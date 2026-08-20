@@ -1064,28 +1064,13 @@ int fullmag_fdm_backend_step(
     if (ctx->gpu_transport_rhs.active) ctx->last_error.clear();
     ctx->current_dt = dt_seconds;
     ctx->step_interrupted = false;
-    const uint64_t accepted_step = ctx->step_count;
-    const double accepted_time = ctx->current_time;
-    uint64_t transport_attempt_id = 0;
-    if (ctx->gpu_transport_rhs.active) {
-        if (ctx->gpu_transport_attempt_generation == UINT64_MAX) {
-            ctx->last_error = "bound spin-transport attempt identity exhausted";
-            return FULLMAG_FDM_ERR_INVALID;
-        }
-        transport_attempt_id = ++ctx->gpu_transport_attempt_generation;
-        ctx->gpu_transport_active_attempt_id = transport_attempt_id;
-    }
-    if (!context_begin_gpu_transport_step(*ctx, transport_attempt_id)) {
-        ctx->gpu_transport_active_attempt_id = 0;
-        ctx->last_error = "failed to begin bound spin-transport step transaction";
-        return FULLMAG_FDM_ERR_CUDA;
-    }
-    if (!context_capture_gpu_transport_pre_step_m(*ctx)) {
-        (void)context_rollback_gpu_transport_step(*ctx);
-        return FULLMAG_FDM_ERR_CUDA;
-    }
     fullmag_fdm_reset_hot_loop_audit(*ctx);
     if (ctx->has_multilayer_plan_v2) {
+        if (ctx->gpu_transport_rhs.active) {
+            ctx->last_error =
+                "spin transport is unsupported for v2 multilayer handles";
+            return FULLMAG_FDM_ERR_INVALID;
+        }
         if (ctx->integrator != FULLMAG_FDM_INTEGRATOR_HEUN &&
             ctx->integrator != FULLMAG_FDM_INTEGRATOR_RK4 &&
             ctx->integrator != FULLMAG_FDM_INTEGRATOR_RK23)
@@ -1118,6 +1103,27 @@ int fullmag_fdm_backend_step(
         fullmag_fdm_publish_hot_loop_audit(*ctx, out_stats);
         fullmag_fdm_publish_multilayer_demag_stage_counters(*ctx, out_stats);
         return FULLMAG_FDM_OK;
+    }
+
+    const uint64_t accepted_step = ctx->step_count;
+    const double accepted_time = ctx->current_time;
+    uint64_t transport_attempt_id = 0;
+    if (ctx->gpu_transport_rhs.active) {
+        if (ctx->gpu_transport_attempt_generation == UINT64_MAX) {
+            ctx->last_error = "bound spin-transport attempt identity exhausted";
+            return FULLMAG_FDM_ERR_INVALID;
+        }
+        transport_attempt_id = ++ctx->gpu_transport_attempt_generation;
+        ctx->gpu_transport_active_attempt_id = transport_attempt_id;
+    }
+    if (!context_begin_gpu_transport_step(*ctx, transport_attempt_id)) {
+        ctx->gpu_transport_active_attempt_id = 0;
+        ctx->last_error = "failed to begin bound spin-transport step transaction";
+        return FULLMAG_FDM_ERR_CUDA;
+    }
+    if (!context_capture_gpu_transport_pre_step_m(*ctx)) {
+        (void)context_rollback_gpu_transport_step(*ctx);
+        return FULLMAG_FDM_ERR_CUDA;
     }
 
     if (ctx->precision == FULLMAG_FDM_PRECISION_DOUBLE) {
@@ -1211,6 +1217,11 @@ int fullmag_fdm_context_bind_gpu_transport_v1(
 #if FULLMAG_HAS_CUDA
     if (handle == nullptr || binding == nullptr) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    if (ctx->has_multilayer_plan_v2) {
+        ctx->last_error =
+            "spin transport is unsupported for v2 multilayer handles";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
     return context_bind_gpu_transport_rhs(*ctx, *binding)
         ? FULLMAG_FDM_OK
         : FULLMAG_FDM_ERR_INVALID;

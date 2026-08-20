@@ -4,6 +4,14 @@ import { createHash } from "node:crypto";
 import { createServer } from "node:net";
 import path from "node:path";
 
+import {
+  assertNoSettledR3FFrames,
+  assertQuantitySwitchPerformanceDelta,
+  assertViewportPerformanceTrace,
+  captureViewportPerformanceSnapshot,
+  installViewportPerformanceProbe,
+} from "./lib/viewport-performance-proof.mjs";
+
 const configuredUrl = process.env.CONTROL_ROOM_URL ?? null;
 const requestedAuditPort = Number(process.env.CONTROL_ROOM_AUDIT_PORT ?? 0);
 const auditArtifactsDirectory = path.resolve(
@@ -89,6 +97,7 @@ let auditActive = false;
 
 await installFdmFixtureApi(page, fixture, fixtureRequests);
 await installBrowserAuditInstrumentation(page);
+await installViewportPerformanceProbe(page);
 await page.addInitScript(({ baseUrl }) => {
   window.__FULLMAG_CONFIG__ = {
     ...(window.__FULLMAG_CONFIG__ ?? {}),
@@ -135,6 +144,7 @@ page.on("request", (request) => {
 
 try {
   await mkdir(auditArtifactsDirectory, { recursive: true });
+  const rawPerformanceTrace = [];
   auditLog("goto", url);
   await page.goto(url, { waitUntil: "domcontentloaded" });
   const viewport = page.locator(".fm-viewport-3d");
@@ -167,6 +177,7 @@ try {
     runtime: await readViewportAuditRuntime(page),
     heapBytes: await readJsHeapBytes(cdp),
   };
+  rawPerformanceTrace.push(await captureViewportPerformanceSnapshot(page, "baseline"));
 
   await page.locator('[data-action-id="ws-2d"]').click();
   await page.locator(".fm-viewport-3d canvas").waitFor({ state: "detached", timeout: 10_000 });
@@ -192,6 +203,12 @@ try {
   }
 
   auditActive = true;
+  const quantitySwitchFieldGetsBefore = fieldRequests.length;
+  const quantitySwitchPerformanceBefore = await captureViewportPerformanceSnapshot(
+    page,
+    "quantity-switch-before",
+  );
+  rawPerformanceTrace.push(quantitySwitchPerformanceBefore);
   for (const [index, quantity] of QUANTITY_SEQUENCE.entries()) {
     if (index % 12 === 0) {
       auditLog("switching cached quantity batch", `${index + 1}-${index + 12}`);
@@ -232,6 +249,21 @@ try {
     );
   }
   await page.waitForTimeout(500);
+  const quantitySwitchPerformanceAfter = await captureViewportPerformanceSnapshot(
+    page,
+    "quantity-switch-after",
+  );
+  rawPerformanceTrace.push(quantitySwitchPerformanceAfter);
+  const quantitySwitchPerformanceDelta = assertQuantitySwitchPerformanceDelta({
+    after: quantitySwitchPerformanceAfter,
+    before: quantitySwitchPerformanceBefore,
+    fieldGetsAfter: fieldRequests.length,
+    fieldGetsBefore: quantitySwitchFieldGetsBefore,
+    maxFieldDecodes: 0,
+    maxFieldGets: 0,
+    maxFieldSwaps: 0,
+    plan: "warmed-cache",
+  });
 
   auditLog("reading final diagnostics");
   const after = {
@@ -281,7 +313,11 @@ try {
     await injectViewportIdleLoop(page);
   }
   const idleRequestStart = auditedRequests.length;
+  const idlePerformanceBefore = await captureViewportPerformanceSnapshot(page, "idle-before");
   const idle = await verifyViewportIdle(page, 5_000);
+  const idlePerformanceAfter = await captureViewportPerformanceSnapshot(page, "idle-after");
+  assertNoSettledR3FFrames(idlePerformanceBefore, idlePerformanceAfter, idle.observeMs);
+  rawPerformanceTrace.push(idlePerformanceBefore, idlePerformanceAfter);
   const idleRequests = auditedRequests.slice(idleRequestStart);
   if (idleRequests.length > 0) {
     throw new Error(
@@ -321,6 +357,8 @@ try {
   await page.waitForTimeout(1_000);
   const afterUnmount = await readBrowserAuditCounters(page);
   const afterUnmountRuntime = await readViewportAuditRuntime(page);
+  rawPerformanceTrace.push(await captureViewportPerformanceSnapshot(page, "after-unmount"));
+  assertViewportPerformanceTrace(rawPerformanceTrace);
   if (afterUnmount.buffersDeleted < gpuAfterStress.buffersDeleted) {
     throw new Error("WebGL buffer delete counter regressed after viewport unmount.");
   }
@@ -353,6 +391,8 @@ try {
     idle,
     idleRequests,
     partialMultilayer,
+    quantitySwitchPerformanceDelta,
+    rawPerformanceTrace,
     fidelity,
     topologyRequests,
     url,

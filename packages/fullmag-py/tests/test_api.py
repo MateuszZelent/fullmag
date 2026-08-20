@@ -3722,7 +3722,10 @@ class ProblemApiTests(unittest.TestCase):
         ir = problem.to_ir()
         self.assertEqual(ir["study"]["kind"], "relaxation")
         self.assertEqual(ir["study"]["algorithm"], "llg_overdamped")
-        self.assertEqual(ir["study"]["stop"]["torque_tolerance_apm"], 1e-3)
+        self.assertAlmostEqual(
+            ir["study"]["stop"]["torque_tolerance_apm"],
+            1e-3 / (4.0e-7 * math.pi),
+        )
         self.assertEqual(ir["study"]["stop"]["energy_tolerance_j"], 1e-12)
         self.assertEqual(ir["study"]["stop"]["max_steps"], 500)
         self.assertEqual(ir["study"]["dynamics"]["fixed_timestep"], 2e-13)

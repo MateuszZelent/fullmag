@@ -5,8 +5,10 @@ use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
 use axum::Json;
-use fullmag_authoring::{
-    SceneDocument, SceneObject, SceneObjectRegion, SceneRegionFrame, SceneRegionShape,
+use fullmag_authoring::{SceneDocument, SceneObject, SceneObjectRegion};
+use fullmag_plan::{
+    evaluate_geometry_predicate, AffineTransform3, BoundaryMembership, GeometryPredicate,
+    SelectionError,
 };
 use fullmag_runner::{FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload};
 
@@ -35,6 +37,7 @@ pub struct MeshRegionMembershipQuery {
         (status = 200, description = "Realized-region membership indices from FEM mesh parts, object segments, or geometry projection", body = MeshRegionMembershipResource),
         (status = 404, description = "No active mesh or membership for the region"),
         (status = 409, description = "Region ID is ambiguous without owner_object_id"),
+        (status = 422, description = "Authored selection geometry cannot be evaluated", body = crate::schemas::common::ApiErrorResponse),
     ),
     tag = "data"
 )]
@@ -58,7 +61,7 @@ pub async fn get_mesh_region_membership(
 
     let owner_object_id =
         resolve_mesh_region_owner(scene, &region_id, query.owner_object_id.as_deref())?;
-    build_mesh_region_membership_for_owner(
+    let membership = build_mesh_region_membership_for_owner(
         scene,
         mesh,
         snapshot.mesh_revision,
@@ -66,8 +69,10 @@ pub async fn get_mesh_region_membership(
         &owner_object_id,
         &region_id,
     )
-    .map(Json)
-    .ok_or_else(|| ApiError::not_found(format!("mesh region membership '{region_id}' not found")))
+    .map_err(selection_api_error)?;
+    membership.map(Json).ok_or_else(|| {
+        ApiError::not_found(format!("mesh region membership '{region_id}' not found"))
+    })
 }
 
 #[utoipa::path(
@@ -76,6 +81,7 @@ pub async fn get_mesh_region_membership(
     responses(
         (status = 200, description = "Available realized-region memberships for enabled authored object regions in the current FEM mesh", body = MeshRegionMembershipListResource),
         (status = 404, description = "No active mesh or scene document"),
+        (status = 422, description = "An authored selection geometry cannot be evaluated", body = crate::schemas::common::ApiErrorResponse),
     ),
     tag = "data"
 )]
@@ -98,7 +104,7 @@ pub async fn get_mesh_region_memberships(
     let mut memberships = Vec::new();
     let mut unresolved_regions = Vec::new();
     for (owner_object_id, region_id) in enabled_authored_region_keys(scene) {
-        if let Some(membership) = build_mesh_region_membership_for_owner(
+        match build_mesh_region_membership_for_owner(
             scene,
             mesh,
             snapshot.mesh_revision,
@@ -106,12 +112,12 @@ pub async fn get_mesh_region_memberships(
             &owner_object_id,
             &region_id,
         ) {
-            memberships.push(membership);
-        } else {
-            unresolved_regions.push(MeshUnresolvedRegionResource {
+            Ok(Some(membership)) => memberships.push(membership),
+            Ok(None) => unresolved_regions.push(MeshUnresolvedRegionResource {
                 owner_object_id,
                 region_id,
-            });
+            }),
+            Err(error) => return Err(selection_api_error(error)),
         }
     }
 
@@ -129,8 +135,8 @@ pub(crate) fn build_mesh_region_membership(
     mesh_revision: u64,
     region_membership_revision: u64,
     region_id: &str,
-) -> Option<MeshRegionMembershipResource> {
-    let owner_object_id = resolve_mesh_region_owner(scene, region_id, None).ok()?;
+) -> Result<Option<MeshRegionMembershipResource>, ApiError> {
+    let owner_object_id = resolve_mesh_region_owner(scene, region_id, None)?;
     build_mesh_region_membership_for_owner(
         scene,
         mesh,
@@ -139,6 +145,7 @@ pub(crate) fn build_mesh_region_membership(
         &owner_object_id,
         region_id,
     )
+    .map_err(selection_api_error)
 }
 
 fn build_mesh_region_membership_for_owner(
@@ -148,7 +155,7 @@ fn build_mesh_region_membership_for_owner(
     region_membership_revision: u64,
     owner_object_id: &str,
     region_id: &str,
-) -> Option<MeshRegionMembershipResource> {
+) -> Result<Option<MeshRegionMembershipResource>, SelectionError> {
     let parts = mesh_region_membership_parts(scene, mesh, owner_object_id, region_id);
     let segments = if parts.is_empty() {
         mesh_region_membership_segments(scene, mesh, owner_object_id, region_id)
@@ -156,12 +163,12 @@ fn build_mesh_region_membership_for_owner(
         Vec::new()
     };
     let projection = if parts.is_empty() && segments.is_empty() {
-        mesh_region_membership_geometry_projection(scene, mesh, owner_object_id, region_id)
+        mesh_region_membership_geometry_projection(scene, mesh, owner_object_id, region_id)?
     } else {
         None
     };
     if parts.is_empty() && segments.is_empty() && projection.is_none() {
-        return None;
+        return Ok(None);
     }
 
     let mut mesh_part_ids = Vec::new();
@@ -229,7 +236,7 @@ fn build_mesh_region_membership_for_owner(
         );
     }
 
-    Some(MeshRegionMembershipResource {
+    Ok(Some(MeshRegionMembershipResource {
         mesh_id: mesh.mesh_id.clone(),
         mesh_revision,
         topology_fingerprint: Some(fullmag_runner::fem_mesh_topology_fingerprint(mesh)),
@@ -265,7 +272,7 @@ fn build_mesh_region_membership_for_owner(
         element_indices,
         node_indices,
         boundary_face_indices,
-    })
+    }))
 }
 
 struct GeometryProjectionMembership {
@@ -367,28 +374,37 @@ fn mesh_region_membership_geometry_projection(
     mesh: &FemMeshPayload,
     owner_object_id: &str,
     region_id: &str,
-) -> Option<GeometryProjectionMembership> {
-    let (object, region) = find_enabled_object_region(scene, owner_object_id, region_id)?;
-    if matches!(region.shape, SceneRegionShape::Csg { .. }) {
-        return None;
-    }
-    if matches!(region.frame, SceneRegionFrame::Object)
-        && (!is_identity_quat(object.transform.rotation_quat)
-            || !is_unit_scale(object.transform.scale))
-    {
-        return None;
-    }
+) -> Result<Option<GeometryProjectionMembership>, SelectionError> {
+    let Some((object, region)) = find_enabled_object_region(scene, owner_object_id, region_id)
+    else {
+        return Ok(None);
+    };
+    let region_ir: fullmag_ir::ObjectRegionIR = region.clone().into();
+    let predicate = GeometryPredicate::from_object_region(
+        &region_ir,
+        AffineTransform3 {
+            translation_m: object.transform.translation,
+            rotation_xyzw: object.transform.rotation_quat,
+            scale: object.transform.scale,
+            pivot_m: object.transform.pivot,
+        },
+        BoundaryMembership::inclusive(),
+    )?;
 
     let mut membership = GeometryProjectionMembership {
         element_indices: Vec::new(),
         node_indices: Vec::new(),
         boundary_face_indices: Vec::new(),
     };
-    let elements = mesh.require_tet4_elements().ok()?;
-    let boundary_faces = mesh.require_tri3_boundary_faces().ok()?;
+    let Ok(elements) = mesh.require_tet4_elements() else {
+        return Ok(None);
+    };
+    let Ok(boundary_faces) = mesh.require_tri3_boundary_faces() else {
+        return Ok(None);
+    };
 
     for (index, node) in mesh.nodes.iter().enumerate() {
-        if point_in_region_shape(region_sample_point(*node, object, region), &region.shape) {
+        if evaluate_geometry_predicate(&predicate, *node)? {
             push_unique(&mut membership.node_indices, index as u32);
         }
     }
@@ -396,7 +412,7 @@ fn mesh_region_membership_geometry_projection(
         let Some(centroid) = tetra_centroid(mesh, element) else {
             continue;
         };
-        if point_in_region_shape(region_sample_point(centroid, object, region), &region.shape) {
+        if evaluate_geometry_predicate(&predicate, centroid)? {
             push_unique(&mut membership.element_indices, index as u32);
         }
     }
@@ -404,15 +420,15 @@ fn mesh_region_membership_geometry_projection(
         let Some(centroid) = triangle_centroid(mesh, face) else {
             continue;
         };
-        if point_in_region_shape(region_sample_point(centroid, object, region), &region.shape) {
+        if evaluate_geometry_predicate(&predicate, centroid)? {
             push_unique(&mut membership.boundary_face_indices, index as u32);
         }
     }
 
-    (!membership.element_indices.is_empty()
+    Ok((!membership.element_indices.is_empty()
         || !membership.node_indices.is_empty()
         || !membership.boundary_face_indices.is_empty())
-    .then_some(membership)
+    .then_some(membership))
 }
 
 fn find_enabled_object_region<'a>(
@@ -492,68 +508,8 @@ fn find_matching_enabled_region<'a>(
     })
 }
 
-fn region_sample_point(
-    world_point: [f64; 3],
-    object: &SceneObject,
-    region: &SceneObjectRegion,
-) -> [f64; 3] {
-    match region.frame {
-        SceneRegionFrame::Object => [
-            world_point[0] - object.transform.translation[0],
-            world_point[1] - object.transform.translation[1],
-            world_point[2] - object.transform.translation[2],
-        ],
-        SceneRegionFrame::World => world_point,
-    }
-}
-
-fn is_identity_quat(value: [f64; 4]) -> bool {
-    value[0].abs() <= 1e-12
-        && value[1].abs() <= 1e-12
-        && value[2].abs() <= 1e-12
-        && (value[3] - 1.0).abs() <= 1e-12
-}
-
-fn is_unit_scale(value: [f64; 3]) -> bool {
-    value
-        .iter()
-        .all(|component| (*component - 1.0).abs() <= 1e-12)
-}
-
-fn point_in_region_shape(point: [f64; 3], shape: &SceneRegionShape) -> bool {
-    match shape {
-        SceneRegionShape::Box { size, center } => (0..3).all(|axis| {
-            let half = size[axis] * 0.5;
-            point[axis] >= center[axis] - half && point[axis] <= center[axis] + half
-        }),
-        SceneRegionShape::Cylinder {
-            radius,
-            height,
-            center,
-            axis,
-        } => {
-            let norm = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
-            if norm <= f64::EPSILON {
-                return false;
-            }
-            let unit = [axis[0] / norm, axis[1] / norm, axis[2] / norm];
-            let rel = [
-                point[0] - center[0],
-                point[1] - center[1],
-                point[2] - center[2],
-            ];
-            let axial = rel[0] * unit[0] + rel[1] * unit[1] + rel[2] * unit[2];
-            let radial_sq = rel[0] * rel[0] + rel[1] * rel[1] + rel[2] * rel[2] - axial * axial;
-            axial.abs() <= height * 0.5 && radial_sq <= radius * radius
-        }
-        SceneRegionShape::Sphere { radius, center } => {
-            let dx = point[0] - center[0];
-            let dy = point[1] - center[1];
-            let dz = point[2] - center[2];
-            dx * dx + dy * dy + dz * dz <= radius * radius
-        }
-        SceneRegionShape::Csg { .. } => false,
-    }
+fn selection_api_error(error: SelectionError) -> ApiError {
+    ApiError::unprocessable(error.to_string())
 }
 
 fn tetra_centroid(mesh: &FemMeshPayload, element: &[u32; 4]) -> Option<[f64; 3]> {

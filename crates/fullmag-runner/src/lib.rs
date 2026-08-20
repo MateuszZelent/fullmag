@@ -40,6 +40,10 @@ mod native_fem;
 mod physics_graph_execution;
 mod preview;
 pub mod quantities;
+mod observation;
+pub use observation::{
+    observation_provider_policy, ObservationLane, ObservationProviderPolicy,
+};
 mod regional_field_drive_artifacts;
 mod relaxation;
 pub mod runtime_registry;
@@ -6199,6 +6203,14 @@ mod tests {
                 "relaxation/direct_minimizer.rs must own {symbol}"
             );
         }
+        assert!(
+            !std::path::Path::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/solvers/fdm/workflows/relaxation/direct_minimizer.rs"
+            ))
+            .exists(),
+            "an uncompiled solvers/fdm relaxation copy would create a second algorithm owner"
+        );
     }
 
     #[test]

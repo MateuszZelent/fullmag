@@ -48,6 +48,8 @@ pub struct LiveStatus {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct SessionSummary {
     pub session_id: String,
+    /// Immutable identity of the active session incarnation.
+    pub session_epoch: String,
     pub name: String,
     pub created_at: String,
     pub workspace_root: String,

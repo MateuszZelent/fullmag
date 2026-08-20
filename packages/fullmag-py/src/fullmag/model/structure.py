@@ -686,6 +686,7 @@ class Ferromagnet:
     name: str
     geometry: Geometry
     material: Material
+    object_id: str | None = None
     region: Region | None = None
     m0: InitialMagnetization | None = None
     mesh: PerObjectMeshRecipe | None = None
@@ -696,6 +697,8 @@ class Ferromagnet:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", require_non_empty(self.name, "name"))
+        if self.object_id is not None:
+            object.__setattr__(self, "object_id", require_non_empty(self.object_id, "object_id"))
         if self.region is not None and self.region.geometry.geometry_name != self.geometry.geometry_name:
             raise ValueError("region geometry must match magnet geometry")
         if self.m0 is None:
@@ -713,7 +716,7 @@ class Ferromagnet:
         return _TableQuantityReference(f"{self.name}.m")
 
     def to_ir(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "name": self.name,
             "region": self.region_name,
             "material": self.material.name,
@@ -723,6 +726,9 @@ class Ferromagnet:
             if self.absorbing_boundary is not None
             else None,
         }
+        if self.object_id is not None:
+            payload["object_id"] = self.object_id
+        return payload
 
 
 @dataclass(frozen=True, slots=True)

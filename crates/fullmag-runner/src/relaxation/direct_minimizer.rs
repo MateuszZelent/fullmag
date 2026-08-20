@@ -224,11 +224,19 @@ pub(crate) fn projected_gradient_trial_magnetization(
     magnetization: &[[f64; 3]],
     gradient: &[[f64; 3]],
     step_size: f64,
-) -> Vec<[f64; 3]> {
+    active_mask: Option<&[bool]>,
+) -> Option<Vec<[f64; 3]>> {
     magnetization
         .iter()
         .zip(gradient.iter())
-        .map(|(m, g)| normalized_vec3(sub_vec3(*m, scale_vec3(*g, step_size))))
+        .enumerate()
+        .map(|(index, (m, g))| {
+            if active_mask.is_some_and(|mask| !mask.get(index).copied().unwrap_or(false)) {
+                Some([0.0, 0.0, 0.0])
+            } else {
+                normalized_vec3(sub_vec3(*m, scale_vec3(*g, step_size)))
+            }
+        })
         .collect()
 }
 
@@ -236,11 +244,19 @@ pub(crate) fn nonlinear_cg_trial_magnetization(
     magnetization: &[[f64; 3]],
     direction: &[[f64; 3]],
     step_size: f64,
-) -> Vec<[f64; 3]> {
+    active_mask: Option<&[bool]>,
+) -> Option<Vec<[f64; 3]>> {
     magnetization
         .iter()
         .zip(direction.iter())
-        .map(|(m, p)| normalized_vec3(add_vec3(*m, scale_vec3(*p, step_size))))
+        .enumerate()
+        .map(|(index, (m, p))| {
+            if active_mask.is_some_and(|mask| !mask.get(index).copied().unwrap_or(false)) {
+                Some([0.0, 0.0, 0.0])
+            } else {
+                normalized_vec3(add_vec3(*m, scale_vec3(*p, step_size)))
+            }
+        })
         .collect()
 }
 
@@ -337,6 +353,7 @@ pub(crate) fn projected_gradient_line_search<T, E, F>(
     magnetization: &[[f64; 3]],
     gradient: &[[f64; 3]],
     initial_step_size: f64,
+    active_mask: Option<&[bool]>,
     evaluate_trial: F,
 ) -> Result<Option<DirectMinimizerAcceptedTrial<T>>, E>
 where
@@ -349,6 +366,7 @@ where
         gradient,
         initial_step_size,
         0.0,
+        active_mask,
         evaluate_trial,
     )
 }
@@ -360,6 +378,7 @@ pub(crate) fn projected_gradient_line_search_with_tolerance<T, E, F>(
     gradient: &[[f64; 3]],
     initial_step_size: f64,
     energy_tolerance_j: f64,
+    active_mask: Option<&[bool]>,
     mut evaluate_trial: F,
 ) -> Result<Option<DirectMinimizerAcceptedTrial<T>>, E>
 where
@@ -368,8 +387,22 @@ where
     let mut trial_step_size = initial_step_size;
     let mut backtracks = 0u32;
     loop {
-        let trial =
-            projected_gradient_trial_magnetization(magnetization, gradient, trial_step_size);
+        let Some(trial) = projected_gradient_trial_magnetization(
+            magnetization,
+            gradient,
+            trial_step_size,
+            active_mask,
+        ) else {
+            if direct_minimizer_backtrack_exhausted(
+                DirectMinimizerAlgorithm::ProjectedGradientBb,
+                backtracks,
+            ) {
+                return Ok(None);
+            }
+            trial_step_size = backtracked_step_size(trial_step_size);
+            backtracks += 1;
+            continue;
+        };
         let evaluation = evaluate_trial(&trial)?;
         if projected_gradient_armijo_accepts_with_tolerance(
             previous_energy_j,
@@ -403,6 +436,7 @@ pub(crate) fn nonlinear_cg_line_search<T, E, F>(
     magnetization: &[[f64; 3]],
     direction: &[[f64; 3]],
     initial_step_size: f64,
+    active_mask: Option<&[bool]>,
     evaluate_trial: F,
 ) -> Result<Option<DirectMinimizerAcceptedTrial<T>>, E>
 where
@@ -415,6 +449,7 @@ where
         direction,
         initial_step_size,
         0.0,
+        active_mask,
         evaluate_trial,
     )
 }
@@ -426,6 +461,7 @@ pub(crate) fn nonlinear_cg_line_search_with_tolerance<T, E, F>(
     direction: &[[f64; 3]],
     initial_step_size: f64,
     energy_tolerance_j: f64,
+    active_mask: Option<&[bool]>,
     mut evaluate_trial: F,
 ) -> Result<Option<DirectMinimizerAcceptedTrial<T>>, E>
 where
@@ -434,7 +470,22 @@ where
     let mut trial_step_size = initial_step_size;
     let mut backtracks = 0u32;
     loop {
-        let trial = nonlinear_cg_trial_magnetization(magnetization, direction, trial_step_size);
+        let Some(trial) = nonlinear_cg_trial_magnetization(
+            magnetization,
+            direction,
+            trial_step_size,
+            active_mask,
+        ) else {
+            if direct_minimizer_backtrack_exhausted(
+                DirectMinimizerAlgorithm::NonlinearCg,
+                backtracks,
+            ) {
+                return Ok(None);
+            }
+            trial_step_size = backtracked_step_size(trial_step_size);
+            backtracks += 1;
+            continue;
+        };
         let evaluation = evaluate_trial(&trial)?;
         if nonlinear_cg_armijo_accepts_with_tolerance(
             previous_energy_j,
@@ -476,15 +527,17 @@ pub(crate) fn projected_gradient_step_size_update(
     use_bb1: bool,
     reset_consecutive: u64,
 ) -> ProjectedGradientStepSizeUpdate {
-    let s: Vec<[f64; 3]> = previous_m
+    let ambient_s: Vec<[f64; 3]> = previous_m
         .iter()
         .zip(trial_m.iter())
         .map(|(previous, trial)| sub_vec3(*trial, *previous))
         .collect();
-    let y: Vec<[f64; 3]> = previous_gradient
+    let s = project_tangent(trial_m, &ambient_s);
+    let previous_gradient_transported = project_tangent(trial_m, previous_gradient);
+    let y: Vec<[f64; 3]> = previous_gradient_transported
         .iter()
         .zip(trial_gradient.iter())
-        .map(|(previous, trial)| sub_vec3(*trial, *previous))
+        .map(|(transported, trial)| sub_vec3(*trial, *transported))
         .collect();
     let s_dot_s = energy_metric_dot(&s, &s, ms_apm, volumes_m3);
     let s_dot_y = energy_metric_dot(&s, &y, ms_apm, volumes_m3);
@@ -494,11 +547,6 @@ pub(crate) fn projected_gradient_step_size_update(
         if s_dot_y.is_finite() && s_dot_y > 0.0 {
             (
                 (s_dot_s / s_dot_y).clamp(MIN_STEP_SIZE, MAX_STEP_SIZE),
-                true,
-            )
-        } else if s_dot_y.is_finite() && s_dot_y > 0.0 && y_dot_y.is_finite() && y_dot_y > 0.0 {
-            (
-                (s_dot_y / y_dot_y).clamp(MIN_STEP_SIZE, MAX_STEP_SIZE),
                 true,
             )
         } else {
@@ -808,9 +856,9 @@ mod tests {
     fn projected_gradient_step_size_update_uses_bb1_then_toggles() {
         let update = projected_gradient_step_size_update(
             &[[1.0, 0.0, 0.0]],
-            &[[2.0, 0.0, 0.0]],
+            &[[0.0, 1.0, 0.0]],
             &[[0.0, 0.0, 0.0]],
-            &[[2.0, 0.0, 0.0]],
+            &[[-2.0, 0.0, 0.0]],
             &[1.0],
             &[1.0],
             true,
@@ -820,6 +868,22 @@ mod tests {
         assert_eq!(update.step_size, MAX_STEP_SIZE);
         assert!(!update.use_bb1);
         assert_eq!(update.reset_consecutive, 0);
+    }
+
+    #[test]
+    fn projected_gradient_bb_secant_is_transported_to_the_accepted_tangent_space() {
+        let update = projected_gradient_step_size_update(
+            &[[1.0, 0.0, 0.0]],
+            &[[0.0, 1.0, 0.0]],
+            &[[0.0, 1.0, 0.0]],
+            &[[-2_000.0, 0.0, 0.0]],
+            &[1.0],
+            &[1.0],
+            true,
+            0,
+        );
+
+        assert!((update.step_size - 5.0e-4).abs() < 1.0e-15);
     }
 
     #[test]
@@ -842,16 +906,46 @@ mod tests {
 
     #[test]
     fn projected_gradient_trial_magnetization_steps_against_gradient_and_normalizes() {
-        let trial =
-            projected_gradient_trial_magnetization(&[[1.0, 0.0, 0.0]], &[[0.0, -2.0, 0.0]], 0.5);
+        let trial = projected_gradient_trial_magnetization(
+            &[[1.0, 0.0, 0.0]],
+            &[[0.0, -2.0, 0.0]],
+            0.5,
+            None,
+        )
+        .expect("finite non-degenerate trial");
 
         let inv_sqrt_2 = 1.0 / 2.0_f64.sqrt();
         assert_eq!(trial, vec![[inv_sqrt_2, inv_sqrt_2, 0.0]]);
     }
 
     #[test]
+    fn projected_gradient_trial_preserves_only_masked_inactive_zero_spins() {
+        let trial = projected_gradient_trial_magnetization(
+            &[[1.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+            &[[0.0, -1.0, 0.0], [0.0, 0.0, 0.0]],
+            0.5,
+            Some(&[true, false]),
+        )
+        .expect("masked inactive zero is representable");
+
+        assert_eq!(trial[1], [0.0, 0.0, 0.0]);
+        assert!(
+            (crate::relaxation::vector_math::dot_vec3(trial[0], trial[0]) - 1.0).abs() < 1.0e-15
+        );
+        assert!(projected_gradient_trial_magnetization(
+            &[[0.0, 0.0, 0.0]],
+            &[[0.0, 0.0, 0.0]],
+            0.5,
+            Some(&[true]),
+        )
+        .is_none());
+    }
+
+    #[test]
     fn nonlinear_cg_trial_magnetization_steps_along_direction_and_normalizes() {
-        let trial = nonlinear_cg_trial_magnetization(&[[1.0, 0.0, 0.0]], &[[0.0, 2.0, 0.0]], 0.5);
+        let trial =
+            nonlinear_cg_trial_magnetization(&[[1.0, 0.0, 0.0]], &[[0.0, 2.0, 0.0]], 0.5, None)
+                .expect("finite non-degenerate trial");
 
         let inv_sqrt_2 = 1.0 / 2.0_f64.sqrt();
         assert_eq!(trial, vec![[inv_sqrt_2, inv_sqrt_2, 0.0]]);
@@ -861,6 +955,29 @@ mod tests {
     fn projected_gradient_armijo_accepts_sufficient_energy_decrease() {
         assert!(projected_gradient_armijo_accepts(10.0, 9.999, 1.0, -1.0));
         assert!(!projected_gradient_armijo_accepts(10.0, 10.0, 1.0, -1.0));
+    }
+
+    #[test]
+    fn armijo_tangent_slope_is_derivative_of_normalization_retraction() {
+        let magnetization = [[1.0, 0.0, 0.0]];
+        let field_strength = 3.0;
+        let gradient = [[0.0, -field_strength, 0.0]];
+        let direction = initial_search_direction(&gradient);
+        let tangent_slope = crate::relaxation::vector_math::dot_vec3(gradient[0], direction[0]);
+        let energy = |m: [f64; 3]| -field_strength * m[1];
+        let initial_energy = energy(magnetization[0]);
+
+        for epsilon in [1.0e-3, 1.0e-4, 1.0e-5, 1.0e-6] {
+            let trial = nonlinear_cg_trial_magnetization(&magnetization, &direction, epsilon, None)
+                .expect("normalization retraction must remain representable");
+            let finite_difference = (energy(trial[0]) - initial_energy) / epsilon;
+            let relative_error = (finite_difference - tangent_slope).abs() / tangent_slope.abs();
+
+            assert!(
+                relative_error <= 5.0 * epsilon * epsilon,
+                "epsilon={epsilon:e} finite_difference={finite_difference:e} tangent_slope={tangent_slope:e} relative_error={relative_error:e}"
+            );
+        }
     }
 
     #[test]
@@ -1002,6 +1119,7 @@ mod tests {
             &[[1.0, 0.0, 0.0]],
             &[[0.0, -2.0, 0.0]],
             0.5,
+            None,
             |trial| {
                 trial_count += 1;
                 let expected_y = if trial_count == 1 {
@@ -1026,6 +1144,30 @@ mod tests {
     }
 
     #[test]
+    fn projected_gradient_line_search_never_evaluates_invalid_active_spin() {
+        let mut evaluations = 0u32;
+        let accepted = projected_gradient_line_search(
+            1.0,
+            -1.0,
+            &[[0.0, 0.0, 0.0]],
+            &[[0.0, 0.0, 0.0]],
+            1.0,
+            None,
+            |_| {
+                evaluations += 1;
+                Ok::<_, ()>(DirectMinimizerTrialEvaluation {
+                    stats: (),
+                    energy_j: 0.0,
+                })
+            },
+        )
+        .expect("invalid trials are a controlled line-search result");
+
+        assert!(accepted.is_none());
+        assert_eq!(evaluations, 0);
+    }
+
+    #[test]
     fn projected_gradient_line_search_rejects_exhausted_armijo() {
         let mut trial_count = 0usize;
 
@@ -1035,6 +1177,7 @@ mod tests {
             &[[1.0, 0.0, 0.0]],
             &[[0.0, -2.0, 0.0]],
             0.5,
+            None,
             |_| {
                 trial_count += 1;
                 Ok::<_, ()>(DirectMinimizerTrialEvaluation {
@@ -1059,6 +1202,7 @@ mod tests {
             &[[1.0, 0.0, 0.0]],
             &[[0.0, 2.0, 0.0]],
             0.5,
+            None,
             |trial| {
                 trial_count += 1;
                 let expected_y = if trial_count == 1 {
@@ -1092,6 +1236,7 @@ mod tests {
             &[[1.0, 0.0, 0.0]],
             &[[0.0, 2.0, 0.0]],
             0.5,
+            None,
             |_| {
                 trial_count += 1;
                 Ok::<_, ()>(DirectMinimizerTrialEvaluation {
@@ -1155,10 +1300,10 @@ mod tests {
     #[test]
     fn projected_gradient_bb_products_use_energy_metric_weights() {
         let update = projected_gradient_step_size_update(
-            &[[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
             &[[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+            &[[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
             &[[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
-            &[[2_000.0, 0.0, 0.0], [4_000.0, 0.0, 0.0]],
+            &[[-2_000.0, 0.0, 0.0], [-4_000.0, 0.0, 0.0]],
             &[1.0, 10.0],
             &[1.0, 1.0],
             true,

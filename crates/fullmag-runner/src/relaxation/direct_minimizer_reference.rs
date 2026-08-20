@@ -80,7 +80,12 @@ fn project_tangent(m: &[Vector3], v: &[Vector3]) -> Vec<Vector3> {
         .zip(v.iter())
         .map(|(mi, vi)| {
             let mdotv = dot(*mi, *vi);
-            sub(*vi, scale(*mi, mdotv))
+            let norm_sq = dot(*mi, *mi);
+            if norm_sq.is_finite() && norm_sq > f64::MIN_POSITIVE {
+                sub(*vi, scale(*mi, mdotv / norm_sq))
+            } else {
+                [0.0, 0.0, 0.0]
+            }
         })
         .collect()
 }
@@ -146,31 +151,79 @@ fn project_tangent_soa_into(m: &VectorFieldSoA, v: &VectorFieldSoA, out: &mut Ve
     debug_assert!(out.len() >= m.len());
     for i in 0..m.len() {
         let mdotv = m.x[i] * v.x[i] + m.y[i] * v.y[i] + m.z[i] * v.z[i];
-        out.x[i] = v.x[i] - m.x[i] * mdotv;
-        out.y[i] = v.y[i] - m.y[i] * mdotv;
-        out.z[i] = v.z[i] - m.z[i] * mdotv;
+        let norm_sq = m.x[i] * m.x[i] + m.y[i] * m.y[i] + m.z[i] * m.z[i];
+        if norm_sq.is_finite() && norm_sq > f64::MIN_POSITIVE {
+            out.x[i] = v.x[i] - m.x[i] * mdotv / norm_sq;
+            out.y[i] = v.y[i] - m.y[i] * mdotv / norm_sq;
+            out.z[i] = v.z[i] - m.z[i] * mdotv / norm_sq;
+        } else {
+            out.x[i] = 0.0;
+            out.y[i] = 0.0;
+            out.z[i] = 0.0;
+        }
     }
 }
 
+fn normalized_direct_spin(
+    problem: &ExchangeLlgProblem,
+    index: usize,
+    value: Vector3,
+) -> Option<Vector3> {
+    if problem.ms_at(index) <= 0.0 {
+        return Some([0.0, 0.0, 0.0]);
+    }
+    let norm_sq = dot(value, value);
+    if !norm_sq.is_finite() || norm_sq <= f64::MIN_POSITIVE {
+        return None;
+    }
+    normalized(value).ok()
+}
+
+fn active_magnetization_valid(problem: &ExchangeLlgProblem, m: &[Vector3]) -> bool {
+    m.iter().enumerate().all(|(index, value)| {
+        problem.ms_at(index) <= 0.0 || {
+            let norm_sq = dot(*value, *value);
+            norm_sq.is_finite() && norm_sq > f64::MIN_POSITIVE
+        }
+    })
+}
+
+fn active_magnetization_soa_valid(problem: &ExchangeLlgProblem, m: &VectorFieldSoA) -> bool {
+    (0..m.len()).all(|index| {
+        problem.ms_at(index) <= 0.0 || {
+            let norm_sq =
+                m.x[index] * m.x[index] + m.y[index] * m.y[index] + m.z[index] * m.z[index];
+            norm_sq.is_finite() && norm_sq > f64::MIN_POSITIVE
+        }
+    })
+}
+
 fn scaled_retraction_soa_into(
+    problem: &ExchangeLlgProblem,
     m: &VectorFieldSoA,
     direction: &VectorFieldSoA,
     scale_factor: f64,
     out: &mut VectorFieldSoA,
-) {
+) -> bool {
     debug_assert_eq!(m.len(), direction.len());
     debug_assert!(out.len() >= m.len());
     for i in 0..m.len() {
-        let value = normalized([
-            m.x[i] + scale_factor * direction.x[i],
-            m.y[i] + scale_factor * direction.y[i],
-            m.z[i] + scale_factor * direction.z[i],
-        ])
-        .unwrap_or([0.0, 0.0, 0.0]);
+        let Some(value) = normalized_direct_spin(
+            problem,
+            i,
+            [
+                m.x[i] + scale_factor * direction.x[i],
+                m.y[i] + scale_factor * direction.y[i],
+                m.z[i] + scale_factor * direction.z[i],
+            ],
+        ) else {
+            return false;
+        };
         out.x[i] = value[0];
         out.y[i] = value[1];
         out.z[i] = value[2];
     }
+    true
 }
 
 fn copy_scaled_soa_into(src: &VectorFieldSoA, scale_factor: f64, out: &mut VectorFieldSoA) {
@@ -248,12 +301,16 @@ fn execute_projected_gradient_bb_soa(
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
+        if !active_magnetization_soa_valid(problem, &m) {
+            numerical_error = true;
+            break;
+        }
         let max_torque = compute_max_torque_soa(&m, &h_eff);
-        if control
+        let torque_below_threshold = control
             .stop
             .torque_tolerance_apm
-            .is_some_and(|threshold| max_torque <= threshold)
-        {
+            .is_some_and(|threshold| max_torque.is_finite() && max_torque <= threshold);
+        if torque_confirmation.observe(control, energy_plateau.range(), max_torque) {
             converged = true;
             break;
         }
@@ -268,13 +325,24 @@ fn execute_projected_gradient_bb_soa(
             break;
         }
         if crate::relaxation::direct_minimizer::direct_minimizer_gradient_degenerate(g_norm_sq) {
+            if torque_below_threshold && control.stop.energy_tolerance_j.is_none() {
+                continue;
+            }
             numerical_stagnation = true;
             break;
         }
         let descent_derivative = -g_norm_sq;
 
         loop {
-            scaled_retraction_soa_into(&m, &g, -trial_lambda, &mut m_trial);
+            if !scaled_retraction_soa_into(problem, &m, &g, -trial_lambda, &mut m_trial) {
+                if backtracks >= max_backtrack {
+                    break;
+                }
+                trial_lambda *= 0.5;
+                backtracks += 1;
+                line_search_backtracks += 1;
+                continue;
+            }
             let candidate_energy =
                 problem.total_energy_from_soa_ws(&m_trial, ws, &mut energy_scratch);
             energy_evaluations += 1;
@@ -301,12 +369,24 @@ fn execute_projected_gradient_bb_soa(
         let mut s_dot_y = 0.0;
         let mut y_dot_y = 0.0;
         for i in 0..n {
-            let sx = m_trial.x[i] - m.x[i];
-            let sy = m_trial.y[i] - m.y[i];
-            let sz = m_trial.z[i] - m.z[i];
-            let yx = g_new.x[i] - g.x[i];
-            let yy = g_new.y[i] - g.y[i];
-            let yz = g_new.z[i] - g.z[i];
+            let mx = m_trial.x[i];
+            let my = m_trial.y[i];
+            let mz = m_trial.z[i];
+            let norm_sq = mx * mx + my * my + mz * mz;
+            if !norm_sq.is_finite() || norm_sq <= f64::MIN_POSITIVE {
+                continue;
+            }
+            let ambient_sx = mx - m.x[i];
+            let ambient_sy = my - m.y[i];
+            let ambient_sz = mz - m.z[i];
+            let m_dot_s = mx * ambient_sx + my * ambient_sy + mz * ambient_sz;
+            let sx = ambient_sx - mx * m_dot_s / norm_sq;
+            let sy = ambient_sy - my * m_dot_s / norm_sq;
+            let sz = ambient_sz - mz * m_dot_s / norm_sq;
+            let m_dot_old_g = mx * g.x[i] + my * g.y[i] + mz * g.z[i];
+            let yx = g_new.x[i] - (g.x[i] - mx * m_dot_old_g / norm_sq);
+            let yy = g_new.y[i] - (g.y[i] - my * m_dot_old_g / norm_sq);
+            let yz = g_new.z[i] - (g.z[i] - mz * m_dot_old_g / norm_sq);
             let weight = MU0 * problem.ms_at(i) * problem.cell_size.volume();
             s_dot_s += weight * (sx * sx + sy * sy + sz * sz);
             s_dot_y += weight * (sx * yx + sy * yy + sz * yz);
@@ -317,9 +397,6 @@ fn execute_projected_gradient_bb_soa(
         if use_bb1 {
             if s_dot_y.is_finite() && s_dot_y > 0.0 {
                 lambda = (s_dot_s / s_dot_y).clamp(lambda_min, lambda_max);
-                bb_ok = true;
-            } else if s_dot_y.is_finite() && s_dot_y > 0.0 && y_dot_y.is_finite() && y_dot_y > 0.0 {
-                lambda = (s_dot_y / y_dot_y).clamp(lambda_min, lambda_max);
                 bb_ok = true;
             } else {
                 bb_ok = false;
@@ -416,12 +493,16 @@ fn execute_projected_gradient_bb_aos(
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
+        if !active_magnetization_valid(problem, &m) {
+            numerical_error = true;
+            break;
+        }
         let max_torque = compute_max_torque(&m, &h_eff);
-        if control
+        let torque_below_threshold = control
             .stop
             .torque_tolerance_apm
-            .is_some_and(|threshold| max_torque <= threshold)
-        {
+            .is_some_and(|threshold| max_torque.is_finite() && max_torque <= threshold);
+        if torque_confirmation.observe(control, energy_plateau.range(), max_torque) {
             converged = true;
             break;
         }
@@ -438,17 +519,27 @@ fn execute_projected_gradient_bb_aos(
             break;
         }
         if crate::relaxation::direct_minimizer::direct_minimizer_gradient_degenerate(g_norm_sq) {
+            if torque_below_threshold && control.stop.energy_tolerance_j.is_none() {
+                continue;
+            }
             numerical_stagnation = true;
             break;
         }
         let descent_derivative = -g_norm_sq;
 
         loop {
-            let candidate_m = (0..n)
-                .map(|i| {
-                    normalized(sub(m[i], scale(g[i], trial_lambda))).unwrap_or([0.0, 0.0, 0.0])
-                })
-                .collect::<Vec<_>>();
+            let Some(candidate_m) = (0..n)
+                .map(|i| normalized_direct_spin(problem, i, sub(m[i], scale(g[i], trial_lambda))))
+                .collect::<Option<Vec<_>>>()
+            else {
+                if backtracks >= max_backtrack {
+                    break;
+                }
+                trial_lambda *= 0.5;
+                backtracks += 1;
+                line_search_backtracks += 1;
+                continue;
+            };
 
             let candidate_energy = problem.total_energy_from_vectors_ws(&candidate_m, ws);
             energy_evaluations += 1;
@@ -477,8 +568,12 @@ fn execute_projected_gradient_bb_aos(
 
         // Barzilai–Borwein step selection (Boris-style signedness checks)
         // Divide by 1e6 for numerical stability on large meshes (cancels in ratio)
-        let s: Vec<Vector3> = (0..n).map(|i| sub(m_trial[i], m[i])).collect();
-        let y: Vec<Vector3> = (0..n).map(|i| sub(g_new[i], g[i])).collect();
+        let ambient_s: Vec<Vector3> = (0..n).map(|i| sub(m_trial[i], m[i])).collect();
+        let s = project_tangent(&m_trial, &ambient_s);
+        let old_gradient_transported = project_tangent(&m_trial, &g);
+        let y: Vec<Vector3> = (0..n)
+            .map(|i| sub(g_new[i], old_gradient_transported[i]))
+            .collect();
 
         let s_dot_s = energy_directional_derivative(problem, &s, &s);
         let s_dot_y = energy_directional_derivative(problem, &s, &y);
@@ -491,10 +586,6 @@ fn execute_projected_gradient_bb_aos(
         if use_bb1 {
             if s_dot_y.is_finite() && s_dot_y > 0.0 {
                 lambda = (s_dot_s / s_dot_y).clamp(lambda_min, lambda_max);
-                bb_ok = true;
-            } else if s_dot_y.is_finite() && s_dot_y > 0.0 && y_dot_y.is_finite() && y_dot_y > 0.0 {
-                // Fallback to BB2
-                lambda = (s_dot_y / y_dot_y).clamp(lambda_min, lambda_max);
                 bb_ok = true;
             } else {
                 bb_ok = false;
@@ -618,12 +709,16 @@ fn execute_nonlinear_cg_soa(
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
+        if !active_magnetization_soa_valid(problem, &m) {
+            numerical_error = true;
+            break;
+        }
         let max_torque = compute_max_torque_soa(&m, &h_eff);
-        if control
+        let torque_below_threshold = control
             .stop
             .torque_tolerance_apm
-            .is_some_and(|threshold| max_torque <= threshold)
-        {
+            .is_some_and(|threshold| max_torque.is_finite() && max_torque <= threshold);
+        if torque_confirmation.observe(control, energy_plateau.range(), max_torque) {
             converged = true;
             break;
         }
@@ -632,6 +727,9 @@ fn execute_nonlinear_cg_soa(
             break;
         }
         if crate::relaxation::direct_minimizer::direct_minimizer_gradient_degenerate(g_norm_sq) {
+            if torque_below_threshold && control.stop.energy_tolerance_j.is_none() {
+                continue;
+            }
             numerical_stagnation = true;
             break;
         }
@@ -653,7 +751,15 @@ fn execute_nonlinear_cg_soa(
         let mut accepted_energy = None;
 
         loop {
-            scaled_retraction_soa_into(&m, &p, lambda, &mut m_new);
+            if !scaled_retraction_soa_into(problem, &m, &p, lambda, &mut m_new) {
+                if backtracks >= max_backtrack {
+                    break;
+                }
+                lambda *= 0.5;
+                backtracks += 1;
+                line_search_backtracks += 1;
+                continue;
+            }
             let candidate_energy =
                 problem.total_energy_from_soa_ws(&m_new, ws, &mut energy_scratch);
             energy_evaluations += 1;
@@ -776,13 +882,17 @@ fn execute_nonlinear_cg_aos(
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
+        if !active_magnetization_valid(problem, &m) {
+            numerical_error = true;
+            break;
+        }
         // Check convergence
         let max_torque = compute_max_torque(&m, &h_eff);
-        if control
+        let torque_below_threshold = control
             .stop
             .torque_tolerance_apm
-            .is_some_and(|threshold| max_torque <= threshold)
-        {
+            .is_some_and(|threshold| max_torque.is_finite() && max_torque <= threshold);
+        if torque_confirmation.observe(control, energy_plateau.range(), max_torque) {
             converged = true;
             break;
         }
@@ -791,6 +901,9 @@ fn execute_nonlinear_cg_aos(
             break;
         }
         if crate::relaxation::direct_minimizer::direct_minimizer_gradient_degenerate(g_norm_sq) {
+            if torque_below_threshold && control.stop.energy_tolerance_j.is_none() {
+                continue;
+            }
             numerical_stagnation = true;
             break;
         }
@@ -815,9 +928,18 @@ fn execute_nonlinear_cg_aos(
         let mut accepted_trial = None;
 
         loop {
-            let candidate_m = (0..n)
-                .map(|i| normalized(add(m[i], scale(p[i], lambda))).unwrap_or([0.0, 0.0, 0.0]))
-                .collect::<Vec<_>>();
+            let Some(candidate_m) = (0..n)
+                .map(|i| normalized_direct_spin(problem, i, add(m[i], scale(p[i], lambda))))
+                .collect::<Option<Vec<_>>>()
+            else {
+                if backtracks >= max_backtrack {
+                    break;
+                }
+                lambda *= 0.5;
+                backtracks += 1;
+                line_search_backtracks += 1;
+                continue;
+            };
 
             let candidate_energy = problem.total_energy_from_vectors_ws(&candidate_m, ws);
             energy_evaluations += 1;
@@ -1081,6 +1203,21 @@ mod tests {
         let aos = execute_projected_gradient_bb_aos(&problem, &initial, &mut aos_ws, &control);
 
         assert_relaxation_result_close(&soa, &aos, 1e-8);
+    }
+
+    #[test]
+    fn projected_gradient_bb_rejects_active_zero_initial_magnetization() {
+        let problem = direct_minimizer_problem();
+        let initial = vec![[0.0, 0.0, 0.0]; 4];
+        let control = direct_minimizer_control(RelaxationAlgorithmIR::ProjectedGradientBb);
+        let mut ws = problem.create_workspace();
+
+        let result = execute_projected_gradient_bb(&problem, &initial, &mut ws, &control);
+
+        assert!(result.numerical_error);
+        assert!(!result.converged);
+        assert_eq!(result.steps_taken, 0);
+        assert_eq!(result.final_magnetization, initial);
     }
 
     #[test]

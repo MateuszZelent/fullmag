@@ -21,6 +21,8 @@ import {
 } from "react";
 import * as THREE from "three";
 
+import { recordVisualizationDebugCanvasLifecycle } from "@/kernel/performance/visualizationDebugPerformanceProbe";
+
 type Viewport3DCanvasProps = Omit<CanvasProps, "resize" | "size">;
 
 type Viewport3DCanvasSize = Pick<Size, "height" | "left" | "top" | "width">;
@@ -182,6 +184,7 @@ export const Viewport3DCanvas = forwardRef<
     rootRef.current = root;
     const configureGeneration = configureGenerationRef.current + 1;
     configureGenerationRef.current = configureGeneration;
+    recordVisualizationDebugCanvasLifecycle("root-configure-started");
 
     void root
       .configure({
@@ -200,6 +203,8 @@ export const Viewport3DCanvas = forwardRef<
               : eventSource
             : container;
           state.events.connect?.(eventTarget);
+          recordVisualizationDebugCanvasLifecycle("events-connected");
+          recordVisualizationDebugCanvasLifecycle("context-created");
           if (eventPrefix) {
             state.setEvents({
               compute: (event, rootState) => {
@@ -232,6 +237,7 @@ export const Viewport3DCanvas = forwardRef<
       .then((configuredRoot) => {
         if (configureGenerationRef.current !== configureGeneration) return;
         rootConfiguredRef.current = true;
+        recordVisualizationDebugCanvasLifecycle("root-configure-completed");
         configuredRoot.render(latestSceneRef.current);
       })
       .catch(setError);
@@ -258,6 +264,8 @@ export const Viewport3DCanvas = forwardRef<
     const canvas = canvasRef.current;
     return () => {
       if (canvas) {
+        recordVisualizationDebugCanvasLifecycle("events-disconnected");
+        recordVisualizationDebugCanvasLifecycle("context-disposed");
         unmountComponentAtNode(canvas);
       }
       rootConfiguredRef.current = false;

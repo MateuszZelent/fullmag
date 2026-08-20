@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import math
+from numbers import Real
 from typing import Literal, TypeAlias
 
 from fullmag._validation import (
@@ -571,3 +573,333 @@ Geometry: TypeAlias = (
     | Intersection
     | Translate
 )
+
+
+# ---------------------------------------------------------------------------
+# Selection geometry predicates
+# ---------------------------------------------------------------------------
+def _selection_real(value: object, field: str, *, positive: bool = False) -> float:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        qualifier = "positive " if positive else ""
+        raise TypeError(f"{field} must be a {qualifier}finite real number")
+    normalized = float(value)
+    if not math.isfinite(normalized):
+        qualifier = " and positive" if positive else ""
+        raise ValueError(f"{field} must be finite{qualifier}")
+    if positive and normalized <= 0.0:
+        raise ValueError(f"{field} must be positive")
+    return normalized
+
+
+def _selection_vector(
+    value: object,
+    length: int,
+    field: str,
+) -> tuple[float, ...]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise TypeError(f"{field} must be a sequence of {length} finite real numbers")
+    if len(value) != length:
+        raise ValueError(f"{field} must contain exactly {length} values")
+    return tuple(
+        _selection_real(component, f"{field}[{index}]")
+        for index, component in enumerate(value)
+    )
+
+
+def _normalize_finite_vector(value: object, length: int, field: str) -> tuple[float, ...]:
+    normalized = _selection_vector(value, length, field)
+    largest = max(abs(component) for component in normalized)
+    if largest == 0.0:
+        raise ValueError(f"{field} must be a non-zero finite vector")
+    scaled_norm = math.sqrt(sum((component / largest) ** 2 for component in normalized))
+    return tuple(component / largest / scaled_norm for component in normalized)
+
+
+def _selection_vector3(
+    value: object,
+    field: str,
+) -> tuple[float, float, float]:
+    vector = _selection_vector(value, 3, field)
+    return (vector[0], vector[1], vector[2])
+
+
+def _selection_vector4(
+    value: object,
+    field: str,
+) -> tuple[float, float, float, float]:
+    normalized = _normalize_finite_vector(value, 4, field)
+    return (normalized[0], normalized[1], normalized[2], normalized[3])
+
+
+def _selection_object_id(value: object) -> str:
+    if not isinstance(value, str):
+        raise TypeError("object_id must be a non-empty string")
+    return require_non_empty(value, "object_id")
+
+
+class AuthoredSelectionGeometry:
+    """Closed authored selection-geometry AST before canonical lowering."""
+
+    __slots__ = ()
+
+    @classmethod
+    def from_authored_ir(cls, value: object) -> "AuthoredSelectionGeometry":
+        return _selection_geometry_from_authored_ir(value)
+
+
+class SelectionGeometry(AuthoredSelectionGeometry):
+    """Closed canonical ``geometry_predicate.v1`` AST."""
+
+    __slots__ = ()
+
+    @classmethod
+    def from_ir(cls, value: object) -> "SelectionGeometry":
+        return _selection_geometry_from_ir(value)
+
+    def to_ir(self) -> dict[str, object]:
+        raise NotImplementedError
+
+    def to_authored_ir(self) -> dict[str, object]:
+        return self.to_ir()
+
+
+@dataclass(frozen=True, slots=True)
+class ThroughObjectExtrusion:
+    """Unresolved finite extrusion through an explicitly identified object."""
+
+    object_id: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "object_id", _selection_object_id(self.object_id))
+
+    def to_authored_ir(self) -> dict[str, str]:
+        return {"kind": "through_object", "object_id": self.object_id}
+
+
+@dataclass(frozen=True, slots=True)
+class SelectionCylinder(SelectionGeometry):
+    """Canonical finite cylinder selection predicate."""
+
+    radius_m: float
+    center_m: tuple[float, float, float]
+    axis: tuple[float, float, float]
+    height_m: float
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "radius_m", _selection_real(self.radius_m, "radius", positive=True))
+        object.__setattr__(self, "center_m", _selection_vector3(self.center_m, "center"))
+        normalized_axis = _normalize_finite_vector(self.axis, 3, "normal")
+        object.__setattr__(self, "axis", normalized_axis)
+        object.__setattr__(self, "height_m", _selection_real(self.height_m, "thickness", positive=True))
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "kind": "cylinder",
+            "center_m": list(self.center_m),
+            "axis": list(self.axis),
+            "radius_m": self.radius_m,
+            "height_m": self.height_m,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SelectionThroughObjectDisk(AuthoredSelectionGeometry):
+    """Authored disk whose finite object-bounded lowering is still unresolved."""
+
+    radius_m: float
+    center_m: tuple[float, float, float]
+    normal: tuple[float, float, float]
+    extrusion: ThroughObjectExtrusion
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "radius_m", _selection_real(self.radius_m, "radius", positive=True))
+        object.__setattr__(self, "center_m", _selection_vector3(self.center_m, "center"))
+        normalized_normal = _normalize_finite_vector(self.normal, 3, "normal")
+        object.__setattr__(self, "normal", normalized_normal)
+        if type(self.extrusion) is not ThroughObjectExtrusion:
+            raise TypeError("extrusion must be a ThroughObjectExtrusion node")
+
+    def to_authored_ir(self) -> dict[str, object]:
+        return {
+            "kind": "disk",
+            "center_m": list(self.center_m),
+            "normal": list(self.normal),
+            "radius_m": self.radius_m,
+            "extrusion": self.extrusion.to_authored_ir(),
+        }
+
+
+def _require_canonical_geometry(value: object) -> SelectionGeometry:
+    if type(value) not in (SelectionCylinder, SelectionAffine):
+        raise TypeError("geometry must be an exact canonical SelectionGeometry node")
+    return value
+
+
+def _require_authored_geometry(value: object) -> AuthoredSelectionGeometry:
+    if type(value) not in (
+        SelectionCylinder,
+        SelectionAffine,
+        SelectionThroughObjectDisk,
+        AuthoredSelectionAffine,
+    ):
+        raise TypeError("geometry must be an exact AuthoredSelectionGeometry node")
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class SelectionAffine(SelectionGeometry):
+    """Serializable affine transform for a selection-geometry predicate."""
+
+    geometry: SelectionGeometry
+    translation_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    rotation_xyzw: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
+    scale: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    pivot_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "geometry", _require_canonical_geometry(self.geometry))
+        object.__setattr__(self, "translation_m", _selection_vector3(self.translation_m, "translation"))
+        object.__setattr__(self, "rotation_xyzw", _selection_vector4(self.rotation_xyzw, "quaternion"))
+        normalized_scale = _selection_vector3(self.scale, "scale")
+        if any(component == 0.0 for component in normalized_scale):
+            raise ValueError("scale must be invertible")
+        object.__setattr__(self, "scale", normalized_scale)
+        object.__setattr__(self, "pivot_m", _selection_vector3(self.pivot_m, "pivot"))
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "kind": "affine",
+            "geometry": self.geometry.to_ir(),
+            "translation_m": list(self.translation_m),
+            "rotation_xyzw": list(self.rotation_xyzw),
+            "scale": list(self.scale),
+            "pivot_m": list(self.pivot_m),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AuthoredSelectionAffine(AuthoredSelectionGeometry):
+    """Affine authored AST containing at least one unresolved authored node."""
+
+    geometry: AuthoredSelectionGeometry
+    translation_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    rotation_xyzw: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
+    scale: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    pivot_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+    def __post_init__(self) -> None:
+        geometry = _require_authored_geometry(self.geometry)
+        if type(geometry) in (SelectionCylinder, SelectionAffine):
+            raise TypeError("authored affine geometry must contain an unresolved authored node")
+        object.__setattr__(self, "geometry", geometry)
+        object.__setattr__(self, "translation_m", _selection_vector3(self.translation_m, "translation"))
+        object.__setattr__(self, "rotation_xyzw", _selection_vector4(self.rotation_xyzw, "quaternion"))
+        normalized_scale = _selection_vector3(self.scale, "scale")
+        if any(component == 0.0 for component in normalized_scale):
+            raise ValueError("scale must be invertible")
+        object.__setattr__(self, "scale", normalized_scale)
+        object.__setattr__(self, "pivot_m", _selection_vector3(self.pivot_m, "pivot"))
+
+    def to_authored_ir(self) -> dict[str, object]:
+        return {
+            "kind": "affine",
+            "geometry": self.geometry.to_authored_ir(),
+            "translation_m": list(self.translation_m),
+            "rotation_xyzw": list(self.rotation_xyzw),
+            "scale": list(self.scale),
+            "pivot_m": list(self.pivot_m),
+        }
+
+
+def _selection_ir_mapping(value: object, field: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{field} must be a mapping")
+    if any(not isinstance(key, str) for key in value):
+        raise ValueError(f"{field} keys must be strings")
+    return value
+
+
+def _selection_ir_fields(
+    value: Mapping[str, object],
+    expected: set[str],
+    field: str,
+) -> None:
+    actual = set(value)
+    unknown = actual - expected
+    missing = expected - actual
+    if unknown:
+        raise ValueError(f"{field} has unknown fields: {', '.join(sorted(unknown))}")
+    if missing:
+        raise ValueError(f"{field} is missing fields: {', '.join(sorted(missing))}")
+
+
+def _selection_geometry_from_ir(value: object) -> SelectionGeometry:
+    node = _selection_ir_mapping(value, "canonical geometry predicate")
+    kind = node.get("kind")
+    if kind == "cylinder":
+        _selection_ir_fields(
+            node,
+            {"kind", "center_m", "axis", "radius_m", "height_m"},
+            "canonical cylinder",
+        )
+        return SelectionCylinder(
+            radius_m=node["radius_m"],
+            center_m=node["center_m"],
+            axis=node["axis"],
+            height_m=node["height_m"],
+        )
+    if kind == "affine":
+        _selection_ir_fields(
+            node,
+            {"kind", "geometry", "translation_m", "rotation_xyzw", "scale", "pivot_m"},
+            "canonical affine",
+        )
+        return SelectionAffine(
+            geometry=_selection_geometry_from_ir(node["geometry"]),
+            translation_m=node["translation_m"],
+            rotation_xyzw=node["rotation_xyzw"],
+            scale=node["scale"],
+            pivot_m=node["pivot_m"],
+        )
+    raise ValueError(f"canonical geometry predicate has unsupported kind {kind!r}")
+
+
+def _selection_geometry_from_authored_ir(value: object) -> AuthoredSelectionGeometry:
+    node = _selection_ir_mapping(value, "authored selection geometry")
+    kind = node.get("kind")
+    if kind == "cylinder":
+        return _selection_geometry_from_ir(node)
+    if kind == "disk":
+        _selection_ir_fields(
+            node,
+            {"kind", "center_m", "normal", "radius_m", "extrusion"},
+            "authored through-object disk",
+        )
+        extrusion = _selection_ir_mapping(node["extrusion"], "extrusion")
+        _selection_ir_fields(extrusion, {"kind", "object_id"}, "extrusion")
+        if extrusion["kind"] != "through_object":
+            raise ValueError("extrusion kind must be 'through_object'")
+        return SelectionThroughObjectDisk(
+            radius_m=node["radius_m"],
+            center_m=node["center_m"],
+            normal=node["normal"],
+            extrusion=ThroughObjectExtrusion(object_id=extrusion["object_id"]),
+        )
+    if kind == "affine":
+        _selection_ir_fields(
+            node,
+            {"kind", "geometry", "translation_m", "rotation_xyzw", "scale", "pivot_m"},
+            "authored affine",
+        )
+        geometry = _selection_geometry_from_authored_ir(node["geometry"])
+        affine_fields = {
+            "geometry": geometry,
+            "translation_m": node["translation_m"],
+            "rotation_xyzw": node["rotation_xyzw"],
+            "scale": node["scale"],
+            "pivot_m": node["pivot_m"],
+        }
+        if type(geometry) in (SelectionCylinder, SelectionAffine):
+            return SelectionAffine(**affine_fields)
+        return AuthoredSelectionAffine(**affine_fields)
+    raise ValueError(f"authored selection geometry has unsupported kind {kind!r}")

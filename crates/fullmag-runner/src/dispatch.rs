@@ -49,8 +49,10 @@ use crate::native_fem::{
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::quantities::normalized_quantity_name;
 use crate::quantities::{active_fdm_preview_quantities, active_fem_preview_quantities};
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::relaxation::apply_energy_minimizer_provenance;
+#[cfg(feature = "fem-gpu")]
+use crate::relaxation::apply_fem_direct_minimizer_policy_provenance;
 #[cfg(feature = "cuda")]
 use crate::relaxation::direct_minimizer::direct_minimizer_control;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
@@ -5100,6 +5102,12 @@ fn execute_cuda_fdm(
         },
         ..Default::default()
     };
+    apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
+    if let Some(control) = direct_minimizer_control(plan.relaxation.as_ref()) {
+        provenance.energy_minimizer_realization =
+            crate::relaxation::native_direct_minimizer_realization(control.algorithm, true)
+                .map(str::to_string);
+    }
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)
     } else {
@@ -5957,6 +5965,11 @@ fn execute_native_fem(
         ..Default::default()
     };
     apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
+    apply_fem_direct_minimizer_policy_provenance(
+        &mut provenance,
+        plan.relaxation.as_ref(),
+        execution_engine == "fem_native_gpu",
+    );
     crate::fem::relax::llg_overdamped::fill_provenance(&mut provenance, plan);
     if native_relaxation_step.is_some() {
         provenance.energy_minimizer_realization = plan.relaxation.as_ref().and_then(|control| {
@@ -7512,6 +7525,28 @@ mod tests {
         assert!(
             helper_body.contains("advance_due_schedules(field_schedules, current_stats.time)"),
             "a successful step-0 snapshot must advance the schedule before the first accepted step"
+        );
+    }
+
+    #[test]
+    fn cuda_direct_minimizer_provenance_is_finalized_before_artifact_recording() {
+        let source = include_str!("dispatch.rs");
+        let execute_pos = source
+            .find("fn execute_cuda_fdm")
+            .expect("CUDA FDM execute function must exist");
+        let artifact_pos = source[execute_pos..]
+            .find("let mut artifacts")
+            .map(|offset| execute_pos + offset)
+            .expect("CUDA FDM execute must construct its artifact recorder");
+        let provenance_setup = &source[execute_pos..artifact_pos];
+
+        assert!(
+            provenance_setup.contains("apply_energy_minimizer_provenance"),
+            "CUDA FDM must publish the requested/resolved direct minimizer before artifacts"
+        );
+        assert!(
+            provenance_setup.contains("native_direct_minimizer_realization"),
+            "CUDA FDM must publish an engine-specific PG-BB/NCG realization ID"
         );
     }
 

@@ -1,4 +1,5 @@
 import type { components } from "@/kernel/api/generated/openapi-v2-types";
+import { recordVisualizationDebugPerformanceMetric } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 import type { DecodedTopology } from "@/kernel/api/codecs";
 import {
   buildPartSurfaceIndices,
@@ -153,6 +154,7 @@ const DEFAULT_AXIS: NumericVector3 = [0, 0, 1];
 const DEFAULT_QUATERNION: NumericQuaternion = [0, 0, 0, 1];
 const DEFAULT_SCALE: NumericVector3 = [1, 1, 1];
 const REGION_MESH_OVERLAY_GEOMETRY_CACHE_LIMIT = 16;
+export const REGION_MESH_OVERLAY_GEOMETRY_CACHE_MAX_BYTES = 64 * 1024 * 1024;
 const topologyPositionCache = new WeakMap<DecodedTopology, Float32Array>();
 const regionMeshOverlayGeometryCache = new WeakMap<
   DecodedTopology,
@@ -262,7 +264,11 @@ function cachedRegionMeshOverlayGeometry(
     regionMeshOverlayGeometryCache.set(topology, topologyCache);
   }
   const cached = topologyCache.get(key);
-  if (cached) return cached;
+  if (cached) {
+    recordVisualizationDebugPerformanceMetric("cacheHits");
+    return cached;
+  }
+  recordVisualizationDebugPerformanceMetric("cacheMisses");
 
   const selectedElementSet = new Set(selectedElements);
 
@@ -334,12 +340,39 @@ function normalizeRegionMeshOverlaySurfacePart(
 
 function evictOldestRegionMeshOverlayGeometryEntries(
   entries: Map<string, RegionMeshOverlayGeometryBuffers>,
+  maxEntries = REGION_MESH_OVERLAY_GEOMETRY_CACHE_LIMIT,
+  maxBytes = REGION_MESH_OVERLAY_GEOMETRY_CACHE_MAX_BYTES,
 ): void {
-  while (entries.size > REGION_MESH_OVERLAY_GEOMETRY_CACHE_LIMIT) {
+  while (
+    entries.size > maxEntries ||
+    regionMeshOverlayGeometryEntriesByteLength(entries) > maxBytes
+  ) {
     const oldestKey = entries.keys().next().value;
     if (oldestKey === undefined) return;
     entries.delete(oldestKey);
+    recordVisualizationDebugPerformanceMetric("cacheEvictions");
   }
+}
+
+export function evictRegionMeshOverlayGeometryEntriesForTests(
+  entries: Map<string, RegionMeshOverlayGeometryBuffers>,
+  maxEntries: number,
+  maxBytes: number,
+): void {
+  evictOldestRegionMeshOverlayGeometryEntries(entries, maxEntries, maxBytes);
+}
+
+function regionMeshOverlayGeometryEntriesByteLength(
+  entries: Map<string, RegionMeshOverlayGeometryBuffers>,
+): number {
+  return [...entries.values()].reduce(
+    (total, buffers) =>
+      total +
+      (buffers.edgeIndices?.byteLength ?? 0) +
+      (buffers.surfaceEdgeIndices?.byteLength ?? 0) +
+      (buffers.surfaceIndices?.byteLength ?? 0),
+    0,
+  );
 }
 
 function regionMeshOverlayGeometryCacheKey(

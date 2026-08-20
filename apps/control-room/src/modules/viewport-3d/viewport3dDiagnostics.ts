@@ -4,7 +4,10 @@ import { useEffect, useMemo, useSyncExternalStore } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry";
-import { recordVisualizationDebugViewportFrame } from "@/kernel/performance/visualizationDebugPerformanceProbe";
+import {
+  recordVisualizationDebugPerformanceMetric,
+  recordVisualizationDebugViewportFrame,
+} from "@/kernel/performance/visualizationDebugPerformanceProbe";
 import {
   DIAGNOSTIC_EVENT_NAMES,
   type DiagnosticViewport3DRecord,
@@ -16,6 +19,7 @@ import type { Viewport3DDerivedBufferCacheSnapshot } from "./build-engine/cache/
 
 import type { Viewport3DFieldDemandDiagnosticSummary } from "./model/viewport3DFieldDataPlan";
 import type { Viewport3DTargetDiagnosticSummary } from "./model/viewport3DTargetDiagnostics";
+import type { Viewport3DDirtyReason } from "./viewport3dTypes";
 import {
   createDiagnosticRecordFromViewport3DBuildDiagnostic,
   subscribeViewport3DBuildDiagnostics,
@@ -125,7 +129,9 @@ export interface Viewport3DTrackResourceOptions {
 }
 
 type TrackerListener = () => void;
-export type Viewport3DDirtyReasonCounts = Record<string, number>;
+export type Viewport3DDirtyReasonCounts = Partial<
+  Record<Viewport3DDirtyReason, number>
+>;
 
 const EMPTY_COUNTS: Viewport3DResourceCounts = {
   contextLosses: 0,
@@ -146,7 +152,7 @@ const EMPTY_COUNTS: Viewport3DResourceCounts = {
 };
 
 export class Viewport3DResourceTracker {
-  private readonly dirtyReasonCounts = new Map<string, number>();
+  private readonly dirtyReasonCounts = new Map<Viewport3DDirtyReason, number>();
   private readonly disposables = new Map<object, () => void>();
   private readonly ledgerEntries = new Map<object, Viewport3DResourceLedgerEntry>();
   private readonly listeners = new Set<TrackerListener>();
@@ -223,7 +229,7 @@ export class Viewport3DResourceTracker {
     this.notify();
   }
 
-  recordDirtyFrame(reason: string): void {
+  recordDirtyFrame(reason: Viewport3DDirtyReason): void {
     recordVisualizationDebugViewportFrame(reason);
     this.dirtyReasonCounts.set(
       reason,
@@ -284,6 +290,11 @@ export class Viewport3DResourceTracker {
       owner: ledgerEntry.owner,
     });
     this.counts = incrementCount(this.counts, kind, 1);
+    if (kind === "geometry") {
+      recordVisualizationDebugPerformanceMetric("geometriesCreated");
+    } else if (kind === "material") {
+      recordVisualizationDebugPerformanceMetric("materialsCreated");
+    }
     this.recordViewportEvent({
       detail: {
         byteLength: ledgerEntry.byteLength,
@@ -314,6 +325,11 @@ export class Viewport3DResourceTracker {
     }
     dispose();
     this.counts = incrementCount(this.counts, kind, -1);
+    if (kind === "geometry") {
+      recordVisualizationDebugPerformanceMetric("geometriesDisposed");
+    } else if (kind === "material") {
+      recordVisualizationDebugPerformanceMetric("materialsDisposed");
+    }
     this.recordViewportEvent({
       detail: {
         byteLength: ledgerEntry?.byteLength ?? null,

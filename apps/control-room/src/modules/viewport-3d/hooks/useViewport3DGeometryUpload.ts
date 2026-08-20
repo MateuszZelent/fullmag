@@ -6,6 +6,7 @@ import type { BufferGeometry } from "three";
 import type { Viewport3DBuildLane } from "../build-engine/viewport3dBuildEngineTypes";
 import type { Viewport3DGpuUploadManager } from "../build-engine/gpu/viewport3dGpuUploadTypes";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import type { Viewport3DDirtyReason } from "../viewport3dTypes";
 
 interface Viewport3DGeometryUploadSnapshot {
   readonly geometry: BufferGeometry | null;
@@ -38,7 +39,7 @@ export function useViewport3DGeometryUpload({
   uploadManager,
 }: {
   createGeometry: () => BufferGeometry | null;
-  dirtyReason: string;
+  dirtyReason: Viewport3DDirtyReason;
   enabled: boolean;
   estimatedBytes: number;
   invalidate: () => void;

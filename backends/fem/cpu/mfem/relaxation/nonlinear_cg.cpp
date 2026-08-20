@@ -459,6 +459,13 @@ int run_nonlinear_cg_step(
         out_stats.dt_seconds = 0.0;
         return FULLMAG_FEM_OK;
     }
+    if (relaxation_torque_confirmation_pending(ctx, current_stats.max_torque_Apm)) {
+        out_stats = current_stats;
+        out_stats.dt_seconds = 0.0;
+        out_stats.max_rhs_amplitude = 0.0;
+        update_stage_completion_from_stats(ctx, out_stats);
+        return FULLMAG_FEM_OK;
+    }
 
     std::vector<double> previous_m;
     std::vector<double> previous_h_demag;

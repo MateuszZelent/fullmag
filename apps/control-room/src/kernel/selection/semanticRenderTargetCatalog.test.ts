@@ -213,7 +213,8 @@ describe("semanticRenderTargetCarriersFromManifest", () => {
 
     expect(carriers).toEqual([
       expect.objectContaining({
-        id: "segment:deleted-object:0",
+        diagnosticOnly: true,
+        id: expect.stringMatching(/^segment:deleted-object:[0-9a-f]{8}$/),
         label: "deleted-object",
         object_id: "deleted-object",
         role: "magnetic",
@@ -224,9 +225,55 @@ describe("semanticRenderTargetCarriersFromManifest", () => {
       parts: carriers,
       sceneObjectIds: new Set(),
     });
+    const carrierId = carriers[0]!.id;
     expect(resolveSemanticTargetForMeshPart(catalog, carriers[0]!)).toMatchObject({
-      explorerNodeId: "model:mesh:unassigned:segment%3Adeleted-object%3A0",
-      targetId: "part:segment:deleted-object:0",
+      explorerNodeId: `model:mesh:unassigned:${encodeURIComponent(carrierId)}`,
+      targetId: `part:${carrierId}`,
+    });
+  });
+
+  it("keeps degraded fallback carrier ids stable when manifest segment order changes", () => {
+    const first = {
+      boundary_face_count: 0,
+      boundary_face_start: 0,
+      element_count: 1,
+      element_start: 0,
+      geometry_id: "geometry-a",
+      node_count: 4,
+      node_start: 0,
+      object_id: "object-a",
+    };
+    const second = { ...first, geometry_id: "geometry-b", object_id: "object-b" };
+    const ids = (segments: typeof first[]) =>
+      semanticRenderTargetCarriersFromManifest({
+        mesh_parts: [],
+        object_segments: segments,
+      }).map((carrier) => carrier.id).toSorted();
+
+    expect(ids([first, second])).toEqual(ids([second, first]));
+  });
+
+  it("uses the backend-published fallback carrier identity verbatim", () => {
+    const carriers = semanticRenderTargetCarriersFromManifest({
+      mesh_parts: [],
+      object_segments: [{
+        boundary_face_count: 0,
+        boundary_face_start: 0,
+        diagnostic_only: true,
+        element_count: 1,
+        element_start: 0,
+        geometry_id: "geometry-a",
+        node_count: 4,
+        node_start: 0,
+        object_id: "object-a",
+        segment_fingerprint: "0123456789abcdef",
+        segment_id: "segment:object-a:0123456789abcdef",
+      }],
+    });
+
+    expect(carriers[0]).toMatchObject({
+      diagnosticOnly: true,
+      id: "segment:object-a:0123456789abcdef",
     });
   });
 

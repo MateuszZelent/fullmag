@@ -6,6 +6,7 @@ import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import { fieldVectorComponentsSemanticallyEqual } from "@/kernel/api/fieldQueryIdentity";
 import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
 import type { SurfaceFieldProjectionMode } from "@/kernel/visualization/ObjectVisualizationController";
+import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
 
 import type {
   Viewport3DFieldComponentDemand,
@@ -45,6 +46,8 @@ export interface Viewport3DTargetFieldBuffer {
   requestId: string | null;
   requestIdentityCompatible: boolean;
   resourceKey: string | null;
+  sessionEpoch: string | null;
+  sessionId: string | null;
   sampled: boolean;
   scopeId: string | null;
   scopeKind: Viewport3DFieldScopeKind;
@@ -76,6 +79,7 @@ export function buildViewport3DTargetFieldBuffer({
   responseDomainGenerationId,
   responseMetadata,
   resourceKey,
+  sessionIdentity = null,
   synthetic = false,
   targetIds,
   topologyRevision = null,
@@ -88,6 +92,7 @@ export function buildViewport3DTargetFieldBuffer({
   responseDomainGenerationId?: string | null;
   responseMetadata?: FieldVectorResponseMetadata | null;
   resourceKey: string | null;
+  sessionIdentity?: SessionResourceIdentity | null;
   synthetic?: boolean;
   targetIds: readonly string[];
   topologyRevision?: string | null;
@@ -164,6 +169,8 @@ export function buildViewport3DTargetFieldBuffer({
       meshTopologyHash,
       domainGenerationId,
       indexing,
+      sessionEpoch: sessionIdentity?.sessionEpoch ?? null,
+      sessionId: sessionIdentity?.sessionId ?? null,
       topologyRevision,
     }),
     capability,
@@ -187,6 +194,8 @@ export function buildViewport3DTargetFieldBuffer({
       : buildViewport3DFieldResourceRequestId(fieldVector.quantityId, query),
     requestIdentityCompatible,
     resourceKey,
+    sessionEpoch: sessionIdentity?.sessionEpoch ?? null,
+    sessionId: sessionIdentity?.sessionId ?? null,
     sampled,
     scopeId,
     scopeKind,
@@ -500,6 +509,8 @@ function buildViewport3DTargetFieldBufferId({
   meshTopologyHash,
   domainGenerationId,
   indexing,
+  sessionEpoch,
+  sessionId,
   topologyRevision,
 }: {
   component: Exclude<Viewport3DFieldComponentDemand, "none">;
@@ -511,9 +522,13 @@ function buildViewport3DTargetFieldBufferId({
   meshTopologyHash: string | null;
   domainGenerationId: string | null;
   indexing: NonNullable<DecodedFieldVector["indexing"]>;
+  sessionEpoch: string | null;
+  sessionId: string | null;
   topologyRevision: string | null;
 }): string {
   return [
+    sessionId ?? "session:none",
+    sessionEpoch ?? "epoch:none",
     resolveCanonicalQuantityId(quantityId),
     component,
     scopeKind,

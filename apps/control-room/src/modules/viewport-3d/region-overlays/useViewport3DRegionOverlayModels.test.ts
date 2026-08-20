@@ -5,6 +5,7 @@ import {
   createViewport3DRegionOverlayBuildReference,
   getViewport3DRegionOverlayModelCacheSnapshotForTests,
   putViewport3DRegionOverlayModelsInCache,
+  REGION_OVERLAY_MODEL_CACHE_MAX_BYTES,
   retainViewport3DRegionOverlayModelsFromCache,
   resolveViewport3DRegionOverlayBuildStatus,
   viewport3DRegionOverlayIdentityIsCompatible,
@@ -221,5 +222,27 @@ describe("useViewport3DRegionOverlayModels", () => {
         ?.models,
     ).toBe(retained.models);
     retained.release();
+  });
+
+  it("evicts unretained overlays when their typed-array memory exceeds the byte budget", () => {
+    const floatsPerEntry =
+      Math.floor(REGION_OVERLAY_MODEL_CACHE_MAX_BYTES / Float32Array.BYTES_PER_ELEMENT / 2) +
+      1;
+
+    for (let index = 0; index < 2; index += 1) {
+      putViewport3DRegionOverlayModelsInCache({
+        key: `region-overlay:large:${index}`,
+        models: [
+          { positions: new Float32Array(floatsPerEntry) } as never,
+        ],
+      }).release();
+    }
+
+    const snapshot = getViewport3DRegionOverlayModelCacheSnapshotForTests();
+    expect(snapshot.entryCount).toBe(1);
+    expect(snapshot.estimatedBytes).toBeLessThanOrEqual(
+      REGION_OVERLAY_MODEL_CACHE_MAX_BYTES,
+    );
+    expect(snapshot.keys).toEqual(["region-overlay:large:1"]);
   });
 });

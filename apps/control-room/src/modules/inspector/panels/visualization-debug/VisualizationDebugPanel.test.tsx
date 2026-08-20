@@ -290,6 +290,7 @@ function readyModel(): VisualizationDebugPanelModel {
     kind: "vector",
     label: "Magnetization",
     location: "node",
+    observation_frame: { observation_frame_id: "frame-42", session_epoch: "epoch-1", domain_generation_id: "domain-9", topology_revision: "topology-1", source_step: 0, source_time_seconds: null },
     materialization_wall_time_ns: 0,
     materialized_at_unix_ms: 0,
     quantity_id: "m",

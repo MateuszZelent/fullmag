@@ -1,5 +1,50 @@
 # Subagent-driven development progress
 
+## Plan: Frontend 3D visualization FEM/FDM remediation (2026-08-20)
+
+- Worktree: `/home/kkingstoun/git/fullmag/fullmag`
+- Branch: `master` (jawnie zatwierdzony przez użytkownika)
+- Source plan: `docs/superpowers/plans/2026-08-20-frontend-3d-visualization-fem-fdm-remediation.md`
+- Commit policy: no automatic commits or pushes; task reviews use task-scoped working-tree evidence.
+
+| Task | Status | Implementer | Review |
+|---:|---|---|---|
+| 0–4 | partial/current-tree | earlier implementation | formal task review pending |
+| 5 | partial/current-tree | earlier implementation | formal task review pending |
+| 6 | partial/current-tree | earlier implementation | formal task review pending |
+| 7 | complete (source contracts) | `frontend3d_task7_impl` | approved after four review waves; ACK/adoption identity, bounded fail-closed lifecycle and canonical durable quantity request/ACK proof verified; real browser/runtime capture remains Task 12 |
+| 8 | partial/current-tree | earlier implementation | formal task review pending |
+| 9 | complete (source contracts) | `frontend3d_task9_impl` | approved after three review waves; byte-first cache budgets, bounded counters, quantity/orbit gates and durable raw proof artifacts verified; real browser/WebGL qualification remains Task 12 |
+| 10 | source complete/current-tree | earlier implementation | formal task review pending |
+| 11 | partial/current-tree | earlier implementation | formal task review pending |
+| 12 | pending | — | — |
+
+## Plan: Frozen spins production implementation (2026-08-20)
+
+- Worktree: `/home/kkingstoun/git/fullmag/fullmag`
+- Branch: `master`
+- Source plan: `docs/superpowers/plans/2026-08-20-frozen-spins-production-implementation.md`
+- Commit policy: no automatic commits or pushes; task reviews use task-scoped working-tree diff packages.
+
+| Task | Status | Implementer | Review |
+|---:|---|---|---|
+| 1 | complete | task1_docs + task1_fix | review approved; focused docs gates clean |
+| 2 | complete | task2_geometry + task2_fix | review approved; planner 389/389, API 14/14, generated contract 9/9 |
+| 3 | complete | task3_python_geometry + task3_fix | review approved; focused 40/40; broad 313 passed, 1 skipped, 1 unrelated baseline failure |
+| 4 | in progress | pending | pending |
+| 5 | pending | — | — |
+| 6 | pending | — | — |
+| 7 | pending | — | — |
+| 8 | pending | — | — |
+| 9 | pending | — | — |
+| 10 | pending | — | — |
+| 11 | pending | — | — |
+| 12 | pending | — | — |
+| 13 | pending | — | — |
+| 14 | pending | — | — |
+| 15 | pending | — | — |
+| 16 | pending | — | — |
+
 ## Plan: Compositional physics object authoring (2026-08-13)
 
 - Worktree: `/home/kkingstoun/git/fullmag/fullmag/.worktrees/fdm-gpu-public-m1-spin`

@@ -2,6 +2,10 @@ use fullmag_ir::{FdmHintsIR, FdmMaterialIR, GeometryEntryIR};
 
 const TAU: f64 = std::f64::consts::PI * 2.0;
 
+use crate::selection::geometry::{
+    contains_point, normalize_axis as normalize_selection_axis, AffineTransform3,
+    BoundaryMembership, GeometryPredicate, SelectionError,
+};
 use crate::util::GRID_TOLERANCE;
 use crate::PlanError;
 
@@ -146,7 +150,7 @@ pub(crate) fn ir_to_shape(entry: &GeometryEntryIR) -> Result<GeometryShape, Stri
         } => Ok(GeometryShape::Cylinder {
             radius: *radius,
             height: *height,
-            axis: normalize_axis(*axis)?,
+            axis: normalize_selection_axis(*axis).map_err(|error| error.to_string())?,
         }),
         GeometryEntryIR::Sphere { radius, .. } => Ok(GeometryShape::Sphere { radius: *radius }),
         GeometryEntryIR::SinWaveguide {
@@ -317,53 +321,31 @@ pub(crate) fn shape_local_bounds(shape: &GeometryShape) -> Option<([f64; 3], [f6
     }
 }
 
-fn normalize_axis(axis: [f64; 3]) -> Result<[f64; 3], String> {
-    if axis.iter().any(|component| !component.is_finite()) {
-        return Err("cylinder axis must contain finite values".to_string());
-    }
-    let norm = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
-    if norm <= 1e-15 {
-        return Err("cylinder axis must be non-zero".to_string());
-    }
-    Ok([axis[0] / norm, axis[1] / norm, axis[2] / norm])
-}
-
-fn contains_cylinder_point(radius: f64, height: f64, axis: [f64; 3], point: [f64; 3]) -> bool {
-    let axial = point[0] * axis[0] + point[1] * axis[1] + point[2] * axis[2];
-    if axial.abs() > height * 0.5 {
-        return false;
-    }
-    let radial_sq = point[0] * point[0] + point[1] * point[1] + point[2] * point[2] - axial * axial;
-    radial_sq <= radius * radius
-}
-
-pub(crate) fn contains_cylinder(shape: &GeometryShape, point: [f64; 3]) -> bool {
-    match shape {
-        GeometryShape::Cylinder {
-            radius,
-            height,
-            axis,
-        } => contains_cylinder_point(*radius, *height, *axis, point),
-        _ => false,
-    }
-}
-
 impl GeometryShape {
-    /// Evaluate authored geometry membership in world coordinates.
-    ///
-    /// CSG operands and transforms are evaluated recursively so a translated
-    /// operand retains both its lateral offset and finite extent along z.
-    pub(crate) fn contains(&self, point: [f64; 3]) -> bool {
+    pub(crate) fn compile(&self) -> Result<CompiledGeometryShape, SelectionError> {
+        CompiledGeometryShape::from_shape(self)
+    }
+
+    fn to_geometry_entry(&self) -> GeometryEntryIR {
         match self {
-            Self::Box { size } => (0..3).all(|axis| point[axis].abs() <= size[axis] * 0.5),
-            Self::Cylinder { .. } => contains_cylinder(self, point),
-            Self::Sphere { radius } => {
-                point
-                    .iter()
-                    .map(|component| component * component)
-                    .sum::<f64>()
-                    <= radius * radius
-            }
+            Self::Box { size } => GeometryEntryIR::Box {
+                name: "fdm-canonical-box".to_string(),
+                size: *size,
+            },
+            Self::Cylinder {
+                radius,
+                height,
+                axis,
+            } => GeometryEntryIR::Cylinder {
+                name: "fdm-canonical-cylinder".to_string(),
+                radius: *radius,
+                height: *height,
+                axis: *axis,
+            },
+            Self::Sphere { radius } => GeometryEntryIR::Sphere {
+                name: "fdm-canonical-sphere".to_string(),
+                radius: *radius,
+            },
             Self::SinWaveguide {
                 length,
                 width,
@@ -372,17 +354,168 @@ impl GeometryShape {
                 amplitude,
                 phase,
                 z0,
-            } => contains_sin_waveguide(
-                point[0], point[1], point[2], *length, *width, *height, *period, *amplitude,
-                *phase, *z0,
-            ),
+            } => GeometryEntryIR::SinWaveguide {
+                name: "fdm-sin-waveguide".to_string(),
+                length: *length,
+                width: *width,
+                height: *height,
+                period: *period,
+                amplitude: *amplitude,
+                phase: *phase,
+                z0: *z0,
+            },
             Self::ArchWaveguide {
                 length,
                 width,
                 height,
                 arch_height,
                 z0,
-            } => contains_arch_waveguide(
+            } => GeometryEntryIR::ArchWaveguide {
+                name: "fdm-arch-waveguide".to_string(),
+                length: *length,
+                width: *width,
+                height: *height,
+                arch_height: *arch_height,
+                z0: *z0,
+            },
+            Self::Imported { source, format } => GeometryEntryIR::ImportedGeometry {
+                name: "fdm-imported-geometry".to_string(),
+                source: source.clone(),
+                format: format.clone(),
+                scale: Default::default(),
+            },
+            Self::Translate { child, by } => GeometryEntryIR::Translate {
+                name: "fdm-canonical-translate".to_string(),
+                base: Box::new(child.to_geometry_entry()),
+                by: *by,
+            },
+            Self::Difference { base, tool } => GeometryEntryIR::Difference {
+                name: "fdm-canonical-difference".to_string(),
+                base: Box::new(base.to_geometry_entry()),
+                tool: Box::new(tool.to_geometry_entry()),
+            },
+        }
+    }
+
+    fn has_legacy_waveguide(&self) -> bool {
+        match self {
+            Self::SinWaveguide { .. } | Self::ArchWaveguide { .. } => true,
+            Self::Translate { child, .. } => child.has_legacy_waveguide(),
+            Self::Difference { base, tool } => {
+                base.has_legacy_waveguide() || tool.has_legacy_waveguide()
+            }
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum CompiledGeometryShape {
+    Canonical(GeometryPredicate),
+    SinWaveguide {
+        length: f64,
+        width: f64,
+        height: f64,
+        period: f64,
+        amplitude: f64,
+        phase: f64,
+        z0: f64,
+    },
+    ArchWaveguide {
+        length: f64,
+        width: f64,
+        height: f64,
+        arch_height: f64,
+        z0: f64,
+    },
+    Translate {
+        child: Box<CompiledGeometryShape>,
+        by: [f64; 3],
+    },
+    Difference {
+        base: Box<CompiledGeometryShape>,
+        tool: Box<CompiledGeometryShape>,
+    },
+}
+
+impl CompiledGeometryShape {
+    fn from_shape(shape: &GeometryShape) -> Result<Self, SelectionError> {
+        if !shape.has_legacy_waveguide() {
+            return Ok(Self::Canonical(GeometryPredicate::from_geometry_entry(
+                &shape.to_geometry_entry(),
+                AffineTransform3::identity(),
+                BoundaryMembership::inclusive(),
+            )?));
+        }
+        match shape {
+            GeometryShape::SinWaveguide {
+                length,
+                width,
+                height,
+                period,
+                amplitude,
+                phase,
+                z0,
+            } => Ok(Self::SinWaveguide {
+                length: *length,
+                width: *width,
+                height: *height,
+                period: *period,
+                amplitude: *amplitude,
+                phase: *phase,
+                z0: *z0,
+            }),
+            GeometryShape::ArchWaveguide {
+                length,
+                width,
+                height,
+                arch_height,
+                z0,
+            } => Ok(Self::ArchWaveguide {
+                length: *length,
+                width: *width,
+                height: *height,
+                arch_height: *arch_height,
+                z0: *z0,
+            }),
+            GeometryShape::Translate { child, by } => Ok(Self::Translate {
+                child: Box::new(Self::from_shape(child)?),
+                by: *by,
+            }),
+            GeometryShape::Difference { base, tool } => Ok(Self::Difference {
+                base: Box::new(Self::from_shape(base)?),
+                tool: Box::new(Self::from_shape(tool)?),
+            }),
+            _ => Ok(Self::Canonical(GeometryPredicate::from_geometry_entry(
+                &shape.to_geometry_entry(),
+                AffineTransform3::identity(),
+                BoundaryMembership::inclusive(),
+            )?)),
+        }
+    }
+
+    pub(crate) fn contains(&self, point: [f64; 3]) -> Result<bool, SelectionError> {
+        match self {
+            Self::Canonical(predicate) => contains_point(predicate, point),
+            Self::SinWaveguide {
+                length,
+                width,
+                height,
+                period,
+                amplitude,
+                phase,
+                z0,
+            } => Ok(contains_sin_waveguide(
+                point[0], point[1], point[2], *length, *width, *height, *period, *amplitude,
+                *phase, *z0,
+            )),
+            Self::ArchWaveguide {
+                length,
+                width,
+                height,
+                arch_height,
+                z0,
+            } => Ok(contains_arch_waveguide(
                 point[0],
                 point[1],
                 point[2],
@@ -391,12 +524,24 @@ impl GeometryShape {
                 *height,
                 *arch_height,
                 *z0,
-            ),
+            )),
             Self::Translate { child, by } => {
                 child.contains([point[0] - by[0], point[1] - by[1], point[2] - by[2]])
             }
-            Self::Difference { base, tool } => base.contains(point) && !tool.contains(point),
-            Self::Imported { .. } => false,
+            Self::Difference { base, tool } => Ok(base.contains(point)? && !tool.contains(point)?),
+        }
+    }
+}
+
+fn compile_shape_for_mask(
+    shape: &GeometryShape,
+    errors: &mut Vec<String>,
+) -> Option<CompiledGeometryShape> {
+    match shape.compile() {
+        Ok(predicate) => Some(predicate),
+        Err(error) => {
+            errors.push(error.to_string());
+            None
         }
     }
 }
@@ -489,6 +634,9 @@ pub(crate) fn voxelize_shape(
             };
             let bounds_min = [-bbox[0] * 0.5, -bbox[1] * 0.5, -bbox[2] * 0.5];
             let mut mask = vec![false; n];
+            let Some(predicate) = compile_shape_for_mask(shape, errors) else {
+                return (bbox, None, [nx, ny, nz], bounds_min);
+            };
             for z in 0..nz {
                 for y in 0..ny {
                     for x in 0..nx {
@@ -498,7 +646,13 @@ pub(crate) fn voxelize_shape(
                             bounds_min[2] + (z as f64 + 0.5) * cell_size[2],
                         ];
                         let idx = (x + nx * (y + ny * z)) as usize;
-                        mask[idx] = contains_cylinder_point(*radius, *height, *axis, point);
+                        mask[idx] = match predicate.contains(point) {
+                            Ok(inside) => inside,
+                            Err(error) => {
+                                errors.push(error.to_string());
+                                return (bbox, None, [nx, ny, nz], bounds_min);
+                            }
+                        };
                     }
                 }
             }
@@ -515,6 +669,9 @@ pub(crate) fn voxelize_shape(
                 return (bbox, None, grid_cells, [-*radius; 3]);
             };
             let mut mask = vec![false; n];
+            let Some(predicate) = compile_shape_for_mask(shape, errors) else {
+                return (bbox, None, grid_cells, [-*radius; 3]);
+            };
             for z in 0..grid_cells[2] {
                 for y in 0..grid_cells[1] {
                     for x in 0..grid_cells[0] {
@@ -524,11 +681,13 @@ pub(crate) fn voxelize_shape(
                             -*radius + (z as f64 + 0.5) * cell_size[2],
                         ];
                         let index = (x + grid_cells[0] * (y + grid_cells[1] * z)) as usize;
-                        mask[index] = point
-                            .iter()
-                            .map(|component| component * component)
-                            .sum::<f64>()
-                            <= radius * radius;
+                        mask[index] = match predicate.contains(point) {
+                            Ok(inside) => inside,
+                            Err(error) => {
+                                errors.push(error.to_string());
+                                return (bbox, None, grid_cells, [-*radius; 3]);
+                            }
+                        };
                     }
                 }
             }
@@ -640,6 +799,9 @@ pub(crate) fn voxelize_shape(
                 return (bbox, None, [nx, ny, nz], bounds_min);
             };
             let mut mask = vec![false; n];
+            let Some(predicate) = compile_shape_for_mask(shape, errors) else {
+                return (bbox, None, [nx, ny, nz], bounds_min);
+            };
             for z in 0..nz {
                 for y in 0..ny {
                     for x in 0..nx {
@@ -649,7 +811,13 @@ pub(crate) fn voxelize_shape(
                             bounds_min[2] + (z as f64 + 0.5) * cell_size[2],
                         ];
                         let idx = (x + nx * (y + ny * z)) as usize;
-                        mask[idx] = base.contains(point) && !tool.contains(point);
+                        mask[idx] = match predicate.contains(point) {
+                            Ok(inside) => inside,
+                            Err(error) => {
+                                errors.push(error.to_string());
+                                return (bbox, None, [nx, ny, nz], bounds_min);
+                            }
+                        };
                     }
                 }
             }
@@ -673,6 +841,9 @@ pub(crate) fn voxelize_shape(
                 return (bbox, None, [nx, ny, nz], bounds_min);
             };
             let mut mask = vec![false; n];
+            let Some(predicate) = compile_shape_for_mask(shape, errors) else {
+                return (bbox, None, [nx, ny, nz], bounds_min);
+            };
             for z in 0..nz {
                 for y in 0..ny {
                     for x in 0..nx {
@@ -682,7 +853,13 @@ pub(crate) fn voxelize_shape(
                             bounds_min[2] + (z as f64 + 0.5) * cell_size[2],
                         ];
                         let idx = (x + nx * (y + ny * z)) as usize;
-                        mask[idx] = shape.contains(point);
+                        mask[idx] = match predicate.contains(point) {
+                            Ok(inside) => inside,
+                            Err(error) => {
+                                errors.push(error.to_string());
+                                return (bbox, None, [nx, ny, nz], bounds_min);
+                            }
+                        };
                     }
                 }
             }
@@ -779,4 +956,104 @@ pub(crate) fn cell_for_magnet(hints: &FdmHintsIR, magnet_name: &str) -> Result<[
             magnet_name, reason
         )
     })
+}
+
+#[cfg(test)]
+mod canonical_membership_tests {
+    use super::*;
+    use crate::selection::geometry::{
+        geometry_entry_compilation_count, reset_geometry_entry_compilation_count,
+    };
+
+    #[test]
+    fn geometry_shape_membership_uses_canonical_result_semantics() {
+        let shape = ir_to_shape(&GeometryEntryIR::Difference {
+            name: "difference".to_string(),
+            base: Box::new(GeometryEntryIR::Box {
+                name: "base".to_string(),
+                size: [4.0; 3],
+            }),
+            tool: Box::new(GeometryEntryIR::Translate {
+                name: "tool".to_string(),
+                base: Box::new(GeometryEntryIR::Sphere {
+                    name: "sphere".to_string(),
+                    radius: 1.0,
+                }),
+                by: [1.0, 0.0, 0.0],
+            }),
+        })
+        .unwrap();
+        let predicate = shape.compile().unwrap();
+        assert!(predicate.contains([-1.5, 0.0, 0.0]).unwrap());
+        assert!(!predicate.contains([1.0, 0.0, 0.0]).unwrap());
+
+        let imported = ir_to_shape(&GeometryEntryIR::ImportedGeometry {
+            name: "imported".to_string(),
+            source: "body.stl".to_string(),
+            format: "stl".to_string(),
+            scale: Default::default(),
+        })
+        .unwrap();
+        assert_eq!(
+            imported.compile().unwrap_err().code(),
+            "selection_imported_solid_unqualified"
+        );
+    }
+
+    #[test]
+    fn voxelization_compiles_one_predicate_for_multiple_samples() {
+        let shape = ir_to_shape(&GeometryEntryIR::Difference {
+            name: "difference".to_string(),
+            base: Box::new(GeometryEntryIR::Box {
+                name: "base".to_string(),
+                size: [4.0; 3],
+            }),
+            tool: Box::new(GeometryEntryIR::Sphere {
+                name: "tool".to_string(),
+                radius: 1.0,
+            }),
+        })
+        .unwrap();
+        reset_geometry_entry_compilation_count();
+
+        let (_, mask, cells, _) = voxelize_shape(&shape, [1.0; 3], &mut Vec::new());
+
+        assert_eq!(cells, [4; 3]);
+        assert_eq!(mask.unwrap().len(), 64);
+        assert_eq!(geometry_entry_compilation_count(), 1);
+    }
+
+    #[test]
+    fn nested_translate_difference_preserves_sin_and_arch_waveguides() {
+        let shape = ir_to_shape(&GeometryEntryIR::Translate {
+            name: "translated".to_string(),
+            base: Box::new(GeometryEntryIR::Difference {
+                name: "difference".to_string(),
+                base: Box::new(GeometryEntryIR::SinWaveguide {
+                    name: "sin".to_string(),
+                    length: 4.0,
+                    width: 2.0,
+                    height: 2.0,
+                    period: 4.0,
+                    amplitude: 0.0,
+                    phase: 0.0,
+                    z0: 0.0,
+                }),
+                tool: Box::new(GeometryEntryIR::ArchWaveguide {
+                    name: "arch".to_string(),
+                    length: 2.0,
+                    width: 1.0,
+                    height: 1.0,
+                    arch_height: 0.0,
+                    z0: 0.0,
+                }),
+            }),
+            by: [10.0, 0.0, 0.0],
+        })
+        .unwrap();
+        let predicate = shape.compile().unwrap();
+
+        assert!(predicate.contains([11.5, 0.0, 0.0]).unwrap());
+        assert!(!predicate.contains([10.0, 0.0, 0.0]).unwrap());
+    }
 }

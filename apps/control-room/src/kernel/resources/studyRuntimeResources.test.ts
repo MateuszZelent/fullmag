@@ -189,12 +189,14 @@ function statusWith({
   explicitTopology = false,
   resources = {},
   run = null,
+  sessionEpoch,
   sessionId = "session-1",
 }: {
   discretization?: string;
   explicitTopology?: boolean;
   resources?: Partial<LiveStatusResource["resources"]>;
   run?: LiveStatusResource["run"];
+  sessionEpoch?: string;
   sessionId?: string;
 } = {}): Pick<
   LiveStatusResource,
@@ -225,6 +227,8 @@ function statusWith({
     session: {
       created_at: "2026-05-29T00:00:00.000Z",
       name: "Test session",
+      session_epoch:
+        sessionEpoch ?? `${sessionId}@2026-05-29T00:00:00.000Z`,
       session_id: sessionId,
       workspace_root: "/tmp/fullmag-test",
     },
@@ -306,6 +310,7 @@ describe("study runtime command resource bundles", () => {
       location: "magnetic_only",
       materialization_wall_time_ns: 80_000_000,
       materialized_at_unix_ms: 1_700_000_000_000,
+      observation_frame: { observation_frame_id: "obs-frame-40" },
       quantity_id: "H_demag",
       source_revision: 7,
       source_step: 40,
@@ -316,7 +321,7 @@ describe("study runtime command resource bundles", () => {
     } as const;
 
     expect(fieldMetaFreshnessRevision(base as never)).toBe(
-      "12:stale_complete:7:40:10:1700000000000:80000000:",
+      "obs-frame-40:12:stale_complete:7:40:10:1700000000000:80000000:",
     );
     expect(
       fieldMetaFreshnessRevision({
@@ -329,11 +334,17 @@ describe("study runtime command resource bundles", () => {
     expect(
       fieldMetaFreshnessRevision({
         ...base,
+        observation_frame: { observation_frame_id: "obs-frame-41" },
+      } as never),
+    ).not.toBe(fieldMetaFreshnessRevision(base as never));
+    expect(
+      fieldMetaFreshnessRevision({
+        ...base,
         materialization_error: "native preview snapshot failed",
         state: "error",
       } as never),
     ).toBe(
-      "12:error:7:40:10:1700000000000:80000000:native preview snapshot failed",
+      "obs-frame-40:12:error:7:40:10:1700000000000:80000000:native preview snapshot failed",
     );
   });
 
@@ -366,6 +377,13 @@ describe("study runtime command resource bundles", () => {
       resources: { commands_revision: 2, scene_revision: 8 },
       sessionId: "session-new",
     }) as LiveStatusResource;
+
+    expect(runtimeCommandControlSessionStatusEquals(previous, next)).toBe(false);
+  });
+
+  it("treats a new epoch of the same session id as a runtime command control change", () => {
+    const previous = statusWith({ sessionEpoch: "session-1@1000" }) as LiveStatusResource;
+    const next = statusWith({ sessionEpoch: "session-1@2000" }) as LiveStatusResource;
 
     expect(runtimeCommandControlSessionStatusEquals(previous, next)).toBe(false);
   });

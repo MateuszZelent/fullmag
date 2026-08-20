@@ -1,105 +1,390 @@
-# Task 1 — test RED granicy środkowej warstwy FDM
+# Raport Task 1 — frozen spins: ADR, kontrakt fizyczny i kwalifikacja
 
 ## Status
 
-`DONE`
+`DONE_WITH_CONCERNS`
 
-## Implementacja
+Sześć wymaganych artefaktów Task 1 zostało utworzonych. Bezpośredni walidator
+noty naukowej, jego 23 testy, test granicy bieżącego Python API, skan
+niedomkniętych markerów, sprawdzenie whitespace i strict Sphinx zakończyły się
+powodzeniem. Dwa repo-wide guardy `public_docs` są czerwone wyłącznie na
+istniejących stronach poza zakresem Task 1; nie zostały naprawione, aby nie
+naruszyć zamrożonego zakresu i cudzych zmian.
 
-Dodano endpointowy test
-`planar_default_fdm_even_depth_uses_cell_centered_midplane` w
-`crates/fullmag-api/src/router_v2/tests.rs`.
+Nie wykonano `git add`, `git commit`, `git push` ani modyfikacji kodu.
 
-Fixture opisuje regularną geometrię FDM `2×2×2` z origin
-`[-1, -1, -1] m`, spacing `[1, 1, 1] m`, revision `8` i polem `m`
-niezerowym wyłącznie w niższej z dwóch środkowych warstw (`z-index=0`).
-Górna warstwa jest zerowa.
+## Zrealizowany zakres
 
-Test wykonuje kolejno:
+Utworzono:
 
-1. `GET /v2/sessions/current/data/fields/m/meta` i potwierdza zakres
-   canonical field `min=0`, `max=1`;
-2. `GET /v2/sessions/current/data/fields/m/planar-default/meta` dla
-   `component=magnitude`, `resolution=16×16`;
-3. bezpośrednią asercję, że default frame ma cell-centered
-   `origin_m[2] == -0.5`;
-4. odczyt canonical scalar link zawierającego sample token i expected
-   revisions, dekodowanie FMVP oraz wymaganie 256 próbek i co najmniej jednej
-   wartości o `abs(value) > 1e-12`.
+1. `docs/adr/0026-frozen-spins-constraint-and-selection-model.md`
+2. `docs/physics/0996-frozen-spins-constraint.md`
+3. `docs/physics/0996-frozen-spins-constraint.source-map.json`
+4. `docs/specs/selection-expr-v1.md`
+5. `docs/specs/frozen-spins-v1.md`
+6. `docs/validation/frozen-spins-qualification-matrix.md`
 
-Nie zmieniono kodu produkcyjnego.
+Raport wykonania:
 
-## RED command i pełna istotna porażka
+7. `.superpowers/sdd/task-1-report.md`
 
-```bash
-CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/mnt/fullmag-zfn2-native/cargo-targets/planar-redesign-api cargo test -p fullmag-api planar_default_fdm_even_depth_uses_cell_centered_midplane -- --nocapture
-```
+Istniejąca modyfikacja `.superpowers/sdd/progress.md` była obecna przed Task 1
+i nie została dotknięta.
 
-Wynik: expected RED, `exit 1`, test skompilował się i uruchomił:
+## Zamknięte decyzje
 
-```text
-running 1 test
-test router_v2::tests::planar_default_fdm_even_depth_uses_cell_centered_midplane ... FAILED
+### Semantyka i IR
 
-thread 'router_v2::tests::planar_default_fdm_even_depth_uses_cell_centered_midplane' panicked at crates/fullmag-api/src/router_v2/tests.rs:36551:5:
-assertion `left == right` failed
-  left: Number(0.0)
- right: Number(-0.5)
+- `FrozenSpins` jest osobnym `MagnetizationConstraintIR`, nie parametrem
+  materiałowym ani właściwością `ObjectRegionIR`.
+- `ProblemIR` ma docelowo top-level `selections[]` i
+  `magnetization_constraints[]`; Python stage sugar obniża się do top-level
+  definicji z activation scope.
+- Publiczne wersje to `selection_expr.v1` i `frozen_spins.v1`; ADR przyjmuje
+  docelowy bump `ProblemIR 0.3.0 -> 0.4.0` z addytywną migracją pustych
+  kolekcji.
+- Typed AST odrzuca `eval`, lambdy i stringowe programy. Zwykłe float `==` nie
+  należy do V1; używa się `approx` lub `between`.
+- Publiczny `disk` obniża się do skończonego cylindra. `through_object` wymaga
+  obiektu, skończonych bounds i przecięcia z jego domeną.
 
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 922 filtered out
-```
+### Capture i runtime
 
-Porażka dowodzi dokładnego błędu: default frame dla parzystej liczby warstw
-publikuje geometryczne `z=0.0`, czyli granicę komórek, zamiast środka niższej
-centralnej komórki `z=-0.5`. Obecny floor sampler wybiera przez to zerową
-górną warstwę. Dalsza asercja FMVP pozostaje w teście i po naprawie położenia
-płaszczyzny wymaga niezerowego planar magnitude.
+- V1 wspiera `static` i `snapshot_at_activation`.
+- `capture_current_at_activation` materializuje maskę i przechwytuje referencję
+  atomowo z tej samej stabilnej rewizji, po zwykłej normalizacji/walidacji
+  stanu stage i przed pierwszą próbą kroku.
+- Constraint obowiązuje od początku zarówno w relaksacji, jak i dynamice.
+- Backend maskuje pełny RHS dopiero po LLG, STT, SOT, termice i pozostałych
+  źródłach, odtwarza referencję po każdym kandydacie i liczy autorytatywne
+  redukcje po swobodnych DOF.
+- Energia i pola pozostają pełnodomenowe; frozen spiny nadal wpływają na free
+  DOF.
+- TPI używa essential true DOF albo równoważnej eliminacji w operatorze.
+- All-frozen kończy się bez iteracji z
+  `stop_reason="all_active_dofs_frozen"`.
 
-Pierwszy przebieg diagnostyczny użył niedozwolonego `resolution=2×2` i był RED
-na `planar_meta_response.status(): 400 != 200`. To nie był poprawny RED.
-Fixture skorygowano do istniejącego minimum `16×16`; dopiero powyższy przebieg
-jest zachowanym dowodem regresji.
+### Dyskretyzacja, pamięć i produkt
 
-## Files changed
+- FDM otrzymuje osobny `frozen_mask`; `region_mask` nie może go zastępować.
+- Authoritative FEM preview i solver używają magnetic true DOF. Node/centroid
+  preview może być tylko jawnie nieautorytatywny.
+- Referencyjna reprezentacja runtime V1 jest dense: `u8` maska i dense
+  trójskładnikowa referencja w precyzji backendu, z osobnym no-mask fast path.
+- API pozostaje resource-first: cienki status, rewizjonowane resources i
+  binarna data plane dla ciężkiej maski.
+- Requested intent i resolved execution są zachowywane osobno; forced lane nie
+  może wykonać cichego fallbacku ani pominąć constraintu.
 
-- `crates/fullmag-api/src/router_v2/tests.rs` — test regresyjny, commitowany.
-- `.superpowers/sdd/task-1-report.md` — ten raport, poza commitem.
+## Kontrakt naukowy
 
-Commit: `b1464b481` (`test: reproduce planar FDM midplane boundary bug`).
+Nota definiuje i mapuje:
+
+- $F \subseteq A$ oraz $U=A\setminus F$;
+- $\mathbf m_i(t)=\mathbf m_i^\star$ na $F$;
+- constrained energy $E_c(\mathbf m_U)=E(\mathbf m_U,\mathbf m_F^\star)$;
+- pełny złożony RHS wraz z LLG, STT, SOT i termiką;
+- final-RHS masking;
+- candidate restore;
+- free-domain RHS i torque reductions;
+- TPI essential increment;
+- all-frozen, checkpoint, provenance i free/all telemetry.
+
+Każde równanie ma labelled MyST math, kompletną tabelę symboli i jednostek SI
+oraz source-map. Planowane równania wskazują wyłącznie na unikalne
+`DOC-ANCHOR` z `evidence_status=planned_contract`. Aktualne źródła kodu mapują
+jedynie istniejących właścicieli i luki: granicę wersji IR, dwa różne
+evaluatory geometrii, FEM membership preview, `ObjectRegion` i `fm.study`.
+
+Nie utworzono fałszywego immutable linku dla nowych, niecommitowanych plików.
+Ich indeks jawnie używa `worktree/uncommitted; path + anchor only`. Linki do
+aktualnych źródeł kodu używają pełnego audytowanego SHA
+`d9518082eaee2131c3e7160bd8ae952ed2f45899`.
+
+## Macierz kwalifikacji
+
+Macierz zawiera wymagane kolumny `IR`, `planner`, `runtime`, `scientific`,
+`managed`, `browser`. Wszystkie komórki wszystkich lane'ów zaczynają jako
+`UNQUALIFIED`, w tym:
+
+- FDM CPU/reference FP64;
+- FDM CUDA FP64 i FP32;
+- FDM multilayer CPU/reference i CUDA;
+- FEM CPU/MFEM FP64;
+- FEM GPU MFEM/hypre/libCEED/CUDA FP64.
+
+Osobna macierz algorytmów nie dziedziczy kwalifikacji między overdamped LLG,
+dynamiką, explicit/adaptive RK, ABM, PG-BB, NCG, TPI, STT, SOT, termiką i
+all-frozen. Dokument określa minimalny ledger dowodu z pełnym SHA, dokładną
+komendą, runtime/device identity, immutable artefaktem, oraclem, tolerancjami i
+reviewerem.
 
 ## Weryfikacja
 
-- focused Cargo test: oczekiwany właściwy RED opisany wyżej;
-- `rustfmt --edition 2021 --check crates/fullmag-api/src/router_v2/tests.rs`:
-  `exit 0`;
-- `git diff --check -- crates/fullmag-api/src/router_v2/tests.rs`: `exit 0`;
-- osobne `git diff --cached --name-only` przed commitem wskazało wyłącznie
-  `crates/fullmag-api/src/router_v2/tests.rs`.
+### Bezpośrednie gate'y Task 1 — PASS
 
-Workspace-wide `cargo fmt --all -- --check` nie przeszedł przez obcą,
-niestage'owaną zmianę formatowania w
-`crates/fullmag-api/src/session_persistence.rs:2727`. Nie zmieniono tego pliku;
-zawężony rustfmt dla `tests.rs` przeszedł.
+1. Source-map validator:
 
-## Self-review
+   ```text
+   python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/0996-frozen-spins-constraint.source-map.json --repo-root .
+   exit 0
+   ```
 
-- Fixture reprodukuje rzeczywistą geometrię problemu: parzysta liczba warstw,
-  niezerowe wartości tylko w niższej centralnej warstwie i zerowa warstwa nad
-  nią.
-- Test korzysta z rzeczywistych endpointów, canonical scalar link i istniejącego
-  dekodera FMVP, bez mockowania handlera.
-- RED powstaje z oczekiwanej semantyki cell-centered slice, nie z błędu setupu,
-  statusu HTTP, tokenu ani dekodera.
-- Asercje nie zostały osłabione; po naprawie wymagają zarówno właściwego frame
-  origin, jak i niezerowego planar magnitude.
-- Commit zawiera wyłącznie plik testowy.
+2. Testy walidatora:
 
-## Concerns
+   ```text
+   python3 -m unittest discover -s .agents/skills/scientific-documentation-contract/scripts -p 'test_*.py'
+   Ran 23 tests — OK
+   ```
 
-- Test celowo pozostaje RED do czasu naprawy produkcyjnego resolvera default
-  FDM slice; nie jest to zielona bramka obecnego mastera.
-- Istniejące ostrzeżenia `unused_mut` i `dead_code` w `fullmag-engine`,
-  `fullmag-runner` i `fullmag-api` są niezależne od tego testu.
-- Współdzielony worktree nadal zawiera obce zmiany w `progress.md`,
-  `session_persistence.rs`, `external_solvers/3` i plany redesignu; nie zostały
-  dotknięte ani stage'owane przez ten task.
+3. Bieżąca granica Python API:
+
+   ```text
+   env PYTHONPATH=packages/fullmag-py/src python3 -c <feature detection>
+   FrozenSpins: False
+   select: False
+   exit 0
+   ```
+
+4. Skan niedomkniętych markerów dokładnie dla plików wymaganych briefem:
+
+   ```text
+   rg -n "T[B]D|T[O]DO|do ustalenia" <cztery wymagane dokumenty>
+   0 wyników
+   ```
+
+5. Checkpoint whitespace:
+
+   ```text
+   git diff --check -- docs/adr docs/physics docs/specs docs/validation
+   exit 0
+   ```
+
+   Pliki są nowe i untracked, dlatego uzupełniający skan trailing whitespace
+   objął wszystkie sześć dokładnych ścieżek i zwrócił 0 wyników.
+
+6. Testy guardów dokumentacyjnych:
+
+   ```text
+   python3 -m unittest scripts/test_check_public_doc_examples.py -v
+   Ran 5 tests — OK
+
+   python3 -m unittest scripts/test_public_docs_information_architecture.py -v
+   Ran 22 tests — OK
+
+   python3 scripts/check_public_docs_boundary.py
+   public documentation boundary: passed
+   ```
+
+7. Strict Sphinx:
+
+   ```text
+   sphinx-build -b html -W -n --keep-going public_docs/site /tmp/fullmag-task1-sphinx-html
+   build succeeded
+   ```
+
+Nowa nota jest wewnętrzna pod `docs/physics`, a obecny Sphinx renderuje
+`public_docs/site`; dlatego nie istnieje rendered HTML tej konkretnej strony do
+przekazania drugiemu trybowi `validate_scientific_docs.py --rendered-html`.
+Bezpośrednia walidacja źródła i strict build dostępnego drzewa zostały wykonane.
+
+### Niezależne repo-wide gate'y — FAIL poza zakresem
+
+1. `python3 scripts/check_public_doc_examples.py --root public_docs/site`
+   zwraca exit 1 dla pięciu istniejących stron:
+
+   - `python-api/interactions/drift-diffusion-spin-torque.md`;
+   - `python-api/interactions/interfacial-dmi.md`;
+   - `python-api/interactions/magnetoelastic.md`;
+   - `python-api/interactions/spin-orbit-torque.md`;
+   - `python-api/interactions/spin-transfer-torque.md`.
+
+   Każda ma blok Python niespełniający pełnego wzorca
+   `fm.study(...)` + `study.stages.add_*`. Task 1 nie modyfikował
+   `public_docs/site`.
+
+2. `python3 scripts/public_docs_information_architecture.py --check --root
+   public_docs/site` zwraca exit 1 z istniejącymi rozjazdami `status` metadata
+   względem manifestu na wielu stronach `python-api` i `physics`. Testy samego
+   narzędzia przechodzą 22/22, a strict Sphinx przechodzi. Task 1 nie zmieniał
+   manifestu ani tych stron.
+
+Zgodnie z zamrożonym zakresem nie wykonano drive-by napraw tych gate'ów.
+
+## Samoocena i concerns
+
+1. W self-review wykryto, że `0014` jest już zajęty przez
+   `docs/adr/0014-native-fem-backend-modularization.md`. Controller rozstrzygnął
+   konflikt przez użycie pierwszego wolnego numeru `0026`; semantyka dokumentu
+   i wszystkie odwołania pozostały niezmienione.
+2. Nowe pliki pozostają untracked zgodnie z zakazem stage/commit. Z tego powodu
+   branch-diff validator `validate_changed_scientific_docs.py --base ... --head
+   HEAD` nie widzi ich; uruchomiono bezpośredni, właściwy walidator adjacent
+   source-map. Changed-page gate zadziała dopiero po włączeniu plików do
+   przyszłego commita przez właściciela.
+3. Nie ma dowodu runtime frozen spins. Każde twierdzenie wykonawcze jest opisane
+   jako target/planned, a wszystkie lane'y są `UNQUALIFIED`.
+4. Użycie capability w bieżącym `docs/specs/capability-matrix-v0.md`, OpenAPI,
+   generated transport i UI jest obowiązkiem kolejnych zadań. Task 1 definiuje
+   słownik, ale nie promuje aktualnych capabilities ani nie modyfikuje plików
+   poza listą briefu.
+
+## Wniosek
+
+Task 1 zamyka architekturę i publikacyjny kontrakt potrzebny kolejnym zadaniom.
+Można rozpocząć implementację typed selektora i constraintu bez otwartej
+niejednoznaczności dotyczącej właściciela semantyki, capture timing,
+free/all metrics, all-frozen, FEM true DOF, dense V1, snapshot V1 oraz zakresu
+relaksacja+dynamika. Nie wolno jednak traktować dokumentacji jako kwalifikacji
+któregokolwiek lane'u.
+
+## Poprawki po review Task 1
+
+### Zamknięte findings
+
+1. Default `membership` jest wyprowadzany deterministycznie z klasy AST:
+   geometry-only normalizuje się do jawnego `static`, a state-dependent do
+   jawnego `snapshot_at_activation`. Jawne `static` dla state-dependent AST
+   jest błędem; jawne `snapshot_at_activation` jest legalne dla obu klas.
+2. Publiczny `boundary` domyślnie jest `inclusive`; canonical IR zapisuje jawny
+   znormalizowany obiekt z wersjonowanymi tolerancjami `0.0` i `1e-12`.
+3. Zdefiniowano maszynę epoki aktywacji dla kolejnych i nieciągłych stage IDs,
+   inactive-to-active, ponownego capture oraz checkpoint resume bez recapture.
+4. `inactive_selection=warn_and_intersect` dotyczy wyłącznie raw authored
+   candidate mask. Bit poza aktywną domeną w resolved/runtime/checkpoint mask
+   jest twardym błędem inwariantu.
+5. `max_rhs_all` i `max_torque_all_Apm` mają jawne równania i powstają na $A$
+   z pełnego pre-constraint RHS/torque, z tego samego stanu i rewizji co
+   redukcje `free` po $U$: po candidate restore, przed final-RHS masking.
+6. Każdy overlap wymaga dokładnej równości resolved reference na wspólnych DOF
+   po konwersji do precyzji lane. Dotyczy to capture-current z różnych epok;
+   konflikt odrzuca całą aktywację atomowo.
+7. $\dot{\mathbf m}_i$ i $\mathbf m_i^{\mathrm{candidate}}$ mają osobne wpisy
+   w tabeli symboli i source-map z jednostkami odpowiednio
+   $\mathrm{s^{-1}}$ oraz $1$.
+8. $t$ oznacza wyłącznie czas fizyczny dynamiki w sekundach. PG-BB i NCG używają
+   bezwymiarowego indeksu iteracji $k$; nie mają pseudoczasu w sekundach.
+
+Wszystkie statusy w macierzy lane i algorytmów pozostają `UNQUALIFIED`.
+
+### Zmienione pliki
+
+- `docs/adr/0026-frozen-spins-constraint-and-selection-model.md` — zamknięte
+  defaulty, epoka, raw/resolved invariant, pipeline metryk i overlap.
+- `docs/physics/0996-frozen-spins-constraint.md` — równania `all`, dokładne
+  symbole/jednostki, czas kontra iteracja, default membership, epoka i błędy.
+- `docs/physics/0996-frozen-spins-constraint.source-map.json` — nowe równania,
+  symbole, anchor overlap i poprawiony kontrakt parametru `membership`.
+- `docs/specs/selection-expr-v1.md` — default `inclusive`, klasyfikacja
+  geometry-only/state-dependent oraz raw/resolved mask semantics.
+- `docs/specs/frozen-spins-v1.md` — maszyna epok i restartu, pipeline metryk,
+  dokładna zgodność overlap i znormalizowany payload geometry-only.
+- `docs/validation/frozen-spins-qualification-matrix.md` — przyszłe gate'y dla
+  wszystkich poprawek bez promocji statusu.
+- `.superpowers/sdd/task-1-report.md` — niniejszy fix ledger i dowód testów.
+
+### Dokładne focused validators po ostatniej zmianie
+
+1. Source-map validator:
+
+   ```text
+   python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/0996-frozen-spins-constraint.source-map.json --repo-root .
+   <brak stdout/stderr>
+   exit 0
+   ```
+
+2. Testy walidatora:
+
+   ```text
+   python3 -m unittest discover -s .agents/skills/scientific-documentation-contract/scripts -p 'test_*.py'
+   .......................
+   ----------------------------------------------------------------------
+   Ran 23 tests in 0.777s
+
+   OK
+   exit 0
+   ```
+
+3. Skan niedomkniętych markerów:
+
+   ```text
+   rg -n "T[B]D|T[O]DO|do ustalenia" docs/adr/0026-frozen-spins-constraint-and-selection-model.md docs/physics/0996-frozen-spins-constraint.md docs/specs/selection-expr-v1.md docs/specs/frozen-spins-v1.md
+   <brak wyników>
+   exit 1 (oczekiwany status `rg` przy braku dopasowań)
+   ```
+
+4. Checkpoint whitespace:
+
+   ```text
+   git diff --check -- docs/adr docs/physics docs/specs docs/validation
+   <brak stdout/stderr>
+   exit 0
+   ```
+
+Nie uruchamiano repo-wide guardów poza fix contract. Nie wykonano `git add`,
+`git commit` ani `git push`; niezwiązane zmiany współdzielonego worktree nie
+zostały dotknięte.
+
+## Poprawki po residual re-review Task 1
+
+### Zamknięte findings
+
+1. `selection_expr.v1` rozdziela teraz dwie fazy kontraktu. Publiczny authored
+   input Python/UI może pominąć `inside_geometry.boundary` i otrzymuje default
+   `inclusive`. Canonical normalized `SelectionExprIR` zawsze wymaga jawnego
+   obiektu `boundary`; brak pola na granicy deserializacji canonical IR jest
+   błędem schematu. Tabela required fields jest jawnie opisana jako tabela
+   canonical normalized IR.
+2. Równanie direct minimizer
+   $\mathbf m_i^{(k)}=\mathbf m_i^\star$ dla $i\in F$ znajduje się teraz pod
+   `DOC-ANCHOR:frozen-v1-constraint-model`, czyli dokładnie pod anchorem
+   wskazanym przez wpis `eq-frozen-minimizer-constraint` w source-map.
+
+Zmieniono wyłącznie:
+
+- `docs/specs/selection-expr-v1.md`;
+- `docs/specs/frozen-spins-v1.md`;
+- `.superpowers/sdd/task-1-report.md`.
+
+Statusy wszystkich lane'ów pozostają `UNQUALIFIED`.
+
+### Dokładne focused validators po residual re-review
+
+1. Source-map validator:
+
+   ```text
+   python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/0996-frozen-spins-constraint.source-map.json --repo-root .
+   <brak stdout/stderr>
+   exit 0
+   ```
+
+2. Testy walidatora:
+
+   ```text
+   python3 -m unittest discover -s .agents/skills/scientific-documentation-contract/scripts -p 'test_*.py'
+   .......................
+   ----------------------------------------------------------------------
+   Ran 23 tests in 0.757s
+
+   OK
+   exit 0
+   ```
+
+3. Skan niedomkniętych markerów:
+
+   ```text
+   rg -n "T[B]D|T[O]DO|do ustalenia" docs/adr/0026-frozen-spins-constraint-and-selection-model.md docs/physics/0996-frozen-spins-constraint.md docs/specs/selection-expr-v1.md docs/specs/frozen-spins-v1.md
+   <brak wyników>
+   exit 1 (oczekiwany status `rg` przy braku dopasowań)
+   ```
+
+4. Checkpoint whitespace:
+
+   ```text
+   git diff --check -- docs/adr docs/physics docs/specs docs/validation
+   <brak stdout/stderr>
+   exit 0
+   ```
+
+Nie uruchamiano innych gate'ów. Nie wykonano `git add`, `git commit` ani
+`git push`; niezwiązane pliki nie zostały dotknięte.

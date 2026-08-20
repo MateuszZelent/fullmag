@@ -35,7 +35,8 @@ describe("ObjectVisualizationPanel performance contracts", () => {
 
   it("retains the last-good panel for a refresh of the same target identity", () => {
     expect(panelSource).toContain("lastGoodPanel");
-    expect(panelSource).toContain("lastGoodPanel?.targetKey === targetId");
+    expect(panelSource).toContain("lastGoodPanel?.identityKey === panelIdentityKey");
+    expect(panelSource).toContain("retainLastGoodPanel");
   });
 
   it("keeps the active surface-color control focusable while its patch is pending", () => {

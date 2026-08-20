@@ -50,6 +50,7 @@ describe("derived B_drive display quantity", () => {
       kind: "vector",
       label: "Drive field",
       location: "node",
+      observation_frame: { observation_frame_id: "frame-4", session_epoch: "epoch-1", domain_generation_id: "domain-1", topology_revision: "topology-1", source_step: 0, source_time_seconds: null },
       materialization_wall_time_ns: 0,
       materialized_at_unix_ms: 0,
       quantity_id: "H_drive",
@@ -390,6 +391,7 @@ function liveStatusFixture(
     session: {
       created_at: "0",
       name: "test",
+      session_epoch: "session-1@0",
       session_id: "session-1",
       workspace_root: "/tmp/fullmag",
     },

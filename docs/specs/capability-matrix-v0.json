@@ -1,6 +1,6 @@
 {
   "schema_version": "capability_matrix.v0",
-  "updated_at": "2026-08-18",
+  "updated_at": "2026-08-20",
   "status_vocabulary": {
     "unsupported": "The current lane has no legal executable realization for this feature.",
     "source_visible": "Source or planner scaffolding exists, but the lane is not a legal public executable path.",
@@ -236,12 +236,13 @@
       "label": "Relaxation(llg_overdamped)",
       "lanes": {
         "fdm_cpu_reference": "reference_executable",
-        "fdm_gpu_production": "production_executable",
-        "fem_cpu_public": "production_executable",
-        "fem_gpu_public": "production_executable"
+        "fdm_gpu_production": "development_executable",
+        "fem_cpu_public": "development_executable",
+        "fem_gpu_public": "development_executable"
       },
       "validated_workloads": [],
-      "notes": "Only overdamped LLG owns dynamics, an RK integrator, dt, and a stage-local relaxation clock. Canonical defaults are 1e-4 A/m and 50000 steps. Execution publishes exact accepted-state max_torque_Apm, auxiliary max_torque_T, separate max_rhs_norm_per_s, and authoritative completion."
+      "notes": "Only overdamped LLG owns dynamics, an RK integrator, dt, and a stage-local relaxation clock. Canonical defaults are 1e-4 A/m and 50000 steps. Execution publishes exact accepted-state max_torque_Apm, auxiliary max_torque_T, separate max_rhs_norm_per_s, and authoritative completion. The current GPU and FEM lanes are development-executable only: no source-bound managed qualification receipt exists, so no production_executable or validated claim is permitted.",
+      "validation_state": "unvalidated"
     },
     {
       "id": "llg_timestep_qualification_registry",
@@ -261,24 +262,26 @@
       "label": "Relaxation(projected_gradient_bb)",
       "lanes": {
         "fdm_cpu_reference": "reference_executable",
-        "fdm_gpu_production": "production_executable",
-        "fem_cpu_public": "production_executable",
-        "fem_gpu_public": "production_executable"
+        "fdm_gpu_production": "development_executable",
+        "fem_cpu_public": "development_executable",
+        "fem_gpu_public": "development_executable"
       },
       "validated_workloads": [],
-      "notes": "Direct minimization uses the physical mu0 Ms V energy metric and an m/A line-search step. It owns no dynamics, RK, dt, physical time, or pseudo-time. FDM CPU/CUDA remain executable. FEM CPU/GPU PG-BB including demag is production-qualified at rtol<=1e-12 through direct polarized Armijo increments, with no hidden fallback. Unsupported heterogeneous cellwise FDM CUDA material payloads reject rather than degrade silently."
+      "notes": "Direct minimization uses the physical mu0 Ms V energy metric and an m/A line-search step. It owns no dynamics, RK, dt, physical time, or pseudo-time. FDM CPU is the reference lane; CUDA and FEM CPU/GPU remain development-executable. There is no current source-bound managed qualification receipt for PG-BB, including demag, therefore no production-qualified or validated claim is permitted. Unsupported heterogeneous cellwise FDM CUDA material payloads reject rather than degrade silently.",
+      "validation_state": "unvalidated"
     },
     {
       "id": "relaxation_nonlinear_cg",
       "label": "Relaxation(nonlinear_cg)",
       "lanes": {
         "fdm_cpu_reference": "reference_executable",
-        "fdm_gpu_production": "production_executable",
-        "fem_cpu_public": "production_executable",
-        "fem_gpu_public": "production_executable"
+        "fdm_gpu_production": "development_executable",
+        "fem_cpu_public": "development_executable",
+        "fem_gpu_public": "development_executable"
       },
       "validated_workloads": [],
-      "notes": "PR+ direct minimization uses the same physical energy metric, m/A line-search step, retraction, and Armijo units as PG-BB. It owns no RK or time controls."
+      "notes": "PR+ direct minimization uses the same physical energy metric, m/A line-search step, retraction, and Armijo units as PG-BB. It owns no RK or time controls. FDM CPU is the reference lane; CUDA and FEM CPU/GPU are development-executable pending exact source-bound managed receipts, so no production_executable or validated claim is permitted.",
+      "validation_state": "unvalidated"
     },
     {
       "id": "relaxation_tangent_plane_implicit",
@@ -290,7 +293,8 @@
         "fem_gpu_public": "unsupported"
       },
       "validated_workloads": [],
-      "notes": "TPI is CPU/MFEM development-only, not production-qualified. Strict mode and forced GPU reject. Extended mode may resolve only to CPU/MFEM with explicit requested/resolved provenance and warning. It owns no RK or time controls."
+      "notes": "TPI is CPU/MFEM development-only, not production-qualified. Strict mode and forced GPU reject. Extended mode may resolve only to CPU/MFEM with explicit requested/resolved provenance and warning. It owns no RK or time controls. No source-bound managed qualification receipt exists.",
+      "validation_state": "unvalidated"
     },
     {
       "id": "slonczewski_stt",

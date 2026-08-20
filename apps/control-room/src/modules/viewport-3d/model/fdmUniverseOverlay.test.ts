@@ -74,6 +74,7 @@ describe("resolveFdmUniverseOutsideSupportOverlayModel", () => {
       }),
     ).toEqual({
       activeCellCount: 6,
+      carrierId: "fdm-universe-outside-support",
       kind: "fdm-universe-outside-magnetic-support",
       legend: {
         magneticSupport: "Magnetic support · 6 active cells",
@@ -82,8 +83,8 @@ describe("resolveFdmUniverseOutsideSupportOverlayModel", () => {
       magneticSupportBounds: support,
       inactiveCellCount: 2,
       target: {
-        id: "fdm-universe-outside-support",
-        kind: "fdm-domain",
+        id: "airbox",
+        kind: "airbox",
         label: "Airbox",
       },
       universeBounds: universe,

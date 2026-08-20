@@ -3,6 +3,7 @@ import type {
   DiagnosticRecordSeverity,
   DiagnosticViewport3DBuildRecord,
 } from "@/kernel/performance/diagnostic-recorder/diagnosticRecorderTypes";
+import { recordVisualizationDebugPerformanceMetric } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 
 import type { Viewport3DBuildDiagnosticRecord } from "./viewport3dBuildEngineTypes";
 import type { Viewport3DBuildFallbackSnapshot } from "./viewport3dBuildEngineTypes";
@@ -63,6 +64,14 @@ export function createDiagnosticRecordFromViewport3DBuildDiagnostic(
 export function recordViewport3DBuildDiagnostic(
   record: Viewport3DBuildDiagnosticRecord,
 ): void {
+  if (record.state === "ready") {
+    if (record.lane === "topology-index") {
+      recordVisualizationDebugPerformanceMetric("topologyBuilds");
+    }
+    if (record.workerComputeMs > 0) {
+      recordVisualizationDebugPerformanceMetric("workerJobs");
+    }
+  }
   recordViewport3DBuildPipelineSnapshot(record);
   recordViewport3DBuildFallbackSnapshot(record);
   for (const listener of listeners) {

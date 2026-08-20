@@ -2174,6 +2174,7 @@ pub async fn get_command_detail(
 fn latest_energy_row(snapshot: &SessionStateResponse) -> Option<ScalarRow> {
     snapshot.scalar_rows.last().cloned().or_else(|| {
         snapshot.live_state.as_ref().map(|live_state| ScalarRow {
+            observation_frame: None,
             step: live_state.latest_step.step,
             time: live_state.latest_step.time,
             solver_dt: live_state.latest_step.dt,

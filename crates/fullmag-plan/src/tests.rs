@@ -1,7 +1,6 @@
 use super::*;
 use crate::geometry::{
-    cell_for_magnet, contains_cylinder, fdm_default_cell, ir_to_shape, shape_local_bounds,
-    voxelize_shape,
+    cell_for_magnet, fdm_default_cell, ir_to_shape, shape_local_bounds, voxelize_shape,
 };
 use std::collections::BTreeMap;
 
@@ -8225,7 +8224,7 @@ fn multilayer_planner_fails_closed_for_csg_body_overlap() {
 }
 
 #[test]
-fn multilayer_planner_rejects_unsupported_active_region_and_coupling_before_plan() {
+fn multilayer_planner_materializes_supported_csg_region_and_rejects_unsupported_coupling() {
     let mut region_problem = stacked_two_body_multilayer_problem();
     let mut region = default_test_object_region();
     region.owner_object = "free".to_string();
@@ -8237,11 +8236,24 @@ fn multilayer_planner_rejects_unsupported_active_region_and_coupling_before_plan
         }),
     };
     region_problem.object_regions.push(region);
-    let region_error = plan(&region_problem).expect_err("unsupported region shape must fail");
-    assert!(region_error
-        .reasons
+    let region_plan = plan(&region_problem).expect("supported CSG region must materialize");
+    let BackendPlanIR::FdmMultilayer(multilayer) = region_plan.backend_plan else {
+        panic!("expected multilayer FDM plan");
+    };
+    let free = multilayer
+        .layers
         .iter()
-        .any(|reason| reason.contains("does not yet support CSG")));
+        .find(|layer| layer.object_id == "free")
+        .expect("free layer");
+    assert!(free
+        .native_region_mask
+        .as_deref()
+        .is_some_and(|mask| { mask.iter().any(|numeric_id| *numeric_id == 1) }));
+    assert!(free.native_region_legend.as_deref().is_some_and(|legend| {
+        legend
+            .iter()
+            .any(|entry| entry.region_id == "free:csg" && entry.numeric_id == 1)
+    }));
 
     let mut coupling_problem = stacked_two_body_multilayer_problem();
     coupling_problem.couplings.push(fullmag_ir::CouplingIR {
@@ -12008,11 +12020,12 @@ fn cylinder_axis_controls_oriented_bounds_and_containment() {
         axis: [1.0, 0.0, 0.0],
     };
     let shape = ir_to_shape(&cylinder).expect("cylinder should lower");
+    let predicate = shape.compile().expect("cylinder should compile");
     let (min, max) = shape_local_bounds(&shape).expect("cylinder bounds should be analytic");
     assert_eq!(min, [-2.0, -1.0, -1.0]);
     assert_eq!(max, [2.0, 1.0, 1.0]);
-    assert!(contains_cylinder(&shape, [1.5, 0.0, 0.0]));
-    assert!(!contains_cylinder(&shape, [0.0, 1.1, 0.0]));
+    assert!(predicate.contains([1.5, 0.0, 0.0]).unwrap());
+    assert!(!predicate.contains([0.0, 1.1, 0.0]).unwrap());
 
     let y_axis = GeometryEntryIR::Cylinder {
         name: "y_axis".to_string(),
@@ -12021,11 +12034,12 @@ fn cylinder_axis_controls_oriented_bounds_and_containment() {
         axis: [0.0, 1.0, 0.0],
     };
     let y_shape = ir_to_shape(&y_axis).expect("y-axis cylinder should lower");
+    let y_predicate = y_shape.compile().expect("y-axis cylinder should compile");
     let (y_min, y_max) = shape_local_bounds(&y_shape).expect("y-axis bounds should be analytic");
     assert_eq!(y_min, [-1.0, -2.0, -1.0]);
     assert_eq!(y_max, [1.0, 2.0, 1.0]);
-    assert!(contains_cylinder(&y_shape, [0.0, 1.5, 0.0]));
-    assert!(!contains_cylinder(&y_shape, [1.1, 0.0, 0.0]));
+    assert!(y_predicate.contains([0.0, 1.5, 0.0]).unwrap());
+    assert!(!y_predicate.contains([1.1, 0.0, 0.0]).unwrap());
 
     let diagonal = GeometryEntryIR::Cylinder {
         name: "diagonal".to_string(),
@@ -12034,6 +12048,9 @@ fn cylinder_axis_controls_oriented_bounds_and_containment() {
         axis: [1.0, 1.0, 1.0],
     };
     let diagonal_shape = ir_to_shape(&diagonal).expect("diagonal cylinder should lower");
+    let diagonal_predicate = diagonal_shape
+        .compile()
+        .expect("diagonal cylinder should compile");
     let (diagonal_min, diagonal_max) =
         shape_local_bounds(&diagonal_shape).expect("diagonal bounds should be analytic");
     let extent = (1.0_f64 * (1.0_f64 - 1.0_f64 / 3.0_f64)
@@ -12042,8 +12059,8 @@ fn cylinder_axis_controls_oriented_bounds_and_containment() {
     for component in diagonal_min.iter().chain(diagonal_max.iter()) {
         assert!((component.abs() - extent).abs() < 1e-12);
     }
-    assert!(contains_cylinder(&diagonal_shape, [1.0, 1.0, 1.0]));
-    assert!(!contains_cylinder(&diagonal_shape, [2.0, -2.0, 0.0]));
+    assert!(diagonal_predicate.contains([1.0, 1.0, 1.0]).unwrap());
+    assert!(!diagonal_predicate.contains([2.0, -2.0, 0.0]).unwrap());
 }
 
 #[test]
@@ -12058,6 +12075,22 @@ fn cylinder_axis_lowering_rejects_zero_and_nonfinite_axes() {
         let error = ir_to_shape(&cylinder).expect_err("invalid cylinder axis must fail closed");
         assert!(error.contains("cylinder axis"));
     }
+}
+
+#[test]
+fn cylinder_axis_lowering_accepts_huge_finite_axis() {
+    let cylinder = GeometryEntryIR::Cylinder {
+        name: "huge_axis".to_string(),
+        radius: 1.0,
+        height: 4.0,
+        axis: [1.0e308, 1.0e308, 0.0],
+    };
+
+    let shape = ir_to_shape(&cylinder).expect("huge finite cylinder axis must normalize");
+    let predicate = shape.compile().expect("huge finite cylinder must compile");
+
+    assert!(predicate.contains([1.0, 1.0, 0.0]).unwrap());
+    assert!(!predicate.contains([1.0, -1.0, 0.0]).unwrap());
 }
 
 #[test]

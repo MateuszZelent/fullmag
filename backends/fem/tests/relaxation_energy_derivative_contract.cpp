@@ -8,8 +8,10 @@
 #include "cpu/mfem/interactions/exchange_energy_difference.hpp"
 #include "cpu/mfem/interactions/exchange_legacy_gpu_upload.hpp"
 #include "cpu/mfem/interactions/zeeman_energy.hpp"
+#include "cpu/mfem/relaxation/direct_energy_increment.hpp"
 #include "cpu/mfem/relaxation/relaxation_math.hpp"
 #include "cpu/mfem/runtime/aos_field.hpp"
+#include "cpu/mfem/runtime/backend_lifecycle.hpp"
 #include "fem_common.hpp"
 #include "src/relaxation_numerics.hpp"
 #if FULLMAG_HAS_MFEM_STACK
@@ -800,6 +802,86 @@ private:
     fullmag_fem_backend *handle_ = nullptr;
 };
 
+class DirectArmijoTransactionFixture {
+public:
+    DirectArmijoTransactionFixture()
+    {
+        current_m_.reserve(kFieldLength);
+        trial_m_.reserve(kFieldLength);
+        constexpr double transverse = 1.0e-6;
+        const double longitudinal = 1.0 / std::sqrt(1.0 + transverse * transverse);
+        const double rotated = transverse * longitudinal;
+        for (size_t node = 0; node < kNodeCount; ++node) {
+            current_m_.insert(current_m_.end(), {1.0, 0.0, 0.0});
+            trial_m_.insert(trial_m_.end(), {longitudinal, rotated, 0.0});
+        }
+        fullmag_fem_plan_desc plan = plan_for(Interaction::Demag, current_m_);
+        plan.has_external_field = 1;
+        plan.external_field_am[0] = 0.0;
+        plan.external_field_am[1] = 5.0e5;
+        plan.external_field_am[2] = 0.0;
+        check(
+            fullmag::fem::initialize_backend_runtime(ctx_, plan, error_),
+            "direct Armijo transaction fixture initialization failed: " + error_);
+        original_demag_rtol_ = ctx_.demag.solver.relative_tolerance;
+        current_stats_ = snapshot(current_m_, "ordinary current");
+        previous_h_demag_ = ctx_.demag.h_xyz;
+        trial_stats_ = snapshot(trial_m_, "ordinary trial");
+    }
+
+    ~DirectArmijoTransactionFixture()
+    {
+        ctx_.interrupt.poll = nullptr;
+        ctx_.interrupt.user_data = nullptr;
+        ctx_.mfem_context.ready = true;
+        fullmag::fem::destroy_backend_runtime(ctx_);
+    }
+
+    fullmag_fem_step_stats snapshot(
+        const std::vector<double> &magnetization,
+        const char *label)
+    {
+        error_.clear();
+        fullmag_fem_step_stats stats{};
+        check(
+            fullmag::fem::relaxation::upload_and_snapshot(
+                ctx_, magnetization, stats, "direct Armijo transaction", label, error_) ==
+                FULLMAG_FEM_OK,
+            std::string("direct Armijo transaction snapshot failed: ") + error_);
+        return stats;
+    }
+
+    fullmag::fem::DirectMinimizerArmijoResult evaluate(
+        const fullmag_fem_step_stats &current_stats,
+        const fullmag_fem_step_stats &trial_stats,
+        double armijo_increment_rhs_j)
+    {
+        error_.clear();
+        fullmag_fem_step_stats profile_stats{};
+        return fullmag::fem::direct_minimizer_armijo_evaluate(
+            ctx_,
+            "direct Armijo transaction",
+            current_m_,
+            trial_m_,
+            previous_h_demag_,
+            current_stats,
+            trial_stats,
+            profile_stats,
+            armijo_increment_rhs_j /
+                fullmag::fem::relaxation::kArmijoCoefficient,
+            error_);
+    }
+
+    fullmag::fem::Context ctx_{};
+    std::vector<double> current_m_;
+    std::vector<double> trial_m_;
+    std::vector<double> previous_h_demag_;
+    fullmag_fem_step_stats current_stats_{};
+    fullmag_fem_step_stats trial_stats_{};
+    double original_demag_rtol_ = 0.0;
+    std::string error_;
+};
+
 struct AnalyticDerivative {
     double value_j = 0.0;
     double absolute_term_sum_j = 0.0;
@@ -1100,6 +1182,143 @@ void direct_armijo_difference_resolves_sub_ulp_total_energy_decrement()
         strict_armijo_difference_decision(uphill, -5.0e-35) ==
             ArmijoDifferenceDecision::Reject,
         "direct Armijo difference must reject a resolved uphill trial");
+}
+
+void endpoint_total_armijo_can_accept_a_sub_ulp_energy_increase()
+{
+    using fullmag::fem::relaxation::ArmijoDifferenceDecision;
+    using fullmag::fem::relaxation::EnergyDifference;
+    using fullmag::fem::relaxation::strict_armijo_difference_decision;
+
+    const double current_total_energy = -2.0e-17;
+    const double direct_delta_energy = 1.0e-34;
+    const double trial_total_energy =
+        current_total_energy + direct_delta_energy;
+    const double armijo_increment_rhs = -5.0e-35;
+    check(
+        trial_total_energy == current_total_energy &&
+            current_total_energy + armijo_increment_rhs ==
+                current_total_energy,
+        "manufactured tangent-plane fixture must hide both its physical increase and the Armijo decrement in endpoint-total binary64 rounding");
+    check(
+        trial_total_energy <=
+            current_total_energy + armijo_increment_rhs,
+        "the cancellation-prone tangent-plane endpoint-total predicate must reproduce the false acceptance before the production path is removed");
+
+    const EnergyDifference uphill = {
+        direct_delta_energy,
+        std::abs(direct_delta_energy),
+        0.0,
+    };
+    check(
+        strict_armijo_difference_decision(uphill, armijo_increment_rhs) ==
+            ArmijoDifferenceDecision::Reject,
+        "the direct energy-difference predicate must reject the same resolved sub-ULP uphill trial");
+}
+
+int request_direct_armijo_interrupt(void *)
+{
+    return 1;
+}
+
+void direct_armijo_refinement_transaction_returns_the_accepted_snapshot()
+{
+    using fullmag::fem::DirectMinimizerArmijoOutcome;
+
+    DirectArmijoTransactionFixture fixture;
+    const auto baseline = fixture.evaluate(
+        fixture.current_stats_, fixture.trial_stats_, 1.0);
+    check(
+        baseline.outcome == DirectMinimizerArmijoOutcome::Rejected &&
+            baseline.direct_difference.delta_joules < 0.0,
+        "the real FEM demag-plus-Zeeman fixture must provide a descending direct increment without entering refinement");
+
+    const double direct_delta = baseline.direct_difference.delta_joules;
+    const double ordinary_accept_rhs =
+        direct_delta + 2.0 * baseline.direct_difference.roundoff_bound_joules;
+    check(
+        ordinary_accept_rhs < 0.0,
+        "the ordinary acceptance threshold must remain a strict descent increment");
+    fullmag_fem_step_stats ordinary_trial_stats = fixture.trial_stats_;
+    ordinary_trial_stats.step = std::numeric_limits<uint64_t>::max();
+    const auto ordinary_accept = fixture.evaluate(
+        fixture.current_stats_, ordinary_trial_stats, ordinary_accept_rhs);
+    check(
+        ordinary_accept.outcome ==
+                DirectMinimizerArmijoOutcome::AcceptedOrdinary &&
+            ordinary_accept.accepted_stats.step == ordinary_trial_stats.step &&
+            fixture.ctx_.state.m_xyz == fixture.trial_m_,
+        "ordinary Armijo acceptance must return the caller's ordinary trial stats and retain the ordinary trial state");
+
+    const double reduction_factor =
+        fullmag::fem::relaxation::reduction_roundoff_bound(8u);
+    check(
+        std::isfinite(reduction_factor) && reduction_factor > 0.0,
+        "the direct Armijo transaction fixture requires a finite reduction roundoff factor");
+    const double residual_operand =
+        std::abs(direct_delta) / reduction_factor;
+    fullmag_fem_step_stats ambiguous_current = fixture.current_stats_;
+    fullmag_fem_step_stats ambiguous_trial = fixture.trial_stats_;
+    ambiguous_current.drive_energy_joules = residual_operand;
+    ambiguous_trial.drive_energy_joules = residual_operand;
+    ambiguous_trial.step = std::numeric_limits<uint64_t>::max();
+    const double refined_accept_rhs = 0.5 * direct_delta;
+    const auto refined_accept = fixture.evaluate(
+        ambiguous_current, ambiguous_trial, refined_accept_rhs);
+    check(
+        refined_accept.outcome ==
+                DirectMinimizerArmijoOutcome::AcceptedRefined &&
+            refined_accept.accepted_stats.step == fixture.ctx_.state.step_count &&
+            refined_accept.accepted_stats.step != ambiguous_trial.step &&
+            fixture.ctx_.state.m_xyz == fixture.trial_m_ &&
+            fixture.ctx_.demag.solver.relative_tolerance ==
+                fixture.original_demag_rtol_,
+        "refined Armijo acceptance must return refined trial stats matching the trial snapshot retained in Context");
+
+    fixture.snapshot(fixture.trial_m_, "pre-refined rejection trial");
+    const auto refined_reject = fixture.evaluate(
+        ambiguous_current, ambiguous_trial, 1.5 * direct_delta);
+    check(
+        refined_reject.outcome == DirectMinimizerArmijoOutcome::Rejected &&
+            fixture.ctx_.state.m_xyz == fixture.trial_m_,
+        "a resolved refinement rejection must not report accepted stats and must leave restoration to the line-search transaction owner");
+    fixture.error_.clear();
+    check(
+        fullmag::fem::relaxation::restore_after_rejected_trial(
+            fixture.ctx_,
+            fixture.current_m_,
+            "direct Armijo transaction",
+            0u,
+            1.0,
+            fixture.error_) == FULLMAG_FEM_OK &&
+            fixture.ctx_.state.m_xyz == fixture.current_m_,
+        "the real rejected-refinement transaction must restore and resnapshot the previous state");
+
+    fixture.snapshot(fixture.trial_m_, "pre-interrupt trial");
+    fixture.ctx_.interrupt.poll = request_direct_armijo_interrupt;
+    fixture.ctx_.interrupt.user_data = nullptr;
+    fixture.ctx_.interrupt.step_interrupted = false;
+    const auto interrupted = fixture.evaluate(
+        ambiguous_current, ambiguous_trial, refined_accept_rhs);
+    check(
+        interrupted.outcome == DirectMinimizerArmijoOutcome::Interrupted &&
+            fixture.ctx_.interrupt.step_interrupted &&
+            fixture.ctx_.state.m_xyz == fixture.current_m_,
+        "an interrupted real refinement snapshot must return no accepted stats and stop on the current-state snapshot");
+    fixture.ctx_.interrupt.poll = nullptr;
+    fixture.ctx_.interrupt.step_interrupted = false;
+
+    fixture.snapshot(fixture.trial_m_, "pre-snapshot-failure trial");
+    fixture.ctx_.mfem_context.ready = false;
+    const auto snapshot_failure = fixture.evaluate(
+        ambiguous_current, ambiguous_trial, refined_accept_rhs);
+    check(
+        snapshot_failure.outcome ==
+                DirectMinimizerArmijoOutcome::SnapshotFailure &&
+            !fixture.error_.empty() &&
+            fixture.ctx_.state.m_xyz == fixture.current_m_,
+        "a failed real refinement snapshot must return no accepted stats and preserve the last successfully uploaded current state");
+    fixture.ctx_.mfem_context.ready = true;
 }
 
 void polarized_demag_energy_difference_uses_endpoint_fields()
@@ -3172,6 +3391,8 @@ int main()
     dimension_aware_reduction_guards_are_scale_relative();
     strict_monotone_energy_scale_sweep();
     direct_armijo_difference_resolves_sub_ulp_total_energy_decrement();
+    endpoint_total_armijo_can_accept_a_sub_ulp_energy_increase();
+    direct_armijo_refinement_transaction_returns_the_accepted_snapshot();
     polarized_demag_energy_difference_uses_endpoint_fields();
     polarized_robin_boundary_energy_difference_uses_endpoint_potentials();
     direct_zeeman_energy_difference_avoids_endpoint_total_subtraction();

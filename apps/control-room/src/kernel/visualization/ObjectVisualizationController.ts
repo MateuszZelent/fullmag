@@ -13,6 +13,10 @@ import {
   visualizationTargetIdForSceneObject,
   type Selection,
 } from "../selection/selectionTypes";
+import {
+  canonicalVisualizationTargetId as canonicalPublicVisualizationTargetId,
+  FDM_OUTSIDE_SUPPORT_CARRIER_ID,
+} from "./visualizationTargetIdentity";
 
 export type VisualizationTargetKind =
   | "airbox"
@@ -165,17 +169,10 @@ export const AIRBOX_VISUALIZATION_TARGET: VisualizationTargetRef = {
   label: "Airbox",
 };
 
-/**
- * The structured FDM universe outside magnetic support is a logical view of
- * the same regular grid, not a FEM airbox mesh.  Keep it as a separate
- * visualization target so its viewport choices cannot overwrite the
- * magnetic-support target.
- */
+/** @deprecated The outside-support identifier is a carrier, not a target. */
 export const FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET = {
-  id: "fdm-universe-outside-support",
-  kind: "fdm-domain",
-  // User-facing identity is shared with the FEM domain.  The id/kind remain
-  // FDM-specific so the regular-grid settings cannot leak into FEM state.
+  id: "airbox",
+  kind: "airbox",
   label: "Airbox",
 } as const satisfies VisualizationTargetRef;
 
@@ -202,11 +199,11 @@ const DEFAULT_VISUALIZATION_TARGET_CAPABILITIES: VisualizationTargetCapabilities
 const AIRBOX_VISUALIZATION_TARGET_CAPABILITIES: VisualizationTargetCapabilities = {
   primaryRenderModes: ["wireframe", "points"],
   showBoundsControl: true,
-  showGeometryScopeControl: true,
+  showGeometryScopeControl: false,
   supportsFieldData: true,
   supportsPoints: true,
   supportsVectors: true,
-  supportsVectorSurfaceOffset: true,
+  supportsVectorSurfaceOffset: false,
 };
 
 const FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET_CAPABILITIES: VisualizationTargetCapabilities = {
@@ -235,7 +232,7 @@ export function isFdmUniverseOutsideSupportTarget(
 ): boolean {
   return (
     target.kind === "fdm-domain" &&
-    target.id === FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id
+    target.id === FDM_OUTSIDE_SUPPORT_CARRIER_ID
   );
 }
 
@@ -1034,12 +1031,17 @@ export function resolveTargetVisualization({
         }
       : resolvedBaseSettings;
   const targetKey = visualizationTargetKey(target);
+  const storedOverride =
+    snapshot.overrides[targetKey] ??
+    (targetKey === "airbox"
+      ? snapshot.overrides[FDM_OUTSIDE_SUPPORT_CARRIER_ID]
+      : undefined);
   const pendingOverride = resolvePendingTargetPatch(snapshot, target);
   const localOverride = registryEntry
     ? pendingOverride
-    : pendingOverride || snapshot.overrides[targetKey]
+    : pendingOverride || storedOverride
       ? {
-          ...(snapshot.overrides[targetKey] ?? {}),
+          ...(storedOverride ?? {}),
           ...(pendingOverride ?? {}),
         }
       : null;
@@ -1392,6 +1394,7 @@ export function visualizationStateOverrideFromTargetPatch(
 }
 
 export function visualizationStateScopeIdForTarget(target: VisualizationTargetRef): string {
+  if (target.id === FDM_OUTSIDE_SUPPORT_CARRIER_ID) return "airbox";
   if (target.kind === "object" && target.id.startsWith("object:")) {
     return canonicalVisualizationSceneObjectId(
       target.id.slice("object:".length),
@@ -1406,6 +1409,7 @@ export function visualizationStateScopeIdForTarget(target: VisualizationTargetRe
 function visualizationStateScopeForTarget(
   target: VisualizationTargetRef,
 ): VisualizationStateResource["overrides"][number]["scope"] {
+  if (target.id === FDM_OUTSIDE_SUPPORT_CARRIER_ID) return "airbox";
   if (target.kind === "fdm-domain") return "fdm_domain";
   if (target.kind === "fdm-native-layer") return "fdm_native_layer";
   return target.kind;
@@ -1613,6 +1617,13 @@ export function visualizationStateOverrideMatchesTarget(
   entry: VisualizationStateResource["overrides"][number],
   target: VisualizationTargetRef,
 ): boolean {
+  if (
+    target.kind === "airbox" &&
+    entry.scope === "fdm_domain" &&
+    entry.scope_id === FDM_OUTSIDE_SUPPORT_CARRIER_ID
+  ) {
+    return true;
+  }
   if (entry.scope !== visualizationStateScopeForTarget(target)) return false;
   if (
     entry.scope_id === target.id ||
@@ -1631,16 +1642,21 @@ export function visualizationStateOverrideMatchesTarget(
 function normalizeVisualizationStateOverride(
   override: VisualizationStateResource["overrides"][number],
 ): VisualizationStateResource["overrides"][number] {
-  return override.quantity?.active_quantity_id
+  const canonicalOverride =
+    override.scope === "fdm_domain" &&
+    override.scope_id === FDM_OUTSIDE_SUPPORT_CARRIER_ID
+      ? { ...override, scope: "airbox" as const, scope_id: "airbox" }
+      : override;
+  return canonicalOverride.quantity?.active_quantity_id
     ? {
-        ...override,
+        ...canonicalOverride,
         quantity: {
           active_quantity_id: normalizeQuantityIdOrDefault(
-            override.quantity.active_quantity_id,
+            canonicalOverride.quantity.active_quantity_id,
           ),
         },
       }
-    : override;
+    : canonicalOverride;
 }
 
 export function visualizationStatePatchFromDefaultTargetPatch(
@@ -2217,6 +2233,10 @@ export function resolveVisualizationTargetFromSelection(
       selection.ref.type === "fdm-domain"
         ? selection.ref.visualizationTargetId
         : "fdm-domain";
+    if (canonicalPublicVisualizationTargetId(targetId) === "airbox") {
+      if (selection.kind?.startsWith("airbox.mesh")) return null;
+      return AIRBOX_VISUALIZATION_TARGET;
+    }
     if (targetId.startsWith(FDM_NATIVE_LAYER_TARGET_PREFIX)) {
       return {
         id: targetId,
@@ -2252,17 +2272,6 @@ export function resolveVisualizationTargetFromSelection(
       selection.ref.kind === "airbox.multilayer.target")
   ) {
     return AIRBOX_VISUALIZATION_TARGET;
-  }
-
-  if (
-    selection.ref?.type === "airbox" &&
-    selection.ref.visualizationTargetId === FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id
-  ) {
-    return {
-      id: FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id,
-      kind: "fdm-domain",
-      label: FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.label,
-    };
   }
 
   if (
@@ -2309,7 +2318,8 @@ export function resolveVisualizationTargetFromSelection(
 }
 
 export function visualizationTargetKey(target: VisualizationTargetRef): string {
-  if (target.kind === "airbox") return "airbox";
+  const publicTargetId = canonicalPublicVisualizationTargetId(target.id);
+  if (target.kind === "airbox" || publicTargetId === "airbox") return "airbox";
   if (target.kind === "fdm-domain") {
     return target.id === FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id
       ? FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id

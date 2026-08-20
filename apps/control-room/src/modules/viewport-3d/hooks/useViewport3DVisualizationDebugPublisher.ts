@@ -78,7 +78,10 @@ export interface Viewport3DVisualizationDebugSource {
   fullFieldBufferIdentity?: {
     bufferId: string;
     currentDomainGenerationId: string | null;
+    fieldRevision?: string | null;
     resourceKey: string | null;
+    sessionEpoch?: string | null;
+    sessionId?: string | null;
   } | null;
   fullFieldVector: DecodedFieldVector | null;
   targets: readonly Viewport3DVisualizationDebugTargetSource[];
@@ -563,8 +566,8 @@ function resolveCarrierSources(
   if (result.length === 0 && source.fullFieldVector) {
     const fullPass = source.fieldModel?.targetPasses.get("full");
     if (fullPass) {
-      const carrierId = target.target.id === "fdm-universe-outside-support"
-        ? target.target.id
+      const carrierId = target.target.id === "airbox"
+        ? "fdm-universe-outside-support"
         : "fdm-domain";
       result.push({
         carrierId,

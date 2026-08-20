@@ -58,7 +58,11 @@ import {
   useQuantityCatalogResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import { useResource } from "@/kernel/resources/useResource";
-import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
+import {
+  useSessionResourceIdentity,
+  useSessionStatusSelector,
+} from "@/kernel/resources/useSessionStatus";
 import { useKernel } from "@/kernel/KernelContext";
 import type {
   ResourceResult,
@@ -89,6 +93,7 @@ import {
   AIRBOX_VISUALIZATION_TARGET,
   resolveDefaultVisualizationSettings,
   resolveGlobalObjectVisualizationSettings,
+  resolveVisualizationTargetFromSelection,
   resolveFdmViewportVisualizationSettings,
   resolveTargetVisualization,
   surfaceColorSourceToColorMode,
@@ -308,7 +313,7 @@ import {
   useViewport3DAirboxFieldVectors,
   useViewport3DDomainMeta,
   useViewport3DDomainTopology,
-  useViewport3DFieldVector,
+  useViewport3DAnalysisFieldVector,
   useViewport3DFieldVectorRequest,
   useViewport3DMeshQualityData,
   useViewport3DPartFieldVectors,
@@ -671,6 +676,7 @@ export function mergeViewport3DPrimaryTargetFieldBuffers({
   primaryFieldQuantityId,
   primaryFieldRequest,
   primaryFieldResourceKey,
+  sessionIdentity = null,
   topology,
   topologyRevision = null,
 }: {
@@ -681,6 +687,7 @@ export function mergeViewport3DPrimaryTargetFieldBuffers({
   primaryFieldQuantityId: string;
   primaryFieldRequest: Viewport3DFieldResourceRequest;
   primaryFieldResourceKey: string;
+  sessionIdentity?: SessionResourceIdentity | null;
   topology:
     | Pick<
         Viewport3DTopologyRenderModel<Viewport3DMeshPart>,
@@ -739,6 +746,7 @@ export function mergeViewport3DPrimaryTargetFieldBuffers({
         },
         query: primaryFieldRequest.query,
         resourceKey: primaryFieldResourceKey,
+        sessionIdentity,
         targetIds: [partId],
         topologyRevision,
       }),
@@ -804,6 +812,7 @@ export function resolveViewport3DResolvedPartFieldBuffers({
   magneticPartFieldQueries,
   magneticPartFieldRevision = null,
   magneticPartFieldVectors,
+  sessionIdentity = null,
   targetQuantityFieldRequests,
   targetQuantityFieldRevision = null,
   targetQuantityFieldVectors,
@@ -826,6 +835,7 @@ export function resolveViewport3DResolvedPartFieldBuffers({
   >;
   magneticPartFieldRevision?: ResourceRevision | null;
   magneticPartFieldVectors?: ReadonlyMap<string, DecodedFieldVector> | null;
+  sessionIdentity?: SessionResourceIdentity | null;
   targetQuantityFieldRequests?: ReadonlyMap<
     string,
     Viewport3DResolvedFieldResourceRequest
@@ -892,6 +902,7 @@ export function resolveViewport3DResolvedPartFieldBuffers({
                 request.query,
               )
             : null),
+        sessionIdentity,
         targetIds: [partId],
         topologyRevision: resolvedTopologyRevision,
       }),
@@ -996,6 +1007,7 @@ export function resolveViewport3DResolvedPartFieldBuffers({
             scope_kind: "airbox",
           },
           resourceKey: null,
+          sessionIdentity,
           synthetic: true,
           targetIds: [partId],
           topologyRevision: resolvedTopologyRevision,
@@ -2644,6 +2656,7 @@ export function useViewport3DSceneModel({
   const cameraRegistryCamera = useCameraRegistryCamera();
   const visualProfile = getViewport3DVisualProfile(commandState.visualProfileId);
   const computeRunning = useSessionStatusSelector(selectViewport3DComputeRunning);
+  const sessionIdentity = useSessionResourceIdentity();
   const renderingState = visualizationState.data;
   const maxInteractiveVectorGlyphs = useMemo(
     () => resolveViewport3DMaxVectorGlyphs(renderingState),
@@ -2654,6 +2667,10 @@ export function useViewport3DSceneModel({
     [selection],
   );
   const { selectedObjectId, selectedRegionId } = regionSelectionScope;
+  const selectedVisualizationTargetId = useMemo(
+    () => resolveVisualizationTargetFromSelection(selection)?.id ?? null,
+    [selection],
+  );
   const cameraView = resolveViewport3DSceneCameraView({
     cameraRegistryCamera,
     commandState,
@@ -3467,6 +3484,7 @@ export function useViewport3DSceneModel({
   const nativeLayerFieldVectors = useViewport3DQuantityFieldVectors(
     nativeLayerFieldRequests,
     Boolean(fdmLaneActive && nativeLayerFieldRequests.size > 0),
+    { selectedTargetId: selectedVisualizationTargetId },
   );
   const fdmTargetSettingsById = useMemo(() => {
     const settingsById = new Map<string, VisualizationTargetSettings>();
@@ -3814,17 +3832,19 @@ export function useViewport3DSceneModel({
   const magneticPartFieldVectors = useViewport3DPartFieldVectors(
     magneticPartFieldQueries,
     magneticPartFieldQueries.size > 0,
+    { selectedTargetId: selectedVisualizationTargetId },
   );
   const targetQuantityFieldVectors = useViewport3DQuantityFieldVectors(
     targetQuantityFieldRequests,
     targetQuantityFieldRequests.size > 0,
+    { selectedTargetId: selectedVisualizationTargetId },
   );
   const airboxFieldVectors = useViewport3DAirboxFieldVectors(
     airboxSettings.activeQuantityId,
     airboxFieldVectorParts,
     airboxFieldVectorEnabled && airboxFieldVectorParts.length > 0,
     airboxFieldVectorRequests,
-    undefined,
+    { selectedTargetId: selectedVisualizationTargetId },
     fieldCatalog.data,
   );
   const rawFieldRenderOptions = useViewport3DFieldRenderOptions({
@@ -3956,6 +3976,7 @@ export function useViewport3DSceneModel({
           magneticPartFieldRevision:
             magneticPartFieldVectors.payloadRevision ?? null,
           magneticPartFieldVectors: magneticPartFieldVectors.data,
+          sessionIdentity,
           targetQuantityFieldRequests,
           targetQuantityFieldRevision:
             targetQuantityFieldVectors.payloadRevision ?? null,
@@ -3997,6 +4018,7 @@ export function useViewport3DSceneModel({
       magneticPartFieldQueries,
       partScalarRanges.data,
       primaryFieldRenderOptions,
+      sessionIdentity,
       targetQuantityFieldVectors.data,
       targetQuantityFieldVectors.payloadRevision,
       targetQuantityFieldRequests,
@@ -4354,7 +4376,7 @@ export function useViewport3DSceneModel({
     () => resolveViewport3DAnalysisComplexProjectionEnabled(analysisOverlay?.query),
     [analysisOverlay?.query],
   );
-  const analysisComplexFieldVector = useViewport3DFieldVector(
+  const analysisComplexFieldVector = useViewport3DAnalysisFieldVector(
     primaryFieldQuantityId,
     analysisComplexFieldQuery,
     Boolean(analysisOverlay) &&
@@ -4419,6 +4441,7 @@ export function useViewport3DSceneModel({
         primaryFieldQuantityId,
         primaryFieldRequest,
         primaryFieldResourceKey: fieldVectorResourceKey,
+        sessionIdentity,
         topology: fieldCompatibleTopologyRenderModel,
         topologyRevision:
           topology.revision == null ? null : String(topology.revision),
@@ -4432,6 +4455,7 @@ export function useViewport3DSceneModel({
       fieldVectorResourceKey,
       primaryFieldRevision,
       resolvedFieldRenderOptions,
+      sessionIdentity,
       topology.revision,
     ],
   );
@@ -4463,7 +4487,7 @@ export function useViewport3DSceneModel({
     quantityId: fdmAirboxActiveQuantityId,
     targetFieldRequests: targetQuantityFieldRequests,
     targetFieldVectors: targetQuantityFieldVectors.data,
-    targetId: "fdm-universe-outside-support",
+    targetId: "airbox",
   });
   const fdmAirboxUsesPrimaryField =
     fdmAirboxResolvedField?.requestId === "primary-field-vector";
@@ -4573,7 +4597,8 @@ export function useViewport3DSceneModel({
           responseDomainGenerationId: fdmAirboxResponseDomainGenerationId,
           responseMetadata: fdmAirboxFieldResponseMetadata,
           resourceKey: null,
-          targetIds: ["fdm-universe-outside-support"],
+          sessionIdentity,
+          targetIds: ["airbox"],
         })
       : null;
   const fdmAirboxFieldVector = fdmAirboxIdentityBuffer?.requestIdentityCompatible
@@ -4995,6 +5020,7 @@ export function useViewport3DSceneModel({
                     targetFieldResponseDomainGenerationId,
                   responseMetadata: targetFieldResponseMetadata,
                   resourceKey: targetFieldResourceKey,
+                  sessionIdentity,
                   targetIds: [view.target.id],
                   topologyRevision: fdmBuildTopologyRevision ?? null,
                 })
@@ -5203,6 +5229,7 @@ export function useViewport3DSceneModel({
       maxInteractiveVectorGlyphs,
       primaryFieldQuantityId,
       primaryFieldRequest,
+      sessionIdentity,
       targetQuantityFieldRequests,
       targetQuantityFieldVectors,
       vectorScale,
@@ -5605,6 +5632,7 @@ export function useViewport3DSceneModel({
           responseDomainGenerationId,
           responseMetadata: fdmMultilayerAirboxField.responseMetadata,
           resourceKey: fdmMultilayerAirboxFieldResourceKey,
+          sessionIdentity,
           targetIds: [AIRBOX_VISUALIZATION_TARGET.id],
           topologyRevision: fdmMultilayerAirboxDomain.carrierFingerprint,
         })
@@ -5714,6 +5742,7 @@ export function useViewport3DSceneModel({
     fdmMultilayerAirboxField.payloadRevision,
     fdmMultilayerAirboxField.responseMetadata,
     fdmMultilayerAirboxFieldRequest,
+    sessionIdentity,
     fdmMultilayerAirboxFieldResourceKey,
   ]);
   const fdmSurfaceColors =
@@ -5785,7 +5814,8 @@ export function useViewport3DSceneModel({
             responseDomainGenerationId: fdmAirboxResponseDomainGenerationId,
             responseMetadata: fdmAirboxFieldResponseMetadata,
             resourceKey: fdmAirboxFieldResourceKey,
-            targetIds: ["fdm-universe-outside-support"],
+            sessionIdentity,
+            targetIds: ["airbox"],
             topologyRevision: fdmBuildTopologyRevision,
           });
           return { ...buffer, decodedFieldVector: buffer.fieldVector };
@@ -5809,14 +5839,14 @@ export function useViewport3DSceneModel({
     fieldBufferState: fdmAirboxFieldBuffer ? "target-buffer" : "missing",
     surface: {
       degradation: null,
-      passId: "fdm-universe-outside-support:surface",
+      passId: "airbox:surface",
       scalarColorMode: null,
       scalarColors: null,
     },
     vectors: {
       buildReference: fdmAirboxVectorBuildReference,
       degradation: null,
-      passId: "fdm-universe-outside-support:vector-glyph",
+      passId: "airbox:vector-glyph",
       segments: fdmAirboxVectorSegments,
     },
   };
@@ -5954,9 +5984,6 @@ export function useViewport3DSceneModel({
         ) {
           carrierIds.add("fdm-universe-outside-support");
         }
-        if (target.id === "fdm-universe-outside-support") {
-          carrierIds.add(target.id);
-        }
         for (const [carrierId, regionTarget] of regionTargetByPartId) {
           if (regionTarget.id === target.id) carrierIds.add(carrierId);
         }
@@ -5969,9 +5996,7 @@ export function useViewport3DSceneModel({
               : target.id === AIRBOX_VISUALIZATION_TARGET.id &&
                   fdmUniverseOutsideSupport
                 ? fdmAirboxDebugRenderPass
-              : target.id === "fdm-universe-outside-support"
-                ? fdmAirboxDebugRenderPass
-                : fdmTargetView
+              : fdmTargetView
               ? {
                 fieldBuffer: fdmTargetView.fieldBuffer,
                 fieldBufferState: fdmTargetView.fieldBuffer
@@ -6243,16 +6268,17 @@ export function useViewport3DSceneModel({
       [...femDomain.partsById].map(([carrierId, part]) => [carrierId, part.role]),
     ),
     fieldModel: fieldRenderModel,
-    fullFieldBufferIdentity: fdmFieldVector
+    // Debug/adoption evidence must use the same session-scoped target buffer as
+    // the FDM renderer.  A decoded payload fingerprint is not a session identity.
+    fullFieldBufferIdentity: fdmAirboxFieldBuffer
       ? {
-          bufferId: `decoded:${fdmFieldVector.quantityId}:${fdmFieldVector.pointCount}:${fdmFieldVector.values.byteLength}`,
-          currentDomainGenerationId: fdmDomainGenerationId,
-          resourceKey: sameViewport3DQuantityId(
-            fdmSettings.activeQuantityId,
-            primaryFieldQuantityId,
-          )
-            ? fieldVectorResourceKey
-            : null,
+          bufferId: fdmAirboxFieldBuffer.bufferId,
+          currentDomainGenerationId:
+            fdmAirboxFieldBuffer.currentDomainGenerationId ?? null,
+          fieldRevision: fdmAirboxFieldBuffer.fieldRevision,
+          resourceKey: fdmAirboxFieldBuffer.resourceKey,
+          sessionEpoch: sessionIdentity?.sessionEpoch ?? null,
+          sessionId: sessionIdentity?.sessionId ?? null,
         }
       : null,
     fullFieldVector: fdmDomain ? fdmFieldVector ?? null : null,

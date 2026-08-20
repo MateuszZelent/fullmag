@@ -764,12 +764,12 @@ describe("viewport3DFieldDataPlan", () => {
       expect.objectContaining({
         completeness: "sampled-ok",
         component: "full",
-        passId: "fdm-universe-outside-support:vector-glyph",
+        passId: "airbox:vector-glyph",
         passKind: "vector-glyph",
         quantityId: "H_demag",
         scopeId: "airbox",
         scopeKind: "airbox",
-        targetId: "fdm-universe-outside-support",
+        targetId: "airbox",
       }),
     ]);
     expect([...fdmAirboxTargetQuantity.requests.values()][0]).toMatchObject({
@@ -876,7 +876,11 @@ describe("viewport3DFieldDataPlan", () => {
           materialization_state: "unmaterialized",
           n_comp: 3,
           normalization_hint: "max_abs",
+          publication_state: "interactive",
+          renderable: true,
+          requestable: true,
           shape: "vector_field",
+          solver_capability: "supported",
           supports_export: true,
           supports_history: false,
           supports_preview_2d: true,
@@ -1004,10 +1008,10 @@ describe("viewport3DFieldDataPlan", () => {
 
     expect(plan.demands).toEqual([
       expect.objectContaining({
-        passId: "fdm-universe-outside-support:vector-glyph",
+        passId: "airbox:vector-glyph",
         quantityId: "H_eff",
         scopeKind: "airbox",
-        targetId: "fdm-universe-outside-support",
+        targetId: "airbox",
       }),
     ]);
     expect([...plan.requests.values()]).toEqual([
@@ -1092,7 +1096,7 @@ describe("viewport3DFieldDataPlan", () => {
     expect(
       resolveViewport3DVectorCarrierSampleLimit(
         1200,
-        "fdm-universe-outside-support",
+        "airbox",
       ),
     ).toBe(9600);
     expect(resolveViewport3DVectorCarrierSampleLimit(1200, "part:free-layer"))

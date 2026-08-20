@@ -69,7 +69,7 @@ export function buildFdmAirboxNode(
         badge: `${grid.shape.join(" × ")} / ${cellCount} cells`,
         icon: "mesh",
         status: meshStatus,
-        visualizationTargetId: "fdm-universe-outside-support",
+        visualizationTargetId: "airbox",
         contextCommands: ["workspace.focus-selection"],
         children: [
           {
@@ -80,7 +80,7 @@ export function buildFdmAirboxNode(
             badge: "read-only",
             icon: "settings",
             status: meshStatus,
-            visualizationTargetId: "fdm-universe-outside-support",
+            visualizationTargetId: "airbox",
           },
           {
             id: "model:airbox:mesh:quality-gates",
@@ -90,7 +90,7 @@ export function buildFdmAirboxNode(
             badge: "read-only",
             icon: "gauge",
             status: meshStatus,
-            visualizationTargetId: "fdm-universe-outside-support",
+            visualizationTargetId: "airbox",
           },
           {
             id: "model:airbox:mesh:statistics",
@@ -100,7 +100,7 @@ export function buildFdmAirboxNode(
             badge: "structured grid",
             icon: "activity",
             status: meshStatus,
-            visualizationTargetId: "fdm-universe-outside-support",
+            visualizationTargetId: "airbox",
           },
           {
             id: "model:airbox:mesh:topology",
@@ -110,7 +110,7 @@ export function buildFdmAirboxNode(
             badge: "not applicable",
             icon: "mesh",
             status: "unsupported",
-            visualizationTargetId: "fdm-universe-outside-support",
+            visualizationTargetId: "airbox",
           },
           {
             id: "model:airbox:mesh:build",
@@ -120,7 +120,7 @@ export function buildFdmAirboxNode(
             badge: "execution artifact",
             icon: "activity",
             status: meshStatus,
-            visualizationTargetId: "fdm-universe-outside-support",
+            visualizationTargetId: "airbox",
           },
         ],
       },

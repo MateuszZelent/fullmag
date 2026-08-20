@@ -15,6 +15,7 @@ import {
   fdmCuboidUsesInstanceColors,
   fdmCuboidVectorPassCanRenderWithoutCellModel,
   buildFdmVectorSegments,
+  evictFdmVectorSegmentCacheEntriesForTests,
   fdmCuboidSurfaceMeshKey,
   hasAnyEffectiveFdmPass,
   handleFdmCuboidContextLost,
@@ -103,6 +104,16 @@ const viewport3DSceneModelPath = join(
 );
 
 describe("FdmCuboidLayer model", () => {
+  it("evicts vector segments by byte budget before the count limit", () => {
+    const entries = new Map([
+      ["oldest", new Float32Array(4)],
+      ["newest", new Float32Array(4)],
+    ]);
+
+    evictFdmVectorSegmentCacheEntriesForTests(entries, 8, 16);
+
+    expect([...entries.keys()]).toEqual(["newest"]);
+  });
   it("keeps a vector-only Airbox pass renderable without a cell instance model", () => {
     expect(
       fdmCuboidVectorPassCanRenderWithoutCellModel({
@@ -924,6 +935,16 @@ describe("FdmCuboidLayer model", () => {
       )?.entryCount ?? 0;
 
     expect(after - before).toBeLessThanOrEqual(8);
+  });
+
+  it("publishes and enforces a byte budget for the FDM vector segment cache", () => {
+    const budget = memoryBudgetRegistry
+      .snapshot()
+      .find((entry) => entry.id === "viewport3d.render.fdmVectorSegmentCache");
+    const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
+
+    expect(budget?.maxBytes).toBe(32 * 1024 * 1024);
+    expect(layerSource).toContain("fieldCacheBytes > maxBytes");
   });
 
   it("reuses the scene-level FDM instance model for surface color mapping and layer rendering", () => {

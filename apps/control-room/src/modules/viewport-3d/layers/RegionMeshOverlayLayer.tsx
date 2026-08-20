@@ -16,6 +16,7 @@ import type {
   Viewport3DGpuUploadManager,
 } from "../build-engine/gpu/viewport3dGpuUploadTypes";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import type { Viewport3DDirtyReason } from "../viewport3dTypes";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import { type RegionMeshOverlayModel } from "./regionOverlayModel";
 import { materialPolicyProps, RENDER_POLICIES } from "./viewport3DRenderPolicy";
@@ -182,7 +183,7 @@ function useRegionMeshOverlayGeometryUpload({
   tracker,
   uploadManager,
 }: {
-  dirtyReason: string;
+  dirtyReason: Viewport3DDirtyReason;
   enabled: boolean;
   indices: Uint32Array | null | undefined;
   invalidate: () => void;

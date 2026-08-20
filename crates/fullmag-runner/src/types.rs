@@ -2592,6 +2592,18 @@ pub struct RelaxationControllerPolicyProvenance {
     pub max_error_floor: f64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FemDirectMinimizerPolicyProvenance {
+    pub requested_direction_policy: String,
+    pub resolved_direction_policy: String,
+    pub requested_linear_solver: String,
+    pub resolved_linear_solver: String,
+    pub requested_preconditioner: String,
+    pub resolved_preconditioner: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub environment_overrides: Vec<String>,
+}
+
 impl TimestepPolicyProvenance {
     pub fn initial_dt(&self) -> f64 {
         self.resolved.initial_dt()
@@ -2865,6 +2877,33 @@ pub struct ChargeTransportExecutionProvenance {
     pub convergence_digest: String,
 }
 
+/// One execution request at a specific resolution boundary.
+///
+/// Final artifacts carry three instances: immutable author intent, the
+/// effective request after launcher/environment policy, and the execution
+/// identity observed from the engine that actually ran.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExecutionRequestProvenance {
+    pub backend: String,
+    pub device: String,
+    pub precision: String,
+    pub mode: String,
+}
+
+/// Mandatory execution-resolution record inserted into final metadata.
+///
+/// `fallback_reason` is intentionally serialized as JSON null when no
+/// fallback occurred so consumers never have to infer absence semantics.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FinalExecutionResolutionProvenance {
+    pub authored_request: ExecutionRequestProvenance,
+    pub effective_request: ExecutionRequestProvenance,
+    pub resolved_execution: ExecutionRequestProvenance,
+    pub resolution_mode: String,
+    pub fallback_occurred: bool,
+    pub fallback_reason: Option<String>,
+}
+
 /// Included in artifact metadata for reproducibility.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExecutionProvenance {
@@ -2941,6 +2980,9 @@ pub struct ExecutionProvenance {
     /// Runtime realization of the energy minimizer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub energy_minimizer_realization: Option<String>,
+    /// Requested and resolved native FEM direct-minimizer direction/solver policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_direct_minimizer_policy: Option<FemDirectMinimizerPolicyProvenance>,
     /// Demag realization requested by the user/plan.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requested_demag_realization: Option<String>,

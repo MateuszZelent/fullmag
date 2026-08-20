@@ -678,7 +678,7 @@ async function qualifyVisualizationMutationStability(page, inspector, fixture) {
           await mutationControl.evaluate((control) => control.click());
         }
         await page.waitForTimeout(40);
-        const duringMutation = await overview.evaluate((element, marker) => {
+        const duringMutation = await overview.evaluate((element) => {
           const scroller = element.closest(".fm-inspector");
           const opacityAnimations = element
             .getAnimations({ subtree: true })
@@ -695,7 +695,7 @@ async function qualifyVisualizationMutationStability(page, inspector, fixture) {
             opacityAnimations: opacityAnimations.length,
             scrollTop: scroller?.scrollTop ?? 0,
           };
-        }, identity);
+        });
         assert(
           duringMutation.connected && duringMutation.marker === identity,
           `${target.label}: Visualization Inspector remounted during mutation.`,

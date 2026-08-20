@@ -83,9 +83,18 @@ def _relevant_git_paths(repo_root: Path, source_inputs: Sequence[Path]) -> tuple
     paths = tuple(
         sorted(
             (
-                _relative_path(raw.decode("utf-8"), "git path")
-                for raw in output.split(b"\0")
-                if raw
+                path
+                for path in (
+                    _relative_path(raw.decode("utf-8"), "git path")
+                    for raw in output.split(b"\0")
+                    if raw
+                )
+                # ``git ls-files -c`` retains tracked paths deleted from a
+                # dirty worktree.  They are represented by the diff hash, not
+                # as readable source records; otherwise a legitimate FM013
+                # duplicate-owner deletion makes runtime export fail before
+                # it can report the expected dirty-source policy.
+                if (repo_root / path).exists() or (repo_root / path).is_symlink()
             ),
             key=lambda value: str(value).encode("utf-8"),
         )

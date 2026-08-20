@@ -1,0 +1,48 @@
+{
+  "schema_version": "selection_expr.v1",
+  "id": "pinned_positive_core",
+  "name": "Pinned positive core",
+  "expression": {
+    "kind": "and",
+    "expressions": [
+      {
+        "kind": "in_object",
+        "object_id": "free_layer"
+      },
+      {
+        "kind": "inside_geometry",
+        "geometry": {
+          "kind": "cylinder",
+          "center_m": [0.0, 0.0, 0.0],
+          "axis": [0.0, 0.0, 1.0],
+          "radius_m": 2.5e-8,
+          "height_m": 3e-9
+        },
+        "frame": {
+          "kind": "object",
+          "object_id": "free_layer"
+        },
+        "sampling": {
+          "kind": "dof_point"
+        },
+        "boundary": {
+          "kind": "inclusive",
+          "absolute_tolerance_m": 0.0,
+          "relative_tolerance": 1e-12
+        }
+      },
+      {
+        "kind": "compare",
+        "lhs": {
+          "kind": "magnetization_component",
+          "component": "z"
+        },
+        "op": "gt",
+        "rhs": {
+          "kind": "constant",
+          "value": 0.5
+        }
+      }
+    ]
+  }
+}

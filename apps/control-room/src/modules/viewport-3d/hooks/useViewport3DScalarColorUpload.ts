@@ -6,6 +6,7 @@ import { BufferAttribute, type BufferGeometry } from "three";
 import { createViewport3DGpuUploadManager } from "../build-engine/gpu/viewport3dGpuUploadManager";
 import type { Viewport3DGpuUploadChunk } from "../build-engine/gpu/viewport3dGpuUploadTypes";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import type { Viewport3DDirtyReason } from "../viewport3dTypes";
 import {
   applyVertexScalarColorBuffer,
   canApplyVertexScalarColorBuffer,
@@ -153,7 +154,7 @@ export function useViewport3DScalarColorUpload({
   vertexCount,
 }: {
   colorBuffer: ScalarColorBuffer | null | undefined;
-  dirtyReason: string;
+  dirtyReason: Viewport3DDirtyReason;
   enabled: boolean;
   geometry: BufferGeometry | null;
   invalidate: () => void;
@@ -335,7 +336,7 @@ export function useViewport3DScalarShaderColorUpload({
   vertexCount,
 }: {
   colorBuffer: ScalarColorBuffer | null | undefined;
-  dirtyReason: string;
+  dirtyReason: Viewport3DDirtyReason;
   enabled: boolean;
   geometry: BufferGeometry | null;
   invalidate: () => void;

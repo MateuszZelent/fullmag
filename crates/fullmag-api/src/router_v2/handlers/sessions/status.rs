@@ -123,6 +123,10 @@ pub(crate) fn build_live_status(
 ) -> LiveStatus {
     let session = SessionSummary {
         session_id: snapshot.session.session_id.clone(),
+        session_epoch: format!(
+            "{}@{}",
+            snapshot.session.session_id, snapshot.session.started_at_unix_ms
+        ),
         name: snapshot.session.problem_name.clone(),
         created_at: snapshot.session.started_at_unix_ms.to_string(),
         workspace_root: workspace_root.display().to_string(),

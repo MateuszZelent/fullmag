@@ -71,7 +71,6 @@ import {
   regionVisualizationCarrierSupportsFieldMeta,
   regionVisualizationFieldWarning,
   VISUALIZATION_COLOR_MODE_ITEMS,
-  VISUALIZATION_QUANTITY_ITEMS,
   visualizationOverrideStateLabel,
   visualizationQuantityItems,
   fieldCatalogQuantityAvailable,
@@ -2069,27 +2068,7 @@ describe("ObjectVisualizationPanelModel", () => {
     expect(new Set(vectorValues).size).toBe(vectorValues.length);
   });
 
-  it("exposes target quantity options for the inspector visualization panel", () => {
-    expect(VISUALIZATION_QUANTITY_ITEMS.map((item) => item.value)).toEqual([
-      "m",
-      "H_eff",
-      "H_demag",
-      "H_ext",
-      "H_ex",
-      "H_ani",
-      "torque",
-      "eden_total",
-      "eden_ex",
-      "eden_demag",
-      "eden_ext",
-      "eden_ani",
-      "eden_dmi",
-      "mat_ms",
-      "mat_aex",
-      "mat_alpha",
-      "mat_dind",
-      "mat_dbulk",
-    ]);
+  it("does not invent quantity options before a canonical catalog arrives", () => {
     expect(visualizationQuantityItems("exchange_field")[0]).toEqual({
       label: "exchange_field",
       value: "exchange_field",
@@ -2129,7 +2108,7 @@ describe("ObjectVisualizationPanelModel", () => {
         null,
         targetAvailability,
       ),
-    ).toEqual([{ label: "Demag field / H_demag", value: "H_demag" }]);
+    ).toEqual([{ label: "H_demag", value: "H_demag" }]);
   });
 
   it("offers advertised quantities before their field payloads reach the inspector", () => {
@@ -2153,7 +2132,11 @@ describe("ObjectVisualizationPanelModel", () => {
           materialization_state: "unmaterialized",
           n_comp: 3,
           normalization_hint: "max_abs",
+          publication_state: "interactive",
+          renderable: true,
+          requestable: true,
           shape: "vector_field",
+          solver_capability: "supported",
           supports_export: true,
           supports_history: false,
           supports_preview_2d: true,
@@ -2172,7 +2155,11 @@ describe("ObjectVisualizationPanelModel", () => {
           materialization_state: "unmaterialized",
           n_comp: 1,
           normalization_hint: "signed",
+          publication_state: "interactive",
+          renderable: true,
+          requestable: true,
           shape: "spatial_scalar",
+          solver_capability: "supported",
           supports_export: true,
           supports_history: false,
           supports_preview_2d: true,
@@ -2566,7 +2553,7 @@ describe("ObjectVisualizationPanelModel", () => {
     ).toContain("Physical field coloring");
   });
 
-  it("keeps the FDM Airbox marker on the structured-grid target while FEM stays canonical Airbox", () => {
+  it("maps both FDM and FEM Airbox selections to the canonical Airbox target", () => {
     const fdmSelection = {
       kind: "mesh.grid.universe-outside-support",
       label: "Airbox",
@@ -2582,11 +2569,7 @@ describe("ObjectVisualizationPanelModel", () => {
       },
     } as const;
     const fdmTarget = resolveVisualizationTargetFromSelection(fdmSelection);
-    expect(fdmTarget).toEqual({
-      id: "fdm-universe-outside-support",
-      kind: "fdm-domain",
-      label: "Airbox",
-    });
+    expect(fdmTarget).toEqual({ id: "airbox", kind: "airbox", label: "Airbox" });
     expect(
       resolveObjectVisualizationTargetForLane({
         lane: "fdm",

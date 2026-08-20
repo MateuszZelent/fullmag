@@ -267,15 +267,15 @@ describe("viewport3dDomainAdapter", () => {
       {
         carrierKind: "object-segment",
         fieldCapable: false,
-        id: "segment:object-1:0",
+        id: "segment:object-1:fa636585",
         object_id: "object-1",
         role: "magnetic",
       },
     ]);
     expect(domain.objectPartIds.get("object-1")).toEqual([
-      "segment:object-1:0",
+      "segment:object-1:fa636585",
     ]);
-    expect(domain.partsById.get("segment:object-1:0")).toMatchObject({
+    expect(domain.partsById.get("segment:object-1:fa636585")).toMatchObject({
       carrierKind: "object-segment",
       fieldCapable: false,
     });

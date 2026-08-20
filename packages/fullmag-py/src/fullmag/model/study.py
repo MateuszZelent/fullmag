@@ -811,6 +811,8 @@ class Relaxation:
         table_autosave: TableAutosave | None = None,
         torque_tolerance_unit: str = "T",
     ) -> None:
+        if torque_tolerance_unit not in {"T", "A/m"}:
+            raise ValueError("torque_tolerance_unit must be 'T' or 'A/m'")
         object.__setattr__(self, "outputs", outputs)
         object.__setattr__(self, "algorithm", algorithm)
         object.__setattr__(
@@ -824,13 +826,12 @@ class Relaxation:
                 max_relaxation_time_s=max_relaxation_time_s,
                 max_pseudotime_s=max_pseudotime_s,
                 max_physical_time_s=max_physical_time_s,
+                torque_tolerance_unit=torque_tolerance_unit,
             ),
         )
         object.__setattr__(self, "dynamics", dynamics)
         object.__setattr__(self, "_table_autosave", table_autosave)
         object.__setattr__(self, "torque_tolerance", self.stop.torque_tolerance_apm)
-        if torque_tolerance_unit not in {"T", "A/m"}:
-            raise ValueError("torque_tolerance_unit must be 'T' or 'A/m'")
         object.__setattr__(self, "torque_tolerance_unit", torque_tolerance_unit)
         object.__setattr__(self, "energy_tolerance", self.stop.energy_tolerance_j)
         object.__setattr__(self, "max_steps", self.stop.max_steps)
@@ -923,6 +924,7 @@ def _resolve_relax_stop(
     max_relaxation_time_s: object,
     max_pseudotime_s: object,
     max_physical_time_s: object,
+    torque_tolerance_unit: str,
 ) -> RelaxStop:
     def maybe_float(value: object) -> float | None:
         if value is _UNSET or value is None:
@@ -935,6 +937,8 @@ def _resolve_relax_stop(
         return int(value)
 
     alias_torque = maybe_float(torque_tolerance)
+    if alias_torque is not None and torque_tolerance_unit == "T":
+        alias_torque /= 4.0e-7 * math.pi
     alias_energy = maybe_float(energy_tolerance)
     alias_max_steps = maybe_int(max_steps)
     time_kwargs = {

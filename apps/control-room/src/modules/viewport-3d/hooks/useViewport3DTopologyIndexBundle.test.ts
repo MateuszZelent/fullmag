@@ -9,6 +9,7 @@ import {
   putViewport3DTopologyIndexBundleInCache,
   retainViewport3DTopologyIndexBundleFromCache,
   resolveViewport3DTopologyIndexStatus,
+  TOPOLOGY_INDEX_BUNDLE_CACHE_MAX_BYTES,
   viewport3DTopologyIndexStateIsCompatible,
 } from "./useViewport3DTopologyIndexBundle";
 import type { Viewport3DTopologyIndexBundle } from "../viewport3dTopologyIndexModel";
@@ -199,5 +200,28 @@ describe("useViewport3DTopologyIndexBundle", () => {
         ?.bundle,
     ).toBe(retained.bundle);
     retained.release();
+  });
+
+  it("evicts unretained topology bundles when typed arrays exceed the byte budget", () => {
+    const indicesPerEntry =
+      Math.floor(TOPOLOGY_INDEX_BUNDLE_CACHE_MAX_BYTES / Uint32Array.BYTES_PER_ELEMENT / 2) +
+      1;
+
+    for (let index = 0; index < 2; index += 1) {
+      putViewport3DTopologyIndexBundleInCache({
+        bundle: {
+          ...makeTopologyIndexBundle(index),
+          fallbackSurfaceIndices: new Uint32Array(indicesPerEntry),
+        },
+        key: `topology-index:large:${index}`,
+      }).release();
+    }
+
+    const snapshot = getViewport3DTopologyIndexBundleCacheSnapshotForTests();
+    expect(snapshot.entryCount).toBe(1);
+    expect(snapshot.estimatedBytes).toBeLessThanOrEqual(
+      TOPOLOGY_INDEX_BUNDLE_CACHE_MAX_BYTES,
+    );
+    expect(snapshot.keys).toEqual(["topology-index:large:1"]);
   });
 });

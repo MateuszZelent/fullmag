@@ -11,6 +11,7 @@ import {
   memoryBudgetRegistry,
   type MemoryBudgetEntry,
 } from "@/kernel/performance/MemoryBudgetRegistry";
+import { recordVisualizationDebugPerformanceMetric } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 import type { SurfaceFieldProjectionMode } from "@/kernel/visualization/ObjectVisualizationController";
 import { buildAirOnlyVisualizationNodeSelection } from "@/shared/domain/mesh/visualizationNodeSelection";
 
@@ -295,6 +296,7 @@ type Viewport3DVectorFieldValueResolver = (
 
 const DEFAULT_VIEWPORT_3D_VECTOR_GLYPH_BUDGET = 2048;
 const RENDER_CACHE_MAX_ENTRIES_PER_OWNER = 8;
+export const RENDER_CACHE_MAX_BYTES_PER_OWNER = 64 * 1024 * 1024;
 
 interface Viewport3DRenderCacheCounter {
   byteLength: number;
@@ -333,7 +335,7 @@ for (const [id, label] of VIEWPORT_3D_RENDER_CACHE_DEFINITIONS) {
       entryCount: counter.entryCount,
       id,
       label: counter.label,
-      maxBytes: null,
+      maxBytes: RENDER_CACHE_MAX_BYTES_PER_OWNER,
     };
   });
 }
@@ -2046,12 +2048,14 @@ function getCachedValue<TKey extends object, TValue>(
   }
 
   if (entries.has(key)) {
+    recordVisualizationDebugPerformanceMetric("cacheHits");
     const value = entries.get(key) as TValue;
     entries.delete(key);
     entries.set(key, value);
     return value;
   }
 
+  recordVisualizationDebugPerformanceMetric("cacheMisses");
   const value = build();
   entries.set(key, value);
   recordRenderCacheInsert(statsId, value);
@@ -2082,14 +2086,37 @@ function getCachedNestedFieldValue<TOwner extends object, TValue>(
 function evictOldestRenderCacheEntries<TValue>(
   entries: Map<string, TValue>,
   statsId: string | undefined,
+  maxEntries = RENDER_CACHE_MAX_ENTRIES_PER_OWNER,
+  maxBytes = RENDER_CACHE_MAX_BYTES_PER_OWNER,
 ): void {
-  while (entries.size > RENDER_CACHE_MAX_ENTRIES_PER_OWNER) {
+  while (
+    entries.size > maxEntries ||
+    renderCacheEntriesByteLength(entries) > maxBytes
+  ) {
     const oldestKey = entries.keys().next().value;
     if (oldestKey === undefined) return;
     const value = entries.get(oldestKey);
     entries.delete(oldestKey);
+    recordVisualizationDebugPerformanceMetric("cacheEvictions");
     recordRenderCacheEviction(statsId, value);
   }
+}
+
+export function evictViewport3DRenderCacheEntriesForTests(
+  entries: Map<string, unknown>,
+  maxEntries: number,
+  maxBytes: number,
+): void {
+  evictOldestRenderCacheEntries(entries, undefined, maxEntries, maxBytes);
+}
+
+function renderCacheEntriesByteLength<TValue>(
+  entries: Map<string, TValue>,
+): number {
+  return [...entries.values()].reduce(
+    (total, value) => total + estimateRenderCacheValueByteLength(value),
+    0,
+  );
 }
 
 function recordRenderCacheInsert(statsId: string | undefined, value: unknown) {
@@ -2139,7 +2166,7 @@ export function getViewport3DRenderCacheStats(): MemoryBudgetEntry[] {
       entryCount: counter?.entryCount ?? 0,
       id,
       label: counter?.label ?? id,
-      maxBytes: null,
+      maxBytes: RENDER_CACHE_MAX_BYTES_PER_OWNER,
       owner: "viewport-3d",
       releaseReason: null,
     };

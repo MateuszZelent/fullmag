@@ -254,11 +254,7 @@ export function VisualizationRenderModeSection({
     currentMode !== "off" &&
     !capabilities.primaryRenderModes.includes(currentMode);
   const applyRenderMode = (value: VisualizationDisplayMode) =>
-    void patch(
-      target.id === "fdm-universe-outside-support"
-        ? { renderMode: value }
-        : renderModeDisplayPatch(value),
-    );
+    void patch(renderModeDisplayPatch(value));
 
   return (
     <div className="grid min-w-0 gap-1.5">

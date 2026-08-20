@@ -552,6 +552,11 @@ void native_c_api_keeps_v2_handles_out_of_legacy_step_path() {
         c_api.find("select_cuda_device_if_requested(*ctx)", create_v2);
     const std::size_t upload_in_v2 =
         c_api.find("context_upload_multilayer_plan_v2(*ctx, *plan)", create_v2);
+    const std::size_t step_entry = c_api.find("int fullmag_fdm_backend_step(");
+    const std::size_t multilayer_step =
+        c_api.find("if (ctx->has_multilayer_plan_v2)", step_entry);
+    const std::size_t transport_begin =
+        c_api.find("context_begin_gpu_transport_step(*ctx, transport_attempt_id)", step_entry);
 
     check(
         create_v2 != std::string::npos &&
@@ -574,6 +579,16 @@ void native_c_api_keeps_v2_handles_out_of_legacy_step_path() {
             c_api.find("launch_multilayer_rk23_step_fp32(*ctx, dt_seconds, out_stats)") !=
                 std::string::npos,
         "step must route staged v2 multilayer handles through native timestep launchers");
+    check(
+        step_entry != std::string::npos &&
+            multilayer_step != std::string::npos &&
+            transport_begin != std::string::npos &&
+            multilayer_step < transport_begin,
+        "multilayer stepping must branch before starting the unsupported transport transaction");
+    check(
+        c_api.find("spin transport is unsupported for v2 multilayer handles") !=
+            std::string::npos,
+        "the direct C ABI must reject spin-transport binding on v2 multilayer handles");
     check(
         c_api.find("native multilayer timestep execution is not implemented for fullmag_fdm_backend_step") ==
             std::string::npos,

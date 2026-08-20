@@ -1,25 +1,43 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const appRoot = process.cwd();
 const repoRoot = path.resolve(appRoot, "../..");
 const srcRoot = path.join(appRoot, "src");
 const failures = [];
 
-checkKernelModuleImports();
-checkCrossModuleImports();
-checkRibbonCommandModel();
-checkAppMenuSlot();
-checkRuntimeComputeAcceptanceInvalidations();
-checkLegacyWebPathGovernance();
-checkRawHexOutsideDesignTokens();
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  checkBackupSuffixFiles();
+  checkKernelModuleImports();
+  checkCrossModuleImports();
+  checkRibbonCommandModel();
+  checkAppMenuSlot();
+  checkRuntimeComputeAcceptanceInvalidations();
+  checkLegacyWebPathGovernance();
+  checkRawHexOutsideDesignTokens();
 
-if (failures.length > 0) {
-  console.error(`Architecture hygiene check failed:\n${failures.join("\n")}`);
-  process.exit(1);
+  if (failures.length > 0) {
+    console.error(`Architecture hygiene check failed:\n${failures.join("\n")}`);
+    process.exit(1);
+  }
+
+  console.log("Architecture hygiene check passed.");
 }
 
-console.log("Architecture hygiene check passed.");
+function checkBackupSuffixFiles() {
+  failures.push(...findBackupSuffixFailures(srcRoot, appRoot));
+}
+
+export function findBackupSuffixFailures(root, relativeRoot = root) {
+  const backupSuffixPattern = /(\.orig|\.rej|\.bak|~)$/;
+  return listAllFiles(root)
+    .filter((filePath) => backupSuffixPattern.test(filePath))
+    .map(
+      (filePath) =>
+        `${path.relative(relativeRoot, filePath).split(path.sep).join("/")} is a backup/reject artifact.`,
+    );
+}
 
 function checkKernelModuleImports() {
   const kernelRoot = path.join(srcRoot, "kernel");
@@ -247,6 +265,22 @@ function listSourceFiles(root) {
     const isTestFile =
       entry.name.includes(".test.") || entry.name.includes(".spec.");
     if (!isTestFile && (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx"))) {
+      files.push(filePath);
+    }
+  }
+  return files;
+}
+
+function listAllFiles(root) {
+  const files = [];
+  if (!existsSync(root)) return files;
+
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const filePath = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === "node_modules" || entry.name === ".next") continue;
+      files.push(...listAllFiles(filePath));
+    } else {
       files.push(filePath);
     }
   }

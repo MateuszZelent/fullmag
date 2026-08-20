@@ -31,6 +31,14 @@ const profileSwitchScriptUrl = new URL(
   "../../../scripts/audit-viewport-3d-profile-switch.mjs",
   import.meta.url,
 );
+const idlePerformanceAuditScriptUrl = new URL(
+  "../../../scripts/audit-idle-performance.mjs",
+  import.meta.url,
+);
+const airboxVectorColdToggleAuditScriptUrl = new URL(
+  "../../../scripts/audit-airbox-vector-cold-toggle.mjs",
+  import.meta.url,
+);
 const justfileUrl = new URL("../../../../../justfile", import.meta.url);
 const fdmCpuRelaxSmokeUrl = new URL(
   "../../../../../examples/fdm_cpu_relax_smoke.py",
@@ -48,6 +56,26 @@ function endpointFamilyLiteral(path: string, suffix: string): string {
 }
 
 describe("viewport smoke projection round-trip", () => {
+  it("requires every browser performance audit to preserve opt-in renderer counter traces", () => {
+    for (const scriptUrl of [
+      memoryChurnScriptUrl,
+      femTopologyUploadAuditScriptUrl,
+      profileSwitchScriptUrl,
+      airboxVectorColdToggleAuditScriptUrl,
+    ]) {
+      const script = readFileSync(scriptUrl, "utf8");
+
+      expect(script).toContain("viewport-performance-proof.mjs");
+      expect(script).toContain("installViewportPerformanceProbe");
+      expect(script).toContain("captureViewportPerformanceSnapshot");
+      expect(script).toContain("rawPerformanceTrace");
+    }
+
+    const idleAudit = readFileSync(idlePerformanceAuditScriptUrl, "utf8");
+    expect(idleAudit).toContain("recordVisualizationDebugViewportFrame");
+    expect(idleAudit).toContain("settled R3F frames");
+  });
+
   it("refuses mutating an existing session without a disposable script guard", () => {
     const smokeScript = readFileSync(smokeScriptUrl, "utf8");
 

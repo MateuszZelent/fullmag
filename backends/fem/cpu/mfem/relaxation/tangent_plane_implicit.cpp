@@ -12,6 +12,7 @@
 
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag.hpp"
+#include "cpu/mfem/relaxation/direct_energy_increment.hpp"
 #include "cpu/mfem/relaxation/relaxation_math.hpp"
 #include "cpu/mfem/runtime/mfem_host_access.hpp"
 #include "cpu/mfem/runtime/mpi_init.hpp"
@@ -1242,11 +1243,20 @@ int run_tangent_plane_implicit_step(
         out_stats.dt_seconds = 0.0;
         return FULLMAG_FEM_OK;
     }
+    if (relaxation_torque_confirmation_pending(ctx, current_stats.max_torque_Apm)) {
+        out_stats = current_stats;
+        out_stats.dt_seconds = 0.0;
+        out_stats.max_rhs_amplitude = 0.0;
+        update_stage_completion_from_stats(ctx, out_stats);
+        return FULLMAG_FEM_OK;
+    }
 
     std::vector<double> previous_m;
+    std::vector<double> previous_h_demag;
     {
         ScopedPhaseTimer timer(&profile_stats.relaxation_state_copy_wall_time_ns);
         previous_m = ctx.state.m_xyz;
+        previous_h_demag = ctx.demag.h_xyz;
     }
     std::vector<double> gradient;
     double g_norm_sq = 0.0;
@@ -1286,6 +1296,7 @@ int run_tangent_plane_implicit_step(
     int status = FULLMAG_FEM_OK;
     double direction_dot_gradient = 0.0;
     bool line_search_accepted = false;
+    DirectMinimizerArmijoResult armijo_result;
     while (true) {
         std::vector<double> direction;
         if (!solve_tangent_plane_linear_system(
@@ -1335,10 +1346,32 @@ int run_tangent_plane_implicit_step(
         bool armijo = false;
         {
             ScopedPhaseTimer timer(&profile_stats.relaxation_line_search_wall_time_ns);
-            armijo =
-                trial_stats.total_energy_joules <=
-                current_stats.total_energy_joules +
-                    relaxation::kArmijoCoefficient * trial_step * direction_dot_gradient;
+            armijo_result = direct_minimizer_armijo_evaluate(
+                ctx,
+                "tangent-plane implicit",
+                previous_m,
+                trial_m,
+                previous_h_demag,
+                current_stats,
+                trial_stats,
+                profile_stats,
+                trial_step * direction_dot_gradient,
+                error);
+            armijo = armijo_result.accepted();
+        }
+        if (!error.empty() || ctx.interrupt.step_interrupted) {
+            const bool interrupted = ctx.interrupt.step_interrupted;
+            const std::string difference_error = error.empty()
+                ? "tangent-plane implicit direct energy difference interrupted"
+                : error;
+            return relaxation::restore_previous_relaxation_state(
+                ctx,
+                previous_m,
+                "tangent-plane implicit",
+                "direct trial energy-difference failure",
+                interrupted ? FULLMAG_FEM_ERR_INTERRUPTED : FULLMAG_FEM_ERR_INTERNAL,
+                difference_error,
+                error);
         }
         if (armijo) {
             line_search_accepted = true;
@@ -1367,6 +1400,26 @@ int run_tangent_plane_implicit_step(
             "tangent-plane implicit",
             backtracks,
             {},
+            error);
+    }
+
+    const double accepted_energy_delta_upper_j =
+        armijo_result.accepted_difference.delta_joules +
+        armijo_result.accepted_difference.roundoff_bound_joules;
+    if (!std::isfinite(accepted_energy_delta_upper_j) ||
+        !std::isfinite(armijo_result.armijo_increment_rhs_j) ||
+        !(accepted_energy_delta_upper_j <=
+              armijo_result.armijo_increment_rhs_j &&
+          armijo_result.armijo_increment_rhs_j <= 0.0)) {
+        const std::string proof_error =
+            "tangent-plane implicit accepted Armijo proof is invalid";
+        return relaxation::restore_previous_relaxation_state(
+            ctx,
+            previous_m,
+            "tangent-plane implicit",
+            "accepted Armijo proof validation failure",
+            FULLMAG_FEM_ERR_INTERNAL,
+            proof_error,
             error);
     }
 
@@ -1406,10 +1459,19 @@ int run_tangent_plane_implicit_step(
     }
     relaxation::finish_accepted_relaxation_step(
         ctx,
-        trial_stats,
+        armijo_result.accepted_stats,
         profile_stats,
         out_stats,
         trial_step);
+    ctx.relaxation.accepted_energy_proof.available = true;
+    ctx.relaxation.accepted_energy_proof.delta_j =
+        armijo_result.accepted_difference.delta_joules;
+    ctx.relaxation.accepted_energy_proof.roundoff_bound_j =
+        armijo_result.accepted_difference.roundoff_bound_joules;
+    ctx.relaxation.accepted_energy_proof.delta_upper_j =
+        accepted_energy_delta_upper_j;
+    ctx.relaxation.accepted_energy_proof.armijo_rhs_j =
+        armijo_result.armijo_increment_rhs_j;
     relaxation::publish_accepted_gradient_completion(ctx, trial_g_norm_sq);
     return FULLMAG_FEM_OK;
 #else

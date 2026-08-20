@@ -1,10 +1,22 @@
 import { inflateSync } from "node:zlib";
+import path from "node:path";
 
 import { createSmokeMutationGuard } from "./lib/smoke-session-isolation.mjs";
+import {
+  assertViewportOrbitPerformanceArtifactFile,
+  assertOrbitPerformanceDelta,
+  captureViewportPerformanceSnapshot,
+  installViewportPerformanceProbe,
+  writeViewportOrbitPerformanceArtifact,
+} from "./lib/viewport-performance-proof.mjs";
 
 const url = process.env.CONTROL_ROOM_URL ?? "http://localhost:3100/workspace";
 const VIEWPORT_3D_SELECTOR = ".fm-viewport-3d";
 const VIEWPORT_3D_CANVAS_SELECTOR = ".fm-viewport-3d canvas";
+const viewport3DArtifactDirectory = path.resolve(
+  process.env.CONTROL_ROOM_AUDIT_ARTIFACTS_DIR ??
+    ".artifacts/viewport-3d-browser-audit",
+);
 const apiBase =
   process.env.CONTROL_ROOM_API_BASE_URL ??
   process.env.NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL ??
@@ -112,6 +124,7 @@ if (allowMissingSession) {
   await installMissingSessionFastFailRoutes(page);
 }
 await installComputePerformanceProbe(page);
+await installViewportPerformanceProbe(page);
 const errors = [];
 const sceneResponses = [];
 const fieldVectorRequests = [];
@@ -119,6 +132,7 @@ const realtimeMessages = [];
 const cameraGestureRequests = [];
 const activeInitialForbiddenResourceRequests = new Map();
 const viewport3DPerformancePhases = [];
+let orbitPerformanceArtifactPath = null;
 let sceneResponseSequence = 0;
 let lastInitialForbiddenResourceRequestAt = 0;
 let recordCameraGestureRequests = false;
@@ -288,6 +302,7 @@ try {
       page,
       "hysteresis replay",
     );
+    await assertOrbitPerformanceArtifactReady();
     logViewport3DPerformancePhases(viewport3DPerformancePhases);
     console.log(`Viewport 3D final WebGL: ${JSON.stringify(finalWebGL)}.`);
     console.log(`Viewport 3D smoke passed at ${url}.`);
@@ -302,6 +317,7 @@ try {
         page,
         "camera gestures",
       );
+      await assertOrbitPerformanceArtifactReady();
       logViewport3DPerformancePhases(viewport3DPerformancePhases);
       console.log(`Viewport 3D final WebGL: ${JSON.stringify(finalWebGL)}.`);
       console.log(`Viewport 3D camera smoke passed at ${url}.`);
@@ -351,6 +367,7 @@ try {
         page,
         "complete viewport smoke",
       );
+      await assertOrbitPerformanceArtifactReady();
       logViewport3DPerformancePhases(viewport3DPerformancePhases);
       logComputePerformanceProbe(computeMetrics);
       console.log(`Viewport 3D final WebGL: ${JSON.stringify(finalWebGL)}.`);
@@ -470,6 +487,11 @@ async function verifyCameraGesturesStayLocal({ page }) {
   const initialCameraSignature = await readViewportCameraSignature(page);
 
   await clearViewportCameraTrajectory(page);
+  const orbitRequestStart = cameraGestureRequests.length;
+  const orbitPerformanceBefore = await captureViewportPerformanceSnapshot(
+    page,
+    "camera-orbit-before",
+  );
   await assertCameraGestureDoesNotFetch(page, "orbit rotate", async () => {
     await page.mouse.move(x, y);
     await page.mouse.down({ button: "left" });
@@ -485,6 +507,28 @@ async function verifyCameraGesturesStayLocal({ page }) {
     }
     await page.mouse.up({ button: "left" });
   });
+  const orbitPerformanceAfter = await captureViewportPerformanceSnapshot(
+    page,
+    "camera-orbit-after",
+  );
+  const orbitRequests = cameraGestureRequests.slice(orbitRequestStart);
+  const orbitPerformanceDelta = assertOrbitPerformanceDelta({
+    acknowledgementsAfter: orbitRequests.filter(
+      (request) => request.method === "PATCH" && request.path === VISUALIZATION_STATE_PATH,
+    ).length,
+    acknowledgementsBefore: 0,
+    after: orbitPerformanceAfter,
+    before: orbitPerformanceBefore,
+    fieldGetsAfter: orbitRequests.filter(
+      (request) => request.method === "GET" && isFieldVectorSamplesPath(request.path),
+    ).length,
+    fieldGetsBefore: 0,
+  });
+  orbitPerformanceArtifactPath = await writeViewportOrbitPerformanceArtifact({
+    artifactDirectory: viewport3DArtifactDirectory,
+    delta: orbitPerformanceDelta,
+    rawPerformanceTrace: [orbitPerformanceBefore, orbitPerformanceAfter],
+  });
   const rotateCameraSignature = await waitForCameraSignatureChange(
     page,
     initialCameraSignature,
@@ -497,9 +541,11 @@ async function verifyCameraGesturesStayLocal({ page }) {
     "left-button orbit rotate",
     "position",
   );
-  gesturePerformancePhases.push(
-    await collectViewport3DPerformancePhase(page, "camera-orbit-continuity"),
-  );
+  gesturePerformancePhases.push({
+    ...(await collectViewport3DPerformancePhase(page, "camera-orbit-continuity")),
+    rawPerformanceTrace: [orbitPerformanceBefore, orbitPerformanceAfter],
+    viewportPerformanceDelta: orbitPerformanceDelta,
+  });
 
   await clearViewportCameraTrajectory(page);
   await assertCameraGestureDoesNotFetch(page, "orbit zoom", async () => {
@@ -584,6 +630,15 @@ async function verifyCameraGesturesStayLocal({ page }) {
     `Camera gesture smoke passed: visualization_state_patches=0 background_resource_requests=0 session_requests=${gestureRequests.length}`,
   );
   return gesturePerformancePhases;
+}
+
+async function assertOrbitPerformanceArtifactReady() {
+  if (!orbitPerformanceArtifactPath) {
+    throw new Error(
+      "Viewport smoke cannot pass without a persisted camera-orbit raw performance trace.",
+    );
+  }
+  await assertViewportOrbitPerformanceArtifactFile(orbitPerformanceArtifactPath);
 }
 
 async function verifyHysteresisReplaySmoke(page) {

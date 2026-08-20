@@ -13,6 +13,7 @@ pub mod physics_object;
 pub mod plan;
 pub mod planar_monitor;
 pub mod quantities;
+pub mod selection;
 pub mod spectral_validation;
 pub mod spin_transport;
 pub mod study;
@@ -30,6 +31,7 @@ pub use planar_monitor::*;
 pub use quantities::{
     field_to_quantity_output, scalar_to_quantity_output, OutputSinkIR, QuantityOutputIR,
 };
+pub use selection::*;
 pub use spectral_validation::BlochWavevectorIR;
 pub use spin_transport::*;
 pub use study::*;

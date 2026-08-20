@@ -4,6 +4,7 @@ import type {
   DiagnosticRecordSeverity,
   DiagnosticViewport3DBuildRecord,
 } from "@/kernel/performance/diagnostic-recorder/diagnosticRecorderTypes";
+import { recordVisualizationDebugPerformanceMetric } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 
 type Viewport3DGpuUploadDiagnosticListener = (
   record: Viewport3DGpuUploadDiagnosticRecord,
@@ -14,6 +15,16 @@ const listeners = new Set<Viewport3DGpuUploadDiagnosticListener>();
 export function recordViewport3DGpuUploadDiagnostic(
   record: Viewport3DGpuUploadDiagnosticRecord,
 ): void {
+  if (record.status === "ready") {
+    recordVisualizationDebugPerformanceMetric("gpuUploads");
+    recordVisualizationDebugPerformanceMetric(
+      "gpuUploadBytes",
+      record.uploadBytes,
+    );
+    if (record.lane === "topology-index") {
+      recordVisualizationDebugPerformanceMetric("topologyUploads");
+    }
+  }
   for (const listener of listeners) {
     try {
       listener(record);

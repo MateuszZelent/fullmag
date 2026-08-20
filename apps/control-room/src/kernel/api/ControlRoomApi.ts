@@ -583,6 +583,7 @@ import {
 import type { OpenApiV2Path } from "./generated/openapi-v2-paths";
 import type { RequestDiagnosticsController } from "./RequestDiagnosticsController";
 import type { components } from "./generated/openapi-v2-types";
+import { recordVisualizationDebugPerformanceMetric } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 
 type FetchLike = typeof fetch;
 type PathParams = Record<string, string | number>;
@@ -3118,6 +3119,9 @@ export class ControlRoomApi {
           throw error;
         }
         const decodeDurationMs = Math.max(0, nowMs() - decodeStartedAt);
+        if (decoderKind === "field-vector") {
+          recordVisualizationDebugPerformanceMetric("fieldDecodes");
+        }
 
         this.requestDiagnostics?.record({
           byteLength,

@@ -2269,7 +2269,10 @@ fn is_airbox_identity_id(id: &str) -> bool {
             .map(|(_, value)| value.to_string())
             .unwrap_or_default();
     }
-    matches!(normalized.as_str(), "airbox" | "__air__" | "__airbox__")
+    matches!(
+        normalized.as_str(),
+        "airbox" | "__air__" | "__airbox__" | "fdm-universe-outside-support"
+    )
 }
 
 fn mesh_part_requires_visualization_fallback(

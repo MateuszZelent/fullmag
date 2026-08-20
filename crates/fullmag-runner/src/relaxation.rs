@@ -19,6 +19,6 @@ pub(crate) use convergence::{
 pub(crate) use direct_minimizer_reference::{execute_nonlinear_cg, execute_projected_gradient_bb};
 pub(crate) use provenance::NATIVE_LLG_TIME_INTEGRATOR_REALIZATION;
 pub(crate) use provenance::{
-    apply_energy_minimizer_provenance, native_direct_minimizer_realization,
-    CPU_SOA_DIRECT_MINIMIZER_REALIZATION,
+    apply_energy_minimizer_provenance, apply_fem_direct_minimizer_policy_provenance,
+    native_direct_minimizer_realization, CPU_SOA_DIRECT_MINIMIZER_REALIZATION,
 };

@@ -2,7 +2,9 @@
 
 import React, {
   useCallback,
+  useEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   useSyncExternalStore,
@@ -1025,6 +1027,11 @@ function useObjectVisualizationPanelState(
   const vectorSceneCap = resolveVisualizationVectorSceneCap(
     displayVisualizationState,
   );
+  const vectorTopologyHash =
+    vectorCapacity?.topologyHash ??
+    (fdmTarget
+      ? fdmMembership.data?.grid_fingerprint ?? null
+      : manifest.data?.topology_fingerprint ?? null);
   function onTogglePartVectors(visible: boolean) {
     if (!resolvedTarget || !displayVisualizationState) return;
     queueTargetVectorVisibilityPatch({
@@ -1081,11 +1088,12 @@ function useObjectVisualizationPanelState(
     vectorBudgetRanges,
     vectorCapacity,
     vectorSceneCap,
+    sessionIdentityKey: manifestStatus
+      ? `${manifestStatus.session.session_id}\u0000${manifestStatus.session.session_epoch}`
+      : null,
     visualizationResourceRevision,
     vectorMeshParts,
-    vectorTopologyHash:
-      vectorCapacity?.topologyHash ??
-      (fdmTarget ? fdmMembership.data?.grid_fingerprint ?? null : manifest.data?.topology_fingerprint ?? null),
+    vectorTopologyHash,
     visualizationBaselineReady,
     fdmNotice,
   } as const;
@@ -1141,32 +1149,41 @@ export function VisualizationTargetInspectorPanel({
       ? "airbox"
       : target.id
     : null;
-  const [lastGoodPanel, setLastGoodPanel] = useState<{
+  type RetainedPanel = {
+    identityKey: string;
     panel: ResolvedObjectVisualizationPanelState;
     revision: string | number | null;
     targetKey: string;
-  } | null>(null);
-  if (
-    visualizationBaselineReady &&
-    resolvedPanel &&
-    targetId &&
-    (lastGoodPanel?.revision !== panel.visualizationResourceRevision ||
-      lastGoodPanel.targetKey !== targetId)
-  ) {
-    setLastGoodPanel((current) =>
-      current?.revision === panel.visualizationResourceRevision &&
-      current.targetKey === targetId
+  };
+  const [lastGoodPanel, retainLastGoodPanel] = useReducer(
+    (current: RetainedPanel | null, next: RetainedPanel) =>
+      current?.revision === next.revision && current.identityKey === next.identityKey
         ? current
-        : {
-            panel: resolvedPanel,
-            revision: panel.visualizationResourceRevision,
-            targetKey: targetId,
-          },
-    );
-  }
+        : next,
+    null,
+  );
+  const panelIdentityKey = targetId && panel.sessionIdentityKey
+    ? `${targetId}\u0000${panel.sessionIdentityKey}\u0000${panel.vectorTopologyHash ?? "topology:none"}`
+    : null;
+  useEffect(() => {
+    if (visualizationBaselineReady && resolvedPanel && targetId && panelIdentityKey) {
+      retainLastGoodPanel({
+        panel: resolvedPanel,
+        identityKey: panelIdentityKey,
+        revision: panel.visualizationResourceRevision,
+        targetKey: targetId,
+      });
+    }
+  }, [
+    panel.visualizationResourceRevision,
+    panelIdentityKey,
+    resolvedPanel,
+    targetId,
+    visualizationBaselineReady,
+  ]);
   const stablePanel = visualizationBaselineReady
     ? resolvedPanel
-    : lastGoodPanel?.targetKey === targetId
+    : lastGoodPanel?.identityKey === panelIdentityKey
       ? lastGoodPanel.panel
       : null;
   const activeSettings = stablePanel?.settings ?? settings;

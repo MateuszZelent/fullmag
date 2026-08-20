@@ -22,6 +22,7 @@ import {
   inspectViewport3DFieldVectorCacheEntryDiagnostics,
   invalidateViewport3DFieldMetaResources,
   loadCachedBinaryResource,
+  loadViewport3DFieldRequestsBounded,
   resolveCachedFieldVectorEnvelope,
   resolveViewport3DAirboxFieldVectorQuery,
   resolveViewport3DAirboxFieldVectorPartStates,
@@ -29,6 +30,7 @@ import {
   resolveViewport3DAirboxFieldVectorResourceRequests,
   resolveViewport3DFieldVectorResourceKey,
   resolveViewport3DFieldVectorCollectionLastGood,
+  resolveViewport3DFieldVectorRequestStates,
   resolveViewport3DFieldVectorCollectionResourceKey,
   resolveViewport3DPartFieldVectorResourceRequests,
   resolveViewport3DQuantityFieldVectorResourceRequests,
@@ -78,6 +80,74 @@ function fieldResponseMetadata(
 }
 
 describe("viewport3dResources", () => {
+  it("loads field carriers with bounded priority-aware concurrency", async () => {
+    const started: string[] = [];
+    const releases = new Map<string, () => void>();
+    let active = 0;
+    let maxActive = 0;
+    const requests = [
+      { id: "remaining", consumers: ["target:remaining"] },
+      { id: "surface", consumers: ["target:surface-visible"] },
+      { id: "selected", consumers: ["object:selected:surface"] },
+      { id: "vectors", consumers: ["target:vector-glyph-visible"] },
+      { id: "remaining-2", consumers: ["target:remaining"] },
+    ];
+
+    const pending = loadViewport3DFieldRequestsBounded(
+      requests,
+      async (request) => {
+        started.push(request.id);
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await new Promise<void>((resolve) => releases.set(request.id, resolve));
+        active -= 1;
+        return request.id;
+      },
+      { concurrency: 2, selectedTargetId: "object:selected" },
+    );
+
+    await vi.waitFor(() => expect(started).toEqual(["selected", "vectors"]));
+    releases.get("selected")?.();
+    await vi.waitFor(() => expect(started).toEqual(["selected", "vectors", "surface"]));
+    for (const release of releases.values()) release();
+    await vi.waitFor(() => expect(started).toHaveLength(5));
+    for (const release of releases.values()) release();
+
+    await expect(pending).resolves.toEqual([
+      "selected",
+      "vectors",
+      "surface",
+      "remaining",
+      "remaining-2",
+    ]);
+    expect(maxActive).toBe(2);
+  });
+
+  it.each([1, 10, 50])(
+    "loads %i carrier requests exactly once within the shared concurrency budget",
+    async (requestCount) => {
+      let active = 0;
+      let maxActive = 0;
+      const calls = new Map<number, number>();
+      const results = await loadViewport3DFieldRequestsBounded(
+        Array.from({ length: requestCount }, (_, id) => ({ consumers: [], id })),
+        async ({ id }) => {
+          calls.set(id, (calls.get(id) ?? 0) + 1);
+          active += 1;
+          maxActive = Math.max(maxActive, active);
+          await Promise.resolve();
+          active -= 1;
+          return id;
+        },
+        { concurrency: 4 },
+      );
+
+      expect(results).toHaveLength(requestCount);
+      expect([...calls.values()]).toEqual(Array(requestCount).fill(1));
+      expect(maxActive).toBe(Math.min(4, requestCount));
+    },
+  );
+
   it("keeps the failing quantity request explicit in a partial collection error", () => {
     const error = createViewport3DFieldVectorPartialLoadError({
       cause: new Error("backend rejected H_demag"),
@@ -177,6 +247,40 @@ describe("viewport3dResources", () => {
       reasonCode: "field_materialization_pending",
       revision: null,
       status: "pending",
+    });
+  });
+
+  it("keeps one failed carrier isolated while other request states remain ready", () => {
+    const ready = {
+      data: {
+        dtype: "float64" as const,
+        grid: [1, 1, 1] as [number, number, number],
+        nComp: 3,
+        pointCount: 1,
+        quantityId: "m",
+        valueCount: 3,
+        values: new Float64Array([1, 0, 0]),
+      },
+      etag: '"m-ready"',
+      responseMetadata: fieldResponseMetadata(),
+      resourceKey: "field:m:ready",
+    };
+    const states = resolveViewport3DFieldVectorRequestStates({
+      current: new Map([["ready", ready]]),
+      displayed: new Map([["ready", ready]]),
+      failures: new Map([
+        ["failed", { reasonCode: "target_carrier_missing", status: 404 }],
+      ]),
+      previous: new Map(),
+      requests: new Map([["ready", {}], ["failed", {}]]),
+      status: "error",
+    });
+
+    expect(states.get("ready")?.status).toBe("ready");
+    expect(states.get("failed")).toMatchObject({
+      data: null,
+      reasonCode: "target_carrier_missing",
+      status: "unavailable",
     });
   });
 
@@ -396,6 +500,9 @@ describe("viewport3dResources", () => {
     expect(quantityCollectionSource).not.toContain("Promise.all(");
     expect(partCollectionSource).not.toContain("Promise.all(");
     expect(airboxCollectionSource).not.toContain("Promise.all(");
+    expect(quantityCollectionSource).toContain("loadViewport3DFieldRequestsBounded(");
+    expect(partCollectionSource).toContain("loadViewport3DFieldRequestsBounded(");
+    expect(airboxCollectionSource).toContain("loadViewport3DFieldRequestsBounded(");
   });
 
   it("changes a collection resource identity when a stable target changes quantity or query", () => {

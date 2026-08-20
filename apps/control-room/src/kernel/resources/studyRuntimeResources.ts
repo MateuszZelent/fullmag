@@ -235,7 +235,7 @@ type StudyRuntimeCommandSessionStatus = {
     | "stages_revision"
   >;
   run: Pick<NonNullable<LiveStatusResource["run"]>, "run_id"> | null;
-  session: Pick<LiveStatusResource["session"], "session_id">;
+  session: Pick<LiveStatusResource["session"], "session_epoch" | "session_id">;
 };
 
 export function selectStudyRuntimeCommandSessionStatus(status: {
@@ -264,6 +264,7 @@ export function selectStudyRuntimeCommandSessionStatus(status: {
     },
     run: status.data.run ? { run_id: status.data.run.run_id } : null,
     session: {
+      session_epoch: status.data.session.session_epoch,
       session_id: status.data.session.session_id,
     },
   };
@@ -293,7 +294,8 @@ export function studyRuntimeCommandSessionStatusEquals(
     previous.resources.scene_revision === next.resources.scene_revision &&
     previous.resources.stages_revision === next.resources.stages_revision &&
     previous.run?.run_id === next.run?.run_id &&
-    previous.session.session_id === next.session.session_id
+    previous.session.session_id === next.session.session_id &&
+    previous.session.session_epoch === next.session.session_epoch
   );
 }
 
@@ -322,6 +324,9 @@ export function runtimeCommandControlSessionStatusEquals(
     return false;
   }
   if (previous.session.session_id !== next.session.session_id) {
+    return false;
+  }
+  if (previous.session.session_epoch !== next.session.session_epoch) {
     return false;
   }
   if (previous.run?.run_id !== next.run?.run_id) {
@@ -1837,6 +1842,7 @@ export function fieldMetaFreshnessRevision(
 ): string | null {
   if (!data) return null;
   return [
+    data.observation_frame?.observation_frame_id ?? "observation-frame:unavailable",
     data.field_revision,
     data.state,
     data.source_revision,

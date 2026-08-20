@@ -1,3 +1,8 @@
+import { mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { createQuantitySwitchAckProofRecorder } from "../src/kernel/visualization/quantitySwitchAckProofCore.js";
+
 const apiBase = (
   process.env.CONTROL_ROOM_API_BASE_URL ??
   process.env.NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL ??
@@ -35,6 +40,7 @@ const requireFullmagWebsocket =
 
 const FULLMAG_WS_PATH = "/v2/sessions/current/events/ws";
 const SESSION_RESOURCE_PREFIX = "/v2/sessions/current/";
+const VISUALIZATION_ACK_PATH = "/v2/sessions/current/visualization/client-acks";
 const FIELD_VECTOR_PATTERN = /^\/v2\/sessions\/current\/data\/fields\/[^/]+\/samples\/vector/;
 const TOPOLOGY_PATHS = new Set([
   "/v2/sessions/current/data/domain/topology",
@@ -52,6 +58,7 @@ async function main() {
   const browser = await playwright.chromium.launch();
   const page = await browser.newPage({ viewport: { height: 900, width: 1440 } });
   const httpEvents = [];
+  const quantityAckEvents = [];
   const wsFrames = [];
   let sawFullmagWebsocket = false;
 
@@ -71,6 +78,10 @@ async function main() {
       path,
       timestamp: Date.now(),
     });
+    if (pathWithoutQuery(path) === VISUALIZATION_ACK_PATH && request.method() === "POST") {
+      const body = safelyParseJson(request.postData());
+      quantityAckEvents.push({ body, raw: request.postData() });
+    }
   });
   page.on("response", (response) => {
     const path = currentSessionPath(response.url());
@@ -108,6 +119,7 @@ async function main() {
     await page.waitForTimeout(warmupMs);
 
     httpEvents.length = 0;
+    quantityAckEvents.length = 0;
     wsFrames.length = 0;
     const start = Date.now();
     await page.waitForTimeout(windowMs);
@@ -119,6 +131,13 @@ async function main() {
       wsFrames,
     });
     const failures = validateSummary(summary);
+    const quantityProof = buildQuantitySwitchAckProof({
+      acknowledgements: quantityAckEvents,
+      expectations: quantityProofExpectationsFromEnv(),
+      requests: httpEvents,
+    });
+    writeQuantitySwitchAckProofArtifact(quantityProof);
+    failures.push(...quantityProof.failures);
     console.log(`Realtime communication metrics: ${JSON.stringify(summary)}`);
     if (failures.length > 0) {
       throw new Error(
@@ -129,6 +148,60 @@ async function main() {
   } finally {
     await browser.close();
   }
+}
+
+export function buildQuantitySwitchAckProof({ acknowledgements, expectations, requests }) {
+  const recorder = createQuantitySwitchAckProofRecorder();
+  const canonicalExpectations = expectations.map((entry) => ({
+    carrierKey: `${entry.viewportId}\u0000${entry.resourceKey}`,
+    revision: entry.revision,
+    styleOnly: entry.styleOnly,
+  }));
+  for (const request of requests) {
+    if (request.direction !== "tx") continue;
+    const carrierKey = `${expectations.find((entry) => entry.resourceKey === request.path)?.viewportId ?? "unexpected"}\u0000${request.path}`;
+    recorder.recordRequest({ carrierKey, method: request.method, resourceKey: carrierKey, unexpected: request.method === "GET" && FIELD_VECTOR_PATTERN.test(pathWithoutQuery(request.path)) && !expectations.some((entry) => entry.resourceKey === request.path) });
+  }
+  for (const event of acknowledgements) {
+    const body = event.body ?? event;
+    const viewportId = body?.viewport_id ?? body?.viewportId;
+    const matching = expectations.find((entry) => entry.viewportId === viewportId && entry.revision === body?.revision);
+    recorder.recordAcknowledgement({
+      carrierKey: matching ? `${matching.viewportId}\u0000${matching.resourceKey}` : "malformed",
+      malformed: !body || !Number.isInteger(body.revision) || typeof viewportId !== "string" || typeof body.status !== "string",
+      revision: body?.revision ?? -1,
+      status: body?.status,
+    });
+  }
+  const failures = recorder.validate(canonicalExpectations);
+  return {
+    schemaVersion: 1,
+    provenance: { apiBase, script: "smoke-realtime-communication-budget.mjs", workspaceUrl },
+    raw: { acknowledgements, requests },
+    expectations,
+    failures,
+    result: failures.length === 0 ? "pass" : "fail",
+  };
+}
+
+export function writeQuantitySwitchAckProofArtifact(proof, artifactPath = process.env.CONTROL_ROOM_QUANTITY_ACK_PROOF_ARTIFACT ?? "artifacts/quantity-switch-ack-proof.json") {
+  const destination = resolve(artifactPath);
+  mkdirSync(dirname(destination), { recursive: true });
+  const temporary = `${destination}.tmp-${process.pid}`;
+  writeFileSync(temporary, `${JSON.stringify(proof, null, 2)}\n`, "utf8");
+  renameSync(temporary, destination);
+  return destination;
+}
+
+function quantityProofExpectationsFromEnv() {
+  const parsed = safelyParseJson(process.env.CONTROL_ROOM_QUANTITY_ACK_PROOF_EXPECTATIONS);
+  if (!Array.isArray(parsed) || parsed.length === 0) return [];
+  return parsed.every((entry) => entry && typeof entry.resourceKey === "string" && typeof entry.viewportId === "string" && Number.isInteger(entry.revision)) ? parsed : [];
+}
+
+function safelyParseJson(value) {
+  if (typeof value !== "string") return null;
+  try { return JSON.parse(value); } catch { return null; }
 }
 
 function summarize({ durationMs, httpEvents, sawFullmagWebsocket, wsFrames }) {
@@ -272,7 +345,9 @@ async function loadPlaywright() {
   }
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}

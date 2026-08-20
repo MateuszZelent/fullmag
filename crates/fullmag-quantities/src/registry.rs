@@ -231,7 +231,7 @@ impl QuantityProvider for SpatialScalarFieldProvider {
 
 /// Populate a registry with the standard set of providers.
 ///
-/// This registers providers for all 23 catalog quantities using the
+/// This registers providers for every canonical catalog quantity using the
 /// built-in `VectorFieldProvider`, `SpatialScalarFieldProvider` and
 /// `GlobalScalarProvider` types.
 pub fn register_standard_providers(registry: &mut QuantityRegistry) {
@@ -244,6 +244,7 @@ pub fn register_standard_providers(registry: &mut QuantityRegistry) {
         HDemag,
         HExt,
         HAnt,
+        HDrive,
         HEff,
         Torque,
         HAni,
@@ -317,11 +318,17 @@ mod tests {
     use crate::GlobalQuantityRow;
 
     #[test]
-    fn standard_providers_register_all_48() {
+    fn standard_providers_register_every_canonical_quantity() {
         let mut reg = QuantityRegistry::new();
         register_standard_providers(&mut reg);
-        // 23 vector + 15 spatial-scalar + 10 global scalar providers = 48.
-        assert_eq!(reg.len(), 48);
+        assert_eq!(reg.len(), crate::quantity_catalog().len());
+        for spec in crate::quantity_catalog() {
+            assert!(
+                reg.providers.contains_key(&spec.id),
+                "missing provider for canonical quantity {}",
+                spec.id.as_str(),
+            );
+        }
     }
 
     #[test]

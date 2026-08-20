@@ -53,6 +53,8 @@ describe("viewport3DRenderAdoptionRegistry", () => {
         kind: "surface",
         resourceKey: null,
         scalarBufferKey: "scalar-a",
+        sessionEpoch: "legacy-unscoped",
+        sessionId: "legacy-unscoped",
         targetId: "airbox",
         vectorBuildKey: null,
       },
@@ -65,6 +67,8 @@ describe("viewport3DRenderAdoptionRegistry", () => {
         kind: "vector",
         resourceKey: null,
         scalarBufferKey: null,
+        sessionEpoch: "legacy-unscoped",
+        sessionId: "legacy-unscoped",
         targetId: "airbox",
         vectorBuildKey: "vector-b",
       },
@@ -72,6 +76,111 @@ describe("viewport3DRenderAdoptionRegistry", () => {
 
     release();
     expect(registry.snapshot("airbox")).toEqual([]);
+  });
+
+  it("rejects old-session buffers and purges receipts on an epoch change", () => {
+    const registry = createViewport3DRenderAdoptionRegistry();
+    registry.retainDemand("airbox");
+    registry.setSessionIdentity({ sessionEpoch: "session-1@1000", sessionId: "session-1" });
+
+    registry.recordVectorAdoption({
+      byteLength: 96,
+      carrierId: "fdm-universe-outside-support",
+      fieldBufferId: "session-1:session-1@1000:H_demag:full:airbox:airbox",
+      sessionIdentity: { sessionEpoch: "session-1@1000", sessionId: "session-1" },
+      targetId: "airbox",
+      vectorBuildKey: "old-vector",
+    });
+    expect(registry.snapshot("airbox")[0]).toMatchObject({
+      sessionEpoch: "session-1@1000",
+      sessionId: "session-1",
+    });
+
+    registry.setSessionIdentity({ sessionEpoch: "session-1@2000", sessionId: "session-1" });
+    expect(registry.snapshot("airbox")).toEqual([]);
+    registry.recordVectorAdoption({
+      byteLength: 96,
+      carrierId: "fdm-universe-outside-support",
+      fieldBufferId: "session-1:session-1@1000:H_demag:full:airbox:airbox",
+      sessionIdentity: { sessionEpoch: "session-1@1000", sessionId: "session-1" },
+      targetId: "airbox",
+      vectorBuildKey: "late-old-vector",
+    });
+    expect(registry.snapshot("airbox")).toEqual([]);
+    expect(registry.getLifecycleStats().rejectedAdoptionCount).toBe(1);
+  });
+
+  it("uses the explicitly validated registry session identity for an FDM target buffer", async () => {
+    const { buildViewport3DTargetFieldBuffer } = await import("./viewport3DTargetFieldBuffer");
+    const registry = createViewport3DRenderAdoptionRegistry();
+    registry.retainDemand("airbox");
+    registry.setSessionIdentity({ sessionEpoch: "session-7@1000", sessionId: "session-7" });
+    const buffer = buildViewport3DTargetFieldBuffer({
+      domain: { domainGenerationId: "fdm-1", meshTopologyHash: "grid-1", meshTopologyRevision: "1", pointCount: 1 },
+      fieldVector: {
+        dtype: "float64",
+        formatVersion: 2,
+        grid: [1, 1, 1],
+        indexing: "full_domain",
+        meshTopologyHash: "grid-1",
+        nComp: 3,
+        pointCount: 1,
+        quantityId: "H_demag",
+        valueCount: 3,
+        values: new Float64Array([0, 0, 0]),
+      },
+      query: { component: "full", scope_kind: "airbox" },
+      resourceKey: "field-vector:H_demag:airbox",
+      sessionIdentity: { sessionEpoch: "session-7@1000", sessionId: "session-7" },
+      targetIds: ["airbox"],
+    });
+
+    registry.recordVectorAdoption({
+      byteLength: buffer.values.byteLength,
+      carrierId: "fdm-universe-outside-support",
+      fieldBufferId: buffer.bufferId,
+      resourceKey: buffer.resourceKey,
+      targetId: "airbox",
+      vectorBuildKey: "fdm-vector",
+    });
+
+    expect(registry.snapshot("airbox")[0]).toMatchObject({
+      fieldBufferId: buffer.bufferId,
+      sessionEpoch: "session-7@1000",
+      sessionId: "session-7",
+    });
+    expect(registry.hasActiveAdoption({
+      fieldBufferId: buffer.bufferId,
+      resourceKey: buffer.resourceKey,
+      sessionEpoch: "session-7@1000",
+      sessionId: "session-7",
+    })).toBe(true);
+  });
+
+  it("does not let a stale buffer adoption satisfy a newer data revision", () => {
+    const registry = createViewport3DRenderAdoptionRegistry();
+    registry.setSessionIdentity({ sessionEpoch: "epoch-1", sessionId: "session-1" });
+    const base = {
+      byteLength: 12,
+      carrierId: "fdm-domain",
+      resourceKey: "field:H_demag",
+      targetId: "airbox",
+      vectorBuildKey: "vectors",
+    };
+    registry.recordVectorAdoption({ ...base, fieldBufferId: "session-1:epoch-1:H_demag:field-7" });
+    expect(registry.hasActiveAdoption({
+      fieldBufferId: "session-1:epoch-1:H_demag:field-8",
+      resourceKey: "field:H_demag",
+      sessionEpoch: "epoch-1",
+      sessionId: "session-1",
+    })).toBe(false);
+    registry.recordVectorAdoption({ ...base, fieldBufferId: "session-1:epoch-1:H_demag:field-8" });
+    expect(registry.hasActiveAdoption({
+      fieldBufferId: "session-1:epoch-1:H_demag:field-8",
+      resourceKey: "field:H_demag",
+      sessionEpoch: "epoch-1",
+      sessionId: "session-1",
+    })).toBe(true);
   });
 
   it("notifies only for semantic receipt changes and clears target removal", () => {

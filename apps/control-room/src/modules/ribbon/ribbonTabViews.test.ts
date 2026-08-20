@@ -19,6 +19,10 @@ describe("quantityItemsForVisualizationTarget", () => {
       quantities: [
         {
           capability_state: "supported",
+          solver_capability: "supported",
+          requestable: true,
+          renderable: true,
+          publication_state: "published",
           description: "Demagnetization field",
           domain: "full_domain",
           id: "H_demag",
@@ -38,6 +42,10 @@ describe("quantityItemsForVisualizationTarget", () => {
         },
         {
           capability_state: "supported",
+          solver_capability: "supported",
+          requestable: true,
+          renderable: true,
+          publication_state: "published",
           description: "Demag energy density",
           domain: "magnetic_only",
           id: "eden_demag",

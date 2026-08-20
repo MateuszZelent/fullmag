@@ -7,7 +7,816 @@ use crate::{
     OBJECT_MATERIAL_ASSIGNMENT_SCHEMA_VERSION, PHYSICS_INTERFACE_SCHEMA_VERSION,
     PHYSICS_OBJECT_SCHEMA_VERSION, PLANAR_FRAME_NORMALIZATION_VERSION,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+
+pub(crate) fn validate_selection_definitions_impl(
+    definitions: &[crate::SelectionDefinitionIR],
+    limits: crate::SelectionLimits,
+    context: Option<&crate::SelectionValidationContext>,
+) -> Result<(), Vec<String>> {
+    let mut errors = Vec::new();
+    let mut by_id = BTreeMap::new();
+    for (index, definition) in definitions.iter().enumerate() {
+        let path = format!("selections[{index}]");
+        if definition.schema_version != crate::SELECTION_EXPR_SCHEMA_VERSION {
+            errors.push(format!(
+                "{path}.schema_version must be '{}'",
+                crate::SELECTION_EXPR_SCHEMA_VERSION
+            ));
+        }
+        if definition.id.trim().is_empty() {
+            errors.push(format!("{path}.id must not be empty"));
+        } else if by_id.insert(definition.id.as_str(), definition).is_some() {
+            errors.push(format!("{path}.id '{}' is duplicated", definition.id));
+        }
+        if definition
+            .name
+            .as_ref()
+            .is_some_and(|name| name.trim().is_empty())
+        {
+            errors.push(format!("{path}.name must not be empty when present"));
+        }
+
+        let mut stats = SelectionStats::default();
+        validate_selection_expression(
+            &definition.expression,
+            &path,
+            1,
+            limits,
+            &mut stats,
+            context,
+            &mut errors,
+        );
+        if stats.nodes > limits.max_nodes {
+            errors.push(format!(
+                "selection_complexity_exceeded: {path}.expression has {} nodes; maximum is {}",
+                stats.nodes, limits.max_nodes
+            ));
+        }
+        if stats.references > limits.max_references {
+            errors.push(format!(
+                "selection_complexity_exceeded: {path}.expression has {} references; maximum is {}",
+                stats.references, limits.max_references
+            ));
+        }
+    }
+
+    for (index, definition) in definitions.iter().enumerate() {
+        visit_selection_references(
+            &definition.expression,
+            &format!("selections[{index}].expression"),
+            &by_id,
+            &mut errors,
+        );
+    }
+    validate_selection_reference_cycles(&by_id, &mut errors);
+    validate_expanded_selection_limits(&by_id, limits, &mut errors);
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+#[derive(Default)]
+struct SelectionStats {
+    nodes: usize,
+    references: usize,
+}
+
+fn validate_selection_expression(
+    expression: &crate::SelectionExprIR,
+    path: &str,
+    depth: usize,
+    limits: crate::SelectionLimits,
+    stats: &mut SelectionStats,
+    context: Option<&crate::SelectionValidationContext>,
+    errors: &mut Vec<String>,
+) {
+    stats.nodes = stats.nodes.saturating_add(1);
+    if depth > limits.max_depth {
+        errors.push(format!(
+            "selection_complexity_exceeded: {path} reaches depth {depth}; maximum is {}",
+            limits.max_depth
+        ));
+        return;
+    }
+
+    match expression {
+        crate::SelectionExprIR::AllMagnetic {} => {}
+        crate::SelectionExprIR::InObject { object_id } => {
+            require_selection_id(object_id, &format!("{path}.object_id"), errors);
+            validate_selection_object_reference(object_id, path, context, errors);
+        }
+        crate::SelectionExprIR::InRegion {
+            object_id,
+            region_id,
+        } => {
+            require_selection_id(object_id, &format!("{path}.object_id"), errors);
+            require_selection_id(region_id, &format!("{path}.region_id"), errors);
+            validate_selection_region_reference(object_id, region_id, path, context, errors);
+        }
+        crate::SelectionExprIR::InsideGeometry {
+            geometry,
+            frame,
+            boundary,
+            ..
+        } => {
+            validate_selection_geometry(
+                geometry,
+                &format!("{path}.geometry"),
+                depth + 1,
+                limits,
+                stats,
+                errors,
+            );
+            validate_selection_frame(frame, &format!("{path}.frame"), context, errors);
+            validate_selection_boundary(boundary, &format!("{path}.boundary"), errors);
+        }
+        crate::SelectionExprIR::Compare {
+            lhs,
+            rhs,
+            tolerance,
+            ..
+        } => {
+            validate_selection_scalar(
+                lhs,
+                &format!("{path}.lhs"),
+                depth + 1,
+                limits,
+                stats,
+                context,
+                errors,
+            );
+            validate_selection_scalar(
+                rhs,
+                &format!("{path}.rhs"),
+                depth + 1,
+                limits,
+                stats,
+                context,
+                errors,
+            );
+            validate_tolerances(
+                tolerance.atol,
+                tolerance.rtol,
+                &format!("{path}.tolerance"),
+                false,
+                errors,
+            );
+        }
+        crate::SelectionExprIR::Approx {
+            value,
+            target,
+            atol,
+            rtol,
+        } => {
+            validate_selection_scalar(
+                value,
+                &format!("{path}.value"),
+                depth + 1,
+                limits,
+                stats,
+                context,
+                errors,
+            );
+            validate_selection_scalar(
+                target,
+                &format!("{path}.target"),
+                depth + 1,
+                limits,
+                stats,
+                context,
+                errors,
+            );
+            validate_tolerances(*atol, *rtol, path, true, errors);
+        }
+        crate::SelectionExprIR::Between {
+            value,
+            lower,
+            upper,
+            ..
+        } => {
+            validate_selection_scalar(
+                value,
+                &format!("{path}.value"),
+                depth + 1,
+                limits,
+                stats,
+                context,
+                errors,
+            );
+            if !lower.is_finite() || !upper.is_finite() {
+                errors.push(format!(
+                    "selection_invalid_constant: {path}.lower and upper must be finite"
+                ));
+            } else if lower > upper {
+                errors.push(format!("{path}.lower must be <= {path}.upper"));
+            }
+        }
+        crate::SelectionExprIR::And { expressions }
+        | crate::SelectionExprIR::Or { expressions } => {
+            if expressions.is_empty() {
+                errors.push(format!("{path}.expressions must not be empty"));
+            }
+            for (index, child) in expressions.iter().enumerate() {
+                validate_selection_expression(
+                    child,
+                    &format!("{path}.expressions[{index}]"),
+                    depth + 1,
+                    limits,
+                    stats,
+                    context,
+                    errors,
+                );
+            }
+        }
+        crate::SelectionExprIR::Xor { expressions } => {
+            if expressions.len() < 2 {
+                errors.push(format!(
+                    "{path}.expressions must contain at least two expressions"
+                ));
+            }
+            for (index, child) in expressions.iter().enumerate() {
+                validate_selection_expression(
+                    child,
+                    &format!("{path}.expressions[{index}]"),
+                    depth + 1,
+                    limits,
+                    stats,
+                    context,
+                    errors,
+                );
+            }
+        }
+        crate::SelectionExprIR::Not { expression } => validate_selection_expression(
+            expression,
+            &format!("{path}.expression"),
+            depth + 1,
+            limits,
+            stats,
+            context,
+            errors,
+        ),
+        crate::SelectionExprIR::Ref { selection_id } => {
+            stats.references = stats.references.saturating_add(1);
+            require_selection_id(selection_id, &format!("{path}.selection_id"), errors);
+        }
+    }
+}
+
+fn validate_selection_scalar(
+    scalar: &crate::SelectionScalarExprIR,
+    path: &str,
+    depth: usize,
+    limits: crate::SelectionLimits,
+    stats: &mut SelectionStats,
+    context: Option<&crate::SelectionValidationContext>,
+    errors: &mut Vec<String>,
+) {
+    stats.nodes = stats.nodes.saturating_add(1);
+    if depth > limits.max_depth {
+        errors.push(format!(
+            "selection_complexity_exceeded: {path} reaches depth {depth}; maximum is {}",
+            limits.max_depth
+        ));
+        return;
+    }
+    match scalar {
+        crate::SelectionScalarExprIR::Constant { value } => {
+            if !value.is_finite() {
+                errors.push(format!(
+                    "selection_invalid_constant: {path}.value must be finite"
+                ));
+            }
+        }
+        crate::SelectionScalarExprIR::Coordinate { frame, .. } => {
+            validate_selection_frame(frame, &format!("{path}.frame"), context, errors);
+        }
+        crate::SelectionScalarExprIR::MagnetizationComponent { .. }
+        | crate::SelectionScalarExprIR::MagnetizationNorm {} => {}
+        crate::SelectionScalarExprIR::MagnetizationDot { axis } => {
+            let norm_sq = axis.iter().map(|value| value * value).sum::<f64>();
+            if !norm_sq.is_finite() || (norm_sq - 1.0).abs() > 1.0e-12 {
+                errors.push(format!("{path}.axis must be normalized and finite"));
+            }
+        }
+        crate::SelectionScalarExprIR::Abs { value } => validate_selection_scalar(
+            value,
+            &format!("{path}.value"),
+            depth + 1,
+            limits,
+            stats,
+            context,
+            errors,
+        ),
+    }
+}
+
+fn validate_selection_geometry(
+    geometry: &crate::GeometryPredicateIR,
+    path: &str,
+    depth: usize,
+    limits: crate::SelectionLimits,
+    stats: &mut SelectionStats,
+    errors: &mut Vec<String>,
+) {
+    stats.nodes = stats.nodes.saturating_add(1);
+    if depth > limits.max_depth {
+        errors.push(format!(
+            "selection_complexity_exceeded: {path} reaches depth {depth}; maximum is {}",
+            limits.max_depth
+        ));
+        return;
+    }
+    match geometry {
+        crate::GeometryPredicateIR::Box { center_m, size_m } => {
+            if center_m.iter().any(|value| !value.is_finite())
+                || size_m
+                    .iter()
+                    .any(|value| !value.is_finite() || *value <= 0.0)
+            {
+                errors.push(format!(
+                    "selection_invalid_geometry: {path} box center must be finite and size must be finite and positive"
+                ));
+            }
+        }
+        crate::GeometryPredicateIR::Cylinder {
+            center_m,
+            axis,
+            radius_m,
+            height_m,
+        } => {
+            if center_m.iter().any(|value| !value.is_finite())
+                || axis.iter().any(|value| !value.is_finite())
+                || !radius_m.is_finite()
+                || *radius_m <= 0.0
+                || !height_m.is_finite()
+                || *height_m <= 0.0
+            {
+                errors.push(format!(
+                    "selection_invalid_geometry: {path} cylinder values must be finite with positive radius and height"
+                ));
+            }
+            let norm_sq = axis.iter().map(|value| value * value).sum::<f64>();
+            if !norm_sq.is_finite() || (norm_sq - 1.0).abs() > 1.0e-12 {
+                errors.push(format!(
+                    "selection_invalid_geometry: {path}.axis must be normalized"
+                ));
+            }
+        }
+        crate::GeometryPredicateIR::Sphere { center_m, radius_m } => {
+            if center_m.iter().any(|value| !value.is_finite())
+                || !radius_m.is_finite()
+                || *radius_m <= 0.0
+            {
+                errors.push(format!(
+                    "selection_invalid_geometry: {path} sphere center must be finite and radius must be finite and positive"
+                ));
+            }
+        }
+        crate::GeometryPredicateIR::Ellipsoid { center_m, radii_m } => {
+            if center_m.iter().any(|value| !value.is_finite())
+                || radii_m
+                    .iter()
+                    .any(|value| !value.is_finite() || *value <= 0.0)
+            {
+                errors.push(format!(
+                    "selection_invalid_geometry: {path} ellipsoid center must be finite and radii must be finite and positive"
+                ));
+            }
+        }
+        crate::GeometryPredicateIR::Union { a, b }
+        | crate::GeometryPredicateIR::Intersection { a, b }
+        | crate::GeometryPredicateIR::Xor { a, b } => {
+            validate_selection_geometry(a, &format!("{path}.a"), depth + 1, limits, stats, errors);
+            validate_selection_geometry(b, &format!("{path}.b"), depth + 1, limits, stats, errors);
+        }
+        crate::GeometryPredicateIR::Difference { base, tool } => {
+            validate_selection_geometry(
+                base,
+                &format!("{path}.base"),
+                depth + 1,
+                limits,
+                stats,
+                errors,
+            );
+            validate_selection_geometry(
+                tool,
+                &format!("{path}.tool"),
+                depth + 1,
+                limits,
+                stats,
+                errors,
+            );
+        }
+        crate::GeometryPredicateIR::Complement { geometry, domain } => {
+            validate_selection_geometry(
+                geometry,
+                &format!("{path}.geometry"),
+                depth + 1,
+                limits,
+                stats,
+                errors,
+            );
+            validate_selection_geometry(
+                domain,
+                &format!("{path}.domain"),
+                depth + 1,
+                limits,
+                stats,
+                errors,
+            );
+        }
+        crate::GeometryPredicateIR::Affine {
+            geometry,
+            translation_m,
+            rotation_xyzw,
+            scale,
+            pivot_m,
+        } => {
+            if translation_m
+                .iter()
+                .chain(rotation_xyzw)
+                .chain(scale)
+                .chain(pivot_m)
+                .any(|value| !value.is_finite())
+                || scale.iter().any(|value| *value == 0.0)
+            {
+                errors.push(format!(
+                    "selection_invalid_geometry: {path} affine transform must be finite and invertible"
+                ));
+            }
+            let quaternion_norm_sq = rotation_xyzw.iter().map(|value| value * value).sum::<f64>();
+            if !quaternion_norm_sq.is_finite() || (quaternion_norm_sq - 1.0).abs() > 1.0e-12 {
+                errors.push(format!(
+                    "selection_invalid_geometry: {path}.rotation_xyzw must be normalized and finite"
+                ));
+            }
+            validate_selection_geometry(
+                geometry,
+                &format!("{path}.geometry"),
+                depth + 1,
+                limits,
+                stats,
+                errors,
+            );
+        }
+        crate::GeometryPredicateIR::ImportedSolid { asset_id } => {
+            if asset_id.trim().is_empty() {
+                errors.push(format!(
+                    "selection_invalid_geometry: {path}.asset_id must not be empty"
+                ));
+            }
+            errors.push(format!(
+                "selection_imported_solid_unqualified: {path} requires a qualified occupancy engine"
+            ));
+        }
+    }
+}
+
+fn validate_selection_frame(
+    frame: &crate::SelectionFrameIR,
+    path: &str,
+    context: Option<&crate::SelectionValidationContext>,
+    errors: &mut Vec<String>,
+) {
+    if let crate::SelectionFrameIR::Object { object_id } = frame {
+        require_selection_id(object_id, &format!("{path}.object_id"), errors);
+        validate_selection_object_reference(object_id, path, context, errors);
+    }
+}
+
+fn validate_selection_object_reference(
+    object_id: &str,
+    path: &str,
+    context: Option<&crate::SelectionValidationContext>,
+    errors: &mut Vec<String>,
+) {
+    if let Some(context) = context {
+        if !object_id.trim().is_empty() && !context.object_ids.contains(object_id) {
+            errors.push(format!(
+                "selection_unknown_object: {path} references object '{object_id}' which does not exist"
+            ));
+        }
+    }
+}
+
+fn validate_selection_region_reference(
+    object_id: &str,
+    region_id: &str,
+    path: &str,
+    context: Option<&crate::SelectionValidationContext>,
+    errors: &mut Vec<String>,
+) {
+    if let Some(context) = context {
+        validate_selection_object_reference(object_id, path, Some(context), errors);
+        if !object_id.trim().is_empty()
+            && !region_id.trim().is_empty()
+            && !context
+                .region_ids
+                .contains(&(object_id.to_string(), region_id.to_string()))
+        {
+            errors.push(format!(
+                "selection_unknown_region: {path} references region '{object_id}/{region_id}' which does not exist"
+            ));
+        }
+    }
+}
+
+fn validate_selection_boundary(
+    boundary: &crate::BoundaryMembershipIR,
+    path: &str,
+    errors: &mut Vec<String>,
+) {
+    let (absolute, relative) = match boundary {
+        crate::BoundaryMembershipIR::Inclusive {
+            absolute_tolerance_m,
+            relative_tolerance,
+        }
+        | crate::BoundaryMembershipIR::Exclusive {
+            absolute_tolerance_m,
+            relative_tolerance,
+        } => (*absolute_tolerance_m, *relative_tolerance),
+    };
+    validate_tolerances(absolute, relative, path, false, errors);
+}
+
+fn validate_tolerances(
+    absolute: f64,
+    relative: f64,
+    path: &str,
+    require_positive: bool,
+    errors: &mut Vec<String>,
+) {
+    if !absolute.is_finite() || absolute < 0.0 || !relative.is_finite() || relative < 0.0 {
+        errors.push(format!("{path} tolerances must be finite and non-negative"));
+    } else if require_positive && absolute == 0.0 && relative == 0.0 {
+        errors.push(format!("{path} requires at least one positive tolerance"));
+    }
+}
+
+fn require_selection_id(value: &str, path: &str, errors: &mut Vec<String>) {
+    if value.trim().is_empty() {
+        errors.push(format!("{path} must not be empty"));
+    }
+}
+
+fn visit_selection_references(
+    expression: &crate::SelectionExprIR,
+    path: &str,
+    by_id: &BTreeMap<&str, &crate::SelectionDefinitionIR>,
+    errors: &mut Vec<String>,
+) {
+    match expression {
+        crate::SelectionExprIR::And { expressions }
+        | crate::SelectionExprIR::Or { expressions }
+        | crate::SelectionExprIR::Xor { expressions } => {
+            for (index, child) in expressions.iter().enumerate() {
+                visit_selection_references(
+                    child,
+                    &format!("{path}.expressions[{index}]"),
+                    by_id,
+                    errors,
+                );
+            }
+        }
+        crate::SelectionExprIR::Not { expression } => {
+            visit_selection_references(expression, &format!("{path}.expression"), by_id, errors)
+        }
+        crate::SelectionExprIR::Ref { selection_id }
+            if !selection_id.trim().is_empty() && !by_id.contains_key(selection_id.as_str()) =>
+        {
+            errors.push(format!(
+                "selection_unknown_reference: {path}.selection_id '{selection_id}' does not exist"
+            ));
+        }
+        _ => {}
+    }
+}
+
+fn validate_selection_reference_cycles(
+    by_id: &BTreeMap<&str, &crate::SelectionDefinitionIR>,
+    errors: &mut Vec<String>,
+) {
+    fn visit<'a>(
+        id: &'a str,
+        by_id: &BTreeMap<&'a str, &'a crate::SelectionDefinitionIR>,
+        visiting: &mut BTreeSet<&'a str>,
+        visited: &mut BTreeSet<&'a str>,
+        errors: &mut Vec<String>,
+    ) {
+        if visited.contains(id) {
+            return;
+        }
+        if !visiting.insert(id) {
+            errors.push(format!(
+                "selection_reference_cycle: selection '{id}' participates in a reference cycle"
+            ));
+            return;
+        }
+        if let Some(definition) = by_id.get(id) {
+            let mut references = Vec::new();
+            collect_selection_references(&definition.expression, &mut references);
+            for reference in references {
+                if by_id.contains_key(reference) {
+                    visit(reference, by_id, visiting, visited, errors);
+                }
+            }
+        }
+        visiting.remove(id);
+        visited.insert(id);
+    }
+
+    let mut visiting = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+    for id in by_id.keys().copied() {
+        visit(id, by_id, &mut visiting, &mut visited, errors);
+    }
+}
+
+fn collect_selection_references<'a>(
+    expression: &'a crate::SelectionExprIR,
+    references: &mut Vec<&'a str>,
+) {
+    match expression {
+        crate::SelectionExprIR::And { expressions }
+        | crate::SelectionExprIR::Or { expressions }
+        | crate::SelectionExprIR::Xor { expressions } => {
+            for child in expressions {
+                collect_selection_references(child, references);
+            }
+        }
+        crate::SelectionExprIR::Not { expression } => {
+            collect_selection_references(expression, references)
+        }
+        crate::SelectionExprIR::Ref { selection_id } => references.push(selection_id),
+        _ => {}
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct ExpandedSelectionMetrics {
+    nodes: usize,
+    references: usize,
+    depth: usize,
+}
+
+impl ExpandedSelectionMetrics {
+    fn leaf() -> Self {
+        Self {
+            nodes: 1,
+            references: 0,
+            depth: 1,
+        }
+    }
+
+    fn parent(children: impl IntoIterator<Item = Self>) -> Self {
+        let mut metrics = Self::leaf();
+        let mut child_depth = 0;
+        for child in children {
+            metrics.nodes = metrics.nodes.saturating_add(child.nodes);
+            metrics.references = metrics.references.saturating_add(child.references);
+            child_depth = child_depth.max(child.depth);
+        }
+        metrics.depth = 1usize.saturating_add(child_depth);
+        metrics
+    }
+}
+
+fn validate_expanded_selection_limits(
+    by_id: &BTreeMap<&str, &crate::SelectionDefinitionIR>,
+    limits: crate::SelectionLimits,
+    errors: &mut Vec<String>,
+) {
+    let mut memo = BTreeMap::new();
+    for selection_id in by_id.keys().copied() {
+        let metrics =
+            expanded_definition_metrics(selection_id, by_id, &mut memo, &mut BTreeSet::new());
+        if metrics.depth > limits.max_depth {
+            errors.push(format!(
+                "selection_complexity_exceeded: selection '{selection_id}' has expanded depth {}; maximum is {}",
+                metrics.depth, limits.max_depth
+            ));
+        }
+        if metrics.nodes > limits.max_nodes {
+            errors.push(format!(
+                "selection_complexity_exceeded: selection '{selection_id}' has {} expanded nodes; maximum is {}",
+                metrics.nodes, limits.max_nodes
+            ));
+        }
+        if metrics.references > limits.max_references {
+            errors.push(format!(
+                "selection_complexity_exceeded: selection '{selection_id}' has {} expanded references; maximum is {}",
+                metrics.references, limits.max_references
+            ));
+        }
+    }
+}
+
+fn expanded_definition_metrics(
+    selection_id: &str,
+    by_id: &BTreeMap<&str, &crate::SelectionDefinitionIR>,
+    memo: &mut BTreeMap<String, ExpandedSelectionMetrics>,
+    visiting: &mut BTreeSet<String>,
+) -> ExpandedSelectionMetrics {
+    if let Some(metrics) = memo.get(selection_id) {
+        return *metrics;
+    }
+    if !visiting.insert(selection_id.to_string()) {
+        return ExpandedSelectionMetrics::default();
+    }
+    let metrics = by_id
+        .get(selection_id)
+        .map_or_else(ExpandedSelectionMetrics::default, |definition| {
+            expanded_expression_metrics(&definition.expression, by_id, memo, visiting)
+        });
+    visiting.remove(selection_id);
+    memo.insert(selection_id.to_string(), metrics);
+    metrics
+}
+
+fn expanded_expression_metrics(
+    expression: &crate::SelectionExprIR,
+    by_id: &BTreeMap<&str, &crate::SelectionDefinitionIR>,
+    memo: &mut BTreeMap<String, ExpandedSelectionMetrics>,
+    visiting: &mut BTreeSet<String>,
+) -> ExpandedSelectionMetrics {
+    match expression {
+        crate::SelectionExprIR::AllMagnetic {}
+        | crate::SelectionExprIR::InObject { .. }
+        | crate::SelectionExprIR::InRegion { .. } => ExpandedSelectionMetrics::leaf(),
+        crate::SelectionExprIR::InsideGeometry { geometry, .. } => {
+            ExpandedSelectionMetrics::parent([expanded_geometry_metrics(geometry)])
+        }
+        crate::SelectionExprIR::Compare { lhs, rhs, .. } => ExpandedSelectionMetrics::parent([
+            expanded_scalar_metrics(lhs),
+            expanded_scalar_metrics(rhs),
+        ]),
+        crate::SelectionExprIR::Approx { value, target, .. } => ExpandedSelectionMetrics::parent([
+            expanded_scalar_metrics(value),
+            expanded_scalar_metrics(target),
+        ]),
+        crate::SelectionExprIR::Between { value, .. } => {
+            ExpandedSelectionMetrics::parent([expanded_scalar_metrics(value)])
+        }
+        crate::SelectionExprIR::And { expressions }
+        | crate::SelectionExprIR::Or { expressions }
+        | crate::SelectionExprIR::Xor { expressions } => ExpandedSelectionMetrics::parent(
+            expressions
+                .iter()
+                .map(|child| expanded_expression_metrics(child, by_id, memo, visiting)),
+        ),
+        crate::SelectionExprIR::Not { expression } => {
+            ExpandedSelectionMetrics::parent([expanded_expression_metrics(
+                expression, by_id, memo, visiting,
+            )])
+        }
+        crate::SelectionExprIR::Ref { selection_id } => {
+            let target = expanded_definition_metrics(selection_id, by_id, memo, visiting);
+            let mut metrics = ExpandedSelectionMetrics::parent([target]);
+            metrics.references = metrics.references.saturating_add(1);
+            metrics
+        }
+    }
+}
+
+fn expanded_scalar_metrics(scalar: &crate::SelectionScalarExprIR) -> ExpandedSelectionMetrics {
+    match scalar {
+        crate::SelectionScalarExprIR::Abs { value } => {
+            ExpandedSelectionMetrics::parent([expanded_scalar_metrics(value)])
+        }
+        _ => ExpandedSelectionMetrics::leaf(),
+    }
+}
+
+fn expanded_geometry_metrics(geometry: &crate::GeometryPredicateIR) -> ExpandedSelectionMetrics {
+    match geometry {
+        crate::GeometryPredicateIR::Union { a, b }
+        | crate::GeometryPredicateIR::Intersection { a, b }
+        | crate::GeometryPredicateIR::Xor { a, b } => ExpandedSelectionMetrics::parent([
+            expanded_geometry_metrics(a),
+            expanded_geometry_metrics(b),
+        ]),
+        crate::GeometryPredicateIR::Difference { base, tool } => {
+            ExpandedSelectionMetrics::parent([
+                expanded_geometry_metrics(base),
+                expanded_geometry_metrics(tool),
+            ])
+        }
+        crate::GeometryPredicateIR::Complement { geometry, domain } => {
+            ExpandedSelectionMetrics::parent([
+                expanded_geometry_metrics(geometry),
+                expanded_geometry_metrics(domain),
+            ])
+        }
+        crate::GeometryPredicateIR::Affine { geometry, .. } => {
+            ExpandedSelectionMetrics::parent([expanded_geometry_metrics(geometry)])
+        }
+        _ => ExpandedSelectionMetrics::leaf(),
+    }
+}
 
 pub(crate) fn vector3_is_finite(vector: &[f64; 3]) -> bool {
     vector.iter().all(|value| value.is_finite())

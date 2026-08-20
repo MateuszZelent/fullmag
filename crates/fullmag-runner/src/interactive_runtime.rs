@@ -5391,6 +5391,7 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
         requested_energy_minimizer: None,
         resolved_energy_minimizer: None,
         energy_minimizer_realization: None,
+        fem_direct_minimizer_policy: None,
         requested_demag_realization: None,
         resolved_demag_realization: None,
         timestep_policy,
@@ -5503,6 +5504,7 @@ fn cuda_execution_provenance(
         requested_energy_minimizer: None,
         resolved_energy_minimizer: None,
         energy_minimizer_realization: None,
+        fem_direct_minimizer_policy: None,
         requested_demag_realization: None,
         resolved_demag_realization: None,
         timestep_policy,
@@ -5615,6 +5617,7 @@ fn fem_gpu_execution_provenance(
         requested_energy_minimizer: None,
         resolved_energy_minimizer: None,
         energy_minimizer_realization: None,
+        fem_direct_minimizer_policy: None,
         requested_demag_realization: plan
             .demag_realization
             .map(|r| r.provenance_name().to_string()),
@@ -5721,6 +5724,11 @@ fn fem_gpu_execution_provenance(
         fem_poisson_demag: None,
     };
     crate::relaxation::apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
+    crate::relaxation::apply_fem_direct_minimizer_policy_provenance(
+        &mut provenance,
+        plan.relaxation.as_ref(),
+        matches!(native_fem_backend_id(plan), FemBackendId::GpuNative),
+    );
     Ok(provenance)
 }
 

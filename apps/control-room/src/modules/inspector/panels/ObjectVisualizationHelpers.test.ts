@@ -20,6 +20,7 @@ describe("selectObjectVisualizationManifestStatus", () => {
       capabilities: { explicit_topology: false },
       domain: { discretization: "fdm" },
       resources: { mesh_revision: undefined },
+      session: { session_epoch: "", session_id: "" },
     });
   });
 });

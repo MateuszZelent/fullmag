@@ -33,6 +33,8 @@ import {
 } from "@/kernel/browserFullmagConfig";
 import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
 import { useMeshHistogramBinElementsResource } from "@/kernel/resources/geometryLifecycleResources";
+import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
+import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
 import { useFieldMetaResource } from "@/kernel/resources/studyRuntimeResources";
 import {
   selectionSnapshotEquals,
@@ -58,8 +60,8 @@ import {
   type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import {
-  useVisualizationClientAck,
   useVisualizationClientAckSender,
+  type VisualizationDataAdoptionIdentity,
 } from "@/kernel/visualization/useVisualizationClientAck";
 import { Button } from "@/shared/ui/Button";
 import {
@@ -1241,6 +1243,7 @@ interface Viewport3DFrameProps
   quantityId: string;
   renderedMeshRevision: number | string | null;
   scalarColorPalette: string;
+  sessionIdentity: SessionResourceIdentity | null;
   selectedLabel: string;
   slotId: ModuleProps["slotId"];
   status: string;
@@ -1256,6 +1259,7 @@ export default function Viewport3DModule({
   slotId,
 }: ModuleProps) {
   const { clientReady, colors } = useViewport3DColors();
+  const sessionIdentity = useSessionResourceIdentity();
   const selection = useSelectionSelector((state) => state, {
     isEqual: selectionSnapshotEquals,
   });
@@ -1498,6 +1502,7 @@ export default function Viewport3DModule({
       rotationMode={commandState.widgets.rotationMode}
       scaleLabelsVisible={commandState.widgets.scaleLabelsVisible}
       scaleUnitMode={commandState.widgets.scaleUnitMode}
+      sessionIdentity={sessionIdentity}
       slotId={slotId}
       tracker={tracker}
       viewCubeVisible={commandState.widgets.viewCubeVisible}
@@ -1688,6 +1693,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   onRegionOverlayVisibilityChange,
   regionDiagnosticOverlayState,
   quantityId,
+  sessionIdentity,
   selectedLabel,
   slotId,
   status,
@@ -1730,10 +1736,24 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     useState<Viewport3DInspectHover | null>(null);
   const lastRenderedMeshRevision = useRef<number | string | null>(null);
   const sendVisualizationAck = useVisualizationClientAckSender({ api: kernel.api });
+  const visualizationAckRevisionRef = useRef<{
+    resourceFrameKey: string;
+    revision: number;
+  } | null>(null);
+  const visualizationAckKindsRef = useRef(
+    new Map<number, {
+      changeKind: "data" | "style";
+      dataIdentity: VisualizationDataAdoptionIdentity | null;
+      resourceKey: string;
+    }>(),
+  );
   const visualizationDebugAdoptionRegistry = useMemo(
     () => createViewport3DRenderAdoptionRegistry(),
     [],
   );
+  useEffect(() => {
+    visualizationDebugAdoptionRegistry.setSessionIdentity(sessionIdentity);
+  }, [sessionIdentity, visualizationDebugAdoptionRegistry]);
   const visualizationDebugCandidateBuilder = useMemo(
     () =>
       createViewport3DVisualizationDebugCandidateBuilder({
@@ -2013,10 +2033,26 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           : null,
       }),
     );
-    sendVisualizationAck({
+    const ackKind = visualizationAckKindsRef.current.get(revision);
+    const resourceKey = ackKind?.resourceKey ?? sceneProps.resourceFrameKey;
+    const hasMatchingAdoption = !ackKind ||
+      ackKind.changeKind === "style" ||
+      (ackKind.dataIdentity !== null &&
+        visualizationDebugAdoptionRegistry.hasActiveAdoption({
+          fieldBufferId: ackKind.dataIdentity.fieldBufferId,
+          resourceKey,
+          sessionEpoch: ackKind.dataIdentity.sessionEpoch,
+          sessionId: ackKind.dataIdentity.sessionId,
+        }));
+    if (hasMatchingAdoption) sendVisualizationAck({
+      changeKind: ackKind?.changeKind ?? "style",
       effectiveRenderMode: visualizationEffectiveRenderMode,
       enabled: clientReady && !visualizationError,
+      dataIdentity: ackKind?.dataIdentity ?? null,
+      renderCommit: ackKind?.dataIdentity ?? null,
       revision,
+      resourceKey,
+      sessionEpoch: sessionIdentity?.sessionEpoch ?? null,
       status: "rendered",
       viewportId: slotId,
     });
@@ -2036,21 +2072,73 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     clientReady,
     kernel.bus,
     sceneProps.renderedMeshRevision,
+    sceneProps.resourceFrameKey,
     sendVisualizationAck,
+    sessionIdentity?.sessionEpoch,
+    sessionIdentity?.sessionId,
     slotId,
     visualizationDebugPublisher,
+    visualizationDebugAdoptionRegistry,
     visualizationEffectiveRenderMode,
     visualizationError,
   ]);
-  useVisualizationClientAck({
-    api: kernel.api,
-    effectiveRenderMode: visualizationEffectiveRenderMode,
-    enabled: clientReady,
-    error: visualizationError,
-    revision: sceneProps.visualizationRevision,
-    status: visualizationError ? "failed" : "applied",
-    viewportId: slotId,
-  });
+  useEffect(() => {
+    const revision = sceneProps.visualizationRevision;
+    if (revision == null) return;
+    const previous = visualizationAckRevisionRef.current;
+    const changeKind = previous?.resourceFrameKey === sceneProps.resourceFrameKey
+      ? "style"
+      : "data";
+    const resourceKey =
+      visualizationDebugSource.fullFieldBufferIdentity?.resourceKey ??
+      sceneProps.resourceFrameKey;
+    const bufferIdentity = visualizationDebugSource.fullFieldBufferIdentity;
+    const dataIdentity =
+      bufferIdentity?.resourceKey &&
+      bufferIdentity.sessionEpoch &&
+      bufferIdentity.sessionId
+        ? {
+            fieldBufferId: bufferIdentity.bufferId,
+            fieldRevision: bufferIdentity.fieldRevision ?? null,
+            resourceKey: bufferIdentity.resourceKey,
+            sessionEpoch: bufferIdentity.sessionEpoch,
+            sessionId: bufferIdentity.sessionId,
+            visualizationRevision: revision,
+          }
+        : null;
+    visualizationAckRevisionRef.current = {
+      resourceFrameKey: sceneProps.resourceFrameKey,
+      revision,
+    };
+    visualizationAckKindsRef.current.set(revision, { changeKind, dataIdentity, resourceKey });
+    while (visualizationAckKindsRef.current.size > 64) {
+      const oldest = visualizationAckKindsRef.current.keys().next().value;
+      if (oldest === undefined) break;
+      visualizationAckKindsRef.current.delete(oldest);
+    }
+    sendVisualizationAck({
+      changeKind,
+      dataIdentity,
+      effectiveRenderMode: visualizationEffectiveRenderMode,
+      enabled: clientReady,
+      error: visualizationError,
+      resourceKey,
+      revision,
+      sessionEpoch: sessionIdentity?.sessionEpoch ?? null,
+      status: visualizationError ? "failed" : changeKind === "data" ? "applied" : "rendered",
+      viewportId: slotId,
+    });
+  }, [
+    clientReady,
+    sceneProps.resourceFrameKey,
+    sceneProps.visualizationRevision,
+    sendVisualizationAck,
+    sessionIdentity?.sessionEpoch,
+    slotId,
+    visualizationDebugSource.fullFieldBufferIdentity?.resourceKey,
+    visualizationEffectiveRenderMode,
+    visualizationError,
+  ]);
   const resourceIssueOpen = Boolean(
     fieldDataIssue && dismissedResourceIssueKey !== fieldDataIssue.key,
   );

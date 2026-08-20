@@ -6,7 +6,6 @@ import {
   airboxVisualizationStatePatchFromTargetPatch,
   DEFAULT_AIRBOX_VISUALIZATION,
   DEFAULT_FDM_DOMAIN_VISUALIZATION,
-  DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
   DEFAULT_OBJECT_VISUALIZATION,
   FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET,
   ObjectVisualizationController,
@@ -138,10 +137,10 @@ describe("ObjectVisualizationController", () => {
     expect(visualizationTargetCapabilities(AIRBOX_VISUALIZATION_TARGET)).toEqual({
       primaryRenderModes: ["wireframe", "points"],
       showBoundsControl: true,
-      showGeometryScopeControl: true,
+      showGeometryScopeControl: false,
       supportsFieldData: true,
       supportsPoints: true,
-      supportsVectorSurfaceOffset: true,
+      supportsVectorSurfaceOffset: false,
       supportsVectors: true,
     });
     expect(visualizationTargetCapabilities({ id: "film", kind: "object" })).toEqual({
@@ -184,6 +183,8 @@ describe("ObjectVisualizationController", () => {
         activeQuantityId: "H_demag",
         vectorBudget: 400,
         vectorColorMode: "magnitude",
+        vectorSurfaceOffsetEnabled: true,
+        vectorSurfaceOffsetScale: 0.25,
         vectorsVisible: true,
       },
     });
@@ -223,7 +224,7 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
-  it("normalizes surface render-mode patches and stale field overrides to FDM Airbox wireframe", () => {
+  it("migrates stale FDM Airbox overrides onto the canonical Airbox target", () => {
     const controller = new ObjectVisualizationController();
 
     controller.patchTarget(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET, {
@@ -232,9 +233,9 @@ describe("ObjectVisualizationController", () => {
     expect(visualizationTargetCapabilities(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET))
       .toMatchObject({ primaryRenderModes: ["wireframe", "points"] });
     expect(controller.getSettings(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET)).toMatchObject({
-      renderMode: "wireframe",
+      renderMode: "off",
       shaderVisible: false,
-      wireframeVisible: true,
+      wireframeVisible: false,
     });
 
     const stale = resolveTargetVisualization({
@@ -257,10 +258,10 @@ describe("ObjectVisualizationController", () => {
     expect(stale.settings).toMatchObject({
       activeQuantityId: "H_demag",
       pointsVisible: true,
-      shaderVisible: false,
-      surfaceColorSource: "solid",
+      shaderVisible: true,
+      surfaceColorSource: "magnitude",
       vectorsVisible: true,
-      wireframeVisible: true,
+      wireframeVisible: false,
     });
   });
 
@@ -903,10 +904,10 @@ describe("ObjectVisualizationController", () => {
           visualizationTargetId: "fdm-universe-outside-support",
         },
       }),
-    ).toEqual(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET);
+    ).toBeNull();
   });
 
-  it("keeps FDM universe outside-support settings isolated from the domain defaults", () => {
+  it("uses the canonical Airbox settings independently from FDM domain defaults", () => {
     const controller = new ObjectVisualizationController();
     const mainTarget = { id: "fdm-domain", kind: "fdm-domain" as const };
 
@@ -921,7 +922,7 @@ describe("ObjectVisualizationController", () => {
     });
     expect(controller.getSettings(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET)).toMatchObject(
       {
-        ...DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
+        ...DEFAULT_AIRBOX_VISUALIZATION,
         activeQuantityId: "H_demag",
       },
     );
@@ -932,8 +933,8 @@ describe("ObjectVisualizationController", () => {
     });
 
     expect(Object.keys(controller.getSnapshot().overrides).sort()).toEqual([
+      "airbox",
       "fdm-domain",
-      "fdm-universe-outside-support",
     ]);
     expect(controller.getSettings(mainTarget).wireframeOpacityPercent).toBe(11);
     expect(
@@ -1048,7 +1049,7 @@ describe("ObjectVisualizationController", () => {
           visualizationTargetId: "airbox",
         },
       }),
-    ).not.toEqual(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET);
+    ).toEqual(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET);
 
     expect(
       resolveVisualizationTargetFromSelection({
@@ -2209,16 +2210,16 @@ describe("ObjectVisualizationController", () => {
 
     expect(visualizationStateOverrideFromTargetPatch(target, { visible: false }))
       .toMatchObject({
-        scope: "fdm_domain",
-        scope_id: "fdm-universe-outside-support",
+        scope: "airbox",
+        scope_id: "airbox",
         visible: false,
       });
     expect(mergeVisualizationStateTargetOverride(existing, target, { visible: false }))
       .toEqual([
         existing[0],
         {
-          scope: "fdm_domain",
-          scope_id: "fdm-universe-outside-support",
+          scope: "airbox",
+          scope_id: "airbox",
           display: { visible: false },
           visible: false,
         },
@@ -2353,7 +2354,7 @@ describe("ObjectVisualizationController", () => {
       [
         {
           scope: "region",
-          scope_id: target.id,
+          scope_id: "fdm-universe-outside-support",
           style: { surface_color_source: "component_x" },
         },
       ],
@@ -2985,7 +2986,7 @@ describe("ObjectVisualizationController", () => {
       overrides: [
         {
           scope: "fdm_domain",
-          scope_id: target.id,
+          scope_id: "fdm-universe-outside-support",
           display: { wireframe: { visible: true } },
           style: { vector_budget: 256, wireframe_color: "#123456" },
           quantity: { active_quantity_id: "H_eff" },

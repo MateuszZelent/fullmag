@@ -1810,7 +1810,7 @@ fn validate_terminal_field_replacement(
 
 pub(crate) fn apply_current_live_snapshot(
     current: &mut SessionStateResponse,
-    req: CurrentLiveSnapshotRequest,
+    mut req: CurrentLiveSnapshotRequest,
 ) -> Result<(), ApiError> {
     let apply_start = std::time::Instant::now();
     if matches!(
@@ -1923,6 +1923,12 @@ pub(crate) fn apply_current_live_snapshot(
     }
     if let Some(fem_mesh) = req.fem_mesh {
         apply_fem_mesh_update(current, fem_mesh);
+    }
+    if let Some(row) = req.latest_scalar_row.as_mut() {
+        bind_scalar_observation_frame(current, row);
+    }
+    if let Some(latest_fields) = req.latest_fields.as_mut() {
+        bind_latest_field_observation_frames(current, latest_fields);
     }
     if let Some(row) = req.latest_scalar_row {
         if upsert_scalar_row(&mut current.scalar_rows, row) {
@@ -2134,8 +2140,11 @@ pub(crate) fn apply_current_live_runtime_frame(
 
 pub(crate) fn apply_current_live_scalar_frame(
     current: &mut SessionStateResponse,
-    frame: CurrentLiveScalarFrameRequest,
+    mut frame: CurrentLiveScalarFrameRequest,
 ) -> Result<(), ApiError> {
+    if let Some(row) = frame.latest_scalar_row.as_mut() {
+        bind_scalar_observation_frame(current, row);
+    }
     if let Some(row) = frame.latest_scalar_row {
         if upsert_scalar_row(&mut current.scalar_rows, row) {
             current.scalar_revision = next_revision(current.scalar_revision);
@@ -2153,7 +2162,7 @@ pub(crate) fn apply_current_live_scalar_frame(
 
 pub(crate) fn apply_current_live_field_frame(
     current: &mut SessionStateResponse,
-    frame: CurrentLiveFieldFrameRequest,
+    mut frame: CurrentLiveFieldFrameRequest,
 ) -> Result<(), ApiError> {
     if matches!(
         validate_terminal_field_replacement(
@@ -2196,6 +2205,9 @@ pub(crate) fn apply_current_live_field_frame(
     }
     let previous_field_sources =
         capture_effective_field_sources(current, &affected_field_quantities);
+    if let Some(latest_fields) = frame.latest_fields.as_mut() {
+        bind_latest_field_observation_frames(current, latest_fields);
+    }
     let has_latest_fields = frame.latest_fields.is_some();
     let has_preview_fields = frame.preview_fields.is_some();
     if let Some(latest_fields) = frame.latest_fields {
@@ -2278,6 +2290,53 @@ pub(crate) fn upsert_scalar_row(rows: &mut Vec<ScalarRow>, row: ScalarRow) -> bo
 pub(crate) fn merge_latest_fields(current: &mut LatestFields, incoming: LatestFields) {
     for (quantity, value) in incoming.into_inner() {
         current.insert(quantity, value);
+    }
+}
+
+fn accepted_observation_frame_ref(
+    current: &SessionStateResponse,
+    source_step: u64,
+    source_time_seconds: Option<f64>,
+) -> crate::schemas::common::AcceptedObservationFrameRef {
+    crate::schemas::common::AcceptedObservationFrameRef::for_snapshot(
+        &current.session.session_id,
+        current.session.started_at_unix_ms,
+        domain_generation_id(current),
+        current.mesh_revision,
+        source_step,
+        source_time_seconds,
+    )
+}
+
+fn bind_scalar_observation_frame(current: &SessionStateResponse, row: &mut ScalarRow) {
+    row.observation_frame = Some(accepted_observation_frame_ref(
+        current,
+        row.step,
+        Some(row.time),
+    ));
+}
+
+fn bind_latest_field_observation_frames(
+    current: &SessionStateResponse,
+    latest_fields: &mut LatestFields,
+) {
+    for (_, value) in latest_fields.entries_mut() {
+        let Some(object) = value.as_object_mut() else {
+            continue;
+        };
+        let source_step = object
+            .get("source_step")
+            .and_then(Value::as_u64)
+            .or_else(|| current.live_state.as_ref().map(|state| state.latest_step.step))
+            .unwrap_or(0);
+        let source_time_seconds = object
+            .get("source_time_seconds")
+            .and_then(Value::as_f64)
+            .or_else(|| current.live_state.as_ref().map(|state| state.latest_step.time));
+        let frame = accepted_observation_frame_ref(current, source_step, source_time_seconds);
+        if let Ok(frame) = serde_json::to_value(frame) {
+            object.insert("observation_frame".to_string(), frame);
+        }
     }
 }
 
@@ -2552,6 +2611,7 @@ mod tests {
 
     fn scalar_row(step: u64, e_total: f64) -> ScalarRow {
         ScalarRow {
+            observation_frame: None,
             step,
             time: step as f64 * 1e-12,
             solver_dt: 1e-12,
@@ -2982,6 +3042,50 @@ mod tests {
         assert_eq!(current.scalar_revision, 2);
         assert_eq!(current.scalar_rows.len(), 1);
         assert_eq!(current.scalar_rows[0].step, 2);
+    }
+
+    #[test]
+    fn accepted_observation_frames_remain_bound_after_topology_revision_changes() {
+        let mut current = test_current_snapshot();
+        current.mesh_revision = 7;
+        apply_current_live_scalar_frame(
+            &mut current,
+            CurrentLiveScalarFrameRequest {
+                session_id: "test-session".to_string(),
+                latest_scalar_row: Some(scalar_row(4, 1.0)),
+            },
+        )
+        .expect("scalar frame should apply");
+        let mut fields: LatestFields = serde_json::from_value(json!({
+            "H_eff": {
+                "source_step": 4,
+                "source_time_seconds": 4e-12,
+                "values": [[1.0, 0.0, 0.0]],
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("field fixture");
+        bind_latest_field_observation_frames(&current, &mut fields);
+
+        let scalar_frame = current.scalar_rows[0]
+            .observation_frame
+            .clone()
+            .expect("scalar observation frame");
+        let field_frame: crate::schemas::common::AcceptedObservationFrameRef =
+            serde_json::from_value(fields.get("H_eff").unwrap()["observation_frame"].clone())
+                .expect("field observation frame");
+        assert_eq!(scalar_frame, field_frame);
+
+        current.mesh_revision = 8;
+        assert_eq!(
+            current.scalar_rows[0]
+                .observation_frame
+                .as_ref()
+                .unwrap()
+                .topology_revision,
+            "7"
+        );
+        assert_eq!(field_frame.topology_revision, "7");
     }
 
     #[test]

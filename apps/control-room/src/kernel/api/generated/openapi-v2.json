@@ -1,6 +1,42 @@
 {
   "components": {
     "schemas": {
+      "AcceptedObservationFrameRef": {
+        "properties": {
+          "domain_generation_id": {
+            "type": "string"
+          },
+          "observation_frame_id": {
+            "type": "string"
+          },
+          "session_epoch": {
+            "type": "string"
+          },
+          "source_step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source_time_seconds": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "topology_revision": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "observation_frame_id",
+          "session_epoch",
+          "domain_generation_id",
+          "topology_revision",
+          "source_step"
+        ],
+        "type": "object"
+      },
       "ActiveLaneCapabilityReasonCode": {
         "description": "Stable machine-readable classification for an active-lane operation reason.\nHuman-readable `reason` text may evolve without changing UI behavior.",
         "enum": [
@@ -5422,6 +5458,9 @@
             "minimum": 0,
             "type": "integer"
           },
+          "observation_frame": {
+            "$ref": "#/components/schemas/AcceptedObservationFrameRef"
+          },
           "quantity_id": {
             "type": "string"
           },
@@ -5466,6 +5505,7 @@
           }
         },
         "required": [
+          "observation_frame",
           "quantity_id",
           "label",
           "kind",
@@ -12548,6 +12588,12 @@
             "minimum": 0,
             "type": "integer"
           },
+          "diagnostic_only": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "element_count": {
             "format": "int32",
             "minimum": 0,
@@ -12576,6 +12622,19 @@
           },
           "object_id": {
             "type": "string"
+          },
+          "segment_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "segment_id": {
+            "description": "Stable content-addressed fallback carrier id. Object segments remain\ndiagnostic geometry and are never field-capable carriers.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -17055,11 +17114,23 @@
           "normalization_hint": {
             "type": "string"
           },
+          "publication_state": {
+            "description": "Publication plane: `interactive`, `export_only`, or `hidden`.",
+            "type": "string"
+          },
           "quick_access_label": {
             "type": [
               "string",
               "null"
             ]
+          },
+          "renderable": {
+            "description": "Whether the current UI renderer supports this quantity shape without coercion.",
+            "type": "boolean"
+          },
+          "requestable": {
+            "description": "Whether the active runtime exposes a legal data-plane request for this shape.",
+            "type": "boolean"
           },
           "scalar_metric_key": {
             "type": [
@@ -17068,6 +17139,10 @@
             ]
           },
           "shape": {
+            "type": "string"
+          },
+          "solver_capability": {
+            "description": "Solver/provider capability plane, independent of request and payload state.",
             "type": "string"
           },
           "supports_export": {
@@ -17102,6 +17177,10 @@
           "supports_history",
           "supports_export",
           "capability_state",
+          "solver_capability",
+          "requestable",
+          "renderable",
+          "publication_state",
           "materializable",
           "materialization_state"
         ],
@@ -18752,6 +18831,12 @@
             },
             "type": "array"
           },
+          "observation_frames": {
+            "items": {
+              "$ref": "#/components/schemas/AcceptedObservationFrameRef"
+            },
+            "type": "array"
+          },
           "returned_rows": {
             "format": "int64",
             "minimum": 0,
@@ -18783,7 +18868,8 @@
           "total_rows",
           "returned_rows",
           "columns",
-          "rows"
+          "rows",
+          "observation_frames"
         ],
         "type": "object"
       },
@@ -21858,6 +21944,10 @@
           "name": {
             "type": "string"
           },
+          "session_epoch": {
+            "description": "Immutable identity of the active session incarnation.",
+            "type": "string"
+          },
           "session_id": {
             "type": "string"
           },
@@ -21867,6 +21957,7 @@
         },
         "required": [
           "session_id",
+          "session_epoch",
           "name",
           "created_at",
           "workspace_root"
@@ -30794,7 +30885,7 @@
             }
           },
           {
-            "description": "Stable frontend target identity, for example `airbox` or\n`fdm-universe-outside-support`.",
+            "description": "Stable canonical frontend target identity. Airbox always uses `airbox`.",
             "in": "query",
             "name": "target_id",
             "required": false,
@@ -36276,6 +36367,16 @@
           },
           "409": {
             "description": "Region ID is ambiguous without owner_object_id"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Authored selection geometry cannot be evaluated"
           }
         },
         "tags": [
@@ -36299,6 +36400,16 @@
           },
           "404": {
             "description": "No active mesh or scene document"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "An authored selection geometry cannot be evaluated"
           }
         },
         "tags": [
@@ -37457,6 +37568,16 @@
           },
           "404": {
             "description": "No active workspace, mesh, scene, or region membership"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Authored region selection geometry cannot be evaluated"
           }
         },
         "tags": [
@@ -42515,8 +42636,8 @@
     }
   ],
   "x-fullmag-build-identity": {
-    "built_at_utc": "2026-08-19T19:49:47Z",
-    "git_commit": "6d2e6378b1d086be6c5468829bad9640e96b572c",
+    "built_at_utc": "2026-08-20T11:02:56Z",
+    "git_commit": "d9518082eaee2131c3e7160bd8ae952ed2f45899",
     "source_snapshot_sha256": "unknown",
     "worktree_state": "dirty"
   },

@@ -242,7 +242,7 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       type: "fdm-domain",
       visualizationTargetId:
         node.kind === "mesh.grid.universe-outside-support"
-          ? "fdm-universe-outside-support"
+          ? "airbox"
           : node.kind === "mesh.grid.region" && node.objectId && node.regionId
             ? visualizationTargetIdForSceneObject(
                 node.objectId,
@@ -440,7 +440,7 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       visualizationTargetId:
         !isPublicAirboxVisualization &&
         node.visualizationTargetId === "fdm-universe-outside-support"
-          ? "fdm-universe-outside-support"
+          ? "airbox"
           : "airbox",
     };
   }

@@ -8,6 +8,11 @@ import { statusRefreshIntervalMs } from "../realtime/communicationPolicy";
 
 import { useResourceSelector } from "./useResource";
 import type { ResourceResult } from "./resourceTypes";
+import {
+  sessionResourceIdentitiesEqual,
+  sessionResourceIdentityFromStatus,
+  type SessionResourceIdentity,
+} from "./sessionResourceIdentity";
 
 export const SESSION_STATUS_RESOURCE_KEY = "session:status";
 
@@ -69,4 +74,11 @@ export function useSessionStatusSelector<TSelected>(
     resourceKey: SESSION_STATUS_RESOURCE_KEY,
     selector,
   });
+}
+
+export function useSessionResourceIdentity(): SessionResourceIdentity | null {
+  return useSessionStatusSelector(
+    (status) => sessionResourceIdentityFromStatus(status.data),
+    { isEqual: sessionResourceIdentitiesEqual },
+  );
 }

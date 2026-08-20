@@ -163,7 +163,7 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `data/scalars` | compatibility projection of the default scalar table, not a second scalar-history owner |
 | `data/artifacts` | artifact index entries; entries may expose optional region-owned authoring provenance summaries (`scene_revision`, authored region count, material field count, coupling count, blocked/deferred diagnostic counts) but must not inline heavy artifact payloads |
 | `data/material-fields` and `data/material-fields/{field_id}` | material-parameter field data catalog and per-assignment realized sample payloads for authored material fields; detail resources may include typed realized material-field asset metadata (`asset_id`, `artifact_path`, mesh identity, location, component count, source kind, algorithm, timing), while `model/material-fields` remains the summary/status resource |
-| `data/mesh-region-membership/{region_id}` and `data/mesh-region-memberships` | realized-region membership indices for current FEM mesh parts, with explicit `object_segments` fallback when no mesh-part entry exists and typed Box/Cylinder/Sphere geometry projection for authored regions without mesh parts; topology remains owned by mesh topology resources, and the list resource exposes available memberships plus owner-qualified `unresolved_regions[]` entries without moving heavy topology into status |
+| `data/mesh-region-membership/{region_id}` and `data/mesh-region-memberships` | realized-region membership indices for current FEM mesh parts, with explicit `object_segments` fallback when no mesh-part entry exists and typed Box/Cylinder/Sphere plus Union/Intersection/Difference/Translate geometry projection for authored regions without mesh parts; object-frame projection applies the full authored translation, quaternion, nonuniform scale, and pivot transform, while world-frame projection remains independent of the owner transform; topology remains owned by mesh topology resources, and the list resource exposes only identity-unresolved memberships in owner-qualified `unresolved_regions[]` entries without moving heavy topology into status |
 | `data/fdm-region-memberships` and `data/fdm-region-membership[/{region_id}]` | thin realized FDM membership descriptor plus full or region-scoped binary FMRM payloads. The descriptor owns grid/legend identity and an optional exact `magnetic_support` summary derived from the realized active and region masks: cell-edge support bounds and active, inactive, and active-unassigned cell counts. Legacy artifacts may omit the summary; consumers then fail closed instead of inferring support from authored or domain bounds. The binary payload remains the owner of per-cell membership. |
 | `meshing/summary` | lightweight mesh dashboard summary and revision pointers |
 | `meshing/builds` | mesh build history collection |
@@ -173,6 +173,15 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `meshing/meshes/shared-domain/manifest` | mesh identity, mesh provenance, object segments, mesh parts, and tree/selection metadata |
 | `meshing/meshes/*/quality`, `meshing/meshes/*/quality/per-element`, `meshing/meshes/*/report`, and `meshing/meshes/*/size-field` | detailed shared-domain, object-scoped, and airbox-scoped quality summaries, binary per-element quality data, reports, and realized size-field diagnostics |
 | `visualization/client-acks` | latest client-side acknowledgement per browser viewport for observed visualization-state revisions |
+
+Analytic mesh-region projection is fail-closed. Singular or non-finite affine
+transforms, imported solids without a qualified analytic occupancy evaluator,
+and unsupported geometry variants return HTTP `422` with their stable
+`selection_*` error code. The single-membership endpoint, the collection
+endpoint, and mesh-region quality preserve that typed failure; they must not
+convert evaluation errors into `404`, an unresolved identity, or an empty
+membership. `404` remains reserved for missing session, mesh, scene, owner, or
+region identity.
 
 ### Simulation preparation contract
 

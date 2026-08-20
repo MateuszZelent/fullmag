@@ -203,7 +203,20 @@ pub(crate) fn execute_direct_minimizer(
                 message: "FDM CUDA direct-minimizer gradient metric is invalid".to_string(),
             });
         }
+        let current_torque_apm = crate::relaxation::vector_math::max_torque_from_field(
+            &state.magnetization,
+            &state.h_eff,
+        );
+        if torque_confirmation.observe(control, energy_plateau.range(), current_torque_apm) {
+            break;
+        }
         if direct_minimizer_gradient_degenerate(weighted_gradient_norm_sq) {
+            if control.stop.torque_tolerance_apm.is_some_and(|threshold| {
+                current_torque_apm.is_finite() && current_torque_apm <= threshold
+            }) && control.stop.energy_tolerance_j.is_none()
+            {
+                continue;
+            }
             numerical_stagnation = true;
             break;
         }
@@ -226,6 +239,7 @@ pub(crate) fn execute_direct_minimizer(
                         &state.gradient,
                         trial_lambda,
                         energy_tolerance_j,
+                        plan.active_mask.as_deref(),
                         |trial| {
                             let step_size =
                                 initial_trial_step_size * 0.5_f64.powi(trial_evaluations as i32);
@@ -325,6 +339,7 @@ pub(crate) fn execute_direct_minimizer(
                         &state.search_direction,
                         trial_lambda,
                         energy_tolerance_j,
+                        plan.active_mask.as_deref(),
                         |trial| {
                             let step_size =
                                 initial_trial_step_size * 0.5_f64.powi(trial_evaluations as i32);

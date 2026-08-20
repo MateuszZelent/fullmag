@@ -3,6 +3,11 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import path from "node:path";
 
+import {
+  captureViewportPerformanceSnapshot,
+  installViewportPerformanceProbe,
+} from "./lib/viewport-performance-proof.mjs";
+
 const FEM_PART_COUNTS = [1, 10, 100];
 const FEM_NODE_COUNT = 4096;
 const FEM_MANIFEST_PATH = "/v2/sessions/current/meshing/meshes/shared-domain/manifest";
@@ -75,7 +80,7 @@ try {
   });
   await writeFile(
     path.join(auditArtifactsDirectory, "fem-topology-upload-metrics.json"),
-    `${JSON.stringify({ measurements, preCanvasErrorBoundaryProof, semanticTargetExplorerProof }, null, 2)}\n`,
+    `${JSON.stringify({ measurements, preCanvasErrorBoundaryProof, rawPerformanceTrace: measurements.map((measurement) => measurement.rawPerformanceTrace), semanticTargetExplorerProof }, null, 2)}\n`,
   );
   console.log("FEM topology upload audit passed:", `measurements=${measurements.length}`);
 } finally {
@@ -358,6 +363,7 @@ async function measureFemTopologyUploads({ browser, partCount, passConfig, url }
   const fixture = createFemTopologyFixture({ partCount, passConfig });
   const errors = [];
   await installBrowserAuditInstrumentation(page);
+  await installViewportPerformanceProbe(page);
   await installFemFixtureApi(page, fixture);
   await page.addInitScript(({ baseUrl }) => {
     window.__FULLMAG_CONFIG__ = {
@@ -400,6 +406,9 @@ async function measureFemTopologyUploads({ browser, partCount, passConfig, url }
     );
     const diagnostics = await readViewportDiagnostics(page);
     const gpu = await readBrowserAuditCounters(page);
+    const rawPerformanceTrace = [
+      await captureViewportPerformanceSnapshot(page, `${passConfig.id}:parts=${partCount}`),
+    ];
     if (gpu.drawCalls <= 0) {
       throw new Error(`FEM ${passConfig.id} fixture with ${partCount} parts produced no WebGL draw calls.`);
     }
@@ -420,6 +429,7 @@ async function measureFemTopologyUploads({ browser, partCount, passConfig, url }
       gpu,
       partCount,
       pass: passConfig.id,
+      rawPerformanceTrace,
     };
   } finally {
     await page.close();

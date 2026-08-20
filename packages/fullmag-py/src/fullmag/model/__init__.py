@@ -121,6 +121,7 @@ from .physics_scope import (
     PhysicsScope,
     build_physics_graph,
 )
+from .selection import Selection, SelectionDefinition, SelectionScalar
 from .spin_torque import (
     ConstantEnvelope,
     InterfaceCppSTT,
@@ -182,6 +183,9 @@ from .eigen import (
 
 __all__ = [
     "AbsorbingBoundaryLayer",
+    "Selection",
+    "SelectionDefinition",
+    "SelectionScalar",
     "BackendTarget",
     "CubicAnisotropy",
     "ThermalNoise",

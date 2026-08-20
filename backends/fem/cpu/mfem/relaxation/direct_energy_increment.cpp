@@ -105,19 +105,19 @@ relaxation::EnergyDifference direct_energy_difference(
     return result;
 }
 
-bool refined_armijo_accepts(
+void evaluate_refined_armijo(
     Context &ctx,
     const char *algorithm_name,
     const std::vector<double> &previous_m,
     const std::vector<double> &trial_m,
     const relaxation::EnergyDifference &ordinary_difference,
     double armijo_rhs_joules,
-    relaxation::EnergyDifference &accepted_difference,
+    DirectMinimizerArmijoResult &result,
     fullmag_fem_step_stats &profile_stats,
     std::string &error)
 {
     if (!ctx.demag.enabled) {
-        return false;
+        return;
     }
     const fullmag_fem_solver_config ordinary_solver = ctx.demag.solver;
     const double ordinary_rtol = ordinary_solver.relative_tolerance;
@@ -125,7 +125,7 @@ bool refined_armijo_accepts(
     const double refined_rtol = std::max(refinement_floor, ordinary_rtol * 0.1);
     if (!std::isfinite(ordinary_rtol) || !std::isfinite(refined_rtol) ||
         ordinary_rtol <= refined_rtol) {
-        return false;
+        return;
     }
 
     ctx.demag.solver.relative_tolerance = refined_rtol;
@@ -142,6 +142,18 @@ bool refined_armijo_accepts(
     if (current_status == FULLMAG_FEM_OK) {
         refined_previous_h_demag = ctx.demag.h_xyz;
     }
+    if (current_status != FULLMAG_FEM_OK) {
+        ctx.demag.solver = ordinary_solver;
+        result.outcome = DirectMinimizerArmijoOutcome::SnapshotFailure;
+        return;
+    }
+    relaxation::accumulate_relaxation_profile_sample(
+        profile_stats, refined_current_stats);
+    if (ctx.interrupt.step_interrupted) {
+        ctx.demag.solver = ordinary_solver;
+        result.outcome = DirectMinimizerArmijoOutcome::Interrupted;
+        return;
+    }
     const int trial_status = current_status == FULLMAG_FEM_OK
         ? relaxation::upload_and_snapshot(
               ctx,
@@ -153,10 +165,15 @@ bool refined_armijo_accepts(
         : current_status;
     ctx.demag.solver = ordinary_solver;
     if (trial_status != FULLMAG_FEM_OK) {
-        return false;
+        result.outcome = DirectMinimizerArmijoOutcome::SnapshotFailure;
+        return;
     }
-    relaxation::accumulate_relaxation_profile_sample(profile_stats, refined_current_stats);
-    relaxation::accumulate_relaxation_profile_sample(profile_stats, refined_trial_stats);
+    relaxation::accumulate_relaxation_profile_sample(
+        profile_stats, refined_trial_stats);
+    if (ctx.interrupt.step_interrupted) {
+        result.outcome = DirectMinimizerArmijoOutcome::Interrupted;
+        return;
+    }
     const auto refined_difference = direct_energy_difference(
         ctx,
         algorithm_name,
@@ -167,34 +184,36 @@ bool refined_armijo_accepts(
         refined_trial_stats,
         error);
     if (!error.empty() || ctx.interrupt.step_interrupted) {
-        return false;
+        result.outcome = ctx.interrupt.step_interrupted
+            ? DirectMinimizerArmijoOutcome::Interrupted
+            : DirectMinimizerArmijoOutcome::EvaluationFailure;
+        return;
     }
     const bool accepted = relaxation::strict_armijo_difference_refinement_accepts(
         ordinary_difference, refined_difference, armijo_rhs_joules);
     if (accepted) {
-        accepted_difference = refined_difference;
+        result.outcome = DirectMinimizerArmijoOutcome::AcceptedRefined;
+        result.accepted_difference = refined_difference;
+        result.accepted_stats = refined_trial_stats;
     }
-    return accepted;
 }
 
 } // namespace
 
-bool direct_minimizer_armijo_accepts(
+DirectMinimizerArmijoResult direct_minimizer_armijo_evaluate(
     Context &ctx,
     const char *algorithm_name,
     const std::vector<double> &previous_m,
     const std::vector<double> &trial_m,
     const std::vector<double> &previous_h_demag,
-    const std::vector<double> &previous_h_eff,
     const fullmag_fem_step_stats &current_stats,
     const fullmag_fem_step_stats &trial_stats,
     fullmag_fem_step_stats &profile_stats,
-    relaxation::EnergyDifference &direct_difference,
-    relaxation::EnergyDifference &accepted_difference,
-    double &armijo_increment_rhs_j,
+    double armijo_linear_increment_j,
     std::string &error)
 {
-    direct_difference = direct_energy_difference(
+    DirectMinimizerArmijoResult result;
+    result.direct_difference = direct_energy_difference(
         ctx,
         algorithm_name,
         previous_m,
@@ -204,34 +223,78 @@ bool direct_minimizer_armijo_accepts(
         trial_stats,
         error);
     if (!error.empty() || ctx.interrupt.step_interrupted) {
-        return false;
+        result.outcome = ctx.interrupt.step_interrupted
+            ? DirectMinimizerArmijoOutcome::Interrupted
+            : DirectMinimizerArmijoOutcome::EvaluationFailure;
+        return result;
     }
-    const auto chord_increment =
-        relaxation::representable_chord_energy_linear_increment(
-            ctx, previous_m, trial_m, previous_h_eff);
-    armijo_increment_rhs_j =
-        relaxation::kArmijoCoefficient * chord_increment.value;
+    result.armijo_increment_rhs_j =
+        relaxation::kArmijoCoefficient * armijo_linear_increment_j;
     const auto decision =
-        std::isfinite(chord_increment.value) && chord_increment.value < 0.0 &&
-            std::isfinite(armijo_increment_rhs_j)
+        std::isfinite(armijo_linear_increment_j) &&
+            armijo_linear_increment_j < 0.0 &&
+            std::isfinite(result.armijo_increment_rhs_j)
         ? relaxation::strict_armijo_difference_decision(
-              direct_difference, armijo_increment_rhs_j)
+              result.direct_difference, result.armijo_increment_rhs_j)
         : relaxation::ArmijoDifferenceDecision::Reject;
     if (decision == relaxation::ArmijoDifferenceDecision::Accept) {
-        accepted_difference = direct_difference;
-        return true;
+        result.outcome = DirectMinimizerArmijoOutcome::AcceptedOrdinary;
+        result.accepted_difference = result.direct_difference;
+        result.accepted_stats = trial_stats;
+        return result;
     }
-    return decision == relaxation::ArmijoDifferenceDecision::Refine &&
-        refined_armijo_accepts(
+    if (decision == relaxation::ArmijoDifferenceDecision::Refine) {
+        evaluate_refined_armijo(
             ctx,
             algorithm_name,
             previous_m,
             trial_m,
-            direct_difference,
-            armijo_increment_rhs_j,
-            accepted_difference,
+            result.direct_difference,
+            result.armijo_increment_rhs_j,
+            result,
             profile_stats,
             error);
+    }
+    return result;
+}
+
+bool direct_minimizer_armijo_accepts(
+    Context &ctx,
+    const char *algorithm_name,
+    const std::vector<double> &previous_m,
+    const std::vector<double> &trial_m,
+    const std::vector<double> &previous_h_demag,
+    const std::vector<double> &previous_h_eff,
+    const fullmag_fem_step_stats &current_stats,
+    fullmag_fem_step_stats &trial_stats,
+    fullmag_fem_step_stats &profile_stats,
+    relaxation::EnergyDifference &direct_difference,
+    relaxation::EnergyDifference &accepted_difference,
+    double &armijo_increment_rhs_j,
+    std::string &error)
+{
+    const auto chord_increment =
+        relaxation::representable_chord_energy_linear_increment(
+            ctx, previous_m, trial_m, previous_h_eff);
+    const auto result = direct_minimizer_armijo_evaluate(
+        ctx,
+        algorithm_name,
+        previous_m,
+        trial_m,
+        previous_h_demag,
+        current_stats,
+        trial_stats,
+        profile_stats,
+        chord_increment.value,
+        error);
+    direct_difference = result.direct_difference;
+    accepted_difference = result.accepted_difference;
+    armijo_increment_rhs_j = result.armijo_increment_rhs_j;
+    if (result.accepted()) {
+        trial_stats = result.accepted_stats;
+        return true;
+    }
+    return false;
 }
 
 } // namespace fullmag::fem

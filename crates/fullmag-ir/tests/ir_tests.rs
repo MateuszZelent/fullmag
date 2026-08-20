@@ -6734,3 +6734,702 @@ fn fixed_family_extractors_reject_malformed_csr_instead_of_shortening_output() {
         .unwrap_err()
         .contains("boundary_markers"));
 }
+
+#[test]
+fn selection_all_expression_variants_round_trip_with_strict_wire_shapes() {
+    let scalar_fixtures = [
+        serde_json::json!({"kind": "constant", "value": 0.5}),
+        serde_json::json!({
+            "kind": "coordinate",
+            "component": "x",
+            "frame": {"kind": "world"}
+        }),
+        serde_json::json!({"kind": "magnetization_component", "component": "z"}),
+        serde_json::json!({"kind": "magnetization_norm"}),
+        serde_json::json!({"kind": "magnetization_dot", "axis": [0.0, 0.0, 1.0]}),
+        serde_json::json!({
+            "kind": "abs",
+            "value": {"kind": "constant", "value": -0.5}
+        }),
+    ];
+    for fixture in scalar_fixtures {
+        let parsed: SelectionScalarExprIR = serde_json::from_value(fixture.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), fixture);
+    }
+
+    let expression_fixtures = [
+        serde_json::json!({"kind": "all_magnetic"}),
+        serde_json::json!({"kind": "in_object", "object_id": "free_layer"}),
+        serde_json::json!({
+            "kind": "in_region",
+            "object_id": "free_layer",
+            "region_id": "pinning"
+        }),
+        serde_json::json!({
+            "kind": "inside_geometry",
+            "geometry": {
+                "kind": "cylinder",
+                "center_m": [0.0, 0.0, 0.0],
+                "axis": [0.0, 0.0, 1.0],
+                "radius_m": 2.5e-8,
+                "height_m": 3e-9
+            },
+            "frame": {"kind": "object", "object_id": "free_layer"},
+            "sampling": {"kind": "dof_point"},
+            "boundary": {
+                "kind": "inclusive",
+                "absolute_tolerance_m": 0.0,
+                "relative_tolerance": 1e-12
+            }
+        }),
+        serde_json::json!({
+            "kind": "compare",
+            "lhs": {"kind": "magnetization_component", "component": "z"},
+            "op": "gt",
+            "rhs": {"kind": "constant", "value": 0.5}
+        }),
+        serde_json::json!({
+            "kind": "approx",
+            "value": {"kind": "magnetization_norm"},
+            "target": {"kind": "constant", "value": 1.0},
+            "atol": 1e-12,
+            "rtol": 0.0
+        }),
+        serde_json::json!({
+            "kind": "between",
+            "value": {"kind": "magnetization_component", "component": "x"},
+            "lower": -0.4,
+            "upper": 0.4,
+            "closed": "both"
+        }),
+        serde_json::json!({
+            "kind": "and",
+            "expressions": [{"kind": "all_magnetic"}]
+        }),
+        serde_json::json!({
+            "kind": "or",
+            "expressions": [{"kind": "all_magnetic"}]
+        }),
+        serde_json::json!({
+            "kind": "xor",
+            "expressions": [
+                {"kind": "all_magnetic"},
+                {"kind": "in_object", "object_id": "free_layer"}
+            ]
+        }),
+        serde_json::json!({
+            "kind": "not",
+            "expression": {"kind": "all_magnetic"}
+        }),
+        serde_json::json!({"kind": "ref", "selection_id": "named"}),
+    ];
+    for fixture in expression_fixtures {
+        let parsed: SelectionExprIR = serde_json::from_value(fixture.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), fixture);
+    }
+}
+
+#[test]
+fn selection_deserialization_canonicalizes_nested_boolean_forms() {
+    let parsed: SelectionExprIR = serde_json::from_value(serde_json::json!({
+        "kind": "and",
+        "expressions": [
+            {"kind": "all_magnetic"},
+            {
+                "kind": "and",
+                "expressions": [
+                    {"kind": "in_object", "object_id": "free_layer"},
+                    {"kind": "in_object", "object_id": "fixed_layer"}
+                ]
+            }
+        ]
+    }))
+    .unwrap();
+
+    assert_eq!(
+        serde_json::to_value(parsed).unwrap(),
+        serde_json::json!({
+            "kind": "and",
+            "expressions": [
+                {"kind": "all_magnetic"},
+                {"kind": "in_object", "object_id": "free_layer"},
+                {"kind": "in_object", "object_id": "fixed_layer"}
+            ]
+        })
+    );
+}
+
+#[test]
+fn selection_geometry_predicate_v1_round_trips_every_required_variant() {
+    let fixtures = [
+        serde_json::json!({
+            "kind": "box",
+            "center_m": [0.0, 0.0, 0.0],
+            "size_m": [2.0, 4.0, 6.0]
+        }),
+        serde_json::json!({
+            "kind": "cylinder",
+            "center_m": [0.0, 0.0, 0.0],
+            "axis": [0.0, 0.0, 1.0],
+            "radius_m": 2.0,
+            "height_m": 4.0
+        }),
+        serde_json::json!({
+            "kind": "sphere",
+            "center_m": [0.0, 0.0, 0.0],
+            "radius_m": 3.0
+        }),
+        serde_json::json!({
+            "kind": "ellipsoid",
+            "center_m": [1.0, 2.0, 3.0],
+            "radii_m": [2.0, 3.0, 4.0]
+        }),
+        serde_json::json!({
+            "kind": "union",
+            "a": {"kind": "sphere", "center_m": [-1.0, 0.0, 0.0], "radius_m": 2.0},
+            "b": {"kind": "sphere", "center_m": [1.0, 0.0, 0.0], "radius_m": 2.0}
+        }),
+        serde_json::json!({
+            "kind": "intersection",
+            "a": {"kind": "sphere", "center_m": [-1.0, 0.0, 0.0], "radius_m": 2.0},
+            "b": {"kind": "sphere", "center_m": [1.0, 0.0, 0.0], "radius_m": 2.0}
+        }),
+        serde_json::json!({
+            "kind": "difference",
+            "base": {"kind": "box", "center_m": [0.0, 0.0, 0.0], "size_m": [4.0, 4.0, 4.0]},
+            "tool": {"kind": "sphere", "center_m": [0.0, 0.0, 0.0], "radius_m": 1.0}
+        }),
+        serde_json::json!({
+            "kind": "xor",
+            "a": {"kind": "sphere", "center_m": [-1.0, 0.0, 0.0], "radius_m": 2.0},
+            "b": {"kind": "sphere", "center_m": [1.0, 0.0, 0.0], "radius_m": 2.0}
+        }),
+        serde_json::json!({
+            "kind": "complement",
+            "geometry": {"kind": "sphere", "center_m": [0.0, 0.0, 0.0], "radius_m": 1.0},
+            "domain": {"kind": "box", "center_m": [0.0, 0.0, 0.0], "size_m": [4.0, 4.0, 4.0]}
+        }),
+        serde_json::json!({
+            "kind": "affine",
+            "geometry": {"kind": "sphere", "center_m": [0.0, 0.0, 0.0], "radius_m": 1.0},
+            "translation_m": [1.0, 2.0, 3.0],
+            "rotation_xyzw": [0.0, 0.0, 0.0, 1.0],
+            "scale": [1.0, 2.0, 3.0],
+            "pivot_m": [0.0, 0.0, 0.0]
+        }),
+        serde_json::json!({
+            "kind": "imported_solid",
+            "asset_id": "asset_mesh_001"
+        }),
+    ];
+
+    for fixture in fixtures {
+        let parsed: GeometryPredicateIR = serde_json::from_value(fixture.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), fixture);
+    }
+}
+
+#[test]
+fn selection_imported_solid_is_known_but_fails_closed_without_qualification() {
+    let definition: SelectionDefinitionIR = serde_json::from_value(serde_json::json!({
+        "schema_version": "selection_expr.v1",
+        "id": "imported",
+        "expression": {
+            "kind": "inside_geometry",
+            "geometry": {"kind": "imported_solid", "asset_id": "asset_mesh_001"},
+            "frame": {"kind": "world"},
+            "sampling": {"kind": "dof_point"},
+            "boundary": {
+                "kind": "inclusive",
+                "absolute_tolerance_m": 0.0,
+                "relative_tolerance": 1e-12
+            }
+        }
+    }))
+    .expect("imported_solid is a known schema variant");
+
+    let errors = validate_selection_definitions(&[definition], SelectionLimits::default())
+        .unwrap_err()
+        .join("\n");
+    assert!(errors.contains("selection_imported_solid_unqualified"));
+}
+
+#[test]
+fn selection_serde_rejects_unknown_fields_and_executable_expressions() {
+    for invalid in [
+        serde_json::json!({"kind": "all_magnetic", "lambda": "lambda p: True"}),
+        serde_json::json!({"kind": "string_expression", "expression": "m.z > 0.5"}),
+        serde_json::json!("m.z > 0.5"),
+    ] {
+        assert!(serde_json::from_value::<SelectionExprIR>(invalid).is_err());
+    }
+    assert!(
+        serde_json::from_value::<SelectionDefinitionIR>(serde_json::json!({
+            "schema_version": "selection_expr.v1",
+            "id": "named",
+            "expression": {"kind": "all_magnetic"},
+            "extra": true
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn selection_validation_rejects_reference_cycles_and_unknown_references() {
+    let cyclic = vec![
+        SelectionDefinitionIR::new(
+            "a",
+            SelectionExprIR::Ref {
+                selection_id: "b".into(),
+            },
+        ),
+        SelectionDefinitionIR::new(
+            "b",
+            SelectionExprIR::Ref {
+                selection_id: "a".into(),
+            },
+        ),
+    ];
+    let errors = validate_selection_definitions(&cyclic, SelectionLimits::default())
+        .unwrap_err()
+        .join("\n");
+    assert!(errors.contains("selection_reference_cycle"));
+
+    let unknown = vec![SelectionDefinitionIR::new(
+        "a",
+        SelectionExprIR::Ref {
+            selection_id: "missing".into(),
+        },
+    )];
+    let errors = validate_selection_definitions(&unknown, SelectionLimits::default())
+        .unwrap_err()
+        .join("\n");
+    assert!(errors.contains("selection_unknown_reference"));
+}
+
+#[test]
+fn selection_validation_enforces_depth_64_and_node_limit_4096() {
+    fn nested_not(depth: usize) -> SelectionExprIR {
+        let mut expression = SelectionExprIR::AllMagnetic {};
+        for _ in 1..depth {
+            expression = SelectionExprIR::Not {
+                expression: Box::new(expression),
+            };
+        }
+        expression
+    }
+
+    validate_selection_definitions(
+        &[SelectionDefinitionIR::new("depth-64", nested_not(64))],
+        SelectionLimits::default(),
+    )
+    .expect("depth 64 is allowed");
+    let errors = validate_selection_definitions(
+        &[SelectionDefinitionIR::new("depth-65", nested_not(65))],
+        SelectionLimits::default(),
+    )
+    .unwrap_err()
+    .join("\n");
+    assert!(errors.contains("selection_complexity_exceeded"));
+    assert!(errors.contains("depth"));
+
+    let leaves = |count| SelectionExprIR::And {
+        expressions: (0..count)
+            .map(|_| SelectionExprIR::AllMagnetic {})
+            .collect(),
+    };
+    validate_selection_definitions(
+        &[SelectionDefinitionIR::new("nodes-4096", leaves(4095))],
+        SelectionLimits::default(),
+    )
+    .expect("4096 nodes including the root are allowed");
+    let errors = validate_selection_definitions(
+        &[SelectionDefinitionIR::new("nodes-4097", leaves(4096))],
+        SelectionLimits::default(),
+    )
+    .unwrap_err()
+    .join("\n");
+    assert!(errors.contains("selection_complexity_exceeded"));
+    assert!(errors.contains("nodes"));
+}
+
+#[test]
+fn selection_geometry_nodes_participate_in_the_same_depth_limit() {
+    fn nested_affine(depth: usize) -> GeometryPredicateIR {
+        let mut geometry = GeometryPredicateIR::Sphere {
+            center_m: [0.0; 3],
+            radius_m: 1.0,
+        };
+        for _ in 1..depth {
+            geometry = GeometryPredicateIR::Affine {
+                geometry: Box::new(geometry),
+                translation_m: [0.0; 3],
+                rotation_xyzw: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0; 3],
+                pivot_m: [0.0; 3],
+            };
+        }
+        geometry
+    }
+    let selection = |geometry| {
+        SelectionDefinitionIR::new(
+            "geometry-depth",
+            SelectionExprIR::InsideGeometry {
+                geometry,
+                frame: SelectionFrameIR::World {},
+                sampling: SelectionSamplingIR::DofPoint {},
+                boundary: BoundaryMembershipIR::default(),
+            },
+        )
+    };
+
+    validate_selection_definitions(&[selection(nested_affine(63))], SelectionLimits::default())
+        .expect("selection root plus 63 geometry nodes has depth 64");
+    let errors =
+        validate_selection_definitions(&[selection(nested_affine(64))], SelectionLimits::default())
+            .unwrap_err()
+            .join("\n");
+    assert!(errors.contains("selection_complexity_exceeded"));
+    assert!(errors.contains("depth"));
+}
+
+#[test]
+fn selection_scalar_nodes_participate_in_the_same_depth_limit() {
+    fn nested_abs(depth: usize) -> SelectionScalarExprIR {
+        let mut scalar = SelectionScalarExprIR::Constant { value: 1.0 };
+        for _ in 1..depth {
+            scalar = SelectionScalarExprIR::Abs {
+                value: Box::new(scalar),
+            };
+        }
+        scalar
+    }
+    let selection = |scalar| {
+        SelectionDefinitionIR::new(
+            "scalar-depth",
+            SelectionExprIR::Compare {
+                lhs: scalar,
+                op: ComparisonOpIR::Gt,
+                rhs: SelectionScalarExprIR::Constant { value: 0.0 },
+                tolerance: ComparisonToleranceIR::default(),
+            },
+        )
+    };
+
+    validate_selection_definitions(&[selection(nested_abs(63))], SelectionLimits::default())
+        .expect("selection root plus 63 scalar nodes has depth 64");
+    let errors =
+        validate_selection_definitions(&[selection(nested_abs(64))], SelectionLimits::default())
+            .unwrap_err()
+            .join("\n");
+    assert!(errors.contains("selection_complexity_exceeded"));
+    assert!(errors.contains("depth"));
+}
+
+#[test]
+fn selection_limits_apply_to_the_transitively_expanded_reference_graph() {
+    fn reference_chain(count: usize) -> Vec<SelectionDefinitionIR> {
+        (0..count)
+            .map(|index| {
+                let expression = if index + 1 == count {
+                    SelectionExprIR::AllMagnetic {}
+                } else {
+                    SelectionExprIR::Ref {
+                        selection_id: format!("s{}", index + 1),
+                    }
+                };
+                SelectionDefinitionIR::new(format!("s{index}"), expression)
+            })
+            .collect()
+    }
+
+    validate_selection_definitions(&reference_chain(64), SelectionLimits::default())
+        .expect("expanded reference depth 64 is allowed");
+    let errors = validate_selection_definitions(&reference_chain(65), SelectionLimits::default())
+        .unwrap_err()
+        .join("\n");
+    assert!(errors.contains("selection_complexity_exceeded"));
+    assert!(errors.contains("expanded depth"));
+
+    let fanout = |count| {
+        vec![
+            SelectionDefinitionIR::new("leaf", SelectionExprIR::AllMagnetic {}),
+            SelectionDefinitionIR::new(
+                "root",
+                SelectionExprIR::And {
+                    expressions: (0..count)
+                        .map(|_| SelectionExprIR::Ref {
+                            selection_id: "leaf".into(),
+                        })
+                        .collect(),
+                },
+            ),
+        ]
+    };
+    validate_selection_definitions(&fanout(1024), SelectionLimits::default())
+        .expect("1024 expanded references are allowed");
+    let errors = validate_selection_definitions(&fanout(1025), SelectionLimits::default())
+        .unwrap_err()
+        .join("\n");
+    assert!(errors.contains("selection_complexity_exceeded"));
+    assert!(errors.contains("expanded references"));
+}
+
+#[test]
+fn selection_validation_rejects_empty_sets_and_invalid_scalars() {
+    for expression in [
+        SelectionExprIR::And {
+            expressions: vec![],
+        },
+        SelectionExprIR::Or {
+            expressions: vec![],
+        },
+        SelectionExprIR::Xor {
+            expressions: vec![],
+        },
+        SelectionExprIR::Xor {
+            expressions: vec![SelectionExprIR::AllMagnetic {}],
+        },
+        SelectionExprIR::Between {
+            value: SelectionScalarExprIR::Constant { value: 0.0 },
+            lower: 1.0,
+            upper: -1.0,
+            closed: ClosedIntervalIR::Both,
+        },
+    ] {
+        assert!(validate_selection_definitions(
+            &[SelectionDefinitionIR::new("invalid", expression)],
+            SelectionLimits::default(),
+        )
+        .is_err());
+    }
+    assert!(
+        serde_json::from_str::<SelectionScalarExprIR>(r#"{"kind":"constant","value":1e999}"#)
+            .is_err()
+    );
+}
+
+#[test]
+fn selection_dot_axis_is_normalized_and_hash_is_deterministic() {
+    let scalar: SelectionScalarExprIR = serde_json::from_value(serde_json::json!({
+        "kind": "magnetization_dot",
+        "axis": [0.0, 0.0, 4.0]
+    }))
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(scalar).unwrap(),
+        serde_json::json!({"kind": "magnetization_dot", "axis": [0.0, 0.0, 1.0]})
+    );
+
+    let definition = SelectionDefinitionIR::new(
+        "positive-z",
+        SelectionExprIR::Compare {
+            lhs: SelectionScalarExprIR::MagnetizationComponent {
+                component: CartesianComponentIR::Z,
+            },
+            op: ComparisonOpIR::Gt,
+            rhs: SelectionScalarExprIR::Constant { value: 0.5 },
+            tolerance: ComparisonToleranceIR::default(),
+        },
+    );
+    let first = canonical_standalone_selection_sha256(&definition).unwrap();
+    let round_trip: SelectionDefinitionIR =
+        serde_json::from_value(serde_json::to_value(&definition).unwrap()).unwrap();
+    assert_eq!(
+        first,
+        canonical_standalone_selection_sha256(&round_trip).unwrap()
+    );
+    assert_eq!(first.len(), 64);
+    assert!(
+        canonical_standalone_selection_sha256(&SelectionDefinitionIR::new(
+            "root",
+            SelectionExprIR::Ref {
+                selection_id: "dependency".into(),
+            },
+        ))
+        .is_err()
+    );
+}
+
+#[test]
+fn selection_validation_rejects_programmatic_noncanonical_axes_and_quaternions() {
+    for axis in [[0.0, 0.0, 0.0], [0.0, 0.0, 4.0], [f64::NAN, 0.0, 1.0]] {
+        let definition = SelectionDefinitionIR::new(
+            "axis",
+            SelectionExprIR::Compare {
+                lhs: SelectionScalarExprIR::MagnetizationDot { axis },
+                op: ComparisonOpIR::Gt,
+                rhs: SelectionScalarExprIR::Constant { value: 0.0 },
+                tolerance: ComparisonToleranceIR::default(),
+            },
+        );
+        let errors = validate_selection_definitions(&[definition], SelectionLimits::default())
+            .unwrap_err()
+            .join("\n");
+        assert!(errors.contains("axis must be normalized"));
+    }
+
+    let affine = |rotation_xyzw| {
+        SelectionDefinitionIR::new(
+            "rotation",
+            SelectionExprIR::InsideGeometry {
+                geometry: GeometryPredicateIR::Affine {
+                    geometry: Box::new(GeometryPredicateIR::Sphere {
+                        center_m: [0.0; 3],
+                        radius_m: 1.0,
+                    }),
+                    translation_m: [0.0; 3],
+                    rotation_xyzw,
+                    scale: [1.0; 3],
+                    pivot_m: [0.0; 3],
+                },
+                frame: SelectionFrameIR::World {},
+                sampling: SelectionSamplingIR::DofPoint {},
+                boundary: BoundaryMembershipIR::default(),
+            },
+        )
+    };
+    for rotation in [
+        [0.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 4.0],
+        [f64::NAN, 0.0, 0.0, 1.0],
+    ] {
+        let errors =
+            validate_selection_definitions(&[affine(rotation)], SelectionLimits::default())
+                .unwrap_err()
+                .join("\n");
+        assert!(errors.contains("rotation_xyzw must be normalized"));
+    }
+
+    let parsed: GeometryPredicateIR = serde_json::from_value(serde_json::json!({
+        "kind": "affine",
+        "geometry": {"kind": "sphere", "center_m": [0.0, 0.0, 0.0], "radius_m": 1.0},
+        "translation_m": [0.0, 0.0, 0.0],
+        "rotation_xyzw": [0.0, 0.0, 0.0, 4.0],
+        "scale": [1.0, 1.0, 1.0],
+        "pivot_m": [0.0, 0.0, 0.0]
+    }))
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(parsed).unwrap()["rotation_xyzw"],
+        serde_json::json!([0.0, 0.0, 0.0, 1.0])
+    );
+}
+
+#[test]
+fn selection_context_validates_object_region_and_frame_references() {
+    let context = SelectionValidationContext::new(["free_layer"], [("free_layer", "pinning")]);
+    let valid = vec![
+        SelectionDefinitionIR::new(
+            "region",
+            SelectionExprIR::InRegion {
+                object_id: "free_layer".into(),
+                region_id: "pinning".into(),
+            },
+        ),
+        SelectionDefinitionIR::new(
+            "coordinate",
+            SelectionExprIR::Compare {
+                lhs: SelectionScalarExprIR::Coordinate {
+                    component: CartesianComponentIR::X,
+                    frame: SelectionFrameIR::Object {
+                        object_id: "free_layer".into(),
+                    },
+                },
+                op: ComparisonOpIR::Gt,
+                rhs: SelectionScalarExprIR::Constant { value: 0.0 },
+                tolerance: ComparisonToleranceIR::default(),
+            },
+        ),
+    ];
+    validate_selection_definitions_with_context(&valid, SelectionLimits::default(), &context)
+        .expect("known object, region, and frame references are valid");
+
+    let invalid = vec![
+        SelectionDefinitionIR::new(
+            "object",
+            SelectionExprIR::InObject {
+                object_id: "missing".into(),
+            },
+        ),
+        SelectionDefinitionIR::new(
+            "region",
+            SelectionExprIR::InRegion {
+                object_id: "free_layer".into(),
+                region_id: "missing".into(),
+            },
+        ),
+    ];
+    let errors =
+        validate_selection_definitions_with_context(&invalid, SelectionLimits::default(), &context)
+            .unwrap_err()
+            .join("\n");
+    assert!(errors.contains("selection_unknown_object"));
+    assert!(errors.contains("selection_unknown_region"));
+}
+
+#[test]
+fn canonical_selection_graph_hash_includes_reachable_dependencies() {
+    let definitions = vec![
+        SelectionDefinitionIR::new("leaf", SelectionExprIR::AllMagnetic {}),
+        SelectionDefinitionIR::new(
+            "root",
+            SelectionExprIR::Ref {
+                selection_id: "leaf".into(),
+            },
+        ),
+    ];
+    let first = canonical_selection_sha256("root", &definitions).unwrap();
+    assert_eq!(
+        first,
+        "37ccb1ac788b858b5513c7a2da296793cdbb8ad2e7f29efbdd21a6b6db7cf1ab"
+    );
+    let mut changed = definitions.clone();
+    changed[0].expression = SelectionExprIR::InObject {
+        object_id: "free_layer".into(),
+    };
+    let second = canonical_selection_sha256("root", &changed).unwrap();
+    assert_ne!(first, second);
+    assert_eq!(
+        first,
+        canonical_selection_sha256("root", &definitions).unwrap()
+    );
+    assert!(canonical_selection_sha256("missing", &definitions).is_err());
+}
+
+#[test]
+fn canonical_selection_hash_float_encoding_matches_python() {
+    let fixture = include_str!("fixtures/selection_expr_v1_python_golden.json");
+    let definition: SelectionDefinitionIR = serde_json::from_str(fixture).unwrap();
+
+    assert_eq!(
+        canonical_selection_sha256("pinned_positive_core", &[definition]).unwrap(),
+        "036780fa25429c74f9b5298b928e9712895c448c599cafbba5e5a192da320582"
+    );
+}
+
+#[test]
+fn canonical_selection_hash_unicode_encoding_matches_python() {
+    let definition = SelectionDefinitionIR::new(
+        "warstwa_ż",
+        SelectionExprIR::InObject {
+            object_id: "próbka_ą".into(),
+        },
+    );
+
+    assert_eq!(
+        canonical_selection_sha256("warstwa_ż", &[definition]).unwrap(),
+        "98fb0dbc117d3ca0f1aa2018544be79e45200858c54139fb1f4b836f3974bde1"
+    );
+}
+
+#[test]
+fn selection_python_golden_fixture_is_canonical_rust_json() {
+    let fixture = include_str!("fixtures/selection_expr_v1_python_golden.json");
+    let definition: SelectionDefinitionIR = serde_json::from_str(fixture).unwrap();
+    validate_selection_definitions(&[definition.clone()], SelectionLimits::default()).unwrap();
+    assert_eq!(
+        serde_json::to_value(definition).unwrap(),
+        serde_json::from_str::<serde_json::Value>(fixture).unwrap()
+    );
+}

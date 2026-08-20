@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useReducer, useRef } from "react";
 
 import type { DecodedTopology } from "@/kernel/api/codecs";
+import { recordVisualizationDebugPerformanceMetric } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 import { buildViewport3DRegionOverlayJobKey } from "../build-engine/viewport3dBuildJobKeys";
 import type {
   RegionMeshOverlayModel,
@@ -105,6 +106,7 @@ interface Viewport3DRegionOverlayModelCacheEntry {
 }
 
 const REGION_OVERLAY_MODEL_CACHE_LIMIT = 16;
+export const REGION_OVERLAY_MODEL_CACHE_MAX_BYTES = 64 * 1024 * 1024;
 const VIEWPORT_3D_REGION_OVERLAY_INITIAL_STATE: Viewport3DRegionOverlayReducerState =
   {
     identity: null,
@@ -233,7 +235,11 @@ export function retainViewport3DRegionOverlayModelsFromCache(
   key: string,
 ): Viewport3DRegionOverlayModelCacheHandle | null {
   const entry = regionOverlayModelCache.get(key);
-  if (!entry) return null;
+  if (!entry) {
+    recordVisualizationDebugPerformanceMetric("cacheMisses");
+    return null;
+  }
+  recordVisualizationDebugPerformanceMetric("cacheHits");
   entry.refCount += 1;
   entry.lastUsedAtMs = now();
   return createRegionOverlayModelCacheHandle(entry);
@@ -627,14 +633,26 @@ function createRegionOverlayModelCacheHandle(
 }
 
 function evictRegionOverlayModelCache(): void {
-  while (regionOverlayModelCache.size > REGION_OVERLAY_MODEL_CACHE_LIMIT) {
+  while (
+    regionOverlayModelCache.size > REGION_OVERLAY_MODEL_CACHE_LIMIT ||
+    regionOverlayModelCacheEstimatedBytes() >
+      REGION_OVERLAY_MODEL_CACHE_MAX_BYTES
+  ) {
     const evictable = [...regionOverlayModelCache.values()]
       .filter((entry) => entry.refCount === 0)
       .toSorted((left, right) => left.lastUsedAtMs - right.lastUsedAtMs)[0];
     if (!evictable) return;
     regionOverlayModelCache.delete(evictable.key);
     regionOverlayModelBuffers.delete(evictable.token);
+    recordVisualizationDebugPerformanceMetric("cacheEvictions");
   }
+}
+
+function regionOverlayModelCacheEstimatedBytes(): number {
+  return [...regionOverlayModelCache.values()].reduce(
+    (total, entry) => total + entry.estimatedBytes,
+    0,
+  );
 }
 
 function estimateRegionOverlayModelBytes(

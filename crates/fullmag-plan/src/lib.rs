@@ -28,6 +28,7 @@ pub mod quantities;
 mod region_conflict;
 mod regional_field_drive;
 mod sampling;
+mod selection;
 mod spin_torque;
 mod spin_transport;
 mod surface_selectors;
@@ -66,6 +67,10 @@ pub use sampling::{
     resolve_auto_sampling_for_stage, validate_continuous_autosave_targets,
     validate_stage_autosave_capabilities, ResolvedAutosaveClock, ResolvedStageAutosave,
     SamplingResolutionIR, SAMPLING_RESOLUTION_SCHEMA_VERSION,
+};
+pub use selection::geometry::{
+    evaluate_geometry_predicate, AffineTransform3, BoundaryMembership, GeometryPredicate,
+    SelectionError,
 };
 pub use surface_selectors::{resolve_fem_surface_selector, ResolvedFemSurfaceSelector};
 pub use util::generate_random_unit_vectors;

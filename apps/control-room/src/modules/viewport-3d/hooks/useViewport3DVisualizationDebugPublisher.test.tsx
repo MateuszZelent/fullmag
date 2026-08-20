@@ -1085,10 +1085,10 @@ describe("createViewport3DVisualizationDebugCandidateBuilder", () => {
     })({ signal: new AbortController().signal, targetId });
     await settleCandidate(candidate);
     const registry = createViewport3DRenderAdoptionRegistry();
-    registry.setCarrierTargets(new Map([[targetId, [targetId]]]));
+    registry.setCarrierTargets(new Map([["fdm-domain", [targetId]]]));
     registry.retainDemand(targetId);
     recordFdmCuboidSurfaceAdoption({
-      carrierId: targetId,
+      carrierId: "fdm-domain",
       fieldBufferId: "field-fdm-airbox",
       registry,
       scalarBuffer: scalarColors,
@@ -1099,8 +1099,8 @@ describe("createViewport3DVisualizationDebugCandidateBuilder", () => {
       receipts: registry.snapshot(targetId),
     });
 
-    expect(result.target.carrierIds).toEqual([targetId]);
-    expect(result.carriers[0]?.carrierId).toBe(targetId);
+    expect(result.target.carrierIds).toEqual(["fdm-domain"]);
+    expect(result.carriers[0]?.carrierId).toBe("fdm-domain");
     expect(result.carriers[0]?.render.adoption.surface).toMatchObject({
       adoptedFieldBufferId: "field-fdm-airbox",
       adoptedScalarBufferKey:
@@ -1522,6 +1522,8 @@ describe("createViewport3DVisualizationDebugCandidateBuilder", () => {
         kind: "surface",
         resourceKey: "resource-part:a",
         scalarBufferKey: "scalar-part:a",
+        sessionEpoch: "session-1@1000",
+        sessionId: "session-1",
         targetId: "object:a",
         vectorBuildKey: null,
       }, {
@@ -1534,6 +1536,8 @@ describe("createViewport3DVisualizationDebugCandidateBuilder", () => {
         kind: "vector",
         resourceKey: "resource-vector-old",
         scalarBufferKey: null,
+        sessionEpoch: "session-1@1000",
+        sessionId: "session-1",
         targetId: "object:a",
         vectorBuildKey: "vector-part:a",
       }],

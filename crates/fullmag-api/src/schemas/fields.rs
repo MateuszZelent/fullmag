@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::schemas::common::AcceptedObservationFrameRef;
+
 // ── Existing catalog / meta types ────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -89,6 +91,7 @@ pub struct FieldDescriptor {
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct FieldMeta {
+    pub observation_frame: AcceptedObservationFrameRef,
     pub quantity_id: String,
     pub label: String,
     pub kind: String,

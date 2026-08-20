@@ -1,6 +1,11 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import {
+  captureViewportPerformanceSnapshot,
+  installViewportPerformanceProbe,
+} from "./lib/viewport-performance-proof.mjs";
+
 const NOT_MEASURED = "NOT MEASURED";
 const CANONICAL_LANE_IDS = Object.freeze([
   "fdm-single-grid",
@@ -93,6 +98,7 @@ const context = await browser.newContext({
   viewport: { width: 1440, height: 900 },
 });
 const page = await context.newPage();
+await installViewportPerformanceProbe(page);
 const cdp = await context.newCDPSession(page);
 await cdp.send("Network.enable").catch(() => undefined);
 await cdp.send("Performance.enable").catch(() => undefined);
@@ -125,6 +131,7 @@ page.on("response", async (response) => {
 });
 
 const metrics = [];
+const rawPerformanceTrace = [];
 const rapidToggleReports = [];
 const quantitySwitchReports = [];
 const surfaceTransitionReports = [];
@@ -132,6 +139,9 @@ let runError = null;
 try {
   for (const lane of laneEntries) {
     await page.goto(lane.url, { waitUntil: "domcontentloaded" });
+    rawPerformanceTrace.push(
+      await captureViewportPerformanceSnapshot(page, `lane:${lane.id}:loaded`),
+    );
     await waitForAuditHooks(page);
     await waitForCanvas(page);
 
@@ -172,6 +182,9 @@ try {
         count: surfaceTransitionCount,
       }),
     );
+    rawPerformanceTrace.push(
+      await captureViewportPerformanceSnapshot(page, `lane:${lane.id}:complete`),
+    );
   }
 } catch (error) {
   runError = error;
@@ -208,6 +221,7 @@ const report = {
     })),
   ),
   metrics,
+  rawPerformanceTrace,
   summary: Object.fromEntries(
     laneEntries.map(({ id }) => [
       id,

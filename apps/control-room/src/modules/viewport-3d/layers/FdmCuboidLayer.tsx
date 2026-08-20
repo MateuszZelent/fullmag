@@ -3,6 +3,7 @@
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import { viewport3DVectorLayersEnabledFromBrowserConfig } from "@/kernel/browserFullmagConfig";
 import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry";
+import { recordVisualizationDebugPerformanceMetric } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 import { type ThreeEvent, useThree } from "@react-three/fiber";
 import {
@@ -123,6 +124,7 @@ export function hasAnyEffectiveFdmPass(
 const FDM_INSPECT_PROJECTION_FALLBACK_LIMIT = 5000;
 const FDM_INSPECT_PROJECTION_HIT_RADIUS_PX = 36;
 const FDM_VECTOR_SEGMENT_CACHE_MAX_ENTRIES_PER_FIELD = 8;
+const FDM_VECTOR_SEGMENT_CACHE_MAX_BYTES_PER_FIELD = 32 * 1024 * 1024;
 const FDM_VECTOR_SEGMENT_CACHE_MEMORY_BUDGET_ID =
   "viewport3d.render.fdmVectorSegmentCache";
 
@@ -137,7 +139,7 @@ memoryBudgetRegistry.register(FDM_VECTOR_SEGMENT_CACHE_MEMORY_BUDGET_ID, () => (
   entryCount: fdmVectorSegmentCacheCounter.entryCount,
   id: FDM_VECTOR_SEGMENT_CACHE_MEMORY_BUDGET_ID,
   label: "FDM vector segment cache",
-  maxBytes: null,
+  maxBytes: FDM_VECTOR_SEGMENT_CACHE_MAX_BYTES_PER_FIELD,
 }));
 
 export const FDM_CUBOID_UPLOAD_BATCH_SIZE = 2048;
@@ -211,7 +213,11 @@ function cachedFdmVectorSegments(
   cacheKey: string,
 ): Float32Array | null | undefined {
   const fieldCache = fdmVectorSegmentCache.get(model)?.get(fieldVector);
-  if (!fieldCache?.has(cacheKey)) return undefined;
+  if (!fieldCache?.has(cacheKey)) {
+    recordVisualizationDebugPerformanceMetric("cacheMisses");
+    return undefined;
+  }
+  recordVisualizationDebugPerformanceMetric("cacheHits");
   return fieldCache.get(cacheKey) ?? null;
 }
 
@@ -241,15 +247,34 @@ function cacheFdmVectorSegments(
 
 function evictOldestFdmVectorSegmentCacheEntries(
   fieldCache: Map<string, Float32Array | null>,
+  maxEntries = FDM_VECTOR_SEGMENT_CACHE_MAX_ENTRIES_PER_FIELD,
+  maxBytes = FDM_VECTOR_SEGMENT_CACHE_MAX_BYTES_PER_FIELD,
 ): void {
-  while (fieldCache.size > FDM_VECTOR_SEGMENT_CACHE_MAX_ENTRIES_PER_FIELD) {
+  let fieldCacheBytes = Array.from(fieldCache.values()).reduce(
+    (total, value) => total + fdmVectorSegmentByteLength(value),
+    0,
+  );
+  while (
+    fieldCache.size > maxEntries ||
+    fieldCacheBytes > maxBytes
+  ) {
     const oldestKey = fieldCache.keys().next().value;
     if (oldestKey === undefined) return;
     const value = fieldCache.get(oldestKey);
     fieldCache.delete(oldestKey);
+    recordVisualizationDebugPerformanceMetric("cacheEvictions");
+    fieldCacheBytes -= fdmVectorSegmentByteLength(value);
     fdmVectorSegmentCacheCounter.entryCount -= 1;
     fdmVectorSegmentCacheCounter.byteLength -= fdmVectorSegmentByteLength(value);
   }
+}
+
+export function evictFdmVectorSegmentCacheEntriesForTests(
+  fieldCache: Map<string, Float32Array | null>,
+  maxEntries: number,
+  maxBytes: number,
+): void {
+  evictOldestFdmVectorSegmentCacheEntries(fieldCache, maxEntries, maxBytes);
 }
 
 function fdmVectorSegmentByteLength(

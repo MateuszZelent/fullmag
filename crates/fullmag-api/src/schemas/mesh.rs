@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use utoipa::ToSchema;
 
 use crate::types::MeshCommandTarget;
@@ -824,6 +825,14 @@ pub struct MeshPeriodicBoundaryFacePairResource {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
 pub struct MeshObjectSegmentResource {
+    /// Stable content-addressed fallback carrier id. Object segments remain
+    /// diagnostic geometry and are never field-capable carriers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub segment_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub segment_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic_only: Option<bool>,
     pub object_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub geometry_id: Option<String>,
@@ -837,7 +846,11 @@ pub struct MeshObjectSegmentResource {
 
 impl From<&FemMeshObjectSegment> for MeshObjectSegmentResource {
     fn from(value: &FemMeshObjectSegment) -> Self {
+        let segment_fingerprint = mesh_object_segment_fingerprint(value);
         Self {
+            segment_id: Some(format!("segment:{}:{}", value.object_id, segment_fingerprint)),
+            segment_fingerprint: Some(segment_fingerprint),
+            diagnostic_only: Some(true),
             object_id: value.object_id.clone(),
             geometry_id: value.geometry_id.clone(),
             node_start: value.node_start,
@@ -848,6 +861,31 @@ impl From<&FemMeshObjectSegment> for MeshObjectSegmentResource {
             boundary_face_count: value.boundary_face_count,
         }
     }
+}
+
+fn mesh_object_segment_fingerprint(value: &FemMeshObjectSegment) -> String {
+    let mut hasher = Sha256::new();
+    for part in [
+        value.object_id.as_str(),
+        value.geometry_id.as_deref().unwrap_or_default(),
+    ] {
+        hasher.update((part.len() as u64).to_le_bytes());
+        hasher.update(part.as_bytes());
+    }
+    for number in [
+        value.node_start,
+        value.node_count,
+        value.element_start,
+        value.element_count,
+        value.boundary_face_start,
+        value.boundary_face_count,
+    ] {
+        hasher.update(number.to_le_bytes());
+    }
+    hasher.finalize()[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]

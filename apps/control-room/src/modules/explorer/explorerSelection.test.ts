@@ -323,7 +323,7 @@ describe("selectExplorerNode", () => {
       type: "fdm-domain",
       visualizationTargetId:
         scope === "universe-outside-support"
-          ? "fdm-universe-outside-support"
+          ? "airbox"
           : "fdm-domain",
     });
   });
@@ -335,7 +335,7 @@ describe("selectExplorerNode", () => {
       kind: "airbox.visualization",
       label: "Visualization",
       parentId: "model:airbox",
-      visualizationTargetId: "fdm-universe-outside-support",
+      visualizationTargetId: "airbox",
     }, "explorer");
 
     expect(kernel.selection.get()).toMatchObject({

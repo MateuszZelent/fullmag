@@ -7,8 +7,7 @@ use crate::artifact_pipeline::ArtifactPipelineSender;
 use crate::artifact_pipeline::ArtifactRecorder;
 use crate::fem::eigen_path::execute_fem_eigen_path;
 use crate::fem::pbc::{
-    fem_static_periodic_decision, validate_periodic_region_material_certificate,
-    FemStaticPbcLane,
+    fem_static_periodic_decision, validate_periodic_region_material_certificate, FemStaticPbcLane,
 };
 use crate::fem::plan::normalized_fem_plan_for_runtime;
 use crate::fem::preview::{fem_plan_for_cpu_native, fem_plan_for_native_gpu};
@@ -25,9 +24,11 @@ use crate::fem_eigen;
 #[cfg(feature = "fem-gpu")]
 use crate::native_fem::NativeFemBackend;
 #[cfg(feature = "fem-gpu")]
-use crate::relaxation::apply_energy_minimizer_provenance;
-#[cfg(feature = "fem-gpu")]
 use crate::relaxation::RelaxationEnergyPlateauWindow;
+#[cfg(feature = "fem-gpu")]
+use crate::relaxation::{
+    apply_energy_minimizer_provenance, apply_fem_direct_minimizer_policy_provenance,
+};
 #[cfg(feature = "fem-gpu")]
 use crate::relaxation_direct_minimizer::direct_minimizer_control;
 #[cfg(feature = "fem-gpu")]
@@ -97,11 +98,25 @@ pub(crate) fn execute_fem<'a>(
     match engine {
         FemEngine::CpuNative => {
             let cpu_plan = fem_plan_for_cpu_native(&normalized_plan);
-            execute_native_fem(&cpu_plan, &fem_mesh_generation_id, until_seconds, outputs, live, artifact_writer)
+            execute_native_fem(
+                &cpu_plan,
+                &fem_mesh_generation_id,
+                until_seconds,
+                outputs,
+                live,
+                artifact_writer,
+            )
         }
         FemEngine::NativeGpu => {
             let gpu_plan = fem_plan_for_native_gpu(&normalized_plan);
-            execute_native_fem(&gpu_plan, &fem_mesh_generation_id, until_seconds, outputs, live, artifact_writer)
+            execute_native_fem(
+                &gpu_plan,
+                &fem_mesh_generation_id,
+                until_seconds,
+                outputs,
+                live,
+                artifact_writer,
+            )
         }
     }
 }
@@ -200,24 +215,21 @@ fn execute_native_fem(
     }
     let node_count = plan.mesh.nodes.len();
     let initial_magnetization = backend.copy_m(node_count)?;
-    let timestep_policy = if crate::fem::relax::algorithm::native_step_control(
-        plan.relaxation.as_ref(),
-    )
-    .is_some()
-    {
-        None
-    } else {
-        Some(crate::resolve_timestep_policy(
-            plan.integrator,
-            plan.fixed_timestep,
-            plan.adaptive_timestep.as_ref(),
-            if crate::native_fem::native_fem_plan_requests_gpu_mfem_device(plan) {
-                crate::types::TimestepExecutionLane::fem_gpu(plan.precision)
-            } else {
-                crate::types::TimestepExecutionLane::fem_cpu(plan.precision)
-            },
-        )?)
-    };
+    let timestep_policy =
+        if crate::fem::relax::algorithm::native_step_control(plan.relaxation.as_ref()).is_some() {
+            None
+        } else {
+            Some(crate::resolve_timestep_policy(
+                plan.integrator,
+                plan.fixed_timestep,
+                plan.adaptive_timestep.as_ref(),
+                if crate::native_fem::native_fem_plan_requests_gpu_mfem_device(plan) {
+                    crate::types::TimestepExecutionLane::fem_gpu(plan.precision)
+                } else {
+                    crate::types::TimestepExecutionLane::fem_cpu(plan.precision)
+                },
+            )?)
+        };
     let dt_is_fixed = plan.fixed_timestep.is_some();
     let mut steps = Vec::new();
     let current_stats = if needs_initial_snapshot {
@@ -278,6 +290,11 @@ fn execute_native_fem(
         ..Default::default()
     };
     apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
+    apply_fem_direct_minimizer_policy_provenance(
+        &mut provenance,
+        plan.relaxation.as_ref(),
+        execution_engine == "fem_native_gpu",
+    );
     apply_native_fem_runtime_contract(
         &mut provenance,
         plan,

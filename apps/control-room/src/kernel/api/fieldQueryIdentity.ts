@@ -178,6 +178,21 @@ export function fieldVectorResourceKey(
   );
 }
 
+export function sessionScopedFieldVectorResourceKey(
+  identity: { readonly sessionEpoch: string; readonly sessionId: string },
+  quantityId: string,
+  query: FieldVectorQuery = {},
+): string {
+  if (!identity.sessionId.trim() || !identity.sessionEpoch.trim()) {
+    throw new Error("complete session resource identity is required");
+  }
+  return [
+    `session=${encodeURIComponent(identity.sessionId)}`,
+    `epoch=${encodeURIComponent(identity.sessionEpoch)}`,
+    fieldVectorResourceKey(quantityId, query),
+  ].join("|");
+}
+
 export function parseCanonicalFieldVectorResourceKey(
   value: string,
 ): CanonicalFieldVectorQuery | null {

@@ -19,6 +19,11 @@ ensure-python:
     if ! "{{repo_python}}" -m pip --version >/dev/null 2>&1; then echo "cannot bootstrap pip in the Fullmag Python environment; ensurepip completed without a usable pip module" >&2; exit 1; fi
     "{{repo_python}}" -m pip install 'numpy>=1.24' 'scipy>=1.10' 'gmsh>=4.12' 'meshio>=5.3' 'trimesh>=4.2' 'h5py>=3.8' 'zarr>=2.18,<3' 'rich>=13.7' 'matplotlib>=3.7' 'pytest>=9,<10'
 
+verify-relaxation-capability-evidence:
+    just ensure-python
+    PYTHONDONTWRITEBYTECODE=1 "{{repo_python}}" -m pytest -q scripts/test_validate_relaxation_capability_evidence.py
+    "{{repo_python}}" scripts/validate_relaxation_capability_evidence.py docs/specs/capability-matrix-v0.json --repo-root "{{repo_root}}"
+
 build target="fullmag" cpu_only="0":
     bash -euo pipefail -c 'target="{{target}}"; cpu_only="{{cpu_only}}"; case "$target" in target=*) target="${target#target=}" ;; --target=*) target="${target#--target=}" ;; esac; case "$cpu_only" in cpu_only=*) cpu_only="${cpu_only#cpu_only=}" ;; esac; case "$cpu_only" in 1|true|TRUE|on|ON|yes|YES|y|Y) cpu_only="1" ;; 0|false|FALSE|off|OFF|no|NO|n|N|"") cpu_only="0" ;; *) cpu_only="0" ;; esac; if [ "$target" = "fullmag" ]; then FULLMAG_BUILD_CPU_ONLY="$cpu_only" make install-cli; elif [ "$target" = "fullmag-static" ]; then FULLMAG_BUILD_CPU_ONLY="$cpu_only" make install-cli-static; elif [ "$target" = "fullmag-dev" ]; then FULLMAG_BUILD_CPU_ONLY="$cpu_only" make install-cli-dev; elif [ "$target" = "fullmag-host" ]; then make install-cli; elif [ "$target" = "dev-image" ]; then docker compose build dev; elif [ "$target" = "fem-gpu-runtime" ]; then docker compose --profile fem-gpu build fem-gpu; elif [ "$target" = "fem-gpu-runtime-host" ]; then ./scripts/export_fem_gpu_runtime.sh; else echo "unknown build target: $target" >&2; echo "supported targets: fullmag, fullmag-static, fullmag-dev, fullmag-host, dev-image, fem-gpu-runtime, fem-gpu-runtime-host" >&2; exit 1; fi'
 
@@ -632,6 +637,31 @@ verify-fem-relaxation-source-contract:
     bash scripts/verify_fem_mesh_hot_loop_source_contract.sh
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && cmake --build native/build --target fem_relaxation_source_contract fem_relaxation_energy_derivative_contract fem_stage_completion_contract fem_rk_explicit_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_relaxation_source_contract && native/build/backends/fem/fem_relaxation_energy_derivative_contract && native/build/backends/fem/fem_stage_completion_contract && native/build/backends/fem/fem_rk_explicit_contract'
+
+verify-fem-relaxation-policy-provenance-contract:
+    docker compose --profile fem-gpu run --rm --no-deps \
+      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-runner --features fem-gpu relaxation::provenance --lib -- --nocapture'
+
+verify-fdm-relaxation-physics-qualification:
+    just verify-fdm-relaxation-qualification-release
+
+verify-fdm-relaxation-qualification-smoke:
+    just ensure-python
+    PYTHONDONTWRITEBYTECODE=1 "{{repo_python}}" -m pytest -q scripts/test_validate_fdm_relaxation_qualification.py
+    timeout --foreground "${FULLMAG_FDM_RELAXATION_SMOKE_TIMEOUT_S:-180}" bash -lc 'CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fdm-relaxation-qualification-smoke CARGO_INCREMENTAL=0 cargo test -p fullmag-runner --test physics_validation fdm_relaxation::uniform_field_alignment -- --ignored --nocapture'
+
+verify-fdm-relaxation-qualification-release:
+    just verify-fdm-relaxation-qualification-smoke
+    timeout --foreground "${FULLMAG_FDM_RELAXATION_RELEASE_TIMEOUT_S:-900}" bash -lc 'CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fdm-relaxation-qualification-release CARGO_INCREMENTAL=0 cargo test -p fullmag-runner --test physics_validation fdm_relaxation:: -- --ignored --nocapture'
+
+verify-fem-relaxation-tpi-contract:
+    just ensure-managed-fem-runtime
+    docker compose --profile fem-gpu run --rm --no-deps \
+      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; cmake --build native/build --target fem_relaxation_source_contract fem_relaxation_energy_derivative_contract; LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_relaxation_source_contract; native/build/backends/fem/fem_relaxation_energy_derivative_contract'
+
+verify-relaxation-production-matrix:
+    just ensure-python
+    receipt_root="${FULLMAG_RELAXATION_RECEIPT_ROOT:-.fullmag/reports/relaxation-qualification}"; artifact_root="${FULLMAG_RELAXATION_ARTIFACT_ROOT:-$receipt_root}"; expected_identity="${FULLMAG_RELAXATION_EXPECTED_IDENTITY:-$receipt_root/expected-identity.json}"; output="${FULLMAG_RELAXATION_MATRIX_OUTPUT:-.fullmag/reports/relaxation-production-matrix/manifest.v1.json}"; mkdir -p "$(dirname "$output")"; PYTHONDONTWRITEBYTECODE=1 "{{repo_python}}" scripts/verify_relaxation_production_matrix.py --receipt-root "$receipt_root" --artifact-root "$artifact_root" --expected-identity "$expected_identity" --output "$output"
 
 verify-fem-solver-optimization-ledger:
     python3 scripts/validate_fem_solver_optimization_ledger.py docs/audits/2026-07-29-fem-solver-optimization-remediation-ledger.md

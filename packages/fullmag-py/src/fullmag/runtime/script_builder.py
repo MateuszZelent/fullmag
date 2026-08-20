@@ -1462,8 +1462,13 @@ def _render_geometry_and_materials(
     lines = ["# Geometry & Material"]
     for magnet in problem.magnets:
         var_name = magnet_vars[magnet.name]
+        object_id_arg = (
+            f", object_id={_py_repr(magnet.object_id)}"
+            if magnet.object_id is not None
+            else ""
+        )
         lines.append(
-            f"{var_name} = {_surface_call(surface, 'geometry')}({_render_geometry_expr(magnet.geometry, magnet_name=magnet.name, source_root=source_root)}, name={_py_repr(magnet.name)})"
+            f"{var_name} = {_surface_call(surface, 'geometry')}({_render_geometry_expr(magnet.geometry, magnet_name=magnet.name, source_root=source_root)}, name={_py_repr(magnet.name)}{object_id_arg})"
         )
         if canonical_fdm and fdm is not None and fdm.per_magnet:
             grid = fdm.per_magnet.get(magnet.name)
@@ -2042,7 +2047,15 @@ def _render_geometries_from_override(
             lines.append("")
             continue
 
-        lines.append(f"{var_name} = {_surface_call(surface, 'geometry')}({expr}, name={_py_repr(name)})")
+        object_id = g.get("object_id")
+        object_id_arg = (
+            f", object_id={_py_repr(object_id)}"
+            if isinstance(object_id, str) and object_id
+            else ""
+        )
+        lines.append(
+            f"{var_name} = {_surface_call(surface, 'geometry')}({expr}, name={_py_repr(name)}{object_id_arg})"
+        )
         region_name = g.get("region_name")
         if isinstance(region_name, str) and region_name and region_name != name:
             lines.append(f"{var_name}.region_name = {_py_repr(region_name)}")
@@ -7033,6 +7046,7 @@ def _export_geometry_entry(
 
     return {
         "name": magnet.name,
+        "object_id": magnet.object_id,
         "region_name": magnet.region_name,
         "geometry_kind": geometry_kind,
         "geometry_params": geometry_params,

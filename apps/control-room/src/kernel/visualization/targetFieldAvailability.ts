@@ -6,6 +6,10 @@ import {
   resolveCanonicalQuantityId,
 } from "@/kernel/api/quantityIds";
 import type { VisualizationTargetRef } from "./ObjectVisualizationController";
+import {
+  canonicalVisualizationTargetId,
+  isAirboxVisualizationTargetId,
+} from "./visualizationTargetIdentity";
 
 /**
  * Availability of a field for one concrete visualization target.
@@ -349,7 +353,14 @@ function carrierForTarget(
   target: VisualizationTargetRef,
 ): TargetFieldCarrierDescriptor | null {
   if (!carrier) return null;
-  if (carrier.targetIds && !carrier.targetIds.includes(target.id)) return null;
+  if (
+    carrier.targetIds &&
+    !carrier.targetIds.some(
+      (targetId) =>
+        canonicalVisualizationTargetId(targetId) ===
+        canonicalVisualizationTargetId(target.id),
+    )
+  ) return null;
   return carrier;
 }
 
@@ -423,6 +434,7 @@ function targetScopeKind(target: VisualizationTargetRef): string | null {
 function targetScopeId(target: VisualizationTargetRef): string | null {
   if (
     target.kind === "airbox" ||
+    isAirboxVisualizationTargetId(target.id) ||
     (target.kind === "fdm-domain" &&
       target.id === "fdm-universe-outside-support")
   ) {

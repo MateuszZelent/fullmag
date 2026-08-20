@@ -10,7 +10,9 @@ export function quantityCatalogEntrySupportsSpatialVisualization(
   quantity: QuantityCatalogEntry,
 ): boolean {
   return (
-    quantity.capability_state === "supported" &&
+    quantity.solver_capability === "supported" &&
+    quantity.requestable &&
+    quantity.renderable &&
     quantity.materializable &&
     quantity.interactive_preview &&
     quantity.supports_preview_3d &&

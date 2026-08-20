@@ -80,7 +80,8 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("checkObjectVisualizationPanelNumberFieldCommitBoundary");
     expect(auditScript).toContain("onValueCommit");
     expect(auditScript).toContain("setDraftOverride(nextValue)");
-    expect(auditScript).toContain("setDraftOverride(null)");
+    expect(auditScript).toContain("commitValueInAnimationFrame(nextValue)");
+    expect(auditScript).toContain("onChangeRef.current(valueToCommit)");
     expect(auditScript).not.toContain("VISUALIZATION_NUMBER_COMMIT_DELAY_MS");
     expect(auditScript).toContain("Wireframe opacity");
     expect(auditScript).toContain('label="Vector opacity"');
@@ -93,7 +94,7 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain('patchNumber("vectorThickness"');
     expect(auditScript).toContain('patchNumber("vectorLengthScale"');
     expect(auditScript).toContain("onValueChange");
-    expect(auditScript).toContain("onChange(nextValue)");
+    expect(auditScript).toContain("onChangeRef.current(valueToCommit)");
     expect(auditScript).toContain("selectObjectVisualizationPanelSnapshot");
     expect(auditScript).toContain("objectVisualizationPanelSnapshotEquals");
     expect(auditScript).toContain("checkMeshDetailsPanelSessionStatusSelector");

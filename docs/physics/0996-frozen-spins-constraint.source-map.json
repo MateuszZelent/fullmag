@@ -1,0 +1,85 @@
+{
+  "document": {
+    "path": "docs/physics/0996-frozen-spins-constraint.md"
+  },
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "unqualified"},
+    {"solver": "FEM", "device": "GPU", "status": "unqualified"},
+    {"solver": "FDM", "device": "CPU", "status": "unqualified"},
+    {"solver": "FDM", "device": "GPU", "status": "unqualified"}
+  ],
+  "equations": [
+    {"id": "eq-frozen-active-partition", "symbols": ["A", "F", "U"], "sources": ["source-constraint-model"]},
+    {"id": "eq-frozen-constraint", "symbols": ["m_i", "m_i_star", "i", "F", "t"], "sources": ["source-constraint-model"]},
+    {"id": "eq-frozen-minimizer-constraint", "symbols": ["m_i_k", "m_i_star", "i", "F", "k"], "sources": ["source-constraint-model"]},
+    {"id": "eq-frozen-constrained-energy", "symbols": ["E_c", "E", "m_U", "m_F_star"], "sources": ["source-energy"]},
+    {"id": "eq-frozen-assembled-rhs", "symbols": ["R_i", "R_LLG_i", "R_STT_i", "R_SOT_i", "R_thermal_i", "R_other_i"], "sources": ["source-final-rhs"]},
+    {"id": "eq-frozen-final-rhs", "symbols": ["m_dot_i", "R_i", "i", "F", "U"], "sources": ["source-final-rhs"]},
+    {"id": "eq-frozen-candidate-restore", "symbols": ["m_candidate_i", "m_i_star", "i", "F"], "sources": ["source-candidate-restore"]},
+    {"id": "eq-frozen-free-reductions", "symbols": ["r_max_U", "R_i", "tau_max_U", "m_i", "H_eff_i", "i", "U"], "sources": ["source-free-reductions"]},
+    {"id": "eq-frozen-all-reductions", "symbols": ["r_max_A", "R_i", "tau_max_A", "m_i", "H_eff_i", "i", "A"], "sources": ["source-free-reductions"]},
+    {"id": "eq-frozen-tpi", "symbols": ["v_i", "i", "F"], "sources": ["source-tpi"]}
+  ],
+  "symbols": [
+    {"id": "A", "latex": "A", "meaning": "Aktywne magnetyczne stopnie swobody", "si_unit": "1"},
+    {"id": "F", "latex": "F", "meaning": "Zamrożone aktywne stopnie swobody", "si_unit": "1"},
+    {"id": "U", "latex": "U", "meaning": "Swobodne aktywne stopnie swobody", "si_unit": "1"},
+    {"id": "i", "latex": "i", "meaning": "Indeks magnetycznego DOF", "si_unit": "1"},
+    {"id": "t", "latex": "t", "meaning": "Czas fizyczny wyłącznie w stage dynamiki", "si_unit": "\\mathrm{s}"},
+    {"id": "k", "latex": "k", "meaning": "Indeks iteracji direct minimizer, nie czas", "si_unit": "1"},
+    {"id": "m_i", "latex": "\\mathbf m_i", "meaning": "Zredukowana magnetyzacja DOF", "si_unit": "1"},
+    {"id": "m_i_k", "latex": "\\mathbf m_i^{(k)}", "meaning": "Zredukowana magnetyzacja DOF w iteracji minimizatora k", "si_unit": "1"},
+    {"id": "m_i_star", "latex": "\\mathbf m_i^\\star", "meaning": "Referencyjna zredukowana magnetyzacja zamrożonego DOF", "si_unit": "1"},
+    {"id": "m_dot_i", "latex": "\\dot{\\mathbf m}_i", "meaning": "Fizyczna pochodna magnetyzacji po czasie w dynamice", "si_unit": "\\mathrm{s^{-1}}"},
+    {"id": "m_candidate_i", "latex": "\\mathbf m_i^{\\mathrm{candidate}}", "meaning": "Stan kandydujący przed przywróceniem zamrożonej referencji", "si_unit": "1"},
+    {"id": "m_U", "latex": "\\mathbf m_U", "meaning": "Stan magnetyzacji na swobodnej domenie", "si_unit": "1"},
+    {"id": "m_F_star", "latex": "\\mathbf m_F^\\star", "meaning": "Referencyjny stan magnetyzacji na zamrożonej domenie", "si_unit": "1"},
+    {"id": "E", "latex": "E", "meaning": "Pełna energia mikromagnetyczna", "si_unit": "\\mathrm{J}"},
+    {"id": "E_c", "latex": "E_{\\mathrm c}", "meaning": "Energia ograniczona jako funkcja swobodnego stanu", "si_unit": "\\mathrm{J}"},
+    {"id": "R_i", "latex": "\\mathbf R_i", "meaning": "Pełny złożony RHS magnetyzacji", "si_unit": "\\mathrm{s^{-1}}"},
+    {"id": "R_LLG_i", "latex": "\\mathbf R_{\\mathrm{LLG},i}", "meaning": "Składnik RHS LLG", "si_unit": "\\mathrm{s^{-1}}"},
+    {"id": "R_STT_i", "latex": "\\mathbf R_{\\mathrm{STT},i}", "meaning": "Składnik RHS STT", "si_unit": "\\mathrm{s^{-1}}"},
+    {"id": "R_SOT_i", "latex": "\\mathbf R_{\\mathrm{SOT},i}", "meaning": "Składnik RHS SOT", "si_unit": "\\mathrm{s^{-1}}"},
+    {"id": "R_thermal_i", "latex": "\\mathbf R_{\\mathrm{thermal},i}", "meaning": "Składnik RHS wynikający z termiki", "si_unit": "\\mathrm{s^{-1}}"},
+    {"id": "R_other_i", "latex": "\\mathbf R_{\\mathrm{other},i}", "meaning": "Inny aktywny składnik RHS", "si_unit": "\\mathrm{s^{-1}}"},
+    {"id": "r_max_U", "latex": "r_{\\max,U}", "meaning": "Maksymalna norma RHS po swobodnych DOF", "si_unit": "\\mathrm{s^{-1}}"},
+    {"id": "r_max_A", "latex": "r_{\\max,A}", "meaning": "Maksymalna norma pełnego pre-constraint RHS po aktywnych DOF", "si_unit": "\\mathrm{s^{-1}}"},
+    {"id": "H_eff_i", "latex": "\\mathbf H_{\\mathrm{eff},i}", "meaning": "Efektywne pole magnetyczne", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "tau_max_U", "latex": "\\tau_{\\max,U}", "meaning": "Maksymalny moment $\\lVert\\mathbf m\\times\\mathbf H_\\mathrm{eff}\\rVert$ po swobodnych DOF", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "tau_max_A", "latex": "\\tau_{\\max,A}", "meaning": "Maksymalny pre-constraint moment po aktywnych DOF", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "v_i", "latex": "\\mathbf v_i", "meaning": "Prędkość tangent-plane", "si_unit": "\\mathrm{s^{-1}}"}
+  ],
+  "sources": [
+    {"id": "source-constraint-model", "path": "docs/specs/frozen-spins-v1.md", "symbol": "DOC-ANCHOR:frozen-v1-constraint-model", "responsibility": "Zatwierdzony model ograniczenia V1.", "evidence_status": "planned_contract"},
+    {"id": "source-energy", "path": "docs/specs/frozen-spins-v1.md", "symbol": "DOC-ANCHOR:frozen-v1-energy", "responsibility": "Zatwierdzona semantyka pełnej energii.", "evidence_status": "planned_contract"},
+    {"id": "source-final-rhs", "path": "docs/specs/frozen-spins-v1.md", "symbol": "DOC-ANCHOR:frozen-v1-final-rhs", "responsibility": "Zatwierdzona kolejność final-RHS masking.", "evidence_status": "planned_contract"},
+    {"id": "source-candidate-restore", "path": "docs/specs/frozen-spins-v1.md", "symbol": "DOC-ANCHOR:frozen-v1-candidate-restore", "responsibility": "Zatwierdzony candidate restore.", "evidence_status": "planned_contract"},
+    {"id": "source-free-reductions", "path": "docs/specs/frozen-spins-v1.md", "symbol": "DOC-ANCHOR:frozen-v1-free-reductions", "responsibility": "Zatwierdzone redukcje po swobodnych DOF.", "evidence_status": "planned_contract"},
+    {"id": "source-tpi", "path": "docs/specs/frozen-spins-v1.md", "symbol": "DOC-ANCHOR:frozen-v1-tpi", "responsibility": "Zatwierdzony warunek essential true DOF dla TPI.", "evidence_status": "planned_contract"},
+    {"id": "source-capture", "path": "docs/specs/frozen-spins-v1.md", "symbol": "DOC-ANCHOR:frozen-v1-capture", "responsibility": "Zatwierdzony atomowy moment capture.", "evidence_status": "planned_contract"},
+    {"id": "source-overlap", "path": "docs/specs/frozen-spins-v1.md", "symbol": "DOC-ANCHOR:frozen-v1-overlap", "responsibility": "Zatwierdzona dokładna zgodność resolved reference na overlap.", "evidence_status": "planned_contract"},
+    {"id": "source-all-frozen", "path": "docs/specs/frozen-spins-v1.md", "symbol": "DOC-ANCHOR:frozen-v1-all-frozen", "responsibility": "Zatwierdzona semantyka all-frozen.", "evidence_status": "planned_contract"},
+    {"id": "source-ir-version", "path": "crates/fullmag-ir/src/lib.rs", "symbol": "is_supported_ir_version_for_read", "responsibility": "Bieżąca granica odczytu wersji ProblemIR."},
+    {"id": "source-fdm-region", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "materialize_object_region_mask", "responsibility": "Bieżąca materializacja maski regionu FDM."},
+    {"id": "source-regional-geometry", "path": "crates/fullmag-plan/src/regional_field_drive.rs", "symbol": "resolve_fdm_regional_field_drives", "responsibility": "Bieżące rozwiązanie geometrii regional field drive dla FDM."},
+    {"id": "source-fem-preview", "path": "crates/fullmag-api/src/router_v2/handlers/data/mesh_region_membership.rs", "symbol": "build_mesh_region_membership", "responsibility": "Bieżący resource membership FEM i preview."},
+    {"id": "source-object-region", "path": "packages/fullmag-py/src/fullmag/model/structure.py", "symbol": "class ObjectRegion", "responsibility": "Bieżący publiczny region material/mesh."},
+    {"id": "source-study", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "study", "responsibility": "Bieżący stage-first root Python DSL."},
+    {"id": "source-selection-ir", "path": "crates/fullmag-ir/src/selection.rs", "symbol": "canonical_selection_sha256", "responsibility": "Bieżący typowany i kanonicznie hashowany kontrakt selection_expr.v1 po stronie Rust."},
+    {"id": "source-selection-python", "path": "packages/fullmag-py/src/fullmag/model/selection.py", "symbol": "class Selection", "responsibility": "Bieżący typowany kontrakt selection_expr.v1 po stronie Python DSL."},
+    {"id": "source-selection-hash", "path": "packages/fullmag-py/src/fullmag/model/selection.py", "symbol": "canonical_selection_sha256", "responsibility": "Bieżący kanoniczny, walidowany hash named selection i zależności."}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "fm.FrozenSpins.id", "type": "str", "default": "required", "si_unit": "1", "validation": "non-empty unique", "meaning": "Stabilna tożsamość constraintu", "backend_support": "planned: FDM/FEM CPU/GPU", "problem_ir": "magnetization_constraints[].id"},
+      {"python": "fm.FrozenSpins.name", "type": "str", "default": "derived from id", "si_unit": "1", "validation": "non-empty", "meaning": "Nazwa użytkowa", "backend_support": "planned: FDM/FEM CPU/GPU", "problem_ir": "magnetization_constraints[].name"},
+      {"python": "fm.FrozenSpins.enabled", "type": "bool", "default": "True", "si_unit": "1", "validation": "boolean", "meaning": "Czy constraint jest authored-active", "backend_support": "planned: FDM/FEM CPU/GPU", "problem_ir": "magnetization_constraints[].enabled"},
+      {"python": "fm.FrozenSpins.selector", "type": "SelectionExpr", "default": "required", "si_unit": "1", "validation": "valid selection_expr.v1", "meaning": "Wybór magnetycznych DOF", "backend_support": "planned: FDM/FEM CPU/GPU", "problem_ir": "magnetization_constraints[].selector"},
+      {"python": "fm.FrozenSpins.reference", "type": "FrozenReferencePolicy", "default": "capture_current_at_activation", "si_unit": "1", "validation": "supported reference policy", "meaning": "Źródło magnetyzacji referencyjnej", "backend_support": "planned: FDM/FEM CPU/GPU", "problem_ir": "magnetization_constraints[].reference"},
+      {"python": "fm.FrozenSpins.membership", "type": "SelectionMembershipPolicy", "default": "geometry-only -> static; state-dependent -> snapshot_at_activation", "si_unit": "1", "validation": "static only for geometry-only; snapshot_at_activation for both AST classes", "meaning": "Czas materializacji członkostwa", "backend_support": "planned: FDM/FEM CPU/GPU", "problem_ir": "magnetization_constraints[].membership"},
+      {"python": "fm.FrozenSpins.activation", "type": "ConstraintActivation", "default": "all stages passed by sugar", "si_unit": "1", "validation": "existing non-empty stage IDs", "meaning": "Zakres stage aktywacji", "backend_support": "planned: FDM/FEM CPU/GPU", "problem_ir": "magnetization_constraints[].activation"},
+      {"python": "fm.FrozenSpins.empty_selection", "type": "str", "default": "error", "si_unit": "1", "validation": "error or allow_noop", "meaning": "Polityka pustej finalnej maski", "backend_support": "planned: FDM/FEM CPU/GPU", "problem_ir": "magnetization_constraints[].empty_selection"},
+      {"python": "fm.FrozenSpins.inactive_selection", "type": "str", "default": "warn_and_intersect", "si_unit": "1", "validation": "warn_and_intersect or error", "meaning": "Polityka raw selection poza aktywną domeną", "backend_support": "planned: FDM/FEM CPU/GPU", "problem_ir": "magnetization_constraints[].inactive_selection"}
+    ]
+  }
+}

@@ -150,6 +150,12 @@ export function createFdmVectorOnlyBuildInput({
   const [nx, ny, nz] = domain.shape;
   const totalCells = Math.min(domain.totalCells, nx * ny * nz);
   if (realizedRegionIds && realizedRegionIds.length !== totalCells) return null;
+  if (
+    (cellSelection === "active" || cellSelection === "inactive") &&
+    !realizedRegionIds
+  ) {
+    return null;
+  }
   const requestedSamples = normalizeFdmVectorSampleLimit(
     maxSamples,
     fieldVector?.pointCount ?? domain.displayCellCount,

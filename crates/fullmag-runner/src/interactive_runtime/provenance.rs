@@ -2,20 +2,19 @@ use super::*;
 
 pub(crate) fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, RunError> {
     let fft_backend = cpu_reference::resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
-    let timestep_policy = if crate::relaxation::direct_minimizer::direct_minimizer_control(
-        plan.relaxation.as_ref(),
-    )
-    .is_some()
-    {
-        None
-    } else {
-        Some(crate::resolve_timestep_policy(
-            plan.integrator,
-            plan.fixed_timestep,
-            plan.adaptive_timestep.as_ref(),
-            crate::types::TimestepExecutionLane::fdm_cpu(),
-        )?)
-    };
+    let timestep_policy =
+        if crate::relaxation::direct_minimizer::direct_minimizer_control(plan.relaxation.as_ref())
+            .is_some()
+        {
+            None
+        } else {
+            Some(crate::resolve_timestep_policy(
+                plan.integrator,
+                plan.fixed_timestep,
+                plan.adaptive_timestep.as_ref(),
+                crate::types::TimestepExecutionLane::fdm_cpu(),
+            )?)
+        };
 
     Ok(ExecutionProvenance {
         execution_engine: "cpu_reference".to_string(),
@@ -35,10 +34,14 @@ pub(crate) fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProv
         ignored_terms: Vec::new(),
         random_seed: None,
         requested_integrator: None,
-        resolved_integrator: plan.integrator.map(crate::integrator_choice_name).map(str::to_string),
+        resolved_integrator: plan
+            .integrator
+            .map(crate::integrator_choice_name)
+            .map(str::to_string),
         requested_energy_minimizer: None,
         resolved_energy_minimizer: None,
         energy_minimizer_realization: None,
+        fem_direct_minimizer_policy: None,
         requested_demag_realization: None,
         resolved_demag_realization: None,
         timestep_policy,
@@ -88,20 +91,17 @@ pub(crate) fn cuda_execution_provenance(
     plan: &FdmPlanIR,
     device_info: &crate::fdm::gpu::cuda::native::DeviceInfo,
 ) -> Result<ExecutionProvenance, RunError> {
-    let timestep_policy = if crate::fem::relax::algorithm::native_step_control(
-        plan.relaxation.as_ref(),
-    )
-    .is_some()
-    {
-        None
-    } else {
-        Some(crate::resolve_timestep_policy(
-            plan.integrator,
-            plan.fixed_timestep,
-            plan.adaptive_timestep.as_ref(),
-            crate::types::TimestepExecutionLane::fdm_cuda(plan.precision),
-        )?)
-    };
+    let timestep_policy =
+        if crate::fem::relax::algorithm::native_step_control(plan.relaxation.as_ref()).is_some() {
+            None
+        } else {
+            Some(crate::resolve_timestep_policy(
+                plan.integrator,
+                plan.fixed_timestep,
+                plan.adaptive_timestep.as_ref(),
+                crate::types::TimestepExecutionLane::fdm_cuda(plan.precision),
+            )?)
+        };
     Ok(ExecutionProvenance {
         execution_engine: "cuda_fdm".to_string(),
         precision: match plan.precision {
@@ -127,10 +127,14 @@ pub(crate) fn cuda_execution_provenance(
         ignored_terms: Vec::new(),
         random_seed: None,
         requested_integrator: None,
-        resolved_integrator: plan.integrator.map(crate::integrator_choice_name).map(str::to_string),
+        resolved_integrator: plan
+            .integrator
+            .map(crate::integrator_choice_name)
+            .map(str::to_string),
         requested_energy_minimizer: None,
         resolved_energy_minimizer: None,
         energy_minimizer_realization: None,
+        fem_direct_minimizer_policy: None,
         requested_demag_realization: None,
         resolved_demag_realization: None,
         timestep_policy,
@@ -187,24 +191,21 @@ pub(crate) fn fem_gpu_execution_provenance(
     plan: &FemPlanIR,
     device_info: &FemDeviceInfo,
 ) -> Result<ExecutionProvenance, RunError> {
-    let timestep_policy = if crate::fem::relax::algorithm::native_step_control(
-        plan.relaxation.as_ref(),
-    )
-    .is_some()
-    {
-        None
-    } else {
-        Some(crate::resolve_timestep_policy(
-            plan.integrator,
-            plan.fixed_timestep,
-            plan.adaptive_timestep.as_ref(),
-            if plan.mfem_device_string.as_deref() == Some("cpu") {
-                crate::types::TimestepExecutionLane::fem_cpu(plan.precision)
-            } else {
-                crate::types::TimestepExecutionLane::fem_gpu(plan.precision)
-            },
-        )?)
-    };
+    let timestep_policy =
+        if crate::fem::relax::algorithm::native_step_control(plan.relaxation.as_ref()).is_some() {
+            None
+        } else {
+            Some(crate::resolve_timestep_policy(
+                plan.integrator,
+                plan.fixed_timestep,
+                plan.adaptive_timestep.as_ref(),
+                if plan.mfem_device_string.as_deref() == Some("cpu") {
+                    crate::types::TimestepExecutionLane::fem_cpu(plan.precision)
+                } else {
+                    crate::types::TimestepExecutionLane::fem_gpu(plan.precision)
+                },
+            )?)
+        };
     let execution_engine = native_fem_backend_id(plan).provenance_name();
     let resolved_demag_realization = resolved_native_fem_demag(plan);
     let mut provenance = ExecutionProvenance {
@@ -229,6 +230,7 @@ pub(crate) fn fem_gpu_execution_provenance(
         requested_energy_minimizer: None,
         resolved_energy_minimizer: None,
         energy_minimizer_realization: None,
+        fem_direct_minimizer_policy: None,
         requested_demag_realization: plan
             .demag_realization
             .map(|r| r.provenance_name().to_string()),

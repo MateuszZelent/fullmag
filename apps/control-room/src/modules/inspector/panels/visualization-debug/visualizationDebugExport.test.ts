@@ -10,6 +10,18 @@ import {
   createVisualizationDebugEvidenceActions,
 } from "./visualizationDebugExport";
 
+const H_EFF_VECTOR_PATH = [
+  "",
+  "v2",
+  "sessions",
+  "current",
+  "data",
+  "fields",
+  "H_eff",
+  "samples",
+  "vector",
+].join("/");
+
 describe("visualization debug evidence export", () => {
   it("builds deterministic schema-versioned, JSON-safe evidence within the byte budget", () => {
     const model = exportModel("/data/fields/m/samples/vector?scope_kind=object&scope_id=magnet");
@@ -107,7 +119,7 @@ describe("visualization debug evidence export", () => {
 
   it("builds a readable bounded log with the exact transport evidence", () => {
     const model = exportModel(
-      "/v2/sessions/current/data/fields/H_eff/samples/vector?component=full&scope_kind=airbox",
+      `${H_EFF_VECTOR_PATH}?component=full&scope_kind=airbox`,
     );
     model.transport = [
       {
@@ -122,9 +134,9 @@ describe("visualization debug evidence export", () => {
         messageType: null,
         method: "GET",
         outcome: "error",
-        path: "/v2/sessions/current/data/fields/H_eff/samples/vector",
+        path: H_EFF_VECTOR_PATH,
         requestId: "request-1",
-        resourceKey: "/v2/sessions/current/data/fields/H_eff/samples/vector?component=full&scope_kind=airbox",
+        resourceKey: `${H_EFF_VECTOR_PATH}?component=full&scope_kind=airbox`,
         status: 200,
         timestampMs: 1_234,
       },

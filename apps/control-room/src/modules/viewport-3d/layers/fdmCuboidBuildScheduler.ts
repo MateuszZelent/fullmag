@@ -1,6 +1,7 @@
 "use client";
 
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import { recordVisualizationDebugPerformanceMetric } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 
 import { recordViewport3DBuildDiagnostic } from "../build-engine/viewport3dBuildDiagnostics";
 import type { Viewport3DBuildDiagnosticRecord } from "../build-engine/viewport3dBuildEngineTypes";
@@ -371,6 +372,10 @@ function cloneFieldVectorForWorker(
 }
 
 function cloneFieldVectorValues(values: DecodedFieldVector["values"]) {
+  recordVisualizationDebugPerformanceMetric(
+    "typedArrayCopiedBytes",
+    values.byteLength,
+  );
   return new Float64Array(values);
 }
 

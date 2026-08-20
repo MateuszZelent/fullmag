@@ -481,6 +481,14 @@ async fn validate_runtime_command_contract(
         validate_stage_control_target(&snapshot, command)?;
     }
 
+    if snapshot.session.status == "completed"
+        && matches!(command.kind.as_str(), "compute_fields" | "compute_energies")
+    {
+        return Err(ApiError::conflict(
+            "session_completed_read_only: completed sessions cannot compute observables",
+        ));
+    }
+
     Ok(())
 }
 

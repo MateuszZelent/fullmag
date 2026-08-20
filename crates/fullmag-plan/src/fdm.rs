@@ -28,6 +28,7 @@ use crate::magnetization_textures::TextureSamplePoint;
 use crate::magnetization_textures_v2::sample_preset_texture_versioned;
 use crate::oersted::{resolve_fdm_oersted_term, ResolvedOerstedTerm};
 use crate::region_conflict::{resolve_region_conflict, RegionConflictCandidate};
+use crate::selection::geometry::{contains_point, geometry_entry_bounds, normalize_axis};
 use crate::spin_torque::{
     resolve_legacy_spin_torque, resolve_sot_fields, SpinTorqueExecutableLane,
 };
@@ -35,6 +36,7 @@ use crate::util::{generate_random_unit_vectors, runtime_requests_cuda, GRID_TOLE
 use crate::validate::{
     planned_study_controls, validate_executable_outputs, validate_grid_asset_cell_size,
 };
+use crate::{AffineTransform3, BoundaryMembership, GeometryPredicate};
 
 /// Calculate the full host tensor payload required by the multilayer ABI v2.
 ///
@@ -719,58 +721,6 @@ fn crop_fdm_asset_to_active_support(
     Some((bounding_size, active_mask, cells, origin))
 }
 
-fn point_in_region_shape(point: [f64; 3], shape: &RegionShapeIR) -> Result<bool, String> {
-    match shape {
-        RegionShapeIR::Box { size, center } => Ok((0..3).all(|axis| {
-            let half = size[axis] * 0.5;
-            point[axis] >= center[axis] - half && point[axis] <= center[axis] + half
-        })),
-        RegionShapeIR::Sphere { radius, center } => {
-            let dx = point[0] - center[0];
-            let dy = point[1] - center[1];
-            let dz = point[2] - center[2];
-            Ok(dx * dx + dy * dy + dz * dz <= radius * radius)
-        }
-        RegionShapeIR::Cylinder {
-            radius,
-            height,
-            center,
-            axis,
-        } => {
-            let axis_norm = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
-            if axis_norm <= 0.0 {
-                return Err("cylinder region axis must be non-zero".to_string());
-            }
-            let unit = [
-                axis[0] / axis_norm,
-                axis[1] / axis_norm,
-                axis[2] / axis_norm,
-            ];
-            let rel = [
-                point[0] - center[0],
-                point[1] - center[1],
-                point[2] - center[2],
-            ];
-            let axial = rel[0] * unit[0] + rel[1] * unit[1] + rel[2] * unit[2];
-            if axial.abs() > height * 0.5 {
-                return Ok(false);
-            }
-            let radial = [
-                rel[0] - axial * unit[0],
-                rel[1] - axial * unit[1],
-                rel[2] - axial * unit[2],
-            ];
-            Ok(
-                radial[0] * radial[0] + radial[1] * radial[1] + radial[2] * radial[2]
-                    <= radius * radius,
-            )
-        }
-        RegionShapeIR::Csg { .. } => Err(
-            "FDM object region materialization does not yet support CSG region shapes".to_string(),
-        ),
-    }
-}
-
 fn materialize_object_region_mask(
     problem: &ProblemIR,
     owner_names: &[&str],
@@ -822,14 +772,24 @@ fn materialize_object_region_mask(
         active_mask,
     );
     let mut assigned_counts = vec![0usize; regions.len()];
-    for region in &regions {
-        if region.frame != RegionFrameIR::Object {
-            errors.push(format!(
-                "object_region '{}' uses frame={:?}; FDM region mask materialization currently supports object frame only",
-                region.region_id, region.frame
-            ));
-        }
-    }
+    let owner_transform = AffineTransform3 {
+        translation_m: owner_translation,
+        ..AffineTransform3::identity()
+    };
+    let predicates = regions
+        .iter()
+        .map(|region| {
+            GeometryPredicate::from_object_region(
+                region,
+                owner_transform,
+                BoundaryMembership::inclusive(),
+            )
+            .map_err(|error| {
+                errors.push(format!("object_region '{}': {error}", region.region_id));
+            })
+            .ok()
+        })
+        .collect::<Vec<_>>();
     for (index, region) in regions.iter().enumerate() {
         let region_index = (index + 1) as u32;
         debug_assert!(region_index <= fullmag_ir::MAX_FDM_REGION_IDS);
@@ -841,12 +801,13 @@ fn materialize_object_region_mask(
         }
         let mut matches = Vec::new();
         for (index, region) in regions.iter().enumerate() {
-            match point_in_region_shape(point.position_object, &region.shape) {
+            let Some(predicate) = &predicates[index] else {
+                continue;
+            };
+            match region_predicate_contains(predicate, point.position_world) {
                 Ok(true) => matches.push(index),
                 Ok(false) => {}
-                Err(message) => {
-                    errors.push(format!("object_region '{}': {message}", region.region_id))
-                }
+                Err(error) => errors.push(format!("object_region '{}': {error}", region.region_id)),
             }
         }
         if matches.is_empty() {
@@ -887,6 +848,30 @@ fn materialize_object_region_mask(
     }
 
     (mask, region_ids)
+}
+
+fn region_predicate_contains(
+    predicate: &GeometryPredicate,
+    world_point: [f64; 3],
+) -> Result<bool, crate::SelectionError> {
+    contains_point(predicate, world_point)
+}
+
+#[cfg(test)]
+pub(crate) fn object_region_membership_for_points(
+    region: &fullmag_ir::ObjectRegionIR,
+    object_transform: AffineTransform3,
+    points: &[[f64; 3]],
+) -> Result<Vec<bool>, crate::SelectionError> {
+    let predicate = GeometryPredicate::from_object_region(
+        region,
+        object_transform,
+        BoundaryMembership::inclusive(),
+    )?;
+    points
+        .iter()
+        .map(|point| region_predicate_contains(&predicate, *point))
+        .collect()
 }
 
 fn materialize_prescribed_sot_target_mask(
@@ -1152,9 +1137,10 @@ fn sample_shape_mask(
     grid_cells: [u32; 3],
     cell_size: [f64; 3],
     origin: [f64; 3],
-) -> Vec<bool> {
+) -> Result<Vec<bool>, crate::SelectionError> {
     let [nx, ny, nz] = grid_cells.map(|value| value as usize);
     let mut mask = vec![false; nx * ny * nz];
+    let predicate = shape.compile()?;
     for z in 0..nz {
         for y in 0..ny {
             for x in 0..nx {
@@ -1163,11 +1149,11 @@ fn sample_shape_mask(
                     origin[1] + (y as f64 + 0.5) * cell_size[1],
                     origin[2] + (z as f64 + 0.5) * cell_size[2],
                 ];
-                mask[x + nx * (y + ny * z)] = shape.contains(point);
+                mask[x + nx * (y + ny * z)] = predicate.contains(point)?;
             }
         }
     }
-    mask
+    Ok(mask)
 }
 
 #[derive(Default)]
@@ -1318,11 +1304,7 @@ fn region_shape_bounds(shape: &RegionShapeIR) -> Result<([f64; 3], [f64; 3]), St
             center,
             axis,
         } => {
-            let norm = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
-            if !norm.is_finite() || norm <= 0.0 {
-                return Err("cylinder region axis must be finite and non-zero".to_string());
-            }
-            let unit = axis.map(|component| component / norm);
+            let unit = normalize_axis(*axis).map_err(|error| error.to_string())?;
             let half_height = height * 0.5;
             let extents: [f64; 3] = std::array::from_fn(|index| {
                 half_height * unit[index].abs()
@@ -1333,9 +1315,67 @@ fn region_shape_bounds(shape: &RegionShapeIR) -> Result<([f64; 3], [f64; 3]), St
                 std::array::from_fn(|index| center[index] + extents[index]),
             ))
         }
-        RegionShapeIR::Csg { .. } => {
-            Err("FDM transport object regions do not yet support CSG shapes".to_string())
+        RegionShapeIR::Csg { expression } => {
+            geometry_entry_bounds(expression).map_err(|error| error.to_string())
         }
+    }
+}
+
+#[cfg(test)]
+mod region_shape_bounds_tests {
+    use super::*;
+
+    fn translated_box(name: &str, size: [f64; 3], by: [f64; 3]) -> GeometryEntryIR {
+        GeometryEntryIR::Translate {
+            name: name.to_string(),
+            base: Box::new(GeometryEntryIR::Box {
+                name: format!("{name}-base"),
+                size,
+            }),
+            by,
+        }
+    }
+
+    #[test]
+    fn csg_region_bounds_are_conservative_for_union_intersection_and_difference() {
+        let union = RegionShapeIR::Csg {
+            expression: Box::new(GeometryEntryIR::Union {
+                name: "union".to_string(),
+                a: Box::new(translated_box("left", [2.0; 3], [0.0; 3])),
+                b: Box::new(translated_box("right", [2.0; 3], [3.0, 0.0, 0.0])),
+            }),
+        };
+        assert_eq!(
+            region_shape_bounds(&union).unwrap(),
+            ([-1.0; 3], [4.0, 1.0, 1.0])
+        );
+
+        let intersection = RegionShapeIR::Csg {
+            expression: Box::new(GeometryEntryIR::Intersection {
+                name: "intersection".to_string(),
+                a: Box::new(translated_box("left", [4.0; 3], [0.0; 3])),
+                b: Box::new(translated_box("right", [4.0; 3], [1.0, 0.0, 0.0])),
+            }),
+        };
+        assert_eq!(
+            region_shape_bounds(&intersection).unwrap(),
+            ([-1.0, -2.0, -2.0], [2.0, 2.0, 2.0])
+        );
+
+        let difference = RegionShapeIR::Csg {
+            expression: Box::new(GeometryEntryIR::Difference {
+                name: "difference".to_string(),
+                base: Box::new(translated_box("base", [4.0; 3], [1.0, 0.0, 0.0])),
+                tool: Box::new(GeometryEntryIR::Sphere {
+                    name: "tool".to_string(),
+                    radius: 1.0,
+                }),
+            }),
+        };
+        assert_eq!(
+            region_shape_bounds(&difference).unwrap(),
+            ([-1.0, -2.0, -2.0], [3.0, 2.0, 2.0])
+        );
     }
 }
 
@@ -1539,7 +1579,10 @@ fn transport_common_grid(
     }
     checked_fdm_grid_cost(grid_cells, FDM_GRID_ESTIMATED_BYTES_PER_CELL)?;
 
-    let magnetic_mask = sample_shape_mask(magnetic_shape, grid_cells, cell_size, bounds_min);
+    let magnetic_mask = sample_shape_mask(magnetic_shape, grid_cells, cell_size, bounds_min)
+        .map_err(|error| PlanError {
+            reasons: vec![error.to_string()],
+        })?;
     if !magnetic_mask.iter().any(|active| *active) {
         return Err(PlanError {
             reasons: vec!["magnetic domain selects no cells on the transport grid".to_string()],
@@ -1558,7 +1601,11 @@ fn transport_common_grid(
         })?;
         object_masks.insert(
             object_id.clone(),
-            sample_shape_mask(&shape, grid_cells, cell_size, bounds_min),
+            sample_shape_mask(&shape, grid_cells, cell_size, bounds_min).map_err(|error| {
+                PlanError {
+                    reasons: vec![format!("geometry '{}': {error}", entry.name())],
+                }
+            })?,
         );
     }
     object_masks.insert(magnet.name.clone(), magnetic_mask.clone());
@@ -1578,6 +1625,20 @@ fn transport_common_grid(
             )],
         })?;
         let translation = top_level_geometry_translation(geometry);
+        let predicate = GeometryPredicate::from_object_region(
+            object_region,
+            AffineTransform3 {
+                translation_m: translation,
+                ..AffineTransform3::identity()
+            },
+            BoundaryMembership::inclusive(),
+        )
+        .map_err(|error| PlanError {
+            reasons: vec![format!(
+                "object_region '{}': {error}",
+                object_region.region_id
+            )],
+        })?;
         let object_mask = object_masks.get(object_id).expect("reachable object mask");
         let [nx, ny, nz] = grid_cells.map(|value| value as usize);
         let mut mask = vec![false; nx * ny * nz];
@@ -1593,20 +1654,14 @@ fn transport_common_grid(
                         bounds_min[1] + (y as f64 + 0.5) * cell_size[1],
                         bounds_min[2] + (z as f64 + 0.5) * cell_size[2],
                     ];
-                    let point = if object_region.frame == RegionFrameIR::Object {
-                        std::array::from_fn(|axis| world[axis] - translation[axis])
-                    } else {
-                        world
-                    };
-                    mask[cell] =
-                        point_in_region_shape(point, &object_region.shape).map_err(|reason| {
-                            PlanError {
-                                reasons: vec![format!(
-                                    "object_region '{}': {reason}",
-                                    object_region.region_id
-                                )],
-                            }
-                        })?;
+                    mask[cell] = region_predicate_contains(&predicate, world).map_err(|error| {
+                        PlanError {
+                            reasons: vec![format!(
+                                "object_region '{}': {error}",
+                                object_region.region_id
+                            )],
+                        }
+                    })?;
                 }
             }
         }

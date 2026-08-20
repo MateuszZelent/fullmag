@@ -13,6 +13,7 @@ export type ObjectVisualizationManifestStatus = {
   capabilities: Pick<LiveStatusResource["capabilities"], "explicit_topology">;
   domain: Pick<LiveStatusResource["domain"], "discretization">;
   resources: Pick<LiveStatusResource["resources"], "mesh_revision">;
+  session: Pick<LiveStatusResource["session"], "session_epoch" | "session_id">;
 };
 
 export function selectObjectVisualizationManifestStatus(status: {
@@ -33,6 +34,10 @@ export function selectObjectVisualizationManifestStatus(status: {
     resources: {
       mesh_revision: status.data.resources?.mesh_revision,
     },
+    session: {
+      session_epoch: status.data.session?.session_epoch ?? "",
+      session_id: status.data.session?.session_id ?? "",
+    },
   };
 }
 
@@ -47,6 +52,8 @@ export function objectVisualizationManifestStatusEquals(
       next.capabilities.explicit_topology &&
     previous.domain.discretization === next.domain.discretization &&
     previous.resources.mesh_revision === next.resources.mesh_revision
+    && previous.session.session_id === next.session.session_id
+    && previous.session.session_epoch === next.session.session_epoch
   );
 }
 

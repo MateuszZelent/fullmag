@@ -14,6 +14,40 @@ class RelaxationContractTests(unittest.TestCase):
         self.assertEqual(stop.torque_tolerance_apm, 1e-6 / (4.0e-7 * math.pi))
         self.assertEqual(stop.max_steps, 50_000)
 
+    def test_legacy_relaxation_tesla_tolerance_lowers_to_ampere_per_meter(self):
+        study = fm.Relaxation(
+            outputs=[],
+            torque_tolerance=1e-6,
+            torque_tolerance_unit="T",
+        )
+
+        self.assertAlmostEqual(
+            study.to_ir()["stop"]["torque_tolerance_apm"],
+            1e-6 / (4.0e-7 * math.pi),
+        )
+
+    def test_legacy_relaxation_ampere_per_meter_tolerance_is_unchanged(self):
+        study = fm.Relaxation(
+            outputs=[],
+            torque_tolerance=0.75,
+            torque_tolerance_unit="A/m",
+        )
+
+        self.assertEqual(study.to_ir()["stop"]["torque_tolerance_apm"], 0.75)
+
+    def test_legacy_relaxation_tesla_alias_compares_canonical_stop_units(self):
+        tolerance_t = 1e-6
+        tolerance_apm = tolerance_t / (4.0e-7 * math.pi)
+
+        study = fm.Relaxation(
+            outputs=[],
+            stop=fm.RelaxStop(torque_tolerance_apm=tolerance_apm),
+            torque_tolerance=tolerance_t,
+            torque_tolerance_unit="T",
+        )
+
+        self.assertAlmostEqual(study.stop.torque_tolerance_apm, tolerance_apm)
+
     def test_direct_minimizer_rejects_llg_dynamics(self):
         with self.assertRaisesRegex(ValueError, "does not accept dynamics"):
             fm.Relaxation(

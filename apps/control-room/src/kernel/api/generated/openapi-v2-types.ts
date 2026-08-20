@@ -3503,6 +3503,16 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AcceptedObservationFrameRef: {
+            domain_generation_id: string;
+            observation_frame_id: string;
+            session_epoch: string;
+            /** Format: int64 */
+            source_step: number;
+            /** Format: double */
+            source_time_seconds?: number | null;
+            topology_revision: string;
+        };
         /**
          * @description Stable machine-readable classification for an active-lane operation reason.
          *     Human-readable `reason` text may evolve without changing UI behavior.
@@ -4798,6 +4808,7 @@ export interface components {
             materialization_wall_time_ns: number;
             /** Format: int64 */
             materialized_at_unix_ms: number;
+            observation_frame: components["schemas"]["AcceptedObservationFrameRef"];
             quantity_id: string;
             /** Format: int64 */
             source_revision: number;
@@ -6665,6 +6676,7 @@ export interface components {
             boundary_face_count: number;
             /** Format: int32 */
             boundary_face_start: number;
+            diagnostic_only?: boolean | null;
             /** Format: int32 */
             element_count: number;
             /** Format: int32 */
@@ -6675,6 +6687,12 @@ export interface components {
             /** Format: int32 */
             node_start: number;
             object_id: string;
+            segment_fingerprint?: string | null;
+            /**
+             * @description Stable content-addressed fallback carrier id. Object segments remain
+             *     diagnostic geometry and are never field-capable carriers.
+             */
+            segment_id?: string | null;
         };
         MeshObjectSizeFieldResource: {
             object_id: string;
@@ -7779,9 +7797,17 @@ export interface components {
             /** Format: int32 */
             n_comp: number;
             normalization_hint: string;
+            /** @description Publication plane: `interactive`, `export_only`, or `hidden`. */
+            publication_state: string;
             quick_access_label?: string | null;
+            /** @description Whether the current UI renderer supports this quantity shape without coercion. */
+            renderable: boolean;
+            /** @description Whether the active runtime exposes a legal data-plane request for this shape. */
+            requestable: boolean;
             scalar_metric_key?: string | null;
             shape: string;
+            /** @description Solver/provider capability plane, independent of request and payload state. */
+            solver_capability: string;
             supports_export: boolean;
             supports_history: boolean;
             supports_preview_2d: boolean;
@@ -8201,6 +8227,7 @@ export interface components {
         SaveProfile: "compact" | "solved" | "resume" | "archive" | "recovery";
         ScalarWindow: {
             columns: string[];
+            observation_frames: components["schemas"]["AcceptedObservationFrameRef"][];
             /** Format: int64 */
             returned_rows: number;
             /** Format: int64 */
@@ -8962,6 +8989,8 @@ export interface components {
         SessionSummary: {
             created_at: string;
             name: string;
+            /** @description Immutable identity of the active session incarnation. */
+            session_epoch: string;
             session_id: string;
             workspace_root: string;
         };
@@ -12520,10 +12549,7 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_availability: {
         parameters: {
             query?: {
-                /**
-                 * @description Stable frontend target identity, for example `airbox` or
-                 *     `fdm-universe-outside-support`.
-                 */
+                /** @description Stable canonical frontend target identity. Airbox always uses `airbox`. */
                 target_id?: string | null;
                 /** @description Field carrier scope. Defaults to the complete domain carrier. */
                 scope_kind?: string | null;
@@ -14809,6 +14835,15 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Authored selection geometry cannot be evaluated */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
         };
     };
     data_get_sessions_current_data_mesh_region_memberships: {
@@ -14835,6 +14870,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description An authored selection geometry cannot be evaluated */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
             };
         };
     };
@@ -15816,6 +15860,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Authored region selection geometry cannot be evaluated */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
             };
         };
     };

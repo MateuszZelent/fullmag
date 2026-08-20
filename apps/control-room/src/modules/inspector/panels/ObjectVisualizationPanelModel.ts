@@ -795,7 +795,7 @@ export function resolveObjectVisualizationTargetForLane({
     return selectionTarget?.kind === "airbox" ? selectionTarget : null;
   }
   if (selection.kind !== "mesh.grid.universe-outside-support") return null;
-  return selectionTarget?.kind === "fdm-domain" ? selectionTarget : null;
+  return selectionTarget?.kind === "airbox" ? selectionTarget : null;
 }
 
 export function resolveObjectVisualizationResourceGates({
@@ -1159,30 +1159,6 @@ export const VISUALIZATION_COLOR_MODE_ITEMS: Array<{
   { value: "z", label: "Z component" },
   { value: "magnitude", label: "Magnitude" },
   { value: "monochrome", label: "Monochrome" },
-];
-
-export const VISUALIZATION_QUANTITY_ITEMS: Array<{
-  label: string;
-  value: string;
-}> = [
-  { value: "m", label: "Magnetization / m" },
-  { value: "H_eff", label: "Effective field / H_eff" },
-  { value: "H_demag", label: "Demag field / H_demag" },
-  { value: "H_ext", label: "Zeeman field / H_ext" },
-  { value: "H_ex", label: "Exchange field / H_ex" },
-  { value: "H_ani", label: "Anisotropy field / H_ani" },
-  { value: "torque", label: "Torque / torque" },
-  { value: "eden_total", label: "Total energy density / eden_total" },
-  { value: "eden_ex", label: "Exchange energy density / eden_ex" },
-  { value: "eden_demag", label: "Demag energy density / eden_demag" },
-  { value: "eden_ext", label: "Zeeman energy density / eden_ext" },
-  { value: "eden_ani", label: "Anisotropy energy density / eden_ani" },
-  { value: "eden_dmi", label: "DMI energy density / eden_dmi" },
-  { value: "mat_ms", label: "Saturation magnetization / mat_ms" },
-  { value: "mat_aex", label: "Exchange stiffness / mat_aex" },
-  { value: "mat_alpha", label: "Gilbert damping / mat_alpha" },
-  { value: "mat_dind", label: "Interfacial DMI / mat_dind" },
-  { value: "mat_dbulk", label: "Bulk DMI / mat_dbulk" },
 ];
 
 type MeshPart = NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number];
@@ -2207,12 +2183,6 @@ export function visualizationQuantityItems(
   quantityCatalog?: QuantityCatalogResource | null,
   targetAvailability?: ReadonlyMap<string, TargetFieldAvailability>,
 ): Array<{ disabled?: boolean; label: string; value: string }> {
-  const staticItemsByQuantityId = new Map(
-    VISUALIZATION_QUANTITY_ITEMS.map((item) => [
-      resolveCanonicalQuantityId(item.value),
-      item,
-    ]),
-  );
   const capabilityItems = quantityCatalog
     ? quantityCatalog.quantities
         .filter(
@@ -2236,15 +2206,12 @@ export function visualizationQuantityItems(
           const canonicalQuantityId = resolveCanonicalQuantityId(
             quantity.quantity_id,
           );
-          const staticItem = staticItemsByQuantityId.get(canonicalQuantityId);
           return {
-            label: quantity.label || staticItem?.label || quantity.quantity_id,
+            label: quantity.label || canonicalQuantityId,
             value: quantity.quantity_id,
           };
         })
-    : targetKind === "airbox"
-      ? []
-      : VISUALIZATION_QUANTITY_ITEMS;
+    : [];
   const baseItems = quantityCatalog
     ? mergeVisualizationQuantityItems(capabilityItems, fieldItems)
     : targetKind === "airbox"
@@ -2283,10 +2250,9 @@ export function visualizationQuantityItems(
   const activeCanonicalQuantityId = resolveCanonicalQuantityId(activeQuantityId);
   const activeAvailability = targetAvailability?.get(activeCanonicalQuantityId);
   if (activeAvailability && targetFieldAvailabilityIsSelectable(activeAvailability)) {
-    const staticItem = staticItemsByQuantityId.get(activeCanonicalQuantityId);
     return [
       {
-        label: staticItem?.label ?? activeQuantityId,
+        label: activeQuantityId,
         value: activeQuantityId,
       },
       ...targetAwareItems,

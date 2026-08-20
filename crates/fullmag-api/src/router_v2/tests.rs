@@ -1100,6 +1100,7 @@ async fn test_v2_router_with_session() -> axum::Router {
 
 fn sample_scalar_row(step: u64, time: f64, e_total: f64) -> ScalarRow {
     ScalarRow {
+        observation_frame: None,
         step,
         time,
         solver_dt: 1e-12,
@@ -1321,6 +1322,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
         });
         snapshot.scalar_rows = vec![
             ScalarRow {
+                observation_frame: None,
                 step: 41,
                 time: 2.4e-9,
                 solver_dt: 1.0e-13,
@@ -1348,6 +1350,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 table_expressions: Vec::new(),
             },
             ScalarRow {
+                observation_frame: None,
                 step: 42,
                 time: 2.5e-9,
                 solver_dt: 1.0e-13,
@@ -7003,6 +7006,13 @@ async fn scalar_history_returns_windowed_columnar_rows() {
         serde_json::json!(["step", "time", "e_total", "mx"])
     );
     assert_eq!(json["rows"], serde_json::json!([[2.0, 2e-12, 7.3, 0.2]]));
+    assert_eq!(json["observation_frames"].as_array().map(Vec::len), Some(1));
+    assert_eq!(json["observation_frames"][0]["source_step"], 2);
+    assert_eq!(json["observation_frames"][0]["source_time_seconds"], 2e-12);
+    assert_eq!(
+        json["observation_frames"][0]["session_epoch"],
+        "test-session@1700000000000"
+    );
 }
 
 #[tokio::test]
@@ -7574,6 +7584,9 @@ async fn quantity_capability_is_separate_from_unmaterialized_field_cache() {
     let meta = body_json(meta_response).await;
     assert_eq!(meta["state"], "unmaterialized");
     assert_eq!(meta["materialization_reason_code"], "field_unmaterialized");
+    assert!(meta["observation_frame"]["observation_frame_id"]
+        .as_str()
+        .is_some_and(|value| value.starts_with("obs:test-session@1700000000000:")));
 }
 
 // ─── display endpoint ───────────────────────────────────────────────────────
@@ -12544,6 +12557,13 @@ async fn mesh_shared_domain_manifest_returns_tree_metadata() {
     assert_eq!(json["geometry_realization_revision"], 3);
     assert_eq!(json["mesh_name"], "test-mesh");
     assert_eq!(json["object_segments"][0]["object_id"], "body");
+    assert_eq!(json["object_segments"][0]["diagnostic_only"], true);
+    assert!(json["object_segments"][0]["segment_id"]
+        .as_str()
+        .is_some_and(|value| value.starts_with("segment:body:")));
+    assert!(json["object_segments"][0]["segment_fingerprint"]
+        .as_str()
+        .is_some_and(|value| value.len() == 16));
     assert_eq!(json["mesh_parts"][0]["role"], "air");
     assert_eq!(json["mesh_parts"][1]["object_id"], "body");
     assert_eq!(json["regions"][0]["region_id"], "region:body");
@@ -12969,7 +12989,7 @@ async fn mesh_region_membership_projects_object_frame_region_with_owner_translat
 }
 
 #[tokio::test]
-async fn mesh_region_membership_rejects_projected_object_frame_rotation() {
+async fn mesh_region_membership_projects_object_frame_rotation() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         let mut mesh = sample_fem_mesh_payload();
@@ -13011,11 +13031,17 @@ async fn mesh_region_membership_rejects_projected_object_frame_rotation() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["source"], "geometry_projection");
+    assert_eq!(json["region_id"], "body:rotated-core");
+    assert_eq!(json["element_indices"], serde_json::json!([]));
+    assert_eq!(json["node_indices"], serde_json::json!([0]));
+    assert_eq!(json["boundary_face_indices"], serde_json::json!([]));
 }
 
 #[tokio::test]
-async fn mesh_region_membership_rejects_projected_object_frame_scale() {
+async fn mesh_region_membership_projects_object_frame_nonuniform_scale() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         let mut mesh = sample_fem_mesh_payload();
@@ -13057,7 +13083,292 @@ async fn mesh_region_membership_rejects_projected_object_frame_scale() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["source"], "geometry_projection");
+    assert_eq!(json["region_id"], "body:scaled-core");
+    assert_eq!(json["element_indices"], serde_json::json!([0]));
+    assert_eq!(json["node_indices"], serde_json::json!([0, 1]));
+    assert_eq!(json["boundary_face_indices"], serde_json::json!([0]));
+}
+
+#[tokio::test]
+async fn mesh_region_membership_api_matches_shared_cross_consumer_corpus() {
+    let corpus: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fullmag-plan/tests/fixtures/geometry_selection_parity.json"
+    ))
+    .unwrap();
+    let points: Vec<[f64; 3]> = serde_json::from_value(corpus["points"].clone()).unwrap();
+    let expected: Vec<bool> = serde_json::from_value(corpus["expected"].clone()).unwrap();
+    let expected_node_indices = expected
+        .iter()
+        .enumerate()
+        .filter_map(|(index, selected)| selected.then_some(index as u32))
+        .collect::<Vec<_>>();
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload();
+        mesh.nodes = points;
+        mesh.cells = fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]);
+        mesh.facets = fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]);
+        mesh.object_segments.clear();
+        mesh.mesh_parts.clear();
+        let mut scene = sample_scene_document();
+        scene.objects[0]
+            .regions
+            .push(fullmag_authoring::SceneObjectRegion {
+                region_id: "body:parity".to_string(),
+                owner_object: "body".to_string(),
+                name: "Parity".to_string(),
+                shape: fullmag_authoring::SceneRegionShape::Csg {
+                    expression: Box::new(fullmag_ir::GeometryEntryIR::Difference {
+                        name: "parity-difference".to_string(),
+                        base: Box::new(fullmag_ir::GeometryEntryIR::Box {
+                            name: "parity-base".to_string(),
+                            size: [4.0, 2.0, 2.0],
+                        }),
+                        tool: Box::new(fullmag_ir::GeometryEntryIR::Translate {
+                            name: "parity-tool".to_string(),
+                            base: Box::new(fullmag_ir::GeometryEntryIR::Sphere {
+                                name: "parity-sphere".to_string(),
+                                radius: 0.75,
+                            }),
+                            by: [0.5, 0.0, 0.0],
+                        }),
+                    }),
+                },
+                frame: fullmag_authoring::SceneRegionFrame::World,
+                enabled: true,
+                priority: 10,
+                mesh_policy: None,
+                material_overrides: Vec::new(),
+                texture_override: None,
+                material_transition: None,
+                realization_policy: fullmag_authoring::SceneRegionRealizationPolicy::Project,
+            });
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/mesh-region-membership/body%3Aparity")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(
+        json["node_indices"],
+        serde_json::json!(expected_node_indices)
+    );
+    assert_eq!(json["element_indices"], serde_json::json!([0]));
+    assert_eq!(json["boundary_face_indices"], serde_json::json!([0]));
+}
+
+#[tokio::test]
+async fn mesh_region_membership_returns_typed_422_for_selection_failures() {
+    let cases = [
+        (
+            "singular",
+            fullmag_authoring::SceneRegionShape::Box {
+                center: [0.0; 3],
+                size: [1.0; 3],
+            },
+            Some([1.0, 0.0, 1.0]),
+            "selection_singular_transform",
+        ),
+        (
+            "imported",
+            fullmag_authoring::SceneRegionShape::Csg {
+                expression: Box::new(fullmag_ir::GeometryEntryIR::ImportedGeometry {
+                    name: "imported".to_string(),
+                    source: "body.stl".to_string(),
+                    format: "stl".to_string(),
+                    scale: Default::default(),
+                }),
+            },
+            None,
+            "selection_imported_solid_unqualified",
+        ),
+        (
+            "unsupported",
+            fullmag_authoring::SceneRegionShape::Csg {
+                expression: Box::new(fullmag_ir::GeometryEntryIR::Ellipsoid {
+                    name: "ellipsoid".to_string(),
+                    radii: [1.0; 3],
+                }),
+            },
+            None,
+            "selection_variant_unsupported",
+        ),
+    ];
+
+    for (suffix, shape, scale, expected_code) in cases {
+        let state = test_app_state_with_live_session().await;
+        if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+            let mut mesh = sample_fem_mesh_payload();
+            mesh.mesh_parts.clear();
+            let mut scene = sample_scene_document();
+            if let Some(scale) = scale {
+                scene.objects[0].transform.scale = scale;
+            }
+            scene.objects[0]
+                .regions
+                .push(fullmag_authoring::SceneObjectRegion {
+                    region_id: format!("body:{suffix}"),
+                    owner_object: "body".to_string(),
+                    name: suffix.to_string(),
+                    shape,
+                    frame: fullmag_authoring::SceneRegionFrame::Object,
+                    enabled: true,
+                    priority: 10,
+                    mesh_policy: None,
+                    material_overrides: Vec::new(),
+                    texture_override: None,
+                    material_transition: None,
+                    realization_policy: fullmag_authoring::SceneRegionRealizationPolicy::Project,
+                });
+            snapshot.fem_mesh = Some(mesh);
+            snapshot.scene_document = Some(scene);
+        }
+        let app = build_v2_router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v2/sessions/current/data/mesh-region-membership/body%3A{suffix}"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let json = body_json(response).await;
+        assert_eq!(json["code"], expected_code);
+    }
+}
+
+#[tokio::test]
+async fn mesh_region_membership_list_preserves_selection_error() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload();
+        mesh.mesh_parts.clear();
+        let mut scene = sample_scene_document();
+        scene.objects[0]
+            .regions
+            .push(fullmag_authoring::SceneObjectRegion {
+                region_id: "body:imported".to_string(),
+                owner_object: "body".to_string(),
+                name: "Imported".to_string(),
+                shape: fullmag_authoring::SceneRegionShape::Csg {
+                    expression: Box::new(fullmag_ir::GeometryEntryIR::ImportedGeometry {
+                        name: "imported".to_string(),
+                        source: "body.stl".to_string(),
+                        format: "stl".to_string(),
+                        scale: Default::default(),
+                    }),
+                },
+                frame: fullmag_authoring::SceneRegionFrame::Object,
+                enabled: true,
+                priority: 10,
+                mesh_policy: None,
+                material_overrides: Vec::new(),
+                texture_override: None,
+                material_transition: None,
+                realization_policy: fullmag_authoring::SceneRegionRealizationPolicy::Project,
+            });
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/mesh-region-memberships")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let json = body_json(response).await;
+    assert_eq!(json["code"], "selection_imported_solid_unqualified");
+}
+
+#[tokio::test]
+async fn mesh_region_quality_preserves_selection_error() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_fem_mesh_payload();
+        mesh.mesh_parts.clear();
+        let mut scene = sample_scene_document();
+        scene.objects[0]
+            .regions
+            .push(fullmag_authoring::SceneObjectRegion {
+                region_id: "body:unsupported".to_string(),
+                owner_object: "body".to_string(),
+                name: "Unsupported".to_string(),
+                shape: fullmag_authoring::SceneRegionShape::Csg {
+                    expression: Box::new(fullmag_ir::GeometryEntryIR::Ellipsoid {
+                        name: "ellipsoid".to_string(),
+                        radii: [1.0; 3],
+                    }),
+                },
+                frame: fullmag_authoring::SceneRegionFrame::Object,
+                enabled: true,
+                priority: 10,
+                mesh_policy: None,
+                material_overrides: Vec::new(),
+                texture_override: None,
+                material_transition: None,
+                realization_policy: fullmag_authoring::SceneRegionRealizationPolicy::Project,
+            });
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/regions/body%3Aunsupported/quality")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let json = body_json(response).await;
+    assert_eq!(json["code"], "selection_variant_unsupported");
+}
+
+#[test]
+fn mesh_region_selection_failures_are_declared_as_422_in_openapi() {
+    let openapi = crate::openapi_v2::openapi_json();
+    for path in [
+        "/v2/sessions/current/data/mesh-region-membership/{region_id}",
+        "/v2/sessions/current/data/mesh-region-memberships",
+        "/v2/sessions/current/meshing/meshes/regions/{region_id}/quality",
+    ] {
+        assert!(
+            openapi["paths"][path]["get"]["responses"]
+                .get("422")
+                .is_some(),
+            "missing typed 422 response for {path}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -13188,13 +13499,9 @@ async fn mesh_region_memberships_lists_available_authored_region_memberships() {
         json["memberships"][1]["element_indices"],
         serde_json::json!([0])
     );
-    assert_eq!(
-        json["unresolved_regions"],
-        serde_json::json!([{
-            "owner_object_id": "body",
-            "region_id": "body:unsupported"
-        }])
-    );
+    assert_eq!(json["memberships"][2]["region_id"], "body:unsupported");
+    assert_eq!(json["memberships"][2]["source"], "geometry_projection");
+    assert!(json.get("unresolved_regions").is_none());
     assert!(json.get("unresolved_region_ids").is_none());
 }
 
@@ -19387,6 +19694,36 @@ async fn commands_endpoint_enqueues_compute_energies_command() {
         queue.front().map(|command| command.kind.as_str()),
         Some("compute_energies")
     );
+}
+
+#[tokio::test]
+async fn commands_endpoint_rejects_compute_for_completed_session() {
+    for kind in ["compute_fields", "compute_energies"] {
+        let state = test_app_state_with_live_session().await;
+        if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+            snapshot.session.status = "completed".into();
+        }
+        let app = build_v2_router().with_state(state.clone());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v2/sessions/current/simulation/commands")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "kind": kind }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT, "kind={kind}");
+        let body = body_json(response).await;
+        assert_eq!(body["code"], "session_completed_read_only", "kind={kind}");
+        assert!(state.current_control_queue.lock().await.is_empty());
+    }
 }
 
 #[tokio::test]

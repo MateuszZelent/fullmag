@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useReducer, useRef } from "react";
 
 import type { DecodedTopology } from "@/kernel/api/codecs";
+import { recordVisualizationDebugPerformanceMetric } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 
 import { buildViewport3DTopologyIndexJobKey } from "../build-engine/viewport3dBuildJobKeys";
 import {
@@ -85,6 +86,7 @@ interface Viewport3DTopologyIndexBundleCacheEntry {
 }
 
 const TOPOLOGY_INDEX_BUNDLE_CACHE_LIMIT = 16;
+export const TOPOLOGY_INDEX_BUNDLE_CACHE_MAX_BYTES = 64 * 1024 * 1024;
 const VIEWPORT_3D_TOPOLOGY_INDEX_INITIAL_STATE: Viewport3DTopologyIndexReducerState =
   {
     identity: null,
@@ -188,7 +190,11 @@ export function retainViewport3DTopologyIndexBundleFromCache(
   key: string,
 ): Viewport3DTopologyIndexBundleCacheHandle | null {
   const entry = topologyIndexBundleCache.get(key);
-  if (!entry) return null;
+  if (!entry) {
+    recordVisualizationDebugPerformanceMetric("cacheMisses");
+    return null;
+  }
+  recordVisualizationDebugPerformanceMetric("cacheHits");
   entry.refCount += 1;
   entry.lastUsedAtMs = now();
   return createTopologyIndexBundleCacheHandle(entry);
@@ -487,14 +493,26 @@ function releaseTopologyIndexBundleToken(token: object | null): void {
 }
 
 function evictTopologyIndexBundleCache(): void {
-  while (topologyIndexBundleCache.size > TOPOLOGY_INDEX_BUNDLE_CACHE_LIMIT) {
+  while (
+    topologyIndexBundleCache.size > TOPOLOGY_INDEX_BUNDLE_CACHE_LIMIT ||
+    topologyIndexBundleCacheEstimatedBytes() >
+      TOPOLOGY_INDEX_BUNDLE_CACHE_MAX_BYTES
+  ) {
     const evictable = [...topologyIndexBundleCache.values()]
       .filter((entry) => entry.refCount === 0)
       .toSorted((left, right) => left.lastUsedAtMs - right.lastUsedAtMs)[0];
     if (!evictable) return;
     topologyIndexBundleCache.delete(evictable.key);
     topologyIndexBundleBuffers.delete(evictable.token);
+    recordVisualizationDebugPerformanceMetric("cacheEvictions");
   }
+}
+
+function topologyIndexBundleCacheEstimatedBytes(): number {
+  return [...topologyIndexBundleCache.values()].reduce(
+    (total, entry) => total + entry.estimatedBytes,
+    0,
+  );
 }
 
 function now(): number {

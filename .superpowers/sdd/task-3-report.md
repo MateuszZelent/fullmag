@@ -1,105 +1,168 @@
-# Raport Task 3 — target resolver, sampler i cache planarny
+# Raport Task 3 — Python geometry parity i convenience `disk`
 
 ## Status
 
-`DONE`
+`IMPLEMENTED_WITH_EXTERNAL_REGRESSION_BLOCKER`
 
-Task 3 został zaimplementowany na bazie `ResolvedSpatialField` bez zmiany publicznego wire, OpenAPI, UI, ProblemIR ani Python DSL. Route planarny nie używa już równoległych ścieżek `extract_fdm_field` / `extract_fem_field`.
+Zakres Task 3 jest zaimplementowany i focused testy są zielone. Szeroka bramka
+`test_api.py` dobiegła do końca, ale ujawniła jeden powtarzalny, niezwiązany z
+Task 3 błąd istniejącego kontraktu tekstur. Bramka szeroka pozostaje formalnie
+niezaliczona; nie zmieniono będących poza zakresem `test_api.py` ani
+`fullmag/init/textures.py`.
 
 ## Zakres wykonany
 
-- Dodano wewnętrzny `ResolvedSpatialTarget` i `ResolvedSpatialScope`.
-- Resolver wybiera dokładne komórki FDM albo elementy FEM dla `domain`, `magnetic_domain`, `object`, `region`, `mesh_part` i legalnego `airbox`.
-- FDM `object` korzysta z dokładnego membership; aktywna maska nie jest traktowana jako membership obiektu, a niejednoznaczne `0` dla wielu obiektów failuje kontrolowanie.
-- FEM wymaga Tet4 i nodalnego P1. Compact carrier jest rozwijany przez jawne local-to-global node IDs; brak wymaganych wartości kończy się kontrolowanym błędem.
-- Bounds `target`, `magnetic_domain` i `universe` są liczone z właściwych zbiorów encji. Pusty magnetic extent nie jest zastępowany bounds całej domeny.
-- `FdmAirboxCells` jest jedynym legalnym FDM carrierem dla scope `airbox`; quantity jest sprawdzane przez istniejący kontrakt carriera, bez literalnej gałęzi `H_demag`.
-- FDM surface failuje bez substytucji; FEM akceptuje tylko opublikowane `object_boundary`.
-- Fingerprint targetu obejmuje rodzaj i ID targetu, carrier/mapping, wybrane encje oraz mesh/grid revision.
-- Wewnętrzny `PlanarSampleIdentity` obejmuje session, monitor i scene revisions, target, quantity/component/revision/generation, carrier revision, operator, pełną ramkę i extent, resolution, quality oraz provenance źródła. Dla legacy pola bez revision/generation dodawany jest fingerprint wartości.
-- Cache wykonuje lookup i insert pod mutexem, ale sampling poza mutexem; pozostawiono istniejące bounded LRU/budżety.
-- Usunięto stary planarny scope/bounds resolver i osierocone pole `FdmField.active_mask`.
+- Dodano równoległy, niemutowalny AST `SelectionGeometry` w
+  `packages/fullmag-py/src/fullmag/model/geometry.py`. Nie zastępuje on
+  istniejącego scenicznego `Geometry`, więc nie zmienia legacy payloadów
+  geometrii, regionów ani eksportu skryptów.
+- `fm.shapes.disk(...)` tworzy finite cylinder z kanonicznymi polami
+  `center_m`, `axis`, `radius_m` i `height_m`; normalna jest normalizowana.
+- `fm.shapes.disk(..., extrusion="through_object", object_id=...)` zachowuje
+  nierozstrzygniętą typed policy z obiektem. Nie udaje wyznaczonej wysokości
+  przed loweringiem bounds obiektu.
+- `fm.shapes.affine(...)`, `fm.shapes.rotate(...)` i `fm.shapes.scale(...)`
+  tworzą wyłącznie serializowalny AST `affine` z `translation_m`,
+  `rotation_xyzw`, `scale` i `pivot_m`; nie wykonują selekcji punktów w
+  Pythonie.
+- Gotowe buildery są także eksportowane na poziomie `fullmag`:
+  `fm.disk`, `fm.affine`, `fm.rotate`, `fm.scale`.
 
-## RED
+## Dowód TDD
 
-Pierwszy wykonany RED:
+### RED
 
-```text
-cargo test -p fullmag-api planar_sampling::target_tests:: --no-run
-exit 101
-E0432: brak resolve_spatial_target, sample_resolved_target,
-       PlanarSampleIdentity, ResolvedSpatialScope
-E0599: brak QuantityDataPlaneStore::get_or_sample_planar
-```
+Pierwsze uruchomienie bez ustawionego lokalnego import path zakończyło się
+collection error `ModuleNotFoundError: No module named 'fullmag'`; nie jest
+traktowane jako dowód RED.
 
-Po dodaniu kompilowalnego kontraktu pierwszy behavioural run miał wynik `8 passed; 3 failed`; ujawnił dwie pomyłki komponentu w fixture oraz zbyt ogólny tekst diagnostyczny Airbox. Po ich korekcie wymagane testy stały się zielone.
-
-Integracja route początkowo miała wynik `3 passed; 2 failed`. Oba błędy były 409 `field 'm' has no FEM topology carrier`: stare happy-path fixtures publikowały grid-shaped values bez prawdziwego carrier identity. Nie przywrócono syntetycznego fallbacku origin/spacing; fixtures uzupełniono o jawny FDM `artifact_layout` z grid, origin i cell size, a osobny test potwierdza 409 dla danych bez wiarygodnego carriera.
-
-## GREEN i weryfikacja
-
-Wykonano z:
+Po ustawieniu `PYTHONPATH=packages/fullmag-py/src` uruchomiono:
 
 ```text
-CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/viewport2d-task3
-CARGO_INCREMENTAL=0
+pytest -q packages/fullmag-py/tests/test_selection_geometry.py
 ```
 
-- `cargo test -p fullmag-api planar_sampling::target_tests:: -- --nocapture`
-  - `11 passed; 0 failed`.
-- `cargo test -p fullmag-api quantity_data_plane::tests::planar_cache_mutex_is_not_held_during_expensive_sampling -- --nocapture`
-  - `1 passed; 0 failed`.
-- `cargo test -p fullmag-api planar_field_ -- --nocapture`
-  - `6 passed; 0 failed`.
-- `cargo test -p fullmag-api planar_ -- --nocapture`
-  - finalnie `41 passed; 0 failed`.
-- `cargo check -p fullmag-api --bin fullmag-api`
-  - exit 0; brak nowych warningów Task 3. Pozostało pięć wcześniejszych warningów w `schemas/authoring.rs` i `schemas/decimal_u64.rs` oraz warningi zależności.
-- targeted `rustfmt --check`
-  - exit 0.
-- `git diff --check`
-  - exit 0.
+Wynik: `9 failed`. Wszystkie oczekiwane zachowania failowały przez brak
+`fullmag.shapes.disk`, `fullmag.shapes.rotate` i `fullmag.shapes.affine`
+(`AttributeError`), a nie przez błąd test harnessu.
 
-Testy obejmują: bounds wybranego FEM targetu, compact/full parity dla plane i slab, dokładny FDM object target, legalność Airbox, stałe pole po rotacji i zmianie resolution, refinement-invariant slab z tolerancją `1e-10`, oddzielne cache keys dla revision/quality/thickness, mutex release, empty target, ambiguous membership, unsupported FEM carrier/order, nielegalny surface oraz route fail-closed bez prawdziwego spatial carriera.
+### GREEN
 
-## Granice kwalifikacji
+Po minimalnej implementacji uruchomiono:
 
-- Zmiana jest zweryfikowana testami manufactured/unit i integracją HTTP v2.
-- Publiczny wire/OpenAPI nie został zmieniony; publiczny sample token pozostaje zakresem Task 4.
-- HTTP v2 pozostaje źródłem prawdy dla unified viewport; nie dodano bocznego transportu ani bezpośredniej ścieżki UI.
-- Nie wykonano browser smoke, interaktywnego runtime ani fizycznej/produkcyjnej kwalifikacji; Task 3 ich nie obejmuje.
+```text
+PYTHONPATH=packages/fullmag-py/src pytest -q packages/fullmag-py/tests/test_selection_geometry.py
+```
+
+Wynik: `9 passed in 0.48s`.
+
+Testy obejmują finite disk lowering, normalizację normalnej i center,
+`radius <= 0`, `thickness <= 0`, zerową normalną, brak `object_id` dla
+`through_object`, nierozstrzygniętą typed policy, JSON round-trip z nested
+`scale`/`rotate`/`affine` oraz nieodwracalną skalę.
+
+## Weryfikacja
+
+| Bramka | Wynik |
+|---|---|
+| Focused selection geometry | PASS — 40 passed in 0.30s po fixupie review |
+| `git diff --check -- packages/fullmag-py` | PASS — exit 0 |
+| Wymagany `test_api.py` | NIEZALICZONE — pełny wynik: 313 passed, 1 skipped, 1 unrelated failure w 92.40s |
+
+## Self-review
+
+- Legacy `Geometry` nadal serializuje poprzedni scene/region IR; nowy typ ma
+  jednoznaczną nazwę `SelectionGeometry` i nie jest do niego podstawiany.
+- Finite `disk` nie ma wrappera extrusion i dokładnie emituje cylinder
+  wymagany przez kontrakt.
+- `through_object` przechowuje wyłącznie requested intent; wysokość nie jest
+  lokalnie szacowana ani wykonywana.
+- Walidacja odrzuca niefinityczne wektory, zerową normalną, zerowy komponent
+  skali i zerowy quaternion. Skala ujemna pozostaje legalna, bo jest
+  odwracalna.
+- Nie dodano `SelectionExprIR`, `FrozenSpins`, lokalnego point-in-geometry ani
+  zmian w lowering/runtime.
+
+## Pozostały blocker
+
+Wymagana regresja została uruchomiona do końca:
+
+```text
+PYTHONPATH=packages/fullmag-py/src pytest -q packages/fullmag-py/tests/test_selection_geometry.py packages/fullmag-py/tests/test_api.py
+```
+
+Broad gate ma świeży wynik końcowy, ale nie jest PASS z powodu opisanej niżej
+niezależnej rozbieżności `preset_version`.
 
 ## Fixup po review
 
-Dwa review odrzuciły pierwszą wersję z czterech powodów. Fixup usuwa wszystkie wskazane luki:
+### Domknięty kontrakt
 
-- runtime scope FEM jest teraz osobną maską i ogranicza niezależnie `target`, `magnetic_domain` oraz `universe`; pokryto `mesh_part` i `airbox`, w tym pusty magnetic extent Airbox,
-- brak membership FDM nie jest już interpretowany jako cała domena magnetyczna; zwykły carrier domeny i `FdmAirboxCells` failują kontrolowanie dla `MagneticDomain`,
-- test slab używa niejednorodnego liniowego pola P1 na skośnym Tet4, wyłącznie `SlabAverage`, sprawdza niepuste occupancy/pary oraz coarse/refined wobec analitycznej średniej z tolerancją `1e-10`,
-- wszystkie node IDs wybranych Tet4 są walidowane przed indeksowaniem bufora; błąd zawiera stabilne `invalid_fem_connectivity` zamiast paniki.
+- `SelectionGeometry` jest zamkniętą klasą bazową canonical AST, a konstruktor
+  `SelectionAffine` akceptuje wyłącznie dokładne typy
+  `SelectionCylinder | SelectionAffine`. String, mapping, dowolny obiekt,
+  subclass i obiekt z własnym `to_ir()` nie są przyjmowane jako dzieci.
+- Authored AST jest rozdzielony od canonical `geometry_predicate.v1`.
+  `SelectionThroughObjectDisk` ma wyłącznie `to_authored_ir()` z
+  `kind="disk"` i typed `ThroughObjectExtrusion`; nie ma `to_ir()` i nie może
+  serializować się jako skończony canonical cylinder przed loweringiem bounds
+  obiektu i przecięciem z `in_object` w Task 4.
+- Canonical affine i authored affine są osobnymi immutable dataclasses.
+  Transformacje przez `fm.affine`, `fm.rotate` i `fm.scale` zachowują tę
+  granicę również dla zagnieżdżonego `through_object`.
+- Wszystkie składowe liczbowe przechodzą ścisłą walidację przed konwersją.
+  `bool`, stringi i nienumeryczne sekwencje są odrzucane; NaN/Inf są
+  odrzucane; radius/thickness muszą być dodatnie; normal/quaternion niezerowe;
+  każdy komponent scale niezerowy.
+- `SelectionGeometry.from_ir()` i
+  `AuthoredSelectionGeometry.from_authored_ir()` odtwarzają typed AST,
+  odrzucają nieznane/brakujące pola oraz złe warianty, kopiują wejściowe
+  listy/mappingi do immutable tuples i zwracają świeże listy/dicty przy każdej
+  serializacji.
+- Publiczny namespace eksportuje dokładnie aliasy builderów `affine`, `disk`,
+  `rotate`, `scale`; wewnętrzne klasy AST nie zostały dodane do
+  `fullmag.__all__`.
 
-RED po dodaniu testów regresyjnych: `11 passed; 5 failed`. Failowały oba przypadki FDM, bounds `universe` dla FEM `mesh_part` i Airbox oraz out-of-range Tet4 przez panic. Skorygowany test niejednorodnego slab przeszedł już przed zmianą produkcyjną, potwierdzając istniejącą poprawność tej części przy niewakuacyjnym oracle.
+### RED po review
 
-Końcowa weryfikacja fixupu:
+Pierwsza próba nowych testów zakończyła się collection error przez bezpośredni
+import jeszcze nieistniejącej klasy `AuthoredSelectionGeometry`; nie jest
+zaliczona jako behavioural RED. Po zmianie testu na odwołanie przez moduł:
 
-- `cargo test -p fullmag-api planar_sampling::target_tests:: -- --nocapture`: `16 passed; 0 failed`,
-- `cargo test -p fullmag-api planar_ -- --nocapture`: `46 passed; 0 failed`,
-- `cargo test -p fullmag-api planar_field_ -- --nocapture`: `6 passed; 0 failed`,
-- `cargo check -p fullmag-api --bin fullmag-api`: exit 0; wyłącznie pięć wcześniejszych warningów schemas i warningi zależności,
-- targeted `rustfmt --check` oraz `git diff --check`: exit 0.
+```text
+PYTHONPATH=packages/fullmag-py/src pytest -q packages/fullmag-py/tests/test_selection_geometry.py
+19 failed, 20 passed in 0.40s
+```
 
-## Drugi fixup po re-review: oracle ważenia slab
+Failowały oczekiwane klasy zachowania: akceptacja `bool`/stringów, brak
+runtime closure dzieci AST, `through_object` udający cylinder, brak typed
+`from_ir`/`from_authored_ir`, brak copy-safe round-trip oraz brak walidacji
+typed extrusion policy.
 
-Re-review wykazało, że poprzedni test refinement opierał się na jednym Tet4. Taki fixture nie odróżnia poprawnej całki objętościowej od uśredniania po liczbie elementów lub węzłów.
+### GREEN po review
 
-RED wykonano przeciw dotychczasowemu fixture przez jawny wymóg dwóch Tet4: targeted test zakończył się exit 101 z `left: 1`, `right: 2` i komunikatem `refinement oracle requires two unequal-volume Tet4 elements`.
+Po minimalnej implementacji i końcowym wzmocnieniu copy-safety:
 
-Fixture zastąpiono dwoma rozłącznymi Tet4 o nierównych objętościach `1/6` i `1/3`. Liniowe pole P1 ma średnie elementowe `2.5` i `4.75`, więc błędna średnia po liczbie elementów wynosi `3.625`, a niezależny oracle ważony miarą wynosi `4.0`. Analityczna całkowita zajęta miara wynosi `0.5`.
+```text
+PYTHONPATH=packages/fullmag-py/src pytest -q packages/fullmag-py/tests/test_selection_geometry.py
+40 passed in 0.30s
+```
 
-Test sprawdza wyłącznie `SlabAverage`, niepuste occupancy i parę coarse/refined oraz z tolerancją `1e-10`:
+### Pełna bramka i niezależny blocker
 
-- coarse i refined równe analitycznej średniej `4.0`,
-- coarse równe refined,
-- `coarse.meta.occupied_measure` i `refined.meta.occupied_measure` równe sobie i analitycznej mierze `0.5`.
+Wymagany proces nie został przerwany i dobiegł do końca:
 
-Wzmocniony test przeszedł na istniejącym samplerze, dlatego fixup jest test-only i nie zmienia kodu produkcyjnego. Końcowa weryfikacja: targeted `1/1`, pełne `planar_` `46/46`, routes `planar_field_` `6/6`, `cargo check -p fullmag-api --bin fullmag-api`, targeted `rustfmt --check` i `git diff --check` — wszystkie exit 0. `cargo check` nadal raportuje wyłącznie wcześniejsze warningi.
+```text
+PYTHONPATH=packages/fullmag-py/src pytest -q \
+  packages/fullmag-py/tests/test_selection_geometry.py \
+  packages/fullmag-py/tests/test_api.py
+1 failed, 313 passed, 1 skipped, 41 warnings in 92.40s
+```
+
+Jedyny failure to
+`ProblemApiTests.test_random_initializer_serializes_to_ir`. Aktualne
+`fm.texture.random(seed=42)` emituje `preset_version: 2` z
+`packages/fullmag-py/src/fullmag/init/textures.py`, a istniejące oczekiwanie w
+`test_api.py:2160` nadal nie zawiera tego pola. Celowana reprodukcja zakończyła
+się identycznie (`1 failed in 0.46s`). Ani producent tekstury, ani test nie są
+częścią Task 3; zgodnie z zakresem nie zostały zmienione.

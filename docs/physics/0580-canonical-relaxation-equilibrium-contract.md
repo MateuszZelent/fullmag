@@ -674,6 +674,9 @@ Runtime records:
 - integrator and time-step policy only for LLG;
 - gradient metric, line-search policy, and preconditioner policy only for the
   relevant minimizer;
+- for native FEM direct minimizers, the requested and resolved direction
+  policy, linear solver, preconditioner, and the names of any environment
+  overrides that affected policy resolution;
 - fresh final torque, energy plateau, step count, and typed stop reason;
 - requested and resolved convergence-controller policy, consecutive-torque
   count, rejected energy-increase trials, tightening count, and controller

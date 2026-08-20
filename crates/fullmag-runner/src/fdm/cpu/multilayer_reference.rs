@@ -176,6 +176,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
         requested_energy_minimizer: None,
         resolved_energy_minimizer: None,
         energy_minimizer_realization: None,
+        fem_direct_minimizer_policy: None,
         requested_demag_realization: None,
         resolved_demag_realization: None,
         timestep_policy: Some(timestep_policy),

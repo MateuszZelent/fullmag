@@ -5,7 +5,7 @@
 //! disabled:
 //!
 //! ```text
-//! dm/dt = -α γ_eff (m × H_eff) × m   [pure damping, no precession]
+//! dm/dt = -α γ_eff m × (m × H_eff)   [pure damping, no precession]
 //! ```
 //!
 //! In the native ABI this translates to setting the `precession_enabled` flag

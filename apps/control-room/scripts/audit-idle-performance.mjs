@@ -31,6 +31,10 @@ const visualizationDebugPublisher = readFileSync(
   ),
   "utf8",
 );
+const viewportDiagnostics = readFileSync(
+  path.join(viewportRoot, "viewport3dDiagnostics.ts"),
+  "utf8",
+);
 
 const failures = [];
 
@@ -60,6 +64,7 @@ for (const filePath of listSourceFiles(viewportRoot)) {
 }
 
 auditVisualizationDebugIdleContracts();
+auditSettledR3FFrameContract();
 auditChartIdleContracts();
 
 if (failures.length > 0) {
@@ -89,6 +94,14 @@ function auditVisualizationDebugIdleContracts() {
     if (visualizationDebugPublisher.includes(forbidden)) {
       failures.push(`Visualization Debug publisher must not call ${forbidden}.`);
     }
+  }
+}
+
+function auditSettledR3FFrameContract() {
+  if (!viewportDiagnostics.includes("recordVisualizationDebugViewportFrame(reason)")) {
+    failures.push(
+      "Idle performance audit requires settled R3F frames to use the opt-in viewport counter.",
+    );
   }
 }
 

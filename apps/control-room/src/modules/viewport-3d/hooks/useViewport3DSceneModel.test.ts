@@ -129,7 +129,11 @@ describe("viewport vector scale", () => {
           materialization_state: "unsupported",
           n_comp: 3,
           normalization_hint: "",
+          publication_state: "hidden",
+          renderable: false,
+          requestable: false,
           shape: "vector_field",
+          solver_capability: "unsupported",
           supports_export: false,
           supports_history: false,
           supports_preview_2d: false,
@@ -414,11 +418,14 @@ describe("FDM Airbox mesh demand", () => {
     );
 
     expect(targetsBlock).toContain(
-      'target.id === "fdm-universe-outside-support"',
+      "target.id === AIRBOX_VISUALIZATION_TARGET.id",
+    );
+    expect(targetsBlock).toContain(
+      'carrierIds.add("fdm-universe-outside-support")',
     );
     expect(targetsBlock).toContain("carrierIds.add(target.id)");
     expect(targetsBlock).toMatch(
-      /target\.id === "fdm-universe-outside-support"\s*\?\s*fdmAirboxDebugRenderPass/,
+      /target\.id === AIRBOX_VISUALIZATION_TARGET\.id[\s\S]*fdmUniverseOutsideSupport[\s\S]*\? fdmAirboxDebugRenderPass/,
     );
     expect(source).toContain(
       "const fdmAirboxDebugRenderPass: Viewport3DTargetRenderPassModel",

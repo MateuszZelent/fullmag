@@ -9,10 +9,11 @@ use fullmag_ir::BackendPlanIR;
 use sha2::{Digest, Sha256};
 
 use crate::types::{
-    ExecutedRun, FemCpuRelaxationAlgorithmPolicyMetadata, FemCpuRelaxationDemagPolicyMetadata,
-    FemCpuRelaxationDemagTimingsNs, FemCpuRelaxationEnergyTerms,
-    FemCpuRelaxationQualificationMetadata, FemGpuRelaxationAlgorithmPolicyMetadata,
-    FemGpuRelaxationDevicePolicyMetadata, FemGpuRelaxationQualificationMetadata, StepStats,
+    ExecutedRun, ExecutionRequestProvenance, FemCpuRelaxationAlgorithmPolicyMetadata,
+    FemCpuRelaxationDemagPolicyMetadata, FemCpuRelaxationDemagTimingsNs,
+    FemCpuRelaxationEnergyTerms, FemCpuRelaxationQualificationMetadata,
+    FemGpuRelaxationAlgorithmPolicyMetadata, FemGpuRelaxationDevicePolicyMetadata,
+    FemGpuRelaxationQualificationMetadata, FinalExecutionResolutionProvenance, StepStats,
 };
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -236,30 +237,285 @@ fn region_realization_revisions_metadata(problem: &fullmag_ir::ProblemIR) -> ser
 }
 
 fn requested_execution_metadata(problem: &fullmag_ir::ProblemIR) -> serde_json::Value {
-    let backend = match problem.backend_policy.requested_backend {
-        fullmag_ir::BackendTarget::Auto => "auto",
-        fullmag_ir::BackendTarget::Fdm => "fdm",
-        fullmag_ir::BackendTarget::Fem => "fem",
-        fullmag_ir::BackendTarget::Hybrid => "hybrid",
-    };
-    let device = match backend {
-        "fem" => effective_fem_device_request(problem),
-        "fdm" => requested_registry_device_for_fdm(problem),
-        _ => runtime_device(problem)
-            .unwrap_or("auto")
-            .replace("cuda", "gpu"),
-    };
-    let mode = match problem.validation_profile.execution_mode {
+    let authored = authored_execution_request(problem);
+    serde_json::json!({
+        "backend": authored.backend,
+        "device": authored.device,
+        "precision": authored.precision,
+        "mode": authored.mode,
+        "fallback_policy": if authored.mode == "strict" { "forbidden" } else { "allowed" },
+    })
+}
+
+fn execution_mode_name(mode: fullmag_ir::ExecutionMode) -> &'static str {
+    match mode {
         fullmag_ir::ExecutionMode::Strict => "strict",
         fullmag_ir::ExecutionMode::Extended => "extended",
         fullmag_ir::ExecutionMode::Hybrid => "hybrid",
+    }
+}
+
+fn execution_precision_name(precision: fullmag_ir::ExecutionPrecision) -> &'static str {
+    match precision {
+        fullmag_ir::ExecutionPrecision::Single => "single",
+        fullmag_ir::ExecutionPrecision::Double => "double",
+    }
+}
+
+fn normalize_execution_device(device: &str) -> String {
+    device.replace("cuda", "gpu")
+}
+
+fn authored_execution_request(problem: &fullmag_ir::ProblemIR) -> ExecutionRequestProvenance {
+    ExecutionRequestProvenance {
+        backend: problem
+            .backend_policy
+            .requested_backend
+            .as_str()
+            .to_string(),
+        device: normalize_execution_device(runtime_device(problem).unwrap_or("auto")),
+        precision: execution_precision_name(problem.backend_policy.execution_precision).to_string(),
+        mode: execution_mode_name(problem.validation_profile.execution_mode).to_string(),
+    }
+}
+
+fn effective_execution_request(
+    problem: &fullmag_ir::ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> ExecutionRequestProvenance {
+    let device = match &plan.backend_plan {
+        BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => {
+            requested_registry_device_for_fdm(problem)
+        }
+        BackendPlanIR::Fem(_)
+        | BackendPlanIR::FemEigen(_)
+        | BackendPlanIR::FemFrequencyResponse(_) => {
+            let authored_device =
+                normalize_execution_device(runtime_device(problem).unwrap_or("auto"));
+            if problem.validation_profile.execution_mode == fullmag_ir::ExecutionMode::Strict
+                && authored_device != "auto"
+            {
+                authored_device
+            } else {
+                effective_fem_device_request(problem)
+            }
+        }
     };
-    serde_json::json!({
-        "backend": backend,
-        "device": device,
-        "precision": runtime_precision(problem),
-        "mode": mode,
-        "fallback_policy": if mode == "strict" { "forbidden" } else { "allowed" },
+    ExecutionRequestProvenance {
+        backend: plan.common.requested_backend.as_str().to_string(),
+        device: normalize_execution_device(&device),
+        precision: runtime_precision(problem).to_string(),
+        mode: execution_mode_name(plan.common.execution_mode).to_string(),
+    }
+}
+
+fn actual_engine_backend_and_device(engine: &str) -> std::io::Result<(&'static str, &'static str)> {
+    if engine.starts_with("cpu_reference") {
+        return Ok(("fdm", "cpu"));
+    }
+    if engine.starts_with("cuda_") || engine.starts_with("fdm_gpu_") {
+        return Ok(("fdm", "gpu"));
+    }
+    if matches!(engine, "fem_native_gpu" | "fem_eigen_native_gpu") {
+        return Ok(("fem", "gpu"));
+    }
+    if engine.starts_with("fem_cpu")
+        || engine.starts_with("native_fem.")
+        || engine.starts_with("runner.")
+    {
+        return Ok(("fem", "cpu"));
+    }
+    Err(Error::new(
+        ErrorKind::InvalidData,
+        format!("final execution provenance has unknown execution_engine '{engine}'"),
+    ))
+}
+
+fn validate_direct_minimizer_realization(
+    plan: &fullmag_ir::ExecutionPlanIR,
+    provenance: &crate::types::ExecutionProvenance,
+    resolved_device: &str,
+) -> std::io::Result<()> {
+    let relaxation = match &plan.backend_plan {
+        BackendPlanIR::Fdm(fdm) => fdm.relaxation.as_ref(),
+        BackendPlanIR::Fem(fem) => fem.relaxation.as_ref(),
+        _ => None,
+    };
+    let Some(control) = relaxation else {
+        return Ok(());
+    };
+    if !matches!(
+        control.algorithm,
+        fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+            | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
+            | fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit
+    ) {
+        return Ok(());
+    }
+
+    let expected_algorithm = control.algorithm.as_str();
+    if provenance.requested_energy_minimizer.as_deref() != Some(expected_algorithm)
+        || provenance.resolved_energy_minimizer.as_deref() != Some(expected_algorithm)
+    {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "final direct-minimizer provenance mismatch: plan algorithm={expected_algorithm}, requested={:?}, resolved={:?}",
+                provenance.requested_energy_minimizer,
+                provenance.resolved_energy_minimizer
+            ),
+        ));
+    }
+
+    let expected_realization = match &plan.backend_plan {
+        BackendPlanIR::Fdm(_) if resolved_device == "cpu" => {
+            Some(crate::relaxation::CPU_SOA_DIRECT_MINIMIZER_REALIZATION)
+        }
+        BackendPlanIR::Fdm(_) | BackendPlanIR::Fem(_) => {
+            crate::relaxation::native_direct_minimizer_realization(
+                control.algorithm,
+                resolved_device == "gpu",
+            )
+        }
+        _ => None,
+    }
+    .ok_or_else(|| {
+        Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "no direct-minimizer realization is defined for algorithm={expected_algorithm} device={resolved_device}"
+            ),
+        )
+    })?;
+
+    if provenance.energy_minimizer_realization.as_deref() != Some(expected_realization) {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "final direct-minimizer realization mismatch: engine={} algorithm={} expected={} actual={:?}",
+                provenance.execution_engine,
+                expected_algorithm,
+                expected_realization,
+                provenance.energy_minimizer_realization
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn final_execution_resolution_provenance(
+    problem: &fullmag_ir::ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    provenance: &crate::types::ExecutionProvenance,
+) -> std::io::Result<FinalExecutionResolutionProvenance> {
+    let authored_request = authored_execution_request(problem);
+    let effective_request = effective_execution_request(problem, plan);
+    let (resolved_backend, resolved_device) =
+        actual_engine_backend_and_device(&provenance.execution_engine)?;
+    let resolved_precision = provenance.precision.as_str();
+    if !matches!(resolved_precision, "single" | "double") {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!("final execution provenance has invalid precision '{resolved_precision}'"),
+        ));
+    }
+    let planned_backend = plan.common.resolved_backend.as_str();
+    if resolved_backend != planned_backend {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "resolved backend mismatch: plan={planned_backend} actual_engine={} actual_backend={resolved_backend}",
+                provenance.execution_engine
+            ),
+        ));
+    }
+    if effective_request.backend != "auto" && effective_request.backend != resolved_backend {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "forced backend mismatch: effective={} resolved={resolved_backend}",
+                effective_request.backend
+            ),
+        ));
+    }
+    if effective_request.device != "auto" && effective_request.device != resolved_device {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "forced device mismatch: effective={} resolved={resolved_device}",
+                effective_request.device
+            ),
+        ));
+    }
+    if authored_request.mode == "strict"
+        && authored_request.device != "auto"
+        && authored_request.device != resolved_device
+    {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "forced device mismatch: authored strict={} resolved={resolved_device}",
+                authored_request.device
+            ),
+        ));
+    }
+    if effective_request.precision != resolved_precision {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "execution precision mismatch: effective={} resolved={resolved_precision}",
+                effective_request.precision
+            ),
+        ));
+    }
+
+    let fallback = provenance.resolved_fallback.as_ref();
+    if fallback.is_some_and(|entry| !entry.occurred) {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "resolved_fallback is present but occurred=false",
+        ));
+    }
+    let fallback_occurred = fallback.is_some_and(|entry| entry.occurred);
+    if plan.common.execution_mode == fullmag_ir::ExecutionMode::Strict && fallback_occurred {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "strict execution metadata cannot contain a resolved fallback",
+        ));
+    }
+    let fallback_reason = fallback.map(|entry| entry.reason.clone());
+    if fallback_reason.as_deref().is_some_and(str::is_empty) {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "resolved fallback must contain a non-empty reason",
+        ));
+    }
+
+    validate_direct_minimizer_realization(plan, provenance, resolved_device)?;
+
+    let resolved_execution = ExecutionRequestProvenance {
+        backend: resolved_backend.to_string(),
+        device: resolved_device.to_string(),
+        precision: resolved_precision.to_string(),
+        mode: execution_mode_name(plan.common.execution_mode).to_string(),
+    };
+    let resolution_mode = if fallback_occurred {
+        "fallback"
+    } else if authored_request != effective_request {
+        "override"
+    } else if effective_request.backend == "auto" || effective_request.device == "auto" {
+        "automatic"
+    } else {
+        "exact"
+    };
+
+    Ok(FinalExecutionResolutionProvenance {
+        authored_request,
+        effective_request,
+        resolved_execution,
+        resolution_mode: resolution_mode.to_string(),
+        fallback_occurred,
+        fallback_reason,
     })
 }
 
@@ -798,10 +1054,7 @@ fn fem_cpu_relaxation_algorithm_policy_metadata(
 ) -> Option<FemCpuRelaxationAlgorithmPolicyMetadata> {
     let control = fem.relaxation.as_ref()?;
     let derivative_contract = fem_energy_weighted_armijo_contract(control, provenance);
-    let gpu_status = provenance
-        .fem_gpu_qualification_status
-        .clone()
-        .or_else(|| Some(default_fem_relaxation_gpu_status(control.algorithm).to_string()));
+    let gpu_status = provenance.fem_gpu_qualification_status.clone();
     match control.algorithm {
         fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb => {
             Some(FemCpuRelaxationAlgorithmPolicyMetadata {
@@ -974,15 +1227,6 @@ fn fem_energy_weighted_armijo_contract(
         armijo_decrement_units: "J",
         armijo_derivative_units: "J",
     })
-}
-
-fn default_fem_relaxation_gpu_status(algorithm: fullmag_ir::RelaxationAlgorithmIR) -> &'static str {
-    match algorithm {
-        fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped
-        | fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
-        | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg => "production_executable",
-        fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit => "unsupported",
-    }
 }
 
 fn fem_gpu_relaxation_qualification_metadata(
@@ -1327,6 +1571,16 @@ pub(crate) fn write_artifacts(
     let region_realization_revisions = region_realization_revisions_metadata(problem);
     let material_field_assets = write_material_field_artifacts(output_dir, plan)?;
     let mut execution_provenance_json = execution_provenance_json(plan, &execution_provenance)?;
+    let execution_resolution =
+        final_execution_resolution_provenance(problem, plan, &execution_provenance)?;
+    execution_provenance_json
+        .as_object_mut()
+        .expect("ExecutionProvenance must serialize to an object")
+        .insert(
+            "execution_resolution".to_string(),
+            serde_json::to_value(execution_resolution)
+                .expect("FinalExecutionResolutionProvenance must serialize"),
+        );
     let physics_graph_artifact = physics_graph_provenance_artifact(problem, plan, Some(executed))?;
     if let Some(artifact) = physics_graph_artifact.as_ref() {
         let graph_provenance: serde_json::Value =
@@ -4679,7 +4933,10 @@ mod tests {
     };
     use std::collections::HashMap;
     use std::fs;
+    use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static FINAL_EXECUTION_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn dmi_field_artifact_units_include_bulk_quantity() {
@@ -5910,6 +6167,391 @@ mod tests {
         }
     }
 
+    fn final_execution_test_run(provenance: ExecutionProvenance) -> ExecutedRun {
+        ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: vec![StepStats {
+                    step: 1,
+                    e_total: -1.0,
+                    max_torque_Apm: 0.0,
+                    ..StepStats::default()
+                }],
+                final_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+                completion: None,
+            },
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: Vec::new(),
+            provenance,
+        }
+    }
+
+    fn write_final_execution_test_metadata(
+        label: &str,
+        problem: &fullmag_ir::ProblemIR,
+        plan: &ExecutionPlanIR,
+        provenance: ExecutionProvenance,
+    ) -> std::io::Result<serde_json::Value> {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-final-execution-{label}-{}-{suffix}",
+            std::process::id()
+        ));
+        let result = write_artifacts(
+            &output_dir,
+            problem,
+            plan,
+            &final_execution_test_run(provenance),
+            None,
+        )
+        .and_then(|()| {
+            let raw = fs::read_to_string(output_dir.join("metadata.json"))?;
+            serde_json::from_str(&raw).map_err(|error| {
+                Error::new(
+                    ErrorKind::InvalidData,
+                    format!("final execution metadata is invalid JSON: {error}"),
+                )
+            })
+        });
+        let _ = fs::remove_dir_all(&output_dir);
+        result
+    }
+
+    fn write_final_execution_test_metadata_with_fem_policy(
+        policy: &str,
+        label: &str,
+        problem: &fullmag_ir::ProblemIR,
+        plan: &ExecutionPlanIR,
+        provenance: ExecutionProvenance,
+    ) -> std::io::Result<serde_json::Value> {
+        with_fem_execution_policy(policy, || {
+            write_final_execution_test_metadata(label, problem, plan, provenance)
+        })
+    }
+
+    fn write_final_execution_test_metadata_without_fem_policy(
+        label: &str,
+        problem: &fullmag_ir::ProblemIR,
+        plan: &ExecutionPlanIR,
+        provenance: ExecutionProvenance,
+    ) -> std::io::Result<serde_json::Value> {
+        without_fem_execution_policy(|| {
+            write_final_execution_test_metadata(label, problem, plan, provenance)
+        })
+    }
+
+    fn with_fem_execution_policy<T>(policy: &str, action: impl FnOnce() -> T) -> T {
+        let _guard = FINAL_EXECUTION_ENV_LOCK
+            .lock()
+            .expect("lock final execution test environment");
+        let previous = std::env::var_os("FULLMAG_FEM_EXECUTION");
+        unsafe {
+            std::env::set_var("FULLMAG_FEM_EXECUTION", policy);
+        }
+        let result = action();
+        unsafe {
+            if let Some(previous) = previous {
+                std::env::set_var("FULLMAG_FEM_EXECUTION", previous);
+            } else {
+                std::env::remove_var("FULLMAG_FEM_EXECUTION");
+            }
+        }
+        result
+    }
+
+    fn without_fem_execution_policy<T>(action: impl FnOnce() -> T) -> T {
+        let _guard = FINAL_EXECUTION_ENV_LOCK
+            .lock()
+            .expect("lock final execution test environment");
+        let previous_execution = std::env::var_os("FULLMAG_FEM_EXECUTION");
+        let previous_all_in_gpu = std::env::var_os("FULLMAG_FEM_ALL_IN_GPU");
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+            std::env::remove_var("FULLMAG_FEM_ALL_IN_GPU");
+        }
+        let result = action();
+        unsafe {
+            if let Some(previous) = previous_execution {
+                std::env::set_var("FULLMAG_FEM_EXECUTION", previous);
+            }
+            if let Some(previous) = previous_all_in_gpu {
+                std::env::set_var("FULLMAG_FEM_ALL_IN_GPU", previous);
+            }
+        }
+        result
+    }
+
+    fn fem_execution_problem(device: &str, mode: ExecutionMode) -> fullmag_ir::ProblemIR {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
+        problem.validation_profile.execution_mode = mode;
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({
+                "device": device,
+                "precision": "double",
+            }),
+        );
+        problem
+    }
+
+    #[test]
+    fn final_metadata_contains_no_fallback_cpu_execution_resolution() {
+        let problem = fem_execution_problem("cpu", ExecutionMode::Extended);
+        let mut plan = test_fem_execution_plan();
+        plan.common.execution_mode = ExecutionMode::Extended;
+        let metadata = write_final_execution_test_metadata_without_fem_policy(
+            "cpu-exact",
+            &problem,
+            &plan,
+            ExecutionProvenance {
+                execution_engine: "fem_cpu_native".to_string(),
+                precision: "double".to_string(),
+                ..ExecutionProvenance::default()
+            },
+        )
+        .expect("CPU final metadata should be written");
+
+        let resolution = &metadata["execution_provenance"]["execution_resolution"];
+        assert_eq!(resolution["authored_request"]["backend"], "fem");
+        assert_eq!(resolution["authored_request"]["device"], "cpu");
+        assert_eq!(resolution["effective_request"]["device"], "cpu");
+        assert_eq!(resolution["resolved_execution"]["backend"], "fem");
+        assert_eq!(resolution["resolved_execution"]["device"], "cpu");
+        assert_eq!(resolution["resolution_mode"], "exact");
+        assert_eq!(resolution["fallback_occurred"], false);
+        assert!(resolution.get("fallback_reason").is_some());
+        assert!(resolution["fallback_reason"].is_null());
+        let typed: crate::types::FinalExecutionResolutionProvenance =
+            serde_json::from_value(resolution.clone())
+                .expect("final execution resolution must deserialize to its typed contract");
+        assert_eq!(
+            serde_json::to_value(typed).expect("typed final resolution must serialize"),
+            *resolution
+        );
+    }
+
+    #[test]
+    fn final_metadata_contains_forced_gpu_execution_resolution_and_ncg_realization() {
+        let problem = fem_execution_problem("gpu", ExecutionMode::Strict);
+        let mut plan = test_fem_execution_plan();
+        if let BackendPlanIR::Fem(fem) = &mut plan.backend_plan {
+            fem.relaxation = Some(fullmag_ir::RelaxationControlIR {
+                algorithm: fullmag_ir::RelaxationAlgorithmIR::NonlinearCg,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1.0e-3),
+                    energy_tolerance_j: None,
+                    max_steps: Some(1),
+                    max_relaxation_time_s: None,
+                },
+            });
+        }
+        let metadata = write_final_execution_test_metadata_without_fem_policy(
+            "gpu-exact",
+            &problem,
+            &plan,
+            ExecutionProvenance {
+                execution_engine: "fem_native_gpu".to_string(),
+                precision: "double".to_string(),
+                mfem_version: Some("4.8".to_string()),
+                hypre_version: Some("2.32.0".to_string()),
+                requested_energy_minimizer: Some("nonlinear_cg".to_string()),
+                resolved_energy_minimizer: Some("nonlinear_cg".to_string()),
+                energy_minimizer_realization: Some("native_cuda_nonlinear_cg".to_string()),
+                ..ExecutionProvenance::default()
+            },
+        )
+        .expect("forced GPU final metadata should be written");
+
+        let resolution = &metadata["execution_provenance"]["execution_resolution"];
+        assert_eq!(resolution["effective_request"]["device"], "gpu");
+        assert_eq!(resolution["resolved_execution"]["device"], "gpu");
+        assert_eq!(resolution["resolution_mode"], "exact");
+        assert_eq!(resolution["fallback_occurred"], false);
+        assert_eq!(
+            metadata["execution_provenance"]["energy_minimizer_realization"],
+            "native_cuda_nonlinear_cg"
+        );
+    }
+
+    #[test]
+    fn final_metadata_preserves_authored_request_and_managed_effective_override() {
+        let mut problem = fem_execution_problem("cpu", ExecutionMode::Extended);
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_device_override".to_string(),
+            serde_json::json!({
+                "device": "gpu",
+                "source": "managed_launcher",
+            }),
+        );
+        let mut plan = test_fem_execution_plan();
+        plan.common.execution_mode = ExecutionMode::Extended;
+        let metadata = without_fem_execution_policy(|| {
+            write_final_execution_test_metadata(
+                "managed-gpu-override",
+                &problem,
+                &plan,
+                ExecutionProvenance {
+                    execution_engine: "fem_native_gpu".to_string(),
+                    precision: "double".to_string(),
+                    mfem_version: Some("4.8".to_string()),
+                    hypre_version: Some("2.32.0".to_string()),
+                    ..ExecutionProvenance::default()
+                },
+            )
+        })
+        .expect("managed GPU override final metadata should be written");
+
+        let resolution = &metadata["execution_provenance"]["execution_resolution"];
+        assert_eq!(resolution["authored_request"]["device"], "cpu");
+        assert_eq!(resolution["effective_request"]["device"], "gpu");
+        assert_eq!(resolution["resolved_execution"]["device"], "gpu");
+        assert_eq!(resolution["resolution_mode"], "override");
+        assert_eq!(resolution["fallback_occurred"], false);
+        assert!(resolution["fallback_reason"].is_null());
+    }
+
+    #[test]
+    fn final_metadata_contains_auto_gpu_to_cpu_fallback_resolution() {
+        let problem = fem_execution_problem("auto", ExecutionMode::Extended);
+        let mut plan = test_fem_execution_plan();
+        plan.common.execution_mode = ExecutionMode::Extended;
+        let metadata = write_final_execution_test_metadata_with_fem_policy(
+            "auto",
+            "auto-fallback",
+            &problem,
+            &plan,
+            ExecutionProvenance {
+                execution_engine: "fem_cpu_native".to_string(),
+                precision: "double".to_string(),
+                resolved_fallback: Some(ResolvedFallback {
+                    occurred: true,
+                    original_engine: "fem_native_gpu".to_string(),
+                    fallback_engine: "fem_cpu_native".to_string(),
+                    reason: "native_fem_gpu_unavailable".to_string(),
+                    message: "GPU unavailable; selected CPU".to_string(),
+                }),
+                ..ExecutionProvenance::default()
+            },
+        )
+        .expect("auto fallback metadata should be written");
+
+        let resolution = &metadata["execution_provenance"]["execution_resolution"];
+        assert_eq!(resolution["authored_request"]["device"], "auto");
+        assert_eq!(resolution["effective_request"]["device"], "auto");
+        assert_eq!(resolution["resolved_execution"]["device"], "cpu");
+        assert_eq!(resolution["resolution_mode"], "fallback");
+        assert_eq!(resolution["fallback_occurred"], true);
+        assert_eq!(resolution["fallback_reason"], "native_fem_gpu_unavailable");
+    }
+
+    #[test]
+    fn final_metadata_rejects_strict_forced_gpu_resolved_as_cpu() {
+        let problem = fem_execution_problem("gpu", ExecutionMode::Strict);
+        let plan = test_fem_execution_plan();
+        let error = write_final_execution_test_metadata_without_fem_policy(
+            "strict-gpu-mismatch",
+            &problem,
+            &plan,
+            ExecutionProvenance {
+                execution_engine: "fem_cpu_native".to_string(),
+                precision: "double".to_string(),
+                ..ExecutionProvenance::default()
+            },
+        )
+        .expect_err("strict forced GPU metadata must reject a CPU execution");
+
+        assert!(error.to_string().contains("forced device mismatch"));
+    }
+
+    #[test]
+    fn final_metadata_records_tpi_auto_to_cpu_resolution() {
+        let problem = fem_execution_problem("auto", ExecutionMode::Extended);
+        let mut plan = test_fem_execution_plan();
+        plan.common.execution_mode = ExecutionMode::Extended;
+        if let BackendPlanIR::Fem(fem) = &mut plan.backend_plan {
+            fem.relaxation = Some(fullmag_ir::RelaxationControlIR {
+                algorithm: fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1.0e-3),
+                    energy_tolerance_j: None,
+                    max_steps: Some(1),
+                    max_relaxation_time_s: None,
+                },
+            });
+        }
+        let metadata = write_final_execution_test_metadata_with_fem_policy(
+            "auto",
+            "tpi-auto-cpu",
+            &problem,
+            &plan,
+            ExecutionProvenance {
+                execution_engine: "fem_cpu_native".to_string(),
+                precision: "double".to_string(),
+                requested_energy_minimizer: Some("tangent_plane_implicit".to_string()),
+                resolved_energy_minimizer: Some("tangent_plane_implicit".to_string()),
+                energy_minimizer_realization: Some("native_mfem_tpi".to_string()),
+                resolved_fallback: Some(ResolvedFallback {
+                    occurred: true,
+                    original_engine: "fem_native_gpu".to_string(),
+                    fallback_engine: "fem_cpu_native".to_string(),
+                    reason: "fem_gpu_relaxation_algorithm_cpu_only".to_string(),
+                    message: "TPI is resolved to CPU/MFEM".to_string(),
+                }),
+                ..ExecutionProvenance::default()
+            },
+        )
+        .expect("TPI auto fallback metadata should be written");
+
+        let resolution = &metadata["execution_provenance"]["execution_resolution"];
+        assert_eq!(resolution["effective_request"]["device"], "auto");
+        assert_eq!(resolution["resolved_execution"]["device"], "cpu");
+        assert_eq!(resolution["resolution_mode"], "fallback");
+        assert_eq!(
+            resolution["fallback_reason"],
+            "fem_gpu_relaxation_algorithm_cpu_only"
+        );
+    }
+
+    #[test]
+    fn final_metadata_rejects_pgbb_realization_for_wrong_engine() {
+        let problem = fem_execution_problem("cpu", ExecutionMode::Extended);
+        let mut plan = test_fem_execution_plan();
+        plan.common.execution_mode = ExecutionMode::Extended;
+        if let BackendPlanIR::Fem(fem) = &mut plan.backend_plan {
+            fem.relaxation = Some(fullmag_ir::RelaxationControlIR {
+                algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1.0e-3),
+                    energy_tolerance_j: None,
+                    max_steps: Some(1),
+                    max_relaxation_time_s: None,
+                },
+            });
+        }
+        let error = write_final_execution_test_metadata_without_fem_policy(
+            "pgbb-realization-mismatch",
+            &problem,
+            &plan,
+            ExecutionProvenance {
+                execution_engine: "fem_cpu_native".to_string(),
+                precision: "double".to_string(),
+                requested_energy_minimizer: Some("projected_gradient_bb".to_string()),
+                resolved_energy_minimizer: Some("projected_gradient_bb".to_string()),
+                energy_minimizer_realization: Some("native_cuda_pgbb".to_string()),
+                ..ExecutionProvenance::default()
+            },
+        )
+        .expect_err("CPU PG-BB metadata must reject a CUDA realization ID");
+
+        assert!(error.to_string().contains("realization mismatch"));
+    }
+
     fn test_periodic_fem_execution_plan() -> ExecutionPlanIR {
         let mut plan = test_fem_execution_plan();
         if let BackendPlanIR::Fem(fem) = &mut plan.backend_plan {
@@ -6190,7 +6832,7 @@ mod tests {
 
     #[test]
     fn metadata_execution_provenance_persists_resolved_fallback() {
-        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let mut problem = fem_execution_problem("auto", ExecutionMode::Extended);
         problem.problem_meta.runtime_metadata.insert(
             "region_realization_revisions".to_string(),
             serde_json::json!({
@@ -6201,7 +6843,8 @@ mod tests {
                 "initial_state": 14,
             }),
         );
-        let plan = test_fem_execution_plan();
+        let mut plan = test_fem_execution_plan();
+        plan.common.execution_mode = ExecutionMode::Extended;
         let unique_suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock drift")
@@ -6244,8 +6887,10 @@ mod tests {
             },
         };
 
-        write_artifacts(&output_dir, &problem, &plan, &executed, None)
-            .expect("artifact write should preserve resolved fallback");
+        with_fem_execution_policy("auto", || {
+            write_artifacts(&output_dir, &problem, &plan, &executed, None)
+        })
+        .expect("artifact write should preserve resolved fallback");
 
         let metadata: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(output_dir.join("metadata.json")).expect("metadata should exist"),
@@ -6320,7 +6965,11 @@ mod tests {
             field_snapshots: Vec::new(),
             field_snapshot_count: 0,
             auxiliary_artifacts: Vec::new(),
-            provenance: ExecutionProvenance::default(),
+            provenance: ExecutionProvenance {
+                execution_engine: "fem_cpu_native".to_string(),
+                precision: "double".to_string(),
+                ..ExecutionProvenance::default()
+            },
         };
 
         write_artifacts(&output_dir, &problem, &plan, &executed, None)
@@ -6357,7 +7006,7 @@ mod tests {
 
     #[test]
     fn fem_canonical_stt_persists_complete_provenance_and_manifest() {
-        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let mut problem = fem_execution_problem("auto", ExecutionMode::Extended);
         problem.spin_torque_modules = vec![fullmag_ir::SpinTorqueModuleIR::Slonczewski {
             schema_version: Some("slonczewski_torque.v1".to_string()),
             id: Some("cpp".to_string()),
@@ -6380,6 +7029,7 @@ mod tests {
             }),
         }];
         let mut plan = test_fem_execution_plan();
+        plan.common.execution_mode = ExecutionMode::Extended;
         let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
             panic!("FEM fixture")
         };
@@ -6442,7 +7092,10 @@ mod tests {
                 ..ExecutionProvenance::default()
             },
         };
-        write_artifacts(&output_dir, &problem, &plan, &executed, None).expect("write artifacts");
+        with_fem_execution_policy("auto", || {
+            write_artifacts(&output_dir, &problem, &plan, &executed, None)
+        })
+        .expect("write artifacts");
 
         let metadata: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(output_dir.join("metadata.json")).expect("metadata"),
@@ -7011,7 +7664,7 @@ mod tests {
         );
         assert_eq!(
             metadata["algorithm_policy"]["gpu_status"],
-            "production_executable"
+            serde_json::Value::Null
         );
 
         let typed: crate::types::FemCpuRelaxationQualificationMetadata =
@@ -7314,7 +7967,7 @@ mod tests {
 
     #[test]
     fn metadata_reports_fem_gpu_direct_minimizer_qualification_policy() {
-        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let mut problem = fem_execution_problem("gpu", ExecutionMode::Strict);
         problem.problem_meta.name = "gpu_ncg_relax_metadata".to_string();
         let mut plan = test_fem_execution_plan();
         if let BackendPlanIR::Fem(fem) = &mut plan.backend_plan {
@@ -7328,10 +7981,11 @@ mod tests {
                 },
             });
         }
-        plan.common.execution_mode = ExecutionMode::Extended;
         let provenance = ExecutionProvenance {
             execution_engine: "fem_native_gpu".to_string(),
             precision: "double".to_string(),
+            mfem_version: Some("4.8".to_string()),
+            hypre_version: Some("2.32.0".to_string()),
             requested_energy_minimizer: Some("nonlinear_cg".to_string()),
             resolved_energy_minimizer: Some("nonlinear_cg".to_string()),
             energy_minimizer_realization: Some("native_cuda_nonlinear_cg".to_string()),
@@ -7458,7 +8112,7 @@ mod tests {
 
     #[test]
     fn metadata_reports_fem_llg_overdamped_relaxation_policy() {
-        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let mut problem = fem_execution_problem("gpu", ExecutionMode::Strict);
         problem.problem_meta.name = "gpu_llg_relax_metadata".to_string();
         let mut gpu_plan = test_fem_execution_plan();
         if let BackendPlanIR::Fem(fem) = &mut gpu_plan.backend_plan {
@@ -7472,7 +8126,6 @@ mod tests {
                 },
             });
         }
-        gpu_plan.common.execution_mode = ExecutionMode::Extended;
         let executed = ExecutedRun {
             result: RunResult {
                 status: RunStatus::Completed,
@@ -7494,6 +8147,8 @@ mod tests {
             provenance: ExecutionProvenance {
                 execution_engine: "fem_native_gpu".to_string(),
                 precision: "double".to_string(),
+                mfem_version: Some("4.8".to_string()),
+                hypre_version: Some("2.32.0".to_string()),
                 requested_integrator: Some("heun".to_string()),
                 resolved_integrator: Some("heun".to_string()),
                 requested_energy_minimizer: Some("llg_overdamped".to_string()),
@@ -7716,6 +8371,7 @@ mod tests {
             requested_energy_minimizer: None,
             resolved_energy_minimizer: None,
             energy_minimizer_realization: None,
+            fem_direct_minimizer_policy: None,
             requested_demag_realization: None,
             resolved_demag_realization: None,
             timestep_policy: None,
@@ -8600,6 +9256,7 @@ mod tests {
             requested_energy_minimizer: None,
             resolved_energy_minimizer: None,
             energy_minimizer_realization: None,
+            fem_direct_minimizer_policy: None,
             requested_demag_realization: None,
             resolved_demag_realization: None,
             timestep_policy: None,

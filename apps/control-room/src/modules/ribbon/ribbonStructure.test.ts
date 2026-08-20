@@ -1522,11 +1522,19 @@ describe("ribbon structure", () => {
     expect(result).toMatchObject({ status: "completed" });
     expect(patches).toEqual([
       {
+        layers: {
+          airbox: {
+            vectors: {
+              domain: "airbox_only",
+              visible: true,
+            },
+          },
+        },
         overrides: [
           {
             display: { vectors: { visible: true } },
-            scope: "fdm_domain",
-            scope_id: FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id,
+            scope: "airbox",
+            scope_id: "airbox",
           },
         ],
       },

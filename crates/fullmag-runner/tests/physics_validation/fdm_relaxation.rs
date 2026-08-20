@@ -1,5 +1,48 @@
 use super::*;
 
+fn assert_authoritative_relaxation_completion(
+    result: &fullmag_runner::RunResult,
+    workload: &str,
+    max_steps: u64,
+) {
+    assert_eq!(
+        result.status,
+        RunStatus::Completed,
+        "{workload}: runner must finish with Completed"
+    );
+    let completion = result
+        .completion
+        .as_ref()
+        .unwrap_or_else(|| panic!("{workload}: missing authoritative completion"));
+    assert!(
+        completion.converged,
+        "{workload}: Completed without completion.converged=true: {completion:?}"
+    );
+    assert!(
+        matches!(
+            completion.reason,
+            Some(fullmag_ir::StageStopReason::Torque | fullmag_ir::StageStopReason::Energy)
+        ),
+        "{workload}: completion reason is not a convergence reason: {completion:?}"
+    );
+    assert!(
+        result.steps.len() < max_steps as usize,
+        "{workload}: qualification must not terminate at max_steps"
+    );
+    let final_step = result
+        .steps
+        .last()
+        .unwrap_or_else(|| panic!("{workload}: no accepted scalar step"));
+    for (name, value) in [
+        ("e_total", final_step.e_total),
+        ("max_torque_Apm", final_step.max_torque_Apm),
+        ("max_torque_T", final_step.max_torque_T),
+        ("max_rhs_norm_per_s", final_step.max_rhs_norm_per_s),
+    ] {
+        assert!(value.is_finite(), "{workload}: {name} is not finite: {value}");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Test 1: Uniform field alignment
 // ---------------------------------------------------------------------------
@@ -14,7 +57,7 @@ fn uniform_field_alignment() {
     let n = 16usize;
     let random_m0 = fullmag_plan::generate_random_unit_vectors(42, n);
 
-    let plan = FdmPlanIR {
+    let plan = certify_fdm_grid(FdmPlanIR {
         grid: GridDimensions { cells: [4, 4, 1] },
         cell_size: [5e-9, 5e-9, 5e-9],
         region_mask: vec![0; n],
@@ -24,7 +67,7 @@ fn uniform_field_alignment() {
         gyromagnetic_ratio: 2.211e5,
         precision: ExecutionPrecision::Double,
         exchange_bc: ExchangeBoundaryCondition::Neumann,
-        integrator: IntegratorChoice::Heun,
+        integrator: Some(IntegratorChoice::Heun),
         fixed_timestep: Some(1e-14),
         adaptive_timestep: None,
         field_refresh: None,
@@ -34,8 +77,7 @@ fn uniform_field_alignment() {
                 torque_tolerance_apm: Some(1e-5),
                 energy_tolerance_j: None,
                 max_steps: Some(50_000),
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
         }),
         enable_exchange: false,
@@ -71,10 +113,10 @@ fn uniform_field_alignment() {
         interfacial_dmi: None,
         bulk_dmi: None,
         ..Default::default()
-    };
+    });
 
     let result = fullmag_runner::run_reference_fdm(&plan, 1e-9, &[]).expect("run should succeed");
-    assert_eq!(result.status, RunStatus::Completed);
+    assert_authoritative_relaxation_completion(&result, "fdm_cpu_fp64.llg_overdamped.macrospin", 50_000);
 
     let avg = average_m(&result.final_magnetization);
     assert_vec_approx("field_alignment", avg, [1.0, 0.0, 0.0], 1e-2);
@@ -97,7 +139,7 @@ fn exchange_only_random_to_uniform() {
     let n = 64usize;
     let random_m0 = fullmag_plan::generate_random_unit_vectors(123, n);
 
-    let plan = FdmPlanIR {
+    let plan = certify_fdm_grid(FdmPlanIR {
         grid: GridDimensions { cells: [4, 4, 4] },
         cell_size: [2e-9, 2e-9, 2e-9],
         region_mask: vec![0; n],
@@ -107,7 +149,7 @@ fn exchange_only_random_to_uniform() {
         gyromagnetic_ratio: 2.211e5,
         precision: ExecutionPrecision::Double,
         exchange_bc: ExchangeBoundaryCondition::Neumann,
-        integrator: IntegratorChoice::Heun,
+        integrator: Some(IntegratorChoice::Heun),
         fixed_timestep: Some(1e-14),
         adaptive_timestep: None,
         field_refresh: None,
@@ -117,8 +159,7 @@ fn exchange_only_random_to_uniform() {
                 torque_tolerance_apm: Some(1e-6),
                 energy_tolerance_j: None,
                 max_steps: Some(10_000),
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
         }),
         enable_exchange: true,
@@ -153,9 +194,14 @@ fn exchange_only_random_to_uniform() {
         interfacial_dmi: None,
         bulk_dmi: None,
         ..Default::default()
-    };
+    });
 
     let result = fullmag_runner::run_reference_fdm(&plan, 1e-9, &[]).expect("run should succeed");
+    assert_authoritative_relaxation_completion(
+        &result,
+        "fdm_cpu_fp64.projected_gradient_bb.exchange_only",
+        10_000,
+    );
 
     // Exchange energy should be negligibly small after relaxation
     // (BB converges very rapidly on this exchange-only problem)
@@ -194,7 +240,7 @@ fn thin_film_shape_anisotropy() {
         })
         .collect();
 
-    let plan = FdmPlanIR {
+    let plan = certify_fdm_grid(FdmPlanIR {
         grid: GridDimensions { cells: [nx, ny, 1] },
         cell_size: [5e-9, 5e-9, 2e-9], // thin: 2nm thick vs 80nm wide
         region_mask: vec![0; n],
@@ -204,7 +250,7 @@ fn thin_film_shape_anisotropy() {
         gyromagnetic_ratio: 2.211e5,
         precision: ExecutionPrecision::Double,
         exchange_bc: ExchangeBoundaryCondition::Neumann,
-        integrator: IntegratorChoice::Heun,
+        integrator: Some(IntegratorChoice::Heun),
         fixed_timestep: Some(1e-13),
         adaptive_timestep: None,
         field_refresh: None,
@@ -214,8 +260,7 @@ fn thin_film_shape_anisotropy() {
                 torque_tolerance_apm: Some(1e-3),
                 energy_tolerance_j: None,
                 max_steps: Some(50_000),
-                max_pseudotime_s: None,
-                max_physical_time_s: None,
+                max_relaxation_time_s: None,
             },
         }),
         enable_exchange: true,
@@ -250,9 +295,14 @@ fn thin_film_shape_anisotropy() {
         interfacial_dmi: None,
         bulk_dmi: None,
         ..Default::default()
-    };
+    });
 
     let result = fullmag_runner::run_reference_fdm(&plan, 10e-9, &[]).expect("run should succeed");
+    assert_authoritative_relaxation_completion(
+        &result,
+        "fdm_cpu_fp64.llg_overdamped.thin_film_demag",
+        50_000,
+    );
 
     let avg = average_m(&result.final_magnetization);
 
@@ -293,7 +343,7 @@ fn sp4_equilibrium() {
 
     let result =
         fullmag_runner::run_reference_fdm(&plan, 10e-9, &[]).expect("SP4 relax should succeed");
-    assert_eq!(result.status, RunStatus::Completed);
+    assert_authoritative_relaxation_completion(&result, "fdm_cpu_fp64.llg_overdamped.sp4", 50_000);
 
     let avg = average_m(&result.final_magnetization);
 
@@ -349,6 +399,11 @@ fn sp4_cross_algorithm_equilibrium() {
         let plan = sp4_plan(*alg, 0.5, true);
         let result = fullmag_runner::run_reference_fdm(&plan, 10e-9, &[])
             .unwrap_or_else(|e| panic!("{name} relaxation failed: {}", e.message));
+        assert_authoritative_relaxation_completion(
+            &result,
+            &format!("fdm_cpu_fp64.{}.sp4", name.to_ascii_lowercase()),
+            50_000,
+        );
         let avg = average_m(&result.final_magnetization);
         let energy = result.steps.last().unwrap().e_total;
         results.push((name, avg, energy));
@@ -400,6 +455,11 @@ fn sp4_reversal_dynamics() {
     let relax_plan = sp4_plan(RelaxationAlgorithmIR::LlgOverdamped, 0.5, true);
     let relax_result = fullmag_runner::run_reference_fdm(&relax_plan, 10e-9, &[])
         .expect("SP4 relax should succeed");
+    assert_authoritative_relaxation_completion(
+        &relax_result,
+        "fdm_cpu_fp64.llg_overdamped.sp4.reversal_prestage",
+        50_000,
+    );
 
     let relaxed_m = relax_result.final_magnetization;
 
@@ -409,7 +469,7 @@ fn sp4_reversal_dynamics() {
     let mu0 = 4.0 * std::f64::consts::PI * 1e-7;
     let h_ext = [-24.6e-3 / mu0, 4.3e-3 / mu0, 0.0];
 
-    let dyn_plan = FdmPlanIR {
+    let dyn_plan = certify_fdm_grid(FdmPlanIR {
         grid: GridDimensions {
             cells: [128, 32, 1],
         },
@@ -424,7 +484,7 @@ fn sp4_reversal_dynamics() {
         gyromagnetic_ratio: 2.211e5,
         precision: ExecutionPrecision::Double,
         exchange_bc: ExchangeBoundaryCondition::Neumann,
-        integrator: IntegratorChoice::Heun,
+        integrator: Some(IntegratorChoice::Heun),
         fixed_timestep: Some(5e-14), // needs small dt for dynamics with α=0.02
         adaptive_timestep: None,
         relaxation: None, // no relaxation — pure dynamics
@@ -460,7 +520,7 @@ fn sp4_reversal_dynamics() {
         interfacial_dmi: None,
         bulk_dmi: None,
         ..Default::default()
-    };
+    });
 
     let dyn_result = fullmag_runner::run_reference_fdm(&dyn_plan, 1e-9, &[])
         .expect("SP4 dynamics should succeed");

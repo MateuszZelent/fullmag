@@ -191,7 +191,7 @@ describe("AirboxInspectorLanePanel", () => {
     expect(html).not.toContain("FDM Universe / Grid Extent");
   });
 
-  it("honors an explicit FDM Airbox selection while runtime status is unavailable", () => {
+  it("does not infer the runtime lane from a legacy FDM Airbox selection", () => {
     testState.discretization = null;
     testState.calls.length = 0;
 
@@ -199,12 +199,12 @@ describe("AirboxInspectorLanePanel", () => {
       <AirboxOverviewLanePanel selection={explicitFdmSelection} />,
     );
 
-    expect(testState.calls).toEqual([true, true]);
-    expect(html).toContain("Airbox · FDM structured universe");
-    expect(html).not.toContain("FEM Airbox child");
+    expect(testState.calls).toEqual([false, false]);
+    expect(html).not.toContain("Airbox · FDM structured universe");
+    expect(html).toContain("FEM Airbox child");
   });
 
-  it("fails closed when the explicit Airbox target conflicts with runtime status", () => {
+  it("uses the current runtime lane despite a legacy FDM Airbox selection", () => {
     testState.discretization = "fem";
     testState.calls.length = 0;
 
@@ -213,9 +213,9 @@ describe("AirboxInspectorLanePanel", () => {
     );
 
     expect(testState.calls).toEqual([false, false]);
-    expect(html).toContain("Airbox selection is unavailable");
+    expect(html).not.toContain("Airbox selection is unavailable");
     expect(html).not.toContain("Airbox · FDM structured universe");
-    expect(html).not.toContain("FEM Airbox child");
+    expect(html).toContain("FEM Airbox child");
   });
 
   it("uses the shared parameters panel with an explicit FDM lane", () => {

@@ -1,4 +1,15 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+
+import {
+  captureViewportPerformanceSnapshot,
+  installViewportPerformanceProbe,
+} from "./lib/viewport-performance-proof.mjs";
+
 const url = process.env.CONTROL_ROOM_URL ?? "http://localhost:3100/workspace";
+const auditArtifactsDirectory = path.resolve(
+  process.env.CONTROL_ROOM_AUDIT_ARTIFACTS_DIR ?? ".artifacts/viewport-3d-browser-audit",
+);
 const apiBase =
   process.env.CONTROL_ROOM_API_BASE_URL ??
   process.env.NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL ??
@@ -30,6 +41,7 @@ const browser = await playwright.chromium.launch();
 const page = await browser.newPage({
   viewport: { height: 900, width: 1440 },
 });
+await installViewportPerformanceProbe(page);
 const errors = [];
 const resourceRequests = [];
 let auditActive = false;
@@ -66,6 +78,7 @@ page.on("request", (request) => {
 });
 
 try {
+  const rawPerformanceTrace = [];
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await openViewport3D(page);
   const viewport = page.locator(".fm-viewport-3d");
@@ -74,6 +87,7 @@ try {
   await waitForCanvasReady(canvas);
   await waitForDiagnostics(page);
   const baseline = await waitForStableDiagnostics(page);
+  rawPerformanceTrace.push(await captureViewportPerformanceSnapshot(page, "baseline"));
   const sequence = [
     "interactive-lite",
     "interactive",
@@ -90,6 +104,7 @@ try {
   auditActive = false;
 
   const after = await waitForStableDiagnostics(page);
+  rawPerformanceTrace.push(await captureViewportPerformanceSnapshot(page, "after-profile-switch"));
   const maxGeometryGrowth = Math.max(12, baseline.geo * 2);
   const cacheGrowth = after.cacheBytes - baseline.cacheBytes;
   if (after.geo > baseline.geo + maxGeometryGrowth) {
@@ -110,6 +125,11 @@ try {
   if (errors.length > 0) {
     throw new Error(`Browser console/network errors:\n${errors.join("\n")}`);
   }
+  await mkdir(auditArtifactsDirectory, { recursive: true });
+  await writeFile(
+    path.join(auditArtifactsDirectory, "viewport-3d-profile-switch.json"),
+    `${JSON.stringify({ after, baseline, rawPerformanceTrace, resourceRequests }, null, 2)}\n`,
+  );
 
   console.log(
     "Viewport 3D profile-switch audit passed:",

@@ -128,6 +128,7 @@ pub struct QuantityDescriptorWire {
     pub supports_preview_3d: bool,
     pub supports_history: bool,
     pub supports_export: bool,
+    pub ui_exposed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quick_access_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -138,7 +139,6 @@ pub struct QuantityDescriptorWire {
 pub fn build_wire_catalog() -> Vec<QuantityDescriptorWire> {
     crate::quantity_catalog()
         .iter()
-        .filter(|spec| spec.ui_exposed)
         .map(|spec| QuantityDescriptorWire {
             id: spec.id.as_str().to_string(),
             label: spec.label.to_string(),
@@ -154,6 +154,7 @@ pub fn build_wire_catalog() -> Vec<QuantityDescriptorWire> {
             supports_preview_3d: spec.supports_preview_3d,
             supports_history: spec.supports_history,
             supports_export: spec.supports_export,
+            ui_exposed: spec.ui_exposed,
             quick_access_label: spec.quick_access_label.map(str::to_string),
             scalar_metric_key: spec.scalar_metric_key.map(str::to_string),
         })

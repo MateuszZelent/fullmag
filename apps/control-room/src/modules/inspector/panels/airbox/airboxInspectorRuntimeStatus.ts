@@ -68,7 +68,7 @@ export function resolveAirboxInspectorLane(
   const selectionLane =
     selection.ref?.type === "airbox"
       ? selection.kind === "airbox.multilayer.target" ||
-        selection.ref.visualizationTargetId === "fdm-universe-outside-support"
+        selection.kind === "mesh.grid.universe-outside-support"
         ? "fdm"
         : null
       : null;

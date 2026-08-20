@@ -518,9 +518,18 @@ class MagnetHandle:
         layer.m     = fm.texture.uniform(1, 0, 0)
     """
 
-    def __init__(self, shape: object, name: str = "body") -> None:
+    def __init__(
+        self,
+        shape: object,
+        name: str = "body",
+        *,
+        object_id: str | None = None,
+    ) -> None:
         self._shape = shape
         self._name = name
+        self._object_id = (
+            require_non_empty(object_id, "object_id") if object_id is not None else None
+        )
         self.region_name: str | None = None
         self.Ms: float | None = None
         self.Aex: float | None = None
@@ -548,6 +557,10 @@ class MagnetHandle:
 
     def __repr__(self) -> str:
         return f"MagnetHandle({self._name!r}, Ms={self.Ms}, Aex={self.Aex}, m={self._m_value!r})"
+
+    @property
+    def object_id(self) -> str | None:
+        return self._object_id
 
     @property
     def m(self) -> "MagnetizationHandle":
@@ -631,6 +644,7 @@ class MagnetHandle:
             name=self._name,
             geometry=resolved_geometry,
             material=mat,
+            object_id=self._object_id,
             region=region,
             m0=m0,
             object_regions=tuple(self._object_regions),
@@ -658,7 +672,7 @@ class MagnetHandle:
             else self.regions.reserve_region_id(region_id)
         )
         region = ObjectRegion(
-            owner_object=self._name,
+            owner_object=self._object_id if self._object_id is not None else self._name,
             name=name,
             shape=shape,
             region_id=resolved_region_id,
@@ -5438,8 +5452,14 @@ class StudyBuilder:
         )
         return self
 
-    def geometry(self, shape: object, name: str = "body") -> MagnetHandle:
-        return geometry(shape, name=name)
+    def geometry(
+        self,
+        shape: object,
+        name: str = "body",
+        *,
+        object_id: str | None = None,
+    ) -> MagnetHandle:
+        return geometry(shape, name=name, object_id=object_id)
 
     def geometry_object(
         self,
@@ -7417,7 +7437,12 @@ def _cache_mesh_quality_reports(assets: dict[str, Any] | None) -> None:
 # Geometry → MagnetHandle
 # ---------------------------------------------------------------------------
 
-def geometry(shape: object, name: str = "body") -> MagnetHandle:
+def geometry(
+    shape: object,
+    name: str = "body",
+    *,
+    object_id: str | None = None,
+) -> MagnetHandle:
     """Register a magnet and return its configuration handle.
 
     Returns a ``MagnetHandle`` on which to set material parameters::
@@ -7428,7 +7453,7 @@ def geometry(shape: object, name: str = "body") -> MagnetHandle:
 
     Multiple calls register multiple magnets.
     """
-    handle = MagnetHandle(shape, name)
+    handle = MagnetHandle(shape, name, object_id=object_id)
     _state._magnets.append(handle)
     return handle
 

@@ -9,6 +9,8 @@ export interface Viewport3DRenderAdoptionReceipt {
   itemCount?: number;
   kind: Viewport3DRenderAdoptionKind;
   resourceKey: string | null;
+  sessionEpoch: string;
+  sessionId: string;
   scalarBufferKey: string | null;
   targetId: string;
   vectorBuildKey: string | null;
@@ -16,8 +18,14 @@ export interface Viewport3DRenderAdoptionReceipt {
 
 export type Viewport3DRenderAdoptionIdentity = Omit<
   Viewport3DRenderAdoptionReceipt,
-  "adoptedAtMs" | "adoptionSequence" | "byteLength" | "itemCount" | "targetId"
->;
+  | "adoptedAtMs"
+  | "adoptionSequence"
+  | "byteLength"
+  | "itemCount"
+  | "sessionEpoch"
+  | "sessionId"
+  | "targetId"
+> & Partial<Pick<Viewport3DRenderAdoptionReceipt, "sessionEpoch" | "sessionId">>;
 
 interface SurfaceAdoptionInput {
   byteLength: number;
@@ -25,6 +33,7 @@ interface SurfaceAdoptionInput {
   fieldBufferId: string | null;
   ownerId?: string;
   resourceKey?: string | null;
+  sessionIdentity?: { sessionEpoch: string; sessionId: string } | null;
   scalarBufferKey: string;
   targetId?: string;
 }
@@ -36,6 +45,7 @@ interface VectorAdoptionInput {
   itemCount?: number;
   ownerId?: string;
   resourceKey?: string | null;
+  sessionIdentity?: { sessionEpoch: string; sessionId: string } | null;
   targetId?: string;
   vectorBuildKey: string;
 }
@@ -43,8 +53,10 @@ interface VectorAdoptionInput {
 type AdoptionPass = Omit<Viewport3DRenderAdoptionReceipt, "targetId">;
 type AdoptionInput = Omit<
   Viewport3DRenderAdoptionReceipt,
-  "adoptedAtMs" | "adoptionSequence" | "targetId"
->;
+  "adoptedAtMs" | "adoptionSequence" | "sessionEpoch" | "sessionId" | "targetId"
+> & {
+  sessionIdentity?: { sessionEpoch: string; sessionId: string } | null;
+};
 
 interface OwnedAdoption {
   explicitTargetId: string | null;
@@ -69,6 +81,12 @@ export interface Viewport3DRenderAdoptionRegistry {
   ): void;
   clearTarget(targetId: string): void;
   getLifecycleStats(): Viewport3DRenderAdoptionRegistryLifecycleStats;
+  hasActiveAdoption(input: {
+    fieldBufferId: string;
+    resourceKey: string | null;
+    sessionEpoch: string;
+    sessionId: string;
+  }): boolean;
   registerCarrierAdoptionReplay(
     carrierId: string,
     replay: () => void,
@@ -76,6 +94,7 @@ export interface Viewport3DRenderAdoptionRegistry {
   recordSurfaceAdoption(input: SurfaceAdoptionInput): void;
   recordVectorAdoption(input: VectorAdoptionInput): void;
   retainDemand(targetId: string): () => void;
+  setSessionIdentity(identity: { sessionEpoch: string; sessionId: string } | null): void;
   setCarrierTargets(
     targetIdsByCarrierId: ReadonlyMap<string, readonly string[]>,
   ): void;
@@ -106,6 +125,7 @@ export function createViewport3DRenderAdoptionRegistry({
   let adoptionSequence = 0;
   let activeOwnerCount = 0;
   let rejectedAdoptionCount = 0;
+  let currentSessionIdentity: { sessionEpoch: string; sessionId: string } | null = null;
 
   const notify = (targetId: string) => {
     for (const listener of [...listeners]) listener(targetId);
@@ -197,11 +217,26 @@ export function createViewport3DRenderAdoptionRegistry({
     explicitOwnerId: string | undefined,
     explicitTargetId: string | undefined,
   ) => {
-    const key = receiptKey(input);
-    const ownerId = explicitOwnerId ?? legacyOwnerId(input);
+    const { sessionIdentity: explicitSessionIdentity = null, ...receiptInput } = input;
+    const responseSessionIdentity = explicitSessionIdentity ?? currentSessionIdentity;
+    if (
+      currentSessionIdentity &&
+      (!responseSessionIdentity ||
+        responseSessionIdentity.sessionId !== currentSessionIdentity.sessionId ||
+        responseSessionIdentity.sessionEpoch !== currentSessionIdentity.sessionEpoch)
+    ) {
+      rejectedAdoptionCount += 1;
+      return;
+    }
+    const sessionIdentity = responseSessionIdentity ?? currentSessionIdentity ?? {
+      sessionEpoch: "legacy-unscoped",
+      sessionId: "legacy-unscoped",
+    };
+    const key = receiptKey(receiptInput);
+    const ownerId = explicitOwnerId ?? legacyOwnerId(receiptInput);
     const currentOwners = activePasses.get(key);
     const currentOwner = currentOwners?.get(ownerId);
-    if (currentOwner && adoptedPassEquals(currentOwner.receipt, input)) {
+    if (currentOwner && adoptedPassEquals(currentOwner.receipt, receiptInput)) {
       currentOwner.explicitTargetId = explicitTargetId ?? null;
       syncPass(key);
       return;
@@ -230,15 +265,17 @@ export function createViewport3DRenderAdoptionRegistry({
       return;
     }
     if (currentOwner) rememberInactive(currentOwner);
-    const inactiveKey = historyKey(ownerId, input);
+    const inactiveKey = historyKey(ownerId, receiptInput);
     const historical = inactiveHistory.get(inactiveKey);
     const matchingActive = [...(currentOwners?.values() ?? [])].find((owned) =>
-      adoptedPassEquals(owned.receipt, input),
+      adoptedPassEquals(owned.receipt, receiptInput),
     );
     const receipt = matchingActive?.receipt ?? historical ?? Object.freeze({
-      ...input,
+      ...receiptInput,
       adoptedAtMs: safeTimestamp(now()),
       adoptionSequence: ++adoptionSequence,
+      sessionEpoch: sessionIdentity.sessionEpoch,
+      sessionId: sessionIdentity.sessionId,
     });
     inactiveHistory.delete(inactiveKey);
     const owners = currentOwners ?? new Map<string, OwnedAdoption>();
@@ -303,6 +340,22 @@ export function createViewport3DRenderAdoptionRegistry({
         targetReceiptCount,
       };
     },
+    hasActiveAdoption({ fieldBufferId, resourceKey, sessionEpoch, sessionId }) {
+      for (const owners of activePasses.values()) {
+        for (const owned of owners.values()) {
+          const receipt = owned.receipt;
+          if (
+            receipt.fieldBufferId === fieldBufferId &&
+            receipt.resourceKey === resourceKey &&
+            receipt.sessionEpoch === sessionEpoch &&
+            receipt.sessionId === sessionId
+          ) {
+            return true;
+          }
+        }
+      }
+      return false;
+    },
     registerCarrierAdoptionReplay(carrierId, replay) {
       const replays = replaysByCarrier.get(carrierId) ?? new Set();
       replays.add(replay);
@@ -324,6 +377,7 @@ export function createViewport3DRenderAdoptionRegistry({
         kind: "surface",
         resourceKey: input.resourceKey ?? null,
         scalarBufferKey: input.scalarBufferKey,
+        sessionIdentity: input.sessionIdentity ?? null,
         vectorBuildKey: null,
       }, input.ownerId, input.targetId);
     },
@@ -337,6 +391,7 @@ export function createViewport3DRenderAdoptionRegistry({
           : { itemCount: safeCount(input.itemCount) }),
         kind: "vector",
         resourceKey: input.resourceKey ?? null,
+        sessionIdentity: input.sessionIdentity ?? null,
         scalarBufferKey: null,
         vectorBuildKey: input.vectorBuildKey,
       }, input.ownerId, input.targetId);
@@ -361,6 +416,22 @@ export function createViewport3DRenderAdoptionRegistry({
         clearRejectedTargetPasses(targetId);
         if (hadReceipts) notify(targetId);
       };
+    },
+    setSessionIdentity(identity) {
+      if (
+        currentSessionIdentity?.sessionId === identity?.sessionId &&
+        currentSessionIdentity?.sessionEpoch === identity?.sessionEpoch
+      ) {
+        return;
+      }
+      const affectedTargetIds = [...receipts.keys()];
+      currentSessionIdentity = identity;
+      receipts.clear();
+      activePasses.clear();
+      inactiveHistory.clear();
+      rejectedTargetPasses.clear();
+      activeOwnerCount = 0;
+      for (const targetId of affectedTargetIds) notify(targetId);
     },
     snapshot(targetId) {
       return receipts.get(targetId) ?? EMPTY_RECEIPTS;
@@ -466,6 +537,8 @@ function receiptsEqual(
       left.itemCount === right.itemCount &&
       left.kind === right.kind &&
       left.resourceKey === right.resourceKey &&
+      left.sessionEpoch === right.sessionEpoch &&
+      left.sessionId === right.sessionId &&
       left.scalarBufferKey === right.scalarBufferKey &&
       left.targetId === right.targetId &&
       left.vectorBuildKey === right.vectorBuildKey,
@@ -479,6 +552,8 @@ function adoptionIdentityEquals(
     | "fieldBufferId"
     | "kind"
     | "resourceKey"
+    | "sessionEpoch"
+    | "sessionId"
     | "scalarBufferKey"
     | "vectorBuildKey"
   >,
@@ -489,6 +564,8 @@ function adoptionIdentityEquals(
     receipt.fieldBufferId === adoption.fieldBufferId &&
     receipt.kind === adoption.kind &&
     receipt.resourceKey === adoption.resourceKey &&
+    (adoption.sessionEpoch === undefined || receipt.sessionEpoch === adoption.sessionEpoch) &&
+    (adoption.sessionId === undefined || receipt.sessionId === adoption.sessionId) &&
     receipt.scalarBufferKey === adoption.scalarBufferKey &&
     receipt.vectorBuildKey === adoption.vectorBuildKey
   );

@@ -82,6 +82,36 @@ describe("FDM cuboid realized membership", () => {
     expect(input?.anchors).toEqual(new Float32Array([1.5, 0.5, 0.5, 7.5, 0.5, 0.5]));
   });
 
+  it.each(["active", "inactive"] as const)(
+    "fails closed for vectors-only %s selection without exact membership",
+    (cellSelection) => {
+      const domain = {
+        bounds: null,
+        displayCellBudget: 2,
+        displayCellCount: 2,
+        kind: "fdm-grid" as const,
+        origin: [0, 0, 0] as [number, number, number],
+        shape: [2, 1, 1] as [number, number, number],
+        spacing: [1, 1, 1] as [number, number, number],
+        stride: 1,
+        totalCells: 2,
+      };
+
+      expect(createFdmVectorOnlyBuildInput({
+        cellSelection,
+        domain,
+        maxSamples: 2,
+        realizedRegionIds: null,
+      })).toBeNull();
+      expect(createFdmVectorOnlyBuildInput({
+        cellSelection,
+        domain,
+        maxSamples: 2,
+        realizedRegionIds: new Uint32Array([FMRM_INACTIVE_REGION_ID]),
+      })).toBeNull();
+    },
+  );
+
   it("builds a bounded sampled vector stream from anchors without a cuboid model", () => {
     const result = buildFdmVectorSegmentsFromAnchors({
       anchorMode: "center",

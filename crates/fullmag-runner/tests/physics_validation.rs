@@ -18,6 +18,9 @@ use fullmag_ir::{
 };
 use fullmag_runner::RunStatus;
 
+#[path = "physics_validation/fdm_relaxation.rs"]
+mod fdm_relaxation;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -136,6 +139,29 @@ fn assert_vec_approx(label: &str, actual: [f64; 3], expected: [f64; 3], tol: f64
     }
 }
 
+fn certify_fdm_grid(mut plan: FdmPlanIR) -> FdmPlanIR {
+    let total_cells =
+        (plan.grid.cells[0] as u64) * (plan.grid.cells[1] as u64) * (plan.grid.cells[2] as u64);
+    let active_cells = plan
+        .active_mask
+        .as_deref()
+        .map(|mask| mask.iter().filter(|active| **active).count() as u64)
+        .unwrap_or(total_cells);
+    plan.grid_certificate = Some(
+        fullmag_ir::FdmGridCertificateIR::new_with_masks(
+            plan.origin_m,
+            plan.grid.cells,
+            plan.cell_size,
+            active_cells,
+            total_cells * fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+            plan.active_mask.as_deref(),
+            &plan.region_mask,
+        )
+        .expect("physics-validation grid certificate should be valid"),
+    );
+    plan
+}
+
 /// µMAG Standard Problem 4 plan: 128×32×1 Permalloy film.
 fn sp4_plan(algorithm: RelaxationAlgorithmIR, damping: f64, enable_demag: bool) -> FdmPlanIR {
     let nx = 128u32;
@@ -146,7 +172,7 @@ fn sp4_plan(algorithm: RelaxationAlgorithmIR, damping: f64, enable_demag: bool) 
     let norm = (1.0f64 * 1.0 + 0.1 * 0.1).sqrt();
     let m0 = vec![[1.0 / norm, 0.1 / norm, 0.0]; n];
 
-    FdmPlanIR {
+    certify_fdm_grid(FdmPlanIR {
         grid: GridDimensions { cells: [nx, ny, 1] },
         cell_size: [500e-9 / nx as f64, 125e-9 / ny as f64, 3e-9],
         region_mask: vec![0; n],
@@ -204,7 +230,7 @@ fn sp4_plan(algorithm: RelaxationAlgorithmIR, damping: f64, enable_demag: bool) 
         interfacial_dmi: None,
         bulk_dmi: None,
         ..Default::default()
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------

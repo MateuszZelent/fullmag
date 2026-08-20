@@ -1,9 +1,13 @@
 import type { Viewport3DBounds } from "../viewport3dRenderModel";
 import type { DomainPresentation } from "@/shared/domain/mesh/domainPresentation";
+import {
+  AIRBOX_TARGET_ID,
+  FDM_OUTSIDE_SUPPORT_CARRIER_ID,
+} from "@/kernel/visualization/visualizationTargetIdentity";
 
 export const FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET = {
-  id: "fdm-universe-outside-support",
-  kind: "fdm-domain",
+  id: AIRBOX_TARGET_ID,
+  kind: "airbox",
   label: "Airbox",
 } as const;
 
@@ -22,6 +26,7 @@ export interface FdmUniverseOutsideSupportOverlayModel {
   magneticSupportBounds: Viewport3DBounds;
   /** Counts are exact only after the canonical FMRM artifact is available. */
   activeCellCount: number | null;
+  carrierId: typeof FDM_OUTSIDE_SUPPORT_CARRIER_ID;
   inactiveCellCount: number | null;
   target: typeof FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET;
   universeBounds: Viewport3DBounds;
@@ -51,6 +56,7 @@ export function resolveFdmUniverseOutsideSupportOverlayModel({
 
   return {
     activeCellCount,
+    carrierId: FDM_OUTSIDE_SUPPORT_CARRIER_ID,
     inactiveCellCount,
     kind: "fdm-universe-outside-magnetic-support",
     legend: {

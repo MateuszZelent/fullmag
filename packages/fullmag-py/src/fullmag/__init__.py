@@ -1,6 +1,6 @@
 """Public embedded Python DSL for Fullmag."""
 
-from . import couplings, fields, init, shapes
+from . import couplings, fields, init, select, shapes
 from .init import (
     FIELD_STATE_FORMATS,
     MAGNETIZATION_STATE_FORMATS,
@@ -150,6 +150,9 @@ from .model import (
     StageAutosave,
     TableAutosave,
     RuntimeSelection,
+    Selection,
+    SelectionDefinition,
+    SelectionScalar,
     SlabAverage,
     SaveDispersion,
     SaveEigenDiagnostics,
@@ -218,6 +221,7 @@ from .model import (
     SettleTree,
     Hysteresis,
 )
+from .shapes import affine, disk, rotate, scale
 from .runtime import BackendTarget, Result, Simulation, load_problem_from_script
 from .meshing import (
     MeshData,
@@ -480,6 +484,9 @@ __all__ = [
     "RfDrive",
     "RegionalFieldDrive",
     "RuntimeSelection",
+    "Selection",
+    "SelectionDefinition",
+    "SelectionScalar",
     "SlabAverage",
     "SaveDispersion",
     "SaveField",
@@ -517,6 +524,7 @@ __all__ = [
     "Translate",
     "Union",
     "VectorCurrentDrive",
+    "affine",
     "Zeeman",
     "ZhangLiSTT",
     "backend",
@@ -541,10 +549,12 @@ __all__ = [
     "SettleTree",
     "Hysteresis",
     "couplings",
+    "disk",
     "export_stl",
     "fields",
     "generate_mesh",
     "shapes",
+    "select",
     "resolve_mesh_size_controls",
     "infer_magnetization_state_format",
     "init",
@@ -617,6 +627,8 @@ __all__ = [
     "RunWhile",
     "set_name",
     "run",
+    "rotate",
+    "scale",
     "run_stage",
     "frequency_response",
     "frequency_response_stage",

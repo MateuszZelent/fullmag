@@ -45,10 +45,10 @@ describe("viewport3DTargets", () => {
     });
   });
 
-  it("keeps the outside-support overlay as a distinct structured-domain target", () => {
+  it("uses the canonical Airbox target for the outside-support carrier", () => {
     expect(targetForFdmUniverseOutsideSupport()).toEqual({
-      id: "fdm-universe-outside-support",
-      kind: "fdm-domain",
+      id: "airbox",
+      kind: "airbox",
       label: "Airbox",
     });
   });
@@ -515,6 +515,7 @@ describe("viewport3DTargets", () => {
     };
     const overlay = {
       activeCellCount: null,
+      carrierId: "fdm-universe-outside-support" as const,
       kind: "fdm-universe-outside-magnetic-support" as const,
       legend: { magneticSupport: "support", outsideSupport: "outside" },
       magneticSupportBounds: {
@@ -523,8 +524,8 @@ describe("viewport3DTargets", () => {
         size: [2, 2, 2] as [number, number, number],
       },
       target: {
-        id: "fdm-universe-outside-support" as const,
-        kind: "fdm-domain" as const,
+        id: "airbox" as const,
+        kind: "airbox" as const,
         label: "Airbox" as const,
       },
       inactiveCellCount: null,
@@ -557,7 +558,7 @@ describe("viewport3DTargets", () => {
         scope,
         type: "fdm-domain",
         visualizationTargetId: scope === "universe-outside-support"
-          ? "fdm-universe-outside-support"
+          ? "airbox"
           : "fdm-domain",
       },
     });

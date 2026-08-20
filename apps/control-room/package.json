@@ -11,6 +11,7 @@
     "diagnostics:record": "node scripts/record-diagnostics.mjs",
     "diagnostics:record:memory-leak": "CONTROL_ROOM_DIAGNOSTICS_SCENARIO=memory-leak node scripts/record-diagnostics.mjs",
     "diagnostics:record:viewport-3d": "CONTROL_ROOM_DIAGNOSTICS_SCENARIO=viewport-3d node scripts/record-diagnostics.mjs",
+    "validate:viewport-proof": "node scripts/validate-viewport-proof-manifest.mjs",
     "audit:viewport-3d-memory-churn": "node scripts/audit-viewport-3d-memory-churn.mjs",
     "audit:viewport-main-tab-memory": "node scripts/audit-viewport-main-tab-memory.mjs",
     "audit:airbox-vector-cold-toggle": "node scripts/audit-airbox-vector-cold-toggle.mjs",

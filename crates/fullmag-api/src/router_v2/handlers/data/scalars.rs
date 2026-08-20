@@ -7,6 +7,8 @@ use axum::Json;
 use serde::Deserialize;
 
 use crate::error::ApiError;
+use crate::router_v2::handlers::sessions::status::domain_generation_id;
+use crate::schemas::common::AcceptedObservationFrameRef;
 use crate::schemas::scalars::ScalarWindow;
 use crate::types::AppState;
 
@@ -135,6 +137,27 @@ pub async fn get_scalars(
         .collect();
 
     let returned = rows.len() as u64;
+    let observation_frames = guard
+        .as_ref()
+        .map(|snapshot| {
+            let generation_id = domain_generation_id(snapshot);
+            window
+                .iter()
+                .map(|row| {
+                    row.observation_frame.clone().unwrap_or_else(|| {
+                        AcceptedObservationFrameRef::for_snapshot(
+                            &snapshot.session.session_id,
+                            snapshot.session.started_at_unix_ms,
+                            generation_id.clone(),
+                            snapshot.mesh_revision,
+                            row.step,
+                            Some(row.time),
+                        )
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
     Ok(Json(ScalarWindow {
         revision,
@@ -142,5 +165,6 @@ pub async fn get_scalars(
         returned_rows: returned,
         columns: columns.into_iter().map(str::to_string).collect(),
         rows,
+        observation_frames,
     }))
 }

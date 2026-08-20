@@ -112,6 +112,7 @@ const status: LiveStatusResource = {
   session: {
     created_at: "0",
     name: "test",
+    session_epoch: "session-1@0",
     session_id: "session-1",
     workspace_root: "/tmp/fullmag",
   },

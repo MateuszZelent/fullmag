@@ -1210,6 +1210,20 @@ int gpu_relax_nonlinear_cg_step(
             reason,
             error);
     }
+    const double current_torque_apm = current_snapshot.terms_j[
+        static_cast<size_t>(GpuFinalScalarSlot::MaxTorque)];
+    if (relaxation_torque_confirmation_pending(ctx, current_torque_apm)) {
+        out_stats.step = ctx.state.step_count;
+        out_stats.time_seconds = 0.0;
+        out_stats.dt_seconds = 0.0;
+        mark_gpu_relax_ncg_device_source_of_truth(ctx);
+        if (!gpu_rk_finalize_step_stats_control_readback(ctx, out_stats, reason)) {
+            error = reason;
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+        out_stats.max_rhs_amplitude = 0.0;
+        return FULLMAG_FEM_OK;
+    }
     if (gradient_norm_sq == 0.0) {
         out_stats.step = ctx.state.step_count;
         out_stats.time_seconds = 0.0;

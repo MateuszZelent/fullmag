@@ -25,6 +25,7 @@ import {
   buildVectorLineSegmentsForNodeSelection,
   combineViewport3DBounds,
   distributeVectorGlyphBudget,
+  evictViewport3DRenderCacheEntriesForTests,
   getViewport3DRenderCacheStats,
   resolveNodeSelectionCount,
   resolveTopologyBounds,
@@ -1430,6 +1431,17 @@ describe("viewport3dRenderModel", () => {
       )?.entryCount ?? 0;
 
     expect(after - before).toBeLessThanOrEqual(8);
+  });
+
+  it("evicts render buffers by byte budget before the count limit", () => {
+    const entries = new Map<string, unknown>([
+      ["oldest", new Float32Array(4)],
+      ["newest", new Float32Array(4)],
+    ]);
+
+    evictViewport3DRenderCacheEntriesForTests(entries, 8, 16);
+
+    expect([...entries.keys()]).toEqual(["newest"]);
   });
 
   it("rejects full-domain field buffers that do not match the active topology node count", () => {

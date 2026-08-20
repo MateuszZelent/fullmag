@@ -317,6 +317,7 @@ export type SelectionRef =
       scope: FdmDomainSelectionScope;
       type: "fdm-domain";
       visualizationTargetId:
+        | "airbox"
         | "fdm-domain"
         | `fdm-native-layer:${string}`
         | "fdm-universe-outside-support"

@@ -3,6 +3,7 @@ import type {
   DecodedTopology,
 } from "@/kernel/api/codecs";
 import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry";
+import { recordVisualizationDebugPerformanceMetric } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 
 import type { ScalarColorBuffer } from "./viewport3dFieldMapping";
 import { magnitudeColorRgb } from "./viewport3dVectorColoring";
@@ -15,6 +16,7 @@ type MeshQualityColorCacheEntry = Partial<
 >;
 
 const MESH_QUALITY_COLOR_CACHE_MAX_ENTRIES_PER_QUALITY = 8;
+export const MESH_QUALITY_COLOR_CACHE_MAX_BYTES_PER_QUALITY = 64 * 1024 * 1024;
 const MESH_QUALITY_COLOR_CACHE_MEMORY_BUDGET_ID =
   "viewport3d.render.meshQualityColorCache";
 const meshQualityColorCacheCounter = {
@@ -30,7 +32,7 @@ memoryBudgetRegistry.register(
     entryCount: meshQualityColorCacheCounter.entryCount,
     id: MESH_QUALITY_COLOR_CACHE_MEMORY_BUDGET_ID,
     label: "Mesh quality color cache",
-    maxBytes: null,
+    maxBytes: MESH_QUALITY_COLOR_CACHE_MAX_BYTES_PER_QUALITY,
   }),
 );
 
@@ -59,7 +61,11 @@ export function buildMeshQualityVertexColors(
 
   const cacheKey = `${metric}:${palette}`;
   const cached = cachedMeshQualityVertexColors(topology, quality, cacheKey);
-  if (cached !== undefined) return cached;
+  if (cached !== undefined) {
+    recordVisualizationDebugPerformanceMetric("cacheHits");
+    return cached;
+  }
+  recordVisualizationDebugPerformanceMetric("cacheMisses");
 
   if (quality.elementCount !== topology.elementCount) {
     cacheMeshQualityVertexColors(topology, quality, cacheKey, null);
@@ -139,13 +145,21 @@ function cacheMeshQualityVertexColors(
 
 function evictOldestMeshQualityColorCacheEntries(
   entry: MeshQualityColorCacheEntry,
+  maxEntries = MESH_QUALITY_COLOR_CACHE_MAX_ENTRIES_PER_QUALITY,
+  maxBytes = MESH_QUALITY_COLOR_CACHE_MAX_BYTES_PER_QUALITY,
 ): void {
   const keys = Object.keys(entry);
-  while (keys.length > MESH_QUALITY_COLOR_CACHE_MAX_ENTRIES_PER_QUALITY) {
+  let byteLength = meshQualityColorEntryByteLength(entry);
+  while (
+    keys.length > maxEntries ||
+    byteLength > maxBytes
+  ) {
     const oldestKey = keys.shift();
     if (!oldestKey) return;
     const value = entry[oldestKey];
     delete entry[oldestKey];
+    recordVisualizationDebugPerformanceMetric("cacheEvictions");
+    byteLength -= meshQualityColorByteLength(value);
     meshQualityColorCacheCounter.entryCount = Math.max(
       0,
       meshQualityColorCacheCounter.entryCount - 1,
@@ -156,6 +170,23 @@ function evictOldestMeshQualityColorCacheEntries(
         meshQualityColorByteLength(value),
     );
   }
+}
+
+export function evictMeshQualityColorCacheEntriesForTests(
+  entry: MeshQualityColorCacheEntry,
+  maxEntries: number,
+  maxBytes: number,
+): void {
+  evictOldestMeshQualityColorCacheEntries(entry, maxEntries, maxBytes);
+}
+
+function meshQualityColorEntryByteLength(
+  entry: MeshQualityColorCacheEntry,
+): number {
+  return Object.values(entry).reduce(
+    (total, result) => total + meshQualityColorByteLength(result),
+    0,
+  );
 }
 
 function meshQualityColorByteLength(

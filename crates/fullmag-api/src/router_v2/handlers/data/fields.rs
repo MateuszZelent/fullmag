@@ -60,6 +60,7 @@ use crate::router_v2::handlers::sessions::status::{
     field_catalog_revision as current_field_catalog_revision, field_quantity_revision,
 };
 use crate::schemas::fields::*;
+use crate::schemas::common::AcceptedObservationFrameRef;
 use crate::session::{
     current_artifact_dir, latest_field_source_precedence, preview_cache_precedes_latest,
     preview_field_source_precedence, resolved_current_field_source, ResolvedCurrentFieldSource,
@@ -2113,8 +2114,7 @@ pub async fn get_field_catalog(
 
 #[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
 pub struct TargetFieldAvailabilityQuery {
-    /// Stable frontend target identity, for example `airbox` or
-    /// `fdm-universe-outside-support`.
+    /// Stable canonical frontend target identity. Airbox always uses `airbox`.
     pub target_id: Option<String>,
     /// Field carrier scope. Defaults to the complete domain carrier.
     pub scope_kind: Option<String>,
@@ -2176,6 +2176,11 @@ pub(crate) fn resolve_target_field_availability(
         .unwrap_or_else(|| {
             default_availability_target_id(snapshot, &scope_kind, scope_id.as_deref())
         });
+    let target_id = if target_id == "fdm-universe-outside-support" {
+        "airbox".to_string()
+    } else {
+        target_id
+    };
     let generation = domain_generation_id(snapshot);
     let revision = nonzero_revision(field_quantity_revision(snapshot, &quantity_id));
 
@@ -2461,7 +2466,7 @@ fn default_availability_target_id(
         if is_fdm_multilayer_snapshot(snapshot) {
             "fdm-multilayer-domain".to_string()
         } else {
-            "fdm-universe-outside-support".to_string()
+            "fdm-domain".to_string()
         }
     } else {
         "fem-domain".to_string()
@@ -2757,6 +2762,13 @@ pub async fn get_field_meta(
         if let Some(status) = materializer_status {
             let freshness = materializer_request_freshness(snapshot, status);
             return Ok(Json(FieldMeta {
+                observation_frame: field_observation_frame_ref(
+                    snapshot,
+                    quantity_id,
+                    &gen_id,
+                    freshness.source_step,
+                    freshness.source_time_seconds,
+                ),
                 quantity_id: quantity_id.to_string(),
                 label,
                 kind,
@@ -2790,6 +2802,13 @@ pub async fn get_field_meta(
         {
             let freshness = legacy_pending_field_freshness(snapshot);
             return Ok(Json(FieldMeta {
+                observation_frame: field_observation_frame_ref(
+                    snapshot,
+                    quantity_id,
+                    &gen_id,
+                    freshness.source_step,
+                    freshness.source_time_seconds,
+                ),
                 quantity_id: quantity_id.to_string(),
                 label,
                 kind,
@@ -2823,6 +2842,13 @@ pub async fn get_field_meta(
                 )
             };
             return Ok(Json(FieldMeta {
+                observation_frame: field_observation_frame_ref(
+                    snapshot,
+                    quantity_id,
+                    &gen_id,
+                    current_source_step(snapshot),
+                    None,
+                ),
                 quantity_id: quantity_id.to_string(),
                 label,
                 kind,
@@ -2883,6 +2909,13 @@ pub async fn get_field_meta(
     let raw_values = apply_field_scope(raw_values, grid, n_comp as usize, resolved_scope.as_ref());
 
     Ok(Json(FieldMeta {
+        observation_frame: field_observation_frame_ref(
+            snapshot,
+            quantity_id,
+            &gen_id,
+            freshness.source_step,
+            freshness.source_time_seconds,
+        ),
         quantity_id: quantity_id.to_string(),
         label,
         kind,
@@ -2906,6 +2939,30 @@ pub async fn get_field_meta(
         materialization_reason_code: freshness.materialization_reason_code,
         materialization_error: freshness.materialization_error,
     }))
+}
+
+fn field_observation_frame_ref(
+    snapshot: &SessionStateResponse,
+    quantity_id: &str,
+    domain_generation_id: &str,
+    source_step: u64,
+    source_time_seconds: Option<f64>,
+) -> AcceptedObservationFrameRef {
+    snapshot
+        .latest_fields
+        .get(quantity_id)
+        .and_then(|value| value.get("observation_frame"))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_else(|| {
+            AcceptedObservationFrameRef::for_snapshot(
+                &snapshot.session.session_id,
+                snapshot.session.started_at_unix_ms,
+                domain_generation_id,
+                snapshot.mesh_revision,
+                source_step,
+                source_time_seconds,
+            )
+        })
 }
 
 #[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]

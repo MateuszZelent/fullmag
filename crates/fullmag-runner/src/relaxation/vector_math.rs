@@ -23,14 +23,22 @@ pub(crate) fn scale_vec3(a: [f64; 3], s: f64) -> [f64; 3] {
     [a[0] * s, a[1] * s, a[2] * s]
 }
 
-pub(crate) fn normalized_vec3(v: [f64; 3]) -> [f64; 3] {
+pub(crate) fn normalized_vec3(v: [f64; 3]) -> Option<[f64; 3]> {
     let n2 = dot_vec3(v, v);
-    if n2 <= 0.0 {
-        [0.0, 0.0, 0.0]
+    if !n2.is_finite() || n2 <= f64::MIN_POSITIVE {
+        None
     } else {
         let inv = 1.0 / n2.sqrt();
-        [v[0] * inv, v[1] * inv, v[2] * inv]
+        Some([v[0] * inv, v[1] * inv, v[2] * inv])
     }
+}
+
+fn tangent_projection(m: [f64; 3], v: [f64; 3]) -> [f64; 3] {
+    let norm_sq = dot_vec3(m, m);
+    if !norm_sq.is_finite() || norm_sq <= f64::MIN_POSITIVE {
+        return [f64::NAN; 3];
+    }
+    sub_vec3(v, scale_vec3(m, dot_vec3(m, v) / norm_sq))
 }
 
 pub(crate) fn tangent_gradient_from_field(
@@ -41,7 +49,7 @@ pub(crate) fn tangent_gradient_from_field(
         .iter()
         .zip(h_eff.iter())
         .map(|(m, h)| {
-            let projected = sub_vec3(*h, scale_vec3(*m, dot_vec3(*m, *h)));
+            let projected = tangent_projection(*m, *h);
             scale_vec3(projected, -1.0)
         })
         .collect()
@@ -57,7 +65,7 @@ pub(crate) fn global_dot_vec3(a: &[[f64; 3]], b: &[[f64; 3]]) -> f64 {
 pub(crate) fn project_tangent(m: &[[f64; 3]], v: &[[f64; 3]]) -> Vec<[f64; 3]> {
     m.iter()
         .zip(v.iter())
-        .map(|(mi, vi)| sub_vec3(*vi, scale_vec3(*mi, dot_vec3(*mi, *vi))))
+        .map(|(mi, vi)| tangent_projection(*mi, *vi))
         .collect()
 }
 
@@ -97,5 +105,21 @@ mod tests {
         let h = [[0.0, 2.0, 0.0], [3.0, 0.0, 4.0]];
 
         assert_eq!(max_torque_from_field(&m, &h), 5.0);
+    }
+
+    #[test]
+    fn tangent_projection_handles_finite_non_unit_magnetization() {
+        let projected = project_tangent(&[[2.0, 0.0, 0.0]], &[[1.0, 3.0, 0.0]]);
+
+        assert_eq!(projected, vec![[0.0, 3.0, 0.0]]);
+        assert_eq!(dot_vec3([2.0, 0.0, 0.0], projected[0]), 0.0);
+    }
+
+    #[test]
+    fn zero_subnormal_and_nonfinite_normalization_are_invalid() {
+        assert_eq!(normalized_vec3([0.0, 0.0, 0.0]), None);
+        assert_eq!(normalized_vec3([f64::MIN_POSITIVE, 0.0, 0.0]), None);
+        assert_eq!(normalized_vec3([f64::NAN, 0.0, 0.0]), None);
+        assert_eq!(normalized_vec3([f64::INFINITY, 0.0, 0.0]), None);
     }
 }

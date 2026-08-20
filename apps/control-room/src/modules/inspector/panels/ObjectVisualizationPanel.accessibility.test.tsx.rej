@@ -1,5 +1,0 @@
-diff a/apps/control-room/src/modules/inspector/panels/ObjectVisualizationPanel.accessibility.test.tsx b/apps/control-room/src/modules/inspector/panels/ObjectVisualizationPanel.accessibility.test.tsx	(rejected hunks)
-@@ -246,1 +246,2 @@
--    const dom = installSimulationPreparationTestDom();
-+    const dom = installSimulationPreparationTestDom();
-+    const previousHtmlFormElement = Object.getOwnPropertyDescriptor(globalThis, "HTMLFormElement");

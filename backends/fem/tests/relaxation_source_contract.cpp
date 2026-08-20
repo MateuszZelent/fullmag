@@ -797,6 +797,19 @@ void c_abi_exposes_native_relaxation_step() {
             pgbb_torque_pending_update < pgbb_torque_pending_return,
         "native FEM CPU projected-gradient BB must advance torque confirmation state for zero-dt pending samples");
     check(
+        nonlinear_cg.find(
+            "if (relaxation_torque_confirmation_pending(ctx, current_stats.max_torque_Apm))") !=
+                std::string::npos &&
+            tangent_plane.find(
+                "if (relaxation_torque_confirmation_pending(ctx, current_stats.max_torque_Apm))") !=
+                std::string::npos,
+        "native FEM CPU NCG and tangent-plane relaxation must confirm torque before classifying a degenerate gradient");
+    check(
+        gpu_nonlinear_cg.find(
+            "if (relaxation_torque_confirmation_pending(ctx, current_torque_apm))") !=
+            std::string::npos,
+        "native FEM GPU NCG must confirm torque before classifying a degenerate gradient");
+    check(
         relaxation_math.find("#include \"cpu/mfem/runtime/stage_completion.hpp\"") !=
                 std::string::npos &&
             relaxation_math.find("update_stage_completion_from_stats(ctx, out_stats)") !=
@@ -971,7 +984,7 @@ void c_abi_exposes_native_relaxation_step() {
                 pgbb_first_armijo) &&
             direct_energy_increment.find("strict_armijo_difference_decision(") !=
                 std::string::npos &&
-            direct_energy_increment.find("refined_armijo_accepts(") !=
+            direct_energy_increment.find("evaluate_refined_armijo(") !=
                 std::string::npos &&
             (pgbb_monotone_escape == std::string::npos ||
                 pgbb_monotone_escape > pgbb_backtrack_limit),
@@ -1290,6 +1303,24 @@ void c_abi_exposes_native_relaxation_step() {
             tangent_plane.find("restore_after_failed_line_search(") !=
                 std::string::npos,
         "native FEM tangent-plane implicit relaxation must reject exhausted Armijo searches and restore the previous state");
+    check(
+        tangent_plane.find(
+            "#include \"cpu/mfem/relaxation/direct_energy_increment.hpp\"") !=
+                std::string::npos &&
+            tangent_plane.find("direct_minimizer_armijo_evaluate(") !=
+                std::string::npos &&
+            tangent_plane.find(
+                "finish_accepted_relaxation_step(\n        ctx,\n        armijo_result.accepted_stats,") !=
+                std::string::npos &&
+            tangent_plane.find("trial_step * direction_dot_gradient") !=
+                std::string::npos &&
+            tangent_plane.find(
+                "representable_chord_energy_linear_increment") ==
+                std::string::npos &&
+            tangent_plane.find(
+                "trial_stats.total_energy_joules <=") ==
+                std::string::npos,
+        "native FEM tangent-plane implicit Armijo must keep the derivative-at-zero increment, use a direct energy difference with bounded refinement, and never fall back to cancellation-prone endpoint totals");
     check(
         tangent_plane.find("restore_previous_relaxation_state(") !=
                 std::string::npos &&

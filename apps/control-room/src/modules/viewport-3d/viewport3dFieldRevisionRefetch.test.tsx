@@ -3,7 +3,11 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ControlRoomApi } from "@/kernel/api/ControlRoomApi";
-import { DATA_FIELDS_PATH, SIMULATION_COMMANDS_PATH } from "@/kernel/api/apiPaths";
+import {
+  DATA_FIELDS_PATH,
+  SESSION_STATUS_PATH,
+  SIMULATION_COMMANDS_PATH,
+} from "@/kernel/api/apiPaths";
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { KernelContext } from "@/kernel/KernelContext";
@@ -13,6 +17,7 @@ import {
 } from "@/kernel/realtime/communicationPolicy";
 import { RealtimeInvalidationBridge } from "@/kernel/realtime/RealtimeInvalidationBridge";
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
+import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 import { useFieldMetaResource } from "@/kernel/resources/studyRuntimeResources";
 import type { KernelApi } from "@/kernel/types";
 
@@ -37,6 +42,71 @@ type FieldMetaProbeObservation = {
 afterEach(() => updateRealtimeCommunicationPolicy({}));
 
 describe("viewport 3D field revision refetch", () => {
+  it("never adopts a delayed field response from the previous session epoch", async () => {
+    updateRealtimeCommunicationPolicy({ status_refresh_ms: 1 });
+    let sessionEpoch = "session-1@1000";
+    let vectorRequests = 0;
+    let resolveOldResponse: ((response: Response) => void) | null = null;
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        const requestUrl = String(url);
+        if (new URL(requestUrl).pathname === SESSION_STATUS_PATH) {
+          return jsonResponse({
+            resources: {},
+            session: { session_epoch: sessionEpoch, session_id: "session-1" },
+          });
+        }
+        if (requestUrl.includes("/data/fields/H_demag/samples/vector")) {
+          vectorRequests += 1;
+          if (vectorRequests === 1) {
+            return new Promise<Response>((resolve) => {
+              resolveOldResponse = resolve;
+            });
+          }
+          return fieldVectorResponse(2);
+        }
+        throw new Error(`Unexpected request ${requestUrl}`);
+      },
+    });
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const kernel = {
+      api,
+      bus,
+      diagnosticRecorder: new DiagnosticRecorderController({ config: { enabled: false } }),
+      resources,
+    } as unknown as KernelApi;
+    const observations: Array<ReturnType<typeof useViewport3DFieldVectorRequest>> = [];
+    const dom = installTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <Probe observations={observations} />
+          </KernelContext.Provider>,
+        );
+      });
+      await waitFor(() => vectorRequests === 1, "old epoch field request did not start");
+
+      sessionEpoch = "session-1@2000";
+      await act(async () => resources.invalidate(SESSION_STATUS_RESOURCE_KEY, 2));
+      await waitFor(
+        () => vectorRequests === 2 && observations.at(-1)?.data?.values[0] === 2,
+        "new epoch field response was not adopted",
+      );
+
+      await act(async () => resolveOldResponse?.(fieldVectorResponse(1)));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(observations.at(-1)?.data?.values[0]).toBe(2);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("refetches a live-owned 204 on field revision without posting compute_fields", async () => {
     updateRealtimeCommunicationPolicy({ field_sample_publish_ms: 1 });
     const calls: Array<{ method: string; url: string }> = [];
@@ -46,6 +116,15 @@ describe("viewport 3D field revision refetch", () => {
       fetchImpl: async (url, init) => {
         const requestUrl = String(url);
         calls.push({ method: init?.method ?? "GET", url: requestUrl });
+        if (new URL(requestUrl).pathname === SESSION_STATUS_PATH) {
+          return jsonResponse({
+            resources: {},
+            session: {
+              session_epoch: "session-1@1700000000000",
+              session_id: "session-1",
+            },
+          });
+        }
         if (requestUrl.includes("/data/fields/H_demag/samples/vector")) {
           vectorRequests += 1;
           return vectorRequests === 1
@@ -264,7 +343,7 @@ function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), { headers: contractHeaders });
 }
 
-function fieldVectorResponse(): Response {
+function fieldVectorResponse(firstValue = 1): Response {
   const buffer = new ArrayBuffer(48 + 3 * Float64Array.BYTES_PER_ELEMENT);
   const view = new DataView(buffer);
   for (const [index, code] of [..."FMVP"].entries()) {
@@ -278,7 +357,7 @@ function fieldVectorResponse(): Response {
   view.setUint32(20, 1, true);
   view.setUint32(24, 1, true);
   new TextEncoder().encodeInto("H_demag", new Uint8Array(buffer, 28, 16));
-  new Float64Array(buffer, 48).set([1, 0, -1]);
+  new Float64Array(buffer, 48).set([firstValue, 0, -1]);
   return new Response(buffer, {
     headers: {
       ...contractHeaders,

@@ -43,6 +43,17 @@ const objectSelection: SelectionRef = {
   type: "scene-object",
   visualizationTargetId: "object:magnet",
 };
+
+function observationFrame(sourceStep: number) {
+  return {
+    domain_generation_id: "domain-1",
+    observation_frame_id: `frame-${sourceStep}`,
+    session_epoch: "epoch-1",
+    source_step: sourceStep,
+    source_time_seconds: null,
+    topology_revision: "topology-1",
+  };
+}
 const MOUNTED_VECTOR_PATH = DATA_FIELD_VECTOR_PATH.replace(
   "{quantity_id}",
   "m",
@@ -178,6 +189,7 @@ describe("useVisualizationDebugPanelModel", () => {
       kind: "vector",
       label: "m",
       location: "node",
+      observation_frame: observationFrame(1),
       materialization_wall_time_ns: 0,
       materialized_at_unix_ms: 0,
       quantity_id: "m",
@@ -208,6 +220,7 @@ describe("useVisualizationDebugPanelModel", () => {
         kind: "vector",
         label: "m",
         location: "node",
+        observation_frame: observationFrame(12),
         materialization_wall_time_ns: 0,
         materialized_at_unix_ms: 0,
         quantity_id: "m",
@@ -380,6 +393,7 @@ describe("useVisualizationDebugPanelModel", () => {
       kind: "vector",
       label: "Magnetization",
       location: "node",
+      observation_frame: observationFrame(12),
       materialization_wall_time_ns: 0,
       materialized_at_unix_ms: 0,
       quantity_id: "m",
@@ -531,6 +545,7 @@ describe("useVisualizationDebugPanelModel", () => {
         kind: "vector",
         label: "Magnetization",
         location: "node",
+        observation_frame: observationFrame(12),
         materialization_wall_time_ns: 0,
         materialized_at_unix_ms: 0,
         quantity_id: "m",

@@ -6,7 +6,10 @@ import type {
 } from "@/kernel/api/codecs";
 import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry";
 
-import { buildMeshQualityVertexColors } from "./viewport3dQualityMapping";
+import {
+  buildMeshQualityVertexColors,
+  evictMeshQualityColorCacheEntriesForTests,
+} from "./viewport3dQualityMapping";
 import { magnitudeColorRgb } from "./viewport3dVectorColoring";
 
 function topologyFixture(): DecodedTopology {
@@ -115,6 +118,17 @@ describe("buildMeshQualityVertexColors", () => {
       )?.entryCount ?? 0;
 
     expect(after - before).toBeLessThanOrEqual(8);
+  });
+
+  it("evicts mesh quality colors by byte budget before the count limit", () => {
+    const entry = {
+      oldest: { colors: new Float32Array(4), range: { min: 0, max: 1 } },
+      newest: { colors: new Float32Array(4), range: { min: 0, max: 1 } },
+    };
+
+    evictMeshQualityColorCacheEntriesForTests(entry, 8, 16);
+
+    expect(Object.keys(entry)).toEqual(["newest"]);
   });
 
   it("rejects missing metric arrays and element-count drift", () => {

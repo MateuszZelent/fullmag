@@ -50,7 +50,7 @@ export function resolveViewport3DVectorCarrierSampleLimit(
     0,
     Math.floor(Number.isFinite(requestedBudget) ? requestedBudget : 0),
   );
-  if (budget <= 0 || targetId !== "fdm-universe-outside-support") {
+  if (budget <= 0 || targetId !== "airbox") {
     return budget;
   }
   return Math.min(
@@ -892,7 +892,7 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
 
   for (const target of fdmTargetSettings) {
     if (
-      (target.targetId !== "fdm-universe-outside-support" &&
+      (target.targetId !== "airbox" &&
         sameViewport3DQuantityIdForPlanning(
           target.settings.activeQuantityId,
           primaryFieldQuantityId,
@@ -905,7 +905,7 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
     const quantityId = resolveCanonicalQuantityId(target.settings.activeQuantityId);
     if (
       !isViewport3DQuantityAvailable(quantityId, availableQuantityIds) ||
-      (target.targetId === "fdm-universe-outside-support" &&
+      (target.targetId === "airbox" &&
         !airboxQuantityIsAvailable({
           fieldCatalog,
           quantityCatalog,
@@ -921,10 +921,10 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
           quantityId,
           settings: target.settings,
           targetId: target.targetId,
-          targetKind: "fdm-domain",
+          targetKind: target.targetId === "airbox" ? "airbox" : "fdm-domain",
         }),
         {
-          forceComplete: target.targetId !== "fdm-universe-outside-support",
+          forceComplete: target.targetId !== "airbox",
           maxSamples: resolveViewport3DVectorCarrierSampleLimit(
             clampViewport3DInteractiveVectorBudgetForPlanning(
               target.settings.vectorBudget,
@@ -934,11 +934,11 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
           ),
           replayQuery: selectedSnapshotQuery,
           scopeId:
-            target.targetId === "fdm-universe-outside-support"
+            target.targetId === "airbox"
               ? "airbox"
               : null,
           scopeKind:
-            target.targetId === "fdm-universe-outside-support"
+            target.targetId === "airbox"
               ? "airbox"
               : "full",
         },
@@ -954,13 +954,13 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
       ? {
           label: "FDM Airbox",
           settings: fdmAirboxSettings,
-          targetId: "fdm-universe-outside-support",
+          targetId: "airbox",
         }
       : null,
   ]) {
     if (
       !target ||
-      (target.targetId !== "fdm-universe-outside-support" &&
+      (target.targetId !== "airbox" &&
         sameViewport3DQuantityIdForPlanning(
           target.settings.activeQuantityId,
           primaryFieldQuantityId,
@@ -973,7 +973,7 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
     const quantityId = resolveCanonicalQuantityId(target.settings.activeQuantityId);
     if (
       !isViewport3DQuantityAvailable(quantityId, availableQuantityIds) ||
-      (target.targetId === "fdm-universe-outside-support" &&
+      (target.targetId === "airbox" &&
         !airboxQuantityIsAvailable({
           fieldCatalog,
           quantityCatalog,
@@ -988,14 +988,14 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
           label: target.label,
           quantityId,
           settings:
-            target.targetId === "fdm-universe-outside-support"
+            target.targetId === "airbox"
               ? { ...target.settings, shaderVisible: false }
               : target.settings,
           targetId: target.targetId,
-          targetKind: "fdm-domain",
+          targetKind: target.targetId === "airbox" ? "airbox" : "fdm-domain",
         }),
         {
-          forceComplete: target.targetId !== "fdm-universe-outside-support",
+          forceComplete: target.targetId !== "airbox",
           maxSamples: resolveViewport3DVectorCarrierSampleLimit(
             clampViewport3DInteractiveVectorBudgetForPlanning(
               target.settings.vectorBudget,
@@ -1005,11 +1005,11 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
           ),
           replayQuery: selectedSnapshotQuery,
           scopeId:
-            target.targetId === "fdm-universe-outside-support"
+            target.targetId === "airbox"
               ? "airbox"
               : null,
           scopeKind:
-            target.targetId === "fdm-universe-outside-support"
+            target.targetId === "airbox"
               ? "airbox"
               : "full",
         },

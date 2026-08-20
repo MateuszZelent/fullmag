@@ -2289,6 +2289,7 @@ pub async fn get_mesh_object_quality(
     responses(
         (status = 200, description = "Per-region mesh quality", body = MeshRegionQualityResource),
         (status = 404, description = "No active workspace, mesh, scene, or region membership"),
+        (status = 422, description = "Authored region selection geometry cannot be evaluated", body = crate::schemas::common::ApiErrorResponse),
     ),
     tag = "meshing"
 )]
@@ -2311,7 +2312,7 @@ pub async fn get_mesh_region_quality(
             snapshot.mesh_revision,
             snapshot.region_realization_revisions.membership,
             &region_id,
-        )
+        )?
         .ok_or_else(|| {
             ApiError::not_found(format!("mesh region membership '{region_id}' not found"))
         })?;

@@ -921,4 +921,24 @@ describe("viewport3DTargetFieldBuffer", () => {
     expect(viewport3DTargetFieldBufferCanServeVectors(buffer)).toBe(true);
     expect(viewport3DTargetFieldBufferCanServeSurface(buffer, "x")).toBe(false);
   });
+
+  it("keeps derived buffer ownership distinct across session epochs", () => {
+    const options = {
+      fieldVector: vectorFixture(),
+      query: { component: "full", scope_kind: "full" } as const,
+      targetIds: ["part-a"],
+    };
+    const first = buildViewport3DTargetFieldBuffer({
+      ...options,
+      sessionIdentity: { sessionEpoch: "epoch-1", sessionId: "session-1" },
+    });
+    const second = buildViewport3DTargetFieldBuffer({
+      ...options,
+      sessionIdentity: { sessionEpoch: "epoch-2", sessionId: "session-1" },
+    });
+
+    expect(first.bufferId).not.toBe(second.bufferId);
+    expect(first.sessionEpoch).toBe("epoch-1");
+    expect(second.sessionEpoch).toBe("epoch-2");
+  });
 });

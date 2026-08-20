@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from fullmag._validation import as_vector3
 from fullmag.model.geometry import (
     ArchWaveguide,
+    AuthoredSelectionAffine,
+    AuthoredSelectionGeometry,
     Box,
     Cylinder,
     Ellipse,
@@ -10,7 +14,11 @@ from fullmag.model.geometry import (
     Geometry,
     ImportedGeometry,
     SinWaveguide,
+    SelectionAffine,
+    SelectionCylinder,
+    SelectionThroughObjectDisk,
     Sphere,
+    ThroughObjectExtrusion,
 )
 
 
@@ -40,6 +48,84 @@ def cylinder(
     name: str = "cylinder",
 ) -> Geometry:
     return _with_center(Cylinder(radius=radius, height=height, name=name), center)
+
+
+def disk(
+    *,
+    radius: float,
+    thickness: float | None = None,
+    center: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    normal: tuple[float, float, float] = (0.0, 0.0, 1.0),
+    extrusion: Literal["finite", "through_object"] = "finite",
+    object_id: str | None = None,
+) -> AuthoredSelectionGeometry:
+    """Build a selection-only disk predicate without evaluating point membership."""
+    if extrusion == "finite":
+        if object_id is not None:
+            raise ValueError("object_id is only valid with through_object extrusion")
+        if thickness is None:
+            raise ValueError("thickness is required for finite disk extrusion")
+        return SelectionCylinder(
+            radius_m=radius,
+            center_m=center,
+            axis=normal,
+            height_m=thickness,
+        )
+    if extrusion == "through_object":
+        if thickness is not None:
+            raise ValueError("thickness is not valid with through_object extrusion")
+        if object_id is None:
+            raise ValueError("object_id is required for through_object extrusion")
+        return SelectionThroughObjectDisk(
+            radius_m=radius,
+            center_m=center,
+            normal=normal,
+            extrusion=ThroughObjectExtrusion(object_id=object_id),
+        )
+    raise ValueError("extrusion must be 'finite' or 'through_object'")
+
+
+def affine(
+    geometry: AuthoredSelectionGeometry,
+    *,
+    translation: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    quaternion: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0),
+    scale: tuple[float, float, float] = (1.0, 1.0, 1.0),
+    pivot: tuple[float, float, float] = (0.0, 0.0, 0.0),
+) -> AuthoredSelectionGeometry:
+    """Build a serializable affine selection predicate without evaluating it."""
+    fields = {
+        "geometry": geometry,
+        "translation_m": translation,
+        "rotation_xyzw": quaternion,
+        "scale": scale,
+        "pivot_m": pivot,
+    }
+    if type(geometry) in (SelectionCylinder, SelectionAffine):
+        return SelectionAffine(**fields)
+    if type(geometry) in (SelectionThroughObjectDisk, AuthoredSelectionAffine):
+        return AuthoredSelectionAffine(**fields)
+    raise TypeError("geometry must be an exact AuthoredSelectionGeometry node")
+
+
+def rotate(
+    geometry: AuthoredSelectionGeometry,
+    *,
+    quaternion: tuple[float, float, float, float],
+    pivot: tuple[float, float, float] = (0.0, 0.0, 0.0),
+) -> AuthoredSelectionGeometry:
+    """Build a rotation-only affine selection predicate."""
+    return affine(geometry, quaternion=quaternion, pivot=pivot)
+
+
+def scale(
+    geometry: AuthoredSelectionGeometry,
+    *,
+    factors: tuple[float, float, float],
+    pivot: tuple[float, float, float] = (0.0, 0.0, 0.0),
+) -> AuthoredSelectionGeometry:
+    """Build a scale-only affine selection predicate."""
+    return affine(geometry, scale=factors, pivot=pivot)
 
 
 def sphere(
@@ -145,12 +231,16 @@ def imported(
 
 
 __all__ = [
+    "affine",
     "arch_waveguide",
     "box",
     "cylinder",
+    "disk",
     "ellipse",
     "ellipsoid",
     "imported",
+    "rotate",
+    "scale",
     "sin_waveguide",
     "sphere",
 ]

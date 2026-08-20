@@ -470,6 +470,8 @@ pub(crate) struct EigenDispersionResponse {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[allow(non_snake_case)]
 pub(crate) struct ScalarRow {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation_frame: Option<crate::schemas::common::AcceptedObservationFrameRef>,
     pub step: u64,
     pub time: f64,
     pub solver_dt: f64,
@@ -847,6 +849,10 @@ impl LatestFields {
 
     pub(crate) fn entries(&self) -> impl Iterator<Item = (&String, &Value)> {
         self.0.iter()
+    }
+
+    pub(crate) fn entries_mut(&mut self) -> impl Iterator<Item = (&String, &mut Value)> {
+        self.0.iter_mut()
     }
 
     pub(crate) fn into_inner(self) -> BTreeMap<String, Value> {

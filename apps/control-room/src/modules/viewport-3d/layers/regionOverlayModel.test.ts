@@ -4,11 +4,22 @@ import type { components } from "@/kernel/api/generated/openapi-v2-types";
 import {
   buildRegionMeshOverlayModels,
   buildRegionOverlayModels,
+  evictRegionMeshOverlayGeometryEntriesForTests,
   resolveRegionOverlayColor,
   resolveRegionOverlayStyle,
 } from "./regionOverlayModel";
 
 describe("regionOverlayModel", () => {
+  it("evicts region geometry by byte budget before the count limit", () => {
+    const entries = new Map([
+      ["oldest", { edgeIndices: new Uint32Array(4), surfaceEdgeIndices: null, surfaceIndices: null }],
+      ["newest", { edgeIndices: new Uint32Array(4), surfaceEdgeIndices: null, surfaceIndices: null }],
+    ]);
+
+    evictRegionMeshOverlayGeometryEntriesForTests(entries, 16, 16);
+
+    expect([...entries.keys()]).toEqual(["newest"]);
+  });
   it("normalizes authored box, cylinder, and sphere region shapes", () => {
     const models = buildRegionOverlayModels([
       {

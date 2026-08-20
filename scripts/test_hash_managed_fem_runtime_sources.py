@@ -122,3 +122,23 @@ def test_dirty_relevant_sources_reject_export_without_explicit_opt_in(tmp_path: 
         hasher.SourceProvenanceError, match="FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT=1"
     ):
         hasher.collect_source_provenance(repo, inputs)
+
+
+def test_deleted_tracked_source_is_dirty_but_does_not_break_source_hashing(
+    tmp_path: Path,
+) -> None:
+    hasher = load_hasher_module()
+    repo, inputs = make_repository(tmp_path)
+    (repo / "src" / "keep.txt").write_text("keep\n", encoding="utf-8")
+    git(repo, "add", "src/keep.txt")
+    git(repo, "commit", "-qm", "add remaining source")
+    (repo / "src" / "runtime.txt").unlink()
+
+    with pytest.raises(
+        hasher.SourceProvenanceError, match="FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT=1"
+    ):
+        hasher.collect_source_provenance(repo, inputs)
+
+    dirty = hasher.collect_source_provenance(repo, inputs, allow_dirty=True)
+    assert dirty["source_provenance"]["dirty"] is True
+    assert len(dirty["source_provenance"]["dirty_patch_sha256"]) == 64

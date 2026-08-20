@@ -98,15 +98,20 @@ describe("visualization target commands", () => {
     expect(result).toMatchObject({ status: "completed" });
     expect(queuePatch).toHaveBeenCalledWith(
       {
+        layers: {
+          airbox: {
+            vectors: { domain: "airbox_only", visible: true },
+          },
+        },
         overrides: [
           {
             display: { vectors: { visible: true } },
-            scope: "fdm_domain",
-            scope_id: "fdm-universe-outside-support",
+            scope: "airbox",
+            scope_id: "airbox",
           },
         ],
       },
-      ["fdm-universe-outside-support"],
+      ["airbox"],
     );
   });
 
@@ -241,8 +246,8 @@ describe("visualization target commands", () => {
         overrides: [
           {
             display: { vectors: { visible: true } },
-            scope: "fdm_domain",
-            scope_id: target.id,
+            scope: "airbox",
+            scope_id: "airbox",
           },
         ],
       },

@@ -19,7 +19,28 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run Rust contract tests
-        run: cargo test -p fullmag-ir -p fullmag-plan -p fullmag-authoring
+      run: cargo test -p fullmag-ir -p fullmag-plan -p fullmag-authoring -p fullmag-quantities -p fullmag-api
+
+  fdm-relaxation-qualification:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Python test runner
+        run: python3 -m pip install --user 'pytest>=9,<10'
+
+      - name: Validate FDM qualification receipt contract
+        run: python3 -m pytest -q scripts/test_validate_fdm_relaxation_qualification.py
+
+      - name: Run bounded CPU FP64 physics smoke
+        run: timeout --foreground 180s cargo test -p fullmag-runner --test physics_validation fdm_relaxation::uniform_field_alignment -- --ignored --nocapture
 
   api-hygiene-rg13:
     runs-on: ubuntu-22.04
@@ -81,6 +102,20 @@ jobs:
 
       - name: Check control-room API hygiene
         run: pnpm --dir apps/control-room check:api-hygiene
+
+      - name: Verify generated API determinism
+        run: |
+          pnpm --dir apps/control-room generate:api
+          git diff --exit-code -- \
+            apps/control-room/src/kernel/api/generated/openapi-v2.json \
+            apps/control-room/src/kernel/api/generated/openapi-v2-types.ts \
+            apps/control-room/src/kernel/api/generated/openapi-v2-client.ts
+
+      - name: Validate viewport proof contract
+        run: pnpm --dir apps/control-room validate:viewport-proof --self-test
+
+      - name: Lint control-room app
+        run: pnpm --dir apps/control-room lint
 
       - name: Check control-room idle performance
         run: pnpm --dir apps/control-room audit:idle-performance

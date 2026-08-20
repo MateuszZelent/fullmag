@@ -847,8 +847,8 @@ function checkObjectVisualizationPanelNumberFieldCommitBoundary() {
     "onValueChange",
     "setDraftOverride(nextValue)",
     "onValueCommit",
-    "setDraftOverride(null)",
-    "onChange(nextValue)",
+    "commitValueInAnimationFrame(nextValue)",
+    "onChangeRef.current(valueToCommit)",
   ]);
   forbidTokens(numberField, "ObjectVisualizationPanel NumberField commit boundary", [
     "window.setTimeout(",
