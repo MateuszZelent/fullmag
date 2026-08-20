@@ -24100,6 +24100,38 @@ async fn session_import_replace_project_reports_semantic_differences_without_com
         .iter()
         .any(|warning| warning == "non-blocking semantic difference in geometry"));
 
+    let restored = state
+        .current_live_state
+        .read()
+        .await
+        .clone()
+        .expect("replace_project must publish the imported snapshot");
+    let restored_script = PathBuf::from(&restored.session.script_path);
+    let restored_artifacts = PathBuf::from(&restored.session.artifact_dir);
+    assert!(
+        restored_script.starts_with(
+            repo_root
+                .join(".fullmag/local-live/session-store/imports")
+        ),
+        "replace_project must rebase script_path into the published import"
+    );
+    assert!(
+        restored_artifacts.starts_with(
+            repo_root
+                .join(".fullmag/local-live/session-store/imports")
+        ),
+        "replace_project must rebase artifact_dir into the published import"
+    );
+    assert_eq!(
+        fs::read(&restored_script).expect("published script must be readable"),
+        b"study = fullmag.Study(name='different-model')\n"
+    );
+    assert_eq!(
+        restored.runtime_status.code, "imported_read_only",
+        "replace_project must not retain the previous executable runtime"
+    );
+    assert!(!restored.runtime_status.can_accept_commands);
+
     let _ = fs::remove_dir_all(&repo_root);
 }
 
@@ -24329,10 +24361,140 @@ async fn session_import_missing_snapshot_rejects_before_mutating_state_or_store(
 }
 
 #[tokio::test]
+async fn session_import_rejects_late_run_snapshot_mismatch_without_publishing_or_mutating_live_state() {
+    use base64::Engine;
+    use std::io::Cursor;
+
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    let active_before = serde_json::to_value(
+        state
+            .current_live_state
+            .read()
+            .await
+            .clone()
+            .expect("fixture must have active state"),
+    )
+    .expect("active snapshot must serialize");
+    let selection_before = serde_json::to_value(state.current_display_selection.read().await.clone())
+        .expect("selection must serialize");
+    let presentation_before =
+        serde_json::to_value(state.current_display_presentation.read().await.clone())
+            .expect("presentation must serialize");
+
+    let export_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/exports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "profile": "compact" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(export_response.status(), StatusCode::OK);
+    let fms_bytes = base64::engine::general_purpose::STANDARD
+        .decode(
+            body_json(export_response).await["fms_base64"]
+                .as_str()
+                .expect("export must include fms payload"),
+        )
+        .expect("exported fms must decode");
+    let preflight = fullmag_session::preflight_fms(Cursor::new(fms_bytes), &[])
+        .expect("exported fixture must preflight");
+    let source_store = fullmag_session::SessionStore::open(repo_root.join("late-entry-source"))
+        .expect("source session store should open");
+    let mut documents = HashMap::new();
+    for (path, bytes) in &preflight.documents {
+        if let Some(name) = path.strip_prefix("project/") {
+            documents.insert(name.to_string(), bytes.clone());
+        } else if path.starts_with("runs/") || path.starts_with("objects/sha256/") {
+            source_store
+                .write_document(path, bytes)
+                .expect("run fixture entry should persist");
+        }
+    }
+    let snapshot = documents
+        .get_mut("current_live_snapshot.json")
+        .expect("export must contain the persisted live snapshot");
+    let mut snapshot_json: serde_json::Value =
+        serde_json::from_slice(snapshot).expect("snapshot fixture must be JSON");
+    snapshot_json["session"]["run_id"] = serde_json::json!("undeclared-run");
+    *snapshot = serde_json::to_vec(&snapshot_json).expect("mismatched snapshot must serialize");
+    let mut malformed_archive = Cursor::new(Vec::new());
+    fullmag_session::pack_fms(
+        &mut malformed_archive,
+        &source_store,
+        &preflight.session,
+        &preflight.workspace,
+        &preflight.export_profile,
+        &documents,
+        &fullmag_session::PackOptions::default(),
+    )
+    .expect("late-mismatch fixture archive should pack");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/imports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "fms_base64": base64::engine::general_purpose::STANDARD
+                            .encode(malformed_archive.into_inner()),
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        serde_json::to_value(
+            state
+                .current_live_state
+                .read()
+                .await
+                .clone()
+                .expect("failed import must retain active snapshot"),
+        )
+        .expect("active snapshot must serialize"),
+        active_before
+    );
+    assert_eq!(
+        serde_json::to_value(state.current_display_selection.read().await.clone())
+            .expect("selection must serialize"),
+        selection_before
+    );
+    assert_eq!(
+        serde_json::to_value(state.current_display_presentation.read().await.clone())
+            .expect("presentation must serialize"),
+        presentation_before
+    );
+    let imports_dir = repo_root.join(".fullmag/local-live/session-store/imports");
+    assert!(
+        !imports_dir.exists()
+            || fs::read_dir(&imports_dir)
+                .expect("imports directory should be readable")
+                .next()
+                .is_none(),
+        "late validation failure must not leave a published import"
+    );
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
 async fn solved_session_export_restores_frequency_artifacts_after_source_history_is_removed() {
     use base64::Engine;
 
     let (app, state, repo_root) = test_router_with_session_store_state().await;
+    set_running_stage_execution(&state, 17).await;
     let source_artifact_dir = repo_root.join("artifacts");
     let spectrum = br#"{"schema_version":"eigen_spectrum.v2","samples":[],"marker":"persisted"}"#;
     let mode_bytes = b"exact-mode-payload-bytes";
@@ -24417,7 +24579,8 @@ async fn solved_session_export_restores_frequency_artifacts_after_source_history
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({
-                        "fms_base64": base64::engine::general_purpose::STANDARD.encode(&fms_bytes)
+                        "fms_base64": base64::engine::general_purpose::STANDARD.encode(&fms_bytes),
+                        "restore_mode": "visualization_only",
                     })
                     .to_string(),
                 ))
@@ -24429,13 +24592,33 @@ async fn solved_session_export_restores_frequency_artifacts_after_source_history
 
     let restored_artifact_dir = {
         let current = state.current_live_state.read().await;
-        std::path::PathBuf::from(
-            &current
-                .as_ref()
-                .expect("session import must restore the active snapshot")
-                .session
-                .artifact_dir,
-        )
+        let restored = current
+            .as_ref()
+            .expect("session import must restore the active snapshot");
+        assert_eq!(restored.runtime_status.code, "imported_read_only");
+        assert!(!restored.runtime_status.can_accept_commands);
+        assert!(restored.stage_execution.as_ref().is_some_and(|execution| {
+            execution.runtime_state == RuntimeLifecycleState::Completed
+                && execution.active_stage_index.is_none()
+                && execution
+                    .stage_statuses
+                    .iter()
+                    .all(|status| *status == StageLifecycleState::Completed)
+                && execution
+                    .stages
+                    .iter()
+                    .all(|stage| stage.status == StageLifecycleState::Completed)
+        }));
+        let script_path = PathBuf::from(&restored.session.script_path);
+        assert!(script_path.starts_with(
+            repo_root
+                .join(".fullmag/local-live/session-store/imports")
+        ));
+        assert_eq!(
+            fs::read(script_path).expect("published imported script must be readable"),
+            b"study = fullmag.Study()\n"
+        );
+        PathBuf::from(&restored.session.artifact_dir)
     };
     assert_ne!(restored_artifact_dir, source_artifact_dir);
     assert_eq!(
@@ -24445,6 +24628,7 @@ async fn solved_session_export_restores_frequency_artifacts_after_source_history
     );
 
     let spectrum_response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("GET")
@@ -24458,6 +24642,26 @@ async fn solved_session_export_restores_frequency_artifacts_after_source_history
     let spectrum_resource = body_json(spectrum_response).await;
     assert_eq!(spectrum_resource["status"], "ready");
     assert_eq!(spectrum_resource["payload"]["marker"], "persisted");
+
+    let command_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "kind": "solve" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(command_response.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(command_response).await["code"], "imported_read_only");
+    assert!(
+        state.current_command_ledger.lock().await.is_empty(),
+        "read-only rejection must happen before a runtime command is recorded"
+    );
 
     let _ = fs::remove_dir_all(&repo_root);
 }

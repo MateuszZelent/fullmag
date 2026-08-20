@@ -52,6 +52,7 @@ pub(crate) async fn submit_structured_command_impl(
     headers: &HeaderMap,
     mut req: StructuredCommandRequest,
 ) -> Result<CommandResponse, ApiError> {
+    reject_imported_read_only_command(&state).await?;
     validate_relax_command_controls(&req)?;
     validate_solver_policy_controls(&req)?;
     if request_has_adaptive_solver_policy(&req) {
@@ -79,6 +80,19 @@ pub(crate) async fn submit_structured_command_impl(
     }
     validate_runtime_command_contract(&state, &command).await?;
     enqueue_session_command_impl(state, headers, command).await
+}
+
+async fn reject_imported_read_only_command(state: &Arc<AppState>) -> Result<(), ApiError> {
+    let current = state.current_live_state.read().await;
+    let snapshot = current
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    if snapshot.runtime_status.code == "imported_read_only" {
+        return Err(ApiError::conflict(format!(
+            "imported_read_only: simulation commands are unavailable for an imported snapshot"
+        )));
+    }
+    Ok(())
 }
 
 async fn fdm_grid_refresh_rejection_reason(state: &Arc<AppState>) -> Result<String, ApiError> {

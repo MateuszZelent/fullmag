@@ -16,7 +16,10 @@ use crate::schemas::visualization_state::{
     default_planar_color_range_state, default_planar_visualization_state, PlanarColorRangeMode,
     PlanarColorRangeState, PlanarSourceSelectionState,
 };
-use crate::types::{AppState, DisplayPresentationState, RuntimeStatusView, SessionStateResponse};
+use crate::types::{
+    AppState, CurrentWorkspaceLayout, CurrentWorkspaceRibbon, CurrentWorkspaceSelection,
+    DisplayPresentationState, RuntimeStatusView, SessionStateResponse,
+};
 use crate::{
     current_live_realtime_state_from_snapshot, publish_current_live_realtime_batch_changed,
 };
@@ -24,8 +27,8 @@ use crate::{
 use fullmag_session::{
     capture_checkpoint, determine_restore_class, inspect_fms, pack_fms, preflight_fms, unpack_fms,
     CaptureRequest, CheckpointCompatibility, CheckpointSnapshotProvider, FieldCapturePolicy,
-    FmsExportProfile, FmsRunManifest, FmsSessionManifest, FmsWorkspaceManifest, PackOptions,
-    SaveProfile, SessionInspection, SessionStore, SolverEnergies,
+    FmsExportProfile, FmsPreflight, FmsRunManifest, FmsSessionManifest, FmsWorkspaceManifest,
+    PackOptions, SaveProfile, SessionInspection, SessionStore, SolverEnergies,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -58,6 +61,12 @@ struct PersistedCurrentLiveSnapshot {
     display_presentation_schema_version: Option<u32>,
     #[serde(default)]
     display_presentation: serde_json::Value,
+    #[serde(default)]
+    workspace_selection: CurrentWorkspaceSelection,
+    #[serde(default)]
+    workspace_ribbon: CurrentWorkspaceRibbon,
+    #[serde(default)]
+    workspace_layout: CurrentWorkspaceLayout,
     preview_config: crate::types::CurrentPreviewConfig,
     preview: Option<crate::types::PreviewState>,
     builder_adapter: Option<fullmag_authoring::ScriptBuilderState>,
@@ -98,6 +107,9 @@ impl From<&SessionStateResponse> for PersistedCurrentLiveSnapshot {
             mesh_build_revision: value.mesh_build_revision,
             region_realization_revisions: value.region_realization_revisions,
             display_presentation: serde_json::Value::Null,
+            workspace_selection: CurrentWorkspaceSelection::default(),
+            workspace_ribbon: CurrentWorkspaceRibbon::default(),
+            workspace_layout: CurrentWorkspaceLayout::default(),
         }
     }
 }
@@ -694,11 +706,17 @@ async fn collect_project_documents(
         }
         // Full workspace/session snapshot used for exact workspace restore.
         let presentation = state.current_display_presentation.read().await.clone();
+        let workspace_selection = state.current_workspace_selection.read().await.clone();
+        let workspace_ribbon = state.current_workspace_ribbon.read().await.clone();
+        let workspace_layout = state.current_workspace_layout.read().await.clone();
         let persisted = PersistedCurrentLiveSnapshot::from(snapshot);
         let persisted = PersistedCurrentLiveSnapshot {
             display_presentation_schema_version: Some(DISPLAY_PRESENTATION_SCHEMA_VERSION),
             display_presentation: persisted_display_presentation(&presentation)
                 .expect("display presentation must serialize"),
+            workspace_selection,
+            workspace_ribbon,
+            workspace_layout,
             ..persisted
         };
         if let Ok(data) = serde_json::to_vec_pretty(&persisted) {
@@ -1257,6 +1275,152 @@ fn session_restore_compatibility(
     }
 }
 
+fn safe_import_session_id(session_id: &str) -> String {
+    let safe = session_id
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if safe.is_empty() {
+        "session".to_string()
+    } else {
+        safe
+    }
+}
+
+fn validate_imported_snapshot_run(
+    preflight: &FmsPreflight,
+    persisted: &PersistedCurrentLiveSnapshot,
+) -> Result<(), ApiError> {
+    if persisted.session.session_id != preflight.session.session_id {
+        return Err(ApiError::bad_request(
+            "invalid_fms_snapshot: snapshot session_id does not match manifest/session.json",
+        ));
+    }
+    let run_id = &persisted.session.run_id;
+    let run_ref = format!("runs/{run_id}/run_manifest.json");
+    if !preflight.session.run_refs.iter().any(|reference| reference == &run_ref) {
+        return Err(ApiError::bad_request(format!(
+            "invalid_fms_snapshot: active run '{run_id}' is not declared by manifest/session.json"
+        )));
+    }
+    let run_bytes = preflight.documents.get(&run_ref).ok_or_else(|| {
+        ApiError::bad_request(format!(
+            "invalid_fms_snapshot: declared run manifest '{run_ref}' is missing"
+        ))
+    })?;
+    let run_manifest: FmsRunManifest = serde_json::from_slice(run_bytes).map_err(|error| {
+        ApiError::bad_request(format!(
+            "invalid_fms_snapshot: declared run manifest '{run_ref}' is invalid: {error}"
+        ))
+    })?;
+    if run_manifest.run_id != *run_id {
+        return Err(ApiError::bad_request(format!(
+            "invalid_fms_snapshot: declared run manifest '{run_ref}' has run_id '{}'",
+            run_manifest.run_id
+        )));
+    }
+    for document in [
+        "project/main.py",
+        "project/ui_state.json",
+        "project/current_live_snapshot.json",
+    ] {
+        if !preflight.documents.contains_key(document) {
+            return Err(ApiError::bad_request(format!(
+                "invalid_fms_snapshot: required document '{document}' is missing"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn normalize_imported_read_only(persisted: &mut PersistedCurrentLiveSnapshot) {
+    persisted.session.status = "completed".to_string();
+    persisted.runtime_status = RuntimeStatusView {
+        kind: fullmag_runner::RuntimeStatus::Completed,
+        code: "imported_read_only".to_string(),
+        is_busy: false,
+        can_accept_commands: false,
+    };
+    if let Some(run) = persisted.run.as_mut() {
+        run.status = "completed".to_string();
+    }
+    if let Some(live_state) = persisted.live_state.as_mut() {
+        live_state.status = "completed".to_string();
+        live_state.latest_step.finished = true;
+    }
+    if let Some(execution) = persisted.stage_execution.as_mut() {
+        let total_stages = execution
+            .total_stages
+            .max(execution.stage_statuses.len())
+            .max(execution.stages.len());
+        execution.total_stages = total_stages;
+        execution.completed_stage_indexes = (0..total_stages).collect();
+        execution.stage_statuses = vec![crate::types::StageLifecycleState::Completed; total_stages];
+        for stage in &mut execution.stages {
+            stage.status = crate::types::StageLifecycleState::Completed;
+        }
+        execution.active_stage_index = None;
+        execution.active_stage_kind = None;
+        execution.runtime_state = crate::types::RuntimeLifecycleState::Completed;
+    }
+}
+
+fn publish_imported_session(
+    state: &AppState,
+    fms_bytes: &[u8],
+    preflight: &FmsPreflight,
+    persisted: &PersistedCurrentLiveSnapshot,
+    import_id: &str,
+) -> Result<PathBuf, ApiError> {
+    let imports = session_store_root(state).join("imports");
+    std::fs::create_dir_all(&imports)
+        .map_err(|error| ApiError::internal(format!("creating import root: {error}")))?;
+    let published = imports.join(&import_id);
+    let staging = imports.join(format!(".{import_id}.staging"));
+
+    let result = (|| -> Result<(), ApiError> {
+        let staging_store = SessionStore::open(&staging)
+            .map_err(|error| ApiError::internal(format!("creating import staging: {error}")))?;
+        let imported_session = unpack_fms(Cursor::new(fms_bytes), &staging_store)
+            .map_err(|error| ApiError::bad_request(format!("invalid_fms_unpack: {error}")))?;
+        if imported_session.session_id != preflight.session.session_id {
+            return Err(ApiError::bad_request(
+                "invalid_fms_unpack: session manifest changed during import",
+            ));
+        }
+        validate_imported_snapshot_run(preflight, persisted)?;
+        staging_store
+            .write_document(
+                "project/current_live_snapshot.json",
+                &serde_json::to_vec_pretty(persisted).map_err(|error| {
+                    ApiError::internal(format!(
+                        "serializing rebased imported session snapshot: {error}"
+                    ))
+                })?,
+            )
+            .map_err(|error| {
+                ApiError::internal(format!(
+                    "persisting rebased imported session snapshot: {error}"
+                ))
+            })?;
+        std::fs::rename(&staging, &published).map_err(|error| {
+            ApiError::internal(format!("publishing imported session snapshot: {error}"))
+        })?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(error);
+    }
+    Ok(published)
+}
+
 /// `POST /v2/sessions/current/persistence/imports`
 pub(crate) async fn import_session_commit(
     State(state): State<Arc<AppState>>,
@@ -1300,11 +1464,20 @@ pub(crate) async fn import_session_commit(
         ));
     }
 
-    let store = open_store(&state)?;
-    let session = unpack_fms(Cursor::new(&fms_bytes), &store)
-        .map_err(|error| ApiError::internal(format!("unpacking preflighted .fms: {error}")))?;
-
-    let restored_artifact_dir = session_store_run_artifact_dir(&store, &persisted.session.run_id)
+    normalize_imported_read_only(&mut persisted);
+    let import_id = format!(
+        "{}-{}",
+        safe_import_session_id(&preflight.session.session_id),
+        crate::uuid_v4_hex()
+    );
+    let published_root = session_store_root(&state)
+        .join("imports")
+        .join(&import_id);
+    persisted.session.script_path = published_root.join("project/main.py").display().to_string();
+    let restored_artifact_dir = published_root
+        .join("runs")
+        .join(&persisted.session.run_id)
+        .join("artifacts")
         .display()
         .to_string();
     persisted.session.artifact_dir = restored_artifact_dir.clone();
@@ -1312,73 +1485,50 @@ pub(crate) async fn import_session_commit(
         run.artifact_dir = restored_artifact_dir;
     }
     let restored: SessionStateResponse = persisted.clone().into();
-    store
-        .write_document(
-            "project/current_live_snapshot.json",
-            &serde_json::to_vec_pretty(&persisted).map_err(|error| {
-                ApiError::internal(format!(
-                    "serializing rebased imported session snapshot: {error}"
-                ))
-            })?,
-        )
-        .map_err(|error| {
-            ApiError::internal(format!(
-                "persisting rebased imported session snapshot: {error}"
-            ))
-        })?;
+    let published_root =
+        publish_imported_session(&state, &fms_bytes, &preflight, &persisted, &import_id)?;
+    let published_store = SessionStore::open(&published_root)
+        .map_err(|error| ApiError::internal(format!("opening published import: {error}")))?;
 
-    match req.restore_mode {
-        SessionRestoreMode::VisualizationOnly => {
-            {
-                let mut selection = state.current_display_selection.write().await;
-                *selection = restored.display_selection.clone();
-            }
-            {
-                let mut presentation = state.current_display_presentation.write().await;
-                *presentation = restored_display_presentation;
-            }
-            if let Some(active) = active_snapshot.as_ref() {
-                let realtime_state = current_live_realtime_state_from_snapshot(
-                    &state,
-                    active,
-                    restored.display_selection.revision,
-                )
-                .await;
-                publish_current_live_realtime_batch_changed(&state, &realtime_state, false, 0)
-                    .await?;
-            }
-        }
-        SessionRestoreMode::ReplaceProject => {
-            {
-                let mut current = state.current_live_state.write().await;
-                *current = Some(restored.clone());
-            }
-            {
-                let mut selection = state.current_display_selection.write().await;
-                *selection = restored.display_selection.clone();
-            }
-            {
-                let mut presentation = state.current_display_presentation.write().await;
-                *presentation = restored_display_presentation;
-            }
-            let realtime_state = current_live_realtime_state_from_snapshot(
-                &state,
-                &restored,
-                restored.display_selection.revision,
-            )
-            .await;
-            publish_current_live_realtime_batch_changed(&state, &realtime_state, false, 0).await?;
-        }
-        SessionRestoreMode::Resume => unreachable!("resume returns before any mutation"),
+    {
+        let mut current = state.current_live_state.write().await;
+        *current = Some(restored.clone());
     }
+    {
+        let mut selection = state.current_display_selection.write().await;
+        *selection = restored.display_selection.clone();
+    }
+    {
+        let mut presentation = state.current_display_presentation.write().await;
+        *presentation = restored_display_presentation;
+    }
+    {
+        let mut selection = state.current_workspace_selection.write().await;
+        *selection = persisted.workspace_selection.clone();
+    }
+    {
+        let mut ribbon = state.current_workspace_ribbon.write().await;
+        *ribbon = persisted.workspace_ribbon.clone();
+    }
+    {
+        let mut layout = state.current_workspace_layout.write().await;
+        *layout = persisted.workspace_layout.clone();
+    }
+    let realtime_state = current_live_realtime_state_from_snapshot(
+        &state,
+        &restored,
+        restored.display_selection.revision,
+    )
+    .await;
+    publish_current_live_realtime_batch_changed(&state, &realtime_state, false, 0).await?;
 
-    let restored_ui_state = store
+    let restored_ui_state = published_store
         .read_document("project/ui_state.json")
         .map_err(|e| ApiError::internal(format!("reading ui_state document: {e}")))?
         .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok());
 
     Ok(Json(SessionImportCommitResponse {
-        session_id: session.session_id,
+        session_id: preflight.session.session_id,
         restore_mode: req.restore_mode,
         restore_class: preflight.inspection.restore_class,
         warnings,
