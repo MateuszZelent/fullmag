@@ -484,10 +484,14 @@ impl InteractiveRuntimeHost {
         self.control.clear_running_interrupt();
     }
 
-    pub(super) fn mark_closed(&self) {
+    pub(super) fn mark_closed(&mut self, live_workspace: &LocalLiveWorkspace) {
         if let Ok(mut preview_state) = self.preview_source.lock() {
             preview_state.status = InteractivePreviewStatus::Closed;
+            preview_state.continuation_magnetization = None;
+            preview_state.generation = preview_state.generation.saturating_add(1);
         }
+        self.runtime = None;
+        live_workspace.discard_retained_observations();
         self.control.clear_running_interrupt();
     }
 

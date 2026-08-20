@@ -348,6 +348,20 @@ impl LocalLiveWorkspace {
         self.publisher.request_publish();
     }
 
+    /// Drop every mutable preview provider/cache while preserving the immutable
+    /// terminal field/scalar snapshot. The clear flag is published in the same
+    /// epoch transition so a client cannot keep rendering a retired provider.
+    pub fn discard_retained_observations(&self) {
+        self.update(|state| {
+            state.preview_fields.clear();
+            state.pending_preview_fields.clear();
+            state.superseded_pending_preview_fields.clear();
+            state.clear_preview_cache = true;
+            state.preview_cache_revision = state.preview_cache_revision.saturating_add(1);
+            state.field_generation = None;
+        });
+    }
+
     pub fn update_profiled<F>(&self, mutate: F) -> LiveWorkspaceUpdateTimings
     where
         F: FnOnce(&mut LocalLiveWorkspaceState),

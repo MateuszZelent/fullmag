@@ -94,6 +94,7 @@ pub(crate) fn relaxation_stop_criteria_satisfied(
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct RelaxationTorqueConfirmation {
     consecutive_samples: u32,
+    last_sample_id: Option<u64>,
 }
 
 impl RelaxationTorqueConfirmation {
@@ -124,6 +125,25 @@ impl RelaxationTorqueConfirmation {
             self.consecutive_samples = 0;
         }
         self.consecutive_samples >= RELAXATION_TORQUE_CONFIRMATION_STEPS
+    }
+
+    /// Observe a convergence sample tied to one accepted solver state.
+    ///
+    /// A relaxation loop may inspect the same state both at the top of the
+    /// iteration and immediately after accepting a step.  Those two checks
+    /// must not count as two independent confirmation samples.
+    pub(crate) fn observe_at_accepted_step(
+        &mut self,
+        control: &RelaxationControlIR,
+        energy_plateau_range_j: Option<EnergyPlateauRangeJ>,
+        max_torque_apm: f64,
+        accepted_step: u64,
+    ) -> bool {
+        if self.last_sample_id == Some(accepted_step) {
+            return self.confirmed();
+        }
+        self.last_sample_id = Some(accepted_step);
+        self.observe(control, energy_plateau_range_j, max_torque_apm)
     }
 
     #[cfg(test)]
@@ -504,6 +524,28 @@ mod tests {
             confirmation.consecutive_samples(),
             RELAXATION_TORQUE_CONFIRMATION_STEPS
         );
+    }
+
+    #[test]
+    fn torque_confirmation_ignores_duplicate_observation_of_same_accepted_state() {
+        let control = RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: Some(2.0),
+                energy_tolerance_j: None,
+                max_steps: Some(50_000),
+                max_relaxation_time_s: None,
+            },
+        };
+        let mut confirmation = RelaxationTorqueConfirmation::default();
+
+        assert!(!confirmation.observe_at_accepted_step(&control, None, 1.0, 0));
+        assert!(!confirmation.observe_at_accepted_step(&control, None, 1.0, 0));
+        assert_eq!(confirmation.consecutive_samples(), 1);
+        assert!(!confirmation.observe_at_accepted_step(&control, None, 1.0, 1));
+        assert!(!confirmation.observe_at_accepted_step(&control, None, 1.0, 1));
+        assert_eq!(confirmation.consecutive_samples(), 2);
+        assert!(confirmation.observe_at_accepted_step(&control, None, 1.0, 2));
     }
 
     #[test]

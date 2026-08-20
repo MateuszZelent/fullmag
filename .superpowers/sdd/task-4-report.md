@@ -4,8 +4,9 @@
 
 `READY_FOR_RE_REVIEW`
 
-Wszystkie pięć findingów z `.superpowers/sdd/task-4-review.md` zostało
-naprawionych w cyklu RED/GREEN. Nie wykonano stage, commit ani push. Capability
+Wszystkie pięć findingów specyfikacyjnych z
+`.superpowers/sdd/task-4-review.md` oraz dwa późniejsze findingi jakościowe
+zostały naprawione w cyklu RED/GREEN. Nie wykonano stage, commit ani push. Capability
 dla frozen spins pozostaje `UNQUALIFIED`: Task 4 dostarcza wyłącznie typowany
 kontrakt selekcji, walidację, hash i authoring; nie implementuje
 `MagnetizationConstraintIR`, `FrozenSpins`, planowania, materializacji maski ani
@@ -84,6 +85,38 @@ jest jawnie wykrywana. Nie jest generowane losowe ID podczas serializacji.
 frozen spins nadal nie istnieją. Source map wskazuje istniejące, stabilne
 symbole i przechodzi focused validator.
 
+### 6. Rozdzielenie odpowiedzialności modułu Pythona
+
+Monolityczny `packages/fullmag-py/src/fullmag/model/selection.py` został
+rozdzielony bez zmiany publicznych importów ani API:
+
+- `_selection_wire.py` (`491` linii) jest właścicielem typed wire nodes,
+  ścisłego parse i canonicalization;
+- `_selection_validation.py` (`179` linii) jest właścicielem metryk, walidacji
+  grafu, rozwiniętych limitów i kanonicznego hasha;
+- `selection.py` (`706` linii) pozostaje publiczną fasadą oraz właścicielem DSL
+  i lowering geometrii authored.
+
+Kierunek importów jest acykliczny: oba prywatne moduły nie importują publicznej
+fasady, a fasada deleguje do nich implementację. Zachowano dotychczasowe importy
+`fullmag`, `fullmag.select` i `fullmag.model.selection`, łącznie z bezpośrednim
+dostępem do `_validate_definition_graph` używanym przez focused testy.
+
+### 7. Trwałe testy grafu i hasha Pythona
+
+Nowy `test_selection_graph_limits.py` sprawdza te same wejścia przez
+`_validate_definition_graph` oraz publiczny `canonical_selection_sha256`:
+
+- nieznaną referencję;
+- cykl referencji;
+- akceptację `64` i odrzucenie `65` poziomów rozwiniętego grafu;
+- akceptację `4096` i odrzucenie `4097` węzłów;
+- akceptację `1024` i odrzucenie `1025` referencji.
+
+Test architektury był właściwym RED: przed refaktorem suite miał `1 failed,
+5 passed`, ponieważ `_selection_wire` nie istniał. Po rozdzieleniu ten sam suite
+ma `6 passed`; pięć testów kontraktu granicznego pozostało GREEN przez refaktor.
+
 ## Dowody RED
 
 1. Pełna geometria i limity: focused Rust uruchomił sześć failures — brak
@@ -100,14 +133,19 @@ symbole i przechodzi focused validator.
    `point_in_region_shape` i `geometry_contains`; po aktualizacji mapy wykrył
    też niewspierany format deklaracji enum, który zastąpiono walidowalnym,
    istniejącym symbolem źródłowym bez fabrykowania deklaracji.
+6. Jakość Pythona: nowy focused suite dał `1 failed, 5 passed`; failure
+   `ModuleNotFoundError: fullmag.model._selection_wire` potwierdził, że typed
+   wire/parse, graph/hash i publiczny DSL nadal były jednym modułem. Po podziale
+   wszystkie sześć testów przeszło.
 
 ## Świeże bramki GREEN
 
 ```text
 PYTHONPATH=packages/fullmag-py/src pytest -q \
   packages/fullmag-py/tests/test_selection_contract.py \
-  packages/fullmag-py/tests/test_selection_geometry.py
-72 passed in 0.39s
+  packages/fullmag-py/tests/test_selection_geometry.py \
+  packages/fullmag-py/tests/test_selection_graph_limits.py
+78 passed in 0.60s
 
 CARGO_TARGET_DIR=/tmp/fullmag-task4-fix-target CARGO_INCREMENTAL=0 \
   cargo test -p fullmag-ir selection -- --nocapture
@@ -115,16 +153,24 @@ CARGO_TARGET_DIR=/tmp/fullmag-task4-fix-target CARGO_INCREMENTAL=0 \
 pozostałe test binaries: 0 uruchomionych, 0 failed po filtrze selection
 
 ruff check packages/fullmag-py/src/fullmag/model/selection.py \
+  packages/fullmag-py/src/fullmag/model/_selection_wire.py \
+  packages/fullmag-py/src/fullmag/model/_selection_validation.py \
   packages/fullmag-py/src/fullmag/select.py \
   packages/fullmag-py/tests/test_selection_contract.py \
-  packages/fullmag-py/tests/test_selection_geometry.py
+  packages/fullmag-py/tests/test_selection_geometry.py \
+  packages/fullmag-py/tests/test_selection_graph_limits.py
 All checks passed
 
-ruff format --check dla tych samych czterech plików
-4 files already formatted
+ruff format --check dla tych samych siedmiu plików
+7 files already formatted
 
 python3 -m py_compile packages/fullmag-py/src/fullmag/model/selection.py \
+  packages/fullmag-py/src/fullmag/model/_selection_wire.py \
+  packages/fullmag-py/src/fullmag/model/_selection_validation.py \
   packages/fullmag-py/src/fullmag/select.py
+exit 0
+
+git diff --check -- <pliki Task 4 quality>
 exit 0
 
 rustfmt --edition 2021 --check \
@@ -157,8 +203,9 @@ python3 -m unittest discover \
 
 ## Handoff do ponownej recenzji
 
-Recenzent powinien ponownie sprawdzić dokładnie pięć findingów z
-`task-4-review.md`, szczególnie parity kanonicznego hasha, fail-closed
-`imported_solid`, deserializację nested boolean oraz zachowanie jawnego
-`object_id` w canonical script round-trip. Oczekiwany status po pozytywnej
-recenzji: `READY`; do tego czasu raport pozostaje `READY_FOR_RE_REVIEW`.
+Recenzent powinien ponownie sprawdzić pięć findingów z `task-4-review.md` oraz
+dwa findingi jakościowe, szczególnie parity kanonicznego hasha, fail-closed
+`imported_solid`, deserializację nested boolean, zachowanie jawnego `object_id`
+w canonical script round-trip, acykliczny podział modułów i dokładne testy
+limitów grafu. Oczekiwany status po pozytywnej recenzji: `READY`; do tego czasu
+raport pozostaje `READY_FOR_RE_REVIEW`.

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::schemas::common::AcceptedObservationFrameRef;
+use crate::schemas::common::{AcceptedObservationFrameRef, FieldPublicationBundle};
 
 // ── Existing catalog / meta types ────────────────────────────────────────────
 
@@ -92,6 +92,8 @@ pub struct FieldDescriptor {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct FieldMeta {
     pub observation_frame: AcceptedObservationFrameRef,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication_bundle: Option<FieldPublicationBundle>,
     pub quantity_id: String,
     pub label: String,
     pub kind: String,

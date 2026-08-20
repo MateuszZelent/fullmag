@@ -7,7 +7,7 @@ use crate::types::{
     ExecutedRun, LivePreviewField, LivePreviewRequest, RunError, RunResult, StepAction, StepStats,
     StepUpdate,
 };
-use fullmag_ir::{BackendPlanIR, ExecutionPlanIR, ProblemIR, StudyIR};
+use fullmag_ir::{ExecutionPlanIR, ProblemIR, StudyIR};
 
 use super::backend::{BackendGeometry, InteractiveBackend};
 use super::cache::DisplayCache;
@@ -15,11 +15,11 @@ use super::display::{DisplayKind, DisplayPayload, DisplaySelection, DisplaySelec
 
 pub(crate) fn build_atomic_terminal_update(
     backend: &mut dyn InteractiveBackend,
-    plan: &ExecutionPlanIR,
+    _plan: &ExecutionPlanIR,
     display_revision: u64,
     executed: &ExecutedRun,
 ) -> Result<Option<StepUpdate>, RunError> {
-    if !crate::interactive_runtime::should_materialize_terminal_fdm_fields(executed.result.status) {
+    if !crate::interactive_runtime::should_materialize_terminal_fields(executed.result.status) {
         return Ok(None);
     }
     let final_stats = executed.result.steps.last().cloned().unwrap_or_default();
@@ -33,7 +33,7 @@ pub(crate) fn build_atomic_terminal_update(
         BackendGeometry::Fdm { grid } => (grid, None),
         BackendGeometry::Fem { mesh } => ([0u32, 0, 0], mesh.generation_id),
     };
-    let cached_preview_fields = if matches!(plan.backend_plan, BackendPlanIR::Fdm(_)) {
+    let cached_preview_fields = {
         let request = LivePreviewRequest {
             revision: display_revision,
             quantity: "m".to_string(),
@@ -51,7 +51,7 @@ pub(crate) fn build_atomic_terminal_update(
             .snapshot_vector_fields(&quantities, &request)
             .map_err(|error| RunError {
                 message: format!(
-                    "completed FDM solve could not be finalized because terminal field materialization failed: {}",
+                    "completed solve could not be finalized because terminal field materialization failed: {}",
                     error.message
                 ),
             })?;
@@ -66,8 +66,6 @@ pub(crate) fn build_atomic_terminal_update(
             field.materialized_at_unix_ms = materialized_at_unix_ms;
         }
         Some(fields)
-    } else {
-        None
     };
 
     Ok(Some(StepUpdate {

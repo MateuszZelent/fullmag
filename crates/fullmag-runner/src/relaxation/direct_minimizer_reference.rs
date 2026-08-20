@@ -310,7 +310,12 @@ fn execute_projected_gradient_bb_soa(
             .stop
             .torque_tolerance_apm
             .is_some_and(|threshold| max_torque.is_finite() && max_torque <= threshold);
-        if torque_confirmation.observe(control, energy_plateau.range(), max_torque) {
+        if torque_confirmation.observe_at_accepted_step(
+            control,
+            energy_plateau.range(),
+            max_torque,
+            steps,
+        ) {
             converged = true;
             break;
         }
@@ -433,7 +438,12 @@ fn execute_projected_gradient_bb_soa(
 
         let energy_plateau_range = energy_plateau.record(energy);
         let max_torque = compute_max_torque_soa(&m, &h_eff);
-        if torque_confirmation.observe(control, energy_plateau_range, max_torque) {
+        if torque_confirmation.observe_at_accepted_step(
+            control,
+            energy_plateau_range,
+            max_torque,
+            steps,
+        ) {
             converged = true;
             break;
         }
@@ -502,7 +512,12 @@ fn execute_projected_gradient_bb_aos(
             .stop
             .torque_tolerance_apm
             .is_some_and(|threshold| max_torque.is_finite() && max_torque <= threshold);
-        if torque_confirmation.observe(control, energy_plateau.range(), max_torque) {
+        if torque_confirmation.observe_at_accepted_step(
+            control,
+            energy_plateau.range(),
+            max_torque,
+            steps,
+        ) {
             converged = true;
             break;
         }
@@ -626,7 +641,12 @@ fn execute_projected_gradient_bb_aos(
 
         let energy_plateau_range = energy_plateau.record(energy);
         let max_torque = compute_max_torque(&m, &h_eff);
-        if torque_confirmation.observe(control, energy_plateau_range, max_torque) {
+        if torque_confirmation.observe_at_accepted_step(
+            control,
+            energy_plateau_range,
+            max_torque,
+            steps,
+        ) {
             converged = true;
             break;
         }
@@ -718,7 +738,12 @@ fn execute_nonlinear_cg_soa(
             .stop
             .torque_tolerance_apm
             .is_some_and(|threshold| max_torque.is_finite() && max_torque <= threshold);
-        if torque_confirmation.observe(control, energy_plateau.range(), max_torque) {
+        if torque_confirmation.observe_at_accepted_step(
+            control,
+            energy_plateau.range(),
+            max_torque,
+            steps,
+        ) {
             converged = true;
             break;
         }
@@ -824,7 +849,12 @@ fn execute_nonlinear_cg_soa(
 
         let energy_plateau_range = energy_plateau.record(energy);
         let max_torque = compute_max_torque_soa(&m, &h_eff);
-        if torque_confirmation.observe(control, energy_plateau_range, max_torque) {
+        if torque_confirmation.observe_at_accepted_step(
+            control,
+            energy_plateau_range,
+            max_torque,
+            steps,
+        ) {
             converged = true;
             break;
         }
@@ -892,7 +922,12 @@ fn execute_nonlinear_cg_aos(
             .stop
             .torque_tolerance_apm
             .is_some_and(|threshold| max_torque.is_finite() && max_torque <= threshold);
-        if torque_confirmation.observe(control, energy_plateau.range(), max_torque) {
+        if torque_confirmation.observe_at_accepted_step(
+            control,
+            energy_plateau.range(),
+            max_torque,
+            steps,
+        ) {
             converged = true;
             break;
         }
@@ -1015,7 +1050,12 @@ fn execute_nonlinear_cg_aos(
 
         let energy_plateau_range = energy_plateau.record(energy);
         let max_torque = compute_max_torque(&m, &h_eff);
-        if torque_confirmation.observe(control, energy_plateau_range, max_torque) {
+        if torque_confirmation.observe_at_accepted_step(
+            control,
+            energy_plateau_range,
+            max_torque,
+            steps,
+        ) {
             converged = true;
             break;
         }

@@ -9,6 +9,10 @@ import { statusRefreshIntervalMs } from "../realtime/communicationPolicy";
 import { useResourceSelector } from "./useResource";
 import type { ResourceResult } from "./resourceTypes";
 import {
+  selectSessionLifecycle,
+  type SelectedSessionLifecycle,
+} from "./sessionLifecycle";
+import {
   sessionResourceIdentitiesEqual,
   sessionResourceIdentityFromStatus,
   type SessionResourceIdentity,
@@ -80,5 +84,11 @@ export function useSessionResourceIdentity(): SessionResourceIdentity | null {
   return useSessionStatusSelector(
     (status) => sessionResourceIdentityFromStatus(status.data),
     { isEqual: sessionResourceIdentitiesEqual },
+  );
+}
+
+export function useSessionLifecycle(): SelectedSessionLifecycle | null {
+  return useSessionStatusSelector((status) =>
+    status.data?.lifecycle ? selectSessionLifecycle(status.data.lifecycle) : null,
   );
 }

@@ -10635,7 +10635,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 .enter_awaiting_command(continuation_magnetization.clone(), &live_workspace);
             paused_stage = None;
         }
-        interactive_runtime_host.mark_closed();
+        interactive_runtime_host.mark_closed(&live_workspace);
         live_workspace.update(|state| {
             set_live_state_status(&mut state.live_state, "completed", Some(true));
         });

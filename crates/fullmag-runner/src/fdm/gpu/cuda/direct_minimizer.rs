@@ -207,7 +207,12 @@ pub(crate) fn execute_direct_minimizer(
             &state.magnetization,
             &state.h_eff,
         );
-        if torque_confirmation.observe(control, energy_plateau.range(), current_torque_apm) {
+        if torque_confirmation.observe_at_accepted_step(
+            control,
+            energy_plateau.range(),
+            current_torque_apm,
+            state.accepted_steps,
+        ) {
             break;
         }
         if direct_minimizer_gradient_degenerate(weighted_gradient_norm_sq) {
@@ -460,7 +465,12 @@ pub(crate) fn execute_direct_minimizer(
         current_stats = accepted_stats;
 
         let energy_plateau_range = energy_plateau.record(state.energy_j);
-        if torque_confirmation.observe(control, energy_plateau_range, torque_apm) {
+        if torque_confirmation.observe_at_accepted_step(
+            control,
+            energy_plateau_range,
+            torque_apm,
+            state.accepted_steps,
+        ) {
             break;
         }
     }

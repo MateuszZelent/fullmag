@@ -121,11 +121,19 @@ pub(crate) fn build_live_status(
     commands_revision: u64,
     command_completion_revision: u64,
 ) -> LiveStatus {
+    let solver_lifecycle = crate::session::effective_runtime_status_code(snapshot);
+    let lifecycle = lifecycle_contract(
+        &solver_lifecycle,
+        snapshot.runtime_status.can_accept_commands && !snapshot.runtime_status.is_busy,
+    );
+    let terminal_session_resource = lifecycle.session_resource == "tombstoned";
     let session = SessionSummary {
         session_id: snapshot.session.session_id.clone(),
-        session_epoch: format!(
-            "{}@{}",
-            snapshot.session.session_id, snapshot.session.started_at_unix_ms
+        session_epoch: session_epoch(
+            &snapshot.session.session_id,
+            snapshot.session.started_at_unix_ms,
+            snapshot.session.finished_at_unix_ms,
+            terminal_session_resource,
         ),
         name: snapshot.session.problem_name.clone(),
         created_at: snapshot.session.started_at_unix_ms.to_string(),
@@ -316,12 +324,46 @@ pub(crate) fn build_live_status(
         session,
         run,
         solver,
+        lifecycle,
         display,
         domain,
         resources,
         capabilities,
         energies,
         metrics,
+    }
+}
+
+pub(crate) fn lifecycle_contract(
+    solver: &str,
+    runtime_accepts_commands: bool,
+) -> crate::schemas::status::SessionLifecycleSummary {
+    let terminal = matches!(solver, "completed" | "failed" | "cancelled" | "closed");
+    crate::schemas::status::SessionLifecycleSummary {
+        solver: solver.to_string(),
+        session_resource: if terminal { "tombstoned" } else { "active" }.to_string(),
+        connectivity: "connected".to_string(),
+        commandability: if terminal {
+            "read_only"
+        } else if runtime_accepts_commands {
+            "allowed"
+        } else {
+            "forbidden"
+        }
+        .to_string(),
+    }
+}
+
+pub(crate) fn session_epoch(
+    session_id: &str,
+    started_at_unix_ms: u128,
+    finished_at_unix_ms: u128,
+    terminal_session_resource: bool,
+) -> String {
+    if terminal_session_resource {
+        format!("{session_id}@{started_at_unix_ms}:tombstone:{finished_at_unix_ms}")
+    } else {
+        format!("{session_id}@{started_at_unix_ms}")
     }
 }
 
@@ -1267,9 +1309,30 @@ fn compat_end_to_end_steps_per_second(
 #[cfg(test)]
 mod tests {
     use super::{
-        compat_end_to_end_steps_per_second, relaxation_algorithms_available,
-        solver_completion_record,
+        compat_end_to_end_steps_per_second, lifecycle_contract, relaxation_algorithms_available,
+        session_epoch, solver_completion_record,
     };
+
+    #[test]
+    fn awaiting_command_is_an_active_commandable_session_resource() {
+        let lifecycle = lifecycle_contract("awaiting_command", true);
+        assert_eq!(lifecycle.solver, "awaiting_command");
+        assert_eq!(lifecycle.session_resource, "active");
+        assert_eq!(lifecycle.connectivity, "connected");
+        assert_eq!(lifecycle.commandability, "allowed");
+    }
+
+    #[test]
+    fn completed_session_is_a_read_only_tombstone_with_a_new_epoch() {
+        let lifecycle = lifecycle_contract("completed", false);
+        assert_eq!(lifecycle.session_resource, "tombstoned");
+        assert_eq!(lifecycle.commandability, "read_only");
+        assert_eq!(session_epoch("session-1", 1000, 0, false), "session-1@1000");
+        assert_eq!(
+            session_epoch("session-1", 1000, 2000, true),
+            "session-1@1000:tombstone:2000"
+        );
+    }
 
     #[test]
     fn status_uses_last_solver_completion_before_terminal_save_stage() {

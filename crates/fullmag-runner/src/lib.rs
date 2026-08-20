@@ -3181,7 +3181,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         | BackendPlanIR::FemFrequencyResponse(_) => None,
     };
     let cached_preview_fields = if matches!(plan.backend_plan, BackendPlanIR::Fdm(_))
-        && interactive_runtime::should_materialize_terminal_fdm_fields(executed.result.status)
+        && interactive_runtime::should_materialize_terminal_fields(executed.result.status)
     {
         let materialized_at_unix_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

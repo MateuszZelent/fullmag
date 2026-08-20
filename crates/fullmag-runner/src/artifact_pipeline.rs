@@ -1731,6 +1731,7 @@ mod tests {
             source_hash: None,
             execution_mode: fullmag_ir::ExecutionMode::Strict,
             layout: serde_json::json!({"kind": "fem", "node_count": 2}),
+            execution_resolution: None,
         };
         let mut pipeline = ArtifactPipeline::start(output_dir.clone(), context, 2)
             .expect("start artifact pipeline");
@@ -1805,6 +1806,7 @@ mod tests {
             source_hash: None,
             execution_mode: fullmag_ir::ExecutionMode::Strict,
             layout: serde_json::json!({"kind": "fdm", "grid": [2, 1, 1]}),
+            execution_resolution: None,
         };
         let info = NativeVectorSnapshotInfo {
             cell_count: 2,
@@ -1875,6 +1877,7 @@ mod tests {
             source_hash: None,
             execution_mode: fullmag_ir::ExecutionMode::Strict,
             layout: serde_json::json!({"kind": "fdm", "grid": [1, 1, 1]}),
+            execution_resolution: None,
         };
         let execution_context =
             crate::physics_graph_execution::PhysicsGraphExecutionContext::from_exact_ids_for_test(

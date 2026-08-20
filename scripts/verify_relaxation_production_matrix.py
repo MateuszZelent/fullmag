@@ -15,6 +15,7 @@ import hashlib
 import json
 import re
 import shlex
+import subprocess
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -33,6 +34,28 @@ ALGORITHMS = (
     "tangent_plane_implicit",
 )
 FEATURE_IDS = {algorithm: f"relaxation_{algorithm}" for algorithm in ALGORITHMS}
+ARTIFACT_SCHEMA = "fullmag.relaxation.qualification_artifact.v1"
+RECIPE_HEADER = re.compile(r"^([A-Za-z0-9_-]+)(?:\s+[^:]*)?:\s*(?:#.*)?$")
+
+# These are the only recipes that can ever produce a matrix receipt.  The
+# CUDA/FEM recipes are intentionally reserved until their managed runtime
+# contracts exist in the repository; a CPU recipe must never qualify a GPU
+# cell by naming a different lane in the receipt.
+CANONICAL_RECIPE_BY_LANE = {
+    "fdm_cpu_reference": "verify-fdm-relaxation-qualification-release",
+    "fdm_gpu_production": "verify-fdm-relaxation-qualification-cuda-release",
+    "fem_cpu_public": "verify-fem-relaxation-qualification-release",
+    "fem_gpu_public": "verify-fem-relaxation-qualification-cuda-release",
+}
+
+# TPI is not a legal production cell for FDM or FEM GPU in the current
+# capability matrix.  It must be represented as not_applicable, not as a
+# permanently missing receipt.
+UNSUPPORTED_CELLS = {
+    ("tangent_plane_implicit", "fdm_cpu_reference"),
+    ("tangent_plane_implicit", "fdm_gpu_production"),
+    ("tangent_plane_implicit", "fem_gpu_public"),
+}
 
 # The order is part of the canonical matrix and therefore part of the
 # deterministic output.  FEM FP32 is intentionally not a legal cell until it
@@ -109,6 +132,11 @@ EXECUTION_KEYS = frozenset(
         "max_steps_reached",
         "non_converged",
         "fallback_occurred",
+        "accepted_steps",
+        "max_steps",
+        "metrics",
+        "confirmation",
+        "process",
     }
 )
 EXPECTED_MESH_REFINEMENT = {
@@ -154,14 +182,81 @@ def canonical_cells() -> tuple[tuple[str, str, str], ...]:
         for algorithm in ALGORITHMS
         for lane, policy in LANE_POLICIES.items()
         for precision in policy["precisions"]
+        if (algorithm, lane) not in UNSUPPORTED_CELLS
     )
 
 
-def canonical_workloads(algorithm: str, lane: str) -> list[str]:
+def all_matrix_cells() -> tuple[tuple[str, str, str], ...]:
+    return tuple(
+        (algorithm, lane, precision)
+        for algorithm in ALGORITHMS
+        for lane, policy in LANE_POLICIES.items()
+        for precision in policy["precisions"]
+    )
+
+
+def canonical_workloads(algorithm: str, lane: str, precision: str) -> list[str]:
     return [
-        f"{lane}.{algorithm}.macrospin",
-        f"{lane}.{algorithm}.exchange_demag",
+        f"{lane}.{precision}.{algorithm}.macrospin",
+        f"{lane}.{precision}.{algorithm}.exchange_demag",
     ]
+
+
+def _git(repo_root: Path, *args: str) -> str:
+    try:
+        return subprocess.check_output(
+            ["git", *args], cwd=repo_root, text=True, stderr=subprocess.STDOUT
+        ).strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        output = getattr(error, "output", "")
+        raise ValueError(f"cannot inspect source identity: {output or error}") from error
+
+
+def _source_identity(repo_root: Path) -> tuple[str, str]:
+    flagged = [
+        line
+        for line in _git(repo_root, "ls-files", "-v").splitlines()
+        if line and line[0] in {"h", "s", "S"}
+    ]
+    if flagged:
+        raise ValueError("source has assume-unchanged or skip-worktree index flags")
+    status = _git(
+        repo_root,
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+        "--ignore-submodules=none",
+    )
+    if status:
+        raise ValueError("source worktree is dirty")
+    commit = _git(repo_root, "rev-parse", "HEAD")
+    tree = _git(repo_root, "rev-parse", "HEAD^{tree}")
+    if not _is_commit(commit):
+        raise ValueError("source commit is invalid")
+    identity = _canonical_bytes({"source_commit": commit, "source_tree": tree})
+    return commit, _sha256_bytes(identity)
+
+
+def _recipe_body(repo_root: Path, recipe: str) -> str:
+    justfile = repo_root / "justfile"
+    if not justfile.is_file():
+        raise ValueError("repository justfile does not exist")
+    lines = justfile.read_text(encoding="utf-8").splitlines()
+    for index, line in enumerate(lines):
+        match = RECIPE_HEADER.fullmatch(line)
+        if match is None or match.group(1) != recipe:
+            continue
+        body: list[str] = []
+        for candidate in lines[index + 1 :]:
+            if candidate and not candidate[0].isspace():
+                break
+            body.append(candidate)
+        return "\n".join(line.rstrip() for line in body).strip("\n") + "\n"
+    raise ValueError(f"canonical recipe {recipe} does not exist in justfile")
+
+
+def _recipe_sha256(repo_root: Path, recipe: str) -> str:
+    return _sha256_bytes(_recipe_body(repo_root, recipe).encode("utf-8"))
 
 
 def _path_label(path: Path, root: Path) -> str:
@@ -321,7 +416,12 @@ def _scan_forbidden_execution_values(
             _scan_forbidden_execution_values(child, cell, errors, f"{path}[{index}]")
 
 
-def _validate_execution(receipt: Mapping[str, Any], cell: str, errors: list[str]) -> None:
+def _validate_execution(
+    root: Path,
+    receipt: Mapping[str, Any],
+    cell: str,
+    errors: list[str],
+) -> None:
     execution = receipt.get("execution")
     if not isinstance(execution, Mapping):
         _add(errors, cell, "missing=execution")
@@ -332,7 +432,7 @@ def _validate_execution(receipt: Mapping[str, Any], cell: str, errors: list[str]
         _add(errors, cell, f"status={execution.get('status', 'missing')}")
     if execution.get("converged") is not True:
         _add(errors, cell, "non_converged=true")
-    if execution.get("termination_reason") != "converged":
+    if execution.get("termination_reason") not in {"torque", "energy"}:
         _add(errors, cell, f"termination_reason={execution.get('termination_reason', 'missing')}")
     for key, reason in (
         ("timeout", "timeout=true"),
@@ -342,6 +442,59 @@ def _validate_execution(receipt: Mapping[str, Any], cell: str, errors: list[str]
     ):
         if execution.get(key) is not False:
             _add(errors, cell, reason)
+    accepted_steps = execution.get("accepted_steps")
+    max_steps = execution.get("max_steps")
+    if not isinstance(accepted_steps, int) or accepted_steps < 0:
+        _add(errors, cell, "invalid=execution.accepted_steps")
+    if not isinstance(max_steps, int) or max_steps <= 0:
+        _add(errors, cell, "invalid=execution.max_steps")
+    elif isinstance(accepted_steps, int) and accepted_steps >= max_steps:
+        _add(errors, cell, "max_steps=true")
+    metrics = execution.get("metrics")
+    if not isinstance(metrics, Mapping) or not metrics:
+        _add(errors, cell, "missing=execution.metrics")
+    else:
+        for name, value in metrics.items():
+            if not isinstance(name, str) or not isinstance(value, (int, float)) or not float(value) == float(value) or abs(float(value)) == float("inf"):
+                _add(errors, cell, f"invalid=execution.metrics.{name}")
+    confirmation = execution.get("confirmation")
+    if not isinstance(confirmation, Mapping):
+        _add(errors, cell, "missing=execution.confirmation")
+    else:
+        if not isinstance(confirmation.get("accepted_state_id"), str) or not confirmation["accepted_state_id"]:
+            _add(errors, cell, "missing=execution.confirmation.accepted_state_id")
+        if confirmation.get("observed_after_accepted_step") is not True:
+            _add(errors, cell, "missing=execution.confirmation.observed_after_accepted_step")
+    process = execution.get("process")
+    if not isinstance(process, Mapping):
+        _add(errors, cell, "missing=execution.process")
+        return
+    required_process = {
+        "command",
+        "command_sha256",
+        "runtime_manifest_path",
+        "runtime_manifest_sha256",
+        "log_path",
+        "log_sha256",
+        "exit_code",
+    }
+    if set(process) != required_process:
+        _add(errors, cell, "invalid=execution.process.fields")
+        return
+    command = receipt.get("managed_command")
+    if process.get("command") != command:
+        _add(errors, cell, "mismatch=execution.process.command")
+    if not _is_sha256(process.get("command_sha256")) or process.get("command_sha256") != _sha256_bytes(str(command).encode("utf-8")):
+        _add(errors, cell, "invalid=execution.process.command_sha256")
+    for field in ("runtime_manifest_path", "log_path"):
+        path = _safe_artifact_path(root, process.get(field), f"execution.process.{field}", errors, cell)
+        digest = process.get(f"{field.replace('_path', '')}_sha256")
+        if not _is_sha256(digest):
+            _add(errors, cell, f"invalid=execution.process.{field.replace('_path', '')}_sha256")
+        elif path is not None and _sha256_file(path) != digest:
+            _add(errors, cell, f"artifact_sha256_mismatch=execution.process.{field}")
+    if process.get("exit_code") != 0:
+        _add(errors, cell, "status=process_failed")
 
 
 def _validate_artifact_manifest(
@@ -351,6 +504,10 @@ def _validate_artifact_manifest(
     cell: str,
     errors: list[str],
     collected: list[dict[str, str]],
+    receipt: Mapping[str, Any],
+    algorithm: str,
+    lane: str,
+    precision: str,
 ) -> None:
     if not isinstance(level_evidence, Mapping):
         _add(errors, cell, f"missing=scope.evidence.{level}")
@@ -382,7 +539,69 @@ def _validate_artifact_manifest(
         assert isinstance(digest, str)
         if _sha256_file(artifact) != digest:
             _add(errors, cell, f"artifact_sha256_mismatch={raw_path}")
+        _validate_semantic_artifact(
+            artifact,
+            level,
+            receipt,
+            algorithm,
+            lane,
+            precision,
+            cell,
+            errors,
+        )
         collected.append({"level": level, "path": raw_path.replace("\\", "/"), "sha256": digest})
+
+
+def _validate_semantic_artifact(
+    path: Path,
+    level: str,
+    receipt: Mapping[str, Any],
+    algorithm: str,
+    lane: str,
+    precision: str,
+    cell: str,
+    errors: list[str],
+) -> None:
+    document = _load_json(path)
+    if document is None:
+        _add(errors, cell, f"invalid={level}.artifact_json")
+        return
+    if document.get("schema_version") != ARTIFACT_SCHEMA:
+        _add(errors, cell, f"invalid={level}.artifact_schema")
+    if document.get("level") != level:
+        _add(errors, cell, f"mismatch={level}.artifact_level")
+    expected_cell = {"algorithm": algorithm, "lane": lane, "precision": precision}
+    if document.get("cell") != expected_cell:
+        _add(errors, cell, f"mismatch={level}.artifact_cell")
+    if document.get("workload_ids") != canonical_workloads(algorithm, lane, precision):
+        _add(errors, cell, f"mismatch={level}.artifact_workloads")
+    for key in ("source_commit", "source_tree_sha256"):
+        if document.get(key) != receipt.get(key):
+            _add(errors, cell, f"mismatch={level}.artifact_{key}")
+    if document.get("runtime_identity") != LANE_POLICIES[lane]["runtime_identity"]:
+        _add(errors, cell, f"mismatch={level}.artifact_runtime_identity")
+    if document.get("oracle") != ORACLE_IDENTITIES[algorithm]:
+        _add(errors, cell, f"mismatch={level}.artifact_oracle")
+    result = document.get("result")
+    if not isinstance(result, Mapping):
+        _add(errors, cell, f"missing={level}.artifact_result")
+        return
+    if result.get("status") != "passed" or result.get("converged") is not True:
+        _add(errors, cell, f"non_converged={level}.artifact_result")
+    if result.get("termination_reason") not in {"torque", "energy"}:
+        _add(errors, cell, f"invalid={level}.artifact_termination_reason")
+    accepted_steps = result.get("accepted_steps")
+    max_steps = result.get("max_steps")
+    if not isinstance(accepted_steps, int) or not isinstance(max_steps, int) or max_steps <= 0 or accepted_steps >= max_steps:
+        _add(errors, cell, f"invalid={level}.artifact_step_bounds")
+    metrics = result.get("metrics")
+    if not isinstance(metrics, Mapping) or not metrics or any(
+        not isinstance(value, (int, float))
+        or not float(value) == float(value)
+        or abs(float(value)) == float("inf")
+        for value in metrics.values()
+    ):
+        _add(errors, cell, f"invalid={level}.artifact_metrics")
 
 
 def _validate_scope(
@@ -412,7 +631,7 @@ def _validate_scope(
         "device": policy["device"],
         "precision": precision,
         "runtime_identity": policy["runtime_identity"],
-        "validated_workloads": canonical_workloads(algorithm, lane),
+        "validated_workloads": canonical_workloads(algorithm, lane, precision),
         "oracle": ORACLE_IDENTITIES[algorithm],
         "mesh_refinement": EXPECTED_MESH_REFINEMENT,
         "repeatability": EXPECTED_REPEATABILITY,
@@ -428,7 +647,18 @@ def _validate_scope(
         _add(errors, cell, "missing=scope.evidence")
     else:
         for level in EVIDENCE_LEVELS:
-            _validate_artifact_manifest(root, level, evidence.get(level), cell, errors, collected)
+            _validate_artifact_manifest(
+                root,
+                level,
+                evidence.get(level),
+                cell,
+                errors,
+                collected,
+                receipt,
+                algorithm,
+                lane,
+                precision,
+            )
     artifact_path = _safe_artifact_path(root, receipt.get("artifact_path"), "artifact", errors, cell)
     artifact_digest = receipt.get("artifact_sha256")
     if not _is_sha256(artifact_digest):
@@ -450,6 +680,8 @@ def _validate_receipt(
     cell_tuple: tuple[str, str, str],
     expected: Mapping[str, Any] | None,
     errors: list[str],
+    live_source_identity: tuple[str, str] | None = None,
+    live_recipe_sha256: str | None = None,
 ) -> list[dict[str, str]]:
     algorithm, lane, precision = cell_tuple
     cell = _cell(algorithm, lane, precision)
@@ -467,6 +699,8 @@ def _validate_receipt(
     ):
         if receipt.get(key) != expected_value:
             _add(errors, cell, f"mismatch={key}")
+    if receipt.get("runtime_identity") != policy["runtime_identity"]:
+        _add(errors, cell, "mismatch=runtime_identity")
     if receipt.get("source_clean") is not True:
         _add(errors, cell, "source_clean=false")
     if not isinstance(receipt.get("managed_command"), str) or not receipt["managed_command"].strip():
@@ -478,6 +712,8 @@ def _validate_receipt(
             command = []
         if len(command) != 2 or command[0] != "just":
             _add(errors, cell, "invalid=managed_command")
+        elif command[1] != CANONICAL_RECIPE_BY_LANE[lane]:
+            _add(errors, cell, "mismatch=managed_command.canonical_recipe")
     if expected is not None:
         if receipt.get("source_commit") != expected.get("source_commit"):
             _add(errors, cell, "source_commit=mismatch")
@@ -495,9 +731,16 @@ def _validate_receipt(
         _add(errors, cell, "invalid=source_tree_sha256")
     if not _is_sha256(receipt.get("recipe_sha256")):
         _add(errors, cell, "invalid=recipe_sha256")
+    if live_source_identity is not None:
+        if receipt.get("source_commit") != live_source_identity[0]:
+            _add(errors, cell, "source_commit=live_worktree_mismatch")
+        if receipt.get("source_tree_sha256") != live_source_identity[1]:
+            _add(errors, cell, "source_tree_sha256=live_worktree_mismatch")
+    if live_recipe_sha256 is not None and receipt.get("recipe_sha256") != live_recipe_sha256:
+        _add(errors, cell, "recipe_sha256=live_justfile_mismatch")
     if receipt.get("solver_audit_gate") != "passed":
         _add(errors, cell, "missing=solver_audit_gate.passed")
-    _validate_execution(receipt, cell, errors)
+    _validate_execution(root, receipt, cell, errors)
     _scan_forbidden_execution_values(receipt, cell, errors)
     return _validate_scope(root, receipt, algorithm, lane, precision, cell, errors)
 
@@ -525,6 +768,7 @@ def orchestrate(
     expected_identity: Mapping[str, Any] | None,
     artifact_root: Path,
     output_path: Path | None = None,
+    source_root: Path | None = None,
 ) -> dict[str, Any]:
     """Validate receipts and return a deterministic qualification result.
 
@@ -536,6 +780,29 @@ def orchestrate(
     root = artifact_root.resolve()
     errors: list[str] = []
     normalized_expected = _validate_expected_identity(expected_identity, errors)
+    live_source_identity: tuple[str, str] | None = None
+    live_recipe_sha256: dict[str, str] = {}
+    if source_root is not None:
+        source_root = source_root.resolve()
+        try:
+            live_source_identity = _source_identity(source_root)
+        except ValueError as error:
+            _add(errors, None, f"invalid=live_source_identity|{error}")
+        for lane, recipe in CANONICAL_RECIPE_BY_LANE.items():
+            try:
+                live_recipe_sha256[lane] = _recipe_sha256(source_root, recipe)
+            except (OSError, UnicodeError, ValueError) as error:
+                _add(errors, None, f"invalid=live_recipe.{lane}|{error}")
+        if normalized_expected is not None and live_source_identity is not None:
+            if normalized_expected.get("source_commit") != live_source_identity[0]:
+                _add(errors, None, "mismatch=expected_identity.source_commit.live_worktree")
+            if normalized_expected.get("source_tree_sha256") != live_source_identity[1]:
+                _add(errors, None, "mismatch=expected_identity.source_tree_sha256.live_worktree")
+        if normalized_expected is not None:
+            expected_hashes = normalized_expected.get("recipe_sha256_by_lane", {})
+            for lane, actual in live_recipe_sha256.items():
+                if expected_hashes.get(lane) != actual:
+                    _add(errors, None, f"mismatch=expected_identity.recipe_sha256_by_lane.{lane}.live_justfile")
     records: list[dict[str, Any]] = []
     by_cell: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
     receipt_paths_sorted = sorted(
@@ -580,6 +847,8 @@ def orchestrate(
                 cell_tuple,
                 normalized_expected,
                 errors,
+                live_source_identity,
+                live_recipe_sha256.get(cell_tuple[1]),
             )
 
     for cell_tuple in canonical_cells():
@@ -598,8 +867,19 @@ def orchestrate(
         _add(errors, None, "mixed_source=receipt_identities_differ")
 
     manifest_cells: list[dict[str, Any]] = []
-    for algorithm, lane, precision in canonical_cells():
+    for algorithm, lane, precision in all_matrix_cells():
         cell_tuple = (algorithm, lane, precision)
+        if (algorithm, lane) in UNSUPPORTED_CELLS:
+            manifest_cells.append(
+                {
+                    "algorithm": algorithm,
+                    "lane": lane,
+                    "precision": precision,
+                    "status": "not_applicable",
+                    "receipt_paths": [],
+                }
+            )
+            continue
         cell_records = by_cell.get(cell_tuple, [])
         manifest_cells.append(
             {
@@ -624,11 +904,13 @@ def orchestrate(
     ]
     receipt_manifest.sort(key=lambda item: (item["path"], json.dumps(item["cell"], sort_keys=True)))
     artifacts: list[dict[str, str]] = []
+    artifact_owners: dict[str, set[str]] = defaultdict(set)
     for record in records:
         cell_tuple = record["cell"]
         if cell_tuple is None:
             continue
         for item in record["artifacts"]:
+            artifact_owners[item["path"]].add(_cell(*cell_tuple))
             artifacts.append(
                 {
                     "cell": _cell(*cell_tuple),
@@ -637,6 +919,9 @@ def orchestrate(
                     "sha256": item["sha256"],
                 }
             )
+    for path, owners in sorted(artifact_owners.items()):
+        if len(owners) > 1:
+            _add(errors, None, f"duplicate_artifact_across_cells={path}")
     artifacts.sort(key=lambda item: (item["path"], item["level"], item["cell"], item["sha256"]))
     missing_evidence = sorted(set(errors))
     status = "qualified" if not missing_evidence else "blocked"
@@ -651,6 +936,15 @@ def orchestrate(
                 for lane, policy in LANE_POLICIES.items()
             },
             "cell_count": len(canonical_cells()),
+            "not_applicable_cells": [
+                {
+                    "algorithm": algorithm,
+                    "lane": lane,
+                    "precision": precision,
+                }
+                for algorithm, lane, precision in all_matrix_cells()
+                if (algorithm, lane) in UNSUPPORTED_CELLS
+            ],
         },
         "expected_identity": normalized_expected,
         "cells": manifest_cells,

@@ -31,6 +31,9 @@ pub struct LiveStatus {
     pub run: Option<RunSummary>,
     /// Thin solver summary for polling cadence and top-bar state. Detailed solver state is owned by `simulation/solver/status`.
     pub solver: SolverSummary,
+    /// Independent solver, session-resource, connectivity, and commandability
+    /// state. Consumers must not derive commandability from solver state.
+    pub lifecycle: SessionLifecycleSummary,
     /// Current renderer/view selection. The writable display resource is `visualization/display`.
     pub display: DisplaySelection,
     /// Thin domain summary for adapter selection. Heavy topology is owned by `data/domain/topology` and meshing mesh resources.
@@ -43,6 +46,14 @@ pub struct LiveStatus {
     pub energies: EnergySummary,
     /// Lightweight runtime metrics for status surfaces. Detailed logs/diagnostics live under `diagnostics/*`.
     pub metrics: MetricsSummary,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq, Eq)]
+pub struct SessionLifecycleSummary {
+    pub solver: String,
+    pub session_resource: String,
+    pub connectivity: String,
+    pub commandability: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

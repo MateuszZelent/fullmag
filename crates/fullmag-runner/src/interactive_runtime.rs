@@ -146,7 +146,7 @@ pub(crate) fn build_cached_grid_preview_fields(
     (!cached.is_empty()).then_some(cached)
 }
 
-pub(crate) fn should_materialize_terminal_fdm_fields(status: RunStatus) -> bool {
+pub(crate) fn should_materialize_terminal_fields(status: RunStatus) -> bool {
     status == RunStatus::Completed
 }
 
@@ -212,7 +212,7 @@ mod tests {
     use super::{
         attach_fem_crossover_decision_to_provenance, attach_resolved_fallback_to_provenance,
         cached_display_refresh_due, cpu_execution_provenance, display_refresh_due,
-        normalize_runtime_context_signature, should_materialize_terminal_fdm_fields,
+        normalize_runtime_context_signature, should_materialize_terminal_fields,
         InteractiveFdmPreviewRuntime, InteractiveFdmPreviewRuntimeInner,
     };
     use crate::dispatch::FdmEngine;
@@ -888,7 +888,7 @@ mod tests {
 
     #[test]
     fn terminal_fdm_field_materialization_rejects_non_success_statuses() {
-        assert!(should_materialize_terminal_fdm_fields(
+        assert!(should_materialize_terminal_fields(
             crate::RunStatus::Completed
         ));
         for status in [
@@ -896,7 +896,7 @@ mod tests {
             crate::RunStatus::Cancelled,
             crate::RunStatus::Paused,
         ] {
-            assert!(!should_materialize_terminal_fdm_fields(status));
+            assert!(!should_materialize_terminal_fields(status));
 
             let plan = make_soa_fdm_plan();
             let mut execution_plan = fullmag_plan::plan(&ProblemIR::bootstrap_example())

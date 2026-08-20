@@ -58,9 +58,10 @@ use crate::router_v2::handlers::analysis::hysteresis::read_hysteresis_points_if_
 use crate::router_v2::handlers::sessions::status::{
     domain_generation_id, domain_generation_revision, fdm_grid_fingerprint, fdm_grid_shape,
     field_catalog_revision as current_field_catalog_revision, field_quantity_revision,
+    field_revision as current_field_revision, topology_revision,
 };
 use crate::schemas::fields::*;
-use crate::schemas::common::AcceptedObservationFrameRef;
+use crate::schemas::common::{AcceptedObservationFrameRef, FieldPublicationBundle};
 use crate::session::{
     current_artifact_dir, latest_field_source_precedence, preview_cache_precedes_latest,
     preview_field_source_precedence, resolved_current_field_source, ResolvedCurrentFieldSource,
@@ -2769,6 +2770,7 @@ pub async fn get_field_meta(
                     freshness.source_step,
                     freshness.source_time_seconds,
                 ),
+                publication_bundle: None,
                 quantity_id: quantity_id.to_string(),
                 label,
                 kind,
@@ -2809,6 +2811,7 @@ pub async fn get_field_meta(
                     freshness.source_step,
                     freshness.source_time_seconds,
                 ),
+                publication_bundle: None,
                 quantity_id: quantity_id.to_string(),
                 label,
                 kind,
@@ -2849,6 +2852,7 @@ pub async fn get_field_meta(
                     current_source_step(snapshot),
                     None,
                 ),
+                publication_bundle: None,
                 quantity_id: quantity_id.to_string(),
                 label,
                 kind,
@@ -2907,15 +2911,58 @@ pub async fn get_field_meta(
         resolved_field.as_ref(),
     )?;
     let raw_values = apply_field_scope(raw_values, grid, n_comp as usize, resolved_scope.as_ref());
+    let observation_frame = field_observation_frame_ref(
+        snapshot,
+        quantity_id,
+        &gen_id,
+        freshness.source_step,
+        freshness.source_time_seconds,
+    );
+    let topology_revision = topology_revision(snapshot, domain_generation_revision(snapshot));
+    let scope_kind = resolved_scope
+        .as_ref()
+        .map(|scope| scope.kind.clone())
+        .or_else(|| query.scope_kind.clone())
+        .unwrap_or_else(|| "full".to_string());
+    let scope_id = resolved_scope
+        .as_ref()
+        .and_then(|scope| scope.id.clone())
+        .or_else(|| query.scope_id.clone());
+    let carrier_id = scope_id
+        .as_ref()
+        .map(|id| format!("{scope_kind}:{id}"))
+        .unwrap_or_else(|| format!("{scope_kind}:{gen_id}"));
+    let topology_hash = format!(
+        "sha256:{:x}",
+        Sha256::digest(format!("{gen_id}:{topology_revision}"))
+    );
+    let carrier_fingerprint = resolved_scope
+        .as_ref()
+        .and_then(|scope| scope.carrier_hash.clone())
+        .unwrap_or_else(|| {
+            format!(
+                "sha256:{:x}",
+                Sha256::digest(format!("{carrier_id}:{topology_hash}"))
+            )
+        });
+    let publication_bundle = FieldPublicationBundle::for_response(
+        observation_frame.clone(),
+        current_field_revision(snapshot),
+        snapshot.scalar_revision,
+        current_field_catalog_revision(snapshot),
+        topology_revision,
+        topology_hash,
+        quantity_id,
+        component_label(&component),
+        scope_kind,
+        scope_id,
+        carrier_id,
+        carrier_fingerprint,
+    );
 
     Ok(Json(FieldMeta {
-        observation_frame: field_observation_frame_ref(
-            snapshot,
-            quantity_id,
-            &gen_id,
-            freshness.source_step,
-            freshness.source_time_seconds,
-        ),
+        observation_frame,
+        publication_bundle: Some(publication_bundle),
         quantity_id: quantity_id.to_string(),
         label,
         kind,

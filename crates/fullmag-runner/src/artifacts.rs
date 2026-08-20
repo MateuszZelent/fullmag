@@ -204,6 +204,13 @@ pub(crate) fn artifact_provenance_json(
         serde_json::to_value(context.execution_mode).expect("execution mode must serialize"),
     );
     object.insert("build_identity".to_string(), build_identity_json());
+    if let Some(resolution) = context.execution_resolution.as_ref() {
+        object.insert(
+            "execution_resolution".to_string(),
+            serde_json::to_value(resolution)
+                .expect("FinalExecutionResolutionProvenance must serialize"),
+        );
+    }
     value
 }
 
@@ -310,25 +317,29 @@ fn effective_execution_request(
 }
 
 fn actual_engine_backend_and_device(engine: &str) -> std::io::Result<(&'static str, &'static str)> {
-    if engine.starts_with("cpu_reference") {
-        return Ok(("fdm", "cpu"));
-    }
-    if engine.starts_with("cuda_") || engine.starts_with("fdm_gpu_") {
-        return Ok(("fdm", "gpu"));
-    }
-    if matches!(engine, "fem_native_gpu" | "fem_eigen_native_gpu") {
-        return Ok(("fem", "gpu"));
-    }
-    if engine.starts_with("fem_cpu")
-        || engine.starts_with("native_fem.")
-        || engine.starts_with("runner.")
-    {
-        return Ok(("fem", "cpu"));
-    }
-    Err(Error::new(
+    let resolved = match engine {
+        "cpu_reference" | "cpu_reference_multilayer" => ("fdm", "cpu"),
+        "cuda_fdm"
+        | "cuda_fdm_charge_only"
+        | "cuda_assisted_multilayer"
+        | "cuda_native_multilayer_convolution"
+        | "cuda_native_multilayer_single_grid"
+        | "cuda_native_multilayer_demag_v2"
+        | "fdm_gpu_native" => ("fdm", "gpu"),
+        "fem_native_gpu" | "fem_eigen_native_gpu" => ("fem", "gpu"),
+        "fem_cpu_native"
+        | "native_fem_cpu"
+        | "native_fem.frequency_domain.production_cpu"
+        | "runner.frequency_response_test"
+        | "runner.dense_block_real_validation" => ("fem", "cpu"),
+        _ => {
+            return Err(Error::new(
         ErrorKind::InvalidData,
         format!("final execution provenance has unknown execution_engine '{engine}'"),
-    ))
+            ));
+        }
+    };
+    Ok(resolved)
 }
 
 fn validate_direct_minimizer_realization(
@@ -489,6 +500,24 @@ fn final_execution_resolution_provenance(
             ErrorKind::InvalidData,
             "resolved fallback must contain a non-empty reason",
         ));
+    }
+    if let Some(entry) = fallback {
+        if entry.original_engine == entry.fallback_engine {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "resolved fallback original_engine and fallback_engine must differ",
+            ));
+        }
+        if entry.fallback_engine != provenance.execution_engine {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "resolved fallback engine mismatch: fallback={} actual={}",
+                    entry.fallback_engine, provenance.execution_engine
+                ),
+            ));
+        }
+        actual_engine_backend_and_device(&entry.fallback_engine)?;
     }
 
     validate_direct_minimizer_realization(plan, provenance, resolved_device)?;
@@ -1515,6 +1544,7 @@ pub(crate) struct FieldArtifactContext {
     pub source_hash: Option<String>,
     pub execution_mode: fullmag_ir::ExecutionMode,
     pub layout: serde_json::Value,
+    pub execution_resolution: Option<FinalExecutionResolutionProvenance>,
 }
 
 pub(crate) fn build_field_context(
@@ -1527,7 +1557,78 @@ pub(crate) fn build_field_context(
         source_hash: problem.problem_meta.source_hash.clone(),
         execution_mode: plan.common.execution_mode,
         layout: field_layout(plan),
+        execution_resolution: None,
     }
+}
+
+fn collect_streamed_provenance_files(
+    directory: &Path,
+    files: &mut Vec<std::path::PathBuf>,
+) -> std::io::Result<()> {
+    if !directory.is_dir() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(directory)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            collect_streamed_provenance_files(&path, files)?;
+            continue;
+        }
+        let is_zarr_attributes = path.file_name().and_then(|name| name.to_str()) == Some(".zattrs");
+        if is_zarr_attributes || path.extension().and_then(|extension| extension.to_str()) == Some("json") {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+/// Complete provenance for field artifacts written by the asynchronous
+/// pipeline before the final execution resolution was known.
+pub(crate) fn finalize_streamed_artifact_provenance(
+    output_dir: &Path,
+    resolution: &FinalExecutionResolutionProvenance,
+) -> std::io::Result<()> {
+    let fields_dir = output_dir.join("fields");
+    let mut files = Vec::new();
+    collect_streamed_provenance_files(&fields_dir, &mut files)?;
+    for path in files {
+        let bytes = fs::read(&path)?;
+        let mut value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!("streamed field artifact '{}' is invalid JSON: {error}", path.display()),
+            )
+        })?;
+        let mut changed = false;
+        if let Some(provenance) = value.get_mut("provenance").and_then(|value| value.as_object_mut()) {
+            provenance.insert(
+                "execution_resolution".to_string(),
+                serde_json::to_value(resolution)
+                    .expect("FinalExecutionResolutionProvenance must serialize"),
+            );
+            changed = true;
+        }
+        if value
+            .get("schema_version")
+            .and_then(serde_json::Value::as_str)
+            == Some("fdm_multilayer_field_manifest.v1")
+        {
+            value
+                .as_object_mut()
+                .expect("multilayer manifest must be an object")
+                .insert(
+                    "provenance".to_string(),
+                    serde_json::json!({
+                        "execution_resolution": resolution,
+                    }),
+                );
+            changed = true;
+        }
+        if changed {
+            fs::write(path, serde_json::to_vec_pretty(&value)?)?;
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn write_artifacts(
@@ -1537,7 +1638,6 @@ pub(crate) fn write_artifacts(
     executed: &ExecutedRun,
     streamed: Option<&ArtifactPipelineSummary>,
 ) -> std::io::Result<()> {
-    fs::create_dir_all(output_dir)?;
     let diagnostic_steps = solver_diagnostic_steps(executed);
     let accepted_steps = diagnostic_steps
         .as_deref()
@@ -1546,8 +1646,7 @@ pub(crate) fn write_artifacts(
         .problem_meta
         .runtime_metadata
         .get("sampling_resolution");
-    write_sampling_resolution_artifact(output_dir, sampling_resolution)?;
-    let field_context = build_field_context(problem, plan);
+    let mut field_context = build_field_context(problem, plan);
     let requested_execution = requested_execution_metadata(problem);
     let runtime_threading = runtime_threading_summary(problem);
     let execution_provenance =
@@ -1573,6 +1672,10 @@ pub(crate) fn write_artifacts(
     let mut execution_provenance_json = execution_provenance_json(plan, &execution_provenance)?;
     let execution_resolution =
         final_execution_resolution_provenance(problem, plan, &execution_provenance)?;
+    field_context.execution_resolution = Some(execution_resolution.clone());
+    fs::create_dir_all(output_dir)?;
+    finalize_streamed_artifact_provenance(output_dir, &execution_resolution)?;
+    write_sampling_resolution_artifact(output_dir, sampling_resolution)?;
     execution_provenance_json
         .as_object_mut()
         .expect("ExecutionProvenance must serialize to an object")
@@ -4280,6 +4383,11 @@ fn write_multilayer_field_manifest(
         "layer_count": layers.len(),
         "layers": layers.iter().map(|layer| layer.manifest_entry.clone()).collect::<Vec<_>>(),
         "layout": context.layout.clone(),
+        "provenance": context.execution_resolution.as_ref().map(|resolution| {
+            serde_json::json!({
+                "execution_resolution": resolution,
+            })
+        }),
     });
     fs::write(
         observable_dir.join("manifest.json"),
@@ -4971,6 +5079,7 @@ mod tests {
             source_hash: None,
             execution_mode: ExecutionMode::Strict,
             layout: serde_json::json!({"backend": "fdm", "grid_cells": [2, 1, 1]}),
+            execution_resolution: None,
         };
         let snapshot = FieldSnapshot::new(
             "m",
