@@ -1750,6 +1750,9 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
             .as_nanos(),
     ));
     fs::create_dir_all(&repo_root).expect("failed to create temp repo root");
+    let script_path = repo_root.join("test.py");
+    fs::write(&script_path, b"study = fullmag.Study()\n")
+        .expect("canonical script fixture should be written");
 
     let (control_events_tx, _rx) = watch::channel(0u64);
 
@@ -1786,7 +1789,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         run_id: "test-run".into(),
         status: "running".into(),
         interactive_session_requested: false,
-        script_path: "test.py".into(),
+        script_path: script_path.display().to_string(),
         problem_name: "contract-test".into(),
         requested_backend: "cpu-fdm".into(),
         explicit_selection: false,
@@ -23902,6 +23905,124 @@ async fn session_import_commit_round_trips_exported_session() {
     let json = body_json(commit_response).await;
     assert_eq!(json["session_id"], "test-session");
     assert_eq!(json["restore_class"], "config_only");
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn solved_session_export_restores_frequency_artifacts_after_source_history_is_removed() {
+    use base64::Engine;
+
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    let source_artifact_dir = repo_root.join("artifacts");
+    let spectrum = br#"{"schema_version":"eigen_spectrum.v2","samples":[],"marker":"persisted"}"#;
+    let mode_bytes = b"exact-mode-payload-bytes";
+    fs::create_dir_all(source_artifact_dir.join("eigen/modes/sample_0000"))
+        .expect("source eigen artifact directory should exist");
+    fs::write(source_artifact_dir.join("eigen/spectrum.v2.json"), spectrum)
+        .expect("source spectrum should be written");
+    fs::write(
+        source_artifact_dir.join("eigen/modes/sample_0000/mode_0000.bin"),
+        mode_bytes,
+    )
+    .expect("source mode payload should be written");
+    let export_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/exports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "profile": "solved" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(export_response.status(), StatusCode::OK);
+    let exported = body_json(export_response).await;
+    let fms_base64 = exported["fms_base64"]
+        .as_str()
+        .expect("solved export must include fms payload")
+        .to_string();
+    let fms_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&fms_base64)
+        .expect("exported fms base64 must decode");
+
+    let inspect_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/imports/inspections")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "fms_base64": fms_base64 }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(inspect_response.status(), StatusCode::OK);
+    let inspection = body_json(inspect_response).await;
+    assert_eq!(inspection["inspection"]["warnings"], serde_json::json!([]));
+
+    fs::remove_dir_all(&source_artifact_dir)
+        .expect("simulated local-live history should be removable after save");
+    assert!(!source_artifact_dir.exists());
+    *state.current_live_state.write().await = None;
+
+    let import_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/imports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "fms_base64": base64::engine::general_purpose::STANDARD.encode(&fms_bytes)
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(import_response.status(), StatusCode::OK);
+
+    let restored_artifact_dir = {
+        let current = state.current_live_state.read().await;
+        std::path::PathBuf::from(
+            &current
+                .as_ref()
+                .expect("session import must restore the active snapshot")
+                .session
+                .artifact_dir,
+        )
+    };
+    assert_ne!(restored_artifact_dir, source_artifact_dir);
+    assert_eq!(
+        fs::read(restored_artifact_dir.join("eigen/modes/sample_0000/mode_0000.bin"))
+            .expect("imported mode bytes must survive history deletion"),
+        mode_bytes
+    );
+
+    let spectrum_response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(spectrum_response.status(), StatusCode::OK);
+    let spectrum_resource = body_json(spectrum_response).await;
+    assert_eq!(spectrum_resource["status"], "ready");
+    assert_eq!(spectrum_resource["payload"]["marker"], "persisted");
 
     let _ = fs::remove_dir_all(&repo_root);
 }

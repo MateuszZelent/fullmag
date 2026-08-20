@@ -234,35 +234,77 @@ pub fn inspect_fms<R: Read + Seek>(reader: R) -> Result<SessionInspection> {
 
     let session: FmsSessionManifest = read_json_entry(&mut archive, "manifest/session.json")
         .context("reading session manifest")?;
+    let entry_names = (0..archive.len())
+        .map(|index| {
+            archive
+                .by_index(index)
+                .map(|entry| entry.name().to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut warnings = Vec::new();
 
     // Try to find the latest checkpoint.
     let mut latest_cp: Option<CheckpointSummary> = None;
     for run_ref in &session.run_refs {
         let parts: Vec<&str> = run_ref.split('/').collect();
-        if parts.len() >= 2 {
-            let run_id = parts[1];
-            // Scan for checkpoint directories.
-            let prefix = format!("runs/{run_id}/checkpoints/");
-            for i in 0..archive.len() {
-                let entry = archive.by_index(i)?;
-                let name = entry.name().to_string();
-                if name.starts_with(&prefix) && name.ends_with("/checkpoint.json") {
-                    drop(entry);
-                    if let Ok(cp) = read_json_entry::<FmsCheckpoint, _>(&mut archive, &name) {
-                        let summary = CheckpointSummary {
-                            checkpoint_id: cp.checkpoint_id,
-                            step: cp.step,
-                            time_s: cp.time_s,
-                            study_kind: cp.compatibility.study_kind.unwrap_or_default(),
-                        };
-                        if latest_cp
-                            .as_ref()
-                            .map_or(true, |prev| summary.step > prev.step)
-                        {
-                            latest_cp = Some(summary);
-                        }
+        if parts.len() < 2 || parts[0] != "runs" || parts[1].is_empty() {
+            warnings.push(format!("invalid run reference '{run_ref}'"));
+            continue;
+        }
+        let run_id = parts[1];
+        if !entry_names.iter().any(|name| name == run_ref) {
+            warnings.push(format!(
+                "run manifest '{run_ref}' is missing from the archive"
+            ));
+        }
+        let checkpoint_prefix = format!("runs/{run_id}/checkpoints/");
+        let checkpoint_names = entry_names
+            .iter()
+            .filter(|name| {
+                name.starts_with(&checkpoint_prefix) && name.ends_with("/checkpoint.json")
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if matches!(session.profile, SaveProfile::Resume | SaveProfile::Archive)
+            && checkpoint_names.is_empty()
+        {
+            warnings.push(format!(
+                "{} session run '{run_id}' has no packaged checkpoint",
+                match session.profile {
+                    SaveProfile::Resume => "resume",
+                    SaveProfile::Archive => "archive",
+                    _ => unreachable!(),
+                }
+            ));
+        }
+        if matches!(
+            session.profile,
+            SaveProfile::Solved | SaveProfile::Resume | SaveProfile::Archive
+        ) && !entry_names
+            .iter()
+            .any(|name| name.starts_with(&format!("runs/{run_id}/artifacts/")))
+        {
+            warnings.push(format!("solved run '{run_id}' has no packaged artifacts"));
+        }
+        for name in checkpoint_names {
+            match read_json_entry::<FmsCheckpoint, _>(&mut archive, &name) {
+                Ok(cp) => {
+                    let summary = CheckpointSummary {
+                        checkpoint_id: cp.checkpoint_id,
+                        step: cp.step,
+                        time_s: cp.time_s,
+                        study_kind: cp.compatibility.study_kind.unwrap_or_default(),
+                    };
+                    if latest_cp
+                        .as_ref()
+                        .map_or(true, |prev| summary.step > prev.step)
+                    {
+                        latest_cp = Some(summary);
                     }
                 }
+                Err(error) => warnings.push(format!(
+                    "checkpoint descriptor '{name}' cannot be read: {error}"
+                )),
             }
         }
     }
@@ -296,7 +338,7 @@ pub fn inspect_fms<R: Read + Seek>(reader: R) -> Result<SessionInspection> {
         run_count: session.run_refs.len(),
         latest_checkpoint: latest_cp,
         restore_class,
-        warnings: Vec::new(),
+        warnings,
         total_size_bytes: total_compressed,
     })
 }
@@ -425,5 +467,66 @@ mod tests {
         let script = store2.read_document("project/main.py").unwrap();
         assert!(script.is_some());
         assert!(String::from_utf8_lossy(&script.unwrap()).contains("hello"));
+    }
+
+    #[test]
+    fn inspect_reports_when_a_solved_run_has_no_packaged_artifacts() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(dir.path().join("store")).unwrap();
+        let mut session = FmsSessionManifest::new("s-001", "Test", SaveProfile::Solved);
+        session
+            .run_refs
+            .push("runs/run-001/run_manifest.json".to_string());
+        store.commit_session(&session).unwrap();
+        store
+            .commit_run(&FmsRunManifest {
+                run_id: "run-001".to_string(),
+                status: RunStatus::Completed,
+                study_kind: "eigenmode".to_string(),
+                backend: "fem".to_string(),
+                precision: "double".to_string(),
+                started_at: chrono::Utc::now(),
+                finished_at: Some(chrono::Utc::now()),
+                total_steps: 1,
+                total_time_s: 0.0,
+                plan_ref: None,
+                live_state_ref: None,
+                latest_checkpoint_ref: None,
+                artifact_index_ref: None,
+            })
+            .unwrap();
+        let script = b"# fullmag script".to_vec();
+        let workspace = FmsWorkspaceManifest {
+            workspace_id: "local-live".into(),
+            problem_name: "test_problem".into(),
+            project_ref: "project/".into(),
+            script_ref: "project/main.py".into(),
+            script_sha256: crate::cas::hex_sha256(&script),
+            ui_state_ref: "project/ui_state.json".into(),
+            scene_document_ref: "project/scene_document.json".into(),
+            script_builder_ref: None,
+            model_builder_graph_ref: None,
+            asset_index_ref: None,
+        };
+        let mut documents = HashMap::new();
+        documents.insert("main.py".into(), script);
+
+        let mut buffer = Cursor::new(Vec::new());
+        pack_fms(
+            &mut buffer,
+            &store,
+            &session,
+            &workspace,
+            &FmsExportProfile::for_profile(SaveProfile::Solved),
+            &documents,
+            &PackOptions::default(),
+        )
+        .unwrap();
+
+        let inspection = inspect_fms(Cursor::new(buffer.into_inner())).unwrap();
+        assert!(inspection
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("no packaged artifacts")));
     }
 }

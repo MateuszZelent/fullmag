@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::Cursor;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::extract::State;
@@ -658,6 +659,134 @@ async fn collect_project_documents(
     docs
 }
 
+fn session_store_run_artifact_dir(store: &SessionStore, run_id: &str) -> PathBuf {
+    store.root().join("runs").join(run_id).join("artifacts")
+}
+
+fn copy_artifact_tree(source: &Path, destination: &Path) -> Result<(), ApiError> {
+    std::fs::create_dir_all(destination).map_err(|error| {
+        ApiError::internal(format!(
+            "creating session artifact snapshot '{}': {error}",
+            destination.display()
+        ))
+    })?;
+    for entry in std::fs::read_dir(source).map_err(|error| {
+        ApiError::internal(format!(
+            "reading solved artifact directory '{}': {error}",
+            source.display()
+        ))
+    })? {
+        let entry = entry.map_err(|error| {
+            ApiError::internal(format!(
+                "reading solved artifact directory entry '{}': {error}",
+                source.display()
+            ))
+        })?;
+        let file_type = entry.file_type().map_err(|error| {
+            ApiError::internal(format!(
+                "reading solved artifact type '{}': {error}",
+                entry.path().display()
+            ))
+        })?;
+        let target = destination.join(entry.file_name());
+        if file_type.is_symlink() {
+            return Err(ApiError::conflict(format!(
+                "solved session export rejects symbolic-link artifact '{}'",
+                entry.path().display()
+            )));
+        }
+        if file_type.is_dir() {
+            copy_artifact_tree(&entry.path(), &target)?;
+        } else if file_type.is_file() {
+            std::fs::copy(entry.path(), &target).map_err(|error| {
+                ApiError::internal(format!(
+                    "copying solved artifact to '{}': {error}",
+                    target.display()
+                ))
+            })?;
+        } else {
+            return Err(ApiError::conflict(format!(
+                "solved session export rejects non-regular artifact '{}'",
+                entry.path().display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn capture_solved_artifacts(
+    store: &SessionStore,
+    run_id: &str,
+    source: &Path,
+) -> Result<PathBuf, ApiError> {
+    if !source.is_dir() {
+        return Err(ApiError::conflict(format!(
+            "solved session export requires an existing artifact directory for run '{run_id}': {}",
+            source.display()
+        )));
+    }
+
+    let destination = session_store_run_artifact_dir(store, run_id);
+    if destination.exists() {
+        let source_canonical = source.canonicalize().map_err(|error| {
+            ApiError::internal(format!(
+                "resolving solved artifact source '{}': {error}",
+                source.display()
+            ))
+        })?;
+        let destination_canonical = destination.canonicalize().map_err(|error| {
+            ApiError::internal(format!(
+                "resolving session artifact destination '{}': {error}",
+                destination.display()
+            ))
+        })?;
+        if source_canonical == destination_canonical {
+            return Ok(destination);
+        }
+    }
+
+    let temporary = destination.with_file_name(format!(
+        "artifacts.save-{}-{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    copy_artifact_tree(source, &temporary)?;
+
+    let previous = destination.with_file_name(format!(
+        "artifacts.previous-{}-{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    if destination.exists() {
+        std::fs::rename(&destination, &previous).map_err(|error| {
+            let _ = std::fs::remove_dir_all(&temporary);
+            ApiError::internal(format!(
+                "preparing session artifact snapshot replacement '{}': {error}",
+                destination.display()
+            ))
+        })?;
+    }
+    if let Err(error) = std::fs::rename(&temporary, &destination) {
+        if previous.exists() {
+            let _ = std::fs::rename(&previous, &destination);
+        }
+        let _ = std::fs::remove_dir_all(&temporary);
+        return Err(ApiError::internal(format!(
+            "committing session artifact snapshot '{}': {error}",
+            destination.display()
+        )));
+    }
+    if previous.exists() {
+        std::fs::remove_dir_all(&previous).map_err(|error| {
+            ApiError::internal(format!(
+                "removing superseded session artifact snapshot '{}': {error}",
+                previous.display()
+            ))
+        })?;
+    }
+    Ok(destination)
+}
+
 // ── Handlers ───────────────────────────────────────────────────────────
 
 /// `POST /v2/sessions/current/persistence/exports`
@@ -680,8 +809,10 @@ pub(crate) async fn export_session(
 
     let mut session_manifest = FmsSessionManifest::new(&session_id, &name, req.profile);
 
-    // Collect run info from the current state.
-    {
+    // Capture the actual local-live artifact directory into the SessionStore.
+    // The store is the only artifact source that `pack_fms` reads, so packing
+    // directly from it makes a solved save independent of local-live history.
+    let artifact_source = {
         let guard = state.current_live_state.read().await;
         if let Some(snapshot) = guard.as_ref() {
             let run_ref = format!("runs/{}/run_manifest.json", snapshot.session.run_id);
@@ -713,10 +844,20 @@ pub(crate) async fn export_session(
             store
                 .commit_run(&run_manifest)
                 .map_err(|e| ApiError::internal(e.to_string()))?;
+            crate::session::current_artifact_dir(snapshot)
+                .map(|artifact_dir| (snapshot.session.run_id.clone(), artifact_dir))
+        } else {
+            None
         }
-    }
+    };
 
     let export_profile = FmsExportProfile::for_profile(req.profile);
+    if export_profile.include_artifacts() {
+        let (run_id, artifact_source) = artifact_source.ok_or_else(|| {
+            ApiError::conflict("solved session export requires an active run artifact directory")
+        })?;
+        capture_solved_artifacts(&store, &run_id, &artifact_source)?;
+    }
     let docs = collect_project_documents(&state, req.ui_state.as_ref()).await;
     let script = docs.get("main.py").ok_or_else(|| {
         ApiError::conflict("session has no readable canonical Python script to save")
@@ -797,6 +938,7 @@ pub(crate) async fn import_session_commit(
     // Determine restore class.
     let inspection = inspect_fms(Cursor::new(&fms_bytes))
         .map_err(|e| ApiError::internal(format!("re-inspecting .fms: {e}")))?;
+    let warnings = inspection.warnings.clone();
 
     // Try to restore the current live workspace snapshot from packaged docs.
     if let Some(snapshot_bytes) = store
@@ -805,7 +947,7 @@ pub(crate) async fn import_session_commit(
     {
         if let Ok(snapshot_document) = serde_json::from_slice::<serde_json::Value>(&snapshot_bytes)
         {
-            if let Ok(persisted) =
+            if let Ok(mut persisted) =
                 serde_json::from_value::<PersistedCurrentLiveSnapshot>(snapshot_document.clone())
             {
                 let restored_display_presentation = restore_display_presentation(
@@ -817,7 +959,30 @@ pub(crate) async fn import_session_commit(
                         "unsupported or invalid persisted display presentation ({error}); session restore did not mutate the active workspace"
                     ))
                 })?;
-                let restored: SessionStateResponse = persisted.into();
+                let restored_artifact_dir = session_store_run_artifact_dir(
+                    &store,
+                    &persisted.session.run_id,
+                );
+                let restored_artifact_dir = restored_artifact_dir.display().to_string();
+                persisted.session.artifact_dir = restored_artifact_dir.clone();
+                if let Some(run) = persisted.run.as_mut() {
+                    run.artifact_dir = restored_artifact_dir;
+                }
+                let restored: SessionStateResponse = persisted.clone().into();
+                store
+                    .write_document(
+                        "project/current_live_snapshot.json",
+                        &serde_json::to_vec_pretty(&persisted).map_err(|error| {
+                            ApiError::internal(format!(
+                                "serializing rebased imported session snapshot: {error}"
+                            ))
+                        })?,
+                    )
+                    .map_err(|error| {
+                        ApiError::internal(format!(
+                            "persisting rebased imported session snapshot: {error}"
+                        ))
+                    })?;
                 // Refresh the in-memory active workspace.
                 {
                     let mut current = state.current_live_state.write().await;
@@ -851,7 +1016,7 @@ pub(crate) async fn import_session_commit(
     Ok(Json(SessionImportCommitResponse {
         session_id: session.session_id,
         restore_class: inspection.restore_class,
-        warnings: inspection.warnings,
+        warnings,
         ui_state: restored_ui_state,
     }))
 }
