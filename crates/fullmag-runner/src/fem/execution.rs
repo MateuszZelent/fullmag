@@ -6,6 +6,9 @@ use crate::artifact_pipeline::ArtifactPipelineSender;
 #[cfg(feature = "fem-gpu")]
 use crate::artifact_pipeline::ArtifactRecorder;
 use crate::fem::eigen_path::execute_fem_eigen_path;
+use crate::fem::eigen_execution_resolution::{
+    FemEigenExecutionLane, PlannedFemEigenExecution,
+};
 use crate::fem::pbc::{
     fem_static_periodic_decision, validate_periodic_region_material_certificate,
     FemStaticPbcLane,
@@ -137,7 +140,14 @@ pub(crate) fn execute_fem_eigen(
     // the single-k solver for each sample point and then performs branch
     // tracking and writes V2 artifacts.
     if matches!(plan.k_sampling, Some(fullmag_ir::KSamplingIR::Path { .. })) {
-        return execute_fem_eigen_path(engine, plan, outputs);
+        return execute_fem_eigen_path(
+            PlannedFemEigenExecution::legacy(match engine {
+                FemEngine::CpuNative => FemEigenExecutionLane::Cpu,
+                FemEngine::NativeGpu => FemEigenExecutionLane::Gpu,
+            }),
+            plan,
+            outputs,
+        );
     }
 
     match engine {

@@ -1042,6 +1042,51 @@ fn validate_native_modal_request_payload_ownership(
     Ok(())
 }
 
+pub(crate) fn validate_planned_modal_execution_attestation(
+    planned_engine: fullmag_ir::FemEigenEngineIR,
+    requested_target: NativeModalExecutionTarget,
+    resolved_target: Option<u32>,
+    resolved_fallback_state: u32,
+    resolved_engine_id: &str,
+) -> Result<(), String> {
+    let (expected_target, accepted_engine_ids): (u32, &[&str]) = match planned_engine {
+        fullmag_ir::FemEigenEngineIR::Auto => {
+            return Err("native_modal_engine_mismatch: planned engine cannot be auto".to_string());
+        }
+        fullmag_ir::FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc => {
+            (1, &["k0_poisson_airbox_cpu_schur_slepc"])
+        }
+        fullmag_ir::FemEigenEngineIR::GpuModalDeviceKrylov => (
+            2,
+            &[
+                "gpu_modal_device_krylov",
+                "k0_poisson_airbox_gpu_petsc_slepc",
+            ],
+        ),
+    };
+    let requested_target_value = match requested_target {
+        NativeModalExecutionTarget::Auto => 0,
+        NativeModalExecutionTarget::ProductionCpu => 1,
+        NativeModalExecutionTarget::ProductionGpu => 2,
+    };
+    if requested_target_value != expected_target || resolved_target != Some(expected_target) {
+        return Err(format!(
+            "native_modal_execution_target_mismatch: planned_engine={planned_engine:?} requested_target={requested_target_value} resolved_target={resolved_target:?}"
+        ));
+    }
+    if resolved_fallback_state != 0 {
+        return Err(format!(
+            "native_modal_runtime_fallback_forbidden: resolved_fallback_state={resolved_fallback_state}"
+        ));
+    }
+    if !accepted_engine_ids.contains(&resolved_engine_id) {
+        return Err(format!(
+            "native_modal_engine_mismatch: planned_engine={planned_engine:?} resolved_engine_id={resolved_engine_id:?}"
+        ));
+    }
+    Ok(())
+}
+
 #[allow(dead_code)]
 pub(crate) fn solve_native_driven_response_contract(
     request: NativeDrivenResponseContractRequest<'_>,
@@ -4279,32 +4324,13 @@ mod tests {
                     },
                 ],
             };
-        let certificate_binding_v6 = crate::fem_eigen::OwnedModalCertificateV6Binding {
-            mesh_generation_identity: "mesh-generation:fixture".to_string(),
-            mesh_magnetic: view(1, 1, "magnetic:fixture"),
-            payload_magnetic: view(2, 1, "magnetic:fixture"),
-            mesh_scalar: view(1, 2, "airbox:fixture"),
-            payload_scalar: view(2, 2, "airbox:fixture"),
-            canonical_preimage: "fixture".to_string(),
-            canonical_preimage_sha256: digest.to_string(),
-            magnetic_class_digest_sha256: digest.to_string(),
-            scalar_class_digest_sha256: digest.to_string(),
-            shared_domain_map_binding_sha256: digest.to_string(),
-            boundary_gauge_digest: digest.to_string(),
-            boundary_kind: "robin".to_string(),
-            boundary_marker: 1,
-            robin_beta: 1.0,
-            source_topology_fingerprint: digest.to_string(),
-            bias_field_sample_index: 3,
-            bias_field_sample_id: "bias-field-sample:3".to_string(),
-            bias_field_sample_signature: digest.to_string(),
-            bias_field_sample_a_per_m: vec![0.0, 0.0, 0.0],
-            cell_markers: vec![1, 0],
-            scalar_reduced_node: vec![0, 0, 0, 0, 1],
-            scalar_reduced_class_count: 2,
-            magnetic_reduced_node: vec![0, 0, 0, 0, u32::MAX],
-            magnetic_reduced_class_count: 1,
-        };
+        let certificate_binding_v6 = crate::fem_eigen::OwnedModalCertificateV6Binding::test_fixture(
+            digest,
+            view(1, 1, "magnetic:fixture"),
+            view(2, 1, "magnetic:fixture"),
+            view(1, 2, "airbox:fixture"),
+            view(2, 2, "airbox:fixture"),
+        );
         NativeModalEigenSharedDomainProblem {
             mesh,
             equilibrium_m0_xyz: m0.clone(),
@@ -4458,6 +4484,79 @@ mod tests {
         )
         .expect_err("production demag without the certified shared-domain payload must fail");
         assert!(error.contains("requires a certified shared-domain payload"));
+    }
+
+    #[test]
+    fn planned_modal_attestation_rejects_cpu_gpu_target_mismatch() {
+        let cpu_error = validate_planned_modal_execution_attestation(
+            fullmag_ir::FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc,
+            NativeModalExecutionTarget::ProductionCpu,
+            Some(2),
+            0,
+            "k0_poisson_airbox_cpu_schur_slepc",
+        )
+        .expect_err("CPU request returning GPU target must fail closed");
+        assert!(cpu_error.contains("native_modal_execution_target_mismatch"));
+
+        let gpu_error = validate_planned_modal_execution_attestation(
+            fullmag_ir::FemEigenEngineIR::GpuModalDeviceKrylov,
+            NativeModalExecutionTarget::ProductionGpu,
+            Some(1),
+            0,
+            "gpu_modal_device_krylov",
+        )
+        .expect_err("GPU request returning CPU target must fail closed");
+        assert!(gpu_error.contains("native_modal_execution_target_mismatch"));
+    }
+
+    #[test]
+    fn planned_modal_attestation_rejects_fallback_and_unknown_engine_response() {
+        let fallback_error = validate_planned_modal_execution_attestation(
+            fullmag_ir::FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc,
+            NativeModalExecutionTarget::ProductionCpu,
+            Some(1),
+            1,
+            "k0_poisson_airbox_cpu_schur_slepc",
+        )
+        .expect_err("runtime fallback is forbidden after planning");
+        assert!(fallback_error.contains("native_modal_runtime_fallback_forbidden"));
+
+        let engine_error = validate_planned_modal_execution_attestation(
+            fullmag_ir::FemEigenEngineIR::GpuModalDeviceKrylov,
+            NativeModalExecutionTarget::ProductionGpu,
+            Some(2),
+            0,
+            "",
+        )
+        .expect_err("empty native engine response must fail closed");
+        assert!(engine_error.contains("native_modal_engine_mismatch"));
+    }
+
+    #[test]
+    fn planned_gpu_modal_attestation_accepts_only_canonical_or_adapter_engine_id() {
+        for engine_id in [
+            "gpu_modal_device_krylov",
+            "k0_poisson_airbox_gpu_petsc_slepc",
+        ] {
+            validate_planned_modal_execution_attestation(
+                fullmag_ir::FemEigenEngineIR::GpuModalDeviceKrylov,
+                NativeModalExecutionTarget::ProductionGpu,
+                Some(2),
+                0,
+                engine_id,
+            )
+            .expect("canonical GPU engine and its explicit native adapter alias are accepted");
+        }
+
+        let error = validate_planned_modal_execution_attestation(
+            fullmag_ir::FemEigenEngineIR::GpuModalDeviceKrylov,
+            NativeModalExecutionTarget::ProductionGpu,
+            Some(2),
+            0,
+            "fem_eigen_native_gpu",
+        )
+        .expect_err("broad legacy engine id must not attest the exact GPU lane");
+        assert!(error.contains("native_modal_engine_mismatch"));
     }
 
     #[test]

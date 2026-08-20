@@ -1,6 +1,9 @@
 //! Public and internal types for the runner.
 
-use fullmag_ir::{FemMeshPartRole, FemMeshPartSelector, MeshQualityIR, StageCompletionIR};
+use fullmag_ir::{
+    FemEigenExecutionResolutionIR, FemMeshPartRole, FemMeshPartSelector, MeshQualityIR,
+    StageCompletionIR,
+};
 use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -2663,6 +2666,22 @@ pub struct ResolvedFallback {
     pub message: String,
 }
 
+/// Attestation returned by the native modal boundary after planner selection.
+///
+/// This is intentionally separate from `resolved_fallback`: the latter records
+/// planner selection (including legal auto-to-CPU resolution), while this
+/// object proves that the native runtime executed the accepted target without
+/// a second, hidden runtime fallback.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FemEigenNativeExecutionAttestation {
+    pub requested_target: String,
+    pub resolved_target: String,
+    pub resolved_engine_id: String,
+    pub fallback_used: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<String>,
+}
+
 /// FEM demag solver provenance.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct FemPoissonDemagProvenance {
@@ -2861,6 +2880,12 @@ pub struct ExecutionProvenance {
     pub random_seed: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_fallback: Option<ResolvedFallback>,
+    /// Full planner-accepted exact FEM eigen execution resolution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_eigen_execution_resolution: Option<FemEigenExecutionResolutionIR>,
+    /// Native no-fallback attestation, recorded independently of planner fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_eigen_native_execution_attestation: Option<FemEigenNativeExecutionAttestation>,
     /// Qualified FEM auto-device crossover decision, if requested device was auto.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fem_crossover_decision: Option<FemCrossoverDecision>,

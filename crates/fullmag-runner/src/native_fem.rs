@@ -37,9 +37,9 @@ pub(crate) use frequency_domain::measured_modal_gpu_attestation_fixture;
 #[allow(unused_imports)]
 pub(crate) use frequency_domain::{
     solve_native_driven_frequency_response, solve_native_driven_response_contract,
-    solve_native_modal_eigen, NativeDrivenFrequencyResponseDmiElement,
-    NativeDrivenFrequencyResponseDmiKind, NativeDrivenFrequencyResponseExchangeEdge,
-    NativeDrivenFrequencyResponseFloquetPeriodicPair,
+    solve_native_modal_eigen, validate_planned_modal_execution_attestation,
+    NativeDrivenFrequencyResponseDmiElement, NativeDrivenFrequencyResponseDmiKind,
+    NativeDrivenFrequencyResponseExchangeEdge, NativeDrivenFrequencyResponseFloquetPeriodicPair,
     NativeDrivenFrequencyResponseMfemOperatorProblem,
     NativeDrivenFrequencyResponsePeriodicAirboxCoupledBlockProblem,
     NativeDrivenFrequencyResponsePeriodicNodePair, NativeDrivenFrequencyResponseRequest,

@@ -1,7 +1,9 @@
+use super::artifacts::{write_response_sweep_bundle, write_response_sweep_bundle_with_progress};
 use nalgebra::{DMatrix, DVector};
 use num_complex::Complex64;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::path::Path;
 
 const BLOCK_REAL_MATRIX_LAYOUT: &str = "block_real";
 
@@ -762,4 +764,62 @@ mod tests {
         assert!(solution.residual_l2_norm < 1e-12);
         assert!(solution.relative_residual_l2_norm < 1e-12);
     }
+}
+
+pub fn solve_and_write_field_driven_response_sweep_bundle(
+    base_dir: &Path,
+    template: &BlockRealHarmonicTemplate,
+    frequencies_rad_per_s: &[f64],
+    field_excitation: &DVector<Complex64>,
+    backend_engine_id: &str,
+    solver_model: &str,
+    damping_policy: &str,
+    lane_classification: &str,
+) -> Result<FieldDrivenResponseSweepArtifact, String> {
+    let points =
+        solve_field_driven_block_real_sweep(template, frequencies_rad_per_s, field_excitation)?;
+    let artifact = build_field_driven_response_sweep_artifact(
+        &points,
+        backend_engine_id,
+        solver_model,
+        damping_policy,
+        lane_classification,
+    );
+    write_response_sweep_bundle(base_dir, &artifact)
+        .map_err(|error| format!("failed to write response sweep bundle: {error}"))?;
+    Ok(artifact)
+}
+
+pub fn solve_and_write_field_driven_response_sweep_bundle_with_interrupt(
+    base_dir: &Path,
+    template: &BlockRealHarmonicTemplate,
+    frequencies_rad_per_s: &[f64],
+    field_excitation: &DVector<Complex64>,
+    should_interrupt_after_completed_points: impl FnMut(usize) -> bool,
+    backend_engine_id: &str,
+    solver_model: &str,
+    damping_policy: &str,
+    lane_classification: &str,
+) -> Result<FieldDrivenResponseSweepArtifact, String> {
+    let outcome = solve_field_driven_block_real_sweep_with_interrupt(
+        template,
+        frequencies_rad_per_s,
+        field_excitation,
+        should_interrupt_after_completed_points,
+    )?;
+    let artifact = build_field_driven_response_sweep_artifact(
+        &outcome.points,
+        backend_engine_id,
+        solver_model,
+        damping_policy,
+        lane_classification,
+    );
+    write_response_sweep_bundle_with_progress(
+        base_dir,
+        &artifact,
+        outcome.requested_point_count,
+        outcome.interrupted,
+    )
+    .map_err(|error| format!("failed to write response sweep bundle: {error}"))?;
+    Ok(artifact)
 }
