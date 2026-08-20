@@ -25,7 +25,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read, Seek, Write};
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 use zip::write::SimpleFileOptions;
@@ -58,6 +58,11 @@ const MAX_UNCOMPRESSED_ZIP_BYTES: u64 = 64 * 1024 * 1024 * 1024;
 struct ZipDirectoryScan {
     names: Vec<String>,
     total_compressed: u64,
+}
+
+struct PackEntry {
+    archive_path: String,
+    data: Vec<u8>,
 }
 
 impl Default for PackOptions {
@@ -97,6 +102,9 @@ pub fn pack_fms<W: Write + Seek>(
     opts: &PackOptions,
 ) -> Result<()> {
     validate_pack_input(workspace, documents)?;
+    let canonical_root = canonical_store_root(store.root())?;
+    let run_entries = plan_run_entries(store.root(), &canonical_root, session, export_profile)?;
+    let cas_entries = plan_cas_entries(store.root(), &canonical_root, &run_entries)?;
 
     let mut zip = zip::ZipWriter::new(writer);
     let fopts = zip_options(opts.compression);
@@ -123,40 +131,296 @@ pub fn pack_fms<W: Write + Seek>(
     }
 
     // ── runs/ ──────────────────────────────────────────────────────────
-    for run_ref in &session.run_refs {
-        // run_ref is like "runs/run-000001/run_manifest.json"
-        if let Some(data) = store.read_document(run_ref)? {
-            zip.start_file(run_ref, fopts)?;
-            zip.write_all(&data)?;
-        }
-
-        // Extract run_id from path.
-        let parts: Vec<&str> = run_ref.split('/').collect();
-        if parts.len() >= 2 {
-            let run_id = parts[1];
-            pack_run_checkpoints(&mut zip, store, run_id, export_profile, fopts)?;
-            if export_profile.include_artifacts() {
-                pack_run_artifacts(&mut zip, store, run_id, fopts)?;
-            }
-        }
+    for entry in run_entries {
+        zip.start_file(&entry.archive_path, fopts)?;
+        zip.write_all(&entry.data)?;
     }
 
     // ── objects/ ───────────────────────────────────────────────────────
     // Only include CAS objects that are referenced by packed checkpoints.
-    let live_refs = store.collect_live_refs()?;
-    for hash in &live_refs {
-        if let Some(data) = store.cas().get(hash)? {
-            let path = format!("objects/sha256/{hash}");
-            // Use Stored for binary blobs — they're already compressed or incompressible.
-            let blob_opts = SimpleFileOptions::default()
-                .compression_method(CompressionMethod::Stored)
-                .large_file(true);
-            zip.start_file(&path, blob_opts)?;
-            zip.write_all(&data)?;
-        }
+    for entry in cas_entries {
+        // Use Stored for binary blobs — they're already compressed or incompressible.
+        let blob_opts = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Stored)
+            .large_file(true);
+        zip.start_file(&entry.archive_path, blob_opts)?;
+        zip.write_all(&entry.data)?;
     }
 
     zip.finish()?;
+    Ok(())
+}
+
+fn canonical_store_root(store_root: &Path) -> Result<PathBuf> {
+    let metadata = std::fs::symlink_metadata(store_root)
+        .with_context(|| format!("reading session store metadata {}", store_root.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        anyhow::bail!(
+            "session store root must be a non-symlink directory: {}",
+            store_root.display()
+        );
+    }
+    std::fs::canonicalize(store_root)
+        .with_context(|| format!("canonicalizing session store {}", store_root.display()))
+}
+
+fn plan_cas_entries(
+    store_root: &Path,
+    canonical_root: &Path,
+    run_entries: &[PackEntry],
+) -> Result<Vec<PackEntry>> {
+    let mut entries = Vec::new();
+    let mut hashes = HashSet::new();
+    for entry in run_entries
+        .iter()
+        .filter(|entry| entry.archive_path.ends_with("/checkpoint.json"))
+    {
+        let checkpoint: FmsCheckpoint = serde_json::from_slice(&entry.data)
+            .with_context(|| format!("parsing packaged checkpoint {}", entry.archive_path))?;
+        hashes.extend(
+            checkpoint
+                .field_refs
+                .into_iter()
+                .map(|field_ref| field_ref.tensor_descriptor_ref),
+        );
+    }
+    for hash in hashes {
+        let archive_path = format!("objects/sha256/{hash}");
+        validate_portable_namespace_path(&archive_path)?;
+        let source = store_root.join(&archive_path);
+        if let Some(data) = read_store_file_if_exists(store_root, canonical_root, &source)? {
+            entries.push(PackEntry { archive_path, data });
+        }
+    }
+    Ok(entries)
+}
+
+fn plan_run_entries(
+    store_root: &Path,
+    canonical_root: &Path,
+    session: &FmsSessionManifest,
+    profile: &FmsExportProfile,
+) -> Result<Vec<PackEntry>> {
+    let mut entries = Vec::new();
+    let mut seen_refs = HashSet::new();
+    for run_ref in &session.run_refs {
+        let run_id = parse_run_ref(run_ref)?;
+        if !seen_refs.insert(run_ref) {
+            anyhow::bail!("duplicate run reference `{run_ref}`");
+        }
+        let run_dir = store_root.join("runs").join(run_id);
+        let run_manifest = run_dir.join("run_manifest.json");
+        if let Some(data) = read_store_file_if_exists(store_root, canonical_root, &run_manifest)? {
+            entries.push(PackEntry {
+                archive_path: run_ref.clone(),
+                data,
+            });
+        }
+        if profile.needs_checkpoints() {
+            plan_checkpoint_entries(store_root, canonical_root, run_id, &mut entries)?;
+        }
+        if profile.include_artifacts() {
+            plan_artifact_entries(store_root, canonical_root, run_id, &mut entries)?;
+        }
+    }
+    Ok(entries)
+}
+
+fn parse_run_ref(run_ref: &str) -> Result<&str> {
+    let Some(run_id) = run_ref
+        .strip_prefix("runs/")
+        .and_then(|value| value.strip_suffix("/run_manifest.json"))
+    else {
+        anyhow::bail!("invalid run reference `{run_ref}`");
+    };
+    if run_id.is_empty() || run_id.contains('/') {
+        anyhow::bail!("invalid run reference `{run_ref}`");
+    }
+    let canonical_ref = format!("runs/{run_id}/run_manifest.json");
+    if canonical_ref != run_ref {
+        anyhow::bail!("invalid run reference `{run_ref}`");
+    }
+    validate_portable_namespace_path(&canonical_ref)
+        .with_context(|| format!("invalid run reference `{run_ref}`"))?;
+    Ok(run_id)
+}
+
+fn plan_checkpoint_entries(
+    store_root: &Path,
+    canonical_root: &Path,
+    run_id: &str,
+    entries: &mut Vec<PackEntry>,
+) -> Result<()> {
+    let checkpoint_dir = store_root.join("runs").join(run_id).join("checkpoints");
+    if !store_source_exists(&checkpoint_dir)? {
+        return Ok(());
+    }
+    validate_store_source(store_root, canonical_root, &checkpoint_dir, true)?;
+    for checkpoint in std::fs::read_dir(&checkpoint_dir)? {
+        let checkpoint = checkpoint?;
+        let checkpoint_type = checkpoint.file_type()?;
+        if checkpoint_type.is_symlink() {
+            anyhow::bail!(
+                "symlink source is not permitted: {}",
+                checkpoint.path().display()
+            );
+        }
+        if !checkpoint_type.is_dir() {
+            anyhow::bail!(
+                "unsupported checkpoint source: {}",
+                checkpoint.path().display()
+            );
+        }
+        let checkpoint_name = portable_file_name(&checkpoint)?;
+        let checkpoint_prefix = format!("runs/{run_id}/checkpoints/{checkpoint_name}");
+        validate_portable_namespace_path(&checkpoint_prefix)?;
+        validate_store_source(store_root, canonical_root, &checkpoint.path(), true)?;
+        for file in std::fs::read_dir(checkpoint.path())? {
+            let file = file?;
+            let file_type = file.file_type()?;
+            if file_type.is_symlink() {
+                anyhow::bail!("symlink source is not permitted: {}", file.path().display());
+            }
+            if !file_type.is_file() {
+                anyhow::bail!("unsupported checkpoint source: {}", file.path().display());
+            }
+            let name = portable_file_name(&file)?;
+            let archive_path = format!("{checkpoint_prefix}/{name}");
+            validate_portable_namespace_path(&archive_path)?;
+            entries.push(PackEntry {
+                archive_path,
+                data: read_store_file(store_root, canonical_root, &file.path())?,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn plan_artifact_entries(
+    store_root: &Path,
+    canonical_root: &Path,
+    run_id: &str,
+    entries: &mut Vec<PackEntry>,
+) -> Result<()> {
+    let artifacts = store_root.join("runs").join(run_id).join("artifacts");
+    if !store_source_exists(&artifacts)? {
+        return Ok(());
+    }
+    plan_artifact_directory(
+        store_root,
+        canonical_root,
+        &artifacts,
+        &format!("runs/{run_id}/artifacts"),
+        entries,
+    )
+}
+
+fn plan_artifact_directory(
+    store_root: &Path,
+    canonical_root: &Path,
+    directory: &Path,
+    prefix: &str,
+    entries: &mut Vec<PackEntry>,
+) -> Result<()> {
+    validate_portable_namespace_path(prefix)?;
+    validate_store_source(store_root, canonical_root, directory, true)?;
+    for entry in std::fs::read_dir(directory)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            anyhow::bail!(
+                "symlink source is not permitted: {}",
+                entry.path().display()
+            );
+        }
+        let name = portable_file_name(&entry)?;
+        let archive_path = format!("{prefix}/{name}");
+        validate_portable_namespace_path(&archive_path)?;
+        if file_type.is_dir() {
+            plan_artifact_directory(
+                store_root,
+                canonical_root,
+                &entry.path(),
+                &archive_path,
+                entries,
+            )?;
+        } else if file_type.is_file() {
+            entries.push(PackEntry {
+                archive_path,
+                data: read_store_file(store_root, canonical_root, &entry.path())?,
+            });
+        } else {
+            anyhow::bail!("unsupported artifact source: {}", entry.path().display());
+        }
+    }
+    Ok(())
+}
+
+fn portable_file_name(entry: &std::fs::DirEntry) -> Result<String> {
+    entry.file_name().into_string().map_err(|_| {
+        anyhow::anyhow!(
+            "store source name is not valid UTF-8: {}",
+            entry.path().display()
+        )
+    })
+}
+
+fn read_store_file_if_exists(
+    store_root: &Path,
+    canonical_root: &Path,
+    source: &Path,
+) -> Result<Option<Vec<u8>>> {
+    if !store_source_exists(source)? {
+        return Ok(None);
+    }
+    Ok(Some(read_store_file(store_root, canonical_root, source)?))
+}
+
+fn store_source_exists(source: &Path) -> Result<bool> {
+    match std::fs::symlink_metadata(source) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error)
+            .with_context(|| format!("reading store source metadata {}", source.display())),
+    }
+}
+
+fn read_store_file(store_root: &Path, canonical_root: &Path, source: &Path) -> Result<Vec<u8>> {
+    validate_store_source(store_root, canonical_root, source, false)?;
+    std::fs::read(source).with_context(|| format!("reading store source {}", source.display()))
+}
+
+fn validate_store_source(
+    store_root: &Path,
+    canonical_root: &Path,
+    source: &Path,
+    must_be_directory: bool,
+) -> Result<()> {
+    let relative = source
+        .strip_prefix(store_root)
+        .with_context(|| format!("store source is outside root: {}", source.display()))?;
+    let mut current = PathBuf::from(store_root);
+    for component in relative.components() {
+        let Component::Normal(component) = component else {
+            anyhow::bail!("unsafe store source: {}", source.display());
+        };
+        current.push(component);
+        let metadata = std::fs::symlink_metadata(&current)
+            .with_context(|| format!("reading store source metadata {}", current.display()))?;
+        if metadata.file_type().is_symlink() {
+            anyhow::bail!("symlink source is not permitted: {}", current.display());
+        }
+    }
+    let metadata = std::fs::symlink_metadata(source)?;
+    if (must_be_directory && !metadata.file_type().is_dir())
+        || (!must_be_directory && !metadata.file_type().is_file())
+    {
+        anyhow::bail!("unsupported store source: {}", source.display());
+    }
+    let canonical_source = std::fs::canonicalize(source)?;
+    if !canonical_source.starts_with(canonical_root) {
+        anyhow::bail!("store source escapes session root: {}", source.display());
+    }
     Ok(())
 }
 
@@ -199,79 +463,6 @@ fn validate_pack_input(
             "script SHA-256 mismatch: expected {}, got {actual}",
             workspace.script_sha256
         );
-    }
-    Ok(())
-}
-
-fn pack_run_checkpoints<W: Write + Seek>(
-    zip: &mut zip::ZipWriter<W>,
-    store: &SessionStore,
-    run_id: &str,
-    profile: &FmsExportProfile,
-    opts: SimpleFileOptions,
-) -> Result<()> {
-    // Only pack checkpoints if the profile warrants it.
-    if !profile.needs_checkpoints() {
-        return Ok(());
-    }
-    let cp_base = format!("runs/{run_id}/checkpoints");
-    let cp_dir = store.root().join(&cp_base);
-    if !cp_dir.exists() {
-        return Ok(());
-    }
-    for entry in std::fs::read_dir(&cp_dir)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            let cp_name = entry.file_name();
-            let cp_name = cp_name.to_string_lossy();
-            // Pack all files in this checkpoint directory.
-            for file_entry in std::fs::read_dir(entry.path())? {
-                let file_entry = file_entry?;
-                if file_entry.file_type()?.is_file() {
-                    let fname = file_entry.file_name();
-                    let fname = fname.to_string_lossy();
-                    let archive_path = format!("{cp_base}/{cp_name}/{fname}");
-                    let data = std::fs::read(file_entry.path())?;
-                    zip.start_file(&archive_path, opts)?;
-                    zip.write_all(&data)?;
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn pack_run_artifacts<W: Write + Seek>(
-    zip: &mut zip::ZipWriter<W>,
-    store: &SessionStore,
-    run_id: &str,
-    opts: SimpleFileOptions,
-) -> Result<()> {
-    let art_dir = store.root().join("runs").join(run_id).join("artifacts");
-    if !art_dir.exists() {
-        return Ok(());
-    }
-    pack_directory_recursive(zip, &art_dir, &format!("runs/{run_id}/artifacts"), opts)
-}
-
-fn pack_directory_recursive<W: Write + Seek>(
-    zip: &mut zip::ZipWriter<W>,
-    dir: &Path,
-    prefix: &str,
-    opts: SimpleFileOptions,
-) -> Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        let archive_path = format!("{prefix}/{name}");
-        if entry.file_type()?.is_dir() {
-            pack_directory_recursive(zip, &entry.path(), &archive_path, opts)?;
-        } else {
-            let data = std::fs::read(entry.path())?;
-            zip.start_file(&archive_path, opts)?;
-            zip.write_all(&data)?;
-        }
     }
     Ok(())
 }
@@ -686,12 +877,16 @@ fn document_json<T: serde::de::DeserializeOwned>(
 fn validate_portable_namespace_path(name: &str) -> Result<()> {
     let bytes = name.as_bytes();
     let has_windows_prefix = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
-    if name.is_empty()
+    if !name.is_ascii()
+        || name.is_empty()
         || name.contains('\\')
         || name.contains(':')
         || name.chars().any(char::is_control)
         || has_windows_prefix
     {
+        if !name.is_ascii() {
+            anyhow::bail!("FMS archive paths must use ASCII components: `{name}`");
+        }
         anyhow::bail!("unsafe archive path `{name}`");
     }
     let non_directory_name = name.strip_suffix('/').unwrap_or(name);
@@ -833,6 +1028,141 @@ mod tests {
             writer.write_all(&data).unwrap();
         }
         writer.finish().unwrap().into_inner()
+    }
+
+    fn pack_fixture(
+        profile: SaveProfile,
+    ) -> (
+        tempfile::TempDir,
+        SessionStore,
+        FmsSessionManifest,
+        FmsWorkspaceManifest,
+        FmsExportProfile,
+        HashMap<String, Vec<u8>>,
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let script = b"print('verified')".to_vec();
+        let session = test_session();
+        let workspace = test_workspace(&script);
+        let mut documents = HashMap::new();
+        documents.insert("main.py".to_string(), script);
+        (
+            directory,
+            store,
+            session,
+            workspace,
+            FmsExportProfile::for_profile(profile),
+            documents,
+        )
+    }
+
+    fn assert_pack_rejected_without_output(
+        store: &SessionStore,
+        session: &FmsSessionManifest,
+        workspace: &FmsWorkspaceManifest,
+        export_profile: &FmsExportProfile,
+        documents: &HashMap<String, Vec<u8>>,
+        expected_error: &str,
+    ) {
+        let mut output = Cursor::new(Vec::new());
+        let error = pack_fms(
+            &mut output,
+            store,
+            session,
+            workspace,
+            export_profile,
+            documents,
+            &PackOptions::default(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains(expected_error));
+        assert!(output.into_inner().is_empty());
+    }
+
+    #[test]
+    fn pack_rejects_invalid_run_references_before_output_or_external_read() {
+        for run_ref in ["../outside-file", "/outside/run_manifest.json"] {
+            let (directory, store, mut session, workspace, profile, documents) =
+                pack_fixture(SaveProfile::Compact);
+            std::fs::write(directory.path().join("outside-file"), b"secret").unwrap();
+            session.run_refs.push(run_ref.to_string());
+
+            assert_pack_rejected_without_output(
+                &store,
+                &session,
+                &workspace,
+                &profile,
+                &documents,
+                "invalid run reference",
+            );
+            assert_eq!(
+                std::fs::read(directory.path().join("outside-file")).unwrap(),
+                b"secret"
+            );
+        }
+    }
+
+    #[test]
+    fn pack_rejects_unsafe_artifact_name_before_output() {
+        let (_directory, store, mut session, workspace, profile, documents) =
+            pack_fixture(SaveProfile::Solved);
+        session
+            .run_refs
+            .push("runs/run-001/run_manifest.json".to_string());
+        store
+            .write_document("runs/run-001/run_manifest.json", b"{}")
+            .unwrap();
+        let artifacts = store.root().join("runs/run-001/artifacts");
+        std::fs::create_dir_all(&artifacts).unwrap();
+        std::fs::write(artifacts.join("bad:artifact"), b"secret").unwrap();
+
+        assert_pack_rejected_without_output(
+            &store,
+            &session,
+            &workspace,
+            &profile,
+            &documents,
+            "unsafe archive path",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pack_rejects_symlink_artifact_before_output() {
+        use std::os::unix::fs::symlink;
+
+        let (directory, store, mut session, workspace, profile, documents) =
+            pack_fixture(SaveProfile::Solved);
+        session
+            .run_refs
+            .push("runs/run-001/run_manifest.json".to_string());
+        store
+            .write_document("runs/run-001/run_manifest.json", b"{}")
+            .unwrap();
+        let outside = directory.path().join("outside-file");
+        std::fs::write(&outside, b"secret").unwrap();
+        let artifacts = store.root().join("runs/run-001/artifacts");
+        std::fs::create_dir_all(&artifacts).unwrap();
+        symlink(&outside, artifacts.join("leak")).unwrap();
+
+        assert_pack_rejected_without_output(
+            &store, &session, &workspace, &profile, &documents, "symlink",
+        );
+        assert_eq!(std::fs::read(outside).unwrap(), b"secret");
+    }
+
+    #[test]
+    fn pack_rejects_non_ascii_archive_path_components_before_output() {
+        for name in ["Ż.json", "ż.json", "e\u{301}.json"] {
+            let (_directory, store, session, workspace, profile, mut documents) =
+                pack_fixture(SaveProfile::Compact);
+            documents.insert(name.to_string(), b"{}".to_vec());
+
+            assert_pack_rejected_without_output(
+                &store, &session, &workspace, &profile, &documents, "ASCII",
+            );
+        }
     }
 
     fn rename_central_directory_entry(mut archive: Vec<u8>, from: &str, to: &str) -> Vec<u8> {
@@ -1138,7 +1468,7 @@ mod tests {
     }
 
     #[test]
-    fn preflight_preserves_non_ascii_regular_document_names() {
+    fn preflight_and_unpack_reject_non_ascii_regular_document_names() {
         let script = b"print('verified')";
         let archive = archive_with_entries(
             &test_workspace(script),
@@ -1148,9 +1478,7 @@ mod tests {
             ],
         );
 
-        let preflight = preflight_fms(Cursor::new(archive), &[]).unwrap();
-
-        assert_eq!(preflight.documents["project/zażółć.json"], b"{}");
+        assert_rejected_before_store_mutation(archive, "ASCII");
     }
 
     #[test]
