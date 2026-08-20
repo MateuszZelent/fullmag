@@ -181,8 +181,8 @@ fn validate_pack_input(
             format!("project/{name}")
         };
         validate_archive_path(&archive_path)?;
-        if !archive_paths.insert(archive_path.clone()) {
-            anyhow::bail!("duplicate archive path `{archive_path}`");
+        if !archive_paths.insert(portable_extraction_key(&archive_path)) {
+            anyhow::bail!("duplicate archive path or case-fold collision `{archive_path}`");
         }
         if archive_path == "project/main.py" {
             script = Some(data);
@@ -446,8 +446,8 @@ fn scan_zip_directory(bytes: &[u8]) -> Result<ZipDirectoryScan> {
             .context("ZIP entry name is not valid UTF-8")?
             .to_owned();
         validate_archive_path(&name)?;
-        if !seen_names.insert(name.clone()) {
-            anyhow::bail!("duplicate ZIP entry `{name}`");
+        if !seen_names.insert(portable_extraction_key(&name)) {
+            anyhow::bail!("duplicate ZIP entry or case-fold collision `{name}`");
         }
         let extra = &bytes[offset + 46 + name_len..offset + 46 + name_len + extra_len];
         let needs_zip64_uncompressed = uncompressed_size == u32::MAX as u64;
@@ -716,6 +716,13 @@ fn cas_digest_from_path(name: &str) -> Result<Option<&str>> {
         anyhow::bail!("invalid CAS object path `{name}`");
     }
     Ok(Some(digest))
+}
+
+/// Maps a validated archive path into the case-insensitive filesystem domain
+/// used for portable extraction collision detection. Archive names and hashes
+/// remain byte-for-byte unchanged.
+fn portable_extraction_key(name: &str) -> String {
+    name.to_ascii_lowercase()
 }
 
 // ── Export profile helpers ─────────────────────────────────────────────
@@ -995,6 +1002,53 @@ mod tests {
     #[test]
     fn preflight_and_unpack_reject_inner_current_directory_script_alias() {
         assert_script_alias_is_rejected("project/./main.py");
+    }
+
+    fn assert_case_fold_collision_is_rejected(entries: Vec<(String, Vec<u8>)>) {
+        let archive = archive_with_entries(&test_workspace(b"print('verified')"), entries);
+
+        let error = preflight_fms(Cursor::new(&archive), &[]).unwrap_err();
+        assert!(error.to_string().contains("case-fold collision"));
+
+        let store_dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(store_dir.path().join("store")).unwrap();
+        let error = unpack_fms(Cursor::new(archive), &store).unwrap_err();
+        assert!(error.to_string().contains("case-fold collision"));
+        assert_eq!(store.read_document("project/main.py").unwrap(), None);
+    }
+
+    #[test]
+    fn preflight_and_unpack_reject_case_folded_script_alias() {
+        assert_case_fold_collision_is_rejected(vec![
+            ("project/main.py".to_string(), b"print('verified')".to_vec()),
+            (
+                "PROJECT/MAIN.PY".to_string(),
+                b"print('unverified')".to_vec(),
+            ),
+        ]);
+    }
+
+    #[test]
+    fn preflight_and_unpack_reject_case_folded_document_alias() {
+        assert_case_fold_collision_is_rejected(vec![
+            ("project/main.py".to_string(), b"print('verified')".to_vec()),
+            ("project/ui_state.json".to_string(), b"{}".to_vec()),
+            ("PROJECT/UI_STATE.JSON".to_string(), b"malicious".to_vec()),
+        ]);
+    }
+
+    #[test]
+    fn preflight_and_unpack_reject_case_folded_cas_alias() {
+        let data = b"CAS bytes".to_vec();
+        let digest = crate::cas::hex_sha256(&data);
+        assert_case_fold_collision_is_rejected(vec![
+            ("project/main.py".to_string(), b"print('verified')".to_vec()),
+            (format!("objects/sha256/{digest}"), data.clone()),
+            (
+                format!("OBJECTS/SHA256/{}", digest.to_ascii_uppercase()),
+                data,
+            ),
+        ]);
     }
 
     #[test]
