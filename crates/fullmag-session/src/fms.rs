@@ -682,6 +682,14 @@ fn validate_archive_path(name: &str) -> Result<()> {
     if name.is_empty() || name.contains('\\') || has_windows_prefix {
         anyhow::bail!("unsafe archive path `{name}`");
     }
+    let non_directory_name = name.strip_suffix('/').unwrap_or(name);
+    if non_directory_name.is_empty()
+        || non_directory_name
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == ".")
+    {
+        anyhow::bail!("unsafe archive path `{name}`");
+    }
     let path = Path::new(name);
     if path.is_absolute()
         || path.components().any(|component| {
@@ -952,6 +960,41 @@ mod tests {
         let error = preflight_fms(Cursor::new(archive), &[]).unwrap_err();
 
         assert!(error.to_string().contains("unsafe archive path"));
+    }
+
+    fn assert_script_alias_is_rejected(alias: &str) {
+        let script = b"print('verified')";
+        let archive = archive_with_entries(
+            &test_workspace(script),
+            [
+                ("project/main.py".to_string(), script.to_vec()),
+                (alias.to_string(), b"print('unverified')".to_vec()),
+            ],
+        );
+
+        let error = preflight_fms(Cursor::new(&archive), &[]).unwrap_err();
+        assert!(error.to_string().contains("unsafe archive path"));
+
+        let store_dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(store_dir.path().join("store")).unwrap();
+        let error = unpack_fms(Cursor::new(archive), &store).unwrap_err();
+        assert!(error.to_string().contains("unsafe archive path"));
+        assert_eq!(store.read_document("project/main.py").unwrap(), None);
+    }
+
+    #[test]
+    fn preflight_and_unpack_reject_current_directory_script_alias() {
+        assert_script_alias_is_rejected("./project/main.py");
+    }
+
+    #[test]
+    fn preflight_and_unpack_reject_repeated_separator_script_alias() {
+        assert_script_alias_is_rejected("project//main.py");
+    }
+
+    #[test]
+    fn preflight_and_unpack_reject_inner_current_directory_script_alias() {
+        assert_script_alias_is_rejected("project/./main.py");
     }
 
     #[test]
