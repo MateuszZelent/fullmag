@@ -180,7 +180,7 @@ fn validate_pack_input(
             }
             format!("project/{name}")
         };
-        validate_archive_path(&archive_path)?;
+        validate_portable_namespace_path(&archive_path)?;
         if !archive_paths.insert(portable_extraction_key(&archive_path)) {
             anyhow::bail!("duplicate archive path or case-fold collision `{archive_path}`");
         }
@@ -315,6 +315,9 @@ pub fn preflight_fms<R: Read + Seek>(
 
     for (index, name) in scan.names.iter().enumerate() {
         let mut entry = archive.by_index(index)?;
+        if entry.is_symlink() {
+            anyhow::bail!("symlink entries are not permitted (`{name}`)");
+        }
         if name.ends_with('/') {
             continue;
         }
@@ -357,7 +360,7 @@ pub fn preflight_fms<R: Read + Seek>(
         );
     }
     for required in required_documents {
-        validate_archive_path(required)?;
+        validate_portable_namespace_path(required)?;
         if !documents.contains_key(*required) {
             anyhow::bail!("required archive document `{required}` is missing");
         }
@@ -445,7 +448,7 @@ fn scan_zip_directory(bytes: &[u8]) -> Result<ZipDirectoryScan> {
         let name = std::str::from_utf8(&bytes[offset + 46..offset + 46 + name_len])
             .context("ZIP entry name is not valid UTF-8")?
             .to_owned();
-        validate_archive_path(&name)?;
+        validate_portable_namespace_path(&name)?;
         if !seen_names.insert(portable_extraction_key(&name)) {
             anyhow::bail!("duplicate ZIP entry or case-fold collision `{name}`");
         }
@@ -676,17 +679,29 @@ fn document_json<T: serde::de::DeserializeOwned>(
     serde_json::from_slice(&data).with_context(|| format!("parsing JSON from `{name}`"))
 }
 
-fn validate_archive_path(name: &str) -> Result<()> {
+/// Validates the portable namespace used for every FMS extraction target.
+///
+/// Names remain unchanged after validation; this only defines which names can
+/// safely refer to a target on every supported extraction filesystem.
+fn validate_portable_namespace_path(name: &str) -> Result<()> {
     let bytes = name.as_bytes();
     let has_windows_prefix = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
-    if name.is_empty() || name.contains('\\') || has_windows_prefix {
+    if name.is_empty()
+        || name.contains('\\')
+        || name.contains(':')
+        || name.chars().any(char::is_control)
+        || has_windows_prefix
+    {
         anyhow::bail!("unsafe archive path `{name}`");
     }
     let non_directory_name = name.strip_suffix('/').unwrap_or(name);
     if non_directory_name.is_empty()
-        || non_directory_name
-            .split('/')
-            .any(|segment| segment.is_empty() || segment == ".")
+        || non_directory_name.split('/').any(|segment| {
+            segment.is_empty()
+                || segment == "."
+                || segment.ends_with([' ', '.'])
+                || is_windows_reserved_device(segment)
+        })
     {
         anyhow::bail!("unsafe archive path `{name}`");
     }
@@ -701,7 +716,28 @@ fn validate_archive_path(name: &str) -> Result<()> {
     {
         anyhow::bail!("unsafe archive path `{name}`");
     }
+
+    let key = portable_extraction_key(name);
+    if key.starts_with("project/") && !name.starts_with("project/") {
+        anyhow::bail!("non-canonical project path `{name}`");
+    }
+    if key.starts_with("objects/sha256/") {
+        if !name.starts_with("objects/sha256/") {
+            anyhow::bail!("non-canonical CAS path `{name}`");
+        }
+        cas_digest_from_path(name)?;
+    }
     Ok(())
+}
+
+fn is_windows_reserved_device(component: &str) -> bool {
+    let stem = component.split('.').next().unwrap_or_default();
+    let upper = stem.to_ascii_uppercase();
+    let bytes = upper.as_bytes();
+    matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (bytes.len() == 4
+            && matches!(&bytes[..3], b"COM" | b"LPT")
+            && matches!(bytes[3], b'1'..=b'9'))
 }
 
 fn cas_digest_from_path(name: &str) -> Result<Option<&str>> {
@@ -1004,51 +1040,172 @@ mod tests {
         assert_script_alias_is_rejected("project/./main.py");
     }
 
-    fn assert_case_fold_collision_is_rejected(entries: Vec<(String, Vec<u8>)>) {
+    fn assert_case_fold_collision_is_rejected(
+        entries: Vec<(String, Vec<u8>)>,
+        expected_error: &str,
+    ) {
         let archive = archive_with_entries(&test_workspace(b"print('verified')"), entries);
 
         let error = preflight_fms(Cursor::new(&archive), &[]).unwrap_err();
-        assert!(error.to_string().contains("case-fold collision"));
+        assert!(error.to_string().contains(expected_error));
 
         let store_dir = tempfile::tempdir().unwrap();
         let store = SessionStore::open(store_dir.path().join("store")).unwrap();
         let error = unpack_fms(Cursor::new(archive), &store).unwrap_err();
-        assert!(error.to_string().contains("case-fold collision"));
+        assert!(error.to_string().contains(expected_error));
         assert_eq!(store.read_document("project/main.py").unwrap(), None);
+    }
+
+    fn assert_rejected_before_store_mutation(archive: Vec<u8>, expected_error: &str) {
+        let error = preflight_fms(Cursor::new(&archive), &[]).unwrap_err();
+        assert!(error.to_string().contains(expected_error));
+
+        let store_dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(store_dir.path().join("store")).unwrap();
+        let error = unpack_fms(Cursor::new(archive), &store).unwrap_err();
+        assert!(error.to_string().contains(expected_error));
+        assert_eq!(store.read_document("project/main.py").unwrap(), None);
+        assert!(store.cas().list().unwrap().is_empty());
+    }
+
+    fn archive_with_symlink(name: &str) -> Vec<u8> {
+        let script = b"print('verified')";
+        let workspace = test_workspace(script);
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        write_json(
+            &mut writer,
+            "manifest/session.json",
+            &test_session(),
+            options,
+        )
+        .unwrap();
+        write_json(&mut writer, "manifest/workspace.json", &workspace, options).unwrap();
+        write_json(
+            &mut writer,
+            "manifest/export_profile.json",
+            &FmsExportProfile::for_profile(SaveProfile::Compact),
+            options,
+        )
+        .unwrap();
+        writer.start_file("project/main.py", options).unwrap();
+        writer.write_all(script).unwrap();
+        writer.add_symlink(name, "target", options).unwrap();
+        writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn preflight_and_unpack_reject_portable_namespace_aliases() {
+        for alias in [
+            "project/main.py.",
+            "project/main.py ",
+            r"project\main.py",
+            "project/main.py:alternate",
+            "project/CON.txt",
+            "project/COM1.log",
+            "project/LPT9",
+        ] {
+            let archive = archive_with_entries(
+                &test_workspace(b"print('verified')"),
+                [
+                    ("project/main.py".to_string(), b"print('verified')".to_vec()),
+                    (alias.to_string(), b"malicious".to_vec()),
+                ],
+            );
+            assert_rejected_before_store_mutation(archive, "unsafe archive path");
+        }
+    }
+
+    #[test]
+    fn preflight_and_unpack_reject_noncanonical_case_folded_cas_path() {
+        let digest = crate::cas::hex_sha256(b"expected CAS bytes");
+        let archive = archive_with_entries(
+            &test_workspace(b"print('verified')"),
+            [
+                ("project/main.py".to_string(), b"print('verified')".to_vec()),
+                (
+                    format!("OBJECTS/SHA256/{digest}"),
+                    b"tampered CAS bytes".to_vec(),
+                ),
+            ],
+        );
+        assert_rejected_before_store_mutation(archive, "non-canonical CAS path");
+    }
+
+    #[test]
+    fn preflight_and_unpack_reject_symlink_entries() {
+        assert_rejected_before_store_mutation(archive_with_symlink("project/link"), "symlink");
+    }
+
+    #[test]
+    fn preflight_preserves_non_ascii_regular_document_names() {
+        let script = b"print('verified')";
+        let archive = archive_with_entries(
+            &test_workspace(script),
+            [
+                ("project/main.py".to_string(), script.to_vec()),
+                ("project/zażółć.json".to_string(), b"{}".to_vec()),
+            ],
+        );
+
+        let preflight = preflight_fms(Cursor::new(archive), &[]).unwrap();
+
+        assert_eq!(preflight.documents["project/zażółć.json"], b"{}");
     }
 
     #[test]
     fn preflight_and_unpack_reject_case_folded_script_alias() {
-        assert_case_fold_collision_is_rejected(vec![
-            ("project/main.py".to_string(), b"print('verified')".to_vec()),
-            (
-                "PROJECT/MAIN.PY".to_string(),
-                b"print('unverified')".to_vec(),
-            ),
-        ]);
+        assert_case_fold_collision_is_rejected(
+            vec![
+                ("project/main.py".to_string(), b"print('verified')".to_vec()),
+                (
+                    "PROJECT/MAIN.PY".to_string(),
+                    b"print('unverified')".to_vec(),
+                ),
+            ],
+            "non-canonical project path",
+        );
     }
 
     #[test]
     fn preflight_and_unpack_reject_case_folded_document_alias() {
-        assert_case_fold_collision_is_rejected(vec![
-            ("project/main.py".to_string(), b"print('verified')".to_vec()),
-            ("project/ui_state.json".to_string(), b"{}".to_vec()),
-            ("PROJECT/UI_STATE.JSON".to_string(), b"malicious".to_vec()),
-        ]);
+        assert_case_fold_collision_is_rejected(
+            vec![
+                ("project/main.py".to_string(), b"print('verified')".to_vec()),
+                ("project/ui_state.json".to_string(), b"{}".to_vec()),
+                ("PROJECT/UI_STATE.JSON".to_string(), b"malicious".to_vec()),
+            ],
+            "non-canonical project path",
+        );
     }
 
     #[test]
     fn preflight_and_unpack_reject_case_folded_cas_alias() {
         let data = b"CAS bytes".to_vec();
         let digest = crate::cas::hex_sha256(&data);
-        assert_case_fold_collision_is_rejected(vec![
-            ("project/main.py".to_string(), b"print('verified')".to_vec()),
-            (format!("objects/sha256/{digest}"), data.clone()),
-            (
-                format!("OBJECTS/SHA256/{}", digest.to_ascii_uppercase()),
-                data,
-            ),
-        ]);
+        assert_case_fold_collision_is_rejected(
+            vec![
+                ("project/main.py".to_string(), b"print('verified')".to_vec()),
+                (format!("objects/sha256/{digest}"), data.clone()),
+                (
+                    format!("OBJECTS/SHA256/{}", digest.to_ascii_uppercase()),
+                    data,
+                ),
+            ],
+            "non-canonical CAS path",
+        );
+    }
+
+    #[test]
+    fn preflight_and_unpack_reject_case_folded_regular_document_collision() {
+        assert_case_fold_collision_is_rejected(
+            vec![
+                ("project/main.py".to_string(), b"print('verified')".to_vec()),
+                ("runs/notes.txt".to_string(), b"first".to_vec()),
+                ("RUNS/NOTES.TXT".to_string(), b"second".to_vec()),
+            ],
+            "case-fold collision",
+        );
     }
 
     #[test]
