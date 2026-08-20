@@ -23770,6 +23770,37 @@ async fn session_export_returns_404_without_session() {
 }
 
 #[tokio::test]
+async fn session_export_rejects_missing_canonical_script_before_creating_a_snapshot() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.script_path = repo_root.join("missing.py").display().to_string();
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/exports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "profile": "compact" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let error = body_json(response).await;
+    assert_eq!(error["code"], "invalid_script");
+    assert!(!repo_root
+        .join(".fullmag/local-live/session-store/runs/test-run/run_manifest.json")
+        .exists());
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
 async fn session_export_returns_fms_payload_with_session() {
     let (app, repo_root) = test_router_with_session_store().await;
     let response = app
@@ -23798,6 +23829,27 @@ async fn session_export_returns_fms_payload_with_session() {
         .as_str()
         .is_some_and(|value| !value.is_empty()));
     assert!(json["size_bytes"].as_u64().unwrap_or(0) > 0);
+
+    use base64::Engine;
+    let fms_bytes = base64::engine::general_purpose::STANDARD
+        .decode(
+            json["fms_base64"]
+                .as_str()
+                .expect("export response must contain fms_base64"),
+        )
+        .expect("exported fms base64 must decode");
+    let preflight = fullmag_session::preflight_fms(std::io::Cursor::new(fms_bytes), &[])
+        .expect("exported fms must pass preflight");
+    let script = b"study = fullmag.Study()\n";
+    assert_eq!(
+        preflight.documents.get("project/main.py"),
+        Some(&script.to_vec()),
+        "project/main.py must retain its exact source bytes"
+    );
+    assert_eq!(
+        preflight.workspace.script_sha256,
+        fullmag_session::hex_sha256(script)
+    );
 
     let _ = fs::remove_dir_all(&repo_root);
 }
@@ -23949,6 +24001,22 @@ async fn solved_session_export_restores_frequency_artifacts_after_source_history
     let fms_bytes = base64::engine::general_purpose::STANDARD
         .decode(&fms_base64)
         .expect("exported fms base64 must decode");
+    let preflight = fullmag_session::preflight_fms(std::io::Cursor::new(&fms_bytes), &[])
+        .expect("solved fms must pass preflight");
+    assert_eq!(
+        preflight
+            .documents
+            .get("runs/test-run/artifacts/eigen/spectrum.v2.json"),
+        Some(&spectrum.to_vec()),
+        "the exact spectrum metadata must be embedded in the fms"
+    );
+    assert_eq!(
+        preflight
+            .documents
+            .get("runs/test-run/artifacts/eigen/modes/sample_0000/mode_0000.bin"),
+        Some(&mode_bytes.to_vec()),
+        "the exact binary mode field must be embedded in the fms"
+    );
 
     let inspect_response = app
         .clone()

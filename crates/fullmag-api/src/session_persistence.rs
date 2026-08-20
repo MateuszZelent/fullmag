@@ -608,6 +608,7 @@ async fn current_session_id(state: &AppState) -> Result<String, ApiError> {
 async fn collect_project_documents(
     state: &AppState,
     ui_state: Option<&serde_json::Value>,
+    script: Vec<u8>,
 ) -> HashMap<String, Vec<u8>> {
     let mut docs = HashMap::new();
     let guard = state.current_live_state.read().await;
@@ -646,17 +647,38 @@ async fn collect_project_documents(
         }
     }
 
-    // Try to read the main script from disk.
-    if let Some(snapshot) = guard.as_ref() {
-        let script_path = std::path::Path::new(&snapshot.session.script_path);
-        if script_path.exists() {
-            if let Ok(data) = std::fs::read(script_path) {
-                docs.insert("main.py".into(), data);
-            }
-        }
-    }
+    docs.insert("main.py".into(), script);
 
     docs
+}
+
+async fn read_canonical_script(state: &AppState) -> Result<Vec<u8>, ApiError> {
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active workspace"))?;
+    let script_path = Path::new(&snapshot.session.script_path);
+    let metadata = std::fs::symlink_metadata(script_path).map_err(|_| {
+        ApiError::unprocessable(
+            "invalid_script: session script_path must name a readable regular Python file",
+        )
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(ApiError::unprocessable(
+            "invalid_script: session script_path must name a readable regular Python file",
+        ));
+    }
+    let script = std::fs::read(script_path).map_err(|_| {
+        ApiError::unprocessable(
+            "invalid_script: session script_path must name a readable regular Python file",
+        )
+    })?;
+    if script.is_empty() {
+        return Err(ApiError::unprocessable(
+            "invalid_script: session script_path must name a non-empty Python file",
+        ));
+    }
+    Ok(script)
 }
 
 fn session_store_run_artifact_dir(store: &SessionStore, run_id: &str) -> PathBuf {
@@ -745,12 +767,27 @@ fn capture_solved_artifacts(
         }
     }
 
-    let temporary = destination.with_file_name(format!(
-        "artifacts.save-{}-{}",
+    let temporary = store.root().join("runs").join(format!(
+        ".artifacts.save-{}-{}",
         std::process::id(),
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
     ));
-    copy_artifact_tree(source, &temporary)?;
+    if let Err(error) = copy_artifact_tree(source, &temporary) {
+        let _ = std::fs::remove_dir_all(&temporary);
+        return Err(error);
+    }
+
+    let destination_parent = destination
+        .parent()
+        .expect("artifact destination has run parent");
+    let destination_parent_existed = destination_parent.exists();
+    if let Err(error) = std::fs::create_dir_all(destination_parent) {
+        let _ = std::fs::remove_dir_all(&temporary);
+        return Err(ApiError::internal(format!(
+            "creating session artifact run directory '{}': {error}",
+            destination_parent.display()
+        )));
+    }
 
     let previous = destination.with_file_name(format!(
         "artifacts.previous-{}-{}",
@@ -771,6 +808,9 @@ fn capture_solved_artifacts(
             let _ = std::fs::rename(&previous, &destination);
         }
         let _ = std::fs::remove_dir_all(&temporary);
+        if !destination_parent_existed {
+            let _ = std::fs::remove_dir(destination_parent);
+        }
         return Err(ApiError::internal(format!(
             "committing session artifact snapshot '{}': {error}",
             destination.display()
@@ -787,6 +827,55 @@ fn capture_solved_artifacts(
     Ok(destination)
 }
 
+#[cfg(test)]
+mod artifact_capture_tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_artifact_copy_leaves_no_published_or_staged_artifact_tree() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-api-artifact-capture-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let source = root.join("source");
+        std::fs::create_dir_all(source.join("eigen/modes"))
+            .expect("source artifact fixture should be created");
+        std::fs::write(source.join("eigen/spectrum.v2.json"), b"spectrum")
+            .expect("spectrum fixture should be written");
+        symlink(
+            "/not-a-real-mode.bin",
+            source.join("eigen/modes/mode_0000.bin"),
+        )
+        .expect("symlink fixture should be created");
+        let store = SessionStore::open(root.join("store")).expect("session store should open");
+
+        let error = capture_solved_artifacts(&store, "run-001", &source)
+            .expect_err("symbolic-link artifact must reject the snapshot");
+        assert_eq!(error.status, axum::http::StatusCode::CONFLICT);
+        let run_dir = store.root().join("runs/run-001");
+        assert!(!run_dir.exists(), "failed copy must not publish a run tree");
+        assert!(
+            !store.root().join("runs").exists()
+                || std::fs::read_dir(store.root().join("runs"))
+                    .expect("runs staging parent should be readable")
+                    .all(|entry| {
+                        !entry
+                            .expect("staging entry should be readable")
+                            .file_name()
+                            .to_string_lossy()
+                            .starts_with(".artifacts.save-")
+                    }),
+            "failed copy must clean its staging tree"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
+
 // ── Handlers ───────────────────────────────────────────────────────────
 
 /// `POST /v2/sessions/current/persistence/exports`
@@ -795,6 +884,7 @@ pub(crate) async fn export_session(
     Json(req): Json<SessionExportRequest>,
 ) -> Result<Json<SessionExportResponse>, ApiError> {
     let session_id = current_session_id(&state).await?;
+    let script = read_canonical_script(&state).await?;
     let store = open_store(&state)?;
 
     let name = if let Some(n) = req.name {
@@ -812,7 +902,7 @@ pub(crate) async fn export_session(
     // Capture the actual local-live artifact directory into the SessionStore.
     // The store is the only artifact source that `pack_fms` reads, so packing
     // directly from it makes a solved save independent of local-live history.
-    let artifact_source = {
+    let run_capture = {
         let guard = state.current_live_state.read().await;
         if let Some(snapshot) = guard.as_ref() {
             let run_ref = format!("runs/{}/run_manifest.json", snapshot.session.run_id);
@@ -841,11 +931,7 @@ pub(crate) async fn export_session(
                 latest_checkpoint_ref: None,
                 artifact_index_ref: None,
             };
-            store
-                .commit_run(&run_manifest)
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-            crate::session::current_artifact_dir(snapshot)
-                .map(|artifact_dir| (snapshot.session.run_id.clone(), artifact_dir))
+            Some((run_manifest, crate::session::current_artifact_dir(snapshot)))
         } else {
             None
         }
@@ -853,15 +939,18 @@ pub(crate) async fn export_session(
 
     let export_profile = FmsExportProfile::for_profile(req.profile);
     if export_profile.include_artifacts() {
-        let (run_id, artifact_source) = artifact_source.ok_or_else(|| {
+        let (run_manifest, artifact_source) = run_capture.as_ref().ok_or_else(|| {
             ApiError::conflict("solved session export requires an active run artifact directory")
         })?;
-        capture_solved_artifacts(&store, &run_id, &artifact_source)?;
+        let artifact_source = artifact_source.as_ref().ok_or_else(|| {
+            ApiError::conflict("solved session export requires an active run artifact directory")
+        })?;
+        capture_solved_artifacts(&store, &run_manifest.run_id, artifact_source)?;
     }
-    let docs = collect_project_documents(&state, req.ui_state.as_ref()).await;
-    let script = docs.get("main.py").ok_or_else(|| {
-        ApiError::conflict("session has no readable canonical Python script to save")
-    })?;
+    let docs = collect_project_documents(&state, req.ui_state.as_ref(), script).await;
+    let script = docs
+        .get("main.py")
+        .expect("validated canonical script must be present in project documents");
     let workspace_manifest = FmsWorkspaceManifest {
         workspace_id: "local-live".into(),
         problem_name: name.clone(),
@@ -881,6 +970,11 @@ pub(crate) async fn export_session(
             .unwrap_or(fullmag_session::CompressionProfile::Balanced),
     };
 
+    if let Some((run_manifest, _)) = run_capture {
+        store
+            .commit_run(&run_manifest)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+    }
     store
         .commit_session(&session_manifest)
         .map_err(|e| ApiError::internal(e.to_string()))?;
