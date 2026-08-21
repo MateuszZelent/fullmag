@@ -1,73 +1,193 @@
 ---
 title: Response Solver
 status: partial
+reviewed_revision: 88c7160080bc1e8519950df283d2dd02087cc3da
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+source_of_truth: public response schema, native FEM response contract, runner implementation, and frequency-domain artifact contracts
 ---
 
 (public-docs-numerical-methods-frequency-domain-response-solver)=
 # Frequency-domain response solver
 
+:::{admonition} Current production boundary
+:class: important
+
+The response solver computes first-order harmonic response around a declared equilibrium. The
+native public route is FEM. FDM CPU and FDM GPU frequency-response requests are unsupported. The
+frequency solver-tree headers describe a broader target architecture than the runtime currently
+executes; requested and resolved solver methods must therefore be reported separately.
+:::
+
 (numerical-methods-frequency-response-problem-statement)=
 ## Physical and numerical problem
 
-The response solver computes the steady-state linear response of a declared equilibrium to a
-harmonic field excitation. It is distinct from eigenmode extraction: the frequency is prescribed,
-the excitation phase is part of the request, and the output is an observable such as a susceptibility
-tensor. The current native production contract is FEM; FDM is rejected by the planner for this path.
+For an equilibrium $\mathbf m_0$, Fullmag linearizes the enabled LLG operator in the local tangent
+space and solves at prescribed positive frequencies. The drive amplitude and phase are part of the
+request; the output is a complex response field or a derived observable. This is not an eigensolve:
+the frequency is prescribed and the right-hand side is nonzero. It is also not a nonlinear
+harmonic-balance calculation: the result is valid only in the small-amplitude regime in which the
+first-order linearization is adequate.
+
+The equilibrium source, dynamic demagnetization policy, Gilbert damping policy, spin-wave boundary
+condition, magnetostatic boundary condition, FEM mesh, solver lane, precision, Fourier convention,
+and excitation normalization define one numerical problem. Changing any of them changes the
+response operator or the meaning of the result.
 
 (numerical-methods-frequency-response-governing-equations)=
 ## Governing equations
 
-With $\delta\mathbf m(t)=\Re\{\widehat{\mathbf m}(\omega)e^{\mathrm i\omega t}\}$ and harmonic drive
-$\widehat{\mathbf h}_{\mathrm{ext}}$, the linearized frequency-domain system is
+With the recorded phasor convention
+
+```{math}
+:label: eq-numerical-frequency-response-ansatz
+\delta\mathbf m(t)=
+\Re\!\left\{\widehat{\mathbf m}(\omega)e^{\mathrm i\omega t}\right\},
+\qquad
+\delta\mathbf h_{\mathrm{ext}}(t)=
+\Re\!\left\{\widehat{\mathbf h}_{\mathrm{ext}}e^{\mathrm i\omega t}\right\},
+```
+
+the native tangent problem is represented as
 
 ```{math}
 :label: eq-numerical-frequency-response-system
-\left(\mathsf K+\mathrm i\omega\mathsf G\right)
-\widehat{\mathbf q}(\omega)=\widehat{\mathbf b}(\omega),
+\mathsf A(\omega)\widehat{\mathbf q}(\omega)
+=\widehat{\mathbf b}(\omega),
 \qquad
-\widehat{\mathbf b}(\omega)=\mathsf C\widehat{\mathbf h}_{\mathrm{ext}}.
+\mathsf A(\omega)=\mathsf K+\mathrm i\omega\mathsf G,
+\qquad
+\widehat{\mathbf b}=\mathsf C\widehat{\mathbf h}_{\mathrm{ext}}.
 ```
 
-For a susceptibility observable, the response is normalized by the declared excitation amplitude:
+$\mathsf K$ contains the linearized effective-field operator, $\mathsf G$ contains the gyrotropic,
+mass, and damping structure of the selected formulation, and $\mathsf C$ maps the applied field to
+tangent coordinates. The exact scaling and signs are owned by the native operator contract and the
+recorded `phase_convention`; they must not be reconstructed from plot labels.
+
+The physical perturbation is obtained by reconstructing tangent coordinates in the local basis,
 
 ```{math}
-:label: eq-numerical-frequency-response-susceptibility
-\widehat{\boldsymbol\chi}(\omega)=
-\frac{\widehat{\mathbf m}(\omega)}{\widehat{\mathbf h}_{\mathrm{ext}}(\omega)},
+:label: eq-numerical-frequency-response-reconstruction
+\widehat{\mathbf m}_i
+=\mathbf e_{1,i}\widehat q_{1,i}
++\mathbf e_{2,i}\widehat q_{2,i},
 \qquad
-\delta\mathbf m(t)=\Re\{\widehat{\mathbf m}e^{\mathrm i\omega t}\}.
+\mathbf m_{0,i}\cdot\widehat{\mathbf m}_i=0
 ```
 
-(numerical-methods-frequency-response-symbols-and-si-units)=
-## Symbols and SI units
+up to the numerical tangent-leakage tolerance.
 
-| Symbol | Meaning | SI unit |
-|---|---|---|
-| $\delta\mathbf m$ | dynamic magnetization perturbation | $1$ |
-| $\widehat{\mathbf m}$ | complex perturbation amplitude | $1$ |
-| $\widehat{\mathbf h}_{\mathrm{ext}}$ | complex excitation field amplitude | $\mathrm{A\,m^{-1}}$ |
-| $\mathsf K$ | tangent stiffness/dynamic matrix | problem-dependent |
-| $\mathsf G$ | gyrotropic/damping matrix | problem-dependent |
-| $\omega$ | angular frequency | $\mathrm{rad\,s^{-1}}$ |
-| $\widehat{\mathbf q}$ | complex tangent response | $1$ |
-| $\widehat{\mathbf b}$ | assembled harmonic right-hand side | problem-dependent |
-| $\mathsf C$ | drive coupling operator | problem-dependent |
-| $\widehat{\boldsymbol\chi}$ | complex susceptibility | $1$ |
+(numerical-methods-frequency-response-susceptibility)=
+## Susceptibility and response-unit conventions
+
+Two quantities that are often both called “susceptibility” are dimensionally different:
+
+```{math}
+:label: eq-numerical-frequency-response-physical-susceptibility
+\widehat{\boldsymbol\chi}_{M}(\omega)
+=\frac{\widehat{\mathbf M}(\omega)}
+{\widehat{\mathbf h}_{\mathrm{ext}}(\omega)},
+\qquad
+\widehat{\mathbf M}=M_s\widehat{\mathbf m},
+```
+
+which is dimensionless in SI, and
+
+```{math}
+:label: eq-numerical-frequency-response-reduced-susceptibility
+\widehat{\boldsymbol\chi}_{m}(\omega)
+=\frac{\widehat{\mathbf m}(\omega)}
+{\widehat{\mathbf h}_{\mathrm{ext}}(\omega)},
+```
+
+which has unit $\mathrm{m\,A^{-1}}$ because reduced magnetization is dimensionless while field has
+unit $\mathrm{A\,m^{-1}}$.
+
+At the reviewed revision, the dense block-real validation artifact stores `m_complex` as
+`normalized_magnetization` and computes the scalar projection
+
+```{math}
+:label: eq-numerical-frequency-response-v1-susceptibility
+\chi_{\mathrm{v1}}
+=\frac{\widehat{\mathbf h}^{\ast}
+\widehat{\mathbf m}}
+{\widehat{\mathbf h}^{\ast}\widehat{\mathbf h}}.
+```
+
+This expression has unit $\mathrm{m\,A^{-1}}$ when the excitation is in
+$\mathrm{A\,m^{-1}}$, although `response_block_real.rs` currently labels the serialized
+`susceptibility_tensor` as `dimensionless`. This is a **known artifact-unit contract gap**. The
+current value must not be interpreted as conventional dimensionless $\widehat M/\widehat H$ unless
+the writer explicitly applies $M_s$ and records the averaging/volume convention. The artifact
+schema should ultimately expose the numerator quantity, denominator quantity, spatial reduction,
+and SI unit directly.
+
+The same caution applies to `absorbed_power_density`. The physical cycle-averaged magnetic work
+under the $e^{\mathrm i\omega t}$ convention has the form
+
+```{math}
+:label: eq-numerical-frequency-response-absorbed-power
+p_{\mathrm{abs}}
+=-\frac{\mu_0\omega}{2}
+\operatorname{Im}
+\left(\widehat{\mathbf h}_{\mathrm{ext}}^{\ast}
+\cdot\widehat{\mathbf M}\right),
+```
+
+with an explicitly declared local or volume-averaged reduction. The dense validation writer
+currently evaluates `-0.5 * omega * Im(h^H m)` and labels it $\mathrm{W\,m^{-3}}$; therefore the
+native scaling, $M_s$, $\mu_0$, and volume normalization must be certified before using that field
+as a physical power density.
+
+(numerical-methods-frequency-response-true-residual)=
+## Algebraic residual and per-frequency status
+
+For every returned frequency sample,
+
+```{math}
+:label: eq-numerical-frequency-response-residual
+\mathbf r(\omega)
+=\widehat{\mathbf b}-\mathsf A(\omega)\widehat{\mathbf q},
+```
+
+and a scale-independent relative diagnostic can be written as
+
+```{math}
+:label: eq-numerical-frequency-response-relative-residual
+\varepsilon_{\mathrm{true}}(\omega)
+=\frac{\lVert\mathbf r(\omega)\rVert_2}
+{\max(\lVert\widehat{\mathbf b}\rVert_2,b_{\mathrm{scale}})}.
+```
+
+The denominator convention actually used by the backend must be recorded. A Krylov recurrence
+residual, preconditioned residual, reduced-system residual, or backend status code does not replace
+reapplication of the original full operator. The frequency-plan contract therefore requires true
+residual verification. For Schur or modal reduction, the final residual must be reconstructed in
+the unreduced coupled space.
+
+A sweep is a set of individually qualified solves. Each point records at least frequency, resolved
+lane, converged/failed/interrupted state, iteration count, final residual, true residual, and output
+availability. One aggregate “success” flag cannot hide a failed point in the middle of a sweep.
 
 (numerical-methods-frequency-response-assumptions-and-validity)=
 ## Assumptions and validity
 
-- The response is a first-order perturbation around the declared equilibrium. Large-angle or
-  nonlinear response requires time-domain dynamics and is not this solver.
-- Frequencies are positive finite values in Hz at the Python boundary and are converted to angular
-  frequency in the operator contract.
-- `include_demag`, damping, spin-wave boundary condition and magnetostatic boundary condition change
-  the operator and must be recorded with every response curve.
-- Solver `rtol` and iteration limits control algebraic convergence only; they do not prove mesh or
-  equilibrium convergence.
+- The equilibrium passes the declared static torque gate. Linearizing a transient state defines a
+  different problem and must be identified explicitly.
+- The excitation is nonzero when a normalized response or susceptibility is requested.
+- Frequencies are finite positive values in hertz at the Python boundary and are converted to
+  $\omega=2\pi f$ in the native operator.
+- `include_demag`, `damping_policy`, `bc`, and `magnetostatic_bc` change the operator and must be
+  included in its content identity.
+- The response remains sufficiently small for first-order linearization. Increasing drive amplitude
+  in this solver changes only the linear scaling; it cannot produce nonlinear resonance shifts,
+  mode coupling, or saturation.
+- Algebraic tolerance controls the linear solve only. Mesh error, equilibrium error, airbox error,
+  dynamic-demagnetization error, and frequency-sampling error are independent.
+- Warm starts and operator-template reuse may improve a sweep but must not carry an unconverged or
+  physically incompatible state into the next point without provenance.
 
 (numerical-methods-frequency-response-python-api)=
 ## Python API
@@ -82,24 +202,30 @@ study.engine("fem")
 study.device("cpu", precision="double")
 study.mode("strict")
 study.universe(mode="manual", size=(700 * nm, 250 * nm, 250 * nm))
-film = study.geometry(fm.Box(size=(500 * nm, 125 * nm, 3 * nm), name="film"), name="film")
+
+film = study.geometry(
+    fm.Box(size=(500 * nm, 125 * nm, 3 * nm), name="film"),
+    name="film",
+)
 film.Ms = 8.0e5
 film.Aex = 1.3e-11
 film.alpha = 0.02
-film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
-study.demag()
+film.m = fm.texture.uniform(1.0, 0.0, 0.0)
+
+study.exchange()
+study.demag(model="airbox", variant="robin")
 study.stages.add_frequency_response(
+    stage_id="linear_response",
     frequencies_hz=(1.0e9, 2.0e9, 3.0e9),
     excitation_field_au_per_m=(0.0, 0.0, 1.0),
     excitation_phase_rad=0.0,
-    observable="susceptibility_tensor",
+    observable="m_complex",
     include_demag=True,
     equilibrium_source="provided",
-    normalization="unit_l2",
-    damping_policy="ignore",
+    damping_policy="include",
     bc="free",
     magnetostatic_bc="open",
-    solver_method="schur_reduced",
+    solver_method="auto",
     solver_preconditioner="block_jacobi",
     solver_rtol=1.0e-8,
     solver_max_iterations=500,
@@ -108,84 +234,207 @@ study.stages.add_frequency_response(
 ```
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
-|---|---|---|---|---|---|---|---|
-| `FrequencyResponseStageSpec.frequencies_hz` | `Sequence[float]` | required | $\mathrm{Hz}$ | finite positive values | response sampling frequencies | FEM | `study.frequencies_hz` |
-| `FrequencyResponseStageSpec.excitation_field_au_per_m` | `tuple[float,float,float]` | `(0,0,1)` | $\mathrm{A\,m^{-1}}$ | finite three-vector | harmonic drive amplitude | FEM | `study.excitation.field_au_per_m` |
-| `FrequencyResponseStageSpec.excitation_phase_rad` | `float` | `0` | $\mathrm{rad}$ | finite | drive phase | FEM | `study.excitation.phase_rad` |
-| `FrequencyResponseStageSpec.observable` | `str` | `susceptibility_tensor` | $1$ | supported response output | requested observable | FEM | `study.outputs` |
-| `FrequencyResponseStageSpec.include_demag` | `bool` | `True` | $1$ | Boolean | include dynamic demag | FEM gated | `study.operator.include_demag` |
+|---|---|---:|---:|---|---|---|---|
+| `FrequencyResponseStageSpec.frequencies_hz` | `Sequence[float]` | required | $\mathrm{Hz}$ | nonempty finite positive values | response samples | FEM | `study.frequencies_hz` |
+| `FrequencyResponseStageSpec.excitation_field_au_per_m` | `tuple[float,float,float]` | `(0,0,1)` | $\mathrm{A\,m^{-1}}$ | finite three-vector; nonzero for normalized observables | complex-drive magnitude before phase rotation | FEM | `study.excitation.field_au_per_m` |
+| `FrequencyResponseStageSpec.excitation_phase_rad` | `float` | `0` | $\mathrm{rad}$ | finite | global drive phase | FEM | `study.excitation.phase_rad` |
+| `FrequencyResponseStageSpec.observable` | `str` | `susceptibility_tensor` | quantity-dependent | supported response output | requested materialized observable | FEM | `study.outputs` |
+| `FrequencyResponseStageSpec.include_demag` | `bool` | `True` | $1$ | Boolean | include dynamic demagnetization | FEM, capability-gated | `study.operator.include_demag` |
 | `FrequencyResponseStageSpec.equilibrium_source` | `str` | `provided` | $1$ | `provided`, `relax`, or `artifact` | equilibrium source | planner | `study.equilibrium` |
-| `FrequencyResponseStageSpec.equilibrium_artifact` | `str | None` | `None` | $1$ | required for artifact | equilibrium artifact | planner | `study.equilibrium_artifact` |
-| `FrequencyResponseStageSpec.normalization` | `str` | `unit_l2` | $1$ | supported mode normalization | response normalization | FEM | `study.normalization` |
-| `FrequencyResponseStageSpec.damping_policy` | `str` | `ignore` | $1$ | `ignore` or `include` | damping policy | FEM | `study.damping_policy` |
-| `FrequencyResponseStageSpec.k_vector` | `tuple[float,float,float] | None` | `None` | $\mathrm{m^{-1}}$ | finite three-vector | legacy Bloch vector | FEM Floquet | `study.k_vector` |
-| `FrequencyResponseStageSpec.k_sampling` | `object | None` | `None` | $1$ | valid sampling schema | k sampling | FEM Floquet | `study.k_sampling` |
-| `FrequencyResponseStageSpec.bc` | `str | dict[str,object]` | `free` | $1$ | supported spin-wave BC | dynamic magnetization boundary | FEM | `study.spin_wave_bc` |
-| `FrequencyResponseStageSpec.magnetostatic_bc` | `str` | `open` | $1$ | `open`, `periodic_airbox_k0`, or `floquet_airbox` | magnetostatic closure | FEM | `study.magnetostatic_bc` |
-| `FrequencyResponseSolverPolicy.rtol` | `float | None` | `None` | $1$ | finite positive | algebraic relative tolerance | FEM | `study.solver_policy.rtol` |
-| `FrequencyResponseSolverPolicy.max_iterations` | `int | None` | `None` | $1$ | positive integer | iteration ceiling | FEM | `study.solver_policy.max_iterations` |
+| `FrequencyResponseStageSpec.equilibrium_artifact` | `str | None` | `None` | $1$ | required for `artifact` | equilibrium artifact identity | planner | `study.equilibrium_artifact` |
+| `FrequencyResponseStageSpec.normalization` | `str` | `unit_l2` | $1$ | supported internal basis normalization | modal/reduced-basis policy, not physical response amplitude | FEM | `study.normalization` |
+| `FrequencyResponseStageSpec.damping_policy` | `str` | `ignore` | $1$ | `ignore` or `include` | damping in the linearized operator | FEM | `study.damping_policy` |
+| `FrequencyResponseStageSpec.k_vector` | `tuple[float,float,float] | None` | `None` | $\mathrm{m^{-1}}$ | finite three-vector | one Bloch sample | FEM Floquet gate | `study.k_vector` |
+| `FrequencyResponseStageSpec.k_sampling` | object | `None` | $1$ | valid sampling schema | multiple Bloch samples | FEM Floquet gate | `study.k_sampling` |
+| `FrequencyResponseStageSpec.bc` | `str | dict` | `free` | $1$ | supported spin-wave boundary schema | dynamic magnetization boundary | FEM | `study.spin_wave_bc` |
+| `FrequencyResponseStageSpec.magnetostatic_bc` | `str` | `open` | $1$ | `open`, `periodic_airbox_k0`, or `floquet_airbox` | dynamic magnetostatic closure | FEM | `study.magnetostatic_bc` |
+| solver `method` | enum/string | `auto` | $1$ | current-runtime availability described below | requested algebraic route | FEM | `study.solver_policy.method` |
+| solver `preconditioner` | enum/string | `auto` | $1$ | method/lane-compatible value | requested preconditioner | FEM | `study.solver_policy.preconditioner` |
+| solver `rtol` | `float | None` | `None` | $1$ | finite positive | relative algebraic tolerance | FEM | `study.solver_policy.rtol` |
+| solver `max_iterations` | `int | None` | `None` | $1$ | positive integer | iteration budget | FEM | `study.solver_policy.max_iterations` |
+| solver `restart_iterations` | `int | None` | `None` | $1$ | positive integer | restarted-GMRES subspace length | FEM iterative lanes | `study.solver_policy.restart_iterations` |
+
+`observable="m_complex"` is used in the example because its stored quantity is unambiguous: complex
+reduced magnetization. When requesting `susceptibility_tensor`, consumers must inspect the artifact
+schema and SI-unit metadata rather than assume conventional dimensionless susceptibility.
 
 (numerical-methods-frequency-response-problem-ir)=
 ## ProblemIR and provenance
 
-The IR stores sampling, excitation, linearized operator, equilibrium, boundary conditions and solver
-policy separately. Resolved provenance records FEM mesh identity, device/precision, operator digest,
-equilibrium source digest, solver residuals and every response sample. Python request and resolved
-execution must not be collapsed into one status field.
+The IR stores sampling, excitation, linearized operator, equilibrium, boundary conditions, output
+intent, and solver policy separately. Required resolved provenance includes:
+
+- source equilibrium artifact and accepted torque metric;
+- FEM mesh, periodic-pair, material, and operator digests;
+- phase convention and tangent-basis identity;
+- requested and resolved backend, device, precision, solver method, preconditioner, and dependency;
+- operator, vector, Krylov, and preconditioner residency;
+- fallback status and reason;
+- dynamic-demagnetization and magnetostatic-boundary realization;
+- one status, iteration history, residual, and true-residual certification per frequency;
+- drive field, phase, spatial normalization, and output units;
+- warm-start/factor/operator-template reuse;
+- interruption and partial-artifact status.
+
+The hardened artifact contract distinguishes `implementation_state` from `validation_state` and
+requires an exact bounded `validated_scope`. Executable code is not automatically
+production-qualified.
+
+(numerical-methods-frequency-response-runtime-boundary)=
+## Solver-tree contract versus current runtime
+
+The planner headers represent the intended lanes
+`dense_reference`, `cpu_sparse_direct`, `full_coupled_field_split`, `schur_reduced`,
+`modal_reduced`, `gpu_operator_host_krylov`, and `gpu_device_krylov`. The runner's
+`frequency_response_solver_method_rejection_reason` currently exposes a narrower explicit-method
+surface:
+
+| Requested explicit method | Current runtime result |
+|---|---|
+| `dense_reference` | allowed only for nonperiodic CPU validation requests |
+| `schur_reduced` | allowed only for `periodic_airbox_k0` or `floquet_airbox` requests |
+| `gpu_operator_host_krylov` | allowed only when device `gpu` was requested |
+| `cpu_sparse_direct` | rejected as solver-tree contract not yet implemented in the current runtime |
+| `full_coupled_field_split` | rejected as solver-tree contract not yet implemented in the current runtime |
+| `modal_reduced` | rejected as solver-tree contract not yet implemented in the current runtime |
+| `gpu_device_krylov` | rejected as solver-tree contract not yet implemented in the current runtime |
+| `auto` | resolved by the production/validation runtime path and recorded separately |
+
+For the source-visible resolver, the broad resolved names are
+`gpu_operator_host_krylov` for a requested GPU route, `schur_reduced` for the periodic-airbox Schur
+route, and `production_cpu_host_gmres` for the ordinary CPU production route. This table is a
+revision-specific implementation boundary, not a permanent API promise.
 
 (numerical-methods-frequency-response-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
-Script export preserves all frequencies and solver parameters. Validation errors include empty or
-non-positive frequency lists, invalid boundary combinations, missing periodic mesh metadata, invalid
-solver policy and unsupported dynamic demagnetization. Unsupported combinations are rejected before
-execution; no FDM fallback is allowed. Requested intent and resolved execution remain separate.
+Script export preserves the full frequency sequence, excitation, phase, operator, boundary, output,
+and solver policy. Validation failures include:
+
+- empty, non-finite, or nonpositive frequency lists;
+- zero drive for a normalized response;
+- missing or rejected equilibrium;
+- unsupported explicit solver method;
+- invalid boundary/Floquet metadata;
+- unavailable dynamic demagnetization;
+- incompatible device, precision, dependency, or preconditioner;
+- singular direct operator or failed Krylov convergence;
+- non-finite response, residual, or output;
+- failed true-residual/full-block certification.
+
+An unsupported request fails before execution. It cannot silently become FDM, free-boundary,
+no-demag, CPU, dense validation, or a different solver method. Interrupted sweeps publish only an
+explicitly partial artifact with completed-point count and requested-point count.
 
 (numerical-methods-frequency-response-discrete-realization)=
 ## Discrete realization by lane
 
 | Solver | Device | Status | Realization |
 |---|---|---|---|
-| FEM | CPU | partial/source-backed | native driven-response contract |
-| FEM | GPU | partial/qualification-dependent | separate production slice and dependency gates |
-| FDM | CPU | unsupported | planner rejects the frequency-domain study |
-| FDM | GPU | unsupported | no public FDM frequency-domain lane |
+| FEM | CPU | source-backed, bounded | dense validation and production host-GMRES/native routes; periodic Schur route is separately gated |
+| FEM | GPU | partial, qualification-dependent | GPU operator with host Krylov is represented; actual device residency and transfer audit are required |
+| FDM | CPU | unsupported | planner/runtime reject native frequency-response execution |
+| FDM | GPU | unsupported | no public FDM CUDA frequency-response lane |
+
+A CUDA-enabled build, GPU request, or GPU lane label does not prove device-resident Krylov. The
+operator, vectors, Krylov basis, and preconditioner have separate residency fields.
 
 (numerical-methods-frequency-response-implementation-mapping)=
 ## Implementation mapping
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane |
 |---|---|---|---|---|
-| Python stage schema | `packages/fullmag-py/src/fullmag/world.py` | `class FrequencyResponseStageSpec` | public request fields | Python |
-| Python stage builder | `packages/fullmag-py/src/fullmag/world.py` | `frequency_response_stage` | solver policy lowering | Python/IR |
-| Request validation | `backends/fem/src/frequency_domain/operator_contract.cpp` | `validate_driven_frequency_response_request` | native legality checks | FEM |
-| Response solve | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | `solve_driven_response_contract` | response status/diagnostics | FEM |
+| Python stage schema | `packages/fullmag-py/src/fullmag/world.py` | `class FrequencyResponseStageSpec` | public response request | Python |
+| Python stage builder | `packages/fullmag-py/src/fullmag/world.py` | `frequency_response_stage` | stage and solver-policy lowering | Python/IR |
+| Native request validation | `backends/fem/src/frequency_domain/operator_contract.cpp` | `validate_driven_frequency_response_request` | operator and boundary legality | FEM |
+| Native response contract | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | `solve_driven_response_contract` | driven solve status and diagnostics | FEM |
+| Solver-tree types | `backends/fem/include/frequency_domain/planner/frequency_solve_plan.hpp` | `FrequencySolvePlan` | lanes, representations, solvers, preconditioners, certificates | FEM planner |
+| Planner selection | `backends/fem/include/frequency_domain/planner/frequency_solve_planner.hpp` | `plan_frequency_response` | architecture-level lane selection | FEM planner |
+| Runtime availability gate | `crates/fullmag-runner/src/frequency_response.rs` | `frequency_response_solver_method_rejection_reason` | rejects target lanes not yet executable | runner |
+| Runtime resolved-name mapping | `crates/fullmag-runner/src/frequency_response.rs` | `resolved_frequency_response_solver_method_name` | broad runtime lane identity | runner |
+| Dense block-real solve | `crates/fullmag-runner/src/eigen/response_block_real.rs` | `solve_block_real_harmonic_response` | complex system represented as a real $2n\times2n$ solve | validation/reference |
+| Dense sweep and reuse | `crates/fullmag-runner/src/eigen/response_block_real.rs` | `solve_field_driven_block_real_sweep_with_interrupt` | per-frequency solve, template reuse, warm-start provenance | validation/reference |
+| v1 response artifact | `crates/fullmag-runner/src/eigen/response_block_real.rs` | `build_field_driven_response_sweep_artifact` | complex response, residuals, derived outputs, SI map | validation/reference |
 
 (numerical-methods-frequency-response-validation)=
-## Validation
+## Verification and scientific validation
 
-Check excitation normalization, residuals at every frequency, phase convention, equilibrium torque,
-mesh convergence, frequency refinement, observable units and CPU/GPU parity under the same operator
-digest. A smooth response curve without residual and provenance data is not sufficient.
+### Algebraic tests
+
+1. Compare the block-real solve with a direct complex solve on the same tiny matrix.
+2. Recompute the original operator residual independently of the solver recurrence.
+3. Verify that real/imaginary block layout reproduces
+   $(A_R+\mathrm iA_I)(q_R+\mathrm iq_I)=b_R+\mathrm ib_I$.
+4. Exercise singular, zero-drive, non-finite, interrupted, and unsupported-method failures.
+5. For Schur reduction, reconstruct magnetic, potential, and gauge residual blocks.
+
+### Physical tests
+
+1. **Macrospin:** compare complex transverse response, resonance frequency, phase, and
+   damping-dependent linewidth with an independently evaluated linear macrospin model.
+2. **Time/frequency parity:** drive the same equilibrium at sufficiently small amplitude in the time
+   domain, remove transients, and compare the complex Fourier amplitude.
+3. **Mesh and equilibrium convergence:** refine the FEM mesh and tighten equilibrium torque before
+   comparing resonance positions or amplitudes.
+4. **Airbox/demag convergence:** vary airbox extent, closure, and Poisson tolerance when dynamic
+   demagnetization is enabled.
+5. **Frequency refinement:** refine sampling around every peak; a coarse smooth curve can miss the
+   true maximum and linewidth.
+6. **Unit audit:** verify `m_complex`, $M_s$ scaling, drive units, susceptibility convention, volume
+   reduction, and absorbed-power formula against an independent SI calculation.
+7. **CPU/GPU parity:** compare the same operator digest, true residual, complex response, and units,
+   while proving the actual residency/transfer path.
+
+### Reduced-order tests
+
+A modal or Schur result is accepted only after comparing selected points with the full-order solve
+and verifying the full-operator residual. A reduced residual alone is insufficient, particularly
+outside the basis-certification frequency interval.
 
 (numerical-methods-frequency-response-limitations)=
-## Limitations
+## Limitations and current contract gaps
 
-This is a linear-response solver. Dynamic Floquet demagnetization and arbitrary FDM response are
-separate or unsupported paths and must not be inferred from this page.
+- The solver is linear response only; nonlinear frequency shifts, harmonic generation, and
+  large-angle saturation are outside this contract.
+- Native FDM response is unsupported.
+- Several solver-tree lanes exist in architecture headers but are rejected by the current explicit
+  runtime method gate.
+- Nonzero-$k$ dynamic demagnetization is not production-qualified; see {doc}`floquet-response`.
+- GPU-operator/host-Krylov and device-resident Krylov are distinct claims; the latter is not implied.
+- The v1 dense artifact labels a reduced-magnetization/field projection as dimensionless
+  susceptibility; its SI contract must be corrected before physical interpretation.
+- The v1 dense artifact's absorbed-power label requires independent verification of $\mu_0M_s$,
+  volume, and operator scaling.
+- Solver `rtol` does not establish equilibrium, mesh, airbox, frequency, or model convergence.
+- The public observable request does not guarantee that every writer materializes every output.
 
 (numerical-methods-frequency-response-scientific-bibliography)=
 ## Scientific bibliography
 
-- A. A. Thiele, “Steady-state motion of magnetic domains,” *Physical Review Letters* 30 (1973).
-- Canonical dynamic owner: {doc}`../../physics/foundations/llg-equation`.
+1. C. Kittel, “On the theory of ferromagnetic resonance absorption,” *Physical Review* **73**, 155
+   (1948), [doi:10.1103/PhysRev.73.155](https://doi.org/10.1103/PhysRev.73.155).
+2. B. A. Kalinikos and A. N. Slavin, “Theory of dipole-exchange spin wave spectrum for
+   ferromagnetic films with mixed exchange boundary conditions,” *Journal of Physics C* **19**,
+   7013--7033 (1986),
+   [doi:10.1088/0022-3719/19/35/014](https://doi.org/10.1088/0022-3719/19/35/014).
+3. Y. Saad and M. H. Schultz, “GMRES: A generalized minimal residual algorithm for solving
+   nonsymmetric linear systems,” *SIAM Journal on Scientific and Statistical Computing* **7**,
+   856--869 (1986), [doi:10.1137/0907058](https://doi.org/10.1137/0907058).
+4. C. Abert, “Micromagnetics and spintronics: models and numerical methods,” *European Physical
+   Journal B* **92**, 120 (2019),
+   [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
 
 (numerical-methods-frequency-response-source-code-index)=
 ## Source-code index
 
 | Claim | Repository path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Python stage schema | `packages/fullmag-py/src/fullmag/world.py` | `class FrequencyResponseStageSpec` | response parameters | Python source |
-| Stage lowering | `packages/fullmag-py/src/fullmag/world.py` | `frequency_response_stage` | policy creation | Python source |
-| Native validation | `backends/fem/src/frequency_domain/operator_contract.cpp` | `validate_driven_frequency_response_request` | legality | native source |
-| Native response | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | `solve_driven_response_contract` | response contract | native source |
+| Public response schema | `packages/fullmag-py/src/fullmag/world.py` | `class FrequencyResponseStageSpec` | request fields and validation | Python source/tests |
+| Stage lowering | `packages/fullmag-py/src/fullmag/world.py` | `frequency_response_stage` | canonical solver policy | Python/IR tests |
+| Native legality | `backends/fem/src/frequency_domain/operator_contract.cpp` | `validate_driven_frequency_response_request` | native request validation | native source |
+| Native response | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | `solve_driven_response_contract` | solve contract and diagnostics | native source |
+| Solver plan | `backends/fem/include/frequency_domain/planner/frequency_solve_plan.hpp` | `FrequencySolvePlan` | architecture lane vocabulary | header contract |
+| Solver planner | `backends/fem/include/frequency_domain/planner/frequency_solve_planner.hpp` | `plan_frequency_response` | architecture selection | header tests/contracts |
+| Runtime lane gate | `crates/fullmag-runner/src/frequency_response.rs` | `frequency_response_solver_method_rejection_reason` | current executable subset | runner tests |
+| Block-real reference | `crates/fullmag-runner/src/eigen/response_block_real.rs` | `solve_block_real_harmonic_response` | dense validation system | unit tests |
+| v1 artifact units/outputs | `crates/fullmag-runner/src/eigen/response_block_real.rs` | `response_sweep_si_units`, `field_driven_response_point` | serialized units and derived observables | source audit |
