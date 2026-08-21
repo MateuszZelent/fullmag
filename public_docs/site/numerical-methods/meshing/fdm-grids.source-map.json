@@ -1,26 +1,63 @@
 {
-  "document": {"path": "public_docs/site/numerical-methods/meshing/fdm-grids.md"},
+  "document": {
+    "path": "public_docs/site/numerical-methods/meshing/fdm-grids.md",
+    "reviewed_revision": "88c7160080bc1e8519950df283d2dd02087cc3da"
+  },
   "backend_matrix": [
     {"solver": "FDM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FDM", "device": "GPU", "status": "source-backed"},
+    {"solver": "FDM", "device": "GPU", "status": "source-backed-capability-gated"},
     {"solver": "FEM", "device": "CPU", "status": "not-applicable", "reason": "FDM Cartesian grids are not FEM meshes."},
     {"solver": "FEM", "device": "GPU", "status": "not-applicable", "reason": "FDM Cartesian grids are not FEM meshes."}
   ],
   "equations": [
     {"id": "eq-numerical-fdm-grid-centre", "symbols": ["x", "x0", "h"], "sources": ["grid"]},
-    {"id": "eq-numerical-fdm-grid-volume", "symbols": ["V", "h", "Nx", "N"], "sources": ["grid"]}
+    {"id": "eq-numerical-fdm-grid-volume", "symbols": ["Vcell", "h", "Nxyz", "N"], "sources": ["grid"]},
+    {"id": "eq-numerical-fdm-grid-binary-volume", "symbols": ["Vmh", "Vcell", "chi"], "sources": ["fdm"]},
+    {"id": "eq-numerical-fdm-grid-fractional-volume", "symbols": ["Vmh", "Vcell", "phi"], "sources": ["fdm"]},
+    {"id": "eq-numerical-fdm-grid-per-magnet", "symbols": ["Gr", "x0", "Nxyz", "h", "chi"], "sources": ["grid", "fdm"]},
+    {"id": "eq-numerical-fdm-grid-common-transfer", "symbols": ["Mc", "Mr", "Hr", "P", "R"], "sources": ["demag_policy"]},
+    {"id": "eq-numerical-fdm-grid-central-first", "symbols": ["u", "h"], "sources": ["interaction_owned"]},
+    {"id": "eq-numerical-fdm-grid-central-second", "symbols": ["u", "h"], "sources": ["interaction_owned"]}
   ],
   "symbols": [
     {"id": "x", "latex": "$\\mathbf x_{ijk}$", "meaning": "cell centre", "si_unit": "$\\mathrm{m}$"},
-    {"id": "x0", "latex": "$\\mathbf x_0$", "meaning": "grid origin", "si_unit": "$\\mathrm{m}$"},
-    {"id": "h", "latex": "$h_x,h_y,h_z$", "meaning": "cell spacings", "si_unit": "$\\mathrm{m}$"},
-    {"id": "V", "latex": "$V_{\\mathrm{cell}}$", "meaning": "cell volume", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "Nx", "latex": "$N_x,N_y,N_z$", "meaning": "cell counts", "si_unit": "$1$"},
-    {"id": "N", "latex": "$N$", "meaning": "total cell count", "si_unit": "$1$"}
+    {"id": "x0", "latex": "$\\mathbf x_0$", "meaning": "cell-boundary origin", "si_unit": "$\\mathrm{m}$"},
+    {"id": "h", "latex": "$h_x,h_y,h_z$", "meaning": "native cell spacings", "si_unit": "$\\mathrm{m}$"},
+    {"id": "Vcell", "latex": "$V_{\\mathrm{cell}}$", "meaning": "cell volume", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "Vmh", "latex": "$V_{m,h}$", "meaning": "discrete magnetic volume", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "Nxyz", "latex": "$N_x,N_y,N_z$", "meaning": "cell counts", "si_unit": "$1$"},
+    {"id": "N", "latex": "$N$", "meaning": "total rectangular allocation", "si_unit": "$1$"},
+    {"id": "chi", "latex": "$\\chi_{ijk}$", "meaning": "binary active/material mask", "si_unit": "$1$"},
+    {"id": "phi", "latex": "$\\phi_{ijk}$", "meaning": "magnetic volume fraction", "si_unit": "$1$"},
+    {"id": "Gr", "latex": "$\\mathcal G_r$", "meaning": "native grid owned by magnet r", "si_unit": "$1$"},
+    {"id": "Mc", "latex": "$\\mathbf M_c$", "meaning": "magnetization represented on common convolution grid", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Mr", "latex": "$\\mathbf M_r$", "meaning": "magnetization on native grid r", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Hr", "latex": "$\\mathbf H_r$", "meaning": "field restricted to native grid r", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "P", "latex": "$\\mathcal P_{r\\to c}$", "meaning": "native-to-common transfer", "si_unit": "implementation-dependent"},
+    {"id": "R", "latex": "$\\mathcal R_{c\\to r}$", "meaning": "common-to-native transfer", "si_unit": "implementation-dependent"},
+    {"id": "u", "latex": "$u$", "meaning": "generic grid scalar component", "si_unit": "quantity-dependent"}
   ],
-  "sources": [{"id": "grid", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDMGrid", "responsibility": "FDM grid spacing and serialization."}],
-  "public_api": {"parameters": [
-    {"python": "FDM.default_cell", "type": "tuple[float,float,float]", "default": "required", "si_unit": "$\\mathrm{m}$", "validation": "three finite positive values", "meaning": "Cartesian spacing", "backend_support": "FDM CPU/GPU", "problem_ir": "`discretization.fdm.default_cell`"},
-    {"python": "FDMGrid.cell", "type": "tuple[float,float,float]", "default": "required", "si_unit": "$\\mathrm{m}$", "validation": "three finite positive values", "meaning": "per-grid spacing", "backend_support": "FDM CPU/GPU", "problem_ir": "`discretization.fdm.per_magnet`"}
-  ]}
+  "sources": [
+    {"id": "grid", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDMGrid", "responsibility": "Per-magnet native cell spacing and serialization."},
+    {"id": "fdm", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDM", "responsibility": "Default/per-magnet grids and boundary-correction request."},
+    {"id": "demag_policy", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDMDemag", "responsibility": "Single-grid and multilayer common-grid policy."},
+    {"id": "newell", "path": "crates/fullmag-fdm-demag/src/newell.rs", "symbol": "compute_newell_kernels", "responsibility": "Cell-geometry-dependent Newell demagnetization tensor."},
+    {"id": "fft", "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs", "symbol": "compute_newell_kernel_spectra; compute_periodic_newell_kernel_spectra", "responsibility": "Open/periodic tensor spectra and grid-dependent cache objects."},
+    {"id": "interaction_owned", "path": "public_docs/site/physics/interactions/index.md", "symbol": "interaction-specific terminal pages", "responsibility": "Exact local stencils and boundary equations are interaction-owned."}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "FDMGrid.cell", "type": "tuple[float,float,float]", "default": "required", "si_unit": "$\\mathrm{m}$", "validation": "exactly three finite positive values", "meaning": "per-magnet native spacing", "backend_support": "FDM CPU/GPU", "problem_ir": "`fdm.per_magnet.<name>.cell`"},
+      {"python": "FDM.default_cell", "type": "tuple[float,float,float] | None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "exactly three finite positive values", "meaning": "default native spacing", "backend_support": "FDM CPU/GPU", "problem_ir": "`fdm.default_cell` and compatibility `fdm.cell`"},
+      {"python": "FDM.per_magnet", "type": "dict[str,FDMGrid] | None", "default": "None", "si_unit": "$1$", "validation": "nonempty names and FDMGrid values", "meaning": "object-owned native grids", "backend_support": "FDM CPU/GPU capability-gated", "problem_ir": "`fdm.per_magnet`"},
+      {"python": "FDM.boundary_correction", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "none, volume, or full", "meaning": "requested boundary correction", "backend_support": "interaction/device gated", "problem_ir": "`fdm.boundary_correction`"},
+      {"python": "FDM.boundary_phi_floor", "type": "float | None", "default": "None", "si_unit": "$1$", "validation": "strictly in (0,1)", "meaning": "minimum boundary volume fraction", "backend_support": "boundary-correction gated", "problem_ir": "`fdm.boundary_phi_floor`"},
+      {"python": "FDM.boundary_delta_min", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "nonnegative", "meaning": "minimum geometric distance for full correction", "backend_support": "boundary-correction gated", "problem_ir": "`fdm.boundary_delta_min`"},
+      {"python": "FDMDemag.strategy", "type": "str", "default": "auto", "si_unit": "$1$", "validation": "auto, single_grid, or multilayer_convolution", "meaning": "nonlocal grid strategy", "backend_support": "FDM", "problem_ir": "`fdm.demag.strategy`"},
+      {"python": "FDMDemag.mode", "type": "str", "default": "auto", "si_unit": "$1$", "validation": "auto, two_d_stack, or three_d", "meaning": "multilayer common-grid dimensionality", "backend_support": "FDM", "problem_ir": "`fdm.demag.mode`"},
+      {"python": "FDMDemag.common_cells", "type": "tuple[int,int,int] | None", "default": "None", "si_unit": "$1$", "validation": "positive integer triple; incompatible with two_d_stack", "meaning": "explicit 3D common-grid dimensions", "backend_support": "FDM multilayer", "problem_ir": "`fdm.demag.common_cells`"},
+      {"python": "FDMDemag.common_cells_xy", "type": "tuple[int,int] | None", "default": "None", "si_unit": "$1$", "validation": "positive integer pair; auto/two_d_stack only", "meaning": "explicit common in-plane dimensions", "backend_support": "FDM multilayer", "problem_ir": "`fdm.demag.common_cells_xy`"},
+      {"python": "FDMDemag.common_cell_size", "type": "tuple[float,float,float] | None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "positive triple; mutually exclusive with explicit counts", "meaning": "requested common-grid spacing", "backend_support": "FDM multilayer", "problem_ir": "`fdm.demag.common_cell_size`"}
+    ]
+  }
 }
