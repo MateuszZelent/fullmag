@@ -12,6 +12,7 @@
 #include "gpu/cuda/integrators/rk/rk23_stage_sequence.hpp"
 
 #include "context.hpp"
+#include "gpu/cuda/constraints/frozen_spins.cuh"
 #include "gpu/cuda/fields/vector_field_kernels.hpp"
 #include "gpu/cuda/integrators/rk/rk_bs23_accept_kernel.hpp"
 #include "gpu/cuda/integrators/rk/rk_rhs_runtime.hpp"
@@ -71,6 +72,16 @@ bool gpu_rk_run_rk23_stage_sequence(
     }
     if (!cuda_launch_ok("launch GPU RK23 midpoint/normalize", reason)) {
         return false;
+    }
+    if (ctx.frozen_spins.enabled()) {
+        gpu_project_frozen_reference(
+            gpu.rk.m_stage,
+            gpu.mesh_regions.frozen_mask,
+            gpu.mesh_regions.frozen_reference_x,
+            gpu.mesh_regions.frozen_reference_y,
+            gpu.mesh_regions.frozen_reference_z,
+            n,
+            stream);
     }
     if (!gpu_rk_compute_rhs_for_magnetization(
             ctx,

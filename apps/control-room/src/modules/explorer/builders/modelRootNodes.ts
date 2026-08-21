@@ -13,7 +13,10 @@ import {
   createExplorerNode,
   type ModelTreeResources,
 } from "./explorerNodeContract";
-import { buildObjectExplorerNode } from "./objectExplorerNodes";
+import {
+  buildObjectExplorerNode,
+  frozenSpinsSelectorOwner,
+} from "./objectExplorerNodes";
 
 function formatLength(value: number): string {
   const abs = Math.abs(value);
@@ -88,18 +91,53 @@ export function buildPlanarMonitorNodes(
   };
 }
 
+export function buildUnscopedFrozenSpinsNodes(
+  resources: ModelTreeResources,
+): ExplorerNode | null {
+  const unscoped = (resources.frozenSpins?.definitions ?? []).filter((definition) => {
+    return frozenSpinsSelectorOwner(definition.selector) === null;
+  });
+  if (unscoped.length === 0) return null;
+  const children: ExplorerNode[] = unscoped.map((definition) => ({
+    id: `model:definitions:frozen-spins:${encodeURIComponent(definition.id)}`,
+    kind: "object.frozen-spins",
+    label: definition.name || "Frozen Spins",
+    parentId: "model:definitions:frozen-spins",
+    badge: definition.enabled === false ? "disabled" : "unscoped",
+    constraintId: definition.id,
+    icon: "shield",
+    status: definition.enabled === false ? "degraded" : "ready",
+    contextCommands: ["workspace.focus-selection"],
+  }));
+  return {
+    badge: `${children.length}`,
+    children,
+    icon: "shield",
+    id: "model:definitions:frozen-spins",
+    kind: "object.frozen-spins",
+    label: "Frozen Spins (Unscoped)",
+    parentId: "model:definitions",
+    selectable: false,
+    status: "ready",
+  };
+}
 
 export function buildDefinitionsNode(
   resources: ModelTreeResources,
 ): ExplorerNode {
+  const children: ExplorerNode[] = [
+    buildPlanarMonitorNodes(
+      resources.planarMonitors,
+      resources.planarMonitorDraft,
+    ),
+  ];
+  const unscopedFrozen = buildUnscopedFrozenSpinsNodes(resources);
+  if (unscopedFrozen) {
+    children.push(unscopedFrozen);
+  }
   return createExplorerNode({
     badge: "authoring",
-    children: [
-      buildPlanarMonitorNodes(
-        resources.planarMonitors,
-        resources.planarMonitorDraft,
-      ),
-    ],
+    children,
     icon: "braces",
     id: "model:definitions",
     kind: "definitions.root",

@@ -301,12 +301,16 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     if (!plan) return nullptr;
 
     auto *ctx = new (std::nothrow) Context();
-    if (!ctx) return nullptr;
-    const bool has_frozen_payload = plan->frozen_mask != nullptr
+    const bool has_frozen_spins = (plan->frozen_mask != nullptr
         || plan->frozen_mask_len != 0
         || plan->frozen_reference_xyz != nullptr
-        || plan->frozen_reference_len != 0;
-    if (has_frozen_payload) {
+        || plan->frozen_reference_len != 0);
+    if (has_frozen_spins) {
+        if (plan->precision == FULLMAG_FDM_PRECISION_SINGLE) {
+            ctx->last_error =
+                "frozen_spins_cuda_fp32_unqualified: single-precision CUDA frozen spins constraints are unqualified; use double precision";
+            return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+        }
         const uint64_t cell_count = grid_cell_count(plan->grid);
         if (plan->frozen_mask == nullptr || plan->frozen_reference_xyz == nullptr
             || plan->frozen_mask_len != cell_count

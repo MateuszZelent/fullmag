@@ -99,11 +99,17 @@ int run_backend_step_attempt(
         } else if (error.empty() || error == original_error) {
             error = original_error;
         }
+        if (ctx.frozen_spins.enabled()) {
+            ctx.frozen_spins.project_onto_reference(ctx.state.m_xyz);
+        }
         refresh_transaction_stats();
     };
     bool ok = false;
     ctx.interrupt.step_interrupted = false;
     ctx.transfer_audit.audit.reset_step_violation();
+    if (ctx.frozen_spins.enabled()) {
+        ctx.frozen_spins.project_onto_reference(ctx.state.m_xyz);
+    }
     const auto &tab = tableau_for_integrator(ctx.base_plan.integrator);
     if (!gpu_rk_prepare_phase_timing_events(ctx, tab, error)) {
         rollback();

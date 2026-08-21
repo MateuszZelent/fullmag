@@ -1,6 +1,6 @@
 # `frozen_spins.v1`: ograniczenie magnetyzacji
 
-- Status: zatwierdzony kontrakt implementacyjny, runtime niezakwalifikowany
+- Status: zatwierdzony kontrakt implementacyjny; FDM CPU/CUDA runtime oraz FEM CPU P1 RK zweryfikowane w zarządzanych recepturach
 - Wersja schematu: `frozen_spins.v1`
 - Właściciel: `MagnetizationConstraintIR`
 - Powiązane: ADR 0026, `docs/specs/selection-expr-v1.md`

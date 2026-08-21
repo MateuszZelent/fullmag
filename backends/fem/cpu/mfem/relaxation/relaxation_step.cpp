@@ -21,6 +21,10 @@ int run_native_relaxation_step(
     fullmag_fem_step_stats &out_stats,
     std::string &error)
 {
+    if (ctx.frozen_spins.enabled() && algorithm == FULLMAG_FEM_RELAX_TANGENT_PLANE_IMPLICIT) {
+        error = "native FEM Tangent-Plane Implicit relaxation does not support frozen spins constraints (frozen_spins_fem_tpi_unqualified)";
+        return FULLMAG_FEM_ERR_INVALID;
+    }
     ctx.relaxation.accepted_energy_proof = {};
     switch (algorithm) {
         case FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB:

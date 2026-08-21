@@ -436,6 +436,8 @@ pub(crate) struct CheckpointCreateRequest {
     pub profile: SaveProfile,
     #[serde(default)]
     pub reason: Option<String>,
+    #[serde(default)]
+    pub expected_state_version: Option<u64>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -447,6 +449,8 @@ pub(crate) struct CheckpointCreateResponse {
 pub(crate) struct CheckpointRestoreRequest {
     #[serde(default)]
     pub reason: Option<String>,
+    #[serde(default)]
+    pub expected_state_version: Option<u64>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -927,6 +931,23 @@ pub(crate) async fn create_checkpoint(
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active workspace"))?;
+    if let Some(expected_state_version) = req.expected_state_version {
+        if snapshot.state_version != expected_state_version {
+            return Err(ApiError::conflict(format!(
+                "checkpoint_capture_stale_state: expected state version {expected_state_version}, found {}",
+                snapshot.state_version
+            )));
+        }
+    }
+    let capture_state_version = snapshot.state_version;
+    let capture_run_id = snapshot.session.run_id.clone();
+    let capture_stage_index = snapshot
+        .stage_execution
+        .as_ref()
+        .and_then(|stage| stage.active_stage_index);
+    let capture_field_catalog_revision = snapshot.field_catalog_revision;
+    let capture_field_samples_revision = snapshot.field_samples_revision;
+
     let provider = LiveCheckpointProvider::from_snapshot(snapshot)?;
     let mut context =
         checkpoint_context_from_active_stage(snapshot, provider.vector_count() as u64);
@@ -943,16 +964,31 @@ pub(crate) async fn create_checkpoint(
     drop(guard);
 
     let mut guard = state.current_live_state.write().await;
-    let changed = guard.as_mut().is_some_and(|snapshot| {
-        link_active_stage_checkpoint_preserved(snapshot, &checkpoint_id, Some(&artifact_ref))
-    });
+    let current_snapshot = guard
+        .as_mut()
+        .ok_or_else(|| ApiError::not_found("no active workspace"))?;
+    if current_snapshot.session.run_id != capture_run_id
+        || current_snapshot.state_version != capture_state_version
+        || current_snapshot
+            .stage_execution
+            .as_ref()
+            .and_then(|stage| stage.active_stage_index)
+            != capture_stage_index
+        || current_snapshot.field_catalog_revision != capture_field_catalog_revision
+        || current_snapshot.field_samples_revision != capture_field_samples_revision
+    {
+        return Err(ApiError::conflict(
+            "checkpoint_capture_stale_state: session state mutated during capture",
+        ));
+    }
+    let changed = link_active_stage_checkpoint_preserved(
+        current_snapshot,
+        &checkpoint_id,
+        Some(&artifact_ref),
+    );
     let changed_snapshot = if changed {
-        if let Some(snapshot) = guard.as_mut() {
-            snapshot.state_version = snapshot.state_version.saturating_add(1);
-            Some(snapshot.clone())
-        } else {
-            None
-        }
+        current_snapshot.state_version = current_snapshot.state_version.saturating_add(1);
+        Some(current_snapshot.clone())
     } else {
         None
     };
@@ -985,6 +1021,14 @@ pub(crate) async fn restore_checkpoint(
     let snapshot = guard
         .as_mut()
         .ok_or_else(|| ApiError::not_found("no active workspace"))?;
+    if let Some(expected_state_version) = req.expected_state_version {
+        if snapshot.state_version != expected_state_version {
+            return Err(ApiError::conflict(format!(
+                "checkpoint_restore_stale_state: expected state version {expected_state_version}, found {}",
+                snapshot.state_version
+            )));
+        }
+    }
     let run_id = snapshot.session.run_id.clone();
     let checkpoint = read_checkpoint_for_run(&store, &run_id, &checkpoint_id)?;
     let common_state = read_checkpoint_common_state(&store, &checkpoint)?;
@@ -1533,9 +1577,13 @@ impl CheckpointSnapshotProvider for LiveCheckpointProvider {
                 "fullmag.fdm.coupled_m3_checkpoint.v1",
             )
         };
+        let backend_family = match self.compatibility.runtime_family.as_deref() {
+            Some(family) if !family.is_empty() => family.to_string(),
+            _ => "fdm_cpu_reference".to_string(),
+        };
         Ok(Some(fullmag_session::BackendStatePayload {
             format: "fullmag.backend_state.v1".into(),
-            backend_family: "fdm_cpu_reference".into(),
+            backend_family: backend_family.into(),
             integrator_kind: Some(integrator_kind.into()),
             integrator_state: Some(checkpoint),
             rng_state,
@@ -2044,12 +2092,16 @@ fn read_checkpoint_coupled_state(
         payload.integrator_kind.as_deref(),
         Some("coupled_imex_ark2") | Some("frozen_spins")
     );
+    let supported_backend = matches!(
+        payload.backend_family.as_str(),
+        "fdm_cpu_reference" | "fdm_cuda" | "fem_cpu" | "fem_gpu"
+    );
     if payload.format != "fullmag.backend_state.v1"
-        || payload.backend_family != "fdm_cpu_reference"
+        || !supported_backend
         || !supported_integrator
     {
         return Err(ApiError::bad_request(
-            "unsupported FDM backend checkpoint envelope",
+            "unsupported backend checkpoint envelope",
         ));
     }
     let state = payload
@@ -2140,17 +2192,28 @@ fn checkpoint_compatibility(snapshot: &SessionStateResponse) -> CheckpointCompat
         .and_then(|state| state.latest_step.magnetization.as_ref())
         .map(|values| values.len() / 3)
         .unwrap_or(0);
+    let runtime_family = snapshot
+        .session
+        .resolved_runtime_family
+        .clone()
+        .or_else(|| snapshot.session.resolved_device.clone())
+        .unwrap_or_else(|| "fdm_cpu_reference".to_string());
+
+    let restart_abi = Some(format!(
+        "{}:{}",
+        runtime_family,
+        snapshot.session.resolved_engine_id.as_deref().unwrap_or("default")
+    ));
+    let problem_hash = Some(format!("problem:rev-{}", snapshot.scene_revision));
+    let plan_hash = Some(format!("plan:rev-{}", snapshot.plan_revision));
+
     CheckpointCompatibility {
-        restart_abi: None,
-        problem_hash: None,
-        plan_hash: None,
+        restart_abi,
+        problem_hash,
+        plan_hash,
         state_schema_version: Some("fullmag.checkpoint.v1".to_string()),
         engine_id: snapshot.session.resolved_engine_id.clone(),
-        runtime_family: snapshot
-            .session
-            .resolved_runtime_family
-            .clone()
-            .or_else(|| snapshot.session.resolved_device.clone()),
+        runtime_family: Some(runtime_family),
         precision: Some(
             snapshot
                 .session
@@ -2551,7 +2614,10 @@ mod coupled_checkpoint_identity_tests {
                     "constitutive_version": "transport_constitutive.one_way.fullmag.v1",
                     "charge_operator_version": "fv_charge_face_flux.v1",
                     "spin_operator_version": "fv_spin_upwind_v1",
-                    "torque_formula_version": "drift_diffusion_absorbed_flux.v1",
+                    "runtime_owner": "fdm_cpu_reference",
+                    "transport_realization": "drift_diffusion.fdm_cpu_reference",
+                    "fallback_used": false,
+                    "evaluated_envelope_multiplier": 1.0,
                     "state_revision": 1,
                     "operator_revision": 0
                 }],
@@ -2900,5 +2966,21 @@ mod planar_presentation_migration_tests {
             .visualization_restore_warnings
             .iter()
             .any(|warning| warning.contains("ambiguous_airbox_ordering")));
+    }
+
+    #[test]
+    fn checkpoint_request_types_support_expected_state_version() {
+        let req_create: CheckpointCreateRequest = serde_json::from_str(
+            r#"{"expected_state_version": 42, "reason": "test"}"#,
+        )
+        .expect("deserialize create req");
+        assert_eq!(req_create.expected_state_version, Some(42));
+        assert_eq!(req_create.reason.as_deref(), Some("test"));
+
+        let req_restore: CheckpointRestoreRequest = serde_json::from_str(
+            r#"{"expected_state_version": 99}"#,
+        )
+        .expect("deserialize restore req");
+        assert_eq!(req_restore.expected_state_version, Some(99));
     }
 }

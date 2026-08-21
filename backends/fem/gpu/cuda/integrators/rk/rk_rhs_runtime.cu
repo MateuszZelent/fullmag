@@ -11,6 +11,7 @@
 #include "gpu/cuda/integrators/rk/rk_rhs_runtime.hpp"
 
 #include "context.hpp"
+#include "gpu/cuda/constraints/frozen_spins.cuh"
 #include "gpu/cuda/integrators/rk/rk_demag_dispatch.hpp"
 #include "gpu/cuda/integrators/rk/rk_direct_torques.hpp"
 #include "gpu/cuda/integrators/rk/rk_dmi_fields.hpp"
@@ -200,6 +201,9 @@ bool gpu_rk_compute_rhs_for_magnetization(
     }
     if (!gpu_rk_add_direct_torques(ctx, m, rhs, stream, n, evaluation_time_s, reason)) {
         return false;
+    }
+    if (ctx.frozen_spins.enabled()) {
+        gpu_zero_frozen_rhs(rhs, ctx.gpu_state.device.mesh_regions.frozen_mask, n, stream);
     }
     if (!rhs_timer.finish(reason)) {
         return false;

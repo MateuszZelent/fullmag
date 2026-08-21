@@ -12,6 +12,7 @@
 #include "gpu/cuda/integrators/rk/rk_stage_schedule.hpp"
 
 #include "context.hpp"
+#include "gpu/cuda/constraints/frozen_spins.cuh"
 #include "gpu/cuda/integrators/rk/heun_stage_sequence.hpp"
 #include "gpu/cuda/integrators/rk/rk23_adaptive_k3.hpp"
 #include "gpu/cuda/integrators/rk/rk23_stage_sequence.hpp"
@@ -100,6 +101,16 @@ bool gpu_rk_run_stage_attempt(
     if (!cuda_launch_ok("launch GPU RK accept/normalize", reason)) {
         gpu.rk.fsal_valid = false;
         return false;
+    }
+    if (ctx.frozen_spins.enabled()) {
+        gpu_project_frozen_reference(
+            gpu.magnetization.m,
+            gpu.mesh_regions.frozen_mask,
+            gpu.mesh_regions.frozen_reference_x,
+            gpu.mesh_regions.frozen_reference_y,
+            gpu.mesh_regions.frozen_reference_z,
+            n,
+            stream);
     }
     if (rk_step_inject_failure(
             ctx,

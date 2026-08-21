@@ -265,6 +265,11 @@ fn normalized_direct_spin(
     index: usize,
     value: Vector3,
 ) -> Option<Vector3> {
+    if let Some(frozen) = problem.frozen_spins() {
+        if frozen.is_frozen(index) {
+            return Some(frozen.reference()[index]);
+        }
+    }
     if problem.ms_at(index) <= 0.0 {
         return Some([0.0, 0.0, 0.0]);
     }

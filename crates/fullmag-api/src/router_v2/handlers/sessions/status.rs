@@ -439,7 +439,7 @@ pub(crate) fn session_epoch(
     }
 }
 
-pub(crate) const ACTIVE_LANE_OPERATION_IDS: [&str; 29] = [
+pub(crate) const ACTIVE_LANE_OPERATION_IDS: [&str; 31] = [
     "grid_build",
     "shared_mesh_build",
     "field_quantity",
@@ -464,6 +464,8 @@ pub(crate) const ACTIVE_LANE_OPERATION_IDS: [&str; 29] = [
     "interaction.oersted_field",
     "interaction.magnetoelastic",
     "interaction.thermal",
+    "interaction.frozen_spins",
+    "constraint.frozen_spins",
     "study.relaxation",
     "study.time_integration",
     "study.eigenmodes",
@@ -894,6 +896,20 @@ fn active_lane_operations(
         (
             "interaction.thermal".into(),
             term_operation(has_term(&["thermal"]), "interaction:thermal"),
+        ),
+        (
+            "interaction.frozen_spins".into(),
+            supported(
+                "Frozen spins constraints are supported for the active lane.",
+                &["constraint:frozen_spins"],
+            ),
+        ),
+        (
+            "constraint.frozen_spins".into(),
+            supported(
+                "Frozen spins constraints are supported for the active lane.",
+                &["constraint:frozen_spins"],
+            ),
         ),
         (
             "study.relaxation".into(),

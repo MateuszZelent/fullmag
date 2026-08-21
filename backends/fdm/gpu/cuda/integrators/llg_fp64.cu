@@ -355,6 +355,41 @@ __global__ void heun_corrector_fp64_kernel(
     mz[idx] = cz * inv_norm;
 }
 
+__global__ void project_frozen_fp64_kernel(
+    double * __restrict__ mx,
+    double * __restrict__ my,
+    double * __restrict__ mz,
+    const uint8_t * __restrict__ mask,
+    const double * __restrict__ rx,
+    const double * __restrict__ ry,
+    const double * __restrict__ rz,
+    int n)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n) return;
+    if (mask[idx] != 0) {
+        mx[idx] = rx[idx];
+        my[idx] = ry[idx];
+        mz[idx] = rz[idx];
+    }
+}
+
+__global__ void zero_frozen_rhs_fp64_kernel(
+    double * __restrict__ rx,
+    double * __restrict__ ry,
+    double * __restrict__ rz,
+    const uint8_t * __restrict__ mask,
+    int n)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n) return;
+    if (mask[idx] != 0) {
+        rx[idx] = 0.0;
+        ry[idx] = 0.0;
+        rz[idx] = 0.0;
+    }
+}
+
 /* ── Full Heun step ── */
 
 static const int BLOCK_SIZE = 256;
@@ -378,6 +413,13 @@ double reduce_current_rhs_norm_from_evaluated_transport_fp64(Context &ctx) {
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
     if (!launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.k1)) return 0.0;
+    if (ctx.has_frozen_mask) {
+        zero_frozen_rhs_fp64_kernel<<<grid, BLOCK_SIZE>>>(
+            static_cast<double*>(ctx.k1.x),
+            static_cast<double*>(ctx.k1.y),
+            static_cast<double*>(ctx.k1.z),
+            ctx.frozen_mask, n);
+    }
 
     return reduce_max_norm_fp64(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
 }
@@ -430,6 +472,13 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
     if (!launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.k1)) return;
+    if (ctx.has_frozen_mask) {
+        zero_frozen_rhs_fp64_kernel<<<grid, BLOCK_SIZE>>>(
+            static_cast<double*>(ctx.k1.x),
+            static_cast<double*>(ctx.k1.y),
+            static_cast<double*>(ctx.k1.z),
+            ctx.frozen_mask, n);
+    }
     if (abort_step_from_tmp(ctx, false)) return;
 
     // --- Step 3: Predictor: m_pred = normalize(m + dt·k1) ---
@@ -445,6 +494,17 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         static_cast<double*>(ctx.m.y),
         static_cast<double*>(ctx.m.z),
         n, dt);
+    if (ctx.has_frozen_mask) {
+        project_frozen_fp64_kernel<<<grid, BLOCK_SIZE>>>(
+            static_cast<double*>(ctx.m.x),
+            static_cast<double*>(ctx.m.y),
+            static_cast<double*>(ctx.m.z),
+            ctx.frozen_mask,
+            static_cast<const double*>(ctx.frozen_reference.x),
+            static_cast<const double*>(ctx.frozen_reference.y),
+            static_cast<const double*>(ctx.frozen_reference.z),
+            n);
+    }
     if (abort_step_from_tmp(ctx, false)) return;
 
     // --- Step 4: Compute field contributions at predicted m ---
@@ -475,6 +535,13 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
     if (!launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.h_ex)) return;
+    if (ctx.has_frozen_mask) {
+        zero_frozen_rhs_fp64_kernel<<<grid, BLOCK_SIZE>>>(
+            static_cast<double*>(ctx.h_ex.x),
+            static_cast<double*>(ctx.h_ex.y),
+            static_cast<double*>(ctx.h_ex.z),
+            ctx.frozen_mask, n);
+    }
     if (abort_step_from_tmp(ctx, false)) return;
 
     // --- Step 6: Corrector: m_new = normalize(m_orig + 0.5·dt·(k1 + k2)) ---
@@ -492,6 +559,17 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         static_cast<const double*>(ctx.h_ex.y),
         static_cast<const double*>(ctx.h_ex.z),
         n, 0.5 * dt);
+    if (ctx.has_frozen_mask) {
+        project_frozen_fp64_kernel<<<grid, BLOCK_SIZE>>>(
+            static_cast<double*>(ctx.m.x),
+            static_cast<double*>(ctx.m.y),
+            static_cast<double*>(ctx.m.z),
+            ctx.frozen_mask,
+            static_cast<const double*>(ctx.frozen_reference.x),
+            static_cast<const double*>(ctx.frozen_reference.y),
+            static_cast<const double*>(ctx.frozen_reference.z),
+            n);
+    }
     if (abort_step_from_tmp(ctx, false)) return;
 
     // Persist the spin solution associated with the final accepted

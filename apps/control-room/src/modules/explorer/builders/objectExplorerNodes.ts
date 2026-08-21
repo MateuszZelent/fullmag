@@ -505,13 +505,12 @@ export function frozenSpinsSelectorOwner(
     expression.kind === "or" ||
     expression.kind === "xor"
   ) {
-    const owners = expression.expressions
-      .map(frozenSpinsSelectorOwner)
-      .filter((owner): owner is NonNullable<typeof owner> => owner !== null);
-    if (owners.length === 0) return null;
+    const owners = expression.expressions.map(frozenSpinsSelectorOwner);
+    if (owners.length === 0 || owners.some((owner) => owner === null)) return null;
     const first = owners[0]!;
     return owners.every(
       (owner) =>
+        owner !== null &&
         owner.objectId === first.objectId &&
         (owner.regionId ?? null) === (first.regionId ?? null),
     )

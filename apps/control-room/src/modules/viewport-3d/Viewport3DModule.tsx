@@ -1336,7 +1336,7 @@ export default function Viewport3DModule({
       buildFrozenSpinsOverlayModel({
         current: frozenSpinsPreview.data?.current ?? false,
         fdmDomain: sceneModel.fdmDomain,
-        // No API resource currently publishes exact FEM true-DOF coordinates.
+        // No OpenAPI resource currently publishes exact FEM true-DOF coordinates.
         // Never substitute topology vertices: higher-order true DOFs are not nodes.
         femTrueDofPositions: null,
         mask: frozenSpinsMask.data,

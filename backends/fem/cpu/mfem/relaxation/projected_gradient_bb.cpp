@@ -73,6 +73,12 @@ void update_bb_step_size(
                     ctx.mesh.magnetic_node_mask[node] == 0u) {
                     continue;
                 }
+                if (ctx.frozen_spins.enabled()) {
+                    const auto &mask = ctx.frozen_spins.mask();
+                    if (node < mask.size() && mask[node] != 0u) {
+                        continue;
+                    }
+                }
                 const double mass = ctx.integration_weights.mfem_lumped_mass[node];
                 if (!std::isfinite(mass) || mass <= 0.0) {
                     s_dot_s = invalid_metric;
@@ -190,6 +196,9 @@ int run_projected_gradient_bb_step(
             previous_m,
             ctx.effective_field.h_xyz,
             previous_gradient);
+        if (ctx.frozen_spins.enabled()) {
+            ctx.frozen_spins.zero_frozen_rhs(previous_gradient);
+        }
         current_gradient_valid = relaxation::validate_tangent_gradient_field(
             ctx,
             previous_gradient,
@@ -265,6 +274,9 @@ int run_projected_gradient_bb_step(
                 descent_direction,
                 trial_step,
                 trial_m);
+            if (ctx.frozen_spins.enabled()) {
+                ctx.frozen_spins.project_onto_reference(trial_m);
+            }
         }
         const uint8_t *magnetic_node_mask =
             ctx.mesh.magnetic_node_mask.empty()
@@ -400,6 +412,9 @@ int run_projected_gradient_bb_step(
             trial_m,
             ctx.effective_field.h_xyz,
             trial_gradient);
+        if (ctx.frozen_spins.enabled()) {
+            ctx.frozen_spins.zero_frozen_rhs(trial_gradient);
+        }
         accepted_gradient_valid = relaxation::validate_tangent_gradient_field(
             ctx,
             trial_gradient,

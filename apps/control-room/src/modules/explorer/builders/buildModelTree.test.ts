@@ -4082,4 +4082,52 @@ describe("buildModelTree", () => {
       }),
     ).toBeNull();
   });
+
+  it("places unscoped frozen-spins constraints under Definitions without dropping them", () => {
+    const frozenSpins: FrozenSpinsCollectionResource = {
+      count: 1,
+      definitions: [
+        {
+          activation: { kind: "all_stages" },
+          empty_selection: "error",
+          enabled: true,
+          id: "pin-global-not",
+          inactive_selection: "warn_and_intersect",
+          membership: { kind: "static" },
+          name: "Pin Complement",
+          reference: { kind: "capture_current_at_activation" },
+          schema_version: "frozen_spins.v1",
+          selector: {
+            kind: "not",
+            expression: { kind: "in_object", object_id: "film" },
+          },
+        },
+      ],
+      revision: 1,
+    };
+    const tree = buildModelTree(
+      {
+        objects: [
+          {
+            id: "film",
+            label: "Film",
+            objectRole: "magnet",
+          },
+        ],
+      },
+      { frozenSpins },
+    );
+    const nodes = flattenExplorerNodes(tree).filter(
+      (node) => node.kind === "object.frozen-spins",
+    );
+    expect(nodes).toHaveLength(2); // One parent group node and one leaf node
+    const leaf = nodes.find((node) => node.constraintId === "pin-global-not");
+    expect(leaf).toBeDefined();
+    expect(leaf).toMatchObject({
+      constraintId: "pin-global-not",
+      id: "model:definitions:frozen-spins:pin-global-not",
+      parentId: "model:definitions:frozen-spins",
+      badge: "unscoped",
+    });
+  });
 });

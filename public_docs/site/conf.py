@@ -22,8 +22,18 @@ extensions = [
     "responsive_tables",
     "status_navigation",
     "page_last_modified",
+    "page_dates",
 ]
 templates_path = ["_templates"]
+
+# Site-global publication time shown as "Zbudowano w" under the doc header.
+# GitHub Actions sets FULLMAG_DOCS_BUILD_TIME; fall back to the current UTC
+# time so local builds still carry a meaningful value.
+from datetime import datetime, timezone
+build_time = os.environ.get("FULLMAG_DOCS_BUILD_TIME")
+if not build_time:
+    build_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+html_context = {"fem_docs_build_time": build_time}
 exclude_patterns = ["_build", "internal", "generated", "README.md"]
 source_suffix = {".md": "markdown", ".rst": "restructuredtext"}
 

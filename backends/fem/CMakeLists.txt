@@ -105,6 +105,7 @@ set(FEM_SOURCES
     cpu/mfem/interactions/exchange_mass_projection.cpp
     cpu/mfem/interactions/exchange_operator.cpp
     cpu/mfem/interactions/exchange_runtime.cpp
+    cpu/mfem/interactions/frozen_spins.cpp
     cpu/mfem/interactions/magnetoelastic.cpp
     cpu/mfem/interactions/magnetoelastic_field.cpp
     cpu/mfem/interactions/magnetoelastic_prescribed_strain.cpp
@@ -232,6 +233,7 @@ if(FULLMAG_USE_MFEM_STACK)
         enable_language(CUDA)
         find_package(CUDAToolkit REQUIRED)
         list(APPEND FEM_SOURCES
+            gpu/cuda/constraints/frozen_spins.cu
             gpu/cuda/exchange/exchange_kernels.cu
             gpu/cuda/fields/vector_field_kernels.cu
             gpu/cuda/frequency_domain/driven_response_gpu.cu
@@ -1008,6 +1010,14 @@ target_include_directories(fem_heun_step_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_heun_step_contract COMMAND fem_heun_step_contract)
+
+add_executable(fem_frozen_spins_contract tests/frozen_spins_contract.cpp)
+target_link_libraries(fem_frozen_spins_contract PRIVATE fullmag_fem)
+target_include_directories(fem_frozen_spins_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_frozen_spins_contract COMMAND fem_frozen_spins_contract)
 
 add_executable(fem_cpu_threads_contract tests/cpu_threads_contract.cpp)
 target_link_libraries(fem_cpu_threads_contract PRIVATE fullmag_fem)

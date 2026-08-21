@@ -37,6 +37,7 @@
 #include "cpu/mfem/runtime/mfem_device.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace fullmag::fem {
@@ -103,6 +104,32 @@ bool build_context_from_plan(
 
     if (!initialize_state_plan_fields(ctx, plan, error)) {
         return false;
+    }
+    const std::size_t true_dofs = static_cast<std::size_t>(
+        ctx.mesh.periodic_reduced_node_count > 0
+            ? ctx.mesh.periodic_reduced_node_count
+            : ctx.mesh.n_nodes);
+    const std::size_t active_candidates = ctx.mesh.magnetic_node_mask.empty()
+        ? true_dofs
+        : static_cast<std::size_t>(std::count_if(
+            ctx.mesh.magnetic_node_mask.begin(),
+            ctx.mesh.magnetic_node_mask.end(),
+            [](uint8_t v) { return v != 0; }));
+
+    const char *fingerprint = "mesh_p1_v1";
+    if (!ctx.frozen_spins.import_descriptor(
+            plan.frozen_mask,
+            plan.frozen_mask_len,
+            plan.frozen_reference_xyz,
+            plan.frozen_reference_len,
+            true_dofs,
+            active_candidates,
+            fingerprint,
+            error)) {
+        return false;
+    }
+    if (ctx.frozen_spins.enabled()) {
+        ctx.frozen_spins.project_onto_reference(ctx.state.m_xyz);
     }
     if (!std::isfinite(plan.stage_start_time_s) || plan.stage_start_time_s < 0.0) {
         error = "stage_start_time_s must be finite and non-negative";

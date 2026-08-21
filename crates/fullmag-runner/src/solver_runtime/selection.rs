@@ -308,18 +308,34 @@ pub(crate) fn reject_frozen_spins_cuda_plan_execution(plan: &FdmPlanIR) -> Resul
 
 pub(crate) fn reject_frozen_spins_fem_execution(problem: &ProblemIR) -> Result<(), RunError> {
     if problem_has_enabled_frozen_spins(problem) {
-        return Err(RunError {
-            message: "frozen_spins_fem_unqualified: the selected native FEM CPU/GPU runtime does not yet consume the resolved true-DOF mask/reference descriptor; refusing execution instead of silently dropping the constraint".to_string(),
-        });
+        if runtime_fem_order(problem) > 1 {
+            return Err(RunError {
+                message: "frozen_spins_fem_fe_order_unsupported: fe_order > 1 is not supported with frozen spins without explicit high-order true-DOF map".to_string(),
+            });
+        }
+        if let fullmag_ir::StudyIR::Relaxation { algorithm, .. } = &problem.study {
+            match algorithm {
+                fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit => {
+                    return Err(RunError {
+                        message: format!("frozen_spins_fem_tpi_unqualified: native FEM direct minimizer '{algorithm:?}' does not support frozen spins constraints"),
+                    });
+                }
+                fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+                | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
+                | fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped => {}
+            }
+        }
     }
     Ok(())
 }
 
 pub(crate) fn reject_frozen_spins_fem_plan_execution(plan: &FemPlanIR) -> Result<(), RunError> {
     if plan.frozen_spins.is_some() {
-        return Err(RunError {
-            message: "frozen_spins_fem_unqualified: resolved FEM plan carries a true-DOF mask but the selected native FEM runtime has no mask/reference consumer".to_string(),
-        });
+        if plan.fe_order > 1 {
+            return Err(RunError {
+                message: "frozen_spins_fem_fe_order_unsupported: fe_order > 1 is not supported with frozen spins without explicit high-order true-DOF map".to_string(),
+            });
+        }
     }
     Ok(())
 }
@@ -748,8 +764,18 @@ mod tests {
     }
 
     #[test]
-    fn frozen_spins_fem_guard_rejects_authored_problem_constraints() {
+    fn frozen_spins_fem_guard_rejects_unsupported_fe_order() {
         let mut problem = ProblemIR::bootstrap_example();
+        problem.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
+            fem: Some(fullmag_ir::FemHintsIR {
+                order: 2,
+                hmax: 1.0,
+                mesh: None,
+                demag_solver_policy: None,
+            }),
+            fdm: None,
+            hybrid: None,
+        });
         problem
             .magnetization_constraints
             .push(MagnetizationConstraintIR::FrozenSpins(FrozenSpinsIR {
@@ -766,7 +792,13 @@ mod tests {
             }));
 
         let error = super::reject_frozen_spins_fem_execution(&problem)
-            .expect_err("native FEM must not accept an unqualified frozen-spins constraint");
-        assert!(error.message.starts_with("frozen_spins_fem_unqualified:"));
+            .expect_err("high-order FEM must reject frozen spins without explicit true-DOF map");
+        assert!(error.message.starts_with("frozen_spins_fem_fe_order_unsupported:"));
+
+        problem.backend_policy.discretization_hints.as_mut().unwrap().fem.as_mut().unwrap().order = 1;
+        assert!(
+            super::reject_frozen_spins_fem_execution(&problem).is_ok(),
+            "P1 FEM must accept frozen spins on qualified lanes"
+        );
     }
 }

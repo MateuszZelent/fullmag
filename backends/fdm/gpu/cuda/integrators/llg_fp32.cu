@@ -341,6 +341,25 @@ __global__ void heun_corrector_fp32_kernel(
     mz[idx] = cz * inv_norm;
 }
 
+__global__ void project_frozen_fp32_kernel(
+    float * __restrict__ mx,
+    float * __restrict__ my,
+    float * __restrict__ mz,
+    const uint8_t * __restrict__ mask,
+    const float * __restrict__ ref_x,
+    const float * __restrict__ ref_y,
+    const float * __restrict__ ref_z,
+    int n)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n) return;
+    if (mask != nullptr && mask[idx] != 0) {
+        mx[idx] = ref_x[idx];
+        my[idx] = ref_y[idx];
+        mz[idx] = ref_z[idx];
+    }
+}
+
 /* ── Full Heun step (fp32) ── */
 
 static const int BLOCK_SIZE = 256;
@@ -407,6 +426,15 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         (const float*)ctx.k1.x, (const float*)ctx.k1.y, (const float*)ctx.k1.z,
         (float*)ctx.m.x, (float*)ctx.m.y, (float*)ctx.m.z,
         n, dt_f);
+    if (ctx.has_frozen_mask) {
+        project_frozen_fp32_kernel<<<grid, BLOCK_SIZE>>>(
+            (float*)ctx.m.x, (float*)ctx.m.y, (float*)ctx.m.z,
+            ctx.frozen_mask,
+            (const float*)ctx.frozen_reference.x,
+            (const float*)ctx.frozen_reference.y,
+            (const float*)ctx.frozen_reference.z,
+            n);
+    }
     if (abort_step_from_tmp(ctx, false)) return;
 
     // Step 4: field contributions at predicted m
@@ -435,6 +463,15 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         (const float*)ctx.k1.x, (const float*)ctx.k1.y, (const float*)ctx.k1.z,
         (const float*)ctx.h_ex.x, (const float*)ctx.h_ex.y, (const float*)ctx.h_ex.z,
         n, 0.5f * dt_f);
+    if (ctx.has_frozen_mask) {
+        project_frozen_fp32_kernel<<<grid, BLOCK_SIZE>>>(
+            (float*)ctx.m.x, (float*)ctx.m.y, (float*)ctx.m.z,
+            ctx.frozen_mask,
+            (const float*)ctx.frozen_reference.x,
+            (const float*)ctx.frozen_reference.y,
+            (const float*)ctx.frozen_reference.z,
+            n);
+    }
     if (abort_step_from_tmp(ctx, false)) return;
 
     if (!fullmag_fdm_should_fill_step_stats_for_step(ctx, ctx.step_count + 1)) {

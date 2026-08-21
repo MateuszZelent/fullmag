@@ -72,4 +72,45 @@ describe("SelectionExpressionBuilder", () => {
     expect(markup).toContain('data-selection-geometry-kind="sphere"');
     expect(markup).toContain('data-selection-geometry-kind="box"');
   });
+
+  it("renders validation feedback for empty clauses and invalid bounds", () => {
+    const emptyAndMarkup = renderToStaticMarkup(
+      createElement(SelectionExpressionBuilder, {
+        expression: {
+          kind: "and",
+          expressions: [],
+        },
+        objectId: "film",
+        onChange: vi.fn(),
+      }),
+    );
+    expect(emptyAndMarkup).toContain("At least one sub-expression clause is required.");
+
+    const invalidBetweenMarkup = renderToStaticMarkup(
+      createElement(SelectionExpressionBuilder, {
+        expression: {
+          kind: "between",
+          closed: "both",
+          lower: 5.0,
+          upper: 1.0,
+          value: { kind: "constant", value: 0 },
+        },
+        objectId: "film",
+        onChange: vi.fn(),
+      }),
+    );
+    expect(invalidBetweenMarkup).toContain("Lower bound cannot exceed upper bound.");
+
+    const emptyObjectMarkup = renderToStaticMarkup(
+      createElement(SelectionExpressionBuilder, {
+        expression: {
+          kind: "in_object",
+          object_id: "",
+        },
+        objectId: "film",
+        onChange: vi.fn(),
+      }),
+    );
+    expect(emptyObjectMarkup).toContain("Object ID cannot be empty.");
+  });
 });

@@ -620,6 +620,9 @@ void tangent_gradient_from_field(
             gradient_xyz[idx] = -projected[component];
         }
     }
+    if (ctx.frozen_spins.enabled()) {
+        ctx.frozen_spins.zero_frozen_rhs(gradient_xyz);
+    }
 }
 
 std::vector<double> project_tangent(
@@ -654,6 +657,9 @@ std::vector<double> project_tangent(
             const size_t idx = base + component;
             projected[idx] = node_projected[component];
         }
+    }
+    if (ctx.frozen_spins.enabled()) {
+        ctx.frozen_spins.zero_frozen_rhs(projected);
     }
     return projected;
 }
@@ -1025,6 +1031,9 @@ void retracted_step_into(
         trial_xyz[base + 0] = x * inv;
         trial_xyz[base + 1] = y * inv;
         trial_xyz[base + 2] = z * inv;
+    }
+    if (ctx.frozen_spins.enabled()) {
+        ctx.frozen_spins.project_onto_reference(trial_xyz);
     }
 }
 

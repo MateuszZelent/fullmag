@@ -223,6 +223,15 @@ target_compile_definitions(frozen_spins_abi_contract PRIVATE
 )
 add_test(NAME fdm_frozen_spins_abi_contract COMMAND frozen_spins_abi_contract)
 
+if(FULLMAG_ENABLE_CUDA)
+    add_executable(fdm_frozen_spins_cuda_runtime_contract tests/frozen_spins_cuda_runtime.cpp)
+    target_include_directories(fdm_frozen_spins_cuda_runtime_contract PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+    )
+    target_link_libraries(fdm_frozen_spins_cuda_runtime_contract PRIVATE fullmag_fdm)
+    add_test(NAME fdm_frozen_spins_cuda_runtime_contract COMMAND fdm_frozen_spins_cuda_runtime_contract)
+endif()
+
 add_executable(region_owned_abi_contract tests/region_owned_abi_contract.cpp)
 add_test(NAME fdm_region_owned_abi_contract COMMAND region_owned_abi_contract)
 

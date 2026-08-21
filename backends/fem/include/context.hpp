@@ -14,6 +14,7 @@
 #include "cpu/mfem/interactions/dmi.hpp"
 #include "cpu/mfem/interactions/effective_field.hpp"
 #include "cpu/mfem/interactions/exchange.hpp"
+#include "cpu/mfem/interactions/frozen_spins.hpp"
 #include "cpu/mfem/interactions/magnetoelastic_prescribed_strain.hpp"
 #include "cpu/mfem/interactions/oersted.hpp"
 #include "cpu/mfem/interactions/transport_stage.hpp"
@@ -73,6 +74,7 @@ struct Context {
 
     FemMeshRuntimeState mesh{};
     FemStateRuntimeState state{};
+    FrozenSpins frozen_spins{};
     ExchangeRuntimeState exchange{};
     DemagRuntimeState demag{};
     ZeemanRuntimeState zeeman{};

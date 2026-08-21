@@ -1,8 +1,8 @@
 # Frozen spins: ograniczenie magnetyzacji
 
-- Status: zatwierdzony kontrakt fizyczny; authoring, typed IR, kompilacja planu i FDM CPU/reference runtime zaimplementowane; wszystkie lane'y runtime pozostają niezakwalifikowane
+- Status: zatwierdzony kontrakt fizyczny; authoring, typed IR, kompilacja planu, FDM CPU/CUDA runtime oraz FEM CPU P1 RK zaimplementowane i zweryfikowane w zarządzanych recepturach
 - Właściciele: Fullmag physics, planner i backend teams
-- Ostatnia aktualizacja: 2026-08-20
+- Ostatnia aktualizacja: 2026-08-21
 - Powiązane ADR: `docs/adr/0026-frozen-spins-constraint-and-selection-model.md`
 - Powiązane specyfikacje: `docs/specs/selection-expr-v1.md`, `docs/specs/frozen-spins-v1.md`
 
@@ -20,11 +20,12 @@ Kontrakt obejmuje relaksację i dynamikę od pierwszej wersji schematu. Bieżąc
 kod zawiera typed `SelectionExprIR`, publiczny `fullmag.select`,
 `MagnetizationConstraintIR::FrozenSpins`, top-level lowering oraz stage
 activation. Planner zawiera dense resolved mask i certyfikat dla FDM cell
-centers oraz FEM magnetic true DOF. FDM CPU/reference konsumuje resolved plan
-i utrzymuje final-RHS/candidate-restore invariant; CUDA oraz native FEM są
-obecnie jawnie fail-closed, więc nie wolno traktować ich descriptorów jako
-wykonania. Poniższe równania pozostają zatwierdzonym kontraktem runtime, a
-częściowe testy FDM nie są dowodem kwalifikacji naukowej.
+centers oraz FEM magnetic true DOF. FDM CPU/reference oraz FDM CUDA runtime
+konsumują resolved plan i utrzymują final-RHS/candidate-restore invariant
+(potwierdzone przez `fullmag.frozen_spins.cuda.runtime.evidence.v1`); natywny
+FEM CPU P1 RK konsumuje deskryptor i zeruje RHS oraz rzutuje stan w stepperach
+(zweryfikowane przez `fem_frozen_spins_contract`). Poniższe równania pozostają
+zatwierdzonym kontraktem runtime.
 
 (frozen-spins-governing-equations)=
 ## 2. Równania rządzące
@@ -320,10 +321,10 @@ także gdy dwie referencje capture-current pochodzą z różnych epok.
 
 | Solver | Device | Target realization | Status kwalifikacji |
 |---|---|---|---|
-| FDM | CPU | cell-center bool mask; osobny Rust reference oracle i natywny właściciel backendu | `UNQUALIFIED` |
-| FDM | GPU | device-resident dense mask/reference; osobne FP64 i FP32 gates | `UNQUALIFIED` |
-| FEM | CPU | magnetic true-DOF mask; MFEM/hypre; TPI essential true DOF | `UNQUALIFIED` |
-| FEM | GPU | MFEM/hypre/libCEED/CUDA, mask/reference device-resident | `UNQUALIFIED` |
+| FDM | CPU | cell-center bool mask; osobny Rust reference oracle i natywny właściciel backendu | `QUALIFIED` (FP64 reference) |
+| FDM | GPU | device-resident dense mask/reference; osobne FP64 i FP32 gates | `QUALIFIED` (FP64 Heun/RK4), `UNQUALIFIED` (FP32 fail-closed) |
+| FEM | CPU | magnetic true-DOF mask; MFEM/hypre; explicit P1 RK stepper | `QUALIFIED` (P1 explicit RK), `UNQUALIFIED` (direct minimizers fail-closed) |
+| FEM | GPU | MFEM/hypre/libCEED/CUDA, mask/reference device-resident | `UNQUALIFIED` (fail-closed) |
 
 FDM utrzymuje oddzielne `active_mask`, `region_mask`, `frozen_mask` i logiczny
 `free_mask`. `region_mask` jest klasyfikacją materiałową, nie constraintem.

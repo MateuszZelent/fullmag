@@ -150,14 +150,13 @@ function postprocessingRootKind(
 export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
   if (
     node.kind === "object.frozen-spins" &&
-    node.constraintId &&
-    node.objectId
+    node.constraintId
   ) {
     return {
       constraintId: node.constraintId,
       kind: "object.frozen-spins",
       nodeId: node.id,
-      objectId: node.objectId,
+      ...(node.objectId ? { objectId: node.objectId } : {}),
       ...(node.objectRole ? { objectRole: node.objectRole } : {}),
       ...(node.regionId ? { regionId: node.regionId } : {}),
       type: "frozen-spins",
