@@ -1,5 +1,5 @@
 ---
-title: Interpolation And State Transfer
+title: Interpolation and State Transfer
 status: implemented
 doc_kind: reference
 audience: user
