@@ -240,6 +240,14 @@ free.mesh(cell_size=(2 * nm, 2 * nm, 1 * nm))
 free.Ms = 800.0e3
 free.Aex = 13.0e-12
 free.m = fm.texture.uniform(1.0, 0.0, 0.0)
+
+study.exchange()
+study.stages.add_relax(
+    stage_id="grid_contract",
+    algorithm="projected_gradient_bb",
+    max_steps=100,
+    tolT=1.0e-6,
+)
 ```
 
 ### Explicit discretization schema
