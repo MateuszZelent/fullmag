@@ -1,5 +1,5 @@
 ---
-title: Airbox Construction And Grading
+title: Airbox
 status: implemented
 doc_kind: reference
 audience: user
