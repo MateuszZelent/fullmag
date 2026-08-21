@@ -10,49 +10,53 @@ owner: fullmag-public-docs
 # Ferromagnet
 
 (python-api-magnets-and-textures-ferromagnet-problem-statement)=
-<!-- (problem-statement)= -->
 ## Contract
-This page records the current public Python authoring contract and canonical lowering; it does not redefine solver physics.
+
+`Ferromagnet` binds one geometry, one magnetic material, an initial state, optional object-local
+mesh/region data, and object-scoped constraints. The stage-first `study.geometry(...)` facade is
+the normal user workflow; the constructor remains the canonical class API and serialization owner.
 
 (python-api-magnets-and-textures-ferromagnet-governing-equations)=
-<!-- (governing-equations)= -->
 ## Governing equations
-This API page introduces no independent governing equation. Physical equations belong to interaction and solver-lane pages.
+
+This object introduces no independent field equation. It defines ownership and identity for the
+magnetic domain consumed by interactions and dynamics.
 
 (python-api-magnets-and-textures-ferromagnet-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
 ## Symbols and SI units
-Every owned input has its SI unit below; $1$ denotes dimensionless data.
+
+Geometry lengths use metres. Material parameters retain their interaction-specific SI units.
+Magnetization textures and region/constraint identities are dimensionless semantic data.
 
 (python-api-magnets-and-textures-ferromagnet-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
-Constructor checks run immediately. Lowering and planning additionally check mesh cardinality, capability, and backend legality.
+
+Names and optional `object_id` values are non-empty. A supplied `Region` must refer to the same
+geometry. When `m0` is omitted, the constructor installs uniform $+x$ magnetization. Planner
+validation owns mesh, region, material-field, and constraint realization.
 
 (python-api-magnets-and-textures-ferromagnet-python-api)=
-<!-- (python-api)= -->
 ## Python API
+
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| `Ferromagnet.name` | `str` | `required` | $1$ | Non-empty object identity. | Non-empty object identity. | FEM/FDM CPU/GPU; planner checks combinations | `magnets[].name` |
-| `Ferromagnet.geometry` | `Geometry` | `required` | $1$ | Geometry occupied by the magnetic body. | Geometry occupied by the magnetic body. | FEM/FDM CPU/GPU; planner checks combinations | `magnets[].geometry` |
-| `Ferromagnet.material` | `Material` | `required` | $1$ | Material supplying magnetic coefficients. | Material supplying magnetic coefficients. | FEM/FDM CPU/GPU; planner checks combinations | `magnets[].material` |
-| `Ferromagnet.region` | `Region \| None` | `None` | $1$ | Optional named region; when absent, the geometry name becomes the magnet region. | Optional named region; when absent, the geometry name becomes the magnet region. | FEM/FDM CPU/GPU; planner checks combinations | `magnets[].region` |
-| `Ferromagnet.m0` | `InitialMagnetization \| None` | `None` | $1$ | Initial reduced magnetization. | Initial reduced magnetization. | FEM/FDM CPU/GPU; planner checks combinations | `magnets[].initial_magnetization` |
-| `Ferromagnet.mesh` | `PerObjectMeshRecipe \| None` | `None` | $1$ | Optional object-local mesh recipe. | Optional object-local mesh recipe. | FEM/FDM CPU/GPU; planner checks combinations | `magnets[].mesh` |
-| `Ferromagnet.object_regions` | `tuple` | `()` | $1$ | Authored object-local regions lowered into `object_regions`; names and ownership are validated. | Authored object-local regions lowered into `object_regions`; names and ownership are validated. | FEM/FDM CPU/GPU; planner checks combinations | `magnets[].object_regions` |
-| `Ferromagnet.allocated_region_ids` | `tuple of strings` | `()` | $1$ | Reserved region identities used by builder and round-trip ownership. | Reserved region identities used by builder and round-trip ownership. | FEM/FDM CPU/GPU; planner checks combinations | `magnets[].allocated_region_ids` |
-| `Ferromagnet.material_parameter_fields` | `tuple` | `()` | $1$ | Object-owned spatial material assignments lowered into `material_parameter_fields`. | Object-owned spatial material assignments lowered into `material_parameter_fields`. | FEM/FDM CPU/GPU; planner checks combinations | `magnets[].material_parameter_fields` |
-| `Ferromagnet.absorbing_boundary` | `AbsorbingBoundaryLayer \| None` | `None` | $1$ | Optional per-object additive Gilbert-damping layer; `AbsorbingBoundaryLayer` validates widths, faces, profile, and frame. | Object-scoped damping ramp at selected boundary faces. | FEM/FDM CPU/GPU authoring; planner and runtime capability-gate the resolved lane. | `magnets[].absorbing_boundary` |
+| `Ferromagnet.name` | `str` | required | $1$ | non-empty | magnetic object name | all authoring lanes | `magnets[].name` |
+| `Ferromagnet.geometry` | `Geometry` | required | mixed | valid geometry object | occupied magnetic geometry | all authoring lanes | `magnets[].geometry` / geometry entry |
+| `Ferromagnet.material` | `Material` | required | mixed | valid material object | magnetic coefficients | all authoring lanes | `magnets[].material` |
+| `Ferromagnet.object_id` | `str \| None` | `None` | $1$ | non-empty when supplied | stable object identity used by selections and constraints | all authoring lanes; planner resolves | `magnets[].object_id` |
+| `Ferromagnet.region` | `Region \| None` | `None` | $1$ | geometry must match magnet geometry | optional canonical magnet region | all authoring lanes | `magnets[].region` |
+| `Ferromagnet.m0` | `InitialMagnetization \| None` | `None` | $1$ | typed initial state; defaults to uniform $+x$ | initial reduced magnetization | all authoring lanes | `magnets[].initial_magnetization` |
+| `Ferromagnet.mesh` | `PerObjectMeshRecipe \| None` | `None` | mixed | typed mesh recipe | object-local meshing intent | planner-dependent | `magnets[].mesh_recipe` |
+| `Ferromagnet.object_regions` | `tuple[ObjectRegion, ...]` | `()` | $1$ | unique object-owned identities | authored subregions | planner-dependent | `object_regions` |
+| `Ferromagnet.allocated_region_ids` | `tuple[str, ...]` | `()` | $1$ | unique reserved IDs | builder/round-trip region ownership | authoring metadata | region identity registry |
+| `Ferromagnet.material_parameter_fields` | `tuple[MaterialParameterAssignment, ...]` | `()` | parameter-dependent | typed, finite, cardinality checked later | spatial material fields | planner-dependent | `material_parameter_fields` |
+| `Ferromagnet.absorbing_boundary` | `AbsorbingBoundaryLayer \| None` | `None` | mixed | typed profile and valid faces | object-scoped damping layer | capability-gated | `magnets[].absorbing_boundary` |
+| `Ferromagnet._magnetization_constraints` | `list[object]` | empty list factory | $1$ | populated by typed helpers such as `freeze_spins`; direct mutation is not public workflow | object-scoped constraint accumulator | collected by problem/study lowering | canonical magnetization constraints |
 
-
-### Complete ferromagnet stage scenario
-
-The stage builder owns the public workflow. Material values, geometry, and initial magnetization
-are assigned to the returned magnetic body before the solver and stages are declared.
+### Complete stage-first scenario
 
 ```python
-# %% Ferromagnet authoring in a complete stage-first study
+# %% Ferromagnet authoring
 import fullmag as fm
 
 nm = 1.0e-9
@@ -61,54 +65,62 @@ study.engine("fdm")
 study.device("cpu", precision="double")
 study.mode("strict")
 study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 5 * nm))
-study.exchange()
 film = study.geometry(fm.Box(100 * nm, 20 * nm, 5 * nm), name="film")
 film.Ms = 800.0e3
 film.Aex = 13.0e-12
 film.alpha = 0.02
-film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
-study.solver(integrator="rk45", fix_dt=1.0e-15, gamma=2.211e5)
-study.stages.add_run(stage_id="run", until=1.0e-9)
+film.m = fm.texture.uniform(1.0, 0.0, 0.0)
+study.exchange()
+study.stages.add_run(stage_id="run", until=1.0e-12)
 ```
 
 (python-api-magnets-and-textures-ferromagnet-problem-ir)=
-<!-- (problem-ir)= -->
 ## ProblemIR
-The final column gives the serialized destination owned by the current lowering implementation.
+
+The magnet record preserves object identity, material binding, region, initial magnetization,
+mesh recipe, and absorbing-boundary data. Object regions, fields, and constraints retain separate
+typed ownership rather than being flattened into the magnet name.
 
 (python-api-magnets-and-textures-ferromagnet-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
-Requested intent is preserved in Python and IR. Resolved execution is selected by the planner. Validation errors reject malformed values; unsupported combinations fail capability checks without silent fallback.
+
+Requested object IDs, region ownership, material bindings, texture versions, mesh recipes, and
+constraint identities are preserved. Unknown references, duplicate identities, mismatched region
+geometry, or unsupported runtime realization fail closed.
 
 (python-api-magnets-and-textures-ferromagnet-discrete-realization)=
-<!-- (discrete-realization)= -->
 ## Discrete realization
-This page owns authoring and lowering only; numerical realization belongs to solver-lane documentation.
+
+FDM realizes the object as active cells; FEM realizes it as marked magnetic elements/nodes. The
+constructor does not prove either mesh or device lane executable.
 
 (python-api-magnets-and-textures-ferromagnet-implementation-mapping)=
-<!-- (implementation-mapping)= -->
 ## Implementation mapping
-The adjacent map anchors claims to `packages/fullmag-py/src/fullmag/model/structure.py` and `class Ferromagnet`.
+
+`packages/fullmag-py/src/fullmag/model/structure.py`, `class Ferromagnet`, owns construction,
+default state, object identity, constraint accumulation, and magnet-record lowering.
 
 (python-api-magnets-and-textures-ferromagnet-validation)=
-<!-- (validation)= -->
 ## Validation
-Tests compare this inventory with live signatures and validate its source map.
+
+Tests compare this complete parameter inventory with `inspect.signature(Ferromagnet)` and validate
+the adjacent source map.
 
 (python-api-magnets-and-textures-ferromagnet-limitations)=
-<!-- (limitations)= -->
 ## Limitations
-Representability does not prove every backend combination executable; planner capabilities are authoritative.
+
+The underscore-prefixed accumulator is exposed by the dataclass signature but is not the preferred
+user API. Use typed constraint helpers and stage/problem authoring rather than mutating it directly.
 
 (python-api-magnets-and-textures-ferromagnet-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
 ## Scientific bibliography
-No physical model is introduced. Primary references belong to consuming interaction pages.
+
+No new physical model is introduced; references belong to the interactions consuming the magnet.
 
 (python-api-magnets-and-textures-ferromagnet-source-code-index)=
-<!-- (source-code-index)= -->
 ## Source-code index
+
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Constructor, validation, lowering | `packages/fullmag-py/src/fullmag/model/structure.py` | `class Ferromagnet` | Canonical Python API behavior | Ownership test and source-map validator |
+| constructor and lowering | `packages/fullmag-py/src/fullmag/model/structure.py` | `class Ferromagnet` | canonical object API | signature/source-map tests |
+| stage-first facade | `packages/fullmag-py/src/fullmag/world.py` | `study.geometry` / magnetic handle | fluent object authoring | builder tests |

@@ -1,331 +1,45 @@
 {
-  "document": {
-    "path": "public_docs/site/python-api/problem/problem.md"
-  },
+  "document": {"path": "public_docs/site/python-api/problem/problem.md"},
   "backend_matrix": [
-    {
-      "solver": "FEM",
-      "device": "CPU",
-      "status": "documented"
-    },
-    {
-      "solver": "FEM",
-      "device": "GPU",
-      "status": "documented"
-    },
-    {
-      "solver": "FDM",
-      "device": "CPU",
-      "status": "documented"
-    },
-    {
-      "solver": "FDM",
-      "device": "GPU",
-      "status": "documented"
-    }
+    {"solver": "FEM", "device": "CPU", "status": "documented"},
+    {"solver": "FEM", "device": "GPU", "status": "documented"},
+    {"solver": "FDM", "device": "CPU", "status": "documented"},
+    {"solver": "FDM", "device": "GPU", "status": "documented"}
   ],
   "equations": [],
   "symbols": [],
-  "sources": [
-    {
-      "id": "owner",
-      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
-      "symbol": "class Problem",
-      "responsibility": "Owns the documented public API, validation, and lowering."
-    }
-  ],
-  "public_api": {
-    "parameters": [
-      {
-        "python": "Problem.name",
-        "type": "str",
-        "default": "required",
-        "si_unit": "1",
-        "validation": "Non-empty problem identity; `problem_meta.name`.",
-        "meaning": "Non-empty problem identity; `problem_meta.name`.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "problem_meta.name"
-      },
-      {
-        "python": "Problem.magnets",
-        "type": "sequence of `Ferromagnet`",
-        "default": "required",
-        "si_unit": "1",
-        "validation": "Non-empty magnetic objects; lowers geometry, regions, materials, and `magnets`.",
-        "meaning": "Non-empty magnetic objects; lowers geometry, regions, materials, and `magnets`.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "magnets"
-      },
-      {
-        "python": "Problem.energy",
-        "type": "sequence of energy terms",
-        "default": "required",
-        "si_unit": "1",
-        "validation": "Authored interactions; `energy_terms`. Duplicate legality is checked by planners.",
-        "meaning": "Authored interactions; `energy_terms`. Duplicate legality is checked by planners.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "energy_terms"
-      },
-      {
-        "python": "Problem.study",
-        "type": "study or `None`",
-        "default": "None",
-        "si_unit": "1",
-        "validation": "Canonical study. One of `study` or legacy `dynamics` must be supplied; `study`.",
-        "meaning": "Canonical study. One of `study` or legacy `dynamics` must be supplied; `study`.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "study"
-      },
-      {
-        "python": "Problem.dynamics",
-        "type": "LLG | None",
-        "default": "None",
-        "si_unit": "1",
-        "validation": "Legacy time-evolution input; conflicts with explicit `study`; normalized into `study.dynamics`.",
-        "meaning": "Legacy time-evolution input; conflicts with explicit `study`; normalized into `study.dynamics`.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "study.dynamics"
-      },
-      {
-        "python": "Problem.outputs",
-        "type": "sequence or `None`",
-        "default": "None",
-        "si_unit": "1",
-        "validation": "Legacy output list requiring legacy `dynamics`; normalized into `study.sampling.outputs`.",
-        "meaning": "Legacy output list requiring legacy `dynamics`; normalized into `study.sampling.outputs`.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "study.sampling.outputs"
-      },
-      {
-        "python": "Problem.discretization",
-        "type": "hints or `None`",
-        "default": "None",
-        "si_unit": "1",
-        "validation": "FDM/FEM/hybrid authoring hints; `backend_policy.discretization_hints`.",
-        "meaning": "FDM/FEM/hybrid authoring hints; `backend_policy.discretization_hints`.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "backend_policy.discretization_hints"
-      },
-      {
-        "python": "Problem.description",
-        "type": "str | None",
-        "default": "None",
-        "si_unit": "1",
-        "validation": "Optional human description; `problem_meta.description`.",
-        "meaning": "Optional human description; `problem_meta.description`.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "problem_meta.description"
-      },
-      {
-        "python": "Problem.runtime",
-        "type": "RuntimeSelection",
-        "default": "factory default",
-        "si_unit": "1",
-        "validation": "Requested backend, device, and precision intent; `backend_policy` and runtime metadata.",
-        "meaning": "Requested backend, device, and precision intent; `backend_policy` and runtime metadata.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "backend_policy"
-      },
-      {
-        "python": "Problem.runtime_metadata",
-        "type": "mapping",
-        "default": "{}",
-        "si_unit": "1",
-        "validation": "User/runtime provenance metadata; `problem_meta.runtime_metadata`.",
-        "meaning": "User/runtime provenance metadata; `problem_meta.runtime_metadata`.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "problem_meta.runtime_metadata"
-      },
-      {
-        "python": "Problem.auxiliary_geometries",
-        "type": "sequence",
-        "default": "()",
-        "si_unit": "1",
-        "validation": "Nonmagnetic/helper geometry entries; `geometry.entries`.",
-        "meaning": "Nonmagnetic/helper geometry entries; `geometry.entries`.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "geometry.entries"
-      },
-      {
-        "python": "Problem.current_modules",
-        "type": "sequence",
-        "default": "()",
-        "si_unit": "1",
-        "validation": "Current/Oersted modules; `current_modules`.",
-        "meaning": "Current/Oersted modules; `current_modules`.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "current_modules"
-      },
-      {
-        "python": "Problem.field_drives",
-        "type": "sequence",
-        "default": "()",
-        "si_unit": "1",
-        "validation": "Regional and time-dependent field drives; `field_drives`.",
-        "meaning": "Regional and time-dependent field drives; `field_drives`.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "field_drives"
-      },
-      {
-        "python": "Problem.couplings",
-        "type": "sequence",
-        "default": "()",
-        "si_unit": "1",
-        "validation": "Explicit inter-object or multiphysics couplings; `couplings`.",
-        "meaning": "Explicit inter-object or multiphysics couplings; `couplings`.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "couplings"
-      },
-      {
-        "python": "Problem.monitors",
-        "type": "sequence",
-        "default": "()",
-        "si_unit": "1",
-        "validation": "Planar monitor definitions; `planar_monitors`.",
-        "meaning": "Planar monitor definitions; `planar_monitors`.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "planar_monitors"
-      },
-      {
-        "python": "Problem.excitation_analysis",
-        "type": "analysis or None",
-        "default": "None",
-        "si_unit": "1",
-        "validation": "Optional spin-wave excitation analysis; `excitation_analysis`.",
-        "meaning": "Optional spin-wave excitation analysis; `excitation_analysis`.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "excitation_analysis"
-      },
-      {
-        "python": "Problem.geometry_asset_cache",
-        "type": "mapping",
-        "default": "{}",
-        "si_unit": "1",
-        "validation": "Internal deterministic geometry-asset cache used during lowering; `geometry_assets`.",
-        "meaning": "Internal deterministic geometry-asset cache used during lowering; `geometry_assets`.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "geometry_assets"
-      },
-      {
-        "python": "Problem.spin_torque",
-        "type": "legacy torque or None",
-        "default": "None",
-        "si_unit": "1",
-        "validation": "Legacy single-torque compatibility input; normalized into torque modules.",
-        "meaning": "Legacy single-torque compatibility input; normalized into torque modules.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "study.spin_torques"
-      },
-      {
-        "python": "Problem.spin_torques",
-        "type": "sequence",
-        "default": "()",
-        "si_unit": "1",
-        "validation": "Canonical spin-torque modules; serialized into study/runtime contracts.",
-        "meaning": "Canonical spin-torque modules; serialized into study/runtime contracts.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "study.spin_torques"
-      },
-      {
-        "python": "Problem.spin_transports",
-        "type": "sequence",
-        "default": "()",
-        "si_unit": "1",
-        "validation": "Canonical steady spin drift-diffusion modules; validated against torque `solve_id` references and serialized into transport runtime contracts.",
-        "meaning": "Canonical steady spin drift-diffusion modules carrying charge/spin material, boundary, solver, and reciprocal-coupling intent.",
-        "backend_support": "FDM/FEM CPU reference slices; planner rejects unsupported GPU, interface, and reciprocal combinations",
-        "problem_ir": "spin_transport_modules"
-      },
-      {
-        "python": "Problem.temperature",
-        "type": "float | None",
-        "default": "None",
-        "si_unit": "\\mathrm{K}",
-        "validation": "Optional non-negative thermal temperature; thermal metadata and term consistency are validated.",
-        "meaning": "Optional non-negative thermal temperature; thermal metadata and term consistency are validated.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "temperature"
-      },
-      {
-        "python": "Problem.elastic_materials",
-        "type": "sequence",
-        "default": "()",
-        "si_unit": "1",
-        "validation": "Elastic constitutive materials; `elastic_materials`.",
-        "meaning": "Elastic constitutive materials; `elastic_materials`.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "elastic_materials"
-      },
-      {
-        "python": "Problem.elastic_bodies",
-        "type": "sequence",
-        "default": "()",
-        "si_unit": "1",
-        "validation": "Elastic body assignments; `elastic_bodies`.",
-        "meaning": "Elastic body assignments; `elastic_bodies`.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "elastic_bodies"
-      },
-      {
-        "python": "Problem.magnetostriction_laws",
-        "type": "sequence",
-        "default": "()",
-        "si_unit": "1",
-        "validation": "Magnetostriction constitutive laws; `magnetostriction_laws`.",
-        "meaning": "Magnetostriction constitutive laws; `magnetostriction_laws`.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "magnetostriction_laws"
-      },
-      {
-        "python": "Problem.mechanical_bcs",
-        "type": "sequence",
-        "default": "()",
-        "si_unit": "1",
-        "validation": "Mechanical boundary conditions; `mechanical_bcs`.",
-        "meaning": "Mechanical boundary conditions; `mechanical_bcs`.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "mechanical_bcs"
-      },
-      {
-        "python": "Problem.mechanical_loads",
-        "type": "sequence",
-        "default": "()",
-        "si_unit": "1",
-        "validation": "Mechanical loads; `mechanical_loads`.",
-        "meaning": "Mechanical loads; `mechanical_loads`.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "mechanical_loads"
-      },
-      {
-        "python": "Problem.pbc",
-        "type": "FdmPbc, three booleans, or None",
-        "default": "None",
-        "si_unit": "1",
-        "validation": "Requested periodic axes; canonical PBC section and backend capability checks.",
-        "meaning": "Requested periodic axes; canonical PBC section and backend capability checks.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "backend_policy.pbc"
-      },
-      {
-        "python": "Problem.auxiliary_geometry_roles",
-        "type": "mapping",
-        "default": "{}",
-        "si_unit": "1",
-        "validation": "Maps auxiliary geometry names to roles; unknown names fail.",
-        "meaning": "Maps auxiliary geometry names to roles; unknown names fail.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "geometry.entries[].type"
-      },
-      {
-        "python": "Problem.spin_torque_activation",
-        "type": "mapping",
-        "default": "{}",
-        "si_unit": "1",
-        "validation": "Stage-local activation for canonical torque modules; unknown ids fail.",
-        "meaning": "Stage-local activation for canonical torque modules; unknown ids fail.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "study.spin_torques"
-      }
-    ]
-  }
+  "sources": [{"id": "owner", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "class Problem", "responsibility": "Owns aggregate public API, reference validation, selections, constraints, and lowering."}],
+  "public_api": {"parameters": [
+    {"python":"Problem.name","type":"str","default":"required","si_unit":"1","validation":"non-empty","meaning":"problem identity","backend_support":"all authoring lanes","problem_ir":"problem_meta.name"},
+    {"python":"Problem.magnets","type":"Sequence[Ferromagnet]","default":"required","si_unit":"mixed","validation":"non-empty and unique","meaning":"magnetic objects","backend_support":"all authoring lanes","problem_ir":"magnets"},
+    {"python":"Problem.energy","type":"Sequence[EnergyTerm]","default":"required","si_unit":"mixed","validation":"typed and duplicate-checked","meaning":"interactions","backend_support":"planner-dependent","problem_ir":"energy_terms"},
+    {"python":"Problem.study","type":"study | None","default":"None","si_unit":"mixed","validation":"canonical/legacy exclusivity","meaning":"study","backend_support":"planner-dependent","problem_ir":"study"},
+    {"python":"Problem.dynamics","type":"LLG | None","default":"None","si_unit":"mixed","validation":"legacy compatibility","meaning":"legacy dynamics","backend_support":"planner-dependent","problem_ir":"study.dynamics"},
+    {"python":"Problem.outputs","type":"sequence | None","default":"None","si_unit":"mixed","validation":"legacy dynamics required","meaning":"legacy outputs","backend_support":"planner-dependent","problem_ir":"study.sampling.outputs"},
+    {"python":"Problem.discretization","type":"DiscretizationHints | None","default":"None","si_unit":"mixed","validation":"typed hints","meaning":"discretization intent","backend_support":"all lanes subject to planner","problem_ir":"backend_policy.discretization_hints"},
+    {"python":"Problem.description","type":"str | None","default":"None","si_unit":"1","validation":"optional string","meaning":"description","backend_support":"all authoring lanes","problem_ir":"problem_meta.description"},
+    {"python":"Problem.runtime","type":"RuntimeSelection","default":"factory default","si_unit":"1","validation":"typed request","meaning":"runtime intent","backend_support":"all authoring lanes","problem_ir":"backend_policy"},
+    {"python":"Problem.runtime_metadata","type":"mapping","default":"{}","si_unit":"1","validation":"mapping","meaning":"provenance metadata","backend_support":"all authoring lanes","problem_ir":"problem_meta.runtime_metadata"},
+    {"python":"Problem.auxiliary_geometries","type":"sequence","default":"()","si_unit":"mixed","validation":"typed geometries","meaning":"auxiliary geometry","backend_support":"planner-dependent","problem_ir":"geometry.entries"},
+    {"python":"Problem.auxiliary_geometry_roles","type":"mapping","default":"{}","si_unit":"1","validation":"known names and allowed roles","meaning":"geometry roles","backend_support":"planner-dependent","problem_ir":"geometry.entries[].type"},
+    {"python":"Problem.current_modules","type":"sequence","default":"()","si_unit":"mixed","validation":"typed and unique","meaning":"current modules","backend_support":"planner-dependent","problem_ir":"current_modules"},
+    {"python":"Problem.field_drives","type":"sequence","default":"()","si_unit":"mixed","validation":"typed drives","meaning":"field drives","backend_support":"planner-dependent","problem_ir":"field_drives"},
+    {"python":"Problem.couplings","type":"sequence","default":"()","si_unit":"mixed","validation":"typed couplings","meaning":"coupling graph","backend_support":"planner-dependent","problem_ir":"couplings"},
+    {"python":"Problem.monitors","type":"sequence","default":"()","si_unit":"mixed","validation":"typed monitors","meaning":"planar monitors","backend_support":"planner-dependent","problem_ir":"planar_monitors"},
+    {"python":"Problem.excitation_analysis","type":"analysis | None","default":"None","si_unit":"mixed","validation":"typed analysis","meaning":"excitation analysis","backend_support":"planner-dependent","problem_ir":"excitation_analysis"},
+    {"python":"Problem.geometry_asset_cache","type":"mapping","default":"{}","si_unit":"1","validation":"internal deterministic cache","meaning":"geometry asset cache","backend_support":"build-time","problem_ir":"geometry_assets"},
+    {"python":"Problem.spin_torque","type":"legacy torque | None","default":"None","si_unit":"mixed","validation":"exclusive with canonical list","meaning":"legacy torque","backend_support":"compatibility","problem_ir":"spin_torque_modules"},
+    {"python":"Problem.spin_torques","type":"sequence","default":"()","si_unit":"mixed","validation":"typed and referenced","meaning":"canonical torques","backend_support":"planner-dependent","problem_ir":"spin_torque_modules"},
+    {"python":"Problem.spin_torque_activation","type":"mapping","default":"{}","si_unit":"1","validation":"known module IDs","meaning":"stage torque activation","backend_support":"planner-dependent","problem_ir":"study spin-torque activation"},
+    {"python":"Problem.spin_transports","type":"sequence","default":"()","si_unit":"mixed","validation":"typed solve graph","meaning":"spin transport","backend_support":"bounded CPU subsets","problem_ir":"spin_transport_modules"},
+    {"python":"Problem.temperature","type":"float | None","default":"None","si_unit":"K","validation":"finite non-negative; term consistency","meaning":"thermal compatibility temperature","backend_support":"planner-dependent","problem_ir":"temperature"},
+    {"python":"Problem.elastic_materials","type":"sequence","default":"()","si_unit":"mixed","validation":"typed and unique","meaning":"elastic materials","backend_support":"planner-dependent","problem_ir":"elastic_materials"},
+    {"python":"Problem.elastic_bodies","type":"sequence","default":"()","si_unit":"mixed","validation":"typed references","meaning":"elastic bodies","backend_support":"planner-dependent","problem_ir":"elastic_bodies"},
+    {"python":"Problem.magnetostriction_laws","type":"sequence","default":"()","si_unit":"mixed","validation":"typed and unique","meaning":"magnetostriction laws","backend_support":"planner-dependent","problem_ir":"magnetostriction_laws"},
+    {"python":"Problem.mechanical_bcs","type":"sequence","default":"()","si_unit":"mixed","validation":"typed boundary conditions","meaning":"mechanical BCs","backend_support":"planner-dependent","problem_ir":"mechanical_bcs"},
+    {"python":"Problem.mechanical_loads","type":"sequence","default":"()","si_unit":"mixed","validation":"typed loads","meaning":"mechanical loads","backend_support":"planner-dependent","problem_ir":"mechanical_loads"},
+    {"python":"Problem.selections","type":"Sequence[SelectionDefinition]","default":"()","si_unit":"1","validation":"unique, acyclic, bounded complexity, valid references","meaning":"selection definitions","backend_support":"authoring and planner resolution","problem_ir":"selections"},
+    {"python":"Problem.magnetization_constraints","type":"Sequence[FrozenSpins]","default":"()","si_unit":"1","validation":"typed and reference-checked","meaning":"magnetization constraints","backend_support":"capability-gated","problem_ir":"magnetization_constraints"},
+    {"python":"Problem.pbc","type":"FdmPbc | tuple[bool,bool,bool] | None","default":"None","si_unit":"1","validation":"typed axes/policy","meaning":"periodicity request","backend_support":"planner-dependent","problem_ir":"backend_policy.pbc"}
+  ]}
 }

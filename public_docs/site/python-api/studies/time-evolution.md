@@ -10,111 +10,104 @@ owner: fullmag-public-docs
 # Time Evolution
 
 (python-api-studies-time-evolution-problem-statement)=
-<!-- (problem-statement)= -->
 ## Contract
-This page records the current public Python authoring contract and canonical lowering; it does not redefine solver physics.
+
+`TimeEvolution` owns one LLG dynamics policy, output sampling, optional frozen-spin constraints,
+and an optional table-autosave policy. The stage-first builder normally constructs this contract
+from `study.solver(...)`, output declarations, constraints, and `study.stages.add_run(...)`.
 
 (python-api-studies-time-evolution-governing-equations)=
-<!-- (governing-equations)= -->
 ## Governing equations
-This API page introduces no independent governing equation. Physical equations belong to interaction and solver-lane pages.
+
+The LLG equation belongs to the dynamics reference. This class orders its integration and sampling
+contract and does not introduce a second equation or torque conversion.
 
 (python-api-studies-time-evolution-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
 ## Symbols and SI units
-Every owned input has its SI unit below; $1$ denotes dimensionless data.
+
+Dynamics and output quantities retain their documented SI units. `constraints` and output IDs are
+semantic data; sampling periods are in seconds when time-based.
 
 (python-api-studies-time-evolution-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
-Constructor checks run immediately. Lowering and planning additionally check mesh cardinality, capability, and backend legality.
+
+An empty output sequence is legal. Constraints must be typed `FrozenSpins` definitions and retain
+selection, activation, reference, and failure policies. The selected planner/runtime remains the
+source of truth for whether a constraint and output combination is executable.
 
 (python-api-studies-time-evolution-python-api)=
-<!-- (python-api)= -->
 ## Python API
+
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| `TimeEvolution.dynamics` | `LLG` | `required` | $1$ | Time-domain equation and integrator settings. | Time-domain equation and integrator settings. | FEM/FDM CPU/GPU; planner checks combinations | `study.dynamics` |
-| `TimeEvolution.outputs` | `sequence` | `required` | $1$ | Sampling requests. An empty sequence is valid. | Sampling requests. An empty sequence is valid. | FEM/FDM CPU/GPU; planner checks combinations | `study.outputs` |
-| `TimeEvolution.table_autosave` | `TableAutosave \| None` | `None` | $1$ | Optional tabular autosave policy. | Optional tabular autosave policy. | FEM/FDM CPU/GPU; planner checks combinations | `study.table_autosave` |
-
-
-### Complete stage-first example
-
-Time evolution is authored as solver policy plus an ordered physical-time stage. It is not
-constructed as a standalone `TimeEvolution(...)` object in a user script.
+| `TimeEvolution.dynamics` | `LLG` | required | mixed | typed dynamics policy | time-domain equation and integrator | planner-dependent | `study.dynamics` |
+| `TimeEvolution.outputs` | `Sequence[TimeOutputSpec]` | required | mixed | typed outputs; empty sequence legal | requested field/scalar/snapshot sampling | planner-dependent | `study.sampling.outputs` |
+| `TimeEvolution.constraints` | `Sequence[FrozenSpins]` | `()` | $1$ | typed frozen-spin constraints; references resolved at problem/planner boundary | stage-applicable magnetization constraints | capability-gated by target and lane | canonical magnetization constraints associated with the study |
+| `TimeEvolution.table_autosave` | `TableAutosave \| None` | `None` | mixed | typed autosave policy | optional scalar-table sampling | planner/runtime-dependent | `study.sampling.table_autosave` |
 
 ```python
-# %% Time-evolution study with adaptive RK45
+# %% Time-evolution study
 import fullmag as fm
 
-nm = 1.0e-9
 study = fm.study("time_evolution_api_example")
 study.engine("fdm")
 study.device("cpu", precision="double")
-study.mode("strict")
-study.exchange()
-study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 5 * nm))
-film = study.geometry(fm.Box(100 * nm, 20 * nm, 5 * nm), name="film")
-film.Ms = 800.0e3
+study.objects.mesh.defaults(cell_size=(2e-9, 2e-9, 2e-9))
+film = study.geometry(fm.Box(40e-9, 20e-9, 4e-9), name="film")
+film.Ms = 8.0e5
 film.Aex = 13.0e-12
 film.alpha = 0.02
-film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
-study.solver(
-    integrator="rk45",
-    adaptive_timestep=fm.AdaptiveTimestep(
-        atol=1.0e-6,
-        rtol=1.0e-3,
-        dt_min=1.0e-15,
-        dt_max=1.0e-12,
-    ),
-    gamma=2.211e5,
-)
-study.tableautosave(
-    1.0e-12,
-    quantities=["step", "t", "dt", "e_ex", "e_total", "max_torque_T"],
-)
-study.stages.add_run(stage_id="run", until=1.0e-9)
+film.m = fm.texture.uniform(1.0, 0.0, 0.0)
+study.exchange()
+study.solver(integrator="rk45", fix_dt=1e-15)
+study.stages.add_run(stage_id="run", until=1e-12)
 ```
 
 (python-api-studies-time-evolution-problem-ir)=
-<!-- (problem-ir)= -->
 ## ProblemIR
-The final column gives the serialized destination owned by the current lowering implementation.
+
+The time-evolution record preserves dynamics and sampling. Constraint definitions remain typed
+problem/study intent and must not be lost when stages are rewritten or exported.
 
 (python-api-studies-time-evolution-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
-Requested intent is preserved in Python and IR. Resolved execution is selected by the planner. Validation errors reject malformed values; unsupported combinations fail capability checks without silent fallback.
+
+Requested dynamics, outputs, constraints, and autosave policy are preserved. Unknown selection or
+object references, unsupported constraints, invalid output quantities, or unavailable execution
+lanes fail closed.
 
 (python-api-studies-time-evolution-discrete-realization)=
-<!-- (discrete-realization)= -->
 ## Discrete realization
-This page owns authoring and lowering only; numerical realization belongs to solver-lane documentation.
+
+Each backend integrates the same requested study through its own LLG, output, and constraint
+materialization. CPU/GPU trajectory identity is not implied.
 
 (python-api-studies-time-evolution-implementation-mapping)=
-<!-- (implementation-mapping)= -->
 ## Implementation mapping
-The adjacent map anchors claims to `packages/fullmag-py/src/fullmag/model/study.py` and `class TimeEvolution`.
+
+`packages/fullmag-py/src/fullmag/model/study.py`, `class TimeEvolution`, owns construction and
+study-level lowering; problem/planner layers own constraint reference resolution.
 
 (python-api-studies-time-evolution-validation)=
-<!-- (validation)= -->
 ## Validation
-Tests compare this inventory with live signatures and validate its source map.
+
+Tests compare the inventory with `inspect.signature(TimeEvolution)` and validate the source map.
+Runtime tests must additionally exercise active/inactive stage constraints and checkpoint replay.
 
 (python-api-studies-time-evolution-limitations)=
-<!-- (limitations)= -->
 ## Limitations
-Representability does not prove every backend combination executable; planner capabilities are authoritative.
+
+Representability does not prove every integrator, output, constraint, solver, device, and precision
+combination executable.
 
 (python-api-studies-time-evolution-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
 ## Scientific bibliography
-No physical model is introduced. Primary references belong to consuming interaction pages.
+
+Physical references belong to LLG, thermal-noise, torque, and constraint pages.
 
 (python-api-studies-time-evolution-source-code-index)=
-<!-- (source-code-index)= -->
 ## Source-code index
+
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Constructor, validation, lowering | `packages/fullmag-py/src/fullmag/model/study.py` | `class TimeEvolution` | Canonical Python API behavior | Ownership test and source-map validator |
+| constructor and lowering | `packages/fullmag-py/src/fullmag/model/study.py` | `class TimeEvolution` | dynamics, sampling, constraints | signature/source-map tests |
