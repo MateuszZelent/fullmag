@@ -14,6 +14,8 @@ author = "FullMag contributors"
 release = os.environ.get("FULLMAG_DOCS_VERSION", "latest")
 version = release
 
+# Strict CI imports every local entry at Sphinx startup, so this inventory must
+# remain synchronized with the tracked modules in ``public_docs/site/_extensions``.
 extensions = [
     "myst_parser",
     "sphinx_design",
