@@ -121,6 +121,7 @@ jobs:
         run: |
           python -m unittest packages/fullmag-py/tests/test_public_python_api_documentation.py -v
           python -m unittest packages/fullmag-py/tests/test_public_exchange_documentation.py -v
+          python -m unittest packages/fullmag-py/tests/test_material_dmi_units.py -v
 
       - name: Build public documentation strictly
         env:
