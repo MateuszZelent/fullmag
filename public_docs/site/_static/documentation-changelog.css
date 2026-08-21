@@ -1,0 +1,136 @@
+/* Git-backed public documentation history. */
+.fm-documentation-changelog {
+  display: grid;
+  gap: 0.65rem;
+  max-width: 100%;
+  margin-top: 1rem;
+}
+
+.fm-documentation-changelog .fm-changelog-date {
+  margin: 1.65rem 0 0.15rem;
+  padding-bottom: 0.38rem;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  font-size: 1rem;
+  font-weight: 750;
+  letter-spacing: 0.025em;
+}
+
+.fm-changelog-day {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.fm-changelog-entry {
+  min-width: 0;
+  padding: 0.72rem 0.85rem;
+  border-inline-start: 0.22rem solid color-mix(in srgb, currentColor 32%, transparent);
+  border-radius: 0 0.45rem 0.45rem 0;
+  background: color-mix(in srgb, currentColor 3.5%, transparent);
+}
+
+.fm-changelog-entry--fixed {
+  border-inline-start-color: color-mix(in srgb, #15803d 72%, currentColor);
+}
+
+.fm-changelog-entry--added {
+  border-inline-start-color: color-mix(in srgb, #2563eb 72%, currentColor);
+}
+
+.fm-changelog-entry--docs,
+.fm-changelog-entry--documentation {
+  border-inline-start-color: color-mix(in srgb, #7c3aed 72%, currentColor);
+}
+
+.fm-changelog-entry--breaking {
+  border-inline-start-color: color-mix(in srgb, #b91c1c 78%, currentColor);
+}
+
+.fm-changelog-heading,
+.fm-changelog-meta,
+.fm-changelog-paths {
+  margin: 0;
+}
+
+.fm-changelog-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.42rem;
+  line-height: 1.45;
+}
+
+.fm-changelog-badge,
+.fm-changelog-scope {
+  display: inline-block;
+  padding: 0.12rem 0.38rem;
+  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.035em;
+  line-height: 1.25;
+  text-transform: uppercase;
+}
+
+.fm-changelog-scope {
+  font-weight: 600;
+  text-transform: none;
+  opacity: 0.74;
+}
+
+.fm-changelog-subject {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 650;
+}
+
+.fm-changelog-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 0.28rem;
+  color: color-mix(in srgb, currentColor 66%, transparent);
+  font-size: 0.78rem;
+}
+
+.fm-changelog-meta code,
+.fm-changelog-meta .literal {
+  font-size: 0.76rem;
+}
+
+.fm-changelog-paths {
+  margin-top: 0.38rem;
+  color: color-mix(in srgb, currentColor 70%, transparent);
+  font-size: 0.76rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.fm-changelog-path {
+  overflow-wrap: anywhere;
+}
+
+.fm-changelog-page-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin: 1rem 0 1.5rem;
+}
+
+.fm-changelog-page-link {
+  display: inline-block;
+  padding: 0.48rem 0.68rem;
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-radius: 0.38rem;
+  text-decoration: none;
+}
+
+@media (max-width: 36rem) {
+  .fm-changelog-entry {
+    padding: 0.65rem 0.72rem;
+  }
+
+  .fm-changelog-heading {
+    gap: 0.35rem;
+  }
+}
