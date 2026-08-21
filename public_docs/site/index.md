@@ -85,8 +85,8 @@ mapping, and validation evidence in one place.
   realizations.
 - {doc}`validation/index` — inspect analytical cases, standard problems, parity, and
   qualification status.
-- [Documentation changelog](changelog/index.html) — inspect recent public-documentation commits
-  and Sphinx-native version-change records.
+- {doc}`changelog/index` — inspect recent public-documentation commits and Sphinx-native
+  version-change records.
 
 ## The canonical workflow
 
