@@ -20,6 +20,22 @@
   white-space: nowrap;
 }
 
+.fm-page-last-modified__separator {
+  margin-inline: 0.08rem;
+  opacity: 0.68;
+}
+
+.fm-page-last-modified__changelog {
+  color: inherit;
+  font-weight: 600;
+  text-decoration-thickness: 0.08em;
+  text-underline-offset: 0.16em;
+}
+
+.fm-page-last-modified__changelog:hover {
+  color: currentColor;
+}
+
 @media (max-width: 32rem) {
   .fm-page-last-modified {
     margin-top: -0.3rem;

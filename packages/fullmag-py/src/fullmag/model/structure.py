@@ -101,7 +101,7 @@ class Material:
         if self.Dind is not None:
             _warn_if_suspicious_si("Dind", self.Dind, lower=-1.0e-1, upper=1.0e-1, unit="J/m^2")
         if self.Dbulk is not None:
-            _warn_if_suspicious_si("Dbulk", self.Dbulk, lower=-1.0e-1, upper=1.0e-1, unit="J/m^3")
+            _warn_if_suspicious_si("Dbulk", self.Dbulk, lower=-1.0e-1, upper=1.0e-1, unit="J/m^2")
 
     def to_ir(self) -> dict[str, object]:
         return {

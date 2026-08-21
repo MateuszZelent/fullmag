@@ -9,6 +9,10 @@ owner: fullmag-public-docs
 (public-docs-python-api-materials-material)=
 # Material
 
+```{versionchanged} development
+Corrected `Material.Dbulk` and `Material.Dbulk_field` to the micromagnetic bulk-DMI coefficient unit $\mathrm{J\,m^{-2}}$ and documented the dimensional check.
+```
+
 (python-api-materials-material-problem-statement)=
 <!-- (problem-statement)= -->
 ## Contract
@@ -29,6 +33,12 @@ Every owned input has its SI unit below; $1$ denotes dimensionless data.
 ## Assumptions and validity
 Constructor checks run immediately. Lowering and planning additionally check mesh cardinality, capability, and backend legality.
 
+Both interfacial and isotropic bulk micromagnetic DMI coefficients multiply one spatial derivative
+of reduced magnetization in an energy density. Their dimension is therefore
+$\mathrm{J\,m^{-2}}$: coefficient $\times$ derivative $\mathrm{m^{-1}}$ gives
+$\mathrm{J\,m^{-3}}$. The two DMI variants differ by symmetry and operator, not by coefficient
+unit.
+
 (python-api-materials-material-python-api)=
 <!-- (python-api)= -->
 ## Python API
@@ -47,7 +57,7 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 | `Material.anisC1` | `three floats or None` | `None` | $1$ | Finite first cubic-anisotropy axis. | Finite first cubic-anisotropy axis. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].cubic_anisotropy_axis1` |
 | `Material.anisC2` | `three floats or None` | `None` | $1$ | Finite second cubic-anisotropy axis. | Finite second cubic-anisotropy axis. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].cubic_anisotropy_axis2` |
 | `Material.Dind` | `float \| None` | `None` | $\mathrm{J\,m^{-2}}$ | Finite interfacial-DMI material coefficient; it does not enable DMI by itself. | Finite interfacial-DMI material coefficient; it does not enable DMI by itself. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].interfacial_dmi` |
-| `Material.Dbulk` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Finite bulk-DMI material coefficient; it does not enable DMI by itself. | Finite bulk-DMI material coefficient; it does not enable DMI by itself. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].bulk_dmi` |
+| `Material.Dbulk` | `float \| None` | `None` | $\mathrm{J\,m^{-2}}$ | Finite bulk-DMI material coefficient; it does not enable DMI by itself. | Finite bulk-DMI material coefficient; it does not enable DMI by itself. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].bulk_dmi` |
 | `Material.Ms_field` | `list[float] \| None` | `None` | $\mathrm{A\,m^{-1}}$ | Optional spatial values overriding scalar `Ms`; mesh cardinality and lane legality are checked downstream. | Optional spatial values overriding scalar `Ms`; mesh cardinality and lane legality are checked downstream. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].ms_field` |
 | `Material.A_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-1}}$ | Optional spatial values overriding scalar `A`; not an FDM pair-coefficient lookup table. | Optional spatial values overriding scalar `A`; not an FDM pair-coefficient lookup table. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].a_field` |
 | `Material.alpha_field` | `list[float] \| None` | `None` | $1$ | Optional mesh-aligned damping values; cardinality and lane support are checked downstream. | Optional mesh-aligned damping values; cardinality and lane support are checked downstream. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].alpha_field` |
@@ -57,7 +67,7 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 | `Material.Kc2_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Optional spatial `Kc2` values. | Optional spatial `Kc2` values. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].kc2_field` |
 | `Material.Kc3_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Optional spatial `Kc3` values. | Optional spatial `Kc3` values. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].kc3_field` |
 | `Material.Dind_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-2}}$ | Optional spatial interfacial-DMI values. | Optional spatial interfacial-DMI values. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].dind_field` |
-| `Material.Dbulk_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Optional spatial bulk-DMI values. | Optional spatial bulk-DMI values. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].dbulk_field` |
+| `Material.Dbulk_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-2}}$ | Optional spatial bulk-DMI values. | Optional spatial bulk-DMI values. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].dbulk_field` |
 
 
 ### Complete material stage scenario
@@ -124,7 +134,7 @@ No physical model is introduced. Primary references belong to consuming interact
 
 (python-api-materials-material-source-code-index)=
 <!-- (source-code-index)= -->
-## Source-code index
+## Source code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
 | Constructor, validation, lowering | `packages/fullmag-py/src/fullmag/model/structure.py` | `class Material` | Canonical Python API behavior | Ownership test and source-map validator |

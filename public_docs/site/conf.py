@@ -22,6 +22,7 @@ extensions = [
     "responsive_tables",
     "status_navigation",
     "page_last_modified",
+    "documentation_changelog",
     "page_dates",
 ]
 templates_path = ["_templates"]
@@ -44,6 +45,7 @@ myst_enable_extensions = [
     "linkify",
     "substitution",
 ]
+myst_fence_as_directive = ["math"]
 myst_heading_anchors = 3
 
 copybutton_prompt_text = r">>> |\.\.\. |\$ "
@@ -53,11 +55,19 @@ html_theme = "sphinx_clarity_theme"
 html_title = "FullMag public documentation"
 html_static_path = ["_static"]
 html_extra_path = ["CNAME"]
-html_css_files = ["fullmag-docs.css", "page-last-modified.css"]
+html_css_files = [
+    "fullmag-docs.css",
+    "page-last-modified.css",
+    "documentation-changelog.css",
+]
 html_js_files = ["status-navigation.js"]
 
 page_last_modified_label = "Last changes:"
 page_last_modified_format = "%H:%M %d.%m.%Y"
 page_last_modified_timezone = "Europe/Warsaw"
+
+documentation_changelog_repository_url = "https://github.com/MateuszZelent/fullmag"
+documentation_changelog_limit = 80
+documentation_changelog_timezone = "Europe/Warsaw"
 
 nitpicky = True
