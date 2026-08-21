@@ -1,5 +1,5 @@
 ---
-title: Mesh Refinement And Quality
+title: Refinement
 status: implemented
 doc_kind: reference
 audience: user
