@@ -1,5 +1,5 @@
 ---
-title: Swept And Mixed-Layer Meshes
+title: Swept Meshes
 status: partial
 doc_kind: reference
 audience: user
