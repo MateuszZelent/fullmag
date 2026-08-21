@@ -1,0 +1,28 @@
+/* Page-specific source history shown directly below the document title. */
+.fm-page-last-modified {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.32rem;
+  max-width: 100%;
+  margin: -0.45rem 0 1.3rem;
+  color: color-mix(in srgb, currentColor 66%, transparent);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.fm-page-last-modified__label {
+  font-weight: 650;
+}
+
+.fm-page-last-modified time {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+@media (max-width: 32rem) {
+  .fm-page-last-modified {
+    margin-top: -0.3rem;
+    font-size: 0.8rem;
+  }
+}
