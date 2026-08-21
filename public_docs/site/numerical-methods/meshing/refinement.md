@@ -293,6 +293,17 @@ magnet.mesh(
     compute_quality=True,
     per_element_quality=True,
 )
+magnet.Ms = 800.0e3
+magnet.Aex = 13.0e-12
+magnet.m = fm.texture.uniform(1.0, 0.0, 0.0)
+
+study.exchange()
+study.stages.add_relax(
+    stage_id="equilibrium",
+    algorithm="nonlinear_cg",
+    tolT=1.0e-6,
+    max_steps=50_000,
+)
 ```
 
 Typed per-object recipes additionally expose algorithms, optimization, boundary layers, swept
