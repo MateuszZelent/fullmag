@@ -1,0 +1,16 @@
+name: Fullmag connector workflow permission probe
+
+on:
+  push:
+    branches:
+      - codex/workflow-probe-magnetic-textures-20260821
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm workflow execution
+        run: echo "connector workflow probe passed"
