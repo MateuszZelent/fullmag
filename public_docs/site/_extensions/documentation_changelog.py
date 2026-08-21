@@ -176,7 +176,8 @@ def _subject_metadata(subject: str) -> tuple[str, str, str | None, bool]:
     kind = match.group("kind").lower()
     category = _CATEGORY_LABELS.get(kind, kind.capitalize())
     scope = match.group("scope")
-    return category, re.sub(r"[^a-z0-9]+", "-", kind).strip("-") or "change", scope, bool(match.group("breaking"))
+    slug = re.sub(r"[^a-z0-9]+", "-", kind).strip("-") or "change"
+    return category, slug, scope, bool(match.group("breaking"))
 
 
 def _path_reference(
@@ -304,7 +305,10 @@ def _validate_rendered_changelog(app: Sphinx, exception: BaseException | None) -
         rendered = output_path.read_text(encoding="utf-8")
     except OSError as error:
         raise ExtensionError(f"Cannot read rendered documentation changelog: {error}") from error
-    if rendered.count(f'class="{ROOT_CLASS}"') != 1:
+    class_pattern = re.compile(
+        rf'class="[^"]*\b{re.escape(ROOT_CLASS)}\b[^"]*"'
+    )
+    if len(class_pattern.findall(rendered)) != 1:
         raise ExtensionError("Rendered documentation changelog must contain exactly one changelog root.")
     if f"{app.config.documentation_changelog_repository_url.rstrip('/')}/commit/" not in rendered:
         raise ExtensionError("Rendered documentation changelog contains no repository commit links.")
