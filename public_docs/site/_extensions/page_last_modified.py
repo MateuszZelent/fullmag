@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
 LOGGER = logging.getLogger(__name__)
 MARKER_CLASS = "fm-page-last-modified"
+CHANGELOG_LINK_CLASS = "fm-page-last-modified__changelog"
 DISPLAY_TIMESTAMP_RE = re.compile(r"\b\d{2}:\d{2} \d{2}\.\d{2}\.\d{4}\b")
 
 
@@ -148,12 +149,21 @@ def _insert_page_last_modified(
     display_value = localized.strftime(app.config.page_last_modified_format)
     machine_value = localized.isoformat(timespec="minutes")
     label = app.config.page_last_modified_label
+    changelog_uri = app.builder.get_relative_uri(
+        docname,
+        app.config.page_last_modified_changelog_docname,
+    )
+    changelog_label = app.config.page_last_modified_changelog_label
 
     metadata_html = (
         f'<p class="{MARKER_CLASS}">'
         f'<span class="fm-page-last-modified__label">{escape(label)}</span> '
         f'<time datetime="{escape(machine_value, quote=True)}">'
-        f"{escape(display_value)}</time></p>"
+        f"{escape(display_value)}</time>"
+        '<span class="fm-page-last-modified__separator" aria-hidden="true">·</span>'
+        f'<a class="{CHANGELOG_LINK_CLASS}" '
+        f'href="{escape(changelog_uri, quote=True)}">{escape(changelog_label)}</a>'
+        "</p>"
     )
     metadata_node = nodes.raw("", metadata_html, format="html")
 
@@ -191,6 +201,8 @@ def _validate_rendered_metadata(app: Sphinx, exception: BaseException | None) ->
             continue
         if not DISPLAY_TIMESTAMP_RE.search(rendered):
             failures.append(f"{docname}: last-change timestamp has an invalid display format")
+        if rendered.count(f'class="{CHANGELOG_LINK_CLASS}"') != 1:
+            failures.append(f"{docname}: expected exactly one documentation changelog link")
 
     if failures:
         preview = "\n".join(f"- {failure}" for failure in failures[:20])
@@ -201,7 +213,7 @@ def _validate_rendered_metadata(app: Sphinx, exception: BaseException | None) ->
         )
 
     LOGGER.info(
-        "Validated page last-change metadata for %d documentation pages.",
+        "Validated page last-change metadata and changelog links for %d documentation pages.",
         len(app.env.found_docs),
     )
 
@@ -214,10 +226,20 @@ def setup(app: Sphinx) -> dict[str, object]:
         "html",
     )
     app.add_config_value("page_last_modified_timezone", "Europe/Warsaw", "html")
+    app.add_config_value(
+        "page_last_modified_changelog_docname",
+        "changelog/index",
+        "html",
+    )
+    app.add_config_value(
+        "page_last_modified_changelog_label",
+        "Documentation changelog",
+        "html",
+    )
     app.connect("doctree-resolved", _insert_page_last_modified)
     app.connect("build-finished", _validate_rendered_metadata)
     return {
-        "version": "1",
+        "version": "2",
         "parallel_read_safe": True,
         "parallel_write_safe": True,
     }
