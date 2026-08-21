@@ -167,8 +167,10 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       pages: write
       id-token: write
+      statuses: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -176,3 +178,54 @@ jobs:
       - name: Deploy public documentation
         id: deployment
         uses: actions/deploy-pages@v5
+
+      - name: Verify deployed DMI page
+        id: verify
+        shell: bash
+        env:
+          VERIFY_URL: https://fullmag.mzelent.pl/physics/interactions/dmi/index.html
+        run: |
+          set -euo pipefail
+          page="$(mktemp)"
+          trap 'rm -f "$page"' EXIT
+
+          for attempt in $(seq 1 18); do
+            if curl --fail --silent --show-error --location \
+              --connect-timeout 10 --max-time 30 \
+              "$VERIFY_URL" --output "$page" \
+              && grep --fixed-strings --quiet "Dzyaloshinskii" "$page" \
+              && grep --fixed-strings --quiet \
+                "Fullmag distinguishes interfacial and bulk" "$page"; then
+              echo "Verified deployed DMI page on attempt ${attempt}."
+              exit 0
+            fi
+            echo "Deployment not visible yet (attempt ${attempt}/18)."
+            sleep 10
+          done
+
+          echo "::error::Deployed DMI page did not expose the expected audited content."
+          exit 1
+
+      - name: Publish deployment commit status
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+          VERIFY_URL: https://fullmag.mzelent.pl/physics/interactions/dmi/index.html
+        run: |
+          set -euo pipefail
+          if [[ "$VERIFY_OUTCOME" == "success" ]]; then
+            state="success"
+            description="GitHub Pages and audited DMI page verified"
+          else
+            state="failure"
+            description="GitHub Pages DMI verification failed"
+          fi
+
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state="$state" \
+            -f context="Public documentation deployment" \
+            -f description="$description" \
+            -f target_url="$VERIFY_URL"
