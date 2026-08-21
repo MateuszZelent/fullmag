@@ -1,248 +1,46 @@
 {
   "document": {
     "path": "public_docs/site/physics/interactions/spin-orbit-torque/index.md",
-    "title": "Prescribed spin-orbit torque",
-    "interaction": "canonical signed prescribed spin-orbit torque"
+    "title": "Spin-orbit torque",
+    "interaction": "spin orbit torque"
   },
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "reference_executable", "reason": "Independent FP64 algebra and bounded target-mask, trajectory, and current-scaling reference checks exist."},
-    {"solver": "FDM", "device": "GPU", "status": "production_executable", "reason": "Native CUDA is the production implementation lane with bounded managed FP64 trajectory and scaling evidence; broad and FP32 qualification remain open."},
-    {"solver": "FEM", "device": "CPU", "status": "reference_executable", "reason": "Native MFEM and Rust reference evaluators have bounded SI-oracle, stage-time, mask, rollback, and trajectory evidence."},
-    {"solver": "FEM", "device": "GPU", "status": "reference_executable", "reason": "The device-resident CUDA direct-torque path has bounded FP64 SI-oracle and CPU/GPU parity evidence but is not production-qualified."}
-  ],
-  "equations": [
-    {"id": "eq-prescribed-sot-drive", "symbols": ["J_signed", "Jc", "t_drive", "n_nf", "sigma_hat"], "sources": ["sot-plan-drive"]},
-    {"id": "eq-prescribed-sot-gilbert", "symbols": ["Omega_dl", "Omega_fl", "gamma_e", "hbar", "xi_dl", "xi_fl", "J_signed", "e", "Ms", "tF", "m", "sigma_hat", "T_sot"], "sources": ["fdm-cpu", "fdm-gpu", "fem-cpu", "fem-gpu"]},
-    {"id": "eq-prescribed-sot-explicit", "symbols": ["T_sot", "alpha", "m"], "sources": ["fdm-cpu", "fdm-gpu", "fem-cpu", "fem-gpu"]}
-  ],
-  "symbols": [
-    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
-    {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization on the target", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "Jc", "latex": "$\\mathbf J_c$", "meaning": "conventional charge-current density", "si_unit": "$\\mathrm{A\\,m^{-2}}$"},
-    {"id": "J_signed", "latex": "$J_{\\mathrm{signed}}$", "meaning": "signed drive-projected current density", "si_unit": "$\\mathrm{A\\,m^{-2}}$"},
-    {"id": "t_drive", "latex": "$\\hat{\\mathbf t}$", "meaning": "fixed drive direction", "si_unit": "$1$"},
-    {"id": "n_nf", "latex": "$\\hat{\\mathbf n}_{NF}$", "meaning": "oriented nonmagnet-to-ferromagnet normal", "si_unit": "$1$"},
-    {"id": "sigma_hat", "latex": "$\\hat{\\boldsymbol\\sigma}$", "meaning": "normalized spin-polarization direction", "si_unit": "$1$"},
-    {"id": "xi_dl", "latex": "$\\xi_{\\mathrm{DL}}$", "meaning": "signed damping-like efficiency", "si_unit": "$1$"},
-    {"id": "xi_fl", "latex": "$\\xi_{\\mathrm{FL}}$", "meaning": "signed field-like efficiency", "si_unit": "$1$"},
-    {"id": "tF", "latex": "$t_F$", "meaning": "free-layer thickness in the local prefactor", "si_unit": "$\\mathrm{m}$"},
-    {"id": "gamma_e", "latex": "$\\gamma_e$", "meaning": "positive angular gyromagnetic magnitude", "si_unit": "$\\mathrm{s^{-1}\\,T^{-1}}$"},
-    {"id": "hbar", "latex": "$\\hbar$", "meaning": "reduced Planck constant", "si_unit": "$\\mathrm{J\\,s}$"},
-    {"id": "e", "latex": "$e$", "meaning": "positive elementary charge", "si_unit": "$\\mathrm{C}$"},
-    {"id": "Omega_dl", "latex": "$\\Omega_{\\mathrm{DL}}$", "meaning": "damping-like angular rate", "si_unit": "$\\mathrm{s^{-1}}$"},
-    {"id": "Omega_fl", "latex": "$\\Omega_{\\mathrm{FL}}$", "meaning": "field-like angular rate", "si_unit": "$\\mathrm{s^{-1}}$"},
-    {"id": "T_sot", "latex": "$\\mathbf T_{\\mathrm{SOT},G}$", "meaning": "Gilbert-source SOT rate", "si_unit": "$\\mathrm{s^{-1}}$"},
-    {"id": "alpha", "latex": "$\\alpha$", "meaning": "Gilbert damping", "si_unit": "$1$"}
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+    }
   ],
   "sources": [
     {
-      "id": "python-sot",
+      "id": "python-owner",
       "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
       "symbol": "class PrescribedSpinOrbitTorque",
-      "responsibility": "Validate and lower the canonical target, drive, efficiencies, and thickness.",
-      "test_path": "packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py",
-      "test_symbol": "test_prescribed_scalar_all_envelopes_render_canonically_without_loss",
-      "lane": "API/IR",
-      "evidence_status": "source mapped; focused public round-trip",
-      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/packages/fullmag-py/src/fullmag/model/spin_torque.py",
-      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py",
-      "source_anchor_status": "immutable_commit",
-      "test_anchor_status": "immutable_commit"
-    },
-    {
-      "id": "python-signed-drive",
-      "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
-      "symbol": "class SignedScalarDrive",
-      "responsibility": "Preserve signed scalar current, normalized spin axis, and optional envelope.",
-      "test_path": "packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py",
-      "test_symbol": "test_prescribed_scalar_all_envelopes_render_canonically_without_loss",
-      "lane": "API/IR",
-      "evidence_status": "source mapped; focused public round-trip",
-      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/packages/fullmag-py/src/fullmag/model/spin_torque.py",
-      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py",
-      "source_anchor_status": "immutable_commit",
-      "test_anchor_status": "immutable_commit"
-    },
-    {
-      "id": "python-vector-drive",
-      "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
-      "symbol": "class VectorCurrentDrive",
-      "responsibility": "Preserve vector source identity and oriented fixed axes.",
-      "test_path": "packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py",
-      "test_symbol": "test_vector_and_legacy_prescribed_sot_render_canonically_without_loss",
-      "lane": "API/IR",
-      "evidence_status": "source mapped; focused public round-trip",
-      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/packages/fullmag-py/src/fullmag/model/spin_torque.py",
-      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py",
-      "source_anchor_status": "immutable_commit",
-      "test_anchor_status": "immutable_commit"
-    },
-    {
-      "id": "sot-plan-drive",
-      "path": "crates/fullmag-plan/src/spin_torque.rs",
-      "symbol": "resolve_sot_fields",
-      "responsibility": "Evaluate the signed current projection and the oriented interface-normal cross product.",
-      "test_path": "crates/fullmag-plan/src/spin_torque.rs",
-      "test_symbol": "canonical_prescribed_sot_vector_binding_preserves_axes_and_reverses_signed_projection",
-      "lane": "planner",
-      "evidence_status": "source mapped; focused planner contract",
-      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-plan/src/spin_torque.rs",
-      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-plan/src/spin_torque.rs",
-      "source_anchor_status": "immutable_commit",
-      "test_anchor_status": "immutable_commit"
-    },
-    {
-      "id": "fdm-target",
-      "path": "crates/fullmag-plan/src/fdm.rs",
-      "symbol": "materialize_prescribed_sot_target_mask",
-      "responsibility": "Resolve FDM object or region targets without broadening.",
-      "test_path": "crates/fullmag-plan/src/fdm.rs",
-      "test_symbol": "prescribed_sot_region_target_materializes_cell_mask",
-      "lane": "FDM CPU/GPU planner",
-      "evidence_status": "source mapped; focused planner contract",
-      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-plan/src/fdm.rs",
-      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-plan/src/fdm.rs",
-      "source_anchor_status": "immutable_commit",
-      "test_anchor_status": "immutable_commit"
-    },
-    {
-      "id": "fem-target",
-      "path": "crates/fullmag-plan/src/fem.rs",
-      "symbol": "materialize_fem_spin_torque_target_masks",
-      "responsibility": "Resolve FEM whole-object masks and reject unsupported region subtargets.",
-      "test_path": "crates/fullmag-plan/src/fem.rs",
-      "test_symbol": "fem_spin_torque_object_target_materializes_node_and_element_masks",
-      "lane": "FEM CPU/GPU planner",
-      "evidence_status": "source mapped; focused planner contract",
-      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-plan/src/fem.rs",
-      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-plan/src/fem.rs",
-      "source_anchor_status": "immutable_commit",
-      "test_anchor_status": "immutable_commit"
-    },
-    {
-      "id": "fdm-cpu",
-      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
-      "symbol": "prescribed_sot_torque_from_config",
-      "responsibility": "Evaluate the independent FDM CPU SI and Gilbert reference algebra.",
-      "test_path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
-      "test_symbol": "prescribed_sot_matches_signed_si_gilbert_source_oracle",
-      "lane": "FDM CPU",
-      "evidence_status": "bounded CPU oracle/contract; not production qualification",
-      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-engine/src/fdm/cpu/fields.rs",
-      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-engine/src/fdm/cpu/fields.rs",
-      "source_anchor_status": "immutable_commit",
-      "test_anchor_status": "immutable_commit"
-    },
-    {
-      "id": "fdm-gpu",
-      "path": "backends/fdm/include/spin_torque.hpp",
-      "symbol": "prescribed_sot_explicit_rhs",
-      "responsibility": "Evaluate native CUDA precision-lane prescribed SOT.",
-      "test_path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs",
-      "test_symbol": "native_fdm_prescribed_sot_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available",
-      "lane": "FDM GPU",
-      "evidence_status": "bounded CUDA parity contract; hardware-gated; not production qualification",
-      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/backends/fdm/include/spin_torque.hpp",
-      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/crates/fullmag-runner/src/fdm/gpu/cuda/native.rs",
-      "source_anchor_status": "immutable_commit",
-      "test_anchor_status": "immutable_commit"
-    },
-    {
-      "id": "fem-cpu",
-      "path": "backends/fem/cpu/mfem/interactions/sot.cpp",
-      "symbol": "add_sot_rhs_aos",
-      "responsibility": "Evaluate native MFEM CPU prescribed SOT.",
-      "test_path": "backends/fem/tests/stt_contract.cpp",
-      "test_symbol": "prescribed_sot_rhs_matches_si_oracle_and_current_reversal",
-      "lane": "FEM CPU",
-      "evidence_status": "bounded native CPU contract; not production qualification",
-      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/backends/fem/cpu/mfem/interactions/sot.cpp",
-      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/backends/fem/tests/stt_contract.cpp",
-      "source_anchor_status": "immutable_commit",
-      "test_anchor_status": "immutable_commit"
-    },
-    {
-      "id": "fem-gpu",
-      "path": "backends/fem/gpu/cuda/interactions/sot/sot_kernels.cu",
-      "symbol": "prescribed_sot_rhs_kernel",
-      "responsibility": "Evaluate device-resident FEM GPU prescribed SOT.",
-      "test_path": "backends/fem/tests/cuda_sot_contract.cpp",
-      "test_symbol": "canonical_prescribed_sot_matches_cpu_and_independent_oracle",
-      "lane": "FEM GPU",
-      "evidence_status": "bounded CUDA contract; hardware-gated; not production qualification",
-      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/backends/fem/gpu/cuda/interactions/sot/sot_kernels.cu",
-      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/220262df5d84fa04b842c414e3e5868444b356e5/backends/fem/tests/cuda_sot_contract.cpp",
-      "source_anchor_status": "immutable_commit",
-      "test_anchor_status": "immutable_commit"
+      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
     }
   ],
-  "evidence_tests": [
-    {
-      "path": "packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py",
-      "symbol": "test_prescribed_scalar_all_envelopes_render_canonically_without_loss",
-      "claims": [
-        "python-sot",
-        "python-signed-drive"
-      ]
-    },
-    {
-      "path": "packages/fullmag-py/tests/test_spin_transport_runtime_roundtrip.py",
-      "symbol": "test_vector_and_legacy_prescribed_sot_render_canonically_without_loss",
-      "claims": [
-        "python-vector-drive"
-      ]
-    },
-    {
-      "path": "crates/fullmag-plan/src/spin_torque.rs",
-      "symbol": "canonical_prescribed_sot_vector_binding_preserves_axes_and_reverses_signed_projection",
-      "claims": [
-        "sot-plan-drive"
-      ]
-    },
-    {
-      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
-      "symbol": "prescribed_sot_matches_signed_si_gilbert_source_oracle",
-      "claims": [
-        "fdm-cpu"
-      ]
-    },
-    {
-      "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs",
-      "symbol": "native_fdm_prescribed_sot_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available",
-      "claims": [
-        "fdm-gpu"
-      ]
-    },
-    {
-      "path": "backends/fem/tests/stt_contract.cpp",
-      "symbol": "prescribed_sot_rhs_matches_si_oracle_and_current_reversal",
-      "claims": [
-        "fem-cpu"
-      ]
-    },
-    {
-      "path": "backends/fem/tests/cuda_sot_contract.cpp",
-      "symbol": "canonical_prescribed_sot_matches_cpu_and_independent_oracle",
-      "claims": [
-        "fem-gpu"
-      ]
-    }
-  ],
+  "symbols": [],
+  "equations": [],
   "public_api": {
-    "parameters": [
-      {"python": "PrescribedSpinOrbitTorque.name", "type": "str", "default": "required", "si_unit": "$1$", "validation": "non-empty", "meaning": "stable torque-module identity", "backend_support": "all four lanes; execution is capability-gated", "problem_ir": "spin_torque_modules[].id"},
-      {"python": "PrescribedSpinOrbitTorque.target", "type": "RegionRef", "default": "required", "si_unit": "$1$", "validation": "non-empty and resolvable magnetic object; FEM region subtargets fail closed", "meaning": "magnetic torque target", "backend_support": "FDM CPU/GPU and bounded FEM CPU/GPU", "problem_ir": "spin_torque_modules[].target"},
-      {"python": "PrescribedSpinOrbitTorque.drive", "type": "SignedScalarDrive or VectorCurrentDrive", "default": "required", "si_unit": "$\\mathrm{A\\,m^{-2}}$ or source binding", "validation": "exactly one tagged drive; vector axes must be finite, nonzero, and nonparallel", "meaning": "signed current and polarization source", "backend_support": "all four lanes with lane-specific envelope/source limits", "problem_ir": "spin_torque_modules[].drive"},
-      {"python": "PrescribedSpinOrbitTorque.xi_dl", "type": "float", "default": "required", "si_unit": "$1$", "validation": "finite and signed", "meaning": "damping-like efficiency", "backend_support": "all four lanes", "problem_ir": "spin_torque_modules[].xi_dl"},
-      {"python": "PrescribedSpinOrbitTorque.xi_fl", "type": "float", "default": "0.0", "si_unit": "$1$", "validation": "finite and signed", "meaning": "field-like efficiency", "backend_support": "all four lanes", "problem_ir": "spin_torque_modules[].xi_fl"},
-      {"python": "PrescribedSpinOrbitTorque.free_layer_thickness_m", "type": "float", "default": "required", "si_unit": "$\\mathrm{m}$", "validation": "finite and strictly positive", "meaning": "homogenized ferromagnet thickness", "backend_support": "all four lanes", "problem_ir": "spin_torque_modules[].free_layer_thickness_m"},
-      {"python": "SignedScalarDrive.current_density_Apm2", "type": "float", "default": "required", "si_unit": "$\\mathrm{A\\,m^{-2}}$", "validation": "finite; zero is legal and produces zero signed source", "meaning": "signed prescribed current density", "backend_support": "all four lanes", "problem_ir": "spin_torque_modules[].drive.current_density_Apm2"},
-      {"python": "SignedScalarDrive.sigma", "type": "Sequence[float]", "default": "required", "si_unit": "$1$", "validation": "three finite components and norm above `1e-12`; normalized once", "meaning": "authored spin axis", "backend_support": "all four lanes", "problem_ir": "spin_torque_modules[].drive.sigma_hat"},
-      {"python": "SignedScalarDrive.envelope", "type": "TimeEnvelope or None", "default": "None", "si_unit": "$1$", "validation": "canonical envelope; tabulated artifacts are runtime-gated", "meaning": "stage-time multiplier", "backend_support": "FDM bounded constant slice; FEM bounded non-tabulated slice", "problem_ir": "spin_torque_modules[].drive.envelope"},
-      {"python": "VectorCurrentDrive.current_source", "type": "str", "default": "required", "si_unit": "$1$", "validation": "non-empty current-source id", "meaning": "vector current binding", "backend_support": "planner/runtime source availability is lane-gated", "problem_ir": "spin_torque_modules[].drive.current_source_id"},
-      {"python": "VectorCurrentDrive.drive_direction", "type": "Sequence[float]", "default": "required", "si_unit": "$1$", "validation": "finite, nonzero, and not parallel to interface normal", "meaning": "fixed current projection axis", "backend_support": "all four authoring lanes", "problem_ir": "spin_torque_modules[].drive.drive_direction"},
-      {"python": "VectorCurrentDrive.interface_normal", "type": "Sequence[float]", "default": "required", "si_unit": "$1$", "validation": "finite, nonzero, and not parallel to drive direction", "meaning": "oriented HM-to-FM normal", "backend_support": "all four authoring lanes", "problem_ir": "spin_torque_modules[].drive.interface_normal"}
-    ]
+    "parameters": []
   }
 }

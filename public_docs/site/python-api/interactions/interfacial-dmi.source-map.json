@@ -2,43 +2,45 @@
   "document": {
     "path": "public_docs/site/python-api/interactions/interfacial-dmi.md",
     "title": "Interfacial DMI Python API",
-    "interaction": "interfacial DMI authoring and lowering contract"
+    "interaction": "interfacial dmi"
   },
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "Python lowering feeds the double-precision FDM reference lane."},
-    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "Python lowering feeds the FP64/FP32 CUDA iDMI field and energy paths."},
-    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "Python lowering feeds native FEM weak residual and material-field paths."},
-    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "Python lowering feeds device-resident FEM iDMI paths; runtime parity is separate evidence."}
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+    }
   ],
   "sources": [
-    {"id": "python-term", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class InterfacialDMI", "responsibility": "Explicit constructor and term serialization."},
-    {"id": "python-material", "path": "packages/fullmag-py/src/fullmag/model/structure.py", "symbol": "class Material", "responsibility": "Dind and Dind_field serialization and scalar validation."},
-    {"id": "python-vector", "path": "packages/fullmag-py/src/fullmag/_validation.py", "symbol": "as_vector3", "responsibility": "Interface-normal shape and finite-value validation."},
-    {"id": "planner-fdm", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "FDM iDMI term resolution and legality."},
-    {"id": "planner-fem", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem", "responsibility": "FEM normal, scalar fallback, and field resolution."},
-    {"id": "scene-export", "path": "packages/fullmag-py/src/fullmag/runtime/scene_document.py", "symbol": "_normalize_interaction_entry", "responsibility": "Runtime scene interaction normalization."}
+    {
+      "id": "python-owner",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class InterfacialDMI",
+      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+    }
   ],
-  "symbols": [
-    {"id": "D", "latex": "$D$", "meaning": "interfacial DMI coefficient", "si_unit": "$\\mathrm{J\\,m^{-2}}$"},
-    {"id": "nhat", "latex": "$\\hat{\\mathbf n}$", "meaning": "normalized interface normal", "si_unit": "$1$"},
-    {"id": "mn", "latex": "$m_n$", "meaning": "$\\mathbf m\\cdot\\hat{\\mathbf n}$", "si_unit": "$1$"},
-    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
-    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
-    {"id": "Hi", "latex": "$\\mathbf H_{\\mathrm i}$", "meaning": "interfacial DMI effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "wi", "latex": "$w_{\\mathrm i}$", "meaning": "interfacial DMI energy density", "si_unit": "$\\mathrm{J\\,m^{-3}}$"}
-  ],
-  "equations": [
-    {"id": "eq-python-interfacial-dmi-density", "symbols": ["wi", "D", "mn", "m"], "sources": ["python-term", "python-material"]},
-    {"id": "eq-python-interfacial-dmi-field", "symbols": ["Hi", "D", "mu0", "Ms", "mn", "m", "nhat"], "sources": ["planner-fdm", "planner-fem"]}
-  ],
+  "symbols": [],
+  "equations": [],
   "public_api": {
-    "constructors": ["fullmag.InterfacialDMI", "fullmag.Material"],
-    "parameters": [
-      {"python": "InterfacialDMI.D", "type": "float", "default": "required", "si_unit": "$\\mathrm{J\\,m^{-2}}$", "validation": "finite", "meaning": "scalar interfacial DMI coefficient and chirality sign", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "`energy_terms[].D` for `kind=interfacial_dmi`"},
-      {"python": "InterfacialDMI.interface_normal", "type": "Sequence[float] | None", "default": "None", "si_unit": "$1$", "validation": "length 3; finite; FEM non-zero; FDM normalized `+z` only", "meaning": "interface symmetry axis", "backend_support": "FDM `+z`; FEM any non-zero normalized axis", "problem_ir": "`energy_terms[].interface_normal` when supplied"},
-      {"python": "Material.Dind", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-2}}$", "validation": "finite when supplied; FEM planner resolves active value", "meaning": "material-owned scalar iDMI coefficient", "backend_support": "FEM CPU/GPU; not a native FDM scalar route", "problem_ir": "`materials[].interfacial_dmi`"},
-      {"python": "Material.Dind_field", "type": "list[float] | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-2}}$", "validation": "FEM node cardinality and finite values validated downstream", "meaning": "spatial nodal iDMI coefficient", "backend_support": "FEM CPU/GPU", "problem_ir": "`materials[].dind_field`"}
-    ]
+    "parameters": []
   }
 }

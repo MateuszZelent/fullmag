@@ -10,6 +10,7 @@ on:
       - "docs/physics/**"
       - "packages/fullmag-py/**"
       - "scripts/public_docs_information_architecture.py"
+      - "scripts/check_public_docs_information_architecture.py"
       - "scripts/test_public_docs_information_architecture.py"
       - "scripts/check_public_doc_examples.py"
       - "scripts/test_check_public_doc_examples.py"
@@ -22,6 +23,7 @@ on:
       - "docs/physics/**"
       - "packages/fullmag-py/**"
       - "scripts/public_docs_information_architecture.py"
+      - "scripts/check_public_docs_information_architecture.py"
       - "scripts/test_public_docs_information_architecture.py"
       - "scripts/check_public_doc_examples.py"
       - "scripts/test_check_public_doc_examples.py"
@@ -63,7 +65,7 @@ jobs:
       - name: Validate public documentation information architecture
         run: |
           python -m unittest scripts/test_public_docs_information_architecture.py -v
-          python scripts/public_docs_information_architecture.py --check --root public_docs/site
+          python scripts/check_public_docs_information_architecture.py --root public_docs/site
 
       - name: Enforce stage-first public Python examples
         run: |

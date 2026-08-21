@@ -1,24 +1,16 @@
 ---
 title: Anisotropy
-status: implemented
+status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: docs/physics/0402-uniaxial-anisotropy.md and docs/physics/0403-cubic-anisotropy.md
 ---
 
 (public-docs-physics-interactions-anisotropy-root)=
-# Magnetocrystalline anisotropy
+# Anisotropy
 
-This is the canonical physical owner for FullMag magnetocrystalline anisotropy. It defines the
-shared interaction contract once and separates the two implemented symmetry families into
-{doc}`uniaxial` and {doc}`cubic`. The pages are not four copies for FDM CPU, FDM GPU, FEM CPU, and
-FEM GPU: solver and device differences belong in the realization matrix below and in the
-family-specific chapters.
-
-The public compatibility objects `fullmag.UniaxialAnisotropy` and `fullmag.CubicAnisotropy` are
-authoring forms. During lowering they are migrated to the target `Material`; they do not create a
-second physical energy term in `ProblemIR`.
+Fullmag supports uniaxial and cubic local magnetocrystalline anisotropy. The absolute energy
+convention matters because Fullmag reports scalar energies, not only effective fields.
 
 ```{toctree}
 :maxdepth: 1
@@ -27,397 +19,194 @@ uniaxial
 cubic
 ```
 
-(anisotropy-problem-statement)=
+(physics-anisotropy-problem-statement)=
 ## Physical problem
 
-Let $\Omega_m$ be the magnetic domain, $\mathbf M$ the magnetization,
-$M_s>0$ the saturation magnetization, and $\mathbf m=\mathbf M/M_s$ the reduced
-magnetization. Magnetocrystalline anisotropy is a local energy density that depends on the
-orientation of $\mathbf m$ relative to a material frame. It is distinct from exchange and
-demagnetization: it contains no spatial derivative and does not require a Poisson, convolution,
-or boundary-value solve.
+This page is the public physical and authoring contract for the interaction. It separates authored semantics, planner resolution, executable backend lanes, and scientific qualification.
 
-FullMag currently exposes two material-frame families:
-
-* uniaxial anisotropy, with one easy-axis direction $\mathbf u$ and constants $K_{u1}$ and
-  $K_{u2}$;
-* cubic anisotropy, with two supplied crystal axes $\mathbf c_1$, $\mathbf c_2$, a derived
-  $\mathbf c_3=\mathbf c_1\times\mathbf c_2$, and constants $K_{c1}$, $K_{c2}$, and $K_{c3}$.
-
-The physical interaction is conservative. Its field is added to the effective-field assembly and
-its energy is included in the anisotropy scalar observable. The LLG equation and magnetization
-normalization are owned by the dynamics contract, not duplicated here.
-
-(anisotropy-governing-equations)=
+(physics-anisotropy-governing-equations)=
 ## Governing equations
 
-The total anisotropy is the sum of the active family contributions:
+Let $q=\mathbf m\cdot\hat{\mathbf u}$. The **implemented Fullmag convention** is
 
 ```{math}
-:label: eq-anisotropy-total-energy
-E_{\mathrm{ani}}[\mathbf m]
-=E_{\mathrm u}[\mathbf m]+E_{\mathrm c}[\mathbf m],
-\qquad
-\mathbf H_{\mathrm{ani}}
-=\mathbf H_{\mathrm u}+\mathbf H_{\mathrm c}.
+:label: eq-public-anisotropy-anisotropy-uniaxial-energy
+w_{\mathrm u}=-K_{u1}q^2-K_{u2}q^4 .
 ```
 
-For uniaxial anisotropy, define the projection
-
 ```{math}
-:label: eq-anisotropy-uniaxial-projection
-q=\mathbf m\cdot\mathbf u.
-```
-
-The implemented FullMag energy convention is
-
-```{math}
-:label: eq-anisotropy-uniaxial-energy
-w_{\mathrm u}=-K_{u1}q^2-K_{u2}q^4,
-\qquad
-E_{\mathrm u}=\int_{\Omega_m}w_{\mathrm u}\,\mathrm dV,
-\qquad
+:label: eq-public-anisotropy-anisotropy-uniaxial-field
 \mathbf H_{\mathrm u}
-=\frac{2K_{u1}q+4K_{u2}q^3}{\mu_0M_s}\,\mathbf u.
+=
+\frac{2K_{u1}q+4K_{u2}q^3}{\mu_0M_s}\hat{\mathbf u}.
 ```
 
-For cubic anisotropy, define the direction cosines and invariant
+This is not parameter-identical to writing
+$K_{u1}\sin^2\theta+K_{u2}\sin^4\theta$. The first-order terms differ only by an additive
+constant, but the second-order coefficient requires a transformation. Documentation and
+docstrings must therefore use the implemented negative-power convention.
+
+For an orthonormal crystal frame
+$(\hat{\mathbf c}_1,\hat{\mathbf c}_2,\hat{\mathbf c}_3)$, let
+$\alpha_i=\mathbf m\cdot\hat{\mathbf c}_i$ and
 
 ```{math}
-:label: eq-anisotropy-cubic-frame
-\mathbf c_3=\mathbf c_1\times\mathbf c_2,
-\qquad
-\alpha_a=\mathbf m\cdot\mathbf c_a,
-\qquad
-\Sigma=\alpha_1^2\alpha_2^2+\alpha_2^2\alpha_3^2+\alpha_3^2\alpha_1^2.
+:label: eq-public-anisotropy-anisotropy-cubic-invariant
+P=\alpha_1^2\alpha_2^2+\alpha_2^2\alpha_3^2+\alpha_3^2\alpha_1^2 .
 ```
 
-The implemented cubic density is
+The implemented cubic polynomial is
 
 ```{math}
-:label: eq-anisotropy-cubic-energy
-w_{\mathrm c}=K_{c1}\Sigma
+:label: eq-public-anisotropy-anisotropy-cubic-energy
+w_{\mathrm c}
+=
+K_{c1}P
 +K_{c2}\alpha_1^2\alpha_2^2\alpha_3^2
-+K_{c3}\Sigma^2,
-\qquad
-E_{\mathrm c}=\int_{\Omega_m}w_{\mathrm c}\,\mathrm dV.
++K_{c3}P^2 .
 ```
 
-The effective fields use the common FullMag SI variational convention
+Because higher-order cubic conventions differ between codes and publications, $K_{c2}$ and
+$K_{c3}$ must always be interpreted together with this equation.
 
-```{math}
-:label: eq-anisotropy-effective-field
-\mathbf H_{\mathrm{ani}}
-=-\frac{1}{\mu_0M_s}
-\frac{\delta E_{\mathrm{ani}}}{\delta\mathbf m},
-\qquad
-\mathbf H_{\mathrm c}=g_1\mathbf c_1+g_2\mathbf c_2+g_3\mathbf c_3.
-```
-
-The complete $g_a$ expressions are recorded in {doc}`cubic`; they must not be replaced by a
-single-axis approximation when the cubic family is active. Likewise, the complete uniaxial
-parameter and field contract is recorded in {doc}`uniaxial`.
-
-## Solver and backend realization matrix
-
-| Solver | Device | Status | Realized contract and qualification boundary |
-|---|---|---|---|
-| FDM | CPU | reference | Cell-local uniaxial/cubic field evaluation, active-cell masking, and cell-volume energy reduction in the reference path. |
-| FDM | GPU | implemented | Separate FP64 and FP32 local kernels plus scalar reductions; multilayer dispatch has its own kernel. Source availability is not executed-device qualification. |
-| FEM | CPU | implemented | Nodal field evaluation with magnetic-node/lumped-volume reductions and material-field promotion; crystal-frame validation is planner-owned. |
-| FEM | GPU | implemented | Device-resident uniaxial/cubic field and block-energy kernels with final reductions; missing device buffers fail closed and parity requires executed-device evidence. |
-
-The matrix describes implementation evidence, not universal qualification. A resolved execution
-record must retain the requested constants and axes, normalized or validated frame, scalar versus
-spatial coefficient realization, solver, device, precision, mesh, and output legality.
-
-(anisotropy-symbols-and-si-units)=
+(physics-anisotropy-symbols-and-si-units)=
 ## Symbols and SI units
 
-| Symbol | Definition | SI unit |
-|---|---|---|
-| $\mathbf M$ | magnetization | $\mathrm{A\,m^{-1}}$ |
-| $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
-| $\mathbf m$ | reduced magnetization $\mathbf M/M_s$ | $1$ |
-| $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
-| $\Omega_m$ | magnetic integration domain | $\mathrm{m^3}$ |
-| $\mathbf u$ | uniaxial easy-axis direction | $1$ |
-| $q$ | uniaxial projection $\mathbf m\cdot\mathbf u$ | $1$ |
-| $K_{u1}$ | first-order uniaxial anisotropy constant | $\mathrm{J\,m^{-3}}$ |
-| $K_{u2}$ | second-order uniaxial anisotropy constant | $\mathrm{J\,m^{-3}}$ |
-| $\mathbf c_1$ | first supplied cubic crystal axis | $1$ |
-| $\mathbf c_2$ | second supplied cubic crystal axis | $1$ |
-| $\mathbf c_3$ | derived cubic crystal axis $\mathbf c_1\times\mathbf c_2$ | $1$ |
-| $\alpha_a$ | cubic direction cosine $\mathbf m\cdot\mathbf c_a$ | $1$ |
-| $\Sigma$ | first cubic invariant | $1$ |
-| $K_{c1}$ | first cubic anisotropy constant | $\mathrm{J\,m^{-3}}$ |
-| $K_{c2}$ | second cubic anisotropy constant | $\mathrm{J\,m^{-3}}$ |
-| $K_{c3}$ | third cubic anisotropy constant | $\mathrm{J\,m^{-3}}$ |
-| $w_{\mathrm u}$ | uniaxial anisotropy energy density | $\mathrm{J\,m^{-3}}$ |
-| $w_{\mathrm c}$ | cubic anisotropy energy density | $\mathrm{J\,m^{-3}}$ |
-| $E_{\mathrm u}$ | total uniaxial anisotropy energy | $\mathrm{J}$ |
-| $E_{\mathrm c}$ | total cubic anisotropy energy | $\mathrm{J}$ |
-| $E_{\mathrm{ani}}$ | total anisotropy energy | $\mathrm{J}$ |
-| $\mathbf H_{\mathrm u}$ | uniaxial effective field | $\mathrm{A\,m^{-1}}$ |
-| $\mathbf H_{\mathrm c}$ | cubic effective field | $\mathrm{A\,m^{-1}}$ |
-| $\mathbf H_{\mathrm{ani}}$ | total anisotropy effective field | $\mathrm{A\,m^{-1}}$ |
-| $g_a$ | crystal-frame cubic field component | $\mathrm{A\,m^{-1}}$ |
-| $i$ | discrete cell or node index | $1$ |
-| $V_i$ | FDM cell volume | $\mathrm{m^3}$ |
-| $w_i^{\mathrm{lump}}$ | FEM magnetic-node lumped integration weight | $\mathrm{m^3}$ |
+| Symbol | Meaning | SI unit |
+|---|---|---:|
+| $K_{u1},K_{u2}$ | uniaxial coefficients in the Fullmag convention | $\mathrm{J\,m^{-3}}$ |
+| $K_{c1},K_{c2},K_{c3}$ | cubic coefficients in the Fullmag convention | $\mathrm{J\,m^{-3}}$ |
+| $\hat{\mathbf u}$ | uniaxial axis | $1$ |
+| $\hat{\mathbf c}_i$ | orthonormal crystal axes | $1$ |
+| $w_{\mathrm u},w_{\mathrm c}$ | local energy density | $\mathrm{J\,m^{-3}}$ |
+| $\mathbf H_{\mathrm u},\mathbf H_{\mathrm c}$ | effective field | $\mathrm{A\,m^{-1}}$ |
 
-(anisotropy-assumptions-and-validity)=
+(physics-anisotropy-assumptions-and-validity)=
 ## Assumptions and validity
 
-* All constants are authored directly in SI energy density units
-  $\mathrm{J\,m^{-3}}$. No CGS conversion or hidden $\mu_0$ factor is applied to the energy.
-* $M_s$ is finite and positive. The field scales with $1/M_s$; the energy density does not.
-* An active uniaxial axis must be finite and non-zero. Native lanes normalize the direction where
-  their contract allows it; the resolved provenance must record the normalized value.
-* The cubic frame is physically orthonormal. FEM planning validates the supplied axes strictly;
-  FDM behavior that normalizes or derives axes is a lane-specific realization and is not evidence
-  that arbitrary non-orthogonal frames are physically valid.
-* Spatial coefficient fields are mesh-associated data. Their length, interpolation, and memory
-  residency are validated by the selected planner; a Python list does not bypass those checks.
-* The negative-power uniaxial energy convention and the cubic polynomial above define the absolute
-  FullMag energy. A publication that adds a constant to the energy may have the same field but a
-  different reported scalar energy.
-* Anisotropy is local and has no independent boundary condition. Any surface anisotropy or DMI
-  boundary term is a different interaction and must not be folded into these constants.
+Anisotropy is local and has no independent boundary condition. Active axes must be finite and
+non-zero; cubic axes must define a non-degenerate frame and are normalized/orthogonalized only
+according to an explicit planner contract. Spatial coefficient fields are mesh-associated data
+and must match the realized cell/node cardinality.
 
-(anisotropy-python-api)=
-## Python authoring and complete parameter contract
+(physics-anisotropy-discrete-realization)=
+## Backend capability matrix
 
-The canonical authoring form stores anisotropy on `Material`. The compatibility constructors are
-still public and are migrated only for a single material target.
+| Solver | Device | Authoring / IR | Executable realization | Scientific qualification | Exact boundary |
+|---|---|---|---|---|---|
+| FDM | CPU | material fields and compatibility constructors | reference executable | analytic and finite-difference oracles | cell-local field and volume energy sum |
+| FDM | GPU | same canonical material IR | implemented | FP32/FP64 qualification separate | device masks and optional coefficient arrays |
+| FEM | CPU | same canonical material IR | implemented | mesh/integration convergence required | nodal/element realization and resolved axes |
+| FEM | GPU | same canonical material IR | implemented | executed-device parity required | device-resident fields, masks, and reductions |
 
-| Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
-|---|---|---|---|---|---|---|---|
-| `UniaxialAnisotropy.ku1` | `float` | `required` | $\mathrm{J\,m^{-3}}$ | finite | first-order uniaxial constant | FDM/FEM CPU/GPU after migration | `materials[].uniaxial_anisotropy` |
-| `UniaxialAnisotropy.ku2` | `float` | `0.0` | $\mathrm{J\,m^{-3}}$ | finite | second-order uniaxial constant | FDM/FEM CPU/GPU after migration | `materials[].uniaxial_anisotropy_k2` |
-| `UniaxialAnisotropy.axis` | `Sequence[float]` | `(0,0,1)` | $1$ | length 3 and finite; non-zero when active | uniaxial easy axis | FDM/FEM CPU/GPU after migration | `materials[].anisotropy_axis` |
-| `CubicAnisotropy.kc1` | `float` | `required` | $\mathrm{J\,m^{-3}}$ | finite | first cubic constant | FDM/FEM CPU/GPU after migration | `materials[].cubic_anisotropy_kc1` |
-| `CubicAnisotropy.kc2` | `float` | `0.0` | $\mathrm{J\,m^{-3}}$ | finite | second cubic constant | FDM/FEM CPU/GPU after migration | `materials[].cubic_anisotropy_kc2` |
-| `CubicAnisotropy.kc3` | `float` | `0.0` | $\mathrm{J\,m^{-3}}$ | finite | third cubic constant | FDM/FEM CPU/GPU after migration | `materials[].cubic_anisotropy_kc3` |
-| `CubicAnisotropy.axis1` | `Sequence[float]` | `(1,0,0)` | $1$ | length 3 and finite | first cubic crystal axis | FDM/FEM CPU/GPU after migration | `materials[].cubic_anisotropy_axis1` |
-| `CubicAnisotropy.axis2` | `Sequence[float]` | `(0,1,0)` | $1$ | length 3 and finite | second cubic crystal axis | FDM/FEM CPU/GPU after migration | `materials[].cubic_anisotropy_axis2` |
-| `Material.Ku1` | `float or None` | `None` | $\mathrm{J\,m^{-3}}$ | finite when supplied | canonical first-order uniaxial value | FDM/FEM CPU/GPU | `materials[].uniaxial_anisotropy` |
-| `Material.Ku2` | `float or None` | `None` | $\mathrm{J\,m^{-3}}$ | finite when supplied | canonical second-order uniaxial value | FDM/FEM CPU/GPU | `materials[].uniaxial_anisotropy_k2` |
-| `Material.anisU` | `tuple[float,float,float] or None` | `None` | $1$ | length 3 and finite; non-zero when active | canonical uniaxial axis | FDM/FEM CPU/GPU | `materials[].anisotropy_axis` |
-| `Material.Kc1` | `float or None` | `None` | $\mathrm{J\,m^{-3}}$ | finite when supplied | canonical first cubic value | FDM/FEM CPU/GPU | `materials[].cubic_anisotropy_kc1` |
-| `Material.Kc2` | `float or None` | `None` | $\mathrm{J\,m^{-3}}$ | finite when supplied | canonical second cubic value | FDM/FEM CPU/GPU | `materials[].cubic_anisotropy_kc2` |
-| `Material.Kc3` | `float or None` | `None` | $\mathrm{J\,m^{-3}}$ | finite when supplied | canonical third cubic value | FDM/FEM CPU/GPU | `materials[].cubic_anisotropy_kc3` |
-| `Material.anisC1` | `tuple[float,float,float] or None` | `None` | $1$ | length 3 and finite | canonical first cubic axis | FDM/FEM CPU/GPU | `materials[].cubic_anisotropy_axis1` |
-| `Material.anisC2` | `tuple[float,float,float] or None` | `None` | $1$ | length 3 and finite | canonical second cubic axis | FDM/FEM CPU/GPU | `materials[].cubic_anisotropy_axis2` |
-| `Material.Ku_field` | `list[float] or None` | `None` | $\mathrm{J\,m^{-3}}$ | finite values; mesh cardinality downstream | spatial $K_{u1}$ override | FEM and supported allocating FDM reference paths | `materials[].ku_field` |
-| `Material.Ku2_field` | `list[float] or None` | `None` | $\mathrm{J\,m^{-3}}$ | finite values; mesh cardinality downstream | spatial $K_{u2}$ override | FEM and supported allocating FDM reference paths | `materials[].ku2_field` |
-| `Material.Kc1_field` | `list[float] or None` | `None` | $\mathrm{J\,m^{-3}}$ | finite values; mesh cardinality downstream | spatial $K_{c1}$ override | FEM and supported allocating FDM reference paths | `materials[].kc1_field` |
-| `Material.Kc2_field` | `list[float] or None` | `None` | $\mathrm{J\,m^{-3}}$ | finite values; mesh cardinality downstream | spatial $K_{c2}$ override | FEM and supported allocating FDM reference paths | `materials[].kc2_field` |
-| `Material.Kc3_field` | `list[float] or None` | `None` | $\mathrm{J\,m^{-3}}$ | finite values; mesh cardinality downstream | spatial $K_{c3}$ override | FEM and supported allocating FDM reference paths | `materials[].kc3_field` |
-
-### Executable user workflow: study and stages
-
-The normal user-facing script uses the study/stage API. The anisotropy constants are assigned to
-the geometry handle, and the ordered relaxation/run pipeline is declared explicitly.
+(physics-anisotropy-python-api)=
+## Python API and stage-first example
 
 ```python
-# %% Copyable Python/Jupyter example: canonical study pipeline
+# %% Study, execution lane, and magnetic body
 import fullmag as fm
 
 nm = 1.0e-9
-study = fm.study("uniaxial-example")
+study = fm.study("anisotropy_reference")
 study.engine("fdm")
-study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 1 * nm))
-
-body = study.geometry(fm.Box(40 * nm, 20 * nm, 5 * nm), name="film")
-body.Ms = 800.0e3
+study.device("cpu", precision="double")
+study.mode("strict")
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
+body = study.geometry(fm.Box(40 * nm, 20 * nm, 4 * nm), name="film")
+body.Ms = 8.0e5
 body.Aex = 13.0e-12
-body.alpha = 0.01
-body.Ku1 = 0.5e6
-body.anisU = (0.0, 0.0, 1.0)
+body.alpha = 0.02
 body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
-study.stages.add_relax(
-    stage_id="relax",
-    tolT=1.0e-6,
-    dt=1.0e-15,
-    max_steps=50_000,
-)
-study.stages.add_run(stage_id="run", until=1.0e-9)
+body.Ku1 = 5.0e5
+body.Ku2 = 5.0e4
+body.anisU = (0.0, 0.0, 1.0)
+study.exchange()
+study.stages.add_relax(stage_id="relax", algorithm="projected_gradient_bb", max_steps=500, tolT=1.0e-6)
 ```
 
-`study.stages` is the executable user workflow. It produces stage-local physical snapshots that
-are later lowered and planned; the solver/device realization is resolved after the script has
-declared its intent.
-
-### Interaction and material lowering fragments
-
-The stage pipeline above is the public simulation workflow. The following cells inspect the
-canonical material fields and compatibility interaction independently; they do not assemble or
-launch a top-level simulation.
+A cubic material uses the same object-owned route:
 
 
-These fragments are lowering examples, not device qualification. They can be adapted to a cubic
-material by setting `Kc1`, `Kc2`, `Kc3`, `anisC1`, and `anisC2`, or by using `fm.CubicAnisotropy`
-as the compatibility energy term.
 
-(anisotropy-problem-ir)=
-## ProblemIR and planner resolution
+`UniaxialAnisotropy` and `CubicAnisotropy` remain compatibility constructors. Canonical export
+should migrate unambiguous single-material terms to material-owned fields.
 
-The canonical material fragment produced by the example is material-owned:
+(physics-anisotropy-problem-ir)=
+## ProblemIR
+
+Representative material fragment:
 
 ```json
 {
   "uniaxial_anisotropy": 500000.0,
   "uniaxial_anisotropy_k2": 50000.0,
   "anisotropy_axis": [0.0, 0.0, 1.0],
-  "cubic_anisotropy_kc1": null,
-  "cubic_anisotropy_kc2": null,
-  "cubic_anisotropy_kc3": null,
-  "cubic_anisotropy_axis1": null,
-  "cubic_anisotropy_axis2": null
+  "cubic_anisotropy_kc1": 48000.0,
+  "cubic_anisotropy_kc2": 0.0,
+  "cubic_anisotropy_kc3": 0.0,
+  "cubic_anisotropy_axis1": [1.0, 0.0, 0.0],
+  "cubic_anisotropy_axis2": [0.0, 1.0, 0.0]
 }
 ```
 
-The compatibility migration removes `UniaxialAnisotropy` and `CubicAnisotropy` from the final
-energy-term list and merges their values into exactly one material. `_migrate_legacy_anisotropy_energy_terms`
-rejects multiple material targets and conflicting existing values. `plan_fdm` and `plan_fem` then
-resolve scalar or spatial material data, axis legality, masks, mesh cardinality, selected solver,
-device, and precision. The planner may reject an unsupported combination; it must never drop an
-anisotropy term while reporting a successful execution.
+(physics-anisotropy-validation)=
+## Validation boundary and required code corrections
 
-(anisotropy-round-trip-and-failure-semantics)=
-## Round-trip and failure semantics
+At the audited revision, compatibility constructors convert constants with `float()` and axes
+with `as_vector3`; this does not guarantee finite values or non-zero/orthogonal axes at the
+constructor boundary. `Material.Ku1/Ku2` are finite-checked, while the cubic material constants
+do not receive the same explicit finite check. The documentation should state where each check
+actually occurs, and the API should be hardened so all scalar coefficients and axes fail early.
 
-Requested intent is the original Python constructor or material fields, including values before
-axis normalization and before planner promotion of region values. Resolved execution is the
-material-owned IR plus normalized/validated axes, resolved scalar versus spatial coefficients,
-solver, device, precision, mesh, and output decisions. Script export must preserve the canonical
-material form when no compatibility term is needed.
+The docstring of `UniaxialAnisotropy` must be corrected from a
+$\sin^2/\sin^4$ parameterization to the implemented
+$-K_{u1}q^2-K_{u2}q^4$ convention.
 
-Validation errors include non-finite constants, malformed vectors, an active zero uniaxial axis,
-conflicting legacy/material values, multiple material targets, invalid spatial-field cardinality,
-invalid FEM cubic axes, and illegal output requests. Unsupported combinations are planner errors,
-not silent fallbacks. Source presence or Python acceptance is not proof of GPU execution or parity.
+## Required numerical validation
 
-(anisotropy-discrete-realization)=
-## Discrete realization
+- energy minima/maxima for easy-axis and easy-plane signs;
+- analytic torque for several $q$, including the $K_{u2}$ term;
+- finite-difference derivative of energy versus field;
+- cubic $\langle100\rangle$, $\langle110\rangle$, and
+  $\langle111\rangle$ energy ordering;
+- invariance under a rigid rotation of both magnetization and crystal frame;
+- spatial-coefficient cardinality and mask tests;
+- CPU/GPU comparison at matched integration/reduction conventions.
 
-### FDM CPU
+(physics-anisotropy-limitations)=
+## Limitations and recommended extensions
 
-The reference path evaluates each active cell locally. The uniaxial field and energy are the
-pointwise formulas above multiplied by $V_i$ for the scalar reduction; the cubic path evaluates
-the three crystal projections and the full polynomial at the cell. Inactive cells contribute zero
-field and zero energy. Spatial coefficient arrays are only used by allocating reference paths when
-their cardinality matches the realized grid.
+Surface anisotropy, arbitrary anisotropy tensors, temperature-dependent coefficients, and
+crystal frames varying continuously in space require distinct typed contracts. They must not be
+encoded by overloading scalar `Ku` or two cubic axes.
 
-### FDM GPU
-
-The standard CUDA path has separate FP64 and FP32 kernels. Field and scalar-energy operations are
-separate dispatches, and the multilayer path has a layer-local anisotropy kernel. CUDA context
-uploads reject arrays with the wrong cell count. The precision-specific reduction order changes
-round-off, so parity requires a declared tolerance and matched material/mask state. A compiled
-kernel is not executed-device evidence.
-
-### FEM CPU
-
-The native FEM path evaluates local anisotropy at magnetic nodes and uses magnetic-node volumes or
-element material quadrature for energy. Non-magnetic nodes are excluded. The planner promotes
-region-varying constants to resolved fields and validates cubic axes before native evaluation.
-FEM spatial interpolation and lumped/consistent integration are not interchangeable with the FDM
-cell sum; comparisons must state the mesh and reduction rule.
-
-### FEM GPU
-
-The CUDA kernels keep magnetization, saturation, constants, optional spatial fields, axes, masks,
-lumped masses, and block sums in device-resident buffers. Uniaxial and cubic field/energy kernels
-are separate. A missing or incompatible buffer is a fail-closed runtime error; the host FEM path
-is not an implicit fallback. Final energy reductions and RK field dispatch are separate runtime
-responsibilities.
-
-### Observables
-
-| Observable | Kind | SI unit | Meaning |
-|---|---|---|---|
-| `H_ani` | vector field | $\mathrm{A\,m^{-1}}$ | uniaxial or total anisotropy effective field, according to the quantity catalog |
-| `H_ani_cubic` | vector field | $\mathrm{A\,m^{-1}}$ | cubic anisotropy field where separately materialized |
-| `E_ani` | scalar | $\mathrm{J}$ | total uniaxial plus cubic anisotropy energy |
-| `eden_ani` | spatial scalar field | $\mathrm{J\,m^{-3}}$ | local anisotropy energy density where materialized |
-
-(anisotropy-implementation-mapping)=
-## Implementation mapping
-
-The implementation is intentionally layered:
-
-1. `UniaxialAnisotropy` and `CubicAnisotropy` own compatibility construction and serialization.
-2. `Material` owns canonical scalar and spatial fields.
-3. `_migrate_legacy_anisotropy_energy_terms` owns conflict-checked migration.
-4. `plan_fdm` and `plan_fem` own backend-specific resolution and legality.
-5. FDM CPU and CUDA own cell-local field and energy realization.
-6. FEM CPU and CUDA own nodal/element or device-resident realization and reductions.
-
-The adjacent source map gives every equation and implementation claim a repository-relative path
-and stable symbol. Generated line links may be added for a particular immutable revision, but a
-line range is never the source identity.
-
-(anisotropy-validation)=
-## Validation and qualification
-
-The minimum scientific checks are:
-
-* for uniaxial $\mathbf m=\mathbf u$, verify $q=1$, the analytic field, and the negative-power
-  energy; for $\mathbf m\perp\mathbf u$, verify zero uniaxial field and density;
-* for cubic high-symmetry directions, compare the full polynomial energy and finite-difference
-  derivative with the crystal-frame field;
-* compare scalar and spatial coefficient fields with scalar baselines after mesh cardinality and
-  integration rules are fixed;
-* test active masks, zero/inactive terms, migration conflicts, invalid axes, and output legality;
-* compare FDM CPU, FDM CUDA FP64/FP32, FEM CPU, and FEM CUDA on the same physical state, recording
-  mesh, precision, reduction order, device identity, and tolerances.
-
-Python tests and static source validation establish API and structural contracts. They do not
-establish executed-device GPU parity; that requires managed runtime evidence and a declared
-qualification record.
-
-(anisotropy-limitations)=
-## Limitations and deferred qualification
-
-The public API exposes material-level axes and spatial coefficient fields, not arbitrary public
-per-node orientation fields. FEM strict crystal-frame validation and FDM normalization behavior
-remain distinct lane contracts. The public documentation records implementation status separately
-from executed-device qualification; it does not promote a source-only or skipped GPU test to
-qualified parity.
-
-(anisotropy-scientific-bibliography)=
+(physics-anisotropy-scientific-bibliography)=
 ## Scientific bibliography
 
-1. W. F. Brown, *Micromagnetics*, Wiley, 1963.
-2. FullMag canonical uniaxial model: `docs/physics/0402-uniaxial-anisotropy.md`.
-3. FullMag canonical cubic model: `docs/physics/0403-cubic-anisotropy.md`.
-4. FullMag material-region and parameter-field semantics:
-   `docs/physics/0104-material-regions-parameter-fields-and-interface-couplings.md`.
+1. R. Skomski, *Simple Models of Magnetism*, Oxford University Press, 2008.
+2. A. Hubert and R. Schäfer, *Magnetic Domains*, Springer, 1998.
 
-(anisotropy-source-code-index)=
+(physics-anisotropy-source-code-index)=
 ## Source-code index
 
-| Repository path | Stable symbol | Responsibility |
+| Repository path | Stable symbol / area | Responsibility |
 |---|---|---|
-| `packages/fullmag-py/src/fullmag/model/energy.py` | `class UniaxialAnisotropy` | Compatibility uniaxial constructor and serialization. |
-| `packages/fullmag-py/src/fullmag/model/energy.py` | `class CubicAnisotropy` | Compatibility cubic constructor and serialization. |
-| `packages/fullmag-py/src/fullmag/model/structure.py` | `class Material` | Canonical anisotropy fields and material serialization. |
-| `packages/fullmag-py/src/fullmag/world.py` | `study` | Public study-root entry point for executable scripts. |
-| `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` | Study-level engine, geometry, and material configuration facade. |
-| `packages/fullmag-py/src/fullmag/world.py` | `class StudyStagesBuilder` | Ordered relaxation and physical-time stage authoring. |
-| `packages/fullmag-py/src/fullmag/world.py` | `class CapturedStage` | Stage-local physical Problem snapshot and requested action. |
-| `packages/fullmag-py/src/fullmag/model/problem.py` | `_migrate_legacy_anisotropy_energy_terms` | Conflict-checked compatibility migration. |
-| `crates/fullmag-plan/src/fdm.rs` | `plan_fdm` | FDM material and execution-plan resolution. |
-| `crates/fullmag-plan/src/fem.rs` | `plan_fem` | FEM material promotion and axis legality. |
-| `crates/fullmag-engine/src/fem.rs` | `anisotropy_field_from_vectors` | FEM CPU combined anisotropy field. |
-| `crates/fullmag-engine/src/fem.rs` | `uniaxial_anisotropy_energy_from_vectors` | FEM CPU uniaxial energy reduction. |
-| `crates/fullmag-engine/src/fem.rs` | `cubic_anisotropy_energy_from_vectors` | FEM CPU cubic energy reduction. |
-| `backends/fdm/gpu/cuda/interactions/demag_fp64.cu` | `anisotropy_field_fp64_kernel` | FDM CUDA FP64 local anisotropy field. |
-| `backends/fdm/gpu/cuda/interactions/demag_fp32.cu` | `anisotropy_field_fp32_kernel` | FDM CUDA FP32 local anisotropy field. |
-| `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` | `reduce_uniaxial_anisotropy_energy_fp64` | FDM CUDA FP64 uniaxial energy reduction. |
-| `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` | `reduce_cubic_anisotropy_energy_fp64` | FDM CUDA FP64 cubic energy reduction. |
-| `backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu` | `uniaxial_anisotropy_field_energy_blocks_kernel` | FEM CUDA uniaxial field and block energy. |
-| `backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu` | `cubic_anisotropy_field_energy_blocks_kernel` | FEM CUDA cubic field and block energy. |
+| `packages/fullmag-py/src/fullmag/model/energy.py` | `UniaxialAnisotropy, CubicAnisotropy` | compatibility constructors |
+| `packages/fullmag-py/src/fullmag/model/structure.py` | `Material anisotropy fields` | canonical coefficients and axes |
+| `crates/fullmag-plan/src/fdm.rs` | `anisotropy planning` | FDM coefficient/mask resolution |
+| `crates/fullmag-plan/src/fem.rs` | `anisotropy planning` | FEM fields and crystal-frame validation |
+| `backends/fem/cpu/mfem/interactions/anisotropy_uniaxial.cpp` | `uniaxial field/energy` | implemented negative-power convention |
+| `backends/fem/cpu/mfem/interactions` | `cubic anisotropy` | FEM CPU polynomial realization |
+| `backends/fdm/gpu/cuda/interactions` | `anisotropy kernels` | FDM GPU realization |
+| `backends/fem/gpu/cuda/interactions` | `anisotropy kernels` | FEM GPU realization |
+
+(physics-anisotropy-round-trip-and-failure-semantics)=
+## Round-trip and failure semantics
+
+Requested intent preserves the authored model, coefficients, orientations, targets, and execution request. Resolved execution records the selected solver, device, precision, discretization, and capability decision. Validation errors reject malformed or contradictory data before runtime. Unsupported combinations fail closed and are not silently omitted or converted to another interaction.
+
+(physics-anisotropy-implementation-mapping)=
+## Implementation mapping
+
+Python owns authoring and serialization, ProblemIR owns canonical intent, planners own legality and realization selection, and backend kernels own numerical evaluation.

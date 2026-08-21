@@ -4,211 +4,112 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: docs/physics/0403-cubic-anisotropy.md
 ---
 
 (public-docs-python-api-interactions-cubic-anisotropy)=
 # Cubic anisotropy Python API
 
-This page owns the public cubic-anisotropy constructors, material fields, compatibility migration,
-validation, canonical IR, outputs, and copyable examples. The equations and backend lanes are in
-{doc}`../../physics/interactions/anisotropy/cubic`.
+This page owns the Python authoring, validation, and `ProblemIR` boundary. The scientific
+equations and backend interpretation are owned by {doc}`../../physics/interactions/anisotropy/index`.
 
-The canonical authoring form is material-owned `Kc1`, `Kc2`, `Kc3`, `anisC1`, and `anisC2`. The
-`CubicAnisotropy` object remains a compatibility form and is migrated to one material target.
-
-(cubic-api-problem-statement)=
+(api-cubic-anisotropy-problem-statement)=
 ## Physical problem
 
-For crystal direction cosines $\alpha_a=\mathbf m\cdot\mathbf c_a$, define
+This page is the public physical and authoring contract for the interaction. It separates authored semantics, planner resolution, executable backend lanes, and scientific qualification.
 
-```{math}
-:label: eq-python-cubic-density
-w_{\mathrm c}=K_{c1}\Sigma+K_{c2}\alpha_1^2\alpha_2^2\alpha_3^2+K_{c3}\Sigma^2.
-```
+(api-cubic-anisotropy-governing-equations)=
+## Implemented polynomial
 
-(cubic-api-governing-equations)=
-## Governing equations
+With $P=\alpha_1^2\alpha_2^2+\alpha_2^2\alpha_3^2+\alpha_3^2\alpha_1^2$,
 
-```{math}
-:label: eq-python-cubic-frame
-\mathbf c_3=\mathbf c_1\times\mathbf c_2,
-\qquad
-\Sigma=\alpha_1^2\alpha_2^2+\alpha_2^2\alpha_3^2+\alpha_3^2\alpha_1^2.
-```
+$$
+w=K_{c1}P+K_{c2}\alpha_1^2\alpha_2^2\alpha_3^2+K_{c3}P^2.
+$$
 
-(cubic-api-symbols-and-si-units)=
-## Symbols and SI units
+Always publish this equation with the constants because higher-order cubic conventions vary.
 
-| Symbol | Definition | SI unit |
-|---|---|---:|
-| $\mathbf c_1$ | first crystal axis | $1$ |
-| $\mathbf c_2$ | second crystal axis | $1$ |
-| $\mathbf c_3$ | derived third crystal axis | $1$ |
-| $\alpha_a$ | direction cosine | $1$ |
-| $\Sigma$ | first cubic invariant | $1$ |
-| $K_{c1}$ | first cubic constant | $\mathrm{J\,m^{-3}}$ |
-| $K_{c2}$ | second cubic constant | $\mathrm{J\,m^{-3}}$ |
-| $K_{c3}$ | third cubic constant | $\mathrm{J\,m^{-3}}$ |
-| $\mathbf m$ | reduced magnetization | $1$ |
-| $w_{\mathrm c}$ | cubic anisotropy energy density | $\mathrm{J\,m^{-3}}$ |
+(api-cubic-anisotropy-python-api)=
+## Python API and stage-first example
 
-(cubic-api-assumptions-and-validity)=
-## Assumptions and validity
-
-- Constants are passed in J/m^3; no CGS conversion occurs.
-- The physical crystal frame must be orthonormal. Python performs shape/finiteness validation;
-  FEM planning performs strict unit/orthogonality validation.
-- `CubicAnisotropy` migration requires one material target and rejects conflicting material data.
-- Python acceptance is requested intent, not proof of backend/device qualification.
-
-(cubic-api-python-api)=
-## Complete constructors and parameters
-
-### `CubicAnisotropy`
-
-
-| Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
-|---|---|---|---|---|---|---|---|
-| `CubicAnisotropy.kc1` | `float` | `required` | $\mathrm{J\,m^{-3}}$ | `finite` | `first cubic constant` | `FDM/FEM CPU/GPU after migration` | `materials[].cubic_anisotropy_kc1` |
-| `CubicAnisotropy.kc2` | `float` | `0.0` | $\mathrm{J\,m^{-3}}$ | `finite` | `second cubic constant` | `FDM/FEM CPU/GPU after migration` | `materials[].cubic_anisotropy_kc2` |
-| `CubicAnisotropy.kc3` | `float` | `0.0` | $\mathrm{J\,m^{-3}}$ | `finite` | `third cubic constant` | `FDM/FEM CPU/GPU after migration` | `materials[].cubic_anisotropy_kc3` |
-| `CubicAnisotropy.axis1` | `Sequence[float]` | `(1,0,0)` | $1$ | `length 3; finite` | `first crystal axis` | `FDM/FEM CPU/GPU after migration` | `materials[].cubic_anisotropy_axis1` |
-| `CubicAnisotropy.axis2` | `Sequence[float]` | `(0,1,0)` | $1$ | `length 3; finite` | `second crystal axis` | `FDM/FEM CPU/GPU after migration` | `materials[].cubic_anisotropy_axis2` |
-
-### `Material` fields
-
-| Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
-|---|---|---|---|---|---|---|---|
-| `Material.Kc1` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | `finite when supplied` | `canonical first cubic value` | `FDM/FEM CPU/GPU` | `materials[].cubic_anisotropy_kc1` |
-| `Material.Kc2` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | `finite when supplied` | `canonical second cubic value` | `FDM/FEM CPU/GPU` | `materials[].cubic_anisotropy_kc2` |
-| `Material.Kc3` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | `finite when supplied` | `canonical third cubic value` | `FDM/FEM CPU/GPU` | `materials[].cubic_anisotropy_kc3` |
-| `Material.anisC1` | `tuple[float,float,float] \| None` | `None` | $1$ | `length 3; finite` | `first crystal axis` | `FDM/FEM CPU/GPU` | `materials[].cubic_anisotropy_axis1` |
-| `Material.anisC2` | `tuple[float,float,float] \| None` | `None` | $1$ | `length 3; finite` | `second crystal axis` | `FDM/FEM CPU/GPU` | `materials[].cubic_anisotropy_axis2` |
-| `Material.Kc1_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | `finite; cardinality downstream` | `spatial Kc1 override` | `FEM and supported allocating FDM reference paths` | `materials[].kc1_field` |
-| `Material.Kc2_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | `finite; cardinality downstream` | `spatial Kc2 override` | `FEM and supported allocating FDM reference paths` | `materials[].kc2_field` |
-| `Material.Kc3_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | `finite; cardinality downstream` | `spatial Kc3 override` | `FEM and supported allocating FDM reference paths` | `materials[].kc3_field` |
-
-### Canonical material example
-
-(cubic-api-example)=
-````python
-# %% Cubic anisotropy registration
+```python
+# %% Study, execution lane, and magnetic body
 import fullmag as fm
 
-nm = 1e-9
+nm = 1.0e-9
+study = fm.study("cubic_anisotropy_reference")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
+body = study.geometry(fm.Box(40 * nm, 20 * nm, 4 * nm), name="film")
+body.Ms = 8.0e5
+body.Aex = 13.0e-12
+body.alpha = 0.02
+body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
-# Stage-first authoring using explicit term + material property
-study = fm.study("cubic_anisotropy_example")
-study.discretization("fem")
-study.device("cpu")
-
-study.universe(bounds=((0, 0, 0), (100 * nm, 100 * nm, 10 * nm)))
-
-# Register material with cubic anisotropy via material property
-mat = fm.Material(
-    name="cobalt",
-    Ms=1.4e6,
-    A=2.0e-11,
-    alpha=0.02,
-    Kc1=2e5,
-    Kc2=1e4,
-    anisC1=(1, 0, 0),
-    anisC2=(0, 1, 0),
-)
-study.material(mat)
-
-# Register geometry
-film = fm.Box(size=(100 * nm, 100 * nm, 10 * nm), material="cobalt")
-study.geometry(film)
-
-# Explicit CubicAnisotropy term (equivalent to material properties above)
-study.terms.add(fm.CubicAnisotropy(kc1=2e5, kc2=1e4, axis1=(1, 0, 0), axis2=(0, 1, 0)))
-
-study.stages.add_relax(stage_id="relax", tolA=795.7747154594767)
-````
-
-### Outputs
-
-| Output | Kind | SI unit | Requires |
-|---|---|---|---|
-| `H_ani_cubic` | vector field | $\mathrm{A\,m^{-1}}$ | Active cubic coefficients and field materialization. |
-| `E_ani` | scalar | $\mathrm{J}$ | Active anisotropy and scalar energy materialization. |
-| `eden_ani` | spatial scalar field | $\mathrm{J\,m^{-3}}$ | Active anisotropy and spatial-energy materialization. |
-
-(cubic-api-problem-ir)=
-## ProblemIR lowering
-
-The compatibility object is migrated to a material fragment and removed from the canonical energy
-list:
-
-```json
-{
-  "cubic_anisotropy_kc1": 200000.0,
-  "cubic_anisotropy_kc2": 10000.0,
-  "cubic_anisotropy_kc3": 0.0,
-  "cubic_anisotropy_axis1": [1.0, 0.0, 0.0],
-  "cubic_anisotropy_axis2": [0.0, 1.0, 0.0]
-}
+body.Kc1 = 4.8e4
+body.Kc2 = 0.0
+body.Kc3 = 0.0
+body.anisC1 = (1.0, 0.0, 0.0)
+body.anisC2 = (0.0, 1.0, 0.0)
+study.exchange()
+study.stages.add_relax(stage_id="relax", algorithm="projected_gradient_bb", max_steps=500, tolT=1.0e-6)
 ```
 
-```{math}
-:label: eq-python-cubic-ir-fields
-\mathrm{IR}_{\mathrm c}
-=
-\{K_{c1},K_{c2},K_{c3},\mathbf c_1,\mathbf c_2\}.
-```
+(api-cubic-anisotropy-validation)=
+## Parameters and validation
 
-(cubic-api-round-trip-and-failure-semantics)=
+| Parameter | SI unit | Required check |
+|---|---:|---|
+| `kc1`, `kc2`, `kc3` | $\mathrm{J\,m^{-3}}$ | finite |
+| `axis1`, `axis2` | $1$ | finite, non-zero, non-collinear; build an orthonormal frame by a declared rule |
+
+At the audited revision, compatibility constructors mostly convert values; material cubic
+constants also lack the same explicit finite validation used by `Ku1/Ku2`. Harden both routes.
+
+(api-cubic-anisotropy-problem-ir)=
+## Lowering
+
+Canonical export stores `cubic_anisotropy_kc1/kc2/kc3` and the two authored axes on the material.
+A planner may normalize the frame for execution, but requested and resolved axes must remain
+distinguishable in provenance.
+
+(api-cubic-anisotropy-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
-Requested intent remains visible in the source model; resolved execution records material fields,
-validated crystal frame, solver/device/precision, and output decisions. Wrong vector shape,
-non-finite values, material conflicts, multiple migration targets, invalid FEM axes, and illegal
-outputs are validation errors. Unsupported combinations are planner errors, not silent fallbacks.
+Requested intent preserves the authored model, coefficients, orientations, targets, and execution request. Resolved execution records the selected solver, device, precision, discretization, and capability decision. Validation errors reject malformed or contradictory data before runtime. Unsupported combinations fail closed and are not silently omitted or converted to another interaction.
 
-(cubic-api-discrete-realization)=
-## Discrete realization selected after lowering
+(api-cubic-anisotropy-symbols-and-si-units)=
+## Symbols and SI units
 
-The Python layer does not select FDM cells, FEM quadrature, device buffers, or precision. Those are
-resolved after lowering and are separately documented in the physical owner page.
+All physical inputs use SI units. Dimensionless axes and reduced magnetization are normalized according to the stated contract.
 
-(cubic-api-implementation-mapping)=
+(api-cubic-anisotropy-assumptions-and-validity)=
+## Assumptions and validity
+
+The authored model is valid only within the continuum, discretization, boundary, and capability limits stated on this page.
+
+(api-cubic-anisotropy-discrete-realization)=
+## Discrete realization
+
+FDM and FEM, and CPU and GPU, are distinct numerical realizations. Their availability and qualification are reported separately in the capability tables above.
+
+(api-cubic-anisotropy-implementation-mapping)=
 ## Implementation mapping
 
-`CubicAnisotropy` validates and serializes compatibility values. The Problem migration helper
-merges them into `Material`; planners resolve material fields and crystal-axis legality. Stable
-symbols are listed below and checked by the adjacent source map.
+Python owns authoring and serialization, ProblemIR owns canonical intent, planners own legality and realization selection, and backend kernels own numerical evaluation.
 
-(cubic-api-validation)=
-## Validation plan
-
-Test defaults, exact serialization, axis shape/finiteness, migration, conflicts, multi-material
-failure, script export, and output legality. Use high-symmetry crystal directions and finite
-differences of energy to verify the native field. Python acceptance alone is not GPU qualification.
-
-(cubic-api-limitations)=
+(api-cubic-anisotropy-limitations)=
 ## Limitations
 
-The public API exposes two axes and derives the third. It has no public arbitrary third-axis field,
-per-node crystal frame, solver tolerance, or device selector. Spatial Kc fields remain subject to
-backend cardinality and material-location constraints.
+Capabilities not listed as executable must fail closed. Source presence alone is not runtime or scientific qualification.
 
-(cubic-api-scientific-bibliography)=
+(api-cubic-anisotropy-scientific-bibliography)=
 ## Scientific bibliography
 
-- Brown, W. F., *Micromagnetics*, Wiley, 1963.
-- FullMag internal source of truth: `docs/physics/0403-cubic-anisotropy.md`.
-- FullMag Python implementation: `packages/fullmag-py/src/fullmag/model/energy.py` and `structure.py`.
+The principal references are listed in the interaction-specific bibliography above.
 
-(cubic-api-source-code-index)=
+(api-cubic-anisotropy-source-code-index)=
 ## Source-code index
 
-| Repository path | Stable symbol | Responsibility |
-|---|---|---|
-| `packages/fullmag-py/src/fullmag/model/energy.py` | `class CubicAnisotropy` | Compatibility constructor and serialization. |
-| `packages/fullmag-py/src/fullmag/model/structure.py` | `class Material` | Canonical cubic material fields. |
-| `packages/fullmag-py/src/fullmag/_validation.py` | `as_vector3` | Axis shape/finiteness validation. |
-| `packages/fullmag-py/src/fullmag/model/problem.py` | `_migrate_legacy_anisotropy_energy_terms` | Material migration and conflict semantics. |
-| `crates/fullmag-plan/src/fdm.rs` | `plan_fdm` | FDM material planning. |
-| `crates/fullmag-plan/src/fem.rs` | `plan_fem` | FEM material planning and crystal-frame validation. |
+The implementation owners are listed in the interaction-specific source table above.

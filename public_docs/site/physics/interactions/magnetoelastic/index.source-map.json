@@ -2,102 +2,45 @@
   "document": {
     "path": "public_docs/site/physics/interactions/magnetoelastic/index.md",
     "title": "Magnetoelastic interaction",
-    "interaction": "cubic B1/B2 prescribed-strain magnetoelastic coupling"
+    "interaction": "magnetoelastic"
   },
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "partial", "reason": "Native field and energy routines exist, but the public FDM planner rejects the complete Magnetoelastic ProblemIR term."},
-    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "FP64 and FP32 fused kernel branches exist, but complete planner and executed-device qualification are absent."},
-    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "Native prescribed-strain planner and CPU nodal field/lumped-energy realization are present."},
-    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "Native device upload and field/block-energy kernels are present; executed-device parity is separately qualified."}
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+    }
   ],
   "sources": [
-    {"id": "python-magnetoelastic", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class Magnetoelastic", "responsibility": "Named coupling constructor and IR reference."},
-    {"id": "python-elastic-material", "path": "packages/fullmag-py/src/fullmag/model/mechanics.py", "symbol": "class ElasticMaterial", "responsibility": "Elastic constants, density, damping, and IR."},
-    {"id": "python-elastic-body", "path": "packages/fullmag-py/src/fullmag/model/mechanics.py", "symbol": "class ElasticBody", "responsibility": "Elastic geometry/material graph node."},
-    {"id": "python-law", "path": "packages/fullmag-py/src/fullmag/model/mechanics.py", "symbol": "class MagnetostrictionLaw", "responsibility": "Cubic/isotropic law validation and IR."},
-    {"id": "python-boundary", "path": "packages/fullmag-py/src/fullmag/model/mechanics.py", "symbol": "class MechanicalBoundaryCondition", "responsibility": "Mechanical boundary validation and IR."},
-    {"id": "python-load", "path": "packages/fullmag-py/src/fullmag/model/mechanics.py", "symbol": "class MechanicalLoad", "responsibility": "Body-force, strain, and stress validation and IR."},
-    {"id": "python-prescribed", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class PrescribedStrain", "responsibility": "Semantic no-solve mechanics mode."},
-    {"id": "python-quasistatic", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class QuasistaticElasticity", "responsibility": "Semantic Picard mechanics mode."},
-    {"id": "python-elastodynamics", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class Elastodynamics", "responsibility": "Semantic dynamic mechanics mode."},
-    {"id": "fdm-single", "path": "crates/fullmag-engine/src/magnetoelastic.rs", "symbol": "h_mel_single", "responsibility": "FDM local prescribed-strain field."},
-    {"id": "fdm-field", "path": "crates/fullmag-engine/src/magnetoelastic.rs", "symbol": "h_mel_field", "responsibility": "FDM uniform/per-cell field and active-mask handling."},
-    {"id": "fdm-density", "path": "crates/fullmag-engine/src/magnetoelastic.rs", "symbol": "e_mel_density_single", "responsibility": "FDM local coupling density."},
-    {"id": "fdm-total", "path": "crates/fullmag-engine/src/magnetoelastic.rs", "symbol": "e_mel_total", "responsibility": "FDM cell-volume energy reduction."},
-    {"id": "fdm-gpu-fp64", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "combine_effective_field_fp64_kernel", "responsibility": "FDM CUDA FP64 fused magnetoelastic branch."},
-    {"id": "fdm-gpu-fp32", "path": "backends/fdm/gpu/cuda/interactions/demag_fp32.cu", "symbol": "combine_effective_field_fp32_kernel", "responsibility": "FDM CUDA FP32 fused magnetoelastic branch."},
-    {"id": "fem-plan", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "resolve_fem_magnetoelastic_plan", "responsibility": "FEM graph checks and prescribed-strain legality."},
-    {"id": "fem-cpu", "path": "backends/fem/cpu/mfem/interactions/magnetoelastic_prescribed_strain.cpp", "symbol": "compute_magnetoelastic_field", "responsibility": "FEM CPU field and lumped energy."},
-    {"id": "fem-gpu-kernel", "path": "backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.cu", "symbol": "magnetoelastic_field_energy_blocks_kernel", "responsibility": "FEM CUDA field and block energy."},
-    {"id": "fem-gpu-upload", "path": "backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_upload.cpp", "symbol": "gpu_magnetoelastic_upload_strain", "responsibility": "FEM CUDA six-component strain upload."}
+    {
+      "id": "python-owner",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class Magnetoelastic",
+      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+    }
   ],
-  "symbols": [
-    {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization $\\mathbf M/M_s$", "si_unit": "$1$"},
-    {"id": "mi", "latex": "$m_i$", "meaning": "Cartesian component of reduced magnetization", "si_unit": "$1$"},
-    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
-    {"id": "epseng", "latex": "$\\boldsymbol{\\varepsilon}^{\\mathrm{eng}}$", "meaning": "engineering-Voigt strain input", "si_unit": "$1$"},
-    {"id": "epsij", "latex": "$\\varepsilon_{ij}$", "meaning": "tensor strain component", "si_unit": "$1$"},
-    {"id": "gammaij", "latex": "$\\gamma_{ij}$", "meaning": "engineering shear strain $2\\varepsilon_{ij}$", "si_unit": "$1$"},
-    {"id": "B1", "latex": "$B_1$", "meaning": "diagonal cubic magnetoelastic constant", "si_unit": "$\\mathrm{Pa}$"},
-    {"id": "B2", "latex": "$B_2$", "meaning": "shear cubic magnetoelastic constant", "si_unit": "$\\mathrm{Pa}$"},
-    {"id": "emel", "latex": "$e_{\\mathrm{mel}}$", "meaning": "local magnetoelastic energy density", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
-    {"id": "Emel", "latex": "$E_{\\mathrm{mel}}$", "meaning": "total magnetoelastic energy", "si_unit": "$\\mathrm{J}$"},
-    {"id": "Hmel", "latex": "$\\mathbf H_{\\mathrm{mel}}$", "meaning": "magnetoelastic effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "i", "latex": "$i$", "meaning": "cell or node index", "si_unit": "$1$"},
-    {"id": "N", "latex": "$N$", "meaning": "number of realized cells or nodes", "si_unit": "$1$"},
-    {"id": "ai", "latex": "$a_i$", "meaning": "active magnetic-cell/node indicator", "si_unit": "$1$"},
-    {"id": "Vi", "latex": "$V_i$", "meaning": "FDM cell volume", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "wlump", "latex": "$w_i^{\\mathrm{lump}}$", "meaning": "FEM lumped nodal integration weight", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "u", "latex": "$\\mathbf u$", "meaning": "mechanical displacement", "si_unit": "$\\mathrm{m}$"},
-    {"id": "sigma", "latex": "$\\boldsymbol{\\sigma}$", "meaning": "Cauchy stress tensor", "si_unit": "$\\mathrm{Pa}$"},
-    {"id": "C", "latex": "$C_{ijkl}$", "meaning": "elastic stiffness tensor", "si_unit": "$\\mathrm{Pa}$"},
-    {"id": "rho", "latex": "$\\rho$", "meaning": "mass density", "si_unit": "$\\mathrm{kg\\,m^{-3}}$"},
-    {"id": "f", "latex": "$\\mathbf f$", "meaning": "body-force density", "si_unit": "$\\mathrm{N\\,m^{-3}}$"}
-  ],
-  "equations": [
-    {"id": "eq-mel-voigt-order", "symbols": ["epseng", "epsij", "gammaij"], "sources": ["python-load", "fdm-single", "fem-cpu"]},
-    {"id": "eq-mel-b1b2-density", "symbols": ["B1", "B2", "epsij", "mi", "emel"], "sources": ["fdm-density", "fem-cpu", "fem-gpu-kernel"]},
-    {"id": "eq-mel-field", "symbols": ["Hmel", "mu0", "Ms", "emel", "m"], "sources": ["fdm-single", "fem-cpu", "fem-gpu-kernel"]},
-    {"id": "eq-mel-field-component", "symbols": ["Hmel", "B1", "B2", "epsij", "mi", "mu0", "Ms"], "sources": ["fdm-single", "fem-cpu", "fem-gpu-kernel"]},
-    {"id": "eq-mel-fdm-energy", "symbols": ["Emel", "ai", "emel", "Vi", "i", "N"], "sources": ["fdm-total", "fdm-density"]},
-    {"id": "eq-mel-fem-energy", "symbols": ["Emel", "ai", "emel", "wlump", "i", "N"], "sources": ["fem-cpu", "fem-gpu-kernel"]},
-    {"id": "eq-mel-small-strain", "symbols": ["epsij", "u", "sigma", "C"], "sources": ["python-quasistatic", "python-elastodynamics"]},
-    {"id": "eq-mel-equilibrium", "symbols": ["sigma"], "sources": ["python-quasistatic"]},
-    {"id": "eq-mel-elastodynamics", "symbols": ["rho", "u", "sigma", "f"], "sources": ["python-elastodynamics"]}
-  ],
+  "symbols": [],
+  "equations": [],
   "public_api": {
-    "parameters": [
-      {"python": "Magnetoelastic.magnet", "type": "str", "default": "required", "si_unit": "$1$", "validation": "non-empty string", "meaning": "magnetic-body reference", "backend_support": "graph validation", "problem_ir": "energy_terms[].magnet"},
-      {"python": "Magnetoelastic.body", "type": "str", "default": "required", "si_unit": "$1$", "validation": "non-empty string", "meaning": "elastic-body reference", "backend_support": "FEM planner validation", "problem_ir": "energy_terms[].body"},
-      {"python": "Magnetoelastic.law", "type": "str", "default": "required", "si_unit": "$1$", "validation": "non-empty string", "meaning": "magnetostriction-law reference", "backend_support": "graph validation", "problem_ir": "energy_terms[].law"},
-      {"python": "ElasticMaterial.name", "type": "str", "default": "required", "si_unit": "$1$", "validation": "non-empty string", "meaning": "elastic material identifier", "backend_support": "FEM prescribed-strain metadata", "problem_ir": "elastic_materials[].name"},
-      {"python": "ElasticMaterial.C11", "type": "float", "default": "required", "si_unit": "$\\mathrm{Pa}$", "validation": "strictly positive", "meaning": "cubic stiffness constant C11", "backend_support": "FEM prescribed-strain", "problem_ir": "elastic_materials[].c11"},
-      {"python": "ElasticMaterial.C12", "type": "float", "default": "required", "si_unit": "$\\mathrm{Pa}$", "validation": "strictly positive", "meaning": "cubic stiffness constant C12", "backend_support": "FEM prescribed-strain", "problem_ir": "elastic_materials[].c12"},
-      {"python": "ElasticMaterial.C44", "type": "float", "default": "required", "si_unit": "$\\mathrm{Pa}$", "validation": "strictly positive", "meaning": "cubic shear stiffness constant C44", "backend_support": "FEM prescribed-strain", "problem_ir": "elastic_materials[].c44"},
-      {"python": "ElasticMaterial.rho", "type": "float", "default": "required", "si_unit": "$\\mathrm{kg\\,m^{-3}}$", "validation": "strictly positive", "meaning": "mass density", "backend_support": "serialized metadata; mechanics solve deferred", "problem_ir": "elastic_materials[].density"},
-      {"python": "ElasticMaterial.eta_mech", "type": "float or None", "default": "None", "si_unit": "$1$", "validation": "non-negative when supplied", "meaning": "mechanical damping metadata", "backend_support": "serialized metadata; mechanics solve deferred", "problem_ir": "elastic_materials[].mechanical_damping"},
-      {"python": "ElasticBody.name", "type": "str", "default": "required", "si_unit": "$1$", "validation": "non-empty string", "meaning": "elastic-body identifier", "backend_support": "FEM prescribed-strain", "problem_ir": "elastic_bodies[].name"},
-      {"python": "ElasticBody.geometry", "type": "Geometry", "default": "required", "si_unit": "$1$", "validation": "geometry exposes a stable name", "meaning": "mechanical-domain geometry reference", "backend_support": "FEM shared mesh", "problem_ir": "elastic_bodies[].geometry"},
-      {"python": "ElasticBody.elastic_material", "type": "ElasticMaterial", "default": "required", "si_unit": "$1$", "validation": "serialized by material name", "meaning": "elastic material binding", "backend_support": "FEM prescribed-strain", "problem_ir": "elastic_bodies[].elastic_material"},
-      {"python": "MagnetostrictionLaw.name", "type": "str", "default": "required", "si_unit": "$1$", "validation": "non-empty string", "meaning": "law identifier", "backend_support": "graph validation", "problem_ir": "magnetostriction_laws[].name"},
-      {"python": "MagnetostrictionLaw.kind", "type": "str", "default": "cubic", "si_unit": "$1$", "validation": "cubic or isotropic", "meaning": "law family", "backend_support": "cubic path; isotropic FEM conversion rejected", "problem_ir": "magnetostriction_laws[].kind"},
-      {"python": "MagnetostrictionLaw.B1", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{Pa}$", "validation": "required for cubic", "meaning": "diagonal cubic coupling constant", "backend_support": "prescribed-strain B1/B2 path", "problem_ir": "magnetostriction_laws[].b1"},
-      {"python": "MagnetostrictionLaw.B2", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{Pa}$", "validation": "required for cubic", "meaning": "shear cubic coupling constant", "backend_support": "prescribed-strain B1/B2 path", "problem_ir": "magnetostriction_laws[].b2"},
-      {"python": "MagnetostrictionLaw.lambda_s", "type": "float or None", "default": "None", "si_unit": "$1$", "validation": "required for isotropic", "meaning": "isotropic saturation magnetostriction", "backend_support": "semantic object; FEM conversion rejected", "problem_ir": "magnetostriction_laws[].lambda_s"},
-      {"python": "MechanicalBoundaryCondition.kind", "type": "str", "default": "required", "si_unit": "$1$", "validation": "one of four supported kinds", "meaning": "boundary operator kind", "backend_support": "serialized; mechanics solve deferred", "problem_ir": "mechanical_bcs[].kind"},
-      {"python": "MechanicalBoundaryCondition.surface", "type": "str", "default": "required", "si_unit": "$1$", "validation": "non-empty string", "meaning": "boundary marker/name", "backend_support": "serialized; mechanics solve deferred", "problem_ir": "mechanical_bcs[].surface"},
-      {"python": "MechanicalBoundaryCondition.u", "type": "Sequence[float] or None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "exactly three values when used", "meaning": "prescribed displacement", "backend_support": "serialized; mechanics solve deferred", "problem_ir": "mechanical_bcs[].u"},
-      {"python": "MechanicalBoundaryCondition.t", "type": "Sequence[float] or None", "default": "None", "si_unit": "$\\mathrm{Pa}$", "validation": "exactly three values when used", "meaning": "prescribed traction", "backend_support": "serialized; mechanics solve deferred", "problem_ir": "mechanical_bcs[].t"},
-      {"python": "MechanicalLoad.kind", "type": "str", "default": "required", "si_unit": "$1$", "validation": "body_force, prescribed_strain, or prescribed_stress", "meaning": "load family", "backend_support": "prescribed strain has native FEM plan", "problem_ir": "mechanical_loads[].kind"},
-      {"python": "MechanicalLoad.f", "type": "Sequence[float] or None", "default": "None", "si_unit": "$\\mathrm{N\\,m^{-3}}$", "validation": "required for body force; three values", "meaning": "body-force density", "backend_support": "semantic-only; mechanics solve deferred", "problem_ir": "mechanical_loads[].f"},
-      {"python": "MechanicalLoad.strain", "type": "Sequence[float] or None", "default": "None", "si_unit": "$1$", "validation": "exactly six Voigt values", "meaning": "engineering-Voigt prescribed strain", "backend_support": "prescribed-strain path", "problem_ir": "mechanical_loads[].strain"},
-      {"python": "MechanicalLoad.stress", "type": "Sequence[float] or None", "default": "None", "si_unit": "$\\mathrm{Pa}$", "validation": "exactly six Voigt values", "meaning": "engineering-Voigt prescribed stress", "backend_support": "semantic-only; mechanics solve deferred", "problem_ir": "mechanical_loads[].stress"},
-      {"python": "PrescribedStrain", "type": "no parameters", "default": "—", "si_unit": "$1$", "validation": "mode marker", "meaning": "external deformation with no mechanical solve", "backend_support": "semantic object; not wired to LLG", "problem_ir": "study.dynamics.mechanics"},
-      {"python": "QuasistaticElasticity.max_picard_iterations", "type": "int", "default": "3", "si_unit": "$1$", "validation": "at least one", "meaning": "Picard iteration cap", "backend_support": "semantic object; FEM planner rejects", "problem_ir": "study.dynamics.mechanics.max_picard_iterations"},
-      {"python": "QuasistaticElasticity.picard_tolerance", "type": "float", "default": "1e-6", "si_unit": "$1$", "validation": "strictly positive", "meaning": "Picard convergence tolerance", "backend_support": "semantic object; FEM planner rejects", "problem_ir": "study.dynamics.mechanics.picard_tolerance"},
-      {"python": "Elastodynamics.mechanical_dt", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{s}$", "validation": "strictly positive when supplied", "meaning": "mechanical integration step", "backend_support": "semantic object; FEM planner rejects", "problem_ir": "study.dynamics.mechanics.mechanical_dt"}
-    ]
+    "parameters": []
   }
 }

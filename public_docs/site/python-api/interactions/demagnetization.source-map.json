@@ -2,85 +2,45 @@
   "document": {
     "path": "public_docs/site/python-api/interactions/demagnetization.md",
     "title": "Demagnetization",
-    "interaction": "demagnetization Python API"
+    "interaction": "demagnetization"
   },
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "The public API lowers to the FDM reference realization."},
-    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "The public API can request CUDA, but source presence does not replace executed-device qualification."},
-    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "The public API lowers FEM mesh and native linear-solver policies."},
-    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "The public API carries the request; executed-device qualification remains a separate runtime gate."}
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+    }
   ],
   "sources": [
-    {"id": "demag", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class Demag", "responsibility": "Demagnetization constructor, validation, aliases and canonical IR realization."},
-    {"id": "fdm-grid", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDMGrid", "responsibility": "Per-magnet native FDM cell specification."},
-    {"id": "fdm-policy", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDMDemag", "responsibility": "FDM demagnetization strategy and common-grid policy."},
-    {"id": "fdm", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDM", "responsibility": "Top-level FDM cell, multilayer and partial-cell policy."},
-    {"id": "fem", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FEM", "responsibility": "FEM order, target element size, mesh and solver-policy destination."},
-    {"id": "solver-policy", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FemLinearSolverPolicy", "responsibility": "FEM solver, preconditioner, tolerance, iteration and diagnostic policy."},
-    {"id": "pbc", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "class FdmPbc", "responsibility": "Periodic-axis and demagnetization-policy validation and IR."},
-    {"id": "flat-api", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "demag_quality", "responsibility": "Flat scripting state updates for demag selection, FDM hints, solver policy and refresh cadence."},
-    {"id": "fdm-plan", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "FDM planner resolution."},
-    {"id": "fem-plan", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem", "responsibility": "FEM planner resolution."},
-    {"id": "output-validation", "path": "crates/fullmag-plan/src/validate.rs", "symbol": "validate_executable_outputs", "responsibility": "Fail-closed output validation."}
+    {
+      "id": "python-owner",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class Demag",
+      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+    }
   ],
-  "symbols": [
-    {"id": "Hd", "latex": "$\\mathbf H_{\\mathrm d}$", "meaning": "demagnetizing field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "u", "latex": "$u$", "meaning": "scalar potential", "si_unit": "$\\mathrm{A}$"},
-    {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "Ed", "latex": "$E_{\\mathrm d}$", "meaning": "demagnetization energy", "si_unit": "$\\mathrm{J}$"},
-    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
-    {"id": "Omega", "latex": "$\\Omega_m$", "meaning": "magnetic domain", "si_unit": "$\\mathrm{m^3}$"}
-  ],
-  "equations": [
-    {"id": "eq-python-demag-field", "symbols": ["Hd", "u", "M"], "sources": ["demag"]},
-    {"id": "eq-python-demag-energy", "symbols": ["Ed", "mu0", "M", "Hd", "Omega"], "sources": ["demag"]}
-  ],
+  "symbols": [],
+  "equations": [],
   "public_api": {
-    "constructors": [
-      "fullmag.Demag",
-      "fullmag.FDMGrid",
-      "fullmag.FDMDemag",
-      "fullmag.FDM",
-      "fullmag.FEM",
-      "fullmag.FemLinearSolverPolicy",
-      "fullmag.FdmPbc"
-    ],
-    "parameters": [
-      {"python": "Demag.model", "type": "optional str", "default": "None", "si_unit": "$1$", "validation": "`airbox`, `bem`, `fredkin_koehler`, or `fmm`.", "meaning": "Canonical realization family; it does not itself choose CPU or GPU.", "backend_support": "Planner-dependent.", "problem_ir": "`energy[].realization`"},
-      {"python": "Demag.variant", "type": "optional str", "default": "None", "si_unit": "$1$", "validation": "Only `airbox` accepts `auto`, `robin`, or `dirichlet`; other models reject it.", "meaning": "Selects the FEM airbox outer closure.", "backend_support": "FEM airbox lanes.", "problem_ir": "`energy[].realization`"},
-      {"python": "Demag.realization", "type": "optional str", "default": "None", "si_unit": "$1$", "validation": "Legacy input; cannot be combined with `model`; aliases are normalized.", "meaning": "Backward-compatible explicit realization.", "backend_support": "Normalized before planning.", "problem_ir": "`energy[].realization`"},
-      {"python": "FDMGrid.cell", "type": "tuple[float,float,float]", "default": "required", "si_unit": "$\\mathrm{m}$", "validation": "Exactly three finite positive values.", "meaning": "Native Cartesian cell size for one named magnet.", "backend_support": "FDM multilayer paths.", "problem_ir": "`discretization.fdm.per_magnet[name].cell`"},
-      {"python": "FDMDemag.strategy", "type": "str", "default": "auto", "si_unit": "$1$", "validation": "`auto`, `single_grid`, or `multilayer_convolution`.", "meaning": "Selects one common grid or explicit native-grid convolution.", "backend_support": "FDM lanes.", "problem_ir": "`discretization.demag.strategy`"},
-      {"python": "FDMDemag.mode", "type": "str", "default": "auto", "si_unit": "$1$", "validation": "`auto`, `two_d_stack`, or `three_d`.", "meaning": "Selects thin-film stack or full-3-D convolution mode.", "backend_support": "FDM lanes.", "problem_ir": "`discretization.demag.mode`"},
-      {"python": "FDMDemag.common_cells", "type": "optional tuple[int,int,int]", "default": "None", "si_unit": "$1$", "validation": "Exactly three positive integers.", "meaning": "Explicit 3-D common convolution grid.", "backend_support": "FDM lanes.", "problem_ir": "`discretization.demag.common_cells`"},
-      {"python": "FDMDemag.common_cells_xy", "type": "optional tuple[int,int]", "default": "None", "si_unit": "$1$", "validation": "Exactly two positive integers.", "meaning": "Explicit in-plane common grid for `two_d_stack`.", "backend_support": "FDM lanes.", "problem_ir": "`discretization.demag.common_cells_xy`"},
-      {"python": "FDMDemag.allow_single_grid_fallback", "type": "optional bool", "default": "None", "si_unit": "$1$", "validation": "Any non-`None` value raises `ValueError`; no silent lowering.", "meaning": "Removed compatibility switch.", "backend_support": "No backend support.", "problem_ir": "Not serialized"},
-      {"python": "FDMDemag.explain", "type": "bool", "default": "True", "si_unit": "$1$", "validation": "Boolean.", "meaning": "Requests a human-readable plan summary; it is not physics or IR.", "backend_support": "FDM authoring helper.", "problem_ir": "Not serialized"},
-      {"python": "FDM.default_cell", "type": "optional tuple[float,float,float]", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "Exactly three finite positive values; legacy `cell` is an alias. Required unless `per_magnet` is non-empty.", "meaning": "Default Cartesian cell size used when a magnet has no native override.", "backend_support": "FDM CPU/GPU.", "problem_ir": "`discretization.fdm.default_cell`"},
-      {"python": "FDM.per_magnet", "type": "optional dict[str,FDMGrid]", "default": "None", "si_unit": "$1$", "validation": "Each entry maps a magnet name to a valid `FDMGrid`.", "meaning": "Native grids for selected magnets in a multilayer problem.", "backend_support": "FDM multilayer paths.", "problem_ir": "`discretization.fdm.per_magnet`"},
-      {"python": "FDM.demag", "type": "optional FDMDemag", "default": "None", "si_unit": "$1$", "validation": "Nested `FDMDemag` fields are validated individually.", "meaning": "Attaches the FDM demagnetization topology policy.", "backend_support": "FDM CPU/GPU.", "problem_ir": "`discretization.fdm.demag`"},
-      {"python": "FDM.boundary_correction", "type": "optional str", "default": "None", "si_unit": "$1$", "validation": "`none`, `volume`, or `full`.", "meaning": "Selects no correction, T0 volume-fraction weighting, or T1 full boundary stencil.", "backend_support": "Lane/precision dependent.", "problem_ir": "`discretization.fdm.boundary_correction`"},
-      {"python": "FDM.boundary_phi_floor", "type": "optional float", "default": "None", "si_unit": "$1$", "validation": "Strictly between $0$ and $1$ when supplied.", "meaning": "Minimum partial-cell volume fraction used by correction stability logic.", "backend_support": "Boundary-correction lanes.", "problem_ir": "`discretization.fdm.boundary_phi_floor`"},
-      {"python": "FDM.boundary_delta_min", "type": "optional float", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "Greater than or equal to $0$ when supplied.", "meaning": "Minimum boundary distance used by the T1 stencil.", "backend_support": "Boundary-correction lanes.", "problem_ir": "`discretization.fdm.boundary_delta_min`"},
-      {"python": "FEM.order", "type": "int", "default": "required", "si_unit": "$1$", "validation": "Integer greater than or equal to $1$.", "meaning": "Polynomial order of the FEM potential space.", "backend_support": "FEM CPU/GPU subject to planner support.", "problem_ir": "`backend_policy.discretization_hints.fem.order`"},
-      {"python": "FEM.maximum_element_size", "type": "float", "default": "required", "si_unit": "$\\mathrm{m}$", "validation": "Finite positive value; `hmax` is an alias.", "meaning": "Target maximum element size.", "backend_support": "FEM CPU/GPU.", "problem_ir": "`backend_policy.discretization_hints.fem.hmax`"},
-      {"python": "FEM.hmax", "type": "optional float", "default": "alias", "si_unit": "$\\mathrm{m}$", "validation": "Must equal `maximum_element_size` when both are supplied.", "meaning": "Short alias for the FEM target element size.", "backend_support": "FEM CPU/GPU.", "problem_ir": "`backend_policy.discretization_hints.fem.hmax`"},
-      {"python": "FEM.mesh", "type": "optional str", "default": "None", "si_unit": "$1$", "validation": "Non-empty when present.", "meaning": "Explicit mesh source; airbox models require the appropriate shared-domain mesh.", "backend_support": "FEM planner.", "problem_ir": "`backend_policy.discretization_hints.fem.mesh`"},
-      {"python": "FEM.demag_solver_policy", "type": "optional FemLinearSolverPolicy", "default": "None", "si_unit": "$1$", "validation": "Policy fields are validated individually below.", "meaning": "Linear-solver policy attached to FEM demagnetization solves.", "backend_support": "FEM CPU/GPU implementation paths.", "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy`"},
-      {"python": "FemLinearSolverPolicy.solver", "type": "Literal[\"CG\", \"GMRES\"]", "default": "CG", "si_unit": "$1$", "validation": "Must be `CG` or `GMRES`.", "meaning": "Krylov method for the sparse FEM system.", "backend_support": "FEM CPU/GPU Hypre paths.", "problem_ir": "`demag_solver_policy.solver`"},
-      {"python": "FemLinearSolverPolicy.preconditioner", "type": "Literal[\"AMG\", \"JACOBI\", \"NONE\"]", "default": "AMG", "si_unit": "$1$", "validation": "Must be `AMG`, `JACOBI`, or `NONE`.", "meaning": "BoomerAMG, diagonal scaling, or identity preconditioning.", "backend_support": "FEM CPU/GPU; device AMG requires device Hypre.", "problem_ir": "`demag_solver_policy.preconditioner`"},
-      {"python": "FemLinearSolverPolicy.rtol", "type": "float", "default": "1e-8", "si_unit": "$1$", "validation": "Finite and strictly positive.", "meaning": "Relative algebraic stopping tolerance; it does not control mesh or airbox truncation error.", "backend_support": "FEM CPU/GPU.", "problem_ir": "`demag_solver_policy.rtol`"},
-      {"python": "FemLinearSolverPolicy.atol", "type": "optional float", "default": "None", "si_unit": "$1$", "validation": "When supplied, finite and strictly positive.", "meaning": "Optional absolute algebraic stopping tolerance.", "backend_support": "FEM CPU/GPU.", "problem_ir": "`demag_solver_policy.atol`"},
-      {"python": "FemLinearSolverPolicy.max_iterations", "type": "int", "default": "500", "si_unit": "$1$", "validation": "Integer greater than or equal to $1$.", "meaning": "Hard Krylov iteration limit; non-convergence is a failed solve.", "backend_support": "FEM CPU/GPU.", "problem_ir": "`demag_solver_policy.max_iterations`"},
-      {"python": "FemLinearSolverPolicy.print_level", "type": "int", "default": "0", "si_unit": "$1$", "validation": "Integer greater than or equal to $0$.", "meaning": "Hypre/MFEM diagnostic verbosity only.", "backend_support": "FEM CPU/GPU.", "problem_ir": "`demag_solver_policy.print_level`"},
-      {"python": "FdmPbc.axes", "type": "tuple[bool,bool,bool]", "default": "required", "si_unit": "$1$", "validation": "Exactly three values, normalized to booleans.", "meaning": "Periodic status of x, y, z.", "backend_support": "FDM planner and FEM periodic reduction.", "problem_ir": "`pbc.axes`"},
-      {"python": "FdmPbc.demag", "type": "str", "default": "open", "si_unit": "$1$", "validation": "`open`, `truncated_images`, or `periodic_airbox_k0`.", "meaning": "Selects the periodic demag Green-function policy.", "backend_support": "Solver-specific; planner validates legality.", "problem_ir": "`pbc.demag`"},
-      {"python": "FdmPbc.image_counts", "type": "optional tuple[int,int,int]", "default": "None", "si_unit": "$1$", "validation": "Non-negative and only with `truncated_images`.", "meaning": "Number of finite translated images per axis.", "backend_support": "FDM.", "problem_ir": "`pbc.image_counts`"},
-      {"python": "demag(enabled=..., model=..., variant=..., realization=...)", "type": "keyword parameters", "default": "`enabled=True`, others `None`", "si_unit": "mixed", "validation": "Same `Demag` validation; `model` and `realization` cannot be combined.", "meaning": "Enables/disables the term and selects its requested realization.", "backend_support": "Flat scripting API.", "problem_ir": "`energy[].realization` plus enabled state"},
-      {"python": "fem_demag_solver(solver=..., preconditioner=..., rtol=..., atol=..., max_iterations=..., print_level=...)", "type": "keyword parameters", "default": "`CG`, `AMG`, `1e-8`, `None`, `500`, `0`", "si_unit": "mixed control units", "validation": "Same `FemLinearSolverPolicy` validation.", "meaning": "Sets the native FEM linear-solver policy.", "backend_support": "FEM CPU/GPU paths.", "problem_ir": "`discretization.fem.demag_solver_policy`"},
-      {"python": "fdm(default_cell=..., per_magnet=..., demag=..., boundary_correction=..., boundary_phi_floor=..., boundary_delta_min=...)", "type": "keyword parameters", "default": "all `None`", "si_unit": "mixed", "validation": "Same `FDM` validation; a default cell or non-empty `per_magnet` is required.", "meaning": "Sets complete FDM discretization hints.", "backend_support": "FDM CPU/GPU.", "problem_ir": "`discretization.fdm`"},
-      {"python": "boundary_correction(mode)", "type": "str", "default": "not set", "si_unit": "$1$", "validation": "`none`, `volume`, or `full`.", "meaning": "Sets the flat FDM partial-cell correction mode.", "backend_support": "FDM boundary-correction lanes.", "problem_ir": "`discretization.fdm.boundary_correction`"},
-      {"python": "demag_quality(profile)", "type": "str", "default": "not set", "si_unit": "$1$", "validation": "`exact`, `balanced`, or `fast`.", "meaning": "Sets demag refresh cadence: exact every RHS, balanced $5\\times10^{-13}\\,\\mathrm{s}$, fast $2\\times10^{-12}\\,\\mathrm{s}$.", "backend_support": "Time-integration refresh policy.", "problem_ir": "`study.field_refresh.demag_interval_s`"}
-    ]
+    "parameters": []
   }
 }

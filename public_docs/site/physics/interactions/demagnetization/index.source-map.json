@@ -1,50 +1,46 @@
 {
-  "document": {"path": "public_docs/site/physics/interactions/demagnetization/index.md", "title": "Demagnetization", "interaction": "demagnetization"},
+  "document": {
+    "path": "public_docs/site/physics/interactions/demagnetization/index.md",
+    "title": "Demagnetization",
+    "interaction": "demagnetization"
+  },
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "FFT/Newell reference path."},
-    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "FP32 and FP64 CUDA paths are source-visible; qualification is evidence-gated."},
-    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "Poisson and FEM/BEM CPU paths are source-visible."},
-    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "GPU demag dispatch exists but qualification depends on executed-device evidence."}
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+    }
   ],
   "sources": [
-    {"id": "py-demag", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class Demag", "responsibility": "Public demagnetization realization API."},
-    {"id": "py-fdm-policy", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDMDemag", "responsibility": "FDM demag strategy policy."},
-    {"id": "py-pbc", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "class FdmPbc", "responsibility": "Periodic demag policy."},
-    {"id": "fdm-cpu", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "demag_field_from_vectors", "responsibility": "FDM CPU field evaluation."},
-    {"id": "fdm-spectra", "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs", "symbol": "compute_newell_kernel_spectra", "responsibility": "FDM Newell spectra."},
-    {"id": "fdm-gpu", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "launch_demag_field_fp64", "responsibility": "FDM CUDA FP64 dispatch."},
-    {"id": "fdm-gpu32", "path": "backends/fdm/gpu/cuda/interactions/demag_fp32.cu", "symbol": "launch_demag_field_fp32", "responsibility": "FDM CUDA FP32 dispatch."},
-    {"id": "fdm-energy", "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu", "symbol": "reduce_demag_energy_fp64", "responsibility": "FDM CUDA energy reduction."},
-    {"id": "fem-aggregate", "path": "backends/fem/cpu/mfem/interactions/demag.cpp", "symbol": "compute_demag_field_for_magnetization", "responsibility": "FEM CPU orchestration."},
-    {"id": "fem-rhs", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp", "symbol": "assemble_demag_poisson_rhs", "responsibility": "FEM Poisson RHS."},
-    {"id": "fem-solve", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_solve.cpp", "symbol": "context_compute_demag_poisson", "responsibility": "FEM Poisson solve."},
-    {"id": "fem-bem", "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_solve.cpp", "symbol": "context_compute_demag_fem_bem", "responsibility": "FEM/BEM solve."},
-    {"id": "fem-periodic", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp", "symbol": "solve_demag_periodic_poisson_reduced", "responsibility": "Periodic FEM reduction."},
-    {"id": "fem-gpu", "path": "backends/fem/gpu/cuda/integrators/rk/rk_demag_dispatch.cu", "symbol": "gpu_rk_compute_demag_for_device_stage", "responsibility": "FEM GPU stage dispatch."},
-    {"id": "fdm-plan", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "FDM planner resolution."},
-    {"id": "fem-plan", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem", "responsibility": "FEM planner resolution."},
-    {"id": "output-validation", "path": "crates/fullmag-plan/src/validate.rs", "symbol": "validate_executable_outputs", "responsibility": "Fail-closed output validation."}
+    {
+      "id": "python-owner",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class Demag",
+      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+    }
   ],
-  "symbols": [
-    {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "Hd", "latex": "$\\mathbf H_{\\mathrm d}$", "meaning": "demagnetizing field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "phi", "latex": "$\\phi$", "meaning": "magnetic scalar potential", "si_unit": "$\\mathrm{A}$"},
-    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
-    {"id": "Ed", "latex": "$E_{\\mathrm d}$", "meaning": "demagnetization energy", "si_unit": "$\\mathrm{J}$"},
-    {"id": "Omega", "latex": "$\\Omega_m$", "meaning": "magnetic domain", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "Omegaa", "latex": "$\\Omega_a$", "meaning": "FEM airbox domain", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "normal", "latex": "$\\mathbf n$", "meaning": "outward unit normal", "si_unit": "$1$"},
-    {"id": "sigma", "latex": "$\\sigma_m$", "meaning": "surface magnetic charge density $\\mathbf M\\cdot\\mathbf n$", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "G", "latex": "$G$", "meaning": "continuous demagnetization Green kernel", "si_unit": "$\\mathrm{m^{-3}}$"},
-    {"id": "deltaE", "latex": "$\\delta E_{\\mathrm d}/\\delta\\mathbf M$", "meaning": "functional derivative of demagnetization energy", "si_unit": "$\\mathrm{N\\,m^2\\,A^{-1}}$"}
-  ],
-  "equations": [
-    {"id": "eq-demag-maxwell", "symbols": ["Hd", "M"], "sources": ["py-demag", "fem-aggregate"]},
-    {"id": "eq-demag-potential", "symbols": ["phi", "M", "Hd"], "sources": ["fem-solve"]},
-    {"id": "eq-demag-energy", "symbols": ["Ed", "mu0", "M", "Hd", "Omega", "deltaE"], "sources": ["fem-solve"]}
-  ],
-  "public_api": {"constructors": ["fullmag.Demag", "fullmag.FDMDemag", "fullmag.FdmPbc"], "parameters": [
-    {"python": "Demag.model", "type": "optional str", "default": "None", "si_unit": "$1$", "validation": "`airbox`, `bem`, `fredkin_koehler`, or `fmm`", "meaning": "Canonical demagnetization model family.", "backend_support": "Planner-dependent; unsupported combinations fail closed.", "problem_ir": "`energy[].realization`"},
-    {"python": "FDMDemag.strategy", "type": "str", "default": "auto", "si_unit": "$1$", "validation": "`auto`, `single_grid`, or `multilayer_convolution`", "meaning": "Selects the FDM multi-magnet convolution plan.", "backend_support": "FDM lanes only.", "problem_ir": "`discretization.demag.strategy`"}
-  ]}
+  "symbols": [],
+  "equations": [],
+  "public_api": {
+    "parameters": []
+  }
 }
