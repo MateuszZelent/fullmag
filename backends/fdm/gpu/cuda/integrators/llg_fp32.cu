@@ -268,6 +268,13 @@ __global__ void llg_rhs_fp32_kernel(
         rhs_z += amp * (-xi_dl * dl_z + xi_fl * fl_z);
     }
 
+    // Project only the final assembled RHS. Frozen cells still contribute to
+    // exchange/demag fields; they simply do not evolve in any explicit stage.
+    if (stt.has_frozen_mask && stt.frozen_mask[idx] != 0) {
+        rhs_x = 0.0f;
+        rhs_y = 0.0f;
+        rhs_z = 0.0f;
+    }
     out_x[idx] = rhs_x;
     out_y[idx] = rhs_y;
     out_z[idx] = rhs_z;

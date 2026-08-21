@@ -48,6 +48,24 @@ class RelaxationContractTests(unittest.TestCase):
 
         self.assertAlmostEqual(study.stop.torque_tolerance_apm, tolerance_apm)
 
+    def test_torque_tolerance_round_trips_at_object_boundary_in_both_units(self):
+        for unit, authored in (("T", 2.5e-6), ("A/m", 1.75)):
+            with self.subTest(unit=unit):
+                study = fm.Relaxation(
+                    outputs=[],
+                    algorithm="nonlinear_cg",
+                    torque_tolerance=authored,
+                    torque_tolerance_unit=unit,
+                )
+                stop_ir = study.to_ir()["stop"]
+                round_tripped = fm.RelaxStop(**stop_ir)
+
+                self.assertAlmostEqual(
+                    round_tripped.torque_tolerance_apm,
+                    study.stop.torque_tolerance_apm,
+                )
+                self.assertEqual(round_tripped.to_ir(), stop_ir)
+
     def test_direct_minimizer_rejects_llg_dynamics(self):
         with self.assertRaisesRegex(ValueError, "does not accept dynamics"):
             fm.Relaxation(

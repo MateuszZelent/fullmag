@@ -622,6 +622,7 @@ async function qualifyVisualizationMutationStability(page, inspector, fixture) {
     { iterations: 16, label: "Airbox", nodeId: "model:airbox:visualization" },
   ];
   fixture.visualizationPatchDelayMs = 180;
+  fixture.visualizationPatchRejectOnce = true;
   try {
     for (const target of targets) {
       await selectInspectorNode(page, inspector, target.nodeId, {
@@ -721,10 +722,17 @@ async function qualifyVisualizationMutationStability(page, inspector, fixture) {
           (await overview.getAttribute("data-mutation-stability-marker")) === identity,
           `${target.label}: Visualization Inspector remounted after mutation ACK.`,
         );
+        if (target.label === "Object" && iteration === 0) {
+          assert(
+            !(await unrelatedVisibility.isDisabled()),
+            "Object: unrelated visibility control was disabled after mutation reject.",
+          );
+        }
       }
     }
   } finally {
     fixture.visualizationPatchDelayMs = 0;
+    fixture.visualizationPatchRejectOnce = false;
   }
 }
 
@@ -1160,6 +1168,7 @@ function createInspectorFixture() {
     scene,
     topology: inspectorTopologyBuffer(),
     visualizationPatchDelayMs: 0,
+    visualizationPatchRejectOnce: false,
     visualization: inspectorVisualizationState(),
   };
 }
@@ -1259,6 +1268,13 @@ async function installInspectorFixtureApi(page, fixture) {
     if (path === "/v2/sessions/current/visualization/state" && request.method() === "PATCH") {
       const patch = request.postDataJSON() ?? {};
       fixture.visualizationMutationBodies.push(patch);
+      if (fixture.visualizationPatchRejectOnce) {
+        fixture.visualizationPatchRejectOnce = false;
+        if (fixture.visualizationPatchDelayMs > 0) {
+          await new Promise((resolveDelay) => setTimeout(resolveDelay, fixture.visualizationPatchDelayMs));
+        }
+        return fulfillJson(route, { error: { code: "fixture_visualization_reject" } }, 409);
+      }
       fixture.visualization = mergeInspectorVisualizationState(fixture.visualization, patch);
       fixture.visualization.revision += 1;
       if (fixture.visualizationPatchDelayMs > 0) {

@@ -907,6 +907,24 @@ describe("ObjectVisualizationController", () => {
     ).toBeNull();
   });
 
+  it("canonicalizes a technical Airbox carrier when resolving a public target", () => {
+    expect(
+      resolveVisualizationTargetFromSelection({
+        kind: "object.visualization",
+        label: "Airbox",
+        nodeId: "model:object:__air__:visualization",
+        objectId: "__air__",
+        ref: {
+          kind: "object.visualization",
+          nodeId: "model:object:__air__:visualization",
+          objectId: "__air__",
+          type: "scene-object",
+          visualizationTargetId: "object:__air__",
+        },
+      }),
+    ).toEqual(AIRBOX_VISUALIZATION_TARGET);
+  });
+
   it("uses the canonical Airbox settings independently from FDM domain defaults", () => {
     const controller = new ObjectVisualizationController();
     const mainTarget = { id: "fdm-domain", kind: "fdm-domain" as const };
@@ -1665,7 +1683,7 @@ describe("ObjectVisualizationController", () => {
       wireframeVisible: false,
     });
     controller.patchTarget(target, { wireframeVisible: false });
-    controller.patchTargetPending(target, { shaderVisible: false }, 14);
+    controller.patchTargetPending(target, { shaderVisible: false }, 14, "test-shader");
 
     const stateAtPendingRevision = {
       revision: 14,
@@ -1743,7 +1761,7 @@ describe("ObjectVisualizationController", () => {
     );
 
     expect(persistedOverride).not.toBeNull();
-    controller.patchTargetPending(target, patch, 1);
+    controller.patchTargetPending(target, patch, 1, "test-ack");
     controller.acknowledgePendingTargetPatches({
       revision: 2,
       overrides: [persistedOverride!],
@@ -1765,7 +1783,7 @@ describe("ObjectVisualizationController", () => {
     const controller = new ObjectVisualizationController();
     const target = { id: "object:film", kind: "object" as const };
 
-    controller.patchTargetPending(target, { surfaceColorSource: "magnitude" }, 3);
+    controller.patchTargetPending(target, { surfaceColorSource: "magnitude" }, 3, "test-color");
 
     expect(controller.getSnapshot().pendingOverrides?.["object:film"]?.patch).toEqual({
       surfaceColorSource: "magnitude",
@@ -1780,6 +1798,7 @@ describe("ObjectVisualizationController", () => {
       target,
       { shaderVisible: false, wireframeVisible: true },
       14,
+      "test-fem",
     );
 
     expect(
@@ -1811,9 +1830,9 @@ describe("ObjectVisualizationController", () => {
     };
 
     controller.patchTarget(femTarget, { wireframeVisible: false });
-    controller.patchTargetPending(femTarget, { shaderVisible: false }, 14);
-    controller.patchTargetPending(fdmTarget, { vectorsVisible: true }, 14);
-    controller.patchTargetPending(nativeTarget, { wireframeVisible: true }, 14);
+    controller.patchTargetPending(femTarget, { shaderVisible: false }, 14, "test-fem");
+    controller.patchTargetPending(fdmTarget, { vectorsVisible: true }, 14, "test-fdm");
+    controller.patchTargetPending(nativeTarget, { wireframeVisible: true }, 14, "test-native");
 
     controller.rejectPendingTargetPatches([
       visualizationTargetKey(fdmTarget),
@@ -1842,12 +1861,29 @@ describe("ObjectVisualizationController", () => {
     ).toBe(true);
   });
 
+  it("keeps a newer field transaction when an older parallel field transaction is rejected", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "object:film", kind: "object" as const };
+
+    controller.patchTargetPending(target, { surfaceColorSource: "component_x" }, 14, "tx-color");
+    controller.patchTargetPending(target, { vectorsVisible: true }, 14, "tx-vectors");
+    controller.rejectPendingTargetPatches([visualizationTargetKey(target)], ["tx-color"]);
+
+    expect(controller.getSnapshot().pendingOverrides?.[visualizationTargetKey(target)]).toMatchObject({
+      patch: { vectorsVisible: true },
+      fieldTransactionIds: { vectorsVisible: "tx-vectors" },
+    });
+    expect(
+      resolveVisualizationSettings(controller.getSnapshot(), target).vectorsVisible,
+    ).toBe(true);
+  });
+
   it("clears a target pending overlay without deleting committed or viewport state", () => {
     const controller = new ObjectVisualizationController();
     const target = { id: "object:film", kind: "object" as const };
     controller.patchTarget(target, { wireframeVisible: false });
     controller.patchViewportPreferences(target, { primitiveVisible: true });
-    controller.patchTargetPending(target, { shaderVisible: false }, 14);
+    controller.patchTargetPending(target, { shaderVisible: false }, 14, "test-clear");
 
     controller.clearPendingTarget(target);
 

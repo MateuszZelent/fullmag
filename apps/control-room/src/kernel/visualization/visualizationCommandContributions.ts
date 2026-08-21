@@ -139,7 +139,7 @@ async function patchTargetOverrideResource(
     return false;
   }
 
-  await patchVisualizationState(
+  const receipt = await patchVisualizationState(
     context,
     {
       ...basePatch,
@@ -151,7 +151,14 @@ async function patchTargetOverrideResource(
     },
     [visualizationTargetKey(target)],
   );
-  context.visualization?.patchTargetPending(target, patch, state.revision);
+  if (receipt) {
+    context.visualization?.patchTargetPending(
+      target,
+      patch,
+      state.revision,
+      receipt.transactionId,
+    );
+  }
   return true;
 }
 
@@ -201,16 +208,16 @@ async function patchVisualizationState(
   context: CommandContext,
   patch: VisualizationStatePatch,
   targetIds: readonly string[] = [],
-): Promise<void> {
+): Promise<{ transactionId: string } | null> {
   if (context.visualizationSync) {
-    context.visualizationSync.queuePatch(patch, targetIds);
-    return;
+    return context.visualizationSync.queuePatch(patch, targetIds);
   }
 
   const next = await context.api?.visualization.patch(patch);
   if (next) {
     context.resources?.invalidate(VISUALIZATION_STATE_PATH, next.revision);
   }
+  return null;
 }
 
 function visualizationStateFromContext(

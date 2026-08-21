@@ -212,9 +212,11 @@ mod tests {
             dmi_energy: 0.0,
             total_energy: 0.0,
             max_dm_dt: 13.0,
+            max_rhs_all_norm_per_s: 13.0,
             max_h_eff: 0.0,
             max_h_demag: 0.0,
             max_torque_Apm: 0.0,
+            max_torque_all_Apm: 0.0,
             per_object_scalars: std::collections::HashMap::new(),
         };
 

@@ -334,8 +334,8 @@ fn actual_engine_backend_and_device(engine: &str) -> std::io::Result<(&'static s
         | "runner.dense_block_real_validation" => ("fem", "cpu"),
         _ => {
             return Err(Error::new(
-        ErrorKind::InvalidData,
-        format!("final execution provenance has unknown execution_engine '{engine}'"),
+                ErrorKind::InvalidData,
+                format!("final execution provenance has unknown execution_engine '{engine}'"),
             ));
         }
     };
@@ -1575,7 +1575,9 @@ fn collect_streamed_provenance_files(
             continue;
         }
         let is_zarr_attributes = path.file_name().and_then(|name| name.to_str()) == Some(".zattrs");
-        if is_zarr_attributes || path.extension().and_then(|extension| extension.to_str()) == Some("json") {
+        if is_zarr_attributes
+            || path.extension().and_then(|extension| extension.to_str()) == Some("json")
+        {
             files.push(path);
         }
     }
@@ -1591,20 +1593,76 @@ pub(crate) fn finalize_streamed_artifact_provenance(
     let fields_dir = output_dir.join("fields");
     let mut files = Vec::new();
     collect_streamed_provenance_files(&fields_dir, &mut files)?;
+    finalize_provenance_files(&files, resolution, false)
+}
+
+/// Finalize metadata emitted by a stage-autosave writer.  Unlike regular
+/// streamed field output, autosave metadata is spread across the root
+/// `.zattrs`, stage manifests, continuous-index metadata, and field metadata;
+/// every JSON metadata object in that tree therefore receives the same final
+/// execution resolution.
+pub(crate) fn finalize_stage_autosave_provenance(
+    autosave_root: &Path,
+    resolution: &FinalExecutionResolutionProvenance,
+) -> std::io::Result<()> {
+    let mut files = Vec::new();
+    collect_streamed_provenance_files(autosave_root, &mut files)?;
+    finalize_provenance_files(&files, resolution, true)
+}
+
+fn finalize_provenance_files(
+    files: &[std::path::PathBuf],
+    resolution: &FinalExecutionResolutionProvenance,
+    require_metadata_provenance: bool,
+) -> std::io::Result<()> {
+    let serialized_resolution = serde_json::to_value(resolution)
+        .expect("FinalExecutionResolutionProvenance must serialize");
     for path in files {
         let bytes = fs::read(&path)?;
         let mut value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
             Error::new(
                 ErrorKind::InvalidData,
-                format!("streamed field artifact '{}' is invalid JSON: {error}", path.display()),
+                format!(
+                    "streamed field artifact '{}' is invalid JSON: {error}",
+                    path.display()
+                ),
             )
         })?;
         let mut changed = false;
-        if let Some(provenance) = value.get_mut("provenance").and_then(|value| value.as_object_mut()) {
+        if require_metadata_provenance {
+            let object = value.as_object_mut().ok_or_else(|| {
+                Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "stage-autosave metadata '{}' must be a JSON object",
+                        path.display()
+                    ),
+                )
+            })?;
+            let provenance = object
+                .entry("provenance".to_string())
+                .or_insert_with(|| serde_json::json!({}));
+            let provenance = provenance.as_object_mut().ok_or_else(|| {
+                Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "stage-autosave metadata '{}' has non-object provenance",
+                        path.display()
+                    ),
+                )
+            })?;
             provenance.insert(
                 "execution_resolution".to_string(),
-                serde_json::to_value(resolution)
-                    .expect("FinalExecutionResolutionProvenance must serialize"),
+                serialized_resolution.clone(),
+            );
+            changed = true;
+        } else if let Some(provenance) = value
+            .get_mut("provenance")
+            .and_then(|value| value.as_object_mut())
+        {
+            provenance.insert(
+                "execution_resolution".to_string(),
+                serialized_resolution.clone(),
             );
             changed = true;
         }
@@ -1619,7 +1677,7 @@ pub(crate) fn finalize_streamed_artifact_provenance(
                 .insert(
                     "provenance".to_string(),
                     serde_json::json!({
-                        "execution_resolution": resolution,
+                        "execution_resolution": serialized_resolution.clone(),
                     }),
                 );
             changed = true;
@@ -1675,6 +1733,11 @@ pub(crate) fn write_artifacts(
     field_context.execution_resolution = Some(execution_resolution.clone());
     fs::create_dir_all(output_dir)?;
     finalize_streamed_artifact_provenance(output_dir, &execution_resolution)?;
+    if let Some(autosave_root) = streamed.and_then(|summary| summary.autosave_root.as_deref()) {
+        if autosave_root != output_dir {
+            finalize_stage_autosave_provenance(autosave_root, &execution_resolution)?;
+        }
+    }
     write_sampling_resolution_artifact(output_dir, sampling_resolution)?;
     execution_provenance_json
         .as_object_mut()
@@ -1733,6 +1796,7 @@ pub(crate) fn write_artifacts(
         "engine_version": env!("CARGO_PKG_VERSION"),
         "build_identity": build_identity_json(),
         "status": executed.result.status,
+        "completion": executed.result.completion,
         "scalar_rows": executed.result.steps.len(),
         "accepted_solver_steps": accepted_steps.len(),
         "field_snapshots": executed.field_snapshot_count,
@@ -6180,6 +6244,7 @@ mod tests {
                 fe_order: 1,
                 hmax: 0.4,
                 initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+                frozen_spins: None,
                 material: MaterialIR {
                     name: "Py".to_string(),
                     saturation_magnetisation: 800e3,
@@ -6329,6 +6394,43 @@ mod tests {
         });
         let _ = fs::remove_dir_all(&output_dir);
         result
+    }
+
+    #[test]
+    fn metadata_persists_authoritative_stage_completion() {
+        let problem = fem_execution_problem("cpu", ExecutionMode::Strict);
+        let plan = test_fem_execution_plan();
+        let mut executed = final_execution_test_run(ExecutionProvenance::default());
+        executed.result.completion = Some(fullmag_ir::StageCompletionIR {
+            status: "completed".to_string(),
+            converged: true,
+            reason: Some(fullmag_ir::StageStopReason::Torque),
+            metric: Some(fullmag_ir::StageMetricKind::MaxTorqueApm),
+            metric_name: Some("max_torque_apm".to_string()),
+            metric_value: Some(0.25),
+            threshold: Some(1.0),
+        });
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-authoritative-completion-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock drift")
+                .as_nanos()
+        ));
+
+        write_artifacts(&output_dir, &problem, &plan, &executed, None)
+            .expect("artifact write should preserve completion");
+        let metadata: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("metadata.json")).expect("metadata should exist"),
+        )
+        .expect("metadata should parse");
+
+        assert_eq!(metadata["completion"]["status"], "completed");
+        assert_eq!(metadata["completion"]["converged"], true);
+        assert_eq!(metadata["completion"]["reason"], "torque");
+        assert_eq!(metadata["completion"]["metric"], "max_torque_apm");
+        fs::remove_dir_all(output_dir).expect("temporary completion artifacts should be removed");
     }
 
     fn write_final_execution_test_metadata_with_fem_policy(
@@ -7288,6 +7390,7 @@ mod tests {
             scalar_row_writer_wall_time_ns: 30,
             field_snapshot_writer_wall_time_ns: 80,
             native_field_snapshot_writer_wall_time_ns: 0,
+            autosave_root: None,
         };
 
         write_artifacts(&output_dir, &problem, &plan, &executed, Some(&streamed))

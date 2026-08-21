@@ -19,10 +19,12 @@ use super::field_resolution::{
     live_magnetization_available, strict_flat_json_field_values,
 };
 use super::multilayer_identity::correlate_multilayer_layers;
+use super::quantities::{current_field_carriers, resolved_quantity_capability_for_snapshot};
 use super::resolved_spatial_field::{
-    resolve_current_spatial_field, resolve_fdm_object_indices, resolve_fem_node_mapping,
-    resolve_spatial_field_from_values, FdmCellMembership, ResolvedSpatialField,
-    SpatialFieldCarrier, SpatialFieldProvenance, SpatialFieldSourceKind,
+    full_field_publication_carrier_identity, resolve_current_spatial_field,
+    resolve_fdm_object_indices, resolve_fem_node_mapping, resolve_spatial_field_from_values,
+    FdmCellMembership, ResolvedSpatialField, SpatialFieldCarrier, SpatialFieldProvenance,
+    SpatialFieldSourceKind,
 };
 use crate::artifacts::{read_json_artifact_value, try_resolve_artifact_path};
 use crate::error::ApiError;
@@ -58,17 +60,16 @@ use crate::router_v2::handlers::analysis::hysteresis::read_hysteresis_points_if_
 use crate::router_v2::handlers::sessions::status::{
     domain_generation_id, domain_generation_revision, fdm_grid_fingerprint, fdm_grid_shape,
     field_catalog_revision as current_field_catalog_revision, field_quantity_revision,
-    field_revision as current_field_revision, topology_revision,
 };
+use crate::schemas::common::AcceptedObservationFrameRef;
 use crate::schemas::fields::*;
-use crate::schemas::common::{AcceptedObservationFrameRef, FieldPublicationBundle};
 use crate::session::{
     current_artifact_dir, latest_field_source_precedence, preview_cache_precedes_latest,
     preview_field_source_precedence, resolved_current_field_source, ResolvedCurrentFieldSource,
 };
 use crate::types::{AppState, CommandLifecycleState, SessionStateResponse};
 use fullmag_quantities::{normalize_quantity_id, quantity_spec};
-use fullmag_runner::{FemMeshPayload, RuntimeEngineId};
+use fullmag_runner::{FemMeshPayload, QuantityMaterializationCapability, RuntimeEngineId};
 
 // ── Response header constants ────────────────────────────────────────────────
 
@@ -84,6 +85,7 @@ static HDR_SCOPE_ID: &str = "x-fullmag-scope-id";
 static HDR_SNAPSHOT_ID: &str = "x-fullmag-snapshot-id";
 static HDR_FIELD_INDEXING: &str = "x-fullmag-field-indexing";
 static HDR_NODE_INDEX_COUNT: &str = "x-fullmag-node-index-count";
+static HDR_PAYLOAD_STATE: &str = "x-fullmag-payload-state";
 const HYSTERESIS_ZARR_STORE: &str = "hysteresis.zarr";
 const HYSTERESIS_ZARR_M_FIELD: &str = "fields/m";
 const FDM_MULTILAYER_AIRBOX_MANIFEST: &str = "fields/H_demag/airbox/manifest.json";
@@ -1298,6 +1300,14 @@ fn insert_field_vector_binary_headers(
     if let Ok(value) = HeaderValue::from_str(&format!("FMVP;version={encoding_version}")) {
         h.insert(HeaderName::from_static(HDR_ENCODING), value);
     }
+    h.insert(
+        HeaderName::from_static(HDR_PAYLOAD_STATE),
+        if encoding_version >= 3 {
+            HeaderValue::from_static("current")
+        } else {
+            HeaderValue::from_static("legacy_unverified")
+        },
+    );
     if let Some(topology_hash) = topology_hash {
         if let Ok(value) = HeaderValue::from_str(topology_hash) {
             h.insert(
@@ -1884,6 +1894,8 @@ pub async fn get_field_catalog(
     let gen_id = domain_generation_id(snapshot);
 
     let mut quantities = Vec::new();
+    let mut materialized_carriers =
+        BTreeMap::<String, (String, Option<String>, String, String)>::new();
 
     for (qid, value) in snapshot.latest_fields.entries() {
         if preview_cache_is_fresher(snapshot, qid) {
@@ -1900,6 +1912,7 @@ pub async fn get_field_catalog(
             };
             field
         };
+        remember_materialized_carrier(&mut materialized_carriers, &resolved);
         push_field_descriptor(
             &mut quantities,
             qid,
@@ -1922,6 +1935,7 @@ pub async fn get_field_catalog(
         let Some(resolved) = resolve_current_spatial_field(snapshot, qid, n_comp)? else {
             continue;
         };
+        remember_materialized_carrier(&mut materialized_carriers, &resolved);
         push_field_descriptor(
             &mut quantities,
             qid,
@@ -1956,6 +1970,7 @@ pub async fn get_field_catalog(
                 component_count,
                 &carrier,
             ) {
+                remember_materialized_carrier(&mut materialized_carriers, &field);
                 push_field_descriptor(
                     &mut quantities,
                     &field.quantity_id,
@@ -1984,6 +1999,7 @@ pub async fn get_field_catalog(
         let Some(field) = resolve_transport_spatial_field(snapshot, quantity_id)? else {
             continue;
         };
+        remember_materialized_carrier(&mut materialized_carriers, &field);
         catalog_revision = catalog_revision.max(field.quantity_revision);
         push_field_descriptor(
             &mut quantities,
@@ -2014,6 +2030,7 @@ pub async fn get_field_catalog(
     if live_magnetization_is_selected {
         let live_magnetization = resolve_current_spatial_field(snapshot, "m", 3)?
             .ok_or_else(|| ApiError::internal("selected live magnetization has no carrier"))?;
+        remember_materialized_carrier(&mut materialized_carriers, &live_magnetization);
         quantities.retain(|quantity| quantity.quantity_id != "m");
         push_field_descriptor(
             &mut quantities,
@@ -2103,6 +2120,60 @@ pub async fn get_field_catalog(
             &gen_id,
             legacy_pending_field_freshness(snapshot),
             false,
+        );
+    }
+
+    for descriptor in &mut quantities {
+        let Some(spec) = quantity_spec(&descriptor.quantity_id) else {
+            continue;
+        };
+        let materialization = match descriptor.state {
+            FieldMaterializationState::Complete | FieldMaterializationState::StaleComplete => {
+                QuantityMaterializationCapability::Materialized
+            }
+            FieldMaterializationState::Pending => QuantityMaterializationCapability::Pending,
+            FieldMaterializationState::Unmaterialized => {
+                QuantityMaterializationCapability::Unmaterialized
+            }
+            FieldMaterializationState::Unsupported | FieldMaterializationState::Error => {
+                QuantityMaterializationCapability::Unavailable
+            }
+        };
+        let scope = if descriptor.location == "airbox_only" {
+            "airbox"
+        } else {
+            spec.domain.as_str()
+        };
+        let carriers = if descriptor.available
+            && matches!(
+                descriptor.state,
+                FieldMaterializationState::Complete | FieldMaterializationState::StaleComplete
+            ) {
+            materialized_carriers
+                .get(&descriptor.quantity_id)
+                .map(|(scope_kind, scope_id, carrier_id, carrier_fingerprint)| {
+                    current_field_carriers(
+                        spec,
+                        scope_kind,
+                        scope_id.as_deref(),
+                        carrier_id,
+                        Some(carrier_fingerprint),
+                        None,
+                    )
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        descriptor.resolved_capability = Some(
+            resolved_quantity_capability_for_snapshot(
+                snapshot,
+                spec,
+                materialization,
+                carriers,
+                scope,
+            )
+            .into(),
         );
     }
 
@@ -2607,6 +2678,10 @@ pub async fn get_field_meta(
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
 
     let spec = quantity_spec(quantity_id);
+    let requested_capability_scope = query
+        .scope_kind
+        .as_deref()
+        .unwrap_or_else(|| spec.map(|spec| spec.domain.as_str()).unwrap_or("full"));
     let n_comp = spec.map(|s| s.n_comp).unwrap_or(3);
     let label = spec
         .map(|s| s.label.to_string())
@@ -2789,6 +2864,15 @@ pub async fn get_field_meta(
                 state: freshness.state,
                 materialization_reason_code: freshness.materialization_reason_code,
                 materialization_error: freshness.materialization_error,
+                resolved_capability: field_meta_resolved_capability(
+                    snapshot,
+                    quantity_id,
+                    freshness.state,
+                    requested_capability_scope,
+                    query.scope_id.as_deref(),
+                    None,
+                    None,
+                ),
             }));
         }
         let selected_quantity =
@@ -2830,6 +2914,15 @@ pub async fn get_field_meta(
                 state: freshness.state,
                 materialization_reason_code: freshness.materialization_reason_code,
                 materialization_error: freshness.materialization_error,
+                resolved_capability: field_meta_resolved_capability(
+                    snapshot,
+                    quantity_id,
+                    freshness.state,
+                    requested_capability_scope,
+                    query.scope_id.as_deref(),
+                    None,
+                    None,
+                ),
             }));
         }
         if let Some(supported) = capability_supports_quantity(snapshot, quantity_id) {
@@ -2871,6 +2964,15 @@ pub async fn get_field_meta(
                 state,
                 materialization_reason_code: reason_code,
                 materialization_error: None,
+                resolved_capability: field_meta_resolved_capability(
+                    snapshot,
+                    quantity_id,
+                    state,
+                    requested_capability_scope,
+                    query.scope_id.as_deref(),
+                    None,
+                    None,
+                ),
             }));
         }
         return Err(ApiError::not_found(format!(
@@ -2918,7 +3020,6 @@ pub async fn get_field_meta(
         freshness.source_step,
         freshness.source_time_seconds,
     );
-    let topology_revision = topology_revision(snapshot, domain_generation_revision(snapshot));
     let scope_kind = resolved_scope
         .as_ref()
         .map(|scope| scope.kind.clone())
@@ -2928,41 +3029,31 @@ pub async fn get_field_meta(
         .as_ref()
         .and_then(|scope| scope.id.clone())
         .or_else(|| query.scope_id.clone());
-    let carrier_id = scope_id
+    let component_name = component_label(&component);
+    let publication_bundle = snapshot
+        .field_publication_bundles
+        .get(quantity_id)
+        .filter(|bundle| {
+            bundle.observation_frame == observation_frame
+                && bundle.field.component == component_name
+                && bundle.field.scope_kind == scope_kind
+                && bundle.field.scope_id == scope_id
+        })
+        .cloned();
+    let carrier_identity = airbox_field
         .as_ref()
-        .map(|id| format!("{scope_kind}:{id}"))
-        .unwrap_or_else(|| format!("{scope_kind}:{gen_id}"));
-    let topology_hash = format!(
-        "sha256:{:x}",
-        Sha256::digest(format!("{gen_id}:{topology_revision}"))
-    );
-    let carrier_fingerprint = resolved_scope
-        .as_ref()
-        .and_then(|scope| scope.carrier_hash.clone())
-        .unwrap_or_else(|| {
-            format!(
-                "sha256:{:x}",
-                Sha256::digest(format!("{carrier_id}:{topology_hash}"))
-            )
+        .or(resolved_field.as_ref())
+        .and_then(|field| {
+            let identity = full_field_publication_carrier_identity(field)?;
+            Some((
+                target_carrier_id(field, resolved_scope.as_ref(), &gen_id),
+                identity.carrier_fingerprint,
+            ))
         });
-    let publication_bundle = FieldPublicationBundle::for_response(
-        observation_frame.clone(),
-        current_field_revision(snapshot),
-        snapshot.scalar_revision,
-        current_field_catalog_revision(snapshot),
-        topology_revision,
-        topology_hash,
-        quantity_id,
-        component_label(&component),
-        scope_kind,
-        scope_id,
-        carrier_id,
-        carrier_fingerprint,
-    );
 
     Ok(Json(FieldMeta {
         observation_frame,
-        publication_bundle: Some(publication_bundle),
+        publication_bundle,
         quantity_id: quantity_id.to_string(),
         label,
         kind,
@@ -2985,6 +3076,19 @@ pub async fn get_field_meta(
         state: freshness.state,
         materialization_reason_code: freshness.materialization_reason_code,
         materialization_error: freshness.materialization_error,
+        resolved_capability: field_meta_resolved_capability(
+            snapshot,
+            quantity_id,
+            freshness.state,
+            &scope_kind,
+            scope_id.as_deref(),
+            carrier_identity
+                .as_ref()
+                .map(|(carrier_id, _)| carrier_id.as_str()),
+            carrier_identity
+                .as_ref()
+                .map(|(_, fingerprint)| fingerprint.as_str()),
+        ),
     }))
 }
 
@@ -3101,21 +3205,99 @@ fn push_field_descriptor(
         state: freshness.state,
         materialization_reason_code: freshness.materialization_reason_code,
         materialization_error: freshness.materialization_error,
+        resolved_capability: None,
     });
+}
+
+fn remember_materialized_carrier(
+    carriers: &mut BTreeMap<String, (String, Option<String>, String, String)>,
+    field: &ResolvedSpatialField<'_>,
+) {
+    if field.values.is_empty() {
+        return;
+    }
+    let Some(identity) = full_field_publication_carrier_identity(field) else {
+        return;
+    };
+    carriers.insert(
+        field.quantity_id.clone(),
+        (
+            identity.scope_kind,
+            identity.scope_id,
+            identity.carrier_id,
+            identity.carrier_fingerprint,
+        ),
+    );
 }
 
 fn capability_supports_quantity(
     snapshot: &SessionStateResponse,
     quantity_id: &str,
 ) -> Option<bool> {
-    let capabilities = snapshot.capabilities.as_ref()?;
-    let supported = capabilities
-        .preview_quantities
-        .iter()
-        .chain(capabilities.snapshot_quantities.iter())
-        .filter_map(|id| normalize_quantity_id(id).ok())
-        .any(|id| id.as_str() == quantity_id);
-    Some(supported)
+    snapshot.capabilities.as_ref()?;
+    let spec = quantity_spec(quantity_id)?;
+    let resolved = resolved_quantity_capability_for_snapshot(
+        snapshot,
+        spec,
+        QuantityMaterializationCapability::Unmaterialized,
+        Vec::new(),
+        spec.domain.as_str(),
+    );
+    Some(resolved.provider == fullmag_runner::QuantityProviderCapability::Available)
+}
+
+fn field_meta_resolved_capability(
+    snapshot: &SessionStateResponse,
+    quantity_id: &str,
+    state: FieldMaterializationState,
+    scope_kind: &str,
+    scope_id: Option<&str>,
+    carrier_id: Option<&str>,
+    carrier_fingerprint: Option<&str>,
+) -> Option<crate::schemas::quantities::ResolvedQuantityCapability> {
+    let spec = quantity_spec(quantity_id)?;
+    let materialization = match state {
+        FieldMaterializationState::Complete | FieldMaterializationState::StaleComplete => {
+            QuantityMaterializationCapability::Materialized
+        }
+        FieldMaterializationState::Pending => QuantityMaterializationCapability::Pending,
+        FieldMaterializationState::Unmaterialized => {
+            QuantityMaterializationCapability::Unmaterialized
+        }
+        FieldMaterializationState::Unsupported | FieldMaterializationState::Error => {
+            QuantityMaterializationCapability::Unavailable
+        }
+    };
+    let carriers = if matches!(
+        state,
+        FieldMaterializationState::Complete | FieldMaterializationState::StaleComplete
+    ) {
+        carrier_id
+            .zip(carrier_fingerprint)
+            .map(|(carrier_id, carrier_fingerprint)| {
+                current_field_carriers(
+                    spec,
+                    scope_kind,
+                    scope_id,
+                    carrier_id,
+                    Some(carrier_fingerprint),
+                    None,
+                )
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    Some(
+        resolved_quantity_capability_for_snapshot(
+            snapshot,
+            spec,
+            materialization,
+            carriers,
+            scope_kind,
+        )
+        .into(),
+    )
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
@@ -4313,7 +4495,8 @@ fn sample_unscoped_field_values(
             ("x-fullmag-snapshot-id" = String, description = "Optional persisted snapshot identifier"),
             ("x-fullmag-mesh-topology-hash" = String, description = "Optional FMVP v3 mesh topology hash"),
             ("x-fullmag-field-indexing" = String, description = "Optional FMVP v3 field indexing"),
-            ("x-fullmag-node-index-count" = usize, description = "Optional FMVP v3 node-index count")
+            ("x-fullmag-node-index-count" = usize, description = "Optional FMVP v3 node-index count"),
+            ("x-fullmag-payload-state" = String, description = "current for metadata-complete FMVP v3; legacy_unverified for FMVP v2")
         )),
         (status = 202, description = "Field vector materialization is pending. The JSON body contains a stable reason_code, retry_after_ms, requested quantity/scope, and domain generation; clients may retry this resource.", body = FieldVectorPendingResponse, content_type = "application/json"),
         (status = 204, description = "Recognized field quantity has no materialized source and no active pending materialization is reported (not requested or currently unavailable); no payload is returned."),
@@ -4354,8 +4537,26 @@ pub async fn get_field_vector(
         return Ok(response);
     }
 
-    let spec = quantity_spec(quantity_id);
-    let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
+    let spec = quantity_spec(quantity_id)
+        .ok_or_else(|| ApiError::not_found(format!("unknown field quantity '{quantity_id}'")))?;
+    let scope = query.scope_kind.as_deref().unwrap_or(spec.domain.as_str());
+    let resolved_capability = resolved_quantity_capability_for_snapshot(
+        snapshot,
+        spec,
+        QuantityMaterializationCapability::Unmaterialized,
+        Vec::new(),
+        scope,
+    );
+    if resolved_capability.request != fullmag_runner::QuantityRequestCapability::FieldVector {
+        return Err(ApiError::bad_request(format!(
+            "quantity '{quantity_id}' is not requestable as a field vector: {}",
+            resolved_capability
+                .reason_code
+                .as_deref()
+                .unwrap_or("quantity_not_requestable")
+        )));
+    }
+    let n_comp = spec.n_comp as usize;
 
     let component = parse_component(query.component.as_deref(), n_comp)?;
     let airbox_carrier = requested_fdm_multilayer_airbox_carrier(snapshot, &query, quantity_id)?;
@@ -4445,7 +4646,7 @@ pub async fn get_field_vector(
                 .and_then(|state| state.latest_step.magnetization.as_ref())
                 .is_some());
 
-    if raw_values_opt.is_none() && spec.is_some() {
+    if raw_values_opt.is_none() {
         validate_pending_field_vector_scope(
             &query,
             snapshot,
@@ -4471,7 +4672,7 @@ pub async fn get_field_vector(
 
     let (raw_values, grid, resolved_field) = match raw_values_opt {
         Some(values) => values,
-        None if spec.is_some() => {
+        None => {
             if invalid_current_field_source_is_present(snapshot, quantity_id, n_comp) {
                 return Err(ApiError::not_found(format!(
                     "field '{}' has no valid current value source",
@@ -4536,12 +4737,6 @@ pub async fn get_field_vector(
                 return Ok(StatusCode::NO_CONTENT.into_response());
             }
             return Ok(StatusCode::NO_CONTENT.into_response());
-        }
-        None => {
-            return Err(ApiError::not_found(format!(
-                "field '{}' not available in memory",
-                quantity_id
-            )));
         }
     };
     let field_revision = airbox_field
@@ -7804,10 +7999,11 @@ fn urlencoding(s: &str) -> String {
 mod tests {
     use super::{
         analysis_complex_vector_view_values, analysis_frequency_response_view_values,
-        apply_field_scope, decode_complex_f64_pairs_little_endian, is_fem_runtime,
-        parse_analysis_eigen_mode_field_id, parse_analysis_frequency_response_field_id,
-        parse_component, preview_cache_is_fresher, project_values, push_field_descriptor,
-        resolve_field_scope, resolve_target_field_availability, resolve_transport_spatial_field,
+        apply_field_scope, decode_complex_f64_pairs_little_endian,
+        insert_field_vector_binary_headers, is_fem_runtime, parse_analysis_eigen_mode_field_id,
+        parse_analysis_frequency_response_field_id, parse_component, preview_cache_is_fresher,
+        project_values, push_field_descriptor, resolve_field_scope,
+        resolve_target_field_availability, resolve_transport_spatial_field,
         serialize_analysis_field_vector_binary, FieldFreshness, FieldMaterializationState,
         FieldVectorQuery, ResolvedFieldScopeDomain, TargetFieldAvailabilityQuery,
     };
@@ -7817,8 +8013,174 @@ mod tests {
     use crate::session::default_current_live_state;
     use crate::types::CurrentLiveSnapshotRequest;
     use fullmag_runner::{
-        BackendCapabilities, FemMeshPartPayload, FemMeshPayload, LivePreviewField, RuntimeEngineId,
+        BackendCapabilities, FemMeshPartPayload, FemMeshPayload, LivePreviewField,
+        ResolvedQuantityProviderRegistry, RuntimeEngineId,
     };
+
+    fn snapshot_with_field_provider(quantity_id: &str) -> crate::types::SessionStateResponse {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "field-carrier-contract"
+        }))
+        .expect("minimal live snapshot request should deserialize");
+        let mut snapshot = default_current_live_state(&request);
+        snapshot.capabilities = Some(BackendCapabilities {
+            engine_id: RuntimeEngineId::FdmCpuReference,
+            capability_profile_version: "test".to_string(),
+            supported_terms: Vec::new(),
+            term_scopes: std::collections::BTreeMap::new(),
+            feature_capabilities: std::collections::BTreeMap::new(),
+            supported_demag_realizations: Vec::new(),
+            preview_quantities: vec![quantity_id.to_string()],
+            snapshot_quantities: Vec::new(),
+            scalar_outputs: Vec::new(),
+            resolved_quantity_registry: Some(ResolvedQuantityProviderRegistry::from_resolved_plan(
+                "fdm_cpu_reference",
+                "double",
+                [quantity_id],
+                std::iter::empty::<&str>(),
+            )),
+            approximate_operators: Vec::new(),
+            supports_frequency_response: false,
+            supports_coupled_magnetoelastic_quasistatic: false,
+            supports_coupled_magnetoelastic_elastodynamic: false,
+            supports_frequency_domain_elastodynamics: false,
+            supports_coupled_eigenmodes: false,
+            supports_lossy_fallback_override: false,
+        });
+        snapshot
+    }
+
+    #[test]
+    fn field_vector_payload_state_is_fail_closed_for_legacy_fmvp() {
+        let mut legacy = axum::response::Response::new(axum::body::Body::empty());
+        insert_field_vector_binary_headers(&mut legacy, 2, None, None, None);
+        assert_eq!(
+            legacy
+                .headers()
+                .get(super::HDR_PAYLOAD_STATE)
+                .and_then(|value| value.to_str().ok()),
+            Some("legacy_unverified")
+        );
+
+        let mut current = axum::response::Response::new(axum::body::Body::empty());
+        insert_field_vector_binary_headers(&mut current, 3, None, None, None);
+        assert_eq!(
+            current
+                .headers()
+                .get(super::HDR_PAYLOAD_STATE)
+                .and_then(|value| value.to_str().ok()),
+            Some("current")
+        );
+    }
+
+    #[test]
+    fn field_meta_pending_error_and_unmaterialized_states_have_no_carrier() {
+        let snapshot = snapshot_with_field_provider("H_demag");
+
+        for state in [
+            FieldMaterializationState::Pending,
+            FieldMaterializationState::Error,
+            FieldMaterializationState::Unmaterialized,
+        ] {
+            let resolved = super::field_meta_resolved_capability(
+                &snapshot,
+                "H_demag",
+                state,
+                "full",
+                None,
+                Some("fdm:verified-grid:full"),
+                None,
+            )
+            .expect("resolved capability");
+            assert!(
+                resolved.carriers.is_empty(),
+                "{state:?} must not publish a carrier"
+            );
+        }
+    }
+
+    #[test]
+    fn field_meta_complete_payload_carrier_has_identity_without_guessed_version() {
+        let snapshot = snapshot_with_field_provider("H_demag");
+        let resolved = super::field_meta_resolved_capability(
+            &snapshot,
+            "H_demag",
+            FieldMaterializationState::Complete,
+            "full",
+            None,
+            Some("fdm:verified-grid:full"),
+            Some("verified-grid"),
+        )
+        .expect("resolved capability");
+
+        assert_eq!(resolved.carriers.len(), 1);
+        assert!(!resolved.carriers[0].carrier_id.is_empty());
+        assert!(!resolved.carriers[0].carrier_id.starts_with("declared:"));
+        assert_eq!(resolved.carriers[0].carrier_fingerprint, "verified-grid");
+        assert_eq!(resolved.carriers[0].payload_version, None);
+        assert_eq!(
+            resolved.carriers[0].payload_state,
+            crate::schemas::quantities::FieldPayloadState::Current
+        );
+    }
+
+    #[test]
+    fn field_meta_carrier_uses_resolved_airbox_scope() {
+        let snapshot = snapshot_with_field_provider("H_demag");
+        let resolved = super::field_meta_resolved_capability(
+            &snapshot,
+            "H_demag",
+            FieldMaterializationState::Complete,
+            "airbox",
+            Some("airbox"),
+            Some("sha256:verified-airbox-carrier"),
+            Some("verified-airbox-fingerprint"),
+        )
+        .expect("resolved capability");
+
+        assert_eq!(resolved.scope, "airbox");
+        assert_eq!(resolved.carriers.len(), 1);
+        assert_eq!(resolved.carriers[0].scope, "airbox");
+        assert_eq!(resolved.carriers[0].scope_kind, "airbox");
+        assert_eq!(resolved.carriers[0].scope_id.as_deref(), Some("airbox"));
+        assert_eq!(
+            resolved.carriers[0].carrier_id,
+            "sha256:verified-airbox-carrier"
+        );
+        assert_eq!(
+            resolved.carriers[0].carrier_fingerprint,
+            "verified-airbox-fingerprint"
+        );
+    }
+
+    #[test]
+    fn field_meta_carrier_uses_resolved_layer_identity() {
+        let snapshot = snapshot_with_field_provider("H_demag");
+        let resolved = super::field_meta_resolved_capability(
+            &snapshot,
+            "H_demag",
+            FieldMaterializationState::Complete,
+            "layer",
+            Some("layer:top"),
+            Some("sha256:verified-layer-carrier"),
+            Some("verified-layer-fingerprint"),
+        )
+        .expect("resolved capability");
+
+        assert_eq!(resolved.scope, "layer");
+        assert_eq!(resolved.carriers.len(), 1);
+        assert_eq!(resolved.carriers[0].scope, "layer");
+        assert_eq!(resolved.carriers[0].scope_kind, "layer");
+        assert_eq!(resolved.carriers[0].scope_id.as_deref(), Some("layer:top"));
+        assert_eq!(
+            resolved.carriers[0].carrier_id,
+            "sha256:verified-layer-carrier"
+        );
+        assert_eq!(
+            resolved.carriers[0].carrier_fingerprint,
+            "verified-layer-fingerprint"
+        );
+    }
 
     #[test]
     fn target_availability_proves_fdm_single_grid_carrier_without_adoption() {
@@ -8966,6 +9328,7 @@ mod tests {
             preview_quantities: Vec::new(),
             snapshot_quantities: Vec::new(),
             scalar_outputs: Vec::new(),
+            resolved_quantity_registry: None,
             approximate_operators: Vec::new(),
             supports_frequency_response: false,
             supports_coupled_magnetoelastic_quasistatic: false,

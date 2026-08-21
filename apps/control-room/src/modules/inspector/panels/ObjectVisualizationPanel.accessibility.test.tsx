@@ -229,7 +229,6 @@ describe("ObjectVisualizationPanel accessibility controls", () => {
         onReset={vi.fn()}
         onResetChildRegions={vi.fn()}
         onRetry={vi.fn()}
-        pending={false}
         childRegionPending={false}
         resetLabel="Reset display"
       />,

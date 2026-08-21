@@ -1113,7 +1113,6 @@ export function VisualizationOverridesSection({
   onReset,
   onResetChildRegions,
   onRetry,
-  pending,
   resetLabel,
 }: {
   childRegionOverrideCount: number;
@@ -1125,13 +1124,12 @@ export function VisualizationOverridesSection({
   onReset: () => void;
   onResetChildRegions: () => void;
   onRetry: () => void;
-  pending: boolean;
   resetLabel: string;
 }) {
   return (
     <InspectorGroup collapsible defaultOpen={false} title="Diagnostics & overrides">
       <div className="fm-inspector-toolbar">
-        <Button size="sm" type="button" disabled={pending} variant="ghost" onClick={onReset}>
+        <Button size="sm" type="button" variant="ghost" onClick={onReset}>
           <RotateCcw size={12} aria-hidden="true" />
           {resetLabel}
         </Button>

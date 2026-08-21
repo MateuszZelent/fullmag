@@ -1,7 +1,13 @@
-# Relaxation qualification matrix — 2026-07-11
+# Historical relaxation qualification matrix — 2026-07-11
 
-This report records the current production contract after the complete
-relaxation audit. The canonical physics definition is
+> This is a historical snapshot and is superseded for current status. Its
+> production/qualified labels and listed artifacts must not be used to promote
+> a lane. The current fail-closed status is defined by
+> `docs/specs/capability-matrix-v0.json` and
+> `docs/audits/2026-08-20-relaxation-audit-v2-verification-remediation.md`.
+
+This report recorded the production contract claimed at that historical date
+after the then-current relaxation audit. The canonical physics definition is
 `docs/physics/0580-canonical-relaxation-equilibrium-contract.md`.
 
 ## Contract conclusions

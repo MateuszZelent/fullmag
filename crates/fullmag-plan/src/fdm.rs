@@ -4,12 +4,13 @@ use fullmag_fdm_demag::{
     TensorRepresentation, TransferKind,
 };
 use fullmag_ir::{
-    AxisBoundary, BackendPlanIR, BackendTarget, CommonPlanMeta, DiscretizationHintsIR,
-    EnergyTermIR, ExchangeBoundaryCondition, ExchangeCouplingModeIR, ExecutionPlanIR,
-    ExecutionPrecision, FdmGridCertificateIR, FdmLayerPlanIR, FdmMaterialIR, FdmMultilayerPlanIR,
-    FdmMultilayerSummaryIR, FdmPlanIR, GeometryEntryIR, GridDimensions, InitialMagnetizationIR,
-    IntegratorChoice, OutputPlanIR, ProblemIR, ProvenancePlanIR, RegionFrameIR, RegionShapeIR,
-    RelaxationAlgorithmIR, SeedPolicy, ThermalSeedConfig, TimeDependenceIR, IR_VERSION,
+    AxisBoundary, BackendPlanIR, BackendTarget, CommonPlanMeta, ConstraintActivationIR,
+    DiscretizationHintsIR, EnergyTermIR, ExchangeBoundaryCondition, ExchangeCouplingModeIR,
+    ExecutionPlanIR, ExecutionPrecision, FdmGridCertificateIR, FdmLayerPlanIR, FdmMaterialIR,
+    FdmMultilayerPlanIR, FdmMultilayerSummaryIR, FdmPlanIR, FrozenReferencePolicyIR,
+    GeometryEntryIR, GridDimensions, InitialMagnetizationIR, IntegratorChoice, OutputPlanIR,
+    ProblemIR, ProvenancePlanIR, RegionFrameIR, RegionShapeIR, RelaxationAlgorithmIR, SeedPolicy,
+    SelectionMembershipPolicyIR, ThermalSeedConfig, TimeDependenceIR, IR_VERSION,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -29,10 +30,16 @@ use crate::magnetization_textures_v2::sample_preset_texture_versioned;
 use crate::oersted::{resolve_fdm_oersted_term, ResolvedOerstedTerm};
 use crate::region_conflict::{resolve_region_conflict, RegionConflictCandidate};
 use crate::selection::geometry::{contains_point, geometry_entry_bounds, normalize_axis};
+use crate::selection::{
+    compile_fdm_frozen_spins, FdmFrozenSpinsDomain, FrozenSpinsCompileRequest,
+    ResolvedFrozenSpinsReference, SelectionDofMembership,
+};
 use crate::spin_torque::{
     resolve_legacy_spin_torque, resolve_sot_fields, SpinTorqueExecutableLane,
 };
-use crate::util::{generate_random_unit_vectors, runtime_requests_cuda, GRID_TOLERANCE, MU0};
+use crate::util::{
+    active_stage_id, generate_random_unit_vectors, runtime_requests_cuda, GRID_TOLERANCE, MU0,
+};
 use crate::validate::{
     planned_study_controls, validate_executable_outputs, validate_grid_asset_cell_size,
 };
@@ -329,11 +336,8 @@ fn grid_sample_points(
         for y in 0..ny {
             for x in 0..nx {
                 let idx = x + nx * (y + ny * z);
-                let world = [
-                    origin[0] + (x as f64 + 0.5) * cell_size[0],
-                    origin[1] + (y as f64 + 0.5) * cell_size[1],
-                    origin[2] + (z as f64 + 0.5) * cell_size[2],
-                ];
+                let world =
+                    resolved_fdm_cell_center([x as u32, y as u32, z as u32], cell_size, origin);
                 let object = [
                     world[0] - owner_translation[0],
                     world[1] - owner_translation[1],
@@ -348,6 +352,28 @@ fn grid_sample_points(
         }
     }
     points
+}
+
+pub(crate) fn resolved_fdm_cell_centers(
+    grid_cells: [u32; 3],
+    cell_size: [f64; 3],
+    origin: [f64; 3],
+) -> Vec<[f64; 3]> {
+    let mut points = Vec::with_capacity(grid_cells.into_iter().fold(1_usize, |product, count| {
+        product.saturating_mul(count as usize)
+    }));
+    for z in 0..grid_cells[2] {
+        for y in 0..grid_cells[1] {
+            for x in 0..grid_cells[0] {
+                points.push(resolved_fdm_cell_center([x, y, z], cell_size, origin));
+            }
+        }
+    }
+    points
+}
+
+fn resolved_fdm_cell_center(index: [u32; 3], cell_size: [f64; 3], origin: [f64; 3]) -> [f64; 3] {
+    std::array::from_fn(|axis| origin[axis] + (f64::from(index[axis]) + 0.5) * cell_size[axis])
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -848,6 +874,217 @@ fn materialize_object_region_mask(
     }
 
     (mask, region_ids)
+}
+
+/// Lower the authored top-level frozen-spin constraints onto the resolved FDM
+/// cell-center domain.  The runtime captures the actual magnetization at stage
+/// activation; the plan-time initial state is used only as a deterministic
+/// overlap reference while the activation reference is still deferred.
+fn resolve_fdm_frozen_spins(
+    problem: &ProblemIR,
+    magnet: &fullmag_ir::MagnetIR,
+    geometry: &GeometryEntryIR,
+    grid_cells: [u32; 3],
+    cell_size: [f64; 3],
+    origin: [f64; 3],
+    top_level_translation: [f64; 3],
+    active_mask: Option<&[bool]>,
+    initial_magnetization: &[[f64; 3]],
+    grid_certificate: &FdmGridCertificateIR,
+) -> Result<Option<fullmag_ir::ResolvedFrozenSpinsPlanIR>, PlanError> {
+    let active_stage = active_stage_id(problem);
+    let constraints: Vec<_> = problem
+        .magnetization_constraints
+        .iter()
+        .filter_map(|constraint| {
+            let frozen = constraint.frozen_spins();
+            if !frozen.enabled || !frozen_spins_active_in_stage(frozen, active_stage) {
+                return None;
+            }
+            Some(frozen.clone())
+        })
+        .collect();
+    if constraints.is_empty() {
+        return Ok(None);
+    }
+
+    let mut errors = Vec::new();
+    for constraint in &constraints {
+        if !matches!(
+            constraint.reference,
+            FrozenReferencePolicyIR::CaptureCurrentAtActivation {}
+        ) {
+            errors.push(format!(
+                "frozen_spins_fdm_reference_policy_unsupported: constraint '{}' uses {:?}; FDM CPU currently supports only capture_current_at_activation",
+                constraint.id, constraint.reference
+            ));
+        }
+        if !matches!(
+            constraint.membership,
+            SelectionMembershipPolicyIR::Static {}
+        ) {
+            errors.push(format!(
+                "frozen_spins_fdm_membership_policy_unsupported: constraint '{}' requires {:?}; FDM CPU currently supports only static geometry membership",
+                constraint.id, constraint.membership
+            ));
+        }
+        if fullmag_ir::selection_is_state_dependent(&constraint.selector, &problem.selections) {
+            errors.push(format!(
+                "frozen_spins_fdm_state_dependent_selection_unsupported: constraint '{}' requires an activation snapshot before FDM lowering",
+                constraint.id
+            ));
+        }
+    }
+    if !errors.is_empty() {
+        return Err(PlanError { reasons: errors });
+    }
+
+    let expected_cells = usize::try_from(
+        checked_fdm_grid_cost(grid_cells, FDM_GRID_ESTIMATED_BYTES_PER_CELL)
+            .map_err(|error| PlanError {
+                reasons: error.reasons,
+            })?
+            .cells,
+    )
+    .map_err(|_| PlanError {
+        reasons: vec![format!(
+            "frozen_spins_fdm_domain_size_mismatch: resolved grid cell count does not fit usize for {:?}",
+            grid_cells
+        )],
+    })?;
+    if initial_magnetization.len() != expected_cells {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "frozen_spins_fdm_reference_size_mismatch: initial magnetization has {} cells, resolved grid has {}",
+                initial_magnetization.len(), expected_cells
+            )],
+        });
+    }
+    let all_active = vec![true; expected_cells];
+    let resolved_active_mask = active_mask.unwrap_or(&all_active);
+    if resolved_active_mask.len() != expected_cells {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "frozen_spins_fdm_domain_size_mismatch: active mask has {} cells, resolved grid has {}",
+                resolved_active_mask.len(), expected_cells
+            )],
+        });
+    }
+
+    let points = resolved_fdm_cell_centers(grid_cells, cell_size, origin);
+    let mut object_aliases = BTreeSet::new();
+    object_aliases.insert(magnet.name.clone());
+    object_aliases.insert(geometry.name().to_string());
+    if let Some(object_id) = magnet.object_id.as_ref() {
+        object_aliases.insert(object_id.clone());
+    }
+    let object_aliases: Vec<_> = object_aliases.into_iter().collect();
+    let object_transform = AffineTransform3 {
+        translation_m: top_level_translation,
+        ..AffineTransform3::identity()
+    };
+    let region_predicates: Vec<_> = problem
+        .object_regions
+        .iter()
+        .filter(|region| {
+            region.enabled
+                && object_aliases
+                    .iter()
+                    .any(|object| object == &region.owner_object)
+        })
+        .map(|region| {
+            GeometryPredicate::from_object_region(
+                region,
+                object_transform,
+                BoundaryMembership::inclusive(),
+            )
+            .map(|predicate| (region, predicate))
+            .map_err(|error| PlanError {
+                reasons: vec![format!(
+                    "frozen_spins_fdm_region_predicate_invalid: region '{}': {error}",
+                    region.region_id
+                )],
+            })
+        })
+        .collect::<Result<_, _>>()?;
+
+    let mut memberships = vec![SelectionDofMembership::default(); expected_cells];
+    for (index, membership) in memberships.iter_mut().enumerate() {
+        if resolved_active_mask[index] {
+            membership.object_ids = object_aliases.clone();
+        }
+        for (region, predicate) in &region_predicates {
+            if contains_point(predicate, points[index]).map_err(|error| PlanError {
+                reasons: vec![format!(
+                    "frozen_spins_fdm_region_membership_failed: region '{}': {error}",
+                    region.region_id
+                )],
+            })? {
+                membership
+                    .region_ids
+                    .push((region.owner_object.clone(), region.region_id.clone()));
+            }
+        }
+    }
+
+    let known_entities = fullmag_ir::SelectionValidationContext::new(
+        object_aliases.clone(),
+        problem
+            .object_regions
+            .iter()
+            .map(|region| (region.owner_object.clone(), region.region_id.clone())),
+    );
+    let mut object_transforms = BTreeMap::new();
+    for object_id in &object_aliases {
+        object_transforms.insert(object_id.clone(), object_transform);
+    }
+    let references: Vec<_> = constraints
+        .iter()
+        .map(|constraint| ResolvedFrozenSpinsReference {
+            constraint_id: constraint.id.as_str(),
+            values: initial_magnetization,
+            source_state_revision: None,
+            topology_fingerprint: &grid_certificate.grid_fingerprint,
+        })
+        .collect();
+    let request = FrozenSpinsCompileRequest {
+        constraints: &constraints,
+        selections: &problem.selections,
+        activation_stage_id: active_stage,
+        object_transforms: &object_transforms,
+        known_entities: &known_entities,
+        state_snapshot: None,
+        resolved_references: &references,
+        expected_source_state_revision: None,
+        expected_grid_or_mesh_fingerprint: &grid_certificate.grid_fingerprint,
+    };
+    compile_fdm_frozen_spins(
+        &FdmFrozenSpinsDomain {
+            origin_m: origin,
+            counts: grid_cells,
+            cell_m: cell_size,
+            active_mask: resolved_active_mask,
+            memberships: &memberships,
+            grid_fingerprint: &grid_certificate.grid_fingerprint,
+        },
+        &request,
+    )
+    .map(Some)
+    .map_err(|error| PlanError {
+        reasons: vec![format!("frozen_spins_fdm_lowering_failed: {error}")],
+    })
+}
+
+fn frozen_spins_active_in_stage(
+    constraint: &fullmag_ir::FrozenSpinsIR,
+    active_stage: Option<&str>,
+) -> bool {
+    match &constraint.activation {
+        ConstraintActivationIR::AllStages {} => true,
+        ConstraintActivationIR::StageIds { stage_ids } => {
+            active_stage.is_some_and(|stage| stage_ids.iter().any(|id| id == stage))
+        }
+    }
 }
 
 fn region_predicate_contains(
@@ -2504,6 +2741,18 @@ pub(crate) fn plan_fdm(
     })?
     .with_object_ids(grid_object_ids)
     .with_region_legend(grid_legend);
+    let frozen_spins = resolve_fdm_frozen_spins(
+        problem,
+        magnet,
+        geometry,
+        grid_cells,
+        cell_size,
+        native_origin,
+        top_level_translation,
+        active_mask.as_deref(),
+        &initial_magnetization,
+        &grid_certificate,
+    )?;
     let active_field_drives: Vec<_> = problem
         .field_drives
         .iter()
@@ -2566,6 +2815,7 @@ pub(crate) fn plan_fdm(
         grid_certificate: Some(grid_certificate),
         region_mask,
         active_mask: active_mask.clone(),
+        frozen_spins,
         spin_transport_plans,
         fdm_gpu_charge_transports,
         initial_magnetization,
@@ -3257,6 +3507,18 @@ pub(crate) fn plan_fdm_multilayer(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
 ) -> Result<ExecutionPlanIR, PlanError> {
+    if problem
+        .magnetization_constraints
+        .iter()
+        .any(|constraint| constraint.frozen_spins().enabled)
+    {
+        return Err(PlanError {
+            reasons: vec![
+                "frozen_spins_fdm_multilayer_lowering_missing: multilayer FDM has no canonical per-layer frozen mask carrier yet; execution is rejected before runtime selection"
+                    .to_string(),
+            ],
+        });
+    }
     let mut errors = Vec::new();
     let active_transport_graph =
         crate::spin_transport::resolve_active_fdm_transport_graph(problem)?;

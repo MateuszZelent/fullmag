@@ -14,6 +14,7 @@ import {
   RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND,
   RIBBON_COMMANDS,
   RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
+  RIBBON_PHYSICS_CREATE_FROZEN_SPINS_COMMAND,
   RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
   RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
   RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
@@ -1150,6 +1151,22 @@ describe("ribbon structure", () => {
     const content = buildRibbonTabContent("view", {
       ...context,
       selection,
+      quantityCatalog: {
+        schema_version: "v1",
+        quantities: ["torque", "eden_total"].map((id) => ({
+          domain: "magnetic_only",
+          id,
+          interactive_preview: true,
+          label: id,
+          location: "cell",
+          materializable: true,
+          renderable: true,
+          requestable: true,
+          solver_capability: "supported",
+          supports_preview_3d: true,
+          unit: id === "torque" ? "T" : "J/m³",
+        })),
+      } as never,
     });
     const selectedGroup = content?.groups.find(
       (group) => group.id === "view-selected-display",
@@ -1925,6 +1942,151 @@ describe("ribbon structure", () => {
         type: "physics-field-drive",
       },
     }]);
+  });
+
+  it.each([
+    ["object.root", null, { kind: "in_object", object_id: "film" }],
+    [
+      "object.region",
+      "pinned_edge",
+      { kind: "in_region", object_id: "film", region_id: "pinned_edge" },
+    ],
+  ] as const)(
+    "creates a revision-safe frozen-spins definition for %s selection",
+    async (kind, regionId, expectedSelector) => {
+      const registry = createRibbonCommandRegistry();
+      const created: unknown[] = [];
+      const selections: unknown[] = [];
+      const invalidations: unknown[] = [];
+      const selection = {
+        kind,
+        label: regionId ?? "Film",
+        moduleSource: "explorer",
+        nodeId: regionId
+          ? `model:object:film:regions:${regionId}`
+          : "model:object:film",
+        objectId: "film",
+        ref: {
+          kind,
+          nodeId: "selected",
+          objectId: "film",
+          objectRole: "magnet",
+          ...(regionId ? { regionId } : {}),
+          type: "scene-object",
+          visualizationTargetId: regionId
+            ? `region:film:${regionId}`
+            : "object:film",
+        },
+      };
+      const context = {
+        api: {
+          model: {
+            frozenSpins: {
+              create: async (request: unknown) => {
+                created.push(request);
+                return { definition: (request as { definition: unknown }).definition, revision: 5 };
+              },
+              list: async () => ({ count: 0, definitions: [], revision: 4 }),
+            },
+          },
+        },
+        layout: { setPanelVisible: vi.fn() },
+        resourceData: {
+          [SESSION_STATUS_RESOURCE_KEY]: {
+            domain: { discretization: "fdm" },
+          },
+        },
+        resources: {
+          invalidate: (...args: unknown[]) => invalidations.push(args),
+        },
+        selection: {
+          get: () => selection,
+          set: (value: unknown) => selections.push(value),
+        },
+        source: "test" as const,
+      } as unknown as CommandContext;
+
+      expect(registry.isEnabled(RIBBON_PHYSICS_CREATE_FROZEN_SPINS_COMMAND, context)).toBe(true);
+      await expect(
+        registry.execute(RIBBON_PHYSICS_CREATE_FROZEN_SPINS_COMMAND, context),
+      ).resolves.toMatchObject({ status: "completed" });
+      expect(created).toEqual([
+        expect.objectContaining({
+          expected_revision: 4,
+          definition: expect.objectContaining({ selector: expectedSelector }),
+        }),
+      ]);
+      expect(invalidations).toEqual([[expect.stringContaining("frozen-spins"), 5]]);
+      expect(selections[0]).toMatchObject({
+        kind: "object.frozen-spins",
+        objectId: "film",
+        ref: { type: "frozen-spins" },
+      });
+    },
+  );
+
+  it("gates Frozen Spins to a selected ferromagnet or region and a resolved lane", () => {
+    const registry = createRibbonCommandRegistry();
+    const base = {
+      api: {} as never,
+      resourceData: {
+        [SESSION_STATUS_RESOURCE_KEY]: { domain: { discretization: "fdm" } },
+      },
+      source: "test" as const,
+    };
+    expect(
+      registry.isEnabled(RIBBON_PHYSICS_CREATE_FROZEN_SPINS_COMMAND, {
+        ...base,
+        selection: { get: () => null } as never,
+      }),
+    ).toBe(false);
+    expect(
+      registry.isEnabled(RIBBON_PHYSICS_CREATE_FROZEN_SPINS_COMMAND, {
+        ...base,
+        resourceData: {
+          [SESSION_STATUS_RESOURCE_KEY]: { domain: { discretization: "unknown" } },
+        },
+        selection: {
+          get: () => ({
+            kind: "object.root",
+            objectId: "film",
+            ref: { type: "scene-object", objectRole: "magnet" },
+          }),
+        } as never,
+      }),
+    ).toBe(false);
+    const magnetSelection = {
+      kind: "object.root",
+      objectId: "film",
+      ref: {
+        kind: "object.root",
+        nodeId: "model:object:film",
+        objectId: "film",
+        objectRole: "magnet",
+        type: "scene-object",
+        visualizationTargetId: "object:film",
+      },
+    };
+    expect(
+      registry.isEnabled(RIBBON_PHYSICS_CREATE_FROZEN_SPINS_COMMAND, {
+        ...base,
+        resourceData: {
+          [SESSION_STATUS_RESOURCE_KEY]: { domain: { discretization: "fem" } },
+        },
+        selection: { get: () => magnetSelection } as never,
+      }),
+    ).toBe(false);
+    expect(
+      registry.isEnabled(RIBBON_PHYSICS_CREATE_FROZEN_SPINS_COMMAND, {
+        ...base,
+        selection: {
+          get: () => ({
+            ...magnetSelection,
+            ref: { ...magnetSelection.ref, objectRole: "antenna" },
+          }),
+        } as never,
+      }),
+    ).toBe(false);
   });
 
   it("keeps Oersted and spin torque in the single capability-gated Add Physics menu", () => {

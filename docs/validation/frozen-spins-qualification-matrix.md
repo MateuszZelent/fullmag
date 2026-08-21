@@ -168,3 +168,20 @@ który nie obsługuje constraintu, ani pominąć constraintu.
 
 Aktualny ledger nie zawiera dowodu frozen spins. Wszystkie lane'y pozostają
 `UNQUALIFIED`.
+
+## Stan dowodów po implementacji 2026-08-20
+
+Poniższy wpis nie promuje żadnego lane'u do `QUALIFIED`; rozdziela jedynie
+wykonane kontrakty od brakujących bramek produkcyjnych.
+
+| Lane | Wykonane dowody | Pozostaje otwarte |
+|---|---|---|
+| FDM CPU/reference single-grid | IR/planner materialization, runtime final-RHS/candidate restore, 21 testów planner, 5 testów runner, Python/IR testy | pełna macierz scientific, managed executable proof, browser |
+| FDM CUDA | append-only ABI, C++ ABI 1/1, Rust FFI 1/1, managed `verify-frozen-spins-fdm-cuda`, fail-closed capability 1/1 | CUDA kernels/integratory/minimizers, CPU↔GPU parity, device proof |
+| FDM multilayer | jawny typed rejection przed emisją planu | per-layer maska i runtime |
+| FEM CPU/GPU | true-DOF planner materialization, append-only descriptor, managed build, fail-closed guards | native mask/restore/reductions, FEM preview true-DOF, parity |
+| Control Room FDM | resource-first API, ribbon/Explorer/Inspector/overlay, 93 focused tests, typecheck | real browser/WebGL, FEM carrier |
+
+Wartości `QUALIFIED` są nadal zarezerwowane dla immutable scientific/managed
+evidence; sama kompilacja zarządzanego runtime nie jest dowodem wykonania
+frozen spins przez backend.

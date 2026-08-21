@@ -32,6 +32,10 @@ pub struct SceneDocument {
     pub field_drives: SceneFieldDrivesState,
     #[serde(default)]
     pub monitors: SceneMonitorState,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selections: Vec<fullmag_ir::SelectionDefinitionIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub magnetization_constraints: Vec<fullmag_ir::MagnetizationConstraintIR>,
     #[serde(default)]
     pub current_modules: SceneCurrentModulesState,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

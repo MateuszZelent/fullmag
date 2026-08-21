@@ -3,12 +3,20 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use serde::Serialize;
 use std::fmt;
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct ApiDiagnostic {
+    pub code: String,
+    pub message: String,
+}
 
 #[derive(Debug)]
 pub(crate) struct ApiError {
     pub status: StatusCode,
     pub message: String,
+    pub diagnostics: Vec<ApiDiagnostic>,
 }
 
 impl fmt::Display for ApiError {
@@ -22,6 +30,7 @@ impl ApiError {
         Self {
             status: StatusCode::NOT_FOUND,
             message: message.into(),
+            diagnostics: Vec::new(),
         }
     }
 
@@ -29,6 +38,7 @@ impl ApiError {
         Self {
             status: StatusCode::BAD_REQUEST,
             message: message.into(),
+            diagnostics: Vec::new(),
         }
     }
 
@@ -36,6 +46,7 @@ impl ApiError {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message: message.into(),
+            diagnostics: Vec::new(),
         }
     }
 
@@ -43,6 +54,7 @@ impl ApiError {
         Self {
             status: StatusCode::CONFLICT,
             message: message.into(),
+            diagnostics: Vec::new(),
         }
     }
 
@@ -50,6 +62,18 @@ impl ApiError {
         Self {
             status: StatusCode::UNPROCESSABLE_ENTITY,
             message: message.into(),
+            diagnostics: Vec::new(),
+        }
+    }
+
+    pub fn unprocessable_with_diagnostics(
+        message: impl Into<String>,
+        diagnostics: Vec<ApiDiagnostic>,
+    ) -> Self {
+        Self {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            message: message.into(),
+            diagnostics,
         }
     }
 }
@@ -82,6 +106,11 @@ impl IntoResponse for ApiError {
             })
             .to_string();
         let message = self.message;
+        let diagnostics = if self.diagnostics.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::json!(self.diagnostics)
+        };
         (
             self.status,
             Json(serde_json::json!({
@@ -94,6 +123,7 @@ impl IntoResponse for ApiError {
                     None
                 },
                 "revision_context": serde_json::Value::Null,
+                "diagnostics": diagnostics,
             })),
         )
             .into_response()

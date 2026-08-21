@@ -53,11 +53,11 @@ fn v0_3_magnet_migrates_to_object_and_magnetization_module() {
     );
     assert_eq!(
         value["material_assignments"][0]["target"],
-        serde_json::json!({"object_id": "obj_free_layer", "region_id": "free_layer"})
+        serde_json::json!({"object_id": "obj_free_layer"})
     );
     assert_eq!(
         value["magnetization_modules"][0]["target"],
-        serde_json::json!({"object_id": "obj_free_layer", "region_id": "free_layer"})
+        serde_json::json!({"object_id": "obj_free_layer"})
     );
     assert_eq!(
         value["material_parameter_fields"][0]["owner_object"],
@@ -68,6 +68,9 @@ fn v0_3_magnet_migrates_to_object_and_magnetization_module() {
         "obj_heavy_metal"
     );
     let problem: ProblemIRV04 = serde_json::from_value(value.clone()).unwrap();
+    problem
+        .validate()
+        .expect("migrated whole-object magnet target must validate");
     let round_trip = serde_json::to_value(problem).unwrap();
     assert_eq!(
         round_trip["surface_boundary_conditions"],
@@ -80,13 +83,30 @@ fn v0_3_magnet_migrates_to_object_and_magnetization_module() {
 #[test]
 fn v0_4_material_assignments_preserve_object_and_region_targets() {
     let mut problem = ProblemIRV04::bootstrap_example();
+    problem.object_regions.push(ObjectRegionIR {
+        region_id: "core".into(),
+        owner_object: "obj_strip".into(),
+        name: "Core".into(),
+        shape: RegionShapeIR::Box {
+            size: [1.0, 1.0, 1.0],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: RegionFrameIR::Object,
+        enabled: true,
+        priority: 0,
+        mesh_policy: None,
+        material_overrides: Vec::new(),
+        texture_override: None,
+        realization_policy: RegionRealizationPolicyIR::Inherit,
+        material_transition: None,
+    });
     problem
         .material_assignments
         .push(ObjectMaterialAssignmentIR::new(
-            "assignment_object_level",
+            "assignment_region_level",
             RegionRefIR {
                 object_id: "obj_strip".into(),
-                region_id: None,
+                region_id: Some("core".into()),
             },
             "Py",
         ));
@@ -94,11 +114,11 @@ fn v0_4_material_assignments_preserve_object_and_region_targets() {
     let value = serde_json::to_value(problem).unwrap();
     assert_eq!(
         value["material_assignments"][0]["target"],
-        serde_json::json!({"object_id": "obj_strip", "region_id": "strip"})
+        serde_json::json!({"object_id": "obj_strip"})
     );
     assert_eq!(
         value["material_assignments"][1]["target"],
-        serde_json::json!({"object_id": "obj_strip"})
+        serde_json::json!({"object_id": "obj_strip", "region_id": "core"})
     );
 }
 

@@ -14,6 +14,7 @@ import {
 } from "three";
 
 import { viewport3dStore } from "../viewport3dStore";
+import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type {
   Viewport3DCameraState,
@@ -74,7 +75,7 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
   viewCubeVisible,
 }: OrientationHudLayerProps) {
   const camera = useThree((state) => state.camera);
-  const invalidate = useThree((state) => state.invalidate);
+  const invalidate = useBatchedInvalidate("camera");
   const controls = useThree((state) =>
     "controls" in state
       ? (state.controls as ViewportCameraControlsHandle | undefined)
@@ -244,7 +245,7 @@ function ScreenAnchoredGroup({
 }) {
   const ref = useRef<Group>(null);
   const camera = useThree((state) => state.camera);
-  const invalidate = useThree((state) => state.invalidate);
+  const invalidate = useBatchedInvalidate("resize");
   const size = useThree((state) => state.size);
   const anchors = useMemo(() => resolveOrientationHudAnchors(size), [size]);
   const vectors = useMemo<AnchorVectors>(

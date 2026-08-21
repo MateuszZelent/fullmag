@@ -1253,10 +1253,12 @@ int run_tangent_plane_implicit_step(
 
     std::vector<double> previous_m;
     std::vector<double> previous_h_demag;
+    std::vector<double> previous_h_eff;
     {
         ScopedPhaseTimer timer(&profile_stats.relaxation_state_copy_wall_time_ns);
         previous_m = ctx.state.m_xyz;
         previous_h_demag = ctx.demag.h_xyz;
+        previous_h_eff = ctx.effective_field.h_xyz;
     }
     std::vector<double> gradient;
     double g_norm_sq = 0.0;
@@ -1346,18 +1348,30 @@ int run_tangent_plane_implicit_step(
         bool armijo = false;
         {
             ScopedPhaseTimer timer(&profile_stats.relaxation_line_search_wall_time_ns);
-            armijo_result = direct_minimizer_armijo_evaluate(
+            relaxation::EnergyDifference direct_difference;
+            relaxation::EnergyDifference accepted_difference;
+            double armijo_increment_rhs_j = 0.0;
+            armijo = direct_minimizer_armijo_accepts(
                 ctx,
                 "tangent-plane implicit",
                 previous_m,
                 trial_m,
                 previous_h_demag,
+                previous_h_eff,
                 current_stats,
                 trial_stats,
                 profile_stats,
-                trial_step * direction_dot_gradient,
+                direct_difference,
+                accepted_difference,
+                armijo_increment_rhs_j,
                 error);
-            armijo = armijo_result.accepted();
+            armijo_result.direct_difference = direct_difference;
+            armijo_result.accepted_difference = accepted_difference;
+            armijo_result.accepted_stats = trial_stats;
+            armijo_result.armijo_increment_rhs_j = armijo_increment_rhs_j;
+            armijo_result.outcome = armijo
+                ? DirectMinimizerArmijoOutcome::AcceptedOrdinary
+                : DirectMinimizerArmijoOutcome::Rejected;
         }
         if (!error.empty() || ctx.interrupt.step_interrupted) {
             const bool interrupted = ctx.interrupt.step_interrupted;

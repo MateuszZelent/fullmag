@@ -1,8 +1,90 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createViewport3DRenderAdoptionRegistry } from "./viewport3DRenderAdoptionRegistry";
+import {
+  createViewport3DRenderAdoptionRegistry as createUnscopedViewport3DRenderAdoptionRegistry,
+} from "./viewport3DRenderAdoptionRegistry";
+
+function createViewport3DRenderAdoptionRegistry(
+  options?: Parameters<typeof createUnscopedViewport3DRenderAdoptionRegistry>[0],
+) {
+  const registry = createUnscopedViewport3DRenderAdoptionRegistry(options);
+  const testSessionIdentity = {
+    sessionEpoch: "test-session@1000",
+    sessionId: "test-session",
+  } as const;
+  let currentSessionIdentity: typeof testSessionIdentity | { sessionEpoch: string; sessionId: string } | null = testSessionIdentity;
+  registry.setSessionIdentity(testSessionIdentity);
+  return {
+    ...registry,
+    setSessionIdentity(identity: typeof currentSessionIdentity) {
+      currentSessionIdentity = identity;
+      registry.setSessionIdentity(identity);
+    },
+    recordSurfaceAdoption(input: Parameters<typeof registry.recordSurfaceAdoption>[0]) {
+      return registry.recordSurfaceAdoption({
+        ...input,
+        sessionIdentity:
+          input.sessionIdentity === undefined
+            ? currentSessionIdentity
+            : input.sessionIdentity,
+      });
+    },
+    recordVectorAdoption(input: Parameters<typeof registry.recordVectorAdoption>[0]) {
+      return registry.recordVectorAdoption({
+        ...input,
+        sessionIdentity:
+          input.sessionIdentity === undefined
+            ? currentSessionIdentity
+            : input.sessionIdentity,
+      });
+    },
+  };
+}
 
 describe("viewport3DRenderAdoptionRegistry", () => {
+  it("fails closed with a typed unavailable result when session identity is missing", () => {
+    const registry = createUnscopedViewport3DRenderAdoptionRegistry();
+    registry.retainDemand("airbox");
+
+    const result = registry.recordVectorAdoption({
+      byteLength: 96,
+      carrierId: "part:air",
+      fieldBufferId: "field-1",
+      targetId: "airbox",
+      vectorBuildKey: "vector-1",
+    });
+
+    expect(result).toEqual({
+      reason: "missing-session-identity",
+      status: "unavailable",
+    });
+    expect(registry.snapshot("airbox")).toEqual([]);
+    expect(registry.getLifecycleStats().rejectedAdoptionCount).toBe(1);
+  });
+
+  it("does not fill a missing receipt identity from the current registry identity", () => {
+    const registry = createUnscopedViewport3DRenderAdoptionRegistry();
+    registry.setSessionIdentity({
+      sessionEpoch: "current-session@1000",
+      sessionId: "current-session",
+    });
+    registry.retainDemand("airbox");
+
+    const result = registry.recordVectorAdoption({
+      byteLength: 96,
+      carrierId: "part:air",
+      fieldBufferId: "legacy-buffer-without-identity",
+      targetId: "airbox",
+      vectorBuildKey: "legacy-vector",
+    });
+
+    expect(result).toEqual({
+      reason: "missing-session-identity",
+      status: "unavailable",
+    });
+    expect(registry.snapshot("airbox")).toEqual([]);
+  });
+
   it("does not retain adoption evidence while debug demand is closed", () => {
     const registry = createViewport3DRenderAdoptionRegistry();
 
@@ -53,8 +135,8 @@ describe("viewport3DRenderAdoptionRegistry", () => {
         kind: "surface",
         resourceKey: null,
         scalarBufferKey: "scalar-a",
-        sessionEpoch: "legacy-unscoped",
-        sessionId: "legacy-unscoped",
+        sessionEpoch: "test-session@1000",
+        sessionId: "test-session",
         targetId: "airbox",
         vectorBuildKey: null,
       },
@@ -67,8 +149,8 @@ describe("viewport3DRenderAdoptionRegistry", () => {
         kind: "vector",
         resourceKey: null,
         scalarBufferKey: null,
-        sessionEpoch: "legacy-unscoped",
-        sessionId: "legacy-unscoped",
+        sessionEpoch: "test-session@1000",
+        sessionId: "test-session",
         targetId: "airbox",
         vectorBuildKey: "vector-b",
       },

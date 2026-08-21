@@ -1,4 +1,386 @@
 use super::*;
+use sha2::{Digest, Sha256};
+
+fn resolved_frozen_spins(mask: Vec<bool>) -> fullmag_ir::ResolvedFrozenSpinsPlanIR {
+    let frozen_dof_count = mask.iter().filter(|frozen| **frozen).count() as u64;
+    let active_dof_count = mask.len() as u64;
+    let free_dof_count = active_dof_count - frozen_dof_count;
+    let mut hash = Sha256::new();
+    hash.update(active_dof_count.to_le_bytes());
+    hash.update(
+        mask.iter()
+            .map(|frozen| u8::from(*frozen))
+            .collect::<Vec<_>>(),
+    );
+    let mask_sha256 = format!("{:x}", hash.finalize());
+    fullmag_ir::ResolvedFrozenSpinsPlanIR {
+        schema_version: fullmag_ir::RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION.to_string(),
+        constraint_ids: vec!["pinned".to_string()],
+        frozen_mask: mask,
+        active_dof_count,
+        frozen_dof_count,
+        free_dof_count,
+        mask_sha256: mask_sha256.clone(),
+        grid_or_mesh_fingerprint: "physics-validation-frozen-grid".to_string(),
+        source_state_revision: Some(1),
+        all_active_dofs_frozen: active_dof_count > 0 && free_dof_count == 0,
+        certificate: fullmag_ir::SelectionCertificateIR {
+            schema_version: fullmag_ir::SELECTION_CERTIFICATE_SCHEMA_VERSION.to_string(),
+            evaluator_id: "selection.fdm_cell_center.v1".to_string(),
+            constraint_ids: vec!["pinned".to_string()],
+            authored_fingerprints: vec![fullmag_ir::SelectionAuthoredFingerprintIR {
+                constraint_id: "pinned".to_string(),
+                selector_sha256: "a".repeat(64),
+            }],
+            raw_candidate_dof_count: frozen_dof_count,
+            inactive_candidate_dof_count: 0,
+            active_dof_count,
+            frozen_dof_count,
+            free_dof_count,
+            bounds_m: None,
+            grid_or_mesh_fingerprint: "physics-validation-frozen-grid".to_string(),
+            source_state_revision: Some(1),
+            mask_sha256,
+            resolved_reference_sha256: "b".repeat(64),
+            warnings: Vec::new(),
+        },
+    }
+}
+
+fn frozen_two_cell_plan() -> FdmPlanIR {
+    certify_fdm_grid(FdmPlanIR {
+        grid: GridDimensions { cells: [2, 1, 1] },
+        cell_size: [2e-9, 2e-9, 2e-9],
+        region_mask: vec![0; 2],
+        initial_magnetization: vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        material: permalloy(),
+        gyromagnetic_ratio: 2.211e5,
+        precision: ExecutionPrecision::Double,
+        exchange_bc: ExchangeBoundaryCondition::Neumann,
+        integrator: Some(IntegratorChoice::Heun),
+        fixed_timestep: Some(1e-14),
+        enable_exchange: true,
+        enable_demag: false,
+        frozen_spins: Some(resolved_frozen_spins(vec![true, false])),
+        ..Default::default()
+    })
+}
+
+#[test]
+fn frozen_spins_fdm_cpu_preserves_pinned_cell_and_evolves_free_exchange_neighbor() {
+    let plan = frozen_two_cell_plan();
+    let result = fullmag_runner::run_reference_fdm(&plan, 1e-14, &[])
+        .expect("two-cell frozen-spin reference run should succeed");
+
+    assert_eq!(
+        result.final_magnetization[0].map(f64::to_bits),
+        plan.initial_magnetization[0].map(f64::to_bits),
+        "the frozen cell must remain bitwise equal to its captured reference"
+    );
+    assert_ne!(
+        result.final_magnetization[1].map(f64::to_bits),
+        plan.initial_magnetization[1].map(f64::to_bits),
+        "the free exchange neighbour must still evolve"
+    );
+}
+
+#[test]
+fn frozen_spins_fdm_cpu_keeps_pinned_source_in_exchange_and_demag() {
+    let mut plan = frozen_two_cell_plan();
+    plan.enable_demag = true;
+    let result = fullmag_runner::run_reference_fdm(&plan, 1e-14, &[])
+        .expect("frozen exchange-demag reference run should succeed");
+
+    assert_eq!(
+        result.final_magnetization[0].map(f64::to_bits),
+        plan.initial_magnetization[0].map(f64::to_bits),
+        "a frozen source must stay fixed while remaining present in field assembly"
+    );
+    assert_ne!(
+        result.final_magnetization[1].map(f64::to_bits),
+        plan.initial_magnetization[1].map(f64::to_bits),
+        "demag/exchange from the frozen neighbour must drive the free cell"
+    );
+}
+
+#[test]
+fn frozen_spins_fdm_cpu_masks_stt_sot_and_thermal_rhs() {
+    let mut plan = frozen_two_cell_plan();
+    plan.current_density = Some([1.0e12, 0.0, 0.0]);
+    plan.stt_degree = Some(0.5);
+    plan.stt_beta = Some(0.1);
+    plan.sot_current_density = Some(1.0e11);
+    plan.sot_xi_dl = Some(0.1);
+    plan.sot_xi_fl = Some(0.05);
+    plan.sot_sigma = Some([0.0, 1.0, 0.0]);
+    plan.sot_thickness = Some(2.0e-9);
+    plan.sot_formula_version = Some("prescribed_sot.fullmag.v1".to_string());
+    plan.sot_target = Some(fullmag_ir::RegionRefIR {
+        object_id: "magnet".to_string(),
+        region_id: None,
+    });
+    plan.sot_active_mask = Some(vec![true, true]);
+    plan.sot_envelope = Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 1.0 });
+    plan.sot_drive = Some(fullmag_ir::PrescribedSotV1DriveIR::SignedScalar {
+        current_density_apm2: 1.0e11,
+        sigma_hat: [0.0, 1.0, 0.0],
+        envelope: Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 1.0 }),
+    });
+    plan.temperature = Some(300.0);
+    plan.thermal_seed_config = Some(fullmag_ir::ThermalSeedConfig {
+        policy: fullmag_ir::SeedPolicy::Fixed,
+        seed: Some(7),
+    });
+
+    let result = fullmag_runner::run_reference_fdm(&plan, 1e-14, &[])
+        .expect("frozen STT/SOT/thermal reference run should succeed");
+
+    assert_eq!(
+        result.final_magnetization[0].map(f64::to_bits),
+        plan.initial_magnetization[0].map(f64::to_bits),
+        "final RHS masking must suppress every torque source on a frozen cell"
+    );
+}
+
+#[test]
+fn frozen_spins_fdm_cpu_all_frozen_completes_without_integrator_steps() {
+    let mut plan = frozen_two_cell_plan();
+    plan.frozen_spins = Some(resolved_frozen_spins(vec![true, true]));
+    plan.external_field = Some([0.0, 0.0, 8.0e5]);
+    let result = fullmag_runner::run_reference_fdm(&plan, 1e-14, &[])
+        .expect("all-frozen reference run should succeed");
+
+    assert!(
+        result.steps.iter().all(|step| step.step == 0),
+        "all-frozen execution must not enter an integrator step"
+    );
+    assert_eq!(
+        result.final_magnetization, plan.initial_magnetization,
+        "all-frozen execution must preserve the whole captured state"
+    );
+}
+
+#[test]
+fn frozen_spins_fdm_cpu_publishes_free_and_all_telemetry_without_hiding_pinned_torque() {
+    let mut plan = frozen_two_cell_plan();
+    plan.frozen_spins = Some(resolved_frozen_spins(vec![true, true]));
+    plan.enable_exchange = false;
+    plan.external_field = Some([0.0, 0.0, 8.0e5]);
+    let result = fullmag_runner::run_reference_fdm(&plan, 1e-14, &[])
+        .expect("all-frozen telemetry run should succeed");
+    let final_step = result.steps.last().expect("all-frozen scalar snapshot");
+    let value = serde_json::to_value(final_step).expect("StepStats serializes");
+
+    assert_eq!(value["max_rhs_norm_per_s"], 0.0);
+    assert_eq!(value["max_torque_Apm"], 0.0);
+    assert!(
+        value["max_rhs_all_norm_per_s"].as_f64().unwrap_or_default() > 0.0,
+        "all-domain RHS diagnostic must retain the pre-mask frozen contribution"
+    );
+    assert!(
+        value["max_torque_all_Apm"].as_f64().unwrap_or_default() > 0.0,
+        "all-domain torque diagnostic must retain the frozen contribution"
+    );
+    assert_eq!(value["frozen_reference_max_drift"], 0.0);
+    assert_eq!(value["active_dof_count"], 2.0);
+    assert_eq!(value["frozen_dof_count"], 2.0);
+    assert_eq!(value["free_dof_count"], 0.0);
+}
+
+#[test]
+fn frozen_spins_all_frozen_telemetry_retains_stt_sot_and_thermal_rhs() {
+    let mut plan = frozen_two_cell_plan();
+    plan.frozen_spins = Some(resolved_frozen_spins(vec![true, true]));
+    plan.enable_exchange = false;
+    plan.current_density = Some([1.0e12, 0.0, 0.0]);
+    plan.stt_degree = Some(0.5);
+    plan.stt_beta = Some(0.1);
+    plan.sot_current_density = Some(1.0e11);
+    plan.sot_xi_dl = Some(0.1);
+    plan.sot_xi_fl = Some(0.05);
+    plan.sot_sigma = Some([0.0, 1.0, 0.0]);
+    plan.sot_thickness = Some(2.0e-9);
+    plan.sot_formula_version = Some("prescribed_sot.fullmag.v1".to_string());
+    plan.sot_target = Some(fullmag_ir::RegionRefIR {
+        object_id: "magnet".to_string(),
+        region_id: None,
+    });
+    plan.sot_active_mask = Some(vec![true, true]);
+    plan.sot_envelope = Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 1.0 });
+    plan.sot_drive = Some(fullmag_ir::PrescribedSotV1DriveIR::SignedScalar {
+        current_density_apm2: 1.0e11,
+        sigma_hat: [0.0, 1.0, 0.0],
+        envelope: Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 1.0 }),
+    });
+    plan.temperature = Some(300.0);
+    plan.thermal_seed_config = Some(fullmag_ir::ThermalSeedConfig {
+        policy: fullmag_ir::SeedPolicy::Fixed,
+        seed: Some(7),
+    });
+
+    let result = fullmag_runner::run_reference_fdm(&plan, 1e-14, &[])
+        .expect("all-frozen STT/SOT/thermal telemetry run should succeed");
+    let final_step = result.steps.last().expect("all-frozen scalar snapshot");
+
+    assert_eq!(final_step.max_rhs_norm_per_s, 0.0);
+    assert_eq!(final_step.max_torque_Apm, 0.0);
+    assert!(
+        final_step.max_rhs_all_norm_per_s > 0.0,
+        "all-DOF RHS must retain STT/SOT/thermal forcing"
+    );
+    assert!(
+        final_step.max_torque_all_Apm > 0.0,
+        "all-DOF torque must retain thermal effective-field forcing"
+    );
+}
+
+#[test]
+fn frozen_spins_fdm_cpu_preserves_candidate_references_for_every_public_integrator() {
+    for integrator in [
+        IntegratorChoice::Heun,
+        IntegratorChoice::Rk4,
+        IntegratorChoice::Rk23,
+        IntegratorChoice::Rk45,
+        IntegratorChoice::Abm3,
+    ] {
+        let mut plan = frozen_two_cell_plan();
+        plan.integrator = Some(integrator);
+        let result = fullmag_runner::run_reference_fdm(&plan, 4e-14, &[])
+            .unwrap_or_else(|error| panic!("{integrator:?}: frozen-spin run failed: {error}"));
+        assert_eq!(
+            result.final_magnetization[0].map(f64::to_bits),
+            plan.initial_magnetization[0].map(f64::to_bits),
+            "{integrator:?}: every candidate and accepted state must restore the frozen reference"
+        );
+    }
+}
+
+#[test]
+fn frozen_spins_fdm_cpu_false_mask_is_bitwise_legacy_parity() {
+    for integrator in [
+        IntegratorChoice::Heun,
+        IntegratorChoice::Rk4,
+        IntegratorChoice::Rk23,
+        IntegratorChoice::Rk45,
+        IntegratorChoice::Abm3,
+    ] {
+        let mut constrained = frozen_two_cell_plan();
+        constrained.frozen_spins = Some(resolved_frozen_spins(vec![false, false]));
+        constrained.integrator = Some(integrator);
+        let mut legacy = constrained.clone();
+        legacy.frozen_spins = None;
+
+        let constrained_result = fullmag_runner::run_reference_fdm(&constrained, 4e-14, &[])
+            .unwrap_or_else(|error| panic!("{integrator:?}: no-op mask run failed: {error}"));
+        let legacy_result = fullmag_runner::run_reference_fdm(&legacy, 4e-14, &[])
+            .unwrap_or_else(|error| panic!("{integrator:?}: legacy run failed: {error}"));
+
+        assert_eq!(
+            constrained_result
+                .final_magnetization
+                .iter()
+                .map(|value| value.map(f64::to_bits))
+                .collect::<Vec<_>>(),
+            legacy_result
+                .final_magnetization
+                .iter()
+                .map(|value| value.map(f64::to_bits))
+                .collect::<Vec<_>>(),
+            "{integrator:?}: a resolved mask with no frozen DOFs must retain the legacy numerical path"
+        );
+        let constrained_step = constrained_result
+            .steps
+            .last()
+            .expect("constrained step stats");
+        assert_eq!(
+            constrained_step.max_rhs_norm_per_s, constrained_step.max_rhs_all_norm_per_s,
+            "{integrator:?}: no-mask legacy RHS alias must equal all-DOF telemetry"
+        );
+        assert_eq!(
+            constrained_step.max_torque_Apm, constrained_step.max_torque_all_Apm,
+            "{integrator:?}: no-mask legacy torque alias must equal all-DOF telemetry"
+        );
+    }
+}
+
+fn frozen_direct_minimizer_plan(
+    algorithm: RelaxationAlgorithmIR,
+    frozen_mask: Vec<bool>,
+) -> FdmPlanIR {
+    let mut plan = frozen_two_cell_plan();
+    plan.frozen_spins = Some(resolved_frozen_spins(frozen_mask));
+    plan.external_field = Some([0.0, 0.0, 8.0e5]);
+    plan.relaxation = Some(RelaxationControlIR {
+        algorithm,
+        stop: fullmag_ir::RelaxStopIR {
+            torque_tolerance_apm: None,
+            energy_tolerance_j: None,
+            max_steps: Some(4),
+            max_relaxation_time_s: None,
+        },
+    });
+    plan
+}
+
+#[test]
+fn frozen_spins_direct_minimizer_preserves_reference_with_one_free_dof() {
+    for algorithm in [
+        RelaxationAlgorithmIR::ProjectedGradientBb,
+        RelaxationAlgorithmIR::NonlinearCg,
+    ] {
+        let plan = frozen_direct_minimizer_plan(algorithm, vec![true, false]);
+        let result = fullmag_runner::run_reference_fdm(&plan, 1e-14, &[])
+            .unwrap_or_else(|error| panic!("{algorithm:?}: constrained minimizer failed: {error}"));
+
+        assert_eq!(
+            result.final_magnetization[0].map(f64::to_bits),
+            plan.initial_magnetization[0].map(f64::to_bits),
+            "{algorithm:?}: every line-search trial and accepted state must restore the frozen reference"
+        );
+        assert_ne!(
+            result.final_magnetization[1].map(f64::to_bits),
+            plan.initial_magnetization[1].map(f64::to_bits),
+            "{algorithm:?}: the single free DOF must remain eligible for minimization"
+        );
+        let final_step = result.steps.last().expect("direct minimizer stats");
+        assert!(final_step.e_total.is_finite());
+        assert!(final_step.max_torque_Apm.is_finite());
+        assert_eq!(final_step.frozen_reference_max_drift, 0.0);
+        assert_eq!(final_step.frozen_dof_count, 1);
+        assert_eq!(final_step.free_dof_count, 1);
+    }
+}
+
+#[test]
+fn frozen_spins_direct_minimizer_all_frozen_is_finite_zero_step_noop() {
+    for algorithm in [
+        RelaxationAlgorithmIR::ProjectedGradientBb,
+        RelaxationAlgorithmIR::NonlinearCg,
+    ] {
+        let plan = frozen_direct_minimizer_plan(algorithm, vec![true, true]);
+        let result = fullmag_runner::run_reference_fdm(&plan, 1e-14, &[])
+            .unwrap_or_else(|error| panic!("{algorithm:?}: all-frozen minimizer failed: {error}"));
+
+        assert_eq!(
+            result.final_magnetization
+                .iter()
+                .map(|value| value.map(f64::to_bits))
+                .collect::<Vec<_>>(),
+            plan.initial_magnetization
+                .iter()
+                .map(|value| value.map(f64::to_bits))
+                .collect::<Vec<_>>(),
+            "{algorithm:?}: an empty free domain is an exact no-op"
+        );
+        assert!(result.steps.iter().all(|step| step.step == 0));
+        let final_step = result.steps.last().expect("all-frozen minimizer stats");
+        assert!(final_step.e_total.is_finite());
+        assert_eq!(final_step.max_torque_Apm, 0.0);
+        assert_eq!(final_step.frozen_reference_max_drift, 0.0);
+        assert_eq!(final_step.frozen_dof_count, 2);
+        assert_eq!(final_step.free_dof_count, 0);
+    }
+}
 
 fn assert_authoritative_relaxation_completion(
     result: &fullmag_runner::RunResult,
@@ -39,7 +421,10 @@ fn assert_authoritative_relaxation_completion(
         ("max_torque_T", final_step.max_torque_T),
         ("max_rhs_norm_per_s", final_step.max_rhs_norm_per_s),
     ] {
-        assert!(value.is_finite(), "{workload}: {name} is not finite: {value}");
+        assert!(
+            value.is_finite(),
+            "{workload}: {name} is not finite: {value}"
+        );
     }
 }
 
@@ -116,7 +501,11 @@ fn uniform_field_alignment() {
     });
 
     let result = fullmag_runner::run_reference_fdm(&plan, 1e-9, &[]).expect("run should succeed");
-    assert_authoritative_relaxation_completion(&result, "fdm_cpu_fp64.llg_overdamped.macrospin", 50_000);
+    assert_authoritative_relaxation_completion(
+        &result,
+        "fdm_cpu_fp64.llg_overdamped.macrospin",
+        50_000,
+    );
 
     let avg = average_m(&result.final_magnetization);
     assert_vec_approx("field_alignment", avg, [1.0, 0.0, 0.0], 1e-2);

@@ -2557,6 +2557,7 @@ fn frequency_response_demag_backend_plan(
         fe_order: plan.fe_order,
         hmax: plan.hmax,
         initial_magnetization: plan.equilibrium_magnetization.clone(),
+        frozen_spins: None,
         material: plan.material.clone(),
         anisotropy_axis_field: None,
         ms_element_field: None,

@@ -5,6 +5,7 @@ import type {
   DomainMetaResource,
   FdmMultilayerLayoutResource,
   FdmRegionMembershipResource,
+  FrozenSpinsCollectionResource,
   FrequencyDomainManifestResource,
   HysteresisExecutionTreeResource,
   SceneResource,
@@ -34,6 +35,7 @@ import {
   flattenExplorerNodes,
 } from "./buildModelTree";
 import { createExplorerNode } from "./explorerNodeContract";
+import { frozenSpinsSelectorOwner } from "./objectExplorerNodes";
 import {
   modelTreeSnapshotFromScene,
   modelTreeSnapshotWithStageExecution,
@@ -4002,5 +4004,82 @@ describe("buildModelTree", () => {
       expect(nodes.map((node) => node.kind)).toContain(kind);
     }
     expect(nodes.map((node) => node.kind)).not.toContain("airbox.visualization.debug");
+  });
+
+  it("places each frozen-spins constraint once under its stable object or region owner", () => {
+    const frozenSpins = {
+      count: 2,
+      definitions: [
+        {
+          id: "pin-object",
+          name: "Pinned object",
+          schema_version: "frozen_spins.v1",
+          selector: { kind: "in_object", object_id: "film" },
+        },
+        {
+          id: "pin-edge",
+          name: "Pinned edge",
+          schema_version: "frozen_spins.v1",
+          selector: {
+            kind: "in_region",
+            object_id: "film",
+            region_id: "pinned_edge",
+          },
+        },
+      ],
+      revision: 8,
+    } satisfies FrozenSpinsCollectionResource;
+    const tree = buildModelTree(
+      {
+        objects: [
+          {
+            id: "film",
+            label: "Ferromagnet",
+            regions: [
+              {
+                enabled: true,
+                id: "pinned_edge",
+                label: "pinned_edge",
+                materialFieldCount: 0,
+                materialOverrideCount: 0,
+                meshPolicyActive: false,
+                source: "authored",
+                textureOverrideActive: false,
+              },
+            ],
+          },
+        ],
+      },
+      { frozenSpins },
+    );
+    const nodes = flattenExplorerNodes(tree).filter(
+      (node) => node.kind === "object.frozen-spins",
+    );
+
+    expect(nodes).toHaveLength(2);
+    expect(nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          constraintId: "pin-object",
+          id: "model:object:film:frozen-spins:pin-object",
+          parentId: "model:object:film",
+        }),
+        expect.objectContaining({
+          constraintId: "pin-edge",
+          id: "model:object:film:regions:pinned_edge:frozen-spins:pin-edge",
+          parentId: "model:object:film:regions:pinned_edge",
+          regionId: "pinned_edge",
+        }),
+      ]),
+    );
+  });
+
+  it("does not mis-own complemented frozen-spins selectors", () => {
+    expect(
+      frozenSpinsSelectorOwner({
+        kind: "not",
+        expression: { kind: "in_object", object_id: "film" },
+      }),
+    ).toBeNull();
   });
 });

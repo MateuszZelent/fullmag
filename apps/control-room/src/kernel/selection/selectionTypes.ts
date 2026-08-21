@@ -271,6 +271,14 @@ export type SelectionRef =
   | LiveChartSelectionRef
   | LiveChartPointSelectionRef
   | {
+      constraintId: string;
+      kind: "object.frozen-spins";
+      nodeId: string;
+      objectId: string;
+      regionId?: string;
+      type: "frozen-spins";
+    }
+  | {
       descriptorId: string;
       kind: string;
       nodeId: string;
@@ -344,6 +352,7 @@ export type SelectionRef =
       kind: ObjectSelectionKind;
       nodeId: string;
       objectId: string;
+      objectRole?: "antenna" | "magnet" | "auxiliary";
       extensionId?: string;
       regionId?: string;
       type: "scene-object";
@@ -731,6 +740,14 @@ export function selectionRefEquals(
   if (left.type !== right.type) return false;
 
   switch (left.type) {
+    case "frozen-spins":
+      return (
+        right.type === "frozen-spins" &&
+        left.constraintId === right.constraintId &&
+        left.nodeId === right.nodeId &&
+        left.objectId === right.objectId &&
+        nullableStringEquals(left.regionId, right.regionId)
+      );
     case "runtime-explorer":
       return (
         right.type === "runtime-explorer" &&
@@ -815,6 +832,7 @@ export function selectionRefEquals(
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
         left.objectId === right.objectId &&
+        left.objectRole === right.objectRole &&
         nullableStringEquals(left.extensionId, right.extensionId) &&
         nullableStringEquals(left.regionId, right.regionId) &&
         nullableStringEquals(left.carrierPartId, right.carrierPartId) &&

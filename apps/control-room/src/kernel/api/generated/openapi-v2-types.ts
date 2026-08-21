@@ -1380,6 +1380,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/data/frozen-spins/resolved-masks/{mask_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_frozen_spins_resolved_masks_mask_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/data/material-fields": {
         parameters: {
             query?: never;
@@ -2274,6 +2290,70 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/frozen-spins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_frozen_spins"];
+        put?: never;
+        post: operations["model_post_sessions_current_model_frozen_spins"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/frozen-spins/previews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["model_post_sessions_current_model_frozen_spins_previews"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/frozen-spins/previews/{preview_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_frozen_spins_previews_preview_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/frozen-spins/{constraint_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_frozen_spins_constraint_id"];
+        put?: never;
+        post?: never;
+        delete: operations["model_delete_sessions_current_model_frozen_spins_constraint_id"];
+        options?: never;
+        head?: never;
+        patch: operations["model_patch_sessions_current_model_frozen_spins_constraint_id"];
         trace?: never;
     };
     "/v2/sessions/current/model/geometry/capabilities": {
@@ -3594,9 +3674,14 @@ export interface components {
             visible: boolean;
             wireframe: components["schemas"]["BasicLayerState"];
         };
+        ApiErrorDiagnosticResponse: {
+            code: string;
+            message: string;
+        };
         ApiErrorResponse: {
             capability_reason?: string | null;
             code: string;
+            diagnostics?: components["schemas"]["ApiErrorDiagnosticResponse"][] | null;
             error: string;
             message: string;
             request_id?: string | null;
@@ -3614,6 +3699,8 @@ export interface components {
             stage_autosave?: null | components["schemas"]["StageAutosaveArtifactMetadata"];
         };
         AuthoringTransactionRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
             /** @enum {string} */
             kind: "replace_scene";
             scene: Record<string, never>;
@@ -4027,6 +4114,14 @@ export interface components {
         };
         /** @enum {string} */
         CompressionProfile: "speed" | "balanced" | "smallest";
+        ConstraintActivationSchema: {
+            /** @enum {string} */
+            kind: "all_stages";
+        } | {
+            /** @enum {string} */
+            kind: "stage_ids";
+            stage_ids: string[];
+        };
         CouplingCreateRequest: {
             /** Format: int64 */
             base_revision?: number | null;
@@ -4346,6 +4441,8 @@ export interface components {
             wavevector_unit: string;
             x_m: number[];
         };
+        /** @enum {string} */
+        EmptySelectionPolicySchema: "error" | "allow_noop";
         EnergySummary: {
             /** Format: double */
             anisotropy?: number | null;
@@ -4667,6 +4764,20 @@ export interface components {
             supported: boolean;
             target_id: string;
         };
+        FieldCarrierDescriptor: {
+            carrier_fingerprint: string;
+            carrier_id: string;
+            /** Format: int32 */
+            components: number;
+            indexing: string;
+            payload_state: components["schemas"]["FieldPayloadState"];
+            payload_version?: string | null;
+            /** @description Compatibility projection of `scope_kind` for existing clients. */
+            scope: string;
+            scope_id?: string | null;
+            scope_kind: string;
+            view: string;
+        };
         FieldCatalog: {
             domain_generation_id: string;
             quantities: components["schemas"]["FieldDescriptor"][];
@@ -4693,6 +4804,7 @@ export interface components {
             /** Format: int64 */
             materialized_at_unix_ms: number;
             quantity_id: string;
+            resolved_capability?: null | components["schemas"]["ResolvedQuantityCapability"];
             /** Format: int64 */
             source_revision: number;
             /** Format: int64 */
@@ -4809,7 +4921,9 @@ export interface components {
             /** Format: int64 */
             materialized_at_unix_ms: number;
             observation_frame: components["schemas"]["AcceptedObservationFrameRef"];
+            publication_bundle?: null | components["schemas"]["FieldPublicationBundle"];
             quantity_id: string;
+            resolved_capability?: null | components["schemas"]["ResolvedQuantityCapability"];
             /** Format: int64 */
             source_revision: number;
             /** Format: int64 */
@@ -4825,6 +4939,8 @@ export interface components {
             stats?: null | components["schemas"]["FieldStats"];
             unit: string;
         };
+        /** @enum {string} */
+        FieldPayloadState: "current" | "legacy_unverified" | "unmaterialized";
         FieldProjectionMaskDescriptor: {
             available: boolean;
             etag?: string | null;
@@ -4901,6 +5017,38 @@ export interface components {
             normal_coord: number;
             /** Format: double */
             value: number;
+        };
+        FieldPublicationBinding: {
+            carrier_fingerprint: string;
+            carrier_id: string;
+            component: string;
+            quantity_id: string;
+            scope_id?: string | null;
+            scope_kind: string;
+        };
+        /**
+         * @description Atomic identity envelope for one field response. A consumer must accept or
+         *     reject the whole bundle; individual revision or carrier members are not a
+         *     valid publication on their own.
+         */
+        FieldPublicationBundle: {
+            domain_generation_id: string;
+            field: components["schemas"]["FieldPublicationBinding"];
+            observation_frame: components["schemas"]["AcceptedObservationFrameRef"];
+            publication_id: string;
+            responses: components["schemas"]["FieldPublicationResponseRevisions"];
+            topology_hash: string;
+            topology_revision: string;
+        };
+        FieldPublicationResponseRevisions: {
+            /** Format: int64 */
+            field_catalog_revision: number;
+            /** Format: int64 */
+            fields_revision: number;
+            /** Format: int64 */
+            scalars_revision: number;
+            /** Format: int64 */
+            topology_revision: number;
         };
         FieldSliceBinaryDescriptor: {
             available: boolean;
@@ -5402,6 +5550,99 @@ export interface components {
             mode_table: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             response_field_3d_overlay: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             response_sweep_chart: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+        };
+        FrozenReferencePolicySchema: {
+            /** @enum {string} */
+            kind: "capture_current_at_activation";
+        } | {
+            /** @enum {string} */
+            kind: "initial_state";
+        } | {
+            asset_id: string;
+            /** @enum {string} */
+            kind: "explicit_field_asset";
+        };
+        FrozenSpinsCollectionResource: {
+            count: number;
+            definitions: components["schemas"]["FrozenSpinsSchema"][];
+            /** Format: int64 */
+            revision: number;
+        };
+        FrozenSpinsDefinitionResource: {
+            definition: components["schemas"]["FrozenSpinsSchema"];
+            /** Format: int64 */
+            revision: number;
+        };
+        FrozenSpinsDeleteRequest: {
+            /** Format: int64 */
+            expected_revision: number;
+        };
+        FrozenSpinsMutationRequest: {
+            definition: components["schemas"]["FrozenSpinsSchema"];
+            /** Format: int64 */
+            expected_revision: number;
+        };
+        FrozenSpinsPreviewRequest: {
+            /** Format: int64 */
+            expected_revision: number;
+            /** Format: int64 */
+            expected_source_state_revision: number;
+            expected_topology_fingerprint: string;
+            selector: components["schemas"]["SelectionExprSchema"];
+            stage_id?: string | null;
+            target_object_id: string;
+        };
+        FrozenSpinsPreviewResponse: {
+            bounds_m?: number[][] | null;
+            current: boolean;
+            /** Format: double */
+            fraction: number;
+            /** Format: int64 */
+            free_dof_count: number;
+            /** Format: int64 */
+            frozen_dof_count: number;
+            mask_resource: string;
+            mask_sha256: string;
+            preview_id: string;
+            requested: components["schemas"]["FrozenSpinsRequestedIntent"];
+            resolved: components["schemas"]["FrozenSpinsResolvedPlanSummary"];
+            /** Format: int64 */
+            revision: number;
+            schema_version: string;
+            warnings: components["schemas"]["FrozenSpinsWarning"][];
+        };
+        FrozenSpinsRequestedIntent: {
+            selector_sha256: string;
+            stage_id?: string | null;
+            target_object_id: string;
+        };
+        FrozenSpinsResolvedPlanSummary: {
+            all_active_dofs_frozen: boolean;
+            constraint_ids: string[];
+            effective_selector_sha256: string;
+            evaluator_id: string;
+            qualification: string;
+            resolved_reference_sha256: string;
+            schema_version: string;
+            /** Format: int64 */
+            source_state_revision?: number | null;
+            topology_fingerprint: string;
+        };
+        FrozenSpinsSchema: {
+            activation?: components["schemas"]["ConstraintActivationSchema"];
+            empty_selection?: components["schemas"]["EmptySelectionPolicySchema"];
+            enabled?: boolean;
+            id: string;
+            inactive_selection?: components["schemas"]["InactiveSelectionPolicySchema"];
+            membership?: null | components["schemas"]["SelectionMembershipPolicySchema"];
+            name: string;
+            reference?: components["schemas"]["FrozenReferencePolicySchema"];
+            schema_version: string;
+            selector: components["schemas"]["SelectionExprSchema"];
+        };
+        FrozenSpinsWarning: {
+            code: string;
+            message: string;
         };
         /** @enum {string} */
         GeometryBackendTarget: "fem" | "fdm";
@@ -6041,6 +6282,8 @@ export interface components {
             note?: string | null;
             triangle_count?: number | null;
         };
+        /** @enum {string} */
+        InactiveSelectionPolicySchema: "warn_and_intersect" | "error";
         KnownSceneCurrentTransport: {
             boundaries?: components["schemas"]["SceneChargeBoundary"][];
             /** Format: double */
@@ -6219,6 +6462,11 @@ export interface components {
             domain: components["schemas"]["DomainSummary"];
             /** @description Thin latest energy summary for status surfaces. Energy samples/history are owned by `simulation/solver/energies/*`. */
             energies: components["schemas"]["EnergySummary"];
+            /**
+             * @description Independent solver, session-resource, connectivity, and commandability
+             *     state. Consumers must not derive commandability from solver state.
+             */
+            lifecycle: components["schemas"]["SessionLifecycleSummary"];
             /** @description Lightweight runtime metrics for status surfaces. Detailed logs/diagnostics live under `diagnostics/*`. */
             metrics: components["schemas"]["MetricsSummary"];
             /** @description Revision pointers used to invalidate resource hooks. Heavy resources must be fetched from their owning endpoint. */
@@ -6245,6 +6493,10 @@ export interface components {
             region_initial_state_revision?: number | null;
             /** Format: int64 */
             scene_revision: number;
+        };
+        MagnetizationConstraintSchema: components["schemas"]["FrozenSpinsSchema"] & {
+            /** @enum {string} */
+            kind: "frozen_spins";
         };
         MaterialParameterFieldDataListResource: {
             fields: components["schemas"]["MaterialParameterFieldDataSummaryResource"][];
@@ -7804,6 +8056,7 @@ export interface components {
             renderable: boolean;
             /** @description Whether the active runtime exposes a legal data-plane request for this shape. */
             requestable: boolean;
+            resolved_capability?: null | components["schemas"]["ResolvedQuantityCapability"];
             scalar_metric_key?: string | null;
             shape: string;
             /** @description Solver/provider capability plane, independent of request and payload state. */
@@ -7818,6 +8071,16 @@ export interface components {
             quantities: components["schemas"]["QuantityCatalogEntry"][];
             schema_version: string;
         };
+        /** @enum {string} */
+        QuantityMaterializationCapability: "not_applicable" | "unmaterialized" | "pending" | "materialized" | "legacy_unverified" | "unavailable";
+        /** @enum {string} */
+        QuantityProviderCapability: "available" | "unavailable";
+        /** @enum {string} */
+        QuantityPublicationCapability: "interactive" | "export_only" | "hidden";
+        /** @enum {string} */
+        QuantityRenderCapability: "renderable" | "unsupported_shape" | "unavailable";
+        /** @enum {string} */
+        QuantityRequestCapability: "field_vector" | "scalar_resource" | "unsupported_shape" | "unavailable";
         QuantityVisualizationPatch: {
             active_quantity_id?: string | null;
             auto_contrast?: boolean | null;
@@ -8055,6 +8318,19 @@ export interface components {
             occurred: boolean;
             original_engine: string;
             reason: string;
+        };
+        ResolvedQuantityCapability: {
+            carriers: components["schemas"]["FieldCarrierDescriptor"][];
+            lane: string;
+            materialization: components["schemas"]["QuantityMaterializationCapability"];
+            precision: string;
+            provider: components["schemas"]["QuantityProviderCapability"];
+            publication: components["schemas"]["QuantityPublicationCapability"];
+            quantity_id: string;
+            reason_code?: string | null;
+            render: components["schemas"]["QuantityRenderCapability"];
+            request: components["schemas"]["QuantityRequestCapability"];
+            scope: string;
         };
         ResourceRevisionMap: {
             /** Format: int64 */
@@ -8677,6 +8953,7 @@ export interface components {
             magnetization_assets?: {
                 [key: string]: unknown;
             }[];
+            magnetization_constraints?: components["schemas"]["MagnetizationConstraintSchema"][];
             materials?: components["schemas"]["SceneMaterialResource"][];
             objects?: components["schemas"]["SceneObjectResource"][];
             oersted_fields?: components["schemas"]["SceneOerstedField"][];
@@ -8688,6 +8965,7 @@ export interface components {
             scene?: null | components["schemas"]["SceneMetadataResource"];
             /** Format: int64 */
             scene_revision?: number | null;
+            selections?: components["schemas"]["SelectionDefinitionSchema"][];
             spin_torques?: components["schemas"]["SceneSpinTorque"][];
             spin_transports?: components["schemas"]["SceneSpinTransport"][];
             study?: {
@@ -8925,6 +9203,212 @@ export interface components {
             source_kind: string;
             written: boolean;
         };
+        SelectionBoundaryMembershipSchema: {
+            /** Format: double */
+            absolute_tolerance_m: number;
+            /** @enum {string} */
+            kind: "inclusive";
+            /** Format: double */
+            relative_tolerance: number;
+        } | {
+            /** Format: double */
+            absolute_tolerance_m: number;
+            /** @enum {string} */
+            kind: "exclusive";
+            /** Format: double */
+            relative_tolerance: number;
+        };
+        /** @enum {string} */
+        SelectionCartesianComponentSchema: "x" | "y" | "z";
+        /** @enum {string} */
+        SelectionClosedIntervalSchema: "none" | "left" | "right" | "both";
+        /** @enum {string} */
+        SelectionComparisonOpSchema: "lt" | "le" | "gt" | "ge";
+        SelectionComparisonToleranceSchema: {
+            /** Format: double */
+            atol: number;
+            /** Format: double */
+            rtol: number;
+        };
+        SelectionDefinitionSchema: {
+            expression: components["schemas"]["SelectionExprSchema"];
+            id: string;
+            name?: string | null;
+            schema_version: string;
+        };
+        SelectionExprSchema: {
+            /** @enum {string} */
+            kind: "all_magnetic";
+        } | {
+            /** @enum {string} */
+            kind: "in_object";
+            object_id: string;
+        } | {
+            /** @enum {string} */
+            kind: "in_region";
+            object_id: string;
+            region_id: string;
+        } | {
+            boundary: components["schemas"]["SelectionBoundaryMembershipSchema"];
+            frame: components["schemas"]["SelectionFrameSchema"];
+            geometry: components["schemas"]["SelectionGeometryPredicateSchema"];
+            /** @enum {string} */
+            kind: "inside_geometry";
+            sampling: components["schemas"]["SelectionSamplingSchema"];
+        } | {
+            /** @enum {string} */
+            kind: "compare";
+            lhs: components["schemas"]["SelectionScalarExprSchema"];
+            op: components["schemas"]["SelectionComparisonOpSchema"];
+            rhs: components["schemas"]["SelectionScalarExprSchema"];
+            tolerance?: components["schemas"]["SelectionComparisonToleranceSchema"];
+        } | {
+            /** Format: double */
+            atol: number;
+            /** @enum {string} */
+            kind: "approx";
+            /** Format: double */
+            rtol: number;
+            target: components["schemas"]["SelectionScalarExprSchema"];
+            value: components["schemas"]["SelectionScalarExprSchema"];
+        } | {
+            closed: components["schemas"]["SelectionClosedIntervalSchema"];
+            /** @enum {string} */
+            kind: "between";
+            /** Format: double */
+            lower: number;
+            /** Format: double */
+            upper: number;
+            value: components["schemas"]["SelectionScalarExprSchema"];
+        } | {
+            expressions: components["schemas"]["SelectionExprSchema"][];
+            /** @enum {string} */
+            kind: "and";
+        } | {
+            expressions: components["schemas"]["SelectionExprSchema"][];
+            /** @enum {string} */
+            kind: "or";
+        } | {
+            expressions: components["schemas"]["SelectionExprSchema"][];
+            /** @enum {string} */
+            kind: "xor";
+        } | {
+            expression: components["schemas"]["SelectionExprSchema"];
+            /** @enum {string} */
+            kind: "not";
+        } | {
+            /** @enum {string} */
+            kind: "ref";
+            selection_id: string;
+        };
+        SelectionFrameSchema: {
+            /** @enum {string} */
+            kind: "world";
+        } | {
+            /** @enum {string} */
+            kind: "object";
+            object_id: string;
+        };
+        SelectionGeometryPredicateSchema: {
+            center_m: number[];
+            /** @enum {string} */
+            kind: "box";
+            size_m: number[];
+        } | {
+            axis: number[];
+            center_m: number[];
+            /** Format: double */
+            height_m: number;
+            /** @enum {string} */
+            kind: "cylinder";
+            /** Format: double */
+            radius_m: number;
+        } | {
+            center_m: number[];
+            /** @enum {string} */
+            kind: "sphere";
+            /** Format: double */
+            radius_m: number;
+        } | {
+            center_m: number[];
+            /** @enum {string} */
+            kind: "ellipsoid";
+            radii_m: number[];
+        } | {
+            a: components["schemas"]["SelectionGeometryPredicateSchema"];
+            b: components["schemas"]["SelectionGeometryPredicateSchema"];
+            /** @enum {string} */
+            kind: "union";
+        } | {
+            a: components["schemas"]["SelectionGeometryPredicateSchema"];
+            b: components["schemas"]["SelectionGeometryPredicateSchema"];
+            /** @enum {string} */
+            kind: "intersection";
+        } | {
+            base: components["schemas"]["SelectionGeometryPredicateSchema"];
+            /** @enum {string} */
+            kind: "difference";
+            tool: components["schemas"]["SelectionGeometryPredicateSchema"];
+        } | {
+            a: components["schemas"]["SelectionGeometryPredicateSchema"];
+            b: components["schemas"]["SelectionGeometryPredicateSchema"];
+            /** @enum {string} */
+            kind: "xor";
+        } | {
+            domain: components["schemas"]["SelectionGeometryPredicateSchema"];
+            geometry: components["schemas"]["SelectionGeometryPredicateSchema"];
+            /** @enum {string} */
+            kind: "complement";
+        } | {
+            geometry: components["schemas"]["SelectionGeometryPredicateSchema"];
+            /** @enum {string} */
+            kind: "affine";
+            pivot_m: number[];
+            rotation_xyzw: number[];
+            scale: number[];
+            translation_m: number[];
+        } | {
+            asset_id: string;
+            /** @enum {string} */
+            kind: "imported_solid";
+        };
+        SelectionMembershipPolicySchema: {
+            /** @enum {string} */
+            kind: "static";
+        } | {
+            /** @enum {string} */
+            kind: "snapshot_at_activation";
+        };
+        SelectionSamplingSchema: {
+            /** @enum {string} */
+            kind: "dof_point";
+        };
+        SelectionScalarExprSchema: {
+            /** @enum {string} */
+            kind: "constant";
+            /** Format: double */
+            value: number;
+        } | {
+            component: components["schemas"]["SelectionCartesianComponentSchema"];
+            frame: components["schemas"]["SelectionFrameSchema"];
+            /** @enum {string} */
+            kind: "coordinate";
+        } | {
+            component: components["schemas"]["SelectionCartesianComponentSchema"];
+            /** @enum {string} */
+            kind: "magnetization_component";
+        } | {
+            /** @enum {string} */
+            kind: "magnetization_norm";
+        } | {
+            axis: number[];
+            /** @enum {string} */
+            kind: "magnetization_dot";
+        } | {
+            /** @enum {string} */
+            kind: "abs";
+            value: components["schemas"]["SelectionScalarExprSchema"];
+        };
         SessionAssetImportResponse: {
             artifact_ref: string;
             asset_id: string;
@@ -8933,6 +9417,10 @@ export interface components {
             summary: components["schemas"]["ImportedAssetSummary"];
             target_realization: string;
         };
+        /** @enum {string} */
+        SessionCommandability: "allowed" | "forbidden" | "read_only";
+        /** @enum {string} */
+        SessionConnectivity: "connected" | "degraded" | "disconnected";
         SessionExportRequest: {
             compression?: null | components["schemas"]["CompressionProfile"];
             /** @description Optional session name override. */
@@ -8986,6 +9474,14 @@ export interface components {
             total_size_bytes: number;
             warnings: string[];
         };
+        SessionLifecycleSummary: {
+            commandability: components["schemas"]["SessionCommandability"];
+            connectivity: components["schemas"]["SessionConnectivity"];
+            session_resource: components["schemas"]["SessionResourceLifecycle"];
+            solver: string;
+        };
+        /** @enum {string} */
+        SessionResourceLifecycle: "active" | "tombstoned";
         SessionSummary: {
             created_at: string;
             name: string;
@@ -14667,6 +15163,8 @@ export interface operations {
                     "x-fullmag-n-comp"?: number;
                     /** @description Optional FMVP v3 node-index count */
                     "x-fullmag-node-index-count"?: number;
+                    /** @description current for metadata-complete FMVP v3; legacy_unverified for FMVP v2 */
+                    "x-fullmag-payload-state"?: string;
                     /** @description Decoded point count */
                     "x-fullmag-point-count"?: number;
                     /** @description Canonical quantity identifier */
@@ -14734,6 +15232,103 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ApiErrorResponse"];
                 };
+            };
+        };
+    };
+    data_get_sessions_current_data_frozen_spins_resolved_masks_mask_id: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Strong ETag from a previous mask response */
+                "If-None-Match"?: string | null;
+                /** @description Optional single byte range for the binary payload */
+                Range?: string | null;
+            };
+            path: {
+                /** @description Resolved preview mask identity */
+                mask_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Versioned bit-packed frozen-spins mask */
+            200: {
+                headers: {
+                    /** @description Supported byte range unit */
+                    "Accept-Ranges"?: string;
+                    /** @description Strong identity of the complete FMSK representation */
+                    ETag?: string;
+                    /** @description SHA-256 identity of the logical bit mask */
+                    "x-fullmag-mask-sha256"?: string;
+                    /** @description Magnetization source-state revision */
+                    "x-fullmag-source-state-revision"?: string;
+                    /** @description Resolved topology identity */
+                    "x-fullmag-topology-fingerprint"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.fullmag.frozen-mask": unknown;
+                };
+            };
+            /** @description Partial frozen-spins mask payload */
+            206: {
+                headers: {
+                    /** @description Supported byte range unit */
+                    "Accept-Ranges"?: string;
+                    /** @description Returned byte interval */
+                    "Content-Range"?: string;
+                    /** @description Strong identity of the complete FMSK representation */
+                    ETag?: string;
+                    /** @description SHA-256 identity of the logical bit mask */
+                    "x-fullmag-mask-sha256"?: string;
+                    /** @description Magnetization source-state revision */
+                    "x-fullmag-source-state-revision"?: string;
+                    /** @description Resolved topology identity */
+                    "x-fullmag-topology-fingerprint"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.fullmag.frozen-mask": unknown;
+                };
+            };
+            /** @description Mask not modified for the supplied ETag */
+            304: {
+                headers: {
+                    /** @description Strong identity of the complete FMSK representation */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Resolved mask missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Mask source-state or topology is stale */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Requested byte range is not satisfiable */
+            416: {
+                headers: {
+                    /** @description Supported byte range unit */
+                    "Accept-Ranges"?: string;
+                    /** @description Unsatisfied complete representation length */
+                    "Content-Range"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -17204,6 +17799,280 @@ export interface operations {
             };
         };
     };
+    model_get_sessions_current_model_frozen_spins: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrozenSpinsCollectionResource"];
+                };
+            };
+        };
+    };
+    model_post_sessions_current_model_frozen_spins: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FrozenSpinsMutationRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrozenSpinsDefinitionResource"];
+                };
+            };
+            /** @description Revision or identity conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Typed selector validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    model_post_sessions_current_model_frozen_spins_previews: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FrozenSpinsPreviewRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrozenSpinsPreviewResponse"];
+                };
+            };
+            /** @description Stale source-state or topology revision */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Typed selector validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    model_get_sessions_current_model_frozen_spins_previews_preview_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                preview_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrozenSpinsPreviewResponse"];
+                };
+            };
+            /** @description Preview missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Preview source-state or topology is stale */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    model_get_sessions_current_model_frozen_spins_constraint_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                constraint_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrozenSpinsDefinitionResource"];
+                };
+            };
+            /** @description Definition missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    model_delete_sessions_current_model_frozen_spins_constraint_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                constraint_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FrozenSpinsDeleteRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrozenSpinsCollectionResource"];
+                };
+            };
+            /** @description Definition missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Revision conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Invalid request body */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    model_patch_sessions_current_model_frozen_spins_constraint_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                constraint_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FrozenSpinsMutationRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrozenSpinsDefinitionResource"];
+                };
+            };
+            /** @description Definition missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Revision or identity conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Typed selector validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
     model_get_sessions_current_model_geometry_capabilities: {
         parameters: {
             query?: never;
@@ -18524,6 +19393,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Scene revision conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     model_patch_sessions_current_model_scene: {
@@ -18557,6 +19433,13 @@ export interface operations {
             };
             /** @description No active workspace */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Scene revision conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -19004,6 +19887,13 @@ export interface operations {
             };
             /** @description No active workspace */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Scene revision conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

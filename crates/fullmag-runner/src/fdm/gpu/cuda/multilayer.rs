@@ -1815,9 +1815,11 @@ fn snapshot_native_multilayer_observables(
         dmi_energy,
         total_energy,
         max_dm_dt,
+        max_rhs_all_norm_per_s: max_dm_dt,
         max_h_eff,
         max_h_demag,
         max_torque_Apm: max_torque_apm,
+        max_torque_all_Apm: max_torque_apm,
         per_object_scalars,
     };
     transfer_counters.finish_host_snapshot();
@@ -2089,6 +2091,7 @@ fn build_native_stacked_cuda_plan(
             spin_transport_plans: Vec::new(),
             fdm_gpu_charge_transports: Vec::new(),
             initial_magnetization,
+            frozen_spins: None,
             material: reference_material.clone(),
             enable_exchange: plan.enable_exchange,
             enable_demag: plan.enable_demag,
@@ -2467,6 +2470,7 @@ fn single_layer_cuda_plan(plan: &FdmMultilayerPlanIR, layer: &FdmLayerPlanIR) ->
         spin_transport_plans: Vec::new(),
         fdm_gpu_charge_transports: Vec::new(),
         initial_magnetization: layer.initial_magnetization.clone(),
+        frozen_spins: None,
         material: FdmMaterialIR {
             name: layer.material.name.clone(),
             saturation_magnetisation: layer.material.saturation_magnetisation,
@@ -2834,9 +2838,11 @@ fn observe_multilayer_cuda(
             + anisotropy_energy
             + dmi_energy,
         max_dm_dt,
+        max_rhs_all_norm_per_s: max_dm_dt,
         max_h_eff,
         max_h_demag,
         max_torque_Apm: max_torque_apm,
+        max_torque_all_Apm: max_torque_apm,
         per_object_scalars,
     })
 }
@@ -3163,9 +3169,11 @@ fn observe_multilayer_cuda_single(
             + anisotropy_energy
             + dmi_energy,
         max_dm_dt,
+        max_rhs_all_norm_per_s: max_dm_dt,
         max_h_eff,
         max_h_demag,
         max_torque_Apm: max_torque_apm,
+        max_torque_all_Apm: max_torque_apm,
         per_object_scalars,
     })
 }
@@ -3628,9 +3636,11 @@ fn observe_native_stacked_fields(
             + anisotropy_energy
             + dmi_energy,
         max_dm_dt,
+        max_rhs_all_norm_per_s: max_dm_dt,
         max_h_eff,
         max_h_demag,
         max_torque_Apm: max_torque_apm,
+        max_torque_all_Apm: max_torque_apm,
         per_object_scalars,
     })
 }
@@ -4999,9 +5009,11 @@ mod tests {
             dmi_energy: 0.25,
             total_energy: 6.75,
             max_dm_dt: 7.0,
+            max_rhs_all_norm_per_s: 7.0,
             max_h_eff: 8.0,
             max_h_demag: 9.0,
             max_torque_Apm: 10.0,
+            max_torque_all_Apm: 10.0,
             per_object_scalars,
         };
         let native_step = StepStats {

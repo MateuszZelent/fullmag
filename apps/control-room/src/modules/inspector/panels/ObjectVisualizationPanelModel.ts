@@ -58,6 +58,7 @@ import {
   type VisualizationTargetPatch,
   type VisualizationTargetRef,
   type VisualizationTargetSettings,
+  type VisualizationStoredTargetPatch,
   type ViewportTargetRenderingPreferences,
   isFdmUniverseOutsideSupportTarget,
   visualizationTargetCapabilities,
@@ -946,7 +947,10 @@ export function queuePartVectorVisibilityPatch({
   part: NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number];
   sceneObjectIds: ReadonlySet<string>;
   state: VisualizationStateResource;
-  sync: Pick<{ queuePatch: (patch: VisualizationStatePatch) => void }, "queuePatch">;
+  sync: Pick<
+    { queuePatch: (patch: VisualizationStatePatch) => { transactionId: string } },
+    "queuePatch"
+  >;
   visible: boolean;
 }): VisualizationTargetRef {
   const target = resolveObjectVisualizationPanelTarget({
@@ -972,19 +976,22 @@ export function queueTargetVectorVisibilityPatch({
 }: {
   controller: Pick<ObjectVisualizationController, "patchTargetPending">;
   state: VisualizationStateResource;
-  sync: Pick<{ queuePatch: (patch: VisualizationStatePatch) => void }, "queuePatch">;
+  sync: Pick<
+    { queuePatch: (patch: VisualizationStatePatch) => { transactionId: string } },
+    "queuePatch"
+  >;
   target: VisualizationTargetRef;
   visible: boolean;
 }): VisualizationTargetRef {
   const patch = { vectorsVisible: visible } satisfies VisualizationTargetPatch;
-  sync.queuePatch({
+  const receipt = sync.queuePatch({
     overrides: mergeVisualizationStateTargetOverride(
       state.overrides ?? [],
       target,
       patch,
     ),
   });
-  controller.patchTargetPending(target, patch, state.revision);
+  controller.patchTargetPending(target, patch, state.revision, receipt.transactionId);
   return target;
 }
 
@@ -1260,6 +1267,50 @@ export interface VisualizationTargetMutationStatus {
   state: VisualizationTargetMutationState;
 }
 
+/**
+ * Last-good Inspector content is valid only for one rendered carrier.  A
+ * transient resource refresh may reuse it; a session, topology, or carrier
+ * transition must render the normal unavailable/loading state instead.
+ */
+export function resolveVisualizationPanelIdentityKey({
+  carrierFingerprint,
+  sessionIdentityKey,
+  targetId,
+  topologyHash,
+}: {
+  carrierFingerprint: string | null | undefined;
+  sessionIdentityKey: string | null | undefined;
+  targetId: string | null | undefined;
+  topologyHash: string | null | undefined;
+}): string | null {
+  if (
+    !carrierFingerprint ||
+    !sessionIdentityKey ||
+    !targetId ||
+    !topologyHash
+  ) {
+    return null;
+  }
+  return [targetId, sessionIdentityKey, topologyHash, carrierFingerprint].join("\u0000");
+}
+
+/** Pending controls are independently addressable even when a PATCH batches fields. */
+export function resolvePendingVisualizationFieldKeys({
+  patch,
+  targetId,
+  transactionId,
+}: {
+  patch: VisualizationTargetPatch;
+  targetId: string;
+  transactionId: string;
+}): ReadonlySet<string> {
+  return new Set(
+    Object.keys(patch).map(
+      (fieldName) => `${targetId}\u0000${fieldName}\u0000${transactionId}`,
+    ),
+  );
+}
+
 interface VisualizationTargetMutationSnapshot {
   error?: Error | null;
   inflightTargetIds?: readonly string[];
@@ -1283,10 +1334,22 @@ export function resolvePendingVisualizationFields({
 }): ReadonlySet<keyof VisualizationTargetPatch> {
   const fields = new Set<keyof VisualizationTargetPatch>();
   for (const targetId of targetIds) {
-    const patch = snapshot.pendingOverrides?.[targetId]?.patch;
-    if (!patch) continue;
-    for (const field of Object.keys(patch) as Array<keyof VisualizationTargetPatch>) {
-      fields.add(field);
+    const pending = snapshot.pendingOverrides?.[targetId];
+    if (!pending) continue;
+    for (const fieldName of Object.keys(pending.patch) as Array<
+      keyof VisualizationStoredTargetPatch
+    >) {
+      const transactionId =
+        pending.fieldTransactionIds?.[fieldName] ?? pending.transactionId;
+      if (!transactionId) continue;
+      for (const key of resolvePendingVisualizationFieldKeys({
+        patch: { [fieldName]: pending.patch[fieldName] },
+        targetId,
+        transactionId,
+      })) {
+        const [, field] = key.split("\u0000");
+        if (field) fields.add(field as keyof VisualizationTargetPatch);
+      }
     }
   }
   return fields;

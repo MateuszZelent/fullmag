@@ -22,6 +22,7 @@ use crate::preview::{
 };
 #[cfg(feature = "cuda")]
 use crate::quantities::normalized_quantity_name;
+use crate::quantities::QuantityId;
 #[cfg(feature = "cuda")]
 use crate::relaxation::llg_overdamped_uses_pure_damping;
 #[cfg(feature = "cuda")]
@@ -43,6 +44,64 @@ use std::ffi::CStr;
 use std::io::Write;
 #[cfg(feature = "cuda")]
 use std::sync::atomic::{AtomicBool, Ordering};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CudaSnapshotObservable {
+    M,
+    HEx,
+    HDemag,
+    HExt,
+    HOe,
+    HAni,
+    HEff,
+    EdenEx,
+    EdenDemag,
+    EdenExt,
+    EdenDrive,
+    EdenAni,
+    EdenDmi,
+    EdenTotal,
+}
+
+impl CudaSnapshotObservable {
+    fn from_quantity(id: QuantityId) -> Option<Self> {
+        Some(match id {
+            QuantityId::M => Self::M,
+            QuantityId::HEx => Self::HEx,
+            QuantityId::HDemag => Self::HDemag,
+            QuantityId::HExt => Self::HExt,
+            QuantityId::HOe => Self::HOe,
+            QuantityId::HAni => Self::HAni,
+            QuantityId::HEff => Self::HEff,
+            QuantityId::EdenEx => Self::EdenEx,
+            QuantityId::EdenDemag => Self::EdenDemag,
+            QuantityId::EdenExt => Self::EdenExt,
+            QuantityId::EdenDrive => Self::EdenDrive,
+            QuantityId::EdenAni => Self::EdenAni,
+            QuantityId::EdenDmi => Self::EdenDmi,
+            QuantityId::EdenTotal => Self::EdenTotal,
+            _ => return None,
+        })
+    }
+
+    #[cfg(feature = "cuda")]
+    fn is_scalar(self) -> bool {
+        matches!(
+            self,
+            Self::EdenEx
+                | Self::EdenDemag
+                | Self::EdenExt
+                | Self::EdenDrive
+                | Self::EdenAni
+                | Self::EdenDmi
+                | Self::EdenTotal
+        )
+    }
+}
+
+pub(crate) fn can_materialize_preview_quantity(id: QuantityId) -> bool {
+    id == QuantityId::Torque || CudaSnapshotObservable::from_quantity(id).is_some()
+}
 
 /// Check whether the native CUDA FDM backend is compiled and available.
 pub(crate) fn is_cuda_available() -> bool {
@@ -322,6 +381,19 @@ fn ensure_cuda_slonczewski_supported(plan: &fullmag_ir::FdmPlanIR) -> Result<(),
             message: format!("unsupported FDM CUDA Slonczewski formula_version '{other}'"),
         }),
     }
+}
+
+#[cfg(feature = "cuda")]
+fn ensure_cuda_frozen_spins_supported(
+    requested: bool,
+    capability_bits: u64,
+) -> Result<(), RunError> {
+    if requested && capability_bits & ffi::FULLMAG_FDM_CAPABILITY_FROZEN_SPINS_V1 == 0 {
+        return Err(RunError {
+            message: "frozen_spins_cuda_unqualified: native CUDA frozen-spin kernels are not capability-qualified".to_string(),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(feature = "cuda")]
@@ -756,6 +828,12 @@ impl NativeFdmBackend {
     }
 
     pub fn create(plan: &fullmag_ir::FdmPlanIR) -> Result<Self, RunError> {
+        let frozen_capabilities = if plan.frozen_spins.is_some() {
+            unsafe { ffi::fullmag_fdm_capability_bits_v1() }
+        } else {
+            0
+        };
+        ensure_cuda_frozen_spins_supported(plan.frozen_spins.is_some(), frozen_capabilities)?;
         ensure_cuda_slonczewski_supported(plan)?;
         validate_single_grid_budget(plan)?;
         let sot_formula = ffi_prescribed_sot_formula(plan)?;
@@ -826,6 +904,13 @@ impl NativeFdmBackend {
         let active_mask_flat: Option<Vec<u8>> = plan.active_mask.as_ref().map(|mask| {
             mask.iter()
                 .map(|is_active| if *is_active { 1u8 } else { 0u8 })
+                .collect()
+        });
+        let frozen_mask_flat: Option<Vec<u8>> = plan.frozen_spins.as_ref().map(|frozen| {
+            frozen
+                .frozen_mask
+                .iter()
+                .map(|is_frozen| if *is_frozen { 1u8 } else { 0u8 })
                 .collect()
         });
         let sot_active_mask_flat: Option<Vec<u8>> = plan.sot_active_mask.as_ref().map(|mask| {
@@ -1265,6 +1350,22 @@ impl NativeFdmBackend {
             adaptive_headroom: 0.0,
             stats_mode: ffi::fullmag_fdm_stats_mode::FULLMAG_FDM_STATS_FULL,
             stats_stride: 1,
+            frozen_mask: frozen_mask_flat
+                .as_ref()
+                .map_or(std::ptr::null(), |mask| mask.as_ptr()),
+            frozen_mask_len: frozen_mask_flat
+                .as_ref()
+                .map_or(0, |mask| mask.len() as u64),
+            frozen_reference_xyz: if frozen_mask_flat.is_some() {
+                m_flat.as_ptr()
+            } else {
+                std::ptr::null()
+            },
+            frozen_reference_len: if frozen_mask_flat.is_some() {
+                m_flat.len() as u64
+            } else {
+                0
+            },
         };
 
         let time_policy = native_time_policy(adaptive)?;
@@ -2095,20 +2196,9 @@ impl NativeFdmBackend {
             let sampled = crate::preview::resample_grid_vectors(&torque, &plan);
             crate::preview::flatten_vectors(&sampled)
         } else {
-            let observable = match quantity {
-                "m" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_M,
-                "H_ex" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EX,
-                "H_demag" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_DEMAG,
-                "H_ext" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EXT,
-                "H_oe" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_OE,
-                "H_ani" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ANI,
-                "H_eff" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EFF,
-                other => {
-                    return Err(RunError {
-                        message: format!("unsupported CUDA vector preview snapshot '{other}'"),
-                    });
-                }
-            };
+            let observable = snapshot_observable(quantity).ok_or_else(|| RunError {
+                message: format!("unsupported CUDA vector preview snapshot '{quantity}'"),
+            })?;
             let len = preview_count * 3;
             if self.precision == fullmag_ir::ExecutionPrecision::Single {
                 let mut flat = vec![0.0f32; len];
@@ -2673,50 +2763,47 @@ fn flatten_vectors_f32(vectors: &[[f32; 3]]) -> Vec<f32> {
 
 #[cfg(feature = "cuda")]
 fn snapshot_observable(name: &str) -> Option<ffi::fullmag_fdm_observable> {
-    Some(match name {
-        "m" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_M,
-        "H_ex" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EX,
-        "H_demag" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_DEMAG,
-        "H_ext" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EXT,
-        "H_oe" | "H_OE" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_OE,
-        "H_ani" | "H_ANI" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ANI,
-        "H_eff" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EFF,
-        "eden_ex" | "EDEN_EX" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_EX,
-        "eden_demag" | "EDEN_DEMAG" => {
+    let id = crate::quantities::normalize_quantity_id(name).ok()?;
+    Some(match CudaSnapshotObservable::from_quantity(id)? {
+        CudaSnapshotObservable::M => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_M,
+        CudaSnapshotObservable::HEx => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EX,
+        CudaSnapshotObservable::HDemag => {
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_DEMAG
+        }
+        CudaSnapshotObservable::HExt => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EXT,
+        CudaSnapshotObservable::HOe => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_OE,
+        CudaSnapshotObservable::HAni => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ANI,
+        CudaSnapshotObservable::HEff => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EFF,
+        CudaSnapshotObservable::EdenEx => {
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_EX
+        }
+        CudaSnapshotObservable::EdenDemag => {
             ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_DEMAG
         }
-        "eden_ext" | "EDEN_EXT" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_EXT,
-        "eden_drive" | "EDEN_DRIVE" => {
+        CudaSnapshotObservable::EdenExt => {
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_EXT
+        }
+        CudaSnapshotObservable::EdenDrive => {
             ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_DRIVE
         }
-        "eden_ani" | "EDEN_ANI" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_ANI,
-        "eden_dmi" | "EDEN_DMI" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_DMI,
-        "eden_total" | "EDEN_TOTAL" => {
+        CudaSnapshotObservable::EdenAni => {
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_ANI
+        }
+        CudaSnapshotObservable::EdenDmi => {
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_DMI
+        }
+        CudaSnapshotObservable::EdenTotal => {
             ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_TOTAL
         }
-        _ => return None,
     })
 }
 
 #[cfg(feature = "cuda")]
 fn is_scalar_quantity_name(name: &str) -> bool {
-    matches!(
-        name,
-        "eden_ex"
-            | "eden_demag"
-            | "eden_ext"
-            | "eden_drive"
-            | "eden_ani"
-            | "eden_dmi"
-            | "eden_total"
-            | "EDEN_EX"
-            | "EDEN_DEMAG"
-            | "EDEN_EXT"
-            | "EDEN_DRIVE"
-            | "EDEN_ANI"
-            | "EDEN_DMI"
-            | "EDEN_TOTAL"
-    )
+    crate::quantities::normalize_quantity_id(name)
+        .ok()
+        .and_then(CudaSnapshotObservable::from_quantity)
+        .is_some_and(CudaSnapshotObservable::is_scalar)
 }
 
 #[cfg(feature = "cuda")]
@@ -2814,6 +2901,17 @@ mod tests {
         CellSize, CubicAnisotropyConfig, EffectiveFieldTerms, ExchangeLlgProblem, LlgConfig,
         MaterialParameters, TimeIntegrator, UniaxialAnisotropyConfig,
     };
+
+    #[test]
+    fn native_fdm_frozen_spins_capability_gate_accepts_advertised_single_grid_lane() {
+        ensure_cuda_frozen_spins_supported(false, 0)
+            .expect("the legacy null-mask path must remain available");
+        let error = ensure_cuda_frozen_spins_supported(true, 0)
+            .expect_err("an unadvertised frozen-spin request must fail closed");
+        assert!(error.message.contains("frozen_spins_cuda_unqualified"));
+        ensure_cuda_frozen_spins_supported(true, ffi::FULLMAG_FDM_CAPABILITY_FROZEN_SPINS_V1)
+            .expect("the versioned capability bit admits the single-grid ABI payload");
+    }
 
     #[test]
     fn prescribed_sot_formula_mapping_preserves_legacy_and_selects_v1_explicitly() {

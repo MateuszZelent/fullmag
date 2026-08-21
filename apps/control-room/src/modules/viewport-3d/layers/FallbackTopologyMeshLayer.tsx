@@ -10,6 +10,7 @@ import {
 } from "./viewport3DRenderPolicy";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
 import {
   viewport3DFieldColorLayersEnabledFromBrowserConfig,
   viewport3DVectorLayersEnabledFromBrowserConfig,
@@ -74,6 +75,7 @@ const FALLBACK_TOPOLOGY_GEOMETRY_UPLOAD_FRAME_BUDGET_MS = 3;
 
 export function FallbackTopologyMeshLayer({
   colors,
+  sessionIdentity,
   vectorColorMode,
   fallbackSettings,
   femDomain,
@@ -87,6 +89,7 @@ export function FallbackTopologyMeshLayer({
   vectorStyle,
 }: {
   colors: Viewport3DColors;
+  sessionIdentity?: SessionResourceIdentity | null;
   vectorColorMode: string;
   fallbackSettings: VisualizationTargetSettings;
   femDomain: FemManifestRenderDomain;
@@ -346,6 +349,7 @@ export function FallbackTopologyMeshLayer({
       pointGeometry={pointGeometry}
       renderSettings={renderSettings}
       renderPlan={renderPlan}
+      sessionIdentity={sessionIdentity}
       scalarShaderMaterial={scalarShaderMaterial}
       surfaceOpacity={surfaceOpacity}
       surfacePolicy={surfacePolicy}
@@ -368,6 +372,7 @@ function FallbackTopologyMeshPrimitives({
   pointGeometry,
   renderSettings,
   renderPlan,
+  sessionIdentity,
   scalarShaderMaterial,
   surfaceOpacity,
   surfacePolicy,
@@ -386,6 +391,7 @@ function FallbackTopologyMeshPrimitives({
   pointGeometry: BufferGeometry | null;
   renderSettings: VisualizationTargetSettings;
   renderPlan: Viewport3DTargetRenderPlan;
+  sessionIdentity?: SessionResourceIdentity | null;
   scalarShaderMaterial: ReturnType<typeof createScalarSurfaceShaderMaterial> | null;
   surfaceOpacity: number;
   surfacePolicy: ReturnType<typeof surfaceMaterialPolicyProps>;
@@ -460,6 +466,7 @@ function FallbackTopologyMeshPrimitives({
           )}
           materialProfile={materialProfile.glyphs}
           opacity={renderPlan.vectors.opacity}
+          sessionIdentity={sessionIdentity}
           segments={vectorSegments}
           style={vectorStyleFromSettings(renderSettings, vectorStyle)}
           tracker={tracker}

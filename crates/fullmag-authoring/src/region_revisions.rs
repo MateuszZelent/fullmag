@@ -248,6 +248,31 @@ mod tests {
     }
 
     #[test]
+    fn frozen_spins_authoring_does_not_advance_region_realization_lanes() {
+        let before = scene();
+        let mut after = before.clone();
+        after.magnetization_constraints = serde_json::from_value(json!([{
+            "kind": "frozen_spins",
+            "schema_version": "frozen_spins.v1",
+            "id": "pin-core",
+            "name": "Pinned core",
+            "enabled": true,
+            "selector": {"kind": "in_object", "object_id": "film"},
+            "reference": {"kind": "capture_current_at_activation"},
+            "membership": {"kind": "static"},
+            "activation": {"kind": "all_stages"},
+            "empty_selection": "error",
+            "inactive_selection": "warn_and_intersect"
+        }]))
+        .expect("frozen-spins constraint fixture");
+
+        assert_eq!(
+            classify_region_realization_impact(&before, &after),
+            RegionRealizationImpact::default()
+        );
+    }
+
+    #[test]
     fn each_region_product_has_an_independent_lane() {
         let before = scene();
 

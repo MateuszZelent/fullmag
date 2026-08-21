@@ -6,6 +6,8 @@ use crate::artifact_pipeline::ArtifactPipelineSender;
 #[cfg(feature = "cuda")]
 use crate::artifact_pipeline::ArtifactRecorder;
 #[cfg(feature = "cuda")]
+use crate::constraints::FrozenSpinsCheckpointV1;
+#[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::artifacts::{
     capture_initial_cuda_fields, record_cuda_due_outputs, record_cuda_final_outputs,
 };
@@ -45,6 +47,42 @@ use crate::types::{ExecutedRun, LiveStepConsumer, RunError};
 use crate::types::{ExecutionProvenance, RunResult, RunStatus, StepAction, StepStats, StepUpdate};
 
 #[cfg(feature = "cuda")]
+fn frozen_spins_checkpoint_value(
+    plan: &FdmPlanIR,
+    frozen_state: Option<&fullmag_engine::FrozenSpinsState>,
+    magnetization: &[[f64; 3]],
+    step: u64,
+    time_s: f64,
+    dt: f64,
+) -> Result<Option<serde_json::Value>, RunError> {
+    let (Some(frozen_plan), Some(frozen_state)) = (plan.frozen_spins.as_ref(), frozen_state) else {
+        return Ok(None);
+    };
+    let checkpoint = FrozenSpinsCheckpointV1::from_runtime(
+        frozen_plan,
+        frozen_state,
+        magnetization,
+        step,
+        time_s,
+        dt,
+        "fdm_cuda",
+        "cuda",
+        match plan.precision {
+            fullmag_ir::ExecutionPrecision::Double => "double",
+            fullmag_ir::ExecutionPrecision::Single => "single",
+        },
+    )
+    .map_err(|error| RunError {
+        message: format!("serializing CUDA Frozen Spins checkpoint: {error}"),
+    })?;
+    serde_json::to_value(checkpoint)
+        .map(Some)
+        .map_err(|error| RunError {
+            message: format!("serializing CUDA Frozen Spins checkpoint: {error}"),
+        })
+}
+
+#[cfg(feature = "cuda")]
 fn ensure_single_object_scalars(stats: &mut StepStats, object_id: &str) {
     if stats.per_object_scalars.is_empty() {
         stats.per_object_scalars = single_object_scalars(object_id, stats);
@@ -70,6 +108,12 @@ pub(crate) fn execute_cuda_fdm(
     mut live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    crate::solver_runtime::selection::reject_frozen_spins_cuda_plan_execution(plan)?;
+    if plan.frozen_spins.is_some() && direct_minimizer_control(plan.relaxation.as_ref()).is_some() {
+        return Err(RunError {
+            message: "frozen_spins_cuda_direct_minimizer_unqualified: native CUDA BB/NCG does not yet consume the resolved frozen reference during trial retractions".to_string(),
+        });
+    }
     crate::fdm::reject_adaptive_cuda_single_grid_plan(plan)?;
     if until_seconds <= 0.0 {
         return Err(RunError {
@@ -105,6 +149,20 @@ pub(crate) fn execute_cuda_fdm(
         * (plan.grid.cells[1] as usize)
         * (plan.grid.cells[2] as usize);
     let initial_magnetization = backend.copy_m(cell_count)?;
+    let frozen_spins_state = plan
+        .frozen_spins
+        .as_ref()
+        .map(|frozen_plan| {
+            fullmag_engine::FrozenSpinsState::capture_at_activation(
+                frozen_plan,
+                plan.active_mask.as_deref(),
+                &initial_magnetization,
+            )
+            .map_err(|error| RunError {
+                message: format!("CUDA Frozen Spins activation: {error}"),
+            })
+        })
+        .transpose()?;
     let timestep_policy = if direct_minimizer_control(plan.relaxation.as_ref()).is_some() {
         None
     } else {
@@ -170,6 +228,14 @@ pub(crate) fn execute_cuda_fdm(
     let mut cancelled = false;
     let mut current_stats = backend.snapshot_step_stats(plan.grid.cells)?;
     ensure_single_object_scalars(&mut current_stats, "free");
+    let mut final_frozen_checkpoint = frozen_spins_checkpoint_value(
+        plan,
+        frozen_spins_state.as_ref(),
+        &initial_magnetization,
+        current_stats.step,
+        current_stats.time,
+        current_stats.dt,
+    )?;
 
     if let Some(direct_minimizer) = direct_minimizer_control(plan.relaxation.as_ref()) {
         let control = direct_minimizer.control;
@@ -179,6 +245,25 @@ pub(crate) fn execute_cuda_fdm(
             backend.copy_h_eff(cell_count)?,
             current_stats.e_total,
         );
+        let ms_apm = plan
+            .material
+            .ms_field
+            .clone()
+            .unwrap_or_else(|| vec![plan.material.saturation_magnetisation; cell_count]);
+        let cell_volume_m3 = plan.cell_size.iter().product::<f64>();
+        let volumes_m3 = (0..cell_count)
+            .map(|index| {
+                if plan
+                    .active_mask
+                    .as_ref()
+                    .is_none_or(|mask| mask.get(index).copied().unwrap_or(false))
+                {
+                    cell_volume_m3
+                } else {
+                    0.0
+                }
+            })
+            .collect::<Vec<_>>();
 
         while state.accepted_steps < direct_minimizer_step_budget(control) {
             if let Some(live) = live.as_mut() {
@@ -201,7 +286,7 @@ pub(crate) fn execute_cuda_fdm(
                         None
                     };
                     let action = (live.on_step)(StepUpdate {
-                        coupled_checkpoint: None,
+                        coupled_checkpoint: final_frozen_checkpoint.clone(),
                         stats: current_stats.clone(),
                         grid: live.grid,
                         fem_mesh_generation_id: None,
@@ -238,7 +323,11 @@ pub(crate) fn execute_cuda_fdm(
                         g_norm_sq,
                         &state.magnetization,
                         &state.gradient,
+                        &state.h_eff,
                         trial_lambda,
+                        &ms_apm,
+                        &volumes_m3,
+                        None,
                         |trial| {
                             backend.upload_magnetization(trial)?;
                             backend.refresh_observables()?;
@@ -262,6 +351,8 @@ pub(crate) fn execute_cuda_fdm(
                         &m_trial,
                         &state.gradient,
                         &g_new,
+                        &ms_apm,
+                        &volumes_m3,
                         state.use_bb1,
                         state.reset_consecutive,
                     );
@@ -277,6 +368,8 @@ pub(crate) fn execute_cuda_fdm(
                     let p_dot_g = nonlinear_cg_descent_direction_dot(
                         &mut state.search_direction,
                         &state.gradient,
+                        &ms_apm,
+                        &volumes_m3,
                     );
                     trial_lambda = nonlinear_cg_initial_step_size(&state.search_direction);
 
@@ -284,8 +377,12 @@ pub(crate) fn execute_cuda_fdm(
                         state.energy_j,
                         p_dot_g,
                         &state.magnetization,
+                        &state.h_eff,
                         &state.search_direction,
                         trial_lambda,
+                        &ms_apm,
+                        &volumes_m3,
+                        None,
                         |trial| {
                             backend.upload_magnetization(trial)?;
                             backend.refresh_observables()?;
@@ -308,7 +405,8 @@ pub(crate) fn execute_cuda_fdm(
                         &state.gradient,
                         &g_new,
                         &state.search_direction,
-                        g_norm_sq,
+                        &ms_apm,
+                        &volumes_m3,
                         state.accepted_steps + 1,
                     );
                     state.h_eff = h_eff_new;
@@ -321,6 +419,14 @@ pub(crate) fn execute_cuda_fdm(
             state.magnetization = m_trial;
             state.energy_j = trial_stats.e_total;
             state.accepted_steps += 1;
+            final_frozen_checkpoint = frozen_spins_checkpoint_value(
+                plan,
+                frozen_spins_state.as_ref(),
+                &state.magnetization,
+                state.accepted_steps,
+                0.0,
+                trial_lambda,
+            )?;
 
             let mut accepted_stats = trial_stats.clone();
             let torque_apm = apply_direct_minimizer_step_metrics(
@@ -366,7 +472,7 @@ pub(crate) fn execute_cuda_fdm(
                         None
                     };
                     let action = (live.on_step)(StepUpdate {
-                        coupled_checkpoint: None,
+                        coupled_checkpoint: final_frozen_checkpoint.clone(),
                         stats: current_stats.clone(),
                         grid: live.grid,
                         fem_mesh_generation_id: None,
@@ -397,6 +503,17 @@ pub(crate) fn execute_cuda_fdm(
             current_time = stats.time;
             latest_stats = Some(stats.clone());
             current_stats = stats.clone();
+            if live.is_some() {
+                let frozen_magnetization = backend.copy_m(cell_count)?;
+                final_frozen_checkpoint = frozen_spins_checkpoint_value(
+                    plan,
+                    frozen_spins_state.as_ref(),
+                    &frozen_magnetization,
+                    stats.step,
+                    stats.time,
+                    stats.dt,
+                )?;
+            }
             let due_scalar_row = scalar_row_due(&scalar_schedules, stats.time);
             let mut sampled_stats = stats.clone();
             let mut magnetization_cache: Option<Vec<[f64; 3]>> = None;
@@ -461,7 +578,7 @@ pub(crate) fn execute_cuda_fdm(
                     None
                 };
                 let action = (live.on_step)(StepUpdate {
-                    coupled_checkpoint: None,
+                    coupled_checkpoint: final_frozen_checkpoint.clone(),
                     stats: sampled_stats.clone(),
                     grid: live.grid,
                     fem_mesh_generation_id: None,
@@ -527,6 +644,14 @@ pub(crate) fn execute_cuda_fdm(
     )?;
 
     let final_magnetization = backend.copy_m(cell_count)?;
+    final_frozen_checkpoint = frozen_spins_checkpoint_value(
+        plan,
+        frozen_spins_state.as_ref(),
+        &final_magnetization,
+        latest_stats.as_ref().map_or(0, |stats| stats.step),
+        latest_stats.as_ref().map_or(0.0, |stats| stats.time),
+        latest_stats.as_ref().map_or(0.0, |stats| stats.dt),
+    )?;
     if let Some(session) = gpu_transport.as_mut() {
         backend.unbind_gpu_transport()?;
         session.close().map_err(|error| RunError {
@@ -552,6 +677,19 @@ pub(crate) fn execute_cuda_fdm(
         },
     );
 
+    let auxiliary_artifacts = final_frozen_checkpoint
+        .map(|checkpoint| {
+            serde_json::to_vec_pretty(&checkpoint)
+                .map(|bytes| crate::types::AuxiliaryArtifact {
+                    relative_path: "constraints/frozen_spins_checkpoint.v1.json".to_string(),
+                    bytes,
+                })
+                .map_err(|error| RunError {
+                    message: format!("serializing CUDA Frozen Spins checkpoint artifact: {error}"),
+                })
+        })
+        .transpose()?;
+
     Ok(ExecutedRun {
         result: RunResult {
             status,
@@ -562,7 +700,7 @@ pub(crate) fn execute_cuda_fdm(
         initial_magnetization,
         field_snapshots,
         field_snapshot_count,
-        auxiliary_artifacts: Vec::new(),
+        auxiliary_artifacts: auxiliary_artifacts.into_iter().collect(),
         provenance,
     })
 }

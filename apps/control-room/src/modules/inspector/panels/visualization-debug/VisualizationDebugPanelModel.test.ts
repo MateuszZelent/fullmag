@@ -348,6 +348,72 @@ describe("VisualizationDebugPanelModel", () => {
     expect(model.state).toBe(expected);
   });
 
+  it("preserves authoritative session and solver lifecycle resources with their revisions", () => {
+    const model = buildVisualizationDebugPanelModel({
+      activeViewportMainModuleId: "viewport-3d",
+      clientAcks: null,
+      diagnostics: [],
+      fieldMetaByQueryKey: new Map(),
+      lifecycleEvidence: {
+        session: {
+          lifecycle: {
+            commandability: "allowed",
+            connectivity: "connected",
+            session_resource: "active",
+            solver: "running",
+          },
+          resourceRevision: 17,
+          resourceStatus: "ready",
+          session: {
+            created_at: "2026-08-20T18:00:00Z",
+            name: "debug-session",
+            session_epoch: "epoch-17",
+            session_id: "session-17",
+            workspace_root: "/workspace",
+          },
+          solverSummary: { state: "running" },
+        },
+        solver: {
+          resourceRevision: 23,
+          resourceStatus: "ready",
+          status: {
+            can_accept_commands: false,
+            is_busy: true,
+            revision: 23,
+            run_id: "run-4",
+            runtime_state: "running",
+            runtime_status_code: "integrating",
+            runtime_status_kind: "active",
+            session_status: "running",
+            stage_kind: "relax",
+            warnings: [],
+          },
+        },
+        source: "http-v2-session-and-solver-resources",
+      },
+      selection: selection({ kind: "object", objectId: "magnet" }),
+      snapshots: [snapshot()],
+    });
+
+    expect(model.mutationEvidence.lifecycle).toMatchObject({
+      source: "http-v2-session-and-solver-resources",
+      session: {
+        resourceRevision: 17,
+        resourceStatus: "ready",
+        session: { session_epoch: "epoch-17", session_id: "session-17" },
+      },
+      solver: {
+        resourceRevision: 23,
+        resourceStatus: "ready",
+        status: {
+          run_id: "run-4",
+          runtime_state: "running",
+          runtime_status_code: "integrating",
+        },
+      },
+    });
+  });
+
   it("keeps two viewports and two carriers grouped without merging identities", () => {
     const firstKey = `${VECTOR_PATH}?component=x&scope_kind=part&scope_id=a&snapshot_id=s1&stage_id=stage-a&view=real`;
     const secondKey = `${VECTOR_PATH}?component=y&scope_kind=part&scope_id=b&snapshot_id=s2&stage_id=stage-b&view=imaginary`;

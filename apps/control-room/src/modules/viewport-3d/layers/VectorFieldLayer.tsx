@@ -24,6 +24,7 @@ import {
 } from "three";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import type { Viewport3DDerivedBufferRetainHandle } from "../build-engine/cache/viewport3dDerivedBufferCache";
 import { createViewport3DGpuUploadManager } from "../build-engine/gpu/viewport3dGpuUploadManager";
@@ -1110,6 +1111,7 @@ export function VectorFieldLayer({
   style,
   materialProfile,
   renderOnTop = false,
+  sessionIdentity,
   tracker,
 }: {
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
@@ -1122,6 +1124,7 @@ export function VectorFieldLayer({
   materialProfile?: Viewport3DMaterialProfile["glyphs"];
   opacity?: number;
   renderOnTop?: boolean;
+  sessionIdentity?: SessionResourceIdentity | null;
   segments: Float32Array | null;
   fieldBufferId?: string | null;
   style?: VectorFieldLayerVectorStyle;
@@ -1184,6 +1187,7 @@ export function VectorFieldLayer({
     glyphCount: number;
     ownerId: string;
     resourceKey: string | null;
+    sessionIdentity: SessionResourceIdentity | null | undefined;
   } | null>(null);
   const adoptionOwnerId = `vector-field:${useId()}`;
   const recordAdoption = useCallback(
@@ -1198,6 +1202,7 @@ export function VectorFieldLayer({
         glyphCount,
         ownerId: adoptionOwnerId,
         resourceKey: glyphBuild?.sourceResourceKey ?? null,
+        sessionIdentity,
       };
       recordVectorFieldAdoption({
         buildKey: sourceVectorBuildKey,
@@ -1209,9 +1214,10 @@ export function VectorFieldLayer({
         ownerId: adoptionOwnerId,
         resourceKey: glyphBuild?.sourceResourceKey ?? null,
         registry: adoptionRegistry,
+        sessionIdentity,
       });
     },
-    [adoptionOwnerId, adoptionRegistry, carrierId, fieldBufferId, glyphBuild, glyphCount],
+    [adoptionOwnerId, adoptionRegistry, carrierId, fieldBufferId, glyphBuild, glyphCount, sessionIdentity],
   );
   useEffect(() => {
     if (!adoptionRegistry || !carrierId) return;
@@ -1223,6 +1229,7 @@ export function VectorFieldLayer({
         carrierId,
         ownerId: adoptionOwnerId,
         registry: adoptionRegistry,
+        sessionIdentity: adoption.sessionIdentity,
       });
     });
     return () => {
@@ -1303,6 +1310,7 @@ export function recordVectorFieldAdoption({
   ownerId,
   resourceKey = null,
   registry,
+  sessionIdentity,
 }: {
   buildKey: string;
   byteLength: number;
@@ -1312,6 +1320,7 @@ export function recordVectorFieldAdoption({
   ownerId?: string;
   resourceKey?: string | null;
   registry: Viewport3DRenderAdoptionRegistry;
+  sessionIdentity?: SessionResourceIdentity | null;
 }): Viewport3DRenderAdoptionIdentity {
   const adoption = vectorFieldAdoptionIdentity({
     buildKey,
@@ -1326,6 +1335,7 @@ export function recordVectorFieldAdoption({
     itemCount: glyphCount,
     ownerId,
     resourceKey: adoption.resourceKey,
+    sessionIdentity,
     vectorBuildKey: adoption.vectorBuildKey ?? buildKey,
   });
   return adoption;

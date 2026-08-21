@@ -1,4 +1,5 @@
 import type {
+  FrozenSpinsDefinition,
   LiveStatusResource,
   VisualizationStatePatch,
   VisualizationStateResource,
@@ -11,6 +12,7 @@ import type {
 } from "@/kernel/commands/commandTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
+import { MODEL_FROZEN_SPINS_PATH } from "@/kernel/api/apiPaths";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 import { resolveActiveLaneOperation } from "@/kernel/resources/useActiveLaneCapabilities";
 import { beginPlanarMonitorDraft } from "@/kernel/workspace/crossSectionWorkspace";
@@ -62,6 +64,8 @@ export const RIBBON_PHYSICS_CREATE_SPIN_TRANSPORT_COMMAND =
   "ribbon.physics.create-spin-transport";
 export const RIBBON_PHYSICS_CREATE_SPIN_INTERFACE_COMMAND =
   "ribbon.physics.create-spin-interface";
+export const RIBBON_PHYSICS_CREATE_FROZEN_SPINS_COMMAND =
+  "ribbon.physics.create-frozen-spins";
 export const RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND =
   "ribbon.cross-section.begin-draft";
 
@@ -212,6 +216,16 @@ export const RIBBON_COMMANDS: CommandContribution[] = [
     run: beginCrossSectionDraftFromCommand,
   },
   {
+    id: RIBBON_PHYSICS_CREATE_FROZEN_SPINS_COMMAND,
+    title: "Create Frozen Spins",
+    group: "ribbon-physics",
+    category: "Physics",
+    scope: "selection",
+    isEnabled: frozenSpinsCommandEnabled,
+    disabledReason: frozenSpinsCommandDisabledReason,
+    run: createFrozenSpinsFromCommand,
+  },
+  {
     id: RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
     title: "Create Global Field Drive",
     group: "ribbon-physics",
@@ -263,6 +277,129 @@ export const RIBBON_COMMANDS: CommandContribution[] = [
     run: selectPhysicsInteractionFromCommand,
   },
 ];
+
+function frozenSpinsSelection(context: CommandContext): {
+  objectId: string;
+  regionId: string | null;
+} | null {
+  const selection = context.selection?.get() as Selection | null | undefined;
+  if (!selection?.objectId) return null;
+  if (
+    selection.kind !== "object.root" &&
+    selection.kind !== "object.region"
+  ) {
+    return null;
+  }
+  if (
+    selection.ref?.type !== "scene-object" ||
+    selection.ref.objectRole !== "magnet"
+  ) {
+    return null;
+  }
+  return {
+    objectId: selection.objectId,
+    regionId:
+      selection.ref?.type === "scene-object"
+        ? selection.ref.regionId ?? null
+        : null,
+  };
+}
+
+function frozenSpinsCommandEnabled(context: CommandContext): boolean {
+  const lane = ribbonInteractionDiscretization(context);
+  return Boolean(
+    context.api &&
+      frozenSpinsSelection(context) &&
+      lane === "fdm",
+  );
+}
+
+function frozenSpinsCommandDisabledReason(
+  context: CommandContext,
+): string | null {
+  if (!context.api) return "Control Room API is not available.";
+  if (!frozenSpinsSelection(context)) {
+    return "Select a ferromagnet or one of its regions first.";
+  }
+  const lane = ribbonInteractionDiscretization(context);
+  if (lane === "unknown") {
+    return "Frozen-spins capability is unavailable while the execution lane is unresolved.";
+  }
+  return lane === "fem"
+    ? "Frozen-spins preview is unavailable until the FEM runtime publishes an exact true-DOF carrier."
+    : null;
+}
+
+async function createFrozenSpinsFromCommand(
+  context: CommandContext,
+): Promise<CommandResult> {
+  const reason = frozenSpinsCommandDisabledReason(context);
+  if (reason || !context.api) {
+    return { message: reason ?? "Frozen-spins capability is unavailable.", status: "failed" };
+  }
+  const target = frozenSpinsSelection(context);
+  if (!target) {
+    return { message: "Select a ferromagnet or region first.", status: "failed" };
+  }
+  const collection = await context.api.model.frozenSpins.list();
+  const id = nextFrozenSpinsId(collection.definitions.map((entry) => entry.id));
+  const definition: FrozenSpinsDefinition = {
+    activation: { kind: "all_stages" },
+    empty_selection: "error",
+    enabled: true,
+    id,
+    inactive_selection: "warn_and_intersect",
+    membership: { kind: "static" },
+    name: target.regionId ? `Frozen spins · ${target.regionId}` : "Frozen spins",
+    reference: { kind: "capture_current_at_activation" },
+    schema_version: "frozen_spins.v1",
+    selector: target.regionId
+      ? {
+          kind: "in_region",
+          object_id: target.objectId,
+          region_id: target.regionId,
+        }
+      : { kind: "in_object", object_id: target.objectId },
+  };
+  const created = await context.api.model.frozenSpins.create({
+    definition,
+    expected_revision: collection.revision,
+  });
+  context.resources?.invalidate(
+    MODEL_FROZEN_SPINS_PATH,
+    created.revision,
+  );
+  const nodeParent = target.regionId
+    ? `model:object:${target.objectId}:regions:${target.regionId}`
+    : `model:object:${target.objectId}`;
+  const nodeId = `${nodeParent}:frozen-spins:${encodeURIComponent(id)}`;
+  context.selection?.set(
+    {
+      kind: "object.frozen-spins",
+      label: "Frozen Spins",
+      nodeId,
+      objectId: target.objectId,
+      ref: {
+        constraintId: id,
+        kind: "object.frozen-spins",
+        nodeId,
+        objectId: target.objectId,
+        ...(target.regionId ? { regionId: target.regionId } : {}),
+        type: "frozen-spins",
+      },
+    },
+    context.source,
+  );
+  context.layout?.setPanelVisible("right", true);
+  return { status: "completed" };
+}
+
+function nextFrozenSpinsId(existing: readonly string[]): string {
+  const used = new Set(existing);
+  let index = 1;
+  while (used.has(`frozen-spins-${index}`)) index += 1;
+  return `frozen-spins-${index}`;
+}
 
 async function patchVisualizationStateFromCommand(
   context: CommandContext,
@@ -700,15 +837,16 @@ async function patchAirboxVisualization(
     return { status: "completed" };
   }
 
+  const receipt = await patchVisualizationState(context, statePatch);
   const revision = state?.revision;
-  if (typeof revision === "number") {
+  if (typeof revision === "number" && receipt) {
     context.visualization?.patchTargetPending(
       AIRBOX_VISUALIZATION_TARGET,
       persistentVisualizationTargetPatch(patch),
       revision,
+      receipt.transactionId,
     );
   }
-  await patchVisualizationState(context, statePatch);
   return { status: "completed" };
 }
 
@@ -716,19 +854,20 @@ async function patchVisualizationState(
   context: CommandContext,
   patch: VisualizationStatePatch,
   options: { flush?: boolean } = {},
-): Promise<void> {
+): Promise<{ transactionId: string } | null> {
   if (context.visualizationSync) {
-    context.visualizationSync.queuePatch(patch);
+    const receipt = context.visualizationSync.queuePatch(patch);
     if (options.flush) {
       await context.visualizationSync.flushNow();
     }
-    return;
+    return receipt;
   }
 
   const state = await context.api?.visualization.patch(patch);
   if (state) {
     invalidateVisualizationState(context, state);
   }
+  return null;
 }
 
 function invalidateVisualizationState(

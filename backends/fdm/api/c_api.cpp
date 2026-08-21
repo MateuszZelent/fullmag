@@ -285,6 +285,13 @@ int fullmag_fdm_is_available(void) {
 #endif
 }
 
+uint64_t fullmag_fdm_capability_bits_v1(void) {
+    // The single-grid CUDA integrators consume a device-resident Frozen Spins
+    // mask after all physical RHS sources are assembled. Multilayer plans are
+    // still rejected by the planner and do not advertise this lane.
+    return FULLMAG_FDM_CAPABILITY_FROZEN_SPINS_V1;
+}
+
 /* ── Create ── */
 
 fullmag_fdm_backend *fullmag_fdm_backend_create(
@@ -295,6 +302,21 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
 
     auto *ctx = new (std::nothrow) Context();
     if (!ctx) return nullptr;
+    const bool has_frozen_payload = plan->frozen_mask != nullptr
+        || plan->frozen_mask_len != 0
+        || plan->frozen_reference_xyz != nullptr
+        || plan->frozen_reference_len != 0;
+    if (has_frozen_payload) {
+        const uint64_t cell_count = grid_cell_count(plan->grid);
+        if (plan->frozen_mask == nullptr || plan->frozen_reference_xyz == nullptr
+            || plan->frozen_mask_len != cell_count
+            || plan->frozen_reference_len != 3 * cell_count)
+        {
+            ctx->last_error =
+                "frozen_spins_cuda_abi_invalid: expected dense mask[cell_count] and f64 reference[3*cell_count]";
+            return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+        }
+    }
     if (plan->precision == FULLMAG_FDM_PRECISION_SINGLE
         && plan->boundary_correction != FULLMAG_FDM_BOUNDARY_NONE)
     {
@@ -338,6 +360,7 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     ctx->enable_demag = plan->enable_demag != 0;
     ctx->has_external_field = plan->has_external_field != 0;
     ctx->has_active_mask = plan->active_mask != nullptr;
+    ctx->has_frozen_mask = plan->frozen_mask != nullptr;
     ctx->has_region_mask = plan->region_mask != nullptr;
     ctx->has_exchange_lut = ctx->has_region_mask; // always build LUT when regions are present
     ctx->has_demag_tensor_kernel = plan->demag_kernel_spectrum_len != 0;
@@ -716,6 +739,16 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
 
     if (ctx->has_active_mask &&
         !context_upload_active_mask(*ctx, plan->active_mask, plan->active_mask_len))
+    {
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    if (ctx->has_frozen_mask &&
+        !context_upload_frozen_spins(
+            *ctx,
+            plan->frozen_mask,
+            plan->frozen_mask_len,
+            plan->frozen_reference_xyz,
+            plan->frozen_reference_len))
     {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }

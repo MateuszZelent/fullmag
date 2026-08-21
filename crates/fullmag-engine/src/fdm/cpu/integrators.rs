@@ -3,7 +3,7 @@
 //! All methods are `impl ExchangeLlgProblem` — Rust allows splitting impls
 //! across multiple files within the same crate.
 
-use crate::vector::{add, norm, normalized, scale};
+use crate::vector::{add, cross, norm, normalized, scale};
 use crate::{
     CoupledImexArk2Stage, CoupledImexArk2Tableau, EvaluationRequest, ExchangeLlgProblem,
     ExchangeLlgState, ExchangeLlgStateSoA, ExternalStageTerms, FftWorkspace, IntegratorBuffers,
@@ -125,12 +125,14 @@ impl ExchangeLlgProblem {
             &mut bufs.h_eff[..n],
             &mut bufs.k[0][..n],
             terms0,
+            self.frozen_spins(),
             |m, h, rhs| self.llg_rhs_from_fields_with_direct_torques_into(m, h, rhs),
         )?;
 
         for i in 0..n {
             bufs.m_stage[i] = normalized(add(bufs.m0[i], scale(bufs.k[0][i], GAMMA * dt)))?;
         }
+        self.restore_frozen_reference(&mut bufs.m_stage[..n]);
         self.effective_field_into_ws_at_time(
             &bufs.m_stage[..n],
             ws,
@@ -147,6 +149,7 @@ impl ExchangeLlgProblem {
             &mut bufs.h_eff[..n],
             &mut bufs.k[1][..n],
             terms1,
+            self.frozen_spins(),
             |m, h, rhs| self.llg_rhs_from_fields_with_direct_torques_into(m, h, rhs),
         )?;
 
@@ -159,6 +162,7 @@ impl ExchangeLlgProblem {
                 ),
             ))?;
         }
+        self.restore_frozen_reference(&mut bufs.delta[..n]);
         self.effective_field_into_ws_at_time(&bufs.delta[..n], ws, &mut bufs.h_eff[..n], t0 + dt);
         let terms2 = external_terms(
             &bufs.delta[..n],
@@ -170,6 +174,7 @@ impl ExchangeLlgProblem {
             &mut bufs.h_eff[..n],
             &mut bufs.k[2][..n],
             terms2,
+            self.frozen_spins(),
             |m, h, rhs| self.llg_rhs_from_fields_with_direct_torques_into(m, h, rhs),
         )?;
 
@@ -182,6 +187,7 @@ impl ExchangeLlgProblem {
                 ),
             ))?;
         }
+        self.restore_frozen_reference(&mut bufs.delta[..n]);
         let mut eval = self.compute_step_observables_at_time(
             &bufs.delta[..n],
             ws,
@@ -197,11 +203,12 @@ impl ExchangeLlgProblem {
             CoupledImexArk2Stage::AcceptedObservation,
         )?;
         let dynamic_field = final_terms.additional_field_apm.clone();
-        apply_external_stage_terms(
+        let final_reductions = apply_external_stage_terms(
             &bufs.delta[..n],
             &mut bufs.h_eff[..n],
             &mut bufs.rhs[..n],
             final_terms,
+            self.frozen_spins(),
             |m, h, rhs| self.llg_rhs_from_fields_with_direct_torques_into(m, h, rhs),
         )?;
         let dynamic_external_energy =
@@ -212,16 +219,12 @@ impl ExchangeLlgProblem {
             .iter()
             .map(|value| norm(*value))
             .fold(0.0, f64::max);
-        eval.max_rhs_amplitude = bufs.rhs[..n]
-            .iter()
-            .map(|value| norm(*value))
-            .fold(0.0, f64::max);
-        eval.max_torque_Apm = bufs.delta[..n]
-            .iter()
-            .zip(&bufs.h_eff[..n])
-            .map(|(m, h)| norm(crate::vector::cross(*m, *h)))
-            .fold(0.0, f64::max);
+        eval.max_rhs_amplitude = final_reductions.max_rhs_free_amplitude;
+        eval.max_rhs_all_amplitude = final_reductions.max_rhs_all_amplitude;
+        eval.max_torque_Apm = final_reductions.max_torque_free_apm;
+        eval.max_torque_all_Apm = final_reductions.max_torque_all_apm;
         state.magnetization[..n].copy_from_slice(&bufs.delta[..n]);
+        self.restore_frozen_reference(&mut state.magnetization[..n]);
         state.time_seconds = t0 + dt;
         Ok(eval.into_step_report(state.time_seconds, dt, false))
     }
@@ -296,12 +299,14 @@ impl ExchangeLlgProblem {
             &mut bufs.h_eff[..n],
             &mut bufs.k[0][..n],
             terms0,
+            self.frozen_spins(),
             |m, h, rhs| self.llg_rhs_from_fields_with_direct_torques_into(m, h, rhs),
         )?;
 
         for i in 0..n {
             bufs.m_stage[i] = normalized(add(bufs.m0[i], scale(bufs.k[0][i], dt)))?;
         }
+        self.restore_frozen_reference(&mut bufs.m_stage[..n]);
 
         self.effective_field_into_ws_at_time(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n], t0 + dt);
         let terms1 = external_terms(&bufs.m_stage[..n], t0 + dt, None)?;
@@ -310,6 +315,7 @@ impl ExchangeLlgProblem {
             &mut bufs.h_eff[..n],
             &mut bufs.k[1][..n],
             terms1,
+            self.frozen_spins(),
             |m, h, rhs| self.llg_rhs_from_fields_with_direct_torques_into(m, h, rhs),
         )?;
 
@@ -321,6 +327,7 @@ impl ExchangeLlgProblem {
                 scale(add(bufs.k[0][i], bufs.k[1][i]), 0.5 * dt),
             ))?;
         }
+        self.restore_frozen_reference(&mut bufs.delta[..n]);
 
         let mut eval = self.compute_step_observables_at_time(
             &bufs.delta[..n],
@@ -354,11 +361,12 @@ impl ExchangeLlgProblem {
             }),
         )?;
         let dynamic_field = final_terms.additional_field_apm.clone();
-        apply_external_stage_terms(
+        let final_reductions = apply_external_stage_terms(
             &bufs.delta[..n],
             &mut bufs.h_eff[..n],
             &mut bufs.rhs[..n],
             final_terms,
+            self.frozen_spins(),
             |m, h, rhs| self.llg_rhs_from_fields_with_direct_torques_into(m, h, rhs),
         )?;
 
@@ -370,17 +378,13 @@ impl ExchangeLlgProblem {
             .iter()
             .map(|value| norm(*value))
             .fold(0.0, f64::max);
-        eval.max_rhs_amplitude = bufs.rhs[..n]
-            .iter()
-            .map(|value| norm(*value))
-            .fold(0.0, f64::max);
-        eval.max_torque_Apm = bufs.delta[..n]
-            .iter()
-            .zip(&bufs.h_eff[..n])
-            .map(|(m, h)| norm(crate::vector::cross(*m, *h)))
-            .fold(0.0, f64::max);
+        eval.max_rhs_amplitude = final_reductions.max_rhs_free_amplitude;
+        eval.max_rhs_all_amplitude = final_reductions.max_rhs_all_amplitude;
+        eval.max_torque_Apm = final_reductions.max_torque_free_apm;
+        eval.max_torque_all_Apm = final_reductions.max_torque_all_apm;
 
         state.magnetization[..n].copy_from_slice(&bufs.delta[..n]);
+        self.restore_frozen_reference(&mut state.magnetization[..n]);
         state.time_seconds = t0 + dt;
         self.advance_thermal_step();
         Ok(eval.into_step_report(state.time_seconds, dt, false))
@@ -428,6 +432,7 @@ impl ExchangeLlgProblem {
         }
 
         // k2 = f(t+dt, predicted)
+        self.restore_frozen_reference(&mut bufs.m_stage[..n]);
         self.effective_field_into_ws_at_time(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n], t0 + dt);
         self.llg_rhs_from_fields_with_direct_torques_into(
             &bufs.m_stage[..n],
@@ -457,6 +462,7 @@ impl ExchangeLlgProblem {
                 mag[i] = normalized(add(m0[i], scale(add(k0[i], k1[i]), 0.5 * dt)))?;
             }
         }
+        self.restore_frozen_reference(&mut state.magnetization[..n]);
         state.time_seconds += dt;
 
         let eval = self.compute_step_observables_at_time(
@@ -566,6 +572,7 @@ impl ExchangeLlgProblem {
                 stage[i] = normalized(add(m0[i], scale(kj[i], 0.5 * dt)))?;
             }
         }
+        self.restore_frozen_reference(&mut bufs.m_stage[..n]);
         self.effective_field_into_ws_at_time(
             &bufs.m_stage[..n],
             ws,
@@ -595,6 +602,7 @@ impl ExchangeLlgProblem {
                 stage[i] = normalized(add(m0[i], scale(kj[i], 0.5 * dt)))?;
             }
         }
+        self.restore_frozen_reference(&mut bufs.m_stage[..n]);
         self.effective_field_into_ws_at_time(
             &bufs.m_stage[..n],
             ws,
@@ -624,6 +632,7 @@ impl ExchangeLlgProblem {
                 stage[i] = normalized(add(m0[i], scale(kj[i], dt)))?;
             }
         }
+        self.restore_frozen_reference(&mut bufs.m_stage[..n]);
         self.effective_field_into_ws_at_time(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n], t0 + dt);
         self.llg_rhs_from_fields_with_direct_torques_into(
             &bufs.m_stage[..n],
@@ -665,6 +674,7 @@ impl ExchangeLlgProblem {
                 ))?;
             }
         }
+        self.restore_frozen_reference(&mut state.magnetization[..n]);
         state.time_seconds += dt;
 
         let eval = self.compute_step_observables_at_time(
@@ -849,6 +859,7 @@ impl ExchangeLlgProblem {
                     stage[i] = normalized(add(m0[i], scale(kj[i], f)))?;
                 }
             }
+            self.restore_frozen_reference(&mut bufs.m_stage[..n]);
             self.effective_field_into_ws_at_time(
                 &bufs.m_stage[..n],
                 ws,
@@ -879,6 +890,7 @@ impl ExchangeLlgProblem {
                     stage[i] = normalized(add(m0[i], scale(kj[i], f)))?;
                 }
             }
+            self.restore_frozen_reference(&mut bufs.m_stage[..n]);
             self.effective_field_into_ws_at_time(
                 &bufs.m_stage[..n],
                 ws,
@@ -927,6 +939,7 @@ impl ExchangeLlgProblem {
             }
 
             // k4 for error estimate
+            self.restore_frozen_reference(&mut bufs.m_stage[..n]);
             self.effective_field_into_ws_at_time(
                 &bufs.m_stage[..n],
                 ws,
@@ -956,6 +969,7 @@ impl ExchangeLlgProblem {
 
             if !self.dynamics.adaptive_enabled || error <= thr {
                 state.magnetization[..n].copy_from_slice(&bufs.m_stage[..n]);
+                self.restore_frozen_reference(&mut state.magnetization[..n]);
                 state.time_seconds += dt;
                 let ratio = (cfg.headroom * (thr / error.max(1e-30)).powf(1.0 / 3.0))
                     .min(cfg.growth_limit)
@@ -1199,6 +1213,7 @@ impl ExchangeLlgProblem {
                     stage[i] = normalized(add(m0[i], scale(k0[i], f)))?;
                 }
             }
+            self.restore_frozen_reference(&mut bufs.m_stage[..n]);
             self.effective_field_into_ws_at_time(
                 &bufs.m_stage[..n],
                 ws,
@@ -1235,6 +1250,7 @@ impl ExchangeLlgProblem {
                     ))?;
                 }
             }
+            self.restore_frozen_reference(&mut bufs.m_stage[..n]);
             self.effective_field_into_ws_at_time(
                 &bufs.m_stage[..n],
                 ws,
@@ -1277,6 +1293,7 @@ impl ExchangeLlgProblem {
                     ))?;
                 }
             }
+            self.restore_frozen_reference(&mut bufs.m_stage[..n]);
             self.effective_field_into_ws_at_time(
                 &bufs.m_stage[..n],
                 ws,
@@ -1330,6 +1347,7 @@ impl ExchangeLlgProblem {
                     ))?;
                 }
             }
+            self.restore_frozen_reference(&mut bufs.m_stage[..n]);
             self.effective_field_into_ws_at_time(
                 &bufs.m_stage[..n],
                 ws,
@@ -1387,6 +1405,7 @@ impl ExchangeLlgProblem {
                     ))?;
                 }
             }
+            self.restore_frozen_reference(&mut bufs.m_stage[..n]);
             self.effective_field_into_ws_at_time(
                 &bufs.m_stage[..n],
                 ws,
@@ -1443,6 +1462,7 @@ impl ExchangeLlgProblem {
             }
 
             // k7 for error estimate (FSAL) → k[6]
+            self.restore_frozen_reference(&mut bufs.m_stage[..n]);
             self.effective_field_into_ws_at_time(
                 &bufs.m_stage[..n],
                 ws,
@@ -1467,6 +1487,7 @@ impl ExchangeLlgProblem {
 
             if !self.dynamics.adaptive_enabled || error <= thr {
                 state.magnetization[..n].copy_from_slice(&bufs.m_stage[..n]);
+                self.restore_frozen_reference(&mut state.magnetization[..n]);
                 state.time_seconds += dt;
                 state.k_fsal = (!dynamic_oersted).then(|| bufs.k[6][..n].to_vec());
                 let ratio = (cfg.headroom * (thr / error.max(1e-30)).powf(0.2))
@@ -1799,6 +1820,7 @@ impl ExchangeLlgProblem {
             }
 
             // k2 = f(t+dt, predicted)
+            self.restore_frozen_reference(&mut bufs.m_stage[..n]);
             self.effective_field_into_ws_at_time(
                 &bufs.m_stage[..n],
                 ws,
@@ -1833,6 +1855,7 @@ impl ExchangeLlgProblem {
                     mag[i] = normalized(add(m0[i], scale(add(k0[i], k1[i]), 0.5 * dt)))?;
                 }
             }
+            self.restore_frozen_reference(&mut state.magnetization[..n]);
             state.time_seconds += dt;
 
             // Store RHS at accepted point for history
@@ -1895,6 +1918,7 @@ impl ExchangeLlgProblem {
         }
 
         // Evaluate RHS at predicted point → k[0]
+        self.restore_frozen_reference(&mut bufs.m_stage[..n]);
         self.effective_field_into_ws_at_time(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n], t0 + dt);
         self.llg_rhs_from_fields_with_direct_torques_into(
             &bufs.m_stage[..n],
@@ -1930,6 +1954,7 @@ impl ExchangeLlgProblem {
                 mag[i] = normalized(add(m0[i], scale(corr, dt)))?;
             }
         }
+        self.restore_frozen_reference(&mut state.magnetization[..n]);
         state.time_seconds += dt;
 
         // Push f_star (k[0]) into history
@@ -2785,7 +2810,9 @@ impl ExchangeLlgProblem {
             max_effective_field_amplitude,
             max_demag_field_amplitude,
             max_rhs_amplitude,
+            max_rhs_all_amplitude: max_rhs_amplitude,
             max_torque_Apm: max_torque_apm,
+            max_torque_all_Apm: max_torque_apm,
         }
     }
 
@@ -2815,7 +2842,9 @@ impl ExchangeLlgProblem {
             max_effective_field_amplitude,
             max_demag_field_amplitude: 0.0,
             max_rhs_amplitude,
+            max_rhs_all_amplitude: max_rhs_amplitude,
             max_torque_Apm: max_torque_apm,
+            max_torque_all_Apm: max_torque_apm,
         }
     }
 
@@ -2925,13 +2954,24 @@ impl ExchangeLlgProblem {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct FinalRhsReductions {
+    max_rhs_free_amplitude: f64,
+    max_rhs_all_amplitude: f64,
+    max_torque_free_apm: f64,
+    max_torque_all_apm: f64,
+}
+
+/// One coupled-stage RHS owner: assemble all field and direct contributions,
+/// then apply the frozen-spin final mask exactly once.
 fn apply_external_stage_terms<F>(
     magnetization: &[Vector3],
     field: &mut [Vector3],
     rhs: &mut [Vector3],
     terms: ExternalStageTerms,
+    frozen_spins: Option<&crate::FrozenSpinsState>,
     llg_rhs: F,
-) -> Result<()>
+) -> Result<FinalRhsReductions>
 where
     F: FnOnce(&[Vector3], &[Vector3], &mut [Vector3]),
 {
@@ -2959,7 +2999,27 @@ where
     for (value, direct) in rhs.iter_mut().zip(&terms.direct_torque_per_s) {
         *value = add(*value, *direct);
     }
-    Ok(())
+    let max_rhs_all_amplitude = rhs.iter().map(|value| norm(*value)).fold(0.0, f64::max);
+    let max_torque_all_apm = magnetization
+        .iter()
+        .zip(field.iter())
+        .map(|(m, h)| norm(cross(*m, *h)))
+        .fold(0.0, f64::max);
+    let (max_rhs_free_amplitude, max_torque_free_apm) = if let Some(frozen) = frozen_spins {
+        frozen.mask_final_rhs(rhs);
+        (
+            frozen.max_norm_free(rhs),
+            frozen.max_cross_norm_free(magnetization, field),
+        )
+    } else {
+        (max_rhs_all_amplitude, max_torque_all_apm)
+    };
+    Ok(FinalRhsReductions {
+        max_rhs_free_amplitude,
+        max_rhs_all_amplitude,
+        max_torque_free_apm,
+        max_torque_all_apm,
+    })
 }
 
 fn max_norm_soa(field: &VectorFieldSoA) -> f64 {

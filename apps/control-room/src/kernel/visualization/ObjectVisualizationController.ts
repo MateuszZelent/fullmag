@@ -128,8 +128,12 @@ export interface ObjectVisualizationSnapshot {
 
 export interface PendingVisualizationTargetPatch {
   baseRevision: number;
+  fieldTransactionIds?: Partial<
+    Record<keyof VisualizationStoredTargetPatch, string>
+  >;
   patch: VisualizationStoredTargetPatch;
   target: VisualizationTargetRef;
+  transactionId: string;
 }
 
 export interface ResolvedTargetVisualization {
@@ -704,6 +708,7 @@ export class ObjectVisualizationController {
     target: VisualizationTargetRef,
     patch: VisualizationTargetPatch,
     baseRevision: number,
+    transactionId: string,
   ): void {
     const key = visualizationTargetKey(target);
     const current = this.pendingOverrides.get(key);
@@ -716,15 +721,26 @@ export class ObjectVisualizationController {
     // the canonical `surfaceColorSource` instead. `renderMode` was already
     // lowered to pass flags by normalizePatch above.
     delete nextPatch.shaderColorMode;
+    const fieldTransactionIds = { ...current?.fieldTransactionIds };
+    for (const field of Object.keys(nextPatch) as Array<
+      keyof VisualizationStoredTargetPatch
+    >) {
+      if (!Object.is(current?.patch[field], nextPatch[field])) {
+        fieldTransactionIds[field] = transactionId;
+      }
+    }
     const next: PendingVisualizationTargetPatch = {
       baseRevision,
+      fieldTransactionIds,
       patch: nextPatch,
       target,
+      transactionId,
     };
 
     if (
       current &&
       current.baseRevision === next.baseRevision &&
+      current.transactionId === next.transactionId &&
       samePatch(current.patch, next.patch)
     ) {
       return;
@@ -734,38 +750,95 @@ export class ObjectVisualizationController {
     this.bump();
   }
 
-  acknowledgePendingTargetPatches(state: VisualizationStateResource): void {
+  acknowledgePendingTargetPatches(
+    state: VisualizationStateResource,
+    transactionIds: readonly string[] = [],
+  ): void {
+    const acknowledged = new Set(transactionIds);
     let changed = false;
     for (const [key, pending] of this.pendingOverrides) {
       const persistedOverride = resolveVisualizationStateTargetOverride(
         state,
         pending.target,
       );
+      const acknowledgedPatch = Object.fromEntries(
+        Object.entries(pending.patch).filter(([field]) =>
+          transactionIds.length === 0 ||
+          acknowledged.has(pending.fieldTransactionIds?.[field as keyof VisualizationStoredTargetPatch] ?? pending.transactionId),
+        ),
+      ) as VisualizationStoredTargetPatch;
       if (
         state.revision > pending.baseRevision &&
         persistedOverride &&
-        visualizationTargetPatchSatisfiesPatch(persistedOverride, pending.patch)
+        Object.keys(acknowledgedPatch).length > 0 &&
+        visualizationTargetPatchSatisfiesPatch(persistedOverride, acknowledgedPatch)
       ) {
         const committedOverride = {
           ...(this.overrides.get(key) ?? {}),
           ...persistedOverride,
         };
         this.overrides.set(key, committedOverride);
-        this.pendingOverrides.delete(key);
+        const remainingPatch = Object.fromEntries(
+          Object.entries(pending.patch).filter(
+            ([field]) => !(field in acknowledgedPatch),
+          ),
+        ) as VisualizationStoredTargetPatch;
+        if (Object.keys(remainingPatch).length === 0) {
+          this.pendingOverrides.delete(key);
+        } else {
+          const remainingFieldTransactionIds = Object.fromEntries(
+            Object.entries(pending.fieldTransactionIds ?? {}).filter(([field]) => field in remainingPatch),
+          ) as Partial<Record<keyof VisualizationStoredTargetPatch, string>>;
+          this.pendingOverrides.set(key, {
+            ...pending,
+            fieldTransactionIds: remainingFieldTransactionIds,
+            patch: remainingPatch,
+            transactionId: Object.values(remainingFieldTransactionIds)[0] ?? pending.transactionId,
+          });
+        }
         changed = true;
       }
     }
     if (changed) this.bump();
   }
 
-  rejectPendingTargetPatches(targetIds: readonly string[]): void {
+  rejectPendingTargetPatches(
+    targetIds: readonly string[],
+    transactionIds: readonly string[] = [],
+  ): void {
     if (targetIds.length === 0 || this.pendingOverrides.size === 0) return;
 
     const rejected = new Set(targetIds);
+    const rejectedTransactions = new Set(transactionIds);
     let changed = false;
-    for (const [key] of this.pendingOverrides) {
+    for (const [key, pending] of this.pendingOverrides) {
       if (!rejected.has(key)) continue;
-      this.pendingOverrides.delete(key);
+      if (transactionIds.length === 0) {
+        this.pendingOverrides.delete(key);
+        changed = true;
+        continue;
+      }
+      const remainingPatch = Object.fromEntries(
+        Object.entries(pending.patch).filter(([field]) => {
+          const transactionId =
+            pending.fieldTransactionIds?.[field as keyof VisualizationStoredTargetPatch] ??
+            pending.transactionId;
+          return !rejectedTransactions.has(transactionId);
+        }),
+      ) as VisualizationStoredTargetPatch;
+      if (Object.keys(remainingPatch).length === 0) {
+        this.pendingOverrides.delete(key);
+      } else {
+        const remainingFieldTransactionIds = Object.fromEntries(
+          Object.entries(pending.fieldTransactionIds ?? {}).filter(([field]) => field in remainingPatch),
+        ) as Partial<Record<keyof VisualizationStoredTargetPatch, string>>;
+        this.pendingOverrides.set(key, {
+          ...pending,
+          fieldTransactionIds: remainingFieldTransactionIds,
+          patch: remainingPatch,
+          transactionId: Object.values(remainingFieldTransactionIds)[0] ?? pending.transactionId,
+        });
+      }
       changed = true;
     }
     if (changed) this.bump();
@@ -2283,6 +2356,12 @@ export function resolveVisualizationTargetFromSelection(
   }
 
   if (selection.objectId && selection.ref?.type === "scene-object" && selection.ref.regionId) {
+    if (
+      canonicalPublicVisualizationTargetId(selection.ref.visualizationTargetId) ===
+      AIRBOX_VISUALIZATION_TARGET.id
+    ) {
+      return AIRBOX_VISUALIZATION_TARGET;
+    }
     return {
       id: selection.ref.visualizationTargetId,
       kind: "region",
@@ -2291,11 +2370,18 @@ export function resolveVisualizationTargetFromSelection(
   }
 
   if (selection.objectId) {
+    const objectTargetId =
+      selection.ref?.type === "scene-object"
+        ? selection.ref.visualizationTargetId
+        : visualizationTargetIdForSceneObject(selection.objectId);
+    if (
+      canonicalPublicVisualizationTargetId(objectTargetId) ===
+      AIRBOX_VISUALIZATION_TARGET.id
+    ) {
+      return AIRBOX_VISUALIZATION_TARGET;
+    }
     return {
-      id:
-        selection.ref?.type === "scene-object"
-          ? selection.ref.visualizationTargetId
-          : visualizationTargetIdForSceneObject(selection.objectId),
+      id: objectTargetId,
       kind: "object",
       label: selection.label,
     };

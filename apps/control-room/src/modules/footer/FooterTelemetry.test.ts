@@ -54,6 +54,12 @@ const status: LiveStatusResource = {
     discretization: "fem",
     generation_id: "7",
   },
+  lifecycle: {
+    solver: "awaiting_command",
+    session_resource: "active",
+    connectivity: "connected",
+    commandability: "allowed",
+  },
   energies: {
     anisotropy: 0.4,
     demag: 0.2,

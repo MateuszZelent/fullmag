@@ -34,6 +34,7 @@ pub type Vector3 = [f64; 3];
 
 // ── Re-exports from FDM modules ───────────────────────────────────────
 pub use fdm::neighbor_index;
+pub use fdm::shared::frozen_spins::FrozenSpinsState;
 pub use fdm::{
     compute_newell_kernel_spectra, compute_newell_kernel_spectra_thin_film_2d,
     compute_periodic_newell_kernel_spectra, run_reference_exchange_demo, AbmHistory, AbmHistorySoA,
@@ -57,6 +58,65 @@ pub use vector::{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn resolved_frozen_spins(mask: Vec<bool>) -> fullmag_ir::ResolvedFrozenSpinsPlanIR {
+        let active_dof_count = mask.len() as u64;
+        let frozen_dof_count = mask.iter().filter(|frozen| **frozen).count() as u64;
+        let free_dof_count = active_dof_count - frozen_dof_count;
+        fullmag_ir::ResolvedFrozenSpinsPlanIR {
+            schema_version: fullmag_ir::RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION.to_string(),
+            constraint_ids: vec!["pinned".to_string()],
+            frozen_mask: mask,
+            active_dof_count,
+            frozen_dof_count,
+            free_dof_count,
+            mask_sha256: "test-mask".to_string(),
+            grid_or_mesh_fingerprint: "test-grid".to_string(),
+            source_state_revision: Some(1),
+            all_active_dofs_frozen: free_dof_count == 0,
+            certificate: fullmag_ir::SelectionCertificateIR {
+                schema_version: fullmag_ir::SELECTION_CERTIFICATE_SCHEMA_VERSION.to_string(),
+                evaluator_id: "selection.fdm_cell_center.v1".to_string(),
+                constraint_ids: vec!["pinned".to_string()],
+                authored_fingerprints: vec![fullmag_ir::SelectionAuthoredFingerprintIR {
+                    constraint_id: "pinned".to_string(),
+                    selector_sha256: "a".repeat(64),
+                }],
+                raw_candidate_dof_count: frozen_dof_count,
+                inactive_candidate_dof_count: 0,
+                active_dof_count,
+                frozen_dof_count,
+                free_dof_count,
+                bounds_m: None,
+                grid_or_mesh_fingerprint: "test-grid".to_string(),
+                source_state_revision: Some(1),
+                mask_sha256: "test-mask".to_string(),
+                resolved_reference_sha256: "b".repeat(64),
+                warnings: Vec::new(),
+            },
+        }
+    }
+
+    fn frozen_coupled_problem() -> (ExchangeLlgProblem, ExchangeLlgState) {
+        let mut problem = simple_problem(0.1, 1.0);
+        let mut state = problem
+            .new_state(vec![[1.0, 0.0, 0.0]; 3])
+            .expect("state should build");
+        problem
+            .capture_frozen_spins_at_activation(
+                &resolved_frozen_spins(vec![true, false, false]),
+                &mut state,
+            )
+            .expect("frozen-spin activation should succeed");
+        (problem, state)
+    }
+
+    fn frozen_coupled_terms() -> ExternalStageTerms {
+        ExternalStageTerms {
+            additional_field_apm: vec![[0.0, 0.0, 1.0], [0.0; 3], [0.0; 3]],
+            direct_torque_per_s: vec![[0.0, 1.0, 0.0], [0.0; 3], [0.0; 3]],
+        }
+    }
 
     fn simple_problem(alpha: f64, gamma: f64) -> ExchangeLlgProblem {
         let grid = GridShape::new(3, 1, 1).expect("valid grid");
@@ -1124,6 +1184,102 @@ mod tests {
         assert_eq!(corrected.dt_s, 1e-3);
         assert!(corrected.embedded_lte_m.is_finite());
         assert!(corrected.embedded_lte_m >= 0.0);
+    }
+
+    #[test]
+    fn coupled_heun_masks_external_direct_torque_after_all_rhs_terms_and_reports_free_all() {
+        let (problem, mut state) = frozen_coupled_problem();
+        let initial_frozen = state.magnetization()[0];
+        let mut ws = problem.create_workspace();
+        let mut bufs = problem.create_integrator_buffers();
+
+        let report = problem
+            .heun_step_with_external_stage_terms(
+                &mut state,
+                1e-3,
+                &mut ws,
+                &mut bufs,
+                EvaluationRequest::Full,
+                |_m, _time| Ok(frozen_coupled_terms()),
+            )
+            .expect("coupled Heun step should succeed");
+
+        assert_eq!(state.magnetization()[0], initial_frozen);
+        assert_eq!(report.max_rhs_amplitude, 0.0);
+        assert_eq!(report.max_torque_Apm, 0.0);
+        assert!(report.max_rhs_all_amplitude > 0.0);
+        assert!(report.max_torque_all_Apm > 0.0);
+    }
+
+    #[test]
+    fn coupled_ars_masks_external_direct_torque_after_all_rhs_terms_and_reports_free_all() {
+        let (problem, mut state) = frozen_coupled_problem();
+        let initial_frozen = state.magnetization()[0];
+        let mut ws = problem.create_workspace();
+        let mut bufs = problem.create_integrator_buffers();
+
+        let report = problem
+            .coupled_imex_ark2_fixed_step_with_external_stage_terms(
+                &mut state,
+                1e-3,
+                &mut ws,
+                &mut bufs,
+                EvaluationRequest::Full,
+                |_m, _time, _stage| Ok(frozen_coupled_terms()),
+            )
+            .expect("coupled ARS step should succeed");
+
+        assert_eq!(state.magnetization()[0], initial_frozen);
+        assert_eq!(report.max_rhs_amplitude, 0.0);
+        assert_eq!(report.max_torque_Apm, 0.0);
+        assert!(report.max_rhs_all_amplitude > 0.0);
+        assert!(report.max_torque_all_Apm > 0.0);
+    }
+
+    #[test]
+    fn coupled_heun_false_frozen_mask_retains_legacy_bitwise_parity() {
+        let legacy_problem = simple_problem(0.1, 1.0);
+        let mut legacy_state = legacy_problem
+            .new_state(vec![[1.0, 0.0, 0.0]; 3])
+            .expect("legacy state should build");
+        let mut constrained_problem = simple_problem(0.1, 1.0);
+        let mut constrained_state = constrained_problem
+            .new_state(vec![[1.0, 0.0, 0.0]; 3])
+            .expect("constrained state should build");
+        constrained_problem
+            .capture_frozen_spins_at_activation(
+                &resolved_frozen_spins(vec![false, false, false]),
+                &mut constrained_state,
+            )
+            .expect("empty frozen mask should activate");
+        let mut legacy_ws = legacy_problem.create_workspace();
+        let mut legacy_bufs = legacy_problem.create_integrator_buffers();
+        let mut constrained_ws = constrained_problem.create_workspace();
+        let mut constrained_bufs = constrained_problem.create_integrator_buffers();
+
+        let legacy_report = legacy_problem
+            .heun_step_with_external_stage_terms(
+                &mut legacy_state,
+                1e-3,
+                &mut legacy_ws,
+                &mut legacy_bufs,
+                EvaluationRequest::Full,
+                |_m, _time| Ok(frozen_coupled_terms()),
+            )
+            .expect("legacy coupled Heun should succeed");
+        let constrained_report = constrained_problem
+            .heun_step_with_external_stage_terms(
+                &mut constrained_state,
+                1e-3,
+                &mut constrained_ws,
+                &mut constrained_bufs,
+                EvaluationRequest::Full,
+                |_m, _time| Ok(frozen_coupled_terms()),
+            )
+            .expect("empty-mask coupled Heun should succeed");
+
+        assert_eq!(legacy_state, constrained_state);
+        assert_eq!(legacy_report, constrained_report);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Frozen spins: ograniczenie magnetyzacji
 
-- Status: zatwierdzony kontrakt fizyczny; implementacja i wszystkie lane'y niezakwalifikowane
+- Status: zatwierdzony kontrakt fizyczny; authoring, typed IR, kompilacja planu i FDM CPU/reference runtime zaimplementowane; wszystkie lane'y runtime pozostają niezakwalifikowane
 - Właściciele: Fullmag physics, planner i backend teams
 - Ostatnia aktualizacja: 2026-08-20
 - Powiązane ADR: `docs/adr/0026-frozen-spins-constraint-and-selection-model.md`
@@ -17,10 +17,14 @@ pola oraz wpływać na swobodne sąsiedztwo. Nie wolno modelować tego przez
 końcowy clamp wykonywany tylko po zaakceptowanym kroku.
 
 Kontrakt obejmuje relaksację i dynamikę od pierwszej wersji schematu. Bieżący
-kod zawiera typed `SelectionExprIR` i publiczny `fullmag.select`, ale nadal nie
-zawiera `FrozenSpins`, top-level constraintu w `ProblemIR`, plannerowej maski
-ani backendowego runtime. Poniższe równania są zatwierdzonym kontraktem
-planowanym, nie dowodem wykonania.
+kod zawiera typed `SelectionExprIR`, publiczny `fullmag.select`,
+`MagnetizationConstraintIR::FrozenSpins`, top-level lowering oraz stage
+activation. Planner zawiera dense resolved mask i certyfikat dla FDM cell
+centers oraz FEM magnetic true DOF. FDM CPU/reference konsumuje resolved plan
+i utrzymuje final-RHS/candidate-restore invariant; CUDA oraz native FEM są
+obecnie jawnie fail-closed, więc nie wolno traktować ich descriptorów jako
+wykonania. Poniższe równania pozostają zatwierdzonym kontraktem runtime, a
+częściowe testy FDM nie są dowodem kwalifikacji naukowej.
 
 (frozen-spins-governing-equations)=
 ## 2. Równania rządzące
@@ -199,35 +203,30 @@ pozostać źródłem wartości sąsiada w stencilach swobodnych DOF.
 (frozen-spins-python-api)=
 ## 5. Python API
 
-### 5.1. Aktualna granica wykonywalności
+### 5.1. Aktualna granica authoringu
 
-Publiczne `fullmag` udostępnia `fm.study(...)`, jawne `object_id` na realnym
-uchwycie magnetycznym, `ObjectRegion`, typed `fullmag.select` i canonical
-fingerprint. Nie udostępnia jeszcze `fm.FrozenSpins` ani stage registration
-constraintów. Poniższy blok jest wykonywalnym testem aktualnej granicy
-authoringu; buduje typed selector, ale nie uruchamia constraintu.
+Publiczne `fullmag` udostępnia `fm.FrozenSpins`,
+`ObjectRegion.freeze_spins(...)`, `Ferromagnet.freeze_spins(...)`, jawne
+`object_id`, typed `fullmag.select` oraz `constraints=[...]` w etapach relax/run.
+Wszystkie te ścieżki obniżają constraint do jednej top-level definicji. Jest to
+wykonywalny authoring i walidacja IR, ale nie solverowa realizacja constraintu.
 
 ```python
 # %%
 import fullmag as fm
 
 # %%
-selector = fm.select.in_object("free_layer") & (fm.select.m.z > 0.5)
-print(selector.to_ir())
-print(hasattr(fm, "FrozenSpins"))
+constraint = fm.FrozenSpins(
+    id="pinned_free_layer",
+    selector=fm.select.in_object("free_layer"),
+    stage_ids=["relax"],
+)
+print(constraint.to_ir())
 ```
 
-Po implementacji Task 5 ten test ma zostać zastąpiony repozytoryjnym scenariuszem
-`fm.study(...)` z jawnym engine/device/mode, geometrią, materiałem,
-magnetyzacją, constraintem, `study.stages.add_relaxation(...)`, dynamiką i
-outputs. Do tego czasu planowany kształt authoringu jest kontraktem tekstowym,
-nie kodem Python do skopiowania:
-
-```text
-constraint = FrozenSpins(selector=typed_selection, ...)
-study.stages.add_relaxation(..., constraints=[constraint])
-study.stages.add_time_evolution(..., constraints=[constraint])
-```
+Repozytoryjny scenariusz `test_frozen_spins_contract.py` potwierdza jawne API,
+convenience regionu/obiektu i agregację activation do stage IDs. Brak capability
+runtime oznacza, że tego payloadu nie wolno jeszcze wykonać jako frozen spins.
 
 ### 5.2. Zaimplementowana granica typed selection
 
@@ -242,7 +241,7 @@ referencje, przekroczenie limitów `64/4096/1024` i niekwalifikowany
 `imported_solid` failują przed hashowaniem. Jest to authoring/IR, nie
 materializacja ani capability runtime.
 
-### 5.3. Planowane parametry publiczne constraintu
+### 5.3. Zaimplementowane parametry publiczne constraintu
 
 | Python | Typ | Domyślna wartość | Jednostka SI | Walidacja | Znaczenie | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
@@ -256,7 +255,7 @@ materializacja ani capability runtime.
 | `fm.FrozenSpins.empty_selection` | `str` | error | $1$ | error or allow_noop | Polityka pustej finalnej maski | planned: FDM/FEM CPU/GPU | `magnetization_constraints[].empty_selection` |
 | `fm.FrozenSpins.inactive_selection` | `str` | warn_and_intersect | $1$ | warn_and_intersect or error | Polityka raw selection poza aktywną domeną | planned: FDM/FEM CPU/GPU | `magnetization_constraints[].inactive_selection` |
 
-Convenience `ObjectRegion.freeze_spins()` ma przyjąć co najmniej stabilne
+Convenience `ObjectRegion.freeze_spins()` przyjmuje stabilne
 constraint ID/name, reference, membership i activation, po czym zbudować
 `selector=in_region(owner_object, region_id)`. Nie zapisuje właściwości
 materiałowej w regionie.
@@ -264,12 +263,13 @@ materiałowej w regionie.
 (frozen-spins-problem-ir)=
 ## 6. `ProblemIR`, normalizacja i planner
 
-Target `ProblemIR 0.4.0` dodaje top-level `selections[]` oraz
-`magnetization_constraints[]`. Kanoniczny target payload constraintu jest
+Typed `ProblemIRV04` dodaje top-level `selections[]` oraz
+`magnetization_constraints[]`, a przejściowy publiczny writer `0.3.0` zapisuje
+te same addytywne kolekcje do czasu atomowego cutover całego stosu. Kanoniczny
+payload constraintu jest
 zdefiniowany w `docs/specs/frozen-spins-v1.md` pod
-`DOC-ANCHOR:frozen-v1-problem-ir`. Typed selection istnieje, ale nie jest to
-jeszcze JSON wyprodukowany przez top-level lowering constraintu, ponieważ
-`magnetization_constraints[]` i jego stage sugar należą do Task 5.
+`DOC-ANCHOR:frozen-v1-problem-ir`. Python explicit API, convenience API i stage
+sugar produkują ten sam top-level JSON.
 
 Python stage sugar i Control Room tworzą tę samą top-level definicję z
 `activation.stage_ids`. Normalizacja wypełnia jawne defaulty, normalizuje typed
@@ -341,25 +341,30 @@ kompilacja, runtime i scientific qualification są oddzielnymi dowodami.
 (frozen-spins-implementation-mapping)=
 ## 9. Mapowanie implementacyjne i obecne luki
 
-Aktualne źródła dowodzą jedynie istniejących właścicieli, na których przyszła
-implementacja ma się oprzeć:
+Aktualne źródła dowodzą authoringu, typed IR i kompilacji planu, ale nie
+realizacji runtime:
 
-- `ProblemIR` ma obecnie wersję `0.3.0` i nie zawiera jeszcze top-level kolekcji
-  selekcji ani constraintów;
+- publiczny writer `ProblemIR` pozostaje przejściowo na wersji `0.3.0`, lecz
+  zawiera addytywne top-level kolekcje selekcji i constraintów; osobny typed
+  `ProblemIRV04` oraz migracja `0.3.0 -> 0.4.0` zachowują te kolekcje;
 - `SelectionExprIR`, strict validation, canonical hash i publiczny Python
   selection DSL są zaimplementowane jako samodzielny kontrakt authoringowy;
+- `ResolvedFrozenSpinsPlanIR`, `SelectionCertificateIR` oraz kompilatory
+  `compile_fdm_frozen_spins` i `compile_fem_frozen_spins` materializują dense
+  maskę, counts, bounds, hash i rewizję bez podłączenia do runtime;
 - `ObjectRegion` jest publicznym właścicielem geometrii, materiału i polityki
   realizacji regionu;
-- FDM plan ma `active_mask` i jednowartościowe `region_mask`, ale nie ma
-  `frozen_mask`;
+- `FdmPlanIR` zachowuje `active_mask` i jednowartościowe `region_mask`, a
+  niezależny resolved frozen-spins plan zachowuje `frozen_mask`;
 - co najmniej dwa istniejące evaluatory geometrii mają różne zakresy wariantów;
 - FEM mesh membership może publikować node/centroid preview, które nie jest
   solverowym true-DOF constraintem;
-- obecny publiczny builder posiada `study()`, lecz nie ma authoringu frozen
-  spins.
+- publiczny builder posiada authoring frozen spins i agreguje jedną definicję
+  do jawnych `activation.stage_ids`.
 
-Te fakty nie dowodzą działania constraintu. Planowane równania są zakotwiczone
-w `docs/specs/frozen-spins-v1.md` jako `planned_contract`.
+Te fakty nie dowodzą działania constraintu. Równania runtime są zakotwiczone w
+`docs/specs/frozen-spins-v1.md` jako `planned_contract`; wpisy source index dla
+IR i kompilatorów mają osobny status planner-implemented/runtime-unqualified.
 
 (frozen-spins-validation)=
 ## 10. Strategia walidacji
@@ -409,9 +414,9 @@ Szczegółowy ledger i wszystkie początkowe statusy `UNQUALIFIED` znajdują si�
 (frozen-spins-limitations)=
 ## 11. Ograniczenia i prace odłożone
 
-- Typed selection jest zaimplementowane w Python API i `fullmag-ir`, ale brak
-  top-level frozen-spins constraintu w `ProblemIR`, plannerze i backendach;
-  nota nie nadaje capability.
+- Typed selection, top-level frozen-spins authoring/IR oraz plannerowa dense
+  maska z certyfikatem są zaimplementowane, ale backendy, checkpoint i runtime
+  lifecycle nie konsumują planu; nota nie nadaje capability.
 - `live_accepted_step_membership` wymaga osobnego schematu V2 z histerezą,
   restartem historii i checkpointem maszyny członkostwa.
 - Częściowe zamrożenie składowych magnetyzacji nie należy do V1.
@@ -450,8 +455,13 @@ Szczegółowy ledger i wszystkie początkowe statusy `UNQUALIFIED` znajdują si�
 | Aktualna granica wersji IR | `crates/fullmag-ir/src/lib.rs` | `is_supported_ir_version_for_read` | Obsługiwane wersje read | IR | bieżące testy IR niezwiązane z frozen spins | current source only | [source](https://github.com/MateuszZelent/fullmag/blob/d9518082eaee2131c3e7160bd8ae952ed2f45899/crates/fullmag-ir/src/lib.rs) |
 | Typed selection IR | `crates/fullmag-ir/src/selection.rs` | `canonical_selection_sha256` | Kanoniczny zamknięty AST, limity i fingerprint | IR | `selection_*` w `crates/fullmag-ir/tests/ir_tests.rs` | current source, runtime unqualified | `worktree/uncommitted`; path + symbol only |
 | Publiczny Python selection DSL | `packages/fullmag-py/src/fullmag/model/selection.py` | `class Selection` | Typed builders, parse/round-trip i canonical hash | Python | `packages/fullmag-py/tests/test_selection_contract.py` | current source, runtime unqualified | `worktree/uncommitted`; path + symbol only |
+| Typed frozen-spins IR | `crates/fullmag-ir/src/constraint.rs` | `MagnetizationConstraintIR`, `FrozenSpinsIR` | Strict serde, defaulty i polityki V1 | IR | `frozen_spins_*` w `crates/fullmag-ir/tests/ir_tests.rs` | authoring/IR implemented, runtime unqualified | `worktree/uncommitted`; path + symbol only |
+| Resolved plan i certyfikat | `crates/fullmag-ir/src/plan.rs` | `ResolvedFrozenSpinsPlanIR::validate_intrinsic` | Dense maska, certyfikat i fail-closed walidacja cache | IR/planner | `resolved_frozen_spins_*` | planner implemented, runtime unqualified | `worktree/uncommitted`; path + symbol only |
+| Kompilator selekcji FDM | `crates/fullmag-plan/src/selection/fdm.rs` | `compile_fdm_frozen_spins` | Środki komórek, active intersection i certyfikat | FDM CPU/GPU | `frozen_spins_fdm_*` | planner implemented, execution lane unqualified | `worktree/uncommitted`; path + symbol only |
+| Kompilator selekcji FEM | `crates/fullmag-plan/src/selection/fem.rs` | `compile_fem_frozen_spins` | P1/P2 magnetic true DOF, any-incident magnetic | FEM CPU/GPU | `frozen_spins_fem_*` | planner implemented, execution lane unqualified | `worktree/uncommitted`; path + symbol only |
+| Publiczny Python frozen-spins DSL | `packages/fullmag-py/src/fullmag/model/constraints.py` | `class FrozenSpins` | Strict parse/lowering i default membership | Python | `packages/fullmag-py/tests/test_frozen_spins_contract.py` | authoring/IR implemented, runtime unqualified | `worktree/uncommitted`; path + symbol only |
 | Aktualna materializacja regionu FDM | `crates/fullmag-plan/src/fdm.rs` | `materialize_object_region_mask` | Istniejący evaluator regionu | FDM | bieżące testy regionów, nie frozen spins | current source only | `worktree/uncommitted`; path + symbol only |
 | Konsument predykatu geometrii drive | `crates/fullmag-plan/src/regional_field_drive.rs` | `resolve_fdm_regional_field_drives` | Istniejąca maska geometryczna drive | FDM | bieżące testy drive, nie frozen spins | current source only | `worktree/uncommitted`; path + symbol only |
 | Aktualny preview membership FEM | `crates/fullmag-api/src/router_v2/handlers/data/mesh_region_membership.rs` | `build_mesh_region_membership` | Mesh parts i fallback preview | FEM/API | bieżące testy membership, nie true-DOF constraint | current source only | [source](https://github.com/MateuszZelent/fullmag/blob/d9518082eaee2131c3e7160bd8ae952ed2f45899/crates/fullmag-api/src/router_v2/handlers/data/mesh_region_membership.rs) |
 | Publiczny właściciel regionu | `packages/fullmag-py/src/fullmag/model/structure.py` | `class ObjectRegion` | Region material/mesh API | Python | bieżące testy regionu, nie frozen spins | current source only | [source](https://github.com/MateuszZelent/fullmag/blob/d9518082eaee2131c3e7160bd8ae952ed2f45899/packages/fullmag-py/src/fullmag/model/structure.py) |
-| Publiczny stage-first root | `packages/fullmag-py/src/fullmag/world.py` | `study` | `fm.study(...)` | Python | bieżące testy buildera, brak constraint hook | current source only | [source](https://github.com/MateuszZelent/fullmag/blob/d9518082eaee2131c3e7160bd8ae952ed2f45899/packages/fullmag-py/src/fullmag/world.py) |
+| Publiczny stage-first root | `packages/fullmag-py/src/fullmag/world.py` | `StudyStagesBuilder._merge_constraints` | Agregacja top-level constraintu do stage IDs bez mutacji przed zatwierdzeniem etapu | Python | `test_stage_constraints_lower_to_one_top_level_definition_with_stage_ids` | authoring/IR implemented, runtime unqualified | `worktree/uncommitted`; path + symbol only |

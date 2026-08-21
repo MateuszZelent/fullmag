@@ -639,6 +639,18 @@ pub(crate) fn test_app_state() -> Arc<AppState> {
         repo_root: PathBuf::from("."),
         current_workspace_root: PathBuf::from("."),
         current_live_state: Arc::new(RwLock::new(None)),
+        current_live_connectivity: Arc::new(RwLock::new(
+            crate::schemas::status::SessionConnectivity::Connected,
+        )),
+        current_live_last_seen_unix_ms: Arc::new(AtomicU64::new(
+            u64::try_from(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis(),
+            )
+            .unwrap_or(u64::MAX),
+        )),
         current_live_realtime_events: tokio::sync::broadcast::channel(16).0,
         current_live_realtime_replay: Arc::new(Mutex::new(VecDeque::new())),
         current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
@@ -661,6 +673,7 @@ pub(crate) fn test_app_state() -> Arc<AppState> {
         current_control_next_seq: Arc::new(Mutex::new(0)),
         feature_flags: FeatureFlags::default(),
         quantity_data_plane: Arc::new(crate::quantity_data_plane::QuantityDataPlaneStore::new()),
+        frozen_spins_previews: Arc::new(RwLock::new(Default::default())),
     })
 }
 
@@ -726,6 +739,7 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
         quantities: Vec::new(),
         fem_mesh: None,
         latest_fields: LatestFields::default(),
+        field_publication_bundles: BTreeMap::new(),
         preview_cache: Default::default(),
         artifacts: Vec::new(),
         display_selection: CurrentDisplaySelection::default(),
@@ -1096,6 +1110,185 @@ async fn test_router_with_session() -> axum::Router {
 
 async fn test_v2_router_with_session() -> axum::Router {
     build_v2_router().with_state(test_app_state_with_live_session().await)
+}
+
+#[tokio::test]
+async fn stale_runner_heartbeat_disconnects_status_and_rejects_mutating_commands() {
+    let state = test_app_state_with_live_session().await;
+    assert_eq!(
+        *state.current_live_connectivity.read().await,
+        crate::schemas::status::SessionConnectivity::Connected
+    );
+    let now_unix_ms = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .unwrap_or(u64::MAX);
+    state.current_live_last_seen_unix_ms.store(
+        now_unix_ms.saturating_sub(60_000),
+        std::sync::atomic::Ordering::Release,
+    );
+    let app = build_v2_router().with_state(state.clone());
+    let status_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(status_response.status(), StatusCode::OK);
+    let body = body_json(status_response).await;
+    assert_eq!(body["lifecycle"]["solver"], "awaiting_command");
+    assert_eq!(body["lifecycle"]["session_resource"], "active");
+    assert_eq!(body["lifecycle"]["connectivity"], "disconnected");
+    assert_eq!(body["lifecycle"]["commandability"], "forbidden");
+    assert_eq!(
+        *state.current_live_connectivity.read().await,
+        crate::schemas::status::SessionConnectivity::Disconnected
+    );
+
+    let command_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "kind": "save_vtk" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(command_response.status(), StatusCode::CONFLICT);
+    let command_body = body_json(command_response).await;
+    assert_eq!(command_body["code"], "session_connectivity_disconnected");
+    assert!(state.current_control_queue.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn delayed_runner_heartbeat_degrades_status_and_rejects_mutating_commands() {
+    let state = test_app_state_with_live_session().await;
+    let now_unix_ms = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .unwrap_or(u64::MAX);
+    state.current_live_last_seen_unix_ms.store(
+        now_unix_ms.saturating_sub(20_000),
+        std::sync::atomic::Ordering::Release,
+    );
+    let app = build_v2_router().with_state(state.clone());
+    let status_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status_response.status(), StatusCode::OK);
+    let status_body = body_json(status_response).await;
+    assert_eq!(status_body["lifecycle"]["solver"], "awaiting_command");
+    assert_eq!(status_body["lifecycle"]["connectivity"], "degraded");
+    assert_eq!(status_body["lifecycle"]["commandability"], "forbidden");
+
+    let command_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "kind": "save_vtk" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(command_response.status(), StatusCode::CONFLICT);
+    let command_body = body_json(command_response).await;
+    assert_eq!(command_body["code"], "session_connectivity_degraded");
+    assert!(state.current_control_queue.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn internal_idle_heartbeat_restores_connectivity_without_resource_revision_churn() {
+    let state = test_app_state_with_live_session().await;
+    let now_unix_ms = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .unwrap_or(u64::MAX);
+    state.current_live_last_seen_unix_ms.store(
+        now_unix_ms.saturating_sub(60_000),
+        std::sync::atomic::Ordering::Release,
+    );
+    assert_eq!(
+        crate::router_v2::handlers::sessions::status::refresh_current_live_connectivity(&state)
+            .await,
+        crate::schemas::status::SessionConnectivity::Disconnected
+    );
+    let revisions_before = {
+        let current = state.current_live_state.read().await;
+        let snapshot = current.as_ref().expect("live session");
+        (
+            snapshot.state_version,
+            snapshot.scalar_revision,
+            snapshot.mesh_revision,
+            snapshot.field_catalog_revision,
+            snapshot.field_samples_revision,
+        )
+    };
+    let app = axum::Router::new()
+        .route(
+            "/heartbeat",
+            axum::routing::post(crate::sync_current_live_heartbeat),
+        )
+        .with_state(state.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/heartbeat")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "session_id": "test-session" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        *state.current_live_connectivity.read().await,
+        crate::schemas::status::SessionConnectivity::Connected
+    );
+    let revisions_after = {
+        let current = state.current_live_state.read().await;
+        let snapshot = current.as_ref().expect("live session");
+        (
+            snapshot.state_version,
+            snapshot.scalar_revision,
+            snapshot.mesh_revision,
+            snapshot.field_catalog_revision,
+            snapshot.field_samples_revision,
+        )
+    };
+    assert_eq!(revisions_after, revisions_before);
 }
 
 fn sample_scalar_row(step: u64, time: f64, e_total: f64) -> ScalarRow {
@@ -1697,6 +1890,7 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
         quantities: Vec::new(),
         fem_mesh: None,
         latest_fields: LatestFields::default(),
+        field_publication_bundles: BTreeMap::new(),
         preview_cache: Default::default(),
         artifacts: Vec::new(),
         display_selection: CurrentDisplaySelection::default(),
@@ -1748,6 +1942,18 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         repo_root: repo_root.clone(),
         current_workspace_root: repo_root.clone(),
         current_live_state: Arc::new(RwLock::new(None)),
+        current_live_connectivity: Arc::new(RwLock::new(
+            crate::schemas::status::SessionConnectivity::Connected,
+        )),
+        current_live_last_seen_unix_ms: Arc::new(AtomicU64::new(
+            u64::try_from(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis(),
+            )
+            .unwrap_or(u64::MAX),
+        )),
         current_live_realtime_events: tokio::sync::broadcast::channel(16).0,
         current_live_realtime_replay: Arc::new(Mutex::new(VecDeque::new())),
         current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
@@ -1770,6 +1976,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         current_control_next_seq: Arc::new(Mutex::new(0)),
         feature_flags: FeatureFlags::default(),
         quantity_data_plane: Arc::new(crate::quantity_data_plane::QuantityDataPlaneStore::new()),
+        frozen_spins_previews: Arc::new(RwLock::new(Default::default())),
     });
 
     let session = SessionManifest {
@@ -1858,6 +2065,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         quantities: Vec::new(),
         fem_mesh: None,
         latest_fields: LatestFields::default(),
+        field_publication_bundles: BTreeMap::new(),
         preview_cache: Default::default(),
         artifacts: Vec::new(),
         display_selection: CurrentDisplaySelection::default(),
@@ -4377,6 +4585,9 @@ async fn field_vector_returns_pending_metadata_for_materializer_request() {
 async fn field_vector_returns_pending_metadata_for_active_compute_fields_quantity() {
     let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
     set_test_fdm_multilayer_layout(&state, [4, 1, 1]).await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.capabilities = Some(resolved_compute_fields_capabilities(&["H_demag"]));
+    }
 
     let detail = enqueue_compute_fields_and_get_detail(&app).await;
     let command_id = detail["command_id"]
@@ -4525,6 +4736,7 @@ async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_
     {
         let mut guard = state.current_live_state.write().await;
         let snapshot = guard.as_mut().expect("live session exists");
+        snapshot.capabilities = Some(resolved_compute_fields_capabilities(&["H_eff"]));
         crate::session::apply_current_live_snapshot(
             snapshot,
             CurrentLiveSnapshotRequest {
@@ -4633,6 +4845,95 @@ async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_
     assert_eq!(vector.status(), StatusCode::OK);
     let vector_bytes = body_bytes(vector).await;
     assert_eq!(&vector_bytes[..4], b"FMVP");
+}
+
+#[tokio::test]
+async fn field_meta_keeps_atomic_publication_bundle_after_topology_advances() {
+    let state = test_app_state_with_live_session().await;
+    let expected_topology_hash;
+    let accepted_scalar_revision;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        let mesh = sample_fem_mesh_payload();
+        expected_topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(&mesh);
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.mesh_revision = 7;
+        crate::session::apply_current_live_snapshot(
+            snapshot,
+            CurrentLiveSnapshotRequest {
+                session_id: snapshot.session.session_id.clone(),
+                session: None,
+                session_status: None,
+                metadata: None,
+                mesh_workspace: None,
+                stage_execution: None,
+                simulation_preparation: None,
+                run: None,
+                live_state: None,
+                coupled_checkpoint: None,
+                latest_scalar_row: Some(sample_scalar_row(4, 4e-12, 6.0)),
+                latest_fields: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "H_eff": {
+                            "source_step": 4,
+                            "source_time_seconds": 4e-12,
+                            "values": [
+                                [1.0, 0.0, 0.0],
+                                [1.0, 0.0, 0.0],
+                                [1.0, 0.0, 0.0],
+                                [1.0, 0.0, 0.0]
+                            ],
+                            "layout": { "grid_cells": [4, 1, 1] }
+                        }
+                    }))
+                    .expect("accepted H_eff field"),
+                ),
+                replace_latest_fields: false,
+                field_generation: None,
+                preview_fields: None,
+                clear_preview_cache: false,
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: None,
+            },
+        )
+        .expect("atomic field/scalar snapshot should apply");
+        accepted_scalar_revision = snapshot.scalar_revision;
+        let bundle = snapshot
+            .field_publication_bundles
+            .get("H_eff")
+            .expect("accepted snapshot should store its publication bundle");
+        assert_eq!(bundle.topology_revision, "7");
+        assert_eq!(bundle.topology_hash, expected_topology_hash);
+        assert_eq!(bundle.responses.scalars_revision, accepted_scalar_revision);
+
+        snapshot.mesh_revision = 8;
+        snapshot.fem_mesh.as_mut().expect("FEM mesh").nodes[0][0] = 0.125;
+    }
+
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_eff/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["observation_frame"]["topology_revision"], "7");
+    assert_eq!(body["publication_bundle"]["topology_revision"], "7");
+    assert_eq!(
+        body["publication_bundle"]["topology_hash"],
+        expected_topology_hash
+    );
+    assert_eq!(
+        body["publication_bundle"]["responses"]["scalars_revision"],
+        accepted_scalar_revision
+    );
 }
 
 #[tokio::test]
@@ -14220,7 +14521,6 @@ async fn authoring_scene_put_commits_scene_document() {
     }
     let app = build_v2_router().with_state(state.clone());
     let mut updated = sample_scene_document();
-    updated.revision = 5;
     updated.scene.name = "Authoring Scene".to_string();
     updated.objects[0].geometry.geometry_params = serde_json::json!({
         "size": [2.0, 1.0, 1.0]
@@ -14505,6 +14805,7 @@ async fn authoring_transactions_replace_scene_commits_document() {
                 .body(Body::from(
                     serde_json::json!({
                         "kind": "replace_scene",
+                        "base_revision": 3,
                         "scene": serde_json::to_value(updated).expect("scene value")
                     })
                     .to_string(),
@@ -19220,6 +19521,41 @@ async fn reconcile_compute_fields_command(state: &Arc<AppState>) -> bool {
     )
 }
 
+fn resolved_compute_fields_capabilities(
+    field_quantities: &[&str],
+) -> fullmag_runner::BackendCapabilities {
+    let field_quantities = field_quantities
+        .iter()
+        .map(|id| (*id).to_string())
+        .collect::<Vec<_>>();
+    fullmag_runner::BackendCapabilities {
+        engine_id: fullmag_runner::RuntimeEngineId::FdmCpuReference,
+        capability_profile_version: "test".to_string(),
+        supported_terms: Vec::new(),
+        term_scopes: BTreeMap::new(),
+        feature_capabilities: BTreeMap::new(),
+        supported_demag_realizations: Vec::new(),
+        preview_quantities: field_quantities.clone(),
+        snapshot_quantities: Vec::new(),
+        scalar_outputs: Vec::new(),
+        resolved_quantity_registry: Some(
+            fullmag_runner::ResolvedQuantityProviderRegistry::from_resolved_plan(
+                "fdm_cpu_reference",
+                "double",
+                field_quantities.iter().map(String::as_str),
+                std::iter::empty::<&str>(),
+            ),
+        ),
+        approximate_operators: Vec::new(),
+        supports_frequency_response: false,
+        supports_coupled_magnetoelastic_quasistatic: false,
+        supports_coupled_magnetoelastic_elastodynamic: false,
+        supports_frequency_domain_elastodynamics: false,
+        supports_coupled_eigenmodes: false,
+        supports_lossy_fallback_override: false,
+    }
+}
+
 #[tokio::test]
 async fn compute_fields_command_contract_resolves_fdm_full_requirement() {
     let state = test_app_state_with_live_session().await;
@@ -19233,6 +19569,7 @@ async fn compute_fields_command_contract_resolves_fdm_full_requirement() {
                 "preview_quantities": ["m"]
             }
         }));
+        snapshot.capabilities = Some(resolved_compute_fields_capabilities(&["m"]));
         snapshot.latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
@@ -19305,6 +19642,7 @@ async fn compute_fields_command_contract_resolves_multilayer_full_and_airbox_req
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.metadata.as_mut().expect("multilayer metadata")["capabilities"] =
             serde_json::json!({ "preview_quantities": ["m"] });
+        snapshot.capabilities = Some(resolved_compute_fields_capabilities(&["m", "H_demag"]));
         snapshot.latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
@@ -19407,6 +19745,7 @@ async fn compute_fields_completion_requires_exact_quantity_scope_generation_and_
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.metadata.as_mut().expect("multilayer metadata")["capabilities"] =
             serde_json::json!({ "preview_quantities": ["m"] });
+        snapshot.capabilities = Some(resolved_compute_fields_capabilities(&["m", "H_demag"]));
         snapshot.latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
@@ -19538,6 +19877,7 @@ async fn compute_fields_command_stays_dispatched_until_airbox_carrier_is_readabl
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.metadata.as_mut().expect("multilayer metadata")["capabilities"] =
             serde_json::json!({ "preview_quantities": ["m"] });
+        snapshot.capabilities = Some(resolved_compute_fields_capabilities(&["m", "H_demag"]));
         snapshot.latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
@@ -19602,6 +19942,7 @@ async fn compute_fields_command_contract_resolves_fem_full_requirement() {
                 "preview_quantities": ["m"]
             }
         }));
+        snapshot.capabilities = Some(resolved_compute_fields_capabilities(&["m"]));
         snapshot.fem_mesh = Some(sample_fem_mesh_payload());
         snapshot.latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
@@ -19697,33 +20038,67 @@ async fn commands_endpoint_enqueues_compute_energies_command() {
 }
 
 #[tokio::test]
-async fn commands_endpoint_rejects_compute_for_completed_session() {
-    for kind in ["compute_fields", "compute_energies"] {
-        let state = test_app_state_with_live_session().await;
-        if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-            snapshot.session.status = "completed".into();
+async fn commands_endpoint_rejects_every_mutation_for_terminal_sessions() {
+    for status in ["completed", "failed", "cancelled", "closed"] {
+        for kind in ["compute_fields", "save_vtk"] {
+            let state = test_app_state_with_live_session().await;
+            if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+                snapshot.session.status = status.into();
+                snapshot.runtime_status.code = status.into();
+            }
+            state
+                .current_live_last_seen_unix_ms
+                .store(1, std::sync::atomic::Ordering::Release);
+            let app = build_v2_router().with_state(state.clone());
+
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v2/sessions/current/simulation/commands")
+                        .header("content-type", "application/json")
+                        .body(Body::from(serde_json::json!({ "kind": kind }).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(
+                response.status(),
+                StatusCode::CONFLICT,
+                "status={status} kind={kind}"
+            );
+            let body = body_json(response).await;
+            assert_eq!(
+                body["code"],
+                format!("session_{status}_read_only"),
+                "status={status} kind={kind}"
+            );
+            assert!(state.current_control_queue.lock().await.is_empty());
         }
-        let app = build_v2_router().with_state(state.clone());
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v2/sessions/current/simulation/commands")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::json!({ "kind": kind }).to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::CONFLICT, "kind={kind}");
-        let body = body_json(response).await;
-        assert_eq!(body["code"], "session_completed_read_only", "kind={kind}");
-        assert!(state.current_control_queue.lock().await.is_empty());
     }
+}
+
+#[tokio::test]
+async fn commands_endpoint_keeps_awaiting_command_session_commandable() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v2_router().with_state(state.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "kind": "save_vtk" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(state.current_control_queue.lock().await.len(), 1);
 }
 
 #[tokio::test]
@@ -42978,4 +43353,1434 @@ fn v2_test_uri(template: &str) -> String {
         .replace("{part_id}", "missing-part")
         .replace("{interaction_kind}", "exchange")
         .replace("{interface_id}", "missing-interface")
+}
+
+async fn frozen_spins_test_state() -> Arc<AppState> {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 12;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [3, 1, 1],
+                "origin_m": [0.0, 0.0, 0.0],
+                "cell_size": [1.0, 1.0, 1.0]
+            },
+            "execution_plan": {
+                "backend_plan": {
+                    "grid_certificate": {
+                        "grid_fingerprint": "grid-a",
+                        "cells": [3, 1, 1],
+                        "origin_m": [0.0, 0.0, 0.0],
+                        "cell_size": [1.0, 1.0, 1.0]
+                    }
+                }
+            }
+        }));
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0]
+                ],
+                "layout": {"grid_cells": [3, 1, 1]}
+            }
+        }))
+        .expect("frozen-spins magnetization fixture");
+        snapshot.field_quantity_revisions.insert("m".into(), 7);
+    }
+    state
+}
+
+fn frozen_spins_definition(id: &str, name: &str) -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": "frozen_spins.v1",
+        "id": id,
+        "name": name,
+        "enabled": true,
+        "selector": {"kind": "all_magnetic"},
+        "reference": {"kind": "capture_current_at_activation"},
+        "membership": {"kind": "static"},
+        "activation": {"kind": "all_stages"},
+        "empty_selection": "error",
+        "inactive_selection": "warn_and_intersect"
+    })
+}
+
+#[tokio::test]
+async fn frozen_spins_crud_is_revision_safe_and_preserves_definition_identity() {
+    let state = frozen_spins_test_state().await;
+    let app = build_v2_router().with_state(state);
+
+    let create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/frozen-spins")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_revision": 12,
+                        "definition": frozen_spins_definition("pin-edge", "Pinned edge")
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::OK);
+    let created = body_json(create).await;
+    assert_eq!(created["revision"], 13);
+    assert_eq!(created["definition"]["id"], "pin-edge");
+    assert_eq!(created["definition"]["name"], "Pinned edge");
+    let revision = created["revision"].as_u64().unwrap();
+
+    let list = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/model/frozen-spins")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let list = body_json(list).await;
+    assert_eq!(list["count"], 1);
+    assert_eq!(list["definitions"][0]["id"], "pin-edge");
+
+    let get = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/model/frozen-spins/pin-edge")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get.status(), StatusCode::OK);
+    assert_eq!(body_json(get).await["definition"]["name"], "Pinned edge");
+
+    let stale = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/model/frozen-spins/pin-edge")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_revision": 12,
+                        "definition": frozen_spins_definition("pin-edge", "Stale edit")
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(stale).await["code"], "selection_stale_revision");
+
+    let patch = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/model/frozen-spins/pin-edge")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_revision": revision,
+                        "definition": frozen_spins_definition("pin-edge", "Pinned edge v2")
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(patch.status(), StatusCode::OK);
+    let patched = body_json(patch).await;
+    assert_eq!(patched["definition"]["name"], "Pinned edge v2");
+
+    let delete = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/v2/sessions/current/model/frozen-spins/pin-edge")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"expected_revision": patched["revision"]}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete.status(), StatusCode::OK);
+    let deleted = body_json(delete).await;
+    assert_eq!(deleted["count"], 0);
+}
+
+#[tokio::test]
+async fn frozen_spins_concurrent_mutations_admit_exactly_one_revision_winner() {
+    let state = frozen_spins_test_state().await;
+    let state_version_before = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .expect("live frozen-spins fixture")
+        .state_version;
+    let state_for_assert = state.clone();
+    let app = build_v2_router().with_state(state);
+    let create = |id: &'static str| {
+        let app = app.clone();
+        async move {
+            app.oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v2/sessions/current/model/frozen-spins")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "expected_revision": 12,
+                            "definition": frozen_spins_definition(id, id)
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+        }
+    };
+
+    let (left, right) = tokio::join!(create("pin-left"), create("pin-right"));
+    let statuses = [left.status(), right.status()];
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|status| **status == StatusCode::OK)
+            .count(),
+        1
+    );
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|status| **status == StatusCode::CONFLICT)
+            .count(),
+        1
+    );
+    let state_version_after = state_for_assert
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .expect("live frozen-spins fixture")
+        .state_version;
+    assert_eq!(state_version_after, state_version_before + 1);
+}
+
+#[tokio::test]
+async fn frozen_spins_preview_is_bounded_and_mask_is_bit_packed_data_plane() {
+    let state = frozen_spins_test_state().await;
+    let app = build_v2_router().with_state(state);
+    let preview = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/frozen-spins/previews")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_revision": 12,
+                        "expected_source_state_revision": 7,
+                        "expected_topology_fingerprint": "grid-a",
+                        "target_object_id": "body",
+                        "stage_id": null,
+                        "selector": {"kind": "all_magnetic"}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(preview.status(), StatusCode::OK);
+    let preview = body_json(preview).await;
+    assert_eq!(preview["revision"], 12);
+    assert_eq!(preview["current"], true);
+    assert_eq!(preview["frozen_dof_count"], 3);
+    assert_eq!(preview["free_dof_count"], 0);
+    assert_eq!(preview["fraction"], 1.0);
+    assert_eq!(
+        preview["bounds_m"],
+        serde_json::json!([[0.5, 0.5, 0.5], [2.5, 0.5, 0.5]])
+    );
+    assert!(preview["mask_sha256"]
+        .as_str()
+        .unwrap()
+        .starts_with("sha256:"));
+    assert!(preview["warnings"].is_array());
+    assert!(preview.get("mask").is_none());
+    assert!(preview.get("resolved_reference").is_none());
+    let mask_resource = preview["mask_resource"].as_str().unwrap().to_string();
+
+    let mask = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(mask_resource)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mask.status(), StatusCode::OK);
+    assert_eq!(
+        mask.headers().get(header::CONTENT_TYPE).unwrap(),
+        "application/vnd.fullmag.frozen-mask"
+    );
+    let bytes = body_bytes(mask).await;
+    assert_eq!(&bytes[..4], b"FMSK");
+    assert_eq!(bytes[4], 1);
+    assert_eq!(bytes[5], 1, "encoding 1 is bit-packed LSB-first");
+    assert_eq!(u64::from_le_bytes(bytes[8..16].try_into().unwrap()), 3);
+    assert_eq!(bytes[64] & 0b0000_0111, 0b0000_0111);
+
+    let status = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status.status(), StatusCode::OK);
+    let status_text = String::from_utf8(body_bytes(status).await).unwrap();
+    assert!(!status_text.contains("frozen_mask"));
+    assert!(!status_text.contains("resolved_reference"));
+}
+
+#[tokio::test]
+async fn frozen_spins_preview_maps_typed_selector_and_missing_target_errors() {
+    let state = frozen_spins_test_state().await;
+    let app = build_v2_router().with_state(state);
+
+    let missing = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/frozen-spins/previews")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_revision": 12,
+                        "expected_source_state_revision": 7,
+                        "expected_topology_fingerprint": "grid-a",
+                        "target_object_id": "missing",
+                        "selector": {"kind": "in_object", "object_id": "missing"}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body_json(missing).await["code"], "selection_unknown_object");
+
+    let mut selector = serde_json::json!({"kind": "all_magnetic"});
+    for _ in 0..65 {
+        selector = serde_json::json!({"kind": "not", "expression": selector});
+    }
+    let too_deep = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/frozen-spins/previews")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_revision": 12,
+                        "expected_source_state_revision": 7,
+                        "expected_topology_fingerprint": "grid-a",
+                        "target_object_id": "body",
+                        "selector": selector
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(too_deep.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        body_json(too_deep).await["code"],
+        "selection_complexity_exceeded"
+    );
+}
+
+#[tokio::test]
+async fn frozen_spins_preview_fails_closed_on_stale_source_or_topology() {
+    let state = frozen_spins_test_state().await;
+    let app = build_v2_router().with_state(state);
+
+    for (field, value, code) in [
+        (
+            "expected_source_state_revision",
+            serde_json::json!(6),
+            "selection_stale_revision",
+        ),
+        (
+            "expected_topology_fingerprint",
+            serde_json::json!("grid-old"),
+            "selection_topology_mismatch",
+        ),
+    ] {
+        let mut request = serde_json::json!({
+            "expected_revision": 12,
+            "expected_source_state_revision": 7,
+            "expected_topology_fingerprint": "grid-a",
+            "target_object_id": "body",
+            "selector": {"kind": "all_magnetic"}
+        });
+        request[field] = value;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v2/sessions/current/model/frozen-spins/previews")
+                    .header("content-type", "application/json")
+                    .body(Body::from(request.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(body_json(response).await["code"], code);
+    }
+}
+
+#[test]
+fn frozen_spins_openapi_declares_control_and_data_plane_resources() {
+    let document = crate::openapi_v2::openapi_json();
+    let paths = &document["paths"];
+    assert!(paths["/v2/sessions/current/model/frozen-spins"].is_object());
+    assert!(paths["/v2/sessions/current/model/frozen-spins/{constraint_id}"].is_object());
+    assert!(paths["/v2/sessions/current/model/frozen-spins/previews"].is_object());
+    assert!(paths["/v2/sessions/current/model/frozen-spins/previews/{preview_id}"].is_object());
+    assert!(paths["/v2/sessions/current/data/frozen-spins/resolved-masks/{mask_id}"].is_object());
+    let schemas = &document["components"]["schemas"];
+    assert!(schemas["FrozenSpinsPreviewResponse"].is_object());
+    assert!(schemas["FrozenSpinsPreviewResponse"]
+        .to_string()
+        .contains("mask_resource"));
+    assert!(!schemas["FrozenSpinsPreviewResponse"]
+        .to_string()
+        .contains("frozen_mask"));
+}
+
+#[tokio::test]
+async fn frozen_spins_preview_reports_unsupported_fem_carrier_before_fdm_fingerprint() {
+    let state = frozen_spins_test_state().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {"backend": "fem"}
+        }));
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 0.0, 0.0]
+                ]
+            }
+        }))
+        .expect("FEM nodal magnetization fixture");
+    }
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/frozen-spins/previews")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_revision": 12,
+                        "expected_source_state_revision": 7,
+                        "expected_topology_fingerprint": "mesh-candidate",
+                        "target_object_id": "body",
+                        "selector": {"kind": "all_magnetic"}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        body_json(response).await["code"],
+        "selection_variant_unsupported"
+    );
+}
+
+#[tokio::test]
+async fn frozen_spins_preview_rejects_selector_bound_to_another_object() {
+    let state = frozen_spins_test_state().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let scene = snapshot
+            .scene_document
+            .as_mut()
+            .expect("frozen-spins scene");
+        let mut other = scene.objects[0].clone();
+        other.id = "other".to_string();
+        other.name = "Other".to_string();
+        scene.objects.push(other);
+    }
+    let app = build_v2_router().with_state(state);
+    for selector in [
+        serde_json::json!({"kind": "in_object", "object_id": "other"}),
+        serde_json::json!({
+            "kind": "not",
+            "expression": {"kind": "in_object", "object_id": "other"}
+        }),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v2/sessions/current/model/frozen-spins/previews")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "expected_revision": 12,
+                            "expected_source_state_revision": 7,
+                            "expected_topology_fingerprint": "grid-a",
+                            "target_object_id": "body",
+                            "selector": selector
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            body_json(response).await["code"],
+            "selection_target_mismatch"
+        );
+    }
+}
+
+#[tokio::test]
+async fn scene_commit_rejects_a_cross_family_stale_candidate_atomically() {
+    let state = frozen_spins_test_state().await;
+    let mut stale_scene = crate::get_or_load_current_live_scene_document(&state)
+        .await
+        .expect("stale scene candidate");
+    let app = build_v2_router().with_state(state.clone());
+    let create = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/frozen-spins")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_revision": 12,
+                        "definition": frozen_spins_definition("pin-race", "Pinned race")
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::OK);
+
+    stale_scene.scene.name = "Stale cross-family edit".to_string();
+    let error = crate::commit_current_live_scene_document(&state, stale_scene)
+        .await
+        .expect_err("stale candidate must not overwrite the committed scene");
+    assert_eq!(error.status, StatusCode::CONFLICT);
+    assert!(error.message.starts_with("scene_stale_revision:"));
+
+    let current = crate::get_or_load_current_live_scene_document(&state)
+        .await
+        .expect("current scene");
+    assert_eq!(current.revision, 13);
+    assert_ne!(current.scene.name, "Stale cross-family edit");
+    assert!(current
+        .magnetization_constraints
+        .iter()
+        .any(|constraint| constraint.frozen_spins().id == "pin-race"));
+}
+
+#[test]
+fn scene_resource_preserves_selection_and_frozen_spins_authoring_state() {
+    let mut scene = sample_scene_document();
+    scene.selections = serde_json::from_value(serde_json::json!([{
+        "schema_version": "selection_expr.v1",
+        "id": "edge",
+        "name": "Edge",
+        "expression": {"kind": "all_magnetic"}
+    }]))
+    .expect("selection fixture");
+    scene.magnetization_constraints = serde_json::from_value(serde_json::json!([{
+        "kind": "frozen_spins",
+        "schema_version": "frozen_spins.v1",
+        "id": "pin-edge",
+        "name": "Pinned edge",
+        "enabled": true,
+        "selector": {"kind": "ref", "selection_id": "edge"},
+        "reference": {"kind": "capture_current_at_activation"},
+        "membership": {"kind": "static"},
+        "activation": {"kind": "all_stages"},
+        "empty_selection": "error",
+        "inactive_selection": "warn_and_intersect"
+    }]))
+    .expect("constraint fixture");
+
+    let resource = crate::schemas::authoring::SceneResource::from_scene_document(scene.clone())
+        .expect("scene resource projection");
+    let projected = serde_json::to_value(resource).expect("scene resource serializes");
+    assert_eq!(projected["selections"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        projected["magnetization_constraints"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+    let roundtrip: fullmag_authoring::SceneDocument =
+        serde_json::from_value(projected).expect("scene resource returns to canonical scene");
+    assert_eq!(roundtrip.selections, scene.selections);
+    assert_eq!(
+        roundtrip.magnetization_constraints,
+        scene.magnetization_constraints
+    );
+}
+
+#[test]
+fn frozen_spins_openapi_is_typed_and_declares_structured_errors() {
+    let document = crate::openapi_v2::openapi_json();
+    let schemas = &document["components"]["schemas"];
+    let definition = &schemas["FrozenSpinsMutationRequest"]["properties"]["definition"];
+    assert_ne!(definition, &serde_json::json!({"type": "object"}));
+    assert!(definition.get("$ref").is_some() || definition.get("oneOf").is_some());
+    let selector = &schemas["FrozenSpinsPreviewRequest"]["properties"]["selector"];
+    assert_ne!(selector, &serde_json::json!({"type": "object"}));
+    assert!(selector.get("$ref").is_some() || selector.get("oneOf").is_some());
+    let frozen_required = schemas["FrozenSpinsSchema"]["required"]
+        .as_array()
+        .expect("frozen-spins schema required fields");
+    for defaulted in [
+        "enabled",
+        "reference",
+        "membership",
+        "activation",
+        "empty_selection",
+        "inactive_selection",
+    ] {
+        assert!(
+            !frozen_required.iter().any(|field| field == defaulted),
+            "canonical defaulted field {defaulted} must remain optional in OpenAPI"
+        );
+    }
+    let constraint_kind = &schemas["MagnetizationConstraintSchema"];
+    assert!(
+        constraint_kind.to_string().contains("frozen_spins"),
+        "magnetization constraint schema must expose a frozen_spins literal"
+    );
+    assert!(
+        !constraint_kind
+            .to_string()
+            .contains("\"kind\":{\"type\":\"string\"}"),
+        "constraint kind must not be an unconstrained string"
+    );
+    for property in [
+        &schemas["FrozenSpinsSchema"]["properties"]["enabled"],
+        &schemas["FrozenSpinsSchema"]["properties"]["reference"],
+        &schemas["FrozenSpinsSchema"]["properties"]["activation"],
+        &schemas["SelectionExprSchema"]["oneOf"][4]["properties"]["tolerance"],
+    ] {
+        assert!(
+            !property.to_string().contains("\"null\""),
+            "optional defaulted fields must not advertise runtime-rejected null: {property}"
+        );
+    }
+
+    for (path, method, statuses) in [
+        (
+            "/v2/sessions/current/model/frozen-spins",
+            "post",
+            &["409", "422"][..],
+        ),
+        (
+            "/v2/sessions/current/model/frozen-spins/{constraint_id}",
+            "patch",
+            &["409", "422"][..],
+        ),
+        (
+            "/v2/sessions/current/model/frozen-spins/previews",
+            "post",
+            &["409", "422"][..],
+        ),
+    ] {
+        for status in statuses {
+            assert_eq!(
+                document["paths"][path][method]["responses"][status]["content"]["application/json"]
+                    ["schema"]["$ref"],
+                "#/components/schemas/ApiErrorResponse",
+                "{method} {path} {status}"
+            );
+        }
+    }
+
+    let mask_responses = &document["paths"]
+        ["/v2/sessions/current/data/frozen-spins/resolved-masks/{mask_id}"]["get"]["responses"];
+    for (status, expected_headers) in [
+        (
+            "200",
+            &[
+                "ETag",
+                "Accept-Ranges",
+                "x-fullmag-mask-sha256",
+                "x-fullmag-topology-fingerprint",
+                "x-fullmag-source-state-revision",
+            ][..],
+        ),
+        (
+            "206",
+            &[
+                "ETag",
+                "Accept-Ranges",
+                "Content-Range",
+                "x-fullmag-mask-sha256",
+                "x-fullmag-topology-fingerprint",
+                "x-fullmag-source-state-revision",
+            ][..],
+        ),
+        ("304", &["ETag"][..]),
+        ("416", &["Accept-Ranges", "Content-Range"][..]),
+    ] {
+        for header_name in expected_headers {
+            assert!(
+                mask_responses[status]["headers"][header_name].is_object(),
+                "mask response {status} must type header {header_name}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn frozen_spins_json_rejections_use_the_documented_api_error_shape() {
+    let app = build_v2_router().with_state(frozen_spins_test_state().await);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/frozen-spins/previews")
+                .header("content-type", "application/json")
+                .body(Body::from("{"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let error = body_json(response).await;
+    assert_eq!(error["code"], "invalid_request_body");
+    assert!(error["error"].is_string());
+    assert!(error["message"].is_string());
+}
+
+#[tokio::test]
+async fn frozen_spins_optional_non_null_openapi_matches_runtime_rejection() {
+    let app = build_v2_router().with_state(frozen_spins_test_state().await);
+    for field in ["enabled", "reference", "activation"] {
+        let mut definition = serde_json::json!({
+            "schema_version": "frozen_spins.v1",
+            "id": format!("null-{field}"),
+            "name": "Null parity",
+            "selector": {"kind": "all_magnetic"}
+        });
+        definition[field] = serde_json::Value::Null;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v2/sessions/current/model/frozen-spins")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "expected_revision": 12,
+                            "definition": definition
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{field}"
+        );
+        assert_eq!(body_json(response).await["code"], "invalid_request_body");
+    }
+
+    let (status, error) = create_frozen_spins_preview_for_test(
+        &app,
+        serde_json::json!({
+            "kind": "compare",
+            "lhs": {"kind": "coordinate", "component": "x", "frame": {"kind": "world"}},
+            "op": "gt",
+            "rhs": {"kind": "constant", "value": 0.0},
+            "tolerance": null
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(error["code"], "invalid_request_body");
+}
+
+#[tokio::test]
+async fn frozen_spins_validation_preserves_multiple_bounded_diagnostics() {
+    let app = build_v2_router().with_state(frozen_spins_test_state().await);
+    let (status, error) = create_frozen_spins_preview_for_test(
+        &app,
+        serde_json::json!({
+            "kind": "and",
+            "expressions": [
+                {"kind": "in_region", "object_id": "body", "region_id": "missing-a"},
+                {"kind": "in_region", "object_id": "body", "region_id": "missing-b"}
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let diagnostics = error["diagnostics"]
+        .as_array()
+        .expect("structured selection diagnostics");
+    assert!(diagnostics.len() >= 2);
+    assert!(diagnostics.len() <= 32);
+    assert!(diagnostics.iter().all(|item| item["code"].is_string()));
+    assert!(diagnostics.iter().all(|item| item["message"].is_string()));
+}
+
+async fn create_frozen_spins_preview_for_test(
+    app: &axum::Router,
+    selector: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/frozen-spins/previews")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_revision": 12,
+                        "expected_source_state_revision": 7,
+                        "expected_topology_fingerprint": "grid-a",
+                        "target_object_id": "body",
+                        "selector": selector
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, body_json(response).await)
+}
+
+#[tokio::test]
+async fn frozen_spins_preview_identity_includes_selector_not_only_resolved_mask() {
+    let state = frozen_spins_test_state().await;
+    let app = build_v2_router().with_state(state.clone());
+    let (first_status, first) =
+        create_frozen_spins_preview_for_test(&app, serde_json::json!({"kind": "all_magnetic"}))
+            .await;
+    let (second_status, second) = create_frozen_spins_preview_for_test(
+        &app,
+        serde_json::json!({
+            "kind": "and",
+            "expressions": [
+                {"kind": "all_magnetic"},
+                {"kind": "all_magnetic"}
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(first_status, StatusCode::OK);
+    assert_eq!(second_status, StatusCode::OK);
+    assert_eq!(first["mask_sha256"], second["mask_sha256"]);
+    assert_ne!(first["preview_id"], second["preview_id"]);
+    assert_eq!(state.frozen_spins_previews.read().await.len(), 2);
+}
+
+#[tokio::test]
+async fn frozen_spins_mask_etag_covers_the_complete_fmsk_representation() {
+    let state = frozen_spins_test_state().await;
+    let app = build_v2_router().with_state(state.clone());
+    let (status, preview) =
+        create_frozen_spins_preview_for_test(&app, serde_json::json!({"kind": "all_magnetic"}))
+            .await;
+    assert_eq!(status, StatusCode::OK);
+    let resource = preview["mask_resource"].as_str().unwrap().to_string();
+    let preview_id = preview["preview_id"].as_str().unwrap().to_string();
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&resource)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let first_etag = first.headers()[header::ETAG].to_str().unwrap().to_string();
+    let first_body = body_bytes(first).await;
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document.as_mut().expect("scene").revision = 13;
+    }
+    {
+        let mut previews = state.frozen_spins_previews.write().await;
+        let record = previews.get_mut(&preview_id).expect("preview record");
+        record.scene_revision = 13;
+        record.response.revision = 13;
+    }
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri(&resource)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let second_etag = second.headers()[header::ETAG].to_str().unwrap().to_string();
+    let second_body = body_bytes(second).await;
+    assert_ne!(first_body, second_body);
+    assert_ne!(first_etag, second_etag);
+}
+
+#[tokio::test]
+async fn frozen_spins_preview_store_is_bounded_and_evicts_oldest_records() {
+    let state = frozen_spins_test_state().await;
+    let app = build_v2_router().with_state(state.clone());
+    let (status, preview) =
+        create_frozen_spins_preview_for_test(&app, serde_json::json!({"kind": "all_magnetic"}))
+            .await;
+    assert_eq!(status, StatusCode::OK);
+    let seed_id = preview["preview_id"].as_str().unwrap();
+    let seed = state
+        .frozen_spins_previews
+        .read()
+        .await
+        .get(seed_id)
+        .cloned()
+        .expect("seed preview");
+    let mut previews = state.frozen_spins_previews.write().await;
+    for index in 0..40 {
+        let id = format!("bounded-{index:02}");
+        let mut record = seed.clone();
+        record.response.preview_id = id.clone();
+        previews.insert(id, record);
+    }
+    assert!(previews.len() <= 32);
+    assert!(previews.get("bounded-00").is_none());
+    assert!(previews.get("bounded-39").is_some());
+}
+
+#[tokio::test]
+async fn frozen_spins_preview_store_discards_records_from_a_previous_session() {
+    let state = frozen_spins_test_state().await;
+    let app = build_v2_router().with_state(state.clone());
+    let (status, preview) =
+        create_frozen_spins_preview_for_test(&app, serde_json::json!({"kind": "all_magnetic"}))
+            .await;
+    assert_eq!(status, StatusCode::OK);
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.session_id = "replacement-session".to_string();
+    }
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(preview["mask_resource"].as_str().unwrap())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(state.frozen_spins_previews.read().await.len(), 0);
+}
+
+#[tokio::test]
+async fn frozen_spins_delayed_insert_cannot_clear_a_newer_session_epoch() {
+    let state = frozen_spins_test_state().await;
+    let app = build_v2_router().with_state(state.clone());
+    let (status, preview) =
+        create_frozen_spins_preview_for_test(&app, serde_json::json!({"kind": "all_magnetic"}))
+            .await;
+    assert_eq!(status, StatusCode::OK);
+    let old_id = preview["preview_id"].as_str().unwrap();
+    let old_record = state
+        .frozen_spins_previews
+        .read()
+        .await
+        .get(old_id)
+        .cloned()
+        .expect("old-session preview");
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.session_id = "session-b".to_string();
+    }
+    let mut current_record = old_record.clone();
+    current_record.session_id = "session-b".to_string();
+    current_record.response.preview_id = "session-b-preview".to_string();
+    state
+        .frozen_spins_previews
+        .write()
+        .await
+        .insert("session-b-preview".to_string(), current_record);
+
+    let error = super::handlers::model::frozen_spins::insert_current_preview_record(
+        &state,
+        "late-session-a".to_string(),
+        old_record,
+    )
+    .await
+    .expect_err("stale session insert must fail closed");
+    assert_eq!(error.status, StatusCode::CONFLICT);
+    let previews = state.frozen_spins_previews.read().await;
+    assert!(previews.get("session-b-preview").is_some());
+    assert!(previews.get("late-session-a").is_none());
+}
+
+#[tokio::test]
+async fn frozen_spins_shared_model_and_data_read_holds_the_session_epoch() {
+    let state = frozen_spins_test_state().await;
+    let app = build_v2_router().with_state(state.clone());
+    let (status, preview) =
+        create_frozen_spins_preview_for_test(&app, serde_json::json!({"kind": "all_magnetic"}))
+            .await;
+    assert_eq!(status, StatusCode::OK);
+    let preview_id = preview["preview_id"].as_str().unwrap().to_string();
+
+    let store_guard = state.frozen_spins_previews.write().await;
+    let read_state = state.clone();
+    let read_id = preview_id.clone();
+    let read_task = tokio::spawn(async move {
+        super::handlers::model::frozen_spins::current_preview_record(&read_state, &read_id).await
+    });
+    let mut observed_session_reader = false;
+    for _ in 0..256 {
+        if state.current_live_state.try_write().is_err() {
+            observed_session_reader = true;
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        observed_session_reader,
+        "preview read must retain the session read guard while waiting for the store"
+    );
+
+    let switch_state = state.clone();
+    let mut switch_task = tokio::spawn(async move {
+        if let Some(snapshot) = switch_state.current_live_state.write().await.as_mut() {
+            snapshot.session.session_id = "session-c".to_string();
+        }
+    });
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(25), &mut switch_task)
+            .await
+            .is_err(),
+        "session transition must wait until the shared model/data store read completes"
+    );
+    drop(store_guard);
+    assert!(read_task.await.unwrap().unwrap().is_some());
+    switch_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn frozen_spins_mask_supports_not_modified_ranges_and_unsatisfied_ranges() {
+    let state = frozen_spins_test_state().await;
+    let app = build_v2_router().with_state(state);
+    let (status, preview) =
+        create_frozen_spins_preview_for_test(&app, serde_json::json!({"kind": "all_magnetic"}))
+            .await;
+    assert_eq!(status, StatusCode::OK);
+    let resource = preview["mask_resource"].as_str().unwrap();
+
+    let full = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(resource)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(full.status(), StatusCode::OK);
+    let etag = full.headers()[header::ETAG].to_str().unwrap().to_string();
+
+    let not_modified = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(resource)
+                .header(header::IF_NONE_MATCH, &etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(not_modified.status(), StatusCode::NOT_MODIFIED);
+
+    let partial = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(resource)
+                .header(header::RANGE, "bytes=0-3")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(partial.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(&body_bytes(partial).await[..], b"FMSK");
+
+    let unsatisfied = app
+        .oneshot(
+            Request::builder()
+                .uri(resource)
+                .header(header::RANGE, "bytes=9999-")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unsatisfied.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+}
+
+#[tokio::test]
+async fn frozen_spins_ref_default_membership_resolves_named_state_dependency() {
+    let state = frozen_spins_test_state().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document.as_mut().expect("scene").selections =
+            serde_json::from_value(serde_json::json!([{
+                "schema_version": "selection_expr.v1",
+                "id": "positive_mx",
+                "name": "Positive mx",
+                "expression": {
+                    "kind": "compare",
+                    "lhs": {"kind": "magnetization_component", "component": "x"},
+                    "op": "gt",
+                    "rhs": {"kind": "constant", "value": 0.0}
+                }
+            }]))
+            .expect("state-dependent named selection");
+    }
+    let app = build_v2_router().with_state(state);
+    let mut definition = frozen_spins_definition("pin-positive", "Pin positive mx");
+    definition["selector"] = serde_json::json!({
+        "kind": "ref",
+        "selection_id": "positive_mx"
+    });
+    definition.as_object_mut().unwrap().remove("membership");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/frozen-spins")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_revision": 12,
+                        "definition": definition
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(response).await["definition"]["membership"]["kind"],
+        "snapshot_at_activation"
+    );
+}
+
+#[tokio::test]
+async fn frozen_spins_scene_validation_rejects_invalid_asset_and_stage_activation() {
+    let invalid_cases = [
+        (
+            "reference",
+            serde_json::json!({"kind": "explicit_field_asset", "asset_id": ""}),
+            "frozen_reference_asset_invalid",
+        ),
+        (
+            "activation",
+            serde_json::json!({"kind": "stage_ids", "stage_ids": []}),
+            "frozen_activation_stage_ids_invalid",
+        ),
+        (
+            "activation",
+            serde_json::json!({"kind": "stage_ids", "stage_ids": ["missing", "missing"]}),
+            "frozen_activation_stage_ids_invalid",
+        ),
+        (
+            "activation",
+            serde_json::json!({"kind": "stage_ids", "stage_ids": ["missing"]}),
+            "frozen_activation_stage_unknown",
+        ),
+    ];
+    for (field, value, code) in invalid_cases {
+        let state = frozen_spins_test_state().await;
+        let app = build_v2_router().with_state(state);
+        let mut definition = frozen_spins_definition("pin-invalid", "Invalid pin");
+        definition[field] = value;
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v2/sessions/current/model/frozen-spins")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "expected_revision": 12,
+                            "definition": definition
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{code}"
+        );
+        assert_eq!(body_json(response).await["code"], code);
+    }
+}
+
+#[tokio::test]
+async fn frozen_spins_preview_intersects_all_magnetic_with_target_object() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let mesh_dir = artifact_dir.join("mesh");
+    fs::create_dir_all(&mesh_dir).expect("create membership artifact directory");
+    let topology_fingerprint = "00".repeat(32);
+    fs::write(
+        mesh_dir.join("fdm_region_membership.v2.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "fdm_region_membership.v2",
+            "binary_path": "mesh/fdm_region_membership.v2.bin",
+            "grid_fingerprint": topology_fingerprint,
+            "origin_m": [0.0, 0.0, 0.0],
+            "counts": [3, 1, 1],
+            "cell_m": [1.0, 1.0, 1.0],
+            "cell_count": 3,
+            "object_ids": ["body", "other"],
+            "region_legend": [{
+                "numeric_id": 1,
+                "object_id": "body",
+                "region_id": "body:all",
+                "priority": 0
+            }, {
+                "numeric_id": 2,
+                "object_id": "other",
+                "region_id": "other:all",
+                "priority": 0
+            }],
+            "encoding": "FMRM:u32_membership_le"
+        }))
+        .unwrap(),
+    )
+    .expect("write membership descriptor");
+    fs::write(
+        mesh_dir.join("fdm_region_membership.v2.bin"),
+        fdm_v2_membership_binary([3, 1, 1], &[1, 1, 2]),
+    )
+    .expect("write membership mask");
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut scene = sample_scene_document();
+        scene.revision = 12;
+        let mut other = scene.objects[0].clone();
+        other.id = "other".to_string();
+        other.name = "Other".to_string();
+        scene.objects.push(other);
+        snapshot.scene_document = Some(scene);
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [3, 1, 1],
+                "origin_m": [0.0, 0.0, 0.0],
+                "cell_size": [1.0, 1.0, 1.0]
+            },
+            "execution_plan": {"backend_plan": {"grid_certificate": {
+                "grid_fingerprint": "00".repeat(32),
+                "cells": [3, 1, 1],
+                "origin_m": [0.0, 0.0, 0.0],
+                "cell_size": [1.0, 1.0, 1.0]
+            }}}
+        }));
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0]
+                ],
+                "layout": {"grid_cells": [3, 1, 1]}
+            }
+        }))
+        .expect("multi-object magnetization fixture");
+        snapshot.field_quantity_revisions.insert("m".into(), 7);
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/frozen-spins/previews")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_revision": 12,
+                        "expected_source_state_revision": 7,
+                        "expected_topology_fingerprint": "00".repeat(32),
+                        "target_object_id": "body",
+                        "selector": {"kind": "all_magnetic"}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let preview = body_json(response).await;
+    assert_eq!(preview["frozen_dof_count"], 2);
+    assert_eq!(preview["free_dof_count"], 1);
+    assert_ne!(
+        preview["requested"]["selector_sha256"],
+        preview["resolved"]["effective_selector_sha256"]
+    );
+    let record = state
+        .frozen_spins_previews
+        .read()
+        .await
+        .get(preview["preview_id"].as_str().unwrap())
+        .cloned()
+        .expect("target-scoped preview record");
+    assert_eq!(record.frozen_mask, vec![true, true, false]);
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn frozen_spins_preview_uses_a_collision_free_synthetic_selection_id() {
+    let state = frozen_spins_test_state().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document.as_mut().expect("scene").selections =
+            serde_json::from_value(serde_json::json!([{
+                "schema_version": "selection_expr.v1",
+                "id": "__preview_selector__",
+                "name": "Legal authored name",
+                "expression": {"kind": "all_magnetic"}
+            }]))
+            .expect("authored selection fixture");
+    }
+    let app = build_v2_router().with_state(state);
+    let (status, preview) =
+        create_frozen_spins_preview_for_test(&app, serde_json::json!({"kind": "all_magnetic"}))
+            .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+}
+
+#[test]
+fn frozen_spins_scene_validation_uses_a_collision_free_synthetic_selection_id() {
+    let mut scene = sample_scene_document();
+    scene.selections = serde_json::from_value(serde_json::json!([{
+        "schema_version": "selection_expr.v1",
+        "id": "__scene_constraint_0",
+        "name": "Legal authored selection",
+        "expression": {"kind": "all_magnetic"}
+    }]))
+    .expect("authored selection fixture");
+    scene.magnetization_constraints = serde_json::from_value(serde_json::json!([{
+        "kind": "frozen_spins",
+        "schema_version": "frozen_spins.v1",
+        "id": "pin-body",
+        "name": "Pin body",
+        "enabled": true,
+        "selector": {"kind": "all_magnetic"}
+    }]))
+    .expect("constraint fixture");
+    fullmag_authoring::validate_scene_document(&scene)
+        .expect("legal authored selection id must not collide with validator internals");
+}
+
+#[tokio::test]
+async fn frozen_spins_preview_rejects_an_unknown_stage_context() {
+    let state = frozen_spins_test_state().await;
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/frozen-spins/previews")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_revision": 12,
+                        "expected_source_state_revision": 7,
+                        "expected_topology_fingerprint": "grid-a",
+                        "target_object_id": "body",
+                        "stage_id": "missing-stage",
+                        "selector": {"kind": "all_magnetic"}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body_json(response).await["code"], "selection_unknown_stage");
 }

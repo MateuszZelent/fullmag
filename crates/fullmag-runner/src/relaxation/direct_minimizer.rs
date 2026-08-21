@@ -168,6 +168,51 @@ pub(crate) fn energy_metric_dot(
         .sum()
 }
 
+pub(crate) fn energy_metric_dot_free(
+    a: &[[f64; 3]],
+    b: &[[f64; 3]],
+    ms_apm: &[f64],
+    volumes_m3: &[f64],
+    frozen: Option<&fullmag_engine::FrozenSpinsState>,
+) -> f64 {
+    assert_eq!(a.len(), b.len());
+    assert_eq!(a.len(), ms_apm.len());
+    assert_eq!(a.len(), volumes_m3.len());
+    a.iter()
+        .zip(b)
+        .zip(ms_apm)
+        .zip(volumes_m3)
+        .enumerate()
+        .filter(|(index, _)| frozen.is_none_or(|state| !state.is_frozen(*index)))
+        .map(|(_, (((ai, bi), ms), volume))| {
+            MU0 * ms * volume * crate::relaxation::vector_math::dot_vec3(*ai, *bi)
+        })
+        .sum()
+}
+
+/// Return the first-order energy increment represented by the stored trial chord.
+///
+/// The field (rather than only the tangent gradient) is intentional: a
+/// normalized floating-point retraction can carry a representable normal
+/// component, and the ambient field is the derivative of the physical energy
+/// against that actual chord.
+pub(crate) fn representable_chord_energy_linear_increment(
+    previous_magnetization: &[[f64; 3]],
+    trial_magnetization: &[[f64; 3]],
+    h_eff: &[[f64; 3]],
+    ms_apm: &[f64],
+    volumes_m3: &[f64],
+) -> f64 {
+    assert_eq!(previous_magnetization.len(), trial_magnetization.len());
+    assert_eq!(previous_magnetization.len(), h_eff.len());
+    let chord: Vec<[f64; 3]> = previous_magnetization
+        .iter()
+        .zip(trial_magnetization)
+        .map(|(previous, trial)| sub_vec3(*trial, *previous))
+        .collect();
+    -energy_metric_dot(h_eff, &chord, ms_apm, volumes_m3)
+}
+
 pub(crate) fn mask_vectors_to_active_domain(values: &mut [[f64; 3]], active_mask: Option<&[bool]>) {
     let Some(active_mask) = active_mask else {
         return;
@@ -240,6 +285,21 @@ pub(crate) fn projected_gradient_trial_magnetization(
         .collect()
 }
 
+pub(crate) fn projected_gradient_trial_magnetization_with_frozen(
+    magnetization: &[[f64; 3]],
+    gradient: &[[f64; 3]],
+    step_size: f64,
+    active_mask: Option<&[bool]>,
+    frozen: Option<&fullmag_engine::FrozenSpinsState>,
+) -> Option<Vec<[f64; 3]>> {
+    let mut trial =
+        projected_gradient_trial_magnetization(magnetization, gradient, step_size, active_mask)?;
+    if let Some(frozen) = frozen {
+        frozen.restore_reference(&mut trial);
+    }
+    Some(trial)
+}
+
 pub(crate) fn nonlinear_cg_trial_magnetization(
     magnetization: &[[f64; 3]],
     direction: &[[f64; 3]],
@@ -260,17 +320,30 @@ pub(crate) fn nonlinear_cg_trial_magnetization(
         .collect()
 }
 
+pub(crate) fn nonlinear_cg_trial_magnetization_with_frozen(
+    magnetization: &[[f64; 3]],
+    direction: &[[f64; 3]],
+    step_size: f64,
+    active_mask: Option<&[bool]>,
+    frozen: Option<&fullmag_engine::FrozenSpinsState>,
+) -> Option<Vec<[f64; 3]>> {
+    let mut trial =
+        nonlinear_cg_trial_magnetization(magnetization, direction, step_size, active_mask)?;
+    if let Some(frozen) = frozen {
+        frozen.restore_reference(&mut trial);
+    }
+    Some(trial)
+}
+
 pub(crate) fn projected_gradient_armijo_accepts(
     previous_energy_j: f64,
     trial_energy_j: f64,
-    step_size: f64,
-    direction_dot_gradient_j_per_step: f64,
+    representable_chord_energy_increment_j: f64,
 ) -> bool {
     projected_gradient_armijo_accepts_with_tolerance(
         previous_energy_j,
         trial_energy_j,
-        step_size,
-        direction_dot_gradient_j_per_step,
+        representable_chord_energy_increment_j,
         0.0,
     )
 }
@@ -278,28 +351,30 @@ pub(crate) fn projected_gradient_armijo_accepts(
 pub(crate) fn projected_gradient_armijo_accepts_with_tolerance(
     previous_energy_j: f64,
     trial_energy_j: f64,
-    step_size: f64,
-    direction_dot_gradient_j_per_step: f64,
+    representable_chord_energy_increment_j: f64,
     energy_tolerance_j: f64,
 ) -> bool {
-    direction_dot_gradient_j_per_step < 0.0
+    let tolerance = energy_tolerance_j.max(0.0);
+    previous_energy_j.is_finite()
+        && trial_energy_j.is_finite()
+        && representable_chord_energy_increment_j.is_finite()
+        && representable_chord_energy_increment_j < 0.0
+        && (tolerance > 0.0 || trial_energy_j < previous_energy_j)
         && trial_energy_j
             <= previous_energy_j
-                + ARMIJO_COEFFICIENT * step_size * direction_dot_gradient_j_per_step
-                + energy_tolerance_j.max(0.0)
+                + ARMIJO_COEFFICIENT * representable_chord_energy_increment_j
+                + tolerance
 }
 
 pub(crate) fn nonlinear_cg_armijo_accepts(
     previous_energy_j: f64,
     trial_energy_j: f64,
-    step_size: f64,
-    direction_dot_gradient: f64,
+    representable_chord_energy_increment_j: f64,
 ) -> bool {
     nonlinear_cg_armijo_accepts_with_tolerance(
         previous_energy_j,
         trial_energy_j,
-        step_size,
-        direction_dot_gradient,
+        representable_chord_energy_increment_j,
         0.0,
     )
 }
@@ -307,14 +382,19 @@ pub(crate) fn nonlinear_cg_armijo_accepts(
 pub(crate) fn nonlinear_cg_armijo_accepts_with_tolerance(
     previous_energy_j: f64,
     trial_energy_j: f64,
-    step_size: f64,
-    direction_dot_gradient: f64,
+    representable_chord_energy_increment_j: f64,
     energy_tolerance_j: f64,
 ) -> bool {
-    trial_energy_j
-        <= previous_energy_j
-            + ARMIJO_COEFFICIENT * step_size * direction_dot_gradient
-            + energy_tolerance_j.max(0.0)
+    let tolerance = energy_tolerance_j.max(0.0);
+    previous_energy_j.is_finite()
+        && trial_energy_j.is_finite()
+        && representable_chord_energy_increment_j.is_finite()
+        && representable_chord_energy_increment_j < 0.0
+        && (tolerance > 0.0 || trial_energy_j < previous_energy_j)
+        && trial_energy_j
+            <= previous_energy_j
+                + ARMIJO_COEFFICIENT * representable_chord_energy_increment_j
+                + tolerance
 }
 
 pub(crate) fn backtracked_step_size(step_size: f64) -> f64 {
@@ -352,7 +432,10 @@ pub(crate) fn projected_gradient_line_search<T, E, F>(
     direction_dot_gradient_j_per_step: f64,
     magnetization: &[[f64; 3]],
     gradient: &[[f64; 3]],
+    h_eff: &[[f64; 3]],
     initial_step_size: f64,
+    ms_apm: &[f64],
+    volumes_m3: &[f64],
     active_mask: Option<&[bool]>,
     evaluate_trial: F,
 ) -> Result<Option<DirectMinimizerAcceptedTrial<T>>, E>
@@ -364,8 +447,11 @@ where
         direction_dot_gradient_j_per_step,
         magnetization,
         gradient,
+        h_eff,
         initial_step_size,
         0.0,
+        ms_apm,
+        volumes_m3,
         active_mask,
         evaluate_trial,
     )
@@ -376,8 +462,11 @@ pub(crate) fn projected_gradient_line_search_with_tolerance<T, E, F>(
     direction_dot_gradient_j_per_step: f64,
     magnetization: &[[f64; 3]],
     gradient: &[[f64; 3]],
+    h_eff: &[[f64; 3]],
     initial_step_size: f64,
     energy_tolerance_j: f64,
+    ms_apm: &[f64],
+    volumes_m3: &[f64],
     active_mask: Option<&[bool]>,
     mut evaluate_trial: F,
 ) -> Result<Option<DirectMinimizerAcceptedTrial<T>>, E>
@@ -404,13 +493,22 @@ where
             continue;
         };
         let evaluation = evaluate_trial(&trial)?;
-        if projected_gradient_armijo_accepts_with_tolerance(
-            previous_energy_j,
-            evaluation.energy_j,
-            trial_step_size,
-            direction_dot_gradient_j_per_step,
-            energy_tolerance_j,
-        ) {
+        let chord_increment_j = representable_chord_energy_linear_increment(
+            magnetization,
+            &trial,
+            h_eff,
+            ms_apm,
+            volumes_m3,
+        );
+        if direction_dot_gradient_j_per_step.is_finite()
+            && direction_dot_gradient_j_per_step < 0.0
+            && projected_gradient_armijo_accepts_with_tolerance(
+                previous_energy_j,
+                evaluation.energy_j,
+                chord_increment_j,
+                energy_tolerance_j,
+            )
+        {
             return Ok(Some(DirectMinimizerAcceptedTrial {
                 stats: evaluation.stats,
                 magnetization: trial,
@@ -434,8 +532,11 @@ pub(crate) fn nonlinear_cg_line_search<T, E, F>(
     previous_energy_j: f64,
     direction_dot_gradient: f64,
     magnetization: &[[f64; 3]],
+    h_eff: &[[f64; 3]],
     direction: &[[f64; 3]],
     initial_step_size: f64,
+    ms_apm: &[f64],
+    volumes_m3: &[f64],
     active_mask: Option<&[bool]>,
     evaluate_trial: F,
 ) -> Result<Option<DirectMinimizerAcceptedTrial<T>>, E>
@@ -446,9 +547,12 @@ where
         previous_energy_j,
         direction_dot_gradient,
         magnetization,
+        h_eff,
         direction,
         initial_step_size,
         0.0,
+        ms_apm,
+        volumes_m3,
         active_mask,
         evaluate_trial,
     )
@@ -458,9 +562,12 @@ pub(crate) fn nonlinear_cg_line_search_with_tolerance<T, E, F>(
     previous_energy_j: f64,
     direction_dot_gradient: f64,
     magnetization: &[[f64; 3]],
+    h_eff: &[[f64; 3]],
     direction: &[[f64; 3]],
     initial_step_size: f64,
     energy_tolerance_j: f64,
+    ms_apm: &[f64],
+    volumes_m3: &[f64],
     active_mask: Option<&[bool]>,
     mut evaluate_trial: F,
 ) -> Result<Option<DirectMinimizerAcceptedTrial<T>>, E>
@@ -487,13 +594,22 @@ where
             continue;
         };
         let evaluation = evaluate_trial(&trial)?;
-        if nonlinear_cg_armijo_accepts_with_tolerance(
-            previous_energy_j,
-            evaluation.energy_j,
-            trial_step_size,
-            direction_dot_gradient,
-            energy_tolerance_j,
-        ) {
+        let chord_increment_j = representable_chord_energy_linear_increment(
+            magnetization,
+            &trial,
+            h_eff,
+            ms_apm,
+            volumes_m3,
+        );
+        if direction_dot_gradient.is_finite()
+            && direction_dot_gradient < 0.0
+            && nonlinear_cg_armijo_accepts_with_tolerance(
+                previous_energy_j,
+                evaluation.energy_j,
+                chord_increment_j,
+                energy_tolerance_j,
+            )
+        {
             return Ok(Some(DirectMinimizerAcceptedTrial {
                 stats: evaluation.stats,
                 magnetization: trial,
@@ -673,7 +789,54 @@ pub(crate) fn apply_direct_minimizer_step_metrics(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fullmag_ir::{RelaxStopIR, RelaxationControlIR};
+    use fullmag_ir::{
+        RelaxStopIR, RelaxationControlIR, ResolvedFrozenSpinsPlanIR,
+        SelectionAuthoredFingerprintIR, SelectionCertificateIR,
+        RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION, SELECTION_CERTIFICATE_SCHEMA_VERSION,
+    };
+
+    fn frozen_spins_state(
+        mask: Vec<bool>,
+        reference: &[[f64; 3]],
+    ) -> fullmag_engine::FrozenSpinsState {
+        let frozen_dof_count = mask.iter().filter(|frozen| **frozen).count() as u64;
+        let active_dof_count = mask.len() as u64;
+        let free_dof_count = active_dof_count - frozen_dof_count;
+        let plan = ResolvedFrozenSpinsPlanIR {
+            schema_version: RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION.to_string(),
+            constraint_ids: vec!["test".to_string()],
+            frozen_mask: mask,
+            active_dof_count,
+            frozen_dof_count,
+            free_dof_count,
+            mask_sha256: "a".repeat(64),
+            grid_or_mesh_fingerprint: "test-grid".to_string(),
+            source_state_revision: Some(1),
+            all_active_dofs_frozen: active_dof_count > 0 && free_dof_count == 0,
+            certificate: SelectionCertificateIR {
+                schema_version: SELECTION_CERTIFICATE_SCHEMA_VERSION.to_string(),
+                evaluator_id: "selection.fdm_cell_center.v1".to_string(),
+                constraint_ids: vec!["test".to_string()],
+                authored_fingerprints: vec![SelectionAuthoredFingerprintIR {
+                    constraint_id: "test".to_string(),
+                    selector_sha256: "b".repeat(64),
+                }],
+                raw_candidate_dof_count: frozen_dof_count,
+                inactive_candidate_dof_count: 0,
+                active_dof_count,
+                frozen_dof_count,
+                free_dof_count,
+                bounds_m: None,
+                grid_or_mesh_fingerprint: "test-grid".to_string(),
+                source_state_revision: Some(1),
+                mask_sha256: "a".repeat(64),
+                resolved_reference_sha256: "c".repeat(64),
+                warnings: Vec::new(),
+            },
+        };
+        fullmag_engine::FrozenSpinsState::capture_at_activation(&plan, None, reference)
+            .expect("valid frozen-spin fixture")
+    }
 
     fn control(algorithm: RelaxationAlgorithmIR) -> RelaxationControlIR {
         RelaxationControlIR {
@@ -685,6 +848,64 @@ mod tests {
                 max_relaxation_time_s: None,
             },
         }
+    }
+
+    #[test]
+    fn frozen_spins_direct_minimizer_reductions_exclude_frozen_entries() {
+        let reference = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let frozen = frozen_spins_state(vec![true, false], &reference);
+        let ms = [1.0, 1.0];
+        let volumes = [1.0, 1.0];
+        let g = [[100.0, 0.0, 0.0], [2.0, 0.0, 0.0]];
+        let s = [[90.0, 0.0, 0.0], [3.0, 0.0, 0.0]];
+        let y = [[80.0, 0.0, 0.0], [5.0, 0.0, 0.0]];
+        let p = [[70.0, 0.0, 0.0], [-7.0, 0.0, 0.0]];
+
+        let g_dot_g = energy_metric_dot_free(&g, &g, &ms, &volumes, Some(&frozen));
+        let s_dot_s = energy_metric_dot_free(&s, &s, &ms, &volumes, Some(&frozen));
+        let s_dot_y = energy_metric_dot_free(&s, &y, &ms, &volumes, Some(&frozen));
+        let p_dot_g = energy_metric_dot_free(&p, &g, &ms, &volumes, Some(&frozen));
+
+        assert_eq!(g_dot_g, MU0 * 4.0);
+        assert_eq!(s_dot_s, MU0 * 9.0);
+        assert_eq!(s_dot_y, MU0 * 15.0);
+        assert_eq!(p_dot_g, MU0 * -14.0);
+    }
+
+    #[test]
+    fn frozen_spins_direct_minimizer_trials_restore_reference_before_evaluation() {
+        let reference = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let frozen = frozen_spins_state(vec![true, false], &reference);
+        let gradient = [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0]];
+        let direction = [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0]];
+
+        let projected = projected_gradient_trial_magnetization_with_frozen(
+            &reference,
+            &gradient,
+            0.25,
+            None,
+            Some(&frozen),
+        )
+        .expect("valid projected-gradient trial");
+        let ncg = nonlinear_cg_trial_magnetization_with_frozen(
+            &reference,
+            &direction,
+            0.25,
+            None,
+            Some(&frozen),
+        )
+        .expect("valid NCG trial");
+
+        assert_eq!(
+            projected[0].map(f64::to_bits),
+            reference[0].map(f64::to_bits)
+        );
+        assert_eq!(ncg[0].map(f64::to_bits), reference[0].map(f64::to_bits));
+        assert_ne!(
+            projected[1].map(f64::to_bits),
+            reference[1].map(f64::to_bits)
+        );
+        assert_ne!(ncg[1].map(f64::to_bits), reference[1].map(f64::to_bits));
     }
 
     #[test]
@@ -953,8 +1174,37 @@ mod tests {
 
     #[test]
     fn projected_gradient_armijo_accepts_sufficient_energy_decrease() {
-        assert!(projected_gradient_armijo_accepts(10.0, 9.999, 1.0, -1.0));
-        assert!(!projected_gradient_armijo_accepts(10.0, 10.0, 1.0, -1.0));
+        assert!(projected_gradient_armijo_accepts(10.0, 9.999, -1.0));
+        assert!(!projected_gradient_armijo_accepts(10.0, 10.0, -1.0));
+    }
+
+    #[test]
+    fn armijo_uses_representable_retraction_chord() {
+        let previous_m = [[1.0, 0.0, 0.0]];
+        let trial_m = [[0.6, 0.8, 0.0]];
+        let h_eff = [[0.0, 1.0, 0.0]];
+        let chord_increment_j = representable_chord_energy_linear_increment(
+            &previous_m,
+            &trial_m,
+            &h_eff,
+            &[1.0],
+            &[1.0],
+        );
+        let previous_energy_j = 1.0;
+        let trial_energy_j = previous_energy_j - 9.0e-5 * MU0;
+
+        assert!((chord_increment_j + 0.8 * MU0).abs() < 1.0e-15);
+        assert!(projected_gradient_armijo_accepts_with_tolerance(
+            previous_energy_j,
+            trial_energy_j,
+            chord_increment_j,
+            0.0,
+        ));
+        assert!(!projected_gradient_armijo_accepts(
+            previous_energy_j,
+            trial_energy_j,
+            -MU0,
+        ));
     }
 
     #[test]
@@ -995,14 +1245,12 @@ mod tests {
         assert!(!projected_gradient_armijo_accepts(
             previous_energy_j,
             trial_energy_j,
-            1.0e-6,
             -1.0e-20,
         ));
         assert!(projected_gradient_armijo_accepts_with_tolerance(
             previous_energy_j,
             trial_energy_j,
-            1.0e-6,
-            -1.0e-20,
+            -1.0e-26,
             energy_tolerance_j,
         ));
     }
@@ -1055,8 +1303,7 @@ mod tests {
         assert!(!projected_gradient_armijo_accepts(
             previous_energy_j,
             insufficient_trial_energy_j,
-            step_size_m_per_a,
-            slope_j_per_step,
+            step_size_m_per_a * slope_j_per_step,
         ));
     }
 
@@ -1080,8 +1327,8 @@ mod tests {
 
     #[test]
     fn nonlinear_cg_armijo_accepts_descent_direction_decrease() {
-        assert!(nonlinear_cg_armijo_accepts(10.0, 9.999, 1.0, -1.0));
-        assert!(!nonlinear_cg_armijo_accepts(10.0, 10.0, 1.0, -1.0));
+        assert!(nonlinear_cg_armijo_accepts(10.0, 9.999, -1.0));
+        assert!(!nonlinear_cg_armijo_accepts(10.0, 10.0, -1.0));
     }
 
     #[test]
@@ -1118,7 +1365,10 @@ mod tests {
             -1.0,
             &[[1.0, 0.0, 0.0]],
             &[[0.0, -2.0, 0.0]],
+            &[[0.0, 2.0, 0.0]],
             0.5,
+            &[1.0],
+            &[1.0],
             None,
             |trial| {
                 trial_count += 1;
@@ -1151,7 +1401,10 @@ mod tests {
             -1.0,
             &[[0.0, 0.0, 0.0]],
             &[[0.0, 0.0, 0.0]],
+            &[[0.0, 0.0, 0.0]],
             1.0,
+            &[1.0],
+            &[1.0],
             None,
             |_| {
                 evaluations += 1;
@@ -1176,7 +1429,10 @@ mod tests {
             -1.0,
             &[[1.0, 0.0, 0.0]],
             &[[0.0, -2.0, 0.0]],
+            &[[0.0, 2.0, 0.0]],
             0.5,
+            &[1.0],
+            &[1.0],
             None,
             |_| {
                 trial_count += 1;
@@ -1200,8 +1456,11 @@ mod tests {
             10.0,
             -1.0,
             &[[1.0, 0.0, 0.0]],
+            &[[0.0, 1.0, 0.0]],
             &[[0.0, 2.0, 0.0]],
             0.5,
+            &[1.0],
+            &[1.0],
             None,
             |trial| {
                 trial_count += 1;
@@ -1234,8 +1493,11 @@ mod tests {
             10.0,
             -1.0,
             &[[1.0, 0.0, 0.0]],
+            &[[0.0, 1.0, 0.0]],
             &[[0.0, 2.0, 0.0]],
             0.5,
+            &[1.0],
+            &[1.0],
             None,
             |_| {
                 trial_count += 1;

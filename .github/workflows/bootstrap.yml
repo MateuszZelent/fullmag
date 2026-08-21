@@ -18,29 +18,32 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
 
-      - name: Run Rust contract tests
-      run: cargo test -p fullmag-ir -p fullmag-plan -p fullmag-authoring -p fullmag-quantities -p fullmag-api
+      - name: Run Rust quantity, API and CLI contracts
+        run: ./scripts/ci/run_frontend3d_required_gate.sh rust-quantity-api-cli-contracts
 
-  fdm-relaxation-qualification:
+  generated-api-determinism:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.8.1
 
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.18.0
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
-      - name: Install Python test runner
-        run: python3 -m pip install --user 'pytest>=9,<10'
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
 
-      - name: Validate FDM qualification receipt contract
-        run: python3 -m pytest -q scripts/test_validate_fdm_relaxation_qualification.py
-
-      - name: Run bounded CPU FP64 physics smoke
-        run: timeout --foreground 180s cargo test -p fullmag-runner --test physics_validation fdm_relaxation::uniform_field_alignment -- --ignored --nocapture
+      - name: Verify generated API determinism
+        run: ./scripts/ci/run_frontend3d_required_gate.sh generated-api-determinism
 
   api-hygiene-rg13:
     runs-on: ubuntu-22.04
@@ -86,39 +89,20 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
-      - name: Install ripgrep
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ripgrep
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Resource-first migration gates
         run: ./scripts/ci-resource-first-gates.sh --strict
 
-      - name: Install workspace dependencies
-        run: pnpm install --frozen-lockfile
-
       - name: Check control-room architecture hygiene
         run: pnpm --dir apps/control-room check:architecture-hygiene
 
-      - name: Check control-room API hygiene
-        run: pnpm --dir apps/control-room check:api-hygiene
-
-      - name: Verify generated API determinism
-        run: |
-          pnpm --dir apps/control-room generate:api
-          git diff --exit-code -- \
-            apps/control-room/src/kernel/api/generated/openapi-v2.json \
-            apps/control-room/src/kernel/api/generated/openapi-v2-types.ts \
-            apps/control-room/src/kernel/api/generated/openapi-v2-client.ts
-
-      - name: Validate viewport proof contract
-        run: pnpm --dir apps/control-room validate:viewport-proof --self-test
-
-      - name: Lint control-room app
-        run: pnpm --dir apps/control-room lint
-
       - name: Check control-room idle performance
         run: pnpm --dir apps/control-room audit:idle-performance
+
+      - name: Typecheck, lint and test Control Room
+        run: ./scripts/ci/run_frontend3d_required_gate.sh control-room-typecheck-lint-test
 
       - name: Check control-room compute performance
         run: pnpm --dir apps/control-room audit:compute-performance
@@ -126,44 +110,72 @@ jobs:
       - name: Benchmark control-room compute performance
         run: pnpm --dir apps/control-room bench:compute-performance
 
-      - name: Typecheck control-room app
-        run: pnpm --dir apps/control-room typecheck
+      - name: Build control-room app
+        run: pnpm --dir apps/control-room build
 
-      - name: Test control-room app
-        run: pnpm --dir apps/control-room test
+  browser-fixture-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
 
-      - name: Install Chromium for viewport lifecycle audit
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.8.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.18.0
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium for browser fixture smoke
         run: pnpm --dir apps/control-room exec playwright install --with-deps chromium
 
-      - name: Audit production viewport lifecycle and memory
-        run: pnpm --dir apps/control-room audit:viewport-3d-memory-churn
+      - name: Run browser fixture smoke
+        run: ./scripts/ci/run_frontend3d_required_gate.sh browser-fixture-smoke
 
-      - name: Audit FEM topology WebGL position uploads
-        run: pnpm --dir apps/control-room audit:viewport-3d-fem-topology-uploads
-
-      - name: Verify viewport lifecycle audit negative controls
+      - name: Verify browser fixture smoke negative control
         run: |
-          set -euo pipefail
-          for control in \
-            CONTROL_ROOM_AUDIT_INJECT_IDLE_LOOP \
-            CONTROL_ROOM_AUDIT_INJECT_WORKER_LEAK \
-            CONTROL_ROOM_AUDIT_INJECT_GPU_BUFFER_LEAK; do
-            if env "$control=1" pnpm --dir apps/control-room audit:viewport-3d-memory-churn; then
-              echo "Expected $control to fail the lifecycle audit."
-              exit 1
-            fi
-          done
+          if FULLMAG_CI_INJECT_FAILURE=browser-fixture-proof-identity \
+            ./scripts/ci/run_frontend3d_required_gate.sh browser-fixture-smoke; then
+            echo "Expected intentional browser proof identity failure." >&2
+            exit 1
+          fi
 
-      - name: Upload viewport lifecycle audit artifacts
+      - name: Upload browser fixture smoke artifacts
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: viewport-3d-browser-audit
           path: apps/control-room/.artifacts/viewport-3d-browser-audit
-          if-no-files-found: warn
+          if-no-files-found: error
 
-      - name: Build control-room app
-        run: pnpm --dir apps/control-room build
+  fdm-relaxation-qualification:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Python test runner
+        run: python3 -m pip install --user 'pytest>=9,<10'
+
+      - name: Validate FDM qualification receipt contract
+        run: python3 -m pytest -q scripts/test_validate_fdm_relaxation_qualification.py
+
+      - name: Run bounded CPU FP64 physics smoke
+        run: timeout --foreground 180s cargo test -p fullmag-runner --test physics_validation fdm_relaxation::uniform_field_alignment -- --ignored --nocapture
 
   python-contracts:
     runs-on: ubuntu-latest

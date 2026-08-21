@@ -1,6 +1,7 @@
 "use client";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
 
 import type {
   Viewport3DMeshPart,
@@ -27,6 +28,7 @@ import type { Viewport3DRenderAdoptionRegistry } from "../model/viewport3DRender
 export function TopologyMeshLayer({
   adoptionRegistry,
   colors,
+  sessionIdentity,
   vectorColorMode,
   fieldModel,
   getPartSettings,
@@ -42,6 +44,7 @@ export function TopologyMeshLayer({
 }: {
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
   colors: Viewport3DColors;
+  sessionIdentity?: SessionResourceIdentity | null;
   vectorColorMode: string;
   fieldModel: Viewport3DFieldRenderModel | null;
   getPartSettings: (part: Viewport3DMeshPart) => VisualizationTargetSettings;
@@ -69,6 +72,7 @@ export function TopologyMeshLayer({
             <MeshPartLayer
               adoptionRegistry={adoptionRegistry}
               colors={colors}
+              sessionIdentity={sessionIdentity}
               fieldModel={resolvedFieldModel}
               key={partModel.part.id}
               magnetizationTexturePreview={(() => {

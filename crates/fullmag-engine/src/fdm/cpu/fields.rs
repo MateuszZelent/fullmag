@@ -272,7 +272,8 @@ impl ExchangeLlgProblem {
         {
             *effective = add(*effective, *oersted);
         }
-        let rhs = {
+        self.thermal_field_add_into(&mut effective_field);
+        let mut rhs = {
             let compute = |i: usize| self.llg_rhs_from_field(magnetization[i], effective_field[i]);
             #[cfg(feature = "parallel")]
             {
@@ -286,6 +287,10 @@ impl ExchangeLlgProblem {
                 (0..magnetization.len()).map(compute).collect::<Vec<_>>()
             }
         };
+        // Observability owns a raw all-DOF RHS. Do not reuse the mutating
+        // final-RHS mask owner here: telemetry must retain pinned STT/SOT and
+        // thermal contributions while separately publishing the free subset.
+        self.direct_torques_add_into(magnetization, &mut rhs);
 
         let exchange_energy_joules = if self.terms.exchange {
             self.exchange_energy_from_field(magnetization, &exchange_field)
@@ -323,7 +328,14 @@ impl ExchangeLlgProblem {
 
         let max_effective_field_amplitude = max_norm(&effective_field);
         let max_demag_field_amplitude = max_norm(&demag_field);
-        let max_rhs_amplitude = max_norm(&rhs);
+        let max_rhs_all_amplitude = max_norm(&rhs);
+        let max_torque_all_apm = max_cross_norm(magnetization, &effective_field);
+        let max_rhs_amplitude = self
+            .frozen_spins()
+            .map_or(max_rhs_all_amplitude, |frozen| frozen.max_norm_free(&rhs));
+        let max_torque_apm = self.frozen_spins().map_or(max_torque_all_apm, |frozen| {
+            frozen.max_cross_norm_free(magnetization, &effective_field)
+        });
 
         EffectiveFieldObservables {
             magnetization: magnetization.to_vec(),
@@ -341,7 +353,9 @@ impl ExchangeLlgProblem {
             max_effective_field_amplitude,
             max_demag_field_amplitude,
             max_rhs_amplitude,
-            max_torque_Apm: max_cross_norm(magnetization, &effective_field),
+            max_rhs_all_amplitude,
+            max_torque_Apm: max_torque_apm,
+            max_torque_all_Apm: max_torque_all_apm,
         }
     }
 
@@ -1189,7 +1203,9 @@ impl ExchangeLlgProblem {
 
     /// Whether the problem can step through the persistent SoA CPU fast path.
     pub fn soa_fast_path_supported(&self) -> bool {
-        true
+        self.frozen_spins
+            .as_ref()
+            .is_none_or(|frozen| frozen.frozen_dof_count() == 0)
     }
 
     pub(crate) fn exchange_field_add_into_soa(
@@ -1762,6 +1778,9 @@ impl ExchangeLlgProblem {
             out[i] = self.llg_rhs_from_field_at(i, magnetization[i], h_eff[i]);
         }
         self.direct_torques_add_into(magnetization, out);
+        if let Some(frozen) = &self.frozen_spins {
+            frozen.mask_final_rhs(&mut out[..n]);
+        }
     }
 
     pub(crate) fn direct_torques_add_into(&self, magnetization: &[Vector3], out: &mut [Vector3]) {
@@ -3278,8 +3297,17 @@ impl ExchangeLlgProblem {
             self.sot_torque_add_into(magnetization, sot, &mut rhs_out[..n]);
         }
 
-        let max_rhs_amplitude = max_norm(&rhs_out[..n]);
-        let max_torque_Apm = max_cross_norm(&magnetization[..n], &h_eff[..n]);
+        let max_rhs_all_amplitude = max_norm(&rhs_out[..n]);
+        let max_torque_all_Apm = max_cross_norm(&magnetization[..n], &h_eff[..n]);
+        if let Some(frozen) = self.frozen_spins() {
+            frozen.mask_final_rhs(&mut rhs_out[..n]);
+        }
+        let max_rhs_amplitude = self.frozen_spins().map_or(max_rhs_all_amplitude, |frozen| {
+            frozen.max_norm_free(&rhs_out[..n])
+        });
+        let max_torque_Apm = self.frozen_spins().map_or(max_torque_all_Apm, |frozen| {
+            frozen.max_cross_norm_free(&magnetization[..n], &h_eff[..n])
+        });
 
         RhsEvaluation {
             exchange_energy_joules,
@@ -3296,7 +3324,9 @@ impl ExchangeLlgProblem {
             max_effective_field_amplitude,
             max_demag_field_amplitude,
             max_rhs_amplitude,
+            max_rhs_all_amplitude,
             max_torque_Apm,
+            max_torque_all_Apm,
         }
     }
 
@@ -3360,8 +3390,17 @@ impl ExchangeLlgProblem {
             self.sot_torque_add_into(magnetization, sot, &mut rhs_out[..n]);
         }
 
-        let max_rhs_amplitude = max_norm(&rhs_out[..n]);
-        let max_torque_Apm = max_cross_norm(&magnetization[..n], &h_eff[..n]);
+        let max_rhs_all_amplitude = max_norm(&rhs_out[..n]);
+        let max_torque_all_Apm = max_cross_norm(&magnetization[..n], &h_eff[..n]);
+        if let Some(frozen) = self.frozen_spins() {
+            frozen.mask_final_rhs(&mut rhs_out[..n]);
+        }
+        let max_rhs_amplitude = self.frozen_spins().map_or(max_rhs_all_amplitude, |frozen| {
+            frozen.max_norm_free(&rhs_out[..n])
+        });
+        let max_torque_Apm = self.frozen_spins().map_or(max_torque_all_Apm, |frozen| {
+            frozen.max_cross_norm_free(&magnetization[..n], &h_eff[..n])
+        });
 
         RhsEvaluation {
             exchange_energy_joules: 0.0,
@@ -3373,7 +3412,9 @@ impl ExchangeLlgProblem {
             max_effective_field_amplitude,
             max_demag_field_amplitude: 0.0,
             max_rhs_amplitude,
+            max_rhs_all_amplitude,
             max_torque_Apm,
+            max_torque_all_Apm,
         }
     }
 
@@ -3845,7 +3886,9 @@ impl ExchangeLlgProblem {
             max_effective_field_amplitude: max_norm(&effective_field),
             max_demag_field_amplitude: max_norm(&demag_field),
             max_rhs_amplitude: max_norm(&rhs),
+            max_rhs_all_amplitude: max_norm(&rhs),
             max_torque_Apm: max_cross_norm(magnetization, &effective_field),
+            max_torque_all_Apm: max_cross_norm(magnetization, &effective_field),
         };
 
         (rhs, eval)

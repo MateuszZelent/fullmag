@@ -183,6 +183,85 @@ pub(crate) struct ResolvedSpatialField<'a> {
     pub carrier: SpatialFieldCarrier<'a>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FieldPublicationCarrierIdentity {
+    pub scope_kind: String,
+    pub scope_id: Option<String>,
+    pub carrier_id: String,
+    pub carrier_fingerprint: String,
+    pub topology_hash: String,
+}
+
+/// Returns only identities carried by the accepted field payload/topology.
+/// Missing fingerprints deliberately fail closed instead of deriving a value
+/// from the current session generation at read time.
+pub(crate) fn full_field_publication_carrier_identity(
+    field: &ResolvedSpatialField<'_>,
+) -> Option<FieldPublicationCarrierIdentity> {
+    let identity = match &field.carrier {
+        SpatialFieldCarrier::FdmCells {
+            grid_fingerprint: Some(fingerprint),
+            ..
+        } => FieldPublicationCarrierIdentity {
+            scope_kind: "full".to_string(),
+            scope_id: None,
+            carrier_id: format!("fdm:{fingerprint}:full"),
+            carrier_fingerprint: fingerprint.clone(),
+            topology_hash: fingerprint.clone(),
+        },
+        SpatialFieldCarrier::FemNodes {
+            topology_fingerprint,
+            ..
+        }
+        | SpatialFieldCarrier::FemElements {
+            topology_fingerprint,
+            ..
+        } => FieldPublicationCarrierIdentity {
+            scope_kind: "full".to_string(),
+            scope_id: None,
+            carrier_id: format!("fem:{topology_fingerprint}:full"),
+            carrier_fingerprint: topology_fingerprint.clone(),
+            topology_hash: topology_fingerprint.clone(),
+        },
+        SpatialFieldCarrier::ArtifactLinear {
+            artifact_identity, ..
+        } => FieldPublicationCarrierIdentity {
+            scope_kind: "full".to_string(),
+            scope_id: None,
+            carrier_id: format!("artifact:{artifact_identity}:full"),
+            carrier_fingerprint: artifact_identity.clone(),
+            topology_hash: artifact_identity.clone(),
+        },
+        SpatialFieldCarrier::FdmAirboxCells {
+            carrier_fingerprint,
+            ..
+        } => FieldPublicationCarrierIdentity {
+            scope_kind: "airbox".to_string(),
+            scope_id: Some("airbox".to_string()),
+            carrier_id: format!("sha256:{carrier_fingerprint}"),
+            carrier_fingerprint: carrier_fingerprint.clone(),
+            topology_hash: carrier_fingerprint.clone(),
+        },
+        SpatialFieldCarrier::FdmNativeLayerCells {
+            layer_id,
+            grid_fingerprint,
+            carrier_fingerprint,
+            ..
+        } => FieldPublicationCarrierIdentity {
+            scope_kind: "layer".to_string(),
+            scope_id: Some(layer_id.clone()),
+            carrier_id: format!("sha256:{carrier_fingerprint}"),
+            carrier_fingerprint: carrier_fingerprint.clone(),
+            topology_hash: grid_fingerprint.clone(),
+        },
+        SpatialFieldCarrier::FdmCells {
+            grid_fingerprint: None,
+            ..
+        } => return None,
+    };
+    Some(identity)
+}
+
 impl ResolvedSpatialField<'static> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_artifact_linear(

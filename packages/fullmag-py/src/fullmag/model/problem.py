@@ -24,6 +24,7 @@ from fullmag.model.antenna import (
     UniformFieldProfile,
 )
 from fullmag.model.couplings import Coupling
+from fullmag.model.constraints import FrozenSpins
 from fullmag.model.current_transport import CurrentTransport
 from fullmag.model.discretization import DiscretizationHints, FEM
 from fullmag.model.dynamics import LLG
@@ -61,6 +62,7 @@ from fullmag.model.structure import (
     Region,
 )
 from fullmag.model.study import Eigenmodes, FrequencyResponse, Relaxation, TimeEvolution
+from fullmag.model.selection import SelectionDefinition
 
 IR_VERSION = "0.3.0"
 API_VERSION = "0.3.0"
@@ -1310,6 +1312,93 @@ def _normalize_study_pipeline_value(value: object) -> dict[str, object] | None:
     return copy.deepcopy(value)
 
 
+def _validate_constraint_frame_reference(
+    frame: object, object_ids: set[str]
+) -> None:
+    if not isinstance(frame, Mapping) or frame.get("kind") != "object":
+        return
+    object_id = frame.get("object_id")
+    if object_id not in object_ids:
+        raise ValueError(f"selection_unknown_object: {object_id!r}")
+
+
+def _validate_constraint_scalar_references(
+    scalar: object, object_ids: set[str]
+) -> None:
+    if not isinstance(scalar, Mapping):
+        return
+    if scalar.get("kind") == "coordinate":
+        _validate_constraint_frame_reference(scalar.get("frame"), object_ids)
+    nested = scalar.get("value")
+    if isinstance(nested, Mapping):
+        _validate_constraint_scalar_references(nested, object_ids)
+
+
+def _validate_constraint_selector_references(
+    selector: object,
+    definitions: Mapping[str, Mapping[str, object]],
+    object_ids: set[str],
+    region_ids: set[tuple[str, str]],
+    resolving: frozenset[str] = frozenset(),
+) -> None:
+    if not isinstance(selector, Mapping):
+        raise TypeError("constraint selector must be a selection mapping")
+    kind = selector.get("kind")
+    if kind == "in_object":
+        object_id = selector.get("object_id")
+        if object_id not in object_ids:
+            raise ValueError(f"selection_unknown_object: {object_id!r}")
+        return
+    if kind == "in_region":
+        reference = (selector.get("object_id"), selector.get("region_id"))
+        if reference not in region_ids:
+            raise ValueError(
+                f"selection_unknown_region: {reference[0]!r}/{reference[1]!r}"
+            )
+        return
+    if kind == "inside_geometry":
+        _validate_constraint_frame_reference(selector.get("frame"), object_ids)
+        return
+    if kind in {"compare", "approx"}:
+        for key in ("lhs", "rhs", "value", "target"):
+            _validate_constraint_scalar_references(selector.get(key), object_ids)
+        return
+    if kind == "between":
+        _validate_constraint_scalar_references(selector.get("value"), object_ids)
+        return
+    if kind in {"and", "or", "xor"}:
+        expressions = selector.get("expressions")
+        if isinstance(expressions, Sequence):
+            for child in expressions:
+                _validate_constraint_selector_references(
+                    child, definitions, object_ids, region_ids, resolving
+                )
+        return
+    if kind == "not":
+        _validate_constraint_selector_references(
+            selector.get("expression"),
+            definitions,
+            object_ids,
+            region_ids,
+            resolving,
+        )
+        return
+    if kind == "ref":
+        selection_id = selector.get("selection_id")
+        definition = definitions.get(selection_id) if isinstance(selection_id, str) else None
+        if definition is None:
+            raise ValueError(f"selection_unknown_reference: {selection_id!r}")
+        if selection_id in resolving:
+            raise ValueError(f"selection_reference_cycle: {selection_id!r}")
+        _validate_constraint_selector_references(
+            definition.get("expression"),
+            definitions,
+            object_ids,
+            region_ids,
+            resolving | {selection_id},
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class Problem:
     name: str
@@ -1349,6 +1438,8 @@ class Problem:
     magnetostriction_laws: Sequence[MagnetostrictionLaw] = ()
     mechanical_bcs: Sequence[MechanicalBoundaryCondition] = ()
     mechanical_loads: Sequence[MechanicalLoad] = ()
+    selections: Sequence[SelectionDefinition] = ()
+    magnetization_constraints: Sequence[FrozenSpins] = ()
 
     # Periodic boundary conditions (per-axis, for FDM)
     pbc: FdmPbc | tuple[bool, bool, bool] | None = None
@@ -1457,6 +1548,11 @@ class Problem:
                 )
 
         ensure_unique_names((magnet.name for magnet in self.magnets), "magnet names")
+        explicit_object_ids = [
+            magnet.object_id for magnet in self.magnets if magnet.object_id is not None
+        ]
+        ensure_unique_names(explicit_object_ids, "magnet object_ids")
+        self._validate_magnetization_constraints()
         ensure_unique_names(
             (module.name for module in self.current_modules), "current module names"
         )
@@ -1764,6 +1860,11 @@ class Problem:
             "planar_monitors": [monitor.to_ir() for monitor in self.monitors],
             "field_drives": [drive.to_ir() for drive in self.field_drives],
             "magnets": magnets_ir,
+            "selections": [selection.to_ir() for selection in self.selections],
+            "magnetization_constraints": [
+                constraint.to_ir(selections=self.selections)
+                for constraint in self._collect_magnetization_constraints()
+            ],
             "energy_terms": [term.to_ir() for term in self.energy],
             "current_modules": [module.to_ir() for module in self.current_modules],
             "spin_transport_modules": _spin_transport_modules_ir(self),
@@ -1798,6 +1899,75 @@ class Problem:
         if physics_objects:
             result["physics_objects"] = physics_objects
         return result
+
+    def _collect_magnetization_constraints(self) -> tuple[FrozenSpins, ...]:
+        collected: list[FrozenSpins] = list(self.magnetization_constraints)
+        study_constraints = getattr(self.study, "constraints", ())
+        collected.extend(study_constraints)
+        for magnet in self.magnets:
+            collected.extend(magnet._magnetization_constraints)
+            for region in magnet.object_regions:
+                collected.extend(region._magnetization_constraints)
+        return tuple(collected)
+
+    def _validate_magnetization_constraints(self) -> None:
+        if any(not isinstance(selection, SelectionDefinition) for selection in self.selections):
+            raise TypeError("Problem.selections must contain SelectionDefinition objects")
+        ensure_unique_names(
+            (selection.selection_id for selection in self.selections),
+            "selection ids",
+        )
+        constraints = self._collect_magnetization_constraints()
+        if any(not isinstance(constraint, FrozenSpins) for constraint in constraints):
+            raise TypeError(
+                "Problem.magnetization_constraints must contain FrozenSpins objects"
+            )
+        ids: set[str] = set()
+        object_ids = {
+            magnet.object_id for magnet in self.magnets if magnet.object_id is not None
+        }
+        region_ids = {
+            (region.owner_object, region.region_id)
+            for region in self._collect_object_regions()
+        }
+        stage_ids = {
+            str(node.get("id"))
+            for node in (
+                self.runtime_metadata.get("study_pipeline", {}).get("nodes", [])
+                if isinstance(self.runtime_metadata.get("study_pipeline"), Mapping)
+                else []
+            )
+            if isinstance(node, Mapping) and isinstance(node.get("id"), str)
+        }
+        has_study_pipeline = isinstance(
+            self.runtime_metadata.get("study_pipeline"), Mapping
+        )
+        definitions = {selection.selection_id: selection.to_ir() for selection in self.selections}
+        for selection in self.selections:
+            _validate_constraint_selector_references(
+                selection.expression.to_ir(),
+                definitions,
+                object_ids,
+                region_ids,
+                frozenset({selection.selection_id}),
+            )
+        for constraint in constraints:
+            if constraint.id in ids:
+                raise ValueError(
+                    f"duplicate magnetization constraint id {constraint.id!r}"
+                )
+            ids.add(constraint.id)
+            _validate_constraint_selector_references(
+                constraint.selector.to_ir(), definitions, object_ids, region_ids
+            )
+            payload = constraint.to_ir(selections=self.selections)
+            activation = payload["activation"]
+            if activation["kind"] == "stage_ids" and has_study_pipeline:
+                for stage_id in activation["stage_ids"]:
+                    if stage_id not in stage_ids:
+                        raise ValueError(
+                            f"magnetization constraint {constraint.id!r} activation stage id {stage_id!r} does not exist"
+                        )
 
     def _resolve_discretization(
         self,

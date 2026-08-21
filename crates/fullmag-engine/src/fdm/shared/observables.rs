@@ -18,9 +18,15 @@ pub struct StepReport {
     pub max_effective_field_amplitude: f64,
     pub max_demag_field_amplitude: f64,
     /// Maximum total dynamic RHS norm in 1/s, including direct torques.
+    /// For frozen-spin execution this is the free-DOF value.
     pub max_rhs_amplitude: f64,
+    /// Maximum total dynamic RHS norm over every active DOF, before masking.
+    pub max_rhs_all_amplitude: f64,
     /// Exact field-equilibrium residual max |m x H_eff| in A/m.
+    /// For frozen-spin execution this is the free-DOF value.
     pub max_torque_Apm: f64,
+    /// Exact field-equilibrium residual over every active DOF in A/m.
+    pub max_torque_all_Apm: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -42,8 +48,10 @@ pub struct EffectiveFieldObservables {
     pub max_demag_field_amplitude: f64,
     /// Maximum total dynamic RHS norm in 1/s, including direct torques.
     pub max_rhs_amplitude: f64,
+    pub max_rhs_all_amplitude: f64,
     /// Exact field-equilibrium residual max |m x H_eff| in A/m.
     pub max_torque_Apm: f64,
+    pub max_torque_all_Apm: f64,
 }
 
 /// Lightweight observables from a single RHS evaluation.
@@ -60,8 +68,10 @@ pub struct RhsEvaluation {
     pub max_demag_field_amplitude: f64,
     /// Maximum total dynamic RHS norm in 1/s, including direct torques.
     pub max_rhs_amplitude: f64,
+    pub max_rhs_all_amplitude: f64,
     /// Exact field-equilibrium residual max |m x H_eff| in A/m.
     pub max_torque_Apm: f64,
+    pub max_torque_all_Apm: f64,
 }
 
 #[cfg(test)]
@@ -80,7 +90,9 @@ mod tests {
             max_effective_field_amplitude: 0.0,
             max_demag_field_amplitude: 0.0,
             max_rhs_amplitude: 13.0,
+            max_rhs_all_amplitude: 13.0,
             max_torque_Apm: 0.0,
+            max_torque_all_Apm: 0.0,
         }
         .into_step_report(1.0, 0.1, false);
 
@@ -111,7 +123,9 @@ impl RhsEvaluation {
             max_effective_field_amplitude: self.max_effective_field_amplitude,
             max_demag_field_amplitude: self.max_demag_field_amplitude,
             max_rhs_amplitude: self.max_rhs_amplitude,
+            max_rhs_all_amplitude: self.max_rhs_all_amplitude,
             max_torque_Apm: self.max_torque_Apm,
+            max_torque_all_Apm: self.max_torque_all_Apm,
         }
     }
 }

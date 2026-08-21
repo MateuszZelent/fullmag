@@ -1307,20 +1307,15 @@ void c_abi_exposes_native_relaxation_step() {
         tangent_plane.find(
             "#include \"cpu/mfem/relaxation/direct_energy_increment.hpp\"") !=
                 std::string::npos &&
-            tangent_plane.find("direct_minimizer_armijo_evaluate(") !=
+            tangent_plane.find("direct_minimizer_armijo_accepts(") !=
                 std::string::npos &&
             tangent_plane.find(
                 "finish_accepted_relaxation_step(\n        ctx,\n        armijo_result.accepted_stats,") !=
                 std::string::npos &&
-            tangent_plane.find("trial_step * direction_dot_gradient") !=
-                std::string::npos &&
-            tangent_plane.find(
-                "representable_chord_energy_linear_increment") ==
-                std::string::npos &&
             tangent_plane.find(
                 "trial_stats.total_energy_joules <=") ==
                 std::string::npos,
-        "native FEM tangent-plane implicit Armijo must keep the derivative-at-zero increment, use a direct energy difference with bounded refinement, and never fall back to cancellation-prone endpoint totals");
+        "native FEM tangent-plane implicit Armijo must use the shared representable-chord direct-increment owner with bounded refinement and never fall back to cancellation-prone endpoint totals");
     check(
         tangent_plane.find("restore_previous_relaxation_state(") !=
                 std::string::npos &&

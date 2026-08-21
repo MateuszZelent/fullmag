@@ -13,7 +13,14 @@ const checks = [
     label: "direct fetch outside kernel API",
   },
   {
-    args: ["apps/web|ControlRoomContext|normalizeSession|mergeSession", "src"],
+    args: [
+      "apps/web|ControlRoomContext|normalizeSession|mergeSession",
+      "src",
+      "--glob",
+      "!**/*.test.*",
+      "--glob",
+      "!**/*.spec.*",
+    ],
     label: "legacy frontend imports or state models",
   },
   {

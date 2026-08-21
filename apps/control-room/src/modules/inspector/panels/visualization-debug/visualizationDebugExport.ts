@@ -16,7 +16,7 @@ import {
 } from "./visualizationDebugPresentation";
 
 export const VISUALIZATION_DEBUG_EXPORT_SCHEMA_VERSION =
-  "fullmag.visualization-debug.v1" as const;
+  "fullmag.visualization-debug.v2" as const;
 export const VISUALIZATION_DEBUG_EXPORT_MIME = "application/json";
 export const MAX_VISUALIZATION_DEBUG_EXPORT_BYTES =
   MAX_VISUALIZATION_DEBUG_SNAPSHOT_BYTES;
@@ -129,6 +129,39 @@ export function buildVisualizationDebugLog(
   add("Target", model.target?.id ?? "—");
   add("Target kind", model.target?.kind ?? "—");
   add("Selection kind", model.target?.selectionKind ?? "—");
+
+  section("Authoritative lifecycle & mutation receipt");
+  const lifecycle = model.mutationEvidence.lifecycle;
+  add("Lifecycle source", lifecycle.source);
+  add("Session resource status", lifecycle.session.resourceStatus);
+  add("Session resource revision", lifecycle.session.resourceRevision ?? "—");
+  add("Session ID", lifecycle.session.session?.session_id ?? "—");
+  add("Session epoch", lifecycle.session.session?.session_epoch ?? "—");
+  add("Session resource lifecycle", lifecycle.session.lifecycle?.session_resource ?? "—");
+  add("Session solver lifecycle", lifecycle.session.lifecycle?.solver ?? "—");
+  add("Session commandability", lifecycle.session.lifecycle?.commandability ?? "—");
+  add("Session connectivity", lifecycle.session.lifecycle?.connectivity ?? "—");
+  add("Solver resource status", lifecycle.solver.resourceStatus);
+  add("Solver resource revision", lifecycle.solver.resourceRevision ?? "—");
+  add("Solver runtime state", lifecycle.solver.status?.runtime_state ?? "—");
+  add("Solver runtime status", lifecycle.solver.status?.runtime_status_kind ?? "—");
+  add("Solver runtime code", lifecycle.solver.status?.runtime_status_code ?? "—");
+  add("Solver session status", lifecycle.solver.status?.session_status ?? "—");
+  add("Solver run / stage", [lifecycle.solver.status?.run_id ?? "—", lifecycle.solver.status?.stage_kind ?? "—"]);
+  add(
+    "Realtime connectivity",
+    `${model.mutationEvidence.connectivity.status} · disrupted=${model.mutationEvidence.connectivity.disrupted}`,
+  );
+  add("Authoritative visualization revision", model.mutationEvidence.sync.lastRemoteRevision ?? "—");
+  const mutation = model.mutationEvidence.sync.mutation;
+  add("PATCH status", mutation?.status ?? "idle");
+  add("PATCH transaction IDs", mutation?.transactionIds ?? []);
+  add("PATCH response revision", mutation?.responseRevision ?? "—");
+  add("PATCH response request ID", mutation?.requestId ?? "—");
+  add("PATCH target", mutation?.targetId ?? "—");
+  add("PATCH error", mutation?.error ?? "—");
+  add("Pending target IDs", model.mutationEvidence.sync.pendingTargetIds);
+  add("Rejected target IDs", model.mutationEvidence.sync.rejectedTargetIds);
 
   section("Viewport & carriers");
   for (const viewport of model.viewports) {
@@ -293,6 +326,10 @@ export function buildVisualizationDebugLog(
     add(
       "Rendered acknowledgement",
       carrier.render.adoption.frameCommitId ?? observation.snapshot.viewport.frameCommitId,
+    );
+    add(
+      "Adoption receipt/state",
+      `${carrier.render.adoption.surface.adoptedFieldBufferId ?? "none"} / ${carrier.render.adoption.vector.adoptedFieldBufferId ?? "none"} · ${carrier.render.fieldBufferState}`,
     );
   }
 

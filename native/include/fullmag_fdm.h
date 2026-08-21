@@ -47,6 +47,10 @@ extern "C" {
 /* Region id 0 is background; ids 1..MAX_REGION_ID address the LUT safely. */
 #define FULLMAG_FDM_MAX_REGION_ID (FULLMAG_FDM_MAX_EXCHANGE_REGIONS - 1)
 
+/* Append-only frozen-spin plan extension. Support is advertised separately. */
+#define FULLMAG_FDM_FROZEN_SPINS_ABI_V1 1u
+#define FULLMAG_FDM_CAPABILITY_FROZEN_SPINS_V1 (UINT64_C(1) << 0)
+
 /* ── Enums ── */
 
 typedef enum {
@@ -477,6 +481,16 @@ typedef struct {
      */
     fullmag_fdm_stats_mode     stats_mode;
     uint32_t                   stats_stride;
+
+    /*
+     * Frozen-spin ABI v1. NULL/zero preserves the unconstrained fast path.
+     * The reference is AoS f64 xyz and must contain 3 * frozen_mask_len values.
+     * Callers must check FULLMAG_FDM_CAPABILITY_FROZEN_SPINS_V1 before use.
+     */
+    const uint8_t             *frozen_mask;
+    uint64_t                   frozen_mask_len;
+    const double              *frozen_reference_xyz;
+    uint64_t                   frozen_reference_len;
 } fullmag_fdm_plan_desc;
 
 typedef enum {
@@ -597,6 +611,9 @@ typedef struct FULLMAG_FDM_BINDING_ALIGN8 fullmag_fdm_gpu_transport_llg_binding_
  * Returns 1 if available, 0 otherwise.
  */
 int fullmag_fdm_is_available(void);
+
+/** Return supported append-only FDM feature bits for ABI v1. */
+uint64_t fullmag_fdm_capability_bits_v1(void);
 
 /**
  * Create a backend handle from an executable plan.

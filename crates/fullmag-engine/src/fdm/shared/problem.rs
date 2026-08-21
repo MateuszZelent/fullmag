@@ -3,8 +3,9 @@
 use crate::{
     CellSize, EffectiveFieldObservables, EffectiveFieldTerms, EngineError, EvaluationRequest,
     ExchangeLlgState, ExchangeLlgStateSoA, FdmBoundaryPolicy, FdmDemagBoundary, FftWorkspace,
-    GridShape, IntegratorBuffers, LlgConfig, MaterialParameters, RegionalFieldDriveTerm,
-    ResolvedFdmPeriodicWorkspace, Result, StepReport, TimeIntegrator, Vector3,
+    FrozenSpinsState, GridShape, IntegratorBuffers, LlgConfig, MaterialParameters,
+    RegionalFieldDriveTerm, ResolvedFdmPeriodicWorkspace, Result, StepReport, TimeIntegrator,
+    Vector3,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -16,6 +17,8 @@ pub struct ExchangeLlgProblem {
     pub dynamics: LlgConfig,
     pub terms: EffectiveFieldTerms,
     pub active_mask: Option<Vec<bool>>,
+    /// Captured hard constraint for the active execution stage.
+    pub frozen_spins: Option<FrozenSpinsState>,
     /// Per-axis periodic / open boundary policy for exchange and DMI stencils.
     pub boundary_policy: FdmBoundaryPolicy,
     /// Resolved demagnetization boundary realization.  Runtime construction
@@ -130,6 +133,7 @@ impl ExchangeLlgProblem {
             dynamics,
             terms,
             active_mask,
+            frozen_spins: None,
             boundary_policy: FdmBoundaryPolicy::default(),
             demag_boundary: FdmDemagBoundary::Open,
             demag_image_counts: [10, 10, 10],
@@ -177,6 +181,72 @@ impl ExchangeLlgProblem {
 
     pub fn uniform_state(&self, value: Vector3) -> Result<ExchangeLlgState> {
         ExchangeLlgState::uniform(self.grid, value)
+    }
+
+    pub fn capture_frozen_spins_at_activation(
+        &mut self,
+        plan: &fullmag_ir::ResolvedFrozenSpinsPlanIR,
+        state: &mut ExchangeLlgState,
+    ) -> Result<()> {
+        self.ensure_state_matches_grid(state)?;
+        let frozen_spins = FrozenSpinsState::capture_at_activation(
+            plan,
+            self.active_mask.as_deref(),
+            state.magnetization(),
+        )?;
+        if self
+            .frozen_spins
+            .as_ref()
+            .is_none_or(|current| !current.same_mask(&frozen_spins))
+        {
+            state.invalidate_fsal();
+            state.reset_abm_history();
+        }
+        self.frozen_spins = Some(frozen_spins);
+        Ok(())
+    }
+
+    pub fn frozen_spins(&self) -> Option<&FrozenSpinsState> {
+        self.frozen_spins.as_ref()
+    }
+
+    /// Install a constraint restored from a durable checkpoint without
+    /// re-evaluating the authored selector. The caller must validate the
+    /// checkpoint against the resolved plan before passing the state here.
+    pub fn restore_frozen_spins_checkpoint(
+        &mut self,
+        frozen_spins: FrozenSpinsState,
+        state: &mut ExchangeLlgState,
+    ) -> Result<()> {
+        self.ensure_state_matches_grid(state)?;
+        if frozen_spins.len() != self.grid.cell_count() {
+            return Err(EngineError::new(
+                "frozen_spins_checkpoint_grid_size_mismatch",
+            ));
+        }
+        if let Some(active_mask) = self.active_mask.as_deref() {
+            if let Some(index) = frozen_spins
+                .mask()
+                .iter()
+                .zip(active_mask)
+                .position(|(frozen, active)| *frozen && !*active)
+            {
+                return Err(EngineError::new(format!(
+                    "frozen_spins_checkpoint_outside_active_domain: index {index}"
+                )));
+            }
+        }
+        frozen_spins.restore_reference(state.magnetization_mut());
+        state.invalidate_fsal();
+        state.reset_abm_history();
+        self.frozen_spins = Some(frozen_spins);
+        Ok(())
+    }
+
+    pub(crate) fn restore_frozen_reference(&self, candidate: &mut [Vector3]) {
+        if let Some(frozen) = &self.frozen_spins {
+            frozen.restore_reference(candidate);
+        }
     }
 
     /// Build a reusable FFT workspace matching this problem's grid.
@@ -456,6 +526,9 @@ impl ExchangeLlgProblem {
             }
             TimeIntegrator::ABM3 => self.abm3_step_buf(state, dt, ws, bufs, evaluation),
         };
+        if result.is_ok() {
+            self.restore_frozen_reference(&mut state.magnetization);
+        }
         // Advance thermal RNG counter after each step attempt
         self.advance_thermal_step();
         result
@@ -656,6 +729,7 @@ impl Clone for ExchangeLlgProblem {
             dynamics: self.dynamics.clone(),
             terms: self.terms.clone(),
             active_mask: self.active_mask.clone(),
+            frozen_spins: self.frozen_spins.clone(),
             boundary_policy: self.boundary_policy,
             demag_boundary: self.demag_boundary,
             demag_image_counts: self.demag_image_counts,
@@ -681,6 +755,7 @@ impl PartialEq for ExchangeLlgProblem {
             && self.dynamics == other.dynamics
             && self.terms == other.terms
             && self.active_mask == other.active_mask
+            && self.frozen_spins == other.frozen_spins
             && self.boundary_policy == other.boundary_policy
             && self.demag_boundary == other.demag_boundary
             && self.temperature == other.temperature

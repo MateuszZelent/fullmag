@@ -48,6 +48,7 @@ async function main() {
     }
   }, apiPhaseTimeoutMs);
   const { final_step: finalStep, final_time: finalTime, run, sessionStatus } = terminalRun;
+  const sessionIdentity = requireSessionIdentity(sessionStatus);
   const scene = await getJson("/v2/sessions/current/model/scene");
   const sceneObject = Array.isArray(scene?.objects)
     ? scene.objects.find((candidate) => candidate?.id === objectId)
@@ -128,17 +129,17 @@ async function main() {
     await assertCanvasHealth(canvas, "after workspace load");
     const switches = [];
     setPhase("object-quantity-switches");
-    switches.push(await switchInspectorQuantity({ page, explorerTargets, quantityId: "H_demag", responses, scope: "object", scopes }));
-    switches.push(await switchRibbonQuantity({ page, explorerTargets, quantityId: "H_eff", responses, scope: "object" }));
-    switches.push(await switchInspectorQuantity({ page, explorerTargets, quantityId: "H_ext", responses, scope: "object", scopes }));
-    switches.push(await switchInspectorQuantity({ page, explorerTargets, quantityId: "eden_demag", responses, scope: "object", scopes }));
+    switches.push(await switchInspectorQuantity({ page, explorerTargets, quantityId: "H_demag", responses, scope: "object", scopes, sessionIdentity }));
+    switches.push(await switchRibbonQuantity({ page, explorerTargets, quantityId: "H_eff", responses, scope: "object", sessionIdentity }));
+    switches.push(await switchInspectorQuantity({ page, explorerTargets, quantityId: "H_ext", responses, scope: "object", scopes, sessionIdentity }));
+    switches.push(await switchInspectorQuantity({ page, explorerTargets, quantityId: "eden_demag", responses, scope: "object", scopes, sessionIdentity }));
     setPhase("airbox-quantity-gate");
     const airboxMagnetization = await assertAirboxMagnetizationUnavailable({ page, explorerTargets, scopes });
     setPhase("airbox-display-preflight");
     const airboxDisplay = await exerciseFdmAirboxRenderModes({ artifactDir, page, explorerTargets });
     setPhase("airbox-field-switches");
     for (const [scope, quantityId] of [["airbox", "H_demag"], ["airbox", "H_eff"]]) {
-      switches.push(await switchInspectorQuantity({ page, explorerTargets, quantityId, responses, scope, scopes }));
+      switches.push(await switchInspectorQuantity({ page, explorerTargets, quantityId, responses, scope, scopes, sessionIdentity }));
     }
     const airboxRender = await assertFdmAirboxVectorRender({ page });
     const airboxInspector = await selectExplorerVisualizationTarget(page, explorerTargets.airbox);
@@ -206,7 +207,7 @@ export async function awaitTerminalFieldGeneration({
   }
 }
 
-async function switchRibbonQuantity({ page, explorerTargets, quantityId, responses, scope }) {
+async function switchRibbonQuantity({ page, explorerTargets, quantityId, responses, scope, sessionIdentity }) {
   const renderPass = "surface";
   const preSwitchAdoptions = await captureLatestExactVisualizationAdoption({
     page,
@@ -235,13 +236,14 @@ async function switchRibbonQuantity({ page, explorerTargets, quantityId, respons
     quantityId,
     renderPass,
     response,
+    sessionIdentity,
     switchStartedAtMs,
     target: explorerTargets[scope],
   });
   return { adoption, quantity_id: quantityId, response, scope, surface: "ribbon" };
 }
 
-async function switchInspectorQuantity({ page, explorerTargets, quantityId, responses, scope, scopes }) {
+async function switchInspectorQuantity({ page, explorerTargets, quantityId, responses, scope, scopes, sessionIdentity }) {
   const renderPass = quantityId === "eden_demag" ? "surface" : "vector-glyph";
   const preSwitchAdoptions = await captureLatestExactVisualizationAdoption({
     page,
@@ -294,6 +296,7 @@ async function switchInspectorQuantity({ page, explorerTargets, quantityId, resp
     quantityId,
     renderPass,
     response,
+    sessionIdentity,
     switchStartedAtMs,
     target: explorerTargets[scope],
   });
@@ -530,6 +533,7 @@ async function waitForExactVisualizationDebugEvidence({
   quantityId,
   renderPass = quantityId === "eden_demag" ? "surface" : "vector-glyph",
   response,
+  sessionIdentity,
   switchStartedAtMs,
   target,
 }) {
@@ -566,6 +570,7 @@ async function waitForExactVisualizationDebugEvidence({
           quantityId,
           renderPass,
           response,
+          sessionIdentity,
           switchStartedAtMs,
         })
         || !["ready", "derived-global", "target-buffer"].includes(carrier.render.fieldBufferState)
@@ -761,6 +766,7 @@ export function exactVisualizationAdoptionMatches({
   quantityId,
   renderPass = quantityId === "eden_demag" ? "surface" : "vector-glyph",
   response,
+  sessionIdentity,
   switchStartedAtMs,
 }) {
   const carrier = observation?.carrier;
@@ -777,6 +783,7 @@ export function exactVisualizationAdoptionMatches({
     || passAdoption.adoptedResourceKey !== response.resource_key
     || !carrier.render.requestedFieldBufferId
     || carrier.render.requestedFieldBufferId !== passAdoption.adoptedFieldBufferId
+    || !adoptedFieldBufferMatchesSession(passAdoption.adoptedFieldBufferId, sessionIdentity)
     || !response.etag
     || carrier.cache?.etag !== response.etag
     || carrier.cache?.dataIdentityMatches !== true
@@ -797,6 +804,26 @@ export function exactVisualizationAdoptionMatches({
   }
   return carrier.render.requestedPasses?.includes("vector-glyph")
     && carrier.render.vectors?.buildKey === passAdoption.adoptedVectorBuildKey;
+}
+
+function adoptedFieldBufferMatchesSession(fieldBufferId, sessionIdentity) {
+  const sessionId = sessionIdentity?.sessionId?.trim();
+  const sessionEpoch = sessionIdentity?.sessionEpoch?.trim();
+  return Boolean(
+    sessionId
+    && sessionEpoch
+    && typeof fieldBufferId === "string"
+    && fieldBufferId.startsWith(`${sessionId}:${sessionEpoch}:`),
+  );
+}
+
+function requireSessionIdentity(sessionStatus) {
+  const sessionId = sessionStatus?.session?.session_id?.trim();
+  const sessionEpoch = sessionStatus?.session?.session_epoch?.trim();
+  if (!sessionId || !sessionEpoch) {
+    throw new Error("FDM terminal WebGL proof requires current session_id and session_epoch.");
+  }
+  return { sessionEpoch, sessionId };
 }
 
 function adoptionKindForRenderPass(renderPass) {

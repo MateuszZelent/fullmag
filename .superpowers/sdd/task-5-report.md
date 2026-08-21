@@ -1,271 +1,169 @@
-# Task 5 report: materialize FEM previews outside the solver deadline
+# Raport Task 5 — `MagnetizationConstraintIR` i frozen spins authoring
 
-Status: `READY_FOR_REREVIEW`
+Data: 2026-08-20
 
-Base revision: `7599f78968ca21014685d1617eb14f3dc8a69bca`
+## Wynik
 
-## Native ABI and DG0 step-metrics remediation submitted 2026-07-23
+Task 5 zamyka warstwę authoringu i typed IR dla `frozen_spins.v1`.
+Nie implementuje planera, resolved mask, runtime, solverów ani UI. Wszystkie
+lane'y FDM/FEM CPU/GPU pozostają `UNQUALIFIED`.
 
-This follow-up closes the two findings in the independent re-review at
-`156322e8f1c5cfaeb88386734a90ff326c457538`. It does not change the reviewer-owned
-`CHANGES_REQUIRED` verdict; it submits new implementation and evidence for another
-independent review.
+Naprawy findings 1–9 z review są wdrożone i przeszły świeże bramki GREEN.
+Ostateczny verdict pozostaje własnością niezależnego re-review; ten raport nie
+zastępuje jego decyzji.
 
-### TDD evidence
+Publiczny writer Pythona pozostaje przejściowo na `ProblemIR 0.3.0`, zgodnie z
+istniejącą bramką atomowego cutover. Zapisuje jednak addytywne kolekcje
+`selections[]` i `magnetization_constraints[]`. Osobny typed `ProblemIRV04`
+zawiera te same kolekcje, a migracja `0.3.0 -> 0.4.0` dodaje je jako puste, gdy
+nie istniały.
 
-- P1 RED: `env COMPOSE_PROJECT_NAME=fullmag just verify-fem-material-element-ms-contract`
-  built the new public-ABI fixture, executed the ordinary CPU RK positive case, and
-  then stopped with `FAIL: DG0 direct relaxation must fail unavailable` (exit 1).
-  An earlier compile-only harness failure due to a missing `<cstdint>` include was
-  corrected before this behavioral RED and is not counted as defect evidence.
-- P2 RED: `env COMPOSE_PROJECT_NAME=fullmag just verify-fem-dg0-step-metrics-contract`
-  stopped with `FAIL: DG0 average magnetization must not heap-allocate` (exit 1).
-  Allocation counting was enabled only around
-  `average_magnetization_components(ctx)` after Context and material-adapter setup.
-- P1/P2 GREEN: the same focused step-metrics command and the complete managed
-  material command both returned exit 0. The ABI fixture proves ordinary CPU RK
-  remains executable, PG-BB/nonlinear-CG/tangent-plane calls on a reusable handle
-  return `FULLMAG_FEM_ERR_UNAVAILABLE`, and an LLG-overdamped DG0 plan rejects at
-  backend creation.
+## Zaimplementowany kontrakt Rust
 
-### Implementation
+- Dodano strict, internally tagged `MagnetizationConstraintIR::FrozenSpins`.
+- Dodano `FrozenSpinsIR` i polityki:
+  `FrozenReferencePolicyIR`, `SelectionMembershipPolicyIR`,
+  `ConstraintActivationIR`, `EmptySelectionPolicyIR` oraz
+  `InactiveSelectionPolicyIR`.
+- Serde odrzuca unknown fields i normalizuje brakujące defaulty. Geometryczny
+  selector domyślnie otrzymuje `static`, a state-dependent selector
+  `snapshot_at_activation`.
+- Bezpośrednia deserializacja `ProblemIRV04` wykonuje normalizację na poziomie
+  całego problemu przed typed lowering, więc referencja do state-dependent
+  named selection korzysta z pełnego grafu definicji, a nie z pustego kontekstu.
+- `ProblemIR` i `ProblemIRV04` zawierają top-level `selections[]` i
+  `magnetization_constraints[]`.
+- `MagnetIR.object_id` jest jawne i opcjonalne. Nowe constrainty rozstrzygają
+  referencje wyłącznie względem jawnych ID; nazwa użytkowa nie jest źródłem
+  tożsamości constraintu.
+- Walidacja obejmuje: schema version, puste i zduplikowane ID, object/region/
+  selection/stage references, state-dependent `static` oraz niepoprawne
+  polityki. Overlap nie jest zgadywany z authored policy: zgodnie ze specyfikacją
+  dopiero runtime porównuje dokładne resolved reference values.
+- Legacy `MagnetIR.object_id`, jeśli jest obecne, musi być niepuste i unikalne;
+  constraint nie może używać nazwy użytkowej jako zastępczej tożsamości.
+- Migracja zachowuje dotychczasowy model obiektowy v0.4, referencje właścicieli
+  i nieznane pola legacy wymagane przez round-trip. Legacy top-level
+  `RegionIR.name` definiujący geometrię całego magnesu nie jest już fałszywie
+  emitowany jako `ObjectRegionIR.region_id`; assignment i moduł celują w cały
+  obiekt przez `RegionRefIR { object_id, region_id: None }`. Jawne typed region
+  targets v0.4 pozostają obsługiwane.
 
-- One material-owned guard now enforces the element-DG0 `M_s` relaxation
-  restriction at LLG-overdamped Context construction, the pure-damping RK entry,
-  and the common direct-relaxation dispatcher. The dispatcher guard covers PG-BB,
-  nonlinear-CG, and tangent-plane implicit without adding workflow state to
-  `Context`.
-- DG0 average magnetization now performs one active-element traversal and returns
-  the three `M_s`-weighted component integrals plus their denominator. It allocates
-  no unit fields, no mesh-sized scratch, and performs no repeated mass-bilinear
-  traversals on the accepted-step hot path.
+## Zaimplementowany kontrakt Python
 
-### Fresh verification
+- Dodano publiczne `fm.FrozenSpins` ze strict `from_ir()` i copy-safe `to_ir()`.
+- Dodano `ObjectRegion.freeze_spins(...)` oraz
+  `Ferromagnet.freeze_spins(...)`.
+- Convenience regionu tworzy `select.in_region(object_id, region_id)`;
+  convenience obiektu wymaga jawnego `object_id` i tworzy
+  `select.in_object(object_id)`.
+- Constraint nie jest zapisywany jako materiał ani właściwość regionu.
+- `Problem`, `TimeEvolution` i `Relaxation` przyjmują typed constraints i
+  obniżają je do jednej top-level kolekcji.
+- `StudyStagesBuilder` scala ponowne użycie tego samego constraint ID do jednej
+  definicji z uporządkowanymi `activation.stage_ids`. Merge jest transakcyjny:
+  kandydat powstaje na kopii, pełny stage jest walidowany i capture'owany przed
+  publikacją constraint registry oraz stage listy.
+- `add_run` waliduje i scala kandydat constraintów przed rozwinięciem
+  deprecated legacy run configuration. Odrzucony constraint nie pozostawia
+  ghost `table_autosave`, autosave/FFT action ani stage'u. Walidacja obejmuje
+  cały złożony `Problem`, nie tylko sprawdzenie typu `FrozenSpins`, więc także
+  semantycznie błędny selector kończy się przed pierwszą mutacją konfiguracji.
+- Legacy run configuration jest najpierw walidowana w całości: unsupported
+  keys, `table_autosave`, pełna sekwencja `outputs`, `spin_wave_response` i
+  `output_every`, a oba deprecation warnings są emitowane przed commit boundary.
+  Dopiero po tej fazie powstają widoczne configuration actions; późny błędny
+  output ani warning traktowany jako wyjątek nie może pozostawić wcześniejszych
+  table/autosave nodes.
+- `Problem` odrzuca zduplikowane named-selection IDs i waliduje cały graf
+  referencji przed membership inference; cykl kończy się typed
+  `selection_reference_cycle`, nie `RecursionError`.
+- Jawne API i oba convenience API emitują ten sam kanoniczny payload.
+- Source map wskazuje aktualne symbole Rust constraint IR, publiczny Python
+  `FrozenSpins` i stage builder.
 
-- `env COMPOSE_PROJECT_NAME=fullmag just verify-fem-dg0-step-metrics-contract`:
-  passed the numeric and zero-allocation assertions.
-- `env COMPOSE_PROJECT_NAME=fullmag just verify-fem-material-element-ms-contract`:
-  passed the new ABI workflow contract and all existing material/context/
-  interaction/step-metrics contracts.
-- `env COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime`: detected the
-  stale native source, rebuilt/exported the runtime, and the final validator
-  reported `{"bundle":"valid","runtime":"fem-gpu-host"}`.
-- `env COMPOSE_PROJECT_NAME=fullmag just verify-fem-preview-review-unit-contract`:
-  passed all focused API/CLI/planner tests, the exact callback regression (1/1),
-  the runner Task 5 group (16/16), and backend source-layout tests (2/2).
-- `.fullmag/local/python/bin/python -m unittest scripts/test_verify_fem_preview_surface_matrix.py`:
-  13/13 passed.
-- `env COMPOSE_PROJECT_NAME=fullmag just build-static-control-room`: passed the
-  production build; its generated `next-env.d.ts` change was reverted.
-- Focused ordinary-time DG0 energy qualification passed at source step 52 under
-  `.fullmag/reports/fem-preview-energy-qualification/dg0-ms-native-relax-remediation`.
-  The element-DG0 range was `400000..800000 A/m`, projection was
-  `fem_nodal_conservative_tetra_projection`, and maximum relative error was
-  `1.9450934198233654e-9` across exchange, demag, external, and total comparisons.
+## TDD — RED
 
-The 216-row GPU preview matrix was deliberately not rerun. This follow-up changes
-only native CPU relaxation legality and CPU DG0 step statistics; `native_fem.rs`,
-the preview handoff/materializer, API, Control Room consumers, and GPU preview
-operators are unchanged. The new native ABI/allocation tests and focused real CPU
-DG0 artifact are the relevant proof. The earlier 216-row artifact remains prior
-preview-path evidence and is not presented as fresh proof for this remediation.
+- Rust: `cargo test -p fullmag-ir frozen_spins` początkowo nie kompilował się z
+  powodu braku `MagnetizationConstraintIR`.
+- Python: `pytest -q packages/fullmag-py/tests/test_frozen_spins_contract.py`
+  początkowo zakończył się pięcioma oczekiwanymi porażkami z powodu braku
+  `FrozenSpins`, pól `Problem` i stage `constraints`.
+- Review RED: odrzucone `add_run(until=-1, constraints=[frozen])` i
+  `add_relax(..., constraints=[frozen])` pozostawiały ghost stage ID
+  `rejected` w top-level activation; migracja v0.4 emitowała
+  `region_id: "strip"` bez `ObjectRegionIR`; duplicate selection ID był
+  akceptowany, a cykl named selections kończył się `RecursionError`.
+- Review RED w Rust potwierdził brak walidacji pustych/zduplikowanych
+  `MagnetIR.object_id` i błędne odrzucenie overlap wyłącznie z powodu różnych
+  authored reference policies. Test kompletności source map również najpierw
+  nie znalazł nowych symboli implementacji.
+- Końcowe review RED odtworzyło ghost `flat_table_autosave` dla
+  `add_run(..., table_autosave=False, constraints=[object()])`, przestarzały
+  anchor `StudyStagesBuilder._register_constraints` w nocie oraz błędny default
+  `static` przy bezpośredniej deserializacji v0.4 referencji do state-dependent
+  named selection. Każdy przypadek otrzymał osobny test regresyjny przed
+  naprawą.
+- Finalny re-review RED ujawnił, że wczesny test typu nie obejmował poprawnego
+  `FrozenSpins` z semantycznie błędnym `select.in_object("missing")`. Dokładna
+  regresja potwierdziła ghost `flat_table_autosave`; po naprawie capture i pełna
+  walidacja kandydata poprzedzają legacy expansion, a test potwierdza brak akcji,
+  stage'u, rejestracji constraintu i mutacji authored activation.
+- Następny RED objął późny błąd legacy options: poprawne
+  `table_autosave=False` i poprawny constraint, lecz `outputs=[object()]`,
+  pozostawiały `flat_table_autosave` i `flat_autosave`. Parametryzowana regresja
+  obejmuje teraz nieważny run stage, relax stage, table option, późny output i
+  semantycznie nieważny typed constraint. Szósty wariant traktuje warning
+  `legacy output_every` jako wyjątek i sprawdza tę samą granicę transakcji;
+  każdy wariant wymaga zerowej liczby ghost nodes i niezmienionego authored
+  state.
 
-## Outcome
+## Weryfikacja — GREEN
 
-### Independent re-review remediation submitted 2026-07-23
+- `CARGO_TARGET_DIR=/tmp/fullmag-task5-ir-target cargo test -p fullmag-ir`
+  — PASS: 321 testów crate'a, 0 failed; doc-testy 0 failed.
+- `CARGO_TARGET_DIR=/tmp/fullmag-task5-ir-target cargo test -p fullmag-ir frozen_spins`
+  — PASS: 3 testy, 0 failed.
+- Bezpośrednia normalizacja v0.4:
+  `problem_ir_v0_4_direct_deserialize_normalizes_ref_membership_with_named_definitions`
+  — PASS: 1 test, 0 failed.
+- `PYTHONPATH=packages/fullmag-py/src pytest -q packages/fullmag-py/tests/test_frozen_spins_contract.py`
+  — PASS: 15 passed.
+- Frozen/selection/stages regression:
+  `test_frozen_spins_contract.py`, `test_selection_contract.py`,
+  `test_selection_graph_limits.py`, `test_study_stages.py`
+  — PASS: 78 passed, 4 subtests passed.
+- `CARGO_TARGET_DIR=/tmp/fullmag-task5-rust-target cargo check -p fullmag-plan --tests`
+  — PASS po addytywnym uzupełnieniu 20 legacy test literals o
+  `object_id: None`.
+- `cargo fmt -p fullmag-ir -- --check` — PASS po formatowaniu.
+- `ruff check` i `ruff format --check` dla nowego modułu constraintów i jego
+  testu — PASS.
+- `python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/0996-frozen-spins-constraint.source-map.json --repo-root .`
+  — PASS.
+- Testy validatora scientific docs — PASS: 23 tests.
+- `git diff --check -- crates/fullmag-ir packages/fullmag-py docs/physics/0996-frozen-spins-constraint.md docs/physics/0996-frozen-spins-constraint.source-map.json .superpowers/sdd/task-5-report.md .superpowers/sdd/task-5-review.md`
+  — PASS.
 
-This implementation closes both P1 findings and the P2 finding from the independent
-re-review. The prior reviewer verdict remains reviewer-owned; this report marks the
-implementation ready for a new independent review, not accepted or complete.
+## Niezależne, odziedziczone bramki
 
-- The public field freshness enum is again exactly `complete | stale_complete |
-  pending | error`. `superseded` remains internal bounded-handoff telemetry. A
-  compatible retained payload stays `stale_complete` during a newer pending or
-  superseded request and preserves the retained payload's source step, revision,
-  timestamp, wall time, and statistics. A newer failure reports `error` without
-  relabelling retained values with failed-request provenance.
-- Element-DG0 `M_s` is production-reachable only on native FEM CPU ordinary time
-  evolution with consistent-mass exchange. Poisson demag and Zeeman may be added;
-  demag-only and Zeeman-only plans do not promote DG0 support. GPU DG0, direct
-  relaxation, anisotropy, DMI, thermal, STT, Oersted, and magnetoelastic DG0 plans
-  remain fail-closed.
-- DG0 field-dot energy projections now preserve the exact P1-tetrahedron weak-form
-  integral, including consistent-mass off-diagonal terms, and carry
-  `fem_nodal_conservative_tetra_projection`. Uniform and nodal-P1 previews retain
-  `fem_nodal_visualization_projection`.
-- Five separate managed fixtures reached real Python -> ProblemIR -> planner ->
-  runner execution: CPU DG0 `M_s`, and GPU uniform-`M_s` uniaxial, cubic,
-  interfacial-DMI, and bulk-DMI. Every advertised projected term and `eden_total`
-  was integrated at source step 52 and compared with its matching native scalar.
-- The exact non-`task5_`
-  `fem_preview_materialization_stays_outside_callback_deadline` regression now
-  asserts the single-owner retention contract and is explicitly run by the managed
-  review recipe. The managed runner group passed 16/16 Task 5 tests.
-- The removed `exchange_contract.cpp` assertion only searched for a stale,
-  untracked report-document sentence. The executable native
-  `fem_exchange_contract` target remains in
-  `verify-fem-material-element-ms-contract` and passed in the final native gate.
+- Pełny `packages/fullmag-py/tests/test_api.py`: 273 passed, 1 skipped,
+  1 failed. Jedyna porażka jest poza Task 5:
+  `test_random_initializer_serializes_to_ir` oczekuje payloadu bez
+  `preset_version`, podczas gdy bieżący serializer zwraca
+  `preset_version: 2`. Kod tekstur nie został zmieniony w Task 5.
+- Pełny lint dotkniętych dużych modułów Pythona raportuje istniejące błędy w
+  `problem.py`, `study.py` i `world.py`, niezwiązane z frozen spins. Nowy moduł
+  i nowy test przechodzą lint.
+- `cargo fmt -p fullmag-plan -- --check` zatrzymuje się na istniejącym
+  formatowaniu `crates/fullmag-plan/src/util.rs`; 20 zmienionych literals w
+  `tests.rs` są wyłącznie mechanicznym dodaniem pola.
 
-All five energy runs were written under
-`.fullmag/reports/fem-preview-energy-qualification/` and passed their independent
-native-scalar comparisons:
+## Granice akceptacji
 
-| Variant | Device / material | Projection | Compared terms | Maximum relative error |
-|---|---|---|---|---:|
-| `dg0-ms` | CPU, element-DG0 `M_s` | `fem_nodal_conservative_tetra_projection` | `eden_ex`, `eden_demag`, `eden_ext`, `eden_total` | 1.9450934198233654e-09 |
-| `uniaxial` | GPU, uniform `M_s` | `fem_nodal_visualization_projection` | `eden_ani`, `eden_total` | 3.2853607098039007e-11 |
-| `cubic` | GPU, uniform `M_s` | `fem_nodal_visualization_projection` | `eden_ani`, `eden_total` | 3.8805584161779044e-11 |
-| `interfacial-dmi` | GPU, uniform `M_s` | `fem_nodal_visualization_projection` | `eden_dmi`, `eden_total` | 2.7557566216410217e-11 |
-| `bulk-dmi` | GPU, uniform `M_s` | `fem_nodal_visualization_projection` | `eden_dmi`, `eden_total` | 4.1634656172889099e-11 |
+Kod obecny oznacza wyłącznie `AUTHORING/IR IMPLEMENTED`. Nie wolno raportować
+`FrozenSpins` jako wykonywalnej capability, dopóki kolejne zadania nie dodadzą
+plannerowej materializacji maski, reference capture, runtime enforcement,
+telemetrii/provenance oraz lane-specific kwalifikacji naukowej.
 
-The first post-change 216-run invocation completed all row executions but failed
-during final CSV serialization because heterogeneous rows were projected through
-the first row's singular energy key. That run is preserved as RED evidence at
-`.fullmag/reports/fem-preview-surface-matrix/20260723-081559/raw_rows.json`.
-The serializer now builds an explicit ordered union of public columns and writes
-missing cells as `null`; two focused RED/GREEN contracts and the full 13/13
-verifier suite cover the schema. This failed invocation is not acceptance proof.
-
-The existing FEM preview path now owns one bounded asynchronous materializer. Solver callbacks enqueue one snapshot only when the handoff can accept it, retain the last complete compatible payload while work is pending, and account for superseded requests. Magnetization, demagnetizing field, other cached vector fields, and energy-density materialization no longer perform their heavy snapshot copy/materialization inside the solver callback deadline.
-
-The v2 field resources now expose source provenance and freshness without adding payload to thin session status. Control Room keeps topology-compatible `stale_complete` and `pending` data visible instead of clearing the viewport. The managed 4 x 3 x 3 surface matrix completed all warmups and repeats with exact preview payload equivalence.
-
-## Implementation
-
-### Runner and native FEM
-
-- Extended the existing `FemPreviewHandoff` and `PendingFemPreviewState`; no competing preview worker was added.
-- The handoff has a single in-flight job, `can_accept`, nonblocking completion polling, `last_good`, cache-cycle ownership, and a `preview_superseded_count`.
-- Solver callbacks check capacity before creating a snapshot. A full handoff preserves the previous complete field and increments the superseded count.
-- `PendingFemPreviewJob` covers vector fields and energy-density work. The energy job owns the required `m`, `H_*`, per-node `Ms`, active mask, and term prefactors.
-- Energy density is evaluated on the worker as `prefactor * mu0 * Ms * dot(m, h)` for active terms and magnetic nodes. No new physics was added to the FFI.
-- Final cached fields are stamped with the terminal solver step/revision so post-solver cache refresh cannot regress their provenance.
-- CUDA snapshot staging now records the staging event and makes the compute stream wait for it before reuse, preventing staging-buffer reuse while the asynchronous D2H copy is in flight.
-
-### CLI/runtime publication
-
-- Added an explicit positive `FULLMAG_PREVIEW_EVERY_N` override while preserving FEM cadence 10, FDM cadence 50, and disabled preview semantics.
-- Published and pending cache entries are reconciled per quantity by `(source_step, source_revision, materialized_at_unix_ms)`; an idle refresh cannot overwrite a newer terminal field.
-- Idle snapshots are promoted to the current live step before reconciliation.
-- Latest-field source metadata is carried into live workspace publication.
-
-### API contract
-
-- Added `source_step`, `source_revision`, `materialized_at_unix_ms`, `stale_by_steps`, `materialization_wall_time_ns`, and `state` to field catalog/meta resources.
-- Freshness states are `complete`, `stale_complete`, `pending`, and `error`.
-- Catalog, metadata, and vector handlers choose the newest compatible source candidate instead of preferring storage order.
-- Invalid/non-finite or wrong-sized live magnetization is not advertised as a pending usable field.
-- Missing legacy `source_step` remains step 0 instead of being relabelled as current.
-- Projection-cache identity and ETags include session identity, preventing cross-session reuse.
-- Thin status remains revision-only; freshness payload is confined to field resources.
-- OpenAPI JSON was regenerated from the current managed API binary, byte-compared successfully with that binary's `--print-openapi-v2` output, and the TypeScript transport was regenerated.
-
-### Control Room
-
-- Field-resource normalization carries freshness metadata and revision changes.
-- Viewport scene selection retains a topology-compatible complete payload while the selected quantity is `pending` or `stale_complete`.
-- Visualization and inspector models consume the same resource state; no component endpoint string, direct `fetch()`, or parallel state path was introduced.
-- Added focused tests for stale/pending retention and freshness propagation.
-
-### Qualification tooling and documentation
-
-- Added `examples/fem_preview_surface_matrix.py` as the bounded real FEM GPU fixture.
-- Added `scripts/verify_fem_preview_surface_matrix.py`, the Control Room freshness smoke, package script, and `just verify-fem-preview-surface-matrix`.
-- Added initial/final durable `H_demag` snapshots so artifact provenance is checked independently of preview-resource identity.
-- Updated ADR 0011 and the v2 resource-first API specification.
-
-## TDD and defect chronology
-
-1. A fake 80 ms job first characterized the synchronous deadline violation. GREEN keeps five measured callback handoffs below 2 ms while `last_good` remains available and the worker finishes later.
-2. The same-revision cache test exposed a cadence cycle that did not restart. Cache cadence now starts a fresh cycle without adding another worker.
-3. Energy-density tests fixed worker ownership of `m`, field terms, masks, and per-node `Ms`, and assert the exact existing energy formula.
-4. Native snapshot contract review exposed staging-buffer reuse without a compute-stream dependency. The CUDA event wait and source contract close that race.
-5. API RED showed projection cache identity omitted session identity. The key/ETag now includes the session id.
-6. Early matrix runs exposed final `H_demag` reporting step 0 and selecting stale storage. Terminal stamping and newest-source selection make every accepted row report source step 52.
-7. Interactive shutdown exposed post-solver idle refresh replacing the terminal field. Monotonic per-quantity reconciliation now rejects provenance regression.
-8. Full API verification exposed legacy latest-field metadata and invalid live `m` being treated as current/pending. Focused regressions now pass.
-9. Independent review found that headless and interactive execution did not enter the first GPU demag solve with the same fresh-initial-guess intent. Headless now calls the same native `begin_stage` contract, and interactive snapshotting preserves the pending fresh-demag intent through the pre-solve snapshot. A native snapshot contract and a four-way profiler-off/on A/B run prove exact terminal `m`, `H_demag`, and step-1 scalar parity.
-10. Independent review found that a backward host wall-clock adjustment could abort script preparation even though ordering and duration already use monotonic state. Preparation now preserves the raw observed Unix timestamp, exposes a bounded `clock_adjustment` diagnostic, and continues to derive duration and ordering from monotonic/revision state. Focused CLI and v2 API RED/GREEN contracts cover a 32-second backward adjustment.
-11. The Python preflight could select a resolved interpreter path outside the canonical managed environment and the verifier still contained a one-row startup-clock retry. Interpreter identity now preserves the selected symlink path and checks `sys.prefix` before imports. The retry path was deleted completely; the verifier source contract asserts that every row calls `run_row` exactly once.
-12. Final diff audit removed the temporary `FULLMAG_TASK5_STAGE_TRACE` and `FULLMAG_PREVIEW_TRACE` diagnostics. No environment lookup, diagnostic hashing, or trace output remains in runtime or solver hot paths; the opt-in bounded solver profiler remains the only performance instrumentation.
-13. The final relaxation source gate detected an exact-inventory hash change. A base/current multiset audit showed unchanged counts (191 `.fem_mesh` accesses and 64 mesh producers) and only one-for-one rustfmt statement wrapping changes: two API test assertions plus five existing stage-owner/test producers. No production mesh access or producer was added, removed, moved into a callback/loop, or associated with D2H/synchronization. The exact golden hashes were updated to the audited inventory and the semantic source gate was rerun.
-
-## Preview matrix evidence
-
-Authoritative post-serializer-fix report: `.fullmag/reports/fem-preview-surface-matrix/20260723-090252/summary.json`
-
-- Modes: disabled, `m`, `H_demag`, full cache.
-- Cadences: 10, 25, 50.
-- Surfaces: headless, interactive without browser, Control Room.
-- Repeats: one warmup plus five measured runs per variant.
-- Completed: 36 warmups + 180 measured = 216/216 runs.
-- Median end-to-end surface elapsed time: 9623.050 ms.
-- Production callback characterization: 60 live asynchronous rows; callback maximum 1,105,207 ns, callback plus scheduling fence maximum 1,414,746 ns, thread-CPU maximum 1,077,007 ns, and zero wall-time outliers. Every accepted row stayed below the 2,000,000 ns deadline.
-- Preview `m`: one exact payload SHA-256, `6c8dff3a5a6245440ead7e13866029cb3ad2f6dc1d1e02028341c0dc817a8b63`.
-- Preview `H_demag`: one exact payload SHA-256, `2610fdaf301c221f8200644653f6a2c24575b8fd183d71056730e287c57fef45`.
-- Both masks: exact SHA-256 `af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc`.
-- Cross-surface raw preview differences for both quantities: max absolute 0, max scaled relative 0, max ULP 0.
-- Final durable `m` artifacts also had one exact hash, `eb2f5b65d1a3f853ff1623aeaf71e1fabc53b245ba540568a8e5d05349fafff2`, with maximum cross-surface absolute difference 0.
-- Terminal `H_demag` was checked against durable Zarr in 60 measured rows; all reported `source_step=52`, `state=complete`, and the same exact payload hash.
-- Full-cache terminal payload and mask SHA-256 values were recorded for all 12 materialized quantities. Energy comparison covered 30 managed rows.
-- The dedicated delayed-production-path retention proof preserved `stale_complete` materialization without clearing the retained browser canvas; its callback maximum was 193,395 ns.
-
-Clock/retry note: there is no retry implementation. Poll deadlines use `time.monotonic()` and elapsed measurements use `time.perf_counter()`. Preparation retains raw Unix timestamps for evidence but uses monotonic duration and revision/canonical-stage ordering. The authoritative run invoked each of its 216 rows exactly once.
-
-The first canonical invocation in the restricted tool sandbox stopped before row 1 because the API listener bind returned `EPERM`; its preserved diagnostic is `.fullmag/reports/fem-preview-surface-matrix/20260723-032805/api.log`. The exact canonical command was then executed with permission to bind the local API/browser listener. This was a whole-workflow environment restart, not a row retry. An earlier pre-remediation run at `.fullmag/reports/fem-preview-surface-matrix/20260723-021635/` stopped after 107 measured rows when the host wall clock moved backwards by 32.508 seconds; that failure produced the monotonic clock-adjustment contracts above and was not continued or retried.
-
-## Verification
-
-### Managed/native gates
-
-- `env COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime`: passed after the final runtime rebuild; the exported portable bundle validator reported `bundle: valid`.
-- `env COMPOSE_PROJECT_NAME=fullmag just verify-fem-relaxation-runtime`: passed. Source/native contracts passed; managed GPU LLG overdamped, projected-gradient BB, and nonlinear-CG lanes passed; the expected GPU tangent-plane skip remained explicit; CPU relaxation lanes including tangent-plane passed.
-- `env COMPOSE_PROJECT_NAME=fullmag just verify-fem-preview-review-unit-contract`: passed sequentially against the validated final bundle. The exact non-`task5_` callback regression passed, the runner group passed 16/16 `task5_` tests, and the backend source-layout group passed 2/2, in addition to the recipe's focused CLI/API/planner transport, freshness, precedence, clock-adjustment, and merge contracts.
-- `env COMPOSE_PROJECT_NAME=fullmag just verify-fem-material-element-ms-contract`: passed the planner-aligned native material/context/element-quadrature/exchange/Zeeman/anisotropy/demag contracts and the DG0-aware step-metrics contract.
-- `env COMPOSE_PROJECT_NAME=fullmag just verify-fem-preview-energy-qualification`: passed the verifier unit suite, managed bundle validation, static Control Room build, and all five separate native energy fixtures.
-- Managed `preview_enqueue_matrix_stays_below_solver_deadline`: passed all 60 measured samples.
-- `env COMPOSE_PROJECT_NAME=fullmag just verify-fem-preview-surface-matrix`: passed all 216 rows with the equivalence results above; the authoritative post-serializer-fix report is `.fullmag/reports/fem-preview-surface-matrix/20260723-090252/summary.json`.
-
-Two earlier review-gate launches are excluded from proof: the restricted-sandbox attempt could not access the Docker socket, and a concurrently launched attempt collided with the runtime exporter's clean/replacement window and exited 127 because `libfullmag_fem.so.0` was temporarily absent. No product assertion is based on either launch. The final result above was obtained only after the relaxation rebuild, a separate successful bundle validation, and a fully sequential review-gate invocation.
-
-### Rust/API gates
-
-- `cargo test -p fullmag-cli`: 233 passed.
-- `python3 -m unittest scripts.test_verify_fem_preview_surface_matrix`: 13/13 verifier contracts passed, including no row retries, five distinct energy operator payloads, and heterogeneous CSV schema/rectangularization.
-- `python3 -m unittest scripts.test_ensure_python_recipe`: 3/3 managed-Python bootstrap contracts passed.
-- Fresh focused API tests after final OpenAPI regeneration all passed:
-  - `field_vector_cache_identity_includes_session_id`
-  - `v2_field_catalog_rejects_non_finite_live_magnetization`
-  - `v2_field_catalog_rejects_fem_live_magnetization_with_wrong_point_count`
-  - `v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field`
-  - `v2_h_demag_resource_prefers_newer_preview_cache_over_stale_latest_field`
-  - `cached_preview_merge_never_regresses_source_provenance`
-- Full `fullmag-api` suite: 668 passed, 4 failed. This gate is not reported green. All four failures reproduce at exact base `7599f78968ca21014685d1617eb14f3dc8a69bca` with the same values:
-  - `display_patch_accepts_partial_update`: `presentation.vector_glyphs` is false.
-  - `hysteresis_progress_endpoint_averages_only_magnetic_fem_nodes`: actual `[0.0, 0.5, 0.0]`, expected `[0.0, 1.0, 0.0]`.
-  - `hysteresis_progress_endpoint_uses_fem_element_volume_weights_for_live_average`: expected x component `1/28` assertion fails.
-  - `object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_nodes`: actual `11.5`, expected `3.0`.
-- The display and simulation runtime handlers exercised by those four tests are unchanged by Task 5. The detached base reproduction establishes that they are baseline failures, not a claim inferred only from diff locality.
-
-### Control Room gates
-
-- `env TMPDIR=/tmp corepack pnpm --dir apps/control-room test`: 392 files passed, 1 skipped; 3765 tests passed, 1 skipped.
-- `corepack pnpm --dir apps/control-room audit:compute-performance`: passed; no idle-redraw regression.
-- `corepack pnpm --dir apps/control-room typecheck`: passed.
-- `corepack pnpm --dir apps/control-room lint`: passed with zero warnings.
-- `corepack pnpm --dir apps/control-room check:api-hygiene`: passed.
-- Final focused viewport resource-frame test: 1 file and 103 tests passed, including both `stale_complete` and `pending` payload retention.
-- Static Control Room production build: passed.
-- OpenAPI managed-binary output versus generated JSON: byte-for-byte `cmp` passed; TypeScript types and generated client regenerated successfully.
-- `python3 -m py_compile` for the fixture/verifier, `node --check` for the browser smoke, and `git diff --check`: passed.
-- Final source audit found no `FULLMAG_TASK5_STAGE_TRACE` or `FULLMAG_PREVIEW_TRACE` markers and no production row-retry helper or `clock-retry` path. `apps/control-room/next-env.d.ts` has no Task 5 diff.
-
-React Doctor could not run: the sandboxed `npx` attempt failed with `EAI_AGAIN`, and escalation was rejected because it would execute an unpinned third-party package. No dependency was installed.
-
-## Scope and remaining concerns
-
-- Task changes are confined to the existing runner/native preview path, runtime publication, v2 field resources, generated frontend transport, compatible Control Room consumers/tests, qualification tooling, and required docs.
-- `.superpowers/sdd/progress.md` is a pre-existing modification and is deliberately excluded from the Task 5 commit.
-- The four full-API failures above remain repository baseline defects. They are documented, reproduced, and intentionally not repaired by this preview task.
-- Repo-wide `cargo fmt --all -- --check` remains nonzero because it proposes broad formatting across existing untouched code and large mixed-history files. No broad mechanical rewrite was applied; the new preview module and the task's focused changed files were checked separately, and compilation/tests are green as recorded above.
-- Native GPU and managed-runtime success proves the preview path is production-executable on the exercised device. The matrix proves exact preview equivalence for this bounded fixture; it is not a general physics-validation claim beyond that fixture and contract.
+Nie wykonano commita, stage ani push.

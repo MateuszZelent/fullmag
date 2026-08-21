@@ -17,7 +17,11 @@ import type { RequestDiagnosticEntry } from "@/kernel/api/RequestDiagnosticsCont
 import { useKernel } from "@/kernel/KernelContext";
 import { useLayoutSelector } from "@/kernel/layout/useLayout";
 import type { SelectionRef } from "@/kernel/selection/selectionTypes";
-import { useFieldMetaResource } from "@/kernel/resources/studyRuntimeResources";
+import {
+  useFieldMetaResource,
+  useSolverStatusResource,
+} from "@/kernel/resources/studyRuntimeResources";
+import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import {
   EMPTY_VISUALIZATION_DEBUG_SNAPSHOTS,
   type VisualizationDebugController,
@@ -30,6 +34,7 @@ import {
   resolveVisualizationDebugTarget,
   visualizationDebugQuerySupportsFieldMeta,
   type VisualizationDebugExactFieldQuery,
+  type VisualizationDebugLifecycleEvidence,
   type VisualizationDebugPanelModel,
 } from "./VisualizationDebugPanelModel";
 
@@ -286,6 +291,30 @@ function useVisualizationDebugPanelModelState({
   const clientAcks = useVisualizationClientAcksResource({
     enabled: target !== null,
   });
+  const sessionLifecycle = useSessionStatusSelector(
+    (status): VisualizationDebugLifecycleEvidence["session"] => ({
+      lifecycle: status.data?.lifecycle ?? null,
+      resourceRevision: status.revision,
+      resourceStatus: status.status,
+      session: status.data?.session ?? null,
+      solverSummary: status.data?.solver ?? null,
+    }),
+    {
+      enabled: target !== null,
+      isEqual: visualizationDebugSessionLifecycleEqual,
+    },
+  );
+  const solverLifecycle = useSolverStatusResource({ enabled: target !== null });
+  const visualizationSync = useSyncExternalStore(
+    kernel.visualizationSync.subscribe.bind(kernel.visualizationSync),
+    kernel.visualizationSync.getSnapshot.bind(kernel.visualizationSync),
+    kernel.visualizationSync.getSnapshot.bind(kernel.visualizationSync),
+  );
+  const realtimeConnection = useSyncExternalStore(
+    kernel.realtimeConnection.subscribe.bind(kernel.realtimeConnection),
+    kernel.realtimeConnection.getSnapshot.bind(kernel.realtimeConnection),
+    kernel.realtimeConnection.getSnapshot.bind(kernel.realtimeConnection),
+  );
 
   return useMemo(
     () =>
@@ -294,17 +323,47 @@ function useVisualizationDebugPanelModelState({
         clientAcks: clientAcks.data,
         diagnostics,
         fieldMetaByQueryKey,
+        lifecycleEvidence: {
+          session: sessionLifecycle,
+          solver: {
+            resourceRevision: solverLifecycle.revision,
+            resourceStatus: solverLifecycle.status,
+            status: solverLifecycle.data,
+          },
+          source: "http-v2-session-and-solver-resources",
+        },
         selection,
         snapshots,
+        realtimeConnection,
+        visualizationSync,
       }),
     [
       activeViewportMainModuleId,
       clientAcks.data,
       diagnostics,
       fieldMetaByQueryKey,
+      sessionLifecycle,
       selection,
+      solverLifecycle.data,
+      solverLifecycle.revision,
+      solverLifecycle.status,
       snapshots,
+      realtimeConnection,
+      visualizationSync,
     ],
+  );
+}
+
+function visualizationDebugSessionLifecycleEqual(
+  previous: VisualizationDebugLifecycleEvidence["session"],
+  next: VisualizationDebugLifecycleEvidence["session"],
+): boolean {
+  return (
+    previous.resourceRevision === next.resourceRevision &&
+    previous.resourceStatus === next.resourceStatus &&
+    previous.lifecycle === next.lifecycle &&
+    previous.session === next.session &&
+    previous.solverSummary === next.solverSummary
   );
 }
 

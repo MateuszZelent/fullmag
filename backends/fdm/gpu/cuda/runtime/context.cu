@@ -1141,6 +1141,27 @@ static void free_active_mask(Context &ctx) {
     }
 }
 
+static bool alloc_frozen_mask(Context &ctx) {
+    if (!ctx.has_frozen_mask) {
+        return true;
+    }
+    const size_t bytes = ctx.cell_count * sizeof(uint8_t);
+    const cudaError_t err = cudaMalloc(reinterpret_cast<void **>(&ctx.frozen_mask), bytes);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaMalloc(frozen_mask)", err);
+        return false;
+    }
+    return true;
+}
+
+static void free_frozen_mask(Context &ctx) {
+    if (ctx.frozen_mask) {
+        cudaFree(ctx.frozen_mask);
+        ctx.frozen_mask = nullptr;
+    }
+    ctx.frozen_cell_count = 0;
+}
+
 static bool alloc_sot_active_mask(Context &ctx) {
     if (!ctx.has_sot_active_mask) {
         return true;
@@ -1871,6 +1892,8 @@ static DeviceMultilayerFftWorkspace *ensure_multilayer_fft_workspace(
 bool context_alloc_device(Context &ctx) {
     if (!context_create_compute_stream(ctx)) return false;
     if (!alloc_active_mask(ctx)) return false;
+    if (!alloc_frozen_mask(ctx)) return false;
+    if (ctx.has_frozen_mask && !alloc_vector_field(ctx, ctx.frozen_reference)) return false;
     if (!alloc_sot_active_mask(ctx)) return false;
     if (!alloc_slonczewski_active_mask(ctx)) return false;
     if (!alloc_region_mask(ctx)) return false;
@@ -2072,6 +2095,8 @@ void context_free_device(Context &ctx) {
     free_fft_workspace(ctx);
     free_demag_kernel(ctx);
     free_active_mask(ctx);
+    free_frozen_mask(ctx);
+    free_vector_field(ctx.frozen_reference);
     free_sot_active_mask(ctx);
     free_slonczewski_active_mask(ctx);
     free_region_mask(ctx);
@@ -2099,6 +2124,65 @@ bool context_upload_active_mask(Context &ctx, const uint8_t *mask, uint64_t len)
     if (err != cudaSuccess) {
         set_cuda_error(ctx, "cudaMemcpy(active_mask)", err);
         return false;
+    }
+    return true;
+}
+
+bool context_upload_frozen_spins(
+    Context &ctx,
+    const uint8_t *mask,
+    uint64_t mask_len,
+    const double *reference_xyz,
+    uint64_t reference_len)
+{
+    if (!ctx.has_frozen_mask) {
+        return true;
+    }
+    if (!mask || mask_len != ctx.cell_count || !reference_xyz ||
+        reference_len != 3 * ctx.cell_count) {
+        ctx.last_error = "frozen_spins_cuda_abi_invalid: expected dense mask[cell_count] and f64 reference[3*cell_count]";
+        return false;
+    }
+    cudaError_t err = cudaMemcpy(
+        ctx.frozen_mask,
+        mask,
+        ctx.cell_count * sizeof(uint8_t),
+        cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaMemcpy(frozen_mask)", err);
+        return false;
+    }
+    ctx.frozen_cell_count = 0;
+    for (uint64_t index = 0; index < ctx.cell_count; ++index) {
+        if (mask[index] != 0) ++ctx.frozen_cell_count;
+    }
+
+    if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+        std::vector<double> x(ctx.cell_count), y(ctx.cell_count), z(ctx.cell_count);
+        for (uint64_t index = 0; index < ctx.cell_count; ++index) {
+            x[index] = reference_xyz[3 * index + 0];
+            y[index] = reference_xyz[3 * index + 1];
+            z[index] = reference_xyz[3 * index + 2];
+        }
+        if (cudaMemcpy(ctx.frozen_reference.x, x.data(), x.size() * sizeof(double), cudaMemcpyHostToDevice) != cudaSuccess ||
+            cudaMemcpy(ctx.frozen_reference.y, y.data(), y.size() * sizeof(double), cudaMemcpyHostToDevice) != cudaSuccess ||
+            cudaMemcpy(ctx.frozen_reference.z, z.data(), z.size() * sizeof(double), cudaMemcpyHostToDevice) != cudaSuccess) {
+            set_cuda_error(ctx, "cudaMemcpy(frozen_reference)", cudaGetLastError());
+            return false;
+        }
+    } else {
+        std::vector<float> x(ctx.cell_count), y(ctx.cell_count), z(ctx.cell_count);
+        for (uint64_t index = 0; index < ctx.cell_count; ++index) {
+            x[index] = static_cast<float>(reference_xyz[3 * index + 0]);
+            y[index] = static_cast<float>(reference_xyz[3 * index + 1]);
+            z[index] = static_cast<float>(reference_xyz[3 * index + 2]);
+        }
+        if (cudaMemcpy(ctx.frozen_reference.x, x.data(), x.size() * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess ||
+            cudaMemcpy(ctx.frozen_reference.y, y.data(), y.size() * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess ||
+            cudaMemcpy(ctx.frozen_reference.z, z.data(), z.size() * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess) {
+            set_cuda_error(ctx, "cudaMemcpy(frozen_reference)", cudaGetLastError());
+            return false;
+        }
     }
     return true;
 }

@@ -72,6 +72,11 @@ pub use selection::geometry::{
     evaluate_geometry_predicate, AffineTransform3, BoundaryMembership, GeometryPredicate,
     SelectionError,
 };
+pub use selection::{
+    compile_fdm_frozen_spins, compile_fem_frozen_spins, FdmFrozenSpinsDomain, FemIncidentElement,
+    FemTrueDofDomain, FrozenSpinsCompileRequest, FrozenSpinsStateSnapshot,
+    ResolvedFrozenSpinsReference, SelectionDofMembership,
+};
 pub use surface_selectors::{resolve_fem_surface_selector, ResolvedFemSurfaceSelector};
 pub use util::generate_random_unit_vectors;
 

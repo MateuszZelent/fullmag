@@ -1678,6 +1678,10 @@ async fn main() {
         repo_root: repo_root.clone(),
         current_workspace_root,
         current_live_state: Arc::new(RwLock::new(None)),
+        current_live_connectivity: Arc::new(RwLock::new(
+            crate::schemas::status::SessionConnectivity::Connected,
+        )),
+        current_live_last_seen_unix_ms: Arc::new(AtomicU64::new(0)),
         current_live_realtime_events: broadcast::channel(256).0,
         current_live_realtime_replay: Arc::new(Mutex::new(VecDeque::new())),
         current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
@@ -1700,6 +1704,7 @@ async fn main() {
         current_control_next_seq: Arc::new(Mutex::new(0)),
         feature_flags,
         quantity_data_plane: Arc::new(crate::quantity_data_plane::QuantityDataPlaneStore::new()),
+        frozen_spins_previews: Arc::new(RwLock::new(Default::default())),
     });
 
     let cors = router_v2::middleware::cors::cors_layer();
@@ -1731,6 +1736,10 @@ async fn main() {
         .route(
             "/v1/internal/live/current/fields",
             post(sync_current_live_field_frame),
+        )
+        .route(
+            "/v1/internal/live/current/heartbeat",
+            post(sync_current_live_heartbeat),
         )
         .route(
             "/v1/internal/live/current/control/wait",
@@ -2184,6 +2193,25 @@ async fn sync_current_live_snapshot(
     .await
 }
 
+async fn sync_current_live_heartbeat(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CurrentLiveHeartbeatRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    {
+        let current = state.current_live_state.read().await;
+        let snapshot = current
+            .as_ref()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        if snapshot.session.session_id != req.session_id {
+            return Err(ApiError::conflict(
+                "current_live_heartbeat_session_mismatch",
+            ));
+        }
+    }
+    crate::router_v2::handlers::sessions::status::record_current_live_heartbeat(&state).await;
+    Ok(Json(json!({ "accepted": true })))
+}
+
 async fn sync_current_live_session_frame(
     State(state): State<Arc<AppState>>,
     Json(frame): Json<CurrentLiveSessionFrameRequest>,
@@ -2376,6 +2404,9 @@ where
     let apply_start = std::time::Instant::now();
     if let Err(error) = apply(&mut next) {
         *current = Some(next);
+        drop(current);
+        *state.current_live_connectivity.write().await =
+            crate::schemas::status::SessionConnectivity::Degraded;
         return Err(error);
     }
     let apply_ms = apply_start.elapsed().as_micros();
@@ -2491,6 +2522,7 @@ where
     };
     *current = Some(next);
     drop(current);
+    crate::router_v2::handlers::sessions::status::record_current_live_heartbeat(state).await;
 
     if let Some((session_id, run_id, revision, row)) = scalar_sample {
         publish_current_live_realtime_scalar_sample(&state, session_id, run_id, revision, row)
@@ -3023,6 +3055,14 @@ pub(crate) async fn commit_current_live_scene_document(
             normalize_scene_document_magnetization_assets(&mut current_scene);
             snapshot.builder_adapter = scene_document_builder_projection(&current_scene).ok();
             snapshot.scene_document = Some(current_scene);
+        }
+        if let Some(current_scene) = snapshot.scene_document.as_ref() {
+            if scene_document.revision != current_scene.revision {
+                return Err(ApiError::conflict(format!(
+                    "scene_stale_revision: expected scene revision {}, current {}",
+                    scene_document.revision, current_scene.revision
+                )));
+            }
         }
         let previous_scene = snapshot.scene_document.clone();
         let region_impact = previous_scene

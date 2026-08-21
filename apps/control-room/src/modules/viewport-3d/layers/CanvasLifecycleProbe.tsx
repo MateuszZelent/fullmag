@@ -5,6 +5,7 @@ import { useEffect, useRef } from "react";
 
 import type { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 
 export function CanvasLifecycleProbe({
   diagnostics,
@@ -13,7 +14,8 @@ export function CanvasLifecycleProbe({
   diagnostics: RequestDiagnosticsController;
   tracker: Viewport3DResourceTracker;
 }) {
-  const { gl, invalidate } = useThree();
+  const gl = useThree((state) => state.gl);
+  const invalidate = useBatchedInvalidate("frame-commit");
   const frameWindowRef = useRef({
     frames: 0,
     startedAtMs: 0,
@@ -48,6 +50,7 @@ export function CanvasLifecycleProbe({
   }, [gl, invalidate, tracker]);
 
   useFrame(() => {
+    tracker.recordDirtyFrame("frame-commit");
     const now = performance.now();
     if (!firstNonZeroBufferRecordedRef.current) {
       const context = gl.getContext();

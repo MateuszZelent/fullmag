@@ -39,6 +39,7 @@ export type ExplorerNodeKind =
   | "model.planar.monitor"
   | "model.planar.monitor.draft"
   | "object.root"
+  | "object.frozen-spins"
   | "object.geometry"
   | "object.antenna"
   | "object.material"
@@ -372,6 +373,7 @@ export interface ExplorerNode {
   visualizationTargetId?: string;
   modeIndex?: number;
   objectId?: string;
+  objectRole?: "antenna" | "magnet" | "auxiliary";
   observableId?: string;
   couplingId?: string;
   currentTransportId?: string;
@@ -383,6 +385,7 @@ export interface ExplorerNode {
   physicsActivation?: string;
   physicsDependencyIds?: readonly string[];
   regionId?: string;
+  constraintId?: string;
   resourceRef?: string;
   runtimeDescriptorId?: string;
   runtimeResourceKey?: string;

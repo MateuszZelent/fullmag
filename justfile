@@ -648,11 +648,40 @@ verify-fdm-relaxation-physics-qualification:
 verify-fdm-relaxation-qualification-smoke:
     just ensure-python
     PYTHONDONTWRITEBYTECODE=1 "{{repo_python}}" -m pytest -q scripts/test_validate_fdm_relaxation_qualification.py
-    timeout --foreground "${FULLMAG_FDM_RELAXATION_SMOKE_TIMEOUT_S:-180}" bash -lc 'CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fdm-relaxation-qualification-smoke CARGO_INCREMENTAL=0 cargo test -p fullmag-runner --test physics_validation fdm_relaxation::uniform_field_alignment -- --ignored --nocapture'
+    bash -euo pipefail -c 'timeout_s="${FULLMAG_FDM_RELAXATION_SMOKE_TIMEOUT_S:-180}"; case "$timeout_s" in ""|*[!0-9]*) echo "FULLMAG_FDM_RELAXATION_SMOKE_TIMEOUT_S must be an integer" >&2; exit 2;; esac; if [ "$timeout_s" -gt 180 ]; then echo "FULLMAG_FDM_RELAXATION_SMOKE_TIMEOUT_S exceeds the 180 s hard limit" >&2; exit 2; fi; exec timeout --foreground "${timeout_s}s" bash -lc "CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fdm-relaxation-qualification-smoke CARGO_INCREMENTAL=0 cargo test -p fullmag-runner --test physics_validation fdm_relaxation::uniform_field_alignment -- --ignored --nocapture"'
 
 verify-fdm-relaxation-qualification-release:
     just verify-fdm-relaxation-qualification-smoke
-    timeout --foreground "${FULLMAG_FDM_RELAXATION_RELEASE_TIMEOUT_S:-900}" bash -lc 'CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fdm-relaxation-qualification-release CARGO_INCREMENTAL=0 cargo test -p fullmag-runner --test physics_validation fdm_relaxation:: -- --ignored --nocapture'
+    bash -euo pipefail -c 'timeout_s="${FULLMAG_FDM_RELAXATION_RELEASE_TIMEOUT_S:-900}"; case "$timeout_s" in ""|*[!0-9]*) echo "FULLMAG_FDM_RELAXATION_RELEASE_TIMEOUT_S must be an integer" >&2; exit 2;; esac; if [ "$timeout_s" -gt 900 ]; then echo "FULLMAG_FDM_RELAXATION_RELEASE_TIMEOUT_S exceeds the 900 s hard limit" >&2; exit 2; fi; exec timeout --foreground "${timeout_s}s" bash -lc "CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/fdm-relaxation-qualification-release CARGO_INCREMENTAL=0 cargo test -p fullmag-runner --test physics_validation fdm_relaxation:: -- --ignored --nocapture"'
+    just ensure-python
+    FULLMAG_SKIP_MANAGED_FEM_GPU_EXPORT=1 just build target=fullmag cpu_only=1
+    FULLMAG_RELAXATION_TIMEOUT_S="${FULLMAG_FDM_RELAXATION_CASE_TIMEOUT_S:-900}" \
+    "{{repo_python}}" scripts/run_relaxation_qualification_lane.py \
+      --lane fdm_cpu_reference \
+      --repo-root "{{repo_root}}" \
+      --artifact-root "${FULLMAG_RELAXATION_ARTIFACT_ROOT:-.fullmag/reports/relaxation-qualification}" \
+      --executable "{{local_bin}}/fullmag"
+
+verify-fdm-relaxation-qualification-cuda-release:
+    just ensure-python
+    just ensure-managed-fem-runtime
+    docker compose --profile fem-gpu run --rm --no-deps \
+      -e FULLMAG_RELAXATION_TIMEOUT_S="${FULLMAG_FDM_RELAXATION_CASE_TIMEOUT_S:-900}" \
+      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; python3 scripts/run_relaxation_qualification_lane.py --lane fdm_gpu_production --repo-root /workspace --artifact-root "${FULLMAG_RELAXATION_ARTIFACT_ROOT:-.fullmag/reports/relaxation-qualification}" --executable /workspace/.fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu --managed-runtime-manifest /workspace/.fullmag/runtimes/fem-gpu-host/manifest.json'
+
+verify-fem-relaxation-qualification-release:
+    just ensure-managed-fem-runtime
+    just verify-fem-relaxation-source-contract
+    docker compose --profile fem-gpu run --rm --no-deps \
+      -e FULLMAG_RELAXATION_TIMEOUT_S="${FULLMAG_FEM_RELAXATION_CASE_TIMEOUT_S:-900}" \
+      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; python3 scripts/run_relaxation_qualification_lane.py --lane fem_cpu_public --repo-root /workspace --artifact-root "${FULLMAG_RELAXATION_ARTIFACT_ROOT:-.fullmag/reports/relaxation-qualification}" --executable /workspace/.fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu --managed-runtime-manifest /workspace/.fullmag/runtimes/fem-gpu-host/manifest.json'
+
+verify-fem-relaxation-qualification-cuda-release:
+    just ensure-managed-fem-runtime
+    just verify-fem-relaxation-source-contract
+    docker compose --profile fem-gpu run --rm --no-deps \
+      -e FULLMAG_RELAXATION_TIMEOUT_S="${FULLMAG_FEM_RELAXATION_CASE_TIMEOUT_S:-900}" \
+      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; python3 scripts/run_relaxation_qualification_lane.py --lane fem_gpu_public --repo-root /workspace --artifact-root "${FULLMAG_RELAXATION_ARTIFACT_ROOT:-.fullmag/reports/relaxation-qualification}" --executable /workspace/.fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu --managed-runtime-manifest /workspace/.fullmag/runtimes/fem-gpu-host/manifest.json'
 
 verify-fem-relaxation-tpi-contract:
     just ensure-managed-fem-runtime
@@ -661,7 +690,7 @@ verify-fem-relaxation-tpi-contract:
 
 verify-relaxation-production-matrix:
     just ensure-python
-    receipt_root="${FULLMAG_RELAXATION_RECEIPT_ROOT:-.fullmag/reports/relaxation-qualification}"; artifact_root="${FULLMAG_RELAXATION_ARTIFACT_ROOT:-$receipt_root}"; expected_identity="${FULLMAG_RELAXATION_EXPECTED_IDENTITY:-$receipt_root/expected-identity.json}"; output="${FULLMAG_RELAXATION_MATRIX_OUTPUT:-.fullmag/reports/relaxation-production-matrix/manifest.v1.json}"; mkdir -p "$(dirname "$output")"; PYTHONDONTWRITEBYTECODE=1 "{{repo_python}}" scripts/verify_relaxation_production_matrix.py --receipt-root "$receipt_root" --artifact-root "$artifact_root" --expected-identity "$expected_identity" --output "$output"
+    receipt_root="${FULLMAG_RELAXATION_RECEIPT_ROOT:-.fullmag/reports/relaxation-qualification}"; artifact_root="${FULLMAG_RELAXATION_ARTIFACT_ROOT:-$receipt_root}"; expected_identity="${FULLMAG_RELAXATION_EXPECTED_IDENTITY:-$receipt_root/expected-identity.json}"; output="${FULLMAG_RELAXATION_MATRIX_OUTPUT:-.fullmag/reports/relaxation-production-matrix/manifest.v1.json}"; mkdir -p "$(dirname "$output")"; PYTHONDONTWRITEBYTECODE=1 "{{repo_python}}" scripts/verify_relaxation_production_matrix.py --receipt-root "$receipt_root" --artifact-root "$artifact_root" --expected-identity "$expected_identity" --source-root "$(pwd)" --output "$output"
 
 verify-fem-solver-optimization-ledger:
     python3 scripts/validate_fem_solver_optimization_ledger.py docs/audits/2026-07-29-fem-solver-optimization-remediation-ledger.md
@@ -811,6 +840,14 @@ verify-fdm-gpu-m1-layout-abi-contract:
       -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
       fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}/fdm-gpu-m1-layout"; mkdir -p "$build_dir" "$build_dir/cargo-home" "$build_dir/cargo-target"; evidence="$build_dir/fdm-gpu-m1-layout-abi-v1.json"; rm -f "$evidence" "$evidence.tmp"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm fdm_gpu_transport_layout_abi_v1_contract fdm_gpu_transport_registry_fail_closed_v1_contract fdm_gpu_transport_checkpoint_semantic_v1_contract fdm_gpu_transport_layout_abi_v1_c11_contract; FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$build_dir/cargo-home" CARGO_TARGET_DIR="$build_dir/cargo-target" CARGO_INCREMENTAL=0 cargo test -p fullmag-fdm-sys gpu_transport_abi_v1::tests -- --nocapture; ctest --test-dir "$build_dir/backends/fdm" --output-on-failure -R "^fdm_gpu_transport_(layout_abi_v1(_c11)?|registry_fail_closed_v1|checkpoint_semantic_v1)_contract$"; FULLMAG_FDM_GPU_M1_EVIDENCE_PATH="$evidence" "$build_dir/backends/fdm/fdm_gpu_transport_layout_abi_v1_contract"; test -s "$evidence"; python3 -m json.tool "$evidence"'
+
+verify-frozen-spins-fdm-cuda:
+    docker compose --profile fem-gpu run --rm --no-deps \
+      -v "${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}:${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
+      -e FULLMAG_MANAGED_NATIVE_ROOT="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
+      -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}/fdm-frozen-spins-contract"; mkdir -p "$build_dir/cargo-home" "$build_dir/cargo-target"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm frozen_spins_abi_contract; export FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$build_dir/cargo-home" CARGO_TARGET_DIR="$build_dir/cargo-target" CARGO_INCREMENTAL=0; ctest --test-dir "$build_dir/backends/fdm" --output-on-failure -R "^fdm_frozen_spins_abi_contract$"; cargo test -p fullmag-fdm-sys frozen_spins_v1_is_an_append_only_nullable_plan_extension -- --nocapture; cargo test -p fullmag-runner --features cuda native_fdm_frozen_spins_capability_gate_accepts_advertised_single_grid_lane -- --nocapture; cargo test -p fullmag-runner constraints::checkpoint -- --nocapture; cargo test -p fullmag-runner fdm::cpu::reference::tests::frozen_spins_checkpoint_round_trip_restores_reference_without_selector_recapture -- --nocapture'
 
 verify-fdm-gpu-m1-charge-native-contract:
     docker compose --profile fem-gpu run --rm --no-deps \

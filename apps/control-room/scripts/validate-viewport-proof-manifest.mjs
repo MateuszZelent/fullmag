@@ -38,6 +38,7 @@ async function selfTest() {
         workflowName: "self-test-workflow",
         jobName: "self-test-job",
         headSha: SHA,
+        timestampUtc: "2026-08-20T18:00:00.000Z",
         conclusion: "success",
       },
       source: {
@@ -80,7 +81,24 @@ async function selfTest() {
       ],
       blocker: null,
     };
+    const sourceSnapshot = {
+      schema: "fullmag.source-snapshot.v2",
+      head_commit_full: SHA,
+      source_snapshot_sha256: SHA,
+    };
     await validateProofManifest(manifest, root);
+    validateSourceSnapshotBinding(manifest, sourceSnapshot);
+    try {
+      validateSourceSnapshotBinding(manifest, {
+        ...sourceSnapshot,
+        source_snapshot_sha256: "b".repeat(64),
+      });
+      throw new Error("mismatched source snapshot was accepted");
+    } catch (error) {
+      if (!(error instanceof ProofManifestError) || error.reasonCode !== "source_snapshot_mismatch") {
+        throw error;
+      }
+    }
     manifest.execution.headSha = "b".repeat(64);
     await assertProofManifestFailure(
       manifest,
@@ -142,7 +160,11 @@ async function main() {
   }
   const manifestPath = optionValue(args, "--manifest") ?? args[0] ?? null;
   if (!manifestPath) {
-    throw new Error("usage: validate-viewport-proof-manifest.mjs --manifest <path> [--artifact-root <path>] [--source-snapshot <path>]");
+    throw new Error("usage: validate-viewport-proof-manifest.mjs --manifest <path> [--artifact-root <path>] --source-snapshot <path>");
+  }
+  const sourceSnapshotPath = optionValue(args, "--source-snapshot");
+  if (!sourceSnapshotPath) {
+    throw new Error("viewport proof validation requires --source-snapshot <path>");
   }
   const absoluteManifestPath = resolve(manifestPath);
   const artifactRoot = resolve(
@@ -150,11 +172,8 @@ async function main() {
   );
   const manifest = JSON.parse(await readFile(absoluteManifestPath, "utf8"));
   await validateProofManifest(manifest, artifactRoot);
-  const sourceSnapshotPath = optionValue(args, "--source-snapshot");
-  if (sourceSnapshotPath) {
-    const sourceSnapshot = JSON.parse(await readFile(resolve(sourceSnapshotPath), "utf8"));
-    validateSourceSnapshotBinding(manifest, sourceSnapshot);
-  }
+  const sourceSnapshot = JSON.parse(await readFile(resolve(sourceSnapshotPath), "utf8"));
+  validateSourceSnapshotBinding(manifest, sourceSnapshot);
   process.stdout.write(`viewport proof manifest valid: ${absoluteManifestPath}\n`);
 }
 

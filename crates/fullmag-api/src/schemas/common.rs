@@ -2,6 +2,12 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ApiErrorDiagnosticResponse {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct ApiErrorResponse {
     pub code: String,
     pub error: String,
@@ -12,6 +18,8 @@ pub struct ApiErrorResponse {
     pub revision_context: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostics: Option<Vec<ApiErrorDiagnosticResponse>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -87,7 +95,7 @@ impl AcceptedObservationFrameRef {
 /// Atomic identity envelope for one field response. A consumer must accept or
 /// reject the whole bundle; individual revision or carrier members are not a
 /// valid publication on their own.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub struct FieldPublicationBundle {
     pub publication_id: String,
     pub observation_frame: AcceptedObservationFrameRef,
@@ -204,8 +212,18 @@ mod tests {
             Some(2.5e-12),
         );
         let bundle = FieldPublicationBundle::for_response(
-            frame.clone(), 17, 13, 19, 11, "sha256:topology", "H_eff", "magnitude",
-            "object", Some("magnet-1"), "object:magnet-1", "sha256:carrier",
+            frame.clone(),
+            17,
+            13,
+            19,
+            11,
+            "sha256:topology",
+            "H_eff",
+            "magnitude",
+            "object",
+            Some("magnet-1"),
+            "object:magnet-1",
+            "sha256:carrier",
         );
 
         assert_eq!(bundle.observation_frame, frame);
@@ -214,6 +232,8 @@ mod tests {
         assert_eq!(bundle.topology_revision, "11");
         assert_eq!(bundle.field.quantity_id, "H_eff");
         assert_eq!(bundle.field.carrier_fingerprint, "sha256:carrier");
-        assert!(bundle.publication_id.contains(&bundle.observation_frame.observation_frame_id));
+        assert!(bundle
+            .publication_id
+            .contains(&bundle.observation_frame.observation_frame_id));
     }
 }

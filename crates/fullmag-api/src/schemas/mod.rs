@@ -7,6 +7,7 @@ pub mod diagnostics;
 pub mod display;
 pub mod domain;
 pub mod fields;
+pub mod frozen_spins;
 pub mod hysteresis;
 pub mod logs;
 pub mod mesh;
@@ -23,5 +24,6 @@ pub mod tables;
 pub mod visualization_state;
 pub mod workspace;
 
+pub use frozen_spins::*;
 pub use planar_fields::*;
 pub use planar_monitors::*;

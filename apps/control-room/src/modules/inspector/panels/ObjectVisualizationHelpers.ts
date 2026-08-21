@@ -176,12 +176,28 @@ export function objectVisualizationPanelSnapshotEquals(
     const nextPending = next.pendingOverrides?.[key];
     if (
       previousPending?.baseRevision !== nextPending?.baseRevision ||
+      previousPending?.transactionId !== nextPending?.transactionId ||
+      !fieldTransactionIdsEqual(
+        previousPending?.fieldTransactionIds,
+        nextPending?.fieldTransactionIds,
+      ) ||
       !visualizationTargetPatchEquals(previousPending?.patch, nextPending?.patch)
     ) {
       return false;
     }
   }
 
+  return true;
+}
+
+function fieldTransactionIdsEqual(
+  left: Readonly<Record<string, string | undefined>> | undefined,
+  right: Readonly<Record<string, string | undefined>> | undefined,
+): boolean {
+  const keys = new Set([...Object.keys(left ?? {}), ...Object.keys(right ?? {})]);
+  for (const key of keys) {
+    if (left?.[key] !== right?.[key]) return false;
+  }
   return true;
 }
 

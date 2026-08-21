@@ -40,4 +40,17 @@ describe("selectSessionLifecycle", () => {
     expect(lifecycle.isConnected).toBe(false);
     expect(lifecycle.canSubmitCommands).toBe(false);
   });
+
+  it("consumes degraded connectivity independently from commandability", () => {
+    const lifecycle = selectSessionLifecycle({
+      connectivity: "degraded",
+      session_resource: "active",
+      solver: "running",
+      commandability: "forbidden",
+    });
+
+    expect(lifecycle.solver).toBe("running");
+    expect(lifecycle.isConnected).toBe(false);
+    expect(lifecycle.canSubmitCommands).toBe(false);
+  });
 });

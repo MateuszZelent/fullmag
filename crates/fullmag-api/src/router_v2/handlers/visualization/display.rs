@@ -187,8 +187,13 @@ pub async fn replace_visualization_state(
         presentation.visualization_camera = Some(replacement.camera);
         presentation.visualization_clip = Some(replacement.clip);
         presentation.visualization_vector_style = Some(replacement.vector_style);
-        presentation.visualization_overrides =
-            Some(canonicalize_visualization_overrides(&replacement.overrides));
+        let canonicalized =
+            canonicalize_visualization_overrides_with_diagnostics(&replacement.overrides);
+        presentation.visualization_overrides = Some(canonicalized.overrides);
+        append_visualization_restore_warnings(
+            &mut presentation.visualization_restore_warnings,
+            &canonicalized.warnings,
+        );
     }
     let selection = state.current_display_selection.read().await;
     let presentation = state.current_display_presentation.read().await;
@@ -1541,8 +1546,12 @@ fn apply_visualization_presentation_patch(
         presentation.visualization_vector_style = Some(style);
     }
     if let Some(overrides) = &update.overrides {
-        presentation.visualization_overrides =
-            Some(canonicalize_visualization_overrides(overrides));
+        let canonicalized = canonicalize_visualization_overrides_with_diagnostics(overrides);
+        presentation.visualization_overrides = Some(canonicalized.overrides);
+        append_visualization_restore_warnings(
+            &mut presentation.visualization_restore_warnings,
+            &canonicalized.warnings,
+        );
     }
     if let Some(airbox_patch) = update
         .layers
@@ -2049,12 +2058,15 @@ pub(crate) fn build_visualization_state_response(
         .visualization_vector_style
         .clone()
         .unwrap_or_else(default_vector_style_visualization);
-    let overrides = canonicalize_visualization_overrides(
+    let canonicalized_overrides = canonicalize_visualization_overrides_with_diagnostics(
         presentation
             .visualization_overrides
             .as_deref()
             .unwrap_or_default(),
     );
+    let overrides = canonicalized_overrides.overrides;
+    let mut restore_warnings = presentation.visualization_restore_warnings.clone();
+    append_visualization_restore_warnings(&mut restore_warnings, &canonicalized_overrides.warnings);
     let targets = build_visualization_target_registry(
         &quantity.active_quantity_id,
         &quantity.colormap,
@@ -2094,7 +2106,7 @@ pub(crate) fn build_visualization_state_response(
         overrides,
         targets,
         diagnostics: VisualizationDiagnostics {
-            warnings: presentation.visualization_restore_warnings.clone(),
+            warnings: restore_warnings,
             degraded_reasons,
         },
         active_quantity_id: quantity.active_quantity_id,
@@ -2121,36 +2133,84 @@ pub(crate) fn build_visualization_state_response(
     }
 }
 
-fn canonicalize_visualization_overrides(
+const MAX_VISUALIZATION_RESTORE_WARNINGS: usize = 16;
+const AIRBOX_OVERRIDE_ORDERING_WARNING: &str =
+    "visualization_override_migration_ambiguous_airbox_ordering: persisted Airbox aliases lack per-entry revision/timestamp evidence; canonical identity was retained when unambiguous and conflicting legacy entries were dropped";
+
+#[derive(Debug, Clone)]
+pub(crate) struct CanonicalizedVisualizationOverrides {
+    pub(crate) overrides: Vec<VisualizationOverrideState>,
+    pub(crate) warnings: Vec<String>,
+}
+
+pub(crate) fn append_visualization_restore_warnings(
+    warnings: &mut Vec<String>,
+    additions: &[String],
+) {
+    for warning in additions {
+        if warnings.iter().any(|existing| existing == warning) {
+            continue;
+        }
+        if warnings.len() >= MAX_VISUALIZATION_RESTORE_WARNINGS {
+            break;
+        }
+        warnings.push(warning.clone());
+    }
+    bound_visualization_restore_warnings(warnings);
+}
+
+pub(crate) fn bound_visualization_restore_warnings(warnings: &mut Vec<String>) {
+    warnings.truncate(MAX_VISUALIZATION_RESTORE_WARNINGS);
+}
+
+pub(crate) fn canonicalize_visualization_overrides_with_diagnostics(
     overrides: &[VisualizationOverrideState],
-) -> Vec<VisualizationOverrideState> {
-    let canonical = overrides
+) -> CanonicalizedVisualizationOverrides {
+    let airbox_entries = overrides
         .iter()
-        .find(|entry| entry.scope == VisualizationScopeKind::Airbox && entry.scope_id == "airbox")
-        .or_else(|| {
-            overrides.iter().find(|entry| {
-                entry.scope == VisualizationScopeKind::Part
-                    && is_airbox_identity_id(&entry.scope_id)
-            })
+        .filter(|entry| {
+            matches!(
+                entry.scope,
+                VisualizationScopeKind::Airbox
+                    | VisualizationScopeKind::Object
+                    | VisualizationScopeKind::Part
+            ) && is_airbox_identity_id(&entry.scope_id)
         })
-        .or_else(|| {
-            overrides.iter().find(|entry| {
-                entry.scope == VisualizationScopeKind::Object
-                    && is_airbox_identity_id(&entry.scope_id)
-            })
-        })
-        .or_else(|| {
-            overrides.iter().find(|entry| {
-                entry.scope == VisualizationScopeKind::Airbox
-                    && is_airbox_identity_id(&entry.scope_id)
-            })
-        })
-        .cloned()
-        .map(|mut entry| {
-            entry.scope = VisualizationScopeKind::Airbox;
-            entry.scope_id = "airbox".to_string();
-            entry
-        });
+        .collect::<Vec<_>>();
+    let canonical_entries = airbox_entries
+        .iter()
+        .filter(|entry| entry.scope == VisualizationScopeKind::Airbox && entry.scope_id == "airbox")
+        .collect::<Vec<_>>();
+
+    let mut warnings = Vec::new();
+    let canonical = if canonical_entries.len() == 1 {
+        if airbox_entries.len() > 1 {
+            warnings.push(AIRBOX_OVERRIDE_ORDERING_WARNING.to_string());
+        }
+        Some((**canonical_entries[0]).clone())
+    } else if canonical_entries.len() > 1 {
+        if canonical_entries
+            .windows(2)
+            .all(|entries| **entries[0] == **entries[1])
+        {
+            if airbox_entries.len() > canonical_entries.len() {
+                warnings.push(AIRBOX_OVERRIDE_ORDERING_WARNING.to_string());
+            }
+            Some((**canonical_entries[0]).clone())
+        } else {
+            warnings.push(AIRBOX_OVERRIDE_ORDERING_WARNING.to_string());
+            None
+        }
+    } else if airbox_entries.len() == 1 {
+        Some(normalize_airbox_override(airbox_entries[0]))
+    } else if airbox_entries.is_empty() {
+        None
+    } else {
+        // Multiple legacy aliases have no per-entry revision/timestamp in the
+        // persisted contract. Never choose by array order or guessed priority.
+        warnings.push(AIRBOX_OVERRIDE_ORDERING_WARNING.to_string());
+        None
+    };
 
     let mut normalized = overrides
         .iter()
@@ -2167,6 +2227,17 @@ fn canonicalize_visualization_overrides(
     if let Some(canonical) = canonical {
         normalized.push(canonical);
     }
+    bound_visualization_restore_warnings(&mut warnings);
+    CanonicalizedVisualizationOverrides {
+        overrides: normalized,
+        warnings,
+    }
+}
+
+fn normalize_airbox_override(entry: &VisualizationOverrideState) -> VisualizationOverrideState {
+    let mut normalized = entry.clone();
+    normalized.scope = VisualizationScopeKind::Airbox;
+    normalized.scope_id = "airbox".to_string();
     normalized
 }
 
@@ -2548,4 +2619,85 @@ struct QuantityProjection {
     auto_contrast: bool,
     contrast_min: Option<f64>,
     contrast_max: Option<f64>,
+}
+
+#[cfg(test)]
+mod visualization_override_migration_tests {
+    use super::*;
+
+    fn airbox_override(
+        scope: VisualizationScopeKind,
+        scope_id: &str,
+        visible: bool,
+    ) -> VisualizationOverrideState {
+        VisualizationOverrideState {
+            scope,
+            scope_id: scope_id.to_string(),
+            visible: Some(visible),
+            display: None,
+            style: None,
+            quantity: None,
+        }
+    }
+
+    #[test]
+    fn canonical_and_legacy_airbox_conflict_retains_canonical_identity_with_warning() {
+        let canonical = airbox_override(VisualizationScopeKind::Airbox, "airbox", true);
+        let legacy = airbox_override(VisualizationScopeKind::Object, "object:__air__", false);
+
+        let result = canonicalize_visualization_overrides_with_diagnostics(&[canonical, legacy]);
+
+        assert_eq!(result.overrides.len(), 1);
+        assert_eq!(result.overrides[0].scope, VisualizationScopeKind::Airbox);
+        assert_eq!(result.overrides[0].scope_id, "airbox");
+        assert_eq!(result.overrides[0].visible, Some(true));
+        assert_eq!(result.warnings.len(), 1);
+    }
+
+    #[test]
+    fn reversing_legacy_airbox_aliases_does_not_change_the_migration_result() {
+        let canonical = airbox_override(VisualizationScopeKind::Airbox, "airbox", true);
+        let legacy = airbox_override(VisualizationScopeKind::Object, "object:__airbox__", false);
+
+        let normalized = canonicalize_visualization_overrides_with_diagnostics(&[
+            canonical.clone(),
+            legacy.clone(),
+        ]);
+        let reversed = canonicalize_visualization_overrides_with_diagnostics(&[legacy, canonical]);
+
+        assert_eq!(normalized.overrides, reversed.overrides);
+        assert_eq!(normalized.warnings, reversed.warnings);
+        assert_eq!(normalized.overrides.len(), 1);
+        assert_eq!(normalized.overrides[0].scope_id, "airbox");
+    }
+
+    #[test]
+    fn conflicting_legacy_airbox_aliases_are_dropped_without_ordering_evidence() {
+        let first = airbox_override(VisualizationScopeKind::Part, "part:__air__", true);
+        let second = airbox_override(VisualizationScopeKind::Part, "part:__airbox__", false);
+
+        let result = canonicalize_visualization_overrides_with_diagnostics(&[first, second]);
+
+        assert!(result.overrides.is_empty());
+        assert_eq!(result.warnings.len(), 1);
+    }
+
+    #[test]
+    fn restore_warnings_are_deduplicated_and_bounded() {
+        let additions = (0..(MAX_VISUALIZATION_RESTORE_WARNINGS + 4))
+            .map(|index| format!("warning-{index}"))
+            .collect::<Vec<_>>();
+        let mut warnings = vec!["warning-0".to_string()];
+
+        append_visualization_restore_warnings(&mut warnings, &additions);
+
+        assert_eq!(warnings.len(), MAX_VISUALIZATION_RESTORE_WARNINGS);
+        assert_eq!(
+            warnings
+                .iter()
+                .filter(|warning| warning.as_str() == "warning-0")
+                .count(),
+            1
+        );
+    }
 }

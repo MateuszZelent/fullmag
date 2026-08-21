@@ -210,7 +210,7 @@ BB1 and BB2 use `s_tilde` and `y_tilde` in the energy metric. This transport
 does not change the public algorithm name, accepted-state retraction, or the
 `m/A` step unit.
 
-The Armijo slope
+The analytic Armijo slope
 
 \[
 \phi'(0)=\langle\mathbf g,\mathbf p\rangle_E
@@ -218,6 +218,32 @@ The Armijo slope
 
 has units `J A/m`, so `lambda * phi'(0)` is in joules. A line search that
 compares joules with an unweighted vector dot product is dimensionally invalid.
+It is a derivative oracle, not the final floating-point acceptance quantity.
+
+For every direct-minimizer lane, the strict acceptance threshold uses the
+representable chord of the actual normalized trial state:
+
+\[
+s_i^{\mathrm{fp}}=m_{1,i}^{\mathrm{fp}}-m_{0,i}^{\mathrm{fp}},
+\qquad
+\Delta E_{\mathrm{lin,chord}}
+=-\mu_0\sum_i M_{s,i}V_i
+H_{\mathrm{eff},i}(m_0)\cdot s_i^{\mathrm{fp}}.
+\]
+
+The chord increment must be finite and strictly negative. The Armijo decision
+is then
+
+\[
+E_{\mathrm{trial}}
+\le E_{\mathrm{previous}}
+ +c_1\Delta E_{\mathrm{lin,chord}}+\varepsilon_E.
+\]
+
+This prevents a normalized floating-point retraction from being judged by an
+unrepresentable `lambda * phi'(0)` product. FDM currently obtains the left-hand
+side from the backend total-energy snapshot; it does not claim the FEM-style
+per-interaction direct-difference roundoff certificate until that owner exists.
 
 For FEM direct minimizers, sufficient decrease is evaluated from a direct
 energy increment, not from subtraction of independently published endpoint
@@ -338,6 +364,8 @@ for a lane, that lane rejects Oersted during relaxation.
 | `E_previous` ($E_{\mathrm{previous}}$) | last accepted energy | $\mathrm{J}$ |
 | `c_1` ($c_1$) | Armijo coefficient | $1$ |
 | `phi_prime` ($\phi'(0)$) | physical-metric directional energy derivative | $\mathrm{J\,A\,m^{-1}}$ |
+| `s_i^{\mathrm{fp}}` | representable trial chord at cell/node `i` | $1$ |
+| `Delta E_lin_chord` ($\Delta E_{\mathrm{lin,chord}}$) | first-order energy increment along the stored trial chord | $\mathrm{J}$ |
 
 (assumptions-and-validity)=
 ### 2.6 Assumptions and validity limits
@@ -393,16 +421,24 @@ absolute energy budget
 \\varepsilon_{\\mathrm{f32}}=2^{-23},
 ```
 
-and accepts a finite trial only when
+and accepts a finite trial only when the line-search bound uses the
+representable floating-point chord produced by the normalization:
 
 ```{math}
 :label: fdm-cuda-fp32-armijo-acceptance
 
 E_{\\mathrm{trial}}
  \\le E_{\\mathrm{previous}}
- + c_1\\lambda\\,\\phi'(0)
+ + c_1\\Delta E_{\\mathrm{lin,chord}}
  + \\varepsilon_{E,\\mathrm{single}}(E_{\\mathrm{previous}}).
 ```
+
+Here
+`$\\Delta E_{\\mathrm{lin,chord}}=-\\mu_0\\sum_i M_{s,i}V_i
+\\boldsymbol{H}_{\\mathrm{eff},i}\\cdot\\boldsymbol{s}^{\\mathrm{fp}}_i$` is
+computed from the actual stored trial. The analytic directional derivative
+`$\\phi'(0)$` remains a finite-descent and diagnostic quantity; it is not
+substituted for the chord in the acceptance decision.
 
 The budget has unit `J`, is applied only to the internal trial decision, and
 does not modify the reported energy, torque, or stop threshold. CUDA double and
@@ -428,8 +464,11 @@ realizations.
   resolves to `1e-12`; an explicitly looser policy is rejected before runtime.
   This algorithm-specific requirement does not change the `1e-8` default used
   by LLG dynamics.
-- FEM PG-BB with demag is production-qualified through direct polarized
-  Armijo increments on CPU/MFEM and GPU/CUDA; no fallback is used.
+- FEM PG-BB with demag has a direct polarized Armijo realization on CPU/MFEM
+  and GPU/CUDA. This physics note does not promote it to production
+  qualification: that status is granted only by a fresh managed receipt in
+  the capability matrix, including runtime, parity, refinement, and
+  repeatability gates.
 - PG-BB/NCG preconditioners and TPI operators use dimensionally compatible mass,
   stiffness, and local-curvature blocks.
 - Native nonfinite torque, energy, gradient, error estimate, or solver residual
@@ -647,10 +686,13 @@ The planner rejects illegal interactions before backend selection and reports
 the physical reason. Capability decisions are explicit for discretization,
 device, precision, execution mode, and algorithm.
 
-- FDM: LLG, PG-BB, NCG where the selected lane is qualified; no TPI.
-- FEM CPU: production LLG/PG-BB/NCG; TPI only in explicit extended development
-  mode until qualification.
-- FEM GPU: production LLG/PG-BB/NCG where qualified; forced TPI unsupported.
+- FDM: LLG, PG-BB, NCG only where the selected lane has a fresh source-bound
+  qualification receipt; the current relaxation rows remain unvalidated.
+- FEM CPU: executable LLG/PG-BB/NCG paths, but no current source-bound
+  production qualification; TPI is only in explicit extended development mode
+  until qualification.
+- FEM GPU: executable LLG/PG-BB/NCG paths subject to runtime gates, but no
+  current source-bound production qualification; forced TPI is unsupported.
 - Automatic TPI may fall back to CPU only in extended development mode and
   must record the fallback reason.
 - Strict mode never hides a fallback or development capability.
@@ -809,7 +851,8 @@ run through their repository-owned commands.
 - [x] Control Room inspector and round-trip
 - [x] Artifacts and provenance
 - [x] Analytical and cross-backend tests
-- [x] Managed runtime verification
+- [x] Managed runtime contract verification
+- [ ] Full source-bound managed relaxation qualification matrix
 - [x] Canonical physics contract
 
 (limitations)=

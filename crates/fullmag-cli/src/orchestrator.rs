@@ -41,6 +41,20 @@ const DEFERRED_DOMAIN_COMPLETION_DETAIL: &str =
 const DEFERRED_MESH_COMPLETION_DETAIL: &str =
     "Mesh completed during deferred materialization; timing unavailable";
 
+fn frozen_spins_checkpoint_from_stage_artifacts(
+    stage_artifact_dir: &Path,
+) -> Result<Option<serde_json::Value>> {
+    let path = stage_artifact_dir.join("constraints/frozen_spins_checkpoint.v1.json");
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let bytes = fs::read(&path)
+        .with_context(|| format!("reading Frozen Spins checkpoint {}", path.display()))?;
+    let value = serde_json::from_slice(&bytes)
+        .with_context(|| format!("parsing Frozen Spins checkpoint {}", path.display()))?;
+    Ok(Some(value))
+}
+
 fn preparation_unix_time_millis() -> Result<u64> {
     u64::try_from(unix_time_millis()?).context("preparation timestamp exceeds u64")
 }
@@ -5578,6 +5592,7 @@ struct PauseCheckpointProvider {
     energies: fullmag_session::SolverEnergies,
     magnetization: Vec<[f64; 3]>,
     compatibility: fullmag_session::CheckpointCompatibility,
+    backend_checkpoint: Option<serde_json::Value>,
 }
 
 impl fullmag_session::CheckpointSnapshotProvider for PauseCheckpointProvider {
@@ -5609,7 +5624,19 @@ impl fullmag_session::CheckpointSnapshotProvider for PauseCheckpointProvider {
     }
 
     fn backend_state_payload(&self) -> Result<Option<fullmag_session::BackendStatePayload>> {
-        Ok(None)
+        let Some(checkpoint) = self.backend_checkpoint.clone() else {
+            return Ok(None);
+        };
+        Ok(Some(fullmag_session::BackendStatePayload {
+            format: "fullmag.backend_state.v1".to_string(),
+            backend_family: "fdm_cpu_reference".to_string(),
+            integrator_kind: Some("frozen_spins".to_string()),
+            integrator_state: Some(checkpoint),
+            rng_state: None,
+            extra: serde_json::json!({
+                "checkpoint_schema": fullmag_runner::constraints::FROZEN_SPINS_CHECKPOINT_SCHEMA
+            }),
+        }))
     }
 
     fn compatibility(&self) -> fullmag_session::CheckpointCompatibility {
@@ -5622,6 +5649,7 @@ fn capture_pause_checkpoint(
     step: Option<&fullmag_runner::StepStats>,
     magnetization: &[[f64; 3]],
     backend_plan: &BackendPlanIR,
+    stage_artifact_dir: &Path,
 ) -> Result<fullmag_session::CaptureResult> {
     let store_root = repo_root()
         .join(".fullmag")
@@ -5642,6 +5670,7 @@ fn capture_pause_checkpoint(
         },
         magnetization: magnetization.to_vec(),
         compatibility: pause_checkpoint_compatibility(backend_plan, magnetization.len()),
+        backend_checkpoint: frozen_spins_checkpoint_from_stage_artifacts(stage_artifact_dir)?,
     };
     fullmag_session::capture_checkpoint(
         &store,
@@ -8832,6 +8861,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         );
 
         if !use_live_callback {
+            let frozen_spins_checkpoint =
+                frozen_spins_checkpoint_from_stage_artifacts(&current_stage_artifact_dir)?;
             let grid = match &execution_plan.backend_plan {
                 BackendPlanIR::Fdm(fdm) => {
                     [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]]
@@ -8852,7 +8883,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             for (index, stats) in stage_result.steps.iter().enumerate() {
                 let is_final_step = index + 1 == stage_result.steps.len();
                 let update = fullmag_runner::StepUpdate {
-                    coupled_checkpoint: None,
+                    coupled_checkpoint: is_final_step
+                        .then(|| frozen_spins_checkpoint.clone())
+                        .flatten(),
                     stats: offset_step_stats(std::slice::from_ref(stats), step_offset, time_offset)
                         .into_iter()
                         .next()
@@ -8912,6 +8945,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             step_offset,
             time_offset,
             is_session_final_stage && !stage_failed,
+            frozen_spins_checkpoint_from_stage_artifacts(&current_stage_artifact_dir)?,
         ) {
             live_workspace.update(|state| {
                 // The terminal solver payload must use the same ingest path as ordinary live
@@ -10159,6 +10193,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         last_offset_step.as_ref(),
                         &stage_result.final_magnetization,
                         &execution_plan.backend_plan,
+                        &current_stage_artifact_dir,
                     ) {
                         Ok(capture) => Some(capture),
                         Err(error) => {
@@ -10443,6 +10478,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             }
 
             if !use_live_callback {
+                let frozen_spins_checkpoint =
+                    frozen_spins_checkpoint_from_stage_artifacts(&current_stage_artifact_dir)?;
                 let grid = match &execution_plan.backend_plan {
                     BackendPlanIR::Fdm(fdm) => {
                         [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]]
@@ -10460,9 +10497,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     .as_ref()
                     .map(|asset| asset.identity.generation_id().to_string());
                 let mut live_cadence = LiveProgressCadence::default();
-                for stats in &stage_result.steps {
+                for (index, stats) in stage_result.steps.iter().enumerate() {
+                    let is_final_step = index + 1 == stage_result.steps.len();
                     let update = fullmag_runner::StepUpdate {
-                        coupled_checkpoint: None,
+                        coupled_checkpoint: is_final_step
+                            .then(|| frozen_spins_checkpoint.clone())
+                            .flatten(),
                         stats: offset_step_stats(
                             std::slice::from_ref(stats),
                             step_offset,
@@ -10510,6 +10550,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 step_offset,
                 time_offset,
                 false,
+                frozen_spins_checkpoint_from_stage_artifacts(&current_stage_artifact_dir)?,
             ) {
                 live_workspace.update(|state| {
                     state.session.status = if final_update.finished {

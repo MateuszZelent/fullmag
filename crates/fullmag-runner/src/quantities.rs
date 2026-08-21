@@ -112,49 +112,8 @@ fn has_values(values: &Option<Vec<f64>>) -> bool {
 
 fn fdm_quantity_is_active(engine: FdmEngine, plan: &FdmPlanIR, id: QuantityId) -> bool {
     let engine_exposes = match engine {
-        FdmEngine::CpuReference => matches!(
-            id,
-            QuantityId::M
-                | QuantityId::HEx
-                | QuantityId::HDemag
-                | QuantityId::HExt
-                | QuantityId::HDrive
-                | QuantityId::HAnt
-                | QuantityId::Torque
-                | QuantityId::HAni
-                | QuantityId::HDmi
-                | QuantityId::HEff
-                | QuantityId::HOe
-                | QuantityId::EdenEx
-                | QuantityId::EdenDemag
-                | QuantityId::EdenExt
-                | QuantityId::EdenDrive
-                | QuantityId::EdenAni
-                | QuantityId::EdenDmi
-                | QuantityId::EdenTotal
-                | QuantityId::MatMs
-                | QuantityId::MatAex
-                | QuantityId::MatAlpha
-        ),
-        FdmEngine::CudaFdm => matches!(
-            id,
-            QuantityId::M
-                | QuantityId::HEx
-                | QuantityId::HDemag
-                | QuantityId::HExt
-                | QuantityId::Torque
-                | QuantityId::HAni
-                | QuantityId::HEff
-                | QuantityId::HOe
-                | QuantityId::EdenEx
-                | QuantityId::EdenDemag
-                | QuantityId::EdenExt
-                | QuantityId::EdenAni
-                | QuantityId::EdenDmi
-                | QuantityId::EdenTotal
-                | QuantityId::VElectric
-                | QuantityId::JCharge
-        ),
+        FdmEngine::CpuReference => crate::fdm::cpu::reference::can_materialize_preview_quantity(id),
+        FdmEngine::CudaFdm => crate::fdm::gpu::cuda::native::can_materialize_preview_quantity(id),
     };
     engine_exposes && fdm_plan_enables_quantity(plan, id)
 }
@@ -165,7 +124,7 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         QuantityId::HEx => plan.enable_exchange,
         QuantityId::HDemag => plan.enable_demag,
         QuantityId::HExt => plan.external_field.is_some(),
-        QuantityId::HDrive => !plan.field_drives.is_empty(),
+        QuantityId::HDrive => plan.field_drives.iter().any(|drive| drive.enabled),
         QuantityId::HOe => plan.has_oersted_cylinder || plan.oersted_field_xyz.is_some(),
         QuantityId::HAni => fdm_has_uniaxial_anisotropy(&plan.material),
         QuantityId::HAniCubic => fdm_has_cubic_anisotropy(&plan.material),
@@ -178,7 +137,7 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         QuantityId::EdenEx => plan.enable_exchange,
         QuantityId::EdenDemag => plan.enable_demag,
         QuantityId::EdenExt => plan.external_field.is_some(),
-        QuantityId::EdenDrive => !plan.field_drives.is_empty(),
+        QuantityId::EdenDrive => plan.field_drives.iter().any(|drive| drive.enabled),
         QuantityId::EdenAni => {
             fdm_has_uniaxial_anisotropy(&plan.material) || fdm_has_cubic_anisotropy(&plan.material)
         }
@@ -280,56 +239,9 @@ fn fdm_multilayer_quantity_is_active(plan: &FdmMultilayerPlanIR, id: QuantityId)
 
 fn fem_quantity_is_active(engine: FemEngine, plan: &FemPlanIR, id: QuantityId) -> bool {
     let engine_exposes = match engine {
-        FemEngine::CpuNative => matches!(
-            id,
-            QuantityId::M
-                | QuantityId::HEx
-                | QuantityId::HDemag
-                | QuantityId::DemagPhi
-                | QuantityId::HExt
-                | QuantityId::HAnt
-                | QuantityId::HDrive
-                | QuantityId::Torque
-                | QuantityId::HEff
-                | QuantityId::HDmi
-                | QuantityId::HDmiBulk
-                | QuantityId::HTherm
-                | QuantityId::EdenEx
-                | QuantityId::EdenDemag
-                | QuantityId::EdenExt
-                | QuantityId::EdenDrive
-                | QuantityId::EdenAni
-                | QuantityId::EdenDmi
-                | QuantityId::EdenTotal
-                | QuantityId::VElectric
-                | QuantityId::JCharge
-                | QuantityId::SpinPotential
-                | QuantityId::SpinCurrentTensor
-                | QuantityId::TorqueStt
-        ),
-        FemEngine::NativeGpu => matches!(
-            id,
-            QuantityId::M
-                | QuantityId::HEx
-                | QuantityId::HDemag
-                | QuantityId::HExt
-                | QuantityId::HAnt
-                | QuantityId::Torque
-                | QuantityId::HEff
-                | QuantityId::HAni
-                | QuantityId::HDmi
-                | QuantityId::HMel
-                | QuantityId::HAniCubic
-                | QuantityId::HDmiBulk
-                | QuantityId::HOe
-                | QuantityId::HTherm
-                | QuantityId::EdenEx
-                | QuantityId::EdenDemag
-                | QuantityId::EdenExt
-                | QuantityId::EdenAni
-                | QuantityId::EdenDmi
-                | QuantityId::EdenTotal
-        ),
+        FemEngine::CpuNative | FemEngine::NativeGpu => {
+            crate::native_fem::can_materialize_preview_quantity(plan, id)
+        }
     };
     engine_exposes && fem_plan_enables_quantity(plan, id)
 }
@@ -342,7 +254,7 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
         QuantityId::DemagPhi => plan.enable_demag,
         QuantityId::HExt => plan.external_field.is_some(),
         QuantityId::HAnt => !plan.current_modules.is_empty(),
-        QuantityId::HDrive => !plan.field_drives.is_empty(),
+        QuantityId::HDrive => plan.field_drives.iter().any(|drive| drive.enabled),
         QuantityId::HAni => material_has_uniaxial_anisotropy(&plan.material),
         QuantityId::HAniCubic => material_has_cubic_anisotropy(&plan.material),
         QuantityId::HDmi => plan.interfacial_dmi.is_some() || has_values(&plan.dind_field),
@@ -359,7 +271,7 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
         QuantityId::EdenEx => plan.enable_exchange,
         QuantityId::EdenDemag => plan.enable_demag,
         QuantityId::EdenExt => plan.external_field.is_some(),
-        QuantityId::EdenDrive => !plan.field_drives.is_empty(),
+        QuantityId::EdenDrive => plan.field_drives.iter().any(|drive| drive.enabled),
         QuantityId::EdenAni => {
             material_has_uniaxial_anisotropy(&plan.material)
                 || material_has_cubic_anisotropy(&plan.material)
@@ -427,8 +339,9 @@ fn material_has_cubic_anisotropy(material: &MaterialIR) -> bool {
 mod tests {
     use super::*;
     use fullmag_ir::{
-        ExchangeBoundaryCondition, ExecutionPrecision, FemDomainMeshModeIR, IntegratorChoice,
-        MeshIR,
+        DriveActivationIR, ExchangeBoundaryCondition, ExecutionPrecision, FemDomainMeshModeIR,
+        FieldDriveKindIR, FieldSpatialProfileIR, FieldTargetIR, FieldTimeOriginIR,
+        IntegratorChoice, MeshIR, RegionalFieldDriveIR, TimeDependenceIR,
     };
     use std::collections::HashMap;
 
@@ -468,6 +381,7 @@ mod tests {
             fe_order: 1,
             hmax: 0.4,
             initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+            frozen_spins: None,
             enable_exchange: true,
             enable_demag: false,
             material: MaterialIR {
@@ -655,7 +569,7 @@ mod tests {
         );
         assert_eq!(
             active_fem_preview_quantities(FemEngine::CpuNative, &plan, &quantities),
-            vec!["m", "H_ex", "H_demag", "H_ext", "torque", "H_eff"]
+            vec!["m", "H_ex", "H_demag", "H_ext", "torque", "H_ani", "H_eff"]
         );
     }
 
@@ -706,6 +620,72 @@ mod tests {
                 "eden_dmi",
                 "eden_total"
             ]
+        );
+    }
+
+    fn regional_field_drive() -> RegionalFieldDriveIR {
+        RegionalFieldDriveIR {
+            id: "drive".to_string(),
+            name: "Drive".to_string(),
+            kind: FieldDriveKindIR::Regional,
+            enabled: true,
+            target: FieldTargetIR::Global {},
+            amplitude_b_t: 1.0e-3,
+            direction: [1.0, 0.0, 0.0],
+            spatial_profile: FieldSpatialProfileIR::Uniform {},
+            waveform: TimeDependenceIR::Constant,
+            time_origin: FieldTimeOriginIR::StageLocal,
+            activation: DriveActivationIR::AllTimeEvolution {},
+            migration: None,
+        }
+    }
+
+    #[test]
+    fn drive_provider_truth_matches_runtime_materializers() {
+        let drive = regional_field_drive();
+        let mut fdm = fdm_plan();
+        fdm.field_drives.push(drive.clone());
+
+        assert!(
+            active_fdm_preview_quantities(
+                FdmEngine::CpuReference,
+                &fdm,
+                &["H_drive", "eden_drive"],
+            )
+            .is_empty(),
+            "CPU FDM must not advertise drive quantities missing from its preview dispatcher"
+        );
+        assert_eq!(
+            active_fdm_preview_quantities(FdmEngine::CudaFdm, &fdm, &["H_drive", "eden_drive"],),
+            vec!["eden_drive"],
+            "CUDA FDM must follow its native snapshot-observable dispatcher"
+        );
+
+        let mut fem = fem_plan();
+        fem.field_drives.push(drive);
+
+        assert_eq!(
+            active_fem_preview_quantities(FemEngine::CpuNative, &fem, &["H_drive", "eden_drive"],),
+            vec!["H_drive"],
+            "CPU FEM must follow the native field-observable dispatcher"
+        );
+        assert_eq!(
+            active_fem_preview_quantities(FemEngine::NativeGpu, &fem, &["H_drive", "eden_drive"],),
+            vec!["H_drive"],
+            "GPU FEM must follow the native field-observable dispatcher"
+        );
+
+        fdm.field_drives[0].enabled = false;
+        assert!(
+            active_fdm_preview_quantities(FdmEngine::CudaFdm, &fdm, &["H_drive", "eden_drive"],)
+                .is_empty(),
+            "a disabled FDM drive is not an active provider term"
+        );
+        fem.field_drives[0].enabled = false;
+        assert!(
+            active_fem_preview_quantities(FemEngine::CpuNative, &fem, &["H_drive", "eden_drive"],)
+                .is_empty(),
+            "a disabled FEM drive is not an active provider term"
         );
     }
 

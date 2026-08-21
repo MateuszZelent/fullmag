@@ -36,6 +36,13 @@ interface VisualizationRegistrySyncApi {
     patch: VisualizationStatePatch,
     options?: RequestOptions,
   ) => Promise<VisualizationStateResource>;
+  patchWithResponseIdentity?: (
+    patch: VisualizationStatePatch,
+    options?: RequestOptions,
+  ) => Promise<{
+    data: VisualizationStateResource;
+    requestId: string | null;
+  }>;
 }
 
 export interface VisualizationRegistrySyncSnapshot {
@@ -43,6 +50,7 @@ export interface VisualizationRegistrySyncSnapshot {
   inflightPatch: VisualizationStatePatch | null;
   inflightTargetIds: readonly string[];
   inflightPlanarTargetIds: readonly string[];
+  inflightTransactionIds: readonly string[];
   lastLocalChangedAt: number | null;
   lastRemoteRevision: ResourceRevision | null;
   mutation: VisualizationRegistryMutationState | null;
@@ -50,6 +58,7 @@ export interface VisualizationRegistrySyncSnapshot {
   pendingPatch: VisualizationStatePatch | null;
   pendingTargetIds: readonly string[];
   pendingPlanarTargetIds: readonly string[];
+  pendingTransactionIds: readonly string[];
   rejectedTargetIds: readonly string[];
   rejectedPlanarTargetIds: readonly string[];
   version: number;
@@ -59,8 +68,16 @@ export interface VisualizationRegistryMutationState {
   attempts: number;
   error: string | null;
   requestId: string | null;
+  responseRevision: ResourceRevision | null;
   status: "inflight" | "rejected" | "retrying" | "succeeded";
   targetId: string;
+  transactionIds: readonly string[];
+}
+
+/** Identity of a queued PATCH intent. The same ID is carried into the concrete
+ * coalesced HTTP PATCH and its acknowledgement/rejection callbacks. */
+export interface VisualizationPatchReceipt {
+  transactionId: string;
 }
 
 interface VisualizationRegistrySyncControllerOptions {
@@ -71,7 +88,15 @@ interface VisualizationRegistrySyncControllerOptions {
   maxTransientAttempts?: number;
   retryBaseDelayMs?: number;
   resources?: Pick<ResourceInvalidationController, "invalidate">;
-  onRejectedTargetPatches?: (targetIds: readonly string[]) => void;
+  onAcknowledgedTargetPatches?: (
+    state: VisualizationStateResource,
+    targetIds: readonly string[],
+    transactionIds: readonly string[],
+  ) => void;
+  onRejectedTargetPatches?: (
+    targetIds: readonly string[],
+    transactionIds: readonly string[],
+  ) => void;
 }
 
 const DEFAULT_MAX_LATENCY_MS = 2_500;
@@ -85,6 +110,7 @@ const INITIAL_SNAPSHOT: VisualizationRegistrySyncSnapshot = {
   inflightPatch: null,
   inflightTargetIds: EMPTY_TARGET_IDS,
   inflightPlanarTargetIds: EMPTY_TARGET_IDS,
+  inflightTransactionIds: EMPTY_TARGET_IDS,
   lastLocalChangedAt: null,
   lastRemoteRevision: null,
   mutation: null,
@@ -93,6 +119,7 @@ const INITIAL_SNAPSHOT: VisualizationRegistrySyncSnapshot = {
   pendingTargetIds: EMPTY_TARGET_IDS,
   rejectedTargetIds: EMPTY_TARGET_IDS,
   pendingPlanarTargetIds: EMPTY_TARGET_IDS,
+  pendingTransactionIds: EMPTY_TARGET_IDS,
   version: 0,
   rejectedPlanarTargetIds: EMPTY_TARGET_IDS,
 };
@@ -107,8 +134,16 @@ export class VisualizationRegistrySyncController {
   private readonly retryBaseDelayMs: number;
   private readonly resources: Pick<ResourceInvalidationController, "invalidate"> | null;
   private readonly onRejectedTargetPatches:
-    | ((targetIds: readonly string[]) => void)
+    | ((targetIds: readonly string[], transactionIds: readonly string[]) => void)
     | null;
+  private readonly onAcknowledgedTargetPatches:
+    | ((
+        state: VisualizationStateResource,
+        targetIds: readonly string[],
+        transactionIds: readonly string[],
+      ) => void)
+    | null;
+  private transactionSequence = 0;
   private firstPendingAt: number | null = null;
   private flushPromise: Promise<void> | null = null;
   private inflightCameraInvalidationSuppressed = false;
@@ -127,6 +162,7 @@ export class VisualizationRegistrySyncController {
     maxTransientAttempts = DEFAULT_MAX_TRANSIENT_ATTEMPTS,
     retryBaseDelayMs = DEFAULT_RETRY_BASE_DELAY_MS,
     resources,
+    onAcknowledgedTargetPatches,
     onRejectedTargetPatches,
   }: VisualizationRegistrySyncControllerOptions) {
     this.api = api;
@@ -136,6 +172,7 @@ export class VisualizationRegistrySyncController {
     this.maxTransientAttempts = Math.max(1, Math.trunc(maxTransientAttempts));
     this.retryBaseDelayMs = Math.max(0, retryBaseDelayMs);
     this.resources = resources ?? null;
+    this.onAcknowledgedTargetPatches = onAcknowledgedTargetPatches ?? null;
     this.onRejectedTargetPatches = onRejectedTargetPatches ?? null;
   }
 
@@ -209,6 +246,7 @@ export class VisualizationRegistrySyncController {
     if (!patch) return Promise.resolve();
     const targetIds = this.snapshot.pendingTargetIds;
     const planarTargetIds = this.snapshot.pendingPlanarTargetIds;
+    const transactionIds = this.snapshot.pendingTransactionIds;
     const requestPatch = rebaseVisualizationStatePatch(
       this.remoteState,
       patch,
@@ -235,16 +273,23 @@ export class VisualizationRegistrySyncController {
         this.snapshot.inflightPlanarTargetIds,
         this.snapshot.pendingPlanarTargetIds,
       ),
+      inflightTransactionIds: mergeTargetIds(
+        this.snapshot.inflightTransactionIds,
+        transactionIds,
+      ),
       pendingFingerprint: null,
       pendingPatch: null,
       pendingTargetIds: EMPTY_TARGET_IDS,
       pendingPlanarTargetIds: EMPTY_TARGET_IDS,
+      pendingTransactionIds: EMPTY_TARGET_IDS,
       mutation: {
         attempts: 0,
         error: null,
         requestId: null,
+        responseRevision: null,
         status: "inflight",
         targetId: visualizationPatchTargetId(patch),
+        transactionIds,
       },
       version: this.snapshot.version + 1,
     };
@@ -254,7 +299,7 @@ export class VisualizationRegistrySyncController {
     }
 
     this.flushPromise = this.patchWithBoundedRetry(requestPatch)
-      .then((state) => {
+      .then(({ requestId, state }) => {
         this.rejectedPatch = null;
         this.observeRemoteState(state);
         // Optimize: populate the local resource cache pessimistically with the fresh patched state
@@ -278,12 +323,18 @@ export class VisualizationRegistrySyncController {
         this.snapshot = {
           ...this.snapshot,
           mutation: this.snapshot.mutation
-            ? { ...this.snapshot.mutation, status: "succeeded" }
+            ? {
+                ...this.snapshot.mutation,
+                requestId,
+                responseRevision: state.revision,
+                status: "succeeded",
+              }
             : null,
           rejectedTargetIds: EMPTY_TARGET_IDS,
           version: this.snapshot.version + 1,
           rejectedPlanarTargetIds: EMPTY_TARGET_IDS,
         };
+        this.onAcknowledgedTargetPatches?.(state, targetIds, transactionIds);
       })
       .catch((error: unknown) => {
         this.rejectedPatch = patch;
@@ -296,11 +347,13 @@ export class VisualizationRegistrySyncController {
           inflightPatch: null,
           inflightTargetIds: EMPTY_TARGET_IDS,
           inflightPlanarTargetIds: EMPTY_TARGET_IDS,
+          inflightTransactionIds: EMPTY_TARGET_IDS,
           pendingFingerprint: null,
           pendingPatch: null,
           pendingTargetIds: EMPTY_TARGET_IDS,
           rejectedTargetIds,
           pendingPlanarTargetIds: EMPTY_TARGET_IDS,
+          pendingTransactionIds: EMPTY_TARGET_IDS,
           rejectedPlanarTargetIds,
           mutation: this.snapshot.mutation
             ? {
@@ -313,7 +366,7 @@ export class VisualizationRegistrySyncController {
           version: this.snapshot.version + 1,
         };
         this.firstPendingAt = null;
-        this.onRejectedTargetPatches?.(rejectedTargetIds);
+        this.onRejectedTargetPatches?.(rejectedTargetIds, transactionIds);
         if (renderAffectingPatch) {
           this.notify();
         }
@@ -331,7 +384,10 @@ export class VisualizationRegistrySyncController {
 
   private async patchWithBoundedRetry(
     patch: VisualizationStatePatch,
-  ): Promise<VisualizationStateResource> {
+  ): Promise<{
+    requestId: string | null;
+    state: VisualizationStateResource;
+  }> {
     for (let attempt = 1; attempt <= this.maxTransientAttempts; attempt += 1) {
       this.snapshot = {
         ...this.snapshot,
@@ -345,7 +401,11 @@ export class VisualizationRegistrySyncController {
         version: this.snapshot.version + 1,
       };
       try {
-        return await this.api.patch(patch);
+        if (this.api.patchWithResponseIdentity) {
+          const result = await this.api.patchWithResponseIdentity(patch);
+          return { requestId: result.requestId, state: result.data };
+        }
+        return { requestId: null, state: await this.api.patch(patch) };
       } catch (error) {
         if (!isTransientVisualizationPatchError(error) || attempt >= this.maxTransientAttempts) {
           throw error;
@@ -408,6 +468,9 @@ export class VisualizationRegistrySyncController {
     const inflightPlanarTargetIds = inflightPatch
       ? this.snapshot.inflightPlanarTargetIds
       : EMPTY_TARGET_IDS;
+    const inflightTransactionIds = inflightPatch
+      ? this.snapshot.inflightTransactionIds
+      : EMPTY_TARGET_IDS;
     if (
       this.snapshot.lastRemoteRevision === state.revision &&
       this.snapshot.pendingPatch === pendingPatch &&
@@ -415,7 +478,8 @@ export class VisualizationRegistrySyncController {
       this.snapshot.pendingTargetIds === pendingTargetIds &&
       this.snapshot.pendingPlanarTargetIds === pendingPlanarTargetIds &&
       this.snapshot.inflightTargetIds === inflightTargetIds &&
-      this.snapshot.inflightPlanarTargetIds === inflightPlanarTargetIds
+      this.snapshot.inflightPlanarTargetIds === inflightPlanarTargetIds &&
+      this.snapshot.inflightTransactionIds === inflightTransactionIds
     ) {
       return;
     }
@@ -425,6 +489,7 @@ export class VisualizationRegistrySyncController {
       inflightPatch,
       inflightTargetIds,
       inflightPlanarTargetIds,
+      inflightTransactionIds,
       lastRemoteRevision: state.revision,
       pendingFingerprint: null,
       pendingPatch,
@@ -443,17 +508,17 @@ export class VisualizationRegistrySyncController {
   queuePatch(
     patch: VisualizationStatePatch,
     targetIds: readonly string[] = [],
-  ): void {
-    this.queuePatchForChannels(patch, targetIds, EMPTY_TARGET_IDS);
+  ): VisualizationPatchReceipt {
+    return this.queuePatchForChannels(patch, targetIds, EMPTY_TARGET_IDS);
   }
 
-  queuePlanarTargetOverride(operation: PlanarTargetOverrideOperation): void {
+  queuePlanarTargetOverride(operation: PlanarTargetOverrideOperation): VisualizationPatchReceipt | null {
     if (
       operation.target.kind !== "airbox" &&
       operation.target.kind !== "object" &&
       operation.target.kind !== "part"
     ) {
-      return;
+      return null;
     }
     const targetId = visualizationTargetKey(operation.target);
     const targetOverrides: PlanarTargetOverride[] =
@@ -466,7 +531,7 @@ export class VisualizationRegistrySyncController {
             },
           ]
         : [];
-    this.queuePatchForChannels(
+    return this.queuePatchForChannels(
       { planar: { target_overrides: targetOverrides } },
       EMPTY_TARGET_IDS,
       [targetId],
@@ -477,8 +542,9 @@ export class VisualizationRegistrySyncController {
     patch: VisualizationStatePatch,
     targetIds: readonly string[],
     planarTargetIds: readonly string[],
-  ): void {
-    if (!hasPatchKeys(patch)) return;
+  ): VisualizationPatchReceipt {
+    const receipt = { transactionId: this.nextTransactionId() };
+    if (!hasPatchKeys(patch)) return receipt;
     const effectiveTargetIds = normalizeTargetIds(
       targetIds.length > 0 ? targetIds : targetIdsFromPatch(patch),
     );
@@ -494,7 +560,7 @@ export class VisualizationRegistrySyncController {
         effectivePlanarTargetIds,
       )
     ) {
-      return;
+      return receipt;
     }
 
     const now = this.now();
@@ -512,6 +578,10 @@ export class VisualizationRegistrySyncController {
       this.snapshot.pendingPlanarTargetIds,
       effectivePlanarTargetIds,
     );
+    const pendingTransactionIds = mergeTargetIds(
+      this.snapshot.pendingTransactionIds,
+      [receipt.transactionId],
+    );
 
     this.firstPendingAt = this.firstPendingAt ?? now;
     this.snapshot = {
@@ -522,12 +592,14 @@ export class VisualizationRegistrySyncController {
       pendingPatch,
       pendingTargetIds,
       pendingPlanarTargetIds,
+      pendingTransactionIds,
       version: this.snapshot.version + 1,
     };
     if (!isCameraOnlyPatch(pendingPatch)) {
       this.notify();
     }
     this.scheduleFlush();
+    return receipt;
   }
 
   retryRejectedMutation(): Promise<void> {
@@ -621,6 +693,11 @@ export class VisualizationRegistrySyncController {
     for (const listener of this.listeners) {
       listener();
     }
+  }
+
+  private nextTransactionId(): string {
+    this.transactionSequence += 1;
+    return `visualization-${this.now()}-${this.transactionSequence}`;
   }
 }
 

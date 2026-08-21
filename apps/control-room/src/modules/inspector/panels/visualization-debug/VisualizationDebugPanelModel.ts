@@ -1,10 +1,16 @@
 import type {
   FieldMetaQuery,
   FieldMetaResource,
+  LiveStatusResource,
+  ResourceRevision,
+  SolverStatusResource,
   VisualizationClientAckEntry,
   VisualizationClientAckResource,
 } from "@/kernel/api/apiTypes";
 import type { RequestDiagnosticEntry } from "@/kernel/api/RequestDiagnosticsController";
+import type { RealtimeConnectionSnapshot } from "@/kernel/realtime/RealtimeConnectionController";
+import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
+import type { VisualizationRegistrySyncSnapshot } from "@/kernel/visualization/VisualizationRegistrySyncController";
 import {
   fieldVectorComponentEvidenceIdentity,
   fieldVectorComponentsSemanticallyEqual,
@@ -111,12 +117,53 @@ export interface VisualizationDebugViewportPanelModel {
   viewportId: string;
 }
 
+export interface VisualizationDebugLifecycleEvidence {
+  session: {
+    lifecycle: LiveStatusResource["lifecycle"] | null;
+    resourceRevision: ResourceRevision | null;
+    resourceStatus: ResourceStatus;
+    session: LiveStatusResource["session"] | null;
+    solverSummary: LiveStatusResource["solver"] | null;
+  };
+  solver: {
+    resourceRevision: ResourceRevision | null;
+    resourceStatus: ResourceStatus;
+    status: SolverStatusResource | null;
+  };
+  source: "http-v2-session-and-solver-resources";
+}
+
+const EMPTY_VISUALIZATION_DEBUG_LIFECYCLE_EVIDENCE: VisualizationDebugLifecycleEvidence =
+  Object.freeze({
+    session: Object.freeze({
+      lifecycle: null,
+      resourceRevision: null,
+      resourceStatus: "idle" as const,
+      session: null,
+      solverSummary: null,
+    }),
+    solver: Object.freeze({
+      resourceRevision: null,
+      resourceStatus: "idle" as const,
+      status: null,
+    }),
+    source: "http-v2-session-and-solver-resources" as const,
+  });
+
 export interface VisualizationDebugPanelModel {
   disposition: VisualizationDebugDisposition;
   fieldQueries: readonly VisualizationDebugExactFieldQuery[];
   issues: readonly VisualizationDebugIssue[];
   state: VisualizationDebugPanelState;
   target: VisualizationDebugTarget | null;
+  mutationEvidence: {
+    connectivity: Pick<RealtimeConnectionSnapshot, "disrupted" | "status">;
+    lifecycle: VisualizationDebugLifecycleEvidence;
+    sync: Pick<
+      VisualizationRegistrySyncSnapshot,
+      "lastRemoteRevision" | "mutation" | "pendingTargetIds" | "rejectedTargetIds"
+    >;
+  };
   transport: readonly RequestDiagnosticEntry[];
   viewports: readonly VisualizationDebugViewportPanelModel[];
 }
@@ -128,6 +175,12 @@ export interface BuildVisualizationDebugPanelModelInput {
   fieldMetaByQueryKey: ReadonlyMap<string, FieldMetaResource | null>;
   selection: SelectionRef | null;
   snapshots: readonly VisualizationDebugSnapshot[];
+  realtimeConnection?: Pick<RealtimeConnectionSnapshot, "disrupted" | "status">;
+  lifecycleEvidence?: VisualizationDebugLifecycleEvidence;
+  visualizationSync?: Pick<
+    VisualizationRegistrySyncSnapshot,
+    "lastRemoteRevision" | "mutation" | "pendingTargetIds" | "rejectedTargetIds"
+  >;
 }
 
 export function resolveVisualizationDebugTarget(
@@ -170,24 +223,32 @@ export function buildVisualizationDebugPanelModel({
   fieldMetaByQueryKey,
   selection,
   snapshots,
+  realtimeConnection = { disrupted: false, status: "idle" },
+  lifecycleEvidence = EMPTY_VISUALIZATION_DEBUG_LIFECYCLE_EVIDENCE,
+  visualizationSync = {
+    lastRemoteRevision: null,
+    mutation: null,
+    pendingTargetIds: [],
+    rejectedTargetIds: [],
+  },
 }: BuildVisualizationDebugPanelModelInput): VisualizationDebugPanelModel {
   const target = resolveVisualizationDebugTarget(selection);
-  if (!target) return emptyModel("unsupported-target", null);
+  if (!target) return emptyModel("unsupported-target", null, realtimeConnection, lifecycleEvidence, visualizationSync);
   if (activeViewportMainModuleId !== "viewport-3d") {
-    return emptyModel("active-non-3d", target);
+    return emptyModel("active-non-3d", target, realtimeConnection, lifecycleEvidence, visualizationSync);
   }
 
   const exactSnapshots = snapshots.filter(
     (snapshot) => snapshot.target.id === target.id,
   );
   if (exactSnapshots.length === 0) {
-    return emptyModel("missing-snapshot", target);
+    return emptyModel("missing-snapshot", target, realtimeConnection, lifecycleEvidence, visualizationSync);
   }
   const viewportSnapshots = exactSnapshots.filter(
     (snapshot) => snapshot.viewport.viewportId.trim().length > 0,
   );
   if (viewportSnapshots.length === 0) {
-    return emptyModel("missing-viewport", target);
+    return emptyModel("missing-viewport", target, realtimeConnection, lifecycleEvidence, visualizationSync);
   }
 
   const fieldQueries = new Map<string, VisualizationDebugExactFieldQuery>();
@@ -291,6 +352,11 @@ export function buildVisualizationDebugPanelModel({
     issues: composite.issues,
     state,
     target,
+    mutationEvidence: Object.freeze({
+      connectivity: Object.freeze({ ...realtimeConnection }),
+      lifecycle: freezeVisualizationDebugLifecycleEvidence(lifecycleEvidence),
+      sync: Object.freeze({ ...visualizationSync }),
+    }),
     transport: Object.freeze(
       exactDiagnostics.slice(0, MAX_VISUALIZATION_DEBUG_TRANSPORT_ENTRIES),
     ),
@@ -490,6 +556,12 @@ export function visualizationDebugQuerySupportsFieldMeta(
 function emptyModel(
   state: VisualizationDebugPanelState,
   target: VisualizationDebugTarget | null,
+  realtimeConnection: Pick<RealtimeConnectionSnapshot, "disrupted" | "status">,
+  lifecycleEvidence: VisualizationDebugLifecycleEvidence,
+  visualizationSync: Pick<
+    VisualizationRegistrySyncSnapshot,
+    "lastRemoteRevision" | "mutation" | "pendingTargetIds" | "rejectedTargetIds"
+  >,
 ): VisualizationDebugPanelModel {
   const issues =
     state === "missing-snapshot"
@@ -509,8 +581,23 @@ function emptyModel(
     issues,
     state,
     target,
+    mutationEvidence: Object.freeze({
+      connectivity: Object.freeze({ ...realtimeConnection }),
+      lifecycle: freezeVisualizationDebugLifecycleEvidence(lifecycleEvidence),
+      sync: Object.freeze({ ...visualizationSync }),
+    }),
     transport: Object.freeze([]),
     viewports: Object.freeze([]),
+  });
+}
+
+function freezeVisualizationDebugLifecycleEvidence(
+  evidence: VisualizationDebugLifecycleEvidence,
+): VisualizationDebugLifecycleEvidence {
+  return Object.freeze({
+    session: Object.freeze({ ...evidence.session }),
+    solver: Object.freeze({ ...evidence.solver }),
+    source: evidence.source,
   });
 }
 

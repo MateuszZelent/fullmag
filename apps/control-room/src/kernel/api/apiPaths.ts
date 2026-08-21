@@ -203,6 +203,10 @@ export const DATA_FIELDS_PATH = openApiV2Path(
   "/v2/sessions/current/data/fields",
 );
 
+export const DATA_FROZEN_SPINS_RESOLVED_MASK_PATH = openApiV2Path(
+  "/v2/sessions/current/data/frozen-spins/resolved-masks/{mask_id}",
+);
+
 export const DATA_FIELD_AVAILABILITY_PATH = openApiV2Path(
   "/v2/sessions/current/data/fields/{quantity_id}/availability",
 );
@@ -567,6 +571,22 @@ export const MODEL_UNIVERSE_FIT_PATH = openApiV2Path(
 
 export const MODEL_SCENE_PATH = openApiV2Path(
   "/v2/sessions/current/model/scene",
+);
+
+export const MODEL_FROZEN_SPINS_PATH = openApiV2Path(
+  "/v2/sessions/current/model/frozen-spins",
+);
+
+export const MODEL_FROZEN_SPIN_PATH = openApiV2Path(
+  "/v2/sessions/current/model/frozen-spins/{constraint_id}",
+);
+
+export const MODEL_FROZEN_SPINS_PREVIEWS_PATH = openApiV2Path(
+  "/v2/sessions/current/model/frozen-spins/previews",
+);
+
+export const MODEL_FROZEN_SPINS_PREVIEW_PATH = openApiV2Path(
+  "/v2/sessions/current/model/frozen-spins/previews/{preview_id}",
 );
 
 export const MODEL_PHYSICS_GRAPH_PATH = openApiV2Path(

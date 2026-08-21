@@ -213,6 +213,16 @@ target_include_directories(multilayer_abi_v2_contract PRIVATE
 )
 add_test(NAME fdm_multilayer_abi_v2_contract COMMAND multilayer_abi_v2_contract)
 
+add_executable(frozen_spins_abi_contract tests/frozen_spins_abi_contract.cpp)
+target_include_directories(frozen_spins_abi_contract PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(frozen_spins_abi_contract PRIVATE fullmag_fdm)
+target_compile_definitions(frozen_spins_abi_contract PRIVATE
+    FULLMAG_FDM_TEST_CUDA_BUILD=$<BOOL:${FULLMAG_ENABLE_CUDA}>
+)
+add_test(NAME fdm_frozen_spins_abi_contract COMMAND frozen_spins_abi_contract)
+
 add_executable(region_owned_abi_contract tests/region_owned_abi_contract.cpp)
 add_test(NAME fdm_region_owned_abi_contract COMMAND region_owned_abi_contract)
 

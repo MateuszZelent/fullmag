@@ -1321,9 +1321,11 @@ pub(crate) fn observe_state(
         dmi_energy: 0.0,
         total_energy: observables.total_energy_joules,
         max_dm_dt: observables.max_rhs_amplitude,
+        max_rhs_all_norm_per_s: observables.max_rhs_all_amplitude,
         max_h_eff: observables.max_effective_field_amplitude,
         max_h_demag: observables.max_demag_field_amplitude,
         max_torque_Apm: max_torque_apm,
+        max_torque_all_Apm: observables.max_torque_all_Apm,
         per_object_scalars: std::collections::HashMap::new(),
     })
 }
@@ -1630,6 +1632,7 @@ mod tests {
             fe_order: 1,
             hmax: 1.0,
             initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+            frozen_spins: None,
             material: MaterialIR {
                 name: "Py".to_string(),
                 saturation_magnetisation: 800e3,
@@ -1815,6 +1818,7 @@ mod tests {
             fe_order: 1,
             hmax: 10e-9,
             initial_magnetization: vec![[0.0, 0.0, 1.0]; 8],
+            frozen_spins: None,
             material: MaterialIR {
                 name: "Py".to_string(),
                 saturation_magnetisation: 800e3,
@@ -2006,6 +2010,7 @@ mod tests {
             fe_order: 1,
             hmax: 10e-9,
             initial_magnetization: vec![[0.0, 0.0, 1.0]; 64],
+            frozen_spins: None,
             material: MaterialIR {
                 name: "Py".to_string(),
                 saturation_magnetisation: 800e3,
@@ -2339,9 +2344,11 @@ mod tests {
             dmi_energy: 0.0,
             total_energy: 0.0,
             max_dm_dt: 0.0,
+            max_rhs_all_norm_per_s: 0.0,
             max_h_eff: 0.0,
             max_h_demag: 0.0,
             max_torque_Apm: 0.0,
+            max_torque_all_Apm: 0.0,
             per_object_scalars: std::collections::HashMap::new(),
         };
 

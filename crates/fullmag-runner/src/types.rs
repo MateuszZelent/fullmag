@@ -400,15 +400,30 @@ pub struct StepStats {
     /// `max_torque_Apm`; direct torques may contribute here.
     #[serde(default)]
     pub max_rhs_norm_per_s: f64,
+    /// Maximum total dynamic RHS over all active DOFs, before frozen-spin masking.
+    #[serde(default)]
+    pub max_rhs_all_norm_per_s: f64,
     pub max_h_eff: f64,
     pub max_h_demag: f64,
     /// Native max |m × H_eff| torque metric in A/m.
     #[serde(default)]
     pub max_torque_Apm: f64,
+    /// Maximum field-equilibrium residual over all active DOFs in A/m.
+    #[serde(default)]
+    pub max_torque_all_Apm: f64,
     /// max |m × B_eff| = μ₀ · max_torque_Apm, in Tesla.
     /// Comparable to mumax MaxTorque.
     #[serde(default)]
     pub max_torque_T: f64,
+    /// Largest norm difference between a frozen DOF and its activation reference.
+    #[serde(default)]
+    pub frozen_reference_max_drift: f64,
+    #[serde(default)]
+    pub active_dof_count: u64,
+    #[serde(default)]
+    pub frozen_dof_count: u64,
+    #[serde(default)]
+    pub free_dof_count: u64,
     #[serde(default)]
     pub accepted_energy_proof_available: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -773,10 +788,16 @@ impl Default for StepStats {
             e_total: 0.0,
             max_dm_dt: 0.0,
             max_rhs_norm_per_s: 0.0,
+            max_rhs_all_norm_per_s: 0.0,
             max_h_eff: 0.0,
             max_h_demag: 0.0,
             max_torque_Apm: 0.0,
+            max_torque_all_Apm: 0.0,
             max_torque_T: 0.0,
+            frozen_reference_max_drift: 0.0,
+            active_dof_count: 0,
+            frozen_dof_count: 0,
+            free_dof_count: 0,
             accepted_energy_proof_available: false,
             accepted_energy_delta_j: None,
             accepted_energy_roundoff_bound_j: None,
@@ -3481,10 +3502,12 @@ pub(crate) struct StateObservables {
     pub dmi_energy: f64,
     pub total_energy: f64,
     pub max_dm_dt: f64,
+    pub max_rhs_all_norm_per_s: f64,
     pub max_h_eff: f64,
     pub max_h_demag: f64,
     #[allow(dead_code)]
     pub max_torque_Apm: f64,
+    pub max_torque_all_Apm: f64,
     pub per_object_scalars: HashMap<String, HashMap<String, f64>>,
 }
 
@@ -3554,6 +3577,7 @@ mod tests {
             fe_order: 1,
             hmax: 0.4,
             initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+            frozen_spins: None,
             material: MaterialIR {
                 name: "Py".to_string(),
                 saturation_magnetisation: 800e3,

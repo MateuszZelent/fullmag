@@ -283,6 +283,47 @@ fn has_prescribed_zeeman_mask_antenna(problem: &ProblemIR) -> bool {
     })
 }
 
+fn problem_has_enabled_frozen_spins(problem: &ProblemIR) -> bool {
+    problem
+        .magnetization_constraints
+        .iter()
+        .any(|constraint| constraint.frozen_spins().enabled)
+}
+
+pub(crate) fn reject_frozen_spins_cuda_execution(problem: &ProblemIR) -> Result<(), RunError> {
+    // The native single-grid CUDA lane now validates and consumes the
+    // append-only mask/reference ABI. Unsupported multilayer plans are
+    // rejected by the canonical FDM planner before reaching this hook.
+    let _ = problem;
+    Ok(())
+}
+
+pub(crate) fn reject_frozen_spins_cuda_plan_execution(plan: &FdmPlanIR) -> Result<(), RunError> {
+    // Capability negotiation is performed by NativeFdmBackend::create(),
+    // after the compiled native library reports its feature bits. Keeping the
+    // generic planner hook permissive avoids a stale source-level rejection.
+    let _ = plan;
+    Ok(())
+}
+
+pub(crate) fn reject_frozen_spins_fem_execution(problem: &ProblemIR) -> Result<(), RunError> {
+    if problem_has_enabled_frozen_spins(problem) {
+        return Err(RunError {
+            message: "frozen_spins_fem_unqualified: the selected native FEM CPU/GPU runtime does not yet consume the resolved true-DOF mask/reference descriptor; refusing execution instead of silently dropping the constraint".to_string(),
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn reject_frozen_spins_fem_plan_execution(plan: &FemPlanIR) -> Result<(), RunError> {
+    if plan.frozen_spins.is_some() {
+        return Err(RunError {
+            message: "frozen_spins_fem_unqualified: resolved FEM plan carries a true-DOF mask but the selected native FEM runtime has no mask/reference consumer".to_string(),
+        });
+    }
+    Ok(())
+}
+
 pub(crate) fn runtime_fem_policy(problem: &ProblemIR) -> &'static str {
     match runtime_device(problem) {
         Some("cpu") => "cpu",
@@ -353,6 +394,10 @@ pub(crate) fn resolve_fdm_engine_with_trail(
         _ => unreachable!("normalize_fdm_execution_policy returned an unknown value"),
     }?;
 
+    if resolution.engine == FdmEngine::CudaFdm {
+        reject_frozen_spins_cuda_execution(problem)?;
+    }
+
     if resolution.engine == FdmEngine::CudaFdm && has_prescribed_zeeman_mask_antenna(problem) {
         if policy == "cuda" {
             return Err(RunError {
@@ -385,6 +430,9 @@ pub(crate) fn resolve_fdm_engine_for_plan_with_trail(
 ) -> Result<EngineResolution<FdmEngine>, RunError> {
     let requested_device = public_fdm_gpu_charge_device_request(problem);
     let resolution = resolve_fdm_engine_with_trail(problem)?;
+    if resolution.engine == FdmEngine::CudaFdm {
+        reject_frozen_spins_cuda_plan_execution(plan)?;
+    }
     require_public_fdm_gpu_charge_runtime_selection(
         !plan.fdm_gpu_charge_transports.is_empty(),
         &requested_device,
@@ -457,7 +505,11 @@ mod tests {
         FemSelectionEnvSnapshot,
     };
     use crate::solver_runtime::engine::{EngineResolution, FdmEngine};
-    use fullmag_ir::ProblemIR;
+    use fullmag_ir::{
+        ConstraintActivationIR, EmptySelectionPolicyIR, FrozenReferencePolicyIR, FrozenSpinsIR,
+        InactiveSelectionPolicyIR, MagnetizationConstraintIR, ProblemIR, SelectionExprIR,
+        SelectionMembershipPolicyIR, FROZEN_SPINS_SCHEMA_VERSION,
+    };
     use serde_json::Value;
     use std::sync::{LazyLock, Mutex};
 
@@ -671,5 +723,50 @@ mod tests {
             .fallback
             .expect("unavailable CUDA must remain visible for auto FDM");
         assert_eq!(fallback.reason, "fdm_cuda_unavailable");
+    }
+
+    #[test]
+    fn frozen_spins_cuda_guard_allows_authored_problem_constraints_until_native_capability_check() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem
+            .magnetization_constraints
+            .push(MagnetizationConstraintIR::FrozenSpins(FrozenSpinsIR {
+                schema_version: FROZEN_SPINS_SCHEMA_VERSION.to_string(),
+                id: "pin-strip".to_string(),
+                name: "Pinned strip".to_string(),
+                enabled: true,
+                selector: SelectionExprIR::AllMagnetic {},
+                reference: FrozenReferencePolicyIR::CaptureCurrentAtActivation {},
+                membership: SelectionMembershipPolicyIR::Static {},
+                activation: ConstraintActivationIR::AllStages {},
+                empty_selection: EmptySelectionPolicyIR::Error,
+                inactive_selection: InactiveSelectionPolicyIR::WarnAndIntersect,
+            }));
+
+        super::reject_frozen_spins_cuda_execution(&problem)
+            .expect("native CUDA capability negotiation owns the final gate");
+    }
+
+    #[test]
+    fn frozen_spins_fem_guard_rejects_authored_problem_constraints() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem
+            .magnetization_constraints
+            .push(MagnetizationConstraintIR::FrozenSpins(FrozenSpinsIR {
+                schema_version: FROZEN_SPINS_SCHEMA_VERSION.to_string(),
+                id: "pin-strip".to_string(),
+                name: "Pinned strip".to_string(),
+                enabled: true,
+                selector: SelectionExprIR::AllMagnetic {},
+                reference: FrozenReferencePolicyIR::CaptureCurrentAtActivation {},
+                membership: SelectionMembershipPolicyIR::Static {},
+                activation: ConstraintActivationIR::AllStages {},
+                empty_selection: EmptySelectionPolicyIR::Error,
+                inactive_selection: InactiveSelectionPolicyIR::WarnAndIntersect,
+            }));
+
+        let error = super::reject_frozen_spins_fem_execution(&problem)
+            .expect_err("native FEM must not accept an unqualified frozen-spins constraint");
+        assert!(error.message.starts_with("frozen_spins_fem_unqualified:"));
     }
 }

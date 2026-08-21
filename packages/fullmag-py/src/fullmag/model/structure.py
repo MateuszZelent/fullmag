@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 import warnings
 
@@ -374,6 +374,9 @@ class ObjectRegion:
     texture_override: RegionTextureOverride | None = None
     _delete_callback: Callable[[], None] | None = field(default=None, repr=False, compare=False)
     material: ObjectRegionMaterialProxy = field(init=False, repr=False)
+    _magnetization_constraints: list[object] = field(
+        default_factory=list, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         self.owner_object = require_non_empty(self.owner_object, "owner_object")
@@ -509,6 +512,37 @@ class ObjectRegion:
         if self._delete_callback is None:
             raise RuntimeError("region is not attached to an owner registry")
         self._delete_callback()
+
+    def freeze_spins(
+        self,
+        *,
+        id: str | None = None,
+        name: str | None = None,
+        enabled: bool = True,
+        reference: object = "capture_current_at_activation",
+        membership: str | None = None,
+        activation: object = None,
+        stage_ids: Sequence[str] | None = None,
+        empty_selection: str = "error",
+        inactive_selection: str = "warn_and_intersect",
+    ):
+        from .constraints import FrozenSpins
+        from .selection import in_region_selection
+
+        constraint = FrozenSpins(
+            id=f"{self.region_id}_frozen" if id is None else id,
+            name=self.name if name is None else name,
+            enabled=enabled,
+            selector=in_region_selection(self.owner_object, self.region_id),
+            reference=reference,
+            membership=membership,
+            activation=activation,
+            stage_ids=stage_ids,
+            empty_selection=empty_selection,
+            inactive_selection=inactive_selection,
+        )
+        self._magnetization_constraints.append(constraint)
+        return constraint
 
     def to_ir(self) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -694,6 +728,9 @@ class Ferromagnet:
     allocated_region_ids: tuple[str, ...] = ()
     material_parameter_fields: tuple[MaterialParameterAssignment, ...] = ()
     absorbing_boundary: AbsorbingBoundaryLayer | None = None
+    _magnetization_constraints: list[object] = field(
+        default_factory=list, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", require_non_empty(self.name, "name"))
@@ -717,6 +754,7 @@ class Ferromagnet:
 
     def to_ir(self) -> dict[str, object]:
         payload: dict[str, object] = {
+            "object_id": self.object_id,
             "name": self.name,
             "region": self.region_name,
             "material": self.material.name,
@@ -726,9 +764,40 @@ class Ferromagnet:
             if self.absorbing_boundary is not None
             else None,
         }
-        if self.object_id is not None:
-            payload["object_id"] = self.object_id
         return payload
+
+    def freeze_spins(
+        self,
+        *,
+        id: str,
+        name: str | None = None,
+        enabled: bool = True,
+        reference: object = "capture_current_at_activation",
+        membership: str | None = None,
+        activation: object = None,
+        stage_ids: Sequence[str] | None = None,
+        empty_selection: str = "error",
+        inactive_selection: str = "warn_and_intersect",
+    ):
+        from .constraints import FrozenSpins
+        from .selection import in_object_selection
+
+        if self.object_id is None:
+            raise ValueError("Ferromagnet.freeze_spins requires an explicit object_id")
+        constraint = FrozenSpins(
+            id=id,
+            name=name,
+            enabled=enabled,
+            selector=in_object_selection(self.object_id),
+            reference=reference,
+            membership=membership,
+            activation=activation,
+            stage_ids=stage_ids,
+            empty_selection=empty_selection,
+            inactive_selection=inactive_selection,
+        )
+        self._magnetization_constraints.append(constraint)
+        return constraint
 
 
 @dataclass(frozen=True, slots=True)

@@ -3,6 +3,7 @@
 import type { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import type { PlanarMonitorFramePreview } from "@/kernel/workspace/planarMonitorFramePreview";
+import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
 import type { DecodedFieldVector, DecodedTopology } from "@/kernel/api/codecs";
 import {
   viewport3DAirboxLayerEnabledFromBrowserConfig,
@@ -63,6 +64,7 @@ import type {
   Viewport3DInspectScreenPosition,
 } from "../viewport3dInspect";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import type {
   Viewport3DBounds,
   Viewport3DFieldRenderModel,
@@ -157,11 +159,16 @@ import type { FdmUniverseOutsideSupportOverlayModel } from "../model/fdmUniverse
 import type { Viewport3DFdmTargetRenderView } from "../model/viewport3DFdmTargetViews";
 import type { FdmAirboxPassPlan } from "./fdmAirboxPassPlan";
 import type { Viewport3DVectorBuildReference } from "../viewport3dRenderModel";
+import {
+  FrozenSpinsOverlay,
+  type FrozenSpinsOverlayModel,
+} from "./FrozenSpinsOverlay";
 
 const EMPTY_REGION_OVERLAYS: readonly RegionOverlayInput[] = [];
 
 interface Viewport3DSceneProps {
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
+  sessionIdentity?: SessionResourceIdentity | null;
   bounds: Viewport3DBounds | null;
   cameraOrthographicScale: number | null;
   cameraProjection: Viewport3DCameraProjection;
@@ -190,6 +197,8 @@ interface Viewport3DSceneProps {
   fdmMultilayerAirboxBuildStatus: string;
   fdmUniverseOutsideSupport: FdmUniverseOutsideSupportOverlayModel | null;
   fdmInstanceModel: FdmCuboidInstanceModel | null | undefined;
+  frozenSpinsOverlayModel: FrozenSpinsOverlayModel | null;
+  frozenSpinsOverlayVisible: boolean;
   availableQuantityIds?: ReadonlySet<string> | null;
   fdmNativeLayerViews: readonly FdmNativeLayerRenderView[];
   fdmTargetViews: readonly Viewport3DFdmTargetRenderView[];
@@ -732,7 +741,7 @@ function useViewport3DModelLayerStage({
   resetKey: string;
   tracker: Viewport3DResourceTracker;
 }): number {
-  const invalidate = useThree((state) => state.invalidate);
+  const invalidate = useBatchedInvalidate("frame-commit");
   const [stageState, setStageState] = useState(() => ({
     resetKey,
     stage: 0,
@@ -1023,6 +1032,7 @@ export function resolveViewport3DRealizedFdmObjectIds({
 
 function Viewport3DModelLayerStack({
   adoptionRegistry,
+  sessionIdentity,
   airboxSettings,
   bounds,
   colors,
@@ -1077,6 +1087,7 @@ function Viewport3DModelLayerStack({
 }: Pick<
   Viewport3DSceneProps,
   | "adoptionRegistry"
+  | "sessionIdentity"
   | "airboxSettings"
   | "bounds"
   | "colors"
@@ -1231,6 +1242,7 @@ function Viewport3DModelLayerStack({
               adoptionRegistry={adoptionRegistry}
               carrierId={view.target.id}
               colors={colors}
+              sessionIdentity={sessionIdentity}
               fieldVector={view.fieldVector}
               instanceModel={view.model}
               inspectEnabled={false}
@@ -1258,6 +1270,7 @@ function Viewport3DModelLayerStack({
               adoptionRegistry={adoptionRegistry}
               carrierId={stagedFdmMultilayerAirboxView.target.id}
               colors={colors}
+              sessionIdentity={sessionIdentity}
               fieldVector={stagedFdmMultilayerAirboxView.fieldVector}
               instanceModel={stagedFdmMultilayerAirboxView.model}
               inspectEnabled={false}
@@ -1292,6 +1305,7 @@ function Viewport3DModelLayerStack({
               adoptionRegistry={adoptionRegistry}
               carrierId={view.target.id}
               colors={colors}
+              sessionIdentity={sessionIdentity}
               fieldVector={view.fieldVector}
               geometryScopeInstanceOrdinals={view.surfaceInstanceOrdinals}
               instanceModel={view.sourceModel}
@@ -1332,6 +1346,7 @@ function Viewport3DModelLayerStack({
           adoptionRegistry={adoptionRegistry}
           carrierId="fdm-universe-outside-support"
           colors={colors}
+          sessionIdentity={sessionIdentity}
           fieldVector={fdmAirboxFieldVector}
           vectorGlyphColors={fdmAirboxVectorGlyphColors?.colors ?? null}
           instanceModel={fdmAirboxInstanceModel}
@@ -1355,6 +1370,7 @@ function Viewport3DModelLayerStack({
         <AirboxLayer
           adoptionRegistry={adoptionRegistry}
           colors={colors}
+          sessionIdentity={sessionIdentity}
           fieldModel={stagedFieldModel}
           materialProfile={materialProfile}
           onSelectPart={onSelectPart}
@@ -1384,6 +1400,7 @@ function Viewport3DModelLayerStack({
         <TopologyMeshLayer
           adoptionRegistry={adoptionRegistry}
           colors={colors}
+          sessionIdentity={sessionIdentity}
           fieldModel={stagedFieldModel}
           getPartSettings={getPartSettings}
           materialProfile={materialProfile}
@@ -1627,6 +1644,7 @@ function useViewport3DRenderAdoptionFrame({
 
 export function Viewport3DScene({
   adoptionRegistry,
+  sessionIdentity,
   bounds,
   cameraOrthographicScale,
   cameraProjection,
@@ -1654,6 +1672,8 @@ export function Viewport3DScene({
   fdmNativeLayerViews,
   fdmTargetViews,
   fdmSettings,
+  frozenSpinsOverlayModel,
+  frozenSpinsOverlayVisible,
   fieldModel,
   fitRevision,
   getObjectSettings,
@@ -1709,7 +1729,7 @@ export function Viewport3DScene({
   viewCubeVisible,
   visualProfileId,
 }: Viewport3DSceneProps) {
-  const invalidate = useThree((state) => state.invalidate);
+  const invalidate = useBatchedInvalidate("camera");
   const setThreeState = useThree((state) => state.set);
   const viewportSize = useThree((state) => state.size);
   const orthographicCameraRef = useRef<ThreeOrthographicCamera>(null);
@@ -1964,6 +1984,7 @@ export function Viewport3DScene({
       />
       <Viewport3DModelLayerStack
         adoptionRegistry={adoptionRegistry}
+        sessionIdentity={sessionIdentity}
         airboxSettings={airboxSettings}
         bounds={bounds}
         colors={colors}
@@ -2016,6 +2037,17 @@ export function Viewport3DScene({
         vectorStyle={vectorStyle}
         visualizationRevision={visualizationRevision}
       />
+      {frozenSpinsOverlayVisible && frozenSpinsOverlayModel ? (
+        <FrozenSpinsOverlay
+          color={
+            frozenSpinsOverlayModel.current
+              ? colors.danger ?? colors.accentStrong ?? colors.accent
+              : colors.textSecondary ?? colors.wire
+          }
+          model={frozenSpinsOverlayModel}
+          tracker={tracker}
+        />
+      ) : null}
       <Viewport3DInteractionAndHudStack
         bounds={bounds}
         cameraGestureRef={cameraGestureRef}

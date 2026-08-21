@@ -587,11 +587,19 @@ int gpu_relax_projected_gradient_bb_step(
             return FULLMAG_FEM_ERR_INTERNAL;
         }
         out_stats.max_rhs_amplitude = 0.0;
+        const bool degenerate_gradient_stagnation =
+            relaxation_degenerate_gradient_requires_stagnation(
+                ctx,
+                current_torque_apm);
         set_stage_completion(
             ctx,
             FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT,
-            "tangent_gradient_norm_sq",
-            gradient_norm_sq,
+            degenerate_gradient_stagnation
+                ? "numerical_stagnation"
+                : "tangent_gradient_norm_sq",
+            degenerate_gradient_stagnation
+                ? 1.0
+                : gradient_norm_sq,
             0.0);
         return FULLMAG_FEM_OK;
     }

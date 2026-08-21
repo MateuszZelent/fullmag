@@ -510,6 +510,7 @@ describe("visualization target commands", () => {
       { id: "object:free-layer", kind: "object" },
       { surfaceOpacityPercent: 35 },
       7,
+      "test-pending",
     );
     const result = await commands.execute(
       "visualization.target.clear-overrides",

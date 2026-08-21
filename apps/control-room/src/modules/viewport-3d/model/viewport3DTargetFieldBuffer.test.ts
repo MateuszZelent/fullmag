@@ -28,6 +28,10 @@ function buildViewport3DTargetFieldBuffer(
 ) {
   return buildViewport3DTargetFieldBufferWithResourceKey({
     ...options,
+    sessionIdentity:
+      "sessionIdentity" in options
+        ? options.sessionIdentity
+        : { sessionEpoch: "test-session@1000", sessionId: "test-session" },
     resourceKey:
       options.resourceKey ??
       serializeCanonicalFieldVectorResourceKey(
@@ -75,6 +79,24 @@ function responseMetadataFixture(
 }
 
 describe("viewport3DTargetFieldBuffer", () => {
+  it("returns typed unavailable and cannot be adopted without session identity", () => {
+    const buffer = buildViewport3DTargetFieldBuffer({
+      fieldVector: vectorFixture(),
+      query: { component: "full", scope_kind: "full" },
+      sessionIdentity: null,
+      targetIds: ["part-a"],
+    });
+
+    expect(buffer.availability).toEqual({
+      reason: "missing-session-identity",
+      status: "unavailable",
+    });
+    expect(viewport3DTargetFieldBufferCanServeVectors(buffer, "m")).toBe(false);
+    expect(
+      viewport3DTargetFieldBufferCanServeSurface(buffer, "orientation", "m"),
+    ).toBe(false);
+  });
+
   it.each([
     ["object", "sample", undefined, "object:sample"],
     ["region", "shared", "sample", "region:sample:shared"],

@@ -3,7 +3,10 @@ use std::fmt;
 #[cfg(test)]
 use std::cell::Cell;
 
-use fullmag_ir::{GeometryEntryIR, ObjectRegionIR, RegionFrameIR, RegionShapeIR};
+use fullmag_ir::{
+    BoundaryMembershipIR, GeometryEntryIR, GeometryPredicateIR, ObjectRegionIR, RegionFrameIR,
+    RegionShapeIR,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AffineTransform3 {
@@ -50,6 +53,25 @@ impl BoundaryMembership {
         }
     }
 
+    pub(crate) fn from_ir(value: BoundaryMembershipIR) -> Self {
+        match value {
+            BoundaryMembershipIR::Inclusive {
+                absolute_tolerance_m,
+                relative_tolerance,
+            } => Self::Inclusive {
+                absolute_tolerance_m,
+                relative_tolerance,
+            },
+            BoundaryMembershipIR::Exclusive {
+                absolute_tolerance_m,
+                relative_tolerance,
+            } => Self::Exclusive {
+                absolute_tolerance_m,
+                relative_tolerance,
+            },
+        }
+    }
+
     fn tolerance(self, characteristic_length_m: f64) -> Result<f64, SelectionError> {
         let (absolute, relative) = match self {
             Self::Inclusive {
@@ -80,14 +102,14 @@ impl BoundaryMembership {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectionError {
-    code: &'static str,
+    code: String,
     message: String,
 }
 
 impl SelectionError {
-    fn new(code: &'static str, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
-            code,
+            code: code.into(),
             message: message.into(),
         }
     }
@@ -96,8 +118,8 @@ impl SelectionError {
         Self::new("selection_invalid_geometry", message)
     }
 
-    pub fn code(&self) -> &'static str {
-        self.code
+    pub fn code(&self) -> &str {
+        &self.code
     }
 }
 
@@ -132,9 +154,18 @@ enum GeometryNode {
         radius_m: f64,
         center_m: [f64; 3],
     },
+    Ellipsoid {
+        radii_m: [f64; 3],
+        center_m: [f64; 3],
+    },
     Union(Box<GeometryNode>, Box<GeometryNode>),
     Intersection(Box<GeometryNode>, Box<GeometryNode>),
     Difference(Box<GeometryNode>, Box<GeometryNode>),
+    Xor(Box<GeometryNode>, Box<GeometryNode>),
+    Complement {
+        geometry: Box<GeometryNode>,
+        domain: Box<GeometryNode>,
+    },
     Affine {
         geometry: Box<GeometryNode>,
         transform: AffineTransform3,
@@ -142,6 +173,20 @@ enum GeometryNode {
 }
 
 impl GeometryPredicate {
+    pub fn from_ir(
+        geometry: &GeometryPredicateIR,
+        transform: AffineTransform3,
+        boundary: BoundaryMembership,
+    ) -> Result<Self, SelectionError> {
+        let geometry = node_from_predicate_ir(geometry)?;
+        validate_node(&geometry)?;
+        Ok(Self {
+            geometry,
+            transform,
+            boundary,
+        })
+    }
+
     pub(crate) fn from_geometry_entry(
         entry: &GeometryEntryIR,
         transform: AffineTransform3,
@@ -192,6 +237,10 @@ impl GeometryPredicate {
             },
             boundary,
         })
+    }
+
+    pub fn contains(&self, world_point_m: [f64; 3]) -> Result<bool, SelectionError> {
+        contains_point(self, world_point_m)
     }
 }
 
@@ -298,6 +347,79 @@ fn node_from_geometry_entry(entry: &GeometryEntryIR) -> Result<GeometryNode, Sel
     Ok(node)
 }
 
+fn node_from_predicate_ir(geometry: &GeometryPredicateIR) -> Result<GeometryNode, SelectionError> {
+    let node = match geometry {
+        GeometryPredicateIR::Box { center_m, size_m } => GeometryNode::Box {
+            size_m: *size_m,
+            center_m: *center_m,
+        },
+        GeometryPredicateIR::Cylinder {
+            center_m,
+            axis,
+            radius_m,
+            height_m,
+        } => GeometryNode::Cylinder {
+            radius_m: *radius_m,
+            height_m: *height_m,
+            center_m: *center_m,
+            axis: normalize_axis(*axis)?,
+        },
+        GeometryPredicateIR::Sphere { center_m, radius_m } => GeometryNode::Sphere {
+            radius_m: *radius_m,
+            center_m: *center_m,
+        },
+        GeometryPredicateIR::Ellipsoid { center_m, radii_m } => GeometryNode::Ellipsoid {
+            radii_m: *radii_m,
+            center_m: *center_m,
+        },
+        GeometryPredicateIR::Union { a, b } => GeometryNode::Union(
+            Box::new(node_from_predicate_ir(a)?),
+            Box::new(node_from_predicate_ir(b)?),
+        ),
+        GeometryPredicateIR::Intersection { a, b } => GeometryNode::Intersection(
+            Box::new(node_from_predicate_ir(a)?),
+            Box::new(node_from_predicate_ir(b)?),
+        ),
+        GeometryPredicateIR::Difference { base, tool } => GeometryNode::Difference(
+            Box::new(node_from_predicate_ir(base)?),
+            Box::new(node_from_predicate_ir(tool)?),
+        ),
+        GeometryPredicateIR::Xor { a, b } => GeometryNode::Xor(
+            Box::new(node_from_predicate_ir(a)?),
+            Box::new(node_from_predicate_ir(b)?),
+        ),
+        GeometryPredicateIR::Complement { geometry, domain } => GeometryNode::Complement {
+            geometry: Box::new(node_from_predicate_ir(geometry)?),
+            domain: Box::new(node_from_predicate_ir(domain)?),
+        },
+        GeometryPredicateIR::Affine {
+            geometry,
+            translation_m,
+            rotation_xyzw,
+            scale,
+            pivot_m,
+        } => GeometryNode::Affine {
+            geometry: Box::new(node_from_predicate_ir(geometry)?),
+            transform: AffineTransform3 {
+                translation_m: *translation_m,
+                rotation_xyzw: *rotation_xyzw,
+                scale: *scale,
+                pivot_m: *pivot_m,
+            },
+        },
+        GeometryPredicateIR::ImportedSolid { asset_id } => {
+            return Err(SelectionError::new(
+                "selection_imported_solid_unqualified",
+                format!(
+                    "imported solid '{asset_id}' has no qualified analytic occupancy evaluator"
+                ),
+            ));
+        }
+    };
+    validate_node(&node)?;
+    Ok(node)
+}
+
 fn validate_node(node: &GeometryNode) -> Result<(), SelectionError> {
     match node {
         GeometryNode::Box { size_m, center_m } => {
@@ -337,11 +459,27 @@ fn validate_node(node: &GeometryNode) -> Result<(), SelectionError> {
                 ));
             }
         }
+        GeometryNode::Ellipsoid { radii_m, center_m } => {
+            require_finite(center_m, "ellipsoid center")?;
+            if radii_m
+                .iter()
+                .any(|value| !value.is_finite() || *value <= 0.0)
+            {
+                return Err(SelectionError::invalid_geometry(
+                    "ellipsoid radii must contain finite positive values",
+                ));
+            }
+        }
         GeometryNode::Union(a, b)
         | GeometryNode::Intersection(a, b)
-        | GeometryNode::Difference(a, b) => {
+        | GeometryNode::Difference(a, b)
+        | GeometryNode::Xor(a, b) => {
             validate_node(a)?;
             validate_node(b)?;
+        }
+        GeometryNode::Complement { geometry, domain } => {
+            validate_node(geometry)?;
+            validate_node(domain)?;
         }
         GeometryNode::Affine {
             geometry,
@@ -372,6 +510,9 @@ fn contains_local(
         GeometryNode::Sphere { radius_m, center_m } => {
             contains_sphere_point(*radius_m, *center_m, point, boundary)
         }
+        GeometryNode::Ellipsoid { radii_m, center_m } => {
+            contains_ellipsoid_point(*radii_m, *center_m, point, boundary)
+        }
         GeometryNode::Union(a, b) => {
             Ok(contains_local(a, point, boundary)? || contains_local(b, point, boundary)?)
         }
@@ -380,6 +521,13 @@ fn contains_local(
         }
         GeometryNode::Difference(base, tool) => {
             Ok(contains_local(base, point, boundary)? && !contains_local(tool, point, boundary)?)
+        }
+        GeometryNode::Xor(a, b) => {
+            Ok(contains_local(a, point, boundary)? ^ contains_local(b, point, boundary)?)
+        }
+        GeometryNode::Complement { geometry, domain } => {
+            Ok(contains_local(domain, point, boundary)?
+                && !contains_local(geometry, point, boundary)?)
         }
         GeometryNode::Affine {
             geometry,
@@ -414,7 +562,19 @@ fn node_bounds(node: &GeometryNode) -> Result<([f64; 3], [f64; 3]), SelectionErr
             std::array::from_fn(|axis| center_m[axis] - radius_m),
             std::array::from_fn(|axis| center_m[axis] + radius_m),
         )),
+        GeometryNode::Ellipsoid { radii_m, center_m } => Ok((
+            std::array::from_fn(|axis| center_m[axis] - radii_m[axis]),
+            std::array::from_fn(|axis| center_m[axis] + radii_m[axis]),
+        )),
         GeometryNode::Union(a, b) => {
+            let (a_min, a_max) = node_bounds(a)?;
+            let (b_min, b_max) = node_bounds(b)?;
+            Ok((
+                std::array::from_fn(|axis| a_min[axis].min(b_min[axis])),
+                std::array::from_fn(|axis| a_max[axis].max(b_max[axis])),
+            ))
+        }
+        GeometryNode::Xor(a, b) => {
             let (a_min, a_max) = node_bounds(a)?;
             let (b_min, b_max) = node_bounds(b)?;
             Ok((
@@ -435,6 +595,7 @@ fn node_bounds(node: &GeometryNode) -> Result<([f64; 3], [f64; 3]), SelectionErr
             Ok((bounds_min, bounds_max))
         }
         GeometryNode::Difference(base, _) => node_bounds(base),
+        GeometryNode::Complement { domain, .. } => node_bounds(domain),
         GeometryNode::Affine {
             geometry,
             transform,
@@ -526,23 +687,39 @@ pub(crate) fn contains_sphere_point(
     boundary.upper_contains(dot(relative, relative).sqrt(), radius_m)
 }
 
+fn contains_ellipsoid_point(
+    radii_m: [f64; 3],
+    center_m: [f64; 3],
+    point: [f64; 3],
+    boundary: BoundaryMembership,
+) -> Result<bool, SelectionError> {
+    let mut effective_radii = [0.0; 3];
+    for axis in 0..3 {
+        let tolerance = boundary.tolerance(radii_m[axis])?;
+        effective_radii[axis] = match boundary {
+            BoundaryMembership::Inclusive { .. } => radii_m[axis] + tolerance,
+            BoundaryMembership::Exclusive { .. } => (radii_m[axis] - tolerance).max(0.0),
+        };
+    }
+    if effective_radii.contains(&0.0) {
+        return Ok(false);
+    }
+    let normalized_radius_squared = (0..3)
+        .map(|axis| ((point[axis] - center_m[axis]) / effective_radii[axis]).powi(2))
+        .sum::<f64>();
+    Ok(match boundary {
+        BoundaryMembership::Inclusive { .. } => normalized_radius_squared <= 1.0,
+        BoundaryMembership::Exclusive { .. } => normalized_radius_squared < 1.0,
+    })
+}
+
 fn inverse_transform(
     world_point_m: [f64; 3],
     transform: AffineTransform3,
 ) -> Result<[f64; 3], SelectionError> {
-    validate_transform_components(transform)?;
-    if transform.scale.iter().any(|component| *component == 0.0) {
-        return Err(SelectionError::new(
-            "selection_singular_transform",
-            "affine transform scale must be invertible",
-        ));
-    }
-    let Some(unit_rotation) = stable_unit(transform.rotation_xyzw) else {
-        return Err(SelectionError::new(
-            "selection_singular_transform",
-            "affine transform quaternion must be invertible",
-        ));
-    };
+    validate_affine_transform(transform)?;
+    let unit_rotation = stable_unit(transform.rotation_xyzw)
+        .expect("validated affine quaternion must remain invertible");
     let inverse_rotation = [
         -unit_rotation[0],
         -unit_rotation[1],
@@ -559,6 +736,30 @@ fn inverse_transform(
         rotated[1] / transform.scale[1] + transform.pivot_m[1],
         rotated[2] / transform.scale[2] + transform.pivot_m[2],
     ])
+}
+
+pub(crate) fn validate_affine_transform(transform: AffineTransform3) -> Result<(), SelectionError> {
+    validate_transform_components(transform)?;
+    if transform.scale.iter().any(|component| *component == 0.0) {
+        return Err(SelectionError::new(
+            "selection_singular_transform",
+            "affine transform scale must be invertible",
+        ));
+    }
+    if stable_unit(transform.rotation_xyzw).is_none() {
+        return Err(SelectionError::new(
+            "selection_singular_transform",
+            "affine transform quaternion must be invertible",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn world_point_in_frame(
+    world_point_m: [f64; 3],
+    object_transform: AffineTransform3,
+) -> Result<[f64; 3], SelectionError> {
+    inverse_transform(world_point_m, object_transform)
 }
 
 fn validate_transform_components(transform: AffineTransform3) -> Result<(), SelectionError> {

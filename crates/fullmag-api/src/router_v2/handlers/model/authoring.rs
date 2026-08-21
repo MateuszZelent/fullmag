@@ -1041,6 +1041,7 @@ pub async fn get_authoring_scene(
         (status = 200, description = "Committed canonical authoring scene document", body = SceneResource),
         (status = 400, description = "Invalid scene document payload"),
         (status = 404, description = "No active workspace"),
+        (status = 409, description = "Scene revision conflict"),
     ),
     tag = "model"
 )]
@@ -1065,6 +1066,7 @@ pub async fn replace_authoring_scene(
         (status = 200, description = "Committed canonical authoring scene after merge patch", body = SceneResource),
         (status = 400, description = "Invalid scene patch payload"),
         (status = 404, description = "No active workspace"),
+        (status = 409, description = "Scene revision conflict"),
     ),
     tag = "model"
 )]
@@ -2995,6 +2997,7 @@ pub async fn patch_authoring_object_interaction(
         (status = 200, description = "Committed authoring transaction", body = AuthoringTransactionResponse),
         (status = 400, description = "Invalid authoring transaction payload"),
         (status = 404, description = "No active workspace"),
+        (status = 409, description = "Scene revision conflict"),
     ),
     tag = "model"
 )]
@@ -3003,10 +3006,19 @@ pub async fn commit_authoring_transaction(
     Json(req): Json<AuthoringTransactionRequest>,
 ) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
     let (transaction_kind, committed) = match req {
-        AuthoringTransactionRequest::ReplaceScene { scene } => {
-            let scene_document: SceneDocument = serde_json::from_value(scene).map_err(|error| {
-                ApiError::bad_request(format!("invalid scene document payload: {error}"))
-            })?;
+        AuthoringTransactionRequest::ReplaceScene {
+            base_revision,
+            scene,
+        } => {
+            let mut scene_document: SceneDocument =
+                serde_json::from_value(scene).map_err(|error| {
+                    ApiError::bad_request(format!("invalid scene document payload: {error}"))
+                })?;
+            if base_revision.is_some() {
+                let current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+                check_base_scene_revision(&current_scene, base_revision)?;
+                scene_document.revision = current_scene.revision;
+            }
             let committed =
                 crate::commit_current_live_scene_document(&state, scene_document).await?;
             ("replace_scene", committed)

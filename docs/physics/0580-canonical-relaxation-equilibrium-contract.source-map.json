@@ -18,6 +18,11 @@
       "id": "fdm-cuda-fp32-armijo-acceptance",
       "symbols": ["E_trial", "E_previous", "c_1", "lambda", "phi_prime", "epsilon_E_single"],
       "sources": ["fp32ArmijoAcceptance"]
+    },
+    {
+      "id": "representable-chord-armijo",
+      "symbols": ["s_fp", "Delta_E_lin_chord", "H_eff", "Ms", "V_i", "mu0", "E_trial", "E_previous", "c_1"],
+      "sources": ["representableChordIncrement", "representableChordRegression"]
     }
   ],
   "symbols": [
@@ -28,7 +33,9 @@
     {"id": "E_previous", "latex": "E_{\\mathrm{previous}}", "meaning": "last accepted energy", "si_unit": "\\mathrm{J}"},
     {"id": "c_1", "latex": "c_1", "meaning": "Armijo coefficient", "si_unit": "1"},
     {"id": "lambda", "latex": "\\lambda", "meaning": "direct-minimizer line-search step", "si_unit": "\\mathrm{m\\,A^{-1}}"},
-    {"id": "phi_prime", "latex": "\\phi'(0)", "meaning": "physical-metric directional energy derivative", "si_unit": "\\mathrm{J\\,A\\,m^{-1}}"}
+    {"id": "phi_prime", "latex": "\\phi'(0)", "meaning": "physical-metric directional energy derivative", "si_unit": "\\mathrm{J\\,A\\,m^{-1}}"},
+    {"id": "s_fp", "latex": "s_i^{\\mathrm{fp}}", "meaning": "representable normalized trial chord", "si_unit": "1"},
+    {"id": "Delta_E_lin_chord", "latex": "\\Delta E_{\\mathrm{lin,chord}}", "meaning": "first-order energy increment along the stored trial chord", "si_unit": "\\mathrm{J}"}
   ],
   "sources": [
     {
@@ -90,6 +97,18 @@
       "path": "crates/fullmag-runner/src/relaxation/direct_minimizer.rs",
       "symbol": "single_precision_armijo_uses_bounded_energy_roundoff_budget",
       "responsibility": "Protect strict double Armijo while covering the CUDA single-precision roundoff case."
+    },
+    {
+      "id": "representableChordIncrement",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer.rs",
+      "symbol": "representable_chord_energy_linear_increment",
+      "responsibility": "Compute the Joule-valued Armijo increment from the actual normalized floating-point trial chord and current effective field."
+    },
+    {
+      "id": "representableChordRegression",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer.rs",
+      "symbol": "armijo_uses_representable_retraction_chord",
+      "responsibility": "Reject the analytic step-slope threshold when it is stricter than the stored retraction chord."
     }
   ],
   "public_api": {

@@ -3,6 +3,7 @@
  */
 
 #include "context.hpp"
+#include "cpu/mfem/relaxation/relaxation_math.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
 
 #include <cmath>
@@ -550,6 +551,55 @@ void torque_physical_time_pseudotime_and_step_stops_are_reported() {
     }
 }
 
+void zero_gradient_with_high_torque_is_numerical_stagnation() {
+    fullmag::fem::Context ctx;
+    ctx.stage_completion.relax_stop.has_torque_tolerance_apm = 1;
+    ctx.stage_completion.relax_stop.torque_tolerance_apm = 2.0;
+
+    fullmag_fem_step_stats current{};
+    current.max_torque_Apm = 3.0;
+    fullmag_fem_step_stats out{};
+    fullmag::fem::relaxation::finish_degenerate_gradient_relaxation_step(
+        ctx,
+        current,
+        out,
+        0.0);
+    check(
+        ctx.stage_completion.snapshot.reason == FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT,
+        "degenerate high-torque state uses the numerical-stagnation stop family");
+    check(
+        std::strcmp(ctx.stage_completion.snapshot.metric_name, "numerical_stagnation") == 0,
+        "degenerate high-torque state cannot publish gradient equilibrium");
+
+    fullmag::fem::Context accepted;
+    accepted.stage_completion.relax_stop.has_torque_tolerance_apm = 1;
+    accepted.stage_completion.relax_stop.torque_tolerance_apm = 2.0;
+    accepted.relaxation.cached_current_stats.max_torque_Apm = 3.0;
+    fullmag::fem::relaxation::publish_accepted_gradient_completion(accepted, 0.0);
+    check(
+        std::strcmp(accepted.stage_completion.snapshot.metric_name, "numerical_stagnation") == 0,
+        "accepted zero-gradient high-torque state cannot publish gradient equilibrium");
+
+    fullmag::fem::Context energy_limited;
+    energy_limited.stage_completion.relax_stop.has_energy_tolerance_j = 1;
+    energy_limited.stage_completion.relax_stop.energy_tolerance_j = 0.25;
+    energy_limited.stage_completion.relax_stop.has_torque_tolerance_apm = 1;
+    energy_limited.stage_completion.relax_stop.torque_tolerance_apm = 2.0;
+    fullmag_fem_step_stats low_torque{};
+    low_torque.max_torque_Apm = 1.0;
+    fullmag_fem_step_stats energy_out{};
+    fullmag::fem::relaxation::finish_degenerate_gradient_relaxation_step(
+        energy_limited,
+        low_torque,
+        energy_out,
+        0.0);
+    check(
+        std::strcmp(
+            energy_limited.stage_completion.snapshot.metric_name,
+            "numerical_stagnation") == 0,
+        "energy-plus-torque zero-gradient state must fail closed");
+}
+
 void stage_completion_snapshot_returns_public_state() {
     fullmag::fem::Context ctx;
     ctx.stage_completion.snapshot.has_reason = 1;
@@ -600,6 +650,7 @@ int main() {
     current_snapshot_completion_reports_non_plateau_stop_criteria();
     torque_confirmation_pending_is_torque_only_and_bounded();
     torque_physical_time_pseudotime_and_step_stops_are_reported();
+    zero_gradient_with_high_torque_is_numerical_stagnation();
     stage_completion_snapshot_returns_public_state();
     return 0;
 }

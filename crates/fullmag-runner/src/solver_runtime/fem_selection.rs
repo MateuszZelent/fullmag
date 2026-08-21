@@ -8,7 +8,8 @@ use crate::solver_runtime::engine::{fem_engine_id, FemEngine, FemEngineResolutio
 use crate::solver_runtime::fem_crossover::resolve_auto_fem_plan_device;
 use crate::solver_runtime::selection::{
     apply_runtime_gpu_index, effective_fem_device_request, effective_fem_device_request_for_plan,
-    fem_policy_requires_gpu, runtime_fem_order, runtime_fem_policy,
+    fem_policy_requires_gpu, reject_frozen_spins_fem_execution,
+    reject_frozen_spins_fem_plan_execution, runtime_fem_order, runtime_fem_policy,
 };
 use crate::types::RunError;
 
@@ -37,6 +38,7 @@ fn native_fem_cpu_unavailable_error(
 pub(crate) fn resolve_fem_engine_with_trail(
     problem: &ProblemIR,
 ) -> Result<FemEngineResolution, RunError> {
+    reject_frozen_spins_fem_execution(problem)?;
     apply_runtime_gpu_index(problem, "fem");
     let policy = effective_fem_device_request(problem);
     let availability = native_fem::native_availability();
@@ -210,6 +212,8 @@ pub(crate) fn resolve_fem_engine_for_plan_with_trail(
     plan: &FemPlanIR,
     preview_enabled: bool,
 ) -> Result<FemEngineResolution, RunError> {
+    reject_frozen_spins_fem_execution(problem)?;
+    reject_frozen_spins_fem_plan_execution(plan)?;
     apply_runtime_gpu_index(problem, "fem");
     let requested_device = effective_fem_device_request_for_plan(problem, plan);
     let availability = native_fem::native_availability();

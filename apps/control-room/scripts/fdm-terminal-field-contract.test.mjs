@@ -350,6 +350,11 @@ test("browser smoke rejects historical adoption for a repeated resource key", ()
 
 function exactAdoptionFixture() {
   const resourceKey = "/v2/sessions/current/data/fields/H_demag/samples/vector?scope_kind=full";
+  const sessionIdentity = {
+    sessionEpoch: "session-8@2000",
+    sessionId: "session-8",
+  };
+  const fieldBufferId = `${sessionIdentity.sessionId}:${sessionIdentity.sessionEpoch}:H_demag:full:full:none`;
   return {
     observation: {
       carrier: {
@@ -366,14 +371,14 @@ function exactAdoptionFixture() {
             },
             vector: {
               adoptedAtMs: 2_025,
-              adoptedFieldBufferId: "buffer-8",
+              adoptedFieldBufferId: fieldBufferId,
               adoptedResourceKey: resourceKey,
               adoptedVectorBuildKey: "vector-8",
               adoptedVectorItemCount: 8,
               adoptionSequence: 8,
             },
           },
-          requestedFieldBufferId: "buffer-8",
+          requestedFieldBufferId: fieldBufferId,
           requestedPasses: ["vector-glyph"],
           surface: { bufferKey: null },
           vectors: { buildKey: "vector-8" },
@@ -399,6 +404,7 @@ function exactAdoptionFixture() {
       response_finished_at_ms: 2_050,
       response_started_at_ms: 2_010,
     },
+    sessionIdentity,
     switchStartedAtMs: 2_000,
   };
 }
@@ -424,6 +430,20 @@ test("exact render evidence accepts a fast valid adoption before body observatio
 test("exact render evidence rejects an adoption from before the switch response", () => {
   const fixture = exactAdoptionFixture();
   fixture.observation.carrier.render.adoption.vector.adoptedAtMs = 2_005;
+  assert.equal(exactVisualizationAdoptionMatches(fixture), false);
+});
+
+test("browser proof rejects an old-session field buffer even when quantity and scope repeat", () => {
+  const fixture = exactAdoptionFixture();
+  fixture.sessionIdentity = {
+    sessionEpoch: "session-new@2000",
+    sessionId: "session-new",
+  };
+  fixture.observation.carrier.render.requestedFieldBufferId =
+    "session-old:session-old@1000:H_demag:full:full:none";
+  fixture.observation.carrier.render.adoption.vector.adoptedFieldBufferId =
+    fixture.observation.carrier.render.requestedFieldBufferId;
+
   assert.equal(exactVisualizationAdoptionMatches(fixture), false);
 });
 

@@ -7,7 +7,7 @@ use crate::{
     RegionRefIR, RegionalFieldDriveIR, SpinTorqueModuleIR, SpinTransportModuleIR, StudyIR,
     SurfaceRefIR, ValidationProfileIR,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -195,7 +195,7 @@ impl MagnetizationModuleIR {
 
 /// The explicit 0.4 wire model is intentionally separate from `ProblemIR`.
 /// The public writer remains 0.3 until the cross-layer switch is atomic.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ProblemIRV04 {
     pub ir_version: String,
     pub problem_meta: ProblemMeta,
@@ -215,6 +215,10 @@ pub struct ProblemIRV04 {
     pub interfaces: Vec<PhysicsInterfaceIR>,
     #[serde(default)]
     pub magnetization_modules: Vec<MagnetizationModuleIR>,
+    #[serde(default)]
+    pub selections: Vec<crate::SelectionDefinitionIR>,
+    #[serde(default)]
+    pub magnetization_constraints: Vec<crate::MagnetizationConstraintIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub couplings: Vec<CouplingIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -269,6 +273,154 @@ pub struct ProblemIRV04 {
     pub mesh_semantics: Option<MeshSemanticsIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub physics_graph: Option<Value>,
+    #[serde(flatten)]
+    pub legacy_extensions: BTreeMap<String, Value>,
+}
+
+#[derive(Deserialize)]
+struct ProblemIRV04Wire {
+    ir_version: String,
+    problem_meta: ProblemMeta,
+    geometry: GeometryIR,
+    #[serde(default)]
+    geometry_assets: Option<GeometryAssetsIR>,
+    regions: Vec<RegionIR>,
+    #[serde(default)]
+    object_regions: Vec<ObjectRegionIR>,
+    materials: Vec<MaterialIR>,
+    #[serde(default)]
+    material_parameter_fields: Vec<MaterialParameterAssignmentIR>,
+    objects: Vec<PhysicsObjectIR>,
+    #[serde(default)]
+    material_assignments: Vec<ObjectMaterialAssignmentIR>,
+    #[serde(default)]
+    interfaces: Vec<PhysicsInterfaceIR>,
+    #[serde(default)]
+    magnetization_modules: Vec<MagnetizationModuleIR>,
+    #[serde(default)]
+    selections: Vec<crate::SelectionDefinitionIR>,
+    #[serde(default)]
+    magnetization_constraints: Vec<crate::MagnetizationConstraintIR>,
+    #[serde(default)]
+    couplings: Vec<CouplingIR>,
+    #[serde(default)]
+    planar_monitors: Vec<PlanarMonitorIR>,
+    energy_terms: Vec<EnergyTermIR>,
+    study: StudyIR,
+    backend_policy: BackendPolicyIR,
+    validation_profile: ValidationProfileIR,
+    #[serde(default)]
+    current_modules: Vec<CurrentModuleIR>,
+    #[serde(default)]
+    field_drives: Vec<RegionalFieldDriveIR>,
+    #[serde(default)]
+    excitation_analysis: Option<ExcitationAnalysisIR>,
+    #[serde(default)]
+    spin_torque_modules: Vec<SpinTorqueModuleIR>,
+    #[serde(default)]
+    spin_transport_modules: Vec<SpinTransportModuleIR>,
+    #[serde(default)]
+    current_density: Option<[f64; 3]>,
+    #[serde(default)]
+    stt_degree: Option<f64>,
+    #[serde(default)]
+    stt_beta: Option<f64>,
+    #[serde(default)]
+    stt_spin_polarization: Option<[f64; 3]>,
+    #[serde(default)]
+    stt_lambda: Option<f64>,
+    #[serde(default)]
+    stt_epsilon_prime: Option<f64>,
+    #[serde(default)]
+    stt_thickness: Option<f64>,
+    #[serde(default)]
+    stt_fixed_layer_position: Option<String>,
+    #[serde(default)]
+    temperature: Option<f64>,
+    #[serde(default)]
+    elastic_materials: Vec<ElasticMaterialIR>,
+    #[serde(default)]
+    elastic_bodies: Vec<ElasticBodyIR>,
+    #[serde(default)]
+    magnetostriction_laws: Vec<MagnetostrictionLawIR>,
+    #[serde(default)]
+    mechanical_bcs: Vec<MechanicalBoundaryConditionIR>,
+    #[serde(default)]
+    mechanical_loads: Vec<MechanicalLoadIR>,
+    #[serde(default)]
+    air_box_policy: Option<AirBoxPolicyIR>,
+    #[serde(default)]
+    pbc: Option<FdmPeriodicityIR>,
+    #[serde(default)]
+    mesh_semantics: Option<MeshSemanticsIR>,
+    #[serde(default)]
+    physics_graph: Option<Value>,
+    #[serde(flatten)]
+    legacy_extensions: BTreeMap<String, Value>,
+}
+
+impl From<ProblemIRV04Wire> for ProblemIRV04 {
+    fn from(wire: ProblemIRV04Wire) -> Self {
+        Self {
+            ir_version: wire.ir_version,
+            problem_meta: wire.problem_meta,
+            geometry: wire.geometry,
+            geometry_assets: wire.geometry_assets,
+            regions: wire.regions,
+            object_regions: wire.object_regions,
+            materials: wire.materials,
+            material_parameter_fields: wire.material_parameter_fields,
+            objects: wire.objects,
+            material_assignments: wire.material_assignments,
+            interfaces: wire.interfaces,
+            magnetization_modules: wire.magnetization_modules,
+            selections: wire.selections,
+            magnetization_constraints: wire.magnetization_constraints,
+            couplings: wire.couplings,
+            planar_monitors: wire.planar_monitors,
+            energy_terms: wire.energy_terms,
+            study: wire.study,
+            backend_policy: wire.backend_policy,
+            validation_profile: wire.validation_profile,
+            current_modules: wire.current_modules,
+            field_drives: wire.field_drives,
+            excitation_analysis: wire.excitation_analysis,
+            spin_torque_modules: wire.spin_torque_modules,
+            spin_transport_modules: wire.spin_transport_modules,
+            current_density: wire.current_density,
+            stt_degree: wire.stt_degree,
+            stt_beta: wire.stt_beta,
+            stt_spin_polarization: wire.stt_spin_polarization,
+            stt_lambda: wire.stt_lambda,
+            stt_epsilon_prime: wire.stt_epsilon_prime,
+            stt_thickness: wire.stt_thickness,
+            stt_fixed_layer_position: wire.stt_fixed_layer_position,
+            temperature: wire.temperature,
+            elastic_materials: wire.elastic_materials,
+            elastic_bodies: wire.elastic_bodies,
+            magnetostriction_laws: wire.magnetostriction_laws,
+            mechanical_bcs: wire.mechanical_bcs,
+            mechanical_loads: wire.mechanical_loads,
+            air_box_policy: wire.air_box_policy,
+            pbc: wire.pbc,
+            mesh_semantics: wire.mesh_semantics,
+            physics_graph: wire.physics_graph,
+            legacy_extensions: wire.legacy_extensions,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ProblemIRV04 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let mut value = Value::deserialize(deserializer)?;
+        crate::normalize_frozen_membership_defaults_in_problem_value(&mut value)
+            .map_err(serde::de::Error::custom)?;
+        let wire = ProblemIRV04Wire::deserialize(value).map_err(serde::de::Error::custom)?;
+        Ok(wire.into())
+    }
 }
 
 impl ProblemIRV04 {
@@ -357,6 +509,11 @@ pub fn migrate_v0_3_problem_ir_to_v0_4(value: &mut Value) -> Result<(), String> 
             region.get("geometry").unwrap_or(&Value::Null),
             &format!("/regions/{index}/geometry"),
         )?;
+        if !geometry_by_name.contains_key(&geometry) {
+            return Err(format!(
+                "/regions/{index}/geometry: unresolved geometry '{geometry}'"
+            ));
+        }
         if region_geometry_by_name
             .insert(name.clone(), geometry)
             .is_some()
@@ -398,7 +555,12 @@ pub fn migrate_v0_3_problem_ir_to_v0_4(value: &mut Value) -> Result<(), String> 
                 "/regions: geometry '{geometry_id}' referenced by /magnets/{index}/region does not exist"
             ));
         }
-        let object_id = object_id_for(&name);
+        let object_id = magnet
+            .get("object_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| object_id_for(&name));
         if !seen_object_ids.insert(object_id.clone()) {
             return Err(format!(
                 "/magnets/{index}/name: duplicate migrated object_id '{object_id}'"
@@ -410,6 +572,7 @@ pub fn migrate_v0_3_problem_ir_to_v0_4(value: &mut Value) -> Result<(), String> 
             ));
         }
         object_id_by_legacy_name.insert(name.clone(), object_id.clone());
+        object_id_by_legacy_name.insert(object_id.clone(), object_id.clone());
         magnetic_geometry_ids.insert(geometry_id.clone());
 
         let assignment_id = format!("assignment_{object_id}");
@@ -519,12 +682,85 @@ pub fn migrate_v0_3_problem_ir_to_v0_4(value: &mut Value) -> Result<(), String> 
         );
     }
 
+    if let Some(assignments) = root
+        .get_mut("material_parameter_fields")
+        .and_then(Value::as_array_mut)
+    {
+        for (index, assignment) in assignments.iter_mut().enumerate() {
+            let assignment = assignment
+                .as_object_mut()
+                .ok_or_else(|| format!("/material_parameter_fields/{index}: expected an object"))?;
+            let legacy_owner = required_string(
+                assignment.get("owner_object").unwrap_or(&Value::Null),
+                &format!("/material_parameter_fields/{index}/owner_object"),
+            )?;
+            let object_id = object_id_by_legacy_name.get(&legacy_owner).ok_or_else(|| {
+                format!(
+                    "/material_parameter_fields/{index}/owner_object: unresolved legacy object '{legacy_owner}'"
+                )
+            })?;
+            assignment.insert("owner_object".to_string(), Value::String(object_id.clone()));
+        }
+    }
+    if let Some(boundary_conditions) = root
+        .get_mut("surface_boundary_conditions")
+        .and_then(Value::as_array_mut)
+    {
+        for (index, boundary_condition) in boundary_conditions.iter_mut().enumerate() {
+            let boundary_condition = boundary_condition.as_object_mut().ok_or_else(|| {
+                format!("/surface_boundary_conditions/{index}: expected an object")
+            })?;
+            let surface = boundary_condition
+                .get_mut("surface")
+                .and_then(Value::as_object_mut)
+                .ok_or_else(|| {
+                    format!("/surface_boundary_conditions/{index}/surface: expected an object")
+                })?;
+            let legacy_owner = required_string(
+                surface.get("object_id").unwrap_or(&Value::Null),
+                &format!("/surface_boundary_conditions/{index}/surface/object_id"),
+            )?;
+            let object_id = object_id_by_legacy_name.get(&legacy_owner).ok_or_else(|| {
+                format!(
+                    "/surface_boundary_conditions/{index}/surface/object_id: unresolved legacy object '{legacy_owner}'"
+                )
+            })?;
+            surface.insert("object_id".to_string(), Value::String(object_id.clone()));
+        }
+    }
+
     root.remove("magnets");
     root.insert(
         "ir_version".to_string(),
         Value::String(PROBLEM_IR_V04_VERSION.to_string()),
     );
+    let bootstrap = serde_json::to_value(ProblemIR::bootstrap_example())
+        .expect("ProblemIR bootstrap must serialize");
+    for key in [
+        "energy_terms",
+        "study",
+        "backend_policy",
+        "validation_profile",
+    ] {
+        if !root.contains_key(key) {
+            root.insert(key.to_string(), bootstrap[key].clone());
+        }
+    }
     if let Some(meta) = root.get_mut("problem_meta").and_then(Value::as_object_mut) {
+        meta.entry("description".to_string()).or_insert(Value::Null);
+        meta.entry("script_language".to_string())
+            .or_insert_with(|| Value::String("python".to_string()));
+        meta.entry("script_source".to_string())
+            .or_insert(Value::Null);
+        meta.entry("entrypoint_kind".to_string())
+            .or_insert_with(|| Value::String("build".to_string()));
+        meta.entry("source_hash".to_string()).or_insert(Value::Null);
+        meta.entry("runtime_metadata".to_string())
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        meta.entry("backend_revision".to_string())
+            .or_insert(Value::Null);
+        meta.entry("seeds".to_string())
+            .or_insert_with(|| Value::Array(Vec::new()));
         for key in ["script_api_version", "serializer_version"] {
             if meta.get(key).and_then(Value::as_str) == Some("0.3.0") {
                 meta.insert(
@@ -550,5 +786,10 @@ pub fn migrate_v0_3_problem_ir_to_v0_4(value: &mut Value) -> Result<(), String> 
         "magnetization_modules".to_string(),
         serde_json::to_value(magnetization_modules).expect("magnetization module IR serializes"),
     );
+    root.entry("selections".to_string())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    root.entry("magnetization_constraints".to_string())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    crate::normalize_frozen_membership_defaults_in_problem_value(value)?;
     Ok(())
 }

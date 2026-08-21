@@ -50,6 +50,16 @@ interface VectorAdoptionInput {
   vectorBuildKey: string;
 }
 
+export type Viewport3DRenderAdoptionResult =
+  | { status: "adopted" }
+  | {
+      reason:
+        | "adoption-capacity-exhausted"
+        | "missing-session-identity"
+        | "session-identity-mismatch";
+      status: "unavailable";
+    };
+
 type AdoptionPass = Omit<Viewport3DRenderAdoptionReceipt, "targetId">;
 type AdoptionInput = Omit<
   Viewport3DRenderAdoptionReceipt,
@@ -91,8 +101,8 @@ export interface Viewport3DRenderAdoptionRegistry {
     carrierId: string,
     replay: () => void,
   ): () => void;
-  recordSurfaceAdoption(input: SurfaceAdoptionInput): void;
-  recordVectorAdoption(input: VectorAdoptionInput): void;
+  recordSurfaceAdoption(input: SurfaceAdoptionInput): Viewport3DRenderAdoptionResult;
+  recordVectorAdoption(input: VectorAdoptionInput): Viewport3DRenderAdoptionResult;
   retainDemand(targetId: string): () => void;
   setSessionIdentity(identity: { sessionEpoch: string; sessionId: string } | null): void;
   setCarrierTargets(
@@ -218,7 +228,20 @@ export function createViewport3DRenderAdoptionRegistry({
     explicitTargetId: string | undefined,
   ) => {
     const { sessionIdentity: explicitSessionIdentity = null, ...receiptInput } = input;
-    const responseSessionIdentity = explicitSessionIdentity ?? currentSessionIdentity;
+    // A receipt is valid only when its producer supplies the session identity
+    // that was used to build the buffer. The registry's current identity is
+    // only a validation boundary; it must never backfill missing provenance.
+    const responseSessionIdentity = explicitSessionIdentity;
+    if (
+      !responseSessionIdentity?.sessionId.trim() ||
+      !responseSessionIdentity.sessionEpoch.trim()
+    ) {
+      rejectedAdoptionCount += 1;
+      return {
+        reason: "missing-session-identity" as const,
+        status: "unavailable" as const,
+      };
+    }
     if (
       currentSessionIdentity &&
       (!responseSessionIdentity ||
@@ -226,12 +249,12 @@ export function createViewport3DRenderAdoptionRegistry({
         responseSessionIdentity.sessionEpoch !== currentSessionIdentity.sessionEpoch)
     ) {
       rejectedAdoptionCount += 1;
-      return;
+      return {
+        reason: "session-identity-mismatch" as const,
+        status: "unavailable" as const,
+      };
     }
-    const sessionIdentity = responseSessionIdentity ?? currentSessionIdentity ?? {
-      sessionEpoch: "legacy-unscoped",
-      sessionId: "legacy-unscoped",
-    };
+    const sessionIdentity = responseSessionIdentity;
     const key = receiptKey(receiptInput);
     const ownerId = explicitOwnerId ?? legacyOwnerId(receiptInput);
     const currentOwners = activePasses.get(key);
@@ -239,15 +262,15 @@ export function createViewport3DRenderAdoptionRegistry({
     if (currentOwner && adoptedPassEquals(currentOwner.receipt, receiptInput)) {
       currentOwner.explicitTargetId = explicitTargetId ?? null;
       syncPass(key);
-      return;
+      return { status: "adopted" as const };
     }
     if (!currentOwners && activePasses.size >= MAX_ACTIVE_ADOPTED_PASSES) {
       rejectedAdoptionCount += 1;
-      return;
+      return { reason: "adoption-capacity-exhausted" as const, status: "unavailable" as const };
     }
     if (!currentOwner && activeOwnerCount >= MAX_ACTIVE_ADOPTED_PASSES) {
       rejectedAdoptionCount += 1;
-      return;
+      return { reason: "adoption-capacity-exhausted" as const, status: "unavailable" as const };
     }
     const resolvedTargetIds = explicitTargetId
       ? [explicitTargetId]
@@ -262,7 +285,7 @@ export function createViewport3DRenderAdoptionRegistry({
       for (const targetId of saturatedTargetIds) {
         rememberRejectedTargetPass(targetId, key);
       }
-      return;
+      return { reason: "adoption-capacity-exhausted" as const, status: "unavailable" as const };
     }
     if (currentOwner) rememberInactive(currentOwner);
     const inactiveKey = historyKey(ownerId, receiptInput);
@@ -287,6 +310,7 @@ export function createViewport3DRenderAdoptionRegistry({
     });
     activePasses.set(key, owners);
     syncPass(key);
+    return { status: "adopted" as const };
   };
   const replayCarrier = (carrierId: string) => {
     for (const replay of [...(replaysByCarrier.get(carrierId) ?? [])]) replay();
@@ -370,7 +394,7 @@ export function createViewport3DRenderAdoptionRegistry({
       };
     },
     recordSurfaceAdoption(input) {
-      adopt({
+      return adopt({
         byteLength: safeByteLength(input.byteLength),
         carrierId: input.carrierId,
         fieldBufferId: input.fieldBufferId,
@@ -382,7 +406,7 @@ export function createViewport3DRenderAdoptionRegistry({
       }, input.ownerId, input.targetId);
     },
     recordVectorAdoption(input) {
-      adopt({
+      return adopt({
         byteLength: safeByteLength(input.byteLength),
         carrierId: input.carrierId,
         fieldBufferId: input.fieldBufferId,

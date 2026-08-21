@@ -51,6 +51,7 @@ import { EigenModeInspectorPanel } from "./panels/frequency-domain/EigenModeInsp
 import { FmrModalSpectrumInspectorPanel } from "./panels/frequency-domain/FmrModalSpectrumInspectorPanel";
 import { FmrResponseSweepInspectorPanel } from "./panels/frequency-domain/FmrResponseSweepInspectorPanel";
 import { FieldQuantityInspectorPanel } from "./panels/FieldQuantityInspectorPanel";
+import { FrozenSpinsInspectorPanel } from "./panels/constraint/FrozenSpinsInspectorPanel";
 import { MeshPartVisualizationPanel } from "./panels/MeshPartVisualizationPanel";
 import { ModeVisualizationOverviewPanel } from "./panels/mode-visualization/ModeVisualizationOverviewPanel";
 import { ObjectGeneralPanel } from "./panels/ObjectGeneralPanel";
@@ -855,6 +856,12 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
     title: "Object General",
     selectionKinds: ["object.root"],
     component: ObjectGeneralPanel,
+  },
+  {
+    id: "object-frozen-spins",
+    title: "Frozen Spins",
+    selectionKinds: ["object.frozen-spins"],
+    component: FrozenSpinsInspectorPanel,
   },
   {
     id: "geometry-object",

@@ -2,8 +2,11 @@ use super::*;
 use fullmag_engine::OerstedCylinderConfig;
 use fullmag_ir::{
     ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR, GridDimensions, IntegratorChoice,
-    RelaxationAlgorithmIR, RelaxationControlIR,
+    RelaxationAlgorithmIR, RelaxationControlIR, ResolvedFrozenSpinsPlanIR,
+    SelectionAuthoredFingerprintIR, SelectionCertificateIR,
+    RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION, SELECTION_CERTIFICATE_SCHEMA_VERSION,
 };
+use sha2::{Digest, Sha256};
 
 fn make_test_plan() -> FdmPlanIR {
     FdmPlanIR {
@@ -57,6 +60,145 @@ fn make_test_plan() -> FdmPlanIR {
         bulk_dmi: None,
         ..Default::default()
     }
+}
+
+fn resolved_frozen_spins(mask: Vec<bool>) -> ResolvedFrozenSpinsPlanIR {
+    let frozen_dof_count = mask.iter().filter(|frozen| **frozen).count() as u64;
+    let active_dof_count = mask.len() as u64;
+    let free_dof_count = active_dof_count - frozen_dof_count;
+    let mut hash = Sha256::new();
+    hash.update(active_dof_count.to_le_bytes());
+    hash.update(mask.iter().map(|frozen| u8::from(*frozen)).collect::<Vec<_>>());
+    let mask_sha256 = format!("{:x}", hash.finalize());
+    ResolvedFrozenSpinsPlanIR {
+        schema_version: RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION.to_string(),
+        constraint_ids: vec!["pinned".to_string()],
+        frozen_mask: mask,
+        active_dof_count,
+        frozen_dof_count,
+        free_dof_count,
+        mask_sha256: mask_sha256.clone(),
+        grid_or_mesh_fingerprint: "runtime-test-grid".to_string(),
+        source_state_revision: Some(1),
+        all_active_dofs_frozen: active_dof_count > 0 && free_dof_count == 0,
+        certificate: SelectionCertificateIR {
+            schema_version: SELECTION_CERTIFICATE_SCHEMA_VERSION.to_string(),
+            evaluator_id: "selection.fdm_cell_center.v1".to_string(),
+            constraint_ids: vec!["pinned".to_string()],
+            authored_fingerprints: vec![SelectionAuthoredFingerprintIR {
+                constraint_id: "pinned".to_string(),
+                selector_sha256: "a".repeat(64),
+            }],
+            raw_candidate_dof_count: frozen_dof_count,
+            inactive_candidate_dof_count: 0,
+            active_dof_count,
+            frozen_dof_count,
+            free_dof_count,
+            bounds_m: None,
+            grid_or_mesh_fingerprint: "runtime-test-grid".to_string(),
+            source_state_revision: Some(1),
+            mask_sha256,
+            resolved_reference_sha256: "b".repeat(64),
+            warnings: Vec::new(),
+        },
+    }
+}
+
+fn frozen_two_cell_plan() -> FdmPlanIR {
+    FdmPlanIR {
+        grid: GridDimensions { cells: [2, 1, 1] },
+        cell_size: [2e-9, 2e-9, 2e-9],
+        region_mask: vec![0; 2],
+        initial_magnetization: vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        frozen_spins: Some(resolved_frozen_spins(vec![true, false])),
+        ..make_test_plan()
+    }
+}
+
+#[test]
+fn frozen_spins_fdm_cpu_preserves_pinned_cell_and_evolves_free_exchange_neighbor() {
+    let plan = frozen_two_cell_plan();
+    let result = execute_reference_fdm(&plan, 1e-14, &[], None, None)
+        .expect("two-cell frozen-spin reference run should succeed");
+
+    assert_eq!(
+        result.result.final_magnetization[0]
+            .map(f64::to_bits),
+        plan.initial_magnetization[0].map(f64::to_bits),
+        "the frozen cell must remain bitwise equal to its captured reference"
+    );
+    assert_ne!(
+        result.result.final_magnetization[1]
+            .map(f64::to_bits),
+        plan.initial_magnetization[1].map(f64::to_bits),
+        "the free exchange neighbour must still evolve"
+    );
+}
+
+#[test]
+fn frozen_spins_fdm_cpu_keeps_pinned_source_in_exchange_and_demag() {
+    let mut plan = frozen_two_cell_plan();
+    plan.enable_demag = true;
+    let result = execute_reference_fdm(&plan, 1e-14, &[], None, None)
+        .expect("frozen exchange-demag reference run should succeed");
+
+    assert_eq!(
+        result.result.final_magnetization[0]
+            .map(f64::to_bits),
+        plan.initial_magnetization[0].map(f64::to_bits),
+        "a frozen source must stay fixed while remaining present in field assembly"
+    );
+    assert_ne!(
+        result.result.final_magnetization[1]
+            .map(f64::to_bits),
+        plan.initial_magnetization[1].map(f64::to_bits),
+        "demag/exchange from the frozen neighbour must drive the free cell"
+    );
+}
+
+#[test]
+fn frozen_spins_fdm_cpu_masks_stt_sot_and_thermal_rhs() {
+    let mut plan = frozen_two_cell_plan();
+    plan.current_density = Some([1.0e12, 0.0, 0.0]);
+    plan.stt_degree = Some(0.5);
+    plan.stt_beta = Some(0.1);
+    plan.sot_current_density = Some(1.0e11);
+    plan.sot_xi_dl = Some(0.1);
+    plan.sot_xi_fl = Some(0.05);
+    plan.sot_sigma = Some([0.0, 1.0, 0.0]);
+    plan.sot_thickness = Some(2.0e-9);
+    plan.sot_active_mask = Some(vec![true, true]);
+    plan.temperature = Some(300.0);
+    plan.thermal_seed_config = Some(fullmag_ir::ThermalSeedConfig { seed: Some(7) });
+
+    let result = execute_reference_fdm(&plan, 1e-14, &[], None, None)
+        .expect("frozen STT/SOT/thermal reference run should succeed");
+
+    assert_eq!(
+        result.result.final_magnetization[0]
+            .map(f64::to_bits),
+        plan.initial_magnetization[0].map(f64::to_bits),
+        "final RHS masking must suppress every torque source on a frozen cell"
+    );
+}
+
+#[test]
+fn frozen_spins_fdm_cpu_all_frozen_completes_without_integrator_steps() {
+    let mut plan = frozen_two_cell_plan();
+    plan.frozen_spins = Some(resolved_frozen_spins(vec![true, true]));
+    plan.external_field = Some([0.0, 0.0, 8.0e5]);
+    let result = execute_reference_fdm(&plan, 1e-14, &[], None, None)
+        .expect("all-frozen reference run should succeed");
+
+    assert!(
+        result.result.steps.iter().all(|step| step.step == 0),
+        "all-frozen execution must not enter an integrator step"
+    );
+    assert_eq!(
+        result.result.final_magnetization,
+        plan.initial_magnetization,
+        "all-frozen execution must preserve the whole captured state"
+    );
 }
 
 fn cpu_fft_env_lock() -> std::sync::MutexGuard<'static, ()> {

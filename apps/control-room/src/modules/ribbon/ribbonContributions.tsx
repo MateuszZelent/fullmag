@@ -128,6 +128,7 @@ import {
 import {
   RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
   RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
+  RIBBON_PHYSICS_CREATE_FROZEN_SPINS_COMMAND,
   RIBBON_PHYSICS_CREATE_SPIN_INTERFACE_COMMAND,
   RIBBON_PHYSICS_CREATE_SPIN_TRANSPORT_COMMAND,
   RIBBON_SELECTION_FOCUS_AIRBOX_COMMAND,
@@ -161,7 +162,6 @@ type SliceRenderMode = VisualizationStateResource["slice"]["render_mode"];
 import {
   homeTab,
   viewTab,
-  QUANTITY_ITEMS,
   SURFACE_COLOR_SOURCE_ITEMS,
   MESH_RENDER_ITEMS,
   VECTOR_COLOR_ITEMS,
@@ -496,6 +496,14 @@ const physicsTab: RibbonTabContent = {
       subtitle: "add physics",
       tone: "compose",
       actions: [
+        {
+          id: "physics-add-frozen-spins",
+          icon: icon(Magnet),
+          label: "Frozen Spins",
+          commandId: RIBBON_PHYSICS_CREATE_FROZEN_SPINS_COMMAND,
+          iconColor: "text-amber-400",
+          tooltip: "Freeze the selected ferromagnet or region",
+        },
         { id: "physics-add-dmi", icon: icon(Sparkles), label: "DMI",         disabled: true, iconColor: "text-cyan-400",  menu: radioMenu("physics-dmi-type", "DMI type", "bulk", [["bulk", "Bulk DMI"], ["interfacial", "Interfacial DMI"]]) },
         { id: "physics-add-ku",  icon: icon(Binary),   label: "Uniaxial Ku", disabled: true, iconColor: "text-rose-400" },
       ],
@@ -2208,13 +2216,6 @@ function activeCommandValue(
   )?.[1] ?? null;
 }
 
-function quantityLabel(quantityId: string): string {
-  return (
-    QUANTITY_ITEMS.find((item) => item.value === quantityId)?.label ??
-    quantityId
-  );
-}
-
 function surfaceColorSourceLabel(source: SurfaceColorSource): string {
   return (
     SURFACE_COLOR_SOURCE_ITEMS.find((item) => item.value === source)?.label ??
@@ -2409,6 +2410,15 @@ function buildQuantityAction(
   const colormap = state?.quantity?.colormap ?? state?.colormap ?? "viridis";
   const vectorColorMode =
     state?.vector_style?.color_mode ?? "orientation";
+  const quantityItems = quantityItemsForVisualizationTarget(
+    activeQuantityId,
+    undefined,
+    context.fieldCatalog,
+    context.quantityCatalog,
+  );
+  const activeQuantityLabel =
+    quantityItems.find((item) => item.value === activeQuantityId)?.label ??
+    activeQuantityId;
   return {
     id: "view-quantity",
     icon: icon(hasMixedTargetQuantities ? AlertTriangle : Sigma),
@@ -2421,7 +2431,7 @@ function buildQuantityAction(
         type: "status",
         id: "quantity:current",
         label: "Current",
-        value: quantityLabel(activeQuantityId),
+        value: activeQuantityLabel,
       },
       ...(hasMixedTargetQuantities
         ? [
@@ -2454,7 +2464,7 @@ function buildQuantityAction(
         id: "quantity:source",
         label: "Quantity source",
         value: activeQuantityId,
-        items: QUANTITY_ITEMS,
+        items: quantityItems,
         disabled: !context.api,
         commandId: RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
         commandInput: (value: string) =>

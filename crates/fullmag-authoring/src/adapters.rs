@@ -74,6 +74,8 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
         monitors: crate::SceneMonitorState {
             planar: builder.planar_monitors.clone(),
         },
+        selections: Vec::new(),
+        magnetization_constraints: Vec::new(),
         current_modules: SceneCurrentModulesState {
             modules: builder.current_modules.clone(),
             excitation_analysis: builder.excitation_analysis.clone(),
@@ -429,6 +431,8 @@ pub fn scene_document_to_script_builder_overrides(
             .map(|coupling| serde_json::to_value(coupling).unwrap_or(Value::Null))
             .collect::<Vec<_>>(),
         "planar_monitors": builder.planar_monitors,
+        "selections": scene.selections,
+        "magnetization_constraints": scene.magnetization_constraints,
         "current_modules": builder.current_modules.iter().map(|module| serde_json::json!({
             "kind": module.kind,
             "name": module.name,

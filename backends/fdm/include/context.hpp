@@ -198,11 +198,13 @@ struct Context {
     bool enable_demag = false;
     bool has_external_field = false;
     bool has_active_mask = false;
+    bool has_frozen_mask = false;
     bool has_region_mask = false;
     bool has_demag_tensor_kernel = false;
     bool thin_film_2d_demag = false;
     double external_field[3] = {0.0, 0.0, 0.0};
     uint64_t active_cell_count = 0;
+    uint64_t frozen_cell_count = 0;
 
     // Uniaxial Anisotropy
     bool has_uniaxial_anisotropy = false;
@@ -331,6 +333,12 @@ struct Context {
 
     // Device state (SoA layout)
     DeviceVectorField m;      // magnetization
+    // Device-resident Frozen Spins payload. The mask is consumed by every
+    // LLG RHS kernel after all physical torque sources have been assembled;
+    // the reference is retained for exact accepted-state restore/checkpoint
+    // handling without a host round-trip.
+    uint8_t *frozen_mask = nullptr;
+    DeviceVectorField frozen_reference;
     DeviceVectorField h_ex;   // exchange field
     DeviceVectorField h_demag;// demag field
     // Full-domain observable demag field. Unlike h_demag, this is never
@@ -595,6 +603,8 @@ void release_async_preview_snapshot_pool_slot(
 /// Passed by value to CUDA kernels so they don't need host-side Context access.
 struct SttParams {
     const uint8_t *active_mask = nullptr;
+    const uint8_t *frozen_mask = nullptr;
+    int     has_frozen_mask     = 0;
     int     has_zhang_li_stt    = 0;
     double  current_density_x   = 0.0;
     double  current_density_y   = 0.0;
@@ -656,6 +666,8 @@ inline double oersted_field_scale(const Context &ctx, double evaluation_time) {
 inline SttParams stt_params_from_ctx(const Context &ctx) {
     SttParams p;
     p.active_mask = ctx.active_mask;
+    p.frozen_mask = ctx.frozen_mask;
+    p.has_frozen_mask = ctx.has_frozen_mask ? 1 : 0;
     p.has_zhang_li_stt  = ctx.has_zhang_li_stt  ? 1 : 0;
     p.current_density_x = ctx.current_density_x;
     p.current_density_y = ctx.current_density_y;
@@ -887,6 +899,16 @@ bool context_upload_layer_magnetization_f32(
 
 /// Upload active cell mask (host u8 -> device u8).
 bool context_upload_active_mask(Context &ctx, const uint8_t *mask, uint64_t len);
+
+/// Upload the Frozen Spins mask and activation reference. The reference is
+/// supplied as AoS f64 host storage and converted to the selected device
+/// precision for the resident checkpoint/restore buffer.
+bool context_upload_frozen_spins(
+    Context &ctx,
+    const uint8_t *mask,
+    uint64_t mask_len,
+    const double *reference_xyz,
+    uint64_t reference_len);
 
 /// Upload prescribed-SOT target mask (host u8 -> device u8).
 bool context_upload_sot_active_mask(Context &ctx, const uint8_t *mask, uint64_t len);

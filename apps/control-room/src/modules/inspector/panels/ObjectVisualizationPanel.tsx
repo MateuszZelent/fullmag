@@ -107,10 +107,10 @@ import {
   targetFieldCarrierDescriptorFromDebugSnapshots,
   resolveVisualizationTargetMutationStatus,
   resolvePendingVisualizationFields,
+  resolveVisualizationPanelIdentityKey,
   shouldLoadObjectVisualizationFieldCatalog,
   shouldShowPrimitiveDisplayToggle,
   queueTargetVectorVisibilityPatch,
-  resolveObjectVisualizationPanelTarget,
   resolveSelectedTargetVectorMeshPartRows,
   resolveObjectVisualizationPanelSelectionTarget,
   visualizationOverrideStateLabel,
@@ -405,17 +405,6 @@ function useObjectVisualizationPanelState(
       }
     }
 
-    for (const part of manifest.data?.mesh_parts ?? []) {
-      if (isVisualizationAirboxIdentity(part)) continue;
-      targets.push(
-        resolveObjectVisualizationPanelTarget({
-          part,
-          sceneObjectIds,
-          visualizationState: displayVisualizationState,
-        }),
-      );
-    }
-
     if (resolvedTarget?.kind === "object") {
       targets.push(...childRegionTargets);
     }
@@ -423,12 +412,9 @@ function useObjectVisualizationPanelState(
     return targets;
   }, [
     childRegionTargets,
-    manifest.data?.mesh_parts,
-    sceneObjectIds,
     selection.label,
     selection.objectId,
     resolvedTarget,
-    displayVisualizationState,
   ]);
   const selectPanelSnapshot = useCallback(
     (snapshot: ObjectVisualizationSnapshot) =>
@@ -696,11 +682,15 @@ function useObjectVisualizationPanelState(
         return;
       }
 
-      visualizationSync.queuePatch(statePatch, [targetKey ?? visualizationTargetKey(resolvedTarget)]);
+      const receipt = visualizationSync.queuePatch(
+        statePatch,
+        [targetKey ?? visualizationTargetKey(resolvedTarget)],
+      );
       visualization.patchTargetPending(
         resolvedTarget,
         persistentVisualizationTargetPatch(patchValue),
         visualizationState.rawData?.revision ?? visualizationState.data?.revision ?? 0,
+        receipt.transactionId,
       );
       setFeedback(null);
       return;
@@ -722,7 +712,7 @@ function useObjectVisualizationPanelState(
           remotePatch,
         );
       }
-      visualizationSync.queuePatch(
+      const receipt = visualizationSync.queuePatch(
         {
           overrides,
         },
@@ -735,6 +725,7 @@ function useObjectVisualizationPanelState(
           patchTarget,
           remotePatch,
           visualizationState.rawData?.revision ?? visualizationState.data?.revision ?? 0,
+          receipt.transactionId,
         );
       }
     }
@@ -1082,6 +1073,7 @@ function useObjectVisualizationPanelState(
     settings: panelSettings,
     target: resolvedTarget,
     targetFieldAvailability,
+    carrierIdentity: vectorCapacity?.carrierId ?? targetFieldCarrier?.carrierId ?? null,
     setPatchChildRegions,
     primitiveDisplayToggleVisible,
     vectorBudgetRange,
@@ -1134,11 +1126,13 @@ export function VisualizationTargetInspectorPanel({
 }: InspectorPanelProps & { owner: VisualizationInspectorOwner }) {
   const panel = useObjectVisualizationPanelState(selection);
   const {
+    carrierIdentity,
     displaySettings,
     planarVisualizationState,
     settings,
     target,
     visualizationBaselineReady,
+    vectorTopologyHash,
   } = panel;
   const resolvedPanel =
     target && settings && displaySettings
@@ -1162,9 +1156,12 @@ export function VisualizationTargetInspectorPanel({
         : next,
     null,
   );
-  const panelIdentityKey = targetId && panel.sessionIdentityKey
-    ? `${targetId}\u0000${panel.sessionIdentityKey}\u0000${panel.vectorTopologyHash ?? "topology:none"}`
-    : null;
+  const panelIdentityKey = resolveVisualizationPanelIdentityKey({
+    carrierFingerprint: carrierIdentity,
+    sessionIdentityKey: panel.sessionIdentityKey,
+    targetId,
+    topologyHash: vectorTopologyHash,
+  });
   useEffect(() => {
     if (visualizationBaselineReady && resolvedPanel && targetId && panelIdentityKey) {
       retainLastGoodPanel({
@@ -1533,7 +1530,6 @@ function ObjectVisualizationPanelView({
         onReset={() => void resetTarget()}
         onResetChildRegions={() => void resetChildRegionTargets()}
         onRetry={() => void panel.retryRejectedMutation()}
-        pending={pending}
         childRegionPending={childRegionPending}
         resetLabel={visualizationResetActionLabel(target.kind)}
       />

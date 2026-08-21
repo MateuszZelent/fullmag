@@ -56,6 +56,8 @@ import {
   resolveVisualizationVectorBudgetValues,
   resolveVisualizationTargetMutationStatus,
   resolvePendingVisualizationFields,
+  resolveVisualizationPanelIdentityKey,
+  resolvePendingVisualizationFieldKeys,
   resolveVisualizationVectorScopeForTarget,
   shouldShowPrimitiveDisplayToggle,
   shouldLoadObjectVisualizationFieldCatalog,
@@ -649,8 +651,18 @@ describe("ObjectVisualizationPanelModel", () => {
     const controller = new ObjectVisualizationController();
     const film = { id: "object:film", kind: "object" as const };
     const other = { id: "object:other", kind: "object" as const };
-    controller.patchTargetPending(film, { surfaceColorSource: "component_x" }, 7);
-    controller.patchTargetPending(other, { vectorsVisible: true }, 7);
+    controller.patchTargetPending(
+      film,
+      { surfaceColorSource: "component_x" },
+      7,
+      "tx-film",
+    );
+    controller.patchTargetPending(
+      other,
+      { vectorsVisible: true },
+      7,
+      "tx-other",
+    );
 
     expect(
       [...resolvePendingVisualizationFields({
@@ -658,6 +670,54 @@ describe("ObjectVisualizationPanelModel", () => {
         targetIds: ["object:film"],
       })],
     ).toEqual(["surfaceColorSource"]);
+    expect(controller.getSnapshot().pendingOverrides?.["object:film"]?.transactionId).toBe(
+      "tx-film",
+    );
+  });
+
+  it("keys pending controls by target, field, and transaction", () => {
+    expect(
+      resolvePendingVisualizationFieldKeys({
+        patch: { surfaceColorSource: "component_x", vectorsVisible: true },
+        targetId: "object:film",
+        transactionId: "tx-42",
+      }),
+    ).toEqual(
+      new Set([
+        "object:film\u0000surfaceColorSource\u0000tx-42",
+        "object:film\u0000vectorsVisible\u0000tx-42",
+      ]),
+    );
+  });
+
+  it("keeps a distinct transaction identity for each batched pending field", () => {
+    const controller = new ObjectVisualizationController();
+    const film = { id: "object:film", kind: "object" as const };
+
+    controller.patchTargetPending(film, { surfaceColorSource: "component_x" }, 7, "tx-1");
+    controller.patchTargetPending(film, { vectorsVisible: true }, 7, "tx-2");
+
+    expect(controller.getSnapshot().pendingOverrides?.["object:film"]?.fieldTransactionIds).toEqual({
+      surfaceColorSource: "tx-1",
+      vectorsVisible: "tx-2",
+    });
+  });
+
+  it("does not retain a last-good panel when the carrier identity changes", () => {
+    const baseline = resolveVisualizationPanelIdentityKey({
+      carrierFingerprint: "carrier:film-a",
+      sessionIdentityKey: "session-1\u00001",
+      targetId: "object:film",
+      topologyHash: "topology-7",
+    });
+    const changedCarrier = resolveVisualizationPanelIdentityKey({
+      carrierFingerprint: "carrier:film-b",
+      sessionIdentityKey: "session-1\u00001",
+      targetId: "object:film",
+      topologyHash: "topology-7",
+    });
+
+    expect(baseline).not.toBe(changedCarrier);
   });
 
   it("keeps accounting stale when the current target identity changes", () => {
@@ -1773,6 +1833,7 @@ describe("ObjectVisualizationPanelModel", () => {
               baseRevision: 4,
               patch: { vectorsVisible: false },
               target: { id: "region:object-a:core", kind: "region" },
+              transactionId: "tx-region-vectors",
             },
           },
         },
@@ -1936,7 +1997,7 @@ describe("ObjectVisualizationPanelModel", () => {
       queueTargetVectorVisibilityPatch({
         controller,
         state,
-        sync: { queuePatch: (patch) => queuedPatches.push(patch) },
+        sync: { queuePatch: (patch) => { queuedPatches.push(patch); return { transactionId: "test-region" }; } },
         target,
         visible: false,
       }),
@@ -1967,7 +2028,7 @@ describe("ObjectVisualizationPanelModel", () => {
       queueTargetVectorVisibilityPatch({
         controller,
         state,
-        sync: { queuePatch: (patch) => queuedPatches.push(patch) },
+        sync: { queuePatch: (patch) => { queuedPatches.push(patch); return { transactionId: "test-target" }; } },
         target,
         visible: false,
       }),
@@ -2779,7 +2840,7 @@ describe("ObjectVisualizationPanelModel", () => {
       part: { id: "part-film", object_id: "projection-film" } as MeshPart,
       sceneObjectIds: new Set(["projection-film"]),
       state: state as never,
-      sync: { queuePatch: (patch) => queuedPatches.push(patch) },
+      sync: { queuePatch: (patch) => { queuedPatches.push(patch); return { transactionId: "test-part" }; } },
       visible: false,
     });
 

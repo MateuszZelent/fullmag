@@ -2,10 +2,14 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+const targetSectionSource = readFileSync(
+  join(process.cwd(), "src/modules/inspector/panels/ObjectVisualizationTargetSection.tsx"),
+  "utf8",
+);
 const panelSource =
   readFileSync(join(process.cwd(), "src/modules/inspector/panels/ObjectVisualizationPanel.tsx"), "utf8") +
   readFileSync(join(process.cwd(), "src/modules/inspector/panels/ObjectVisualizationHelpers.ts"), "utf8") +
-  readFileSync(join(process.cwd(), "src/modules/inspector/panels/ObjectVisualizationTargetSection.tsx"), "utf8");
+  targetSectionSource;
 const visualizationCss = readFileSync(
   join(process.cwd(), "src/design/styles/inspector-visualization.css"),
   "utf8",
@@ -37,6 +41,17 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).toContain("lastGoodPanel");
     expect(panelSource).toContain("lastGoodPanel?.identityKey === panelIdentityKey");
     expect(panelSource).toContain("retainLastGoodPanel");
+    expect(panelSource).toContain("resolveVisualizationPanelIdentityKey");
+    expect(panelSource).toContain("carrierIdentity");
+  });
+
+  it("updates last-good Inspector state after render, not while rendering", () => {
+    const effectStart = panelSource.indexOf("  useEffect(() => {");
+    const retainCall = panelSource.indexOf("retainLastGoodPanel({");
+
+    expect(effectStart).toBeGreaterThanOrEqual(0);
+    expect(retainCall).toBeGreaterThan(effectStart);
+    expect(panelSource.slice(0, effectStart)).not.toContain("retainLastGoodPanel({");
   });
 
   it("keeps the active surface-color control focusable while its patch is pending", () => {
@@ -116,6 +131,12 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).not.toContain("useObjectVisualizationRegistry()");
   });
 
+  it("does not add every manifest part to the selected Inspector snapshot", () => {
+    expect(panelSource).not.toContain(
+      "for (const part of manifest.data?.mesh_parts ?? [])",
+    );
+  });
+
   it("keeps ordinary visualization controls independent from opt-in Debug demand", () => {
     expect(panelSource).not.toContain("useVisualizationDebugSnapshots");
     expect(panelSource).not.toContain("kernel.visualizationDebug.request");
@@ -167,9 +188,9 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).toContain('ariaLabel: "Toggle target visibility"');
     expect(panelSource).not.toContain('aria-label="Toggle surface shading"');
     expect(panelSource).not.toContain('aria-label="Toggle wireframe overlay"');
-    expect(panelSource).toContain("disabled={pending}");
+    expect(panelSource).not.toContain("disabled={pending}");
     expect(panelSource).toContain("resetLabel={visualizationResetActionLabel(target.kind)}");
-    expect(panelSource).toContain("disabled={pending}");
+    expect(targetSectionSource).not.toContain("disabled={pending}");
   });
 
   it("renders target quantity selection inside the visualization inspector", () => {

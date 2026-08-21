@@ -178,25 +178,37 @@ function checkRuntimeComputeAcceptanceInvalidations() {
 }
 
 function checkLegacyWebPathGovernance() {
-  const legacyPathPattern = /apps\/web/g;
+  failures.push(...findLegacyRuntimePathFailures(repoRoot));
+}
+
+// Runtime guard covers apps/web and apps/legacy_web, never documentation or ADRs.
+export function findLegacyRuntimePathFailures(root) {
+  const legacyPathPattern = /apps\/(?:web|legacy_web)/g;
   const activeFiles = [
-    "AGENTS.md",
     "package.json",
     ".github/workflows/bootstrap.yml",
     "scripts/dev-control-room.sh",
     "scripts/stop-control-room.sh",
     "scripts/build_desktop_linux_container.sh",
     "scripts/windows/build_windows_msi.ps1",
+    "crates/fullmag-cli/src/control_room.rs",
   ];
 
+  const failuresForRoot = [];
   for (const relativePath of activeFiles) {
-    const fullPath = path.join(repoRoot, relativePath);
+    const fullPath = path.join(root, relativePath);
     if (!existsSync(fullPath)) continue;
     const content = readFileSync(fullPath, "utf8");
-    if (legacyPathPattern.test(content)) {
-      failures.push(`${relativePath} still references apps/web.`);
+    const legacyPaths = new Set(
+      [...content.matchAll(legacyPathPattern)].map(([match]) => match),
+    );
+    for (const legacyPath of legacyPaths) {
+      failuresForRoot.push(
+        `${relativePath} still references legacy frontend runtime path "${legacyPath}".`,
+      );
     }
   }
+  return failuresForRoot;
 }
 
 function extractCommandContributionBlock(content, commandId) {

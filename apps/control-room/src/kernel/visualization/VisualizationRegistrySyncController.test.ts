@@ -600,6 +600,34 @@ describe("VisualizationRegistrySyncController", () => {
     expect(controller.getSnapshot().mutation?.status).toBe("succeeded");
   });
 
+  it("preserves the successful PATCH response request id with its revision and receipt", async () => {
+    const patchWithResponseIdentity = vi.fn(async () => ({
+      data: visualizationState(42),
+      requestId: "patch-response-42",
+    }));
+    const controller = new VisualizationRegistrySyncController({
+      api: {
+        patch: vi.fn(async () => visualizationState(42)),
+        patchWithResponseIdentity,
+      },
+      retryBaseDelayMs: 0,
+    });
+    const receipt = controller.queuePatch(
+      { layers: { vectors: { visible: true } } },
+      ["object:film"],
+    );
+
+    await controller.flushNow();
+
+    expect(patchWithResponseIdentity).toHaveBeenCalledTimes(1);
+    expect(controller.getSnapshot().mutation).toMatchObject({
+      requestId: "patch-response-42",
+      responseRevision: 42,
+      status: "succeeded",
+      transactionIds: [receipt.transactionId],
+    });
+  });
+
   it("retains interleaved optimistic target overrides by scope identity", () => {
     const { controller } = createController({ now: () => 0 });
     const remote = visualizationState(10);
@@ -844,7 +872,7 @@ describe("VisualizationRegistrySyncController", () => {
       retryBaseDelayMs: 0,
     });
     controller.observeRemoteState(visualizationState(7));
-    controller.queuePatch(
+    const receipt = controller.queuePatch(
       {
         overrides: [
           {
@@ -866,9 +894,10 @@ describe("VisualizationRegistrySyncController", () => {
       },
       rejectedTargetIds: ["fdm-universe-outside-support"],
     });
-    expect(onRejectedTargetPatches).toHaveBeenCalledWith([
-      "fdm-universe-outside-support",
-    ]);
+    expect(onRejectedTargetPatches).toHaveBeenCalledWith(
+      ["fdm-universe-outside-support"],
+      [receipt.transactionId],
+    );
   });
 
   it("flushes FDM target overrides through the versioned visualization resource", async () => {

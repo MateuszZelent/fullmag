@@ -1453,6 +1453,20 @@ void publish_accepted_gradient_completion(
 {
     if (std::isfinite(accepted_gradient_norm_sq) &&
         accepted_gradient_norm_sq == 0.0) {
+        if (ctx.stage_completion.relax_stop.has_torque_tolerance_apm != 0 ||
+            ctx.stage_completion.relax_stop.has_energy_tolerance_j != 0) {
+            if (relaxation_degenerate_gradient_requires_stagnation(
+                    ctx,
+                    ctx.relaxation.cached_current_stats.max_torque_Apm)) {
+                set_stage_completion(
+                    ctx,
+                    FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT,
+                    "numerical_stagnation",
+                    1.0,
+                    0.0);
+            }
+            return;
+        }
         set_stage_completion(
             ctx,
             FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT,
@@ -1471,12 +1485,23 @@ void finish_degenerate_gradient_relaxation_step(
     out_stats = current_stats;
     out_stats.dt_seconds = 0.0;
     out_stats.max_rhs_amplitude = 0.0;
-    set_stage_completion(
-        ctx,
-        FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT,
-        "tangent_gradient_norm_sq",
-        gradient_norm_sq,
-        0.0);
+    if (relaxation_degenerate_gradient_requires_stagnation(
+            ctx,
+            current_stats.max_torque_Apm)) {
+        set_stage_completion(
+            ctx,
+            FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT,
+            "numerical_stagnation",
+            1.0,
+            0.0);
+    } else if (ctx.stage_completion.relax_stop.has_torque_tolerance_apm == 0) {
+        set_stage_completion(
+            ctx,
+            FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT,
+            "tangent_gradient_norm_sq",
+            gradient_norm_sq,
+            0.0);
+    }
 }
 
 } // namespace fullmag::fem::relaxation

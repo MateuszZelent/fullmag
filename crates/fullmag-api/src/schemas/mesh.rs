@@ -848,7 +848,10 @@ impl From<&FemMeshObjectSegment> for MeshObjectSegmentResource {
     fn from(value: &FemMeshObjectSegment) -> Self {
         let segment_fingerprint = mesh_object_segment_fingerprint(value);
         Self {
-            segment_id: Some(format!("segment:{}:{}", value.object_id, segment_fingerprint)),
+            segment_id: Some(format!(
+                "segment:{}:{}",
+                value.object_id, segment_fingerprint
+            )),
             segment_fingerprint: Some(segment_fingerprint),
             diagnostic_only: Some(true),
             object_id: value.object_id.clone(),

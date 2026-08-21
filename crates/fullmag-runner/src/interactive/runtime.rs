@@ -15,7 +15,7 @@ use super::display::{DisplayKind, DisplayPayload, DisplaySelection, DisplaySelec
 
 pub(crate) fn build_atomic_terminal_update(
     backend: &mut dyn InteractiveBackend,
-    _plan: &ExecutionPlanIR,
+    plan: &ExecutionPlanIR,
     display_revision: u64,
     executed: &ExecutedRun,
 ) -> Result<Option<StepUpdate>, RunError> {
@@ -46,7 +46,8 @@ pub(crate) fn build_atomic_terminal_update(
             auto_scale_enabled: false,
             max_points: 0,
         };
-        let quantities = crate::quantities::field_materialization_quantity_ids();
+        let quantities = crate::ObservationProviderResolver::from_backend_plan(&plan.backend_plan)
+            .terminal_snapshot_quantity_ids();
         let mut fields = backend
             .snapshot_vector_fields(&quantities, &request)
             .map_err(|error| RunError {

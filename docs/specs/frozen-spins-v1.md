@@ -69,6 +69,7 @@ max_rhs_free
 max_rhs_all
 max_torque_free_Apm
 max_torque_all_Apm
+active_dof_count
 frozen_dof_count
 free_dof_count
 frozen_reference_max_drift
@@ -221,6 +222,7 @@ Gdy $U=\varnothing$, stage jest deterministycznym no-op:
   "converged": true,
   "stop_reason": "all_active_dofs_frozen",
   "executed_steps": 0,
+  "active_dof_count": 128,
   "free_dof_count": 0
 }
 ```
@@ -261,6 +263,9 @@ membership/reference/algorithm, zły rozmiar maski, resolved frozen DOF poza
 aktywną domeną, stale revision, activation-epoch mismatch, topology mismatch i
 drift powyżej kontraktu lane.
 
-Aktualny kod nie implementuje tego schematu. Status każdego lane pozostaje
+Authoring Python, typed IR oraz plannerowe kompilatory FDM/FEM implementują
+schemat selekcji, dense maskę i certyfikat resolved plan. Kompilator przyjmuje
+referencję jako zwalidowane wejście transakcji; backendy nie konsumują jeszcze
+tego planu i nie realizują constraintu. Status każdego lane pozostaje
 `UNQUALIFIED` do czasu przejścia macierzy
 `docs/validation/frozen-spins-qualification-matrix.md`.

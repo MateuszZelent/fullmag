@@ -269,6 +269,15 @@ __global__ void llg_rhs_fp64_kernel(
         rhs_z += sot.amp * (-sot.xi_dl * dl_z + sot.xi_fl * fl_z);
     }
 
+    // Frozen Spins is a post-assembly constraint: all LLG/STT/SOT sources
+    // above are evaluated normally, then the final RHS is projected to zero.
+    // Because every explicit stage uses this kernel, candidate states retain
+    // the activation reference without a host round-trip.
+    if (stt.has_frozen_mask && stt.frozen_mask[idx] != 0) {
+        rhs_x = 0.0;
+        rhs_y = 0.0;
+        rhs_z = 0.0;
+    }
     out_x[idx] = rhs_x;
     out_y[idx] = rhs_y;
     out_z[idx] = rhs_z;

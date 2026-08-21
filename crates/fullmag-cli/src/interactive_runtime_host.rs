@@ -445,9 +445,11 @@ impl InteractiveRuntimeHost {
         base_problem: ProblemIR,
         backend_plan: &BackendPlanIR,
     ) -> Self {
+        let provider_resolver =
+            fullmag_runner::ObservationProviderResolver::from_backend_plan(backend_plan);
         let dynamic_idle_preview_supported =
             supports_dynamic_idle_preview(&base_problem, backend_plan);
-        let multilayer_idle_snapshot = matches!(backend_plan, BackendPlanIR::FdmMultilayer(_));
+        let multilayer_idle_snapshot = provider_resolver.uses_deterministic_reconstruction();
         Self {
             control,
             preview_source: Arc::new(Mutex::new(InteractivePreviewSourceState {
@@ -457,7 +459,7 @@ impl InteractiveRuntimeHost {
             })),
             runtime: None,
             base_problem,
-            runtime_capable: supports_idle_interactive_runtime(backend_plan),
+            runtime_capable: provider_resolver.retains_idle_runtime(),
             dynamic_idle_preview_supported,
             multilayer_idle_snapshot,
         }
@@ -891,16 +893,6 @@ impl InteractiveRuntimeHost {
     }
 }
 
-fn supports_idle_interactive_runtime(backend_plan: &BackendPlanIR) -> bool {
-    match backend_plan {
-        BackendPlanIR::Fdm(_) => true,
-        BackendPlanIR::Fem(fem) => {
-            fem.domain_mesh_mode != FemDomainMeshModeIR::SharedDomainMeshWithAir
-        }
-        _ => false,
-    }
-}
-
 fn supports_dynamic_idle_preview(problem: &ProblemIR, backend_plan: &BackendPlanIR) -> bool {
     match backend_plan {
         BackendPlanIR::Fem(fem) => {
@@ -913,7 +905,11 @@ fn supports_dynamic_idle_preview(problem: &ProblemIR, backend_plan: &BackendPlan
         BackendPlanIR::FdmMultilayer(_) => fullmag_runner::resolve_runtime_engine(problem)
             .map(|runtime| runtime.accelerator == "cpu")
             .unwrap_or(false),
-        _ => supports_dynamic_live_preview(backend_plan),
+        _ => {
+            fullmag_runner::ObservationProviderResolver::from_backend_plan(backend_plan)
+                .retains_idle_runtime()
+                && supports_dynamic_live_preview(backend_plan)
+        }
     }
 }
 
@@ -1040,10 +1036,12 @@ fn apply_step_stats_to_idle_live_state(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_step_stats_to_idle_live_state, CurrentLiveControlState,
-        CurrentLiveDisplaySelectionHandle,
+        apply_step_stats_to_idle_live_state, scalar_row_from_stats, CurrentLiveControlState,
+        CurrentLiveDisplaySelectionHandle, InteractivePreviewStatus, InteractiveRuntimeHost,
     };
-    use crate::live_workspace::{bootstrap_live_state, LocalLiveWorkspaceState};
+    use crate::live_workspace::{
+        bootstrap_live_state, CurrentLivePublisher, LocalLiveWorkspace, LocalLiveWorkspaceState,
+    };
     use crate::types::{
         CurrentLiveLatestFields, CurrentLivePreviewFieldCache, RunManifest, SessionCommand,
         SessionManifest,
@@ -1159,6 +1157,111 @@ mod tests {
             stages: None,
             profile: None,
         }
+    }
+
+    fn test_control_handle() -> CurrentLiveDisplaySelectionHandle {
+        CurrentLiveDisplaySelectionHandle {
+            shared: Arc::new((
+                Mutex::new(CurrentLiveControlState {
+                    display_selection: Default::default(),
+                    queue: VecDeque::new(),
+                }),
+                Condvar::new(),
+            )),
+            stop: Arc::new(AtomicBool::new(false)),
+            running_interrupt: Arc::new(Mutex::new(None)),
+            running_interrupt_requested: Arc::new(AtomicBool::new(false)),
+            worker_owner: true,
+        }
+    }
+
+    fn retained_preview_field(quantity: &str) -> fullmag_runner::LivePreviewField {
+        fullmag_runner::LivePreviewField {
+            config_revision: 3,
+            source_step: 7,
+            source_time_seconds: Some(2.5e-12),
+            source_revision: 7,
+            materialized_at_unix_ms: 1,
+            materialization_wall_time_ns: 1,
+            quantity: quantity.to_string(),
+            unit: "A/m".to_string(),
+            spatial_kind: "grid".to_string(),
+            quantity_domain: "vector".to_string(),
+            preview_grid: [1, 1, 1],
+            original_grid: [1, 1, 1],
+            vector_field_values: vec![1.0, 0.0, 0.0],
+            x_chosen_size: 1,
+            y_chosen_size: 1,
+            applied_x_chosen_size: 1,
+            applied_y_chosen_size: 1,
+            applied_layer_stride: 1,
+            auto_downscaled: false,
+            auto_downscale_message: None,
+            active_mask: None,
+        }
+    }
+
+    #[test]
+    fn mark_closed_drops_provider_and_mutable_caches_but_retains_terminal_observations() {
+        let problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let plan = fullmag_plan::plan(&problem).expect("bootstrap problem should plan");
+        let mut host =
+            InteractiveRuntimeHost::new(test_control_handle(), problem.clone(), &plan.backend_plan);
+        host.runtime = Some(
+            fullmag_runner::create_interactive_runtime(&problem, None)
+                .expect("FDM interactive provider should initialize"),
+        );
+        {
+            let mut preview_source = host.preview_source.lock().expect("preview source lock");
+            preview_source.status = InteractivePreviewStatus::AwaitingCommand;
+            preview_source.continuation_magnetization = Some(vec![[1.0, 0.0, 0.0]]);
+            preview_source.generation = 11;
+        }
+
+        let mut state = workspace_state_for_energy_refresh();
+        state.latest_scalar_row = Some(scalar_row_from_stats(&StepStats {
+            step: 7,
+            time: 2.5e-12,
+            e_total: 3.0,
+            ..StepStats::default()
+        }));
+        state.latest_fields.insert(
+            "H_eff".to_string(),
+            serde_json::json!({ "values": [[1.0, 0.0, 0.0]] }),
+        );
+        let retained = retained_preview_field("H_eff");
+        state.preview_fields.insert(retained.clone());
+        state.pending_preview_fields.insert(retained.clone());
+        state.superseded_pending_preview_fields.push(retained);
+        state.preview_cache_revision = 5;
+        state.field_generation = Some(crate::types::CurrentLiveFieldGeneration {
+            run_id: "run-test".to_string(),
+            sequence: 2,
+        });
+        let publisher = CurrentLivePublisher::spawn_with_test_sink("session-test", |_, _| Ok(()));
+        let workspace = LocalLiveWorkspace::new(state, publisher);
+
+        host.mark_closed(&workspace);
+
+        assert!(host.runtime.is_none());
+        let preview_source = host.preview_source.lock().expect("preview source lock");
+        assert_eq!(preview_source.status, InteractivePreviewStatus::Closed);
+        assert!(preview_source.continuation_magnetization.is_none());
+        assert_eq!(preview_source.generation, 12);
+        drop(preview_source);
+
+        let closed = workspace.snapshot();
+        assert!(closed.preview_fields.is_empty());
+        assert!(closed.pending_preview_fields.is_empty());
+        assert!(closed.superseded_pending_preview_fields.is_empty());
+        assert!(closed.clear_preview_cache);
+        assert_eq!(closed.preview_cache_revision, 6);
+        assert!(closed.field_generation.is_none());
+        assert!(!closed.latest_fields.is_empty());
+        assert_eq!(
+            closed.latest_scalar_row.as_ref().map(|row| row.step),
+            Some(7)
+        );
     }
 
     #[test]

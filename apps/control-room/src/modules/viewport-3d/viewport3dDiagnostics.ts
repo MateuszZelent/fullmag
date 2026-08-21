@@ -6,6 +6,7 @@ import { useKernel } from "@/kernel/KernelContext";
 import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry";
 import {
   recordVisualizationDebugPerformanceMetric,
+  recordVisualizationDebugResourceCounts,
   recordVisualizationDebugViewportFrame,
 } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 import {
@@ -362,6 +363,13 @@ export class Viewport3DResourceTracker {
       textures: 0,
       workers: 0,
     };
+    recordVisualizationDebugResourceCounts({
+      geometries: 0,
+      materials: 0,
+      renderTargets: 0,
+      textures: 0,
+      workers: 0,
+    });
   }
 
   subscribe(listener: TrackerListener): () => void {

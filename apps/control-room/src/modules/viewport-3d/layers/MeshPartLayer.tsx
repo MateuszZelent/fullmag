@@ -14,6 +14,7 @@ import {
 } from "./viewport3DRenderPolicy";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
 import {
   viewport3DFieldColorLayersEnabledFromBrowserConfig,
   viewport3DVectorLayersEnabledFromBrowserConfig,
@@ -469,6 +470,7 @@ function scalarColorBufferMatchesRetainedSettings(
 export const MeshPartLayer = memo(function MeshPartLayer({
   adoptionRegistry,
   colors,
+  sessionIdentity,
   vectorColorMode,
   fieldModel,
   materialProfile,
@@ -483,6 +485,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
 }: {
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
   colors: Viewport3DColors;
+  sessionIdentity?: SessionResourceIdentity | null;
   vectorColorMode: string;
   fieldModel: Viewport3DFieldRenderModel | null;
   materialProfile: Viewport3DMaterialProfile;
@@ -763,6 +766,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       fieldBufferId: requestedFieldBufferId,
       ownerId: adoptionOwnerId,
       registry: adoptionRegistry,
+      sessionIdentity,
       scalarBuffer: adoptedScalarColors,
     });
     const replay = () => {
@@ -771,6 +775,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
         fieldBufferId: requestedFieldBufferId,
         ownerId: adoptionOwnerId,
         registry: adoptionRegistry,
+        sessionIdentity,
         scalarBuffer: adoptedScalarColors,
       });
     };
@@ -786,6 +791,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     meshQualityColors,
     part.id,
     requestedFieldBufferId,
+    sessionIdentity,
   ]);
 
   const materialRef = useRef<MeshBasicMaterial>(null);
@@ -977,6 +983,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
           opacity={renderPlan.vectors.opacity}
           segments={vectorLayerInput.segments}
           fieldBufferId={requestedFieldBufferId}
+          sessionIdentity={sessionIdentity}
           style={vectorStyleFromSettings(renderSettings, vectorStyle)}
           tracker={tracker}
         />
@@ -999,12 +1006,14 @@ export function recordMeshPartSurfaceAdoption({
   fieldBufferId,
   ownerId,
   registry,
+  sessionIdentity,
   scalarBuffer,
 }: {
   carrierId: string;
   fieldBufferId: string | null;
   ownerId?: string;
   registry: Viewport3DRenderAdoptionRegistry;
+  sessionIdentity?: SessionResourceIdentity | null;
   scalarBuffer: ScalarColorBuffer;
 }): Viewport3DRenderAdoptionIdentity {
   const adoption = {
@@ -1021,6 +1030,7 @@ export function recordMeshPartSurfaceAdoption({
       (scalarBuffer.scalarValues?.byteLength ?? 0),
     ownerId,
     ...adoption,
+    sessionIdentity,
   });
   return adoption;
 }

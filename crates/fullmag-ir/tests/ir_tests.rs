@@ -7368,6 +7368,348 @@ fn selection_context_validates_object_region_and_frame_references() {
     assert!(errors.contains("selection_unknown_region"));
 }
 
+fn frozen_spins_problem_value() -> serde_json::Value {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value["magnets"][0]["object_id"] = serde_json::json!("strip_object");
+    value["object_regions"] = serde_json::json!([{
+        "region_id": "pinned_edge",
+        "owner_object": "strip_object",
+        "name": "Pinned edge",
+        "shape": {"kind": "box", "size": [1.0, 1.0, 1.0], "center": [0.0, 0.0, 0.0]},
+        "frame": "object",
+        "enabled": true,
+        "priority": 0,
+        "material_overrides": [],
+        "realization_policy": "inherit"
+    }]);
+    value["problem_meta"]["runtime_metadata"]["study_pipeline"] = serde_json::json!({
+        "version": "study_pipeline.v1",
+        "nodes": [
+            {"id": "relax", "stage_kind": "relax", "enabled": true, "payload": {}},
+            {"id": "run", "stage_kind": "run", "enabled": true, "payload": {}}
+        ]
+    });
+    value
+}
+
+#[test]
+fn frozen_spins_serde_normalizes_defaults_and_rejects_unknown_fields() {
+    let constraint: MagnetizationConstraintIR = serde_json::from_value(serde_json::json!({
+        "kind": "frozen_spins",
+        "schema_version": "frozen_spins.v1",
+        "id": "pinned",
+        "name": "Pinned",
+        "selector": {"kind": "in_object", "object_id": "strip_object"}
+    }))
+    .expect("minimal frozen-spins payload should apply canonical defaults");
+    assert_eq!(
+        serde_json::to_value(constraint).unwrap(),
+        serde_json::json!({
+            "kind": "frozen_spins",
+            "schema_version": "frozen_spins.v1",
+            "id": "pinned",
+            "name": "Pinned",
+            "enabled": true,
+            "selector": {"kind": "in_object", "object_id": "strip_object"},
+            "reference": {"kind": "capture_current_at_activation"},
+            "membership": {"kind": "static"},
+            "activation": {"kind": "all_stages"},
+            "empty_selection": "error",
+            "inactive_selection": "warn_and_intersect"
+        })
+    );
+
+    let state_dependent: MagnetizationConstraintIR = serde_json::from_value(serde_json::json!({
+        "kind": "frozen_spins",
+        "schema_version": "frozen_spins.v1",
+        "id": "positive_z",
+        "name": "Positive z",
+        "selector": {
+            "kind": "compare",
+            "lhs": {"kind": "magnetization_component", "component": "z"},
+            "op": "gt",
+            "rhs": {"kind": "constant", "value": 0.5}
+        }
+    }))
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(state_dependent).unwrap()["membership"],
+        serde_json::json!({"kind": "snapshot_at_activation"})
+    );
+
+    let error = serde_json::from_value::<MagnetizationConstraintIR>(serde_json::json!({
+        "kind": "frozen_spins",
+        "schema_version": "frozen_spins.v1",
+        "id": "pinned",
+        "name": "Pinned",
+        "selector": {"kind": "all_magnetic"},
+        "backend_mask": true
+    }))
+    .expect_err("unknown frozen-spins fields must fail closed");
+    assert!(error.to_string().contains("unknown field"));
+}
+
+#[test]
+fn frozen_spins_problem_validation_rejects_missing_references_and_duplicates() {
+    let canonical = serde_json::json!({
+        "kind": "frozen_spins",
+        "schema_version": "frozen_spins.v1",
+        "id": "pinned",
+        "name": "Pinned",
+        "enabled": true,
+        "selector": {
+            "kind": "in_region",
+            "object_id": "strip_object",
+            "region_id": "pinned_edge"
+        },
+        "reference": {"kind": "capture_current_at_activation"},
+        "membership": {"kind": "static"},
+        "activation": {"kind": "stage_ids", "stage_ids": ["relax"]},
+        "empty_selection": "error",
+        "inactive_selection": "warn_and_intersect"
+    });
+    let mut value = frozen_spins_problem_value();
+    value["magnetization_constraints"] = serde_json::json!([canonical]);
+    let problem: ProblemIR = serde_json::from_value(value).unwrap();
+    problem
+        .validate()
+        .expect("known object, region, and stage are valid");
+
+    for (label, mutate, expected) in [
+        (
+            "object",
+            ("selector", "object_id", "missing"),
+            "selection_unknown_object",
+        ),
+        (
+            "region",
+            ("selector", "region_id", "missing"),
+            "selection_unknown_region",
+        ),
+        (
+            "stage",
+            ("activation", "stage_ids", "missing"),
+            "activation stage id 'missing' does not exist",
+        ),
+    ] {
+        let mut value = frozen_spins_problem_value();
+        let mut constraint = canonical.clone();
+        if label == "stage" {
+            constraint[mutate.0][mutate.1] = serde_json::json!([mutate.2]);
+        } else {
+            constraint[mutate.0][mutate.1] = serde_json::json!(mutate.2);
+        }
+        value["magnetization_constraints"] = serde_json::json!([constraint]);
+        let errors = serde_json::from_value::<ProblemIR>(value)
+            .unwrap()
+            .validate()
+            .unwrap_err()
+            .join("\n");
+        assert!(errors.contains(expected), "{label}: {errors}");
+    }
+
+    let mut value = frozen_spins_problem_value();
+    value["magnetization_constraints"] = serde_json::json!([canonical.clone(), canonical]);
+    let errors = serde_json::from_value::<ProblemIR>(value)
+        .unwrap()
+        .validate()
+        .unwrap_err()
+        .join("\n");
+    assert!(errors.contains("duplicate") && errors.contains("pinned"));
+}
+
+#[test]
+fn frozen_spins_rejects_static_state_membership_but_defers_overlap_values_to_runtime() {
+    let state_selector = serde_json::json!({
+        "kind": "compare",
+        "lhs": {"kind": "magnetization_component", "component": "z"},
+        "op": "gt",
+        "rhs": {"kind": "constant", "value": 0.5}
+    });
+    let mut value = frozen_spins_problem_value();
+    value["magnetization_constraints"] = serde_json::json!([{
+        "kind": "frozen_spins", "schema_version": "frozen_spins.v1",
+        "id": "illegal_static", "name": "Illegal static", "enabled": true,
+        "selector": state_selector, "reference": {"kind": "initial_state"},
+        "membership": {"kind": "static"}, "activation": {"kind": "all_stages"},
+        "empty_selection": "error", "inactive_selection": "warn_and_intersect"
+    }]);
+    let errors = serde_json::from_value::<ProblemIR>(value)
+        .unwrap()
+        .validate()
+        .unwrap_err()
+        .join("\n");
+    assert!(errors.contains("frozen_membership_static_state_dependent"));
+
+    let mut value = frozen_spins_problem_value();
+    value["magnetization_constraints"] = serde_json::json!([
+        {
+            "kind": "frozen_spins", "schema_version": "frozen_spins.v1",
+            "id": "first", "name": "First", "enabled": true,
+            "selector": {"kind": "in_region", "object_id": "strip_object", "region_id": "pinned_edge"},
+            "reference": {"kind": "initial_state"}, "membership": {"kind": "static"},
+            "activation": {"kind": "stage_ids", "stage_ids": ["relax"]},
+            "empty_selection": "error", "inactive_selection": "warn_and_intersect"
+        },
+        {
+            "kind": "frozen_spins", "schema_version": "frozen_spins.v1",
+            "id": "second", "name": "Second", "enabled": true,
+            "selector": {"kind": "in_region", "object_id": "strip_object", "region_id": "pinned_edge"},
+            "reference": {"kind": "explicit_field_asset", "asset_id": "different"},
+            "membership": {"kind": "static"},
+            "activation": {"kind": "stage_ids", "stage_ids": ["relax"]},
+            "empty_selection": "error", "inactive_selection": "warn_and_intersect"
+        }
+    ]);
+    serde_json::from_value::<ProblemIR>(value)
+        .unwrap()
+        .validate()
+        .expect("authored reference policies alone cannot prove a resolved-value conflict");
+}
+
+#[test]
+fn problem_ir_v0_3_migrates_additive_constraint_collections_and_object_identity() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value["ir_version"] = serde_json::json!("0.3.0");
+    value["problem_meta"]["script_api_version"] = serde_json::json!("0.3.0");
+    value["problem_meta"]["serializer_version"] = serde_json::json!("0.3.0");
+    value.as_object_mut().unwrap().remove("selections");
+    value
+        .as_object_mut()
+        .unwrap()
+        .remove("magnetization_constraints");
+    value["magnets"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("object_id");
+
+    migrate_v0_3_problem_ir_to_v0_4(&mut value).unwrap();
+    let decoded: ProblemIRV04 = serde_json::from_value(value).unwrap();
+    let canonical = serde_json::to_value(decoded).unwrap();
+    assert_eq!(canonical["ir_version"], "0.4.0");
+    assert_eq!(canonical["problem_meta"]["script_api_version"], "0.4.0");
+    assert_eq!(canonical["problem_meta"]["serializer_version"], "0.4.0");
+    assert_eq!(canonical["selections"], serde_json::json!([]));
+    assert_eq!(
+        canonical["magnetization_constraints"],
+        serde_json::json!([])
+    );
+    assert_eq!(canonical["objects"][0]["object_id"], "obj_strip");
+    assert!(canonical.get("magnets").is_none());
+}
+
+#[test]
+fn problem_ir_v0_3_migration_keeps_legacy_region_as_a_whole_object_target() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value["ir_version"] = serde_json::json!("0.3.0");
+    value["problem_meta"]["script_api_version"] = serde_json::json!("0.3.0");
+    value["problem_meta"]["serializer_version"] = serde_json::json!("0.3.0");
+
+    migrate_v0_3_problem_ir_to_v0_4(&mut value).unwrap();
+    let decoded: ProblemIRV04 = serde_json::from_value(value).unwrap();
+
+    assert!(decoded.object_regions.is_empty());
+    assert_eq!(decoded.material_assignments[0].target.region_id, None);
+    assert_eq!(decoded.magnetization_modules[0].target.region_id, None);
+    decoded
+        .validate()
+        .expect("migrated whole-object targets must pass typed V04 validation");
+}
+
+#[test]
+fn problem_ir_v0_4_direct_deserialize_normalizes_ref_membership_with_named_definitions() {
+    let mut value = serde_json::to_value(ProblemIRV04::bootstrap_example()).unwrap();
+    value["selections"] = serde_json::json!([
+        {
+            "schema_version": "selection_expr.v1",
+            "id": "geometric",
+            "expression": {"kind": "in_object", "object_id": "obj_strip"}
+        },
+        {
+            "schema_version": "selection_expr.v1",
+            "id": "state",
+            "expression": {
+                "kind": "compare",
+                "lhs": {"kind": "magnetization_component", "component": "z"},
+                "op": "gt",
+                "rhs": {"kind": "constant", "value": 0.5}
+            }
+        }
+    ]);
+    value["magnetization_constraints"] = serde_json::json!([
+        {
+            "kind": "frozen_spins", "schema_version": "frozen_spins.v1",
+            "id": "geometric", "name": "Geometric", "enabled": true,
+            "selector": {"kind": "ref", "selection_id": "geometric"},
+            "reference": {"kind": "capture_current_at_activation"},
+            "activation": {"kind": "all_stages"},
+            "empty_selection": "error", "inactive_selection": "warn_and_intersect"
+        },
+        {
+            "kind": "frozen_spins", "schema_version": "frozen_spins.v1",
+            "id": "state", "name": "State", "enabled": true,
+            "selector": {"kind": "ref", "selection_id": "state"},
+            "reference": {"kind": "capture_current_at_activation"},
+            "activation": {"kind": "all_stages"},
+            "empty_selection": "error", "inactive_selection": "warn_and_intersect"
+        }
+    ]);
+
+    let decoded: ProblemIRV04 = serde_json::from_value(value).unwrap();
+    let canonical = serde_json::to_value(&decoded).unwrap();
+
+    assert_eq!(
+        canonical["magnetization_constraints"][0]["membership"],
+        serde_json::json!({"kind": "static"})
+    );
+    assert_eq!(
+        canonical["magnetization_constraints"][1]["membership"],
+        serde_json::json!({"kind": "snapshot_at_activation"})
+    );
+    decoded
+        .validate()
+        .expect("direct V04 decode must normalize membership before typed validation");
+}
+
+#[test]
+fn problem_ir_legacy_object_ids_are_non_empty_unique_and_own_constraint_identity() {
+    let mut empty = frozen_spins_problem_value();
+    empty["magnets"][0]["object_id"] = serde_json::json!(" ");
+    let errors = serde_json::from_value::<ProblemIR>(empty)
+        .unwrap()
+        .validate()
+        .unwrap_err()
+        .join("\n");
+    assert!(errors.contains("magnets[0].object_id must not be empty"));
+
+    let mut duplicate = frozen_spins_problem_value();
+    let mut second = duplicate["magnets"][0].clone();
+    second["name"] = serde_json::json!("second-strip");
+    duplicate["magnets"].as_array_mut().unwrap().push(second);
+    let errors = serde_json::from_value::<ProblemIR>(duplicate)
+        .unwrap()
+        .validate()
+        .unwrap_err()
+        .join("\n");
+    assert!(errors.contains("magnets[1].object_id 'strip_object' is duplicated"));
+
+    let mut display_name_reference = frozen_spins_problem_value();
+    display_name_reference["magnetization_constraints"] = serde_json::json!([{
+        "kind": "frozen_spins", "schema_version": "frozen_spins.v1",
+        "id": "display_name", "name": "Display name", "enabled": true,
+        "selector": {"kind": "in_object", "object_id": "strip"},
+        "reference": {"kind": "initial_state"}, "membership": {"kind": "static"},
+        "activation": {"kind": "stage_ids", "stage_ids": ["relax"]},
+        "empty_selection": "error", "inactive_selection": "warn_and_intersect"
+    }]);
+    let errors = serde_json::from_value::<ProblemIR>(display_name_reference)
+        .unwrap()
+        .validate()
+        .unwrap_err()
+        .join("\n");
+    assert!(errors.contains("selection_unknown_object"));
+}
+
 #[test]
 fn canonical_selection_graph_hash_includes_reachable_dependencies() {
     let definitions = vec![

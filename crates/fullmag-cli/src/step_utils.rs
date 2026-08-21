@@ -583,6 +583,7 @@ pub(crate) fn final_stage_step_update(
     step_offset: u64,
     time_offset: f64,
     finished: bool,
+    checkpoint: Option<serde_json::Value>,
 ) -> Option<fullmag_runner::StepUpdate> {
     let stats = steps.last()?.clone();
     let stats = offset_step_stats(std::slice::from_ref(&stats), step_offset, time_offset)
@@ -592,7 +593,7 @@ pub(crate) fn final_stage_step_update(
 
     Some(match backend_plan {
         BackendPlanIR::Fdm(fdm) => fullmag_runner::StepUpdate {
-            coupled_checkpoint: None,
+            coupled_checkpoint: checkpoint,
             stats,
             grid: [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]],
             fem_mesh_generation_id: None,

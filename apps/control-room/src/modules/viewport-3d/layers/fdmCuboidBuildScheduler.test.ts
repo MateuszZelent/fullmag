@@ -198,6 +198,7 @@ describe("FDM cuboid build scheduler", () => {
           values: new Float64Array([1, 0, 0, 0, 1, 0]),
         },
         gridShape: [2, 1, 1],
+        membershipAdmission: "full-domain",
         maxVectors: 2,
         scale: 1,
       },
@@ -207,6 +208,186 @@ describe("FDM cuboid build scheduler", () => {
     expect(LoopbackFdmCuboidWorker.instances[0]?.requests[0]?.vectorOnly).toBeTruthy();
     expect(result.model).toBeNull();
     expect(result.vectorCellIndices).toEqual(new Uint32Array([0, 1]));
+  });
+
+  it("carries exact vectors-only membership through the worker request", async () => {
+    vi.stubGlobal("Worker", LoopbackFdmCuboidWorker);
+    const result = await buildViewport3DFdmVectorsOffMainThread(
+      {
+        anchorMode: "center",
+        anchors: new Float32Array([0, 0, 0, 1, 0, 0]),
+        cellIndices: new Uint32Array([0, 1]),
+        cellSelection: "active",
+        fieldVector: {
+          dtype: "float64",
+          grid: [2, 1, 1],
+          nComp: 3,
+          pointCount: 2,
+          quantityId: "H_demag",
+          valueCount: 6,
+          values: new Float64Array([1, 0, 0, 0, 1, 0]),
+        },
+        gridShape: [2, 1, 1],
+        maxVectors: 2,
+        realizedRegionIds: new Uint32Array([0, FMRM_INACTIVE_REGION_ID]),
+        scale: 1,
+      },
+      { buildKey: "fdm-vector-only:exact-membership" },
+    );
+
+    expect(LoopbackFdmCuboidWorker.instances[0]?.requests[0]?.cellSelection).toBe(
+      "active",
+    );
+    expect(result.vectorCellIndices).toEqual(new Uint32Array([0]));
+  });
+
+  it("carries native mask evidence through the worker and filters active vectors", async () => {
+    vi.stubGlobal("Worker", LoopbackFdmCuboidWorker);
+    const result = await buildViewport3DFdmVectorsOffMainThread(
+      {
+        anchorMode: "center",
+        anchors: new Float32Array([0, 0, 0, 1, 0, 0]),
+        cellIndices: new Uint32Array([0, 1]),
+        cellSelection: "active",
+        fieldVector: {
+          dtype: "float64",
+          grid: [2, 1, 1],
+          nComp: 3,
+          pointCount: 2,
+          quantityId: "H_demag",
+          valueCount: 6,
+          values: new Float64Array([1, 0, 0, 0, 1, 0]),
+        },
+        gridShape: [2, 1, 1],
+        maxVectors: 2,
+        nativeActiveMask: new Uint8Array([1, 0]),
+        scale: 1,
+      },
+      { buildKey: "fdm-vector-only:native-mask" },
+    );
+
+    expect(
+      LoopbackFdmCuboidWorker.instances[0]?.requests[0]?.vectorOnly
+        ?.nativeActiveMask,
+    ).toEqual(new Uint8Array([1, 0]));
+    expect(result.vectorCellIndices).toEqual(new Uint32Array([0]));
+  });
+
+  it("does not schedule a worker for exact admission without exact evidence", async () => {
+    vi.stubGlobal("Worker", LoopbackFdmCuboidWorker);
+    const result = await buildViewport3DFdmVectorsOffMainThread(
+      {
+        anchorMode: "center",
+        anchors: new Float32Array([0, 0, 0]),
+        cellIndices: new Uint32Array([0]),
+        fieldVector: {
+          dtype: "float64",
+          grid: [1, 1, 1],
+          nComp: 3,
+          pointCount: 1,
+          quantityId: "H_demag",
+          valueCount: 3,
+          values: new Float64Array([1, 0, 0]),
+        },
+        gridShape: [1, 1, 1],
+        membershipAdmission: "exact",
+        maxVectors: 1,
+        scale: 1,
+      },
+      { buildKey: "fdm-vector-only:missing-membership" },
+    );
+
+    expect(LoopbackFdmCuboidWorker.instances).toHaveLength(0);
+    expect(result.vectorCellIndices).toBeNull();
+    expect(result.vectorSegments).toBeNull();
+  });
+
+  it("rejects full-domain admission for dense vectors-only selection before scheduling", async () => {
+    vi.stubGlobal("Worker", LoopbackFdmCuboidWorker);
+    const result = await buildViewport3DFdmVectorsOffMainThread(
+      {
+        anchorMode: "center",
+        anchors: new Float32Array([0, 0, 0]),
+        cellIndices: new Uint32Array([0]),
+        cellSelection: "dense",
+        fieldVector: {
+          dtype: "float64",
+          grid: [1, 1, 1],
+          nComp: 3,
+          pointCount: 1,
+          quantityId: "H_demag",
+          valueCount: 3,
+          values: new Float64Array([1, 0, 0]),
+        },
+        gridShape: [1, 1, 1],
+        membershipAdmission: "full-domain",
+        maxVectors: 1,
+        scale: 1,
+      },
+      { buildKey: "fdm-vector-only:dense-full-domain" },
+    );
+
+    expect(LoopbackFdmCuboidWorker.instances).toHaveLength(0);
+    expect(result.vectorCellIndices).toBeNull();
+    expect(result.vectorSegments).toBeNull();
+  });
+
+  it.each(["realizedRegionIds", "nativeActiveMask"] as const)(
+    "rejects wrong-length %s before scheduling",
+    async (evidenceKind) => {
+      vi.stubGlobal("Worker", LoopbackFdmCuboidWorker);
+      const result = await buildViewport3DFdmVectorsOffMainThread(
+        {
+          anchorMode: "center",
+          anchors: new Float32Array([0, 0, 0, 1, 0, 0]),
+          cellIndices: new Uint32Array([0, 1]),
+          cellSelection: "active",
+          fieldVector: {
+            dtype: "float64",
+            grid: [2, 1, 1],
+            nComp: 3,
+            pointCount: 2,
+            quantityId: "H_demag",
+            valueCount: 6,
+            values: new Float64Array([1, 0, 0, 0, 1, 0]),
+          },
+          gridShape: [2, 1, 1],
+          membershipAdmission: "exact",
+          maxVectors: 2,
+          nativeActiveMask:
+            evidenceKind === "nativeActiveMask"
+              ? new Uint8Array([1])
+              : null,
+          realizedRegionIds:
+            evidenceKind === "realizedRegionIds"
+              ? new Uint32Array([0])
+              : null,
+          scale: 1,
+        },
+        { buildKey: "fdm-vector-only:wrong-" + evidenceKind },
+      );
+
+      expect(LoopbackFdmCuboidWorker.instances).toHaveLength(0);
+      expect(result.vectorCellIndices).toBeNull();
+      expect(result.vectorSegments).toBeNull();
+    },
+  );
+
+  it("does not schedule an active full-cuboid job without exact membership", async () => {
+    vi.stubGlobal("Worker", LoopbackFdmCuboidWorker);
+    const request = createFallbackFdmCuboidRequest(1);
+    const result = await buildViewport3DFdmCuboidOffMainThread(
+      {
+        ...request,
+        cellSelection: "active",
+        realizedRegionIds: null,
+      },
+      { buildKey: "fdm-cuboid:missing-active-membership" },
+    );
+
+    expect(LoopbackFdmCuboidWorker.instances).toHaveLength(0);
+    expect(result.model).toBeNull();
+    expect(result.vectorCellIndices).toBeNull();
   });
 
   it("keeps a small full-cuboid fallback available when the worker is unavailable", async () => {

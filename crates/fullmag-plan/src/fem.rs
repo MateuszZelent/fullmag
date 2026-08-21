@@ -33,12 +33,224 @@ use crate::validate::{
     validate_frequency_response_outputs,
 };
 
+/// Lower authored frozen-spin constraints onto FEM nodal true DOFs.
+///
+/// P1 FEM nodes are the canonical true-DOF carrier in the current planner.
+/// Incidence is materialized once from the final merged mesh: a node is
+/// magnetic when at least one incident element belongs to a magnetic segment;
+/// interface nodes retain every incident object/region identity.
+fn resolve_fem_frozen_spins(
+    problem: &ProblemIR,
+    mesh: &fullmag_ir::MeshIR,
+    object_segments: &[fullmag_ir::FemObjectSegmentIR],
+    initial_magnetization: &[[f64; 3]],
+    fe_order: u32,
+) -> Result<Option<fullmag_ir::ResolvedFrozenSpinsPlanIR>, PlanError> {
+    let constraints: Vec<_> = problem
+        .magnetization_constraints
+        .iter()
+        .filter_map(|constraint| {
+            let frozen = constraint.frozen_spins();
+            let active = match &frozen.activation {
+                fullmag_ir::ConstraintActivationIR::AllStages {} => true,
+                fullmag_ir::ConstraintActivationIR::StageIds { stage_ids } => crate::util::active_stage_id(problem)
+                    .is_some_and(|stage| stage_ids.iter().any(|candidate| candidate == stage)),
+            };
+            (frozen.enabled && active).then_some(frozen.clone())
+        })
+        .collect();
+    if constraints.is_empty() {
+        return Ok(None);
+    }
+    if initial_magnetization.len() != mesh.nodes.len() {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "frozen_spins_fem_reference_size_mismatch: initial magnetization has {} nodes, resolved mesh has {}",
+                initial_magnetization.len(),
+                mesh.nodes.len()
+            )],
+        });
+    }
+
+    let mesh_fingerprint = mesh
+        .mixed_topology_fingerprint_v3()
+        .map_err(|error| PlanError {
+            reasons: vec![format!("frozen_spins_fem_topology_fingerprint_failed: {error}")],
+        })?;
+
+    let magnetic_object_ids: BTreeSet<String> = object_segments
+        .iter()
+        .filter(|segment| segment.object_id != AIR_OBJECT_SEGMENT_ID)
+        .map(|segment| segment.object_id.clone())
+        .collect();
+    let known_entities = fullmag_ir::SelectionValidationContext::new(
+        magnetic_object_ids.iter().cloned().collect::<Vec<_>>(),
+        problem
+            .object_regions
+            .iter()
+            .filter(|region| region.enabled)
+            .map(|region| (region.owner_object.clone(), region.region_id.clone()))
+            .collect::<Vec<_>>(),
+    );
+    let object_transforms = magnetic_object_ids
+        .iter()
+        .map(|object_id| (object_id.clone(), crate::AffineTransform3::identity()))
+        .collect::<BTreeMap<_, _>>();
+
+    let region_predicates = problem
+        .object_regions
+        .iter()
+        .filter(|region| region.enabled && magnetic_object_ids.contains(&region.owner_object))
+        .map(|region| {
+            crate::GeometryPredicate::from_object_region(
+                region,
+                crate::AffineTransform3::identity(),
+                crate::BoundaryMembership::inclusive(),
+            )
+            .map(|predicate| (region.owner_object.clone(), region.region_id.clone(), predicate))
+            .map_err(|error| PlanError {
+                reasons: vec![format!(
+                    "frozen_spins_fem_region_predicate_invalid: region '{}': {error}",
+                    region.region_id
+                )],
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut incident_elements = vec![Vec::new(); mesh.nodes.len()];
+    for cell in mesh.cells.iter() {
+        let segment = object_segments.iter().find(|segment| {
+            let start = segment.element_start as usize;
+            let end = start.saturating_add(segment.element_count as usize);
+            (start..end).contains(&cell.ordinal)
+        });
+        let Some(segment) = segment else {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "frozen_spins_fem_segment_missing_for_element: element ordinal {} has no object segment",
+                    cell.ordinal
+                )],
+            });
+        };
+        let magnetic = segment.object_id != AIR_OBJECT_SEGMENT_ID;
+        for &node in cell.nodes {
+            let node_index = usize::try_from(node).map_err(|_| PlanError {
+                reasons: vec![format!(
+                    "frozen_spins_fem_node_index_invalid: node {} does not fit usize",
+                    node
+                )],
+            })?;
+            let Some(point) = mesh.nodes.get(node_index).copied() else {
+                return Err(PlanError {
+                    reasons: vec![format!(
+                        "frozen_spins_fem_node_index_out_of_bounds: node {} exceeds {} mesh nodes",
+                        node,
+                        mesh.nodes.len()
+                    )],
+                });
+            };
+            let region_ids = if magnetic {
+                region_predicates
+                    .iter()
+                    .filter(|(owner, _, _)| owner == &segment.object_id)
+                    .filter_map(|(_, region_id, predicate)| {
+                        match predicate.contains(point) {
+                            Ok(true) => Some(Ok(region_id.clone())),
+                            Ok(false) => None,
+                            Err(error) => Some(Err(PlanError {
+                                reasons: vec![format!(
+                                    "frozen_spins_fem_region_membership_failed: region '{}': {error}",
+                                    region_id
+                                )],
+                            })),
+                        }
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+            } else {
+                Vec::new()
+            };
+            incident_elements[node_index].push(if magnetic {
+                crate::selection::FemIncidentElement {
+                    magnetic: true,
+                    object_id: Some(segment.object_id.clone()),
+                    region_ids,
+                }
+            } else {
+                crate::selection::FemIncidentElement::air()
+            });
+        }
+    }
+
+    let references = constraints
+        .iter()
+        .map(|constraint| crate::ResolvedFrozenSpinsReference {
+            constraint_id: constraint.id.as_str(),
+            values: initial_magnetization,
+            source_state_revision: None,
+            topology_fingerprint: &mesh_fingerprint,
+        })
+        .collect::<Vec<_>>();
+    let request = crate::selection::FrozenSpinsCompileRequest {
+        constraints: &constraints,
+        selections: &problem.selections,
+        activation_stage_id: crate::util::active_stage_id(problem),
+        object_transforms: &object_transforms,
+        known_entities: &known_entities,
+        state_snapshot: None,
+        resolved_references: &references,
+        expected_source_state_revision: None,
+        expected_grid_or_mesh_fingerprint: &mesh_fingerprint,
+    };
+    crate::selection::compile_fem_frozen_spins(
+        &crate::selection::FemTrueDofDomain {
+            fe_order,
+            true_dof_points_m: &mesh.nodes,
+            incident_elements: &incident_elements,
+            mesh_fingerprint: &mesh_fingerprint,
+        },
+        &request,
+    )
+    .map(Some)
+    .map_err(|error| PlanError {
+        reasons: vec![format!("frozen_spins_fem_lowering_failed: {error}")],
+    })
+}
+
 const FEM_AIRBOX_DEMAG_REQUIRED_MESSAGE: &str = "FEM demag requires a conformal shared-domain mesh with air and a Poisson airbox realization (Robin or Dirichlet).";
 const CUBIC_AXIS_ORTHOGONALITY_DOT_TOL: f64 = 1e-3;
 const CUBIC_AXIS_ORTHOGONALITY_CROSS_MIN_NORM: f64 = 1e-6;
 const CUBIC_AXIS_VALIDATION_ERROR: &str =
     "cubic anisotropy axes must be finite, normalized and mutually orthogonal";
 const FEM_DIRECT_MINIMIZER_DEMAG_RTOL_MAX: f64 = 1.0e-12;
+
+/// Resolve one FEM magnetization true DOF using the accepted any-incident
+/// magnetic policy. Air-only incidence remains inactive; shared interface DOFs
+/// retain every incident magnetic object/region identity.
+pub(crate) fn resolve_true_dof_incident_magnetic_membership(
+    incident_elements: &[crate::selection::FemIncidentElement],
+) -> Result<(bool, crate::selection::SelectionDofMembership), crate::SelectionError> {
+    let mut membership = crate::selection::SelectionDofMembership::default();
+    for element in incident_elements.iter().filter(|element| element.magnetic) {
+        let Some(object_id) = element.object_id.as_ref() else {
+            return Err(crate::SelectionError::new(
+                "selection_invalid_geometry",
+                "magnetic FEM incident element is missing object identity",
+            ));
+        };
+        membership.object_ids.push(object_id.clone());
+        membership.region_ids.extend(
+            element
+                .region_ids
+                .iter()
+                .map(|region_id| (object_id.clone(), region_id.clone())),
+        );
+    }
+    membership.object_ids.sort();
+    membership.object_ids.dedup();
+    membership.region_ids.sort();
+    membership.region_ids.dedup();
+    Ok((!membership.object_ids.is_empty(), membership))
+}
 
 fn is_direct_relaxation_minimizer(algorithm: fullmag_ir::RelaxationAlgorithmIR) -> bool {
     matches!(
@@ -2747,6 +2959,13 @@ pub(crate) fn plan_fem(
             reasons: vec!["FEM M1 steady spin transport is not stage-coupled to relaxation; the plan fails closed before runtime provenance".to_string()],
         });
     }
+    let frozen_spins = resolve_fem_frozen_spins(
+        problem,
+        &mesh,
+        &object_segments,
+        &initial_magnetization,
+        fem_hints.order,
+    )?;
 
     let mut fem_plan = FemPlanIR {
         mesh_name: mesh_name.clone(),
@@ -2760,6 +2979,7 @@ pub(crate) fn plan_fem(
         fe_order: fem_hints.order,
         hmax: fem_hints.hmax,
         initial_magnetization,
+        frozen_spins,
         material,
         anisotropy_axis_field,
         ms_element_field,

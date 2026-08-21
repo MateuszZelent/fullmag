@@ -355,9 +355,9 @@ mod control_room_guard_tests {
     use std::time::Duration;
 
     use super::{
-        api_openapi_response_is_compatible, browser_open_args, control_room_launch_signature,
-        packaged_install_root, wait_for_api_ready, BootstrapProcessGuard, ControlRoomGuard,
-        GuardedProcess,
+        api_openapi_response_is_compatible, browser_control_room_assets, browser_open_args,
+        control_room_launch_signature, packaged_install_root, wait_for_api_ready,
+        BootstrapProcessGuard, ControlRoomGuard, GuardedProcess,
     };
     use std::process::Command as TestCommand;
 
@@ -597,6 +597,44 @@ mod control_room_guard_tests {
 
         std::fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn missing_canonical_control_room_dev_server_fails_closed_without_legacy_fallback() {
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-control-room-missing-v2-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let legacy_root = root.join("apps").join("legacy".to_string() + "_web");
+        std::fs::create_dir_all(&legacy_root).unwrap();
+        std::fs::write(legacy_root.join("dev-server.mjs"), "legacy").unwrap();
+
+        let error = browser_control_room_assets(&root, true).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("apps/control-room/dev-server.mjs"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn canonical_control_room_wins_when_reference_tree_exists() {
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-control-room-canonical-v2-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("apps/control-room")).unwrap();
+        let legacy_root = root.join("apps").join("legacy".to_string() + "_web");
+        std::fs::create_dir_all(&legacy_root).unwrap();
+        std::fs::write(root.join("apps/control-room/dev-server.mjs"), "v2").unwrap();
+        std::fs::write(legacy_root.join("dev-server.mjs"), "legacy").unwrap();
+
+        let (web_dir, _, _, _available) = browser_control_room_assets(&root, true).unwrap();
+
+        assert_eq!(web_dir, root.join("apps/control-room"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 pub(crate) struct ControlPlaneReady {
@@ -607,38 +645,40 @@ pub(crate) struct ControlPlaneReady {
     pub frontend_child: Option<std::process::Child>,
 }
 
-fn browser_control_room_assets(root: &Path, dev_mode: bool) -> (PathBuf, PathBuf, PathBuf, bool) {
-    // Prefer apps/control-room (v2 frontend). Fall back to apps/web then apps/legacy_web.
+fn browser_control_room_assets(
+    root: &Path,
+    dev_mode: bool,
+) -> Result<(PathBuf, PathBuf, PathBuf, bool)> {
+    // The v2 Control Room is the only supported runtime frontend. Legacy paths
+    // remain reference material and must never be selected by the launcher.
     let v2_dir = root.join("apps").join("control-room");
-    let legacy_candidates = ["apps/web", "apps/legacy_web"].map(|p| root.join(p));
-    let web_dir = if v2_dir.join("dev-server.mjs").is_file() {
-        v2_dir
-    } else {
-        legacy_candidates
-            .into_iter()
-            .find(|p| p.join("dev-server.mjs").is_file())
-            .unwrap_or_else(|| root.join("apps").join("web"))
-    };
+    let dev_server = v2_dir.join("dev-server.mjs");
+    if dev_mode && !dev_server.is_file() {
+        bail!(
+            "canonical Control Room frontend is unavailable: expected {}",
+            dev_server.display()
+        );
+    }
     let repo_local_static_web_root = root.join(".fullmag").join("local").join("web");
-    let repo_built_static_web_root = web_dir.join("out");
+    let repo_built_static_web_root = v2_dir.join("out");
     let static_web_root = if repo_local_static_web_root.join("index.html").is_file() {
         repo_local_static_web_root
     } else {
         repo_built_static_web_root
     };
     let external_control_room_available = if dev_mode {
-        command_exists("node") && web_dir.join("dev-server.mjs").is_file()
+        command_exists("node") && dev_server.is_file()
     } else {
         command_exists("node")
-            && web_dir.join("dev-server.mjs").is_file()
+            && dev_server.is_file()
             && static_web_root.join("index.html").is_file()
     };
-    (
-        web_dir,
+    Ok((
+        v2_dir,
         static_web_root,
         root.join(".fullmag").join("control-room-mode.txt"),
         external_control_room_available,
-    )
+    ))
 }
 
 pub(crate) fn bootstrap_control_plane(
@@ -651,7 +691,7 @@ pub(crate) fn bootstrap_control_plane(
     let log_dir = root.join(".fullmag").join("logs");
     let url_file = root.join(".fullmag").join("control-room-url.txt");
     let (web_dir, static_web_root, mode_file, external_control_room_available) =
-        browser_control_room_assets(&root, dev_mode);
+        browser_control_room_assets(&root, dev_mode)?;
     fs::create_dir_all(&log_dir)?;
 
     let stream_api_logs_to_terminal = dev_mode
@@ -864,7 +904,7 @@ pub(crate) fn bootstrap_control_plane(
     }
 
     bail!(
-        "control room dev mode requires a local Node frontend; run `just build-static-control-room` and omit `--dev`, or install Node and keep `apps/web/dev-server.mjs` available"
+        "control room dev mode requires the canonical Control Room frontend at apps/control-room/dev-server.mjs; run `just build-static-control-room` and omit `--dev`, or install the Control Room dependencies"
     )
 }
 
@@ -1446,6 +1486,30 @@ fn sync_current_live_field_frame(
     Ok(())
 }
 
+fn sync_current_live_heartbeat(session_id: &str) -> Result<()> {
+    current_live_api_client()
+        .post(internal_live_api_url("heartbeat"))
+        .json(&serde_json::json!({ "session_id": session_id }))
+        .send()
+        .context("failed to sync current live heartbeat")?
+        .error_for_status()
+        .context("current live heartbeat endpoint returned error")?;
+    Ok(())
+}
+
+fn payload_has_current_live_delta(payload: &CurrentLiveSnapshotPayload) -> bool {
+    payload.replace_latest_fields
+        || payload.latest_scalar_row.is_some()
+        || payload_routes_to_current_live_session_frame(payload)
+        || payload.live_state.is_some()
+        || payload.engine_log.is_some()
+        || payload.solver_profile.is_some()
+        || payload.fem_mesh.is_some()
+        || payload.latest_fields.is_some()
+        || payload.preview_fields.is_some()
+        || payload.clear_preview_cache
+}
+
 fn payload_routes_to_current_live_session_frame(payload: &CurrentLiveSnapshotPayload) -> bool {
     payload.session.is_some()
         || payload.session_status.is_some()
@@ -1507,6 +1571,9 @@ pub(crate) fn sync_current_live_delta(
     session_id: &str,
     payload: &CurrentLiveSnapshotPayload,
 ) -> Result<()> {
+    if !payload_has_current_live_delta(payload) {
+        return sync_current_live_heartbeat(session_id);
+    }
     sync_current_live_delta_with(
         session_id,
         payload,
@@ -1713,7 +1780,6 @@ pub(crate) fn spawn_fullmag_api(
             runtime_root.join("share").join("control-room"),
             root.join(".fullmag").join("local").join("web"),
             root.join("apps").join("control-room").join("out"),
-            root.join("apps").join("web").join("out"),
         ];
         candidates
             .into_iter()

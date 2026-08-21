@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { recordVisualizationDebugResourceCounts } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 
 import {
   buildViewport3DDiagnostics,
@@ -8,6 +10,13 @@ import {
 } from "./viewport3dDiagnostics";
 
 describe("viewport3dDiagnostics", () => {
+  const testWindow = globalThis as typeof globalThis & Window;
+
+  afterEach(() => {
+    delete testWindow.__FULLMAG_VISUALIZATION_DEBUG_PERFORMANCE__;
+    vi.unstubAllGlobals();
+  });
+
   it("subscribes build-engine diagnostics into the diagnostic recorder", () => {
     const source = readFileSync(
       new URL("./viewport3dDiagnostics.ts", import.meta.url),
@@ -48,6 +57,42 @@ describe("viewport3dDiagnostics", () => {
     expect(dispose).toHaveBeenCalledTimes(1);
     expect(tracker.getSnapshot().geometries).toBe(0);
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("publishes fresh zero resource counts when teardown disposes the tracker", () => {
+    vi.stubGlobal("window", testWindow);
+    testWindow.__FULLMAG_VISUALIZATION_DEBUG_PERFORMANCE__ = {
+      publishes: 0,
+      scans: 0,
+      viewportFrames: 0,
+    };
+    const tracker = new Viewport3DResourceTracker();
+    for (const kind of [
+      "geometry",
+      "material",
+      "render-target",
+      "texture",
+      "worker",
+    ] as const) {
+      tracker.track(kind, { dispose: vi.fn() });
+    }
+    recordVisualizationDebugResourceCounts({
+      geometries: 1,
+      materials: 1,
+      renderTargets: 1,
+      textures: 1,
+      workers: 1,
+    });
+
+    tracker.disposeAll();
+
+    expect(testWindow.__FULLMAG_VISUALIZATION_DEBUG_PERFORMANCE__.resourceCounts).toEqual({
+      geometries: 0,
+      materials: 0,
+      renderTargets: 0,
+      textures: 0,
+      workers: 0,
+    });
   });
 
   it("counts dirty-frame reasons until they are consumed", () => {

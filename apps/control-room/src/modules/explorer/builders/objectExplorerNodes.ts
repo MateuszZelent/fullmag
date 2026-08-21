@@ -5,6 +5,10 @@ import type {
   ModelTreePhysicsInteractionSnapshot,
 } from "../explorerTypes";
 import type { CurrentTransportListResource } from "@/kernel/api/apiTypes";
+import type {
+  FrozenSpinsDefinition,
+  FrozenSpinsSelectionExpression,
+} from "@/kernel/api/apiTypes";
 
 import { buildPhysicsGraphObjectNode } from "./physicsGraphTree";
 import {
@@ -68,6 +72,7 @@ export function buildObjectExplorerNode(
       badge: object.geometryKind ?? "antenna",
       icon: "wave",
       objectId,
+      objectRole: object.objectRole,
       status: "ready",
       contextCommands: [
         "planar-monitor.create",
@@ -133,6 +138,7 @@ export function buildObjectExplorerNode(
     badge: object.geometryKind ?? "object",
     icon: "box",
     objectId,
+    objectRole: object.objectRole,
     status: meshStatus,
     contextCommands: [
       "planar-monitor.create",
@@ -157,6 +163,7 @@ export function buildObjectExplorerNode(
         contextCommands: ["workspace.focus-selection"],
       },
       regionsNode(parentId, object, resources),
+      ...frozenSpinsNodes(parentId, object.id, null, resources),
       magneticParametersNode(parentId, object),
       {
         id: `${parentId}:magnetic-texture`,
@@ -332,6 +339,7 @@ function authoredRegionNode(
     badge: region.realizationStatus ?? region.source,
     icon: "circle",
     objectId: object.id,
+    objectRole: object.objectRole,
     regionId: region.id,
     status,
     contextCommands: [
@@ -348,6 +356,7 @@ function authoredRegionNode(
       "planar-monitor.create": planarMonitorRegionCreationInput(resources, object.id, region.id),
     },
     children: [
+      ...frozenSpinsNodes(nodeId, object.id, region.id, resources),
       {
         id: `${nodeId}:geometry`,
         kind: "object.region.geometry",
@@ -441,6 +450,78 @@ function authoredRegionNode(
       },
     ],
   };
+}
+
+function frozenSpinsNodes(
+  parentId: string,
+  objectId: string,
+  regionId: string | null,
+  resources: ModelTreeResources,
+): ExplorerNode[] {
+  return (resources.frozenSpins?.definitions ?? []).flatMap((definition) => {
+    const owner = frozenSpinsSelectorOwner(definition.selector);
+    if (
+      !owner ||
+      owner.objectId !== objectId ||
+      (owner.regionId ?? null) !== regionId
+    ) {
+      return [];
+    }
+    return [frozenSpinsNode(parentId, definition, owner)];
+  });
+}
+
+function frozenSpinsNode(
+  parentId: string,
+  definition: FrozenSpinsDefinition,
+  owner: { objectId: string; regionId?: string },
+): ExplorerNode {
+  return {
+    id: `${parentId}:frozen-spins:${encodeURIComponent(definition.id)}`,
+    kind: "object.frozen-spins",
+    label: "Frozen Spins",
+    parentId,
+    badge: definition.enabled === false ? "disabled" : definition.name,
+    constraintId: definition.id,
+    icon: "shield",
+    objectId: owner.objectId,
+    ...(owner.regionId ? { regionId: owner.regionId } : {}),
+    status: definition.enabled === false ? "degraded" : "ready",
+    contextCommands: ["workspace.focus-selection"],
+  };
+}
+
+export function frozenSpinsSelectorOwner(
+  expression: FrozenSpinsSelectionExpression,
+): { objectId: string; regionId?: string } | null {
+  if (expression.kind === "in_region") {
+    return { objectId: expression.object_id, regionId: expression.region_id };
+  }
+  if (expression.kind === "in_object") {
+    return { objectId: expression.object_id };
+  }
+  if (
+    expression.kind === "and" ||
+    expression.kind === "or" ||
+    expression.kind === "xor"
+  ) {
+    const owners = expression.expressions
+      .map(frozenSpinsSelectorOwner)
+      .filter((owner): owner is NonNullable<typeof owner> => owner !== null);
+    if (owners.length === 0) return null;
+    const first = owners[0]!;
+    return owners.every(
+      (owner) =>
+        owner.objectId === first.objectId &&
+        (owner.regionId ?? null) === (first.regionId ?? null),
+    )
+      ? first
+      : null;
+  }
+  // A negated selector denotes the complement of its child and therefore has
+  // no unambiguous local owner in the object/region tree.
+  if (expression.kind === "not") return null;
+  return null;
 }
 
 function explorerStatusFromRegionMeshLifecycle(

@@ -207,6 +207,10 @@ impl ExchangeLlgState {
         &self.magnetization
     }
 
+    pub fn magnetization_mut(&mut self) -> &mut [Vector3] {
+        &mut self.magnetization
+    }
+
     /// Invalidate the FSAL buffer (e.g. after external state modification).
     pub fn invalidate_fsal(&mut self) {
         self.k_fsal = None;

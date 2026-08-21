@@ -1,7 +1,7 @@
 use crate::dispatch::{FdmEngine, FemEngine};
 use crate::quantities::QuantityId;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -76,6 +76,10 @@ pub struct BackendCapabilities {
     pub preview_quantities: Vec<String>,
     pub snapshot_quantities: Vec<String>,
     pub scalar_outputs: Vec<String>,
+    /// Runner-owned provider resolution for the selected plan/runtime lane.
+    /// The legacy quantity lists above remain compatibility projections only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_quantity_registry: Option<ResolvedQuantityProviderRegistry>,
     pub approximate_operators: Vec<String>,
     pub supports_frequency_response: bool,
     pub supports_coupled_magnetoelastic_quasistatic: bool,
@@ -83,6 +87,372 @@ pub struct BackendCapabilities {
     pub supports_frequency_domain_elastodynamics: bool,
     pub supports_coupled_eigenmodes: bool,
     pub supports_lossy_fallback_override: bool,
+}
+
+/// Provider plane for one quantity in the resolved backend/plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuantityProviderCapability {
+    Available,
+    Unavailable,
+}
+
+/// Data-plane request exposed for one resolved quantity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuantityRequestCapability {
+    FieldVector,
+    ScalarResource,
+    UnsupportedShape,
+    Unavailable,
+}
+
+/// Materialization truth is deliberately independent from provider support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuantityMaterializationCapability {
+    NotApplicable,
+    Unmaterialized,
+    Pending,
+    Materialized,
+    LegacyUnverified,
+    Unavailable,
+}
+
+/// Renderer support for the resolved shape without frontend coercion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuantityRenderCapability {
+    Renderable,
+    UnsupportedShape,
+    Unavailable,
+}
+
+/// Publication policy from the canonical catalog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuantityPublicationCapability {
+    Interactive,
+    ExportOnly,
+    Hidden,
+}
+
+/// Verification state carried by a concrete field payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldPayloadState {
+    Current,
+    LegacyUnverified,
+    Unmaterialized,
+}
+
+/// Generic field carrier metadata. Consumers select by these properties and
+/// never by quantity-specific branches.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FieldCarrierDescriptor {
+    pub carrier_id: String,
+    pub carrier_fingerprint: String,
+    /// Compatibility projection of `scope_kind` for existing clients.
+    pub scope: String,
+    pub scope_kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_id: Option<String>,
+    pub components: u8,
+    pub indexing: String,
+    pub view: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload_version: Option<String>,
+    pub payload_state: FieldPayloadState,
+}
+
+/// Five independent capability planes resolved for one runtime lane.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedQuantityCapability {
+    pub quantity_id: String,
+    pub provider: QuantityProviderCapability,
+    pub request: QuantityRequestCapability,
+    pub materialization: QuantityMaterializationCapability,
+    pub render: QuantityRenderCapability,
+    pub publication: QuantityPublicationCapability,
+    pub scope: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
+    pub lane: String,
+    pub precision: String,
+    pub carriers: Vec<FieldCarrierDescriptor>,
+}
+
+/// Request-local evidence supplied by API/resource owners to the canonical
+/// resolver. Provider and publication truth remain runner-owned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedQuantityCapabilityContext<'a> {
+    pub scope: &'a str,
+    pub precision: &'a str,
+    pub materialization: QuantityMaterializationCapability,
+    pub carriers: Vec<FieldCarrierDescriptor>,
+}
+
+fn canonical_quantity_set(ids: impl IntoIterator<Item = impl AsRef<str>>) -> BTreeSet<String> {
+    ids.into_iter()
+        .filter_map(|candidate| {
+            fullmag_quantities::normalize_quantity_id(candidate.as_ref())
+                .ok()
+                .map(|id| id.as_str().to_string())
+        })
+        .collect()
+}
+
+/// Resolved provider registry for one already-selected runtime plan.
+///
+/// `BackendCapabilities` keeps `preview_quantities`, `snapshot_quantities` and
+/// `scalar_outputs` as compatibility projections for existing clients.  They
+/// are not read independently by API handlers.  This registry is the one
+/// runner-owned provider plane used by the quantity resolver, which prevents a
+/// scalar output from accidentally making a spatial field requestable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedQuantityProviderRegistry {
+    pub field_quantities: Vec<String>,
+    pub scalar_quantities: Vec<String>,
+    pub lane: String,
+    pub precision: String,
+    #[serde(default)]
+    pub source: QuantityProviderRegistrySource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuantityProviderRegistrySource {
+    CompatibilityProfile,
+    ResolvedPlan,
+}
+
+impl Default for QuantityProviderRegistrySource {
+    fn default() -> Self {
+        Self::CompatibilityProfile
+    }
+}
+
+impl ResolvedQuantityProviderRegistry {
+    pub fn from_resolved_plan<I, J>(
+        lane: impl Into<String>,
+        precision: impl Into<String>,
+        field_quantities: I,
+        scalar_quantities: J,
+    ) -> Self
+    where
+        I: IntoIterator,
+        I::Item: AsRef<str>,
+        J: IntoIterator,
+        J::Item: AsRef<str>,
+    {
+        Self {
+            field_quantities: canonical_quantity_set(field_quantities)
+                .into_iter()
+                .collect(),
+            scalar_quantities: canonical_quantity_set(scalar_quantities)
+                .into_iter()
+                .collect(),
+            lane: lane.into(),
+            precision: precision.into(),
+            source: QuantityProviderRegistrySource::ResolvedPlan,
+        }
+    }
+
+    fn from_compatibility_profile<I, J>(
+        lane: impl Into<String>,
+        precision: impl Into<String>,
+        field_quantities: I,
+        scalar_quantities: J,
+    ) -> Self
+    where
+        I: IntoIterator,
+        I::Item: AsRef<str>,
+        J: IntoIterator,
+        J::Item: AsRef<str>,
+    {
+        let mut registry =
+            Self::from_resolved_plan(lane, precision, field_quantities, scalar_quantities);
+        registry.source = QuantityProviderRegistrySource::CompatibilityProfile;
+        registry
+    }
+
+    fn contains(&self, spec: &fullmag_quantities::QuantitySpec) -> bool {
+        match spec.shape {
+            fullmag_quantities::QuantityShape::GlobalScalar => {
+                self.scalar_quantities
+                    .iter()
+                    .any(|id| id == spec.id.as_str())
+                    || spec.scalar_metric_key.is_some_and(|key| {
+                        self.scalar_quantities
+                            .iter()
+                            .any(|candidate| candidate.eq_ignore_ascii_case(key))
+                    })
+            }
+            _ => self
+                .field_quantities
+                .iter()
+                .any(|id| id == spec.id.as_str()),
+        }
+    }
+}
+
+fn precision_label(precision: fullmag_ir::ExecutionPrecision) -> &'static str {
+    match precision {
+        fullmag_ir::ExecutionPrecision::Single => "single",
+        fullmag_ir::ExecutionPrecision::Double => "double",
+    }
+}
+
+/// Attach a compatibility registry to a static lane profile. Planned runtime
+/// resolution replaces this projection with the active-plan registry before
+/// the capability snapshot is published.
+fn attach_compatibility_registry(
+    mut capabilities: BackendCapabilities,
+    precision: fullmag_ir::ExecutionPrecision,
+) -> BackendCapabilities {
+    let mut field_quantities = capabilities
+        .preview_quantities
+        .iter()
+        .chain(capabilities.snapshot_quantities.iter())
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    if capabilities.engine_id == RuntimeEngineId::FemCpuNative {
+        field_quantities.extend([
+            "V_electric",
+            "J_charge",
+            "spin_current_tensor",
+            "torque_stt",
+        ]);
+    }
+    let scalar_quantities = capabilities
+        .scalar_outputs
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    capabilities.resolved_quantity_registry = Some(
+        ResolvedQuantityProviderRegistry::from_compatibility_profile(
+            capabilities.engine_id.as_str(),
+            precision_label(precision),
+            field_quantities,
+            scalar_quantities,
+        ),
+    );
+    capabilities
+}
+
+/// Resolve provider, request, materialization, render and publication from one
+/// runner-owned source. API quantity catalogs and field resources must call
+/// this function instead of interpreting preview/snapshot lists independently.
+pub fn resolve_quantity_capability(
+    capabilities: &BackendCapabilities,
+    spec: &fullmag_quantities::QuantitySpec,
+    context: ResolvedQuantityCapabilityContext<'_>,
+) -> ResolvedQuantityCapability {
+    let registry = capabilities.resolved_quantity_registry.as_ref();
+    let registry_available = registry.is_some();
+    let registry_is_resolved_plan = registry
+        .is_some_and(|registry| registry.source == QuantityProviderRegistrySource::ResolvedPlan);
+    let registry_identity_matches = registry.is_some_and(|registry| {
+        registry.lane == capabilities.engine_id.as_str()
+            && (registry.precision == context.precision || registry.precision == "unknown")
+    });
+    let provider_registered = registry_is_resolved_plan
+        && registry_identity_matches
+        && registry.is_some_and(|registry| registry.contains(spec));
+    let provider = if provider_registered {
+        QuantityProviderCapability::Available
+    } else {
+        QuantityProviderCapability::Unavailable
+    };
+    let request = if !provider_registered {
+        QuantityRequestCapability::Unavailable
+    } else {
+        match spec.shape {
+            fullmag_quantities::QuantityShape::VectorField
+            | fullmag_quantities::QuantityShape::SpatialScalar => {
+                QuantityRequestCapability::FieldVector
+            }
+            fullmag_quantities::QuantityShape::GlobalScalar => {
+                QuantityRequestCapability::ScalarResource
+            }
+            fullmag_quantities::QuantityShape::TensorField => {
+                QuantityRequestCapability::UnsupportedShape
+            }
+        }
+    };
+    let render = if !provider_registered {
+        QuantityRenderCapability::Unavailable
+    } else {
+        match spec.shape {
+            fullmag_quantities::QuantityShape::VectorField
+            | fullmag_quantities::QuantityShape::SpatialScalar
+                if spec.ui_exposed && spec.supports_preview_3d =>
+            {
+                QuantityRenderCapability::Renderable
+            }
+            fullmag_quantities::QuantityShape::TensorField => {
+                QuantityRenderCapability::UnsupportedShape
+            }
+            _ => QuantityRenderCapability::Unavailable,
+        }
+    };
+    let publication = if spec.ui_exposed && spec.interactive_preview {
+        QuantityPublicationCapability::Interactive
+    } else if spec.supports_export {
+        QuantityPublicationCapability::ExportOnly
+    } else {
+        QuantityPublicationCapability::Hidden
+    };
+    let materialization = if !provider_registered {
+        QuantityMaterializationCapability::Unavailable
+    } else if spec.shape == fullmag_quantities::QuantityShape::GlobalScalar {
+        QuantityMaterializationCapability::NotApplicable
+    } else if request == QuantityRequestCapability::UnsupportedShape {
+        QuantityMaterializationCapability::Unavailable
+    } else {
+        context.materialization
+    };
+    let reason_code = if !registry_available {
+        Some("quantity_registry_unavailable")
+    } else if !registry_is_resolved_plan {
+        Some("quantity_registry_not_resolved_plan")
+    } else if !registry_identity_matches {
+        Some("quantity_registry_identity_mismatch")
+    } else if !provider_registered {
+        Some("quantity_unsupported")
+    } else if request == QuantityRequestCapability::UnsupportedShape {
+        Some("unsupported_shape")
+    } else if materialization == QuantityMaterializationCapability::LegacyUnverified {
+        Some("legacy_unverified")
+    } else if materialization == QuantityMaterializationCapability::Pending {
+        Some("field_materialization_pending")
+    } else if materialization == QuantityMaterializationCapability::Unmaterialized {
+        Some("field_unmaterialized")
+    } else {
+        None
+    };
+
+    ResolvedQuantityCapability {
+        quantity_id: spec.id.as_str().to_string(),
+        provider,
+        request,
+        materialization,
+        render,
+        publication,
+        scope: context.scope.to_string(),
+        reason_code: reason_code.map(str::to_string),
+        lane: registry
+            .map(|registry| registry.lane.clone())
+            .unwrap_or_else(|| capabilities.engine_id.as_str().to_string()),
+        precision: registry
+            .map(|registry| registry.precision.clone())
+            .unwrap_or_else(|| context.precision.to_string()),
+        carriers: if request == QuantityRequestCapability::FieldVector {
+            context.carriers
+        } else {
+            Vec::new()
+        },
+    }
 }
 
 // These are semantic-only in the current public contract. Keep them explicit so
@@ -266,7 +636,7 @@ pub(crate) fn capabilities_for_fdm_engine(
     engine: FdmEngine,
     profile: FdmCapabilityProfile,
 ) -> BackendCapabilities {
-    match engine {
+    let capabilities = match engine {
         FdmEngine::CpuReference => BackendCapabilities {
             supports_frequency_response: DEFERRED_STUDY_CAPABILITY,
             supports_coupled_magnetoelastic_quasistatic: DEFERRED_STUDY_CAPABILITY,
@@ -321,6 +691,7 @@ pub(crate) fn capabilities_for_fdm_engine(
                 "E_ext".to_string(),
                 "E_total".to_string(),
             ],
+            resolved_quantity_registry: None,
             approximate_operators: Vec::new(),
             supports_lossy_fallback_override: false,
         },
@@ -373,10 +744,12 @@ pub(crate) fn capabilities_for_fdm_engine(
                 "E_ext".to_string(),
                 "E_total".to_string(),
             ],
+            resolved_quantity_registry: None,
             approximate_operators: Vec::new(),
             supports_lossy_fallback_override: false,
         },
-    }
+    };
+    attach_compatibility_registry(capabilities, fullmag_ir::ExecutionPrecision::Double)
 }
 
 /// Resolve the executable quantity surface for the selected precision.
@@ -389,13 +762,14 @@ pub(crate) fn capabilities_for_fdm_engine(
 pub(crate) fn capabilities_for_fdm_engine_with_precision(
     engine: FdmEngine,
     profile: FdmCapabilityProfile,
-    _precision: fullmag_ir::ExecutionPrecision,
+    precision: fullmag_ir::ExecutionPrecision,
 ) -> BackendCapabilities {
-    capabilities_for_fdm_engine(engine, profile)
+    let capabilities = capabilities_for_fdm_engine(engine, profile);
+    attach_compatibility_registry(capabilities, precision)
 }
 
 pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilities {
-    match engine {
+    let capabilities = match engine {
         FemEngine::CpuNative => BackendCapabilities {
             supports_frequency_response: DEFERRED_STUDY_CAPABILITY,
             supports_coupled_magnetoelastic_quasistatic: DEFERRED_STUDY_CAPABILITY,
@@ -432,6 +806,12 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
                 QuantityId::HAni,
                 QuantityId::HDmi,
                 QuantityId::HMel,
+                QuantityId::EdenEx,
+                QuantityId::EdenDemag,
+                QuantityId::EdenExt,
+                QuantityId::EdenAni,
+                QuantityId::EdenDmi,
+                QuantityId::EdenTotal,
             ]),
             snapshot_quantities: quantity_names(&[
                 QuantityId::M,
@@ -442,6 +822,12 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
                 QuantityId::HAni,
                 QuantityId::HDmi,
                 QuantityId::HMel,
+                QuantityId::EdenEx,
+                QuantityId::EdenDemag,
+                QuantityId::EdenExt,
+                QuantityId::EdenAni,
+                QuantityId::EdenDmi,
+                QuantityId::EdenTotal,
             ]),
             scalar_outputs: vec![
                 "E_ex".to_string(),
@@ -449,6 +835,7 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
                 "E_ext".to_string(),
                 "E_total".to_string(),
             ],
+            resolved_quantity_registry: None,
             approximate_operators: Vec::new(),
             supports_lossy_fallback_override: false,
         },
@@ -488,6 +875,12 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
                 QuantityId::HAni,
                 QuantityId::HDmi,
                 QuantityId::HMel,
+                QuantityId::EdenEx,
+                QuantityId::EdenDemag,
+                QuantityId::EdenExt,
+                QuantityId::EdenAni,
+                QuantityId::EdenDmi,
+                QuantityId::EdenTotal,
             ]),
             snapshot_quantities: quantity_names(&[
                 QuantityId::M,
@@ -498,6 +891,12 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
                 QuantityId::HAni,
                 QuantityId::HDmi,
                 QuantityId::HMel,
+                QuantityId::EdenEx,
+                QuantityId::EdenDemag,
+                QuantityId::EdenExt,
+                QuantityId::EdenAni,
+                QuantityId::EdenDmi,
+                QuantityId::EdenTotal,
             ]),
             scalar_outputs: vec![
                 "E_ex".to_string(),
@@ -505,10 +904,12 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
                 "E_ext".to_string(),
                 "E_total".to_string(),
             ],
+            resolved_quantity_registry: None,
             approximate_operators: Vec::new(),
             supports_lossy_fallback_override: false,
         },
-    }
+    };
+    attach_compatibility_registry(capabilities, fullmag_ir::ExecutionPrecision::Double)
 }
 
 pub(crate) fn capabilities_for_fem_eigen_engine(engine: FemEngine) -> BackendCapabilities {
@@ -517,7 +918,7 @@ pub(crate) fn capabilities_for_fem_eigen_engine(engine: FemEngine) -> BackendCap
         FemEngine::CpuNative => RuntimeEngineId::FemEigenCpuBaseline,
         FemEngine::NativeGpu => RuntimeEngineId::FemEigenNativeGpu,
     };
-    capabilities
+    align_compatibility_registry_to_final_engine(capabilities)
 }
 
 pub(crate) fn capabilities_for_fem_frequency_response_validation_engine(
@@ -532,12 +933,66 @@ pub(crate) fn capabilities_for_fem_frequency_response_validation_engine(
     {
         capabilities.engine_id = RuntimeEngineId::FemFrequencyResponseDenseValidation;
     }
+    align_compatibility_registry_to_final_engine(capabilities)
+}
+
+fn align_compatibility_registry_to_final_engine(
+    mut capabilities: BackendCapabilities,
+) -> BackendCapabilities {
+    if let Some(registry) = capabilities.resolved_quantity_registry.take() {
+        capabilities.resolved_quantity_registry = Some(
+            ResolvedQuantityProviderRegistry::from_compatibility_profile(
+                capabilities.engine_id.as_str(),
+                registry.precision,
+                registry.field_quantities,
+                registry.scalar_quantities,
+            ),
+        );
+    }
+    capabilities
+}
+
+pub(crate) fn mark_study_quantity_registry_as_resolved_plan(
+    mut capabilities: BackendCapabilities,
+) -> BackendCapabilities {
+    let precision = capabilities
+        .resolved_quantity_registry
+        .as_ref()
+        .map(|registry| registry.precision.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    capabilities.resolved_quantity_registry =
+        Some(ResolvedQuantityProviderRegistry::from_resolved_plan(
+            capabilities.engine_id.as_str(),
+            precision,
+            std::iter::empty::<&str>(),
+            std::iter::empty::<&str>(),
+        ));
     capabilities
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn with_resolved_quantity_providers(
+        mut capabilities: BackendCapabilities,
+        field_quantities: &[&str],
+        scalar_quantities: &[&str],
+    ) -> BackendCapabilities {
+        let precision = capabilities
+            .resolved_quantity_registry
+            .as_ref()
+            .map(|registry| registry.precision.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+        capabilities.resolved_quantity_registry =
+            Some(ResolvedQuantityProviderRegistry::from_resolved_plan(
+                capabilities.engine_id.as_str(),
+                precision,
+                field_quantities,
+                scalar_quantities,
+            ));
+        capabilities
+    }
 
     fn mixed_p1_statuses(
         capabilities: &BackendCapabilities,
@@ -882,5 +1337,326 @@ mod tests {
                 .any(|id| id == quantity));
         }
         assert!(capabilities.preview_quantities.iter().any(|id| id == "m"));
+    }
+
+    #[test]
+    fn fem_capability_profile_exposes_only_materializable_energy_density_shapes() {
+        let expected = [
+            "eden_ex",
+            "eden_demag",
+            "eden_ext",
+            "eden_ani",
+            "eden_dmi",
+            "eden_total",
+        ];
+
+        for capabilities in [
+            capabilities_for_fem_engine(FemEngine::CpuNative),
+            capabilities_for_fem_engine(FemEngine::NativeGpu),
+        ] {
+            for quantity in expected {
+                assert!(
+                    capabilities
+                        .preview_quantities
+                        .iter()
+                        .any(|id| id == quantity),
+                    "{} must expose materializable FEM preview quantity {quantity}",
+                    capabilities.engine_id.as_str()
+                );
+                assert!(
+                    capabilities
+                        .snapshot_quantities
+                        .iter()
+                        .any(|id| id == quantity),
+                    "{} must expose materializable FEM snapshot quantity {quantity}",
+                    capabilities.engine_id.as_str()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn resolved_quantity_capability_keeps_all_five_planes_and_carrier_metadata() {
+        let capabilities = with_resolved_quantity_providers(
+            capabilities_for_fdm_engine(FdmEngine::CpuReference, FdmCapabilityProfile::SingleGrid),
+            &["H_demag"],
+            &[],
+        );
+        let spec = fullmag_quantities::quantity_spec("H_demag").expect("canonical quantity");
+        let carrier = FieldCarrierDescriptor {
+            carrier_id: "field:H_demag:full".to_string(),
+            carrier_fingerprint: "verified-topology".to_string(),
+            scope: "full_domain".to_string(),
+            scope_kind: "full_domain".to_string(),
+            scope_id: None,
+            components: 3,
+            indexing: "full_domain".to_string(),
+            view: "full".to_string(),
+            payload_version: Some("fmvp.v3".to_string()),
+            payload_state: FieldPayloadState::Current,
+        };
+
+        let resolved = resolve_quantity_capability(
+            &capabilities,
+            spec,
+            ResolvedQuantityCapabilityContext {
+                scope: "full_domain",
+                precision: "double",
+                materialization: QuantityMaterializationCapability::Materialized,
+                carriers: vec![carrier.clone()],
+            },
+        );
+
+        assert_eq!(resolved.provider, QuantityProviderCapability::Available);
+        assert_eq!(resolved.request, QuantityRequestCapability::FieldVector);
+        assert_eq!(
+            resolved.materialization,
+            QuantityMaterializationCapability::Materialized
+        );
+        assert_eq!(resolved.render, QuantityRenderCapability::Renderable);
+        assert_eq!(
+            resolved.publication,
+            QuantityPublicationCapability::Interactive
+        );
+        assert_eq!(resolved.lane, "fdm_cpu_reference");
+        assert_eq!(resolved.precision, "double");
+        assert_eq!(resolved.carriers, vec![carrier]);
+    }
+
+    #[test]
+    fn provider_registry_keeps_scalar_and_spatial_planes_separate() {
+        let mut capabilities =
+            capabilities_for_fdm_engine(FdmEngine::CpuReference, FdmCapabilityProfile::SingleGrid);
+        capabilities.resolved_quantity_registry =
+            Some(ResolvedQuantityProviderRegistry::from_resolved_plan(
+                "fdm_cpu_reference",
+                "double",
+                std::iter::empty::<&str>(),
+                ["E_total", "H_demag"],
+            ));
+
+        let registry = capabilities
+            .resolved_quantity_registry
+            .as_ref()
+            .expect("resolved provider registry");
+        let spatial = fullmag_quantities::quantity_spec("H_demag").expect("spatial quantity");
+        let scalar = fullmag_quantities::quantity_spec("E_total").expect("scalar quantity");
+
+        assert!(!registry.contains(spatial));
+        assert!(registry.contains(scalar));
+    }
+
+    #[test]
+    fn provider_registry_uses_resolved_plan_projection_for_field_quantities() {
+        let mut capabilities =
+            capabilities_for_fdm_engine(FdmEngine::CpuReference, FdmCapabilityProfile::SingleGrid);
+        capabilities.resolved_quantity_registry =
+            Some(ResolvedQuantityProviderRegistry::from_resolved_plan(
+                "fdm_cpu_reference",
+                "double",
+                ["H_demag"],
+                std::iter::empty::<&str>(),
+            ));
+
+        let spec = fullmag_quantities::quantity_spec("H_demag").expect("spatial quantity");
+        let resolved = resolve_quantity_capability(
+            &capabilities,
+            spec,
+            ResolvedQuantityCapabilityContext {
+                scope: "full_domain",
+                precision: "double",
+                materialization: QuantityMaterializationCapability::Unmaterialized,
+                carriers: Vec::new(),
+            },
+        );
+
+        assert_eq!(resolved.provider, QuantityProviderCapability::Available);
+        assert_eq!(resolved.request, QuantityRequestCapability::FieldVector);
+    }
+
+    #[test]
+    fn static_compatibility_registry_is_not_provider_truth() {
+        let capabilities =
+            capabilities_for_fdm_engine(FdmEngine::CpuReference, FdmCapabilityProfile::SingleGrid);
+        let spec = fullmag_quantities::quantity_spec("H_demag").expect("canonical quantity");
+
+        let resolved = resolve_quantity_capability(
+            &capabilities,
+            spec,
+            ResolvedQuantityCapabilityContext {
+                scope: "full_domain",
+                precision: "double",
+                materialization: QuantityMaterializationCapability::Unmaterialized,
+                carriers: Vec::new(),
+            },
+        );
+
+        assert_eq!(resolved.provider, QuantityProviderCapability::Unavailable);
+        assert_eq!(
+            resolved.reason_code.as_deref(),
+            Some("quantity_registry_not_resolved_plan")
+        );
+    }
+
+    #[test]
+    fn fem_study_registries_match_final_engine_identity() {
+        for capabilities in [
+            capabilities_for_fem_eigen_engine(FemEngine::CpuNative),
+            capabilities_for_fem_eigen_engine(FemEngine::NativeGpu),
+            capabilities_for_fem_frequency_response_validation_engine(FemEngine::CpuNative),
+        ] {
+            let registry = capabilities
+                .resolved_quantity_registry
+                .as_ref()
+                .expect("resolved FEM study registry");
+            assert_eq!(registry.lane, capabilities.engine_id.as_str());
+            assert_eq!(registry.precision, "double");
+            assert_eq!(
+                registry.source,
+                QuantityProviderRegistrySource::CompatibilityProfile
+            );
+        }
+    }
+
+    #[test]
+    fn planned_fem_study_registry_is_resolved_but_has_no_invented_providers() {
+        let capabilities = mark_study_quantity_registry_as_resolved_plan(
+            capabilities_for_fem_eigen_engine(FemEngine::CpuNative),
+        );
+        let registry = capabilities
+            .resolved_quantity_registry
+            .as_ref()
+            .expect("resolved FEM study registry");
+        assert_eq!(registry.lane, capabilities.engine_id.as_str());
+        assert_eq!(
+            registry.source,
+            QuantityProviderRegistrySource::ResolvedPlan
+        );
+        assert!(registry.field_quantities.is_empty());
+        assert!(registry.scalar_quantities.is_empty());
+
+        let spec = fullmag_quantities::quantity_spec("H_demag").expect("canonical quantity");
+        let resolved = resolve_quantity_capability(
+            &capabilities,
+            spec,
+            ResolvedQuantityCapabilityContext {
+                scope: "full",
+                precision: "double",
+                materialization: QuantityMaterializationCapability::Unmaterialized,
+                carriers: Vec::new(),
+            },
+        );
+        assert_eq!(resolved.provider, QuantityProviderCapability::Unavailable);
+        assert_eq!(
+            resolved.reason_code.as_deref(),
+            Some("quantity_unsupported")
+        );
+    }
+
+    #[test]
+    fn compatibility_quantity_lists_cannot_mutate_resolved_provider_plane() {
+        let mut capabilities =
+            capabilities_for_fdm_engine(FdmEngine::CpuReference, FdmCapabilityProfile::SingleGrid);
+        capabilities.preview_quantities = vec!["H_demag".to_string()];
+        capabilities.snapshot_quantities.clear();
+        capabilities.scalar_outputs.clear();
+        capabilities.resolved_quantity_registry =
+            Some(ResolvedQuantityProviderRegistry::from_resolved_plan(
+                "fdm_cpu_reference",
+                "double",
+                std::iter::empty::<&str>(),
+                std::iter::empty::<&str>(),
+            ));
+
+        let spec = fullmag_quantities::quantity_spec("H_demag").expect("spatial quantity");
+        let resolved = resolve_quantity_capability(
+            &capabilities,
+            spec,
+            ResolvedQuantityCapabilityContext {
+                scope: "full_domain",
+                precision: "double",
+                materialization: QuantityMaterializationCapability::Unmaterialized,
+                carriers: Vec::new(),
+            },
+        );
+
+        assert_eq!(resolved.provider, QuantityProviderCapability::Unavailable);
+        assert_eq!(
+            resolved.reason_code.as_deref(),
+            Some("quantity_unsupported")
+        );
+    }
+
+    #[test]
+    fn resolved_tensor_capability_is_scoped_unsupported_shape_not_a_vector_guess() {
+        let capabilities = with_resolved_quantity_providers(
+            capabilities_for_fem_engine(FemEngine::CpuNative),
+            &["spin_current_tensor"],
+            &[],
+        );
+        let spec = fullmag_quantities::quantity_spec("spin_current_tensor")
+            .expect("canonical tensor quantity");
+
+        let resolved = resolve_quantity_capability(
+            &capabilities,
+            spec,
+            ResolvedQuantityCapabilityContext {
+                scope: "magnetic_only",
+                precision: "double",
+                materialization: QuantityMaterializationCapability::Unmaterialized,
+                carriers: Vec::new(),
+            },
+        );
+
+        assert_eq!(resolved.provider, QuantityProviderCapability::Available);
+        assert_eq!(
+            resolved.request,
+            QuantityRequestCapability::UnsupportedShape
+        );
+        assert_eq!(resolved.render, QuantityRenderCapability::UnsupportedShape);
+        assert_eq!(resolved.reason_code.as_deref(), Some("unsupported_shape"));
+        assert!(resolved.carriers.is_empty());
+    }
+
+    #[test]
+    fn legacy_payload_can_never_resolve_as_current_materialization() {
+        let capabilities = with_resolved_quantity_providers(
+            capabilities_for_fdm_engine(FdmEngine::CpuReference, FdmCapabilityProfile::SingleGrid),
+            &["m"],
+            &[],
+        );
+        let spec = fullmag_quantities::quantity_spec("m").expect("canonical quantity");
+
+        let resolved = resolve_quantity_capability(
+            &capabilities,
+            spec,
+            ResolvedQuantityCapabilityContext {
+                scope: "magnetic_only",
+                precision: "double",
+                materialization: QuantityMaterializationCapability::LegacyUnverified,
+                carriers: vec![FieldCarrierDescriptor {
+                    carrier_id: "legacy:m".to_string(),
+                    carrier_fingerprint: "legacy-fingerprint".to_string(),
+                    scope: "magnetic_only".to_string(),
+                    scope_kind: "magnetic_only".to_string(),
+                    scope_id: None,
+                    components: 3,
+                    indexing: "legacy_count_only".to_string(),
+                    view: "full".to_string(),
+                    payload_version: Some("fmvp.v2".to_string()),
+                    payload_state: FieldPayloadState::LegacyUnverified,
+                }],
+            },
+        );
+
+        assert_eq!(
+            resolved.materialization,
+            QuantityMaterializationCapability::LegacyUnverified
+        );
+        assert_eq!(resolved.reason_code.as_deref(), Some("legacy_unverified"));
+        assert_eq!(
+            resolved.carriers[0].payload_state,
+            FieldPayloadState::LegacyUnverified
+        );
     }
 }

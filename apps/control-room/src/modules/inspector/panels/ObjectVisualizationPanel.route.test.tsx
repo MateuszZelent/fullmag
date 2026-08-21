@@ -33,6 +33,10 @@ vi.mock("@/kernel/KernelContext", () => ({
       }),
       subscribe: () => () => undefined,
     },
+    realtimeConnection: {
+      getSnapshot: () => ({ disrupted: false, status: "connected" }),
+      subscribe: () => () => undefined,
+    },
     visualizationDebug: {
       getSnapshots: () => [],
       subscribe: () => () => undefined,
@@ -71,6 +75,10 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
   },
   useQuantityCatalogResource: ({ enabled }: { enabled: boolean }) => {
     resourceCall("quantity-catalog", enabled);
+    return { data: null, error: null, revision: null, status: "idle" };
+  },
+  useSolverStatusResource: ({ enabled }: { enabled: boolean }) => {
+    resourceCall("solver-status", enabled);
     return { data: null, error: null, revision: null, status: "idle" };
   },
 }));
@@ -421,6 +429,19 @@ afterEach(() => {
 });
 
 describe("ObjectVisualizationPanel lane routing", () => {
+  it("renders the same Inspector root across an optimistic snapshot refresh without render-phase warnings", () => {
+    testState.discretization = "fdm";
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const before = renderToStaticMarkup(<ObjectVisualizationPanel selection={selection} />);
+    const during = renderToStaticMarkup(<ObjectVisualizationPanel selection={selection} />);
+
+    expect(before).toContain('data-visualization-revision="1:1"');
+    expect(during).toContain('data-visualization-revision="1:1"');
+    expect(consoleError).not.toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
   it("places visualization controls before scientific context", () => {
     testState.discretization = "fdm";
     const html = renderResolvedInspector(selection);
@@ -496,6 +517,7 @@ describe("ObjectVisualizationPanel lane routing", () => {
 
   it("renders route-specific debug owner contracts around the shared diagnostic body", () => {
     testState.discretization = "fdm";
+    testState.resourceCalls.length = 0;
 
     const routes = [
       {
@@ -541,6 +563,11 @@ describe("ObjectVisualizationPanel lane routing", () => {
         "Activate the 3D center surface to observe adopted render data.",
       );
     }
+    expect(
+      testState.resourceCalls.filter(
+        (call) => call.name === "solver-status" && call.enabled,
+      ),
+    ).toHaveLength(routes.length);
   });
 
   it("keeps a normal explicit-FDM object visualization route on the object target", () => {

@@ -8,6 +8,16 @@ import type {
 import { quantityItemsForVisualizationTarget } from "./ribbonTabViews";
 
 describe("quantityItemsForVisualizationTarget", () => {
+  it("shows only the active disabled loading item before catalogs arrive", () => {
+    expect(quantityItemsForVisualizationTarget("H_demag", "object")).toEqual([
+      {
+        disabled: true,
+        label: "Loading quantity catalog / H_demag",
+        value: "H_demag",
+      },
+    ]);
+  });
+
   it("offers advertised materializable quantities before field payloads exist", () => {
     const fieldCatalog = {
       domain_generation_id: "fdm-generation-1",
@@ -106,10 +116,16 @@ describe("quantityItemsForVisualizationTarget", () => {
       quantityItemsForVisualizationTarget("H_eff", "airbox", fieldCatalog),
     ).toEqual([
       { disabled: true, label: "Unavailable / H_eff", value: "H_eff" },
-      { label: "Demag field / H_demag", value: "H_demag" },
-      { label: "Antenna field / H_ant", value: "H_ant" },
+      { label: "H_demag", value: "H_demag" },
+      { label: "H_ant", value: "H_ant" },
     ]);
-    expect(quantityItemsForVisualizationTarget("H_demag", "airbox")).toEqual([]);
+    expect(quantityItemsForVisualizationTarget("H_demag", "airbox")).toEqual([
+      {
+        disabled: true,
+        label: "Loading quantity catalog / H_demag",
+        value: "H_demag",
+      },
+    ]);
   });
 
   it("uses every available spatial catalog quantity for objects, and only full-domain ones for an Airbox", () => {

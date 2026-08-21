@@ -697,6 +697,13 @@ typedef struct {
     uint64_t                   sot_active_node_mask_len;
     /* Append-only stage-time envelope extension. */
     fullmag_fem_sot_envelope_desc sot_envelope;
+
+    /* Append-only frozen-spins descriptor. The native FEM runtime must either
+       consume both arrays as one activation snapshot or fail closed. */
+    const uint8_t *frozen_mask;
+    uint64_t frozen_mask_len;
+    const double *frozen_reference_xyz;
+    uint64_t frozen_reference_len;
 } fullmag_fem_plan_desc;
 
 /*

@@ -9,6 +9,17 @@ export type QuantityCatalogEntry = QuantityCatalogResource["quantities"][number]
 export function quantityCatalogEntrySupportsSpatialVisualization(
   quantity: QuantityCatalogEntry,
 ): boolean {
+  const resolved = quantity.resolved_capability;
+  if (resolved) {
+    return (
+      resolved.provider === "available" &&
+      resolved.request === "field_vector" &&
+      resolved.render === "renderable" &&
+      resolved.publication === "interactive" &&
+      resolved.materialization !== "legacy_unverified" &&
+      resolved.materialization !== "unavailable"
+    );
+  }
   return (
     quantity.solver_capability === "supported" &&
     quantity.requestable &&
@@ -17,6 +28,24 @@ export function quantityCatalogEntrySupportsSpatialVisualization(
     quantity.interactive_preview &&
     quantity.supports_preview_3d &&
     quantity.location !== "global"
+  );
+}
+
+export function quantityCatalogEntryHasAdoptableSpatialCarrier(
+  quantity: QuantityCatalogEntry,
+): boolean {
+  const resolved = quantity.resolved_capability;
+  return Boolean(
+    resolved &&
+      quantityCatalogEntrySupportsSpatialVisualization(quantity) &&
+      resolved.materialization === "materialized" &&
+      resolved.carriers.some(
+        (carrier) =>
+          carrier.components > 0 &&
+          carrier.view.length > 0 &&
+          carrier.indexing !== "legacy_count_only" &&
+          carrier.payload_state === "current",
+      ),
   );
 }
 

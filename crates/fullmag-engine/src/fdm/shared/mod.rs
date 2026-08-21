@@ -1,3 +1,4 @@
+pub(crate) mod frozen_spins;
 pub(crate) mod observables;
 pub(crate) mod problem;
 pub(crate) mod terms;

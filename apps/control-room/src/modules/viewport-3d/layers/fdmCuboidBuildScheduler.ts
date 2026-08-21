@@ -10,6 +10,7 @@ import {
   buildViewport3DFdmCuboid,
   estimateFdmCuboidBuildInputBytes,
   estimateFdmCuboidBuildOutputBytes,
+  isFdmCuboidBuildAdmissible,
   type FdmCuboidBuildRequest,
   type FdmCuboidBuildResult,
   type FdmVectorOnlyBuildRequest,
@@ -67,6 +68,13 @@ export async function buildViewport3DFdmCuboidOffMainThread(
   options: FdmCuboidBuildOptions = {},
 ): Promise<FdmCuboidBuildResult> {
   throwIfAborted(options.signal);
+  if (!isFdmCuboidBuildAdmissible(request)) {
+    return {
+      model: null,
+      vectorCellIndices: null,
+      vectorSegments: null,
+    };
+  }
   const buildKey =
     options.buildKey ?? `fdm-cuboid:adhoc:${fallbackFdmCuboidBuildId++}`;
   const scheduler = getFdmCuboidBuildJobScheduler();
@@ -100,10 +108,11 @@ export async function buildViewport3DFdmVectorsOffMainThread(
 ): Promise<FdmCuboidBuildResult> {
   return buildViewport3DFdmCuboidOffMainThread(
     {
-      cellSelection: "all",
+      cellSelection: request.cellSelection ?? "all",
       domain: null,
       maxVectorGlyphs: request.maxVectors,
-      realizedRegionIds: null,
+      membershipAdmission: request.membershipAdmission,
+      realizedRegionIds: request.realizedRegionIds ?? null,
       vectorAnchorMode: request.anchorMode,
       vectorField: request.fieldVector,
       vectorGeometryScope: request.geometryScope,
@@ -112,6 +121,8 @@ export async function buildViewport3DFdmVectorsOffMainThread(
         cellIndices: request.cellIndices,
         gridShape: request.gridShape,
         cellSize: request.cellSize,
+        nativeActiveMask: request.nativeActiveMask,
+        membershipAdmission: request.membershipAdmission,
       },
       vectorScale: request.scale,
       voxelFillRatio: 1,
@@ -352,10 +363,12 @@ function cloneFdmCuboidBuildRequestForWorker(
     vectorField: cloneFieldVectorForWorker(input.vectorField),
     vectorOnly: input.vectorOnly
       ? {
+          ...input.vectorOnly,
           anchors: new Float32Array(input.vectorOnly.anchors),
           cellIndices: new Uint32Array(input.vectorOnly.cellIndices),
-          gridShape: input.vectorOnly.gridShape,
-          cellSize: input.vectorOnly.cellSize,
+          nativeActiveMask: input.vectorOnly.nativeActiveMask
+            ? new Uint8Array(input.vectorOnly.nativeActiveMask)
+            : input.vectorOnly.nativeActiveMask,
         }
       : input.vectorOnly,
   };
@@ -391,6 +404,10 @@ function transferablesForFdmCuboidBuildRequest(
   addArrayBufferTransferable(transferables, request.realizedRegionIds?.buffer);
   addArrayBufferTransferable(transferables, request.vectorOnly?.anchors.buffer);
   addArrayBufferTransferable(transferables, request.vectorOnly?.cellIndices.buffer);
+  addArrayBufferTransferable(
+    transferables,
+    request.vectorOnly?.nativeActiveMask?.buffer,
+  );
   return transferables;
 }
 

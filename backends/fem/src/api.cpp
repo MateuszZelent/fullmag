@@ -2633,6 +2633,12 @@ fullmag_fem_backend *fullmag_fem_backend_create(const fullmag_fem_plan_desc *pla
         fullmag_fem_set_global_error("fullmag_fem_backend_create received null plan");
         return nullptr;
     }
+    if (plan->frozen_mask_len != 0 || plan->frozen_reference_len != 0 ||
+        plan->frozen_mask != nullptr || plan->frozen_reference_xyz != nullptr) {
+        fullmag_fem_set_global_error(
+            "frozen_spins_fem_unqualified: native FEM backend does not yet consume the true-DOF mask/reference descriptor");
+        return nullptr;
+    }
 
     auto *handle = new (std::nothrow) fullmag_fem_backend();
     if (handle == nullptr) {
@@ -2659,6 +2665,12 @@ fullmag_fem_backend *fullmag_fem_backend_create_v2(
 {
     if (plan == nullptr) {
         fullmag_fem_set_global_error("fullmag_fem_backend_create_v2 received null plan");
+        return nullptr;
+    }
+    if (plan->frozen_mask_len != 0 || plan->frozen_reference_len != 0 ||
+        plan->frozen_mask != nullptr || plan->frozen_reference_xyz != nullptr) {
+        fullmag_fem_set_global_error(
+            "frozen_spins_fem_unqualified: native FEM backend does not yet consume the true-DOF mask/reference descriptor");
         return nullptr;
     }
     if (adaptive_config == nullptr) {

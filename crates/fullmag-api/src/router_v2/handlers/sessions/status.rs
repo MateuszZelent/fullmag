@@ -1,6 +1,7 @@
 //! GET /v2/sessions/current/status — thin LiveStatus summary.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use axum::extract::State;
@@ -26,6 +27,8 @@ const RELAXATION_ALGORITHMS_AVAILABLE: [&str; 4] = [
     "nonlinear_cg",
     "tangent_plane_implicit",
 ];
+const CONNECTIVITY_DEGRADED_AFTER_MS: u64 = 15_000;
+const CONNECTIVITY_DISCONNECTED_AFTER_MS: u64 = 45_000;
 
 fn relaxation_algorithms_available() -> Vec<String> {
     RELAXATION_ALGORITHMS_AVAILABLE
@@ -49,6 +52,7 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<LiveS
     let workspace_selection = state.current_workspace_selection.read().await.clone();
     let workspace_ribbon = state.current_workspace_ribbon.read().await.clone();
     let workspace_layout = state.current_workspace_layout.read().await.clone();
+    let connectivity = refresh_current_live_connectivity(&state).await;
     let (commands_revision, command_completion_revision) = {
         let ledger = state.current_command_ledger.lock().await;
         let revisions = command_ledger_revisions(&ledger);
@@ -72,7 +76,68 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<LiveS
         &workspace_layout,
         commands_revision,
         command_completion_revision,
+        connectivity,
     )))
+}
+
+/// Advances backend-owned connectivity from the real runner publication
+/// heartbeat. Only an accepted publication may restore `Connected`; this path
+/// can only preserve or worsen connectivity when the heartbeat becomes stale.
+pub(crate) async fn refresh_current_live_connectivity(state: &AppState) -> SessionConnectivity {
+    refresh_current_live_connectivity_at(state, current_unix_ms()).await
+}
+
+pub(crate) async fn record_current_live_heartbeat(state: &AppState) {
+    record_current_live_heartbeat_at(state, current_unix_ms()).await;
+}
+
+fn current_unix_ms() -> u64 {
+    u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .unwrap_or(u64::MAX)
+}
+
+async fn record_current_live_heartbeat_at(state: &AppState, now_unix_ms: u64) {
+    state
+        .current_live_last_seen_unix_ms
+        .store(now_unix_ms, Ordering::Release);
+    *state.current_live_connectivity.write().await = SessionConnectivity::Connected;
+}
+
+async fn refresh_current_live_connectivity_at(
+    state: &AppState,
+    now_unix_ms: u64,
+) -> SessionConnectivity {
+    let last_seen = state.current_live_last_seen_unix_ms.load(Ordering::Acquire);
+    let current = *state.current_live_connectivity.read().await;
+    let next = connectivity_from_liveness_at(current, last_seen, now_unix_ms);
+    if next != current {
+        *state.current_live_connectivity.write().await = next;
+    }
+    next
+}
+
+fn connectivity_from_liveness_at(
+    current: SessionConnectivity,
+    last_seen_unix_ms: u64,
+    now_unix_ms: u64,
+) -> SessionConnectivity {
+    if last_seen_unix_ms == 0 {
+        return current;
+    }
+    let age_ms = now_unix_ms.saturating_sub(last_seen_unix_ms);
+    if age_ms >= CONNECTIVITY_DISCONNECTED_AFTER_MS {
+        SessionConnectivity::Disconnected
+    } else if age_ms >= CONNECTIVITY_DEGRADED_AFTER_MS && current == SessionConnectivity::Connected
+    {
+        SessionConnectivity::Degraded
+    } else {
+        current
+    }
 }
 
 fn is_terminal_stage_record(record: &crate::types::StageExecutionRecord) -> bool {
@@ -120,13 +185,16 @@ pub(crate) fn build_live_status(
     workspace_layout: &CurrentWorkspaceLayout,
     commands_revision: u64,
     command_completion_revision: u64,
+    connectivity: SessionConnectivity,
 ) -> LiveStatus {
     let solver_lifecycle = crate::session::effective_runtime_status_code(snapshot);
     let lifecycle = lifecycle_contract(
         &solver_lifecycle,
         snapshot.runtime_status.can_accept_commands && !snapshot.runtime_status.is_busy,
+        connectivity,
     );
-    let terminal_session_resource = lifecycle.session_resource == "tombstoned";
+    let terminal_session_resource =
+        lifecycle.session_resource == crate::schemas::status::SessionResourceLifecycle::Tombstoned;
     let session = SessionSummary {
         session_id: snapshot.session.session_id.clone(),
         session_epoch: session_epoch(
@@ -337,20 +405,24 @@ pub(crate) fn build_live_status(
 pub(crate) fn lifecycle_contract(
     solver: &str,
     runtime_accepts_commands: bool,
+    connectivity: SessionConnectivity,
 ) -> crate::schemas::status::SessionLifecycleSummary {
     let terminal = matches!(solver, "completed" | "failed" | "cancelled" | "closed");
     crate::schemas::status::SessionLifecycleSummary {
         solver: solver.to_string(),
-        session_resource: if terminal { "tombstoned" } else { "active" }.to_string(),
-        connectivity: "connected".to_string(),
-        commandability: if terminal {
-            "read_only"
-        } else if runtime_accepts_commands {
-            "allowed"
+        session_resource: if terminal {
+            crate::schemas::status::SessionResourceLifecycle::Tombstoned
         } else {
-            "forbidden"
-        }
-        .to_string(),
+            crate::schemas::status::SessionResourceLifecycle::Active
+        },
+        connectivity,
+        commandability: if terminal {
+            crate::schemas::status::SessionCommandability::ReadOnly
+        } else if runtime_accepts_commands && connectivity == SessionConnectivity::Connected {
+            crate::schemas::status::SessionCommandability::Allowed
+        } else {
+            crate::schemas::status::SessionCommandability::Forbidden
+        },
     }
 }
 
@@ -1309,29 +1381,74 @@ fn compat_end_to_end_steps_per_second(
 #[cfg(test)]
 mod tests {
     use super::{
-        compat_end_to_end_steps_per_second, lifecycle_contract, relaxation_algorithms_available,
-        session_epoch, solver_completion_record,
+        compat_end_to_end_steps_per_second, connectivity_from_liveness_at, lifecycle_contract,
+        relaxation_algorithms_available, session_epoch, solver_completion_record,
+        CONNECTIVITY_DEGRADED_AFTER_MS, CONNECTIVITY_DISCONNECTED_AFTER_MS,
+    };
+    use crate::schemas::status::{
+        SessionCommandability, SessionConnectivity, SessionResourceLifecycle,
     };
 
     #[test]
     fn awaiting_command_is_an_active_commandable_session_resource() {
-        let lifecycle = lifecycle_contract("awaiting_command", true);
+        let lifecycle =
+            lifecycle_contract("awaiting_command", true, SessionConnectivity::Connected);
         assert_eq!(lifecycle.solver, "awaiting_command");
-        assert_eq!(lifecycle.session_resource, "active");
-        assert_eq!(lifecycle.connectivity, "connected");
-        assert_eq!(lifecycle.commandability, "allowed");
+        assert_eq!(lifecycle.session_resource, SessionResourceLifecycle::Active);
+        assert_eq!(lifecycle.connectivity, SessionConnectivity::Connected);
+        assert_eq!(lifecycle.commandability, SessionCommandability::Allowed);
     }
 
     #[test]
     fn completed_session_is_a_read_only_tombstone_with_a_new_epoch() {
-        let lifecycle = lifecycle_contract("completed", false);
-        assert_eq!(lifecycle.session_resource, "tombstoned");
-        assert_eq!(lifecycle.commandability, "read_only");
+        let lifecycle = lifecycle_contract("completed", false, SessionConnectivity::Connected);
+        assert_eq!(
+            lifecycle.session_resource,
+            SessionResourceLifecycle::Tombstoned
+        );
+        assert_eq!(lifecycle.commandability, SessionCommandability::ReadOnly);
         assert_eq!(session_epoch("session-1", 1000, 0, false), "session-1@1000");
         assert_eq!(
             session_epoch("session-1", 1000, 2000, true),
             "session-1@1000:tombstone:2000"
         );
+    }
+
+    #[test]
+    fn degraded_transport_preserves_solver_lifecycle_but_forbids_commands() {
+        let lifecycle = lifecycle_contract("running", true, SessionConnectivity::Degraded);
+        assert_eq!(lifecycle.solver, "running");
+        assert_eq!(lifecycle.session_resource, SessionResourceLifecycle::Active);
+        assert_eq!(lifecycle.connectivity, SessionConnectivity::Degraded);
+        assert_eq!(lifecycle.commandability, SessionCommandability::Forbidden);
+    }
+
+    #[test]
+    fn periodic_idle_ticks_keep_long_awaiting_session_connected_until_ticks_stop() {
+        let mut last_seen = 1_000_u64;
+        let mut connectivity = SessionConnectivity::Connected;
+        for now in (11_000_u64..=61_000_u64).step_by(10_000) {
+            last_seen = now;
+            connectivity = connectivity_from_liveness_at(connectivity, last_seen, now);
+            assert_eq!(connectivity, SessionConnectivity::Connected);
+            assert_eq!(
+                lifecycle_contract("awaiting_command", true, connectivity).commandability,
+                SessionCommandability::Allowed
+            );
+        }
+
+        connectivity = connectivity_from_liveness_at(
+            connectivity,
+            last_seen,
+            last_seen + CONNECTIVITY_DEGRADED_AFTER_MS,
+        );
+        assert_eq!(connectivity, SessionConnectivity::Degraded);
+        connectivity = connectivity_from_liveness_at(
+            connectivity,
+            last_seen,
+            last_seen + CONNECTIVITY_DISCONNECTED_AFTER_MS,
+        );
+        assert_eq!(connectivity, SessionConnectivity::Disconnected);
     }
 
     #[test]

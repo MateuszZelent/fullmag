@@ -153,6 +153,23 @@ bool relaxation_torque_confirmation_pending(
     double max_torque_apm);
 
 /*
+ * Return whether a configured torque criterion is currently violated.  Direct
+ * minimizers use this guard before publishing a zero-gradient completion so a
+ * representability-degenerate state cannot masquerade as equilibrium.
+ */
+bool relaxation_torque_above_tolerance(
+    const Context &ctx,
+    double max_torque_apm);
+
+/*
+ * Return whether a zero-gradient direct-minimizer state cannot be published
+ * as physical equilibrium and must be reported as numerical stagnation.
+ */
+bool relaxation_degenerate_gradient_requires_stagnation(
+    const Context &ctx,
+    double max_torque_apm);
+
+/*
  * Update relaxation stop state from the latest public step statistics.
  *
  * The function accumulates pseudo-time from non-negative `dt_seconds`, tracks

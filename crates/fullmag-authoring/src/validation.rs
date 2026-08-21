@@ -176,7 +176,116 @@ pub fn validate_scene_document(scene: &SceneDocument) -> Result<(), SceneDocumen
     }
     validate_scene_field_drives(scene, &object_ids)?;
     validate_scene_planar_monitors(scene, &object_ids)?;
+    validate_scene_magnetization_constraints(scene, &object_ids)?;
 
+    Ok(())
+}
+
+fn validate_scene_magnetization_constraints(
+    scene: &SceneDocument,
+    object_ids: &BTreeSet<String>,
+) -> Result<(), SceneDocumentValidationError> {
+    let region_ids = scene.objects.iter().flat_map(|object| {
+        object
+            .regions
+            .iter()
+            .map(move |region| (object.id.clone(), region.region_id.clone()))
+    });
+    let context =
+        fullmag_ir::SelectionValidationContext::new(object_ids.iter().cloned(), region_ids);
+    fullmag_ir::validate_selection_definitions_with_context(
+        &scene.selections,
+        fullmag_ir::SelectionLimits::default(),
+        &context,
+    )
+    .map_err(|errors| SceneDocumentValidationError::new(errors.join("\n")))?;
+
+    let mut known_stage_ids = BTreeSet::new();
+    if let Some(pipeline) = &scene.study.study_pipeline {
+        collect_stage_ids(&pipeline.nodes, &mut known_stage_ids);
+    }
+
+    let mut constraint_ids = BTreeSet::new();
+    for (index, constraint) in scene.magnetization_constraints.iter().enumerate() {
+        let frozen = constraint.frozen_spins();
+        let path = format!("magnetization_constraints[{index}]");
+        if frozen.schema_version != fullmag_ir::FROZEN_SPINS_SCHEMA_VERSION {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path}.schema_version must be '{}'",
+                fullmag_ir::FROZEN_SPINS_SCHEMA_VERSION
+            )));
+        }
+        if frozen.id.trim().is_empty() || !constraint_ids.insert(frozen.id.as_str()) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path}.id must be non-empty and unique"
+            )));
+        }
+        if frozen.name.trim().is_empty() {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{path}.name must not be empty"
+            )));
+        }
+        if let fullmag_ir::FrozenReferencePolicyIR::ExplicitFieldAsset { asset_id } =
+            &frozen.reference
+        {
+            if asset_id.trim().is_empty() {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "frozen_reference_asset_invalid: {path}.reference.asset_id must not be empty"
+                )));
+            }
+        }
+        if let fullmag_ir::ConstraintActivationIR::StageIds { stage_ids } = &frozen.activation {
+            let unique = stage_ids.iter().collect::<BTreeSet<_>>();
+            if stage_ids.is_empty()
+                || stage_ids.iter().any(|stage_id| stage_id.trim().is_empty())
+                || unique.len() != stage_ids.len()
+            {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "frozen_activation_stage_ids_invalid: {path}.activation.stage_ids must be non-empty and unique"
+                )));
+            }
+            if let Some(stage_id) = stage_ids
+                .iter()
+                .find(|stage_id| !known_stage_ids.contains(stage_id.as_str()))
+            {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "frozen_activation_stage_unknown: {path} activation stage id '{stage_id}' does not exist"
+                )));
+            }
+        }
+        if matches!(
+            frozen.membership,
+            fullmag_ir::SelectionMembershipPolicyIR::Static {}
+        ) && fullmag_ir::selection_is_state_dependent(&frozen.selector, &scene.selections)
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "frozen_membership_static_state_dependent: {path}.membership cannot be static for a state-dependent selector"
+            )));
+        }
+        let mut synthetic_index = index;
+        let synthetic_id = loop {
+            let candidate = format!("__scene_constraint_{synthetic_index}");
+            if scene
+                .selections
+                .iter()
+                .all(|definition| definition.id != candidate)
+            {
+                break candidate;
+            }
+            synthetic_index = synthetic_index.saturating_add(1);
+        };
+        let mut definitions = scene.selections.clone();
+        definitions.push(fullmag_ir::SelectionDefinitionIR::new(
+            synthetic_id,
+            frozen.selector.clone(),
+        ));
+        fullmag_ir::validate_selection_definitions_with_context(
+            &definitions,
+            fullmag_ir::SelectionLimits::default(),
+            &context,
+        )
+        .map_err(|errors| SceneDocumentValidationError::new(errors.join("\n")))?;
+    }
     Ok(())
 }
 

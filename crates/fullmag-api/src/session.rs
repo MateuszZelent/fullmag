@@ -12,7 +12,7 @@ use crate::router_v2::handlers::data::fields::{
     load_fdm_multilayer_airbox_carrier, resolved_fdm_multilayer_airbox_field,
 };
 use crate::router_v2::handlers::data::resolved_spatial_field::{
-    resolve_current_spatial_field, ResolvedSpatialField,
+    full_field_publication_carrier_identity, resolve_current_spatial_field, ResolvedSpatialField,
 };
 use crate::router_v2::handlers::sessions::status::domain_generation_id;
 use crate::types::*;
@@ -20,6 +20,69 @@ use fullmag_runner::{LivePreviewField, RuntimeStatus};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone)]
+pub(crate) struct FrozenSpinsPreviewRecord {
+    pub session_id: String,
+    pub scene_revision: u64,
+    pub source_state_revision: u64,
+    pub topology_fingerprint: String,
+    pub response: crate::schemas::FrozenSpinsPreviewResponse,
+    pub frozen_mask: Vec<bool>,
+}
+
+const MAX_FROZEN_SPINS_PREVIEWS: usize = 32;
+
+#[derive(Debug, Default)]
+pub(crate) struct FrozenSpinsPreviewStore {
+    records: BTreeMap<String, FrozenSpinsPreviewRecord>,
+    insertion_order: VecDeque<String>,
+    session_id: Option<String>,
+}
+
+impl FrozenSpinsPreviewStore {
+    pub(crate) fn retain_session(&mut self, session_id: &str) {
+        if self.session_id.as_deref() != Some(session_id) {
+            self.records.clear();
+            self.insertion_order.clear();
+            self.session_id = Some(session_id.to_string());
+        }
+    }
+
+    pub(crate) fn get(&self, preview_id: &str) -> Option<&FrozenSpinsPreviewRecord> {
+        self.records.get(preview_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn get_mut(&mut self, preview_id: &str) -> Option<&mut FrozenSpinsPreviewRecord> {
+        self.records.get_mut(preview_id)
+    }
+
+    pub(crate) fn insert(
+        &mut self,
+        preview_id: String,
+        record: FrozenSpinsPreviewRecord,
+    ) -> Option<FrozenSpinsPreviewRecord> {
+        self.retain_session(&record.session_id);
+        if self.records.contains_key(&preview_id) {
+            self.insertion_order
+                .retain(|existing| existing != &preview_id);
+        }
+        self.insertion_order.push_back(preview_id.clone());
+        let replaced = self.records.insert(preview_id, record);
+        while self.records.len() > MAX_FROZEN_SPINS_PREVIEWS {
+            if let Some(oldest) = self.insertion_order.pop_front() {
+                self.records.remove(&oldest);
+            }
+        }
+        replaced
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.records.len()
+    }
+}
 
 pub(crate) async fn current_live_session_id(state: &AppState) -> Result<String, ApiError> {
     let current = state.current_live_state.read().await;
@@ -1254,6 +1317,7 @@ pub(crate) fn default_current_live_state(req: &CurrentLiveSnapshotRequest) -> Se
         quantities: Vec::new(),
         fem_mesh: None,
         latest_fields: LatestFields::default(),
+        field_publication_bundles: BTreeMap::new(),
         preview_cache: CachedPreviewFields::default(),
         artifacts: Vec::new(),
         display_selection: CurrentDisplaySelection::default(),
@@ -1810,6 +1874,16 @@ fn validate_terminal_field_replacement(
 
 pub(crate) fn apply_current_live_snapshot(
     current: &mut SessionStateResponse,
+    req: CurrentLiveSnapshotRequest,
+) -> Result<(), ApiError> {
+    let mut candidate = current.clone();
+    apply_current_live_snapshot_in_place(&mut candidate, req)?;
+    *current = candidate;
+    Ok(())
+}
+
+fn apply_current_live_snapshot_in_place(
+    current: &mut SessionStateResponse,
     mut req: CurrentLiveSnapshotRequest,
 ) -> Result<(), ApiError> {
     let apply_start = std::time::Instant::now();
@@ -1995,6 +2069,7 @@ pub(crate) fn apply_current_live_snapshot(
 
     let result = finalize_current_live_apply(current, flags);
     if result.is_ok() {
+        refresh_accepted_field_publication_bundles(current, &affected_field_quantities)?;
         annotate_solver_profile_publisher_apply(
             &mut current.solver_profile,
             apply_start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
@@ -2162,6 +2237,16 @@ pub(crate) fn apply_current_live_scalar_frame(
 
 pub(crate) fn apply_current_live_field_frame(
     current: &mut SessionStateResponse,
+    frame: CurrentLiveFieldFrameRequest,
+) -> Result<(), ApiError> {
+    let mut candidate = current.clone();
+    apply_current_live_field_frame_in_place(&mut candidate, frame)?;
+    *current = candidate;
+    Ok(())
+}
+
+fn apply_current_live_field_frame_in_place(
+    current: &mut SessionStateResponse,
     mut frame: CurrentLiveFieldFrameRequest,
 ) -> Result<(), ApiError> {
     if matches!(
@@ -2244,7 +2329,8 @@ pub(crate) fn apply_current_live_field_frame(
             clear_preview_cache: frame.clear_preview_cache,
             ..CurrentLiveApplyFlags::default()
         },
-    )
+    )?;
+    refresh_accepted_field_publication_bundles(current, &affected_field_quantities)
 }
 
 pub(crate) fn current_artifact_dir(current: &SessionStateResponse) -> Option<PathBuf> {
@@ -2327,17 +2413,89 @@ fn bind_latest_field_observation_frames(
         let source_step = object
             .get("source_step")
             .and_then(Value::as_u64)
-            .or_else(|| current.live_state.as_ref().map(|state| state.latest_step.step))
+            .or_else(|| {
+                current
+                    .live_state
+                    .as_ref()
+                    .map(|state| state.latest_step.step)
+            })
             .unwrap_or(0);
         let source_time_seconds = object
             .get("source_time_seconds")
             .and_then(Value::as_f64)
-            .or_else(|| current.live_state.as_ref().map(|state| state.latest_step.time));
+            .or_else(|| {
+                current
+                    .live_state
+                    .as_ref()
+                    .map(|state| state.latest_step.time)
+            });
         let frame = accepted_observation_frame_ref(current, source_step, source_time_seconds);
         if let Ok(frame) = serde_json::to_value(frame) {
             object.insert("observation_frame".to_string(), frame);
         }
     }
+}
+
+fn refresh_accepted_field_publication_bundles(
+    current: &mut SessionStateResponse,
+    affected_quantities: &BTreeSet<String>,
+) -> Result<(), ApiError> {
+    for quantity_id in affected_quantities {
+        current.field_publication_bundles.remove(quantity_id);
+        let Some(field_value) = current.latest_fields.get(quantity_id) else {
+            continue;
+        };
+        let Some(observation_frame_value) = field_value.get("observation_frame") else {
+            continue;
+        };
+        let observation_frame: crate::schemas::common::AcceptedObservationFrameRef =
+            serde_json::from_value(observation_frame_value.clone()).map_err(|error| {
+                ApiError::conflict(format!(
+                    "accepted field '{quantity_id}' has an invalid observation frame: {error}"
+                ))
+            })?;
+        let scalar_matches_frame = current
+            .scalar_rows
+            .iter()
+            .rev()
+            .any(|row| row.observation_frame.as_ref() == Some(&observation_frame));
+        if !scalar_matches_frame {
+            continue;
+        }
+        let Some(spec) = fullmag_quantities::quantity_spec(quantity_id) else {
+            continue;
+        };
+        let Some(field) =
+            resolve_current_spatial_field(current, quantity_id, usize::from(spec.n_comp))?
+        else {
+            continue;
+        };
+        let Some(carrier) = full_field_publication_carrier_identity(&field) else {
+            continue;
+        };
+        let topology_revision = observation_frame
+            .topology_revision
+            .parse::<u64>()
+            .map_err(|_| ApiError::conflict("accepted observation topology revision is invalid"))?;
+        let bundle = crate::schemas::common::FieldPublicationBundle::for_response(
+            observation_frame,
+            current.field_samples_revision,
+            current.scalar_revision,
+            current.field_catalog_revision,
+            topology_revision,
+            carrier.topology_hash,
+            quantity_id,
+            "full",
+            carrier.scope_kind,
+            carrier.scope_id,
+            carrier.carrier_id,
+            carrier.carrier_fingerprint,
+        );
+        current
+            .field_publication_bundles
+            .insert(quantity_id.clone(), bundle);
+    }
+    Ok(())
 }
 
 pub(crate) fn merge_cached_preview_fields(

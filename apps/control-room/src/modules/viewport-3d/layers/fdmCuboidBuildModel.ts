@@ -109,6 +109,8 @@ export interface FdmCuboidBuildRequest {
   vectorField?: DecodedFieldVector | null;
   /** Optional vector-only payload. When present no cuboid model is built. */
   vectorOnly?: FdmVectorOnlyBuildInput | null;
+  /** Admission hint; exact is accepted only with attached membership evidence. */
+  membershipAdmission?: "exact" | "full-domain";
   vectorGeometryScope?: "full" | "surface";
   vectorScale: number;
   vectorSurfaceOffsetEnabled?: boolean;
@@ -123,6 +125,81 @@ export interface FdmVectorOnlyBuildInput {
   cellIndices: Uint32Array;
   gridShape: [number, number, number];
   cellSize?: readonly [number, number, number];
+  /** Exact native active-cell evidence used when FMRM is unavailable. */
+  nativeActiveMask?: Uint8Array | null;
+  /** Admission hint; exact is accepted only with attached membership evidence. */
+  membershipAdmission?: "exact" | "full-domain";
+}
+
+/**
+ * Returns whether a vectors-only request can be admitted before scheduling a
+ * worker. A full-domain proof is valid only for an explicit all-cell target;
+ * active/inactive selections require exact membership evidence.
+ */
+export function isFdmVectorOnlyBuildAdmissible(
+  request: Pick<
+    FdmCuboidBuildRequest,
+    "cellSelection" | "membershipAdmission" | "nativeActiveMask" | "realizedRegionIds" | "vectorOnly"
+  >,
+): boolean {
+  if (!request.vectorOnly) return true;
+  const [nx, ny, nz] = request.vectorOnly.gridShape;
+  const totalCells = nx * ny * nz;
+  const realizedRegionIds = request.realizedRegionIds;
+  if (realizedRegionIds && realizedRegionIds.length !== totalCells) return false;
+  const nativeMask = request.vectorOnly.nativeActiveMask ?? null;
+  if (nativeMask && !isValidFdmNativeActiveMask(nativeMask, totalCells)) {
+    return false;
+  }
+  if (request.nativeActiveMask && !isValidFdmNativeActiveMask(
+    request.nativeActiveMask,
+    totalCells,
+  )) {
+    return false;
+  }
+  if (realizedRegionIds?.length === totalCells || nativeMask) return true;
+  const admission =
+    request.vectorOnly.membershipAdmission ?? request.membershipAdmission;
+  return admission === "full-domain" && request.cellSelection === "all";
+}
+
+/** Reject active/inactive full-cuboid jobs before they can reach a worker. */
+export function isFdmCuboidBuildAdmissible(
+  request: Pick<
+    FdmCuboidBuildRequest,
+    "cellSelection" | "domain" | "membershipAdmission" | "nativeActiveMask" | "realizedRegionIds" | "vectorOnly"
+  >,
+): boolean {
+  if (!isFdmVectorOnlyBuildAdmissible(request)) return false;
+  if (!request.vectorOnly) {
+    const domain = request.domain;
+    if (request.realizedRegionIds || request.nativeActiveMask) {
+      if (!domain || domain.totalCells <= 0) return false;
+      const [nx, ny, nz] = domain.shape;
+      const totalCells = Math.min(domain.totalCells, nx * ny * nz);
+      if (
+        request.realizedRegionIds &&
+        request.realizedRegionIds.length !== totalCells
+      ) {
+        return false;
+      }
+      if (
+        request.nativeActiveMask &&
+        !isValidFdmNativeActiveMask(request.nativeActiveMask, totalCells)
+      ) {
+        return false;
+      }
+    }
+  }
+  if (request.cellSelection !== "active" && request.cellSelection !== "inactive") {
+    return true;
+  }
+  if (request.vectorOnly) return true;
+  const domain = request.domain;
+  if (!domain || domain.totalCells <= 0) return false;
+  const [nx, ny, nz] = domain.shape;
+  const totalCells = Math.min(domain.totalCells, nx * ny * nz);
+  return request.realizedRegionIds?.length === totalCells;
 }
 
 /**
@@ -135,6 +212,8 @@ export function createFdmVectorOnlyBuildInput({
   domain,
   fieldVector,
   maxSamples,
+  membershipAdmission,
+  nativeActiveMask,
   realizedRegionIds,
 }: {
   cellSelection: FdmCuboidCellSelection;
@@ -144,15 +223,21 @@ export function createFdmVectorOnlyBuildInput({
     "indexing" | "nodeIndices" | "pointCount"
   > | null;
   maxSamples?: number | null;
+  membershipAdmission?: "exact" | "full-domain";
+  nativeActiveMask?: Uint8Array | null;
   realizedRegionIds: Uint32Array | null;
 }): FdmVectorOnlyBuildInput | null {
   if (!domain || domain.totalCells <= 0) return null;
   const [nx, ny, nz] = domain.shape;
   const totalCells = Math.min(domain.totalCells, nx * ny * nz);
   if (realizedRegionIds && realizedRegionIds.length !== totalCells) return null;
+  const hasExactMembership = realizedRegionIds !== null;
+  const nativeMask = nativeActiveMask ?? null;
+  if (nativeMask && !isValidFdmNativeActiveMask(nativeMask, totalCells)) return null;
   if (
-    (cellSelection === "active" || cellSelection === "inactive") &&
-    !realizedRegionIds
+    !hasExactMembership &&
+    !nativeMask &&
+    !(membershipAdmission === "full-domain" && cellSelection === "all")
   ) {
     return null;
   }
@@ -167,7 +252,12 @@ export function createFdmVectorOnlyBuildInput({
   );
   const selectedCandidates: number[] = [];
   for (const cellIndex of candidateCellIndices) {
-    const regionId = realizedRegionIds?.[cellIndex] ?? FMRM_INACTIVE_REGION_ID;
+    const regionId = realizedRegionIds?.[cellIndex] ??
+      (nativeMask
+        ? nativeMask[cellIndex] === 1
+          ? 0
+          : FMRM_INACTIVE_REGION_ID
+        : FMRM_INACTIVE_REGION_ID);
     if (!cellMatchesSelection(regionId, cellSelection)) continue;
     selectedCandidates.push(cellIndex);
   }
@@ -196,6 +286,10 @@ export function createFdmVectorOnlyBuildInput({
     cellIndices: selected,
     gridShape: [nx, ny, nz],
     cellSize: domain.spacing,
+    nativeActiveMask: nativeMask ? new Uint8Array(nativeMask) : undefined,
+    membershipAdmission: hasExactMembership || nativeMask
+      ? "exact"
+      : "full-domain",
   };
 }
 
@@ -259,11 +353,13 @@ export function buildViewport3DFdmCuboid(
       fieldVector: request.vectorField,
       geometryScope: request.vectorGeometryScope ?? "full",
       maxVectors: request.maxVectorGlyphs,
+      ...request.vectorOnly,
+      membershipAdmission:
+        request.vectorOnly.membershipAdmission ?? request.membershipAdmission,
       realizedRegionIds: request.realizedRegionIds,
       scale: request.vectorScale,
       surfaceOffsetEnabled: request.vectorSurfaceOffsetEnabled,
       surfaceOffsetScale: request.vectorSurfaceOffsetScale,
-      ...request.vectorOnly,
     });
     return {
       model: null,
@@ -346,6 +442,33 @@ export function buildFdmVectorSegmentsFromAnchors(
   ) {
     return null;
   }
+  const hasExactMembership = hasExactFdmMembership(
+    request.realizedRegionIds,
+    request.gridShape,
+  );
+  const nativeActiveMask = request.nativeActiveMask ?? null;
+  const hasExactNativeMask = nativeActiveMask
+    ? isValidFdmNativeActiveMask(
+        nativeActiveMask,
+        request.gridShape[0] * request.gridShape[1] * request.gridShape[2],
+      )
+    : false;
+  if (request.realizedRegionIds && !hasExactMembership) return null;
+  if (nativeActiveMask && !hasExactNativeMask) return null;
+  const hasExactEvidence = hasExactMembership || hasExactNativeMask;
+  if (
+    !hasExactEvidence &&
+    request.membershipAdmission !== "full-domain"
+  ) {
+    return null;
+  }
+  if (
+    !hasExactEvidence &&
+    request.membershipAdmission === "full-domain" &&
+    (request.cellSelection ?? "all") !== "all"
+  ) {
+    return null;
+  }
   const indexing = buildFdmFieldIndexResolver(
     fieldVector,
     request.gridShape[0] * request.gridShape[1] * request.gridShape[2],
@@ -354,7 +477,18 @@ export function buildFdmVectorSegmentsFromAnchors(
 
   const candidates: number[] = [];
   for (let ordinal = 0; ordinal < cellIndices.length; ordinal += 1) {
-    if (indexing.resolve(cellIndices[ordinal] ?? -1) !== null) {
+    const cellIndex = cellIndices[ordinal] ?? -1;
+    if (
+      indexing.resolve(cellIndex) !== null &&
+      (!hasExactEvidence ||
+        cellMatchesSelection(
+          request.realizedRegionIds?.[cellIndex] ??
+            (nativeActiveMask?.[cellIndex] === 1
+              ? 0
+              : FMRM_INACTIVE_REGION_ID),
+          request.cellSelection ?? "all",
+        ))
+    ) {
       candidates.push(ordinal);
     }
   }
@@ -483,6 +617,17 @@ function hasExactFdmMembership(
   [nx, ny, nz]: readonly [number, number, number],
 ): realizedRegionIds is Uint32Array {
   return realizedRegionIds?.length === nx * ny * nz;
+}
+
+function isValidFdmNativeActiveMask(
+  nativeActiveMask: Uint8Array,
+  totalCells: number,
+): boolean {
+  if (nativeActiveMask.length !== totalCells) return false;
+  for (const value of nativeActiveMask) {
+    if (value !== 0 && value !== 1) return false;
+  }
+  return true;
 }
 
 function resolveFdmSurfaceAnchorNormal(
@@ -1406,6 +1551,7 @@ export function estimateFdmCuboidBuildInputBytes(
     (request.realizedRegionIds?.byteLength ?? 0)
     + (request.vectorOnly?.anchors.byteLength ?? 0)
     + (request.vectorOnly?.cellIndices.byteLength ?? 0)
+    + (request.vectorOnly?.nativeActiveMask?.byteLength ?? 0)
   );
 }
 

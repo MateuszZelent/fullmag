@@ -40,6 +40,7 @@ from .current_transport import (
     VoltageElectrode,
 )
 from .couplings import Coupling, CouplingEndpoint, CouplingRegistry
+from .constraints import FrozenSpins
 from .planar_monitor import (
     DepthProjection,
     MonitorTarget,
@@ -336,6 +337,7 @@ __all__ = [
     "UniformFieldProfile",
     "FrequencyResponse",
     "FrequencyResponseSolverPolicy",
+    "FrozenSpins",
     "DispersionValidationScenario",
     "K0KittelFieldSample",
     "K0KittelFieldSweepValidation",

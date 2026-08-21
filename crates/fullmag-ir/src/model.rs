@@ -455,6 +455,8 @@ pub struct MaterialIR {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MagnetIR {
+    #[serde(default)]
+    pub object_id: Option<String>,
     pub name: String,
     pub region: String,
     pub material: String,

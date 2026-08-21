@@ -5,6 +5,7 @@ import math
 import re
 from typing import Mapping, Sequence
 
+from fullmag.model.constraints import FrozenSpins
 from fullmag.model.dynamics import LLG
 from fullmag.model.eigen import ModeTracking, coerce_k_sampling
 from fullmag.model.outputs import (
@@ -612,16 +613,19 @@ def _serialize_spin_wave_bc(value: SpinWaveBoundarySpec) -> str | dict[str, obje
 class TimeEvolution:
     dynamics: LLG
     outputs: Sequence[TimeOutputSpec]
+    constraints: Sequence[FrozenSpins]
     _table_autosave: TableAutosave | None = field(default=None, repr=False)
 
     def __init__(
         self,
         dynamics: LLG,
         outputs: Sequence[TimeOutputSpec],
+        constraints: Sequence[FrozenSpins] = (),
         table_autosave: TableAutosave | None = None,
     ) -> None:
         object.__setattr__(self, "dynamics", dynamics)
         object.__setattr__(self, "outputs", outputs)
+        object.__setattr__(self, "constraints", tuple(constraints))
         object.__setattr__(self, "_table_autosave", table_autosave)
         self.__post_init__()
 
@@ -653,6 +657,7 @@ class TimeEvolution:
         return TimeEvolution(
             dynamics=self.dynamics,
             outputs=self.outputs,
+            constraints=self.constraints,
             table_autosave=TableAutosave(
                 t_sampl=t_sampl,
                 quantities=quantities,
@@ -667,6 +672,7 @@ class TimeEvolution:
         return TimeEvolution(
             dynamics=self.dynamics,
             outputs=self.outputs,
+            constraints=self.constraints,
             table_autosave=self._table_autosave.add_expression(expression),
         )
 
@@ -790,6 +796,7 @@ class Relaxation:
     algorithm: str = "llg_overdamped"
     stop: RelaxStop = field(default_factory=RelaxStop)
     dynamics: LLG | None = None
+    constraints: Sequence[FrozenSpins] = ()
     _table_autosave: TableAutosave | None = field(default=None, repr=False)
     torque_tolerance: float | None = field(init=False)
     torque_tolerance_unit: str = field(init=False)
@@ -808,6 +815,7 @@ class Relaxation:
         max_pseudotime_s: object = _UNSET,
         max_physical_time_s: object = _UNSET,
         dynamics: LLG | None = None,
+        constraints: Sequence[FrozenSpins] = (),
         table_autosave: TableAutosave | None = None,
         torque_tolerance_unit: str = "T",
     ) -> None:
@@ -830,6 +838,7 @@ class Relaxation:
             ),
         )
         object.__setattr__(self, "dynamics", dynamics)
+        object.__setattr__(self, "constraints", tuple(constraints))
         object.__setattr__(self, "_table_autosave", table_autosave)
         object.__setattr__(self, "torque_tolerance", self.stop.torque_tolerance_apm)
         object.__setattr__(self, "torque_tolerance_unit", torque_tolerance_unit)
@@ -890,6 +899,7 @@ class Relaxation:
             algorithm=self.algorithm,
             dynamics=self.dynamics,
             outputs=self.outputs,
+            constraints=self.constraints,
             stop=self.stop,
             torque_tolerance_unit=self.torque_tolerance_unit,
             table_autosave=TableAutosave(
@@ -907,6 +917,7 @@ class Relaxation:
             algorithm=self.algorithm,
             dynamics=self.dynamics,
             outputs=self.outputs,
+            constraints=self.constraints,
             stop=self.stop,
             torque_tolerance_unit=self.torque_tolerance_unit,
             table_autosave=self._table_autosave.add_expression(expression),

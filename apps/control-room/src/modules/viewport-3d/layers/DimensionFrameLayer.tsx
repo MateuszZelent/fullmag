@@ -1,6 +1,5 @@
 "use client";
 
-import { useThree } from "@react-three/fiber";
 import { useEffect, useMemo, memo } from "react";
 import {
   BufferAttribute,
@@ -11,6 +10,7 @@ import {
 } from "three";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import type { Viewport3DBounds } from "../viewport3dRenderModel";
 import type {
   Viewport3DCameraProjection,
@@ -64,7 +64,7 @@ export const DimensionFrameLayer = memo(function DimensionFrameLayer({
   tracker,
   unitMode,
 }: DimensionFrameLayerProps) {
-  const invalidate = useThree((state) => state.invalidate);
+  const invalidate = useBatchedInvalidate("resize");
   const layerColors = useMemo(
     () => resolveDimensionFrameLayerColors(colors),
     [colors],

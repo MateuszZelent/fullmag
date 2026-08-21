@@ -1305,9 +1305,11 @@ fn observe_multilayer(
             + anisotropy_energy
             + dmi_energy,
         max_dm_dt,
+        max_rhs_all_norm_per_s: max_dm_dt,
         max_h_eff,
         max_h_demag,
         max_torque_Apm: max_torque_apm,
+        max_torque_all_Apm: max_torque_apm,
         per_object_scalars,
     })
 }
@@ -1579,14 +1581,84 @@ fn max_norm(values: &[[f64; 3]]) -> f64 {
     values.iter().map(|value| norm(*value)).fold(0.0, f64::max)
 }
 
+fn restore_frozen_reference_by_layer_offsets(
+    frozen: &fullmag_engine::FrozenSpinsState,
+    layers: &mut [Vec<[f64; 3]>],
+) -> Result<(), RunError> {
+    let total_len = layers.iter().map(Vec::len).sum::<usize>();
+    if total_len != frozen.len() {
+        return Err(RunError {
+            message: format!(
+                "frozen_spins_multilayer_state_size_mismatch: flattened layer length {} differs from frozen state length {}",
+                total_len,
+                frozen.len()
+            ),
+        });
+    }
+    let mut flat = flatten_layers(layers);
+    frozen.restore_reference(&mut flat);
+    let mut offset = 0usize;
+    for layer in layers {
+        let end = offset + layer.len();
+        layer.copy_from_slice(&flat[offset..end]);
+        offset = end;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::LivePreviewRequest;
     use fullmag_ir::{
         AxisBoundary, ExchangeBoundaryCondition, FdmDemagPeriodicityIR, FdmLayerPlanIR,
-        FdmMaterialIR, FdmPeriodicityIR, RelaxationControlIR,
+        FdmMaterialIR, FdmPeriodicityIR, RelaxationControlIR, ResolvedFrozenSpinsPlanIR,
+        SelectionAuthoredFingerprintIR, SelectionCertificateIR,
+        RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION, SELECTION_CERTIFICATE_SCHEMA_VERSION,
     };
+
+    fn frozen_spins_state(
+        mask: Vec<bool>,
+        reference: &[[f64; 3]],
+    ) -> fullmag_engine::FrozenSpinsState {
+        let frozen_dof_count = mask.iter().filter(|frozen| **frozen).count() as u64;
+        let active_dof_count = mask.len() as u64;
+        let free_dof_count = active_dof_count - frozen_dof_count;
+        let plan = ResolvedFrozenSpinsPlanIR {
+            schema_version: RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION.to_string(),
+            constraint_ids: vec!["multilayer-test".to_string()],
+            frozen_mask: mask,
+            active_dof_count,
+            frozen_dof_count,
+            free_dof_count,
+            mask_sha256: "a".repeat(64),
+            grid_or_mesh_fingerprint: "multilayer-test-grid".to_string(),
+            source_state_revision: Some(1),
+            all_active_dofs_frozen: active_dof_count > 0 && free_dof_count == 0,
+            certificate: SelectionCertificateIR {
+                schema_version: SELECTION_CERTIFICATE_SCHEMA_VERSION.to_string(),
+                evaluator_id: "selection.fdm_cell_center.v1".to_string(),
+                constraint_ids: vec!["multilayer-test".to_string()],
+                authored_fingerprints: vec![SelectionAuthoredFingerprintIR {
+                    constraint_id: "multilayer-test".to_string(),
+                    selector_sha256: "b".repeat(64),
+                }],
+                raw_candidate_dof_count: frozen_dof_count,
+                inactive_candidate_dof_count: 0,
+                active_dof_count,
+                frozen_dof_count,
+                free_dof_count,
+                bounds_m: None,
+                grid_or_mesh_fingerprint: "multilayer-test-grid".to_string(),
+                source_state_revision: Some(1),
+                mask_sha256: "a".repeat(64),
+                resolved_reference_sha256: "c".repeat(64),
+                warnings: Vec::new(),
+            },
+        };
+        fullmag_engine::FrozenSpinsState::capture_at_activation(&plan, None, reference)
+            .expect("valid multilayer frozen-spin fixture")
+    }
 
     fn make_plan(enable_demag: bool) -> FdmMultilayerPlanIR {
         let layers = vec![
@@ -1703,6 +1775,26 @@ mod tests {
         plan.planner_summary.estimated_unique_kernels = estimate.catalog.keys.len() as u32;
         plan.planner_summary.estimated_kernel_bytes = estimate.accounting.admission_bytes;
         plan
+    }
+
+    #[test]
+    fn frozen_spins_multilayer_restore_uses_flattened_unequal_layer_offsets() {
+        let reference = vec![
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, -1.0, 0.0],
+        ];
+        let frozen = frozen_spins_state(vec![false, true, true, false, true], &reference);
+        let moved = [0.0, 0.0, -1.0];
+        let mut layers = vec![vec![moved; 2], vec![moved; 3]];
+
+        restore_frozen_reference_by_layer_offsets(&frozen, &mut layers)
+            .expect("unequal layer layout should map to the flattened frozen carrier");
+
+        assert_eq!(layers[0], vec![moved, reference[1]]);
+        assert_eq!(layers[1], vec![reference[2], moved, reference[4]]);
     }
 
     #[test]

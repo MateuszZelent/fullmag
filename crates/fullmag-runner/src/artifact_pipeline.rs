@@ -73,6 +73,11 @@ pub(crate) struct ArtifactPipelineSummary {
     pub scalar_row_writer_wall_time_ns: u64,
     pub field_snapshot_writer_wall_time_ns: u64,
     pub native_field_snapshot_writer_wall_time_ns: u64,
+    /// Root of stage-autosave artifacts when it is distinct from the regular
+    /// artifact output.  Final execution resolution is known only after the
+    /// solver returns, so the caller must finalize this tree after the writer
+    /// thread has flushed it.
+    pub autosave_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -1367,7 +1372,12 @@ fn writer_loop(
         .map_err(|error| format!("failed to serialize field storage metadata: {error}"))?,
     )
     .map_err(|error| format!("failed to write field storage metadata: {error}"))?;
-    let mut summary = ArtifactPipelineSummary::default();
+    let mut summary = ArtifactPipelineSummary {
+        autosave_root: stage_autosave_config
+            .as_ref()
+            .map(|_| autosave_root.to_path_buf()),
+        ..ArtifactPipelineSummary::default()
+    };
     let mut scalar_writer: Option<BufWriter<File>> = None;
     let mut stage_autosave = stage_autosave_config
         .map(|config| StageAutosaveRuntime::new(autosave_root, config))
@@ -1923,6 +1933,146 @@ mod tests {
             payload["provenance"]["executed_physics_module_ids"],
             serde_json::json!(["torque:strip"])
         );
+        let request = || crate::types::ExecutionRequestProvenance {
+            backend: "fdm".into(),
+            device: "cpu".into(),
+            precision: "double".into(),
+            mode: "strict".into(),
+        };
+        let resolution = crate::types::FinalExecutionResolutionProvenance {
+            authored_request: request(),
+            effective_request: request(),
+            resolved_execution: request(),
+            resolution_mode: "exact".into(),
+            fallback_occurred: false,
+            fallback_reason: None,
+        };
+        crate::artifacts::finalize_streamed_artifact_provenance(&output_dir, &resolution)
+            .expect("finalize streamed execution provenance");
+        let finalized: serde_json::Value = serde_json::from_slice(
+            &fs::read(output_dir.join("fields/m/step_000001.json"))
+                .expect("read finalized field metadata"),
+        )
+        .expect("decode finalized field artifact");
+        assert_eq!(
+            finalized["provenance"]["execution_resolution"],
+            serde_json::to_value(resolution).expect("serialize execution resolution")
+        );
         fs::remove_dir_all(output_dir).expect("remove exact physics fixture");
+    }
+
+    #[test]
+    fn separate_stage_autosave_root_is_recorded_for_final_provenance() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-autosave-provenance-output-{}-{unique}",
+            std::process::id()
+        ));
+        let autosave_root = std::env::temp_dir().join(format!(
+            "fullmag-autosave-provenance-root-{}-{unique}",
+            std::process::id()
+        ));
+        let field_context = FieldArtifactContext {
+            problem_name: "autosave-provenance".into(),
+            ir_version: "v0".into(),
+            source_hash: None,
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            layout: serde_json::json!({"kind": "fdm", "grid": [1, 1, 1]}),
+            execution_resolution: None,
+        };
+        let stage_autosave = StageAutosavePipelineConfig {
+            stage_id: "relax".into(),
+            policy: fullmag_ir::StageAutosaveIR {
+                kind: "stage_autosave".into(),
+                target: "state".into(),
+                layout: fullmag_ir::AutosaveLayoutIR::Separate,
+                format: fullmag_ir::AutosaveFormatIR::Zarr,
+                table: None,
+                fields: vec![fullmag_ir::FieldAutosaveIR {
+                    kind: "field_autosave".into(),
+                    quantity: "m".into(),
+                    every_seconds: None,
+                    sample_period_policy: None,
+                    every_steps: Some(1),
+                }],
+            },
+        };
+        let mut pipeline = ArtifactPipeline::start_with_stage_autosave_roots(
+            output_dir.clone(),
+            autosave_root.clone(),
+            field_context,
+            2,
+            Some(stage_autosave),
+            None,
+        )
+        .expect("start artifact pipeline");
+        let mut recorder =
+            ArtifactRecorder::streaming(ExecutionProvenance::default(), pipeline.sender());
+        recorder
+            .record_field_snapshot(
+                FieldSnapshot::new(
+                    "m",
+                    1,
+                    1.0e-13,
+                    1.0e-13,
+                    3,
+                    "xyz",
+                    "cell",
+                    "full",
+                    1,
+                    vec![1.0, 0.0, 0.0],
+                )
+                .expect("valid field snapshot"),
+            )
+            .expect("enqueue field snapshot");
+        let summary = pipeline.finish().expect("finish artifact pipeline");
+        assert_eq!(summary.autosave_root, Some(autosave_root.clone()));
+
+        let request = || crate::types::ExecutionRequestProvenance {
+            backend: "fdm".into(),
+            device: "cpu".into(),
+            precision: "double".into(),
+            mode: "strict".into(),
+        };
+        let resolution = crate::types::FinalExecutionResolutionProvenance {
+            authored_request: request(),
+            effective_request: request(),
+            resolved_execution: request(),
+            resolution_mode: "exact".into(),
+            fallback_occurred: false,
+            fallback_reason: None,
+        };
+        crate::artifacts::finalize_stage_autosave_provenance(&autosave_root, &resolution)
+            .expect("finalize separate stage autosave provenance");
+
+        let root_zattrs: serde_json::Value = serde_json::from_slice(
+            &fs::read(autosave_root.join("state.zarr/.zattrs")).expect("read root zattrs"),
+        )
+        .expect("decode root zattrs");
+        let stage_manifest: serde_json::Value = serde_json::from_slice(
+            &fs::read(autosave_root.join("state.zarr/stages/stage_0000_relax/manifest.json"))
+                .expect("read stage manifest"),
+        )
+        .expect("decode stage manifest");
+        let field_zattrs: serde_json::Value = serde_json::from_slice(
+            &fs::read(autosave_root.join("state.zarr/stages/stage_0000_relax/fields/m/.zattrs"))
+                .expect("read field zattrs"),
+        )
+        .expect("decode field zattrs");
+        let expected = serde_json::to_value(&resolution).expect("serialize resolution");
+        assert_eq!(root_zattrs["provenance"]["execution_resolution"], expected);
+        assert_eq!(
+            stage_manifest["provenance"]["execution_resolution"],
+            serde_json::to_value(&resolution).expect("serialize resolution")
+        );
+        assert_eq!(
+            field_zattrs["provenance"]["execution_resolution"],
+            serde_json::to_value(&resolution).expect("serialize resolution")
+        );
+        fs::remove_dir_all(output_dir).expect("remove autosave output fixture");
+        fs::remove_dir_all(autosave_root).expect("remove autosave provenance fixture");
     }
 }

@@ -87,7 +87,8 @@ use crate::preview::{
     mesh_quantity_active_mask,
 };
 #[cfg(feature = "fem-gpu")]
-use crate::quantities::{normalize_quantity_id, QuantityId};
+use crate::quantities::normalize_quantity_id;
+use crate::quantities::QuantityId;
 #[cfg(feature = "fem-gpu")]
 use crate::scalar_metrics::{single_object_scalars, weighted_object_scalars};
 #[cfg(feature = "fem-gpu")]
@@ -677,31 +678,96 @@ fn normalized_native_runtime_element_markers(
     ))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeFemPreviewObservable {
+    M,
+    HEx,
+    HDemag,
+    DemagPhi,
+    HExt,
+    HDrive,
+    HEff,
+    Torque,
+    HAni,
+    HDmi,
+    HMel,
+    HAniCubic,
+    HDmiBulk,
+    HOe,
+    HTherm,
+}
+
+impl NativeFemPreviewObservable {
+    fn from_quantity(id: QuantityId) -> Option<Self> {
+        Some(match id {
+            QuantityId::M => Self::M,
+            QuantityId::HEx => Self::HEx,
+            QuantityId::HDemag => Self::HDemag,
+            QuantityId::DemagPhi => Self::DemagPhi,
+            QuantityId::HExt => Self::HExt,
+            QuantityId::HDrive => Self::HDrive,
+            QuantityId::HEff => Self::HEff,
+            QuantityId::Torque => Self::Torque,
+            QuantityId::HAni => Self::HAni,
+            QuantityId::HDmi => Self::HDmi,
+            QuantityId::HMel => Self::HMel,
+            QuantityId::HAniCubic => Self::HAniCubic,
+            QuantityId::HDmiBulk => Self::HDmiBulk,
+            QuantityId::HOe => Self::HOe,
+            QuantityId::HTherm => Self::HTherm,
+            _ => return None,
+        })
+    }
+}
+
 #[cfg(feature = "fem-gpu")]
 fn fem_preview_observable(quantity: &str) -> Result<ffi::fullmag_fem_observable, RunError> {
-    Ok(match normalize_quantity_id(quantity)? {
-        QuantityId::HEx => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EX,
-        QuantityId::HDemag => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DEMAG,
-        QuantityId::DemagPhi => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_DEMAG_PHI,
-        QuantityId::HExt => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EXT,
-        QuantityId::HEff => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EFF,
-        QuantityId::Torque => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_TORQUE,
-        QuantityId::HAni => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_ANI,
-        QuantityId::HDmi => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DMI,
-        QuantityId::HMel => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_MEL,
-        QuantityId::HAniCubic => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_ANI_CUBIC,
-        QuantityId::HDmiBulk => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DMI_BULK,
-        QuantityId::HOe => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_OE,
-        QuantityId::HTherm => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_THERM,
-        QuantityId::HDrive => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DRIVE,
-        QuantityId::M => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_M,
-        other => {
-            return Err(RunError {
-                message: format!(
-                    "native FEM preview quantity '{}' is not supported",
-                    other.as_str()
-                ),
-            });
+    let id = normalize_quantity_id(quantity)?;
+    let observable = NativeFemPreviewObservable::from_quantity(id).ok_or_else(|| RunError {
+        message: format!(
+            "native FEM preview quantity '{}' is not supported",
+            id.as_str()
+        ),
+    })?;
+    Ok(match observable {
+        NativeFemPreviewObservable::M => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_M,
+        NativeFemPreviewObservable::HEx => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EX,
+        NativeFemPreviewObservable::HDemag => {
+            ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DEMAG
+        }
+        NativeFemPreviewObservable::DemagPhi => {
+            ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_DEMAG_PHI
+        }
+        NativeFemPreviewObservable::HExt => {
+            ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EXT
+        }
+        NativeFemPreviewObservable::HDrive => {
+            ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DRIVE
+        }
+        NativeFemPreviewObservable::HEff => {
+            ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EFF
+        }
+        NativeFemPreviewObservable::Torque => {
+            ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_TORQUE
+        }
+        NativeFemPreviewObservable::HAni => {
+            ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_ANI
+        }
+        NativeFemPreviewObservable::HDmi => {
+            ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DMI
+        }
+        NativeFemPreviewObservable::HMel => {
+            ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_MEL
+        }
+        NativeFemPreviewObservable::HAniCubic => {
+            ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_ANI_CUBIC
+        }
+        NativeFemPreviewObservable::HDmiBulk => {
+            ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DMI_BULK
+        }
+        NativeFemPreviewObservable::HOe => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_OE,
+        NativeFemPreviewObservable::HTherm => {
+            ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_THERM
         }
     })
 }
@@ -1208,8 +1274,8 @@ fn pack_native_regional_field_drives(
     ))
 }
 
-#[cfg(feature = "fem-gpu")]
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
 struct NativeFemEnergyDensityTerms {
     exchange: bool,
     demag: bool,
@@ -1220,7 +1286,6 @@ struct NativeFemEnergyDensityTerms {
     bulk_dmi: bool,
 }
 
-#[cfg(feature = "fem-gpu")]
 impl NativeFemEnergyDensityTerms {
     fn from_plan(plan: &fullmag_ir::FemPlanIR) -> Self {
         Self {
@@ -1286,9 +1351,20 @@ impl NativeFemEnergyDensityTerms {
         Some(terms)
     }
 
+    #[cfg(feature = "fem-gpu")]
     fn includes_cubic(&self, quantity: &str) -> bool {
         self.cubic_anisotropy && matches!(quantity, "eden_ani" | "eden_total")
     }
+}
+
+pub(crate) fn can_materialize_preview_quantity(
+    plan: &fullmag_ir::FemPlanIR,
+    id: QuantityId,
+) -> bool {
+    NativeFemPreviewObservable::from_quantity(id).is_some()
+        || NativeFemEnergyDensityTerms::from_plan(plan)
+            .observables_for(id.as_str())
+            .is_some()
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -1366,7 +1442,6 @@ fn resolved_cubic_energy_density(
     })))
 }
 
-#[cfg(feature = "fem-gpu")]
 fn native_fem_plan_has_uniaxial_anisotropy(plan: &fullmag_ir::FemPlanIR) -> bool {
     plan.material.uniaxial_anisotropy.is_some()
         || plan.material.uniaxial_anisotropy_k2.is_some()
@@ -1382,7 +1457,6 @@ fn native_fem_plan_has_uniaxial_anisotropy(plan: &fullmag_ir::FemPlanIR) -> bool
             .is_some_and(|values| !values.is_empty())
 }
 
-#[cfg(feature = "fem-gpu")]
 fn native_fem_plan_has_cubic_anisotropy(plan: &fullmag_ir::FemPlanIR) -> bool {
     plan.material.cubic_anisotropy_kc1.is_some()
         || plan.material.cubic_anisotropy_kc2.is_some()
@@ -2093,6 +2167,13 @@ impl NativeFemBackend {
                 _ => None,
             })
             .unwrap_or(1.0);
+        let frozen_mask = plan.frozen_spins.as_ref().map(|frozen| {
+            frozen
+                .frozen_mask
+                .iter()
+                .map(|selected| u8::from(*selected))
+                .collect::<Vec<_>>()
+        });
 
         let mut plan_desc = ffi::fullmag_fem_plan_desc {
             mesh,
@@ -2484,6 +2565,20 @@ impl NativeFemBackend {
             sot_active_node_mask: optional_slice_ptr(&sot_active_node_mask),
             sot_active_node_mask_len: sot_active_node_mask.len() as u64,
             sot_envelope,
+            frozen_mask: frozen_mask
+                .as_deref()
+                .map_or(std::ptr::null(), |mask| mask.as_ptr()),
+            frozen_mask_len: frozen_mask.as_ref().map_or(0, |mask| mask.len() as u64),
+            frozen_reference_xyz: if frozen_mask.is_some() {
+                m_flat.as_ptr()
+            } else {
+                std::ptr::null()
+            },
+            frozen_reference_len: if frozen_mask.is_some() {
+                m_flat.len() as u64
+            } else {
+                0
+            },
             // Oersted field
             has_oersted_cylinder: if plan.has_oersted_cylinder { 1 } else { 0 },
             oersted_current: plan.oersted_current.unwrap_or(0.0),

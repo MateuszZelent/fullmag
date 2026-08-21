@@ -25,6 +25,7 @@ use fullmag_authoring::{
 use fullmag_ir::{
     GeometryEntryIR, InitialMagnetizationIR, MagnetIR, MaterialIR, ObjectRegionIR, RegionIR,
 };
+use fullmag_quantities::quantity_spec;
 
 use crate::schemas::relaxation::MU0_T_PER_APM;
 
@@ -52,6 +53,7 @@ pub(crate) async fn submit_structured_command_impl(
     headers: &HeaderMap,
     mut req: StructuredCommandRequest,
 ) -> Result<CommandResponse, ApiError> {
+    enforce_session_command_admission(&state).await?;
     validate_relax_command_controls(&req)?;
     validate_solver_policy_controls(&req)?;
     if request_has_adaptive_solver_policy(&req) {
@@ -79,6 +81,41 @@ pub(crate) async fn submit_structured_command_impl(
     }
     validate_runtime_command_contract(&state, &command).await?;
     enqueue_session_command_impl(state, headers, command).await
+}
+
+async fn enforce_session_command_admission(state: &Arc<AppState>) -> Result<(), ApiError> {
+    let terminal_status = {
+        let current = state.current_live_state.read().await;
+        let snapshot = current
+            .as_ref()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        let effective = effective_runtime_status_code(snapshot);
+        let terminal_status = [effective.as_str(), snapshot.session.status.as_str()]
+            .into_iter()
+            .find(|status| matches!(*status, "completed" | "failed" | "cancelled" | "closed"))
+            .map(str::to_string);
+        terminal_status
+    };
+    if let Some(status) = terminal_status {
+        return Err(ApiError::conflict(format!(
+            "session_{status}_read_only: terminal sessions reject all mutating commands"
+        )));
+    }
+
+    let connectivity =
+        crate::router_v2::handlers::sessions::status::refresh_current_live_connectivity(state)
+            .await;
+    let connectivity_code = match connectivity {
+        crate::schemas::status::SessionConnectivity::Connected => None,
+        crate::schemas::status::SessionConnectivity::Degraded => Some("degraded"),
+        crate::schemas::status::SessionConnectivity::Disconnected => Some("disconnected"),
+    };
+    if let Some(connectivity_code) = connectivity_code {
+        return Err(ApiError::conflict(format!(
+            "session_connectivity_{connectivity_code}: mutating commands require a connected runner publication path"
+        )));
+    }
+    Ok(())
 }
 
 async fn fdm_grid_refresh_rejection_reason(state: &Arc<AppState>) -> Result<String, ApiError> {
@@ -481,14 +518,6 @@ async fn validate_runtime_command_contract(
         validate_stage_control_target(&snapshot, command)?;
     }
 
-    if snapshot.session.status == "completed"
-        && matches!(command.kind.as_str(), "compute_fields" | "compute_energies")
-    {
-        return Err(ApiError::conflict(
-            "session_completed_read_only: completed sessions cannot compute observables",
-        ));
-    }
-
     Ok(())
 }
 
@@ -826,6 +855,7 @@ fn scene_problem_patch_for_mesh(scene: &SceneDocument) -> Result<serde_json::Val
             dbulk_field: None,
         });
         magnets.push(MagnetIR {
+            object_id: Some(object.id.clone()),
             absorbing_boundary: None,
             initial_magnetization: Some(initial_magnetization_for_object(scene, object)),
             material: material_name,
@@ -1380,18 +1410,49 @@ fn new_session_command(command_id: String, kind: &str, created_at_unix_ms: u128)
 fn compute_fields_materialization_requirements(
     snapshot: &SessionStateResponse,
 ) -> Vec<FieldMaterializationRequirement> {
-    let canonical_ids = fullmag_runner::quantities::field_materialization_quantity_ids();
-    let quantity_ids = supported_materialization_quantity_ids(snapshot, &canonical_ids);
-    let generation_id = domain_generation_id(snapshot);
-    let mut requirements = vec![FieldMaterializationRequirement {
-        quantity_ids: quantity_ids.into_iter().map(ToString::to_string).collect(),
-        scope_kind: "full".to_string(),
-        scope_id: None,
-        generation_id: generation_id.clone(),
-        carrier_fingerprint: None,
-    }];
+    let has_resolved_plan_registry = snapshot
+        .capabilities
+        .as_ref()
+        .and_then(|capabilities| capabilities.resolved_quantity_registry.as_ref())
+        .is_some_and(|registry| {
+            registry.source == fullmag_runner::QuantityProviderRegistrySource::ResolvedPlan
+        });
+    if !has_resolved_plan_registry {
+        return Vec::new();
+    }
 
-    if snapshot_is_fdm_multilayer(snapshot) {
+    let canonical_ids = fullmag_runner::quantities::field_materialization_quantity_ids();
+    let supported_quantity_ids = supported_materialization_quantity_ids(snapshot, &canonical_ids);
+    if supported_quantity_ids.is_empty() {
+        return Vec::new();
+    }
+    let is_multilayer = snapshot_is_fdm_multilayer(snapshot);
+    let airbox_demag_supported = is_multilayer
+        && supported_quantity_ids
+            .iter()
+            .any(|quantity_id| *quantity_id == "H_demag");
+    let quantity_ids = if is_multilayer {
+        supported_quantity_ids
+            .iter()
+            .copied()
+            .filter(|quantity_id| *quantity_id != "H_demag")
+            .collect::<Vec<_>>()
+    } else {
+        supported_quantity_ids
+    };
+    let generation_id = domain_generation_id(snapshot);
+    let mut requirements = Vec::new();
+    if !quantity_ids.is_empty() {
+        requirements.push(FieldMaterializationRequirement {
+            quantity_ids: quantity_ids.into_iter().map(ToString::to_string).collect(),
+            scope_kind: "full".to_string(),
+            scope_id: None,
+            generation_id: generation_id.clone(),
+            carrier_fingerprint: None,
+        });
+    }
+
+    if airbox_demag_supported {
         let carrier_fingerprint =
             crate::router_v2::handlers::data::fields::load_fdm_multilayer_airbox_carrier(snapshot)
                 .ok()
@@ -1412,47 +1473,45 @@ fn supported_materialization_quantity_ids<'a>(
     snapshot: &SessionStateResponse,
     canonical_ids: &'a [&'a str],
 ) -> Vec<&'a str> {
-    let supported = snapshot
-        .metadata
-        .as_ref()
-        .and_then(|metadata| metadata.get("capabilities"))
-        .and_then(|capabilities| capabilities.get("preview_quantities"))
-        .and_then(serde_json::Value::as_array)
-        .or_else(|| {
-            snapshot
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.get("live_preview"))
-                .and_then(|preview| preview.get("supported_quantities"))
-                .and_then(serde_json::Value::as_array)
-        });
-    if let Some(supported) = supported {
-        return canonical_ids
-            .iter()
-            .copied()
-            .filter(|quantity| {
-                supported
-                    .iter()
-                    .any(|value| value.as_str() == Some(*quantity))
-            })
-            .collect();
-    }
+    let Some(capabilities) = snapshot.capabilities.as_ref() else {
+        return Vec::new();
+    };
+    let precision = snapshot
+        .session
+        .resolved_precision
+        .as_deref()
+        .unwrap_or(snapshot.session.precision.as_str());
+    supported_materialization_quantity_ids_for_capabilities(capabilities, precision, canonical_ids)
+}
 
-    let descriptor_ids = snapshot
-        .quantities
+fn supported_materialization_quantity_ids_for_capabilities<'a>(
+    capabilities: &fullmag_runner::BackendCapabilities,
+    precision: &str,
+    canonical_ids: &'a [&'a str],
+) -> Vec<&'a str> {
+    canonical_ids
         .iter()
-        .filter(|descriptor| descriptor.interactive_preview && descriptor.available)
-        .map(|descriptor| descriptor.id.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    if !descriptor_ids.is_empty() {
-        return canonical_ids
-            .iter()
-            .copied()
-            .filter(|quantity| descriptor_ids.contains(quantity))
-            .collect();
-    }
-
-    canonical_ids.to_vec()
+        .copied()
+        .filter(|quantity_id| {
+            let Some(spec) = quantity_spec(quantity_id) else {
+                return false;
+            };
+            let resolved = fullmag_runner::resolve_quantity_capability(
+                capabilities,
+                spec,
+                fullmag_runner::ResolvedQuantityCapabilityContext {
+                    scope: spec.domain.as_str(),
+                    precision,
+                    materialization:
+                        fullmag_runner::QuantityMaterializationCapability::Unmaterialized,
+                    carriers: Vec::new(),
+                },
+            );
+            resolved.request == fullmag_runner::QuantityRequestCapability::FieldVector
+                && resolved.materialization
+                    != fullmag_runner::QuantityMaterializationCapability::Unavailable
+        })
+        .collect()
 }
 
 fn snapshot_is_fdm_multilayer(snapshot: &SessionStateResponse) -> bool {
@@ -1651,6 +1710,137 @@ fn apply_command_intent(
 mod tests {
     use super::*;
     use crate::schemas::diagnostics::SolverProfileCommandConfig;
+    use crate::session::default_current_live_state;
+    use crate::types::CurrentLiveSnapshotRequest;
+
+    fn resolved_capability_fixture() -> fullmag_runner::BackendCapabilities {
+        fullmag_runner::BackendCapabilities {
+            engine_id: fullmag_runner::RuntimeEngineId::FdmCpuReference,
+            capability_profile_version: "test".to_string(),
+            supported_terms: Vec::new(),
+            term_scopes: std::collections::BTreeMap::new(),
+            feature_capabilities: std::collections::BTreeMap::new(),
+            supported_demag_realizations: Vec::new(),
+            preview_quantities: vec![
+                "m".to_string(),
+                "H_demag".to_string(),
+                "spin_current_tensor".to_string(),
+            ],
+            snapshot_quantities: Vec::new(),
+            scalar_outputs: vec!["E_total".to_string()],
+            resolved_quantity_registry: Some(
+                fullmag_runner::ResolvedQuantityProviderRegistry::from_resolved_plan(
+                    "fdm_cpu_reference",
+                    "double",
+                    ["m", "H_demag", "spin_current_tensor"],
+                    ["E_total"],
+                ),
+            ),
+            approximate_operators: Vec::new(),
+            supports_frequency_response: false,
+            supports_coupled_magnetoelastic_quasistatic: false,
+            supports_coupled_magnetoelastic_elastodynamic: false,
+            supports_frequency_domain_elastodynamics: false,
+            supports_coupled_eigenmodes: false,
+            supports_lossy_fallback_override: false,
+        }
+    }
+
+    fn compatibility_capability_fixture() -> fullmag_runner::BackendCapabilities {
+        let mut capabilities = resolved_capability_fixture();
+        let registry = capabilities
+            .resolved_quantity_registry
+            .as_mut()
+            .expect("resolved registry fixture");
+        registry.source = fullmag_runner::QuantityProviderRegistrySource::CompatibilityProfile;
+        capabilities
+    }
+
+    #[test]
+    fn compute_fields_uses_resolved_field_materialization_capability() {
+        let candidates = ["m", "H_demag", "E_total", "spin_current_tensor"];
+
+        assert_eq!(
+            supported_materialization_quantity_ids_for_capabilities(
+                &resolved_capability_fixture(),
+                "double",
+                &candidates,
+            ),
+            vec!["m", "H_demag"],
+            "only runner-resolved spatial field vectors may be materialized; scalar resources and unsupported tensor shapes must stay out"
+        );
+    }
+
+    #[test]
+    fn compute_fields_without_runtime_capabilities_is_fail_closed() {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "compute-fields-no-capabilities"
+        }))
+        .expect("minimal live snapshot request should deserialize");
+        let snapshot = default_current_live_state(&request);
+
+        assert!(supported_materialization_quantity_ids(&snapshot, &["m", "H_demag"]).is_empty());
+    }
+
+    #[test]
+    fn multilayer_compute_fields_without_runtime_capabilities_has_no_airbox_requirement() {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "compute-fields-multilayer-no-capabilities"
+        }))
+        .expect("minimal live snapshot request should deserialize");
+        let mut snapshot = default_current_live_state(&request);
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": { "backend": "fdm_multilayer" }
+        }));
+
+        assert!(compute_fields_materialization_requirements(&snapshot).is_empty());
+    }
+
+    #[test]
+    fn compute_fields_with_compatibility_profile_has_no_unverified_requirements() {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "compute-fields-compatibility-profile"
+        }))
+        .expect("minimal live snapshot request should deserialize");
+        let mut snapshot = default_current_live_state(&request);
+        snapshot.capabilities = Some(compatibility_capability_fixture());
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": { "backend": "fdm_multilayer" }
+        }));
+
+        assert!(compute_fields_materialization_requirements(&snapshot).is_empty());
+    }
+
+    #[test]
+    fn multilayer_compute_fields_rejects_compatibility_and_empty_resolved_registries() {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "compute-fields-multilayer-untrusted-registry"
+        }))
+        .expect("minimal live snapshot request should deserialize");
+        let mut snapshot = default_current_live_state(&request);
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": { "backend": "fdm_multilayer" }
+        }));
+
+        let mut compatibility = resolved_capability_fixture();
+        compatibility
+            .resolved_quantity_registry
+            .as_mut()
+            .expect("registry")
+            .source = fullmag_runner::QuantityProviderRegistrySource::CompatibilityProfile;
+        snapshot.capabilities = Some(compatibility);
+        assert!(compute_fields_materialization_requirements(&snapshot).is_empty());
+
+        let mut empty_resolved = resolved_capability_fixture();
+        let registry = empty_resolved
+            .resolved_quantity_registry
+            .as_mut()
+            .expect("registry");
+        registry.field_quantities.clear();
+        registry.scalar_quantities.clear();
+        snapshot.capabilities = Some(empty_resolved);
+        assert!(compute_fields_materialization_requirements(&snapshot).is_empty());
+    }
 
     #[test]
     fn set_solver_profile_command_preserves_profile_payload() {

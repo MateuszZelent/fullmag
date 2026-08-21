@@ -376,6 +376,12 @@ function liveStatusFixture(
       discretization: "fdm",
       generation_id: "0",
     },
+    lifecycle: {
+      solver: "awaiting_command",
+      session_resource: "active",
+      connectivity: "connected",
+      commandability: "allowed",
+    },
     energies: {},
     metrics: {
       steps_per_second: null,
@@ -4121,6 +4127,26 @@ describe("ControlRoomApi", () => {
     expect(parseRequestBody(observedInit?.body)).toEqual({
       active_quantity_id: "m",
       vector_glyphs: true,
+    });
+  });
+
+  it("returns the authoritative visualization PATCH response request id", async () => {
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async () =>
+        jsonResponse(
+          { active_quantity_id: "m", revision: 42 },
+          { headers: { "x-request-id": "patch-response-42" } },
+        ),
+    });
+
+    const result = await api.visualization.patchWithResponseIdentity({
+      active_quantity_id: "m",
+    });
+
+    expect(result).toEqual({
+      data: { active_quantity_id: "m", revision: 42 },
+      requestId: "patch-response-42",
     });
   });
 

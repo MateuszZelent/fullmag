@@ -231,6 +231,28 @@ bool relaxation_torque_confirmation_pending(
         max_torque_apm <= relax_stop.torque_tolerance_apm;
 }
 
+bool relaxation_torque_above_tolerance(
+    const Context &ctx,
+    double max_torque_apm)
+{
+    const auto &relax_stop = ctx.stage_completion.relax_stop;
+    if (relax_stop.has_torque_tolerance_apm == 0) {
+        return false;
+    }
+    return !std::isfinite(max_torque_apm) ||
+        !std::isfinite(relax_stop.torque_tolerance_apm) ||
+        max_torque_apm > relax_stop.torque_tolerance_apm;
+}
+
+bool relaxation_degenerate_gradient_requires_stagnation(
+    const Context &ctx,
+    double max_torque_apm)
+{
+    const auto &relax_stop = ctx.stage_completion.relax_stop;
+    return relax_stop.has_energy_tolerance_j != 0 ||
+        relaxation_torque_above_tolerance(ctx, max_torque_apm);
+}
+
 void set_stage_completion(
     Context &ctx,
     fullmag_fem_stage_stop_reason reason,

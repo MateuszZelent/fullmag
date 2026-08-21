@@ -10,6 +10,7 @@ import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { isViewport3DImmediatePointerDownRegion } from "../viewport3dEventManager";
 import { nearTuple3, sameTuple3 } from "../viewport3dMath";
 import type { Viewport3DBounds } from "../viewport3dRenderModel";
+import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import {
   DEFAULT_VIEWPORT_3D_CAMERA_STATE,
   viewport3dStore,
@@ -500,7 +501,8 @@ export function CameraController({
   resetCameraRevision: number;
   tracker: Viewport3DResourceTracker;
 }) {
-  const { camera, invalidate } = useThree();
+  const { camera } = useThree();
+  const invalidate = useBatchedInvalidate("camera");
   const handledFitRevisionRef = useRef(fitRevision);
   const handledResetCameraRevisionRef = useRef(resetCameraRevision);
   const autoFittedBoundsRef = useRef<string | null>(null);
@@ -781,7 +783,8 @@ function useOrbitCameraControlsModel({
   onOrbitDebugAnglesChange,
   tracker,
 }: OrbitCameraControlsProps) {
-  const { camera, invalidate, size } = useThree();
+  const { camera, size } = useThree();
+  const invalidate = useBatchedInvalidate("camera");
   const gl = useThree((state) => state.gl);
   const controlsRef = useRef<OrbitControlsHandle>(null);
   const options = resolveViewport3DCameraInteractionOptions();

@@ -2440,7 +2440,9 @@ impl FemLlgProblem {
             max_effective_field_amplitude,
             max_demag_field_amplitude,
             max_rhs_amplitude,
+            max_rhs_all_amplitude: max_rhs_amplitude,
             max_torque_Apm,
+            max_torque_all_Apm: max_torque_Apm,
         })
     }
 
@@ -2543,7 +2545,9 @@ impl FemLlgProblem {
             max_effective_field_amplitude,
             max_demag_field_amplitude,
             max_rhs_amplitude,
+            max_rhs_all_amplitude: max_rhs_amplitude,
             max_torque_Apm,
+            max_torque_all_Apm: max_torque_Apm,
         })
     }
 

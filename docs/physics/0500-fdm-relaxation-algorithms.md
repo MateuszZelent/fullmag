@@ -257,16 +257,35 @@ Barzilai–Borwein (BB) method [Barzilai & Borwein, 1988].
     An exact degenerate gradient reduction is numerical stagnation, not
     physical convergence; it produces an explicit failed/non-converged stop.
 
-3.  **Armijo backtracking line search**: starting from $\lambda_{\mathrm{trial}} = \lambda$, find $\lambda_k$ such that
+3.  **Armijo backtracking line search**: starting from
+    $\lambda_{\mathrm{trial}} = \lambda$, form the normalized trial and its
+    representable floating-point chord
 
     $$
-    E\!\left[\mathcal{R}_{\boldsymbol{m}}(-\lambda_k \boldsymbol{g})\right]
-    \le
-    E[\boldsymbol{m}] - c_1 \lambda_k
-    \langle\boldsymbol{g},\boldsymbol{g}\rangle_E,
+    \boldsymbol{s}_i^{\mathrm{fp}}
+    =\mathcal{R}_{\boldsymbol{m}_i}
+      (-\lambda_k \boldsymbol{g}_i)^{\mathrm{fp}}
+      -\boldsymbol{m}_i^{\mathrm{fp}}.
     $$
 
-    where $c_1 = 10^{-4}$ (Armijo parameter).
+    The sufficient-decrease increment uses the current ambient field:
+
+    $$
+    \Delta E_{\mathrm{lin,chord}}
+    =-\mu_0\sum_i M_{s,i}V_i
+      \boldsymbol{H}_{\mathrm{eff},i}
+      \cdot\boldsymbol{s}_i^{\mathrm{fp}},
+    \qquad
+    E_{\mathrm{trial}}
+    \le E_{\mathrm{previous}}
+      +c_1\Delta E_{\mathrm{lin,chord}}+\varepsilon_E.
+    $$
+
+    The chord increment must be finite and strictly negative. Here
+    $c_1 = 10^{-4}$ (Armijo parameter) and $\varepsilon_E$ is the bounded
+    precision-specific energy budget. The representable chord is required
+    because normalization can differ from the analytic
+    $-\lambda_k\boldsymbol{g}_i$ increment.
     If the condition fails, halve $\lambda_k$ and repeat (up to 20 backtracks).
     The CPU FDM line-search energy includes exchange, demag, external field,
     uniaxial/cubic anisotropy, prescribed-strain magnetoelastic energy, and
@@ -405,12 +424,28 @@ direction, achieving superlinear convergence near minima.
 4.  **Armijo backtracking line search** along $\boldsymbol{p}_n$:
 
     $$
-    E\!\left[\mathcal{R}_{\boldsymbol{m}}(\lambda \boldsymbol{p}_n)\right]
-    \le
-    E[\boldsymbol{m}] + c_1\,\lambda\,\langle \boldsymbol{p}_n, \boldsymbol{g}_n \rangle,
+    \boldsymbol{s}_{n,i}^{\mathrm{fp}}
+    =\mathcal{R}_{\boldsymbol{m}_{n,i}}
+      (\lambda\boldsymbol{p}_{n,i})^{\mathrm{fp}}
+      -\boldsymbol{m}_{n,i}^{\mathrm{fp}},
+    \qquad
+    \Delta E_{\mathrm{lin,chord}}
+    =-\mu_0\sum_i M_{s,i}V_i
+      \boldsymbol{H}_{\mathrm{eff},n,i}
+      \cdot\boldsymbol{s}_{n,i}^{\mathrm{fp}},
     $$
 
-    with $c_1 = 10^{-4}$, maximum 30 backtracks.  Initial step:
+    $$
+    E_{\mathrm{trial}}
+    \le E[\boldsymbol{m}_n]
+      +c_1\Delta E_{\mathrm{lin,chord}}+\varepsilon_E,
+    $$
+
+    with a finite, strictly negative chord increment, $c_1 = 10^{-4}$, and
+    maximum 30 backtracks. The analytic
+    $\lambda\langle\boldsymbol{p}_n, \boldsymbol{g}_n \rangle_E$ remains a
+    descent-direction guard and diagnostic, not the floating-point threshold.
+    Initial step:
     $\lambda_0 = \min(10^{-6},\; 1/\|\boldsymbol{p}_n\|)$.
     The energy functional is the same CPU FDM scalar functional used by
     Algorithm B.

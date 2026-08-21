@@ -257,6 +257,12 @@ pub struct SceneResource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub magnetization_assets: Vec<BTreeMap<String, Value>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schema(value_type = Vec<crate::schemas::frozen_spins::SelectionDefinitionSchema>)]
+    pub selections: Vec<fullmag_ir::SelectionDefinitionIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schema(value_type = Vec<crate::schemas::frozen_spins::MagnetizationConstraintSchema>)]
+    pub magnetization_constraints: Vec<fullmag_ir::MagnetizationConstraintIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub couplings: Vec<fullmag_authoring::SceneCoupling>,
     #[serde(default)]
     pub field_drives: FieldDriveListStateResource,
@@ -1452,6 +1458,8 @@ pub struct ScenePatchRequest {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AuthoringTransactionRequest {
     ReplaceScene {
+        #[serde(default)]
+        base_revision: Option<u64>,
         #[schema(value_type = Object)]
         scene: Value,
     },

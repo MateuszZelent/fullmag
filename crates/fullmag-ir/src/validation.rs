@@ -79,6 +79,162 @@ pub(crate) fn validate_selection_definitions_impl(
     }
 }
 
+pub(crate) fn validate_problem_magnetization_constraints(
+    problem: &ProblemIR,
+    errors: &mut Vec<String>,
+) {
+    let mut object_ids = BTreeSet::new();
+    for (index, magnet) in problem.magnets.iter().enumerate() {
+        let Some(object_id) = &magnet.object_id else {
+            continue;
+        };
+        if object_id.trim().is_empty() {
+            errors.push(format!("magnets[{index}].object_id must not be empty"));
+        } else if !object_ids.insert(object_id.clone()) {
+            errors.push(format!(
+                "magnets[{index}].object_id '{object_id}' is duplicated"
+            ));
+        }
+    }
+    let region_ids = problem
+        .object_regions
+        .iter()
+        .map(|region| (region.owner_object.clone(), region.region_id.clone()));
+    validate_magnetization_constraints(
+        &problem.selections,
+        &problem.magnetization_constraints,
+        object_ids,
+        region_ids,
+        pipeline_stage_ids(&problem.problem_meta.runtime_metadata),
+        errors,
+    );
+}
+
+fn validate_v04_magnetization_constraints(problem: &ProblemIRV04, errors: &mut Vec<String>) {
+    validate_magnetization_constraints(
+        &problem.selections,
+        &problem.magnetization_constraints,
+        problem
+            .objects
+            .iter()
+            .map(|object| object.object_id.clone()),
+        problem
+            .object_regions
+            .iter()
+            .map(|region| (region.owner_object.clone(), region.region_id.clone())),
+        pipeline_stage_ids(&problem.problem_meta.runtime_metadata),
+        errors,
+    );
+}
+
+fn pipeline_stage_ids(metadata: &BTreeMap<String, serde_json::Value>) -> BTreeSet<String> {
+    metadata
+        .get("study_pipeline")
+        .and_then(|value| value.get("nodes"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|node| node.get("id").and_then(serde_json::Value::as_str))
+        .map(str::to_string)
+        .collect()
+}
+
+fn validate_magnetization_constraints<ObjectIds, RegionIds>(
+    selections: &[crate::SelectionDefinitionIR],
+    constraints: &[crate::MagnetizationConstraintIR],
+    object_ids: ObjectIds,
+    region_ids: RegionIds,
+    stage_ids: BTreeSet<String>,
+    errors: &mut Vec<String>,
+) where
+    ObjectIds: IntoIterator<Item = String>,
+    RegionIds: IntoIterator<Item = (String, String)>,
+{
+    let context = crate::SelectionValidationContext::new(object_ids, region_ids);
+    if let Err(selection_errors) = crate::validate_selection_definitions_with_context(
+        selections,
+        crate::SelectionLimits::default(),
+        &context,
+    ) {
+        errors.extend(selection_errors);
+    }
+
+    let mut ids = BTreeSet::new();
+    for (index, constraint) in constraints.iter().enumerate() {
+        let frozen = constraint.frozen_spins();
+        let path = format!("magnetization_constraints[{index}]");
+        if frozen.schema_version != crate::FROZEN_SPINS_SCHEMA_VERSION {
+            errors.push(format!(
+                "{path}.schema_version must be '{}'",
+                crate::FROZEN_SPINS_SCHEMA_VERSION
+            ));
+        }
+        if frozen.id.trim().is_empty() {
+            errors.push(format!("{path}.id must not be empty"));
+        } else if !ids.insert(frozen.id.as_str()) {
+            errors.push(format!(
+                "{path} duplicate magnetization constraint id '{}'",
+                frozen.id
+            ));
+        }
+        if frozen.name.trim().is_empty() {
+            errors.push(format!("{path}.name must not be empty"));
+        }
+        if let crate::FrozenReferencePolicyIR::ExplicitFieldAsset { asset_id } = &frozen.reference {
+            if asset_id.trim().is_empty() {
+                errors.push(format!("{path}.reference.asset_id must not be empty"));
+            }
+        }
+        if matches!(
+            frozen.membership,
+            crate::SelectionMembershipPolicyIR::Static {}
+        ) && crate::selection_is_state_dependent(&frozen.selector, selections)
+        {
+            errors.push(format!(
+                "frozen_membership_static_state_dependent: {path}.membership cannot be static for a state-dependent selector"
+            ));
+        }
+        if let crate::ConstraintActivationIR::StageIds {
+            stage_ids: active_ids,
+        } = &frozen.activation
+        {
+            if active_ids.is_empty() {
+                errors.push(format!("{path}.activation.stage_ids must not be empty"));
+            }
+            let mut local = BTreeSet::new();
+            for stage_id in active_ids {
+                if stage_id.trim().is_empty() || !local.insert(stage_id.as_str()) {
+                    errors.push(format!(
+                        "{path}.activation.stage_ids must be non-empty and unique"
+                    ));
+                } else if !stage_ids.contains(stage_id) {
+                    errors.push(format!(
+                        "{path} activation stage id '{stage_id}' does not exist"
+                    ));
+                }
+            }
+        }
+        let mut definitions = selections.to_vec();
+        let root_id = format!("__fullmag_constraint_root_{index}");
+        definitions.push(crate::SelectionDefinitionIR::new(
+            root_id.clone(),
+            frozen.selector.clone(),
+        ));
+        if let Err(selection_errors) = crate::validate_selection_definitions_with_context(
+            &definitions,
+            crate::SelectionLimits::default(),
+            &context,
+        ) {
+            errors.extend(selection_errors.into_iter().filter(|error| {
+                error.contains(&root_id)
+                    || error.contains("selection_unknown")
+                    || error.contains("selection_reference")
+                    || error.contains("selection_complexity")
+            }));
+        }
+    }
+}
+
 #[derive(Default)]
 struct SelectionStats {
     nodes: usize,
@@ -163,6 +319,7 @@ fn validate_selection_expression(
                 tolerance.rtol,
                 &format!("{path}.tolerance"),
                 false,
+                "selection_invalid_constant",
                 errors,
             );
         }
@@ -190,7 +347,14 @@ fn validate_selection_expression(
                 context,
                 errors,
             );
-            validate_tolerances(*atol, *rtol, path, true, errors);
+            validate_tolerances(
+                *atol,
+                *rtol,
+                path,
+                true,
+                "selection_invalid_constant",
+                errors,
+            );
         }
         crate::SelectionExprIR::Between {
             value,
@@ -212,7 +376,9 @@ fn validate_selection_expression(
                     "selection_invalid_constant: {path}.lower and upper must be finite"
                 ));
             } else if lower > upper {
-                errors.push(format!("{path}.lower must be <= {path}.upper"));
+                errors.push(format!(
+                    "selection_invalid_constant: {path}.lower must be <= {path}.upper"
+                ));
             }
         }
         crate::SelectionExprIR::And { expressions }
@@ -299,7 +465,9 @@ fn validate_selection_scalar(
         crate::SelectionScalarExprIR::MagnetizationDot { axis } => {
             let norm_sq = axis.iter().map(|value| value * value).sum::<f64>();
             if !norm_sq.is_finite() || (norm_sq - 1.0).abs() > 1.0e-12 {
-                errors.push(format!("{path}.axis must be normalized and finite"));
+                errors.push(format!(
+                    "selection_invalid_axis: {path}.axis must be normalized and finite"
+                ));
             }
         }
         crate::SelectionScalarExprIR::Abs { value } => validate_selection_scalar(
@@ -540,7 +708,14 @@ fn validate_selection_boundary(
             relative_tolerance,
         } => (*absolute_tolerance_m, *relative_tolerance),
     };
-    validate_tolerances(absolute, relative, path, false, errors);
+    validate_tolerances(
+        absolute,
+        relative,
+        path,
+        false,
+        "selection_invalid_boundary",
+        errors,
+    );
 }
 
 fn validate_tolerances(
@@ -548,12 +723,17 @@ fn validate_tolerances(
     relative: f64,
     path: &str,
     require_positive: bool,
+    error_code: &str,
     errors: &mut Vec<String>,
 ) {
     if !absolute.is_finite() || absolute < 0.0 || !relative.is_finite() || relative < 0.0 {
-        errors.push(format!("{path} tolerances must be finite and non-negative"));
+        errors.push(format!(
+            "{error_code}: {path} tolerances must be finite and non-negative"
+        ));
     } else if require_positive && absolute == 0.0 && relative == 0.0 {
-        errors.push(format!("{path} requires at least one positive tolerance"));
+        errors.push(format!(
+            "{error_code}: {path} requires at least one positive tolerance"
+        ));
     }
 }
 
@@ -832,6 +1012,7 @@ fn dot(a: &[f64; 3], b: &[f64; 3]) -> f64 {
 
 pub(crate) fn validate_physics_object_problem(problem: &ProblemIRV04) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
+    validate_v04_magnetization_constraints(problem, &mut errors);
     if problem.ir_version != crate::PROBLEM_IR_V04_VERSION {
         errors.push(format!(
             "ir_version must be '{}' for ProblemIRV04",

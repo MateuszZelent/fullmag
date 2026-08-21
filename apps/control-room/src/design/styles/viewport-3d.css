@@ -98,6 +98,25 @@
   backdrop-filter: blur(4px);
 }
 
+.fm-viewport-3d__frozen-spins-controls {
+  flex: 1 1 16rem;
+}
+
+.fm-viewport-3d__frozen-spins-legend {
+  display: block;
+  box-sizing: border-box;
+  flex: 1 1 0;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  background: color-mix(in srgb, var(--fm-bg-chrome) 88%, transparent);
+  padding: var(--fm-space-1) var(--fm-space-2);
+  color: var(--fm-text-secondary);
+  backdrop-filter: blur(4px);
+}
+
 .fm-viewport-3d__refresh-countdown {
   display: inline-flex;
   width: 11rem;

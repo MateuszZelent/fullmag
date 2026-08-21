@@ -324,6 +324,35 @@ describe("Viewport3DScene scale helpers", () => {
     expect(providerEnd).toBeGreaterThan(modelStackStart);
   });
 
+  it("passes the exact session identity through every adoption-producing layer", () => {
+    const layerSources = [
+      "./MeshPartLayer.tsx",
+      "./VectorFieldLayer.tsx",
+      "./FdmCuboidLayer.tsx",
+      "./BoundsLayers.tsx",
+      "./TopologyMeshLayer.tsx",
+      "./FallbackTopologyMeshLayer.tsx",
+    ].map((path) =>
+      readFileSync(new URL(path, import.meta.url), "utf8"),
+    );
+
+    expect(layerSources[0]).toContain("sessionIdentity={sessionIdentity}");
+    expect(layerSources[0]).toMatch(
+      /registry\.recordSurfaceAdoption\(\{[\s\S]*sessionIdentity,/,
+    );
+    expect(layerSources[1]).toContain("sessionIdentity,");
+    expect(layerSources[1]).toMatch(
+      /registry\.recordVectorAdoption\(\{[\s\S]*sessionIdentity,/,
+    );
+    expect(layerSources[2]).toContain("sessionIdentity={sessionIdentity}");
+    expect(layerSources[2]).toMatch(
+      /registry\.recordSurfaceAdoption\(\{[\s\S]*sessionIdentity,/,
+    );
+    expect(layerSources[3]).toContain("sessionIdentity={sessionIdentity}");
+    expect(layerSources[4]).toContain("sessionIdentity={sessionIdentity}");
+    expect(layerSources[5]).toContain("sessionIdentity={sessionIdentity}");
+  });
+
   it("uses the demand-rendered dimension frame layer instead of Three helper grids", () => {
     const source = readFileSync(
       new URL("./Viewport3DScene.tsx", import.meta.url),

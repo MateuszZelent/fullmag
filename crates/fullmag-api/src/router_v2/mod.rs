@@ -84,6 +84,25 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             post(handlers::model::duplicate_planar_monitor),
         )
         .route(
+            "/v2/sessions/current/model/frozen-spins",
+            get(handlers::model::list_frozen_spins)
+                .post(handlers::model::create_frozen_spins),
+        )
+        .route(
+            "/v2/sessions/current/model/frozen-spins/previews",
+            post(handlers::model::create_frozen_spins_preview),
+        )
+        .route(
+            "/v2/sessions/current/model/frozen-spins/previews/:preview_id",
+            get(handlers::model::get_frozen_spins_preview),
+        )
+        .route(
+            "/v2/sessions/current/model/frozen-spins/:constraint_id",
+            get(handlers::model::get_frozen_spins)
+                .patch(handlers::model::patch_frozen_spins)
+                .delete(handlers::model::delete_frozen_spins),
+        )
+        .route(
             "/v2/sessions/current/model/current-transports",
             get(handlers::model::get_current_transports)
                 .post(handlers::model::create_current_transport),
@@ -554,6 +573,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::data::get_fdm_region_membership_binary_scoped),
         )
         .route(
+            "/v2/sessions/current/data/frozen-spins/resolved-masks/:mask_id",
+            get(handlers::data::get_frozen_spins_resolved_mask),
+        )
+        .route(
             "/v2/sessions/current/data/fields/:quantity_id/meta",
             get(handlers::data::get_field_meta),
         )
@@ -993,6 +1016,7 @@ async fn create_session() -> Result<Json<Value>, ApiError> {
     Err(ApiError {
         status: StatusCode::BAD_REQUEST,
         message: "the local runtime currently exposes only /v2/sessions/current".to_string(),
+        diagnostics: Vec::new(),
     })
 }
 
@@ -1015,6 +1039,7 @@ async fn patch_current_session() -> Result<Json<Value>, ApiError> {
     Err(ApiError {
         status: StatusCode::BAD_REQUEST,
         message: "session metadata mutation is not yet supported by the local runtime".to_string(),
+        diagnostics: Vec::new(),
     })
 }
 

@@ -36,6 +36,7 @@ describe("selectObjectVisualizationPanelSnapshot", () => {
       baseRevision: 3,
       patch: { shaderVisible: true },
       target,
+      transactionId: "tx-film-shader",
     } as const;
 
     const projected = selectObjectVisualizationPanelSnapshot(

@@ -11,6 +11,7 @@ import {
 } from "./viewport3DRenderPolicy";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
 import {
   viewport3DFieldColorLayersEnabledFromBrowserConfig,
   viewport3DVectorLayersEnabledFromBrowserConfig,
@@ -204,6 +205,7 @@ export function BoundsVolumeWireframe({
 const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
   adoptionRegistry,
   colors,
+  sessionIdentity,
   fieldModel,
   materialProfile,
   onSelectPart,
@@ -217,6 +219,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
 }: {
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
   colors: Viewport3DColors;
+  sessionIdentity?: SessionResourceIdentity | null;
   fieldModel: Viewport3DFieldRenderModel | null;
   materialProfile: Viewport3DMaterialProfile;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
@@ -385,6 +388,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
       fieldBufferId: requestedFieldBufferId,
       ownerId: adoptionOwnerId,
       registry: adoptionRegistry,
+      sessionIdentity,
       scalarBuffer: visibleScalarColors,
     });
     const replay = () => {
@@ -393,6 +397,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
         fieldBufferId: requestedFieldBufferId,
         ownerId: adoptionOwnerId,
         registry: adoptionRegistry,
+        sessionIdentity,
         scalarBuffer: visibleScalarColors,
       });
     };
@@ -401,7 +406,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
       unregister();
       adoptionRegistry.clearAdoption(adoptionOwnerId, adoption);
     };
-  }, [adoptionOwnerId, adoptionRegistry, part.id, requestedFieldBufferId, visibleScalarColors]);
+  }, [adoptionOwnerId, adoptionRegistry, part.id, requestedFieldBufferId, sessionIdentity, visibleScalarColors]);
 
   const hasScalarColors =
     surfaceColorState.hasScalarColors &&
@@ -528,6 +533,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
             materialProfile={materialProfile.glyphs}
             opacity={renderPlan.vectors.opacity}
             fieldBufferId={requestedFieldBufferId}
+            sessionIdentity={sessionIdentity}
             segments={vectorLayerInput.segments}
             style={vectorStyleFromSettings(renderSettings, vectorStyle)}
             tracker={tracker}
@@ -624,6 +630,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
           materialProfile={materialProfile.glyphs}
           opacity={renderPlan.vectors.opacity}
           fieldBufferId={requestedFieldBufferId}
+          sessionIdentity={sessionIdentity}
           segments={vectorLayerInput.segments}
           style={vectorStyleFromSettings(renderSettings, vectorStyle)}
           tracker={tracker}
@@ -1119,6 +1126,7 @@ export const FdmUniverseOutsideSupportLayer = memo(
 export function AirboxLayerContent({
   adoptionRegistry,
   colors,
+  sessionIdentity,
   vectorColorMode,
   fieldModel,
   materialProfile,
@@ -1131,6 +1139,7 @@ export function AirboxLayerContent({
 }: {
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
   colors: Viewport3DColors;
+  sessionIdentity?: SessionResourceIdentity | null;
   vectorColorMode: string;
   fieldModel: Viewport3DFieldRenderModel | null;
   materialProfile: Viewport3DMaterialProfile;
@@ -1159,6 +1168,7 @@ export function AirboxLayerContent({
           adoptionRegistry={adoptionRegistry}
           key={partModel.part.id}
           colors={colors}
+          sessionIdentity={sessionIdentity}
           fieldModel={fieldModel}
           materialProfile={materialProfile}
           onSelectPart={onSelectPart}

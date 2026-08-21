@@ -7,7 +7,10 @@ import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
 import type { RequestDiagnosticEntry } from "@/kernel/api/RequestDiagnosticsController";
 import type { VisualizationDebugSnapshot } from "@/kernel/visualization/visualizationDebugTypes";
 
-import type { VisualizationDebugPanelModel } from "./VisualizationDebugPanelModel";
+import type {
+  VisualizationDebugLifecycleEvidence,
+  VisualizationDebugPanelModel,
+} from "./VisualizationDebugPanelModel";
 import { VisualizationDebugPanelView } from "./VisualizationDebugPanel";
 import { memoryGroups } from "./visualizationDebugPresentation";
 
@@ -269,6 +272,11 @@ function emptyModel(): VisualizationDebugPanelModel {
     disposition: "unknown",
     fieldQueries: [],
     issues: [],
+    mutationEvidence: {
+      connectivity: { disrupted: false, status: "connected" },
+      lifecycle: lifecycleEvidence(),
+      sync: { lastRemoteRevision: 1, mutation: null, pendingTargetIds: [], rejectedTargetIds: [] },
+    },
     state: "missing-snapshot",
     target: {
       id: "object:magnet",
@@ -323,6 +331,11 @@ function readyModel(): VisualizationDebugPanelModel {
     disposition: "ready",
     fieldQueries: [],
     issues: snapshot.issues,
+    mutationEvidence: {
+      connectivity: { disrupted: false, status: "connected" },
+      lifecycle: lifecycleEvidence(),
+      sync: { lastRemoteRevision: 1, mutation: null, pendingTargetIds: [], rejectedTargetIds: [] },
+    },
     state: "ready",
     target: {
       id: "object:magnet",
@@ -361,6 +374,24 @@ function readyModel(): VisualizationDebugPanelModel {
         viewportId: "viewport-primary",
       },
     ],
+  };
+}
+
+function lifecycleEvidence(): VisualizationDebugLifecycleEvidence {
+  return {
+    session: {
+      lifecycle: null,
+      resourceRevision: null,
+      resourceStatus: "idle",
+      session: null,
+      solverSummary: null,
+    },
+    solver: {
+      resourceRevision: null,
+      resourceStatus: "idle",
+      status: null,
+    },
+    source: "http-v2-session-and-solver-resources",
   };
 }
 

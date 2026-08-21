@@ -35,6 +35,7 @@ import {
   resolveViewport3DPartFieldVectorResourceRequests,
   resolveViewport3DQuantityFieldVectorResourceRequests,
   resolveViewport3DQuantityFieldVectorResourceKeys,
+  synchronizeViewport3DSessionIdentity,
   viewport3DFieldVectorMatchesRequestIdentity,
   viewport3DFieldMetaResourceMatchesQuantity,
   type Viewport3DFieldVectorEnvelope,
@@ -80,6 +81,108 @@ function fieldResponseMetadata(
 }
 
 describe("viewport3dResources", () => {
+  it("purges session caches and stale inflight work synchronously before resource reads", () => {
+    const source = readFileSync(viewport3dResourcesSourceUrl, "utf8");
+    const hookStart = source.indexOf("function useViewport3DSessionIdentity()");
+    const hookEnd = source.indexOf("\n}\n", hookStart);
+    const hookSource = source.slice(hookStart, hookEnd);
+
+    expect(hookStart).toBeGreaterThanOrEqual(0);
+    expect(hookSource).toContain(
+      "synchronizeViewport3DSessionIdentity(identity);",
+    );
+    expect(hookSource).not.toContain("useEffect(");
+    expect(source).toContain("abortViewport3DInflightBinaryResources");
+  });
+
+  it("aborts a delayed old-session response before decode or cache adoption", async () => {
+    const cache = new ResourceCache<string>({ maxBytes: 32 });
+    const decoded = vi.fn();
+    const adopted = vi.fn();
+    synchronizeViewport3DSessionIdentity({
+      sessionEpoch: "session-old@1000",
+      sessionId: "session-old",
+    });
+
+    const pending = loadCachedBinaryResource(
+      cache,
+      "session=session-old&epoch=session-old%401000|field:m",
+      (_etag, signal) =>
+        new Promise((resolve, reject) => {
+          const decodeTimer = setTimeout(() => {
+            decoded();
+            resolve({
+              byteLength: 5,
+              data: "old",
+              etag: '"old"',
+              status: "ready",
+            });
+          }, 1_000);
+          signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(decodeTimer);
+              reject(new DOMException("old session aborted", "AbortError"));
+            },
+            { once: true },
+          );
+        }),
+      { onFreshAdoption: adopted },
+    );
+
+    synchronizeViewport3DSessionIdentity({
+      sessionEpoch: "session-new@2000",
+      sessionId: "session-new",
+    });
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(decoded).not.toHaveBeenCalled();
+    expect(adopted).not.toHaveBeenCalled();
+    expect(cache.stats()).toEqual({ byteLength: 0, entryCount: 0 });
+  });
+
+  it("rejects a late old-session completion even when the transport ignores abort", async () => {
+    const cache = new ResourceCache<string>({ maxBytes: 32 });
+    let resolveResponse!: (result: {
+      byteLength: number;
+      data: string;
+      etag: string;
+      status: "ready";
+    }) => void;
+    const adopted = vi.fn();
+    synchronizeViewport3DSessionIdentity({
+      sessionEpoch: "session-old@1000",
+      sessionId: "session-old",
+    });
+    const pending = loadCachedBinaryResource(
+      cache,
+      "session=session-old&epoch=session-old%401000|field:m:late",
+      () =>
+        new Promise((resolve) => {
+          resolveResponse = resolve;
+        }),
+      { onFreshAdoption: adopted },
+    );
+
+    synchronizeViewport3DSessionIdentity({
+      sessionEpoch: "session-new@2000",
+      sessionId: "session-new",
+    });
+    resolveResponse({
+      byteLength: 5,
+      data: "late-old",
+      etag: '"late-old"',
+      status: "ready",
+    });
+
+    await expect(pending).rejects.toMatchObject({
+      code: "session-identity-changed",
+      name: "AbortError",
+    });
+    expect(adopted).not.toHaveBeenCalled();
+    expect(cache.stats()).toEqual({ byteLength: 0, entryCount: 0 });
+  });
+
   it("loads field carriers with bounded priority-aware concurrency", async () => {
     const started: string[] = [];
     const releases = new Map<string, () => void>();

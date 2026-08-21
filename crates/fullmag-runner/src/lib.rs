@@ -23,6 +23,7 @@ pub mod autosave_storage;
 pub mod autosave_txt;
 pub mod autosave_zarr;
 pub mod capabilities;
+pub mod constraints;
 mod derived_fields;
 mod dispatch;
 pub mod eigen;
@@ -37,12 +38,13 @@ pub mod hysteresis;
 pub mod interactive;
 mod interactive_runtime;
 mod native_fem;
+mod observation;
 mod physics_graph_execution;
 mod preview;
 pub mod quantities;
-mod observation;
 pub use observation::{
     observation_provider_policy, ObservationLane, ObservationProviderPolicy,
+    ObservationProviderResolver,
 };
 mod regional_field_drive_artifacts;
 mod relaxation;
@@ -409,9 +411,31 @@ pub fn compare_coupled_m3_checkpoint_module_identity_values(
     fdm::cpu::spin_transport::compare_coupled_m3_checkpoint_module_identity_values(actual, expected)
 }
 
+/// Validate the self-contained Frozen Spins checkpoint shape before a session
+/// persistence layer accepts it. Full plan/topology identity is validated by
+/// the FDM execution lane once the resolved plan is available.
+pub fn validate_frozen_spins_checkpoint_value(
+    value: &serde_json::Value,
+    vector_count: usize,
+) -> Result<(), RunError> {
+    let checkpoint: constraints::FrozenSpinsCheckpointV1 = serde_json::from_value(value.clone())
+        .map_err(|error| RunError {
+            message: format!("invalid Frozen Spins checkpoint payload: {error}"),
+        })?;
+    checkpoint
+        .validate_structure(vector_count)
+        .map_err(|error| RunError {
+            message: error.to_string(),
+        })
+}
+
 // Public re-exports (unchanged API surface).
 pub use capabilities::{
-    BackendCapabilities, FeatureCapability, FeatureCapabilityStatus, RuntimeEngineId,
+    resolve_quantity_capability, BackendCapabilities, FeatureCapability, FeatureCapabilityStatus,
+    FieldCarrierDescriptor, FieldPayloadState, QuantityMaterializationCapability,
+    QuantityProviderCapability, QuantityProviderRegistrySource, QuantityPublicationCapability,
+    QuantityRenderCapability, QuantityRequestCapability, ResolvedQuantityCapability,
+    ResolvedQuantityCapabilityContext, ResolvedQuantityProviderRegistry, RuntimeEngineId,
     MIXED_P1_FEATURE_CAPABILITY_IDS, MIXED_P1_MESH_FEATURE_CAPABILITY_IDS,
 };
 pub use interactive::backend::BackendGeometry;
@@ -465,6 +489,7 @@ pub use types::{
 use crate::capabilities::{
     capabilities_for_fdm_engine_with_precision, capabilities_for_fem_eigen_engine,
     capabilities_for_fem_engine, capabilities_for_fem_frequency_response_validation_engine,
+    mark_study_quantity_registry_as_resolved_plan,
 };
 use crate::fdm::cpu::multilayer_reference;
 use crate::fdm::cpu::reference as cpu_reference;
@@ -4093,12 +4118,16 @@ pub fn resolve_planned_runtime_capabilities(
             });
             Ok(capabilities)
         }
-        BackendPlanIR::FemEigen(_) => Ok(capabilities_for_fem_eigen_engine(
-            dispatch::resolve_fem_engine_with_trail(problem)?.engine,
+        BackendPlanIR::FemEigen(_) => Ok(mark_study_quantity_registry_as_resolved_plan(
+            capabilities_for_fem_eigen_engine(
+                dispatch::resolve_fem_engine_with_trail(problem)?.engine,
+            ),
         )),
         BackendPlanIR::FemFrequencyResponse(_) => {
-            Ok(capabilities_for_fem_frequency_response_validation_engine(
-                dispatch::FemEngine::CpuNative,
+            Ok(mark_study_quantity_registry_as_resolved_plan(
+                capabilities_for_fem_frequency_response_validation_engine(
+                    dispatch::FemEngine::CpuNative,
+                ),
             ))
         }
     }
@@ -4127,6 +4156,31 @@ fn restrict_capabilities_to_plan_active_quantities(
         .into_iter()
         .map(str::to_string)
         .collect();
+
+    let (lane, precision) = capabilities
+        .resolved_quantity_registry
+        .as_ref()
+        .map(|registry| (registry.lane.clone(), registry.precision.clone()))
+        .unwrap_or_else(|| {
+            (
+                capabilities.engine_id.as_str().to_string(),
+                "unknown".to_string(),
+            )
+        });
+    let active_field_quantities = filter(&fullmag_quantities::all_quantity_ids());
+    let scalar_quantities = capabilities
+        .scalar_outputs
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    capabilities.resolved_quantity_registry = Some(
+        capabilities::ResolvedQuantityProviderRegistry::from_resolved_plan(
+            lane,
+            precision,
+            active_field_quantities,
+            scalar_quantities,
+        ),
+    );
 }
 
 pub fn resolve_session_runtime(problem: &ProblemIR) -> Result<ResolvedSessionRuntime, RunError> {
@@ -4413,6 +4467,28 @@ pub fn run_reference_fdm(
 /// Resume the CPU-double coupled M3 reference runtime from the exact backend
 /// state captured in a session checkpoint.
 pub fn resume_reference_fdm_from_coupled_checkpoint(
+    plan: &FdmPlanIR,
+    checkpoint: serde_json::Value,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+) -> Result<RunResult, RunError> {
+    Ok(
+        cpu_reference::execute_reference_fdm_with_coupled_checkpoint(
+            plan,
+            until_seconds,
+            outputs,
+            None,
+            None,
+            Some(checkpoint),
+        )?
+        .result,
+    )
+}
+
+/// Resume the CPU-double FDM reference lane from a durable Frozen Spins
+/// checkpoint. The resolved mask/reference are restored verbatim; the
+/// authored selector is not evaluated during restart.
+pub fn resume_reference_fdm_from_frozen_spins_checkpoint(
     plan: &FdmPlanIR,
     checkpoint: serde_json::Value,
     until_seconds: f64,

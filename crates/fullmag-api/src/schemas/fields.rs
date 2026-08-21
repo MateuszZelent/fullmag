@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::schemas::common::{AcceptedObservationFrameRef, FieldPublicationBundle};
+use crate::schemas::quantities::ResolvedQuantityCapability;
 
 // ── Existing catalog / meta types ────────────────────────────────────────────
 
@@ -87,6 +88,9 @@ pub struct FieldDescriptor {
     pub materialization_reason_code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub materialization_error: Option<String>,
+    /// Same runner-owned capability resource returned by the quantity catalog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_capability: Option<ResolvedQuantityCapability>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -116,6 +120,9 @@ pub struct FieldMeta {
     pub materialization_reason_code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub materialization_error: Option<String>,
+    /// Same runner-owned capability resource returned by the quantity catalog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_capability: Option<ResolvedQuantityCapability>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

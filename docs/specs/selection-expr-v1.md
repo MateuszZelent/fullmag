@@ -54,7 +54,10 @@ Skalary V1 to skończona stała, współrzędna `x|y|z` w jawnym frame,
 współrzędne są w metrach.
 
 Operator `compare.op` należy do `lt|le|gt|ge`. Zwykłe zmiennoprzecinkowe `eq`
-nie istnieje. `approx` wymaga `atol >= 0`, `rtol >= 0` i co najmniej jednej
+nie istnieje. Pole `compare.tolerance` jest kompatybilnościowym składnikiem IR,
+ale kompilator V1 wymaga dokładnie `atol=0` i `rtol=0`; wartość niezerowa
+failuje kodem `selection_compare_tolerance_unsupported`, zamiast być cicho
+ignorowana. `approx` wymaga `atol >= 0`, `rtol >= 0` i co najmniej jednej
 dodatniej tolerancji. `between` wymaga `lower <= upper` i
 `closed=none|left|right|both`. NaN daje `false` i diagnostykę; nieskończona
 magnetyzacja jest validation error stanu.
@@ -154,6 +157,12 @@ Preview uprawniony do aktywacji i runtime używają tego samego kompilatora,
 topology fingerprintu i mask fingerprintu. Stale revision albo inny topology
 fingerprint unieważnia wynik; UI nie może zatwierdzić starego preview.
 
+Warstwa IR i plannerowa materializacja istnieją obecnie jako
+`ResolvedFrozenSpinsPlanIR`, `SelectionCertificateIR`,
+`compile_fdm_frozen_spins` i `compile_fem_frozen_spins`. Nie są jeszcze
+podłączone do wykonania constraintu, authoritative preview ani checkpointu.
+Wszystkie lane'y wykonawcze pozostają `UNQUALIFIED`.
+
 (selection-expr-v1-errors)=
 ## 6. Failure semantics
 
@@ -163,6 +172,7 @@ Wymagane kody obejmują:
 - `selection_unknown_object`, `selection_unknown_region`,
   `selection_unknown_reference`, `selection_reference_cycle`;
 - `selection_complexity_exceeded`, `selection_invalid_constant`,
+  `selection_invalid_axis`, `selection_invalid_boundary`,
   `selection_invalid_geometry`, `selection_singular_transform`;
 - `selection_empty`, `selection_inactive_intersection`;
 - `selection_resolved_mask_outside_active_domain`;
@@ -234,6 +244,8 @@ niezależne i pochodzi z macierzy walidacyjnej.
 
 To jest zatwierdzony kontrakt i wspólny fixture parity Rust/Python. Bieżący
 kod zawiera typed `SelectionExprIR`, publiczny `fullmag.select`, canonical
-lowering, strict validation i zgodny fingerprint authoringowy. Planner,
-materializacja maski i runtime frozen spins pozostają niezaimplementowane i
-niezakwalifikowane; obecność AST nie jest dowodem wykonania constraintu.
+lowering, strict validation i zgodny fingerprint authoringowy. Planner zawiera
+kompilację dense maski oraz certyfikatu dla FDM i FEM true DOF, ale runtime,
+checkpoint i authoritative preview pozostają niezaimplementowane. Każdy lane
+wykonawczy pozostaje `UNQUALIFIED`; plannerowa materializacja nie jest dowodem
+wykonania constraintu.

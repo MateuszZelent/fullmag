@@ -30,6 +30,7 @@ pub const FULLMAG_FEM_STEADY_TRANSPORT_RT0_BOUNDARY_CLOSURE_INTERFACE: u32 = 3;
 pub const FULLMAG_FEM_SOT_FORMULA_NONE: u32 = 0;
 pub const FULLMAG_FEM_SOT_FORMULA_PRESCRIBED_V1: u32 = 1;
 pub const FULLMAG_FEM_SOT_ENVELOPE_ABI_VERSION: u32 = 1;
+pub const FULLMAG_FEM_FROZEN_SPINS_ABI_VERSION: u32 = 1;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -758,6 +759,11 @@ pub struct fullmag_fem_plan_desc {
     pub sot_active_node_mask: *const u8,
     pub sot_active_node_mask_len: u64,
     pub sot_envelope: fullmag_fem_sot_envelope_desc,
+    /// Append-only frozen-spins mask/reference descriptor.
+    pub frozen_mask: *const u8,
+    pub frozen_mask_len: u64,
+    pub frozen_reference_xyz: *const f64,
+    pub frozen_reference_len: u64,
 }
 
 #[repr(C)]

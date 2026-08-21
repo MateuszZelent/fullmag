@@ -25,7 +25,7 @@ export type Viewport3DFieldPayloadCapability =
   | "scalar-complete"
   | "synthetic-full-vector";
 
-export interface Viewport3DTargetFieldBuffer {
+interface Viewport3DTargetFieldBufferBase {
   bufferId: string;
   capability: Viewport3DFieldPayloadCapability;
   component: Exclude<Viewport3DFieldComponentDemand, "none">;
@@ -46,8 +46,6 @@ export interface Viewport3DTargetFieldBuffer {
   requestId: string | null;
   requestIdentityCompatible: boolean;
   resourceKey: string | null;
-  sessionEpoch: string | null;
-  sessionId: string | null;
   sampled: boolean;
   scopeId: string | null;
   scopeKind: Viewport3DFieldScopeKind;
@@ -56,6 +54,23 @@ export interface Viewport3DTargetFieldBuffer {
   values: DecodedFieldVector["values"];
   vectorComponentCount: number;
 }
+
+export type Viewport3DTargetFieldBuffer = Viewport3DTargetFieldBufferBase &
+  (
+    | {
+        availability: { status: "ready" };
+        sessionEpoch: string;
+        sessionId: string;
+      }
+    | {
+        availability: {
+          reason: "missing-session-identity";
+          status: "unavailable";
+        };
+        sessionEpoch: null;
+        sessionId: null;
+      }
+  );
 
 export type Viewport3DTargetFieldInputSource =
   | "fallback-field-vector"
@@ -79,7 +94,7 @@ export function buildViewport3DTargetFieldBuffer({
   responseDomainGenerationId,
   responseMetadata,
   resourceKey,
-  sessionIdentity = null,
+  sessionIdentity,
   synthetic = false,
   targetIds,
   topologyRevision = null,
@@ -97,6 +112,10 @@ export function buildViewport3DTargetFieldBuffer({
   targetIds: readonly string[];
   topologyRevision?: string | null;
 }): Viewport3DTargetFieldBuffer {
+  const validSessionIdentity =
+    sessionIdentity?.sessionId.trim() && sessionIdentity.sessionEpoch.trim()
+      ? sessionIdentity
+      : null;
   const component = resolveTargetFieldBufferComponent(fieldVector, query);
   const indexing = fieldVector.indexing ?? "legacy_count_only";
   const sampled = indexing === "sampled_node_indices" || query.max_samples != null;
@@ -159,6 +178,20 @@ export function buildViewport3DTargetFieldBuffer({
     synthetic,
   });
   return {
+    ...(validSessionIdentity
+      ? {
+          availability: { status: "ready" as const },
+          sessionEpoch: validSessionIdentity.sessionEpoch,
+          sessionId: validSessionIdentity.sessionId,
+        }
+      : {
+          availability: {
+            reason: "missing-session-identity" as const,
+            status: "unavailable" as const,
+          },
+          sessionEpoch: null,
+          sessionId: null,
+        }),
     bufferId: buildViewport3DTargetFieldBufferId({
       component,
       fieldRevision,
@@ -169,8 +202,8 @@ export function buildViewport3DTargetFieldBuffer({
       meshTopologyHash,
       domainGenerationId,
       indexing,
-      sessionEpoch: sessionIdentity?.sessionEpoch ?? null,
-      sessionId: sessionIdentity?.sessionId ?? null,
+      sessionEpoch: validSessionIdentity?.sessionEpoch ?? null,
+      sessionId: validSessionIdentity?.sessionId ?? null,
       topologyRevision,
     }),
     capability,
@@ -194,8 +227,6 @@ export function buildViewport3DTargetFieldBuffer({
       : buildViewport3DFieldResourceRequestId(fieldVector.quantityId, query),
     requestIdentityCompatible,
     resourceKey,
-    sessionEpoch: sessionIdentity?.sessionEpoch ?? null,
-    sessionId: sessionIdentity?.sessionId ?? null,
     sampled,
     scopeId,
     scopeKind,
@@ -339,6 +370,7 @@ export function viewport3DTargetFieldBufferCanServeSurface(
   projectionMode: SurfaceFieldProjectionMode = "raw_nodal",
 ): boolean {
   if (!buffer || !colorMode) return false;
+  if (buffer.availability.status !== "ready") return false;
   if (!buffer.requestIdentityCompatible) return false;
   if (buffer.domainCompatibility.status === "mismatch") return false;
   if (!viewport3DTargetFieldBufferMatchesQuantity(buffer, quantityId)) {
@@ -371,6 +403,7 @@ export function viewport3DTargetFieldBufferCanServeVectors(
   quantityId?: string | null,
 ): boolean {
   if (!buffer) return false;
+  if (buffer.availability.status !== "ready") return false;
   if (!buffer.requestIdentityCompatible) return false;
   if (buffer.domainCompatibility.status === "mismatch") return false;
   if (!viewport3DTargetFieldBufferMatchesQuantity(buffer, quantityId)) {

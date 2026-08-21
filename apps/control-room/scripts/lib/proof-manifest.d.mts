@@ -16,4 +16,10 @@ export function writeProofManifest(
   manifest: unknown,
   outputPath: string,
   artifactRoot: string,
+  sourceSnapshot: unknown,
+): Promise<void>;
+
+export function writeProofManifestToReportRoot(
+  manifest: unknown,
+  reportRoot: string,
 ): Promise<void>;

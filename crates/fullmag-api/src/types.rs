@@ -107,6 +107,11 @@ pub(crate) struct AppState {
     pub current_workspace_root: PathBuf,
     /// Sessionless local-live workspace snapshot used by the root `/` GUI.
     pub current_live_state: Arc<RwLock<Option<SessionStateResponse>>>,
+    /// Backend-owned health of the runner-to-resource publication path.
+    pub current_live_connectivity: Arc<RwLock<crate::schemas::status::SessionConnectivity>>,
+    /// Last successfully accepted runner frame or idle liveness tick.
+    /// Status/admission use it for degraded/disconnected transitions.
+    pub current_live_last_seen_unix_ms: Arc<AtomicU64>,
     /// Resource-first realtime events for `/v2/sessions/current/events/ws`.
     pub current_live_realtime_events: broadcast::Sender<CurrentLiveRealtimeEvent>,
     /// Bounded replay buffer for the resource-first realtime stream.
@@ -150,6 +155,9 @@ pub(crate) struct AppState {
     pub feature_flags: crate::feature_flags::FeatureFlags,
     /// P4: binary projection/slice cache decoupled from the session snapshot lock.
     pub quantity_data_plane: Arc<crate::quantity_data_plane::QuantityDataPlaneStore>,
+    /// Session-bound authoritative frozen-spins preview metadata and dense mask backing.
+    /// The mask is never serialized into status or another JSON control-plane resource.
+    pub frozen_spins_previews: Arc<RwLock<crate::session::FrozenSpinsPreviewStore>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -672,6 +680,10 @@ pub(crate) struct SessionStateResponse {
     pub quantities: Vec<QuantityDescriptor>,
     pub fem_mesh: Option<FemMeshPayload>,
     pub latest_fields: LatestFields,
+    /// Exact accepted-frame publication bindings. These are produced together
+    /// with field/scalar acceptance and must never be reconstructed by a read handler.
+    #[serde(skip, default)]
+    pub field_publication_bundles: BTreeMap<String, crate::schemas::common::FieldPublicationBundle>,
     #[serde(skip_serializing, default)]
     pub preview_cache: CachedPreviewFields,
     pub artifacts: Vec<ArtifactEntry>,
@@ -1079,6 +1091,11 @@ pub(crate) struct CurrentLiveSnapshotRequest {
     /// are also accepted for backwards compatibility.
     #[serde(default)]
     pub fem_mesh: Option<FemMeshPayload>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct CurrentLiveHeartbeatRequest {
+    pub session_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1636,6 +1653,7 @@ mod tests {
             quantities: Vec::new(),
             fem_mesh: None,
             latest_fields: LatestFields::default(),
+            field_publication_bundles: BTreeMap::new(),
             preview_cache: CachedPreviewFields::default(),
             artifacts: Vec::new(),
             display_selection: CurrentDisplaySelection::default(),

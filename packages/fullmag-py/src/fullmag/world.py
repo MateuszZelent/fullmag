@@ -55,6 +55,7 @@ from fullmag.model.antenna import (
 )
 from fullmag.model.absorbing_boundary import AbsorbingBoundaryLayer
 from fullmag.model.couplings import CouplingEndpoint, CouplingRegistry
+from fullmag.model.constraints import FrozenSpins, merge_constraint_stage_ids
 from fullmag.model.current_transport import (
     ChargeBoundary,
     ChargePotentialGauge,
@@ -2474,6 +2475,7 @@ class _WorldState:
     _default_mesh_spec: _MeshSpecState = field(default_factory=_MeshSpecState)
     _script_source_root: Path | None = None
     _declared_stages: list[CapturedStage] = field(default_factory=list)
+    _magnetization_constraints: list[FrozenSpins] = field(default_factory=list)
 
 
 # Module-level singleton
@@ -3725,6 +3727,73 @@ class StudyStagesBuilder:
             index += 1
         return f"{kind}-{index}"
 
+    def _merge_constraints(
+        self, constraints: Sequence[FrozenSpins], stage_id: str
+    ) -> list[FrozenSpins]:
+        if isinstance(constraints, (str, bytes)) or not isinstance(
+            constraints, Sequence
+        ):
+            raise TypeError("constraints must be a sequence of FrozenSpins")
+        merged_constraints = list(_state._magnetization_constraints)
+        for constraint in constraints:
+            if not isinstance(constraint, FrozenSpins):
+                raise TypeError("constraints must contain FrozenSpins objects")
+            existing_index = next(
+                (
+                    index
+                    for index, existing in enumerate(merged_constraints)
+                    if existing.id == constraint.id
+                ),
+                None,
+            )
+            existing = (
+                merged_constraints[existing_index]
+                if existing_index is not None
+                else None
+            )
+            merged = merge_constraint_stage_ids(existing, constraint, stage_id)
+            if existing_index is None:
+                merged_constraints.append(merged)
+            else:
+                merged_constraints[existing_index] = merged
+        return merged_constraints
+
+    def _capture_with_constraints(
+        self,
+        captured_stage: CapturedStage,
+        constraints: Sequence[FrozenSpins],
+        stage_id: str,
+    ) -> tuple[CapturedStage, list[FrozenSpins]]:
+        merged_constraints = self._merge_constraints(constraints, stage_id)
+        captured_stage = self._capture_with_merged_constraints(
+            captured_stage, constraints, merged_constraints
+        )
+        return captured_stage, merged_constraints
+
+    @staticmethod
+    def _capture_with_merged_constraints(
+        captured_stage: CapturedStage,
+        constraints: Sequence[FrozenSpins],
+        merged_constraints: Sequence[FrozenSpins],
+    ) -> CapturedStage:
+        if constraints:
+            captured_stage = replace(
+                captured_stage,
+                problem=replace(
+                    captured_stage.problem,
+                    magnetization_constraints=tuple(merged_constraints),
+                ),
+            )
+        return captured_stage
+
+    @staticmethod
+    def _commit_stage(
+        captured_stage: CapturedStage,
+        merged_constraints: list[FrozenSpins],
+    ) -> None:
+        _state._magnetization_constraints = merged_constraints
+        _state._declared_stages.append(captured_stage)
+
     def add_stage(
         self,
         stage_spec: object,
@@ -3732,18 +3801,22 @@ class StudyStagesBuilder:
         stage_id: str | None = None,
         output_every: float | None = None,
         id_kind: str | None = None,
+        constraints: Sequence[FrozenSpins] = (),
     ) -> "StudyStagesBuilder":
         captured_stage = _capture_stage(stage_spec)
         kind = id_kind or captured_stage.entrypoint_kind.removeprefix("flat_")
         resolved_id = self._allocate_stage_id(kind, stage_id)
         if output_every is not None:
             require_positive(output_every, "output_every")
+        captured_stage, merged_constraints = self._capture_with_constraints(
+            captured_stage, constraints, resolved_id
+        )
         captured_stage = replace(
             captured_stage,
             stage_id=resolved_id,
             output_every_seconds=output_every,
         )
-        _state._declared_stages.append(captured_stage)
+        self._commit_stage(captured_stage, merged_constraints)
         if _state._interactive:
             _state._wait_for_solve = True
         return self
@@ -3772,7 +3845,9 @@ class StudyStagesBuilder:
         adaptive_timestep: AdaptiveTimestep | None = None,
         field_refresh: FieldRefreshPolicy | None = None,
         stop: RelaxStop | None = None,
+        constraints: Sequence[FrozenSpins] = (),
     ) -> RelaxStageBuilder:
+        resolved_id = self._allocate_stage_id("relax", stage_id)
         captured_stage = _capture_stage(
             relax_stage(
                 tol=tol,
@@ -3797,9 +3872,11 @@ class StudyStagesBuilder:
                 stop=stop,
             )
         )
-        resolved_id = self._allocate_stage_id("relax", stage_id)
-        _state._declared_stages.append(
-            replace(captured_stage, stage_id=resolved_id)
+        captured_stage, merged_constraints = self._capture_with_constraints(
+            captured_stage, constraints, resolved_id
+        )
+        self._commit_stage(
+            replace(captured_stage, stage_id=resolved_id), merged_constraints
         )
         if _state._interactive:
             _state._wait_for_solve = True
@@ -3814,12 +3891,20 @@ class StudyStagesBuilder:
     ) -> RunStageBuilder:
         if until is None:
             raise TypeError("add_run() requires until")
+        constraints = legacy_run_configuration.pop("constraints", ())
+        stage_spec = run_stage(until)
+        resolved_id = self._allocate_stage_id("run", stage_id)
+        merged_constraints = self._merge_constraints(constraints, resolved_id)
+        captured_stage = self._capture_with_merged_constraints(
+            _capture_stage(stage_spec), constraints, merged_constraints
+        )
         if legacy_run_configuration:
             self._expand_legacy_run_configuration(legacy_run_configuration)
-        captured_stage = _capture_stage(run_stage(until))
-        resolved_id = self._allocate_stage_id("run", stage_id)
-        _state._declared_stages.append(
-            replace(captured_stage, stage_id=resolved_id)
+            captured_stage = self._capture_with_merged_constraints(
+                _capture_stage(stage_spec), constraints, merged_constraints
+            )
+        self._commit_stage(
+            replace(captured_stage, stage_id=resolved_id), merged_constraints
         )
         if _state._interactive:
             _state._wait_for_solve = True
@@ -3839,23 +3924,13 @@ class StudyStagesBuilder:
         if unsupported:
             joined = ", ".join(unsupported)
             raise TypeError(f"add_run() got unsupported legacy keyword(s): {joined}")
-        warnings.warn(
-            "Run-local sampling and FFT arguments are deprecated; Fullmag expanded "
-            "them into visible Table autosave, Autosave, and FFT response stages.",
-            DeprecationWarning,
-            stacklevel=3,
-        )
 
         table_autosave = configuration.get("table_autosave")
-        if table_autosave is False:
-            self._append_table_autosave_action(None, enabled=False, stage_id=None)
-        elif isinstance(table_autosave, TableAutosave):
-            self._append_table_autosave_action(
-                table_autosave,
-                enabled=True,
-                stage_id=None,
-            )
-        elif table_autosave is not None:
+        if not (
+            table_autosave is None
+            or table_autosave is False
+            or isinstance(table_autosave, TableAutosave)
+        ):
             raise TypeError(
                 "legacy table_autosave must be TableAutosave, False, or None"
             )
@@ -3864,16 +3939,54 @@ class StudyStagesBuilder:
         if outputs is not None:
             if isinstance(outputs, (str, bytes)) or not isinstance(outputs, Sequence):
                 raise TypeError("legacy outputs must be a sequence of SaveField/SaveScalar")
-            self.autosave(enabled=False)
-            for output in outputs:
-                if not isinstance(output, (SaveField, SaveScalar)):
-                    raise TypeError(
-                        "legacy Run outputs support SaveField and SaveScalar; "
-                        "configure snapshots independently"
-                    )
-                self._append_autosave_output_action(output, stage_id=None)
+            if any(not isinstance(output, (SaveField, SaveScalar)) for output in outputs):
+                raise TypeError(
+                    "legacy Run outputs support SaveField and SaveScalar; "
+                    "configure snapshots independently"
+                )
 
         spin_wave_response = configuration.get("spin_wave_response")
+        if not (
+            spin_wave_response is None
+            or spin_wave_response is False
+            or isinstance(spin_wave_response, GammaResponseAnalysis)
+        ):
+            raise TypeError(
+                "legacy spin_wave_response must be GammaResponseAnalysis, False, or None"
+            )
+
+        output_every = configuration.get("output_every")
+        if output_every is not None:
+            require_positive(float(output_every), "output_every")
+
+        warnings.warn(
+            "Run-local sampling and FFT arguments are deprecated; Fullmag expanded "
+            "them into visible Table autosave, Autosave, and FFT response stages.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        if output_every is not None:
+            warnings.warn(
+                "legacy output_every had no independent runtime sampling contract and "
+                "is ignored; use explicit Table autosave or Autosave stages",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+
+        if table_autosave is False:
+            self._append_table_autosave_action(None, enabled=False, stage_id=None)
+        elif isinstance(table_autosave, TableAutosave):
+            self._append_table_autosave_action(
+                table_autosave,
+                enabled=True,
+                stage_id=None,
+            )
+
+        if outputs is not None:
+            self.autosave(enabled=False)
+            for output in outputs:
+                self._append_autosave_output_action(output, stage_id=None)
+
         if spin_wave_response is False:
             self.fft_response(enabled=False)
         elif isinstance(spin_wave_response, GammaResponseAnalysis):
@@ -3884,20 +3997,6 @@ class StudyStagesBuilder:
                 susceptibility_floor_fraction=(
                     spin_wave_response.susceptibility_floor_fraction
                 ),
-            )
-        elif spin_wave_response is not None:
-            raise TypeError(
-                "legacy spin_wave_response must be GammaResponseAnalysis, False, or None"
-            )
-
-        output_every = configuration.get("output_every")
-        if output_every is not None:
-            require_positive(float(output_every), "output_every")
-            warnings.warn(
-                "legacy output_every had no independent runtime sampling contract and "
-                "is ignored; use explicit Table autosave or Autosave stages",
-                DeprecationWarning,
-                stacklevel=3,
             )
 
     def add_field_drive(
@@ -4151,6 +4250,7 @@ class StudyStagesBuilder:
         tolT: object = _RELAX_UNSET,
         max_steps: int = 50_000,
         energy_tolerance: float | None = None,
+        constraints: Sequence[FrozenSpins] = (),
     ) -> "StudyStagesBuilder":
         return self.add_stage(
             relax_stage(
@@ -4164,6 +4264,7 @@ class StudyStagesBuilder:
             ),
             stage_id=stage_id,
             id_kind="minimize",
+            constraints=constraints,
         )
 
     def add_eigenmodes(
@@ -8515,6 +8616,7 @@ def _build_problem(
         temperature=s._thermal_noise.temperature if s._thermal_noise is not None else None,
         excitation_analysis=s._excitation_analysis,
         geometry_asset_cache=s._geometry_asset_cache,
+        magnetization_constraints=tuple(s._magnetization_constraints),
         pbc=s._pbc,
     )
 

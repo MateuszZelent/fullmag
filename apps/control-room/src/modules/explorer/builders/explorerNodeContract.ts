@@ -2,6 +2,7 @@ import type {
   ArtifactResource,
   CurrentRunResource,
   CurrentTransportListResource,
+  FrozenSpinsCollectionResource,
   FrequencyDomainJsonArtifactResource,
   FrequencyDomainManifestResource,
   FrequencyDomainTextArtifactResource,
@@ -31,6 +32,7 @@ export interface ExplorerTreeResources {
 
 export type ModelTreeResources = ExplorerTreeResources & {
   currentTransports?: CurrentTransportListResource | null;
+  frozenSpins?: FrozenSpinsCollectionResource | null;
   planarMonitorDraft?: PlanarMonitorDraft | null;
   planarMonitors?: PlanarMonitorCollectionResource | null;
   planarMonitorTargetCapabilities?: {

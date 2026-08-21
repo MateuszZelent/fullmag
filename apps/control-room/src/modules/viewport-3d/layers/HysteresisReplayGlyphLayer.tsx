@@ -1,6 +1,5 @@
 "use client";
 
-import { useThree } from "@react-three/fiber";
 import { memo, useEffect, useMemo } from "react";
 import { BufferAttribute, BufferGeometry } from "three";
 
@@ -9,6 +8,7 @@ import type {
   HysteresisReplayGlyphModel,
 } from "../model/viewport3DTargets";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import type { Viewport3DBounds } from "../viewport3dRenderModel";
 
 interface HysteresisReplayGlyphLayerAxisModel {
@@ -113,7 +113,7 @@ export const HysteresisReplayGlyphLayer = memo(function HysteresisReplayGlyphLay
   glyphModel: HysteresisReplayGlyphModel | null;
   tracker: Viewport3DResourceTracker;
 }) {
-  const invalidate = useThree((state) => state.invalidate);
+  const invalidate = useBatchedInvalidate("field-buffer");
   const model = useMemo(
     () => buildHysteresisReplayGlyphLayerModel({ bounds, glyphModel }),
     [bounds, glyphModel],

@@ -112,6 +112,64 @@ describe("FDM cuboid realized membership", () => {
     },
   );
 
+  it("turns a native active mask into exact vectors-only admission", () => {
+    const input = createFdmVectorOnlyBuildInput({
+      cellSelection: "active",
+      domain: {
+        bounds: null,
+        displayCellBudget: 3,
+        displayCellCount: 3,
+        kind: "fdm-grid",
+        origin: [0, 0, 0],
+        shape: [3, 1, 1],
+        spacing: [1, 1, 1],
+        stride: 1,
+        totalCells: 3,
+      },
+      fieldVector: {
+        indexing: "explicit_node_indices",
+        nodeIndices: new Uint32Array([0, 1, 2]),
+        pointCount: 3,
+      },
+      maxSamples: 3,
+      nativeActiveMask: new Uint8Array([1, 0, 1]),
+      realizedRegionIds: null,
+    });
+
+    expect(input?.cellIndices).toEqual(new Uint32Array([0, 2]));
+    expect(input?.nativeActiveMask).toEqual(new Uint8Array([1, 0, 1]));
+    expect(input?.membershipAdmission).toBe("exact");
+  });
+
+  it("filters native inactive vectors through exact mask evidence", () => {
+    const input = createFdmVectorOnlyBuildInput({
+      cellSelection: "inactive",
+      domain: {
+        bounds: null,
+        displayCellBudget: 3,
+        displayCellCount: 3,
+        kind: "fdm-grid",
+        origin: [0, 0, 0],
+        shape: [3, 1, 1],
+        spacing: [1, 1, 1],
+        stride: 1,
+        totalCells: 3,
+      },
+      fieldVector: {
+        indexing: "explicit_node_indices",
+        nodeIndices: new Uint32Array([0, 1, 2]),
+        pointCount: 3,
+      },
+      maxSamples: 3,
+      nativeActiveMask: new Uint8Array([1, 0, 1]),
+      realizedRegionIds: null,
+    });
+
+    expect(input?.cellIndices).toEqual(new Uint32Array([1]));
+    expect(input?.nativeActiveMask).toEqual(new Uint8Array([1, 0, 1]));
+    expect(input?.membershipAdmission).toBe("exact");
+  });
+
   it("builds a bounded sampled vector stream from anchors without a cuboid model", () => {
     const result = buildFdmVectorSegmentsFromAnchors({
       anchorMode: "center",
@@ -120,6 +178,7 @@ describe("FDM cuboid realized membership", () => {
       cellIndices: new Uint32Array([0, 1, 2]),
       fieldVector: fieldVector([1, 0, 0, 0, 1, 0, 0, 0, 1]),
       gridShape: [3, 1, 1],
+      membershipAdmission: "full-domain",
       maxVectors: 2,
       scale: 100,
     });
@@ -131,6 +190,47 @@ describe("FDM cuboid realized membership", () => {
       (result?.segments?.[5] ?? 0) - (result?.segments?.[2] ?? 0),
     )).toBeCloseTo(1.5 * Math.cbrt(3 / 2));
     expect(result?.segments.length).toBe(2 * 7);
+  });
+
+  it("fails closed for vectors-only all-cell selection without membership admission", () => {
+    const result = buildFdmVectorSegmentsFromAnchors({
+      anchorMode: "center",
+      anchors: new Float32Array([0, 0, 0]),
+      cellIndices: new Uint32Array([0]),
+      fieldVector: fieldVector([1, 0, 0]),
+      gridShape: [1, 1, 1],
+      maxVectors: 1,
+      scale: 1,
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("rejects full-domain admission for a dense selection", () => {
+    const result = buildViewport3DFdmCuboid({
+      cellSelection: "dense",
+      domain: null,
+      maxVectorGlyphs: 1,
+      membershipAdmission: "full-domain",
+      realizedRegionIds: null,
+      vectorAnchorMode: "center",
+      vectorField: fieldVector([1, 0, 0]),
+      vectorOnly: {
+        anchors: new Float32Array([0, 0, 0]),
+        cellIndices: new Uint32Array([0]),
+        gridShape: [1, 1, 1],
+      },
+      vectorScale: 1,
+      voxelFillRatio: 1,
+      voxelMagnitudeThreshold: 0,
+      voxelTopography: {
+        amplitudeCells: 0,
+        component: "magnitude",
+        enabled: false,
+      },
+    });
+
+    expect(result.vectorCellIndices).toBeNull();
   });
 
   it("spreads full-grid vector glyphs across distinct 3D bins", () => {
@@ -156,6 +256,7 @@ describe("FDM cuboid realized membership", () => {
         ),
       ),
       gridShape,
+      membershipAdmission: "full-domain",
       maxVectors: 8,
       scale: 1,
     });

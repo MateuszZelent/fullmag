@@ -51,9 +51,38 @@ pub struct LiveStatus {
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq, Eq)]
 pub struct SessionLifecycleSummary {
     pub solver: String,
-    pub session_resource: String,
-    pub connectivity: String,
-    pub commandability: String,
+    pub session_resource: SessionResourceLifecycle,
+    pub connectivity: SessionConnectivity,
+    pub commandability: SessionCommandability,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionResourceLifecycle {
+    Active,
+    Tombstoned,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionConnectivity {
+    Connected,
+    Degraded,
+    Disconnected,
+}
+
+impl Default for SessionConnectivity {
+    fn default() -> Self {
+        Self::Connected
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionCommandability {
+    Allowed,
+    Forbidden,
+    ReadOnly,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

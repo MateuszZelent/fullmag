@@ -134,8 +134,10 @@ function createKernel(): KernelApi {
   const visualizationSync = new VisualizationRegistrySyncController({
     api: api.visualization,
     resources,
-    onRejectedTargetPatches: (targetIds) =>
-      visualization.rejectPendingTargetPatches(targetIds),
+    onAcknowledgedTargetPatches: (state, _targetIds, transactionIds) =>
+      visualization.acknowledgePendingTargetPatches(state, transactionIds),
+    onRejectedTargetPatches: (targetIds, transactionIds) =>
+      visualization.rejectPendingTargetPatches(targetIds, transactionIds),
   });
   const realtime = new RealtimeInvalidationBridge(resources, {
     bus,

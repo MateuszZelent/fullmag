@@ -29,6 +29,7 @@ use crate::types::{LiveStepConsumer, RunError, StepAction, StepStats, StepUpdate
 pub(crate) struct CudaDirectMinimizerOutcome {
     pub(crate) latest_stats: Option<StepStats>,
     pub(crate) cancelled: bool,
+    pub(crate) torque_confirmed: bool,
     pub(crate) numerical_stagnation: bool,
 }
 
@@ -116,6 +117,7 @@ pub(crate) fn execute_direct_minimizer(
     let control = direct_minimizer.control;
     let mut latest_stats = Some(current_stats.clone());
     let mut cancelled = false;
+    let mut torque_confirmed = false;
     let mut numerical_stagnation = false;
     let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     let active_mask = plan.active_mask.as_deref();
@@ -213,6 +215,7 @@ pub(crate) fn execute_direct_minimizer(
             current_torque_apm,
             state.accepted_steps,
         ) {
+            torque_confirmed = true;
             break;
         }
         if direct_minimizer_gradient_degenerate(weighted_gradient_norm_sq) {
@@ -220,7 +223,28 @@ pub(crate) fn execute_direct_minimizer(
                 current_torque_apm.is_finite() && current_torque_apm <= threshold
             }) && control.stop.energy_tolerance_j.is_none()
             {
-                continue;
+                for _ in 0..2 {
+                    backend.refresh_observables()?;
+                    let mut fresh_h_eff = backend.copy_h_eff(cell_count)?;
+                    mask_vectors_to_active_domain(&mut fresh_h_eff, active_mask);
+                    let fresh_torque_apm = crate::relaxation::vector_math::max_torque_from_field(
+                        &state.magnetization,
+                        &fresh_h_eff,
+                    );
+                    state.h_eff = fresh_h_eff;
+                    if torque_confirmation.observe(
+                        control,
+                        energy_plateau.range(),
+                        fresh_torque_apm,
+                    ) {
+                        torque_confirmed = true;
+                        break;
+                    }
+                }
+                if !torque_confirmed {
+                    numerical_stagnation = true;
+                }
+                break;
             }
             numerical_stagnation = true;
             break;
@@ -242,8 +266,11 @@ pub(crate) fn execute_direct_minimizer(
                         direction_dot_gradient_j_per_step,
                         &state.magnetization,
                         &state.gradient,
+                        &state.h_eff,
                         trial_lambda,
                         energy_tolerance_j,
+                        &ms_apm,
+                        &volumes_m3,
                         plan.active_mask.as_deref(),
                         |trial| {
                             let step_size =
@@ -341,9 +368,12 @@ pub(crate) fn execute_direct_minimizer(
                         state.energy_j,
                         p_dot_g,
                         &state.magnetization,
+                        &state.h_eff,
                         &state.search_direction,
                         trial_lambda,
                         energy_tolerance_j,
+                        &ms_apm,
+                        &volumes_m3,
                         plan.active_mask.as_deref(),
                         |trial| {
                             let step_size =
@@ -471,6 +501,7 @@ pub(crate) fn execute_direct_minimizer(
             torque_apm,
             state.accepted_steps,
         ) {
+            torque_confirmed = true;
             break;
         }
     }
@@ -478,6 +509,7 @@ pub(crate) fn execute_direct_minimizer(
     Ok(CudaDirectMinimizerOutcome {
         latest_stats,
         cancelled,
+        torque_confirmed,
         numerical_stagnation,
     })
 }

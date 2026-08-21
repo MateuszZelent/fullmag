@@ -32,6 +32,7 @@ import {
   API_CONTRACT_VERSION_HEADER,
   DATA_FIELD_AVAILABILITY_PATH,
   DATA_FIELDS_PATH,
+  DATA_FROZEN_SPINS_RESOLVED_MASK_PATH,
   DATA_QUANTITIES_PATH,
   DATA_ARTIFACT_PATH,
   DATA_ARTIFACTS_PATH,
@@ -109,6 +110,10 @@ import {
   MODEL_GEOMETRY_REALIZATION_CURRENT_PATH,
   MODEL_GEOMETRY_REALIZATIONS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_FROZEN_SPIN_PATH,
+  MODEL_FROZEN_SPINS_PATH,
+  MODEL_FROZEN_SPINS_PREVIEW_PATH,
+  MODEL_FROZEN_SPINS_PREVIEWS_PATH,
   MODEL_COUPLINGS_PATH,
   MODEL_CURRENT_TRANSPORT_PATH,
   MODEL_CURRENT_TRANSPORTS_PATH,
@@ -348,6 +353,12 @@ import type {
   TableRowsQuery,
   TableRowsResource,
   SceneResource,
+  FrozenSpinsCollectionResource,
+  FrozenSpinsDefinitionResource,
+  FrozenSpinsMutationRequest,
+  FrozenSpinsDeleteRequest,
+  FrozenSpinsPreviewRequest,
+  FrozenSpinsPreviewResponse,
   SceneCurrentTransport,
   SceneSpinTransport,
   SceneSpinTorque,
@@ -593,6 +604,11 @@ type BinaryOpenApiTransportResult = {
   error?: unknown;
   response: Response;
 };
+
+export interface JsonResponseIdentity<T> {
+  data: T;
+  requestId: string | null;
+}
 
 function planarRequestSpec(
   source: PlanarFieldSource,
@@ -1585,6 +1601,74 @@ export class ControlRoomApi {
   };
 
   readonly model = {
+    frozenSpins: {
+      list: (options?: RequestOptions) =>
+        this.requestJson<FrozenSpinsCollectionResource>(
+          MODEL_FROZEN_SPINS_PATH,
+          options,
+        ),
+      get: (constraintId: string, options?: RequestOptions) =>
+        this.requestJson<FrozenSpinsDefinitionResource>(
+          MODEL_FROZEN_SPIN_PATH,
+          options,
+          { path: { constraint_id: constraintId } },
+        ),
+      create: (
+        request: FrozenSpinsMutationRequest,
+        options?: RequestOptions,
+      ) =>
+        this.postJson<FrozenSpinsDefinitionResource, FrozenSpinsMutationRequest>(
+          MODEL_FROZEN_SPINS_PATH,
+          request,
+          options,
+        ),
+      patch: (
+        constraintId: string,
+        request: FrozenSpinsMutationRequest,
+        options?: RequestOptions,
+      ) =>
+        this.patchJson<FrozenSpinsDefinitionResource, FrozenSpinsMutationRequest>(
+          MODEL_FROZEN_SPIN_PATH,
+          request,
+          options,
+          { path: { constraint_id: constraintId } },
+        ),
+      delete: (
+        constraintId: string,
+        request: FrozenSpinsDeleteRequest,
+        options?: RequestOptions,
+      ) =>
+        this.deleteJsonWithBody<
+          FrozenSpinsCollectionResource,
+          FrozenSpinsDeleteRequest
+        >(MODEL_FROZEN_SPIN_PATH, request, options, {
+          path: { constraint_id: constraintId },
+        }),
+      createPreview: (
+        request: FrozenSpinsPreviewRequest,
+        options?: RequestOptions,
+      ) =>
+        this.postJson<FrozenSpinsPreviewResponse, FrozenSpinsPreviewRequest>(
+          MODEL_FROZEN_SPINS_PREVIEWS_PATH,
+          request,
+          options,
+        ),
+      getPreview: (previewId: string, options?: RequestOptions) =>
+        this.requestJson<FrozenSpinsPreviewResponse>(
+          MODEL_FROZEN_SPINS_PREVIEW_PATH,
+          options,
+          { path: { preview_id: previewId } },
+        ),
+      resolvedMask: (
+        maskId: string,
+        options?: BinaryRequestOptions,
+      ): Promise<BinaryResourceResult<ArrayBuffer>> =>
+        this.requestBinaryBytes(
+          DATA_FROZEN_SPINS_RESOLVED_MASK_PATH,
+          options,
+          { mask_id: maskId },
+        ),
+    },
     currentTransports: (options?: RequestOptions) =>
       this.requestJson<CurrentTransportListResource>(MODEL_CURRENT_TRANSPORTS_PATH, options),
     currentTransport: (id: string, options?: RequestOptions) =>
@@ -2325,6 +2409,14 @@ export class ControlRoomApi {
         patch,
         options,
       ),
+    patchWithResponseIdentity: (
+      patch: VisualizationStatePatch,
+      options?: RequestOptions,
+    ) =>
+      this.patchJsonWithResponseIdentity<
+        VisualizationStateResource,
+        VisualizationStatePatch
+      >(VISUALIZATION_STATE_PATH, patch, options),
     state: (options?: RequestOptions) =>
       this.requestJson<VisualizationStateResource>(
         VISUALIZATION_STATE_PATH,
@@ -2452,6 +2544,24 @@ export class ControlRoomApi {
       signal: options.signal,
     } as never);
     return readOpenApiResult<TResponse>(result);
+  }
+
+  private async patchJsonWithResponseIdentity<TResponse, TBody>(
+    path: OpenApiV2Path,
+    body: TBody,
+    options: RequestOptions = {},
+    params?: Record<string, unknown>,
+  ): Promise<JsonResponseIdentity<TResponse>> {
+    const result = await this.transport.PATCH(path as never, {
+      body,
+      cache: "no-store",
+      params,
+      signal: options.signal,
+    } as never);
+    return {
+      data: readOpenApiResult<TResponse>(result),
+      requestId: result.response.headers.get("x-request-id"),
+    };
   }
 
   private async putJson<TResponse, TBody>(

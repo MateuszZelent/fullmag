@@ -13,6 +13,1356 @@ fn multilayer_pair_kernel_footprint_counts_every_abi_v2_pair_payload() {
     );
 }
 
+mod frozen_spins_selection_compiler_tests {
+    use std::{collections::BTreeMap, sync::OnceLock};
+
+    use fullmag_ir::{
+        BoundaryMembershipIR, ConstraintActivationIR, EmptySelectionPolicyIR,
+        FrozenReferencePolicyIR, FrozenSpinsIR, GeometryPredicateIR, InactiveSelectionPolicyIR,
+        ResolvedFrozenSpinsPlanIR, SelectionDefinitionIR, SelectionExprIR, SelectionFrameIR,
+        SelectionMembershipPolicyIR, SelectionSamplingIR, SelectionValidationContext,
+        FROZEN_SPINS_SCHEMA_VERSION, SELECTION_EXPR_SCHEMA_VERSION,
+    };
+
+    use crate::{
+        compile_fdm_frozen_spins, compile_fem_frozen_spins, AffineTransform3, FdmFrozenSpinsDomain,
+        FemIncidentElement, FemTrueDofDomain, FrozenSpinsCompileRequest, FrozenSpinsStateSnapshot,
+        ResolvedFrozenSpinsReference, SelectionDofMembership,
+    };
+
+    fn constraint(id: &str, selector: SelectionExprIR) -> FrozenSpinsIR {
+        FrozenSpinsIR {
+            schema_version: FROZEN_SPINS_SCHEMA_VERSION.to_string(),
+            id: id.to_string(),
+            name: id.to_string(),
+            enabled: true,
+            selector,
+            reference: FrozenReferencePolicyIR::CaptureCurrentAtActivation {},
+            membership: SelectionMembershipPolicyIR::Static {},
+            activation: ConstraintActivationIR::AllStages {},
+            empty_selection: EmptySelectionPolicyIR::Error,
+            inactive_selection: InactiveSelectionPolicyIR::WarnAndIntersect,
+        }
+    }
+
+    fn membership(objects: &[&str], regions: &[(&str, &str)]) -> SelectionDofMembership {
+        SelectionDofMembership {
+            object_ids: objects.iter().map(|value| (*value).to_string()).collect(),
+            region_ids: regions
+                .iter()
+                .map(|(object, region)| ((*object).to_string(), (*region).to_string()))
+                .collect(),
+        }
+    }
+
+    fn known_entities() -> &'static SelectionValidationContext {
+        static KNOWN: OnceLock<SelectionValidationContext> = OnceLock::new();
+        KNOWN.get_or_init(|| {
+            SelectionValidationContext::new(
+                ["magnet", "a", "b"],
+                [
+                    ("magnet", "left"),
+                    ("magnet", "overlap"),
+                    ("magnet", "right"),
+                    ("b", "rim"),
+                ],
+            )
+        })
+    }
+
+    fn compile_selector_error_code(
+        selector: SelectionExprIR,
+        selections: &[SelectionDefinitionIR],
+    ) -> String {
+        compile_selector_error_code_with_membership(
+            selector,
+            selections,
+            SelectionMembershipPolicyIR::Static {},
+        )
+    }
+
+    fn compile_selector_error_code_with_membership(
+        selector: SelectionExprIR,
+        selections: &[SelectionDefinitionIR],
+        membership_policy: SelectionMembershipPolicyIR,
+    ) -> String {
+        let mut authored_constraint = constraint("selection", selector);
+        authored_constraint.membership = membership_policy;
+        let constraints = [authored_constraint];
+        let memberships = [membership(&["magnet"], &[])];
+        let active_mask = [true];
+        let domain = FdmFrozenSpinsDomain {
+            origin_m: [0.0; 3],
+            counts: [1, 1, 1],
+            cell_m: [1.0; 3],
+            active_mask: &active_mask,
+            memberships: &memberships,
+            grid_fingerprint: "fdm-grid-v1",
+        };
+        let values = [[1.0, 0.0, 0.0]];
+        let references = [ResolvedFrozenSpinsReference {
+            constraint_id: "selection",
+            values: &values,
+            source_state_revision: Some(1),
+            topology_fingerprint: "fdm-grid-v1",
+        }];
+        let transforms = BTreeMap::new();
+        let request = FrozenSpinsCompileRequest {
+            constraints: &constraints,
+            selections,
+            activation_stage_id: None,
+            object_transforms: &transforms,
+            known_entities: known_entities(),
+            state_snapshot: None,
+            resolved_references: &references,
+            expected_source_state_revision: Some(1),
+            expected_grid_or_mesh_fingerprint: "fdm-grid-v1",
+        };
+        compile_fdm_frozen_spins(&domain, &request)
+            .expect_err("invalid selector must fail closed")
+            .code()
+            .to_string()
+    }
+
+    #[test]
+    fn frozen_spins_fdm_exact_mask_intersects_inactive_cells_and_unions_overlaps() {
+        let constraints = vec![
+            constraint(
+                "left",
+                SelectionExprIR::InRegion {
+                    object_id: "magnet".to_string(),
+                    region_id: "left".to_string(),
+                },
+            ),
+            constraint(
+                "overlap",
+                SelectionExprIR::InRegion {
+                    object_id: "magnet".to_string(),
+                    region_id: "overlap".to_string(),
+                },
+            ),
+        ];
+        let memberships = vec![
+            membership(&["magnet"], &[("magnet", "left"), ("magnet", "overlap")]),
+            membership(&["magnet"], &[("magnet", "overlap")]),
+            membership(&["magnet"], &[("magnet", "right")]),
+        ];
+        let active_mask = vec![true, false, true];
+        let domain = FdmFrozenSpinsDomain {
+            origin_m: [0.0, 0.0, 0.0],
+            counts: [3, 1, 1],
+            cell_m: [1.0, 1.0, 1.0],
+            active_mask: &active_mask,
+            memberships: &memberships,
+            grid_fingerprint: "fdm-grid-v1",
+        };
+        let current = vec![[1.0, 0.0, 0.0]; 3];
+        let references = vec![
+            ResolvedFrozenSpinsReference {
+                constraint_id: "left",
+                values: &current,
+                source_state_revision: Some(7),
+                topology_fingerprint: "fdm-grid-v1",
+            },
+            ResolvedFrozenSpinsReference {
+                constraint_id: "overlap",
+                values: &current,
+                source_state_revision: Some(7),
+                topology_fingerprint: "fdm-grid-v1",
+            },
+        ];
+        let transforms = BTreeMap::<String, AffineTransform3>::new();
+        let request = FrozenSpinsCompileRequest {
+            constraints: &constraints,
+            selections: &[],
+            activation_stage_id: None,
+            object_transforms: &transforms,
+            known_entities: known_entities(),
+            state_snapshot: None,
+            resolved_references: &references,
+            expected_source_state_revision: Some(7),
+            expected_grid_or_mesh_fingerprint: "fdm-grid-v1",
+        };
+
+        let resolved = compile_fdm_frozen_spins(&domain, &request).unwrap();
+
+        assert_eq!(resolved.frozen_mask, vec![true, false, false]);
+        assert_eq!(resolved.frozen_dof_count, 1);
+        assert_eq!(resolved.free_dof_count, 1);
+        assert_eq!(resolved.source_state_revision, Some(7));
+        assert_eq!(resolved.certificate.raw_candidate_dof_count, 2);
+        assert_eq!(resolved.certificate.inactive_candidate_dof_count, 1);
+        assert_eq!(resolved.certificate.bounds_m, Some([[0.5, 0.5, 0.5]; 2]));
+        assert_eq!(resolved.mask_sha256.len(), 64);
+        assert_eq!(resolved.certificate.mask_sha256, resolved.mask_sha256);
+        assert_eq!(resolved.certificate.resolved_reference_sha256.len(), 64);
+        assert_eq!(resolved.certificate.authored_fingerprints.len(), 2);
+        assert!(resolved
+            .certificate
+            .authored_fingerprints
+            .iter()
+            .all(|fingerprint| fingerprint.selector_sha256.len() == 64));
+        assert_eq!(
+            compile_fdm_frozen_spins(&domain, &request).unwrap(),
+            resolved,
+            "same authored input, topology, revision, and references must be deterministic"
+        );
+        resolved.validate_against_active_mask(&active_mask).unwrap();
+    }
+
+    #[test]
+    fn frozen_spins_overlap_compares_resolved_values_not_authored_reference_policy() {
+        let mut constraints = vec![
+            constraint("first", SelectionExprIR::AllMagnetic {}),
+            constraint("second", SelectionExprIR::AllMagnetic {}),
+        ];
+        constraints[0].reference = FrozenReferencePolicyIR::InitialState {};
+        constraints[1].reference = FrozenReferencePolicyIR::ExplicitFieldAsset {
+            asset_id: "different-policy".to_string(),
+        };
+        let memberships = vec![membership(&["magnet"], &[])];
+        let active_mask = vec![true];
+        let domain = FdmFrozenSpinsDomain {
+            origin_m: [0.0; 3],
+            counts: [1, 1, 1],
+            cell_m: [1.0; 3],
+            active_mask: &active_mask,
+            memberships: &memberships,
+            grid_fingerprint: "fdm-grid-v1",
+        };
+        let first = [[1.0, 0.0, 0.0]];
+        let second = [[0.0, 1.0, 0.0]];
+        let references = vec![
+            ResolvedFrozenSpinsReference {
+                constraint_id: "first",
+                values: &first,
+                source_state_revision: None,
+                topology_fingerprint: "fdm-grid-v1",
+            },
+            ResolvedFrozenSpinsReference {
+                constraint_id: "second",
+                values: &second,
+                source_state_revision: None,
+                topology_fingerprint: "fdm-grid-v1",
+            },
+        ];
+        let transforms = BTreeMap::new();
+        let request = FrozenSpinsCompileRequest {
+            constraints: &constraints,
+            selections: &[],
+            activation_stage_id: None,
+            object_transforms: &transforms,
+            known_entities: known_entities(),
+            state_snapshot: None,
+            resolved_references: &references,
+            expected_source_state_revision: None,
+            expected_grid_or_mesh_fingerprint: "fdm-grid-v1",
+        };
+
+        let error = compile_fdm_frozen_spins(&domain, &request).unwrap_err();
+
+        assert_eq!(error.code(), "frozen_reference_conflict");
+        let message = error.to_string();
+        assert!(message.contains("first"));
+        assert!(message.contains("second"));
+        assert!(message.contains("conflict_count=1"));
+        assert!(message.contains("sample_dof_indices=[0]"));
+    }
+
+    #[test]
+    fn frozen_spins_overlap_allows_different_policies_with_equal_resolved_values() {
+        let mut constraints = vec![
+            constraint("initial", SelectionExprIR::AllMagnetic {}),
+            constraint("asset", SelectionExprIR::AllMagnetic {}),
+        ];
+        constraints[0].reference = FrozenReferencePolicyIR::InitialState {};
+        constraints[1].reference = FrozenReferencePolicyIR::ExplicitFieldAsset {
+            asset_id: "reference-field".to_string(),
+        };
+        let memberships = [membership(&["magnet"], &[])];
+        let active_mask = [true];
+        let domain = FdmFrozenSpinsDomain {
+            origin_m: [0.0; 3],
+            counts: [1, 1, 1],
+            cell_m: [1.0; 3],
+            active_mask: &active_mask,
+            memberships: &memberships,
+            grid_fingerprint: "fdm-grid-v1",
+        };
+        let values = [[1.0, 0.0, 0.0]];
+        let references = [
+            ResolvedFrozenSpinsReference {
+                constraint_id: "initial",
+                values: &values,
+                source_state_revision: None,
+                topology_fingerprint: "fdm-grid-v1",
+            },
+            ResolvedFrozenSpinsReference {
+                constraint_id: "asset",
+                values: &values,
+                source_state_revision: None,
+                topology_fingerprint: "fdm-grid-v1",
+            },
+        ];
+        let transforms = BTreeMap::new();
+        let request = FrozenSpinsCompileRequest {
+            constraints: &constraints,
+            selections: &[],
+            activation_stage_id: None,
+            object_transforms: &transforms,
+            known_entities: known_entities(),
+            state_snapshot: None,
+            resolved_references: &references,
+            expected_source_state_revision: None,
+            expected_grid_or_mesh_fingerprint: "fdm-grid-v1",
+        };
+
+        let resolved = compile_fdm_frozen_spins(&domain, &request)
+            .expect("resolved values, not authored policies, govern overlap legality");
+
+        assert_eq!(resolved.frozen_mask, vec![true]);
+        assert_eq!(resolved.constraint_ids, vec!["initial", "asset"]);
+    }
+
+    #[test]
+    fn frozen_spins_capture_rejects_mixed_reference_revisions_before_publication() {
+        let constraints = vec![
+            constraint("first", SelectionExprIR::AllMagnetic {}),
+            constraint("second", SelectionExprIR::AllMagnetic {}),
+        ];
+        let memberships = vec![membership(&["magnet"], &[])];
+        let active_mask = vec![true];
+        let domain = FdmFrozenSpinsDomain {
+            origin_m: [0.0; 3],
+            counts: [1, 1, 1],
+            cell_m: [1.0; 3],
+            active_mask: &active_mask,
+            memberships: &memberships,
+            grid_fingerprint: "fdm-grid-v1",
+        };
+        let captured = [[1.0, 0.0, 0.0]];
+        let references = [
+            ResolvedFrozenSpinsReference {
+                constraint_id: "first",
+                values: &captured,
+                source_state_revision: Some(7),
+                topology_fingerprint: "fdm-grid-v1",
+            },
+            ResolvedFrozenSpinsReference {
+                constraint_id: "second",
+                values: &captured,
+                source_state_revision: Some(8),
+                topology_fingerprint: "fdm-grid-v1",
+            },
+        ];
+        let transforms = BTreeMap::new();
+        let request = FrozenSpinsCompileRequest {
+            constraints: &constraints,
+            selections: &[],
+            activation_stage_id: None,
+            object_transforms: &transforms,
+            known_entities: known_entities(),
+            state_snapshot: None,
+            resolved_references: &references,
+            expected_source_state_revision: Some(7),
+            expected_grid_or_mesh_fingerprint: "fdm-grid-v1",
+        };
+
+        let error = compile_fdm_frozen_spins(&domain, &request)
+            .expect_err("mixed capture revisions must reject the whole activation");
+
+        assert_eq!(error.code(), "selection_stale_revision");
+    }
+
+    #[test]
+    fn frozen_spins_canonical_hash_preserves_typed_selector_errors() {
+        let invalid_geometry = SelectionExprIR::InsideGeometry {
+            geometry: GeometryPredicateIR::Box {
+                center_m: [0.0; 3],
+                size_m: [0.0, 1.0, 1.0],
+            },
+            frame: SelectionFrameIR::World {},
+            sampling: SelectionSamplingIR::DofPoint {},
+            boundary: BoundaryMembershipIR::default(),
+        };
+        assert_eq!(
+            compile_selector_error_code(invalid_geometry, &[]),
+            "selection_invalid_geometry"
+        );
+
+        let imported = SelectionExprIR::InsideGeometry {
+            geometry: GeometryPredicateIR::ImportedSolid {
+                asset_id: "mesh.stl".to_string(),
+            },
+            frame: SelectionFrameIR::World {},
+            sampling: SelectionSamplingIR::DofPoint {},
+            boundary: BoundaryMembershipIR::default(),
+        };
+        assert_eq!(
+            compile_selector_error_code(imported, &[]),
+            "selection_imported_solid_unqualified"
+        );
+
+        let cycle = vec![
+            SelectionDefinitionIR {
+                schema_version: SELECTION_EXPR_SCHEMA_VERSION.to_string(),
+                id: "a".to_string(),
+                name: None,
+                expression: SelectionExprIR::Ref {
+                    selection_id: "b".to_string(),
+                },
+            },
+            SelectionDefinitionIR {
+                schema_version: SELECTION_EXPR_SCHEMA_VERSION.to_string(),
+                id: "b".to_string(),
+                name: None,
+                expression: SelectionExprIR::Ref {
+                    selection_id: "a".to_string(),
+                },
+            },
+        ];
+        assert_eq!(
+            compile_selector_error_code(
+                SelectionExprIR::Ref {
+                    selection_id: "a".to_string(),
+                },
+                &cycle,
+            ),
+            "selection_reference_cycle"
+        );
+
+        let mut too_deep = SelectionExprIR::AllMagnetic {};
+        for _ in 0..65 {
+            too_deep = SelectionExprIR::Not {
+                expression: Box::new(too_deep),
+            };
+        }
+        assert_eq!(
+            compile_selector_error_code(too_deep, &[]),
+            "selection_complexity_exceeded"
+        );
+
+        assert_eq!(
+            compile_selector_error_code(
+                SelectionExprIR::Ref {
+                    selection_id: "missing".to_string(),
+                },
+                &[],
+            ),
+            "selection_unknown_reference"
+        );
+
+        assert_eq!(
+            compile_selector_error_code(
+                SelectionExprIR::Between {
+                    value: fullmag_ir::SelectionScalarExprIR::Constant { value: 0.0 },
+                    lower: f64::NAN,
+                    upper: 1.0,
+                    closed: fullmag_ir::ClosedIntervalIR::Both,
+                },
+                &[],
+            ),
+            "selection_invalid_constant"
+        );
+
+        let invalid_boundary = SelectionExprIR::InsideGeometry {
+            geometry: GeometryPredicateIR::Sphere {
+                center_m: [0.0; 3],
+                radius_m: 1.0,
+            },
+            frame: SelectionFrameIR::World {},
+            sampling: SelectionSamplingIR::DofPoint {},
+            boundary: BoundaryMembershipIR::Inclusive {
+                absolute_tolerance_m: -1.0,
+                relative_tolerance: 0.0,
+            },
+        };
+        assert_eq!(
+            compile_selector_error_code(invalid_boundary, &[]),
+            "selection_invalid_boundary"
+        );
+
+        let invalid_axis = SelectionExprIR::Compare {
+            lhs: fullmag_ir::SelectionScalarExprIR::MagnetizationDot {
+                axis: [2.0, 0.0, 0.0],
+            },
+            op: fullmag_ir::ComparisonOpIR::Gt,
+            rhs: fullmag_ir::SelectionScalarExprIR::Constant { value: 0.0 },
+            tolerance: fullmag_ir::ComparisonToleranceIR::default(),
+        };
+        assert_eq!(
+            compile_selector_error_code_with_membership(
+                invalid_axis,
+                &[],
+                SelectionMembershipPolicyIR::SnapshotAtActivation {},
+            ),
+            "selection_invalid_axis"
+        );
+    }
+
+    #[test]
+    fn frozen_spins_compare_rejects_nonzero_ignored_tolerance() {
+        let selector = SelectionExprIR::Compare {
+            lhs: fullmag_ir::SelectionScalarExprIR::Coordinate {
+                component: fullmag_ir::CartesianComponentIR::X,
+                frame: SelectionFrameIR::World {},
+            },
+            op: fullmag_ir::ComparisonOpIR::Gt,
+            rhs: fullmag_ir::SelectionScalarExprIR::Constant { value: 0.0 },
+            tolerance: fullmag_ir::ComparisonToleranceIR {
+                atol: 1.0e-9,
+                rtol: 0.0,
+            },
+        };
+
+        assert_eq!(
+            compile_selector_error_code(selector, &[]),
+            "selection_compare_tolerance_unsupported"
+        );
+    }
+
+    #[test]
+    fn frozen_spins_zero_dof_rejects_singular_geometry_and_coordinate_frames() {
+        let selectors = [
+            SelectionExprIR::InsideGeometry {
+                geometry: GeometryPredicateIR::Sphere {
+                    center_m: [0.0; 3],
+                    radius_m: 1.0,
+                },
+                frame: SelectionFrameIR::Object {
+                    object_id: "magnet".to_string(),
+                },
+                sampling: SelectionSamplingIR::DofPoint {},
+                boundary: BoundaryMembershipIR::default(),
+            },
+            SelectionExprIR::Compare {
+                lhs: fullmag_ir::SelectionScalarExprIR::Coordinate {
+                    component: fullmag_ir::CartesianComponentIR::X,
+                    frame: SelectionFrameIR::Object {
+                        object_id: "magnet".to_string(),
+                    },
+                },
+                op: fullmag_ir::ComparisonOpIR::Gt,
+                rhs: fullmag_ir::SelectionScalarExprIR::Constant { value: 0.0 },
+                tolerance: Default::default(),
+            },
+        ];
+        let transforms = BTreeMap::from([(
+            "magnet".to_string(),
+            AffineTransform3 {
+                scale: [1.0, 0.0, 1.0],
+                ..AffineTransform3::identity()
+            },
+        )]);
+        let points = Vec::<[f64; 3]>::new();
+        let incidents = Vec::<Vec<FemIncidentElement>>::new();
+        let domain = FemTrueDofDomain {
+            fe_order: 2,
+            true_dof_points_m: &points,
+            incident_elements: &incidents,
+            mesh_fingerprint: "fem-mesh-v1",
+        };
+        let values = Vec::<[f64; 3]>::new();
+
+        for (index, selector) in selectors.into_iter().enumerate() {
+            let mut frozen = constraint("singular", selector);
+            frozen.empty_selection = EmptySelectionPolicyIR::AllowNoop;
+            let constraints = [frozen];
+            let references = [ResolvedFrozenSpinsReference {
+                constraint_id: "singular",
+                values: &values,
+                source_state_revision: Some(1),
+                topology_fingerprint: "fem-mesh-v1",
+            }];
+            let request = FrozenSpinsCompileRequest {
+                constraints: &constraints,
+                selections: &[],
+                activation_stage_id: None,
+                object_transforms: &transforms,
+                known_entities: known_entities(),
+                state_snapshot: None,
+                resolved_references: &references,
+                expected_source_state_revision: Some(1),
+                expected_grid_or_mesh_fingerprint: "fem-mesh-v1",
+            };
+
+            let error = compile_fem_frozen_spins(&domain, &request)
+                .expect_err("singular frame must fail before an empty mask loop");
+            assert_eq!(error.code(), "selection_singular_transform", "case {index}");
+        }
+    }
+
+    #[test]
+    fn frozen_spins_known_zero_dof_region_uses_empty_selection_policy() {
+        let mut frozen = constraint(
+            "empty-region",
+            SelectionExprIR::InRegion {
+                object_id: "magnet".to_string(),
+                region_id: "authored-but-empty".to_string(),
+            },
+        );
+        frozen.empty_selection = EmptySelectionPolicyIR::AllowNoop;
+        let constraints = [frozen];
+        let memberships = [membership(&["magnet"], &[])];
+        let active_mask = [true];
+        let domain = FdmFrozenSpinsDomain {
+            origin_m: [0.0; 3],
+            counts: [1, 1, 1],
+            cell_m: [1.0; 3],
+            active_mask: &active_mask,
+            memberships: &memberships,
+            grid_fingerprint: "fdm-grid-v1",
+        };
+        let values = [[1.0, 0.0, 0.0]];
+        let references = [ResolvedFrozenSpinsReference {
+            constraint_id: "empty-region",
+            values: &values,
+            source_state_revision: Some(1),
+            topology_fingerprint: "fdm-grid-v1",
+        }];
+        let transforms = BTreeMap::new();
+        let known_entities =
+            SelectionValidationContext::new(["magnet"], [("magnet", "authored-but-empty")]);
+        let request = FrozenSpinsCompileRequest {
+            constraints: &constraints,
+            selections: &[],
+            activation_stage_id: None,
+            object_transforms: &transforms,
+            known_entities: &known_entities,
+            state_snapshot: None,
+            resolved_references: &references,
+            expected_source_state_revision: Some(1),
+            expected_grid_or_mesh_fingerprint: "fdm-grid-v1",
+        };
+
+        let resolved = compile_fdm_frozen_spins(&domain, &request)
+            .expect("known region without realized DOFs is a valid no-op");
+
+        assert_eq!(resolved.frozen_mask, vec![false]);
+        assert_eq!(resolved.frozen_dof_count, 0);
+        assert_eq!(resolved.free_dof_count, 1);
+    }
+
+    #[test]
+    fn frozen_spins_state_membership_requires_current_matching_snapshot_revision() {
+        let mut state_constraint = constraint(
+            "positive_x",
+            SelectionExprIR::Compare {
+                lhs: fullmag_ir::SelectionScalarExprIR::MagnetizationComponent {
+                    component: fullmag_ir::CartesianComponentIR::X,
+                },
+                op: fullmag_ir::ComparisonOpIR::Gt,
+                rhs: fullmag_ir::SelectionScalarExprIR::Constant { value: 0.0 },
+                tolerance: Default::default(),
+            },
+        );
+        state_constraint.membership = SelectionMembershipPolicyIR::SnapshotAtActivation {};
+        let constraints = vec![state_constraint];
+        let memberships = vec![membership(&["magnet"], &[])];
+        let active_mask = vec![true];
+        let state = [[1.0, 0.0, 0.0]];
+        let domain = FdmFrozenSpinsDomain {
+            origin_m: [0.0; 3],
+            counts: [1, 1, 1],
+            cell_m: [1.0; 3],
+            active_mask: &active_mask,
+            memberships: &memberships,
+            grid_fingerprint: "fdm-grid-v1",
+        };
+        let references = [ResolvedFrozenSpinsReference {
+            constraint_id: "positive_x",
+            values: &state,
+            source_state_revision: Some(9),
+            topology_fingerprint: "fdm-grid-v1",
+        }];
+        let transforms = BTreeMap::new();
+        let request = FrozenSpinsCompileRequest {
+            constraints: &constraints,
+            selections: &[],
+            activation_stage_id: None,
+            object_transforms: &transforms,
+            known_entities: known_entities(),
+            state_snapshot: Some(FrozenSpinsStateSnapshot {
+                magnetization: &state,
+                revision: 8,
+            }),
+            resolved_references: &references,
+            expected_source_state_revision: Some(9),
+            expected_grid_or_mesh_fingerprint: "fdm-grid-v1",
+        };
+
+        let error = compile_fdm_frozen_spins(&domain, &request).unwrap_err();
+
+        assert_eq!(error.code(), "selection_stale_revision");
+    }
+
+    #[test]
+    fn frozen_spins_state_snapshot_materializes_exact_mask_at_matching_revision() {
+        let mut state_constraint = constraint(
+            "positive_x",
+            SelectionExprIR::Compare {
+                lhs: fullmag_ir::SelectionScalarExprIR::MagnetizationComponent {
+                    component: fullmag_ir::CartesianComponentIR::X,
+                },
+                op: fullmag_ir::ComparisonOpIR::Gt,
+                rhs: fullmag_ir::SelectionScalarExprIR::Constant { value: 0.0 },
+                tolerance: Default::default(),
+            },
+        );
+        state_constraint.membership = SelectionMembershipPolicyIR::SnapshotAtActivation {};
+        let constraints = vec![state_constraint];
+        let memberships = vec![membership(&["magnet"], &[]); 2];
+        let active_mask = vec![true, true];
+        let state = [[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]];
+        let domain = FdmFrozenSpinsDomain {
+            origin_m: [0.0; 3],
+            counts: [2, 1, 1],
+            cell_m: [1.0; 3],
+            active_mask: &active_mask,
+            memberships: &memberships,
+            grid_fingerprint: "fdm-grid-v1",
+        };
+        let references = [ResolvedFrozenSpinsReference {
+            constraint_id: "positive_x",
+            values: &state,
+            source_state_revision: Some(9),
+            topology_fingerprint: "fdm-grid-v1",
+        }];
+        let transforms = BTreeMap::new();
+        let request = FrozenSpinsCompileRequest {
+            constraints: &constraints,
+            selections: &[],
+            activation_stage_id: None,
+            object_transforms: &transforms,
+            known_entities: known_entities(),
+            state_snapshot: Some(FrozenSpinsStateSnapshot {
+                magnetization: &state,
+                revision: 9,
+            }),
+            resolved_references: &references,
+            expected_source_state_revision: Some(9),
+            expected_grid_or_mesh_fingerprint: "fdm-grid-v1",
+        };
+
+        let resolved = compile_fdm_frozen_spins(&domain, &request).unwrap();
+
+        assert_eq!(resolved.frozen_mask, vec![true, false]);
+        assert_eq!(resolved.source_state_revision, Some(9));
+    }
+
+    #[test]
+    fn frozen_spins_inside_geometry_adapts_canonical_ir_in_object_frame() {
+        let constraints = vec![constraint(
+            "object_box",
+            SelectionExprIR::InsideGeometry {
+                geometry: GeometryPredicateIR::Box {
+                    center_m: [0.0; 3],
+                    size_m: [1.0; 3],
+                },
+                frame: SelectionFrameIR::Object {
+                    object_id: "magnet".to_string(),
+                },
+                sampling: SelectionSamplingIR::DofPoint {},
+                boundary: BoundaryMembershipIR::default(),
+            },
+        )];
+        let memberships = vec![membership(&["magnet"], &[])];
+        let active_mask = vec![true];
+        let values = [[1.0, 0.0, 0.0]];
+        let domain = FdmFrozenSpinsDomain {
+            origin_m: [10.0, 0.0, 0.0],
+            counts: [1, 1, 1],
+            cell_m: [1.0; 3],
+            active_mask: &active_mask,
+            memberships: &memberships,
+            grid_fingerprint: "fdm-grid-v1",
+        };
+        let references = [ResolvedFrozenSpinsReference {
+            constraint_id: "object_box",
+            values: &values,
+            source_state_revision: Some(1),
+            topology_fingerprint: "fdm-grid-v1",
+        }];
+        let transforms = BTreeMap::from([(
+            "magnet".to_string(),
+            AffineTransform3 {
+                translation_m: [10.0, 0.0, 0.0],
+                ..AffineTransform3::identity()
+            },
+        )]);
+        let request = FrozenSpinsCompileRequest {
+            constraints: &constraints,
+            selections: &[],
+            activation_stage_id: None,
+            object_transforms: &transforms,
+            known_entities: known_entities(),
+            state_snapshot: None,
+            resolved_references: &references,
+            expected_source_state_revision: Some(1),
+            expected_grid_or_mesh_fingerprint: "fdm-grid-v1",
+        };
+
+        let resolved = compile_fdm_frozen_spins(&domain, &request).unwrap();
+
+        assert_eq!(resolved.frozen_mask, vec![true]);
+        assert_eq!(
+            resolved.certificate.evaluator_id,
+            "selection.fdm_cell_center.v1"
+        );
+    }
+
+    #[test]
+    fn frozen_spins_topology_mismatch_fails_before_mask_materialization() {
+        let constraints = vec![constraint("all", SelectionExprIR::AllMagnetic {})];
+        let memberships = vec![membership(&["magnet"], &[])];
+        let active_mask = vec![true];
+        let values = [[1.0, 0.0, 0.0]];
+        let references = [ResolvedFrozenSpinsReference {
+            constraint_id: "all",
+            values: &values,
+            source_state_revision: Some(1),
+            topology_fingerprint: "old-grid",
+        }];
+        let domain = FdmFrozenSpinsDomain {
+            origin_m: [0.0; 3],
+            counts: [1, 1, 1],
+            cell_m: [1.0; 3],
+            active_mask: &active_mask,
+            memberships: &memberships,
+            grid_fingerprint: "new-grid",
+        };
+        let transforms = BTreeMap::new();
+        let request = FrozenSpinsCompileRequest {
+            constraints: &constraints,
+            selections: &[],
+            activation_stage_id: None,
+            object_transforms: &transforms,
+            known_entities: known_entities(),
+            state_snapshot: None,
+            resolved_references: &references,
+            expected_source_state_revision: Some(1),
+            expected_grid_or_mesh_fingerprint: "old-grid",
+        };
+
+        let error = compile_fdm_frozen_spins(&domain, &request).unwrap_err();
+
+        assert_eq!(error.code(), "selection_topology_mismatch");
+    }
+
+    #[test]
+    fn frozen_spins_fdm_topology_and_size_fail_before_point_materialization() {
+        use crate::selection::{
+            fdm_point_materialization_count, reset_fdm_point_materialization_count,
+        };
+
+        let constraints = vec![constraint("all", SelectionExprIR::AllMagnetic {})];
+        let memberships = vec![membership(&["magnet"], &[])];
+        let active_mask = vec![true];
+        let values = [[1.0, 0.0, 0.0]];
+        let references = [ResolvedFrozenSpinsReference {
+            constraint_id: "all",
+            values: &values,
+            source_state_revision: Some(1),
+            topology_fingerprint: "expected-grid",
+        }];
+        let transforms = BTreeMap::new();
+        let request = FrozenSpinsCompileRequest {
+            constraints: &constraints,
+            selections: &[],
+            activation_stage_id: None,
+            object_transforms: &transforms,
+            known_entities: known_entities(),
+            state_snapshot: None,
+            resolved_references: &references,
+            expected_source_state_revision: Some(1),
+            expected_grid_or_mesh_fingerprint: "expected-grid",
+        };
+
+        reset_fdm_point_materialization_count();
+        let topology_domain = FdmFrozenSpinsDomain {
+            origin_m: [0.0; 3],
+            counts: [1, 1, 1],
+            cell_m: [1.0; 3],
+            active_mask: &active_mask,
+            memberships: &memberships,
+            grid_fingerprint: "different-grid",
+        };
+        let error = compile_fdm_frozen_spins(&topology_domain, &request).unwrap_err();
+        assert_eq!(error.code(), "selection_topology_mismatch");
+        assert_eq!(fdm_point_materialization_count(), 0);
+
+        let size_domain = FdmFrozenSpinsDomain {
+            origin_m: [0.0; 3],
+            counts: [2, 1, 1],
+            cell_m: [1.0; 3],
+            active_mask: &active_mask,
+            memberships: &memberships,
+            grid_fingerprint: "expected-grid",
+        };
+        let error = compile_fdm_frozen_spins(&size_domain, &request).unwrap_err();
+        assert_eq!(error.code(), "selection_domain_size_mismatch");
+        assert_eq!(fdm_point_materialization_count(), 0);
+    }
+
+    #[test]
+    fn frozen_spins_fem_p1_p2_use_any_incident_magnetic_true_dof_policy() {
+        let constraints = vec![constraint(
+            "object_a",
+            SelectionExprIR::InObject {
+                object_id: "a".to_string(),
+            },
+        )];
+        let points = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+            [4.0, 0.0, 0.0],
+        ];
+        let incidents = vec![
+            vec![FemIncidentElement::magnetic("a", &[])],
+            vec![
+                FemIncidentElement::magnetic("a", &[]),
+                FemIncidentElement::air(),
+            ],
+            vec![FemIncidentElement::air()],
+            vec![FemIncidentElement::magnetic("b", &["rim"])],
+            vec![
+                FemIncidentElement::magnetic("a", &[]),
+                FemIncidentElement::magnetic("b", &[]),
+            ],
+        ];
+        let reference_values = vec![[1.0, 0.0, 0.0]; points.len()];
+        let references = [ResolvedFrozenSpinsReference {
+            constraint_id: "object_a",
+            values: &reference_values,
+            source_state_revision: Some(4),
+            topology_fingerprint: "fem-mesh-v1",
+        }];
+        let transforms = BTreeMap::new();
+        let request = FrozenSpinsCompileRequest {
+            constraints: &constraints,
+            selections: &[],
+            activation_stage_id: None,
+            object_transforms: &transforms,
+            known_entities: known_entities(),
+            state_snapshot: None,
+            resolved_references: &references,
+            expected_source_state_revision: Some(4),
+            expected_grid_or_mesh_fingerprint: "fem-mesh-v1",
+        };
+
+        for fe_order in [1, 2] {
+            let domain = FemTrueDofDomain {
+                fe_order,
+                true_dof_points_m: &points,
+                incident_elements: &incidents,
+                mesh_fingerprint: "fem-mesh-v1",
+            };
+            let resolved = compile_fem_frozen_spins(&domain, &request).unwrap();
+            assert_eq!(
+                resolved.frozen_mask,
+                vec![true, true, false, false, true],
+                "P{fe_order} true-DOF mask"
+            );
+            assert_eq!(resolved.frozen_dof_count, 3);
+            assert_eq!(resolved.free_dof_count, 1);
+        }
+    }
+
+    #[test]
+    fn frozen_spins_fem_p2_edge_and_face_true_dofs_preserve_incident_membership() {
+        // Q2 hexahedral Lagrange nodes are the tensor product of the local
+        // shape-function abscissae {0, 1/2, 1}. Build global true DOFs by
+        // deduplicating those nodes across adjacent element topology.
+        let elements = [
+            ([0_i32, 0, 0], Some("a")),
+            ([1_i32, 0, 0], Some("b")),
+            ([0_i32, 1, 0], None),
+        ];
+        let mut topology = BTreeMap::<[i32; 3], Vec<FemIncidentElement>>::new();
+        for (origin, object_id) in elements {
+            for local_z in 0..=2 {
+                for local_y in 0..=2 {
+                    for local_x in 0..=2 {
+                        let key = [
+                            2 * origin[0] + local_x,
+                            2 * origin[1] + local_y,
+                            2 * origin[2] + local_z,
+                        ];
+                        topology.entry(key).or_default().push(match object_id {
+                            Some(object_id) => FemIncidentElement::magnetic(object_id, &[]),
+                            None => FemIncidentElement::air(),
+                        });
+                    }
+                }
+            }
+        }
+        let (points, incidents): (Vec<_>, Vec<_>) = topology
+            .into_iter()
+            .map(|(key, incident)| (key.map(|value| f64::from(value) * 0.5), incident))
+            .unzip();
+        let constraints = vec![constraint(
+            "object_a",
+            SelectionExprIR::InObject {
+                object_id: "a".to_string(),
+            },
+        )];
+        let values = vec![[1.0, 0.0, 0.0]; points.len()];
+        let references = [ResolvedFrozenSpinsReference {
+            constraint_id: "object_a",
+            values: &values,
+            source_state_revision: Some(4),
+            topology_fingerprint: "fem-p2-mesh-v1",
+        }];
+        let transforms = BTreeMap::new();
+        let request = FrozenSpinsCompileRequest {
+            constraints: &constraints,
+            selections: &[],
+            activation_stage_id: None,
+            object_transforms: &transforms,
+            known_entities: known_entities(),
+            state_snapshot: None,
+            resolved_references: &references,
+            expected_source_state_revision: Some(4),
+            expected_grid_or_mesh_fingerprint: "fem-p2-mesh-v1",
+        };
+        let domain = FemTrueDofDomain {
+            fe_order: 2,
+            true_dof_points_m: &points,
+            incident_elements: &incidents,
+            mesh_fingerprint: "fem-p2-mesh-v1",
+        };
+
+        let resolved = compile_fem_frozen_spins(&domain, &request).unwrap();
+
+        let expected_mask: Vec<_> = points
+            .iter()
+            .map(|point| {
+                point
+                    .iter()
+                    .all(|coordinate| (0.0..=1.0).contains(coordinate))
+            })
+            .collect();
+        assert_eq!(resolved.frozen_mask, expected_mask);
+        assert_eq!(resolved.frozen_dof_count, 27);
+        assert_eq!(resolved.free_dof_count, 18);
+
+        let selected_at = |point: [f64; 3]| {
+            let index = points
+                .iter()
+                .position(|candidate| *candidate == point)
+                .expect("Q2 topology must contain requested shape-function carrier");
+            resolved.frozen_mask[index]
+        };
+        assert!(selected_at([0.5, 0.0, 0.0])); // Q2 edge, object a only
+        assert!(selected_at([1.0, 0.5, 0.5])); // Q2 face, magnetic a/b
+        assert!(selected_at([0.5, 1.0, 0.5])); // Q2 face, magnetic a/air
+        assert!(!selected_at([1.5, 0.0, 0.0])); // Q2 edge, object b only
+        assert!(!selected_at([0.0, 1.5, 0.0])); // Q2 edge, air only
+    }
+
+    #[test]
+    fn frozen_spins_fem_topology_mismatch_fails_before_membership_materialization() {
+        use crate::selection::{
+            fem_membership_materialization_count, reset_fem_membership_materialization_count,
+        };
+
+        let constraints = vec![constraint("all", SelectionExprIR::AllMagnetic {})];
+        let points = [[0.0, 0.0, 0.0]];
+        let incidents = [vec![FemIncidentElement::magnetic("magnet", &[])]];
+        let values = [[1.0, 0.0, 0.0]];
+        let references = [ResolvedFrozenSpinsReference {
+            constraint_id: "all",
+            values: &values,
+            source_state_revision: Some(1),
+            topology_fingerprint: "expected-mesh",
+        }];
+        let transforms = BTreeMap::new();
+        let request = FrozenSpinsCompileRequest {
+            constraints: &constraints,
+            selections: &[],
+            activation_stage_id: None,
+            object_transforms: &transforms,
+            known_entities: known_entities(),
+            state_snapshot: None,
+            resolved_references: &references,
+            expected_source_state_revision: Some(1),
+            expected_grid_or_mesh_fingerprint: "expected-mesh",
+        };
+        let domain = FemTrueDofDomain {
+            fe_order: 2,
+            true_dof_points_m: &points,
+            incident_elements: &incidents,
+            mesh_fingerprint: "stale-mesh",
+        };
+
+        reset_fem_membership_materialization_count();
+        let error = compile_fem_frozen_spins(&domain, &request).unwrap_err();
+
+        assert_eq!(error.code(), "selection_topology_mismatch");
+        assert_eq!(fem_membership_materialization_count(), 0);
+    }
+
+    #[test]
+    fn frozen_spins_adapter_covers_world_object_affine_and_composite_geometry() {
+        let object_selector = SelectionExprIR::InsideGeometry {
+            geometry: GeometryPredicateIR::Ellipsoid {
+                center_m: [1.0, 0.0, 0.0],
+                radii_m: [0.3; 3],
+            },
+            frame: SelectionFrameIR::Object {
+                object_id: "magnet".to_string(),
+            },
+            sampling: SelectionSamplingIR::DofPoint {},
+            boundary: BoundaryMembershipIR::default(),
+        };
+        let world_selector = SelectionExprIR::InsideGeometry {
+            geometry: GeometryPredicateIR::Complement {
+                geometry: Box::new(GeometryPredicateIR::Xor {
+                    a: Box::new(GeometryPredicateIR::Ellipsoid {
+                        center_m: [11.0, 0.0, 0.0],
+                        radii_m: [0.3; 3],
+                    }),
+                    b: Box::new(GeometryPredicateIR::Sphere {
+                        center_m: [13.0, 0.0, 0.0],
+                        radius_m: 0.3,
+                    }),
+                }),
+                domain: Box::new(GeometryPredicateIR::Box {
+                    center_m: [12.0, 0.0, 0.0],
+                    size_m: [3.0, 1.0, 1.0],
+                }),
+            },
+            frame: SelectionFrameIR::World {},
+            sampling: SelectionSamplingIR::DofPoint {},
+            boundary: BoundaryMembershipIR::default(),
+        };
+        let constraints = vec![
+            constraint("object-affine", object_selector),
+            constraint("world-composite", world_selector),
+        ];
+        let memberships = vec![membership(&["magnet"], &[]); 3];
+        let active_mask = vec![true; 3];
+        let domain = FdmFrozenSpinsDomain {
+            origin_m: [10.5, -0.5, -0.5],
+            counts: [3, 1, 1],
+            cell_m: [1.0; 3],
+            active_mask: &active_mask,
+            memberships: &memberships,
+            grid_fingerprint: "fdm-affine-v1",
+        };
+        let values = vec![[1.0, 0.0, 0.0]; 3];
+        let references = [
+            ResolvedFrozenSpinsReference {
+                constraint_id: "object-affine",
+                values: &values,
+                source_state_revision: Some(2),
+                topology_fingerprint: "fdm-affine-v1",
+            },
+            ResolvedFrozenSpinsReference {
+                constraint_id: "world-composite",
+                values: &values,
+                source_state_revision: Some(2),
+                topology_fingerprint: "fdm-affine-v1",
+            },
+        ];
+        let transforms = BTreeMap::from([(
+            "magnet".to_string(),
+            AffineTransform3 {
+                translation_m: [10.0, 0.0, 0.0],
+                rotation_xyzw: [
+                    0.0,
+                    0.0,
+                    std::f64::consts::FRAC_1_SQRT_2,
+                    std::f64::consts::FRAC_1_SQRT_2,
+                ],
+                scale: [2.0, 0.5, 1.0],
+                pivot_m: [1.0, 0.0, 0.0],
+            },
+        )]);
+        let request = FrozenSpinsCompileRequest {
+            constraints: &constraints,
+            selections: &[],
+            activation_stage_id: None,
+            object_transforms: &transforms,
+            known_entities: known_entities(),
+            state_snapshot: None,
+            resolved_references: &references,
+            expected_source_state_revision: Some(2),
+            expected_grid_or_mesh_fingerprint: "fdm-affine-v1",
+        };
+
+        let resolved = compile_fdm_frozen_spins(&domain, &request).unwrap();
+
+        assert_eq!(resolved.frozen_mask, vec![true, true, false]);
+    }
+
+    #[test]
+    fn frozen_spins_public_adapter_materializes_direct_affine_ir_in_world_and_object_frames() {
+        let direct_affine = |translation_m| GeometryPredicateIR::Affine {
+            geometry: Box::new(GeometryPredicateIR::Sphere {
+                center_m: [0.0; 3],
+                radius_m: 0.2,
+            }),
+            translation_m,
+            rotation_xyzw: [
+                0.0,
+                0.0,
+                std::f64::consts::FRAC_1_SQRT_2,
+                std::f64::consts::FRAC_1_SQRT_2,
+            ],
+            scale: [2.0, 0.5, 1.0],
+            pivot_m: [0.25, 0.25, 0.0],
+        };
+        let constraints = vec![
+            constraint(
+                "world-direct-affine",
+                SelectionExprIR::InsideGeometry {
+                    geometry: direct_affine([0.125, 0.75, 0.5]),
+                    frame: SelectionFrameIR::World {},
+                    sampling: SelectionSamplingIR::DofPoint {},
+                    boundary: BoundaryMembershipIR::default(),
+                },
+            ),
+            constraint(
+                "object-direct-affine",
+                SelectionExprIR::InsideGeometry {
+                    geometry: direct_affine([0.0, 0.0, 0.5]),
+                    frame: SelectionFrameIR::Object {
+                        object_id: "magnet".to_string(),
+                    },
+                    sampling: SelectionSamplingIR::DofPoint {},
+                    boundary: BoundaryMembershipIR::default(),
+                },
+            ),
+        ];
+        let memberships = vec![membership(&["magnet"], &[]); 3];
+        let active_mask = vec![true; 3];
+        let domain = FdmFrozenSpinsDomain {
+            origin_m: [0.0; 3],
+            counts: [3, 1, 1],
+            cell_m: [1.0; 3],
+            active_mask: &active_mask,
+            memberships: &memberships,
+            grid_fingerprint: "fdm-direct-affine-v1",
+        };
+        let values = vec![[1.0, 0.0, 0.0]; 3];
+        let references = [
+            ResolvedFrozenSpinsReference {
+                constraint_id: "world-direct-affine",
+                values: &values,
+                source_state_revision: Some(2),
+                topology_fingerprint: "fdm-direct-affine-v1",
+            },
+            ResolvedFrozenSpinsReference {
+                constraint_id: "object-direct-affine",
+                values: &values,
+                source_state_revision: Some(2),
+                topology_fingerprint: "fdm-direct-affine-v1",
+            },
+        ];
+        let transforms = BTreeMap::from([(
+            "magnet".to_string(),
+            AffineTransform3 {
+                translation_m: [1.0, 0.0, 0.0],
+                rotation_xyzw: [
+                    0.0,
+                    0.0,
+                    std::f64::consts::FRAC_1_SQRT_2,
+                    std::f64::consts::FRAC_1_SQRT_2,
+                ],
+                scale: [2.0, 0.5, 1.0],
+                pivot_m: [0.25, 0.25, 0.0],
+            },
+        )]);
+        let request = FrozenSpinsCompileRequest {
+            constraints: &constraints,
+            selections: &[],
+            activation_stage_id: None,
+            object_transforms: &transforms,
+            known_entities: known_entities(),
+            state_snapshot: None,
+            resolved_references: &references,
+            expected_source_state_revision: Some(2),
+            expected_grid_or_mesh_fingerprint: "fdm-direct-affine-v1",
+        };
+
+        let resolved = compile_fdm_frozen_spins(&domain, &request).unwrap();
+
+        assert_eq!(resolved.frozen_mask, vec![true, true, false]);
+
+        for (constraint_index, expected_mask) in
+            [(0, vec![true, false, false]), (1, vec![false, true, false])]
+        {
+            let one_constraint = [constraints[constraint_index].clone()];
+            let one_reference = [references[constraint_index]];
+            let one_request = FrozenSpinsCompileRequest {
+                constraints: &one_constraint,
+                selections: &[],
+                activation_stage_id: None,
+                object_transforms: &transforms,
+                known_entities: known_entities(),
+                state_snapshot: None,
+                resolved_references: &one_reference,
+                expected_source_state_revision: Some(2),
+                expected_grid_or_mesh_fingerprint: "fdm-direct-affine-v1",
+            };
+            assert_eq!(
+                compile_fdm_frozen_spins(&domain, &one_request)
+                    .unwrap()
+                    .frozen_mask,
+                expected_mask
+            );
+        }
+    }
+
+    #[test]
+    fn frozen_spins_all_active_dofs_frozen_is_a_finite_counted_noop_plan() {
+        let constraints = vec![constraint("all", SelectionExprIR::AllMagnetic {})];
+        let memberships = vec![membership(&["magnet"], &[]); 2];
+        let active_mask = vec![true, true];
+        let values = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let domain = FdmFrozenSpinsDomain {
+            origin_m: [0.0; 3],
+            counts: [2, 1, 1],
+            cell_m: [1.0; 3],
+            active_mask: &active_mask,
+            memberships: &memberships,
+            grid_fingerprint: "fdm-grid-v1",
+        };
+        let references = [ResolvedFrozenSpinsReference {
+            constraint_id: "all",
+            values: &values,
+            source_state_revision: Some(3),
+            topology_fingerprint: "fdm-grid-v1",
+        }];
+        let transforms = BTreeMap::new();
+        let request = FrozenSpinsCompileRequest {
+            constraints: &constraints,
+            selections: &[],
+            activation_stage_id: None,
+            object_transforms: &transforms,
+            known_entities: known_entities(),
+            state_snapshot: None,
+            resolved_references: &references,
+            expected_source_state_revision: Some(3),
+            expected_grid_or_mesh_fingerprint: "fdm-grid-v1",
+        };
+
+        let ResolvedFrozenSpinsPlanIR {
+            frozen_dof_count,
+            free_dof_count,
+            all_active_dofs_frozen,
+            ..
+        } = compile_fdm_frozen_spins(&domain, &request).unwrap();
+
+        assert_eq!(frozen_dof_count, 2);
+        assert_eq!(free_dof_count, 0);
+        assert!(all_active_dofs_frozen);
+    }
+}
+
 #[test]
 fn multilayer_pair_kernel_footprint_exposes_l_squared_cost_beyond_shift_telemetry() {
     let abi_v2_bytes = checked_multilayer_pair_kernel_footprint([262_144, 1, 1], 8)
@@ -1942,6 +3292,52 @@ fn bootstrap_example_plans_successfully() {
         }
         _ => panic!("expected FDM plan"),
     }
+}
+
+#[test]
+fn fdm_plan_materializes_frozen_spins_from_problem_ir() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.magnets[0].object_id = Some("strip-object".to_string());
+    ir.magnetization_constraints
+        .push(MagnetizationConstraintIR::FrozenSpins(FrozenSpinsIR {
+            schema_version: FROZEN_SPINS_SCHEMA_VERSION.to_string(),
+            id: "pin-strip".to_string(),
+            name: "Pinned strip".to_string(),
+            enabled: true,
+            selector: SelectionExprIR::InObject {
+                object_id: "strip-object".to_string(),
+            },
+            reference: FrozenReferencePolicyIR::CaptureCurrentAtActivation {},
+            membership: SelectionMembershipPolicyIR::Static {},
+            activation: ConstraintActivationIR::AllStages {},
+            empty_selection: EmptySelectionPolicyIR::Error,
+            inactive_selection: InactiveSelectionPolicyIR::WarnAndIntersect,
+        }));
+
+    let plan = plan(&ir).expect("canonical FDM lowering must materialize frozen spins");
+    let BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    let frozen = fdm
+        .frozen_spins
+        .expect("FDM plan must carry the resolved frozen-spin certificate");
+    assert_eq!(frozen.constraint_ids, vec!["pin-strip"]);
+    assert_eq!(frozen.frozen_mask.len(), fdm.initial_magnetization.len());
+    assert_eq!(frozen.frozen_dof_count, frozen.active_dof_count);
+    assert_eq!(frozen.free_dof_count, 0);
+    assert!(frozen.all_active_dofs_frozen);
+    assert_eq!(
+        frozen.grid_or_mesh_fingerprint,
+        fdm.grid_certificate
+            .as_ref()
+            .expect("FDM plan must carry grid certificate")
+            .grid_fingerprint
+    );
+    assert!(frozen
+        .certificate
+        .warnings
+        .iter()
+        .any(|warning| warning.starts_with("frozen_reference_deferred:")));
 }
 
 #[test]
@@ -4605,6 +6001,7 @@ fn fem_backend_multibody_merges_disjoint_mesh_assets() {
     ];
     ir.magnets = vec![
         fullmag_ir::MagnetIR {
+            object_id: None,
             name: "free".to_string(),
             region: "free".to_string(),
             material: "Py".to_string(),
@@ -4614,6 +6011,7 @@ fn fem_backend_multibody_merges_disjoint_mesh_assets() {
             absorbing_boundary: None,
         },
         fullmag_ir::MagnetIR {
+            object_id: None,
             name: "ref".to_string(),
             region: "ref".to_string(),
             material: "Py".to_string(),
@@ -4749,6 +6147,7 @@ fn fem_backend_multibody_rejects_incompatible_cubic_anisotropy_axes() {
         geometry: "second".to_string(),
     });
     ir.magnets.push(fullmag_ir::MagnetIR {
+        object_id: None,
         name: "second".to_string(),
         region: "second".to_string(),
         material: "Co".to_string(),
@@ -4907,6 +6306,7 @@ fn fem_plan_heterogeneous_materials_populates_region_materials_for_cuda() {
         geometry: "second".to_string(),
     });
     ir.magnets.push(fullmag_ir::MagnetIR {
+        object_id: None,
         name: "second".to_string(),
         region: "second".to_string(),
         material: "Co".to_string(),
@@ -5031,6 +6431,7 @@ fn fem_plan_promotes_active_anisotropy_axis_material_for_heterogeneous_regions()
         geometry: "cofeb_top_ring".to_string(),
     });
     ir.magnets.push(fullmag_ir::MagnetIR {
+        object_id: None,
         name: "cofeb_top_ring".to_string(),
         region: "cofeb_top_ring".to_string(),
         material: "CoFeB".to_string(),
@@ -5144,6 +6545,7 @@ fn fem_plan_conformal_shared_domain_duplicates_interface_nodes_for_cuda() {
         geometry: "second".to_string(),
     });
     ir.magnets.push(fullmag_ir::MagnetIR {
+        object_id: None,
         name: "second".to_string(),
         region: "second".to_string(),
         material: "Py".to_string(),
@@ -5227,6 +6629,7 @@ fn fem_plan_four_body_shared_domain_populates_region_materials_on_cuda() {
             geometry: geom_name.clone(),
         });
         ir.magnets.push(fullmag_ir::MagnetIR {
+            object_id: None,
             name: magnet_name.clone(),
             region: magnet_name.clone(),
             material: "Py".to_string(),
@@ -6481,6 +7884,7 @@ fn multilayer_single_precision_is_rejected_without_cuda_device_request() {
     ];
     ir.magnets = vec![
         fullmag_ir::MagnetIR {
+            object_id: None,
             name: "free".to_string(),
             region: "free_region".to_string(),
             material: "Py".to_string(),
@@ -6490,6 +7894,7 @@ fn multilayer_single_precision_is_rejected_without_cuda_device_request() {
             absorbing_boundary: None,
         },
         fullmag_ir::MagnetIR {
+            object_id: None,
             name: "ref".to_string(),
             region: "ref_region".to_string(),
             material: "Py".to_string(),
@@ -6566,6 +7971,7 @@ fn multilayer_single_precision_is_accepted_when_cuda_device_requested() {
     ];
     ir.magnets = vec![
         fullmag_ir::MagnetIR {
+            object_id: None,
             name: "free".to_string(),
             region: "free_region".to_string(),
             material: "Py".to_string(),
@@ -6575,6 +7981,7 @@ fn multilayer_single_precision_is_accepted_when_cuda_device_requested() {
             absorbing_boundary: None,
         },
         fullmag_ir::MagnetIR {
+            object_id: None,
             name: "ref".to_string(),
             region: "ref_region".to_string(),
             material: "Py".to_string(),
@@ -6660,6 +8067,7 @@ fn stacked_two_body_multilayer_problem() -> ProblemIR {
     ];
     ir.magnets = vec![
         fullmag_ir::MagnetIR {
+            object_id: None,
             name: "free".to_string(),
             region: "free_region".to_string(),
             material: "Py".to_string(),
@@ -6669,6 +8077,7 @@ fn stacked_two_body_multilayer_problem() -> ProblemIR {
             absorbing_boundary: None,
         },
         fullmag_ir::MagnetIR {
+            object_id: None,
             name: "ref".to_string(),
             region: "ref_region".to_string(),
             material: "Py".to_string(),
@@ -6707,6 +8116,29 @@ fn stacked_two_body_multilayer_problem() -> ProblemIR {
 }
 
 #[test]
+fn multilayer_fdm_rejects_authored_frozen_spins_before_runtime_selection() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.magnetization_constraints
+        .push(MagnetizationConstraintIR::FrozenSpins(FrozenSpinsIR {
+            schema_version: FROZEN_SPINS_SCHEMA_VERSION.to_string(),
+            id: "pin-stack".to_string(),
+            name: "Pinned stack".to_string(),
+            enabled: true,
+            selector: SelectionExprIR::AllMagnetic {},
+            reference: FrozenReferencePolicyIR::CaptureCurrentAtActivation {},
+            membership: SelectionMembershipPolicyIR::Static {},
+            activation: ConstraintActivationIR::AllStages {},
+            empty_selection: EmptySelectionPolicyIR::Error,
+            inactive_selection: InactiveSelectionPolicyIR::WarnAndIntersect,
+        }));
+
+    let error = plan(&ir).expect_err("multilayer must not drop authored frozen spins");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.starts_with("frozen_spins_fdm_multilayer_lowering_missing:")
+    }));
+}
+
+#[test]
 fn regular_three_layer_planner_uses_deduplicated_cpu_catalog_memory() {
     let mut ir = stacked_two_body_multilayer_problem();
     ir.geometry.entries.push(GeometryEntryIR::Translate {
@@ -6722,6 +8154,7 @@ fn regular_three_layer_planner_uses_deduplicated_cpu_catalog_memory() {
         geometry: "third_geom".to_string(),
     });
     ir.magnets.push(fullmag_ir::MagnetIR {
+        object_id: None,
         name: "third".to_string(),
         region: "third_region".to_string(),
         material: "Py".to_string(),
@@ -6829,6 +8262,7 @@ fn eight_layer_multilayer_problem_for_kernel_budget() -> ProblemIR {
             geometry: geometry_name,
         });
         ir.magnets.push(fullmag_ir::MagnetIR {
+            object_id: None,
             name,
             region: region_name,
             material: "Py".to_string(),
@@ -6869,6 +8303,7 @@ fn three_layer_catalog_problem(thicknesses_m: [f64; 3]) -> ProblemIR {
         geometry: "layer_2_geom".to_string(),
     });
     ir.magnets.push(fullmag_ir::MagnetIR {
+        object_id: None,
         name: "layer_2".to_string(),
         region: "layer_2_region".to_string(),
         material: "Py".to_string(),
@@ -8539,6 +9974,7 @@ fn multilayer_planner_materializes_xy_offset_in_common_scratch_transfer() {
     ];
     ir.magnets = vec![
         fullmag_ir::MagnetIR {
+            object_id: None,
             name: "free".to_string(),
             region: "free_region".to_string(),
             material: "Py".to_string(),
@@ -8546,6 +9982,7 @@ fn multilayer_planner_materializes_xy_offset_in_common_scratch_transfer() {
             absorbing_boundary: None,
         },
         fullmag_ir::MagnetIR {
+            object_id: None,
             name: "ref".to_string(),
             region: "ref_region".to_string(),
             material: "Py".to_string(),
@@ -11493,6 +12930,7 @@ fn fem_plan_homogeneous_multi_body_populates_region_materials() {
         geometry: "second_geom".to_string(),
     });
     ir.magnets.push(fullmag_ir::MagnetIR {
+        object_id: None,
         name: "second".to_string(),
         region: "second".to_string(),
         material: "Py".to_string(), // same as the first body
@@ -14851,6 +16289,7 @@ fn fem_cpu_relaxation_rejects_conflicting_nodal_and_element_ms_before_native_cre
         geometry: "second".to_string(),
     });
     ir.magnets.push(fullmag_ir::MagnetIR {
+        object_id: None,
         name: "second".to_string(),
         region: "second".to_string(),
         material: "Co".to_string(),

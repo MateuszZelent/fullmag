@@ -131,6 +131,102 @@ fn energy_directional_derivative_soa(
     sum
 }
 
+fn fdm_representable_chord_energy_linear_increment(
+    problem: &ExchangeLlgProblem,
+    previous_magnetization: &[Vector3],
+    trial_magnetization: &[Vector3],
+    h_eff: &[Vector3],
+) -> f64 {
+    let cell_volume = problem.cell_size.volume();
+    previous_magnetization
+        .iter()
+        .zip(trial_magnetization)
+        .zip(h_eff)
+        .enumerate()
+        .map(|(index, ((previous, trial), field))| {
+            -MU0 * problem.ms_at(index) * cell_volume * dot(*field, sub(*trial, *previous))
+        })
+        .sum()
+}
+
+fn fdm_representable_chord_energy_linear_increment_soa(
+    problem: &ExchangeLlgProblem,
+    previous_magnetization: &VectorFieldSoA,
+    trial_magnetization: &VectorFieldSoA,
+    h_eff: &VectorFieldSoA,
+) -> f64 {
+    let cell_volume = problem.cell_size.volume();
+    let mut increment = 0.0;
+    for index in 0..previous_magnetization.len() {
+        let chord_dot_field = h_eff.x[index]
+            * (trial_magnetization.x[index] - previous_magnetization.x[index])
+            + h_eff.y[index] * (trial_magnetization.y[index] - previous_magnetization.y[index])
+            + h_eff.z[index] * (trial_magnetization.z[index] - previous_magnetization.z[index]);
+        increment -= MU0 * problem.ms_at(index) * cell_volume * chord_dot_field;
+    }
+    increment
+}
+
+fn invalid_initial_state_result(initial_magnetization: &[Vector3]) -> RelaxationResult {
+    RelaxationResult {
+        final_magnetization: initial_magnetization.to_vec(),
+        steps_taken: 0,
+        last_accepted_step_m_per_a: None,
+        line_search_backtracks: 0,
+        energy_evaluations: 0,
+        field_evaluations: 0,
+        rhs_evaluations: 0,
+        final_energy: f64::NAN,
+        final_energy_plateau_range_j: None,
+        final_max_torque: f64::NAN,
+        converged: false,
+        numerical_stagnation: false,
+        numerical_error: true,
+    }
+}
+
+fn confirm_exact_equilibrium_aos(
+    problem: &ExchangeLlgProblem,
+    magnetization: &[Vector3],
+    ws: &mut FftWorkspace,
+    control: &RelaxationControlIR,
+    energy_plateau: &RelaxationEnergyPlateauWindow,
+    torque_confirmation: &mut RelaxationTorqueConfirmation,
+    h_eff: &mut Vec<Vector3>,
+    field_evaluations: &mut u64,
+) -> bool {
+    for _ in 0..2 {
+        *h_eff = problem.effective_field_from_vectors_ws(magnetization, ws);
+        *field_evaluations += 1;
+        let max_torque = compute_max_torque(magnetization, h_eff);
+        if torque_confirmation.observe(control, energy_plateau.range(), max_torque) {
+            return true;
+        }
+    }
+    false
+}
+
+fn confirm_exact_equilibrium_soa(
+    problem: &ExchangeLlgProblem,
+    magnetization: &VectorFieldSoA,
+    ws: &mut FftWorkspace,
+    control: &RelaxationControlIR,
+    energy_plateau: &RelaxationEnergyPlateauWindow,
+    torque_confirmation: &mut RelaxationTorqueConfirmation,
+    h_eff: &mut VectorFieldSoA,
+    field_evaluations: &mut u64,
+) -> bool {
+    for _ in 0..2 {
+        problem.effective_field_into_soa_ws(magnetization, ws, h_eff);
+        *field_evaluations += 1;
+        let max_torque = compute_max_torque_soa(magnetization, h_eff);
+        if torque_confirmation.observe(control, energy_plateau.range(), max_torque) {
+            return true;
+        }
+    }
+    false
+}
+
 fn compute_max_torque_soa(magnetization: &VectorFieldSoA, h_eff: &VectorFieldSoA) -> f64 {
     debug_assert_eq!(magnetization.len(), h_eff.len());
     let mut max_torque = 0.0;
@@ -269,6 +365,9 @@ fn execute_projected_gradient_bb_soa(
     control: &RelaxationControlIR,
 ) -> RelaxationResult {
     let n = initial_magnetization.len();
+    if !active_magnetization_valid(problem, initial_magnetization) {
+        return invalid_initial_state_result(initial_magnetization);
+    }
     let mut m = VectorFieldSoA::from_aos(initial_magnetization);
     let mut m_trial = VectorFieldSoA::zeros(n);
     let mut h_eff = VectorFieldSoA::zeros(n);
@@ -285,7 +384,6 @@ fn execute_projected_gradient_bb_soa(
     let mut lambda: f64 = lambda_default;
     let lambda_min: f64 = 1e-15;
     let lambda_max: f64 = 1e-3;
-    let c_armijo: f64 = 1e-4;
     let max_backtrack: u32 = 20;
     let mut use_bb1 = true;
     let mut reset_consecutive: u64 = 0;
@@ -331,9 +429,22 @@ fn execute_projected_gradient_bb_soa(
         }
         if crate::relaxation::direct_minimizer::direct_minimizer_gradient_degenerate(g_norm_sq) {
             if torque_below_threshold && control.stop.energy_tolerance_j.is_none() {
-                continue;
+                converged = confirm_exact_equilibrium_soa(
+                    problem,
+                    &m,
+                    ws,
+                    control,
+                    &energy_plateau,
+                    &mut torque_confirmation,
+                    &mut h_eff,
+                    &mut field_evaluations,
+                );
+                if !converged {
+                    numerical_stagnation = true;
+                }
+            } else {
+                numerical_stagnation = true;
             }
-            numerical_stagnation = true;
             break;
         }
         let descent_derivative = -g_norm_sq;
@@ -351,7 +462,16 @@ fn execute_projected_gradient_bb_soa(
             let candidate_energy =
                 problem.total_energy_from_soa_ws(&m_trial, ws, &mut energy_scratch);
             energy_evaluations += 1;
-            if candidate_energy <= energy + c_armijo * trial_lambda * descent_derivative {
+            let chord_increment_j =
+                fdm_representable_chord_energy_linear_increment_soa(problem, &m, &m_trial, &h_eff);
+            if descent_derivative.is_finite()
+                && descent_derivative < 0.0
+                && crate::relaxation::direct_minimizer::projected_gradient_armijo_accepts(
+                    energy,
+                    candidate_energy,
+                    chord_increment_j,
+                )
+            {
                 accepted_energy = Some(candidate_energy);
                 break;
             }
@@ -475,6 +595,9 @@ fn execute_projected_gradient_bb_aos(
     control: &RelaxationControlIR,
 ) -> RelaxationResult {
     let n = initial_magnetization.len();
+    if !active_magnetization_valid(problem, initial_magnetization) {
+        return invalid_initial_state_result(initial_magnetization);
+    }
     let mut m: Vec<Vector3> = initial_magnetization.to_vec();
 
     // Initial gradient
@@ -487,7 +610,6 @@ fn execute_projected_gradient_bb_aos(
     let mut lambda: f64 = lambda_default;
     let lambda_min: f64 = 1e-15;
     let lambda_max: f64 = 1e-3;
-    let c_armijo: f64 = 1e-4; // sufficient decrease parameter
     let max_backtrack: u32 = 20;
     let mut use_bb1 = true; // alternate between BB1 and BB2
     let mut reset_consecutive: u64 = 0; // Boris-style reset counter
@@ -535,9 +657,22 @@ fn execute_projected_gradient_bb_aos(
         }
         if crate::relaxation::direct_minimizer::direct_minimizer_gradient_degenerate(g_norm_sq) {
             if torque_below_threshold && control.stop.energy_tolerance_j.is_none() {
-                continue;
+                converged = confirm_exact_equilibrium_aos(
+                    problem,
+                    &m,
+                    ws,
+                    control,
+                    &energy_plateau,
+                    &mut torque_confirmation,
+                    &mut h_eff,
+                    &mut field_evaluations,
+                );
+                if !converged {
+                    numerical_stagnation = true;
+                }
+            } else {
+                numerical_stagnation = true;
             }
-            numerical_stagnation = true;
             break;
         }
         let descent_derivative = -g_norm_sq;
@@ -559,9 +694,16 @@ fn execute_projected_gradient_bb_aos(
             let candidate_energy = problem.total_energy_from_vectors_ws(&candidate_m, ws);
             energy_evaluations += 1;
 
-            // Armijo sufficient decrease in joules, using dE/dlambda for the
-            // field-scaled tangent gradient.
-            if candidate_energy <= energy + c_armijo * trial_lambda * descent_derivative {
+            let chord_increment_j =
+                fdm_representable_chord_energy_linear_increment(problem, &m, &candidate_m, &h_eff);
+            if descent_derivative.is_finite()
+                && descent_derivative < 0.0
+                && crate::relaxation::direct_minimizer::projected_gradient_armijo_accepts(
+                    energy,
+                    candidate_energy,
+                    chord_increment_j,
+                )
+            {
                 accepted_trial = Some((candidate_m, candidate_energy));
                 break;
             }
@@ -696,6 +838,9 @@ fn execute_nonlinear_cg_soa(
     control: &RelaxationControlIR,
 ) -> RelaxationResult {
     let n = initial_magnetization.len();
+    if !active_magnetization_valid(problem, initial_magnetization) {
+        return invalid_initial_state_result(initial_magnetization);
+    }
     let mut m = VectorFieldSoA::from_aos(initial_magnetization);
     let mut m_new = VectorFieldSoA::zeros(n);
     let mut h_eff = VectorFieldSoA::zeros(n);
@@ -715,7 +860,6 @@ fn execute_nonlinear_cg_soa(
     let mut g_norm_sq = energy_directional_derivative_soa(problem, &g, &g);
 
     let max_backtrack: u32 = 30;
-    let c_armijo: f64 = 1e-4;
     let restart_interval: u64 = 50;
 
     let mut steps: u64 = 0;
@@ -753,9 +897,22 @@ fn execute_nonlinear_cg_soa(
         }
         if crate::relaxation::direct_minimizer::direct_minimizer_gradient_degenerate(g_norm_sq) {
             if torque_below_threshold && control.stop.energy_tolerance_j.is_none() {
-                continue;
+                converged = confirm_exact_equilibrium_soa(
+                    problem,
+                    &m,
+                    ws,
+                    control,
+                    &energy_plateau,
+                    &mut torque_confirmation,
+                    &mut h_eff,
+                    &mut field_evaluations,
+                );
+                if !converged {
+                    numerical_stagnation = true;
+                }
+            } else {
+                numerical_stagnation = true;
             }
-            numerical_stagnation = true;
             break;
         }
 
@@ -788,7 +945,16 @@ fn execute_nonlinear_cg_soa(
             let candidate_energy =
                 problem.total_energy_from_soa_ws(&m_new, ws, &mut energy_scratch);
             energy_evaluations += 1;
-            if candidate_energy <= energy + c_armijo * lambda * directional_derivative {
+            let chord_increment_j =
+                fdm_representable_chord_energy_linear_increment_soa(problem, &m, &m_new, &h_eff);
+            if directional_derivative.is_finite()
+                && directional_derivative < 0.0
+                && crate::relaxation::direct_minimizer::nonlinear_cg_armijo_accepts(
+                    energy,
+                    candidate_energy,
+                    chord_increment_j,
+                )
+            {
                 accepted_energy = Some(candidate_energy);
                 break;
             }
@@ -886,6 +1052,9 @@ fn execute_nonlinear_cg_aos(
     control: &RelaxationControlIR,
 ) -> RelaxationResult {
     let n = initial_magnetization.len();
+    if !active_magnetization_valid(problem, initial_magnetization) {
+        return invalid_initial_state_result(initial_magnetization);
+    }
     let mut m: Vec<Vector3> = initial_magnetization.to_vec();
 
     // Initial gradient
@@ -898,7 +1067,6 @@ fn execute_nonlinear_cg_aos(
     let mut g_norm_sq = energy_directional_derivative(problem, &g, &g);
 
     let max_backtrack: u32 = 30;
-    let c_armijo: f64 = 1e-4;
     let restart_interval: u64 = 50; // force CG restart every N steps
 
     let mut steps: u64 = 0;
@@ -937,9 +1105,22 @@ fn execute_nonlinear_cg_aos(
         }
         if crate::relaxation::direct_minimizer::direct_minimizer_gradient_degenerate(g_norm_sq) {
             if torque_below_threshold && control.stop.energy_tolerance_j.is_none() {
-                continue;
+                converged = confirm_exact_equilibrium_aos(
+                    problem,
+                    &m,
+                    ws,
+                    control,
+                    &energy_plateau,
+                    &mut torque_confirmation,
+                    &mut h_eff,
+                    &mut field_evaluations,
+                );
+                if !converged {
+                    numerical_stagnation = true;
+                }
+            } else {
+                numerical_stagnation = true;
             }
-            numerical_stagnation = true;
             break;
         }
 
@@ -979,8 +1160,16 @@ fn execute_nonlinear_cg_aos(
             let candidate_energy = problem.total_energy_from_vectors_ws(&candidate_m, ws);
             energy_evaluations += 1;
 
-            // Armijo condition
-            if candidate_energy <= energy + c_armijo * lambda * directional_derivative {
+            let chord_increment_j =
+                fdm_representable_chord_energy_linear_increment(problem, &m, &candidate_m, &h_eff);
+            if directional_derivative.is_finite()
+                && directional_derivative < 0.0
+                && crate::relaxation::direct_minimizer::nonlinear_cg_armijo_accepts(
+                    energy,
+                    candidate_energy,
+                    chord_increment_j,
+                )
+            {
                 accepted_trial = Some((candidate_m, candidate_energy));
                 break;
             }
@@ -1261,6 +1450,55 @@ mod tests {
     }
 
     #[test]
+    fn direct_minimizers_confirm_exact_equilibrium_without_fake_accepted_steps() {
+        let problem = direct_minimizer_problem();
+        let initial = vec![[0.0, 0.0, 1.0]; 4];
+
+        for algorithm in [
+            RelaxationAlgorithmIR::ProjectedGradientBb,
+            RelaxationAlgorithmIR::NonlinearCg,
+        ] {
+            let mut control = control(Some(1.0e-6), None);
+            control.algorithm = algorithm;
+            control.stop.max_steps = Some(4);
+            let mut ws = problem.create_workspace();
+
+            let result = match algorithm {
+                RelaxationAlgorithmIR::ProjectedGradientBb => {
+                    execute_projected_gradient_bb(&problem, &initial, &mut ws, &control)
+                }
+                RelaxationAlgorithmIR::NonlinearCg => {
+                    execute_nonlinear_cg(&problem, &initial, &mut ws, &control)
+                }
+                _ => unreachable!(),
+            };
+
+            assert!(
+                result.converged,
+                "{algorithm:?} must confirm exact equilibrium"
+            );
+            assert!(!result.numerical_stagnation);
+            assert_eq!(result.steps_taken, 0);
+            assert_eq!(result.field_evaluations, 3);
+            assert!(result.final_max_torque <= 1.0e-6);
+        }
+    }
+
+    #[test]
+    fn direct_minimizers_reject_subnormal_active_initial_magnetization_before_field_evaluation() {
+        let problem = direct_minimizer_problem();
+        let initial = vec![[f64::from_bits(1), 0.0, 0.0]; 4];
+        let control = direct_minimizer_control(RelaxationAlgorithmIR::ProjectedGradientBb);
+        let mut ws = problem.create_workspace();
+
+        let result = execute_projected_gradient_bb(&problem, &initial, &mut ws, &control);
+
+        assert!(result.numerical_error);
+        assert_eq!(result.field_evaluations, 0);
+        assert_eq!(result.energy_evaluations, 0);
+    }
+
+    #[test]
     fn projected_gradient_bb_accepts_macrospin_energy_scale() {
         let field_m_t = 35.0;
         let problem = macrospin_sw_problem(field_m_t);
@@ -1289,9 +1527,11 @@ mod tests {
         );
         assert_eq!(result.field_evaluations, result.steps_taken + 1);
         assert_eq!(result.rhs_evaluations, 0);
-        assert_eq!(
-            result.energy_evaluations,
-            result.steps_taken + result.line_search_backtracks + 1
+        // An exhausted line search evaluates its final rejected trial after
+        // the last permitted backtrack; that probe is an energy evaluation
+        // but not another backtrack.
+        assert!(
+            result.energy_evaluations >= result.steps_taken + result.line_search_backtracks + 1
         );
     }
 

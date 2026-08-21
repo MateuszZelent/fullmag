@@ -21,18 +21,21 @@ use super::spin_transport::{
     FdmCoupledCheckpoint, FdmSpinTransportEvaluation, FdmSpinTransportWorkflow,
 };
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
+use crate::constraints::{FrozenSpinsCheckpointV1, FROZEN_SPINS_CHECKPOINT_SCHEMA};
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 use crate::fdm::{artifacts::select_state_observable_field, validate_single_grid_budget};
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::preview::{
     build_grid_preview_field, build_grid_scalar_preview_field, flatten_vectors, select_observables,
 };
-use crate::quantities::normalized_quantity_name;
-use crate::quantities::{active_fdm_preview_quantities, field_materialization_quantity_ids};
+use crate::quantities::{
+    active_fdm_preview_quantities, field_materialization_quantity_ids, normalized_quantity_name,
+    QuantityId,
+};
 use crate::relaxation::{
     apply_energy_minimizer_provenance, execute_nonlinear_cg, execute_projected_gradient_bb,
     llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
-    CPU_SOA_DIRECT_MINIMIZER_REALIZATION,
+    CPU_SOA_DIRECT_MINIMIZER_REALIZATION, NATIVE_LLG_TIME_INTEGRATOR_REALIZATION,
 };
 use crate::scalar_metrics::{
     apply_average_m_to_step_stats_with_active_mask, scalar_outputs_request_average_m,
@@ -577,6 +580,10 @@ enum DirectPreviewValues {
     Scalar(Vec<f64>),
 }
 
+pub(crate) fn can_materialize_preview_quantity(id: QuantityId) -> bool {
+    direct_field_values_available(id.as_str()) || direct_scalar_values_available(id.as_str())
+}
+
 fn select_direct_preview_values(
     direct_fields: &mut DirectFieldSnapshotCache<'_>,
     quantity: &str,
@@ -914,8 +921,20 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
     let initial_dt = timestep_policy.as_ref().map(|policy| policy.initial_dt());
 
     let (mut problem, mut state) = build_snapshot_problem_and_state(plan)?;
-    let mut restored_checkpoint = coupled_checkpoint
-        .map(|value| {
+    let mut restored_frozen_checkpoint = None;
+    let mut restored_checkpoint = if let Some(value) = coupled_checkpoint {
+        if value.get("schema").and_then(serde_json::Value::as_str)
+            == Some(FROZEN_SPINS_CHECKPOINT_SCHEMA)
+        {
+            restored_frozen_checkpoint = Some(
+                serde_json::from_value::<FrozenSpinsCheckpointV1>(value).map_err(|error| {
+                    RunError {
+                        message: format!("invalid Frozen Spins checkpoint payload: {error}"),
+                    }
+                })?,
+            );
+            None
+        } else {
             super::spin_transport::validate_coupled_m3_checkpoint_value(
                 &value,
                 plan.grid
@@ -924,11 +943,17 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     .map(|cells| *cells as usize)
                     .product(),
             )?;
-            serde_json::from_value::<FdmCoupledCheckpoint>(value).map_err(|error| RunError {
-                message: format!("invalid coupled M3 checkpoint payload: {error}"),
-            })
-        })
-        .transpose()?;
+            Some(
+                serde_json::from_value::<FdmCoupledCheckpoint>(value).map_err(|error| {
+                    RunError {
+                        message: format!("invalid coupled M3 checkpoint payload: {error}"),
+                    }
+                })?,
+            )
+        }
+    } else {
+        None
+    };
     let mut resume_timestep = None;
     let mut resume_previous_timestep = None;
     let mut resume_step_count = None;
@@ -953,6 +978,43 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
             })?;
         problem.restore_thermal_step(checkpoint.thermal_counter);
     }
+    if let Some(checkpoint) = restored_frozen_checkpoint.take() {
+        let frozen_plan = plan.frozen_spins.as_ref().ok_or_else(|| RunError {
+            message: "Frozen Spins checkpoint requires a Frozen Spins plan".to_string(),
+        })?;
+        checkpoint
+            .validate_for_plan(frozen_plan)
+            .map_err(|error| RunError {
+                message: format!("Frozen Spins checkpoint validation: {error}"),
+            })?;
+        let frozen_state = checkpoint
+            .restore_engine_state(frozen_plan)
+            .map_err(|error| RunError {
+                message: format!("Frozen Spins checkpoint state: {error}"),
+            })?;
+        state
+            .restore_exact_checkpoint(checkpoint.magnetization, checkpoint.time_s)
+            .map_err(|error| RunError {
+                message: format!("restoring Frozen Spins checkpoint magnetization: {error}"),
+            })?;
+        problem
+            .restore_frozen_spins_checkpoint(frozen_state, &mut state)
+            .map_err(|error| RunError {
+                message: format!("restoring Frozen Spins checkpoint constraint: {error}"),
+            })?;
+        resume_timestep = (checkpoint.dt > 0.0).then_some(checkpoint.dt);
+        resume_previous_timestep = (checkpoint.dt > 0.0).then_some(checkpoint.dt);
+        resume_step_count = Some(checkpoint.step);
+    } else if let Some(frozen_plan) = plan.frozen_spins.as_ref() {
+        problem
+            .capture_frozen_spins_at_activation(frozen_plan, &mut state)
+            .map_err(|error| RunError {
+                message: format!("frozen spins activation: {error}"),
+            })?;
+    }
+    let all_active_dofs_frozen = problem
+        .frozen_spins()
+        .is_some_and(fullmag_engine::FrozenSpinsState::all_active_dofs_frozen);
     let initial_magnetization = state.magnetization().to_vec();
 
     let mut dt = resume_timestep.unwrap_or_else(|| {
@@ -969,6 +1031,18 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
     let mut steps: Vec<StepStats> = Vec::new();
     let mut step_count: u64 = resume_step_count.unwrap_or(0);
     let mut final_coupled_checkpoint = None;
+    // Keep the resolved Frozen Spins state in the live update stream as an
+    // opaque restart payload.  This is the only safe way for session pause
+    // and persistence layers to carry the activation reference without
+    // re-evaluating the authored selector.
+    let mut final_frozen_checkpoint = frozen_spins_checkpoint_value(
+        plan,
+        &problem,
+        &state,
+        step_count,
+        state.time_seconds,
+        last_solver_dt,
+    )?;
     let fft_backend = resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
     let mut provenance = ExecutionProvenance {
         execution_engine: "cpu_reference".to_string(),
@@ -1001,6 +1075,9 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
     if is_direct_minimization && problem.soa_fast_path_supported() {
         provenance.energy_minimizer_realization =
             Some(CPU_SOA_DIRECT_MINIMIZER_REALIZATION.to_string());
+    } else if pure_damping_relax {
+        provenance.energy_minimizer_realization =
+            Some(NATIVE_LLG_TIME_INTEGRATOR_REALIZATION.to_string());
     }
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)
@@ -1103,7 +1180,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
             0.0,
             wall_elapsed,
             &observables,
-            problem.active_mask.as_deref(),
+            &problem,
         );
         final_stats.pseudo_time_s = None;
         let direct_metrics = final_stats
@@ -1162,11 +1239,11 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     0.0,
                     0,
                     observables,
-                    problem.active_mask.as_deref(),
+                    &problem,
                 )
             })
             .unwrap_or_default();
-        while state.time_seconds < stage_end_time_s {
+        while !all_active_dofs_frozen && state.time_seconds < stage_end_time_s {
             if step_count == 0
                 && live
                     .as_ref()
@@ -1221,7 +1298,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                         None
                     };
                     let action = (live.on_step)(StepUpdate {
-                        coupled_checkpoint: None,
+                        coupled_checkpoint: final_frozen_checkpoint.clone(),
                         stats: current_stats.clone(),
                         scalar_row_due: preview_due && preview_targets_global_scalar,
                         grid: live.grid,
@@ -1466,7 +1543,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                 dt = next;
             }
             last_step_report = Some(report);
-            let latest_stats = StepStats {
+            let mut latest_stats = StepStats {
                 step: step_count,
                 time: report.time_seconds,
                 dt: report.dt_used,
@@ -1477,13 +1554,16 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                 e_total: report.total_energy_joules,
                 max_dm_dt: report.max_rhs_amplitude,
                 max_rhs_norm_per_s: report.max_rhs_amplitude,
+                max_rhs_all_norm_per_s: report.max_rhs_all_amplitude,
                 max_h_eff: report.max_effective_field_amplitude,
                 max_h_demag: report.max_demag_field_amplitude,
                 max_torque_Apm: report.max_torque_Apm,
+                max_torque_all_Apm: report.max_torque_all_Apm,
                 max_torque_T: report.max_torque_Apm * crate::MU0,
                 wall_time_ns: wall_elapsed,
                 ..StepStats::default()
             };
+            apply_frozen_spin_step_telemetry(&mut latest_stats, &problem, state.magnetization());
             current_stats = latest_stats.clone();
             // Preserve every accepted adaptive/fixed controller step for the
             // solver diagnostics trace.  User-visible scalar schedules remain
@@ -1509,6 +1589,14 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                         })
                 })
                 .transpose()?;
+            final_frozen_checkpoint = frozen_spins_checkpoint_value(
+                plan,
+                &problem,
+                &state,
+                step_count,
+                state.time_seconds,
+                report.dt_used,
+            )?;
 
             if !default_scalar_trace || !field_schedules.is_empty() {
                 record_due_outputs(
@@ -1605,7 +1693,9 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     );
                 }
                 let action = (live.on_step)(StepUpdate {
-                    coupled_checkpoint: final_coupled_checkpoint.clone(),
+                    coupled_checkpoint: final_frozen_checkpoint
+                        .clone()
+                        .or_else(|| final_coupled_checkpoint.clone()),
                     stats: update_stats,
                     scalar_row_due: due_scalar_row,
                     grid: live.grid,
@@ -1770,7 +1860,9 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     None
                 };
                 let _ = (live.on_step)(StepUpdate {
-                    coupled_checkpoint: final_coupled_checkpoint.clone(),
+                    coupled_checkpoint: final_frozen_checkpoint
+                        .clone()
+                        .or_else(|| final_coupled_checkpoint.clone()),
                     stats: final_stats,
                     scalar_row_due: true,
                     grid: live.grid,
@@ -1798,13 +1890,25 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
     } else {
         RunStatus::Completed
     };
-    let completion = direct_minimizer_completion.unwrap_or_else(|| {
-        crate::relaxation::resolve_stage_completion(
-            status,
-            plan.relaxation.as_ref(),
-            completion_metrics,
-        )
-    });
+    let completion = if all_active_dofs_frozen {
+        StageCompletionIR {
+            status: "completed".to_string(),
+            converged: true,
+            reason: None,
+            metric: None,
+            metric_name: Some("all_active_dofs_frozen".to_string()),
+            metric_value: Some(0.0),
+            threshold: None,
+        }
+    } else {
+        direct_minimizer_completion.unwrap_or_else(|| {
+            crate::relaxation::resolve_stage_completion(
+                status,
+                plan.relaxation.as_ref(),
+                completion_metrics,
+            )
+        })
+    };
     if completion.status == "failed" {
         status = RunStatus::Failed;
     }
@@ -1852,6 +1956,14 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
             })?,
         });
     }
+    if let Some(checkpoint) = final_frozen_checkpoint {
+        auxiliary_artifacts.push(crate::types::AuxiliaryArtifact {
+            relative_path: "constraints/frozen_spins_checkpoint.v1.json".to_string(),
+            bytes: serde_json::to_vec_pretty(&checkpoint).map_err(|error| RunError {
+                message: format!("serializing Frozen Spins checkpoint artifact: {error}"),
+            })?,
+        });
+    }
 
     Ok(ExecutedRun {
         result: RunResult {
@@ -1866,6 +1978,40 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         auxiliary_artifacts,
         provenance,
     })
+}
+
+fn frozen_spins_checkpoint_value(
+    plan: &FdmPlanIR,
+    problem: &ExchangeLlgProblem,
+    state: &ExchangeLlgState,
+    step: u64,
+    time_s: f64,
+    dt: f64,
+) -> Result<Option<serde_json::Value>, RunError> {
+    let (Some(frozen_plan), Some(frozen_state)) =
+        (plan.frozen_spins.as_ref(), problem.frozen_spins())
+    else {
+        return Ok(None);
+    };
+    let checkpoint = FrozenSpinsCheckpointV1::from_runtime(
+        frozen_plan,
+        frozen_state,
+        state.magnetization(),
+        step,
+        time_s,
+        dt,
+        "fdm_cpu_reference",
+        "cpu",
+        "double",
+    )
+    .map_err(|error| RunError {
+        message: format!("serializing Frozen Spins checkpoint state: {error}"),
+    })?;
+    serde_json::to_value(checkpoint)
+        .map(Some)
+        .map_err(|error| RunError {
+            message: format!("serializing Frozen Spins checkpoint state: {error}"),
+        })
 }
 
 fn step_reference_fdm_problem(
@@ -2003,7 +2149,7 @@ fn record_due_outputs(
             solver_dt,
             wall_time_ns,
             &observables,
-            problem.active_mask.as_deref(),
+            problem,
         );
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
@@ -2051,7 +2197,7 @@ fn record_scalar_snapshot(
         solver_dt,
         wall_time_ns,
         &observables,
-        problem.active_mask.as_deref(),
+        problem,
     );
     artifacts.record_scalar(&stats)?;
     steps.push(stats);
@@ -2170,7 +2316,7 @@ fn record_final_outputs(
             solver_dt,
             0,
             &observables,
-            problem.active_mask.as_deref(),
+            problem,
         );
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
@@ -2272,8 +2418,11 @@ fn observe_state_with_antenna_field(
         problem.material.damping,
         problem.dynamics.precession_enabled,
     );
-    let max_torque_apm =
+    let max_torque_all_apm =
         max_torque_residual_apm_from_field(&observables.magnetization, &effective_field);
+    let max_torque_apm = problem.frozen_spins().map_or(max_torque_all_apm, |frozen| {
+        frozen.max_cross_norm_free(&observables.magnetization, &effective_field)
+    });
 
     Ok(StateObservables {
         magnetization: observables.magnetization,
@@ -2299,9 +2448,11 @@ fn observe_state_with_antenna_field(
         dmi_energy: observables.dmi_energy_joules,
         total_energy: observables.total_energy_joules + drive_energy,
         max_dm_dt: observables.max_rhs_amplitude,
+        max_rhs_all_norm_per_s: observables.max_rhs_all_amplitude,
         max_h_eff: observables.max_effective_field_amplitude,
         max_h_demag: observables.max_demag_field_amplitude,
         max_torque_Apm: max_torque_apm,
+        max_torque_all_Apm: max_torque_all_apm,
         per_object_scalars: std::collections::HashMap::new(),
     })
 }
@@ -2375,9 +2526,11 @@ fn make_step_stats_from_report(
         e_total: report.total_energy_joules + drive_energy,
         max_dm_dt: report.max_rhs_amplitude,
         max_rhs_norm_per_s: report.max_rhs_amplitude,
+        max_rhs_all_norm_per_s: report.max_rhs_all_amplitude,
         max_h_eff: report.max_effective_field_amplitude,
         max_h_demag: report.max_demag_field_amplitude,
         max_torque_Apm: report.max_torque_Apm,
+        max_torque_all_Apm: report.max_torque_all_Apm,
         max_torque_T: report.max_torque_Apm * crate::MU0,
         wall_time_ns,
         ..StepStats::default()
@@ -2387,8 +2540,32 @@ fn make_step_stats_from_report(
         magnetization,
         problem.active_mask.as_deref(),
     );
+    apply_frozen_spin_step_telemetry(&mut stats, problem, magnetization);
     stats.per_object_scalars = single_object_scalars("free", &stats);
     stats
+}
+
+fn apply_frozen_spin_step_telemetry(
+    stats: &mut StepStats,
+    problem: &ExchangeLlgProblem,
+    magnetization: &[Vector3],
+) {
+    let active_dof_count = problem
+        .active_mask
+        .as_deref()
+        .map_or(magnetization.len(), |mask| {
+            mask.iter().filter(|active| **active).count()
+        });
+    stats.active_dof_count = active_dof_count as u64;
+    if let Some(frozen) = problem.frozen_spins() {
+        stats.frozen_dof_count = frozen.frozen_dof_count() as u64;
+        stats.free_dof_count = frozen.free_dof_count() as u64;
+        stats.frozen_reference_max_drift = frozen.max_reference_drift(magnetization);
+    } else {
+        stats.free_dof_count = active_dof_count as u64;
+        stats.max_rhs_all_norm_per_s = stats.max_rhs_norm_per_s;
+        stats.max_torque_all_Apm = stats.max_torque_Apm;
+    }
 }
 
 fn make_step_stats(
@@ -2397,7 +2574,7 @@ fn make_step_stats(
     solver_dt: f64,
     wall_time_ns: u64,
     observables: &StateObservables,
-    active_mask: Option<&[bool]>,
+    problem: &ExchangeLlgProblem,
 ) -> StepStats {
     let mut stats = StepStats {
         step,
@@ -2412,9 +2589,11 @@ fn make_step_stats(
         e_total: observables.total_energy,
         max_dm_dt: observables.max_dm_dt,
         max_rhs_norm_per_s: observables.max_dm_dt,
+        max_rhs_all_norm_per_s: observables.max_rhs_all_norm_per_s,
         max_h_eff: observables.max_h_eff,
         max_h_demag: observables.max_h_demag,
         max_torque_Apm: observables.max_torque_Apm,
+        max_torque_all_Apm: observables.max_torque_all_Apm,
         max_torque_T: observables.max_torque_Apm * crate::MU0,
         wall_time_ns,
         ..StepStats::default()
@@ -2422,8 +2601,9 @@ fn make_step_stats(
     apply_average_m_to_step_stats_with_active_mask(
         &mut stats,
         &observables.magnetization,
-        active_mask,
+        problem.active_mask.as_deref(),
     );
+    apply_frozen_spin_step_telemetry(&mut stats, problem, &observables.magnetization);
     stats.per_object_scalars = if observables.per_object_scalars.is_empty() {
         single_object_scalars("free", &stats)
     } else {
@@ -2446,6 +2626,7 @@ fn direct_field_values_available(name: &str) -> bool {
             | "H_dmi"
             | "H_oe"
             | "H_OE"
+            | "H_ant"
             | "H_eff"
             | "torque"
     ) && component.map_or(true, |component| matches!(component, "x" | "y" | "z"))
@@ -2476,6 +2657,7 @@ struct DirectFieldSnapshotCache<'a> {
     anisotropy_field: Option<Vec<Vector3>>,
     dmi_field: Option<Vec<Vector3>>,
     oersted_field: Option<Vec<Vector3>>,
+    antenna_field_cache: Option<Vec<Vector3>>,
     effective_field: Option<Vec<Vector3>>,
     torque_field: Option<Vec<Vector3>>,
     oersted_field_override: Option<&'a [Vector3]>,
@@ -2503,6 +2685,7 @@ impl<'a> DirectFieldSnapshotCache<'a> {
             anisotropy_field: None,
             dmi_field: None,
             oersted_field: None,
+            antenna_field_cache: None,
             effective_field: None,
             torque_field: None,
             oersted_field_override,
@@ -2672,6 +2855,19 @@ impl<'a> DirectFieldSnapshotCache<'a> {
                 }
                 Ok(self.oersted_field.as_deref().expect("cached Oersted field"))
             }
+            "H_ant" => {
+                if let Some(values) = self.antenna_field {
+                    return Ok(values);
+                }
+                if self.antenna_field_cache.is_none() {
+                    self.antenna_field_cache =
+                        Some(vec![[0.0, 0.0, 0.0]; self.state.magnetization().len()]);
+                }
+                Ok(self
+                    .antenna_field_cache
+                    .as_deref()
+                    .expect("cached antenna field"))
+            }
             "H_eff" => self.observable_effective_field(name),
             "torque" => self.torque_field(name),
             _ => Err(RunError {
@@ -2760,9 +2956,12 @@ mod tests {
         DriveActivationIR, ExchangeBoundaryCondition, ExecutionPrecision, FdmDemagPeriodicityIR,
         FdmMaterialIR, FdmPeriodicityIR, FieldDriveKindIR, FieldSpatialProfileIR, FieldTargetIR,
         FieldTimeOriginIR, GridDimensions, IntegratorChoice, RegionalFieldDriveIR, RelaxStopIR,
-        RelaxationAlgorithmIR, RelaxationControlIR, ResolvedRegionalFieldDriveBasisIR,
-        StageStopReason, TimeDependenceIR,
+        RelaxationAlgorithmIR, RelaxationControlIR, ResolvedFrozenSpinsPlanIR,
+        ResolvedRegionalFieldDriveBasisIR, SelectionAuthoredFingerprintIR, SelectionCertificateIR,
+        StageStopReason, TimeDependenceIR, RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION,
+        SELECTION_CERTIFICATE_SCHEMA_VERSION,
     };
+    use sha2::{Digest, Sha256};
 
     fn make_test_plan() -> FdmPlanIR {
         FdmPlanIR {
@@ -3364,6 +3563,27 @@ mod tests {
     }
 
     #[test]
+    fn direct_preview_provider_owns_antenna_field_materialization() {
+        let plan = make_test_plan();
+        let (problem, state) =
+            build_snapshot_problem_and_state(&plan).expect("reference snapshot state");
+        let antenna_field = vec![[1.0, 2.0, 3.0]; state.magnetization().len()];
+        let mut direct_fields = DirectFieldSnapshotCache::new_with_source_fields(
+            &problem,
+            &state,
+            None,
+            Some(&antenna_field),
+        );
+
+        let values = select_direct_preview_values(&mut direct_fields, "H_ant")
+            .expect("antenna materializer should not error");
+        assert!(
+            matches!(values, Some(DirectPreviewValues::Vector(values)) if values == antenna_field)
+        );
+        assert!(can_materialize_preview_quantity(QuantityId::HAnt));
+    }
+
+    #[test]
     fn snapshot_vector_fields_exposes_resolved_fdm_material_scalars() {
         reset_observe_state_calls();
 
@@ -3784,7 +4004,9 @@ mod tests {
             max_effective_field_amplitude: 11.0,
             max_demag_field_amplitude: 5.0,
             max_rhs_amplitude: 17.0,
+            max_rhs_all_amplitude: 17.0,
             max_torque_Apm: 19.0,
+            max_torque_all_Apm: 19.0,
         };
         let mut scalar_schedules = vec![OutputSchedule {
             name: "E_total".to_string(),
@@ -4293,7 +4515,9 @@ mod tests {
             max_effective_field_amplitude: 6.0,
             max_demag_field_amplitude: 7.0,
             max_rhs_amplitude: 8.0,
+            max_rhs_all_amplitude: 8.0,
             max_torque_Apm: 9.0,
+            max_torque_all_Apm: 9.0,
         };
         let mut scalar_schedules = vec![OutputSchedule {
             name: "E_total".to_string(),
@@ -5938,5 +6162,99 @@ mod tests {
                 relative * 100.0
             );
         }
+    }
+
+    #[test]
+    fn frozen_spins_checkpoint_round_trip_restores_reference_without_selector_recapture() {
+        let mask = vec![true, false];
+        let frozen_dof_count = 1;
+        let active_dof_count = 2;
+        let free_dof_count = 1;
+        let mut hash = Sha256::new();
+        hash.update((mask.len() as u64).to_le_bytes());
+        hash.update(
+            mask.iter()
+                .map(|value| u8::from(*value))
+                .collect::<Vec<_>>(),
+        );
+        let mask_sha256 = format!("{:x}", hash.finalize());
+        let plan = FdmPlanIR {
+            grid: GridDimensions { cells: [2, 1, 1] },
+            region_mask: vec![0; 2],
+            initial_magnetization: vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            frozen_spins: Some(ResolvedFrozenSpinsPlanIR {
+                schema_version: RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION.to_string(),
+                constraint_ids: vec!["pinned".to_string()],
+                frozen_mask: mask,
+                active_dof_count,
+                frozen_dof_count,
+                free_dof_count,
+                mask_sha256: mask_sha256.clone(),
+                grid_or_mesh_fingerprint: "runtime-test-grid".to_string(),
+                source_state_revision: Some(1),
+                all_active_dofs_frozen: false,
+                certificate: SelectionCertificateIR {
+                    schema_version: SELECTION_CERTIFICATE_SCHEMA_VERSION.to_string(),
+                    evaluator_id: "selection.fdm_cell_center.v1".to_string(),
+                    constraint_ids: vec!["pinned".to_string()],
+                    authored_fingerprints: vec![SelectionAuthoredFingerprintIR {
+                        constraint_id: "pinned".to_string(),
+                        selector_sha256: "a".repeat(64),
+                    }],
+                    raw_candidate_dof_count: 1,
+                    inactive_candidate_dof_count: 0,
+                    active_dof_count,
+                    frozen_dof_count,
+                    free_dof_count,
+                    bounds_m: None,
+                    grid_or_mesh_fingerprint: "runtime-test-grid".to_string(),
+                    source_state_revision: Some(1),
+                    mask_sha256,
+                    resolved_reference_sha256: "b".repeat(64),
+                    warnings: Vec::new(),
+                },
+            }),
+            ..make_test_plan()
+        };
+        let first = execute_reference_fdm(&plan, 1e-14, &[], None, None)
+            .expect("initial Frozen Spins run should succeed");
+        let checkpoint_bytes = first
+            .auxiliary_artifacts
+            .iter()
+            .find(|artifact| {
+                artifact.relative_path == "constraints/frozen_spins_checkpoint.v1.json"
+            })
+            .expect("Frozen Spins run must emit its durable checkpoint artifact")
+            .bytes
+            .clone();
+        let mut checkpoint: serde_json::Value =
+            serde_json::from_slice(&checkpoint_bytes).expect("checkpoint JSON should decode");
+        checkpoint["reference"] = serde_json::json!([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0]]);
+        checkpoint["magnetization"] = checkpoint["reference"].clone();
+        let mut reference_hash = Sha256::new();
+        reference_hash.update(2_u64.to_le_bytes());
+        for value in [[0.0_f64, 0.0, 1.0], [0.0, 1.0, 0.0]] {
+            for component in value {
+                reference_hash.update(component.to_bits().to_le_bytes());
+            }
+        }
+        checkpoint["reference_sha256"] =
+            serde_json::Value::String(format!("{:x}", reference_hash.finalize()));
+
+        let resumed = execute_reference_fdm_with_coupled_checkpoint(
+            &plan,
+            1e-14,
+            &[],
+            None,
+            None,
+            Some(checkpoint),
+        )
+        .expect("Frozen Spins checkpoint resume should succeed");
+
+        assert_eq!(
+            resumed.result.final_magnetization[0].map(f64::to_bits),
+            [0.0, 0.0, 1.0].map(f64::to_bits),
+            "restart must use the persisted reference, not recapture the selector"
+        );
     }
 }

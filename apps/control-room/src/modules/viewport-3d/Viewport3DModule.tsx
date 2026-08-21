@@ -37,6 +37,12 @@ import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus"
 import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
 import { useFieldMetaResource } from "@/kernel/resources/studyRuntimeResources";
 import {
+  frozenSpinsMaskIdFromResource,
+  useFrozenSpinsActivePreviewId,
+  useFrozenSpinsMaskResource,
+  useFrozenSpinsPreviewResource,
+} from "@/kernel/resources/frozenSpinsResources";
+import {
   selectionSnapshotEquals,
   useSelectionActions,
   useSelectionSelector,
@@ -107,6 +113,7 @@ import type { Viewport3DAirboxFrameState } from "./layers/Viewport3DScene";
 import { recordViewport3DCameraTrajectorySample } from "./layers/viewport3DCameraTrajectoryProbe";
 import { resolveViewport3DTargetSurfaceLayerInput } from "./layers/viewport3DLayerPassInputs";
 import type { RegionOverlaySelection } from "./layers/RegionOverlayLayer";
+import { buildFrozenSpinsOverlayModel } from "./layers/FrozenSpinsOverlay";
 import {
   DEFAULT_REGION_DIAGNOSTIC_OVERLAY_STATE,
   regionDiagnosticOverlayMode,
@@ -1237,6 +1244,7 @@ interface Viewport3DFrameProps
   ) => void;
   onClearSelection: () => void;
   onFdmUniverseOverlayVisibilityChange: (visible: boolean) => void;
+  onFrozenSpinsOverlayVisibilityChange: (visible: boolean) => void;
   onRegionOverlaySourceChange: (source: RegionDiagnosticOverlaySource) => void;
   onRegionOverlayVisibilityChange: (visible: boolean) => void;
   regionDiagnosticOverlayState: RegionDiagnosticOverlayState;
@@ -1265,6 +1273,15 @@ export default function Viewport3DModule({
   });
   const { select, clear } = useSelectionActions(moduleId);
   const tracker = useViewport3DResourceTracker();
+  const sessionIdentityKey = sessionIdentity
+    ? `${sessionIdentity.sessionId}\u0000${sessionIdentity.sessionEpoch}`
+    : null;
+  const previousSessionIdentityKeyRef = useRef(sessionIdentityKey);
+  useEffect(() => {
+    if (previousSessionIdentityKeyRef.current === sessionIdentityKey) return;
+    previousSessionIdentityKeyRef.current = sessionIdentityKey;
+    tracker.recordDirtyFrame("session-identity-changed");
+  }, [sessionIdentityKey, tracker]);
   const reportWorkerRuntimeCounts = useCallback(
     (counts: Parameters<typeof tracker.setWorkerRuntimeCounts>[0]) =>
       tracker.setWorkerRuntimeCounts(counts),
@@ -1287,6 +1304,8 @@ export default function Viewport3DModule({
     useState<RegionDiagnosticOverlayState>(
       DEFAULT_REGION_DIAGNOSTIC_OVERLAY_STATE,
     );
+  const [frozenSpinsOverlayVisible, setFrozenSpinsOverlayVisible] =
+    useState(true);
   const meshHistogramBinElements = useMeshHistogramBinElementsResource(
     meshSizeHighlight?.resource ?? null,
   );
@@ -1300,6 +1319,36 @@ export default function Viewport3DModule({
     resourceCounts,
     selection,
   });
+  const frozenSpinsPreviewId = useFrozenSpinsActivePreviewId();
+  const frozenSpinsPreview = useFrozenSpinsPreviewResource(
+    frozenSpinsPreviewId ?? "",
+    { enabled: frozenSpinsPreviewId !== null },
+  );
+  const frozenSpinsMaskId = frozenSpinsPreview.data
+    ? frozenSpinsMaskIdFromResource(frozenSpinsPreview.data.mask_resource)
+    : null;
+  const frozenSpinsMask = useFrozenSpinsMaskResource(
+    frozenSpinsMaskId ?? "",
+    { enabled: frozenSpinsMaskId !== null },
+  );
+  const frozenSpinsOverlayModel = useMemo(
+    () =>
+      buildFrozenSpinsOverlayModel({
+        current: frozenSpinsPreview.data?.current ?? false,
+        fdmDomain: sceneModel.fdmDomain,
+        // No API resource currently publishes exact FEM true-DOF coordinates.
+        // Never substitute topology vertices: higher-order true DOFs are not nodes.
+        femTrueDofPositions: null,
+        mask: frozenSpinsMask.data,
+        previewId: frozenSpinsPreviewId ?? "",
+      }),
+    [
+      frozenSpinsMask.data,
+      frozenSpinsPreview.data,
+      frozenSpinsPreviewId,
+      sceneModel.fdmDomain,
+    ],
+  );
   const { onSelectDomain, onSelectFdmCell, onSelectFdmTarget, onSelectFdmUniverseOutsideSupport, onSelectObject, onSelectPart, onSelectPlanarMonitor, onSelectRegion } =
     useViewport3DSelectionHandlers({
       domainId,
@@ -1479,6 +1528,9 @@ export default function Viewport3DModule({
       onCameraPatch={patchCameraState}
       onClearSelection={clear}
       onFdmUniverseOverlayVisibilityChange={changeFdmUniverseOverlayVisibility}
+      frozenSpinsOverlayModel={frozenSpinsOverlayModel}
+      frozenSpinsOverlayVisible={frozenSpinsOverlayVisible}
+      onFrozenSpinsOverlayVisibilityChange={setFrozenSpinsOverlayVisible}
       onRegionOverlaySourceChange={changeRegionOverlaySource}
       onRegionOverlayVisibilityChange={changeRegionOverlayVisibility}
       onSelectDomain={onSelectDomain}
@@ -1689,6 +1741,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   onCameraPatch,
   onClearSelection,
   onFdmUniverseOverlayVisibilityChange,
+  onFrozenSpinsOverlayVisibilityChange,
   onRegionOverlaySourceChange,
   onRegionOverlayVisibilityChange,
   regionDiagnosticOverlayState,
@@ -1751,9 +1804,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     () => createViewport3DRenderAdoptionRegistry(),
     [],
   );
-  useEffect(() => {
-    visualizationDebugAdoptionRegistry.setSessionIdentity(sessionIdentity);
-  }, [sessionIdentity, visualizationDebugAdoptionRegistry]);
+  visualizationDebugAdoptionRegistry.setSessionIdentity(sessionIdentity);
   const visualizationDebugCandidateBuilder = useMemo(
     () =>
       createViewport3DVisualizationDebugCandidateBuilder({
@@ -2291,6 +2342,15 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       data-fdm-airbox-points-visible={airboxPointsVisible ? "true" : "false"}
       data-fdm-airbox-wireframe-visible={airboxWireframeVisible ? "true" : "false"}
       data-fdm-airbox-vectors-visible={airboxVectorsVisible ? "true" : "false"}
+      data-frozen-spins-overlay-count={String(
+        sceneProps.frozenSpinsOverlayModel?.renderedCount ?? 0,
+      )}
+      data-frozen-spins-overlay-visible={
+        sceneProps.frozenSpinsOverlayVisible ? "true" : "false"
+      }
+      data-frozen-spins-preview-current={
+        sceneProps.frozenSpinsOverlayModel?.current ? "true" : "false"
+      }
       data-inspect-enabled={sceneProps.inspectEnabled ? "true" : "false"}
       data-primitive-object-count={sceneProps.primitiveModel?.objects.length ?? 0}
       data-primitive-object-ids={primitiveObjectIds}
@@ -2415,6 +2475,39 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
                 {sceneProps.fdmUniverseOutsideSupport.legend.outsideSupport}
               </span>
             ) : null}
+          </fieldset>
+        ) : null}
+        {sceneProps.frozenSpinsOverlayModel ? (
+          <fieldset
+            aria-label="Frozen Spins overlay"
+            className="fm-viewport-3d__frozen-spins-controls fm-viewport-3d__region-modes"
+          >
+            <Button
+              aria-pressed={sceneProps.frozenSpinsOverlayVisible}
+              size="sm"
+              type="button"
+              variant={
+                sceneProps.frozenSpinsOverlayVisible ? "primary" : "secondary"
+              }
+              onClick={() =>
+                onFrozenSpinsOverlayVisibilityChange(
+                  !sceneProps.frozenSpinsOverlayVisible,
+                )
+              }
+            >
+              Frozen Spins
+            </Button>
+            <span className="fm-viewport-3d__frozen-spins-legend">
+              {sceneProps.frozenSpinsOverlayModel.renderedCount.toLocaleString("en-US")}
+              /{sceneProps.frozenSpinsOverlayModel.frozenCount.toLocaleString("en-US")}
+              {" frozen · "}
+              {sceneProps.frozenSpinsOverlayModel.carrierKind === "fdm-cells"
+                ? "FDM cells"
+                : "FEM true DOFs"}
+              {sceneProps.frozenSpinsOverlayModel.current
+                ? " · current"
+                : " · stale preview"}
+            </span>
           </fieldset>
         ) : null}
         <Viewport3DFieldRefreshCountdown refresh={fieldRefresh} />

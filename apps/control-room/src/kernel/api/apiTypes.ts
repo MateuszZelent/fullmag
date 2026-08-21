@@ -592,6 +592,31 @@ export interface ObjectMetricsResource {
   time_seconds: number;
 }
 export type SceneResource = components["schemas"]["SceneResource"];
+export type FrozenSpinsCollectionResource =
+  components["schemas"]["FrozenSpinsCollectionResource"];
+export type FrozenSpinsDefinitionResource =
+  components["schemas"]["FrozenSpinsDefinitionResource"];
+export type FrozenSpinsMutationRequest =
+  components["schemas"]["FrozenSpinsMutationRequest"];
+export type FrozenSpinsDeleteRequest =
+  components["schemas"]["FrozenSpinsDeleteRequest"];
+export type FrozenSpinsPreviewRequest =
+  components["schemas"]["FrozenSpinsPreviewRequest"];
+export type FrozenSpinsPreviewResponse =
+  components["schemas"]["FrozenSpinsPreviewResponse"];
+export type FrozenSpinsDefinition = components["schemas"]["FrozenSpinsSchema"];
+export type FrozenSpinsSelectionExpression =
+  components["schemas"]["SelectionExprSchema"];
+export type FrozenSpinsReferencePolicy =
+  components["schemas"]["FrozenReferencePolicySchema"];
+export type FrozenSpinsMembershipPolicy =
+  components["schemas"]["SelectionMembershipPolicySchema"];
+export type FrozenSpinsActivation =
+  components["schemas"]["ConstraintActivationSchema"];
+export type SelectionScalarExpression =
+  components["schemas"]["SelectionScalarExprSchema"];
+export type SelectionGeometryPredicate =
+  components["schemas"]["SelectionGeometryPredicateSchema"];
 export type SceneCurrentTransport = components["schemas"]["SceneCurrentTransport"];
 export type SceneSpinTransport = components["schemas"]["SceneSpinTransport"];
 export type KnownSceneCurrentTransport = components["schemas"]["KnownSceneCurrentTransport"];

@@ -9,15 +9,19 @@
 
 | Task | Status | Implementer | Review |
 |---:|---|---|---|
-| 0–4 | partial/current-tree | earlier implementation | formal task review pending |
-| 5 | partial/current-tree | earlier implementation | formal task review pending |
-| 6 | partial/current-tree | earlier implementation | formal task review pending |
+| 0 | complete (source/CI contracts) | `frontend3d_task0_impl` | approved after TOCTOU fix wave; real managed/browser baseline remains BLOCKED |
+| 1 | complete (source contracts) | `frontend3d_task1_impl` | approved after two Critical fix waves; real delayed-session browser proof remains BLOCKED |
+| 2 | partial (source/API contracts) | `frontend3d_task0_impl` | `ResolvedQuantityProviderRegistry` z `CompatibilityProfile`/`ResolvedPlan`; pięć planes i generyczne carriery; `compute_fields` dla braku/compat/empty registry fail-closed, a FDM multilayer `H_demag` jest target-only Airbox; OpenAPI 1.15 MB/current, frontend quantity/catalog/Ribbon 16/16 + viewport 51/51/typecheck/hygiene, API 13/13 + 28/28 + 1/1, runner lib check PASS; `quantities::tests::` 6/6 i `capabilities::tests::` 20/20 PASS po lane-aware FEM CPU/GPU `H_drive`/`eden_drive` korekcie; `QUANTITY_ITEMS` usunięto, lecz mapy shape/unit, pełny provider/materializer/active-term registry i runtime/browser pozostają otwarte |
+| 3 | partial (F3D-S01/S02 source contracts) | `frontend3d_task1_impl` | canonical Airbox aliases and resolver mapping; exact FMRM/native-mask admission with zero-worker fail-closed scheduler; persisted display/session migration now canonical-only with bounded warning and ambiguous-legacy fail-closed; focused frontend 302/302, typecheck/lint/diff-check pass; per-entry revision/timestamp schema, stale/fingerprint provenance and runtime/browser remain open |
+| 4 | complete (source contracts) | `frontend3d_task1_review2` | quantity-only fallback removed; exact carrier consumer required, including fail-closed `consumers:[]` regression; 230 graph tests and typecheck pass; browser/runtime remains blocked |
+| 5 | blocked (source contracts verified) | `frontend3d_task5_impl` | final review approved; stored exact-frame bundle, resolver-driven provider selection, terminal-first admission, production heartbeat and connectivity path verified at source level; API/CLI/OpenAPI execution, managed FEM and four-lane black-box remain blocked by unrelated Frozen Spins/IR compile state and environment |
+| 6 | complete with concerns (source contracts) | `frontend3d_task0_impl` | approved after route-fixture/requestId fix wave; transaction-scoped pending/ACK, target-scoped last-good and structured v2 lifecycle/debug export verified; final primary suite 368/368 (independent review 261/261), typecheck/diff-check pass; browser/WebGL reject-before/during/after remains blocked |
 | 7 | complete (source contracts) | `frontend3d_task7_impl` | approved after four review waves; ACK/adoption identity, bounded fail-closed lifecycle and canonical durable quantity request/ACK proof verified; real browser/runtime capture remains Task 12 |
-| 8 | partial/current-tree | earlier implementation | formal task review pending |
+| 8 | blocked (source contracts verified) | `frontend3d_task8_impl` | review approved after two fix waves; teardown/root-owned invalidation, StrictMode lifecycle, bounded reasons and resource-zero audit verified; real Chromium/WebGL 100-switch remains blocked by SIGTRAP |
 | 9 | complete (source contracts) | `frontend3d_task9_impl` | approved after three review waves; byte-first cache budgets, bounded counters, quantity/orbit gates and durable raw proof artifacts verified; real browser/WebGL qualification remains Task 12 |
-| 10 | source complete/current-tree | earlier implementation | formal task review pending |
-| 11 | partial/current-tree | earlier implementation | formal task review pending |
-| 12 | pending | — | — |
+| 10 | complete with concerns (source contracts) | `frontend3d_task1_impl` | canonical-only CLI launcher, legacy runtime hygiene gate and backup-suffix gate verified; Vitest 18/18, typecheck/rustfmt/diff-check pass; Cargo test blocked by unrelated Frozen Spins/IR compile errors, browser/runtime remains blocked |
+| 11 | complete (source/CI contracts) | `frontend3d_task11_impl` | review approved after fix wave; five visible contexts, real GitHub identity-bound proof writer, strict schema and fail-closed missing-runner/intentional-failure gates verified; actual GitHub/browser/managed run remains blocked |
+| 12 | blocked (runtime qualification) | `frontend3d_task7_impl` | final report `.superpowers/sdd/frontend3d-task-12-report.md`; source/CI evidence is partially approved, but real API/models, four lane matrix, browser/WebGL, managed FEM and GitHub proof remain unavailable; do not report production PASS |
 
 ## Plan: Frozen spins production implementation (2026-08-20)
 
@@ -31,19 +35,19 @@
 | 1 | complete | task1_docs + task1_fix | review approved; focused docs gates clean |
 | 2 | complete | task2_geometry + task2_fix | review approved; planner 389/389, API 14/14, generated contract 9/9 |
 | 3 | complete | task3_python_geometry + task3_fix | review approved; focused 40/40; broad 313 passed, 1 skipped, 1 unrelated baseline failure |
-| 4 | in progress | pending | pending |
-| 5 | pending | — | — |
-| 6 | pending | — | — |
-| 7 | pending | — | — |
-| 8 | pending | — | — |
-| 9 | pending | — | — |
-| 10 | pending | — | — |
-| 11 | pending | — | — |
-| 12 | pending | — | — |
-| 13 | pending | — | — |
-| 14 | pending | — | — |
-| 15 | pending | — | — |
-| 16 | pending | — | — |
+| 4 | complete | task4_selection_ir + task4_fix + task4_quality | review approved; Python 78/78, Rust 22/22, docs validator 23/23 |
+| 5 | complete | task5_frozen_constraint + task5_fix | review approved; fullmag-ir 321/321, Python 77 + 4 subtests, planner check |
+| 6 | complete | task6_selection_compiler + task6_fix | review approved; planner 19/19, IR 3/3, full plan+IR 805/805, docs/diff gates clean; execution lanes UNQUALIFIED |
+| 7 | complete | task7_api_impl | review approved; API 26/26, planner 19/19, authoring 91/91, OpenAPI 2/2, frontend contract 10/10; broad 630 passed with 5 known unrelated baseline failures; runtime/scientific/browser lanes UNQUALIFIED |
+| 8 | implemented, qualification partial | task8_fdm_cpu_impl + task8_fdm_cpu_review | canonical single-grid ProblemIR→FdmPlan ingress, final-RHS masking, candidate restore, free/all telemetry and all-frozen path; focused runner/planner/IR tests green; full scientific qualification remains open |
+| 9 | implemented, qualification partial | task9_fdm_minimizer | PG-BB/NCG free-domain reductions, frozen trial restore and unequal multilayer offset restore; focused runner tests 5/5 green; multilayer execution remains fail-closed |
+| 10 | partial / fail-closed | task10_fdm_cuda | append-only ABI, C++ ABI 1/1, Rust FFI 1/1, managed CUDA gate 1/1 and capability guard green; native CUDA kernels/integrators/minimizers are not implemented, capability remains disabled |
+| 11 | partial / fail-closed | task11_fem_descriptor | FEM true-DOF planner mask/reference and append-only native descriptor materialized; managed FEM build green; native consumer rejects with typed `frozen_spins_fem_unqualified` |
+| 12 | blocked | — | native FEM CPU/MFEM mask/restore/reduction consumer is not implemented; execution fails closed before backend startup |
+| 13 | blocked | — | native FEM GPU device-resident consumer is not implemented; execution fails closed before backend startup |
+| 14 | pending / unqualified | — | checkpoint persistence of dense mask/reference and activation epoch is not wired; no restart claim |
+| 15 | partial / browser blocked | task15_control_room | FDM API/ribbon/Explorer/dedicated Inspector/FMSK overlay source contracts and 93 focused tests green; FEM command disabled; real browser/WebGL proof unavailable |
+| 16 | blocked | — | qualification matrix updated only from executable evidence; CUDA/FEM scientific lanes and browser gate remain open |
 
 ## Plan: Compositional physics object authoring (2026-08-13)
 

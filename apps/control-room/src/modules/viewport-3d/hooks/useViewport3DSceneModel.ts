@@ -1050,10 +1050,7 @@ function resolveViewport3DTargetQuantityFieldVectorForTarget({
       continue;
     }
     const consumers = request.consumers ?? [];
-    if (
-      consumers.length > 0 &&
-      !consumers.some((consumer) => consumer.startsWith(`${targetId}:`))
-    ) {
+    if (!consumers.some((consumer) => consumer.startsWith(`${targetId}:`))) {
       continue;
     }
     return {
@@ -1063,14 +1060,7 @@ function resolveViewport3DTargetQuantityFieldVectorForTarget({
     };
   }
 
-  const legacyFieldVector = fieldVectors.get(canonicalQuantityId) ?? null;
-  return legacyFieldVector
-    ? {
-        fieldVector: legacyFieldVector,
-        request: null,
-        requestId: canonicalQuantityId,
-      }
-    : null;
+  return null;
 }
 
 export function resolveViewport3DFdmTargetFieldVectorForTarget({
@@ -5345,6 +5335,7 @@ export function useViewport3DSceneModel({
                   domain: { ...domain, kind: "fdm-grid" as const },
                   fieldVector,
                   maxSamples: maxVectors,
+                  nativeActiveMask: activeMask,
                   realizedRegionIds: null,
                 })
               : null,
@@ -5393,6 +5384,10 @@ export function useViewport3DSceneModel({
         `visible=${airboxSettings.visible}|vectors=${vectorsVisible}|budget=${maxVectors}` +
         `|scale=${airboxSettings.vectorLengthScale}|center=${airboxSettings.vectorCenteringEnabled}` +
         `|scope=${airboxSettings.geometryScope}`;
+      const airboxVectorsOnlyEnabled =
+        vectorsVisible &&
+        !airboxSettings.pointsVisible &&
+        !airboxSettings.wireframeVisible;
       entries.push({
         buildKey: buildViewport3DFdmCuboidJobKey({
           algorithmVersion: 2,
@@ -5411,7 +5406,7 @@ export function useViewport3DSceneModel({
           targetVisualizationRevision: airboxStyleRevision,
           topologyRevision: fdmMultilayerAirboxDomain.carrierFingerprint,
         }),
-        cellSelection: "dense",
+        cellSelection: airboxVectorsOnlyEnabled ? "all" : "dense",
         domain: { ...fdmMultilayerAirboxDomain, kind: "fdm-grid" as const },
         enabled: true,
         groupKey: "fdm-cuboid:session=current:multilayer-airbox",
@@ -5423,18 +5418,16 @@ export function useViewport3DSceneModel({
         vectorAnchorMode: airboxSettings.vectorCenteringEnabled ? "center" : "tail",
         vectorField: vectorsVisible ? fieldVector : null,
         vectorGeometryScope: airboxSettings.geometryScope,
-        vectorOnly:
-          vectorsVisible &&
-          !airboxSettings.pointsVisible &&
-          !airboxSettings.wireframeVisible
-            ? createFdmVectorOnlyBuildInput({
-                cellSelection: "all",
-                domain: { ...fdmMultilayerAirboxDomain, kind: "fdm-grid" as const },
-                fieldVector,
-                maxSamples: maxVectors,
-                realizedRegionIds: null,
-              })
-            : null,
+        vectorOnly: airboxVectorsOnlyEnabled
+          ? createFdmVectorOnlyBuildInput({
+              cellSelection: "all",
+              domain: { ...fdmMultilayerAirboxDomain, kind: "fdm-grid" as const },
+              fieldVector,
+              maxSamples: maxVectors,
+              membershipAdmission: "full-domain",
+              realizedRegionIds: null,
+            })
+          : null,
         vectorScale: airboxVectorScale,
         vectorSurfaceOffsetEnabled:
           airboxSettings.vectorSurfaceOffsetEnabled ?? false,

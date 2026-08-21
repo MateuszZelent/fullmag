@@ -11,6 +11,7 @@ const PROOF_CLASSES = new Set([
   "blocked",
 ]);
 const OUTCOMES = new Set(["pass", "fail", "blocked"]);
+const UTC_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 
 export class ProofManifestError extends Error {
   constructor(reasonCode, detail) {
@@ -152,18 +153,32 @@ function validateSession(session) {
   requireString(session.endLifecycle, "session.endLifecycle");
 }
 
-function validateExecution(execution, implementationCommit) {
-  requireString(execution.provider, "execution.provider");
-  requireString(execution.runId, "execution.runId");
+function requireUtcTimestamp(value, label) {
+  if (typeof value !== "string" || !UTC_TIMESTAMP_PATTERN.test(value) || Number.isNaN(Date.parse(value))) {
+    fail("invalid_timestamp", `${label} must be an ISO-8601 UTC timestamp`);
+  }
+  return value;
+}
+
+function validateExecution(execution, implementationCommit, outcome) {
+  const provider = requireString(execution.provider, "execution.provider");
+  const runId = requireString(execution.runId, "execution.runId");
   requireString(execution.workflowName, "execution.workflowName");
   requireString(execution.jobName, "execution.jobName");
   const headSha = requireGitCommit(execution.headSha, "execution.headSha");
-  requireString(execution.conclusion, "execution.conclusion");
+  const conclusion = requireString(execution.conclusion, "execution.conclusion");
+  requireUtcTimestamp(execution.timestampUtc, "execution.timestampUtc");
+  if (provider === "github-actions" && !/^[1-9][0-9]*$/.test(runId)) {
+    fail("invalid_execution_identity", "execution.runId must be a GitHub Actions numeric run ID");
+  }
   if (headSha !== implementationCommit) {
     fail(
       "execution_source_mismatch",
       "execution.headSha does not match source.implementationCommit",
     );
+  }
+  if ((outcome === "pass" && conclusion !== "success") || (outcome !== "pass" && conclusion === "success")) {
+    fail("execution_outcome_mismatch", `outcome=${outcome} is inconsistent with conclusion=${conclusion}`);
   }
 }
 
@@ -221,6 +236,7 @@ export async function validateProofManifest(manifestValue, artifactRoot) {
   validateExecution(
     requireObject(manifest.execution, "execution"),
     source.implementationCommit,
+    manifest.outcome,
   );
   validateRuntime(requireObject(manifest.runtime, "runtime"));
   validateModel(requireObject(manifest.model, "model"), manifest.proofClass);
@@ -234,8 +250,8 @@ export async function validateProofManifest(manifestValue, artifactRoot) {
   if (!Array.isArray(manifest.steps)) {
     fail("invalid_manifest", "steps must be an array");
   }
-  if (!Array.isArray(manifest.artifacts)) {
-    fail("invalid_manifest", "artifacts must be an array");
+  if (!Array.isArray(manifest.artifacts) || manifest.artifacts.length === 0) {
+    fail("artifact_required", "artifacts must be a non-empty array");
   }
 
   const canonicalRoot = await realpath(resolve(artifactRoot));
@@ -267,7 +283,13 @@ export async function validateProofManifest(manifestValue, artifactRoot) {
   }
 }
 
-export async function writeProofManifest(manifest, outputPath, artifactRoot) {
+export async function writeProofManifest(
+  manifest,
+  outputPath,
+  artifactRoot,
+  sourceSnapshot,
+) {
+  validateSourceSnapshotBinding(manifest, sourceSnapshot);
   await validateProofManifest(manifest, artifactRoot);
   const canonicalRoot = await realpath(resolve(artifactRoot));
   const lexicalOutput = resolve(outputPath);
@@ -282,4 +304,17 @@ export async function writeProofManifest(manifest, outputPath, artifactRoot) {
     encoding: "utf8",
     flag: "wx",
   });
+}
+
+export async function writeProofManifestToReportRoot(manifest, reportRoot) {
+  const canonicalRoot = await realpath(resolve(reportRoot));
+  const sourceSnapshot = JSON.parse(
+    await readFile(resolve(canonicalRoot, "source-snapshot.v2.json"), "utf8"),
+  );
+  await writeProofManifest(
+    manifest,
+    resolve(canonicalRoot, "viewport-proof-manifest.json"),
+    canonicalRoot,
+    sourceSnapshot,
+  );
 }

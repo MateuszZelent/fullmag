@@ -214,20 +214,35 @@ fn main() -> Result<()> {
             let execution_plan =
                 fullmag_plan::plan(&ir).map_err(|error| anyhow!(error.to_string()))?;
             let BackendPlanIR::Fdm(fdm) = &execution_plan.backend_plan else {
-                bail!("coupled M3 checkpoint resume requires a single-grid FDM plan");
+                bail!("FDM checkpoint resume requires a single-grid FDM plan");
             };
             let raw = std::fs::read(&checkpoint)
                 .with_context(|| format!("reading checkpoint {}", checkpoint.display()))?;
             let checkpoint_value: Value = serde_json::from_slice(&raw)
                 .with_context(|| format!("parsing checkpoint {}", checkpoint.display()))?;
             let coupled_state = coupled_checkpoint_state(checkpoint_value)?;
-            let evidence = fullmag_runner::resume_reference_fdm_from_coupled_checkpoint_evidence(
-                fdm,
-                coupled_state,
-                until,
-                &execution_plan.output_plan.outputs,
-            )
-            .map_err(|error| anyhow!(error.message))?;
+            let is_frozen = coupled_state["schema"].as_str()
+                == Some(fullmag_runner::constraints::FROZEN_SPINS_CHECKPOINT_SCHEMA);
+            let evidence = if is_frozen {
+                let result = fullmag_runner::resume_reference_fdm_from_frozen_spins_checkpoint(
+                    fdm,
+                    coupled_state,
+                    until,
+                    &execution_plan.output_plan.outputs,
+                )
+                .map_err(|error| anyhow!(error.message))?;
+                serde_json::to_value(run_json_summary(&result, std::path::Path::new("")))?
+            } else {
+                serde_json::to_value(
+                    fullmag_runner::resume_reference_fdm_from_coupled_checkpoint_evidence(
+                        fdm,
+                        coupled_state,
+                        until,
+                        &execution_plan.output_plan.outputs,
+                    )
+                    .map_err(|error| anyhow!(error.message))?,
+                )?
+            };
             let evidence = serde_json::to_string_pretty(&evidence)?;
             let resumed_from = serde_json::to_string(&checkpoint.display().to_string())?;
             println!("{{\n  \"evidence\": {evidence},\n  \"resumed_from\": {resumed_from}\n}}");
@@ -305,14 +320,17 @@ fn coupled_checkpoint_state(value: Value) -> Result<Value> {
     }
     if value["format"] != "fullmag.backend_state.v1"
         || value["backend_family"] != "fdm_cpu_reference"
-        || value["integrator_kind"] != "coupled_imex_ark2"
+        || !matches!(
+            value["integrator_kind"].as_str(),
+            Some("coupled_imex_ark2") | Some("frozen_spins")
+        )
     {
-        bail!("unsupported coupled M3 backend checkpoint envelope");
+        bail!("unsupported FDM backend checkpoint envelope");
     }
     value
         .get("integrator_state")
         .cloned()
-        .ok_or_else(|| anyhow!("coupled M3 backend checkpoint has no integrator_state"))
+        .ok_or_else(|| anyhow!("FDM backend checkpoint has no integrator_state"))
 }
 
 // ── Session persistence CLI ────────────────────────────────────────────

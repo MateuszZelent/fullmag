@@ -308,6 +308,7 @@ describe("MeshPartLayer", () => {
       carrierId: "part:a",
       fieldBufferId: "field-requested-new",
       registry,
+      sessionIdentity: { sessionEpoch: "test-session@1000", sessionId: "test-session" },
       scalarBuffer: {
         buildKey: "scalar-retained",
         colors: new Float32Array(9),
@@ -338,6 +339,7 @@ describe("MeshPartLayer", () => {
       carrierId: "part:a",
       fieldBufferId: "field-a",
       registry,
+      sessionIdentity: { sessionEpoch: "test-session@1000", sessionId: "test-session" },
       scalarBuffer,
     });
 

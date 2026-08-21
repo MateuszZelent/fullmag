@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 
 import {
   DATA_FIELDS_PATH,
@@ -71,6 +71,7 @@ function recordFieldVectorCacheAdoption(): void {
 const lastGoodFieldVectorRequestKeys = new Map<string, string>();
 const MAX_LAST_GOOD_FIELD_VECTOR_REQUEST_KEYS = 1_024;
 let activeViewportSessionIdentityKey: string | null = null;
+let viewport3DSessionIdentityGeneration = 0;
 
 function clearViewport3DSessionCaches(): void {
   topologyCache.clear();
@@ -79,16 +80,33 @@ function clearViewport3DSessionCaches(): void {
   lastGoodFieldVectorRequestKeys.clear();
 }
 
-function useViewport3DSessionIdentity() {
-  const identity = useSessionResourceIdentity();
+function abortViewport3DInflightBinaryResources(): void {
+  for (const inflightByKey of binaryResourceInflight.values()) {
+    for (const inflight of inflightByKey.values()) {
+      inflight.controller.abort();
+      releaseInflightBinaryResourceListeners(inflight);
+    }
+  }
+  binaryResourceInflight.clear();
+}
+
+export function synchronizeViewport3DSessionIdentity(
+  identity: ReturnType<typeof useSessionResourceIdentity>,
+): boolean {
   const identityKey = identity
     ? `${identity.sessionId}\u0000${identity.sessionEpoch}`
     : null;
-  useEffect(() => {
-    if (activeViewportSessionIdentityKey === identityKey) return;
-    clearViewport3DSessionCaches();
-    activeViewportSessionIdentityKey = identityKey;
-  }, [identityKey]);
+  if (activeViewportSessionIdentityKey === identityKey) return false;
+  viewport3DSessionIdentityGeneration += 1;
+  abortViewport3DInflightBinaryResources();
+  clearViewport3DSessionCaches();
+  activeViewportSessionIdentityKey = identityKey;
+  return true;
+}
+
+function useViewport3DSessionIdentity() {
+  const identity = useSessionResourceIdentity();
+  synchronizeViewport3DSessionIdentity(identity);
   return identity;
 }
 
@@ -455,7 +473,7 @@ export const resolveViewport3DFieldVectorRequestStates =
 const qualityDataCache = new ResourceCache<DecodedMeshQualityData>({
   maxBytes: 48 * 1024 * 1024,
 });
-const binaryResourceInflight = new WeakMap<
+const binaryResourceInflight = new Map<
   object,
   Map<string, InflightBinaryResource<unknown>>
 >();
@@ -724,7 +742,9 @@ export function getViewport3DFieldVectorCacheEntryDiagnostics(
 export function inspectViewport3DFieldVectorCacheEntryDiagnostics<TInflight>(
   cache: ResourceCache<DecodedFieldVector, FieldVectorResponseMetadata>,
   resourceKey: string,
-  inflightRegistry: WeakMap<object, ReadonlyMap<string, TInflight>>,
+  inflightRegistry:
+    | ReadonlyMap<object, ReadonlyMap<string, TInflight>>
+    | WeakMap<object, ReadonlyMap<string, TInflight>>,
   expectedData?: DecodedFieldVector,
 ): Viewport3DFieldVectorCacheEntryDiagnostics {
   const diagnostics = cache.inspect(resourceKey);
@@ -813,6 +833,7 @@ export async function loadCachedBinaryResource<TData, TMetadata = undefined>(
     signal?: AbortSignal;
   } = {},
 ): Promise<TData | null> {
+  const requestSessionIdentityGeneration = viewport3DSessionIdentityGeneration;
   const cached = cache.get(key);
   if (cached && options.preferCached) {
     recordVisualizationDebugPerformanceMetric("cacheHits");
@@ -830,7 +851,11 @@ export async function loadCachedBinaryResource<TData, TMetadata = undefined>(
   const controller = new AbortController();
   const pending = (async () => {
     const result = await request(cached?.etag, controller.signal);
-
+    if (
+      requestSessionIdentityGeneration !== viewport3DSessionIdentityGeneration
+    ) {
+      throw createViewport3DSessionIdentityAbortError(key);
+    }
     if (result.status === "pending") {
       const pendingResult = result;
       throw Object.assign(
@@ -889,6 +914,18 @@ export async function loadCachedBinaryResource<TData, TMetadata = undefined>(
   } finally {
     clearInflightBinaryResource(cache, key, inflightResource);
   }
+}
+
+function createViewport3DSessionIdentityAbortError(key: string): Error {
+  return Object.assign(
+    new Error(`Binary resource ${key} completed after a session identity change`),
+    {
+      code: "session-identity-changed",
+      name: "AbortError",
+      reason_code: "session-identity-changed",
+      status: 409,
+    },
+  );
 }
 
 function getInflightBinaryResource<TData, TMetadata>(

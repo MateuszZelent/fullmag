@@ -69,33 +69,21 @@ export type VectorLayerDomainPatch = NonNullable<
   >["domain"]
 >;
 
-export const QUANTITY_ITEMS = [
-  { value: "m",             label: "Magnetization / m" },
-  { value: "H_eff",         label: "Effective field / H_eff" },
-  { value: "H_demag",       label: "Demag field / H_demag" },
-  { value: "H_ex",          label: "Exchange field / H_ex" },
-  { value: "H_ani",         label: "Anisotropy field / H_ani" },
-  { value: "H_ant",         label: "Antenna field / H_ant" },
-  { value: "torque",        label: "Torque / torque" },
-  { value: "eden_total",    label: "Total energy density / ε_total" },
-  { value: "eden_ex",       label: "Exchange energy density / ε_ex" },
-  { value: "eden_demag",    label: "Demag energy density / ε_demag" },
-  { value: "eden_ext",      label: "Zeeman energy density / ε_ext" },
-  { value: "eden_ani",      label: "Anisotropy energy density / ε_ani" },
-  { value: "eden_dmi",      label: "DMI energy density / ε_dmi" },
-  { value: "mat_ms",        label: "Saturation magnetization / M_sat" },
-  { value: "mat_aex",       label: "Exchange stiffness / A_ex" },
-  { value: "mat_alpha",     label: "Gilbert damping / α" },
-  { value: "mat_dind",      label: "Interfacial DMI / D_ind" },
-  { value: "mat_dbulk",     label: "Bulk DMI / D_bulk" },
-];
-
 export function quantityItemsForVisualizationTarget(
   activeQuantityId: string,
   targetKind?: VisualizationTargetKind,
   fieldCatalog?: FieldCatalogResource | null,
   quantityCatalog?: QuantityCatalogResource | null,
 ): Array<{ disabled?: boolean; label: string; value: string }> {
+  if (!fieldCatalog && !quantityCatalog) {
+    return [
+      {
+        disabled: true,
+        label: `Loading quantity catalog / ${activeQuantityId}`,
+        value: activeQuantityId,
+      },
+    ];
+  }
   const capabilityItems = quantityCatalog
     ? quantityCatalog.quantities
         .filter(
@@ -120,21 +108,14 @@ export function quantityItemsForVisualizationTarget(
         )
         .map((quantity) => ({
           value: quantity.quantity_id,
-          // The static list is only a pre-load label fallback; the catalog
-          // remains the source of selectable identifiers and availability.
           label: quantity.unit
-            ? `${quantity.label || QUANTITY_ITEMS.find((item) => item.value === quantity.quantity_id)?.label || quantity.quantity_id} / ${quantity.unit}`
-            : quantity.label || QUANTITY_ITEMS.find((item) => item.value === quantity.quantity_id)?.label || quantity.quantity_id,
+            ? `${quantity.label || quantity.quantity_id} / ${quantity.unit}`
+            : quantity.label || quantity.quantity_id,
         }))
-    : targetKind === "airbox"
-      ? []
-      : QUANTITY_ITEMS;
+    : [];
   const baseItems = quantityCatalog
     ? mergeQuantityItems(capabilityItems, fieldItems)
     : fieldItems;
-  if (targetKind === "airbox" && !fieldCatalog && !quantityCatalog) {
-    return baseItems;
-  }
   return baseItems.some((item) => item.value === activeQuantityId)
     ? baseItems
     : [
@@ -482,7 +463,7 @@ export const viewTab: RibbonTabContent = {
             { type: "status",   id: "quantity:current",         label: "Current", value: "m — Magnetization" },
             { type: "checkbox", id: "quantity:overlay-visible", label: "Quantity overlay on/off", checked: true },
             { type: "separator",id: "quantity:s0" },
-            { type: "radio-group", id: "quantity:source",       label: "Quantity source", value: "m", items: QUANTITY_ITEMS },
+            { type: "radio-group", id: "quantity:source",       label: "Quantity source", value: "m", items: quantityItemsForVisualizationTarget("m") },
             { type: "separator",id: "quantity:s1" },
             {
               type: "submenu",

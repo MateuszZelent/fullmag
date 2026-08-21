@@ -20,12 +20,36 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+try:
+    from scripts.relaxation_qualification_contract import (
+        RECEIPT_SCHEMA,
+        canonical_binding,
+        parity_baseline,
+        parity_scope,
+        PARITY_SCHEMA,
+        validate_mesh_refinement,
+        validate_repeatability,
+        validate_sha256_mapping,
+    )
+except ModuleNotFoundError:  # direct ``python scripts/<script>.py`` execution
+    from relaxation_qualification_contract import (  # type: ignore[no-redef]
+        RECEIPT_SCHEMA,
+        canonical_binding,
+        parity_baseline,
+        parity_scope,
+        PARITY_SCHEMA,
+        validate_mesh_refinement,
+        validate_repeatability,
+        validate_sha256_mapping,
+    )
 
-RECEIPT_SCHEMA = "fullmag.relaxation_qualification_receipt.v1"
 MANIFEST_SCHEMA = "fullmag.relaxation_production_matrix.v1"
 MATRIX_ID = "FM-RELAX-017"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+ROOT = Path(__file__).resolve().parents[1]
+ORACLE_SCRIPT = ROOT / "scripts" / "verify_relaxation_independent_oracle.py"
+ORACLE_SCRIPT_RELATIVE = "scripts/verify_relaxation_independent_oracle.py"
 
 ALGORITHMS = (
     "llg_overdamped",
@@ -120,6 +144,12 @@ SCOPE_KEYS = frozenset(
         "mesh_refinement",
         "repeatability",
         "evidence",
+        "material_representation",
+        "material_payload_sha256",
+        "active_mask_sha256",
+        "realization_id",
+        "direction_policy",
+        "parity",
     }
 )
 EVIDENCE_LEVELS = ("D4", "D5", "D6")
@@ -144,6 +174,50 @@ EXPECTED_MESH_REFINEMENT = {
     "strategy": "same_physical_problem",
 }
 EXPECTED_REPEATABILITY = {"warmup_runs": 1, "measured_runs": 5}
+CASE_KEYS = frozenset(
+    {
+        "workload_id",
+        "algorithm",
+        "backend",
+        "device",
+        "precision",
+        "timeout_s",
+        "elapsed_s",
+        "status",
+        "skipped",
+        "fallback_occurred",
+        "completion",
+        "accepted_steps",
+        "max_steps",
+        "metrics",
+        "oracle",
+        "artifacts",
+    }
+)
+RUN_RECORD_KEYS = frozenset(
+    {
+        "workload_id",
+        "mesh_level",
+        "repetition",
+        "command",
+        "elapsed_s",
+        "timeout_s",
+        "timeout",
+        "exit_code",
+        "log_path",
+        "log_sha256",
+        "input_contract_path",
+        "input_contract_sha256",
+        "metadata_path",
+        "metadata_sha256",
+        "final_observables_path",
+        "final_observables_sha256",
+        "final_state_path",
+        "final_state_sha256",
+        "result",
+        "initial_energy_j",
+    }
+)
 
 
 def _canonical_bytes(value: Any) -> bytes:
@@ -213,6 +287,9 @@ def _git(repo_root: Path, *args: str) -> str:
 
 
 def _source_identity(repo_root: Path) -> tuple[str, str]:
+    top_level = Path(_git(repo_root, "rev-parse", "--show-toplevel")).resolve()
+    if top_level != repo_root.resolve():
+        raise ValueError("source_root is not the Git worktree root")
     flagged = [
         line
         for line in _git(repo_root, "ls-files", "-v").splitlines()
@@ -276,6 +353,124 @@ def _load_json(path: Path) -> Mapping[str, Any] | None:
     except (OSError, UnicodeError, json.JSONDecodeError):
         return None
     return value if isinstance(value, dict) else None
+
+
+def _validate_oracle_artifact(
+    root: Path,
+    document: Mapping[str, Any],
+    *,
+    algorithm: str,
+    lane: str,
+    precision: str,
+    workload: str,
+    cell: str,
+    errors: list[str],
+) -> None:
+    if document.get("schema_version") != "fullmag.relaxation.oracle_artifact.v1":
+        _add(errors, cell, "invalid=case.oracle.artifact.schema")
+    if document.get("oracle") != ORACLE_IDENTITIES[algorithm]:
+        _add(errors, cell, "invalid=case.oracle.artifact.oracle")
+    if document.get("status") != "passed" or document.get("workload") != workload.rsplit(".", 1)[-1]:
+        _add(errors, cell, "invalid=case.oracle.artifact.status_or_workload")
+
+    independence = document.get("independence")
+    if not isinstance(independence, Mapping):
+        _add(errors, cell, "missing=case.oracle.artifact.independence")
+    else:
+        if independence.get("kind") != "standalone_python_oracle":
+            _add(errors, cell, "invalid=case.oracle.artifact.independence.kind")
+        if independence.get("implementation") != ORACLE_SCRIPT_RELATIVE:
+            _add(errors, cell, "mismatch=case.oracle.artifact.independence.implementation")
+        implementation_hash = independence.get("implementation_sha256")
+        if not _is_sha256(implementation_hash):
+            _add(errors, cell, "invalid=case.oracle.artifact.independence.implementation_sha256")
+        elif not ORACLE_SCRIPT.is_file() or _sha256_file(ORACLE_SCRIPT) != implementation_hash:
+            _add(errors, cell, "mismatch=case.oracle.artifact.independence.implementation_sha256")
+
+    input_path = _safe_artifact_path(
+        root,
+        document.get("input_path"),
+        "case.oracle.artifact.input_path",
+        errors,
+        cell,
+    )
+    input_hash = document.get("input_sha256")
+    if not _is_sha256(input_hash):
+        _add(errors, cell, "invalid=case.oracle.artifact.input_sha256")
+    elif input_path is not None and _sha256_file(input_path) != input_hash:
+        _add(errors, cell, "artifact_sha256_mismatch=case.oracle.artifact.input_path")
+    input_document = _load_json(input_path) if input_path is not None else None
+    if input_document is None:
+        _add(errors, cell, "invalid=case.oracle.artifact.input")
+    else:
+        for key, expected in (
+            ("schema_version", "fullmag.relaxation.oracle_input.v1"),
+            ("oracle", ORACLE_IDENTITIES[algorithm]),
+            ("algorithm", algorithm),
+            ("lane", lane),
+            ("precision", precision),
+            ("workload", workload.rsplit(".", 1)[-1]),
+        ):
+            if input_document.get(key) != expected:
+                _add(errors, cell, f"mismatch=case.oracle.artifact.input.{key}")
+
+    measurement_count = document.get("measurement_count")
+    comparisons = document.get("comparisons")
+    if not isinstance(measurement_count, int) or measurement_count < 6 or not isinstance(comparisons, list) or len(comparisons) != measurement_count:
+        _add(errors, cell, "invalid=case.oracle.comparisons")
+        return
+    input_measurements = input_document.get("measurements") if isinstance(input_document, Mapping) else None
+    if not isinstance(input_measurements, list) or len(input_measurements) != measurement_count:
+        _add(errors, cell, "invalid=case.oracle.input.measurements")
+        input_measurements = []
+    for index, comparison in enumerate(comparisons):
+        if not isinstance(comparison, Mapping):
+            _add(errors, cell, "invalid=case.oracle.comparison")
+            continue
+        if comparison.get("status") != "passed":
+            _add(errors, cell, "status=case.oracle.comparison")
+        for path_field, hash_field in (
+            ("input_contract_path", "input_contract_sha256"),
+            ("final_state_path", "final_state_sha256"),
+        ):
+            artifact = _safe_artifact_path(
+                root,
+                comparison.get(path_field),
+                f"case.oracle.comparison.{path_field}",
+                errors,
+                cell,
+            )
+            digest = comparison.get(hash_field)
+            if not _is_sha256(digest):
+                _add(errors, cell, f"invalid=case.oracle.comparison.{hash_field}")
+            elif artifact is not None and _sha256_file(artifact) != digest:
+                _add(errors, cell, f"artifact_sha256_mismatch=case.oracle.comparison.{path_field}")
+        for key in ("reference", "observed", "state_observed", "absolute_error", "tolerance"):
+            value = comparison.get(key)
+            if not isinstance(value, Mapping) or not value or any(
+                not isinstance(item, (int, float))
+                or not float(item) == float(item)
+                or abs(float(item)) == float("inf")
+                for item in value.values()
+            ):
+                _add(errors, cell, f"invalid=case.oracle.comparison.{key}")
+        absolute_error = comparison.get("absolute_error")
+        tolerance = comparison.get("tolerance")
+        if isinstance(absolute_error, Mapping) and isinstance(tolerance, Mapping):
+            for key, error in absolute_error.items():
+                limit = tolerance.get(key)
+                if not isinstance(limit, (int, float)) or float(error) > float(limit):
+                    _add(errors, cell, f"oracle_error_exceeds_tolerance={key}")
+        if index < len(input_measurements) and isinstance(input_measurements[index], Mapping):
+            source = input_measurements[index]
+            for key in (
+                "input_contract_path",
+                "input_contract_sha256",
+                "final_state_path",
+                "final_state_sha256",
+            ):
+                if comparison.get(key) != source.get(key):
+                    _add(errors, cell, f"mismatch=case.oracle.comparison.{key}")
 
 
 def _safe_artifact_path(root: Path, raw: object, label: str, errors: list[str], cell: str) -> Path | None:
@@ -495,6 +690,436 @@ def _validate_execution(
             _add(errors, cell, f"artifact_sha256_mismatch=execution.process.{field}")
     if process.get("exit_code") != 0:
         _add(errors, cell, "status=process_failed")
+    runtime_manifest_path = _safe_artifact_path(
+        root,
+        process.get("runtime_manifest_path"),
+        "execution.process.runtime_manifest_path",
+        errors,
+        cell,
+    )
+    executable: str | None = None
+    if runtime_manifest_path is not None:
+        runtime_manifest = _load_json(runtime_manifest_path)
+        if runtime_manifest is None:
+            _add(errors, cell, "invalid=execution.runtime_manifest_json")
+        else:
+            expected_runtime = LANE_POLICIES[receipt["lane"]]["runtime_identity"]
+            for key, expected in (
+                ("schema_version", "fullmag.relaxation.runtime_manifest.v1"),
+                ("runtime_identity", expected_runtime),
+                ("backend", LANE_POLICIES[receipt["lane"]]["backend"]),
+                ("device", LANE_POLICIES[receipt["lane"]]["device"]),
+                ("precision", receipt["precision"]),
+                ("source_commit", receipt["source_commit"]),
+                ("source_tree_sha256", receipt["source_tree_sha256"]),
+            ):
+                if runtime_manifest.get(key) != expected:
+                    _add(errors, cell, f"mismatch=execution.runtime_manifest.{key}")
+            if runtime_manifest.get("scenario") != "examples/relaxation_qualification_case.py":
+                _add(errors, cell, "mismatch=execution.runtime_manifest.scenario")
+            if not _is_sha256(runtime_manifest.get("scenario_sha256")):
+                _add(errors, cell, "invalid=execution.runtime_manifest.scenario_sha256")
+            executable = runtime_manifest.get("executable")
+            if not isinstance(executable, str) or not executable:
+                _add(errors, cell, "missing=execution.runtime_manifest.executable")
+            if not _is_sha256(runtime_manifest.get("executable_sha256")):
+                _add(errors, cell, "invalid=execution.runtime_manifest.executable_sha256")
+            source_git_tree = runtime_manifest.get("source_git_tree")
+            if not isinstance(source_git_tree, str) or not COMMIT_RE.fullmatch(source_git_tree):
+                _add(errors, cell, "invalid=execution.runtime_manifest.source_git_tree")
+            if receipt["lane"] != "fdm_cpu_reference":
+                managed_manifest_hash = runtime_manifest.get("managed_bundle_manifest_sha256")
+                if not _is_sha256(managed_manifest_hash):
+                    _add(errors, cell, "invalid=execution.runtime_manifest.managed_bundle_manifest_sha256")
+                build_identity = runtime_manifest.get("managed_bundle_build_identity")
+                if not isinstance(build_identity, Mapping):
+                    _add(errors, cell, "missing=execution.runtime_manifest.managed_bundle_build_identity")
+                else:
+                    if build_identity.get("git_commit") != receipt.get("source_commit"):
+                        _add(errors, cell, "mismatch=execution.runtime_manifest.managed_bundle_build_identity.git_commit")
+                    if build_identity.get("git_tree") != source_git_tree:
+                        _add(errors, cell, "mismatch=execution.runtime_manifest.managed_bundle_build_identity.git_tree")
+                    if build_identity.get("worktree_state") != "clean":
+                        _add(errors, cell, "invalid=execution.runtime_manifest.managed_bundle_build_identity.worktree_state")
+    log_path = _safe_artifact_path(
+        root,
+        process.get("log_path"),
+        "execution.process.log_path",
+        errors,
+        cell,
+    )
+    if log_path is not None:
+        log = _load_json(log_path)
+        if log is None:
+            _add(errors, cell, "invalid=execution.log_json")
+        else:
+            if log.get("schema_version") != "fullmag.relaxation.execution_log.v1":
+                _add(errors, cell, "invalid=execution.log_schema")
+            if log.get("status") != "passed" or log.get("exit_code") != 0:
+                _add(errors, cell, "status=execution.log_failed")
+            if log.get("command") != receipt.get("managed_command"):
+                _add(errors, cell, "mismatch=execution.log_command")
+            subprocesses = log.get("subprocesses")
+            expected_workloads = set(
+                canonical_workloads(receipt["algorithm"], receipt["lane"], receipt["precision"])
+            )
+            if not isinstance(subprocesses, list) or len(subprocesses) != 30:
+                _add(errors, cell, "invalid=execution.log_subprocess_coverage")
+            else:
+                seen: set[tuple[object, object, object]] = set()
+                for record in subprocesses:
+                    _validate_run_record(
+                        root,
+                        record,
+                        expected_workloads=expected_workloads,
+                        cell=cell,
+                        errors=errors,
+                        measured_only=True,
+                    )
+                    if isinstance(record, Mapping):
+                        command_text = record.get("command")
+                        if isinstance(executable, str) and executable not in command_text:
+                            _add(errors, cell, "mismatch=run_record.command.executable")
+                        if "examples/relaxation_qualification_case.py" not in str(command_text):
+                            _add(errors, cell, "mismatch=run_record.command.scenario")
+                        identity = (
+                            record.get("workload_id"),
+                            record.get("mesh_level"),
+                            record.get("repetition"),
+                        )
+                        if identity in seen:
+                            _add(errors, cell, "duplicate=execution.log_subprocess")
+                        seen.add(identity)
+                expected_pairs = {
+                    (workload, mesh, f"measured-{index:02d}")
+                    for workload in expected_workloads
+                    for mesh in ("coarse", "medium", "fine")
+                    for index in range(1, 6)
+                }
+                if seen != expected_pairs:
+                    _add(errors, cell, "invalid=execution.log_subprocess_coverage")
+
+
+def _validate_run_record(
+    root: Path,
+    record: object,
+    *,
+    expected_workloads: set[str],
+    cell: str,
+    errors: list[str],
+    measured_only: bool = False,
+) -> None:
+    if not isinstance(record, Mapping) or set(record) != RUN_RECORD_KEYS:
+        _add(errors, cell, "invalid=run_record.fields")
+        return
+    workload = record.get("workload_id")
+    if workload not in expected_workloads:
+        _add(errors, cell, "invalid=run_record.workload")
+    mesh = record.get("mesh_level")
+    if mesh not in {"coarse", "medium", "fine"}:
+        _add(errors, cell, "invalid=run_record.mesh")
+    repetition = record.get("repetition")
+    if not isinstance(repetition, str) or not re.fullmatch(r"(?:warmup|measured)-[0-9]{2}", repetition):
+        _add(errors, cell, "invalid=run_record.repetition")
+    elif measured_only and not repetition.startswith("measured-"):
+        _add(errors, cell, "invalid=run_record.warmup_in_execution_log")
+    timeout = record.get("timeout_s")
+    elapsed = record.get("elapsed_s")
+    if not isinstance(timeout, (int, float)) or not float(timeout) == float(timeout) or not 0 < float(timeout) <= 900.0:
+        _add(errors, cell, "invalid=run_record.timeout_s")
+    if not isinstance(elapsed, (int, float)) or not float(elapsed) == float(elapsed) or not 0 <= float(elapsed) <= float(timeout or 0):
+        _add(errors, cell, "invalid=run_record.elapsed_s")
+    if record.get("timeout") is not False or record.get("exit_code") != 0:
+        _add(errors, cell, "invalid=run_record.process_status")
+    if not isinstance(record.get("command"), str) or not record["command"]:
+        _add(errors, cell, "invalid=run_record.command")
+    result = record.get("result")
+    if not isinstance(result, Mapping):
+        _add(errors, cell, "invalid=run_record.result")
+    else:
+        if result.get("status") != "passed" or result.get("converged") is not True:
+            _add(errors, cell, "invalid=run_record.result_status")
+        if result.get("termination_reason") not in {"torque", "energy"}:
+            _add(errors, cell, "invalid=run_record.result_reason")
+        accepted_steps = result.get("accepted_steps")
+        max_steps = result.get("max_steps")
+        if not isinstance(accepted_steps, int) or not isinstance(max_steps, int) or not 0 <= accepted_steps < max_steps:
+            _add(errors, cell, "invalid=run_record.result_step_bounds")
+        metrics = result.get("metrics")
+        if not isinstance(metrics, Mapping) or not metrics or any(
+            not isinstance(value, (int, float))
+            or not float(value) == float(value)
+            or abs(float(value)) == float("inf")
+            for value in metrics.values()
+        ):
+            _add(errors, cell, "invalid=run_record.result_metrics")
+    if not isinstance(record.get("initial_energy_j"), (int, float)) or not float(record["initial_energy_j"]) == float(record["initial_energy_j"]):
+        _add(errors, cell, "invalid=run_record.initial_energy")
+    for path_field, hash_field in (
+        ("log_path", "log_sha256"),
+        ("input_contract_path", "input_contract_sha256"),
+        ("metadata_path", "metadata_sha256"),
+        ("final_observables_path", "final_observables_sha256"),
+        ("final_state_path", "final_state_sha256"),
+    ):
+        raw_path = record.get(path_field)
+        path = _safe_artifact_path(root, raw_path, f"run_record.{path_field}", errors, cell)
+        digest = record.get(hash_field)
+        if not _is_sha256(digest):
+            _add(errors, cell, f"invalid=run_record.{hash_field}")
+        elif path is not None and _sha256_file(path) != digest:
+            _add(errors, cell, f"artifact_sha256_mismatch=run_record.{path_field}")
+
+
+def _validate_cases(
+    root: Path,
+    receipt: Mapping[str, Any],
+    algorithm: str,
+    lane: str,
+    precision: str,
+    cell: str,
+    errors: list[str],
+) -> None:
+    cases = receipt.get("cases")
+    expected_workloads = canonical_workloads(algorithm, lane, precision)
+    if not isinstance(cases, list) or len(cases) != len(expected_workloads):
+        _add(errors, cell, "invalid=cases.coverage")
+        return
+    case_ids = [case.get("workload_id") if isinstance(case, Mapping) else None for case in cases]
+    if case_ids != expected_workloads:
+        _add(errors, cell, "invalid=cases.order_or_workload")
+    for case in cases:
+        if not isinstance(case, Mapping):
+            _add(errors, cell, "invalid=case.object")
+            continue
+        if set(case) != CASE_KEYS:
+            _add(errors, cell, "invalid=case.fields")
+            continue
+        workload = case.get("workload_id")
+        if workload not in expected_workloads:
+            _add(errors, cell, "invalid=case.workload")
+        if case.get("algorithm") != algorithm or case.get("backend") != LANE_POLICIES[lane]["backend"]:
+            _add(errors, cell, "mismatch=case.algorithm_backend")
+        if case.get("device") != LANE_POLICIES[lane]["device"] or case.get("precision") != precision:
+            _add(errors, cell, "mismatch=case.execution_scope")
+        timeout = case.get("timeout_s")
+        elapsed = case.get("elapsed_s")
+        if not isinstance(timeout, (int, float)) or not float(timeout) == float(timeout) or not 0 < float(timeout) <= 900.0:
+            _add(errors, cell, "invalid=case.timeout_s")
+        if not isinstance(elapsed, (int, float)) or not float(elapsed) == float(elapsed) or not 0 <= float(elapsed) <= float(timeout or 0):
+            _add(errors, cell, "invalid=case.elapsed_s")
+        if case.get("status") != "passed" or case.get("skipped") is not False or case.get("fallback_occurred") is not False:
+            _add(errors, cell, "invalid=case.status")
+        completion = case.get("completion")
+        if not isinstance(completion, Mapping) or completion.get("converged") is not True or completion.get("reason") not in {"torque", "energy"}:
+            _add(errors, cell, "invalid=case.completion")
+        accepted_steps = case.get("accepted_steps")
+        max_steps = case.get("max_steps")
+        if not isinstance(accepted_steps, int) or not isinstance(max_steps, int) or not 0 <= accepted_steps < max_steps:
+            _add(errors, cell, "invalid=case.step_bounds")
+        if not isinstance(case.get("metrics"), Mapping) or not case["metrics"] or any(
+            not isinstance(value, (int, float)) or not float(value) == float(value) or abs(float(value)) == float("inf")
+            for value in case["metrics"].values()
+        ):
+            _add(errors, cell, "invalid=case.metrics")
+        oracle = case.get("oracle")
+        if not isinstance(oracle, Mapping) or set(oracle) != {"kind", "id", "artifact_path", "artifact_sha256"} or {
+            key: oracle.get(key) for key in ("kind", "id")
+        } != ORACLE_IDENTITIES[algorithm]:
+            _add(errors, cell, "invalid=case.oracle")
+            continue
+        oracle_path = _safe_artifact_path(root, oracle.get("artifact_path"), "case.oracle.artifact_path", errors, cell)
+        if not _is_sha256(oracle.get("artifact_sha256")) or oracle_path is None or _sha256_file(oracle_path) != oracle.get("artifact_sha256"):
+            _add(errors, cell, "invalid=case.oracle.artifact_sha256")
+        else:
+            oracle_document = _load_json(oracle_path)
+            if oracle_document is None:
+                _add(errors, cell, "invalid=case.oracle.artifact")
+            else:
+                _validate_oracle_artifact(
+                    root,
+                    oracle_document,
+                    algorithm=algorithm,
+                    lane=lane,
+                    precision=precision,
+                    workload=str(workload),
+                    cell=cell,
+                    errors=errors,
+                )
+        artifacts = case.get("artifacts")
+        if not isinstance(artifacts, list) or not artifacts:
+            _add(errors, cell, "missing=case.artifacts")
+            continue
+        for item in artifacts:
+            if not isinstance(item, Mapping) or set(item) != {"path", "sha256"}:
+                _add(errors, cell, "invalid=case.artifact_manifest")
+                continue
+            path = _safe_artifact_path(root, item.get("path"), "case.artifact.path", errors, cell)
+            if path is None or not _is_sha256(item.get("sha256")) or _sha256_file(path) != item.get("sha256"):
+                _add(errors, cell, "invalid=case.artifact_hash")
+                continue
+            document = _load_json(path)
+            if document is None or document.get("schema_version") != "fullmag.relaxation.case_artifact.v1" or document.get("workload_id") != workload or document.get("status") != "passed":
+                _add(errors, cell, "invalid=case.artifact")
+            elif not isinstance(document.get("result"), Mapping) or document.get("run_count") != 18:
+                _add(errors, cell, "invalid=case.artifact.completeness")
+            else:
+                run_records = document.get("run_records")
+                if not isinstance(run_records, list) or len(run_records) != 18:
+                    _add(errors, cell, "invalid=case.artifact.run_records")
+                else:
+                    seen: set[tuple[object, object, object]] = set()
+                    for record in run_records:
+                        _validate_run_record(
+                            root,
+                            record,
+                            expected_workloads={str(workload)},
+                            cell=cell,
+                            errors=errors,
+                        )
+                        if isinstance(record, Mapping):
+                            identity = (
+                                record.get("workload_id"),
+                                record.get("mesh_level"),
+                                record.get("repetition"),
+                            )
+                            if identity in seen:
+                                _add(errors, cell, "duplicate=case.artifact.run_record")
+                            seen.add(identity)
+                    expected_records = {
+                        (workload, mesh, repetition)
+                        for mesh in ("coarse", "medium", "fine")
+                        for repetition in ("warmup-01", "measured-01", "measured-02", "measured-03", "measured-04", "measured-05")
+                    }
+                    if seen != expected_records:
+                        _add(errors, cell, "invalid=case.artifact.run_record_coverage")
+
+
+def _validate_parity(
+    root: Path,
+    scope: Mapping[str, Any],
+    receipt: Mapping[str, Any],
+    algorithm: str,
+    lane: str,
+    precision: str,
+    cell: str,
+    errors: list[str],
+) -> None:
+    value = scope.get("parity")
+    expected = parity_scope(lane, precision)
+    if expected["status"] == "not_applicable":
+        if value != expected:
+            _add(errors, cell, "invalid=scope.parity.not_applicable")
+        return
+    if not isinstance(value, Mapping):
+        _add(errors, cell, "missing=scope.parity")
+        return
+    for key, expected_value in expected.items():
+        if value.get(key) != expected_value:
+            _add(errors, cell, f"mismatch=scope.parity.{key}")
+    path = _safe_artifact_path(root, value.get("artifact_path"), "scope.parity.artifact_path", errors, cell)
+    digest = value.get("artifact_sha256")
+    if path is None or not _is_sha256(digest) or _sha256_file(path) != digest:
+        _add(errors, cell, "invalid=scope.parity.artifact_sha256")
+        return
+    artifact = _load_json(path)
+    if artifact is None:
+        _add(errors, cell, "invalid=scope.parity.artifact")
+        return
+    if artifact.get("schema_version") != PARITY_SCHEMA or artifact.get("status") != "passed":
+        _add(errors, cell, "invalid=scope.parity.artifact_schema")
+    if artifact.get("target") != {"algorithm": algorithm, "lane": lane, "precision": precision}:
+        _add(errors, cell, "mismatch=scope.parity.target")
+    baseline = expected
+    if artifact.get("baseline") != {"lane": baseline["baseline_lane"], "precision": baseline["baseline_precision"]}:
+        _add(errors, cell, "mismatch=scope.parity.baseline")
+    if artifact.get("source_commit") != receipt.get("source_commit"):
+        _add(errors, cell, "mismatch=scope.parity.source_commit")
+    if artifact.get("source_tree_sha256") != receipt.get("source_tree_sha256"):
+        _add(errors, cell, "mismatch=scope.parity.source_tree_sha256")
+    comparisons = artifact.get("comparisons")
+    if not isinstance(comparisons, list) or len(comparisons) != 6:
+        _add(errors, cell, "invalid=scope.parity.comparisons")
+        return
+    target_workloads = set(canonical_workloads(algorithm, lane, precision))
+    baseline_workloads = set(
+        canonical_workloads(algorithm, expected["baseline_lane"], expected["baseline_precision"])
+    )
+    target_refinement = scope.get("mesh_refinement")
+    target_observations = target_refinement.get("observations") if isinstance(target_refinement, Mapping) else None
+    target_by_pair = {
+        (item.get("workload_id"), item.get("mesh_level")): item
+        for item in target_observations or []
+        if isinstance(item, Mapping)
+    }
+    metric_names = {"energy_j", "max_torque_apm", "max_torque_t", "mx", "my", "mz"}
+    observed_pairs: set[tuple[object, object, object]] = set()
+    for comparison in comparisons:
+        if not isinstance(comparison, Mapping) or comparison.get("status") != "passed":
+            _add(errors, cell, "invalid=scope.parity.comparison")
+            continue
+        target_workload = comparison.get("target_workload_id")
+        baseline_workload = comparison.get("baseline_workload_id")
+        mesh_level = comparison.get("mesh_level")
+        if (
+            target_workload not in target_workloads
+            or baseline_workload not in baseline_workloads
+            or not isinstance(mesh_level, str)
+            or (target_workload, baseline_workload, mesh_level) in observed_pairs
+        ):
+            _add(errors, cell, "invalid=scope.parity.workload_mesh")
+        else:
+            observed_pairs.add((target_workload, baseline_workload, mesh_level))
+        for key in ("target_input_contract_sha256", "baseline_input_contract_sha256", "target_final_state_sha256", "baseline_final_state_sha256"):
+            if not _is_sha256(comparison.get(key)):
+                _add(errors, cell, f"invalid=scope.parity.{key}")
+        for key in ("target_metrics", "baseline_metrics", "absolute_error", "tolerance"):
+            value_map = comparison.get(key)
+            if not isinstance(value_map, Mapping) or not value_map or any(
+                not isinstance(item, (int, float)) or not float(item) == float(item) or abs(float(item)) == float("inf")
+                for item in value_map.values()
+            ):
+                _add(errors, cell, f"invalid=scope.parity.{key}")
+        target_observation = target_by_pair.get((target_workload, mesh_level))
+        if not isinstance(target_observation, Mapping):
+            _add(errors, cell, "missing=scope.parity.target_refinement_observation")
+        else:
+            if comparison.get("target_input_contract_sha256") != target_observation.get("input_contract_sha256"):
+                _add(errors, cell, "mismatch=scope.parity.target_input_contract_sha256")
+            final_states = target_observation.get("final_state_sha256")
+            if not isinstance(final_states, list) or comparison.get("target_final_state_sha256") not in final_states:
+                _add(errors, cell, "mismatch=scope.parity.target_final_state_sha256")
+        target_metrics = comparison.get("target_metrics")
+        baseline_metrics = comparison.get("baseline_metrics")
+        absolute_error = comparison.get("absolute_error")
+        tolerances = comparison.get("tolerance")
+        if isinstance(target_metrics, Mapping) and set(target_metrics) != metric_names:
+            _add(errors, cell, "invalid=scope.parity.target_metrics.keys")
+        if isinstance(baseline_metrics, Mapping) and set(baseline_metrics) != metric_names:
+            _add(errors, cell, "invalid=scope.parity.baseline_metrics.keys")
+        if isinstance(absolute_error, Mapping) and isinstance(tolerances, Mapping):
+            if set(absolute_error) != metric_names or set(tolerances) != metric_names:
+                _add(errors, cell, "invalid=scope.parity.metric.keys")
+            if isinstance(target_metrics, Mapping) and isinstance(baseline_metrics, Mapping):
+                for name in metric_names:
+                    if name not in absolute_error or name not in tolerances:
+                        continue
+                    expected_error = abs(float(target_metrics[name]) - float(baseline_metrics[name]))
+                    declared_error = float(absolute_error[name])
+                    tolerance = float(tolerances[name])
+                    if tolerance < 0 or abs(declared_error - expected_error) > max(1e-30, expected_error * 1e-12):
+                        _add(errors, cell, f"mismatch=scope.parity.absolute_error.{name}")
+                    if expected_error > tolerance:
+                        _add(errors, cell, f"parity_error_exceeds_tolerance={name}")
+    expected_pairs = {
+        (target, baseline, mesh)
+        for target in target_workloads
+        for baseline in baseline_workloads
+        if target.rsplit(".", 1)[-1] == baseline.rsplit(".", 1)[-1]
+        for mesh in ("coarse", "medium", "fine")
+    }
+    if observed_pairs != expected_pairs:
+        _add(errors, cell, "invalid=scope.parity.workload_mesh_coverage")
 
 
 def _validate_artifact_manifest(
@@ -582,6 +1207,23 @@ def _validate_semantic_artifact(
         _add(errors, cell, f"mismatch={level}.artifact_runtime_identity")
     if document.get("oracle") != ORACLE_IDENTITIES[algorithm]:
         _add(errors, cell, f"mismatch={level}.artifact_oracle")
+    scope = receipt.get("validated_scope")
+    if isinstance(scope, Mapping):
+        for key in (
+            "material_representation",
+            "material_payload_sha256",
+            "active_mask_sha256",
+            "realization_id",
+            "direction_policy",
+        ):
+            if document.get(key) != scope.get(key):
+                _add(errors, cell, f"mismatch={level}.artifact_{key}")
+        if document.get("mesh_refinement_observations") != scope.get("mesh_refinement"):
+            _add(errors, cell, f"mismatch={level}.artifact_mesh_refinement_observations")
+        if document.get("repeatability_observations") != scope.get("repeatability"):
+            _add(errors, cell, f"mismatch={level}.artifact_repeatability_observations")
+        if document.get("parity") != scope.get("parity"):
+            _add(errors, cell, f"mismatch={level}.artifact_parity")
     result = document.get("result")
     if not isinstance(result, Mapping):
         _add(errors, cell, f"missing={level}.artifact_result")
@@ -602,6 +1244,88 @@ def _validate_semantic_artifact(
         for value in metrics.values()
     ):
         _add(errors, cell, f"invalid={level}.artifact_metrics")
+
+
+def _validate_scope_run_bindings(
+    root: Path,
+    receipt: Mapping[str, Any],
+    scope: Mapping[str, Any],
+    *,
+    algorithm: str,
+    lane: str,
+    precision: str,
+    cell: str,
+    errors: list[str],
+) -> None:
+    cases = receipt.get("cases")
+    records_by_pair: dict[tuple[str, str], list[Mapping[str, Any]]] = defaultdict(list)
+    if not isinstance(cases, list):
+        _add(errors, cell, "missing=scope.run_bindings.cases")
+        return
+    for case in cases:
+        if not isinstance(case, Mapping):
+            continue
+        workload = case.get("workload_id")
+        artifacts = case.get("artifacts")
+        if not isinstance(workload, str) or not isinstance(artifacts, list):
+            continue
+        for manifest in artifacts:
+            if not isinstance(manifest, Mapping):
+                continue
+            path = _safe_artifact_path(root, manifest.get("path"), "scope.run_bindings.case_artifact", errors, cell)
+            if path is None:
+                continue
+            document = _load_json(path)
+            run_records = document.get("run_records") if isinstance(document, Mapping) else None
+            if not isinstance(run_records, list):
+                continue
+            for record in run_records:
+                if isinstance(record, Mapping) and isinstance(record.get("mesh_level"), str):
+                    records_by_pair[(workload, record["mesh_level"])].append(record)
+
+    refinement = scope.get("mesh_refinement")
+    repeatability = scope.get("repeatability")
+    refinement_observations = refinement.get("observations") if isinstance(refinement, Mapping) else None
+    repeatability_observations = repeatability.get("observations") if isinstance(repeatability, Mapping) else None
+    if not isinstance(refinement_observations, list) or not isinstance(repeatability_observations, list):
+        _add(errors, cell, "missing=scope.run_bindings.observations")
+        return
+    for observation in refinement_observations:
+        if not isinstance(observation, Mapping):
+            continue
+        workload = observation.get("workload_id")
+        mesh = observation.get("mesh_level")
+        measured = [
+            record
+            for record in records_by_pair.get((workload, mesh), [])
+            if str(record.get("repetition", "")).startswith("measured-")
+        ]
+        if len(measured) != 5:
+            _add(errors, cell, "invalid=scope.mesh_refinement.run_binding_count")
+            continue
+        input_hashes = {record.get("input_contract_sha256") for record in measured}
+        final_hashes = [record.get("final_state_sha256") for record in measured]
+        if input_hashes != {observation.get("input_contract_sha256")}:
+            _add(errors, cell, "mismatch=scope.mesh_refinement.input_contract_sha256")
+        if final_hashes != observation.get("final_state_sha256"):
+            _add(errors, cell, "mismatch=scope.mesh_refinement.final_state_sha256")
+    for observation in repeatability_observations:
+        if not isinstance(observation, Mapping):
+            continue
+        workload = observation.get("workload_id")
+        mesh = observation.get("mesh_level")
+        measured = [
+            record
+            for record in records_by_pair.get((workload, mesh), [])
+            if str(record.get("repetition", "")).startswith("measured-")
+        ]
+        if len(measured) != 5:
+            _add(errors, cell, "invalid=scope.repeatability.run_binding_count")
+            continue
+        if [record.get("log_path") for record in measured] != observation.get("run_log_paths"):
+            _add(errors, cell, "mismatch=scope.repeatability.run_log_paths")
+        if [record.get("final_state_sha256") for record in measured] != observation.get("final_state_sha256"):
+            _add(errors, cell, "mismatch=scope.repeatability.final_state_sha256")
 
 
 def _validate_scope(
@@ -633,14 +1357,40 @@ def _validate_scope(
         "runtime_identity": policy["runtime_identity"],
         "validated_workloads": canonical_workloads(algorithm, lane, precision),
         "oracle": ORACLE_IDENTITIES[algorithm],
-        "mesh_refinement": EXPECTED_MESH_REFINEMENT,
-        "repeatability": EXPECTED_REPEATABILITY,
     }
+    try:
+        expected_values.update(
+            canonical_binding(
+                lane=lane,
+                algorithm=algorithm,
+                workload_ids=canonical_workloads(algorithm, lane, precision),
+                mesh_levels=EXPECTED_MESH_REFINEMENT["levels"],
+            )
+        )
+    except (TypeError, ValueError) as error:
+        _add(errors, cell, f"invalid=scope.binding|{error}")
+    for key in (
+        "material_payload_sha256",
+        "active_mask_sha256",
+    ):
+        value = scope.get(key)
+        if key == "material_payload_sha256":
+            valid_hashes = validate_sha256_mapping(value)
+        else:
+            valid_hashes = validate_sha256_mapping(value, nested=True)
+        if key in scope and not valid_hashes:
+            _add(errors, cell, f"invalid=scope.{key}")
     for key, expected in expected_values.items():
         if key not in scope:
             continue
         if scope.get(key) != expected:
             _add(errors, cell, f"mismatch=scope.{key}")
+    workloads = canonical_workloads(algorithm, lane, precision)
+    if not validate_mesh_refinement(scope.get("mesh_refinement"), workloads):
+        _add(errors, cell, "invalid=scope.mesh_refinement.observations")
+    if not validate_repeatability(scope.get("repeatability"), workloads):
+        _add(errors, cell, "invalid=scope.repeatability.observations")
+    _validate_parity(root, scope, receipt, algorithm, lane, precision, cell, errors)
     evidence = scope.get("evidence")
     collected: list[dict[str, str]] = []
     if not isinstance(evidence, Mapping):
@@ -671,6 +1421,16 @@ def _validate_scope(
         assert isinstance(artifact_relative, str)
         if not any(item["path"] == artifact_relative.replace("\\", "/") for item in collected):
             _add(errors, cell, "missing=artifact_manifest.artifact_path")
+    _validate_scope_run_bindings(
+        root,
+        receipt,
+        scope,
+        algorithm=algorithm,
+        lane=lane,
+        precision=precision,
+        cell=cell,
+        errors=errors,
+    )
     return collected
 
 
@@ -706,6 +1466,9 @@ def _validate_receipt(
     if not isinstance(receipt.get("managed_command"), str) or not receipt["managed_command"].strip():
         _add(errors, cell, "missing=managed_command")
     else:
+        expected_command = f"just {CANONICAL_RECIPE_BY_LANE[lane]}"
+        if receipt["managed_command"] != expected_command:
+            _add(errors, cell, "mismatch=managed_command.canonical_recipe")
         try:
             command = shlex.split(receipt["managed_command"])
         except ValueError:
@@ -742,6 +1505,7 @@ def _validate_receipt(
         _add(errors, cell, "missing=solver_audit_gate.passed")
     _validate_execution(root, receipt, cell, errors)
     _scan_forbidden_execution_values(receipt, cell, errors)
+    _validate_cases(root, receipt, algorithm, lane, precision, cell, errors)
     return _validate_scope(root, receipt, algorithm, lane, precision, cell, errors)
 
 
@@ -772,9 +1536,10 @@ def orchestrate(
 ) -> dict[str, Any]:
     """Validate receipts and return a deterministic qualification result.
 
-    ``expected_identity`` is mandatory for a qualified result.  It must name
-    the source commit, source tree digest, and recipe digest for every lane;
-    the orchestrator never chooses the first receipt as its trust anchor.
+    ``expected_identity`` and a clean ``source_root`` are mandatory for a
+    qualified result.  The expected identity must name the source commit,
+    source tree digest, and recipe digest for every lane; the orchestrator
+    never chooses the first receipt or an offline caller as its trust anchor.
     """
 
     root = artifact_root.resolve()
@@ -782,7 +1547,9 @@ def orchestrate(
     normalized_expected = _validate_expected_identity(expected_identity, errors)
     live_source_identity: tuple[str, str] | None = None
     live_recipe_sha256: dict[str, str] = {}
-    if source_root is not None:
+    if source_root is None:
+        _add(errors, None, "missing=source_root")
+    else:
         source_root = source_root.resolve()
         try:
             live_source_identity = _source_identity(source_root)
@@ -995,6 +1762,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--recipe-sha256", action="append", help="LANE=SHA256")
     parser.add_argument("--artifact-root", type=Path)
     parser.add_argument(
+        "--source-root",
+        type=Path,
+        help="live source tree to verify; qualification recipes should always provide this",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=Path("relaxation-production-matrix.v1.json"),
@@ -1010,6 +1782,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         expected_identity=_read_expected_identity(args.expected_identity, args),
         artifact_root=artifact_root,
         output_path=args.output,
+        source_root=args.source_root.resolve() if args.source_root is not None else None,
     )
     print(f"{MATRIX_ID} {result['status'].upper()}")
     print(f"manifest={args.output} checksum_sha256={result['checksum_sha256']}")

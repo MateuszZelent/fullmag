@@ -18,6 +18,7 @@ import type { PlanarMonitorFramePreview } from "@/kernel/workspace/planarMonitor
 import { planarMonitorFramePreviewCanSelect } from "@/kernel/workspace/planarMonitorFramePreview";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import type { Viewport3DBounds } from "../viewport3dRenderModel";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import {
@@ -55,7 +56,7 @@ export function ClipPlaneLayer({
   tracker,
 }: ClipPlaneLayerProps) {
   const gl = useThree((state) => state.gl);
-  const invalidate = useThree((state) => state.invalidate);
+  const invalidate = useBatchedInvalidate("material-style");
   const frame = useMemo(
     () => resolveClipPlaneFrame(clip, bounds, frameRotationDegrees),
     [bounds, clip, frameRotationDegrees],
@@ -124,7 +125,7 @@ export function ClipPlaneFramePreviewLayer({
   frameRotationDegrees,
   tracker,
 }: ClipPlaneFramePreviewLayerProps) {
-  const invalidate = useThree((state) => state.invalidate);
+  const invalidate = useBatchedInvalidate("target-visibility");
   const frame = useMemo(
     () => resolveClipPlaneFrame(clip, bounds, frameRotationDegrees),
     [bounds, clip, frameRotationDegrees],
@@ -160,7 +161,7 @@ export function PlanarMonitorFramePreviewLayer({
   preview: PlanarMonitorFramePreview;
   tracker: Viewport3DResourceTracker;
 }) {
-  const invalidate = useThree((state) => state.invalidate);
+  const invalidate = useBatchedInvalidate("target-visibility");
   const geometry = useMemo(() => {
     const next = new BufferGeometry();
     next.setAttribute(

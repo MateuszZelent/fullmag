@@ -106,6 +106,10 @@ import { buildFdmSampledScalarColors } from "../viewport3dFieldMapping";
 
 const sceneModelSourceUrl = new URL("./useViewport3DSceneModel.ts", import.meta.url);
 const planarPreviewSourceUrl = new URL("../../../kernel/workspace/planarMonitorFramePreview.ts", import.meta.url);
+const TEST_SESSION_IDENTITY = {
+  sessionEpoch: "test-session@1000",
+  sessionId: "test-session",
+} as const;
 
 describe("viewport vector scale", () => {
   it("derives glyphs from effective sample spacing", () => {
@@ -262,6 +266,7 @@ describe("FDM Airbox mesh demand", () => {
       carrierId: targetId,
       fieldBufferId: buffer.bufferId,
       registry,
+      sessionIdentity: TEST_SESSION_IDENTITY,
       scalarBuffer,
     });
 
@@ -377,6 +382,7 @@ describe("FDM Airbox mesh demand", () => {
       glyphCount: 4,
       resourceKey: demagResourceKey,
       registry,
+      sessionIdentity: TEST_SESSION_IDENTITY,
     });
 
     expect(demagSettings.activeQuantityId).toBe("H_demag");
@@ -1135,6 +1141,61 @@ describe("useViewport3DSceneModel", () => {
     expect(resolved.partTargetFieldBuffers.has("part-b")).toBe(false);
   });
 
+  it("does not assign an unplanned quantity-keyed payload to a carrier", () => {
+    const resolved = resolveViewport3DResolvedPartFieldBuffers({
+      getPartSettings: () => ({
+        ...DEFAULT_OBJECT_VISUALIZATION,
+        activeQuantityId: "H_eff",
+        shaderVisible: true,
+        visible: true,
+      }),
+      targetQuantityFieldVectors: new Map([
+        ["H_eff", fieldVectorFixture({ quantityId: "H_eff" })],
+      ]),
+      topology: {
+        airboxParts: [],
+        magneticParts: [{ part: { id: "part-a", label: "A" } }],
+        nodeCount: 4,
+      } as never,
+    });
+
+    expect(resolved.partFieldVectors.has("part-a")).toBe(false);
+    expect(resolved.partTargetFieldBuffers.has("part-a")).toBe(false);
+  });
+
+  it("does not assign a request without a carrier consumer", () => {
+    const request = {
+      consumers: [],
+      quantityId: "H_eff",
+      query: {
+        component: "full" as const,
+        scope_id: "part-a",
+        scope_kind: "part" as const,
+      },
+      requestId: "quantity=H_eff&component=full&scope_id=part-a&scope_kind=part",
+    };
+    const resolved = resolveViewport3DResolvedPartFieldBuffers({
+      getPartSettings: () => ({
+        ...DEFAULT_OBJECT_VISUALIZATION,
+        activeQuantityId: "H_eff",
+        shaderVisible: true,
+        visible: true,
+      }),
+      targetQuantityFieldRequests: new Map([[request.requestId, request]]),
+      targetQuantityFieldVectors: new Map([
+        [request.requestId, fieldVectorFixture({ quantityId: "H_eff" })],
+      ]),
+      topology: {
+        airboxParts: [],
+        magneticParts: [{ part: { id: "part-a", label: "A" } }],
+        nodeCount: 4,
+      } as never,
+    });
+
+    expect(resolved.partFieldVectors.has("part-a")).toBe(false);
+    expect(resolved.partTargetFieldBuffers.has("part-a")).toBe(false);
+  });
+
   it("keeps requested resource identity when a decoded scoped payload reports another quantity", () => {
     const resolved = resolveViewport3DResolvedPartFieldBuffers({
       getPartSettings: () => ({
@@ -1250,6 +1311,7 @@ describe("useViewport3DSceneModel", () => {
       resolveViewport3DResolvedPartFieldBuffers({
         airboxSyntheticVectorsEnabled: true,
         getPartSettings: () => DEFAULT_OBJECT_VISUALIZATION,
+        sessionIdentity: TEST_SESSION_IDENTITY,
         topology,
         topologyRevision: "topology-r2",
       });
@@ -1318,6 +1380,7 @@ describe("useViewport3DSceneModel", () => {
       glyphCount: 1,
       resourceKey: identifiedGlyphBuild.sourceResourceKey,
       registry,
+      sessionIdentity: TEST_SESSION_IDENTITY,
     });
     const receipt = registry.snapshot("airbox").find(
       ({ kind }) => kind === "vector",

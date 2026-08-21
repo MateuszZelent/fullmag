@@ -1,0 +1,19 @@
+name: frontend-3d-managed-fem
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  managed-fem-qualification:
+    runs-on: [self-hosted, linux, x64, fem-managed]
+    env:
+      FULLMAG_MANAGED_FEM_RUNNER: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Run managed FEM magnetic-only and shared-air qualification
+        run: ./scripts/ci/run_frontend3d_required_gate.sh managed-fem-qualification

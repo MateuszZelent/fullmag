@@ -13,7 +13,7 @@ use crate::{
     ResolvedPeriodicImagesIR, ResolvedSpinTransportPlanIR, SeedPolicy, SpinWaveBoundaryConditionIR,
     ThermalSeedConfig, TimeDependenceIR, TimeEnvelopeIR,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -40,6 +40,226 @@ pub struct CommonPlanMeta {
     pub execution_mode: ExecutionMode,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub material_field_plans: Vec<MaterialFieldPlan>,
+}
+
+pub const RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION: &str = "resolved_frozen_spins_plan.v1";
+pub const SELECTION_CERTIFICATE_SCHEMA_VERSION: &str = "selection_certificate.v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SelectionAuthoredFingerprintIR {
+    pub constraint_id: String,
+    pub selector_sha256: String,
+}
+
+/// Reproducible evidence for one materialized selection transaction.
+///
+/// This remains backend-neutral: discretization-specific facts are represented
+/// by the evaluator identity and the resolved topology fingerprint.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SelectionCertificateIR {
+    pub schema_version: String,
+    pub evaluator_id: String,
+    pub constraint_ids: Vec<String>,
+    pub authored_fingerprints: Vec<SelectionAuthoredFingerprintIR>,
+    pub raw_candidate_dof_count: u64,
+    pub inactive_candidate_dof_count: u64,
+    pub active_dof_count: u64,
+    pub frozen_dof_count: u64,
+    pub free_dof_count: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bounds_m: Option<[[f64; 3]; 2]>,
+    pub grid_or_mesh_fingerprint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_state_revision: Option<u64>,
+    pub mask_sha256: String,
+    pub resolved_reference_sha256: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ResolvedFrozenSpinsPlanIR {
+    pub schema_version: String,
+    pub constraint_ids: Vec<String>,
+    pub frozen_mask: Vec<bool>,
+    pub active_dof_count: u64,
+    pub frozen_dof_count: u64,
+    pub free_dof_count: u64,
+    pub mask_sha256: String,
+    pub grid_or_mesh_fingerprint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_state_revision: Option<u64>,
+    pub all_active_dofs_frozen: bool,
+    pub certificate: SelectionCertificateIR,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResolvedFrozenSpinsPlanIRWire {
+    schema_version: String,
+    constraint_ids: Vec<String>,
+    frozen_mask: Vec<bool>,
+    active_dof_count: u64,
+    frozen_dof_count: u64,
+    free_dof_count: u64,
+    mask_sha256: String,
+    grid_or_mesh_fingerprint: String,
+    #[serde(default)]
+    source_state_revision: Option<u64>,
+    all_active_dofs_frozen: bool,
+    certificate: SelectionCertificateIR,
+}
+
+impl<'de> Deserialize<'de> for ResolvedFrozenSpinsPlanIR {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = ResolvedFrozenSpinsPlanIRWire::deserialize(deserializer)?;
+        let plan = Self {
+            schema_version: wire.schema_version,
+            constraint_ids: wire.constraint_ids,
+            frozen_mask: wire.frozen_mask,
+            active_dof_count: wire.active_dof_count,
+            frozen_dof_count: wire.frozen_dof_count,
+            free_dof_count: wire.free_dof_count,
+            mask_sha256: wire.mask_sha256,
+            grid_or_mesh_fingerprint: wire.grid_or_mesh_fingerprint,
+            source_state_revision: wire.source_state_revision,
+            all_active_dofs_frozen: wire.all_active_dofs_frozen,
+            certificate: wire.certificate,
+        };
+        plan.validate_intrinsic()
+            .map_err(serde::de::Error::custom)?;
+        Ok(plan)
+    }
+}
+
+impl ResolvedFrozenSpinsPlanIR {
+    pub fn validate_intrinsic(&self) -> Result<(), String> {
+        let invalid = |message: &str| format!("resolved_frozen_spins_invalid: {message}");
+        if self.schema_version != RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION {
+            return Err(invalid("unsupported resolved plan schema version"));
+        }
+        if self.certificate.schema_version != SELECTION_CERTIFICATE_SCHEMA_VERSION {
+            return Err(invalid("unsupported selection certificate schema version"));
+        }
+        if self.constraint_ids != self.certificate.constraint_ids {
+            return Err(invalid("plan and certificate constraint IDs differ"));
+        }
+        if self.grid_or_mesh_fingerprint.is_empty()
+            || self.grid_or_mesh_fingerprint != self.certificate.grid_or_mesh_fingerprint
+        {
+            return Err(invalid("plan and certificate topology fingerprints differ"));
+        }
+        if self.source_state_revision != self.certificate.source_state_revision {
+            return Err(invalid("plan and certificate source revisions differ"));
+        }
+        let frozen_dof_count = self.frozen_mask.iter().filter(|value| **value).count() as u64;
+        if self.frozen_dof_count != frozen_dof_count
+            || self.certificate.frozen_dof_count != frozen_dof_count
+        {
+            return Err(invalid("frozen DOF counts do not match the dense mask"));
+        }
+        if self.free_dof_count != self.certificate.free_dof_count {
+            return Err(invalid("plan and certificate free DOF counts differ"));
+        }
+        if self.active_dof_count != self.certificate.active_dof_count {
+            return Err(invalid("plan and certificate active DOF counts differ"));
+        }
+        let derived_active_dof_count = self
+            .frozen_dof_count
+            .checked_add(self.free_dof_count)
+            .ok_or_else(|| invalid("active DOF count overflows"))?;
+        if self.active_dof_count != derived_active_dof_count {
+            return Err(invalid(
+                "active DOF count does not equal frozen plus free DOFs",
+            ));
+        }
+        if self.active_dof_count > self.frozen_mask.len() as u64 {
+            return Err(invalid("active DOF count exceeds dense mask length"));
+        }
+        let all_frozen = self.active_dof_count > 0 && self.free_dof_count == 0;
+        if self.all_active_dofs_frozen != all_frozen {
+            return Err(invalid("all-active-DOFs-frozen flag is inconsistent"));
+        }
+        let raw_count = self
+            .frozen_dof_count
+            .checked_add(self.certificate.inactive_candidate_dof_count)
+            .ok_or_else(|| invalid("raw candidate count overflows"))?;
+        if self.certificate.raw_candidate_dof_count != raw_count {
+            return Err(invalid(
+                "raw/inactive/frozen candidate counts are inconsistent",
+            ));
+        }
+        let mask_sha256 = resolved_frozen_mask_sha256(&self.frozen_mask);
+        if self.mask_sha256 != mask_sha256 || self.certificate.mask_sha256 != mask_sha256 {
+            return Err(invalid(
+                "plan or certificate mask hash does not match the dense mask",
+            ));
+        }
+        if self.certificate.authored_fingerprints.len() != self.constraint_ids.len()
+            || self
+                .certificate
+                .authored_fingerprints
+                .iter()
+                .zip(&self.constraint_ids)
+                .any(|(fingerprint, constraint_id)| {
+                    fingerprint.constraint_id != *constraint_id
+                        || fingerprint.selector_sha256.len() != 64
+                })
+        {
+            return Err(invalid("authored fingerprints do not match constraint IDs"));
+        }
+        Ok(())
+    }
+
+    /// Enforce the post-certificate invariant `frozen_mask` is a subset of the
+    /// exact active magnetic domain. Callers must not repair a rejected plan by
+    /// intersecting it again.
+    pub fn validate_against_active_mask(&self, active_mask: &[bool]) -> Result<(), String> {
+        if self.frozen_mask.len() != active_mask.len() {
+            return Err(format!(
+                "selection_resolved_mask_size_mismatch: frozen mask length {} differs from active mask length {}",
+                self.frozen_mask.len(),
+                active_mask.len()
+            ));
+        }
+        if let Some(index) = self
+            .frozen_mask
+            .iter()
+            .zip(active_mask)
+            .position(|(frozen, active)| *frozen && !*active)
+        {
+            return Err(format!(
+                "selection_resolved_mask_outside_active_domain: frozen DOF {index} is inactive"
+            ));
+        }
+        let active_dof_count = active_mask.iter().filter(|active| **active).count() as u64;
+        if self.active_dof_count != active_dof_count
+            || self.certificate.active_dof_count != active_dof_count
+        {
+            return Err(format!(
+                "selection_resolved_active_count_mismatch: certified active DOF count {} / {} differs from resolved active mask count {active_dof_count}",
+                self.active_dof_count, self.certificate.active_dof_count
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn resolved_frozen_mask_sha256(mask: &[bool]) -> String {
+    let mut hash = Sha256::new();
+    hash.update((mask.len() as u64).to_le_bytes());
+    hash.update(
+        mask.iter()
+            .map(|value| u8::from(*value))
+            .collect::<Vec<_>>(),
+    );
+    format!("{:x}", hash.finalize())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -448,6 +668,10 @@ pub struct FdmPlanIR {
     pub region_mask: Vec<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_mask: Option<Vec<bool>>,
+    /// Canonically materialized frozen-spin constraint for this resolved FDM
+    /// execution plan. `None` preserves the legacy unconstrained runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frozen_spins: Option<ResolvedFrozenSpinsPlanIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spin_transport_plans: Vec<ResolvedSpinTransportPlanIR>,
     /// Bounded standalone FDM CUDA charge-only realizations. The public M1
@@ -1032,6 +1256,10 @@ pub struct FemPlanIR {
     pub fe_order: u32,
     pub hmax: f64,
     pub initial_magnetization: Vec<[f64; 3]>,
+    /// Canonically materialized frozen-spin constraint on FEM true DOFs.
+    /// `None` preserves the unconstrained FEM plan contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frozen_spins: Option<ResolvedFrozenSpinsPlanIR>,
     pub material: MaterialIR,
     /// FEM-only realized nodal uniaxial anisotropy axes. Empty means use
     /// `material.anisotropy_axis` as a uniform axis.
@@ -1709,11 +1937,128 @@ pub struct ProvenancePlanIR {
 
 #[cfg(test)]
 mod tests {
+    use sha2::{Digest, Sha256};
+
     use super::{
         FdmGridCertificateIR, FdmPlanIR, FdmRegionLegendEntryIR, FemMeshTopologyFamilyIR,
         FemMixedTopologyCapabilityStatusIR, FemMixedTopologyProvenanceIR, RequestedFemDemagIR,
-        ResolvedFemDemagIR,
+        ResolvedFemDemagIR, ResolvedFrozenSpinsPlanIR, SelectionAuthoredFingerprintIR,
+        SelectionCertificateIR, RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION,
+        SELECTION_CERTIFICATE_SCHEMA_VERSION,
     };
+
+    fn resolved_frozen_spins_fixture() -> ResolvedFrozenSpinsPlanIR {
+        let mut hash = Sha256::new();
+        hash.update(2_u64.to_le_bytes());
+        hash.update([1_u8, 0_u8]);
+        let mask_sha256 = format!("{:x}", hash.finalize());
+        ResolvedFrozenSpinsPlanIR {
+            schema_version: RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION.to_string(),
+            constraint_ids: vec!["pinned".to_string()],
+            frozen_mask: vec![true, false],
+            active_dof_count: 2,
+            frozen_dof_count: 1,
+            free_dof_count: 1,
+            mask_sha256: mask_sha256.clone(),
+            grid_or_mesh_fingerprint: "grid-v1".to_string(),
+            source_state_revision: Some(7),
+            all_active_dofs_frozen: false,
+            certificate: SelectionCertificateIR {
+                schema_version: SELECTION_CERTIFICATE_SCHEMA_VERSION.to_string(),
+                evaluator_id: "selection.fdm_cell_center.v1".to_string(),
+                constraint_ids: vec!["pinned".to_string()],
+                authored_fingerprints: vec![SelectionAuthoredFingerprintIR {
+                    constraint_id: "pinned".to_string(),
+                    selector_sha256: "b".repeat(64),
+                }],
+                raw_candidate_dof_count: 1,
+                inactive_candidate_dof_count: 0,
+                active_dof_count: 2,
+                frozen_dof_count: 1,
+                free_dof_count: 1,
+                bounds_m: Some([[0.5, 0.5, 0.5]; 2]),
+                grid_or_mesh_fingerprint: "grid-v1".to_string(),
+                source_state_revision: Some(7),
+                mask_sha256,
+                resolved_reference_sha256: "c".repeat(64),
+                warnings: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn resolved_frozen_spins_round_trips_dense_mask_and_certificate() {
+        let plan = resolved_frozen_spins_fixture();
+        let encoded = serde_json::to_value(&plan).expect("resolved plan serializes");
+        assert_eq!(encoded["active_dof_count"], serde_json::json!(2));
+        assert_eq!(
+            encoded["certificate"]["active_dof_count"],
+            serde_json::json!(2)
+        );
+        let decoded: ResolvedFrozenSpinsPlanIR =
+            serde_json::from_value(encoded).expect("resolved plan deserializes");
+        assert_eq!(decoded, plan);
+        decoded.validate_against_active_mask(&[true, true]).unwrap();
+    }
+
+    #[test]
+    fn resolved_frozen_spins_rejects_bits_outside_active_domain_without_repair() {
+        let plan = resolved_frozen_spins_fixture();
+        let error = plan
+            .validate_against_active_mask(&[false, true])
+            .expect_err("certified frozen bit outside active domain must fail closed");
+        assert!(error.contains("selection_resolved_mask_outside_active_domain"));
+        assert_eq!(plan.frozen_mask, vec![true, false]);
+    }
+
+    #[test]
+    fn resolved_frozen_spins_deserialization_rejects_intrinsic_mismatches() {
+        let valid = serde_json::to_value(resolved_frozen_spins_fixture()).unwrap();
+        let mutations = [
+            ("/schema_version", serde_json::json!("wrong-plan.v1")),
+            (
+                "/certificate/schema_version",
+                serde_json::json!("wrong-certificate.v1"),
+            ),
+            ("/frozen_mask", serde_json::json!([true, true])),
+            ("/active_dof_count", serde_json::json!(1)),
+            ("/frozen_dof_count", serde_json::json!(2)),
+            ("/free_dof_count", serde_json::json!(0)),
+            ("/all_active_dofs_frozen", serde_json::json!(true)),
+            ("/mask_sha256", serde_json::json!("0".repeat(64))),
+            (
+                "/certificate/mask_sha256",
+                serde_json::json!("0".repeat(64)),
+            ),
+            ("/certificate/raw_candidate_dof_count", serde_json::json!(2)),
+            ("/certificate/active_dof_count", serde_json::json!(1)),
+            (
+                "/certificate/grid_or_mesh_fingerprint",
+                serde_json::json!("other-grid"),
+            ),
+            ("/certificate/source_state_revision", serde_json::json!(8)),
+            ("/certificate/constraint_ids", serde_json::json!(["other"])),
+        ];
+
+        for (path, replacement) in mutations {
+            let mut payload = valid.clone();
+            *payload.pointer_mut(path).expect("fixture path must exist") = replacement;
+            let error = serde_json::from_value::<ResolvedFrozenSpinsPlanIR>(payload)
+                .expect_err("invalid resolved cache payload must fail closed");
+            assert!(
+                error.to_string().contains("resolved_frozen_spins_invalid"),
+                "path {path}: {error}"
+            );
+        }
+
+        let mut coherently_mutated = valid;
+        coherently_mutated["free_dof_count"] = serde_json::json!(0);
+        coherently_mutated["certificate"]["free_dof_count"] = serde_json::json!(0);
+        coherently_mutated["all_active_dofs_frozen"] = serde_json::json!(true);
+        let error = serde_json::from_value::<ResolvedFrozenSpinsPlanIR>(coherently_mutated)
+            .expect_err("active-domain count must reject coherent free/all-frozen mutation");
+        assert!(error.to_string().contains("resolved_frozen_spins_invalid"));
+    }
     use crate::{
         validate_fdm_region_lut_indices, ExecutionDevice, ExecutionPrecision, MAX_FDM_REGION_IDS,
     };

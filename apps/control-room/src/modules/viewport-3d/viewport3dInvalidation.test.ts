@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -24,24 +25,37 @@ describe("buildViewport3DResourceFrameKey", () => {
     expect(failed).toContain("404 /model/scene");
   });
 
-  it("batches R3F invalidation on a microtask instead of a timer", () => {
+  it("routes every viewport invalidation consumer through the one root-owned controller", () => {
     const source = readFileSync(
       new URL("./viewport3dBatchedInvalidate.ts", import.meta.url),
       "utf8",
     );
-
-    expect(source).toContain("queueMicrotask(flushPendingInvalidates)");
-    expect(source).not.toContain("setTimeout(flushPendingInvalidates");
-    expect(source).not.toContain("clearTimeout(pendingTimer)");
-  });
-
-  it("subscribes only to the R3F invalidate function", () => {
-    const source = readFileSync(
-      new URL("./viewport3dBatchedInvalidate.ts", import.meta.url),
+    const canvasSource = readFileSync(
+      new URL("./Viewport3DCanvas.tsx", import.meta.url),
       "utf8",
     );
+    const root = join(process.cwd(), "src/modules/viewport-3d");
+    const sourceFiles = readdirSync(root, { recursive: true })
+      .map((entry) => join(root, entry.toString()))
+      .filter((entry) => /\.tsx?$/.test(entry))
+      .filter((entry) => !/\.test\.tsx?$/.test(entry))
+      .filter((entry) => !entry.endsWith("viewport3dBatchedInvalidate.ts"));
 
-    expect(source).toContain("useThree((state) => state.invalidate)");
-    expect(source).not.toContain("useThree()");
+    expect(source).toContain("Viewport3DInvalidationProvider");
+    expect(canvasSource).toContain("Viewport3DInvalidationProvider");
+    for (const sourceFile of sourceFiles) {
+      const sourceText = readFileSync(sourceFile, "utf8");
+      const rawInvalidatePatterns = [
+        /useThree\s*\(\s*\)\s*\.\s*invalidate/,
+        /\b(?:const|let|var)\s*{[^;=]*\binvalidate\b[^;=]*}\s*=\s*useThree\s*\(\s*\)/,
+        /useThree\s*\(\s*\(?\s*[A-Za-z_$][\w$]*\s*\)?\s*=>\s*[A-Za-z_$][\w$]*\s*\.\s*invalidate\s*\)/,
+        /useThree\s*\(\s*\(\s*{[\s\S]*?\binvalidate\b[\s\S]*?}\s*\)\s*=>/,
+      ];
+      for (const rawInvalidatePattern of rawInvalidatePatterns) {
+        expect(sourceText, `${sourceFile} uses a raw R3F invalidation alias`).not.toMatch(
+          rawInvalidatePattern,
+        );
+      }
+    }
   });
 });

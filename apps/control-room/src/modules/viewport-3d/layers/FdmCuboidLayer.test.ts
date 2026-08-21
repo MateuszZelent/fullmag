@@ -541,6 +541,7 @@ describe("FdmCuboidLayer model", () => {
     recordFdmCuboidSurfaceAdoption({
       fieldBufferId: "field-global",
       registry,
+      sessionIdentity: { sessionEpoch: "test-session@1000", sessionId: "test-session" },
       scalarBuffer: {
         buildKey: "scalar-global",
         colors: new Float32Array(12),
@@ -565,6 +566,7 @@ describe("FdmCuboidLayer model", () => {
       carrierId: "region:left:core",
       fieldBufferId: "field-global",
       registry,
+      sessionIdentity: { sessionEpoch: "test-session@1000", sessionId: "test-session" },
       scalarBuffer: {
         buildKey: "scalar-left-core",
         colors: new Float32Array(6),

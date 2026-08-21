@@ -79,7 +79,9 @@ use crate::solver_runtime::fem_crossover::resolve_auto_fem_plan_device;
 use crate::solver_runtime::selection::all_in_gpu_fem_required;
 pub(crate) use crate::solver_runtime::selection::{
     all_in_gpu_fem_env_requested, effective_fem_device_request,
-    effective_fem_device_request_for_plan, fem_gpu_execution_forced, resolve_fdm_engine,
+    effective_fem_device_request_for_plan, fem_gpu_execution_forced,
+    reject_frozen_spins_cuda_execution, reject_frozen_spins_cuda_plan_execution,
+    reject_frozen_spins_fem_execution, reject_frozen_spins_fem_plan_execution, resolve_fdm_engine,
     resolve_fdm_engine_for_plan_with_trail, resolve_fdm_engine_with_trail,
 };
 #[cfg(feature = "fem-gpu")]
@@ -588,6 +590,13 @@ fn resolve_fdm_engine_with_registry(
     let mut worker = resolved.worker;
     let mut resolved_device = resolved.device;
 
+    if engine == FdmEngine::CudaFdm {
+        reject_frozen_spins_cuda_execution(problem)?;
+        if let Some(plan) = plan {
+            reject_frozen_spins_cuda_plan_execution(plan)?;
+        }
+    }
+
     if engine == FdmEngine::CudaFdm && has_prescribed_zeeman_mask_antenna(problem) {
         if forced_device {
             return Err(RunError {
@@ -641,6 +650,7 @@ fn resolve_fdm_engine_with_registry(
 pub(crate) fn resolve_fem_engine_with_trail(
     problem: &ProblemIR,
 ) -> Result<EngineResolution<FemEngine>, RunError> {
+    reject_frozen_spins_fem_execution(problem)?;
     let requested_device = effective_fem_device_request(problem);
     resolve_fem_engine_with_effective_request(problem, &requested_device)
 }
@@ -1420,6 +1430,8 @@ pub(crate) fn resolve_fem_engine_for_plan_with_trail(
     plan: &FemPlanIR,
     preview_enabled: bool,
 ) -> Result<FemPlanEngineResolution, RunError> {
+    reject_frozen_spins_fem_execution(problem)?;
+    reject_frozen_spins_fem_plan_execution(plan)?;
     if !native_fem::is_cpu_available() {
         return Err(RunError {
             message:
@@ -2259,6 +2271,7 @@ pub(crate) fn execute_fem_with_context_in_mode<'a>(
     #[cfg(not(feature = "fem-gpu"))]
     let _ = physics_execution_context;
     let mut normalized_plan = normalized_fem_plan_for_runtime(plan)?;
+    reject_frozen_spins_fem_plan_execution(&normalized_plan)?;
     reject_unsupported_steady_transport_component_outputs(&normalized_plan, outputs)?;
     #[cfg(feature = "fem-gpu")]
     let transport_artifact_writer = artifact_writer.clone();
@@ -5003,6 +5016,7 @@ fn execute_cuda_fdm(
     mut live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    crate::solver_runtime::selection::reject_frozen_spins_cuda_plan_execution(plan)?;
     if until_seconds <= 0.0 {
         return Err(RunError {
             message: "until_seconds must be positive".to_string(),
@@ -5104,9 +5118,20 @@ fn execute_cuda_fdm(
     };
     apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
     if let Some(control) = direct_minimizer_control(plan.relaxation.as_ref()) {
+        let algorithm = match control.algorithm {
+            crate::relaxation::direct_minimizer::DirectMinimizerAlgorithm::ProjectedGradientBb => {
+                fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+            }
+            crate::relaxation::direct_minimizer::DirectMinimizerAlgorithm::NonlinearCg => {
+                fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
+            }
+        };
         provenance.energy_minimizer_realization =
-            crate::relaxation::native_direct_minimizer_realization(control.algorithm, true)
+            crate::relaxation::native_direct_minimizer_realization(algorithm, true)
                 .map(str::to_string);
+    } else if llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()) {
+        provenance.energy_minimizer_realization =
+            Some(crate::relaxation::NATIVE_LLG_TIME_INTEGRATOR_REALIZATION.to_string());
     }
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)
@@ -5126,6 +5151,7 @@ fn execute_cuda_fdm(
     let mut last_preview_revision: Option<u64> = None;
     let mut cancelled = false;
     let mut numerical_stagnation = false;
+    let mut direct_minimizer_torque_confirmed = false;
     let mut current_stats = backend.snapshot_step_stats(plan.grid.cells)?;
     ensure_single_object_scalars(&mut current_stats, "free");
 
@@ -5144,6 +5170,7 @@ fn execute_cuda_fdm(
         )?;
         latest_stats = outcome.latest_stats;
         cancelled = outcome.cancelled;
+        direct_minimizer_torque_confirmed = outcome.torque_confirmed;
         numerical_stagnation = outcome.numerical_stagnation;
     } else {
         let mut dt = provenance
@@ -5427,7 +5454,7 @@ fn execute_cuda_fdm(
         plan.relaxation.as_ref(),
         crate::relaxation::RelaxationCompletionMetrics {
             max_torque_apm: completion_max_torque_apm,
-            torque_confirmed: torque_confirmation.confirmed(),
+            torque_confirmed: torque_confirmation.confirmed() || direct_minimizer_torque_confirmed,
             accepted_energy_plateau_range_j: energy_plateau.range(),
             steps: completion_steps,
             relaxation_time_s: completion_time_s,
@@ -7090,6 +7117,7 @@ mod tests {
             fe_order: 1,
             hmax: 0.4,
             initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+            frozen_spins: None,
             material: fullmag_ir::MaterialIR {
                 name: "Py".to_string(),
                 saturation_magnetisation: 800e3,

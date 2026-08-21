@@ -3,7 +3,6 @@
 import {
   createRoot,
   extend,
-  unmountComponentAtNode,
   type CanvasProps,
   type Catalogue,
   type RootState,
@@ -22,6 +21,7 @@ import {
 import * as THREE from "three";
 
 import { recordVisualizationDebugCanvasLifecycle } from "@/kernel/performance/visualizationDebugPerformanceProbe";
+import { Viewport3DInvalidationProvider } from "./viewport3dBatchedInvalidate";
 
 type Viewport3DCanvasProps = Omit<CanvasProps, "resize" | "size">;
 
@@ -48,6 +48,98 @@ function sameViewport3DCanvasSize(
     previous.top === next.top &&
     previous.width === next.width
   );
+}
+
+export interface Viewport3DCanvasLifecycleSnapshot {
+  activeRoots: number;
+  configureCompleted: number;
+  configureStarted: number;
+  contextCreated: number;
+  contextDisposed: number;
+  eventConnections: number;
+  eventDisconnections: number;
+  rootsCreated: number;
+  rootsUnmounted: number;
+}
+
+export function createViewport3DCanvasLifecycleController() {
+  let activeRoot = false;
+  let configureGeneration = 0;
+  let contextActive = false;
+  let eventsConnected = false;
+  const snapshot: Viewport3DCanvasLifecycleSnapshot = {
+    activeRoots: 0,
+    configureCompleted: 0,
+    configureStarted: 0,
+    contextCreated: 0,
+    contextDisposed: 0,
+    eventConnections: 0,
+    eventDisconnections: 0,
+    rootsCreated: 0,
+    rootsUnmounted: 0,
+  };
+
+  return {
+    configureCompleted(generation: number): boolean {
+      if (generation !== configureGeneration || !activeRoot) return false;
+      snapshot.configureCompleted += 1;
+      return true;
+    },
+    contextCreated(): boolean {
+      if (contextActive) return false;
+      contextActive = true;
+      snapshot.contextCreated += 1;
+      return true;
+    },
+    eventsConnected(): boolean {
+      if (eventsConnected) return false;
+      eventsConnected = true;
+      snapshot.eventConnections += 1;
+      return true;
+    },
+    getSnapshot(): Viewport3DCanvasLifecycleSnapshot {
+      return { ...snapshot };
+    },
+    isCurrentConfigure(generation: number): boolean {
+      return activeRoot && generation === configureGeneration;
+    },
+    mountRoot(): void {
+      if (activeRoot) {
+        throw new Error("Viewport3DCanvas root is already active");
+      }
+      activeRoot = true;
+      snapshot.activeRoots = 1;
+      snapshot.rootsCreated += 1;
+    },
+    startConfigure(): number {
+      if (!activeRoot) {
+        throw new Error("Viewport3DCanvas root must mount before configure");
+      }
+      configureGeneration += 1;
+      snapshot.configureStarted += 1;
+      return configureGeneration;
+    },
+    unmountRoot(): { disposeContext: boolean; disconnectEvents: boolean } {
+      if (!activeRoot) {
+        return { disconnectEvents: false, disposeContext: false };
+      }
+      activeRoot = false;
+      configureGeneration += 1;
+      snapshot.activeRoots = 0;
+      snapshot.rootsUnmounted += 1;
+      const disconnectEvents = eventsConnected;
+      const disposeContext = contextActive;
+      if (disconnectEvents) {
+        eventsConnected = false;
+        snapshot.eventDisconnections += 1;
+      }
+      if (disposeContext) {
+        contextActive = false;
+        snapshot.contextDisposed += 1;
+      }
+      return { disconnectEvents, disposeContext };
+    },
+  };
 }
 
 function Viewport3DCanvasErrorBridge({
@@ -123,7 +215,8 @@ export const Viewport3DCanvas = forwardRef<
     null,
   );
   const rootConfiguredRef = useRef(false);
-  const configureGenerationRef = useRef(0);
+  const lifecycleRef = useRef(createViewport3DCanvasLifecycleController());
+  const rootStateRef = useRef<RootState | null>(null);
   const latestPointerMissedRef = useRef(onPointerMissed);
   const latestCreatedRef = useRef(onCreated);
   const latestSceneRef = useRef<React.ReactNode>(null);
@@ -132,7 +225,11 @@ export const Viewport3DCanvas = forwardRef<
   const sceneContent = useMemo(
     () => (
       <Viewport3DCanvasErrorBridge onError={setError}>
-        <React.Suspense fallback={fallback ?? null}>{children}</React.Suspense>
+        <React.Suspense fallback={fallback ?? null}>
+          <Viewport3DInvalidationProvider>
+            {children}
+          </Viewport3DInvalidationProvider>
+        </React.Suspense>
       </Viewport3DCanvasErrorBridge>
     ),
     [children, fallback],
@@ -181,9 +278,11 @@ export const Viewport3DCanvas = forwardRef<
     }
 
     const root = rootRef.current ?? createRoot(canvas);
-    rootRef.current = root;
-    const configureGeneration = configureGenerationRef.current + 1;
-    configureGenerationRef.current = configureGeneration;
+    if (!rootRef.current) {
+      lifecycleRef.current.mountRoot();
+      rootRef.current = root;
+    }
+    const configureGeneration = lifecycleRef.current.startConfigure();
     recordVisualizationDebugCanvasLifecycle("root-configure-started");
 
     void root
@@ -197,14 +296,19 @@ export const Viewport3DCanvas = forwardRef<
         legacy,
         linear,
         onCreated: (state: RootState) => {
+          rootStateRef.current = state;
           const eventTarget = eventSource
             ? "current" in eventSource
               ? eventSource.current
               : eventSource
             : container;
-          state.events.connect?.(eventTarget);
-          recordVisualizationDebugCanvasLifecycle("events-connected");
-          recordVisualizationDebugCanvasLifecycle("context-created");
+          if (lifecycleRef.current.eventsConnected()) {
+            state.events.connect?.(eventTarget);
+            recordVisualizationDebugCanvasLifecycle("events-connected");
+          }
+          if (lifecycleRef.current.contextCreated()) {
+            recordVisualizationDebugCanvasLifecycle("context-created");
+          }
           if (eventPrefix) {
             state.setEvents({
               compute: (event, rootState) => {
@@ -235,12 +339,16 @@ export const Viewport3DCanvas = forwardRef<
         size,
       })
       .then((configuredRoot) => {
-        if (configureGenerationRef.current !== configureGeneration) return;
+        if (!lifecycleRef.current.configureCompleted(configureGeneration)) return;
         rootConfiguredRef.current = true;
         recordVisualizationDebugCanvasLifecycle("root-configure-completed");
         configuredRoot.render(latestSceneRef.current);
       })
-      .catch(setError);
+      .catch((configureError: unknown) => {
+        if (lifecycleRef.current.isCurrentConfigure(configureGeneration)) {
+          setError(configureError);
+        }
+      });
   }, [
     camera,
     dpr,
@@ -261,12 +369,17 @@ export const Viewport3DCanvas = forwardRef<
   ]);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
+    const lifecycle = lifecycleRef.current;
     return () => {
-      if (canvas) {
+      const teardown = lifecycle.unmountRoot();
+      rootStateRef.current?.events.disconnect?.();
+      rootStateRef.current = null;
+      rootRef.current?.unmount();
+      if (teardown.disconnectEvents) {
         recordVisualizationDebugCanvasLifecycle("events-disconnected");
+      }
+      if (teardown.disposeContext) {
         recordVisualizationDebugCanvasLifecycle("context-disposed");
-        unmountComponentAtNode(canvas);
       }
       rootConfiguredRef.current = false;
       rootRef.current = null;

@@ -1,71 +1,134 @@
 /**
  * viewport3dBatchedInvalidate — Deduplicates R3F invalidation calls.
  *
- * Ported from legacy `useBatchedInvalidate.ts`.  Multiple layers may call
- * `invalidate()` during the same React commit (color update + camera fit +
- * resource change).  Without batching, each call schedules a separate frame,
- * which can produce visible intermediate states.
- *
- * This utility coalesces all invalidation requests into one microtask
- * so that the viewport re-renders once per commit batch instead of N times.
+ * A viewport owns its pending demand frame. Reasons are typed, bounded, and
+ * flushed with that frame so an invalid caller cannot create an unaccounted
+ * render while `frameloop="demand"` is active.
  */
 
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import {
+  createContext,
+  createElement,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
 import { useThree } from "@react-three/fiber";
 
-const pendingInvalidates = new Set<() => void>();
-let pendingMicrotask = false;
+import type { Viewport3DDirtyReason } from "./viewport3dTypes";
 
-function flushPendingInvalidates() {
-  pendingMicrotask = false;
-  const callbacks = Array.from(pendingInvalidates);
-  pendingInvalidates.clear();
-  for (const invalidate of callbacks) {
-    invalidate();
-  }
+export const VIEWPORT_3D_BATCHED_INVALIDATE_REASON_LIMIT = 16;
+
+type Viewport3DInvalidate = (reason?: Viewport3DDirtyReason) => void;
+
+const Viewport3DInvalidationContext = createContext<Viewport3DInvalidate | null>(
+  null,
+);
+
+interface Viewport3DBatchedInvalidatorOptions {
+  invalidate: (reasons: readonly Viewport3DDirtyReason[]) => void;
+  maxReasons?: number;
+  schedule: (flush: () => void) => void;
 }
 
-function scheduleBatchedViewportInvalidate(invalidate: () => void): void {
-  if (typeof window === "undefined") {
-    invalidate();
-    return;
-  }
-  pendingInvalidates.add(invalidate);
-  if (pendingMicrotask) {
-    return;
-  }
-  pendingMicrotask = true;
-  queueMicrotask(flushPendingInvalidates);
+export function createViewport3DBatchedInvalidator({
+  invalidate,
+  maxReasons = VIEWPORT_3D_BATCHED_INVALIDATE_REASON_LIMIT,
+  schedule,
+}: Viewport3DBatchedInvalidatorOptions) {
+  const reasons = new Set<Viewport3DDirtyReason>();
+  let overflowed = false;
+  let scheduled = false;
+
+  const flush = () => {
+    scheduled = false;
+    if (overflowed || reasons.size === 0) return;
+    const frameReasons = Array.from(reasons);
+    reasons.clear();
+    invalidate(frameReasons);
+  };
+
+  return {
+    cancel(): void {
+      reasons.clear();
+      overflowed = false;
+    },
+    getSnapshot() {
+      return {
+        overflowed,
+        reasons: Array.from(reasons),
+      };
+    },
+    invalidate(reason: Viewport3DDirtyReason): boolean {
+      if (overflowed) return false;
+      if (!reasons.has(reason) && reasons.size >= maxReasons) {
+        overflowed = true;
+        return false;
+      }
+      reasons.add(reason);
+      if (!scheduled) {
+        scheduled = true;
+        schedule(flush);
+      }
+      return true;
+    },
+  };
 }
 
-function cancelBatchedViewportInvalidate(invalidate: () => void): void {
-  pendingInvalidates.delete(invalidate);
+export function Viewport3DInvalidationProvider({
+  children,
+}: {
+  children: ReactNode;
+}) {
+  const rootInvalidate = useThree((state) => state.invalidate);
+  const [controller] = useState(() =>
+    createViewport3DBatchedInvalidator({
+      invalidate: () => rootInvalidate(),
+      schedule: (flush) => {
+        if (typeof window === "undefined") {
+          flush();
+          return;
+        }
+        queueMicrotask(flush);
+      },
+    }),
+  );
+
+  useEffect(() => () => controller.cancel(), [controller]);
+
+  const invalidate = useCallback<Viewport3DInvalidate>(
+    (reason = "frame-commit") => {
+      controller.invalidate(reason);
+    },
+    [controller],
+  );
+
+  return createElement(
+    Viewport3DInvalidationContext.Provider,
+    { value: invalidate },
+    children,
+  );
 }
 
-/**
- * Hook that returns a batched invalidate function.  Use this instead of
- * `useThree(s => s.invalidate)` directly in layer components.
- */
-export function useBatchedInvalidate(): () => void {
-  const invalidate = useThree((state) => state.invalidate);
-  const invalidateRef = useRef(invalidate);
+/** Returns the active Canvas/root's typed invalidation controller. */
+export function useBatchedInvalidate(
+  defaultReason: Viewport3DDirtyReason = "frame-commit",
+): (reason?: Viewport3DDirtyReason) => void {
+  const invalidate = useContext(Viewport3DInvalidationContext);
+  if (!invalidate) {
+    throw new Error("Viewport3D invalidation requires the active Canvas root");
+  }
 
-  useEffect(() => {
-    invalidateRef.current = invalidate;
-  }, [invalidate]);
-
-  const scheduleInvalidate = useCallback(() => {
-    scheduleBatchedViewportInvalidate(invalidateRef.current);
-  }, []);
-
-  useEffect(() => {
-    const current = invalidateRef.current;
-    return () => {
-      cancelBatchedViewportInvalidate(current);
-    };
-  }, []);
+  const scheduleInvalidate = useCallback(
+    (reason: Viewport3DDirtyReason = defaultReason) => {
+      invalidate(reason);
+    },
+    [defaultReason, invalidate],
+  );
 
   return scheduleInvalidate;
 }

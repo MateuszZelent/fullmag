@@ -11,6 +11,10 @@ use utoipa::ToSchema;
 
 use crate::error::ApiError;
 use crate::router_v2::handlers::sessions::status::field_revision;
+use crate::router_v2::handlers::visualization::display::{
+    append_visualization_restore_warnings, bound_visualization_restore_warnings,
+    canonicalize_visualization_overrides_with_diagnostics,
+};
 use crate::schemas::visualization_state::{
     default_planar_color_range_state, default_planar_visualization_state, PlanarColorRangeMode,
     PlanarColorRangeState, PlanarSourceSelectionState,
@@ -45,6 +49,8 @@ struct PersistedCurrentLiveSnapshot {
     quantities: Vec<crate::types::QuantityDescriptor>,
     fem_mesh: Option<fullmag_runner::FemMeshPayload>,
     latest_fields: crate::types::LatestFields,
+    #[serde(default)]
+    field_publication_bundles: BTreeMap<String, crate::schemas::common::FieldPublicationBundle>,
     #[serde(default)]
     accepted_terminal_field_generation: Option<crate::types::CurrentLiveFieldGeneration>,
     #[serde(default)]
@@ -85,6 +91,7 @@ impl From<&SessionStateResponse> for PersistedCurrentLiveSnapshot {
             quantities: value.quantities.clone(),
             fem_mesh: value.fem_mesh.clone(),
             latest_fields: value.latest_fields.clone(),
+            field_publication_bundles: value.field_publication_bundles.clone(),
             accepted_terminal_field_generation: value.accepted_terminal_field_generation.clone(),
             terminal_field_generations: value.terminal_field_generations.clone(),
             artifacts: value.artifacts.clone(),
@@ -113,7 +120,7 @@ fn restore_display_presentation(
     schema_version: Option<u32>,
     document: &serde_json::Value,
 ) -> Result<DisplayPresentationState, String> {
-    match schema_version.unwrap_or(6) {
+    let mut restored = match schema_version.unwrap_or(6) {
         6 => migrate_display_presentation_v6(document.clone()),
         7 => migrate_display_presentation_v7(document.clone()),
         8 => migrate_display_presentation_v8(document.clone()),
@@ -123,7 +130,18 @@ fn restore_display_presentation(
         other => Err(format!(
             "unsupported display presentation schema_version {other}; current version is {DISPLAY_PRESENTATION_SCHEMA_VERSION}"
         )),
+    }?;
+
+    if let Some(overrides) = restored.visualization_overrides.take() {
+        let canonicalized = canonicalize_visualization_overrides_with_diagnostics(&overrides);
+        restored.visualization_overrides = Some(canonicalized.overrides);
+        append_visualization_restore_warnings(
+            &mut restored.visualization_restore_warnings,
+            &canonicalized.warnings,
+        );
     }
+    bound_visualization_restore_warnings(&mut restored.visualization_restore_warnings);
+    Ok(restored)
 }
 
 fn migrate_display_presentation_v7(
@@ -328,6 +346,7 @@ impl From<PersistedCurrentLiveSnapshot> for SessionStateResponse {
             quantities: value.quantities,
             fem_mesh: value.fem_mesh,
             latest_fields: value.latest_fields,
+            field_publication_bundles: value.field_publication_bundles,
             preview_cache: crate::types::CachedPreviewFields::default(),
             artifacts: value.artifacts,
             display_selection: value.display_selection,
@@ -980,6 +999,30 @@ pub(crate) async fn restore_checkpoint(
         snapshot.coupled_checkpoint.as_ref(),
         coupled_checkpoint.as_ref(),
     ) {
+        (Some(active), Some(candidate))
+            if active["schema"].as_str()
+                == Some(fullmag_runner::constraints::FROZEN_SPINS_CHECKPOINT_SCHEMA)
+                && candidate["schema"].as_str()
+                    == Some(fullmag_runner::constraints::FROZEN_SPINS_CHECKPOINT_SCHEMA) =>
+        {
+            validate_frozen_checkpoint_restore(
+                active,
+                candidate,
+                &magnetization,
+                common_state.time_s,
+                common_state.dt,
+            )?
+        }
+        (Some(active), Some(candidate))
+            if active["schema"].as_str()
+                == Some(fullmag_runner::constraints::FROZEN_SPINS_CHECKPOINT_SCHEMA)
+                || candidate["schema"].as_str()
+                    == Some(fullmag_runner::constraints::FROZEN_SPINS_CHECKPOINT_SCHEMA) =>
+        {
+            return Err(ApiError::bad_request(
+                "FDM checkpoint constraint schema cannot change during restore",
+            ));
+        }
         (Some(active), Some(candidate)) => validate_coupled_checkpoint_restore(
             snapshot,
             active,
@@ -1465,25 +1508,38 @@ impl CheckpointSnapshotProvider for LiveCheckpointProvider {
         let Some(checkpoint) = self.coupled_checkpoint.clone() else {
             return Ok(None);
         };
-        let rng_state = fullmag_session::RngState {
-            global_seed: checkpoint["thermal_seed"].as_u64().unwrap_or(0),
-            stream_family: checkpoint["thermal_rng_algorithm"]
-                .as_str()
-                .unwrap_or("unknown")
-                .to_string(),
-            counter_base: checkpoint["thermal_counter"].as_u64().unwrap_or(0),
-            substream_per_cell: Some(true),
-            last_consumed_nonce: checkpoint["thermal_counter"].as_u64().unwrap_or(0),
+        let is_frozen_spins = checkpoint["schema"].as_str()
+            == Some(fullmag_runner::constraints::FROZEN_SPINS_CHECKPOINT_SCHEMA);
+        let (integrator_kind, rng_state, checkpoint_schema) = if is_frozen_spins {
+            (
+                "frozen_spins",
+                None,
+                fullmag_runner::constraints::FROZEN_SPINS_CHECKPOINT_SCHEMA,
+            )
+        } else {
+            let thermal_counter = checkpoint["thermal_counter"].as_u64().unwrap_or(0);
+            (
+                "coupled_imex_ark2",
+                Some(fullmag_session::RngState {
+                    global_seed: checkpoint["thermal_seed"].as_u64().unwrap_or(0),
+                    stream_family: checkpoint["thermal_rng_algorithm"]
+                        .as_str()
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    counter_base: thermal_counter,
+                    substream_per_cell: Some(true),
+                    last_consumed_nonce: thermal_counter,
+                }),
+                "fullmag.fdm.coupled_m3_checkpoint.v1",
+            )
         };
         Ok(Some(fullmag_session::BackendStatePayload {
             format: "fullmag.backend_state.v1".into(),
             backend_family: "fdm_cpu_reference".into(),
-            integrator_kind: Some("coupled_imex_ark2".into()),
+            integrator_kind: Some(integrator_kind.into()),
             integrator_state: Some(checkpoint),
-            rng_state: Some(rng_state),
-            extra: serde_json::json!({
-                "checkpoint_schema": "fullmag.fdm.coupled_m3_checkpoint.v1"
-            }),
+            rng_state,
+            extra: serde_json::json!({"checkpoint_schema": checkpoint_schema}),
         }))
     }
 
@@ -1542,6 +1598,15 @@ fn parse_coupled_checkpoint(
 }
 
 fn validate_coupled_checkpoint_value(value: &serde_json::Value) -> Result<(), ApiError> {
+    if value["schema"].as_str() == Some(fullmag_runner::constraints::FROZEN_SPINS_CHECKPOINT_SCHEMA)
+    {
+        let vector_count = value["magnetization"]
+            .as_array()
+            .map(Vec::len)
+            .ok_or_else(|| ApiError::bad_request("Frozen Spins checkpoint has no magnetization"))?;
+        return fullmag_runner::validate_frozen_spins_checkpoint_value(value, vector_count)
+            .map_err(|error| ApiError::bad_request(error.message));
+    }
     let payload = parse_coupled_checkpoint(value)?;
     fullmag_runner::validate_coupled_m3_checkpoint_value(value, payload.magnetization.len())
         .map_err(|error| ApiError::bad_request(error.message))
@@ -1580,6 +1645,61 @@ fn validate_coupled_checkpoint_restore(
         active_value,
     )
     .map_err(|error| ApiError::bad_request(error.message))
+}
+
+fn validate_frozen_checkpoint_restore(
+    active_value: &serde_json::Value,
+    candidate_value: &serde_json::Value,
+    common_magnetization: &[[f64; 3]],
+    common_time_s: f64,
+    common_dt_s: f64,
+) -> Result<(), ApiError> {
+    fullmag_runner::validate_frozen_spins_checkpoint_value(
+        active_value,
+        common_magnetization.len(),
+    )
+    .map_err(|error| ApiError::bad_request(error.message))?;
+    fullmag_runner::validate_frozen_spins_checkpoint_value(
+        candidate_value,
+        common_magnetization.len(),
+    )
+    .map_err(|error| ApiError::bad_request(error.message))?;
+    let active: fullmag_runner::constraints::FrozenSpinsCheckpointV1 =
+        serde_json::from_value(active_value.clone()).map_err(|error| {
+            ApiError::bad_request(format!("invalid Frozen Spins checkpoint payload: {error}"))
+        })?;
+    let candidate: fullmag_runner::constraints::FrozenSpinsCheckpointV1 =
+        serde_json::from_value(candidate_value.clone()).map_err(|error| {
+            ApiError::bad_request(format!("invalid Frozen Spins checkpoint payload: {error}"))
+        })?;
+    if active.constraint_ids != candidate.constraint_ids
+        || active.authored_fingerprints != candidate.authored_fingerprints
+        || active.activation != candidate.activation
+        || active.mask_len != candidate.mask_len
+        || active.mask_bits != candidate.mask_bits
+        || active.mask_sha256 != candidate.mask_sha256
+        || active.reference != candidate.reference
+        || active.reference_sha256 != candidate.reference_sha256
+        || active.active_dof_count != candidate.active_dof_count
+        || active.frozen_dof_count != candidate.frozen_dof_count
+        || active.free_dof_count != candidate.free_dof_count
+        || active.backend != candidate.backend
+        || active.device != candidate.device
+        || active.precision != candidate.precision
+    {
+        return Err(ApiError::bad_request(
+            "Frozen Spins checkpoint activation or backend identity mismatch",
+        ));
+    }
+    if candidate.magnetization.as_slice() != common_magnetization
+        || candidate.time_s != common_time_s
+        || candidate.dt != common_dt_s
+    {
+        return Err(ApiError::bad_request(
+            "Frozen Spins checkpoint disagrees with common solver state",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_active_coupled_identity(
@@ -1920,17 +2040,21 @@ fn read_checkpoint_coupled_state(
         serde_json::from_slice(&bytes).map_err(|error| {
             ApiError::bad_request(format!("invalid checkpoint backend state: {error}"))
         })?;
+    let supported_integrator = matches!(
+        payload.integrator_kind.as_deref(),
+        Some("coupled_imex_ark2") | Some("frozen_spins")
+    );
     if payload.format != "fullmag.backend_state.v1"
         || payload.backend_family != "fdm_cpu_reference"
-        || payload.integrator_kind.as_deref() != Some("coupled_imex_ark2")
+        || !supported_integrator
     {
         return Err(ApiError::bad_request(
-            "unsupported coupled M3 backend checkpoint envelope",
+            "unsupported FDM backend checkpoint envelope",
         ));
     }
-    let state = payload.integrator_state.ok_or_else(|| {
-        ApiError::bad_request("coupled M3 backend checkpoint has no integrator state")
-    })?;
+    let state = payload
+        .integrator_state
+        .ok_or_else(|| ApiError::bad_request("FDM backend checkpoint has no integrator state"))?;
     validate_coupled_checkpoint_value(&state)?;
     Ok(Some(state))
 }
@@ -2560,7 +2684,9 @@ mod terminal_field_generation_persistence_tests {
 #[cfg(test)]
 mod planar_presentation_migration_tests {
     use super::*;
-    use crate::schemas::visualization_state::default_planar_visualization_state;
+    use crate::schemas::visualization_state::{
+        default_planar_visualization_state, VisualizationOverrideState, VisualizationScopeKind,
+    };
 
     fn persisted_document(
         auto_contrast: bool,
@@ -2727,8 +2853,52 @@ mod planar_presentation_migration_tests {
     #[test]
     fn unknown_presentation_version_is_rejected_without_migration() {
         let document = serde_json::json!({});
-        assert!(restore_display_presentation(Some(DISPLAY_PRESENTATION_SCHEMA_VERSION + 1), &document)
-            .expect_err("future schema must not mutate state")
-            .contains("unsupported"));
+        assert!(restore_display_presentation(
+            Some(DISPLAY_PRESENTATION_SCHEMA_VERSION + 1),
+            &document
+        )
+        .expect_err("future schema must not mutate state")
+        .contains("unsupported"));
+    }
+
+    #[test]
+    fn persisted_airbox_alias_conflict_restores_to_canonical_identity_with_warning() {
+        let mut document = serde_json::to_value(DisplayPresentationState {
+            visualization_overrides: Some(vec![
+                VisualizationOverrideState {
+                    scope: VisualizationScopeKind::Object,
+                    scope_id: "object:__air__".to_string(),
+                    visible: Some(false),
+                    display: None,
+                    style: None,
+                    quantity: None,
+                },
+                VisualizationOverrideState {
+                    scope: VisualizationScopeKind::Airbox,
+                    scope_id: "airbox".to_string(),
+                    visible: Some(true),
+                    display: None,
+                    style: None,
+                    quantity: None,
+                },
+            ]),
+            ..DisplayPresentationState::default()
+        })
+        .expect("serialize persisted presentation");
+
+        let restored =
+            restore_display_presentation(Some(DISPLAY_PRESENTATION_SCHEMA_VERSION), &document)
+                .expect("restore persisted presentation");
+        let overrides = restored
+            .visualization_overrides
+            .expect("restored visualization overrides");
+        assert_eq!(overrides.len(), 1);
+        assert_eq!(overrides[0].scope, VisualizationScopeKind::Airbox);
+        assert_eq!(overrides[0].scope_id, "airbox");
+        assert_eq!(overrides[0].visible, Some(true));
+        assert!(restored
+            .visualization_restore_warnings
+            .iter()
+            .any(|warning| warning.contains("ambiguous_airbox_ordering")));
     }
 }

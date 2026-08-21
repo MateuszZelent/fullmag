@@ -1,21 +1,7 @@
-export type SolverLifecycle =
-  | "awaiting_command"
-  | "bootstrapping"
-  | "breaking"
-  | "cancelled"
-  | "closing"
-  | "completed"
-  | "failed"
-  | "materializing"
-  | "materializing_script"
-  | "paused"
-  | "pending"
-  | "running"
-  | "unknown"
-  | "waiting_for_compute";
+export type SolverLifecycle = string;
 
 export type SessionResourceLifecycle = "active" | "tombstoned";
-export type SessionConnectivity = "connected" | "disconnected";
+export type SessionConnectivity = "connected" | "degraded" | "disconnected";
 export type SessionCommandability = "allowed" | "forbidden" | "read_only";
 
 export interface SessionLifecycleContract {

@@ -5872,6 +5872,7 @@ mod tests {
             geometry: "cell".to_string(),
         }];
         problem.magnets = vec![fullmag_ir::MagnetIR {
+            object_id: Some("cell".to_string()),
             name: "cell".to_string(),
             region: "cell".to_string(),
             material: "Py".to_string(),
@@ -6500,6 +6501,7 @@ mod tests {
             fe_order: 1,
             hmax: 1.0,
             initial_magnetization: vec![[1.0, 0.0, 0.0]; 5],
+            frozen_spins: None,
             material: fullmag_ir::MaterialIR {
                 name: "mat".to_string(),
                 saturation_magnetisation: 1.0,

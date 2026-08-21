@@ -356,6 +356,21 @@
         ],
         "type": "object"
       },
+      "ApiErrorDiagnosticResponse": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
       "ApiErrorResponse": {
         "properties": {
           "capability_reason": {
@@ -366,6 +381,15 @@
           },
           "code": {
             "type": "string"
+          },
+          "diagnostics": {
+            "items": {
+              "$ref": "#/components/schemas/ApiErrorDiagnosticResponse"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "error": {
             "type": "string"
@@ -452,6 +476,14 @@
         "oneOf": [
           {
             "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "kind": {
                 "enum": [
                   "replace_scene"
@@ -2258,6 +2290,45 @@
         ],
         "type": "string"
       },
+      "ConstraintActivationSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "all_stages"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "stage_ids"
+                ],
+                "type": "string"
+              },
+              "stage_ids": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "stage_ids",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "CouplingCreateRequest": {
         "properties": {
           "base_revision": {
@@ -3593,6 +3664,13 @@
         ],
         "type": "object"
       },
+      "EmptySelectionPolicySchema": {
+        "enum": [
+          "error",
+          "allow_noop"
+        ],
+        "type": "string"
+      },
       "EnergySummary": {
         "properties": {
           "anisotropy": {
@@ -4907,6 +4985,60 @@
         ],
         "type": "object"
       },
+      "FieldCarrierDescriptor": {
+        "properties": {
+          "carrier_fingerprint": {
+            "type": "string"
+          },
+          "carrier_id": {
+            "type": "string"
+          },
+          "components": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "indexing": {
+            "type": "string"
+          },
+          "payload_state": {
+            "$ref": "#/components/schemas/FieldPayloadState"
+          },
+          "payload_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "description": "Compatibility projection of `scope_kind` for existing clients.",
+            "type": "string"
+          },
+          "scope_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope_kind": {
+            "type": "string"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "carrier_id",
+          "carrier_fingerprint",
+          "scope",
+          "scope_kind",
+          "components",
+          "indexing",
+          "view",
+          "payload_state"
+        ],
+        "type": "object"
+      },
       "FieldCatalog": {
         "properties": {
           "domain_generation_id": {
@@ -4994,6 +5126,17 @@
           },
           "quantity_id": {
             "type": "string"
+          },
+          "resolved_capability": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResolvedQuantityCapability",
+                "description": "Same runner-owned capability resource returned by the quantity catalog."
+              }
+            ]
           },
           "source_revision": {
             "format": "int64",
@@ -5461,8 +5604,29 @@
           "observation_frame": {
             "$ref": "#/components/schemas/AcceptedObservationFrameRef"
           },
+          "publication_bundle": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FieldPublicationBundle"
+              }
+            ]
+          },
           "quantity_id": {
             "type": "string"
+          },
+          "resolved_capability": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResolvedQuantityCapability",
+                "description": "Same runner-owned capability resource returned by the quantity catalog."
+              }
+            ]
           },
           "source_revision": {
             "format": "int64",
@@ -5522,6 +5686,14 @@
           "state"
         ],
         "type": "object"
+      },
+      "FieldPayloadState": {
+        "enum": [
+          "current",
+          "legacy_unverified",
+          "unmaterialized"
+        ],
+        "type": "string"
       },
       "FieldProjectionMaskDescriptor": {
         "properties": {
@@ -5796,6 +5968,106 @@
           "normal_coord",
           "value",
           "measure"
+        ],
+        "type": "object"
+      },
+      "FieldPublicationBinding": {
+        "properties": {
+          "carrier_fingerprint": {
+            "type": "string"
+          },
+          "carrier_id": {
+            "type": "string"
+          },
+          "component": {
+            "type": "string"
+          },
+          "quantity_id": {
+            "type": "string"
+          },
+          "scope_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope_kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "quantity_id",
+          "component",
+          "scope_kind",
+          "carrier_id",
+          "carrier_fingerprint"
+        ],
+        "type": "object"
+      },
+      "FieldPublicationBundle": {
+        "description": "Atomic identity envelope for one field response. A consumer must accept or\nreject the whole bundle; individual revision or carrier members are not a\nvalid publication on their own.",
+        "properties": {
+          "domain_generation_id": {
+            "type": "string"
+          },
+          "field": {
+            "$ref": "#/components/schemas/FieldPublicationBinding"
+          },
+          "observation_frame": {
+            "$ref": "#/components/schemas/AcceptedObservationFrameRef"
+          },
+          "publication_id": {
+            "type": "string"
+          },
+          "responses": {
+            "$ref": "#/components/schemas/FieldPublicationResponseRevisions"
+          },
+          "topology_hash": {
+            "type": "string"
+          },
+          "topology_revision": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "publication_id",
+          "observation_frame",
+          "responses",
+          "domain_generation_id",
+          "topology_revision",
+          "topology_hash",
+          "field"
+        ],
+        "type": "object"
+      },
+      "FieldPublicationResponseRevisions": {
+        "properties": {
+          "field_catalog_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fields_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scalars_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "topology_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fields_revision",
+          "scalars_revision",
+          "field_catalog_revision",
+          "topology_revision"
         ],
         "type": "object"
       },
@@ -7413,6 +7685,377 @@
           "mode_3d_overlay",
           "response_sweep_chart",
           "response_field_3d_overlay"
+        ],
+        "type": "object"
+      },
+      "FrozenReferencePolicySchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "capture_current_at_activation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "initial_state"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "asset_id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "explicit_field_asset"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "asset_id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "FrozenSpinsCollectionResource": {
+        "properties": {
+          "count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "definitions": {
+            "items": {
+              "$ref": "#/components/schemas/FrozenSpinsSchema"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "count",
+          "definitions"
+        ],
+        "type": "object"
+      },
+      "FrozenSpinsDefinitionResource": {
+        "properties": {
+          "definition": {
+            "$ref": "#/components/schemas/FrozenSpinsSchema"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "definition"
+        ],
+        "type": "object"
+      },
+      "FrozenSpinsDeleteRequest": {
+        "properties": {
+          "expected_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_revision"
+        ],
+        "type": "object"
+      },
+      "FrozenSpinsMutationRequest": {
+        "properties": {
+          "definition": {
+            "$ref": "#/components/schemas/FrozenSpinsSchema"
+          },
+          "expected_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "definition"
+        ],
+        "type": "object"
+      },
+      "FrozenSpinsPreviewRequest": {
+        "properties": {
+          "expected_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "expected_source_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "expected_topology_fingerprint": {
+            "type": "string"
+          },
+          "selector": {
+            "$ref": "#/components/schemas/SelectionExprSchema"
+          },
+          "stage_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target_object_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "expected_source_state_revision",
+          "expected_topology_fingerprint",
+          "target_object_id",
+          "selector"
+        ],
+        "type": "object"
+      },
+      "FrozenSpinsPreviewResponse": {
+        "properties": {
+          "bounds_m": {
+            "items": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "current": {
+            "type": "boolean"
+          },
+          "fraction": {
+            "format": "double",
+            "type": "number"
+          },
+          "free_dof_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "frozen_dof_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mask_resource": {
+            "type": "string"
+          },
+          "mask_sha256": {
+            "type": "string"
+          },
+          "preview_id": {
+            "type": "string"
+          },
+          "requested": {
+            "$ref": "#/components/schemas/FrozenSpinsRequestedIntent"
+          },
+          "resolved": {
+            "$ref": "#/components/schemas/FrozenSpinsResolvedPlanSummary"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/FrozenSpinsWarning"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "preview_id",
+          "revision",
+          "current",
+          "frozen_dof_count",
+          "free_dof_count",
+          "fraction",
+          "mask_sha256",
+          "warnings",
+          "mask_resource",
+          "requested",
+          "resolved"
+        ],
+        "type": "object"
+      },
+      "FrozenSpinsRequestedIntent": {
+        "properties": {
+          "selector_sha256": {
+            "type": "string"
+          },
+          "stage_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target_object_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_object_id",
+          "selector_sha256"
+        ],
+        "type": "object"
+      },
+      "FrozenSpinsResolvedPlanSummary": {
+        "properties": {
+          "all_active_dofs_frozen": {
+            "type": "boolean"
+          },
+          "constraint_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "effective_selector_sha256": {
+            "type": "string"
+          },
+          "evaluator_id": {
+            "type": "string"
+          },
+          "qualification": {
+            "type": "string"
+          },
+          "resolved_reference_sha256": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "source_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "topology_fingerprint": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "evaluator_id",
+          "constraint_ids",
+          "topology_fingerprint",
+          "effective_selector_sha256",
+          "resolved_reference_sha256",
+          "all_active_dofs_frozen",
+          "qualification"
+        ],
+        "type": "object"
+      },
+      "FrozenSpinsSchema": {
+        "properties": {
+          "activation": {
+            "$ref": "#/components/schemas/ConstraintActivationSchema"
+          },
+          "empty_selection": {
+            "$ref": "#/components/schemas/EmptySelectionPolicySchema"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "inactive_selection": {
+            "$ref": "#/components/schemas/InactiveSelectionPolicySchema"
+          },
+          "membership": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SelectionMembershipPolicySchema"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "reference": {
+            "$ref": "#/components/schemas/FrozenReferencePolicySchema"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "selector": {
+            "$ref": "#/components/schemas/SelectionExprSchema"
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "name",
+          "selector"
+        ],
+        "type": "object"
+      },
+      "FrozenSpinsWarning": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
         ],
         "type": "object"
       },
@@ -9951,6 +10594,13 @@
         ],
         "type": "object"
       },
+      "InactiveSelectionPolicySchema": {
+        "enum": [
+          "warn_and_intersect",
+          "error"
+        ],
+        "type": "string"
+      },
       "KnownSceneCurrentTransport": {
         "properties": {
           "boundaries": {
@@ -10675,6 +11325,10 @@
             "$ref": "#/components/schemas/EnergySummary",
             "description": "Thin latest energy summary for status surfaces. Energy samples/history are owned by `simulation/solver/energies/*`."
           },
+          "lifecycle": {
+            "$ref": "#/components/schemas/SessionLifecycleSummary",
+            "description": "Independent solver, session-resource, connectivity, and commandability\nstate. Consumers must not derive commandability from solver state."
+          },
           "metrics": {
             "$ref": "#/components/schemas/MetricsSummary",
             "description": "Lightweight runtime metrics for status surfaces. Detailed logs/diagnostics live under `diagnostics/*`."
@@ -10711,6 +11365,7 @@
           "runtime_bundle_version",
           "session",
           "solver",
+          "lifecycle",
           "display",
           "domain",
           "resources",
@@ -10765,6 +11420,31 @@
           "asset"
         ],
         "type": "object"
+      },
+      "MagnetizationConstraintSchema": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FrozenSpinsSchema"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "frozen_spins"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        ]
       },
       "MaterialParameterFieldDataListResource": {
         "properties": {
@@ -17132,6 +17812,17 @@
             "description": "Whether the active runtime exposes a legal data-plane request for this shape.",
             "type": "boolean"
           },
+          "resolved_capability": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResolvedQuantityCapability",
+                "description": "Runner-resolved provider/request/materialization/render/publication truth."
+              }
+            ]
+          },
           "scalar_metric_key": {
             "type": [
               "string",
@@ -17203,6 +17894,49 @@
           "quantities"
         ],
         "type": "object"
+      },
+      "QuantityMaterializationCapability": {
+        "enum": [
+          "not_applicable",
+          "unmaterialized",
+          "pending",
+          "materialized",
+          "legacy_unverified",
+          "unavailable"
+        ],
+        "type": "string"
+      },
+      "QuantityProviderCapability": {
+        "enum": [
+          "available",
+          "unavailable"
+        ],
+        "type": "string"
+      },
+      "QuantityPublicationCapability": {
+        "enum": [
+          "interactive",
+          "export_only",
+          "hidden"
+        ],
+        "type": "string"
+      },
+      "QuantityRenderCapability": {
+        "enum": [
+          "renderable",
+          "unsupported_shape",
+          "unavailable"
+        ],
+        "type": "string"
+      },
+      "QuantityRequestCapability": {
+        "enum": [
+          "field_vector",
+          "scalar_resource",
+          "unsupported_shape",
+          "unavailable"
+        ],
+        "type": "string"
       },
       "QuantityVisualizationPatch": {
         "properties": {
@@ -18189,6 +18923,62 @@
           "fallback_engine",
           "reason",
           "message"
+        ],
+        "type": "object"
+      },
+      "ResolvedQuantityCapability": {
+        "properties": {
+          "carriers": {
+            "items": {
+              "$ref": "#/components/schemas/FieldCarrierDescriptor"
+            },
+            "type": "array"
+          },
+          "lane": {
+            "type": "string"
+          },
+          "materialization": {
+            "$ref": "#/components/schemas/QuantityMaterializationCapability"
+          },
+          "precision": {
+            "type": "string"
+          },
+          "provider": {
+            "$ref": "#/components/schemas/QuantityProviderCapability"
+          },
+          "publication": {
+            "$ref": "#/components/schemas/QuantityPublicationCapability"
+          },
+          "quantity_id": {
+            "type": "string"
+          },
+          "reason_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "render": {
+            "$ref": "#/components/schemas/QuantityRenderCapability"
+          },
+          "request": {
+            "$ref": "#/components/schemas/QuantityRequestCapability"
+          },
+          "scope": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "quantity_id",
+          "provider",
+          "request",
+          "materialization",
+          "render",
+          "publication",
+          "scope",
+          "lane",
+          "precision",
+          "carriers"
         ],
         "type": "object"
       },
@@ -20715,6 +21505,12 @@
             },
             "type": "array"
           },
+          "magnetization_constraints": {
+            "items": {
+              "$ref": "#/components/schemas/MagnetizationConstraintSchema"
+            },
+            "type": "array"
+          },
           "materials": {
             "items": {
               "$ref": "#/components/schemas/SceneMaterialResource"
@@ -20765,6 +21561,12 @@
               "integer",
               "null"
             ]
+          },
+          "selections": {
+            "items": {
+              "$ref": "#/components/schemas/SelectionDefinitionSchema"
+            },
+            "type": "array"
           },
           "spin_torques": {
             "items": {
@@ -21712,6 +22514,918 @@
         ],
         "type": "object"
       },
+      "SelectionBoundaryMembershipSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "absolute_tolerance_m": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "inclusive"
+                ],
+                "type": "string"
+              },
+              "relative_tolerance": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "absolute_tolerance_m",
+              "relative_tolerance",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "absolute_tolerance_m": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "exclusive"
+                ],
+                "type": "string"
+              },
+              "relative_tolerance": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "absolute_tolerance_m",
+              "relative_tolerance",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SelectionCartesianComponentSchema": {
+        "enum": [
+          "x",
+          "y",
+          "z"
+        ],
+        "type": "string"
+      },
+      "SelectionClosedIntervalSchema": {
+        "enum": [
+          "none",
+          "left",
+          "right",
+          "both"
+        ],
+        "type": "string"
+      },
+      "SelectionComparisonOpSchema": {
+        "enum": [
+          "lt",
+          "le",
+          "gt",
+          "ge"
+        ],
+        "type": "string"
+      },
+      "SelectionComparisonToleranceSchema": {
+        "properties": {
+          "atol": {
+            "format": "double",
+            "type": "number"
+          },
+          "rtol": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "atol",
+          "rtol"
+        ],
+        "type": "object"
+      },
+      "SelectionDefinitionSchema": {
+        "properties": {
+          "expression": {
+            "$ref": "#/components/schemas/SelectionExprSchema"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "expression"
+        ],
+        "type": "object"
+      },
+      "SelectionExprSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "all_magnetic"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "in_object"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "in_region"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              },
+              "region_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "region_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "boundary": {
+                "$ref": "#/components/schemas/SelectionBoundaryMembershipSchema"
+              },
+              "frame": {
+                "$ref": "#/components/schemas/SelectionFrameSchema"
+              },
+              "geometry": {
+                "$ref": "#/components/schemas/SelectionGeometryPredicateSchema"
+              },
+              "kind": {
+                "enum": [
+                  "inside_geometry"
+                ],
+                "type": "string"
+              },
+              "sampling": {
+                "$ref": "#/components/schemas/SelectionSamplingSchema"
+              }
+            },
+            "required": [
+              "geometry",
+              "frame",
+              "sampling",
+              "boundary",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "compare"
+                ],
+                "type": "string"
+              },
+              "lhs": {
+                "$ref": "#/components/schemas/SelectionScalarExprSchema"
+              },
+              "op": {
+                "$ref": "#/components/schemas/SelectionComparisonOpSchema"
+              },
+              "rhs": {
+                "$ref": "#/components/schemas/SelectionScalarExprSchema"
+              },
+              "tolerance": {
+                "$ref": "#/components/schemas/SelectionComparisonToleranceSchema"
+              }
+            },
+            "required": [
+              "lhs",
+              "op",
+              "rhs",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "atol": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "approx"
+                ],
+                "type": "string"
+              },
+              "rtol": {
+                "format": "double",
+                "type": "number"
+              },
+              "target": {
+                "$ref": "#/components/schemas/SelectionScalarExprSchema"
+              },
+              "value": {
+                "$ref": "#/components/schemas/SelectionScalarExprSchema"
+              }
+            },
+            "required": [
+              "value",
+              "target",
+              "atol",
+              "rtol",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "closed": {
+                "$ref": "#/components/schemas/SelectionClosedIntervalSchema"
+              },
+              "kind": {
+                "enum": [
+                  "between"
+                ],
+                "type": "string"
+              },
+              "lower": {
+                "format": "double",
+                "type": "number"
+              },
+              "upper": {
+                "format": "double",
+                "type": "number"
+              },
+              "value": {
+                "$ref": "#/components/schemas/SelectionScalarExprSchema"
+              }
+            },
+            "required": [
+              "value",
+              "lower",
+              "upper",
+              "closed",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "expressions": {
+                "items": {
+                  "$ref": "#/components/schemas/SelectionExprSchema"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "and"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "expressions",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "expressions": {
+                "items": {
+                  "$ref": "#/components/schemas/SelectionExprSchema"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "or"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "expressions",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "expressions": {
+                "items": {
+                  "$ref": "#/components/schemas/SelectionExprSchema"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "xor"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "expressions",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "expression": {
+                "$ref": "#/components/schemas/SelectionExprSchema"
+              },
+              "kind": {
+                "enum": [
+                  "not"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "expression",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "ref"
+                ],
+                "type": "string"
+              },
+              "selection_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "selection_id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SelectionFrameSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "world"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "object"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SelectionGeometryPredicateSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "center_m": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "box"
+                ],
+                "type": "string"
+              },
+              "size_m": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "center_m",
+              "size_m",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "axis": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "center_m": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "height_m": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "cylinder"
+                ],
+                "type": "string"
+              },
+              "radius_m": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "center_m",
+              "axis",
+              "radius_m",
+              "height_m",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "center_m": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "sphere"
+                ],
+                "type": "string"
+              },
+              "radius_m": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "center_m",
+              "radius_m",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "center_m": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "ellipsoid"
+                ],
+                "type": "string"
+              },
+              "radii_m": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "center_m",
+              "radii_m",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "a": {
+                "$ref": "#/components/schemas/SelectionGeometryPredicateSchema"
+              },
+              "b": {
+                "$ref": "#/components/schemas/SelectionGeometryPredicateSchema"
+              },
+              "kind": {
+                "enum": [
+                  "union"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "a",
+              "b",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "a": {
+                "$ref": "#/components/schemas/SelectionGeometryPredicateSchema"
+              },
+              "b": {
+                "$ref": "#/components/schemas/SelectionGeometryPredicateSchema"
+              },
+              "kind": {
+                "enum": [
+                  "intersection"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "a",
+              "b",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "base": {
+                "$ref": "#/components/schemas/SelectionGeometryPredicateSchema"
+              },
+              "kind": {
+                "enum": [
+                  "difference"
+                ],
+                "type": "string"
+              },
+              "tool": {
+                "$ref": "#/components/schemas/SelectionGeometryPredicateSchema"
+              }
+            },
+            "required": [
+              "base",
+              "tool",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "a": {
+                "$ref": "#/components/schemas/SelectionGeometryPredicateSchema"
+              },
+              "b": {
+                "$ref": "#/components/schemas/SelectionGeometryPredicateSchema"
+              },
+              "kind": {
+                "enum": [
+                  "xor"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "a",
+              "b",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "domain": {
+                "$ref": "#/components/schemas/SelectionGeometryPredicateSchema"
+              },
+              "geometry": {
+                "$ref": "#/components/schemas/SelectionGeometryPredicateSchema"
+              },
+              "kind": {
+                "enum": [
+                  "complement"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "geometry",
+              "domain",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "geometry": {
+                "$ref": "#/components/schemas/SelectionGeometryPredicateSchema"
+              },
+              "kind": {
+                "enum": [
+                  "affine"
+                ],
+                "type": "string"
+              },
+              "pivot_m": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "rotation_xyzw": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "scale": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "translation_m": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "geometry",
+              "translation_m",
+              "rotation_xyzw",
+              "scale",
+              "pivot_m",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "asset_id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "imported_solid"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "asset_id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SelectionMembershipPolicySchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "static"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "snapshot_at_activation"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SelectionSamplingSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "dof_point"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SelectionScalarExprSchema": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "constant"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "value",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "component": {
+                "$ref": "#/components/schemas/SelectionCartesianComponentSchema"
+              },
+              "frame": {
+                "$ref": "#/components/schemas/SelectionFrameSchema"
+              },
+              "kind": {
+                "enum": [
+                  "coordinate"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "component",
+              "frame",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "component": {
+                "$ref": "#/components/schemas/SelectionCartesianComponentSchema"
+              },
+              "kind": {
+                "enum": [
+                  "magnetization_component"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "component",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "magnetization_norm"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "axis": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "magnetization_dot"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "axis",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "abs"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/SelectionScalarExprSchema"
+              }
+            },
+            "required": [
+              "value",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "SessionAssetImportResponse": {
         "properties": {
           "artifact_ref": {
@@ -21742,6 +23456,22 @@
           "summary"
         ],
         "type": "object"
+      },
+      "SessionCommandability": {
+        "enum": [
+          "allowed",
+          "forbidden",
+          "read_only"
+        ],
+        "type": "string"
+      },
+      "SessionConnectivity": {
+        "enum": [
+          "connected",
+          "degraded",
+          "disconnected"
+        ],
+        "type": "string"
       },
       "SessionExportRequest": {
         "properties": {
@@ -21935,6 +23665,36 @@
           "total_size_bytes"
         ],
         "type": "object"
+      },
+      "SessionLifecycleSummary": {
+        "properties": {
+          "commandability": {
+            "$ref": "#/components/schemas/SessionCommandability"
+          },
+          "connectivity": {
+            "$ref": "#/components/schemas/SessionConnectivity"
+          },
+          "session_resource": {
+            "$ref": "#/components/schemas/SessionResourceLifecycle"
+          },
+          "solver": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "solver",
+          "session_resource",
+          "connectivity",
+          "commandability"
+        ],
+        "type": "object"
+      },
+      "SessionResourceLifecycle": {
+        "enum": [
+          "active",
+          "tombstoned"
+        ],
+        "type": "string"
       },
       "SessionSummary": {
         "properties": {
@@ -36179,6 +37939,12 @@
                   "type": "integer"
                 }
               },
+              "x-fullmag-payload-state": {
+                "description": "current for metadata-complete FMVP v3; legacy_unverified for FMVP v2",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "x-fullmag-point-count": {
                 "description": "Decoded point count",
                 "schema": {
@@ -36264,6 +38030,181 @@
               }
             },
             "description": "Stale or mismatched domain generation/carrier revision, malformed or stale carrier, or inconsistent multilayer artifact and execution-plan identities"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/frozen-spins/resolved-masks/{mask_id}": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_frozen_spins_resolved_masks_mask_id",
+        "parameters": [
+          {
+            "description": "Resolved preview mask identity",
+            "in": "path",
+            "name": "mask_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Strong ETag from a previous mask response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional single byte range for the binary payload",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/vnd.fullmag.frozen-mask": {}
+            },
+            "description": "Versioned bit-packed frozen-spins mask",
+            "headers": {
+              "Accept-Ranges": {
+                "description": "Supported byte range unit",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Strong identity of the complete FMSK representation",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-mask-sha256": {
+                "description": "SHA-256 identity of the logical bit mask",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-source-state-revision": {
+                "description": "Magnetization source-state revision",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-topology-fingerprint": {
+                "description": "Resolved topology identity",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "206": {
+            "content": {
+              "application/vnd.fullmag.frozen-mask": {}
+            },
+            "description": "Partial frozen-spins mask payload",
+            "headers": {
+              "Accept-Ranges": {
+                "description": "Supported byte range unit",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Range": {
+                "description": "Returned byte interval",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Strong identity of the complete FMSK representation",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-mask-sha256": {
+                "description": "SHA-256 identity of the logical bit mask",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-source-state-revision": {
+                "description": "Magnetization source-state revision",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-topology-fingerprint": {
+                "description": "Resolved topology identity",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Mask not modified for the supplied ETag",
+            "headers": {
+              "ETag": {
+                "description": "Strong identity of the complete FMSK representation",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Resolved mask missing"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Mask source-state or topology is stale"
+          },
+          "416": {
+            "description": "Requested byte range is not satisfiable",
+            "headers": {
+              "Accept-Ranges": {
+                "description": "Supported byte range unit",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Range": {
+                "description": "Unsatisfied complete representation length",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "tags": [
@@ -38999,6 +40940,350 @@
         ]
       }
     },
+    "/v2/sessions/current/model/frozen-spins": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_frozen_spins",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrozenSpinsCollectionResource"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "post": {
+        "operationId": "model_post_sessions_current_model_frozen_spins",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FrozenSpinsMutationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrozenSpinsDefinitionResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Revision or identity conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Typed selector validation error"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/frozen-spins/previews": {
+      "post": {
+        "operationId": "model_post_sessions_current_model_frozen_spins_previews",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FrozenSpinsPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrozenSpinsPreviewResponse"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale source-state or topology revision"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Typed selector validation error"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/frozen-spins/previews/{preview_id}": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_frozen_spins_previews_preview_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "preview_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrozenSpinsPreviewResponse"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Preview missing"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Preview source-state or topology is stale"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/frozen-spins/{constraint_id}": {
+      "delete": {
+        "operationId": "model_delete_sessions_current_model_frozen_spins_constraint_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "constraint_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FrozenSpinsDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrozenSpinsCollectionResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Definition missing"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Revision conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request body"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "get": {
+        "operationId": "model_get_sessions_current_model_frozen_spins_constraint_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "constraint_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrozenSpinsDefinitionResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Definition missing"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "patch": {
+        "operationId": "model_patch_sessions_current_model_frozen_spins_constraint_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "constraint_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FrozenSpinsMutationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrozenSpinsDefinitionResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Definition missing"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Revision or identity conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Typed selector validation error"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
     "/v2/sessions/current/model/geometry/capabilities": {
       "get": {
         "operationId": "model_get_sessions_current_model_geometry_capabilities",
@@ -40416,6 +42701,9 @@
           },
           "404": {
             "description": "No active workspace"
+          },
+          "409": {
+            "description": "Scene revision conflict"
           }
         },
         "tags": [
@@ -40448,6 +42736,9 @@
           },
           "404": {
             "description": "No active workspace"
+          },
+          "409": {
+            "description": "Scene revision conflict"
           }
         },
         "tags": [
@@ -40946,6 +43237,9 @@
           },
           "404": {
             "description": "No active workspace"
+          },
+          "409": {
+            "description": "Scene revision conflict"
           }
         },
         "tags": [
@@ -42636,8 +44930,8 @@
     }
   ],
   "x-fullmag-build-identity": {
-    "built_at_utc": "2026-08-20T11:02:56Z",
-    "git_commit": "d9518082eaee2131c3e7160bd8ae952ed2f45899",
+    "built_at_utc": "2026-08-20T23:03:53Z",
+    "git_commit": "f79c65d43ef2ac550f89932b47940489f719acb0",
     "source_snapshot_sha256": "unknown",
     "worktree_state": "dirty"
   },

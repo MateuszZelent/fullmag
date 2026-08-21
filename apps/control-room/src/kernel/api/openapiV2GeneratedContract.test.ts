@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { createOpenApiV2Transport } from "./generated/openapi-v2-client";
+import { ControlRoomApi } from "./ControlRoomApi";
 import {
   assertOpenApiV2Path,
   openApiV2PathLiterals,
@@ -27,6 +28,7 @@ describe("generated OpenAPI v2 transport", () => {
       "x-fullmag-mesh-topology-hash": "string",
       "x-fullmag-n-comp": "integer",
       "x-fullmag-node-index-count": "integer",
+      "x-fullmag-payload-state": "string",
       "x-fullmag-point-count": "integer",
       "x-fullmag-quantity-id": "string",
       "x-fullmag-scope-id": "string",
@@ -204,6 +206,42 @@ describe("generated OpenAPI v2 transport", () => {
     expect(
       openApiV2PathLiterals.filter((path) => !promotedPaths.has(path)),
     ).toEqual([]);
+  });
+
+  it("promotes frozen-spins resources through canonical paths and the API facade", () => {
+    expect(apiPaths.MODEL_FROZEN_SPINS_PATH).toBe(
+      "/v2/sessions/current/model/frozen-spins",
+    );
+    expect(apiPaths.MODEL_FROZEN_SPIN_PATH).toBe(
+      "/v2/sessions/current/model/frozen-spins/{constraint_id}",
+    );
+    expect(apiPaths.MODEL_FROZEN_SPINS_PREVIEWS_PATH).toBe(
+      "/v2/sessions/current/model/frozen-spins/previews",
+    );
+    expect(apiPaths.MODEL_FROZEN_SPINS_PREVIEW_PATH).toBe(
+      "/v2/sessions/current/model/frozen-spins/previews/{preview_id}",
+    );
+    expect(apiPaths.DATA_FROZEN_SPINS_RESOLVED_MASK_PATH).toBe(
+      "/v2/sessions/current/data/frozen-spins/resolved-masks/{mask_id}",
+    );
+
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async () => new Response(null, { status: 204 }),
+    });
+    expect(api.model).toHaveProperty("frozenSpins");
+    expect(Object.keys((api.model as unknown as Record<string, unknown>).frozenSpins as object)).toEqual(
+      expect.arrayContaining([
+        "list",
+        "get",
+        "create",
+        "patch",
+        "delete",
+        "createPreview",
+        "getPreview",
+        "resolvedMask",
+      ]),
+    );
   });
 
   it("keeps structured-current closure authoring closed, typed, and region-scoped", () => {

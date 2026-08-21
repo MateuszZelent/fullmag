@@ -1,6 +1,156 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QuantityProviderCapability {
+    Available,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QuantityRequestCapability {
+    FieldVector,
+    ScalarResource,
+    UnsupportedShape,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QuantityMaterializationCapability {
+    NotApplicable,
+    Unmaterialized,
+    Pending,
+    Materialized,
+    LegacyUnverified,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QuantityRenderCapability {
+    Renderable,
+    UnsupportedShape,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QuantityPublicationCapability {
+    Interactive,
+    ExportOnly,
+    Hidden,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldPayloadState {
+    Current,
+    LegacyUnverified,
+    Unmaterialized,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+pub struct FieldCarrierDescriptor {
+    pub carrier_id: String,
+    pub carrier_fingerprint: String,
+    /// Compatibility projection of `scope_kind` for existing clients.
+    pub scope: String,
+    pub scope_kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_id: Option<String>,
+    pub components: u8,
+    pub indexing: String,
+    pub view: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload_version: Option<String>,
+    pub payload_state: FieldPayloadState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+pub struct ResolvedQuantityCapability {
+    pub quantity_id: String,
+    pub provider: QuantityProviderCapability,
+    pub request: QuantityRequestCapability,
+    pub materialization: QuantityMaterializationCapability,
+    pub render: QuantityRenderCapability,
+    pub publication: QuantityPublicationCapability,
+    pub scope: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
+    pub lane: String,
+    pub precision: String,
+    pub carriers: Vec<FieldCarrierDescriptor>,
+}
+
+macro_rules! mirror_enum_from_runner {
+    ($runner:ty, $api:ty, {$($variant:ident),+ $(,)?}) => {
+        impl From<$runner> for $api {
+            fn from(value: $runner) -> Self {
+                match value {
+                    $(<$runner>::$variant => <$api>::$variant,)+
+                }
+            }
+        }
+    };
+}
+
+mirror_enum_from_runner!(fullmag_runner::QuantityProviderCapability, QuantityProviderCapability, {
+    Available, Unavailable
+});
+mirror_enum_from_runner!(fullmag_runner::QuantityRequestCapability, QuantityRequestCapability, {
+    FieldVector, ScalarResource, UnsupportedShape, Unavailable
+});
+mirror_enum_from_runner!(fullmag_runner::QuantityMaterializationCapability, QuantityMaterializationCapability, {
+    NotApplicable, Unmaterialized, Pending, Materialized, LegacyUnverified, Unavailable
+});
+mirror_enum_from_runner!(fullmag_runner::QuantityRenderCapability, QuantityRenderCapability, {
+    Renderable, UnsupportedShape, Unavailable
+});
+mirror_enum_from_runner!(fullmag_runner::QuantityPublicationCapability, QuantityPublicationCapability, {
+    Interactive, ExportOnly, Hidden
+});
+mirror_enum_from_runner!(fullmag_runner::FieldPayloadState, FieldPayloadState, {
+    Current, LegacyUnverified, Unmaterialized
+});
+
+impl From<fullmag_runner::FieldCarrierDescriptor> for FieldCarrierDescriptor {
+    fn from(value: fullmag_runner::FieldCarrierDescriptor) -> Self {
+        Self {
+            carrier_id: value.carrier_id,
+            carrier_fingerprint: value.carrier_fingerprint,
+            scope: value.scope,
+            scope_kind: value.scope_kind,
+            scope_id: value.scope_id,
+            components: value.components,
+            indexing: value.indexing,
+            view: value.view,
+            payload_version: value.payload_version,
+            payload_state: value.payload_state.into(),
+        }
+    }
+}
+
+impl From<fullmag_runner::ResolvedQuantityCapability> for ResolvedQuantityCapability {
+    fn from(value: fullmag_runner::ResolvedQuantityCapability) -> Self {
+        Self {
+            quantity_id: value.quantity_id,
+            provider: value.provider.into(),
+            request: value.request.into(),
+            materialization: value.materialization.into(),
+            render: value.render.into(),
+            publication: value.publication.into(),
+            scope: value.scope,
+            reason_code: value.reason_code,
+            lane: value.lane,
+            precision: value.precision,
+            carriers: value.carriers.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct QuantityCatalogEntry {
     pub id: String,
@@ -34,6 +184,9 @@ pub struct QuantityCatalogEntry {
     pub materialization_state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub materialization_reason_code: Option<String>,
+    /// Runner-resolved provider/request/materialization/render/publication truth.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_capability: Option<ResolvedQuantityCapability>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quick_access_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -75,6 +228,7 @@ impl From<fullmag_quantities::QuantityDescriptorWire> for QuantityCatalogEntry {
             materializable: false,
             materialization_state: "unmaterialized".to_string(),
             materialization_reason_code: None,
+            resolved_capability: None,
             quick_access_label: value.quick_access_label,
             scalar_metric_key: value.scalar_metric_key,
         }

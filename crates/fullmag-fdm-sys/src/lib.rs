@@ -15,6 +15,8 @@ use std::os::raw::c_char;
 pub const FULLMAG_FDM_MAX_EXCHANGE_REGIONS: usize = 256;
 pub const FULLMAG_FDM_MAX_REGION_ID: u32 = (FULLMAG_FDM_MAX_EXCHANGE_REGIONS - 1) as u32;
 pub const FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V1: u32 = 1;
+pub const FULLMAG_FDM_FROZEN_SPINS_ABI_V1: u32 = 1;
+pub const FULLMAG_FDM_CAPABILITY_FROZEN_SPINS_V1: u64 = 1_u64 << 0;
 
 // ── Return codes ──
 
@@ -436,6 +438,11 @@ pub struct fullmag_fdm_plan_desc {
     pub adaptive_headroom: f64,
     pub stats_mode: fullmag_fdm_stats_mode,
     pub stats_stride: u32,
+    /// Nullable append-only frozen-spin mask/reference extension.
+    pub frozen_mask: *const u8,
+    pub frozen_mask_len: u64,
+    pub frozen_reference_xyz: *const f64,
+    pub frozen_reference_len: u64,
 }
 
 #[repr(C)]
@@ -1104,6 +1111,8 @@ pub struct fullmag_fdm_cpu_oersted_abi_layout_v1 {
 #[cfg_attr(not(feature = "build-native"), allow(dead_code))]
 extern "C" {
     pub fn fullmag_fdm_is_available() -> i32;
+
+    pub fn fullmag_fdm_capability_bits_v1() -> u64;
 
     pub fn fullmag_fdm_backend_create(
         plan: *const fullmag_fdm_plan_desc,
@@ -2014,6 +2023,24 @@ mod tests {
         assert_eq!(
             offset_of!(fullmag_fdm_llg_checkpoint_info_v1, adaptive_previous_error),
             88
+        );
+    }
+
+    #[test]
+    fn frozen_spins_v1_is_an_append_only_nullable_plan_extension() {
+        assert_eq!(FULLMAG_FDM_FROZEN_SPINS_ABI_V1, 1);
+        assert_eq!(FULLMAG_FDM_CAPABILITY_FROZEN_SPINS_V1, 1_u64 << 0);
+        assert!(
+            offset_of!(fullmag_fdm_plan_desc, frozen_mask)
+                > offset_of!(fullmag_fdm_plan_desc, stats_stride)
+        );
+        assert!(
+            offset_of!(fullmag_fdm_plan_desc, frozen_reference_xyz)
+                > offset_of!(fullmag_fdm_plan_desc, frozen_mask_len)
+        );
+        assert!(
+            offset_of!(fullmag_fdm_plan_desc, frozen_reference_len)
+                > offset_of!(fullmag_fdm_plan_desc, frozen_reference_xyz)
         );
     }
 }

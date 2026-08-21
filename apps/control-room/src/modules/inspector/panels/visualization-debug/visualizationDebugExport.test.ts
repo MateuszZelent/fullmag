@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { VisualizationDebugPanelModel } from "./VisualizationDebugPanelModel";
+import type {
+  VisualizationDebugLifecycleEvidence,
+  VisualizationDebugPanelModel,
+} from "./VisualizationDebugPanelModel";
 import {
   MAX_VISUALIZATION_DEBUG_EXPORT_BYTES,
   VISUALIZATION_DEBUG_EXPORT_MIME,
@@ -30,6 +33,9 @@ describe("visualization debug evidence export", () => {
     expect(result.document.schemaVersion).toBe(
       VISUALIZATION_DEBUG_EXPORT_SCHEMA_VERSION,
     );
+    expect(result.document.schemaVersion).toBe(
+      "fullmag.visualization-debug.v2",
+    );
     expect(result.document.exportedAtMs).toBe(1_234);
     expect(result.document.model.state).toBe("ready");
     expect(result.mime).toBe(VISUALIZATION_DEBUG_EXPORT_MIME);
@@ -37,6 +43,39 @@ describe("visualization debug evidence export", () => {
       MAX_VISUALIZATION_DEBUG_EXPORT_BYTES,
     );
     expect(JSON.parse(result.json)).toEqual(result.document);
+    expect(result.document.model).toMatchObject({
+      mutationEvidence: {
+        sync: {
+          mutation: {
+            requestId: "patch-response-42",
+            responseRevision: 42,
+            status: "succeeded",
+            targetId: "object:magnet",
+            transactionIds: ["visualization-42-1"],
+          },
+        },
+      },
+      viewports: [
+        {
+          carriers: [
+            {
+              observations: [
+                {
+                  carrier: {
+                    render: {
+                      adoption: {
+                        frameCommitId: "frame-1",
+                        surface: { adoptedResourceKey: expect.any(String) },
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
   });
 
   it("replaces oversized evidence with a bounded, explicit size-limit summary", () => {
@@ -47,6 +86,24 @@ describe("visualization debug evidence export", () => {
       selectionKind: "object.visualization.debug",
     };
     model.disposition = "blocked";
+    model.mutationEvidence = {
+      connectivity: { disrupted: false, status: "connected" },
+      lifecycle: testLifecycleEvidence(),
+      sync: {
+        lastRemoteRevision: 42,
+        mutation: {
+          attempts: 1,
+          error: null,
+          requestId: "patch-request-1",
+          responseRevision: 42,
+          status: "succeeded",
+          targetId: "airbox",
+          transactionIds: ["visualization-42-1"],
+        },
+        pendingTargetIds: [],
+        rejectedTargetIds: [],
+      },
+    };
     model.issues = Array.from({ length: 20 }, (_, index) => ({
       code: `issue-${index}`,
       evidence: [`index=${index}:${"evidence".repeat(20_000)}`],
@@ -142,6 +199,24 @@ describe("visualization debug evidence export", () => {
       },
     ];
     model.disposition = "blocked";
+    model.mutationEvidence = {
+      connectivity: { disrupted: false, status: "connected" },
+      lifecycle: testLifecycleEvidence(),
+      sync: {
+        lastRemoteRevision: 42,
+        mutation: {
+          attempts: 1,
+          error: null,
+          requestId: "patch-request-1",
+          responseRevision: 42,
+          status: "succeeded",
+          targetId: "airbox",
+          transactionIds: ["visualization-42-1"],
+        },
+        pendingTargetIds: [],
+        rejectedTargetIds: [],
+      },
+    };
     model.issues = [
       {
         code: "scope-id-mismatch",
@@ -160,6 +235,14 @@ describe("visualization debug evidence export", () => {
     expect(log).toContain("scope_kind=airbox");
     expect(log).toContain("Planned and decoded scope identifiers differ.");
     expect(log).toContain("ResourcePartialLoadError: One or more quantity field vectors are not ready.");
+    expect(log).toContain("Realtime connectivity\tconnected · disrupted=false");
+    expect(log).toContain("Session ID\tsession-17");
+    expect(log).toContain("Session solver lifecycle\trunning");
+    expect(log).toContain("Solver resource revision\t23");
+    expect(log).toContain("Solver runtime state\trunning");
+    expect(log).toContain('PATCH transaction IDs\t["visualization-42-1"]');
+    expect(log).toContain("PATCH response revision\t42");
+    expect(log).toContain("Adoption receipt/state");
     expect(new TextEncoder().encode(log).byteLength).toBeLessThanOrEqual(
       MAX_VISUALIZATION_DEBUG_EXPORT_BYTES,
     );
@@ -281,11 +364,69 @@ describe("visualization debug evidence export", () => {
   });
 });
 
+function testLifecycleEvidence(): VisualizationDebugLifecycleEvidence {
+  return {
+    session: {
+      lifecycle: {
+        commandability: "allowed",
+        connectivity: "connected",
+        session_resource: "active",
+        solver: "running",
+      },
+      resourceRevision: 17,
+      resourceStatus: "ready",
+      session: {
+        created_at: "2026-08-20T18:00:00Z",
+        name: "debug-session",
+        session_epoch: "epoch-17",
+        session_id: "session-17",
+        workspace_root: "/workspace",
+      },
+      solverSummary: { state: "running" },
+    },
+    solver: {
+      resourceRevision: 23,
+      resourceStatus: "ready",
+      status: {
+        can_accept_commands: false,
+        is_busy: true,
+        revision: 23,
+        run_id: "run-4",
+        runtime_state: "running",
+        runtime_status_code: "integrating",
+        runtime_status_kind: "active",
+        session_status: "running",
+        stage_kind: "relax",
+        warnings: [],
+      },
+    },
+    source: "http-v2-session-and-solver-resources",
+  };
+}
+
 function exportModel(resourceKey: string): VisualizationDebugPanelModel {
   return {
     disposition: "ready",
     fieldQueries: [],
     issues: [],
+    mutationEvidence: {
+      connectivity: { disrupted: false, status: "connected" },
+      lifecycle: testLifecycleEvidence(),
+      sync: {
+        lastRemoteRevision: 42,
+        mutation: {
+          attempts: 1,
+          error: null,
+          requestId: "patch-response-42",
+          responseRevision: 42,
+          status: "succeeded",
+          targetId: "object:magnet",
+          transactionIds: ["visualization-42-1"],
+        },
+        pendingTargetIds: [],
+        rejectedTargetIds: [],
+      },
+    },
     state: "ready",
     target: {
       id: "object:magnet",

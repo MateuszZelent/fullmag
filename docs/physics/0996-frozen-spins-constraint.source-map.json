@@ -67,7 +67,14 @@
     {"id": "source-study", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "study", "responsibility": "Bieżący stage-first root Python DSL."},
     {"id": "source-selection-ir", "path": "crates/fullmag-ir/src/selection.rs", "symbol": "canonical_selection_sha256", "responsibility": "Bieżący typowany i kanonicznie hashowany kontrakt selection_expr.v1 po stronie Rust."},
     {"id": "source-selection-python", "path": "packages/fullmag-py/src/fullmag/model/selection.py", "symbol": "class Selection", "responsibility": "Bieżący typowany kontrakt selection_expr.v1 po stronie Python DSL."},
-    {"id": "source-selection-hash", "path": "packages/fullmag-py/src/fullmag/model/selection.py", "symbol": "canonical_selection_sha256", "responsibility": "Bieżący kanoniczny, walidowany hash named selection i zależności."}
+    {"id": "source-selection-hash", "path": "packages/fullmag-py/src/fullmag/model/selection.py", "symbol": "canonical_selection_sha256", "responsibility": "Bieżący kanoniczny, walidowany hash named selection i zależności."},
+    {"id": "source-constraint-ir", "path": "crates/fullmag-ir/src/constraint.rs", "symbol": "frozen_spins", "responsibility": "Bieżący typed accessor wariantu MagnetizationConstraintIR::FrozenSpins po stronie Rust."},
+    {"id": "source-frozen-spins-ir", "path": "crates/fullmag-ir/src/constraint.rs", "symbol": "normalize_frozen_membership_defaults_in_problem_value", "responsibility": "Bieżąca normalizacja typed payloadu frozen_spins.v1 i membership względem named selections."},
+    {"id": "source-resolved-frozen-plan", "path": "crates/fullmag-ir/src/plan.rs", "symbol": "validate_intrinsic", "responsibility": "Bieżący resolved plan, certyfikat i fail-closed walidacja cache.", "evidence_status": "planner_implemented_runtime_unqualified"},
+    {"id": "source-fdm-frozen-compiler", "path": "crates/fullmag-plan/src/selection/fdm.rs", "symbol": "compile_fdm_frozen_spins", "responsibility": "Bieżąca plannerowa materializacja frozen-spins na środkach komórek FDM.", "evidence_status": "planner_implemented_execution_unqualified"},
+    {"id": "source-fem-frozen-compiler", "path": "crates/fullmag-plan/src/selection/fem.rs", "symbol": "compile_fem_frozen_spins", "responsibility": "Bieżąca plannerowa materializacja frozen-spins na magnetycznych true DOF FEM.", "evidence_status": "planner_implemented_execution_unqualified"},
+    {"id": "source-frozen-spins-python", "path": "packages/fullmag-py/src/fullmag/model/constraints.py", "symbol": "class FrozenSpins", "responsibility": "Bieżący publiczny typed FrozenSpins, walidacja i lowering Python do ProblemIR."},
+    {"id": "source-frozen-spins-stages", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyStagesBuilder", "responsibility": "Bieżące atomowe stage constraints sugar i top-level rejestracja aktywacji."}
   ],
   "public_api": {
     "parameters": [

@@ -1926,7 +1926,8 @@ mod tests {
         apply_python_progress_event, bootstrap_live_state, clear_cached_preview_fields,
         fem_mesh_payload_clone_count, full_field_materialization_request,
         ingest_preview_fields_from_update, live_api_publish_enabled, merge_detailed_mesh_workspace,
-        merge_pending_publish_payload, merge_preview_field_payloads, publish_pending_scalar_rows,
+        merge_pending_publish_payload, merge_preview_field_payloads,
+        publish_idle_liveness_heartbeat, publish_pending_scalar_rows,
         replace_cached_preview_fields, reset_fem_mesh_payload_clone_count,
         scalar_candidate_from_workspace_state, table_autosave_sample_due,
         upsert_cached_preview_field, CurrentLivePublisher, CurrentLiveScalarRow,
@@ -1947,6 +1948,33 @@ mod tests {
     fn headless_zero_api_port_disables_live_http_publication() {
         assert!(!live_api_publish_enabled(0));
         assert!(live_api_publish_enabled(8081));
+    }
+
+    #[test]
+    fn idle_liveness_tick_emits_empty_payload_without_scientific_frame() {
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let sink_observed = Arc::clone(&observed);
+        let sink: LivePublishSink = Arc::new(move |session_id, payload| {
+            sink_observed
+                .lock()
+                .expect("heartbeat observations lock")
+                .push((session_id.to_string(), payload.clone()));
+            Ok(())
+        });
+
+        publish_idle_liveness_heartbeat("awaiting-session", &sink)
+            .expect("idle heartbeat should publish");
+
+        let observations = observed.lock().expect("heartbeat observations lock");
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0].0, "awaiting-session");
+        let heartbeat = &observations[0].1;
+        assert!(heartbeat.session.is_none());
+        assert!(heartbeat.live_state.is_none());
+        assert!(heartbeat.latest_scalar_row.is_none());
+        assert!(heartbeat.latest_fields.is_none());
+        assert!(heartbeat.preview_fields.is_none());
+        assert!(heartbeat.fem_mesh.is_none());
     }
 
     #[test]
@@ -4985,10 +5013,21 @@ fn current_live_publisher_loop(
     full_sink: LivePublishSink,
     wake_rx: mpsc::Receiver<()>,
 ) {
+    const LIVENESS_HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
     let mut last_publish_at: Option<Instant> = None;
     let mut successful_publish_window = SuccessfulPublishWindow::default();
     let mut slow_publish_count: u64 = 0;
-    while wake_rx.recv().is_ok() {
+    loop {
+        match wake_rx.recv_timeout(LIVENESS_HEARTBEAT_INTERVAL) {
+            Ok(()) => {}
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if let Err(error) = publish_idle_liveness_heartbeat(&session_id, &delta_sink) {
+                    eprintln!("fullmag live liveness heartbeat warning: {error:#}");
+                }
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
         if !coalesce_delay.is_zero() {
             std::thread::sleep(coalesce_delay);
         }
@@ -5196,6 +5235,10 @@ fn current_live_publisher_loop(
             eprintln!("fullmag final live scalar sync warning: {error:#}");
         }
     }
+}
+
+fn publish_idle_liveness_heartbeat(session_id: &str, delta_sink: &LivePublishSink) -> Result<()> {
+    delta_sink(session_id, &CurrentLiveSnapshotPayload::default())
 }
 
 fn publish_pending_scalar_rows(

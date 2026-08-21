@@ -5,6 +5,7 @@ import { viewport3DVectorLayersEnabledFromBrowserConfig } from "@/kernel/browser
 import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry";
 import { recordVisualizationDebugPerformanceMetric } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
 import { type ThreeEvent, useThree } from "@react-three/fiber";
 import {
   useEffect,
@@ -992,6 +993,7 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
   onPointerOut,
   renderSettings,
   renderPlan,
+  sessionIdentity,
   surfaceColors,
   surfaceRef,
   tracker,
@@ -1007,6 +1009,7 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
   onPointerOut: () => void;
   renderSettings: VisualizationTargetSettings;
   renderPlan: Viewport3DTargetRenderPlan;
+  sessionIdentity?: SessionResourceIdentity | null;
   surfaceColors: ScalarColorBuffer | null;
   surfaceRef: RefObject<InstancedMesh | null>;
   tracker: Viewport3DResourceTracker;
@@ -1037,20 +1040,33 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
   );
   const lastAdoptedSurfaceRef = useRef<{
     fieldBufferId: string | null;
+    sessionIdentity: SessionResourceIdentity | null | undefined;
     scalarBuffer: ScalarColorBuffer;
   } | null>(null);
   const adoptionOwnerId = `fdm-cuboid-surface:${useId()}`;
   const recordSurfaceAdoption = useCallback(() => {
     if (!adoptionRegistry || !surfaceColors) return;
-    lastAdoptedSurfaceRef.current = { fieldBufferId, scalarBuffer: surfaceColors };
+    lastAdoptedSurfaceRef.current = {
+      fieldBufferId,
+      sessionIdentity,
+      scalarBuffer: surfaceColors,
+    };
     recordFdmCuboidSurfaceAdoption({
       carrierId,
       fieldBufferId,
       ownerId: adoptionOwnerId,
       registry: adoptionRegistry,
+      sessionIdentity,
       scalarBuffer: surfaceColors,
     });
-  }, [adoptionOwnerId, adoptionRegistry, carrierId, fieldBufferId, surfaceColors]);
+  }, [
+    adoptionOwnerId,
+    adoptionRegistry,
+    carrierId,
+    fieldBufferId,
+    sessionIdentity,
+    surfaceColors,
+  ]);
   useEffect(() => {
     if (!adoptionRegistry) return;
     const unregister = adoptionRegistry.registerCarrierAdoptionReplay(carrierId, () => {
@@ -1061,6 +1077,7 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
         fieldBufferId: adopted.fieldBufferId,
         ownerId: adoptionOwnerId,
         registry: adoptionRegistry,
+        sessionIdentity: adopted.sessionIdentity,
         scalarBuffer: adopted.scalarBuffer,
       });
     });
@@ -1356,6 +1373,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   onSelectRegion,
   regionOverlays,
   settings,
+  sessionIdentity,
   selectedObjectId,
   selectedRegionId,
   surfaceColors,
@@ -1401,6 +1419,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   selectedObjectId?: string | null;
   selectedRegionId?: string | null;
   settings: VisualizationTargetSettings;
+  sessionIdentity?: SessionResourceIdentity | null;
   surfaceColors: ScalarColorBuffer | null;
   tracker: Viewport3DResourceTracker;
   vectorColorMode: string;
@@ -1606,6 +1625,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
         glyphColorsOverride={vectorGlyphColors}
         materialProfile={materialProfile.glyphs}
         opacity={targetRenderPlan.vectors.opacity}
+        sessionIdentity={sessionIdentity}
         renderOnTop
         fieldBufferId={
           fieldVector
@@ -1701,6 +1721,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
           onPointerOut={handlePointerOut}
           renderSettings={renderSettings}
           renderPlan={targetRenderPlan}
+          sessionIdentity={sessionIdentity}
           surfaceColors={surfaceColors}
           surfaceRef={surfaceRef}
           tracker={tracker}
@@ -1727,12 +1748,14 @@ export function recordFdmCuboidSurfaceAdoption({
   fieldBufferId,
   ownerId,
   registry,
+  sessionIdentity,
   scalarBuffer,
 }: {
   carrierId?: string;
   fieldBufferId: string | null;
   ownerId?: string;
   registry: Viewport3DRenderAdoptionRegistry;
+  sessionIdentity?: SessionResourceIdentity | null;
   scalarBuffer: ScalarColorBuffer;
 }): Viewport3DRenderAdoptionIdentity {
   const adoption = fdmCuboidSurfaceAdoptionIdentity({
@@ -1748,6 +1771,7 @@ export function recordFdmCuboidSurfaceAdoption({
     fieldBufferId: adoption.fieldBufferId,
     ownerId,
     resourceKey: adoption.resourceKey,
+    sessionIdentity,
     scalarBufferKey: adoption.scalarBufferKey ?? "unknown",
   });
   return adoption;

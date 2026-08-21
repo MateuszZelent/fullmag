@@ -1444,6 +1444,8 @@ mod tests {
             universe: None,
             field_drives: crate::SceneFieldDrivesState::default(),
             monitors: crate::SceneMonitorState::default(),
+            selections: Vec::new(),
+            magnetization_constraints: Vec::new(),
             current_modules: SceneCurrentModulesState::default(),
             current_transports: Vec::new(),
             spin_transports: Vec::new(),

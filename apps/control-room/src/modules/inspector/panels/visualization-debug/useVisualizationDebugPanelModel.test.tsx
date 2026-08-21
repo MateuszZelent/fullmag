@@ -14,9 +14,11 @@ import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { KernelContext } from "@/kernel/KernelContext";
 import { LayoutController } from "@/kernel/layout/LayoutController";
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
+import { RealtimeConnectionController } from "@/kernel/realtime/RealtimeConnectionController";
 import type { SelectionRef } from "@/kernel/selection/selectionTypes";
 import type { KernelApi } from "@/kernel/types";
 import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
+import { VisualizationRegistrySyncController } from "@/kernel/visualization/VisualizationRegistrySyncController";
 import type { VisualizationDebugSnapshot } from "@/kernel/visualization/visualizationDebugTypes";
 
 import {
@@ -106,6 +108,8 @@ describe("useVisualizationDebugPanelModel", () => {
         subscribe: () => () => undefined,
       },
       visualizationDebug: controller,
+      visualizationSync: makeVisualizationSyncController(),
+      realtimeConnection: new RealtimeConnectionController(),
     } as unknown as KernelApi;
 
     const html = renderToStaticMarkup(
@@ -176,6 +180,10 @@ describe("useVisualizationDebugPanelModel", () => {
     expect(hookSource).toContain("VisualizationDebugPanelModelAdapter");
     expect(hookSource).not.toContain("createContext");
     expect(hookSource).not.toContain("Context.Provider");
+    expect(hookSource).toContain("useSessionStatusSelector");
+    expect(hookSource).toContain("useSolverStatusResource");
+    expect(hookSource).toContain("kernel.realtimeConnection");
+    expect(hookSource).toContain("kernel.visualizationSync");
   });
 
   it("isolates derived meta registries per adapter instance", () => {
@@ -437,6 +445,17 @@ describe("useVisualizationDebugPanelModel", () => {
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
       });
     }
+    for (
+      let index = 0;
+      index < 5 &&
+      observations.at(-1)?.mutationEvidence.lifecycle.solver.resourceStatus !==
+        "ready";
+      index += 1
+    ) {
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+    }
 
     expect(observations.at(-1)?.state).toBe("ready");
     expect(meta).toHaveBeenCalledTimes(1);
@@ -457,6 +476,19 @@ describe("useVisualizationDebugPanelModel", () => {
     expect(observation?.backendRenderComparison).toEqual({
       compatible: true,
       rangesMatch: true,
+    });
+    expect(latest.mutationEvidence.lifecycle).toMatchObject({
+      session: {
+        resourceRevision: 17,
+        resourceStatus: "ready",
+        session: { session_epoch: "epoch-17", session_id: "session-17" },
+      },
+      solver: {
+        resourceRevision: 23,
+        resourceStatus: "ready",
+        status: { run_id: "run-4", runtime_state: "running" },
+      },
+      source: "http-v2-session-and-solver-resources",
     });
 
     const emptySnapshot = mountedSnapshot();
@@ -685,6 +717,43 @@ function makeMountedKernel({
   return {
     api: {
       data: { fields: { meta } },
+      sessions: {
+        current: {
+          status: async () => ({
+            lifecycle: {
+              commandability: "allowed",
+              connectivity: "connected",
+              session_resource: "active",
+              solver: "running",
+            },
+            resources: { visualization_state_revision: 17 },
+            session: {
+              created_at: "2026-08-20T18:00:00Z",
+              name: "debug-session",
+              session_epoch: "epoch-17",
+              session_id: "session-17",
+              workspace_root: "/workspace",
+            },
+            solver: { state: "running" },
+          }),
+        },
+      },
+      simulation: {
+        solver: {
+          status: async () => ({
+            can_accept_commands: false,
+            is_busy: true,
+            revision: 23,
+            run_id: "run-4",
+            runtime_state: "running",
+            runtime_status_code: "integrating",
+            runtime_status_kind: "active",
+            session_status: "running",
+            stage_kind: "relax",
+            warnings: [],
+          }),
+        },
+      },
       visualization: {
         acks: async () => ({ entries: [], revision: 0 }),
       },
@@ -694,8 +763,20 @@ function makeMountedKernel({
     diagnostics: new RequestDiagnosticsController(),
     layout: new LayoutController(bus),
     resources,
+    realtimeConnection: new RealtimeConnectionController(),
     visualizationDebug: new VisualizationDebugController(),
+    visualizationSync: makeVisualizationSyncController(),
   } as unknown as KernelApi;
+}
+
+function makeVisualizationSyncController(): VisualizationRegistrySyncController {
+  return new VisualizationRegistrySyncController({
+    api: {
+      patch: async () => {
+        throw new Error("visualization PATCH is not used by this fixture");
+      },
+    },
+  });
 }
 
 function mountedSnapshot(

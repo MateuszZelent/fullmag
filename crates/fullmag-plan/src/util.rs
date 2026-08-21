@@ -216,11 +216,7 @@ pub fn generate_random_unit_vectors(seed: u64, count: usize) -> Vec<[f64; 3]> {
         let phi = unit_from_u64(phi_hash) * std::f64::consts::TAU;
         let cos_theta = unit_from_u64(cos_hash) * 2.0 - 1.0;
         let sin_theta = (1.0 - cos_theta * cos_theta).max(0.0).sqrt();
-        vectors.push([
-            sin_theta * phi.cos(),
-            sin_theta * phi.sin(),
-            cos_theta,
-        ]);
+        vectors.push([sin_theta * phi.cos(), sin_theta * phi.sin(), cos_theta]);
     }
     vectors
 }

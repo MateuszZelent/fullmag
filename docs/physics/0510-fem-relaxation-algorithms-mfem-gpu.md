@@ -1,7 +1,8 @@
 
 # Relaxation algorithms for FEM micromagnetics on MFEM/libCEED/hypre with GPU
 
-- Status: production-executable for LLG/PG-BB/NCG; TPI under development
+- Status: executable implementation paths for LLG/PG-BB/NCG; qualification
+  remains unvalidated; TPI under development
 - Owners: Fullmag core
 - Last updated: 2026-07-27
 - Related ADRs:
@@ -34,9 +35,11 @@ Current repo status relevant to this note:
   active term flags, precision, and LLG timing parameters,
 - the runner executes FEM relaxation through the maintained native FEM lanes,
 - `StudyIR::Relaxation` exists. `llg_overdamped`, `nonlinear_cg`, and
-  `projected_gradient_bb` are production-executable for FEM demag workloads
-  at `rtol<=1e-12`. PG-BB uses direct polarized Armijo increments and never
-  substitutes NCG silently.
+  `projected_gradient_bb` have executable FEM demag paths at
+  `rtol<=1e-12`; this source-level availability is not a production
+  qualification. PG-BB uses direct polarized Armijo increments and never
+  substitutes NCG silently. A fresh source-bound managed receipt is still
+  required before any lane is promoted.
   `tangent_plane_implicit` is a CPU/MFEM development capability only:
   strict mode and forced GPU reject it, while extended mode may resolve it to
   CPU/MFEM with explicit requested/resolved provenance,
@@ -45,7 +48,7 @@ Current repo status relevant to this note:
   `fullmag_fem_backend_relax_step` ABI, using
   tangent gradients, Armijo line search, sphere retraction, FEM lumped-mass
   inner products, and exchange-plus-mass preconditioned gradient directions
-  with serial MFEM CG as the production default. HyprePCG/BoomerAMG remains an
+  with serial MFEM CG as the current default. HyprePCG/BoomerAMG remains an
   explicit opt-in qualification path via
   `FULLMAG_FEM_DIRECT_MINIMIZER_PRECONDITIONER_SOLVER=hypre`,
 - native CPU/MFEM carries the development FEM
@@ -64,8 +67,9 @@ Current repo status relevant to this note:
   `pgbb.cpp` also owns the native GPU PG-BB preflight/step boundary reached
   from `run_backend_relaxation_step` when a GPU state is allocated. The CUDA
   branch contains the device-resident Armijo accepted-step loop and BB1/BB2
-  step-size update. Public capability advertises PG-BB on `fem_native_gpu`
-  including demag workloads at `rtol<=1e-12`. Runtime provenance keeps controlled compute scalar
+  step-size update. The native GPU path carries PG-BB on `fem_native_gpu`,
+  including demag workloads at `rtol<=1e-12`, subject to capability and
+  runtime gates. Runtime provenance keeps controlled compute scalar
   readbacks for Armijo/BB decisions distinct from rejected exchange hot-loop
   host sync.
 - native CUDA `nonlinear_cg` now lives under
@@ -436,7 +440,8 @@ fm.Relaxation(
 Backend-neutral user API; FE-specific solver/preconditioner knobs belong in
 execution hints or backend policy, not in the top-level public object.
 
-Current production-executable subset (FEM backend):
+Current executable subset (FEM backend; not production-qualified without a
+fresh source-bound managed receipt):
 
 - `algorithm = "llg_overdamped"`
 - `algorithm = "projected_gradient_bb"`
@@ -459,7 +464,7 @@ For FEM/MFEM/CUDA/hypre/libCEED runtime proof, host-side `cargo`, `cmake`, and
 direct native binaries are only smoke checks. Managed container-backed `just`
 recipes are the authoritative gate; use `just ensure-managed-fem-runtime` for
 runtime freshness and `just fem-gpu-headless ...` for executable GPU relaxation
-smoke coverage. The production relaxation smoke validator requires monotone
+smoke coverage. The managed relaxation smoke validator requires monotone
 `E_total`, finite final energy, valid magnetization norm defect, matching
 runtime provenance/qualification metadata, and at least `1.0e-3` relative
 energy decrease across the smoke trajectory. It also rejects runs where final
@@ -473,17 +478,19 @@ as audit evidence for a local verification run.
 Use `just verify-fem-relaxation-cpu-gpu-consistency-smoke` for the focused
 Box500 exchange-only CPU/GPU consistency slice. It exercises the existing FEM
 benchmark runner with a deterministic heun relaxation case across the active
-production algorithms `llg_overdamped`, `projected_gradient_bb`,
+active algorithms `llg_overdamped`, `projected_gradient_bb`,
 and `nonlinear_cg`. The smoke requires a separate CPU/GPU pair for each active
-production algorithm and intentionally excludes `tangent_plane_implicit`
+active algorithm and intentionally excludes `tangent_plane_implicit`
 because that method remains under development. It is a parity smoke, not a
 replacement for the broader benchmark matrix.
 Use `just verify-fem-relaxation-production-benchmark` for the broader managed
 container-backed interaction-matrix gate. It runs the deterministic Box500
 airbox CPU/GPU consistency preset across exchange, Zeeman, demag, anisotropy,
-DMI, and STT/Oersted scenario families for the current production algorithms.
-It requires per-algorithm CPU/GPU pairs for the active production algorithms
-and strict managed FEM runtime availability.
+DMI, and STT/Oersted scenario families for the current active algorithms.
+It requires per-algorithm CPU/GPU pairs for the active algorithms and strict
+managed FEM runtime availability. These contracts and smokes do not replace
+the FM-RELAX-017 source-bound receipt, mesh-refinement, repeatability,
+independent-oracle, and FP32 gates.
 The benchmark authoring path must preserve that same algorithm-specific
 contract: it passes `dynamics` only for `llg_overdamped` and constructs PGBB or
 NCG without `dynamics`. A matrix row rejected by this authoring validation has
@@ -935,8 +942,8 @@ lane with explicit provenance; forced GPU rejects with a clear diagnostic.
 - [x] FDM backend (`llg_overdamped`, `projected_gradient_bb`, `nonlinear_cg`)
 - [x] FEM backend (`llg_overdamped` on native CPU/MFEM and supported native GPU time-integration lanes)
 - [x] FEM backend (`projected_gradient_bb` and `nonlinear_cg` native mass-weighted minimizers, including demag at `rtol<=1e-12`)
-- [x] FEM backend (`projected_gradient_bb` and `nonlinear_cg` exchange-plus-mass preconditioned minimizers with serial MFEM CG as the production default and explicit Hypre/AMG opt-in for qualification)
-- [x] FEM PG-BB with demag production-qualified by direct polarized Armijo CPU/GPU interaction-matrix evidence
+- [x] FEM backend (`projected_gradient_bb` and `nonlinear_cg` exchange-plus-mass preconditioned minimizers with serial MFEM CG as the current default and explicit Hypre/AMG opt-in for qualification)
+- [ ] FEM PG-BB with demag source-bound managed qualification and direct polarized Armijo CPU/GPU evidence
 - [x] FEM NCG initial/restart routes share the term-complete direct-increment and representable-chord Armijo proof contract on CPU/GPU
 - [x] FEM backend (`tangent_plane_implicit` native CPU/MFEM tangent-plane solve with exchange, local anisotropy, Zeeman, DMI, and demag linear-response actions)
 - [x] FEM GPU backend (`projected_gradient_bb` native CUDA tangent-gradient, mass-metric reduction, normalized-retraction kernels, Armijo/BB step source, native preflight/step boundary, and runner availability)
@@ -944,9 +951,9 @@ lane with explicit provenance; forced GPU rejects with a clear diagnostic.
 - [ ] FEM backend (`tangent_plane_implicit` full GPU/libCEED device-resident tangent-plane solve; under development)
 - [ ] Hybrid backend
 - [x] Outputs / observables
-- [x] Targeted source-contract and managed runtime smoke coverage for current LLG/PG-BB/NCG production lanes
-- [x] Broader interaction-matrix CPU/GPU benchmark gate is wired for current LLG/PG-BB/NCG production lanes
-- [x] Broader interaction-matrix CPU/GPU benchmark pass for current LLG/PG-BB/NCG production lanes
+- [x] Targeted source-contract and managed runtime smoke coverage for current LLG/PG-BB/NCG executable lanes
+- [x] Broader interaction-matrix CPU/GPU benchmark gate is wired for current LLG/PG-BB/NCG executable lanes
+- [ ] Broader interaction-matrix CPU/GPU qualification pass with source-bound receipt
 - [ ] Extended benchmark campaign across mesh refinements, adaptive timesteps, and publication-scale physics cases
 - [x] Documentation (this note + `0500-fdm-relaxation-algorithms.md`)
 

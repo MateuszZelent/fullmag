@@ -91,6 +91,7 @@ import type { ModuleProps } from "@/kernel/types";
 import { useCrossSectionWorkspaceSelector } from "@/kernel/workspace/useCrossSectionWorkspace";
 import { useQuickChartWorkspaceSelector } from "@/kernel/workspace/useQuickChartWorkspace";
 import { usePlanarMonitorsResource } from "@/kernel/resources/planarMonitorResources";
+import { useFrozenSpinsCollectionResource } from "@/kernel/resources/frozenSpinsResources";
 import {
   meshPipelineStatusIsActive,
   normalizeMeshPipelineStatus,
@@ -332,6 +333,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   }, [crossSections]);
   const modelTabActive = activeTab === "model";
   const planarMonitors = usePlanarMonitorsResource({ enabled: modelTabActive });
+  const frozenSpins = useFrozenSpinsCollectionResource({ enabled: modelTabActive });
   const analysisFieldOverlayContext = useAnalysisFieldOverlayContext(
     kernel.analysisFieldOverlay,
   );
@@ -713,6 +715,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
             {
               activeAnalysisFieldOverlay,
               currentTransports: currentTransports.data,
+              frozenSpins: frozenSpins.data,
               frequencyDomainManifest: frequencyDomainManifest.data,
               frequencyDomainResponseSweep: frequencyDomainResponseSweep.data,
               frequencyDomainSpectrum: frequencyDomainSpectrum.data,
@@ -742,6 +745,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     activeTab,
     crossSections,
     currentTransports.data,
+    frozenSpins.data,
     manifest.data,
     manifest.status,
     meshSummary.data,

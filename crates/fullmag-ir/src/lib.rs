@@ -2,6 +2,7 @@ use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
+pub mod constraint;
 pub mod eigen_contract;
 pub mod execution;
 pub mod frequency_response_contract;
@@ -18,6 +19,7 @@ pub mod spectral_validation;
 pub mod spin_transport;
 pub mod study;
 mod validation;
+pub use constraint::*;
 pub use eigen_contract::*;
 pub use execution::*;
 pub use frequency_response_contract::*;
@@ -330,6 +332,10 @@ pub struct ProblemIR {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub material_parameter_fields: Vec<MaterialParameterAssignmentIR>,
     pub magnets: Vec<MagnetIR>,
+    #[serde(default)]
+    pub selections: Vec<SelectionDefinitionIR>,
+    #[serde(default)]
+    pub magnetization_constraints: Vec<MagnetizationConstraintIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub couplings: Vec<CouplingIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -424,6 +430,8 @@ impl<'de> Deserialize<'de> for ProblemIR {
     {
         let mut value = Value::deserialize(deserializer)?;
         migrate_problem_ir_json_value_for_direct_read(&mut value).map_err(D::Error::custom)?;
+        normalize_frozen_membership_defaults_in_problem_value(&mut value)
+            .map_err(D::Error::custom)?;
 
         #[derive(Deserialize)]
         struct ProblemIRWire {
@@ -439,6 +447,10 @@ impl<'de> Deserialize<'de> for ProblemIR {
             #[serde(default)]
             material_parameter_fields: Vec<MaterialParameterAssignmentIR>,
             magnets: Vec<MagnetIR>,
+            #[serde(default)]
+            selections: Vec<SelectionDefinitionIR>,
+            #[serde(default)]
+            magnetization_constraints: Vec<MagnetizationConstraintIR>,
             #[serde(default)]
             couplings: Vec<CouplingIR>,
             #[serde(default)]
@@ -506,6 +518,8 @@ impl<'de> Deserialize<'de> for ProblemIR {
             materials: wire.materials,
             material_parameter_fields: wire.material_parameter_fields,
             magnets: wire.magnets,
+            selections: wire.selections,
+            magnetization_constraints: wire.magnetization_constraints,
             couplings: wire.couplings,
             planar_monitors: wire.planar_monitors,
             energy_terms: wire.energy_terms,
@@ -597,12 +611,15 @@ impl ProblemIR {
             }],
             material_parameter_fields: Vec::new(),
             magnets: vec![MagnetIR {
+                object_id: None,
                 name: "strip".to_string(),
                 region: "strip".to_string(),
                 material: "Py".to_string(),
                 initial_magnetization: Some(InitialMagnetizationIR::RandomSeeded { seed: 42 }),
                 absorbing_boundary: None,
             }],
+            selections: Vec::new(),
+            magnetization_constraints: Vec::new(),
             couplings: Vec::new(),
             planar_monitors: Vec::new(),
             energy_terms: vec![EnergyTermIR::Exchange],
@@ -712,6 +729,7 @@ impl ProblemIR {
             errors.push("problem_meta.entrypoint_kind must not be empty".to_string());
         }
         validate_runtime_selection(self, &mut errors);
+        validate_problem_magnetization_constraints(self, &mut errors);
         if self.geometry.entries.is_empty() {
             errors.push("at least one geometry entry is required".to_string());
         }
@@ -2138,7 +2156,7 @@ fn validate_region_owned_semantics(problem: &ProblemIR, errors: &mut Vec<String>
     let magnet_names: BTreeSet<&str> = problem
         .magnets
         .iter()
-        .map(|magnet| magnet.name.as_str())
+        .map(|magnet| magnet.object_id.as_deref().unwrap_or(magnet.name.as_str()))
         .collect();
     let region_ids: BTreeSet<&str> = problem
         .object_regions

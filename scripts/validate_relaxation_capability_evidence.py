@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
+import math
 import re
 import shlex
 import subprocess
@@ -13,7 +15,37 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-RECEIPT_SCHEMA = "fullmag.relaxation_qualification_receipt.v1"
+_MATRIX_SPEC = importlib.util.spec_from_file_location(
+    "relaxation_production_matrix_for_capability",
+    Path(__file__).with_name("verify_relaxation_production_matrix.py"),
+)
+if _MATRIX_SPEC is None or _MATRIX_SPEC.loader is None:  # pragma: no cover - import machinery failure
+    raise RuntimeError("cannot load the canonical relaxation production matrix validator")
+PRODUCTION_MATRIX = importlib.util.module_from_spec(_MATRIX_SPEC)
+_MATRIX_SPEC.loader.exec_module(PRODUCTION_MATRIX)
+
+try:
+    from scripts.relaxation_qualification_contract import (
+        RECEIPT_SCHEMA,
+        PARITY_SCHEMA,
+        canonical_binding,
+        parity_scope,
+        validate_mesh_refinement,
+        validate_repeatability,
+        validate_sha256_mapping,
+    )
+except ModuleNotFoundError:  # direct ``python scripts/<script>.py`` execution
+    from relaxation_qualification_contract import (  # type: ignore[no-redef]
+        RECEIPT_SCHEMA,
+        PARITY_SCHEMA,
+        canonical_binding,
+        parity_scope,
+        validate_mesh_refinement,
+        validate_repeatability,
+        validate_sha256_mapping,
+    )
+
+ARTIFACT_SCHEMA = "fullmag.relaxation.qualification_artifact.v1"
 PROMOTED_STATUSES = {
     "production_executable",
     "partial_production_executable",
@@ -81,6 +113,26 @@ SCOPE_KEYS = {
     "mesh_refinement",
     "repeatability",
     "evidence",
+    "material_representation",
+    "material_payload_sha256",
+    "active_mask_sha256",
+    "realization_id",
+    "direction_policy",
+    "parity",
+}
+EXECUTION_KEYS = {
+    "status",
+    "converged",
+    "termination_reason",
+    "timeout",
+    "max_steps_reached",
+    "non_converged",
+    "fallback_occurred",
+    "accepted_steps",
+    "max_steps",
+    "metrics",
+    "confirmation",
+    "process",
 }
 EVIDENCE_LEVELS = ("D4", "D5", "D6")
 RELAXATION_EVIDENCE_FIELDS = frozenset(
@@ -113,6 +165,50 @@ MANAGED_RECIPE_ALLOWLIST = {
         "required_markers": (
             "just ensure-managed-fem-runtime",
             "docker compose --profile fem-gpu run",
+        ),
+    },
+    "verify-fdm-relaxation-qualification-release": {
+        "backend": "fdm",
+        "algorithms": frozenset(
+            {"llg_overdamped", "projected_gradient_bb", "nonlinear_cg"}
+        ),
+        "recipe_sha256": "11e5e0e44a73a932a6e088cf1191c5a9a51e2cde468f6e8e5e72f495daa08248",
+        "required_markers": ("scripts/run_relaxation_qualification_lane.py",),
+    },
+    "verify-fdm-relaxation-qualification-cuda-release": {
+        "backend": "fdm",
+        "algorithms": frozenset(
+            {"llg_overdamped", "projected_gradient_bb", "nonlinear_cg"}
+        ),
+        "recipe_sha256": "4eeb91b7628a58fe89fb4dbc865635a60d848fc3a1aafc56ffdbca1d82d1b797",
+        "required_markers": (
+            "just ensure-managed-fem-runtime",
+            "docker compose --profile fem-gpu run",
+            "--lane fdm_gpu_production",
+        ),
+    },
+    "verify-fem-relaxation-qualification-release": {
+        "backend": "fem",
+        "algorithms": frozenset(
+            {"llg_overdamped", "projected_gradient_bb", "nonlinear_cg", "tangent_plane_implicit"}
+        ),
+        "recipe_sha256": "d0b001ce9e0a68106ce9be56df832e38ac0359001ac9779624960a7f19332fb4",
+        "required_markers": (
+            "just verify-fem-relaxation-source-contract",
+            "docker compose --profile fem-gpu run",
+            "--lane fem_cpu_public",
+        ),
+    },
+    "verify-fem-relaxation-qualification-cuda-release": {
+        "backend": "fem",
+        "algorithms": frozenset(
+            {"llg_overdamped", "projected_gradient_bb", "nonlinear_cg"}
+        ),
+        "recipe_sha256": "8bde0bb019a58959e1d48ffb1ffbed2311c4d706c1dabd48feb13cca58c320f5",
+        "required_markers": (
+            "just verify-fem-relaxation-source-contract",
+            "docker compose --profile fem-gpu run",
+            "--lane fem_gpu_public",
         ),
     },
 }
@@ -354,6 +450,280 @@ def canonical_workloads(lane: str, algorithm: str) -> list[str]:
     ]
 
 
+def _load_json(path: Path) -> Mapping[str, Any] | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, Mapping) else None
+
+
+def _finite_metrics(value: object) -> bool:
+    return isinstance(value, Mapping) and bool(value) and all(
+        isinstance(item, (int, float))
+        and not isinstance(item, bool)
+        and math.isfinite(float(item))
+        for item in value.values()
+    )
+
+
+def _validate_semantic_artifact(
+    path: Path,
+    *,
+    level: str,
+    receipt: Mapping[str, Any],
+    algorithm: str,
+    lane: str,
+    workloads: list[str],
+) -> None:
+    document = _load_json(path)
+    require(document is not None, f"{level} artifact must be JSON")
+    require(
+        document.get("schema_version") == ARTIFACT_SCHEMA,
+        f"{level} artifact schema is invalid",
+    )
+    require(document.get("level") == level, f"{level} artifact level is invalid")
+    require(
+        document.get("cell")
+        == {
+            "algorithm": algorithm,
+            "lane": lane,
+            "precision": receipt.get("precision"),
+        },
+        f"{level} artifact cell mismatch",
+    )
+    require(document.get("workload_ids") == workloads, f"{level} artifact workloads mismatch")
+    require(
+        document.get("source_commit") == receipt.get("source_commit"),
+        f"{level} artifact source commit mismatch",
+    )
+    require(
+        document.get("source_tree_sha256") == receipt.get("source_tree_sha256"),
+        f"{level} artifact source tree mismatch",
+    )
+    require(
+        document.get("runtime_identity") == RUNTIME_IDENTITIES[lane],
+        f"{level} artifact runtime mismatch",
+    )
+    require(
+        document.get("oracle") == ORACLE_IDENTITIES[algorithm],
+        f"{level} artifact oracle mismatch",
+    )
+    scope = receipt.get("validated_scope")
+    require(isinstance(scope, Mapping), f"{level} artifact scope is missing")
+    for key in (
+        "material_representation",
+        "material_payload_sha256",
+        "active_mask_sha256",
+        "realization_id",
+        "direction_policy",
+    ):
+        require(document.get(key) == scope.get(key), f"{level} artifact {key} mismatch")
+    require(
+        document.get("parity") == scope.get("parity"),
+        f"{level} artifact parity mismatch",
+    )
+    require(
+        document.get("mesh_refinement_observations") == scope.get("mesh_refinement"),
+        f"{level} artifact mesh refinement observations mismatch",
+    )
+    require(
+        document.get("repeatability_observations") == scope.get("repeatability"),
+        f"{level} artifact repeatability observations mismatch",
+    )
+    result = document.get("result")
+    require(isinstance(result, Mapping), f"{level} artifact result is required")
+    require(
+        result.get("status") == "passed" and result.get("converged") is True,
+        f"{level} artifact did not converge",
+    )
+    require(
+        result.get("termination_reason") in {"torque", "energy"},
+        f"{level} artifact termination reason is invalid",
+    )
+    accepted_steps = result.get("accepted_steps")
+    max_steps = result.get("max_steps")
+    require(
+        isinstance(accepted_steps, int)
+        and not isinstance(accepted_steps, bool)
+        and isinstance(max_steps, int)
+        and not isinstance(max_steps, bool)
+        and max_steps > 0
+        and accepted_steps < max_steps,
+        f"{level} artifact step bounds are invalid",
+    )
+    require(_finite_metrics(result.get("metrics")), f"{level} artifact metrics are invalid")
+
+
+def _validate_parity(
+    scope: Mapping[str, Any],
+    receipt: Mapping[str, Any],
+    repo_root: Path,
+    *,
+    algorithm: str,
+    lane: str,
+    precision: str,
+) -> None:
+    value = scope.get("parity")
+    expected = parity_scope(lane, precision)
+    if expected["status"] == "not_applicable":
+        require(value == expected, "validated_scope parity must be not_applicable")
+        return
+    require(isinstance(value, dict), "validated_scope parity is required")
+    for key, expected_value in expected.items():
+        require(value.get(key) == expected_value, f"validated_scope parity {key} is not canonical")
+    artifact = repository_path(repo_root, value.get("artifact_path"), "parity artifact_path")
+    require(is_sha256(value.get("artifact_sha256")), "parity artifact_sha256 is invalid")
+    require(value["artifact_sha256"] == hashlib.sha256(artifact.read_bytes()).hexdigest(), "parity artifact hash mismatch")
+    document = _load_json(artifact)
+    require(document is not None, "parity artifact must be JSON")
+    require(document.get("schema_version") == PARITY_SCHEMA, "parity artifact schema is invalid")
+    require(document.get("status") == "passed", "parity artifact did not pass")
+    require(document.get("target") == {"algorithm": algorithm, "lane": lane, "precision": precision}, "parity target mismatch")
+    require(document.get("baseline") == {"lane": expected["baseline_lane"], "precision": expected["baseline_precision"]}, "parity baseline mismatch")
+    require(document.get("source_commit") == receipt.get("source_commit"), "parity source commit mismatch")
+    require(document.get("source_tree_sha256") == receipt.get("source_tree_sha256"), "parity source tree mismatch")
+    comparisons = document.get("comparisons")
+    require(isinstance(comparisons, list) and len(comparisons) == 6, "parity comparisons are incomplete")
+    target_workloads = set(canonical_workloads(lane, algorithm))
+    baseline_workloads = set(
+        canonical_workloads(expected["baseline_lane"], algorithm)
+    )
+    target_refinement = scope.get("mesh_refinement")
+    target_observations = target_refinement.get("observations") if isinstance(target_refinement, Mapping) else None
+    target_by_pair = {
+        (item.get("workload_id"), item.get("mesh_level")): item
+        for item in target_observations or []
+        if isinstance(item, Mapping)
+    }
+    metric_names = {"energy_j", "max_torque_apm", "max_torque_t", "mx", "my", "mz"}
+    observed_pairs: set[tuple[object, object, object]] = set()
+    for comparison in comparisons:
+        require(isinstance(comparison, Mapping) and comparison.get("status") == "passed", "parity comparison is invalid")
+        target_workload = comparison.get("target_workload_id")
+        baseline_workload = comparison.get("baseline_workload_id")
+        mesh_level = comparison.get("mesh_level")
+        require(
+            target_workload in target_workloads
+            and baseline_workload in baseline_workloads
+            and isinstance(mesh_level, str)
+            and (target_workload, baseline_workload, mesh_level) not in observed_pairs,
+            "parity workload/mesh comparison is invalid",
+        )
+        observed_pairs.add((target_workload, baseline_workload, mesh_level))
+        for key in ("target_input_contract_sha256", "baseline_input_contract_sha256", "target_final_state_sha256", "baseline_final_state_sha256"):
+            require(is_sha256(comparison.get(key)), f"parity {key} is invalid")
+        for key in ("target_metrics", "baseline_metrics", "absolute_error", "tolerance"):
+            require(_finite_metrics(comparison.get(key)), f"parity {key} is invalid")
+        target_observation = target_by_pair.get((target_workload, mesh_level))
+        require(isinstance(target_observation, Mapping), "parity target refinement observation is missing")
+        require(
+            comparison.get("target_input_contract_sha256") == target_observation.get("input_contract_sha256"),
+            "parity target input contract does not match refinement evidence",
+        )
+        final_states = target_observation.get("final_state_sha256")
+        require(
+            isinstance(final_states, list)
+            and comparison.get("target_final_state_sha256") in final_states,
+            "parity target final state does not match refinement evidence",
+        )
+        target_metrics = comparison.get("target_metrics")
+        baseline_metrics = comparison.get("baseline_metrics")
+        absolute_error = comparison.get("absolute_error")
+        tolerance = comparison.get("tolerance")
+        require(isinstance(target_metrics, Mapping) and set(target_metrics) == metric_names, "parity target metrics keys are invalid")
+        require(isinstance(baseline_metrics, Mapping) and set(baseline_metrics) == metric_names, "parity baseline metrics keys are invalid")
+        require(isinstance(absolute_error, Mapping) and set(absolute_error) == metric_names, "parity absolute error keys are invalid")
+        require(isinstance(tolerance, Mapping) and set(tolerance) == metric_names, "parity tolerance keys are invalid")
+        for name in metric_names:
+            expected_error = abs(float(target_metrics[name]) - float(baseline_metrics[name]))
+            require(
+                abs(float(absolute_error[name]) - expected_error) <= max(1e-30, expected_error * 1e-12),
+                f"parity absolute error is not recalculated for {name}",
+            )
+            require(float(tolerance[name]) >= 0 and expected_error <= float(tolerance[name]), f"parity tolerance failed for {name}")
+    expected_pairs = {
+        (target, baseline, mesh)
+        for target in target_workloads
+        for baseline in baseline_workloads
+        if target.rsplit(".", 1)[-1] == baseline.rsplit(".", 1)[-1]
+        for mesh in ("coarse", "medium", "fine")
+    }
+    require(observed_pairs == expected_pairs, "parity workload/mesh coverage is incomplete")
+
+
+def _validate_execution_evidence(
+    receipt: Mapping[str, Any],
+    repo_root: Path,
+    *,
+    algorithm: str,
+    lane: str,
+) -> None:
+    execution = receipt.get("execution")
+    require(isinstance(execution, Mapping) and set(execution) == EXECUTION_KEYS, "receipt execution evidence is missing or non-canonical")
+    require(execution.get("status") == "passed" and execution.get("converged") is True, "receipt execution did not converge")
+    require(execution.get("termination_reason") in {"torque", "energy"}, "receipt execution termination reason is invalid")
+    for key in ("timeout", "max_steps_reached", "non_converged", "fallback_occurred"):
+        require(execution.get(key) is False, f"receipt execution.{key} cannot qualify")
+    accepted_steps = execution.get("accepted_steps")
+    max_steps = execution.get("max_steps")
+    require(isinstance(accepted_steps, int) and isinstance(max_steps, int) and 0 <= accepted_steps < max_steps, "receipt execution step bounds are invalid")
+    require(_finite_metrics(execution.get("metrics")), "receipt execution metrics are invalid")
+    confirmation = execution.get("confirmation")
+    require(isinstance(confirmation, Mapping), "receipt execution confirmation is missing")
+    require(isinstance(confirmation.get("accepted_state_id"), str) and confirmation["accepted_state_id"], "receipt execution accepted state is missing")
+    require(confirmation.get("observed_after_accepted_step") is True, "receipt execution lacks post-step observation")
+    process = execution.get("process")
+    require(isinstance(process, Mapping), "receipt execution process is missing")
+    required_process = {
+        "command",
+        "command_sha256",
+        "runtime_manifest_path",
+        "runtime_manifest_sha256",
+        "log_path",
+        "log_sha256",
+        "exit_code",
+    }
+    require(set(process) == required_process, "receipt execution process is non-canonical")
+    command = receipt.get("managed_command")
+    require(process.get("command") == command, "receipt execution process command mismatch")
+    require(is_sha256(process.get("command_sha256")) and process["command_sha256"] == hashlib.sha256(str(command).encode("utf-8")).hexdigest(), "receipt execution command hash mismatch")
+    for path_field in ("runtime_manifest_path", "log_path"):
+        path = repository_path(repo_root, process.get(path_field), f"execution.process.{path_field}")
+        digest_field = path_field.replace("_path", "_sha256")
+        require(is_sha256(process.get(digest_field)) and hashlib.sha256(path.read_bytes()).hexdigest() == process[digest_field], f"receipt execution {path_field} hash mismatch")
+    require(process.get("exit_code") == 0, "receipt execution process failed")
+    runtime_manifest = _load_json(repository_path(repo_root, process["runtime_manifest_path"], "runtime_manifest_path"))
+    require(runtime_manifest is not None, "receipt runtime manifest must be JSON")
+    for key, expected in (
+        ("schema_version", "fullmag.relaxation.runtime_manifest.v1"),
+        ("runtime_identity", RUNTIME_IDENTITIES[lane]),
+        ("backend", CANONICAL_LANES[lane]["backend"]),
+        ("device", CANONICAL_LANES[lane]["device"]),
+        ("source_commit", receipt.get("source_commit")),
+        ("source_tree_sha256", receipt.get("source_tree_sha256")),
+        ("scenario", "examples/relaxation_qualification_case.py"),
+    ):
+        require(runtime_manifest.get(key) == expected, f"receipt runtime manifest {key} mismatch")
+    require(runtime_manifest.get("precision") == receipt.get("precision"), "receipt runtime manifest precision mismatch")
+    require(is_sha256(runtime_manifest.get("scenario_sha256")), "receipt runtime manifest scenario hash is invalid")
+    require(is_sha256(runtime_manifest.get("executable_sha256")) and isinstance(runtime_manifest.get("executable"), str) and runtime_manifest["executable"], "receipt runtime manifest executable identity is invalid")
+    source_git_tree = runtime_manifest.get("source_git_tree")
+    require(isinstance(source_git_tree, str) and re.fullmatch(r"[0-9a-f]{40}", source_git_tree) is not None, "receipt runtime manifest source git tree is invalid")
+    if lane != "fdm_cpu_reference":
+        require(is_sha256(runtime_manifest.get("managed_bundle_manifest_sha256")), "receipt managed runtime manifest hash is invalid")
+        build_identity = runtime_manifest.get("managed_bundle_build_identity")
+        require(isinstance(build_identity, Mapping), "receipt managed runtime build identity is missing")
+        require(build_identity.get("git_commit") == receipt.get("source_commit"), "receipt managed runtime commit mismatch")
+        require(build_identity.get("git_tree") == source_git_tree, "receipt managed runtime tree mismatch")
+        require(build_identity.get("worktree_state") == "clean", "receipt managed runtime was built from dirty source")
+    log = _load_json(repository_path(repo_root, process["log_path"], "log_path"))
+    require(log is not None, "receipt execution log must be JSON")
+    require(log.get("schema_version") == "fullmag.relaxation.execution_log.v1", "receipt execution log schema is invalid")
+    require(log.get("status") == "passed" and log.get("exit_code") == 0, "receipt execution log did not pass")
+    require(log.get("command") == command, "receipt execution log command mismatch")
+
+
 def validate_workloads(
     feature_id: str, workloads: object, algorithm: str, promoted_lanes: list[str]
 ) -> list[str]:
@@ -450,16 +820,42 @@ def validate_receipt(
         "validated_scope oracle does not match canonical algorithm",
     )
     require(
-        scope.get("mesh_refinement")
-        == {
-            "levels": ["coarse", "medium", "fine"],
-            "strategy": "same_physical_problem",
-        },
-        "validated_scope mesh_refinement is incomplete or non-canonical",
+        validate_mesh_refinement(scope.get("mesh_refinement"), workloads),
+        "validated_scope mesh_refinement observations are incomplete or non-canonical",
     )
     require(
-        scope.get("repeatability") == {"warmup_runs": 1, "measured_runs": 5},
-        "validated_scope repeatability is incomplete or non-canonical",
+        validate_repeatability(scope.get("repeatability"), workloads),
+        "validated_scope repeatability observations are incomplete or non-canonical",
+    )
+    binding = canonical_binding(
+        lane=lane,
+        algorithm=algorithm,
+        workload_ids=workloads,
+        mesh_levels=("coarse", "medium", "fine"),
+    )
+    for key, value in binding.items():
+        require(scope.get(key) == value, f"validated_scope {key} is not canonical")
+    require(
+        validate_sha256_mapping(scope.get("material_payload_sha256")),
+        "validated_scope material_payload_sha256 is invalid",
+    )
+    require(
+        validate_sha256_mapping(scope.get("active_mask_sha256"), nested=True),
+        "validated_scope active_mask_sha256 is invalid",
+    )
+    _validate_parity(
+        scope,
+        receipt,
+        repo_root,
+        algorithm=algorithm,
+        lane=lane,
+        precision=str(receipt.get("precision")),
+    )
+    _validate_execution_evidence(
+        receipt,
+        repo_root,
+        algorithm=algorithm,
+        lane=lane,
     )
     evidence = scope.get("evidence")
     require(
@@ -490,6 +886,14 @@ def validate_receipt(
                 hashlib.sha256(artifact_path.read_bytes()).hexdigest() == item["sha256"],
                 f"validated_scope {level} artifact_manifest sha256 mismatch",
             )
+            _validate_semantic_artifact(
+                artifact_path,
+                level=level,
+                receipt=receipt,
+                algorithm=algorithm,
+                lane=lane,
+                workloads=workloads,
+            )
             manifest_paths.add(str(item["path"]))
     require(
         receipt.get("artifact_path") in manifest_paths,
@@ -512,7 +916,7 @@ def validate_feature(
     promoted = promoted_lanes(feature)
     if not promoted:
         return
-    workloads = validate_workloads(
+    validate_workloads(
         feature_id,
         feature.get("validated_workloads"),
         algorithm,
