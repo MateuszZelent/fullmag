@@ -9,10 +9,7 @@ owner: fullmag-public-docs
 (public-docs-python-api-interactions-root)=
 # Interactions
 
-Interactions add energy and torque contributions to the magnetic system. Each interaction has one
-canonical scientific owner in the physics reference; the Python pages here document the public
-constructor parameters, validation behavior, and the `ProblemIR` destination for each energy or
-torque term.
+These pages document constructor parameters, validation, stage-first authoring, ProblemIR lowering, and fail-closed capability behavior for public interactions.
 
 ```{toctree}
 :maxdepth: 1

@@ -2,49 +2,45 @@
   "document": {
     "path": "public_docs/site/python-api/interactions/uniaxial-anisotropy.md",
     "title": "Uniaxial anisotropy Python API",
-    "interaction": "uniaxial anisotropy authoring and migration contract"
+    "interaction": "uniaxial anisotropy"
   },
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "Python lowering is backend neutral and feeds the double-precision FDM reference lane."},
-    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "Planner output feeds standard and multilayer CUDA anisotropy paths."},
-    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "Planner output feeds native FEM material and axis realizations."},
-    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "Planner output feeds device FEM anisotropy paths; executed-device parity is separate evidence."}
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+    }
   ],
   "sources": [
-    {"id": "python-uniaxial", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class UniaxialAnisotropy", "responsibility": "Compatibility constructor and term serialization."},
-    {"id": "python-material", "path": "packages/fullmag-py/src/fullmag/model/structure.py", "symbol": "class Material", "responsibility": "Canonical material-owned anisotropy parameters."},
-    {"id": "python-vector", "path": "packages/fullmag-py/src/fullmag/_validation.py", "symbol": "as_vector3", "responsibility": "Axis shape and finite-value validation."},
-    {"id": "python-migration", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "_migrate_legacy_anisotropy_energy_terms", "responsibility": "Conflict-checked legacy-to-material migration."},
-    {"id": "planner-fdm", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "FDM planning of material anisotropy."},
-    {"id": "planner-fem", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem", "responsibility": "FEM planning and axis/material validation."}
+    {
+      "id": "python-owner",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class UniaxialAnisotropy",
+      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+    }
   ],
-  "symbols": [
-    {"id": "u", "latex": "$\\mathbf u$", "meaning": "normalized easy-axis direction", "si_unit": "$1$"},
-    {"id": "q", "latex": "$q$", "meaning": "projection $\\mathbf m\\cdot\\mathbf u$", "si_unit": "$1$"},
-    {"id": "Ku1", "latex": "$K_{u1}$", "meaning": "first-order uniaxial constant", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
-    {"id": "Ku2", "latex": "$K_{u2}$", "meaning": "second-order uniaxial constant", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
-    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
-    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
-    {"id": "Hu", "latex": "$\\mathbf H_{\\mathrm u}$", "meaning": "uniaxial anisotropy effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "wu", "latex": "$w_{\\mathrm u}$", "meaning": "uniaxial anisotropy energy density", "si_unit": "$\\mathrm{J\\,m^{-3}}$"}
-  ],
-  "equations": [
-    {"id": "eq-python-uniaxial-density", "symbols": ["wu", "Ku1", "Ku2", "q"], "sources": ["python-uniaxial", "python-material"]},
-    {"id": "eq-python-uniaxial-field", "symbols": ["Hu", "Ku1", "Ku2", "q", "mu0", "Ms", "u"], "sources": ["planner-fdm", "planner-fem"]},
-    {"id": "eq-python-uniaxial-ir-fields", "symbols": ["Ku1", "Ku2", "u"], "sources": ["python-migration", "python-material"]}
-  ],
+  "symbols": [],
+  "equations": [],
   "public_api": {
-    "constructors": ["fullmag.UniaxialAnisotropy", "fullmag.Material"],
-    "parameters": [
-      {"python": "UniaxialAnisotropy.ku1", "type": "float", "default": "required", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite", "meaning": "first-order uniaxial constant", "backend_support": "FDM/FEM CPU/GPU after migration", "problem_ir": "`materials[].uniaxial_anisotropy`"},
-      {"python": "UniaxialAnisotropy.ku2", "type": "float", "default": "0.0", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite", "meaning": "second-order uniaxial constant", "backend_support": "FDM/FEM CPU/GPU after migration", "problem_ir": "`materials[].uniaxial_anisotropy_k2`"},
-      {"python": "UniaxialAnisotropy.axis", "type": "Sequence[float]", "default": "(0,0,1)", "si_unit": "$1$", "validation": "length 3; finite; non-zero when active", "meaning": "easy-axis direction", "backend_support": "FDM/FEM CPU/GPU after migration", "problem_ir": "`materials[].anisotropy_axis`"},
-      {"python": "Material.Ku1", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite when supplied", "meaning": "canonical first-order material value", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "`materials[].uniaxial_anisotropy`"},
-      {"python": "Material.Ku2", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite when supplied", "meaning": "canonical second-order material value", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "`materials[].uniaxial_anisotropy_k2`"},
-      {"python": "Material.anisU", "type": "tuple[float,float,float] | None", "default": "None", "si_unit": "$1$", "validation": "length 3; finite; non-zero when active", "meaning": "canonical easy-axis direction", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "`materials[].anisotropy_axis`"},
-      {"python": "Material.Ku_field", "type": "list[float] | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite; cardinality validated downstream", "meaning": "spatial Ku1 override", "backend_support": "FEM and supported allocating FDM reference paths", "problem_ir": "`materials[].ku_field`"},
-      {"python": "Material.Ku2_field", "type": "list[float] | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite; cardinality validated downstream", "meaning": "spatial Ku2 override", "backend_support": "FEM and supported allocating FDM reference paths", "problem_ir": "`materials[].ku2_field`"}
-    ]
+    "parameters": []
   }
 }

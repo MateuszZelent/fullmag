@@ -2,65 +2,45 @@
   "document": {
     "path": "public_docs/site/physics/interactions/zeeman/index.md",
     "title": "Zeeman interaction",
-    "interaction": "uniform external magnetic field"
+    "interaction": "zeeman"
   },
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "Double-precision reference lane with active-cell masking and cell-volume reduction."},
-    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "CUDA field and energy paths are present; current executed-device qualification is separate evidence."},
-    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "MFEM/native nodal field, additive effective field, and lumped or quadrature energy paths are present."},
-    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "Device RK field accumulation and block/reduction energy paths are present; executed-device parity remains a gate."}
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+    }
   ],
   "sources": [
-    {"id": "python-zeeman", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class Zeeman", "responsibility": "Public B validation and canonical Zeeman lowering."},
-    {"id": "planner-fdm", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "FDM conversion from B to H_ext, duplicate detection, and output validation."},
-    {"id": "planner-fem", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem", "responsibility": "FEM conversion from B to H_ext, duplicate detection, and output validation."},
-    {"id": "planner-output-validation", "path": "crates/fullmag-plan/src/validate.rs", "symbol": "validate_executable_outputs", "responsibility": "Fail-closed materialization rules for H_ext, E_ext, and eden_ext."},
-    {"id": "fdm-cpu-field", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "external_field_add_into_soa", "responsibility": "Active-cell FDM CPU effective-field addition."},
-    {"id": "fdm-cpu-energy", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "external_energy_from_fields", "responsibility": "FDM CPU Zeeman energy density and volume reduction."},
-    {"id": "fdm-cpu-observable", "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs", "symbol": "observe_state_with_antenna_field", "responsibility": "Builds the full-domain uniform H_ext observable separately from active-cell LLG and energy masking."},
-    {"id": "fem-plan-import", "path": "backends/fem/cpu/mfem/interactions/zeeman.cpp", "symbol": "initialize_zeeman_plan_fields", "responsibility": "Import of resolved FEM plan fields."},
-    {"id": "fem-uniform-field", "path": "backends/fem/cpu/mfem/interactions/zeeman_uniform_field.cpp", "symbol": "initialize_uniform_zeeman_field", "responsibility": "Nodal uniform H_ext buffer initialization."},
-    {"id": "fem-cpu-field", "path": "backends/fem/cpu/mfem/interactions/zeeman_field.cpp", "symbol": "add_zeeman_field", "responsibility": "FEM CPU additive effective-field composition."},
-    {"id": "fem-cpu-energy", "path": "backends/fem/cpu/mfem/interactions/zeeman_energy.cpp", "symbol": "zeeman_energy_from_field", "responsibility": "FEM CPU lumped and saturation-weighted Zeeman energy."},
-    {"id": "fem-gpu-state", "path": "backends/fem/gpu/cuda/runtime/gpu_state_runtime.cpp", "symbol": "initialize_context_gpu_state", "responsibility": "GPU-state and runtime coefficient upload path."},
-    {"id": "fem-gpu-field", "path": "backends/fem/gpu/cuda/integrators/rk/rk_effective_field.cu", "symbol": "gpu_rk_accumulate_effective_field", "responsibility": "Device RK effective-field accumulation including H_ext."},
-    {"id": "fem-gpu-kernel", "path": "backends/fem/gpu/cuda/interactions/zeeman/zeeman_kernels.cu", "symbol": "external_energy_blocks_kernel", "responsibility": "Device Zeeman energy block contributions."},
-    {"id": "fem-gpu-energy", "path": "backends/fem/gpu/cuda/integrators/rk/rk_external_energy_reductions.cu", "symbol": "gpu_rk_reduce_final_external_energy_terms", "responsibility": "Device final external-energy reduction and fail-closed checks."}
+    {
+      "id": "python-owner",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class Zeeman",
+      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+    }
   ],
-  "symbols": [
-    {"id": "Bext", "latex": "$\\mathbf B_{\\mathrm{ext}}$", "meaning": "prescribed external magnetic flux density supplied by `Zeeman(B)`", "si_unit": "$\\mathrm{T}$"},
-    {"id": "Hext", "latex": "$\\mathbf H_{\\mathrm{ext}}$", "meaning": "resolved external magnetic field used by the native planners and solvers", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "Hz", "latex": "$\\mathbf H_Z$", "meaning": "Zeeman contribution to the effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization $\\mathbf M/M_s$", "si_unit": "$1$"},
-    {"id": "eta", "latex": "$\\boldsymbol\\eta$", "meaning": "admissible reduced-magnetization variation", "si_unit": "$1$"},
-    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
-    {"id": "Omega", "latex": "$\\Omega_m$", "meaning": "magnetic integration domain", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "Ez", "latex": "$E_Z$", "meaning": "total Zeeman energy", "si_unit": "$\\mathrm{J}$"},
-    {"id": "wz", "latex": "$w_Z$", "meaning": "local Zeeman energy density", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
-    {"id": "dot", "latex": "$\\mathbf m\\cdot\\mathbf H_{\\mathrm{ext}}$", "meaning": "scalar field contraction used by the energy integrand", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "Vi", "latex": "$V_i$", "meaning": "FDM cell volume", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "wi", "latex": "$w_i^{\\mathrm{lump}}$", "meaning": "FEM nodal lumped integration weight", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "i", "latex": "$i$", "meaning": "discrete FDM cell or FEM node index", "si_unit": "$1$"},
-    {"id": "N", "latex": "$N$", "meaning": "number of active storage locations considered by a kernel or reduction", "si_unit": "$1$"},
-    {"id": "positive-integrand", "latex": "$\\mu_0M_s\\mathbf m\\cdot\\mathbf H_{\\mathrm{ext}}$", "meaning": "positive-unit form of the energy-density integrand before the Zeeman minus sign", "si_unit": "$\\mathrm{J\\,m^{-3}}$"}
-  ],
-  "equations": [
-    {"id": "eq-zeeman-resolved-field", "symbols": ["Bext", "Hext", "mu0"], "sources": ["python-zeeman", "planner-fdm", "planner-fem"]},
-    {"id": "eq-zeeman-energy", "symbols": ["Ez", "mu0", "Omega", "Ms", "m", "Hext", "Bext"], "sources": ["python-zeeman", "fem-cpu-energy"]},
-    {"id": "eq-zeeman-effective-field", "symbols": ["Hz", "Ez", "mu0", "Ms", "m", "Hext", "Bext"], "sources": ["fdm-cpu-field", "fem-cpu-field"]},
-    {"id": "eq-zeeman-energy-density", "symbols": ["wz", "mu0", "Ms", "m", "Hext", "Bext"], "sources": ["fdm-cpu-energy", "fem-cpu-energy"]},
-    {"id": "eq-zeeman-directional-derivative", "symbols": ["Ez", "mu0", "Omega", "Ms", "Hext", "eta", "Bext"], "sources": ["fem-cpu-energy"]},
-    {"id": "eq-zeeman-fdm-cpu", "symbols": ["Ez", "mu0", "N", "Ms", "m", "Hext", "Vi", "Bext"], "sources": ["fdm-cpu-field", "fdm-cpu-energy", "fdm-cpu-observable"]},
-    {"id": "eq-zeeman-fem-cpu-lumped", "symbols": ["Ez", "mu0", "N", "Ms", "m", "Hext", "wi"], "sources": ["fem-cpu-energy"]},
-    {"id": "eq-zeeman-fem-gpu", "symbols": ["Ez", "mu0", "Ms", "m", "Hext", "wi"], "sources": ["fem-gpu-kernel", "fem-gpu-energy"]},
-    {"id": "eq-zeeman-effective-field-composition", "symbols": ["Hext"], "sources": ["fem-gpu-field", "fem-cpu-field"]}
-  ],
+  "symbols": [],
+  "equations": [],
   "public_api": {
-    "constructors": ["fullmag.Zeeman"],
-    "parameters": [
-      {"python": "Zeeman.B", "type": "Sequence[float]", "default": "required", "si_unit": "$\\mathrm{T}$", "validation": "length 3; all components finite", "meaning": "uniform external magnetic flux density", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "`energy[].B` (serialized key `B`)"}
-    ]
+    "parameters": []
   }
 }

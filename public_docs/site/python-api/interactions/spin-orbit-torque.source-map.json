@@ -2,163 +2,45 @@
   "document": {
     "path": "public_docs/site/python-api/interactions/spin-orbit-torque.md",
     "title": "Spin-Orbit Torque Python API",
-    "interaction": "spin-orbit torque Python authoring contract"
+    "interaction": "spin orbit torque"
   },
   "backend_matrix": [
     {
       "solver": "FDM",
       "device": "CPU",
       "status": "partial",
-      "reason": "Cell-local CPU reference realization exists; qualification remains evidence-dependent."
+      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "partial",
-      "reason": "FP64 and FP32 CUDA RHS realizations exist; executed-device parity is a separate gate."
+      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
     },
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "not_implemented",
-      "reason": "The planner rejects SOT on the FEM lane."
+      "status": "partial",
+      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "not_implemented",
-      "reason": "The planner rejects SOT on the FEM lane."
+      "status": "partial",
+      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
     }
   ],
   "sources": [
     {
-      "id": "python-sot",
+      "id": "python-owner",
       "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
-      "symbol": "class SpinOrbitTorque",
-      "responsibility": "validates SOT parameters and lowers the canonical module"
-    },
-    {
-      "id": "python-sot-init",
-      "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
-      "symbol": "class SpinOrbitTorque",
-      "responsibility": "resolves exclusive direct or named current binding"
-    },
-    {
-      "id": "python-sot-ir",
-      "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
-      "symbol": "class SpinOrbitTorque",
-      "responsibility": "emits spin_orbit_torque module IR"
-    },
-    {
-      "id": "python-problem-ir",
-      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
-      "symbol": "_spin_torque_modules_ir",
-      "responsibility": "places torque modules in ProblemIR"
-    },
-    {
-      "id": "python-current",
-      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
-      "symbol": "class CurrentTransport",
-      "responsibility": "validates and lowers named current sources"
-    },
-    {
-      "id": "ir-validation",
-      "path": "crates/fullmag-ir/src/validation.rs",
-      "symbol": "validate_spin_torque_modules",
-      "responsibility": "validates current binding, finiteness, and thickness"
-    },
-    {
-      "id": "planner-sot",
-      "path": "crates/fullmag-plan/src/spin_torque.rs",
-      "symbol": "resolve_sot_fields",
-      "responsibility": "resolves current magnitude and rejects FEM execution"
-    },
-    {
-      "id": "fdm-plan-sot",
-      "path": "crates/fullmag-plan/src/fdm.rs",
-      "symbol": "plan_fdm",
-      "responsibility": "copies resolved SOT fields into the FDM plan"
-    },
-    {
-      "id": "fdm-cpu-build",
-      "path": "crates/fullmag-runner/src/fdm/cpu/reference/interactions.rs",
-      "symbol": "build_sot",
-      "responsibility": "builds the CPU SotConfig"
-    },
-    {
-      "id": "fdm-cpu-aos",
-      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
-      "symbol": "sot_torque_add_into",
-      "responsibility": "computes the cell-local AoS torque"
-    },
-    {
-      "id": "fdm-cpu-soa",
-      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
-      "symbol": "sot_torque_add_into_soa",
-      "responsibility": "computes the cell-local SoA torque"
-    },
-    {
-      "id": "fdm-gpu-state",
-      "path": "backends/fdm/include/context.hpp",
-      "symbol": "sot_params_from_ctx",
-      "responsibility": "normalizes polarization and constructs amplitude"
-    },
-    {
-      "id": "fdm-gpu-fp64",
-      "path": "backends/fdm/gpu/cuda/integrators/llg_fp64.cu",
-      "symbol": "llg_rhs_fp64_kernel",
-      "responsibility": "evaluates the SOT contribution in the FP64 RHS"
-    },
-    {
-      "id": "fdm-gpu-fp32",
-      "path": "backends/fdm/gpu/cuda/integrators/llg_fp32.cu",
-      "symbol": "llg_rhs_fp32_kernel",
-      "responsibility": "evaluates the SOT contribution in the FP32 RHS"
-    },
-    {
-      "id": "fdm-c-api",
-      "path": "backends/fdm/api/c_api.cpp",
-      "symbol": "fullmag_fdm_backend_create",
-      "responsibility": "transfers resolved plan fields into the native context"
+      "symbol": "class PrescribedSpinOrbitTorque",
+      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
     }
   ],
-  "symbols": [
-    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
-    {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "Je", "latex": "$J_e$", "meaning": "charge-current density magnitude", "si_unit": "$\\mathrm{A\\,m^{-2}}$"},
-    {"id": "sigma", "latex": "$\\hat{\\boldsymbol\\sigma}$", "meaning": "spin-polarization direction", "si_unit": "$1$"},
-    {"id": "xiDL", "latex": "$\\xi_{\\mathrm{DL}}$", "meaning": "damping-like efficiency", "si_unit": "$1$"},
-    {"id": "xiFL", "latex": "$\\xi_{\\mathrm{FL}}$", "meaning": "field-like efficiency", "si_unit": "$1$"},
-    {"id": "tF", "latex": "$t_F$", "meaning": "ferromagnet thickness", "si_unit": "$\\mathrm{m}$"},
-    {"id": "Hsot", "latex": "$H_{\\mathrm{SOT}}$", "meaning": "SOT effective-field amplitude", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "R", "latex": "$\\mathbf R_{\\mathrm{SOT}}$", "meaning": "effective-field-like SOT vector", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "gamma", "latex": "$\\gamma_{\\mu_0}$", "meaning": "reduced gyromagnetic constant", "si_unit": "$\\mathrm{m\\,(A\\,s)^{-1}}$"},
-    {"id": "alpha", "latex": "$\\alpha$", "meaning": "Gilbert damping", "si_unit": "$1$"},
-    {"id": "hbar", "latex": "$\\hbar$", "meaning": "reduced Planck constant", "si_unit": "$\\mathrm{J\\,s}$"},
-    {"id": "e", "latex": "$e$", "meaning": "elementary-charge magnitude", "si_unit": "$\\mathrm{C}$"},
-    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
-    {"id": "Jtransport", "latex": "$\\mathbf J_{\\mathrm{transport}}$", "meaning": "resolved current-density vector", "si_unit": "$\\mathrm{A\\,m^{-2}}$"}
-  ],
-  "equations": [
-    {"id": "eq-sot-api-amplitude", "symbols": ["Hsot", "hbar", "Je", "e", "mu0", "Ms", "tF"], "sources": ["planner-sot", "fdm-gpu-state"]},
-    {"id": "eq-sot-api-raw", "symbols": ["R", "Hsot", "xiDL", "xiFL", "m", "sigma"], "sources": ["fdm-cpu-aos", "fdm-gpu-fp64", "fdm-gpu-fp32"]},
-    {"id": "eq-sot-api-llg", "symbols": ["m", "gamma", "Hsot", "R", "alpha", "xiDL", "xiFL", "sigma"], "sources": ["fdm-cpu-aos", "fdm-gpu-fp64", "fdm-gpu-fp32"]},
-    {"id": "eq-sot-api-source-magnitude", "symbols": ["Je", "Jtransport"], "sources": ["planner-sot"]}
-  ],
+  "symbols": [],
+  "equations": [],
   "public_api": {
-    "parameters": [
-      {"python": "SpinOrbitTorque.charge_current_density_a_per_m2", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{A\\,m^{-2}}$", "validation": "positive when supplied; mutually exclusive with current_source", "meaning": "direct current-density magnitude", "backend_support": "FDM CPU/GPU; FEM rejected", "problem_ir": "spin_torque_modules[].charge_current_density_a_per_m2"},
-      {"python": "SpinOrbitTorque.current_source", "type": "str or None", "default": "None", "si_unit": "$1$", "validation": "non-empty and must reference CurrentTransport; mutually exclusive with direct current", "meaning": "named current source", "backend_support": "prescribed-density FDM source resolution", "problem_ir": "spin_torque_modules[].current_source"},
-      {"python": "SpinOrbitTorque.damping_like_efficiency", "type": "float", "default": "0.0", "si_unit": "$1$", "validation": "dimensionless; signed values are preserved", "meaning": "damping-like SOT efficiency", "backend_support": "FDM CPU/GPU", "problem_ir": "spin_torque_modules[].damping_like_efficiency"},
-      {"python": "SpinOrbitTorque.field_like_efficiency", "type": "float", "default": "0.0", "si_unit": "$1$", "validation": "dimensionless; signed values are preserved", "meaning": "field-like SOT efficiency", "backend_support": "FDM CPU/GPU", "problem_ir": "spin_torque_modules[].field_like_efficiency"},
-      {"python": "SpinOrbitTorque.spin_polarization", "type": "Sequence[float]", "default": "(0, 0, 1)", "si_unit": "$1$", "validation": "three finite components; normalized by FDM runtime", "meaning": "spin-polarization direction", "backend_support": "FDM CPU/GPU", "problem_ir": "spin_torque_modules[].spin_polarization"},
-      {"python": "SpinOrbitTorque.ferromagnet_thickness_m", "type": "float", "default": "1e-9", "si_unit": "$\\mathrm{m}$", "validation": "strictly positive", "meaning": "ferromagnet thickness in amplitude denominator", "backend_support": "FDM CPU/GPU", "problem_ir": "spin_torque_modules[].ferromagnet_thickness_m"},
-      {"python": "CurrentTransport.name", "type": "str", "default": "required", "si_unit": "$1$", "validation": "non-empty and unique", "meaning": "named source key", "backend_support": "source lookup", "problem_ir": "current_modules[].name"},
-      {"python": "CurrentTransport.model", "type": "str", "default": "prescribed_density", "si_unit": "$1$", "validation": "prescribed_density or ohmic_poisson", "meaning": "transport model", "backend_support": "prescribed_density executable; ohmic_poisson semantic-only", "problem_ir": "current_modules[].model"},
-      {"python": "CurrentTransport.current_density", "type": "Sequence[float] or None", "default": "None", "si_unit": "$\\mathrm{A\\,m^{-2}}$", "validation": "required for prescribed_density; forbidden for ohmic_poisson", "meaning": "source vector", "backend_support": "prescribed-density source resolution", "problem_ir": "current_modules[].current_density"},
-      {"python": "CurrentTransport.solve_region", "type": "str or None", "default": "None", "si_unit": "$1$", "validation": "non-empty when supplied", "meaning": "source region identifier", "backend_support": "serialized source metadata", "problem_ir": "current_modules[].solve_region"},
-      {"python": "CurrentTransport.conductivity_s_per_m", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{S\\,m^{-1}}$", "validation": "positive when supplied", "meaning": "conductivity metadata", "backend_support": "serialized; not an Ohmic execution proof", "problem_ir": "current_modules[].conductivity_s_per_m"}
-    ]
+    "parameters": []
   }
 }

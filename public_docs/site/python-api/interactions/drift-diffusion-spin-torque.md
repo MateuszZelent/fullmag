@@ -4,181 +4,146 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: public_docs/site/physics/interactions/drift-diffusion-spin-torque/index.md
 ---
 
 (public-docs-python-api-interactions-drift-diffusion-spin-torque)=
 # Drift-diffusion spin torque Python API
 
-DriftDiffusionSpinTorque is currently a semantic-only public object. It validates a
-compact request and lowers it to a spin-torque module fragment; it is not executable on
-FDM CPU, FDM GPU, FEM CPU, or FEM GPU.
+This page owns the Python authoring, validation, and `ProblemIR` boundary. The scientific
+equations and backend interpretation are owned by {doc}`../../physics/interactions/drift-diffusion-spin-torque/index`.
 
-(api-ddst-problem-statement)=
+(api-drift-diffusion-spin-torque-problem-statement)=
 ## Physical problem
 
-The object names a future self-consistent spin-transport torque. It must not be confused
-with the currently executable prescribed-current Slonczewski or Zhang-Li classes.
+This page is the public physical and authoring contract for the interaction. It separates authored semantics, planner resolution, executable backend lanes, and scientific qualification.
 
-(api-ddst-governing-equations)=
-## Governing equations
+(api-drift-diffusion-spin-torque-python-api)=
+## Python API and stage-first example
 
-The intended transport and torque forms are owned by the physics page:
-
-```{math}
-:label: eq-api-ddst-transport
-\frac{\partial\mathbf s}{\partial t}
-=-\nabla\cdot\mathbf J_s-\frac{\mathbf s}{\tau_{\mathrm{sf}}}
--\frac{\mathbf s\times\mathbf m}{\tau_{\mathrm{ex}}}
-+\mathbf q_{\mathrm{src}}.
-```
-
-```{math}
-:label: eq-api-ddst-torque
-\boldsymbol{\tau}_{\mathrm{DD}}
-=-\frac{1}{\tau_{\mathrm{ex}}}\mathbf s\times\mathbf m.
-```
-
-(api-ddst-symbols-and-si-units)=
-## Symbols and SI units
-
-| Symbol | Definition | SI unit |
-|---|---|---:|
-| $\mathbf s$ | spin accumulation | $\mathrm{A\,s\,m^{-3}}$ |
-| $\mathbf J_s$ | spin-current tensor | $\mathrm{A\,m^{-2}}$ |
-| $\tau_{\mathrm{sf}}$ | spin-flip time | $\mathrm{s}$ |
-| $\tau_{\mathrm{ex}}$ | exchange-transfer time | $\mathrm{s}$ |
-| $\boldsymbol{\tau}_{\mathrm{DD}}$ | intended torque density | $\mathrm{A\,s\,m^{-3}\,s^{-1}}$ |
-| $\lambda_{\mathrm{sf}}$ | spin-diffusion length | $\mathrm{m}$ |
-| $\mathbf J$ | charge-current density input | $\mathrm{A\,m^{-2}}$ |
-| $P$ | degree parameter | $1$ |
-| $\beta$ | non-adiabatic parameter | $1$ |
-| $\mathbf p$ | spin-polarization vector | $1$ |
-| $\mathbf m$ | reduced magnetization | $1$ |
-
-(api-ddst-assumptions-and-validity)=
-## Assumptions and validity
-
-The current object exposes no transport coefficients, interface conditions, or solver
-policy. Only constructor validation and IR serialization are implemented. A stage-first
-simulation example is therefore not possible without inventing an unsupported registration
-method; this page publishes no executable Python cell until that stage hook exists.
-
-(api-ddst-python-api)=
-## Complete constructor
-
-
-| Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
-|---|---|---|---|---|---|---|---|
-| current_density | Sequence[float] or None | None | $\mathrm{A\,m^{-2}}$ | three finite values; exclusive with source | prescribed current vector | semantic only | current_density |
-| current_source | str or None | None | $1$ | non-empty; exclusive with density | symbolic current provider | semantic only | current_source |
-| spin_polarization | Sequence[float] | (0,0,1) | $1$ | three finite values; no normalization | polarization vector | semantic only | spin_polarization |
-| degree | float | 0.4 | $1$ | 0 < degree <= 1 | efficiency P | semantic only | degree |
-| beta | float | 0.0 | $1$ | beta >= 0 | non-adiabatic coefficient | semantic only | beta |
-| spin_diffusion_length_m | float | 5e-9 | $\mathrm{m}$ | strictly positive | diffusion length | semantic only | spin_diffusion_length_m |
-
-(api-ddst-example)=
-````python
-# %% DriftDiffusionSpinTorque constructor
+```python
+# %% Study, execution lane, and magnetic body
 import fullmag as fm
 
-nm = 1e-9
+nm = 1.0e-9
+study = fm.study("spin_transport_authoring_boundary")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
+body = study.geometry(fm.Box(40 * nm, 20 * nm, 4 * nm), name="film")
+body.Ms = 8.0e5
+body.Aex = 13.0e-12
+body.alpha = 0.02
+body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
-# Constructor-level example (stage builder support pending)
-# Register a drift-diffusion spin torque term with explicit current density
-ddst = fm.DriftDiffusionSpinTorque(
-    current_density=(0, 0, 5e11),  # A/m² along +z
-    spin_polarization=(0, 0, 1),
-    degree=0.4,
-    beta=0.01,
-    spin_diffusion_length_m=5e-9,
+region = fm.RegionRef("film")
+spin = fm.SpinDriftDiffusion(
+    id="spin",
+    current_source_id="charge",
+    domain=(region,),
+    materials=(fm.SpinTransportMaterialAssignment(
+        region,
+        fm.SpinTransportMaterial(
+            sigma_s_Spm=5.0e6,
+            polarization_p=0.2,
+            theta_sh=0.1,
+            lambda_sf_m=2.0e-9,
+            lambda_j_m=1.0e-9,
+            lambda_phi_m=1.0e-9,
+        ),
+    ),),
 )
-print(f"Registered DriftDiffusionSpinTorque: {ddst}")
-
-# Constructor-level example with named current source
-transport = fm.CurrentTransport(name="spin_channel", current_density=(0, 0, 5e11))
-ddst_source = fm.DriftDiffusionSpinTorque(
-    current_source="spin_channel",
-    spin_polarization=(0, 0, 1),
-    degree=0.4,
-    beta=0.01,
-)
-print(f"Registered with source: {ddst_source}")
-````
-
-(api-ddst-problem-ir)=
-## ProblemIR lowering
-
-For a density-bound request, to_ir_module emits:
-
-```json
-{
-  "kind": "drift_diffusion",
-  "spin_polarization": [0.0, 0.0, 1.0],
-  "degree": 0.4,
-  "beta": 0.01,
-  "spin_diffusion_length_m": 5e-09,
-  "current_density": [0.0, 0.0, 10000000000.0]
-}
+study.spin_transport(spin)
+study.spin_torque(fm.DriftDiffusionSpinTorque("transport_torque", spin.id, region))
+study.stages.add_run(stage_id="authoring_boundary", until=1.0e-15)
 ```
 
-The unused current binding is omitted. Values are converted to JSON lists and finite
-scalars are preserved in SI units.
+The exported canonical classes live in `fullmag.model.spin_transport`. A duplicate placeholder
+class named `DriftDiffusionSpinTorque` exists in `spin_torque.py`; remove or rename it. Public
+documentation and type checking must bind only the canonical class.
 
-(api-ddst-round-trip-and-failure-semantics)=
-## Round-trip and failure semantics
+## `SpinDriftDiffusion` parameters
 
-Requested intent is the validated semantic object and its chosen current binding. Resolved
-execution is unsupported in the current planner. Python rejects both-or-neither current
-bindings, empty source names, wrong-length or non-finite vectors, degree outside (0,1],
-negative beta, and non-positive diffusion length. Strict planning must report unsupported
-capability; it must not substitute another torque model.
-Validation errors and unsupported combinations are explicit. Resolved execution is absent
-rather than silently substituted with another torque model.
+| Parameter | Default | Meaning |
+|---|---|---|
+| `id` | required | stable solve identity |
+| `current_source_id` | required | compatible `CurrentTransport` name |
+| `domain` | required non-empty | solved regions |
+| `materials` | required non-empty | typed spin-material assignments |
+| `interfaces` | `()` | transparent/mixing interface laws |
+| `boundaries` | `()` | typed spin boundary conditions |
+| `solver` | `SpinSolverPolicy()` | linear/nonlinear policy |
+| `requested_execution` | default transport target | strict requested lane |
+| `mode` | `"steady"` | `"steady"` or `"transient"` |
 
-(api-ddst-discrete-realization)=
-## Discrete realization
+Transient mode requires physical spin-capacitance metadata for every material.
 
-All four lanes are unsupported. There is no transport state, spin-current operator, weak
-form, CUDA kernel, device residency contract, or runtime qualification for this object.
-The absence is intentional in the capability matrix and is not CPU/GPU parity.
+## `DriftDiffusionSpinTorque`
 
-(api-ddst-implementation-mapping)=
-## Implementation mapping
+| Parameter | Meaning |
+|---|---|
+| `id` | stable torque-module identity |
+| `solve_id` | named accepted spin solve |
+| `target` | magnetic region receiving absorbed transverse angular momentum |
 
-The source class owns validation and to_ir_module owns canonical fragment emission. The
-current executable subset is defined in the spin-torque module source documentation and
-does not include DriftDiffusionSpinTorque.
+## Capability warning
 
-(api-ddst-validation)=
+FDM GPU and FEM GPU are semantic-only at the audited revision. CPU M1/M2 support is bounded and
+variant-specific. Constructor/IR success is not a generic executable capability.
+
+(api-drift-diffusion-spin-torque-validation)=
 ## Validation
 
-The focused spin-torque tests cover constructor lowering and diffusion-length emission.
-Future implementation requires transport conservation, boundary-condition, torque-sign,
-mesh/timestep/linear-solver, refinement, and matched CPU/GPU runtime tests.
+Require current-source compatibility, material/domain coverage, positive finite transport
+coefficients, explicit reaction disabling, gauge and boundary ownership, interface orientation,
+M2 Schur positivity, supported operator version, and fail-closed strict execution.
 
-(api-ddst-limitations)=
+(api-drift-diffusion-spin-torque-round-trip-and-failure-semantics)=
+## Round-trip and failure semantics
+
+Requested intent preserves the authored model, coefficients, orientations, targets, and execution request. Resolved execution records the selected solver, device, precision, discretization, and capability decision. Validation errors reject malformed or contradictory data before runtime. Unsupported combinations fail closed and are not silently omitted or converted to another interaction.
+
+(api-drift-diffusion-spin-torque-governing-equations)=
+## Governing equations
+
+The equations and sign conventions owned by this interaction are stated in the preceding scientific description.
+
+(api-drift-diffusion-spin-torque-symbols-and-si-units)=
+## Symbols and SI units
+
+All physical inputs use SI units. Dimensionless axes and reduced magnetization are normalized according to the stated contract.
+
+(api-drift-diffusion-spin-torque-assumptions-and-validity)=
+## Assumptions and validity
+
+The authored model is valid only within the continuum, discretization, boundary, and capability limits stated on this page.
+
+(api-drift-diffusion-spin-torque-problem-ir)=
+## ProblemIR
+
+Requested interaction data are serialized without replacing authored intent by backend-specific execution metadata.
+
+(api-drift-diffusion-spin-torque-discrete-realization)=
+## Discrete realization
+
+FDM and FEM, and CPU and GPU, are distinct numerical realizations. Their availability and qualification are reported separately in the capability tables above.
+
+(api-drift-diffusion-spin-torque-implementation-mapping)=
+## Implementation mapping
+
+Python owns authoring and serialization, ProblemIR owns canonical intent, planners own legality and realization selection, and backend kernels own numerical evaluation.
+
+(api-drift-diffusion-spin-torque-limitations)=
 ## Limitations
 
-No public stage registration, transport closure, interface model, output quantity,
-planner capability, or runtime realization exists. This page documents the present
-semantic contract and its explicit unsupported boundary.
+Capabilities not listed as executable must fail closed. Source presence alone is not runtime or scientific qualification.
 
-(api-ddst-scientific-bibliography)=
+(api-drift-diffusion-spin-torque-scientific-bibliography)=
 ## Scientific bibliography
 
-- Zhang, Levy, and Fert, Physical Review Letters 88, 236601 (2002),
-  DOI 10.1103/PhysRevLett.88.236601.
-- Petitjean, Luc, and Waintal, Physical Review Letters 109, 117204 (2012),
-  DOI 10.1103/PhysRevLett.109.117204.
+The principal references are listed in the interaction-specific bibliography above.
 
-(api-ddst-source-code-index)=
+(api-drift-diffusion-spin-torque-source-code-index)=
 ## Source-code index
 
-| Claim | Repository path | Stable symbol | Responsibility | Lane | Evidence |
-|---|---|---|---|---|---|
-| Constructor | packages/fullmag-py/src/fullmag/model/spin_torque.py | class DriftDiffusionSpinTorque | public state and validation | Python | test_stno_spin_torque.py |
-| Current binding | packages/fullmag-py/src/fullmag/model/spin_torque.py | _resolve_current_binding | exclusive current inputs | Python | constructor tests |
-| Degree validation | packages/fullmag-py/src/fullmag/model/spin_torque.py | _validated_degree | P range | Python | constructor tests |
-| Beta validation | packages/fullmag-py/src/fullmag/model/spin_torque.py | _validated_beta | beta lower bound | Python | constructor tests |
-| IR module | packages/fullmag-py/src/fullmag/model/spin_torque.py | to_ir_module | canonical payload | Python | test_drift_diffusion_to_ir_module |
+The implementation owners are listed in the interaction-specific source table above.

@@ -4,203 +4,118 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: docs/physics/0405-bulk-dmi.md
 ---
 
 (public-docs-python-api-interactions-bulk-dmi)=
 # Bulk DMI Python API
 
-This page documents the public Python authoring and lowering contract for
-isotropic bulk Dzyaloshinskii–Moriya interaction.
+This page owns the Python authoring, validation, and `ProblemIR` boundary. The scientific
+equations and backend interpretation are owned by {doc}`../../physics/interactions/dmi/index`.
 
-(bulk-dmi-api-problem-statement)=
-## 1. Problem statement
+(api-bulk-dmi-problem-statement)=
+## Physical problem
 
-Bulk DMI is represented by an explicit fullmag.BulkDMI term or by
-material-owned Material.Dbulk and Material.Dbulk_field values.
+This page is the public physical and authoring contract for the interaction. It separates authored semantics, planner resolution, executable backend lanes, and scientific qualification.
 
-(bulk-dmi-api-governing-equations)=
-## 2. Governing equations
+(api-bulk-dmi-python-api)=
+## Python API and stage-first example
 
-```{math}
-:label: eq-python-bulk-dmi-density
-w_b=D_b\,\mathbf m\cdot(\nabla\times\mathbf m),
-\qquad
-\mathbf H_b=-\frac{2D_b}{\mu_0M_s}(\nabla\times\mathbf m).
-```
-
-The coefficient has units $\mathrm{J\,m^{-2}}$ and the energy density has
-units $\mathrm{J\,m^{-3}}$.
-
-(bulk-dmi-api-symbols-and-si-units)=
-## 3. Symbols and SI units
-
-| Symbol | Meaning | SI unit |
-|---|---|---:|
-| $D_b$ | public bulk DMI coefficient | $\mathrm{J\,m^{-2}}$ |
-| $\mathbf m$ | reduced magnetization | $1$ |
-| $\mathbf H_b$ | bulk DMI effective field | $\mathrm{A\,m^{-1}}$ |
-| $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
-| $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
-| $w_b$ | bulk DMI energy density | $\mathrm{J\,m^{-3}}$ |
-| $E_b$ | bulk DMI energy | $\mathrm{J}$ |
-| $i$ | discrete cell index | $1$ |
-| $\mathcal A$ | active cell set | $1$ |
-| $V_i$ | cell volume | $\mathrm{m^3}$ |
-| $\nabla_h\times$ | discrete curl | $\mathrm{m^{-1}}$ |
-
-(bulk-dmi-api-assumptions-and-validity)=
-## 4. Assumptions and validity
-
-- D is finite and may have either sign.
-- Material fields are finite; cardinality is checked against the resolved mesh.
-- Explicit FDM execution currently requires all three axes periodic.
-- Construction and serialization do not execute a solver or prove GPU parity.
-
-(bulk-dmi-api-python-api)=
-## 5. Python API
-
-
-| Python parameter | Type | Default | SI unit | Validation domain | Meaning | Backend support | ProblemIR destination |
-|---|---|---|---|---|---|---|---|
-| BulkDMI.D | float | required | $\mathrm{J\,m^{-2}}$ | finite; either sign | explicit coefficient and chirality | FDM/FEM CPU/GPU subject to gates | energy_terms[].D for kind=bulk_dmi |
-| Material.Dbulk | float or None | None | $\mathrm{J\,m^{-2}}$ | finite when supplied | material scalar coefficient | FEM CPU/GPU; FDM planner-dependent | materials[].bulk_dmi |
-| Material.Dbulk_field | list[float] or None | None | $\mathrm{J\,m^{-2}}$ | finite; resolved cardinality | spatial nodal coefficient | FEM CPU/GPU | materials[].dbulk_field |
-
-The other required Material parameters (name, Ms, A, alpha) are documented
-by the canonical Material API page.
-
-(bulk-dmi-api-example)=
-````python
-# %% BulkDMI registration
+```python
+# %% Study, execution lane, and magnetic body
 import fullmag as fm
 
-nm = 1e-9
+nm = 1.0e-9
+study = fm.study("bulk_dmi_reference")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
+body = study.geometry(fm.Box(40 * nm, 20 * nm, 4 * nm), name="film")
+body.Ms = 8.0e5
+body.Aex = 13.0e-12
+body.alpha = 0.02
+body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
-# Stage-first authoring using explicit term registration
-study = fm.study("bulk_dmi_example")
-study.discretization("fem")
-study.device("cpu")
-
-study.universe(bounds=((0, 0, 0), (200 * nm, 200 * nm, 20 * nm)))
-
-# Register material with bulk DMI via material property
-mat = fm.Material(name="cobalt", Ms=1.4e6, A=2.0e-11, alpha=0.02, Dbulk=-3e-3)
-study.material(mat)
-
-# Register geometry
-film = fm.Box(size=(200 * nm, 200 * nm, 20 * nm), material="cobalt")
-study.geometry(film)
-
-# Alternatively register BulkDMI as explicit term
-study.terms.add(fm.BulkDMI(D=-3e-3))
-
-study.stages.add_relax(stage_id="relax", tolA=795.7747154594767)
-````
-
-(bulk-dmi-api-problem-ir)=
-## 6. ProblemIR
-
-```json
-{"kind": "bulk_dmi", "D": 0.003}
+body.Dbulk = 1.5e-3  # J/m^2
+study.pbc(x=True, y=True, z=True)
+study.demag(enabled=False)
+study.stages.add_run(stage_id="sample", until=1.0e-12)
 ```
 
-```json
-{"bulk_dmi": 0.003, "dbulk_field": null}
-```
+`D` is a signed coefficient in $\mathrm{J\,m^{-2}}$.
 
-| Python authoring | Normalized IR | Resolution |
-|---|---|---|
-| BulkDMI(D) | energy_terms[].kind=bulk_dmi and energy_terms[].D | explicit interaction term |
-| Material(Dbulk=D) | materials[].bulk_dmi | material scalar fallback when explicit scalar is absent |
-| Material(Dbulk_field=values) | materials[].dbulk_field | FEM spatial coefficient field |
+## Canonical material route
 
-The serializer preserves requested intent. Planner provenance records resolved
-solver, device, precision, coefficient route, mesh cardinality, and
-qualification status separately.
+The internal material field is `Dbulk`; the geometry facade should expose the documented canonical
+spelling consistently. Do not mix case variants between examples, exporter, and UI.
 
-(bulk-dmi-api-round-trip-and-failure-semantics)=
-## 7. Round-trip and failure semantics
+## Parameter reference
 
-Canonical export preserves explicit versus material authoring. The IR validator
-rejects non-finite explicit or material coefficients. The planner rejects
-non-periodic explicit FDM Bulk DMI and all multilayer FDM Bulk DMI.
+| Parameter | Type | SI unit | Required checks |
+|---|---|---:|---|
+| `D` | float | $\mathrm{J\,m^{-2}}$ | finite; either sign |
+| material bulk coefficient | float or spatial field | $\mathrm{J\,m^{-2}}$ | finite; mesh cardinality for fields |
+| periodicity/topology | planner policy | — | compatible with selected FDM bulk stencil |
 
-Validation errors are surfaced as errors. Unsupported combinations are not
-silently removed, converted to interfacial DMI, or executed on CPU as hidden
-fallback. Requested intent and resolved execution remain distinct.
+## Documentation/code correction
 
-(bulk-dmi-api-discrete-realization)=
-## 8. Discrete realization
+`Material.Dbulk` currently emits a suspicious-SI warning labelled `J/m^3`. The correct unit is
+`J/m^2` for $w=D\,\mathbf m\cdot\nabla\times\mathbf m$. Correct the warning before publishing
+threshold guidance.
 
-```{math}
-:label: eq-python-bulk-dmi-fdm
-\mathbf H_{b,i}=-\frac{2D_b}{\mu_0M_{s,i}}
-(\nabla_h\times\mathbf m)_i,
-\qquad
-E_b=\sum_{i\in\mathcal A}
-D_b[\mathbf m_i\cdot(\nabla_h\times\mathbf m)_i]V_i.
-```
+(api-bulk-dmi-validation)=
+## Failure semantics
 
-FEM lowers the same coefficient into the weak residual and lumped projection;
-the native element coefficient is the arithmetic mean of nodal Dbulk_field
-values. CPU/GPU share semantics but differ in execution, residency, reduction
-order, and qualification evidence.
+Reject duplicate explicit/material ownership, non-finite coefficients, unsupported non-periodic
+or multilayer FDM plans, missing FEM fields/buffers, and unavailable observables. Never rotate or
+change the sign of `D` silently.
 
-(bulk-dmi-api-implementation-mapping)=
-## 9. Implementation mapping
+(api-bulk-dmi-round-trip-and-failure-semantics)=
+## Round-trip and failure semantics
 
-| API route | FDM CPU/GPU | FEM CPU/GPU | Failure/provenance |
-|---|---|---|---|
-| BulkDMI.D | explicit scalar, all-axis periodic gate | explicit scalar weak residual | requested term and resolved lane are separate |
-| Material.Dbulk | planner-dependent material route | scalar fallback coefficient | no silent summation |
-| Material.Dbulk_field | no promise of FDM interpolation | nodal field, arithmetic element mean | resolved mesh cardinality required |
+Requested intent preserves the authored model, coefficients, orientations, targets, and execution request. Resolved execution records the selected solver, device, precision, discretization, and capability decision. Validation errors reject malformed or contradictory data before runtime. Unsupported combinations fail closed and are not silently omitted or converted to another interaction.
 
-(bulk-dmi-api-validation)=
-## 10. Validation
+(api-bulk-dmi-governing-equations)=
+## Governing equations
 
-| Test | Expected result | Evidence |
-|---|---|---|
-| BulkDMI(D).to_ir | exact bulk_dmi term | Python contract test |
-| material serialization | bulk_dmi and dbulk_field retained | Python contract test |
-| non-finite values | constructor/IR rejection | validation test |
-| non-periodic FDM | planner failure | planner test |
-| constant magnetization | zero bulk response | analytical test |
-| FEM weak residual | reference agreement | native weak-residual test |
-| GPU lane | parity only with device run | managed runtime evidence |
+The equations and sign conventions owned by this interaction are stated in the preceding scientific description.
 
-(bulk-dmi-api-limitations)=
-## 11. Limitations
+(api-bulk-dmi-symbols-and-si-units)=
+## Symbols and SI units
 
-- The public constructor has one scalar D; tensorial lower-symmetry DMI is not
-  represented.
-- FDM natural non-periodic boundary execution is not exposed.
-- Material field cardinality depends on the resolved mesh.
-- The constructor serializes intent; it does not execute a solver.
+All physical inputs use SI units. Dimensionless axes and reduced magnetization are normalized according to the stated contract.
 
-(bulk-dmi-api-scientific-bibliography)=
-## 12. Scientific bibliography
+(api-bulk-dmi-assumptions-and-validity)=
+## Assumptions and validity
 
-1. A. N. Bogdanov and D. A. Yablonskii, “Thermodynamically stable vortices
-   in magnetically ordered crystals,” *Soviet Physics JETP* 68, 101 (1989).
-2. A. N. Bogdanov and U. K. Rößler, “Chiral symmetry breaking in magnetic
-   thin films and multilayers,” *Physical Review Letters* 87, 037203 (2001),
-   [doi:10.1103/PhysRevLett.87.037203](https://doi.org/10.1103/PhysRevLett.87.037203).
+The authored model is valid only within the continuum, discretization, boundary, and capability limits stated on this page.
 
-(bulk-dmi-api-source-code-index)=
-## 13. Source-code index
+(api-bulk-dmi-problem-ir)=
+## ProblemIR
 
-| Claim | Repository path | Stable symbol | Responsibility | Evidence |
-|---|---|---|---|---|
-| explicit API | `packages/fullmag-py/src/fullmag/model/energy.py` | `class BulkDMI` | finite D and explicit IR | Python contract |
-| material API | `packages/fullmag-py/src/fullmag/model/structure.py` | `class Material` | Dbulk and Dbulk_field | Python contract |
-| FDM boundary API | `packages/fullmag-py/src/fullmag/model/problem.py` | `class FdmPbc` | axis/policy validation | Python contract |
-| IR validation | `crates/fullmag-ir/src/validation.rs` | `validate_dmi_energy_terms` | explicit finite check | IR contract |
-| material validation | `crates/fullmag-ir/src/validation.rs` | `validate_material_dmi_values` | material finite check | IR contract |
-| FDM planner | `crates/fullmag-plan/src/fdm.rs` | `plan_fdm` | periodic legality | planner |
-| FEM planner | `crates/fullmag-plan/src/fem.rs` | `plan_fem` | coefficient resolution | planner |
-| FDM CPU field | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `bulk_dmi_field` | field realization | FDM CPU |
-| FDM CPU energy | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `dmi_energy_from_soa` | energy reduction | FDM CPU |
-| FEM CPU | `backends/fem/cpu/mfem/interactions/dmi_bulk.cpp` | `compute_bulk_dmi_field` | weak residual/projection/energy | FEM CPU |
-| FEM weak algebra | `backends/fem/src/dmi_weak_residual.cpp` | `dmi_accumulate_bulk_residual` | residual algebra | FEM CPU/GPU |
-| FEM GPU | `backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu` | `dmi_element_residual_kernel` | element residual/energy | FEM GPU |
+Requested interaction data are serialized without replacing authored intent by backend-specific execution metadata.
+
+(api-bulk-dmi-discrete-realization)=
+## Discrete realization
+
+FDM and FEM, and CPU and GPU, are distinct numerical realizations. Their availability and qualification are reported separately in the capability tables above.
+
+(api-bulk-dmi-implementation-mapping)=
+## Implementation mapping
+
+Python owns authoring and serialization, ProblemIR owns canonical intent, planners own legality and realization selection, and backend kernels own numerical evaluation.
+
+(api-bulk-dmi-limitations)=
+## Limitations
+
+Capabilities not listed as executable must fail closed. Source presence alone is not runtime or scientific qualification.
+
+(api-bulk-dmi-scientific-bibliography)=
+## Scientific bibliography
+
+The principal references are listed in the interaction-specific bibliography above.
+
+(api-bulk-dmi-source-code-index)=
+## Source-code index
+
+The implementation owners are listed in the interaction-specific source table above.

@@ -2,55 +2,45 @@
   "document": {
     "path": "public_docs/site/python-api/interactions/cubic-anisotropy.md",
     "title": "Cubic anisotropy Python API",
-    "interaction": "cubic anisotropy authoring and migration contract"
+    "interaction": "cubic anisotropy"
   },
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "Backend-neutral lowering feeds the double-precision FDM reference lane."},
-    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "Planner output feeds standard CUDA cubic field and energy paths."},
-    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "Planner output feeds strict FEM crystal-frame validation and material paths."},
-    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "Planner output feeds device cubic kernels; executed-device parity remains separate evidence."}
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+    }
   ],
   "sources": [
-    {"id": "python-cubic", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class CubicAnisotropy", "responsibility": "Compatibility constructor and serialization."},
-    {"id": "python-material", "path": "packages/fullmag-py/src/fullmag/model/structure.py", "symbol": "class Material", "responsibility": "Canonical cubic material fields."},
-    {"id": "python-vector", "path": "packages/fullmag-py/src/fullmag/_validation.py", "symbol": "as_vector3", "responsibility": "Axis shape and finiteness validation."},
-    {"id": "python-migration", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "_migrate_legacy_anisotropy_energy_terms", "responsibility": "Material migration and conflict semantics."},
-    {"id": "planner-fdm", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "FDM material planning."},
-    {"id": "planner-fem", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem", "responsibility": "FEM material planning and crystal-frame validation."}
+    {
+      "id": "python-owner",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class CubicAnisotropy",
+      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+    }
   ],
-  "symbols": [
-    {"id": "c1", "latex": "$\\mathbf c_1$", "meaning": "first crystal axis", "si_unit": "$1$"},
-    {"id": "c2", "latex": "$\\mathbf c_2$", "meaning": "second crystal axis", "si_unit": "$1$"},
-    {"id": "c3", "latex": "$\\mathbf c_3$", "meaning": "derived third crystal axis", "si_unit": "$1$"},
-    {"id": "alpha", "latex": "$\\alpha_a$", "meaning": "direction cosine", "si_unit": "$1$"},
-    {"id": "Sigma", "latex": "$\\Sigma$", "meaning": "first cubic invariant", "si_unit": "$1$"},
-    {"id": "Kc1", "latex": "$K_{c1}$", "meaning": "first cubic constant", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
-    {"id": "Kc2", "latex": "$K_{c2}$", "meaning": "second cubic constant", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
-    {"id": "Kc3", "latex": "$K_{c3}$", "meaning": "third cubic constant", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
-    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
-    {"id": "wc", "latex": "$w_{\\mathrm c}$", "meaning": "cubic anisotropy energy density", "si_unit": "$\\mathrm{J\\,m^{-3}}$"}
-  ],
-  "equations": [
-    {"id": "eq-python-cubic-density", "symbols": ["wc", "Kc1", "Kc2", "Kc3", "Sigma", "alpha"], "sources": ["python-cubic", "python-material"]},
-    {"id": "eq-python-cubic-frame", "symbols": ["c1", "c2", "c3", "Sigma", "alpha", "m"], "sources": ["python-migration", "planner-fem"]},
-    {"id": "eq-python-cubic-ir-fields", "symbols": ["Kc1", "Kc2", "Kc3", "c1", "c2"], "sources": ["python-migration", "python-material"]}
-  ],
+  "symbols": [],
+  "equations": [],
   "public_api": {
-    "constructors": ["fullmag.CubicAnisotropy", "fullmag.Material"],
-    "parameters": [
-      {"python": "CubicAnisotropy.kc1", "type": "float", "default": "required", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite", "meaning": "first cubic constant", "backend_support": "FDM/FEM CPU/GPU after migration", "problem_ir": "`materials[].cubic_anisotropy_kc1`"},
-      {"python": "CubicAnisotropy.kc2", "type": "float", "default": "0.0", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite", "meaning": "second cubic constant", "backend_support": "FDM/FEM CPU/GPU after migration", "problem_ir": "`materials[].cubic_anisotropy_kc2`"},
-      {"python": "CubicAnisotropy.kc3", "type": "float", "default": "0.0", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite", "meaning": "third cubic constant", "backend_support": "FDM/FEM CPU/GPU after migration", "problem_ir": "`materials[].cubic_anisotropy_kc3`"},
-      {"python": "CubicAnisotropy.axis1", "type": "Sequence[float]", "default": "(1,0,0)", "si_unit": "$1$", "validation": "length 3; finite", "meaning": "first crystal axis", "backend_support": "FDM/FEM CPU/GPU after migration", "problem_ir": "`materials[].cubic_anisotropy_axis1`"},
-      {"python": "CubicAnisotropy.axis2", "type": "Sequence[float]", "default": "(0,1,0)", "si_unit": "$1$", "validation": "length 3; finite", "meaning": "second crystal axis", "backend_support": "FDM/FEM CPU/GPU after migration", "problem_ir": "`materials[].cubic_anisotropy_axis2`"},
-      {"python": "Material.Kc1", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite when supplied", "meaning": "canonical first cubic value", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "`materials[].cubic_anisotropy_kc1`"},
-      {"python": "Material.Kc2", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite when supplied", "meaning": "canonical second cubic value", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "`materials[].cubic_anisotropy_kc2`"},
-      {"python": "Material.Kc3", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite when supplied", "meaning": "canonical third cubic value", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "`materials[].cubic_anisotropy_kc3`"},
-      {"python": "Material.anisC1", "type": "tuple[float,float,float] | None", "default": "None", "si_unit": "$1$", "validation": "length 3; finite", "meaning": "first crystal axis", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "`materials[].cubic_anisotropy_axis1`"},
-      {"python": "Material.anisC2", "type": "tuple[float,float,float] | None", "default": "None", "si_unit": "$1$", "validation": "length 3; finite", "meaning": "second crystal axis", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "`materials[].cubic_anisotropy_axis2`"},
-      {"python": "Material.Kc1_field", "type": "list[float] | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite; cardinality downstream", "meaning": "spatial Kc1 override", "backend_support": "FEM and supported allocating FDM reference paths", "problem_ir": "`materials[].kc1_field`"},
-      {"python": "Material.Kc2_field", "type": "list[float] | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite; cardinality downstream", "meaning": "spatial Kc2 override", "backend_support": "FEM and supported allocating FDM reference paths", "problem_ir": "`materials[].kc2_field`"},
-      {"python": "Material.Kc3_field", "type": "list[float] | None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-3}}$", "validation": "finite; cardinality downstream", "meaning": "spatial Kc3 override", "backend_support": "FEM and supported allocating FDM reference paths", "problem_ir": "`materials[].kc3_field`"}
-    ]
+    "parameters": []
   }
 }

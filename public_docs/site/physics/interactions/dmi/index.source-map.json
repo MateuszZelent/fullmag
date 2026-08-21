@@ -2,108 +2,45 @@
   "document": {
     "path": "public_docs/site/physics/interactions/dmi/index.md",
     "title": "Dzyaloshinskii–Moriya interaction",
-    "interaction": "interfacial and isotropic bulk DMI"
+    "interaction": "dmi"
   },
   "backend_matrix": [
     {
       "solver": "FDM",
       "device": "CPU",
-      "status": "reference",
-      "reason": "Native centered interfacial and bulk DMI field/energy routines and CPU comparison tests are present."
+      "status": "partial",
+      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
     },
     {
       "solver": "FDM",
       "device": "GPU",
-      "status": "implemented",
-      "reason": "FP64/FP32 CUDA field and reduction paths are present; executed-device parity is separate evidence."
+      "status": "partial",
+      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
     },
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "implemented",
-      "reason": "Native MFEM field, weak residual, material-field, and lumped projection paths are present."
+      "status": "partial",
+      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "implemented",
-      "reason": "CUDA element residual and resident field/reduction paths are present; executed-device qualification is separate."
+      "status": "partial",
+      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
     }
   ],
   "sources": [
-    {"id": "python-interfacial", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class InterfacialDMI", "responsibility": "Explicit interfacial DMI constructor and IR lowering."},
-    {"id": "python-bulk", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class BulkDMI", "responsibility": "Explicit bulk DMI constructor and IR lowering."},
-    {"id": "python-material", "path": "packages/fullmag-py/src/fullmag/model/structure.py", "symbol": "class Material", "responsibility": "Scalar and spatial DMI material routes."},
-    {"id": "python-pbc", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "class FdmPbc", "responsibility": "FDM periodicity and demag-policy serialization."},
-    {"id": "ir-explicit", "path": "crates/fullmag-ir/src/validation.rs", "symbol": "validate_dmi_energy_terms", "responsibility": "Finite explicit DMI coefficient and normal validation."},
-    {"id": "ir-material", "path": "crates/fullmag-ir/src/validation.rs", "symbol": "validate_material_dmi_values", "responsibility": "Finite scalar and spatial material DMI validation."},
-    {"id": "planner-fdm", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "FDM DMI lane restrictions and plan resolution."},
-    {"id": "planner-fem", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem", "responsibility": "FEM normal, material-field, and mesh resolution."},
-    {"id": "fdm-interfacial", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "interfacial_dmi_field", "responsibility": "Centered +z interfacial DMI field."},
-    {"id": "fdm-bulk", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "bulk_dmi_field", "responsibility": "Centered bulk DMI curl field."},
-    {"id": "fdm-gpu", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "combine_effective_field_fp64_kernel", "responsibility": "Fused FP64 CUDA DMI field assembly."},
-    {"id": "fem-interfacial", "path": "backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp", "symbol": "compute_interfacial_dmi_field", "responsibility": "Native FEM interfacial DMI field."},
-    {"id": "fem-bulk", "path": "backends/fem/cpu/mfem/interactions/dmi_bulk.cpp", "symbol": "compute_bulk_dmi_field", "responsibility": "Native FEM bulk DMI field."},
-    {"id": "fem-weak-interfacial", "path": "backends/fem/src/dmi_weak_residual.cpp", "symbol": "dmi_accumulate_interfacial_residual", "responsibility": "Interfacial DMI element weak residual."},
-    {"id": "fem-weak-bulk", "path": "backends/fem/src/dmi_weak_residual.cpp", "symbol": "dmi_accumulate_bulk_residual", "responsibility": "Bulk DMI element weak residual."},
-    {"id": "fem-projection", "path": "backends/fem/src/dmi_weak_residual.cpp", "symbol": "dmi_project_lumped_field", "responsibility": "FEM DMI residual-to-field projection."},
-    {"id": "fem-gpu", "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu", "symbol": "dmi_element_residual_kernel", "responsibility": "CUDA FEM element residual and energy kernel."},
-    {"id": "fdm-test", "path": "crates/fullmag-engine/src/lib.rs", "symbol": "dmi_soa_effective_field_matches_aos_for_supported_stencil_terms", "responsibility": "FDM allocating/in-place DMI field consistency test."},
-    {"id": "fem-interfacial-test", "path": "crates/fullmag-engine/src/fem.rs", "symbol": "interfacial_dmi_field_action_matches_energy_directional_derivative", "responsibility": "FEM interfacial DMI variational-direction test."},
-    {"id": "fem-bulk-test", "path": "crates/fullmag-engine/src/fem.rs", "symbol": "bulk_dmi_field_action_matches_energy_directional_derivative", "responsibility": "FEM bulk DMI variational-direction test."}
+    {
+      "id": "python-owner",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class InterfacialDMI",
+      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+    }
   ],
-  "symbols": [
-    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
-    {"id": "M", "latex": "$\\mathbf M$", "meaning": "physical magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "Di", "latex": "$D_{\\mathrm i}$", "meaning": "interfacial DMI coefficient", "si_unit": "$\\mathrm{J\\,m^{-2}}$"},
-    {"id": "Db", "latex": "$D_{\\mathrm b}$", "meaning": "bulk DMI coefficient", "si_unit": "$\\mathrm{J\\,m^{-2}}$"},
-    {"id": "A", "latex": "$A$", "meaning": "exchange stiffness in the coupled boundary law", "si_unit": "$\\mathrm{J\\,m^{-1}}$"},
-    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
-    {"id": "n", "latex": "$\\hat{\\mathbf n}$", "meaning": "normalized interfacial symmetry normal", "si_unit": "$1$"},
-    {"id": "nu", "latex": "$\\boldsymbol\\nu$", "meaning": "outward magnetic-boundary normal", "si_unit": "$1$"},
-    {"id": "Omega", "latex": "$\\Omega_m$", "meaning": "magnetic integration domain", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "wi", "latex": "$w_{\\mathrm i}$", "meaning": "interfacial DMI energy density", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
-    {"id": "wb", "latex": "$w_{\\mathrm b}$", "meaning": "bulk DMI energy density", "si_unit": "$\\mathrm{J\\,m^{-3}}$"},
-    {"id": "Ei", "latex": "$E_{\\mathrm i}$", "meaning": "interfacial DMI energy", "si_unit": "$\\mathrm{J}$"},
-    {"id": "Eb", "latex": "$E_{\\mathrm b}$", "meaning": "bulk DMI energy", "si_unit": "$\\mathrm{J}$"},
-    {"id": "EDMI", "latex": "$E_{\\mathrm{DMI}}$", "meaning": "total DMI energy", "si_unit": "$\\mathrm{J}$"},
-    {"id": "Hi", "latex": "$\\mathbf H_{\\mathrm i}$", "meaning": "interfacial DMI effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "Hb", "latex": "$\\mathbf H_{\\mathrm b}$", "meaning": "bulk DMI effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "HDMI", "latex": "$\\mathbf H_{\\mathrm{DMI}}$", "meaning": "total DMI effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "curl", "latex": "$\\nabla\\times$", "meaning": "continuum curl operator", "si_unit": "$\\mathrm{m^{-1}}$"},
-    {"id": "curlh", "latex": "$\\nabla_h\\times$", "meaning": "centered FDM curl operator", "si_unit": "$\\mathrm{m^{-1}}$"},
-    {"id": "delta", "latex": "$\\delta_\\alpha$", "meaning": "centered derivative along coordinate $\\alpha$", "si_unit": "$\\mathrm{m^{-1}}$"},
-    {"id": "dxyz", "latex": "$\\Delta x,\\Delta y,\\Delta z$", "meaning": "FDM cell dimensions", "si_unit": "$\\mathrm{m}$"},
-    {"id": "V", "latex": "$V_i$", "meaning": "volume of FDM cell $i$", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "i", "latex": "$i$", "meaning": "FDM cell or FEM node index", "si_unit": "$1$"},
-    {"id": "Aset", "latex": "$\\mathcal A$", "meaning": "active magnetic FDM cell set", "si_unit": "$1$"},
-    {"id": "v", "latex": "$\\mathbf v$", "meaning": "admissible variational/test field", "si_unit": "$1$"},
-    {"id": "g", "latex": "$g_i$", "meaning": "assembled FEM DMI residual at node $i$", "si_unit": "$\\mathrm{J}$"},
-    {"id": "wlump", "latex": "$w_i^{\\mathrm{lump}}$", "meaning": "FEM lumped nodal integration weight", "si_unit": "$\\mathrm{m^3}$"}
-  ],
-  "equations": [
-    {"id": "eq-dmi-interfacial-density", "symbols": ["Di", "m", "n"], "sources": ["python-interfacial", "fem-weak-interfacial"]},
-    {"id": "eq-dmi-interfacial-energy-field", "symbols": ["Ei", "wi", "Hi", "Di", "mu0", "Ms", "m", "n", "Omega"], "sources": ["fdm-interfacial", "fem-interfacial"]},
-    {"id": "eq-dmi-bulk-density", "symbols": ["Db", "m", "curl", "wb"], "sources": ["python-bulk", "fem-weak-bulk"]},
-    {"id": "eq-dmi-bulk-energy-field", "symbols": ["Eb", "wb", "Hb", "Db", "mu0", "Ms", "curl", "Omega"], "sources": ["fdm-bulk", "fem-bulk"]},
-    {"id": "eq-dmi-total-energy-field", "symbols": ["EDMI", "Ei", "Eb", "HDMI", "Hi", "Hb"], "sources": ["fdm-interfacial", "fdm-bulk"]},
-    {"id": "eq-dmi-fdm-interfacial-field", "symbols": ["Hi", "Di", "mu0", "Ms", "delta", "m"], "sources": ["fdm-interfacial"]},
-    {"id": "eq-dmi-fdm-bulk-field", "symbols": ["Hb", "Db", "mu0", "Ms", "curlh", "delta", "m"], "sources": ["fdm-bulk"]},
-    {"id": "eq-dmi-fem-lumped-projection", "symbols": ["HDMI", "g", "mu0", "Ms", "wlump"], "sources": ["fem-projection"]}
-  ],
+  "symbols": [],
+  "equations": [],
   "public_api": {
-    "parameters": [
-      {"python": "InterfacialDMI.D", "type": "float", "default": "required", "si_unit": "$\\mathrm{J\\,m^{-2}}$", "validation": "finite", "meaning": "interfacial coefficient and chirality sign", "backend_support": "FDM/FEM CPU/GPU subject to lane policy", "problem_ir": "energy_terms[].D"},
-      {"python": "InterfacialDMI.interface_normal", "type": "Sequence[float] or None", "default": "None", "si_unit": "$1$", "validation": "length three and finite; non-zero for FEM; FDM accepts +z only", "meaning": "interfacial symmetry normal", "backend_support": "FDM +z; FEM any non-zero normalized vector", "problem_ir": "energy_terms[].interface_normal"},
-      {"python": "BulkDMI.D", "type": "float", "default": "required", "si_unit": "$\\mathrm{J\\,m^{-2}}$", "validation": "finite; either sign", "meaning": "isotropic bulk coefficient and chirality sign", "backend_support": "FDM/FEM CPU/GPU subject to lane policy", "problem_ir": "energy_terms[].D"},
-      {"python": "Material.Dind", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-2}}$", "validation": "finite when supplied", "meaning": "material-owned scalar interfacial coefficient", "backend_support": "FEM CPU/GPU; not an independent FDM scalar route", "problem_ir": "materials[].interfacial_dmi"},
-      {"python": "Material.Dbulk", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-2}}$", "validation": "finite when supplied", "meaning": "material-owned scalar bulk coefficient", "backend_support": "FEM CPU/GPU; FDM planner-dependent", "problem_ir": "materials[].bulk_dmi"},
-      {"python": "Material.Dind_field", "type": "list[float] or None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-2}}$", "validation": "finite values and resolved FEM node cardinality", "meaning": "spatial interfacial coefficient field", "backend_support": "FEM CPU/GPU", "problem_ir": "materials[].dind_field"},
-      {"python": "Material.Dbulk_field", "type": "list[float] or None", "default": "None", "si_unit": "$\\mathrm{J\\,m^{-2}}$", "validation": "finite values and resolved FEM node cardinality", "meaning": "spatial bulk coefficient field", "backend_support": "FEM CPU/GPU", "problem_ir": "materials[].dbulk_field"},
-      {"python": "FdmPbc.axes", "type": "tuple[bool,bool,bool]", "default": "required", "si_unit": "$1$", "validation": "exactly three booleans", "meaning": "periodic/open policy per Cartesian axis", "backend_support": "FDM CPU/GPU", "problem_ir": "pbc.axes"},
-      {"python": "FdmPbc.demag", "type": "str", "default": "open", "si_unit": "$1$", "validation": "open, truncated_images, or periodic_airbox_k0", "meaning": "demagnetization policy carried with the FDM request", "backend_support": "FDM", "problem_ir": "pbc.demag"},
-      {"python": "FdmPbc.image_counts", "type": "tuple[int,int,int] or None", "default": "None", "si_unit": "$1$", "validation": "exactly three non-negative integers; only with truncated_images", "meaning": "finite image counts for the demag policy", "backend_support": "FDM", "problem_ir": "pbc.image_counts"}
-    ]
+    "parameters": []
   }
 }

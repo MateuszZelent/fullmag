@@ -2,49 +2,45 @@
   "document": {
     "path": "public_docs/site/physics/interactions/inter-region-couplings/index.md",
     "title": "Inter-region couplings",
-    "interaction": "inter-region couplings"
+    "interaction": "inter region couplings"
   },
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "unsupported", "reason": "The planner rejects enabled runtime couplings on the FDM CPU lane."},
-    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "Only region-to-region exchange is materialized for FDM CUDA."},
-    {"solver": "FEM", "device": "CPU", "status": "unsupported", "reason": "No FEM coupling materializer is present in strict planning."},
-    {"solver": "FEM", "device": "GPU", "status": "unsupported", "reason": "No FEM GPU coupling materializer or device evidence exists."}
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+    }
   ],
   "sources": [
-    {"id": "registry", "path": "packages/fullmag-py/src/fullmag/model/couplings.py", "symbol": "class CouplingRegistry", "responsibility": "coupling validation and IR construction"},
-    {"id": "endpoint", "path": "packages/fullmag-py/src/fullmag/model/couplings.py", "symbol": "class CouplingEndpoint", "responsibility": "endpoint payload construction"},
-    {"id": "exchange", "path": "packages/fullmag-py/src/fullmag/model/couplings.py", "symbol": "exchange", "responsibility": "region exchange mode validation"},
-    {"id": "rkky", "path": "packages/fullmag-py/src/fullmag/model/couplings.py", "symbol": "rkky", "responsibility": "RKKY surface coupling"},
-    {"id": "interlayer", "path": "packages/fullmag-py/src/fullmag/model/couplings.py", "symbol": "interlayer_exchange", "responsibility": "interlayer exchange payload"},
-    {"id": "study-couplings", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyCouplingsHandle", "responsibility": "stage-first facade"},
-    {"id": "planner", "path": "crates/fullmag-plan/src/validate.rs", "symbol": "validate_region_owned_planning", "responsibility": "fail-closed coupling capability gate"},
-    {"id": "fdm", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "materialize_region_exchange_couplings", "responsibility": "FDM region-link materialization"}
+    {
+      "id": "python-owner",
+      "path": "packages/fullmag-py/src/fullmag/model/couplings.py",
+      "symbol": "class CouplingRegistry",
+      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+    }
   ],
-  "symbols": [
-    {"id": "ma", "latex": "$\\mathbf m_a,\\mathbf m_b$", "meaning": "reduced magnetization on coupling endpoints", "si_unit": "$1$"},
-    {"id": "mb", "latex": "$\\mathbf m_a,\\mathbf m_b$", "meaning": "reduced magnetization on coupling endpoints", "si_unit": "$1$"},
-    {"id": "J1", "latex": "$J_1$", "meaning": "bilinear surface-coupling coefficient", "si_unit": "$\\mathrm{J\\,m^{-2}}$"},
-    {"id": "J2", "latex": "$J_2$", "meaning": "biquadratic surface-coupling coefficient", "si_unit": "$\\mathrm{J\\,m^{-2}}$"},
-    {"id": "sigma", "latex": "$\\sigma_{\\mathrm{surf}}$", "meaning": "surface energy density", "si_unit": "$\\mathrm{J\\,m^{-2}}$"},
-    {"id": "Esurf", "latex": "$E_{\\mathrm{surf}}$", "meaning": "integrated surface coupling energy", "si_unit": "$\\mathrm{J}$"},
-    {"id": "Gamma", "latex": "$\\Gamma_{ab}$", "meaning": "resolved coupled surface pair", "si_unit": "$\\mathrm{m^2}$"},
-    {"id": "Aa", "latex": "$A_a,A_b$", "meaning": "exchange stiffness on adjacent regions", "si_unit": "$\\mathrm{J\\,m^{-1}}$"},
-    {"id": "Ab", "latex": "$A_a,A_b$", "meaning": "exchange stiffness on adjacent regions", "si_unit": "$\\mathrm{J\\,m^{-1}}$"},
-    {"id": "Aharm", "latex": "$A_{ab}^{\\mathrm{harm}}$", "meaning": "harmonic-mean interface stiffness", "si_unit": "$\\mathrm{J\\,m^{-1}}$"},
-    {"id": "Aab", "latex": "$A_{ab}$", "meaning": "realized region-link stiffness", "si_unit": "$\\mathrm{J\\,m^{-1}}$"},
-    {"id": "scale", "latex": "$s$", "meaning": "harmonic-mean scale", "si_unit": "$1$"},
-    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
-    {"id": "Msa", "latex": "$M_{s,a}$", "meaning": "saturation magnetization of endpoint $a$", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "Hcpl", "latex": "$\\mathbf H_{a,\\mathrm{cpl}}$", "meaning": "coupling effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "n", "latex": "$\\mathbf n$", "meaning": "outward unit normal of a selected face", "si_unit": "$1$"},
-    {"id": "dS", "latex": "$\\mathrm dS$", "meaning": "surface measure", "si_unit": "$\\mathrm{m^2}$"}
-  ],
-  "equations": [
-    {"id": "eq-irc-bilinear", "symbols": ["J1", "J2", "ma", "mb", "sigma"], "sources": ["registry", "rkky", "interlayer"]},
-    {"id": "eq-irc-surface-integral", "symbols": ["Esurf", "Gamma", "sigma", "dS"], "sources": ["rkky", "interlayer"]},
-    {"id": "eq-irc-harmonic-mean", "symbols": ["Aharm", "Aa", "Ab"], "sources": ["exchange"]},
-    {"id": "eq-irc-scaled-exchange", "symbols": ["Aab", "scale", "Aharm"], "sources": ["exchange", "fdm"]},
-    {"id": "eq-irc-effective-field", "symbols": ["Hcpl", "mu0", "Msa", "ma", "Esurf"], "sources": ["registry", "planner"]}
-  ],
-  "public_api": {"constructors": [], "parameters": []}
+  "symbols": [],
+  "equations": [],
+  "public_api": {
+    "parameters": []
+  }
 }

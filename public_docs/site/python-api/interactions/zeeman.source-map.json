@@ -2,41 +2,45 @@
   "document": {
     "path": "public_docs/site/python-api/interactions/zeeman.md",
     "title": "Zeeman Python API",
-    "interaction": "uniform external magnetic field authoring contract"
+    "interaction": "zeeman"
   },
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "Python lowering is backend neutral; FDM CPU is the double-precision reference realization."},
-    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "The planner and public API feed the CUDA uniform-field path; qualification is resolved at runtime."},
-    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "The planner and public API feed the native FEM uniform-field path."},
-    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "The planner and public API feed the device FEM RK path; executed-device parity is a separate gate."}
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+    }
   ],
   "sources": [
-    {"id": "python-zeeman", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class Zeeman", "responsibility": "Public B constructor and exact IR lowering."},
-    {"id": "python-vector-validation", "path": "packages/fullmag-py/src/fullmag/_validation.py", "symbol": "as_vector3", "responsibility": "Length and finite-component validation."},
-    {"id": "python-save-field", "path": "packages/fullmag-py/src/fullmag/model/outputs.py", "symbol": "class SaveField", "responsibility": "Field-output request used by the API contract."},
-    {"id": "python-save-scalar", "path": "packages/fullmag-py/src/fullmag/model/outputs.py", "symbol": "class SaveScalar", "responsibility": "Scalar-output request used by the API contract."},
-    {"id": "planner-fdm", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "FDM B-to-H conversion and duplicate/output validation."},
-    {"id": "planner-fem", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem", "responsibility": "FEM B-to-H conversion and duplicate/output validation."},
-    {"id": "planner-output-validation", "path": "crates/fullmag-plan/src/validate.rs", "symbol": "validate_executable_outputs", "responsibility": "Fail-closed materializable-output checks."}
+    {
+      "id": "python-owner",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class Zeeman",
+      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+    }
   ],
-  "symbols": [
-    {"id": "Bext", "latex": "$\\mathbf B_{\\mathrm{ext}}$", "meaning": "value supplied to `Zeeman(B)`", "si_unit": "$\\mathrm{T}$"},
-    {"id": "Hext", "latex": "$\\mathbf H_{\\mathrm{ext}}$", "meaning": "field resolved by the planner", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
-    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization supplied by the material", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
-    {"id": "Ez", "latex": "$E_Z$", "meaning": "Zeeman energy", "si_unit": "$\\mathrm{J}$"},
-    {"id": "Omega", "latex": "$\\Omega_m$", "meaning": "magnetic integration domain", "si_unit": "$\\mathrm{m^3}$"}
-  ],
-  "equations": [
-    {"id": "eq-python-zeeman-resolved-field", "symbols": ["Hext", "Bext", "mu0"], "sources": ["python-zeeman", "planner-fdm", "planner-fem"]},
-    {"id": "eq-python-zeeman-energy", "symbols": ["Ez", "mu0", "Omega", "Ms", "m", "Hext", "Bext"], "sources": ["python-zeeman"]},
-    {"id": "eq-python-zeeman-planner-resolution", "symbols": ["Hext", "mu0", "Bext"], "sources": ["planner-fdm", "planner-fem"]}
-  ],
+  "symbols": [],
+  "equations": [],
   "public_api": {
-    "constructors": ["fullmag.Zeeman"],
-    "parameters": [
-      {"python": "Zeeman.B", "type": "Sequence[float]", "default": "required", "si_unit": "$\\mathrm{T}$", "validation": "length 3; all components finite", "meaning": "uniform external magnetic flux density", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "`energy[].B` (serialized key `B`)"}
-    ]
+    "parameters": []
   }
 }

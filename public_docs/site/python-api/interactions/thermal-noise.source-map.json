@@ -2,46 +2,45 @@
   "document": {
     "path": "public_docs/site/python-api/interactions/thermal-noise.md",
     "title": "Thermal Noise Python API",
-    "interaction": "Brown stochastic thermal effective field authoring"
+    "interaction": "thermal noise"
   },
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "partial", "reason": "Python lowering reaches the counter-based CPU Brown reference lane; stochastic qualification remains separate."},
-    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "Python lowering reaches FP64/FP32 CUDA source lanes; executed-device parity remains open."},
-    {"solver": "FEM", "device": "CPU", "status": "partial", "reason": "Python lowering reaches the native FEM CPU sampling_correct lane."},
-    {"solver": "FEM", "device": "GPU", "status": "unsupported", "reason": "Strict FEM planner rejects ThermalNoise pending CAP-THERM-GPU-001."}
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+    }
   ],
   "sources": [
-    {"id": "term", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class ThermalNoise", "responsibility": "Public constructor validation and canonical IR serialization."},
-    {"id": "problem", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "class Problem", "responsibility": "Top-level temperature validation and term consistency."},
-    {"id": "flat", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class _WorldState", "responsibility": "Flat API storage for the canonical thermal term."},
-    {"id": "builder", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyBuilder", "responsibility": "Fluent API delegation."},
-    {"id": "fdm-plan", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "FDM seed policy, adaptive/multilayer, and output validation."},
-    {"id": "fem-plan", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "plan_fem", "responsibility": "FEM seed policy and strict GPU capability gate."},
-    {"id": "temperature-tests", "path": "packages/fullmag-py/tests/test_stno_temperature.py", "symbol": "test_conflict_temperature_raises", "responsibility": "Term/top-level temperature conflict regression."},
-    {"id": "ir-tests", "path": "packages/fullmag-py/tests/test_stno_roundtrip.py", "symbol": "test_thermal_noise_in_energy_terms", "responsibility": "Canonical term IR regression."},
-    {"id": "script-tests", "path": "packages/fullmag-py/tests/test_script_builder_roundtrip.py", "symbol": "test_flat_thermal_noise_roundtrip_preserves_temperature_and_seed", "responsibility": "Canonical script rewrite and seed preservation."}
+    {
+      "id": "python-owner",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class ThermalNoise",
+      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+    }
   ],
-  "symbols": [
-    {"id": "Htherm", "latex": "$\\mathbf H_{\\mathrm{therm}}$", "meaning": "sampled thermal effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "sigma", "latex": "$\\sigma_i^{\\,n}$", "meaning": "one-component thermal-field standard deviation", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "alpha", "latex": "$\\alpha_i$", "meaning": "Gilbert damping", "si_unit": "$1$"},
-    {"id": "kB", "latex": "$k_{\\mathrm B}$", "meaning": "Boltzmann constant", "si_unit": "$\\mathrm{J\\,K^{-1}}$"},
-    {"id": "T", "latex": "$T$", "meaning": "`ThermalNoise.temperature` and Brown temperature", "si_unit": "$\\mathrm{K}$"},
-    {"id": "gamma0", "latex": "$\\gamma_{\\mu0}$", "meaning": "bare gyromagnetic input", "si_unit": "$\\mathrm{m\\,A^{-1}\\,s^{-1}}$"},
-    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
-    {"id": "Ms", "latex": "$M_{s,i}$", "meaning": "local saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "Vi", "latex": "$V_i$", "meaning": "FDM cell or FEM nodal volume", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "dt", "latex": "$\\Delta t_n$", "meaning": "timestep of the accepted stochastic interval", "si_unit": "$\\mathrm{s}$"}
-  ],
-  "equations": [
-    {"id": "eq-python-thermal-field", "symbols": ["Htherm", "sigma"], "sources": ["term", "fdm-plan", "fem-plan"]},
-    {"id": "eq-python-thermal-sigma", "symbols": ["sigma", "alpha", "kB", "T", "gamma0", "mu0", "Ms", "Vi", "dt"], "sources": ["fdm-plan", "fem-plan"]}
-  ],
+  "symbols": [],
+  "equations": [],
   "public_api": {
-    "parameters": [
-      {"python": "ThermalNoise.temperature", "type": "float", "default": "required", "si_unit": "$\\mathrm{K}$", "validation": "strictly positive; `ValueError` otherwise", "meaning": "uniform temperature used by the term", "backend_support": "all source lanes subject to gates", "problem_ir": "energy_terms[].temperature"},
-      {"python": "ThermalNoise.seed", "type": "int\\mid None", "default": "None", "si_unit": "$1$", "validation": "`None` = system entropy; integer must be positive; zero/negative raises `ValueError`", "meaning": "requested deterministic replay policy", "backend_support": "FDM CPU/GPU and FEM CPU; FEM GPU rejected by planner", "problem_ir": "energy_terms[].seed"},
-      {"python": "Problem.temperature", "type": "float\\mid None", "default": "None", "si_unit": "$\\mathrm{K}$", "validation": "`None`/zero disables; negative raises `ValueError`; disagreement with term raises `ValueError`", "meaning": "top-level compatibility temperature", "backend_support": "planner-dependent", "problem_ir": "top-level `temperature`"}
-    ]
+    "parameters": []
   }
 }

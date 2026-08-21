@@ -2,37 +2,45 @@
   "document": {
     "path": "public_docs/site/python-api/interactions/drift-diffusion-spin-torque.md",
     "title": "Drift-diffusion spin torque Python API",
-    "interaction": "drift-diffusion spin torque"
+    "interaction": "drift diffusion spin torque"
   },
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "unsupported", "reason": "No drift-diffusion transport state is implemented."},
-    {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "No CUDA transport realization is implemented."},
-    {"solver": "FEM", "device": "CPU", "status": "unsupported", "reason": "No FEM transport realization is implemented."},
-    {"solver": "FEM", "device": "GPU", "status": "unsupported", "reason": "No FEM GPU transport realization is implemented."}
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "partial",
+      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+    }
   ],
   "sources": [
-    {"id": "class", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "class DriftDiffusionSpinTorque", "responsibility": "public state and validation"},
-    {"id": "binding", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "_resolve_current_binding", "responsibility": "exclusive current inputs"},
-    {"id": "degree", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "_validated_degree", "responsibility": "degree range"},
-    {"id": "beta", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "_validated_beta", "responsibility": "beta lower bound"},
-    {"id": "ir", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "class DriftDiffusionSpinTorque", "responsibility": "canonical module payload"}
+    {
+      "id": "python-owner",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_transport.py",
+      "symbol": "class SpinDriftDiffusion",
+      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+    }
   ],
-  "symbols": [
-    {"id": "s", "latex": "$\\mathbf s$", "meaning": "spin accumulation", "si_unit": "$\\mathrm{A\\,s\\,m^{-3}}$"},
-    {"id": "Js", "latex": "$\\mathbf J_s$", "meaning": "spin-current tensor", "si_unit": "$\\mathrm{A\\,m^{-2}}$"},
-    {"id": "tsf", "latex": "$\\tau_{\\mathrm{sf}}$", "meaning": "spin-flip time", "si_unit": "$\\mathrm{s}$"},
-    {"id": "tex", "latex": "$\\tau_{\\mathrm{ex}}$", "meaning": "exchange-transfer time", "si_unit": "$\\mathrm{s}$"},
-    {"id": "tau", "latex": "$\\boldsymbol{\\tau}_{\\mathrm{DD}}$", "meaning": "intended torque density", "si_unit": "$\\mathrm{A\\,s\\,m^{-3}\\,s^{-1}}$"},
-    {"id": "lambda", "latex": "$\\lambda_{\\mathrm{sf}}$", "meaning": "spin-diffusion length", "si_unit": "$\\mathrm{m}$"},
-    {"id": "J", "latex": "$\\mathbf J$", "meaning": "charge-current density input", "si_unit": "$\\mathrm{A\\,m^{-2}}$"},
-    {"id": "P", "latex": "$P$", "meaning": "degree parameter", "si_unit": "$1$"},
-    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
-    {"id": "beta-symbol", "latex": "$\\beta$", "meaning": "non-adiabatic parameter", "si_unit": "$1$"},
-    {"id": "p", "latex": "$\\mathbf p$", "meaning": "spin-polarization vector", "si_unit": "$1$"}
-  ],
-  "equations": [
-    {"id": "eq-api-ddst-transport", "symbols": ["s", "Js", "tsf", "tex", "m"], "sources": ["class"]},
-    {"id": "eq-api-ddst-torque", "symbols": ["tau", "tex", "s", "m"], "sources": ["class"]}
-  ],
-  "public_api": {"constructors": [], "parameters": []}
+  "symbols": [],
+  "equations": [],
+  "public_api": {
+    "parameters": []
+  }
 }
