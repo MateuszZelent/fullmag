@@ -233,9 +233,7 @@ observable controlled while increasing $N_z$.
 ### Typed controls
 
 ```python
-# %% Typed sweep request
-import fullmag as fm
-
+# %% Typed sweep request used by the complete scenario below
 sweep = fm.SweptMeshControls(
     distribution=fm.SweepDistribution(
         kind="uniform",
@@ -252,6 +250,8 @@ sweep = fm.SweptMeshControls(
 
 ```python
 # %% Strict single-layer prism request for an eligible shared-domain route
+import fullmag as fm
+
 nm = 1.0e-9
 study = fm.study("single_layer_prism")
 study.engine("fem")
@@ -268,6 +268,17 @@ film.mesh.thin_film(
     exact_layers=True,
     transition="pyramid_to_tetrahedra",
     order=1,
+)
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.m = fm.texture.uniform(1.0, 0.0, 0.0)
+
+study.exchange()
+study.stages.add_relax(
+    stage_id="equilibrium",
+    algorithm="nonlinear_cg",
+    tolT=1.0e-6,
+    max_steps=50_000,
 )
 ```
 
