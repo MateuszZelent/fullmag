@@ -42,7 +42,7 @@ release notes for solver binaries or scientific qualification receipts.
 
 Use Sphinx's native directives next to the affected public contract:
 
-```text
+````text
 ```{versionadded} development
 Description of the newly exposed user-facing contract.
 ```
@@ -58,7 +58,7 @@ Migration target and removal policy.
 ```{versionremoved} development
 Replacement, rationale, and compatibility consequence.
 ```
-```
+````
 
 The documentation workflow builds the native Sphinx `changes` builder after the strict HTML build
 and publishes its output under `/version-changes/`. A documentation change is therefore visible
