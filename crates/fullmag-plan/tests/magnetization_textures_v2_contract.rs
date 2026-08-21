@@ -211,3 +211,45 @@ fn v2_derives_distinct_bloch_and_neel_wall_directions() {
         .zip(bloch_value)
         .any(|(left, right)| (left - right).abs() > 0.5));
 }
+
+#[test]
+fn v2_bimeron_uses_exact_meron_core_radius() {
+    let radius = 1.0_f64;
+    let wall_width = 1.0_f64;
+    let exact_core_radius = wall_width * (radius / wall_width).cosh().asinh();
+    let preset_params = params([
+        ("radius", json!(radius)),
+        ("wall_width", json!(wall_width)),
+        ("vorticity", json!(1)),
+        ("helicity_rad", json!(0.0)),
+        ("background_sign", json!(1)),
+        ("plane", json!("xy")),
+    ]);
+
+    let values = sample_preset_texture_versioned(
+        "bimeron",
+        2,
+        &preset_params,
+        &TextureMappingIR::default(),
+        &TextureTransform3DIR::default(),
+        &[
+            point(0.0, 0.0, 0.0),
+            point(exact_core_radius, 0.0, 0.0),
+            point(-exact_core_radius, 0.0, 0.0),
+        ],
+    )
+    .unwrap();
+
+    assert!(exact_core_radius > radius + 0.2);
+    assert!((values[0][0] + 1.0).abs() < 1.0e-12);
+    assert!(values[0][1].abs() < 1.0e-12);
+    assert!(values[0][2].abs() < 1.0e-12);
+
+    assert!(values[1][0].abs() < 1.0e-12);
+    assert!(values[1][1].abs() < 1.0e-12);
+    assert!((values[1][2] + 1.0).abs() < 1.0e-12);
+
+    assert!(values[2][0].abs() < 1.0e-12);
+    assert!(values[2][1].abs() < 1.0e-12);
+    assert!((values[2][2] - 1.0).abs() < 1.0e-12);
+}
