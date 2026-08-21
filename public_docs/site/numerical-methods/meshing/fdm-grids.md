@@ -1,5 +1,5 @@
 ---
-title: FDM Cartesian Grids
+title: FDM Grids
 status: implemented
 doc_kind: reference
 audience: user
