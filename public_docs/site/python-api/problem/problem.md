@@ -64,7 +64,7 @@ validated before execution.
 | `Problem.spin_torques` | sequence | `()` | mixed | canonical torque modules | `spin_torque_modules` / study runtime contract |
 | `Problem.spin_torque_activation` | mapping | `{}` | $1$ | stage-local activation; unknown IDs rejected | stage torque activation |
 | `Problem.spin_transports` | sequence | `()` | mixed | canonical spin drift-diffusion modules | `spin_transport_modules` |
-| `Problem.temperature` | `float \| None` | `None` | $\mathrm K$ | non-negative compatibility temperature; thermal-term consistency checked | `temperature` |
+| `Problem.temperature` | `float \| None` | `None` | K | non-negative compatibility temperature; thermal-term consistency checked | `temperature` |
 | `Problem.elastic_materials` | sequence | `()` | mixed | elastic constitutive records | `elastic_materials` |
 | `Problem.elastic_bodies` | sequence | `()` | mixed | elastic body assignments | `elastic_bodies` |
 | `Problem.magnetostriction_laws` | sequence | `()` | mixed | magnetostriction laws | `magnetostriction_laws` |
