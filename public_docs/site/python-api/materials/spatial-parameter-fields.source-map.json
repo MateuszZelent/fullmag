@@ -28,10 +28,28 @@
   "symbols": [],
   "sources": [
     {
-      "id": "owner",
+      "id": "field-factories",
       "path": "packages/fullmag-py/src/fullmag/model/structure.py",
-      "symbol": "class Material",
-      "responsibility": "Owns the documented public API, validation, and lowering."
+      "symbol": "class MaterialParameterField",
+      "responsibility": "Owns constant, linear, radial, and sampled spatial material field payloads."
+    },
+    {
+      "id": "field-assignment",
+      "path": "packages/fullmag-py/src/fullmag/model/structure.py",
+      "symbol": "class MaterialParameterAssignment",
+      "responsibility": "Owns object and region scope, canonical parameter identity, priority, conflict policy, and lowering."
+    },
+    {
+      "id": "region-owner",
+      "path": "packages/fullmag-py/src/fullmag/model/structure.py",
+      "symbol": "class ObjectRegion",
+      "responsibility": "Owns region-local material overrides, transition intent, and region serialization."
+    },
+    {
+      "id": "magnet-owner",
+      "path": "packages/fullmag-py/src/fullmag/model/structure.py",
+      "symbol": "class Ferromagnet",
+      "responsibility": "Carries material parameter assignments in the canonical magnetic object graph."
     }
   ],
   "public_api": {
