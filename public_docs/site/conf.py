@@ -35,6 +35,7 @@ myst_enable_extensions = [
     "linkify",
     "substitution",
 ]
+myst_fence_as_directive = ["math"]
 myst_heading_anchors = 3
 
 copybutton_prompt_text = r">>> |\.\.\. |\$ "
