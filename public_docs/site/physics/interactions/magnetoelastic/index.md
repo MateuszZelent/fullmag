@@ -178,7 +178,6 @@ tests, and provenance.
 1. E. du Trémolet de Lacheisserie, *Magnetostriction: Theory and Applications of
    Magnetoelasticity*, CRC Press, 1993.
 2. A. E. Clark, in *Ferromagnetic Materials*, Vol. 1, North-Holland, 1980.
-3. Relevant Fullmag convention: `docs/physics/0700-shared-magnetoelastic-semantics.md`.
 
 (physics-magnetoelastic-source-code-index)=
 ## Source-code index
