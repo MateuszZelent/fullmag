@@ -41,13 +41,15 @@ source_of_truth: readme.md
     <a class="fm-home-action fm-home-action--primary" href="getting-started/index.html">Start with the user guide</a>
     <a class="fm-home-action" href="physics/index.html">Read the physics reference</a>
     <a class="fm-home-action" href="python-api/index.html">Browse the Python API</a>
+    <a class="fm-home-action" href="changelog/index.html">Documentation changelog</a>
   </div>
 </div>
 
 <div class="fm-home-status">
   <strong>Documentation status.</strong> FullMag is active research software. Each reference page
   states what is executable, semantic-only, planned, experimental, or not qualified. Internal
-  development plans and engineering notes remain outside this public portal.
+  development plans and engineering notes remain outside this public portal. The documentation
+  changelog records public-page edits and explicit user-visible contract changes.
 </div>
 
 ```{toctree}
@@ -83,6 +85,8 @@ mapping, and validation evidence in one place.
   realizations.
 - {doc}`validation/index` — inspect analytical cases, standard problems, parity, and
   qualification status.
+- {doc}`changelog/index` — inspect recent public-documentation commits and Sphinx-native
+  version-change records.
 
 ## The canonical workflow
 

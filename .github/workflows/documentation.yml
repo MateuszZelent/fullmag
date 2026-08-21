@@ -121,6 +121,7 @@ jobs:
         run: |
           python -m unittest packages/fullmag-py/tests/test_public_python_api_documentation.py -v
           python -m unittest packages/fullmag-py/tests/test_public_exchange_documentation.py -v
+          python -m unittest packages/fullmag-py/tests/test_material_dmi_units.py -v
 
       - name: Build public documentation strictly
         env:
@@ -128,6 +129,23 @@ jobs:
         run: >-
           sphinx-build -b html -W -n --keep-going
           public_docs/site public_docs/site/_build/html
+
+      - name: Build Sphinx version-change index
+        env:
+          FULLMAG_DOCS_VERSION: development
+        run: |
+          set -euo pipefail
+          changes_dir="public_docs/site/_build/version-changes"
+          published_dir="public_docs/site/_build/html/version-changes"
+          rm -rf "$changes_dir" "$published_dir"
+          sphinx-build -b changes -W -n --keep-going \
+            -D version=development \
+            public_docs/site "$changes_dir"
+          test -s "$changes_dir/index.html"
+          test -s "$changes_dir/changes.html"
+          mkdir -p "$published_dir"
+          cp -a "$changes_dir/." "$published_dir/"
+          grep --fixed-strings --quiet "development" "$published_dir/changes.html"
 
       - name: Validate rendered scientific documentation
         env:
@@ -179,31 +197,59 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v5
 
-      - name: Verify deployed DMI page
+      - name: Verify deployed documentation and changelog pages
         id: verify
         shell: bash
         env:
-          VERIFY_URL: https://fullmag.mzelent.pl/physics/interactions/dmi/index.html
+          DMI_URL: https://fullmag.mzelent.pl/physics/interactions/dmi/index.html
+          CHANGELOG_URL: https://fullmag.mzelent.pl/changelog/index.html
+          VERSION_CHANGES_URL: https://fullmag.mzelent.pl/version-changes/changes.html
         run: |
           set -euo pipefail
-          page="$(mktemp)"
-          trap 'rm -f "$page"' EXIT
+          dmi_page="$(mktemp)"
+          changelog_page="$(mktemp)"
+          version_page="$(mktemp)"
+          trap 'rm -f "$dmi_page" "$changelog_page" "$version_page"' EXIT
 
           for attempt in $(seq 1 18); do
+            dmi_ok=false
+            changelog_ok=false
+            version_ok=false
+
             if curl --fail --silent --show-error --location \
               --connect-timeout 10 --max-time 30 \
-              "$VERIFY_URL" --output "$page" \
-              && grep --fixed-strings --quiet "Dzyaloshinskii" "$page" \
+              "$DMI_URL" --output "$dmi_page" \
+              && grep --fixed-strings --quiet "Dzyaloshinskii" "$dmi_page" \
               && grep --fixed-strings --quiet \
-                "Fullmag distinguishes interfacial and bulk" "$page"; then
-              echo "Verified deployed DMI page on attempt ${attempt}."
+                "Fullmag distinguishes interfacial and bulk" "$dmi_page"; then
+              dmi_ok=true
+            fi
+
+            if curl --fail --silent --show-error --location \
+              --connect-timeout 10 --max-time 30 \
+              "$CHANGELOG_URL" --output "$changelog_page" \
+              && grep --fixed-strings --quiet "Documentation changelog" "$changelog_page" \
+              && grep --fixed-strings --quiet "Recent documentation changes" "$changelog_page" \
+              && grep --fixed-strings --quiet "/commit/" "$changelog_page"; then
+              changelog_ok=true
+            fi
+
+            if curl --fail --silent --show-error --location \
+              --connect-timeout 10 --max-time 30 \
+              "$VERSION_CHANGES_URL" --output "$version_page" \
+              && grep --fixed-strings --quiet "development" "$version_page"; then
+              version_ok=true
+            fi
+
+            if [[ "$dmi_ok" == true && "$changelog_ok" == true && "$version_ok" == true ]]; then
+              echo "Verified public documentation, Git changelog, and Sphinx version changes on attempt ${attempt}."
               exit 0
             fi
-            echo "Deployment not visible yet (attempt ${attempt}/18)."
+            echo "Deployment not fully visible yet (attempt ${attempt}/18; dmi=${dmi_ok}, changelog=${changelog_ok}, version_changes=${version_ok})."
             sleep 10
           done
 
-          echo "::error::Deployed DMI page did not expose the expected audited content."
+          echo "::error::The deployed documentation did not expose all expected public pages."
           exit 1
 
       - name: Publish deployment commit status
@@ -212,15 +258,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERIFY_OUTCOME: ${{ steps.verify.outcome }}
-          VERIFY_URL: https://fullmag.mzelent.pl/physics/interactions/dmi/index.html
+          VERIFY_URL: https://fullmag.mzelent.pl/changelog/index.html
         run: |
           set -euo pipefail
           if [[ "$VERIFY_OUTCOME" == "success" ]]; then
             state="success"
-            description="GitHub Pages and audited DMI page verified"
+            description="GitHub Pages, changelog, and version changes verified"
           else
             state="failure"
-            description="GitHub Pages DMI verification failed"
+            description="Public documentation or changelog verification failed"
           fi
 
           gh api --method POST \
