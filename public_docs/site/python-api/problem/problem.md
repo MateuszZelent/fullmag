@@ -103,9 +103,12 @@ backend masks before planning.
 (python-api-problem-problem-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
-Export and scene rewriting preserve module identities, signs, units, formula/operator versions,
-selection graphs, constraint policies, stage activation, and requested runtime. Unknown references,
-cycles, duplicates, unsupported capabilities, and stale source identities fail closed.
+Requested intent preserves module identities, signs, units, formula/operator versions, selection
+graphs, constraint policies, stage activation, and requested runtime. Resolved execution records
+the chosen planner realization, concrete meshes/masks, solver, device, precision, and capability
+decisions without replacing requested intent. Validation errors reject unknown references, cycles,
+duplicates, malformed data, and stale source identities. Unsupported combinations fail closed and
+are not silently omitted, converted, or executed on a fallback lane.
 
 (python-api-problem-problem-discrete-realization)=
 ## Discrete realization

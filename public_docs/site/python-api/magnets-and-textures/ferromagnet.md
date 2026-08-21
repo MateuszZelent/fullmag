@@ -84,9 +84,11 @@ typed ownership rather than being flattened into the magnet name.
 (python-api-magnets-and-textures-ferromagnet-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
-Requested object IDs, region ownership, material bindings, texture versions, mesh recipes, and
-constraint identities are preserved. Unknown references, duplicate identities, mismatched region
-geometry, or unsupported runtime realization fail closed.
+Requested intent preserves object IDs, region ownership, material bindings, texture versions,
+mesh recipes, and constraint identities. Resolved execution adds concrete cell/element ownership,
+normalized data, masks, solver, device, and precision without replacing authored intent.
+Validation errors reject unknown references, duplicate identities, mismatched region geometry, and
+malformed data. Unsupported combinations fail closed and are not silently omitted or converted.
 
 (python-api-magnets-and-textures-ferromagnet-discrete-realization)=
 ## Discrete realization

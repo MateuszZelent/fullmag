@@ -67,8 +67,11 @@ Version 2 lowers as a `preset_texture` with `preset_kind="uniform"`, explicit
 (python-api-magnets-and-textures-uniform-texture-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
-Export preserves the authored preset version. It must not silently rewrite a compatibility-v1
-texture as v2 or discard the version field.
+Requested intent preserves the authored direction, mapping, transform, and preset version.
+Resolved execution samples that intent on the final FDM/FEM point ordering without rewriting a
+compatibility-v1 texture as v2. Validation errors reject malformed component forms, non-finite or
+zero version-2 directions, and invalid versions. Unsupported combinations fail closed and are not
+silently converted to another texture.
 
 (python-api-magnets-and-textures-uniform-texture-discrete-realization)=
 ## Discrete realization

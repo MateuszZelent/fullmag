@@ -72,9 +72,11 @@ problem/study intent and must not be lost when stages are rewritten or exported.
 (python-api-studies-time-evolution-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
-Requested dynamics, outputs, constraints, and autosave policy are preserved. Unknown selection or
-object references, unsupported constraints, invalid output quantities, or unavailable execution
-lanes fail closed.
+Requested intent preserves dynamics, outputs, constraints, and autosave policy. Resolved execution
+adds the selected integrator implementation, target masks, output materialization, solver, device,
+and precision without replacing requested intent. Validation errors reject unknown selection or
+object references, malformed constraints, and invalid output quantities. Unsupported combinations
+fail closed and do not silently fall back to another lane.
 
 (python-api-studies-time-evolution-discrete-realization)=
 ## Discrete realization
