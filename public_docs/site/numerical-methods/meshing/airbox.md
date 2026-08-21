@@ -244,6 +244,12 @@ study.fem_demag_solver(
     rtol=1.0e-10,
     max_iterations=500,
 )
+study.stages.add_relax(
+    stage_id="equilibrium",
+    algorithm="nonlinear_cg",
+    tolT=1.0e-6,
+    max_steps=50_000,
+)
 ```
 
 ### Internal generation schema
