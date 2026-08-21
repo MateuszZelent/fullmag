@@ -1,5 +1,5 @@
 ---
-title: Spatial parameter fields
+title: Spatial Parameter Fields
 status: implemented
 doc_kind: reference
 audience: user
@@ -7,7 +7,7 @@ owner: fullmag-public-docs
 ---
 
 (public-docs-python-api-materials-spatial-parameter-fields)=
-# Spatial parameter fields
+# Spatial Parameter Fields
 
 ```{versionchanged} development
 Expanded from a constructor stub into the complete authoring, precedence, unit, lowering, and backend-realization contract for spatial material fields.
