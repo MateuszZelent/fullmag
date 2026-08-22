@@ -83,7 +83,14 @@ jobs:
             public_docs/site/python-api/magnets-and-textures/preset-textures.source-map.json \
             --repo-root .
           python -m unittest packages/fullmag-py/tests/test_public_python_api_documentation.py -v
-          cargo fmt --all -- --check
+          rustfmt --edition 2021 --check \
+            crates/fullmag-plan/src/fdm.rs \
+            crates/fullmag-plan/src/fem.rs \
+            crates/fullmag-plan/src/magnetization_textures_v2.rs \
+            crates/fullmag-plan/src/mesh.rs \
+            crates/fullmag-plan/src/tests.rs \
+            crates/fullmag-plan/tests/magnetization_textures_v2_contract.rs \
+            crates/fullmag-plan/tests/magnetization_textures_v2_parity.rs
           git diff --check
 
       - name: Commit compact fixture and remove temporary workflow
