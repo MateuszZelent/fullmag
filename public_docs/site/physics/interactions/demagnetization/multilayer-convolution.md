@@ -1,6 +1,6 @@
 ---
 title: FDM multilayer convolution
-status: implemented
+status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
@@ -19,9 +19,9 @@ definition of the demagnetizing field.
 Each magnetic object owns a native FDM grid. The common convolution grid is an FFT supercell used
 for pair kernels and transfers; it is neither a material mesh nor a FEM universe mesh. Geometry
 translations determine layer offsets, including the signed $z$ offsets used by the kernels. A
-public FDM multilayer script therefore uses per-object `mesh(cell_size=...)`, a common
-`study.universe.mesh(cell_size=...)`, and `study.demag()`
-and named geometry, but no `study.universe.mesh(...)` dependency.
+public FDM multilayer script uses named geometry and per-object `mesh(cell_size=...)` calls;
+`study.universe.mesh(cell_size=...)` defines the common computational-grid resolution when it
+cannot be inferred, and `study.demag()` enables the physical interaction.
 
 The `partial` status is intentional. FDM CPU FP64 has local field, energy, reciprocity,
 and transfer evidence for the stated case classes. CUDA sources and the ABI contract are
@@ -311,9 +311,9 @@ transform applies $1/(F_xF_yF_z)$ exactly once.
 
 ### 5.1. Complete parameter table
 
-The canonical interface is physics-first. Mesh calls carry geometric resolution and
-`study.demag()` requests the interaction; the planner selects the numerical realization.
-The `FDM*` rows document migration adapters only.
+The canonical interface separates the physical interaction from its numerical realization. Mesh
+calls carry geometric resolution, `study.demag()` enables the interaction, and the planner selects
+the qualified numerical realization. The `FDM*` rows document migration adapters only.
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
@@ -417,7 +417,7 @@ grid and the volume-adjoint pull maps the computed field back to each native gri
 checks that this real transfer executes, produces finite demagnetization energy, and preserves 29
 native cells across the two reduced test layers.
 
-### 5.4. Complete physics-first multilayer example
+### 5.4. Complete multilayer authoring example
 
 The example is stage-first and uses SI units. Loading it verifies authoring and lowering; merely placing a stage in
 the script is not evidence that a native solver ran.
@@ -669,7 +669,7 @@ native grid never fabricates a physical active-cell mask.
 **requested intent** is the authored contract: strategy, mode, per-magnet cells, common
 layout, device, and precision. **resolved execution** is the planner/runtime decision:
 actual mode, grids, transfers, padding, FFT backend, device, and operator counters. UI
-export preserves requested intent as physics-first mesh calls plus `study.demag()`; it does not
+export preserves requested intent through public mesh-authoring calls plus `study.demag()`; it does not
 export multilayer as a FEM realization.
 
 **validation errors** are returned for invalid enums, non-positive sizes, simultaneous
