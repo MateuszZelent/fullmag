@@ -51,8 +51,8 @@ film.alpha = 0.1
 film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 
 study.exchange()
-study.demag(realization="poisson_robin")
-study.solver(dt=5.0e-13, g=2.211e5)
+study.demag()
+study.solver(fix_dt=5.0e-13, gamma=2.211e5)
 
 study.stages.add_relax(
     stage_id="relax",
@@ -81,12 +81,15 @@ study.stages.add_relax(
 - `film.Ms`, `film.Aex` and `film.alpha` set saturation magnetization
   $\mathrm{A\,m^{-1}}$, exchange stiffness $\mathrm{J\,m^{-1}}$ and the Gilbert damping
   parameter ($1$, dimensionless).
-- `study.exchange()` and `study.demag(realization="poisson_robin")` register the two interactions.
+- `study.exchange()` and `study.demag()` register exchange and the FDM demagnetizing-field
+  interaction. No FEM Airbox realization is requested on this lane.
+- `study.solver(fix_dt=..., gamma=...)` sets the fixed solver timestep and the positive
+  gyromagnetic ratio in $\mathrm{m\,A^{-1}\,s^{-1}}$.
 - `study.stages.add_relax(...)` declares the ordered relaxation stage; its `.tableautosave(...)`
   records per-step scalars.
 
-The relaxation requires an explicit timestep policy, which is why `dt=5.0e-13` is supplied both to
-the solver defaults and to the stage.
+The relaxation uses an explicit fixed timestep. `fix_dt=5.0e-13` defines the solver-level default,
+while the stage-level `dt=5.0e-13` records the timestep requested for this relaxation stage.
 
 ## Run headlessly
 

@@ -59,8 +59,8 @@ film.alpha = 0.1
 film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 
 study.exchange()
-study.demag(realization="poisson_robin")
-study.solver(dt=5.0e-13, g=2.211e5)
+study.demag()
+study.solver(fix_dt=5.0e-13, gamma=2.211e5)
 
 study.stages.add_relax(
     stage_id="relax",
@@ -74,7 +74,10 @@ study.stages.add_relax(
 )
 ```
 
-The documented interface is `fm.study(...)` with ordered `study.stages.add_*` stages. Direct construction of low-level problem snapshots is not the public user workflow.
+The documented interface is `fm.study(...)` with ordered `study.stages.add_*` stages. Direct
+construction of low-level problem snapshots is not the public user workflow. `gamma` is the
+positive gyromagnetic ratio in $\mathrm{m\,A^{-1}\,s^{-1}}$; the separate parameter `g` denotes
+the dimensionless electron Landé factor.
 
 ## Execution semantics
 
