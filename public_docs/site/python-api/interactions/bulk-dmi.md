@@ -59,9 +59,8 @@ spelling consistently. Do not mix case variants between examples, exporter, and 
 
 ## Documentation/code correction
 
-`Material.Dbulk` currently emits a suspicious-SI warning labelled `J/m^3`. The correct unit is
-`J/m^2` for $w=D\,\mathbf m\cdot\nabla\times\mathbf m$. Correct the warning before publishing
-threshold guidance.
+`Material.Dbulk` emits a suspicious-SI warning labelled `J/m^2`, matching the public coefficient
+contract for $w=D\,\mathbf m\cdot\nabla\times\mathbf m$.
 
 (api-bulk-dmi-validation)=
 ## Failure semantics

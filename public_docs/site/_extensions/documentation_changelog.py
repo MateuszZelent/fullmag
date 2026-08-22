@@ -39,6 +39,7 @@ class DocumentationCommit:
     changed_at: datetime
     subject: str
     paths: tuple[str, ...]
+    deleted_paths: frozenset[str]
 
 
 _CATEGORY_LABELS = {
@@ -110,13 +111,26 @@ def _parse_git_log(output: str, limit: int) -> tuple[DocumentationCommit, ...]:
         timestamp = _parse_timestamp(timestamp_text)
         if not sha or timestamp is None or not subject:
             continue
-        changed_paths = tuple(
-            dict.fromkeys(
-                line.strip()
-                for line in lines[1:]
-                if line.strip() and not line.startswith(" ")
-            )
-        )
+        changed_paths_list: list[str] = []
+        deleted_paths: set[str] = set()
+        for line in lines[1:]:
+            if not line.strip() or line.startswith(" "):
+                continue
+            fields = line.split("\t")
+            status = fields[0]
+            if status.startswith("R") and len(fields) >= 3:
+                # Show the post-rename path, but keep the old path out of a
+                # blob link because it no longer exists at this revision.
+                changed_paths_list.append(fields[2])
+                deleted_paths.add(fields[1])
+            elif len(fields) >= 2:
+                path = fields[1]
+                changed_paths_list.append(path)
+                if status == "D":
+                    deleted_paths.add(path)
+            else:
+                changed_paths_list.append(line.strip())
+        changed_paths = tuple(dict.fromkeys(changed_paths_list))
         if not changed_paths:
             continue
         commits.append(
@@ -125,6 +139,7 @@ def _parse_git_log(output: str, limit: int) -> tuple[DocumentationCommit, ...]:
                 changed_at=timestamp,
                 subject=subject,
                 paths=changed_paths,
+                deleted_paths=frozenset(deleted_paths),
             )
         )
         if len(commits) >= limit:
@@ -148,7 +163,8 @@ def _documentation_commits(
         f"--max-count={scan_limit}",
         "--date=iso-strict",
         f"--pretty=format:{_COMMIT_SEPARATOR}%H{_FIELD_SEPARATOR}%cI{_FIELD_SEPARATOR}%s",
-        "--name-only",
+        "--name-status",
+        "-M",
         "--",
         *pathspecs,
     )
@@ -185,6 +201,13 @@ def _path_reference(
     commit: DocumentationCommit,
     path: str,
 ) -> nodes.reference:
+    if path in commit.deleted_paths:
+        return nodes.reference(
+            "",
+            path,
+            refuri=f"{repository_url}/commit/{commit.sha}",
+            classes=["fm-changelog-path", "fm-changelog-path--deleted"],
+        )
     encoded_path = quote(path, safe="/")
     return nodes.reference(
         "",
@@ -296,7 +319,11 @@ class DocumentationChangelogDirective(SphinxDirective):
 
 
 def _validate_rendered_changelog(app: Sphinx, exception: BaseException | None) -> None:
-    if exception is not None or app.builder.format != "html":
+    if (
+        exception is not None
+        or app.builder.format != "html"
+        or getattr(app.builder, "name", "") == "changes"
+    ):
         return
     if "changelog/index" not in app.env.found_docs:
         raise ExtensionError("The documentation changelog page is missing from the Sphinx source tree.")
@@ -310,9 +337,18 @@ def _validate_rendered_changelog(app: Sphinx, exception: BaseException | None) -
     )
     if len(class_pattern.findall(rendered)) != 1:
         raise ExtensionError("Rendered documentation changelog must contain exactly one changelog root.")
-    if f"{app.config.documentation_changelog_repository_url.rstrip('/')}/commit/" not in rendered:
+    has_commit_link = (
+        f"{app.config.documentation_changelog_repository_url.rstrip('/')}/commit/" in rendered
+    )
+    has_unavailable_fallback = 'fm-changelog-unavailable' in rendered
+    if not has_commit_link and not has_unavailable_fallback:
         raise ExtensionError("Rendered documentation changelog contains no repository commit links.")
     LOGGER.info("Validated rendered documentation changelog: %s", output_path)
+
+
+def _mark_changelog_outdated(app, env, added, changed, removed) -> list[str]:
+    """Re-run the Git-backed directive when the repository history advances."""
+    return ["changelog/index"] if "changelog/index" in env.found_docs else []
 
 
 def setup(app: Sphinx) -> dict[str, object]:
@@ -333,10 +369,13 @@ def setup(app: Sphinx) -> dict[str, object]:
             "scripts/check_public_doc_examples.py",
             ".agents/skills/scientific-documentation-contract",
             "packages/fullmag-py/tests/test_public_python_api_documentation.py",
+            "packages/fullmag-py/tests/test_public_exchange_documentation.py",
+            "packages/fullmag-py/tests/test_material_dmi_units.py",
         ),
         "html",
     )
     app.add_directive("documentation-changelog", DocumentationChangelogDirective)
+    app.connect("env-get-outdated", _mark_changelog_outdated)
     app.connect("build-finished", _validate_rendered_changelog)
     return {
         "version": "1",

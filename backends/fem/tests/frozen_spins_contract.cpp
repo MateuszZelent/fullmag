@@ -9,6 +9,7 @@
  */
 
 #include "cpu/mfem/interactions/frozen_spins.hpp"
+#include "cpu/mfem/runtime/backend_lifecycle.hpp"
 #include "context.hpp"
 
 #include <cmath>
@@ -145,12 +146,22 @@ void test_frozen_spins_solver_step_contract() {
     const uint32_t cell_offsets[] = {0, 4};
     const uint64_t cell_ordinals[] = {0};
     const uint32_t element_markers[] = {1};
-    const uint32_t boundary_faces[] = {0, 1, 2};
-    const uint32_t facet_types[] = {FULLMAG_FEM_FACET_TRI3};
-    const uint32_t facet_roles[] = {FULLMAG_FEM_FACET_ROLE_EXTERIOR};
-    const uint32_t facet_offsets[] = {0, 3};
-    const uint64_t facet_ordinals[] = {0};
-    const uint32_t boundary_markers[] = {1};
+    const uint32_t boundary_faces[] = {0, 1, 2, 0, 1, 3, 1, 2, 3, 2, 0, 3};
+    const uint32_t facet_types[] = {
+        FULLMAG_FEM_FACET_TRI3,
+        FULLMAG_FEM_FACET_TRI3,
+        FULLMAG_FEM_FACET_TRI3,
+        FULLMAG_FEM_FACET_TRI3,
+    };
+    const uint32_t facet_roles[] = {
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+    };
+    const uint32_t facet_offsets[] = {0, 3, 6, 9, 12};
+    const uint64_t facet_ordinals[] = {0, 1, 2, 3};
+    const uint32_t boundary_markers[] = {1, 1, 1, 1};
 
     // Initial magnetization: node 0 along +z, nodes 1,2,3 along +x
     const double m_init[] = {
@@ -185,17 +196,17 @@ void test_frozen_spins_solver_step_contract() {
     plan.mesh.cell_markers = element_markers;
     plan.mesh.cell_markers_len = 1;
     plan.mesh.facet_types = facet_types;
-    plan.mesh.facet_types_len = 1;
+    plan.mesh.facet_types_len = 4;
     plan.mesh.facet_roles = facet_roles;
-    plan.mesh.facet_roles_len = 1;
+    plan.mesh.facet_roles_len = 4;
     plan.mesh.facet_offsets = facet_offsets;
-    plan.mesh.facet_offsets_len = 2;
+    plan.mesh.facet_offsets_len = 5;
     plan.mesh.facet_nodes = boundary_faces;
-    plan.mesh.facet_nodes_len = 3;
+    plan.mesh.facet_nodes_len = 12;
     plan.mesh.facet_global_ordinals = facet_ordinals;
-    plan.mesh.facet_global_ordinals_len = 1;
+    plan.mesh.facet_global_ordinals_len = 4;
     plan.mesh.facet_markers = boundary_markers;
-    plan.mesh.facet_markers_len = 1;
+    plan.mesh.facet_markers_len = 4;
 
     plan.material.saturation_magnetisation = 8.0e5;
     plan.material.exchange_stiffness = 1.3e-11;
@@ -209,9 +220,13 @@ void test_frozen_spins_solver_step_contract() {
     plan.has_external_field = 1;
     plan.external_field_am[0] = 0.0;
     plan.external_field_am[1] = 1.0e5;
-    plan.external_field_am[2] = 0.0;
     plan.initial_magnetization_xyz = m_init;
     plan.initial_magnetization_len = 12;
+    plan.dt_seconds = 1.0e-13;
+    plan.hmax = 1.0;
+    plan.demag_realization = FULLMAG_FEM_DEMAG_AIRBOX_ROBIN;
+    plan.gpu_device_index = -1;
+    plan.mfem_device_string = "cpu";
     plan.frozen_mask = frozen_mask;
     plan.frozen_mask_len = 4;
     plan.frozen_reference_xyz = frozen_reference;
@@ -261,12 +276,22 @@ void test_frozen_spins_direct_minimizer_contract() {
     const uint32_t cell_offsets[] = {0, 4};
     const uint64_t cell_ordinals[] = {0};
     const uint32_t element_markers[] = {1};
-    const uint32_t boundary_faces[] = {0, 1, 2};
-    const uint32_t facet_types[] = {FULLMAG_FEM_FACET_TRI3};
-    const uint32_t facet_roles[] = {FULLMAG_FEM_FACET_ROLE_EXTERIOR};
-    const uint32_t facet_offsets[] = {0, 3};
-    const uint64_t facet_ordinals[] = {0};
-    const uint32_t boundary_markers[] = {1};
+    const uint32_t boundary_faces[] = {0, 1, 2, 0, 1, 3, 1, 2, 3, 2, 0, 3};
+    const uint32_t facet_types[] = {
+        FULLMAG_FEM_FACET_TRI3,
+        FULLMAG_FEM_FACET_TRI3,
+        FULLMAG_FEM_FACET_TRI3,
+        FULLMAG_FEM_FACET_TRI3,
+    };
+    const uint32_t facet_roles[] = {
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+    };
+    const uint32_t facet_offsets[] = {0, 3, 6, 9, 12};
+    const uint64_t facet_ordinals[] = {0, 1, 2, 3};
+    const uint32_t boundary_markers[] = {1, 1, 1, 1};
 
     const double m_init[] = {
         0.0, 0.0, 1.0,
@@ -299,17 +324,17 @@ void test_frozen_spins_direct_minimizer_contract() {
     plan.mesh.cell_markers = element_markers;
     plan.mesh.cell_markers_len = 1;
     plan.mesh.facet_types = facet_types;
-    plan.mesh.facet_types_len = 1;
+    plan.mesh.facet_types_len = 4;
     plan.mesh.facet_roles = facet_roles;
-    plan.mesh.facet_roles_len = 1;
+    plan.mesh.facet_roles_len = 4;
     plan.mesh.facet_offsets = facet_offsets;
-    plan.mesh.facet_offsets_len = 2;
+    plan.mesh.facet_offsets_len = 5;
     plan.mesh.facet_nodes = boundary_faces;
-    plan.mesh.facet_nodes_len = 3;
+    plan.mesh.facet_nodes_len = 12;
     plan.mesh.facet_global_ordinals = facet_ordinals;
-    plan.mesh.facet_global_ordinals_len = 1;
+    plan.mesh.facet_global_ordinals_len = 4;
     plan.mesh.facet_markers = boundary_markers;
-    plan.mesh.facet_markers_len = 1;
+    plan.mesh.facet_markers_len = 4;
 
     plan.material.saturation_magnetisation = 8.0e5;
     plan.material.exchange_stiffness = 1.3e-11;
@@ -323,9 +348,13 @@ void test_frozen_spins_direct_minimizer_contract() {
     plan.has_external_field = 1;
     plan.external_field_am[0] = 0.0;
     plan.external_field_am[1] = 1.0e5;
-    plan.external_field_am[2] = 0.0;
     plan.initial_magnetization_xyz = m_init;
     plan.initial_magnetization_len = 12;
+    plan.dt_seconds = 1.0e-13;
+    plan.hmax = 1.0;
+    plan.demag_realization = FULLMAG_FEM_DEMAG_AIRBOX_ROBIN;
+    plan.gpu_device_index = -1;
+    plan.mfem_device_string = "cpu";
     plan.frozen_mask = frozen_mask;
     plan.frozen_mask_len = 4;
     plan.frozen_reference_xyz = frozen_reference;

@@ -83,7 +83,7 @@ pub struct EffectiveFieldTerms {
     pub cubic_anisotropy: Option<CubicAnisotropyConfig>,
     /// Interfacial (Néel) DMI constant D [J/m²]. None = disabled.
     pub interfacial_dmi: Option<f64>,
-    /// Bulk (Bloch) DMI constant D [J/m³]. None = disabled.
+    /// Bulk (Bloch) DMI constant D [J/m²]. None = disabled.
     pub bulk_dmi: Option<f64>,
     /// Zhang-Li (CIP) spin-transfer torque. None = disabled.
     pub zhang_li_stt: Option<ZhangLiSttConfig>,

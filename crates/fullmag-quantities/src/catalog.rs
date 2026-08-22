@@ -935,7 +935,7 @@ const CATALOG: [QuantitySpec; 52] = [
         label: "Material Dbulk",
         description: "Resolved bulk DMI distribution",
         shape: QuantityShape::SpatialScalar,
-        unit: "J/m³",
+        unit: "J/m²",
         interactive_preview: true,
         cached_preview: false,
         quick_access_label: Some("Dbulk"),
@@ -1225,7 +1225,7 @@ mod tests {
             ("mat_aex", "Material Aex", "J/m"),
             ("mat_alpha", "Material alpha", "1"),
             ("mat_dind", "Material Dind", "J/m²"),
-            ("mat_dbulk", "Material Dbulk", "J/m³"),
+            ("mat_dbulk", "Material Dbulk", "J/m²"),
         ];
 
         for (id, label, unit) in expected {

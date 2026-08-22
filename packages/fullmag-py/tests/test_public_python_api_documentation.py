@@ -38,6 +38,18 @@ API_PARAMETER_OWNERS: dict[str, Path] = {
     "DiscretizationHints": Path("python-api/discretization/discretization-hints.md"),
     "FDM": Path("python-api/discretization/fdm.md"),
     "FEM": Path("python-api/discretization/fem.md"),
+    "MaterialParameterField.constant": Path(
+        "python-api/materials/spatial-parameter-fields.md"
+    ),
+    "MaterialParameterField.linear": Path(
+        "python-api/materials/spatial-parameter-fields.md"
+    ),
+    "MaterialParameterField.radial": Path(
+        "python-api/materials/spatial-parameter-fields.md"
+    ),
+    "MaterialParameterField.sampled": Path(
+        "python-api/materials/spatial-parameter-fields.md"
+    ),
 }
 
 API_CONSTRUCTORS = {
@@ -64,6 +76,10 @@ API_CONSTRUCTORS = {
     "DiscretizationHints": fm.DiscretizationHints,
     "FDM": fm.FDM,
     "FEM": fm.FEM,
+    "MaterialParameterField.constant": fm.MaterialParameterField.constant,
+    "MaterialParameterField.linear": fm.MaterialParameterField.linear,
+    "MaterialParameterField.radial": fm.MaterialParameterField.radial,
+    "MaterialParameterField.sampled": fm.MaterialParameterField.sampled,
 }
 
 

@@ -21,11 +21,106 @@
     {
       "solver": "FDM",
       "device": "GPU",
-      "status": "documented"
+      "status": "unsupported",
+      "reason": "The planner rejects region-owned Ms, Aex, and Alpha fields for forced CUDA before native upload."
     }
   ],
-  "equations": [],
-  "symbols": [],
+  "equations": [
+    {
+      "id": "eq-material-spatial-effective",
+      "symbols": ["p_eff", "p0", "pa", "w"],
+      "sources": ["field-assignment", "material-resolution", "transition-resolution"]
+    },
+    {
+      "id": "eq-material-spatial-constant",
+      "symbols": ["pc"],
+      "sources": ["field-factories"]
+    },
+    {
+      "id": "eq-material-spatial-linear",
+      "symbols": ["pb", "g", "xf"],
+      "sources": ["field-factories"]
+    },
+    {
+      "id": "eq-material-spatial-radial",
+      "symbols": ["pin", "pout", "xf", "c", "r"],
+      "sources": ["field-factories"]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "p0",
+      "latex": "$p_0$",
+      "meaning": "base material value",
+      "si_unit": "parameter-dependent"
+    },
+    {
+      "id": "p_eff",
+      "latex": "$p_{\\mathrm{eff}}$",
+      "meaning": "value consumed by the realized operator",
+      "si_unit": "parameter-dependent"
+    },
+    {
+      "id": "pa",
+      "latex": "$p_{a_*}$",
+      "meaning": "field value from the winning assignment",
+      "si_unit": "parameter-dependent"
+    },
+    {
+      "id": "pb",
+      "latex": "$p_b$",
+      "meaning": "linear-field base value",
+      "si_unit": "parameter-dependent"
+    },
+    {
+      "id": "pc",
+      "latex": "$p_c$",
+      "meaning": "constant-field value",
+      "si_unit": "parameter-dependent"
+    },
+    {
+      "id": "pin",
+      "latex": "$p_{\\mathrm{in}}$",
+      "meaning": "radial inside value",
+      "si_unit": "parameter-dependent"
+    },
+    {
+      "id": "pout",
+      "latex": "$p_{\\mathrm{out}}$",
+      "meaning": "radial outside value",
+      "si_unit": "parameter-dependent"
+    },
+    {
+      "id": "g",
+      "latex": "$\\mathbf g$",
+      "meaning": "spatial gradient of a scalar parameter",
+      "si_unit": "parameter unit per metre"
+    },
+    {
+      "id": "xf",
+      "latex": "$\\mathbf x_f$",
+      "meaning": "position evaluated in the declared frame",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "c",
+      "latex": "$\\mathbf c$",
+      "meaning": "radial centre in the declared frame",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "r",
+      "latex": "$r$",
+      "meaning": "radial transition radius",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "w",
+      "latex": "$w_{a_*}$",
+      "meaning": "transition weight for the winning assignment",
+      "si_unit": "$1$"
+    }
+  ],
   "sources": [
     {
       "id": "field-factories",
@@ -50,9 +145,182 @@
       "path": "packages/fullmag-py/src/fullmag/model/structure.py",
       "symbol": "class Ferromagnet",
       "responsibility": "Carries material parameter assignments in the canonical magnetic object graph."
+    },
+    {
+      "id": "material-resolution",
+      "path": "crates/fullmag-plan/src/material.rs",
+      "symbol": "resolve_spatial_parameter",
+      "responsibility": "Resolves ownership, conflict policy, analytic field values, and transition-weighted material values."
+    },
+    {
+      "id": "transition-resolution",
+      "path": "crates/fullmag-plan/src/material_transition.rs",
+      "symbol": "resolved_region_transition",
+      "responsibility": "Resolves explicit and default material transition policies."
     }
   ],
   "public_api": {
-    "parameters": []
+    "parameters": [
+      {
+        "python": "MaterialParameterField.constant.value",
+        "type": "float | tuple[float,float,float]",
+        "default": "required",
+        "si_unit": "parameter-dependent",
+        "validation": "finite scalar or finite three-vector",
+        "meaning": "authored constant value",
+        "backend_support": "FDM/FEM CPU analytic fields; GPU lane checks apply",
+        "problem_ir": "`material_parameter_fields[].value.value`"
+      },
+      {
+        "python": "MaterialParameterField.constant.unit",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "non-empty metadata when supplied; no dimensional check",
+        "meaning": "authored value unit metadata",
+        "backend_support": "all lanes preserve metadata; runtime does not convert",
+        "problem_ir": "`material_parameter_fields[].value.unit`"
+      },
+      {
+        "python": "MaterialParameterField.linear.base",
+        "type": "float",
+        "default": "required",
+        "si_unit": "parameter-dependent",
+        "validation": "finite scalar",
+        "meaning": "affine-field base value",
+        "backend_support": "FDM/FEM CPU analytic fields; GPU lane checks apply",
+        "problem_ir": "`material_parameter_fields[].value.base`"
+      },
+      {
+        "python": "MaterialParameterField.linear.gradient",
+        "type": "tuple[float,float,float]",
+        "default": "required",
+        "si_unit": "parameter unit per metre",
+        "validation": "three finite components",
+        "meaning": "spatial gradient",
+        "backend_support": "FDM/FEM CPU analytic fields; GPU lane checks apply",
+        "problem_ir": "`material_parameter_fields[].value.gradient`"
+      },
+      {
+        "python": "MaterialParameterField.linear.frame",
+        "type": "str",
+        "default": "\"object\"",
+        "si_unit": "$1$",
+        "validation": "exactly `object` or `world`",
+        "meaning": "coordinate frame for evaluation",
+        "backend_support": "FDM/FEM CPU analytic fields; GPU lane checks apply",
+        "problem_ir": "`material_parameter_fields[].value.frame`"
+      },
+      {
+        "python": "MaterialParameterField.linear.unit",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "non-empty metadata when supplied; no dimensional check",
+        "meaning": "affine-field value unit metadata",
+        "backend_support": "all lanes preserve metadata; runtime does not convert",
+        "problem_ir": "`material_parameter_fields[].value.unit`"
+      },
+      {
+        "python": "MaterialParameterField.radial.center",
+        "type": "tuple[float,float,float]",
+        "default": "required",
+        "si_unit": "$\\mathrm m$",
+        "validation": "three finite coordinates",
+        "meaning": "radial centre in the declared frame",
+        "backend_support": "FDM/FEM CPU analytic fields; GPU lane checks apply",
+        "problem_ir": "`material_parameter_fields[].value.center`"
+      },
+      {
+        "python": "MaterialParameterField.radial.radius",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm m$",
+        "validation": "finite and positive",
+        "meaning": "radial profile radius",
+        "backend_support": "FDM/FEM CPU analytic fields; GPU lane checks apply",
+        "problem_ir": "`material_parameter_fields[].value.radius`"
+      },
+      {
+        "python": "MaterialParameterField.radial.inside",
+        "type": "float",
+        "default": "required",
+        "si_unit": "parameter-dependent",
+        "validation": "finite scalar inside radius",
+        "meaning": "inside value",
+        "backend_support": "FDM/FEM CPU analytic fields; GPU lane checks apply",
+        "problem_ir": "`material_parameter_fields[].value.inside`"
+      },
+      {
+        "python": "MaterialParameterField.radial.outside",
+        "type": "float",
+        "default": "required",
+        "si_unit": "parameter-dependent",
+        "validation": "finite scalar outside radius",
+        "meaning": "outside value",
+        "backend_support": "FDM/FEM CPU analytic fields; GPU lane checks apply",
+        "problem_ir": "`material_parameter_fields[].value.outside`"
+      },
+      {
+        "python": "MaterialParameterField.radial.frame",
+        "type": "str",
+        "default": "\"object\"",
+        "si_unit": "$1$",
+        "validation": "exactly `object` or `world`",
+        "meaning": "coordinate frame for evaluation",
+        "backend_support": "FDM/FEM CPU analytic fields; GPU lane checks apply",
+        "problem_ir": "`material_parameter_fields[].value.frame`"
+      },
+      {
+        "python": "MaterialParameterField.radial.unit",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "non-empty metadata when supplied; no dimensional check",
+        "meaning": "radial-field value unit metadata",
+        "backend_support": "all lanes preserve metadata; runtime does not convert",
+        "problem_ir": "`material_parameter_fields[].value.unit`"
+      },
+      {
+        "python": "MaterialParameterField.sampled.asset_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty immutable asset identity",
+        "meaning": "reference to sampled data",
+        "backend_support": "authoring-only; planner rejects materialization on all lanes",
+        "problem_ir": "`material_parameter_fields[].value.asset_id`"
+      },
+      {
+        "python": "MaterialParameterField.sampled.component_count",
+        "type": "int",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "integer >= 1",
+        "meaning": "components per sample",
+        "backend_support": "authoring-only; planner rejects materialization on all lanes",
+        "problem_ir": "`material_parameter_fields[].value.component_count`"
+      },
+      {
+        "python": "MaterialParameterField.sampled.location",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "one of `cell`, `node`, `element`, `quadrature`",
+        "meaning": "location of sampled values",
+        "backend_support": "authoring-only; planner rejects materialization on all lanes",
+        "problem_ir": "`material_parameter_fields[].value.location`"
+      },
+      {
+        "python": "MaterialParameterField.sampled.unit",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty metadata; no dimensional check",
+        "meaning": "sampled-value unit metadata",
+        "backend_support": "authoring-only; planner rejects materialization on all lanes",
+        "problem_ir": "`material_parameter_fields[].value.unit`"
+      }
+    ]
   }
 }

@@ -162,8 +162,8 @@ mesh, boundary policy, solver, device, and precision.
 
 `InterfacialDMI.__init__` currently checks vector length/conversion but not finite values or
 non-zero norm. Those checks occur later and should either be documented there or moved into the
-constructor. The warning unit for `Material.Dbulk` is currently reported as
-$\mathrm{J\,m^{-3}}$; it must be corrected to $\mathrm{J\,m^{-2}}$.
+constructor. The `Material.Dbulk` warning and public coefficient contract use
+$\mathrm{J\,m^{-2}}$.
 
 ## Required numerical validation
 

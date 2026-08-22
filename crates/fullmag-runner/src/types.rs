@@ -765,16 +765,6 @@ pub struct StepStats {
     /// Cumulative control-scalar host sync calls observed inside direct-minimizer hot loops.
     #[serde(default)]
     pub hot_loop_control_scalar_host_sync_count: u64,
-    #[serde(default)]
-    pub max_torque_all_Apm: f64,
-    #[serde(default)]
-    pub frozen_reference_max_drift: f64,
-    #[serde(default)]
-    pub active_dof_count: u64,
-    #[serde(default)]
-    pub frozen_dof_count: u64,
-    #[serde(default)]
-    pub free_dof_count: u64,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub per_object_scalars: HashMap<String, HashMap<String, f64>>,
 }
