@@ -1,0 +1,60 @@
+name: Documentation restructure force-add one-shot
+
+on:
+  push:
+    branches:
+      - docs/restructure-frontend-backend-python-api
+  pull_request:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: docs-restructure-force-add-one-shot
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    if: github.ref == 'refs/heads/docs/restructure-frontend-backend-python-api' || github.head_ref == 'docs/restructure-frontend-backend-python-api'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout documentation branch
+        uses: actions/checkout@v7
+        with:
+          ref: docs/restructure-frontend-backend-python-api
+          fetch-depth: 0
+
+      - name: Restore the reviewed one-shot payload
+        run: git checkout efbcde35fedbf514feb907f146b5a1e0b1b6c379 -- .docs-restructure
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Materialize the structured documentation tree
+        run: python .docs-restructure/apply.py
+
+      - name: Validate information architecture and examples
+        run: |
+          python -m py_compile \
+            scripts/check_public_docs_information_architecture.py \
+            scripts/test_public_docs_information_architecture.py \
+            public_docs/site/_extensions/public_docs_information_architecture_v2.py
+          python -m unittest scripts/test_public_docs_information_architecture.py -v
+          python scripts/check_public_docs_information_architecture.py --root public_docs/site
+          python scripts/check_public_doc_examples.py --root public_docs/site
+          git diff --check
+
+      - name: Remove the temporary generator
+        run: rm -rf .docs-restructure .github/workflows/docs-restructure-force-add-once.yml
+
+      - name: Force-add ignored public documentation and commit
+        run: |
+          git config user.name "fullmag-docs-bot"
+          git config user.email "fullmag-docs-bot@users.noreply.github.com"
+          git add -A scripts packages .github
+          git add -f public_docs/site
+          git diff --cached --check
+          git commit -m "docs: materialize ownership-oriented documentation tree"
+          git push origin HEAD:docs/restructure-frontend-backend-python-api
