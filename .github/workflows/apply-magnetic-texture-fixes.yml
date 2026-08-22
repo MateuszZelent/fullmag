@@ -45,9 +45,13 @@ jobs:
           script = zlib.decompress(base64.b85decode(payload_path.read_text(encoding='utf-8'))).decode('utf-8')
           stale = '    quaternion = _normalized_quaternion(rotation_quat or (0.0, 0.0, 0.0, 1.0))'
           current = '    quaternion = _normalized_quaternion(rotation_quat) if rotation_quat is not None else None'
-          if script.count(stale) != 2:
-              raise RuntimeError(f'expected two stale evaluator anchors, found {script.count(stale)}')
-          script = script.replace(stale, current)
+          stale_count = script.count(stale)
+          if stale_count:
+              if stale_count != 2:
+                  raise RuntimeError(f'expected two stale evaluator anchors, found {stale_count}')
+              script = script.replace(stale, current)
+          elif script.count(current) < 2:
+              raise RuntimeError('corrected evaluator anchors are missing from the payload')
           compile(script, str(script_path), 'exec')
           script_path.write_text(script, encoding='utf-8')
           PY
