@@ -198,7 +198,8 @@ The active FEM mesh controls are split by semantic owner:
 |---|---|---|
 | selected magnetic object -> `Object Mesh Policy` | one object override and local refinement | object mesh policy replace resource |
 | selected universe/airbox -> `Airbox Mesh Parameters` | shared exterior geometry and FEM air size policy | universe mesh policy replace resource |
-| `Apply Object Policy` / equivalent transaction | commits the object draft only | updates authored policy; current mesh becomes stale |
+| `Apply Policy` | commits the object draft only | updates authored policy; current mesh becomes stale |
+| `Build Mesh` / `Apply & Build Mesh` | builds the selected object's shared-domain mesh context | `mesh.build-selected` |
 | `Apply Airbox Policy` | commits exterior policy only | updates universe policy; current mesh becomes stale |
 | `Apply & Build Shared-Domain Mesh` | commits draft then requests meshing | `mesh.build-shared-domain` |
 | mesh report/quality tabs | read-only realized topology, quality, fallbacks, selectors, and digests | current/latest-successful mesh resources |
@@ -227,6 +228,11 @@ Only the resolved report can establish whether a requested mode executed without
 
 (python-api-discretization-fem-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
+
+**Requested intent** is the canonical Python or Control Room policy stored before meshing.
+**Resolved execution** is the backend-effective policy and the concrete Gmsh/native result. Public
+**validation errors** reject malformed requests before build, while **unsupported combinations**
+fail capability validation rather than being replaced silently by a different topology or device.
 
 The public boundary rejects malformed values before build. The mesh builder additionally fails or
 marks degradation for nonconformal assembly, empty regions, inverted/collapsed elements, unresolved
