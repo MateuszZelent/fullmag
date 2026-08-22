@@ -28,9 +28,9 @@ film.Aex = 1.55e-11
 film.alpha = 0.1
 film.m = fm.texture.uniform(0.0, 1.0, 0.0)
 
-study.demag(realization="poisson_robin")
+study.demag()
 study.b_ext(0.0, 0.0, 1e-3)
-study.solver(dt=1e-13, g=2.115)
+study.solver(fix_dt=1e-13, g=2.115)
 study.stages.add_relax(
     algorithm="llg_overdamped",
     dt=1e-13,
