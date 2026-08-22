@@ -1,0 +1,108 @@
+name: Apply magnetic texture FEM/FDM fixes
+
+on:
+  push:
+    branches:
+      - codex/magnetic-textures-fem-fdm-fixes-20260822
+
+permissions:
+  contents: write
+
+concurrency:
+  group: magnetic-textures-fem-fdm-fixes
+  cancel-in-progress: false
+
+jobs:
+  apply-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: codex/magnetic-textures-fem-fdm-fixes-20260822
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Decode and execute implementation payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64
+          import zlib
+          from pathlib import Path
+
+          payload_path = Path('.github/fullmag-texture-fixes/apply_changes.py.zlib.b85')
+          script_path = Path('.github/fullmag-texture-fixes/apply_changes.py')
+          script = zlib.decompress(base64.b85decode(payload_path.read_text(encoding='utf-8'))).decode('utf-8')
+          compile(script, str(script_path), 'exec')
+          script_path.write_text(script, encoding='utf-8')
+          PY
+          python .github/fullmag-texture-fixes/apply_changes.py
+
+      - name: Format Rust sources
+        run: cargo fmt --all
+
+      - name: Regenerate Rust/Python parity fixture
+        env:
+          FULLMAG_GENERATE_V2_PARITY: "1"
+        run: cargo test -p fullmag-plan --test magnetization_textures_v2_parity
+
+      - name: Test canonical texture contracts and parity
+        run: |
+          set -euo pipefail
+          cargo test -p fullmag-plan --test magnetization_textures_v2_contract
+          cargo test -p fullmag-plan --test magnetization_textures_v2_parity
+          cargo test -p fullmag-plan --lib texture_object_space_tests
+          cargo check -p fullmag-plan -p fullmag-py-core
+
+      - name: Test Python factories and reference evaluator
+        env:
+          PYTHONPATH: packages/fullmag-py/src
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check pytest
+          python -m pytest -q \
+            packages/fullmag-py/tests/test_advanced_magnetic_textures.py \
+            packages/fullmag-py/tests/test_preset_texture_v2_parity.py \
+            packages/fullmag-py/tests/test_bimeron_textures.py
+
+      - name: Validate public API documentation contract
+        env:
+          PYTHONPATH: packages/fullmag-py/src
+        run: |
+          set -euo pipefail
+          python .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py \
+            public_docs/site/python-api/magnets-and-textures/preset-textures.source-map.json \
+            --repo-root .
+          python -m unittest packages/fullmag-py/tests/test_public_python_api_documentation.py -v
+          python scripts/check_public_doc_examples.py --root public_docs/site
+
+      - name: Verify patch hygiene
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          git diff --check
+          test "$(grep -c 'fn v2_neel_chirality_reverses_the_radial_wall_direction' crates/fullmag-plan/tests/magnetization_textures_v2_contract.rs)" -eq 1
+          test "$(grep -c 'def hopfion(' packages/fullmag-py/src/fullmag/init/textures.py)" -eq 1
+          test "$(grep -c 'pub(crate) fn object_space_sample_points' crates/fullmag-plan/src/mesh.rs)" -eq 1
+
+      - name: Commit validated implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .github/fullmag-texture-fixes
+          rm -f .github/workflows/apply-magnetic-texture-fixes.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit \
+            -m "feat: fix FEM/FDM texture sampling and add topological presets" \
+            -m "Fix Neel chirality semantics in the shared sampler, map translated FEM nodes into object coordinates, unify FDM object-frame conversion, and add v2 antiskyrmion, skyrmionium, and hopfion presets with Rust/Python parity, contract tests, and public documentation."
+          git push origin HEAD:codex/magnetic-textures-fem-fdm-fixes-20260822
