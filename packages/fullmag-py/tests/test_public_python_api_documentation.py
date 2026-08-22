@@ -36,8 +36,8 @@ API_PARAMETER_OWNERS: dict[str, Path] = {
     "SaveScalar": Path("python-api/outputs/fields-and-scalars.md"),
     "Problem": Path("python-api/problem/problem.md"),
     "DiscretizationHints": Path("python-api/discretization/discretization-hints.md"),
-    "FDM": Path("python-api/discretization/fdm.md"),
-    "FEM": Path("python-api/discretization/fem.md"),
+    "FDM": Path("python-api/meshing/fdm/index.md"),
+    "FEM": Path("python-api/meshing/fem/index.md"),
     "MaterialParameterField.constant": Path(
         "python-api/materials/spatial-parameter-fields.md"
     ),
