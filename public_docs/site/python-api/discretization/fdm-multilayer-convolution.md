@@ -277,7 +277,7 @@ non-CPU-reference execution engine and rejects non-FP64 provenance.
 <!-- (problem-ir)= -->
 ## Canonical ProblemIR
 
-The physics-first mesh calls produce `backend_policy.discretization_hints.fdm`. The following JSON is the
+The public mesh-authoring calls produce `backend_policy.discretization_hints.fdm`. The following JSON is the
 canonical `ProblemIR` wrapper produced by the first example's FDM objects; `explain` is absent by
 design because it is an authoring/display preference. The surrounding `backend_policy` path is
 part of the canonical contract, not an illustrative shorthand:
@@ -379,7 +379,7 @@ allocation. Unsupported combinations fail without silently changing multilayer t
 CUDA to CPU, or `three_d` to `two_d_stack`.
 
 The Control Room's global Demag toggle is exported as `study.demag(...)`; the FDM policy is
-exported independently as physics-first mesh calls. A saved `explain` checkbox may
+exported independently through the public mesh-authoring calls. A saved `explain` checkbox may
 round-trip through authoring state and generated Python even though it does not enter physical
 `ProblemIR`.
 
