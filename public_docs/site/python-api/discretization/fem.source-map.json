@@ -1,37 +1,90 @@
 {
   "document": {
-    "path": "public_docs/site/python-api/discretization/fem.md"
+    "path": "public_docs/site/python-api/discretization/fem.md",
+    "reviewed_revision": "043201a94f769307c6b6e0db971da9a8a5eec57c"
   },
   "backend_matrix": [
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "documented"
+      "status": "source-backed",
+      "reason": "Shared-domain Gmsh generation, native extraction, and CPU FEM consumers are source-backed."
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "documented"
+      "status": "partial",
+      "reason": "The mesh asset is shared with the GPU lane, but element-family, order, interaction, and auxiliary-operator coverage remain capability-gated."
     },
     {
       "solver": "FDM",
       "device": "CPU",
-      "status": "documented"
+      "status": "not-applicable",
+      "reason": "FDM uses Cartesian object grids rather than the FEM mesh contract."
     },
     {
       "solver": "FDM",
       "device": "GPU",
-      "status": "documented"
+      "status": "not-applicable",
+      "reason": "FDM uses Cartesian object grids rather than the FEM mesh contract."
     }
   ],
   "equations": [],
   "symbols": [],
   "sources": [
     {
-      "id": "owner",
+      "id": "fem_schema",
       "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
       "symbol": "class FEM",
-      "responsibility": "Owns the documented public API, validation, and lowering."
+      "responsibility": "Study-level FEM constructor, validation, aliases, and IR lowering."
+    },
+    {
+      "id": "object_recipe",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class PerObjectMeshRecipe",
+      "responsibility": "Complete object-owned mesh recipe and topology legality."
+    },
+    {
+      "id": "mesh_operation",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class MeshOperation",
+      "responsibility": "Ordered COMSOL-like meshing operation schema."
+    },
+    {
+      "id": "swept_controls",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class SweptMeshControls",
+      "responsibility": "Typed swept direction, element family, transition, and exact-layer policy."
+    },
+    {
+      "id": "world",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "Stage-first universe, object, build, and solver authoring surface."
+    },
+    {
+      "id": "targets",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py",
+      "symbol": "resolve_shared_domain_targets",
+      "responsibility": "Study/workflow/object target precedence and effective target resolution."
+    },
+    {
+      "id": "report",
+      "path": "packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py",
+      "symbol": "_build_shared_domain_build_report",
+      "responsibility": "Requested-versus-realized mesh, fallback, topology, selector, and quality provenance."
+    },
+    {
+      "id": "ui_model",
+      "path": "apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts",
+      "symbol": "buildObjectMeshPolicyReplaceRequest",
+      "responsibility": "Control Room object-mesh draft validation and canonical JSON request."
+    },
+    {
+      "id": "airbox_ui",
+      "path": "apps/control-room/src/modules/inspector/panels/airbox/airboxMeshPolicyDraft.ts",
+      "symbol": "buildAirboxMeshPolicyReplaceRequest",
+      "responsibility": "Control Room universe/airbox mesh policy canonicalization."
     }
   ],
   "public_api": {
@@ -41,49 +94,49 @@
         "type": "int",
         "default": "required",
         "si_unit": "1",
-        "validation": "Positive finite-element order.",
-        "meaning": "Positive finite-element order.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "validation": "Integer greater than or equal to one.",
+        "meaning": "Study-level finite-element field order.",
+        "backend_support": "FEM; device support is element/order/interaction gated",
         "problem_ir": "backend_policy.discretization_hints.fem.order"
       },
       {
         "python": "FEM.maximum_element_size",
-        "type": "positive float",
-        "default": "required unless hmax is supplied",
+        "type": "float | None",
+        "default": "None; required unless hmax is supplied",
         "si_unit": "\\mathrm{m}",
-        "validation": "Canonical maximum element size. Construction fails if neither spelling is provided.",
-        "meaning": "Canonical maximum element size. Construction fails if neither spelling is provided.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "backend_policy.discretization_hints.fem.maximum_element_size"
+        "validation": "Finite and positive; unequal simultaneous hmax is rejected.",
+        "meaning": "Canonical study-level maximum element-size target.",
+        "backend_support": "FEM",
+        "problem_ir": "backend_policy.discretization_hints.fem.hmax"
       },
       {
         "python": "FEM.hmax",
-        "type": "positive float | None",
+        "type": "float | None",
         "default": "None",
         "si_unit": "\\mathrm{m}",
-        "validation": "Alternate input spelling for the same required size; unequal simultaneous values are rejected.",
-        "meaning": "Alternate input spelling for the same required size; unequal simultaneous values are rejected.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "backend_policy.discretization_hints.fem.maximum_element_size"
+        "validation": "Finite and positive alias; must equal maximum_element_size when both are supplied.",
+        "meaning": "Compatibility spelling of maximum_element_size.",
+        "backend_support": "FEM",
+        "problem_ir": "backend_policy.discretization_hints.fem.hmax"
       },
       {
         "python": "FEM.mesh",
         "type": "str | None",
         "default": "None",
         "si_unit": "1",
-        "validation": "Optional imported mesh reference.",
-        "meaning": "Optional imported mesh reference.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "validation": "Nonempty string when present; imported asset is validated again during extraction.",
+        "meaning": "Imported or prebuilt FEM mesh reference.",
+        "backend_support": "FEM import/extraction path",
         "problem_ir": "backend_policy.discretization_hints.fem.mesh"
       },
       {
         "python": "FEM.demag_solver_policy",
-        "type": "policy or None",
+        "type": "FemLinearSolverPolicy | None",
         "default": "None",
         "si_unit": "1",
-        "validation": "Demagnetization linear-solver policy.",
-        "meaning": "Demagnetization linear-solver policy.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "validation": "Typed FEM Poisson/demag solver policy.",
+        "meaning": "Algebraic demagnetization solver request; it does not change mesh geometry.",
+        "backend_support": "FEM demagnetization lanes",
         "problem_ir": "backend_policy.discretization_hints.fem.demag_solver_policy"
       }
     ]
