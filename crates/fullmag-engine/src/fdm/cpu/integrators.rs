@@ -57,6 +57,17 @@ fn decide_adaptive_step(
     }
 }
 
+#[cfg(feature = "parallel")]
+fn max_error_preserving_nonfinite(left: f64, right: f64) -> f64 {
+    if !left.is_finite() {
+        left
+    } else if !right.is_finite() {
+        right
+    } else {
+        left.max(right)
+    }
+}
+
 #[cfg(test)]
 mod adaptive_decision_tests {
     use super::*;
@@ -105,6 +116,183 @@ mod adaptive_decision_tests {
             panic!("finite rejection must retry");
         };
         assert!(next < 1e-3);
+    }
+
+    fn adaptive_test_problem(integrator: crate::TimeIntegrator) -> crate::ExchangeLlgProblem {
+        crate::ExchangeLlgProblem::with_terms(
+            crate::GridShape::new(1, 1, 1).expect("valid grid"),
+            crate::CellSize::new(1.0, 1.0, 1.0).expect("valid cell size"),
+            crate::MaterialParameters::new(1.0, 1.0e-30, 0.1).expect("valid material"),
+            crate::LlgConfig::new(100.0, integrator)
+                .expect("valid LLG config")
+                .with_adaptive(crate::AdaptiveStepConfig {
+                    max_error: 1.0,
+                    dt_min: 1.0e-9,
+                    dt_max: 1.0,
+                    headroom: 0.2,
+                    rtol: 0.0,
+                    growth_limit: 3.0,
+                    shrink_limit: 0.2,
+                }),
+            crate::EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                external_field: Some([0.0, 1.0, 0.0]),
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn direct_cpu_entry_points_propagate_injected_nonfinite_error_norm() {
+        for integrator in [crate::TimeIntegrator::RK23, crate::TimeIntegrator::RK45] {
+            let problem = adaptive_test_problem(integrator);
+
+            let mut aos = problem.uniform_state([1.0, 0.0, 0.0]).expect("AoS state");
+            let aos_before = aos.clone();
+            let mut aos_ws = problem.create_workspace();
+            let mut aos_bufs = problem.create_integrator_buffers();
+            aos_bufs.adaptive_error_override = Some(f64::NAN);
+            let error = match integrator {
+                crate::TimeIntegrator::RK23 => problem.rk23_step_buf(
+                    &mut aos,
+                    1.0e-6,
+                    &mut aos_ws,
+                    &mut aos_bufs,
+                    crate::EvaluationRequest::Minimal,
+                ),
+                crate::TimeIntegrator::RK45 => problem.rk45_step_buf(
+                    &mut aos,
+                    1.0e-6,
+                    &mut aos_ws,
+                    &mut aos_bufs,
+                    crate::EvaluationRequest::Minimal,
+                ),
+                _ => unreachable!(),
+            }
+            .expect_err("AoS non-finite error norm must terminate");
+            assert_eq!(error.to_string(), "non_finite_adaptive_error");
+            assert_eq!(aos, aos_before);
+
+            let mut soa_aos = problem
+                .uniform_state([1.0, 0.0, 0.0])
+                .expect("SoA AoS state");
+            let soa_aos_before = soa_aos.clone();
+            let mut soa_aos_ws = problem.create_workspace();
+            let mut soa_aos_bufs = problem.create_integrator_buffers();
+            soa_aos_bufs.adaptive_error_override = Some(f64::INFINITY);
+            let error = match integrator {
+                crate::TimeIntegrator::RK23 => problem.rk23_step_soa_buf(
+                    &mut soa_aos,
+                    1.0e-6,
+                    &mut soa_aos_ws,
+                    &mut soa_aos_bufs,
+                    crate::EvaluationRequest::Minimal,
+                ),
+                crate::TimeIntegrator::RK45 => problem.rk45_step_soa_buf(
+                    &mut soa_aos,
+                    1.0e-6,
+                    &mut soa_aos_ws,
+                    &mut soa_aos_bufs,
+                    crate::EvaluationRequest::Minimal,
+                ),
+                _ => unreachable!(),
+            }
+            .expect_err("SoA-buffer non-finite error norm must terminate");
+            assert_eq!(error.to_string(), "non_finite_adaptive_error");
+            assert_eq!(soa_aos, soa_aos_before);
+
+            let mut persistent_soa = problem
+                .uniform_state([1.0, 0.0, 0.0])
+                .expect("persistent SoA seed")
+                .to_soa();
+            let persistent_soa_before = persistent_soa.clone();
+            let mut persistent_soa_ws = problem.create_workspace();
+            let mut persistent_soa_bufs = problem.create_integrator_buffers();
+            persistent_soa_bufs.adaptive_error_override = Some(f64::NAN);
+            let error = match integrator {
+                crate::TimeIntegrator::RK23 => problem.rk23_step_soa_state_buf(
+                    &mut persistent_soa,
+                    1.0e-6,
+                    &mut persistent_soa_ws,
+                    &mut persistent_soa_bufs,
+                    crate::EvaluationRequest::Minimal,
+                ),
+                crate::TimeIntegrator::RK45 => problem.rk45_step_soa_state_buf(
+                    &mut persistent_soa,
+                    1.0e-6,
+                    &mut persistent_soa_ws,
+                    &mut persistent_soa_bufs,
+                    crate::EvaluationRequest::Minimal,
+                ),
+                _ => unreachable!(),
+            }
+            .expect_err("persistent-SoA non-finite error norm must terminate");
+            assert_eq!(error.to_string(), "non_finite_adaptive_error");
+            assert_eq!(persistent_soa, persistent_soa_before);
+        }
+    }
+
+    #[test]
+    fn rk45_terminal_rejection_preserves_fsal_for_aos_and_persistent_soa() {
+        let problem = adaptive_test_problem(crate::TimeIntegrator::RK45);
+
+        let mut aos = problem.uniform_state([1.0, 0.0, 0.0]).expect("AoS state");
+        let mut aos_ws = problem.create_workspace();
+        let mut aos_bufs = problem.create_integrator_buffers();
+        problem
+            .rk45_step_buf(
+                &mut aos,
+                1.0e-6,
+                &mut aos_ws,
+                &mut aos_bufs,
+                crate::EvaluationRequest::Minimal,
+            )
+            .expect("accepted AoS RK45 step");
+        assert!(aos.k_fsal.is_some());
+        let aos_before = aos.clone();
+        aos_bufs.adaptive_error_override = Some(f64::NAN);
+        let error = problem
+            .rk45_step_buf(
+                &mut aos,
+                1.0e-6,
+                &mut aos_ws,
+                &mut aos_bufs,
+                crate::EvaluationRequest::Minimal,
+            )
+            .expect_err("terminal AoS RK45 rejection");
+        assert_eq!(error.to_string(), "non_finite_adaptive_error");
+        assert_eq!(aos, aos_before);
+
+        let mut persistent_soa = problem
+            .uniform_state([1.0, 0.0, 0.0])
+            .expect("persistent SoA seed")
+            .to_soa();
+        let mut persistent_soa_ws = problem.create_workspace();
+        let mut persistent_soa_bufs = problem.create_integrator_buffers();
+        problem
+            .rk45_step_soa_state_buf(
+                &mut persistent_soa,
+                1.0e-6,
+                &mut persistent_soa_ws,
+                &mut persistent_soa_bufs,
+                crate::EvaluationRequest::Minimal,
+            )
+            .expect("accepted persistent-SoA RK45 step");
+        assert!(persistent_soa.k_fsal.is_some());
+        let persistent_soa_before = persistent_soa.clone();
+        persistent_soa_bufs.adaptive_error_override = Some(f64::INFINITY);
+        let error = problem
+            .rk45_step_soa_state_buf(
+                &mut persistent_soa,
+                1.0e-6,
+                &mut persistent_soa_ws,
+                &mut persistent_soa_bufs,
+                crate::EvaluationRequest::Minimal,
+            )
+            .expect_err("terminal persistent-SoA RK45 rejection");
+        assert_eq!(error.to_string(), "non_finite_adaptive_error");
+        assert_eq!(persistent_soa, persistent_soa_before);
     }
 
     #[test]
@@ -1250,11 +1438,7 @@ impl ExchangeLlgProblem {
 
         loop {
             // Stage 1 — FSAL: reuse k7 from previous accepted step
-            let reusable_fsal = if dynamic_oersted {
-                None
-            } else {
-                state.k_fsal.clone()
-            };
+            let reusable_fsal = (!dynamic_oersted).then(|| state.k_fsal.as_ref()).flatten();
             if let Some(fsal) = reusable_fsal {
                 bufs.k[0][..n].copy_from_slice(&fsal);
             } else {
@@ -1646,11 +1830,7 @@ impl ExchangeLlgProblem {
         const E7: f64 = -1.0 / 40.0;
 
         loop {
-            let reusable_fsal = if dynamic_oersted {
-                None
-            } else {
-                state.k_fsal.clone()
-            };
+            let reusable_fsal = (!dynamic_oersted).then(|| state.k_fsal.as_ref()).flatten();
             if let Some(fsal) = reusable_fsal {
                 bufs.soa.k[0].scatter_from_aos(&fsal);
             } else {
@@ -2496,11 +2676,7 @@ impl ExchangeLlgProblem {
         const E7: f64 = -1.0 / 40.0;
 
         loop {
-            let reusable_fsal = if dynamic_oersted {
-                None
-            } else {
-                state.k_fsal.clone()
-            };
+            let reusable_fsal = (!dynamic_oersted).then(|| state.k_fsal.as_ref()).flatten();
             if let Some(fsal) = reusable_fsal {
                 bufs.soa.k[0].copy_from(&fsal);
             } else {
@@ -2977,6 +3153,11 @@ impl ExchangeLlgProblem {
         let rtol = cfg.rtol;
 
         let compute_err = |i: usize| -> f64 {
+            if i == 0 {
+                if let Some(error) = bufs.adaptive_error_override {
+                    return error;
+                }
+            }
             let mut err = [0.0, 0.0, 0.0];
             for &(k_idx, w) in weighted_stages {
                 err[0] += w * bufs.k[k_idx][i][0];
@@ -3000,13 +3181,17 @@ impl ExchangeLlgProblem {
             (0..n)
                 .into_par_iter()
                 .map(compute_err)
-                .reduce(|| 0.0f64, f64::max)
+                .reduce(|| 0.0f64, max_error_preserving_nonfinite)
         }
         #[cfg(not(feature = "parallel"))]
         {
             let mut max_err = 0.0f64;
             for i in 0..n {
-                max_err = max_err.max(compute_err(i));
+                let error = compute_err(i);
+                if !error.is_finite() {
+                    return error;
+                }
+                max_err = max_err.max(error);
             }
             max_err
         }
@@ -3025,6 +3210,11 @@ impl ExchangeLlgProblem {
         let rtol = cfg.rtol;
 
         let compute_err = |i: usize| -> f64 {
+            if i == 0 {
+                if let Some(error) = bufs.adaptive_error_override {
+                    return error;
+                }
+            }
             let mut err = [0.0, 0.0, 0.0];
             for &(k_idx, w) in weighted_stages {
                 err[0] += w * bufs.soa.k[k_idx].x[i];
@@ -3054,13 +3244,17 @@ impl ExchangeLlgProblem {
             (0..n)
                 .into_par_iter()
                 .map(compute_err)
-                .reduce(|| 0.0f64, f64::max)
+                .reduce(|| 0.0f64, max_error_preserving_nonfinite)
         }
         #[cfg(not(feature = "parallel"))]
         {
             let mut max_err = 0.0f64;
             for i in 0..n {
-                max_err = max_err.max(compute_err(i));
+                let error = compute_err(i);
+                if !error.is_finite() {
+                    return error;
+                }
+                max_err = max_err.max(error);
             }
             max_err
         }
