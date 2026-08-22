@@ -1,0 +1,57 @@
+name: Documentation restructure one-shot
+
+on:
+  push:
+    branches:
+      - docs/restructure-frontend-backend-python-api
+    paths:
+      - ".docs-restructure/**"
+      - ".github/workflows/docs-restructure-once.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: docs-restructure-one-shot
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout documentation branch
+        uses: actions/checkout@v7
+        with:
+          ref: docs/restructure-frontend-backend-python-api
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Materialize the structured documentation tree
+        run: python .docs-restructure/apply.py
+
+      - name: Validate information architecture and examples
+        run: |
+          python -m py_compile \
+            scripts/check_public_docs_information_architecture.py \
+            scripts/test_public_docs_information_architecture.py \
+            public_docs/site/_extensions/public_docs_information_architecture_v2.py
+          python -m unittest scripts/test_public_docs_information_architecture.py -v
+          python scripts/check_public_docs_information_architecture.py --root public_docs/site
+          python scripts/check_public_doc_examples.py --root public_docs/site
+          git diff --check
+
+      - name: Remove one-shot generator
+        run: rm -rf .docs-restructure .github/workflows/docs-restructure-once.yml
+
+      - name: Commit generated documentation
+        run: |
+          git config user.name "fullmag-docs-bot"
+          git config user.email "fullmag-docs-bot@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "docs: reorganize documentation by frontend backend and Python API"
+          git push origin HEAD:docs/restructure-frontend-backend-python-api
