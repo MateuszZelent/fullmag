@@ -42,7 +42,7 @@ jobs:
 
           payload_path = Path('.github/fullmag-texture-fixes/apply_changes.py.zlib.b85')
           script_path = Path('.github/fullmag-texture-fixes/apply_changes.py')
-          script = zlib.decompress(base64.b85decode(payload_path.read_text(encoding='utf-8'))).decode('utf-8')
+          script = zlib.decompress(base64.b64decode(payload_path.read_text(encoding='utf-8'))).decode('utf-8')
           stale = '    quaternion = _normalized_quaternion(rotation_quat or (0.0, 0.0, 0.0, 1.0))'
           current = '    quaternion = _normalized_quaternion(rotation_quat) if rotation_quat is not None else None'
           stale_count = script.count(stale)
