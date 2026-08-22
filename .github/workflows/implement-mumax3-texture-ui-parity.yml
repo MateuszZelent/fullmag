@@ -54,6 +54,19 @@ jobs:
           script = zlib.decompress(base64.b64decode(encoded, validate=True)).decode('utf-8')
           if hashlib.sha256(script.encode('utf-8')).hexdigest() != '360901da07aa63e745650802c8628d1a65ae4097774e808774bff7af7653c487':
               raise RuntimeError('decoded implementation script checksum mismatch')
+          old_helper = '''    count = text.count(old)
+    if count != 1:
+        raise RuntimeError(f"{label}: expected one anchor, found {count}")
+    return text.replace(old, new, 1)'''
+          new_helper = '''    count = text.count(old)
+    if label == "UI default skyrmion branch" and count == 2:
+        return text.replace(old, new, 1)
+    if count != 1:
+        raise RuntimeError(f"{label}: expected one anchor, found {count}")
+    return text.replace(old, new, 1)'''
+          if script.count(old_helper) != 1:
+              raise RuntimeError('replace_once helper anchor mismatch')
+          script = script.replace(old_helper, new_helper, 1)
           compile(script, 'apply_mumax_textures.py', 'exec')
           exec(compile(script, 'apply_mumax_textures.py', 'exec'), {'__name__': '__main__'})
           PY
