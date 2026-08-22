@@ -141,7 +141,7 @@ jobs:
           PYTHONPATH: packages/fullmag-py/src
         run: |
           set -euo pipefail
-          python -m pip install --disable-pip-version-check pytest
+          python -m pip install --disable-pip-version-check pytest -e packages/fullmag-py
           python -m pytest -q \
             packages/fullmag-py/tests/test_advanced_magnetic_textures.py \
             packages/fullmag-py/tests/test_preset_texture_v2_parity.py \
