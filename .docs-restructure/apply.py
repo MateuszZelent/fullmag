@@ -38,4 +38,31 @@ for relative_path, content in sorted(mapping.items()):
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
 
+# The ownership-oriented tree deliberately links the Backend landing page to
+# canonical families outside its physical directory.  Teach the common IA
+# helper to emit a genuine relative path instead of requiring every child to
+# be a lexical descendant of its parent directory.
+architecture_path = ROOT / "scripts/public_docs_information_architecture.py"
+architecture = architecture_path.read_text(encoding="utf-8")
+if "import posixpath\n" not in architecture:
+    architecture = architecture.replace(
+        "import argparse\nimport sys\n",
+        "import argparse\nimport posixpath\nimport sys\n",
+        1,
+    )
+old_helper = '''def _relative_child(parent_path: str, child_path: str) -> str:
+    parent = PurePosixPath(parent_path).parent
+    return str(PurePosixPath(child_path).relative_to(parent).with_suffix(""))
+'''
+new_helper = '''def _relative_child(parent_path: str, child_path: str) -> str:
+    parent = str(PurePosixPath(parent_path).parent)
+    child = str(PurePosixPath(child_path).with_suffix(""))
+    return posixpath.relpath(child, start=parent)
+'''
+if old_helper in architecture:
+    architecture = architecture.replace(old_helper, new_helper, 1)
+elif new_helper not in architecture:
+    raise SystemExit("cannot patch cross-family documentation navigation helper")
+architecture_path.write_text(architecture, encoding="utf-8")
+
 print(f"Applied structured documentation tree: {len(mapping)} files")
