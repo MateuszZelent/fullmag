@@ -37,12 +37,25 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           import base64
+          import hashlib
           import zlib
           from pathlib import Path
 
-          payload_path = Path('.github/fullmag-texture-fixes/apply_changes.py.zlib.b85')
+          parts = [
+              Path(f'.github/fullmag-texture-fixes/payload.part{index:02d}')
+              for index in range(1, 11)
+          ]
+          encoded = ''.join(part.read_text(encoding='utf-8') for part in parts)
+          expected_length = 13460
+          expected_sha256 = 'feed7d4de065ee658c0f04212c1e2466bd2b318e75670e14b6fdb8635e861fae'
+          actual_sha256 = hashlib.sha256(encoded.encode('ascii')).hexdigest()
+          if len(encoded) != expected_length or actual_sha256 != expected_sha256:
+              raise RuntimeError(
+                  f'payload verification failed: length={len(encoded)} sha256={actual_sha256}'
+              )
+          compressed = base64.b64decode(encoded, validate=True)
+          script = zlib.decompress(compressed).decode('utf-8')
           script_path = Path('.github/fullmag-texture-fixes/apply_changes.py')
-          script = zlib.decompress(base64.b64decode(payload_path.read_text(encoding='utf-8'))).decode('utf-8')
           stale = '    quaternion = _normalized_quaternion(rotation_quat or (0.0, 0.0, 0.0, 1.0))'
           current = '    quaternion = _normalized_quaternion(rotation_quat) if rotation_quat is not None else None'
           stale_count = script.count(stale)
