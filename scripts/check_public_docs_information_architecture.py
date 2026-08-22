@@ -1,9 +1,9 @@
-"""Run the public-documentation IA check with monotonic status promotion.
+"""Run the owner-oriented public-documentation IA check with status promotion.
 
-The canonical IA manifest records the minimum maturity expected for a page. A
-reference page may be promoted from ``partial`` to ``implemented`` in its front
-matter without requiring an unrelated manifest-only commit. All other metadata,
-navigation, path, label, document-kind, and status mismatches remain errors.
+The canonical navigation used by the public site is defined in
+``public_docs_information_architecture_v2``.  The historical manifest remains importable for
+legacy redirects and compatibility tooling, while this checker validates the user-facing
+Frontend / Backend / Python API tree.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from dataclasses import replace
 from pathlib import Path
 import sys
 
-from public_docs_information_architecture import (
+from public_docs_information_architecture_v2 import (
     PAGE_SPECS,
     PUBLIC_DOCS_ROOT,
     PageSpec,
