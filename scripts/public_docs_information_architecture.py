@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 import argparse
+import posixpath
 import sys
 from typing import Iterable
 
@@ -659,8 +660,9 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
 
 
 def _relative_child(parent_path: str, child_path: str) -> str:
-    parent = PurePosixPath(parent_path).parent
-    return str(PurePosixPath(child_path).relative_to(parent).with_suffix(""))
+    parent = str(PurePosixPath(parent_path).parent)
+    child = str(PurePosixPath(child_path).with_suffix(""))
+    return posixpath.relpath(child, start=parent)
 
 
 def _expected_direct_children(index: PageSpec, specs: Iterable[PageSpec]) -> tuple[str, ...]:

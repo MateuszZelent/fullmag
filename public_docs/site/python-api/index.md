@@ -1,6 +1,6 @@
 ---
 title: Python API
-status: partial
+status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
@@ -9,18 +9,15 @@ owner: fullmag-public-docs
 (public-docs-python-api-root)=
 # Python API
 
-FullMag's public authoring surface is the embedded Python DSL
-(`import fullmag as fm`). Every public script is a stage-first `fm.study(...)` with ordered
-`study.stages.add_*` calls; the DSL lowers to the canonical `ProblemIR` that the planner and
-runtime execute.
+FullMag's public authoring surface is the embedded stage-first Python DSL
+(`import fullmag as fm`). The tree is organized by authoring owner.
 
-The pages here cover the constructor surface, geometry and materials, magnets and textures,
-interactions, current and excitations, boundary conditions, discretization, dynamics, studies,
-outputs, and the runtime lifecycle. Direct `fm.Problem(...)` construction is not part of the
-public workflow.
+Meshing is a dedicated family with separate FDM and FEM branches. Within FEM, ferromagnet and
+airbox commands are separated, and every topology mode has its own page. Low-level composite
+discretization objects remain in a small compatibility branch instead of mixing with mesh workflows.
 
 ```{toctree}
-:maxdepth: 1
+:maxdepth: 4
 
 problem/index
 geometry/index
@@ -29,6 +26,7 @@ magnets-and-textures/index
 interactions/index
 current-and-excitations/index
 boundary-conditions/index
+meshing/index
 discretization/index
 dynamics/index
 studies/index
