@@ -1,0 +1,98 @@
+name: Compact magnetic texture parity fixture
+
+on:
+  push:
+    branches:
+      - codex/magnetic-textures-fem-fdm-fixes-20260822
+
+permissions:
+  contents: write
+
+concurrency:
+  group: compact-magnetic-texture-parity
+  cancel-in-progress: false
+
+jobs:
+  compact-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out texture branch
+        uses: actions/checkout@v4
+        with:
+          ref: codex/magnetic-textures-fem-fdm-fixes-20260822
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Compact fixture without changing its JSON value
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          path = Path("crates/fullmag-plan/tests/fixtures/magnetization_textures_v2_parity.json")
+          before = json.loads(path.read_text(encoding="utf-8"))
+          canonical_before = hashlib.sha256(
+              json.dumps(before, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+          ).hexdigest()
+          path.write_text(
+              json.dumps(before, separators=(",", ":"), ensure_ascii=False) + "\n",
+              encoding="utf-8",
+          )
+          after = json.loads(path.read_text(encoding="utf-8"))
+          canonical_after = hashlib.sha256(
+              json.dumps(after, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+          ).hexdigest()
+          if before != after or canonical_before != canonical_after:
+              raise RuntimeError("fixture semantic value changed during compaction")
+          print(f"semantic sha256: {canonical_after}")
+          print(f"compact size: {path.stat().st_size} bytes")
+          PY
+
+      - name: Validate Rust parity and contracts
+        run: |
+          set -euo pipefail
+          cargo test -p fullmag-plan --test magnetization_textures_v2_parity
+          cargo test -p fullmag-plan --test magnetization_textures_v2_contract
+          cargo test -p fullmag-plan --lib texture_object_space_tests
+          cargo check -p fullmag-plan -p fullmag-py-core
+
+      - name: Validate Python parity
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check pytest -e packages/fullmag-py
+          python -m pytest -q \
+            packages/fullmag-py/tests/test_advanced_magnetic_textures.py \
+            packages/fullmag-py/tests/test_preset_texture_v2_parity.py \
+            packages/fullmag-py/tests/test_bimeron_textures.py
+
+      - name: Validate documentation and patch hygiene
+        env:
+          PYTHONPATH: packages/fullmag-py/src
+        run: |
+          set -euo pipefail
+          python .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py \
+            public_docs/site/python-api/magnets-and-textures/preset-textures.source-map.json \
+            --repo-root .
+          python -m unittest packages/fullmag-py/tests/test_public_python_api_documentation.py -v
+          cargo fmt --all -- --check
+          git diff --check
+
+      - name: Commit compact fixture and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/compact-magnetic-texture-parity.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "test: compact magnetic texture parity fixture"
+          git push origin HEAD:codex/magnetic-textures-fem-fdm-fixes-20260822
