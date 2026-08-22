@@ -39,7 +39,7 @@ for relative_path, content in sorted(mapping.items()):
     target.write_text(content, encoding="utf-8")
 
 # The ownership-oriented tree deliberately links the Backend landing page to
-# canonical families outside its physical directory.  Teach the common IA
+# canonical families outside its physical directory. Teach the common IA
 # helper to emit a genuine relative path instead of requiring every child to
 # be a lexical descendant of its parent directory.
 architecture_path = ROOT / "scripts/public_docs_information_architecture.py"
@@ -64,5 +64,29 @@ if old_helper in architecture:
 elif new_helper not in architecture:
     raise SystemExit("cannot patch cross-family documentation navigation helper")
 architecture_path.write_text(architecture, encoding="utf-8")
+
+# The historical manifest and the published Getting Started page had drifted
+# only in navigation order. Preserve the published pedagogical sequence in the
+# ownership-oriented overlay instead of rewriting that guide for an unrelated
+# meshing reorganization.
+v2_path = ROOT / "public_docs/site/_extensions/public_docs_information_architecture_v2.py"
+v2 = v2_path.read_text(encoding="utf-8")
+if "    'getting-started/index.md': PageSpec(" not in v2:
+    marker = "    'python-api/index.md': PageSpec("
+    replacement = (
+        "    'getting-started/index.md': PageSpec(path='getting-started/index.md', "
+        "title='Getting started', label='public-docs-getting-started-root', "
+        "status='partial', doc_kind='reference', "
+        "scope='the getting-started documentation family', "
+        "children=('getting-started/installation.md', "
+        "'getting-started/first-fdm-simulation.md', "
+        "'getting-started/first-fem-simulation.md', "
+        "'getting-started/choosing-a-solver.md', "
+        "'getting-started/control-room.md'), navigation_maxdepth=1),\n"
+    )
+    if marker not in v2:
+        raise SystemExit("cannot patch Getting Started navigation in IA overlay")
+    v2 = v2.replace(marker, replacement + marker, 1)
+v2_path.write_text(v2, encoding="utf-8")
 
 print(f"Applied structured documentation tree: {len(mapping)} files")
