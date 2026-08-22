@@ -70,7 +70,7 @@ jobs:
           PY
           python .github/fullmag-texture-fixes/apply_changes.py
 
-      - name: Normalize planner error conversion
+      - name: Normalize planner compatibility
         shell: bash
         run: |
           set -euo pipefail
@@ -78,8 +78,8 @@ jobs:
           import re
           from pathlib import Path
 
-          path = Path('crates/fullmag-plan/src/fem.rs')
-          source = path.read_text(encoding='utf-8')
+          fem_path = Path('crates/fullmag-plan/src/fem.rs')
+          fem_source = fem_path.read_text(encoding='utf-8')
           pattern = re.compile(
               r'let sample_points_object\s*=\s*'
               r'object_space_sample_points\(&sample_points, entry\.object_translation\)\?;'
@@ -90,10 +90,34 @@ jobs:
                       reasons: vec![reason],
                   }
               })?;'''
-          source, count = pattern.subn(replacement, source, count=1)
+          fem_source, count = pattern.subn(replacement, fem_source, count=1)
           if count != 1:
               raise RuntimeError(f'expected one FEM error-conversion anchor, found {count}')
-          path.write_text(source, encoding='utf-8')
+          fem_path.write_text(fem_source, encoding='utf-8')
+
+          tests_path = Path('crates/fullmag-plan/src/tests.rs')
+          tests_source = tests_path.read_text(encoding='utf-8')
+          fixtures = {
+              'free_geom': 2,
+              'body_geom': 2,
+          }
+          for geometry_name, expected_count in fixtures.items():
+              old = (
+                  f'        geometry_name: "{geometry_name}".to_string(),\n'
+                  '        initial_magnetization:'
+              )
+              new = (
+                  f'        geometry_name: "{geometry_name}".to_string(),\n'
+                  '        object_translation: [0.0, 0.0, 0.0],\n'
+                  '        initial_magnetization:'
+              )
+              count = tests_source.count(old)
+              if count != expected_count:
+                  raise RuntimeError(
+                      f'expected {expected_count} {geometry_name} test fixtures, found {count}'
+                  )
+              tests_source = tests_source.replace(old, new)
+          tests_path.write_text(tests_source, encoding='utf-8')
           PY
 
       - name: Format Rust sources
