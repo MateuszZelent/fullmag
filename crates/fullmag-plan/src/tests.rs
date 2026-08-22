@@ -1881,6 +1881,7 @@ fn fem_domain_full_sampled_field_copies_by_global_node_indices() {
     let entry = crate::mesh::MagnetPlanningEntry {
         magnet_name: "free".to_string(),
         geometry_name: "free_geom".to_string(),
+        object_translation: [0.0, 0.0, 0.0],
         initial_magnetization: Some(InitialMagnetizationIR::SampledField {
             values: vec![
                 [0.0, 10.0, 100.0],
@@ -1960,6 +1961,7 @@ fn fem_domain_preset_texture_samples_final_mesh_node_order() {
     let entry = crate::mesh::MagnetPlanningEntry {
         magnet_name: "free".to_string(),
         geometry_name: "free_geom".to_string(),
+        object_translation: [0.0, 0.0, 0.0],
         initial_magnetization: Some(InitialMagnetizationIR::PresetTexture {
             preset_kind: "vortex".to_string(),
             preset_version: 1,
@@ -2939,6 +2941,7 @@ fn pack_preserves_shared_interface_nodes_within_one_object() {
     let entry = crate::mesh::MagnetPlanningEntry {
         magnet_name: "body".to_string(),
         geometry_name: "body_geom".to_string(),
+        object_translation: [0.0, 0.0, 0.0],
         initial_magnetization: Some(InitialMagnetizationIR::RandomSeeded { seed: 17 }),
     };
     let expected = crate::mesh::initial_vectors_for_magnet(
@@ -2964,6 +2967,7 @@ fn pack_preserves_shared_interface_nodes_within_one_object() {
     let textured_entry = crate::mesh::MagnetPlanningEntry {
         magnet_name: "body".to_string(),
         geometry_name: "body_geom".to_string(),
+        object_translation: [0.0, 0.0, 0.0],
         initial_magnetization: Some(InitialMagnetizationIR::PresetTexture {
             preset_version: 1,
             preset_kind: "neel_skyrmion".to_string(),
@@ -8133,9 +8137,10 @@ fn multilayer_fdm_rejects_authored_frozen_spins_before_runtime_selection() {
         }));
 
     let error = plan(&ir).expect_err("multilayer must not drop authored frozen spins");
-    assert!(error.reasons.iter().any(|reason| {
-        reason.starts_with("frozen_spins_fdm_multilayer_lowering_missing:")
-    }));
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| { reason.starts_with("frozen_spins_fdm_multilayer_lowering_missing:") }));
 }
 
 #[test]

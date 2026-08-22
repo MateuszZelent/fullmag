@@ -16,9 +16,10 @@ use crate::current_transport::{
 use crate::error::PlanError;
 use crate::mesh::{
     build_air_box_config, build_mesh_parts_from_segments, compatible_fem_material,
-    initial_vectors_for_magnet, load_mesh_from_source, merge_fem_meshes, mesh_bounds,
-    reject_unsupported_mixed_topology, resolve_fem_domain_mesh_asset, resolved_domain_mesh_mode,
-    study_universe_planner_note, MagnetPlanningEntry, AIR_OBJECT_SEGMENT_ID,
+    geometry_object_translation, initial_vectors_for_magnet, load_mesh_from_source,
+    merge_fem_meshes, mesh_bounds, object_space_sample_points, reject_unsupported_mixed_topology,
+    resolve_fem_domain_mesh_asset, resolved_domain_mesh_mode, study_universe_planner_note,
+    MagnetPlanningEntry, AIR_OBJECT_SEGMENT_ID,
 };
 use crate::oersted::{resolve_fem_oersted_term, ResolvedOerstedTerm};
 use crate::spin_torque::{
@@ -53,8 +54,10 @@ fn resolve_fem_frozen_spins(
             let frozen = constraint.frozen_spins();
             let active = match &frozen.activation {
                 fullmag_ir::ConstraintActivationIR::AllStages {} => true,
-                fullmag_ir::ConstraintActivationIR::StageIds { stage_ids } => crate::util::active_stage_id(problem)
-                    .is_some_and(|stage| stage_ids.iter().any(|candidate| candidate == stage)),
+                fullmag_ir::ConstraintActivationIR::StageIds { stage_ids } => {
+                    crate::util::active_stage_id(problem)
+                        .is_some_and(|stage| stage_ids.iter().any(|candidate| candidate == stage))
+                }
             };
             (frozen.enabled && active).then_some(frozen.clone())
         })
@@ -75,7 +78,9 @@ fn resolve_fem_frozen_spins(
     let mesh_fingerprint = mesh
         .mixed_topology_fingerprint_v3()
         .map_err(|error| PlanError {
-            reasons: vec![format!("frozen_spins_fem_topology_fingerprint_failed: {error}")],
+            reasons: vec![format!(
+                "frozen_spins_fem_topology_fingerprint_failed: {error}"
+            )],
         })?;
 
     let magnetic_object_ids: BTreeSet<String> = object_segments
@@ -107,7 +112,13 @@ fn resolve_fem_frozen_spins(
                 crate::AffineTransform3::identity(),
                 crate::BoundaryMembership::inclusive(),
             )
-            .map(|predicate| (region.owner_object.clone(), region.region_id.clone(), predicate))
+            .map(|predicate| {
+                (
+                    region.owner_object.clone(),
+                    region.region_id.clone(),
+                    predicate,
+                )
+            })
             .map_err(|error| PlanError {
                 reasons: vec![format!(
                     "frozen_spins_fem_region_predicate_invalid: region '{}': {error}",
@@ -1325,13 +1336,17 @@ pub(crate) fn assign_domain_initial_for_segments(
         .iter()
         .map(|index| mesh.nodes[*index])
         .collect::<Vec<_>>();
+    let sample_points_object = object_space_sample_points(&sample_points, entry.object_translation)
+        .map_err(|reason| PlanError {
+            reasons: vec![reason],
+        })?;
     let values = initial_vectors_for_magnet(
         &entry.magnet_name,
         &mesh.mesh_name,
         entry.initial_magnetization.as_ref(),
         sample_points.len(),
         Some(&sample_points),
-        Some(&sample_points),
+        Some(&sample_points_object),
     )
     .map_err(|message| PlanError {
         reasons: vec![message],
@@ -2153,7 +2168,7 @@ pub(crate) fn plan_fem(
             ));
             continue;
         };
-        let Some(_geometry_entry) = geometry_by_name.get(geometry_name).copied() else {
+        let Some(geometry_entry) = geometry_by_name.get(geometry_name).copied() else {
             errors.push(format!(
                 "magnet '{}' references geometry '{}' which is missing from geometry.entries",
                 magnet.name, geometry_name
@@ -2201,6 +2216,7 @@ pub(crate) fn plan_fem(
         magnet_entries.push(MagnetPlanningEntry {
             magnet_name: magnet.name.clone(),
             geometry_name: geometry_name.to_string(),
+            object_translation: geometry_object_translation(geometry_entry),
             initial_magnetization: magnet.initial_magnetization.clone(),
         });
 
@@ -2248,13 +2264,23 @@ pub(crate) fn plan_fem(
             }
         };
 
+        let sample_points_object = match object_space_sample_points(
+            &mesh.nodes,
+            geometry_object_translation(geometry_entry),
+        ) {
+            Ok(points) => points,
+            Err(message) => {
+                errors.push(message);
+                continue;
+            }
+        };
         match initial_vectors_for_magnet(
             &magnet.name,
             &mesh.mesh_name,
             magnet.initial_magnetization.as_ref(),
             mesh.nodes.len(),
             Some(&mesh.nodes),
-            Some(&mesh.nodes),
+            Some(&sample_points_object),
         ) {
             Ok(initial_magnetization) => merged_initial_magnetization.extend(initial_magnetization),
             Err(message) => errors.push(message),
@@ -3334,7 +3360,7 @@ pub(crate) fn plan_fem_eigen(
             ));
             continue;
         };
-        let Some(_geometry_entry) = geometry_by_name.get(geometry_name).copied() else {
+        let Some(geometry_entry) = geometry_by_name.get(geometry_name).copied() else {
             errors.push(format!(
                 "magnet '{}' references geometry '{}' which is missing from geometry.entries",
                 magnet.name, geometry_name
@@ -3368,6 +3394,7 @@ pub(crate) fn plan_fem_eigen(
         magnet_entries.push(MagnetPlanningEntry {
             magnet_name: magnet.name.clone(),
             geometry_name: geometry_name.to_string(),
+            object_translation: geometry_object_translation(geometry_entry),
             initial_magnetization: magnet.initial_magnetization.clone(),
         });
 
@@ -3415,13 +3442,23 @@ pub(crate) fn plan_fem_eigen(
             }
         };
 
+        let sample_points_object = match object_space_sample_points(
+            &mesh.nodes,
+            geometry_object_translation(geometry_entry),
+        ) {
+            Ok(points) => points,
+            Err(message) => {
+                errors.push(message);
+                continue;
+            }
+        };
         match initial_vectors_for_magnet(
             &magnet.name,
             &mesh.mesh_name,
             magnet.initial_magnetization.as_ref(),
             mesh.nodes.len(),
             Some(&mesh.nodes),
-            Some(&mesh.nodes),
+            Some(&sample_points_object),
         ) {
             Ok(values) => merged_equilibrium.extend(values),
             Err(message) => errors.push(message),

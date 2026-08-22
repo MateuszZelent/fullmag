@@ -434,10 +434,30 @@ fn skyrmion_theta(radius: f64, distance: f64, wall_width: f64) -> f64 {
     }
 }
 
+#[derive(Clone, Copy)]
+enum SkyrmionWallType {
+    Bloch,
+    Neel,
+}
+
+fn wall_helicity(wall_type: SkyrmionWallType, chirality: f64) -> f64 {
+    match wall_type {
+        SkyrmionWallType::Bloch => chirality * std::f64::consts::FRAC_PI_2,
+        SkyrmionWallType::Neel => {
+            if chirality > 0.0 {
+                0.0
+            } else {
+                std::f64::consts::PI
+            }
+        }
+    }
+}
+
 fn skyrmion(
     params: &BTreeMap<String, Value>,
     point: [f64; 3],
-    helicity: f64,
+    winding: f64,
+    wall_type: SkyrmionWallType,
 ) -> Result<[f64; 3], TextureError> {
     let radius = positive(params, "radius", None)?;
     let wall_width = positive(params, "wall_width", None)?;
@@ -446,13 +466,76 @@ fn skyrmion(
     let distance = point[0].hypot(point[1]);
     let phi = point[1].atan2(point[0]);
     let theta = skyrmion_theta(radius, distance, wall_width);
-    let phase = phi + chirality * helicity;
+    let phase = winding * phi + wall_helicity(wall_type, chirality);
     let sin_theta = theta.sin();
     Ok([
         sin_theta * phase.cos(),
         sin_theta * phase.sin(),
         -polarity * theta.cos(),
     ])
+}
+
+fn skyrmionium(
+    params: &BTreeMap<String, Value>,
+    point: [f64; 3],
+) -> Result<[f64; 3], TextureError> {
+    let inner_radius = positive(params, "inner_radius", None)?;
+    let outer_radius = positive(params, "outer_radius", None)?;
+    if outer_radius <= inner_radius {
+        return Err(invalid("outer_radius", "must be greater than inner_radius"));
+    }
+    let wall_width = positive(params, "wall_width", None)?;
+    let chirality = sign(params, "chirality", 1)?;
+    let background = sign(params, "background_sign", 1)?;
+    let kind = string(params, "kind", Some("neel"))?;
+    let wall_type = match kind.as_str() {
+        "bloch" => SkyrmionWallType::Bloch,
+        "neel" => SkyrmionWallType::Neel,
+        _ => return Err(invalid("kind", "must be either 'bloch' or 'neel'")),
+    };
+    let distance = point[0].hypot(point[1]);
+    let wall_angle = |coordinate: f64| (-coordinate.tanh()).acos();
+    let theta = wall_angle((distance - inner_radius) / wall_width)
+        + wall_angle((distance - outer_radius) / wall_width);
+    let phase = point[1].atan2(point[0]) + wall_helicity(wall_type, chirality);
+    let sin_theta = theta.sin();
+    Ok([
+        sin_theta * phase.cos(),
+        sin_theta * phase.sin(),
+        background * theta.cos(),
+    ])
+}
+
+fn hopfion(params: &BTreeMap<String, Value>, point: [f64; 3]) -> Result<[f64; 3], TextureError> {
+    let radius = positive(params, "radius", None)?;
+    let charge = sign(params, "hopf_charge", 1)?;
+    let background = sign(params, "background_sign", 1)?;
+    let axial_scale = positive(params, "axial_scale", Some(1.0))?;
+    let phase = finite_number(params, "phase_rad", Some(0.0))?;
+
+    let x = point[0] / radius;
+    let y = charge * point[1] / radius;
+    let z = point[2] / (radius * axial_scale);
+    let rho_squared = x * x + y * y + z * z;
+    if !rho_squared.is_finite() {
+        return Ok([0.0, 0.0, background]);
+    }
+    let denominator = 1.0 + rho_squared;
+    let z1_re = 2.0 * x / denominator;
+    let z1_im = 2.0 * y / denominator;
+    let z2_re = 2.0 * z / denominator;
+    let z2_im = (rho_squared - 1.0) / denominator;
+
+    let hopf_x = 2.0 * (z1_re * z2_re + z1_im * z2_im);
+    let hopf_y = 2.0 * (z1_im * z2_re - z1_re * z2_im);
+    let hopf_z = z1_re * z1_re + z1_im * z1_im - z2_re * z2_re - z2_im * z2_im;
+    let rotated_x = phase.cos() * hopf_x - phase.sin() * hopf_y;
+    let rotated_y = phase.sin() * hopf_x + phase.cos() * hopf_y;
+
+    normalize_checked(
+        scale([rotated_x, rotated_y, hopf_z], -background),
+        "hopfion",
+    )
 }
 
 fn axis_vector(axis: &str) -> Result<[f64; 3], TextureError> {
@@ -662,8 +745,11 @@ fn local_evaluate(
         }
         "vortex" => vortex(params, point, 1.0),
         "antivortex" => vortex(params, point, -1.0),
-        "bloch_skyrmion" => skyrmion(params, point, std::f64::consts::FRAC_PI_2),
-        "neel_skyrmion" => skyrmion(params, point, 0.0),
+        "bloch_skyrmion" => skyrmion(params, point, 1.0, SkyrmionWallType::Bloch),
+        "neel_skyrmion" => skyrmion(params, point, 1.0, SkyrmionWallType::Neel),
+        "antiskyrmion" => skyrmion(params, point, -1.0, SkyrmionWallType::Neel),
+        "skyrmionium" => skyrmionium(params, point),
+        "hopfion" => hopfion(params, point),
         "bimeron" => bimeron(params, point),
         "domain_wall" => domain_wall(params, point),
         "two_domain" => two_domain(params, point),
@@ -683,6 +769,8 @@ fn is_metric(preset_kind: &str) -> bool {
             | "antivortex"
             | "bloch_skyrmion"
             | "neel_skyrmion"
+            | "antiskyrmion"
+            | "skyrmionium"
             | "bimeron"
             | "domain_wall"
             | "two_domain"
@@ -697,6 +785,12 @@ fn sample_v2(
     points: &[TextureSamplePoint],
 ) -> Result<Vec<[f64; 3]>, TextureError> {
     let frame = resolve_frame(params, mapping)?;
+    if preset_kind == "hopfion" && frame.is_some() {
+        return Err(invalid(
+            "mapping.projection",
+            "hopfion is three-dimensional and requires object_local projection",
+        ));
+    }
     inverse_transform([0.0, 0.0, 0.0], transform)?;
     forward_rotate([0.0, 0.0, 0.0], transform)?;
     local_evaluate(preset_kind, params, [0.0, 0.0, 0.0])?;
