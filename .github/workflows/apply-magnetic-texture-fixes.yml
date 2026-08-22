@@ -120,6 +120,72 @@ jobs:
           tests_path.write_text(tests_source, encoding='utf-8')
           PY
 
+      - name: Materialize exhaustive advanced preset API rows
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          page_path = Path(
+              'public_docs/site/python-api/magnets-and-textures/preset-textures.md'
+          )
+          source_map_path = page_path.with_suffix('.source-map.json')
+          page = page_path.read_text(encoding='utf-8')
+          source_map = json.loads(source_map_path.read_text(encoding='utf-8'))
+          prefixes = (
+              'texture.antiskyrmion.',
+              'texture.skyrmionium.',
+              'texture.hopfion.',
+          )
+          parameters = [
+              parameter
+              for parameter in source_map['public_api']['parameters']
+              if parameter['python'].startswith(prefixes)
+          ]
+          if len(parameters) != 20:
+              raise RuntimeError(
+                  f'expected 20 advanced preset parameters, found {len(parameters)}'
+              )
+
+          def cell(value: object) -> str:
+              return str(value).replace('|', r'\|')
+
+          rows = []
+          for parameter in parameters:
+              rows.append(
+                  '| '
+                  f'`{cell(parameter["python"])}` | '
+                  f'`{cell(parameter["type"])}` | '
+                  f'`{cell(parameter["default"])}` | '
+                  f'${cell(parameter["si_unit"])}$ | '
+                  f'{cell(parameter["validation"])} | '
+                  f'{cell(parameter["meaning"])} | '
+                  f'{cell(parameter["backend_support"])} | '
+                  f'`{cell(parameter["problem_ir"])}` |'
+              )
+
+          marker = '\n### Mapping and transform methods\n'
+          if page.count(marker) != 1:
+              raise RuntimeError(
+                  f'expected one mapping-table marker, found {page.count(marker)}'
+              )
+          if '#### Advanced version-2 preset parameters' in page:
+              raise RuntimeError('advanced parameter table is already present')
+          block = (
+              '\n#### Advanced version-2 preset parameters\n\n'
+              'These rows complete the canonical Python-to-`ProblemIR` contract for the '
+              'antiskyrmion, skyrmionium, and hopfion factories.\n\n'
+              '| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |\n'
+              '|---|---|---|---|---|---|---|---|\n'
+              + '\n'.join(rows)
+              + '\n'
+          )
+          page = page.replace(marker, block + marker, 1)
+          page_path.write_text(page, encoding='utf-8')
+          PY
+
       - name: Format Rust sources
         run: cargo fmt --all
 
