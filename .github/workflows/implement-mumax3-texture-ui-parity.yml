@@ -1,4 +1,5 @@
 name: Implement Mumax3 texture and UI parity
+# Temporary self-removing implementation workflow.
 
 on:
   push:
