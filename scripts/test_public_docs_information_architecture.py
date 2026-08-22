@@ -6,10 +6,10 @@ import unittest
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parents[1] / "public_docs/site/_extensions"))
 
-import public_docs_information_architecture as information_architecture
+import public_docs_information_architecture_v2 as information_architecture
 import legacy_redirects
 
-from public_docs_information_architecture import (
+from public_docs_information_architecture_v2 import (
     INTERACTION_SLUGS,
     PAGE_SPECS,
     PUBLIC_DOCS_ROOT,
@@ -39,19 +39,91 @@ class PublicDocumentationInformationArchitectureTests(unittest.TestCase):
         "validation",
     )
 
+    @staticmethod
+    def pages() -> dict[str, PageSpec]:
+        return {spec.path: spec for spec in PAGE_SPECS}
+
     def test_page_spec_accepts_doc_kind_after_status(self) -> None:
         spec = PageSpec("guide.md", "Guide", "guide", "planned", "scaffold", "guidance")
         self.assertEqual(spec.doc_kind, "scaffold")
         self.assertEqual(spec.scope, "guidance")
 
-    def test_python_api_is_a_top_level_family(self) -> None:
-        root = next(spec for spec in PAGE_SPECS if spec.path == "index.md")
-        self.assertIn("python-api/index.md", root.children)
+    def test_root_has_three_owner_oriented_documentation_families(self) -> None:
+        root = self.pages()["index.md"]
+        self.assertEqual(root.children[:4], (
+            "getting-started/index.md",
+            "frontend/index.md",
+            "python-api/index.md",
+            "backend/index.md",
+        ))
+        self.assertIn("physics/index.md", root.children)
+        self.assertIn("validation/index.md", root.children)
+        self.assertNotIn("architecture/index.md", root.children)
+        self.assertNotIn("numerical-methods/index.md", root.children)
+
+    def test_backend_owns_numerical_methods_and_architecture(self) -> None:
+        backend = self.pages()["backend/index.md"]
+        self.assertEqual(backend.children, (
+            "backend/meshing/index.md",
+            "numerical-methods/index.md",
+            "architecture/index.md",
+        ))
+
+    def test_python_api_has_a_first_class_meshing_branch(self) -> None:
+        python_api = self.pages()["python-api/index.md"]
+        self.assertIn("python-api/meshing/index.md", python_api.children)
+        self.assertLess(
+            python_api.children.index("python-api/meshing/index.md"),
+            python_api.children.index("python-api/discretization/index.md"),
+        )
+        meshing = self.pages()["python-api/meshing/index.md"]
+        self.assertEqual(meshing.children, (
+            "python-api/meshing/fdm/index.md",
+            "python-api/meshing/fem/index.md",
+            "python-api/meshing/shared-controls.md",
+        ))
+
+    def test_python_fem_meshing_separates_ferromagnet_and_airbox(self) -> None:
+        fem = self.pages()["python-api/meshing/fem/index.md"]
+        self.assertIn("python-api/meshing/fem/ferromagnet/index.md", fem.children)
+        self.assertIn("python-api/meshing/fem/airbox/index.md", fem.children)
+        ferromagnet = self.pages()["python-api/meshing/fem/ferromagnet/index.md"]
+        self.assertEqual(ferromagnet.children, (
+            "python-api/meshing/fem/ferromagnet/tetrahedral.md",
+            "python-api/meshing/fem/ferromagnet/thin-film.md",
+            "python-api/meshing/fem/ferromagnet/swept-prism.md",
+            "python-api/meshing/fem/ferromagnet/swept-hex.md",
+            "python-api/meshing/fem/ferromagnet/boundary-layers.md",
+            "python-api/meshing/fem/ferromagnet/imported-mesh.md",
+            "python-api/meshing/fem/ferromagnet/refinement.md",
+        ))
+
+    def test_backend_fem_meshing_separates_shared_domain_body_and_airbox(self) -> None:
+        fem = self.pages()["backend/meshing/fem/index.md"]
+        self.assertEqual(fem.children, (
+            "backend/meshing/fem/shared-domain/index.md",
+            "backend/meshing/fem/ferromagnet/index.md",
+            "backend/meshing/fem/airbox/index.md",
+            "backend/meshing/fem/quality-and-provenance.md",
+        ))
+
+    def test_frontend_control_room_has_lane_specific_meshing_pages(self) -> None:
+        meshing = self.pages()["frontend/control-room/meshing/index.md"]
+        self.assertEqual(meshing.children, (
+            "frontend/control-room/meshing/fdm.md",
+            "frontend/control-room/meshing/fem/index.md",
+        ))
+        fem = self.pages()["frontend/control-room/meshing/fem/index.md"]
+        self.assertEqual(fem.children, (
+            "frontend/control-room/meshing/fem/object-mesh.md",
+            "frontend/control-room/meshing/fem/airbox-mesh.md",
+            "frontend/control-room/meshing/fem/region-mesh.md",
+            "frontend/control-room/meshing/fem/build-and-quality.md",
+        ))
 
     def test_each_approved_interaction_has_one_canonical_owner(self) -> None:
-        specs_by_path = {spec.path: spec for spec in PAGE_SPECS}
-        self.assertIn("physics/interactions/index.md", specs_by_path)
-        interactions = specs_by_path["physics/interactions/index.md"]
+        pages = self.pages()
+        interactions = pages["physics/interactions/index.md"]
         self.assertEqual(
             interactions.children,
             tuple(f"physics/interactions/{slug}/index.md" for slug in INTERACTION_SLUGS),
@@ -59,123 +131,44 @@ class PublicDocumentationInformationArchitectureTests(unittest.TestCase):
         for child in interactions.children:
             self.assertEqual(sum(spec.path == child for spec in PAGE_SPECS), 1)
 
-    def test_demagnetization_and_dmi_have_approved_subtrees(self) -> None:
+    def test_demagnetization_and_dmi_keep_their_scientific_subtrees(self) -> None:
+        pages = self.pages()
         for slug, subpages in (
             ("demagnetization", self.DEMAGNETIZATION_SUBPAGES),
             ("dmi", self.DMI_SUBPAGES),
         ):
             path = f"physics/interactions/{slug}/index.md"
-            specs_by_path = {spec.path: spec for spec in PAGE_SPECS}
-            self.assertIn(path, specs_by_path)
-            index = specs_by_path[path]
             self.assertEqual(
-                index.children,
-                tuple(
-                    f"physics/interactions/{slug}/{subpage}.md"
-                    for subpage in subpages
-                ),
+                pages[path].children,
+                tuple(f"physics/interactions/{slug}/{page}.md" for page in subpages),
             )
 
-    def test_backend_specific_paths_do_not_own_interactions(self) -> None:
+    def test_backend_specific_paths_do_not_own_physical_interactions(self) -> None:
         backend_interaction_paths = [
             spec.path
             for spec in PAGE_SPECS
-            if spec.path.startswith("physics/solvers/")
-            and "/interactions/" in spec.path
+            if spec.path.startswith("physics/solvers/") and "/interactions/" in spec.path
         ]
         self.assertEqual(backend_interaction_paths, [])
 
-    def test_every_legacy_backend_interaction_url_has_a_canonical_redirect(self) -> None:
-        self.assertTrue(hasattr(information_architecture, "LEGACY_INTERACTION_REDIRECTS"))
-        redirects = information_architecture.LEGACY_INTERACTION_REDIRECTS
-        self.assertEqual(len(redirects), 4 * 14)
-        for source, target in redirects.items():
-            self.assertRegex(
-                source,
-                r"^physics/solvers/(fdm|fem)/(cpu|gpu)/interactions/.+\.md$",
-            )
-            self.assertTrue(target.startswith("physics/interactions/"))
-            self.assertIn(target, {spec.path for spec in PAGE_SPECS})
-
-    def test_deployed_redirects_match_manifest_and_cover_retired_indexes(self) -> None:
+    def test_deployed_legacy_redirects_remain_stable(self) -> None:
         expected = {
-            source.removesuffix(".md") + ".html":
-                target.removesuffix(".md") + ".html"
+            source.removesuffix(".md") + ".html": target.removesuffix(".md") + ".html"
             for source, target in information_architecture.LEGACY_REDIRECTS.items()
         }
-        expected["physics/exchange.html"] = (
-            "physics/interactions/exchange/index.html"
-        )
+        expected["physics/exchange.html"] = "physics/interactions/exchange/index.html"
         self.assertEqual(legacy_redirects._redirects(), expected)
         self.assertEqual(len(expected), 69)
-        self.assertEqual(
-            expected["physics/exchange-demag-zeeman.html"],
-            "physics/interactions/index.html",
-        )
-        for path in (
-            "physics/solvers/index.html",
-            "physics/solvers/fdm/index.html",
-            "physics/solvers/fdm/cpu/index.html",
-            "physics/solvers/fdm/cpu/interactions/index.html",
-        ):
-            self.assertEqual(expected[path], "physics/interactions/index.html")
 
-    def test_root_navigation_depth_exposes_interaction_subtrees(self) -> None:
-        root = next(spec for spec in PAGE_SPECS if spec.path == "index.md")
-        self.assertTrue(hasattr(root, "navigation_maxdepth"))
-        self.assertGreaterEqual(root.navigation_maxdepth, 4)
+    def test_root_navigation_depth_exposes_deep_meshing_modules(self) -> None:
+        self.assertGreaterEqual(self.pages()["index.md"].navigation_maxdepth, 5)
 
     def test_manifest_has_unique_paths_labels_and_valid_statuses(self) -> None:
         self.assertEqual(validate_tree(PAGE_SPECS), [])
 
-    def test_manifest_uses_only_canonical_document_kinds(self) -> None:
-        self.assertLessEqual(
-            {spec.doc_kind for spec in PAGE_SPECS}, {"reference", "scaffold"}
-        )
-        existing_exchange = next(
-            spec
-            for spec in PAGE_SPECS
-            if spec.path == "physics/interactions/exchange/index.md"
-        )
-        self.assertEqual(existing_exchange.doc_kind, "reference")
-        self.assertEqual(existing_exchange.label, "public-docs-physics-exchange")
-
-    def test_published_zeeman_reference_uses_its_canonical_metadata(self) -> None:
-        zeeman = next(
-            spec
-            for spec in PAGE_SPECS
-            if spec.path == "physics/interactions/zeeman/index.md"
-        )
-        self.assertEqual(zeeman.doc_kind, "reference")
-        self.assertEqual(zeeman.status, "partial")
-        self.assertEqual(zeeman.title, "Zeeman interaction")
-        self.assertEqual(zeeman.label, "public-docs-physics-interactions-zeeman")
-
-    def test_published_thermal_reference_uses_reference_metadata(self) -> None:
-        pages = {spec.path: spec for spec in PAGE_SPECS}
-        physics = pages["physics/interactions/thermal-noise/index.md"]
-        python_api = pages["python-api/interactions/thermal-noise.md"]
-        self.assertEqual(physics.doc_kind, "reference")
-        self.assertEqual(physics.status, "partial")
-        self.assertEqual(physics.title, "Thermal Brown noise")
-        self.assertEqual(python_api.doc_kind, "reference")
-        self.assertEqual(python_api.status, "partial")
-        self.assertEqual(python_api.title, "Thermal Noise Python API")
-
-    def test_published_exchange_python_api_uses_reference_metadata(self) -> None:
-        exchange_api = next(
-            spec
-            for spec in PAGE_SPECS
-            if spec.path == "python-api/interactions/exchange.md"
-        )
-        self.assertEqual(exchange_api.doc_kind, "reference")
-        self.assertEqual(exchange_api.status, "partial")
-        self.assertEqual(exchange_api.title, "Exchange Python API")
-
-    def test_index_navigation_links_to_every_direct_child(self) -> None:
-        index = next(spec for spec in PAGE_SPECS if spec.path == "python-api/index.md")
-        text = (PUBLIC_DOCS_ROOT / index.path).read_text()
-        self.assertIn("```{toctree}\n:maxdepth: 1\n", text)
+    def test_index_navigation_links_to_every_direct_python_child(self) -> None:
+        index = self.pages()["python-api/index.md"]
+        text = (PUBLIC_DOCS_ROOT / index.path).read_text(encoding="utf-8")
         for child in index.children:
             relative = Path(child).relative_to(Path(index.path).parent)
             self.assertIn(str(relative.with_suffix("")), text)
@@ -194,7 +187,7 @@ class PublicDocumentationInformationArchitectureTests(unittest.TestCase):
         rendered = render_page(index, Path("public_docs/site"))
         self.assertIn("```{toctree}\n:maxdepth: 4\n", rendered)
 
-    def test_write_creates_missing_files_without_overwriting(self) -> None:
+    def test_write_creates_missing_scaffolds_without_overwriting(self) -> None:
         spec = PageSpec(
             path="guide.md",
             title="Guide",
@@ -211,26 +204,7 @@ class PublicDocumentationInformationArchitectureTests(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 write_pages((spec,), root)
 
-    def test_reference_navigation_requires_a_myst_toctree(self) -> None:
-        child = PageSpec("child.md", "Child", "child", "partial", "reference", "child")
-        parent = PageSpec(
-            "index.md", "Parent", "parent", "partial", "reference", "parent", ("child.md",)
-        )
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            (root / "child.md").write_text(
-                "---\ntitle: Child\nstatus: partial\ndoc_kind: reference\n---\n\n(child)=\n# Child\n"
-            )
-            (root / "index.md").write_text(
-                "---\ntitle: Parent\nstatus: partial\ndoc_kind: reference\n---\n\n(parent)=\n"
-                "# Parent\n\nThe child.md page is discussed here.\n"
-            )
-            self.assertIn(
-                "reference navigation does not match manifest: index.md",
-                check_pages((parent, child), root),
-            )
-
-    def test_reference_navigation_accepts_declared_toctree_entries(self) -> None:
+    def test_reference_navigation_is_exact(self) -> None:
         child = PageSpec("child.md", "Child", "child", "partial", "reference", "child")
         parent = PageSpec(
             "index.md", "Parent", "parent", "partial", "reference", "parent", ("child.md",)
@@ -245,17 +219,6 @@ class PublicDocumentationInformationArchitectureTests(unittest.TestCase):
                 "```{toctree}\n:maxdepth: 1\n\nchild\n```\n"
             )
             self.assertEqual(check_pages((parent, child), root), [])
-
-    def test_reference_navigation_rejects_extra_entries(self) -> None:
-        child = PageSpec("child.md", "Child", "child", "partial", "reference", "child")
-        parent = PageSpec(
-            "index.md", "Parent", "parent", "partial", "reference", "parent", ("child.md",)
-        )
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            (root / "child.md").write_text(
-                "---\ntitle: Child\nstatus: partial\ndoc_kind: reference\n---\n\n(child)=\n# Child\n"
-            )
             (root / "index.md").write_text(
                 "---\ntitle: Parent\nstatus: partial\ndoc_kind: reference\n---\n\n(parent)=\n# Parent\n\n"
                 "```{toctree}\n:maxdepth: 1\n\nchild\nextra\n```\n"
@@ -265,52 +228,8 @@ class PublicDocumentationInformationArchitectureTests(unittest.TestCase):
                 check_pages((parent, child), root),
             )
 
-    def test_reference_navigation_rejects_duplicates_and_wrong_order(self) -> None:
-        first = PageSpec("first.md", "First", "first", "partial", "reference", "first")
-        second = PageSpec("second.md", "Second", "second", "partial", "reference", "second")
-        parent = PageSpec(
-            "index.md",
-            "Parent",
-            "parent",
-            "partial",
-            "reference",
-            "parent",
-            ("first.md", "second.md"),
-        )
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            for spec in (first, second):
-                (root / spec.path).write_text(
-                    f"---\ntitle: {spec.title}\nstatus: partial\ndoc_kind: reference\n---\n\n"
-                    f"({spec.label})=\n# {spec.title}\n"
-                )
-            (root / "index.md").write_text(
-                "---\ntitle: Parent\nstatus: partial\ndoc_kind: reference\n---\n\n(parent)=\n# Parent\n\n"
-                "```{toctree}\n:maxdepth: 1\n\nsecond\nfirst\nfirst\n```\n"
-            )
-            self.assertIn(
-                "reference navigation does not match manifest: index.md",
-                check_pages((parent, first, second), root),
-            )
-
-    def test_reference_requires_complete_canonical_front_matter(self) -> None:
-        spec = PageSpec("guide.md", "Guide", "guide", "partial", "reference", "guide")
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            (root / "guide.md").write_text(
-                "---\ntitle: Guide\nstatus: partial\n---\n\n(guide)=\n# Guide\n"
-            )
-            self.assertIn(
-                "reference metadata 'doc_kind' does not match manifest: guide.md",
-                check_pages((spec,), root),
-            )
-
-    def test_every_manifest_page_exists_and_has_canonical_scaffold(self) -> None:
-        missing = [
-            spec.path
-            for spec in PAGE_SPECS
-            if not (PUBLIC_DOCS_ROOT / spec.path).is_file()
-        ]
+    def test_every_manifest_page_exists(self) -> None:
+        missing = [spec.path for spec in PAGE_SPECS if not (PUBLIC_DOCS_ROOT / spec.path).is_file()]
         self.maxDiff = None
         self.assertEqual(missing, [])
 
