@@ -56,6 +56,74 @@
 
 </div>
 
+<!-- fullmag-version-dashboard:start -->
+<a id="version-dashboard"></a>
+
+## Version and compatibility dashboard
+
+The badges below are generated from repository-owned manifests. They distinguish exact
+toolchain pins from supported dependency ranges; `contract-guard` fails when this README
+no longer matches the source files.
+
+<p align="center">
+  <strong>Continuous verification</strong><br />
+  <a href="https://github.com/MateuszZelent/fullmag/actions/workflows/contract-guard.yml"><img alt="contract-guard" src="https://github.com/MateuszZelent/fullmag/actions/workflows/contract-guard.yml/badge.svg?branch=master" /></a>
+  <a href="https://github.com/MateuszZelent/fullmag/actions/workflows/react-doctor.yml"><img alt="React Doctor" src="https://github.com/MateuszZelent/fullmag/actions/workflows/react-doctor.yml/badge.svg?branch=master" /></a>
+  <a href="https://github.com/MateuszZelent/fullmag/actions/workflows/documentation.yml"><img alt="Public documentation" src="https://github.com/MateuszZelent/fullmag/actions/workflows/documentation.yml/badge.svg?branch=master" /></a>
+</p>
+
+<p align="center">
+  <strong>Core toolchain</strong><br />
+  <a href="Cargo.toml"><img alt="FullMag v0.1.0" src="https://img.shields.io/badge/FullMag-v0.1.0-2563EB?style=for-the-badge" /></a>
+  <a href="packages/fullmag-py/pyproject.toml"><img alt="Python &gt;=3.10" src="https://img.shields.io/badge/Python-%3E%3D3.10-3776AB?style=for-the-badge&amp;logo=python&amp;logoColor=white" /></a>
+  <a href=".node-version"><img alt="Node.js 24.18.0" src="https://img.shields.io/badge/Node.js-24.18.0-339933?style=for-the-badge&amp;logo=nodedotjs&amp;logoColor=white" /></a>
+  <a href="rust-toolchain.toml"><img alt="Rust stable | edition 2021" src="https://img.shields.io/badge/Rust-stable%20%7C%20edition%202021-000000?style=for-the-badge&amp;logo=rust&amp;logoColor=white" /></a>
+  <a href="docker/fem-gpu/Dockerfile"><img alt="CUDA 12.4.1" src="https://img.shields.io/badge/CUDA-12.4.1-76B900?style=for-the-badge&amp;logo=nvidia&amp;logoColor=white" /></a>
+  <a href="docker/fem-gpu/Dockerfile"><img alt="CMake 3.30.5" src="https://img.shields.io/badge/CMake-3.30.5-064F8C?style=for-the-badge&amp;logo=cmake&amp;logoColor=white" /></a>
+  <a href="docker/fem-gpu/Dockerfile"><img alt="pnpm 10.8.1" src="https://img.shields.io/badge/pnpm-10.8.1-F69220?style=for-the-badge&amp;logo=pnpm&amp;logoColor=white" /></a>
+</p>
+
+<p align="center">
+  <strong>Scientific backends</strong><br />
+  <a href="docker/fem-gpu/Dockerfile"><img alt="MFEM 4.9" src="https://img.shields.io/badge/MFEM-4.9-5B6EC4?style=for-the-badge" /></a>
+  <a href="docker/fem-gpu/Dockerfile"><img alt="hypre 3.1.0" src="https://img.shields.io/badge/hypre-3.1.0-6B7280?style=for-the-badge" /></a>
+  <a href="docker/fem-gpu/Dockerfile"><img alt="libCEED 0.12.0" src="https://img.shields.io/badge/libCEED-0.12.0-7C3AED?style=for-the-badge" /></a>
+  <a href="Cargo.toml"><img alt="PyO3 0.29" src="https://img.shields.io/badge/PyO3-0.29-FFD43B?style=for-the-badge&amp;logo=rust&amp;logoColor=000000" /></a>
+  <a href="packages/fullmag-py/pyproject.toml"><img alt="NumPy &gt;=1.24,&lt;3" src="https://img.shields.io/badge/NumPy-%3E%3D1.24%2C%3C3-013243?style=for-the-badge&amp;logo=numpy&amp;logoColor=white" /></a>
+  <a href="packages/fullmag-py/pyproject.toml"><img alt="Gmsh &gt;=4.12,&lt;5" src="https://img.shields.io/badge/Gmsh-%3E%3D4.12%2C%3C5-5B6EC4?style=for-the-badge" /></a>
+</p>
+
+<p align="center">
+  <strong>Control Room</strong><br />
+  <a href="apps/control-room/package.json"><img alt="Next.js 16.2.11" src="https://img.shields.io/badge/Next.js-16.2.11-000000?style=for-the-badge&amp;logo=nextdotjs&amp;logoColor=white" /></a>
+  <a href="apps/control-room/package.json"><img alt="React 19.2.4" src="https://img.shields.io/badge/React-19.2.4-20232A?style=for-the-badge&amp;logo=react&amp;logoColor=61DAFB" /></a>
+  <a href="apps/control-room/package.json"><img alt="TypeScript 5.8.3" src="https://img.shields.io/badge/TypeScript-5.8.3-3178C6?style=for-the-badge&amp;logo=typescript&amp;logoColor=white" /></a>
+  <a href="apps/control-room/package.json"><img alt="Three.js ^0.183.2" src="https://img.shields.io/badge/Three.js-%5E0.183.2-000000?style=for-the-badge&amp;logo=threedotjs&amp;logoColor=white" /></a>
+  <a href="apps/control-room/package.json"><img alt="ECharts ^6.1.0" src="https://img.shields.io/badge/ECharts-%5E6.1.0-AA344D?style=for-the-badge&amp;logo=apacheecharts&amp;logoColor=white" /></a>
+  <a href="Cargo.toml"><img alt="Tauri 2.11.1" src="https://img.shields.io/badge/Tauri-2.11.1-24C8DB?style=for-the-badge&amp;logo=tauri&amp;logoColor=000000" /></a>
+</p>
+
+<details>
+<summary><strong>Version policy and sources of truth</strong></summary>
+
+| Contract | Current manifest value | Source of truth | Policy |
+|---|---|---|---|
+| FullMag packages | `0.1.0` | `Cargo.toml`, `packages/fullmag-py/pyproject.toml`, `apps/control-room/package.json` | package versions must agree |
+| Core toolchain | Python `>=3.10`; Node `24.18.0`; Rust `stable` / edition `2021` | `pyproject.toml`, `.node-version`, `rust-toolchain.toml`, `Cargo.toml` | compatibility range or pinned channel/version |
+| Managed FEM/GPU bundle | CUDA `12.4.1`; CMake `3.30.5`; MFEM `4.9`; hypre `3.1.0`; libCEED `0.12.0` | `docker/fem-gpu/Dockerfile` | exact reproducible build pins |
+| Python scientific API | NumPy `>=1.24,<3`; Zarr `>=2.18,<4`; h5py `>=3.9,<4`; Gmsh `>=4.12,<5` | `packages/fullmag-py/pyproject.toml` | declared compatibility ranges |
+| Control Room direct stack | Next.js `16.2.11`; React `19.2.4`; TypeScript `5.8.3`; Three.js `^0.183.2`; ECharts `^6.1.0` | `apps/control-room/package.json` | direct constraints; complete transitive resolution is pinned in `pnpm-lock.yaml` |
+| Rust/Python and desktop bridge | PyO3 `0.29`; Tauri `2.11.1` | `Cargo.toml` | workspace dependency constraints |
+
+Regenerate after changing a version source:
+
+```bash
+python3 scripts/update_readme_version_dashboard.py --write
+```
+
+</details>
+<!-- fullmag-version-dashboard:end -->
+
 ## What makes FullMag different?
 
 **FullMag is not a single-purpose LLG time-stepper wrapped in a GUI.** It is a complete
