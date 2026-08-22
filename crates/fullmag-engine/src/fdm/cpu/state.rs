@@ -389,8 +389,8 @@ pub struct IntegratorBuffers {
     /// RHS output buffer for zero-alloc report computation.
     pub rhs: Vec<Vector3>,
     /// Test seam for injecting the value returned by adaptive error norms.
-    #[doc(hidden)]
-    pub adaptive_error_override: Option<f64>,
+    #[cfg(test)]
+    pub(crate) adaptive_error_override: Option<f64>,
 }
 
 impl IntegratorBuffers {
@@ -406,6 +406,7 @@ impl IntegratorBuffers {
             h_eff: zero(),
             h_scratch: zero(),
             rhs: zero(),
+            #[cfg(test)]
             adaptive_error_override: None,
         }
     }

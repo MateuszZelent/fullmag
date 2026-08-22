@@ -3153,6 +3153,7 @@ impl ExchangeLlgProblem {
         let rtol = cfg.rtol;
 
         let compute_err = |i: usize| -> f64 {
+            #[cfg(test)]
             if i == 0 {
                 if let Some(error) = bufs.adaptive_error_override {
                     return error;
@@ -3210,6 +3211,7 @@ impl ExchangeLlgProblem {
         let rtol = cfg.rtol;
 
         let compute_err = |i: usize| -> f64 {
+            #[cfg(test)]
             if i == 0 {
                 if let Some(error) = bufs.adaptive_error_override {
                     return error;
