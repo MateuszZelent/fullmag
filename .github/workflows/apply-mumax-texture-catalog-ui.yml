@@ -31,8 +31,6 @@ jobs:
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 9.15.4
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -64,16 +62,13 @@ jobs:
           python .github/fullmag-mumax-textures/apply_mumax_textures.py
 
       - name: Format changed Rust sources
-        shell: bash
         run: |
-          set -euo pipefail
           rustfmt --edition 2021 \
             crates/fullmag-plan/src/magnetization_textures_v2.rs \
             crates/fullmag-plan/tests/magnetization_textures_v2_contract.rs \
             crates/fullmag-plan/tests/magnetization_textures_v2_parity.rs
 
-      - name: Regenerate and compact Rust/Python parity fixture
-        shell: bash
+      - name: Regenerate and compact parity fixture
         env:
           FULLMAG_GENERATE_V2_PARITY: "1"
         run: |
@@ -89,19 +84,14 @@ jobs:
           semantic = hashlib.sha256(
               json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')
           ).hexdigest()
-          path.write_text(
-              json.dumps(value, separators=(',', ':'), ensure_ascii=False) + '\n',
-              encoding='utf-8',
-          )
-          reparsed = json.loads(path.read_text(encoding='utf-8'))
-          if reparsed != value:
+          path.write_text(json.dumps(value, separators=(',', ':'), ensure_ascii=False) + '\n', encoding='utf-8')
+          if json.loads(path.read_text(encoding='utf-8')) != value:
               raise RuntimeError('parity fixture changed semantically during compaction')
           print(f'parity semantic sha256={semantic}')
           print(f'parity compact bytes={path.stat().st_size}')
           PY
 
-      - name: Validate canonical Rust sampler
-        shell: bash
+      - name: Validate Rust sampler and FEM/FDM integration
         run: |
           set -euo pipefail
           cargo test -p fullmag-plan --test magnetization_textures_v2_parity
@@ -109,8 +99,7 @@ jobs:
           cargo test -p fullmag-plan --lib texture_object_space_tests
           cargo check -p fullmag-plan -p fullmag-py-core
 
-      - name: Validate Python authoring API and reference evaluator
-        shell: bash
+      - name: Validate Python authoring API
         run: |
           set -euo pipefail
           python -m pip install --disable-pip-version-check pytest -e packages/fullmag-py
@@ -123,8 +112,7 @@ jobs:
       - name: Install frontend workspace
         run: pnpm install --frozen-lockfile
 
-      - name: Validate texture UI catalog and serialization
-        shell: bash
+      - name: Validate object and region texture UI
         run: |
           set -euo pipefail
           pnpm --filter @fullmag/control-room test -- \
@@ -138,8 +126,7 @@ jobs:
             src/modules/inspector/panels/ObjectMagneticTexturePanelModel.ts \
             src/modules/inspector/panels/ObjectMagneticTexturePanelModel.test.ts
 
-      - name: Validate public documentation contract
-        shell: bash
+      - name: Validate public documentation
         env:
           PYTHONPATH: packages/fullmag-py/src
         run: |
@@ -151,7 +138,6 @@ jobs:
           python scripts/check_public_doc_examples.py --root public_docs/site
 
       - name: Final diff audit
-        shell: bash
         run: |
           set -euo pipefail
           rustfmt --edition 2021 --check \
@@ -165,7 +151,6 @@ jobs:
           test "$(grep -c 'id: \"vortex_wall\"' apps/control-room/src/shared/domain/magnetization-texture/texturePresets.ts)" -eq 1
 
       - name: Commit validated implementation
-        shell: bash
         run: |
           set -euo pipefail
           rm -rf .github/fullmag-mumax-textures
