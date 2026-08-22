@@ -362,8 +362,7 @@ fn frozen_spins_direct_minimizer_all_frozen_is_finite_zero_step_noop() {
             .unwrap_or_else(|error| panic!("{algorithm:?}: all-frozen minimizer failed: {error}"));
 
         assert_eq!(
-            result
-                .final_magnetization
+            result.final_magnetization
                 .iter()
                 .map(|value| value.map(f64::to_bits))
                 .collect::<Vec<_>>(),

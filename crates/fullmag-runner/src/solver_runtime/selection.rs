@@ -793,19 +793,9 @@ mod tests {
 
         let error = super::reject_frozen_spins_fem_execution(&problem)
             .expect_err("high-order FEM must reject frozen spins without explicit true-DOF map");
-        assert!(error
-            .message
-            .starts_with("frozen_spins_fem_fe_order_unsupported:"));
+        assert!(error.message.starts_with("frozen_spins_fem_fe_order_unsupported:"));
 
-        problem
-            .backend_policy
-            .discretization_hints
-            .as_mut()
-            .unwrap()
-            .fem
-            .as_mut()
-            .unwrap()
-            .order = 1;
+        problem.backend_policy.discretization_hints.as_mut().unwrap().fem.as_mut().unwrap().order = 1;
         assert!(
             super::reject_frozen_spins_fem_execution(&problem).is_ok(),
             "P1 FEM must accept frozen spins on qualified lanes"

@@ -505,8 +505,8 @@ mod tests {
     #[test]
     fn all_frozen_checkpoint_restores_without_nan() {
         let plan_all = plan(vec![true, true, true, true]);
-        let state = FrozenSpinsState::capture_at_activation(&plan_all, None, &[[0.0, 1.0, 0.0]; 4])
-            .unwrap();
+        let state =
+            FrozenSpinsState::capture_at_activation(&plan_all, None, &[[0.0, 1.0, 0.0]; 4]).unwrap();
         let checkpoint = FrozenSpinsCheckpointV1::from_runtime(
             &plan_all,
             &state,

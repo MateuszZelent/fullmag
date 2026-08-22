@@ -19,22 +19,10 @@ pub struct FrozenSpinsActivation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FrozenSpinsActivationError {
     StaleState,
-    TopologyMismatch {
-        expected: String,
-        found: String,
-    },
-    SourceRevisionMismatch {
-        expected: Option<u64>,
-        found: Option<u64>,
-    },
-    MaskLengthMismatch {
-        expected: usize,
-        found: usize,
-    },
-    ReferenceLengthMismatch {
-        expected: usize,
-        found: usize,
-    },
+    TopologyMismatch { expected: String, found: String },
+    SourceRevisionMismatch { expected: Option<u64>, found: Option<u64> },
+    MaskLengthMismatch { expected: usize, found: usize },
+    ReferenceLengthMismatch { expected: usize, found: usize },
     NonFiniteReference,
     EmptySelection,
     AllDofsFrozen,
