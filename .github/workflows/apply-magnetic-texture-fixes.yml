@@ -4,13 +4,16 @@ on:
   push:
     branches:
       - codex/magnetic-textures-fem-fdm-fixes-20260822
+  pull_request:
+    branches:
+      - master
 
 permissions:
   contents: write
 
 concurrency:
   group: magnetic-textures-fem-fdm-fixes
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   apply-and-validate:
