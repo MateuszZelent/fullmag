@@ -18,6 +18,7 @@ enum AdaptiveDecision {
     Accepted(f64),
     Retry(f64),
     DtMinExhausted,
+    NonFinite,
 }
 
 fn decide_adaptive_step(
@@ -27,6 +28,9 @@ fn decide_adaptive_step(
     previous_error: Option<f64>,
     cfg: crate::AdaptiveStepConfig,
 ) -> AdaptiveDecision {
+    if !error.is_finite() {
+        return AdaptiveDecision::NonFinite;
+    }
     if error > 1.0 && dt <= cfg.dt_min {
         return AdaptiveDecision::DtMinExhausted;
     }
@@ -56,6 +60,52 @@ fn decide_adaptive_step(
 #[cfg(test)]
 mod adaptive_decision_tests {
     use super::*;
+
+    fn test_config() -> crate::AdaptiveStepConfig {
+        crate::AdaptiveStepConfig {
+            max_error: 1.0,
+            dt_min: 1e-6,
+            dt_max: 1e-2,
+            headroom: 0.2,
+            rtol: 0.0,
+            growth_limit: 3.0,
+            shrink_limit: 0.2,
+        }
+    }
+
+    #[test]
+    fn adaptive_controller_rejects_non_finite_and_stops_at_dt_min() {
+        let cfg = test_config();
+        assert_eq!(
+            decide_adaptive_step(4, 1e-3, 4.0, None, cfg),
+            AdaptiveDecision::Retry(2e-4)
+        );
+        assert_eq!(
+            decide_adaptive_step(4, 1e-6, f64::NAN, None, cfg),
+            AdaptiveDecision::NonFinite
+        );
+        assert_eq!(
+            decide_adaptive_step(4, 1e-6, f64::INFINITY, None, cfg),
+            AdaptiveDecision::NonFinite
+        );
+        assert_eq!(
+            decide_adaptive_step(4, cfg.dt_min, 4.0, None, cfg),
+            AdaptiveDecision::DtMinExhausted
+        );
+    }
+
+    #[test]
+    fn adaptive_controller_clamps_growth_and_shrinks_monotonically() {
+        let cfg = test_config();
+        assert_eq!(
+            decide_adaptive_step(4, 9e-3, 0.0, None, cfg),
+            AdaptiveDecision::Accepted(cfg.dt_max)
+        );
+        let AdaptiveDecision::Retry(next) = decide_adaptive_step(4, 1e-3, 4.0, None, cfg) else {
+            panic!("finite rejection must retry");
+        };
+        assert!(next < 1e-3);
+    }
 
     #[test]
     fn cpu_controller_matches_task6_golden_vectors_and_zero_error_growth_limit() {
@@ -966,15 +1016,17 @@ impl ExchangeLlgProblem {
             );
 
             let thr = if cfg.rtol > 0.0 { 1.0 } else { cfg.max_error };
+            let normalized_error = error / thr;
+            let decision = if self.dynamics.adaptive_enabled {
+                decide_adaptive_step(2, dt, normalized_error, state.adaptive_previous_error, cfg)
+            } else {
+                AdaptiveDecision::Accepted(dt)
+            };
 
-            if !self.dynamics.adaptive_enabled || error <= thr {
+            if let AdaptiveDecision::Accepted(dt_next) = decision {
                 state.magnetization[..n].copy_from_slice(&bufs.m_stage[..n]);
                 self.restore_frozen_reference(&mut state.magnetization[..n]);
                 state.time_seconds += dt;
-                let ratio = (cfg.headroom * (thr / error.max(1e-30)).powf(1.0 / 3.0))
-                    .min(cfg.growth_limit)
-                    .max(cfg.shrink_limit);
-                let dt_next = (dt * ratio).max(cfg.dt_min).min(cfg.dt_max);
                 let eval = self.compute_step_observables_at_time(
                     &state.magnetization,
                     ws,
@@ -984,12 +1036,21 @@ impl ExchangeLlgProblem {
                     evaluation,
                     state.time_seconds,
                 );
+                state.adaptive_previous_error =
+                    self.dynamics.adaptive_enabled.then_some(normalized_error);
                 let mut report = eval.into_step_report(state.time_seconds, dt, false);
                 report.suggested_next_dt = self.dynamics.adaptive_enabled.then_some(dt_next);
                 return Ok(report);
             }
-            if dt <= cfg.dt_min {
-                return Err(crate::EngineError::new("dt_min_exhausted"));
+            match decision {
+                AdaptiveDecision::Retry(next) => dt = next,
+                AdaptiveDecision::DtMinExhausted => {
+                    return Err(crate::EngineError::new("dt_min_exhausted"));
+                }
+                AdaptiveDecision::NonFinite => {
+                    return Err(crate::EngineError::new("non_finite_adaptive_error"));
+                }
+                AdaptiveDecision::Accepted(_) => unreachable!("accepted decision returned above"),
             }
         }
     }
@@ -1093,16 +1154,18 @@ impl ExchangeLlgProblem {
             );
 
             let thr = if cfg.rtol > 0.0 { 1.0 } else { cfg.max_error };
+            let normalized_error = error / thr;
+            let decision = if self.dynamics.adaptive_enabled {
+                decide_adaptive_step(2, dt, normalized_error, state.adaptive_previous_error, cfg)
+            } else {
+                AdaptiveDecision::Accepted(dt)
+            };
 
-            if !self.dynamics.adaptive_enabled || error <= thr {
+            if let AdaptiveDecision::Accepted(dt_next) = decision {
                 bufs.soa
                     .m_stage
                     .gather_into_aos(&mut state.magnetization[..n]);
                 state.time_seconds += dt;
-                let ratio = (cfg.headroom * (thr / error.max(1e-30)).powf(1.0 / 3.0))
-                    .min(cfg.growth_limit)
-                    .max(cfg.shrink_limit);
-                let dt_next = (dt * ratio).max(cfg.dt_min).min(cfg.dt_max);
                 let eval = self.compute_step_observables_at_time(
                     &state.magnetization,
                     ws,
@@ -1112,12 +1175,21 @@ impl ExchangeLlgProblem {
                     evaluation,
                     state.time_seconds,
                 );
+                state.adaptive_previous_error =
+                    self.dynamics.adaptive_enabled.then_some(normalized_error);
                 let mut report = eval.into_step_report(state.time_seconds, dt, false);
                 report.suggested_next_dt = self.dynamics.adaptive_enabled.then_some(dt_next);
                 return Ok(report);
             }
-            if dt <= cfg.dt_min {
-                return Err(crate::EngineError::new("dt_min_exhausted"));
+            match decision {
+                AdaptiveDecision::Retry(next) => dt = next,
+                AdaptiveDecision::DtMinExhausted => {
+                    return Err(crate::EngineError::new("dt_min_exhausted"));
+                }
+                AdaptiveDecision::NonFinite => {
+                    return Err(crate::EngineError::new("non_finite_adaptive_error"));
+                }
+                AdaptiveDecision::Accepted(_) => unreachable!("accepted decision returned above"),
             }
         }
     }
@@ -1179,10 +1251,9 @@ impl ExchangeLlgProblem {
         loop {
             // Stage 1 — FSAL: reuse k7 from previous accepted step
             let reusable_fsal = if dynamic_oersted {
-                state.k_fsal = None;
                 None
             } else {
-                state.k_fsal.take()
+                state.k_fsal.clone()
             };
             if let Some(fsal) = reusable_fsal {
                 bufs.k[0][..n].copy_from_slice(&fsal);
@@ -1484,16 +1555,18 @@ impl ExchangeLlgProblem {
             );
 
             let thr = if cfg.rtol > 0.0 { 1.0 } else { cfg.max_error };
+            let normalized_error = error / thr;
+            let decision = if self.dynamics.adaptive_enabled {
+                decide_adaptive_step(4, dt, normalized_error, state.adaptive_previous_error, cfg)
+            } else {
+                AdaptiveDecision::Accepted(dt)
+            };
 
-            if !self.dynamics.adaptive_enabled || error <= thr {
+            if let AdaptiveDecision::Accepted(dt_next) = decision {
                 state.magnetization[..n].copy_from_slice(&bufs.m_stage[..n]);
                 self.restore_frozen_reference(&mut state.magnetization[..n]);
                 state.time_seconds += dt;
                 state.k_fsal = (!dynamic_oersted).then(|| bufs.k[6][..n].to_vec());
-                let ratio = (cfg.headroom * (thr / error.max(1e-30)).powf(0.2))
-                    .min(cfg.growth_limit)
-                    .max(cfg.shrink_limit);
-                let dt_next = (dt * ratio).max(cfg.dt_min).min(cfg.dt_max);
                 let eval = self.compute_step_observables_at_time(
                     &state.magnetization,
                     ws,
@@ -1503,12 +1576,21 @@ impl ExchangeLlgProblem {
                     evaluation,
                     state.time_seconds,
                 );
+                state.adaptive_previous_error =
+                    self.dynamics.adaptive_enabled.then_some(normalized_error);
                 let mut report = eval.into_step_report(state.time_seconds, dt, false);
                 report.suggested_next_dt = self.dynamics.adaptive_enabled.then_some(dt_next);
                 return Ok(report);
             }
-            if dt <= cfg.dt_min {
-                return Err(crate::EngineError::new("dt_min_exhausted"));
+            match decision {
+                AdaptiveDecision::Retry(next) => dt = next,
+                AdaptiveDecision::DtMinExhausted => {
+                    return Err(crate::EngineError::new("dt_min_exhausted"));
+                }
+                AdaptiveDecision::NonFinite => {
+                    return Err(crate::EngineError::new("non_finite_adaptive_error"));
+                }
+                AdaptiveDecision::Accepted(_) => unreachable!("accepted decision returned above"),
             }
         }
     }
@@ -1565,10 +1647,9 @@ impl ExchangeLlgProblem {
 
         loop {
             let reusable_fsal = if dynamic_oersted {
-                state.k_fsal = None;
                 None
             } else {
-                state.k_fsal.take()
+                state.k_fsal.clone()
             };
             if let Some(fsal) = reusable_fsal {
                 bufs.soa.k[0].scatter_from_aos(&fsal);
@@ -1745,17 +1826,19 @@ impl ExchangeLlgProblem {
             );
 
             let thr = if cfg.rtol > 0.0 { 1.0 } else { cfg.max_error };
+            let normalized_error = error / thr;
+            let decision = if self.dynamics.adaptive_enabled {
+                decide_adaptive_step(4, dt, normalized_error, state.adaptive_previous_error, cfg)
+            } else {
+                AdaptiveDecision::Accepted(dt)
+            };
 
-            if !self.dynamics.adaptive_enabled || error <= thr {
+            if let AdaptiveDecision::Accepted(dt_next) = decision {
                 bufs.soa
                     .m_stage
                     .gather_into_aos(&mut state.magnetization[..n]);
                 state.time_seconds += dt;
                 state.k_fsal = (!dynamic_oersted).then(|| bufs.soa.k[6].gather_to_aos());
-                let ratio = (cfg.headroom * (thr / error.max(1e-30)).powf(0.2))
-                    .min(cfg.growth_limit)
-                    .max(cfg.shrink_limit);
-                let dt_next = (dt * ratio).max(cfg.dt_min).min(cfg.dt_max);
                 let eval = self.compute_step_observables_at_time(
                     &state.magnetization,
                     ws,
@@ -1765,12 +1848,21 @@ impl ExchangeLlgProblem {
                     evaluation,
                     state.time_seconds,
                 );
+                state.adaptive_previous_error =
+                    self.dynamics.adaptive_enabled.then_some(normalized_error);
                 let mut report = eval.into_step_report(state.time_seconds, dt, false);
                 report.suggested_next_dt = self.dynamics.adaptive_enabled.then_some(dt_next);
                 return Ok(report);
             }
-            if dt <= cfg.dt_min {
-                return Err(crate::EngineError::new("dt_min_exhausted"));
+            match decision {
+                AdaptiveDecision::Retry(next) => dt = next,
+                AdaptiveDecision::DtMinExhausted => {
+                    return Err(crate::EngineError::new("dt_min_exhausted"));
+                }
+                AdaptiveDecision::NonFinite => {
+                    return Err(crate::EngineError::new("non_finite_adaptive_error"));
+                }
+                AdaptiveDecision::Accepted(_) => unreachable!("accepted decision returned above"),
             }
         }
     }
@@ -2315,14 +2407,16 @@ impl ExchangeLlgProblem {
             );
 
             let thr = if cfg.rtol > 0.0 { 1.0 } else { cfg.max_error };
+            let normalized_error = error / thr;
+            let decision = if self.dynamics.adaptive_enabled {
+                decide_adaptive_step(2, dt, normalized_error, state.adaptive_previous_error, cfg)
+            } else {
+                AdaptiveDecision::Accepted(dt)
+            };
 
-            if !self.dynamics.adaptive_enabled || error <= thr {
+            if let AdaptiveDecision::Accepted(dt_next) = decision {
                 state.magnetization.copy_from(&bufs.soa.m_stage);
                 state.time_seconds += dt;
-                let ratio = (cfg.headroom * (thr / error.max(1e-30)).powf(1.0 / 3.0))
-                    .min(cfg.growth_limit)
-                    .max(cfg.shrink_limit);
-                let dt_next = (dt * ratio).max(cfg.dt_min).min(cfg.dt_max);
                 let eval = self.compute_step_observables_soa(
                     &state.magnetization,
                     ws,
@@ -2330,12 +2424,21 @@ impl ExchangeLlgProblem {
                     evaluation,
                     state.time_seconds,
                 );
+                state.adaptive_previous_error =
+                    self.dynamics.adaptive_enabled.then_some(normalized_error);
                 let mut report = eval.into_step_report(state.time_seconds, dt, false);
                 report.suggested_next_dt = self.dynamics.adaptive_enabled.then_some(dt_next);
                 return Ok(report);
             }
-            if dt <= cfg.dt_min {
-                return Err(crate::EngineError::new("dt_min_exhausted"));
+            match decision {
+                AdaptiveDecision::Retry(next) => dt = next,
+                AdaptiveDecision::DtMinExhausted => {
+                    return Err(crate::EngineError::new("dt_min_exhausted"));
+                }
+                AdaptiveDecision::NonFinite => {
+                    return Err(crate::EngineError::new("non_finite_adaptive_error"));
+                }
+                AdaptiveDecision::Accepted(_) => unreachable!("accepted decision returned above"),
             }
         }
     }
@@ -2394,10 +2497,9 @@ impl ExchangeLlgProblem {
 
         loop {
             let reusable_fsal = if dynamic_oersted {
-                state.k_fsal = None;
                 None
             } else {
-                state.k_fsal.take()
+                state.k_fsal.clone()
             };
             if let Some(fsal) = reusable_fsal {
                 bufs.soa.k[0].copy_from(&fsal);
@@ -2574,8 +2676,14 @@ impl ExchangeLlgProblem {
             );
 
             let thr = if cfg.rtol > 0.0 { 1.0 } else { cfg.max_error };
+            let normalized_error = error / thr;
+            let decision = if self.dynamics.adaptive_enabled {
+                decide_adaptive_step(4, dt, normalized_error, state.adaptive_previous_error, cfg)
+            } else {
+                AdaptiveDecision::Accepted(dt)
+            };
 
-            if !self.dynamics.adaptive_enabled || error <= thr {
+            if let AdaptiveDecision::Accepted(dt_next) = decision {
                 state.magnetization.copy_from(&bufs.soa.m_stage);
                 state.time_seconds += dt;
                 if dynamic_oersted {
@@ -2585,10 +2693,6 @@ impl ExchangeLlgProblem {
                 } else {
                     state.k_fsal = Some(bufs.soa.k[6].clone());
                 }
-                let ratio = (cfg.headroom * (thr / error.max(1e-30)).powf(0.2))
-                    .min(cfg.growth_limit)
-                    .max(cfg.shrink_limit);
-                let dt_next = (dt * ratio).max(cfg.dt_min).min(cfg.dt_max);
                 let eval = self.compute_step_observables_soa(
                     &state.magnetization,
                     ws,
@@ -2596,12 +2700,21 @@ impl ExchangeLlgProblem {
                     evaluation,
                     state.time_seconds,
                 );
+                state.adaptive_previous_error =
+                    self.dynamics.adaptive_enabled.then_some(normalized_error);
                 let mut report = eval.into_step_report(state.time_seconds, dt, false);
                 report.suggested_next_dt = self.dynamics.adaptive_enabled.then_some(dt_next);
                 return Ok(report);
             }
-            if dt <= cfg.dt_min {
-                return Err(crate::EngineError::new("dt_min_exhausted"));
+            match decision {
+                AdaptiveDecision::Retry(next) => dt = next,
+                AdaptiveDecision::DtMinExhausted => {
+                    return Err(crate::EngineError::new("dt_min_exhausted"));
+                }
+                AdaptiveDecision::NonFinite => {
+                    return Err(crate::EngineError::new("non_finite_adaptive_error"));
+                }
+                AdaptiveDecision::Accepted(_) => unreachable!("accepted decision returned above"),
             }
         }
     }
