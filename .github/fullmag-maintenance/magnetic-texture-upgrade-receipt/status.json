@@ -1,0 +1,8 @@
+{
+  "run_id": "32596115347",
+  "run_attempt": "1",
+  "source_sha": "797d41c42c62ed1c1b48a3f4eaffcc7ef6ec7549",
+  "job_status": "failure",
+  "last_stage": "reconstruct-payload",
+  "published_commit_sha": ""
+}
