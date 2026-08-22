@@ -1,17 +1,47 @@
 # FullMag
 
+<a id="readme-top"></a>
+
 <div align="center">
-  <img src="docs/fullmag-logo-traced-optimized.svg" alt="FullMag logo" width="150" />
-  <p><strong>Computational framework for reproducible finite-difference and finite-element micromagnetics</strong></p>
-  <p>
-    <a href="https://fullmag.mzelent.pl/"><strong>Public documentation</strong></a>
-    ·
+  <a href="https://fullmag.mzelent.pl/">
+    <img src="docs/fullmag-logo-traced-optimized.svg" alt="FullMag logo" width="150" />
+  </a>
+
+  <h3 align="center">Finite-difference and finite-element micromagnetics for reproducible scientific computing</h3>
+
+  <p align="center">
+    FullMag integrates a stage-oriented Python interface, a Rust runtime and reference solvers,
+    native CPU/CUDA backends, FEM infrastructure, and a browser-based Control Room.
+    <br />
+    <br />
+    <a href="https://fullmag.mzelent.pl/"><strong>Public documentation »</strong></a>
+    <br />
+    <br />
     <a href="https://fullmag.mzelent.pl/getting-started/index.html">Getting started</a>
     ·
     <a href="https://fullmag.mzelent.pl/physics/index.html">Physics reference</a>
     ·
+    <a href="https://fullmag.mzelent.pl/numerical-methods/index.html">Numerical methods</a>
+    ·
     <a href="https://fullmag.mzelent.pl/python-api/index.html">Python API</a>
+    ·
+    <a href="examples">Examples</a>
   </p>
+</div>
+
+<div align="center">
+
+![Project status](https://img.shields.io/badge/status-active%20research%20software-2563EB?style=flat-square)
+![Python](https://img.shields.io/badge/Python-authoring%20API-3776AB?style=flat-square&logo=python&logoColor=white)
+![Rust](https://img.shields.io/badge/Rust-runtime%20%26%20solvers-000000?style=flat-square&logo=rust&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-Control%20Room-3178C6?style=flat-square&logo=typescript&logoColor=white)
+![Next.js](https://img.shields.io/badge/Next.js-web%20application-000000?style=flat-square&logo=nextdotjs&logoColor=white)
+![CUDA](https://img.shields.io/badge/CUDA-GPU%20backends-76B900?style=flat-square&logo=nvidia&logoColor=white)
+![MFEM](https://img.shields.io/badge/MFEM-FEM%20backend-5B6EC4?style=flat-square)
+![hypre](https://img.shields.io/badge/hypre-linear%20solvers-6B7280?style=flat-square)
+![libCEED](https://img.shields.io/badge/libCEED-operator%20evaluation-7C3AED?style=flat-square)
+![Horizon Europe](https://img.shields.io/badge/Horizon%20Europe-MSCA%20PF-003399?style=flat-square)
+
 </div>
 
 ## Abstract
@@ -33,14 +63,14 @@ The canonical user and scientific documentation is published at **[fullmag.mzele
 
 FullMag evolves the reduced magnetization
 
-$$
+```math
 \mathbf{m}(\mathbf{r},t)=\frac{\mathbf{M}(\mathbf{r},t)}{M_s(\mathbf{r})},
-\qquad |\mathbf{m}|=1,
-$$
+\qquad \lvert\mathbf{m}\rvert=1,
+```
 
 using the explicit Gilbert form of the Landau–Lifshitz–Gilbert equation,
 
-$$
+```math
 \frac{\partial \mathbf{m}}{\partial t}
 =
 -\frac{\gamma_{\mu_0}}{1+\alpha^2}
@@ -52,20 +82,20 @@ $$
 \right]
 +
 \boldsymbol{\tau}_{\mathrm{direct}}.
-$$
+```
 
-Here, $\gamma_{\mu_0}=\mu_0|\gamma_e|$, $\alpha$ is the Gilbert damping parameter, $\mathbf{H}_{\mathrm{eff}}$ is expressed in $\mathrm{A\,m^{-1}}$, and $\boldsymbol{\tau}_{\mathrm{direct}}$ contains non-conservative torque contributions in $\mathrm{s^{-1}}$.
+Here, $\gamma_{\mu_0}=\mu_0\lvert\gamma_e\rvert$, $\alpha$ is the Gilbert damping parameter, $\mathbf{H}_{\mathrm{eff}}$ is expressed in $\mathrm{A\,m^{-1}}$, and $\boldsymbol{\tau}_{\mathrm{direct}}$ contains non-conservative torque contributions in $\mathrm{s^{-1}}$.
 
 Field-form interactions are assembled as
 
-$$
+```math
 \mathbf{H}_{\mathrm{eff}}=\sum_i\mathbf{H}_i,
 \qquad
 \mathbf{H}_i
 =
 -\frac{1}{\mu_0M_s}
 \frac{\delta E_i}{\delta\mathbf{m}}.
-$$
+```
 
 The public reference documents the governing equations, sign conventions, SI units, discretizations, implementation mappings, validation evidence, and known limits for exchange, demagnetization, Zeeman fields, anisotropy, Dzyaloshinskii–Moriya interaction, thermal noise, Oersted fields, magnetoelastic coupling, and spin-torque terms. Availability is evaluated for a complete execution lane rather than inferred from the presence of an API object or source file.
 
@@ -281,10 +311,6 @@ A BibTeX template is:
 
 Project coordination: **Mateusz Zelent, RPTU Kaiserslautern-Landau**.
 
-## Funding
-
-Mateusz Zelent acknowledges funding from the European Union's Framework Programme for Research and Innovation under HORIZON-MSCA-2024-PF-01, Marie Skłodowska-Curie Grant Agreement No. **101208951 (CNMA)**.
-
 ## Contributing
 
 Changes that alter a physical model or numerical capability should update, as applicable, the Python API, `ProblemIR`, planner capability data, executable backend, observables, tests, validation evidence, and public documentation. A capability claim must state its backend, device, precision, mode, solver, mesh, and workload scope.
@@ -292,3 +318,15 @@ Changes that alter a physical model or numerical capability should update, as ap
 ## License
 
 The repository currently does not contain a root-level license file. Contact the project coordinator before reuse or redistribution.
+
+## Funding and acknowledgements
+
+<div align="center">
+  <img src="https://upload.wikimedia.org/wikipedia/commons/b/b7/Flag_of_Europe.svg" alt="European Union emblem" width="110" />
+  <br />
+  <a href="https://marie-sklodowska-curie-actions.ec.europa.eu/">
+    <img src="https://img.shields.io/badge/Marie%20Sk%C5%82odowska--Curie%20Actions-Horizon%20Europe-003399?style=for-the-badge" alt="Marie Skłodowska-Curie Actions — Horizon Europe" />
+  </a>
+</div>
+
+Mateusz Zelent acknowledges funding from the European Union's Framework Programme for Research and Innovation under HORIZON-MSCA-2024-PF-01, Marie Skłodowska-Curie Grant Agreement No. **101208951 (CNMA)**.
