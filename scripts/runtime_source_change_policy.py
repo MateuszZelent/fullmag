@@ -24,6 +24,8 @@ NON_RUNTIME_PREFIXES = (
     "docs/",
     "public_docs/",
     "scripts/test_",
+    # Owner-oriented documentation manifest package.
+    "scripts/public_docs_information_architecture_v2/",
 )
 NON_RUNTIME_FILES = {
     "AGENTS.md",
@@ -40,6 +42,7 @@ NON_RUNTIME_EXACT_PATHS = {
     "scripts/lib/managed_fem_image_identity.sh",
     "scripts/prune_managed_fem_runtimes.sh",
     "scripts/public_docs_information_architecture.py",
+    "scripts/public_docs_information_architecture_v2.py",
     "scripts/runtime_source_change_policy.py",
     "examples/viewport_2d_default_slice_fdm_smoke.py",
     "examples/assets/fem_performance/relaxation_torque_calibration_suite_v2.json",
