@@ -2,11 +2,7 @@ name: Documentation restructure one-shot
 
 on:
   push:
-    branches:
-      - docs/restructure-frontend-backend-python-api
-    paths:
-      - ".docs-restructure/**"
-      - ".github/workflows/docs-restructure-once.yml"
+  pull_request:
 
 permissions:
   contents: write
@@ -17,6 +13,7 @@ concurrency:
 
 jobs:
   generate:
+    if: github.ref == 'refs/heads/docs/restructure-frontend-backend-python-api' || github.head_ref == 'docs/restructure-frontend-backend-python-api'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout documentation branch
