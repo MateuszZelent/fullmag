@@ -70,6 +70,32 @@ jobs:
           PY
           python .github/fullmag-texture-fixes/apply_changes.py
 
+      - name: Normalize planner error conversion
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import re
+          from pathlib import Path
+
+          path = Path('crates/fullmag-plan/src/fem.rs')
+          source = path.read_text(encoding='utf-8')
+          pattern = re.compile(
+              r'let sample_points_object\s*=\s*'
+              r'object_space_sample_points\(&sample_points, entry\.object_translation\)\?;'
+          )
+          replacement = '''let sample_points_object =
+              object_space_sample_points(&sample_points, entry.object_translation).map_err(|reason| {
+                  PlanError {
+                      reasons: vec![reason],
+                  }
+              })?;'''
+          source, count = pattern.subn(replacement, source, count=1)
+          if count != 1:
+              raise RuntimeError(f'expected one FEM error-conversion anchor, found {count}')
+          path.write_text(source, encoding='utf-8')
+          PY
+
       - name: Format Rust sources
         run: cargo fmt --all
 
