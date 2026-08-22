@@ -225,7 +225,41 @@ pub(crate) struct ResolvedFemDomainMeshAsset {
 pub(crate) struct MagnetPlanningEntry {
     pub magnet_name: String,
     pub geometry_name: String,
+    pub object_translation: [f64; 3],
     pub initial_magnetization: Option<InitialMagnetizationIR>,
+}
+
+pub(crate) fn geometry_object_translation(entry: &fullmag_ir::GeometryEntryIR) -> [f64; 3] {
+    let mut translation = [0.0; 3];
+    let mut current = entry;
+    while let fullmag_ir::GeometryEntryIR::Translate { base, by, .. } = current {
+        for axis in 0..3 {
+            translation[axis] += by[axis];
+        }
+        current = base.as_ref();
+    }
+    translation
+}
+
+pub(crate) fn object_space_sample_points(
+    world_points: &[[f64; 3]],
+    object_translation: [f64; 3],
+) -> Result<Vec<[f64; 3]>, String> {
+    let transform = crate::AffineTransform3 {
+        translation_m: object_translation,
+        ..crate::AffineTransform3::identity()
+    };
+    world_points
+        .iter()
+        .map(|point| {
+            crate::selection::geometry::world_point_in_frame(*point, transform).map_err(|error| {
+                format!(
+                    "failed to map FEM texture sample point {:?} into object coordinates: {error}",
+                    point
+                )
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn initial_vectors_for_magnet(
@@ -2188,5 +2222,51 @@ mod tests {
 
         asset.object_region_markers[0].marker = 2;
         assert!(validate_domain_object_region_identity(&mesh, &problem, &asset).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod texture_object_space_tests {
+    use super::*;
+    use fullmag_ir::{TextureMappingIR, TextureProjectionMode, TextureTransform3DIR};
+
+    #[test]
+    fn translated_fem_samples_are_mapped_back_to_object_space() {
+        let world = vec![[10.0, -4.0, 2.0], [11.0, -2.0, 5.0]];
+        let object = object_space_sample_points(&world, [10.0, -4.0, 2.0]).unwrap();
+        assert_eq!(object, vec![[0.0, 0.0, 0.0], [1.0, 2.0, 3.0]]);
+    }
+
+    #[test]
+    fn fem_preset_uses_object_coordinates_after_owner_translation() {
+        let world = vec![[11.0, 0.0, 0.0]];
+        let object = object_space_sample_points(&world, [10.0, 0.0, 0.0]).unwrap();
+        let initial = InitialMagnetizationIR::PresetTexture {
+            preset_kind: "neel_skyrmion".to_string(),
+            preset_version: 2,
+            preset_params: BTreeMap::from([
+                ("radius".to_string(), serde_json::json!(1.0)),
+                ("wall_width".to_string(), serde_json::json!(0.2)),
+                ("chirality".to_string(), serde_json::json!(1)),
+                ("core_polarity".to_string(), serde_json::json!(-1)),
+            ]),
+            mapping: TextureMappingIR {
+                space: "object".to_string(),
+                projection: TextureProjectionMode::ObjectLocal,
+                clamp_mode: "none".to_string(),
+            },
+            texture_transform: TextureTransform3DIR::default(),
+        };
+        let sampled = initial_vectors_for_magnet(
+            "translated",
+            "mesh",
+            Some(&initial),
+            1,
+            Some(&world),
+            Some(&object),
+        )
+        .unwrap();
+        assert!(sampled[0][0] > 0.99);
+        assert!(sampled[0][1].abs() < 1.0e-12);
     }
 }

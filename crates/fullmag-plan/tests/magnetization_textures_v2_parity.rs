@@ -175,6 +175,47 @@ fn generated_cases() -> Vec<ParityCase> {
             &points,
         ),
         make_case(
+            "antiskyrmion",
+            BTreeMap::from([
+                ("radius".to_string(), json!(8.0e-9)),
+                ("wall_width".to_string(), json!(2.0e-9)),
+                ("chirality".to_string(), json!(-1)),
+                ("core_polarity".to_string(), json!(1)),
+                ("plane".to_string(), json!("xy")),
+            ]),
+            "object_local",
+            None,
+            &points,
+        ),
+        make_case(
+            "skyrmionium",
+            BTreeMap::from([
+                ("inner_radius".to_string(), json!(5.0e-9)),
+                ("outer_radius".to_string(), json!(12.0e-9)),
+                ("wall_width".to_string(), json!(1.5e-9)),
+                ("kind".to_string(), json!("bloch")),
+                ("chirality".to_string(), json!(-1)),
+                ("background_sign".to_string(), json!(1)),
+                ("plane".to_string(), json!("xz")),
+            ]),
+            "object_local",
+            None,
+            &points,
+        ),
+        make_case(
+            "hopfion",
+            BTreeMap::from([
+                ("radius".to_string(), json!(10.0e-9)),
+                ("hopf_charge".to_string(), json!(-1)),
+                ("background_sign".to_string(), json!(1)),
+                ("axial_scale".to_string(), json!(1.4)),
+                ("phase_rad".to_string(), json!(0.3)),
+            ]),
+            "object_local",
+            Some([0.0, 0.0, quarter_turn, quarter_turn]),
+            &points,
+        ),
+        make_case(
             "bimeron",
             BTreeMap::from([
                 ("radius".to_string(), json!(8.0e-9)),
@@ -261,7 +302,7 @@ fn v2_matches_shared_python_parity_fixture_for_all_presets() {
         .expect("run with FULLMAG_GENERATE_V2_PARITY=1 once to create the fixture");
     let cases: Vec<ParityCase> =
         serde_json::from_str(&content).expect("parity fixture should be valid JSON");
-    assert_eq!(cases.len(), 11);
+    assert_eq!(cases.len(), 14);
     for case in cases {
         assert_eq!(case.preset_version, 2);
         assert_eq!(case.points.len(), POINT_COUNT);

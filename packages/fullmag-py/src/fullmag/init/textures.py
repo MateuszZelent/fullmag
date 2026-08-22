@@ -42,6 +42,11 @@ def _require_sign(value: int, name: str) -> int:
     return value
 
 
+def _require_v2_preset(preset_version: int, name: str) -> None:
+    if preset_version != 2:
+        raise ValueError(f"{name} requires preset_version=2")
+
+
 def _require_plane(value: str) -> str:
     if value not in ("xy", "xz", "yz"):
         raise ValueError("plane must be one of 'xy', 'xz', or 'yz'")
@@ -471,6 +476,104 @@ class texture:
                 "plane": plane,
             },
             preview_proxy="disc",
+        )
+
+    @staticmethod
+    def antiskyrmion(
+        radius: float,
+        wall_width: float,
+        chirality: int = 1,
+        core_polarity: int = -1,
+        plane: Literal["xy", "xz", "yz"] = "xy",
+        *,
+        preset_version: int = 2,
+    ) -> PresetTexture:
+        _require_v2_preset(preset_version, "antiskyrmion")
+        radius = _require_finite_positive(radius, "radius")
+        wall_width = _require_finite_positive(wall_width, "wall_width")
+        chirality = _require_sign(chirality, "chirality")
+        core_polarity = _require_sign(core_polarity, "core_polarity")
+        plane = _require_plane(plane)
+        return PresetTexture(
+            preset_version=2,
+            preset_kind="antiskyrmion",
+            params={
+                "radius": radius,
+                "wall_width": wall_width,
+                "chirality": chirality,
+                "core_polarity": core_polarity,
+                "plane": plane,
+            },
+            preview_proxy="disc",
+        )
+
+    @staticmethod
+    def skyrmionium(
+        inner_radius: float,
+        outer_radius: float,
+        wall_width: float,
+        kind: Literal["bloch", "neel"] = "neel",
+        chirality: int = 1,
+        background_sign: int = 1,
+        plane: Literal["xy", "xz", "yz"] = "xy",
+        *,
+        preset_version: int = 2,
+    ) -> PresetTexture:
+        _require_v2_preset(preset_version, "skyrmionium")
+        inner_radius = _require_finite_positive(inner_radius, "inner_radius")
+        outer_radius = _require_finite_positive(outer_radius, "outer_radius")
+        if outer_radius <= inner_radius:
+            raise ValueError("outer_radius must be greater than inner_radius")
+        wall_width = _require_finite_positive(wall_width, "wall_width")
+        if kind not in ("bloch", "neel"):
+            raise ValueError("kind must be 'bloch' or 'neel'")
+        chirality = _require_sign(chirality, "chirality")
+        background_sign = _require_sign(background_sign, "background_sign")
+        plane = _require_plane(plane)
+        return PresetTexture(
+            preset_version=2,
+            preset_kind="skyrmionium",
+            params={
+                "inner_radius": inner_radius,
+                "outer_radius": outer_radius,
+                "wall_width": wall_width,
+                "kind": kind,
+                "chirality": chirality,
+                "background_sign": background_sign,
+                "plane": plane,
+            },
+            preview_proxy="disc",
+        )
+
+    @staticmethod
+    def hopfion(
+        radius: float,
+        hopf_charge: int = 1,
+        background_sign: int = 1,
+        axial_scale: float = 1.0,
+        phase_rad: float = 0.0,
+        *,
+        preset_version: int = 2,
+    ) -> PresetTexture:
+        _require_v2_preset(preset_version, "hopfion")
+        radius = _require_finite_positive(radius, "radius")
+        hopf_charge = _require_sign(hopf_charge, "hopf_charge")
+        background_sign = _require_sign(background_sign, "background_sign")
+        axial_scale = _require_finite_positive(axial_scale, "axial_scale")
+        phase_rad = float(phase_rad)
+        if not math.isfinite(phase_rad):
+            raise ValueError("phase_rad must be finite")
+        return PresetTexture(
+            preset_version=2,
+            preset_kind="hopfion",
+            params={
+                "radius": radius,
+                "hopf_charge": hopf_charge,
+                "background_sign": background_sign,
+                "axial_scale": axial_scale,
+                "phase_rad": phase_rad,
+            },
+            preview_proxy="sphere",
         )
 
     @staticmethod

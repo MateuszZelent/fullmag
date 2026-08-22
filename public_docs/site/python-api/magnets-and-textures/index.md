@@ -11,7 +11,8 @@ owner: fullmag-public-docs
 
 Magnets carry magnetization, and textures define their initial magnetic state. Author a
 ferromagnet, assign a uniform or deterministic-random state, or initialize vortices, antivortices,
-Bloch and Neel skyrmions, bimerons, domain walls, two-domain states, helices, and conical spirals.
+Bloch and Neel skyrmions, antiskyrmions, skyrmionium targets, three-dimensional hopfions,
+bimerons, domain walls, two-domain states, helices, and conical spirals.
 The preset reference documents the implemented equations, versioning, coordinate mapping, FEM/FDM
 materialization, validation, and current limitations.
 

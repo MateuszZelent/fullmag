@@ -29,7 +29,9 @@ use crate::magnetization_textures::TextureSamplePoint;
 use crate::magnetization_textures_v2::sample_preset_texture_versioned;
 use crate::oersted::{resolve_fdm_oersted_term, ResolvedOerstedTerm};
 use crate::region_conflict::{resolve_region_conflict, RegionConflictCandidate};
-use crate::selection::geometry::{contains_point, geometry_entry_bounds, normalize_axis};
+use crate::selection::geometry::{
+    contains_point, geometry_entry_bounds, normalize_axis, world_point_in_frame,
+};
 use crate::selection::{
     compile_fdm_frozen_spins, FdmFrozenSpinsDomain, FrozenSpinsCompileRequest,
     ResolvedFrozenSpinsReference, SelectionDofMembership,
@@ -332,17 +334,23 @@ fn grid_sample_points(
         .and_then(|cost| usize::try_from(cost.cells).ok())
         .unwrap_or(0);
     let mut points = Vec::with_capacity(capacity);
+    let object_transform = AffineTransform3 {
+        translation_m: owner_translation,
+        ..AffineTransform3::identity()
+    };
     for z in 0..nz {
         for y in 0..ny {
             for x in 0..nx {
                 let idx = x + nx * (y + ny * z);
                 let world =
                     resolved_fdm_cell_center([x as u32, y as u32, z as u32], cell_size, origin);
-                let object = [
-                    world[0] - owner_translation[0],
-                    world[1] - owner_translation[1],
-                    world[2] - owner_translation[2],
-                ];
+                let object = world_point_in_frame(world, object_transform).unwrap_or_else(
+                    |error| {
+                        panic!(
+                            "validated FDM owner translation must define an invertible object frame: {error}"
+                        )
+                    },
+                );
                 points.push(TextureSamplePoint {
                     position_world: world,
                     position_object: object,
@@ -4577,4 +4585,23 @@ pub(crate) fn plan_fdm_multilayer(
             physics_graph: None,
         },
     })
+}
+
+#[cfg(test)]
+mod texture_object_space_tests {
+    use super::*;
+
+    #[test]
+    fn grid_sample_points_uses_the_shared_object_frame_transform() {
+        let points = grid_sample_points(
+            [1, 1, 1],
+            [2.0, 2.0, 2.0],
+            [10.0, -4.0, 2.0],
+            [11.0, -3.0, 3.0],
+            None,
+        );
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].position_world, [11.0, -3.0, 3.0]);
+        assert_eq!(points[0].position_object, [0.0, 0.0, 0.0]);
+    }
 }

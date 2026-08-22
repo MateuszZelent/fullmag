@@ -247,7 +247,20 @@ def _vortex(params: Mapping[str, object], point: Sequence[float], vorticity: flo
     return (transverse * math.cos(phase), transverse * math.sin(phase), polarity * core)
 
 
-def _skyrmion(params: Mapping[str, object], point: Sequence[float], helicity: float) -> Vec3:
+def _wall_helicity(kind: str, chirality: int) -> float:
+    if kind == "bloch":
+        return chirality * math.pi / 2.0
+    if kind == "neel":
+        return 0.0 if chirality > 0 else math.pi
+    raise _invalid("kind", "must be either 'bloch' or 'neel'")
+
+
+def _skyrmion(
+    params: Mapping[str, object],
+    point: Sequence[float],
+    winding: float,
+    kind: str,
+) -> Vec3:
     radius = _positive(params, "radius")
     wall_width = _positive(params, "wall_width")
     polarity = _sign(params, "core_polarity")
@@ -255,12 +268,66 @@ def _skyrmion(params: Mapping[str, object], point: Sequence[float], helicity: fl
     distance = math.hypot(point[0], point[1])
     phi = math.atan2(point[1], point[0])
     theta = _skyrmion_theta(radius, distance, wall_width)
-    phase = phi + chirality * helicity
+    phase = winding * phi + _wall_helicity(kind, chirality)
     return (
         math.sin(theta) * math.cos(phase),
         math.sin(theta) * math.sin(phase),
         -polarity * math.cos(theta),
     )
+
+
+def _skyrmionium(params: Mapping[str, object], point: Sequence[float]) -> Vec3:
+    inner_radius = _positive(params, "inner_radius")
+    outer_radius = _positive(params, "outer_radius")
+    if outer_radius <= inner_radius:
+        raise _invalid("outer_radius", "must be greater than inner_radius")
+    wall_width = _positive(params, "wall_width")
+    chirality = _sign(params, "chirality")
+    background = _sign(params, "background_sign")
+    kind = params.get("kind", "neel")
+    if not isinstance(kind, str):
+        raise _invalid("kind", "must be a string")
+    distance = math.hypot(point[0], point[1])
+    wall_angle = lambda coordinate: math.acos(-math.tanh(coordinate))
+    theta = wall_angle((distance - inner_radius) / wall_width) + wall_angle(
+        (distance - outer_radius) / wall_width
+    )
+    phase = math.atan2(point[1], point[0]) + _wall_helicity(kind, chirality)
+    return (
+        math.sin(theta) * math.cos(phase),
+        math.sin(theta) * math.sin(phase),
+        background * math.cos(theta),
+    )
+
+
+def _hopfion(params: Mapping[str, object], point: Sequence[float]) -> Vec3:
+    radius = _positive(params, "radius")
+    charge = _sign(params, "hopf_charge")
+    background = _sign(params, "background_sign")
+    axial_scale = _positive(params, "axial_scale", 1.0)
+    phase = _number(params, "phase_rad", 0.0)
+
+    x = point[0] / radius
+    y = charge * point[1] / radius
+    z = point[2] / (radius * axial_scale)
+    rho_squared = x * x + y * y + z * z
+    if not math.isfinite(rho_squared):
+        return (0.0, 0.0, float(background))
+    denominator = 1.0 + rho_squared
+    z1_re = 2.0 * x / denominator
+    z1_im = 2.0 * y / denominator
+    z2_re = 2.0 * z / denominator
+    z2_im = (rho_squared - 1.0) / denominator
+
+    hopf_x = 2.0 * (z1_re * z2_re + z1_im * z2_im)
+    hopf_y = 2.0 * (z1_im * z2_re - z1_re * z2_im)
+    hopf_z = z1_re * z1_re + z1_im * z1_im - z2_re * z2_re - z2_im * z2_im
+    rotated = (
+        math.cos(phase) * hopf_x - math.sin(phase) * hopf_y,
+        math.sin(phase) * hopf_x + math.cos(phase) * hopf_y,
+        hopf_z,
+    )
+    return _normalize(_scale(rotated, -background), "hopfion")
 
 
 def _sech(value: float) -> float:
@@ -380,9 +447,15 @@ def _local(preset_kind: str, params: Mapping[str, object], point: Sequence[float
     if preset_kind == "antivortex":
         return _vortex(params, point, -1.0)
     if preset_kind == "bloch_skyrmion":
-        return _skyrmion(params, point, math.pi / 2.0)
+        return _skyrmion(params, point, 1.0, "bloch")
     if preset_kind == "neel_skyrmion":
-        return _skyrmion(params, point, 0.0)
+        return _skyrmion(params, point, 1.0, "neel")
+    if preset_kind == "antiskyrmion":
+        return _skyrmion(params, point, -1.0, "neel")
+    if preset_kind == "skyrmionium":
+        return _skyrmionium(params, point)
+    if preset_kind == "hopfion":
+        return _hopfion(params, point)
     if preset_kind == "bimeron":
         return _bimeron(params, point)
     if preset_kind == "domain_wall":
@@ -401,6 +474,8 @@ _METRIC_PRESETS = {
     "antivortex",
     "bloch_skyrmion",
     "neel_skyrmion",
+    "antiskyrmion",
+    "skyrmionium",
     "bimeron",
     "domain_wall",
     "two_domain",
@@ -453,6 +528,11 @@ def evaluate_preset_texture_v2(
         )
 
     frame = _resolve_frame(params, projection)
+    if preset_kind == "hopfion" and frame is not None:
+        raise _invalid(
+            "mapping.projection",
+            "hopfion is three-dimensional and requires object_local projection",
+        )
     quaternion = _normalized_quaternion(rotation_quat) if rotation_quat is not None else None
     _local(preset_kind, params, (0.0, 0.0, 0.0))
     values: list[Vec3] = []
