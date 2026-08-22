@@ -1,0 +1,128 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/discretization/per-object-meshing.md",
+    "reviewed_revision": "043201a94f769307c6b6e0db971da9a8a5eec57c"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source-backed",
+      "reason": "Object recipes are resolved into the shared-domain Gmsh/native FEM path."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "The identical mesh asset can feed GPU execution only when every realized family, order, and operator is supported."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM per-object resolution is owned by FDMGrid rather than PerObjectMeshRecipe."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM per-object resolution is owned by FDMGrid rather than PerObjectMeshRecipe."
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "recipe",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class PerObjectMeshRecipe",
+      "responsibility": "Object mesh parameters, topology validation, and IR lowering."
+    },
+    {
+      "id": "operation",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class MeshOperation",
+      "responsibility": "Ordered meshing-operation schema."
+    },
+    {
+      "id": "world",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class MagnetHandle",
+      "responsibility": "Stage-first object mesh authoring facade."
+    },
+    {
+      "id": "targets",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py",
+      "symbol": "resolve_shared_domain_targets",
+      "responsibility": "Object target precedence and resolved mesh targets."
+    },
+    {
+      "id": "swept",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "classify_sweepability",
+      "responsibility": "Geometry eligibility and swept-mesh realization."
+    },
+    {
+      "id": "report",
+      "path": "packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py",
+      "symbol": "_build_shared_domain_build_report",
+      "responsibility": "Requested/resolved topology, operations, fallbacks, selectors, and quality provenance."
+    },
+    {
+      "id": "ui",
+      "path": "apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx",
+      "symbol": "ObjectMeshPolicyPanel",
+      "responsibility": "Control Room object mesh groups, transactions, and realized-resource views."
+    },
+    {
+      "id": "ui_model",
+      "path": "apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts",
+      "symbol": "buildObjectMeshPolicyReplaceRequest",
+      "responsibility": "Structured draft parsing, exact-prism canonicalization, and object policy request."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {"python":"PerObjectMeshRecipe.maximum_element_size","type":"float | None","default":"None","si_unit":"\\mathrm{m}","validation":"Positive when authored by the public facade.","meaning":"Canonical object maximum element-size target.","backend_support":"FEM","problem_ir":"mesh_workflow.per_geometry.<object>.maximum_element_size"},
+      {"python":"PerObjectMeshRecipe.minimum_element_size","type":"float | None","default":"None","si_unit":"\\mathrm{m}","validation":"Positive and no larger than the effective maximum when authored by the public facade.","meaning":"Canonical object minimum element-size target.","backend_support":"FEM","problem_ir":"mesh_workflow.per_geometry.<object>.minimum_element_size"},
+      {"python":"PerObjectMeshRecipe.hmax","type":"float | None","default":"None","si_unit":"\\mathrm{m}","validation":"Compatibility alias used when maximum_element_size is absent.","meaning":"Object maximum-size alias.","backend_support":"FEM","problem_ir":"mesh_workflow.per_geometry.<object>.hmax"},
+      {"python":"PerObjectMeshRecipe.hmin","type":"float | None","default":"None","si_unit":"\\mathrm{m}","validation":"Compatibility alias used when minimum_element_size is absent.","meaning":"Object minimum-size alias.","backend_support":"FEM","problem_ir":"mesh_workflow.per_geometry.<object>.hmin"},
+      {"python":"PerObjectMeshRecipe.order","type":"int | None","default":"None","si_unit":"1","validation":"Prismatic topology permits only order one.","meaning":"Object finite-element order.","backend_support":"FEM","problem_ir":"mesh_workflow.per_geometry.<object>.order"},
+      {"python":"PerObjectMeshRecipe.source","type":"str | None","default":"None","si_unit":"1","validation":"Imported source is checked during build/extraction.","meaning":"Prebuilt object mesh source.","backend_support":"FEM import path","problem_ir":"mesh_workflow.per_geometry.<object>.source"},
+      {"python":"PerObjectMeshRecipe.calibrate_for","type":"str | None","default":"None","si_unit":"1","validation":"Supported calibration vocabulary.","meaning":"Physics/workflow calibration family.","backend_support":"FEM","problem_ir":"mesh_workflow.per_geometry.<object>.calibrate_for"},
+      {"python":"PerObjectMeshRecipe.size_preset","type":"str | None","default":"None","si_unit":"1","validation":"Supported size-preset vocabulary.","meaning":"Named mesh-size preset.","backend_support":"FEM","problem_ir":"mesh_workflow.per_geometry.<object>.size_preset"},
+      {"python":"PerObjectMeshRecipe.algorithm_2d","type":"int | None","default":"None","si_unit":"1","validation":"Finite integer algorithm identifier.","meaning":"Gmsh surface meshing algorithm.","backend_support":"FEM/Gmsh","problem_ir":"mesh_workflow.per_geometry.<object>.algorithm_2d"},
+      {"python":"PerObjectMeshRecipe.algorithm_3d","type":"int | None","default":"None","si_unit":"1","validation":"Finite integer algorithm identifier.","meaning":"Gmsh volume meshing algorithm.","backend_support":"FEM/Gmsh","problem_ir":"mesh_workflow.per_geometry.<object>.algorithm_3d"},
+      {"python":"PerObjectMeshRecipe.size_factor","type":"float | None","default":"None","si_unit":"1","validation":"Positive when authored by structured controls.","meaning":"Preset-derived size multiplier.","backend_support":"FEM","problem_ir":"mesh_workflow.per_geometry.<object>.size_factor"},
+      {"python":"PerObjectMeshRecipe.size_from_curvature","type":"int | None","default":"None","si_unit":"1","validation":"Nonnegative integer in structured UI.","meaning":"Gmsh curvature sizing control.","backend_support":"FEM/Gmsh","problem_ir":"mesh_workflow.per_geometry.<object>.size_from_curvature"},
+      {"python":"PerObjectMeshRecipe.curvature_factor","type":"float | None","default":"None","si_unit":"1","validation":"Positive when authored.","meaning":"Curvature-derived size factor.","backend_support":"FEM","problem_ir":"mesh_workflow.per_geometry.<object>.curvature_factor"},
+      {"python":"PerObjectMeshRecipe.growth_rate","type":"float | None","default":"None","si_unit":"1","validation":"Positive; stage-first facade limits the practical range.","meaning":"Maximum requested local size growth.","backend_support":"FEM","problem_ir":"mesh_workflow.per_geometry.<object>.growth_rate"},
+      {"python":"PerObjectMeshRecipe.narrow_regions","type":"int | None","default":"None","si_unit":"1","validation":"Integer at least zero.","meaning":"Gmsh narrow-region sizing switch/count.","backend_support":"FEM/Gmsh","problem_ir":"mesh_workflow.per_geometry.<object>.narrow_regions"},
+      {"python":"PerObjectMeshRecipe.narrow_region_resolution","type":"float | None","default":"None","si_unit":"1","validation":"Positive when authored.","meaning":"Narrow-region resolution target.","backend_support":"FEM","problem_ir":"mesh_workflow.per_geometry.<object>.narrow_region_resolution"},
+      {"python":"PerObjectMeshRecipe.smoothing_steps","type":"int | None","default":"None","si_unit":"1","validation":"Positive integer when authored.","meaning":"Gmsh smoothing passes.","backend_support":"FEM/Gmsh","problem_ir":"mesh_workflow.per_geometry.<object>.smoothing_steps"},
+      {"python":"PerObjectMeshRecipe.optimize","type":"str | None","default":"None","si_unit":"1","validation":"Optimizer must be supported by the active Gmsh path.","meaning":"Post-generation optimizer.","backend_support":"FEM/Gmsh","problem_ir":"mesh_workflow.per_geometry.<object>.optimize"},
+      {"python":"PerObjectMeshRecipe.optimize_iters","type":"int | None","default":"None","si_unit":"1","validation":"Positive integer when authored.","meaning":"Optimizer iteration count.","backend_support":"FEM/Gmsh","problem_ir":"mesh_workflow.per_geometry.<object>.optimize_iters"},
+      {"python":"PerObjectMeshRecipe.boundary_layer_count","type":"int | None","default":"None","si_unit":"1","validation":"Positive integer when authored.","meaning":"Boundary-layer element count.","backend_support":"FEM/Gmsh selector-gated","problem_ir":"mesh_workflow.per_geometry.<object>.boundary_layer_count"},
+      {"python":"PerObjectMeshRecipe.boundary_layer_thickness","type":"float | None","default":"None","si_unit":"\\mathrm{m}","validation":"Positive when authored.","meaning":"Total boundary-layer thickness.","backend_support":"FEM/Gmsh selector-gated","problem_ir":"mesh_workflow.per_geometry.<object>.boundary_layer_thickness"},
+      {"python":"PerObjectMeshRecipe.boundary_layer_stretching","type":"float | None","default":"None","si_unit":"1","validation":"Positive growth ratio.","meaning":"Boundary-layer stretching ratio.","backend_support":"FEM/Gmsh selector-gated","problem_ir":"mesh_workflow.per_geometry.<object>.boundary_layer_stretching"},
+      {"python":"PerObjectMeshRecipe.mesh_strategy","type":"str | None","default":"None","si_unit":"1","validation":"auto, free_tetrahedral, thin_film_tetrahedral, swept_prism, or swept_hex.","meaning":"Requested object topology strategy.","backend_support":"FEM capability-gated","problem_ir":"mesh_workflow.per_geometry.<object>.mesh_strategy"},
+      {"python":"PerObjectMeshRecipe.through_thickness_elements","type":"int | None","default":"None","si_unit":"1","validation":"Integer at least one.","meaning":"Element layers through thickness.","backend_support":"FEM swept/thin-film","problem_ir":"mesh_workflow.per_geometry.<object>.through_thickness_elements"},
+      {"python":"PerObjectMeshRecipe.through_thickness_distribution","type":"str | None","default":"None","si_unit":"1","validation":"fixed, linear, or exponential.","meaning":"Layer-thickness distribution.","backend_support":"FEM swept/thin-film","problem_ir":"mesh_workflow.per_geometry.<object>.through_thickness_distribution"},
+      {"python":"PerObjectMeshRecipe.through_thickness_element_ratio","type":"float | None","default":"None","si_unit":"1","validation":"Positive ratio when authored.","meaning":"Relative layer-size ratio.","backend_support":"FEM swept/thin-film","problem_ir":"mesh_workflow.per_geometry.<object>.through_thickness_element_ratio"},
+      {"python":"PerObjectMeshRecipe.through_thickness_symmetric","type":"bool","default":"False","si_unit":"1","validation":"Boolean.","meaning":"Symmetric through-thickness grading.","backend_support":"FEM swept/thin-film","problem_ir":"mesh_workflow.per_geometry.<object>.through_thickness_symmetric"},
+      {"python":"PerObjectMeshRecipe.sweep_face_meshing","type":"str | None","default":"None","si_unit":"1","validation":"triangular or quadrilateral.","meaning":"Source-face element family.","backend_support":"FEM swept","problem_ir":"mesh_workflow.per_geometry.<object>.sweep_face_meshing"},
+      {"python":"PerObjectMeshRecipe.topology","type":"str | None","default":"None","si_unit":"1","validation":"tetrahedral or prismatic; tetrahedral contradicts swept intent.","meaning":"Requested high-level topology.","backend_support":"FEM capability-gated","problem_ir":"mesh_workflow.per_geometry.<object>.topology"},
+      {"python":"PerObjectMeshRecipe.sweep_direction","type":"str | None","default":"None","si_unit":"1","validation":"auto, x, y, or z.","meaning":"Sweep direction.","backend_support":"FEM swept","problem_ir":"mesh_workflow.per_geometry.<object>.sweep_direction"},
+      {"python":"PerObjectMeshRecipe.element_family","type":"str | None","default":"None","si_unit":"1","validation":"prism or hex with matching strategy/source faces.","meaning":"Swept volume element family.","backend_support":"FEM capability-gated","problem_ir":"mesh_workflow.per_geometry.<object>.element_family"},
+      {"python":"PerObjectMeshRecipe.transition_policy","type":"str | None","default":"None","si_unit":"1","validation":"pyramid_to_tetrahedra or reject.","meaning":"Transition into surrounding topology.","backend_support":"FEM capability-gated","problem_ir":"mesh_workflow.per_geometry.<object>.transition_policy"},
+      {"python":"PerObjectMeshRecipe.exact_layer_count","type":"bool | None","default":"None","si_unit":"1","validation":"Boolean; strict prism may not set false.","meaning":"Require exact requested layer count.","backend_support":"FEM capability-gated","problem_ir":"mesh_workflow.per_geometry.<object>.exact_layer_count"},
+      {"python":"PerObjectMeshRecipe.compute_quality","type":"bool","default":"False","si_unit":"1","validation":"Boolean.","meaning":"Request aggregate quality statistics.","backend_support":"FEM","problem_ir":"mesh_workflow.per_geometry.<object>.compute_quality"},
+      {"python":"PerObjectMeshRecipe.per_element_quality","type":"bool","default":"False","si_unit":"1","validation":"Boolean.","meaning":"Request per-element quality arrays.","backend_support":"FEM","problem_ir":"mesh_workflow.per_geometry.<object>.per_element_quality"},
+      {"python":"PerObjectMeshRecipe.size_fields","type":"list[dict]","default":"[]","si_unit":"1","validation":"Each field is validated/resolved by its field kind and selectors.","meaning":"Additional ordered size fields.","backend_support":"FEM/Gmsh","problem_ir":"mesh_workflow.per_geometry.<object>.size_fields"},
+      {"python":"PerObjectMeshRecipe.operations","type":"list[MeshOperation]","default":"[]","si_unit":"1","validation":"Ordered typed operations.","meaning":"COMSOL-like mesh sequence.","backend_support":"FEM/Gmsh operation-dependent","problem_ir":"mesh_workflow.per_geometry.<object>.operations"},
+      {"python":"MeshOperation.kind","type":"str","default":"required","si_unit":"1","validation":"free_tetrahedral, boundary_layers, refine, adapt, swept, or size_field.","meaning":"Operation family.","backend_support":"FEM operation-dependent","problem_ir":"mesh_workflow.per_geometry.<object>.operations[].kind"},
+      {"python":"MeshOperation.params","type":"dict[str, Any]","default":"{}","si_unit":"1","validation":"Operation-specific backend validation.","meaning":"Operation parameters.","backend_support":"FEM operation-dependent","problem_ir":"mesh_workflow.per_geometry.<object>.operations[].params"},
+      {"python":"MeshOperation.enabled","type":"bool","default":"True","si_unit":"1","validation":"Boolean.","meaning":"Whether the authored operation executes.","backend_support":"FEM","problem_ir":"mesh_workflow.per_geometry.<object>.operations[].enabled"}
+    ]
+  }
+}
