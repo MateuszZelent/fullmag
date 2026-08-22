@@ -4,24 +4,29 @@
 
 <div align="center">
   <a href="https://fullmag.mzelent.pl/">
-    <img src="docs/fullmag-logo-traced-optimized.svg" alt="FullMag logo" width="150" />
+    <img src="docs/fullmag-logo-traced-optimized.svg" alt="FullMag logo" width="160" />
   </a>
 
-  <h3 align="center">Finite-difference and finite-element micromagnetics for reproducible scientific computing</h3>
+  <h2 align="center">One micromagnetic workbench for FDM, FEM, CPU/GPU simulation, and interactive analysis</h2>
 
   <p align="center">
-    FullMag integrates a stage-oriented Python interface, a Rust runtime and reference solvers,
-    native CPU/CUDA backends, FEM infrastructure, and a browser-based Control Room.
+    <strong>Geometry and meshing · dynamics · advanced relaxation · hysteresis · eigenmodes · frequency response · 2D/3D visualization</strong>
+  </p>
+
+  <p align="center">
+    Define one physical model, request the numerical engine that fits the problem, and keep
+    authoring, execution, visualization, diagnostics, and provenance in one coherent workflow.
+  </p>
+
+  <p align="center">
+    <a href="https://fullmag.mzelent.pl/"><strong>Explore the public documentation »</strong></a>
     <br />
     <br />
-    <a href="https://fullmag.mzelent.pl/"><strong>Public documentation »</strong></a>
-    <br />
-    <br />
-    <a href="https://fullmag.mzelent.pl/getting-started/index.html">Getting started</a>
+    <a href="https://fullmag.mzelent.pl/getting-started/index.html">Get started</a>
     ·
-    <a href="https://fullmag.mzelent.pl/physics/index.html">Physics reference</a>
+    <a href="https://fullmag.mzelent.pl/frontend/control-room/index.html">Control Room</a>
     ·
-    <a href="https://fullmag.mzelent.pl/numerical-methods/index.html">Numerical methods</a>
+    <a href="https://fullmag.mzelent.pl/backend/index.html">Backends and solvers</a>
     ·
     <a href="https://fullmag.mzelent.pl/python-api/index.html">Python API</a>
     ·
@@ -32,6 +37,8 @@
 <div align="center">
 
 ![Project status](https://img.shields.io/badge/status-active%20research%20software-2563EB?style=flat-square)
+![FDM](https://img.shields.io/badge/FDM-structured%20grids-0F766E?style=flat-square)
+![FEM](https://img.shields.io/badge/FEM-unstructured%20meshes-7C3AED?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-authoring%20API-3776AB?style=flat-square&logo=python&logoColor=white)
 ![Rust](https://img.shields.io/badge/Rust-runtime%20%26%20solvers-000000?style=flat-square&logo=rust&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-Control%20Room-3178C6?style=flat-square&logo=typescript&logoColor=white)
@@ -44,17 +51,100 @@
 
 </div>
 
+## Why FullMag?
+
+**FullMag is not only an LLG time-stepper.** Micromagnetic projects often split geometry,
+meshing, solver execution, visualization, and analysis across separate applications. FullMag brings
+these layers under one canonical, stage-oriented study and connects them to several genuinely
+different numerical engines.
+
+<div align="center">
+  <a href="https://fullmag.mzelent.pl/frontend/control-room/index.html">
+    <img src="public_docs/site/_static/images/ui/control-room-workspace-overview.png" alt="FullMag Control Room workspace with ribbon, Explorer, Inspector, viewport, and runtime status" width="1200" />
+  </a>
+  <p><sub>FullMag Control Room combines model authoring, resource navigation, mesh and field inspection, interactive visualization, runtime status, and analysis in one workspace.</sub></p>
+</div>
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>One physical model, multiple numerical engines</strong><br /><br />
+      A stage-oriented study can target cell-centred <strong>FDM</strong> or unstructured
+      <strong>FEM</strong> and request <strong>CPU</strong> or <strong>GPU</strong> execution.
+      FDM and FEM remain distinct numerical realizations, while materials, interactions, stages,
+      outputs, and provenance live under one contract. The planner reports the resolved lane and
+      rejects unsupported combinations instead of silently changing the request.
+    </td>
+    <td width="50%" valign="top">
+      <strong>A full scientific Control Room, not merely a result viewer</strong><br /><br />
+      Use ribbon commands, a resource Explorer, a transactional Inspector with Apply/Revert,
+      interactive 2D/3D WebGL viewports, live time-series and energy charts, mesh-build monitors,
+      device and stage status, field/result inspection, and stage-first Python export. The UI and
+      Python API operate on the same canonical model.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Relaxation beyond one high-damping integrator</strong><br /><br />
+      Choose <code>llg_overdamped</code>, <code>projected_gradient_bb</code>, or
+      <code>nonlinear_cg</code>. The LLG route supports fixed and adaptive Runge–Kutta families;
+      the direct minimizers operate on the constrained energy landscape with tangent-space updates
+      and Armijo acceptance. Implementations are separated across FDM/FEM and CPU/GPU lanes so the
+      selected algorithm is not reduced to a cosmetic API alias.
+    </td>
+    <td width="50%" valign="top">
+      <strong>More than transient magnetization dynamics</strong><br /><br />
+      Compose ordered stages for time evolution, relaxation, hysteresis, eigenmodes, and
+      frequency-domain response. A single study can carry a qualified equilibrium into modal or
+      driven analysis, with backend-specific capability gates and shared geometry, materials,
+      outputs, artifacts, and provenance.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Meshing and physics for both structured and conforming models</strong><br /><br />
+      FDM supports native Cartesian grids, masks and boundary correction, multi-magnet layouts,
+      and periodic-grid contracts. FEM supports free and thin-film tetrahedra, swept prism/hex
+      meshes, boundary layers, imported and mixed elements, shared domains, and graded Airboxes.
+      The physics library covers exchange, demagnetization, Zeeman fields, anisotropy, interfacial
+      and bulk DMI, thermal noise, Oersted fields, magnetoelasticity, STT/SOT, drift–diffusion
+      transport, and inter-region couplings.
+    </td>
+    <td width="50%" valign="top">
+      <strong>Reproducibility is part of execution</strong><br /><br />
+      Requested intent and resolved execution are retained separately. Results can carry backend,
+      device, precision, mesh/grid identity, solver policy, stopping reason, diagnostics, fields,
+      observables, and artifact provenance. Strict mode forbids hidden fallback, while public
+      support matrices distinguish source presence, executability, runtime verification, physical
+      validation, and production qualification.
+    </td>
+  </tr>
+</table>
+
+The detailed contracts and current support boundaries are documented separately for the
+**[Frontend](https://fullmag.mzelent.pl/frontend/index.html)**,
+**[Backend](https://fullmag.mzelent.pl/backend/index.html)**, and
+**[Python API](https://fullmag.mzelent.pl/python-api/index.html)**.
+
 ## Abstract
 
-FullMag is research software for defining, executing, analysing, and reproducing micromagnetic simulations with finite-difference (FDM) and finite-element (FEM) discretizations. A simulation is authored through the public Python interface, lowered to the canonical `ProblemIR`, checked against backend capabilities, and executed as an ordered sequence of stages. The runtime records both the requested numerical configuration and the configuration that was actually resolved, together with solver diagnostics and scientific artifacts.
+FullMag is a unified research environment for authoring, meshing, executing, visualizing,
+analysing, and reproducing micromagnetic studies with finite-difference (FDM) and finite-element
+(FEM) discretizations. A simulation is authored through the public Python interface or the Control
+Room, lowered to the canonical `ProblemIR`, checked against backend capabilities, and executed as
+an ordered sequence of stages. The runtime records both the requested numerical configuration and
+the configuration that was actually resolved, together with solver diagnostics and scientific
+artifacts.
 
 The repository combines:
 
-- a stage-oriented Python authoring API;
+- a stage-oriented Python authoring API for dynamics, relaxation, hysteresis, eigenmodes, and
+  frequency response;
 - a backend-neutral intermediate representation and capability planner;
 - Rust control-plane, runtime, API, and reference-solver components;
 - native FDM and FEM implementations for CPU and GPU execution;
-- a browser-based Control Room for authoring, monitoring, inspection, and result analysis;
+- a browser-based Control Room for authoring, meshing, monitoring, visualization, and result
+  analysis;
 - validation scenarios, standard problems, and provenance-oriented artifact handling.
 
 The canonical user and scientific documentation is published at **[fullmag.mzelent.pl](https://fullmag.mzelent.pl/)**.
@@ -136,10 +226,11 @@ FullMag contains executable FDM and FEM paths, but support is not a single proje
 | Authoring | Python `fm.study(...)` workflow with ordered `study.stages.add_*` stages and a canonical `ProblemIR` representation |
 | FDM | Structured-grid CPU and CUDA execution paths; interaction and integrator coverage is lane-specific |
 | FEM | Unstructured-mesh CPU and GPU paths built around MFEM, hypre, libCEED, and CUDA; qualification is bounded by mesh, operator, device, precision, and workload |
-| Dynamics and relaxation | LLG time integration and several relaxation algorithms are available on defined lanes; exact integrator and stopping-criterion support is backend-specific |
+| Time integration | Heun, RK4, RK23, RK45, and lane-specific ABM3/coupled integration paths |
+| Relaxation | `llg_overdamped`, `projected_gradient_bb`, and `nonlinear_cg`, with lane-specific FDM/FEM CPU/GPU realizations |
+| Study types | Time evolution, relaxation, hysteresis, eigenmodes, and frequency response; support is backend- and device-specific |
 | Core interactions | Exchange, demagnetization, and Zeeman terms have public executable paths in FDM and FEM |
 | Extended physics | Anisotropy, DMI, thermal, STT/SOT, Oersted, magnetoelastic, and transport features have explicit statuses ranging from semantic-only to bounded executable or validated scopes |
-| Spectral and driven studies | Eigenmode and frequency-response workflows exist, with reference, development, or bounded production status depending on the lane |
 | Device parallelism | Current public execution is single-device; `gpu_count > 1` is rejected |
 
 The normative status vocabulary and feature-level evidence are maintained in [`docs/specs/capability-matrix-v0.md`](docs/specs/capability-matrix-v0.md), its machine-readable companion, and the corresponding public reference pages. Source visibility, successful compilation, executable availability, and scientific validation are treated as distinct states.
@@ -257,14 +348,16 @@ The exact artifact set is controlled by the study and stage output policy. Scien
 
 ## Documentation
 
-The public documentation is the authoritative user-facing reference:
+The public documentation is organized by responsibility:
 
 - **[Getting started](https://fullmag.mzelent.pl/getting-started/index.html)** — installation, first FDM/FEM simulations, solver selection, and Control Room use.
-- **[Python API](https://fullmag.mzelent.pl/python-api/index.html)** — study construction, objects, parameters, interactions, stages, and lowering.
-- **[Physics](https://fullmag.mzelent.pl/physics/index.html)** — governing equations, conventions, interactions, textures, and implementation mappings.
-- **[Numerical methods](https://fullmag.mzelent.pl/numerical-methods/index.html)** — FDM/FEM discretization, solvers, time integration, and computational methods.
+- **[Frontend](https://fullmag.mzelent.pl/frontend/index.html)** — Control Room, meshing UI, visualization, state, commands, and Python round-trip.
+- **[Backend](https://fullmag.mzelent.pl/backend/index.html)** — physical equations, runtime boundaries, meshing realizations, numerical solvers, and execution evidence.
+- **[Python API](https://fullmag.mzelent.pl/python-api/index.html)** — study construction, geometry, materials, interactions, stages, and lowering.
+- **[Physics](https://fullmag.mzelent.pl/physics/index.html)** — governing equations, conventions, interactions, assumptions, and implementation mappings.
+- **[Numerical methods](https://fullmag.mzelent.pl/numerical-methods/index.html)** — time integration, relaxation, demagnetization solvers, eigensolvers, frequency response, and state transfer.
 - **[Validation](https://fullmag.mzelent.pl/validation/index.html)** — analytical tests, standard problems, parity studies, tolerances, and qualification status.
-- **[Architecture](https://fullmag.mzelent.pl/architecture/index.html)** — data flow, runtime boundaries, backend contracts, and provenance.
+- **[Architecture](https://fullmag.mzelent.pl/architecture/index.html)** — data flow, runtime boundaries, backend contracts, artifacts, and provenance.
 
 Internal plans, audits, and engineering notes under `docs/` are not automatically part of the public contract.
 
