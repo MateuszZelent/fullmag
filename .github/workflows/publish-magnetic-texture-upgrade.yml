@@ -1,0 +1,117 @@
+name: Publish FEM and FDM magnetic texture upgrade
+
+on:
+  push:
+    branches:
+      - codex/magnetic-textures-fem-fdm-hopfion-20260822
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-magnetic-textures-fem-fdm-hopfion
+  cancel-in-progress: false
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out publication branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Preserve patch program and reset to latest master
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/fullmag-maintenance/apply_magnetic_texture_upgrade.py.b64.* | base64 --decode > /tmp/apply_magnetic_texture_upgrade.py
+          git fetch origin master
+          git checkout -B magnetic-texture-publish origin/master
+          test "$(git rev-parse HEAD)" = "0343d94d37b7c69e0eef36eee2ca42a8ca3c3135"
+
+      - name: Apply implementation and documentation upgrade
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 /tmp/apply_magnetic_texture_upgrade.py
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check
+
+      - name: Generate and verify the shared Rust-Python parity fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          FULLMAG_GENERATE_V2_PARITY=1 cargo test -p fullmag-plan --test magnetization_textures_v2_parity
+          cargo test -p fullmag-plan --test magnetization_textures_v2_parity
+
+      - name: Run Rust planner and topology regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p fullmag-plan --lib
+          cargo test -p fullmag-plan --test extended_topological_textures
+          cargo test -p fullmag-plan --test magnetization_textures_v2_contract
+          cargo test -p fullmag-plan --test bimeron_textures
+
+      - name: Run Python API and parity tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check pytest
+          PYTHONPATH=packages/fullmag-py/src python3 -m pytest -q \
+            packages/fullmag-py/tests/test_extended_topological_textures.py \
+            packages/fullmag-py/tests/test_preset_texture_v2_parity.py \
+            packages/fullmag-py/tests/test_public_python_api_documentation.py
+
+      - name: Validate scientific public documentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py \
+            public_docs/site/python-api/magnets-and-textures/preset-textures.source-map.json \
+            --repo-root .
+          python3 scripts/check_public_doc_examples.py --root public_docs/site
+          git diff --check
+
+      - name: Commit and publish one fast-forward change to master
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            crates/fullmag-plan/src/magnetization_textures_v2.rs \
+            crates/fullmag-plan/src/mesh.rs \
+            crates/fullmag-plan/src/fem.rs \
+            crates/fullmag-plan/src/fdm.rs \
+            crates/fullmag-plan/tests/extended_topological_textures.rs \
+            crates/fullmag-plan/tests/magnetization_textures_v2_parity.rs \
+            crates/fullmag-plan/tests/fixtures/magnetization_textures_v2_parity.json \
+            packages/fullmag-py/src/fullmag/init/textures.py \
+            packages/fullmag-py/src/fullmag/init/preset_eval_v2.py \
+            packages/fullmag-py/tests/test_extended_topological_textures.py \
+            packages/fullmag-py/tests/test_preset_texture_v2_parity.py \
+            packages/fullmag-py/tests/test_public_python_api_documentation.py \
+            public_docs/site/python-api/magnets-and-textures/index.md \
+            public_docs/site/python-api/magnets-and-textures/preset-textures.md \
+            public_docs/site/python-api/magnets-and-textures/preset-textures.source-map.json
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          git commit \
+            -m "feat: fix mesh texture sampling and add topological presets" \
+            -m "Correct Neel chirality, FEM object-space sampling, FDM inactive sampled fields, mapping validation, and clamp execution. Add antiskyrmion, meron, antimeron, skyrmionium, and H=+/-1 hopfion presets with shared Rust/Python parity, mesh regressions, and public documentation."
+
+          parent="$(git rev-parse HEAD^)"
+          git fetch origin master
+          test "$parent" = "$(git rev-parse origin/master)"
+          git push origin HEAD:master
+          git rev-parse HEAD | tee /tmp/published-commit-sha.txt
+
+      - name: Upload publication receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: magnetic-texture-upgrade-publication
+          path: /tmp/published-commit-sha.txt
