@@ -29,6 +29,8 @@
     ·
     <a href="#technology-stack">Technology stack</a>
     ·
+    <a href="#version-baseline">Version baseline</a>
+    ·
     <a href="https://fullmag.mzelent.pl/frontend/control-room/index.html">Control Room</a>
     ·
     <a href="https://fullmag.mzelent.pl/python-api/index.html">Python API</a>
@@ -42,13 +44,14 @@
 ![Project status](https://img.shields.io/badge/status-active%20research%20software-2563EB?style=flat-square)
 ![FDM](https://img.shields.io/badge/FDM-Newell%20%2B%20FFT-0F766E?style=flat-square)
 ![FEM](https://img.shields.io/badge/FEM-MFEM%20%2B%20hypre-7C3AED?style=flat-square)
-![Python](https://img.shields.io/badge/Python-authoring%20API-3776AB?style=flat-square&logo=python&logoColor=white)
-![Rust](https://img.shields.io/badge/Rust-runtime%20%26%20CPU%20reference-000000?style=flat-square&logo=rust&logoColor=white)
-![CUDA](https://img.shields.io/badge/CUDA-native%20GPU%20backends-76B900?style=flat-square&logo=nvidia&logoColor=white)
-![Gmsh](https://img.shields.io/badge/Gmsh-conforming%20FEM%20meshes-5B6EC4?style=flat-square)
-![PETSc/SLEPc](https://img.shields.io/badge/PETSc%20%2F%20SLEPc-spectral%20solvers-6B7280?style=flat-square)
-![Next.js](https://img.shields.io/badge/Next.js%20%2B%20React-Control%20Room-000000?style=flat-square&logo=nextdotjs&logoColor=white)
-![Three.js](https://img.shields.io/badge/Three.js-interactive%202D%2F3D-000000?style=flat-square&logo=threedotjs&logoColor=white)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](packages/fullmag-py/pyproject.toml)
+[![Rust](https://img.shields.io/badge/Rust-edition%202021-000000?style=flat-square&logo=rust&logoColor=white)](Cargo.toml)
+[![CUDA](https://img.shields.io/badge/CUDA-12.4.1-76B900?style=flat-square&logo=nvidia&logoColor=white)](docker/fem-gpu/Dockerfile)
+[![MFEM](https://img.shields.io/badge/MFEM-4.9-7C3AED?style=flat-square)](docker/fem-gpu/Dockerfile)
+[![hypre](https://img.shields.io/badge/hypre-3.1.0-2563EB?style=flat-square)](docker/fem-gpu/Dockerfile)
+[![Next.js](https://img.shields.io/badge/Next.js-16.2.11-000000?style=flat-square&logo=nextdotjs&logoColor=white)](apps/control-room/package.json)
+[![React](https://img.shields.io/badge/React-19.2.4-61DAFB?style=flat-square&logo=react&logoColor=000000)](apps/control-room/package.json)
+[![Three.js](https://img.shields.io/badge/Three.js-0.183.x-000000?style=flat-square&logo=threedotjs&logoColor=white)](apps/control-room/package.json)
 ![Horizon Europe](https://img.shields.io/badge/Horizon%20Europe-MSCA%20PF-003399?style=flat-square)
 
 </div>
@@ -135,16 +138,83 @@ The full method definitions and support boundaries are maintained in the
 
 | Layer | Technologies used in the repository | Responsibility |
 |---|---|---|
-| **Python authoring and scientific data** | Python 3.10+, NumPy, Zarr, HDF5, PyO3 | Stage-oriented DSL, model construction, artifacts, arrays, and Python–Rust integration |
-| **Geometry and meshing** | Gmsh, Manifold3D, meshio, SciPy, Trimesh | Constructive geometry, surface processing, conforming FEM generation, import/export, and mesh preparation |
-| **Rust control plane** | Rust 2021, Axum, Tokio, Serde, Clap, tracing | `ProblemIR`, validation, capability planning, sessions, CLI/API, runtime orchestration, and provenance |
-| **FDM CPU** | RustFFT, optional Rayon, Rust reference operators | Cartesian field evaluation, Newell spectra, FFT convolution, reference dynamics, relaxation, and numerical oracles |
-| **Native FDM/GPU** | C++17, CUDA, cuFFT, native C ABI | FP32/FP64 kernels, LLG integrators, demagnetization, multilayer execution, transport, reductions, streams, and device telemetry |
-| **FEM CPU/GPU** | C++17, MFEM, hypre, libCEED, CUDA | Conforming finite-element operators, Poisson Airbox, FEM/BEM, time integration, direct minimization, and device execution |
+| **Python authoring and scientific data** | Python 3.10+, NumPy 1.24–2.x, Zarr 2.18–3.x, h5py 3.x, PyO3 0.29 | Stage-oriented DSL, model construction, artifacts, arrays, and Python–Rust integration |
+| **Geometry and meshing** | Gmsh 4.12–4.x, Manifold3D 3.x, meshio 5.3–5.x, SciPy 1.x, Trimesh 4.x | Constructive geometry, surface processing, conforming FEM generation, import/export, and mesh preparation |
+| **Rust control plane** | Rust 2021, Axum 0.7, Tokio 1.45, Serde 1.x, Clap 4.5, tracing 0.1 | `ProblemIR`, validation, capability planning, sessions, CLI/API, runtime orchestration, and provenance |
+| **FDM CPU** | RustFFT 6.4, optional Rayon 1.10, Rust reference operators | Cartesian field evaluation, Newell spectra, FFT convolution, reference dynamics, relaxation, and numerical oracles |
+| **Native FDM/GPU** | C++17, CUDA 12.4.1, cuFFT, native C ABI | FP32/FP64 kernels, LLG integrators, demagnetization, multilayer execution, transport, reductions, streams, and device telemetry |
+| **FEM CPU/GPU** | C++17, MFEM 4.9, hypre 3.1.0, libCEED 0.12.0, CUDA 12.4.1 | Conforming finite-element operators, Poisson Airbox, FEM/BEM, time integration, direct minimization, and device execution |
 | **Spectral and linear algebra** | PETSc, SLEPc, hypre, dense/sparse direct and Krylov implementations | Eigenmodes, frequency response, field-split, Schur, modal reduction, and solver diagnostics |
-| **Control Room** | Next.js 16, React 19, TypeScript, Three.js, React Three Fiber, Drei, ECharts, Recharts, Radix UI, Tailwind CSS | Interactive authoring, Explorer/Inspector, 2D/3D visualization, mesh inspection, live charts, and analysis |
-| **Interfaces and desktop** | OpenAPI v2, `openapi-fetch`, WebSocket, SSE, binary typed-array codecs, Tauri | Typed frontend/backend contracts, live runtime communication, large field transfer, and desktop packaging |
-| **Verification and documentation** | Vitest, Playwright, Storybook, CTest, Rust tests, Sphinx, MyST | API/ABI contracts, numerical regression, browser/WebGL checks, component testing, and scientific documentation |
+| **Control Room** | Next.js 16.2.11, React 19.2.4, TypeScript 5.8.3, Three.js 0.183.x, React Three Fiber 9.5+, ECharts 6.x | Interactive authoring, Explorer/Inspector, 2D/3D visualization, mesh inspection, live charts, and analysis |
+| **Interfaces and desktop** | OpenAPI v2, `openapi-fetch` 0.17+, WebSocket, SSE, binary typed-array codecs, Tauri 2.11 | Typed frontend/backend contracts, live runtime communication, large field transfer, and desktop packaging |
+| **Verification and documentation** | Vitest 4.1+, Playwright 1.60+, Storybook 10.5+, CTest, Rust tests, Sphinx, MyST | API/ABI contracts, numerical regression, browser/WebGL checks, component testing, and scientific documentation |
+
+<a id="version-baseline"></a>
+
+## Versioned dependency baseline
+
+The badges below report the **repository-declared build baseline at this revision**, not the newest
+version available upstream. Each badge links to the manifest, lockfile, or managed image that owns
+the value.
+
+<div align="center">
+  <p>
+    <img src="https://img.shields.io/badge/exact%20pin-managed%20baseline-2EA44F?style=flat-square" alt="Exact pin" />
+    <img src="https://img.shields.io/badge/bounded%20range-public%20compatibility-2563EB?style=flat-square" alt="Bounded compatibility range" />
+    <img src="https://img.shields.io/badge/lockfile-exact%20resolution-F59E0B?style=flat-square" alt="Lockfile resolution" />
+    <img src="https://img.shields.io/badge/rolling-explicitly%20marked-D97706?style=flat-square" alt="Rolling toolchain" />
+  </p>
+
+  <h3>Core toolchains</h3>
+  <p>
+    <a href="Cargo.toml"><img src="https://img.shields.io/badge/FullMag%20workspace-0.1.0-334155?style=for-the-badge" alt="FullMag workspace 0.1.0" /></a>
+    <a href="packages/fullmag-py/pyproject.toml"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&amp;logo=python&amp;logoColor=white" alt="Python 3.10 or newer" /></a>
+    <a href=".node-version"><img src="https://img.shields.io/badge/Node.js-24.18.0-339933?style=for-the-badge&amp;logo=nodedotjs&amp;logoColor=white" alt="Node.js 24.18.0" /></a>
+    <a href="package.json"><img src="https://img.shields.io/badge/pnpm-10.8.1-F69220?style=for-the-badge&amp;logo=pnpm&amp;logoColor=white" alt="pnpm 10.8.1" /></a>
+    <a href="Cargo.toml"><img src="https://img.shields.io/badge/Rust-edition%202021-000000?style=for-the-badge&amp;logo=rust&amp;logoColor=white" alt="Rust edition 2021" /></a>
+    <a href="native/CMakeLists.txt"><img src="https://img.shields.io/badge/C%2B%2B-17-00599C?style=for-the-badge&amp;logo=cplusplus&amp;logoColor=white" alt="C++17" /></a>
+    <a href="docker/fem-gpu/Dockerfile"><img src="https://img.shields.io/badge/CMake-3.30.5-064F8C?style=for-the-badge&amp;logo=cmake&amp;logoColor=white" alt="CMake 3.30.5" /></a>
+    <a href="docker/fem-gpu/Dockerfile"><img src="https://img.shields.io/badge/CUDA-12.4.1-76B900?style=for-the-badge&amp;logo=nvidia&amp;logoColor=white" alt="CUDA 12.4.1" /></a>
+  </p>
+
+  <h3>Numerical and meshing stack</h3>
+  <p>
+    <a href="packages/fullmag-py/pyproject.toml"><img src="https://img.shields.io/badge/NumPy-1.24%20to%202.x-013243?style=for-the-badge&amp;logo=numpy&amp;logoColor=white" alt="NumPy 1.24 to 2.x" /></a>
+    <a href="packages/fullmag-py/pyproject.toml"><img src="https://img.shields.io/badge/Gmsh-4.12%20to%204.x-5B6EC4?style=for-the-badge" alt="Gmsh 4.12 to 4.x" /></a>
+    <a href="crates/fullmag-engine/Cargo.toml"><img src="https://img.shields.io/badge/RustFFT-6.4-B7410E?style=for-the-badge" alt="RustFFT 6.4" /></a>
+    <a href="Cargo.toml"><img src="https://img.shields.io/badge/PyO3-0.29-FFD43B?style=for-the-badge&amp;logo=python&amp;logoColor=111827" alt="PyO3 0.29" /></a>
+    <a href="docker/fem-gpu/Dockerfile"><img src="https://img.shields.io/badge/MFEM-4.9-7C3AED?style=for-the-badge" alt="MFEM 4.9" /></a>
+    <a href="docker/fem-gpu/Dockerfile"><img src="https://img.shields.io/badge/hypre-3.1.0-2563EB?style=for-the-badge" alt="hypre 3.1.0" /></a>
+    <a href="docker/fem-gpu/Dockerfile"><img src="https://img.shields.io/badge/libCEED-0.12.0-0F766E?style=for-the-badge" alt="libCEED 0.12.0" /></a>
+    <a href="docker/fem-gpu/Dockerfile"><img src="https://img.shields.io/badge/Umpire-2024.07%20optional-92400E?style=for-the-badge" alt="Umpire 2024.07 optional" /></a>
+  </p>
+
+  <h3>Control Room and verification</h3>
+  <p>
+    <a href="apps/control-room/package.json"><img src="https://img.shields.io/badge/Next.js-16.2.11-000000?style=for-the-badge&amp;logo=nextdotjs&amp;logoColor=white" alt="Next.js 16.2.11" /></a>
+    <a href="apps/control-room/package.json"><img src="https://img.shields.io/badge/React-19.2.4-61DAFB?style=for-the-badge&amp;logo=react&amp;logoColor=000000" alt="React 19.2.4" /></a>
+    <a href="apps/control-room/package.json"><img src="https://img.shields.io/badge/TypeScript-5.8.3-3178C6?style=for-the-badge&amp;logo=typescript&amp;logoColor=white" alt="TypeScript 5.8.3" /></a>
+    <a href="apps/control-room/package.json"><img src="https://img.shields.io/badge/Three.js-0.183.x-000000?style=for-the-badge&amp;logo=threedotjs&amp;logoColor=white" alt="Three.js 0.183.x" /></a>
+    <a href="apps/control-room/package.json"><img src="https://img.shields.io/badge/React%20Three%20Fiber-9.5%2B-20232A?style=for-the-badge&amp;logo=react&amp;logoColor=61DAFB" alt="React Three Fiber 9.5 or newer compatible version" /></a>
+    <a href="apps/control-room/package.json"><img src="https://img.shields.io/badge/ECharts-6.x-AA344D?style=for-the-badge&amp;logo=apacheecharts&amp;logoColor=white" alt="ECharts 6.x" /></a>
+    <a href="apps/control-room/package.json"><img src="https://img.shields.io/badge/Playwright-1.60%2B-2EAD33?style=for-the-badge&amp;logo=playwright&amp;logoColor=white" alt="Playwright 1.60 or newer compatible version" /></a>
+    <a href="apps/control-room/package.json"><img src="https://img.shields.io/badge/Storybook-10.5%2B-FF4785?style=for-the-badge&amp;logo=storybook&amp;logoColor=white" alt="Storybook 10.5 or newer compatible version" /></a>
+    <a href="apps/control-room/package.json"><img src="https://img.shields.io/badge/Vitest-4.1%2B-6E9F18?style=for-the-badge&amp;logo=vitest&amp;logoColor=white" alt="Vitest 4.1 or newer compatible version" /></a>
+  </p>
+</div>
+
+| Scope | Version-control mechanism | Source of truth |
+|---|---|---|
+| **Public Python API** | Minimum Python version and bounded compatibility intervals prevent unreviewed major-version jumps | [`packages/fullmag-py/pyproject.toml`](packages/fullmag-py/pyproject.toml) |
+| **Rust workspace** | Workspace dependency constraints define accepted releases; the committed lockfile fixes the resolved crate graph | [`Cargo.toml`](Cargo.toml), [`Cargo.lock`](Cargo.lock) |
+| **Control Room** | Direct dependencies are declared per application; Node and pnpm are pinned; the committed lockfile fixes the resolved JavaScript graph | [`apps/control-room/package.json`](apps/control-room/package.json), [`.node-version`](.node-version), [`package.json`](package.json), [`pnpm-lock.yaml`](pnpm-lock.yaml) |
+| **Native FDM/CUDA** | The native build requires C++17 and uses a CUDA 12.4.1 managed image for the documented container baseline | [`native/CMakeLists.txt`](native/CMakeLists.txt), [`native/Containerfile`](native/Containerfile) |
+| **Managed FEM/GPU runtime** | CUDA, CMake, MFEM, hypre, libCEED, optional Umpire, GPU architectures, and relevant build flags are pinned in one image recipe | [`docker/fem-gpu/Dockerfile`](docker/fem-gpu/Dockerfile) |
+
+The managed FEM image currently installs the Rust **nightly** toolchain without a date pin. It is
+therefore a deliberately visible rolling component, not an exact reproducibility claim. Version
+updates should change the owning manifest or image, the corresponding lockfile where applicable,
+and this baseline in the same reviewed change.
 
 ## Integrated workflow rather than disconnected tools
 
