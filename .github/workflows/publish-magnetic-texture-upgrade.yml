@@ -22,64 +22,61 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Preserve patch program and reset to latest master
+      - name: Validate and publish guarded fast-forward commit
         shell: bash
         run: |
           set -euo pipefail
-          cat .github/fullmag-maintenance/apply_magnetic_texture_upgrade.py.b64.* | base64 --decode > /tmp/apply_magnetic_texture_upgrade.py
+          exec > >(tee /tmp/magnetic-texture-upgrade.log) 2>&1
+          stage() {
+            printf '%s\n' "$1" | tee /tmp/magnetic-texture-upgrade-stage.txt
+          }
+
+          stage reconstruct-payload
+          cat .github/fullmag-maintenance/apply_magnetic_texture_upgrade.py.b64.* \
+            | base64 --decode \
+            > /tmp/apply_magnetic_texture_upgrade.py
+          python3 -m py_compile /tmp/apply_magnetic_texture_upgrade.py
+          printf '%s  %s\n' \
+            '36b13162eda7d09e1734b16a3a73b069617fd668f48e4934528fa930bdf8fd93' \
+            '/tmp/apply_magnetic_texture_upgrade.py' \
+            | sha256sum --check --strict
+
+          stage reset-to-pinned-master
           git fetch origin master
           git checkout -B magnetic-texture-publish origin/master
           test "$(git rev-parse HEAD)" = "0343d94d37b7c69e0eef36eee2ca42a8ca3c3135"
 
-      - name: Apply implementation and documentation upgrade
-        shell: bash
-        run: |
-          set -euo pipefail
+          stage apply-upgrade
           python3 /tmp/apply_magnetic_texture_upgrade.py
           cargo fmt --all
           cargo fmt --all -- --check
           git diff --check
 
-      - name: Generate and verify the shared Rust-Python parity fixture
-        shell: bash
-        run: |
-          set -euo pipefail
+          stage generate-parity-fixture
           FULLMAG_GENERATE_V2_PARITY=1 cargo test -p fullmag-plan --test magnetization_textures_v2_parity
           cargo test -p fullmag-plan --test magnetization_textures_v2_parity
 
-      - name: Run Rust planner and topology regression tests
-        shell: bash
-        run: |
-          set -euo pipefail
+          stage rust-regressions
           cargo test -p fullmag-plan --lib
           cargo test -p fullmag-plan --test extended_topological_textures
           cargo test -p fullmag-plan --test magnetization_textures_v2_contract
           cargo test -p fullmag-plan --test bimeron_textures
 
-      - name: Run Python API and parity tests
-        shell: bash
-        run: |
-          set -euo pipefail
+          stage python-regressions
           python3 -m pip install --disable-pip-version-check pytest
           PYTHONPATH=packages/fullmag-py/src python3 -m pytest -q \
             packages/fullmag-py/tests/test_extended_topological_textures.py \
             packages/fullmag-py/tests/test_preset_texture_v2_parity.py \
             packages/fullmag-py/tests/test_public_python_api_documentation.py
 
-      - name: Validate scientific public documentation
-        shell: bash
-        run: |
-          set -euo pipefail
+          stage scientific-documentation
           python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py \
             public_docs/site/python-api/magnets-and-textures/preset-textures.source-map.json \
             --repo-root .
           python3 scripts/check_public_doc_examples.py --root public_docs/site
           git diff --check
 
-      - name: Commit and publish one fast-forward change to master
-        shell: bash
-        run: |
-          set -euo pipefail
+          stage commit-and-push
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add \
@@ -103,15 +100,51 @@ jobs:
           git commit \
             -m "feat: fix mesh texture sampling and add topological presets" \
             -m "Correct Neel chirality, FEM object-space sampling, FDM inactive sampled fields, mapping validation, and clamp execution. Add antiskyrmion, meron, antimeron, skyrmionium, and H=+/-1 hopfion presets with shared Rust/Python parity, mesh regressions, and public documentation."
-
           parent="$(git rev-parse HEAD^)"
           git fetch origin master
           test "$parent" = "$(git rev-parse origin/master)"
           git push origin HEAD:master
           git rev-parse HEAD | tee /tmp/published-commit-sha.txt
+          stage published
+
+      - name: Publish validation receipt branch
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin master
+          git reset --hard
+          git clean -fd
+          git checkout -B magnetic-texture-upgrade-status origin/master
+          receipt_dir=.github/fullmag-maintenance/magnetic-texture-upgrade-receipt
+          mkdir -p "$receipt_dir"
+          cp /tmp/magnetic-texture-upgrade.log "$receipt_dir/run.log" 2>/dev/null || true
+          cp /tmp/published-commit-sha.txt "$receipt_dir/published-commit-sha.txt" 2>/dev/null || true
+          stage="$(cat /tmp/magnetic-texture-upgrade-stage.txt 2>/dev/null || printf '%s' not-started)"
+          published_sha="$(cat /tmp/published-commit-sha.txt 2>/dev/null || true)"
+          cat > "$receipt_dir/status.json" <<JSON
+          {
+            "run_id": "${GITHUB_RUN_ID}",
+            "run_attempt": "${GITHUB_RUN_ATTEMPT}",
+            "source_sha": "${GITHUB_SHA}",
+            "job_status": "${{ job.status }}",
+            "last_stage": "${stage}",
+            "published_commit_sha": "${published_sha}"
+          }
+          JSON
+          git add "$receipt_dir"
+          git commit -m "ci: record magnetic texture upgrade validation ${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          git push --force origin HEAD:refs/heads/codex/magnetic-texture-upgrade-status
 
       - name: Upload publication receipt
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: magnetic-texture-upgrade-publication
-          path: /tmp/published-commit-sha.txt
+          name: magnetic-texture-upgrade-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /tmp/magnetic-texture-upgrade.log
+            /tmp/magnetic-texture-upgrade-stage.txt
+            /tmp/published-commit-sha.txt
+          if-no-files-found: ignore
