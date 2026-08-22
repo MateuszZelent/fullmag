@@ -29,10 +29,10 @@ graph TD
     H --> I["Three.js / WebGL 3D Viewport & ECharts"]
 ```
 
-1. **Physics-First Alignment**: The UI operates strictly on micromagnetic physical concepts (geometry, materials, physical interactions, discretization, stages) rather than exposing raw numerical memory offsets.
+1. **Physical-Model Alignment**: The UI operates on micromagnetic domain concepts (geometry, materials, physical interactions, discretization, and stages) rather than exposing numerical storage details.
 2. **Modular Kernel Architecture**: Feature areas are self-contained modules (`src/modules/*`) registered dynamically with the core shell.
 3. **Explicit Draft Isolation**: Inspector property edits remain in an isolated draft state until committed by the user, preventing partial or corrupt configuration frames from reaching the active solver session.
-4. **Hydration Hygeine & SSR Match**: Client components reading runtime state use `useSyncExternalStore` or hydration gates to guarantee first client render matches SSR.
+4. **SSR Hydration Consistency**: Client components reading runtime state use `useSyncExternalStore` or hydration gates so the first client render matches the server-rendered state.
 5. **Token-First Design System**: Styling is governed by central `--fm-*` CSS tokens (Catppuccin Mocha for dark mode, Latte for light mode), Tailwind CSS, and shadcn/ui shared primitives.
 
 ---
@@ -90,9 +90,9 @@ The 3D Viewport (`src/modules/viewport-3d`) renders geometric domains and 3D vec
 
 ### Performance & Memory Safeguards
 
-- **Instanced Mesh Glyphs**: Vector field arrows and cones are rendered using `THREE.InstancedMesh` with GPU instancing to achieve stable 60 FPS performance even for grids with $>10^6$ vector samples.
+- **Instanced Mesh Glyphs**: Vector field arrows and cones are rendered using `THREE.InstancedMesh` with GPU instancing to reduce draw-call overhead for large vector datasets.
 - **Binary ArrayBuffer Codecs**: Field samples stream directly from the backend over WebSocket/HTTP as unboxed `Float32Array` buffers, bypassing JSON parsing overhead.
-- **Context Loss Recovery**: WebGL canvas lifecycle events (`webglcontextlost`, `webglcontextrestored`) are monitored to automatically restore shader resources without crashing the workspace.
+- **Context Loss Recovery**: WebGL canvas lifecycle events (`webglcontextlost`, `webglcontextrestored`) are monitored so rendering resources can be reconstructed after context restoration.
 - **Topology Caching**: FEM mesh element topologies and node coordinates are cached separately from per-step vector field data, avoiding redundant GPU geometry re-uploads during time integration.
 
 ---
