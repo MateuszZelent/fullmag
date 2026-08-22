@@ -1,6 +1,9 @@
 name: Implement Mumax3 texture and UI parity
 
 on:
+  push:
+    branches:
+      - codex/mumax3-texture-parity-ui-20260823
   pull_request:
     branches:
       - master
@@ -14,7 +17,7 @@ concurrency:
 
 jobs:
   implement-and-validate:
-    if: github.head_ref == 'codex/mumax3-texture-parity-ui-20260823'
+    if: github.event_name == 'push' || github.head_ref == 'codex/mumax3-texture-parity-ui-20260823'
     runs-on: ubuntu-latest
     timeout-minutes: 75
     steps:
