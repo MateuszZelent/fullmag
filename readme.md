@@ -7,26 +7,29 @@
     <img src="docs/fullmag-logo-traced-optimized.svg" alt="FullMag logo" width="160" />
   </a>
 
-  <h2 align="center">One micromagnetic workbench for FDM, FEM, CPU/GPU simulation, and interactive analysis</h2>
+  <h2 align="center">A unified micromagnetic environment for Cartesian FDM, conforming FEM, CPU/CUDA solvers, and interactive scientific analysis</h2>
 
   <p align="center">
-    <strong>Geometry and meshing · dynamics · advanced relaxation · hysteresis · eigenmodes · frequency response · 2D/3D visualization</strong>
+    <strong>Newell–FFT magnetostatics · MFEM/hypre finite elements · LLG dynamics · direct energy minimization · hysteresis · eigenmodes · driven frequency response</strong>
   </p>
 
   <p align="center">
-    Define one physical model, request the numerical engine that fits the problem, and keep
-    authoring, execution, visualization, diagnostics, and provenance in one coherent workflow.
+    Build one physical model in Python or the Control Room, select the discretization and execution
+    lane appropriate to the problem, and keep geometry, meshing, simulation, visualization,
+    diagnostics, and provenance in one coherent workflow.
   </p>
 
   <p align="center">
     <a href="https://fullmag.mzelent.pl/"><strong>Explore the public documentation »</strong></a>
     <br />
     <br />
-    <a href="https://fullmag.mzelent.pl/getting-started/index.html">Get started</a>
+    <a href="#numerical-engines">FDM and FEM engines</a>
+    ·
+    <a href="#solver-portfolio">Solver portfolio</a>
+    ·
+    <a href="#technology-stack">Technology stack</a>
     ·
     <a href="https://fullmag.mzelent.pl/frontend/control-room/index.html">Control Room</a>
-    ·
-    <a href="https://fullmag.mzelent.pl/backend/index.html">Backends and solvers</a>
     ·
     <a href="https://fullmag.mzelent.pl/python-api/index.html">Python API</a>
     ·
@@ -37,94 +40,145 @@
 <div align="center">
 
 ![Project status](https://img.shields.io/badge/status-active%20research%20software-2563EB?style=flat-square)
-![FDM](https://img.shields.io/badge/FDM-structured%20grids-0F766E?style=flat-square)
-![FEM](https://img.shields.io/badge/FEM-unstructured%20meshes-7C3AED?style=flat-square)
+![FDM](https://img.shields.io/badge/FDM-Newell%20%2B%20FFT-0F766E?style=flat-square)
+![FEM](https://img.shields.io/badge/FEM-MFEM%20%2B%20hypre-7C3AED?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-authoring%20API-3776AB?style=flat-square&logo=python&logoColor=white)
-![Rust](https://img.shields.io/badge/Rust-runtime%20%26%20solvers-000000?style=flat-square&logo=rust&logoColor=white)
-![TypeScript](https://img.shields.io/badge/TypeScript-Control%20Room-3178C6?style=flat-square&logo=typescript&logoColor=white)
-![Next.js](https://img.shields.io/badge/Next.js-web%20application-000000?style=flat-square&logo=nextdotjs&logoColor=white)
-![CUDA](https://img.shields.io/badge/CUDA-GPU%20backends-76B900?style=flat-square&logo=nvidia&logoColor=white)
-![MFEM](https://img.shields.io/badge/MFEM-FEM%20backend-5B6EC4?style=flat-square)
-![hypre](https://img.shields.io/badge/hypre-linear%20solvers-6B7280?style=flat-square)
-![libCEED](https://img.shields.io/badge/libCEED-operator%20evaluation-7C3AED?style=flat-square)
+![Rust](https://img.shields.io/badge/Rust-runtime%20%26%20CPU%20reference-000000?style=flat-square&logo=rust&logoColor=white)
+![CUDA](https://img.shields.io/badge/CUDA-native%20GPU%20backends-76B900?style=flat-square&logo=nvidia&logoColor=white)
+![Gmsh](https://img.shields.io/badge/Gmsh-conforming%20FEM%20meshes-5B6EC4?style=flat-square)
+![PETSc/SLEPc](https://img.shields.io/badge/PETSc%20%2F%20SLEPc-spectral%20solvers-6B7280?style=flat-square)
+![Next.js](https://img.shields.io/badge/Next.js%20%2B%20React-Control%20Room-000000?style=flat-square&logo=nextdotjs&logoColor=white)
+![Three.js](https://img.shields.io/badge/Three.js-interactive%202D%2F3D-000000?style=flat-square&logo=threedotjs&logoColor=white)
 ![Horizon Europe](https://img.shields.io/badge/Horizon%20Europe-MSCA%20PF-003399?style=flat-square)
 
 </div>
 
-## Why FullMag?
+## What makes FullMag different?
 
-**FullMag is not only an LLG time-stepper.** Micromagnetic projects often split geometry,
-meshing, solver execution, visualization, and analysis across separate applications. FullMag brings
-these layers under one canonical, stage-oriented study and connects them to several genuinely
-different numerical engines.
+**FullMag is not a single-purpose LLG time-stepper wrapped in a GUI.** It is a complete
+micromagnetic workbench in which structured-grid FDM, conforming-mesh FEM, CPU reference paths,
+native CUDA paths, advanced equilibrium algorithms, spectral solvers, visualization, and
+reproducibility share one stage-oriented study model.
 
 <div align="center">
   <a href="https://fullmag.mzelent.pl/frontend/control-room/index.html">
     <img src="public_docs/site/_static/images/ui/control-room-workspace-overview.png" alt="FullMag Control Room workspace with ribbon, Explorer, Inspector, viewport, and runtime status" width="1200" />
   </a>
-  <p><sub>FullMag Control Room combines model authoring, resource navigation, mesh and field inspection, interactive visualization, runtime status, and analysis in one workspace.</sub></p>
+  <p><sub>The Control Room combines model authoring, Explorer and Inspector workflows, mesh and field inspection, interactive 2D/3D visualization, live analysis, runtime status, and Python export.</sub></p>
 </div>
+
+<a id="numerical-engines"></a>
+
+## Two numerical formulations, one study model
 
 <table>
   <tr>
     <td width="50%" valign="top">
-      <strong>One physical model, multiple numerical engines</strong><br /><br />
-      A stage-oriented study can target cell-centred <strong>FDM</strong> or unstructured
-      <strong>FEM</strong> and request <strong>CPU</strong> or <strong>GPU</strong> execution.
-      FDM and FEM remain distinct numerical realizations, while materials, interactions, stages,
-      outputs, and provenance live under one contract. The planner reports the resolved lane and
-      rejects unsupported combinations instead of silently changing the request.
+      <h3>FDM — structured-grid throughput</h3>
+      <p><strong>Best suited to:</strong> regular thin films, nanowires, racetracks, disks and pillars represented on Cartesian cells, periodic unit cells, large repeated time integrations, and disconnected multilayer stacks.</p>
+      <ul>
+        <li><strong>State space:</strong> cell-centred Cartesian grids, active masks, per-object native grids, volume-fraction and full embedded-boundary correction, and explicit periodic-grid policies.</li>
+        <li><strong>Magnetostatics:</strong> cell-averaged Newell demagnetization tensors accelerated by zero-padded FFTs; separate single-grid and multilayer-convolution contracts; finite periodic-image spectra.</li>
+        <li><strong>CPU implementation:</strong> Rust reference solvers with RustFFT and optional Rayon parallelism.</li>
+        <li><strong>GPU implementation:</strong> C++17/CUDA kernels, cuFFT, FP32/FP64 interaction and LLG lanes, device reductions, streams, and runtime telemetry.</li>
+        <li><strong>Dynamics:</strong> Heun, RK4, RK23, RK45, and lane-specific ABM3 integration.</li>
+        <li><strong>Equilibrium:</strong> overdamped LLG, projected-gradient Barzilai–Borwein, and nonlinear conjugate gradient.</li>
+      </ul>
+      <p><a href="https://fullmag.mzelent.pl/numerical-methods/meshing/fdm/index.html"><strong>FDM meshing and grid contracts »</strong></a></p>
     </td>
     <td width="50%" valign="top">
-      <strong>A full scientific Control Room, not merely a result viewer</strong><br /><br />
-      Use ribbon commands, a resource Explorer, a transactional Inspector with Apply/Revert,
-      interactive 2D/3D WebGL viewports, live time-series and energy charts, mesh-build monitors,
-      device and stage status, field/result inspection, and stage-first Python export. The UI and
-      Python API operate on the same canonical model.
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <strong>Relaxation beyond one high-damping integrator</strong><br /><br />
-      Choose <code>llg_overdamped</code>, <code>projected_gradient_bb</code>, or
-      <code>nonlinear_cg</code>. The LLG route supports fixed and adaptive Runge–Kutta families;
-      the direct minimizers operate on the constrained energy landscape with tangent-space updates
-      and Armijo acceptance. Implementations are separated across FDM/FEM and CPU/GPU lanes so the
-      selected algorithm is not reduced to a cosmetic API alias.
-    </td>
-    <td width="50%" valign="top">
-      <strong>More than transient magnetization dynamics</strong><br /><br />
-      Compose ordered stages for time evolution, relaxation, hysteresis, eigenmodes, and
-      frequency-domain response. A single study can carry a qualified equilibrium into modal or
-      driven analysis, with backend-specific capability gates and shared geometry, materials,
-      outputs, artifacts, and provenance.
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <strong>Meshing and physics for both structured and conforming models</strong><br /><br />
-      FDM supports native Cartesian grids, masks and boundary correction, multi-magnet layouts,
-      and periodic-grid contracts. FEM supports free and thin-film tetrahedra, swept prism/hex
-      meshes, boundary layers, imported and mixed elements, shared domains, and graded Airboxes.
-      The physics library covers exchange, demagnetization, Zeeman fields, anisotropy, interfacial
-      and bulk DMI, thermal noise, Oersted fields, magnetoelasticity, STT/SOT, drift–diffusion
-      transport, and inter-region couplings.
-    </td>
-    <td width="50%" valign="top">
-      <strong>Reproducibility is part of execution</strong><br /><br />
-      Requested intent and resolved execution are retained separately. Results can carry backend,
-      device, precision, mesh/grid identity, solver policy, stopping reason, diagnostics, fields,
-      observables, and artifact provenance. Strict mode forbids hidden fallback, while public
-      support matrices distinguish source presence, executability, runtime verification, physical
-      validation, and production qualification.
+      <h3>FEM — conforming geometry and operator flexibility</h3>
+      <p><strong>Best suited to:</strong> curved or irregular three-dimensional bodies, conforming multi-region structures, strong local refinement, magnetic-plus-air domains, open-boundary magnetostatics, and modal or driven-response studies.</p>
+      <ul>
+        <li><strong>State space:</strong> one conforming shared domain with free or thin-film tetrahedra, swept prisms and hexahedra, boundary layers, imported meshes, mixed elements, periodic pairs, and graded Airboxes.</li>
+        <li><strong>Magnetostatics:</strong> scalar-potential Poisson Airbox with Dirichlet or Robin closure, Fredkin–Koehler FEM/BEM on body-only meshes, and reduced periodic-potential formulations.</li>
+        <li><strong>CPU implementation:</strong> C++17/MFEM operators with hypre linear solvers and explicit field, energy, rollback, and convergence contracts.</li>
+        <li><strong>GPU implementation:</strong> native CUDA field, integrator, reduction, and direct-minimizer paths with hypre device components; support remains operator- and lane-specific.</li>
+        <li><strong>Meshing stack:</strong> Gmsh, Manifold3D, meshio, SciPy, and Trimesh in the optional Python meshing workflow.</li>
+        <li><strong>Spectral stack:</strong> linearized-LLG eigenmodes and driven frequency response with optional PETSc/SLEPc infrastructure and explicit dense, sparse, Schur, modal, and GPU planner lanes.</li>
+      </ul>
+      <p><a href="https://fullmag.mzelent.pl/numerical-methods/meshing/fem/index.html"><strong>FEM meshing and shared-domain contracts »</strong></a></p>
     </td>
   </tr>
 </table>
 
-The detailed contracts and current support boundaries are documented separately for the
-**[Frontend](https://fullmag.mzelent.pl/frontend/index.html)**,
-**[Backend](https://fullmag.mzelent.pl/backend/index.html)**, and
-**[Python API](https://fullmag.mzelent.pl/python-api/index.html)**.
+FullMag does not pretend that FDM and FEM are interchangeable labels. Each formulation owns its
+mesh, discrete operators, memory layout, solver dependencies, and validation evidence. The public
+study records requested intent separately from the resolved backend, device, precision, solver,
+and mesh. In `strict` mode, an unsupported combination fails before expensive allocation rather
+than being replaced by a hidden CPU, FDM, FEM, or solver fallback.
+
+<a id="solver-portfolio"></a>
+
+## Concrete solver portfolio
+
+| Scientific task | Implemented numerical solutions | Current public boundary |
+|---|---|---|
+| **Time-domain magnetization dynamics** | Explicit Gilbert LLG with Heun, RK4, Bogacki–Shampine RK23, Dormand–Prince RK45, adaptive embedded-error control, and lane-specific ABM3/coupled integration | FDM and FEM have distinct CPU/GPU implementations; exact interaction and precision coverage is lane-specific |
+| **Energy minimization and relaxation** | `llg_overdamped`; tangent projected gradient with alternating BB1/BB2 steps and Armijo backtracking; Polak–Ribière+ nonlinear CG with tangent transport, Armijo acceptance, and periodic restart | Source-backed FDM CPU/GPU and FEM CPU/GPU implementations exist; multilayer and device qualification restrictions remain explicit |
+| **Open-boundary demagnetization** | FDM Newell tensor with zero-padded FFT; FDM multilayer convolution on separate native grids; FEM Poisson Airbox with Robin/Dirichlet closure; CPU Fredkin–Koehler FEM/BEM | These solve different discrete boundary-value problems and are never silently substituted |
+| **Periodic magnetostatics** | FDM truncated-image kernel spectra and FEM reduced periodic scalar-potential systems with explicit gauge and zero-mode policy | Periodic-image convergence, mesh pairing, and GPU support are separate qualification dimensions |
+| **Hysteresis** | Ordered field schedules and relaxation stages using the same material, interaction, stopping, artifact, and provenance contracts as ordinary studies | Availability follows the resolved relaxation and field lanes |
+| **Eigenmodes and dispersion** | Tangent-space linearized-LLG generalized eigenproblems, damping include/ignore policy, lowest/nearest/window targeting, mode normalization, and Bloch/Floquet wave-vector sampling | The native public modal contract is FEM; production FDM eigenmode execution is not claimed |
+| **Driven frequency response** | Complex linear response around equilibrium with dense reference, CPU sparse direct, full-coupled field split, Schur-reduced, modal-reduced, GPU-operator/host-Krylov, and device-Krylov planner families | The native public response contract is FEM; every sample retains true-residual and resolved-lane diagnostics |
+| **Current-driven and coupled physics** | Slonczewski and Zhang–Li STT, SOT, Oersted fields, thermal Brown fields, magnetoelastic coupling, and charge/spin drift–diffusion modules | Representability, execution, and validation are reported separately for each FDM/FEM and CPU/GPU lane |
+
+The full method definitions and support boundaries are maintained in the
+**[relaxation](https://fullmag.mzelent.pl/numerical-methods/relaxation/index.html)**,
+**[demagnetization](https://fullmag.mzelent.pl/numerical-methods/demag-solvers/index.html)**,
+**[eigensolver](https://fullmag.mzelent.pl/numerical-methods/eigensolvers/index.html)**, and
+**[frequency-domain](https://fullmag.mzelent.pl/numerical-methods/frequency-domain/index.html)** references.
+
+<a id="technology-stack"></a>
+
+## Technology stack
+
+| Layer | Technologies used in the repository | Responsibility |
+|---|---|---|
+| **Python authoring and scientific data** | Python 3.10+, NumPy, Zarr, HDF5, PyO3 | Stage-oriented DSL, model construction, artifacts, arrays, and Python–Rust integration |
+| **Geometry and meshing** | Gmsh, Manifold3D, meshio, SciPy, Trimesh | Constructive geometry, surface processing, conforming FEM generation, import/export, and mesh preparation |
+| **Rust control plane** | Rust 2021, Axum, Tokio, Serde, Clap, tracing | `ProblemIR`, validation, capability planning, sessions, CLI/API, runtime orchestration, and provenance |
+| **FDM CPU** | RustFFT, optional Rayon, Rust reference operators | Cartesian field evaluation, Newell spectra, FFT convolution, reference dynamics, relaxation, and numerical oracles |
+| **Native FDM/GPU** | C++17, CUDA, cuFFT, native C ABI | FP32/FP64 kernels, LLG integrators, demagnetization, multilayer execution, transport, reductions, streams, and device telemetry |
+| **FEM CPU/GPU** | C++17, MFEM, hypre, libCEED, CUDA | Conforming finite-element operators, Poisson Airbox, FEM/BEM, time integration, direct minimization, and device execution |
+| **Spectral and linear algebra** | PETSc, SLEPc, hypre, dense/sparse direct and Krylov implementations | Eigenmodes, frequency response, field-split, Schur, modal reduction, and solver diagnostics |
+| **Control Room** | Next.js 16, React 19, TypeScript, Three.js, React Three Fiber, Drei, ECharts, Recharts, Radix UI, Tailwind CSS | Interactive authoring, Explorer/Inspector, 2D/3D visualization, mesh inspection, live charts, and analysis |
+| **Interfaces and desktop** | OpenAPI v2, `openapi-fetch`, WebSocket, SSE, binary typed-array codecs, Tauri | Typed frontend/backend contracts, live runtime communication, large field transfer, and desktop packaging |
+| **Verification and documentation** | Vitest, Playwright, Storybook, CTest, Rust tests, Sphinx, MyST | API/ABI contracts, numerical regression, browser/WebGL checks, component testing, and scientific documentation |
+
+## Integrated workflow rather than disconnected tools
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>One canonical model in Python and the UI</strong><br /><br />
+      Geometry, materials, interactions, solver policy, stages, and outputs lower to the same
+      `ProblemIR`. The Control Room can export the stage-oriented Python representation instead of
+      maintaining a separate GUI-only simulation format.
+    </td>
+    <td width="50%" valign="top">
+      <strong>An interactive scientific workspace</strong><br /><br />
+      Ribbon commands, resource Explorer, transactional Inspector with Apply/Revert, mesh-build
+      monitors, 2D/3D WebGL views, field and mesh targets, time-series and energy charts, device
+      status, and result analysis are available in one application.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Explicit numerical planning</strong><br /><br />
+      Backend, device, precision, mesh class, demagnetization realization, integrator,
+      preconditioner, and spectral lane are resolved explicitly. Unsupported requests fail closed;
+      automatic selection is recorded as a planner decision rather than hidden behavior.
+    </td>
+    <td width="50%" valign="top">
+      <strong>Evidence-rich and reproducible results</strong><br /><br />
+      Results can retain grid/mesh identity, enabled physics, requested and resolved execution,
+      stopping reason, residuals, iteration histories, fields, energies, device identity, and
+      artifact provenance. Source presence, executability, runtime verification, physical
+      validation, and production qualification remain distinct claims.
+    </td>
+  </tr>
+</table>
 
 ## Abstract
 
