@@ -18,6 +18,7 @@ from urllib.parse import quote
 
 START_MARKER = "<!-- fullmag-version-dashboard:start -->"
 END_MARKER = "<!-- fullmag-version-dashboard:end -->"
+INSERT_ANCHOR = "\n</div>\n\n## What makes FullMag different?"
 
 
 class VersionSourceError(RuntimeError):
@@ -451,16 +452,37 @@ def render_dashboard(v: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
-def replace_dashboard(readme: str, dashboard: str) -> str:
+def replace_dashboard(
+    readme: str,
+    dashboard: str,
+    *,
+    allow_insert: bool = False,
+) -> str:
     pattern = re.compile(
         rf"{re.escape(START_MARKER)}.*?{re.escape(END_MARKER)}",
         flags=re.DOTALL,
     )
-    if len(pattern.findall(readme)) != 1:
+    matches = pattern.findall(readme)
+    if len(matches) == 1:
+        return pattern.sub(dashboard, readme, count=1)
+    if matches:
         raise VersionSourceError(
-            "readme.md must contain exactly one generated version dashboard"
+            "readme.md contains more than one generated version dashboard"
         )
-    return pattern.sub(dashboard, readme, count=1)
+    if not allow_insert:
+        raise VersionSourceError(
+            "readme.md does not contain the generated version dashboard"
+        )
+    if readme.count(INSERT_ANCHOR) != 1:
+        raise VersionSourceError(
+            "cannot insert version dashboard: README insertion anchor is missing "
+            "or ambiguous"
+        )
+    return readme.replace(
+        INSERT_ANCHOR,
+        f"\n</div>\n\n{dashboard}\n\n## What makes FullMag different?",
+        1,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -475,7 +497,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         current = readme_path.read_text(encoding="utf-8")
         expected = replace_dashboard(
-            current, render_dashboard(collect_versions(root))
+            current,
+            render_dashboard(collect_versions(root)),
+            allow_insert=args.write,
         )
     except (OSError, ValueError, json.JSONDecodeError, VersionSourceError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
