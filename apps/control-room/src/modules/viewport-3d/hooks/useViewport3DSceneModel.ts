@@ -6363,6 +6363,8 @@ export function useViewport3DSceneModel({
     meshQualityRange: meshQualityColors?.range ?? null,
     meshRegionOverlays,
     primitiveModel,
+    sceneRefetch: scene.refetch,
+    sceneRevision: primitiveModel.sceneRevision,
     quantityId: primaryFieldQuantityId,
     regionOverlays,
     resourceFrameKey,

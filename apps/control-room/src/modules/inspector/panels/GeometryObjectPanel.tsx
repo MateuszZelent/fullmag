@@ -7,10 +7,13 @@ import {
 } from "@/kernel/authoring/authoringMutationInvalidation";
 import {
   createObjectTransaction,
-  commitObjectTransformTransaction,
   patchObjectGeometryTransaction,
   primitiveDraftOverlayStore,
 } from "@/kernel/authoring/geometryLifecycleCommands";
+import {
+  commitObjectTranslation,
+  PROBLEM_IR_03_RIGID_TRANSFORM_REASON,
+} from "@/kernel/authoring/objectTranslationMutation";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   publishCommittedSceneResource,
@@ -116,6 +119,7 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     "conflict" | "refresh-error" | "refreshing" | "rebased" | "refetched" | null
   >(null);
   const [conflictBaseRevision, setConflictBaseRevision] = useState<number | null>(null);
+  const [conflictOperation, setConflictOperation] = useState<"create" | "transform">("create");
   const [refreshSawLoading, setRefreshSawLoading] = useState(false);
   const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
   const feedback =
@@ -271,6 +275,7 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
       setFeedback({ kind: "success", message: "Object draft committed." });
     } catch (error) {
       if (isPrimitiveDraftRevisionConflict(error)) {
+        setConflictOperation("create");
         setRevisionConflictPhase("conflict");
         setConflictBaseRevision(draft.baseRevision);
         setRefreshSawLoading(false);
@@ -339,17 +344,22 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
 
     setPending(true);
     try {
-      const response = await commitObjectTransformTransaction(api, draft.objectId, {
-        base_revision: draft.baseRevision,
-        transform: transform.transform,
-      });
-      invalidateAuthoringResources(
+      const translation = transform.transform.translation as [number, number, number];
+      await commitObjectTranslation({
+        api,
+        baseRevision: draft.baseRevision,
+        objectId: draft.objectId,
         resources,
-        response.scene_revision,
-        response.committed_scene,
-      );
+        translation,
+      });
       setFeedback({ kind: "success", message: "Transform committed." });
     } catch (error) {
+      if (isPrimitiveDraftRevisionConflict(error)) {
+        setConflictOperation("transform");
+        setRevisionConflictPhase("conflict");
+        setConflictBaseRevision(draft.baseRevision);
+        setRefreshSawLoading(false);
+      }
       setFeedback({ kind: "error", message: errorMessage(error) });
     } finally {
       setPending(false);
@@ -393,6 +403,9 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
         onRevertDraft={revertDraft}
         onRebaseAfterConflict={rebaseAfterConflict}
         onRefetchAfterConflict={refetchAfterConflict}
+        onRetryAfterConflict={
+          conflictOperation === "transform" ? applyTransformPatch : applyCreateDraft
+        }
         revisionConflictPhase={revisionConflictPhase}
       />
       <ValidationSection
@@ -551,17 +564,20 @@ function TransformSection({
         onChange={(index, value) => onVectorChange("translation", index, value)}
       />
       <DraftVectorFormField
+        disabled
         label="Rotation"
         unit="rad"
         values={draft.rotation}
         onChange={(index, value) => onVectorChange("rotation", index, value)}
       />
       <DraftVectorFormField
+        disabled
         label="Scale"
         unit="x"
         values={draft.scale}
         onChange={(index, value) => onVectorChange("scale", index, value)}
       />
+      <FieldRow label="Rotate / Scale" value={PROBLEM_IR_03_RIGID_TRANSFORM_REASON} />
     </InspectorGroup>
   );
 }
@@ -610,6 +626,7 @@ function ActionsSection({
   onApplyTransformPatch,
   onRebaseAfterConflict,
   onRefetchAfterConflict,
+  onRetryAfterConflict,
   onRevertDraft,
   pending,
   revisionConflictPhase,
@@ -621,6 +638,7 @@ function ActionsSection({
   onApplyTransformPatch: () => Promise<void>;
   onRebaseAfterConflict: () => void;
   onRefetchAfterConflict: () => void;
+  onRetryAfterConflict: () => Promise<void>;
   onRevertDraft: () => void;
   pending: boolean;
   revisionConflictPhase: "conflict" | "refresh-error" | "refreshing" | "rebased" | "refetched" | null;
@@ -680,7 +698,7 @@ function ActionsSection({
             size="sm"
             type="button"
             variant="primary"
-            onClick={() => void onApplyCreateDraft()}
+            onClick={() => void onRetryAfterConflict()}
           >
             Retry Apply
           </Button>
@@ -764,12 +782,14 @@ function ValidationSection({
 }
 
 function DraftVectorFormField({
+  disabled,
   errors,
   label,
   onChange,
   unit,
   values,
 }: {
+  disabled?: boolean;
   errors?: readonly (string | undefined)[];
   label: string;
   onChange: (index: 0 | 1 | 2, value: string) => void;
@@ -778,6 +798,7 @@ function DraftVectorFormField({
 }) {
   return (
     <Vector3Field
+      disabled={disabled}
       errors={errors}
       label={label}
       unit={unit}

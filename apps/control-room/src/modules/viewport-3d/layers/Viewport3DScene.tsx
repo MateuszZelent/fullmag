@@ -163,6 +163,7 @@ import {
   FrozenSpinsOverlay,
   type FrozenSpinsOverlayModel,
 } from "./FrozenSpinsOverlay";
+import { MoveObjectGizmo, type Translation3 } from "../MoveObjectGizmo";
 
 const EMPTY_REGION_OVERLAYS: readonly RegionOverlayInput[] = [];
 
@@ -245,6 +246,11 @@ interface Viewport3DSceneProps {
   onSelectFdmUniverseOutsideSupport: () => void;
   onSelectFdmCell?: (instanceId: number) => void;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
+  onMoveCommit: (
+    objectId: string,
+    translation: Translation3,
+    baseRevision: number,
+  ) => Promise<void> | void;
   orbitDebugAngles: Viewport3DOrbitDebugAngles;
   orbitDebugCommitRevision: number;
   orbitDebugRevision: number;
@@ -1061,6 +1067,8 @@ function Viewport3DModelLayerStack({
   meshSizeHighlightModel,
   onInspectClear,
   onInspectSample,
+  onMoveCommit,
+  onMoveGestureActiveChange,
   onSelectDomain,
   onSelectFdmTarget,
   onSelectFdmUniverseOutsideSupport,
@@ -1115,6 +1123,7 @@ function Viewport3DModelLayerStack({
   | "inspectEnabled"
   | "onInspectClear"
   | "onInspectSample"
+  | "onMoveCommit"
   | "onSelectDomain"
   | "onSelectFdmTarget"
   | "onSelectFdmUniverseOutsideSupport"
@@ -1140,6 +1149,7 @@ function Viewport3DModelLayerStack({
   materialProfile: ReturnType<typeof resolveViewport3DMaterialProfile>;
   sceneLayersEnabled: boolean;
   stageVisibility: Viewport3DModelLayerStageVisibility;
+  onMoveGestureActiveChange: (active: boolean) => void;
 }) {
   const hasMeshBackedRegionOverlays = meshRegionOverlays.length > 0;
   const overlayLayersEnabled = viewport3DOverlayLayersEnabledFromBrowserConfig();
@@ -1394,6 +1404,20 @@ function Viewport3DModelLayerStack({
           tracker={tracker}
         />
       ) : null}
+      {selectedObjectId && primitiveModel?.sceneRevision != null
+        ? primitiveModel.objects
+            .filter((object) => object.objectId === selectedObjectId)
+            .map((object) => (
+              <group key={`move:${object.objectId}`} position={object.bounds.center}>
+                <MoveObjectGizmo
+                  baseRevision={primitiveModel.sceneRevision as number}
+                  object={object}
+                  onCommit={onMoveCommit}
+                  onGestureActiveChange={onMoveGestureActiveChange}
+                />
+              </group>
+            ))
+        : null}
       {!fdmLaneActive &&
       stageVisibility.baseGeometry &&
       viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (
@@ -1529,6 +1553,7 @@ function Viewport3DInteractionAndHudStack({
   rotationMode,
   tracker,
   viewCubeVisible,
+  moveGestureActive,
 }: Pick<
   Viewport3DSceneProps,
   | "bounds"
@@ -1549,6 +1574,7 @@ function Viewport3DInteractionAndHudStack({
   | "viewCubeVisible"
 > & {
   cameraGestureRef: ReturnType<typeof createViewport3DCameraGestureRef>;
+  moveGestureActive: boolean;
 }) {
   return (
     <>
@@ -1566,6 +1592,7 @@ function Viewport3DInteractionAndHudStack({
         onCameraInteractionStart={onCameraInteractionStart}
         onOrbitDebugAnglesChange={onOrbitDebugAnglesChange}
         tracker={tracker}
+        interactionBlocked={moveGestureActive}
       />
       {viewport3DOrientationHudEnabledFromBrowserConfig() ? (
         <OrientationHudLayer
@@ -1724,6 +1751,7 @@ export function Viewport3DScene({
   inspectEnabled,
   onInspectClear,
   onInspectSample,
+  onMoveCommit,
   scaleLabelsVisible,
   scaleUnitMode,
   viewCubeVisible,
@@ -1739,6 +1767,7 @@ export function Viewport3DScene({
     clip: Viewport3DCameraClip;
   } | null>(null);
   const cameraGestureRef = useMemo(() => createViewport3DCameraGestureRef(), []);
+  const [moveGestureActive, setMoveGestureActive] = useState(false);
   const inspectClearArbitrator = useMemo(
     () =>
       createFdmInspectClearArbitrator({
@@ -2014,6 +2043,8 @@ export function Viewport3DScene({
         meshSizeHighlightModel={meshSizeHighlightModel}
         onInspectClear={inspectClearArbitrator.clear}
         onInspectSample={handleArbitratedInspectSample}
+        onMoveCommit={onMoveCommit}
+        onMoveGestureActiveChange={setMoveGestureActive}
         onSelectDomain={onSelectDomain}
         onSelectFdmTarget={onSelectFdmTarget}
         onSelectFdmUniverseOutsideSupport={onSelectFdmUniverseOutsideSupport}
@@ -2066,6 +2097,7 @@ export function Viewport3DScene({
         rotationMode={rotationMode}
         tracker={tracker}
         viewCubeVisible={viewCubeVisible}
+        moveGestureActive={moveGestureActive}
       />
     </VectorGlyphDerivedBufferCacheProvider>
   );

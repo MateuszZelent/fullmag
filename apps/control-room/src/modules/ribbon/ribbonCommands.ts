@@ -71,6 +71,7 @@ export const RIBBON_PHYSICS_CREATE_FROZEN_SPINS_COMMAND =
   "ribbon.physics.create-frozen-spins";
 export const RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND =
   "ribbon.cross-section.begin-draft";
+export const RIBBON_GEOMETRY_MOVE_SELECTED_COMMAND = "geometry.move-selected";
 
 interface PatchDefaultsInput {
   patch: VisualizationTargetPatch;
@@ -130,6 +131,27 @@ export function visualizationAirboxCommandInput(
 }
 
 export const RIBBON_COMMANDS: CommandContribution[] = [
+  {
+    id: RIBBON_GEOMETRY_MOVE_SELECTED_COMMAND,
+    title: "Move selected object",
+    group: "ribbon-geometry",
+    category: "Geometry",
+    scope: "selection",
+    isEnabled: (context) =>
+      Boolean(context.api) && context.selection?.get().ref?.type === "scene-object",
+    disabledReason: (context) => {
+      if (!context.api) return "The current session API is unavailable.";
+      return context.selection?.get().ref?.type === "scene-object"
+        ? null
+        : "Select a canonical scene object to move.";
+    },
+    run: (context) => {
+      if (context.selection?.get().ref?.type !== "scene-object") {
+        return { message: "Select a canonical scene object to move.", status: "failed" };
+      }
+      return { status: "completed" };
+    },
+  },
   {
     id: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
     title: "Patch Visualization State",

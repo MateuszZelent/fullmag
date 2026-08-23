@@ -32,6 +32,11 @@ import {
   viewport3DOrbitDebugEnabledFromBrowserConfig,
 } from "@/kernel/browserFullmagConfig";
 import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
+import {
+  commitObjectTranslation,
+  isObjectTranslationRevisionConflict,
+  type ObjectTranslation,
+} from "@/kernel/authoring/objectTranslationMutation";
 import { useMeshHistogramBinElementsResource } from "@/kernel/resources/geometryLifecycleResources";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
@@ -1215,6 +1220,7 @@ interface Viewport3DFrameProps
     Viewport3DSceneProps,
     | "colors"
     | "onOrbitDebugAnglesChange"
+    | "onMoveCommit"
     | "onVisualizationFrameCommitted"
     | "orbitDebugAngles"
     | "orbitDebugCommitRevision"
@@ -1253,6 +1259,8 @@ interface Viewport3DFrameProps
   scalarColorPalette: string;
   sessionIdentity: SessionResourceIdentity | null;
   selectedLabel: string;
+  sceneRefetch: () => void;
+  sceneRevision: number | null;
   slotId: ModuleProps["slotId"];
   status: string;
   topologyRevision: number | string | null;
@@ -1748,6 +1756,8 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   quantityId,
   sessionIdentity,
   selectedLabel,
+  sceneRefetch,
+  sceneRevision,
   slotId,
   status,
   visualizationEffectiveRenderMode,
@@ -1787,6 +1797,12 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     useState<string | null>(null);
   const [inspectHover, setInspectHover] =
     useState<Viewport3DInspectHover | null>(null);
+  const [moveConflict, setMoveConflict] = useState<{
+    baseRevision: number;
+    objectId: string;
+    phase: "conflict" | "refetched" | "rebased" | "retrying";
+    translation: ObjectTranslation;
+  } | null>(null);
   const lastRenderedMeshRevision = useRef<number | string | null>(null);
   const sendVisualizationAck = useVisualizationClientAckSender({ api: kernel.api });
   const visualizationAckRevisionRef = useRef<{
@@ -2249,6 +2265,44 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     clearInspectHover();
     onClearSelection();
   }, [clearInspectHover, onClearSelection]);
+  const commitMove = useCallback(async (
+    objectId: string,
+    translation: ObjectTranslation,
+    baseRevision: number,
+  ) => {
+    try {
+      await commitObjectTranslation({
+        api: kernel.api,
+        baseRevision,
+        objectId,
+        resources: kernel.resources,
+        translation,
+      });
+      setMoveConflict(null);
+    } catch (error) {
+      if (!isObjectTranslationRevisionConflict(error)) throw error;
+      setMoveConflict({ baseRevision, objectId, phase: "conflict", translation });
+    }
+  }, [kernel.api, kernel.resources]);
+  const rebaseMove = useCallback(() => {
+    if (
+      !moveConflict ||
+      sceneRevision === null ||
+      sceneRevision === moveConflict.baseRevision
+    ) return;
+    setMoveConflict({ ...moveConflict, baseRevision: sceneRevision, phase: "rebased" });
+  }, [moveConflict, sceneRevision]);
+  const retryMove = useCallback(async () => {
+    if (!moveConflict || moveConflict.phase !== "rebased") return;
+    const retry = { ...moveConflict, phase: "retrying" as const };
+    setMoveConflict(retry);
+    await commitMove(retry.objectId, retry.translation, retry.baseRevision);
+  }, [commitMove, moveConflict]);
+  const moveCanRebase = Boolean(
+    moveConflict?.phase === "conflict" &&
+      sceneRevision !== null &&
+      sceneRevision !== moveConflict.baseRevision,
+  );
   const updateInspectHover = useCallback(
     (
       sample: Viewport3DInspectSample,
@@ -2540,6 +2594,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             }
             onInspectClear={clearInspectHover}
             onInspectSample={updateInspectHover}
+            onMoveCommit={commitMove}
             onVisualizationFrameCommitted={onVisualizationFrameCommitted}
             visualProfileId={visualProfile.id}
           />
@@ -2567,6 +2622,38 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           hover={visibleInspectHover}
           provenance={visibleInspectProvenance}
         />
+      ) : null}
+      {moveConflict ? (
+        <aside className="fm-viewport-3d__move-conflict" data-move-conflict={moveConflict.phase}>
+          <span>Scene changed. The move draft is preserved.</span>
+          <Button
+            disabled={moveConflict.phase !== "conflict"}
+            size="sm"
+            type="button"
+            variant="ghost"
+            onClick={sceneRefetch}
+          >
+            Refetch Scene
+          </Button>
+          <Button
+            disabled={!moveCanRebase}
+            size="sm"
+            type="button"
+            variant="ghost"
+            onClick={rebaseMove}
+          >
+            Rebase Draft
+          </Button>
+          <Button
+            disabled={moveConflict.phase !== "rebased"}
+            size="sm"
+            type="button"
+            variant="primary"
+            onClick={() => void retryMove()}
+          >
+            Retry Move
+          </Button>
+        </aside>
       ) : null}
       <Viewport3DFdmSelectionAnnouncement
         announcement={fdmSelectionAnnouncement}

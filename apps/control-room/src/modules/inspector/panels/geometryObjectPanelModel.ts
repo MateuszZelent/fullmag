@@ -475,18 +475,10 @@ export function buildTransformDraftPatch(
 ): GeometryDraftTransformResult {
   const translation = parseVector(draft.translation, "Translation", false);
   if (translation.error) return { error: translation.error, transform: null };
-  const rotation = parseVector(draft.rotation, "Rotation", false);
-  if (rotation.error) return { error: rotation.error, transform: null };
-  const scale = parseVector(draft.scale, "Scale", true);
-  if (scale.error) return { error: scale.error, transform: null };
 
   return {
     error: null,
-    transform: {
-      rotation: rotation.value,
-      scale: scale.value,
-      translation: translation.value,
-    },
+    transform: { translation: translation.value },
   };
 }
 

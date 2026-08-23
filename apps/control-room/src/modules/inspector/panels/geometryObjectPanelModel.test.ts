@@ -242,8 +242,6 @@ describe("resolveGeometryObjectPanelModel", () => {
     expect(buildTransformDraftPatch(draft)).toEqual({
       error: null,
       transform: {
-        rotation: [0, 0, 0],
-        scale: [1, 1, 1],
         translation: [0, 0, 0],
       },
     });
@@ -252,7 +250,7 @@ describe("resolveGeometryObjectPanelModel", () => {
     );
   });
 
-  it("validates local geometry and transform draft values before transactions", () => {
+  it("validates local geometry and translation while excluding unsupported rigid transforms", () => {
     const draft = resolveGeometryObjectDraft(baseSelection, {
       objects: [
         {
@@ -278,10 +276,12 @@ describe("resolveGeometryObjectPanelModel", () => {
     expect(
       buildTransformDraftPatch({
         ...draft,
-        scale: ["1", "bad", "1"],
+        rotation: ["bad", "bad", "bad"],
+        scale: ["bad", "bad", "bad"],
+        translation: ["1e-9", "bad", "0"],
       }),
     ).toEqual({
-      error: "Scale 2 must be a finite SI value.",
+      error: "Translation 2 must be a finite SI value.",
       transform: null,
     });
   });

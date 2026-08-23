@@ -34,6 +34,7 @@ export interface Viewport3DPrimitiveObject {
   meshState: Viewport3DPrimitiveMeshState;
   objectId: string;
   sceneRevision: number;
+  translation?: [number, number, number];
 }
 
 export interface Viewport3DBoxCylinderDifferencePreview {
@@ -496,6 +497,7 @@ export function buildViewport3DPrimitiveRenderModel(
         meshState: state,
         objectId,
         sceneRevision,
+        translation: asVec3(transform?.translation) ?? [0, 0, 0],
       },
     ];
   });

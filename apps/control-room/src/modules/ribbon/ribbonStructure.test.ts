@@ -5060,7 +5060,6 @@ describe("ribbon structure", () => {
       "builder-add-tube",
       "builder-add-wedge",
       "builder-add-polygon_prism",
-      "builder-tool-move",
       "builder-tool-rotate",
       "builder-tool-scale",
       "builder-mode-camera",
@@ -5078,6 +5077,24 @@ describe("ribbon structure", () => {
         expect(action.disabled, action.id).toBe(true);
       }
     }
+    const transformActions = actions.filter((action) =>
+      ["builder-tool-move", "builder-tool-rotate", "builder-tool-scale"].includes(action.id),
+    );
+    expect(transformActions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "builder-tool-move", commandId: "geometry.move-selected" }),
+        expect.objectContaining({
+          disabled: true,
+          id: "builder-tool-rotate",
+          tooltip: "Rotate and Scale require a canonical geometry contract newer than ProblemIR 0.3.",
+        }),
+        expect.objectContaining({
+          disabled: true,
+          id: "builder-tool-scale",
+          tooltip: "Rotate and Scale require a canonical geometry contract newer than ProblemIR 0.3.",
+        }),
+      ]),
+    );
     const frameAllAction = actions.find((action) => action.id === "builder-frame-all");
 
     expect(frameAllAction).toMatchObject({
