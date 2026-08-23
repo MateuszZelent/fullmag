@@ -38,17 +38,21 @@ export function FrozenSpinsInspectorPanel({ selection }: InspectorPanelProps) {
   const resource = useFrozenSpinsDefinitionResource(constraintId, {
     enabled: ref !== null,
   });
-  const lastGoodRef = useRef<{
+  const [lastGood, setLastGood] = useState<{
     constraintId: string;
     resource: NonNullable<typeof resource.data>;
   } | null>(null);
-  if (resource.data) {
-    lastGoodRef.current = { constraintId, resource: resource.data };
+  if (
+    resource.data &&
+    (lastGood?.constraintId !== constraintId ||
+      lastGood.resource !== resource.data)
+  ) {
+    setLastGood({ constraintId, resource: resource.data });
   }
   const retainedResource =
     resource.data ??
-    (lastGoodRef.current?.constraintId === constraintId
-      ? lastGoodRef.current.resource
+    (lastGood?.constraintId === constraintId
+      ? lastGood.resource
       : null);
 
   if (!ref) {
@@ -56,6 +60,15 @@ export function FrozenSpinsInspectorPanel({ selection }: InspectorPanelProps) {
       <FeedbackBanner
         kind="warning"
         message="Select a Frozen Spins constraint in Explorer."
+      />
+    );
+  }
+  const objectId = ref.objectId;
+  if (!objectId) {
+    return (
+      <FeedbackBanner
+        kind="warning"
+        message="The selected Frozen Spins constraint has no owning object."
       />
     );
   }
@@ -74,7 +87,7 @@ export function FrozenSpinsInspectorPanel({ selection }: InspectorPanelProps) {
     <FrozenSpinsEditor
       key={constraintId}
       definition={retainedResource.definition}
-      objectId={ref.objectId}
+      objectId={objectId}
       regionId={ref.regionId ?? null}
       revision={retainedResource.revision}
     />
