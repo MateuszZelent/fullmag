@@ -6655,6 +6655,8 @@ export interface components {
             references?: components["schemas"]["MaterialReferenceResource"][];
             /** Format: int64 */
             region_coefficients_revision?: number | null;
+            /** Format: int64 */
+            scene_revision: number;
         };
         MeshActiveBuildResource: {
             /** @description Current active build descriptor and progress metadata. */
@@ -7495,6 +7497,8 @@ export interface components {
             object_id: string;
             params: Record<string, never>;
             present: boolean;
+            /** Format: int64 */
+            scene_revision: number;
         };
         ObjectMagnetizationAverage: {
             /** Format: double */

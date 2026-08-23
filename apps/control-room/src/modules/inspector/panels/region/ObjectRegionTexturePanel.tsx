@@ -1,7 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { invalidateAuthoringMutationDependents } from "@/kernel/authoring/authoringMutationInvalidation";
+import {
+  acknowledgedAuthoringSceneRevision,
+  invalidateAuthoringMutationDependents,
+} from "@/kernel/authoring/authoringMutationInvalidation";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import {
@@ -137,10 +140,7 @@ export function ObjectRegionTexturePanel({
         buildRegionTextureOverridePatch(asset),
         { baseRevision: assetResponse.scene_revision ?? model.baseRevision ?? undefined },
       );
-      const revision =
-        typeof response.revision === "number"
-          ? response.revision
-          : assetResponse.scene_revision ?? model.baseRevision ?? 0;
+      const revision = acknowledgedAuthoringSceneRevision(response);
       invalidateTextureResources(revision);
       const syncWarning = await syncAuthoringScriptBestEffort(api);
       setDraftState({
@@ -176,10 +176,7 @@ export function ObjectRegionTexturePanel({
         buildRegionTextureOverridePatch(null),
         { baseRevision: model.baseRevision ?? undefined },
       );
-      const revision =
-        typeof response.revision === "number"
-          ? response.revision
-          : model.baseRevision ?? 0;
+      const revision = acknowledgedAuthoringSceneRevision(response);
       invalidateTextureResources(revision);
       const syncWarning = await syncAuthoringScriptBestEffort(api);
       setDraftState({

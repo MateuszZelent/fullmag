@@ -1,5 +1,8 @@
 import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
-import { invalidateAuthoringMutationDependents } from "@/kernel/authoring/authoringMutationInvalidation";
+import {
+  acknowledgedAuthoringSceneRevision,
+  invalidateAuthoringMutationDependents,
+} from "@/kernel/authoring/authoringMutationInvalidation";
 import type { JsonObject } from "@/kernel/api/apiTypes";
 import type {
   CommandContext,
@@ -82,21 +85,17 @@ async function assignPreset(
     },
   );
 
-  if (target.kind === "region") {
-    await context.api.model.patchRegion(
-      target.regionId,
-      {
-        magnetization_ref: assetId,
-      },
-    );
-  } else {
-    await context.api.model.patchObject(target.objectId, {
-      base_revision: assetResponse.scene_revision,
-      magnetization_ref: assetId,
-    });
-  }
+  const assignmentResponse =
+    target.kind === "region"
+      ? await context.api.model.patchRegion(target.regionId, {
+          magnetization_ref: assetId,
+        })
+      : await context.api.model.patchObject(target.objectId, {
+          base_revision: assetResponse.scene_revision,
+          magnetization_ref: assetId,
+        });
 
-  const revision = assetResponse.scene_revision ?? Date.now();
+  const revision = acknowledgedAuthoringSceneRevision(assignmentResponse);
   if (context.resources) {
     invalidateAuthoringMutationDependents(
       context.resources,

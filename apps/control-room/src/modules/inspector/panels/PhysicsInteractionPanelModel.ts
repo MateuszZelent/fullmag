@@ -57,6 +57,7 @@ export function defaultObjectInteractionResource(
     object_id: objectId,
     params: {},
     present: false,
+    scene_revision: 0,
   };
 }
 

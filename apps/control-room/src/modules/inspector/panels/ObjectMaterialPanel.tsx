@@ -2,7 +2,10 @@
 
 import { useCallback, useMemo, useState } from "react";
 
-import { invalidateAuthoringMutationDependents } from "@/kernel/authoring/authoringMutationInvalidation";
+import {
+  acknowledgedAuthoringSceneRevision,
+  invalidateAuthoringMutationDependents,
+} from "@/kernel/authoring/authoringMutationInvalidation";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   resolveMaterialResourceKey,
@@ -70,25 +73,6 @@ type Feedback =
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function nextLocalRevision(
-  ...revisions: Array<number | string | null | undefined>
-): number {
-  const numericRevisions = revisions.filter(
-    (revision): revision is number =>
-      typeof revision === "number" && Number.isFinite(revision),
-  );
-  return numericRevisions.length > 0 ? Math.max(...numericRevisions) + 1 : 0;
-}
-
-function resolveMutationRevision(
-  value: unknown,
-  ...fallbacks: Array<number | string | null | undefined>
-): number {
-  return typeof value === "number" && Number.isFinite(value)
-    ? value
-    : nextLocalRevision(...fallbacks);
 }
 
 function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]) {
@@ -191,11 +175,15 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
     }
     setPending(true);
     try {
-      await api.model.patchObjectInteraction(object.objectId, "uniaxial_anisotropy", {
-        present: anisotropyDraft.present,
-        params: { ku1, axis: [axisX, axisY, axisZ] },
-      });
-      const revision = nextLocalRevision(object.baseRevision);
+      const response = await api.model.patchObjectInteraction(
+        object.objectId,
+        "uniaxial_anisotropy",
+        {
+          present: anisotropyDraft.present,
+          params: { ku1, axis: [axisX, axisY, axisZ] },
+        },
+      );
+      const revision = acknowledgedAuthoringSceneRevision(response);
       resources.invalidate(
         resolveObjectInteractionResourceKey(object.objectId, "uniaxial_anisotropy"),
         revision,
@@ -236,10 +224,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
         object.objectId,
         buildMaterialAssignmentPatch(draft, object.baseRevision),
       );
-      const revision = resolveMutationRevision(
-        sceneResponse.revision,
-        object.baseRevision,
-      );
+      const revision = acknowledgedAuthoringSceneRevision(sceneResponse);
       invalidateMagneticParameterResources(revision);
       setFeedback({
         kind: "success",
@@ -278,8 +263,8 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
 
     setPending(true);
     try {
-      await api.model.patchMaterial(materialId, result.patch);
-      const revision = nextLocalRevision(material.revision, object.baseRevision);
+      const response = await api.model.patchMaterial(materialId, result.patch);
+      const revision = acknowledgedAuthoringSceneRevision(response);
       resources.invalidate(resolveMaterialResourceKey(materialId), revision);
       invalidateMagneticParameterResources(revision);
       setFeedback({

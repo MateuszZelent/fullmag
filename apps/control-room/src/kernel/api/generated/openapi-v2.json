@@ -12059,9 +12059,15 @@
               "integer",
               "null"
             ]
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
+          "scene_revision",
           "id",
           "name",
           "properties"
@@ -15471,9 +15477,15 @@
           },
           "present": {
             "type": "boolean"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
+          "scene_revision",
           "object_id",
           "interaction_kind",
           "present",
@@ -45327,8 +45339,8 @@
     }
   ],
   "x-fullmag-build-identity": {
-    "built_at_utc": "2026-08-23T14:21:27Z",
-    "git_commit": "2d7ffcd43b226f0f401ea26d3354dc78e6b71eff",
+    "built_at_utc": "2026-08-23T17:02:17Z",
+    "git_commit": "28fda14dea3c02610fe58b648f34677bd88d3212",
     "source_snapshot_sha256": "unknown",
     "worktree_state": "dirty"
   },

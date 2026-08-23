@@ -3,7 +3,10 @@
 import { useMemo, useState } from "react";
 
 import type { RegionPatchRequest } from "@/kernel/api/apiTypes";
-import { invalidateAuthoringMutationDependents } from "@/kernel/authoring/authoringMutationInvalidation";
+import {
+  acknowledgedAuthoringSceneRevision,
+  invalidateAuthoringMutationDependents,
+} from "@/kernel/authoring/authoringMutationInvalidation";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import {
@@ -779,10 +782,7 @@ export function ObjectMagneticTexturePanel({
               patch.payload as RegionPatchRequest,
             )
           : await api.model.patchObject(model.objectId, patch.payload);
-      const revision =
-        typeof response.revision === "number"
-          ? response.revision
-          : assetResponse.scene_revision ?? model.baseRevision ?? 0;
+      const revision = acknowledgedAuthoringSceneRevision(response);
       invalidateTextureResources(revision);
       const syncWarning = await syncAuthoringScriptBestEffort(api);
       setDraftState({
@@ -825,10 +825,7 @@ export function ObjectMagneticTexturePanel({
               patch.payload as RegionPatchRequest,
             )
           : await api.model.patchObject(model.objectId, patch.payload);
-      const revision =
-        typeof response.revision === "number"
-          ? response.revision
-          : model.baseRevision ?? 0;
+      const revision = acknowledgedAuthoringSceneRevision(response);
       invalidateTextureResources(revision);
       const syncWarning = await syncAuthoringScriptBestEffort(api);
       setDraftState({

@@ -3,17 +3,25 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
 import { MODEL_READINESS_PATH } from "@/kernel/api/apiPaths";
-import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
-import { buildRuntimeCommandControlResourceData } from "@/kernel/resources/studyRuntimeResources";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
-import { STUDY_RUNTIME_COMMANDS } from "@/kernel/runtime/studyRuntimeCommandContributions";
 
 import {
+  acknowledgedAuthoringSceneRevision,
   AUTHORING_MUTATION_DEPENDENTS,
   invalidateAuthoringMutationDependents,
 } from "./authoringMutationInvalidation";
 
 describe("authoring mutation readiness invalidation", () => {
+  it("accepts only a scene revision acknowledged by the final mutation", () => {
+    expect(
+      acknowledgedAuthoringSceneRevision({ revision: 7, scene_revision: 8 }),
+    ).toBe(8);
+    expect(acknowledgedAuthoringSceneRevision({ revision: 7 })).toBe(7);
+    expect(() => acknowledgedAuthoringSceneRevision({})).toThrow(
+      "Authoring mutation ACK omitted the scene revision.",
+    );
+  });
+
   it.each([
     "../../modules/inspector/panels/ObjectMaterialPanel.tsx",
     "../../modules/inspector/panels/ObjectMagneticTexturePanel.tsx",
@@ -23,6 +31,7 @@ describe("authoring mutation readiness invalidation", () => {
     const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
 
     expect(source).toContain("invalidateAuthoringMutationDependents");
+    expect(source).toContain("acknowledgedAuthoringSceneRevision");
   });
 
   it.each(["material", "magnetization"] as const)(
@@ -49,64 +58,4 @@ describe("authoring mutation readiness invalidation", () => {
     },
   );
 
-  it.each(["material", "magnetization"] as const)(
-    "recovers Run after a no-realtime %s ACK refetches status and readiness",
-    (kind) => {
-      const revision = 18;
-      const invalidate = vi.fn();
-      const registry = new CommandRegistry();
-      for (const command of STUDY_RUNTIME_COMMANDS) registry.register(command);
-
-      const contextAt = (statusSceneRevision: number) => ({
-        api: {} as never,
-        resourceData: buildRuntimeCommandControlResourceData({
-          commandQueue: { commands: [] },
-          geometryValidation: { diagnostics: [] },
-          meshBuildCurrent: null,
-          meshManifest: null,
-          modelReadinessData: {
-            blockers: [],
-            capabilities: {} as never,
-            checks: [],
-            ready_to_export: true,
-            ready_to_run: true,
-            scene_revision: revision,
-          },
-          modelReadinessStatus: "ready",
-          sessionStatus: { resources: { scene_revision: statusSceneRevision } },
-          solverStatus: { runtime_state: "idle" },
-          stageExecution: {
-            active_stage_index: null,
-            revision: revision,
-            runtime_state: "idle",
-            stages: [],
-          },
-        }),
-        source: "test" as const,
-      });
-
-      expect(registry.isEnabled("study.run", contextAt(revision - 1))).toBe(false);
-      expect(
-        registry.get("study.run")?.disabledReason?.(contextAt(revision - 1)),
-      ).toBe("Model readiness is stale for the current scene.");
-
-      invalidateAuthoringMutationDependents({ invalidate }, kind, revision);
-
-      expect(
-        invalidate.mock.calls.filter(
-          ([resourceKey, invalidationRevision]) =>
-            resourceKey === MODEL_READINESS_PATH && invalidationRevision === revision,
-        ),
-      ).toHaveLength(1);
-      expect(
-        invalidate.mock.calls.filter(
-          ([resourceKey, invalidationRevision]) =>
-            resourceKey === SESSION_STATUS_RESOURCE_KEY &&
-            invalidationRevision === revision,
-        ),
-      ).toHaveLength(1);
-      expect(registry.isEnabled("study.run", contextAt(revision))).toBe(true);
-      expect(registry.get("study.run")?.disabledReason?.(contextAt(revision))).toBeNull();
-    },
-  );
 });

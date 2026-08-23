@@ -2782,6 +2782,7 @@ pub async fn get_authoring_material(
         .coefficients;
     Ok(Json(build_material_resource(
         material,
+        scene.revision,
         region_coefficients_revision,
     )))
 }
@@ -2827,6 +2828,7 @@ pub async fn patch_authoring_material(
         .coefficients;
     Ok(Json(build_material_resource(
         material,
+        committed.revision,
         region_coefficients_revision,
     )))
 }
@@ -2940,6 +2942,7 @@ pub async fn get_authoring_object_interaction(
         object,
         kind,
         interaction,
+        scene.revision,
     )))
 }
 
@@ -2986,6 +2989,7 @@ pub async fn patch_authoring_object_interaction(
         object,
         kind,
         interaction,
+        committed.revision,
     )))
 }
 
@@ -4824,9 +4828,11 @@ async fn current_region_realization_revisions(
 
 fn build_material_resource(
     material: &fullmag_authoring::SceneMaterialAsset,
+    scene_revision: u64,
     region_coefficients_revision: u64,
 ) -> MaterialResource {
     MaterialResource {
+        scene_revision,
         region_coefficients_revision: Some(region_coefficients_revision),
         id: material.id.clone(),
         name: material.name.clone(),
@@ -4979,6 +4985,7 @@ fn build_object_interaction_resource(
     object: &SceneObject,
     kind: ScriptBuilderMagneticInteractionKind,
     interaction: Option<&ScriptBuilderMagneticInteractionEntry>,
+    scene_revision: u64,
 ) -> ObjectInteractionResource {
     let (present, enabled, params) = match interaction {
         Some(entry) => (
@@ -4992,6 +4999,7 @@ fn build_object_interaction_resource(
         None => (false, false, Value::Object(Default::default())),
     };
     ObjectInteractionResource {
+        scene_revision,
         object_id: object.id.clone(),
         interaction_kind: interaction_kind_str(kind).to_string(),
         present,

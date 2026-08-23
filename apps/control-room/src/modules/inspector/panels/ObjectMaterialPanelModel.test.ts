@@ -52,6 +52,7 @@ describe("ObjectMaterialPanelModel", () => {
         Ms: 800000,
         alpha: 0.02,
       },
+      scene_revision: 12,
     };
 
     const draft = magneticParametersDraftFromResource("mat-1", resource);

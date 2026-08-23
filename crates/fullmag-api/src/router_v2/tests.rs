@@ -19841,6 +19841,7 @@ async fn authoring_material_patch_commits_requested_material() {
         .as_ref()
         .and_then(|snapshot| snapshot.scene_document.as_ref())
         .expect("scene document committed");
+    assert_eq!(json["scene_revision"], committed.revision);
     let material = committed
         .materials
         .iter()

@@ -34,6 +34,17 @@ export const AUTHORING_MUTATION_DEPENDENTS = {
 
 type AuthoringMutationKind = keyof typeof AUTHORING_MUTATION_DEPENDENTS;
 
+export function acknowledgedAuthoringSceneRevision(response: {
+  revision?: unknown;
+  scene_revision?: unknown;
+}): number {
+  const revision = response.scene_revision ?? response.revision;
+  if (typeof revision !== "number" || !Number.isFinite(revision)) {
+    throw new Error("Authoring mutation ACK omitted the scene revision.");
+  }
+  return revision;
+}
+
 export function invalidateAuthoringMutationDependents(
   resources: {
     invalidate(resourceKey: string, revision: ResourceRevision): void;

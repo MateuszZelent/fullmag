@@ -967,6 +967,7 @@ pub struct MaterialReferenceResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct MaterialResource {
+    pub scene_revision: u64,
     pub region_coefficients_revision: Option<u64>,
     pub id: String,
     pub name: String,
@@ -1018,6 +1019,7 @@ pub struct MaterialPatchRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ObjectInteractionResource {
+    pub scene_revision: u64,
     pub object_id: String,
     pub interaction_kind: String,
     pub present: bool,

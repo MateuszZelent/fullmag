@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
 import { MODEL_READINESS_PATH } from "@/kernel/api/apiPaths";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
+import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 
 import { MAGNETIZATION_TEXTURE_COMMANDS } from "./commands";
 
@@ -76,8 +77,54 @@ describe("magnetization texture commands", () => {
       },
     );
     expect(
-      invalidate.mock.calls.filter(([resourceKey]) => resourceKey === MODEL_READINESS_PATH),
+      invalidate.mock.calls.filter(
+        ([resourceKey, revision]) =>
+          resourceKey === MODEL_READINESS_PATH && revision === 7,
+      ),
     ).toHaveLength(1);
+    expect(
+      invalidate.mock.calls.filter(
+        ([resourceKey, revision]) =>
+          resourceKey === SESSION_STATUS_RESOURCE_KEY && revision === 7,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("invalidates from the final object assignment ACK", async () => {
+    const patchMagnetizationAsset = vi.fn(async () => ({
+      asset: { id: "mag:body:uniform" },
+      scene_revision: 6,
+    }));
+    const patchObject = vi.fn(async () => ({ revision: 7 }));
+    const invalidate = vi.fn();
+    const context = {
+      api: { model: { patchMagnetizationAsset, patchObject } },
+      resourceData: { [MODEL_SCENE_PATH]: { revision: 5 } },
+      resources: { invalidate },
+      selection: {
+        get: () => ({
+          kind: "object.magnetic-texture",
+          objectId: "body",
+          ref: {
+            kind: "object.magnetic-texture",
+            objectId: "body",
+            type: "scene-object",
+          },
+        }),
+      },
+      source: "test",
+    } as unknown as CommandContext;
+
+    await expect(uniformCommand?.run(context)).resolves.toMatchObject({
+      status: "completed",
+    });
+
+    expect(patchObject).toHaveBeenCalledWith("body", {
+      base_revision: 6,
+      magnetization_ref: "mag:body:uniform",
+    });
+    expect(invalidate).toHaveBeenCalledWith(MODEL_READINESS_PATH, 7);
+    expect(invalidate).toHaveBeenCalledWith(SESSION_STATUS_RESOURCE_KEY, 7);
   });
 
   it("disables assignment when no object or region target is selected", () => {

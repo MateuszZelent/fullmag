@@ -563,6 +563,7 @@ export interface ObjectInteractionResource {
   object_id: string;
   params: JsonObject;
   present: boolean;
+  scene_revision: number;
 }
 export interface ObjectPatchRequest extends BaseAuthoringTransaction {
   absorbing_boundary?: JsonObject | null;
