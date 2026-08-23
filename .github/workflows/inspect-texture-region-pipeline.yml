@@ -1,0 +1,79 @@
+name: Inspect texture transform and region pipeline
+
+on:
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    if: github.head_ref == 'codex/texture-transform-region-clipping-20260823'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/texture-transform-region-clipping-20260823
+      - name: Print targeted implementation excerpts
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          requests = {
+              'crates/fullmag-plan/src/fdm.rs': [
+                  'fn grid_sample_points(',
+                  'fn apply_region_texture_overrides(',
+                  'apply_region_texture_overrides(',
+                  'materialize_object_region_mask(',
+              ],
+              'crates/fullmag-plan/src/fem.rs': [
+                  'struct MagnetPlanningEntry',
+                  'fn assign_domain_initial_for_segments(',
+                  'initial_vectors_for_magnet(',
+                  'object_regions',
+              ],
+              'crates/fullmag-plan/src/mesh.rs': [
+                  'pub(crate) fn object_space_sample_points(',
+                  'pub(crate) fn initial_vectors_for_magnet(',
+                  'fn initial_vectors_for_magnet(',
+              ],
+              'crates/fullmag-plan/src/magnetization_textures_v2.rs': [
+                  'pub(crate) fn sample_v2(',
+                  'fn inverse_transform(',
+                  'fn rotate_vector(',
+                  'fn local_evaluate(',
+              ],
+              'crates/fullmag-ir/src/model.rs': [
+                  'pub struct ObjectRegionIR',
+                  'pub enum InitialMagnetizationIR',
+                  'pub struct TextureTransform3DIR',
+                  'pub struct TextureMappingIR',
+              ],
+              'apps/control-room/src/modules/inspector/panels/ObjectRegionsPanelModel.ts': [
+                  'texture',
+                  'region',
+              ],
+          }
+
+          def excerpt(lines, index, before=20, after=80):
+              start = max(index - before, 0)
+              end = min(index + after, len(lines))
+              return '\n'.join(f'{i + 1:5d}: {lines[i]}' for i in range(start, end))
+
+          for path_text, needles in requests.items():
+              path = Path(path_text)
+              print(f'\n===== FILE {path_text} =====')
+              if not path.exists():
+                  print('MISSING')
+                  continue
+              lines = path.read_text(encoding='utf-8').splitlines()
+              for needle in needles:
+                  matches = [i for i, line in enumerate(lines) if needle in line]
+                  print(f'\n--- NEEDLE {needle!r}: {matches} ---')
+                  for index in matches[:8]:
+                      print(excerpt(lines, index))
+                      print('--- END EXCERPT ---')
+          PY
