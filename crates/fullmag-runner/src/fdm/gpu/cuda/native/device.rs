@@ -45,9 +45,15 @@ impl NativeFdmBackend {
 
     pub(crate) fn execution_receipt(
         &self,
+        requested_device: &str,
         requested_mode: fullmag_ir::ExecutionMode,
     ) -> Result<FdmGpuExecutionReceipt, RunError> {
         let device = self.device_info()?;
-        super::residency::query_execution_receipt(self, requested_mode, &device.name)
+        super::residency::query_execution_receipt(
+            self,
+            requested_device,
+            requested_mode,
+            &device.name,
+        )
     }
 }

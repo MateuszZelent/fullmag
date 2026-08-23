@@ -1,5 +1,6 @@
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -71,6 +72,41 @@ int main() {
     static_assert(FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1 == 1u);
     static_assert(offsetof(fullmag_fdm_execution_receipt_v1, abi_version) == 0u);
     static_assert(offsetof(fullmag_fdm_execution_receipt_v1, struct_size) == 4u);
+#define FULLMAG_FDM_EXECUTION_RECEIPT_FIELD(type, name, offset) \
+    static_assert(offsetof(fullmag_fdm_execution_receipt_v1, name) == offset);
+#define FULLMAG_FDM_EXECUTION_RECEIPT_SIZE(size) \
+    static_assert(sizeof(fullmag_fdm_execution_receipt_v1) == size);
+#include "fullmag_fdm_execution_receipt_v1_layout.def"
+#undef FULLMAG_FDM_EXECUTION_RECEIPT_SIZE
+#undef FULLMAG_FDM_EXECUTION_RECEIPT_FIELD
+    fullmag_fdm_execution_receipt_v1 invalid{};
+    std::memset(&invalid, 0x5a, sizeof(invalid));
+    invalid.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1 + 1;
+    invalid.struct_size = sizeof(invalid);
+    const auto unknown_version = invalid;
+    check(!fullmag::fdm::fullmag_fdm_execution_receipt_request_valid(invalid),
+          "unknown receipt ABI version is rejected");
+    check(std::memcmp(&invalid, &unknown_version, sizeof(invalid)) == 0,
+          "unknown ABI rejection leaves output byte-for-byte unchanged");
+    invalid.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1;
+    invalid.struct_size = sizeof(invalid) - 1;
+    const auto truncated = invalid;
+    check(!fullmag::fdm::fullmag_fdm_execution_receipt_request_valid(invalid),
+          "truncated receipt is rejected");
+    check(std::memcmp(&invalid, &truncated, sizeof(invalid)) == 0,
+          "truncated rejection leaves output byte-for-byte unchanged");
+    invalid.struct_size = sizeof(invalid) + 1;
+    const auto oversized = invalid;
+    check(!fullmag::fdm::fullmag_fdm_execution_receipt_request_valid(invalid),
+          "oversized receipt is rejected");
+    check(std::memcmp(&invalid, &oversized, sizeof(invalid)) == 0,
+          "oversized rejection leaves output byte-for-byte unchanged");
+
+    uint64_t bytes = 0;
+    check(fullmag::fdm::fullmag_fdm_checked_vector_bytes(1, sizeof(double), bytes) && bytes == 24,
+          "checked setup byte multiplication accepts a small vector");
+    check(!fullmag::fdm::fullmag_fdm_checked_vector_bytes(UINT64_MAX, sizeof(double), bytes),
+          "checked setup byte multiplication rejects overflow");
 
     fullmag_fdm_execution_receipt_v1 receipt{};
     receipt.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1;
@@ -85,6 +121,9 @@ int main() {
           "hot-loop host compute starts at zero");
     check(receipt.hot_loop_control_scalar_d2h_bytes == 0,
           "scalar control is accounted separately");
+    check(receipt.observation_full_vector_d2h_count == 0 &&
+              receipt.observation_full_vector_h2d_count == 0,
+          "observation transfers are independent from solver hot-loop counters");
 
 #if FULLMAG_FDM_CONTRACT_HAS_CUDA
     double m[3] = {1.0, 0.0, 0.0};
@@ -107,6 +146,30 @@ int main() {
           "managed CUDA fixture creates a native context");
     check(fullmag_fdm_backend_last_error(handle) == nullptr,
           "managed CUDA fixture creation has no deferred error");
+
+    auto check_rejected_query_unchanged = [&](uint32_t abi_version,
+                                               uint32_t struct_size,
+                                               const char *message) {
+        fullmag_fdm_execution_receipt_v1 rejected{};
+        std::memset(&rejected, 0x5a, sizeof(rejected));
+        rejected.abi_version = abi_version;
+        rejected.struct_size = struct_size;
+        const auto before = rejected;
+        check(fullmag_fdm_backend_execution_receipt_v1(handle, &rejected) ==
+                  FULLMAG_FDM_ERR_ABI,
+              message);
+        check(std::memcmp(&rejected, &before, sizeof(rejected)) == 0,
+              "rejected native receipt query leaves output byte-for-byte unchanged");
+    };
+    check_rejected_query_unchanged(FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1 + 1,
+                                   sizeof(receipt),
+                                   "native query rejects an unknown ABI version");
+    check_rejected_query_unchanged(FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1,
+                                   sizeof(receipt) - 1,
+                                   "native query rejects a truncated receipt");
+    check_rejected_query_unchanged(FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1,
+                                   sizeof(receipt) + 1,
+                                   "native query rejects an oversized receipt");
 
     check(fullmag_fdm_backend_execution_receipt_v1(handle, &receipt) == FULLMAG_FDM_OK,
           "created Context publishes execution receipt");
@@ -150,9 +213,9 @@ int main() {
         evidence
             << "{\n"
             << "  \"schema_version\": \"fdm_gpu_execution_receipt_evidence.v1\",\n"
-            << "  \"validation_state\": \"unvalidated\",\n"
+            << "  \"validation_state\": \"validated\",\n"
             << "  \"runtime_check\": \"passed\",\n"
-            << "  \"requested\": \"device_resident\",\n"
+            << "  \"requested\": \"gpu\",\n"
             << "  \"resolved\": \"device_resident\",\n"
             << "  \"executed\": \"cuda_fdm\",\n"
             << "  \"device_ordinal\": " << receipt.device_ordinal << ",\n"
@@ -167,6 +230,10 @@ int main() {
             << receipt.setup_full_vector_h2d_count << ",\n"
             << "    \"setup_full_vector_h2d_bytes\": "
             << receipt.setup_full_vector_h2d_bytes << ",\n"
+            << "    \"setup_full_vector_d2h_count\": "
+            << receipt.setup_full_vector_d2h_count << ",\n"
+            << "    \"setup_full_vector_d2h_bytes\": "
+            << receipt.setup_full_vector_d2h_bytes << ",\n"
             << "    \"hot_loop_full_vector_h2d_count\": "
             << receipt.hot_loop_full_vector_h2d_count << ",\n"
             << "    \"hot_loop_full_vector_h2d_bytes\": "
@@ -182,7 +249,15 @@ int main() {
             << "    \"hot_loop_control_scalar_d2h_bytes\": "
             << receipt.hot_loop_control_scalar_d2h_bytes << ",\n"
             << "    \"hot_loop_control_scalar_host_sync_count\": "
-            << receipt.hot_loop_control_scalar_host_sync_count << "\n"
+            << receipt.hot_loop_control_scalar_host_sync_count << ",\n"
+            << "    \"observation_full_vector_h2d_count\": "
+            << receipt.observation_full_vector_h2d_count << ",\n"
+            << "    \"observation_full_vector_h2d_bytes\": "
+            << receipt.observation_full_vector_h2d_bytes << ",\n"
+            << "    \"observation_full_vector_d2h_count\": "
+            << receipt.observation_full_vector_d2h_count << ",\n"
+            << "    \"observation_full_vector_d2h_bytes\": "
+            << receipt.observation_full_vector_d2h_bytes << "\n"
             << "  }\n"
             << "}\n";
         check(static_cast<bool>(evidence), "managed receipt evidence is complete");
@@ -214,29 +289,42 @@ int main() {
     instrumented.precision = FULLMAG_FDM_PRECISION_DOUBLE;
     instrumented.integrator = FULLMAG_FDM_INTEGRATOR_HEUN;
     instrumented.enable_exchange = true;
-    instrumented.receipt_setup_full_vector_h2d_count = 1;
-    instrumented.receipt_setup_full_vector_h2d_bytes = 24;
-    receipt = fullmag::fdm::fullmag_fdm_make_execution_receipt(instrumented, 0);
+    instrumented.execution_receipt.device_ordinal = 3;
+    fullmag::fdm::fullmag_fdm_record_setup_full_vector_h2d(instrumented, 24);
+    fullmag::fdm::fullmag_fdm_commit_operator_residency(instrumented);
+    receipt = fullmag::fdm::fullmag_fdm_make_execution_receipt(instrumented);
     check(receipt.execution_class == FULLMAG_FDM_EXECUTION_DEVICE_RESIDENT,
           "instrumented Context maps to device-resident receipt semantics");
     check(receipt.setup_full_vector_h2d_count == 1 &&
               receipt.setup_full_vector_h2d_bytes == 24,
           "instrumented setup transfer remains separate from the hot loop");
 
+    check(receipt.device_ordinal == 3,
+          "receipt uses the device ordinal captured by Context creation");
     fullmag::fdm::fullmag_fdm_record_hot_loop_full_vector_h2d(instrumented, 24);
-    receipt = fullmag::fdm::fullmag_fdm_make_execution_receipt(instrumented, 0);
+    receipt = fullmag::fdm::fullmag_fdm_make_execution_receipt(instrumented);
     check(receipt.hot_loop_full_vector_h2d_count == 1 &&
               receipt.hot_loop_full_vector_h2d_bytes == 24,
           "host diagnostic exposes injected full-vector H2D violation");
     fullmag::fdm::fullmag_fdm_record_hot_loop_full_vector_d2h(instrumented, 24);
-    receipt = fullmag::fdm::fullmag_fdm_make_execution_receipt(instrumented, 0);
+    receipt = fullmag::fdm::fullmag_fdm_make_execution_receipt(instrumented);
     check(receipt.hot_loop_full_vector_d2h_count == 1 &&
               receipt.hot_loop_full_vector_d2h_bytes == 24,
           "host diagnostic exposes injected full-vector D2H violation");
     fullmag::fdm::fullmag_fdm_record_hot_loop_host_compute(instrumented);
-    receipt = fullmag::fdm::fullmag_fdm_make_execution_receipt(instrumented, 0);
+    receipt = fullmag::fdm::fullmag_fdm_make_execution_receipt(instrumented);
     check(receipt.hot_loop_host_compute_count == 1,
           "host diagnostic exposes injected host-compute violation");
+    fullmag::fdm::fullmag_fdm_record_observation_full_vector_d2h(instrumented, 24);
+    receipt = fullmag::fdm::fullmag_fdm_make_execution_receipt(instrumented);
+    check(receipt.observation_full_vector_d2h_count == 1 &&
+              receipt.hot_loop_full_vector_d2h_count == 1,
+          "observation D2H is measured without contaminating hot-loop D2H");
+    fullmag::fdm::fullmag_fdm_mark_unproven_operator_host(
+        instrumented, 1ull << 63);
+    receipt = fullmag::fdm::fullmag_fdm_make_execution_receipt(instrumented);
+    check(receipt.host_operator_mask != 0 && receipt.fallback_count == 1,
+          "unproven operator realization is host-marked and fail-closed");
 #endif
 
     std::puts("FDM GPU device residency receipt contract: PASS");

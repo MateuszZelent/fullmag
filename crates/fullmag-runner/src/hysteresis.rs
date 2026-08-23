@@ -2662,6 +2662,7 @@ fn execute_settle_step_at_field(
             };
             let mut executed = dispatch::execute_fdm_in_mode(
                 resolution.engine,
+                &crate::solver_runtime::selection::requested_registry_device_for_fdm(problem),
                 problem.validation_profile.execution_mode,
                 &mutated_fdm,
                 until_seconds,

@@ -46,6 +46,26 @@ extern void set_cuda_error(Context &ctx, const char *operation, cudaError_t err)
 
 namespace {
 
+class ReceiptSolverPhaseGuard {
+public:
+    explicit ReceiptSolverPhaseGuard(Context &context)
+        : context_(context), previous_(context.execution_receipt.solver_phase_active)
+    {
+        context_.execution_receipt.solver_phase_active = true;
+    }
+
+    ~ReceiptSolverPhaseGuard() {
+        context_.execution_receipt.solver_phase_active = previous_;
+    }
+
+    ReceiptSolverPhaseGuard(const ReceiptSolverPhaseGuard &) = delete;
+    ReceiptSolverPhaseGuard &operator=(const ReceiptSolverPhaseGuard &) = delete;
+
+private:
+    Context &context_;
+    bool previous_;
+};
+
 std::optional<int> selected_cuda_device_from_env() {
     const char *specific = std::getenv("FULLMAG_FDM_GPU_INDEX");
     const char *generic = std::getenv("FULLMAG_CUDA_DEVICE_INDEX");
@@ -338,6 +358,10 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     if (!select_cuda_device_if_requested(*ctx)) {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
+    if (cudaGetDevice(&ctx->execution_receipt.device_ordinal) != cudaSuccess) {
+        ctx->last_error = "failed to capture selected CUDA device for execution receipt";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
 
     // Copy grid
     ctx->nx = plan->grid.nx;
@@ -563,7 +587,17 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
         ctx->last_error = "grid has zero cells";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
-    uint64_t expected_len = ctx->cell_count * 3;
+    uint64_t setup_bytes = 0;
+    const uint64_t scalar_bytes =
+        ctx->precision == FULLMAG_FDM_PRECISION_DOUBLE
+            ? sizeof(double) : sizeof(float);
+    if (!fullmag_fdm_checked_vector_bytes(
+            ctx->cell_count, scalar_bytes, setup_bytes)) {
+        ctx->execution_receipt.accounting_valid = false;
+        ctx->last_error = "initial magnetization byte count overflow";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    const uint64_t expected_len = setup_bytes / scalar_bytes;
     if (plan->initial_magnetization_len != expected_len) {
         ctx->last_error = "initial_magnetization_len mismatch: expected "
             + std::to_string(expected_len)
@@ -930,17 +964,13 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
-    ctx->receipt_setup_full_vector_h2d_count += 1;
-    ctx->receipt_setup_full_vector_h2d_bytes +=
-        3u * ctx->cell_count *
-        (ctx->precision == FULLMAG_FDM_PRECISION_DOUBLE ? sizeof(double) : sizeof(float));
-
     if (!context_refresh_observables(*ctx)) {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
 
     // Query device info
     context_query_device_info(*ctx);
+    fullmag_fdm_commit_operator_residency(*ctx);
 
     return reinterpret_cast<fullmag_fdm_backend *>(ctx);
 #else
@@ -1050,6 +1080,10 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
     if (!select_cuda_device_if_requested(*ctx)) {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
+    if (cudaGetDevice(&ctx->execution_receipt.device_ordinal) != cudaSuccess) {
+        ctx->last_error = "failed to capture selected CUDA device for execution receipt";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
 
     if (plan->kind == FULLMAG_FDM_PLAN_UNIFORM_GRID) {
         ctx->last_error =
@@ -1098,6 +1132,7 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
         "uploaded " + std::to_string(ctx->multilayer_layers.size())
         + " layers and " + std::to_string(ctx->multilayer_kernels.size())
         + " tensor kernels; prepared initial FFT workspace; native Heun/RK4/fixed-step RK23 timestep with optional demag and layer-local exchange is available for v2 multilayer handles";
+    fullmag_fdm_commit_operator_residency(*ctx);
     return reinterpret_cast<fullmag_fdm_backend *>(ctx);
 #else
     (void)plan;
@@ -1125,6 +1160,7 @@ int fullmag_fdm_backend_step(
     ctx->current_dt = dt_seconds;
     ctx->step_interrupted = false;
     fullmag_fdm_reset_hot_loop_audit(*ctx);
+    ReceiptSolverPhaseGuard receipt_solver_phase(*ctx);
     if (ctx->has_multilayer_plan_v2) {
         if (ctx->gpu_transport_rhs.active) {
             ctx->last_error =
@@ -1285,9 +1321,11 @@ int fullmag_fdm_context_bind_gpu_transport_v1(
             "spin transport is unsupported for v2 multilayer handles";
         return FULLMAG_FDM_ERR_INVALID;
     }
-    return context_bind_gpu_transport_rhs(*ctx, *binding)
-        ? FULLMAG_FDM_OK
-        : FULLMAG_FDM_ERR_INVALID;
+    if (!context_bind_gpu_transport_rhs(*ctx, *binding)) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    fullmag_fdm_commit_operator_residency(*ctx);
+    return FULLMAG_FDM_OK;
 #else
     (void)handle;
     (void)binding;
@@ -1309,9 +1347,10 @@ extern "C" int fullmag_fdm_test_force_gpu_transport_adaptive_retry(
 int fullmag_fdm_context_unbind_gpu_transport_v1(fullmag_fdm_backend *handle) {
 #if FULLMAG_HAS_CUDA
     if (handle == nullptr) return FULLMAG_FDM_ERR_INVALID;
-    return context_unbind_gpu_transport_rhs(*reinterpret_cast<Context *>(handle))
-        ? FULLMAG_FDM_OK
-        : FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    if (!context_unbind_gpu_transport_rhs(*ctx)) return FULLMAG_FDM_ERR_INVALID;
+    fullmag_fdm_commit_operator_residency(*ctx);
+    return FULLMAG_FDM_OK;
 #else
     (void)handle;
     return FULLMAG_FDM_ERR_CUDA;
@@ -1596,8 +1635,8 @@ fullmag_fdm_field_snapshot *fullmag_fdm_backend_begin_field_snapshot(
 #if FULLMAG_HAS_CUDA
     if (!handle) return nullptr;
     auto *ctx = reinterpret_cast<Context *>(handle);
-    return reinterpret_cast<fullmag_fdm_field_snapshot *>(
-        context_begin_async_field_snapshot(*ctx, observable));
+    auto *snapshot = context_begin_async_field_snapshot(*ctx, observable);
+    return reinterpret_cast<fullmag_fdm_field_snapshot *>(snapshot);
 #else
     (void)handle;
     (void)observable;
@@ -1617,15 +1656,15 @@ fullmag_fdm_preview_snapshot *fullmag_fdm_backend_begin_preview_snapshot(
 #if FULLMAG_HAS_CUDA
     if (!handle) return nullptr;
     auto *ctx = reinterpret_cast<Context *>(handle);
-    return reinterpret_cast<fullmag_fdm_preview_snapshot *>(
-        context_begin_async_preview_snapshot(
+    auto *snapshot = context_begin_async_preview_snapshot(
             *ctx,
             observable,
             preview_nx,
             preview_ny,
             preview_nz,
             z_origin,
-            z_stride));
+            z_stride);
+    return reinterpret_cast<fullmag_fdm_preview_snapshot *>(snapshot);
 #else
     (void)handle;
     (void)observable;
@@ -1990,18 +2029,16 @@ int fullmag_fdm_backend_execution_receipt_v1(
 {
 #if FULLMAG_HAS_CUDA
     if (!handle || !out_receipt) return FULLMAG_FDM_ERR_INVALID;
-    if (out_receipt->abi_version != FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1 ||
-        out_receipt->struct_size != sizeof(fullmag_fdm_execution_receipt_v1))
-    {
+    if (!fullmag_fdm_execution_receipt_request_valid(*out_receipt)) {
         return FULLMAG_FDM_ERR_ABI;
     }
     auto *ctx = reinterpret_cast<Context *>(handle);
-    int device_ordinal = -1;
-    if (cudaGetDevice(&device_ordinal) != cudaSuccess) {
-        return FULLMAG_FDM_ERR_CUDA;
+    if (!ctx->execution_receipt.accounting_valid) {
+        ctx->last_error = "FDM CUDA execution receipt accounting overflow or telemetry gap";
+        return FULLMAG_FDM_ERR_INVALID;
     }
-
-    *out_receipt = fullmag_fdm_make_execution_receipt(*ctx, device_ordinal);
+    const auto receipt = fullmag_fdm_make_execution_receipt(*ctx);
+    *out_receipt = receipt;
     return FULLMAG_FDM_OK;
 #else
     (void)handle;

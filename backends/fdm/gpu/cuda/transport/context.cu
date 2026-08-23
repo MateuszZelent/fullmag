@@ -4344,6 +4344,67 @@ bool device_field_matches(const DeviceVectorField &field, int device) {
     return true;
 }
 
+bool import_transport_receipt_telemetry(
+    Context &ctx,
+    const Slot &slot,
+    bool setup_phase)
+{
+    auto &receipt = ctx.execution_receipt;
+    for (uint64_t index = 0; index < slot.telemetry_count; ++index) {
+        const auto &record = slot.telemetry[index];
+        if (record.audit_sequence <= receipt.transport_telemetry_cursor) continue;
+        if (receipt.transport_telemetry_cursor == UINT64_MAX ||
+            record.audit_sequence != receipt.transport_telemetry_cursor + 1) {
+            receipt.accounting_valid = false;
+            ctx.last_error = "GPU transport telemetry sequence has a gap";
+            return false;
+        }
+        receipt.transport_telemetry_cursor = record.audit_sequence;
+        if (record.status != FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS) {
+            continue;
+        }
+        if (setup_phase) {
+            if (record.direction == FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_H2D) {
+                fullmag_fdm_checked_add(
+                    receipt, receipt.setup_full_vector_h2d_count, record.count);
+                fullmag_fdm_checked_add(
+                    receipt, receipt.setup_full_vector_h2d_bytes, record.bytes);
+            } else if (record.direction ==
+                       FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H) {
+                fullmag_fdm_checked_add(
+                    receipt, receipt.setup_full_vector_d2h_count, record.count);
+                fullmag_fdm_checked_add(
+                    receipt, receipt.setup_full_vector_d2h_bytes, record.bytes);
+            }
+            continue;
+        }
+        if (record.direction == FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_H2D) {
+            fullmag_fdm_checked_add(
+                receipt, receipt.hot_loop_full_vector_h2d_count, record.count);
+            fullmag_fdm_checked_add(
+                receipt, receipt.hot_loop_full_vector_h2d_bytes, record.bytes);
+        } else if (record.direction ==
+                   FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H) {
+            if (record.reason ==
+                FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SCALAR_REDUCTION_D2H) {
+                fullmag_fdm_record_control_scalar_d2h(ctx, record.bytes);
+            } else {
+                fullmag_fdm_checked_add(
+                    receipt, receipt.hot_loop_full_vector_d2h_count, record.count);
+                fullmag_fdm_checked_add(
+                    receipt, receipt.hot_loop_full_vector_d2h_bytes, record.bytes);
+            }
+        } else if (
+            record.direction ==
+                FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL &&
+            record.reason ==
+                FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_STREAM_SYNCHRONIZE) {
+            fullmag_fdm_record_control_scalar_host_sync(ctx, record.count);
+        }
+    }
+    return receipt.accounting_valid;
+}
+
 bool evaluate_bound_gpu_transport_rhs(
     Context &ctx,
     const DeviceVectorField &m_stage,
@@ -4508,7 +4569,6 @@ bool evaluate_bound_gpu_transport_rhs(
             : "GPU transport stage solve failed and its stream could not be drained";
         return false;
     }
-
     std::lock_guard<std::mutex> lock(registry_mutex);
     const auto &context = binding.transport_context;
     if (context.slot >= slots.size()) {
@@ -4537,6 +4597,10 @@ bool evaluate_bound_gpu_transport_rhs(
         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
         0, 0, 1, attempt_id, stage_id, result.iterations,
         result.deterministic_compute_digest);
+    if (!import_transport_receipt_telemetry(ctx, parent, false)) {
+        parent.llg_torque_in_flight = false;
+        return false;
+    }
     ctx.gpu_transport_test_completion_fault = parent.test_llg_completion_fault;
     parent.test_llg_completion_fault = 0;
     ++parent.llg_stage_evaluation_count;
@@ -4608,6 +4672,7 @@ bool context_bind_gpu_transport_rhs(
             "GPU transport descriptor, snapshot, grid, or device does not match LLG";
         return false;
     }
+    if (!import_transport_receipt_telemetry(ctx, parent, true)) return false;
     if (ctx.gpu_transport_owner_id == 0) {
         if (next_llg_binding_owner_id == 0) ++next_llg_binding_owner_id;
         ctx.gpu_transport_owner_id = next_llg_binding_owner_id++;

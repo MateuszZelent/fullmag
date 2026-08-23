@@ -118,8 +118,9 @@ bool copy_device_to_host(
         static_cast<size_t>(ctx.cell_count) * sizeof(double);
     for (const void *component : {field.x, field.y, field.z}) {
         if (component == nullptr ||
-            cudaMemcpy(payload + offset, component, component_bytes,
-                       cudaMemcpyDeviceToHost) != cudaSuccess) {
+            fullmag_fdm_receipt_cuda_memcpy(
+                ctx, payload + offset, component, component_bytes,
+                cudaMemcpyDeviceToHost) != cudaSuccess) {
             ctx.last_error = "failed to export LLG checkpoint device field";
             return false;
         }
@@ -136,8 +137,9 @@ bool copy_host_to_device(
         static_cast<size_t>(ctx.cell_count) * sizeof(double);
     for (void *component : {field.x, field.y, field.z}) {
         if (component == nullptr ||
-            cudaMemcpy(component, payload + offset, component_bytes,
-                       cudaMemcpyHostToDevice) != cudaSuccess) {
+            fullmag_fdm_receipt_cuda_memcpy(
+                ctx, component, payload + offset, component_bytes,
+                cudaMemcpyHostToDevice) != cudaSuccess) {
             ctx.last_error = "failed to import LLG checkpoint device field";
             return false;
         }

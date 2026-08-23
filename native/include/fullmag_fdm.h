@@ -593,33 +593,27 @@ enum {
     FULLMAG_FDM_OPERATOR_DMI = 1ull << 3,
     FULLMAG_FDM_OPERATOR_ANISOTROPY = 1ull << 4,
     FULLMAG_FDM_OPERATOR_REDUCTION = 1ull << 5,
+    FULLMAG_FDM_OPERATOR_EXTERNAL_FIELD = 1ull << 6,
+    FULLMAG_FDM_OPERATOR_MASKS = 1ull << 7,
+    FULLMAG_FDM_OPERATOR_MAGNETOELASTIC = 1ull << 8,
+    FULLMAG_FDM_OPERATOR_THERMAL = 1ull << 9,
+    FULLMAG_FDM_OPERATOR_ZHANG_LI_STT = 1ull << 10,
+    FULLMAG_FDM_OPERATOR_SLONCZEWSKI_STT = 1ull << 11,
+    FULLMAG_FDM_OPERATOR_SOT = 1ull << 12,
+    FULLMAG_FDM_OPERATOR_OERSTED = 1ull << 13,
+    FULLMAG_FDM_OPERATOR_BOUNDARY_CORRECTION = 1ull << 14,
+    FULLMAG_FDM_OPERATOR_MULTILAYER_TRANSFER = 1ull << 15,
+    FULLMAG_FDM_OPERATOR_MULTILAYER_INTERACTIONS = 1ull << 16,
+    FULLMAG_FDM_OPERATOR_MULTILAYER_DEMAG = 1ull << 17,
+    FULLMAG_FDM_OPERATOR_GPU_TRANSPORT = 1ull << 18,
 };
 
 typedef struct {
-    uint32_t abi_version;
-    uint32_t struct_size;
-    fullmag_fdm_execution_class_v1 execution_class;
-    fullmag_fdm_executed_backend_v1 executed_backend;
-    int32_t device_ordinal;
-    fullmag_fdm_precision precision;
-    fullmag_fdm_integrator integrator;
-    uint32_t reserved0;
-    uint64_t required_operator_mask;
-    uint64_t device_operator_mask;
-    uint64_t host_operator_mask;
-    fullmag_fdm_operator_location_v1 reduction_location;
-    fullmag_fdm_operator_location_v1 control_location;
-    uint64_t fallback_count;
-    uint64_t setup_full_vector_h2d_count;
-    uint64_t setup_full_vector_h2d_bytes;
-    uint64_t hot_loop_full_vector_h2d_count;
-    uint64_t hot_loop_full_vector_h2d_bytes;
-    uint64_t hot_loop_full_vector_d2h_count;
-    uint64_t hot_loop_full_vector_d2h_bytes;
-    uint64_t hot_loop_host_compute_count;
-    uint64_t hot_loop_host_sync_count;
-    uint64_t hot_loop_control_scalar_d2h_bytes;
-    uint64_t hot_loop_control_scalar_host_sync_count;
+#define FULLMAG_FDM_EXECUTION_RECEIPT_FIELD(type, name, offset) type name;
+#define FULLMAG_FDM_EXECUTION_RECEIPT_SIZE(size)
+#include "fullmag_fdm_execution_receipt_v1_layout.def"
+#undef FULLMAG_FDM_EXECUTION_RECEIPT_SIZE
+#undef FULLMAG_FDM_EXECUTION_RECEIPT_FIELD
 } fullmag_fdm_execution_receipt_v1;
 
 typedef struct {

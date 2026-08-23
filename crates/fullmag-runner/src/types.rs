@@ -2767,6 +2767,12 @@ pub struct ResolvedFallback {
 pub struct FdmGpuTransferCounts {
     pub setup_full_vector_h2d_count: u64,
     pub setup_full_vector_h2d_bytes: u64,
+    pub setup_full_vector_d2h_count: u64,
+    pub setup_full_vector_d2h_bytes: u64,
+    pub observation_full_vector_h2d_count: u64,
+    pub observation_full_vector_h2d_bytes: u64,
+    pub observation_full_vector_d2h_count: u64,
+    pub observation_full_vector_d2h_bytes: u64,
     pub hot_loop_full_vector_h2d_count: u64,
     pub hot_loop_full_vector_h2d_bytes: u64,
     pub hot_loop_full_vector_d2h_count: u64,
@@ -2800,7 +2806,7 @@ pub struct FdmGpuExecutionReceipt {
 impl FdmGpuExecutionReceipt {
     pub fn strict_unvalidated(precision: &str) -> Self {
         Self {
-            requested: "device_resident".to_string(),
+            requested: "gpu".to_string(),
             resolved: "unavailable".to_string(),
             executed: "none".to_string(),
             device: "unavailable".to_string(),
@@ -2821,7 +2827,7 @@ mod fdm_gpu_execution_receipt_contract_tests {
     fn execution_provenance_serializes_explicit_fdm_gpu_receipt() {
         let mut provenance = ExecutionProvenance::default();
         provenance.fdm_gpu_execution_receipt = Some(FdmGpuExecutionReceipt {
-            requested: "device_resident".into(),
+            requested: "gpu".into(),
             resolved: "device_resident".into(),
             executed: "cuda_fdm".into(),
             device: "cuda:0".into(),
@@ -2848,6 +2854,7 @@ mod fdm_gpu_execution_receipt_contract_tests {
         assert_eq!(receipt["resolved"], "device_resident");
         assert_eq!(receipt["executed"], "cuda_fdm");
         assert_eq!(receipt["fallback_count"], 0);
+        assert_eq!(receipt["transfer_counts"]["observation_full_vector_d2h_count"], 0);
         assert_eq!(
             receipt["transfer_counts"]["setup_full_vector_h2d_bytes"],
             24

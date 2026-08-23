@@ -2123,6 +2123,7 @@ pub(crate) fn execute_fdm<'a>(
 ) -> Result<ExecutedRun, RunError> {
     execute_fdm_in_mode(
         engine,
+        if engine == FdmEngine::CudaFdm { "gpu" } else { "cpu" },
         fullmag_ir::ExecutionMode::Strict,
         plan,
         until_seconds,
@@ -2134,6 +2135,7 @@ pub(crate) fn execute_fdm<'a>(
 
 pub(crate) fn execute_fdm_in_mode<'a>(
     engine: FdmEngine,
+    requested_device: &str,
     execution_mode: fullmag_ir::ExecutionMode,
     plan: &FdmPlanIR,
     until_seconds: f64,
@@ -2205,6 +2207,7 @@ pub(crate) fn execute_fdm_in_mode<'a>(
             artifact_writer,
         ),
         FdmEngine::CudaFdm => execute_cuda_fdm(
+            requested_device,
             execution_mode,
             plan,
             until_seconds,
@@ -5085,6 +5088,7 @@ fn eigen_path_created_at_label() -> String {
 
 #[cfg(feature = "cuda")]
 fn execute_cuda_fdm(
+    requested_device: &str,
     execution_mode: fullmag_ir::ExecutionMode,
     plan: &FdmPlanIR,
     until_seconds: f64,
@@ -5142,7 +5146,12 @@ fn execute_cuda_fdm(
         backend.bind_gpu_transport(&binding)?;
     }
     let device_info = backend.device_info()?;
-    let initial_execution_receipt = backend.execution_receipt(execution_mode)?;
+    let (receipt_lifecycle, initial_execution_receipt) =
+        crate::fdm::gpu::cuda::native::residency::FdmGpuReceiptLifecycle::begin(
+            &backend,
+            requested_device,
+            execution_mode,
+        )?;
     let cell_count = (plan.grid.cells[0] as usize)
         * (plan.grid.cells[1] as usize)
         * (plan.grid.cells[2] as usize);
@@ -5485,12 +5494,7 @@ fn execute_cuda_fdm(
     let completion_time_s = latest_stats.as_ref().map(|stats| stats.time);
     let completion_max_torque_apm = latest_stats.as_ref().map(|stats| stats.max_torque_Apm);
     let final_magnetization = backend.copy_m(cell_count)?;
-    let final_execution_receipt = backend.execution_receipt(execution_mode)?;
-    if execution_mode == fullmag_ir::ExecutionMode::Strict {
-        crate::fdm::gpu::cuda::native::residency::validate_strict_final_receipt(
-            &final_execution_receipt,
-        )?;
-    }
+    let final_execution_receipt = receipt_lifecycle.finish(&backend)?;
     provenance.fdm_gpu_execution_receipt = Some(final_execution_receipt);
     artifacts.update_provenance(provenance.clone());
     record_gpu_transport_final_outputs(

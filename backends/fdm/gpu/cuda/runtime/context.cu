@@ -42,6 +42,53 @@ extern bool launch_multilayer_effective_field_fp32(Context &ctx);
 extern bool launch_energy_density_observable(
     Context &ctx,
     fullmag_fdm_observable observable);
+
+cudaError_t fullmag_fdm_receipt_cuda_memcpy(
+    Context &ctx,
+    void *destination,
+    const void *source,
+    size_t bytes,
+    cudaMemcpyKind kind)
+{
+    const cudaError_t status = ::cudaMemcpy(destination, source, bytes, kind);
+    if (status == cudaSuccess) {
+        if (kind == cudaMemcpyHostToDevice) {
+            fullmag_fdm_record_cuda_transfer_success(ctx, true, bytes);
+        } else if (kind == cudaMemcpyDeviceToHost) {
+            fullmag_fdm_record_cuda_transfer_success(ctx, false, bytes);
+        }
+    }
+    return status;
+}
+
+cudaError_t fullmag_fdm_receipt_cuda_memcpy_async(
+    Context &ctx,
+    void *destination,
+    const void *source,
+    size_t bytes,
+    cudaMemcpyKind kind,
+    cudaStream_t stream)
+{
+    const cudaError_t status =
+        ::cudaMemcpyAsync(destination, source, bytes, kind, stream);
+    if (status == cudaSuccess) {
+        if (kind == cudaMemcpyHostToDevice) {
+            fullmag_fdm_record_cuda_transfer_success(ctx, true, bytes);
+        }
+    }
+    return status;
+}
+
+// Every host-boundary copy in this translation unit is routed through the
+// allocation-free receipt hook. Device-internal copies are intentionally not
+// classified as host transfers.
+#define cudaMemcpy(destination, source, bytes, kind) \
+    fullmag_fdm_receipt_cuda_memcpy( \
+        const_cast<Context &>(ctx), destination, source, bytes, kind)
+#define cudaMemcpyAsync(destination, source, bytes, kind, stream) \
+    fullmag_fdm_receipt_cuda_memcpy_async( \
+        const_cast<Context &>(ctx), destination, source, bytes, kind, stream)
+
 static void free_boundary_correction(Context &ctx);
 static void free_anisotropy_fields(Context &ctx);
 static void free_cubic_anisotropy_fields(Context &ctx);
@@ -3984,6 +4031,7 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
         return nullptr;
     }
     snapshot->precision = ctx.precision;
+    snapshot->receipt_context = &ctx;
     snapshot->cell_count = ctx.cell_count;
     const bool scalar_observable = is_energy_density_observable(observable);
     snapshot->component_count = scalar_observable ? 1u : 3u;
@@ -4264,6 +4312,7 @@ bool context_wait_async_field_snapshot(
         return false;
     }
 
+    const bool completed_device_to_host = snapshot.needs_wait;
     if (snapshot.needs_wait) {
         cudaError_t err =
             cudaEventSynchronize(reinterpret_cast<cudaEvent_t>(snapshot.done_event));
@@ -4285,6 +4334,15 @@ bool context_wait_async_field_snapshot(
         snapshot.precision == FULLMAG_FDM_PRECISION_SINGLE
             ? FULLMAG_FDM_SNAPSHOT_SCALAR_F32
             : FULLMAG_FDM_SNAPSHOT_SCALAR_F64;
+    if (completed_device_to_host && !snapshot.receipt_counted &&
+        snapshot.component_count == 3 &&
+        snapshot.receipt_context != nullptr) {
+        fullmag_fdm_record_cuda_transfer_success(
+            *snapshot.receipt_context,
+            false,
+            snapshot.host_soa_len_bytes);
+        snapshot.receipt_counted = true;
+    }
     return true;
 }
 
@@ -4316,6 +4374,7 @@ AsyncPreviewSnapshot *context_begin_async_preview_snapshot(
         return nullptr;
     }
     snapshot->precision = ctx.precision;
+    snapshot->receipt_context = &ctx;
     snapshot->preview_count = static_cast<uint64_t>(preview_nx) * preview_ny * preview_nz;
     snapshot->host_xyz_len_bytes = snapshot->preview_count * 3u * scalar_size(ctx.precision);
 
@@ -4629,6 +4688,7 @@ bool context_wait_async_preview_snapshot(
         return false;
     }
 
+    const bool completed_device_to_host = snapshot.needs_wait;
     if (snapshot.needs_wait) {
         cudaError_t err =
             cudaEventSynchronize(reinterpret_cast<cudaEvent_t>(snapshot.done_event));
@@ -4650,6 +4710,14 @@ bool context_wait_async_preview_snapshot(
         snapshot.precision == FULLMAG_FDM_PRECISION_SINGLE
             ? FULLMAG_FDM_SNAPSHOT_SCALAR_F32
             : FULLMAG_FDM_SNAPSHOT_SCALAR_F64;
+    if (completed_device_to_host && !snapshot.receipt_counted &&
+        snapshot.receipt_context != nullptr) {
+        fullmag_fdm_record_cuda_transfer_success(
+            *snapshot.receipt_context,
+            false,
+            snapshot.host_xyz_len_bytes);
+        snapshot.receipt_counted = true;
+    }
     return true;
 }
 
