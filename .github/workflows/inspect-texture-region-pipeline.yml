@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: codex/texture-transform-region-clipping-20260823
-      - name: Decode generator
+      - name: Decode generator and package inputs
         shell: bash
         run: |
           set -euo pipefail
@@ -34,10 +34,22 @@ jobs:
           Path('/tmp/texture-region-apply.py').write_bytes(script)
           print(f'decoded {len(script)} bytes')
           PY
+          tar -czf /tmp/texture-region-inputs.tar.gz \
+            crates/fullmag-plan/src \
+            crates/fullmag-plan/tests \
+            public_docs/site/python-api/magnets-and-textures/preset-textures.md \
+            public_docs/site/python-api/magnets-and-textures/preset-textures.source-map.json
       - name: Upload decoded generator
         uses: actions/upload-artifact@v4
         with:
           name: texture-region-generator
           path: /tmp/texture-region-apply.py
+          if-no-files-found: error
+          retention-days: 1
+      - name: Upload deterministic input snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: texture-region-inputs
+          path: /tmp/texture-region-inputs.tar.gz
           if-no-files-found: error
           retention-days: 1
