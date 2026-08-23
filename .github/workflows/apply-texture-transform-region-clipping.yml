@@ -56,16 +56,23 @@ jobs:
           import zlib
           from pathlib import Path
 
-          payload_path = Path('.github/fullmag-texture-region-refactor/apply.py.zlib.b64')
-          encoded = payload_path.read_text(encoding='utf-8').strip()
+          payload_dir = Path('.github/fullmag-texture-region-refactor')
+          parts = [payload_dir / f'payload.part{index:02d}' for index in range(1, 11)]
+          missing = [str(path) for path in parts if not path.is_file()]
+          if missing:
+              raise RuntimeError(f'missing payload fragments: {missing}')
+          encoded = ''.join(path.read_text(encoding='utf-8').strip() for path in parts)
+          expected_length = 16368
           expected_sha256 = 'a92bb20c17913409cd97c3506867e7a5f3d4453c43e8d778efc9f93230d012f2'
           actual_sha256 = hashlib.sha256(encoded.encode('ascii')).hexdigest()
-          if actual_sha256 != expected_sha256:
+          if len(encoded) != expected_length or actual_sha256 != expected_sha256:
               raise RuntimeError(
-                  f'payload checksum mismatch: expected {expected_sha256}, got {actual_sha256}'
+                  'payload verification failed: '
+                  f'length={len(encoded)} expected_length={expected_length} '
+                  f'sha256={actual_sha256} expected_sha256={expected_sha256}'
               )
           script = zlib.decompress(base64.b64decode(encoded, validate=True)).decode('utf-8')
-          script_path = Path('.github/fullmag-texture-region-refactor/apply.py')
+          script_path = payload_dir / 'apply.py'
           compile(script, str(script_path), 'exec')
           script_path.write_text(script, encoding='utf-8')
           PY
