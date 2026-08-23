@@ -1,82 +1,85 @@
-# Bootstrap workflow contract hardening
+# Wzmocnienie kontraktu workflow bootstrap
 
-## Context
+## Kontekst
 
-Pull request #56 restores the repository bootstrap gates, but review found two
-remaining false-negative cases in `scripts/test_bootstrap_workflow_contract.py`:
+Pull request #56 przywraca bramki bootstrap repozytorium, ale review wykazało dwa
+pozostałe przypadki wyników fałszywie ujemnych w
+`scripts/test_bootstrap_workflow_contract.py`:
 
-1. action-version checks compare action counts with human-facing step names, so
-   renaming a step can hide an outdated `uses:` version;
-2. gitlink checks require only a matching `path` entry and can accept a
-   `.gitmodules` section without a clone URL.
+1. kontrole wersji akcji porównują liczbę akcji z nazwami kroków widocznymi dla
+   człowieka, więc zmiana nazwy kroku może ukryć przestarzałą wersję `uses:`;
+2. kontrole gitlinków wymagają tylko pasującego wpisu `path` i mogą zaakceptować
+   sekcję `.gitmodules` bez adresu klonowania.
 
-The implementation must remain dependency-free, run on Windows and Linux, and
-keep `.github/workflows/bootstrap.yml` as the workflow source of truth.
+Implementacja musi pozostać bez dodatkowych zależności, działać na Windows i
+Linux oraz zachować `.github/workflows/bootstrap.yml` jako źródło prawdy dla
+workflow.
 
-## Considered approaches
+## Rozważane podejścia
 
-### 1. Parse the relevant contracts with the Python standard library
+### 1. Parsowanie odpowiednich kontraktów biblioteką standardową Pythona
 
-Extract YAML `uses:` values with an anchored line parser and read
-`.gitmodules` with `configparser`. Validate the actual action references and
-the complete submodule records. This is the selected approach because it is
-independent of step display names and adds no CI dependency.
+Wyodrębnić wartości YAML `uses:` parserem zakotwiczonym na początku klucza oraz
+odczytać `.gitmodules` przez `configparser`. Walidować rzeczywiste odwołania do
+akcji i kompletne rekordy submodułów. To wybrane podejście, ponieważ nie zależy
+od nazw kroków i nie dodaje zależności CI.
 
-### 2. Use broader regular expressions
+### 2. Użycie szerszych wyrażeń regularnych
 
-Regular expressions can validate both files with less helper code, but quoting,
-indentation, and section boundaries make the `.gitmodules` check unnecessarily
-fragile.
+Wyrażenia regularne mogą sprawdzić oba pliki mniejszą liczbą helperów, ale
+cytowanie, wcięcia i granice sekcji czynią kontrolę `.gitmodules` niepotrzebnie
+kruchą.
 
-### 3. Add a YAML parser
+### 3. Dodanie parsera YAML
 
-A YAML parser would model the workflow precisely, but it would introduce a new
-dependency solely for a small static contract test. `.gitmodules` would still
-need a separate parser.
+Parser YAML precyzyjnie odwzorowałby workflow, lecz wprowadziłby nową zależność
+wyłącznie dla małego statycznego testu kontraktu. `.gitmodules` nadal wymagałby
+osobnego parsera.
 
-## Design
+## Projekt
 
-The test module will expose small private helpers with one responsibility each:
+Moduł testowy udostępni małe prywatne helpery o pojedynczej odpowiedzialności:
 
-- collect normalized `uses:` values from workflow lines whose first YAML key is
-  `uses`;
-- assert that every reference for a governed action family uses the required
-  version and that the expected family is present;
-- parse `.gitmodules` sections and build a mapping from normalized path to a
-  nonempty URL;
-- enumerate tracked gitlinks from the Git index and require exactly one complete
-  metadata record for each path.
+- zebranie znormalizowanych wartości `uses:` z wierszy workflow, których
+  pierwszym kluczem YAML jest `uses`;
+- potwierdzenie, że każde odwołanie do objętej kontraktem rodziny akcji używa
+  wymaganej wersji i że oczekiwana rodzina występuje;
+- sparsowanie sekcji `.gitmodules` i zbudowanie mapowania znormalizowanej ścieżki
+  na niepusty URL;
+- wyliczenie śledzonych gitlinków z indeksu Git i wymaganie dokładnie jednego
+  kompletnego rekordu metadanych dla każdej ścieżki.
 
-Action checks will cover `actions/checkout`, `actions/setup-node`,
-`actions/setup-python`, `actions/upload-artifact`, and `pnpm/action-setup`.
-Unrelated third-party actions remain outside this contract.
+Kontrole akcji obejmą `actions/checkout`, `actions/setup-node`,
+`actions/setup-python`, `actions/upload-artifact` i `pnpm/action-setup`.
+Niepowiązane akcje zewnętrzne pozostają poza tym kontraktem.
 
-The gitlink check will fail for a missing section, duplicate path, empty URL, or
-metadata that points to a path not matching the tracked gitlink. It will not
-attempt network access or validate remote reachability.
+Kontrola gitlinków odrzuci brak sekcji, zduplikowaną ścieżkę, pusty URL lub
+metadane wskazujące ścieżkę inną niż śledzony gitlink. Nie będzie wykonywać
+połączeń sieciowych ani sprawdzać osiągalności remote.
 
-## Error behavior
+## Zachowanie błędów
 
-Failures will identify the action family or gitlink path and describe the
-violated invariant. Parsing malformed `.gitmodules` content will fail the test
-rather than silently treating it as absent metadata.
+Błędy wskażą rodzinę akcji albo ścieżkę gitlinku i opiszą naruszony niezmiennik.
+Niepoprawna składnia `.gitmodules` przerwie test zamiast zostać po cichu uznana
+za brak metadanych.
 
-## Verification
+## Weryfikacja
 
-Tests will first demonstrate both reported false negatives:
+Testy najpierw odtworzą oba zgłoszone wyniki fałszywie ujemne:
 
-- renaming a workflow step and downgrading its action must fail;
-- removing a gitlink URL while retaining its path must fail.
+- zmiana nazwy kroku połączona z obniżeniem wersji akcji musi zakończyć się
+  błędem;
+- usunięcie URL gitlinku przy zachowaniu ścieżki musi zakończyć się błędem.
 
-The repository contract test must then pass against the real files. The full
-PR verification also includes Python API contracts, TypeScript typechecking,
-targeted ESLint and Vitest, `git diff --check`, and fresh GitHub Actions runs.
-The Rust DMI contract remains dependent on Linux CI because the local Windows
-build previously exhausted disk space before completing.
+Następnie test kontraktu repozytorium musi przejść dla rzeczywistych plików.
+Pełna weryfikacja PR obejmuje również kontrakty Python API, typecheck TypeScript,
+ukierunkowane ESLint i Vitest, `git diff --check` oraz świeże przebiegi GitHub
+Actions. Kontrakt Rust DMI pozostaje zależny od CI na Linuxie, ponieważ lokalny
+build Windows poprzednio wyczerpał miejsce przed zakończeniem.
 
-## Scope boundaries
+## Granice zakresu
 
-This change does not alter workflow behavior, action versions, submodule
-membership, product code, OpenAPI, runtime semantics, or frontend architecture.
-It only makes the existing bootstrap invariants resistant to the two reviewed
-false-negative cases.
+Zmiana nie modyfikuje zachowania workflow, wersji akcji, członkostwa submodułów,
+kodu produktu, OpenAPI, semantyki runtime ani architektury frontendu. Wyłącznie
+uodparnia istniejące niezmienniki bootstrap na dwa zgłoszone przypadki wyników
+fałszywie ujemnych.

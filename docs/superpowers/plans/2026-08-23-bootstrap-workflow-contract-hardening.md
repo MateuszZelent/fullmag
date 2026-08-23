@@ -1,43 +1,43 @@
-# Bootstrap Workflow Contract Hardening Implementation Plan
+# Plan implementacji wzmocnienia kontraktu workflow bootstrap
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Dla agentów wykonawczych:** WYMAGANY SUB-SKILL: użyj `subagent-driven-development` (zalecane) albo `executing-plans`, aby realizować ten plan zadanie po zadaniu. Kroki używają pól wyboru (`- [ ]`) do śledzenia postępu.
 
-**Goal:** Make PR #56's bootstrap contract reject stale action versions regardless of step names and reject tracked gitlinks without complete clone metadata.
+**Cel:** Sprawić, by kontrakt bootstrap z PR #56 odrzucał nieaktualne wersje akcji niezależnie od nazw kroków oraz odrzucał śledzone gitlinki bez kompletnych metadanych klonowania.
 
-**Architecture:** Keep the contract dependency-free inside `scripts/test_bootstrap_workflow_contract.py`. Parse only the workflow's anchored `uses:` keys, parse `.gitmodules` with `configparser`, and express both invariants through small pure helpers exercised by negative unit tests before applying them to repository files.
+**Architektura:** Kontrakt pozostaje bez dodatkowych zależności w `scripts/test_bootstrap_workflow_contract.py`. Parser odczytuje wyłącznie zakotwiczone klucze `uses:` workflow, `.gitmodules` jest parsowany przez `configparser`, a oba niezmienniki są wyrażone przez małe czyste helpery objęte negatywnymi testami regresji przed zastosowaniem do plików repozytorium.
 
-**Tech Stack:** Python 3 standard library (`configparser`, `pathlib`, `subprocess`, `unittest`), Git index, GitHub Actions YAML as text.
+**Stos technologiczny:** biblioteka standardowa Python 3 (`configparser`, `pathlib`, `subprocess`, `unittest`), indeks Git, tekst YAML GitHub Actions.
 
-## Global Constraints
+## Ograniczenia globalne
 
-- Add no Python or workflow dependency.
-- Support Windows and Linux.
-- Keep `.github/workflows/bootstrap.yml` as the workflow source of truth.
-- Do not alter workflow behavior, action versions, submodule membership, product code, OpenAPI, runtime semantics, or frontend architecture.
-- Govern exactly `actions/checkout@v7`, `actions/setup-node@v7`, `actions/setup-python@v7`, `actions/upload-artifact@v7`, and `pnpm/action-setup@v6`.
-- A tracked gitlink must have exactly one matching `.gitmodules` path and a nonempty URL.
+- Nie dodawać zależności Python ani workflow.
+- Zachować zgodność z Windows i Linux.
+- Zachować `.github/workflows/bootstrap.yml` jako źródło prawdy workflow.
+- Nie zmieniać zachowania workflow, wersji akcji, członkostwa submodułów, kodu produktu, OpenAPI, semantyki runtime ani architektury frontendu.
+- Objąć kontraktem dokładnie `actions/checkout@v7`, `actions/setup-node@v7`, `actions/setup-python@v7`, `actions/upload-artifact@v7` oraz `pnpm/action-setup@v6`.
+- Każdy śledzony gitlink musi mieć dokładnie jedną pasującą ścieżkę `.gitmodules` i niepusty URL.
 
 ---
 
-## File map
+## Mapa plików
 
-- Modify `scripts/test_bootstrap_workflow_contract.py`: parsing helpers, negative regression tests, and repository contract assertions.
-- Preserve `docs/superpowers/specs/2026-08-23-bootstrap-workflow-contract-hardening-design.md`: approved design owner; no implementation edits expected.
+- Modyfikacja `scripts/test_bootstrap_workflow_contract.py`: helpery parsowania, negatywne testy regresji i asercje kontraktu repozytorium.
+- Zachowanie `docs/superpowers/specs/2026-08-23-bootstrap-workflow-contract-hardening-design.md`: zatwierdzony właściciel projektu; nie są oczekiwane zmiany merytoryczne.
 
-### Task 1: Validate actual workflow action references
+### Zadanie 1: Walidacja rzeczywistych odwołań do akcji workflow
 
-**Files:**
-- Modify: `scripts/test_bootstrap_workflow_contract.py:1-35`
+**Pliki:**
+- Modyfikacja: `scripts/test_bootstrap_workflow_contract.py:1-35`
 - Test: `scripts/test_bootstrap_workflow_contract.py`
 
-**Interfaces:**
-- Produces: `_workflow_uses(workflow: str) -> list[str]`.
-- Produces: `_assert_required_action_version(workflow: str, action: str, version: str) -> None`.
-- Consumes: raw text from `.github/workflows/bootstrap.yml`.
+**Interfejsy:**
+- Dostarcza: `_workflow_uses(workflow: str) -> list[str]`.
+- Dostarcza: `_assert_required_action_version(workflow: str, action: str, expected_reference: str) -> None`.
+- Zużywa: surowy tekst `.github/workflows/bootstrap.yml`.
 
-- [ ] **Step 1: Add a failing regression test for renamed steps and stale versions**
+- [ ] **Krok 1: Dodać nieprzechodzący test regresji dla zmienionej nazwy kroku i starej wersji**
 
-Add these helpers as unresolved calls and the test method:
+Dodać metodę testową wywołującą nieistniejący jeszcze helper:
 
 ```python
 def test_action_version_contract_reads_uses_instead_of_step_names(self) -> None:
@@ -60,19 +60,19 @@ jobs:
         )
 ```
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [ ] **Krok 2: Uruchomić test ukierunkowany i potwierdzić RED**
 
-Run:
+Polecenie:
 
 ```powershell
-python scripts/test_bootstrap_workflow_contract.py BootstrapWorkflowContractTests.test_action_version_contract_reads_uses_instead_of_step_names -v
+& 'C:\Users\admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' scripts/test_bootstrap_workflow_contract.py BootstrapWorkflowContractTests.test_action_version_contract_reads_uses_instead_of_step_names -v
 ```
 
-Expected: `ERROR` with `NameError: name '_assert_required_action_version' is not defined`.
+Oczekiwany wynik: `ERROR` z `NameError: name '_assert_required_action_version' is not defined`.
 
-- [ ] **Step 3: Implement the minimal line parser and assertion helper**
+- [ ] **Krok 3: Zaimplementować minimalny parser wierszy i helper asercji**
 
-Add above the test class:
+Dodać nad klasą testową:
 
 ```python
 def _workflow_uses(workflow: str) -> list[str]:
@@ -106,9 +106,9 @@ def _assert_required_action_version(
         )
 ```
 
-- [ ] **Step 4: Replace name-count assertions with governed-family checks**
+- [ ] **Krok 4: Zastąpić asercje liczb nazw kroków kontrolą rodzin akcji**
 
-Replace the body of `test_ci_uses_node24_actions` after reading the workflow:
+Po odczytaniu workflow użyć:
 
 ```python
 required = {
@@ -123,37 +123,43 @@ for action, expected_reference in required.items():
         _assert_required_action_version(workflow, action, expected_reference)
 ```
 
-- [ ] **Step 5: Run the full bootstrap contract and verify GREEN**
-
-Run:
+- [ ] **Krok 5: Uruchomić cały kontrakt bootstrap i potwierdzić GREEN**
 
 ```powershell
-python scripts/test_bootstrap_workflow_contract.py -v
+& 'C:\Users\admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' scripts/test_bootstrap_workflow_contract.py -v
 ```
 
-Expected: all tests pass, including the renamed-step regression and the repository workflow contract.
+Oczekiwany wynik: wszystkie testy przechodzą, w tym regresja zmienionej nazwy oraz kontrakt rzeczywistego workflow.
 
-- [ ] **Step 6: Commit the action-reference hardening**
+- [ ] **Krok 6: Zacommitować wzmocnienie odwołań do akcji**
+
+Najpierw osobno sprawdzić staging:
 
 ```powershell
 git add -- scripts/test_bootstrap_workflow_contract.py
+git diff --cached --name-only
 git diff --cached --check
+```
+
+Po potwierdzeniu, że staging zawiera wyłącznie test kontraktu:
+
+```powershell
 git commit -m "test(ci): validate workflow action references"
 ```
 
-### Task 2: Require complete metadata for every tracked gitlink
+### Zadanie 2: Wymaganie kompletnych metadanych każdego śledzonego gitlinku
 
-**Files:**
-- Modify: `scripts/test_bootstrap_workflow_contract.py:1-90`
+**Pliki:**
+- Modyfikacja: `scripts/test_bootstrap_workflow_contract.py:1-100`
 - Test: `scripts/test_bootstrap_workflow_contract.py`
 
-**Interfaces:**
-- Produces: `_submodule_urls_by_path(gitmodules: str) -> dict[str, str]`.
-- Consumes: `.gitmodules` text and paths from `git ls-files --stage`.
+**Interfejsy:**
+- Dostarcza: `_submodule_urls_by_path(gitmodules: str) -> dict[str, str]`.
+- Zużywa: tekst `.gitmodules` i ścieżki zwrócone przez `git ls-files --stage`.
 
-- [ ] **Step 1: Add failing tests for missing URLs and duplicate paths**
+- [ ] **Krok 1: Dodać nieprzechodzące testy pustego URL i zduplikowanej ścieżki**
 
-Add `import configparser` and these test methods:
+Dodać `import configparser` oraz:
 
 ```python
 def test_submodule_metadata_requires_nonempty_url(self) -> None:
@@ -186,19 +192,17 @@ def test_submodule_metadata_rejects_duplicate_paths(self) -> None:
         _submodule_urls_by_path(gitmodules)
 ```
 
-- [ ] **Step 2: Run both focused tests and verify RED**
-
-Run:
+- [ ] **Krok 2: Uruchomić oba testy ukierunkowane i potwierdzić RED**
 
 ```powershell
-python scripts/test_bootstrap_workflow_contract.py BootstrapWorkflowContractTests.test_submodule_metadata_requires_nonempty_url BootstrapWorkflowContractTests.test_submodule_metadata_rejects_duplicate_paths -v
+& 'C:\Users\admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' scripts/test_bootstrap_workflow_contract.py BootstrapWorkflowContractTests.test_submodule_metadata_requires_nonempty_url BootstrapWorkflowContractTests.test_submodule_metadata_rejects_duplicate_paths -v
 ```
 
-Expected: both tests error with `NameError: name '_submodule_urls_by_path' is not defined`.
+Oczekiwany wynik: oba testy kończą się `NameError: name '_submodule_urls_by_path' is not defined`.
 
-- [ ] **Step 3: Implement strict `.gitmodules` parsing**
+- [ ] **Krok 3: Zaimplementować ścisłe parsowanie `.gitmodules`**
 
-Add above the test class:
+Dodać nad klasą testową:
 
 ```python
 def _submodule_urls_by_path(gitmodules: str) -> dict[str, str]:
@@ -220,9 +224,9 @@ def _submodule_urls_by_path(gitmodules: str) -> dict[str, str]:
     return records
 ```
 
-- [ ] **Step 4: Compare complete metadata paths with the Git index**
+- [ ] **Krok 4: Porównać kompletne ścieżki metadanych z indeksem Git**
 
-Replace `test_every_tracked_gitlink_has_submodule_metadata` after computing `gitlinks`:
+Po obliczeniu `gitlinks` zastąpić dotychczasową pętlę:
 
 ```python
 self.assertTrue(gitlinks)
@@ -234,61 +238,64 @@ self.assertEqual(
 )
 ```
 
-- [ ] **Step 5: Run the contract suite and verify GREEN**
-
-Run:
+- [ ] **Krok 5: Uruchomić cały kontrakt i potwierdzić GREEN**
 
 ```powershell
-python scripts/test_bootstrap_workflow_contract.py -v
+& 'C:\Users\admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' scripts/test_bootstrap_workflow_contract.py -v
 ```
 
-Expected: all tests pass and each of the six tracked external solver gitlinks has a nonempty URL.
+Oczekiwany wynik: wszystkie testy przechodzą, a każdy śledzony gitlink solvera zewnętrznego ma niepusty URL.
 
-- [ ] **Step 6: Commit the gitlink metadata hardening**
+- [ ] **Krok 6: Zacommitować wzmocnienie metadanych gitlinków**
 
 ```powershell
 git add -- scripts/test_bootstrap_workflow_contract.py
+git diff --cached --name-only
 git diff --cached --check
+```
+
+Po osobnym potwierdzeniu stagingu:
+
+```powershell
 git commit -m "test(ci): require complete gitlink metadata"
 ```
 
-### Task 3: Verify and publish PR #56
+### Zadanie 3: Weryfikacja i publikacja PR #56
 
-**Files:**
-- Verify: `scripts/test_bootstrap_workflow_contract.py`
-- Verify: `packages/fullmag-py/tests/test_api.py`
-- Verify: `apps/control-room/src/shared/ui/Resizable.tsx`
-- Verify: `apps/control-room/src/kernel/visualization/visualizationCommandContributions.ts`
-- Verify: `apps/control-room/src/modules/inspector/panels/constraint/FrozenSpinsInspectorPanel.tsx`
-- Verify: `apps/control-room/src/modules/ribbon/ribbonCommands.ts`
-- Verify: `crates/fullmag-runner/src/dispatch.rs`
+**Pliki weryfikowane:**
+- `scripts/test_bootstrap_workflow_contract.py`
+- `packages/fullmag-py/tests/test_api.py`
+- `apps/control-room/src/shared/ui/Resizable.tsx`
+- `apps/control-room/src/kernel/visualization/visualizationCommandContributions.ts`
+- `apps/control-room/src/modules/inspector/panels/constraint/FrozenSpinsInspectorPanel.tsx`
+- `apps/control-room/src/modules/ribbon/ribbonCommands.ts`
+- `crates/fullmag-runner/src/dispatch.rs`
 
-**Interfaces:**
-- Consumes: the commits produced by Tasks 1 and 2 plus existing PR #56 fixes.
-- Produces: a pushed PR head with local evidence and fresh GitHub Actions evidence.
+**Interfejsy:**
+- Zużywa: commity z zadań 1 i 2 oraz istniejące poprawki PR #56.
+- Dostarcza: opublikowany head PR z lokalnymi dowodami i świeżymi dowodami GitHub Actions.
 
-- [ ] **Step 1: Run Python contracts**
-
-```powershell
-python scripts/test_bootstrap_workflow_contract.py -v
-python -m unittest discover -s packages/fullmag-py/tests -p test_api.py -k random_initializer_serializes_to_ir -v
-```
-
-Expected: both commands pass.
-
-- [ ] **Step 2: Run frontend type, lint, and regression tests**
-
-Use the bundled Node runtime and repository dependencies:
+- [ ] **Krok 1: Uruchomić kontrakty Python**
 
 ```powershell
-node node_modules/typescript/bin/tsc --noEmit --project apps/control-room/tsconfig.typecheck.json
-node node_modules/eslint/bin/eslint.js apps/control-room/src/shared/ui/Resizable.tsx apps/control-room/src/kernel/visualization/visualizationCommandContributions.ts apps/control-room/src/modules/inspector/panels/constraint/FrozenSpinsInspectorPanel.tsx apps/control-room/src/modules/ribbon/ribbonCommands.ts
-node node_modules/vitest/vitest.mjs run apps/control-room/src/shared/ui/Resizable.test.ts apps/control-room/src/kernel/visualization/visualizationCommandContributions.test.ts apps/control-room/src/modules/inspector/panels/constraint/FrozenSpinsInspectorPanel.test.tsx apps/control-room/src/modules/ribbon/ribbonStructure.test.ts
+& 'C:\Users\admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' scripts/test_bootstrap_workflow_contract.py -v
+$env:PYTHONPATH = 'packages/fullmag-py/src'
+& 'C:\Users\admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest discover -s packages/fullmag-py/tests -p test_api.py -k random_initializer_serializes_to_ir -v
 ```
 
-Expected: typecheck and lint exit zero; four test files and 128 tests pass.
+Oczekiwany wynik: oba polecenia przechodzą.
 
-- [ ] **Step 3: Check repository hygiene and commit graph**
+- [ ] **Krok 2: Uruchomić typecheck, lint i testy regresji frontendu**
+
+```powershell
+& 'C:\Users\admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' 'C:\Users\admin\Documents\Fullmag\node_modules\typescript\bin\tsc' --noEmit --project apps/control-room/tsconfig.typecheck.json
+& 'C:\Users\admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' 'C:\Users\admin\Documents\Fullmag\node_modules\eslint\bin\eslint.js' apps/control-room/src/shared/ui/Resizable.tsx apps/control-room/src/kernel/visualization/visualizationCommandContributions.ts apps/control-room/src/modules/inspector/panels/constraint/FrozenSpinsInspectorPanel.tsx apps/control-room/src/modules/ribbon/ribbonCommands.ts
+& 'C:\Users\admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' 'C:\Users\admin\Documents\Fullmag\node_modules\vitest\vitest.mjs' run apps/control-room/src/shared/ui/Resizable.test.ts apps/control-room/src/kernel/visualization/visualizationCommandContributions.test.ts apps/control-room/src/modules/inspector/panels/constraint/FrozenSpinsInspectorPanel.test.tsx apps/control-room/src/modules/ribbon/ribbonStructure.test.ts
+```
+
+Oczekiwany wynik: typecheck i lint kończą się kodem zero; przechodzą cztery pliki i 128 testów.
+
+- [ ] **Krok 3: Sprawdzić higienę repozytorium i graf commitów**
 
 ```powershell
 git diff --check origin/master...HEAD
@@ -296,20 +303,20 @@ git status --short
 git log --oneline origin/codex/fix-pr-ci-gates-20260823..HEAD
 ```
 
-Expected: no whitespace errors, clean worktree, and only reviewed PR #56 commits ahead of the remote branch.
+Oczekiwany wynik: brak błędów whitespace, czysty worktree i wyłącznie przejrzane commity PR #56 przed zdalną gałęzią.
 
-- [ ] **Step 4: Push the approved branch update**
+- [ ] **Krok 4: Wypchnąć zatwierdzoną aktualizację gałęzi**
 
 ```powershell
-git push origin codex/fix-pr-ci-gates-20260823
+git push origin HEAD:codex/fix-pr-ci-gates-20260823
 ```
 
-Expected: remote branch advances by fast-forward to the current local head.
+Oczekiwany wynik: zdalna gałąź przechodzi fast-forward na bieżący lokalny head.
 
-- [ ] **Step 5: Verify fresh GitHub Actions and review state**
+- [ ] **Krok 5: Zweryfikować świeże GitHub Actions i stan review**
 
-Fetch workflow runs for the new head, inspect every failed job log, and require all mandatory jobs to complete successfully. Re-fetch review threads and resolve only those whose exact invariant is proven by the new code and tests.
+Pobrać workflow runs dla nowego headu, przeczytać pełny log każdego nieudanego joba i wymagać sukcesu wszystkich obowiązkowych jobów. Ponownie pobrać wątki review i rozwiązać wyłącznie te, których dokładny niezmiennik jest dowiedziony przez nowy kod i testy.
 
-- [ ] **Step 6: Merge only after evidence is complete**
+- [ ] **Krok 6: Scalić dopiero po kompletnych dowodach**
 
-Require a mergeable PR, green mandatory checks, no unresolved actionable review threads, and an exact expected head SHA. Merge PR #56 without bypassing branch protection.
+Wymagać mergeable PR, zielonych obowiązkowych checks, braku nierozwiązanych uwag wymagających działania i dokładnego oczekiwanego SHA headu. Scalić PR #56 bez omijania branch protection.
