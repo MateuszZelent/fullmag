@@ -2204,8 +2204,8 @@ fn checkpoint_compatibility(snapshot: &SessionStateResponse) -> CheckpointCompat
         runtime_family,
         snapshot.session.resolved_engine_id.as_deref().unwrap_or("default")
     ));
-    let problem_hash = Some(format!("problem:rev-{}", snapshot.scene_revision));
-    let plan_hash = Some(format!("plan:rev-{}", snapshot.plan_revision));
+    let problem_hash = None;
+    let plan_hash = None;
 
     CheckpointCompatibility {
         restart_abi,
