@@ -1,5 +1,6 @@
 #include "context.hpp"
 #include "../integrators/fsal_policy.hpp"
+#include "llg_checkpoint_policy.hpp"
 
 #include <cuda_runtime_api.h>
 
@@ -24,6 +25,13 @@ struct HeaderV1 {
     uint64_t magic0;
     uint64_t magic1;
     fullmag_fdm_llg_checkpoint_info_v1 info;
+    uint64_t payload_checksum;
+};
+
+struct HeaderV2 {
+    uint64_t magic0;
+    uint64_t magic1;
+    fullmag_fdm_llg_checkpoint_info_v2 info;
     uint64_t payload_checksum;
 };
 
@@ -59,6 +67,89 @@ bool required_bytes(
     required = sizeof(HeaderV1) +
         arrays * components * ctx.cell_count * sizeof(double);
     return true;
+}
+
+bool required_bytes_v2(
+    const Context &ctx, uint64_t &required, uint32_t &mask)
+{
+    if (ctx.precision != FULLMAG_FDM_PRECISION_DOUBLE ||
+        ctx.has_multilayer_plan_v2 || ctx.cell_count == 0) {
+        return false;
+    }
+    mask = array_mask(ctx);
+    const uint64_t arrays = UINT64_C(1) +
+        ((mask & kArrayFsal) != 0 ? UINT64_C(1) : UINT64_C(0)) +
+        ((mask & kArrayAbmFn) != 0 ? UINT64_C(3) : UINT64_C(0));
+    constexpr uint64_t components = 3;
+    if (ctx.cell_count >
+        (std::numeric_limits<uint64_t>::max() - sizeof(HeaderV2)) /
+            (arrays * components * sizeof(double))) {
+        return false;
+    }
+    required = sizeof(HeaderV2) +
+        arrays * components * ctx.cell_count * sizeof(double);
+    return true;
+}
+
+int32_t checkpoint_device_ordinal(const Context &ctx) {
+    const auto &receipt = *ctx.execution_receipt;
+    std::lock_guard<std::mutex> lock(receipt.accounting_mutex);
+    return receipt.device_ordinal;
+}
+
+fullmag_fdm_llg_checkpoint_info_v2 checkpoint_info_v2(
+    const Context &ctx, uint64_t payload_bytes, uint32_t mask)
+{
+    fullmag_fdm_llg_checkpoint_info_v2 info{};
+    info.schema_version = FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V2;
+    info.struct_size = sizeof(info);
+    info.integrator = static_cast<uint32_t>(ctx.integrator);
+    info.precision = static_cast<uint32_t>(ctx.precision);
+    info.requested_backend = FULLMAG_FDM_CHECKPOINT_BACKEND_FDM;
+    info.resolved_backend = FULLMAG_FDM_CHECKPOINT_BACKEND_FDM;
+    info.executed_backend = FULLMAG_FDM_CHECKPOINT_BACKEND_FDM;
+    info.requested_policy = FULLMAG_FDM_CHECKPOINT_POLICY_GPU_REQUIRED;
+    info.resolved_policy = FULLMAG_FDM_CHECKPOINT_POLICY_GPU_REQUIRED;
+    info.execution_realization = FULLMAG_FDM_CHECKPOINT_REALIZATION_CUDA_FDM;
+    info.device_ordinal = checkpoint_device_ordinal(ctx);
+    info.array_mask = mask;
+    info.cell_count = ctx.cell_count;
+    info.payload_bytes = payload_bytes;
+    info.step_count = ctx.step_count;
+    info.accepted_step_index = ctx.accepted_step_index;
+    info.accepted_state_revision = ctx.accepted_state_revision;
+    info.current_time = ctx.current_time;
+    info.current_dt = ctx.current_dt;
+    info.transport_attempt_generation = ctx.gpu_transport_attempt_generation;
+    info.rhs_source_revision = ctx.rhs_source_revision;
+    info.rhs_field_revision = ctx.rhs_field_revision;
+    info.rhs_transport_revision = ctx.rhs_transport_revision;
+    info.projection_policy_identity = ctx.projection_policy_identity;
+    info.fsal_valid = ctx.fsal_valid ? 1U : 0U;
+    info.abm_startup = ctx.abm_startup;
+    info.abm_last_dt = ctx.abm_last_dt;
+    info.adaptive_enabled = ctx.adaptive_enabled ? 1U : 0U;
+    info.adaptive_has_previous_error =
+        ctx.adaptive_has_previous_error ? 1U : 0U;
+    info.adaptive_previous_error = ctx.adaptive_previous_error;
+    info.fsal_accepted_state_revision = ctx.fsal_accepted_state_revision;
+    info.fsal_accepted_time_bits = ctx.fsal_accepted_time_bits;
+    info.fsal_accepted_dt_bits = ctx.fsal_accepted_dt_bits;
+    info.fsal_source_revision = ctx.fsal_source_revision;
+    info.fsal_field_revision = ctx.fsal_field_revision;
+    info.fsal_transport_revision = ctx.fsal_transport_revision;
+    info.fsal_transport_state_identity = ctx.fsal_transport_state_identity;
+    info.fsal_projection_policy_identity = ctx.fsal_projection_policy_identity;
+    info.fsal_integrator_identity = ctx.fsal_integrator_identity;
+    info.fsal_precision_identity = ctx.fsal_precision_identity;
+    return info;
+}
+
+bool info_equal_v2(
+    const fullmag_fdm_llg_checkpoint_info_v2 &left,
+    const fullmag_fdm_llg_checkpoint_info_v2 &right)
+{
+    return std::memcmp(&left, &right, sizeof(left)) == 0;
 }
 
 fullmag_fdm_llg_checkpoint_info_v1 checkpoint_info(
@@ -214,6 +305,13 @@ int context_llg_checkpoint_import_v1(
     uint64_t exact_bytes,
     const fullmag_fdm_llg_checkpoint_info_v1 &expected_info)
 {
+    (void)source;
+    (void)exact_bytes;
+    (void)expected_info;
+    ctx.last_error =
+        "legacy LLG checkpoint v1 import is unsupported: exact execution identity is unavailable; export and restore schema v2";
+    return FULLMAG_FDM_ERR_ABI;
+#if 0
     uint64_t required = 0;
     uint32_t expected_mask = 0;
     if (!source || !required_bytes(ctx, required, expected_mask) ||
@@ -286,6 +384,181 @@ int context_llg_checkpoint_import_v1(
         header.info.adaptive_has_previous_error != 0;
     ctx.adaptive_previous_error = header.info.adaptive_previous_error;
     context_discard_pre_step_state(ctx);
+    ctx.last_error.clear();
+    return FULLMAG_FDM_OK;
+#endif
+}
+
+int context_llg_checkpoint_query_size_v2(
+    Context &ctx, uint64_t &out_required_bytes)
+{
+    uint32_t mask = 0;
+    if (!required_bytes_v2(ctx, out_required_bytes, mask)) {
+        ctx.last_error =
+            "LLG checkpoint v2 requires a non-empty FP64 single-grid context";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    return FULLMAG_FDM_OK;
+}
+
+int context_llg_checkpoint_export_v2(
+    Context &ctx,
+    void *destination,
+    uint64_t exact_capacity,
+    fullmag_fdm_llg_checkpoint_info_v2 &out_info)
+{
+    uint64_t required = 0;
+    uint32_t mask = 0;
+    if (!destination || !required_bytes_v2(ctx, required, mask) ||
+        exact_capacity != required) {
+        ctx.last_error = "LLG checkpoint v2 export requires the exact queried capacity";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (ctx.gpu_transport_active_attempt_id != 0 ||
+        ctx.gpu_transport_pre_step_m_valid || ctx.accepted_step_pending) {
+        ctx.last_error = "LLG checkpoint v2 export requires an accepted step boundary";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    std::vector<std::byte> payload(static_cast<size_t>(required), std::byte{0});
+    HeaderV2 header{};
+    header.magic0 = kMagic0;
+    header.magic1 = kMagic1;
+    header.info = checkpoint_info_v2(ctx, required, mask);
+    std::memcpy(payload.data(), &header, sizeof(header));
+    uint64_t offset = sizeof(header);
+    if (!copy_device_to_host(ctx, ctx.m, payload.data(), offset) ||
+        ((mask & kArrayFsal) != 0 &&
+         !copy_device_to_host(ctx, ctx.k_fsal, payload.data(), offset)) ||
+        ((mask & kArrayAbmFn) != 0 &&
+         (!copy_device_to_host(ctx, ctx.abm_f_n, payload.data(), offset) ||
+          !copy_device_to_host(ctx, ctx.abm_f_n1, payload.data(), offset) ||
+          !copy_device_to_host(ctx, ctx.abm_f_n2, payload.data(), offset)))) {
+        return FULLMAG_FDM_ERR_CUDA;
+    }
+    if (offset != required) {
+        ctx.last_error = "LLG checkpoint v2 export internal size mismatch";
+        return FULLMAG_FDM_ERR_INTERNAL;
+    }
+    header.payload_checksum = checksum(payload.data(), required);
+    std::memcpy(payload.data(), &header, sizeof(header));
+    std::memcpy(destination, payload.data(), static_cast<size_t>(required));
+    out_info = header.info;
+    return FULLMAG_FDM_OK;
+}
+
+int context_llg_checkpoint_import_v2(
+    Context &ctx,
+    const void *source,
+    uint64_t exact_bytes,
+    const fullmag_fdm_llg_checkpoint_info_v2 &expected_info)
+{
+    uint64_t required = 0;
+    uint32_t expected_mask = 0;
+    if (!source || !required_bytes_v2(ctx, required, expected_mask) ||
+        exact_bytes != required || exact_bytes < sizeof(HeaderV2)) {
+        ctx.last_error = "LLG checkpoint v2 import size or context mismatch";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (ctx.step_count != 0 || ctx.current_time != 0.0 ||
+        ctx.gpu_transport_attempt_generation != 0 ||
+        ctx.gpu_transport_active_attempt_id != 0 ||
+        ctx.gpu_transport_rhs.active || ctx.gpu_transport_pre_step_m_valid) {
+        ctx.last_error = "LLG checkpoint v2 import requires a fresh unbound context";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    std::vector<std::byte> payload(static_cast<size_t>(exact_bytes));
+    std::memcpy(payload.data(), source, static_cast<size_t>(exact_bytes));
+    HeaderV2 header{};
+    std::memcpy(&header, payload.data(), sizeof(header));
+    const uint64_t stored_checksum = header.payload_checksum;
+    header.payload_checksum = 0;
+    std::memcpy(payload.data(), &header, sizeof(header));
+    const uint64_t computed_checksum = checksum(payload.data(), exact_bytes);
+    const auto local_identity = checkpoint_info_v2(ctx, exact_bytes, expected_mask);
+    if (header.magic0 != kMagic0 || header.magic1 != kMagic1 ||
+        stored_checksum != computed_checksum ||
+        header.info.schema_version != FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V2 ||
+        header.info.struct_size != sizeof(header.info) ||
+        !llg_checkpoint_execution_identity_matches(
+            header.info, local_identity) ||
+        header.info.array_mask != expected_mask ||
+        header.info.cell_count != ctx.cell_count ||
+        header.info.payload_bytes != exact_bytes ||
+        header.info.fsal_valid > 1 || header.info.adaptive_enabled > 1 ||
+        header.info.adaptive_has_previous_error > 1 ||
+        header.info.abm_startup > 3 ||
+        !std::isfinite(header.info.current_time) ||
+        !std::isfinite(header.info.current_dt) || header.info.current_dt <= 0.0 ||
+        !std::isfinite(header.info.abm_last_dt) ||
+        !std::isfinite(header.info.adaptive_previous_error) ||
+        header.info.accepted_step_index != header.info.step_count ||
+        header.info.accepted_state_revision == 0 ||
+        header.info.rhs_source_revision == 0 ||
+        header.info.rhs_field_revision == 0 ||
+        header.info.rhs_transport_revision == 0 ||
+        header.info.projection_policy_identity == 0 ||
+        (header.info.fsal_valid != 0 &&
+         (header.info.fsal_accepted_state_revision !=
+              header.info.accepted_state_revision ||
+          header.info.fsal_accepted_time_bits !=
+              fsal_double_bits(header.info.current_time) ||
+          header.info.fsal_source_revision == 0 ||
+          header.info.fsal_field_revision == 0 ||
+          header.info.fsal_transport_revision == 0 ||
+          header.info.fsal_transport_state_identity == 0 ||
+          header.info.fsal_projection_policy_identity == 0 ||
+          header.info.fsal_integrator_identity == 0 ||
+          header.info.fsal_precision_identity == 0)) ||
+        !info_equal_v2(header.info, expected_info)) {
+        ctx.last_error = "LLG checkpoint v2 integrity or execution identity mismatch";
+        return FULLMAG_FDM_ERR_ABI;
+    }
+    uint64_t offset = sizeof(header);
+    if (!copy_host_to_device(ctx, ctx.m, payload.data(), offset) ||
+        ((expected_mask & kArrayFsal) != 0 &&
+         !copy_host_to_device(ctx, ctx.k_fsal, payload.data(), offset)) ||
+        ((expected_mask & kArrayAbmFn) != 0 &&
+         (!copy_host_to_device(ctx, ctx.abm_f_n, payload.data(), offset) ||
+          !copy_host_to_device(ctx, ctx.abm_f_n1, payload.data(), offset) ||
+          !copy_host_to_device(ctx, ctx.abm_f_n2, payload.data(), offset)))) {
+        return FULLMAG_FDM_ERR_CUDA;
+    }
+    if (offset != exact_bytes) {
+        ctx.last_error = "LLG checkpoint v2 import internal size mismatch";
+        return FULLMAG_FDM_ERR_INTERNAL;
+    }
+    ctx.step_count = header.info.step_count;
+    ctx.accepted_step_index = header.info.accepted_step_index;
+    ctx.accepted_state_revision = header.info.accepted_state_revision;
+    ctx.current_time = header.info.current_time;
+    ctx.current_dt = header.info.current_dt;
+    ctx.gpu_transport_attempt_generation =
+        header.info.transport_attempt_generation;
+    ctx.rhs_source_revision = header.info.rhs_source_revision;
+    ctx.rhs_field_revision = header.info.rhs_field_revision;
+    ctx.rhs_transport_revision = header.info.rhs_transport_revision;
+    ctx.projection_policy_identity = header.info.projection_policy_identity;
+    ctx.abm_startup = header.info.abm_startup;
+    ctx.abm_last_dt = header.info.abm_last_dt;
+    ctx.adaptive_enabled = header.info.adaptive_enabled != 0;
+    ctx.adaptive_has_previous_error =
+        header.info.adaptive_has_previous_error != 0;
+    ctx.adaptive_previous_error = header.info.adaptive_previous_error;
+    ctx.fsal_valid = header.info.fsal_valid != 0;
+    ctx.fsal_pending = false;
+    ctx.fsal_accepted_state_revision = header.info.fsal_accepted_state_revision;
+    ctx.fsal_accepted_time_bits = header.info.fsal_accepted_time_bits;
+    ctx.fsal_accepted_dt_bits = header.info.fsal_accepted_dt_bits;
+    ctx.fsal_source_revision = header.info.fsal_source_revision;
+    ctx.fsal_field_revision = header.info.fsal_field_revision;
+    ctx.fsal_transport_revision = header.info.fsal_transport_revision;
+    ctx.fsal_transport_state_identity = header.info.fsal_transport_state_identity;
+    ctx.fsal_projection_policy_identity =
+        header.info.fsal_projection_policy_identity;
+    ctx.fsal_integrator_identity = header.info.fsal_integrator_identity;
+    ctx.fsal_precision_identity = header.info.fsal_precision_identity;
+    context_discard_pre_step_state(ctx);
+    context_invalidate_observables(ctx);
     ctx.last_error.clear();
     return FULLMAG_FDM_OK;
 }

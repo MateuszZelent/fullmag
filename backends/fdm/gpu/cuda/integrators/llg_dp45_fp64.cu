@@ -281,7 +281,7 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     copy_field_d2d(ctx.tmp, ctx.m, ctx.cell_count, context_compute_stream(ctx));
 
     for (;;) {
-        ctx.current_dt = dt;
+        ctx.trial_dt = dt;
         // Stage 1 — FSAL: reuse k_fsal if valid
         const FsalReuseDecision fsal_decision = rhs_allows_fsal_reuse(ctx, dt);
         context_note_fsal_decision(ctx, fsal_decision);
@@ -370,7 +370,7 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             if (!compute_rhs_into(ctx, ctx.k_fsal, n, grid, gamma_bar, alpha,
                                   step_start_time + dt, 7)) return;
             if (abort_step_from_tmp(ctx)) return;
-            context_stage_accepted_step(ctx, dt);
+            context_stage_fsal_accepted_step(ctx, dt);
             context_refresh_observables(ctx);
             if (!fullmag_fdm_should_fill_step_stats(ctx)) {
                 fullmag_fdm_fill_step_stats_metadata(ctx, stats, dt);
@@ -419,7 +419,7 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         // Accept or reject
         if (policy.accepted) {
             // Accept step
-            context_stage_accepted_step(ctx, dt);
+            context_stage_fsal_accepted_step(ctx, dt);
 
             double dt_next = policy.dt_candidate;
 

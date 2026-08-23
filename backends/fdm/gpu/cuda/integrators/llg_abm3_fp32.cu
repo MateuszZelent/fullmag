@@ -6,6 +6,7 @@
  */
 
 #include "context.hpp"
+#include "fsal_policy.hpp"
 
 #include <cuda_runtime.h>
 #include <cmath>
@@ -107,7 +108,7 @@ static void abm3_fill_diagnostics_fp32(Context &ctx, double dt, fullmag_fdm_step
 
     if (ctx.enable_exchange) launch_exchange_field_fp32(ctx);
     if (ctx.enable_demag)    launch_demag_field_fp32(ctx);
-    launch_effective_field_fp32(ctx, ctx.current_time);
+    launch_effective_field_fp32(ctx, ctx.pending_time);
 
     double e_ex = ctx.enable_exchange ? launch_exchange_energy_fp32(ctx) : 0.0;
     double e_demag = launch_demag_energy_fp32(ctx);
@@ -133,8 +134,8 @@ static void abm3_fill_diagnostics_fp32(Context &ctx, double dt, fullmag_fdm_step
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
     fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp32 LLG RHS launch");
     double max_dm_dt = reduce_max_norm_fp32(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
-    stats->step = ctx.step_count;
-    stats->time_seconds = ctx.current_time;
+    stats->step = ctx.pending_step_count;
+    stats->time_seconds = ctx.pending_time;
     stats->dt_seconds = dt;
     stats->exchange_energy_joules = e_ex;
     stats->demag_energy_joules = e_demag;
@@ -210,12 +211,11 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             n, 0.5f * dt_f);
         if (abort_step_from_tmp(ctx, false)) return;
 
-        ctx.step_count++;
-        ctx.current_time += dt;
+        context_stage_accepted_step(ctx, dt);
 
         if (ctx.enable_exchange) launch_exchange_field_fp32(ctx);
         if (ctx.enable_demag)    launch_demag_field_fp32(ctx);
-        launch_effective_field_fp32(ctx, ctx.current_time);
+        launch_effective_field_fp32(ctx, ctx.pending_time);
 
         abm3_rotate_history_fp32(ctx, ctx.cell_count);
 
@@ -270,8 +270,7 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         n, dt_f);
     if (abort_step_from_tmp(ctx, false)) return;
 
-    ctx.step_count++;
-    ctx.current_time += dt;
+    context_stage_accepted_step(ctx, dt);
 
     abm3_rotate_history_fp32(ctx, ctx.cell_count);
     cudaMemcpy(ctx.abm_f_n.x, ctx.k1.x, bytes, cudaMemcpyDeviceToDevice);

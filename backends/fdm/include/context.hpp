@@ -242,6 +242,7 @@ struct Context {
     double temperature = 0.0;  // Kelvin
     double thermal_sigma = 0.0;  // Precomputed noise amplitude (A/m)
     double current_dt = 1e-13;   // Current timestep for thermal sigma computation
+    double trial_dt = 0.0;       // Internal attempt dt; never authoritative/public
     uint64_t thermal_seed = 0;   // Resolved counter-based Brown-noise seed
 
     // Zhang-Li STT (CIP)
@@ -369,7 +370,11 @@ struct Context {
     // Transaction-owned accepted m snapshot for an active bound transport
     // step.  Integrators may freely reuse tmp without weakening rollback.
     DeviceVectorField gpu_transport_pre_step_m;
+    DeviceVectorField gpu_transport_pre_step_abm_f_n;
+    DeviceVectorField gpu_transport_pre_step_abm_f_n1;
+    DeviceVectorField gpu_transport_pre_step_abm_f_n2;
     bool gpu_transport_pre_step_m_valid = false;
+    bool gpu_transport_pre_step_abm_valid = false;
     uint64_t gpu_transport_pre_step_step_count = 0;
     uint64_t gpu_transport_pre_step_accepted_step_index = 0;
     uint64_t gpu_transport_pre_step_accepted_state_revision = 1;
@@ -418,6 +423,7 @@ struct Context {
     uint64_t thermal_rng_draws = 0;
     uint64_t stale_publication_count = 0;
     uint64_t transaction_commit_count = 0;
+    bool observables_valid = false;
 
     // Complete v2 timestep policy (fixed unless explicitly enabled).
     bool adaptive_enabled = false;
@@ -590,6 +596,18 @@ int context_llg_checkpoint_import_v1(
     const void *source,
     uint64_t exact_bytes,
     const fullmag_fdm_llg_checkpoint_info_v1 &expected_info);
+int context_llg_checkpoint_query_size_v2(
+    Context &ctx, uint64_t &out_required_bytes);
+int context_llg_checkpoint_export_v2(
+    Context &ctx,
+    void *destination,
+    uint64_t exact_capacity,
+    fullmag_fdm_llg_checkpoint_info_v2 &out_info);
+int context_llg_checkpoint_import_v2(
+    Context &ctx,
+    const void *source,
+    uint64_t exact_bytes,
+    const fullmag_fdm_llg_checkpoint_info_v2 &expected_info);
 
 bool context_bind_gpu_transport_rhs(
     Context &ctx,
@@ -716,7 +734,8 @@ inline double oersted_field_scale(const Context &ctx, double evaluation_time) {
             const double f = ctx.oersted_time_dep_freq;
             const double phi = ctx.oersted_time_dep_phase;
             const double off = ctx.oersted_time_dep_offset;
-            scale *= sin(2.0 * M_PI * f * t + phi) + off;
+            constexpr double pi = 3.141592653589793238462643383279502884;
+            scale *= sin(2.0 * pi * f * t + phi) + off;
             break;
         }
         case 2: {
@@ -1572,6 +1591,7 @@ bool context_query_device_info(Context &ctx);
 
 /// Populate H_ex / H_demag / H_eff for the current state without advancing time.
 bool context_refresh_observables(Context &ctx);
+void context_invalidate_observables(Context &ctx);
 
 /// Populate only H_demag for the current state without advancing time.
 bool context_refresh_demag_observable(Context &ctx);

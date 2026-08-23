@@ -6,6 +6,7 @@
  */
 
 #include "context.hpp"
+#include "fsal_policy.hpp"
 
 #include <cuda_runtime.h>
 #include <cmath>
@@ -478,8 +479,7 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     if (abort_step_from_tmp(ctx, false)) return;
 
     if (!fullmag_fdm_should_fill_step_stats_for_step(ctx, ctx.step_count + 1)) {
-        ctx.step_count++;
-        ctx.current_time += dt;
+        context_stage_accepted_step(ctx, dt);
         fullmag_fdm_fill_step_stats_metadata(ctx, stats, dt);
         return;
     }
@@ -517,11 +517,10 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
 
     double max_dm_dt = reduce_current_rhs_norm_fp32(ctx);
 
-    ctx.step_count++;
-    ctx.current_time += dt;
+    context_stage_accepted_step(ctx, dt);
 
-    stats->step = ctx.step_count;
-    stats->time_seconds = ctx.current_time;
+    stats->step = ctx.pending_step_count;
+    stats->time_seconds = ctx.pending_time;
     stats->dt_seconds = dt;
     stats->exchange_energy_joules = e_ex;
     stats->demag_energy_joules = e_demag;

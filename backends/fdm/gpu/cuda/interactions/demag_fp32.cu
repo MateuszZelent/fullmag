@@ -722,11 +722,12 @@ void launch_effective_field_fp32(Context &ctx, double evaluation_time) {
     int grid = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
     // Compute thermal noise amplitude (FDT)
-    if (ctx.temperature > 0.0 && ctx.Ms > 0.0 && ctx.current_dt > 0.0) {
+    const double thermal_dt = ctx.trial_dt > 0.0 ? ctx.trial_dt : ctx.current_dt;
+    if (ctx.temperature > 0.0 && ctx.Ms > 0.0 && thermal_dt > 0.0) {
         double MU0 = 4.0 * M_PI * 1e-7;
         double KB = 1.380649e-23;
         double V = ctx.dx * ctx.dy * ctx.dz;
-        ctx.thermal_sigma = sqrt(2.0 * ctx.alpha * KB * ctx.temperature / (ctx.gamma * MU0 * ctx.Ms * V * ctx.current_dt));
+        ctx.thermal_sigma = sqrt(2.0 * ctx.alpha * KB * ctx.temperature / (ctx.gamma * MU0 * ctx.Ms * V * thermal_dt));
     } else {
         ctx.thermal_sigma = 0.0;
     }

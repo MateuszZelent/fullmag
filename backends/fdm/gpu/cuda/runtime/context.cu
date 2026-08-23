@@ -2065,10 +2065,32 @@ bool context_alloc_device(Context &ctx) {
     return true;
 }
 
+static bool copy_field_d2d_async(
+    DeviceVectorField &destination,
+    const DeviceVectorField &source,
+    size_t bytes,
+    cudaStream_t stream)
+{
+    return cudaMemcpyAsync(destination.x, source.x, bytes,
+                           cudaMemcpyDeviceToDevice, stream) == cudaSuccess &&
+        cudaMemcpyAsync(destination.y, source.y, bytes,
+                        cudaMemcpyDeviceToDevice, stream) == cudaSuccess &&
+        cudaMemcpyAsync(destination.z, source.z, bytes,
+                        cudaMemcpyDeviceToDevice, stream) == cudaSuccess;
+}
+
 bool context_capture_pre_step_state(Context &ctx) {
     if (ctx.cell_count == 0) return true;
     if (ctx.gpu_transport_pre_step_m.x == nullptr &&
         !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_m))
+        return false;
+    if (ctx.integrator == FULLMAG_FDM_INTEGRATOR_ABM3 &&
+        ((ctx.gpu_transport_pre_step_abm_f_n.x == nullptr &&
+          !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n)) ||
+         (ctx.gpu_transport_pre_step_abm_f_n1.x == nullptr &&
+          !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n1)) ||
+         (ctx.gpu_transport_pre_step_abm_f_n2.x == nullptr &&
+          !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n2))))
         return false;
     const size_t scalar_bytes = ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
         ? sizeof(double) : sizeof(float);
@@ -2088,6 +2110,20 @@ bool context_capture_pre_step_state(Context &ctx) {
         return false;
     }
     ctx.gpu_transport_pre_step_m_valid = true;
+    if (ctx.integrator == FULLMAG_FDM_INTEGRATOR_ABM3) {
+        if (!copy_field_d2d_async(
+                ctx.gpu_transport_pre_step_abm_f_n, ctx.abm_f_n, bytes, stream) ||
+            !copy_field_d2d_async(
+                ctx.gpu_transport_pre_step_abm_f_n1, ctx.abm_f_n1, bytes, stream) ||
+            !copy_field_d2d_async(
+                ctx.gpu_transport_pre_step_abm_f_n2, ctx.abm_f_n2, bytes, stream) ||
+            cudaStreamSynchronize(stream) != cudaSuccess) {
+            ctx.gpu_transport_pre_step_m_valid = false;
+            ctx.last_error = "failed to capture pre-step ABM history";
+            return false;
+        }
+        ctx.gpu_transport_pre_step_abm_valid = true;
+    }
     ctx.gpu_transport_pre_step_step_count = ctx.step_count;
     ctx.gpu_transport_pre_step_accepted_step_index = ctx.accepted_step_index;
     ctx.gpu_transport_pre_step_accepted_state_revision = ctx.accepted_state_revision;
@@ -2131,12 +2167,25 @@ bool context_rollback_pre_step_state(Context &ctx) {
         ctx.last_error = "failed to restore bound transport pre-step magnetization";
         return false;
     }
+    if (ctx.gpu_transport_pre_step_abm_valid &&
+        (!copy_field_d2d_async(
+             ctx.abm_f_n, ctx.gpu_transport_pre_step_abm_f_n, bytes, stream) ||
+         !copy_field_d2d_async(
+             ctx.abm_f_n1, ctx.gpu_transport_pre_step_abm_f_n1, bytes, stream) ||
+         !copy_field_d2d_async(
+             ctx.abm_f_n2, ctx.gpu_transport_pre_step_abm_f_n2, bytes, stream) ||
+         cudaStreamSynchronize(stream) != cudaSuccess)) {
+        ctx.last_error = "failed to restore pre-step ABM history";
+        return false;
+    }
     ctx.gpu_transport_pre_step_m_valid = false;
+    ctx.gpu_transport_pre_step_abm_valid = false;
     ctx.step_count = ctx.gpu_transport_pre_step_step_count;
     ctx.accepted_step_index = ctx.gpu_transport_pre_step_accepted_step_index;
     ctx.accepted_state_revision = ctx.gpu_transport_pre_step_accepted_state_revision;
     ctx.current_time = ctx.gpu_transport_pre_step_current_time;
     ctx.current_dt = ctx.gpu_transport_pre_step_current_dt;
+    ctx.trial_dt = 0.0;
     ctx.fsal_valid = false;
     ctx.fsal_pending = false;
     ctx.accepted_step_pending = false;
@@ -2150,6 +2199,7 @@ bool context_rollback_pre_step_state(Context &ctx) {
 
 void context_discard_pre_step_state(Context &ctx) {
     ctx.gpu_transport_pre_step_m_valid = false;
+    ctx.gpu_transport_pre_step_abm_valid = false;
 }
 
 void context_free_device(Context &ctx) {
@@ -2167,6 +2217,9 @@ void context_free_device(Context &ctx) {
     free_vector_field(ctx.k1);
     free_vector_field(ctx.tmp);
     free_vector_field(ctx.gpu_transport_pre_step_m);
+    free_vector_field(ctx.gpu_transport_pre_step_abm_f_n);
+    free_vector_field(ctx.gpu_transport_pre_step_abm_f_n1);
+    free_vector_field(ctx.gpu_transport_pre_step_abm_f_n2);
     free_vector_field(ctx.work);
     // DP45 stage buffers
     free_vector_field(ctx.k2);
@@ -4800,6 +4853,7 @@ bool context_query_device_info(Context &ctx) {
 }
 
 bool context_refresh_observables(Context &ctx) {
+    ctx.observables_valid = false;
     const double evaluation_time =
         ctx.accepted_step_pending ? ctx.pending_time : ctx.current_time;
     if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
@@ -4827,7 +4881,12 @@ bool context_refresh_observables(Context &ctx) {
         set_cuda_error(ctx, "context_refresh_observables", err);
         return false;
     }
+    ctx.observables_valid = true;
     return true;
+}
+
+void context_invalidate_observables(Context &ctx) {
+    ctx.observables_valid = false;
 }
 
 bool context_refresh_demag_observable(Context &ctx) {

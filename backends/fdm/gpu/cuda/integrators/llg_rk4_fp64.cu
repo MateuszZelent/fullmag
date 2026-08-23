@@ -14,6 +14,7 @@
  */
 
 #include "context.hpp"
+#include "fsal_policy.hpp"
 
 #include <cuda_runtime.h>
 #include <cmath>
@@ -214,8 +215,7 @@ void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats
             ctx, ctx.m, step_start_time + dt,
             ctx.gpu_transport_active_attempt_id, 5)) return;
 
-    ctx.step_count++;
-    ctx.current_time += dt;
+    context_stage_accepted_step(ctx, dt);
 
     if (!fullmag_fdm_should_fill_step_stats(ctx)) {
         if (!context_complete_gpu_transport_rhs(ctx)) return;
@@ -226,7 +226,7 @@ void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats
     // Diagnostics on accepted state
     if (ctx.enable_exchange) launch_exchange_field_fp64(ctx);
     if (ctx.enable_demag)    launch_demag_field_fp64(ctx);
-    launch_effective_field_fp64(ctx, ctx.current_time);
+    launch_effective_field_fp64(ctx, ctx.pending_time);
 
     double e_ex = ctx.enable_exchange ? launch_exchange_energy_fp64(ctx) : 0.0;
     double e_demag = launch_demag_energy_fp64(ctx);

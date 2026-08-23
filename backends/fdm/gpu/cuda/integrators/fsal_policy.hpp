@@ -170,7 +170,16 @@ inline void context_stage_accepted_step(Context &ctx, double dt) {
     ctx.pending_step_count = ctx.step_count + 1;
     ctx.pending_time = ctx.current_time + dt;
     ctx.pending_dt = dt;
+}
+
+inline void context_stage_fsal_accepted_step(Context &ctx, double dt) {
+    context_stage_accepted_step(ctx, dt);
     context_stage_pending_fsal(ctx, dt);
+}
+
+inline void context_reject_staged_step(Context &ctx) {
+    ctx.accepted_step_pending = false;
+    ctx.fsal_pending = false;
 }
 
 inline void context_publish_pending_fsal(Context &ctx) {
@@ -204,6 +213,17 @@ inline void context_commit_accepted_step(Context &ctx) {
     ++ctx.accepted_state_revision;
     ++ctx.transaction_commit_count;
     ctx.accepted_step_pending = false;
+    ctx.trial_dt = 0.0;
+}
+
+inline bool context_publish_accepted_step_stats(
+    bool committed,
+    const fullmag_fdm_step_stats &trial,
+    fullmag_fdm_step_stats *output)
+{
+    if (!committed || output == nullptr) return false;
+    *output = trial;
+    return true;
 }
 
 inline bool context_get_fsal_telemetry_v1(

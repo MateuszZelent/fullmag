@@ -216,7 +216,7 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     copy_field_d2d_fp32(ctx.tmp, ctx.m, ctx.cell_count, context_compute_stream(ctx));
 
     for (;;) {
-        ctx.current_dt = dt;
+        ctx.trial_dt = dt;
         dt_f = static_cast<float>(dt);
 
         const FsalReuseDecision fsal_decision = rhs_allows_fsal_reuse(ctx, dt);
@@ -300,7 +300,7 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             if (!compute_rhs_into_fp32(ctx, ctx.k_fsal, n, grid, gamma_bar_f, alpha_f,
                                        step_start_time + dt)) return;
             if (abort_step_from_tmp(ctx)) return;
-            context_stage_accepted_step(ctx, dt);
+            context_stage_fsal_accepted_step(ctx, dt);
             context_refresh_observables(ctx);
             if (!fullmag_fdm_should_fill_step_stats(ctx)) {
                 fullmag_fdm_fill_step_stats_metadata(ctx, stats, dt);
@@ -338,7 +338,7 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         }
 
         if (policy.accepted) {
-            context_stage_accepted_step(ctx, dt);
+            context_stage_fsal_accepted_step(ctx, dt);
 
             double dt_next = policy.dt_candidate;
 

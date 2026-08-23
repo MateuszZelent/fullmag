@@ -15,6 +15,10 @@ use std::os::raw::c_char;
 pub const FULLMAG_FDM_MAX_EXCHANGE_REGIONS: usize = 256;
 pub const FULLMAG_FDM_MAX_REGION_ID: u32 = (FULLMAG_FDM_MAX_EXCHANGE_REGIONS - 1) as u32;
 pub const FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V1: u32 = 1;
+pub const FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V2: u32 = 2;
+pub const FULLMAG_FDM_CHECKPOINT_BACKEND_FDM: u32 = 1;
+pub const FULLMAG_FDM_CHECKPOINT_POLICY_GPU_REQUIRED: u32 = 1;
+pub const FULLMAG_FDM_CHECKPOINT_REALIZATION_CUDA_FDM: u32 = 1;
 pub const FULLMAG_FDM_FROZEN_SPINS_ABI_V1: u32 = 1;
 pub const FULLMAG_FDM_CAPABILITY_FROZEN_SPINS_V1: u64 = 1_u64 << 0;
 pub const FULLMAG_FDM_PLAN_DESC_ABI_V2: u32 = 2;
@@ -473,6 +477,51 @@ pub struct fullmag_fdm_plan_desc_v2 {
     pub struct_size: u32,
     pub base: fullmag_fdm_plan_desc,
     pub time_policy: fullmag_fdm_time_policy_desc_v2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct fullmag_fdm_llg_checkpoint_info_v2 {
+    pub schema_version: u32,
+    pub struct_size: u32,
+    pub integrator: u32,
+    pub precision: u32,
+    pub requested_backend: u32,
+    pub resolved_backend: u32,
+    pub executed_backend: u32,
+    pub requested_policy: u32,
+    pub resolved_policy: u32,
+    pub execution_realization: u32,
+    pub device_ordinal: i32,
+    pub array_mask: u32,
+    pub cell_count: u64,
+    pub payload_bytes: u64,
+    pub step_count: u64,
+    pub accepted_step_index: u64,
+    pub accepted_state_revision: u64,
+    pub current_time: f64,
+    pub current_dt: f64,
+    pub transport_attempt_generation: u64,
+    pub rhs_source_revision: u64,
+    pub rhs_field_revision: u64,
+    pub rhs_transport_revision: u64,
+    pub projection_policy_identity: u64,
+    pub fsal_valid: u32,
+    pub abm_startup: u32,
+    pub abm_last_dt: f64,
+    pub adaptive_enabled: u32,
+    pub adaptive_has_previous_error: u32,
+    pub adaptive_previous_error: f64,
+    pub fsal_accepted_state_revision: u64,
+    pub fsal_accepted_time_bits: u64,
+    pub fsal_accepted_dt_bits: u64,
+    pub fsal_source_revision: u64,
+    pub fsal_field_revision: u64,
+    pub fsal_transport_revision: u64,
+    pub fsal_transport_state_identity: u64,
+    pub fsal_projection_policy_identity: u64,
+    pub fsal_integrator_identity: u32,
+    pub fsal_precision_identity: u32,
 }
 
 // ── Step stats ──
@@ -1535,6 +1584,25 @@ extern "C" {
         out_info: *mut fullmag_fdm_device_info,
     ) -> i32;
 
+    pub fn fullmag_fdm_backend_llg_checkpoint_query_size_v2(
+        handle: *mut fullmag_fdm_backend,
+        out_required_bytes: *mut u64,
+    ) -> i32;
+
+    pub fn fullmag_fdm_backend_llg_checkpoint_export_v2(
+        handle: *mut fullmag_fdm_backend,
+        destination: *mut c_void,
+        exact_capacity: u64,
+        out_info: *mut fullmag_fdm_llg_checkpoint_info_v2,
+    ) -> i32;
+
+    pub fn fullmag_fdm_backend_llg_checkpoint_import_v2(
+        handle: *mut fullmag_fdm_backend,
+        source: *const c_void,
+        exact_bytes: u64,
+        expected_info: *const fullmag_fdm_llg_checkpoint_info_v2,
+    ) -> i32;
+
     pub fn fullmag_fdm_backend_execution_receipt_v1(
         handle: *mut fullmag_fdm_backend,
         out_receipt: *mut fullmag_fdm_execution_receipt_v1,
@@ -2283,6 +2351,22 @@ mod tests {
             offset_of!(fullmag_fdm_llg_checkpoint_info_v1, adaptive_previous_error),
             88
         );
+    }
+
+    #[test]
+    fn llg_checkpoint_info_v2_matches_the_exact_execution_layout() {
+        assert_eq!(FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V2, 2);
+        assert_eq!(size_of::<fullmag_fdm_llg_checkpoint_info_v2>(), 248);
+        assert_eq!(align_of::<fullmag_fdm_llg_checkpoint_info_v2>(), 8);
+        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v2, device_ordinal), 40);
+        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v2, cell_count), 48);
+        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v2, accepted_step_index), 72);
+        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v2, current_time), 88);
+        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v2, rhs_source_revision), 112);
+        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v2, abm_last_dt), 152);
+        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v2, adaptive_previous_error), 168);
+        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v2, fsal_accepted_state_revision), 176);
+        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v2, fsal_integrator_identity), 240);
     }
 
     #[test]
