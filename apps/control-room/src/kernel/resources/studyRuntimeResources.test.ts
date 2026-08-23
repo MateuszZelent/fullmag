@@ -30,6 +30,7 @@ import {
   MESHING_PERIODIC_PAIRS_PATH,
   MESHING_SUMMARY_PATH,
   MODEL_SCENE_PATH,
+  MODEL_READINESS_PATH,
   PERSISTENCE_CHECKPOINTS_PATH,
   SIMULATION_RUN_CURRENT_PATH,
   SIMULATION_RUN_PATH,
@@ -42,6 +43,7 @@ import { activeLaneCapabilityFixture } from "./activeLaneCapabilityFixture.testS
 
 import {
   STUDY_RUNTIME_CONTROL_RESOURCE_KEYS,
+  readyCommandResourceData,
   frequencyDomainManifestRevision,
   frequencyDomainSweepProgressRevision,
   frequencyDomainTextArtifactRevision,
@@ -236,6 +238,38 @@ function statusWith({
 }
 
 describe("study runtime command resource bundles", () => {
+  it("loads model readiness into both production command resource bundles", () => {
+    const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
+    const fullBundle = source.slice(
+      source.indexOf("export function useStudyRuntimeCommandResourceData"),
+      source.indexOf("export function useRuntimeCommandControlResourceData"),
+    );
+    const controlBundle = source.slice(
+      source.indexOf("export function useRuntimeCommandControlResourceData"),
+      source.indexOf("export function useObjectMetricsResource"),
+    );
+
+    expect(fullBundle).toContain("useModelReadinessResource");
+    expect(fullBundle).toContain("[MODEL_READINESS_PATH]");
+    expect(controlBundle).toContain("useModelReadinessResource");
+    expect(controlBundle).toContain("[MODEL_READINESS_PATH]");
+    expect(STUDY_RUNTIME_CONTROL_RESOURCE_KEYS).toContain(MODEL_READINESS_PATH);
+  });
+
+  it("withholds a retained readiness snapshot while its production resource is stale", () => {
+    const retained = {
+      blockers: [],
+      checks: [],
+      ready_to_export: true,
+      ready_to_run: true,
+      scene_revision: 3,
+    };
+
+    expect(readyCommandResourceData(retained, "ready")).toBe(retained);
+    expect(readyCommandResourceData(retained, "stale")).toBeNull();
+    expect(readyCommandResourceData(retained, "loading")).toBeNull();
+    expect(readyCommandResourceData(retained, "error")).toBeNull();
+  });
   it("measures the sampled solver trace at load and commit without polling", () => {
     const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
     const profileHook = source.slice(

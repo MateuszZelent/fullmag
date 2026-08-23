@@ -434,24 +434,28 @@ function runtimeReadinessDisabledReason(
     "compute_energies" | "compute_fields" | "solve"
   >,
 ): string | null {
-  if (kind === "solve") {
-    const readiness = resourceData<ModelReadinessResource>(
-      context,
-      MODEL_READINESS_PATH,
-    );
-    if (readiness) {
-      return readiness.ready_to_run
-        ? null
-        : readiness.blockers[0] ??
-            "Complete the model checklist before running.";
-    }
-  }
-
   const status = resourceData<LiveStatusResource>(
     context,
     SESSION_STATUS_RESOURCE_KEY,
   );
   if (!status) return "Session status is unavailable.";
+
+  if (kind === "solve") {
+    const readiness = resourceData<ModelReadinessResource>(
+      context,
+      MODEL_READINESS_PATH,
+    );
+    if (!readiness) return "Model readiness is unavailable.";
+    const sceneRevision = status.resources.scene_revision;
+    if (sceneRevision == null) return "No scene model is loaded.";
+    if (readiness.scene_revision !== sceneRevision) {
+      return "Model readiness is stale for the current scene.";
+    }
+    return readiness.ready_to_run
+      ? null
+      : readiness.blockers[0] ??
+          "Complete the model checklist before running.";
+  }
 
   if (kind === "compute_fields" && !status.capabilities.binary_fields) {
     return "Field data plane is unavailable.";
@@ -1049,6 +1053,7 @@ function invalidateImportedSessionResources(
   invalidateRestoredStateResources(context, revision);
   context.resources?.invalidate(PERSISTENCE_IMPORTS_PATH, revision);
   context.resources?.invalidate(MODEL_SCENE_PATH, revision);
+  context.resources?.invalidate(MODEL_READINESS_PATH, revision);
   context.resources?.invalidate(MODEL_STUDY_PATH, revision);
   context.resources?.invalidate(SIMULATION_RUN_CURRENT_PATH, revision);
   context.resources?.invalidate(SIMULATION_STAGES_EXECUTION_PATH, revision);
@@ -1682,6 +1687,7 @@ function invalidateStudyAuthoringResources(
   revision: string | number,
 ): void {
   context.resources?.invalidate(MODEL_SCENE_PATH, revision);
+  context.resources?.invalidate(MODEL_READINESS_PATH, revision);
   context.resources?.invalidate(MODEL_STUDY_PATH, revision);
   context.resources?.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
   context.resources?.invalidate(SIMULATION_STAGES_EXECUTION_PATH, revision);

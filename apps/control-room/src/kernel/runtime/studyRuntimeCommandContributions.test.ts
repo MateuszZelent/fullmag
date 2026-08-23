@@ -185,6 +185,7 @@ function runtimeResourceData({
   meshPipelineStatus = null,
   meshSourceSceneRevision = null,
   meshRevision = 0,
+  modelReadinessBlocker = null,
   runtimeState = "idle",
   runtimeControls = null,
   regionCoefficientsRevision,
@@ -222,6 +223,7 @@ function runtimeResourceData({
   }> | null;
   meshRevision?: number;
   meshSourceSceneRevision?: number | null;
+  modelReadinessBlocker?: string | null;
   runtimeState?: string;
   runtimeControls?: Array<{
     enabled: boolean;
@@ -251,6 +253,13 @@ function runtimeResourceData({
           }
         : null,
     [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation,
+    [MODEL_READINESS_PATH]: {
+      blockers: modelReadinessBlocker ? [modelReadinessBlocker] : [],
+      checks: [],
+      ready_to_export: modelReadinessBlocker == null,
+      ready_to_run: modelReadinessBlocker == null,
+      scene_revision: sceneRevision ?? 0,
+    },
     [MODEL_REGION_DIAGNOSTICS_PATH]: regionDiagnostics,
     [SESSION_STATUS_RESOURCE_KEY]: {
       capabilities: {
@@ -2463,6 +2472,8 @@ describe("study runtime command contributions", () => {
             },
           ],
         },
+        modelReadinessBlocker:
+          "Resolve geometry validation blockers before running runtime commands.",
       }),
       source: "test" as const,
     };
@@ -2500,7 +2511,10 @@ describe("study runtime command contributions", () => {
     const registry = registryWithStudyRuntimeCommands();
     const context = {
       api: {} as never,
-      resourceData: runtimeResourceData({ meshBuildStatus: "running" }),
+      resourceData: runtimeResourceData({
+        meshBuildStatus: "running",
+        modelReadinessBlocker: "A mesh build is still running.",
+      }),
       source: "test" as const,
     };
 
@@ -2512,7 +2526,7 @@ describe("study runtime command contributions", () => {
     const pipelineContext = {
       api: {} as never,
       resourceData: {
-        ...runtimeResourceData(),
+        ...runtimeResourceData({ modelReadinessBlocker: "A mesh build is still running." }),
         [MESHING_BUILDS_CURRENT_PATH]: {
           mesh_pipeline_status: [
             { id: "generate", label: "Generate", status: "running" },
@@ -2546,6 +2560,8 @@ describe("study runtime command contributions", () => {
             },
           ],
         },
+        modelReadinessBlocker:
+          "Region materialization support blocker: World-frame authored regions require explicit materialization before execution.",
       }),
       source: "test" as const,
     };
@@ -2590,7 +2606,11 @@ describe("study runtime command contributions", () => {
     const api = {} as never;
     const noMeshContext = {
       api,
-      resourceData: runtimeResourceData({ discretization: "fem" }),
+      resourceData: runtimeResourceData({
+        discretization: "fem",
+        modelReadinessBlocker:
+          "Build a current shared-domain mesh before running. Open Mesh Jobs or Build Shared-Domain Mesh.",
+      }),
       source: "test" as const,
     };
     const staleMeshContext = {
@@ -2599,6 +2619,8 @@ describe("study runtime command contributions", () => {
         discretization: "fem",
         meshRevision: 5,
         meshSourceSceneRevision: 2,
+        modelReadinessBlocker:
+          "Build a current shared-domain mesh before running. Open Mesh Jobs or Build Shared-Domain Mesh.",
         sceneRevision: 3,
       }),
       source: "test" as const,
@@ -2630,6 +2652,8 @@ describe("study runtime command contributions", () => {
     const resourceData = runtimeResourceData({
       discretization: "fem",
       meshRevision: 5,
+      modelReadinessBlocker:
+        "Build a current shared-domain mesh before running. Open Mesh Jobs or Build Shared-Domain Mesh.",
       runtimeControls: [
         { kind: "compute_fields", enabled: true },
         { kind: "compute_energies", enabled: true },
@@ -3127,6 +3151,44 @@ describe("study runtime command contributions", () => {
 
     expect(registry.isEnabled("study.run", blockedContext)).toBe(true);
     expect(registry.get("study.run")?.disabledReason?.(blockedContext)).toBeNull();
+  });
+
+  it("fails study Run closed when model readiness is unavailable", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const resourceData = runtimeResourceData();
+    delete resourceData[MODEL_READINESS_PATH];
+    const context = {
+      api: {} as never,
+      resourceData,
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("study.run", context)).toBe(false);
+    expect(registry.get("study.run")?.disabledReason?.(context)).toBe(
+      "Model readiness is unavailable.",
+    );
+  });
+
+  it("fails study Run closed when model readiness is from another scene revision", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const resourceData = runtimeResourceData({ sceneRevision: 4 });
+    resourceData[MODEL_READINESS_PATH] = {
+      blockers: [],
+      checks: [],
+      ready_to_export: true,
+      ready_to_run: true,
+      scene_revision: 3,
+    };
+    const context = {
+      api: {} as never,
+      resourceData,
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("study.run", context)).toBe(false);
+    expect(registry.get("study.run")?.disabledReason?.(context)).toBe(
+      "Model readiness is stale for the current scene.",
+    );
   });
 
   it("does not let stale active command queue block a newer inactive lifecycle state", () => {

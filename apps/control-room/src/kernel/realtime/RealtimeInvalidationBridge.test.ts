@@ -45,6 +45,7 @@ import {
   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
   MESHING_SUMMARY_PATH,
   MODEL_MATERIAL_FIELDS_PATH,
+  MODEL_READINESS_PATH,
   MODEL_REALIZED_REGIONS_PATH,
   MODEL_REGION_DIAGNOSTICS_PATH,
   MODEL_REGIONS_PATH,
@@ -258,6 +259,9 @@ describe("RealtimeInvalidationBridge", () => {
       dependentRevision(MODEL_SCENE_PATH, 12),
     );
     expect(resources.getRevision(MODEL_MATERIAL_FIELDS_PATH)).toBe(
+      dependentRevision(MODEL_SCENE_PATH, 12),
+    );
+    expect(resources.getRevision(MODEL_READINESS_PATH)).toBe(
       dependentRevision(MODEL_SCENE_PATH, 12),
     );
     expect(resources.getRevision("session:status")).toBe(
@@ -1314,6 +1318,7 @@ describe("RealtimeInvalidationBridge", () => {
       "mesh-build-9",
     );
     expect(resources.getRevision(MODEL_SCENE_PATH)).toBe("mesh-build-9");
+    expect(resources.getRevision(MODEL_READINESS_PATH)).toBe("mesh-build-9");
     expect(resources.getRevision(MESHING_BUILDS_CURRENT_PATH)).toBe(
       "mesh-build-9",
     );

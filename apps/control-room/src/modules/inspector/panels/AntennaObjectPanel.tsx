@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 
-import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
+import { MODEL_READINESS_PATH, MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
 import type { JsonObject, RegionalFieldDriveResource } from "@/kernel/api/apiTypes";
 import { useKernel } from "@/kernel/KernelContext";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
@@ -43,6 +43,7 @@ function invalidateSceneResource(
   revision: number,
 ): void {
   resources.invalidate(MODEL_SCENE_PATH, revision);
+  resources.invalidate(MODEL_READINESS_PATH, revision);
 }
 
 export function AntennaObjectPanel({ selection }: InspectorPanelProps) {

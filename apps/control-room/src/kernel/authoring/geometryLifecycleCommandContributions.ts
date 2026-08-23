@@ -17,6 +17,7 @@ import {
   MODEL_GEOMETRY_CAPABILITIES_PATH,
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_READINESS_PATH,
   MODEL_SCENE_PATH,
 } from "../api/apiPaths";
 import type { JsonObject, JsonValue, MeshCapabilitiesResource } from "../api/apiTypes";
@@ -325,6 +326,7 @@ function invalidateSceneAuthoringResources(
   sceneRevision: number,
 ): void {
   context.resources?.invalidate(MODEL_SCENE_PATH, sceneRevision);
+  context.resources?.invalidate(MODEL_READINESS_PATH, sceneRevision);
   context.resources?.invalidate(MODEL_GEOMETRY_VALIDATION_PATH, sceneRevision);
   context.resources?.invalidate(MODEL_GEOMETRY_DIAGNOSTICS_PATH, sceneRevision);
   context.resources?.invalidate(MESHING_BUILDS_CURRENT_PATH, sceneRevision);
@@ -344,6 +346,7 @@ function invalidateObjectMeshResources(
   revision: string | number,
 ): void {
   context.resources?.invalidate(MESHING_BUILDS_CURRENT_PATH, revision);
+  context.resources?.invalidate(MODEL_READINESS_PATH, revision);
   context.resources?.invalidate(MESHING_SUMMARY_PATH, revision);
   context.resources?.invalidate(MESHING_SEMANTICS_PATH, revision);
   context.resources?.invalidate(MESHING_BUILDS_LATEST_SUCCESSFUL_PATH, revision);
@@ -367,6 +370,7 @@ function invalidateSharedDomainMeshResources(
   revision: string | number,
 ): void {
   context.resources?.invalidate(MESHING_BUILDS_PATH, revision);
+  context.resources?.invalidate(MODEL_READINESS_PATH, revision);
   context.resources?.invalidate(MESHING_SUMMARY_PATH, revision);
   context.resources?.invalidate(MESHING_SEMANTICS_PATH, revision);
   context.resources?.invalidate(MESHING_BUILDS_CURRENT_PATH, revision);

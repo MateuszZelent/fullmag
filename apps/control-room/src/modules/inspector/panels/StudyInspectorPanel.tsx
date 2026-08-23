@@ -21,6 +21,7 @@ import {
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SUMMARY_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_READINESS_PATH,
   MODEL_SCENE_PATH,
   MODEL_STUDY_PATH,
   PERSISTENCE_CHECKPOINTS_PATH,
@@ -718,6 +719,7 @@ export function useStudyInspectorPanelController(
       );
       const revision = response.scene_revision;
       kernel.resources.invalidate(MODEL_SCENE_PATH, revision);
+      kernel.resources.invalidate(MODEL_READINESS_PATH, revision);
       kernel.resources.invalidate(MODEL_STUDY_PATH, revision);
       kernel.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
       kernel.resources.invalidate(SIMULATION_STAGES_EXECUTION_PATH, revision);
@@ -779,6 +781,7 @@ export function useStudyInspectorPanelController(
       );
       const revision = response.scene_revision;
       kernel.resources.invalidate(MODEL_SCENE_PATH, revision);
+      kernel.resources.invalidate(MODEL_READINESS_PATH, revision);
       kernel.resources.invalidate(MODEL_STUDY_PATH, revision);
       kernel.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
       kernel.resources.invalidate(SIMULATION_STAGES_EXECUTION_PATH, revision);

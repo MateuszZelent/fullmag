@@ -3,7 +3,11 @@
 import { HelpCircle } from "lucide-react";
 import { useCallback, useMemo, useReducer, useState } from "react";
 
-import { MODEL_SCENE_PATH, MODEL_STUDY_PATH } from "@/kernel/api/apiPaths";
+import {
+  MODEL_READINESS_PATH,
+  MODEL_SCENE_PATH,
+  MODEL_STUDY_PATH,
+} from "@/kernel/api/apiPaths";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   resolveObjectInteractionResourceKey,
@@ -325,6 +329,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
         );
       }
       resources.invalidate(MODEL_SCENE_PATH, revision);
+      resources.invalidate(MODEL_READINESS_PATH, revision);
       resources.invalidate(MODEL_STUDY_PATH, revision);
       resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
       dispatch({

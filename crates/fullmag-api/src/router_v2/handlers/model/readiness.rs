@@ -87,11 +87,6 @@ fn build_model_readiness(
         .filter(|object| object.visible && object.role == "magnet")
         .map(|object| object.id.as_str())
         .collect::<Vec<_>>();
-    let materials = scene
-        .materials
-        .iter()
-        .map(|material| material.id.as_str())
-        .collect::<BTreeSet<_>>();
     let textures = scene
         .magnetization_assets
         .iter()
@@ -105,17 +100,23 @@ fn build_model_readiness(
         "model/scene",
         "Add at least one magnetic object.",
     );
+    let material_error = scene
+        .objects
+        .iter()
+        .filter(|object| object_ids.contains(&object.id.as_str()))
+        .find_map(|object| {
+            fullmag_authoring::resolve_scene_object_solve_material(scene, object)
+                .err()
+                .map(|error| error.to_string())
+        });
     let material = presence_check(
         "material",
         "Material",
-        !object_ids.is_empty()
-            && scene
-                .objects
-                .iter()
-                .filter(|object| object_ids.contains(&object.id.as_str()))
-                .all(|object| materials.contains(object.material_ref.as_str())),
+        !object_ids.is_empty() && material_error.is_none(),
         "model/materials",
-        "Assign a material to every magnetic object.",
+        material_error
+            .as_deref()
+            .unwrap_or("Assign a material to every magnetic object."),
     );
     let texture = presence_check(
         "texture",

@@ -4,6 +4,7 @@ import { useState, type ReactNode } from "react";
 
 import {
   MODEL_SCENE_PATH,
+  MODEL_READINESS_PATH,
   SESSIONS_PATH,
   SESSION_CURRENT_PATH,
 } from "../api/apiPaths";
@@ -57,6 +58,7 @@ export function NewProblemDialog({
       kernel.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
       kernel.resources.invalidatePrefix(SESSION_CURRENT_PATH, revision);
       kernel.resources.invalidate(MODEL_SCENE_PATH, revision);
+      kernel.resources.invalidate(MODEL_READINESS_PATH, revision);
       onOpenChange(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to create the simulation.");

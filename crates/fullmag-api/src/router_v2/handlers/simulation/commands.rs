@@ -798,16 +798,9 @@ fn scene_problem_patch_for_mesh(scene: &SceneDocument) -> Result<serde_json::Val
         let geometry_name = object.id.clone();
         let region_name = object.id.clone();
         let material_name = format!("material:{}", object.id);
-        let material_asset = scene
-            .materials
-            .iter()
-            .find(|candidate| candidate.id == object.material_ref)
-            .ok_or_else(|| {
-                ApiError::bad_request(format!(
-                    "missing material '{}' for object '{}'",
-                    object.material_ref, object.id
-                ))
-            })?;
+        let material = fullmag_authoring::resolve_scene_object_solve_material(scene, object)
+            .map_err(|error| ApiError::bad_request(error.to_string()))?;
+        let material_asset = material.asset;
 
         geometry_entries.push(scene_object_geometry_entry(object, &geometry_name)?);
         regions.push(RegionIR {
@@ -827,12 +820,7 @@ fn scene_problem_patch_for_mesh(scene: &SceneDocument) -> Result<serde_json::Val
             cubic_anisotropy_kc2: None,
             cubic_anisotropy_kc3: None,
             damping: material_asset.properties.alpha,
-            exchange_stiffness: material_asset.properties.aex.ok_or_else(|| {
-                ApiError::bad_request(format!(
-                    "missing Aex material property for object '{}'",
-                    object.id
-                ))
-            })?,
+            exchange_stiffness: material.exchange_stiffness,
             kc1_field: None,
             kc2_field: None,
             kc3_field: None,
@@ -840,12 +828,7 @@ fn scene_problem_patch_for_mesh(scene: &SceneDocument) -> Result<serde_json::Val
             ku_field: None,
             ms_field: None,
             name: material_name.clone(),
-            saturation_magnetisation: material_asset.properties.ms.ok_or_else(|| {
-                ApiError::bad_request(format!(
-                    "missing Ms material property for object '{}'",
-                    object.id
-                ))
-            })?,
+            saturation_magnetisation: material.saturation_magnetisation,
             uniaxial_anisotropy: None,
             uniaxial_anisotropy_k2: None,
             anisotropy_axis: None,

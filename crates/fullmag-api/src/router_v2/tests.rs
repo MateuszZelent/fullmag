@@ -1203,6 +1203,98 @@ async fn model_readiness_accepts_complete_fdm_scene() {
 }
 
 #[tokio::test]
+async fn model_readiness_blocks_material_without_ms() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document_with_stage(serde_json::json!({
+        "entrypoint_kind": "flat_relax",
+        "kind": "relax",
+        "algorithm": "projected_gradient_bb",
+        "stage_id": "relax-1"
+    }));
+    scene.study.requested_backend = "fdm".into();
+    scene.study.fdm = Some(fullmag_authoring::SceneFdmDiscretizationState {
+        default_cell: Some([1.0e-9, 1.0e-9, 1.0e-9]),
+        ..Default::default()
+    });
+    scene.materials[0].properties.ms = None;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/model/readiness")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["ready_to_run"], false);
+    let material = body["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["id"] == "material")
+        .unwrap();
+    assert_eq!(material["state"], "blocked");
+    assert_eq!(
+        material["reason"],
+        "missing Ms material property for object 'body'"
+    );
+}
+
+#[tokio::test]
+async fn model_readiness_blocks_material_without_aex() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document_with_stage(serde_json::json!({
+        "entrypoint_kind": "flat_relax",
+        "kind": "relax",
+        "algorithm": "projected_gradient_bb",
+        "stage_id": "relax-1"
+    }));
+    scene.study.requested_backend = "fdm".into();
+    scene.study.fdm = Some(fullmag_authoring::SceneFdmDiscretizationState {
+        default_cell: Some([1.0e-9, 1.0e-9, 1.0e-9]),
+        ..Default::default()
+    });
+    scene.materials[0].properties.aex = None;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/model/readiness")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["ready_to_run"], false);
+    let material = body["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["id"] == "material")
+        .unwrap();
+    assert_eq!(material["state"], "blocked");
+    assert_eq!(
+        material["reason"],
+        "missing Aex material property for object 'body'"
+    );
+}
+
+#[tokio::test]
 async fn model_readiness_marks_fem_mesh_stale_against_scene_revision() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document_with_stage(serde_json::json!({
