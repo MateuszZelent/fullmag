@@ -72,6 +72,14 @@ jobs:
                   f'sha256={actual_sha256} expected_sha256={expected_sha256}'
               )
           script = zlib.decompress(base64.b64decode(encoded, validate=True)).decode('utf-8')
+          stale_test_name = 'prescribed_sot_refuses_disjoint_target_mask'
+          current_test_name = 'prescribed_sot_region_target_materializes_cell_mask'
+          stale_count = script.count(stale_test_name)
+          if stale_count != 2:
+              raise RuntimeError(
+                  f'expected two stale FDM test anchors, found {stale_count}'
+              )
+          script = script.replace(stale_test_name, current_test_name)
           script_path = payload_dir / 'apply.py'
           compile(script, str(script_path), 'exec')
           script_path.write_text(script, encoding='utf-8')
@@ -151,6 +159,7 @@ jobs:
           set -euo pipefail
           rm -rf .github/fullmag-texture-region-refactor
           rm -f .github/workflows/apply-texture-transform-region-clipping.yml
+          rm -f .github/workflows/inspect-texture-region-pipeline.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
