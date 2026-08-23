@@ -1753,6 +1753,9 @@ async fn main() {
         current_live_state: Arc::new(RwLock::new(None)),
         current_live_session_transition: Arc::new(Mutex::new(())),
         current_live_session_epoch: Arc::new(AtomicU64::new(0)),
+        current_live_session_publication_identity: Arc::new(std::sync::Mutex::new(None)),
+        #[cfg(test)]
+        current_live_session_before_publish_hook: Arc::new(Mutex::new(None)),
         current_live_connectivity: Arc::new(RwLock::new(
             crate::schemas::status::SessionConnectivity::Connected,
         )),

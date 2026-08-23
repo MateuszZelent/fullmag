@@ -644,6 +644,8 @@ pub(crate) fn test_app_state() -> Arc<AppState> {
         current_live_state: Arc::new(RwLock::new(None)),
         current_live_session_transition: Arc::new(Mutex::new(())),
         current_live_session_epoch: Arc::new(AtomicU64::new(0)),
+        current_live_session_publication_identity: Arc::new(std::sync::Mutex::new(None)),
+        current_live_session_before_publish_hook: Arc::new(Mutex::new(None)),
         current_live_connectivity: Arc::new(RwLock::new(
             crate::schemas::status::SessionConnectivity::Connected,
         )),
@@ -1269,6 +1271,84 @@ async fn concurrent_create_scratch_sessions_admit_only_one_without_replacement()
             .count(),
         1
     );
+}
+
+#[tokio::test]
+async fn delayed_scratch_session_publication_cannot_enter_replacement_realtime_stream() {
+    let state = test_app_state();
+    let hook = crate::types::CurrentLiveSessionBeforePublishHook {
+        installed: Arc::new(tokio::sync::Notify::new()),
+        resume: Arc::new(tokio::sync::Notify::new()),
+    };
+    *state
+        .current_live_session_before_publish_hook
+        .lock()
+        .await = Some(hook.clone());
+    let mut events = state.current_live_realtime_events.subscribe();
+
+    let first_state = state.clone();
+    let first = tokio::spawn(async move {
+        crate::router_v2::handlers::sessions::create(
+            axum::extract::State(first_state),
+            axum::Json(crate::schemas::sessions::CreateSessionRequest {
+                name: "First".to_string(),
+                backend: "fdm".to_string(),
+                device: "cpu".to_string(),
+                precision: "double".to_string(),
+                replace_current: false,
+            }),
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(1), hook.installed.notified())
+        .await
+        .expect("first session must pause after installation");
+
+    let (_, axum::Json(replacement)) = crate::router_v2::handlers::sessions::create(
+        axum::extract::State(state.clone()),
+        axum::Json(crate::schemas::sessions::CreateSessionRequest {
+            name: "Replacement".to_string(),
+            backend: "fem".to_string(),
+            device: "cpu".to_string(),
+            precision: "double".to_string(),
+            replace_current: true,
+        }),
+    )
+    .await
+    .expect("replacement must be created");
+
+    hook.resume.notify_one();
+    let (_, axum::Json(first)) = first
+        .await
+        .expect("first task must complete")
+        .expect("first session creation must succeed");
+
+    let event = tokio::time::timeout(std::time::Duration::from_millis(100), events.recv())
+        .await
+        .expect("replacement must publish realtime invalidation")
+        .expect("realtime channel must remain open");
+    let event: LiveRealtimeServerEvent =
+        serde_json::from_str(&event.json).expect("realtime event must serialize");
+    let LiveRealtimeServerEvent::ResourceBatchChanged { session_id, .. } = event else {
+        panic!("replacement must publish a resource invalidation");
+    };
+    assert_eq!(session_id, replacement.session_id);
+    assert_ne!(session_id, first.session_id);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), events.recv())
+            .await
+            .is_err(),
+        "the delayed first-session invalidation must not enter the replacement stream"
+    );
+
+    let replay = state.current_live_realtime_replay.lock().await;
+    assert!(replay.iter().all(|record| {
+        matches!(
+            serde_json::from_str::<LiveRealtimeServerEvent>(&record.json),
+            Ok(LiveRealtimeServerEvent::ResourceBatchChanged { ref session_id, .. })
+                if session_id == &replacement.session_id
+        )
+    }));
 }
 
 #[tokio::test]
@@ -2246,6 +2326,8 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         current_live_state: Arc::new(RwLock::new(None)),
         current_live_session_transition: Arc::new(Mutex::new(())),
         current_live_session_epoch: Arc::new(AtomicU64::new(0)),
+        current_live_session_publication_identity: Arc::new(std::sync::Mutex::new(None)),
+        current_live_session_before_publish_hook: Arc::new(Mutex::new(None)),
         current_live_connectivity: Arc::new(RwLock::new(
             crate::schemas::status::SessionConnectivity::Connected,
         )),

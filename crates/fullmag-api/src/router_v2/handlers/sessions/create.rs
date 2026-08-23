@@ -34,11 +34,11 @@ pub async fn create(
         return Err(ApiError::bad_request("session name must not be empty"));
     }
     let execution = validated_execution(&request)?;
-    let session_id = format!("session-{}", uuid_v4_hex());
-    let scene_document = empty_scene_document(&session_id, name);
+    let scene_document = create_empty_scene_document(&request)?;
+    let session_id = scene_document.scene.id.clone();
     let snapshot = scratch_snapshot(&session_id, name, &execution, scene_document.clone());
 
-    {
+    let transition_epoch = {
         let _transition = state.current_live_session_transition.lock().await;
         let replacing = state.current_live_state.read().await.is_some();
         if replacing && !request.replace_current {
@@ -52,16 +52,38 @@ pub async fn create(
         if replacing {
             reset_current_live_session_resources(&state).await;
         }
-        state
+        let epoch = state
             .current_live_session_epoch
-            .fetch_add(1, Ordering::Relaxed);
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        *state
+            .current_live_session_publication_identity
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(session_id.clone());
         *state.current_live_state.write().await = Some(snapshot.clone());
-    }
+        epoch
+    };
+
+    #[cfg(test)]
+    pause_after_scratch_session_install_before_publish(state.as_ref()).await;
 
     let display_revision = state.current_display_selection.read().await.revision;
     let realtime_state =
         current_live_realtime_state_from_snapshot(state.as_ref(), &snapshot, display_revision).await;
-    publish_current_live_realtime_batch_changed(state.as_ref(), &realtime_state, false, 0).await?;
+    let publish_admitted = {
+        let _transition = state.current_live_session_transition.lock().await;
+        state.current_live_session_epoch.load(Ordering::Relaxed) == transition_epoch
+            && state
+                .current_live_session_publication_identity
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .as_deref()
+                == Some(session_id.as_str())
+    };
+    if publish_admitted {
+        publish_current_live_realtime_batch_changed(state.as_ref(), &realtime_state, false, 0)
+            .await?;
+    }
 
     let scene = SceneResource::from_scene_document(scene_document).map_err(|error| {
         ApiError::internal(format!("failed to serialize empty authoring scene: {error}"))
@@ -94,6 +116,19 @@ pub async fn create(
     ))
 }
 
+#[cfg(test)]
+async fn pause_after_scratch_session_install_before_publish(state: &AppState) {
+    let hook = state
+        .current_live_session_before_publish_hook
+        .lock()
+        .await
+        .take();
+    if let Some(hook) = hook {
+        hook.installed.notify_one();
+        hook.resume.notified().await;
+    }
+}
+
 fn validated_execution(
     request: &CreateSessionRequest,
 ) -> Result<SessionExecutionResource, ApiError> {
@@ -110,12 +145,18 @@ fn validated_execution(
     })
 }
 
-fn empty_scene_document(session_id: &str, name: &str) -> SceneDocument {
-    SceneDocument {
+pub(crate) fn create_empty_scene_document(
+    request: &CreateSessionRequest,
+) -> Result<SceneDocument, ApiError> {
+    let name = request.name.trim();
+    if name.is_empty() {
+        return Err(ApiError::bad_request("session name must not be empty"));
+    }
+    Ok(SceneDocument {
         version: "scene.v2".to_string(),
         revision: 0,
         scene: SceneMetadata {
-            id: session_id.to_string(),
+            id: format!("session-{}", uuid_v4_hex()),
             name: name.to_string(),
             source_of_truth: "ui".to_string(),
             authoring_schema: "0.3".to_string(),
@@ -137,7 +178,7 @@ fn empty_scene_document(session_id: &str, name: &str) -> SceneDocument {
         study: Default::default(),
         outputs: Default::default(),
         editor: Default::default(),
-    }
+    })
 }
 
 fn scratch_snapshot(
@@ -210,4 +251,26 @@ fn scratch_snapshot(
     }));
     snapshot.scene_document = Some(scene_document);
     snapshot
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_empty_scene_document_uses_request_name_and_generates_session_id() {
+        let request = CreateSessionRequest {
+            name: " Scratch ".to_string(),
+            backend: "fdm".to_string(),
+            device: "cpu".to_string(),
+            precision: "double".to_string(),
+            replace_current: false,
+        };
+
+        let scene = create_empty_scene_document(&request).expect("request must create a scene");
+
+        assert_eq!(scene.scene.name, "Scratch");
+        assert!(scene.scene.id.starts_with("session-"));
+        assert!(scene.objects.is_empty());
+    }
 }
