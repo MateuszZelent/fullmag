@@ -90,7 +90,7 @@ describe("viewport3dPrimitiveModel", () => {
     expect(model.objects[0]?.bounds.center).toEqual([4, 5, 6]);
     expect(model.objects[0]?.bounds.size).toEqual([1, 2, 3]);
     expect(buildViewport3DPrimitiveFrameKey(model)).toBe(
-      "7|box:Box:{\"size\":[1,2,3]}:{\"translation\":[4,5,6]}",
+      "7|box:Box:{\"size\":[1,2,3]}:{\"translation\":[4,5,6]}|no-draft",
     );
   });
 

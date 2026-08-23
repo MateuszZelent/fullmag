@@ -163,7 +163,7 @@ import {
   FrozenSpinsOverlay,
   type FrozenSpinsOverlayModel,
 } from "./FrozenSpinsOverlay";
-import { MoveObjectGizmo, type Translation3 } from "../MoveObjectGizmo";
+import { Viewport3DMoveToolLayer, type Translation3 } from "../MoveObjectGizmo";
 
 const EMPTY_REGION_OVERLAYS: readonly RegionOverlayInput[] = [];
 
@@ -250,7 +250,9 @@ interface Viewport3DSceneProps {
     objectId: string,
     translation: Translation3,
     baseRevision: number,
-  ) => Promise<void> | void;
+  ) => Promise<boolean | void> | boolean | void;
+  moveToolObjectId: string | null;
+  moveDraftResetRevision: number;
   orbitDebugAngles: Viewport3DOrbitDebugAngles;
   orbitDebugCommitRevision: number;
   orbitDebugRevision: number;
@@ -1068,6 +1070,8 @@ function Viewport3DModelLayerStack({
   onInspectClear,
   onInspectSample,
   onMoveCommit,
+  moveToolObjectId,
+  moveDraftResetRevision,
   onMoveGestureActiveChange,
   onSelectDomain,
   onSelectFdmTarget,
@@ -1124,6 +1128,8 @@ function Viewport3DModelLayerStack({
   | "onInspectClear"
   | "onInspectSample"
   | "onMoveCommit"
+  | "moveToolObjectId"
+  | "moveDraftResetRevision"
   | "onSelectDomain"
   | "onSelectFdmTarget"
   | "onSelectFdmUniverseOutsideSupport"
@@ -1404,20 +1410,14 @@ function Viewport3DModelLayerStack({
           tracker={tracker}
         />
       ) : null}
-      {selectedObjectId && primitiveModel?.sceneRevision != null
-        ? primitiveModel.objects
-            .filter((object) => object.objectId === selectedObjectId)
-            .map((object) => (
-              <group key={`move:${object.objectId}`} position={object.bounds.center}>
-                <MoveObjectGizmo
-                  baseRevision={primitiveModel.sceneRevision as number}
-                  object={object}
-                  onCommit={onMoveCommit}
-                  onGestureActiveChange={onMoveGestureActiveChange}
-                />
-              </group>
-            ))
-        : null}
+      <Viewport3DMoveToolLayer
+        moveDraftResetRevision={moveDraftResetRevision}
+        moveToolObjectId={moveToolObjectId}
+        onCommit={onMoveCommit}
+        onGestureActiveChange={onMoveGestureActiveChange}
+        primitiveModel={primitiveModel}
+        selectedObjectId={selectedObjectId}
+      />
       {!fdmLaneActive &&
       stageVisibility.baseGeometry &&
       viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (
@@ -1752,6 +1752,8 @@ export function Viewport3DScene({
   onInspectClear,
   onInspectSample,
   onMoveCommit,
+  moveToolObjectId,
+  moveDraftResetRevision,
   scaleLabelsVisible,
   scaleUnitMode,
   viewCubeVisible,
@@ -2044,6 +2046,8 @@ export function Viewport3DScene({
         onInspectClear={inspectClearArbitrator.clear}
         onInspectSample={handleArbitratedInspectSample}
         onMoveCommit={onMoveCommit}
+        moveToolObjectId={moveToolObjectId}
+        moveDraftResetRevision={moveDraftResetRevision}
         onMoveGestureActiveChange={setMoveGestureActive}
         onSelectDomain={onSelectDomain}
         onSelectFdmTarget={onSelectFdmTarget}

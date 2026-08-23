@@ -8,6 +8,7 @@ import {
   MESHING_CAPABILITIES_PATH,
   MESHING_SUMMARY_PATH,
   MODEL_GEOMETRY_CAPABILITIES_PATH,
+  MODEL_SCENE_PATH,
   PERSISTENCE_CHECKPOINTS_PATH,
   VISUALIZATION_STATE_PATH,
 } from "@/kernel/api/apiPaths";
@@ -170,7 +171,9 @@ export default function RibbonModule({ kernel }: ModuleProps) {
   const activeTab = useLayoutSelector((layout) => layout.activeModuleTab);
   const { setActiveTab } = useLayoutActions();
   const selection = useSelectionSelector((currentSelection) =>
-    activeTab === "view" ? currentSelection : EMPTY_SELECTION,
+    activeTab === "view" || activeTab === "geometry"
+      ? currentSelection
+      : EMPTY_SELECTION,
   );
   const visualization = useObjectVisualizationController();
   const visualizationSnapshot = useObjectVisualizationSelector((snapshot) =>
@@ -235,7 +238,9 @@ export default function RibbonModule({ kernel }: ModuleProps) {
     enabled: needsMeshResources,
   });
   const scene = useSceneResource({
-    enabled: activeTab === "view" && selection.ref?.type === "mesh-part",
+    enabled:
+      activeTab === "geometry" ||
+      (activeTab === "view" && selection.ref?.type === "mesh-part"),
   });
   const sceneObjectIds = useMemo(
     () => visualizationSceneObjectIds(scene.data),
@@ -277,6 +282,11 @@ export default function RibbonModule({ kernel }: ModuleProps) {
     () => kernel.commands.getVersion(),
     () => kernel.commands.getVersion(),
   );
+  const objectMoveToolState = useSyncExternalStore(
+    (listener) => kernel.objectMoveTool.subscribe(listener),
+    () => kernel.objectMoveTool.getSnapshot(),
+    () => null,
+  );
 
   const visualizationTarget = useMemo(
     () =>
@@ -310,6 +320,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
           [MESHING_CAPABILITIES_PATH]: meshCapabilities.data,
           [MESHING_SUMMARY_PATH]: meshSummary.data,
           [MODEL_GEOMETRY_CAPABILITIES_PATH]: geometryCapabilities.data,
+          [MODEL_SCENE_PATH]: scene.status === "ready" ? scene.data : null,
           [PERSISTENCE_CHECKPOINTS_PATH]: needsRuntimeResources
             ? checkpointCatalog.data
             : null,
@@ -331,6 +342,8 @@ export default function RibbonModule({ kernel }: ModuleProps) {
       meshCapabilities.data,
       meshManifest.data,
       meshSummary.data,
+      scene.data,
+      scene.status,
       modelReadiness.data,
       modelReadiness.status,
       needsSessionStatusResources,
@@ -345,6 +358,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
   const tabContent = useMemo(
     () => {
       void commandVersion;
+      void objectMoveToolState;
       return buildRibbonTabContent(activeTab, {
         api: kernel.api,
         commandContext,
@@ -370,6 +384,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
       activeTab,
       commandContext,
       commandVersion,
+      objectMoveToolState,
       fieldCatalog.data,
       quantityCatalog.data,
       kernel.api,

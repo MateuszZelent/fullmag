@@ -79,6 +79,7 @@ import {
 import { VisualizationDebugController } from "./visualization/VisualizationDebugController";
 import { VisualizationRegistrySyncController } from "./visualization/VisualizationRegistrySyncController";
 import { VISUALIZATION_TARGET_COMMANDS } from "./visualization/visualizationCommandContributions";
+import { ObjectMoveToolController } from "./authoring/ObjectMoveToolController";
 import { resolveControlRoomModules } from "@/modules";
 
 installPerformanceMeasureGuard();
@@ -119,10 +120,12 @@ function createKernel(): KernelApi {
   const resources = new ResourceInvalidationController(bus);
   const selection = new SelectionController(bus);
   const layout = new LayoutController(bus);
+  const objectMoveTool = new ObjectMoveToolController();
   const chartViewportHandoff = new ChartViewportHandoffController();
   bus.on("session:status-changed", ({ status }) => {
     if (status !== "connected") {
       chartViewportHandoff.cancel("Session changed while loading a chart field.");
+      objectMoveTool.clear();
     }
   });
   const cameraRegistry = new CameraRegistryController({
@@ -191,6 +194,7 @@ function createKernel(): KernelApi {
     diagnosticRecorder,
     layout,
     modules,
+    objectMoveTool,
     realtime,
     realtimeConnection,
     resources,

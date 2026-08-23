@@ -33,10 +33,14 @@ import {
 } from "@/kernel/browserFullmagConfig";
 import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
 import {
-  commitObjectTranslation,
-  isObjectTranslationRevisionConflict,
   type ObjectTranslation,
 } from "@/kernel/authoring/objectTranslationMutation";
+import {
+  commitObjectMoveWorkflow,
+  rebaseObjectMoveConflict,
+  type ObjectMoveConflict,
+} from "@/kernel/authoring/objectMoveConflictWorkflow";
+import { useObjectMoveTool } from "@/kernel/authoring/ObjectMoveToolController";
 import { useMeshHistogramBinElementsResource } from "@/kernel/resources/geometryLifecycleResources";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
@@ -1219,6 +1223,8 @@ interface Viewport3DFrameProps
   extends Omit<
     Viewport3DSceneProps,
     | "colors"
+    | "moveDraftResetRevision"
+    | "moveToolObjectId"
     | "onOrbitDebugAnglesChange"
     | "onMoveCommit"
     | "onVisualizationFrameCommitted"
@@ -1797,12 +1803,9 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     useState<string | null>(null);
   const [inspectHover, setInspectHover] =
     useState<Viewport3DInspectHover | null>(null);
-  const [moveConflict, setMoveConflict] = useState<{
-    baseRevision: number;
-    objectId: string;
-    phase: "conflict" | "refetched" | "rebased" | "retrying";
-    translation: ObjectTranslation;
-  } | null>(null);
+  const [moveConflict, setMoveConflict] = useState<ObjectMoveConflict | null>(null);
+  const [moveDraftResetRevision, setMoveDraftResetRevision] = useState(0);
+  const moveTool = useObjectMoveTool(kernel.objectMoveTool);
   const lastRenderedMeshRevision = useRef<number | string | null>(null);
   const sendVisualizationAck = useVisualizationClientAckSender({ api: kernel.api });
   const visualizationAckRevisionRef = useRef<{
@@ -2270,19 +2273,18 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     translation: ObjectTranslation,
     baseRevision: number,
   ) => {
-    try {
-      await commitObjectTranslation({
-        api: kernel.api,
-        baseRevision,
-        objectId,
-        resources: kernel.resources,
-        translation,
-      });
-      setMoveConflict(null);
-    } catch (error) {
-      if (!isObjectTranslationRevisionConflict(error)) throw error;
-      setMoveConflict({ baseRevision, objectId, phase: "conflict", translation });
-    }
+    return commitObjectMoveWorkflow({
+      api: kernel.api,
+      baseRevision,
+      objectId,
+      onAcknowledged: () => {
+        setMoveConflict(null);
+        setMoveDraftResetRevision((revision) => revision + 1);
+      },
+      onConflict: setMoveConflict,
+      resources: kernel.resources,
+      translation,
+    });
   }, [kernel.api, kernel.resources]);
   const rebaseMove = useCallback(() => {
     if (
@@ -2290,7 +2292,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       sceneRevision === null ||
       sceneRevision === moveConflict.baseRevision
     ) return;
-    setMoveConflict({ ...moveConflict, baseRevision: sceneRevision, phase: "rebased" });
+    setMoveConflict(rebaseObjectMoveConflict(moveConflict, sceneRevision));
   }, [moveConflict, sceneRevision]);
   const retryMove = useCallback(async () => {
     if (!moveConflict || moveConflict.phase !== "rebased") return;
@@ -2595,6 +2597,8 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             onInspectClear={clearInspectHover}
             onInspectSample={updateInspectHover}
             onMoveCommit={commitMove}
+            moveToolObjectId={moveTool?.objectId ?? null}
+            moveDraftResetRevision={moveDraftResetRevision}
             onVisualizationFrameCommitted={onVisualizationFrameCommitted}
             visualProfileId={visualProfile.id}
           />

@@ -12,6 +12,7 @@ import type { VisualizationRegistrySyncController } from "../visualization/Visua
 import type { VisualizationTargetRef } from "../visualization/ObjectVisualizationController";
 import type { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
+import type { ObjectMoveToolController } from "../authoring/ObjectMoveToolController";
 
 export type CommandId = string;
 type CommandGroupId = string;
@@ -35,6 +36,7 @@ export interface CommandContext {
   cameraRegistry?: CameraRegistryController;
   input?: unknown;
   layout?: LayoutController;
+  objectMoveTool?: ObjectMoveToolController;
   resourceData?: Readonly<Record<string, unknown>>;
   resources?: ResourceInvalidationController;
   selection?: SelectionController;

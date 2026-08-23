@@ -15,6 +15,7 @@ import { RealtimeConnectionController } from "../realtime/RealtimeConnectionCont
 import { RealtimeInvalidationBridge } from "../realtime/RealtimeInvalidationBridge";
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { SelectionController } from "../selection/SelectionController";
+import { ObjectMoveToolController } from "../authoring/ObjectMoveToolController";
 import type { KernelApi } from "../types";
 import { AnalysisFieldOverlayController } from "./AnalysisFieldOverlayController";
 import { ChartViewportHandoffController } from "@/kernel/visualization/ChartViewportHandoffController";
@@ -46,6 +47,7 @@ function makeKernel(): KernelApi {
     }),
     layout: new LayoutController(bus),
     modules: new ModuleRegistry(),
+    objectMoveTool: new ObjectMoveToolController(),
     realtime: new RealtimeInvalidationBridge(resources),
     realtimeConnection: new RealtimeConnectionController(),
     resources,

@@ -3,7 +3,10 @@
 import type { ThreeEvent } from "@react-three/fiber";
 import { useEffect, useMemo, useState } from "react";
 
-import type { Viewport3DPrimitiveObject } from "./viewport3dPrimitiveModel";
+import type {
+  Viewport3DPrimitiveRenderModel,
+  Viewport3DPrimitiveObject,
+} from "./viewport3dPrimitiveModel";
 export { PROBLEM_IR_03_RIGID_TRANSFORM_REASON } from "@/kernel/authoring/objectTranslationMutation";
 
 export type MoveAxis = "x" | "y" | "z";
@@ -22,7 +25,7 @@ interface MoveGestureControllerOptions {
     objectId: string,
     translation: Translation3,
     baseRevision: number,
-  ) => Promise<void> | void;
+  ) => Promise<boolean | void> | boolean | void;
   onDraftChange: (draft: MoveDraft | null) => void;
   onGestureActiveChange?: (active: boolean) => void;
   origin: Translation3;
@@ -37,7 +40,12 @@ export function createMoveGestureController({
   origin,
 }: MoveGestureControllerOptions) {
   let active:
-    | { axis: MoveAxis; pointerId: number; start: Translation3 }
+    | {
+        axis: MoveAxis;
+        pointerId: number;
+        releasePointerCapture: (pointerId: number) => void;
+        start: Translation3;
+      }
     | null = null;
   let translation: Translation3 = [...origin];
 
@@ -50,8 +58,10 @@ export function createMoveGestureController({
       pointerId: number,
       point: Translation3,
       setPointerCapture: (pointerId: number) => void,
+      releasePointerCapture: (pointerId: number) => void,
     ): void {
-      active = { axis, pointerId, start: [...point] };
+      if (active) cancelActive(false);
+      active = { axis, pointerId, releasePointerCapture, start: [...point] };
       translation = [...origin];
       setPointerCapture(pointerId);
       onGestureActiveChange?.(true);
@@ -59,21 +69,14 @@ export function createMoveGestureController({
     },
     cancel(): boolean {
       if (!active) return false;
-      active = null;
-      translation = [...origin];
-      publish();
-      onGestureActiveChange?.(false);
+      cancelActive(true);
       return true;
     },
-    async end(
-      pointerId: number,
-      releasePointerCapture: (pointerId: number) => void,
-    ): Promise<void> {
+    async end(pointerId: number): Promise<void> {
       if (!active || active.pointerId !== pointerId) return;
-      active = null;
-      releasePointerCapture(pointerId);
-      onGestureActiveChange?.(false);
-      await onCommit(objectId, [...translation], baseRevision);
+      releaseActiveCapture();
+      const committed = await onCommit(objectId, [...translation], baseRevision);
+      if (committed !== false) onDraftChange(null);
     },
     move(pointerId: number, point: Translation3): void {
       if (!active || active.pointerId !== pointerId) return;
@@ -83,6 +86,24 @@ export function createMoveGestureController({
       publish();
     },
   };
+
+  function releaseActiveCapture(): void {
+    const terminal = active;
+    if (!terminal) return;
+    active = null;
+    try {
+      terminal.releasePointerCapture(terminal.pointerId);
+    } catch {
+      // Capture may already have been released by the browser before lostpointercapture.
+    }
+    onGestureActiveChange?.(false);
+  }
+
+  function cancelActive(clearDraft: boolean): void {
+    releaseActiveCapture();
+    translation = [...origin];
+    if (clearDraft) onDraftChange(null);
+  }
 }
 
 export function MoveObjectGizmo({
@@ -127,16 +148,7 @@ export function MoveObjectGizmo({
   );
 
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && controller.cancel()) {
-        event.preventDefault();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      controller.cancel();
-      window.removeEventListener("keydown", onKeyDown);
-    };
+    return installMoveGestureTerminalListeners(controller, window);
   }, [controller]);
 
   const offset: Translation3 = draft
@@ -150,6 +162,7 @@ export function MoveObjectGizmo({
 
   return (
     <group
+      name={`move-gizmo:${object.objectId}`}
       position={offset}
       userData={{ gizmo: "move", objectId: object.objectId }}
     >
@@ -159,13 +172,11 @@ export function MoveObjectGizmo({
       </mesh>
       {(["x", "y", "z"] as const).map((axis, index) => (
         <mesh
+          {...moveAxisPointerHandlers(controller, axis)}
           key={axis}
           position={axisPosition(axis, length)}
           rotation={axisRotation(axis)}
           userData={{ axis, gizmo: "move-axis", objectId: object.objectId }}
-          onPointerDown={(event) => beginAxisDrag(controller, axis, event)}
-          onPointerMove={(event) => moveAxisDrag(controller, event)}
-          onPointerUp={(event) => void endAxisDrag(controller, event)}
         >
           <cylinderGeometry args={[length * 0.035, length * 0.035, length, 10]} />
           <meshBasicMaterial color={["#f38ba8", "#a6e3a1", "#89b4fa"][index]} depthTest={false} />
@@ -173,6 +184,78 @@ export function MoveObjectGizmo({
       ))}
     </group>
   );
+}
+
+export function installMoveGestureTerminalListeners(
+  controller: ReturnType<typeof createMoveGestureController>,
+  target: Pick<Window, "addEventListener" | "removeEventListener">,
+): () => void {
+  const onKeyDown = (event: Event) => {
+    const keyboardEvent = event as KeyboardEvent;
+    if (keyboardEvent.key === "Escape" && controller.cancel()) {
+      keyboardEvent.preventDefault();
+    }
+  };
+  target.addEventListener("keydown", onKeyDown);
+  return () => {
+    controller.cancel();
+    target.removeEventListener("keydown", onKeyDown);
+  };
+}
+
+export function moveAxisPointerHandlers(
+  controller: ReturnType<typeof createMoveGestureController>,
+  axis: MoveAxis,
+) {
+  return {
+    onLostPointerCapture: (event: ThreeEvent<PointerEvent>) =>
+      cancelAxisDrag(controller, event),
+    onPointerCancel: (event: ThreeEvent<PointerEvent>) =>
+      cancelAxisDrag(controller, event),
+    onPointerDown: (event: ThreeEvent<PointerEvent>) =>
+      beginAxisDrag(controller, axis, event),
+    onPointerMove: (event: ThreeEvent<PointerEvent>) =>
+      moveAxisDrag(controller, event),
+    onPointerUp: (event: ThreeEvent<PointerEvent>) =>
+      void endAxisDrag(controller, event),
+  };
+}
+
+export function Viewport3DMoveToolLayer({
+  moveDraftResetRevision,
+  moveToolObjectId,
+  onCommit,
+  onGestureActiveChange,
+  primitiveModel,
+  selectedObjectId,
+}: {
+  moveDraftResetRevision: number;
+  moveToolObjectId: string | null;
+  onCommit: MoveGestureControllerOptions["onCommit"];
+  onGestureActiveChange?: (active: boolean) => void;
+  primitiveModel: Viewport3DPrimitiveRenderModel | null;
+  selectedObjectId: string | null;
+}) {
+  if (
+    !selectedObjectId ||
+    moveToolObjectId !== selectedObjectId ||
+    primitiveModel?.sceneRevision == null
+  ) return null;
+  return primitiveModel.objects
+    .filter((object) => object.objectId === selectedObjectId)
+    .map((object) => (
+      <group
+        key={`move:${object.objectId}:${moveDraftResetRevision}`}
+        position={object.bounds.center}
+      >
+        <MoveObjectGizmo
+          baseRevision={primitiveModel.sceneRevision as number}
+          object={object}
+          onCommit={onCommit}
+          onGestureActiveChange={onGestureActiveChange}
+        />
+      </group>
+    ));
 }
 
 function eventPoint(event: ThreeEvent<PointerEvent>): Translation3 {
@@ -198,6 +281,7 @@ function beginAxisDrag(
   const target = pointerTarget(event);
   controller.begin(axis, event.pointerId, eventPoint(event), (pointerId) =>
     target.setPointerCapture(pointerId),
+    (pointerId) => target.releasePointerCapture(pointerId),
   );
 }
 
@@ -214,10 +298,15 @@ async function endAxisDrag(
   event: ThreeEvent<PointerEvent>,
 ): Promise<void> {
   event.stopPropagation();
-  const target = pointerTarget(event);
-  await controller.end(event.pointerId, (pointerId) =>
-    target.releasePointerCapture(pointerId),
-  );
+  await controller.end(event.pointerId);
+}
+
+function cancelAxisDrag(
+  controller: ReturnType<typeof createMoveGestureController>,
+  event: ThreeEvent<PointerEvent>,
+): void {
+  event.stopPropagation();
+  controller.cancel();
 }
 
 function axisPosition(axis: MoveAxis, length: number): Translation3 {

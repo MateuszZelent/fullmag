@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   PROBLEM_IR_03_RIGID_TRANSFORM_REASON,
   createMoveGestureController,
+  installMoveGestureTerminalListeners,
+  moveAxisPointerHandlers,
 } from "./MoveObjectGizmo";
 import { commitObjectTranslation } from "@/kernel/authoring/objectTranslationMutation";
 
@@ -20,7 +22,7 @@ describe("MoveObjectGizmo", () => {
       origin: [1e-9, 2e-9, 3e-9],
     });
 
-    controller.begin("x", 4, [0, 0, 0], capture);
+    controller.begin("x", 4, [0, 0, 0], capture, release);
     controller.move(4, [2e-9, 8e-9, 0]);
     controller.move(4, [5e-9, 9e-9, 0]);
 
@@ -32,33 +34,147 @@ describe("MoveObjectGizmo", () => {
       translation: [6e-9, 2e-9, 3e-9],
     });
 
-    await controller.end(4, release);
+    await controller.end(4);
 
     expect(release).toHaveBeenCalledWith(4);
     expect(onCommit).toHaveBeenCalledTimes(1);
     expect(onCommit).toHaveBeenCalledWith("magnet-x", [6e-9, 2e-9, 3e-9], 17);
+    expect(onDraftChange).toHaveBeenLastCalledWith(null);
   });
 
-  it("cancels with Escape, restores origin, and sends no request", () => {
+  it("preserves the final draft when the commit reports a revision conflict", async () => {
+    const onDraftChange = vi.fn();
+    const controller = createMoveGestureController({
+      baseRevision: 3,
+      objectId: "stale-magnet",
+      onCommit: vi.fn().mockResolvedValue(false),
+      onDraftChange,
+      origin: [0, 0, 0],
+    });
+    controller.begin("y", 8, [0, 0, 0], vi.fn(), vi.fn());
+    controller.move(8, [0, 7e-9, 0]);
+
+    await controller.end(8);
+
+    expect(onDraftChange).toHaveBeenLastCalledWith({
+      objectId: "stale-magnet",
+      origin: [0, 0, 0],
+      translation: [0, 7e-9, 0],
+    });
+  });
+
+  it("explicitly cancels once, clears the draft, restores OrbitControls, and sends no request", () => {
     const onDraftChange = vi.fn();
     const onCommit = vi.fn();
+    const onGestureActiveChange = vi.fn();
+    const release = vi.fn();
     const controller = createMoveGestureController({
       baseRevision: 9,
       objectId: "magnet-y",
       onCommit,
       onDraftChange,
+      onGestureActiveChange,
       origin: [0, 0, 0],
     });
 
-    controller.begin("z", 2, [0, 0, 0], vi.fn());
+    controller.begin("z", 2, [0, 0, 0], vi.fn(), release);
     controller.move(2, [0, 0, 3e-9]);
     expect(controller.cancel()).toBe(true);
+    expect(controller.cancel()).toBe(false);
 
-    expect(onDraftChange).toHaveBeenLastCalledWith({
-      objectId: "magnet-y",
+    expect(release).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledWith(2);
+    expect(onDraftChange).toHaveBeenLastCalledWith(null);
+    expect(onGestureActiveChange.mock.calls).toEqual([[true], [false]]);
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it.each(["Escape", "unmount"])(
+    "wires %s to release capture once, clear the draft, restore OrbitControls, and send no request",
+    (path) => {
+      const onCommit = vi.fn();
+      const release = vi.fn();
+      const onDraftChange = vi.fn();
+      const onGestureActiveChange = vi.fn();
+      const controller = createMoveGestureController({
+        baseRevision: 9,
+        objectId: "lifecycle-magnet",
+        onCommit,
+        onDraftChange,
+        onGestureActiveChange,
+        origin: [0, 0, 0],
+      });
+      const keydown: { listener: ((event: Event) => void) | null } = {
+        listener: null,
+      };
+      const target = {
+        addEventListener: vi.fn((_type: string, listener: EventListenerOrEventListenerObject) => {
+          keydown.listener = listener as (event: Event) => void;
+        }),
+        removeEventListener: vi.fn(),
+      } as never;
+      const cleanup = installMoveGestureTerminalListeners(controller, target);
+      controller.begin("z", 6, [0, 0, 0], vi.fn(), release);
+      controller.move(6, [0, 0, 9e-9]);
+
+      if (path === "Escape") {
+        keydown.listener?.({ key: "Escape", preventDefault: vi.fn() } as never);
+      } else {
+        cleanup();
+      }
+
+      expect(release).toHaveBeenCalledOnce();
+      expect(onDraftChange).toHaveBeenLastCalledWith(null);
+      expect(onGestureActiveChange.mock.calls).toEqual([[true], [false]]);
+      expect(onCommit).not.toHaveBeenCalled();
+      cleanup();
+      expect(release).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("restores OrbitControls and releases capture when commit throws", async () => {
+    const release = vi.fn();
+    const onGestureActiveChange = vi.fn();
+    const controller = createMoveGestureController({
+      baseRevision: 9,
+      objectId: "magnet-error",
+      onCommit: vi.fn().mockRejectedValue(new Error("network")),
+      onDraftChange: vi.fn(),
+      onGestureActiveChange,
       origin: [0, 0, 0],
-      translation: [0, 0, 0],
     });
+    controller.begin("x", 3, [0, 0, 0], vi.fn(), release);
+
+    await expect(controller.end(3)).rejects.toThrow("network");
+
+    expect(release).toHaveBeenCalledOnce();
+    expect(onGestureActiveChange.mock.calls).toEqual([[true], [false]]);
+    expect(controller.cancel()).toBe(false);
+  });
+
+  it("wires R3F pointercancel and lostpointercapture to the idempotent terminal cleanup", () => {
+    const releasePointerCapture = vi.fn();
+    const onCommit = vi.fn();
+    const controller = createMoveGestureController({
+      baseRevision: 1,
+      objectId: "wired-magnet",
+      onCommit,
+      onDraftChange: vi.fn(),
+      origin: [0, 0, 0],
+    });
+    const handlers = moveAxisPointerHandlers(controller, "x");
+    const event = {
+      point: { x: 0, y: 0, z: 0 },
+      pointerId: 11,
+      stopPropagation: vi.fn(),
+      target: { releasePointerCapture, setPointerCapture: vi.fn() },
+    } as never;
+
+    handlers.onPointerDown(event);
+    handlers.onPointerCancel(event);
+    handlers.onLostPointerCapture(event);
+
+    expect(releasePointerCapture).toHaveBeenCalledOnce();
     expect(onCommit).not.toHaveBeenCalled();
   });
 

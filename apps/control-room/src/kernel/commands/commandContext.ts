@@ -16,6 +16,7 @@ export function createCommandContext(
     input: patch.input,
     source,
     layout: kernel.layout,
+    objectMoveTool: kernel.objectMoveTool,
     resourceData: patch.resourceData,
     resources: kernel.resources,
     selection: kernel.selection,
