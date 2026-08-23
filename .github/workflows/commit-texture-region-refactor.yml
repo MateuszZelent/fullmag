@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   commit:
-    if: github.head_ref == 'codex/texture-transform-region-clipping-20260823'
+    if: github.head_ref == 'codex/texture-transform-region-clipping-20260823' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -46,6 +46,8 @@ jobs:
           python - <<'PY'
           import base64
           import hashlib
+          import json
+          import re
           import zlib
           from pathlib import Path
 
@@ -54,11 +56,13 @@ jobs:
               (payload_dir / f'payload.part{index:02d}').read_text(encoding='utf-8').strip()
               for index in range(1, 11)
           )
-          if len(encoded) != 16368:
-              raise RuntimeError(f'unexpected payload length: {len(encoded)}')
-          digest = hashlib.sha256(encoded.encode('ascii')).hexdigest()
-          if digest != 'a92bb20c17913409cd97c3506867e7a5f3d4453c43e8d778efc9f93230d012f2':
-              raise RuntimeError(f'unexpected payload sha256: {digest}')
+          expected_sha = 'a92bb20c17913409cd97c3506867e7a5f3d4453c43e8d778efc9f93230d012f2'
+          actual_sha = hashlib.sha256(encoded.encode('ascii')).hexdigest()
+          if len(encoded) != 16368 or actual_sha != expected_sha:
+              raise RuntimeError(
+                  f'payload verification failed: length={len(encoded)}, sha256={actual_sha}'
+              )
+
           script = zlib.decompress(base64.b64decode(encoded, validate=True)).decode('utf-8')
           stale = 'prescribed_sot_refuses_disjoint_target_mask'
           current = 'prescribed_sot_region_target_materializes_cell_mask'
@@ -71,40 +75,24 @@ jobs:
           PY
           python .github/fullmag-texture-region-refactor/apply.py
 
-      - name: Apply final compatibility corrections
+      - name: Update FEM regression test and documentation source anchor
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           import json
+          import re
           from pathlib import Path
 
           tests_path = Path('crates/fullmag-plan/src/tests.rs')
           tests = tests_path.read_text(encoding='utf-8')
-          old = '''#[test]
-          fn fem_region_texture_override_is_rejected_until_runtime_materialization_exists() {
-              let mut ir = fem_minimal_test_ir();
-              let mut region = default_test_object_region();
-              region.texture_override = Some(fullmag_ir::RegionTextureOverrideIR {
-                  initial_magnetization: fullmag_ir::InitialMagnetizationIR::Uniform {
-                      value: [0.0, 0.0, 1.0],
-                  },
-              });
-              ir.object_regions.push(region);
-
-              let err = plan(&ir).expect_err("FEM must not silently ignore region texture overrides");
-              assert!(
-                  err.reasons.iter().any(|reason| {
-                      reason.contains("object region texture_override")
-                          && reason.contains("backend='fem'")
-                          && reason.contains("must not silently ignore region texture overrides")
-                  }),
-                  "unexpected planner errors: {:?}",
-                  err.reasons
-              );
-          }
-          '''
-          new = '''#[test]
+          pattern = re.compile(
+              r'#\[test\]\n'
+              r'fn fem_region_texture_override_is_rejected_until_runtime_materialization_exists\(\) \{'
+              r'.*?\n\}\n',
+              re.DOTALL,
+          )
+          replacement = '''#[test]
           fn fem_region_texture_override_materializes_on_selected_nodes_only() {
               let baseline_ir = fem_minimal_test_ir();
               let baseline_plan = plan(&baseline_ir).expect("baseline FEM plan should succeed");
@@ -126,10 +114,6 @@ jobs:
                   panic!("expected FEM plan");
               };
 
-              assert_eq!(
-                  fem.initial_magnetization.len(),
-                  baseline_fem.initial_magnetization.len()
-              );
               let changed_indices = fem
                   .initial_magnetization
                   .iter()
@@ -137,11 +121,7 @@ jobs:
                   .enumerate()
                   .filter_map(|(index, (actual, baseline))| (actual != baseline).then_some(index))
                   .collect::<Vec<_>>();
-              assert_eq!(
-                  changed_indices,
-                  vec![0],
-                  "the object-frame cylinder contains only node 0 and must not broaden its mask"
-              );
+              assert_eq!(changed_indices, vec![0]);
               assert_eq!(fem.initial_magnetization[0], [0.0, 0.0, 1.0]);
               assert_eq!(
                   &fem.initial_magnetization[1..],
@@ -150,18 +130,20 @@ jobs:
               );
           }
           '''
-          if tests.count(old) != 1:
-              raise RuntimeError(f'unexpected obsolete FEM test count: {tests.count(old)}')
-          tests_path.write_text(tests.replace(old, new, 1), encoding='utf-8')
+          tests, count = pattern.subn(replacement, tests, count=1)
+          if count != 1:
+              raise RuntimeError(f'expected one obsolete FEM test, found {count}')
+          tests_path.write_text(tests, encoding='utf-8')
 
           manifest_path = Path(
-              'public_docs/site/python-api/magnets-and-textures/preset-textures.source-map.json'
+              'public_docs/site/python-api/magnets-and-textures/'
+              'preset-textures.source-map.json'
           )
           manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
-          matches = [entry for entry in manifest['sources'] if entry.get('id') == 'rust-inverse-transform']
-          if len(matches) != 1 or matches[0].get('symbol') != 'PreparedTextureTransform':
-              raise RuntimeError(f'unexpected documentation source entry: {matches}')
-          matches[0]['symbol'] = 'prepare'
+          entries = [entry for entry in manifest['sources'] if entry.get('id') == 'rust-inverse-transform']
+          if len(entries) != 1 or entries[0].get('symbol') != 'PreparedTextureTransform':
+              raise RuntimeError(f'unexpected transform source entry: {entries}')
+          entries[0]['symbol'] = 'prepare'
           manifest_path.write_text(
               json.dumps(manifest, indent=2, ensure_ascii=False) + '\n',
               encoding='utf-8',
@@ -171,17 +153,17 @@ jobs:
               'public_docs/site/python-api/magnets-and-textures/preset-textures.md'
           )
           page = page_path.read_text(encoding='utf-8')
-          old_row = (
+          old = (
               '| coordinate transform | '
               '`crates/fullmag-plan/src/magnetization_textures_v2.rs` | '
               '`PreparedTextureTransform` | '
               'one-time validation plus shared forward/inverse texture transform | '
               'FDM/FEM planner |'
           )
-          new_row = old_row.replace('`PreparedTextureTransform`', '`prepare`')
-          if page.count(old_row) != 1:
-              raise RuntimeError(f'unexpected documentation row count: {page.count(old_row)}')
-          page_path.write_text(page.replace(old_row, new_row, 1), encoding='utf-8')
+          new = old.replace('`PreparedTextureTransform`', '`prepare`')
+          if page.count(old) != 1:
+              raise RuntimeError(f'unexpected documentation row count: {page.count(old)}')
+          page_path.write_text(page.replace(old, new, 1), encoding='utf-8')
           PY
 
       - name: Format and validate implementation
@@ -200,6 +182,7 @@ jobs:
             crates/fullmag-plan/src/tests.rs \
             crates/fullmag-plan/src/validate.rs \
             crates/fullmag-plan/tests/magnetization_textures_v2_contract.rs
+
           cargo test -p fullmag-plan region_textures
           cargo test -p fullmag-plan fdm_region_textures
           cargo test -p fullmag-plan fem_region_textures
@@ -208,6 +191,7 @@ jobs:
           cargo test -p fullmag-plan --test magnetization_textures_v2_parity
           cargo check -p fullmag-plan -p fullmag-py-core
           cargo test -p fullmag-plan
+
           python -m pip install --disable-pip-version-check pytest -e packages/fullmag-py
           python -m pytest -q \
             packages/fullmag-py/tests/test_preset_texture_v2_parity.py \
@@ -228,7 +212,7 @@ jobs:
             src/modules/inspector/panels/ObjectRegionsPanel.test.ts
           git restore -- pnpm-lock.yaml
 
-      - name: Verify and commit source changes
+      - name: Commit source changes
         shell: bash
         run: |
           set -euo pipefail
@@ -257,8 +241,8 @@ jobs:
             crates/fullmag-plan/src/validate.rs \
             crates/fullmag-plan/tests/magnetization_textures_v2_contract.rs \
             public_docs/site/python-api/magnets-and-textures/preset-textures.md \
-            public_docs/site/python-api/magnets-and-textures/preset-textures.source-map.json \
-            .github/fullmag-texture-region-refactor
+            public_docs/site/python-api/magnets-and-textures/preset-textures.source-map.json
+          git add -A .github/fullmag-texture-region-refactor
           git diff --cached --check
           git commit \
             -m 'fix: unify texture transforms and clip regional textures' \
