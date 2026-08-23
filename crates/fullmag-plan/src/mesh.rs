@@ -245,19 +245,26 @@ pub(crate) fn object_space_sample_points(
     world_points: &[[f64; 3]],
     object_translation: [f64; 3],
 ) -> Result<Vec<[f64; 3]>, String> {
-    let transform = crate::AffineTransform3 {
-        translation_m: object_translation,
-        ..crate::AffineTransform3::identity()
-    };
+    if object_translation
+        .iter()
+        .any(|component| !component.is_finite())
+    {
+        return Err(
+            "FEM texture owner translation must contain only finite components".to_string(),
+        );
+    }
     world_points
         .iter()
-        .map(|point| {
-            crate::selection::geometry::world_point_in_frame(*point, transform).map_err(|error| {
-                format!(
-                    "failed to map FEM texture sample point {:?} into object coordinates: {error}",
-                    point
-                )
-            })
+        .enumerate()
+        .map(|(index, point)| {
+            if point.iter().any(|component| !component.is_finite()) {
+                return Err(format!(
+                    "FEM texture sample point {index} contains non-finite coordinates"
+                ));
+            }
+            Ok(std::array::from_fn(|axis| {
+                point[axis] - object_translation[axis]
+            }))
         })
         .collect()
 }
