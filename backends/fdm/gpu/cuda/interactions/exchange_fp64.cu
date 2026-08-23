@@ -204,6 +204,9 @@ void launch_exchange_field_fp64(Context &ctx) {
             inv_dx2, inv_dy2, inv_dz2,
             ctx.phi_floor,
             ctx.nx, ctx.ny, ctx.nz);
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_EXCHANGE |
+                     FULLMAG_FDM_OPERATOR_BOUNDARY_CORRECTION);
         return;
     }
 
@@ -235,6 +238,9 @@ void launch_exchange_field_fp64(Context &ctx) {
             ctx.delta_min,
             ctx.phi_floor,
             ctx.nx, ctx.ny, ctx.nz);
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_EXCHANGE |
+                     FULLMAG_FDM_OPERATOR_BOUNDARY_CORRECTION);
         return;
     }
 
@@ -267,6 +273,7 @@ void launch_exchange_field_fp64(Context &ctx) {
         prefactor,
         inv_mu0_ms,
         ctx.periodic_x, ctx.periodic_y, ctx.periodic_z);
+    fullmag_fdm_note_operator_device_execution(ctx, FULLMAG_FDM_OPERATOR_EXCHANGE);
 }
 
 double launch_exchange_energy_fp64(Context &ctx) {

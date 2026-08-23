@@ -5155,17 +5155,6 @@ fn execute_cuda_fdm(
     let cell_count = (plan.grid.cells[0] as usize)
         * (plan.grid.cells[1] as usize)
         * (plan.grid.cells[2] as usize);
-    let initial_magnetization = backend.copy_m(cell_count)?;
-    let timestep_policy = if direct_minimizer_control(plan.relaxation.as_ref()).is_some() {
-        None
-    } else {
-        Some(crate::resolve_timestep_policy(
-            plan.integrator,
-            plan.fixed_timestep,
-            plan.adaptive_timestep.as_ref(),
-            crate::types::TimestepExecutionLane::fdm_cuda(plan.precision),
-        )?)
-    };
     let mut steps = Vec::new();
     let mut provenance = ExecutionProvenance {
         execution_engine: "cuda_fdm".to_string(),
@@ -5191,7 +5180,7 @@ fn execute_cuda_fdm(
             plan,
         ),
         fdm_gpu_execution_receipt: Some(initial_execution_receipt),
-        timestep_policy,
+        timestep_policy: None,
         executed_physics_kinds: if direct_minimizer_control(plan.relaxation.as_ref()).is_none()
             && (plan.zhang_li_formula_version.is_some()
                 || plan.slonczewski_formula_version.is_some()
@@ -5225,12 +5214,6 @@ fn execute_cuda_fdm(
     } else {
         ArtifactRecorder::in_memory(provenance.clone())
     };
-    let mut scalar_schedules = collect_scalar_schedules(outputs)?;
-    let (mut transport_field_schedules, mut field_schedules) =
-        partition_cuda_field_schedules(outputs, !plan.spin_transport_plans.is_empty())?;
-    let default_scalar_trace = scalar_schedules.is_empty();
-    capture_initial_cuda_fields(&backend, cell_count, &mut field_schedules, &mut artifacts)?;
-
     let mut latest_stats: Option<StepStats> = None;
     let mut current_time = 0.0;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
@@ -5239,6 +5222,30 @@ fn execute_cuda_fdm(
     let mut cancelled = false;
     let mut numerical_stagnation = false;
     let mut direct_minimizer_torque_confirmed = false;
+    let mut initial_magnetization = Vec::new();
+    let mut final_magnetization = Vec::new();
+    let mut completion_steps = 0;
+    let mut completion_time_s = None;
+    let mut completion_max_torque_apm = None;
+    let execution_outcome = (|| -> Result<(), RunError> {
+    initial_magnetization = backend.copy_m(cell_count)?;
+    provenance.timestep_policy = if direct_minimizer_control(plan.relaxation.as_ref()).is_some() {
+        None
+    } else {
+        Some(crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            crate::types::TimestepExecutionLane::fdm_cuda(plan.precision),
+        )?)
+    };
+    artifacts.update_provenance(provenance.clone());
+    let mut scalar_schedules = collect_scalar_schedules(outputs)?;
+    let (mut transport_field_schedules, mut field_schedules) =
+        partition_cuda_field_schedules(outputs, !plan.spin_transport_plans.is_empty())?;
+    let default_scalar_trace = scalar_schedules.is_empty();
+    capture_initial_cuda_fields(&backend, cell_count, &mut field_schedules, &mut artifacts)?;
+
     let mut current_stats = backend.snapshot_step_stats(plan.grid.cells)?;
     ensure_single_object_scalars(&mut current_stats, "free");
 
@@ -5490,13 +5497,10 @@ fn execute_cuda_fdm(
         }
     }
 
-    let completion_steps = latest_stats.as_ref().map_or(0, |stats| stats.step);
-    let completion_time_s = latest_stats.as_ref().map(|stats| stats.time);
-    let completion_max_torque_apm = latest_stats.as_ref().map(|stats| stats.max_torque_Apm);
-    let final_magnetization = backend.copy_m(cell_count)?;
-    let final_execution_receipt = receipt_lifecycle.finish(&backend)?;
-    provenance.fdm_gpu_execution_receipt = Some(final_execution_receipt);
-    artifacts.update_provenance(provenance.clone());
+    completion_steps = latest_stats.as_ref().map_or(0, |stats| stats.step);
+    completion_time_s = latest_stats.as_ref().map(|stats| stats.time);
+    completion_max_torque_apm = latest_stats.as_ref().map(|stats| stats.max_torque_Apm);
+    final_magnetization = backend.copy_m(cell_count)?;
     record_gpu_transport_final_outputs(
         gpu_transport.as_ref(),
         gpu_transport_module_id,
@@ -5526,6 +5530,14 @@ fn execute_cuda_fdm(
         &field_schedules,
         &mut steps,
         &mut artifacts,
+    )?;
+    Ok(())
+    })();
+    receipt_lifecycle.finalize_after_outcome(
+        &backend,
+        &mut provenance,
+        Some(&mut artifacts),
+        execution_outcome,
     )?;
 
     let diagnostic_trace = artifacts.take_solver_steps();
@@ -6294,6 +6306,7 @@ fn execute_native_fem(
 
 #[cfg(not(feature = "cuda"))]
 fn execute_cuda_fdm(
+    _requested_device: &str,
     _execution_mode: fullmag_ir::ExecutionMode,
     _plan: &FdmPlanIR,
     _until_seconds: f64,

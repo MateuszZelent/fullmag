@@ -2830,7 +2830,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             .collect()
     }
 
-    fn execute_with_live_preview(
+    fn execute_with_live_preview_inner(
         &mut self,
         plan: &FdmPlanIR,
         until_seconds: f64,
@@ -3123,8 +3123,6 @@ impl CudaInteractiveFdmPreviewRuntime {
         };
 
         let final_magnetization = self.backend.copy_m(cell_count)?;
-        let final_receipt = self.receipt_lifecycle.finish(&self.backend)?;
-        self.provenance.fdm_gpu_execution_receipt = Some(final_receipt);
         Ok(RunResult {
             status,
             steps,
@@ -3133,7 +3131,69 @@ impl CudaInteractiveFdmPreviewRuntime {
         })
     }
 
+    fn execute_with_live_preview(
+        &mut self,
+        plan: &FdmPlanIR,
+        until_seconds: f64,
+        grid: [u32; 3],
+        field_every_n: u64,
+        display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+        interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+        on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
+    ) -> Result<RunResult, RunError> {
+        let outcome = self.execute_with_live_preview_inner(
+            plan,
+            until_seconds,
+            grid,
+            field_every_n,
+            display_selection,
+            interrupt_requested,
+            on_step,
+        );
+        self.receipt_lifecycle.clone().finalize_after_outcome(
+            &self.backend,
+            &mut self.provenance,
+            None,
+            outcome,
+        )
+    }
+
     fn execute_with_live_preview_streaming(
+        &mut self,
+        plan: &FdmPlanIR,
+        until_seconds: f64,
+        outputs: &[OutputIR],
+        grid: [u32; 3],
+        field_every_n: u64,
+        display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+        interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+        artifact_writer: Option<ArtifactPipelineSender>,
+        on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
+    ) -> Result<ExecutedRun, RunError> {
+        let outcome = self.execute_with_live_preview_streaming_inner(
+            plan,
+            until_seconds,
+            outputs,
+            grid,
+            field_every_n,
+            display_selection,
+            interrupt_requested,
+            artifact_writer,
+            on_step,
+        );
+        let result = self.receipt_lifecycle.clone().finalize_after_outcome(
+            &self.backend,
+            &mut self.provenance,
+            None,
+            outcome,
+        );
+        result.map(|mut executed| {
+            executed.provenance = self.provenance.clone();
+            executed
+        })
+    }
+
+    fn execute_with_live_preview_streaming_inner(
         &mut self,
         plan: &FdmPlanIR,
         until_seconds: f64,
@@ -3442,8 +3502,6 @@ impl CudaInteractiveFdmPreviewRuntime {
         )?;
 
         let final_magnetization = self.backend.copy_m(cell_count)?;
-        let final_receipt = self.receipt_lifecycle.finish(&self.backend)?;
-        self.provenance.fdm_gpu_execution_receipt = Some(final_receipt);
         artifacts.update_provenance(self.provenance.clone());
         let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
         let status = if paused {

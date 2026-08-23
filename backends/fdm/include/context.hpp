@@ -317,7 +317,8 @@ struct Context {
 
     // Measured host-boundary and operator realization receipt. Accounting is
     // allocation-free and never invokes CUDA APIs or synchronization.
-    ExecutionReceiptState execution_receipt;
+    std::shared_ptr<ExecutionReceiptState> execution_receipt =
+        std::make_shared<ExecutionReceiptState>();
 
 
     // Step counter
@@ -489,8 +490,8 @@ struct Context {
     // Error state
     std::string last_error;
 
-    AsyncFieldSnapshotPool async_field_snapshot_pool;
-    AsyncPreviewSnapshotPool async_preview_snapshot_pool;
+    std::shared_ptr<AsyncFieldSnapshotPool> async_field_snapshot_pool;
+    std::shared_ptr<AsyncPreviewSnapshotPool> async_preview_snapshot_pool;
 
     // Native FDM ABI v2 multilayer staging. These buffers are uploaded and
     // stepped separately from the legacy single-grid state.
@@ -575,10 +576,9 @@ struct AsyncFieldSnapshot {
     void *done_event = nullptr;  // cudaEvent_t
     bool needs_wait = false;
     bool done_event_recorded = false;
-    AsyncFieldSnapshotPool *pool = nullptr;
+    std::shared_ptr<AsyncFieldSnapshotPool> pool;
     std::size_t pool_slot = kFdmAsyncFieldSnapshotPoolCapacity;
-    Context *receipt_context = nullptr;
-    bool receipt_counted = false;
+    std::shared_ptr<AsyncTransferReceiptToken> receipt_token;
 };
 
 struct AsyncPreviewSnapshot {
@@ -593,10 +593,9 @@ struct AsyncPreviewSnapshot {
     void *done_event = nullptr;  // cudaEvent_t
     bool needs_wait = false;
     bool done_event_recorded = false;
-    AsyncPreviewSnapshotPool *pool = nullptr;
+    std::shared_ptr<AsyncPreviewSnapshotPool> pool;
     std::size_t pool_slot = kFdmAsyncPreviewSnapshotPoolCapacity;
-    Context *receipt_context = nullptr;
-    bool receipt_counted = false;
+    std::shared_ptr<AsyncTransferReceiptToken> receipt_token;
 };
 
 bool initialize_async_field_snapshot_pool(Context &ctx);
@@ -745,13 +744,14 @@ inline void fullmag_fdm_reset_hot_loop_audit(Context &ctx) {
     ctx.hot_loop_host_sync_count = 0;
     ctx.hot_loop_control_scalar_d2h_bytes = 0;
     ctx.hot_loop_control_scalar_host_sync_count = 0;
+    ctx.execution_receipt->pending_device_operator_mask = 0;
 }
 
 inline void fullmag_fdm_record_control_scalar_d2h(Context &ctx, uint64_t bytes) {
     fullmag_fdm_checked_add(
-        ctx.execution_receipt, ctx.hot_loop_d2h_bytes, bytes);
+        *ctx.execution_receipt, ctx.hot_loop_d2h_bytes, bytes);
     fullmag_fdm_checked_add(
-        ctx.execution_receipt, ctx.hot_loop_control_scalar_d2h_bytes, bytes);
+        *ctx.execution_receipt, ctx.hot_loop_control_scalar_d2h_bytes, bytes);
 }
 
 inline void fullmag_fdm_record_control_scalar_host_sync(
@@ -759,9 +759,9 @@ inline void fullmag_fdm_record_control_scalar_host_sync(
     uint64_t count = 1)
 {
     fullmag_fdm_checked_add(
-        ctx.execution_receipt, ctx.hot_loop_host_sync_count, count);
+        *ctx.execution_receipt, ctx.hot_loop_host_sync_count, count);
     fullmag_fdm_checked_add(
-        ctx.execution_receipt, ctx.hot_loop_control_scalar_host_sync_count, count);
+        *ctx.execution_receipt, ctx.hot_loop_control_scalar_host_sync_count, count);
 }
 
 inline void fullmag_fdm_publish_hot_loop_audit(
@@ -779,7 +779,7 @@ inline void fullmag_fdm_publish_hot_loop_audit(
 }
 
 inline void fullmag_fdm_accumulate_execution_receipt_audit(Context &ctx) {
-    auto &state = ctx.execution_receipt;
+    auto &state = *ctx.execution_receipt;
     fullmag_fdm_checked_add(state, state.hot_loop_host_sync_count,
                             ctx.hot_loop_host_sync_count);
     fullmag_fdm_checked_add(state, state.hot_loop_control_scalar_d2h_bytes,
@@ -799,28 +799,28 @@ inline void fullmag_fdm_record_counted_bytes(
 }
 
 inline void fullmag_fdm_record_setup_full_vector_h2d(Context &ctx, uint64_t bytes) {
-    auto &state = ctx.execution_receipt;
+    auto &state = *ctx.execution_receipt;
     fullmag_fdm_record_counted_bytes(
         state, state.setup_full_vector_h2d_count,
         state.setup_full_vector_h2d_bytes, bytes);
 }
 
 inline void fullmag_fdm_record_setup_full_vector_d2h(Context &ctx, uint64_t bytes) {
-    auto &state = ctx.execution_receipt;
+    auto &state = *ctx.execution_receipt;
     fullmag_fdm_record_counted_bytes(
         state, state.setup_full_vector_d2h_count,
         state.setup_full_vector_d2h_bytes, bytes);
 }
 
 inline void fullmag_fdm_record_observation_full_vector_h2d(Context &ctx, uint64_t bytes) {
-    auto &state = ctx.execution_receipt;
+    auto &state = *ctx.execution_receipt;
     fullmag_fdm_record_counted_bytes(
         state, state.observation_full_vector_h2d_count,
         state.observation_full_vector_h2d_bytes, bytes);
 }
 
 inline void fullmag_fdm_record_observation_full_vector_d2h(Context &ctx, uint64_t bytes) {
-    auto &state = ctx.execution_receipt;
+    auto &state = *ctx.execution_receipt;
     fullmag_fdm_record_counted_bytes(
         state, state.observation_full_vector_d2h_count,
         state.observation_full_vector_d2h_bytes, bytes);
@@ -834,7 +834,7 @@ inline void fullmag_fdm_record_cuda_transfer_success(
     bool host_to_device,
     uint64_t bytes)
 {
-    if (ctx.execution_receipt.solver_phase_active) {
+    if (ctx.execution_receipt->solver_phase_active) {
         if (host_to_device) {
             fullmag_fdm_record_hot_loop_full_vector_h2d(ctx, bytes);
         } else {
@@ -842,7 +842,7 @@ inline void fullmag_fdm_record_cuda_transfer_success(
         }
         return;
     }
-    if (!ctx.execution_receipt.setup_complete) {
+    if (!ctx.execution_receipt->setup_complete) {
         if (host_to_device) {
             fullmag_fdm_record_setup_full_vector_h2d(ctx, bytes);
         } else {
@@ -861,7 +861,7 @@ inline void fullmag_fdm_record_hot_loop_full_vector_h2d(
     Context &ctx,
     uint64_t bytes)
 {
-    auto &state = ctx.execution_receipt;
+    auto &state = *ctx.execution_receipt;
     fullmag_fdm_record_counted_bytes(
         state, state.hot_loop_full_vector_h2d_count,
         state.hot_loop_full_vector_h2d_bytes, bytes);
@@ -871,7 +871,7 @@ inline void fullmag_fdm_record_hot_loop_full_vector_d2h(
     Context &ctx,
     uint64_t bytes)
 {
-    auto &state = ctx.execution_receipt;
+    auto &state = *ctx.execution_receipt;
     fullmag_fdm_record_counted_bytes(
         state, state.hot_loop_full_vector_d2h_count,
         state.hot_loop_full_vector_d2h_bytes, bytes);
@@ -879,9 +879,94 @@ inline void fullmag_fdm_record_hot_loop_full_vector_d2h(
 
 inline void fullmag_fdm_record_hot_loop_host_compute(Context &ctx) {
     fullmag_fdm_checked_add(
-        ctx.execution_receipt,
-        ctx.execution_receipt.hot_loop_host_compute_count,
+        *ctx.execution_receipt,
+        ctx.execution_receipt->hot_loop_host_compute_count,
         1);
+}
+
+enum class TransportReceiptCategory : uint8_t {
+    Ignore,
+    SetupH2D,
+    ScalarD2H,
+    SolverHotLoopH2D,
+    SolverHotLoopD2H,
+    ScalarHostSync,
+    ObservationH2D,
+    ObservationD2H,
+    ObservationHostSync,
+    DeviceExecution,
+    Invalid,
+};
+
+inline TransportReceiptCategory fullmag_fdm_classify_transport_telemetry(
+    const fullmag_fdm_gpu_transport_telemetry_v1 &record)
+{
+    if (record.status != FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS) {
+        return TransportReceiptCategory::Ignore;
+    }
+    const bool transfer =
+        (record.event_flags & FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER) != 0;
+    const bool synchronization =
+        (record.event_flags &
+         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_SYNCHRONIZATION) != 0;
+    const bool cadence =
+        (record.event_flags &
+         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_CADENCE_AUTHORIZED) != 0;
+    const bool provisional =
+        (record.event_flags &
+         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_PROVISIONAL) != 0;
+    switch (record.reason) {
+        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_STATIC_UPLOAD_H2D:
+            return transfer && record.direction ==
+                       FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_H2D
+                ? TransportReceiptCategory::SetupH2D
+                : TransportReceiptCategory::Invalid;
+        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SCALAR_REDUCTION_D2H:
+            if (!transfer || record.direction !=
+                    FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H) {
+                return TransportReceiptCategory::Invalid;
+            }
+            return cadence ? TransportReceiptCategory::ObservationD2H
+                           : TransportReceiptCategory::ScalarD2H;
+        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_ARTIFACT_READBACK_D2H:
+        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_CHECKPOINT_EXPORT_D2H:
+            return transfer && cadence && record.direction ==
+                       FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H
+                ? TransportReceiptCategory::ObservationD2H
+                : TransportReceiptCategory::Invalid;
+        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_CHECKPOINT_IMPORT_H2D:
+            return transfer && cadence && record.direction ==
+                       FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_H2D
+                ? TransportReceiptCategory::ObservationH2D
+                : TransportReceiptCategory::Invalid;
+        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_CONTROL_STATE_H2D:
+            return transfer && provisional && record.direction ==
+                       FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_H2D
+                ? TransportReceiptCategory::SolverHotLoopH2D
+                : TransportReceiptCategory::Invalid;
+        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_STREAM_SYNCHRONIZE:
+        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_EVENT_WAIT:
+            if (!synchronization || record.direction !=
+                    FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL) {
+                return TransportReceiptCategory::Invalid;
+            }
+            return cadence ? TransportReceiptCategory::ObservationHostSync
+                 : TransportReceiptCategory::ScalarHostSync;
+        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVE_STATE_D2D:
+            return record.direction ==
+                       FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2D
+                ? TransportReceiptCategory::Ignore
+                : TransportReceiptCategory::Invalid;
+        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVED_TRANSPORT_RHS:
+            return record.direction ==
+                       FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL
+                ? TransportReceiptCategory::DeviceExecution
+                : TransportReceiptCategory::Invalid;
+        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_REJECTED_ATTEMPT:
+            return TransportReceiptCategory::Ignore;
+        default:
+            return TransportReceiptCategory::Invalid;
+    }
 }
 
 inline uint64_t fullmag_fdm_required_operator_mask(const Context &ctx) {
@@ -925,42 +1010,108 @@ inline uint64_t fullmag_fdm_required_operator_mask(const Context &ctx) {
 }
 
 inline void fullmag_fdm_commit_operator_residency(Context &ctx) {
-    auto &state = ctx.execution_receipt;
+    auto &state = *ctx.execution_receipt;
     const uint64_t required = fullmag_fdm_required_operator_mask(ctx);
-    state.required_operator_mask = required;
-    // This commit is called only after the corresponding Context resources
-    // and CUDA realization have succeeded. Anything not committed remains
-    // absent/host and therefore fails strict validation.
-    state.device_operator_mask = required;
-    state.host_operator_mask = 0;
+    state.required_operator_mask |= required;
+    for (uint64_t bit = 1; bit <= FULLMAG_FDM_OPERATOR_GPU_TRANSPORT; bit <<= 1) {
+        if ((required & bit) != 0) {
+            fullmag_fdm_resolve_operator_device(state, bit);
+        }
+    }
     state.reduction_location = FULLMAG_FDM_LOCATION_DEVICE;
     state.setup_complete = true;
 }
 
-inline void fullmag_fdm_mark_unproven_operator_host(Context &ctx, uint64_t operator_mask) {
-    auto &state = ctx.execution_receipt;
-    state.required_operator_mask |= operator_mask;
-    state.device_operator_mask &= ~operator_mask;
-    state.host_operator_mask |= operator_mask;
-    fullmag_fdm_checked_add(state, state.fallback_count, 1);
+inline void fullmag_fdm_note_operator_device_execution(
+    Context &ctx,
+    uint64_t operator_mask)
+{
+    ctx.execution_receipt->pending_device_operator_mask |= operator_mask;
+}
+
+inline void fullmag_fdm_note_effective_field_device_execution(Context &ctx) {
+    uint64_t mask = 0;
+    if (ctx.has_interfacial_dmi || ctx.has_bulk_dmi) mask |= FULLMAG_FDM_OPERATOR_DMI;
+    if (ctx.has_uniaxial_anisotropy || ctx.has_cubic_anisotropy) {
+        mask |= FULLMAG_FDM_OPERATOR_ANISOTROPY;
+    }
+    if (ctx.has_external_field || ctx.has_static_external_field_profile) {
+        mask |= FULLMAG_FDM_OPERATOR_EXTERNAL_FIELD;
+    }
+    if (ctx.has_active_mask || ctx.has_frozen_mask || ctx.has_region_mask ||
+        ctx.has_slonczewski_active_mask || ctx.has_sot_active_mask) {
+        mask |= FULLMAG_FDM_OPERATOR_MASKS;
+    }
+    if (ctx.has_magnetoelastic) mask |= FULLMAG_FDM_OPERATOR_MAGNETOELASTIC;
+    if (ctx.temperature > 0.0) mask |= FULLMAG_FDM_OPERATOR_THERMAL;
+    if (ctx.has_oersted_field) mask |= FULLMAG_FDM_OPERATOR_OERSTED;
+    fullmag_fdm_note_operator_device_execution(ctx, mask);
+}
+
+inline void fullmag_fdm_note_integrator_device_execution(Context &ctx) {
+    uint64_t mask = FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR |
+                    FULLMAG_FDM_OPERATOR_REDUCTION;
+    if (ctx.has_zhang_li_stt) mask |= FULLMAG_FDM_OPERATOR_ZHANG_LI_STT;
+    if (ctx.has_slonczewski_stt) mask |= FULLMAG_FDM_OPERATOR_SLONCZEWSKI_STT;
+    if (ctx.has_sot) mask |= FULLMAG_FDM_OPERATOR_SOT;
+    fullmag_fdm_note_operator_device_execution(ctx, mask);
+}
+
+inline void fullmag_fdm_commit_successful_step_operator_execution(Context &ctx) {
+    auto &state = *ctx.execution_receipt;
+    const uint64_t proven =
+        state.pending_device_operator_mask & state.required_operator_mask;
+    state.executed_device_operator_mask |= proven;
+    state.executed_host_operator_mask &= ~proven;
+    state.pending_device_operator_mask = 0;
+}
+
+inline void fullmag_fdm_mark_actual_operator_host(Context &ctx, uint64_t operator_mask) {
+    fullmag_fdm_commit_operator_host_execution(*ctx.execution_receipt, operator_mask);
+}
+
+inline fullmag_fdm_execution_class_v1 fullmag_fdm_execution_class(
+    const ExecutionReceiptState &state)
+{
+    if (state.required_operator_mask == 0 ||
+        fullmag_fdm_resolved_unknown_operator_mask(state) != 0) {
+        return FULLMAG_FDM_EXECUTION_UNKNOWN;
+    }
+    if (state.host_operator_mask == 0 &&
+        (state.device_operator_mask & state.required_operator_mask) ==
+            state.required_operator_mask) {
+        return FULLMAG_FDM_EXECUTION_DEVICE_RESIDENT;
+    }
+    if (state.device_operator_mask == 0) return FULLMAG_FDM_EXECUTION_CPU;
+    return FULLMAG_FDM_EXECUTION_HYBRID;
 }
 
 inline fullmag_fdm_execution_receipt_v1 fullmag_fdm_make_execution_receipt(
     const Context &ctx)
 {
-    const auto &state = ctx.execution_receipt;
+    const auto &state = *ctx.execution_receipt;
 
     fullmag_fdm_execution_receipt_v1 receipt{};
     receipt.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1;
     receipt.struct_size = sizeof(receipt);
-    receipt.execution_class = FULLMAG_FDM_EXECUTION_DEVICE_RESIDENT;
-    receipt.executed_backend = FULLMAG_FDM_EXECUTED_CUDA_FDM;
+    receipt.execution_class = fullmag_fdm_execution_class(state);
+    receipt.executed_backend =
+        fullmag_fdm_executed_unknown_operator_mask(state) == 0 &&
+                state.executed_host_operator_mask == 0
+            ? FULLMAG_FDM_EXECUTED_CUDA_FDM
+            : FULLMAG_FDM_EXECUTED_UNKNOWN;
     receipt.device_ordinal = state.device_ordinal;
     receipt.precision = ctx.precision;
     receipt.integrator = ctx.integrator;
     receipt.required_operator_mask = state.required_operator_mask;
     receipt.device_operator_mask = state.device_operator_mask;
     receipt.host_operator_mask = state.host_operator_mask;
+    receipt.resolved_unknown_operator_mask =
+        fullmag_fdm_resolved_unknown_operator_mask(state);
+    receipt.executed_device_operator_mask = state.executed_device_operator_mask;
+    receipt.executed_host_operator_mask = state.executed_host_operator_mask;
+    receipt.executed_unknown_operator_mask =
+        fullmag_fdm_executed_unknown_operator_mask(state);
     receipt.reduction_location = state.reduction_location;
     receipt.control_location = state.control_location;
     receipt.fallback_count = state.fallback_count;

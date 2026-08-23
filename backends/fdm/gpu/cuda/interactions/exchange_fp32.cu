@@ -166,6 +166,7 @@ void launch_exchange_field_fp32(Context &ctx) {
         prefactor,
         inv_mu0_ms,
         ctx.periodic_x, ctx.periodic_y, ctx.periodic_z);
+    fullmag_fdm_note_operator_device_execution(ctx, FULLMAG_FDM_OPERATOR_EXCHANGE);
 }
 
 double launch_exchange_energy_fp32(Context &ctx) {

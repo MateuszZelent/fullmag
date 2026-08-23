@@ -49,13 +49,14 @@ namespace {
 class ReceiptSolverPhaseGuard {
 public:
     explicit ReceiptSolverPhaseGuard(Context &context)
-        : context_(context), previous_(context.execution_receipt.solver_phase_active)
+        : context_(context), previous_(context.execution_receipt->solver_phase_active)
     {
-        context_.execution_receipt.solver_phase_active = true;
+        context_.execution_receipt->solver_phase_active = true;
     }
 
     ~ReceiptSolverPhaseGuard() {
-        context_.execution_receipt.solver_phase_active = previous_;
+        fullmag_fdm_accumulate_execution_receipt_audit(context_);
+        context_.execution_receipt->solver_phase_active = previous_;
     }
 
     ReceiptSolverPhaseGuard(const ReceiptSolverPhaseGuard &) = delete;
@@ -358,7 +359,7 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     if (!select_cuda_device_if_requested(*ctx)) {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
-    if (cudaGetDevice(&ctx->execution_receipt.device_ordinal) != cudaSuccess) {
+    if (cudaGetDevice(&ctx->execution_receipt->device_ordinal) != cudaSuccess) {
         ctx->last_error = "failed to capture selected CUDA device for execution receipt";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
@@ -593,7 +594,7 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
             ? sizeof(double) : sizeof(float);
     if (!fullmag_fdm_checked_vector_bytes(
             ctx->cell_count, scalar_bytes, setup_bytes)) {
-        ctx->execution_receipt.accounting_valid = false;
+        ctx->execution_receipt->accounting_valid = false;
         ctx->last_error = "initial magnetization byte count overflow";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
@@ -1080,7 +1081,7 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
     if (!select_cuda_device_if_requested(*ctx)) {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
-    if (cudaGetDevice(&ctx->execution_receipt.device_ordinal) != cudaSuccess) {
+    if (cudaGetDevice(&ctx->execution_receipt->device_ordinal) != cudaSuccess) {
         ctx->last_error = "failed to capture selected CUDA device for execution receipt";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
@@ -1197,7 +1198,24 @@ int fullmag_fdm_backend_step(
             return FULLMAG_FDM_ERR_CUDA;
         }
         fullmag_fdm_publish_hot_loop_audit(*ctx, out_stats);
-        fullmag_fdm_accumulate_execution_receipt_audit(*ctx);
+        fullmag_fdm_note_integrator_device_execution(*ctx);
+        fullmag_fdm_note_operator_device_execution(
+            *ctx, FULLMAG_FDM_OPERATOR_MULTILAYER_TRANSFER);
+        if (!ctx->multilayer_layers.empty()) {
+            fullmag_fdm_note_operator_device_execution(
+                *ctx, FULLMAG_FDM_OPERATOR_MULTILAYER_INTERACTIONS);
+        }
+        if (!ctx->multilayer_kernels.empty()) {
+            fullmag_fdm_note_operator_device_execution(
+                *ctx, FULLMAG_FDM_OPERATOR_MULTILAYER_DEMAG |
+                          FULLMAG_FDM_OPERATOR_DEMAG);
+        }
+        if (ctx->enable_exchange) {
+            fullmag_fdm_note_operator_device_execution(
+                *ctx, FULLMAG_FDM_OPERATOR_EXCHANGE);
+        }
+        fullmag_fdm_note_effective_field_device_execution(*ctx);
+        fullmag_fdm_commit_successful_step_operator_execution(*ctx);
         fullmag_fdm_publish_multilayer_demag_stage_counters(*ctx, out_stats);
         return FULLMAG_FDM_OK;
     }
@@ -1272,7 +1290,6 @@ int fullmag_fdm_backend_step(
         }
         out_stats->dt_seconds = 0.0;
         fullmag_fdm_publish_hot_loop_audit(*ctx, out_stats);
-        fullmag_fdm_accumulate_execution_receipt_audit(*ctx);
         return FULLMAG_FDM_ERR_INTERRUPTED;
     }
 
@@ -1301,7 +1318,8 @@ int fullmag_fdm_backend_step(
     context_invalidate_gpu_transport_pre_step_m(*ctx);
 
     fullmag_fdm_publish_hot_loop_audit(*ctx, out_stats);
-    fullmag_fdm_accumulate_execution_receipt_audit(*ctx);
+    fullmag_fdm_note_integrator_device_execution(*ctx);
+    fullmag_fdm_commit_successful_step_operator_execution(*ctx);
     return FULLMAG_FDM_OK;
 #else
     (void)handle; (void)dt_seconds; (void)out_stats;
@@ -2033,10 +2051,6 @@ int fullmag_fdm_backend_execution_receipt_v1(
         return FULLMAG_FDM_ERR_ABI;
     }
     auto *ctx = reinterpret_cast<Context *>(handle);
-    if (!ctx->execution_receipt.accounting_valid) {
-        ctx->last_error = "FDM CUDA execution receipt accounting overflow or telemetry gap";
-        return FULLMAG_FDM_ERR_INVALID;
-    }
     const auto receipt = fullmag_fdm_make_execution_receipt(*ctx);
     *out_receipt = receipt;
     return FULLMAG_FDM_OK;

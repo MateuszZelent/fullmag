@@ -688,7 +688,10 @@ void launch_demag_field_fp32(Context &ctx) {
         ctx.has_active_mask ? 1 : 0,
         1.0f / static_cast<float>(ctx.fft_cell_count));
 
-    context_end_compute_stream_work(ctx, "launch_demag_field_fp32");
+    if (context_end_compute_stream_work(ctx, "launch_demag_field_fp32")) {
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_DEMAG);
+    }
 }
 
 /* ── Axpy kernel: dst += scale * src  (for Oersted field addition) ── */
@@ -805,6 +808,7 @@ void launch_effective_field_fp32(Context &ctx, double evaluation_time) {
             ctx.has_active_mask ? 1 : 0,
             n);
     }
+    fullmag_fdm_note_effective_field_device_execution(ctx);
 }
 
 void launch_anisotropy_field_fp32(Context &ctx) {

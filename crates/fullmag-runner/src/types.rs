@@ -2797,10 +2797,18 @@ pub struct FdmGpuExecutionReceipt {
     pub executed: String,
     pub device: String,
     pub precision: String,
+    pub required_operator_mask: u64,
+    pub resolved_device_operator_mask: u64,
+    pub resolved_host_operator_mask: u64,
+    pub resolved_unknown_operator_mask: u64,
+    pub executed_device_operator_mask: u64,
+    pub executed_host_operator_mask: u64,
+    pub executed_unknown_operator_mask: u64,
     pub operator_residency: Vec<FdmGpuOperatorResidency>,
     pub fallback_count: u64,
     pub transfer_counts: FdmGpuTransferCounts,
     pub validation_state: String,
+    pub accounting_valid: bool,
 }
 
 impl FdmGpuExecutionReceipt {
@@ -2811,10 +2819,18 @@ impl FdmGpuExecutionReceipt {
             executed: "none".to_string(),
             device: "unavailable".to_string(),
             precision: precision.to_string(),
+            required_operator_mask: 0,
+            resolved_device_operator_mask: 0,
+            resolved_host_operator_mask: 0,
+            resolved_unknown_operator_mask: 0,
+            executed_device_operator_mask: 0,
+            executed_host_operator_mask: 0,
+            executed_unknown_operator_mask: 0,
             operator_residency: Vec::new(),
             fallback_count: 0,
             transfer_counts: FdmGpuTransferCounts::default(),
             validation_state: "unvalidated".to_string(),
+            accounting_valid: false,
         }
     }
 }
@@ -2832,6 +2848,13 @@ mod fdm_gpu_execution_receipt_contract_tests {
             executed: "cuda_fdm".into(),
             device: "cuda:0".into(),
             precision: "double".into(),
+            required_operator_mask: 1,
+            resolved_device_operator_mask: 1,
+            resolved_host_operator_mask: 0,
+            resolved_unknown_operator_mask: 0,
+            executed_device_operator_mask: 0,
+            executed_host_operator_mask: 0,
+            executed_unknown_operator_mask: 1,
             operator_residency: vec![FdmGpuOperatorResidency {
                 operator: "llg_integrator".into(),
                 realization: "cuda_heun_fp64".into(),
@@ -2846,11 +2869,12 @@ mod fdm_gpu_execution_receipt_contract_tests {
                 ..Default::default()
             },
             validation_state: "unvalidated".into(),
+            accounting_valid: true,
         });
 
         let value = serde_json::to_value(provenance).expect("serialize provenance");
         let receipt = &value["fdm_gpu_execution_receipt"];
-        assert_eq!(receipt["requested"], "device_resident");
+        assert_eq!(receipt["requested"], "gpu");
         assert_eq!(receipt["resolved"], "device_resident");
         assert_eq!(receipt["executed"], "cuda_fdm");
         assert_eq!(receipt["fallback_count"], 0);

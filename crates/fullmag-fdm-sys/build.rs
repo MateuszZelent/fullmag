@@ -1,6 +1,7 @@
 fn main() {
     generate_plan_desc_layout_assertions();
     generate_execution_receipt_layout_assertions();
+    generate_execution_receipt_value_assertions();
 
     if let Ok(lib_dir) = std::env::var("FULLMAG_FDM_LIB_DIR") {
         println!("cargo:rustc-link-search=native={}", lib_dir);
@@ -88,6 +89,53 @@ fn main() {
     );
 }
 
+fn generate_execution_receipt_value_assertions() {
+    let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let values_manifest =
+        manifest_dir.join("../../native/include/fullmag_fdm_execution_receipt_v1_values.def");
+    println!("cargo:rerun-if-changed={}", values_manifest.display());
+    let source = std::fs::read_to_string(&values_manifest)
+        .expect("reading execution receipt values manifest should succeed");
+    let mut assertions = String::new();
+    let mut execution_class_count = 0usize;
+    let mut executed_backend_count = 0usize;
+    let mut operator_location_count = 0usize;
+    let mut operator_mask_count = 0usize;
+    for line in source.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        let (macro_name, arguments) = line
+            .split_once('(')
+            .expect("receipt values line must be a macro invocation");
+        let arguments = arguments
+            .strip_suffix(')')
+            .expect("receipt values invocation must end with ')'");
+        let (name, value) = arguments
+            .split_once(',')
+            .expect("receipt value requires name and value");
+        match macro_name {
+            "FULLMAG_FDM_EXECUTION_CLASS_VALUE" => execution_class_count += 1,
+            "FULLMAG_FDM_EXECUTED_BACKEND_VALUE" => executed_backend_count += 1,
+            "FULLMAG_FDM_OPERATOR_LOCATION_VALUE" => operator_location_count += 1,
+            "FULLMAG_FDM_OPERATOR_MASK_VALUE" => operator_mask_count += 1,
+            other => panic!("unknown receipt values macro: {other}"),
+        }
+        let rust_value = value.trim().replace("ull", "u64");
+        assertions.push_str(&format!(
+            "assert_eq!({}, {}, \"unexpected receipt ABI value for {}\");\n",
+            name.trim(), rust_value, name.trim()
+        ));
+    }
+    assert_eq!(execution_class_count, 5, "execution class value count drift");
+    assert_eq!(executed_backend_count, 2, "executed backend value count drift");
+    assert_eq!(operator_location_count, 5, "operator location value count drift");
+    assert_eq!(operator_mask_count, 19, "operator mask value count drift");
+    let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    std::fs::write(
+        out_dir.join("execution_receipt_v1_value_assertions.rs"),
+        format!("{{\n{assertions}}}\n"),
+    )
+    .expect("writing generated execution receipt value assertions should succeed");
+}
+
 fn generate_execution_receipt_layout_assertions() {
     let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let layout_manifest =
@@ -125,7 +173,7 @@ fn generate_execution_receipt_layout_assertions() {
             other => panic!("unknown receipt layout macro: {other}"),
         }
     }
-    assert_eq!(field_count, 32, "receipt layout field count drift");
+    assert_eq!(field_count, 36, "receipt layout field count drift");
     assert_eq!(size_count, 1, "receipt layout size declaration drift");
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
     std::fs::write(

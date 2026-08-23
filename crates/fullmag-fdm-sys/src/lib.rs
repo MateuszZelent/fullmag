@@ -591,6 +591,10 @@ pub struct fullmag_fdm_execution_receipt_v1 {
     pub required_operator_mask: u64,
     pub device_operator_mask: u64,
     pub host_operator_mask: u64,
+    pub resolved_unknown_operator_mask: u64,
+    pub executed_device_operator_mask: u64,
+    pub executed_host_operator_mask: u64,
+    pub executed_unknown_operator_mask: u64,
     pub reduction_location: fullmag_fdm_operator_location_v1,
     pub control_location: fullmag_fdm_operator_location_v1,
     pub fallback_count: u64,
@@ -616,13 +620,21 @@ pub struct fullmag_fdm_execution_receipt_v1 {
 
 #[cfg(test)]
 mod execution_receipt_v1_layout_tests {
-    use super::fullmag_fdm_execution_receipt_v1;
+    use super::*;
 
     #[test]
     fn c_and_rust_receipt_layout_is_exact() {
         include!(concat!(
             env!("OUT_DIR"),
             "/execution_receipt_v1_layout_assertions.rs"
+        ));
+    }
+
+    #[test]
+    fn c_and_rust_receipt_values_are_exact() {
+        include!(concat!(
+            env!("OUT_DIR"),
+            "/execution_receipt_v1_value_assertions.rs"
         ));
     }
 }

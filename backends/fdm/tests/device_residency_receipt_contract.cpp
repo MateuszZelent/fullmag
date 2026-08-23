@@ -5,8 +5,11 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 
 #include "context.hpp"
 #include "fullmag_fdm.h"
@@ -31,6 +34,16 @@ std::filesystem::path repository_root() {
     auto path = std::filesystem::path(__FILE__);
     if (!path.is_absolute()) path = std::filesystem::absolute(path);
     return path.parent_path().parent_path().parent_path().parent_path();
+}
+
+std::size_t occurrences(const std::string &text, const std::string &needle) {
+    std::size_t count = 0;
+    for (std::size_t offset = 0;
+         (offset = text.find(needle, offset)) != std::string::npos;
+         offset += needle.size()) {
+        ++count;
+    }
+    return count;
 }
 }
 
@@ -69,7 +82,62 @@ int main() {
     const auto active_dispatch = read(root / "backends/fdm/api/c_api.cpp");
     check(active_dispatch.find("execute_reference_fdm") == std::string::npos,
           "active native dispatch contains no CPU reference fallback");
+    const std::map<std::string, std::pair<std::size_t, std::size_t>>
+        approved_host_transfer_inventory{
+            {"demag/newell_gpu_fp64.cu", {0, 6}},
+            {"runtime/context.cu", {44, 36}},
+            {"runtime/llg_checkpoint.cpp", {1, 1}},
+            {"runtime/reductions_fp64.cu", {0, 5}},
+            {"transport/charge/device_solver.cu", {0, 4}},
+            {"transport/context.cu", {5, 12}},
+            {"transport/spin/device_solver.cu", {5, 4}},
+            {"transport/spin/sparse_solver.cu", {0, 3}},
+        };
+    std::map<std::string, std::pair<std::size_t, std::size_t>> observed_inventory;
+    const auto cuda_root = root / "backends/fdm/gpu/cuda";
+    for (const auto &entry : std::filesystem::recursive_directory_iterator(cuda_root)) {
+        if (!entry.is_regular_file()) continue;
+        const auto extension = entry.path().extension().string();
+        if (extension != ".cu" && extension != ".cpp" && extension != ".hpp") continue;
+        const auto source = read(entry.path());
+        for (const auto *forbidden : {
+                 "cudaMemcpyDefault", "cudaMemcpy2D", "cudaMemcpy3D",
+                 "cudaMemcpyPeer", "cudaMemcpyToSymbol", "cudaMemcpyFromSymbol",
+                 "cuMemcpy(", "cuMemcpyHtoD", "cuMemcpyDtoH", "hipMemcpy",
+                 "thrust::copy"}) {
+            check(source.find(forbidden) == std::string::npos,
+                  "active graph contains no alternate unclassified host transfer wrapper");
+        }
+        const auto h2d = occurrences(source, "cudaMemcpyHostToDevice");
+        const auto d2h = occurrences(source, "cudaMemcpyDeviceToHost");
+        if (h2d != 0 || d2h != 0) {
+            observed_inventory.emplace(
+                entry.path().lexically_relative(cuda_root).generic_string(),
+                std::make_pair(h2d, d2h));
+        }
+    }
+    check(observed_inventory == approved_host_transfer_inventory,
+          "full active CUDA graph host-transfer inventory is exact and fail-closed");
+    check(active_dispatch.find(
+              "fullmag_fdm_accumulate_execution_receipt_audit(context_);") !=
+              std::string::npos,
+          "solver phase scope guard flushes receipt audit on every exit");
+    const auto runner_dispatch = read(root / "crates/fullmag-runner/src/dispatch.rs");
+    const auto runner_preview = read(root / "crates/fullmag-runner/src/interactive_runtime.rs");
+    check(runner_dispatch.find("finalize_after_outcome") != std::string::npos,
+          "batch runner finalizes receipt for success and error outcomes");
+    check(runner_preview.find("finalize_after_outcome") != std::string::npos,
+          "both preview runners finalize receipt for success and error outcomes");
     static_assert(FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1 == 1u);
+#define FULLMAG_FDM_EXECUTION_CLASS_VALUE(name, value) static_assert(name == value);
+#define FULLMAG_FDM_EXECUTED_BACKEND_VALUE(name, value) static_assert(name == value);
+#define FULLMAG_FDM_OPERATOR_LOCATION_VALUE(name, value) static_assert(name == value);
+#define FULLMAG_FDM_OPERATOR_MASK_VALUE(name, value) static_assert(name == value);
+#include "fullmag_fdm_execution_receipt_v1_values.def"
+#undef FULLMAG_FDM_OPERATOR_MASK_VALUE
+#undef FULLMAG_FDM_OPERATOR_LOCATION_VALUE
+#undef FULLMAG_FDM_EXECUTED_BACKEND_VALUE
+#undef FULLMAG_FDM_EXECUTION_CLASS_VALUE
     static_assert(offsetof(fullmag_fdm_execution_receipt_v1, abi_version) == 0u);
     static_assert(offsetof(fullmag_fdm_execution_receipt_v1, struct_size) == 4u);
 #define FULLMAG_FDM_EXECUTION_RECEIPT_FIELD(type, name, offset) \
@@ -107,6 +175,94 @@ int main() {
           "checked setup byte multiplication accepts a small vector");
     check(!fullmag::fdm::fullmag_fdm_checked_vector_bytes(UINT64_MAX, sizeof(double), bytes),
           "checked setup byte multiplication rejects overflow");
+
+    fullmag::fdm::ExecutionReceiptState family_state{};
+    fullmag::fdm::fullmag_fdm_require_operator(
+        family_state, FULLMAG_FDM_OPERATOR_GPU_TRANSPORT);
+    check(fullmag::fdm::fullmag_fdm_resolved_unknown_operator_mask(family_state) ==
+              FULLMAG_FDM_OPERATOR_GPU_TRANSPORT,
+          "required operator is explicitly resolved-unknown before realization");
+    fullmag::fdm::fullmag_fdm_resolve_operator_device(
+        family_state, FULLMAG_FDM_OPERATOR_GPU_TRANSPORT);
+    check(fullmag::fdm::fullmag_fdm_resolved_unknown_operator_mask(family_state) == 0 &&
+              fullmag::fdm::fullmag_fdm_executed_unknown_operator_mask(family_state) ==
+                  FULLMAG_FDM_OPERATOR_GPU_TRANSPORT,
+          "transport bind resolves device but does not claim execution");
+    fullmag::fdm::fullmag_fdm_commit_operator_device_execution(
+        family_state, FULLMAG_FDM_OPERATOR_GPU_TRANSPORT);
+    check(fullmag::fdm::fullmag_fdm_executed_unknown_operator_mask(family_state) == 0,
+          "transport success commits actual device execution");
+
+    auto shared_receipt = std::make_shared<fullmag::fdm::ExecutionReceiptState>();
+    fullmag::fdm::AsyncTransferReceiptToken pending_transfer(
+        shared_receipt, false, 24, fullmag::fdm::ReceiptTransferCadence::Observation);
+    check(pending_transfer.complete() && !pending_transfer.complete(),
+          "async transfer receipt commits exactly once");
+    check(shared_receipt->observation_full_vector_d2h_count == 1,
+          "completed async D2H is counted once");
+    fullmag::fdm::AsyncTransferReceiptToken unresolved_transfer(
+        shared_receipt, false, 24, fullmag::fdm::ReceiptTransferCadence::Observation);
+    check(unresolved_transfer.invalidate() && !unresolved_transfer.complete(),
+          "unresolved async transfer invalidates accounting exactly once");
+    check(!shared_receipt->accounting_valid &&
+              shared_receipt->observation_full_vector_d2h_count == 1,
+          "unresolved async transfer is not counted without completion proof");
+
+    auto telemetry = [](uint32_t direction, uint32_t reason, uint32_t flags) {
+        fullmag_fdm_gpu_transport_telemetry_v1 record{};
+        record.status = FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS;
+        record.direction = direction;
+        record.reason = reason;
+        record.event_flags = flags;
+        return record;
+    };
+    using Category = fullmag::fdm::TransportReceiptCategory;
+    check(fullmag::fdm::fullmag_fdm_classify_transport_telemetry(telemetry(
+              FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_H2D,
+              FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_STATIC_UPLOAD_H2D,
+              FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER)) == Category::SetupH2D,
+          "static upload is setup H2D");
+    check(fullmag::fdm::fullmag_fdm_classify_transport_telemetry(telemetry(
+              FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H,
+              FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SCALAR_REDUCTION_D2H,
+              FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER)) == Category::ScalarD2H,
+          "scalar reduction is not a full-vector hot-loop readback");
+    check(fullmag::fdm::fullmag_fdm_classify_transport_telemetry(telemetry(
+              FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H,
+              FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SCALAR_REDUCTION_D2H,
+              FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER |
+                  FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_CADENCE_AUTHORIZED)) ==
+              Category::ObservationD2H,
+          "cadence-authorized scalar checkpoint metadata is observation D2H");
+    for (const auto reason : {
+             FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_ARTIFACT_READBACK_D2H,
+             FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_CHECKPOINT_EXPORT_D2H}) {
+        check(fullmag::fdm::fullmag_fdm_classify_transport_telemetry(telemetry(
+                  FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H, reason,
+                  FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER |
+                      FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_CADENCE_AUTHORIZED)) ==
+                  Category::ObservationD2H,
+              "artifact/checkpoint export uses observation cadence");
+    }
+    check(fullmag::fdm::fullmag_fdm_classify_transport_telemetry(telemetry(
+              FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_H2D,
+              FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_CHECKPOINT_IMPORT_H2D,
+              FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER |
+                  FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_CADENCE_AUTHORIZED)) ==
+              Category::ObservationH2D,
+          "checkpoint import uses observation cadence");
+    check(fullmag::fdm::fullmag_fdm_classify_transport_telemetry(telemetry(
+              FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H,
+              FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_ARTIFACT_READBACK_D2H,
+              FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER)) == Category::Invalid,
+          "artifact readback without authorized cadence fails closed");
+    fullmag::fdm::ExecutionReceiptState sequence_state{};
+    check(fullmag::fdm::fullmag_fdm_accept_transport_telemetry_sequence(
+              sequence_state, 1),
+          "first telemetry sequence is accepted");
+    check(!fullmag::fdm::fullmag_fdm_accept_transport_telemetry_sequence(
+              sequence_state, 3) && !sequence_state.accounting_valid,
+          "transport telemetry sequence gap invalidates accounting");
 
     fullmag_fdm_execution_receipt_v1 receipt{};
     receipt.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1;
@@ -175,8 +331,9 @@ int main() {
           "created Context publishes execution receipt");
     check(receipt.execution_class == FULLMAG_FDM_EXECUTION_DEVICE_RESIDENT,
           "native context resolves device-resident execution");
-    check(receipt.executed_backend == FULLMAG_FDM_EXECUTED_CUDA_FDM,
-          "native context reports executed CUDA backend");
+    check(receipt.executed_backend == FULLMAG_FDM_EXECUTED_UNKNOWN &&
+              receipt.executed_unknown_operator_mask == receipt.required_operator_mask,
+          "native context does not claim execution before the first successful step");
     check(receipt.precision == FULLMAG_FDM_PRECISION_DOUBLE,
           "native receipt preserves executed precision");
     check((receipt.required_operator_mask & FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR) != 0,
@@ -194,6 +351,10 @@ int main() {
           "managed CUDA fixture executes one GPU step");
     check(fullmag_fdm_backend_execution_receipt_v1(handle, &receipt) == FULLMAG_FDM_OK,
           "final receipt is queryable");
+    check(receipt.executed_backend == FULLMAG_FDM_EXECUTED_CUDA_FDM &&
+              receipt.executed_device_operator_mask == receipt.required_operator_mask &&
+              receipt.executed_unknown_operator_mask == 0,
+          "successful step proves every required device operator family");
     check(receipt.hot_loop_full_vector_h2d_count == 0,
           "strict hot loop has zero full-vector H2D");
     check(receipt.hot_loop_full_vector_d2h_count == 0,
@@ -220,11 +381,24 @@ int main() {
             << "  \"executed\": \"cuda_fdm\",\n"
             << "  \"device_ordinal\": " << receipt.device_ordinal << ",\n"
             << "  \"precision\": \"double\",\n"
+            << "  \"integrator\": \"heun\",\n"
             << "  \"required_operator_mask\": "
             << receipt.required_operator_mask << ",\n"
-            << "  \"device_operator_mask\": "
+            << "  \"resolved_device_operator_mask\": "
             << receipt.device_operator_mask << ",\n"
+            << "  \"resolved_host_operator_mask\": "
+            << receipt.host_operator_mask << ",\n"
+            << "  \"resolved_unknown_operator_mask\": "
+            << receipt.resolved_unknown_operator_mask << ",\n"
+            << "  \"executed_device_operator_mask\": "
+            << receipt.executed_device_operator_mask << ",\n"
+            << "  \"executed_host_operator_mask\": "
+            << receipt.executed_host_operator_mask << ",\n"
+            << "  \"executed_unknown_operator_mask\": "
+            << receipt.executed_unknown_operator_mask << ",\n"
             << "  \"fallback_count\": " << receipt.fallback_count << ",\n"
+            << "  \"accounting_valid\": "
+            << (receipt.accounting_valid == 1 ? "true" : "false") << ",\n"
             << "  \"transfer_counts\": {\n"
             << "    \"setup_full_vector_h2d_count\": "
             << receipt.setup_full_vector_h2d_count << ",\n"
@@ -284,12 +458,53 @@ int main() {
               receipt.hot_loop_host_compute_count == 1,
           "receipt exposes injected host-compute violation");
     fullmag_fdm_backend_destroy(handle);
+
+    auto create_snapshot_fixture = [&]() {
+        fullmag_fdm_backend *snapshot_handle = nullptr;
+        check(fullmag_fdm_backend_create_time_policy_v2_checked(
+                  &plan, &snapshot_handle) == FULLMAG_FDM_OK &&
+                  snapshot_handle != nullptr,
+              "managed CUDA fixture creates an async snapshot context");
+        return snapshot_handle;
+    };
+    auto *resolved_handle = create_snapshot_fixture();
+    auto *resolved_context = reinterpret_cast<fullmag::fdm::Context *>(resolved_handle);
+    auto resolved_receipt = resolved_context->execution_receipt;
+    auto *resolved_snapshot = fullmag_fdm_backend_begin_field_snapshot(
+        resolved_handle, FULLMAG_FDM_OBSERVABLE_M);
+    check(resolved_snapshot != nullptr,
+          "async snapshot begins before backend destruction");
+    fullmag_fdm_backend_destroy(resolved_handle);
+    const void *resolved_data = nullptr;
+    uint64_t resolved_bytes = 0;
+    fullmag_fdm_snapshot_desc resolved_desc{};
+    check(fullmag_fdm_field_snapshot_wait(
+              resolved_snapshot, &resolved_data, &resolved_bytes,
+              &resolved_desc) == FULLMAG_FDM_OK,
+          "async snapshot resolves safely after backend destruction");
+    check(resolved_receipt->observation_full_vector_d2h_count == 1 &&
+              resolved_receipt->accounting_valid,
+          "post-destroy async completion is counted exactly once");
+    fullmag_fdm_field_snapshot_destroy(resolved_snapshot);
+
+    auto *dropped_handle = create_snapshot_fixture();
+    auto *dropped_context = reinterpret_cast<fullmag::fdm::Context *>(dropped_handle);
+    auto dropped_receipt = dropped_context->execution_receipt;
+    auto *dropped_snapshot = fullmag_fdm_backend_begin_field_snapshot(
+        dropped_handle, FULLMAG_FDM_OBSERVABLE_M);
+    check(dropped_snapshot != nullptr,
+          "unresolved async snapshot begins before backend destruction");
+    fullmag_fdm_backend_destroy(dropped_handle);
+    fullmag_fdm_field_snapshot_destroy(dropped_snapshot);
+    check(!dropped_receipt->accounting_valid &&
+              dropped_receipt->observation_full_vector_d2h_count == 0,
+          "post-destroy unresolved snapshot invalidates without false counting");
 #else
     fullmag::fdm::Context instrumented{};
     instrumented.precision = FULLMAG_FDM_PRECISION_DOUBLE;
     instrumented.integrator = FULLMAG_FDM_INTEGRATOR_HEUN;
     instrumented.enable_exchange = true;
-    instrumented.execution_receipt.device_ordinal = 3;
+    instrumented.execution_receipt->device_ordinal = 3;
     fullmag::fdm::fullmag_fdm_record_setup_full_vector_h2d(instrumented, 24);
     fullmag::fdm::fullmag_fdm_commit_operator_residency(instrumented);
     receipt = fullmag::fdm::fullmag_fdm_make_execution_receipt(instrumented);
@@ -320,11 +535,11 @@ int main() {
     check(receipt.observation_full_vector_d2h_count == 1 &&
               receipt.hot_loop_full_vector_d2h_count == 1,
           "observation D2H is measured without contaminating hot-loop D2H");
-    fullmag::fdm::fullmag_fdm_mark_unproven_operator_host(
-        instrumented, 1ull << 63);
+    fullmag::fdm::fullmag_fdm_mark_actual_operator_host(
+        instrumented, FULLMAG_FDM_OPERATOR_EXCHANGE);
     receipt = fullmag::fdm::fullmag_fdm_make_execution_receipt(instrumented);
     check(receipt.host_operator_mask != 0 && receipt.fallback_count == 1,
-          "unproven operator realization is host-marked and fail-closed");
+          "actual host execution increments fallback and fails closed");
 #endif
 
     std::puts("FDM GPU device residency receipt contract: PASS");

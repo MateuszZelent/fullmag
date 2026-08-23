@@ -705,7 +705,7 @@ static double finalize_sum_reduction(Context &ctx, double *device_values, uint64
     double result = 0.0;
     if (cudaMemcpy(&result, device_values, sizeof(double), cudaMemcpyDeviceToHost) ==
             cudaSuccess &&
-        ctx.execution_receipt.solver_phase_active) {
+        ctx.execution_receipt->solver_phase_active) {
         fullmag_fdm_record_control_scalar_d2h(ctx, sizeof(double));
         fullmag_fdm_record_control_scalar_host_sync(ctx);
     }
@@ -725,7 +725,7 @@ static double finalize_max_reduction(Context &ctx, double *device_values, uint64
     double result = 0.0;
     if (cudaMemcpy(&result, device_values, sizeof(double), cudaMemcpyDeviceToHost) ==
             cudaSuccess &&
-        ctx.execution_receipt.solver_phase_active) {
+        ctx.execution_receipt->solver_phase_active) {
         fullmag_fdm_record_control_scalar_d2h(ctx, sizeof(double));
         fullmag_fdm_record_control_scalar_host_sync(ctx);
     }

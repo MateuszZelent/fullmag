@@ -265,8 +265,13 @@ static void destroy_async_field_snapshot_pool_resources(AsyncFieldSnapshotPool &
 
 bool initialize_async_field_snapshot_pool(Context &ctx)
 {
-    AsyncFieldSnapshotPool &pool = ctx.async_field_snapshot_pool;
-    destroy_async_field_snapshot_pool_resources(pool);
+    ctx.async_field_snapshot_pool = std::shared_ptr<AsyncFieldSnapshotPool>(
+        new AsyncFieldSnapshotPool(),
+        [](AsyncFieldSnapshotPool *pool) {
+            destroy_async_field_snapshot_pool_resources(*pool);
+            delete pool;
+        });
+    AsyncFieldSnapshotPool &pool = *ctx.async_field_snapshot_pool;
     pool.cell_count = ctx.cell_count;
     pool.component_bytes = ctx.cell_count * scalar_size(ctx.precision);
     pool.host_soa_bytes = pool.component_bytes * 3u;
@@ -315,7 +320,7 @@ bool initialize_async_field_snapshot_pool(Context &ctx)
 
 void destroy_async_field_snapshot_pool(Context &ctx)
 {
-    destroy_async_field_snapshot_pool_resources(ctx.async_field_snapshot_pool);
+    ctx.async_field_snapshot_pool.reset();
 }
 
 bool acquire_async_field_snapshot_pool_slot(
@@ -323,7 +328,11 @@ bool acquire_async_field_snapshot_pool_slot(
     std::size_t &slot_index,
     std::string &error)
 {
-    AsyncFieldSnapshotPool &pool = ctx.async_field_snapshot_pool;
+    if (!ctx.async_field_snapshot_pool) {
+        error = "fdm_async_snapshot_pool_uninitialized";
+        return false;
+    }
+    AsyncFieldSnapshotPool &pool = *ctx.async_field_snapshot_pool;
     slot_index = kFdmAsyncFieldSnapshotPoolCapacity;
     if (!pool.initialized) {
         error = "fdm_async_snapshot_pool_uninitialized";
@@ -419,8 +428,13 @@ static void destroy_async_preview_snapshot_pool_resources(AsyncPreviewSnapshotPo
 
 bool initialize_async_preview_snapshot_pool(Context &ctx)
 {
-    AsyncPreviewSnapshotPool &pool = ctx.async_preview_snapshot_pool;
-    destroy_async_preview_snapshot_pool_resources(pool);
+    ctx.async_preview_snapshot_pool = std::shared_ptr<AsyncPreviewSnapshotPool>(
+        new AsyncPreviewSnapshotPool(),
+        [](AsyncPreviewSnapshotPool *pool) {
+            destroy_async_preview_snapshot_pool_resources(*pool);
+            delete pool;
+        });
+    AsyncPreviewSnapshotPool &pool = *ctx.async_preview_snapshot_pool;
     pool.max_preview_count = ctx.cell_count;
     pool.xyz_bytes = pool.max_preview_count * 3u * scalar_size(ctx.precision);
 
@@ -466,7 +480,7 @@ bool initialize_async_preview_snapshot_pool(Context &ctx)
 
 void destroy_async_preview_snapshot_pool(Context &ctx)
 {
-    destroy_async_preview_snapshot_pool_resources(ctx.async_preview_snapshot_pool);
+    ctx.async_preview_snapshot_pool.reset();
 }
 
 bool acquire_async_preview_snapshot_pool_slot(
@@ -475,7 +489,11 @@ bool acquire_async_preview_snapshot_pool_slot(
     std::size_t &slot_index,
     std::string &error)
 {
-    AsyncPreviewSnapshotPool &pool = ctx.async_preview_snapshot_pool;
+    if (!ctx.async_preview_snapshot_pool) {
+        error = "fdm_async_preview_snapshot_pool_uninitialized";
+        return false;
+    }
+    AsyncPreviewSnapshotPool &pool = *ctx.async_preview_snapshot_pool;
     slot_index = kFdmAsyncPreviewSnapshotPoolCapacity;
     if (!pool.initialized) {
         error = "fdm_async_preview_snapshot_pool_uninitialized";
@@ -1371,7 +1389,10 @@ static void free_preview_download_scratch(Context &ctx) {
 }
 
 static void destroy_async_snapshot_resources(AsyncFieldSnapshot &snapshot) {
-    if (snapshot.pool != nullptr) {
+    if (snapshot.receipt_token) {
+        (void)snapshot.receipt_token->invalidate();
+    }
+    if (snapshot.pool) {
         bool work_complete = !snapshot.needs_wait;
         if (snapshot.needs_wait && !snapshot.done_event_recorded) {
             // Setup can fail after the ready event has been recorded but before
@@ -1418,14 +1439,18 @@ static void destroy_async_snapshot_resources(AsyncFieldSnapshot &snapshot) {
     snapshot.ready_event = nullptr;
     snapshot.staging_done_event = nullptr;
     snapshot.done_event = nullptr;
-    snapshot.pool = nullptr;
+    snapshot.pool.reset();
+    snapshot.receipt_token.reset();
     snapshot.pool_slot = kFdmAsyncFieldSnapshotPoolCapacity;
     snapshot.needs_wait = false;
     snapshot.done_event_recorded = false;
 }
 
 static void destroy_async_preview_resources(AsyncPreviewSnapshot &snapshot) {
-    if (snapshot.pool != nullptr) {
+    if (snapshot.receipt_token) {
+        (void)snapshot.receipt_token->invalidate();
+    }
+    if (snapshot.pool) {
         bool work_complete = !snapshot.needs_wait;
         if (snapshot.needs_wait && !snapshot.done_event_recorded) {
             const cudaError_t ready_error = snapshot.ready_event
@@ -1460,7 +1485,8 @@ static void destroy_async_preview_resources(AsyncPreviewSnapshot &snapshot) {
             cudaFree(snapshot.device_xyz);
         }
     }
-    snapshot.pool = nullptr;
+    snapshot.pool.reset();
+    snapshot.receipt_token.reset();
     snapshot.pool_slot = kFdmAsyncPreviewSnapshotPoolCapacity;
     snapshot.done_event = nullptr;
     snapshot.staging_done_event = nullptr;
@@ -4031,7 +4057,6 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
         return nullptr;
     }
     snapshot->precision = ctx.precision;
-    snapshot->receipt_context = &ctx;
     snapshot->cell_count = ctx.cell_count;
     const bool scalar_observable = is_energy_density_observable(observable);
     snapshot->component_count = scalar_observable ? 1u : 3u;
@@ -4045,7 +4070,7 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
         delete snapshot;
         return nullptr;
     }
-    snapshot->pool = &ctx.async_field_snapshot_pool;
+    snapshot->pool = ctx.async_field_snapshot_pool;
     snapshot->pool_slot = pool_slot;
     const auto &slot = snapshot->pool->slots[pool_slot];
     snapshot->staging = slot.staging;
@@ -4296,6 +4321,11 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
     err = cudaEventRecord(done_event, io_stream);
     if (err != cudaSuccess) return fail("cudaEventRecord(snapshot.done_event)", err);
     snapshot->done_event_recorded = true;
+    snapshot->receipt_token = std::make_shared<AsyncTransferReceiptToken>(
+        ctx.execution_receipt,
+        false,
+        snapshot->host_soa_len_bytes,
+        ReceiptTransferCadence::Observation);
 
     return snapshot;
 }
@@ -4334,14 +4364,8 @@ bool context_wait_async_field_snapshot(
         snapshot.precision == FULLMAG_FDM_PRECISION_SINGLE
             ? FULLMAG_FDM_SNAPSHOT_SCALAR_F32
             : FULLMAG_FDM_SNAPSHOT_SCALAR_F64;
-    if (completed_device_to_host && !snapshot.receipt_counted &&
-        snapshot.component_count == 3 &&
-        snapshot.receipt_context != nullptr) {
-        fullmag_fdm_record_cuda_transfer_success(
-            *snapshot.receipt_context,
-            false,
-            snapshot.host_soa_len_bytes);
-        snapshot.receipt_counted = true;
+    if (completed_device_to_host && snapshot.receipt_token) {
+        (void)snapshot.receipt_token->complete();
     }
     return true;
 }
@@ -4374,7 +4398,6 @@ AsyncPreviewSnapshot *context_begin_async_preview_snapshot(
         return nullptr;
     }
     snapshot->precision = ctx.precision;
-    snapshot->receipt_context = &ctx;
     snapshot->preview_count = static_cast<uint64_t>(preview_nx) * preview_ny * preview_nz;
     snapshot->host_xyz_len_bytes = snapshot->preview_count * 3u * scalar_size(ctx.precision);
 
@@ -4389,7 +4412,7 @@ AsyncPreviewSnapshot *context_begin_async_preview_snapshot(
         delete snapshot;
         return nullptr;
     }
-    snapshot->pool = &ctx.async_preview_snapshot_pool;
+    snapshot->pool = ctx.async_preview_snapshot_pool;
     snapshot->pool_slot = pool_slot;
     const auto &slot = snapshot->pool->slots[pool_slot];
     snapshot->device_xyz = slot.device_xyz;
@@ -4672,6 +4695,11 @@ AsyncPreviewSnapshot *context_begin_async_preview_snapshot(
     err = cudaEventRecord(done_event, io_stream);
     if (err != cudaSuccess) return fail("cudaEventRecord(preview_snapshot.done_event)", err);
     snapshot->done_event_recorded = true;
+    snapshot->receipt_token = std::make_shared<AsyncTransferReceiptToken>(
+        ctx.execution_receipt,
+        false,
+        snapshot->host_xyz_len_bytes,
+        ReceiptTransferCadence::Observation);
 
     return snapshot;
 }
@@ -4710,13 +4738,8 @@ bool context_wait_async_preview_snapshot(
         snapshot.precision == FULLMAG_FDM_PRECISION_SINGLE
             ? FULLMAG_FDM_SNAPSHOT_SCALAR_F32
             : FULLMAG_FDM_SNAPSHOT_SCALAR_F64;
-    if (completed_device_to_host && !snapshot.receipt_counted &&
-        snapshot.receipt_context != nullptr) {
-        fullmag_fdm_record_cuda_transfer_success(
-            *snapshot.receipt_context,
-            false,
-            snapshot.host_xyz_len_bytes);
-        snapshot.receipt_counted = true;
+    if (completed_device_to_host && snapshot.receipt_token) {
+        (void)snapshot.receipt_token->complete();
     }
     return true;
 }
