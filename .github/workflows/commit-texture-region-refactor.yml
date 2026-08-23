@@ -46,8 +46,6 @@ jobs:
           python - <<'PY'
           import base64
           import hashlib
-          import json
-          import re
           import zlib
           from pathlib import Path
 
@@ -230,20 +228,15 @@ jobs:
           rm -rf .github/fullmag-texture-region-refactor
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add \
-            crates/fullmag-plan/src/lib.rs \
-            crates/fullmag-plan/src/region_textures.rs \
-            crates/fullmag-plan/src/magnetization_textures_v2.rs \
-            crates/fullmag-plan/src/mesh.rs \
-            crates/fullmag-plan/src/fdm.rs \
-            crates/fullmag-plan/src/fem.rs \
-            crates/fullmag-plan/src/tests.rs \
-            crates/fullmag-plan/src/validate.rs \
-            crates/fullmag-plan/tests/magnetization_textures_v2_contract.rs \
-            public_docs/site/python-api/magnets-and-textures/preset-textures.md \
-            public_docs/site/python-api/magnets-and-textures/preset-textures.source-map.json
-          git add -A .github/fullmag-texture-region-refactor
+          git add -A
+          git reset -- \
+            .github/workflows/apply-texture-transform-region-clipping.yml \
+            .github/workflows/inspect-texture-region-pipeline.yml \
+            .github/workflows/patch-texture-refactor-workflow.yml \
+            .github/workflows/export-texture-region-refactor.yml \
+            .github/workflows/commit-texture-region-refactor.yml
           git diff --cached --check
+          git diff --cached --name-status
           git commit \
             -m 'fix: unify texture transforms and clip regional textures' \
             -m 'Prepare texture transforms once for FDM and FEM, scope FDM overrides to their owning object in single-grid and multilayer plans, materialize FEM region textures on winning nodal masks, and enforce strict clipping at region boundaries.'
