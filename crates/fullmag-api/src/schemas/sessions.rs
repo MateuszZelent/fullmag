@@ -40,6 +40,20 @@ pub struct CreateSessionRequest {
     pub replace_current: bool,
 }
 
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SessionSummaryResource {
+    pub session_id: String,
+    pub name: String,
+    pub status: String,
+    pub current: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SessionListResource {
+    pub schema_version: String,
+    pub sessions: Vec<SessionSummaryResource>,
+}
+
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct SessionExecutionResource {
     #[schema(value_type = ScratchSessionBackend)]

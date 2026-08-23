@@ -45413,3 +45413,30 @@ async fn frozen_spins_preview_rejects_an_unknown_stage_context() {
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body_json(response).await["code"], "selection_unknown_stage");
 }
+
+#[test]
+fn openapi_session_collection_declares_typed_response() {
+    let openapi = crate::openapi_v2::openapi_json();
+    let get = &openapi["paths"]["/v2/sessions"]["get"];
+
+    assert_eq!(
+        get["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/SessionListResource"
+    );
+    assert!(openapi["components"]["schemas"]
+        .get("SessionListResource")
+        .is_some());
+    assert!(openapi["components"]["schemas"]
+        .get("SessionSummaryResource")
+        .is_some());
+}
+
+#[tokio::test]
+async fn session_collection_handler_returns_a_typed_confirmed_empty_resource() {
+    let state = test_app_state();
+    let axum::Json(resource): axum::Json<crate::schemas::sessions::SessionListResource> =
+        super::list_sessions(axum::extract::State(state)).await;
+
+    assert_eq!(resource.schema_version, "2.0.0");
+    assert!(resource.sessions.is_empty());
+}

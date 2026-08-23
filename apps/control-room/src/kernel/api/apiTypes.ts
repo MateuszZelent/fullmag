@@ -5,15 +5,7 @@ type JsonPrimitive = boolean | null | number | string;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
 export type JsonObject = { [key: string]: JsonValue };
 
-export interface SessionCollectionResource {
-  readonly schema_version: string;
-  readonly sessions: readonly {
-    readonly current: boolean;
-    readonly name: string;
-    readonly session_id: string;
-    readonly status: string;
-  }[];
-}
+export type SessionListResource = components["schemas"]["SessionListResource"];
 
 export type ObjectInteractionKind =
   | "exchange"

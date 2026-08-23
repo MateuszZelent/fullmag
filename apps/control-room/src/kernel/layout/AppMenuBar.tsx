@@ -358,10 +358,18 @@ function appMenuDialogReducer(
 export function AppMenuBar() {
   const sessions = useSessionCollection();
 
-  return sessions.state === "ready" ? <SessionAppMenuBar /> : <NoSessionAppMenuBar />;
+  return sessions.state === "ready" ? (
+    <SessionAppMenuBar />
+  ) : (
+    <NoSessionAppMenuBar state={sessions.state} />
+  );
 }
 
-function NoSessionAppMenuBar() {
+function NoSessionAppMenuBar({
+  state,
+}: {
+  readonly state: "error" | "loading" | "no-session";
+}) {
   const kernel = useKernel();
   const { theme, setTheme } = useTheme();
   const [newProblemOpen, setNewProblemOpen] = useState(false);
@@ -380,6 +388,9 @@ function NoSessionAppMenuBar() {
     }
   };
   const isCommandDisabled = (commandId: string) => {
+    if (commandId === "workspace.new-problem" && state !== "no-session") {
+      return true;
+    }
     const command = kernel.commands.get(commandId);
     return command ? !kernel.commands.isEnabled(commandId, commandContext) : false;
   };
@@ -390,7 +401,13 @@ function NoSessionAppMenuBar() {
         <FullmagMark size={20} className="fm-header__logo" />
         <div className="fm-header__brand-copy">
           <span className="fm-header__title">Fullmag</span>
-          <span className="fm-header__subtitle">No active session</span>
+          <span className="fm-header__subtitle">
+            {state === "no-session"
+              ? "No active session"
+              : state === "loading"
+                ? "Checking sessions"
+                : "Session list unavailable"}
+          </span>
         </div>
       </div>
       <nav className="fm-header__nav" aria-label="Main menu">
@@ -409,7 +426,7 @@ function NoSessionAppMenuBar() {
       </div>
       <NewProblemDialog
         hasActiveSession={false}
-        open={newProblemOpen}
+        open={state === "no-session" && newProblemOpen}
         onOpenChange={setNewProblemOpen}
       />
     </header>

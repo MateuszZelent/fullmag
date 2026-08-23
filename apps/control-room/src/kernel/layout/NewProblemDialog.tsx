@@ -2,9 +2,15 @@
 
 import { useState, type ReactNode } from "react";
 
-import { MODEL_SCENE_PATH, SESSIONS_PATH, SESSION_STATUS_PATH } from "../api/apiPaths";
+import {
+  MODEL_SCENE_PATH,
+  SESSIONS_PATH,
+  SESSION_CURRENT_PATH,
+} from "../api/apiPaths";
 import { useKernel } from "../KernelContext";
+import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
+import { Checkbox } from "@/shared/ui/Checkbox";
 import {
   Dialog,
   DialogClose,
@@ -14,6 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/Dialog";
+import { Input } from "@/shared/ui/Input";
 import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 
 type Backend = "fdm" | "fem";
@@ -45,9 +52,10 @@ export function NewProblemDialog({
         precision: "double",
         replace_current: hasActiveSession,
       });
-      const revision = response.revisions.state_version || 1;
+      const revision = response.revisions.state_version;
       kernel.resources.invalidate(SESSIONS_PATH, revision);
-      kernel.resources.invalidate(SESSION_STATUS_PATH, revision);
+      kernel.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
+      kernel.resources.invalidatePrefix(SESSION_CURRENT_PATH, revision);
       kernel.resources.invalidate(MODEL_SCENE_PATH, revision);
       onOpenChange(false);
     } catch (cause) {
@@ -69,7 +77,7 @@ export function NewProblemDialog({
         <div className="grid gap-4">
           <label className="grid gap-1.5 font-fm-ui text-fm-control text-fm-secondary" htmlFor="fm-new-problem-name">
             Name
-            <input className="fm-inspector-input" disabled={pending} id="fm-new-problem-name" value={name} onChange={(event) => setName(event.target.value)} />
+            <Input disabled={pending} id="fm-new-problem-name" value={name} onChange={(event) => setName(event.target.value)} />
           </label>
           <Selection label="Discretization">
             <SegmentedControl aria-label="Discretization" disabled={pending} options={[{ label: "FDM", value: "fdm" }, { label: "FEM", value: "fem" }]} value={backend} onValueChange={setBackend} />
@@ -82,7 +90,7 @@ export function NewProblemDialog({
           </Selection>
           {hasActiveSession ? (
             <label className="flex items-start gap-2 text-fm-control text-fm-secondary">
-              <input checked={replaceConfirmed} disabled={pending} type="checkbox" onChange={(event) => setReplaceConfirmed(event.target.checked)} />
+              <Checkbox checked={replaceConfirmed} disabled={pending} onChange={(event) => setReplaceConfirmed(event.target.checked)} />
               Replace the active session. Its unsaved workspace state will be lost.
             </label>
           ) : null}

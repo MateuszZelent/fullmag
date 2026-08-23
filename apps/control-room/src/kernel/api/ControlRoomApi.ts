@@ -389,7 +389,7 @@ import type {
   SessionAssetImportResponse,
   SessionExportRequest,
   SessionExportResponse,
-  SessionCollectionResource,
+  SessionListResource,
   SessionImportCommitRequest,
   SessionImportCommitResponse,
   SessionImportInspectRequest,
@@ -730,7 +730,7 @@ export class ControlRoomApi {
 
   readonly sessions = {
     list: (options?: RequestOptions) =>
-      this.requestJson<SessionCollectionResource>(SESSIONS_PATH, options),
+      this.requestJson<SessionListResource>(SESSIONS_PATH, options),
     create: (input: CreateSessionRequest, options?: RequestOptions) =>
       this.postJson<CreateSessionResponse, CreateSessionRequest>(
         SESSIONS_PATH,

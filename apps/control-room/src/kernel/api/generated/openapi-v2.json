@@ -23881,6 +23881,24 @@
         ],
         "type": "object"
       },
+      "SessionListResource": {
+        "properties": {
+          "schema_version": {
+            "type": "string"
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/SessionSummaryResource"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "sessions"
+        ],
+        "type": "object"
+      },
       "SessionResourceLifecycle": {
         "enum": [
           "active",
@@ -23913,6 +23931,29 @@
           "name",
           "created_at",
           "workspace_root"
+        ],
+        "type": "object"
+      },
+      "SessionSummaryResource": {
+        "properties": {
+          "current": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "name",
+          "status",
+          "current"
         ],
         "type": "object"
       },
@@ -30944,6 +30985,13 @@
         "operationId": "sessions_get_sessions",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionListResource"
+                }
+              }
+            },
             "description": "Available sessions"
           }
         },
@@ -45142,8 +45190,8 @@
     }
   ],
   "x-fullmag-build-identity": {
-    "built_at_utc": "2026-08-23T12:49:03Z",
-    "git_commit": "b7588f8a640407b22e855a096bd1790274843d61",
+    "built_at_utc": "2026-08-23T13:36:18Z",
+    "git_commit": "1d16fdecfdd1df62971af234acd329802dfb8e32",
     "source_snapshot_sha256": "unknown",
     "worktree_state": "dirty"
   },

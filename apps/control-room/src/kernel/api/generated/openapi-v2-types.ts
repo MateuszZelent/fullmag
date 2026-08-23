@@ -9529,6 +9529,10 @@ export interface components {
             session_resource: components["schemas"]["SessionResourceLifecycle"];
             solver: string;
         };
+        SessionListResource: {
+            schema_version: string;
+            sessions: components["schemas"]["SessionSummaryResource"][];
+        };
         /** @enum {string} */
         SessionResourceLifecycle: "active" | "tombstoned";
         SessionSummary: {
@@ -9538,6 +9542,12 @@ export interface components {
             session_epoch: string;
             session_id: string;
             workspace_root: string;
+        };
+        SessionSummaryResource: {
+            current: boolean;
+            name: string;
+            session_id: string;
+            status: string;
         };
         SimulationPreparationResource: {
             active_stage_id?: null | components["schemas"]["PreparationStageId"];
@@ -11395,7 +11405,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["SessionListResource"];
+                };
             };
         };
     };

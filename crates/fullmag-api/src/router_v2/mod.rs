@@ -996,23 +996,25 @@ async fn get_openapi_json() -> Json<Value> {
     Json(crate::openapi_v2::openapi_json())
 }
 
-async fn list_sessions(State(state): State<Arc<AppState>>) -> Json<Value> {
+async fn list_sessions(
+    State(state): State<Arc<AppState>>,
+) -> Json<crate::schemas::sessions::SessionListResource> {
     let guard = state.current_live_state.read().await;
     let sessions = guard
         .as_ref()
         .map(|snapshot| {
-            vec![json!({
-                "session_id": snapshot.session.session_id,
-                "name": snapshot.session.problem_name,
-                "status": snapshot.session.status,
-                "current": true,
-            })]
+            vec![crate::schemas::sessions::SessionSummaryResource {
+                session_id: snapshot.session.session_id.clone(),
+                name: snapshot.session.problem_name.clone(),
+                status: snapshot.session.status.clone(),
+                current: true,
+            }]
         })
         .unwrap_or_default();
-    Json(json!({
-        "schema_version": "2.0.0",
-        "sessions": sessions,
-    }))
+    Json(crate::schemas::sessions::SessionListResource {
+        schema_version: "2.0.0".to_string(),
+        sessions,
+    })
 }
 
 async fn get_current_session(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {

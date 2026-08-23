@@ -279,6 +279,8 @@ use utoipa::OpenApi;
     components(schemas(
         crate::schemas::sessions::CreateSessionRequest,
         crate::schemas::sessions::CreateSessionResponse,
+        crate::schemas::sessions::SessionListResource,
+        crate::schemas::sessions::SessionSummaryResource,
         crate::schemas::sessions::ScratchSceneSchemaVersion,
         crate::schemas::sessions::ScratchSceneDocumentResource,
         crate::schemas::sessions::ScratchSessionBackend,
@@ -860,7 +862,16 @@ fn add_session_collection_paths(doc: &mut Value) {
             "get": {
                 "tags": ["sessions"],
                 "operationId": "sessions_list_sessions",
-                "responses": {"200": {"description": "Available sessions"}}
+                "responses": {
+                    "200": {
+                        "description": "Available sessions",
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/SessionListResource"}
+                            }
+                        }
+                    }
+                }
             },
             "post": {
                 "tags": ["sessions"],
