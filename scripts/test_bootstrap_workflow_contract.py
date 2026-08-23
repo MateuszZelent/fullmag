@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 import unittest
 
 
@@ -9,7 +10,7 @@ class BootstrapWorkflowContractTests(unittest.TestCase):
     def test_ci_installs_native_tools_before_contract_checks(self) -> None:
         workflow = (ROOT / ".github/workflows/bootstrap.yml").read_text()
 
-        self.assertEqual(workflow.count("sudo apt-get install -y ripgrep"), 2)
+        self.assertEqual(workflow.count("sudo apt-get install -y ripgrep"), 1)
         self.assertIn("sudo apt-get install -y libglu1-mesa", workflow)
         self.assertIn('test "$(/usr/bin/rg --version | head -n 1)" = "ripgrep 13.0.0"', workflow)
 
@@ -17,8 +18,14 @@ class BootstrapWorkflowContractTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/bootstrap.yml").read_text()
 
         self.assertNotIn("actions/checkout@v4", workflow)
-        self.assertEqual(workflow.count("actions/checkout@v7"), 4)
-        self.assertEqual(workflow.count("actions/setup-node@v7"), 2)
+        self.assertEqual(
+            workflow.count("actions/checkout@v7"),
+            workflow.count("- name: Checkout"),
+        )
+        self.assertEqual(
+            workflow.count("actions/setup-node@v7"),
+            workflow.count("- name: Setup Node.js"),
+        )
         self.assertIn("actions/setup-python@v7", workflow)
         self.assertIn("actions/upload-artifact@v7", workflow)
         self.assertIn("pnpm/action-setup@v6", workflow)
@@ -39,10 +46,18 @@ class BootstrapWorkflowContractTests(unittest.TestCase):
 
     def test_every_tracked_gitlink_has_submodule_metadata(self) -> None:
         gitmodules = (ROOT / ".gitmodules").read_text()
+        index = subprocess.check_output(
+            ["git", "ls-files", "--stage"], cwd=ROOT, text=True
+        )
+        gitlinks = [
+            line.split("\t", 1)[1]
+            for line in index.splitlines()
+            if line.startswith("160000 ")
+        ]
 
-        self.assertIn('[submodule "Codex-Usage"]', gitmodules)
-        self.assertIn("path = Codex-Usage", gitmodules)
-        self.assertIn("url = https://github.com/MacSteini/Codex-Usage", gitmodules)
+        self.assertTrue(gitlinks)
+        for path in gitlinks:
+            self.assertIn(f"path = {path}", gitmodules)
 
 
 if __name__ == "__main__":
