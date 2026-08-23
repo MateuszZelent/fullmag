@@ -1400,6 +1400,14 @@
       },
       "CheckpointCreateRequest": {
         "properties": {
+          "expected_state_version": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "profile": {
             "$ref": "#/components/schemas/SaveProfile"
           },
@@ -1548,6 +1556,14 @@
       },
       "CheckpointRestoreRequest": {
         "properties": {
+          "expected_state_version": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "reason": {
             "type": [
               "string",
@@ -2617,6 +2633,55 @@
           "memory_total_mb",
           "process_rss_mb",
           "process_threads"
+        ],
+        "type": "object"
+      },
+      "CreateSessionRequest": {
+        "properties": {
+          "backend": {
+            "type": "string"
+          },
+          "device": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "precision": {
+            "type": "string"
+          },
+          "replace_current": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "backend",
+          "device",
+          "precision"
+        ],
+        "type": "object"
+      },
+      "CreateSessionResponse": {
+        "properties": {
+          "revisions": {
+            "$ref": "#/components/schemas/ScratchSessionRevisionsResource"
+          },
+          "scene_document": {
+            "$ref": "#/components/schemas/ScratchSceneDocumentResource"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ScratchSessionStatusResource"
+          }
+        },
+        "required": [
+          "session_id",
+          "status",
+          "scene_document",
+          "revisions"
         ],
         "type": "object"
       },
@@ -22460,6 +22525,88 @@
         ],
         "type": "string"
       },
+      "ScratchSceneDocumentResource": {
+        "properties": {
+          "objects": {
+            "items": {
+              "$ref": "#/components/schemas/SceneObjectResource"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "scene": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneMetadataResource"
+              }
+            ]
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "schema_version",
+          "objects"
+        ],
+        "type": "object"
+      },
+      "ScratchSessionRevisionsResource": {
+        "properties": {
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state_version": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "state_version",
+          "scene_revision"
+        ],
+        "type": "object"
+      },
+      "ScratchSessionStatusResource": {
+        "properties": {
+          "effective_execution": {
+            "$ref": "#/components/schemas/SessionExecutionResource"
+          },
+          "fallback": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requested_execution": {
+            "$ref": "#/components/schemas/SessionExecutionResource"
+          }
+        },
+        "required": [
+          "requested_execution",
+          "effective_execution"
+        ],
+        "type": "object"
+      },
       "ScriptSourceResponse": {
         "properties": {
           "bytes": {
@@ -23472,6 +23619,25 @@
           "disconnected"
         ],
         "type": "string"
+      },
+      "SessionExecutionResource": {
+        "properties": {
+          "backend": {
+            "type": "string"
+          },
+          "device": {
+            "type": "string"
+          },
+          "precision": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "backend",
+          "device",
+          "precision"
+        ],
+        "type": "object"
       },
       "SessionExportRequest": {
         "properties": {
@@ -30761,12 +30927,32 @@
       },
       "post": {
         "operationId": "sessions_post_sessions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
-          "200": {
-            "description": "Current session returned"
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateSessionResponse"
+                }
+              }
+            },
+            "description": "Scratch session created"
           },
           "400": {
-            "description": "The local runtime only exposes the current session"
+            "description": "Invalid scratch session request"
+          },
+          "409": {
+            "description": "An active local session already exists"
           }
         },
         "tags": [
@@ -44930,8 +45116,8 @@
     }
   ],
   "x-fullmag-build-identity": {
-    "built_at_utc": "2026-08-20T23:03:53Z",
-    "git_commit": "f79c65d43ef2ac550f89932b47940489f719acb0",
+    "built_at_utc": "2026-08-23T12:20:07Z",
+    "git_commit": "1e7805a0855256f9e08180733bf0be9047a20fae",
     "source_snapshot_sha256": "unknown",
     "worktree_state": "dirty"
   },

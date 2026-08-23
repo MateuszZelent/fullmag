@@ -164,6 +164,7 @@ import {
   PERSISTENCE_IMPORTS_PATH,
   PLATFORM_CAPABILITIES_PATH,
   PLATFORM_HEALTH_PATH,
+  SESSIONS_PATH,
   SESSION_EVENTS_COMMUNICATION_POLICY_PATH,
   SESSION_STATUS_PATH,
   SIMULATION_COMMAND_DETAIL_PATH,
@@ -409,6 +410,9 @@ import type {
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "./apiTypes";
+
+type CreateSessionRequest = components["schemas"]["CreateSessionRequest"];
+type CreateSessionResponse = components["schemas"]["CreateSessionResponse"];
 
 function optionalIntegerHeader(headers: Headers, name: string): number | null {
   const raw = headers.get(name);
@@ -724,6 +728,12 @@ export class ControlRoomApi {
   private readonly fieldMaterializationRequests = new Map<string, Promise<void>>();
 
   readonly sessions = {
+    create: (input: CreateSessionRequest, options?: RequestOptions) =>
+      this.postJson<CreateSessionResponse, CreateSessionRequest>(
+        SESSIONS_PATH,
+        input,
+        options,
+      ),
     current: {
       status: (options?: RequestOptions) =>
         this.requestJson<LiveStatusResource>(SESSION_STATUS_PATH, options),

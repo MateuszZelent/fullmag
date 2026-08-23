@@ -21,7 +21,7 @@ import type {
   LiveStatusResource,
   SimulationPreparationResource,
 } from "./apiTypes";
-import { SIMULATION_PREPARATION_PATH } from "./apiPaths";
+import { SESSIONS_PATH, SIMULATION_PREPARATION_PATH } from "./apiPaths";
 import type { DecodedFieldVector } from "./codecs";
 import { RequestDiagnosticsController } from "./RequestDiagnosticsController";
 import { activeLaneCapabilityFixture } from "../resources/activeLaneCapabilityFixture.testSupport";
@@ -891,6 +891,62 @@ describe("ControlRoomApi", () => {
     expect(observedInit?.method).toBe("GET");
     expect(headers.get("x-request-id")).toBe("req-1");
     expect(headers.get("x-fullmag-contract-version")).toBeNull();
+  });
+
+  it("creates a scratch session through the typed sessions facade", async () => {
+    let observedInit: RequestInit | undefined;
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        observedUrl = String(url);
+        observedInit = init;
+        return jsonResponse(
+          {
+            session_id: "session-scratch",
+            status: {
+              requested_execution: {
+                backend: "fem",
+                device: "cpu",
+                precision: "double",
+              },
+              effective_execution: {
+                backend: "fem",
+                device: "cpu",
+                precision: "double",
+              },
+              fallback: null,
+            },
+            scene_document: {
+              schema_version: "0.3",
+              version: "scene.v2",
+              revision: 0,
+              scene: null,
+              objects: [],
+            },
+            revisions: { scene_revision: 0, state_version: 1 },
+          },
+          { status: 201 },
+        );
+      },
+    });
+
+    const created = await api.sessions.create({
+      name: "Scratch FEM",
+      backend: "fem",
+      device: "cpu",
+      precision: "double",
+    });
+
+    expect(created.session_id).toBe("session-scratch");
+    expect(observedUrl).toBe(`http://127.0.0.1:8765${SESSIONS_PATH}`);
+    expect(observedInit?.method).toBe("POST");
+    expect(parseRequestJsonBody(observedInit?.body)).toMatchObject({
+      backend: "fem",
+      device: "cpu",
+      name: "Scratch FEM",
+      precision: "double",
+    });
   });
 
   it("loads magnetic response sweep artifacts through the analysis facade", async () => {

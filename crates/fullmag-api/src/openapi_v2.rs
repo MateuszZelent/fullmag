@@ -11,6 +11,7 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::platform::realtime::get_communication_policy,
         crate::router_v2::handlers::platform::realtime::patch_communication_policy,
         crate::router_v2::handlers::platform::realtime::ws_current_live,
+        crate::router_v2::handlers::sessions::create,
         crate::router_v2::handlers::sessions::status::get_status,
         crate::router_v2::handlers::data::domain::get_domain_meta,
         crate::router_v2::handlers::data::domain::get_fdm_multilayer_layout,
@@ -276,6 +277,12 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::platform::system::get_health,
     ),
     components(schemas(
+        crate::schemas::sessions::CreateSessionRequest,
+        crate::schemas::sessions::CreateSessionResponse,
+        crate::schemas::sessions::ScratchSceneDocumentResource,
+        crate::schemas::sessions::ScratchSessionRevisionsResource,
+        crate::schemas::sessions::ScratchSessionStatusResource,
+        crate::schemas::sessions::SessionExecutionResource,
         crate::schemas::status::LiveStatus,
         crate::schemas::status::SessionSummary,
         crate::schemas::status::RunSummary,
@@ -854,9 +861,25 @@ fn add_session_collection_paths(doc: &mut Value) {
             "post": {
                 "tags": ["sessions"],
                 "operationId": "sessions_create_session",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {"$ref": "#/components/schemas/CreateSessionRequest"}
+                        }
+                    }
+                },
                 "responses": {
-                    "200": {"description": "Current session returned"},
-                    "400": {"description": "The local runtime only exposes the current session"}
+                    "201": {
+                        "description": "Scratch session created",
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/CreateSessionResponse"}
+                            }
+                        }
+                    },
+                    "400": {"description": "Invalid scratch session request"},
+                    "409": {"description": "An active local session already exists"}
                 }
             }
         }),

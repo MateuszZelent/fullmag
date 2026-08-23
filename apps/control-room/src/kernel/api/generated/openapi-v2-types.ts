@@ -3913,6 +3913,8 @@ export interface components {
             transport_authoring?: null | components["schemas"]["TransportAuthoringCapabilityMap"];
         };
         CheckpointCreateRequest: {
+            /** Format: int64 */
+            expected_state_version?: number | null;
             profile?: components["schemas"]["SaveProfile"];
             reason?: string | null;
         };
@@ -3951,6 +3953,8 @@ export interface components {
             checkpoints: components["schemas"]["CheckpointEntry"][];
         };
         CheckpointRestoreRequest: {
+            /** Format: int64 */
+            expected_state_version?: number | null;
             reason?: string | null;
         };
         CheckpointRestoreResponse: {
@@ -4194,6 +4198,19 @@ export interface components {
             status: string;
             /** Format: double */
             utilization_cpu_percent: number;
+        };
+        CreateSessionRequest: {
+            backend: string;
+            device: string;
+            name: string;
+            precision: string;
+            replace_current?: boolean;
+        };
+        CreateSessionResponse: {
+            revisions: components["schemas"]["ScratchSessionRevisionsResource"];
+            scene_document: components["schemas"]["ScratchSceneDocumentResource"];
+            session_id: string;
+            status: components["schemas"]["ScratchSessionStatusResource"];
         };
         /** @enum {string} */
         CrossSectionImageColorScale: "jet" | "viridis" | "hot" | "coolwarm" | "plasma" | "inferno";
@@ -9188,6 +9205,25 @@ export interface components {
         SceneTransportExecutionMode: "strict" | "extended";
         /** @enum {string} */
         SceneTransportPrecision: "single" | "double";
+        ScratchSceneDocumentResource: {
+            objects: components["schemas"]["SceneObjectResource"][];
+            /** Format: int64 */
+            revision?: number | null;
+            scene?: null | components["schemas"]["SceneMetadataResource"];
+            schema_version: string;
+            version?: string | null;
+        };
+        ScratchSessionRevisionsResource: {
+            /** Format: int64 */
+            scene_revision: number;
+            /** Format: int64 */
+            state_version: number;
+        };
+        ScratchSessionStatusResource: {
+            effective_execution: components["schemas"]["SessionExecutionResource"];
+            fallback?: string | null;
+            requested_execution: components["schemas"]["SessionExecutionResource"];
+        };
         ScriptSourceResponse: {
             bytes: number;
             script_path: string;
@@ -9421,6 +9457,11 @@ export interface components {
         SessionCommandability: "allowed" | "forbidden" | "read_only";
         /** @enum {string} */
         SessionConnectivity: "connected" | "degraded" | "disconnected";
+        SessionExecutionResource: {
+            backend: string;
+            device: string;
+            precision: string;
+        };
         SessionExportRequest: {
             compression?: null | components["schemas"]["CompressionProfile"];
             /** @description Optional session name override. */
@@ -11357,17 +11398,30 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateSessionRequest"];
+            };
+        };
         responses: {
-            /** @description Current session returned */
-            200: {
+            /** @description Scratch session created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateSessionResponse"];
+                };
+            };
+            /** @description Invalid scratch session request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description The local runtime only exposes the current session */
-            400: {
+            /** @description An active local session already exists */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

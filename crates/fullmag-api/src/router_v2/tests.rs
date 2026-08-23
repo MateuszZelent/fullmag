@@ -39223,6 +39223,33 @@ fn openapi_v2_exposes_professional_session_tree() {
 }
 
 #[test]
+fn openapi_session_creation_declares_typed_request_and_outcomes() {
+    let openapi = crate::openapi_v2::openapi_json();
+    let post = &openapi["paths"]["/v2/sessions"]["post"];
+
+    assert_eq!(
+        post["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/CreateSessionRequest"
+    );
+    assert_eq!(
+        post["responses"]["201"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/CreateSessionResponse"
+    );
+    assert!(post["responses"].get("400").is_some());
+    assert!(post["responses"].get("409").is_some());
+
+    let schemas = &openapi["components"]["schemas"];
+    for schema in [
+        "CreateSessionRequest",
+        "CreateSessionResponse",
+        "ScratchSessionStatusResource",
+        "SessionExecutionResource",
+    ] {
+        assert!(schemas.get(schema).is_some(), "OpenAPI missing {schema}");
+    }
+}
+
+#[test]
 fn openapi_v2_has_no_public_v1_paths() {
     let value = crate::openapi_v2::openapi_json();
     let paths = value
