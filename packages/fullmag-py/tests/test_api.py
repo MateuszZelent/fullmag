@@ -2162,6 +2162,7 @@ class ProblemApiTests(unittest.TestCase):
             {
                 "kind": "preset_texture",
                 "preset_kind": "random",
+                "preset_version": 2,
                 "preset_params": {"seed": 42},
                 "mapping": {
                     "space": "object",

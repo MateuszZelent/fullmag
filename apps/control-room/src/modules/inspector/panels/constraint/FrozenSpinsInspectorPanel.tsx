@@ -38,17 +38,20 @@ export function FrozenSpinsInspectorPanel({ selection }: InspectorPanelProps) {
   const resource = useFrozenSpinsDefinitionResource(constraintId, {
     enabled: ref !== null,
   });
-  const lastGoodRef = useRef<{
+  const [lastGood, setLastGood] = useState<{
     constraintId: string;
     resource: NonNullable<typeof resource.data>;
   } | null>(null);
-  if (resource.data) {
-    lastGoodRef.current = { constraintId, resource: resource.data };
+  if (
+    resource.data &&
+    (lastGood?.constraintId !== constraintId || lastGood.resource !== resource.data)
+  ) {
+    setLastGood({ constraintId, resource: resource.data });
   }
   const retainedResource =
     resource.data ??
-    (lastGoodRef.current?.constraintId === constraintId
-      ? lastGoodRef.current.resource
+    (lastGood?.constraintId === constraintId
+      ? lastGood.resource
       : null);
 
   if (!ref) {

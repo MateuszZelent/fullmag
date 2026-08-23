@@ -1,6 +1,13 @@
-import { createElement } from "react";
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+
+import {
+  installSimulationPreparationTestDom,
+  TestElement,
+  TestNode,
+} from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
 import { SelectionExpressionBuilder } from "./SelectionExpressionBuilder";
 
@@ -113,4 +120,47 @@ describe("SelectionExpressionBuilder", () => {
     );
     expect(emptyObjectMarkup).toContain("Object ID cannot be empty.");
   });
+
+  it("preserves the numeric input and focus while adopting a canonical value", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const renderBuilder = (lower: number) => (
+      <SelectionExpressionBuilder
+        expression={{
+          closed: "both",
+          kind: "between",
+          lower,
+          upper: 2,
+          value: { kind: "constant", value: 0 },
+        }}
+        objectId="film"
+        onChange={vi.fn()}
+      />
+    );
+    try {
+      await act(async () => root.render(renderBuilder(0)));
+      const input = findNumberInputs(container)[1]!;
+      input.focus();
+      await act(async () => root.render(renderBuilder(1)));
+      expect(findNumberInputs(container)[1]).toBe(input);
+      expect(dom.document.activeElement).toBe(input);
+      expect(input.value).toBe("1");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
 });
+
+function findNumberInputs(root: TestNode): TestElement[] {
+  const found: TestElement[] = [];
+  const visit = (node: TestNode) => {
+    if (node instanceof TestElement && node.tagName === "INPUT") {
+      found.push(node);
+    }
+    node.childNodes.forEach(visit);
+  };
+  visit(root);
+  return found;
+}

@@ -7000,23 +7000,13 @@ mod tests {
         );
         assert!(
             snapshots.contains("begin_field_snapshot(quantity, 0, 0.0, 0.0)?")
+                && native_fem.contains("QuantityId::HDmi => Self::HDmi")
+                && native_fem.contains("QuantityId::HDmiBulk => Self::HDmiBulk")
                 && native_fem.contains(
-                    &[
-                        "QuantityId::HDmi => ffi::",
-                        "fullmag_",
-                        "fem_observable::",
-                        "FULLMAG_FEM_OBSERVABLE_H_DMI",
-                    ]
-                    .concat()
+                    "NativeFemPreviewObservable::HDmi => {\n            ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DMI"
                 )
                 && native_fem.contains(
-                    &[
-                        "QuantityId::HDmiBulk => ffi::",
-                        "fullmag_",
-                        "fem_observable::",
-                        "FULLMAG_FEM_OBSERVABLE_H_DMI_BULK",
-                    ]
-                    .concat()
+                    "NativeFemPreviewObservable::HDmiBulk => {\n            ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DMI_BULK"
                 ),
             "native FEM field output helper must expose interfacial and bulk DMI fields"
         );
