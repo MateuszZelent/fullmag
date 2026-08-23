@@ -1,10 +1,11 @@
 use axum::{extract::State, http::StatusCode, Json};
 use fullmag_authoring::{SceneDocument, SceneMetadata};
 use serde_json::json;
-use std::sync::Arc;
+use std::sync::{atomic::Ordering, Arc};
 
 use crate::{
-    default_current_live_state, reset_current_live_session_resources,
+    current_live_realtime_state_from_snapshot, default_current_live_state,
+    publish_current_live_realtime_batch_changed, reset_current_live_session_resources,
     schemas::{
         authoring::SceneResource,
         sessions::{
@@ -37,22 +38,30 @@ pub async fn create(
     let scene_document = empty_scene_document(&session_id, name);
     let snapshot = scratch_snapshot(&session_id, name, &execution, scene_document.clone());
 
-    let replacing = {
-        let current = state.current_live_state.read().await;
-        current.is_some()
-    };
-    if replacing && !request.replace_current {
-        return Err(ApiError {
-            status: StatusCode::CONFLICT,
-            message: "an active local session already exists; set replace_current to replace it"
-                .to_string(),
-            diagnostics: Vec::new(),
-        });
+    {
+        let _transition = state.current_live_session_transition.lock().await;
+        let replacing = state.current_live_state.read().await.is_some();
+        if replacing && !request.replace_current {
+            return Err(ApiError {
+                status: StatusCode::CONFLICT,
+                message: "an active local session already exists; set replace_current to replace it"
+                    .to_string(),
+                diagnostics: Vec::new(),
+            });
+        }
+        if replacing {
+            reset_current_live_session_resources(&state).await;
+        }
+        state
+            .current_live_session_epoch
+            .fetch_add(1, Ordering::Relaxed);
+        *state.current_live_state.write().await = Some(snapshot.clone());
     }
-    if replacing {
-        reset_current_live_session_resources(&state).await;
-    }
-    *state.current_live_state.write().await = Some(snapshot.clone());
+
+    let display_revision = state.current_display_selection.read().await.revision;
+    let realtime_state =
+        current_live_realtime_state_from_snapshot(state.as_ref(), &snapshot, display_revision).await;
+    publish_current_live_realtime_batch_changed(state.as_ref(), &realtime_state, false, 0).await?;
 
     let scene = SceneResource::from_scene_document(scene_document).map_err(|error| {
         ApiError::internal(format!("failed to serialize empty authoring scene: {error}"))
@@ -64,11 +73,14 @@ pub async fn create(
             status: ScratchSessionStatusResource {
                 requested_execution: execution.clone(),
                 effective_execution: execution,
+                fallback: None,
             },
             scene_document: ScratchSceneDocumentResource {
                 schema_version: "0.3".to_string(),
-                scene,
-                objects: Vec::new(),
+                version: scene.version,
+                revision: scene.revision,
+                scene: scene.scene,
+                objects: scene.objects,
             },
             revisions: ScratchSessionRevisionsResource {
                 state_version: snapshot.state_version,

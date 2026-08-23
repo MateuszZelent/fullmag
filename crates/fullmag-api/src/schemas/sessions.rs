@@ -1,4 +1,4 @@
-use crate::schemas::authoring::{SceneObjectResource, SceneResource};
+use crate::schemas::authoring::{SceneMetadataResource, SceneObjectResource};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -23,13 +23,15 @@ pub struct SessionExecutionResource {
 pub struct ScratchSessionStatusResource {
     pub requested_execution: SessionExecutionResource,
     pub effective_execution: SessionExecutionResource,
+    pub fallback: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ScratchSceneDocumentResource {
     pub schema_version: String,
-    #[serde(flatten)]
-    pub scene: SceneResource,
+    pub version: Option<String>,
+    pub revision: Option<u64>,
+    pub scene: Option<SceneMetadataResource>,
     pub objects: Vec<SceneObjectResource>,
 }
 

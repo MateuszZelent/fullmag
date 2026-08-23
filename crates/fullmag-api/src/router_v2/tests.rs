@@ -23,14 +23,17 @@ use tokio::sync::{watch, Mutex, RwLock};
 
 use crate::feature_flags::FeatureFlags;
 use crate::schemas::realtime::{
-    RealtimeResourceChange, RealtimeResourceName, RealtimeResourceRevisionMap,
+    LiveRealtimeServerEvent, RealtimeResourceChange, RealtimeResourceName,
+    RealtimeResourceRevisionMap,
 };
+use crate::schemas::commands::CommandResponse;
 use crate::types::{
     AppState, CommandCompletionState, CommandLifecycleState, CurrentDisplaySelection,
     CurrentLiveFieldFrameRequest, CurrentLiveSnapshotRequest, CurrentWorkspaceLayout,
     CurrentWorkspaceRibbon, CurrentWorkspaceSelection, DisplayPresentationState, LatestFields,
-    LiveState, RunManifest, RuntimeLifecycleState, RuntimeStatusView, ScalarRow, SessionCommand,
-    SessionManifest, SessionStateResponse, SimulationPreparationClockAdjustmentSnapshot,
+    GlobalScalarPreviewState, LiveState, PreviewState, RunManifest, RuntimeLifecycleState,
+    RuntimeStatusView, ScalarRow, SessionCommand, SessionManifest, SessionStateResponse,
+    SimulationPreparationClockAdjustmentSnapshot,
     SimulationPreparationFailureSnapshot, SimulationPreparationLogEntrySnapshot,
     SimulationPreparationSnapshot, SimulationPreparationStageSnapshot, StageExecutionRecord,
     StageExecutionState, StageLifecycleState, StepUpdateView, TrackedCommandRecord,
@@ -639,6 +642,8 @@ pub(crate) fn test_app_state() -> Arc<AppState> {
         repo_root: PathBuf::from("."),
         current_workspace_root: PathBuf::from("."),
         current_live_state: Arc::new(RwLock::new(None)),
+        current_live_session_transition: Arc::new(Mutex::new(())),
+        current_live_session_epoch: Arc::new(AtomicU64::new(0)),
         current_live_connectivity: Arc::new(RwLock::new(
             crate::schemas::status::SessionConnectivity::Connected,
         )),
@@ -1129,6 +1134,11 @@ async fn create_scratch_session_accepts_explicit_fdm_and_fem_cpu_double_requests
     assert_eq!(body["status"]["requested_execution"]["backend"], "fdm");
     assert_eq!(body["status"]["requested_execution"]["device"], "cpu");
     assert_eq!(body["status"]["requested_execution"]["precision"], "double");
+    assert_eq!(body["status"]["effective_execution"]["backend"], "fdm");
+    assert_eq!(body["status"]["effective_execution"]["device"], "cpu");
+    assert_eq!(body["status"]["effective_execution"]["precision"], "double");
+    assert!(body["status"].get("fallback").is_some());
+    assert!(body["status"]["fallback"].is_null());
 
     let response = app
         .oneshot(
@@ -1150,6 +1160,11 @@ async fn create_scratch_session_accepts_explicit_fdm_and_fem_cpu_double_requests
     assert_eq!(body["status"]["requested_execution"]["backend"], "fem");
     assert_eq!(body["status"]["requested_execution"]["device"], "cpu");
     assert_eq!(body["status"]["requested_execution"]["precision"], "double");
+    assert_eq!(body["status"]["effective_execution"]["backend"], "fem");
+    assert_eq!(body["status"]["effective_execution"]["device"], "cpu");
+    assert_eq!(body["status"]["effective_execution"]["precision"], "double");
+    assert!(body["status"].get("fallback").is_some());
+    assert!(body["status"]["fallback"].is_null());
 }
 
 #[tokio::test]
@@ -1202,6 +1217,188 @@ async fn create_scratch_session_rejects_unknown_execution_and_implicit_replaceme
         .await
         .unwrap();
     assert_eq!(conflict.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn create_scratch_session_serializes_one_canonical_objects_key() {
+    let response = test_router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"name":"Scratch","backend":"fdm","device":"cpu","precision":"double"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let raw = String::from_utf8(body_bytes(response).await).expect("response must be UTF-8");
+    assert_eq!(raw.matches("\"objects\"").count(), 1, "{raw}");
+}
+
+#[tokio::test]
+async fn concurrent_create_scratch_sessions_admit_only_one_without_replacement() {
+    let app = test_router();
+    let request = || {
+        Request::builder()
+            .method("POST")
+            .uri("/v2/sessions")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"name":"Concurrent","backend":"fdm","device":"cpu","precision":"double"}"#,
+            ))
+            .unwrap()
+    };
+    let (left, right) = tokio::join!(app.clone().oneshot(request()), app.oneshot(request()));
+    let statuses = [left.unwrap().status(), right.unwrap().status()];
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|status| **status == StatusCode::CREATED)
+            .count(),
+        1
+    );
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|status| **status == StatusCode::CONFLICT)
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn create_scratch_session_replacement_resets_resources_and_invalidates() {
+    let state = test_app_state();
+    let app = build_v2_router().with_state(state.clone());
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"name":"First","backend":"fdm","device":"cpu","precision":"double"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::CREATED);
+    let mut events = state.current_live_realtime_events.subscribe();
+
+    let command: SessionCommand = serde_json::from_value(serde_json::json!({
+        "seq": 1,
+        "command_id": "stale-command",
+        "kind": "run",
+        "created_at_unix_ms": 1
+    }))
+    .expect("test command must deserialize");
+    state.current_control_queue.lock().await.push_back(command.clone());
+    state.current_command_responses.lock().await.push_back((
+        "stale-request".to_string(),
+        CommandResponse {
+            accepted: true,
+            command_id: command.command_id.clone(),
+            request_id: Some("stale-request".to_string()),
+            error: None,
+        },
+    ));
+    state.current_command_ledger.lock().await.push_back(TrackedCommandRecord {
+        command,
+        request_id: Some("stale-request".to_string()),
+        status: CommandLifecycleState::Queued,
+        dispatched_at_unix_ms: None,
+        completed_at_unix_ms: None,
+        completion_status: None,
+        error: None,
+    });
+    state.current_display_selection.write().await.revision = 9;
+    state.current_visualization_client_acks.write().await.insert(
+        "stale-client".to_string(),
+        crate::schemas::visualization_state::VisualizationClientAckEntry {
+            client_id: "stale-client".to_string(),
+            client_label: None,
+            viewport_id: None,
+            revision: 9,
+            status: crate::schemas::visualization_state::VisualizationClientAckStatus::Applied,
+            effective_render_mode: None,
+            error: None,
+            received_at_unix_ms: 1,
+        },
+    );
+    state
+        .current_visualization_client_ack_revision
+        .store(9, std::sync::atomic::Ordering::Relaxed);
+    state.current_live_state.write().await.as_mut().unwrap().preview = Some(
+        PreviewState::GlobalScalar(GlobalScalarPreviewState {
+            display_kind: "global_scalar".to_string(),
+            config_revision: 9,
+            source_step: 1,
+            source_time: 0.0,
+            quantity: "E_total".to_string(),
+            unit: "J".to_string(),
+            value: 1.0,
+        }),
+    );
+
+    let replacement = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"name":"Second","backend":"fem","device":"cpu","precision":"double","replace_current":true}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(replacement.status(), StatusCode::CREATED);
+    assert!(state.current_control_queue.lock().await.is_empty());
+    assert!(state.current_command_responses.lock().await.is_empty());
+    assert!(state.current_command_ledger.lock().await.is_empty());
+    assert_eq!(state.current_display_selection.read().await.revision, 0);
+    assert!(state.current_visualization_client_acks.read().await.is_empty());
+    assert_eq!(
+        state
+            .current_visualization_client_ack_revision
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    assert!(state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .unwrap()
+        .preview
+        .is_none());
+
+    let event = tokio::time::timeout(std::time::Duration::from_millis(100), events.recv())
+        .await
+        .expect("replacement must publish an invalidation event")
+        .expect("realtime channel must remain open");
+    let event: LiveRealtimeServerEvent =
+        serde_json::from_str(&event.json).expect("invalidation must serialize");
+    let LiveRealtimeServerEvent::ResourceBatchChanged { payload, .. } = event else {
+        panic!("replacement must publish resource invalidation");
+    };
+    assert!(payload.changes.iter().any(|change| {
+        matches!(change.resource, RealtimeResourceName::SceneDocument)
+            && change.recommended_fetch.as_deref() == Some("/v2/sessions/current/model/scene")
+    }));
+    assert!(payload.changes.iter().any(|change| {
+        matches!(change.resource, RealtimeResourceName::Display)
+            && change.recommended_fetch.as_deref()
+                == Some("/v2/sessions/current/visualization/display")
+    }));
 }
 
 async fn test_router_with_session() -> axum::Router {
@@ -2047,6 +2244,8 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         repo_root: repo_root.clone(),
         current_workspace_root: repo_root.clone(),
         current_live_state: Arc::new(RwLock::new(None)),
+        current_live_session_transition: Arc::new(Mutex::new(())),
+        current_live_session_epoch: Arc::new(AtomicU64::new(0)),
         current_live_connectivity: Arc::new(RwLock::new(
             crate::schemas::status::SessionConnectivity::Connected,
         )),

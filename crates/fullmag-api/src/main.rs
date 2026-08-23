@@ -1164,6 +1164,79 @@ mod terminal_snapshot_route_tests {
 }
 
 #[cfg(test)]
+mod scratch_session_lifecycle_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn stale_runner_snapshot_cannot_reinstall_a_replaced_session() {
+        let state = crate::router_v2::tests::test_app_state();
+        let (_, Json(first)) = crate::router_v2::handlers::sessions::create(
+            State(state.clone()),
+            Json(crate::schemas::sessions::CreateSessionRequest {
+                name: "First".to_string(),
+                backend: "fdm".to_string(),
+                device: "cpu".to_string(),
+                precision: "double".to_string(),
+                replace_current: false,
+            }),
+        )
+        .await
+        .expect("first session must be created");
+        let (_, Json(replacement)) = crate::router_v2::handlers::sessions::create(
+            State(state.clone()),
+            Json(crate::schemas::sessions::CreateSessionRequest {
+                name: "Replacement".to_string(),
+                backend: "fem".to_string(),
+                device: "cpu".to_string(),
+                precision: "double".to_string(),
+                replace_current: true,
+            }),
+        )
+        .await
+        .expect("replacement session must be created");
+        state.current_display_selection.write().await.revision = 7;
+
+        let stale = sync_current_live_snapshot(
+            State(state.clone()),
+            Json(CurrentLiveSnapshotRequest {
+                session_id: first.session_id,
+                session: None,
+                session_status: None,
+                metadata: None,
+                mesh_workspace: None,
+                stage_execution: None,
+                simulation_preparation: None,
+                run: None,
+                live_state: None,
+                coupled_checkpoint: None,
+                latest_scalar_row: None,
+                latest_fields: None,
+                replace_latest_fields: false,
+                field_generation: None,
+                preview_fields: None,
+                clear_preview_cache: false,
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(stale.expect_err("stale session must be rejected").status, StatusCode::CONFLICT);
+        assert_eq!(
+            state
+                .current_live_state
+                .read()
+                .await
+                .as_ref()
+                .map(|snapshot| snapshot.session.session_id.as_str()),
+            Some(replacement.session_id.as_str())
+        );
+        assert_eq!(state.current_display_selection.read().await.revision, 7);
+    }
+}
+
+#[cfg(test)]
 fn current_live_realtime_event_coalesce_window_ms(event: &LiveRealtimeServerEvent) -> Option<u32> {
     if let LiveRealtimeServerEvent::ResourceBatchChanged { payload, .. } = event {
         if payload.changes.iter().any(|change| {
@@ -1678,6 +1751,8 @@ async fn main() {
         repo_root: repo_root.clone(),
         current_workspace_root,
         current_live_state: Arc::new(RwLock::new(None)),
+        current_live_session_transition: Arc::new(Mutex::new(())),
+        current_live_session_epoch: Arc::new(AtomicU64::new(0)),
         current_live_connectivity: Arc::new(RwLock::new(
             crate::schemas::status::SessionConnectivity::Connected,
         )),
@@ -2366,16 +2441,7 @@ where
     F: FnOnce(&mut SessionStateResponse) -> Result<(), ApiError>,
 {
     let sync_start = std::time::Instant::now();
-    let reset_preview = state
-        .current_live_state
-        .read()
-        .await
-        .as_ref()
-        .map(|existing| existing.session.session_id != session_id)
-        .unwrap_or(false);
-    if reset_preview {
-        reset_current_live_session_resources(state).await;
-    }
+    let admission_epoch = state.current_live_session_epoch.load(Ordering::Relaxed);
     let display_selection = state.current_display_selection.read().await.clone();
     let selected_cached_display_fields_match_selection = preview_fields
         .as_ref()
@@ -2388,6 +2454,10 @@ where
         Some(existing) if existing.session.session_id == session_id => {
             let previous_snapshot = existing.clone();
             (existing, Some(previous_snapshot))
+        }
+        Some(existing) => {
+            *current = Some(existing);
+            return Err(ApiError::conflict("current_live_session_mismatch"));
         }
         _ => (
             default_current_live_state(&CurrentLiveSnapshotRequest {
@@ -2542,6 +2612,10 @@ where
     } else {
         None
     };
+    if state.current_live_session_epoch.load(Ordering::Relaxed) != admission_epoch {
+        *current = Some(next);
+        return Err(ApiError::conflict("current_live_session_transitioned"));
+    }
     *current = Some(next);
     drop(current);
     crate::router_v2::handlers::sessions::status::record_current_live_heartbeat(state).await;

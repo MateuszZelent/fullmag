@@ -107,6 +107,10 @@ pub(crate) struct AppState {
     pub current_workspace_root: PathBuf,
     /// Sessionless local-live workspace snapshot used by the root `/` GUI.
     pub current_live_state: Arc<RwLock<Option<SessionStateResponse>>>,
+    /// Serializes explicit current-session replacement transitions only.
+    pub current_live_session_transition: Arc<Mutex<()>>,
+    /// Changes whenever explicit authoring replaces the current session.
+    pub current_live_session_epoch: Arc<AtomicU64>,
     /// Backend-owned health of the runner-to-resource publication path.
     pub current_live_connectivity: Arc<RwLock<crate::schemas::status::SessionConnectivity>>,
     /// Last successfully accepted runner frame or idle liveness tick.
