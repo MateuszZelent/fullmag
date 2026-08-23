@@ -142,6 +142,7 @@ static bool compute_rhs_into_fp32(Context &ctx, DeviceVectorField &rhs_out,
         static_cast<float*>(rhs_out.x), static_cast<float*>(rhs_out.y), static_cast<float*>(rhs_out.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "RK23 fp32 LLG RHS launch");
     if (poll_interrupt(ctx)) {
         abort_step_after_interrupt(ctx);
         return false;

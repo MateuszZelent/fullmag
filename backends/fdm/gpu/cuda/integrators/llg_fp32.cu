@@ -382,6 +382,7 @@ double reduce_current_rhs_norm_fp32(Context &ctx) {
         static_cast<float*>(ctx.k1.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "Euler fp32 LLG RHS launch");
 
     return reduce_max_norm_fp32(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
 }
@@ -418,6 +419,7 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         (float*)ctx.k1.x, (float*)ctx.k1.y, (float*)ctx.k1.z,
         n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "Heun fp32 LLG RHS launch");
     if (abort_step_from_tmp(ctx, false)) return;
 
     // Step 3: predictor → m
@@ -454,6 +456,7 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         (float*)ctx.h_ex.x, (float*)ctx.h_ex.y, (float*)ctx.h_ex.z,
         n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "minimize fp32 LLG RHS launch");
     if (abort_step_from_tmp(ctx, false)) return;
 
     // Step 6: corrector → m

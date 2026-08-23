@@ -264,6 +264,16 @@ target_compile_definitions(fdm_device_residency_receipt_contract PRIVATE
 add_test(NAME fdm_device_residency_receipt_contract
     COMMAND fdm_device_residency_receipt_contract)
 
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME fdm_gpu_transfer_manifest_contract
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/generate_fdm_gpu_transfer_manifest.py
+            --check
+            --self-test
+            --root ${CMAKE_SOURCE_DIR}/..)
+endif()
+
 add_executable(periodic_exchange_fp32_contract tests/periodic_exchange_fp32_contract.cpp)
 add_test(NAME fdm_periodic_exchange_fp32_contract COMMAND periodic_exchange_fp32_contract)
 

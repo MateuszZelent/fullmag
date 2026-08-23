@@ -412,6 +412,7 @@ double reduce_current_rhs_norm_from_evaluated_transport_fp64(Context &ctx) {
         static_cast<double*>(ctx.k1.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "Euler fp64 LLG RHS launch");
     if (!launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.k1)) return 0.0;
     if (ctx.has_frozen_mask) {
         zero_frozen_rhs_fp64_kernel<<<grid, BLOCK_SIZE>>>(
@@ -471,6 +472,7 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         static_cast<double*>(ctx.k1.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "Heun fp64 LLG RHS launch");
     if (!launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.k1)) return;
     if (ctx.has_frozen_mask) {
         zero_frozen_rhs_fp64_kernel<<<grid, BLOCK_SIZE>>>(
@@ -534,6 +536,7 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         static_cast<double*>(ctx.h_ex.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "minimize fp64 LLG RHS launch");
     if (!launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.h_ex)) return;
     if (ctx.has_frozen_mask) {
         zero_frozen_rhs_fp64_kernel<<<grid, BLOCK_SIZE>>>(

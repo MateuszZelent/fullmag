@@ -257,13 +257,60 @@ impl ArtifactPipelineSender {
         provenance: ExecutionProvenance,
         primary_error: String,
     ) -> Result<(), RunError> {
+        self.publish_failed_run_provenance_with_timeout(
+            provenance,
+            primary_error,
+            Duration::from_secs(10),
+        )
+    }
+
+    fn publish_failed_run_provenance_with_timeout(
+        &self,
+        provenance: ExecutionProvenance,
+        primary_error: String,
+        timeout: Duration,
+    ) -> Result<(), RunError> {
+        let deadline = std::time::Instant::now() + timeout;
         let (acknowledgement, completed) = mpsc::channel();
-        self.push(ArtifactJob::FailedRunProvenance {
+        let mut job = ArtifactJob::FailedRunProvenance {
             provenance,
             primary_error,
             acknowledgement,
-        })?;
-        match completed.recv_timeout(Duration::from_secs(10)) {
+        };
+        let queue_depth_after = self.queue_depth.fetch_add(1, Ordering::Relaxed) + 1;
+        self.diagnostics
+            .current_queue_depth
+            .store(queue_depth_after as u64, Ordering::Relaxed);
+        update_atomic_max(&self.diagnostics.max_queue_depth, queue_depth_after as u64);
+
+        loop {
+            match self.tx.try_send(job) {
+                Ok(()) => break,
+                Err(mpsc::TrySendError::Full(returned_job)) => {
+                    job = returned_job;
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    if remaining.is_zero() {
+                        self.rollback_queue_depth();
+                        return Err(RunError {
+                            message:
+                                "timed out enqueueing durable failed-run provenance publication"
+                                    .into(),
+                        });
+                    }
+                    thread::park_timeout(remaining.min(Duration::from_millis(1)));
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    self.rollback_queue_depth();
+                    return Err(RunError {
+                        message: "artifact writer became unavailable before failed-run provenance could be queued"
+                            .into(),
+                    });
+                }
+            }
+        }
+
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        match completed.recv_timeout(remaining) {
             Ok(Ok(())) => Ok(()),
             Ok(Err(message)) => Err(RunError { message }),
             Err(mpsc::RecvTimeoutError::Timeout) => Err(RunError {
@@ -275,6 +322,19 @@ impl ArtifactPipelineSender {
                     .into(),
             }),
         }
+    }
+
+    fn rollback_queue_depth(&self) {
+        let queue_depth_after_rollback = self
+            .queue_depth
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
+                Some(depth.saturating_sub(1))
+            })
+            .map(|previous| previous.saturating_sub(1))
+            .unwrap_or(0);
+        self.diagnostics
+            .current_queue_depth
+            .store(queue_depth_after_rollback as u64, Ordering::Relaxed);
     }
 }
 
@@ -1884,7 +1944,63 @@ mod tests {
                 ["validation_state"],
             "unvalidated"
         );
+        for success_marker in ["metadata.json", "manifest.json", "run-result.json"] {
+            assert!(
+                !output_dir.join(success_marker).exists(),
+                "failed-run publication must not create {success_marker}"
+            );
+        }
         fs::remove_dir_all(output_dir).expect("remove failed-run fixture");
+    }
+
+    fn isolated_pipeline_sender(
+        tx: SyncSender<ArtifactJob>,
+        initial_depth: usize,
+    ) -> ArtifactPipelineSender {
+        ArtifactPipelineSender {
+            tx,
+            queue_depth: Arc::new(AtomicUsize::new(initial_depth)),
+            diagnostics: Arc::new(ArtifactPipelineDiagnosticsState::default()),
+            physics_execution_context: None,
+            #[cfg(feature = "fem-gpu")]
+            accepted_step_fields: Arc::new(Vec::new()),
+        }
+    }
+
+    #[test]
+    fn failed_run_provenance_full_queue_obeys_one_bounded_deadline() {
+        let (tx, receiver) = mpsc::sync_channel(1);
+        tx.send(ArtifactJob::Shutdown).expect("fill test queue");
+        let sender = isolated_pipeline_sender(tx, 1);
+        let deadline = Duration::from_millis(25);
+        let started = std::time::Instant::now();
+        let error = sender
+            .publish_failed_run_provenance_with_timeout(
+                ExecutionProvenance::default(),
+                "primary".into(),
+                deadline,
+            )
+            .expect_err("full queue must time out without blocking forever");
+        assert!(error.message.contains("timed out"));
+        assert!(started.elapsed() < Duration::from_millis(250));
+        drop(receiver);
+    }
+
+    #[test]
+    fn failed_run_provenance_disconnected_queue_returns_immediately() {
+        let (tx, receiver) = mpsc::sync_channel(1);
+        drop(receiver);
+        let sender = isolated_pipeline_sender(tx, 0);
+        let started = std::time::Instant::now();
+        let error = sender
+            .publish_failed_run_provenance_with_timeout(
+                ExecutionProvenance::default(),
+                "primary".into(),
+                Duration::from_millis(100),
+            )
+            .expect_err("disconnected queue must fail");
+        assert!(error.message.contains("unavailable"));
+        assert!(started.elapsed() < Duration::from_millis(50));
     }
 
     #[test]

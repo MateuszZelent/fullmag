@@ -1,8 +1,0 @@
-FULLMAG_FDM_HOST_TRANSFER_FILE("demag/newell_gpu_fp64.cu", 0x2f5ed5361f4aa9b9ull, "fullmag_fdm_receipt_cuda_memcpy", "setup_full_vector", "D2H", "newell_spectrum_setup")
-FULLMAG_FDM_HOST_TRANSFER_FILE("runtime/context.cu", 0x60f65ca31c8b4225ull, "fullmag_fdm_record_cuda_transfer_success", "setup_or_observation_full_vector", "H2D_or_D2H", "context_boundary_copy")
-FULLMAG_FDM_HOST_TRANSFER_FILE("runtime/llg_checkpoint.cpp", 0xf451c15972e7228eull, "fullmag_fdm_receipt_cuda_memcpy", "observation_full_vector", "H2D_or_D2H", "checkpoint_import_or_export")
-FULLMAG_FDM_HOST_TRANSFER_FILE("runtime/reductions_fp64.cu", 0xc7da8c738e027142ull, "fullmag_fdm_record_control_scalar_d2h", "control_scalar", "D2H", "scalar_reduction")
-FULLMAG_FDM_HOST_TRANSFER_FILE("transport/charge/device_solver.cu", 0x6397447603ee0715ull, "output->transfer_count", "control_scalar", "D2H", "charge_solver_control")
-FULLMAG_FDM_HOST_TRANSFER_FILE("transport/context.cu", 0x9ed94a2a9a4e9ae2ull, "append_charge_telemetry", "transport_telemetry", "H2D_or_D2H", "explicit_reason_enum")
-FULLMAG_FDM_HOST_TRANSFER_FILE("transport/spin/device_solver.cu", 0x9a272639519e0304ull, "control_h2d_count", "control_scalar", "H2D_or_D2H", "spin_solver_control")
-FULLMAG_FDM_HOST_TRANSFER_FILE("transport/spin/sparse_solver.cu", 0x6d15d0e2a4bce80aull, "DevicePreconditionerAudit", "control_scalar", "D2H", "preconditioner_audit")

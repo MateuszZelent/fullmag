@@ -131,6 +131,7 @@ static void abm3_fill_diagnostics_fp32(Context &ctx, double dt, fullmag_fdm_step
         static_cast<float*>(ctx.k1.x), static_cast<float*>(ctx.k1.y), static_cast<float*>(ctx.k1.z),
         n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp32 LLG RHS launch");
     double max_dm_dt = reduce_max_norm_fp32(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
     stats->step = ctx.step_count;
     stats->time_seconds = ctx.current_time;
@@ -177,6 +178,7 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<float*>(ctx.k1.x), static_cast<float*>(ctx.k1.y), static_cast<float*>(ctx.k1.z),
             n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0,
             stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+        fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp32 LLG RHS launch");
         if (abort_step_from_tmp(ctx, false)) return;
 
         heun_predictor_fp32_kernel<<<grid, 256>>>(
@@ -197,6 +199,7 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<float*>(ctx.h_ex.x), static_cast<float*>(ctx.h_ex.y), static_cast<float*>(ctx.h_ex.z),
             n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0,
             stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+        fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp32 LLG RHS launch");
         if (abort_step_from_tmp(ctx, false)) return;
 
         heun_corrector_fp32_kernel<<<grid, 256>>>(
@@ -222,6 +225,7 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<float*>(ctx.abm_f_n.x), static_cast<float*>(ctx.abm_f_n.y), static_cast<float*>(ctx.abm_f_n.z),
             n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0,
             stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+        fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp32 LLG RHS launch");
 
         ctx.abm_startup++;
         ctx.abm_last_dt = dt;
@@ -254,6 +258,7 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         static_cast<float*>(ctx.k1.x), static_cast<float*>(ctx.k1.y), static_cast<float*>(ctx.k1.z),
         n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp32 LLG RHS launch");
     if (abort_step_from_tmp(ctx, false)) return;
 
     abm3_corrector_fp32_kernel<<<grid, 256>>>(

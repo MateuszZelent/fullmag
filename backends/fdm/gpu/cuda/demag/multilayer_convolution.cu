@@ -1628,6 +1628,11 @@ void launch_multilayer_demag_field_fp64(Context &ctx) {
     } else {
         launch_multilayer_demag_field_fp64_assisted(ctx);
     }
+    const cudaError_t launch_error = cudaGetLastError();
+    if (launch_error != cudaSuccess) {
+        set_cuda_error(ctx, "launch_multilayer_demag_field_fp64", launch_error);
+        return;
+    }
     if (ctx.last_error.empty()) {
         fullmag_fdm_note_operator_device_execution(
             ctx, FULLMAG_FDM_OPERATOR_DEMAG);
@@ -1655,6 +1660,11 @@ void launch_multilayer_demag_field_fp32(Context &ctx) {
         launch_multilayer_demag_field_fp32_batched(ctx);
     } else {
         launch_multilayer_demag_field_fp32_assisted(ctx);
+    }
+    const cudaError_t launch_error = cudaGetLastError();
+    if (launch_error != cudaSuccess) {
+        set_cuda_error(ctx, "launch_multilayer_demag_field_fp32", launch_error);
+        return;
     }
     if (ctx.last_error.empty()) {
         fullmag_fdm_note_operator_device_execution(

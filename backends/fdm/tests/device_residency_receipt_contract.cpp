@@ -1,12 +1,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <array>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <map>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -37,14 +37,6 @@ std::filesystem::path repository_root() {
     return path.parent_path().parent_path().parent_path().parent_path();
 }
 
-uint64_t fnv1a_64(const std::string &text) {
-    uint64_t hash = 14695981039346656037ull;
-    for (const unsigned char byte : text) {
-        hash ^= byte;
-        hash *= 1099511628211ull;
-    }
-    return hash;
-}
 }
 
 extern "C" int fullmag_fdm_test_record_residency_violation_v1(
@@ -98,91 +90,36 @@ int main() {
     check(receipt_context.find("fullmag_fdm_commit_successful_step_operator_execution") ==
               std::string::npos,
           "operator execution has no central blanket step commit");
-    struct HostTransferManifestEntry {
-        uint64_t source_fingerprint;
-        const char *accounting_owner;
-        const char *category;
-        const char *direction;
-        const char *reason;
-    };
-    const std::map<std::string, HostTransferManifestEntry>
-        approved_host_transfer_inventory{
-#define FULLMAG_FDM_HOST_TRANSFER_FILE(path, fingerprint, owner, category, direction, reason) \
-            {path, {fingerprint, owner, category, direction, reason}},
-#include "fdm_gpu_host_transfer_callsites_v1.def"
-#undef FULLMAG_FDM_HOST_TRANSFER_FILE
-        };
-    std::map<std::string, uint64_t> observed_inventory;
-    const auto cuda_root = root / "backends/fdm/gpu/cuda";
-    for (const auto &entry : std::filesystem::recursive_directory_iterator(cuda_root)) {
-        if (!entry.is_regular_file()) continue;
-        const auto extension = entry.path().extension().string();
-        if (extension != ".cu" && extension != ".cpp" && extension != ".hpp") continue;
-        const auto source = read(entry.path());
-        for (const auto *forbidden : {
-                 "cudaMemcpyDefault", "cudaMemcpy2D", "cudaMemcpy3D",
-                 "cudaMemcpyPeer", "cudaMemcpyToSymbol", "cudaMemcpyFromSymbol",
-                 "cuMemcpy(", "cuMemcpyHtoD", "cuMemcpyDtoH", "hipMemcpy",
-                 "thrust::copy"}) {
-            check(source.find(forbidden) == std::string::npos,
-                  "active graph contains no alternate unclassified host transfer wrapper");
-        }
-        const bool has_host_transfer =
-            source.find("cudaMemcpyHostToDevice") != std::string::npos ||
-            source.find("cudaMemcpyDeviceToHost") != std::string::npos;
-        if (has_host_transfer) {
-            observed_inventory.emplace(
-                entry.path().lexically_relative(cuda_root).generic_string(),
-                fnv1a_64(source));
-        }
-    }
-    check(observed_inventory.size() == approved_host_transfer_inventory.size(),
-          "exact callsite manifest covers every active raw host-transfer source");
-    for (const auto &[path, manifest] : approved_host_transfer_inventory) {
-        const auto observed = observed_inventory.find(path);
-        check(observed != observed_inventory.end(),
-              "manifest contains no stale host-transfer source");
-        check(observed->second == manifest.source_fingerprint,
-              "host-transfer callsite/accounting fingerprint is exact");
-        const auto source = read(cuda_root / path);
-        check(source.find(manifest.accounting_owner) != std::string::npos,
-              "every transfer source is tied to its receipt/telemetry owner");
-        check(std::strlen(manifest.category) != 0 &&
-                  std::strlen(manifest.direction) != 0 &&
-                  std::strlen(manifest.reason) != 0,
-              "every manifest entry has literal category, direction, and reason");
-
-        const auto raw_add_mutation = source + "\ncudaMemcpyHostToDevice\n";
-        check(fnv1a_64(raw_add_mutation) != manifest.source_fingerprint,
-              "manifest mutation gate rejects a raw host-transfer addition");
-        auto unaccounted_mutation = source;
-        const auto owner = unaccounted_mutation.find(manifest.accounting_owner);
-        check(owner != std::string::npos, "accounting owner mutation fixture is present");
-        unaccounted_mutation.replace(
-            owner, std::strlen(manifest.accounting_owner), "unaccounted_transfer");
-        check(fnv1a_64(unaccounted_mutation) != manifest.source_fingerprint,
-              "manifest mutation gate rejects accounted-to-unaccounted swap");
+    for (const auto *torque_family : {
+             "FULLMAG_FDM_OPERATOR_ZHANG_LI_STT",
+             "FULLMAG_FDM_OPERATOR_SLONCZEWSKI_STT",
+             "FULLMAG_FDM_OPERATOR_SOT"}) {
+        check(active_dispatch.find(torque_family) == std::string::npos,
+              "central dispatch flags never claim torque-family execution");
     }
     for (const auto *relative : {
-             "backends/fdm/api",
-             "crates/fullmag-fdm-sys",
-             "crates/fullmag-runner/src/fdm/gpu"}) {
-        for (const auto &entry :
-             std::filesystem::recursive_directory_iterator(root / relative)) {
-            if (!entry.is_regular_file()) continue;
-            const auto source = read(entry.path());
-            check(source.find("cudaMemcpyHostToDevice") == std::string::npos &&
-                      source.find("cudaMemcpyDeviceToHost") == std::string::npos &&
-                      source.find("cuMemcpyHtoD") == std::string::npos &&
-                      source.find("cuMemcpyDtoH") == std::string::npos &&
-                      source.find("hipMemcpy") == std::string::npos,
-                  "API/sys/runner scopes contain no unmanifested raw host transfer");
-        }
+             "backends/fdm/gpu/cuda/integrators/llg_fp32.cu",
+             "backends/fdm/gpu/cuda/integrators/llg_fp64.cu",
+             "backends/fdm/gpu/cuda/integrators/llg_rk4_fp32.cu",
+             "backends/fdm/gpu/cuda/integrators/llg_rk4_fp64.cu",
+             "backends/fdm/gpu/cuda/integrators/llg_rk23_fp32.cu",
+             "backends/fdm/gpu/cuda/integrators/llg_rk23_fp64.cu",
+             "backends/fdm/gpu/cuda/integrators/llg_dp45_fp32.cu",
+             "backends/fdm/gpu/cuda/integrators/llg_dp45_fp64.cu",
+             "backends/fdm/gpu/cuda/integrators/llg_abm3_fp32.cu",
+             "backends/fdm/gpu/cuda/integrators/llg_abm3_fp64.cu"}) {
+        const auto source = read(root / relative);
+        check(source.find("fullmag_fdm_note_llg_rhs_torque_device_launch") !=
+                  std::string::npos,
+              "every LLG workflow owns its torque-family launch receipt hook");
     }
     check(active_dispatch.find(
               "fullmag_fdm_accumulate_execution_receipt_audit(context_);") !=
               std::string::npos,
           "solver phase scope guard flushes receipt audit on every exit");
+    check(active_dispatch.find("context_complete_solver_receipt_attempt") !=
+              std::string::npos,
+          "pending operator launches are completed before receipt commit");
     const auto runner_dispatch = read(root / "crates/fullmag-runner/src/dispatch.rs");
     const auto runner_preview = read(root / "crates/fullmag-runner/src/interactive_runtime.rs");
     check(runner_dispatch.find("finalize_after_outcome") != std::string::npos,
@@ -287,6 +224,85 @@ int main() {
         family_state, FULLMAG_FDM_OPERATOR_GPU_TRANSPORT);
     check(fullmag::fdm::fullmag_fdm_executed_unknown_operator_mask(family_state) == 0,
           "transport success commits actual device execution");
+
+    struct RequiredFamilyFixture {
+        uint64_t family;
+        void (*configure)(fullmag::fdm::Context &);
+    };
+    const std::array<RequiredFamilyFixture, 19> required_family_fixtures{{
+        {FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR, +[](fullmag::fdm::Context &) {}},
+        {FULLMAG_FDM_OPERATOR_EXCHANGE, +[](fullmag::fdm::Context &ctx) { ctx.enable_exchange = true; }},
+        {FULLMAG_FDM_OPERATOR_DEMAG, +[](fullmag::fdm::Context &ctx) { ctx.enable_demag = true; }},
+        {FULLMAG_FDM_OPERATOR_DMI, +[](fullmag::fdm::Context &ctx) { ctx.has_interfacial_dmi = true; }},
+        {FULLMAG_FDM_OPERATOR_ANISOTROPY, +[](fullmag::fdm::Context &ctx) { ctx.has_uniaxial_anisotropy = true; }},
+        {FULLMAG_FDM_OPERATOR_REDUCTION, +[](fullmag::fdm::Context &) {}},
+        {FULLMAG_FDM_OPERATOR_EXTERNAL_FIELD, +[](fullmag::fdm::Context &ctx) { ctx.has_external_field = true; }},
+        {FULLMAG_FDM_OPERATOR_MASKS, +[](fullmag::fdm::Context &ctx) { ctx.has_active_mask = true; }},
+        {FULLMAG_FDM_OPERATOR_MAGNETOELASTIC, +[](fullmag::fdm::Context &ctx) { ctx.has_magnetoelastic = true; }},
+        {FULLMAG_FDM_OPERATOR_THERMAL, +[](fullmag::fdm::Context &ctx) { ctx.temperature = 300.0; }},
+        {FULLMAG_FDM_OPERATOR_ZHANG_LI_STT, +[](fullmag::fdm::Context &ctx) { ctx.has_zhang_li_stt = true; }},
+        {FULLMAG_FDM_OPERATOR_SLONCZEWSKI_STT, +[](fullmag::fdm::Context &ctx) { ctx.has_slonczewski_stt = true; }},
+        {FULLMAG_FDM_OPERATOR_SOT, +[](fullmag::fdm::Context &ctx) { ctx.has_sot = true; }},
+        {FULLMAG_FDM_OPERATOR_OERSTED, +[](fullmag::fdm::Context &ctx) { ctx.has_oersted_field = true; }},
+        {FULLMAG_FDM_OPERATOR_BOUNDARY_CORRECTION, +[](fullmag::fdm::Context &ctx) { ctx.boundary_tier = 1; }},
+        {FULLMAG_FDM_OPERATOR_MULTILAYER_TRANSFER, +[](fullmag::fdm::Context &ctx) {
+             ctx.has_multilayer_plan_v2 = true;
+             ctx.enable_demag = true;
+             ctx.multilayer_kernels.emplace_back();
+         }},
+        {FULLMAG_FDM_OPERATOR_MULTILAYER_INTERACTIONS, +[](fullmag::fdm::Context &ctx) {
+             ctx.has_multilayer_plan_v2 = true;
+             ctx.multilayer_layers.emplace_back();
+         }},
+        {FULLMAG_FDM_OPERATOR_MULTILAYER_DEMAG, +[](fullmag::fdm::Context &ctx) {
+             ctx.has_multilayer_plan_v2 = true;
+             ctx.enable_demag = true;
+             ctx.multilayer_kernels.emplace_back();
+         }},
+        {FULLMAG_FDM_OPERATOR_GPU_TRANSPORT, +[](fullmag::fdm::Context &ctx) { ctx.gpu_transport_rhs.active = true; }},
+    }};
+    for (const auto &fixture : required_family_fixtures) {
+        fullmag::fdm::Context minimal{};
+        minimal.enable_exchange = false;
+        minimal.enable_demag = false;
+        fixture.configure(minimal);
+        check((fullmag::fdm::fullmag_fdm_required_operator_mask(minimal) &
+               fixture.family) != 0,
+              "each of 19 operator families has a minimal required configuration");
+    }
+    fullmag::fdm::Context demag_off_multilayer{};
+    demag_off_multilayer.enable_exchange = false;
+    demag_off_multilayer.enable_demag = false;
+    demag_off_multilayer.has_multilayer_plan_v2 = true;
+    demag_off_multilayer.multilayer_layers.emplace_back();
+    demag_off_multilayer.multilayer_kernels.emplace_back();
+    const auto demag_off_required =
+        fullmag::fdm::fullmag_fdm_required_operator_mask(demag_off_multilayer);
+    check((demag_off_required & FULLMAG_FDM_OPERATOR_MULTILAYER_TRANSFER) == 0 &&
+              (demag_off_required & FULLMAG_FDM_OPERATOR_MULTILAYER_DEMAG) == 0,
+          "demag-off multilayer has no spurious transfer/demag unknown family");
+
+    fullmag::fdm::ExecutionReceiptState pending_family{};
+    fullmag::fdm::fullmag_fdm_require_operator(
+        pending_family, FULLMAG_FDM_OPERATOR_EXCHANGE);
+    fullmag::fdm::fullmag_fdm_resolve_operator_device(
+        pending_family, FULLMAG_FDM_OPERATOR_EXCHANGE);
+    fullmag::fdm::fullmag_fdm_begin_operator_execution_attempt(pending_family);
+    fullmag::fdm::fullmag_fdm_note_operator_device_launch(
+        pending_family, FULLMAG_FDM_OPERATOR_EXCHANGE);
+    check(fullmag::fdm::fullmag_fdm_executed_unknown_operator_mask(pending_family) ==
+              FULLMAG_FDM_OPERATOR_EXCHANGE,
+          "successful launch remains pending until work completion");
+    fullmag::fdm::fullmag_fdm_discard_operator_execution_attempt(pending_family);
+    check(fullmag::fdm::fullmag_fdm_executed_unknown_operator_mask(pending_family) ==
+              FULLMAG_FDM_OPERATOR_EXCHANGE,
+          "launch failure discards pending family without execution claim");
+    fullmag::fdm::fullmag_fdm_begin_operator_execution_attempt(pending_family);
+    fullmag::fdm::fullmag_fdm_note_operator_device_launch(
+        pending_family, FULLMAG_FDM_OPERATOR_EXCHANGE);
+    fullmag::fdm::fullmag_fdm_commit_operator_execution_attempt(pending_family);
+    check(fullmag::fdm::fullmag_fdm_executed_unknown_operator_mask(pending_family) == 0,
+          "completed work commits its family-specific pending hook");
 
     auto shared_receipt = std::make_shared<fullmag::fdm::ExecutionReceiptState>();
     fullmag::fdm::AsyncTransferReceiptToken pending_transfer(

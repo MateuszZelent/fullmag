@@ -140,6 +140,7 @@ static bool compute_rhs_into(Context &ctx, DeviceVectorField &rhs_out,
         static_cast<double*>(rhs_out.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "RK4 fp64 LLG RHS launch");
     if (!launch_add_gpu_transport_torque_fp64(ctx, ctx.m, rhs_out)) return false;
     if (poll_interrupt(ctx)) {
         abort_step_after_interrupt(ctx, false);
@@ -256,6 +257,7 @@ void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats
         static_cast<double*>(ctx.k1.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "RK4 fp64 LLG RHS launch");
     if (!launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.k1)) return;
     double max_dm_dt = reduce_max_norm_fp64(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
 

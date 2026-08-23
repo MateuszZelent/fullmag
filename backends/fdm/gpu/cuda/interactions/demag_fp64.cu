@@ -746,6 +746,12 @@ void launch_demag_field_fp64(Context &ctx) {
             ctx.demag_corr_stencil_size);
     }
 
+    const cudaError_t launch_error = cudaGetLastError();
+    if (launch_error != cudaSuccess) {
+        set_cuda_error(ctx, "launch_demag_field_fp64", launch_error);
+        context_end_compute_stream_work(ctx, "launch_demag_field_fp64");
+        return;
+    }
     if (context_end_compute_stream_work(ctx, "launch_demag_field_fp64")) {
         fullmag_fdm_note_operator_device_execution(
             ctx, FULLMAG_FDM_OPERATOR_DEMAG);
@@ -871,6 +877,11 @@ void launch_effective_field_fp64(Context &ctx, double evaluation_time) {
             ctx.active_mask,
             ctx.has_active_mask ? 1 : 0,
             n);
+    }
+    const cudaError_t launch_error = cudaGetLastError();
+    if (launch_error != cudaSuccess) {
+        set_cuda_error(ctx, "launch_effective_field_fp64", launch_error);
+        return;
     }
     if (ctx.has_interfacial_dmi || ctx.has_bulk_dmi) {
         fullmag_fdm_note_operator_device_execution(ctx, FULLMAG_FDM_OPERATOR_DMI);

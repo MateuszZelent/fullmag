@@ -525,6 +525,7 @@ cudaError_t fullmag_fdm_receipt_cuda_memcpy_async(
 #endif
 bool context_begin_compute_stream_work(Context &ctx, const char *operation);
 bool context_end_compute_stream_work(Context &ctx, const char *operation);
+bool context_complete_solver_receipt_attempt(Context &ctx, const char *operation);
 bool context_test_copy_f64_on_compute_stream(
     Context &ctx, double *destination, const double *source, uint64_t values);
 bool context_capture_gpu_transport_pre_step_m(Context &ctx);
@@ -1020,12 +1021,12 @@ inline uint64_t fullmag_fdm_required_operator_mask(const Context &ctx) {
         required_operator_mask |= FULLMAG_FDM_OPERATOR_BOUNDARY_CORRECTION;
     }
     if (ctx.has_multilayer_plan_v2) {
-        required_operator_mask |= FULLMAG_FDM_OPERATOR_MULTILAYER_TRANSFER;
         if (!ctx.multilayer_layers.empty()) {
             required_operator_mask |= FULLMAG_FDM_OPERATOR_MULTILAYER_INTERACTIONS;
         }
-        if (!ctx.multilayer_kernels.empty()) {
-            required_operator_mask |= FULLMAG_FDM_OPERATOR_MULTILAYER_DEMAG;
+        if (ctx.enable_demag && !ctx.multilayer_kernels.empty()) {
+            required_operator_mask |= FULLMAG_FDM_OPERATOR_MULTILAYER_TRANSFER |
+                                      FULLMAG_FDM_OPERATOR_MULTILAYER_DEMAG;
         }
     }
     if (ctx.gpu_transport_rhs.active) required_operator_mask |= FULLMAG_FDM_OPERATOR_GPU_TRANSPORT;
@@ -1051,8 +1052,36 @@ inline void fullmag_fdm_note_operator_device_execution(
     Context &ctx,
     uint64_t operator_mask)
 {
-    fullmag_fdm_commit_operator_device_execution(
+    fullmag_fdm_note_operator_device_launch(
         *ctx.execution_receipt, operator_mask);
+}
+
+inline bool fullmag_fdm_note_llg_rhs_torque_device_launch(
+    Context &ctx,
+    const char *operation)
+{
+#if FULLMAG_HAS_CUDA
+    const cudaError_t launch_error = cudaGetLastError();
+    if (launch_error != cudaSuccess) {
+        ctx.last_error = std::string(operation) + ": " + cudaGetErrorString(launch_error);
+        return false;
+    }
+#else
+    (void)operation;
+#endif
+    if (ctx.has_zhang_li_stt) {
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_ZHANG_LI_STT);
+    }
+    if (ctx.has_slonczewski_stt) {
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_SLONCZEWSKI_STT);
+    }
+    if (ctx.has_sot) {
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_SOT);
+    }
+    return true;
 }
 
 inline void fullmag_fdm_mark_actual_operator_host(Context &ctx, uint64_t operator_mask) {

@@ -52,11 +52,21 @@ public:
         : context_(context), previous_(fullmag_fdm_set_solver_phase_active(
               *context.execution_receipt, true))
     {
+        fullmag_fdm_begin_operator_execution_attempt(*context.execution_receipt);
     }
 
     ~ReceiptSolverPhaseGuard() {
+        if (!committed_) {
+            fullmag_fdm_discard_operator_execution_attempt(
+                *context_.execution_receipt);
+        }
         fullmag_fdm_accumulate_execution_receipt_audit(context_);
         fullmag_fdm_set_solver_phase_active(*context_.execution_receipt, previous_);
+    }
+
+    void commit() {
+        fullmag_fdm_commit_operator_execution_attempt(*context_.execution_receipt);
+        committed_ = true;
     }
 
     ReceiptSolverPhaseGuard(const ReceiptSolverPhaseGuard &) = delete;
@@ -65,6 +75,7 @@ public:
 private:
     Context &context_;
     bool previous_;
+    bool committed_ = false;
 };
 
 std::optional<int> selected_cuda_device_from_env() {
@@ -1201,9 +1212,14 @@ int fullmag_fdm_backend_step(
         if (!ctx->last_error.empty()) {
             return FULLMAG_FDM_ERR_CUDA;
         }
+        if (!context_complete_solver_receipt_attempt(
+                *ctx, "cudaStreamSynchronize(multilayer receipt attempt)")) {
+            return FULLMAG_FDM_ERR_CUDA;
+        }
         fullmag_fdm_publish_hot_loop_audit(*ctx, out_stats);
         fullmag_fdm_note_operator_device_execution(
             *ctx, FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR);
+        receipt_solver_phase.commit();
         fullmag_fdm_publish_multilayer_demag_stage_counters(*ctx, out_stats);
         return FULLMAG_FDM_OK;
     }
@@ -1297,6 +1313,11 @@ int fullmag_fdm_backend_step(
         (void)rollback_bound_fp64_step(*ctx, accepted_step, accepted_time);
         return FULLMAG_FDM_ERR_CUDA;
     }
+    if (!context_complete_solver_receipt_attempt(
+            *ctx, "cudaStreamSynchronize(single-grid receipt attempt)")) {
+        (void)rollback_bound_fp64_step(*ctx, accepted_step, accepted_time);
+        return FULLMAG_FDM_ERR_CUDA;
+    }
 
     if (!context_commit_gpu_transport_step(*ctx)) {
         ctx->last_error = "failed to commit bound spin-transport step transaction";
@@ -1308,18 +1329,7 @@ int fullmag_fdm_backend_step(
     fullmag_fdm_publish_hot_loop_audit(*ctx, out_stats);
     fullmag_fdm_note_operator_device_execution(
         *ctx, FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR);
-    if (ctx->has_zhang_li_stt) {
-        fullmag_fdm_note_operator_device_execution(
-            *ctx, FULLMAG_FDM_OPERATOR_ZHANG_LI_STT);
-    }
-    if (ctx->has_slonczewski_stt) {
-        fullmag_fdm_note_operator_device_execution(
-            *ctx, FULLMAG_FDM_OPERATOR_SLONCZEWSKI_STT);
-    }
-    if (ctx->has_sot) {
-        fullmag_fdm_note_operator_device_execution(
-            *ctx, FULLMAG_FDM_OPERATOR_SOT);
-    }
+    receipt_solver_phase.commit();
     return FULLMAG_FDM_OK;
 #else
     (void)handle; (void)dt_seconds; (void)out_stats;

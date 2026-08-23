@@ -213,6 +213,7 @@ static bool compute_rhs_into(Context &ctx, DeviceVectorField &rhs_out,
         static_cast<double*>(rhs_out.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "RK23 fp64 LLG RHS launch");
     if (!context_evaluate_gpu_transport_rhs(
             ctx, ctx.m, evaluation_time,
             ctx.gpu_transport_active_attempt_id, stage_id) ||

@@ -18,6 +18,7 @@ namespace fullmag {
 namespace fdm {
 
 extern double reduce_exchange_energy_fp64(Context &ctx);
+extern void set_cuda_error(Context &ctx, const char *operation, cudaError_t err);
 
 /* ── Exchange field kernel ── */
 
@@ -204,6 +205,11 @@ void launch_exchange_field_fp64(Context &ctx) {
             inv_dx2, inv_dy2, inv_dz2,
             ctx.phi_floor,
             ctx.nx, ctx.ny, ctx.nz);
+        const cudaError_t launch_error = cudaGetLastError();
+        if (launch_error != cudaSuccess) {
+            set_cuda_error(ctx, "launch_exchange_field_fp64(t0)", launch_error);
+            return;
+        }
         fullmag_fdm_note_operator_device_execution(
             ctx, FULLMAG_FDM_OPERATOR_EXCHANGE);
         fullmag_fdm_note_operator_device_execution(
@@ -239,6 +245,11 @@ void launch_exchange_field_fp64(Context &ctx) {
             ctx.delta_min,
             ctx.phi_floor,
             ctx.nx, ctx.ny, ctx.nz);
+        const cudaError_t launch_error = cudaGetLastError();
+        if (launch_error != cudaSuccess) {
+            set_cuda_error(ctx, "launch_exchange_field_fp64(t1)", launch_error);
+            return;
+        }
         fullmag_fdm_note_operator_device_execution(
             ctx, FULLMAG_FDM_OPERATOR_EXCHANGE);
         fullmag_fdm_note_operator_device_execution(
@@ -275,6 +286,11 @@ void launch_exchange_field_fp64(Context &ctx) {
         prefactor,
         inv_mu0_ms,
         ctx.periodic_x, ctx.periodic_y, ctx.periodic_z);
+    const cudaError_t launch_error = cudaGetLastError();
+    if (launch_error != cudaSuccess) {
+        set_cuda_error(ctx, "launch_exchange_field_fp64", launch_error);
+        return;
+    }
     fullmag_fdm_note_operator_device_execution(ctx, FULLMAG_FDM_OPERATOR_EXCHANGE);
 }
 

@@ -18,6 +18,7 @@ struct ExecutionReceiptState {
     uint64_t host_operator_mask = 0;
     uint64_t executed_device_operator_mask = 0;
     uint64_t executed_host_operator_mask = 0;
+    uint64_t pending_device_operator_mask = 0;
     fullmag_fdm_operator_location_v1 reduction_location = FULLMAG_FDM_LOCATION_UNKNOWN;
     fullmag_fdm_operator_location_v1 control_location = FULLMAG_FDM_LOCATION_HOST_SCALAR;
     uint64_t fallback_count = 0;
@@ -121,6 +122,39 @@ inline void fullmag_fdm_commit_operator_device_execution(
     state.required_operator_mask |= operator_mask;
     state.executed_device_operator_mask |= operator_mask;
     state.executed_host_operator_mask &= ~operator_mask;
+}
+
+inline void fullmag_fdm_begin_operator_execution_attempt(
+    ExecutionReceiptState &state)
+{
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
+    state.pending_device_operator_mask = 0;
+}
+
+inline void fullmag_fdm_note_operator_device_launch(
+    ExecutionReceiptState &state,
+    uint64_t operator_mask)
+{
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
+    state.pending_device_operator_mask |= operator_mask;
+}
+
+inline void fullmag_fdm_discard_operator_execution_attempt(
+    ExecutionReceiptState &state)
+{
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
+    state.pending_device_operator_mask = 0;
+}
+
+inline void fullmag_fdm_commit_operator_execution_attempt(
+    ExecutionReceiptState &state)
+{
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
+    const uint64_t proven =
+        state.pending_device_operator_mask & state.required_operator_mask;
+    state.executed_device_operator_mask |= proven;
+    state.executed_host_operator_mask &= ~proven;
+    state.pending_device_operator_mask = 0;
 }
 
 inline void fullmag_fdm_commit_operator_host_execution(

@@ -213,6 +213,7 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<double*>(ctx.k1.z),
             n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
             stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+        fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp64 LLG RHS launch");
         if (!context_evaluate_gpu_transport_rhs(
                 ctx, ctx.m, step_start_time,
                 ctx.gpu_transport_active_attempt_id, 1) ||
@@ -251,6 +252,7 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<double*>(ctx.h_ex.z),
             n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
             stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+        fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp64 LLG RHS launch");
         if (!context_evaluate_gpu_transport_rhs(
                 ctx, ctx.m, step_start_time + dt,
                 ctx.gpu_transport_active_attempt_id, 2) ||
@@ -291,6 +293,7 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<double*>(ctx.h_ex.z),
             n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
             stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+        fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp64 LLG RHS launch");
         if (!context_evaluate_gpu_transport_rhs(
                 ctx, ctx.m, step_start_time + dt,
                 ctx.gpu_transport_active_attempt_id, 3) ||
@@ -358,6 +361,7 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         static_cast<double*>(ctx.k1.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp64 LLG RHS launch");
     if (!context_evaluate_gpu_transport_rhs(
             ctx, ctx.m, step_start_time + dt,
             ctx.gpu_transport_active_attempt_id, 1) ||
@@ -401,6 +405,7 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         static_cast<double*>(ctx.h_ex.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp64 LLG RHS launch");
     if (!context_evaluate_gpu_transport_rhs(
             ctx, ctx.m, step_start_time + dt,
             ctx.gpu_transport_active_attempt_id, 2) ||
