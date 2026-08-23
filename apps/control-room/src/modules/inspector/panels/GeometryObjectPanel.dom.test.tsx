@@ -1,5 +1,4 @@
 import { act } from "react";
-import { createRoot } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
@@ -76,6 +75,7 @@ describe("GeometryObjectPanel primitive transaction", () => {
       });
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
     const root = createRoot(container as unknown as Element);
     try {
       await act(async () => root.render(<GeometryObjectPanel selection={selection} />));
@@ -137,6 +137,7 @@ describe("GeometryObjectPanel primitive transaction", () => {
     );
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
     const root = createRoot(container as unknown as Element);
     try {
       await act(async () => root.render(<GeometryObjectPanel selection={selection} />));
@@ -162,6 +163,7 @@ describe("GeometryObjectPanel primitive transaction", () => {
     mocks.sceneResource.revision = null as never;
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
     const root = createRoot(container as unknown as Element);
     try {
       await act(async () => root.render(<GeometryObjectPanel selection={selection} />));
@@ -176,6 +178,7 @@ describe("GeometryObjectPanel primitive transaction", () => {
   it("sends no request for an invalid primitive dimension", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
     const root = createRoot(container as unknown as Element);
     try {
       await act(async () => root.render(<GeometryObjectPanel selection={selection} />));
@@ -195,7 +198,12 @@ function changeInput(root: TestNode, label: string, value: string): void {
   const input = findElements(root, (element) =>
     element.tagName === "INPUT" && element.getAttribute("aria-label") === label)[0];
   if (!input) throw new Error(`Missing input ${label}`);
-  input.value = value;
+  const nativeValueSetter = Object.getOwnPropertyDescriptor(
+    TestElement.prototype,
+    "value",
+  )?.set;
+  if (!nativeValueSetter) throw new Error("Missing native test input value setter");
+  nativeValueSetter.call(input, value);
   input.dispatchEvent(new TestEvent("input", { bubbles: true }));
 }
 

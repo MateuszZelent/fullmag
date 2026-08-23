@@ -53,12 +53,7 @@ export function Vector3Field({
                   disabled={disabled}
                   type="text"
                   value={values[index] ?? ""}
-                  onInput={(event) =>
-                    onChange(
-                      index as 0 | 1 | 2,
-                      (event.target as HTMLInputElement).value,
-                    )
-                  }
+                  onChange={(event) => onChange(index as 0 | 1 | 2, event.target.value)}
                 />
                 {errors?.[index] ? (
                   <span
