@@ -26,7 +26,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
 use tokio::sync::{broadcast, watch, Mutex, RwLock};
 use utoipa::ToSchema;
 
@@ -107,15 +107,14 @@ pub(crate) struct AppState {
     pub current_workspace_root: PathBuf,
     /// Sessionless local-live workspace snapshot used by the root `/` GUI.
     pub current_live_state: Arc<RwLock<Option<SessionStateResponse>>>,
-    /// Serializes explicit current-session replacement transitions only.
+    /// Lock order: current_live_session_transition precedes current-session state,
+    /// resource, and realtime locks. It remains held through current-session publish.
     pub current_live_session_transition: Arc<Mutex<()>>,
     /// Changes whenever explicit authoring replaces the current session.
     pub current_live_session_epoch: Arc<AtomicU64>,
-    /// Session identity paired with the replacement epoch for publication admission.
-    pub current_live_session_publication_identity: Arc<StdMutex<Option<String>>>,
     #[cfg(test)]
-    pub current_live_session_before_publish_hook:
-        Arc<Mutex<Option<CurrentLiveSessionBeforePublishHook>>>,
+    pub current_live_realtime_before_send_hook:
+        Arc<Mutex<Option<CurrentLiveRealtimeBeforeSendHook>>>,
     /// Backend-owned health of the runner-to-resource publication path.
     pub current_live_connectivity: Arc<RwLock<crate::schemas::status::SessionConnectivity>>,
     /// Last successfully accepted runner frame or idle liveness tick.
@@ -183,8 +182,8 @@ pub(crate) struct CurrentLiveRealtimeEvent {
 
 #[cfg(test)]
 #[derive(Debug, Clone)]
-pub(crate) struct CurrentLiveSessionBeforePublishHook {
-    pub installed: Arc<tokio::sync::Notify>,
+pub(crate) struct CurrentLiveRealtimeBeforeSendHook {
+    pub admitted: Arc<tokio::sync::Notify>,
     pub resume: Arc<tokio::sync::Notify>,
 }
 

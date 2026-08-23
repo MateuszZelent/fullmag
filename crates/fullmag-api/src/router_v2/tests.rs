@@ -644,8 +644,7 @@ pub(crate) fn test_app_state() -> Arc<AppState> {
         current_live_state: Arc::new(RwLock::new(None)),
         current_live_session_transition: Arc::new(Mutex::new(())),
         current_live_session_epoch: Arc::new(AtomicU64::new(0)),
-        current_live_session_publication_identity: Arc::new(std::sync::Mutex::new(None)),
-        current_live_session_before_publish_hook: Arc::new(Mutex::new(None)),
+        current_live_realtime_before_send_hook: Arc::new(Mutex::new(None)),
         current_live_connectivity: Arc::new(RwLock::new(
             crate::schemas::status::SessionConnectivity::Connected,
         )),
@@ -1276,12 +1275,12 @@ async fn concurrent_create_scratch_sessions_admit_only_one_without_replacement()
 #[tokio::test]
 async fn delayed_scratch_session_publication_cannot_enter_replacement_realtime_stream() {
     let state = test_app_state();
-    let hook = crate::types::CurrentLiveSessionBeforePublishHook {
-        installed: Arc::new(tokio::sync::Notify::new()),
+    let hook = crate::types::CurrentLiveRealtimeBeforeSendHook {
+        admitted: Arc::new(tokio::sync::Notify::new()),
         resume: Arc::new(tokio::sync::Notify::new()),
     };
     *state
-        .current_live_session_before_publish_hook
+        .current_live_realtime_before_send_hook
         .lock()
         .await = Some(hook.clone());
     let mut events = state.current_live_realtime_events.subscribe();
@@ -1300,28 +1299,50 @@ async fn delayed_scratch_session_publication_cannot_enter_replacement_realtime_s
         )
         .await
     });
-    tokio::time::timeout(std::time::Duration::from_secs(1), hook.installed.notified())
+    tokio::time::timeout(std::time::Duration::from_secs(1), hook.admitted.notified())
         .await
-        .expect("first session must pause after installation");
+        .expect("first session must pause after publication admission");
 
-    let (_, axum::Json(replacement)) = crate::router_v2::handlers::sessions::create(
-        axum::extract::State(state.clone()),
-        axum::Json(crate::schemas::sessions::CreateSessionRequest {
-            name: "Replacement".to_string(),
-            backend: "fem".to_string(),
-            device: "cpu".to_string(),
-            precision: "double".to_string(),
-            replace_current: true,
-        }),
-    )
-    .await
-    .expect("replacement must be created");
+    let replacement_state = state.clone();
+    let replacement = tokio::spawn(async move {
+        crate::router_v2::handlers::sessions::create(
+            axum::extract::State(replacement_state),
+            axum::Json(crate::schemas::sessions::CreateSessionRequest {
+                name: "Replacement".to_string(),
+                backend: "fem".to_string(),
+                device: "cpu".to_string(),
+                precision: "double".to_string(),
+                replace_current: true,
+            }),
+        )
+        .await
+    });
+    tokio::task::yield_now().await;
+    assert!(
+        !replacement.is_finished(),
+        "replacement must wait for the admitted publication to leave replay/send"
+    );
 
     hook.resume.notify_one();
     let (_, axum::Json(first)) = first
         .await
         .expect("first task must complete")
         .expect("first session creation must succeed");
+    let (_, axum::Json(replacement)) = replacement
+        .await
+        .expect("replacement task must complete")
+        .expect("replacement must be created");
+
+    let first_event = tokio::time::timeout(std::time::Duration::from_millis(100), events.recv())
+        .await
+        .expect("first session must publish realtime invalidation")
+        .expect("realtime channel must remain open");
+    let first_event: LiveRealtimeServerEvent =
+        serde_json::from_str(&first_event.json).expect("realtime event must serialize");
+    let LiveRealtimeServerEvent::ResourceBatchChanged { session_id, .. } = first_event else {
+        panic!("first session must publish a resource invalidation");
+    };
+    assert_eq!(session_id, first.session_id);
 
     let event = tokio::time::timeout(std::time::Duration::from_millis(100), events.recv())
         .await
@@ -1333,7 +1354,6 @@ async fn delayed_scratch_session_publication_cannot_enter_replacement_realtime_s
         panic!("replacement must publish a resource invalidation");
     };
     assert_eq!(session_id, replacement.session_id);
-    assert_ne!(session_id, first.session_id);
     assert!(
         tokio::time::timeout(std::time::Duration::from_millis(100), events.recv())
             .await
@@ -2326,8 +2346,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         current_live_state: Arc::new(RwLock::new(None)),
         current_live_session_transition: Arc::new(Mutex::new(())),
         current_live_session_epoch: Arc::new(AtomicU64::new(0)),
-        current_live_session_publication_identity: Arc::new(std::sync::Mutex::new(None)),
-        current_live_session_before_publish_hook: Arc::new(Mutex::new(None)),
+        current_live_realtime_before_send_hook: Arc::new(Mutex::new(None)),
         current_live_connectivity: Arc::new(RwLock::new(
             crate::schemas::status::SessionConnectivity::Connected,
         )),

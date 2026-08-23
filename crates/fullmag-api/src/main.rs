@@ -1234,6 +1234,135 @@ mod scratch_session_lifecycle_tests {
         );
         assert_eq!(state.current_display_selection.read().await.revision, 7);
     }
+
+    #[tokio::test]
+    async fn admitted_runner_publication_blocks_scratch_replacement_until_send() {
+        let state = crate::router_v2::tests::test_app_state();
+        let (_, Json(first)) = crate::router_v2::handlers::sessions::create(
+            State(state.clone()),
+            Json(crate::schemas::sessions::CreateSessionRequest {
+                name: "First".to_string(),
+                backend: "fdm".to_string(),
+                device: "cpu".to_string(),
+                precision: "double".to_string(),
+                replace_current: false,
+            }),
+        )
+        .await
+        .expect("first session must be created");
+        let hook = crate::types::CurrentLiveRealtimeBeforeSendHook {
+            admitted: Arc::new(tokio::sync::Notify::new()),
+            resume: Arc::new(tokio::sync::Notify::new()),
+        };
+        *state.current_live_realtime_before_send_hook.lock().await = Some(hook.clone());
+        let mut events = state.current_live_realtime_events.subscribe();
+
+        let runner_state = state.clone();
+        let runner_session_id = first.session_id.clone();
+        let runner = tokio::spawn(async move {
+            sync_current_live_snapshot(
+                State(runner_state),
+                Json(CurrentLiveSnapshotRequest {
+                    session_id: runner_session_id,
+                    session: None,
+                    session_status: None,
+                    metadata: None,
+                    mesh_workspace: None,
+                    stage_execution: None,
+                    simulation_preparation: None,
+                    run: None,
+                    live_state: None,
+                    coupled_checkpoint: None,
+                    latest_scalar_row: None,
+                    latest_fields: Some(
+                        serde_json::from_value(serde_json::json!({
+                            "H_eff": {
+                                "values": [[0.0, 1.0, 0.0]],
+                                "layout": { "grid_cells": [1, 1, 1] }
+                            }
+                        }))
+                        .expect("runner terminal field frame must deserialize"),
+                    ),
+                    replace_latest_fields: true,
+                    field_generation: Some(CurrentLiveFieldGeneration {
+                        run_id: "runner-test".to_string(),
+                        sequence: 1,
+                    }),
+                    preview_fields: None,
+                    clear_preview_cache: true,
+                    engine_log: None,
+                    solver_profile: None,
+                    fem_mesh: None,
+                }),
+            )
+            .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(1), hook.admitted.notified())
+            .await
+            .expect("runner must pause after publication admission");
+
+        let replacement_state = state.clone();
+        let replacement = tokio::spawn(async move {
+            crate::router_v2::handlers::sessions::create(
+                State(replacement_state),
+                Json(crate::schemas::sessions::CreateSessionRequest {
+                    name: "Replacement".to_string(),
+                    backend: "fem".to_string(),
+                    device: "cpu".to_string(),
+                    precision: "double".to_string(),
+                    replace_current: true,
+                }),
+            )
+            .await
+        });
+        tokio::task::yield_now().await;
+        assert!(
+            !replacement.is_finished(),
+            "scratch replacement must wait for the admitted runner publication"
+        );
+
+        hook.resume.notify_one();
+        let _ = runner
+            .await
+            .expect("runner task must complete")
+            .expect("runner publication must be accepted");
+        let (_, Json(replacement)) = replacement
+            .await
+            .expect("replacement task must complete")
+            .expect("replacement must be created");
+
+        let runner_event = tokio::time::timeout(std::time::Duration::from_millis(100), events.recv())
+            .await
+            .expect("runner must publish before replacement")
+            .expect("realtime channel must remain open");
+        let runner_event: LiveRealtimeServerEvent =
+            serde_json::from_str(&runner_event.json).expect("runner event must serialize");
+        assert!(matches!(
+            runner_event,
+            LiveRealtimeServerEvent::ResourceBatchChanged { ref session_id, .. }
+                if session_id == &first.session_id
+        ));
+        let replacement_event =
+            tokio::time::timeout(std::time::Duration::from_millis(100), events.recv())
+                .await
+                .expect("replacement must publish after runner")
+                .expect("realtime channel must remain open");
+        let replacement_event: LiveRealtimeServerEvent =
+            serde_json::from_str(&replacement_event.json).expect("replacement event must serialize");
+        assert!(matches!(
+            replacement_event,
+            LiveRealtimeServerEvent::ResourceBatchChanged { ref session_id, .. }
+                if session_id == &replacement.session_id
+        ));
+        let replay = state.current_live_realtime_replay.lock().await;
+        assert!(replay.iter().all(|record| {
+            matches!(
+                serde_json::from_str::<LiveRealtimeServerEvent>(&record.json),
+                Ok(LiveRealtimeServerEvent::ResourceBatchChanged { ref session_id, .. })
+                    if session_id == &replacement.session_id
+            )
+        }));
+    }
 }
 
 #[cfg(test)]
@@ -1260,6 +1389,8 @@ async fn publish_current_live_realtime_event(
     state: &AppState,
     event: LiveRealtimeServerEvent,
 ) -> Result<(), ApiError> {
+    #[cfg(test)]
+    pause_current_live_realtime_before_send(state).await;
     publish_current_live_realtime_event_with_parts(
         &state.current_live_realtime_events,
         &state.current_live_realtime_replay,
@@ -1267,6 +1398,19 @@ async fn publish_current_live_realtime_event(
         event,
     )
     .await
+}
+
+#[cfg(test)]
+async fn pause_current_live_realtime_before_send(state: &AppState) {
+    let hook = state
+        .current_live_realtime_before_send_hook
+        .lock()
+        .await
+        .take();
+    if let Some(hook) = hook {
+        hook.admitted.notify_one();
+        hook.resume.notified().await;
+    }
 }
 
 async fn publish_current_live_realtime_event_with_parts(
@@ -1410,6 +1554,7 @@ async fn queue_current_live_realtime_resource_batch(
     };
 
     if should_spawn {
+        let session_transition = state.current_live_session_transition.clone();
         let pending_batches = state.current_live_realtime_pending_batches.clone();
         let events = state.current_live_realtime_events.clone();
         let replay = state.current_live_realtime_replay.clone();
@@ -1417,6 +1562,7 @@ async fn queue_current_live_realtime_resource_batch(
         let policy = state.current_live_realtime_policy.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(u64::from(window_ms))).await;
+            let _session_transition = session_transition.lock().await;
             let Some(pending) = pending_batches.lock().await.remove(&key) else {
                 return;
             };
@@ -1753,9 +1899,8 @@ async fn main() {
         current_live_state: Arc::new(RwLock::new(None)),
         current_live_session_transition: Arc::new(Mutex::new(())),
         current_live_session_epoch: Arc::new(AtomicU64::new(0)),
-        current_live_session_publication_identity: Arc::new(std::sync::Mutex::new(None)),
         #[cfg(test)]
-        current_live_session_before_publish_hook: Arc::new(Mutex::new(None)),
+        current_live_realtime_before_send_hook: Arc::new(Mutex::new(None)),
         current_live_connectivity: Arc::new(RwLock::new(
             crate::schemas::status::SessionConnectivity::Connected,
         )),
@@ -2443,6 +2588,7 @@ async fn sync_current_live_frame_update<F>(
 where
     F: FnOnce(&mut SessionStateResponse) -> Result<(), ApiError>,
 {
+    let _session_transition = state.current_live_session_transition.lock().await;
     let sync_start = std::time::Instant::now();
     let admission_epoch = state.current_live_session_epoch.load(Ordering::Relaxed);
     let display_selection = state.current_display_selection.read().await.clone();
