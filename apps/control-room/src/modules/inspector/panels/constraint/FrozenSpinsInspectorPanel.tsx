@@ -70,11 +70,12 @@ export function FrozenSpinsInspectorPanel({ selection }: InspectorPanelProps) {
     );
   }
 
+  const objectId = ref.objectId ?? selection.objectId;
   return (
     <FrozenSpinsEditor
       key={constraintId}
       definition={retainedResource.definition}
-      objectId={ref.objectId}
+      objectId={objectId}
       regionId={ref.regionId ?? null}
       revision={retainedResource.revision}
     />
@@ -88,7 +89,7 @@ export function FrozenSpinsEditor({
   revision: initialRevision,
 }: {
   definition: FrozenSpinsDefinition;
-  objectId: string;
+  objectId: string | null;
   regionId: string | null;
   revision: number;
 }) {
@@ -100,6 +101,7 @@ export function FrozenSpinsEditor({
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [preview, setPreview] = useState<FrozenSpinsPreviewResponse | null>(null);
   const fieldMeta = useFieldMetaResource({
+    enabled: objectId !== null,
     owner_object_id: objectId,
     quantityId: "m",
   });
@@ -132,6 +134,13 @@ export function FrozenSpinsEditor({
   }
 
   async function createPreview(): Promise<void> {
+    if (!objectId) {
+      setFeedback({
+        kind: "warning",
+        message: "Select a target object to preview Frozen Spins.",
+      });
+      return;
+    }
     const sourceStateRevision = fieldMeta.data?.source_revision;
     const topologyFingerprint = fieldMeta.data?.publication_bundle?.topology_hash;
     if (sourceStateRevision === undefined || !topologyFingerprint) {
@@ -226,12 +235,18 @@ export function FrozenSpinsEditor({
       </InspectorGroup>
 
       <InspectorGroup title="Selection" collapsible defaultOpen>
-        <SelectionExpressionBuilder
-          expression={draft.selector}
-          objectId={objectId}
-          regionId={regionId}
-          onChange={(selector) => setDraft((current) => ({ ...current, selector }))}
-        />
+        {objectId ? (
+          <SelectionExpressionBuilder
+            expression={draft.selector}
+            objectId={objectId}
+            regionId={regionId}
+            onChange={(selector) => setDraft((current) => ({ ...current, selector }))}
+          />
+        ) : (
+          <p className="fm-inspector-feedback" data-kind="warning">
+            Select a target object to edit the selection expression.
+          </p>
+        )}
         <SelectInput
           label="Membership"
           value={membership.kind}

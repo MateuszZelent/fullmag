@@ -874,12 +874,12 @@ async function patchAirboxVisualization(
 
   const receipt = await patchVisualizationState(context, statePatch);
   const revision = state?.revision;
-  if (typeof revision === "number") {
+  if (typeof revision === "number" && receipt) {
     context.visualization?.patchTargetPending(
       AIRBOX_VISUALIZATION_TARGET,
       persistentVisualizationTargetPatch(patch),
       revision,
-      receipt?.transactionId,
+      receipt.transactionId,
     );
   }
   return { status: "completed" };
