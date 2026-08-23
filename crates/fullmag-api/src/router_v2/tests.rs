@@ -1104,6 +1104,106 @@ fn test_router() -> axum::Router {
     build_v2_router().with_state(test_app_state())
 }
 
+#[tokio::test]
+async fn create_scratch_session_accepts_explicit_fdm_and_fem_cpu_double_requests() {
+    let app = test_router();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"name":"Scratch FDM","backend":"fdm","device":"cpu","precision":"double"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = body_json(response).await;
+    assert_eq!(body["scene_document"]["schema_version"], "0.3");
+    assert_eq!(body["scene_document"]["objects"], serde_json::json!([]));
+    assert_eq!(body["status"]["requested_execution"]["backend"], "fdm");
+    assert_eq!(body["status"]["requested_execution"]["device"], "cpu");
+    assert_eq!(body["status"]["requested_execution"]["precision"], "double");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"name":"Scratch FEM","backend":"fem","device":"cpu","precision":"double","replace_current":true}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = body_json(response).await;
+    assert_eq!(body["scene_document"]["schema_version"], "0.3");
+    assert_eq!(body["scene_document"]["objects"], serde_json::json!([]));
+    assert_eq!(body["status"]["requested_execution"]["backend"], "fem");
+    assert_eq!(body["status"]["requested_execution"]["device"], "cpu");
+    assert_eq!(body["status"]["requested_execution"]["precision"], "double");
+}
+
+#[tokio::test]
+async fn create_scratch_session_rejects_unknown_execution_and_implicit_replacement() {
+    let app = test_router();
+
+    let invalid = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"name":"Invalid","backend":"unknown","device":"cpu","precision":"double"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"name":"Scratch FDM","backend":"fdm","device":"cpu","precision":"double"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+
+    let conflict = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"name":"Replacement","backend":"fem","device":"cpu","precision":"double"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+}
+
 async fn test_router_with_session() -> axum::Router {
     build_v2_router().with_state(test_app_state_with_live_session().await)
 }

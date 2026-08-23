@@ -40,7 +40,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             "/v2/platform/docs/asyncapi",
             get(handlers::platform::get_asyncapi_docs),
         )
-        .route("/v2/sessions", get(list_sessions).post(create_session))
+        .route(
+            "/v2/sessions",
+            get(list_sessions).post(handlers::sessions::create),
+        )
         .route(
             "/v2/sessions/current",
             get(get_current_session).patch(patch_current_session),
@@ -1010,14 +1013,6 @@ async fn list_sessions(State(state): State<Arc<AppState>>) -> Json<Value> {
         "schema_version": "2.0.0",
         "sessions": sessions,
     }))
-}
-
-async fn create_session() -> Result<Json<Value>, ApiError> {
-    Err(ApiError {
-        status: StatusCode::BAD_REQUEST,
-        message: "the local runtime currently exposes only /v2/sessions/current".to_string(),
-        diagnostics: Vec::new(),
-    })
 }
 
 async fn get_current_session(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {

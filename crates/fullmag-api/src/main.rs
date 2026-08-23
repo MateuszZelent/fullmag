@@ -2320,6 +2320,35 @@ impl CurrentLiveSyncKind {
     }
 }
 
+pub(crate) async fn reset_current_live_session_resources(state: &AppState) {
+    *state.current_display_selection.write().await = CurrentDisplaySelection::default();
+    *state.current_display_presentation.write().await = DisplayPresentationState::default();
+    state.current_visualization_client_acks.write().await.clear();
+    state
+        .current_visualization_client_ack_revision
+        .store(0, Ordering::Relaxed);
+    *state.current_workspace_selection.write().await = CurrentWorkspaceSelection::default();
+    *state.current_workspace_ribbon.write().await = CurrentWorkspaceRibbon::default();
+    *state.current_workspace_layout.write().await = CurrentWorkspaceLayout::default();
+    state.current_hysteresis_bookmarks.write().await.clear();
+    state.current_control_queue.lock().await.clear();
+    state.current_command_responses.lock().await.clear();
+    state.current_command_ledger.lock().await.clear();
+    *state.current_control_next_seq.lock().await = 0;
+    let _ = state.current_control_events.send(0);
+    state.current_live_realtime_replay.lock().await.clear();
+    state.current_live_realtime_pending_batches.lock().await.clear();
+    state
+        .current_live_realtime_next_seq
+        .store(0, Ordering::Relaxed);
+    *state.frozen_spins_previews.write().await = Default::default();
+    *state.current_live_connectivity.write().await =
+        crate::schemas::status::SessionConnectivity::Connected;
+    state
+        .current_live_last_seen_unix_ms
+        .store(0, Ordering::Relaxed);
+}
+
 async fn sync_current_live_frame_update<F>(
     state: &Arc<AppState>,
     kind: CurrentLiveSyncKind,
@@ -2345,14 +2374,7 @@ where
         .map(|existing| existing.session.session_id != session_id)
         .unwrap_or(false);
     if reset_preview {
-        let display_selection = CurrentDisplaySelection::default();
-        *state.current_display_selection.write().await = display_selection.clone();
-        state.current_control_queue.lock().await.clear();
-        state.current_command_responses.lock().await.clear();
-        state.current_command_ledger.lock().await.clear();
-        let current_seq = *state.current_control_next_seq.lock().await;
-        let _ = state.current_control_events.send(current_seq);
-        let _ = std::fs::remove_dir_all(&state.current_workspace_root);
+        reset_current_live_session_resources(state).await;
     }
     let display_selection = state.current_display_selection.read().await.clone();
     let selected_cached_display_fields_match_selection = preview_fields

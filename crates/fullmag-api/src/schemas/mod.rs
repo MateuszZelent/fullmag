@@ -19,6 +19,7 @@ pub mod realtime;
 pub mod relaxation;
 pub mod runtime;
 pub mod scalars;
+pub mod sessions;
 pub mod status;
 pub mod tables;
 pub mod visualization_state;
