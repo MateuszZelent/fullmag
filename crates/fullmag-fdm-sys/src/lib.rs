@@ -280,6 +280,7 @@ pub struct fullmag_fdm_multilayer_plan_desc_v2 {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+#[allow(non_snake_case)]
 pub struct fullmag_fdm_plan_desc {
     pub grid: fullmag_fdm_grid_desc,
     pub material: fullmag_fdm_material_desc,
@@ -309,9 +310,9 @@ pub struct fullmag_fdm_plan_desc {
 
     // Cubic anisotropy
     pub has_cubic_anisotropy: i32,
-    pub cubic_kc1: f64,
-    pub cubic_kc2: f64,
-    pub cubic_kc3: f64,
+    pub cubic_Kc1: f64,
+    pub cubic_Kc2: f64,
+    pub cubic_Kc3: f64,
     pub cubic_axis1: [f64; 3],
     pub cubic_axis2: [f64; 3],
 
@@ -321,9 +322,9 @@ pub struct fullmag_fdm_plan_desc {
 
     // DMI
     pub has_interfacial_dmi: i32,
-    pub dmi_d_interfacial: f64,
+    pub dmi_D_interfacial: f64,
     pub has_bulk_dmi: i32,
-    pub dmi_d_bulk: f64,
+    pub dmi_D_bulk: f64,
     pub dind_field: *const f64,
     pub dind_field_len: u64,
     pub dbulk_field: *const f64,
@@ -531,6 +532,11 @@ pub struct fullmag_fdm_snapshot_desc {
 
 #[repr(C)]
 pub struct fullmag_fdm_backend {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct fullmag_fdm_plan_ingestion_v2 {
     _private: [u8; 0],
 }
 
@@ -1126,10 +1132,19 @@ extern "C" {
         plan: *const fullmag_fdm_plan_desc_v2,
     ) -> *mut fullmag_fdm_backend;
 
-    pub fn fullmag_fdm_plan_desc_v2_receipt(
+    pub fn fullmag_fdm_plan_ingestion_v2_create_checked(
         plan: *const fullmag_fdm_plan_desc_v2,
+        out_ingestion: *mut *mut fullmag_fdm_plan_ingestion_v2,
+    ) -> i32;
+
+    pub fn fullmag_fdm_plan_ingestion_v2_receipt(
+        ingestion: *const fullmag_fdm_plan_ingestion_v2,
         out_receipt: *mut fullmag_fdm_plan_desc_v2,
     ) -> i32;
+
+    pub fn fullmag_fdm_plan_ingestion_v2_destroy(
+        ingestion: *mut fullmag_fdm_plan_ingestion_v2,
+    );
 
     pub fn fullmag_fdm_backend_create_time_policy_v2_checked(
         plan: *const fullmag_fdm_plan_desc_v2,

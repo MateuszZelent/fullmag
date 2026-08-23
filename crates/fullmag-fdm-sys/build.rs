@@ -1,4 +1,6 @@
 fn main() {
+    generate_plan_desc_layout_assertions();
+
     if let Ok(lib_dir) = std::env::var("FULLMAG_FDM_LIB_DIR") {
         println!("cargo:rustc-link-search=native={}", lib_dir);
         println!("cargo:rustc-link-lib=dylib=fullmag_fdm");
@@ -83,4 +85,82 @@ fn main() {
         "cargo:metadata=lib_dir={}",
         build_dir.join("backends/fdm").display()
     );
+}
+
+fn generate_plan_desc_layout_assertions() {
+    let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let layout_manifest =
+        manifest_dir.join("../../native/include/fullmag_fdm_plan_desc_v2_layout.def");
+    println!("cargo:rerun-if-changed={}", layout_manifest.display());
+    let source = std::fs::read_to_string(&layout_manifest)
+        .expect("reading fullmag_fdm_plan_desc_v2 layout manifest should succeed");
+
+    let mut assertions = String::new();
+    let mut header_fields = 0usize;
+    let mut aggregate_fields = 0usize;
+    let mut base_fields = 0usize;
+    let mut time_fields = 0usize;
+    for line in source.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with("/*") {
+            continue;
+        }
+        let (macro_name, arguments) = line
+            .split_once('(')
+            .expect("layout manifest line must be a macro invocation");
+        let arguments = arguments
+            .strip_suffix(')')
+            .expect("layout manifest macro invocation must end with ')'");
+        let (field, expected) = arguments
+            .split_once(',')
+            .expect("layout manifest macro must contain field and offset");
+        let field = field.trim();
+        let expected = expected.trim();
+        let (label, offset_expression) = match macro_name {
+            "FULLMAG_FDM_PLAN_V2_HEADER_FIELD" => {
+                header_fields += 1;
+                (
+                    field.to_string(),
+                    format!("std::mem::offset_of!(fullmag_fdm_plan_desc_v2, {field})"),
+                )
+            }
+            "FULLMAG_FDM_PLAN_V2_AGGREGATE_FIELD" => {
+                aggregate_fields += 1;
+                (
+                    field.to_string(),
+                    format!("std::mem::offset_of!(fullmag_fdm_plan_desc_v2, {field})"),
+                )
+            }
+            "FULLMAG_FDM_PLAN_V2_BASE_FIELD" => {
+                base_fields += 1;
+                (
+                    format!("base.{field}"),
+                    format!(
+                    "std::mem::offset_of!(fullmag_fdm_plan_desc_v2, base) + std::mem::offset_of!(fullmag_fdm_plan_desc, {field})"
+                    ),
+                )
+            }
+            "FULLMAG_FDM_PLAN_V2_TIME_FIELD" => {
+                time_fields += 1;
+                (
+                    format!("time_policy.{field}"),
+                    format!(
+                    "std::mem::offset_of!(fullmag_fdm_plan_desc_v2, time_policy) + std::mem::offset_of!(fullmag_fdm_time_policy_desc_v2, {field})"
+                    ),
+                )
+            }
+            other => panic!("unknown layout manifest macro: {other}"),
+        };
+        assertions.push_str(&format!(
+            "assert_eq!({offset_expression}, {expected}, \"unexpected offset for {label}\");\n"
+        ));
+    }
+    assert_eq!(header_fields, 2, "v2 layout manifest header field count drift");
+    assert_eq!(aggregate_fields, 2, "v2 layout manifest aggregate field count drift");
+    assert_eq!(base_fields, 140, "base plan descriptor field count drift");
+    assert_eq!(time_fields, 13, "time policy descriptor field count drift");
+
+    let generated = format!("{{\n{assertions}}}\n");
+    let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    std::fs::write(out_dir.join("plan_desc_v2_layout_assertions.rs"), generated)
+        .expect("writing generated plan descriptor layout assertions should succeed");
 }

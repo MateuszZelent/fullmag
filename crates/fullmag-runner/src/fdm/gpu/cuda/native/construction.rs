@@ -288,7 +288,6 @@ impl NativeFdmBackend {
     pub fn create(plan: &fullmag_ir::FdmPlanIR) -> Result<Self, RunError> {
         validate_single_grid_budget(plan)?;
         let sot_formula = super::ffi_prescribed_sot_formula(plan)?;
-        let zhang_li_formula = super::ffi_zhang_li_formula(plan)?;
         let resolved_demag_boundary = crate::fdm::resolve_fdm_demag_boundary(plan)?;
         let grid = ffi::fullmag_fdm_grid_desc {
             nx: plan.grid.cells[0],
@@ -349,24 +348,11 @@ impl NativeFdmBackend {
                 .map(|is_active| if *is_active { 1u8 } else { 0u8 })
                 .collect()
         });
-        let frozen_mask_flat: Option<Vec<u8>> = plan.frozen_spins.as_ref().map(|frozen| {
-            frozen
-                .frozen_mask
-                .iter()
-                .map(|is_frozen| if *is_frozen { 1u8 } else { 0u8 })
-                .collect()
-        });
         let sot_active_mask_flat: Option<Vec<u8>> = plan.sot_active_mask.as_ref().map(|mask| {
             mask.iter()
                 .map(|is_target| if *is_target { 1u8 } else { 0u8 })
                 .collect()
         });
-        let slonczewski_active_mask_flat: Option<Vec<u8>> =
-            plan.slonczewski_active_mask.as_ref().map(|mask| {
-                mask.iter()
-                    .map(|is_target| if *is_target { 1u8 } else { 0u8 })
-                    .collect()
-            });
         let region_mask_flat = if plan.region_mask.is_empty() {
             None
         } else {
@@ -476,43 +462,11 @@ impl NativeFdmBackend {
             has_external_field: if plan.external_field.is_some() { 1 } else { 0 },
             external_field_am: plan.external_field.unwrap_or([0.0, 0.0, 0.0]),
 
-            ms_field: plan
-                .material
-                .ms_field
-                .as_ref()
-                .map_or(std::ptr::null(), |values| values.as_ptr()),
-            ms_field_len: plan
-                .material
-                .ms_field
-                .as_ref()
-                .map_or(0, |values| values.len() as u64),
-            a_field: plan
-                .material
-                .a_field
-                .as_ref()
-                .map_or(std::ptr::null(), |values| values.as_ptr()),
-            a_field_len: plan
-                .material
-                .a_field
-                .as_ref()
-                .map_or(0, |values| values.len() as u64),
-            alpha_field: plan
-                .material
-                .alpha_field
-                .as_ref()
-                .map_or(std::ptr::null(), |values| values.as_ptr()),
-            alpha_field_len: plan
-                .material
-                .alpha_field
-                .as_ref()
-                .map_or(0, |values| values.len() as u64),
-
             current_density_x: plan.current_density.map_or(0.0, |j| j[0]),
             current_density_y: plan.current_density.map_or(0.0, |j| j[1]),
             current_density_z: plan.current_density.map_or(0.0, |j| j[2]),
             stt_degree: plan.stt_degree.unwrap_or(0.0),
             stt_beta: plan.stt_beta.unwrap_or(0.0),
-            zhang_li_formula,
 
             stt_p_x: plan.stt_spin_polarization.map_or(0.0, |p| p[0]),
             stt_p_y: plan.stt_spin_polarization.map_or(0.0, |p| p[1]),
@@ -521,19 +475,6 @@ impl NativeFdmBackend {
             stt_epsilon_prime: plan.stt_epsilon_prime.unwrap_or(0.0),
             stt_free_layer_thickness: plan.stt_thickness.unwrap_or(0.0),
             stt_current_sign: current_sign,
-            slonczewski_formula: match plan.slonczewski_formula_version.as_deref() {
-                Some("slonczewski.fullmag.v2") => {
-                    ffi::fullmag_fdm_slonczewski_formula::FULLMAG_FDM_SLONCZEWSKI_FULLMAG_V2
-                }
-                _ => ffi::fullmag_fdm_slonczewski_formula::FULLMAG_FDM_SLONCZEWSKI_LEGACY_FULLMAG_V0,
-            },
-            stt_stack_normal: plan.slonczewski_stack_normal.unwrap_or([0.0, 0.0, 1.0]),
-            slonczewski_active_mask: slonczewski_active_mask_flat
-                .as_ref()
-                .map_or(std::ptr::null(), |mask| mask.as_ptr()),
-            slonczewski_active_mask_len: slonczewski_active_mask_flat
-                .as_ref()
-                .map_or(0, |mask| mask.len() as u64),
 
             has_sot: if plan.sot_current_density.is_some()
                 && plan.sot_sigma.is_some()
@@ -613,22 +554,6 @@ impl NativeFdmBackend {
             dmi_d_interfacial: plan.interfacial_dmi.unwrap_or(0.0),
             has_bulk_dmi: if plan.bulk_dmi.is_some() { 1 } else { 0 },
             dmi_d_bulk: plan.bulk_dmi.unwrap_or(0.0),
-            dind_field: plan
-                .dind_field
-                .as_ref()
-                .map_or(std::ptr::null(), |field| field.as_ptr()),
-            dind_field_len: plan
-                .dind_field
-                .as_ref()
-                .map_or(0, |field| field.len() as u64),
-            dbulk_field: plan
-                .dbulk_field
-                .as_ref()
-                .map_or(std::ptr::null(), |field| field.as_ptr()),
-            dbulk_field_len: plan
-                .dbulk_field
-                .as_ref()
-                .map_or(0, |field| field.len() as u64),
 
             has_magnetoelastic: if plan.mel_b1.is_some() && plan.mel_uniform_strain.is_some() {
                 1
@@ -692,10 +617,6 @@ impl NativeFdmBackend {
                 .as_ref()
                 .map_or(std::ptr::null(), |lut| lut.as_ptr()),
             exchange_lut_len: exchange_lut.as_ref().map_or(0, |lut| lut.len() as u64),
-            exchange_pair_default:
-                ffi::fullmag_fdm_exchange_pair_mode::FULLMAG_FDM_EXCHANGE_PAIR_UNSPECIFIED,
-            exchange_pairs: std::ptr::null(),
-            exchange_pair_count: 0,
             // Boundary correction — wire geometry data from planner when available.
             boundary_correction: match plan.boundary_correction.as_deref() {
                 Some("volume") => ffi::fullmag_fdm_boundary_correction::FULLMAG_FDM_BOUNDARY_VOLUME,
@@ -807,37 +728,9 @@ impl NativeFdmBackend {
             adaptive_headroom: adaptive.map_or(0.0, |cfg| cfg.safety),
             stats_mode: ffi::fullmag_fdm_stats_mode::FULLMAG_FDM_STATS_FULL,
             stats_stride: 1,
-            frozen_mask: frozen_mask_flat
-                .as_ref()
-                .map_or(std::ptr::null(), |mask| mask.as_ptr()),
-            frozen_mask_len: frozen_mask_flat.as_ref().map_or(0, |mask| mask.len() as u64),
-            frozen_reference_xyz: if frozen_mask_flat.is_some() {
-                m_flat.as_ptr()
-            } else {
-                std::ptr::null()
-            },
-            frozen_reference_len: if frozen_mask_flat.is_some() {
-                m_flat.len() as u64
-            } else {
-                0
-            },
         };
 
-        let plan_desc_v2 = ffi::fullmag_fdm_plan_desc_v2 {
-            abi_version: ffi::FULLMAG_FDM_PLAN_DESC_ABI_V2,
-            struct_size: std::mem::size_of::<ffi::fullmag_fdm_plan_desc_v2>() as u32,
-            base: plan_desc,
-            time_policy: super::native_time_policy(adaptive)?,
-        };
-        let mut handle = std::ptr::null_mut();
-        let create_status = unsafe {
-            ffi::fullmag_fdm_backend_create_time_policy_v2_checked(&plan_desc_v2, &mut handle)
-        };
-        if create_status == ffi::FULLMAG_FDM_ERR_ABI {
-            return Err(RunError {
-                message: "CUDA FDM plan descriptor ABI mismatch".to_string(),
-            });
-        }
+        let handle = unsafe { ffi::fullmag_fdm_backend_create(&plan_desc) };
         if handle.is_null() {
             return Err(RunError {
                 message: "CUDA FDM backend_create returned null".to_string(),

@@ -1135,9 +1135,9 @@ impl NativeFdmBackend {
             } else {
                 0
             },
-            cubic_kc1: plan.material.cubic_anisotropy_kc1.unwrap_or(0.0),
-            cubic_kc2: plan.material.cubic_anisotropy_kc2.unwrap_or(0.0),
-            cubic_kc3: plan.material.cubic_anisotropy_kc3.unwrap_or(0.0),
+            cubic_Kc1: plan.material.cubic_anisotropy_kc1.unwrap_or(0.0),
+            cubic_Kc2: plan.material.cubic_anisotropy_kc2.unwrap_or(0.0),
+            cubic_Kc3: plan.material.cubic_anisotropy_kc3.unwrap_or(0.0),
             cubic_axis1: plan
                 .material
                 .cubic_anisotropy_axis1
@@ -1151,9 +1151,9 @@ impl NativeFdmBackend {
             kc3_field: std::ptr::null(),
 
             has_interfacial_dmi: if plan.interfacial_dmi.is_some() { 1 } else { 0 },
-            dmi_d_interfacial: plan.interfacial_dmi.unwrap_or(0.0),
+            dmi_D_interfacial: plan.interfacial_dmi.unwrap_or(0.0),
             has_bulk_dmi: if plan.bulk_dmi.is_some() { 1 } else { 0 },
-            dmi_d_bulk: plan.bulk_dmi.unwrap_or(0.0),
+            dmi_D_bulk: plan.bulk_dmi.unwrap_or(0.0),
             dind_field: plan
                 .dind_field
                 .as_ref()
@@ -1380,9 +1380,20 @@ impl NativeFdmBackend {
         let create_status = unsafe {
             ffi::fullmag_fdm_backend_create_time_policy_v2_checked(&plan_desc_v2, &mut handle)
         };
-        if create_status == ffi::FULLMAG_FDM_ERR_ABI {
+        if create_status != ffi::FULLMAG_FDM_OK {
+            let message = match create_status {
+                ffi::FULLMAG_FDM_ERR_INVALID => "CUDA FDM plan descriptor is invalid",
+                ffi::FULLMAG_FDM_ERR_CUDA => "CUDA FDM backend initialization failed",
+                ffi::FULLMAG_FDM_ERR_INTERNAL => "CUDA FDM backend initialization failed internally",
+                ffi::FULLMAG_FDM_ERR_INTERRUPTED => "CUDA FDM backend initialization was interrupted",
+                ffi::FULLMAG_FDM_ERR_DT_MIN_EXHAUSTED => {
+                    "CUDA FDM backend exhausted dt_min during initialization"
+                }
+                ffi::FULLMAG_FDM_ERR_ABI => "CUDA FDM plan descriptor ABI mismatch",
+                _ => "CUDA FDM backend returned an unknown initialization status",
+            };
             return Err(RunError {
-                message: "CUDA FDM plan descriptor ABI mismatch".to_string(),
+                message: format!("{message} (status {create_status})"),
             });
         }
         if handle.is_null() {

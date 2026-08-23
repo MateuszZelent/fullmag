@@ -573,6 +573,7 @@ typedef struct {
 /* ── Opaque handle ── */
 
 typedef struct fullmag_fdm_backend fullmag_fdm_backend;
+typedef struct fullmag_fdm_plan_ingestion_v2 fullmag_fdm_plan_ingestion_v2;
 typedef struct fullmag_fdm_field_snapshot fullmag_fdm_field_snapshot;
 typedef struct fullmag_fdm_preview_snapshot fullmag_fdm_preview_snapshot;
 
@@ -632,10 +633,23 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
 fullmag_fdm_backend *fullmag_fdm_backend_create_time_policy_v2(
     const fullmag_fdm_plan_desc_v2 *plan);
 
-/* Validate and copy the exact supported v2 descriptor without allocation. */
-int fullmag_fdm_plan_desc_v2_receipt(
+/*
+ * Validate and ingest the exact supported v2 descriptor into a short-lived
+ * ABI owner.  The owner stores plan-input fields only, owns no pointed-to
+ * buffers, and must not outlive those caller-owned buffers.
+ */
+int fullmag_fdm_plan_ingestion_v2_create_checked(
     const fullmag_fdm_plan_desc_v2 *plan,
+    fullmag_fdm_plan_ingestion_v2 **out_ingestion);
+
+/* Copy the ingested semantic fields into a caller-owned receipt. */
+int fullmag_fdm_plan_ingestion_v2_receipt(
+    const fullmag_fdm_plan_ingestion_v2 *ingestion,
     fullmag_fdm_plan_desc_v2 *out_receipt);
+
+/* Destroy the plan-input owner.  No backend or hot-loop state is affected. */
+void fullmag_fdm_plan_ingestion_v2_destroy(
+    fullmag_fdm_plan_ingestion_v2 *ingestion);
 
 /* Typed constructor. ABI rejection happens before backend allocation. */
 int fullmag_fdm_backend_create_time_policy_v2_checked(

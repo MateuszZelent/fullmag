@@ -10,6 +10,7 @@ set(FDM_PUBLIC_HEADERS
 set(FDM_SOURCES
     api/c_api.cpp
     api/error.cpp
+    api/plan_ingestion_v2.cpp
     gpu/cuda/transport/layout_abi_v1.cpp
     gpu/cuda/transport/checkpoint_abi_v1.cpp
     gpu/cuda/transport/charge/checkpoint_codec.cpp
@@ -236,8 +237,17 @@ add_executable(region_owned_abi_contract tests/region_owned_abi_contract.cpp)
 add_test(NAME fdm_region_owned_abi_contract COMMAND region_owned_abi_contract)
 
 add_executable(fdm_plan_desc_sentinel_contract tests/plan_desc_sentinel_contract.cpp)
-target_include_directories(fdm_plan_desc_sentinel_contract PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(fdm_plan_desc_sentinel_contract PRIVATE fullmag_fdm)
+target_include_directories(fdm_plan_desc_sentinel_contract PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+if(FULLMAG_ENABLE_CUDA)
+    target_link_libraries(fdm_plan_desc_sentinel_contract PRIVATE fullmag_fdm)
+    target_compile_definitions(fdm_plan_desc_sentinel_contract PRIVATE FULLMAG_FDM_CONTRACT_HAS_CUDA=1)
+else()
+    target_sources(fdm_plan_desc_sentinel_contract PRIVATE api/plan_ingestion_v2.cpp)
+    target_compile_definitions(fdm_plan_desc_sentinel_contract PRIVATE FULLMAG_FDM_CONTRACT_HAS_CUDA=0)
+endif()
 add_test(NAME fdm_plan_desc_sentinel_contract COMMAND fdm_plan_desc_sentinel_contract)
 
 add_executable(periodic_exchange_fp32_contract tests/periodic_exchange_fp32_contract.cpp)

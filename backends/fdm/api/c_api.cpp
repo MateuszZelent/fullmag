@@ -7,10 +7,12 @@
 
 #include "fullmag_fdm.h"
 #include "context.hpp"
+#include "plan_ingestion_v2.hpp"
 
 #include <cstdlib>
 #include <cstring>
 #include <new>
+#include <memory>
 #include <optional>
 #include <algorithm>
 #include <random>
@@ -943,37 +945,19 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
 #endif
 }
 
-int fullmag_fdm_plan_desc_v2_receipt(
-    const fullmag_fdm_plan_desc_v2 *plan,
-    fullmag_fdm_plan_desc_v2 *out_receipt)
-{
-    if (!plan || !out_receipt) return FULLMAG_FDM_ERR_INVALID;
-    struct PlanAbiHeader {
-        uint32_t abi_version;
-        uint32_t struct_size;
-    } header{};
-    std::memcpy(&header, plan, sizeof(header));
-    if (header.abi_version != FULLMAG_FDM_PLAN_DESC_ABI_V2 ||
-        header.struct_size != sizeof(fullmag_fdm_plan_desc_v2))
-    {
-        std::memset(out_receipt, 0, sizeof(*out_receipt));
-        return FULLMAG_FDM_ERR_ABI;
-    }
-    std::memcpy(out_receipt, plan, sizeof(*out_receipt));
-    return FULLMAG_FDM_OK;
-}
-
 int fullmag_fdm_backend_create_time_policy_v2_checked(
     const fullmag_fdm_plan_desc_v2 *plan,
     fullmag_fdm_backend **out_handle)
 {
     if (!out_handle) return FULLMAG_FDM_ERR_INVALID;
     *out_handle = nullptr;
-    fullmag_fdm_plan_desc_v2 receipt{};
-    const int abi_status = fullmag_fdm_plan_desc_v2_receipt(plan, &receipt);
+    fullmag_fdm_plan_ingestion_v2 *raw_ingestion = nullptr;
+    const int abi_status =
+        fullmag_fdm_plan_ingestion_v2_create_checked(plan, &raw_ingestion);
     if (abi_status != FULLMAG_FDM_OK) return abi_status;
+    std::unique_ptr<fullmag_fdm_plan_ingestion_v2> ingestion(raw_ingestion);
 #if FULLMAG_HAS_CUDA
-    plan = &receipt;
+    plan = &plan_ingestion_descriptor(*ingestion);
     fullmag_fdm_backend *handle = fullmag_fdm_backend_create(&plan->base);
     if (!handle) return FULLMAG_FDM_ERR_CUDA;
     *out_handle = handle;
