@@ -1,0 +1,51 @@
+name: Patch texture-region validation workflow
+
+on:
+  push:
+    branches:
+      - codex/texture-transform-region-clipping-20260823
+
+permissions:
+  contents: write
+
+concurrency:
+  group: patch-texture-region-validation-workflow
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/texture-transform-region-clipping-20260823
+          fetch-depth: 0
+
+      - name: Remove unrelated global typecheck and self-delete
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/apply-texture-transform-region-clipping.yml')
+          source = path.read_text(encoding='utf-8')
+          target = '          pnpm --dir apps/control-room typecheck\n'
+          if source.count(target) != 1:
+              raise RuntimeError(
+                  f'expected one global typecheck command, found {source.count(target)}'
+              )
+          path.write_text(source.replace(target, '', 1), encoding='utf-8')
+          PY
+          rm -f .github/workflows/patch-texture-refactor-workflow.yml
+
+      - name: Commit validation-scope correction
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'ci: scope texture-region UI validation to its contract'
+          git push origin HEAD:codex/texture-transform-region-clipping-20260823
