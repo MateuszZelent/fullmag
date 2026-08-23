@@ -51,7 +51,7 @@
 
 ---
 
-### Zadanie 1: Prawdziwy kontrakt tworzenia pustej sesji
+### Task 1: Prawdziwy kontrakt tworzenia pustej sesji
 
 **Pliki:**
 - Create: `crates/fullmag-api/src/router_v2/handlers/sessions/create.rs`
@@ -123,7 +123,7 @@
   git commit -m "feat(api): create empty authoring sessions"
   ```
 
-### Zadanie 2: OpenAPI i jedyna typed facade sesji
+### Task 2: OpenAPI i jedyna typed facade sesji
 
 **Pliki:**
 - Modify: `crates/fullmag-api/src/openapi_v2.rs:842-870`
@@ -178,7 +178,7 @@
   git commit -m "feat(frontend): expose typed session creation"
   ```
 
-### Zadanie 3: Stan „brak sesji” i dialog New Problem
+### Task 3: Stan „brak sesji” i dialog New Problem
 
 **Pliki:**
 - Create: `apps/control-room/src/kernel/layout/NewProblemDialog.tsx`
@@ -232,7 +232,7 @@
   git commit -m "feat(frontend): add scratch problem entry flow"
   ```
 
-### Zadanie 4: Serwerowa readiness i checklista modelu
+### Task 4: Serwerowa readiness i checklista modelu
 
 **Pliki:**
 - Create: `crates/fullmag-api/src/router_v2/handlers/model/readiness.rs`
@@ -286,7 +286,7 @@
   git commit -m "feat(authoring): expose model readiness"
   ```
 
-### Zadanie 5: Primitive draft, Apply i konflikt revision
+### Task 5: Primitive draft, Apply i konflikt revision
 
 **Pliki:**
 - Modify: `apps/control-room/src/kernel/authoring/geometryLifecycleCommands.ts`
@@ -329,7 +329,7 @@
   git commit -m "feat(authoring): preview and apply primitive geometry"
   ```
 
-### Zadanie 6: Translacja w Inspectorze i gizmo Move
+### Task 6: Translacja w Inspectorze i gizmo Move
 
 **Pliki:**
 - Create: `apps/control-room/src/modules/viewport-3d/MoveObjectGizmo.tsx`
@@ -365,7 +365,7 @@
   git commit -m "feat(viewport): move authored objects"
   ```
 
-### Zadanie 7: Materiał „utwórz i przypisz” oraz stabilny Inspector
+### Task 7: Materiał „utwórz i przypisz” oraz stabilny Inspector
 
 **Pliki:**
 - Modify: `apps/control-room/src/kernel/layout/MaterialLibraryDialog.tsx`
@@ -400,7 +400,7 @@
   git commit -m "feat(authoring): create and assign materials"
   ```
 
-### Zadanie 8: Tekstura magnetyczna i oddziaływania jako jawne moduły
+### Task 8: Tekstura magnetyczna i oddziaływania jako jawne moduły
 
 **Pliki:**
 - Modify: `apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx`
@@ -441,7 +441,7 @@
   git commit -m "feat(authoring): configure textures and interactions"
   ```
 
-### Zadanie 9: Domknięcie istniejącego authoringu dyskretyzacji FDM
+### Task 9: Domknięcie istniejącego authoringu dyskretyzacji FDM
 
 **Pliki:**
 - Modify: `apps/control-room/src/modules/inspector/panels/StudyGlobalAuthoringModel.ts`
@@ -479,7 +479,7 @@
   git commit -m "feat(authoring): configure FDM grids"
   ```
 
-### Zadanie 10: Kompletny FEM mesh/shared-domain/airbox
+### Task 10: Kompletny FEM mesh/shared-domain/airbox
 
 **Pliki:**
 - Modify: `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx`
@@ -520,7 +520,7 @@
   git commit -m "feat(authoring): complete FEM meshing workflow"
   ```
 
-### Zadanie 11: Study od pustego dokumentu i bezpieczny Run
+### Task 11: Study od pustego dokumentu i bezpieczny Run
 
 **Pliki:**
 - Modify: `apps/control-room/src/modules/inspector/panels/StudyGlobalAuthoringModel.ts`
@@ -557,7 +557,7 @@
   git commit -m "feat(authoring): build and run scratch studies"
   ```
 
-### Zadanie 12: Kanoniczny eksport bez skryptu wejściowego
+### Task 12: Kanoniczny eksport bez skryptu wejściowego
 
 **Pliki:**
 - Modify: `packages/fullmag-py/src/fullmag/runtime/script_builder.py`
@@ -605,7 +605,7 @@
   git commit -m "feat(authoring): export scratch scenes to Python"
   ```
 
-### Zadanie 13: Invalidation i stabilność E3
+### Task 13: Invalidation i stabilność E3
 
 **Pliki:**
 - Modify: `apps/control-room/src/kernel/authoring/regionAuthoringInvalidation.ts`
@@ -641,7 +641,7 @@
   git commit -m "fix(frontend): preserve authoring state across revisions"
   ```
 
-### Zadanie 14: Browser E1/E2/E5 i dowody WebGL
+### Task 14: Browser E1/E2/E5 i dowody WebGL
 
 **Pliki:**
 - Create: `apps/control-room/scripts/lib/scratch-authoring-browser.mjs`
@@ -697,7 +697,7 @@
   git commit -m "test(authoring): qualify scratch FDM and FEM flows"
   ```
 
-### Zadanie 15: Końcowa bramka jakości i dokumentacja
+### Task 15: Końcowa bramka jakości i dokumentacja
 
 **Pliki:**
 - Inspect: `docs/superpowers/specs/2026-08-23-scratch-simulation-authoring-design.md`; zmienić i osobno uzasadnić wyłącznie udowodnioną korektę kontraktu
