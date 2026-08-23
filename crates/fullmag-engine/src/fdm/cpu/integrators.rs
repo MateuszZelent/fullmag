@@ -52,9 +52,31 @@ fn decide_adaptive_step(
         (dt * raw_ratio.clamp(cfg.shrink_limit, cfg.growth_limit)).clamp(cfg.dt_min, cfg.dt_max);
     if accepted {
         AdaptiveDecision::Accepted(next)
-    } else {
+    } else if next < dt {
         AdaptiveDecision::Retry(next)
+    } else {
+        let decreased = dt.next_down();
+        if decreased > 0.0 && decreased >= cfg.dt_min {
+            AdaptiveDecision::Retry(decreased)
+        } else {
+            AdaptiveDecision::DtMinExhausted
+        }
     }
+}
+
+fn decide_adaptive_attempt(
+    order_est: i32,
+    dt: f64,
+    error: f64,
+    previous_error: Option<f64>,
+    cfg: crate::AdaptiveStepConfig,
+    bufs: &mut IntegratorBuffers,
+) -> AdaptiveDecision {
+    #[cfg(test)]
+    bufs.record_adaptive_attempt_for_tests(dt);
+    #[cfg(not(test))]
+    let _ = bufs;
+    decide_adaptive_step(order_est, dt, error, previous_error, cfg)
 }
 
 #[cfg(feature = "parallel")]
@@ -118,6 +140,18 @@ mod adaptive_decision_tests {
         assert!(next < 1e-3);
     }
 
+    #[test]
+    fn adaptive_controller_forces_a_representable_shrink_after_rounding() {
+        let mut cfg = test_config();
+        cfg.headroom = 1.0;
+        let dt = 1e-3;
+        let error = f64::from_bits(1.0f64.to_bits() + 1);
+        let AdaptiveDecision::Retry(next) = decide_adaptive_step(4, dt, error, None, cfg) else {
+            panic!("finite rejection must retry");
+        };
+        assert!(next < dt);
+    }
+
     fn adaptive_test_problem(integrator: crate::TimeIntegrator) -> crate::ExchangeLlgProblem {
         crate::ExchangeLlgProblem::with_terms(
             crate::GridShape::new(1, 1, 1).expect("valid grid"),
@@ -152,7 +186,7 @@ mod adaptive_decision_tests {
             let aos_before = aos.clone();
             let mut aos_ws = problem.create_workspace();
             let mut aos_bufs = problem.create_integrator_buffers();
-            aos_bufs.adaptive_error_override = Some(f64::NAN);
+            aos_bufs.set_adaptive_error_script_for_tests([f64::NAN]);
             let error = match integrator {
                 crate::TimeIntegrator::RK23 => problem.rk23_step_buf(
                     &mut aos,
@@ -180,7 +214,7 @@ mod adaptive_decision_tests {
             let soa_aos_before = soa_aos.clone();
             let mut soa_aos_ws = problem.create_workspace();
             let mut soa_aos_bufs = problem.create_integrator_buffers();
-            soa_aos_bufs.adaptive_error_override = Some(f64::INFINITY);
+            soa_aos_bufs.set_adaptive_error_script_for_tests([f64::INFINITY]);
             let error = match integrator {
                 crate::TimeIntegrator::RK23 => problem.rk23_step_soa_buf(
                     &mut soa_aos,
@@ -209,7 +243,7 @@ mod adaptive_decision_tests {
             let persistent_soa_before = persistent_soa.clone();
             let mut persistent_soa_ws = problem.create_workspace();
             let mut persistent_soa_bufs = problem.create_integrator_buffers();
-            persistent_soa_bufs.adaptive_error_override = Some(f64::NAN);
+            persistent_soa_bufs.set_adaptive_error_script_for_tests([f64::NAN]);
             let error = match integrator {
                 crate::TimeIntegrator::RK23 => problem.rk23_step_soa_state_buf(
                     &mut persistent_soa,
@@ -234,6 +268,96 @@ mod adaptive_decision_tests {
     }
 
     #[test]
+    fn direct_cpu_entry_points_record_injected_retry_dt() {
+        for integrator in [crate::TimeIntegrator::RK23, crate::TimeIntegrator::RK45] {
+            let problem = adaptive_test_problem(integrator);
+
+            let mut aos = problem.uniform_state([1.0, 0.0, 0.0]).expect("AoS state");
+            let mut aos_ws = problem.create_workspace();
+            let mut aos_bufs = problem.create_integrator_buffers();
+            aos_bufs.set_adaptive_error_script_for_tests([4.0, 0.0]);
+            let report = match integrator {
+                crate::TimeIntegrator::RK23 => problem.rk23_step_buf(
+                    &mut aos,
+                    1.0,
+                    &mut aos_ws,
+                    &mut aos_bufs,
+                    crate::EvaluationRequest::Minimal,
+                ),
+                crate::TimeIntegrator::RK45 => problem.rk45_step_buf(
+                    &mut aos,
+                    1.0,
+                    &mut aos_ws,
+                    &mut aos_bufs,
+                    crate::EvaluationRequest::Minimal,
+                ),
+                _ => unreachable!(),
+            }
+            .expect("AoS retry must accept the second attempt");
+            assert_eq!(aos_bufs.adaptive_attempt_dts_for_tests(), &[1.0, 0.2]);
+            assert_eq!(aos.time_seconds, report.dt_used);
+
+            let mut soa_aos = problem
+                .uniform_state([1.0, 0.0, 0.0])
+                .expect("SoA-buffer state");
+            let mut soa_aos_ws = problem.create_workspace();
+            let mut soa_aos_bufs = problem.create_integrator_buffers();
+            soa_aos_bufs.set_adaptive_error_script_for_tests([4.0, 0.0]);
+            let report = match integrator {
+                crate::TimeIntegrator::RK23 => problem.rk23_step_soa_buf(
+                    &mut soa_aos,
+                    1.0,
+                    &mut soa_aos_ws,
+                    &mut soa_aos_bufs,
+                    crate::EvaluationRequest::Minimal,
+                ),
+                crate::TimeIntegrator::RK45 => problem.rk45_step_soa_buf(
+                    &mut soa_aos,
+                    1.0,
+                    &mut soa_aos_ws,
+                    &mut soa_aos_bufs,
+                    crate::EvaluationRequest::Minimal,
+                ),
+                _ => unreachable!(),
+            }
+            .expect("SoA-buffer retry must accept the second attempt");
+            assert_eq!(soa_aos_bufs.adaptive_attempt_dts_for_tests(), &[1.0, 0.2]);
+            assert_eq!(soa_aos.time_seconds, report.dt_used);
+
+            let mut persistent_soa = problem
+                .uniform_state([1.0, 0.0, 0.0])
+                .expect("persistent SoA seed")
+                .to_soa();
+            let mut persistent_soa_ws = problem.create_workspace();
+            let mut persistent_soa_bufs = problem.create_integrator_buffers();
+            persistent_soa_bufs.set_adaptive_error_script_for_tests([4.0, 0.0]);
+            let report = match integrator {
+                crate::TimeIntegrator::RK23 => problem.rk23_step_soa_state_buf(
+                    &mut persistent_soa,
+                    1.0,
+                    &mut persistent_soa_ws,
+                    &mut persistent_soa_bufs,
+                    crate::EvaluationRequest::Minimal,
+                ),
+                crate::TimeIntegrator::RK45 => problem.rk45_step_soa_state_buf(
+                    &mut persistent_soa,
+                    1.0,
+                    &mut persistent_soa_ws,
+                    &mut persistent_soa_bufs,
+                    crate::EvaluationRequest::Minimal,
+                ),
+                _ => unreachable!(),
+            }
+            .expect("persistent SoA retry must accept the second attempt");
+            assert_eq!(
+                persistent_soa_bufs.adaptive_attempt_dts_for_tests(),
+                &[1.0, 0.2]
+            );
+            assert_eq!(persistent_soa.time_seconds, report.dt_used);
+        }
+    }
+
+    #[test]
     fn rk45_terminal_rejection_preserves_fsal_for_aos_and_persistent_soa() {
         let problem = adaptive_test_problem(crate::TimeIntegrator::RK45);
 
@@ -251,7 +375,7 @@ mod adaptive_decision_tests {
             .expect("accepted AoS RK45 step");
         assert!(aos.k_fsal.is_some());
         let aos_before = aos.clone();
-        aos_bufs.adaptive_error_override = Some(f64::NAN);
+        aos_bufs.set_adaptive_error_script_for_tests([f64::NAN]);
         let error = problem
             .rk45_step_buf(
                 &mut aos,
@@ -281,7 +405,7 @@ mod adaptive_decision_tests {
             .expect("accepted persistent-SoA RK45 step");
         assert!(persistent_soa.k_fsal.is_some());
         let persistent_soa_before = persistent_soa.clone();
-        persistent_soa_bufs.adaptive_error_override = Some(f64::INFINITY);
+        persistent_soa_bufs.set_adaptive_error_script_for_tests([f64::INFINITY]);
         let error = problem
             .rk45_step_soa_state_buf(
                 &mut persistent_soa,
@@ -1206,7 +1330,14 @@ impl ExchangeLlgProblem {
             let thr = if cfg.rtol > 0.0 { 1.0 } else { cfg.max_error };
             let normalized_error = error / thr;
             let decision = if self.dynamics.adaptive_enabled {
-                decide_adaptive_step(2, dt, normalized_error, state.adaptive_previous_error, cfg)
+                decide_adaptive_attempt(
+                    2,
+                    dt,
+                    normalized_error,
+                    state.adaptive_previous_error,
+                    cfg,
+                    bufs,
+                )
             } else {
                 AdaptiveDecision::Accepted(dt)
             };
@@ -1344,7 +1475,14 @@ impl ExchangeLlgProblem {
             let thr = if cfg.rtol > 0.0 { 1.0 } else { cfg.max_error };
             let normalized_error = error / thr;
             let decision = if self.dynamics.adaptive_enabled {
-                decide_adaptive_step(2, dt, normalized_error, state.adaptive_previous_error, cfg)
+                decide_adaptive_attempt(
+                    2,
+                    dt,
+                    normalized_error,
+                    state.adaptive_previous_error,
+                    cfg,
+                    bufs,
+                )
             } else {
                 AdaptiveDecision::Accepted(dt)
             };
@@ -1741,7 +1879,14 @@ impl ExchangeLlgProblem {
             let thr = if cfg.rtol > 0.0 { 1.0 } else { cfg.max_error };
             let normalized_error = error / thr;
             let decision = if self.dynamics.adaptive_enabled {
-                decide_adaptive_step(4, dt, normalized_error, state.adaptive_previous_error, cfg)
+                decide_adaptive_attempt(
+                    4,
+                    dt,
+                    normalized_error,
+                    state.adaptive_previous_error,
+                    cfg,
+                    bufs,
+                )
             } else {
                 AdaptiveDecision::Accepted(dt)
             };
@@ -2008,7 +2153,14 @@ impl ExchangeLlgProblem {
             let thr = if cfg.rtol > 0.0 { 1.0 } else { cfg.max_error };
             let normalized_error = error / thr;
             let decision = if self.dynamics.adaptive_enabled {
-                decide_adaptive_step(4, dt, normalized_error, state.adaptive_previous_error, cfg)
+                decide_adaptive_attempt(
+                    4,
+                    dt,
+                    normalized_error,
+                    state.adaptive_previous_error,
+                    cfg,
+                    bufs,
+                )
             } else {
                 AdaptiveDecision::Accepted(dt)
             };
@@ -2589,7 +2741,14 @@ impl ExchangeLlgProblem {
             let thr = if cfg.rtol > 0.0 { 1.0 } else { cfg.max_error };
             let normalized_error = error / thr;
             let decision = if self.dynamics.adaptive_enabled {
-                decide_adaptive_step(2, dt, normalized_error, state.adaptive_previous_error, cfg)
+                decide_adaptive_attempt(
+                    2,
+                    dt,
+                    normalized_error,
+                    state.adaptive_previous_error,
+                    cfg,
+                    bufs,
+                )
             } else {
                 AdaptiveDecision::Accepted(dt)
             };
@@ -2854,7 +3013,14 @@ impl ExchangeLlgProblem {
             let thr = if cfg.rtol > 0.0 { 1.0 } else { cfg.max_error };
             let normalized_error = error / thr;
             let decision = if self.dynamics.adaptive_enabled {
-                decide_adaptive_step(4, dt, normalized_error, state.adaptive_previous_error, cfg)
+                decide_adaptive_attempt(
+                    4,
+                    dt,
+                    normalized_error,
+                    state.adaptive_previous_error,
+                    cfg,
+                    bufs,
+                )
             } else {
                 AdaptiveDecision::Accepted(dt)
             };
@@ -3143,22 +3309,20 @@ impl ExchangeLlgProblem {
     pub(crate) fn max_error_norm_buf(
         &self,
         weighted_stages: &[(usize, f64)],
-        bufs: &IntegratorBuffers,
+        bufs: &mut IntegratorBuffers,
         dt: f64,
         n: usize,
     ) -> f64 {
+        #[cfg(test)]
+        if let Some(error) = bufs.take_adaptive_error_for_tests() {
+            return error;
+        }
         let cfg = self.dynamics.adaptive;
         let use_rtol = cfg.rtol > 0.0;
         let atol = cfg.max_error;
         let rtol = cfg.rtol;
 
         let compute_err = |i: usize| -> f64 {
-            #[cfg(test)]
-            if i == 0 {
-                if let Some(error) = bufs.adaptive_error_override {
-                    return error;
-                }
-            }
             let mut err = [0.0, 0.0, 0.0];
             for &(k_idx, w) in weighted_stages {
                 err[0] += w * bufs.k[k_idx][i][0];
@@ -3201,22 +3365,20 @@ impl ExchangeLlgProblem {
     pub(crate) fn max_error_norm_soa_buf(
         &self,
         weighted_stages: &[(usize, f64)],
-        bufs: &IntegratorBuffers,
+        bufs: &mut IntegratorBuffers,
         dt: f64,
         n: usize,
     ) -> f64 {
+        #[cfg(test)]
+        if let Some(error) = bufs.take_adaptive_error_for_tests() {
+            return error;
+        }
         let cfg = self.dynamics.adaptive;
         let use_rtol = cfg.rtol > 0.0;
         let atol = cfg.max_error;
         let rtol = cfg.rtol;
 
         let compute_err = |i: usize| -> f64 {
-            #[cfg(test)]
-            if i == 0 {
-                if let Some(error) = bufs.adaptive_error_override {
-                    return error;
-                }
-            }
             let mut err = [0.0, 0.0, 0.0];
             for &(k_idx, w) in weighted_stages {
                 err[0] += w * bufs.soa.k[k_idx].x[i];
