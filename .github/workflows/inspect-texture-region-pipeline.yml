@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: codex/texture-transform-region-clipping-20260823
-      - name: Print documentation patch anchors from payload
+      - name: Print late payload section and documentation anchors
         shell: bash
         run: |
           set -euo pipefail
@@ -32,18 +32,6 @@ jobs:
           )
           script = zlib.decompress(base64.b64decode(encoded, validate=True)).decode('utf-8')
           lines = script.splitlines()
-          for index, line in enumerate(lines, start=1):
-              lowered = line.lower()
-              if (
-                  'mermaid' in lowered
-                  or 'preset-textures.md' in line
-                  or 'implementation mapping' in lowered
-                  or 'discrete realization' in lowered
-                  or 'clipping is always performed' in lowered
-              ):
-                  start = max(1, index - 18)
-                  end = min(len(lines), index + 35)
-                  print(f'\n===== SCRIPT LINES {start}-{end}; MATCH {index} =====')
-                  for line_number in range(start, end + 1):
-                      print(f'{line_number:5d}: {lines[line_number - 1]}')
+          for line_number in range(600, min(735, len(lines)) + 1):
+              print(f'{line_number:5d}: {lines[line_number - 1]}')
           PY
