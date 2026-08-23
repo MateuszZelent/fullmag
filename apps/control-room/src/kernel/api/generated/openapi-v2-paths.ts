@@ -170,6 +170,7 @@ export const openApiV2PathLiterals = [
   "/v2/sessions/current/model/planar-monitors",
   "/v2/sessions/current/model/planar-monitors/{monitor_id}",
   "/v2/sessions/current/model/planar-monitors/{monitor_id}/duplicate",
+  "/v2/sessions/current/model/readiness",
   "/v2/sessions/current/model/realized-regions",
   "/v2/sessions/current/model/region-diagnostics",
   "/v2/sessions/current/model/regions",

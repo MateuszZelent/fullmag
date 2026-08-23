@@ -6,6 +6,9 @@ export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
 export type JsonObject = { [key: string]: JsonValue };
 
 export type SessionListResource = components["schemas"]["SessionListResource"];
+export type ModelReadinessResource =
+  components["schemas"]["ModelReadinessResource"];
+export type ModelReadinessCheck = components["schemas"]["ModelReadinessCheck"];
 
 export type ObjectInteractionKind =
   | "exchange"

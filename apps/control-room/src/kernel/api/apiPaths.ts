@@ -573,6 +573,10 @@ export const MODEL_SCENE_PATH = openApiV2Path(
   "/v2/sessions/current/model/scene",
 );
 
+export const MODEL_READINESS_PATH = openApiV2Path(
+  "/v2/sessions/current/model/readiness",
+);
+
 export const MODEL_FROZEN_SPINS_PATH = openApiV2Path(
   "/v2/sessions/current/model/frozen-spins",
 );

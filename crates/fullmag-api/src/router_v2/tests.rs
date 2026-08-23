@@ -1111,6 +1111,144 @@ fn test_router() -> axum::Router {
 }
 
 #[tokio::test]
+async fn model_readiness_reports_all_empty_scene_blockers_in_stable_order() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(
+            crate::router_v2::handlers::sessions::create::create_empty_scene_document(
+                &crate::schemas::sessions::CreateSessionRequest {
+                    backend: "fdm".into(),
+                    device: "cpu".into(),
+                    name: "Empty".into(),
+                    precision: "double".into(),
+                    replace_current: false,
+                },
+            )
+            .expect("empty scratch scene"),
+        );
+    }
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/model/readiness")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["ready_to_run"], false);
+    assert_eq!(body["ready_to_export"], false);
+    assert_eq!(
+        body["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|check| check["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec![
+            "geometry",
+            "material",
+            "texture",
+            "interactions",
+            "discretization",
+            "study",
+        ]
+    );
+    assert_eq!(body["blockers"][0], "Add at least one magnetic object.");
+    assert_eq!(body["capabilities"]["move"]["available"], true);
+    assert_eq!(body["capabilities"]["rotate"]["available"], false);
+    assert_eq!(
+        body["capabilities"]["rotate"]["reason"],
+        "Rotate and Scale require a canonical geometry contract newer than ProblemIR 0.3."
+    );
+}
+
+#[tokio::test]
+async fn model_readiness_accepts_complete_fdm_scene() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document_with_stage(serde_json::json!({
+        "entrypoint_kind": "flat_relax",
+        "kind": "relax",
+        "algorithm": "projected_gradient_bb",
+        "stage_id": "relax-1"
+    }));
+    scene.study.requested_backend = "fdm".into();
+    scene.study.fdm = Some(fullmag_authoring::SceneFdmDiscretizationState {
+        default_cell: Some([1.0e-9, 1.0e-9, 1.0e-9]),
+        ..Default::default()
+    });
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/model/readiness")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["ready_to_run"], true);
+    assert_eq!(body["ready_to_export"], true);
+    assert_eq!(body["blockers"], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn model_readiness_marks_fem_mesh_stale_against_scene_revision() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document_with_stage(serde_json::json!({
+        "entrypoint_kind": "flat_relax",
+        "kind": "relax",
+        "algorithm": "projected_gradient_bb",
+        "stage_id": "relax-1"
+    }));
+    scene.study.requested_backend = "fem".into();
+    let scene_revision = scene.revision;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.mesh_revision = 9;
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "last_build_summary": { "source_scene_revision": scene_revision - 1 }
+        }));
+    }
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/model/readiness")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["ready_to_run"], false);
+    let discretization = body["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["id"] == "discretization")
+        .unwrap();
+    assert_eq!(discretization["state"], "stale");
+    assert_eq!(
+        discretization["reason"],
+        "Build a current shared-domain mesh before running."
+    );
+}
+
+#[tokio::test]
 async fn create_scratch_session_accepts_explicit_fdm_and_fem_cpu_double_requests() {
     let app = test_router();
 

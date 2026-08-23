@@ -2731,6 +2731,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/model/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_readiness"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/model/realized-regions": {
         parameters: {
             query?: never;
@@ -7402,6 +7418,33 @@ export interface components {
             total_steps: number;
             /** Format: int64 */
             uptime_seconds: number;
+        };
+        ModelAuthoringCapabilities: {
+            move: components["schemas"]["ModelAuthoringCapability"];
+            rotate: components["schemas"]["ModelAuthoringCapability"];
+            scale: components["schemas"]["ModelAuthoringCapability"];
+        };
+        ModelAuthoringCapability: {
+            available: boolean;
+            reason?: string | null;
+        };
+        ModelReadinessCheck: {
+            id: string;
+            label: string;
+            reason?: string | null;
+            state: components["schemas"]["ModelReadinessCheckState"];
+            target_resource?: string | null;
+        };
+        /** @enum {string} */
+        ModelReadinessCheckState: "complete" | "blocked" | "stale";
+        ModelReadinessResource: {
+            blockers: string[];
+            capabilities: components["schemas"]["ModelAuthoringCapabilities"];
+            checks: components["schemas"]["ModelReadinessCheck"][];
+            ready_to_export: boolean;
+            ready_to_run: boolean;
+            /** Format: int64 */
+            scene_revision: number;
         };
         NullableF64PatchValue: number | null;
         NullableStringPatchValue: string | null;
@@ -19282,6 +19325,33 @@ export interface operations {
             };
             /** @description Revision conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_readiness: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Derived readiness of the current canonical authoring model */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelReadinessResource"];
+                };
+            };
+            /** @description No active workspace or scene document */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

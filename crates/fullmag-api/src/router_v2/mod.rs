@@ -68,6 +68,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
                 .patch(handlers::model::patch_authoring_scene),
         )
         .route(
+            "/v2/sessions/current/model/readiness",
+            get(handlers::model::get_model_readiness),
+        )
+        .route(
             "/v2/sessions/current/model/physics-graph",
             get(handlers::model::get_physics_graph),
         )

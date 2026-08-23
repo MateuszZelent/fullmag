@@ -10,6 +10,7 @@ import {
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_READINESS_PATH,
   MODEL_SCENE_PATH,
   MODEL_STUDY_PATH,
   MODEL_REGION_DIAGNOSTICS_PATH,
@@ -3093,6 +3094,39 @@ describe("study runtime command contributions", () => {
     expect(registry.get("study.run")?.disabledReason?.(context)).toBe(
       "A runtime command is already active.",
     );
+  });
+
+  it("gates study Run on the server-owned model readiness resource", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const resourceData = runtimeResourceData();
+    resourceData[MODEL_READINESS_PATH] = {
+      blockers: ["Assign initial magnetization to every magnetic object."],
+      checks: [],
+      ready_to_export: false,
+      ready_to_run: false,
+      scene_revision: 3,
+    };
+    const blockedContext = {
+      api: {} as never,
+      resourceData,
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("study.run", blockedContext)).toBe(false);
+    expect(registry.get("study.run")?.disabledReason?.(blockedContext)).toBe(
+      "Assign initial magnetization to every magnetic object.",
+    );
+
+    resourceData[MODEL_READINESS_PATH] = {
+      blockers: [],
+      checks: [],
+      ready_to_export: true,
+      ready_to_run: true,
+      scene_revision: 3,
+    };
+
+    expect(registry.isEnabled("study.run", blockedContext)).toBe(true);
+    expect(registry.get("study.run")?.disabledReason?.(blockedContext)).toBeNull();
   });
 
   it("does not let stale active command queue block a newer inactive lifecycle state", () => {

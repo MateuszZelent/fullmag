@@ -3847,6 +3847,10 @@ fn mesh_build_provenance(snapshot: &SessionStateResponse) -> MeshBuildProvenance
     clean_scene_mesh_provenance(snapshot).unwrap_or(provenance)
 }
 
+pub(crate) fn mesh_source_scene_revision(snapshot: &SessionStateResponse) -> Option<u64> {
+    mesh_build_provenance(snapshot).source_scene_revision
+}
+
 fn clean_scene_mesh_provenance(snapshot: &SessionStateResponse) -> Option<MeshBuildProvenance> {
     let scene = snapshot.scene_document.as_ref()?;
     let mesh = snapshot.fem_mesh.as_ref()?;

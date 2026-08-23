@@ -110,6 +110,7 @@ import {
   MODEL_GEOMETRY_REALIZATION_CURRENT_PATH,
   MODEL_GEOMETRY_REALIZATIONS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_READINESS_PATH,
   MODEL_FROZEN_SPIN_PATH,
   MODEL_FROZEN_SPINS_PATH,
   MODEL_FROZEN_SPINS_PREVIEW_PATH,
@@ -324,6 +325,7 @@ import type {
   MeshSharedDomainQualityResource,
   MeshSharedDomainReportResource,
   MeshSharedDomainManifestResource,
+  ModelReadinessResource,
   MeshSummaryResource,
   MeshUniverseConfigReplaceRequest,
   MeshUniverseConfigResource,
@@ -2171,6 +2173,8 @@ export class ControlRoomApi {
       ),
     scene: (options?: RequestOptions) =>
       this.requestJson<SceneResource>(MODEL_SCENE_PATH, options),
+    readiness: (options?: RequestOptions) =>
+      this.requestJson<ModelReadinessResource>(MODEL_READINESS_PATH, options),
     physicsGraph: (options?: RequestOptions) =>
       this.requestJson<PhysicsGraphResource>(MODEL_PHYSICS_GRAPH_PATH, options),
     authoringScript: (options?: RequestOptions) =>

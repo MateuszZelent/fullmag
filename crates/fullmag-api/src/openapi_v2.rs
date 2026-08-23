@@ -118,6 +118,7 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::meshing::mesh::get_mesh_interface_report,
         crate::router_v2::handlers::meshing::mesh::get_mesh_interface_quality,
         crate::router_v2::handlers::model::authoring::get_authoring_scene,
+        crate::router_v2::handlers::model::readiness::get_model_readiness,
         crate::router_v2::handlers::model::authoring::replace_authoring_scene,
         crate::router_v2::handlers::model::authoring::patch_authoring_scene,
         crate::router_v2::handlers::model::physics_graph::get_physics_graph,

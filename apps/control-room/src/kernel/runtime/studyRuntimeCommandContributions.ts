@@ -8,6 +8,7 @@ import {
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_READINESS_PATH,
   MODEL_REGION_DIAGNOSTICS_PATH,
   MODEL_SCENE_PATH,
   MODEL_STUDY_PATH,
@@ -35,6 +36,7 @@ import type {
   LiveStatusResource,
   MeshActiveBuildResource,
   MeshSharedDomainManifestResource,
+  ModelReadinessResource,
   CurrentRunResource,
   FieldStateTargetRef,
   HysteresisBookmarkPointRequest,
@@ -432,6 +434,19 @@ function runtimeReadinessDisabledReason(
     "compute_energies" | "compute_fields" | "solve"
   >,
 ): string | null {
+  if (kind === "solve") {
+    const readiness = resourceData<ModelReadinessResource>(
+      context,
+      MODEL_READINESS_PATH,
+    );
+    if (readiness) {
+      return readiness.ready_to_run
+        ? null
+        : readiness.blockers[0] ??
+            "Complete the model checklist before running.";
+    }
+  }
+
   const status = resourceData<LiveStatusResource>(
     context,
     SESSION_STATUS_RESOURCE_KEY,
