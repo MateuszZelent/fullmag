@@ -41,6 +41,7 @@ extern "C" {
 #define FULLMAG_FDM_ERR_INTERNAL -3
 #define FULLMAG_FDM_ERR_INTERRUPTED -4
 #define FULLMAG_FDM_ERR_DT_MIN_EXHAUSTED -5
+#define FULLMAG_FDM_ERR_ABI -6
 
 /* Maximum number of distinct exchange regions supported by the LUT. */
 #define FULLMAG_FDM_MAX_EXCHANGE_REGIONS 256
@@ -50,6 +51,7 @@ extern "C" {
 /* Append-only frozen-spin plan extension. Support is advertised separately. */
 #define FULLMAG_FDM_FROZEN_SPINS_ABI_V1 1u
 #define FULLMAG_FDM_CAPABILITY_FROZEN_SPINS_V1 (UINT64_C(1) << 0)
+#define FULLMAG_FDM_PLAN_DESC_ABI_V2 UINT32_C(2)
 
 /* ── Enums ── */
 
@@ -516,6 +518,8 @@ typedef struct {
 } fullmag_fdm_time_policy_desc_v2;
 
 typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
     fullmag_fdm_plan_desc base;
     fullmag_fdm_time_policy_desc_v2 time_policy;
 } fullmag_fdm_plan_desc_v2;
@@ -616,6 +620,7 @@ int fullmag_fdm_is_available(void);
 uint64_t fullmag_fdm_capability_bits_v1(void);
 
 /**
+ * Legacy unversioned v1 compatibility entrypoint.
  * Create a backend handle from an executable plan.
  * Allocates device memory and uploads initial magnetization.
  * Returns NULL on failure; call fullmag_fdm_backend_last_error for details.
@@ -626,6 +631,16 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
 /* Canonical versioned single-grid entrypoint preserving complete LLG policy. */
 fullmag_fdm_backend *fullmag_fdm_backend_create_time_policy_v2(
     const fullmag_fdm_plan_desc_v2 *plan);
+
+/* Validate and copy the exact supported v2 descriptor without allocation. */
+int fullmag_fdm_plan_desc_v2_receipt(
+    const fullmag_fdm_plan_desc_v2 *plan,
+    fullmag_fdm_plan_desc_v2 *out_receipt);
+
+/* Typed constructor. ABI rejection happens before backend allocation. */
+int fullmag_fdm_backend_create_time_policy_v2_checked(
+    const fullmag_fdm_plan_desc_v2 *plan,
+    fullmag_fdm_backend **out_handle);
 
 /**
  * Create a backend handle from the v2 executable FDM plan descriptor.

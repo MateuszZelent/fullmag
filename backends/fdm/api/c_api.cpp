@@ -943,21 +943,48 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
 #endif
 }
 
-fullmag_fdm_backend *fullmag_fdm_backend_create_time_policy_v2(
-    const fullmag_fdm_plan_desc_v2 *plan)
+int fullmag_fdm_plan_desc_v2_receipt(
+    const fullmag_fdm_plan_desc_v2 *plan,
+    fullmag_fdm_plan_desc_v2 *out_receipt)
 {
+    if (!plan || !out_receipt) return FULLMAG_FDM_ERR_INVALID;
+    struct PlanAbiHeader {
+        uint32_t abi_version;
+        uint32_t struct_size;
+    } header{};
+    std::memcpy(&header, plan, sizeof(header));
+    if (header.abi_version != FULLMAG_FDM_PLAN_DESC_ABI_V2 ||
+        header.struct_size != sizeof(fullmag_fdm_plan_desc_v2))
+    {
+        std::memset(out_receipt, 0, sizeof(*out_receipt));
+        return FULLMAG_FDM_ERR_ABI;
+    }
+    std::memcpy(out_receipt, plan, sizeof(*out_receipt));
+    return FULLMAG_FDM_OK;
+}
+
+int fullmag_fdm_backend_create_time_policy_v2_checked(
+    const fullmag_fdm_plan_desc_v2 *plan,
+    fullmag_fdm_backend **out_handle)
+{
+    if (!out_handle) return FULLMAG_FDM_ERR_INVALID;
+    *out_handle = nullptr;
+    fullmag_fdm_plan_desc_v2 receipt{};
+    const int abi_status = fullmag_fdm_plan_desc_v2_receipt(plan, &receipt);
+    if (abi_status != FULLMAG_FDM_OK) return abi_status;
 #if FULLMAG_HAS_CUDA
-    if (!plan) return nullptr;
+    plan = &receipt;
     fullmag_fdm_backend *handle = fullmag_fdm_backend_create(&plan->base);
-    if (!handle) return nullptr;
+    if (!handle) return FULLMAG_FDM_ERR_CUDA;
+    *out_handle = handle;
     auto *ctx = reinterpret_cast<Context *>(handle);
-    if (!ctx->last_error.empty()) return handle;
+    if (!ctx->last_error.empty()) return FULLMAG_FDM_OK;
 
     const auto &policy = plan->time_policy;
     ctx->adaptive_enabled = policy.adaptive_enabled != 0;
     if (!ctx->adaptive_enabled) {
         ctx->fsal_valid = false;
-        return handle;
+        return FULLMAG_FDM_OK;
     }
     const bool compatible_integrator =
         plan->base.integrator == FULLMAG_FDM_INTEGRATOR_RK23 ||
@@ -991,7 +1018,7 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_time_policy_v2(
         !guards_disabled_until_enforced)
     {
         ctx->last_error = "invalid complete adaptive timestep policy in fullmag_fdm_plan_desc_v2";
-        return handle;
+        return FULLMAG_FDM_OK;
     }
 
     ctx->adaptive_tolerance_mode = policy.adaptive_tolerance_mode;
@@ -1009,11 +1036,19 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_time_policy_v2(
     ctx->adaptive_max_spin_rotation = policy.adaptive_max_spin_rotation;
     ctx->has_adaptive_norm_tolerance = policy.has_adaptive_norm_tolerance != 0;
     ctx->adaptive_norm_tolerance = policy.adaptive_norm_tolerance;
-    return handle;
+    return FULLMAG_FDM_OK;
 #else
     (void)plan;
-    return nullptr;
+    return FULLMAG_FDM_ERR_CUDA;
 #endif
+}
+
+fullmag_fdm_backend *fullmag_fdm_backend_create_time_policy_v2(
+    const fullmag_fdm_plan_desc_v2 *plan)
+{
+    fullmag_fdm_backend *handle = nullptr;
+    (void)fullmag_fdm_backend_create_time_policy_v2_checked(plan, &handle);
+    return handle;
 }
 
 fullmag_fdm_backend *fullmag_fdm_backend_create_v2(

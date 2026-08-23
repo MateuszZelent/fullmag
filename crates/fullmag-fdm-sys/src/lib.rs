@@ -17,6 +17,7 @@ pub const FULLMAG_FDM_MAX_REGION_ID: u32 = (FULLMAG_FDM_MAX_EXCHANGE_REGIONS - 1
 pub const FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V1: u32 = 1;
 pub const FULLMAG_FDM_FROZEN_SPINS_ABI_V1: u32 = 1;
 pub const FULLMAG_FDM_CAPABILITY_FROZEN_SPINS_V1: u64 = 1_u64 << 0;
+pub const FULLMAG_FDM_PLAN_DESC_ABI_V2: u32 = 2;
 
 // ── Return codes ──
 
@@ -26,6 +27,7 @@ pub const FULLMAG_FDM_ERR_CUDA: i32 = -2;
 pub const FULLMAG_FDM_ERR_INTERNAL: i32 = -3;
 pub const FULLMAG_FDM_ERR_INTERRUPTED: i32 = -4;
 pub const FULLMAG_FDM_ERR_DT_MIN_EXHAUSTED: i32 = -5;
+pub const FULLMAG_FDM_ERR_ABI: i32 = -6;
 
 // ── Enums ──
 
@@ -466,6 +468,8 @@ pub struct fullmag_fdm_time_policy_desc_v2 {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct fullmag_fdm_plan_desc_v2 {
+    pub abi_version: u32,
+    pub struct_size: u32,
     pub base: fullmag_fdm_plan_desc,
     pub time_policy: fullmag_fdm_time_policy_desc_v2,
 }
@@ -1121,6 +1125,16 @@ extern "C" {
     pub fn fullmag_fdm_backend_create_time_policy_v2(
         plan: *const fullmag_fdm_plan_desc_v2,
     ) -> *mut fullmag_fdm_backend;
+
+    pub fn fullmag_fdm_plan_desc_v2_receipt(
+        plan: *const fullmag_fdm_plan_desc_v2,
+        out_receipt: *mut fullmag_fdm_plan_desc_v2,
+    ) -> i32;
+
+    pub fn fullmag_fdm_backend_create_time_policy_v2_checked(
+        plan: *const fullmag_fdm_plan_desc_v2,
+        out_handle: *mut *mut fullmag_fdm_backend,
+    ) -> i32;
 
     pub fn fullmag_fdm_backend_create_v2(
         plan: *const fullmag_fdm_multilayer_plan_desc_v2,

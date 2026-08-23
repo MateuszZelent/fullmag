@@ -1370,11 +1370,21 @@ impl NativeFdmBackend {
 
         let time_policy = native_time_policy(adaptive)?;
         let plan_desc_v2 = ffi::fullmag_fdm_plan_desc_v2 {
+            abi_version: ffi::FULLMAG_FDM_PLAN_DESC_ABI_V2,
+            struct_size: std::mem::size_of::<ffi::fullmag_fdm_plan_desc_v2>() as u32,
             base: plan_desc,
             time_policy,
         };
 
-        let handle = unsafe { ffi::fullmag_fdm_backend_create_time_policy_v2(&plan_desc_v2) };
+        let mut handle = std::ptr::null_mut();
+        let create_status = unsafe {
+            ffi::fullmag_fdm_backend_create_time_policy_v2_checked(&plan_desc_v2, &mut handle)
+        };
+        if create_status == ffi::FULLMAG_FDM_ERR_ABI {
+            return Err(RunError {
+                message: "CUDA FDM plan descriptor ABI mismatch".to_string(),
+            });
+        }
         if handle.is_null() {
             return Err(RunError {
                 message: "CUDA FDM backend_create returned null".to_string(),
