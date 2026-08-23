@@ -9,10 +9,10 @@ import type {
   MaterialReferenceResource,
   SceneResource,
 } from "@/kernel/api/apiTypes";
+import { invalidateAuthoringMutationDependents } from "@/kernel/authoring/authoringMutationInvalidation";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   resolveMaterialResourceKey,
-  SCENE_RESOURCE_KEY,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import {
@@ -22,6 +22,7 @@ import {
   type MaterialLibraryPreset,
 } from "@/shared/domain/material/materialLibrary";
 import { Button } from "@/shared/ui/Button";
+import { Input } from "@/shared/ui/Input";
 import {
   Dialog,
   DialogClose,
@@ -237,7 +238,7 @@ export function MaterialLibraryDialog({
   }
 
   function invalidateMaterialResources(revision: number, materialId: string): void {
-    resources.invalidate(SCENE_RESOURCE_KEY, revision);
+    invalidateAuthoringMutationDependents(resources, "material", revision);
     resources.invalidate(resolveMaterialResourceKey(materialId), revision);
   }
 
@@ -366,11 +367,11 @@ export function MaterialLibraryDialog({
             <div className="fm-material-library__grid">
               <label>
                 <span>Name</span>
-                <input value={draft.name} onChange={(event) => updateDraft({ name: event.target.value })} />
+                <Input value={draft.name} onChange={(event) => updateDraft({ name: event.target.value })} />
               </label>
               <label>
                 <span>Material ID</span>
-                <input
+                <Input
                   disabled={Boolean(selectedMaterial)}
                   value={draft.id}
                   onChange={(event) => updateDraft({ id: event.target.value })}
@@ -378,36 +379,36 @@ export function MaterialLibraryDialog({
               </label>
               <label>
                 <span>Ms</span>
-                <input inputMode="decimal" value={draft.Ms} onChange={(event) => updateDraft({ Ms: event.target.value })} />
+                <Input inputMode="decimal" value={draft.Ms} onChange={(event) => updateDraft({ Ms: event.target.value })} />
                 <small>A/m</small>
               </label>
               <label>
                 <span>Aex</span>
-                <input inputMode="decimal" value={draft.Aex} onChange={(event) => updateDraft({ Aex: event.target.value })} />
+                <Input inputMode="decimal" value={draft.Aex} onChange={(event) => updateDraft({ Aex: event.target.value })} />
                 <small>J/m</small>
               </label>
               <label>
                 <span>alpha</span>
-                <input inputMode="decimal" value={draft.alpha} onChange={(event) => updateDraft({ alpha: event.target.value })} />
+                <Input inputMode="decimal" value={draft.alpha} onChange={(event) => updateDraft({ alpha: event.target.value })} />
                 <small>1</small>
               </label>
               <label>
                 <span>Dind</span>
-                <input inputMode="decimal" value={draft.Dind} onChange={(event) => updateDraft({ Dind: event.target.value })} />
+                <Input inputMode="decimal" value={draft.Dind} onChange={(event) => updateDraft({ Dind: event.target.value })} />
                 <small>J/m²</small>
               </label>
               <label>
                 <span>Dbulk</span>
-                <input inputMode="decimal" value={draft.Dbulk} onChange={(event) => updateDraft({ Dbulk: event.target.value })} />
+                <Input inputMode="decimal" value={draft.Dbulk} onChange={(event) => updateDraft({ Dbulk: event.target.value })} />
                 <small>J/m³</small>
               </label>
               <label>
                 <span>Reference label</span>
-                <input value={draft.referenceLabel} onChange={(event) => updateDraft({ referenceLabel: event.target.value })} />
+                <Input value={draft.referenceLabel} onChange={(event) => updateDraft({ referenceLabel: event.target.value })} />
               </label>
               <label className="fm-material-library__wide">
                 <span>Literature URL</span>
-                <input value={draft.referenceUrl} onChange={(event) => updateDraft({ referenceUrl: event.target.value })} />
+                <Input value={draft.referenceUrl} onChange={(event) => updateDraft({ referenceUrl: event.target.value })} />
               </label>
               <label className="fm-material-library__wide">
                 <span>Citation</span>

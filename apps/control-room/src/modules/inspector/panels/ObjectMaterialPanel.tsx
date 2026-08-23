@@ -8,6 +8,7 @@ import {
 } from "@/kernel/authoring/authoringMutationInvalidation";
 import { useKernel } from "@/kernel/KernelContext";
 import {
+  publishCommittedSceneResource,
   resolveMaterialResourceKey,
   resolveObjectInteractionResourceKey,
   useMaterialResource,
@@ -32,12 +33,17 @@ import {
 } from "./inspectorDraftState";
 import { resolveGeometryObjectDraft } from "./geometryObjectPanelModel";
 import {
+  buildCreateMaterialDraft,
   buildMaterialAssignmentPatch,
   buildMaterialParametersPatch,
+  buildUniaxialAnisotropyPatch,
+  createMaterialThenAssign,
   magneticParametersDraftFromResource,
   magneticParametersDraftDirty,
   materialParametersDraftKey,
   normalizeMaterialRef,
+  MaterialAssignmentAfterCreateError,
+  type CreateMaterialDraft,
   type MagneticParametersDraft,
 } from "./ObjectMaterialPanelModel";
 
@@ -70,6 +76,21 @@ type Feedback =
       message: string;
     }
   | null;
+
+type PendingOperation = "anisotropy" | "assignment" | "create-assign" | "parameters" | "retry-assign";
+
+function newMaterialDraft(objectName: string): CreateMaterialDraft {
+  const slug = objectName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  return {
+    aex: "1.3e-11",
+    alpha: "0.01",
+    anisotropyAxis: ["0", "0", "1"],
+    ku1: "",
+    materialId: `mat:${slug || "new-material"}`,
+    ms: "8e5",
+    name: `${objectName || "New object"} material`,
+  };
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -135,7 +156,21 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
     }),
   );
   const [feedback, setFeedback] = useState<Feedback>(null);
-  const [pending, setPending] = useState(false);
+  const [pendingOperations, setPendingOperations] = useState<ReadonlySet<PendingOperation>>(
+    () => new Set(),
+  );
+  const [createDraftState, setCreateDraftState] = useState<{
+    draft: CreateMaterialDraft;
+    objectId: string;
+  }>(() => ({ draft: newMaterialDraft(object.name), objectId: object.objectId }));
+  const createDraft = createDraftState.objectId === object.objectId
+    ? createDraftState.draft
+    : newMaterialDraft(object.name);
+  const [assignmentFailure, setAssignmentFailure] = useState<{
+    error: MaterialAssignmentAfterCreateError;
+    refreshCompleted: boolean;
+    rebasedRevision: number | null;
+  } | null>(null);
   const { draft } = resolveInspectorDraftState({
     baseDraft,
     baseKey: draftKey,
@@ -145,6 +180,18 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
   });
   const draftMaterialId = normalizeMaterialRef(draft.materialRef);
   const parametersTargetChanged = draftMaterialId !== materialId;
+
+  function startPending(operation: PendingOperation): void {
+    setPendingOperations((current) => new Set(current).add(operation));
+  }
+
+  function finishPending(operation: PendingOperation): void {
+    setPendingOperations((current) => {
+      const next = new Set(current);
+      next.delete(operation);
+      return next;
+    });
+  }
 
   function updateAnisotropyDraft(patch: Partial<AnisotropyDraft>): void {
     setAnisotropyDraftState((current) => ({
@@ -161,26 +208,23 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
       setFeedback({ kind: "error", message: "No committed scene object." });
       return false;
     }
-    const ku1 = Number(anisotropyDraft.ku1);
-    if (!Number.isFinite(ku1)) {
-      setFeedback({ kind: "error", message: "Ku1 must be a finite number." });
+    const anisotropy = buildUniaxialAnisotropyPatch(
+      anisotropyDraft.ku1,
+      [anisotropyDraft.axisX, anisotropyDraft.axisY, anisotropyDraft.axisZ],
+    );
+    if ("error" in anisotropy) {
+      setFeedback({ kind: "error", message: anisotropy.error });
       return false;
     }
-    const axisX = Number(anisotropyDraft.axisX);
-    const axisY = Number(anisotropyDraft.axisY);
-    const axisZ = Number(anisotropyDraft.axisZ);
-    if (!Number.isFinite(axisX) || !Number.isFinite(axisY) || !Number.isFinite(axisZ)) {
-      setFeedback({ kind: "error", message: "Anisotropy axis components must be finite numbers." });
-      return false;
-    }
-    setPending(true);
+    const value = anisotropy.value ?? { axis: [0, 0, 1] as [number, number, number], ku1: 0 };
+    startPending("anisotropy");
     try {
       const response = await api.model.patchObjectInteraction(
         object.objectId,
         "uniaxial_anisotropy",
         {
           present: anisotropyDraft.present,
-          params: { ku1, axis: [axisX, axisY, axisZ] },
+          params: { ku1: value.ku1, axis: value.axis },
         },
       );
       const revision = acknowledgedAuthoringSceneRevision(response);
@@ -195,7 +239,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
       setFeedback({ kind: "error", message: errorMessage(error) });
       return false;
     } finally {
-      setPending(false);
+      finishPending("anisotropy");
     }
   }
 
@@ -218,7 +262,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
       return false;
     }
 
-    setPending(true);
+    startPending("assignment");
     try {
       const sceneResponse = await api.model.patchObject(
         object.objectId,
@@ -235,7 +279,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
       setFeedback({ kind: "error", message: errorMessage(error) });
       return false;
     } finally {
-      setPending(false);
+      finishPending("assignment");
     }
   }
 
@@ -261,7 +305,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
       return false;
     }
 
-    setPending(true);
+    startPending("parameters");
     try {
       const response = await api.model.patchMaterial(materialId, result.patch);
       const revision = acknowledgedAuthoringSceneRevision(response);
@@ -276,7 +320,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
       setFeedback({ kind: "error", message: errorMessage(error) });
       return false;
     } finally {
-      setPending(false);
+      finishPending("parameters");
     }
   }
 
@@ -284,13 +328,154 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
     invalidateAuthoringMutationDependents(resources, "material", revision);
   }
 
+  function updateCreateDraft(patch: Partial<CreateMaterialDraft>): void {
+    setCreateDraftState((current) => ({
+      draft: {
+        ...(current.objectId === object.objectId
+          ? current.draft
+          : newMaterialDraft(object.name)),
+        ...patch,
+      },
+      objectId: object.objectId,
+    }));
+    setFeedback(null);
+  }
+
+  function stageDeferredAnisotropy(
+    anisotropy: { axis: [number, number, number]; ku1: number } | null,
+  ): void {
+    if (!anisotropy) return;
+    setAnisotropyDraftState({
+      draft: {
+        axisX: String(anisotropy.axis[0]),
+        axisY: String(anisotropy.axis[1]),
+        axisZ: String(anisotropy.axis[2]),
+        ku1: String(anisotropy.ku1),
+        present: true,
+      },
+      key: anisotropyDraftKey,
+    });
+  }
+
+  async function createAndAssignMaterial(): Promise<void> {
+    if (!object.objectId || object.mode !== "committed" || object.baseRevision === null) {
+      setFeedback({ kind: "error", message: "No committed scene object with a known revision." });
+      return;
+    }
+    const validation = buildCreateMaterialDraft(createDraft);
+    if ("error" in validation) {
+      setFeedback({ kind: "error", message: validation.error });
+      return;
+    }
+    startPending("create-assign");
+    setAssignmentFailure(null);
+    try {
+      const result = await createMaterialThenAssign(
+        api,
+        object.objectId,
+        createDraft,
+        object.baseRevision,
+        (created) => {
+          publishCommittedSceneResource(
+            resources,
+            created.committed_scene,
+            created.scene_revision,
+            undefined,
+            false,
+          );
+          resources.invalidate(
+            resolveMaterialResourceKey(validation.value.materialId),
+            created.scene_revision,
+          );
+          invalidateMagneticParameterResources(created.scene_revision);
+        },
+      );
+      const assignmentRevision = acknowledgedAuthoringSceneRevision(result.assigned);
+      publishCommittedSceneResource(
+        resources,
+        result.assigned,
+        assignmentRevision,
+        undefined,
+        false,
+      );
+      invalidateMagneticParameterResources(assignmentRevision);
+      updateDraft({ materialRef: result.materialId });
+      stageDeferredAnisotropy(result.deferredAnisotropy);
+      setFeedback({
+        kind: "success",
+        message: result.deferredAnisotropy
+          ? "Material created and assigned. Ku1 draft is ready; apply anisotropy separately."
+          : "Material created and assigned.",
+      });
+    } catch (error) {
+      if (error instanceof MaterialAssignmentAfterCreateError) {
+        stageDeferredAnisotropy(error.deferredAnisotropy);
+        setAssignmentFailure({ error, refreshCompleted: false, rebasedRevision: null });
+        setFeedback({
+          kind: "error",
+          message: "Material was created and remains in the library, but assignment failed. Refresh and explicitly rebase before retrying assignment.",
+        });
+      } else {
+        setFeedback({ kind: "error", message: errorMessage(error) });
+      }
+    } finally {
+      finishPending("create-assign");
+    }
+  }
+
+  function rebaseFailedAssignment(): void {
+    if (
+      !assignmentFailure ||
+      !assignmentFailure.refreshCompleted ||
+      scene.status !== "ready" ||
+      typeof scene.data?.revision !== "number" ||
+      scene.data.revision <= assignmentFailure.error.assignmentBaseRevision
+    ) return;
+    setAssignmentFailure({
+      ...assignmentFailure,
+      rebasedRevision: scene.data.revision,
+    });
+    setFeedback({ kind: "success", message: `Assignment rebased to scene revision ${scene.data.revision}.` });
+  }
+
+  async function refreshFailedAssignment(): Promise<void> {
+    if (!assignmentFailure) return;
+    await scene.refetch();
+    setAssignmentFailure((current) =>
+      current?.error === assignmentFailure.error
+        ? { ...current, refreshCompleted: true }
+        : current,
+    );
+  }
+
+  async function retryFailedAssignment(): Promise<void> {
+    if (!assignmentFailure || assignmentFailure.rebasedRevision === null) return;
+    startPending("retry-assign");
+    try {
+      const assigned = await assignmentFailure.error.retry(api, assignmentFailure.rebasedRevision);
+      const assignmentRevision = acknowledgedAuthoringSceneRevision(assigned);
+      publishCommittedSceneResource(resources, assigned, assignmentRevision, undefined, false);
+      invalidateMagneticParameterResources(assignmentRevision);
+      updateDraft({ materialRef: assignmentFailure.error.materialId });
+      setAssignmentFailure(null);
+      setFeedback({ kind: "success", message: "Material assignment retry succeeded." });
+    } catch (error) {
+      setFeedback({ kind: "error", message: errorMessage(error) });
+    } finally {
+      finishPending("retry-assign");
+    }
+  }
+
   return {
     anisotropyDraft,
     applyAnisotropy,
     applyMaterial,
     applyParameters,
+    assignmentFailure,
     baseAnisotropyDraft,
     baseDraft,
+    createAndAssignMaterial,
+    createDraft,
     draft,
     draftIdentityKey,
     draftKey,
@@ -299,12 +484,16 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
     materialId,
     object,
     parametersTargetChanged,
-    pending,
+    pendingOperations,
+    refreshFailedAssignment,
+    rebaseFailedAssignment,
+    retryFailedAssignment,
     scene,
     setAnisotropyDraftState,
     setDraftState,
     setFeedback,
     updateAnisotropyDraft,
+    updateCreateDraft,
     updateDraft,
   } as const;
 }
@@ -341,8 +530,11 @@ function ObjectMaterialPanelView({
     applyAnisotropy,
     applyMaterial,
     applyParameters,
+    assignmentFailure,
     baseAnisotropyDraft,
     baseDraft,
+    createAndAssignMaterial,
+    createDraft,
     draft,
     draftIdentityKey,
     draftKey,
@@ -351,12 +543,16 @@ function ObjectMaterialPanelView({
     materialId,
     object,
     parametersTargetChanged,
-    pending,
+    pendingOperations,
+    refreshFailedAssignment,
+    rebaseFailedAssignment,
+    retryFailedAssignment,
     scene,
     setAnisotropyDraftState,
     setDraftState,
     setFeedback,
     updateAnisotropyDraft,
+    updateCreateDraft,
     updateDraft,
   } = panel;
   const draftDirty = magneticParametersDraftDirty(draft, baseDraft);
@@ -417,7 +613,9 @@ function ObjectMaterialPanelView({
   ]);
   useRegisterInspectorEditSession(
     "staged",
-    pending,
+    pendingOperations.has("assignment") ||
+      pendingOperations.has("parameters") ||
+      pendingOperations.has("anisotropy"),
     draftDirty || anisotropyDirty,
     !("error" in parametersValidation) && anisotropyValid,
     undefined,
@@ -467,6 +665,108 @@ function ObjectMaterialPanelView({
                     ?.name ?? draft.materialRef ?? "unassigned"
                 }
               />
+            </InspectorGroup>
+          ) : null}
+          {showSection("assignment") ? (
+            <InspectorGroup title="Create and Assign Material">
+              <FormField
+                label="New material name"
+                mono={false}
+                type="text"
+                value={createDraft.name}
+                onChange={(event) => updateCreateDraft({ name: event.target.value })}
+              />
+              <FormField
+                label="New material ID"
+                type="text"
+                value={createDraft.materialId}
+                onChange={(event) => updateCreateDraft({ materialId: event.target.value })}
+              />
+              <FormField
+                label="New Ms"
+                type="number"
+                unit="A/m"
+                value={createDraft.ms}
+                onChange={(event) => updateCreateDraft({ ms: event.target.value })}
+              />
+              <FormField
+                label="New A"
+                type="number"
+                unit="J/m"
+                value={createDraft.aex}
+                onChange={(event) => updateCreateDraft({ aex: event.target.value })}
+              />
+              <FormField
+                label="New alpha"
+                type="number"
+                value={createDraft.alpha}
+                onChange={(event) => updateCreateDraft({ alpha: event.target.value })}
+              />
+              <FormField
+                label="New Ku1"
+                hint="Optional interaction draft. It is not part of the material ACK and must be applied separately below."
+                type="number"
+                unit="J/m³"
+                value={createDraft.ku1}
+                onChange={(event) => updateCreateDraft({ ku1: event.target.value })}
+              />
+              <Vector3Field
+                label="New anisotropy axis"
+                disabled={!createDraft.ku1.trim()}
+                values={[...createDraft.anisotropyAxis]}
+                onChange={(index, value) => {
+                  const axis = [...createDraft.anisotropyAxis] as [string, string, string];
+                  axis[index] = value;
+                  updateCreateDraft({ anisotropyAxis: axis });
+                }}
+              />
+              <div className="fm-inspector-toolbar">
+                <Button
+                  disabled={pendingOperations.has("create-assign") || object.mode !== "committed"}
+                  size="sm"
+                  type="button"
+                  variant="primary"
+                  onClick={() => void createAndAssignMaterial()}
+                >
+                  Create and assign
+                </Button>
+              </div>
+              {assignmentFailure ? (
+                <div className="fm-inspector-toolbar" data-material-assignment-conflict="true">
+                  <Button
+                    disabled={pendingOperations.has("retry-assign")}
+                    size="sm"
+                    type="button"
+                    variant="ghost"
+                    onClick={() => void refreshFailedAssignment()}
+                  >
+                    Refresh scene
+                  </Button>
+                  <Button
+                    disabled={
+                      pendingOperations.has("retry-assign") ||
+                      scene.status !== "ready" ||
+                      !assignmentFailure.refreshCompleted ||
+                      (scene.data?.revision ?? 0) <= assignmentFailure.error.assignmentBaseRevision
+                    }
+                    size="sm"
+                    type="button"
+                    variant="ghost"
+                    onClick={rebaseFailedAssignment}
+                  >
+                    Rebase assignment
+                  </Button>
+                  <Button
+                    disabled={pendingOperations.has("retry-assign") || assignmentFailure.rebasedRevision === null}
+                    size="sm"
+                    type="button"
+                    variant="primary"
+                    onClick={() => void retryFailedAssignment()}
+                  >
+                    Retry assignment
+                  </Button>
+                </div>
+              ) : null}
             </InspectorGroup>
           ) : null}
       </div>
@@ -568,7 +868,7 @@ function ObjectMaterialPanelView({
               <div className="fm-inspector-toolbar">
                 {showSection("assignment") ? (
                   <Button
-                    disabled={pending || object.mode !== "committed"}
+                    disabled={pendingOperations.has("assignment") || object.mode !== "committed"}
                     size="sm"
                     type="button"
                     variant="primary"
@@ -579,7 +879,7 @@ function ObjectMaterialPanelView({
                 ) : null}
                 {showSection("material-parameters") ? (
                   <Button
-                    disabled={pending || !material.data || parametersTargetChanged}
+                    disabled={pendingOperations.has("parameters") || !material.data || parametersTargetChanged}
                     size="sm"
                     type="button"
                     variant="primary"
@@ -590,7 +890,7 @@ function ObjectMaterialPanelView({
                 ) : null}
                 {showSection("uniaxial-anisotropy") ? (
                   <Button
-                    disabled={pending || object.mode !== "committed"}
+                    disabled={pendingOperations.has("anisotropy") || object.mode !== "committed"}
                     size="sm"
                     type="button"
                     variant="primary"
@@ -600,7 +900,11 @@ function ObjectMaterialPanelView({
                   </Button>
                 ) : null}
                 <Button
-                  disabled={pending}
+                  disabled={
+                    pendingOperations.has("assignment") ||
+                    pendingOperations.has("parameters") ||
+                    pendingOperations.has("anisotropy")
+                  }
                   size="sm"
                   type="button"
                   variant="ghost"
