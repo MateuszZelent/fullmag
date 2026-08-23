@@ -33,6 +33,7 @@ export interface Viewport3DPrimitiveObject {
   magnetizationTexturePreview: Viewport3DMagnetizationTexturePreview | null;
   meshState: Viewport3DPrimitiveMeshState;
   objectId: string;
+  role?: string | null;
   sceneRevision: number;
   translation?: [number, number, number];
 }
@@ -496,6 +497,7 @@ export function buildViewport3DPrimitiveRenderModel(
         ),
         meshState: state,
         objectId,
+        role: objectRole,
         sceneRevision,
         translation: asVec3(transform?.translation) ?? [0, 0, 0],
       },

@@ -3,6 +3,7 @@
 import { useSyncExternalStore } from "react";
 
 export interface ObjectMoveToolState {
+  activationId: number;
   mode: "move";
   objectId: string;
 }
@@ -11,6 +12,7 @@ type Listener = () => void;
 
 export class ObjectMoveToolController {
   private state: ObjectMoveToolState | null = null;
+  private nextActivationId = 1;
   private readonly listeners = new Set<Listener>();
 
   getSnapshot(): ObjectMoveToolState | null {
@@ -19,7 +21,7 @@ export class ObjectMoveToolController {
 
   activate(objectId: string): void {
     if (this.state?.objectId === objectId) return;
-    this.state = { mode: "move", objectId };
+    this.state = { activationId: this.nextActivationId++, mode: "move", objectId };
     this.notify();
   }
 

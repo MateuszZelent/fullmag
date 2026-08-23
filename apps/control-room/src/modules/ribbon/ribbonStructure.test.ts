@@ -5137,7 +5137,11 @@ describe("ribbon structure", () => {
     expect(await registry.execute("geometry.move-selected", context)).toEqual({
       status: "completed",
     });
-    expect(objectMoveTool.getSnapshot()).toEqual({ mode: "move", objectId: "box" });
+    expect(objectMoveTool.getSnapshot()).toEqual({
+      activationId: 1,
+      mode: "move",
+      objectId: "box",
+    });
     expect(layout.get().activeViewportMainModuleId).toBe("viewport-3d");
     expect(layout.get().focusedSlot).toBe("viewport-main");
     expect(registry.isActive("geometry.move-selected", context)).toBe(true);

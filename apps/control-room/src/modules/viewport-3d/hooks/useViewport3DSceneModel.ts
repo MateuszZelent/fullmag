@@ -6365,6 +6365,7 @@ export function useViewport3DSceneModel({
     primitiveModel,
     sceneRefetch: scene.refetch,
     sceneRevision: primitiveModel.sceneRevision,
+    sceneStatus: scene.status,
     quantityId: primaryFieldQuantityId,
     regionOverlays,
     resourceFrameKey,

@@ -32,15 +32,6 @@ import {
   viewport3DOrbitDebugEnabledFromBrowserConfig,
 } from "@/kernel/browserFullmagConfig";
 import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
-import {
-  type ObjectTranslation,
-} from "@/kernel/authoring/objectTranslationMutation";
-import {
-  commitObjectMoveWorkflow,
-  rebaseObjectMoveConflict,
-  type ObjectMoveConflict,
-} from "@/kernel/authoring/objectMoveConflictWorkflow";
-import { useObjectMoveTool } from "@/kernel/authoring/ObjectMoveToolController";
 import { useMeshHistogramBinElementsResource } from "@/kernel/resources/geometryLifecycleResources";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
@@ -118,6 +109,10 @@ import {
   VIEWPORT_3D_ORBIT_DEBUG_LIMITS,
 } from "./layers/CameraControls";
 import { Viewport3DScene } from "./layers/Viewport3DScene";
+import {
+  useViewport3DObjectMoveInteraction,
+  Viewport3DMoveConflictPanel,
+} from "./Viewport3DObjectMoveInteraction";
 import type { Viewport3DAirboxFrameState } from "./layers/Viewport3DScene";
 import { recordViewport3DCameraTrajectorySample } from "./layers/viewport3DCameraTrajectoryProbe";
 import { resolveViewport3DTargetSurfaceLayerInput } from "./layers/viewport3DLayerPassInputs";
@@ -1267,6 +1262,7 @@ interface Viewport3DFrameProps
   selectedLabel: string;
   sceneRefetch: () => void;
   sceneRevision: number | null;
+  sceneStatus: string;
   slotId: ModuleProps["slotId"];
   status: string;
   topologyRevision: number | string | null;
@@ -1764,6 +1760,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   selectedLabel,
   sceneRefetch,
   sceneRevision,
+  sceneStatus,
   slotId,
   status,
   visualizationEffectiveRenderMode,
@@ -1803,9 +1800,22 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     useState<string | null>(null);
   const [inspectHover, setInspectHover] =
     useState<Viewport3DInspectHover | null>(null);
-  const [moveConflict, setMoveConflict] = useState<ObjectMoveConflict | null>(null);
-  const [moveDraftResetRevision, setMoveDraftResetRevision] = useState(0);
-  const moveTool = useObjectMoveTool(kernel.objectMoveTool);
+  const moveTargetEligible = Boolean(
+    sceneProps.selectedObjectId &&
+      sceneProps.primitiveModel?.objects.some(
+        (object) =>
+          object.objectId === sceneProps.selectedObjectId &&
+          object.role === "magnet",
+      ),
+  );
+  const moveInteraction = useViewport3DObjectMoveInteraction({
+    moveTargetEligible,
+    sceneRefetch,
+    sceneRevision,
+    sceneStatus,
+    selectedObjectId: sceneProps.selectedObjectId,
+    sessionId: sessionIdentity?.sessionId ?? null,
+  });
   const lastRenderedMeshRevision = useRef<number | string | null>(null);
   const sendVisualizationAck = useVisualizationClientAckSender({ api: kernel.api });
   const visualizationAckRevisionRef = useRef<{
@@ -2268,43 +2278,6 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     clearInspectHover();
     onClearSelection();
   }, [clearInspectHover, onClearSelection]);
-  const commitMove = useCallback(async (
-    objectId: string,
-    translation: ObjectTranslation,
-    baseRevision: number,
-  ) => {
-    return commitObjectMoveWorkflow({
-      api: kernel.api,
-      baseRevision,
-      objectId,
-      onAcknowledged: () => {
-        setMoveConflict(null);
-        setMoveDraftResetRevision((revision) => revision + 1);
-      },
-      onConflict: setMoveConflict,
-      resources: kernel.resources,
-      translation,
-    });
-  }, [kernel.api, kernel.resources]);
-  const rebaseMove = useCallback(() => {
-    if (
-      !moveConflict ||
-      sceneRevision === null ||
-      sceneRevision === moveConflict.baseRevision
-    ) return;
-    setMoveConflict(rebaseObjectMoveConflict(moveConflict, sceneRevision));
-  }, [moveConflict, sceneRevision]);
-  const retryMove = useCallback(async () => {
-    if (!moveConflict || moveConflict.phase !== "rebased") return;
-    const retry = { ...moveConflict, phase: "retrying" as const };
-    setMoveConflict(retry);
-    await commitMove(retry.objectId, retry.translation, retry.baseRevision);
-  }, [commitMove, moveConflict]);
-  const moveCanRebase = Boolean(
-    moveConflict?.phase === "conflict" &&
-      sceneRevision !== null &&
-      sceneRevision !== moveConflict.baseRevision,
-  );
   const updateInspectHover = useCallback(
     (
       sample: Viewport3DInspectSample,
@@ -2596,9 +2569,9 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             }
             onInspectClear={clearInspectHover}
             onInspectSample={updateInspectHover}
-            onMoveCommit={commitMove}
-            moveToolObjectId={moveTool?.objectId ?? null}
-            moveDraftResetRevision={moveDraftResetRevision}
+            onMoveCommit={moveInteraction.commitMove}
+            moveToolObjectId={moveInteraction.moveToolObjectId}
+            moveDraftResetRevision={moveInteraction.moveDraftResetRevision}
             onVisualizationFrameCommitted={onVisualizationFrameCommitted}
             visualProfileId={visualProfile.id}
           />
@@ -2627,38 +2600,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           provenance={visibleInspectProvenance}
         />
       ) : null}
-      {moveConflict ? (
-        <aside className="fm-viewport-3d__move-conflict" data-move-conflict={moveConflict.phase}>
-          <span>Scene changed. The move draft is preserved.</span>
-          <Button
-            disabled={moveConflict.phase !== "conflict"}
-            size="sm"
-            type="button"
-            variant="ghost"
-            onClick={sceneRefetch}
-          >
-            Refetch Scene
-          </Button>
-          <Button
-            disabled={!moveCanRebase}
-            size="sm"
-            type="button"
-            variant="ghost"
-            onClick={rebaseMove}
-          >
-            Rebase Draft
-          </Button>
-          <Button
-            disabled={moveConflict.phase !== "rebased"}
-            size="sm"
-            type="button"
-            variant="primary"
-            onClick={() => void retryMove()}
-          >
-            Retry Move
-          </Button>
-        </aside>
-      ) : null}
+      <Viewport3DMoveConflictPanel interaction={moveInteraction} />
       <Viewport3DFdmSelectionAnnouncement
         announcement={fdmSelectionAnnouncement}
       />

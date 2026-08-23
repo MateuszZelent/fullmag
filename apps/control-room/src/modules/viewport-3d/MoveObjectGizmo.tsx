@@ -174,6 +174,7 @@ export function MoveObjectGizmo({
         <mesh
           {...moveAxisPointerHandlers(controller, axis)}
           key={axis}
+          name={`move-axis:${axis}:${object.objectId}`}
           position={axisPosition(axis, length)}
           rotation={axisRotation(axis)}
           userData={{ axis, gizmo: "move-axis", objectId: object.objectId }}
@@ -259,7 +260,12 @@ export function Viewport3DMoveToolLayer({
 }
 
 function eventPoint(event: ThreeEvent<PointerEvent>): Translation3 {
-  return [event.point.x, event.point.y, event.point.z];
+  const point = event.point ??
+    (event.nativeEvent as PointerEvent & {
+      point?: { x: number; y: number; z: number };
+    }).point;
+  if (!point) return [0, 0, 0];
+  return [point.x, point.y, point.z];
 }
 
 function pointerTarget(event: ThreeEvent<PointerEvent>): Element & {
