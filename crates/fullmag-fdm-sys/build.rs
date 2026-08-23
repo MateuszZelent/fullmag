@@ -136,10 +136,15 @@ fn generate_execution_receipt_value_assertions() {
     .expect("writing generated execution receipt value assertions should succeed");
 }
 
-fn generate_execution_receipt_layout_assertions() {
+fn generate_execution_receipt_layout_assertions_for(
+    abi_suffix: &str,
+    rust_type: &str,
+    expected_field_count: usize,
+) {
     let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
-    let layout_manifest =
-        manifest_dir.join("../../native/include/fullmag_fdm_execution_receipt_v1_layout.def");
+    let layout_manifest = manifest_dir.join(format!(
+        "../../native/include/fullmag_fdm_execution_receipt_{abi_suffix}_layout.def"
+    ));
     println!("cargo:rerun-if-changed={}", layout_manifest.display());
     let source = std::fs::read_to_string(&layout_manifest)
         .expect("reading execution receipt layout manifest should succeed");
@@ -159,28 +164,41 @@ fn generate_execution_receipt_layout_assertions() {
                 assert_eq!(parts.len(), 3, "receipt field requires type, name, offset");
                 field_count += 1;
                 assertions.push_str(&format!(
-                    "assert_eq!(std::mem::offset_of!(fullmag_fdm_execution_receipt_v1, {}), {}, \"unexpected receipt offset for {}\");\n",
+                    "assert_eq!(std::mem::offset_of!({rust_type}, {}), {}, \"unexpected receipt offset for {}\");\n",
                     parts[1], parts[2], parts[1]
                 ));
             }
             "FULLMAG_FDM_EXECUTION_RECEIPT_SIZE" => {
                 size_count += 1;
                 assertions.push_str(&format!(
-                    "assert_eq!(std::mem::size_of::<fullmag_fdm_execution_receipt_v1>(), {}, \"unexpected receipt size\");\n",
+                    "assert_eq!(std::mem::size_of::<{rust_type}>(), {}, \"unexpected receipt size\");\n",
                     arguments.trim()
                 ));
             }
             other => panic!("unknown receipt layout macro: {other}"),
         }
     }
-    assert_eq!(field_count, 36, "receipt layout field count drift");
+    assert_eq!(field_count, expected_field_count, "receipt layout field count drift");
     assert_eq!(size_count, 1, "receipt layout size declaration drift");
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
     std::fs::write(
-        out_dir.join("execution_receipt_v1_layout_assertions.rs"),
+        out_dir.join(format!("execution_receipt_{abi_suffix}_layout_assertions.rs")),
         format!("{{\n{assertions}}}\n"),
     )
     .expect("writing generated execution receipt layout assertions should succeed");
+}
+
+fn generate_execution_receipt_layout_assertions() {
+    generate_execution_receipt_layout_assertions_for(
+        "v1",
+        "fullmag_fdm_execution_receipt_v1",
+        32,
+    );
+    generate_execution_receipt_layout_assertions_for(
+        "v2",
+        "fullmag_fdm_execution_receipt_v2",
+        36,
+    );
 }
 
 fn generate_plan_desc_layout_assertions() {

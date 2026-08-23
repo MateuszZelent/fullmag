@@ -180,7 +180,12 @@ bool launch_multilayer_anisotropy_field_impl(Context &ctx, const char *operation
         context_end_compute_stream_work(ctx, operation);
         return false;
     }
-    return context_end_compute_stream_work(ctx, operation);
+    if (!context_end_compute_stream_work(ctx, operation)) return false;
+    if (ctx.has_uniaxial_anisotropy || ctx.has_cubic_anisotropy) {
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_ANISOTROPY);
+    }
+    return true;
 }
 
 } // namespace

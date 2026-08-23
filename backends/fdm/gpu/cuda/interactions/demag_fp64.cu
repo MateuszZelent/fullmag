@@ -748,10 +748,11 @@ void launch_demag_field_fp64(Context &ctx) {
 
     if (context_end_compute_stream_work(ctx, "launch_demag_field_fp64")) {
         fullmag_fdm_note_operator_device_execution(
-            ctx, FULLMAG_FDM_OPERATOR_DEMAG |
-                     (ctx.has_demag_boundary_corr
-                          ? FULLMAG_FDM_OPERATOR_BOUNDARY_CORRECTION
-                          : 0));
+            ctx, FULLMAG_FDM_OPERATOR_DEMAG);
+        if (ctx.has_demag_boundary_corr) {
+            fullmag_fdm_note_operator_device_execution(
+                ctx, FULLMAG_FDM_OPERATOR_BOUNDARY_CORRECTION);
+        }
     }
 }
 
@@ -871,7 +872,31 @@ void launch_effective_field_fp64(Context &ctx, double evaluation_time) {
             ctx.has_active_mask ? 1 : 0,
             n);
     }
-    fullmag_fdm_note_effective_field_device_execution(ctx);
+    if (ctx.has_interfacial_dmi || ctx.has_bulk_dmi) {
+        fullmag_fdm_note_operator_device_execution(ctx, FULLMAG_FDM_OPERATOR_DMI);
+    }
+    if (ctx.has_uniaxial_anisotropy || ctx.has_cubic_anisotropy) {
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_ANISOTROPY);
+    }
+    if (ctx.has_external_field || ctx.has_static_external_field_profile) {
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_EXTERNAL_FIELD);
+    }
+    if (ctx.has_active_mask || ctx.has_frozen_mask || ctx.has_region_mask ||
+        ctx.has_slonczewski_active_mask || ctx.has_sot_active_mask) {
+        fullmag_fdm_note_operator_device_execution(ctx, FULLMAG_FDM_OPERATOR_MASKS);
+    }
+    if (ctx.has_magnetoelastic) {
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_MAGNETOELASTIC);
+    }
+    if (ctx.temperature > 0.0) {
+        fullmag_fdm_note_operator_device_execution(ctx, FULLMAG_FDM_OPERATOR_THERMAL);
+    }
+    if (ctx.has_oersted_field) {
+        fullmag_fdm_note_operator_device_execution(ctx, FULLMAG_FDM_OPERATOR_OERSTED);
+    }
 }
 
 void launch_anisotropy_field_fp64(Context &ctx) {

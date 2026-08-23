@@ -205,8 +205,9 @@ void launch_exchange_field_fp64(Context &ctx) {
             ctx.phi_floor,
             ctx.nx, ctx.ny, ctx.nz);
         fullmag_fdm_note_operator_device_execution(
-            ctx, FULLMAG_FDM_OPERATOR_EXCHANGE |
-                     FULLMAG_FDM_OPERATOR_BOUNDARY_CORRECTION);
+            ctx, FULLMAG_FDM_OPERATOR_EXCHANGE);
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_BOUNDARY_CORRECTION);
         return;
     }
 
@@ -239,8 +240,9 @@ void launch_exchange_field_fp64(Context &ctx) {
             ctx.phi_floor,
             ctx.nx, ctx.ny, ctx.nz);
         fullmag_fdm_note_operator_device_execution(
-            ctx, FULLMAG_FDM_OPERATOR_EXCHANGE |
-                     FULLMAG_FDM_OPERATOR_BOUNDARY_CORRECTION);
+            ctx, FULLMAG_FDM_OPERATOR_EXCHANGE);
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_BOUNDARY_CORRECTION);
         return;
     }
 

@@ -564,6 +564,7 @@ typedef struct {
 } fullmag_fdm_device_info;
 
 #define FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1 1u
+#define FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2 2u
 
 typedef enum {
 #define FULLMAG_FDM_EXECUTION_CLASS_VALUE(name, value) name = value,
@@ -620,6 +621,14 @@ typedef struct {
 #undef FULLMAG_FDM_EXECUTION_RECEIPT_SIZE
 #undef FULLMAG_FDM_EXECUTION_RECEIPT_FIELD
 } fullmag_fdm_execution_receipt_v1;
+
+typedef struct {
+#define FULLMAG_FDM_EXECUTION_RECEIPT_FIELD(type, name, offset) type name;
+#define FULLMAG_FDM_EXECUTION_RECEIPT_SIZE(size)
+#include "fullmag_fdm_execution_receipt_v2_layout.def"
+#undef FULLMAG_FDM_EXECUTION_RECEIPT_SIZE
+#undef FULLMAG_FDM_EXECUTION_RECEIPT_FIELD
+} fullmag_fdm_execution_receipt_v2;
 
 typedef struct {
     uint64_t cell_count;
@@ -1049,6 +1058,9 @@ int fullmag_fdm_backend_get_device_info(
 int fullmag_fdm_backend_execution_receipt_v1(
     fullmag_fdm_backend *handle,
     fullmag_fdm_execution_receipt_v1 *out_receipt);
+int fullmag_fdm_backend_execution_receipt_v2(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_execution_receipt_v2 *out_receipt);
 
 /**
  * Return the last error message, or NULL if no error.

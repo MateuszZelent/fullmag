@@ -536,6 +536,7 @@ pub struct fullmag_fdm_backend {
 }
 
 pub const FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1: u32 = 1;
+pub const FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2: u32 = 2;
 pub type fullmag_fdm_execution_class_v1 = u32;
 pub const FULLMAG_FDM_EXECUTION_UNKNOWN: fullmag_fdm_execution_class_v1 = 0;
 pub const FULLMAG_FDM_EXECUTION_DEVICE_RESIDENT: fullmag_fdm_execution_class_v1 = 1;
@@ -573,7 +574,6 @@ pub const FULLMAG_FDM_OPERATOR_MULTILAYER_TRANSFER: u64 = 1 << 15;
 pub const FULLMAG_FDM_OPERATOR_MULTILAYER_INTERACTIONS: u64 = 1 << 16;
 pub const FULLMAG_FDM_OPERATOR_MULTILAYER_DEMAG: u64 = 1 << 17;
 pub const FULLMAG_FDM_OPERATOR_GPU_TRANSPORT: u64 = 1 << 18;
-
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct fullmag_fdm_execution_receipt_v1 {
@@ -585,6 +585,43 @@ pub struct fullmag_fdm_execution_receipt_v1 {
     // Raw integer discriminants are intentional: receipt validation must be
     // able to reject unknown native values without constructing an invalid
     // Rust enum.
+    pub precision: u32,
+    pub integrator: u32,
+    pub reserved0: u32,
+    pub required_operator_mask: u64,
+    pub device_operator_mask: u64,
+    pub host_operator_mask: u64,
+    pub reduction_location: fullmag_fdm_operator_location_v1,
+    pub control_location: fullmag_fdm_operator_location_v1,
+    pub fallback_count: u64,
+    pub setup_full_vector_h2d_count: u64,
+    pub setup_full_vector_h2d_bytes: u64,
+    pub hot_loop_full_vector_h2d_count: u64,
+    pub hot_loop_full_vector_h2d_bytes: u64,
+    pub hot_loop_full_vector_d2h_count: u64,
+    pub hot_loop_full_vector_d2h_bytes: u64,
+    pub hot_loop_host_compute_count: u64,
+    pub hot_loop_host_sync_count: u64,
+    pub hot_loop_control_scalar_d2h_bytes: u64,
+    pub hot_loop_control_scalar_host_sync_count: u64,
+    pub setup_full_vector_d2h_count: u64,
+    pub setup_full_vector_d2h_bytes: u64,
+    pub observation_full_vector_h2d_count: u64,
+    pub observation_full_vector_h2d_bytes: u64,
+    pub observation_full_vector_d2h_count: u64,
+    pub observation_full_vector_d2h_bytes: u64,
+    pub accounting_valid: u32,
+    pub reserved1: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_execution_receipt_v2 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub execution_class: fullmag_fdm_execution_class_v1,
+    pub executed_backend: fullmag_fdm_executed_backend_v1,
+    pub device_ordinal: i32,
     pub precision: u32,
     pub integrator: u32,
     pub reserved0: u32,
@@ -635,6 +672,19 @@ mod execution_receipt_v1_layout_tests {
         include!(concat!(
             env!("OUT_DIR"),
             "/execution_receipt_v1_value_assertions.rs"
+        ));
+    }
+}
+
+#[cfg(test)]
+mod execution_receipt_v2_layout_tests {
+    use super::*;
+
+    #[test]
+    fn c_and_rust_receipt_v2_layout_is_exact() {
+        include!(concat!(
+            env!("OUT_DIR"),
+            "/execution_receipt_v2_layout_assertions.rs"
         ));
     }
 }
@@ -1442,6 +1492,11 @@ extern "C" {
     pub fn fullmag_fdm_backend_execution_receipt_v1(
         handle: *mut fullmag_fdm_backend,
         out_receipt: *mut fullmag_fdm_execution_receipt_v1,
+    ) -> i32;
+
+    pub fn fullmag_fdm_backend_execution_receipt_v2(
+        handle: *mut fullmag_fdm_backend,
+        out_receipt: *mut fullmag_fdm_execution_receipt_v2,
     ) -> i32;
 
     pub fn fullmag_fdm_backend_last_error(handle: *mut fullmag_fdm_backend) -> *const c_char;

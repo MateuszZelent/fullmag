@@ -34,6 +34,7 @@ use std::sync::{
     Arc,
 };
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 pub(crate) const DEFAULT_ARTIFACT_PIPELINE_CAPACITY: usize = 4;
 
@@ -180,6 +181,11 @@ enum ArtifactJob {
         snapshot: NativeFemFieldSnapshot,
         provenance: ExecutionProvenance,
     },
+    FailedRunProvenance {
+        provenance: ExecutionProvenance,
+        primary_error: String,
+        acknowledgement: mpsc::Sender<Result<(), String>>,
+    },
     Shutdown,
 }
 
@@ -196,6 +202,7 @@ impl ArtifactJob {
             ArtifactJob::NativeFieldSnapshot { .. } => 0,
             #[cfg(feature = "fem-gpu")]
             ArtifactJob::NativeFemFieldSnapshot { .. } => 0,
+            ArtifactJob::FailedRunProvenance { .. } => 0,
             ArtifactJob::Shutdown => 0,
         }
     }
@@ -243,6 +250,31 @@ impl ArtifactPipelineSender {
             queue_depth_after,
             diagnostics: self.diagnostics.snapshot(),
         })
+    }
+
+    fn publish_failed_run_provenance(
+        &self,
+        provenance: ExecutionProvenance,
+        primary_error: String,
+    ) -> Result<(), RunError> {
+        let (acknowledgement, completed) = mpsc::channel();
+        self.push(ArtifactJob::FailedRunProvenance {
+            provenance,
+            primary_error,
+            acknowledgement,
+        })?;
+        match completed.recv_timeout(Duration::from_secs(10)) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(message)) => Err(RunError { message }),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(RunError {
+                message: "timed out waiting for durable failed-run provenance publication"
+                    .into(),
+            }),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(RunError {
+                message: "artifact writer stopped before failed-run provenance was durable"
+                    .into(),
+            }),
+        }
     }
 }
 
@@ -912,6 +944,19 @@ impl ArtifactRecorder {
     /// their immutable capture-time provenance.
     pub(crate) fn update_provenance(&mut self, provenance: ExecutionProvenance) {
         self.provenance = provenance;
+    }
+
+    pub(crate) fn publish_failed_run_provenance(
+        &mut self,
+        primary: &RunError,
+    ) -> Result<(), RunError> {
+        if let Some(pipeline) = self.pipeline.as_ref() {
+            pipeline.publish_failed_run_provenance(
+                self.provenance.clone(),
+                primary.message.clone(),
+            )?;
+        }
+        Ok(())
     }
 
     #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
@@ -1601,6 +1646,18 @@ fn writer_loop(
                     job_start.elapsed(),
                 );
             }
+            ArtifactJob::FailedRunProvenance {
+                provenance,
+                primary_error,
+                acknowledgement,
+            } => {
+                let result = write_failed_run_provenance_atomic(
+                    output_dir,
+                    &provenance,
+                    &primary_error,
+                );
+                let _ = acknowledgement.send(result);
+            }
             ArtifactJob::Shutdown => break,
         }
     }
@@ -1630,6 +1687,58 @@ fn writer_loop(
     }
 
     Ok(summary)
+}
+
+fn write_failed_run_provenance_atomic(
+    output_dir: &Path,
+    provenance: &ExecutionProvenance,
+    primary_error: &str,
+) -> Result<(), String> {
+    static TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let final_path = output_dir.join("failed-run-provenance.v1.json");
+    let temporary_path = output_dir.join(format!(
+        ".failed-run-provenance.v1.json.{}.{}.tmp",
+        std::process::id(),
+        TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let payload = serde_json::to_vec_pretty(&serde_json::json!({
+        "schema_version": "fullmag_failed_run_provenance.v1",
+        "primary_error": primary_error,
+        "execution_provenance": provenance,
+    }))
+    .map_err(|error| format!("failed to serialize failed-run provenance: {error}"))?;
+    let result = (|| -> Result<(), String> {
+        let file = File::create(&temporary_path).map_err(|error| {
+            format!(
+                "failed to create temporary failed-run provenance '{}': {error}",
+                temporary_path.display()
+            )
+        })?;
+        let mut writer = BufWriter::new(file);
+        writer.write_all(&payload).map_err(|error| {
+            format!("failed to write failed-run provenance: {error}")
+        })?;
+        writer.write_all(b"\n").map_err(|error| {
+            format!("failed to terminate failed-run provenance: {error}")
+        })?;
+        writer.flush().map_err(|error| {
+            format!("failed to flush failed-run provenance: {error}")
+        })?;
+        writer.get_ref().sync_all().map_err(|error| {
+            format!("failed to sync failed-run provenance: {error}")
+        })?;
+        fs::rename(&temporary_path, &final_path).map_err(|error| {
+            format!(
+                "failed to atomically publish failed-run provenance '{}': {error}",
+                final_path.display()
+            )
+        })?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary_path);
+    }
+    result
 }
 
 enum ArtifactWriterJobKind {
@@ -1723,6 +1832,59 @@ mod tests {
             job.estimated_bytes(),
             18 * std::mem::size_of::<f64>() as u64
         );
+    }
+
+    #[test]
+    fn failed_run_provenance_is_durable_without_success_finish() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-failed-run-provenance-{}-{unique}",
+            std::process::id()
+        ));
+        let context = FieldArtifactContext {
+            problem_name: "failed-fdm-gpu-run".into(),
+            ir_version: "v0".into(),
+            source_hash: None,
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            layout: serde_json::json!({"kind": "fdm", "cell_count": 1}),
+            execution_resolution: None,
+        };
+        let pipeline = ArtifactPipeline::start(output_dir.clone(), context, 2)
+            .expect("start artifact pipeline");
+        let mut provenance = ExecutionProvenance {
+            execution_engine: "cuda_fdm".into(),
+            precision: "double".into(),
+            ..ExecutionProvenance::default()
+        };
+        provenance.fdm_gpu_execution_receipt =
+            Some(crate::types::FdmGpuExecutionReceipt::strict_unvalidated("double"));
+        let mut recorder = ArtifactRecorder::streaming(provenance, pipeline.sender());
+        let primary = RunError {
+            message: "injected failure after create/step".into(),
+        };
+
+        recorder
+            .publish_failed_run_provenance(&primary)
+            .expect("failed-run provenance publication");
+        drop(recorder);
+        drop(pipeline);
+
+        let document: serde_json::Value = serde_json::from_slice(
+            &fs::read(output_dir.join("failed-run-provenance.v1.json"))
+                .expect("durable failed-run provenance"),
+        )
+        .expect("valid failed-run provenance JSON");
+        assert_eq!(document["schema_version"], "fullmag_failed_run_provenance.v1");
+        assert_eq!(document["primary_error"], primary.message);
+        assert_eq!(
+            document["execution_provenance"]["fdm_gpu_execution_receipt"]
+                ["validation_state"],
+            "unvalidated"
+        );
+        fs::remove_dir_all(output_dir).expect("remove failed-run fixture");
     }
 
     #[test]

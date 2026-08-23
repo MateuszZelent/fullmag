@@ -251,7 +251,8 @@ endif()
 add_test(NAME fdm_plan_desc_sentinel_contract COMMAND fdm_plan_desc_sentinel_contract)
 
 add_executable(fdm_device_residency_receipt_contract
-    tests/device_residency_receipt_contract.cpp)
+    tests/device_residency_receipt_contract.cpp
+    tests/execution_receipt_v1_legacy_client.c)
 target_include_directories(fdm_device_residency_receipt_contract PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include)

@@ -49,14 +49,14 @@ namespace {
 class ReceiptSolverPhaseGuard {
 public:
     explicit ReceiptSolverPhaseGuard(Context &context)
-        : context_(context), previous_(context.execution_receipt->solver_phase_active)
+        : context_(context), previous_(fullmag_fdm_set_solver_phase_active(
+              *context.execution_receipt, true))
     {
-        context_.execution_receipt->solver_phase_active = true;
     }
 
     ~ReceiptSolverPhaseGuard() {
         fullmag_fdm_accumulate_execution_receipt_audit(context_);
-        context_.execution_receipt->solver_phase_active = previous_;
+        fullmag_fdm_set_solver_phase_active(*context_.execution_receipt, previous_);
     }
 
     ReceiptSolverPhaseGuard(const ReceiptSolverPhaseGuard &) = delete;
@@ -359,10 +359,12 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     if (!select_cuda_device_if_requested(*ctx)) {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
-    if (cudaGetDevice(&ctx->execution_receipt->device_ordinal) != cudaSuccess) {
+    int device_ordinal = -1;
+    if (cudaGetDevice(&device_ordinal) != cudaSuccess) {
         ctx->last_error = "failed to capture selected CUDA device for execution receipt";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
+    fullmag_fdm_set_device_ordinal(*ctx->execution_receipt, device_ordinal);
 
     // Copy grid
     ctx->nx = plan->grid.nx;
@@ -594,7 +596,7 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
             ? sizeof(double) : sizeof(float);
     if (!fullmag_fdm_checked_vector_bytes(
             ctx->cell_count, scalar_bytes, setup_bytes)) {
-        ctx->execution_receipt->accounting_valid = false;
+        fullmag_fdm_invalidate_execution_receipt(*ctx->execution_receipt);
         ctx->last_error = "initial magnetization byte count overflow";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
@@ -1081,10 +1083,12 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
     if (!select_cuda_device_if_requested(*ctx)) {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
-    if (cudaGetDevice(&ctx->execution_receipt->device_ordinal) != cudaSuccess) {
+    int device_ordinal = -1;
+    if (cudaGetDevice(&device_ordinal) != cudaSuccess) {
         ctx->last_error = "failed to capture selected CUDA device for execution receipt";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
+    fullmag_fdm_set_device_ordinal(*ctx->execution_receipt, device_ordinal);
 
     if (plan->kind == FULLMAG_FDM_PLAN_UNIFORM_GRID) {
         ctx->last_error =
@@ -1198,24 +1202,8 @@ int fullmag_fdm_backend_step(
             return FULLMAG_FDM_ERR_CUDA;
         }
         fullmag_fdm_publish_hot_loop_audit(*ctx, out_stats);
-        fullmag_fdm_note_integrator_device_execution(*ctx);
         fullmag_fdm_note_operator_device_execution(
-            *ctx, FULLMAG_FDM_OPERATOR_MULTILAYER_TRANSFER);
-        if (!ctx->multilayer_layers.empty()) {
-            fullmag_fdm_note_operator_device_execution(
-                *ctx, FULLMAG_FDM_OPERATOR_MULTILAYER_INTERACTIONS);
-        }
-        if (!ctx->multilayer_kernels.empty()) {
-            fullmag_fdm_note_operator_device_execution(
-                *ctx, FULLMAG_FDM_OPERATOR_MULTILAYER_DEMAG |
-                          FULLMAG_FDM_OPERATOR_DEMAG);
-        }
-        if (ctx->enable_exchange) {
-            fullmag_fdm_note_operator_device_execution(
-                *ctx, FULLMAG_FDM_OPERATOR_EXCHANGE);
-        }
-        fullmag_fdm_note_effective_field_device_execution(*ctx);
-        fullmag_fdm_commit_successful_step_operator_execution(*ctx);
+            *ctx, FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR);
         fullmag_fdm_publish_multilayer_demag_stage_counters(*ctx, out_stats);
         return FULLMAG_FDM_OK;
     }
@@ -1318,8 +1306,20 @@ int fullmag_fdm_backend_step(
     context_invalidate_gpu_transport_pre_step_m(*ctx);
 
     fullmag_fdm_publish_hot_loop_audit(*ctx, out_stats);
-    fullmag_fdm_note_integrator_device_execution(*ctx);
-    fullmag_fdm_commit_successful_step_operator_execution(*ctx);
+    fullmag_fdm_note_operator_device_execution(
+        *ctx, FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR);
+    if (ctx->has_zhang_li_stt) {
+        fullmag_fdm_note_operator_device_execution(
+            *ctx, FULLMAG_FDM_OPERATOR_ZHANG_LI_STT);
+    }
+    if (ctx->has_slonczewski_stt) {
+        fullmag_fdm_note_operator_device_execution(
+            *ctx, FULLMAG_FDM_OPERATOR_SLONCZEWSKI_STT);
+    }
+    if (ctx->has_sot) {
+        fullmag_fdm_note_operator_device_execution(
+            *ctx, FULLMAG_FDM_OPERATOR_SOT);
+    }
     return FULLMAG_FDM_OK;
 #else
     (void)handle; (void)dt_seconds; (void)out_stats;
@@ -2052,6 +2052,26 @@ int fullmag_fdm_backend_execution_receipt_v1(
     }
     auto *ctx = reinterpret_cast<Context *>(handle);
     const auto receipt = fullmag_fdm_make_execution_receipt(*ctx);
+    *out_receipt = receipt;
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle;
+    (void)out_receipt;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_execution_receipt_v2(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_execution_receipt_v2 *out_receipt)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !out_receipt) return FULLMAG_FDM_ERR_INVALID;
+    if (!fullmag_fdm_execution_receipt_request_valid(*out_receipt)) {
+        return FULLMAG_FDM_ERR_ABI;
+    }
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    const auto receipt = fullmag_fdm_make_execution_receipt_v2(*ctx);
     *out_receipt = receipt;
     return FULLMAG_FDM_OK;
 #else

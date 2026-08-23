@@ -4349,10 +4349,11 @@ bool import_transport_receipt_telemetry(
     const Slot &slot)
 {
     auto &receipt = *ctx.execution_receipt;
+    std::lock_guard<std::mutex> lock(receipt.accounting_mutex);
     for (uint64_t index = 0; index < slot.telemetry_count; ++index) {
         const auto &record = slot.telemetry[index];
         if (record.audit_sequence <= receipt.transport_telemetry_cursor) continue;
-        if (!fullmag_fdm_accept_transport_telemetry_sequence(
+        if (!fullmag_fdm_accept_transport_telemetry_sequence_locked(
                 receipt, record.audit_sequence)) {
             ctx.last_error = "GPU transport telemetry sequence has a gap";
             return false;
@@ -4371,7 +4372,10 @@ bool import_transport_receipt_telemetry(
                     receipt, receipt.setup_full_vector_h2d_bytes, record.bytes);
                 break;
             case TransportReceiptCategory::ScalarD2H:
-                fullmag_fdm_record_control_scalar_d2h(ctx, record.bytes);
+                fullmag_fdm_checked_add(
+                    receipt, ctx.hot_loop_d2h_bytes, record.bytes);
+                fullmag_fdm_checked_add(
+                    receipt, ctx.hot_loop_control_scalar_d2h_bytes, record.bytes);
                 break;
             case TransportReceiptCategory::SolverHotLoopH2D:
                 fullmag_fdm_checked_add(
@@ -4386,7 +4390,10 @@ bool import_transport_receipt_telemetry(
                     receipt, receipt.hot_loop_full_vector_d2h_bytes, record.bytes);
                 break;
             case TransportReceiptCategory::ScalarHostSync:
-                fullmag_fdm_record_control_scalar_host_sync(ctx, record.count);
+                fullmag_fdm_checked_add(
+                    receipt, ctx.hot_loop_host_sync_count, record.count);
+                fullmag_fdm_checked_add(
+                    receipt, ctx.hot_loop_control_scalar_host_sync_count, record.count);
                 break;
             case TransportReceiptCategory::ObservationH2D:
                 fullmag_fdm_checked_add(
@@ -4401,8 +4408,9 @@ bool import_transport_receipt_telemetry(
                     receipt, receipt.observation_full_vector_d2h_bytes, record.bytes);
                 break;
             case TransportReceiptCategory::DeviceExecution:
-                fullmag_fdm_note_operator_device_execution(
-                    ctx, FULLMAG_FDM_OPERATOR_GPU_TRANSPORT);
+                receipt.required_operator_mask |= FULLMAG_FDM_OPERATOR_GPU_TRANSPORT;
+                receipt.executed_device_operator_mask |= FULLMAG_FDM_OPERATOR_GPU_TRANSPORT;
+                receipt.executed_host_operator_mask &= ~FULLMAG_FDM_OPERATOR_GPU_TRANSPORT;
                 break;
             case TransportReceiptCategory::Invalid:
                 receipt.accounting_valid = false;

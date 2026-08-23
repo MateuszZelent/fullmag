@@ -1628,6 +1628,14 @@ void launch_multilayer_demag_field_fp64(Context &ctx) {
     } else {
         launch_multilayer_demag_field_fp64_assisted(ctx);
     }
+    if (ctx.last_error.empty()) {
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_DEMAG);
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_MULTILAYER_DEMAG);
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_MULTILAYER_TRANSFER);
+    }
 }
 
 void launch_multilayer_demag_field_fp32(Context &ctx) {
@@ -1647,6 +1655,14 @@ void launch_multilayer_demag_field_fp32(Context &ctx) {
         launch_multilayer_demag_field_fp32_batched(ctx);
     } else {
         launch_multilayer_demag_field_fp32_assisted(ctx);
+    }
+    if (ctx.last_error.empty()) {
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_DEMAG);
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_MULTILAYER_DEMAG);
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_MULTILAYER_TRANSFER);
     }
 }
 

@@ -18,7 +18,6 @@ struct ExecutionReceiptState {
     uint64_t host_operator_mask = 0;
     uint64_t executed_device_operator_mask = 0;
     uint64_t executed_host_operator_mask = 0;
-    uint64_t pending_device_operator_mask = 0;
     fullmag_fdm_operator_location_v1 reduction_location = FULLMAG_FDM_LOCATION_UNKNOWN;
     fullmag_fdm_operator_location_v1 control_location = FULLMAG_FDM_LOCATION_HOST_SCALAR;
     uint64_t fallback_count = 0;
@@ -42,13 +41,65 @@ struct ExecutionReceiptState {
     bool setup_complete = false;
     bool solver_phase_active = false;
     uint64_t transport_telemetry_cursor = 0;
-    mutable std::mutex async_accounting_mutex;
+    mutable std::mutex accounting_mutex;
 };
+
+inline bool fullmag_fdm_set_solver_phase_active(
+    ExecutionReceiptState &state,
+    bool active)
+{
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
+    const bool previous = state.solver_phase_active;
+    state.solver_phase_active = active;
+    return previous;
+}
+
+inline bool fullmag_fdm_solver_phase_active(const ExecutionReceiptState &state)
+{
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
+    return state.solver_phase_active;
+}
+
+inline bool fullmag_fdm_setup_complete(const ExecutionReceiptState &state)
+{
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
+    return state.setup_complete;
+}
+
+inline void fullmag_fdm_set_device_ordinal(
+    ExecutionReceiptState &state,
+    int32_t ordinal)
+{
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
+    state.device_ordinal = ordinal;
+}
+
+inline void fullmag_fdm_invalidate_execution_receipt(ExecutionReceiptState &state)
+{
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
+    state.accounting_valid = false;
+}
+
+inline uint64_t fullmag_fdm_resolved_unknown_operator_mask_locked(
+    const ExecutionReceiptState &state)
+{
+    return state.required_operator_mask &
+           ~(state.device_operator_mask | state.host_operator_mask);
+}
+
+inline uint64_t fullmag_fdm_executed_unknown_operator_mask_locked(
+    const ExecutionReceiptState &state)
+{
+    return state.required_operator_mask &
+           ~(state.executed_device_operator_mask |
+             state.executed_host_operator_mask);
+}
 
 inline void fullmag_fdm_require_operator(
     ExecutionReceiptState &state,
     uint64_t operator_mask)
 {
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
     state.required_operator_mask |= operator_mask;
 }
 
@@ -56,6 +107,7 @@ inline void fullmag_fdm_resolve_operator_device(
     ExecutionReceiptState &state,
     uint64_t operator_mask)
 {
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
     state.required_operator_mask |= operator_mask;
     state.device_operator_mask |= operator_mask;
     state.host_operator_mask &= ~operator_mask;
@@ -65,6 +117,7 @@ inline void fullmag_fdm_commit_operator_device_execution(
     ExecutionReceiptState &state,
     uint64_t operator_mask)
 {
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
     state.required_operator_mask |= operator_mask;
     state.executed_device_operator_mask |= operator_mask;
     state.executed_host_operator_mask &= ~operator_mask;
@@ -74,6 +127,7 @@ inline void fullmag_fdm_commit_operator_host_execution(
     ExecutionReceiptState &state,
     uint64_t operator_mask)
 {
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
     state.required_operator_mask |= operator_mask;
     state.host_operator_mask |= operator_mask;
     state.device_operator_mask &= ~operator_mask;
@@ -89,16 +143,15 @@ inline void fullmag_fdm_commit_operator_host_execution(
 inline uint64_t fullmag_fdm_resolved_unknown_operator_mask(
     const ExecutionReceiptState &state)
 {
-    return state.required_operator_mask &
-           ~(state.device_operator_mask | state.host_operator_mask);
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
+    return fullmag_fdm_resolved_unknown_operator_mask_locked(state);
 }
 
 inline uint64_t fullmag_fdm_executed_unknown_operator_mask(
     const ExecutionReceiptState &state)
 {
-    return state.required_operator_mask &
-           ~(state.executed_device_operator_mask |
-             state.executed_host_operator_mask);
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
+    return fullmag_fdm_executed_unknown_operator_mask_locked(state);
 }
 
 inline bool fullmag_fdm_checked_add(
@@ -131,15 +184,14 @@ public:
     AsyncTransferReceiptToken &operator=(const AsyncTransferReceiptToken &) = delete;
 
     bool complete() {
-        Status expected = Status::Pending;
-        if (!status_.compare_exchange_strong(
-                expected, Status::Completed,
-                std::memory_order_acq_rel,
-                std::memory_order_acquire)) {
-            return false;
+        if (!state_) {
+            Status expected = Status::Pending;
+            return status_.compare_exchange_strong(
+                expected, Status::Completed, std::memory_order_acq_rel,
+                std::memory_order_acquire);
         }
-        if (!state_) return true;
-        std::lock_guard<std::mutex> lock(state_->async_accounting_mutex);
+        std::lock_guard<std::mutex> lock(state_->accounting_mutex);
+        if (status_.load(std::memory_order_acquire) != Status::Pending) return false;
         uint64_t *count = nullptr;
         uint64_t *bytes = nullptr;
         if (cadence_ == ReceiptTransferCadence::Setup) {
@@ -160,21 +212,21 @@ public:
         }
         fullmag_fdm_checked_add(*state_, *count, 1);
         fullmag_fdm_checked_add(*state_, *bytes, bytes_);
+        status_.store(Status::Completed, std::memory_order_release);
         return true;
     }
 
     bool invalidate() {
-        Status expected = Status::Pending;
-        if (!status_.compare_exchange_strong(
-                expected, Status::Invalidated,
-                std::memory_order_acq_rel,
-                std::memory_order_acquire)) {
-            return false;
+        if (!state_) {
+            Status expected = Status::Pending;
+            return status_.compare_exchange_strong(
+                expected, Status::Invalidated, std::memory_order_acq_rel,
+                std::memory_order_acquire);
         }
-        if (state_) {
-            std::lock_guard<std::mutex> lock(state_->async_accounting_mutex);
-            state_->accounting_valid = false;
-        }
+        std::lock_guard<std::mutex> lock(state_->accounting_mutex);
+        if (status_.load(std::memory_order_acquire) != Status::Pending) return false;
+        state_->accounting_valid = false;
+        status_.store(Status::Invalidated, std::memory_order_release);
         return true;
     }
 
@@ -228,7 +280,7 @@ inline bool fullmag_fdm_checked_transfer_bytes(
     return true;
 }
 
-inline bool fullmag_fdm_accept_transport_telemetry_sequence(
+inline bool fullmag_fdm_accept_transport_telemetry_sequence_locked(
     ExecutionReceiptState &state,
     uint64_t sequence)
 {
@@ -240,6 +292,21 @@ inline bool fullmag_fdm_accept_transport_telemetry_sequence(
     }
     state.transport_telemetry_cursor = sequence;
     return true;
+}
+
+inline bool fullmag_fdm_accept_transport_telemetry_sequence(
+    ExecutionReceiptState &state,
+    uint64_t sequence)
+{
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
+    return fullmag_fdm_accept_transport_telemetry_sequence_locked(state, sequence);
+}
+
+inline bool fullmag_fdm_execution_receipt_request_valid(
+    const fullmag_fdm_execution_receipt_v2 &receipt)
+{
+    return receipt.abi_version == FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2 &&
+           receipt.struct_size == sizeof(fullmag_fdm_execution_receipt_v2);
 }
 
 inline bool fullmag_fdm_execution_receipt_request_valid(

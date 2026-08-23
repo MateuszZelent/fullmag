@@ -1,6 +1,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -36,14 +37,13 @@ std::filesystem::path repository_root() {
     return path.parent_path().parent_path().parent_path().parent_path();
 }
 
-std::size_t occurrences(const std::string &text, const std::string &needle) {
-    std::size_t count = 0;
-    for (std::size_t offset = 0;
-         (offset = text.find(needle, offset)) != std::string::npos;
-         offset += needle.size()) {
-        ++count;
+uint64_t fnv1a_64(const std::string &text) {
+    uint64_t hash = 14695981039346656037ull;
+    for (const unsigned char byte : text) {
+        hash ^= byte;
+        hash *= 1099511628211ull;
     }
-    return count;
+    return hash;
 }
 }
 
@@ -51,6 +51,12 @@ extern "C" int fullmag_fdm_test_record_residency_violation_v1(
     fullmag_fdm_backend *handle,
     uint32_t violation_kind,
     uint64_t bytes);
+extern "C" int fullmag_fdm_legacy_v1_client_query(
+    void *handle,
+    uint32_t *abi_version,
+    uint32_t *struct_size,
+    uint64_t *required_operator_mask,
+    uint64_t *setup_h2d_count);
 
 int main() {
     const auto root = repository_root();
@@ -82,18 +88,31 @@ int main() {
     const auto active_dispatch = read(root / "backends/fdm/api/c_api.cpp");
     check(active_dispatch.find("execute_reference_fdm") == std::string::npos,
           "active native dispatch contains no CPU reference fallback");
-    const std::map<std::string, std::pair<std::size_t, std::size_t>>
+    const auto receipt_context = read(root / "backends/fdm/include/context.hpp");
+    check(receipt_context.find("fullmag_fdm_note_effective_field_device_execution") ==
+              std::string::npos,
+          "operator execution has no grouped effective-field receipt hook");
+    check(receipt_context.find("fullmag_fdm_note_integrator_device_execution") ==
+              std::string::npos,
+          "operator execution has no grouped integrator receipt hook");
+    check(receipt_context.find("fullmag_fdm_commit_successful_step_operator_execution") ==
+              std::string::npos,
+          "operator execution has no central blanket step commit");
+    struct HostTransferManifestEntry {
+        uint64_t source_fingerprint;
+        const char *accounting_owner;
+        const char *category;
+        const char *direction;
+        const char *reason;
+    };
+    const std::map<std::string, HostTransferManifestEntry>
         approved_host_transfer_inventory{
-            {"demag/newell_gpu_fp64.cu", {0, 6}},
-            {"runtime/context.cu", {44, 36}},
-            {"runtime/llg_checkpoint.cpp", {1, 1}},
-            {"runtime/reductions_fp64.cu", {0, 5}},
-            {"transport/charge/device_solver.cu", {0, 4}},
-            {"transport/context.cu", {5, 12}},
-            {"transport/spin/device_solver.cu", {5, 4}},
-            {"transport/spin/sparse_solver.cu", {0, 3}},
+#define FULLMAG_FDM_HOST_TRANSFER_FILE(path, fingerprint, owner, category, direction, reason) \
+            {path, {fingerprint, owner, category, direction, reason}},
+#include "fdm_gpu_host_transfer_callsites_v1.def"
+#undef FULLMAG_FDM_HOST_TRANSFER_FILE
         };
-    std::map<std::string, std::pair<std::size_t, std::size_t>> observed_inventory;
+    std::map<std::string, uint64_t> observed_inventory;
     const auto cuda_root = root / "backends/fdm/gpu/cuda";
     for (const auto &entry : std::filesystem::recursive_directory_iterator(cuda_root)) {
         if (!entry.is_regular_file()) continue;
@@ -108,16 +127,58 @@ int main() {
             check(source.find(forbidden) == std::string::npos,
                   "active graph contains no alternate unclassified host transfer wrapper");
         }
-        const auto h2d = occurrences(source, "cudaMemcpyHostToDevice");
-        const auto d2h = occurrences(source, "cudaMemcpyDeviceToHost");
-        if (h2d != 0 || d2h != 0) {
+        const bool has_host_transfer =
+            source.find("cudaMemcpyHostToDevice") != std::string::npos ||
+            source.find("cudaMemcpyDeviceToHost") != std::string::npos;
+        if (has_host_transfer) {
             observed_inventory.emplace(
                 entry.path().lexically_relative(cuda_root).generic_string(),
-                std::make_pair(h2d, d2h));
+                fnv1a_64(source));
         }
     }
-    check(observed_inventory == approved_host_transfer_inventory,
-          "full active CUDA graph host-transfer inventory is exact and fail-closed");
+    check(observed_inventory.size() == approved_host_transfer_inventory.size(),
+          "exact callsite manifest covers every active raw host-transfer source");
+    for (const auto &[path, manifest] : approved_host_transfer_inventory) {
+        const auto observed = observed_inventory.find(path);
+        check(observed != observed_inventory.end(),
+              "manifest contains no stale host-transfer source");
+        check(observed->second == manifest.source_fingerprint,
+              "host-transfer callsite/accounting fingerprint is exact");
+        const auto source = read(cuda_root / path);
+        check(source.find(manifest.accounting_owner) != std::string::npos,
+              "every transfer source is tied to its receipt/telemetry owner");
+        check(std::strlen(manifest.category) != 0 &&
+                  std::strlen(manifest.direction) != 0 &&
+                  std::strlen(manifest.reason) != 0,
+              "every manifest entry has literal category, direction, and reason");
+
+        const auto raw_add_mutation = source + "\ncudaMemcpyHostToDevice\n";
+        check(fnv1a_64(raw_add_mutation) != manifest.source_fingerprint,
+              "manifest mutation gate rejects a raw host-transfer addition");
+        auto unaccounted_mutation = source;
+        const auto owner = unaccounted_mutation.find(manifest.accounting_owner);
+        check(owner != std::string::npos, "accounting owner mutation fixture is present");
+        unaccounted_mutation.replace(
+            owner, std::strlen(manifest.accounting_owner), "unaccounted_transfer");
+        check(fnv1a_64(unaccounted_mutation) != manifest.source_fingerprint,
+              "manifest mutation gate rejects accounted-to-unaccounted swap");
+    }
+    for (const auto *relative : {
+             "backends/fdm/api",
+             "crates/fullmag-fdm-sys",
+             "crates/fullmag-runner/src/fdm/gpu"}) {
+        for (const auto &entry :
+             std::filesystem::recursive_directory_iterator(root / relative)) {
+            if (!entry.is_regular_file()) continue;
+            const auto source = read(entry.path());
+            check(source.find("cudaMemcpyHostToDevice") == std::string::npos &&
+                      source.find("cudaMemcpyDeviceToHost") == std::string::npos &&
+                      source.find("cuMemcpyHtoD") == std::string::npos &&
+                      source.find("cuMemcpyDtoH") == std::string::npos &&
+                      source.find("hipMemcpy") == std::string::npos,
+                  "API/sys/runner scopes contain no unmanifested raw host transfer");
+        }
+    }
     check(active_dispatch.find(
               "fullmag_fdm_accumulate_execution_receipt_audit(context_);") !=
               std::string::npos,
@@ -129,6 +190,7 @@ int main() {
     check(runner_preview.find("finalize_after_outcome") != std::string::npos,
           "both preview runners finalize receipt for success and error outcomes");
     static_assert(FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1 == 1u);
+    static_assert(FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2 == 2u);
 #define FULLMAG_FDM_EXECUTION_CLASS_VALUE(name, value) static_assert(name == value);
 #define FULLMAG_FDM_EXECUTED_BACKEND_VALUE(name, value) static_assert(name == value);
 #define FULLMAG_FDM_OPERATOR_LOCATION_VALUE(name, value) static_assert(name == value);
@@ -147,6 +209,16 @@ int main() {
 #include "fullmag_fdm_execution_receipt_v1_layout.def"
 #undef FULLMAG_FDM_EXECUTION_RECEIPT_SIZE
 #undef FULLMAG_FDM_EXECUTION_RECEIPT_FIELD
+    static_assert(sizeof(fullmag_fdm_execution_receipt_v1) == 208u,
+                  "legacy receipt ABI v1 remains byte-for-byte compatible");
+#define FULLMAG_FDM_EXECUTION_RECEIPT_FIELD(type, name, offset) \
+    static_assert(offsetof(fullmag_fdm_execution_receipt_v2, name) == offset);
+#define FULLMAG_FDM_EXECUTION_RECEIPT_SIZE(size) \
+    static_assert(sizeof(fullmag_fdm_execution_receipt_v2) == size);
+#include "fullmag_fdm_execution_receipt_v2_layout.def"
+#undef FULLMAG_FDM_EXECUTION_RECEIPT_SIZE
+#undef FULLMAG_FDM_EXECUTION_RECEIPT_FIELD
+    static_assert(sizeof(fullmag_fdm_execution_receipt_v2) == 240u);
     fullmag_fdm_execution_receipt_v1 invalid{};
     std::memset(&invalid, 0x5a, sizeof(invalid));
     invalid.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1 + 1;
@@ -169,6 +241,29 @@ int main() {
           "oversized receipt is rejected");
     check(std::memcmp(&invalid, &oversized, sizeof(invalid)) == 0,
           "oversized rejection leaves output byte-for-byte unchanged");
+
+    fullmag_fdm_execution_receipt_v2 invalid_v2{};
+    std::memset(&invalid_v2, 0xa5, sizeof(invalid_v2));
+    invalid_v2.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2 + 1;
+    invalid_v2.struct_size = sizeof(invalid_v2);
+    const auto unknown_v2 = invalid_v2;
+    check(!fullmag::fdm::fullmag_fdm_execution_receipt_request_valid(invalid_v2),
+          "unknown receipt ABI v2 version is rejected");
+    check(std::memcmp(&invalid_v2, &unknown_v2, sizeof(invalid_v2)) == 0,
+          "unknown v2 rejection leaves output byte-for-byte unchanged");
+    invalid_v2.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2;
+    invalid_v2.struct_size = sizeof(invalid_v2) - 1;
+    const auto truncated_v2 = invalid_v2;
+    check(!fullmag::fdm::fullmag_fdm_execution_receipt_request_valid(invalid_v2),
+          "truncated receipt ABI v2 is rejected");
+    check(std::memcmp(&invalid_v2, &truncated_v2, sizeof(invalid_v2)) == 0,
+          "truncated v2 rejection leaves output byte-for-byte unchanged");
+    invalid_v2.struct_size = sizeof(invalid_v2) + 1;
+    const auto oversized_v2 = invalid_v2;
+    check(!fullmag::fdm::fullmag_fdm_execution_receipt_request_valid(invalid_v2),
+          "oversized receipt ABI v2 is rejected");
+    check(std::memcmp(&invalid_v2, &oversized_v2, sizeof(invalid_v2)) == 0,
+          "oversized v2 rejection leaves output byte-for-byte unchanged");
 
     uint64_t bytes = 0;
     check(fullmag::fdm::fullmag_fdm_checked_vector_bytes(1, sizeof(double), bytes) && bytes == 24,
@@ -207,6 +302,45 @@ int main() {
     check(!shared_receipt->accounting_valid &&
               shared_receipt->observation_full_vector_d2h_count == 1,
           "unresolved async transfer is not counted without completion proof");
+
+    auto concurrent_receipt = std::make_shared<fullmag::fdm::ExecutionReceiptState>();
+    fullmag::fdm::Context concurrent_context{};
+    concurrent_context.execution_receipt = concurrent_receipt;
+    concurrent_context.precision = FULLMAG_FDM_PRECISION_DOUBLE;
+    concurrent_context.integrator = FULLMAG_FDM_INTEGRATOR_HEUN;
+    fullmag::fdm::AsyncTransferReceiptToken concurrent_transfer(
+        concurrent_receipt, false, 24,
+        fullmag::fdm::ReceiptTransferCadence::Observation);
+    std::atomic<bool> start{false};
+    std::thread async_complete([&] {
+        while (!start.load(std::memory_order_acquire)) {}
+        check(concurrent_transfer.complete(), "parallel async completion succeeds once");
+    });
+    std::thread synchronous_accounting([&] {
+        while (!start.load(std::memory_order_acquire)) {}
+        fullmag::fdm::fullmag_fdm_record_setup_full_vector_h2d(concurrent_context, 24);
+    });
+    start.store(true, std::memory_order_release);
+    for (int sample = 0; sample != 1000; ++sample) {
+        const auto snapshot =
+            fullmag::fdm::fullmag_fdm_make_execution_receipt_v2(concurrent_context);
+        check(snapshot.observation_full_vector_d2h_count <= 1,
+              "parallel receipt snapshots never double-count async completion");
+        check((snapshot.setup_full_vector_h2d_count == 0 &&
+               snapshot.setup_full_vector_h2d_bytes == 0) ||
+              (snapshot.setup_full_vector_h2d_count == 1 &&
+               snapshot.setup_full_vector_h2d_bytes == 24),
+              "parallel receipt snapshot observes coherent sync accounting");
+    }
+    async_complete.join();
+    synchronous_accounting.join();
+    const auto concurrent_final =
+        fullmag::fdm::fullmag_fdm_make_execution_receipt_v2(concurrent_context);
+    check(concurrent_final.observation_full_vector_d2h_count == 1 &&
+              concurrent_final.observation_full_vector_d2h_bytes == 24 &&
+              concurrent_final.setup_full_vector_h2d_count == 1 &&
+              concurrent_final.setup_full_vector_h2d_bytes == 24,
+          "parallel async and sync receipt accounting commits exactly once");
 
     auto telemetry = [](uint32_t direction, uint32_t reason, uint32_t flags) {
         fullmag_fdm_gpu_transport_telemetry_v1 record{};
@@ -329,6 +463,17 @@ int main() {
 
     check(fullmag_fdm_backend_execution_receipt_v1(handle, &receipt) == FULLMAG_FDM_OK,
           "created Context publishes execution receipt");
+    uint32_t legacy_abi = 0;
+    uint32_t legacy_size = 0;
+    uint64_t legacy_required = 0;
+    uint64_t legacy_setup_h2d = 0;
+    check(fullmag_fdm_legacy_v1_client_query(
+              handle, &legacy_abi, &legacy_size, &legacy_required,
+              &legacy_setup_h2d) == FULLMAG_FDM_OK &&
+              legacy_abi == 1 && legacy_size == 208 &&
+              legacy_required == receipt.required_operator_mask &&
+              legacy_setup_h2d == receipt.setup_full_vector_h2d_count,
+          "frozen old-client translation unit queries the restored v1 ABI");
     check(receipt.execution_class == FULLMAG_FDM_EXECUTION_DEVICE_RESIDENT,
           "native context resolves device-resident execution");
     check(receipt.executed_backend == FULLMAG_FDM_EXECUTED_UNKNOWN &&
@@ -504,7 +649,8 @@ int main() {
     instrumented.precision = FULLMAG_FDM_PRECISION_DOUBLE;
     instrumented.integrator = FULLMAG_FDM_INTEGRATOR_HEUN;
     instrumented.enable_exchange = true;
-    instrumented.execution_receipt->device_ordinal = 3;
+    fullmag::fdm::fullmag_fdm_set_device_ordinal(
+        *instrumented.execution_receipt, 3);
     fullmag::fdm::fullmag_fdm_record_setup_full_vector_h2d(instrumented, 24);
     fullmag::fdm::fullmag_fdm_commit_operator_residency(instrumented);
     receipt = fullmag::fdm::fullmag_fdm_make_execution_receipt(instrumented);

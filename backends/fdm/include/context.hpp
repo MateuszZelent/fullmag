@@ -744,10 +744,10 @@ inline void fullmag_fdm_reset_hot_loop_audit(Context &ctx) {
     ctx.hot_loop_host_sync_count = 0;
     ctx.hot_loop_control_scalar_d2h_bytes = 0;
     ctx.hot_loop_control_scalar_host_sync_count = 0;
-    ctx.execution_receipt->pending_device_operator_mask = 0;
 }
 
 inline void fullmag_fdm_record_control_scalar_d2h(Context &ctx, uint64_t bytes) {
+    std::lock_guard<std::mutex> lock(ctx.execution_receipt->accounting_mutex);
     fullmag_fdm_checked_add(
         *ctx.execution_receipt, ctx.hot_loop_d2h_bytes, bytes);
     fullmag_fdm_checked_add(
@@ -758,6 +758,7 @@ inline void fullmag_fdm_record_control_scalar_host_sync(
     Context &ctx,
     uint64_t count = 1)
 {
+    std::lock_guard<std::mutex> lock(ctx.execution_receipt->accounting_mutex);
     fullmag_fdm_checked_add(
         *ctx.execution_receipt, ctx.hot_loop_host_sync_count, count);
     fullmag_fdm_checked_add(
@@ -780,6 +781,7 @@ inline void fullmag_fdm_publish_hot_loop_audit(
 
 inline void fullmag_fdm_accumulate_execution_receipt_audit(Context &ctx) {
     auto &state = *ctx.execution_receipt;
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
     fullmag_fdm_checked_add(state, state.hot_loop_host_sync_count,
                             ctx.hot_loop_host_sync_count);
     fullmag_fdm_checked_add(state, state.hot_loop_control_scalar_d2h_bytes,
@@ -800,6 +802,7 @@ inline void fullmag_fdm_record_counted_bytes(
 
 inline void fullmag_fdm_record_setup_full_vector_h2d(Context &ctx, uint64_t bytes) {
     auto &state = *ctx.execution_receipt;
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
     fullmag_fdm_record_counted_bytes(
         state, state.setup_full_vector_h2d_count,
         state.setup_full_vector_h2d_bytes, bytes);
@@ -807,6 +810,7 @@ inline void fullmag_fdm_record_setup_full_vector_h2d(Context &ctx, uint64_t byte
 
 inline void fullmag_fdm_record_setup_full_vector_d2h(Context &ctx, uint64_t bytes) {
     auto &state = *ctx.execution_receipt;
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
     fullmag_fdm_record_counted_bytes(
         state, state.setup_full_vector_d2h_count,
         state.setup_full_vector_d2h_bytes, bytes);
@@ -814,6 +818,7 @@ inline void fullmag_fdm_record_setup_full_vector_d2h(Context &ctx, uint64_t byte
 
 inline void fullmag_fdm_record_observation_full_vector_h2d(Context &ctx, uint64_t bytes) {
     auto &state = *ctx.execution_receipt;
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
     fullmag_fdm_record_counted_bytes(
         state, state.observation_full_vector_h2d_count,
         state.observation_full_vector_h2d_bytes, bytes);
@@ -821,6 +826,7 @@ inline void fullmag_fdm_record_observation_full_vector_h2d(Context &ctx, uint64_
 
 inline void fullmag_fdm_record_observation_full_vector_d2h(Context &ctx, uint64_t bytes) {
     auto &state = *ctx.execution_receipt;
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
     fullmag_fdm_record_counted_bytes(
         state, state.observation_full_vector_d2h_count,
         state.observation_full_vector_d2h_bytes, bytes);
@@ -834,26 +840,40 @@ inline void fullmag_fdm_record_cuda_transfer_success(
     bool host_to_device,
     uint64_t bytes)
 {
-    if (ctx.execution_receipt->solver_phase_active) {
+    auto &state = *ctx.execution_receipt;
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
+    if (state.solver_phase_active) {
         if (host_to_device) {
-            fullmag_fdm_record_hot_loop_full_vector_h2d(ctx, bytes);
+            fullmag_fdm_record_counted_bytes(
+                state, state.hot_loop_full_vector_h2d_count,
+                state.hot_loop_full_vector_h2d_bytes, bytes);
         } else {
-            fullmag_fdm_record_hot_loop_full_vector_d2h(ctx, bytes);
+            fullmag_fdm_record_counted_bytes(
+                state, state.hot_loop_full_vector_d2h_count,
+                state.hot_loop_full_vector_d2h_bytes, bytes);
         }
         return;
     }
-    if (!ctx.execution_receipt->setup_complete) {
+    if (!state.setup_complete) {
         if (host_to_device) {
-            fullmag_fdm_record_setup_full_vector_h2d(ctx, bytes);
+            fullmag_fdm_record_counted_bytes(
+                state, state.setup_full_vector_h2d_count,
+                state.setup_full_vector_h2d_bytes, bytes);
         } else {
-            fullmag_fdm_record_setup_full_vector_d2h(ctx, bytes);
+            fullmag_fdm_record_counted_bytes(
+                state, state.setup_full_vector_d2h_count,
+                state.setup_full_vector_d2h_bytes, bytes);
         }
         return;
     }
     if (host_to_device) {
-        fullmag_fdm_record_observation_full_vector_h2d(ctx, bytes);
+        fullmag_fdm_record_counted_bytes(
+            state, state.observation_full_vector_h2d_count,
+            state.observation_full_vector_h2d_bytes, bytes);
     } else {
-        fullmag_fdm_record_observation_full_vector_d2h(ctx, bytes);
+        fullmag_fdm_record_counted_bytes(
+            state, state.observation_full_vector_d2h_count,
+            state.observation_full_vector_d2h_bytes, bytes);
     }
 }
 
@@ -862,6 +882,7 @@ inline void fullmag_fdm_record_hot_loop_full_vector_h2d(
     uint64_t bytes)
 {
     auto &state = *ctx.execution_receipt;
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
     fullmag_fdm_record_counted_bytes(
         state, state.hot_loop_full_vector_h2d_count,
         state.hot_loop_full_vector_h2d_bytes, bytes);
@@ -872,12 +893,14 @@ inline void fullmag_fdm_record_hot_loop_full_vector_d2h(
     uint64_t bytes)
 {
     auto &state = *ctx.execution_receipt;
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
     fullmag_fdm_record_counted_bytes(
         state, state.hot_loop_full_vector_d2h_count,
         state.hot_loop_full_vector_d2h_bytes, bytes);
 }
 
 inline void fullmag_fdm_record_hot_loop_host_compute(Context &ctx) {
+    std::lock_guard<std::mutex> lock(ctx.execution_receipt->accounting_mutex);
     fullmag_fdm_checked_add(
         *ctx.execution_receipt,
         ctx.execution_receipt->hot_loop_host_compute_count,
@@ -1011,11 +1034,13 @@ inline uint64_t fullmag_fdm_required_operator_mask(const Context &ctx) {
 
 inline void fullmag_fdm_commit_operator_residency(Context &ctx) {
     auto &state = *ctx.execution_receipt;
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
     const uint64_t required = fullmag_fdm_required_operator_mask(ctx);
     state.required_operator_mask |= required;
     for (uint64_t bit = 1; bit <= FULLMAG_FDM_OPERATOR_GPU_TRANSPORT; bit <<= 1) {
         if ((required & bit) != 0) {
-            fullmag_fdm_resolve_operator_device(state, bit);
+            state.device_operator_mask |= bit;
+            state.host_operator_mask &= ~bit;
         }
     }
     state.reduction_location = FULLMAG_FDM_LOCATION_DEVICE;
@@ -1026,55 +1051,19 @@ inline void fullmag_fdm_note_operator_device_execution(
     Context &ctx,
     uint64_t operator_mask)
 {
-    ctx.execution_receipt->pending_device_operator_mask |= operator_mask;
-}
-
-inline void fullmag_fdm_note_effective_field_device_execution(Context &ctx) {
-    uint64_t mask = 0;
-    if (ctx.has_interfacial_dmi || ctx.has_bulk_dmi) mask |= FULLMAG_FDM_OPERATOR_DMI;
-    if (ctx.has_uniaxial_anisotropy || ctx.has_cubic_anisotropy) {
-        mask |= FULLMAG_FDM_OPERATOR_ANISOTROPY;
-    }
-    if (ctx.has_external_field || ctx.has_static_external_field_profile) {
-        mask |= FULLMAG_FDM_OPERATOR_EXTERNAL_FIELD;
-    }
-    if (ctx.has_active_mask || ctx.has_frozen_mask || ctx.has_region_mask ||
-        ctx.has_slonczewski_active_mask || ctx.has_sot_active_mask) {
-        mask |= FULLMAG_FDM_OPERATOR_MASKS;
-    }
-    if (ctx.has_magnetoelastic) mask |= FULLMAG_FDM_OPERATOR_MAGNETOELASTIC;
-    if (ctx.temperature > 0.0) mask |= FULLMAG_FDM_OPERATOR_THERMAL;
-    if (ctx.has_oersted_field) mask |= FULLMAG_FDM_OPERATOR_OERSTED;
-    fullmag_fdm_note_operator_device_execution(ctx, mask);
-}
-
-inline void fullmag_fdm_note_integrator_device_execution(Context &ctx) {
-    uint64_t mask = FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR |
-                    FULLMAG_FDM_OPERATOR_REDUCTION;
-    if (ctx.has_zhang_li_stt) mask |= FULLMAG_FDM_OPERATOR_ZHANG_LI_STT;
-    if (ctx.has_slonczewski_stt) mask |= FULLMAG_FDM_OPERATOR_SLONCZEWSKI_STT;
-    if (ctx.has_sot) mask |= FULLMAG_FDM_OPERATOR_SOT;
-    fullmag_fdm_note_operator_device_execution(ctx, mask);
-}
-
-inline void fullmag_fdm_commit_successful_step_operator_execution(Context &ctx) {
-    auto &state = *ctx.execution_receipt;
-    const uint64_t proven =
-        state.pending_device_operator_mask & state.required_operator_mask;
-    state.executed_device_operator_mask |= proven;
-    state.executed_host_operator_mask &= ~proven;
-    state.pending_device_operator_mask = 0;
+    fullmag_fdm_commit_operator_device_execution(
+        *ctx.execution_receipt, operator_mask);
 }
 
 inline void fullmag_fdm_mark_actual_operator_host(Context &ctx, uint64_t operator_mask) {
     fullmag_fdm_commit_operator_host_execution(*ctx.execution_receipt, operator_mask);
 }
 
-inline fullmag_fdm_execution_class_v1 fullmag_fdm_execution_class(
+inline fullmag_fdm_execution_class_v1 fullmag_fdm_execution_class_locked(
     const ExecutionReceiptState &state)
 {
     if (state.required_operator_mask == 0 ||
-        fullmag_fdm_resolved_unknown_operator_mask(state) != 0) {
+        fullmag_fdm_resolved_unknown_operator_mask_locked(state) != 0) {
         return FULLMAG_FDM_EXECUTION_UNKNOWN;
     }
     if (state.host_operator_mask == 0 &&
@@ -1086,17 +1075,18 @@ inline fullmag_fdm_execution_class_v1 fullmag_fdm_execution_class(
     return FULLMAG_FDM_EXECUTION_HYBRID;
 }
 
-inline fullmag_fdm_execution_receipt_v1 fullmag_fdm_make_execution_receipt(
+inline fullmag_fdm_execution_receipt_v2 fullmag_fdm_make_execution_receipt_v2(
     const Context &ctx)
 {
     const auto &state = *ctx.execution_receipt;
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
 
-    fullmag_fdm_execution_receipt_v1 receipt{};
-    receipt.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1;
+    fullmag_fdm_execution_receipt_v2 receipt{};
+    receipt.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2;
     receipt.struct_size = sizeof(receipt);
-    receipt.execution_class = fullmag_fdm_execution_class(state);
+    receipt.execution_class = fullmag_fdm_execution_class_locked(state);
     receipt.executed_backend =
-        fullmag_fdm_executed_unknown_operator_mask(state) == 0 &&
+        fullmag_fdm_executed_unknown_operator_mask_locked(state) == 0 &&
                 state.executed_host_operator_mask == 0
             ? FULLMAG_FDM_EXECUTED_CUDA_FDM
             : FULLMAG_FDM_EXECUTED_UNKNOWN;
@@ -1107,11 +1097,11 @@ inline fullmag_fdm_execution_receipt_v1 fullmag_fdm_make_execution_receipt(
     receipt.device_operator_mask = state.device_operator_mask;
     receipt.host_operator_mask = state.host_operator_mask;
     receipt.resolved_unknown_operator_mask =
-        fullmag_fdm_resolved_unknown_operator_mask(state);
+        fullmag_fdm_resolved_unknown_operator_mask_locked(state);
     receipt.executed_device_operator_mask = state.executed_device_operator_mask;
     receipt.executed_host_operator_mask = state.executed_host_operator_mask;
     receipt.executed_unknown_operator_mask =
-        fullmag_fdm_executed_unknown_operator_mask(state);
+        fullmag_fdm_executed_unknown_operator_mask_locked(state);
     receipt.reduction_location = state.reduction_location;
     receipt.control_location = state.control_location;
     receipt.fallback_count = state.fallback_count;
@@ -1133,6 +1123,45 @@ inline fullmag_fdm_execution_receipt_v1 fullmag_fdm_make_execution_receipt(
     receipt.observation_full_vector_d2h_count = state.observation_full_vector_d2h_count;
     receipt.observation_full_vector_d2h_bytes = state.observation_full_vector_d2h_bytes;
     receipt.accounting_valid = state.accounting_valid ? 1u : 0u;
+    return receipt;
+}
+
+inline fullmag_fdm_execution_receipt_v1 fullmag_fdm_make_execution_receipt(
+    const Context &ctx)
+{
+    const auto source = fullmag_fdm_make_execution_receipt_v2(ctx);
+    fullmag_fdm_execution_receipt_v1 receipt{};
+    receipt.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1;
+    receipt.struct_size = sizeof(receipt);
+    receipt.execution_class = source.execution_class;
+    receipt.executed_backend = source.executed_backend;
+    receipt.device_ordinal = source.device_ordinal;
+    receipt.precision = source.precision;
+    receipt.integrator = source.integrator;
+    receipt.required_operator_mask = source.required_operator_mask;
+    receipt.device_operator_mask = source.device_operator_mask;
+    receipt.host_operator_mask = source.host_operator_mask;
+    receipt.reduction_location = source.reduction_location;
+    receipt.control_location = source.control_location;
+    receipt.fallback_count = source.fallback_count;
+    receipt.setup_full_vector_h2d_count = source.setup_full_vector_h2d_count;
+    receipt.setup_full_vector_h2d_bytes = source.setup_full_vector_h2d_bytes;
+    receipt.hot_loop_full_vector_h2d_count = source.hot_loop_full_vector_h2d_count;
+    receipt.hot_loop_full_vector_h2d_bytes = source.hot_loop_full_vector_h2d_bytes;
+    receipt.hot_loop_full_vector_d2h_count = source.hot_loop_full_vector_d2h_count;
+    receipt.hot_loop_full_vector_d2h_bytes = source.hot_loop_full_vector_d2h_bytes;
+    receipt.hot_loop_host_compute_count = source.hot_loop_host_compute_count;
+    receipt.hot_loop_host_sync_count = source.hot_loop_host_sync_count;
+    receipt.hot_loop_control_scalar_d2h_bytes = source.hot_loop_control_scalar_d2h_bytes;
+    receipt.hot_loop_control_scalar_host_sync_count =
+        source.hot_loop_control_scalar_host_sync_count;
+    receipt.setup_full_vector_d2h_count = source.setup_full_vector_d2h_count;
+    receipt.setup_full_vector_d2h_bytes = source.setup_full_vector_d2h_bytes;
+    receipt.observation_full_vector_h2d_count = source.observation_full_vector_h2d_count;
+    receipt.observation_full_vector_h2d_bytes = source.observation_full_vector_h2d_bytes;
+    receipt.observation_full_vector_d2h_count = source.observation_full_vector_d2h_count;
+    receipt.observation_full_vector_d2h_bytes = source.observation_full_vector_d2h_bytes;
+    receipt.accounting_valid = source.accounting_valid;
     return receipt;
 }
 

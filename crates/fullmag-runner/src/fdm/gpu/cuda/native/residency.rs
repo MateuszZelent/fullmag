@@ -14,14 +14,14 @@ fn preflight_error(detail: impl AsRef<str>) -> RunError {
 fn finalize_receipt_result<T>(
     receipt_result: Result<FdmGpuExecutionReceipt, RunError>,
     provenance: &mut crate::types::ExecutionProvenance,
-    artifacts: Option<&mut crate::artifact_pipeline::ArtifactRecorder>,
+    mut artifacts: Option<&mut crate::artifact_pipeline::ArtifactRecorder>,
     outcome: Result<T, RunError>,
 ) -> Result<T, RunError> {
     let receipt = receipt_result.as_ref().ok().cloned().unwrap_or_else(|| {
         FdmGpuExecutionReceipt::strict_unvalidated(&provenance.precision)
     });
     provenance.fdm_gpu_execution_receipt = Some(receipt);
-    if let Some(artifacts) = artifacts {
+    if let Some(artifacts) = artifacts.as_deref_mut() {
         artifacts.update_provenance(provenance.clone());
     }
     match outcome {
@@ -29,7 +29,12 @@ fn finalize_receipt_result<T>(
             receipt_result?;
             Ok(value)
         }
-        Err(primary) => Err(primary),
+        Err(primary) => {
+            if let Some(artifacts) = artifacts.as_deref_mut() {
+                let _ = artifacts.publish_failed_run_provenance(&primary);
+            }
+            Err(primary)
+        }
     }
 }
 
@@ -309,9 +314,9 @@ pub(super) fn query_execution_receipt(
     requested_mode: fullmag_ir::ExecutionMode,
     device_name: &str,
 ) -> Result<FdmGpuExecutionReceipt, RunError> {
-    let mut native = ffi::fullmag_fdm_execution_receipt_v1 {
-        abi_version: ffi::FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1,
-        struct_size: std::mem::size_of::<ffi::fullmag_fdm_execution_receipt_v1>() as u32,
+    let mut native = ffi::fullmag_fdm_execution_receipt_v2 {
+        abi_version: ffi::FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2,
+        struct_size: std::mem::size_of::<ffi::fullmag_fdm_execution_receipt_v2>() as u32,
         execution_class: ffi::FULLMAG_FDM_EXECUTION_UNKNOWN,
         executed_backend: ffi::FULLMAG_FDM_EXECUTED_UNKNOWN,
         device_ordinal: -1,
@@ -348,7 +353,7 @@ pub(super) fn query_execution_receipt(
         reserved1: 0,
     };
     let status = unsafe {
-        ffi::fullmag_fdm_backend_execution_receipt_v1(backend.handle as *mut _, &mut native)
+        ffi::fullmag_fdm_backend_execution_receipt_v2(backend.handle as *mut _, &mut native)
     };
     if status != ffi::FULLMAG_FDM_OK {
         return Err(backend.last_error_or("FDM CUDA execution receipt query failed"));
