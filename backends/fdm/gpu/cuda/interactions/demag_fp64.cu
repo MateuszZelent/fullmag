@@ -792,6 +792,7 @@ void launch_effective_field_fp64(Context &ctx, double evaluation_time) {
     } else {
         ctx.thermal_sigma = 0.0;
     }
+    if (ctx.thermal_sigma > 0.0) ctx.thermal_rng_draws += 3 * ctx.cell_count;
 
     combine_effective_field_fp64_kernel<<<grid, BLOCK_SIZE>>>(
         static_cast<const double*>(ctx.m.x),
@@ -842,7 +843,7 @@ void launch_effective_field_fp64(Context &ctx, double evaluation_time) {
         0.5 / ctx.dx, 0.5 / ctx.dy, 0.5 / ctx.dz,
         ctx.thermal_sigma,
         ctx.thermal_seed,
-        ctx.step_count,
+        ctx.accepted_step_index,
         // Magnetoelastic
         ctx.has_magnetoelastic ? 1 : 0,
         ctx.mel_b1,

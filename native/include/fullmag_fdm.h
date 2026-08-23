@@ -517,6 +517,25 @@ typedef struct {
     double adaptive_norm_tolerance;
 } fullmag_fdm_time_policy_desc_v2;
 
+typedef enum {
+    FULLMAG_FDM_FSAL_INVALIDATION_NONE = 0,
+    FULLMAG_FDM_FSAL_INVALIDATION_CACHE_EMPTY = 1,
+    FULLMAG_FDM_FSAL_INVALIDATION_UNKNOWN_IDENTITY = 2,
+    FULLMAG_FDM_FSAL_INVALIDATION_THERMAL_ACTIVE = 3,
+    FULLMAG_FDM_FSAL_INVALIDATION_WAVEFORM_DISCONTINUITY = 4,
+    FULLMAG_FDM_FSAL_INVALIDATION_STATE_MISMATCH = 5,
+    FULLMAG_FDM_FSAL_INVALIDATION_TIME_MISMATCH = 6,
+    FULLMAG_FDM_FSAL_INVALIDATION_SOURCE_MISMATCH = 7,
+    FULLMAG_FDM_FSAL_INVALIDATION_FIELD_MISMATCH = 8,
+    FULLMAG_FDM_FSAL_INVALIDATION_TRANSPORT_STATE_MISMATCH = 9,
+    FULLMAG_FDM_FSAL_INVALIDATION_PROJECTION_MISMATCH = 10,
+    FULLMAG_FDM_FSAL_INVALIDATION_REALIZATION_MISMATCH = 11,
+    FULLMAG_FDM_FSAL_INVALIDATION_REJECTED_STEP = 12,
+    FULLMAG_FDM_FSAL_INVALIDATION_STEP_ERROR = 13,
+    FULLMAG_FDM_FSAL_INVALIDATION_CHECKPOINT_RESTORE = 14,
+    FULLMAG_FDM_FSAL_INVALIDATION_STALE_PUBLICATION = 15,
+} fullmag_fdm_fsal_invalidation_reason;
+
 typedef struct {
     uint32_t abi_version;
     uint32_t struct_size;
@@ -552,6 +571,20 @@ typedef struct {
     uint64_t multilayer_inverse_fft_count;
     uint64_t multilayer_pair_accumulation_count;
 } fullmag_fdm_step_stats;
+
+#define FULLMAG_FDM_FSAL_TELEMETRY_ABI_V1 1u
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t fsal_reused;
+    fullmag_fdm_fsal_invalidation_reason fsal_invalidation_reason;
+    uint64_t fsal_invalidation_count;
+    uint64_t rhs_evaluations_saved;
+    uint64_t thermal_rng_draws;
+    uint64_t accepted_step_index;
+    uint64_t stale_publication_count;
+    uint64_t transaction_commit_count;
+} fullmag_fdm_fsal_telemetry_v1;
 
 /* ── Device info ── */
 
@@ -754,6 +787,11 @@ int fullmag_fdm_backend_step(
     fullmag_fdm_backend    *handle,
     double                  dt_seconds,
     fullmag_fdm_step_stats *out_stats);
+
+/* Caller initializes abi_version and struct_size. Invalid headers leave output unchanged. */
+int fullmag_fdm_backend_get_fsal_telemetry_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_fsal_telemetry_v1 *out_telemetry);
 
 /* Bind/unbind the stage-wise GPU transport torque source for Heun or RK4. */
 int fullmag_fdm_context_bind_gpu_transport_v1(

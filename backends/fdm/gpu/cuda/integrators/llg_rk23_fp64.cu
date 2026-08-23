@@ -18,6 +18,7 @@
  */
 
 #include "context.hpp"
+#include "fsal_policy.hpp"
 
 #include <cuda_runtime.h>
 #include <cmath>
@@ -247,7 +248,6 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     const double A21 = 1.0 / 2.0;
     const double A32 = 3.0 / 4.0;
     const double B1  = 2.0 / 9.0, B2 = 1.0 / 3.0, B3 = 4.0 / 9.0;
-    const bool fsal_valid_before_step = ctx.fsal_valid;
 
     // Save original m
     copy_field_d2d(ctx.tmp, ctx.m, ctx.cell_count, context_compute_stream(ctx));
@@ -255,7 +255,9 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     for (;;) {
         ctx.current_dt = dt;
         // Stage 1 — FSAL: reuse k_fsal if valid
-        if (ctx.fsal_valid && !ctx.gpu_transport_rhs.active) {
+        const FsalReuseDecision fsal_decision = rhs_allows_fsal_reuse(ctx, dt);
+        context_note_fsal_decision(ctx, fsal_decision);
+        if (fsal_decision.allowed) {
             copy_field_d2d(ctx.k1, ctx.k_fsal, ctx.cell_count, context_compute_stream(ctx));
         } else {
             if (!compute_rhs_into(ctx, ctx.k1, n, grid, gamma_bar, alpha,
@@ -297,9 +299,7 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             if (!compute_rhs_into(ctx, ctx.k_fsal, n, grid, gamma_bar, alpha,
                                   step_start_time + dt, 4)) return;
             if (abort_step_from_tmp(ctx)) return;
-            ctx.step_count++;
-            ctx.current_time += dt;
-            ctx.fsal_valid = !ctx.gpu_transport_rhs.active;
+            context_stage_accepted_step(ctx, dt);
             context_refresh_observables(ctx);
             if (!fullmag_fdm_should_fill_step_stats(ctx)) {
                 fullmag_fdm_fill_step_stats_metadata(ctx, stats, dt);
@@ -335,10 +335,8 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         }
 
         if (policy.dt_min_exhausted) {
-            if (fsal_valid_before_step) {
-                copy_field_d2d(ctx.k_fsal, ctx.k1, ctx.cell_count, context_compute_stream(ctx));
-            }
-            ctx.fsal_valid = fsal_valid_before_step;
+            context_invalidate_fsal_cache(
+                ctx, FULLMAG_FDM_FSAL_INVALIDATION_STEP_ERROR);
             copy_field_d2d(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx));
             context_refresh_observables(ctx);
             ctx.last_error = "dt_min_exhausted";
@@ -348,9 +346,7 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         // Accept or reject
         if (policy.accepted) {
             // Accept step
-            ctx.step_count++;
-            ctx.current_time += dt;
-            ctx.fsal_valid = true;
+            context_stage_accepted_step(ctx, dt);
 
             double dt_next = policy.dt_candidate;
 
@@ -375,8 +371,8 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
                 ctx.work.x, ctx.work.y, ctx.work.z, ctx.cell_count);
             double max_dm_dt = reduce_max_norm_fp64(ctx, ctx.k_fsal.x, ctx.k_fsal.y, ctx.k_fsal.z, ctx.cell_count);
 
-            stats->step = ctx.step_count;
-            stats->time_seconds = ctx.current_time;
+            stats->step = ctx.pending_step_count;
+            stats->time_seconds = ctx.pending_time;
             stats->dt_seconds = dt;
             stats->exchange_energy_joules = e_ex;
             stats->demag_energy_joules = e_demag;
@@ -393,10 +389,10 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             return;
         }
 
-        // Reject: retain the derivative at the committed state for the retry.
+        // Reject: no trial derivative may become authoritative.
         dt = policy.dt_candidate;
-        copy_field_d2d(ctx.k_fsal, ctx.k1, ctx.cell_count, context_compute_stream(ctx));
-        ctx.fsal_valid = true;
+        context_invalidate_fsal_cache(
+            ctx, FULLMAG_FDM_FSAL_INVALIDATION_REJECTED_STEP); // fsal_rejected_step
 
         // Restore original m
         copy_field_d2d(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx));

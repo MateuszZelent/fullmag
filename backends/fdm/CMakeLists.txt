@@ -314,6 +314,14 @@ else()
 endif()
 add_test(NAME fdm_llg_time_policy_contract COMMAND fdm_llg_time_policy_contract)
 
+add_executable(fdm_fsal_retry_transaction_contract
+    tests/fsal_retry_transaction_contract.cpp)
+target_include_directories(fdm_fsal_retry_transaction_contract PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME fdm_fsal_retry_transaction_contract
+    COMMAND fdm_fsal_retry_transaction_contract)
+
 add_executable(prescribed_sot_contract tests/prescribed_sot_contract.cpp)
 target_include_directories(prescribed_sot_contract PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME fdm_prescribed_sot_contract COMMAND prescribed_sot_contract)

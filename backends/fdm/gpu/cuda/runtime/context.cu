@@ -2065,13 +2065,14 @@ bool context_alloc_device(Context &ctx) {
     return true;
 }
 
-bool context_capture_gpu_transport_pre_step_m(Context &ctx) {
-    if (!ctx.gpu_transport_rhs.active || ctx.precision != FULLMAG_FDM_PRECISION_DOUBLE)
-        return true;
+bool context_capture_pre_step_state(Context &ctx) {
+    if (ctx.cell_count == 0) return true;
     if (ctx.gpu_transport_pre_step_m.x == nullptr &&
         !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_m))
         return false;
-    const size_t bytes = static_cast<size_t>(ctx.cell_count) * sizeof(double);
+    const size_t scalar_bytes = ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+        ? sizeof(double) : sizeof(float);
+    const size_t bytes = static_cast<size_t>(ctx.cell_count) * scalar_bytes;
     const cudaStream_t stream = context_compute_stream(ctx);
     // Legacy fixed-step kernels still publish m on the default stream.  Order
     // that producer before the transaction-owned compute-stream snapshot.
@@ -2083,23 +2084,31 @@ bool context_capture_gpu_transport_pre_step_m(Context &ctx) {
         cudaMemcpyAsync(ctx.gpu_transport_pre_step_m.z, ctx.m.z, bytes,
                         cudaMemcpyDeviceToDevice, stream) != cudaSuccess ||
         cudaStreamSynchronize(stream) != cudaSuccess) {
-        ctx.last_error = "failed to capture bound transport pre-step magnetization";
+        ctx.last_error = "failed to capture pre-step magnetization";
         return false;
     }
     ctx.gpu_transport_pre_step_m_valid = true;
+    ctx.gpu_transport_pre_step_step_count = ctx.step_count;
+    ctx.gpu_transport_pre_step_accepted_step_index = ctx.accepted_step_index;
+    ctx.gpu_transport_pre_step_accepted_state_revision = ctx.accepted_state_revision;
+    ctx.gpu_transport_pre_step_current_time = ctx.current_time;
+    ctx.gpu_transport_pre_step_current_dt = ctx.current_dt;
+    ctx.gpu_transport_pre_step_adaptive_has_previous_error =
+        ctx.adaptive_has_previous_error;
+    ctx.gpu_transport_pre_step_adaptive_previous_error = ctx.adaptive_previous_error;
     ctx.gpu_transport_pre_step_abm_startup = ctx.abm_startup;
     ctx.gpu_transport_pre_step_abm_last_dt = ctx.abm_last_dt;
     return true;
 }
 
-bool context_restore_gpu_transport_pre_step_m(Context &ctx) {
-    if (!ctx.gpu_transport_rhs.active || ctx.precision != FULLMAG_FDM_PRECISION_DOUBLE)
-        return true;
+bool context_rollback_pre_step_state(Context &ctx) {
     if (!ctx.gpu_transport_pre_step_m_valid) {
-        ctx.last_error = "bound transport pre-step magnetization snapshot is unavailable";
+        ctx.last_error = "pre-step magnetization snapshot is unavailable";
         return false;
     }
-    const size_t bytes = static_cast<size_t>(ctx.cell_count) * sizeof(double);
+    const size_t scalar_bytes = ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+        ? sizeof(double) : sizeof(float);
+    const size_t bytes = static_cast<size_t>(ctx.cell_count) * scalar_bytes;
     const cudaStream_t stream = context_compute_stream(ctx);
     // A rejected legacy fixed-step integrator can still have default-stream
     // writers in flight.  Complete those writers before restoring on the
@@ -2123,16 +2132,23 @@ bool context_restore_gpu_transport_pre_step_m(Context &ctx) {
         return false;
     }
     ctx.gpu_transport_pre_step_m_valid = false;
-    // A bound attempt may overwrite k_fsal with a transport-dependent
-    // derivative.  Conservatively invalidate it so a later unbound step can
-    // never reuse rejected transport state.
+    ctx.step_count = ctx.gpu_transport_pre_step_step_count;
+    ctx.accepted_step_index = ctx.gpu_transport_pre_step_accepted_step_index;
+    ctx.accepted_state_revision = ctx.gpu_transport_pre_step_accepted_state_revision;
+    ctx.current_time = ctx.gpu_transport_pre_step_current_time;
+    ctx.current_dt = ctx.gpu_transport_pre_step_current_dt;
     ctx.fsal_valid = false;
+    ctx.fsal_pending = false;
+    ctx.accepted_step_pending = false;
+    ctx.adaptive_has_previous_error =
+        ctx.gpu_transport_pre_step_adaptive_has_previous_error;
+    ctx.adaptive_previous_error = ctx.gpu_transport_pre_step_adaptive_previous_error;
     ctx.abm_startup = ctx.gpu_transport_pre_step_abm_startup;
     ctx.abm_last_dt = ctx.gpu_transport_pre_step_abm_last_dt;
     return true;
 }
 
-void context_invalidate_gpu_transport_pre_step_m(Context &ctx) {
+void context_discard_pre_step_state(Context &ctx) {
     ctx.gpu_transport_pre_step_m_valid = false;
 }
 
@@ -4784,6 +4800,8 @@ bool context_query_device_info(Context &ctx) {
 }
 
 bool context_refresh_observables(Context &ctx) {
+    const double evaluation_time =
+        ctx.accepted_step_pending ? ctx.pending_time : ctx.current_time;
     if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
         if (ctx.enable_exchange) {
             launch_exchange_field_fp64(ctx);
@@ -4791,7 +4809,7 @@ bool context_refresh_observables(Context &ctx) {
         if (ctx.enable_demag) {
             launch_demag_field_fp64(ctx);
         }
-        launch_effective_field_fp64(ctx, ctx.current_time);
+        launch_effective_field_fp64(ctx, evaluation_time);
         if (!context_refresh_effective_field_visual(ctx)) return false;
     } else {
         if (ctx.enable_exchange) {
@@ -4800,7 +4818,7 @@ bool context_refresh_observables(Context &ctx) {
         if (ctx.enable_demag) {
             launch_demag_field_fp32(ctx);
         }
-        launch_effective_field_fp32(ctx, ctx.current_time);
+        launch_effective_field_fp32(ctx, evaluation_time);
         if (!context_refresh_effective_field_visual(ctx)) return false;
     }
 

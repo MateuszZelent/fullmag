@@ -730,6 +730,7 @@ void launch_effective_field_fp32(Context &ctx, double evaluation_time) {
     } else {
         ctx.thermal_sigma = 0.0;
     }
+    if (ctx.thermal_sigma > 0.0) ctx.thermal_rng_draws += 3 * ctx.cell_count;
 
     combine_effective_field_fp32_kernel<<<grid, BLOCK_SIZE>>>(
         static_cast<const float*>(ctx.m.x),
@@ -780,7 +781,7 @@ void launch_effective_field_fp32(Context &ctx, double evaluation_time) {
         static_cast<float>(0.5 / ctx.dx), static_cast<float>(0.5 / ctx.dy), static_cast<float>(0.5 / ctx.dz),
         static_cast<float>(ctx.thermal_sigma),
         ctx.thermal_seed,
-        ctx.step_count,
+        ctx.accepted_step_index,
         ctx.has_magnetoelastic ? 1 : 0,
         static_cast<float>(ctx.mel_b1),
         static_cast<float>(ctx.mel_b2),

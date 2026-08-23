@@ -535,6 +535,47 @@ pub struct fullmag_fdm_backend {
     _private: [u8; 0],
 }
 
+pub type fullmag_fdm_fsal_invalidation_reason = u32;
+pub const FULLMAG_FDM_FSAL_INVALIDATION_NONE: fullmag_fdm_fsal_invalidation_reason = 0;
+pub const FULLMAG_FDM_FSAL_INVALIDATION_CACHE_EMPTY: fullmag_fdm_fsal_invalidation_reason = 1;
+pub const FULLMAG_FDM_FSAL_INVALIDATION_UNKNOWN_IDENTITY: fullmag_fdm_fsal_invalidation_reason = 2;
+pub const FULLMAG_FDM_FSAL_INVALIDATION_THERMAL_ACTIVE: fullmag_fdm_fsal_invalidation_reason = 3;
+pub const FULLMAG_FDM_FSAL_INVALIDATION_WAVEFORM_DISCONTINUITY:
+    fullmag_fdm_fsal_invalidation_reason = 4;
+pub const FULLMAG_FDM_FSAL_INVALIDATION_STATE_MISMATCH: fullmag_fdm_fsal_invalidation_reason = 5;
+pub const FULLMAG_FDM_FSAL_INVALIDATION_TIME_MISMATCH: fullmag_fdm_fsal_invalidation_reason = 6;
+pub const FULLMAG_FDM_FSAL_INVALIDATION_SOURCE_MISMATCH: fullmag_fdm_fsal_invalidation_reason = 7;
+pub const FULLMAG_FDM_FSAL_INVALIDATION_FIELD_MISMATCH: fullmag_fdm_fsal_invalidation_reason = 8;
+pub const FULLMAG_FDM_FSAL_INVALIDATION_TRANSPORT_STATE_MISMATCH:
+    fullmag_fdm_fsal_invalidation_reason = 9;
+pub const FULLMAG_FDM_FSAL_INVALIDATION_PROJECTION_MISMATCH: fullmag_fdm_fsal_invalidation_reason =
+    10;
+pub const FULLMAG_FDM_FSAL_INVALIDATION_REALIZATION_MISMATCH: fullmag_fdm_fsal_invalidation_reason =
+    11;
+pub const FULLMAG_FDM_FSAL_INVALIDATION_REJECTED_STEP: fullmag_fdm_fsal_invalidation_reason = 12;
+pub const FULLMAG_FDM_FSAL_INVALIDATION_STEP_ERROR: fullmag_fdm_fsal_invalidation_reason = 13;
+pub const FULLMAG_FDM_FSAL_INVALIDATION_CHECKPOINT_RESTORE: fullmag_fdm_fsal_invalidation_reason =
+    14;
+pub const FULLMAG_FDM_FSAL_INVALIDATION_STALE_PUBLICATION: fullmag_fdm_fsal_invalidation_reason =
+    15;
+
+pub const FULLMAG_FDM_FSAL_TELEMETRY_ABI_V1: u32 = 1;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_fsal_telemetry_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub fsal_reused: u32,
+    pub fsal_invalidation_reason: fullmag_fdm_fsal_invalidation_reason,
+    pub fsal_invalidation_count: u64,
+    pub rhs_evaluations_saved: u64,
+    pub thermal_rng_draws: u64,
+    pub accepted_step_index: u64,
+    pub stale_publication_count: u64,
+    pub transaction_commit_count: u64,
+}
+
 pub const FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1: u32 = 1;
 pub const FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2: u32 = 2;
 pub type fullmag_fdm_execution_class_v1 = u32;
@@ -1321,6 +1362,11 @@ extern "C" {
         out_stats: *mut fullmag_fdm_step_stats,
     ) -> i32;
 
+    pub fn fullmag_fdm_backend_get_fsal_telemetry_v1(
+        handle: *mut fullmag_fdm_backend,
+        out_telemetry: *mut fullmag_fdm_fsal_telemetry_v1,
+    ) -> i32;
+
     pub fn fullmag_fdm_backend_set_interrupt_poll(
         handle: *mut fullmag_fdm_backend,
         poll_fn: fullmag_fdm_interrupt_poll_fn,
@@ -1955,6 +2001,26 @@ mod tests {
         assert_eq!(stats.multilayer_forward_fft_count, 3);
         assert_eq!(stats.multilayer_inverse_fft_count, 3);
         assert_eq!(stats.multilayer_pair_accumulation_count, 9);
+    }
+
+    #[test]
+    fn fsal_telemetry_v1_is_separate_from_frozen_step_stats_layout() {
+        assert_eq!(size_of::<fullmag_fdm_step_stats>(), 192);
+        assert_eq!(
+            offset_of!(fullmag_fdm_step_stats, multilayer_pair_accumulation_count),
+            184
+        );
+        assert_eq!(size_of::<fullmag_fdm_fsal_telemetry_v1>(), 64);
+        assert_eq!(offset_of!(fullmag_fdm_fsal_telemetry_v1, abi_version), 0);
+        assert_eq!(offset_of!(fullmag_fdm_fsal_telemetry_v1, struct_size), 4);
+        assert_eq!(
+            offset_of!(fullmag_fdm_fsal_telemetry_v1, transaction_commit_count),
+            56
+        );
+        let _query: unsafe extern "C" fn(
+            *mut fullmag_fdm_backend,
+            *mut fullmag_fdm_fsal_telemetry_v1,
+        ) -> i32 = fullmag_fdm_backend_get_fsal_telemetry_v1;
     }
 
     #[test]

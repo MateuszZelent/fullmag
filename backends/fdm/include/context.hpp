@@ -324,6 +324,13 @@ struct Context {
     // Step counter
     uint64_t step_count = 0;
     double current_time = 0.0;
+    // Accepted stochastic interval identity is independent of retry attempts.
+    uint64_t accepted_step_index = 0;
+    uint64_t accepted_state_revision = 1;
+    uint64_t rhs_source_revision = 1;
+    uint64_t rhs_field_revision = 1;
+    uint64_t rhs_transport_revision = 1;
+    uint64_t projection_policy_identity = 1;
 
     // Non-owning adapter to transport-owned stage solve and torque storage.
     GpuTransportRhsBinding gpu_transport_rhs;
@@ -363,6 +370,13 @@ struct Context {
     // step.  Integrators may freely reuse tmp without weakening rollback.
     DeviceVectorField gpu_transport_pre_step_m;
     bool gpu_transport_pre_step_m_valid = false;
+    uint64_t gpu_transport_pre_step_step_count = 0;
+    uint64_t gpu_transport_pre_step_accepted_step_index = 0;
+    uint64_t gpu_transport_pre_step_accepted_state_revision = 1;
+    double gpu_transport_pre_step_current_time = 0.0;
+    double gpu_transport_pre_step_current_dt = 0.0;
+    bool gpu_transport_pre_step_adaptive_has_previous_error = false;
+    double gpu_transport_pre_step_adaptive_previous_error = 0.0;
     uint32_t gpu_transport_pre_step_abm_startup = 0;
     double gpu_transport_pre_step_abm_last_dt = 0.0;
     DeviceVectorField work;   // effective field / scratch
@@ -371,6 +385,39 @@ struct Context {
     DeviceVectorField k2, k3, k4, k5, k6;
     DeviceVectorField k_fsal; // FSAL: k7 from prev accepted step = k1 for next
     bool              fsal_valid = false;
+    bool fsal_pending = false;
+    uint64_t fsal_accepted_state_revision = 0;
+    uint64_t fsal_accepted_time_bits = 0;
+    uint64_t fsal_accepted_dt_bits = 0;
+    uint64_t fsal_source_revision = 0;
+    uint64_t fsal_field_revision = 0;
+    uint64_t fsal_transport_revision = 0;
+    uint64_t fsal_transport_state_identity = 0;
+    uint64_t fsal_projection_policy_identity = 0;
+    uint32_t fsal_integrator_identity = 0;
+    uint32_t fsal_precision_identity = 0;
+    uint64_t pending_fsal_accepted_state_revision = 0;
+    uint64_t pending_fsal_accepted_time_bits = 0;
+    uint64_t pending_fsal_accepted_dt_bits = 0;
+    uint64_t pending_fsal_source_revision = 0;
+    uint64_t pending_fsal_field_revision = 0;
+    uint64_t pending_fsal_transport_revision = 0;
+    uint64_t pending_fsal_transport_state_identity = 0;
+    uint64_t pending_fsal_projection_policy_identity = 0;
+    uint32_t pending_fsal_integrator_identity = 0;
+    uint32_t pending_fsal_precision_identity = 0;
+    bool accepted_step_pending = false;
+    uint64_t pending_step_count = 0;
+    double pending_time = 0.0;
+    double pending_dt = 0.0;
+    bool step_fsal_reused = false;
+    fullmag_fdm_fsal_invalidation_reason fsal_invalidation_reason =
+        FULLMAG_FDM_FSAL_INVALIDATION_CACHE_EMPTY;
+    uint64_t fsal_invalidation_count = 0;
+    uint64_t rhs_evaluations_saved = 0;
+    uint64_t thermal_rng_draws = 0;
+    uint64_t stale_publication_count = 0;
+    uint64_t transaction_commit_count = 0;
 
     // Complete v2 timestep policy (fixed unless explicitly enabled).
     bool adaptive_enabled = false;
@@ -528,9 +575,9 @@ bool context_end_compute_stream_work(Context &ctx, const char *operation);
 bool context_complete_solver_receipt_attempt(Context &ctx, const char *operation);
 bool context_test_copy_f64_on_compute_stream(
     Context &ctx, double *destination, const double *source, uint64_t values);
-bool context_capture_gpu_transport_pre_step_m(Context &ctx);
-bool context_restore_gpu_transport_pre_step_m(Context &ctx);
-void context_invalidate_gpu_transport_pre_step_m(Context &ctx);
+bool context_capture_pre_step_state(Context &ctx);
+bool context_rollback_pre_step_state(Context &ctx);
+void context_discard_pre_step_state(Context &ctx);
 int context_llg_checkpoint_query_size_v1(
     Context &ctx, uint64_t &out_required_bytes);
 int context_llg_checkpoint_export_v1(
@@ -724,6 +771,9 @@ inline SttParams stt_params_from_ctx(const Context &ctx) {
 /// State replacement invalidates every multistep/FSAL derivative cache.
 inline void context_reset_integrator_history(Context &ctx) {
     ctx.fsal_valid = false;
+    ctx.fsal_pending = false;
+    ctx.accepted_step_pending = false;
+    ++ctx.accepted_state_revision;
     ctx.abm_startup = 0;
     ctx.abm_last_dt = 0.0;
 }
@@ -737,7 +787,8 @@ inline bool fullmag_fdm_should_fill_step_stats_for_step(const Context &ctx, uint
 }
 
 inline bool fullmag_fdm_should_fill_step_stats(const Context &ctx) {
-    return fullmag_fdm_should_fill_step_stats_for_step(ctx, ctx.step_count);
+    return fullmag_fdm_should_fill_step_stats_for_step(
+        ctx, ctx.accepted_step_pending ? ctx.pending_step_count : ctx.step_count);
 }
 
 inline void fullmag_fdm_reset_hot_loop_audit(Context &ctx) {
@@ -1219,8 +1270,8 @@ inline void fullmag_fdm_fill_step_stats_metadata(
         return;
     }
     std::memset(stats, 0, sizeof(*stats));
-    stats->step = ctx.step_count;
-    stats->time_seconds = ctx.current_time;
+    stats->step = ctx.accepted_step_pending ? ctx.pending_step_count : ctx.step_count;
+    stats->time_seconds = ctx.accepted_step_pending ? ctx.pending_time : ctx.current_time;
     stats->dt_seconds = dt;
     stats->suggested_next_dt = suggested_next_dt;
     fullmag_fdm_publish_hot_loop_audit(ctx, stats);

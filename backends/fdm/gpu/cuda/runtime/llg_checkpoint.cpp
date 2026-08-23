@@ -1,4 +1,5 @@
 #include "context.hpp"
+#include "../integrators/fsal_policy.hpp"
 
 #include <cuda_runtime_api.h>
 
@@ -273,13 +274,18 @@ int context_llg_checkpoint_import_v1(
     ctx.current_dt = header.info.current_dt;
     ctx.gpu_transport_attempt_generation =
         header.info.transport_attempt_generation;
-    ctx.fsal_valid = header.info.fsal_valid != 0;
+    // Checkpoint v1 predates exact FSAL identity.  Restore accepted stochastic
+    // identity, but fail closed for derivative reuse.
+    ctx.accepted_step_index = header.info.step_count;
+    ctx.accepted_state_revision = header.info.step_count + 1;
+    context_invalidate_fsal_cache(
+        ctx, FULLMAG_FDM_FSAL_INVALIDATION_CHECKPOINT_RESTORE);
     ctx.abm_startup = header.info.abm_startup;
     ctx.abm_last_dt = header.info.abm_last_dt;
     ctx.adaptive_has_previous_error =
         header.info.adaptive_has_previous_error != 0;
     ctx.adaptive_previous_error = header.info.adaptive_previous_error;
-    context_invalidate_gpu_transport_pre_step_m(ctx);
+    context_discard_pre_step_state(ctx);
     ctx.last_error.clear();
     return FULLMAG_FDM_OK;
 }
