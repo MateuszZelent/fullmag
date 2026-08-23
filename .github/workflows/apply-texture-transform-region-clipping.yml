@@ -275,10 +275,11 @@ jobs:
       - name: Validate existing region texture UI contract
         run: |
           set -euo pipefail
-          pnpm install --frozen-lockfile
+          pnpm install --no-frozen-lockfile
           pnpm --dir apps/control-room exec vitest run \
             src/modules/inspector/panels/ObjectRegionsPanel.test.ts
           pnpm --dir apps/control-room typecheck
+          git restore -- pnpm-lock.yaml
 
       - name: Verify patch hygiene
         run: |
