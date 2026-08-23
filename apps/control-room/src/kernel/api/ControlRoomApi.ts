@@ -389,6 +389,7 @@ import type {
   SessionAssetImportResponse,
   SessionExportRequest,
   SessionExportResponse,
+  SessionCollectionResource,
   SessionImportCommitRequest,
   SessionImportCommitResponse,
   SessionImportInspectRequest,
@@ -728,6 +729,8 @@ export class ControlRoomApi {
   private readonly fieldMaterializationRequests = new Map<string, Promise<void>>();
 
   readonly sessions = {
+    list: (options?: RequestOptions) =>
+      this.requestJson<SessionCollectionResource>(SESSIONS_PATH, options),
     create: (input: CreateSessionRequest, options?: RequestOptions) =>
       this.postJson<CreateSessionResponse, CreateSessionRequest>(
         SESSIONS_PATH,

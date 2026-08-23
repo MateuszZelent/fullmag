@@ -105,7 +105,25 @@ export const SHELL_COMMANDS: CommandContribution[] = [
   disabledPlaceholder("workspace.preferences", "Preferences", "Application"),
   disabledPlaceholder("workspace.docs", "Physics Documentation", "Application"),
   disabledPlaceholder("workspace.about", "About Fullmag", "Application"),
-  disabledPlaceholder("workspace.new-problem", "New Problem", "File", "Ctrl+N"),
+  {
+    id: "workspace.new-problem",
+    title: "New Problem",
+    group: "workspace",
+    category: "File",
+    scope: "global",
+    shortcut: "Ctrl+N",
+    run: (ctx) => {
+      ctx.bus?.emit("workspace:new-problem-requested", {
+        source:
+          ctx.source === "shortcut"
+            ? "shortcut"
+            : ctx.source === "menu"
+              ? "menu"
+              : "workspace",
+      });
+      return { status: "completed" };
+    },
+  },
   disabledPlaceholder("workspace.save-sync", "Save / Sync", "File", "Ctrl+S"),
   {
     id: "workspace.export-python",
