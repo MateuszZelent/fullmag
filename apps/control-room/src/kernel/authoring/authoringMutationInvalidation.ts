@@ -1,0 +1,44 @@
+import {
+  MESHING_BUILDS_CURRENT_PATH,
+  MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+  MODEL_GEOMETRY_DIAGNOSTICS_PATH,
+  MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_READINESS_PATH,
+  MODEL_REGIONS_PATH,
+  MODEL_SCENE_PATH,
+  VISUALIZATION_STATE_PATH,
+} from "@/kernel/api/apiPaths";
+import type { ResourceRevision } from "@/kernel/api/apiTypes";
+
+export const AUTHORING_MUTATION_DEPENDENTS = {
+  magnetization: [
+    MODEL_SCENE_PATH,
+    MODEL_REGIONS_PATH,
+    MODEL_GEOMETRY_VALIDATION_PATH,
+    MODEL_GEOMETRY_DIAGNOSTICS_PATH,
+    MODEL_READINESS_PATH,
+    VISUALIZATION_STATE_PATH,
+  ],
+  material: [
+    MODEL_SCENE_PATH,
+    MODEL_GEOMETRY_VALIDATION_PATH,
+    MODEL_GEOMETRY_DIAGNOSTICS_PATH,
+    MODEL_READINESS_PATH,
+    MESHING_BUILDS_CURRENT_PATH,
+    MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+  ],
+} as const;
+
+type AuthoringMutationKind = keyof typeof AUTHORING_MUTATION_DEPENDENTS;
+
+export function invalidateAuthoringMutationDependents(
+  resources: {
+    invalidate(resourceKey: string, revision: ResourceRevision): void;
+  },
+  kind: AuthoringMutationKind,
+  revision: ResourceRevision,
+): void {
+  for (const resourceKey of AUTHORING_MUTATION_DEPENDENTS[kind]) {
+    resources.invalidate(resourceKey, revision);
+  }
+}

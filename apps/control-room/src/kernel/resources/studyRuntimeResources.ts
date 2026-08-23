@@ -2312,6 +2312,44 @@ export function readyCommandResourceData<T>(
   return status === "ready" ? data : null;
 }
 
+interface RuntimeCommandControlResourceDataInput {
+  commandQueue: unknown;
+  geometryValidation: unknown;
+  meshBuildCurrent: unknown;
+  meshManifest: unknown;
+  modelReadinessData: ModelReadinessResource | null;
+  modelReadinessStatus: string;
+  sessionStatus: unknown;
+  solverStatus: unknown;
+  stageExecution: unknown;
+}
+
+export function buildRuntimeCommandControlResourceData({
+  commandQueue,
+  geometryValidation,
+  meshBuildCurrent,
+  meshManifest,
+  modelReadinessData,
+  modelReadinessStatus,
+  sessionStatus,
+  solverStatus,
+  stageExecution,
+}: RuntimeCommandControlResourceDataInput): Readonly<Record<string, unknown>> {
+  return {
+    [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: meshManifest,
+    [MESHING_BUILDS_CURRENT_PATH]: meshBuildCurrent,
+    [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation,
+    [MODEL_READINESS_PATH]: readyCommandResourceData(
+      modelReadinessData,
+      modelReadinessStatus,
+    ),
+    [SESSION_STATUS_RESOURCE_KEY]: sessionStatus,
+    [SIMULATION_COMMANDS_PATH]: commandQueue,
+    [SIMULATION_SOLVER_STATUS_PATH]: solverStatus,
+    [SIMULATION_STAGES_EXECUTION_PATH]: stageExecution,
+  };
+}
+
 export function useStudyRuntimeCommandResourceData({
   enabled = true,
 }: RuntimeResourceOptions = {}): Readonly<Record<string, unknown>> {
@@ -2349,23 +2387,23 @@ export function useStudyRuntimeCommandResourceData({
 
   return useMemo(
     () => ({
+      ...buildRuntimeCommandControlResourceData({
+        commandQueue: commandQueue.data,
+        geometryValidation: geometryValidation.data,
+        meshBuildCurrent: meshBuildCurrent.data,
+        meshManifest: meshManifest.data,
+        modelReadinessData: modelReadiness.data,
+        modelReadinessStatus: modelReadiness.status,
+        sessionStatus: enabled ? sessionStatus : null,
+        solverStatus: solverStatus.data,
+        stageExecution: stageExecution.data,
+      }),
       [DIAGNOSTICS_SOLVER_PROFILE_PATH]: solverProfile.data,
-      [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: meshManifest.data,
-      [MESHING_BUILDS_CURRENT_PATH]: meshBuildCurrent.data,
       [MESHING_BUILDS_LATEST_SUCCESSFUL_PATH]: meshBuildLatest.data,
       [MESHING_SUMMARY_PATH]: meshSummary.data,
-      [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation.data,
-      [MODEL_READINESS_PATH]: readyCommandResourceData(
-        modelReadiness.data,
-        modelReadiness.status,
-      ),
       [MODEL_SCENE_PATH]: scene.data,
       [PERSISTENCE_CHECKPOINTS_PATH]: checkpointCatalog.data,
-      [SESSION_STATUS_RESOURCE_KEY]: enabled ? sessionStatus : null,
-      [SIMULATION_COMMANDS_PATH]: commandQueue.data,
       [SIMULATION_RUN_CURRENT_PATH]: currentRun.data,
-      [SIMULATION_SOLVER_STATUS_PATH]: solverStatus.data,
-      [SIMULATION_STAGES_EXECUTION_PATH]: stageExecution.data,
     }),
     [
       checkpointCatalog.data,
@@ -2420,19 +2458,18 @@ export function useRuntimeCommandControlResourceData({
   });
 
   return useMemo(
-    () => ({
-      [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: meshManifest.data,
-      [MESHING_BUILDS_CURRENT_PATH]: meshBuildCurrent.data,
-      [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation.data,
-      [MODEL_READINESS_PATH]: readyCommandResourceData(
-        modelReadiness.data,
-        modelReadiness.status,
-      ),
-      [SESSION_STATUS_RESOURCE_KEY]: enabled ? sessionStatus : null,
-      [SIMULATION_COMMANDS_PATH]: commandQueue.data,
-      [SIMULATION_SOLVER_STATUS_PATH]: solverStatus.data,
-      [SIMULATION_STAGES_EXECUTION_PATH]: stageExecution.data,
-    }),
+    () =>
+      buildRuntimeCommandControlResourceData({
+        commandQueue: commandQueue.data,
+        geometryValidation: geometryValidation.data,
+        meshBuildCurrent: meshBuildCurrent.data,
+        meshManifest: meshManifest.data,
+        modelReadinessData: modelReadiness.data,
+        modelReadinessStatus: modelReadiness.status,
+        sessionStatus: enabled ? sessionStatus : null,
+        solverStatus: solverStatus.data,
+        stageExecution: stageExecution.data,
+      }),
     [
       commandQueue.data,
       enabled,

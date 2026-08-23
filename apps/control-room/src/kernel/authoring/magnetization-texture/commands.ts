@@ -1,15 +1,11 @@
 import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
+import { invalidateAuthoringMutationDependents } from "@/kernel/authoring/authoringMutationInvalidation";
 import type { JsonObject } from "@/kernel/api/apiTypes";
 import type {
   CommandContext,
   CommandContribution,
   CommandResult,
 } from "@/kernel/commands/commandTypes";
-import {
-  MODEL_REGIONS_RESOURCE_KEY,
-  SCENE_RESOURCE_KEY,
-  VISUALIZATION_STATE_RESOURCE_KEY,
-} from "@/kernel/resources/geometryLifecycleResources";
 
 import {
   magnetizationTextureAssetId,
@@ -101,9 +97,13 @@ async function assignPreset(
   }
 
   const revision = assetResponse.scene_revision ?? Date.now();
-  context.resources?.invalidate(SCENE_RESOURCE_KEY, revision);
-  context.resources?.invalidate(MODEL_REGIONS_RESOURCE_KEY, revision);
-  context.resources?.invalidate(VISUALIZATION_STATE_RESOURCE_KEY, revision);
+  if (context.resources) {
+    invalidateAuthoringMutationDependents(
+      context.resources,
+      "magnetization",
+      revision,
+    );
+  }
   return { status: "completed" };
 }
 

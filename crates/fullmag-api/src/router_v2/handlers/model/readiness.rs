@@ -81,12 +81,7 @@ fn build_model_readiness(
     snapshot: &SessionStateResponse,
     scene: &fullmag_authoring::SceneDocument,
 ) -> ModelReadinessResource {
-    let object_ids = scene
-        .objects
-        .iter()
-        .filter(|object| object.visible && object.role == "magnet")
-        .map(|object| object.id.as_str())
-        .collect::<Vec<_>>();
+    let solve_objects = fullmag_authoring::scene_solve_objects(scene).collect::<Vec<_>>();
     let textures = scene
         .magnetization_assets
         .iter()
@@ -96,23 +91,19 @@ fn build_model_readiness(
     let geometry = presence_check(
         "geometry",
         "Geometry",
-        !object_ids.is_empty(),
+        !solve_objects.is_empty(),
         "model/scene",
         "Add at least one magnetic object.",
     );
-    let material_error = scene
-        .objects
-        .iter()
-        .filter(|object| object_ids.contains(&object.id.as_str()))
-        .find_map(|object| {
-            fullmag_authoring::resolve_scene_object_solve_material(scene, object)
-                .err()
-                .map(|error| error.to_string())
-        });
+    let material_error = solve_objects.iter().find_map(|object| {
+        fullmag_authoring::resolve_scene_object_solve_material(scene, object)
+            .err()
+            .map(|error| error.to_string())
+    });
     let material = presence_check(
         "material",
         "Material",
-        !object_ids.is_empty() && material_error.is_none(),
+        !solve_objects.is_empty() && material_error.is_none(),
         "model/materials",
         material_error
             .as_deref()
@@ -121,28 +112,22 @@ fn build_model_readiness(
     let texture = presence_check(
         "texture",
         "Initial magnetization",
-        !object_ids.is_empty()
-            && scene
-                .objects
-                .iter()
-                .filter(|object| object_ids.contains(&object.id.as_str()))
-                .all(|object| {
-                    object
-                        .magnetization_ref
-                        .as_deref()
-                        .is_some_and(|id| textures.contains(id))
-                }),
+        !solve_objects.is_empty()
+            && solve_objects.iter().all(|object| {
+                object
+                    .magnetization_ref
+                    .as_deref()
+                    .is_some_and(|id| textures.contains(id))
+            }),
         "model/magnetization-assets",
         "Assign initial magnetization to every magnetic object.",
     );
     let interactions = presence_check(
         "interactions",
         "Interactions",
-        !object_ids.is_empty()
-            && scene
-                .objects
+        !solve_objects.is_empty()
+            && solve_objects
                 .iter()
-                .filter(|object| object_ids.contains(&object.id.as_str()))
                 .all(|object| object.physics_stack.iter().any(|entry| entry.enabled)),
         "model/objects/interactions",
         "Enable at least one interaction for every magnetic object.",

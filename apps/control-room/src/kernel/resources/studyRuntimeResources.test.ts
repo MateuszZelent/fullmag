@@ -250,9 +250,9 @@ describe("study runtime command resource bundles", () => {
     );
 
     expect(fullBundle).toContain("useModelReadinessResource");
-    expect(fullBundle).toContain("[MODEL_READINESS_PATH]");
+    expect(fullBundle).toContain("buildRuntimeCommandControlResourceData");
     expect(controlBundle).toContain("useModelReadinessResource");
-    expect(controlBundle).toContain("[MODEL_READINESS_PATH]");
+    expect(controlBundle).toContain("buildRuntimeCommandControlResourceData");
     expect(STUDY_RUNTIME_CONTROL_RESOURCE_KEYS).toContain(MODEL_READINESS_PATH);
   });
 

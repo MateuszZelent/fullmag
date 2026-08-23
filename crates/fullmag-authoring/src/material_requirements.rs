@@ -49,6 +49,13 @@ pub struct ResolvedSceneSolveMaterial<'a> {
     pub saturation_magnetisation: f64,
 }
 
+pub fn scene_solve_objects(scene: &SceneDocument) -> impl Iterator<Item = &SceneObject> {
+    scene
+        .objects
+        .iter()
+        .filter(|object| object.role == "magnet")
+}
+
 pub fn resolve_scene_object_solve_material<'a>(
     scene: &'a SceneDocument,
     object: &SceneObject,

@@ -2,17 +2,11 @@
 
 import { useCallback, useMemo, useState } from "react";
 
-import {
-  MODEL_GEOMETRY_DIAGNOSTICS_PATH,
-  MODEL_GEOMETRY_VALIDATION_PATH,
-} from "@/kernel/api/apiPaths";
+import { invalidateAuthoringMutationDependents } from "@/kernel/authoring/authoringMutationInvalidation";
 import { useKernel } from "@/kernel/KernelContext";
 import {
-  MESH_BUILD_CURRENT_RESOURCE_KEY,
-  MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY,
   resolveMaterialResourceKey,
   resolveObjectInteractionResourceKey,
-  SCENE_RESOURCE_KEY,
   useMaterialResource,
   useObjectInteractionResource,
   useSceneResource,
@@ -302,11 +296,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
   }
 
   function invalidateMagneticParameterResources(revision: number): void {
-    resources.invalidate(SCENE_RESOURCE_KEY, revision);
-    resources.invalidate(MODEL_GEOMETRY_VALIDATION_PATH, revision);
-    resources.invalidate(MODEL_GEOMETRY_DIAGNOSTICS_PATH, revision);
-    resources.invalidate(MESH_BUILD_CURRENT_RESOURCE_KEY, revision);
-    resources.invalidate(MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY, revision);
+    invalidateAuthoringMutationDependents(resources, "material", revision);
   }
 
   return {

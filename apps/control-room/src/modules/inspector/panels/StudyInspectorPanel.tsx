@@ -16,18 +16,14 @@ import { useCallback, useEffect, useReducer, type ReactNode } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
-  MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
-  MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SUMMARY_PATH,
-  MODEL_GEOMETRY_VALIDATION_PATH,
   MODEL_READINESS_PATH,
   MODEL_SCENE_PATH,
   MODEL_STUDY_PATH,
   PERSISTENCE_CHECKPOINTS_PATH,
   SIMULATION_COMMANDS_PATH,
   SIMULATION_RUN_CURRENT_PATH,
-  SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
 } from "@/kernel/api/apiPaths";
 import type {
@@ -43,10 +39,12 @@ import {
   shouldLoadRuntimeMeshSummary,
   shouldLoadRuntimeScalars,
   shouldLoadRuntimeStageExecution,
+  buildRuntimeCommandControlResourceData,
   useCommandQueueResource,
   useCommandDetailResource,
   useCheckpointCatalogResource,
   useCurrentRunResource,
+  useModelReadinessResource,
   useSolverEnergyCurrentResource,
   useSolverEnergyHistoryResource,
   useSolverStatusResource,
@@ -550,6 +548,7 @@ export function useStudyInspectorPanelController(
   });
   const checkpointCatalog = useCheckpointCatalogResource();
   const geometryValidation = useGeometryValidationResource();
+  const modelReadiness = useModelReadinessResource();
   const meshBuildCurrent = useMeshBuildCurrent({
     enabled: shouldLoadRuntimeMeshBuild(true, runtimeStatus),
   });
@@ -627,18 +626,22 @@ export function useStudyInspectorPanelController(
   const activeStageIndex = stageExecution.data?.active_stage_index ?? null;
   const commandContext = createCommandContext("inspector", kernel, {
     resourceData: {
-      [MESHING_BUILDS_CURRENT_PATH]: meshBuildCurrent.data,
+      ...buildRuntimeCommandControlResourceData({
+        commandQueue: commandQueue.data,
+        geometryValidation: geometryValidation.data,
+        meshBuildCurrent: meshBuildCurrent.data,
+        meshManifest: meshManifest.data,
+        modelReadinessData: modelReadiness.data,
+        modelReadinessStatus: modelReadiness.status,
+        sessionStatus: runtimeStatus,
+        solverStatus: solverStatus.data,
+        stageExecution: stageExecution.data,
+      }),
       [MESHING_BUILDS_LATEST_SUCCESSFUL_PATH]: meshBuildLatest.data,
-      [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: meshManifest.data,
       [MESHING_SUMMARY_PATH]: meshSummary.data,
-      [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation.data,
       [MODEL_SCENE_PATH]: scene.data,
       [PERSISTENCE_CHECKPOINTS_PATH]: checkpointCatalog.data,
-      [SESSION_STATUS_RESOURCE_KEY]: runtimeStatus,
-      [SIMULATION_COMMANDS_PATH]: commandQueue.data,
       [SIMULATION_RUN_CURRENT_PATH]: currentRun.data,
-      [SIMULATION_SOLVER_STATUS_PATH]: solverStatus.data,
-      [SIMULATION_STAGES_EXECUTION_PATH]: stageExecution.data,
     },
     sourceDetail: "study",
   });

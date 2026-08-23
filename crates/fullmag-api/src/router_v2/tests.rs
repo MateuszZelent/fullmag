@@ -1295,6 +1295,124 @@ async fn model_readiness_blocks_material_without_aex() {
 }
 
 #[tokio::test]
+async fn hidden_magnet_without_aex_is_blocked_by_readiness_and_solve() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document_with_stage(serde_json::json!({
+        "entrypoint_kind": "flat_relax",
+        "kind": "relax",
+        "algorithm": "projected_gradient_bb",
+        "stage_id": "relax-1"
+    }));
+    scene.study.requested_backend = "fdm".into();
+    scene.study.fdm = Some(fullmag_authoring::SceneFdmDiscretizationState {
+        default_cell: Some([1.0e-9, 1.0e-9, 1.0e-9]),
+        ..Default::default()
+    });
+    scene.objects[0].visible = false;
+    scene.materials[0].properties.aex = None;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let readiness = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/model/readiness")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readiness.status(), StatusCode::OK);
+    let readiness = body_json(readiness).await;
+    assert_eq!(readiness["ready_to_run"], false);
+    assert!(readiness["blockers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|reason| reason == "missing Aex material property for object 'body'"));
+
+    let solve = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "kind": "solve" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(solve.status(), StatusCode::BAD_REQUEST);
+    assert!(String::from_utf8_lossy(&body_bytes(solve).await)
+        .contains("missing Aex material property for object 'body'"));
+}
+
+#[tokio::test]
+async fn non_magnetic_carrier_is_ignored_by_readiness_and_solve_projection() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document_with_stage(serde_json::json!({
+        "entrypoint_kind": "flat_relax",
+        "kind": "relax",
+        "algorithm": "projected_gradient_bb",
+        "stage_id": "relax-1"
+    }));
+    scene.study.requested_backend = "fdm".into();
+    scene.study.fdm = Some(fullmag_authoring::SceneFdmDiscretizationState {
+        default_cell: Some([1.0e-9, 1.0e-9, 1.0e-9]),
+        ..Default::default()
+    });
+    let mut carrier_material = scene.materials[0].clone();
+    carrier_material.id = "carrier-material".into();
+    carrier_material.properties.aex = None;
+    carrier_material.properties.ms = None;
+    scene.materials.push(carrier_material);
+    let mut carrier = scene.objects[0].clone();
+    carrier.id = "carrier".into();
+    carrier.name = "Carrier".into();
+    carrier.role = "carrier".into();
+    carrier.material_ref = "carrier-material".into();
+    scene.objects.push(carrier);
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let readiness = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/model/readiness")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readiness.status(), StatusCode::OK);
+    assert_eq!(body_json(readiness).await["ready_to_run"], true);
+
+    let solve = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "kind": "solve" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(solve.status(), StatusCode::OK);
+    assert_eq!(state.current_control_queue.lock().await.len(), 1);
+}
+
+#[tokio::test]
 async fn model_readiness_marks_fem_mesh_stale_against_scene_revision() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document_with_stage(serde_json::json!({

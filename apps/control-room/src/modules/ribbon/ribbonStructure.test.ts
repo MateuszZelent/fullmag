@@ -34,6 +34,7 @@ import { RibbonTabStrip } from "./RibbonTabStrip";
 import {
   MESHING_CAPABILITIES_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_READINESS_PATH,
   SIMULATION_COMMANDS_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
@@ -59,12 +60,21 @@ import {
   crossSectionWorkspaceStore,
   resetCrossSectionWorkspaceForTests,
 } from "@/kernel/workspace/crossSectionWorkspace";
+
 import { GEOMETRY_LIFECYCLE_COMMANDS } from "@/kernel/authoring/geometryLifecycleCommandContributions";
 import { MAGNETIZATION_TEXTURE_COMMANDS } from "@/kernel/authoring/magnetization-texture/commands";
 import { REGION_COMMANDS } from "@/kernel/authoring/regionCommandContributions";
 import { SHELL_COMMANDS } from "@/kernel/layout/shellCommands";
 import { ANALYSIS_FIELD_OVERLAY_COMMANDS } from "@/kernel/visualization/analysisFieldOverlayCommandContributions";
 import { ALL_MODULES } from "@/modules/registry";
+
+const READY_MODEL_READINESS = {
+  blockers: [],
+  checks: [],
+  ready_to_export: true,
+  ready_to_run: true,
+  scene_revision: 1,
+};
 
 type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K];
@@ -4622,6 +4632,7 @@ describe("ribbon structure", () => {
         api: { commands: { submit: vi.fn() } } as never,
         resourceData: {
           [MODEL_GEOMETRY_VALIDATION_PATH]: { diagnostics: [] },
+          [MODEL_READINESS_PATH]: READY_MODEL_READINESS,
           [SESSION_STATUS_RESOURCE_KEY]: {
             capabilities: {
               binary_fields: true,
@@ -4689,6 +4700,7 @@ describe("ribbon structure", () => {
         api: { commands: { submit: vi.fn() } } as never,
         resourceData: {
           [MODEL_GEOMETRY_VALIDATION_PATH]: { diagnostics: [] },
+          [MODEL_READINESS_PATH]: READY_MODEL_READINESS,
           [SESSION_STATUS_RESOURCE_KEY]: {
             capabilities: {
               binary_fields: true,
@@ -4822,6 +4834,13 @@ describe("ribbon structure", () => {
       api: { commands: { submit: vi.fn() } } as never,
       resourceData: {
         [MODEL_GEOMETRY_VALIDATION_PATH]: { diagnostics: [] },
+        [MODEL_READINESS_PATH]: {
+          ...READY_MODEL_READINESS,
+          blockers: [
+            "Build a current shared-domain mesh before running. Open Mesh Jobs or Build Shared-Domain Mesh.",
+          ],
+          ready_to_run: false,
+        },
         [SESSION_STATUS_RESOURCE_KEY]: {
           capabilities: {
             binary_fields: true,

@@ -4,17 +4,11 @@ import { useMemo, useState, useSyncExternalStore } from "react";
 
 import type { LiveStatusResource } from "@/kernel/api/apiTypes";
 import {
-  MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_CAPABILITIES_PATH,
-  MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SUMMARY_PATH,
   MODEL_GEOMETRY_CAPABILITIES_PATH,
-  MODEL_GEOMETRY_VALIDATION_PATH,
   PERSISTENCE_CHECKPOINTS_PATH,
-  SIMULATION_COMMANDS_PATH,
-  SIMULATION_SOLVER_STATUS_PATH,
-  SIMULATION_STAGES_EXECUTION_PATH,
   VISUALIZATION_STATE_PATH,
 } from "@/kernel/api/apiPaths";
 import type { ModuleProps } from "@/kernel/types";
@@ -39,18 +33,17 @@ import {
   shouldLoadRuntimeMeshSummary,
   shouldLoadRuntimeCommandQueue,
   shouldLoadRuntimeStageExecution,
+  buildRuntimeCommandControlResourceData,
   useCommandQueueResource,
   useCommandDetailResource,
   useCheckpointCatalogResource,
   useFieldCatalogResource,
   useQuantityCatalogResource,
+  useModelReadinessResource,
   useSolverStatusResource,
   useStageExecutionResource,
 } from "@/kernel/resources/studyRuntimeResources";
-import {
-  SESSION_STATUS_RESOURCE_KEY,
-  useSessionStatusSelector,
-} from "@/kernel/resources/useSessionStatus";
+import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { EMPTY_SELECTION } from "@/kernel/selection/selectionTypes";
 import {
@@ -263,6 +256,9 @@ export default function RibbonModule({ kernel }: ModuleProps) {
       sessionStatusData,
     ),
   });
+  const modelReadiness = useModelReadinessResource({
+    enabled: needsRuntimeResources,
+  });
   const solverStatus = useSolverStatusResource({
     enabled: needsRuntimeResources,
   });
@@ -297,27 +293,25 @@ export default function RibbonModule({ kernel }: ModuleProps) {
     () =>
       createCommandContext("ribbon", kernel, {
         resourceData: {
-          [MESHING_BUILDS_CURRENT_PATH]: meshBuildCurrent.data,
+          ...buildRuntimeCommandControlResourceData({
+            commandQueue: needsRuntimeResources ? commandQueue.data : null,
+            geometryValidation: geometryValidation.data,
+            meshBuildCurrent: meshBuildCurrent.data,
+            meshManifest: meshManifest.data,
+            modelReadinessData: modelReadiness.data,
+            modelReadinessStatus: modelReadiness.status,
+            sessionStatus: needsSessionStatusResources
+              ? sessionStatusData
+              : null,
+            solverStatus: needsRuntimeResources ? solverStatus.data : null,
+            stageExecution: needsRuntimeResources ? stageExecution.data : null,
+          }),
           [MESHING_BUILDS_LATEST_SUCCESSFUL_PATH]: meshBuildLatest.data,
-          [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: meshManifest.data,
           [MESHING_CAPABILITIES_PATH]: meshCapabilities.data,
           [MESHING_SUMMARY_PATH]: meshSummary.data,
           [MODEL_GEOMETRY_CAPABILITIES_PATH]: geometryCapabilities.data,
-          [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation.data,
           [PERSISTENCE_CHECKPOINTS_PATH]: needsRuntimeResources
             ? checkpointCatalog.data
-            : null,
-          [SIMULATION_COMMANDS_PATH]: needsRuntimeResources
-            ? commandQueue.data
-            : null,
-          [SIMULATION_SOLVER_STATUS_PATH]: needsRuntimeResources
-            ? solverStatus.data
-            : null,
-          [SIMULATION_STAGES_EXECUTION_PATH]: needsRuntimeResources
-            ? stageExecution.data
-            : null,
-          [SESSION_STATUS_RESOURCE_KEY]: needsSessionStatusResources
-            ? sessionStatusData
             : null,
           [VISUALIZATION_STATE_PATH]: visualizationState.data,
         },
@@ -337,6 +331,8 @@ export default function RibbonModule({ kernel }: ModuleProps) {
       meshCapabilities.data,
       meshManifest.data,
       meshSummary.data,
+      modelReadiness.data,
+      modelReadiness.status,
       needsSessionStatusResources,
       sessionStatusData,
       solverStatus.data,

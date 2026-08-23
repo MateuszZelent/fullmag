@@ -667,7 +667,12 @@ async fn validate_authoring_gate_for_command(
             return Err(ApiError::bad_request(reason));
         }
         return Ok(Some((scene, realization)));
-    } else if let Some(reason) = geometry_blocks_solver_run(&scene, backend_target) {
+    }
+    for object in fullmag_authoring::scene_solve_objects(&scene) {
+        fullmag_authoring::resolve_scene_object_solve_material(&scene, object)
+            .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    }
+    if let Some(reason) = geometry_blocks_solver_run(&scene, backend_target) {
         return Err(ApiError::conflict(reason));
     }
     Ok(None)
@@ -794,7 +799,7 @@ fn scene_problem_patch_for_mesh(scene: &SceneDocument) -> Result<serde_json::Val
 
     let mut object_regions = Vec::new();
 
-    for object in &scene.objects {
+    for object in fullmag_authoring::scene_solve_objects(scene) {
         let geometry_name = object.id.clone();
         let region_name = object.id.clone();
         let material_name = format!("material:{}", object.id);

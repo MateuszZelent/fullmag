@@ -2,17 +2,11 @@
 
 import { useMemo, useState } from "react";
 
-import {
-  MODEL_GEOMETRY_DIAGNOSTICS_PATH,
-  MODEL_GEOMETRY_VALIDATION_PATH,
-} from "@/kernel/api/apiPaths";
 import type { RegionPatchRequest } from "@/kernel/api/apiTypes";
+import { invalidateAuthoringMutationDependents } from "@/kernel/authoring/authoringMutationInvalidation";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import {
-  MODEL_REGIONS_RESOURCE_KEY,
-  SCENE_RESOURCE_KEY,
-  VISUALIZATION_STATE_RESOURCE_KEY,
   useModelRegionsResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
@@ -752,11 +746,7 @@ export function ObjectMagneticTexturePanel({
   }
 
   function invalidateTextureResources(revision: number): void {
-    resources.invalidate(SCENE_RESOURCE_KEY, revision);
-    resources.invalidate(MODEL_REGIONS_RESOURCE_KEY, revision);
-    resources.invalidate(MODEL_GEOMETRY_VALIDATION_PATH, revision);
-    resources.invalidate(MODEL_GEOMETRY_DIAGNOSTICS_PATH, revision);
-    resources.invalidate(VISUALIZATION_STATE_RESOURCE_KEY, revision);
+    invalidateAuthoringMutationDependents(resources, "magnetization", revision);
   }
 
   async function saveTexture(): Promise<void> {

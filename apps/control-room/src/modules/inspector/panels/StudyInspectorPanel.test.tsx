@@ -1,10 +1,15 @@
+import { readFileSync } from "node:fs";
+
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { Accordion } from "@/shared/ui/Accordion";
 
-import type { CommandDetailResource } from "@/kernel/api/apiTypes";
+import type { CommandDetailResource, LiveStatusResource } from "@/kernel/api/apiTypes";
+import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
+import { buildRuntimeCommandControlResourceData } from "@/kernel/resources/studyRuntimeResources";
+import { STUDY_RUNTIME_COMMANDS } from "@/kernel/runtime/studyRuntimeCommandContributions";
 
 vi.mock("@radix-ui/react-dialog", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@radix-ui/react-dialog")>();
@@ -56,6 +61,82 @@ function testRequested(overrides: Record<string, string> = {}) {
 }
 
 describe("StudyInspectorPanel", () => {
+  it("uses the shared readiness-aware runtime command adapter", () => {
+    const source = readFileSync(
+      new URL("./StudyInspectorPanel.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("useModelReadinessResource()");
+    expect(source).toContain("buildRuntimeCommandControlResourceData({");
+  });
+
+  it.each([
+    {
+      enabled: true,
+      name: "ready",
+      readiness: { blockers: [], ready_to_run: true, scene_revision: 9 },
+      reason: null,
+    },
+    {
+      enabled: false,
+      name: "blocked",
+      readiness: {
+        blockers: ["Assign initial magnetization to every magnetic object."],
+        ready_to_run: false,
+        scene_revision: 9,
+      },
+      reason: "Assign initial magnetization to every magnetic object.",
+    },
+    {
+      enabled: false,
+      name: "stale",
+      readiness: { blockers: [], ready_to_run: true, scene_revision: 8 },
+      reason: "Model readiness is stale for the current scene.",
+    },
+  ])("feeds $name readiness into the Study Inspector Run command", ({
+    enabled,
+    readiness,
+    reason,
+  }) => {
+    const commands = new CommandRegistry();
+    for (const command of STUDY_RUNTIME_COMMANDS) commands.register(command);
+    const status = {
+      capabilities: { binary_fields: true, explicit_topology: false },
+      domain: { discretization: "fdm" },
+      resources: { mesh_revision: 0, scene_revision: 9 },
+    } as unknown as LiveStatusResource;
+    const resourceData = buildRuntimeCommandControlResourceData({
+      commandQueue: { commands: [] },
+      geometryValidation: { diagnostics: [] },
+      meshBuildCurrent: null,
+      meshManifest: null,
+      modelReadinessData: {
+        capabilities: {} as never,
+        checks: [],
+        ready_to_export: readiness.ready_to_run,
+        ...readiness,
+      },
+      modelReadinessStatus: "ready",
+      sessionStatus: status,
+      solverStatus: { runtime_state: "idle" },
+      stageExecution: {
+        active_stage_index: null,
+        revision: 1,
+        runtime_state: "idle",
+        stages: [],
+      },
+    });
+    const context = {
+      api: {} as never,
+      resourceData,
+      source: "inspector" as const,
+    };
+
+    expect(commands.isEnabled("study.run", context)).toBe(enabled);
+    expect(commands.get("study.run")?.disabledReason?.(context)).toBe(reason);
+  });
+
   it("renders requested, resolved, and fallback runtime provenance rows", () => {
     const html = renderToStaticMarkup(
       <StudyRuntimeSection

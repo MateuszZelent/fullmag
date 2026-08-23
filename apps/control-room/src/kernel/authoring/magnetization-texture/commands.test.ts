@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
+import { MODEL_READINESS_PATH } from "@/kernel/api/apiPaths";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
 
 import { MAGNETIZATION_TEXTURE_COMMANDS } from "./commands";
@@ -19,6 +20,7 @@ describe("magnetization texture commands", () => {
       scene_revision: 6,
     }));
     const patchRegion = vi.fn(async () => ({ revision: 7 }));
+    const invalidate = vi.fn();
     const context = {
       api: {
         model: {
@@ -29,6 +31,7 @@ describe("magnetization texture commands", () => {
       resourceData: {
         [MODEL_SCENE_PATH]: { revision: 5 },
       },
+      resources: { invalidate },
       selection: {
         get: () => ({
           kind: "object.region-magnetic-texture",
@@ -72,6 +75,9 @@ describe("magnetization texture commands", () => {
         magnetization_ref: "mag:body:region:body:uniform",
       },
     );
+    expect(
+      invalidate.mock.calls.filter(([resourceKey]) => resourceKey === MODEL_READINESS_PATH),
+    ).toHaveLength(1);
   });
 
   it("disables assignment when no object or region target is selected", () => {
