@@ -128,7 +128,9 @@ describe("confirmed-empty New Problem entry wiring", () => {
       await act(async () => {
         await mounted.kernel.commands.execute(
           "workspace.new-problem",
-          createCommandContext("workspace", mounted.kernel),
+          createCommandContext("test", mounted.kernel, {
+            sourceDetail: "integration-global-command",
+          }),
         );
       });
       await settle();
