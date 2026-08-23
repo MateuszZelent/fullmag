@@ -3,7 +3,7 @@
     "path": "public_docs/site/python-api/magnets-and-textures/preset-textures.md",
     "title": "Preset Textures",
     "status": "implemented_with_explicit_mapping_and_runtime_qualification_limits",
-    "updated": "2026-08-22",
+    "updated": "2026-08-23",
     "source_revision": "0343d94d37b7c69e0eef36eee2ca42a8ca3c3135"
   },
   "backend_matrix": [
@@ -597,7 +597,7 @@
     {
       "id": "rust-inverse-transform",
       "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
-      "symbol": "inverse_transform",
+      "symbol": "prepare",
       "responsibility": "validated inverse texture-coordinate transform"
     },
     {

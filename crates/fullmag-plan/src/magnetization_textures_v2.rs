@@ -277,81 +277,76 @@ fn rotate_by_quaternion(point: [f64; 3], quaternion: [f64; 4]) -> [f64; 3] {
     add(add(point, scale(t, quaternion[3])), cross(q, t))
 }
 
-fn inverse_transform(
-    point: [f64; 3],
-    transform: &TextureTransform3DIR,
-) -> Result<[f64; 3], TextureError> {
-    let components = transform
-        .translation
-        .into_iter()
-        .chain(transform.scale)
-        .chain(transform.pivot)
-        .chain(transform.rotation_quat)
-        .collect::<Vec<_>>();
-    if components.iter().any(|component| !component.is_finite()) {
-        return Err(invalid(
-            "texture_transform",
-            "all components must be finite",
-        ));
-    }
-    if transform.scale.iter().any(|scale| scale.abs() <= EPSILON) {
-        return Err(invalid(
-            "texture_transform.scale",
-            "all components must be nonzero",
-        ));
-    }
-    let quaternion_norm = transform
-        .rotation_quat
-        .iter()
-        .map(|component| component * component)
-        .sum::<f64>()
-        .sqrt();
-    if !quaternion_norm.is_finite() || quaternion_norm <= EPSILON {
-        return Err(invalid(
-            "texture_transform.rotation_quat",
-            "quaternion must be nonzero and finite",
-        ));
-    }
-    let inverse_quaternion = [
-        -transform.rotation_quat[0] / quaternion_norm,
-        -transform.rotation_quat[1] / quaternion_norm,
-        -transform.rotation_quat[2] / quaternion_norm,
-        transform.rotation_quat[3] / quaternion_norm,
-    ];
-    let shifted = sub(sub(point, transform.translation), transform.pivot);
-    let rotated = rotate_by_quaternion(shifted, inverse_quaternion);
-    Ok([
-        rotated[0] / transform.scale[0] + transform.pivot[0],
-        rotated[1] / transform.scale[1] + transform.pivot[1],
-        rotated[2] / transform.scale[2] + transform.pivot[2],
-    ])
+/// Validated affine transform shared by FDM and FEM texture sampling.
+///
+/// Coordinates are mapped with `S^-1 R^-1 (x - t - pivot) + pivot`. Magnetization
+/// vectors are transformed only by the proper rotation `R`; translation, pivot,
+/// and coordinate scale never scale or translate a spin vector.
+#[derive(Debug, Clone, Copy)]
+struct PreparedTextureTransform {
+    translation: [f64; 3],
+    pivot: [f64; 3],
+    inverse_scale: [f64; 3],
+    rotation: [f64; 4],
+    inverse_rotation: [f64; 4],
 }
 
-fn forward_rotate(
-    vector: [f64; 3],
-    transform: &TextureTransform3DIR,
-) -> Result<[f64; 3], TextureError> {
-    let quaternion_norm = transform
-        .rotation_quat
-        .iter()
-        .map(|component| component * component)
-        .sum::<f64>()
-        .sqrt();
-    if !quaternion_norm.is_finite() || quaternion_norm <= EPSILON {
-        return Err(invalid(
-            "texture_transform.rotation_quat",
-            "quaternion must be nonzero and finite",
-        ));
+impl PreparedTextureTransform {
+    fn prepare(transform: &TextureTransform3DIR) -> Result<Self, TextureError> {
+        if transform
+            .translation
+            .iter()
+            .chain(transform.scale.iter())
+            .chain(transform.pivot.iter())
+            .chain(transform.rotation_quat.iter())
+            .any(|component| !component.is_finite())
+        {
+            return Err(invalid(
+                "texture_transform",
+                "all components must be finite",
+            ));
+        }
+        if transform.scale.iter().any(|value| value.abs() <= EPSILON) {
+            return Err(invalid(
+                "texture_transform.scale",
+                "all components must be nonzero",
+            ));
+        }
+        let quaternion_norm = transform
+            .rotation_quat
+            .iter()
+            .map(|component| component * component)
+            .sum::<f64>()
+            .sqrt();
+        if !quaternion_norm.is_finite() || quaternion_norm <= EPSILON {
+            return Err(invalid(
+                "texture_transform.rotation_quat",
+                "quaternion must be nonzero and finite",
+            ));
+        }
+        let rotation = transform.rotation_quat.map(|value| value / quaternion_norm);
+        Ok(Self {
+            translation: transform.translation,
+            pivot: transform.pivot,
+            inverse_scale: transform.scale.map(f64::recip),
+            rotation,
+            inverse_rotation: [-rotation[0], -rotation[1], -rotation[2], rotation[3]],
+        })
     }
-    Ok(rotate_by_quaternion(
-        vector,
+
+    fn point_to_texture(self, point: [f64; 3]) -> [f64; 3] {
+        let shifted = sub(sub(point, self.translation), self.pivot);
+        let rotated = rotate_by_quaternion(shifted, self.inverse_rotation);
         [
-            transform.rotation_quat[0] / quaternion_norm,
-            transform.rotation_quat[1] / quaternion_norm,
-            transform.rotation_quat[2] / quaternion_norm,
-            transform.rotation_quat[3] / quaternion_norm,
-        ],
-    ))
+            rotated[0] * self.inverse_scale[0] + self.pivot[0],
+            rotated[1] * self.inverse_scale[1] + self.pivot[1],
+            rotated[2] * self.inverse_scale[2] + self.pivot[2],
+        ]
+    }
+
+    fn vector_to_source(self, vector: [f64; 3]) -> [f64; 3] {
+        rotate_by_quaternion(vector, self.rotation)
+    }
 }
 
 fn splitmix64(mut state: u64) -> u64 {
@@ -791,9 +786,9 @@ fn sample_v2(
             "hopfion is three-dimensional and requires object_local projection",
         ));
     }
-    inverse_transform([0.0, 0.0, 0.0], transform)?;
-    forward_rotate([0.0, 0.0, 0.0], transform)?;
+    let prepared_transform = PreparedTextureTransform::prepare(transform)?;
     local_evaluate(preset_kind, params, [0.0, 0.0, 0.0])?;
+
     let mut output = Vec::with_capacity(points.len());
     for point in points {
         let source_position = if mapping.space.eq_ignore_ascii_case("object") {
@@ -811,7 +806,8 @@ fn sample_v2(
             output.push([0.0, 0.0, 0.0]);
             continue;
         }
-        let transformed = inverse_transform(source_position, transform)?;
+
+        let transformed = prepared_transform.point_to_texture(source_position);
         if transformed.iter().any(|component| !component.is_finite()) {
             return Err(invalid(
                 "sample_point",
@@ -824,12 +820,12 @@ fn sample_v2(
             transformed
         };
         let local_vector = local_evaluate(preset_kind, params, local_point)?;
-        let world_vector = if is_metric(preset_kind) {
+        let source_vector = if is_metric(preset_kind) {
             metric_vector(local_vector, frame)
         } else {
             local_vector
         };
-        output.push(forward_rotate(world_vector, transform)?);
+        output.push(prepared_transform.vector_to_source(source_vector));
     }
     Ok(output)
 }
