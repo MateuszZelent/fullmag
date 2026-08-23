@@ -86,6 +86,91 @@ jobs:
           PY
           python .github/fullmag-texture-region-refactor/apply.py
 
+      - name: Replace obsolete FEM region rejection contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/fullmag-plan/src/tests.rs')
+          source = path.read_text(encoding='utf-8')
+          old = '''#[test]
+          fn fem_region_texture_override_is_rejected_until_runtime_materialization_exists() {
+              let mut ir = fem_minimal_test_ir();
+              let mut region = default_test_object_region();
+              region.texture_override = Some(fullmag_ir::RegionTextureOverrideIR {
+                  initial_magnetization: fullmag_ir::InitialMagnetizationIR::Uniform {
+                      value: [0.0, 0.0, 1.0],
+                  },
+              });
+              ir.object_regions.push(region);
+
+              let err = plan(&ir).expect_err("FEM must not silently ignore region texture overrides");
+              assert!(
+                  err.reasons.iter().any(|reason| {
+                      reason.contains("object region texture_override")
+                          && reason.contains("backend='fem'")
+                          && reason.contains("must not silently ignore region texture overrides")
+                  }),
+                  "unexpected planner errors: {:?}",
+                  err.reasons
+              );
+          }
+          '''
+          new = '''#[test]
+          fn fem_region_texture_override_materializes_on_selected_nodes_only() {
+              let baseline_ir = fem_minimal_test_ir();
+              let baseline_plan = plan(&baseline_ir).expect("baseline FEM plan should succeed");
+              let fullmag_ir::BackendPlanIR::Fem(baseline_fem) = baseline_plan.backend_plan else {
+                  panic!("expected baseline FEM plan");
+              };
+
+              let mut ir = baseline_ir;
+              let mut region = default_test_object_region();
+              region.texture_override = Some(fullmag_ir::RegionTextureOverrideIR {
+                  initial_magnetization: fullmag_ir::InitialMagnetizationIR::Uniform {
+                      value: [0.0, 0.0, 1.0],
+                  },
+              });
+              ir.object_regions.push(region);
+
+              let plan = plan(&ir).expect("FEM should materialize region texture overrides");
+              let fullmag_ir::BackendPlanIR::Fem(fem) = plan.backend_plan else {
+                  panic!("expected FEM plan");
+              };
+
+              assert_eq!(
+                  fem.initial_magnetization.len(),
+                  baseline_fem.initial_magnetization.len()
+              );
+              let changed_indices = fem
+                  .initial_magnetization
+                  .iter()
+                  .zip(&baseline_fem.initial_magnetization)
+                  .enumerate()
+                  .filter_map(|(index, (actual, baseline))| (actual != baseline).then_some(index))
+                  .collect::<Vec<_>>();
+              assert_eq!(
+                  changed_indices,
+                  vec![0],
+                  "the object-frame cylinder contains only node 0 and must not broaden its mask"
+              );
+              assert_eq!(fem.initial_magnetization[0], [0.0, 0.0, 1.0]);
+              assert_eq!(
+                  &fem.initial_magnetization[1..],
+                  &baseline_fem.initial_magnetization[1..],
+                  "nodes outside the winning region must preserve the base texture"
+              );
+          }
+          '''
+          if source.count(old) != 1:
+              raise RuntimeError(
+                  f'expected one obsolete FEM region test, found {source.count(old)}'
+              )
+          path.write_text(source.replace(old, new, 1), encoding='utf-8')
+          PY
+
       - name: Format changed Rust files
         run: |
           rustfmt --edition 2021 \
@@ -95,6 +180,7 @@ jobs:
             crates/fullmag-plan/src/mesh.rs \
             crates/fullmag-plan/src/fdm.rs \
             crates/fullmag-plan/src/fem.rs \
+            crates/fullmag-plan/src/tests.rs \
             crates/fullmag-plan/src/validate.rs \
             crates/fullmag-plan/tests/magnetization_textures_v2_contract.rs
 
@@ -104,6 +190,7 @@ jobs:
           cargo test -p fullmag-plan region_textures
           cargo test -p fullmag-plan fdm_region_textures
           cargo test -p fullmag-plan fem_region_textures
+          cargo test -p fullmag-plan fem_region_texture_override_materializes_on_selected_nodes_only
           cargo test -p fullmag-plan --test magnetization_textures_v2_contract
           cargo test -p fullmag-plan --test magnetization_textures_v2_parity
           cargo check -p fullmag-plan -p fullmag-py-core
@@ -145,6 +232,7 @@ jobs:
             crates/fullmag-plan/src/mesh.rs \
             crates/fullmag-plan/src/fdm.rs \
             crates/fullmag-plan/src/fem.rs \
+            crates/fullmag-plan/src/tests.rs \
             crates/fullmag-plan/src/validate.rs \
             crates/fullmag-plan/tests/magnetization_textures_v2_contract.rs
           git diff --check
@@ -152,6 +240,7 @@ jobs:
           test "$(grep -c 'fn apply_fem_region_texture_overrides' crates/fullmag-plan/src/fem.rs)" -eq 1
           test "$(grep -c 'fn apply_region_texture_overrides' crates/fullmag-plan/src/fdm.rs)" -eq 1
           test "$(grep -c 'fn sample_region_initial_on_mask' crates/fullmag-plan/src/region_textures.rs)" -eq 1
+          test "$(grep -c 'fn fem_region_texture_override_materializes_on_selected_nodes_only' crates/fullmag-plan/src/tests.rs)" -eq 1
 
       - name: Commit validated implementation
         shell: bash
