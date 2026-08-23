@@ -1,3 +1,4 @@
+import configparser
 from pathlib import Path
 import subprocess
 import unittest
@@ -37,6 +38,25 @@ def _assert_required_action_version(
         )
 
 
+def _submodule_urls_by_path(gitmodules: str) -> dict[str, str]:
+    parser = configparser.ConfigParser(interpolation=None, strict=True)
+    parser.read_string(gitmodules)
+    records: dict[str, str] = {}
+    for section in parser.sections():
+        if not section.startswith('submodule "'):
+            continue
+        path = parser.get(section, "path", fallback="").strip()
+        if not path:
+            raise AssertionError(f"{section} must define a nonempty path")
+        url = parser.get(section, "url", fallback="").strip()
+        if not url:
+            raise AssertionError(f"{path} must define a nonempty url")
+        if path in records:
+            raise AssertionError(f"duplicate submodule path {path}")
+        records[path] = url
+    return records
+
+
 class BootstrapWorkflowContractTests(unittest.TestCase):
     def test_action_version_contract_reads_uses_instead_of_step_names(self) -> None:
         workflow = """
@@ -56,6 +76,34 @@ jobs:
                 "actions/checkout",
                 "actions/checkout@v7",
             )
+
+    def test_submodule_metadata_requires_nonempty_url(self) -> None:
+        gitmodules = """
+[submodule "external_solvers/example"]
+    path = external_solvers/example
+"""
+
+        with self.assertRaisesRegex(
+            AssertionError,
+            r"external_solvers/example.*nonempty url",
+        ):
+            _submodule_urls_by_path(gitmodules)
+
+    def test_submodule_metadata_rejects_duplicate_paths(self) -> None:
+        gitmodules = """
+[submodule "first"]
+    path = external_solvers/example
+    url = https://example.test/first
+[submodule "second"]
+    path = external_solvers/example
+    url = https://example.test/second
+"""
+
+        with self.assertRaisesRegex(
+            AssertionError,
+            r"duplicate submodule path external_solvers/example",
+        ):
+            _submodule_urls_by_path(gitmodules)
 
     def test_ci_installs_native_tools_before_contract_checks(self) -> None:
         workflow = (ROOT / ".github/workflows/bootstrap.yml").read_text()
@@ -108,8 +156,12 @@ jobs:
         ]
 
         self.assertTrue(gitlinks)
-        for path in gitlinks:
-            self.assertIn(f"path = {path}", gitmodules)
+        metadata = _submodule_urls_by_path(gitmodules)
+        self.assertEqual(
+            set(metadata),
+            set(gitlinks),
+            "tracked gitlinks and complete .gitmodules records must match exactly",
+        )
 
 
 if __name__ == "__main__":
