@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: codex/texture-transform-region-clipping-20260823
-      - name: Print late payload section and documentation anchors
+      - name: Print FDM test patch section
         shell: bash
         run: |
           set -euo pipefail
@@ -32,6 +32,6 @@ jobs:
           )
           script = zlib.decompress(base64.b64decode(encoded, validate=True)).decode('utf-8')
           lines = script.splitlines()
-          for line_number in range(600, min(735, len(lines)) + 1):
+          for line_number in range(120, min(220, len(lines)) + 1):
               print(f'{line_number:5d}: {lines[line_number - 1]}')
           PY
