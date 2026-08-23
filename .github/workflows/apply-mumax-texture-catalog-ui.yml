@@ -50,7 +50,7 @@ jobs:
 
           source = Path('.github/fullmag-mumax-textures/apply_mumax_textures.py.zlib.b64')
           encoded = source.read_text(encoding='utf-8').strip()
-          expected = 'c99c67e9815266cdcc78f0d061bae38a4b3aafabbd7c8f14decdec73afe6ee68'
+          expected = 'e72e8357065daf9c49a5af43d39cd07e058b321b4037c6dc1d1c28a8c2c58a1a'
           actual = hashlib.sha256(encoded.encode('ascii')).hexdigest()
           if actual != expected:
               raise RuntimeError(f'implementation payload checksum mismatch: {actual}')
@@ -161,5 +161,5 @@ jobs:
           git diff --cached --check
           git commit \
             -m "feat: complete Mumax texture catalog and UI coverage" \
-            -m "Add exact VortexWall and HopfionCompactSupport configurations, expose every implemented analytic texture in the object and region editor, extend Rust/Python parity and contract tests, and document the CurrentMag state-transfer equivalent."
+            -m "Add VortexWall and HopfionCompactSupport configurations, expose every implemented analytic texture in the object and region editor, extend Rust/Python parity and contract tests, and document the CurrentMag state-transfer equivalent."
           git push origin HEAD:codex/mumax-texture-catalog-ui-20260823
