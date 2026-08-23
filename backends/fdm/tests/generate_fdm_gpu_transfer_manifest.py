@@ -31,8 +31,56 @@ ACCOUNTING_BY_PATH = (
     ("backends/fdm/gpu/cuda/transport/charge/device_solver.cu", "transfer_count", "transport_control"),
     ("backends/fdm/gpu/cuda/transport/context.cu", "append_charge_telemetry", "transport_telemetry"),
     ("backends/fdm/gpu/cuda/transport/spin/device_solver.cu", "control_h2d_count", "transport_control"),
-    ("backends/fdm/gpu/cuda/transport/spin/sparse_solver.cu", "DevicePreconditionerAudit", "preconditioner_control"),
+    ("backends/fdm/gpu/cuda/transport/spin/sparse_solver.cu", "control_transfer_count", "preconditioner_control"),
 )
+CROSS_FUNCTION_ACCOUNTING = {
+    (
+        "backends/fdm/gpu/cuda/transport/context.cu",
+        "copy_spin_checkpoint_to_host",
+    ): {
+        "caller": "checkpoint_export_impl",
+        "call": "copy_spin_checkpoint_to_host(",
+        "owner": "append_charge_telemetry(",
+        "callee_evidence": ("*copied_bytes", "*copied_count"),
+    },
+    (
+        "backends/fdm/gpu/cuda/transport/context.cu",
+        "materialize_spin_checkpoint_from_host",
+    ): {
+        "caller": "checkpoint_import_impl",
+        "call": "materialize_spin_checkpoint_from_host(",
+        "owner": "append_charge_telemetry(",
+        "callee_evidence": (
+            "FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR",
+            "FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK",
+        ),
+    },
+}
+LOCAL_CALLSITE_ACCOUNTING = {
+    (
+        "backends/fdm/gpu/cuda/transport/spin/device_solver.cu",
+        "test_direct_she_signs_device",
+    ): {
+        "category": "test_observation",
+        "hook": "local-test-observation:test_direct_she_signs_device",
+        "evidence": (
+            "18 * sizeof(double)",
+            "cudaFree(device)",
+        ),
+    },
+    (
+        "backends/fdm/gpu/cuda/transport/spin/sparse_solver.cu",
+        "audit_preconditioner",
+    ): {
+        "category": "test_observation",
+        "hook": "local-test-observation:audit_preconditioner",
+        "evidence": (
+            "DevicePreconditionerAudit host_result",
+            "sizeof(host_result)",
+            "metrics->additive_relative_error",
+        ),
+    },
+}
 
 
 class InventoryError(RuntimeError):
@@ -226,9 +274,18 @@ def accounting_for(
     function: str,
     function_source: str,
     source: str,
+    function_sources: dict[str, list[str]],
 ) -> tuple[str, str]:
     if direction == "D2D":
         return "device_internal", "none_device_internal"
+    local_callsite = LOCAL_CALLSITE_ACCOUNTING.get((path, function))
+    if local_callsite is not None:
+        evidence = tuple(local_callsite["evidence"])
+        if any(token not in function_source for token in evidence):
+            raise InventoryError(
+                f"{path}:{function}: local callsite accounting lost evidence"
+            )
+        return str(local_callsite["category"]), str(local_callsite["hook"])
     for prefix, owner, category in ACCOUNTING_BY_PATH:
         if path.startswith(prefix):
             if path == "backends/fdm/gpu/cuda/transport/charge/device_solver.cu":
@@ -244,8 +301,29 @@ def accounting_for(
                         f"{path}:{function}: transfer lost accounting macro {macro}"
                     )
                 return category, f"macro:{api}"
-            if owner in source:
-                return category, owner
+            cross_function = CROSS_FUNCTION_ACCOUNTING.get((path, function))
+            if cross_function is not None:
+                caller = str(cross_function["caller"])
+                caller_sources = function_sources.get(caller, [])
+                if len(caller_sources) != 1:
+                    raise InventoryError(
+                        f"{path}:{function}: accounting call-chain caller {caller} "
+                        f"resolved {len(caller_sources)} times"
+                    )
+                caller_source = caller_sources[0]
+                call = str(cross_function["call"])
+                cross_owner = str(cross_function["owner"])
+                evidence = tuple(cross_function["callee_evidence"])
+                if caller_source.count(call) != 1 or cross_owner not in caller_source:
+                    raise InventoryError(
+                        f"{path}:{function}: accounting call-chain {caller} lost "
+                        f"call or owner {cross_owner}"
+                    )
+                if any(token not in function_source for token in evidence):
+                    raise InventoryError(
+                        f"{path}:{function}: accounting call-chain lost callee evidence"
+                    )
+                return category, f"call-chain:{caller}->{cross_owner[:-1]}"
             raise InventoryError(
                 f"{path}:{function}: host-capable transfer lost accounting hook {owner}"
             )
@@ -258,6 +336,13 @@ def check_forbidden_surface(source: str, masked: str, path: str) -> None:
         if alias not in ALLOWED_MACRO_SHADOWS or target not in RAW_APIS:
             raise InventoryError(f"{path}: unapproved transfer wrapper alias {alias} -> {target}")
     code = mask_preprocessor(masked)
+    for match in re.finditer(r"\b(cudaMemcpyAsync|cudaMemcpy)\b", code):
+        if code[match.end():].lstrip().startswith("("):
+            continue
+        raise InventoryError(
+            f"{path}: raw transfer API referenced as alias/function pointer "
+            f"{match.group(1)}"
+        )
     for match in re.finditer(
         r"\b(?:cudaMemcpy\w+|cuMemcpy\w*|hipMemcpy\w*)\b(?=\s*\()", code
     ):
@@ -273,6 +358,9 @@ def scan_text(path: str, source: str) -> list[dict[str, object]]:
     check_forbidden_surface(source, masked, path)
     code = mask_preprocessor(masked)
     ranges = function_ranges(code)
+    function_sources: dict[str, list[str]] = {}
+    for start, end, function, _anchor in ranges:
+        function_sources.setdefault(function, []).append(source[start:end])
     calls: list[tuple[int, str, str]] = []
     api_pattern = re.compile(r"(?<![A-Za-z0-9_])(cudaMemcpyAsync|cudaMemcpy)\s*\(")
     for match in api_pattern.finditer(code):
@@ -291,7 +379,8 @@ def scan_text(path: str, source: str) -> list[dict[str, object]]:
         ordinals[ordinal_key] = ordinal
         direction = direction_for(expression)
         category, hook = accounting_for(
-            path, direction, api, function, source[start:end], source
+            path, direction, api, function, source[start:end], source,
+            function_sources,
         )
         call_normalized = normalized(expression)
         entries.append({
@@ -383,6 +472,8 @@ void download(Context &ctx, void *dst, const void *src, size_t bytes) {
         "void f(){ cudaMemcpy2D(a,b,c,d,e,f,g); }",
         "void f(){ hipMemcpy(a,b,c,d); }",
         "#define hidden_copy cudaMemcpy\nvoid f(){ hidden_copy(a,b,c,d); }",
+        "void f(){ auto hidden_copy = cudaMemcpy; hidden_copy(a,b,c,d); }",
+        "void f(){ auto hidden_copy = cudaMemcpyAsync; hidden_copy(a,b,c,d,e); }",
         "void f(){ thrust::copy(a,b,c); }",
     ):
         try:
@@ -391,10 +482,25 @@ void download(Context &ctx, void *dst, const void *src, size_t bytes) {
             pass
         else:
             raise InventoryError(f"scanner accepted forbidden transfer surface: {forbidden}")
+    cross_function_owner = """
+void accounted(Context &ctx) {
+    fullmag_fdm_record_cuda_transfer_success(ctx, true, 1);
+}
+void unaccounted(void *dst, const void *src, size_t bytes) {
+    cudaMemcpy(dst, src, bytes, cudaMemcpyDeviceToHost);
+}
+"""
+    try:
+        scan_text(path, cross_function_owner)
+    except InventoryError:
+        pass
+    else:
+        raise InventoryError("scanner accepted an owner from an unrelated function")
     print(
         "FDM GPU raw-transfer mutations: PASS "
         "(raw-add, new-file-variable, accounted-to-unaccounted, "
-        "direction, reason, category, alternate-api, wrapper-alias)"
+        "direction, reason, category, alternate-api, wrapper-alias, "
+        "function-pointer-alias, cross-function-owner)"
     )
 
 

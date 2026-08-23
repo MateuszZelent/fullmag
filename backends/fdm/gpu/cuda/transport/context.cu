@@ -3830,6 +3830,14 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_test_static_view_copy_v1(
     if (cudaSetDevice(slot.device) != cudaSuccess || cudaMemcpy(destination, source,
             sizeof(*destination), cudaMemcpyDeviceToHost) != cudaSuccess)
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+    if (!append_charge_telemetry(
+            slot, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_ARTIFACT_READBACK_D2H,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER |
+                FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_CADENCE_AUTHORIZED,
+            sizeof(*destination), 1, 0, 0, 0, nullptr))
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
     return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
 }
 
@@ -3849,6 +3857,14 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_test_static_payload_copy_v1(
             slot.static_payload_device[payload_index], destination_bytes,
             cudaMemcpyDeviceToHost) != cudaSuccess)
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+    if (!append_charge_telemetry(
+            slot, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_ARTIFACT_READBACK_D2H,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER |
+                FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_CADENCE_AUTHORIZED,
+            destination_bytes, 1, 0, 0, 0, nullptr))
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
     return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
 }
 
@@ -4065,7 +4081,7 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_test_charge_hierarchy_readback_v1(
     if (context.registry_cookie != kCookie || context.type_tag != kContextTag ||
         context.slot >= slots.size())
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
-    const Slot &slot = slots[context.slot];
+    Slot &slot = slots[context.slot];
     if (!same(context, context.slot, slot.generation) || !slot.active ||
         !slot.hierarchy_cache.valid || aggregate_count != slot.hierarchy_cache.cells ||
         coarse_count != slot.hierarchy_cache.coarse_cells)
@@ -4086,6 +4102,16 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_test_charge_hierarchy_readback_v1(
         cudaMemcpy(structured_edge_weight, slot.hierarchy_cache.coarse_edge_weight,
                    edge_count * sizeof(double), cudaMemcpyDeviceToHost) != cudaSuccess)
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+    if (!append_charge_telemetry(
+            slot, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_ARTIFACT_READBACK_D2H,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER |
+                FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_CADENCE_AUTHORIZED,
+            aggregate_count * sizeof(uint64_t) + coarse_count * sizeof(double) +
+                edge_count * sizeof(double),
+            3, 0, 0, 0, nullptr))
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
     return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
 }
 
@@ -4122,7 +4148,7 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_test_charge_warm_start_readback_v1
     if (context.registry_cookie != kCookie || context.type_tag != kContextTag ||
         context.slot >= slots.size())
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
-    const Slot &slot = slots[context.slot];
+    Slot &slot = slots[context.slot];
     const ChargeHierarchyCache &cache = slot.hierarchy_cache;
     if (!same(context, context.slot, slot.generation) || !slot.active ||
         !cache.warm_valid || cache.warm_potential == nullptr || count != cache.cells ||
@@ -4130,10 +4156,18 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_test_charge_warm_start_readback_v1
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
     if (cudaSetDevice(slot.device) != cudaSuccess)
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
-    return cudaMemcpy(potential, cache.warm_potential, count * sizeof(double),
-                      cudaMemcpyDeviceToHost) == cudaSuccess
-        ? FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK
-        : FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+    if (cudaMemcpy(potential, cache.warm_potential, count * sizeof(double),
+                   cudaMemcpyDeviceToHost) != cudaSuccess)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+    if (!append_charge_telemetry(
+            slot, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_ARTIFACT_READBACK_D2H,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
+            FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER |
+                FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_CADENCE_AUTHORIZED,
+            count * sizeof(double), 1, 0, 0, 0, nullptr))
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
+    return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
 }
 
 extern "C" uint32_t fullmag_fdm_gpu_transport_test_spin_audit_v1(
@@ -4409,8 +4443,7 @@ bool import_transport_receipt_telemetry(
                 break;
             case TransportReceiptCategory::DeviceExecution:
                 receipt.required_operator_mask |= FULLMAG_FDM_OPERATOR_GPU_TRANSPORT;
-                receipt.executed_device_operator_mask |= FULLMAG_FDM_OPERATOR_GPU_TRANSPORT;
-                receipt.executed_host_operator_mask &= ~FULLMAG_FDM_OPERATOR_GPU_TRANSPORT;
+                receipt.pending_device_operator_mask |= FULLMAG_FDM_OPERATOR_GPU_TRANSPORT;
                 break;
             case TransportReceiptCategory::Invalid:
                 receipt.accounting_valid = false;

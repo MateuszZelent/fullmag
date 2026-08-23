@@ -1779,7 +1779,7 @@
     "direction_classifier": "D2H",
     "reason": "copy_spin_checkpoint_to_host:cudaMemcpyAsync#1",
     "category": "transport_telemetry",
-    "accounting_hook": "append_charge_telemetry"
+    "accounting_hook": "call-chain:checkpoint_export_impl->append_charge_telemetry"
   },
   {
     "file": "backends/fdm/gpu/cuda/transport/context.cu",
@@ -1933,7 +1933,7 @@
     "direction_classifier": "H2D",
     "reason": "materialize_spin_checkpoint_from_host:cudaMemcpyAsync#1",
     "category": "transport_telemetry",
-    "accounting_hook": "append_charge_telemetry"
+    "accounting_hook": "call-chain:checkpoint_import_impl->append_charge_telemetry"
   },
   {
     "file": "backends/fdm/gpu/cuda/transport/context.cu",
@@ -1944,7 +1944,7 @@
     "direction_classifier": "D2H",
     "reason": "materialize_spin_checkpoint_from_host:cudaMemcpyAsync#2",
     "category": "transport_telemetry",
-    "accounting_hook": "append_charge_telemetry"
+    "accounting_hook": "call-chain:checkpoint_import_impl->append_charge_telemetry"
   },
   {
     "file": "backends/fdm/gpu/cuda/transport/context.cu",
@@ -2086,8 +2086,8 @@
     "call_hash": "d5c3845ddea38c79",
     "direction_classifier": "D2H",
     "reason": "test_direct_she_signs_device:cudaMemcpy#1",
-    "category": "transport_control",
-    "accounting_hook": "control_h2d_count"
+    "category": "test_observation",
+    "accounting_hook": "local-test-observation:test_direct_she_signs_device"
   },
   {
     "file": "backends/fdm/gpu/cuda/transport/spin/sparse_solver.cu",
@@ -2097,8 +2097,8 @@
     "call_hash": "2510cdff4fa3b568",
     "direction_classifier": "D2H",
     "reason": "audit_preconditioner:cudaMemcpyAsync#1",
-    "category": "preconditioner_control",
-    "accounting_hook": "DevicePreconditionerAudit"
+    "category": "test_observation",
+    "accounting_hook": "local-test-observation:audit_preconditioner"
   },
   {
     "file": "backends/fdm/gpu/cuda/transport/spin/sparse_solver.cu",
@@ -2109,7 +2109,7 @@
     "direction_classifier": "D2H",
     "reason": "prepare:cudaMemcpyAsync#1",
     "category": "preconditioner_control",
-    "accounting_hook": "DevicePreconditionerAudit"
+    "accounting_hook": "control_transfer_count"
   },
   {
     "file": "backends/fdm/gpu/cuda/transport/spin/sparse_solver.cu",
@@ -2120,6 +2120,6 @@
     "direction_classifier": "D2H",
     "reason": "solve:cudaMemcpyAsync#1",
     "category": "preconditioner_control",
-    "accounting_hook": "DevicePreconditionerAudit"
+    "accounting_hook": "control_transfer_count"
   }
 ]

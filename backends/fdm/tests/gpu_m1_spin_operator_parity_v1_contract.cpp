@@ -77,6 +77,19 @@ void require(bool condition, const std::string &message) {
     if (!condition) fail(message);
 }
 
+fullmag_fdm_execution_receipt_v1 query_execution_receipt(
+    fullmag_fdm_backend *backend,
+    const std::string &scenario)
+{
+    fullmag_fdm_execution_receipt_v1 receipt{};
+    receipt.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1;
+    receipt.struct_size = sizeof(receipt);
+    require(fullmag_fdm_backend_execution_receipt_v1(backend, &receipt) ==
+                FULLMAG_FDM_OK,
+            scenario + ": execution receipt query failed");
+    return receipt;
+}
+
 uint64_t latest_telemetry_cursor(
     fullmag_fdm_gpu_transport_context_handle_v1 context)
 {
@@ -976,6 +989,11 @@ GpuResult solve_gpu(const Scenario &scenario) {
             require(fullmag_fdm_backend_step(llg, 1.0e-18, &llg_stats) ==
                         FULLMAG_FDM_ERR_CUDA,
                     scenario.name + ": " + label + " failure was accepted");
+            const auto failed_receipt = query_execution_receipt(llg, scenario.name);
+            require((failed_receipt.executed_device_operator_mask &
+                         FULLMAG_FDM_OPERATOR_GPU_TRANSPORT) == 0,
+                    scenario.name + ": " + label +
+                        " failure published executed GPU transport");
             require(fullmag_fdm_context_unbind_gpu_transport_v1(llg) ==
                         FULLMAG_FDM_OK,
                     scenario.name + ": " + label +
@@ -1048,6 +1066,10 @@ GpuResult solve_gpu(const Scenario &scenario) {
         held_step.join();
         require(held_step_status == FULLMAG_FDM_OK,
                 scenario.name + ": held transport step did not finish after release");
+        const auto successful_receipt = query_execution_receipt(llg, scenario.name);
+        require((successful_receipt.executed_device_operator_mask &
+                     FULLMAG_FDM_OPERATOR_GPU_TRANSPORT) != 0,
+                scenario.name + ": successful transport step did not commit execution");
         require(fullmag_fdm_context_unbind_gpu_transport_v1(llg) ==
                     FULLMAG_FDM_OK,
                 scenario.name + ": held Heun owner could not release claim");
