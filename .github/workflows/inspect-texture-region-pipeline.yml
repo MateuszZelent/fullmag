@@ -16,64 +16,34 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: codex/texture-transform-region-clipping-20260823
-      - name: Print targeted implementation excerpts
+      - name: Print documentation patch anchors from payload
         shell: bash
         run: |
+          set -euo pipefail
           python - <<'PY'
+          import base64
+          import zlib
           from pathlib import Path
 
-          requests = {
-              'crates/fullmag-plan/src/fdm.rs': [
-                  'fn grid_sample_points(',
-                  'fn apply_region_texture_overrides(',
-                  'apply_region_texture_overrides(',
-                  'materialize_object_region_mask(',
-              ],
-              'crates/fullmag-plan/src/fem.rs': [
-                  'struct MagnetPlanningEntry',
-                  'fn assign_domain_initial_for_segments(',
-                  'initial_vectors_for_magnet(',
-                  'object_regions',
-              ],
-              'crates/fullmag-plan/src/mesh.rs': [
-                  'pub(crate) fn object_space_sample_points(',
-                  'pub(crate) fn initial_vectors_for_magnet(',
-                  'fn initial_vectors_for_magnet(',
-              ],
-              'crates/fullmag-plan/src/magnetization_textures_v2.rs': [
-                  'pub(crate) fn sample_v2(',
-                  'fn inverse_transform(',
-                  'fn rotate_vector(',
-                  'fn local_evaluate(',
-              ],
-              'crates/fullmag-ir/src/model.rs': [
-                  'pub struct ObjectRegionIR',
-                  'pub enum InitialMagnetizationIR',
-                  'pub struct TextureTransform3DIR',
-                  'pub struct TextureMappingIR',
-              ],
-              'apps/control-room/src/modules/inspector/panels/ObjectRegionsPanelModel.ts': [
-                  'texture',
-                  'region',
-              ],
-          }
-
-          def excerpt(lines, index, before=20, after=80):
-              start = max(index - before, 0)
-              end = min(index + after, len(lines))
-              return '\n'.join(f'{i + 1:5d}: {lines[i]}' for i in range(start, end))
-
-          for path_text, needles in requests.items():
-              path = Path(path_text)
-              print(f'\n===== FILE {path_text} =====')
-              if not path.exists():
-                  print('MISSING')
-                  continue
-              lines = path.read_text(encoding='utf-8').splitlines()
-              for needle in needles:
-                  matches = [i for i, line in enumerate(lines) if needle in line]
-                  print(f'\n--- NEEDLE {needle!r}: {matches} ---')
-                  for index in matches[:8]:
-                      print(excerpt(lines, index))
-                      print('--- END EXCERPT ---')
+          payload_dir = Path('.github/fullmag-texture-region-refactor')
+          encoded = ''.join(
+              (payload_dir / f'payload.part{index:02d}').read_text(encoding='utf-8').strip()
+              for index in range(1, 11)
+          )
+          script = zlib.decompress(base64.b64decode(encoded, validate=True)).decode('utf-8')
+          lines = script.splitlines()
+          for index, line in enumerate(lines, start=1):
+              lowered = line.lower()
+              if (
+                  'mermaid' in lowered
+                  or 'preset-textures.md' in line
+                  or 'implementation mapping' in lowered
+                  or 'discrete realization' in lowered
+                  or 'clipping is always performed' in lowered
+              ):
+                  start = max(1, index - 18)
+                  end = min(len(lines), index + 35)
+                  print(f'\n===== SCRIPT LINES {start}-{end}; MATCH {index} =====')
+                  for line_number in range(start, end + 1):
+                      print(f'{line_number:5d}: {lines[line_number - 1]}')
           PY
