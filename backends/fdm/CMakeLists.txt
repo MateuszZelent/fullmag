@@ -250,6 +250,19 @@ else()
 endif()
 add_test(NAME fdm_plan_desc_sentinel_contract COMMAND fdm_plan_desc_sentinel_contract)
 
+add_executable(fdm_device_residency_receipt_contract
+    tests/device_residency_receipt_contract.cpp)
+target_include_directories(fdm_device_residency_receipt_contract PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include)
+if(FULLMAG_ENABLE_CUDA)
+    target_link_libraries(fdm_device_residency_receipt_contract PRIVATE fullmag_fdm)
+endif()
+target_compile_definitions(fdm_device_residency_receipt_contract PRIVATE
+    FULLMAG_FDM_CONTRACT_HAS_CUDA=$<BOOL:${FULLMAG_ENABLE_CUDA}>)
+add_test(NAME fdm_device_residency_receipt_contract
+    COMMAND fdm_device_residency_receipt_contract)
+
 add_executable(periodic_exchange_fp32_contract tests/periodic_exchange_fp32_contract.cpp)
 add_test(NAME fdm_periodic_exchange_fp32_contract COMMAND periodic_exchange_fp32_contract)
 

@@ -314,6 +314,19 @@ struct Context {
     uint64_t hot_loop_control_scalar_d2h_bytes = 0;
     uint64_t hot_loop_control_scalar_host_sync_count = 0;
 
+    // Cumulative execution-receipt accounting. Setup full-vector uploads are
+    // intentionally separate from forbidden hot-loop vector movement.
+    uint64_t receipt_setup_full_vector_h2d_count = 0;
+    uint64_t receipt_setup_full_vector_h2d_bytes = 0;
+    uint64_t receipt_hot_loop_full_vector_h2d_count = 0;
+    uint64_t receipt_hot_loop_full_vector_h2d_bytes = 0;
+    uint64_t receipt_hot_loop_full_vector_d2h_count = 0;
+    uint64_t receipt_hot_loop_full_vector_d2h_bytes = 0;
+    uint64_t receipt_hot_loop_host_compute_count = 0;
+    uint64_t receipt_hot_loop_host_sync_count = 0;
+    uint64_t receipt_hot_loop_control_scalar_d2h_bytes = 0;
+    uint64_t receipt_hot_loop_control_scalar_host_sync_count = 0;
+
 
     // Step counter
     uint64_t step_count = 0;
@@ -747,6 +760,86 @@ inline void fullmag_fdm_publish_hot_loop_audit(
     stats->hot_loop_control_scalar_d2h_bytes = ctx.hot_loop_control_scalar_d2h_bytes;
     stats->hot_loop_control_scalar_host_sync_count =
         ctx.hot_loop_control_scalar_host_sync_count;
+}
+
+inline void fullmag_fdm_accumulate_execution_receipt_audit(Context &ctx) {
+    ctx.receipt_hot_loop_host_sync_count += ctx.hot_loop_host_sync_count;
+    ctx.receipt_hot_loop_control_scalar_d2h_bytes +=
+        ctx.hot_loop_control_scalar_d2h_bytes;
+    ctx.receipt_hot_loop_control_scalar_host_sync_count +=
+        ctx.hot_loop_control_scalar_host_sync_count;
+}
+
+inline void fullmag_fdm_record_hot_loop_full_vector_h2d(
+    Context &ctx,
+    uint64_t bytes)
+{
+    ctx.receipt_hot_loop_full_vector_h2d_count += 1;
+    ctx.receipt_hot_loop_full_vector_h2d_bytes += bytes;
+}
+
+inline void fullmag_fdm_record_hot_loop_full_vector_d2h(
+    Context &ctx,
+    uint64_t bytes)
+{
+    ctx.receipt_hot_loop_full_vector_d2h_count += 1;
+    ctx.receipt_hot_loop_full_vector_d2h_bytes += bytes;
+}
+
+inline void fullmag_fdm_record_hot_loop_host_compute(Context &ctx) {
+    ctx.receipt_hot_loop_host_compute_count += 1;
+}
+
+inline fullmag_fdm_execution_receipt_v1 fullmag_fdm_make_execution_receipt(
+    const Context &ctx,
+    int32_t device_ordinal)
+{
+    uint64_t required_operator_mask =
+        FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR | FULLMAG_FDM_OPERATOR_REDUCTION;
+    if (ctx.enable_exchange) required_operator_mask |= FULLMAG_FDM_OPERATOR_EXCHANGE;
+    if (ctx.enable_demag) required_operator_mask |= FULLMAG_FDM_OPERATOR_DEMAG;
+    if (ctx.has_interfacial_dmi || ctx.has_bulk_dmi) {
+        required_operator_mask |= FULLMAG_FDM_OPERATOR_DMI;
+    }
+    if (ctx.has_uniaxial_anisotropy || ctx.has_cubic_anisotropy) {
+        required_operator_mask |= FULLMAG_FDM_OPERATOR_ANISOTROPY;
+    }
+
+    fullmag_fdm_execution_receipt_v1 receipt{};
+    receipt.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1;
+    receipt.struct_size = sizeof(receipt);
+    receipt.execution_class = FULLMAG_FDM_EXECUTION_DEVICE_RESIDENT;
+    receipt.executed_backend = FULLMAG_FDM_EXECUTED_CUDA_FDM;
+    receipt.device_ordinal = device_ordinal;
+    receipt.precision = ctx.precision;
+    receipt.integrator = ctx.integrator;
+    receipt.required_operator_mask = required_operator_mask;
+    receipt.device_operator_mask = required_operator_mask;
+    receipt.host_operator_mask = 0;
+    receipt.reduction_location = FULLMAG_FDM_LOCATION_DEVICE;
+    receipt.control_location = FULLMAG_FDM_LOCATION_HOST_SCALAR;
+    receipt.fallback_count = 0;
+    receipt.setup_full_vector_h2d_count =
+        ctx.receipt_setup_full_vector_h2d_count;
+    receipt.setup_full_vector_h2d_bytes =
+        ctx.receipt_setup_full_vector_h2d_bytes;
+    receipt.hot_loop_full_vector_h2d_count =
+        ctx.receipt_hot_loop_full_vector_h2d_count;
+    receipt.hot_loop_full_vector_h2d_bytes =
+        ctx.receipt_hot_loop_full_vector_h2d_bytes;
+    receipt.hot_loop_full_vector_d2h_count =
+        ctx.receipt_hot_loop_full_vector_d2h_count;
+    receipt.hot_loop_full_vector_d2h_bytes =
+        ctx.receipt_hot_loop_full_vector_d2h_bytes;
+    receipt.hot_loop_host_compute_count =
+        ctx.receipt_hot_loop_host_compute_count;
+    receipt.hot_loop_host_sync_count =
+        ctx.receipt_hot_loop_host_sync_count;
+    receipt.hot_loop_control_scalar_d2h_bytes =
+        ctx.receipt_hot_loop_control_scalar_d2h_bytes;
+    receipt.hot_loop_control_scalar_host_sync_count =
+        ctx.receipt_hot_loop_control_scalar_host_sync_count;
+    return receipt;
 }
 
 inline void fullmag_fdm_publish_multilayer_demag_stage_counters(

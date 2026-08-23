@@ -2763,6 +2763,103 @@ pub struct ResolvedFallback {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FdmGpuTransferCounts {
+    pub setup_full_vector_h2d_count: u64,
+    pub setup_full_vector_h2d_bytes: u64,
+    pub hot_loop_full_vector_h2d_count: u64,
+    pub hot_loop_full_vector_h2d_bytes: u64,
+    pub hot_loop_full_vector_d2h_count: u64,
+    pub hot_loop_full_vector_d2h_bytes: u64,
+    pub hot_loop_host_compute_count: u64,
+    pub hot_loop_host_sync_count: u64,
+    pub hot_loop_control_scalar_d2h_bytes: u64,
+    pub hot_loop_control_scalar_host_sync_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FdmGpuOperatorResidency {
+    pub operator: String,
+    pub realization: String,
+    pub location: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FdmGpuExecutionReceipt {
+    pub requested: String,
+    pub resolved: String,
+    pub executed: String,
+    pub device: String,
+    pub precision: String,
+    pub operator_residency: Vec<FdmGpuOperatorResidency>,
+    pub fallback_count: u64,
+    pub transfer_counts: FdmGpuTransferCounts,
+    pub validation_state: String,
+}
+
+impl FdmGpuExecutionReceipt {
+    pub fn strict_unvalidated(precision: &str) -> Self {
+        Self {
+            requested: "device_resident".to_string(),
+            resolved: "unavailable".to_string(),
+            executed: "none".to_string(),
+            device: "unavailable".to_string(),
+            precision: precision.to_string(),
+            operator_residency: Vec::new(),
+            fallback_count: 0,
+            transfer_counts: FdmGpuTransferCounts::default(),
+            validation_state: "unvalidated".to_string(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod fdm_gpu_execution_receipt_contract_tests {
+    use super::*;
+
+    #[test]
+    fn execution_provenance_serializes_explicit_fdm_gpu_receipt() {
+        let mut provenance = ExecutionProvenance::default();
+        provenance.fdm_gpu_execution_receipt = Some(FdmGpuExecutionReceipt {
+            requested: "device_resident".into(),
+            resolved: "device_resident".into(),
+            executed: "cuda_fdm".into(),
+            device: "cuda:0".into(),
+            precision: "double".into(),
+            operator_residency: vec![FdmGpuOperatorResidency {
+                operator: "llg_integrator".into(),
+                realization: "cuda_heun_fp64".into(),
+                location: "device".into(),
+            }],
+            fallback_count: 0,
+            transfer_counts: FdmGpuTransferCounts {
+                setup_full_vector_h2d_count: 1,
+                setup_full_vector_h2d_bytes: 24,
+                hot_loop_control_scalar_d2h_bytes: 8,
+                hot_loop_control_scalar_host_sync_count: 1,
+                ..Default::default()
+            },
+            validation_state: "unvalidated".into(),
+        });
+
+        let value = serde_json::to_value(provenance).expect("serialize provenance");
+        let receipt = &value["fdm_gpu_execution_receipt"];
+        assert_eq!(receipt["requested"], "device_resident");
+        assert_eq!(receipt["resolved"], "device_resident");
+        assert_eq!(receipt["executed"], "cuda_fdm");
+        assert_eq!(receipt["fallback_count"], 0);
+        assert_eq!(
+            receipt["transfer_counts"]["setup_full_vector_h2d_bytes"],
+            24
+        );
+        assert_eq!(
+            receipt["transfer_counts"]["hot_loop_full_vector_d2h_bytes"],
+            0
+        );
+        assert_eq!(receipt["validation_state"], "unvalidated");
+    }
+}
+
 /// FEM demag solver provenance.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct FemPoissonDemagProvenance {
@@ -2946,6 +3043,10 @@ pub struct ExecutionProvenance {
     /// Measured native CUDA M1 transport residency and provenance counters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fdm_gpu_transport_telemetry: Option<FdmGpuTransportTelemetry>,
+    /// Native CUDA Context receipt proving requested, resolved, and executed
+    /// FDM LLG residency together with setup and hot-loop transfer counters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fdm_gpu_execution_receipt: Option<FdmGpuExecutionReceipt>,
     /// Legacy compatibility observations retained for historical artifacts.
     /// Physics-graph realization must never infer an executed module from a
     /// kind-only observation.

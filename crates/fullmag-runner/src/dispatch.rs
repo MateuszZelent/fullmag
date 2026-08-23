@@ -1979,6 +1979,54 @@ fn resolve_registry_runtime_for_backend(
     requested_device: &str,
     precision: &str,
 ) -> Option<RegistryRuntimeMatch> {
+    if backend == "fdm" {
+        let gpu = registry.resolve(backend, "gpu", precision);
+        let route = crate::fdm::gpu::cuda::route::resolve_fdm_gpu_availability_route(
+            if requested_device == "gpu" {
+                "cuda"
+            } else {
+                requested_device
+            },
+            gpu.is_some(),
+        )
+        .ok()?;
+        return match route {
+            crate::fdm::gpu::cuda::route::FdmGpuAvailabilityRoute::CpuRequested => registry
+                .resolve(backend, "cpu", precision)
+                .map(|resolved| RegistryRuntimeMatch {
+                    runtime_family: resolved.runtime_family,
+                    worker: resolved.worker,
+                    device: "cpu".to_string(),
+                    fallback: None,
+                }),
+            crate::fdm::gpu::cuda::route::FdmGpuAvailabilityRoute::Cuda => {
+                gpu.map(|resolved| RegistryRuntimeMatch {
+                    runtime_family: resolved.runtime_family,
+                    worker: resolved.worker,
+                    device: "gpu".to_string(),
+                    fallback: None,
+                })
+            }
+            crate::fdm::gpu::cuda::route::FdmGpuAvailabilityRoute::CpuAutoFallback {
+                reason,
+            } => registry.resolve(backend, "cpu", precision).map(|resolved| {
+                let (original_engine, fallback_engine) =
+                    registry_gpu_to_cpu_fallback_engine_ids(backend);
+                RegistryRuntimeMatch {
+                    runtime_family: resolved.runtime_family,
+                    worker: resolved.worker,
+                    device: "cpu".to_string(),
+                    fallback: Some(runtime_fallback(
+                        original_engine,
+                        fallback_engine,
+                        reason,
+                        "preferred FDM GPU runtime is unavailable; using CPU runtime"
+                            .to_string(),
+                    )),
+                }
+            }),
+        };
+    }
     if requested_device != "auto" {
         let resolved = registry.resolve(backend, requested_device, precision)?;
         return Some(RegistryRuntimeMatch {
@@ -2073,6 +2121,26 @@ pub(crate) fn execute_fdm<'a>(
     live: Option<LiveStepConsumer<'a>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    execute_fdm_in_mode(
+        engine,
+        fullmag_ir::ExecutionMode::Strict,
+        plan,
+        until_seconds,
+        outputs,
+        live,
+        artifact_writer,
+    )
+}
+
+pub(crate) fn execute_fdm_in_mode<'a>(
+    engine: FdmEngine,
+    execution_mode: fullmag_ir::ExecutionMode,
+    plan: &FdmPlanIR,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    live: Option<LiveStepConsumer<'a>>,
+    artifact_writer: Option<ArtifactPipelineSender>,
+) -> Result<ExecutedRun, RunError> {
     use crate::fdm::gpu::cuda::route::{public_gpu_transport_route, PublicGpuTransportRoute};
 
     let transport_route = public_gpu_transport_route(plan, matches!(engine, FdmEngine::CudaFdm));
@@ -2136,7 +2204,14 @@ pub(crate) fn execute_fdm<'a>(
             live,
             artifact_writer,
         ),
-        FdmEngine::CudaFdm => execute_cuda_fdm(plan, until_seconds, outputs, live, artifact_writer),
+        FdmEngine::CudaFdm => execute_cuda_fdm(
+            execution_mode,
+            plan,
+            until_seconds,
+            outputs,
+            live,
+            artifact_writer,
+        ),
     }?;
     if let Some(artifact) = crate::regional_field_drive_artifacts::regional_field_drive_artifact(
         &plan.field_drives,
@@ -5010,6 +5085,7 @@ fn eigen_path_created_at_label() -> String {
 
 #[cfg(feature = "cuda")]
 fn execute_cuda_fdm(
+    execution_mode: fullmag_ir::ExecutionMode,
     plan: &FdmPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
@@ -5066,6 +5142,7 @@ fn execute_cuda_fdm(
         backend.bind_gpu_transport(&binding)?;
     }
     let device_info = backend.device_info()?;
+    let initial_execution_receipt = backend.execution_receipt(execution_mode)?;
     let cell_count = (plan.grid.cells[0] as usize)
         * (plan.grid.cells[1] as usize)
         * (plan.grid.cells[2] as usize);
@@ -5104,6 +5181,7 @@ fn execute_cuda_fdm(
         transport_modules: crate::fdm::cpu::spin_transport::fdm_gpu_transport_execution_provenance(
             plan,
         ),
+        fdm_gpu_execution_receipt: Some(initial_execution_receipt),
         timestep_policy,
         executed_physics_kinds: if direct_minimizer_control(plan.relaxation.as_ref()).is_none()
             && (plan.zhang_li_formula_version.is_some()
@@ -5407,6 +5485,14 @@ fn execute_cuda_fdm(
     let completion_time_s = latest_stats.as_ref().map(|stats| stats.time);
     let completion_max_torque_apm = latest_stats.as_ref().map(|stats| stats.max_torque_Apm);
     let final_magnetization = backend.copy_m(cell_count)?;
+    let final_execution_receipt = backend.execution_receipt(execution_mode)?;
+    if execution_mode == fullmag_ir::ExecutionMode::Strict {
+        crate::fdm::gpu::cuda::native::residency::validate_strict_final_receipt(
+            &final_execution_receipt,
+        )?;
+    }
+    provenance.fdm_gpu_execution_receipt = Some(final_execution_receipt);
+    artifacts.update_provenance(provenance.clone());
     record_gpu_transport_final_outputs(
         gpu_transport.as_ref(),
         gpu_transport_module_id,
@@ -6204,6 +6290,7 @@ fn execute_native_fem(
 
 #[cfg(not(feature = "cuda"))]
 fn execute_cuda_fdm(
+    _execution_mode: fullmag_ir::ExecutionMode,
     _plan: &FdmPlanIR,
     _until_seconds: f64,
     _outputs: &[OutputIR],

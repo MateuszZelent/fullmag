@@ -5356,6 +5356,7 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
         charge_transport: None,
         transport_modules: Vec::new(),
         fdm_gpu_transport_telemetry: None,
+        fdm_gpu_execution_receipt: None,
         executed_physics_kinds: if timestep_policy.is_some()
             && (plan.zhang_li_formula_version.is_some()
                 || plan.slonczewski_formula_version.is_some()
@@ -5462,6 +5463,7 @@ fn cuda_execution_provenance(
         charge_transport: None,
         transport_modules: Vec::new(),
         fdm_gpu_transport_telemetry: None,
+        fdm_gpu_execution_receipt: None,
         executed_physics_kinds: if timestep_policy.is_some()
             && (plan.zhang_li_formula_version.is_some()
                 || plan.slonczewski_formula_version.is_some()

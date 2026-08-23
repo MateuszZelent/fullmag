@@ -930,6 +930,10 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
+    ctx->receipt_setup_full_vector_h2d_count += 1;
+    ctx->receipt_setup_full_vector_h2d_bytes +=
+        3u * ctx->cell_count *
+        (ctx->precision == FULLMAG_FDM_PRECISION_DOUBLE ? sizeof(double) : sizeof(float));
 
     if (!context_refresh_observables(*ctx)) {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
@@ -1157,6 +1161,7 @@ int fullmag_fdm_backend_step(
             return FULLMAG_FDM_ERR_CUDA;
         }
         fullmag_fdm_publish_hot_loop_audit(*ctx, out_stats);
+        fullmag_fdm_accumulate_execution_receipt_audit(*ctx);
         fullmag_fdm_publish_multilayer_demag_stage_counters(*ctx, out_stats);
         return FULLMAG_FDM_OK;
     }
@@ -1231,6 +1236,7 @@ int fullmag_fdm_backend_step(
         }
         out_stats->dt_seconds = 0.0;
         fullmag_fdm_publish_hot_loop_audit(*ctx, out_stats);
+        fullmag_fdm_accumulate_execution_receipt_audit(*ctx);
         return FULLMAG_FDM_ERR_INTERRUPTED;
     }
 
@@ -1259,6 +1265,7 @@ int fullmag_fdm_backend_step(
     context_invalidate_gpu_transport_pre_step_m(*ctx);
 
     fullmag_fdm_publish_hot_loop_audit(*ctx, out_stats);
+    fullmag_fdm_accumulate_execution_receipt_audit(*ctx);
     return FULLMAG_FDM_OK;
 #else
     (void)handle; (void)dt_seconds; (void)out_stats;
@@ -1973,6 +1980,64 @@ int fullmag_fdm_backend_get_device_info(
     return FULLMAG_FDM_OK;
 #else
     (void)handle; (void)out_info;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_execution_receipt_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_execution_receipt_v1 *out_receipt)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !out_receipt) return FULLMAG_FDM_ERR_INVALID;
+    if (out_receipt->abi_version != FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1 ||
+        out_receipt->struct_size != sizeof(fullmag_fdm_execution_receipt_v1))
+    {
+        return FULLMAG_FDM_ERR_ABI;
+    }
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    int device_ordinal = -1;
+    if (cudaGetDevice(&device_ordinal) != cudaSuccess) {
+        return FULLMAG_FDM_ERR_CUDA;
+    }
+
+    *out_receipt = fullmag_fdm_make_execution_receipt(*ctx, device_ordinal);
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle;
+    (void)out_receipt;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+extern "C" int fullmag_fdm_test_record_residency_violation_v1(
+    fullmag_fdm_backend *handle,
+    uint32_t violation_kind,
+    uint64_t bytes)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    switch (violation_kind) {
+        case 1:
+            if (bytes == 0) return FULLMAG_FDM_ERR_INVALID;
+            fullmag_fdm_record_hot_loop_full_vector_h2d(*ctx, bytes);
+            return FULLMAG_FDM_OK;
+        case 2:
+            if (bytes == 0) return FULLMAG_FDM_ERR_INVALID;
+            fullmag_fdm_record_hot_loop_full_vector_d2h(*ctx, bytes);
+            return FULLMAG_FDM_OK;
+        case 3:
+            if (bytes != 0) return FULLMAG_FDM_ERR_INVALID;
+            fullmag_fdm_record_hot_loop_host_compute(*ctx);
+            return FULLMAG_FDM_OK;
+        default:
+            return FULLMAG_FDM_ERR_INVALID;
+    }
+#else
+    (void)handle;
+    (void)violation_kind;
+    (void)bytes;
     return FULLMAG_FDM_ERR_CUDA;
 #endif
 }

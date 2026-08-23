@@ -2660,8 +2660,9 @@ fn execute_settle_step_at_field(
                 interrupt_requested,
                 on_step: &mut live_on_step,
             };
-            let mut executed = dispatch::execute_fdm(
+            let mut executed = dispatch::execute_fdm_in_mode(
                 resolution.engine,
+                problem.validation_profile.execution_mode,
                 &mutated_fdm,
                 until_seconds,
                 &[],

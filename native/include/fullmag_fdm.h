@@ -563,6 +563,65 @@ typedef struct {
     int  runtime_version;
 } fullmag_fdm_device_info;
 
+#define FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1 1u
+
+typedef enum {
+    FULLMAG_FDM_EXECUTION_UNKNOWN = 0,
+    FULLMAG_FDM_EXECUTION_DEVICE_RESIDENT = 1,
+    FULLMAG_FDM_EXECUTION_GPU_OPERATOR_HOST_CONTROL = 2,
+    FULLMAG_FDM_EXECUTION_HYBRID = 3,
+    FULLMAG_FDM_EXECUTION_CPU = 4,
+} fullmag_fdm_execution_class_v1;
+
+typedef enum {
+    FULLMAG_FDM_EXECUTED_UNKNOWN = 0,
+    FULLMAG_FDM_EXECUTED_CUDA_FDM = 1,
+} fullmag_fdm_executed_backend_v1;
+
+typedef enum {
+    FULLMAG_FDM_LOCATION_UNKNOWN = 0,
+    FULLMAG_FDM_LOCATION_DEVICE = 1,
+    FULLMAG_FDM_LOCATION_HOST = 2,
+    FULLMAG_FDM_LOCATION_MIXED = 3,
+    FULLMAG_FDM_LOCATION_HOST_SCALAR = 4,
+} fullmag_fdm_operator_location_v1;
+
+enum {
+    FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR = 1ull << 0,
+    FULLMAG_FDM_OPERATOR_EXCHANGE = 1ull << 1,
+    FULLMAG_FDM_OPERATOR_DEMAG = 1ull << 2,
+    FULLMAG_FDM_OPERATOR_DMI = 1ull << 3,
+    FULLMAG_FDM_OPERATOR_ANISOTROPY = 1ull << 4,
+    FULLMAG_FDM_OPERATOR_REDUCTION = 1ull << 5,
+};
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    fullmag_fdm_execution_class_v1 execution_class;
+    fullmag_fdm_executed_backend_v1 executed_backend;
+    int32_t device_ordinal;
+    fullmag_fdm_precision precision;
+    fullmag_fdm_integrator integrator;
+    uint32_t reserved0;
+    uint64_t required_operator_mask;
+    uint64_t device_operator_mask;
+    uint64_t host_operator_mask;
+    fullmag_fdm_operator_location_v1 reduction_location;
+    fullmag_fdm_operator_location_v1 control_location;
+    uint64_t fallback_count;
+    uint64_t setup_full_vector_h2d_count;
+    uint64_t setup_full_vector_h2d_bytes;
+    uint64_t hot_loop_full_vector_h2d_count;
+    uint64_t hot_loop_full_vector_h2d_bytes;
+    uint64_t hot_loop_full_vector_d2h_count;
+    uint64_t hot_loop_full_vector_d2h_bytes;
+    uint64_t hot_loop_host_compute_count;
+    uint64_t hot_loop_host_sync_count;
+    uint64_t hot_loop_control_scalar_d2h_bytes;
+    uint64_t hot_loop_control_scalar_host_sync_count;
+} fullmag_fdm_execution_receipt_v1;
+
 typedef struct {
     uint64_t cell_count;
     uint32_t component_count; /* 3 for vectors, 1 for scalar fields */
@@ -986,6 +1045,11 @@ int fullmag_fdm_backend_snapshot_stats(
 int fullmag_fdm_backend_get_device_info(
     fullmag_fdm_backend   *handle,
     fullmag_fdm_device_info *out_info);
+
+/** Query the execution and residency receipt owned by the created Context. */
+int fullmag_fdm_backend_execution_receipt_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_execution_receipt_v1 *out_receipt);
 
 /**
  * Return the last error message, or NULL if no error.

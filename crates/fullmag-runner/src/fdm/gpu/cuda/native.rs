@@ -457,6 +457,13 @@ pub(crate) struct NativeFdmBackend {
     gpu_transport_bound: bool,
 }
 
+#[cfg(any(feature = "cuda", test))]
+pub(crate) mod residency;
+#[cfg(feature = "cuda")]
+mod device;
+#[cfg(feature = "cuda")]
+pub(crate) use device::DeviceInfo;
+
 #[cfg(feature = "cuda")]
 #[derive(Debug, Clone)]
 pub(crate) struct NativeLlgCheckpointV1 {
@@ -2470,37 +2477,6 @@ impl NativeFdmBackend {
         Ok(step_stats)
     }
 
-    /// Query device info.
-    pub fn device_info(&self) -> Result<DeviceInfo, RunError> {
-        let mut info = ffi::fullmag_fdm_device_info {
-            name: [0; 128],
-            compute_capability_major: 0,
-            compute_capability_minor: 0,
-            driver_version: 0,
-            runtime_version: 0,
-        };
-
-        let rc =
-            unsafe { ffi::fullmag_fdm_backend_get_device_info(self.handle as *mut _, &mut info) };
-        if rc != ffi::FULLMAG_FDM_OK {
-            return Err(self.last_error_or("get_device_info failed"));
-        }
-
-        let name = unsafe { CStr::from_ptr(info.name.as_ptr()) }
-            .to_string_lossy()
-            .to_string();
-
-        Ok(DeviceInfo {
-            name,
-            compute_capability: format!(
-                "{}.{}",
-                info.compute_capability_major, info.compute_capability_minor
-            ),
-            driver_version: info.driver_version,
-            runtime_version: info.runtime_version,
-        })
-    }
-
     fn last_error_or(&self, fallback: &str) -> RunError {
         let err = unsafe { ffi::fullmag_fdm_backend_last_error(self.handle as *mut _) };
         let msg = if err.is_null() {
@@ -2717,16 +2693,6 @@ impl Drop for NativeFdmPreviewSnapshot {
             self.handle = std::ptr::null_mut();
         }
     }
-}
-
-/// Parsed device info.
-#[cfg(feature = "cuda")]
-#[derive(Debug, Clone)]
-pub(crate) struct DeviceInfo {
-    pub name: String,
-    pub compute_capability: String,
-    pub driver_version: i32,
-    pub runtime_version: i32,
 }
 
 #[cfg(feature = "cuda")]

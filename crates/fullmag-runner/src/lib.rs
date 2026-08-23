@@ -476,9 +476,10 @@ pub use timestep_qualification::{
 pub use types::{
     fem_eigen_mesh_generation_id, fem_frequency_response_mesh_generation_id,
     fem_mesh_topology_fingerprint, fem_plan_mesh_generation_id, live_preview_values_sha256,
-    AuxiliaryArtifact, ExecutionProvenance, FemCrossoverDecision, FemEigenRunResult,
-    FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload, InitialTimestepReason,
-    LegacyDtPolicy, LiveFieldMaterializationState, LiveFieldMaterializationStatus,
+    AuxiliaryArtifact, ExecutionProvenance, FdmGpuExecutionReceipt, FdmGpuOperatorResidency,
+    FdmGpuTransferCounts, FemCrossoverDecision, FemEigenRunResult, FemMeshObjectSegment,
+    FemMeshPartPayload, FemMeshPayload, InitialTimestepReason, LegacyDtPolicy,
+    LiveFieldMaterializationState, LiveFieldMaterializationStatus,
     LivePreviewField, LivePreviewRequest, LiveVectorFieldSnapshot, LlgTimestepCapabilityId,
     LlgTimestepQualificationId, RequestedTimestepPolicy, ResolvedFallback, ResolvedTimestepPolicy,
     RunError, RunResult, RunStatus, RuntimeEngineInfo, SolverAttemptRecord, StageFemMeshAsset,
@@ -2265,8 +2266,9 @@ pub fn run_planned_problem(
     let executed_result = with_cpu_parallelism(cpu_threads, || match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => {
             let resolution = dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?;
-            let mut executed = dispatch::execute_fdm(
+            let mut executed = dispatch::execute_fdm_in_mode(
                 resolution.engine,
+                plan.common.execution_mode,
                 fdm,
                 until_seconds,
                 &runtime_outputs,
@@ -2595,8 +2597,9 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
         BackendPlanIR::Fdm(fdm) => {
             let grid = fdm.grid.cells;
             let resolution = dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?;
-            let mut executed = dispatch::execute_fdm(
+            let mut executed = dispatch::execute_fdm_in_mode(
                 resolution.engine,
+                plan.common.execution_mode,
                 fdm,
                 until_seconds,
                 &runtime_outputs,
@@ -3015,8 +3018,9 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                 }
                 on_step(update)
             };
-            let mut executed = dispatch::execute_fdm(
+            let mut executed = dispatch::execute_fdm_in_mode(
                 resolution.engine,
+                plan.common.execution_mode,
                 fdm,
                 until_seconds,
                 &runtime_outputs,

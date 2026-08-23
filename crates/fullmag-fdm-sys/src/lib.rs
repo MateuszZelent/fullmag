@@ -535,6 +535,61 @@ pub struct fullmag_fdm_backend {
     _private: [u8; 0],
 }
 
+pub const FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1: u32 = 1;
+pub type fullmag_fdm_execution_class_v1 = u32;
+pub const FULLMAG_FDM_EXECUTION_UNKNOWN: fullmag_fdm_execution_class_v1 = 0;
+pub const FULLMAG_FDM_EXECUTION_DEVICE_RESIDENT: fullmag_fdm_execution_class_v1 = 1;
+pub const FULLMAG_FDM_EXECUTION_GPU_OPERATOR_HOST_CONTROL: fullmag_fdm_execution_class_v1 = 2;
+pub const FULLMAG_FDM_EXECUTION_HYBRID: fullmag_fdm_execution_class_v1 = 3;
+pub const FULLMAG_FDM_EXECUTION_CPU: fullmag_fdm_execution_class_v1 = 4;
+
+pub type fullmag_fdm_executed_backend_v1 = u32;
+pub const FULLMAG_FDM_EXECUTED_UNKNOWN: fullmag_fdm_executed_backend_v1 = 0;
+pub const FULLMAG_FDM_EXECUTED_CUDA_FDM: fullmag_fdm_executed_backend_v1 = 1;
+
+pub type fullmag_fdm_operator_location_v1 = u32;
+pub const FULLMAG_FDM_LOCATION_UNKNOWN: fullmag_fdm_operator_location_v1 = 0;
+pub const FULLMAG_FDM_LOCATION_DEVICE: fullmag_fdm_operator_location_v1 = 1;
+pub const FULLMAG_FDM_LOCATION_HOST: fullmag_fdm_operator_location_v1 = 2;
+pub const FULLMAG_FDM_LOCATION_MIXED: fullmag_fdm_operator_location_v1 = 3;
+pub const FULLMAG_FDM_LOCATION_HOST_SCALAR: fullmag_fdm_operator_location_v1 = 4;
+
+pub const FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR: u64 = 1 << 0;
+pub const FULLMAG_FDM_OPERATOR_EXCHANGE: u64 = 1 << 1;
+pub const FULLMAG_FDM_OPERATOR_DEMAG: u64 = 1 << 2;
+pub const FULLMAG_FDM_OPERATOR_DMI: u64 = 1 << 3;
+pub const FULLMAG_FDM_OPERATOR_ANISOTROPY: u64 = 1 << 4;
+pub const FULLMAG_FDM_OPERATOR_REDUCTION: u64 = 1 << 5;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_execution_receipt_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub execution_class: fullmag_fdm_execution_class_v1,
+    pub executed_backend: fullmag_fdm_executed_backend_v1,
+    pub device_ordinal: i32,
+    pub precision: fullmag_fdm_precision,
+    pub integrator: fullmag_fdm_integrator,
+    pub reserved0: u32,
+    pub required_operator_mask: u64,
+    pub device_operator_mask: u64,
+    pub host_operator_mask: u64,
+    pub reduction_location: fullmag_fdm_operator_location_v1,
+    pub control_location: fullmag_fdm_operator_location_v1,
+    pub fallback_count: u64,
+    pub setup_full_vector_h2d_count: u64,
+    pub setup_full_vector_h2d_bytes: u64,
+    pub hot_loop_full_vector_h2d_count: u64,
+    pub hot_loop_full_vector_h2d_bytes: u64,
+    pub hot_loop_full_vector_d2h_count: u64,
+    pub hot_loop_full_vector_d2h_bytes: u64,
+    pub hot_loop_host_compute_count: u64,
+    pub hot_loop_host_sync_count: u64,
+    pub hot_loop_control_scalar_d2h_bytes: u64,
+    pub hot_loop_control_scalar_host_sync_count: u64,
+}
+
 #[repr(C)]
 pub struct fullmag_fdm_plan_ingestion_v2 {
     _private: [u8; 0],
@@ -1333,6 +1388,11 @@ extern "C" {
     pub fn fullmag_fdm_backend_get_device_info(
         handle: *mut fullmag_fdm_backend,
         out_info: *mut fullmag_fdm_device_info,
+    ) -> i32;
+
+    pub fn fullmag_fdm_backend_execution_receipt_v1(
+        handle: *mut fullmag_fdm_backend,
+        out_receipt: *mut fullmag_fdm_execution_receipt_v1,
     ) -> i32;
 
     pub fn fullmag_fdm_backend_last_error(handle: *mut fullmag_fdm_backend) -> *const c_char;
