@@ -8,6 +8,8 @@ import {
   MODEL_SCENE_PATH,
   MODEL_STUDY_PATH,
 } from "@/kernel/api/apiPaths";
+import type { ObjectInteractionKind } from "@/kernel/api/apiTypes";
+import { acknowledgedAuthoringSceneRevision } from "@/kernel/authoring/authoringMutationInvalidation";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   resolveObjectInteractionResourceKey,
@@ -124,6 +126,37 @@ function errorMessage(error: unknown): string {
 }
 
 type PhysicsInteractionSpec = InteractionSpec;
+
+function invalidateInteractionDependents(
+  resources: { invalidate(resourceKey: string, revision: number): void },
+  revision: number,
+): void {
+  resources.invalidate(MODEL_SCENE_PATH, revision);
+  resources.invalidate(MODEL_READINESS_PATH, revision);
+  resources.invalidate(MODEL_STUDY_PATH, revision);
+  resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
+}
+
+export async function commitObjectInteractionMutation({
+  interactionKind,
+  objectId,
+  patch,
+  resources,
+}: {
+  interactionKind: ObjectInteractionKind;
+  objectId: string;
+  patch: () => Promise<{ revision?: unknown; scene_revision?: unknown }>;
+  resources: { invalidate(resourceKey: string, revision: number): void };
+}): Promise<number> {
+  const response = await patch();
+  const revision = acknowledgedAuthoringSceneRevision(response);
+  resources.invalidate(
+    resolveObjectInteractionResourceKey(objectId, interactionKind),
+    revision,
+  );
+  invalidateInteractionDependents(resources, revision);
+  return revision;
+}
 
 export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
   const objectId = selection.objectId;
@@ -310,28 +343,27 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     dispatch({ type: "setPending", pending: true });
     try {
       if (result.storage === "object_interaction") {
-        await api.model.patchObjectInteraction(
-          objectId ?? "",
-          objectInteractionKind,
-          result.patch,
-        );
+        await commitObjectInteractionMutation({
+          interactionKind: objectInteractionKind,
+          objectId: objectId ?? "",
+          patch: () =>
+            api.model.patchObjectInteraction(
+              objectId ?? "",
+              objectInteractionKind,
+              result.patch,
+            ),
+          resources,
+        });
       } else {
-        await api.model.commitTransaction({
+        const response = await api.model.commitTransaction({
           kind: "merge_patch",
           merge_patch: result.patch,
         });
-      }
-      const revision = Date.now();
-      if (result.storage === "object_interaction" && objectId) {
-        resources.invalidate(
-          resolveObjectInteractionResourceKey(objectId, objectInteractionKind),
-          revision,
+        invalidateInteractionDependents(
+          resources,
+          acknowledgedAuthoringSceneRevision(response),
         );
       }
-      resources.invalidate(MODEL_SCENE_PATH, revision);
-      resources.invalidate(MODEL_READINESS_PATH, revision);
-      resources.invalidate(MODEL_STUDY_PATH, revision);
-      resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
       dispatch({
         type: "setFeedback",
         feedback: {
