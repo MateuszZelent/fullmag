@@ -30,6 +30,7 @@ import {
   type DecodedFieldVector,
 } from "@/kernel/api/codecs";
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
+import { primitiveDraftOverlayStore } from "@/kernel/authoring/geometryLifecycleCommands";
 import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
 import {
   isAnalysisFieldQuantityId,
@@ -268,6 +269,7 @@ import {
   resolvePrimitiveSelectionBounds,
   type Viewport3DPrimitiveObject,
 } from "../viewport3dPrimitiveModel";
+import { primitiveDraftOverlayObject } from "../layers/PrimitiveObjectLayerModel";
 import {
   buildMeshQualityVertexColors,
   topologySupportsTet4FmmqQuality,
@@ -2621,6 +2623,11 @@ export function useViewport3DSceneModel({
   resourceCounts: Viewport3DResourceCounts;
   selection: Selection;
 }) {
+  const primitiveDraft = useSyncExternalStore(
+    primitiveDraftOverlayStore.subscribe,
+    primitiveDraftOverlayStore.getSnapshot,
+    primitiveDraftOverlayStore.getServerSnapshot,
+  );
   const { analysisFieldOverlay } = useKernel();
   const analysisOverlay = useRenderableAnalysisFieldOverlay(analysisFieldOverlay);
   useEffect(() => {
@@ -2950,14 +2957,18 @@ export function useViewport3DSceneModel({
       topologyIndexState,
     ],
   );
-  const primitiveModel = useMemo(
-    () =>
-      buildViewport3DPrimitiveRenderModel(
-        scene.data,
-        sharedDomainManifest.data,
-      ),
-    [scene.data, sharedDomainManifest.data],
-  );
+  const primitiveModel = useMemo(() => {
+    const committed = buildViewport3DPrimitiveRenderModel(
+      scene.data,
+      sharedDomainManifest.data,
+    );
+    return {
+      ...committed,
+      draftOverlay: primitiveDraft
+        ? primitiveDraftOverlayObject(primitiveDraft)
+        : null,
+    };
+  }, [primitiveDraft, scene.data, sharedDomainManifest.data]);
   const objectTransformsById = useMemo(() => {
     const sceneRecord = asJsonRecord(scene.data);
     const transforms = new Map<string, unknown>();

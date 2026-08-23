@@ -34,7 +34,7 @@ describe("authoring mutation readiness invalidation", () => {
     expect(source).toContain("acknowledgedAuthoringSceneRevision");
   });
 
-  it.each(["material", "magnetization"] as const)(
+  it.each(["geometry", "material", "magnetization"] as const)(
     "invalidates readiness exactly once after a %s ACK without realtime",
     (kind) => {
       const invalidate = vi.fn();

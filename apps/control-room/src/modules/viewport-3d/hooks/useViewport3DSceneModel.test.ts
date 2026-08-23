@@ -75,6 +75,7 @@ import {
   resolveViewport3DResolvedPartFieldBuffers,
   sameViewport3DQuantityId,
 } from "./useViewport3DSceneModel";
+
 import {
   resolveHysteresisStepViewportTarget,
 } from "../model/viewport3DTargets";
@@ -701,6 +702,13 @@ function fieldVectorFixture(
 }
 
 describe("useViewport3DSceneModel", () => {
+  it("subscribes to the local primitive draft overlay without fetching mesh data", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+
+    expect(source).toContain("primitiveDraftOverlayStore.subscribe");
+    expect(source).toContain("primitiveDraftOverlayObject");
+    expect(source).not.toContain("api.model.primitiveDraft");
+  });
   it("propagates FEM Airbox per-carrier field states into scene and debug models", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 

@@ -1,21 +1,18 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import {
-  MODEL_GEOMETRY_DIAGNOSTICS_PATH,
-  MODEL_GEOMETRY_VALIDATION_PATH,
-  MODEL_READINESS_PATH,
-  MODEL_SCENE_PATH,
-} from "@/kernel/api/apiPaths";
 import type { SceneResource } from "@/kernel/api/apiTypes";
+import {
+  acknowledgedAuthoringSceneRevision,
+  invalidateAuthoringMutationDependents,
+} from "@/kernel/authoring/authoringMutationInvalidation";
 import {
   createObjectTransaction,
   commitObjectTransformTransaction,
   patchObjectGeometryTransaction,
+  primitiveDraftOverlayStore,
 } from "@/kernel/authoring/geometryLifecycleCommands";
 import { useKernel } from "@/kernel/KernelContext";
 import {
-  MESH_BUILD_CURRENT_RESOURCE_KEY,
-  MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY,
   publishCommittedSceneResource,
   useGeometryValidationResource,
   useSceneResource,
@@ -34,6 +31,9 @@ import {
   createDraftObjectId,
   resolveGeometryObjectDraft,
   resolveGeometryObjectPanelModel,
+  resolvePrimitiveDraft,
+  isPrimitiveDraftRevisionConflict,
+  rebaseGeometryObjectDraft,
   summarizeGeometryValidationMessages,
   type GeometryObjectDraft,
 } from "./geometryObjectPanelModel";
@@ -88,14 +88,8 @@ function invalidateAuthoringResources(
 ): void {
   if (committedScene) {
     publishCommittedSceneResource(resources, committedScene, revision);
-  } else {
-    resources.invalidate(MODEL_SCENE_PATH, revision);
   }
-  resources.invalidate(MODEL_GEOMETRY_VALIDATION_PATH, revision);
-  resources.invalidate(MODEL_READINESS_PATH, revision);
-  resources.invalidate(MODEL_GEOMETRY_DIAGNOSTICS_PATH, revision);
-  resources.invalidate(MESH_BUILD_CURRENT_RESOURCE_KEY, revision);
-  resources.invalidate(MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY, revision);
+  invalidateAuthoringMutationDependents(resources, "geometry", revision);
 }
 
 export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
@@ -108,7 +102,7 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     () => resolveGeometryObjectDraft(selection, scene.data),
     [scene.data, selection],
   );
-  const draftKey = `${baseDraft.mode}:${baseDraft.objectId}:${baseDraft.baseRevision}`;
+  const draftKey = `${baseDraft.mode}:${baseDraft.objectId}`;
   const [draftState, setDraftState] = useState<DraftState>({
     draft: baseDraft,
     key: draftKey,
@@ -118,6 +112,9 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     key: draftKey,
   });
   const [pending, setPending] = useState(false);
+  const [revisionConflictPhase, setRevisionConflictPhase] = useState<
+    "conflict" | "rebased" | "refetched" | null
+  >(null);
   const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
   const feedback =
     feedbackState.key === draftKey ? feedbackState.feedback : null;
@@ -125,6 +122,16 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     validation.data,
     draft.objectId,
   );
+  const primitiveDraft = useMemo(() => resolvePrimitiveDraft(draft), [draft]);
+
+  useEffect(() => {
+    if (draft.mode === "draft-new") {
+      primitiveDraftOverlayStore.publish(primitiveDraft);
+    } else {
+      primitiveDraftOverlayStore.clear();
+    }
+  }, [draft.mode, primitiveDraft]);
+  useEffect(() => () => primitiveDraftOverlayStore.clear(), []);
 
   function updateDraft(updater: (current: GeometryObjectDraft) => GeometryObjectDraft): void {
     setDraftState((current) => ({
@@ -169,9 +176,11 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     }
 
     setPending(true);
+    setRevisionConflictPhase(null);
     try {
       const objectId = createDraftObjectId(draft);
       const response = await createObjectTransaction(api, {
+        base_revision: draft.baseRevision,
         geometry: geometry.geometry,
         material_ref: optionalRef(draft.material),
         name: draft.name.trim() || objectId,
@@ -179,9 +188,10 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
         region_name: optionalRef(draft.region),
         transform: transform.transform,
       });
+      const revision = acknowledgedAuthoringSceneRevision(response);
       invalidateAuthoringResources(
         resources,
-        response.scene_revision,
+        revision,
         response.committed_scene,
       );
       selectionController.set(
@@ -202,10 +212,27 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
       );
       setFeedback({ kind: "success", message: "Object draft committed." });
     } catch (error) {
+      if (isPrimitiveDraftRevisionConflict(error)) {
+        setRevisionConflictPhase("conflict");
+      }
       setFeedback({ kind: "error", message: errorMessage(error) });
     } finally {
       setPending(false);
     }
+  }
+
+  async function refetchAfterConflict(): Promise<void> {
+    await scene.refetch();
+    setRevisionConflictPhase("refetched");
+    setFeedback({ kind: "error", message: "Scene refetched. Rebase the preserved draft before retrying." });
+  }
+
+  function rebaseAfterConflict(): void {
+    updateDraft((current) =>
+      rebaseGeometryObjectDraft(current, baseDraft.baseRevision),
+    );
+    setRevisionConflictPhase("rebased");
+    setFeedback({ kind: "error", message: "Draft rebased to the latest scene revision. Review and retry Apply." });
   }
 
   async function applyGeometryPatch(): Promise<void> {
@@ -277,10 +304,15 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
 
       <PrimitiveGeometrySection
         draft={draft}
+        errors={primitiveDraft.errors}
         onFieldChange={updateField}
         onVectorChange={updateVector}
       />
-      <TransformSection draft={draft} onVectorChange={updateVector} />
+      <TransformSection
+        draft={draft}
+        errors={primitiveDraft.errors}
+        onVectorChange={updateVector}
+      />
       <DraftIdentitySection draft={draft} onFieldChange={updateField} />
       <ActionsSection
         draft={draft}
@@ -290,6 +322,9 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
         onApplyGeometryPatch={applyGeometryPatch}
         onApplyTransformPatch={applyTransformPatch}
         onRevertDraft={revertDraft}
+        onRebaseAfterConflict={rebaseAfterConflict}
+        onRefetchAfterConflict={refetchAfterConflict}
+        revisionConflictPhase={revisionConflictPhase}
       />
       <ValidationSection
         messages={validationMessages}
@@ -301,10 +336,12 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
 
 function PrimitiveGeometrySection({
   draft,
+  errors,
   onFieldChange,
   onVectorChange,
 }: {
   draft: GeometryObjectDraft;
+  errors: Readonly<Record<string, string>>;
   onFieldChange: DraftFieldUpdater;
   onVectorChange: VectorDraftUpdater;
 }) {
@@ -313,6 +350,7 @@ function PrimitiveGeometrySection({
       <FieldRow label="Kind" value={draft.geometryKind} />
       <PrimitiveGeometryFields
         draft={draft}
+        errors={errors}
         onFieldChange={onFieldChange}
         onVectorChange={onVectorChange}
       />
@@ -322,10 +360,12 @@ function PrimitiveGeometrySection({
 
 function PrimitiveGeometryFields({
   draft,
+  errors,
   onFieldChange,
   onVectorChange,
 }: {
   draft: GeometryObjectDraft;
+  errors: Readonly<Record<string, string>>;
   onFieldChange: DraftFieldUpdater;
   onVectorChange: VectorDraftUpdater;
 }) {
@@ -334,6 +374,7 @@ function PrimitiveGeometryFields({
     return (
       <>
         <FormField
+          error={errors.radius}
           label="Radius"
           type="number"
           unit="m"
@@ -341,6 +382,7 @@ function PrimitiveGeometryFields({
           onChange={(event) => onFieldChange("radius", event.target.value)}
         />
         <FormField
+          error={errors.height}
           label="Height"
           type="number"
           unit="m"
@@ -354,6 +396,7 @@ function PrimitiveGeometryFields({
   if (geometryKind === "sphere") {
     return (
       <FormField
+        error={errors.radius}
         label="Radius"
         type="number"
         unit="m"
@@ -407,6 +450,7 @@ function PrimitiveGeometryFields({
 
   return (
     <DraftVectorFormField
+      errors={[errors["size.0"], errors["size.1"], errors["size.2"]]}
       label="Size"
       unit="m"
       values={draft.size}
@@ -417,14 +461,21 @@ function PrimitiveGeometryFields({
 
 function TransformSection({
   draft,
+  errors,
   onVectorChange,
 }: {
   draft: GeometryObjectDraft;
+  errors: Readonly<Record<string, string>>;
   onVectorChange: VectorDraftUpdater;
 }) {
   return (
     <InspectorGroup title="Transform" collapsible defaultOpen>
       <DraftVectorFormField
+        errors={[
+          errors["translation.0"],
+          errors["translation.1"],
+          errors["translation.2"],
+        ]}
         label="Translation"
         unit="m"
         values={draft.translation}
@@ -488,23 +539,29 @@ function ActionsSection({
   onApplyCreateDraft,
   onApplyGeometryPatch,
   onApplyTransformPatch,
+  onRebaseAfterConflict,
+  onRefetchAfterConflict,
   onRevertDraft,
   pending,
+  revisionConflictPhase,
 }: {
   draft: GeometryObjectDraft;
   feedback: Feedback | null;
   onApplyCreateDraft: () => Promise<void>;
   onApplyGeometryPatch: () => Promise<void>;
   onApplyTransformPatch: () => Promise<void>;
+  onRebaseAfterConflict: () => void;
+  onRefetchAfterConflict: () => Promise<void>;
   onRevertDraft: () => void;
   pending: boolean;
+  revisionConflictPhase: "conflict" | "rebased" | "refetched" | null;
 }) {
   return (
     <InspectorGroup title="Actions">
       <div className="fm-inspector-toolbar">
         {draft.mode === "draft-new" ? (
           <Button
-            disabled={pending}
+            disabled={pending || revisionConflictPhase !== null}
             size="sm"
             type="button"
             variant="primary"
@@ -524,6 +581,37 @@ function ActionsSection({
       </div>
       {feedback ? (
         <FeedbackBanner kind={feedback.kind} message={feedback.message} />
+      ) : null}
+      {revisionConflictPhase ? (
+        <div className="fm-inspector-toolbar" data-revision-conflict="true">
+          <Button
+            disabled={pending}
+            size="sm"
+            type="button"
+            variant="ghost"
+            onClick={() => void onRefetchAfterConflict()}
+          >
+            Refetch Scene
+          </Button>
+          <Button
+            disabled={pending || revisionConflictPhase !== "refetched"}
+            size="sm"
+            type="button"
+            variant="ghost"
+            onClick={onRebaseAfterConflict}
+          >
+            Rebase Draft
+          </Button>
+          <Button
+            disabled={pending || revisionConflictPhase !== "rebased"}
+            size="sm"
+            type="button"
+            variant="primary"
+            onClick={() => void onApplyCreateDraft()}
+          >
+            Retry Apply
+          </Button>
+        </div>
       ) : null}
     </InspectorGroup>
   );
@@ -603,11 +691,13 @@ function ValidationSection({
 }
 
 function DraftVectorFormField({
+  errors,
   label,
   onChange,
   unit,
   values,
 }: {
+  errors?: readonly (string | undefined)[];
   label: string;
   onChange: (index: 0 | 1 | 2, value: string) => void;
   unit: string;
@@ -615,6 +705,7 @@ function DraftVectorFormField({
 }) {
   return (
     <Vector3Field
+      errors={errors}
       label={label}
       unit={unit}
       values={values}

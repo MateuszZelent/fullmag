@@ -59,6 +59,7 @@ export interface Viewport3DMagnetizationTexturePreview {
 }
 
 export interface Viewport3DPrimitiveRenderModel {
+  draftOverlay?: Viewport3DPrimitiveObject | null;
   objects: Viewport3DPrimitiveObject[];
   sceneRevision: number | null;
 }
@@ -508,12 +509,13 @@ export function buildViewport3DPrimitiveRenderModel(
 export function buildViewport3DPrimitiveFrameKey(
   primitiveModel: Viewport3DPrimitiveRenderModel | null | undefined,
 ): string {
-  if (!primitiveModel?.objects.length) {
+  if (!primitiveModel?.objects.length && !primitiveModel?.draftOverlay) {
     return `${primitiveModel?.sceneRevision ?? "none"}:empty`;
   }
   return [
     primitiveModel.sceneRevision ?? "none",
     ...primitiveModel.objects.map((object) => object.geometryKey),
+    primitiveModel.draftOverlay?.geometryKey ?? "no-draft",
   ].join("|");
 }
 

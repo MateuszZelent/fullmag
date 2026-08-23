@@ -613,12 +613,14 @@ describe("geometry lifecycle command contributions", () => {
         model: { commitTransaction },
       } as never,
       resources,
+      resourceData: { [MODEL_SCENE_PATH]: { objects: [], revision: 20 } },
       selection,
       source: "test",
     });
 
     expect(result).toEqual({ status: "completed" });
     expect(commitTransaction).toHaveBeenCalledWith({
+      base_revision: 20,
       geometry: {
         geometry_kind: "Box",
         geometry_params: { size: [1e-7, 1e-7, 1e-8] },

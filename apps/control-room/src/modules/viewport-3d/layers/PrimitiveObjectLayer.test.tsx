@@ -15,6 +15,7 @@ import {
   shouldRenderPrimitiveObject,
   shouldRenderPrimitiveTransformGizmo,
   trackPrimitiveObjectGeometry,
+  primitiveDraftOverlayObject,
 } from "./PrimitiveObjectLayerModel";
 
 function primitiveObject(
@@ -39,6 +40,23 @@ function primitiveObject(
 }
 
 describe("PrimitiveObjectLayer geometry resources", () => {
+  it("adapts a draft to a separate stable overlay carrier without topology provenance", () => {
+    const overlay = primitiveDraftOverlayObject({
+      dimensions: [2e-7, 4e-7, 6e-8],
+      errors: {},
+      kind: "box",
+      translation: [7e-9, 8e-9, 9e-9],
+    });
+
+    expect(overlay).not.toBeNull();
+    expect(overlay!).toMatchObject({
+      geometryKey: "draft:box:2e-7,4e-7,6e-8:7e-9,8e-9,9e-9",
+      objectId: "draft:primitive",
+      sceneRevision: -1,
+      bounds: { center: [7e-9, 8e-9, 9e-9], size: [2e-7, 4e-7, 6e-8] },
+    });
+    expect(overlay!.meshState).toBe("primitive-only");
+  });
   it("uses unlit materials for primitive preview surfaces", () => {
     const source = readFileSync(
       fileURLToPath(new URL("./PrimitiveObjectLayer.tsx", import.meta.url)),

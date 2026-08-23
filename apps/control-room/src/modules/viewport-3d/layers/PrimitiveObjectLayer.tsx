@@ -9,7 +9,10 @@ import {
   surfaceMaterialPolicyProps,
 } from "./viewport3DRenderPolicy";
 
-import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+import {
+  DEFAULT_OBJECT_VISUALIZATION,
+  type VisualizationTargetSettings,
+} from "@/kernel/visualization/ObjectVisualizationController";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
@@ -61,10 +64,31 @@ export function PrimitiveObjectLayer({
     invalidate();
   }, [invalidate, primitiveFrameKey, tracker]);
 
-  if (!primitiveModel?.objects.length) return null;
+  if (!primitiveModel?.objects.length && !primitiveModel?.draftOverlay) return null;
 
   return (
     <>
+      {primitiveModel.draftOverlay ? (
+        <group
+          key={primitiveModel.draftOverlay.geometryKey}
+          userData={{ layer: "primitive-draft-overlay" }}
+        >
+          <RenderablePrimitiveObject
+            colors={colors}
+            materialProfile={materialProfile}
+            object={primitiveModel.draftOverlay}
+            onSelectObject={() => undefined}
+            settings={{
+              ...DEFAULT_OBJECT_VISUALIZATION,
+              primitiveOpacityPercent: 42,
+              primitiveVisible: true,
+              shaderVisible: true,
+              wireframeVisible: true,
+            }}
+            tracker={tracker}
+          />
+        </group>
+      ) : null}
       {primitiveModel.objects.map((object) => (
         <PrimitiveObject
           colors={colors}

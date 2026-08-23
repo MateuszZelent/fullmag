@@ -15,7 +15,6 @@ import {
   MESHING_SEMANTICS_PATH,
   MESHING_SUMMARY_PATH,
   MODEL_GEOMETRY_CAPABILITIES_PATH,
-  MODEL_GEOMETRY_DIAGNOSTICS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
   MODEL_READINESS_PATH,
   MODEL_SCENE_PATH,
@@ -39,6 +38,7 @@ import {
   deleteObjectTransaction,
   submitObjectMeshBuild,
 } from "./geometryLifecycleCommands";
+import { invalidateAuthoringMutationDependents } from "./authoringMutationInvalidation";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 
 type JsonRecord = Record<string, unknown>;
@@ -55,6 +55,13 @@ function asString(value: unknown): string | null {
 
 function resourceData(context: CommandContext, resourceKey: string): unknown {
   return context.resourceData?.[resourceKey] ?? null;
+}
+
+function sceneBaseRevision(context: CommandContext): number | null {
+  const revision = asRecord(resourceData(context, MODEL_SCENE_PATH))?.revision;
+  return typeof revision === "number" && Number.isFinite(revision)
+    ? revision
+    : null;
 }
 
 export type MeshCommandLane = "fdm" | "fem" | "unknown";
@@ -325,15 +332,13 @@ function invalidateSceneAuthoringResources(
   context: CommandContext,
   sceneRevision: number,
 ): void {
-  context.resources?.invalidate(MODEL_SCENE_PATH, sceneRevision);
-  context.resources?.invalidate(MODEL_READINESS_PATH, sceneRevision);
-  context.resources?.invalidate(MODEL_GEOMETRY_VALIDATION_PATH, sceneRevision);
-  context.resources?.invalidate(MODEL_GEOMETRY_DIAGNOSTICS_PATH, sceneRevision);
-  context.resources?.invalidate(MESHING_BUILDS_CURRENT_PATH, sceneRevision);
-  context.resources?.invalidate(
-    MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
-    sceneRevision,
-  );
+  if (context.resources) {
+    invalidateAuthoringMutationDependents(
+      context.resources,
+      "geometry",
+      sceneRevision,
+    );
+  }
 }
 
 function objectResourceKey(path: string, objectId: string): string {
@@ -743,11 +748,13 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
       const primitiveKind = primitiveKindFromDraftSelection(selection);
       const objectId = draftObjectId(primitiveKind);
       const name = selection?.label ?? `New ${primitiveKind}`;
+      const baseRevision = sceneBaseRevision(context);
       if (!context.api) {
         return { message: "Control-room API is unavailable.", status: "failed" };
       }
 
       const response = await createObjectTransaction(context.api, {
+        ...(baseRevision !== null ? { base_revision: baseRevision } : {}),
         geometry: defaultPrimitiveGeometry(primitiveKind),
         name,
         object_id: objectId,

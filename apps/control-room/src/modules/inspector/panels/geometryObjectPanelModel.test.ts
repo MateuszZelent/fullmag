@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
@@ -8,6 +9,9 @@ import {
   createDraftObjectId,
   resolveGeometryObjectDraft,
   resolveGeometryObjectPanelModel,
+  resolvePrimitiveDraft,
+  isPrimitiveDraftRevisionConflict,
+  rebaseGeometryObjectDraft,
   summarizeGeometryValidationMessages,
 } from "./geometryObjectPanelModel";
 
@@ -27,6 +31,32 @@ const baseSelection: Selection = {
 };
 
 describe("resolveGeometryObjectPanelModel", () => {
+  it("recognizes only the real revision-conflict API model", () => {
+    expect(
+      isPrimitiveDraftRevisionConflict(
+        new ControlRoomApiError("stale", 409, "request-1", "revision_conflict"),
+      ),
+    ).toBe(true);
+    expect(
+      isPrimitiveDraftRevisionConflict(
+        new ControlRoomApiError("invalid", 400, "request-2", "revision_conflict"),
+      ),
+    ).toBe(false);
+    expect(isPrimitiveDraftRevisionConflict(new Error("revision_conflict"))).toBe(false);
+  });
+
+  it("rebases only the base revision and preserves every dirty field", () => {
+    const draft = resolveGeometryObjectDraft(
+      { ...baseSelection, kind: "builder.primitive", nodeId: "geometry:draft:box", objectId: null, ref: null },
+      { objects: [], revision: 12 },
+    );
+    const dirty = { ...draft, name: "Dirty Box", size: ["1e-7", "2e-7", "3e-8"] as [string, string, string] };
+
+    expect(rebaseGeometryObjectDraft(dirty, 13)).toEqual({
+      ...dirty,
+      baseRevision: 13,
+    });
+  });
   it("reads committed object data from SceneDocument", () => {
     const model = resolveGeometryObjectPanelModel(baseSelection, {
       objects: [
@@ -253,6 +283,41 @@ describe("resolveGeometryObjectPanelModel", () => {
     ).toEqual({
       error: "Scale 2 must be a finite SI value.",
       transform: null,
+    });
+  });
+
+  it.each([
+    ["box", "geometry:draft:box", [1e-7, 1e-7, 1e-8]],
+    ["cylinder", "geometry:draft:cylinder", [1e-7, 1e-8, 1e-7]],
+    ["sphere", "geometry:draft:sphere", [1e-7, 1e-7, 1e-7]],
+  ] as const)("builds a valid %s preview in SI without a server request", (_, nodeId, dimensions) => {
+    const draft = resolveGeometryObjectDraft(
+      { ...baseSelection, kind: "builder.primitive", nodeId, objectId: null, ref: null },
+      { objects: [], revision: 12 },
+    );
+
+    expect(resolvePrimitiveDraft(draft)).toEqual({
+      dimensions,
+      errors: {},
+      kind: nodeId.split(":").at(-1)?.replace(/^./, (value) => value.toUpperCase()),
+      translation: [0, 0, 0],
+    });
+  });
+
+  it("returns field-scoped errors and no preview dimensions for invalid SI values", () => {
+    const draft = resolveGeometryObjectDraft(
+      { ...baseSelection, kind: "builder.primitive", nodeId: "geometry:draft:box", objectId: null, ref: null },
+      { objects: [], revision: 12 },
+    );
+
+    expect(resolvePrimitiveDraft({ ...draft, size: ["1e-7", "0", "bad"] })).toEqual({
+      dimensions: null,
+      errors: {
+        "size.1": "Box size Y must be greater than 0.",
+        "size.2": "Box size Z must be a finite SI value.",
+      },
+      kind: "Box",
+      translation: [0, 0, 0],
     });
   });
 

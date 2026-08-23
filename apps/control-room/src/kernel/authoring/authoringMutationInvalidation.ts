@@ -12,6 +12,15 @@ import type { ResourceRevision } from "@/kernel/api/apiTypes";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 
 export const AUTHORING_MUTATION_DEPENDENTS = {
+  geometry: [
+    MODEL_SCENE_PATH,
+    MODEL_GEOMETRY_VALIDATION_PATH,
+    MODEL_GEOMETRY_DIAGNOSTICS_PATH,
+    MODEL_READINESS_PATH,
+    SESSION_STATUS_RESOURCE_KEY,
+    MESHING_BUILDS_CURRENT_PATH,
+    MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+  ],
   magnetization: [
     MODEL_SCENE_PATH,
     MODEL_REGIONS_PATH,
