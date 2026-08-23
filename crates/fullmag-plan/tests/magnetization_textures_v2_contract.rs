@@ -96,6 +96,34 @@ fn v2_texture_rotation_rotates_the_output_vector() {
 }
 
 #[test]
+fn v2_texture_translation_moves_the_profile_without_translating_spin_vectors() {
+    let transform = TextureTransform3DIR {
+        translation: [2.0, -1.0, 0.5],
+        ..TextureTransform3DIR::default()
+    };
+    let values = sample_preset_texture_versioned(
+        "vortex",
+        2,
+        &params([
+            ("core_radius", json!(0.25)),
+            ("core_polarity", json!(1)),
+            ("circulation", json!(1)),
+            ("plane", json!("xy")),
+        ]),
+        &TextureMappingIR::default(),
+        &transform,
+        &[point(2.0, -1.0, 0.5), point(3.0, -1.0, 0.5)],
+    )
+    .unwrap();
+
+    assert!(values[0][0].abs() < 1.0e-12);
+    assert!(values[0][1].abs() < 1.0e-12);
+    assert!((values[0][2] - 1.0).abs() < 1.0e-12);
+    assert!(values[1][1] > 0.99);
+    assert!(values[1][2].abs() < 1.0e-6);
+}
+
+#[test]
 fn v2_rejects_degenerate_domain_wall_and_projection_conflict() {
     let domain_wall = params([
         ("kind", json!("neel")),

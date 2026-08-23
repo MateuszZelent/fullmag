@@ -3766,8 +3766,14 @@ fn disabled_fdm_region_does_not_materialize_mask_or_texture_override() {
 }
 
 #[test]
-fn fem_region_texture_override_is_rejected_until_runtime_materialization_exists() {
-    let mut ir = fem_minimal_test_ir();
+fn fem_region_texture_override_materializes_on_selected_nodes_only() {
+    let baseline_ir = fem_minimal_test_ir();
+    let baseline_plan = plan(&baseline_ir).expect("baseline FEM plan should succeed");
+    let fullmag_ir::BackendPlanIR::Fem(baseline_fem) = baseline_plan.backend_plan else {
+        panic!("expected baseline FEM plan");
+    };
+
+    let mut ir = baseline_ir;
     let mut region = default_test_object_region();
     region.texture_override = Some(fullmag_ir::RegionTextureOverrideIR {
         initial_magnetization: fullmag_ir::InitialMagnetizationIR::Uniform {
@@ -3776,15 +3782,24 @@ fn fem_region_texture_override_is_rejected_until_runtime_materialization_exists(
     });
     ir.object_regions.push(region);
 
-    let err = plan(&ir).expect_err("FEM must not silently ignore region texture overrides");
-    assert!(
-        err.reasons.iter().any(|reason| {
-            reason.contains("object region texture_override")
-                && reason.contains("backend='fem'")
-                && reason.contains("must not silently ignore region texture overrides")
-        }),
-        "unexpected planner errors: {:?}",
-        err.reasons
+    let plan = plan(&ir).expect("FEM should materialize region texture overrides");
+    let fullmag_ir::BackendPlanIR::Fem(fem) = plan.backend_plan else {
+        panic!("expected FEM plan");
+    };
+
+    let changed_indices = fem
+        .initial_magnetization
+        .iter()
+        .zip(&baseline_fem.initial_magnetization)
+        .enumerate()
+        .filter_map(|(index, (actual, baseline))| (actual != baseline).then_some(index))
+        .collect::<Vec<_>>();
+    assert_eq!(changed_indices, vec![0]);
+    assert_eq!(fem.initial_magnetization[0], [0.0, 0.0, 1.0]);
+    assert_eq!(
+        &fem.initial_magnetization[1..],
+        &baseline_fem.initial_magnetization[1..],
+        "nodes outside the winning region must preserve the base texture"
     );
 }
 

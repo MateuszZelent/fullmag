@@ -159,12 +159,14 @@ async function patchTargetOverrideResource(
     },
     [visualizationTargetKey(target)],
   );
-  context.visualization?.patchTargetPending(
-    target,
-    patch,
-    state.revision,
-    receipt?.transactionId,
-  );
+  if (receipt) {
+    context.visualization?.patchTargetPending(
+      target,
+      patch,
+      state.revision,
+      receipt.transactionId,
+    );
+  }
   return true;
 }
 

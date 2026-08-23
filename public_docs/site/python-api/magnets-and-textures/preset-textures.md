@@ -74,9 +74,12 @@ world-space point according to `mapping.space`. Version 2 then applies the inver
 
 Here `translation` and `pivot` are lengths, `scale` is dimensionless and component-wise, and the
 quaternion is normalized before use. Every scale component and the quaternion norm must exceed
-$10^{-14}$ in the canonical Rust v2 evaluator. After the local profile has been evaluated, the
-magnetization vector is embedded in the selected plane and rotated forward by $\mathcal R_q$.
-Translation, pivot, and scale affect coordinates; only the quaternion rotates spin components.
+$10^{-14}$ in the canonical Rust v2 evaluator. The planner validates the descriptor once and
+materializes a prepared transform containing the normalized forward/inverse quaternion and
+reciprocal scale. FDM cells and FEM nodes therefore use the same affine map without repeating
+normalization for every sample. After the local profile has been evaluated, the magnetization
+vector is embedded in the selected plane and rotated forward by $\mathcal R_q$. Translation,
+pivot, and scale affect coordinates; only the quaternion rotates spin components.
 
 The implemented right-handed frames are:
 
@@ -906,6 +909,34 @@ available, corresponding object coordinates; the current helper falls back to wo
 an object-coordinate array is absent. CPU and GPU FEM lanes consume the same planner-materialized
 initial vector.
 
+
+### Region-owned texture realization and clipping
+
+Object-region textures use the same analytic descriptor and transform pipeline as object-level
+textures, but ownership is resolved before the sampled vectors are merged. For every FDM cell or
+FEM magnetic node, Fullmag first determines the unique winning enabled region using the declared
+priority. Equal highest priorities fail closed. The writable selection is
+
+```{math}
+\Omega_{\mathrm{write}}
+=
+\Omega_{\mathrm{magnetic\ owner}}
+\cap
+\Omega_{\mathrm{winning\ region}}.
+```
+
+The texture transform is evaluated only as a coordinate map inside this selection. Translation,
+rotation, pivot, and scale can move or reshape the visible analytic profile, but they cannot move
+the region boundary and cannot write outside `\Omega_{\mathrm{write}}`. A profile translated partly
+or completely beyond its region is therefore clipped at the region boundary; cells or nodes outside
+the region retain the object-level initial state or the winning texture of another region.
+
+FDM uses the final active-cell mask and numeric winning-region mask in both single-grid and
+multilayer plans. FEM evaluates region predicates on the final magnetic P1 nodes of the merged or
+shared-domain mesh and applies the same priority rule. At a shared FEM interface node there is one
+global nodal degree of freedom, so overlapping region claims are resolved globally by priority
+rather than by silently duplicating the node.
+
 ### Numerical resolution
 
 Analytic normalization does not remove discretization error in gradients, energy, or topological
@@ -957,8 +988,8 @@ discretization study.
 - The canonical version-2 analytic sampler does not implement clamp/repeat/mirror behavior.
 - Projection support is narrower than the public mapping enum suggests.
 - `random` is coordinate-hashed rather than mesh-index-hashed.
-- FDM object coordinates currently account for the top-level owner translation used by the planner;
-  more general geometry-transform ownership requires separate qualification.
+- FDM and FEM object coordinates use the same validated owner-translation convention;
+  texture-local rotation, pivot, and scale are handled by the shared prepared sampler.
 - The Python reference route and planner route use different validation thresholds in some transform
   helpers.
 - No preset factory encodes a stabilizing material model, DMI sign, anisotropy convention, external
@@ -1003,7 +1034,8 @@ implementation contracts and are sourced from the repository.
 | transform authoring | `packages/fullmag-py/src/fullmag/init/textures.py` | `class TextureTransform3D` | public translation, quaternion rotation, component scale, and pivot descriptor | Python authoring / IR |
 | v1/v2 dispatch | `crates/fullmag-plan/src/magnetization_textures.rs` | `sample_preset_texture_versioned` | canonical v1/v2 dispatch used by planners | FDM/FEM planner |
 | canonical v2 sampling pipeline | `crates/fullmag-plan/src/magnetization_textures_v2.rs` | `sample_v2` | v2 mapping, active-point handling, local evaluation, frame embedding, and output-vector rotation | FDM/FEM planner |
-| coordinate transform | `crates/fullmag-plan/src/magnetization_textures_v2.rs` | `inverse_transform` | validated inverse texture-coordinate transform | FDM/FEM planner |
+| coordinate transform | `crates/fullmag-plan/src/magnetization_textures_v2.rs` | `prepare` | one-time validation plus shared forward/inverse texture transform | FDM/FEM planner |
+| region ownership and clipping | `crates/fullmag-plan/src/region_textures.rs` | `sample_region_initial_on_mask` | priority-resolved owner masks and strict clipping of regional textures | FDM/FEM planner |
 | plane coordinates | `crates/fullmag-plan/src/magnetization_textures_v2.rs` | `metric_point` | right-handed planar coordinate projection for metric presets | FDM/FEM planner |
 | plane-vector embedding | `crates/fullmag-plan/src/magnetization_textures_v2.rs` | `metric_vector` | embedding of local texture vectors into the world frame | FDM/FEM planner |
 | preset dispatch and uniform | `crates/fullmag-plan/src/magnetization_textures_v2.rs` | `local_evaluate` | canonical v2 preset-kind dispatch and uniform evaluation | FDM/FEM planner |
