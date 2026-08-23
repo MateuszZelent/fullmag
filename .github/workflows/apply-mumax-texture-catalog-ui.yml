@@ -50,7 +50,7 @@ jobs:
 
           source = Path('.github/fullmag-mumax-textures/apply_mumax_textures.py.zlib.b64')
           encoded = source.read_text(encoding='utf-8').strip()
-          expected = 'e72e8357065daf9c49a5af43d39cd07e058b321b4037c6dc1d1c28a8c2c58a1a'
+          expected = '9b8ef166e2797c418ed8a0201a496727f963982964511e1f451b37a9baf87ddf'
           actual = hashlib.sha256(encoded.encode('ascii')).hexdigest()
           if actual != expected:
               raise RuntimeError(f'implementation payload checksum mismatch: {actual}')
