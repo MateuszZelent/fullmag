@@ -39,8 +39,29 @@ CROSS_FUNCTION_ACCOUNTING = {
         "copy_spin_checkpoint_to_host",
     ): {
         "caller": "checkpoint_export_impl",
-        "call": "copy_spin_checkpoint_to_host(",
-        "owner": "append_charge_telemetry(",
+        "call": "copy_spin_checkpoint_to_host",
+        "call_arguments": (
+            "parent",
+            "snapshot",
+            "&spin_data",
+            "&copied_export_bytes",
+            "&copied_export_count",
+        ),
+        "result_arguments": {
+            "bytes": "copied_export_bytes",
+            "count": "copied_export_count",
+        },
+        "record": {
+            "owner": "append_charge_telemetry",
+            "category": "transport_telemetry",
+            "slot": "parent",
+            "direction": "FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H",
+            "reason": "FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_CHECKPOINT_EXPORT_D2H",
+            "status": "FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS",
+            "flags": "FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER | checkpoint_flags",
+            "bytes": "copied_export_bytes",
+            "count": "copied_export_count",
+        },
         "callee_evidence": ("*copied_bytes", "*copied_count"),
     },
     (
@@ -48,8 +69,21 @@ CROSS_FUNCTION_ACCOUNTING = {
         "materialize_spin_checkpoint_from_host",
     ): {
         "caller": "checkpoint_import_impl",
-        "call": "materialize_spin_checkpoint_from_host(",
-        "owner": "append_charge_telemetry(",
+        "call": "materialize_spin_checkpoint_from_host",
+        "call_arguments": ("parent", "spin_data", "&restored_spin"),
+        "result_variable": "status",
+        "success_value": "FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK",
+        "record": {
+            "owner": "append_charge_telemetry",
+            "category": "transport_telemetry",
+            "slot": "parent",
+            "direction": "FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_H2D",
+            "reason": "FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_CHECKPOINT_IMPORT_H2D",
+            "status": "FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS",
+            "flags": "FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER",
+            "bytes": "import_bytes",
+            "count": "4",
+        },
         "callee_evidence": (
             "FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR",
             "FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK",
@@ -252,6 +286,105 @@ def split_arguments(expression: str) -> list[str]:
     return arguments
 
 
+def named_calls(source: str, name: str) -> list[tuple[int, int, list[str]]]:
+    code = mask_preprocessor(mask_noncode(source))
+    calls: list[tuple[int, int, list[str]]] = []
+    pattern = re.compile(rf"\b{re.escape(name)}\s*\(")
+    for match in pattern.finditer(code):
+        opening = code.find("(", match.start(), match.end())
+        end = balanced_end(code, opening)
+        calls.append((match.start(), end, split_arguments(source[match.start() : end])))
+    return calls
+
+
+def validate_cross_function_accounting(
+    path: str,
+    function: str,
+    function_source: str,
+    caller_source: str,
+    category: str,
+    schema: dict[str, object],
+) -> str:
+    evidence = tuple(schema["callee_evidence"])
+    if any(token not in function_source for token in evidence):
+        raise InventoryError(
+            f"{path}:{function}: accounting call-chain lost callee evidence"
+        )
+
+    call_name = str(schema["call"])
+    expected_call_arguments = [
+        normalized(str(value)) for value in schema["call_arguments"]
+    ]
+    matching_calls = [
+        call
+        for call in named_calls(caller_source, call_name)
+        if [normalized(argument) for argument in call[2]] == expected_call_arguments
+    ]
+    if len(matching_calls) != 1:
+        raise InventoryError(
+            f"{path}:{function}: accounting call-chain caller lost unique "
+            f"{call_name} invocation ({len(matching_calls)} matches)"
+        )
+    call_start, call_end, _ = matching_calls[0]
+
+    result_variable = schema.get("result_variable")
+    if result_variable is not None:
+        assignment_prefix = mask_preprocessor(
+            mask_noncode(caller_source[max(0, call_start - 256) : call_start])
+        )
+        assignment = re.compile(rf"\b{re.escape(str(result_variable))}\s*=\s*$")
+        if assignment.search(assignment_prefix) is None:
+            raise InventoryError(
+                f"{path}:{function}: accounting call-chain lost {result_variable} result assignment"
+            )
+
+    record = dict(schema["record"])
+    if str(record["category"]) != category:
+        raise InventoryError(
+            f"{path}:{function}: accounting call-chain category does not match record schema"
+        )
+    record_arguments = [
+        str(record[key])
+        for key in ("slot", "direction", "reason", "status", "flags", "bytes", "count")
+    ]
+    expected_record_arguments = [normalized(value) for value in record_arguments]
+    matching_records = [
+        call
+        for call in named_calls(caller_source, str(record["owner"]))
+        if call[0] > call_end
+        and len(call[2]) >= len(expected_record_arguments)
+        and [normalized(argument) for argument in call[2][:7]] == expected_record_arguments
+    ]
+    if len(matching_records) != 1:
+        raise InventoryError(
+            f"{path}:{function}: accounting call-chain lost unique post-call "
+            f"{record['reason']} record ({len(matching_records)} matches)"
+        )
+    record_start = matching_records[0][0]
+
+    result_arguments = schema.get("result_arguments")
+    if result_arguments is not None:
+        for field in ("bytes", "count"):
+            if normalized(str(result_arguments[field])) != normalized(str(record[field])):
+                raise InventoryError(
+                    f"{path}:{function}: accounting record lost callee {field} result"
+                )
+    if result_variable is not None:
+        success_value = re.escape(str(schema["success_value"]))
+        result_name = re.escape(str(result_variable))
+        guarded_region = mask_preprocessor(
+            mask_noncode(caller_source[call_end:record_start])
+        )
+        guard = re.compile(rf"\bif\s*\(\s*{result_name}\s*!=\s*{success_value}\s*\)")
+        if guard.search(guarded_region) is None:
+            raise InventoryError(
+                f"{path}:{function}: accounting record lost successful {result_variable} guard"
+            )
+
+    caller = str(schema["caller"])
+    return f"call-chain:{caller}->{record['owner']}"
+
+
 def direction_for(expression: str) -> str:
     arguments = split_arguments(expression)
     if len(arguments) < 4:
@@ -311,19 +444,15 @@ def accounting_for(
                         f"resolved {len(caller_sources)} times"
                     )
                 caller_source = caller_sources[0]
-                call = str(cross_function["call"])
-                cross_owner = str(cross_function["owner"])
-                evidence = tuple(cross_function["callee_evidence"])
-                if caller_source.count(call) != 1 or cross_owner not in caller_source:
-                    raise InventoryError(
-                        f"{path}:{function}: accounting call-chain {caller} lost "
-                        f"call or owner {cross_owner}"
-                    )
-                if any(token not in function_source for token in evidence):
-                    raise InventoryError(
-                        f"{path}:{function}: accounting call-chain lost callee evidence"
-                    )
-                return category, f"call-chain:{caller}->{cross_owner[:-1]}"
+                hook = validate_cross_function_accounting(
+                    path,
+                    function,
+                    function_source,
+                    caller_source,
+                    category,
+                    cross_function,
+                )
+                return category, hook
             raise InventoryError(
                 f"{path}:{function}: host-capable transfer lost accounting hook {owner}"
             )
@@ -482,25 +611,131 @@ void download(Context &ctx, void *dst, const void *src, size_t bytes) {
             pass
         else:
             raise InventoryError(f"scanner accepted forbidden transfer surface: {forbidden}")
-    cross_function_owner = """
-void accounted(Context &ctx) {
-    fullmag_fdm_record_cuda_transfer_success(ctx, true, 1);
+    export_record = """
+    append_charge_telemetry(
+        parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_CHECKPOINT_EXPORT_D2H,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER | checkpoint_flags,
+        copied_export_bytes, copied_export_count, 0, 0, 0, nullptr);
+"""
+    import_record = """
+    append_charge_telemetry(
+        parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_H2D,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_CHECKPOINT_IMPORT_H2D,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER,
+        import_bytes, 4, 0, 0, 0, nullptr);
+"""
+    cross_function_source = """
+bool copy_spin_checkpoint_to_host(
+    void *destination, const void *source, uint64_t bytes,
+    uint64_t *copied_bytes, uint64_t *copied_count) {
+    if (cudaMemcpyAsync(destination, source, bytes, cudaMemcpyDeviceToHost,
+                        stream) != cudaSuccess)
+        return false;
+    *copied_bytes += bytes;
+    ++*copied_count;
+    return true;
 }
-void unaccounted(void *dst, const void *src, size_t bytes) {
-    cudaMemcpy(dst, src, bytes, cudaMemcpyDeviceToHost);
+
+uint32_t checkpoint_export_impl() {
+    uint64_t copied_export_bytes = 0;
+    uint64_t copied_export_count = 0;
+    if (include_spin && !copy_spin_checkpoint_to_host(
+            parent, snapshot, &spin_data, &copied_export_bytes,
+            &copied_export_count))
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+""" + export_record + """
+    append_charge_telemetry(
+        parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_STREAM_SYNCHRONIZE,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_SYNCHRONIZATION,
+        0, 1, 0, 0, 0, nullptr);
+    return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
+}
+
+uint32_t materialize_spin_checkpoint_from_host(
+    void *destination, const void *source, uint64_t bytes) {
+    if (cudaMemcpyAsync(destination, source, bytes, cudaMemcpyHostToDevice,
+                        stream) != cudaSuccess)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+    return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
+}
+
+uint32_t checkpoint_import_impl() {
+    uint32_t status = materialize_spin_checkpoint_from_host(
+        parent, spin_data, &restored_spin);
+    if (status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK)
+        return status;
+    uint64_t import_bytes = bytes;
+""" + import_record + """
+    append_charge_telemetry(
+        parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_STREAM_SYNCHRONIZE,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_SYNCHRONIZATION,
+        0, 1, 0, 0, 0, nullptr);
+    return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
 }
 """
-    try:
-        scan_text(path, cross_function_owner)
-    except InventoryError:
-        pass
-    else:
-        raise InventoryError("scanner accepted an owner from an unrelated function")
+    context_path = "backends/fdm/gpu/cuda/transport/context.cu"
+    cross_expected = scan_text(context_path, cross_function_source)
+    if len(cross_expected) != 2:
+        raise InventoryError("cross-function fixture did not inventory export and import")
+
+    cross_mutations = {
+        "missing export record": cross_function_source.replace(export_record, "", 1),
+        "wrong export reason": cross_function_source.replace(
+            "FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_CHECKPOINT_EXPORT_D2H",
+            "FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SCALAR_REDUCTION_D2H",
+            1,
+        ),
+        "wrong export variables": cross_function_source.replace(
+            "copied_export_bytes, copied_export_count, 0, 0, 0, nullptr",
+            "unrelated_bytes, unrelated_count, 0, 0, 0, nullptr",
+            1,
+        ),
+        "wrong export result argument": cross_function_source.replace(
+            "&copied_export_count))",
+            "&unrelated_export_count))",
+            1,
+        ),
+        "duplicate export record": cross_function_source.replace(
+            export_record,
+            export_record + export_record,
+            1,
+        ),
+        "missing import record": cross_function_source.replace(import_record, "", 1),
+        "wrong import reason": cross_function_source.replace(
+            "FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_CHECKPOINT_IMPORT_H2D",
+            "FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_STATIC_UPLOAD_H2D",
+            1,
+        ),
+        "wrong import variables": cross_function_source.replace(
+            "import_bytes, 4, 0, 0, 0, nullptr",
+            "unrelated_bytes, unrelated_count, 0, 0, 0, nullptr",
+            1,
+        ),
+        "wrong import result variable": cross_function_source.replace(
+            "uint32_t status = materialize_spin_checkpoint_from_host(",
+            "uint32_t unrelated_status = materialize_spin_checkpoint_from_host(",
+            1,
+        ),
+    }
+    for label, mutation in cross_mutations.items():
+        try:
+            scan_text(context_path, mutation)
+        except InventoryError:
+            pass
+        else:
+            raise InventoryError(f"scanner accepted cross-function mutation: {label}")
     print(
         "FDM GPU raw-transfer mutations: PASS "
         "(raw-add, new-file-variable, accounted-to-unaccounted, "
         "direction, reason, category, alternate-api, wrapper-alias, "
-        "function-pointer-alias, cross-function-owner)"
+        "function-pointer-alias, cross-function-record)"
     )
 
 

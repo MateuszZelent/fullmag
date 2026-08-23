@@ -3293,7 +3293,7 @@ uint32_t checkpoint_export_impl(
         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_CHECKPOINT_EXPORT_D2H,
         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER | checkpoint_flags,
-        export_bytes, export_count, 0, 0, snapshot.iterations,
+        copied_export_bytes, copied_export_count, 0, 0, snapshot.iterations,
         snapshot.candidate_digest.data());
     append_charge_telemetry(
         parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL,
