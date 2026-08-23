@@ -463,11 +463,13 @@ describe("geometry lifecycle command contributions", () => {
             model: { commitTransaction },
           } as never,
           resources,
+          resourceData: { [MODEL_SCENE_PATH]: { revision: 21 } },
           selection,
           source: "test",
         }),
       ).toEqual({ status: "completed" });
       expect(commitTransaction).toHaveBeenCalledWith({
+        base_revision: 21,
         geometry: {
           geometry_kind: "Box",
           geometry_params: { size: [1e-7, 1e-7, 1e-8] },
@@ -762,6 +764,7 @@ describe("geometry lifecycle command contributions", () => {
           }),
         },
       } as never,
+      resourceData: { [MODEL_SCENE_PATH]: { revision: 21 } },
       selection,
       source: "test",
     });
@@ -777,6 +780,36 @@ describe("geometry lifecycle command contributions", () => {
       objectId: null,
       ref: null,
     });
+  });
+
+  it("fails closed without a canonical scene revision", async () => {
+    const registry = registryWithLifecycleCommands();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    selection.set(
+      {
+        kind: "builder.primitive",
+        label: "New box",
+        nodeId: "geometry:draft:box",
+        objectId: null,
+        ref: null,
+      },
+      "test",
+    );
+    const commitTransaction = vi.fn();
+
+    expect(registry.isEnabled("geometry.commit-object-draft", { selection, source: "test" }))
+      .toBe(false);
+    expect(
+      await registry.execute("geometry.commit-object-draft", {
+        api: { model: { commitTransaction } } as never,
+        selection,
+        source: "test",
+      }),
+    ).toEqual({
+      message: "The canonical scene revision is unavailable. Refetch the scene before committing.",
+      status: "failed",
+    });
+    expect(commitTransaction).not.toHaveBeenCalled();
   });
 
   it("fails closed for every FEM mesh command and navigation route without a lane", async () => {

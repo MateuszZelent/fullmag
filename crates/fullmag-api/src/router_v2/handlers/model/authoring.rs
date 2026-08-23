@@ -4412,10 +4412,13 @@ fn check_base_scene_revision(
 ) -> Result<(), ApiError> {
     if let Some(base_revision) = base_revision {
         if base_revision != scene.revision {
-            return Err(ApiError::conflict(format!(
-                "scene revision mismatch: base={base_revision}, current={}",
-                scene.revision
-            )));
+            return Err(ApiError::conflict_with_code(
+                "revision_conflict",
+                format!(
+                    "scene revision mismatch: base={base_revision}, current={}",
+                    scene.revision
+                ),
+            ));
         }
     }
     Ok(())

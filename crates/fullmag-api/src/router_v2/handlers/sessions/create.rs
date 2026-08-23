@@ -43,6 +43,7 @@ pub async fn create(
     if replacing && !request.replace_current {
         return Err(ApiError {
             status: StatusCode::CONFLICT,
+            code: None,
             message: "an active local session already exists; set replace_current to replace it"
                 .to_string(),
             diagnostics: Vec::new(),

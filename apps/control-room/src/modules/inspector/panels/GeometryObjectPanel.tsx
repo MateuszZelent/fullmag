@@ -87,7 +87,7 @@ function invalidateAuthoringResources(
   committedScene?: SceneResource,
 ): void {
   if (committedScene) {
-    publishCommittedSceneResource(resources, committedScene, revision);
+    publishCommittedSceneResource(resources, committedScene, revision, undefined, false);
   }
   invalidateAuthoringMutationDependents(resources, "geometry", revision);
 }
@@ -113,8 +113,10 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
   });
   const [pending, setPending] = useState(false);
   const [revisionConflictPhase, setRevisionConflictPhase] = useState<
-    "conflict" | "rebased" | "refetched" | null
+    "conflict" | "refresh-error" | "refreshing" | "rebased" | "refetched" | null
   >(null);
+  const [conflictBaseRevision, setConflictBaseRevision] = useState<number | null>(null);
+  const [refreshSawLoading, setRefreshSawLoading] = useState(false);
   const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
   const feedback =
     feedbackState.key === draftKey ? feedbackState.feedback : null;
@@ -132,6 +134,58 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     }
   }, [draft.mode, primitiveDraft]);
   useEffect(() => () => primitiveDraftOverlayStore.clear(), []);
+  useEffect(() => {
+    if (revisionConflictPhase !== "refreshing") return;
+    let cancelled = false;
+    const updateAfterResourceTransition = (update: () => void) => {
+      queueMicrotask(() => {
+        if (!cancelled) update();
+      });
+    };
+    if (scene.status === "loading") {
+      updateAfterResourceTransition(() => setRefreshSawLoading(true));
+    } else if (scene.status === "error") {
+      updateAfterResourceTransition(() => {
+        setRevisionConflictPhase("refresh-error");
+        setFeedbackState({
+          feedback: {
+            kind: "error",
+            message:
+              scene.error?.message ??
+              "Scene refetch failed. Retry refetch before rebasing.",
+          },
+          key: draftKey,
+        });
+      });
+    } else if (
+      refreshSawLoading &&
+      scene.status === "ready" &&
+      baseDraft.baseRevision !== null &&
+      baseDraft.baseRevision !== conflictBaseRevision
+    ) {
+      updateAfterResourceTransition(() => {
+        setRevisionConflictPhase("refetched");
+        setFeedbackState({
+          feedback: {
+            kind: "error",
+            message: "Scene refetched. Rebase the preserved draft before retrying.",
+          },
+          key: draftKey,
+        });
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    baseDraft.baseRevision,
+    conflictBaseRevision,
+    draftKey,
+    refreshSawLoading,
+    revisionConflictPhase,
+    scene.error,
+    scene.status,
+  ]);
 
   function updateDraft(updater: (current: GeometryObjectDraft) => GeometryObjectDraft): void {
     setDraftState((current) => ({
@@ -164,6 +218,10 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
   }
 
   async function applyCreateDraft(): Promise<void> {
+    if (draft.baseRevision === null) {
+      setFeedback({ kind: "error", message: "The canonical scene revision is unavailable. Refetch the scene before applying." });
+      return;
+    }
     const geometry = buildGeometryDraftPatch(draft);
     if (geometry.error || !geometry.geometry) {
       setFeedback({ kind: "error", message: geometry.error ?? "Invalid geometry draft." });
@@ -214,6 +272,8 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     } catch (error) {
       if (isPrimitiveDraftRevisionConflict(error)) {
         setRevisionConflictPhase("conflict");
+        setConflictBaseRevision(draft.baseRevision);
+        setRefreshSawLoading(false);
       }
       setFeedback({ kind: "error", message: errorMessage(error) });
     } finally {
@@ -221,10 +281,11 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     }
   }
 
-  async function refetchAfterConflict(): Promise<void> {
-    await scene.refetch();
-    setRevisionConflictPhase("refetched");
-    setFeedback({ kind: "error", message: "Scene refetched. Rebase the preserved draft before retrying." });
+  function refetchAfterConflict(): void {
+    setRefreshSawLoading(false);
+    setRevisionConflictPhase("refreshing");
+    setFeedback({ kind: "error", message: "Refetching the canonical scene…" });
+    scene.refetch();
   }
 
   function rebaseAfterConflict(): void {
@@ -236,6 +297,10 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
   }
 
   async function applyGeometryPatch(): Promise<void> {
+    if (draft.baseRevision === null) {
+      setFeedback({ kind: "error", message: "The canonical scene revision is unavailable. Refetch the scene before applying." });
+      return;
+    }
     const geometry = buildGeometryDraftPatch(draft);
     if (geometry.error || !geometry.geometry) {
       setFeedback({ kind: "error", message: geometry.error ?? "Invalid geometry draft." });
@@ -262,6 +327,10 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
   }
 
   async function applyTransformPatch(): Promise<void> {
+    if (draft.baseRevision === null) {
+      setFeedback({ kind: "error", message: "The canonical scene revision is unavailable. Refetch the scene before applying." });
+      return;
+    }
     const transform = buildTransformDraftPatch(draft);
     if (transform.error || !transform.transform) {
       setFeedback({ kind: "error", message: transform.error ?? "Invalid transform draft." });
@@ -551,17 +620,21 @@ function ActionsSection({
   onApplyGeometryPatch: () => Promise<void>;
   onApplyTransformPatch: () => Promise<void>;
   onRebaseAfterConflict: () => void;
-  onRefetchAfterConflict: () => Promise<void>;
+  onRefetchAfterConflict: () => void;
   onRevertDraft: () => void;
   pending: boolean;
-  revisionConflictPhase: "conflict" | "rebased" | "refetched" | null;
+  revisionConflictPhase: "conflict" | "refresh-error" | "refreshing" | "rebased" | "refetched" | null;
 }) {
   return (
     <InspectorGroup title="Actions">
       <div className="fm-inspector-toolbar">
         {draft.mode === "draft-new" ? (
           <Button
-            disabled={pending || revisionConflictPhase !== null}
+            disabled={
+              pending ||
+              draft.baseRevision === null ||
+              revisionConflictPhase !== null
+            }
             size="sm"
             type="button"
             variant="primary"
@@ -585,11 +658,11 @@ function ActionsSection({
       {revisionConflictPhase ? (
         <div className="fm-inspector-toolbar" data-revision-conflict="true">
           <Button
-            disabled={pending}
+            disabled={pending || revisionConflictPhase === "refreshing"}
             size="sm"
             type="button"
             variant="ghost"
-            onClick={() => void onRefetchAfterConflict()}
+            onClick={onRefetchAfterConflict}
           >
             Refetch Scene
           </Button>
@@ -633,7 +706,7 @@ function CommittedObjectActions({
   return (
     <>
       <Button
-        disabled={pending || draft.mode !== "committed"}
+        disabled={pending || draft.mode !== "committed" || draft.baseRevision === null}
         size="sm"
         type="button"
         variant="primary"
@@ -642,7 +715,7 @@ function CommittedObjectActions({
         Apply Geometry
       </Button>
       <Button
-        disabled={pending || draft.mode !== "committed"}
+        disabled={pending || draft.mode !== "committed" || draft.baseRevision === null}
         size="sm"
         type="button"
         onClick={() => void onApplyTransformPatch()}

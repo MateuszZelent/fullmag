@@ -30,7 +30,6 @@ import {
   type DecodedFieldVector,
 } from "@/kernel/api/codecs";
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
-import { primitiveDraftOverlayStore } from "@/kernel/authoring/geometryLifecycleCommands";
 import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
 import {
   isAnalysisFieldQuantityId,
@@ -269,7 +268,7 @@ import {
   resolvePrimitiveSelectionBounds,
   type Viewport3DPrimitiveObject,
 } from "../viewport3dPrimitiveModel";
-import { primitiveDraftOverlayObject } from "../layers/PrimitiveObjectLayerModel";
+import { usePrimitiveDraftOverlay } from "./usePrimitiveDraftOverlay";
 import {
   buildMeshQualityVertexColors,
   topologySupportsTet4FmmqQuality,
@@ -2623,11 +2622,7 @@ export function useViewport3DSceneModel({
   resourceCounts: Viewport3DResourceCounts;
   selection: Selection;
 }) {
-  const primitiveDraft = useSyncExternalStore(
-    primitiveDraftOverlayStore.subscribe,
-    primitiveDraftOverlayStore.getSnapshot,
-    primitiveDraftOverlayStore.getServerSnapshot,
-  );
+  const primitiveDraftOverlay = usePrimitiveDraftOverlay();
   const { analysisFieldOverlay } = useKernel();
   const analysisOverlay = useRenderableAnalysisFieldOverlay(analysisFieldOverlay);
   useEffect(() => {
@@ -2964,11 +2959,9 @@ export function useViewport3DSceneModel({
     );
     return {
       ...committed,
-      draftOverlay: primitiveDraft
-        ? primitiveDraftOverlayObject(primitiveDraft)
-        : null,
+      draftOverlay: primitiveDraftOverlay,
     };
-  }, [primitiveDraft, scene.data, sharedDomainManifest.data]);
+  }, [primitiveDraftOverlay, scene.data, sharedDomainManifest.data]);
   const objectTransformsById = useMemo(() => {
     const sceneRecord = asJsonRecord(scene.data);
     const transforms = new Map<string, unknown>();

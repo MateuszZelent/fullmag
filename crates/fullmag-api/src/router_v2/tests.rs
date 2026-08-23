@@ -16977,6 +16977,36 @@ async fn authoring_transactions_create_transform_and_delete_objects() {
     let create_json = body_json(create_response).await;
     assert_eq!(create_json["transaction_kind"], "create_object");
     let created_revision = create_json["scene_revision"].as_u64().unwrap();
+    let stale_create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/transactions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "create_object",
+                        "base_revision": 12,
+                        "object_id": "stale_box",
+                        "name": "Stale box",
+                        "geometry": {
+                            "geometry_kind": "Box",
+                            "geometry_params": { "size": [100e-9, 100e-9, 30e-9] }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale_create.status(), StatusCode::CONFLICT);
+    let stale_create_json = body_json(stale_create).await;
+    assert_eq!(stale_create_json["code"], "revision_conflict");
+    assert!(stale_create_json["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("base=12")));
     let created_object = create_json["committed_scene"]["objects"]
         .as_array()
         .unwrap()

@@ -1039,6 +1039,7 @@ async fn get_current_session(State(state): State<Arc<AppState>>) -> Result<Json<
 async fn patch_current_session() -> Result<Json<Value>, ApiError> {
     Err(ApiError {
         status: StatusCode::BAD_REQUEST,
+        code: None,
         message: "session metadata mutation is not yet supported by the local runtime".to_string(),
         diagnostics: Vec::new(),
     })

@@ -741,8 +741,12 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
     shortcut: "Ctrl+Enter",
     scope: "selection",
     isEnabled: (context) =>
-      context.selection?.get().kind === "builder.primitive",
-    disabledReason: () => "Open a primitive draft before committing.",
+      context.selection?.get().kind === "builder.primitive" &&
+      sceneBaseRevision(context) !== null,
+    disabledReason: (context) =>
+      context.selection?.get().kind !== "builder.primitive"
+        ? "Open a primitive draft before committing."
+        : "The canonical scene revision is unavailable. Refetch the scene before committing.",
     run: async (context) => {
       const selection = context.selection?.get();
       const primitiveKind = primitiveKindFromDraftSelection(selection);
@@ -752,9 +756,15 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
       if (!context.api) {
         return { message: "Control-room API is unavailable.", status: "failed" };
       }
+      if (baseRevision === null) {
+        return {
+          message: "The canonical scene revision is unavailable. Refetch the scene before committing.",
+          status: "failed",
+        };
+      }
 
       const response = await createObjectTransaction(context.api, {
-        ...(baseRevision !== null ? { base_revision: baseRevision } : {}),
+        base_revision: baseRevision,
         geometry: defaultPrimitiveGeometry(primitiveKind),
         name,
         object_id: objectId,

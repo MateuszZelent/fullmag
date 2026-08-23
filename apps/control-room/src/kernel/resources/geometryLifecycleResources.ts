@@ -511,9 +511,10 @@ export function publishCommittedSceneResource(
   revision: ResourceRevision,
   runtimeStore: ResourceRuntimeStore<SceneResource> =
     sharedResourceRuntimeStore as ResourceRuntimeStore<SceneResource>,
+  invalidate = true,
 ): void {
   runtimeStore.updateData(SCENE_RESOURCE_KEY, scene, revision);
-  resources.invalidate(SCENE_RESOURCE_KEY, revision);
+  if (invalidate) resources.invalidate(SCENE_RESOURCE_KEY, revision);
 }
 
 export function useSceneResource(options: ResourceHookOptions = {}) {
