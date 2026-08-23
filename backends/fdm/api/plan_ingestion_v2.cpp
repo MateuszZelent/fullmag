@@ -15,11 +15,15 @@ void copy_plan_desc_v2_fields(
 #define FULLMAG_FDM_PLAN_V2_AGGREGATE_FIELD(field, expected)
 #define FULLMAG_FDM_PLAN_V2_BASE_FIELD(field, expected) \
     std::memcpy(&destination.base.field, &source.base.field, sizeof(destination.base.field));
+#define FULLMAG_FDM_PLAN_V2_GRID_FIELD(field, expected)
+#define FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD(field, expected)
 #define FULLMAG_FDM_PLAN_V2_TIME_FIELD(field, expected) \
     std::memcpy(&destination.time_policy.field, &source.time_policy.field, \
                 sizeof(destination.time_policy.field));
 #include "fullmag_fdm_plan_desc_v2_layout.def"
 #undef FULLMAG_FDM_PLAN_V2_TIME_FIELD
+#undef FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD
+#undef FULLMAG_FDM_PLAN_V2_GRID_FIELD
 #undef FULLMAG_FDM_PLAN_V2_BASE_FIELD
 #undef FULLMAG_FDM_PLAN_V2_AGGREGATE_FIELD
 #undef FULLMAG_FDM_PLAN_V2_HEADER_FIELD

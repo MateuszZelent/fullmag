@@ -20,11 +20,21 @@ static_assert(sizeof(fullmag_fdm_plan_desc_v2) == 1384);
 #define FULLMAG_FDM_PLAN_V2_BASE_FIELD(field, expected) \
     static_assert(offsetof(fullmag_fdm_plan_desc_v2, base) + \
                       offsetof(fullmag_fdm_plan_desc, field) == expected);
+#define FULLMAG_FDM_PLAN_V2_GRID_FIELD(field, expected) \
+    static_assert(offsetof(fullmag_fdm_plan_desc_v2, base) + \
+                      offsetof(fullmag_fdm_plan_desc, grid) + \
+                      offsetof(fullmag_fdm_grid_desc, field) == expected);
+#define FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD(field, expected) \
+    static_assert(offsetof(fullmag_fdm_plan_desc_v2, base) + \
+                      offsetof(fullmag_fdm_plan_desc, material) + \
+                      offsetof(fullmag_fdm_material_desc, field) == expected);
 #define FULLMAG_FDM_PLAN_V2_TIME_FIELD(field, expected) \
     static_assert(offsetof(fullmag_fdm_plan_desc_v2, time_policy) + \
                       offsetof(fullmag_fdm_time_policy_desc_v2, field) == expected);
 #include "fullmag_fdm_plan_desc_v2_layout.def"
 #undef FULLMAG_FDM_PLAN_V2_TIME_FIELD
+#undef FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD
+#undef FULLMAG_FDM_PLAN_V2_GRID_FIELD
 #undef FULLMAG_FDM_PLAN_V2_BASE_FIELD
 #undef FULLMAG_FDM_PLAN_V2_AGGREGATE_FIELD
 #undef FULLMAG_FDM_PLAN_V2_HEADER_FIELD
@@ -33,6 +43,8 @@ constexpr std::size_t kHeaderFieldCount = 0
 #define FULLMAG_FDM_PLAN_V2_HEADER_FIELD(field, expected) +1
 #define FULLMAG_FDM_PLAN_V2_AGGREGATE_FIELD(field, expected)
 #define FULLMAG_FDM_PLAN_V2_BASE_FIELD(field, expected)
+#define FULLMAG_FDM_PLAN_V2_GRID_FIELD(field, expected)
+#define FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD(field, expected)
 #define FULLMAG_FDM_PLAN_V2_TIME_FIELD(field, expected)
 #include "fullmag_fdm_plan_desc_v2_layout.def"
 ;
@@ -50,20 +62,38 @@ constexpr std::size_t kBaseFieldCount = 0
 #define FULLMAG_FDM_PLAN_V2_BASE_FIELD(field, expected) +1
 #include "fullmag_fdm_plan_desc_v2_layout.def"
 ;
-constexpr std::size_t kTimeFieldCount = 0
+constexpr std::size_t kGridFieldCount = 0
 #undef FULLMAG_FDM_PLAN_V2_BASE_FIELD
 #define FULLMAG_FDM_PLAN_V2_BASE_FIELD(field, expected)
+#undef FULLMAG_FDM_PLAN_V2_GRID_FIELD
+#define FULLMAG_FDM_PLAN_V2_GRID_FIELD(field, expected) +1
+#include "fullmag_fdm_plan_desc_v2_layout.def"
+;
+constexpr std::size_t kMaterialFieldCount = 0
+#undef FULLMAG_FDM_PLAN_V2_GRID_FIELD
+#define FULLMAG_FDM_PLAN_V2_GRID_FIELD(field, expected)
+#undef FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD
+#define FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD(field, expected) +1
+#include "fullmag_fdm_plan_desc_v2_layout.def"
+;
+constexpr std::size_t kTimeFieldCount = 0
+#undef FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD
+#define FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD(field, expected)
 #undef FULLMAG_FDM_PLAN_V2_TIME_FIELD
 #define FULLMAG_FDM_PLAN_V2_TIME_FIELD(field, expected) +1
 #include "fullmag_fdm_plan_desc_v2_layout.def"
 ;
 #undef FULLMAG_FDM_PLAN_V2_TIME_FIELD
+#undef FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD
+#undef FULLMAG_FDM_PLAN_V2_GRID_FIELD
 #undef FULLMAG_FDM_PLAN_V2_BASE_FIELD
 #undef FULLMAG_FDM_PLAN_V2_AGGREGATE_FIELD
 #undef FULLMAG_FDM_PLAN_V2_HEADER_FIELD
 static_assert(kHeaderFieldCount == 2);
 static_assert(kAggregateFieldCount == 2);
 static_assert(kBaseFieldCount == 140);
+static_assert(kGridFieldCount == 6);
+static_assert(kMaterialFieldCount == 4);
 static_assert(kTimeFieldCount == 13);
 
 void check(bool condition, const char *message) {
@@ -183,10 +213,14 @@ void populate_distinct_semantic_sentinels(fullmag_fdm_plan_desc_v2 &plan) {
 #define FULLMAG_FDM_PLAN_V2_AGGREGATE_FIELD(field, expected)
 #define FULLMAG_FDM_PLAN_V2_BASE_FIELD(field, expected) \
     assign_sentinel(plan.base.field, seed++);
+#define FULLMAG_FDM_PLAN_V2_GRID_FIELD(field, expected)
+#define FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD(field, expected)
 #define FULLMAG_FDM_PLAN_V2_TIME_FIELD(field, expected) \
     assign_sentinel(plan.time_policy.field, seed++);
 #include "fullmag_fdm_plan_desc_v2_layout.def"
 #undef FULLMAG_FDM_PLAN_V2_TIME_FIELD
+#undef FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD
+#undef FULLMAG_FDM_PLAN_V2_GRID_FIELD
 #undef FULLMAG_FDM_PLAN_V2_BASE_FIELD
 #undef FULLMAG_FDM_PLAN_V2_AGGREGATE_FIELD
 #undef FULLMAG_FDM_PLAN_V2_HEADER_FIELD
@@ -203,10 +237,14 @@ void check_semantic_receipt(
 #define FULLMAG_FDM_PLAN_V2_HEADER_FIELD(field, expected) FULLMAG_FDM_CHECK_FIELD(field);
 #define FULLMAG_FDM_PLAN_V2_AGGREGATE_FIELD(field, expected)
 #define FULLMAG_FDM_PLAN_V2_BASE_FIELD(field, expected) FULLMAG_FDM_CHECK_FIELD(base.field);
+#define FULLMAG_FDM_PLAN_V2_GRID_FIELD(field, expected)
+#define FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD(field, expected)
 #define FULLMAG_FDM_PLAN_V2_TIME_FIELD(field, expected) \
     FULLMAG_FDM_CHECK_FIELD(time_policy.field);
 #include "fullmag_fdm_plan_desc_v2_layout.def"
 #undef FULLMAG_FDM_PLAN_V2_TIME_FIELD
+#undef FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD
+#undef FULLMAG_FDM_PLAN_V2_GRID_FIELD
 #undef FULLMAG_FDM_PLAN_V2_BASE_FIELD
 #undef FULLMAG_FDM_PLAN_V2_AGGREGATE_FIELD
 #undef FULLMAG_FDM_PLAN_V2_HEADER_FIELD

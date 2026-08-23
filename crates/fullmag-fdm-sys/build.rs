@@ -99,6 +99,8 @@ fn generate_plan_desc_layout_assertions() {
     let mut header_fields = 0usize;
     let mut aggregate_fields = 0usize;
     let mut base_fields = 0usize;
+    let mut grid_fields = 0usize;
+    let mut material_fields = 0usize;
     let mut time_fields = 0usize;
     for line in source.lines().map(str::trim) {
         if line.is_empty() || line.starts_with("/*") {
@@ -139,6 +141,24 @@ fn generate_plan_desc_layout_assertions() {
                     ),
                 )
             }
+            "FULLMAG_FDM_PLAN_V2_GRID_FIELD" => {
+                grid_fields += 1;
+                (
+                    format!("base.grid.{field}"),
+                    format!(
+                    "std::mem::offset_of!(fullmag_fdm_plan_desc_v2, base) + std::mem::offset_of!(fullmag_fdm_plan_desc, grid) + std::mem::offset_of!(fullmag_fdm_grid_desc, {field})"
+                    ),
+                )
+            }
+            "FULLMAG_FDM_PLAN_V2_MATERIAL_FIELD" => {
+                material_fields += 1;
+                (
+                    format!("base.material.{field}"),
+                    format!(
+                    "std::mem::offset_of!(fullmag_fdm_plan_desc_v2, base) + std::mem::offset_of!(fullmag_fdm_plan_desc, material) + std::mem::offset_of!(fullmag_fdm_material_desc, {field})"
+                    ),
+                )
+            }
             "FULLMAG_FDM_PLAN_V2_TIME_FIELD" => {
                 time_fields += 1;
                 (
@@ -157,6 +177,8 @@ fn generate_plan_desc_layout_assertions() {
     assert_eq!(header_fields, 2, "v2 layout manifest header field count drift");
     assert_eq!(aggregate_fields, 2, "v2 layout manifest aggregate field count drift");
     assert_eq!(base_fields, 140, "base plan descriptor field count drift");
+    assert_eq!(grid_fields, 6, "grid descriptor field count drift");
+    assert_eq!(material_fields, 4, "material descriptor field count drift");
     assert_eq!(time_fields, 13, "time policy descriptor field count drift");
 
     let generated = format!("{{\n{assertions}}}\n");
