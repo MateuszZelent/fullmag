@@ -171,6 +171,64 @@ jobs:
           path.write_text(source.replace(old, new, 1), encoding='utf-8')
           PY
 
+      - name: Bind documentation to a validator-compatible Rust declaration
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest_path = Path(
+              'public_docs/site/python-api/magnets-and-textures/'
+              'preset-textures.source-map.json'
+          )
+          manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+          matches = [
+              source
+              for source in manifest.get('sources', [])
+              if source.get('id') == 'rust-inverse-transform'
+          ]
+          if len(matches) != 1:
+              raise RuntimeError(
+                  f'expected one rust-inverse-transform source, found {len(matches)}'
+              )
+          source = matches[0]
+          if source.get('symbol') != 'PreparedTextureTransform':
+              raise RuntimeError(
+                  f'unexpected transform source symbol: {source.get("symbol")!r}'
+              )
+          source['symbol'] = 'prepare'
+          manifest_path.write_text(
+              json.dumps(manifest, indent=2, ensure_ascii=False) + '\n',
+              encoding='utf-8',
+          )
+
+          page_path = Path(
+              'public_docs/site/python-api/magnets-and-textures/preset-textures.md'
+          )
+          page = page_path.read_text(encoding='utf-8')
+          old = (
+              '| coordinate transform | '
+              '`crates/fullmag-plan/src/magnetization_textures_v2.rs` | '
+              '`PreparedTextureTransform` | '
+              'one-time validation plus shared forward/inverse texture transform | '
+              'FDM/FEM planner |'
+          )
+          new = (
+              '| coordinate transform | '
+              '`crates/fullmag-plan/src/magnetization_textures_v2.rs` | '
+              '`prepare` | '
+              'one-time validation plus shared forward/inverse texture transform | '
+              'FDM/FEM planner |'
+          )
+          if page.count(old) != 1:
+              raise RuntimeError(
+                  f'expected one transform source-index row, found {page.count(old)}'
+              )
+          page_path.write_text(page.replace(old, new, 1), encoding='utf-8')
+          PY
+
       - name: Format changed Rust files
         run: |
           rustfmt --edition 2021 \
@@ -237,6 +295,7 @@ jobs:
             crates/fullmag-plan/tests/magnetization_textures_v2_contract.rs
           git diff --check
           test "$(grep -c 'struct PreparedTextureTransform' crates/fullmag-plan/src/magnetization_textures_v2.rs)" -eq 1
+          test "$(grep -c 'fn prepare(transform: &TextureTransform3DIR)' crates/fullmag-plan/src/magnetization_textures_v2.rs)" -eq 1
           test "$(grep -c 'fn apply_fem_region_texture_overrides' crates/fullmag-plan/src/fem.rs)" -eq 1
           test "$(grep -c 'fn apply_region_texture_overrides' crates/fullmag-plan/src/fdm.rs)" -eq 1
           test "$(grep -c 'fn sample_region_initial_on_mask' crates/fullmag-plan/src/region_textures.rs)" -eq 1
