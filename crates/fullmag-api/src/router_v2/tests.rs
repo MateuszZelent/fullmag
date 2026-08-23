@@ -39244,9 +39244,56 @@ fn openapi_session_creation_declares_typed_request_and_outcomes() {
         "CreateSessionResponse",
         "ScratchSessionStatusResource",
         "SessionExecutionResource",
+        "ScratchSessionBackend",
+        "ScratchSessionDevice",
+        "ScratchSessionPrecision",
+        "ScratchSceneSchemaVersion",
     ] {
         assert!(schemas.get(schema).is_some(), "OpenAPI missing {schema}");
     }
+
+    let request = &schemas["CreateSessionRequest"];
+    assert_eq!(
+        request["properties"]["backend"]["$ref"],
+        "#/components/schemas/ScratchSessionBackend"
+    );
+    assert_eq!(
+        request["properties"]["device"]["$ref"],
+        "#/components/schemas/ScratchSessionDevice"
+    );
+    assert_eq!(
+        request["properties"]["precision"]["$ref"],
+        "#/components/schemas/ScratchSessionPrecision"
+    );
+    assert_eq!(schemas["ScratchSessionBackend"]["enum"], serde_json::json!(["fdm", "fem"]));
+    assert_eq!(schemas["ScratchSessionDevice"]["enum"], serde_json::json!(["cpu"]));
+    assert_eq!(
+        schemas["ScratchSessionPrecision"]["enum"],
+        serde_json::json!(["double"])
+    );
+
+    let scene_document = &schemas["ScratchSceneDocumentResource"];
+    assert_eq!(
+        scene_document["properties"]["schema_version"]["$ref"],
+        "#/components/schemas/ScratchSceneSchemaVersion"
+    );
+    assert_eq!(
+        schemas["ScratchSceneSchemaVersion"]["enum"],
+        serde_json::json!(["0.3"])
+    );
+
+    let status = &schemas["ScratchSessionStatusResource"];
+    let required = status["required"]
+        .as_array()
+        .expect("scratch session status must declare required properties");
+    assert!(
+        required.iter().any(|field| field == "fallback"),
+        "scratch session fallback must always be present"
+    );
+    assert_eq!(
+        status["properties"]["fallback"]["type"],
+        serde_json::json!(["string", "null"])
+    );
 }
 
 #[test]

@@ -938,7 +938,23 @@ describe("ControlRoomApi", () => {
       precision: "double",
     });
 
+    type CreateScratchSessionInput = Parameters<typeof api.sessions.create>[0];
+    expectTypeOf<CreateScratchSessionInput>().toEqualTypeOf<{
+      backend: "fdm" | "fem";
+      device: "cpu";
+      name: string;
+      precision: "double";
+      replace_current?: boolean;
+    }>();
+    expectTypeOf<typeof created.scene_document.schema_version>().toEqualTypeOf<"0.3">();
+    expectTypeOf<typeof created.status.fallback>().toEqualTypeOf<string | null>();
+
+    // @ts-expect-error The typed facade rejects unsupported execution requests before transport.
+    void ({ backend: "gpu", device: "cpu", name: "Invalid", precision: "double" } satisfies CreateScratchSessionInput);
+
     expect(created.session_id).toBe("session-scratch");
+    expect(created.status.fallback).toBeNull();
+    expect(created.scene_document.schema_version).toBe("0.3");
     expect(observedUrl).toBe(`http://127.0.0.1:8765${SESSIONS_PATH}`);
     expect(observedInit?.method).toBe("POST");
     expect(parseRequestJsonBody(observedInit?.body)).toMatchObject({

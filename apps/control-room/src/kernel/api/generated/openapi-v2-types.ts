@@ -4200,10 +4200,10 @@ export interface components {
             utilization_cpu_percent: number;
         };
         CreateSessionRequest: {
-            backend: string;
-            device: string;
+            backend: components["schemas"]["ScratchSessionBackend"];
+            device: components["schemas"]["ScratchSessionDevice"];
             name: string;
-            precision: string;
+            precision: components["schemas"]["ScratchSessionPrecision"];
             replace_current?: boolean;
         };
         CreateSessionResponse: {
@@ -9210,9 +9210,17 @@ export interface components {
             /** Format: int64 */
             revision?: number | null;
             scene?: null | components["schemas"]["SceneMetadataResource"];
-            schema_version: string;
+            schema_version: components["schemas"]["ScratchSceneSchemaVersion"];
             version?: string | null;
         };
+        /** @enum {string} */
+        ScratchSceneSchemaVersion: "0.3";
+        /** @enum {string} */
+        ScratchSessionBackend: "fdm" | "fem";
+        /** @enum {string} */
+        ScratchSessionDevice: "cpu";
+        /** @enum {string} */
+        ScratchSessionPrecision: "double";
         ScratchSessionRevisionsResource: {
             /** Format: int64 */
             scene_revision: number;
@@ -9221,7 +9229,7 @@ export interface components {
         };
         ScratchSessionStatusResource: {
             effective_execution: components["schemas"]["SessionExecutionResource"];
-            fallback?: string | null;
+            fallback: string | null;
             requested_execution: components["schemas"]["SessionExecutionResource"];
         };
         ScriptSourceResponse: {
@@ -9458,9 +9466,9 @@ export interface components {
         /** @enum {string} */
         SessionConnectivity: "connected" | "degraded" | "disconnected";
         SessionExecutionResource: {
-            backend: string;
-            device: string;
-            precision: string;
+            backend: components["schemas"]["ScratchSessionBackend"];
+            device: components["schemas"]["ScratchSessionDevice"];
+            precision: components["schemas"]["ScratchSessionPrecision"];
         };
         SessionExportRequest: {
             compression?: null | components["schemas"]["CompressionProfile"];

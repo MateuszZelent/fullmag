@@ -279,7 +279,11 @@ use utoipa::OpenApi;
     components(schemas(
         crate::schemas::sessions::CreateSessionRequest,
         crate::schemas::sessions::CreateSessionResponse,
+        crate::schemas::sessions::ScratchSceneSchemaVersion,
         crate::schemas::sessions::ScratchSceneDocumentResource,
+        crate::schemas::sessions::ScratchSessionBackend,
+        crate::schemas::sessions::ScratchSessionDevice,
+        crate::schemas::sessions::ScratchSessionPrecision,
         crate::schemas::sessions::ScratchSessionRevisionsResource,
         crate::schemas::sessions::ScratchSessionStatusResource,
         crate::schemas::sessions::SessionExecutionResource,

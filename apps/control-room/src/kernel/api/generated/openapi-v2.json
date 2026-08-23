@@ -2639,16 +2639,16 @@
       "CreateSessionRequest": {
         "properties": {
           "backend": {
-            "type": "string"
+            "$ref": "#/components/schemas/ScratchSessionBackend"
           },
           "device": {
-            "type": "string"
+            "$ref": "#/components/schemas/ScratchSessionDevice"
           },
           "name": {
             "type": "string"
           },
           "precision": {
-            "type": "string"
+            "$ref": "#/components/schemas/ScratchSessionPrecision"
           },
           "replace_current": {
             "type": "boolean"
@@ -22552,7 +22552,7 @@
             ]
           },
           "schema_version": {
-            "type": "string"
+            "$ref": "#/components/schemas/ScratchSceneSchemaVersion"
           },
           "version": {
             "type": [
@@ -22566,6 +22566,31 @@
           "objects"
         ],
         "type": "object"
+      },
+      "ScratchSceneSchemaVersion": {
+        "enum": [
+          "0.3"
+        ],
+        "type": "string"
+      },
+      "ScratchSessionBackend": {
+        "enum": [
+          "fdm",
+          "fem"
+        ],
+        "type": "string"
+      },
+      "ScratchSessionDevice": {
+        "enum": [
+          "cpu"
+        ],
+        "type": "string"
+      },
+      "ScratchSessionPrecision": {
+        "enum": [
+          "double"
+        ],
+        "type": "string"
       },
       "ScratchSessionRevisionsResource": {
         "properties": {
@@ -22603,7 +22628,8 @@
         },
         "required": [
           "requested_execution",
-          "effective_execution"
+          "effective_execution",
+          "fallback"
         ],
         "type": "object"
       },
@@ -23623,13 +23649,13 @@
       "SessionExecutionResource": {
         "properties": {
           "backend": {
-            "type": "string"
+            "$ref": "#/components/schemas/ScratchSessionBackend"
           },
           "device": {
-            "type": "string"
+            "$ref": "#/components/schemas/ScratchSessionDevice"
           },
           "precision": {
-            "type": "string"
+            "$ref": "#/components/schemas/ScratchSessionPrecision"
           }
         },
         "required": [
@@ -45116,8 +45142,8 @@
     }
   ],
   "x-fullmag-build-identity": {
-    "built_at_utc": "2026-08-23T12:20:07Z",
-    "git_commit": "1e7805a0855256f9e08180733bf0be9047a20fae",
+    "built_at_utc": "2026-08-23T12:49:03Z",
+    "git_commit": "b7588f8a640407b22e855a096bd1790274843d61",
     "source_snapshot_sha256": "unknown",
     "worktree_state": "dirty"
   },
