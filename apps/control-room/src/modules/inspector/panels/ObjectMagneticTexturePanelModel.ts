@@ -131,6 +131,7 @@ function asNumberArray(value: unknown): number[] | null {
 
 const PRESET_IDS = new Set<string>([
   "uniform",
+  "random",
   "random_seeded",
   "vortex",
   "antivortex",
@@ -725,7 +726,7 @@ export function objectMagneticTexturePresetChangePatch(
 function defaultPresetDraftPatch(
   presetKind: MagnetizationTexturePresetId,
 ): Partial<ObjectMagneticTextureDraft> {
-  if (presetKind === "random_seeded") {
+  if (presetKind === "random" || presetKind === "random_seeded") {
     return { seed: "1" };
   }
 
@@ -960,7 +961,7 @@ function presetParamsFromDraft(
   presetKind: MagnetizationTexturePresetId,
   draft: ObjectMagneticTextureDraft,
 ): JsonObject {
-  if (presetKind === "random_seeded") {
+  if (presetKind === "random" || presetKind === "random_seeded") {
     return {
       seed: requiredNonNegativeInteger(draft.seed, "Random seed"),
     };
@@ -1144,6 +1145,7 @@ function defaultLabel(presetKind: MagnetizationTexturePresetId): string {
   switch (presetKind) {
     case "uniform":
       return "Uniform texture";
+    case "random":
     case "random_seeded":
       return "Random seeded texture";
     case "vortex":

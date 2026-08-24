@@ -30,7 +30,7 @@ describe("Mumax3 magnetic texture UI coverage", () => {
   it("registers every analytic Mumax3 configuration and Fullmag extension", () => {
     expect(MAGNETIZATION_TEXTURE_PRESETS.map((preset) => preset.id)).toEqual([
       "uniform",
-      "random_seeded",
+      "random",
       "vortex",
       "antivortex",
       "bloch_skyrmion",
@@ -65,6 +65,38 @@ describe("Mumax3 magnetic texture UI coverage", () => {
     expect(asset.preset_kind).toBe(presetKind);
     expect(asset.preset_version).toBe(2);
     expect(asset.preset_params).toBeTruthy();
+  });
+
+  it("round-trips the canonical random preset without replacing it with uniform", () => {
+    const model: ObjectMagneticTexturePanelModel = {
+      ...MODEL,
+      asset: {
+        id: "mag:magnet:random",
+        kind: "preset_texture",
+        mapping: { clamp: "none", projection: "object_local", space: "object" },
+        preset_kind: "random",
+        preset_params: { seed: 17 },
+        preset_version: 2,
+        name: "Random seeded texture",
+        texture_transform: {
+          pivot: [0, 0, 0],
+          rotation_deg: [0, 0, 0],
+          scale: [1, 1, 1],
+          translation: [0, 0, 0],
+        },
+      },
+      assetId: "mag:magnet:random",
+      assetKind: "preset_texture",
+      assetLabel: "Random seeded texture",
+      presetKind: "random",
+    };
+    const draft = objectMagneticTextureDraftFromModel(model);
+
+    expect(draft).toMatchObject({ presetKind: "random", seed: "17" });
+    expect(buildObjectMagneticTextureAssetDraft(model, draft)).toMatchObject({
+      preset_kind: "random",
+      preset_params: { seed: 17 },
+    });
   });
 
   it("resets both hopfion presets to object-local projection", () => {

@@ -212,6 +212,13 @@ round-trip every authored parameter unchanged.
 (discrete-realization)=
 ## Discrete realization and backend semantics
 
+| Solver | Device | Realization | Qualification status |
+|---|---|---|---|
+| FDM | CPU | planner sampling at active cell centres | source and shared Rust/Python fixture evidence |
+| FDM | GPU | consumes the shared planner-materialized initial field | semantic parity; GPU runtime qualification remains separate |
+| FEM | CPU | planner sampling at magnetic mesh points | source and shared Rust/Python fixture evidence |
+| FEM | GPU | consumes the shared planner-materialized initial field | semantic parity; GPU runtime qualification remains separate |
+
 The planner samples the same version-2 descriptor at FDM cell centres or FEM magnetic
 mesh points. CPU and GPU lanes consume that materialized vector field; there is no
 backend-specific reinterpretation of either profile. The preset descriptor, requested

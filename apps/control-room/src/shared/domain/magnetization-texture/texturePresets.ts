@@ -1,5 +1,6 @@
 export type MagnetizationTexturePresetId =
   | "uniform"
+  | "random"
   | "random_seeded"
   | "vortex"
   | "antivortex"
@@ -30,7 +31,7 @@ export const MAGNETIZATION_TEXTURE_PRESETS: readonly MagnetizationTexturePreset[
   },
   {
     defaultParams: { seed: 1 },
-    id: "random_seeded",
+    id: "random",
     label: "Random seeded",
   },
   {

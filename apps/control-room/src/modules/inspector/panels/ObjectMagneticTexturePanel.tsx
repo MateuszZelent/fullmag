@@ -364,7 +364,7 @@ export function MagneticTexturePresetParametersSection({
           }}
         />
       ) : null}
-      {draft.presetKind === "random_seeded" ? (
+      {draft.presetKind === "random" || draft.presetKind === "random_seeded" ? (
         <DraftNumberField draft={draft} field="seed" label="Seed" updateDraft={updateDraft} />
       ) : null}
       {draft.presetKind === "vortex" || draft.presetKind === "antivortex" ? (
