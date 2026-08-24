@@ -3230,6 +3230,17 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(loaded.problem.runtime_metadata["study_universe"]["airbox_hmax"], 80e-9)
         self.assertEqual(workflow["per_geometry"][0]["hmax"], 25e-9)
 
+    def test_object_mesh_rejects_imported_mesh_source(self) -> None:
+        fm.reset()
+        study = fm.study("object_mesh_source_rejected")
+        body = study.geometry(fm.Box(20e-9, 20e-9, 10e-9), name="body")
+
+        with self.assertRaisesRegex(
+            ValueError,
+            r"per-object mesh source is unavailable; use FEM\(mesh=\.\.\.\)",
+        ):
+            body.mesh(source="object.mesh")
+
     def test_study_build_domain_mesh_requires_explicit_airbox_hmax(self) -> None:
         script = """
         import fullmag as fm

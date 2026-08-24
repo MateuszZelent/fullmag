@@ -231,8 +231,11 @@ export function validateObjectMeshTopologyCapabilities(
   }
   const builtConfig = "request" in built ? built.request.config : null;
   const requestedLayerCounts = [
-    rawConfig.ok ? rawConfig.value.through_thickness_elements : undefined,
-    builtConfig?.through_thickness_elements,
+    draft.throughThicknessElements.trim()
+      ? builtConfig?.through_thickness_elements
+      : rawConfig.ok
+        ? rawConfig.value.through_thickness_elements
+        : undefined,
   ].filter(
     (value): value is number => typeof value === "number" && Number.isInteger(value),
   );
@@ -511,6 +514,18 @@ export function buildObjectMeshPolicyReplaceRequest({
   const config = parseConfig(configText);
   if (!config.ok) return { error: config.error };
   const value = { ...config.value };
+  const advancedSource = value.source;
+  if (
+    source.trim() ||
+    (advancedSource !== undefined &&
+      advancedSource !== null &&
+      advancedSource !== "")
+  ) {
+    return {
+      error:
+        "Per-object mesh source is unavailable; use the study-level imported mesh route.",
+    };
+  }
 
   const numericFields: Array<[
     key: string,

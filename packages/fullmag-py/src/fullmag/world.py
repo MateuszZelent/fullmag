@@ -1670,6 +1670,12 @@ class GeometryMeshHandle:
         exact_layer_count : bool, optional
             Require the requested through-thickness element count exactly.
         """
+        if source is not None:
+            raise ValueError(
+                "per-object mesh source is unavailable; use FEM(mesh=...) for "
+                "the supported study-level imported mesh route"
+            )
+
         spec = copy.deepcopy(self._owner._mesh_spec)
         if cell_size is not None:
             if any(
@@ -1711,8 +1717,6 @@ class GeometryMeshHandle:
             spec.hmin = resolved_hmin
         if order is not None:
             spec.order = order
-        if source is not None:
-            spec.source = source
         if calibrate_for is not None:
             spec.calibrate_for = _normalize_mesh_calibration(calibrate_for)
         if size_preset is not None:

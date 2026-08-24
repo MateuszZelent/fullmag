@@ -278,7 +278,7 @@ def _resolve_requested_partition_hmaxs(
         requested = _lookup_geometry_name_alias(override_by_name, geometry.geometry_name)
         if requested is None:
             requested = default_object_hmax
-        if requested is None and (airbox_hmax is None):
+        if requested is None:
             requested = float(hints.hmax) if hints.hmax is not None else None
         object_hmax_by_geometry[geometry.geometry_name] = requested
     return requested_airbox_hmax, object_hmax_by_geometry
