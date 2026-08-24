@@ -44,16 +44,9 @@ Mumax3 `Config` constructors.
 
 ## Mumax3-compatible vortex wall
 
-```python
-wall = fm.texture.vortex_wall(
-    wall_half_width=25e-9,
-    left_mx=1,
-    right_mx=-1,
-    circulation=1,
-    core_polarity=1,
-    core_radius=2e-9,
-)
-```
+The complete stage-first Python scenario below constructs
+`fm.texture.vortex_wall(wall_half_width=25e-9, left_mx=1, right_mx=-1,
+circulation=1, core_polarity=1, core_radius=2e-9)`.
 
 For local coordinate $u$, Fullmag returns the normalized left domain for
 $u<-w$, the normalized right domain for $u>w$, and its version-2 vortex profile in
@@ -77,12 +70,8 @@ zero explicitly because its canonical reduced-magnetization field must be unit l
 
 ## Compact-support hopfion
 
-```python
-compact_hopfion = fm.texture.hopfion_compact_support(
-    major_radius=20e-9,
-    minor_radius=8e-9,
-)
-```
+The same executable scenario constructs
+`fm.texture.hopfion_compact_support(major_radius=20e-9, minor_radius=8e-9)`.
 
 For $\psi=\operatorname{atan2}(y,x)$, the toroidal radial coordinate is
 $a_H=x\cos\psi+y\sin\psi-R$ and $\rho=\sqrt{z^2+a_H^2}$; the interior profile is

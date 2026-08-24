@@ -220,13 +220,21 @@ jobs:
           python scripts/test_bootstrap_workflow_contract.py -v
 
       - name: Install Python package
-        run: python -m pip install -e 'packages/fullmag-py[meshing]'
+        run: |
+          python -m pip install 'pytest>=9,<10'
+          python -m pip install -e 'packages/fullmag-py[meshing]'
 
       - name: Run Python API tests
         run: python -m unittest discover -s packages/fullmag-py/tests -p 'test_api.py' -v
 
       - name: Run Python meshing tests
         run: python -m unittest discover -s packages/fullmag-py/tests -p 'test_meshing.py' -v
+
+      - name: Run texture compatibility contracts
+        run: >-
+          python -m pytest -q
+          packages/fullmag-py/tests/test_mumax3_texture_compatibility.py
+          packages/fullmag-py/tests/test_preset_texture_v2_parity.py
 
       - name: Repository consistency checks
         run: python scripts/check_repo_consistency.py

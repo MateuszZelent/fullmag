@@ -218,6 +218,30 @@ jobs:
         self.assertIn(install, rust_job)
         self.assertLess(rust_job.index(install), rust_job.index(run))
 
+    def test_texture_compatibility_regressions_run_in_required_contract_jobs(self) -> None:
+        workflow = (ROOT / ".github/workflows/bootstrap.yml").read_text()
+        gate = (ROOT / "scripts/ci/run_frontend3d_required_gate.sh").read_text()
+
+        self.assertIn(
+            "cargo test -p fullmag-plan --test magnetization_textures_v2_parity "
+            "--test mumax3_texture_compatibility --no-fail-fast",
+            gate,
+        )
+        python_job = workflow.split("  python-contracts:\n", 1)[1]
+        self.assertIn(
+            "python -m pip install 'pytest>=9,<10'",
+            python_job,
+        )
+        self.assertIn("python -m pytest -q", python_job)
+        self.assertIn(
+            "packages/fullmag-py/tests/test_mumax3_texture_compatibility.py",
+            python_job,
+        )
+        self.assertIn(
+            "packages/fullmag-py/tests/test_preset_texture_v2_parity.py",
+            python_job,
+        )
+
     def test_meshing_extra_provides_trimesh_boolean_backend(self) -> None:
         pyproject = (ROOT / "packages/fullmag-py/pyproject.toml").read_text()
 

@@ -4,7 +4,7 @@
     "title": "Preset Textures",
     "status": "implemented_with_explicit_mapping_and_runtime_qualification_limits",
     "updated": "2026-08-23",
-    "source_revision": "0343d94d37b7c69e0eef36eee2ca42a8ca3c3135"
+    "source_revision": "2a04975375242346a9d656a360f8fc4b1a124cdb"
   },
   "backend_matrix": [
     {
@@ -569,6 +569,18 @@
       "path": "packages/fullmag-py/src/fullmag/init/textures.py",
       "symbol": "class PresetTexture",
       "responsibility": "versioned preset descriptor, immutable transform chaining, and ProblemIR serialization"
+    },
+    {
+      "id": "python-vortex-wall-factory",
+      "path": "packages/fullmag-py/src/fullmag/init/textures.py",
+      "symbol": "vortex_wall",
+      "responsibility": "public Mumax3-compatible vortex-wall factory and parameter validation"
+    },
+    {
+      "id": "python-compact-hopfion-factory",
+      "path": "packages/fullmag-py/src/fullmag/init/textures.py",
+      "symbol": "hopfion_compact_support",
+      "responsibility": "public Mumax3-compatible compact-support hopfion factory and parameter validation"
     },
     {
       "id": "python-mapping",
@@ -1536,6 +1548,116 @@
         "si_unit": "1",
         "validation": "exactly 2",
         "meaning": "selects the v2 hopfion contract",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_version"
+      },
+      {
+        "python": "texture.vortex_wall.wall_half_width",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite and positive",
+        "meaning": "central vortex-strip half-width",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.wall_half_width"
+      },
+      {
+        "python": "texture.vortex_wall.left_mx",
+        "type": "float",
+        "default": "1.0",
+        "si_unit": "1",
+        "validation": "finite and nonzero",
+        "meaning": "left-domain sign before normalization",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.left_mx"
+      },
+      {
+        "python": "texture.vortex_wall.right_mx",
+        "type": "float",
+        "default": "-1.0",
+        "si_unit": "1",
+        "validation": "finite and nonzero",
+        "meaning": "right-domain sign before normalization",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.right_mx"
+      },
+      {
+        "python": "texture.vortex_wall.circulation",
+        "type": "int",
+        "default": "1",
+        "si_unit": "1",
+        "validation": "-1 or +1",
+        "meaning": "central-vortex circulation",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.circulation"
+      },
+      {
+        "python": "texture.vortex_wall.core_polarity",
+        "type": "int",
+        "default": "1",
+        "si_unit": "1",
+        "validation": "-1 or +1",
+        "meaning": "central-vortex core polarity",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.core_polarity"
+      },
+      {
+        "python": "texture.vortex_wall.core_radius",
+        "type": "float",
+        "default": "1e-9",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite and positive",
+        "meaning": "central-vortex core radius",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.core_radius"
+      },
+      {
+        "python": "texture.vortex_wall.plane",
+        "type": "str",
+        "default": "\"xy\"",
+        "si_unit": "1",
+        "validation": "\"xy\", \"xz\", or \"yz\"",
+        "meaning": "right-handed local texture frame",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.plane"
+      },
+      {
+        "python": "texture.vortex_wall.preset_version",
+        "type": "int",
+        "default": "2",
+        "si_unit": "1",
+        "validation": "exactly 2",
+        "meaning": "selects the v2 vortex-wall contract",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_version"
+      },
+      {
+        "python": "texture.hopfion_compact_support.major_radius",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite and positive",
+        "meaning": "torus major radius",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.major_radius"
+      },
+      {
+        "python": "texture.hopfion_compact_support.minor_radius",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite, positive, and no greater than major_radius",
+        "meaning": "cross-section and compact-support radius",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.minor_radius"
+      },
+      {
+        "python": "texture.hopfion_compact_support.preset_version",
+        "type": "int",
+        "default": "2",
+        "si_unit": "1",
+        "validation": "exactly 2",
+        "meaning": "selects the v2 compact-support hopfion contract",
         "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
         "problem_ir": "initial_magnetization.preset_version"
       }
