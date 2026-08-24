@@ -371,3 +371,41 @@ Po tej aktualizacji: `cargo check -p fullmag-cli --bin fullmag` **PASS**,
 test owner-loss **1 passed**, filtr `wait_for_solve` **4 passed**. Uzupełniono
 też stare fixture’y CLI o aktualne pola ProblemIR, dzięki czemu ta bramka nie
 jest już blokowana błędem kompilacji testów.
+
+### Aktualizacja bramki 2026-08-25 (stan końcowy tej sesji)
+
+- FDM browser smoke został powtórzony po zmianach harnessu i fasady API:
+  **PASS**. Manifest pozostaje w
+  `C:\Users\admin\Documents\Fullmag\.fullmag\scratch-evidence\browser-fdm-filtered\fdm.manifest.json`.
+  Potwierdzone są `mesh_build:completed`, `relax:completed`, zdrowy WebGL
+  (`context_lost=false`, drawing buffer `617x525`), `request_failures=[]` oraz
+  `unexpected_http_errors=[]` po jawnej allowliście opcjonalnych zasobów.
+- Bramki lokalne po ostatnim commicie `3701037bdbc08ac9f7d12452074ff590f1ca7350`
+  są zielone: `ControlRoomApi` **129/129**, browser helper **7/7**, Python
+  scratch round-trip **9 passed**, `wait_for_solve` **4 passed**, owner-loss
+  **1 passed**, build `fullmag` **PASS**, ESLint zmienionych plików **PASS**.
+- Pełny frontendowy typecheck nadal ujawnia sześć błędów bazowych poza zakresem
+  tej zmiany (`visualizationCommandContributions.ts`,
+  `FrozenSpinsInspectorPanel.tsx`, `ribbonCommands.ts` oraz trzy błędy
+  `Resizable.tsx`). Globalna bramka architektury zgłasza też istniejące surowe
+  kolory Catppuccin w `MoveObjectGizmo.tsx`; nie są to regresje wprowadzonych
+  zmian.
+- Kanoniczny managed FEM nie został zakwalifikowany. `just
+  ensure-managed-fem-runtime` na Windows zatrzymuje się najpierw na błędzie
+  cytowania zagnieżdżonego Bash (`unexpected EOF while looking for matching
+  \"`). Bezpośrednia recepta `just rebuild-fem-runtime`, uruchomiona przez
+  WSL, dochodzi do skryptu eksportu, ale checkout worktree ma CRLF i kończy się
+  na `/usr/bin/env: ‘bash\\r’: No such file or directory` (oraz `set: pipefail\\r`
+  przy wywołaniu przez `bash`).
+- Po uruchomieniu WSL z podniesionymi uprawnieniami dostępna jest wyłącznie
+  dystrybucja `Ubuntu`; nie ma `/zfn2`, `/mnt/fullmag-zfn2-native`, obrazu
+  `fullmag-native.ext4` ani archiwum `fem-gpu-host-latest.tar`. Zgodnie z
+  kontraktem projektu nie zastępuję tego hostowym buildem FEM. E2 (FEM
+  browser/runtime) pozostaje więc **BLOCKED przez środowisko**, a nie przez
+  niezweryfikowaną ścieżkę UI.
+
+Aktualny stan celu: około **88% zrealizowane**. Pozostałe ~12% to uruchomienie
+kanonicznego managed FEM na hoście z działającym WSL/ext4 storage, wykonanie
+`just run-scratch-authoring-fem-browser-smoke fem_execution=cpu` i dołączenie
+manifestu z `requested/effective/resolved == FEM/CPU`; dopiero wtedy można
+oznaczyć E2/E5 jako PASS.
