@@ -213,3 +213,8 @@ def test_required_contexts_and_proof_output_are_fail_closed() -> None:
         "frontend-3d-managed-fem / managed-fem-qualification",
     ):
         assert context in matrix
+
+
+def test_browser_audit_build_keeps_next_env_source_identity_stable() -> None:
+    next_env = (REPO_ROOT / "apps/control-room/next-env.d.ts").read_text()
+    assert 'import "./.next-audit/types/routes.d.ts";' in next_env

@@ -702,8 +702,8 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
         resolved_device: Some("cpu".into()),
         resolved_precision: Some("double".into()),
         resolved_mode: Some("strict".into()),
-        resolved_runtime_family: None,
-        resolved_engine_id: None,
+        resolved_runtime_family: Some("fdm_cpu_reference".into()),
+        resolved_engine_id: Some("fdm_cpu_reference".into()),
         resolved_worker: None,
         resolved_cpu_threads: None,
         resolved_fallback: None,
@@ -727,7 +727,7 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
             is_busy: false,
             can_accept_commands: true,
         },
-        capabilities: Some(resolved_compute_fields_capabilities(&["m"])),
+        capabilities: Some(resolved_all_field_capabilities()),
         metadata: None,
         mesh_workspace: None,
         stage_execution: None,
@@ -1144,7 +1144,7 @@ async fn stale_runner_heartbeat_disconnects_status_and_rejects_mutating_commands
 
     assert_eq!(status_response.status(), StatusCode::OK);
     let body = body_json(status_response).await;
-    assert_eq!(body["lifecycle"]["solver"], "awaiting_command");
+    assert_eq!(body["lifecycle"]["solver"], "running");
     assert_eq!(body["lifecycle"]["session_resource"], "active");
     assert_eq!(body["lifecycle"]["connectivity"], "disconnected");
     assert_eq!(body["lifecycle"]["commandability"], "forbidden");
@@ -1199,7 +1199,7 @@ async fn delayed_runner_heartbeat_degrades_status_and_rejects_mutating_commands(
         .unwrap();
     assert_eq!(status_response.status(), StatusCode::OK);
     let status_body = body_json(status_response).await;
-    assert_eq!(status_body["lifecycle"]["solver"], "awaiting_command");
+    assert_eq!(status_body["lifecycle"]["solver"], "running");
     assert_eq!(status_body["lifecycle"]["connectivity"], "degraded");
     assert_eq!(status_body["lifecycle"]["commandability"], "forbidden");
 
@@ -1858,8 +1858,8 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
         resolved_device: Some("cpu".into()),
         resolved_precision: Some("double".into()),
         resolved_mode: Some("strict".into()),
-        resolved_runtime_family: None,
-        resolved_engine_id: None,
+        resolved_runtime_family: Some("fdm_cpu_reference".into()),
+        resolved_engine_id: Some("fdm_cpu_reference".into()),
         resolved_worker: None,
         resolved_cpu_threads: None,
         resolved_fallback: None,
@@ -2004,8 +2004,8 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         resolved_device: Some("cpu".into()),
         resolved_precision: Some("double".into()),
         resolved_mode: Some("strict".into()),
-        resolved_runtime_family: None,
-        resolved_engine_id: None,
+        resolved_runtime_family: Some("fdm_cpu_reference".into()),
+        resolved_engine_id: Some("fdm_cpu_reference".into()),
         resolved_worker: None,
         resolved_cpu_threads: None,
         resolved_fallback: None,
@@ -2779,7 +2779,7 @@ async fn status_exposes_planner_owned_active_lane_capability_snapshot() {
             .as_object()
             .expect("operation capability map")
             .len(),
-        29
+        31
     );
     assert!(active_lane["operations"]["study.frequency_response"]["reason"].is_string());
     assert!(active_lane["operations"]["study.frequency_response"]["requires"].is_array());
@@ -2788,6 +2788,13 @@ async fn status_exposes_planner_owned_active_lane_capability_snapshot() {
 #[tokio::test]
 async fn status_active_lane_fails_closed_when_planner_capabilities_are_missing() {
     let state = test_app_state_with_live_session().await;
+    state
+        .current_live_state
+        .write()
+        .await
+        .as_mut()
+        .expect("live session")
+        .capabilities = None;
     let response = build_v2_router()
         .with_state(state)
         .oneshot(
@@ -19591,6 +19598,22 @@ fn resolved_compute_fields_capabilities(
     }
 }
 
+fn resolved_all_field_capabilities() -> fullmag_runner::BackendCapabilities {
+    let field_quantities = fullmag_quantities::quantity_specs()
+        .iter()
+        .filter(|spec| {
+            matches!(
+                spec.shape,
+                fullmag_quantities::QuantityShape::VectorField
+                    | fullmag_quantities::QuantityShape::TensorField
+                    | fullmag_quantities::QuantityShape::SpatialScalar
+            )
+        })
+        .map(|spec| spec.id.as_str())
+        .collect::<Vec<_>>();
+    resolved_compute_fields_capabilities(&field_quantities)
+}
+
 #[tokio::test]
 async fn compute_fields_command_contract_resolves_fdm_full_requirement() {
     let state = test_app_state_with_live_session().await;
@@ -24780,7 +24803,7 @@ async fn session_checkpoint_create_captures_live_magnetization() {
     assert_eq!(json["checkpoint"]["source"], "manual_test");
     assert_eq!(json["checkpoint"]["vector_count"], 2);
     assert_eq!(json["checkpoint"]["coordinate_frame"], "solver_domain");
-    assert_eq!(json["checkpoint"]["resume_class"], "logical_resume");
+    assert_eq!(json["checkpoint"]["resume_class"], "exact_resume");
     assert_eq!(json["checkpoint"]["stage_id"], "stage-001");
     assert_eq!(json["checkpoint"]["command_id"], "cmd-stage-1");
     let checkpoint_artifact_ref = json["checkpoint"]["artifact_ref"]
@@ -24861,10 +24884,17 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         .await
         .unwrap();
 
-    assert_eq!(restore_response.status(), StatusCode::OK);
+    if restore_response.status() != StatusCode::OK {
+        let status = restore_response.status();
+        let body = body_bytes(restore_response).await;
+        panic!(
+            "checkpoint restore returned {status}: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
     let restored = body_json(restore_response).await;
     assert_eq!(restored["checkpoint"]["checkpoint_id"], "cp-000042");
-    assert_eq!(restored["restore_class"], "logical_resume");
+    assert_eq!(restored["restore_class"], "exact_resume");
     assert_eq!(restored["restored_vector_count"], 2);
     assert_eq!(restored["field_revision"], 2);
     assert_eq!(restored["checkpoint"]["stage_id"], "stage-001");
@@ -33760,7 +33790,23 @@ async fn assert_v2_field_data_plane_reads_canonical_transport_field_artifacts() 
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::OK, "{quantity}");
+        if quantity == "spin_current_tensor" {
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let body = body_json(response).await;
+            assert_eq!(body["code"], "bad_request");
+            assert!(body["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("unsupported_shape")));
+            continue;
+        }
+        if response.status() != StatusCode::OK {
+            let status = response.status();
+            let body = body_bytes(response).await;
+            panic!(
+                "transport field {quantity} returned {status}: {}",
+                String::from_utf8_lossy(&body)
+            );
+        }
         assert_eq!(
             response
                 .headers()
@@ -39769,6 +39815,7 @@ fn openapi_status_schema_remains_thin_and_owned() {
         "session".to_string(),
         "run".to_string(),
         "solver".to_string(),
+        "lifecycle".to_string(),
         "display".to_string(),
         "domain".to_string(),
         "resources".to_string(),
