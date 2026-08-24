@@ -44,10 +44,52 @@
   ],
   "sources": [
     {
-      "id": "fdm-cpu-rhs",
+      "id": "fdm-cpu-effective-field-live",
       "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
-      "symbol": "llg_rhs_into_ws_zero_alloc",
-      "responsibility": "Oblicza referencyjny RHS LLG w trwałym workspace FDM CPU."
+      "symbol": "effective_field_into_soa_ws_at_time",
+      "responsibility": "Składa live effective field dla integratorów SoA."
+    },
+    {
+      "id": "fdm-cpu-rhs-live",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "symbol": "llg_rhs_soa_into",
+      "responsibility": "Oblicza live RHS LLG z pola w trwałych buforach SoA."
+    },
+    {
+      "id": "fdm-cpu-adaptive-max",
+      "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs",
+      "symbol": "max_error_norm_soa_buf",
+      "responsibility": "Redukuje wektorowy błąd adaptacyjny do maksimum po aktywnych komórkach."
+    },
+    {
+      "id": "fdm-cpu-rk23-live",
+      "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs",
+      "symbol": "rk23_step_soa_state_buf",
+      "responsibility": "Realizuje live adaptacyjny krok RK23 w reprezentacji SoA."
+    },
+    {
+      "id": "fdm-cpu-rk45-live",
+      "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs",
+      "symbol": "rk45_step_soa_state_buf",
+      "responsibility": "Realizuje live adaptacyjny krok RK45 w reprezentacji SoA."
+    },
+    {
+      "id": "fdm-cpu-exchange",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "symbol": "exchange_field_add_into",
+      "responsibility": "Dodaje operator exchange wyznaczający ograniczenie stiffness."
+    },
+    {
+      "id": "fdm-cpu-demag-fft",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "symbol": "demag_field_add_into_soa_fft_backend",
+      "responsibility": "Realizuje kosztowny składnik demag FFT w live field path."
+    },
+    {
+      "id": "fdm-cpu-relaxation-stop",
+      "path": "crates/fullmag-runner/src/relaxation/convergence.rs",
+      "symbol": "effective_max_torque_apm",
+      "responsibility": "Wybiera świeżą metrykę torque używaną przez kontrakt stopu relaksacji."
     }
   ],
   "public_api": {

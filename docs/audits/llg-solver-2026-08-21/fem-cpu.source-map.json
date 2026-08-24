@@ -48,6 +48,66 @@
       "path": "backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp",
       "symbol": "context_step_explicit_rk_mfem",
       "responsibility": "Steruje jawnym krokiem integratora FEM CPU w MFEM."
+    },
+    {
+      "id": "fem-cpu-stage-rhs",
+      "path": "backends/fem/cpu/mfem/integrators/rk_stage_rhs.cpp",
+      "symbol": "evaluate_rk_stage_rhs",
+      "responsibility": "Realizuje powtarzany RHS stage oddzielony od setup planu."
+    },
+    {
+      "id": "fem-cpu-state-upload",
+      "path": "backends/fem/cpu/mfem/runtime/state_io.cpp",
+      "symbol": "context_upload_magnetization_f64",
+      "responsibility": "Mapuje kanoniczną magnetyzację do native FEM state."
+    },
+    {
+      "id": "fem-cpu-mass-projection",
+      "path": "backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp",
+      "symbol": "apply_exchange_component_mass_projection",
+      "responsibility": "Realizuje projekcję składnika exchange przez macierz masy."
+    },
+    {
+      "id": "fem-cpu-demag-cache",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_cache.cpp",
+      "symbol": "demag_poisson_try_load_cached_field",
+      "responsibility": "Sprawdza możliwość reuse pola demag z cache."
+    },
+    {
+      "id": "fem-cpu-demag-solve",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_solve.cpp",
+      "symbol": "context_compute_demag_poisson",
+      "responsibility": "Wykonuje rozwiązanie Poissona dla demag po aktualizacji RHS."
+    },
+    {
+      "id": "fem-cpu-step-metrics",
+      "path": "backends/fem/cpu/mfem/runtime/step_metrics.cpp",
+      "symbol": "fill_common_step_metrics",
+      "responsibility": "Wyznacza native max_torque_Apm; obecnie błędnie obejmuje frozen nodes."
+    },
+    {
+      "id": "fem-cpu-torque-reduction",
+      "path": "backends/fem/cpu/mfem/runtime/step_metrics.cpp",
+      "symbol": "max_cross_norm_aos",
+      "responsibility": "Redukuje normę torque po wszystkich węzłach zamiast po wymaganym free set."
+    },
+    {
+      "id": "fem-cpu-stage-completion",
+      "path": "backends/fem/cpu/mfem/runtime/stage_completion.hpp",
+      "symbol": "update_stage_completion_from_stats",
+      "responsibility": "Konsumuje max_torque_Apm do trzypróbkowego kryterium stopu."
+    },
+    {
+      "id": "fem-cpu-thread-policy",
+      "path": "backends/fem/cpu/mfem/runtime/cpu_threads.cpp",
+      "symbol": "configure_fem_host_runtime_threads",
+      "responsibility": "Konfiguruje budżet wątków hosta dla native FEM."
+    },
+    {
+      "id": "fem-cpu-tpi-relaxation",
+      "path": "backends/fem/cpu/mfem/relaxation/tangent_plane_implicit.cpp",
+      "symbol": "run_tangent_plane_implicit_step",
+      "responsibility": "Realizuje pseudoczasowy krok relaksacyjny TPI, nie integrację trajektorii fizycznego czasu."
     }
   ],
   "public_api": {

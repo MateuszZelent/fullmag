@@ -7,7 +7,7 @@
 
 ## Werdykt
 
-FDM CPU pozostaje referencyjną ścieżką poprawności, ale nie może być traktowany jako wzorzec wydajności bez osobnego profilu kosztu pól, algebry LLG, redukcji i alokacji. Konwencja `H_eff`/`gamma_0` oraz maksymalna norma błędu są już rozstrzygnięte przez kanoniczny kontrakt i implementację; otwarte pozostają pomiary alokacji, kosztu demag, stiffness i polityki wątków.
+FDM CPU pozostaje referencyjną ścieżką poprawności, ale nie może być traktowany jako wzorzec wydajności bez osobnego profilu kosztu pól, algebry LLG, redukcji i alokacji. Konwencja `H_eff`/`gamma_0` oraz maksymalna norma błędu są rozstrzygnięte przez kanoniczny kontrakt i implementację; bezpośredni analityczny test stałego pola dla live SoA RHS pozostaje jednak brakującą bramką. Otwarte są także pomiary alokacji, kosztu demag, stiffness i polityki wątków.
 
 ## Ustalenia priorytetowe
 
@@ -15,17 +15,17 @@ FDM CPU pozostaje referencyjną ścieżką poprawności, ale nie może być trak
 
 | Ustalenie | Stan i pewność | Implementacja (`ścieżka + symbol`) | Test/reproducer |
 |---|---|---|---|
-| Konwencja LLG | potwierdzone, wysoka | `crates/fullmag-engine/src/fdm/cpu/fields.rs` — `ExchangeLlgProblem::llg_rhs_from_field_at` | `sot_macrospin_is_converted_to_rhs_with_gilbert_projection` w tym samym module |
+| Konwencja LLG | implementacja potwierdzona, test bezpośredni brak | `crates/fullmag-engine/src/fdm/cpu/fields.rs` — `effective_field_into_soa_ws_at_time`, `llg_rhs_soa_into` | wymagany analityczny constant-field RHS/trajectory; test SOT nie pokrywa tej ścieżki |
 | Maksymalna norma adaptacyjna | potwierdzone, wysoka | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` — `max_error_norm_buf`, `max_error_norm_soa_buf` | `direct_cpu_entry_points_propagate_injected_nonfinite_error_norm` |
-| Brak alokacji w RHS | częściowo potwierdzone, wysoka | `crates/fullmag-engine/src/fdm/cpu/fields.rs` — `llg_rhs_into_ws_zero_alloc`; `crates/fullmag-engine/src/fdm/cpu/integrators.rs` — `rk23_step_soa_state_buf`, `rk45_step_soa_state_buf` | profil alokatora dla steady state; wynik sprzętowy nadal wymagany |
+| Brak alokacji w live RHS | częściowo potwierdzone statycznie, wysoka | `crates/fullmag-engine/src/fdm/cpu/fields.rs` — `effective_field_into_soa_ws_at_time`, `llg_rhs_soa_into`; `crates/fullmag-engine/src/fdm/cpu/integrators.rs` — `rk23_step_soa_state_buf`, `rk45_step_soa_state_buf` | profil alokatora live SoA steady state; wynik sprzętowy nadal wymagany |
 | Stiffness exchange | luka pomiarowa, średnia | `crates/fullmag-engine/src/fdm/cpu/fields.rs` — `exchange_field_add_into` | refinement `h_min` i time-to-error dla każdego legalnego integratora |
 | Koszt demag per stage | luka pomiarowa, średnia | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` — `rk23_step_soa_state_buf`, `rk45_step_soa_state_buf`; `crates/fullmag-engine/src/fdm/cpu/fields.rs` — `demag_field_add_into_soa_fft_backend` | licznik `demag_solves` i profil accepted/rejected step |
-| Oversubscription CPU/FFT | luka pomiarowa, niska | `crates/fullmag-engine/src/fdm/cpu/fft.rs` — `FftWorkspace`; `crates/fullmag-engine/src/fdm/cpu/fft_backend.rs` — `RustFftBackend` | sweep liczby wątków z affinity, bandwidth i LLC misses |
+| Planowanie CPU/Rayon/FFT | luka pomiarowa, niska | `crates/fullmag-engine/src/fdm/cpu/fft.rs` — `FftWorkspace`; `crates/fullmag-engine/src/fdm/cpu/fft_backend.rs` — `RustFftBackend` | sweep Rayon/FFT z affinity, bandwidth i LLC misses; Hypre nie uczestniczy w FDM CPU |
 | Stop relaksacji | potwierdzone, wysoka | `crates/fullmag-runner/src/relaxation.rs` — `effective_max_torque_apm`; `crates/fullmag-runner/src/types.rs` — `relaxation_torque_confirmation_count` | kontrakty zakończenia w `crates/fullmag-runner/src/dispatch.rs` |
 
 ### Stan potwierdzony — kanoniczna konwencja LLG
 
-Konwencja nie jest otwartą decyzją: `docs/physics/0960-canonical-llg-time-domain-solver-and-qualification-contract.md` (identyfikator `LLG-TD-POLICY-V1`) oraz `docs/physics/llg_conventions.md` (sekcja `Gamma Convention`) definiują `H_eff` w A/m, `gamma_0` w m/(A s) i mianownik Gilberta `1/(1+alpha^2)`. Implementacja FDM CPU realizuje ją w `crates/fullmag-engine/src/fdm/cpu/fields.rs` (`ExchangeLlgProblem::llg_rhs_from_field_at`). Ustalenie audytowe brzmi więc: zachować ten kontrakt i jego testy, a nie dodawać drugi enum konwencji.
+Konwencja nie jest otwartą decyzją: `docs/physics/0960-canonical-llg-time-domain-solver-and-qualification-contract.md` (identyfikator `LLG-TD-POLICY-V1`) oraz `docs/physics/llg_conventions.md` (sekcja `Gamma Convention`) definiują `H_eff` w A/m, `gamma_0` w m/(A s) i mianownik Gilberta `1/(1+alpha^2)`. Live SoA integratory przechodzą przez `effective_field_into_soa_ws_at_time` i `llg_rhs_soa_into`. Istniejący test SOT nie podaje znanego `H_eff` tej ścieżce, dlatego status testowy konwencji pozostaje niepotwierdzony do czasu analitycznego constant-field RHS/trajectory oracle.
 
 ### Stan potwierdzony — kanoniczna maksymalna norma błędu
 
@@ -49,9 +49,9 @@ Demag FFT jest zwykle najdroższym składnikiem. Każdy dodatkowy stage oznacza 
 
 **Naprawa:** trwałe plany FFT i work areas, brak replanowania, pomiar liczby ocen demag na accepted/rejected step, FSAL wyłącznie tam, gdzie metoda i zależności pola na to pozwalają.
 
-### P1 — oversubscription CPU/FFT
+### P1 — planowanie CPU/Rayon/FFT
 
-Równoległość operatorów lokalnych i biblioteki FFT/Hypre nie może niezależnie tworzyć pełnych pul wątków. Powoduje to migracje NUMA, thrashing i niestabilne czasy.
+Równoległość operatorów lokalnych, Rayon i RustFFT nie może powodować konkurencyjnego planowania lub nadmiernej liczby zadań. Hypre nie uczestniczy w lane FDM CPU. Ryzykiem są migracje NUMA, thrashing cache i niestabilne czasy wynikające z rzeczywistej ścieżki Rayon/FFT.
 
 **Naprawa:** jeden budżet wątków, affinity/NUMA policy, chunking aktywnych komórek, pomiar bandwidth i LLC misses.
 
@@ -149,7 +149,7 @@ Raport nie zmienia `ProblemIR`; ocenia realizację istniejącego requested inten
 (fdm-cpu-implementation-mapping)=
 ### Mapowanie implementacji
 
-Właścicielem bezalokacyjnego RHS jest `llg_rhs_into_ws_zero_alloc`.
+Live SoA integratory wywołują `effective_field_into_soa_ws_at_time`, a następnie `llg_rhs_soa_into`; nieużywany wrapper `llg_rhs_into_ws_zero_alloc` nie jest dowodem wykonania hot path.
 
 (fdm-cpu-validation)=
 ### Walidacja
@@ -171,4 +171,12 @@ Audyt statyczny nie jest dowodem wydajności ani kwalifikacji sprzętowej.
 
 | Twierdzenie | Ścieżka | Symbol | Odpowiedzialność | Lane | Test/dowód | Status |
 |---|---|---|---|---|---|---|
-| Bezalokacyjny RHS LLG | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `llg_rhs_into_ws_zero_alloc` | obliczenie RHS w trwałym workspace | FDM CPU | testy modułu FDM CPU | dowód statyczny |
+| Live effective field | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `effective_field_into_soa_ws_at_time` | składa pole dla integratorów SoA | FDM CPU | call chain RK23/RK45 | dowód statyczny |
+| Live RHS LLG | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `llg_rhs_soa_into` | oblicza RHS z pola w trwałych buforach SoA | FDM CPU | wymagany constant-field oracle i profil alokatora | implementacja potwierdzona; test bezpośredni brak |
+| Maksymalna norma adaptacyjna | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `max_error_norm_soa_buf` | maksimum błędu po aktywnych komórkach | FDM CPU | `direct_cpu_entry_points_propagate_injected_nonfinite_error_norm` | dowód statyczny i test kontraktu |
+| RK23 SoA | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `rk23_step_soa_state_buf` | live adaptacyjny krok RK23 | FDM CPU | profil steady-state | dowód statyczny |
+| RK45 SoA | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `rk45_step_soa_state_buf` | live adaptacyjny krok RK45 | FDM CPU | profil steady-state | dowód statyczny |
+| Exchange | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `exchange_field_add_into` | operator lokalny wyznaczający stiffness | FDM CPU | refinement `h_min` | hipoteza pomiarowa |
+| Demag FFT | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `demag_field_add_into_soa_fft_backend` | kosztowny składnik pola per stage | FDM CPU | licznik ocen demag | hipoteza pomiarowa |
+| Workspace FFT | `crates/fullmag-engine/src/fdm/cpu/fft.rs` | `FftWorkspace` | trwałe bufory i plany FFT | FDM CPU | sweep Rayon/FFT | dowód statyczny; koszt otwarty |
+| Stop relaksacji | `crates/fullmag-runner/src/relaxation/convergence.rs` | `effective_max_torque_apm` | wybór świeżej metryki torque | FDM CPU | trzypróbkowy kontrakt stopu | dowód statyczny |

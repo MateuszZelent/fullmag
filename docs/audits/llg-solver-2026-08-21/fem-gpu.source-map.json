@@ -48,6 +48,60 @@
       "path": "backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp",
       "symbol": "gpu_rk_plan_device_resident",
       "responsibility": "Planuje device-resident krok RK dla FEM GPU."
+    },
+    {
+      "id": "fem-gpu-step",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_step.cu",
+      "symbol": "gpu_rk_device_resident_step",
+      "responsibility": "Wykonuje zakwalifikowany krok RK w device-resident lane."
+    },
+    {
+      "id": "fem-gpu-state",
+      "path": "backends/fem/gpu/cuda/state/gpu_state.cpp",
+      "symbol": "gpu_state_initialize",
+      "responsibility": "Inicjalizuje trwały stan FEM na urządzeniu."
+    },
+    {
+      "id": "fem-gpu-exchange-plan",
+      "path": "backends/fem/gpu/cuda/exchange/exchange_plan.cpp",
+      "symbol": "gpu_exchange_plan_stage_exchange",
+      "responsibility": "Rozstrzyga device-resident plan operatora exchange."
+    },
+    {
+      "id": "fem-gpu-transfer-audit",
+      "path": "backends/fem/gpu/cuda/transfer/transfer_audit.cpp",
+      "symbol": "record_device_to_host",
+      "responsibility": "Rejestruje transfery D2H wymagane przez residency audit."
+    },
+    {
+      "id": "fem-gpu-demag-solver",
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp",
+      "symbol": "initialize_demag_poisson_hypre_device_solver",
+      "responsibility": "Inicjalizuje jawnie zlokalizowany device solver demag Poisson."
+    },
+    {
+      "id": "fem-gpu-single-rejection-test",
+      "path": "crates/fullmag-runner/src/native_fem/tests/runtime_smoke.rs",
+      "symbol": "native_fem_single_precision_rejection_is_gpu_specific",
+      "responsibility": "Testuje bieżące jawne odrzucenie single precision dla FEM GPU."
+    },
+    {
+      "id": "fem-gpu-tpi-rejection-test",
+      "path": "crates/fullmag-runner/src/fem/relax/algorithm.rs",
+      "symbol": "tangent_plane_implicit_is_not_reported_as_gpu_supported",
+      "responsibility": "Testuje, że relaksacyjny TPI nie jest zgłaszany jako capability FEM GPU."
+    },
+    {
+      "id": "fem-gpu-plan-test",
+      "path": "backends/fem/tests/gpu_rk_plan.cpp",
+      "symbol": "main",
+      "responsibility": "Testuje statyczny plan RK, exchange i blokady nieobsługiwanych operatorów."
+    },
+    {
+      "id": "fem-gpu-state-test",
+      "path": "backends/fem/tests/gpu_state_runtime_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Testuje kontrakt inicjalizacji i trwałości GPU state."
     }
   ],
   "public_api": {

@@ -31,6 +31,6 @@
 ## M4 — algorithmic time-to-solution
 
 - liczba kosztownych field evaluations na osiągniętą dokładność;
-- tangent-plane/semi-implicit/IMEX dla stiffness;
-- mixed precision wyłącznie po time-to-accuracy qualification;
+- przyszły fizyczno-czasowy tangent-plane/semi-implicit/IMEX dla stiffness; bieżący FEM CPU TPI pozostaje wyłącznie relaksacją time-to-equilibrium;
+- single/mixed precision wyłącznie w lane, który najpierw ma implementację i jawne capability, a następnie przechodzi time-to-accuracy qualification;
 - progi regresji poprawności i wydajności w CI.

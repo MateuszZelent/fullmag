@@ -21,7 +21,7 @@ FEM GPU należy klasyfikować według faktycznego poziomu rezydencji: (1) etykie
 | Partial assembly/matrix-free | zależne od operatora, średnia | `backends/fem/gpu/cuda/exchange/exchange_plan.cpp` — `gpu_exchange_plan_stage_exchange` | `backends/fem/examples/pa_benchmark.cpp` dla macierzy rozmiarów/operatorów |
 | Redukcje i transfery | potwierdzone liczniki, wynik runtime otwarty | `backends/fem/cpu/mfem/runtime/state_io.cpp` — `record_device_to_host`; `backends/fem/gpu/cuda/transfer/transfer_audit.hpp` — `TransferAuditRuntimeState` | `backends/fem/tests/transfer_audit.cpp` plus hardware strict-residency |
 | Lokalizacja preconditionera | jawna dla planów demag, średnia | `backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp` — `initialize_demag_poisson_hypre_device_solver`, `configure_demag_poisson_hypre_preconditioner` | telemetryka backendu i sweep preconditionera bez host fallbacku |
-| Mixed precision | luka kwalifikacyjna, średnia | `backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp` — `gpu_rk_plan_device_resident` | parity pola/RHS/kroku/trajektorii i time-to-accuracy |
+| Single/mixed precision | single obecnie nieobsługiwane, wysoka | `crates/fullmag-runner/src/native_fem/tests/runtime_smoke.rs` — `native_fem_single_precision_rejection_is_gpu_specific` | najpierw zachować jawne odrzucenie; po przyszłej implementacji osobno parity i time-to-accuracy |
 | Stiffness explicit RK | luka pomiarowa, średnia | `backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp` — `gpu_rk_device_resident_step` | sweep `h_min` dla każdego wspieranego integratora |
 
 ### P0 — brak executed-device proof blokuje deklarację produkcyjną
@@ -34,7 +34,7 @@ Requested `gpu` nie wystarcza. Wynik musi potwierdzać urządzenie i implementac
 
 Jeśli wektory są odczytywane albo mapowane na host per stage/iteration, akceleracja operatora zostaje zjedzona przez PCIe/NVLink latency i synchronizacje.
 
-**Naprawa:** trwałe device vectors, device-resident RK/tangent-plane control, urządzeniowe dot products/reductions i asynchroniczna telemetryka.
+**Naprawa:** trwałe device vectors, device-resident RK oraz urządzeniowe dot products/reductions i asynchroniczna telemetryka. Bieżący `tangent_plane_implicit` jest wyłącznie CPU/MFEM algorytmem relaksacji pseudoczasowej, nie fizyczno-czasowym integratorem GPU.
 
 ### P0/P1 — assembly, restrictions i quadrature data muszą być trwałe na urządzeniu
 
@@ -56,13 +56,13 @@ Norma błędu, torque, energia i iteracje solvera powinny być agregowane na GPU
 
 GPU operator z hostowym preconditionerem lub hostowym sparse solve jest ścieżką hybrydową. Planner i provenance muszą używać istniejącego, ograniczonego słownika kontraktu wykonania: między innymi `device_resident`, `hybrid_cpu_poisson` oraz obowiązujących pól FEM GPU execution contract. Audyt nie wprowadza wartości `gpu_operator_host_solver`; nowa wartość wymagałaby wspólnej zmiany ProblemIR, macierzy capability, runtime provenance i wszystkich konsumentów.
 
-### P1 — mixed precision wymaga kontroli solvera i dynamiki
+### P1 — single precision wymaga najpierw implementacji, potem kwalifikacji
 
-Niższa precyzja może zwiększyć iteracje Krylov, pogorszyć energy/torque reductions i zmienić accept/reject. Należy optymalizować time-to-accuracy, nie FLOP/s.
+Bieżący planner/runtime jawnie odrzuca FEM GPU `execution_precision="single"`, ponieważ kernels tej ścieżki nie istnieją. Nie jest to wykonywalny lane oczekujący jedynie parity. Po przyszłej implementacji niższa precyzja będzie wymagała kontroli iteracji Krylov, energy/torque reductions, accept/reject i time-to-accuracy.
 
 ### P1 — explicit RK nadal pozostaje ograniczony przez stiffness
 
-GPU przyspiesza krok, ale nie usuwa ograniczenia `dt ~ h_min^2`. Dla wysokiego order i lokalnych refinement potrzebna jest kwalifikacja tangent-plane/semi-implicit/IMEX na urządzeniu.
+GPU przyspiesza krok, ale nie usuwa ograniczenia `dt ~ h_min^2`. Fizyczno-czasowy tangent-plane/semi-implicit/IMEX na urządzeniu jest planowaną, obecnie nieobsługiwaną capability; nie należy utożsamiać go z istniejącym relaksacyjnym TPI CPU.
 
 ## Audyt fizyczny
 
@@ -106,9 +106,9 @@ GPU przyspiesza krok, ale nie usuwa ograniczenia `dt ~ h_min^2`. Dla wysokiego o
 ### Etap 4 — algorytm
 
 - matrix-free/partial assembly selection;
-- tangent-plane/IMEX dla stiffness;
+- przyszły fizyczno-czasowy tangent-plane/IMEX dla stiffness, po implementacji capability;
 - tolerancje Krylov zależne od błędu czasowego;
-- mixed precision wyłącznie po time-to-accuracy qualification.
+- single/mixed precision dopiero po implementacji lane i time-to-accuracy qualification.
 
 ## Obowiązkowe benchmarki
 
@@ -207,3 +207,10 @@ Statyczny kod nie dowodzi produkcyjnej rezydencji ani przyspieszenia.
 | Twierdzenie | Ścieżka | Symbol | Odpowiedzialność | Lane | Test/dowód | Status |
 |---|---|---|---|---|---|---|
 | Plan device-resident RK | `backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp` | `gpu_rk_plan_device_resident` | planowanie rezydentnego kroku FEM GPU | FEM GPU | testy planu i managed runtime | dowód statyczny; runtime wymaga GPU |
+| Device-resident step | `backends/fem/gpu/cuda/integrators/rk/rk_step.cu` | `gpu_rk_device_resident_step` | wykonanie kroku RK | FEM GPU | `gpu_rk_plan` plus managed receipt | dowód statyczny; hardware gate wymagany |
+| GPU state | `backends/fem/gpu/cuda/state/gpu_state.cpp` | `gpu_state_initialize` | trwały state urządzenia | FEM GPU | `gpu_state_runtime_contract` | test kontraktu |
+| Exchange plan | `backends/fem/gpu/cuda/exchange/exchange_plan.cpp` | `gpu_exchange_plan_stage_exchange` | kwalifikacja device exchange | FEM GPU | `gpu_rk_plan` | test planu |
+| Transfer audit | `backends/fem/gpu/cuda/transfer/transfer_audit.cpp` | `record_device_to_host` | licznik D2H | FEM GPU | `transfer_audit` plus hardware gate | test kontraktu; wynik hardware otwarty |
+| Device demag solver | `backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp` | `initialize_demag_poisson_hypre_device_solver` | lokalizacja solvera/preconditionera | FEM GPU | `cuda_periodic_demag_contract` | dowód statyczny |
+| Single precision rejection | `crates/fullmag-runner/src/native_fem/tests/runtime_smoke.rs` | `native_fem_single_precision_rejection_is_gpu_specific` | jawne odrzucenie niezaimplementowanego lane | FEM GPU | ten sam test | test regresji |
+| TPI GPU rejection | `crates/fullmag-runner/src/fem/relax/algorithm.rs` | `tangent_plane_implicit_is_not_reported_as_gpu_supported` | relaksacyjny TPI pozostaje poza GPU capability | FEM GPU | ten sam test | test regresji |

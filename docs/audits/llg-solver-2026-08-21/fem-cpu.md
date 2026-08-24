@@ -20,7 +20,7 @@ FEM CPU ma największe ryzyko kosztu algorytmicznego, nie samej algebry LLG. Je�
 | Reprezentacja state/DOF | potwierdzone właścicielstwo, wysoka | `backends/fem/include/context.hpp` — `Context`; `backends/fem/cpu/mfem/runtime/state_io.cpp` — `context_upload_magnetization_f64`, `context_sync_gpu_magnetization_to_host` | transfer-audit i parity true/local DOF |
 | Projekcja przez macierz masy | potwierdzone istnienie operatora, koszt otwarty | `backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp` — `apply_exchange_component_mass_projection` | sweep tolerancji i liczby iteracji względem błędu RK |
 | Reuse demag | częściowo potwierdzone, średnia | `backends/fem/cpu/mfem/interactions/demag_poisson_cache.cpp` — `demag_poisson_try_load_cached_field`; `demag_poisson_solve.cpp` — `context_compute_demag_poisson` | licznik rebuildów i iteracji per stage |
-| Norma/stop na siatce FEM | potwierdzone maksimum torque, wysoka | `crates/fullmag-runner/src/derived_fields.rs` — `max_torque_residual_apm_from_field`; `backends/fem/cpu/mfem/runtime/stage_completion.cpp` — `update_stage_completion_from_stats` | nonuniform-mesh fixture i kanoniczny trzypróbkowy stop torque |
+| Norma/stop na siatce FEM z frozen spins | defekt potwierdzony, wysoka | `backends/fem/cpu/mfem/runtime/step_metrics.cpp` — `fill_common_step_metrics`, `max_cross_norm_aos`; `backends/fem/cpu/mfem/runtime/stage_completion.hpp` — `update_stage_completion_from_stats` | wymagany fixture free-set: pinned misaligned spin i all-frozen muszą dać metrykę wolnego zbioru równą zero |
 | Oversubscription | częściowo potwierdzona polityka, koszt otwarty | `backends/fem/cpu/mfem/runtime/cpu_threads.cpp` — `configure_fem_host_runtime_threads`; `backends/fem/include/context.hpp` — `Context::cpu_threads` | sweep OpenMP/MFEM/Hypre threads z NUMA affinity |
 
 ### P0/P1 — assembly i konfiguracja solvera nie mogą występować per stage
@@ -33,7 +33,7 @@ Macierze masy/exchange, sparsity, restrykcje, essential DOF, mapy regionów, qua
 
 Lokalne refinement i złe elementy mogą wymusić bardzo mały `dt`, nawet gdy większość siatki jest gruba.
 
-**Naprawa:** raport CFL/stiffness estimate, histogram `h`, benchmark jawny RK kontra tangent-plane, semi-implicit, IMEX lub mass-lumped route.
+**Naprawa:** raport CFL/stiffness estimate, histogram `h` i benchmark jawnego RK dla trajektorii fizycznego czasu. Bieżący `tangent_plane_implicit` jest algorytmem relaksacji z pseudoczasem, retrakcją i akceptacją Armijo; porównuje się go wyłącznie jako time-to-equilibrium. Fizyczno-czasowy tangent-plane/IMEX jest obecnie planowany i nieobsługiwany.
 
 ### P1 — niejednoznaczna reprezentacja pola i magnetyzacji
 
@@ -55,7 +55,7 @@ Ponowne budowanie operatora, warunków brzegowych, gauge lub airbox mapping jest
 
 ### P1 — adaptacyjna norma błędu zachowuje maksimum po węzłach
 
-Akceptacja kroku FEM zachowuje kanoniczny kontrakt `LLG-TD-MAX-ERR-V1`: `max_err` jest maksimum normy wektorowego błędu po aktywnych węzłach magnetycznych. Nie wolno zastępować go średnią ani normą ważoną macierzą masy, ponieważ lokalny duży błąd zostałby rozcieńczony wraz ze zmianą refinement. Normy masowe mogą służyć jako dodatkowa diagnostyka globalna, ale nie sterują akceptacją kroku. Kryterium stopu torque pozostaje fizycznie zdefiniowanym maksimum `max_torque_Apm` po aktywnych magnetycznych DOF.
+Akceptacja kroku FEM zachowuje kanoniczny kontrakt `LLG-TD-MAX-ERR-V1`: `max_err` jest maksimum normy wektorowego błędu po aktywnych węzłach magnetycznych. Nie wolno zastępować go średnią ani normą ważoną macierzą masy, ponieważ lokalny duży błąd zostałby rozcieńczony wraz ze zmianą refinement. Normy masowe mogą służyć jako dodatkowa diagnostyka globalna, ale nie sterują akceptacją kroku. Kryterium stopu torque powinno być maksimum `max_torque_Apm` po wolnych aktywnych magnetycznych DOF. Bieżący native owner `fill_common_step_metrics` wywołuje jednak `max_cross_norm_aos` po wszystkich węzłach, bez wykluczenia frozen spins, a `update_stage_completion_from_stats` konsumuje tę wartość. Jest to potwierdzony defekt free-set reduction: przypięty, niezgodny spin może blokować zbieżność, a przypadek all-frozen nie gwarantuje wymaganej zerowej metryki wolnego zbioru.
 
 ### P1 — równoległość bibliotek może powodować oversubscription
 
@@ -188,3 +188,13 @@ Audyt statyczny nie kwalifikuje kosztu MFEM/Hypre bez wykonania zarządzanego be
 | Twierdzenie | Ścieżka | Symbol | Odpowiedzialność | Lane | Test/dowód | Status |
 |---|---|---|---|---|---|---|
 | Jawny krok RK w MFEM | `backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp` | `context_step_explicit_rk_mfem` | sterowanie krokiem FEM CPU | FEM CPU | testy integratorów FEM | dowód statyczny |
+| Stage RHS | `backends/fem/cpu/mfem/integrators/rk_stage_rhs.cpp` | `evaluate_rk_stage_rhs` | powtarzany apply oddzielony od setup | FEM CPU | `rk_explicit_contract` i profiler warm-up | dowód statyczny; profil wymagany |
+| State upload | `backends/fem/cpu/mfem/runtime/state_io.cpp` | `context_upload_magnetization_f64` | mapowanie state/DOF | FEM CPU | transfer audit | dowód statyczny |
+| Mass projection | `backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp` | `apply_exchange_component_mass_projection` | projekcja exchange przez mass matrix | FEM CPU | `exchange_contract` | test kontraktu; koszt otwarty |
+| Cache demag | `backends/fem/cpu/mfem/interactions/demag_poisson_cache.cpp` | `demag_poisson_try_load_cached_field` | reuse pola demag | FEM CPU | `demag_poisson_contract` | test kontraktu |
+| Solve demag | `backends/fem/cpu/mfem/interactions/demag_poisson_solve.cpp` | `context_compute_demag_poisson` | Poisson solve po aktualizacji RHS | FEM CPU | `demag_poisson_contract` | test kontraktu; koszt otwarty |
+| Native torque metric | `backends/fem/cpu/mfem/runtime/step_metrics.cpp` | `fill_common_step_metrics` | publikuje `max_torque_Apm` | FEM CPU | brak free-set fixture | defekt: frozen nodes nie są wykluczone |
+| Torque reduction | `backends/fem/cpu/mfem/runtime/step_metrics.cpp` | `max_cross_norm_aos` | maksimum po wszystkich węzłach | FEM CPU | wymagany pinned/all-frozen fixture | potwierdzony defekt free-set |
+| Stage completion | `backends/fem/cpu/mfem/runtime/stage_completion.hpp` | `update_stage_completion_from_stats` | konsumuje torque w stop criterion | FEM CPU | trzypróbkowy stop | dowód statyczny |
+| Thread policy | `backends/fem/cpu/mfem/runtime/cpu_threads.cpp` | `configure_fem_host_runtime_threads` | budżet wątków native FEM | FEM CPU | `cpu_threads_contract` i NUMA sweep | test kontraktu; koszt otwarty |
+| Relaksacyjny TPI | `backends/fem/cpu/mfem/relaxation/tangent_plane_implicit.cpp` | `run_tangent_plane_implicit_step` | pseudoczasowy time-to-equilibrium | FEM CPU | testy relaksacji; nie physical-time order | obsługiwany tylko jako relaksacja |
