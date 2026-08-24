@@ -2,13 +2,13 @@
 
 **Repozytorium:** `MateuszZelent/fullmag`
 **Gałąź bazowa:** `master`
-**Audytowana rewizja źródeł:** [`364ecd08666aede16b86f7a48774eb594d70ce16`](https://github.com/MateuszZelent/fullmag/tree/364ecd08666aede16b86f7a48774eb594d70ce16)
+**Audytowana rewizja źródeł:** [`b24750409fcf2bdb24364ecd7177bbe3ffe39e76`](https://github.com/MateuszZelent/fullmag/tree/b24750409fcf2bdb24364ecd7177bbe3ffe39e76)
 **Data:** 2026-08-21
 **Metoda:** statyczny audyt kompletności device lane, host/device ownership, operatorów FEM, redukcji, integratora, fizyki i testów executed-device.
 
 ## Werdykt
 
-FEM GPU należy klasyfikować według faktycznego poziomu rezydencji: (1) etykieta/planner GPU, (2) wybrane operatory FEM na urządzeniu przy hostowym sterowaniu, (3) pełny device-resident krok LLG. Tylko poziom trzeci uzasadnia nazwę produkcyjnego FEM GPU LLG. Najpoważniejszym ryzykiem jest ścieżka hybrydowa, w której każda ocena stage przechodzi przez hostowe GridFunction/Vector, redukcje, solver Krylov lub konfigurację operatora. Bez sprzętowego CI i operator receipts wsparcie GPU pozostaje niezakwalifikowane.
+FEM GPU należy klasyfikować według faktycznego poziomu rezydencji: (1) etykieta/planner GPU, (2) wybrane operatory FEM na urządzeniu przy hostowym sterowaniu, (3) pełny device-resident krok LLG. Tylko poziom trzeci uzasadnia nazwę produkcyjnego FEM GPU LLG. Audytowana rewizja zawiera fail-closed plan, attempt-scoped execution receipt, kontrolę transferów hot loop oraz publikację zweryfikowanego receipt do provenance. Jest to statyczny dowód implementacji kontraktu, ale nie sprzętowa kwalifikacja całego lane; bez zielonego managed GPU workflow i rzeczywistych receiptów dla reprezentatywnych operatorów status produkcyjny pozostaje niepotwierdzony.
 
 ## Ustalenia priorytetowe
 
@@ -16,7 +16,7 @@ FEM GPU należy klasyfikować według faktycznego poziomu rezydencji: (1) etykie
 
 | Ustalenie | Stan i pewność | Implementacja (`ścieżka + symbol`) | Test/reproducer |
 |---|---|---|---|
-| Executed-device proof | potwierdzone planowanie, kwalifikacja runtime otwarta | `backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp` — `gpu_rk_plan_device_resident`; `crates/fullmag-runner/src/types.rs` — `fem_gpu_rk_stage_exchange_device_resident` | `backends/fem/tests/gpu_rk_plan.cpp` plus managed GPU runtime receipt |
+| Executed-device proof | fail-closed receipt i walidacja potwierdzone statycznie; kwalifikacja sprzętowa otwarta | `backends/fem/gpu/cuda/runtime/execution_receipt.cpp` — `gpu_execution_receipt_commit_attempt`; `crates/fullmag-runner/src/fem/execution_receipt.rs` — `validate_strict_fem_gpu_execution_receipt` | `backends/fem/tests/gpu_strict_execution_contract.cpp` plus managed GPU runtime receipt |
 | Device-resident integrator | częściowo potwierdzone, wysoka | `backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp` — `gpu_rk_device_resident_step`; `backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp` — `context_step_explicit_rk_mfem` | strict no-fallback dla Heun, RK4, RK23 i RK45 |
 | Trwałość danych FEM | potwierdzone struktury, wynik hot-loop otwarty | `backends/fem/gpu/cuda/state/gpu_state.cpp` — `gpu_state_initialize`; `backends/fem/include/context.hpp` — `Context` | `backends/fem/tests/gpu_state_runtime_contract.cpp` i profiler alokacji |
 | Partial assembly/matrix-free | zależne od operatora, średnia | `backends/fem/gpu/cuda/exchange/exchange_plan.cpp` — `gpu_exchange_plan_stage_exchange` | `backends/fem/examples/pa_benchmark.cpp` dla macierzy rozmiarów/operatorów |
@@ -25,11 +25,11 @@ FEM GPU należy klasyfikować według faktycznego poziomu rezydencji: (1) etykie
 | Single/mixed precision | single obecnie nieobsługiwane, wysoka | `crates/fullmag-runner/src/native_fem/tests/runtime_smoke.rs` — `native_fem_single_precision_rejection_is_gpu_specific` | najpierw zachować jawne odrzucenie; po przyszłej implementacji osobno parity i time-to-accuracy |
 | Stiffness explicit RK | luka pomiarowa, średnia | `backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp` — `gpu_rk_device_resident_step` | sweep `h_min` dla każdego wspieranego integratora |
 
-### P0 — brak executed-device proof blokuje deklarację produkcyjną
+### P0 — sprzętowy executed-device proof nadal blokuje deklarację produkcyjną
 
-Requested `gpu` nie wystarcza. Wynik musi potwierdzać urządzenie i implementację dla mass/exchange/demag/local fields, LLG algebra, integrator, redukcje i output.
+Requested `gpu` nie wystarcza. Audytowana implementacja odrzuca receipt z hostowym lub nieznanym operatorem, fallbackiem, transferem hot loop, brakującym wymaganym operatorem albo bez zaakceptowanego kroku i publikuje zweryfikowany receipt do provenance. Nadal potrzebny jest wynik z rzeczywistego urządzenia, który potwierdza mass/exchange/demag/local fields, LLG algebra, integrator, redukcje i output dla kwalifikowanego przypadku.
 
-**Naprawa:** hardware workflow, strict no-fallback, vendor/device/driver/precision receipt oraz test, który celowo uniemożliwia CPU execution.
+**Naprawa:** utrzymać hardware workflow, strict no-fallback, vendor/device/driver/precision receipt oraz test, który celowo uniemożliwia CPU execution; archiwizować zweryfikowany receipt jako dowód kwalifikacji, nie tylko dowód istnienia kodu.
 
 ### P0 — hostowy integrator lub Krylov może zdominować GPU operators
 

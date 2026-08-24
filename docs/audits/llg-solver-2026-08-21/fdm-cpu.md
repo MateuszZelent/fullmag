@@ -2,7 +2,7 @@
 
 **Repozytorium:** `MateuszZelent/fullmag`
 **Gałąź bazowa:** `master`
-**Audytowana rewizja źródeł:** [`364ecd08666aede16b86f7a48774eb594d70ce16`](https://github.com/MateuszZelent/fullmag/tree/364ecd08666aede16b86f7a48774eb594d70ce16)
+**Audytowana rewizja źródeł:** [`b24750409fcf2bdb24364ecd7177bbe3ffe39e76`](https://github.com/MateuszZelent/fullmag/tree/b24750409fcf2bdb24364ecd7177bbe3ffe39e76)
 **Data:** 2026-08-21
 **Metoda:** audyt statyczny architektury, fizyki, numeryki, testów i hot path; zalecenia wydajnościowe wymagają potwierdzenia profilem na reprezentatywnym CPU.
 

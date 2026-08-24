@@ -2,7 +2,7 @@
 
 **Repozytorium:** `MateuszZelent/fullmag`
 **Gałąź bazowa:** `master`
-**Audytowana rewizja źródeł:** [`364ecd08666aede16b86f7a48774eb594d70ce16`](https://github.com/MateuszZelent/fullmag/tree/364ecd08666aede16b86f7a48774eb594d70ce16)
+**Audytowana rewizja źródeł:** [`b24750409fcf2bdb24364ecd7177bbe3ffe39e76`](https://github.com/MateuszZelent/fullmag/tree/b24750409fcf2bdb24364ecd7177bbe3ffe39e76)
 **Data:** 2026-08-21
 **Metoda:** statyczny audyt ścieżki GPU, kontraktów planner/runtime, pamięci, synchronizacji, fizyki i numeryki. Rzeczywistą wydajność musi potwierdzić timeline na docelowym GPU.
 
@@ -21,6 +21,7 @@ Najważniejszym kryterium nie jest obecność kerneli FDM, lecz pełna rezydencj
 | Granulacja kerneli | luka profilowa, niska | `backends/fdm/api/c_api.cpp` — `launch_heun_step_fp64`, `launch_rk4_step_fp64`, `launch_rk23_step_fp64`, `launch_dp45_step_fp64` | Nsight: kernels/step, launch latency, occupancy i bandwidth |
 | Trwałość buforów i FFT | częściowo potwierdzone statycznie, średnia | `backends/fdm/include/context.hpp` — `Context`; `backends/fdm/gpu/cuda/runtime/context.cu` — `context_alloc_device`, `context_prepare_multilayer_fft_workspace_v2` | test repeated-step bez wzrostu alokacji oraz licznik tworzenia planów FFT |
 | Redukcja maksymalnego błędu | pipeline statycznie potwierdzony, parity niepotwierdzone | `backends/fdm/gpu/cuda/integrators/llg_rk23_fp64.cu` — `rk23_error_kernel`; `backends/fdm/gpu/cuda/integrators/llg_dp45_fp64.cu` — `dp45_error_kernel`; `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` — `reduce_adaptive_error_policy`, `reduce_max_blocks_kernel` | `adaptive_error_reduction_contract`; lokalizowany CPU/GPU parity pozostaje wymaganym reproducerem |
+| Torque wolnego zbioru przy `FrozenSpins` | defekt potwierdzony statycznie, wysoka | `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` — `cross_max_norm_blocks_kernel`, `reduce_max_cross_norm_fp64`; `crates/fullmag-runner/src/dispatch.rs` — `execute_cuda_fdm` | wymagane fixture CUDA z niezgodnym polem na przypiętej komórce oraz przypadek all-frozen z dokładnym zerem |
 | Precyzja | częściowo potwierdzone, średnia | `backends/fdm/api/c_api.cpp` — `valid_precision`; osobne entry pointy `*_fp32` i `*_fp64` | field/RHS/stage/trajectory parity dla FP32 i FP64 |
 | Rollback i FSAL | potwierdzone kontraktowo, wysoka | `backends/fdm/gpu/cuda/runtime/step_transaction_controller.hpp` — `StepTransactionController`; `backends/fdm/gpu/cuda/integrators/fsal_policy.hpp` — `context_reject_staged_step` | `backends/fdm/tests/fsal_retry_transaction_contract.cpp` |
 
@@ -51,6 +52,21 @@ Każdy `create_buffer`, alokacja scratch albo plan FFT w hot path jest błędem 
 ### P1 — adaptacyjny integrator wymaga redukcji skalowalnej względem N
 
 Norma błędu musi zachować kanoniczne maksimum wektorowe `LLG-TD-MAX-ERR-V1` po aktywnych komórkach, identycznie jak FDM CPU. Redukcja powinna być hierarchiczna na urządzeniu; atomiki do jednego skalara dla milionów komórek mogą stać się bottleneckiem i źródłem niedeterministyczności.
+
+### P1 — redukcja torque CUDA nie respektuje wolnego zbioru `FrozenSpins`
+
+W ścieżce double-precision single-grid CUDA każdy integrator publikuje `max_torque_Apm`
+przez `reduce_max_cross_norm_fp64`. Kernel `cross_max_norm_blocks_kernel` iteruje po
+wszystkich `n` komórkach i nie otrzymuje ani `frozen_mask`, ani równoważnej maski
+wolnego zbioru. `execute_cuda_fdm` przekazuje ten skalar bez korekty do
+`torque_confirmation.observe_stats`. Przypięty spin niezgodny z lokalnym polem może więc
+bezterminowo blokować relaksację, a przypadek all-frozen nie gwarantuje wymaganego
+`max_torque_Apm = 0`.
+
+**Naprawa:** redukcja musi pomijać komórki przypięte albo otrzymywać jawną maskę wolnego
+zbioru. Wymagane są sprzętowe fixture CUDA dla mieszanego zbioru free/frozen, w którym
+największy surowy moment leży na komórce przypiętej, oraz dla all-frozen z dokładnym
+zerem metryki i poprawnym zakończeniem.
 
 ### P1 — precyzja i mixed precision nie mogą zmieniać fizyki
 
@@ -114,6 +130,7 @@ Raportować: kernels/step, launches/step, synchronizations/step, H2D/D2H bytes, 
 - CPU/GPU parity na każdym poziomie przepływu;
 - test strict no-fallback;
 - test bez readbacku pełnego pola przez zadany przedział kroków;
+- frozen/free-set torque fixture oraz all-frozen `max_torque_Apm == 0` dla CUDA FP64;
 - termiczny fixed-step reproducibility/statistical test oraz test odrzucenia adaptive + Brown noise.
 
 ## Ograniczenia

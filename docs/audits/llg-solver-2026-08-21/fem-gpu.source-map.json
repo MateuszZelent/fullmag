@@ -1,8 +1,8 @@
 {
   "document": {
     "path": "docs/audits/llg-solver-2026-08-21/fem-gpu.md",
-    "audited_source_revision": "364ecd08666aede16b86f7a48774eb594d70ce16",
-    "immutable_source_base_url": "https://github.com/MateuszZelent/fullmag/blob/364ecd08666aede16b86f7a48774eb594d70ce16/"
+    "audited_source_revision": "b24750409fcf2bdb24364ecd7177bbe3ffe39e76",
+    "immutable_source_base_url": "https://github.com/MateuszZelent/fullmag/blob/b24750409fcf2bdb24364ecd7177bbe3ffe39e76/"
   },
   "backend_matrix": [
     {
@@ -50,6 +50,24 @@
       "path": "backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp",
       "symbol": "gpu_rk_plan_device_resident",
       "responsibility": "Planuje device-resident krok RK dla FEM GPU."
+    },
+    {
+      "id": "fem-gpu-execution-receipt",
+      "path": "backends/fem/gpu/cuda/runtime/execution_receipt.cpp",
+      "symbol": "gpu_execution_receipt_commit_attempt",
+      "responsibility": "Zamyka attempt-scoped receipt i zachowuje wyłącznie dowód zaakceptowanego wykonania."
+    },
+    {
+      "id": "fem-gpu-receipt-validation",
+      "path": "crates/fullmag-runner/src/fem/execution_receipt.rs",
+      "symbol": "validate_strict_fem_gpu_execution_receipt",
+      "responsibility": "Fail-closed waliduje klasę wykonania, operator masks, fallback, transfery i zaakceptowany krok przed publikacją provenance."
+    },
+    {
+      "id": "fem-gpu-strict-execution-test",
+      "path": "backends/fem/tests/gpu_strict_execution_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Testuje plan wszystkich jawnych integratorów, lokalizację operatorów, lifecycle receipt i zakaz transferów hot loop."
     },
     {
       "id": "fem-gpu-step",

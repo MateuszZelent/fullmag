@@ -1,8 +1,8 @@
 {
   "document": {
     "path": "docs/audits/llg-solver-2026-08-21/fdm-gpu.md",
-    "audited_source_revision": "364ecd08666aede16b86f7a48774eb594d70ce16",
-    "immutable_source_base_url": "https://github.com/MateuszZelent/fullmag/blob/364ecd08666aede16b86f7a48774eb594d70ce16/"
+    "audited_source_revision": "b24750409fcf2bdb24364ecd7177bbe3ffe39e76",
+    "immutable_source_base_url": "https://github.com/MateuszZelent/fullmag/blob/b24750409fcf2bdb24364ecd7177bbe3ffe39e76/"
   },
   "backend_matrix": [
     {
@@ -74,6 +74,12 @@
       "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu",
       "symbol": "reduce_adaptive_error_policy",
       "responsibility": "Redukuje błędy adaptacyjne przez hierarchiczne maksimum i wyznacza politykę kroku."
+    },
+    {
+      "id": "fdm-gpu-free-set-torque-reduction",
+      "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu",
+      "symbol": "reduce_max_cross_norm_fp64",
+      "responsibility": "Redukuje moment po wszystkich komórkach bez maski wolnego zbioru, co dokumentuje defekt FrozenSpins."
     },
     {
       "id": "fdm-gpu-buffer-setup",
