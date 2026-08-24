@@ -22,7 +22,9 @@
 #include "cpu/mfem/runtime/snapshot.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
 #include "cpu/mfem/runtime/step_metrics.hpp"
+#include "cpu/mfem/runtime/mfem_device.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
+#include "gpu/cuda/runtime/execution_receipt.hpp"
 #include "gpu/cuda/relaxation/nonlinear_cg.hpp"
 #include "gpu/cuda/relaxation/pgbb.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
@@ -32,6 +34,7 @@
 #include <cstddef>
 #include <exception>
 #include <new>
+#include <optional>
 
 namespace fullmag::fem {
 
@@ -68,6 +71,7 @@ int run_backend_step_attempt(
             0.0);
         return FULLMAG_FEM_ERR_INTERNAL;
     }
+    std::optional<TransferAuditScope> gpu_attempt_hot_loop;
     const auto refresh_transaction_stats = [&]() {
         // The RK final-statistics path runs before the outer transaction is
         // committed or rolled back. Refresh the transaction-only fields at
@@ -76,6 +80,10 @@ int run_backend_step_attempt(
         fill_step_profiler_timing_stats(ctx, out_stats);
     };
     auto rollback = [&]() {
+        gpu_attempt_hot_loop.reset();
+        if (gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
+            gpu_execution_receipt_fail_attempt(ctx.gpu_state.execution_receipt);
+        }
         const std::string original_error = error;
         std::string callback_error;
         if (!rollback_transport_stage_attempt(ctx, callback_error)) {
@@ -107,6 +115,12 @@ int run_backend_step_attempt(
     bool ok = false;
     ctx.interrupt.step_interrupted = false;
     ctx.transfer_audit.audit.reset_step_violation();
+    const bool gpu_requested = mfem_device_requests_gpu(ctx);
+    if (gpu_requested) {
+        gpu_attempt_hot_loop.emplace(
+            ctx.transfer_audit.audit,
+            TransferAuditScopeKind::HotLoop);
+    }
     if (ctx.frozen_spins.enabled()) {
         ctx.frozen_spins.project_onto_reference(ctx.state.m_xyz);
     }
@@ -122,11 +136,16 @@ int run_backend_step_attempt(
         return FULLMAG_FEM_ERR_INTERNAL;
     }
     try {
-        TransferAuditScope hot_loop(
-            ctx.transfer_audit.audit,
-            TransferAuditScopeKind::HotLoop);
-        ok = context_step_explicit_rk_mfem(
-            ctx, tab, dt_seconds, out_stats, error);
+        if (gpu_requested) {
+            ok = context_step_explicit_rk_mfem(
+                ctx, tab, dt_seconds, out_stats, error);
+        } else {
+            TransferAuditScope hot_loop(
+                ctx.transfer_audit.audit,
+                TransferAuditScopeKind::HotLoop);
+            ok = context_step_explicit_rk_mfem(
+                ctx, tab, dt_seconds, out_stats, error);
+        }
     } catch (const std::bad_alloc &) {
         error = "RK step candidate/cache allocation failed";
         ok = false;
@@ -134,7 +153,7 @@ int run_backend_step_attempt(
         error = std::string("RK step failed with an internal exception: ") + exception.what();
         ok = false;
     }
-    if (ctx.transfer_audit.audit.hot_loop_violation) {
+    if (!gpu_requested && ctx.transfer_audit.audit.hot_loop_violation) {
         error = ctx.transfer_audit.audit.hot_loop_violation_message;
         rollback();
         set_stage_completion(
@@ -216,6 +235,9 @@ int run_backend_step_attempt(
             return FULLMAG_FEM_ERR_INTERNAL;
         }
         if (energy_decision.kind == RelaxationEnergyAcceptanceKind::rejected_increase) {
+            if (gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
+                gpu_execution_receipt_reject_attempt(ctx.gpu_state.execution_receipt);
+            }
             rollback();
             energy_rejected = true;
             refresh_transaction_stats();
@@ -232,6 +254,57 @@ int run_backend_step_attempt(
             0.0,
             0.0);
         return FULLMAG_FEM_ERR_INTERNAL;
+    }
+    if (gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
+        gpu_attempt_hot_loop.reset();
+        if (ctx.transfer_audit.audit.hot_loop_violation ||
+            !gpu_execution_receipt_update_attempt_transfer(
+                ctx.gpu_state.execution_receipt,
+                ctx.transfer_audit.audit.counters)) {
+            error = ctx.transfer_audit.audit.hot_loop_violation
+                ? ctx.transfer_audit.audit.hot_loop_violation_message
+                : "strict FEM GPU execution rejected current-attempt hot-loop compute host transfer or synchronization";
+            rollback();
+            set_stage_completion(
+                ctx,
+                FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+                nullptr,
+                0.0,
+                0.0);
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+        gpu_execution_receipt_commit_attempt(ctx.gpu_state.execution_receipt);
+        const auto execution_receipt = gpu_execution_receipt_snapshot(
+            ctx.gpu_state.execution_receipt);
+        if (!execution_receipt.accounting_valid ||
+            execution_receipt.executed_unknown_operator_mask != 0 ||
+            execution_receipt.executed_device_operator_mask !=
+                execution_receipt.resolved_device_operator_mask ||
+            execution_receipt.executed_host_operator_mask !=
+                execution_receipt.resolved_host_operator_mask) {
+            error = "GPU-requested native FEM step completed without a valid executed-operator receipt";
+            rollback();
+            set_stage_completion(
+                ctx,
+                FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+                nullptr,
+                0.0,
+                0.0);
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+        if (execution_receipt.execution_class == FemGpuExecutionClass::DeviceResident &&
+            (execution_receipt.executed_host_operator_mask != 0 ||
+             execution_receipt.fallback_count != 0)) {
+            error = "strict FEM GPU step reported host execution or fallback";
+            rollback();
+            set_stage_completion(
+                ctx,
+                FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+                nullptr,
+                0.0,
+                0.0);
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
     }
     transaction.commit();
     refresh_transaction_stats();

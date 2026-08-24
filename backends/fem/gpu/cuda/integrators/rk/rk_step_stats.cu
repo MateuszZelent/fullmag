@@ -514,7 +514,11 @@ bool gpu_rk_finalize_step_stats(
     fullmag_fem_step_stats &stats,
     std::string &reason)
 {
-    return finalize_step_stats_impl(ctx, stats, false, nullptr, 0, reason);
+    if (!finalize_step_stats_impl(ctx, stats, false, nullptr, 0, reason)) {
+        return false;
+    }
+    gpu_rk_note_completed_final_reductions(ctx);
+    return true;
 }
 
 bool gpu_rk_finalize_step_stats_control_readback(

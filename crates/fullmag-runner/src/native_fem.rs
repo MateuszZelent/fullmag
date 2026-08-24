@@ -2886,6 +2886,39 @@ impl NativeFemBackend {
         Ok(NativeFemGpuRkPlanInfo::from_ffi(info))
     }
 
+    pub(crate) fn gpu_execution_receipt(
+        &self,
+    ) -> Result<runtime_info::NativeFemGpuExecutionReceipt, RunError> {
+        let mut receipt = ffi::fullmag_fem_gpu_execution_receipt_v1 {
+            abi_version: ffi::FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_gpu_execution_receipt_v1>() as u32,
+            execution_class: 0,
+            precision: 0,
+            integrator: 0,
+            device_ordinal: -1,
+            required_operator_mask: 0,
+            resolved_device_operator_mask: 0,
+            resolved_host_operator_mask: 0,
+            resolved_unknown_operator_mask: 0,
+            executed_device_operator_mask: 0,
+            executed_host_operator_mask: 0,
+            executed_unknown_operator_mask: 0,
+            fallback_count: 0,
+            accepted_step_count: 0,
+            rejected_attempt_count: 0,
+            failed_attempt_count: 0,
+            hot_loop_compute_h2d_bytes: 0,
+            hot_loop_compute_d2h_bytes: 0,
+            hot_loop_compute_host_sync_count: 0,
+        };
+        let rc =
+            unsafe { ffi::fullmag_fem_backend_gpu_execution_receipt_v1(self.handle, &mut receipt) };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM GPU execution receipt read failed"));
+        }
+        runtime_info::NativeFemGpuExecutionReceipt::from_ffi(receipt)
+    }
+
     fn attach_transfer_audit(&self, stats: &mut StepStats) -> Result<(), RunError> {
         let audit = self.transfer_audit()?;
         stats.hot_loop_h2d_bytes = audit.hot_loop_h2d_bytes;
@@ -5293,6 +5326,7 @@ mod tests {
 
     fn make_test_plan() -> FemPlanIR {
         FemPlanIR {
+            frozen_spins: None,
             mesh_name: "unit_tet".to_string(),
             mesh_source: Some("meshes/unit_tet.msh".to_string()),
             mesh: MeshIR {
@@ -6659,6 +6693,7 @@ mod tests {
 
     fn make_exchange_only_plan() -> FemPlanIR {
         FemPlanIR {
+            frozen_spins: None,
             mesh_name: "two_tets".to_string(),
             mesh_source: Some("meshes/two_tets.msh".to_string()),
             mesh: MeshIR {

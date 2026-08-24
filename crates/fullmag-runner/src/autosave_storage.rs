@@ -23,6 +23,8 @@ pub struct StageManifest {
     pub complete: bool,
     pub table_sample_count: u64,
     pub field_sample_count: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -231,6 +233,7 @@ impl AutosaveTargetState {
             complete: false,
             table_sample_count: 0,
             field_sample_count: 0,
+            provenance: None,
         };
         writer.begin_stage(&manifest)?;
         self.next_stage_index += 1;
@@ -240,6 +243,18 @@ impl AutosaveTargetState {
             next_field_sample: 0,
         });
         Ok(&self.active.as_ref().expect("active stage was set").manifest)
+    }
+
+    pub fn update_active_provenance(
+        &mut self,
+        provenance: serde_json::Value,
+    ) -> Result<(), String> {
+        let active = self
+            .active
+            .as_mut()
+            .ok_or_else(|| format!("autosave target '{}' has no active stage", self.target))?;
+        active.manifest.provenance = Some(provenance);
+        Ok(())
     }
 
     pub fn append_table_row<W: AutosaveTargetWriter>(
@@ -511,6 +526,7 @@ mod tests {
                 complete: true,
                 table_sample_count: 2,
                 field_sample_count: 1,
+                provenance: None,
             },
         )
         .unwrap();
