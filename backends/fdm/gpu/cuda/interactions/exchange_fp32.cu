@@ -15,6 +15,7 @@ namespace fullmag {
 namespace fdm {
 
 extern double reduce_exchange_energy_fp32(Context &ctx);
+extern void set_cuda_error(Context &ctx, const char *operation, cudaError_t err);
 
 __device__ __forceinline__ int pbc_neighbor_fp32(
     int coord, int dim, int stride, int idx, int delta, bool periodic) {
@@ -166,6 +167,12 @@ void launch_exchange_field_fp32(Context &ctx) {
         prefactor,
         inv_mu0_ms,
         ctx.periodic_x, ctx.periodic_y, ctx.periodic_z);
+    const cudaError_t launch_error = cudaGetLastError();
+    if (launch_error != cudaSuccess) {
+        set_cuda_error(ctx, "launch_exchange_field_fp32", launch_error);
+        return;
+    }
+    fullmag_fdm_note_operator_device_execution(ctx, FULLMAG_FDM_OPERATOR_EXCHANGE);
 }
 
 double launch_exchange_energy_fp32(Context &ctx) {

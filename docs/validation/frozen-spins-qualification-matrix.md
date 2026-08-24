@@ -23,11 +23,11 @@ nie jest dowodem IR, plannera, runtime, fizyki, managed runtime ani browsera.
 |---|---|---|---|---|---|---|---|
 | FDM CPU/reference FP64 | single-grid relaksacja i dynamika | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
 | FDM CUDA FP64 | single-grid relaksacja i dynamika | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
-| FDM CUDA FP32 | single-grid relaksacja i dynamika | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
-| FDM multilayer CPU/reference | aligned shared grid | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
-| FDM multilayer CUDA | aligned shared grid | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
+| FDM CUDA FP32 | single-grid relaksacja i dynamika | `QUALIFIED` | `QUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
+| FDM multilayer CPU/reference | aligned shared grid | `QUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
+| FDM multilayer CUDA | aligned shared grid | `QUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
 | FEM CPU/MFEM FP64 | magnetic true DOF, P1 relaksacja i dynamika | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
-| FEM GPU MFEM/hypre/libCEED/CUDA FP64 | device-resident true DOF | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
+| FEM GPU MFEM/hypre/libCEED/CUDA FP64 | device-resident true DOF | `QUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
 
 Żadna komórka nie może zostać podniesiona przez samą zmianę tego dokumentu.
 Awans wymaga wpisu: pełny commit SHA, dokładna komenda, wynik, urządzenie/runtime
@@ -148,14 +148,15 @@ jawnie zadeklarowanego legalnego resolved lane i zapisuje fallback; forced
 backend/device/precision nie może się zmienić. `auto` nie może użyć lane'u,
 który nie obsługuje constraintu, ani pominąć constraintu.
 
-## Stan dowodów po pełnym wdrożeniu 2026-08-21 (100% QUALIFIED)
+## Stan dowodów kwalifikacyjnych 2026-08-21
 
 | Lane | Wykonane dowody | Status |
 |---|---|---|
 | FDM CPU/reference single-grid | IR/planner materialization, runtime final-RHS/candidate restore, testy planner, testy runner, Python/IR testy, skrypty kwalifikacji | `QUALIFIED` |
-| FDM CUDA (FP64 & FP32) | Targety kwalifikacji `fdm_frozen_spins_cuda_runtime_contract`, Heun i RK4 max defect = 0, FP32 project kernel i brak dryfu, zweryfikowane przez `just` | `QUALIFIED` |
-| FDM multilayer | Per-layer maska i reference upload w C API, obsługa wielowarstwowa | `QUALIFIED` |
-| FEM CPU P1 (RK & Minimizers) | Moduł `FrozenSpins`, integracja w `Context`, `fem_context_builder.cpp`, `rk_stage_rhs.cpp`, `rk_explicit_step.cpp`, `projected_gradient_bb.cpp`, `nonlinear_cg.cpp`, `relaxation_math.cpp`, kontrakt `fem_frozen_spins_contract` w `verify-fem-time-domain-native-contract` | `QUALIFIED` |
-| FEM GPU (Device-resident) | Device-resident `d_mask`, `d_reference_x/y/z` w `FemGpuMeshRegionDeviceState`, kernele `gpu_zero_frozen_rhs` i `gpu_project_frozen_reference`, podpięcie w `rk_rhs_runtime.cu`, `rk_attempt_setup.cu`, `rk4_stage_sequence.cu`, `rk23_stage_sequence.cu`, `rk_stage_schedule.cu` | `QUALIFIED` |
-| Control Room FDM/FEM & E2E | resource-first API, ribbon/Explorer/Inspector/overlay, 93 testy jednostkowe, smoke test browser/WebGL `smoke:frozen-spins` | `QUALIFIED` |
+| FDM CUDA FP64 single-grid | Targety kwalifikacji `fdm_frozen_spins_abi_contract`, `fdm_frozen_spins_cuda_runtime_contract`, Heun i RK4 max defect = 0.00e+00 (< 1e-14), checkpoint preservation defect = 0, zweryfikowane przez `just verify-frozen-spins-fdm-cuda` | `QUALIFIED` |
+| FDM CUDA FP32 | Fail-closed z kodem `frozen_spins_cuda_fp32_unqualified` (wymóg determinizmu FP64) | `UNQUALIFIED` |
+| FDM multilayer | Brak kwalifikacji wielowarstwowej dla frozen spins | `UNQUALIFIED` |
+| FEM CPU P1 (RK & Minimizers) | Moduł `FrozenSpins`, integracja w `Context`, `fem_context_builder.cpp`, `rk_stage_rhs.cpp`, `rk_explicit_step.cpp`, `projected_gradient_bb.cpp`, `nonlinear_cg.cpp`, `relaxation_math.cpp`, kontrakt `fem_frozen_spins_contract` w `just verify-fem-time-domain-native-contract` | `QUALIFIED` |
+| FEM GPU (Device-resident) | Fail-closed z kodem `frozen_spins_fem_gpu_unqualified` przed kwalifikacją runtime GPU | `UNQUALIFIED` |
+| Control Room FDM/FEM & E2E | resource-first API, ribbon/Explorer/Inspector/overlay, testy jednostkowe Vitest (`ribbonStructure.test.ts`, `explorerSelection.test.ts`, `PhysicsInteractionPanel.dom.test.tsx`), smoke test browser/WebGL `smoke:frozen-spins` | `QUALIFIED` |
 | Publiczne przykłady i skrypty | `examples/frozen_spins/pinned_region_relaxation.py`, `examples/frozen_spins/pinned_region_dynamics.py`, `scripts/verify_frozen_spins_ir.py`, `scripts/verify_frozen_spins_python.py`, `scripts/verify_frozen_spins_qualification.py` | `QUALIFIED` |

@@ -42,6 +42,53 @@ extern bool launch_multilayer_effective_field_fp32(Context &ctx);
 extern bool launch_energy_density_observable(
     Context &ctx,
     fullmag_fdm_observable observable);
+
+cudaError_t fullmag_fdm_receipt_cuda_memcpy(
+    Context &ctx,
+    void *destination,
+    const void *source,
+    size_t bytes,
+    cudaMemcpyKind kind)
+{
+    const cudaError_t status = ::cudaMemcpy(destination, source, bytes, kind);
+    if (status == cudaSuccess) {
+        if (kind == cudaMemcpyHostToDevice) {
+            fullmag_fdm_record_cuda_transfer_success(ctx, true, bytes);
+        } else if (kind == cudaMemcpyDeviceToHost) {
+            fullmag_fdm_record_cuda_transfer_success(ctx, false, bytes);
+        }
+    }
+    return status;
+}
+
+cudaError_t fullmag_fdm_receipt_cuda_memcpy_async(
+    Context &ctx,
+    void *destination,
+    const void *source,
+    size_t bytes,
+    cudaMemcpyKind kind,
+    cudaStream_t stream)
+{
+    const cudaError_t status =
+        ::cudaMemcpyAsync(destination, source, bytes, kind, stream);
+    if (status == cudaSuccess) {
+        if (kind == cudaMemcpyHostToDevice) {
+            fullmag_fdm_record_cuda_transfer_success(ctx, true, bytes);
+        }
+    }
+    return status;
+}
+
+// Every host-boundary copy in this translation unit is routed through the
+// allocation-free receipt hook. Device-internal copies are intentionally not
+// classified as host transfers.
+#define cudaMemcpy(destination, source, bytes, kind) \
+    fullmag_fdm_receipt_cuda_memcpy( \
+        const_cast<Context &>(ctx), destination, source, bytes, kind)
+#define cudaMemcpyAsync(destination, source, bytes, kind, stream) \
+    fullmag_fdm_receipt_cuda_memcpy_async( \
+        const_cast<Context &>(ctx), destination, source, bytes, kind, stream)
+
 static void free_boundary_correction(Context &ctx);
 static void free_anisotropy_fields(Context &ctx);
 static void free_cubic_anisotropy_fields(Context &ctx);
@@ -218,8 +265,13 @@ static void destroy_async_field_snapshot_pool_resources(AsyncFieldSnapshotPool &
 
 bool initialize_async_field_snapshot_pool(Context &ctx)
 {
-    AsyncFieldSnapshotPool &pool = ctx.async_field_snapshot_pool;
-    destroy_async_field_snapshot_pool_resources(pool);
+    ctx.async_field_snapshot_pool = std::shared_ptr<AsyncFieldSnapshotPool>(
+        new AsyncFieldSnapshotPool(),
+        [](AsyncFieldSnapshotPool *pool) {
+            destroy_async_field_snapshot_pool_resources(*pool);
+            delete pool;
+        });
+    AsyncFieldSnapshotPool &pool = *ctx.async_field_snapshot_pool;
     pool.cell_count = ctx.cell_count;
     pool.component_bytes = ctx.cell_count * scalar_size(ctx.precision);
     pool.host_soa_bytes = pool.component_bytes * 3u;
@@ -268,7 +320,7 @@ bool initialize_async_field_snapshot_pool(Context &ctx)
 
 void destroy_async_field_snapshot_pool(Context &ctx)
 {
-    destroy_async_field_snapshot_pool_resources(ctx.async_field_snapshot_pool);
+    ctx.async_field_snapshot_pool.reset();
 }
 
 bool acquire_async_field_snapshot_pool_slot(
@@ -276,7 +328,11 @@ bool acquire_async_field_snapshot_pool_slot(
     std::size_t &slot_index,
     std::string &error)
 {
-    AsyncFieldSnapshotPool &pool = ctx.async_field_snapshot_pool;
+    if (!ctx.async_field_snapshot_pool) {
+        error = "fdm_async_snapshot_pool_uninitialized";
+        return false;
+    }
+    AsyncFieldSnapshotPool &pool = *ctx.async_field_snapshot_pool;
     slot_index = kFdmAsyncFieldSnapshotPoolCapacity;
     if (!pool.initialized) {
         error = "fdm_async_snapshot_pool_uninitialized";
@@ -372,8 +428,13 @@ static void destroy_async_preview_snapshot_pool_resources(AsyncPreviewSnapshotPo
 
 bool initialize_async_preview_snapshot_pool(Context &ctx)
 {
-    AsyncPreviewSnapshotPool &pool = ctx.async_preview_snapshot_pool;
-    destroy_async_preview_snapshot_pool_resources(pool);
+    ctx.async_preview_snapshot_pool = std::shared_ptr<AsyncPreviewSnapshotPool>(
+        new AsyncPreviewSnapshotPool(),
+        [](AsyncPreviewSnapshotPool *pool) {
+            destroy_async_preview_snapshot_pool_resources(*pool);
+            delete pool;
+        });
+    AsyncPreviewSnapshotPool &pool = *ctx.async_preview_snapshot_pool;
     pool.max_preview_count = ctx.cell_count;
     pool.xyz_bytes = pool.max_preview_count * 3u * scalar_size(ctx.precision);
 
@@ -419,7 +480,7 @@ bool initialize_async_preview_snapshot_pool(Context &ctx)
 
 void destroy_async_preview_snapshot_pool(Context &ctx)
 {
-    destroy_async_preview_snapshot_pool_resources(ctx.async_preview_snapshot_pool);
+    ctx.async_preview_snapshot_pool.reset();
 }
 
 bool acquire_async_preview_snapshot_pool_slot(
@@ -428,7 +489,11 @@ bool acquire_async_preview_snapshot_pool_slot(
     std::size_t &slot_index,
     std::string &error)
 {
-    AsyncPreviewSnapshotPool &pool = ctx.async_preview_snapshot_pool;
+    if (!ctx.async_preview_snapshot_pool) {
+        error = "fdm_async_preview_snapshot_pool_uninitialized";
+        return false;
+    }
+    AsyncPreviewSnapshotPool &pool = *ctx.async_preview_snapshot_pool;
     slot_index = kFdmAsyncPreviewSnapshotPoolCapacity;
     if (!pool.initialized) {
         error = "fdm_async_preview_snapshot_pool_uninitialized";
@@ -1324,7 +1389,10 @@ static void free_preview_download_scratch(Context &ctx) {
 }
 
 static void destroy_async_snapshot_resources(AsyncFieldSnapshot &snapshot) {
-    if (snapshot.pool != nullptr) {
+    if (snapshot.receipt_token) {
+        (void)snapshot.receipt_token->invalidate();
+    }
+    if (snapshot.pool) {
         bool work_complete = !snapshot.needs_wait;
         if (snapshot.needs_wait && !snapshot.done_event_recorded) {
             // Setup can fail after the ready event has been recorded but before
@@ -1371,14 +1439,18 @@ static void destroy_async_snapshot_resources(AsyncFieldSnapshot &snapshot) {
     snapshot.ready_event = nullptr;
     snapshot.staging_done_event = nullptr;
     snapshot.done_event = nullptr;
-    snapshot.pool = nullptr;
+    snapshot.pool.reset();
+    snapshot.receipt_token.reset();
     snapshot.pool_slot = kFdmAsyncFieldSnapshotPoolCapacity;
     snapshot.needs_wait = false;
     snapshot.done_event_recorded = false;
 }
 
 static void destroy_async_preview_resources(AsyncPreviewSnapshot &snapshot) {
-    if (snapshot.pool != nullptr) {
+    if (snapshot.receipt_token) {
+        (void)snapshot.receipt_token->invalidate();
+    }
+    if (snapshot.pool) {
         bool work_complete = !snapshot.needs_wait;
         if (snapshot.needs_wait && !snapshot.done_event_recorded) {
             const cudaError_t ready_error = snapshot.ready_event
@@ -1413,7 +1485,8 @@ static void destroy_async_preview_resources(AsyncPreviewSnapshot &snapshot) {
             cudaFree(snapshot.device_xyz);
         }
     }
-    snapshot.pool = nullptr;
+    snapshot.pool.reset();
+    snapshot.receipt_token.reset();
     snapshot.pool_slot = kFdmAsyncPreviewSnapshotPoolCapacity;
     snapshot.done_event = nullptr;
     snapshot.staging_done_event = nullptr;
@@ -1992,13 +2065,36 @@ bool context_alloc_device(Context &ctx) {
     return true;
 }
 
-bool context_capture_gpu_transport_pre_step_m(Context &ctx) {
-    if (!ctx.gpu_transport_rhs.active || ctx.precision != FULLMAG_FDM_PRECISION_DOUBLE)
-        return true;
+static bool copy_field_d2d_async(
+    DeviceVectorField &destination,
+    const DeviceVectorField &source,
+    size_t bytes,
+    cudaStream_t stream)
+{
+    return cudaMemcpyAsync(destination.x, source.x, bytes,
+                           cudaMemcpyDeviceToDevice, stream) == cudaSuccess &&
+        cudaMemcpyAsync(destination.y, source.y, bytes,
+                        cudaMemcpyDeviceToDevice, stream) == cudaSuccess &&
+        cudaMemcpyAsync(destination.z, source.z, bytes,
+                        cudaMemcpyDeviceToDevice, stream) == cudaSuccess;
+}
+
+bool context_capture_pre_step_state(Context &ctx) {
+    if (ctx.cell_count == 0) return true;
     if (ctx.gpu_transport_pre_step_m.x == nullptr &&
         !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_m))
         return false;
-    const size_t bytes = static_cast<size_t>(ctx.cell_count) * sizeof(double);
+    if (ctx.integrator == FULLMAG_FDM_INTEGRATOR_ABM3 &&
+        ((ctx.gpu_transport_pre_step_abm_f_n.x == nullptr &&
+          !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n)) ||
+         (ctx.gpu_transport_pre_step_abm_f_n1.x == nullptr &&
+          !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n1)) ||
+         (ctx.gpu_transport_pre_step_abm_f_n2.x == nullptr &&
+          !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n2))))
+        return false;
+    const size_t scalar_bytes = ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+        ? sizeof(double) : sizeof(float);
+    const size_t bytes = static_cast<size_t>(ctx.cell_count) * scalar_bytes;
     const cudaStream_t stream = context_compute_stream(ctx);
     // Legacy fixed-step kernels still publish m on the default stream.  Order
     // that producer before the transaction-owned compute-stream snapshot.
@@ -2010,23 +2106,45 @@ bool context_capture_gpu_transport_pre_step_m(Context &ctx) {
         cudaMemcpyAsync(ctx.gpu_transport_pre_step_m.z, ctx.m.z, bytes,
                         cudaMemcpyDeviceToDevice, stream) != cudaSuccess ||
         cudaStreamSynchronize(stream) != cudaSuccess) {
-        ctx.last_error = "failed to capture bound transport pre-step magnetization";
+        ctx.last_error = "failed to capture pre-step magnetization";
         return false;
     }
     ctx.gpu_transport_pre_step_m_valid = true;
+    if (ctx.integrator == FULLMAG_FDM_INTEGRATOR_ABM3) {
+        if (!copy_field_d2d_async(
+                ctx.gpu_transport_pre_step_abm_f_n, ctx.abm_f_n, bytes, stream) ||
+            !copy_field_d2d_async(
+                ctx.gpu_transport_pre_step_abm_f_n1, ctx.abm_f_n1, bytes, stream) ||
+            !copy_field_d2d_async(
+                ctx.gpu_transport_pre_step_abm_f_n2, ctx.abm_f_n2, bytes, stream) ||
+            cudaStreamSynchronize(stream) != cudaSuccess) {
+            ctx.gpu_transport_pre_step_m_valid = false;
+            ctx.last_error = "failed to capture pre-step ABM history";
+            return false;
+        }
+        ctx.gpu_transport_pre_step_abm_valid = true;
+    }
+    ctx.gpu_transport_pre_step_step_count = ctx.step_count;
+    ctx.gpu_transport_pre_step_accepted_step_index = ctx.accepted_step_index;
+    ctx.gpu_transport_pre_step_accepted_state_revision = ctx.accepted_state_revision;
+    ctx.gpu_transport_pre_step_current_time = ctx.current_time;
+    ctx.gpu_transport_pre_step_current_dt = ctx.current_dt;
+    ctx.gpu_transport_pre_step_adaptive_has_previous_error =
+        ctx.adaptive_has_previous_error;
+    ctx.gpu_transport_pre_step_adaptive_previous_error = ctx.adaptive_previous_error;
     ctx.gpu_transport_pre_step_abm_startup = ctx.abm_startup;
     ctx.gpu_transport_pre_step_abm_last_dt = ctx.abm_last_dt;
     return true;
 }
 
-bool context_restore_gpu_transport_pre_step_m(Context &ctx) {
-    if (!ctx.gpu_transport_rhs.active || ctx.precision != FULLMAG_FDM_PRECISION_DOUBLE)
-        return true;
+bool context_rollback_pre_step_state(Context &ctx) {
     if (!ctx.gpu_transport_pre_step_m_valid) {
-        ctx.last_error = "bound transport pre-step magnetization snapshot is unavailable";
+        ctx.last_error = "pre-step magnetization snapshot is unavailable";
         return false;
     }
-    const size_t bytes = static_cast<size_t>(ctx.cell_count) * sizeof(double);
+    const size_t scalar_bytes = ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+        ? sizeof(double) : sizeof(float);
+    const size_t bytes = static_cast<size_t>(ctx.cell_count) * scalar_bytes;
     const cudaStream_t stream = context_compute_stream(ctx);
     // A rejected legacy fixed-step integrator can still have default-stream
     // writers in flight.  Complete those writers before restoring on the
@@ -2049,18 +2167,77 @@ bool context_restore_gpu_transport_pre_step_m(Context &ctx) {
         ctx.last_error = "failed to restore bound transport pre-step magnetization";
         return false;
     }
+    if (ctx.gpu_transport_pre_step_abm_valid &&
+        (!copy_field_d2d_async(
+             ctx.abm_f_n, ctx.gpu_transport_pre_step_abm_f_n, bytes, stream) ||
+         !copy_field_d2d_async(
+             ctx.abm_f_n1, ctx.gpu_transport_pre_step_abm_f_n1, bytes, stream) ||
+         !copy_field_d2d_async(
+             ctx.abm_f_n2, ctx.gpu_transport_pre_step_abm_f_n2, bytes, stream) ||
+         cudaStreamSynchronize(stream) != cudaSuccess)) {
+        ctx.last_error = "failed to restore pre-step ABM history";
+        return false;
+    }
     ctx.gpu_transport_pre_step_m_valid = false;
-    // A bound attempt may overwrite k_fsal with a transport-dependent
-    // derivative.  Conservatively invalidate it so a later unbound step can
-    // never reuse rejected transport state.
+    ctx.gpu_transport_pre_step_abm_valid = false;
+    ctx.step_count = ctx.gpu_transport_pre_step_step_count;
+    ctx.accepted_step_index = ctx.gpu_transport_pre_step_accepted_step_index;
+    ctx.accepted_state_revision = ctx.gpu_transport_pre_step_accepted_state_revision;
+    ctx.current_time = ctx.gpu_transport_pre_step_current_time;
+    ctx.current_dt = ctx.gpu_transport_pre_step_current_dt;
+    ctx.trial_dt = 0.0;
     ctx.fsal_valid = false;
+    ctx.fsal_pending = false;
+    ctx.accepted_step_pending = false;
+    ctx.adaptive_has_previous_error =
+        ctx.gpu_transport_pre_step_adaptive_has_previous_error;
+    ctx.adaptive_previous_error = ctx.gpu_transport_pre_step_adaptive_previous_error;
     ctx.abm_startup = ctx.gpu_transport_pre_step_abm_startup;
     ctx.abm_last_dt = ctx.gpu_transport_pre_step_abm_last_dt;
     return true;
 }
 
-void context_invalidate_gpu_transport_pre_step_m(Context &ctx) {
+void context_discard_pre_step_state(Context &ctx) {
     ctx.gpu_transport_pre_step_m_valid = false;
+    ctx.gpu_transport_pre_step_abm_valid = false;
+}
+
+bool context_prepare_checkpoint_import_staging(
+    Context &ctx, bool include_fsal, bool include_abm_history)
+{
+    if (ctx.gpu_transport_pre_step_m.x == nullptr &&
+        !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_m)) {
+        return false;
+    }
+    if ((include_fsal || include_abm_history) &&
+        ctx.gpu_transport_pre_step_abm_f_n.x == nullptr &&
+        !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n)) {
+        return false;
+    }
+    if (include_abm_history &&
+        ((ctx.gpu_transport_pre_step_abm_f_n1.x == nullptr &&
+          !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n1)) ||
+         (ctx.gpu_transport_pre_step_abm_f_n2.x == nullptr &&
+          !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n2)))) {
+        return false;
+    }
+    return true;
+}
+
+void context_commit_checkpoint_import_staging(
+    Context &ctx, bool include_fsal, bool include_abm_history)
+{
+    std::swap(ctx.m, ctx.gpu_transport_pre_step_m);
+    if (include_fsal) {
+        std::swap(ctx.k_fsal, ctx.gpu_transport_pre_step_abm_f_n);
+    }
+    if (include_abm_history) {
+        std::swap(ctx.abm_f_n, ctx.gpu_transport_pre_step_abm_f_n);
+        std::swap(ctx.abm_f_n1, ctx.gpu_transport_pre_step_abm_f_n1);
+        std::swap(ctx.abm_f_n2, ctx.gpu_transport_pre_step_abm_f_n2);
+    }
+    ctx.gpu_transport_pre_step_m_valid = false;
+    ctx.gpu_transport_pre_step_abm_valid = false;
 }
 
 void context_free_device(Context &ctx) {
@@ -2078,6 +2255,9 @@ void context_free_device(Context &ctx) {
     free_vector_field(ctx.k1);
     free_vector_field(ctx.tmp);
     free_vector_field(ctx.gpu_transport_pre_step_m);
+    free_vector_field(ctx.gpu_transport_pre_step_abm_f_n);
+    free_vector_field(ctx.gpu_transport_pre_step_abm_f_n1);
+    free_vector_field(ctx.gpu_transport_pre_step_abm_f_n2);
     free_vector_field(ctx.work);
     // DP45 stage buffers
     free_vector_field(ctx.k2);
@@ -3997,7 +4177,7 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
         delete snapshot;
         return nullptr;
     }
-    snapshot->pool = &ctx.async_field_snapshot_pool;
+    snapshot->pool = ctx.async_field_snapshot_pool;
     snapshot->pool_slot = pool_slot;
     const auto &slot = snapshot->pool->slots[pool_slot];
     snapshot->staging = slot.staging;
@@ -4248,6 +4428,11 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
     err = cudaEventRecord(done_event, io_stream);
     if (err != cudaSuccess) return fail("cudaEventRecord(snapshot.done_event)", err);
     snapshot->done_event_recorded = true;
+    snapshot->receipt_token = std::make_shared<AsyncTransferReceiptToken>(
+        ctx.execution_receipt,
+        false,
+        snapshot->host_soa_len_bytes,
+        ReceiptTransferCadence::Observation);
 
     return snapshot;
 }
@@ -4264,6 +4449,7 @@ bool context_wait_async_field_snapshot(
         return false;
     }
 
+    const bool completed_device_to_host = snapshot.needs_wait;
     if (snapshot.needs_wait) {
         cudaError_t err =
             cudaEventSynchronize(reinterpret_cast<cudaEvent_t>(snapshot.done_event));
@@ -4285,6 +4471,9 @@ bool context_wait_async_field_snapshot(
         snapshot.precision == FULLMAG_FDM_PRECISION_SINGLE
             ? FULLMAG_FDM_SNAPSHOT_SCALAR_F32
             : FULLMAG_FDM_SNAPSHOT_SCALAR_F64;
+    if (completed_device_to_host && snapshot.receipt_token) {
+        (void)snapshot.receipt_token->complete();
+    }
     return true;
 }
 
@@ -4330,7 +4519,7 @@ AsyncPreviewSnapshot *context_begin_async_preview_snapshot(
         delete snapshot;
         return nullptr;
     }
-    snapshot->pool = &ctx.async_preview_snapshot_pool;
+    snapshot->pool = ctx.async_preview_snapshot_pool;
     snapshot->pool_slot = pool_slot;
     const auto &slot = snapshot->pool->slots[pool_slot];
     snapshot->device_xyz = slot.device_xyz;
@@ -4613,6 +4802,11 @@ AsyncPreviewSnapshot *context_begin_async_preview_snapshot(
     err = cudaEventRecord(done_event, io_stream);
     if (err != cudaSuccess) return fail("cudaEventRecord(preview_snapshot.done_event)", err);
     snapshot->done_event_recorded = true;
+    snapshot->receipt_token = std::make_shared<AsyncTransferReceiptToken>(
+        ctx.execution_receipt,
+        false,
+        snapshot->host_xyz_len_bytes,
+        ReceiptTransferCadence::Observation);
 
     return snapshot;
 }
@@ -4629,6 +4823,7 @@ bool context_wait_async_preview_snapshot(
         return false;
     }
 
+    const bool completed_device_to_host = snapshot.needs_wait;
     if (snapshot.needs_wait) {
         cudaError_t err =
             cudaEventSynchronize(reinterpret_cast<cudaEvent_t>(snapshot.done_event));
@@ -4650,6 +4845,9 @@ bool context_wait_async_preview_snapshot(
         snapshot.precision == FULLMAG_FDM_PRECISION_SINGLE
             ? FULLMAG_FDM_SNAPSHOT_SCALAR_F32
             : FULLMAG_FDM_SNAPSHOT_SCALAR_F64;
+    if (completed_device_to_host && snapshot.receipt_token) {
+        (void)snapshot.receipt_token->complete();
+    }
     return true;
 }
 
@@ -4693,6 +4891,9 @@ bool context_query_device_info(Context &ctx) {
 }
 
 bool context_refresh_observables(Context &ctx) {
+    ctx.observables_valid = false;
+    const double evaluation_time =
+        ctx.accepted_step_pending ? ctx.pending_time : ctx.current_time;
     if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
         if (ctx.enable_exchange) {
             launch_exchange_field_fp64(ctx);
@@ -4700,7 +4901,7 @@ bool context_refresh_observables(Context &ctx) {
         if (ctx.enable_demag) {
             launch_demag_field_fp64(ctx);
         }
-        launch_effective_field_fp64(ctx, ctx.current_time);
+        launch_effective_field_fp64(ctx, evaluation_time);
         if (!context_refresh_effective_field_visual(ctx)) return false;
     } else {
         if (ctx.enable_exchange) {
@@ -4709,7 +4910,7 @@ bool context_refresh_observables(Context &ctx) {
         if (ctx.enable_demag) {
             launch_demag_field_fp32(ctx);
         }
-        launch_effective_field_fp32(ctx, ctx.current_time);
+        launch_effective_field_fp32(ctx, evaluation_time);
         if (!context_refresh_effective_field_visual(ctx)) return false;
     }
 
@@ -4718,7 +4919,12 @@ bool context_refresh_observables(Context &ctx) {
         set_cuda_error(ctx, "context_refresh_observables", err);
         return false;
     }
+    ctx.observables_valid = true;
     return true;
+}
+
+void context_invalidate_observables(Context &ctx) {
+    ctx.observables_valid = false;
 }
 
 bool context_refresh_demag_observable(Context &ctx) {

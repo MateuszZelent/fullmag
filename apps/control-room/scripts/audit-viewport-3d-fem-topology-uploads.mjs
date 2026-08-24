@@ -892,7 +892,7 @@ function femStatusFixture() {
     resources: { artifact_revision: 0, artifacts_revision: 0, command_completion_revision: 0, commands_revision: 0, display_revision: 1, domain_generation_id: 1, engine_log_revision: 0, field_catalog_revision: 1, field_revision: 1, fields_revision: 1, mesh_build_revision: 1, mesh_revision: 1, scalars_revision: 0, scene_revision: 1, slice_revision: 0, stages_revision: 0, topology_revision: 1, visualization_state_revision: 1, workspace_revision: 0 },
     run: null,
     runtime_bundle_version: "fem-topology-upload-fixture",
-    session: { created_at: "0", name: "FEM topology upload fixture", session_id: "fem-topology-upload-fixture", workspace_root: "/tmp/fullmag-fem-topology-upload-fixture" },
+    session: { created_at: "0", name: "FEM topology upload fixture", session_epoch: "fem-topology-upload-fixture@0", session_id: "fem-topology-upload-fixture", workspace_root: "/tmp/fullmag-fem-topology-upload-fixture" },
     solver: { state: "idle" },
   };
 }

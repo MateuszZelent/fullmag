@@ -93,14 +93,18 @@ async function patchSelectedTarget(
       visualization.patchViewportPreferences(target, viewportPreferences);
     }
     const persistentPatch = persistentVisualizationTargetPatch(patch);
-    if (
-      Object.keys(persistentPatch).length > 0 &&
-      !(await patchTargetOverrideResource(context, target, persistentPatch))
-    ) {
-      return {
-        status: "failed" as const,
-        message: "Visualization state resource is unavailable.",
-      };
+    if (Object.keys(persistentPatch).length > 0) {
+      const persisted = await patchTargetOverrideResource(
+        context,
+        target,
+        persistentPatch,
+      );
+      if (!persisted) {
+        return {
+          status: "failed" as const,
+          message: "Visualization state resource is unavailable.",
+        };
+      }
     }
     return { status: "completed" as const };
   }
@@ -216,6 +220,7 @@ async function patchVisualizationState(
   const next = await context.api?.visualization.patch(patch);
   if (next) {
     context.resources?.invalidate(VISUALIZATION_STATE_PATH, next.revision);
+    return { transactionId: `direct-api:${next.revision}` };
   }
   return null;
 }

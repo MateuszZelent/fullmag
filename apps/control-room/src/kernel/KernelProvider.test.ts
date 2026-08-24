@@ -114,7 +114,7 @@ describe("KernelProvider performance contracts", () => {
 
   it("rolls back rejected target patches through the canonical visualization controller", () => {
     expect(kernelProviderSource).toContain(
-      "onRejectedTargetPatches: (targetIds) =>\n      visualization.rejectPendingTargetPatches(targetIds),",
+      "onRejectedTargetPatches: (targetIds, transactionIds) =>\n      visualization.rejectPendingTargetPatches(targetIds, transactionIds),",
     );
   });
 

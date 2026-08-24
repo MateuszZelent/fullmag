@@ -369,46 +369,35 @@ pub(crate) fn resolve_fdm_engine_with_trail(
     };
     let policy = normalize_fdm_execution_policy(&requested_policy)?;
 
-    let resolution = match policy {
-        "cpu" => Ok(EngineResolution {
-            engine: FdmEngine::CpuReference,
+    let availability_route =
+        crate::fdm::gpu::cuda::route::resolve_fdm_gpu_availability_route(
+            policy,
+            native_fdm::is_cuda_available(),
+        )?;
+    let resolution = match availability_route {
+        crate::fdm::gpu::cuda::route::FdmGpuAvailabilityRoute::CpuRequested => {
+            EngineResolution {
+                engine: FdmEngine::CpuReference,
+                fallback: None,
+            }
+        }
+        crate::fdm::gpu::cuda::route::FdmGpuAvailabilityRoute::Cuda => EngineResolution {
+            engine: FdmEngine::CudaFdm,
             fallback: None,
-        }),
-        "cuda" => {
-            if native_fdm::is_cuda_available() {
-                Ok(EngineResolution {
-                    engine: FdmEngine::CudaFdm,
-                    fallback: None,
-                })
-            } else {
-                Err(RunError {
-                    message:
-                        "FDM CUDA execution was requested, but the CUDA backend is not available"
-                            .to_string(),
-                })
+        },
+        crate::fdm::gpu::cuda::route::FdmGpuAvailabilityRoute::CpuAutoFallback { reason } => {
+            EngineResolution {
+                engine: FdmEngine::CpuReference,
+                fallback: Some(runtime_fallback(
+                    fdm_engine_id(FdmEngine::CudaFdm),
+                    fdm_engine_id(FdmEngine::CpuReference),
+                    reason,
+                    "preferred CUDA FDM runtime is unavailable; using CPU reference engine"
+                        .to_string(),
+                )),
             }
         }
-        "auto" => {
-            if native_fdm::is_cuda_available() {
-                Ok(EngineResolution {
-                    engine: FdmEngine::CudaFdm,
-                    fallback: None,
-                })
-            } else {
-                Ok(EngineResolution {
-                    engine: FdmEngine::CpuReference,
-                    fallback: Some(runtime_fallback(
-                        fdm_engine_id(FdmEngine::CudaFdm),
-                        fdm_engine_id(FdmEngine::CpuReference),
-                        "fdm_cuda_unavailable",
-                        "preferred CUDA FDM runtime is unavailable; using CPU reference engine"
-                            .to_string(),
-                    )),
-                })
-            }
-        }
-        _ => unreachable!("normalize_fdm_execution_policy returned an unknown value"),
-    }?;
+    };
 
     if resolution.engine == FdmEngine::CudaFdm {
         reject_frozen_spins_cuda_execution(problem)?;

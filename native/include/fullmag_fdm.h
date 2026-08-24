@@ -41,6 +41,7 @@ extern "C" {
 #define FULLMAG_FDM_ERR_INTERNAL -3
 #define FULLMAG_FDM_ERR_INTERRUPTED -4
 #define FULLMAG_FDM_ERR_DT_MIN_EXHAUSTED -5
+#define FULLMAG_FDM_ERR_ABI -6
 
 /* Maximum number of distinct exchange regions supported by the LUT. */
 #define FULLMAG_FDM_MAX_EXCHANGE_REGIONS 256
@@ -50,6 +51,7 @@ extern "C" {
 /* Append-only frozen-spin plan extension. Support is advertised separately. */
 #define FULLMAG_FDM_FROZEN_SPINS_ABI_V1 1u
 #define FULLMAG_FDM_CAPABILITY_FROZEN_SPINS_V1 (UINT64_C(1) << 0)
+#define FULLMAG_FDM_PLAN_DESC_ABI_V2 UINT32_C(2)
 
 /* ── Enums ── */
 
@@ -152,6 +154,22 @@ typedef enum {
 } fullmag_fdm_stats_mode;
 
 #define FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V1 UINT32_C(1)
+#define FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V2 UINT32_C(2)
+#define FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V3 UINT32_C(3)
+#define FULLMAG_FDM_CHECKPOINT_EXECUTION_IDENTITY_ABI_V3 UINT32_C(3)
+#define FULLMAG_FDM_CHECKPOINT_BACKEND_FDM UINT32_C(1)
+#define FULLMAG_FDM_CHECKPOINT_BACKEND_AUTO UINT32_C(2)
+#define FULLMAG_FDM_CHECKPOINT_POLICY_GPU_REQUIRED UINT32_C(1)
+#define FULLMAG_FDM_CHECKPOINT_REALIZATION_CUDA_FDM UINT32_C(1)
+#define FULLMAG_FDM_CHECKPOINT_POLICY_STRICT UINT32_C(1)
+#define FULLMAG_FDM_CHECKPOINT_POLICY_EXTENDED UINT32_C(2)
+#define FULLMAG_FDM_CHECKPOINT_DEVICE_AUTO UINT32_C(1)
+#define FULLMAG_FDM_CHECKPOINT_DEVICE_GPU UINT32_C(2)
+#define FULLMAG_FDM_CHECKPOINT_RNG_NONE UINT32_C(0)
+#define FULLMAG_FDM_CHECKPOINT_RNG_CURAND_PHILOX4X32_10 UINT32_C(1)
+#define FULLMAG_FDM_CHECKPOINT_RNG_REALIZATION_DISABLED UINT32_C(0)
+#define FULLMAG_FDM_CHECKPOINT_RNG_REALIZATION_CUDA_FP32 UINT32_C(1)
+#define FULLMAG_FDM_CHECKPOINT_RNG_REALIZATION_CUDA_FP64 UINT32_C(2)
 
 typedef struct {
     uint32_t schema_version;
@@ -171,6 +189,113 @@ typedef struct {
     uint32_t reserved0;
     double adaptive_previous_error;
 } fullmag_fdm_llg_checkpoint_info_v1;
+
+typedef struct {
+    uint32_t schema_version;
+    uint32_t struct_size;
+    uint32_t integrator;
+    uint32_t precision;
+    uint32_t requested_backend;
+    uint32_t resolved_backend;
+    uint32_t executed_backend;
+    uint32_t requested_policy;
+    uint32_t resolved_policy;
+    uint32_t execution_realization;
+    int32_t device_ordinal;
+    uint32_t array_mask;
+    uint64_t cell_count;
+    uint64_t payload_bytes;
+    uint64_t step_count;
+    uint64_t accepted_step_index;
+    uint64_t accepted_state_revision;
+    double current_time;
+    double current_dt;
+    uint64_t transport_attempt_generation;
+    uint64_t rhs_source_revision;
+    uint64_t rhs_field_revision;
+    uint64_t rhs_transport_revision;
+    uint64_t projection_policy_identity;
+    uint32_t fsal_valid;
+    uint32_t abm_startup;
+    double abm_last_dt;
+    uint32_t adaptive_enabled;
+    uint32_t adaptive_has_previous_error;
+    double adaptive_previous_error;
+    uint64_t fsal_accepted_state_revision;
+    uint64_t fsal_accepted_time_bits;
+    uint64_t fsal_accepted_dt_bits;
+    uint64_t fsal_source_revision;
+    uint64_t fsal_field_revision;
+    uint64_t fsal_transport_revision;
+    uint64_t fsal_transport_state_identity;
+    uint64_t fsal_projection_policy_identity;
+    uint32_t fsal_integrator_identity;
+    uint32_t fsal_precision_identity;
+} fullmag_fdm_llg_checkpoint_info_v2;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t requested_backend;
+    uint32_t resolved_backend;
+    uint32_t executed_backend;
+    uint32_t requested_policy;
+    uint32_t resolved_policy;
+    uint32_t executed_policy;
+    uint32_t requested_realization;
+    uint32_t resolved_realization;
+    uint32_t executed_realization;
+    uint32_t requested_device;
+    uint32_t resolved_device;
+    uint32_t executed_device;
+    uint32_t requested_precision;
+    uint32_t resolved_precision;
+    uint32_t executed_precision;
+    uint32_t requested_integrator;
+    uint32_t resolved_integrator;
+    uint32_t executed_integrator;
+    int32_t device_ordinal;
+    uint32_t reserved0;
+} fullmag_fdm_checkpoint_execution_identity_v3;
+
+typedef struct {
+    uint32_t schema_version;
+    uint32_t struct_size;
+    fullmag_fdm_checkpoint_execution_identity_v3 execution_identity;
+    uint32_t array_mask;
+    uint32_t reserved0;
+    uint64_t cell_count;
+    uint64_t payload_bytes;
+    uint64_t step_count;
+    uint64_t accepted_step_index;
+    uint64_t accepted_state_revision;
+    double current_time;
+    double current_dt;
+    uint64_t thermal_seed;
+    uint32_t rng_algorithm;
+    uint32_t rng_realization;
+    uint64_t transport_attempt_generation;
+    uint64_t rhs_source_revision;
+    uint64_t rhs_field_revision;
+    uint64_t rhs_transport_revision;
+    uint64_t projection_policy_identity;
+    uint32_t fsal_valid;
+    uint32_t abm_startup;
+    double abm_last_dt;
+    uint32_t adaptive_enabled;
+    uint32_t adaptive_has_previous_error;
+    double adaptive_previous_error;
+    uint64_t fsal_accepted_state_revision;
+    uint64_t fsal_accepted_time_bits;
+    uint64_t fsal_accepted_dt_bits;
+    uint64_t fsal_source_revision;
+    uint64_t fsal_field_revision;
+    uint64_t fsal_transport_revision;
+    uint64_t fsal_transport_state_identity;
+    uint64_t fsal_projection_policy_identity;
+    uint32_t fsal_integrator_identity;
+    uint32_t fsal_precision_identity;
+} fullmag_fdm_llg_checkpoint_info_v3;
 
 typedef int (*fullmag_fdm_interrupt_poll_fn)(void *user_data);
 
@@ -515,7 +640,28 @@ typedef struct {
     double adaptive_norm_tolerance;
 } fullmag_fdm_time_policy_desc_v2;
 
+typedef enum {
+    FULLMAG_FDM_FSAL_INVALIDATION_NONE = 0,
+    FULLMAG_FDM_FSAL_INVALIDATION_CACHE_EMPTY = 1,
+    FULLMAG_FDM_FSAL_INVALIDATION_UNKNOWN_IDENTITY = 2,
+    FULLMAG_FDM_FSAL_INVALIDATION_THERMAL_ACTIVE = 3,
+    FULLMAG_FDM_FSAL_INVALIDATION_WAVEFORM_DISCONTINUITY = 4,
+    FULLMAG_FDM_FSAL_INVALIDATION_STATE_MISMATCH = 5,
+    FULLMAG_FDM_FSAL_INVALIDATION_TIME_MISMATCH = 6,
+    FULLMAG_FDM_FSAL_INVALIDATION_SOURCE_MISMATCH = 7,
+    FULLMAG_FDM_FSAL_INVALIDATION_FIELD_MISMATCH = 8,
+    FULLMAG_FDM_FSAL_INVALIDATION_TRANSPORT_STATE_MISMATCH = 9,
+    FULLMAG_FDM_FSAL_INVALIDATION_PROJECTION_MISMATCH = 10,
+    FULLMAG_FDM_FSAL_INVALIDATION_REALIZATION_MISMATCH = 11,
+    FULLMAG_FDM_FSAL_INVALIDATION_REJECTED_STEP = 12,
+    FULLMAG_FDM_FSAL_INVALIDATION_STEP_ERROR = 13,
+    FULLMAG_FDM_FSAL_INVALIDATION_CHECKPOINT_RESTORE = 14,
+    FULLMAG_FDM_FSAL_INVALIDATION_STALE_PUBLICATION = 15,
+} fullmag_fdm_fsal_invalidation_reason;
+
 typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
     fullmag_fdm_plan_desc base;
     fullmag_fdm_time_policy_desc_v2 time_policy;
 } fullmag_fdm_plan_desc_v2;
@@ -549,6 +695,20 @@ typedef struct {
     uint64_t multilayer_pair_accumulation_count;
 } fullmag_fdm_step_stats;
 
+#define FULLMAG_FDM_FSAL_TELEMETRY_ABI_V1 1u
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t fsal_reused;
+    fullmag_fdm_fsal_invalidation_reason fsal_invalidation_reason;
+    uint64_t fsal_invalidation_count;
+    uint64_t rhs_evaluations_saved;
+    uint64_t thermal_rng_draws;
+    uint64_t accepted_step_index;
+    uint64_t stale_publication_count;
+    uint64_t transaction_commit_count;
+} fullmag_fdm_fsal_telemetry_v1;
+
 /* ── Device info ── */
 
 typedef struct {
@@ -558,6 +718,73 @@ typedef struct {
     int  driver_version;
     int  runtime_version;
 } fullmag_fdm_device_info;
+
+#define FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1 1u
+#define FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2 2u
+
+typedef enum {
+#define FULLMAG_FDM_EXECUTION_CLASS_VALUE(name, value) name = value,
+#define FULLMAG_FDM_EXECUTED_BACKEND_VALUE(name, value)
+#define FULLMAG_FDM_OPERATOR_LOCATION_VALUE(name, value)
+#define FULLMAG_FDM_OPERATOR_MASK_VALUE(name, value)
+#include "fullmag_fdm_execution_receipt_v1_values.def"
+#undef FULLMAG_FDM_OPERATOR_MASK_VALUE
+#undef FULLMAG_FDM_OPERATOR_LOCATION_VALUE
+#undef FULLMAG_FDM_EXECUTED_BACKEND_VALUE
+#undef FULLMAG_FDM_EXECUTION_CLASS_VALUE
+} fullmag_fdm_execution_class_v1;
+
+typedef enum {
+#define FULLMAG_FDM_EXECUTION_CLASS_VALUE(name, value)
+#define FULLMAG_FDM_EXECUTED_BACKEND_VALUE(name, value) name = value,
+#define FULLMAG_FDM_OPERATOR_LOCATION_VALUE(name, value)
+#define FULLMAG_FDM_OPERATOR_MASK_VALUE(name, value)
+#include "fullmag_fdm_execution_receipt_v1_values.def"
+#undef FULLMAG_FDM_OPERATOR_MASK_VALUE
+#undef FULLMAG_FDM_OPERATOR_LOCATION_VALUE
+#undef FULLMAG_FDM_EXECUTED_BACKEND_VALUE
+#undef FULLMAG_FDM_EXECUTION_CLASS_VALUE
+} fullmag_fdm_executed_backend_v1;
+
+typedef enum {
+#define FULLMAG_FDM_EXECUTION_CLASS_VALUE(name, value)
+#define FULLMAG_FDM_EXECUTED_BACKEND_VALUE(name, value)
+#define FULLMAG_FDM_OPERATOR_LOCATION_VALUE(name, value) name = value,
+#define FULLMAG_FDM_OPERATOR_MASK_VALUE(name, value)
+#include "fullmag_fdm_execution_receipt_v1_values.def"
+#undef FULLMAG_FDM_OPERATOR_MASK_VALUE
+#undef FULLMAG_FDM_OPERATOR_LOCATION_VALUE
+#undef FULLMAG_FDM_EXECUTED_BACKEND_VALUE
+#undef FULLMAG_FDM_EXECUTION_CLASS_VALUE
+} fullmag_fdm_operator_location_v1;
+
+enum {
+#define FULLMAG_FDM_EXECUTION_CLASS_VALUE(name, value)
+#define FULLMAG_FDM_EXECUTED_BACKEND_VALUE(name, value)
+#define FULLMAG_FDM_OPERATOR_LOCATION_VALUE(name, value)
+#define FULLMAG_FDM_OPERATOR_MASK_VALUE(name, value) name = value,
+#include "fullmag_fdm_execution_receipt_v1_values.def"
+#undef FULLMAG_FDM_OPERATOR_MASK_VALUE
+#undef FULLMAG_FDM_OPERATOR_LOCATION_VALUE
+#undef FULLMAG_FDM_EXECUTED_BACKEND_VALUE
+#undef FULLMAG_FDM_EXECUTION_CLASS_VALUE
+};
+
+typedef struct {
+#define FULLMAG_FDM_EXECUTION_RECEIPT_FIELD(type, name, offset) type name;
+#define FULLMAG_FDM_EXECUTION_RECEIPT_SIZE(size)
+#include "fullmag_fdm_execution_receipt_v1_layout.def"
+#undef FULLMAG_FDM_EXECUTION_RECEIPT_SIZE
+#undef FULLMAG_FDM_EXECUTION_RECEIPT_FIELD
+} fullmag_fdm_execution_receipt_v1;
+
+typedef struct {
+#define FULLMAG_FDM_EXECUTION_RECEIPT_FIELD(type, name, offset) type name;
+#define FULLMAG_FDM_EXECUTION_RECEIPT_SIZE(size)
+#include "fullmag_fdm_execution_receipt_v2_layout.def"
+#undef FULLMAG_FDM_EXECUTION_RECEIPT_SIZE
+#undef FULLMAG_FDM_EXECUTION_RECEIPT_FIELD
+} fullmag_fdm_execution_receipt_v2;
 
 typedef struct {
     uint64_t cell_count;
@@ -569,6 +796,7 @@ typedef struct {
 /* ── Opaque handle ── */
 
 typedef struct fullmag_fdm_backend fullmag_fdm_backend;
+typedef struct fullmag_fdm_plan_ingestion_v2 fullmag_fdm_plan_ingestion_v2;
 typedef struct fullmag_fdm_field_snapshot fullmag_fdm_field_snapshot;
 typedef struct fullmag_fdm_preview_snapshot fullmag_fdm_preview_snapshot;
 
@@ -616,6 +844,7 @@ int fullmag_fdm_is_available(void);
 uint64_t fullmag_fdm_capability_bits_v1(void);
 
 /**
+ * Legacy unversioned v1 compatibility entrypoint.
  * Create a backend handle from an executable plan.
  * Allocates device memory and uploads initial magnetization.
  * Returns NULL on failure; call fullmag_fdm_backend_last_error for details.
@@ -626,6 +855,29 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
 /* Canonical versioned single-grid entrypoint preserving complete LLG policy. */
 fullmag_fdm_backend *fullmag_fdm_backend_create_time_policy_v2(
     const fullmag_fdm_plan_desc_v2 *plan);
+
+/*
+ * Validate and ingest the exact supported v2 descriptor into a short-lived
+ * ABI owner.  The owner stores plan-input fields only, owns no pointed-to
+ * buffers, and must not outlive those caller-owned buffers.
+ */
+int fullmag_fdm_plan_ingestion_v2_create_checked(
+    const fullmag_fdm_plan_desc_v2 *plan,
+    fullmag_fdm_plan_ingestion_v2 **out_ingestion);
+
+/* Copy the ingested semantic fields into a caller-owned receipt. */
+int fullmag_fdm_plan_ingestion_v2_receipt(
+    const fullmag_fdm_plan_ingestion_v2 *ingestion,
+    fullmag_fdm_plan_desc_v2 *out_receipt);
+
+/* Destroy the plan-input owner.  No backend or hot-loop state is affected. */
+void fullmag_fdm_plan_ingestion_v2_destroy(
+    fullmag_fdm_plan_ingestion_v2 *ingestion);
+
+/* Typed constructor. ABI rejection happens before backend allocation. */
+int fullmag_fdm_backend_create_time_policy_v2_checked(
+    const fullmag_fdm_plan_desc_v2 *plan,
+    fullmag_fdm_backend **out_handle);
 
 /**
  * Create a backend handle from the v2 executable FDM plan descriptor.
@@ -658,6 +910,11 @@ int fullmag_fdm_backend_step(
     fullmag_fdm_backend    *handle,
     double                  dt_seconds,
     fullmag_fdm_step_stats *out_stats);
+
+/* Caller initializes abi_version and struct_size. Invalid headers leave output unchanged. */
+int fullmag_fdm_backend_get_fsal_telemetry_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_fsal_telemetry_v1 *out_telemetry);
 
 /* Bind/unbind the stage-wise GPU transport torque source for Heun or RK4. */
 int fullmag_fdm_context_bind_gpu_transport_v1(
@@ -895,6 +1152,42 @@ int fullmag_fdm_backend_llg_checkpoint_import_v1(
     uint64_t exact_bytes,
     const fullmag_fdm_llg_checkpoint_info_v1 *expected_info);
 
+int fullmag_fdm_backend_llg_checkpoint_query_size_v2(
+    fullmag_fdm_backend *handle,
+    uint64_t *out_required_bytes);
+
+int fullmag_fdm_backend_llg_checkpoint_export_v2(
+    fullmag_fdm_backend *handle,
+    void *destination,
+    uint64_t exact_capacity,
+    fullmag_fdm_llg_checkpoint_info_v2 *out_info);
+
+int fullmag_fdm_backend_llg_checkpoint_import_v2(
+    fullmag_fdm_backend *handle,
+    const void *source,
+    uint64_t exact_bytes,
+    const fullmag_fdm_llg_checkpoint_info_v2 *expected_info);
+
+int fullmag_fdm_backend_set_checkpoint_execution_identity_v3(
+    fullmag_fdm_backend *handle,
+    const fullmag_fdm_checkpoint_execution_identity_v3 *identity);
+
+int fullmag_fdm_backend_llg_checkpoint_query_size_v3(
+    fullmag_fdm_backend *handle,
+    uint64_t *out_required_bytes);
+
+int fullmag_fdm_backend_llg_checkpoint_export_v3(
+    fullmag_fdm_backend *handle,
+    void *destination,
+    uint64_t exact_capacity,
+    fullmag_fdm_llg_checkpoint_info_v3 *out_info);
+
+int fullmag_fdm_backend_llg_checkpoint_import_v3(
+    fullmag_fdm_backend *handle,
+    const void *source,
+    uint64_t exact_bytes,
+    const fullmag_fdm_llg_checkpoint_info_v3 *expected_info);
+
 /**
  * Replace one v2 multilayer layer magnetization from host-side f64 AoS storage.
  * This does not advance time; refresh native multilayer demag before copying
@@ -957,6 +1250,14 @@ int fullmag_fdm_backend_snapshot_stats(
 int fullmag_fdm_backend_get_device_info(
     fullmag_fdm_backend   *handle,
     fullmag_fdm_device_info *out_info);
+
+/** Query the execution and residency receipt owned by the created Context. */
+int fullmag_fdm_backend_execution_receipt_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_execution_receipt_v1 *out_receipt);
+int fullmag_fdm_backend_execution_receipt_v2(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_execution_receipt_v2 *out_receipt);
 
 /**
  * Return the last error message, or NULL if no error.

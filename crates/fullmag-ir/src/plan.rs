@@ -881,7 +881,7 @@ pub struct FdmPlanIR {
     /// Interfacial DMI constant D [J/m²]. None = disabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interfacial_dmi: Option<f64>,
-    /// Bulk (Bloch) DMI constant D [J/m³]. None = disabled.
+    /// Bulk (Bloch) DMI constant D [J/m²]. None = disabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bulk_dmi: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

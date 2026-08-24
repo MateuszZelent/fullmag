@@ -1,5 +1,5 @@
 ---
-title: FullMag public documentation
+title: FullMag documentation
 status: partial
 doc_kind: reference
 audience: user
@@ -13,7 +13,7 @@ source_of_truth: readme.md
 <div class="fm-home-masthead">
   <div class="fm-home-masthead__brand">
     <img src="https://raw.githubusercontent.com/MateuszZelent/fullmag/master/docs/fullmag-logo-traced-optimized.svg" alt="FullMag logo" loading="lazy" />
-    <p class="fm-home-eyebrow">Physics-first micromagnetics</p>
+    <p class="fm-home-eyebrow">Finite-difference and finite-element micromagnetics</p>
   </div>
   <div class="fm-home-masthead__authors">
     <p class="fm-home-label">Authors</p>
@@ -21,109 +21,73 @@ source_of_truth: readme.md
     <p><strong>Dr Mateusz Gołebiewski</strong><br />Adam Mickiewicz University, Poznań</p>
     <p><strong>Prof. Philipp Pirro</strong><br />RPTU Kaiserslautern-Landau</p>
   </div>
-  <div class="fm-home-masthead__funding">
-    <img src="https://upload.wikimedia.org/wikipedia/commons/b/b7/Flag_of_Europe.svg" alt="European Union emblem" loading="lazy" />
-    <div>
-      <p class="fm-home-label">Funding and acknowledgement</p>
-      <p>FullMag has received funding from the European Union's Framework Programme for Research and Innovation, HORIZON-MSCA-2024-PF-01, Marie Skłodowska-Curie Grant Agreement No. <strong>101208951–CNMA</strong>.</p>
-      <a href="https://marie-sklodowska-curie-actions.ec.europa.eu/">
-        <img class="fm-home-funding-badge" src="https://img.shields.io/badge/Marie%20Sk%C5%82odowska--Curie%20Actions-Horizon%20Europe-003399?style=for-the-badge" alt="Marie Skłodowska-Curie Actions — Horizon Europe" loading="lazy" />
-      </a>
-    </div>
-  </div>
 </div>
 
 <div class="fm-home-intro">
-  <p class="fm-home-eyebrow">Research software and scientific reference</p>
-  <h2>A clear path from physical model to reproducible result.</h2>
-  <p>FullMag is a micromagnetics platform for authoring, planning, executing, inspecting, and reproducing simulations across finite-difference and finite-element backends.</p>
+  <p class="fm-home-eyebrow">Documentation organized by ownership</p>
+  <h2>Frontend, backend, and Python API are separate documentation families.</h2>
+  <p>The documentation tree follows the layer that owns a fact. Control Room behavior is documented under Frontend; numerical realization, physics, and runtime contracts under Backend; public authoring commands and parameters under Python API.</p>
   <div class="fm-home-actions">
-    <a class="fm-home-action fm-home-action--primary" href="getting-started/index.html">Start with the user guide</a>
-    <a class="fm-home-action" href="physics/index.html">Read the physics reference</a>
-    <a class="fm-home-action" href="python-api/index.html">Browse the Python API</a>
-    <a class="fm-home-action" href="changelog/index.html">Documentation changelog</a>
+    <a class="fm-home-action fm-home-action--primary" href="getting-started/index.html">Getting started</a>
+    <a class="fm-home-action" href="frontend/index.html">Frontend</a>
+    <a class="fm-home-action" href="backend/index.html">Backend</a>
+    <a class="fm-home-action" href="python-api/index.html">Python API</a>
+    <a class="fm-home-action" href="validation/index.html">Validation</a>
   </div>
-</div>
-
-<div class="fm-home-status">
-  <strong>Documentation status.</strong> FullMag is active research software. Each reference page
-  states what is executable, semantic-only, planned, experimental, or not qualified. Internal
-  development plans and engineering notes remain outside this public portal. The documentation
-  changelog records public-page edits and explicit user-visible contract changes.
 </div>
 
 ```{toctree}
 :hidden:
-:maxdepth: 4
+:maxdepth: 5
 
 getting-started/index
+frontend/index
+backend/index
 python-api/index
-physics/index
-numerical-methods/index
 validation/index
-architecture/index
 ```
 
-## What FullMag is
+## How to use this documentation
 
-FullMag keeps one physical model across the Python DSL, browser control room, canonical
-`ProblemIR`, planner, runtime, and numerical backends. The planner reports an unsupported
-combination instead of silently changing the requested interaction, solver, device, or
-precision.
+| Question | Canonical branch |
+|---|---|
+| How do I operate the browser application? | {doc}`frontend/index` |
+| What algorithm and data structure does the solver execute? | {doc}`backend/index` |
+| Which Python command or parameter should I use? | {doc}`python-api/index` |
+| How was a capability validated? | {doc}`validation/index` |
+| How do I run a first study? | {doc}`getting-started/index` |
 
-The public manual separates scientific meaning from implementation detail. An interaction page
-defines the equations, symbols, units, assumptions, parameters, backend realizations, source
-mapping, and validation evidence in one place.
+The same concept may appear in more than one branch, but each page has one owner. For example,
+**FEM meshing** is split into:
 
-## Start here
+- Frontend: panels, drafts, Apply/Build transactions, reports, and visualization;
+- Backend: Gmsh/MFEM realization, topology, conformity, fallbacks, and numerical validity;
+- Python API: `FEM`, `PerObjectMeshRecipe`, `study.universe.mesh(...)`, object mesh helpers,
+  parameter tables, and ProblemIR lowering.
 
-- {doc}`getting-started/index` — install FullMag and run a first stage-based
-  workflow.
-- {doc}`python-api/index` — author objects, parameters, stages, and canonical
-  lowering.
-- {doc}`physics/index` — read the implemented equations and solver-specific
-  realizations.
-- {doc}`validation/index` — inspect analytical cases, standard problems, parity, and
-  qualification status.
-- {doc}`changelog/index` — inspect recent public-documentation commits and Sphinx-native
-  version-change records.
+## Simulation data flow
 
-## The canonical workflow
+```text
+Python API or Control Room
+            │
+            ▼
+      canonical ProblemIR
+            │
+            ▼
+ planner and capability resolution
+            │
+            ▼
+ backend mesh / operators / stages
+            │
+            ▼
+ artifacts, diagnostics, provenance
+```
 
-1. Author the physical model in Python or the browser.
-2. Lower the request to the canonical `ProblemIR`.
-3. Validate the model and resolve backend capabilities.
-4. Execute ordered sessions, runs, and stages through FDM or FEM.
-5. Inspect fields, observables, artifacts, and provenance.
+Requested intent and resolved execution are never treated as the same object. A mesh parameter
+entered in Python or the UI is a request; the generated mesh, its topology, quality, markers,
+fallbacks, and digest are backend evidence.
 
-The normal public Python workflow uses `fm.study(...)` and ordered
-`study.stages.add_*` calls. Complete copyable scenarios follow the repository-owned
-`tests/standard_problems/...` stage scripts; the manual does not teach direct top-level
-construction of a simulation request.
+## Citation
 
-## Scientific scope
-
-The current public scope covers Landau–Lifshitz–Gilbert dynamics, exchange, demagnetization,
-Zeeman fields, anisotropy, DMI, thermal noise, selected spin-torque and Oersted terms, shared
-FDM/FEM numerical methods, and explicit CPU/GPU qualification boundaries. Follow the individual
-reference page for the authoritative support status; source presence alone is not a qualification
-claim.
-
-## Cite and contact
-
-Until a dedicated FullMag publication is assigned, cite the repository and the exact revision used
-for the result:
-
-> M. Zelent, M. Gołebiewski, and P. Pirro, *FullMag: a physics-first micromagnetics platform for
-> reproducible FDM/FEM simulation workflows*, research software repository,
-> [github.com/MateuszZelent/fullmag](https://github.com/MateuszZelent/fullmag), accessed via
-> [fullmag.mzelent.pl](https://fullmag.mzelent.pl/).
-
-Project coordination: **Mateusz Zelent, RPTU**.
-
-- Repository: [github.com/MateuszZelent/fullmag](https://github.com/MateuszZelent/fullmag)
-- Public site: [fullmag.mzelent.pl](https://fullmag.mzelent.pl/)
-- Documentation issues and feature requests: use the repository issue tracker.
-
-The public workflow builds only `public_docs/site`. Internal plans, audits, agent instructions,
-and unfinished engineering reports under `docs/` are deliberately excluded from the portal.
+Until a versioned release with a persistent identifier is available, cite the repository and exact
+commit used for the reported result.

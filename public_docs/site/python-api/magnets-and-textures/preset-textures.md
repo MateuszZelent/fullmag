@@ -23,7 +23,10 @@ $\mathbf m=\mathbf M/M_\mathrm s$. Fullmag currently exposes the following publi
 | `fm.texture.vortex(...)` | `vortex` | regularized vortex with winding $+1$ |
 | `fm.texture.antivortex(...)` | `antivortex` | regularized antivortex with winding $-1$ |
 | `fm.texture.bloch_skyrmion(...)` | `bloch_skyrmion` | axisymmetric skyrmion with fixed Bloch helicity |
-| `fm.texture.neel_skyrmion(...)` | `neel_skyrmion` | axisymmetric skyrmion with fixed Neel helicity |
+| `fm.texture.neel_skyrmion(...)` | `neel_skyrmion` | axisymmetric skyrmion with chirality-selected radial helicity |
+| `fm.texture.antiskyrmion(...)` | `antiskyrmion` | skyrmion profile with opposite azimuthal winding |
+| `fm.texture.skyrmionium(...)` | `skyrmionium` | normalized 2-pi target state with equal centre and far-field backgrounds |
+| `fm.texture.hopfion(...)` | `hopfion` | three-dimensional unit-vector Hopf-map initializer |
 | `fm.texture.bimeron(...)` | `bimeron` | in-plane skyrmion analogue represented as a meron pair |
 | `fm.texture.domain_wall(...)` | `domain_wall` | smooth Bloch or Neel wall between antiparallel domains |
 | `fm.texture.two_domain(...)` | `two_domain` | sharp or smooth two-domain initializer |
@@ -71,9 +74,12 @@ world-space point according to `mapping.space`. Version 2 then applies the inver
 
 Here `translation` and `pivot` are lengths, `scale` is dimensionless and component-wise, and the
 quaternion is normalized before use. Every scale component and the quaternion norm must exceed
-$10^{-14}$ in the canonical Rust v2 evaluator. After the local profile has been evaluated, the
-magnetization vector is embedded in the selected plane and rotated forward by $\mathcal R_q$.
-Translation, pivot, and scale affect coordinates; only the quaternion rotates spin components.
+$10^{-14}$ in the canonical Rust v2 evaluator. The planner validates the descriptor once and
+materializes a prepared transform containing the normalized forward/inverse quaternion and
+reciprocal scale. FDM cells and FEM nodes therefore use the same affine map without repeating
+normalization for every sample. After the local profile has been evaluated, the magnetization
+vector is embedded in the selected plane and rotated forward by $\mathcal R_q$. Translation,
+pivot, and scale affect coordinates; only the quaternion rotates spin components.
 
 The implemented right-handed frames are:
 
@@ -99,8 +105,9 @@ r=\sqrt{u^2+v^2},
 
 An explicit preset `plane` and a planar mapping projection must identify the same plane; version 2
 rejects a conflict. In the canonical Rust v2 sampler, planar projection is currently applied only to
-`vortex`, `antivortex`, both skyrmions, `bimeron`, `domain_wall`, and `two_domain`.
-`uniform`, `random`, `helical`, and `conical` retain transformed Cartesian coordinates.
+`vortex`, `antivortex`, the skyrmion family, `skyrmionium`, `bimeron`, `domain_wall`, and
+`two_domain`. `uniform`, `random`, `helical`, and `conical` retain transformed Cartesian
+coordinates. `hopfion` is intrinsically three-dimensional and rejects planar projection.
 
 Inactive FDM cells are written as `[0, 0, 0]`. Version-2 parameters and transforms are validated
 before iterating over samples, so malformed input is rejected even for an empty or entirely inactive
@@ -202,9 +209,10 @@ The overflow-resistant version-2 radial profile is equivalent to
 
 The implementation returns $\theta=\pi$ directly for $r\le 10^{-14}\,\mathrm{m}$, evaluates the
 hyperbolic-sine ratio in logarithmic form elsewhere, and saturates the logarithmic ratio outside
-$[-40,40]$. It uses $\gamma=0$ for the Neel preset and
-$\gamma=\pi/2$ for the Bloch preset. In version 2, `core_polarity=p` is the actual sign of the
-normal component at $r=0$.
+$[-40,40]$. The chirality convention is now explicit: Bloch walls use
+$\gamma=c\pi/2$, while Neel walls use $\gamma=0$ for $c=+1$ and $\gamma=\pi$ for $c=-1$.
+Consequently `chirality` reverses the radial Neel-wall direction instead of being a no-op. In
+version 2, `core_polarity=p` is the actual sign of the normal component at $r=0$.
 
 ### Bimeron: implemented field, topology, and exact core geometry
 
@@ -429,6 +437,94 @@ $\mathbf e_2=\mathbf a\times\mathbf e_1$. It evaluates
 The cone angle must lie in $[0,\pi]$. The authored `cone_axis` is normalized and the physical
 wavevector magnitude is retained.
 
+
+### Antiskyrmion
+
+`fm.texture.antiskyrmion(...)` uses the same overflow-resistant radial profile as the skyrmion,
+but reverses the azimuthal winding:
+
+\[
+\psi=-\phi+\gamma_c,\qquad
+\mathbf m_\mathrm{local}=
+(\sin\theta\cos\psi,\ \sin\theta\sin\psi,\ -p\cos\theta).
+\]
+
+The implemented v2 preset is a Neel-type antiskyrmion ansatz. `chirality=+1` gives
+$\gamma_c=0$ and `chirality=-1` gives $\gamma_c=\pi$. It is sampled identically on FDM cell
+centres and FEM magnetic nodes.
+
+| Python parameter | Meaning |
+|---|---|
+| `texture.antiskyrmion.radius` | nominal radial scale in metres |
+| `texture.antiskyrmion.wall_width` | radial transition width in metres |
+| `texture.antiskyrmion.chirality` | radial wall orientation, -1 or +1 |
+| `texture.antiskyrmion.core_polarity` | normal core sign, -1 or +1 |
+| `texture.antiskyrmion.plane` | right-handed `xy`, `xz`, or `yz` frame |
+| `texture.antiskyrmion.preset_version` | must be 2 |
+
+### Skyrmionium
+
+`fm.texture.skyrmionium(...)` is a normalized two-wall, 2-pi target-state initializer. Defining
+
+\[
+a(s)=\arccos[-\tanh(s)],\qquad
+\theta(r)=a\!\left(\frac{r-R_\mathrm{in}}{\Delta}\right)
++a\!\left(\frac{r-R_\mathrm{out}}{\Delta}\right),
+\]
+
+the local field is
+
+\[
+\mathbf m_\mathrm{local}=
+(\sin\theta\cos\psi,\ \sin\theta\sin\psi,\ s_\mathrm{bg}\cos\theta).
+\]
+
+The centre and far field have the same background orientation; the annulus between the two walls
+is reversed. The continuum target has zero net skyrmion number when the full far field is included.
+
+| Python parameter | Meaning |
+|---|---|
+| `texture.skyrmionium.inner_radius` | inner wall radius in metres |
+| `texture.skyrmionium.outer_radius` | outer wall radius in metres; greater than the inner radius |
+| `texture.skyrmionium.wall_width` | common positive wall width in metres |
+| `texture.skyrmionium.kind` | `neel` or `bloch` |
+| `texture.skyrmionium.chirality` | wall orientation, -1 or +1 |
+| `texture.skyrmionium.background_sign` | common centre/far-field normal sign |
+| `texture.skyrmionium.plane` | right-handed `xy`, `xz`, or `yz` frame |
+| `texture.skyrmionium.preset_version` | must be 2 |
+
+### Hopfion
+
+`fm.texture.hopfion(...)` is a three-dimensional Hopf-map initializer. With normalized coordinates
+$X=x/R$, $Y=qy/R$, $Z=z/(R a_z)$, $\rho^2=X^2+Y^2+Z^2$, and $d=1+\rho^2$,
+
+\[
+z_1=\frac{2(X+iY)}{d},\qquad
+z_2=\frac{2Z+i(\rho^2-1)}{d},
+\]
+
+\[
+\mathbf h=
+\left(2\operatorname{Re}(z_1\overline{z_2}),
+2\operatorname{Im}(z_1\overline{z_2}),
+|z_1|^2-|z_2|^2\right),\qquad
+\mathbf m=-s_\mathrm{bg}\,\mathcal R_z(\varphi_0)\mathbf h.
+\]
+
+The field is normalized analytically and renormalized once numerically to suppress roundoff.
+`hopf_charge=-1` reflects the second stereographic coordinate and reverses the texture orientation.
+The profile requires `mapping.projection="object_local"`; orient it in space with the texture
+quaternion transform.
+
+| Python parameter | Meaning |
+|---|---|
+| `texture.hopfion.radius` | isotropic Hopf-map scale in metres |
+| `texture.hopfion.hopf_charge` | orientation sign, -1 or +1 |
+| `texture.hopfion.background_sign` | sign of the uniform far-field axis |
+| `texture.hopfion.axial_scale` | positive dimensionless z-axis scale |
+| `texture.hopfion.phase_rad` | global target-space phase in radians |
+| `texture.hopfion.preset_version` | must be 2 |
+
 ### Version 1 compatibility
 
 Version 1 remains executable only to reproduce historical studies. It is not a less strict spelling
@@ -598,6 +694,33 @@ factory has a separate canonical parameter table on the [Uniform Texture](unifor
 | `texture.conical.cone_angle_rad` | `float` | `pi/4` | $\mathrm{rad}$ | finite and in [0, pi] in v2 | cone angle beta | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.cone_angle_rad` |
 | `texture.conical.phase_rad` | `float` | `0.0` | $\mathrm{rad}$ | finite in v2 | phase offset | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.phase_rad` |
 | `texture.conical.preset_version` | `int` | `2` | $1$ | exactly 1 or 2; bool rejected | selects the serialized evaluator contract | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_version` |
+
+#### Advanced version-2 preset parameters
+
+These rows complete the canonical Python-to-`ProblemIR` contract for the antiskyrmion, skyrmionium, and hopfion factories.
+
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `texture.antiskyrmion.radius` | `float` | `required` | $\mathrm{m}$ | finite and positive | nominal radial profile scale | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.radius` |
+| `texture.antiskyrmion.wall_width` | `float` | `required` | $\mathrm{m}$ | finite and positive | radial transition width | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.wall_width` |
+| `texture.antiskyrmion.chirality` | `int` | `1` | $1$ | -1 or +1 | Neel wall orientation | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.chirality` |
+| `texture.antiskyrmion.core_polarity` | `int` | `-1` | $1$ | -1 or +1 | normal core sign | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.core_polarity` |
+| `texture.antiskyrmion.plane` | `str` | `"xy"` | $1$ | "xy", "xz", or "yz" | right-handed texture plane | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.plane` |
+| `texture.antiskyrmion.preset_version` | `int` | `2` | $1$ | exactly 2 | selects the v2 antiskyrmion contract | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_version` |
+| `texture.skyrmionium.inner_radius` | `float` | `required` | $\mathrm{m}$ | finite and positive | inner radial wall position | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.inner_radius` |
+| `texture.skyrmionium.outer_radius` | `float` | `required` | $\mathrm{m}$ | finite, positive, and greater than inner_radius | outer radial wall position | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.outer_radius` |
+| `texture.skyrmionium.wall_width` | `float` | `required` | $\mathrm{m}$ | finite and positive | common radial wall width | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.wall_width` |
+| `texture.skyrmionium.kind` | `str` | `"neel"` | $1$ | "neel" or "bloch" | wall helicity family | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.kind` |
+| `texture.skyrmionium.chirality` | `int` | `1` | $1$ | -1 or +1 | wall orientation | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.chirality` |
+| `texture.skyrmionium.background_sign` | `int` | `1` | $1$ | -1 or +1 | common centre and far-field normal sign | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.background_sign` |
+| `texture.skyrmionium.plane` | `str` | `"xy"` | $1$ | "xy", "xz", or "yz" | right-handed texture plane | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.plane` |
+| `texture.skyrmionium.preset_version` | `int` | `2` | $1$ | exactly 2 | selects the v2 skyrmionium contract | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_version` |
+| `texture.hopfion.radius` | `float` | `required` | $\mathrm{m}$ | finite and positive | Hopf-map spatial scale | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.radius` |
+| `texture.hopfion.hopf_charge` | `int` | `1` | $1$ | -1 or +1 | Hopf-map orientation sign | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.hopf_charge` |
+| `texture.hopfion.background_sign` | `int` | `1` | $1$ | -1 or +1 | uniform far-field axis sign | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.background_sign` |
+| `texture.hopfion.axial_scale` | `float` | `1.0` | $1$ | finite and positive | dimensionless z-axis scale | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.axial_scale` |
+| `texture.hopfion.phase_rad` | `float` | `0.0` | $\mathrm{rad}$ | finite | global target-space phase | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.phase_rad` |
+| `texture.hopfion.preset_version` | `int` | `2` | $1$ | exactly 2 | selects the v2 hopfion contract | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_version` |
 
 ### Mapping and transform methods
 
@@ -786,6 +909,34 @@ available, corresponding object coordinates; the current helper falls back to wo
 an object-coordinate array is absent. CPU and GPU FEM lanes consume the same planner-materialized
 initial vector.
 
+
+### Region-owned texture realization and clipping
+
+Object-region textures use the same analytic descriptor and transform pipeline as object-level
+textures, but ownership is resolved before the sampled vectors are merged. For every FDM cell or
+FEM magnetic node, Fullmag first determines the unique winning enabled region using the declared
+priority. Equal highest priorities fail closed. The writable selection is
+
+```{math}
+\Omega_{\mathrm{write}}
+=
+\Omega_{\mathrm{magnetic\ owner}}
+\cap
+\Omega_{\mathrm{winning\ region}}.
+```
+
+The texture transform is evaluated only as a coordinate map inside this selection. Translation,
+rotation, pivot, and scale can move or reshape the visible analytic profile, but they cannot move
+the region boundary and cannot write outside `\Omega_{\mathrm{write}}`. A profile translated partly
+or completely beyond its region is therefore clipped at the region boundary; cells or nodes outside
+the region retain the object-level initial state or the winning texture of another region.
+
+FDM uses the final active-cell mask and numeric winning-region mask in both single-grid and
+multilayer plans. FEM evaluates region predicates on the final magnetic P1 nodes of the merged or
+shared-domain mesh and applies the same priority rule. At a shared FEM interface node there is one
+global nodal degree of freedom, so overlapping region claims are resolved globally by priority
+rather than by silently duplicating the node.
+
 ### Numerical resolution
 
 Analytic normalization does not remove discretization error in gradients, energy, or topological
@@ -837,8 +988,8 @@ discretization study.
 - The canonical version-2 analytic sampler does not implement clamp/repeat/mirror behavior.
 - Projection support is narrower than the public mapping enum suggests.
 - `random` is coordinate-hashed rather than mesh-index-hashed.
-- FDM object coordinates currently account for the top-level owner translation used by the planner;
-  more general geometry-transform ownership requires separate qualification.
+- FDM and FEM object coordinates use the same validated owner-translation convention;
+  texture-local rotation, pivot, and scale are handled by the shared prepared sampler.
 - The Python reference route and planner route use different validation thresholds in some transform
   helpers.
 - No preset factory encodes a stabilizing material model, DMI sign, anisotropy convention, external
@@ -883,7 +1034,8 @@ implementation contracts and are sourced from the repository.
 | transform authoring | `packages/fullmag-py/src/fullmag/init/textures.py` | `class TextureTransform3D` | public translation, quaternion rotation, component scale, and pivot descriptor | Python authoring / IR |
 | v1/v2 dispatch | `crates/fullmag-plan/src/magnetization_textures.rs` | `sample_preset_texture_versioned` | canonical v1/v2 dispatch used by planners | FDM/FEM planner |
 | canonical v2 sampling pipeline | `crates/fullmag-plan/src/magnetization_textures_v2.rs` | `sample_v2` | v2 mapping, active-point handling, local evaluation, frame embedding, and output-vector rotation | FDM/FEM planner |
-| coordinate transform | `crates/fullmag-plan/src/magnetization_textures_v2.rs` | `inverse_transform` | validated inverse texture-coordinate transform | FDM/FEM planner |
+| coordinate transform | `crates/fullmag-plan/src/magnetization_textures_v2.rs` | `prepare` | one-time validation plus shared forward/inverse texture transform | FDM/FEM planner |
+| region ownership and clipping | `crates/fullmag-plan/src/region_textures.rs` | `sample_region_initial_on_mask` | priority-resolved owner masks and strict clipping of regional textures | FDM/FEM planner |
 | plane coordinates | `crates/fullmag-plan/src/magnetization_textures_v2.rs` | `metric_point` | right-handed planar coordinate projection for metric presets | FDM/FEM planner |
 | plane-vector embedding | `crates/fullmag-plan/src/magnetization_textures_v2.rs` | `metric_vector` | embedding of local texture vectors into the world frame | FDM/FEM planner |
 | preset dispatch and uniform | `crates/fullmag-plan/src/magnetization_textures_v2.rs` | `local_evaluate` | canonical v2 preset-kind dispatch and uniform evaluation | FDM/FEM planner |

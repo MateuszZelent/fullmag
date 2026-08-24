@@ -32,7 +32,7 @@ Each addend exists only when its corresponding term is present in the canonical 
 - `E_*`: integrated energy contribution, J
 - `m`: reduced magnetization, dimensionless
 - `K_u`, `K_c`: anisotropy constants, J/m^3
-- `D`: DMI constant, J/m^2 for interfacial DMI or J/m^3 for bulk DMI
+- `D`: DMI constant, J/m^2 for both interfacial and bulk DMI in the current Fullmag convention
 
 ### 2.3 Assumptions and approximations
 

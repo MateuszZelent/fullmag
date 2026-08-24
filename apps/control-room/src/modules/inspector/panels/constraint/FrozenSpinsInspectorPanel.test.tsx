@@ -203,6 +203,54 @@ describe("FrozenSpinsInspectorPanel", () => {
     }
   });
 
+  it("does not retain another constraint definition after the target changes", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const selection = {
+      kind: "object.frozen-spins",
+      label: "Frozen Spins",
+      moduleSource: "explorer",
+      nodeId: "model:object:film:frozen-spins:pin-edge",
+      objectId: "film",
+      ref: {
+        constraintId: "pin-edge",
+        kind: "object.frozen-spins",
+        nodeId: "model:object:film:frozen-spins:pin-edge",
+        objectId: "film",
+        type: "frozen-spins",
+      },
+    } as const;
+    try {
+      await act(async () => root.render(<FrozenSpinsInspectorPanel selection={selection} />));
+      expect(findByAttribute(container, "data-frozen-spins-inspector-id")).toBeTruthy();
+
+      mocks.definitionResource = { data: null, error: null };
+      const otherSelection = {
+        ...selection,
+        nodeId: "model:object:film:frozen-spins:pin-other",
+        ref: {
+          ...selection.ref,
+          constraintId: "pin-other",
+          nodeId: "model:object:film:frozen-spins:pin-other",
+        },
+      } as const;
+      await act(async () =>
+        root.render(<FrozenSpinsInspectorPanel selection={otherSelection} />),
+      );
+      expect(container.textContent).toContain("Loading Frozen Spins definition");
+      expect(
+        findElements(
+          container,
+          (element) => element.getAttribute("data-frozen-spins-inspector-id") !== null,
+        ),
+      ).toHaveLength(0);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("preserves a field edit made while an apply transaction is awaiting ACK", async () => {
     let resolvePatch!: (value: unknown) => void;
     mocks.patch.mockReturnValueOnce(new Promise((resolve) => { resolvePatch = resolve; }));

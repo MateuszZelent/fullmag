@@ -319,8 +319,11 @@ function frozenSpinsInteractionOperation(context: CommandContext) {
     | LiveStatusResource
     | null
     | undefined;
+  if (!status?.capabilities?.active_lane) {
+    return null;
+  }
   return resolveActiveLaneOperation(
-    status?.capabilities?.active_lane ?? null,
+    status.capabilities.active_lane,
     "interaction.frozen_spins",
   );
 }
@@ -333,12 +336,18 @@ function frozenSpinsCommandDisabledReason(
     return "Select a ferromagnet or one of its regions first.";
   }
   const op = frozenSpinsInteractionOperation(context);
-  if (op && !op.enabled) {
-    return op.reason || "Frozen spins constraint is not supported by the active execution lane.";
-  }
-  const lane = ribbonInteractionDiscretization(context);
-  if (lane === "unknown") {
-    return "Frozen-spins capability is unavailable while the execution lane is unresolved.";
+  if (op) {
+    if (!op.enabled) {
+      return op.reason || "Frozen spins constraint is not supported by the active execution lane.";
+    }
+  } else {
+    const lane = ribbonInteractionDiscretization(context);
+    if (lane === "unknown") {
+      return "Frozen-spins capability is unavailable while the execution lane is unresolved.";
+    }
+    if (lane !== "fdm") {
+      return "Frozen spins constraints are currently available on FDM lanes only.";
+    }
   }
   return null;
 }
@@ -892,6 +901,7 @@ async function patchVisualizationState(
   const state = await context.api?.visualization.patch(patch);
   if (state) {
     invalidateVisualizationState(context, state);
+    return { transactionId: `direct-api:${state.revision}` };
   }
   return null;
 }

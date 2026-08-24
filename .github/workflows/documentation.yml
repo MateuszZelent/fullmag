@@ -123,9 +123,15 @@ jobs:
           python -m unittest packages/fullmag-py/tests/test_public_exchange_documentation.py -v
           python -m unittest packages/fullmag-py/tests/test_material_dmi_units.py -v
 
+      - name: Resolve documentation build time (UTC)
+        id: build-time
+        shell: bash
+        run: echo "value=$(date -u '+%Y-%m-%d %H:%M UTC')" >> "$GITHUB_OUTPUT"
+
       - name: Build public documentation strictly
         env:
           FULLMAG_DOCS_VERSION: ${{ github.ref_name }}
+          FULLMAG_DOCS_BUILD_TIME: ${{ steps.build-time.outputs.value }}
         run: >-
           sphinx-build -b html -W -n --keep-going
           public_docs/site public_docs/site/_build/html
@@ -230,7 +236,7 @@ jobs:
               "$CHANGELOG_URL" --output "$changelog_page" \
               && grep --fixed-strings --quiet "Documentation changelog" "$changelog_page" \
               && grep --fixed-strings --quiet "Recent documentation changes" "$changelog_page" \
-              && grep --fixed-strings --quiet "/commit/" "$changelog_page"; then
+              && grep --fixed-strings --quiet "/commit/${GITHUB_SHA}" "$changelog_page"; then
               changelog_ok=true
             fi
 

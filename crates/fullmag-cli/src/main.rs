@@ -1161,6 +1161,7 @@ mod tests {
             fe_order: 1,
             hmax: 1.0,
             initial_magnetization: vec![[0.0, 1.0, 0.0]; 4],
+            frozen_spins: None,
             material: MaterialIR {
                 name: "Py".to_string(),
                 saturation_magnetisation: 800e3,

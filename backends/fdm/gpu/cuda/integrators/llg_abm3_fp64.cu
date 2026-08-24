@@ -8,6 +8,7 @@
  */
 
 #include "context.hpp"
+#include "fsal_policy.hpp"
 
 #include <cuda_runtime.h>
 #include <cmath>
@@ -133,7 +134,7 @@ static void abm3_fill_diagnostics(Context &ctx, double dt, fullmag_fdm_step_stat
 
     if (ctx.enable_exchange) launch_exchange_field_fp64(ctx);
     if (ctx.enable_demag)    launch_demag_field_fp64(ctx);
-    launch_effective_field_fp64(ctx, ctx.current_time);
+    launch_effective_field_fp64(ctx, ctx.pending_time);
 
     double e_ex = ctx.enable_exchange ? launch_exchange_energy_fp64(ctx) : 0.0;
     double e_demag = launch_demag_energy_fp64(ctx);
@@ -156,8 +157,8 @@ static void abm3_fill_diagnostics(Context &ctx, double dt, fullmag_fdm_step_stat
     double max_dm_dt = reduce_max_norm_fp64(
         ctx, ctx.abm_f_n.x, ctx.abm_f_n.y, ctx.abm_f_n.z, ctx.cell_count);
 
-    stats->step = ctx.step_count;
-    stats->time_seconds = ctx.current_time;
+    stats->step = ctx.pending_step_count;
+    stats->time_seconds = ctx.pending_time;
     stats->dt_seconds = dt;
     stats->exchange_energy_joules = e_ex;
     stats->demag_energy_joules = e_demag;
@@ -213,6 +214,7 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<double*>(ctx.k1.z),
             n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
             stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+        fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp64 LLG RHS launch");
         if (!context_evaluate_gpu_transport_rhs(
                 ctx, ctx.m, step_start_time,
                 ctx.gpu_transport_active_attempt_id, 1) ||
@@ -251,6 +253,7 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<double*>(ctx.h_ex.z),
             n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
             stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+        fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp64 LLG RHS launch");
         if (!context_evaluate_gpu_transport_rhs(
                 ctx, ctx.m, step_start_time + dt,
                 ctx.gpu_transport_active_attempt_id, 2) ||
@@ -291,14 +294,14 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<double*>(ctx.h_ex.z),
             n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
             stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+        fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp64 LLG RHS launch");
         if (!context_evaluate_gpu_transport_rhs(
                 ctx, ctx.m, step_start_time + dt,
                 ctx.gpu_transport_active_attempt_id, 3) ||
             !launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.h_ex)) return;
         if (abort_step_from_tmp(ctx, false)) return;
 
-        ctx.step_count++;
-        ctx.current_time += dt;
+        context_stage_accepted_step(ctx, dt);
         abm3_rotate_history(ctx, ctx.cell_count);
         cudaMemcpy(ctx.abm_f_n.x, ctx.h_ex.x, bytes, cudaMemcpyDeviceToDevice);
         cudaMemcpy(ctx.abm_f_n.y, ctx.h_ex.y, bytes, cudaMemcpyDeviceToDevice);
@@ -358,6 +361,7 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         static_cast<double*>(ctx.k1.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp64 LLG RHS launch");
     if (!context_evaluate_gpu_transport_rhs(
             ctx, ctx.m, step_start_time + dt,
             ctx.gpu_transport_active_attempt_id, 1) ||
@@ -401,14 +405,14 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         static_cast<double*>(ctx.h_ex.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp64 LLG RHS launch");
     if (!context_evaluate_gpu_transport_rhs(
             ctx, ctx.m, step_start_time + dt,
             ctx.gpu_transport_active_attempt_id, 2) ||
         !launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.h_ex)) return;
     if (abort_step_from_tmp(ctx, false)) return;
 
-    ctx.step_count++;
-    ctx.current_time += dt;
+    context_stage_accepted_step(ctx, dt);
     abm3_rotate_history(ctx, ctx.cell_count);
     cudaMemcpy(ctx.abm_f_n.x, ctx.h_ex.x, bytes, cudaMemcpyDeviceToDevice);
     cudaMemcpy(ctx.abm_f_n.y, ctx.h_ex.y, bytes, cudaMemcpyDeviceToDevice);

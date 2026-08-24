@@ -233,8 +233,8 @@ export function createViewport3DRenderAdoptionRegistry({
     // only a validation boundary; it must never backfill missing provenance.
     const responseSessionIdentity = explicitSessionIdentity;
     if (
-      !responseSessionIdentity?.sessionId.trim() ||
-      !responseSessionIdentity.sessionEpoch.trim()
+      !responseSessionIdentity?.sessionId?.trim() ||
+      !responseSessionIdentity.sessionEpoch?.trim()
     ) {
       rejectedAdoptionCount += 1;
       return {

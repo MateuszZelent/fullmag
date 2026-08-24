@@ -29,6 +29,7 @@ use crate::magnetization_textures::TextureSamplePoint;
 use crate::magnetization_textures_v2::sample_preset_texture_versioned;
 use crate::oersted::{resolve_fdm_oersted_term, ResolvedOerstedTerm};
 use crate::region_conflict::{resolve_region_conflict, RegionConflictCandidate};
+use crate::region_textures::sample_region_initial_on_mask;
 use crate::selection::geometry::{contains_point, geometry_entry_bounds, normalize_axis};
 use crate::selection::{
     compile_fdm_frozen_spins, FdmFrozenSpinsDomain, FrozenSpinsCompileRequest,
@@ -332,17 +333,19 @@ fn grid_sample_points(
         .and_then(|cost| usize::try_from(cost.cells).ok())
         .unwrap_or(0);
     let mut points = Vec::with_capacity(capacity);
+    assert!(
+        owner_translation
+            .iter()
+            .all(|component| component.is_finite()),
+        "validated FDM owner translation must contain only finite components"
+    );
     for z in 0..nz {
         for y in 0..ny {
             for x in 0..nx {
                 let idx = x + nx * (y + ny * z);
                 let world =
                     resolved_fdm_cell_center([x as u32, y as u32, z as u32], cell_size, origin);
-                let object = [
-                    world[0] - owner_translation[0],
-                    world[1] - owner_translation[1],
-                    world[2] - owner_translation[2],
-                ];
+                let object = std::array::from_fn(|axis| world[axis] - owner_translation[axis]);
                 points.push(TextureSamplePoint {
                     position_world: world,
                     position_object: object,
@@ -1171,6 +1174,16 @@ fn materialize_prescribed_sot_target_mask(
     Ok(mask)
 }
 
+fn fdm_owner_names<'a>(magnet: &'a fullmag_ir::MagnetIR, geometry_name: &'a str) -> Vec<&'a str> {
+    let mut names = vec![magnet.name.as_str(), geometry_name];
+    if let Some(object_id) = magnet.object_id.as_deref() {
+        if !names.contains(&object_id) {
+            names.push(object_id);
+        }
+    }
+    names
+}
+
 fn build_fdm_region_legend(
     problem: &ProblemIR,
     owner_names: &[&str],
@@ -1265,6 +1278,7 @@ fn materialize_region_exchange_couplings(
 
 fn apply_region_texture_overrides(
     problem: &ProblemIR,
+    owner_names: &[&str],
     region_index_by_id: &BTreeMap<String, u32>,
     region_mask: &[u32],
     grid_cells: [u32; 3],
@@ -1278,9 +1292,16 @@ fn apply_region_texture_overrides(
     let mut regions = problem
         .object_regions
         .iter()
-        .filter(|region| region.enabled && region.texture_override.is_some())
+        .filter(|region| {
+            region.enabled
+                && region.texture_override.is_some()
+                && owner_names.contains(&region.owner_object.as_str())
+        })
         .collect::<Vec<_>>();
     regions.sort_by_key(|region| (region.priority, region.region_id.as_str()));
+    if regions.is_empty() {
+        return;
+    }
 
     let points = grid_sample_points(
         grid_cells,
@@ -1292,58 +1313,41 @@ fn apply_region_texture_overrides(
     for region in regions {
         let Some(&region_index) = region_index_by_id.get(&region.region_id) else {
             errors.push(format!(
-                "object_region '{}' has texture_override but was not materialized in the FDM region mask",
-                region.region_id
+                "object_region '{}' has texture_override but was not materialized in the FDM region mask for owners [{}]",
+                region.region_id,
+                owner_names.join(", ")
             ));
             continue;
         };
         let Some(texture_override) = region.texture_override.as_ref() else {
             continue;
         };
-        let values = match &texture_override.initial_magnetization {
-            InitialMagnetizationIR::Uniform { value } => vec![*value; initial_magnetization.len()],
-            InitialMagnetizationIR::RandomSeeded { seed } => {
-                generate_random_unit_vectors(*seed, initial_magnetization.len())
+        let selected = region_mask
+            .iter()
+            .enumerate()
+            .map(|(index, numeric_region)| {
+                *numeric_region == region_index
+                    && active_mask.map(|mask| mask[index]).unwrap_or(true)
+            })
+            .collect::<Vec<_>>();
+        if !selected.iter().any(|selected| *selected) {
+            continue;
+        }
+        let values = match sample_region_initial_on_mask(
+            &format!("object_region '{}' FDM texture_override", region.region_id),
+            &texture_override.initial_magnetization,
+            &points,
+            &selected,
+        ) {
+            Ok(values) => values,
+            Err(message) => {
+                errors.push(message);
+                continue;
             }
-            InitialMagnetizationIR::SampledField { values } => {
-                if values.len() != initial_magnetization.len() {
-                    errors.push(format!(
-                        "object_region '{}' texture_override sampled field length {} does not match FDM cell count {}",
-                        region.region_id,
-                        values.len(),
-                        initial_magnetization.len()
-                    ));
-                    continue;
-                }
-                values.clone()
-            }
-            InitialMagnetizationIR::PresetTexture {
-                preset_kind,
-                preset_params,
-                mapping,
-                texture_transform,
-                preset_version,
-            } => match sample_preset_texture_versioned(
-                preset_kind,
-                *preset_version,
-                preset_params,
-                mapping,
-                texture_transform,
-                &points,
-            ) {
-                Ok(values) => values,
-                Err(message) => {
-                    errors.push(format!(
-                        "object_region '{}' texture_override: {message}",
-                        region.region_id
-                    ));
-                    continue;
-                }
-            },
         };
-        for (index, value) in values.into_iter().enumerate() {
-            if region_mask[index] == region_index {
-                initial_magnetization[index] = value;
+        for (index, selected) in selected.iter().copied().enumerate() {
+            if selected {
+                initial_magnetization[index] = values[index];
             }
         }
     }
@@ -2509,7 +2513,7 @@ pub(crate) fn plan_fdm(
         .as_ref()
         .map(|mask| mask.iter().filter(|&&active| active).count())
         .unwrap_or(n_cells);
-    let owner_names = [magnet.name.as_str(), geometry.name()];
+    let owner_names = fdm_owner_names(magnet, geometry.name());
     let (region_mask, region_index_by_id) = materialize_object_region_mask(
         problem,
         &owner_names,
@@ -2553,6 +2557,7 @@ pub(crate) fn plan_fdm(
         .transpose()?;
     apply_region_texture_overrides(
         problem,
+        &owner_names,
         &region_index_by_id,
         &region_mask,
         grid_cells,
@@ -3228,6 +3233,113 @@ mod tests {
     }
 
     #[test]
+    fn fdm_region_textures_are_owner_scoped_and_independent() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let mut left = region(0);
+        left.region_id = "strip:left".to_string();
+        left.owner_object = "strip".to_string();
+        left.priority = 1;
+        left.texture_override = Some(fullmag_ir::RegionTextureOverrideIR {
+            initial_magnetization: InitialMagnetizationIR::Uniform {
+                value: [1.0, 0.0, 0.0],
+            },
+        });
+        let mut right = region(1);
+        right.region_id = "strip:right".to_string();
+        right.owner_object = "strip".to_string();
+        right.priority = 2;
+        right.texture_override = Some(fullmag_ir::RegionTextureOverrideIR {
+            initial_magnetization: InitialMagnetizationIR::Uniform {
+                value: [0.0, 1.0, 0.0],
+            },
+        });
+        let mut foreign = region(2);
+        foreign.region_id = "other:foreign".to_string();
+        foreign.owner_object = "other".to_string();
+        foreign.texture_override = Some(fullmag_ir::RegionTextureOverrideIR {
+            initial_magnetization: InitialMagnetizationIR::Uniform {
+                value: [0.0, 0.0, -1.0],
+            },
+        });
+        problem.object_regions = vec![left, right, foreign];
+
+        let region_index_by_id = BTreeMap::from([
+            ("strip:left".to_string(), 1),
+            ("strip:right".to_string(), 2),
+        ]);
+        let region_mask = vec![1, 2, 0];
+        let mut initial = vec![[0.0, 0.0, 1.0]; 3];
+        let mut errors = Vec::new();
+        apply_region_texture_overrides(
+            &problem,
+            &["strip"],
+            &region_index_by_id,
+            &region_mask,
+            [3, 1, 1],
+            [1.0; 3],
+            [-1.5, -0.5, -0.5],
+            [0.0; 3],
+            None,
+            &mut initial,
+            &mut errors,
+        );
+
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert_eq!(initial[0], [1.0, 0.0, 0.0]);
+        assert_eq!(initial[1], [0.0, 1.0, 0.0]);
+        assert_eq!(initial[2], [0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn fdm_translated_region_texture_is_clipped_to_the_winning_region() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let mut clipped = region(0);
+        clipped.region_id = "strip:clipped".to_string();
+        clipped.owner_object = "strip".to_string();
+        clipped.texture_override = Some(fullmag_ir::RegionTextureOverrideIR {
+            initial_magnetization: InitialMagnetizationIR::PresetTexture {
+                preset_kind: "vortex".to_string(),
+                preset_params: BTreeMap::from([
+                    ("core_radius".to_string(), serde_json::json!(0.25)),
+                    ("core_polarity".to_string(), serde_json::json!(1)),
+                    ("circulation".to_string(), serde_json::json!(1)),
+                    ("plane".to_string(), serde_json::json!("xy")),
+                ]),
+                mapping: fullmag_ir::TextureMappingIR::default(),
+                texture_transform: fullmag_ir::TextureTransform3DIR {
+                    translation: [1.0, 0.0, 0.0],
+                    ..fullmag_ir::TextureTransform3DIR::default()
+                },
+                preset_version: 2,
+            },
+        });
+        problem.object_regions = vec![clipped];
+
+        let region_index_by_id = BTreeMap::from([("strip:clipped".to_string(), 1)]);
+        let region_mask = vec![1, 0, 0];
+        let mut initial = vec![[1.0, 0.0, 0.0]; 3];
+        let mut errors = Vec::new();
+        apply_region_texture_overrides(
+            &problem,
+            &["strip"],
+            &region_index_by_id,
+            &region_mask,
+            [3, 1, 1],
+            [1.0; 3],
+            [0.5, -0.5, -0.5],
+            [0.0; 3],
+            None,
+            &mut initial,
+            &mut errors,
+        );
+
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert!((initial[0][2] - 1.0).abs() < 1.0e-12);
+        assert_eq!(initial[1], [1.0, 0.0, 0.0]);
+        assert_eq!(initial[2], [1.0, 0.0, 0.0]);
+    }
+
+    #[test]
     fn prescribed_sot_region_target_materializes_cell_mask() {
         let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
         problem.object_regions = vec![region(0)];
@@ -3838,7 +3950,7 @@ pub(crate) fn plan_fdm_multilayer(
                 continue;
             }
         };
-        let owner_names = [magnet.name.as_str(), geometry_name];
+        let owner_names = fdm_owner_names(magnet, geometry_name);
         let (native_region_mask, region_index_by_id) = materialize_object_region_mask(
             problem,
             &owner_names,
@@ -3930,7 +4042,7 @@ pub(crate) fn plan_fdm_multilayer(
                 None
             }
         };
-        let initial_magnetization = match &magnet.initial_magnetization {
+        let mut initial_magnetization = match &magnet.initial_magnetization {
             Some(InitialMagnetizationIR::Uniform { value }) => {
                 if let Some(ref mask) = active_mask {
                     mask.iter()
@@ -4007,6 +4119,20 @@ pub(crate) fn plan_fdm_multilayer(
                 }
             }
         };
+
+        apply_region_texture_overrides(
+            problem,
+            &owner_names,
+            &region_index_by_id,
+            &native_region_mask,
+            grid_cells,
+            cell_size,
+            native_origin,
+            placed.translation,
+            active_mask.as_ref(),
+            &mut initial_magnetization,
+            &mut errors,
+        );
 
         lowered_bodies.push(LoweredBody {
             magnet_name: magnet.name.clone(),
@@ -4577,4 +4703,23 @@ pub(crate) fn plan_fdm_multilayer(
             physics_graph: None,
         },
     })
+}
+
+#[cfg(test)]
+mod texture_object_space_tests {
+    use super::*;
+
+    #[test]
+    fn grid_sample_points_uses_the_shared_object_frame_transform() {
+        let points = grid_sample_points(
+            [1, 1, 1],
+            [2.0, 2.0, 2.0],
+            [10.0, -4.0, 2.0],
+            [11.0, -3.0, 3.0],
+            None,
+        );
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].position_world, [11.0, -3.0, 3.0]);
+        assert_eq!(points[0].position_object, [0.0, 0.0, 0.0]);
+    }
 }

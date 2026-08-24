@@ -19,6 +19,7 @@ describe("session resource identity", () => {
 
   it("rejects a status without the complete authoritative identity", () => {
     expect(sessionResourceIdentityFromStatus(null)).toBeNull();
+    expect(sessionResourceIdentityFromStatus({ session: {} } as never)).toBeNull();
     expect(sessionResourceIdentityFromStatus({
       session: { session_id: "session-1", session_epoch: " " },
     } as never)).toBeNull();

@@ -1881,6 +1881,7 @@ fn fem_domain_full_sampled_field_copies_by_global_node_indices() {
     let entry = crate::mesh::MagnetPlanningEntry {
         magnet_name: "free".to_string(),
         geometry_name: "free_geom".to_string(),
+        object_translation: [0.0, 0.0, 0.0],
         initial_magnetization: Some(InitialMagnetizationIR::SampledField {
             values: vec![
                 [0.0, 10.0, 100.0],
@@ -1960,6 +1961,7 @@ fn fem_domain_preset_texture_samples_final_mesh_node_order() {
     let entry = crate::mesh::MagnetPlanningEntry {
         magnet_name: "free".to_string(),
         geometry_name: "free_geom".to_string(),
+        object_translation: [0.0, 0.0, 0.0],
         initial_magnetization: Some(InitialMagnetizationIR::PresetTexture {
             preset_kind: "vortex".to_string(),
             preset_version: 1,
@@ -2939,6 +2941,7 @@ fn pack_preserves_shared_interface_nodes_within_one_object() {
     let entry = crate::mesh::MagnetPlanningEntry {
         magnet_name: "body".to_string(),
         geometry_name: "body_geom".to_string(),
+        object_translation: [0.0, 0.0, 0.0],
         initial_magnetization: Some(InitialMagnetizationIR::RandomSeeded { seed: 17 }),
     };
     let expected = crate::mesh::initial_vectors_for_magnet(
@@ -2964,6 +2967,7 @@ fn pack_preserves_shared_interface_nodes_within_one_object() {
     let textured_entry = crate::mesh::MagnetPlanningEntry {
         magnet_name: "body".to_string(),
         geometry_name: "body_geom".to_string(),
+        object_translation: [0.0, 0.0, 0.0],
         initial_magnetization: Some(InitialMagnetizationIR::PresetTexture {
             preset_version: 1,
             preset_kind: "neel_skyrmion".to_string(),
@@ -3762,8 +3766,14 @@ fn disabled_fdm_region_does_not_materialize_mask_or_texture_override() {
 }
 
 #[test]
-fn fem_region_texture_override_is_rejected_until_runtime_materialization_exists() {
-    let mut ir = fem_minimal_test_ir();
+fn fem_region_texture_override_materializes_on_selected_nodes_only() {
+    let baseline_ir = fem_minimal_test_ir();
+    let baseline_plan = plan(&baseline_ir).expect("baseline FEM plan should succeed");
+    let fullmag_ir::BackendPlanIR::Fem(baseline_fem) = baseline_plan.backend_plan else {
+        panic!("expected baseline FEM plan");
+    };
+
+    let mut ir = baseline_ir;
     let mut region = default_test_object_region();
     region.texture_override = Some(fullmag_ir::RegionTextureOverrideIR {
         initial_magnetization: fullmag_ir::InitialMagnetizationIR::Uniform {
@@ -3772,15 +3782,24 @@ fn fem_region_texture_override_is_rejected_until_runtime_materialization_exists(
     });
     ir.object_regions.push(region);
 
-    let err = plan(&ir).expect_err("FEM must not silently ignore region texture overrides");
-    assert!(
-        err.reasons.iter().any(|reason| {
-            reason.contains("object region texture_override")
-                && reason.contains("backend='fem'")
-                && reason.contains("must not silently ignore region texture overrides")
-        }),
-        "unexpected planner errors: {:?}",
-        err.reasons
+    let plan = plan(&ir).expect("FEM should materialize region texture overrides");
+    let fullmag_ir::BackendPlanIR::Fem(fem) = plan.backend_plan else {
+        panic!("expected FEM plan");
+    };
+
+    let changed_indices = fem
+        .initial_magnetization
+        .iter()
+        .zip(&baseline_fem.initial_magnetization)
+        .enumerate()
+        .filter_map(|(index, (actual, baseline))| (actual != baseline).then_some(index))
+        .collect::<Vec<_>>();
+    assert_eq!(changed_indices, vec![0]);
+    assert_eq!(fem.initial_magnetization[0], [0.0, 0.0, 1.0]);
+    assert_eq!(
+        &fem.initial_magnetization[1..],
+        &baseline_fem.initial_magnetization[1..],
+        "nodes outside the winning region must preserve the base texture"
     );
 }
 
@@ -8133,9 +8152,10 @@ fn multilayer_fdm_rejects_authored_frozen_spins_before_runtime_selection() {
         }));
 
     let error = plan(&ir).expect_err("multilayer must not drop authored frozen spins");
-    assert!(error.reasons.iter().any(|reason| {
-        reason.starts_with("frozen_spins_fdm_multilayer_lowering_missing:")
-    }));
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| { reason.starts_with("frozen_spins_fdm_multilayer_lowering_missing:") }));
 }
 
 #[test]

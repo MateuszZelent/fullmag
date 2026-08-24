@@ -12,11 +12,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: packages/fullmag-py/pyproject.toml
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
+
+      - name: Install Python runtime dependencies
+        run: python -m pip install -e packages/fullmag-py
 
       - name: Run Rust quantity, API and CLI contracts
         run: ./scripts/ci/run_frontend3d_required_gate.sh rust-quantity-api-cli-contracts
@@ -43,7 +53,9 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Verify generated API determinism
-        run: ./scripts/ci/run_frontend3d_required_gate.sh generated-api-determinism
+        run: |
+          node --test apps/control-room/scripts/normalize-openapi-build-identity.node-test.mjs
+          ./scripts/ci/run_frontend3d_required_gate.sh generated-api-determinism
 
   api-hygiene-rg13:
     runs-on: ubuntu-22.04
@@ -138,9 +150,13 @@ jobs:
         run: pnpm --dir apps/control-room exec playwright install --with-deps chromium
 
       - name: Run browser fixture smoke
+        env:
+          CONTROL_ROOM_AUDIT_ARTIFACTS_DIR: ${{ runner.temp }}/viewport-3d-browser-audit
         run: ./scripts/ci/run_frontend3d_required_gate.sh browser-fixture-smoke
 
       - name: Verify browser fixture smoke negative control
+        env:
+          CONTROL_ROOM_AUDIT_ARTIFACTS_DIR: ${{ runner.temp }}/viewport-3d-browser-audit
         run: |
           if FULLMAG_CI_INJECT_FAILURE=browser-fixture-proof-identity \
             ./scripts/ci/run_frontend3d_required_gate.sh browser-fixture-smoke; then
@@ -153,7 +169,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: viewport-3d-browser-audit
-          path: apps/control-room/.artifacts/viewport-3d-browser-audit
+          path: ${{ runner.temp }}/viewport-3d-browser-audit
           if-no-files-found: error
 
   fdm-relaxation-qualification:
@@ -197,6 +213,11 @@ jobs:
 
       - name: Audit managed FEM CPU-only verification configuration
         run: python scripts/test_audit_fem_cpu_only_runtime.py -v
+
+      - name: Run bootstrap workflow contract
+        run: |
+          python -m pip install PyYAML==6.0.3
+          python scripts/test_bootstrap_workflow_contract.py -v
 
       - name: Install Python package
         run: python -m pip install -e 'packages/fullmag-py[meshing]'

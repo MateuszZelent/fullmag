@@ -1,9 +1,7 @@
-"""Run the public-documentation IA check with monotonic status promotion.
+"""Run the ownership-oriented public-documentation IA check.
 
-The canonical IA manifest records the minimum maturity expected for a page. A
-reference page may be promoted from ``partial`` to ``implemented`` in its front
-matter without requiring an unrelated manifest-only commit. All other metadata,
-navigation, path, label, document-kind, and status mismatches remain errors.
+Reference pages may be promoted monotonically from partial to implemented.
+All titles, labels, paths, document kinds, and navigation edges remain strict.
 """
 
 from __future__ import annotations
@@ -13,7 +11,9 @@ from dataclasses import replace
 from pathlib import Path
 import sys
 
-from public_docs_information_architecture import (
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "public_docs/site/_extensions"))
+
+from public_docs_information_architecture_v2 import (
     PAGE_SPECS,
     PUBLIC_DOCS_ROOT,
     PageSpec,

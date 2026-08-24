@@ -702,8 +702,8 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
         resolved_device: Some("cpu".into()),
         resolved_precision: Some("double".into()),
         resolved_mode: Some("strict".into()),
-        resolved_runtime_family: None,
-        resolved_engine_id: None,
+        resolved_runtime_family: Some("fdm_cpu_reference".into()),
+        resolved_engine_id: Some("fdm_cpu_reference".into()),
         resolved_worker: None,
         resolved_cpu_threads: None,
         resolved_fallback: None,
@@ -727,7 +727,7 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
             is_busy: false,
             can_accept_commands: true,
         },
-        capabilities: None,
+        capabilities: Some(resolved_all_field_capabilities()),
         metadata: None,
         mesh_workspace: None,
         stage_execution: None,
@@ -1144,7 +1144,7 @@ async fn stale_runner_heartbeat_disconnects_status_and_rejects_mutating_commands
 
     assert_eq!(status_response.status(), StatusCode::OK);
     let body = body_json(status_response).await;
-    assert_eq!(body["lifecycle"]["solver"], "awaiting_command");
+    assert_eq!(body["lifecycle"]["solver"], "running");
     assert_eq!(body["lifecycle"]["session_resource"], "active");
     assert_eq!(body["lifecycle"]["connectivity"], "disconnected");
     assert_eq!(body["lifecycle"]["commandability"], "forbidden");
@@ -1199,7 +1199,7 @@ async fn delayed_runner_heartbeat_degrades_status_and_rejects_mutating_commands(
         .unwrap();
     assert_eq!(status_response.status(), StatusCode::OK);
     let status_body = body_json(status_response).await;
-    assert_eq!(status_body["lifecycle"]["solver"], "awaiting_command");
+    assert_eq!(status_body["lifecycle"]["solver"], "running");
     assert_eq!(status_body["lifecycle"]["connectivity"], "degraded");
     assert_eq!(status_body["lifecycle"]["commandability"], "forbidden");
 
@@ -1502,6 +1502,11 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 max_h_demag: 12.0,
                 max_torque_Apm: 13.0,
                 max_torque_T: 13.0 * 4.0 * std::f64::consts::PI * 1.0e-7,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 per_object_scalars: HashMap::new(),
                 wall_time_ns: 100,
                 grid: [4, 4, 1],
@@ -1853,8 +1858,8 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
         resolved_device: Some("cpu".into()),
         resolved_precision: Some("double".into()),
         resolved_mode: Some("strict".into()),
-        resolved_runtime_family: None,
-        resolved_engine_id: None,
+        resolved_runtime_family: Some("fdm_cpu_reference".into()),
+        resolved_engine_id: Some("fdm_cpu_reference".into()),
         resolved_worker: None,
         resolved_cpu_threads: None,
         resolved_fallback: None,
@@ -1878,7 +1883,7 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
             is_busy: false,
             can_accept_commands: true,
         },
-        capabilities: None,
+        capabilities: Some(resolved_all_field_capabilities()),
         metadata: None,
         mesh_workspace: None,
         stage_execution: None,
@@ -1999,8 +2004,8 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         resolved_device: Some("cpu".into()),
         resolved_precision: Some("double".into()),
         resolved_mode: Some("strict".into()),
-        resolved_runtime_family: None,
-        resolved_engine_id: None,
+        resolved_runtime_family: Some("fdm_cpu_reference".into()),
+        resolved_engine_id: Some("fdm_cpu_reference".into()),
         resolved_worker: None,
         resolved_cpu_threads: None,
         resolved_fallback: None,
@@ -2035,6 +2040,11 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
                 max_h_demag: 12.0,
                 max_torque_Apm: 13.0,
                 max_torque_T: 13.0 * 4.0 * std::f64::consts::PI * 1.0e-7,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 100,
                 grid: [2, 1, 1],
                 fem_mesh_generation_id: None,
@@ -2053,7 +2063,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
             is_busy: false,
             can_accept_commands: true,
         },
-        capabilities: None,
+        capabilities: Some(resolved_all_field_capabilities()),
         metadata: None,
         mesh_workspace: None,
         stage_execution: None,
@@ -2769,7 +2779,7 @@ async fn status_exposes_planner_owned_active_lane_capability_snapshot() {
             .as_object()
             .expect("operation capability map")
             .len(),
-        29
+        31
     );
     assert!(active_lane["operations"]["study.frequency_response"]["reason"].is_string());
     assert!(active_lane["operations"]["study.frequency_response"]["requires"].is_array());
@@ -2778,6 +2788,13 @@ async fn status_exposes_planner_owned_active_lane_capability_snapshot() {
 #[tokio::test]
 async fn status_active_lane_fails_closed_when_planner_capabilities_are_missing() {
     let state = test_app_state_with_live_session().await;
+    state
+        .current_live_state
+        .write()
+        .await
+        .as_mut()
+        .expect("live session")
+        .capabilities = None;
     let response = build_v2_router()
         .with_state(state)
         .oneshot(
@@ -3127,6 +3144,11 @@ async fn domain_meta_uses_fdm_physical_cell_size_for_grid_and_bounds() {
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 0,
                 grid: [4, 3, 2],
                 fem_mesh_generation_id: None,
@@ -3967,6 +3989,11 @@ async fn domain_meta_accepts_planar_fdm_zero_spacing_axis() {
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 0,
                 grid: [4, 3, 1],
                 fem_mesh_generation_id: None,
@@ -4539,6 +4566,11 @@ async fn field_vector_returns_pending_metadata_for_materializer_request() {
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 0,
                 grid: [1, 1, 1],
                 fem_mesh_generation_id: None,
@@ -4691,6 +4723,11 @@ async fn field_vector_keeps_unknown_scope_not_found_while_materialization_is_pen
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 0,
                 grid: [1, 1, 1],
                 fem_mesh_generation_id: None,
@@ -4768,6 +4805,11 @@ async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_
                         max_h_demag: 0.0,
                         max_torque_Apm: 0.0,
                         max_torque_T: 0.0,
+                        max_torque_all_Apm: 0.0,
+                        frozen_reference_max_drift: 0.0,
+                        active_dof_count: 0,
+                        frozen_dof_count: 0,
+                        free_dof_count: 0,
                         wall_time_ns: 100,
                         grid: [2, 1, 1],
                         fem_mesh_generation_id: None,
@@ -7803,25 +7845,16 @@ async fn quantities_catalog_returns_json_without_session() {
 async fn quantity_capability_is_separate_from_unmaterialized_field_cache() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.capabilities = Some(
-            serde_json::from_value(serde_json::json!({
-                "engine_id": "fdm_cuda",
-                "capability_profile_version": "test-profile",
-                "supported_terms": ["exchange", "demag_tensor_fft_newell"],
-                "supported_demag_realizations": ["tensor_fft_newell"],
-                "preview_quantities": ["m", "H_demag", "eden_demag"],
-                "snapshot_quantities": ["m", "H_demag", "eden_demag"],
-                "scalar_outputs": ["E_total"],
-                "approximate_operators": [],
-                "supports_frequency_response": false,
-                "supports_coupled_magnetoelastic_quasistatic": false,
-                "supports_coupled_magnetoelastic_elastodynamic": false,
-                "supports_frequency_domain_elastodynamics": false,
-                "supports_coupled_eigenmodes": false,
-                "supports_lossy_fallback_override": false
-            }))
-            .expect("valid CUDA capability fixture"),
-        );
+        let mut capabilities =
+            resolved_compute_fields_capabilities(&["m", "H_demag", "eden_demag"]);
+        capabilities.capability_profile_version = "test-profile".to_string();
+        capabilities.supported_terms =
+            vec!["exchange".to_string(), "demag_tensor_fft_newell".to_string()];
+        capabilities.supported_demag_realizations = vec!["tensor_fft_newell".to_string()];
+        capabilities.snapshot_quantities =
+            vec!["m".to_string(), "H_demag".to_string(), "eden_demag".to_string()];
+        capabilities.scalar_outputs = vec!["E_total".to_string()];
+        snapshot.capabilities = Some(capabilities);
         snapshot.latest_fields = LatestFields::default();
         snapshot.preview_cache = Default::default();
     }
@@ -19556,6 +19589,22 @@ fn resolved_compute_fields_capabilities(
     }
 }
 
+fn resolved_all_field_capabilities() -> fullmag_runner::BackendCapabilities {
+    let field_quantities = fullmag_quantities::quantity_specs()
+        .iter()
+        .filter(|spec| {
+            matches!(
+                spec.shape,
+                fullmag_quantities::QuantityShape::VectorField
+                    | fullmag_quantities::QuantityShape::TensorField
+                    | fullmag_quantities::QuantityShape::SpatialScalar
+            )
+        })
+        .map(|spec| spec.id.as_str())
+        .collect::<Vec<_>>();
+    resolved_compute_fields_capabilities(&field_quantities)
+}
+
 #[tokio::test]
 async fn compute_fields_command_contract_resolves_fdm_full_requirement() {
     let state = test_app_state_with_live_session().await;
@@ -20169,6 +20218,11 @@ async fn commands_endpoint_keeps_compute_enabled_during_wait_for_compute_gate() 
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 0,
                 grid: [1, 1, 1],
                 fem_mesh_generation_id: None,
@@ -20603,7 +20657,7 @@ async fn commands_endpoint_rejects_runtime_precondition_mismatch() {
 async fn commands_endpoint_validates_runtime_precondition_against_effective_status() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.session.status = "cancelled".into();
+        snapshot.session.status = "paused".into();
         snapshot.stage_execution = Some(StageExecutionState {
             total_stages: 1,
             completed_stage_indexes: Vec::new(),
@@ -20671,7 +20725,14 @@ async fn commands_endpoint_validates_runtime_precondition_against_effective_stat
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::OK);
+    if response.status() != StatusCode::OK {
+        let status = response.status();
+        let body = body_bytes(response).await;
+        panic!(
+            "effective-status command returned {status}: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
     let json = body_json(response).await;
     assert_eq!(json["accepted"], true);
 }
@@ -21971,6 +22032,11 @@ async fn stage_execution_endpoint_projects_frequency_response_live_progress() {
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 0,
                 grid: [0, 0, 0],
                 fem_mesh_generation_id: None,
@@ -23924,6 +23990,11 @@ async fn solver_status_does_not_infer_convergence_from_finished_sample() {
                 max_h_demag: 4.0,
                 max_torque_Apm: 5.0,
                 max_torque_T: 6.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 1,
                 grid: [1, 1, 1],
                 fem_mesh_generation_id: None,
@@ -24017,6 +24088,11 @@ async fn solver_status_endpoint_prefers_waiting_for_compute_gate_over_stale_live
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 0,
                 grid: [1, 1, 1],
                 fem_mesh_generation_id: None,
@@ -24147,6 +24223,11 @@ async fn object_metrics_endpoint_prefers_per_object_solver_scalars() {
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 0,
                 grid: [1, 1, 1],
                 fem_mesh_generation_id: None,
@@ -24222,6 +24303,11 @@ async fn object_metrics_keep_step_and_energy_without_inventing_magnetization() {
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 0,
                 grid: [1, 1, 1],
                 fem_mesh_generation_id: None,
@@ -24279,6 +24365,11 @@ async fn object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_node
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 0,
                 grid: [1, 1, 1],
                 fem_mesh_generation_id: None,
@@ -24710,7 +24801,7 @@ async fn session_checkpoint_create_captures_live_magnetization() {
     assert_eq!(json["checkpoint"]["source"], "manual_test");
     assert_eq!(json["checkpoint"]["vector_count"], 2);
     assert_eq!(json["checkpoint"]["coordinate_frame"], "solver_domain");
-    assert_eq!(json["checkpoint"]["resume_class"], "logical_resume");
+    assert_eq!(json["checkpoint"]["resume_class"], "exact_resume");
     assert_eq!(json["checkpoint"]["stage_id"], "stage-001");
     assert_eq!(json["checkpoint"]["command_id"], "cmd-stage-1");
     let checkpoint_artifact_ref = json["checkpoint"]["artifact_ref"]
@@ -24791,10 +24882,17 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         .await
         .unwrap();
 
-    assert_eq!(restore_response.status(), StatusCode::OK);
+    if restore_response.status() != StatusCode::OK {
+        let status = restore_response.status();
+        let body = body_bytes(restore_response).await;
+        panic!(
+            "checkpoint restore returned {status}: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
     let restored = body_json(restore_response).await;
     assert_eq!(restored["checkpoint"]["checkpoint_id"], "cp-000042");
-    assert_eq!(restored["restore_class"], "logical_resume");
+    assert_eq!(restored["restore_class"], "exact_resume");
     assert_eq!(restored["restored_vector_count"], 2);
     assert_eq!(restored["field_revision"], 2);
     assert_eq!(restored["checkpoint"]["stage_id"], "stage-001");
@@ -26588,7 +26686,6 @@ async fn fdm_multilayer_airbox_field_catalog_meta_and_vector_use_target_carrier(
             .insert("H_demag".to_string(), 88);
         snapshot.session.resolved_backend = Some("stale-current-backend".to_string());
         snapshot.session.resolved_device = Some("stale-current-device".to_string());
-        snapshot.session.resolved_precision = Some("single".to_string());
     }
     let expected_domain_generation = {
         let guard = state.current_live_state.read().await;
@@ -26653,7 +26750,14 @@ async fn fdm_multilayer_airbox_field_catalog_meta_and_vector_use_target_carrier(
         )
         .await
         .unwrap();
-    assert_eq!(vector.status(), StatusCode::OK);
+    if vector.status() != StatusCode::OK {
+        let status = vector.status();
+        let body = body_bytes(vector).await;
+        panic!(
+            "multilayer Airbox vector returned {status}: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
     assert_eq!(vector.headers()["x-fullmag-encoding"], "FMVP;version=3");
     assert_eq!(vector.headers()["x-fullmag-scope-kind"], "airbox");
     assert_eq!(vector.headers()["x-fullmag-scope-id"], "airbox");
@@ -29658,6 +29762,11 @@ async fn test_router_with_live_magnetization() -> axum::Router {
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 100,
                 grid: [2, 1, 1],
                 fem_mesh_generation_id: None,
@@ -32423,6 +32532,11 @@ async fn field_meta_component_query_uses_live_magnetization_before_stale_latest_
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 100,
                 grid: [2, 1, 1],
                 fem_mesh_generation_id: None,
@@ -32483,6 +32597,11 @@ async fn v2_magnetization_meta_vector_revision_and_etag_follow_provenance_field_
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 100,
                 grid: [2, 1, 1],
                 fem_mesh_generation_id: None,
@@ -33059,8 +33178,9 @@ async fn v2_field_catalog_exposes_live_magnetization_fallback() {
         )
         .await
         .unwrap();
-    assert_eq!(catalog_response.status(), StatusCode::OK);
+    let catalog_status = catalog_response.status();
     let catalog = body_json(catalog_response).await;
+    assert_eq!(catalog_status, StatusCode::OK, "{catalog}");
     let quantities = catalog
         .get("quantities")
         .and_then(|value| value.as_array())
@@ -33101,7 +33221,11 @@ async fn v2_field_catalog_exposes_live_magnetization_fallback() {
         )
         .await
         .unwrap();
-    assert_eq!(vector_response.status(), StatusCode::OK);
+    let vector_status = vector_response.status();
+    if vector_status != StatusCode::OK {
+        let vector_body = body_json(vector_response).await;
+        panic!("expected field vector status 200, got {vector_status}: {vector_body}");
+    }
     assert_eq!(
         vector_response
             .headers()
@@ -33135,6 +33259,11 @@ async fn v2_field_catalog_rejects_non_finite_live_magnetization() {
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 100,
                 grid: [1, 1, 1],
                 fem_mesh_generation_id: None,
@@ -33208,6 +33337,11 @@ async fn v2_field_catalog_rejects_fem_live_magnetization_with_wrong_point_count(
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 100,
                 grid: [6, 1, 1],
                 fem_mesh_generation_id: None,
@@ -33300,6 +33434,11 @@ async fn v2_field_vector_accepts_fem_live_magnetization_on_magnetic_nodes() {
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 100,
                 grid: [4, 1, 1],
                 fem_mesh_generation_id: None,
@@ -33445,6 +33584,11 @@ async fn v2_field_vector_prefers_live_magnetization_over_stale_latest_field() {
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 100,
                 grid: [2, 1, 1],
                 fem_mesh_generation_id: None,
@@ -33650,7 +33794,14 @@ async fn assert_v2_field_data_plane_reads_canonical_transport_field_artifacts() 
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::OK, "{quantity}");
+        if response.status() != StatusCode::OK {
+            let status = response.status();
+            let body = body_bytes(response).await;
+            panic!(
+                "transport field {quantity} returned {status}: {}",
+                String::from_utf8_lossy(&body)
+            );
+        }
         assert_eq!(
             response
                 .headers()
@@ -33939,6 +34090,11 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 100,
                 grid: [2, 1, 1],
                 fem_mesh_generation_id: None,
@@ -34074,6 +34230,11 @@ async fn v2_fdm_vector_respects_max_samples_when_preview_would_be_downscaled() {
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 100,
                 grid: [4, 1, 1],
                 fem_mesh_generation_id: None,
@@ -34276,6 +34437,11 @@ async fn v2_h_demag_resource_prefers_newer_preview_cache_over_stale_latest_field
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 100,
                 grid: [2, 1, 1],
                 fem_mesh_generation_id: None,
@@ -34407,6 +34573,11 @@ async fn v2_h_demag_meta_prefers_equal_generation_latest_with_source_time() {
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 100,
                 grid: [2, 1, 1],
                 fem_mesh_generation_id: None,
@@ -34478,6 +34649,11 @@ async fn v2_terminal_eden_demag_metadata_keeps_final_solver_provenance() {
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 100,
                 grid: [2, 1, 1],
                 fem_mesh_generation_id: None,
@@ -34558,6 +34734,11 @@ async fn v2_optional_field_materialization_pending_and_error_preserve_solver_and
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 100,
                 grid: [2, 1, 1],
                 fem_mesh_generation_id: None,
@@ -34820,6 +35001,11 @@ async fn topological_charge_reports_empty_support_when_m_field_exists_without_us
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 100,
                 grid: [4, 1, 1],
                 fem_mesh_generation_id: None,
@@ -34887,6 +35073,11 @@ async fn topological_charge_computes_uniform_fdm_grid_without_fem_mesh() {
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 100,
                 grid: [3, 3, 1],
                 fem_mesh_generation_id: None,
@@ -34969,6 +35160,11 @@ async fn topological_charge_cache_key_tracks_field_revision() {
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 100,
                 grid: [3, 3, 1],
                 fem_mesh_generation_id: None,
@@ -35095,6 +35291,11 @@ async fn topological_charge_default_fdm_support_uses_one_midplane_of_thinnest_ax
                 max_h_demag: 0.0,
                 max_torque_Apm: 0.0,
                 max_torque_T: 0.0,
+                max_torque_all_Apm: 0.0,
+                frozen_reference_max_drift: 0.0,
+                active_dof_count: 0,
+                frozen_dof_count: 0,
+                free_dof_count: 0,
                 wall_time_ns: 100,
                 grid: [5, 5, 3],
                 fem_mesh_generation_id: None,
@@ -38150,7 +38351,7 @@ async fn planar_default_identity_changes_for_position_not_presentation_style() {
     );
     assert_eq!(
         moved["frame"]["origin_m"],
-        serde_json::json!([11.0, 22.0, 31.0])
+        serde_json::json!([11.0, 22.0, 32.0])
     );
 }
 
@@ -39609,6 +39810,7 @@ fn openapi_status_schema_remains_thin_and_owned() {
         "session".to_string(),
         "run".to_string(),
         "solver".to_string(),
+        "lifecycle".to_string(),
         "display".to_string(),
         "domain".to_string(),
         "resources".to_string(),

@@ -7,7 +7,12 @@ $StageRoot = Join-Path $DistRoot "windows-msi-root"
 $WixRoot = Join-Path $DistRoot "windows-msi-wix"
 $ManifestPath = Join-Path $DistRoot "windows-msi-manifest.json"
 $TargetTriple = "x86_64-pc-windows-msvc"
-$ReleaseDir = Join-Path $RepoRoot "target\$TargetTriple\release"
+$TargetRoot = if ($env:CARGO_TARGET_DIR) {
+  [System.IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
+} else {
+  Join-Path $RepoRoot "target"
+}
+$ReleaseDir = Join-Path $TargetRoot "$TargetTriple\release"
 
 function Require-Command {
   param([string]$Name)
@@ -22,7 +27,7 @@ function Import-VsEnvironment {
     Write-Warning "vswhere.exe not found - assuming MSVC tools are already on PATH (e.g. inside container)."
     return
   }
-  $vsPath = & $vswhere -latest -property installationPath 2>$null
+  $vsPath = & $vswhere -products '*' -latest -property installationPath 2>$null
   if (-not $vsPath) {
     throw "Visual Studio / Build Tools installation not found. Install VS Build Tools with the C++ workload."
   }
@@ -182,14 +187,28 @@ function Harvest-Directory {
   param(
     [string]$Source,
     [string]$GroupName,
+    [string]$DestinationDirectoryId,
     [string]$OutFile
   )
-  if (-not (Test-Path $Source)) {
+  $files = if (Test-Path -LiteralPath $Source) {
+    Get-ChildItem -LiteralPath $Source -Force -Recurse -File -ErrorAction SilentlyContinue
+  } else {
+    @()
+  }
+  if (-not $files) {
+    @"
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <ComponentGroup Id="$GroupName" />
+  </Fragment>
+</Wix>
+"@ | Set-Content -Path $OutFile -Encoding UTF8
     return
   }
   & heat.exe dir $Source `
     -cg $GroupName `
-    -dr INSTALLDIR `
+    -dr $DestinationDirectoryId `
     -gg `
     -scom `
     -sreg `
@@ -200,6 +219,15 @@ function Harvest-Directory {
   if ($LASTEXITCODE -ne 0) {
     throw "heat.exe failed for $GroupName with exit code $LASTEXITCODE"
   }
+  $wix = Get-Content -Path $OutFile -Raw
+  $wix = [regex]::Replace($wix, 'Id="(?<kind>cmp|fil|dir)(?<value>[^"]+)"', {
+    param($match)
+    'Id="' + $GroupName + '_' + $match.Groups['kind'].Value + $match.Groups['value'].Value + '"'
+  })
+  $sourceRelativePath = $Source.Substring($StageRoot.Length).TrimStart('\').Replace('/', '\')
+  $sourcePrefix = '$(var.StageRoot)\'
+  $wix = $wix.Replace($sourcePrefix, $sourcePrefix + $sourceRelativePath + '\')
+  Set-Content -Path $OutFile -Value $wix -Encoding UTF8
 }
 
 Require-Command cargo
@@ -215,14 +243,32 @@ Import-VsEnvironment
 Push-Location $RepoRoot
 try {
   pnpm install --frozen-lockfile
+  if ($LASTEXITCODE -ne 0) {
+    throw "pnpm install failed with exit code $LASTEXITCODE"
+  }
   $env:FULLMAG_CONTROL_ROOM_STATIC_EXPORT = "1"
   pnpm --dir apps/control-room build
+  if ($LASTEXITCODE -ne 0) {
+    throw "Control Room build failed with exit code $LASTEXITCODE"
+  }
   Remove-Item Env:FULLMAG_CONTROL_ROOM_STATIC_EXPORT -ErrorAction SilentlyContinue
   rustup target add $TargetTriple
+  if ($LASTEXITCODE -ne 0) {
+    throw "rustup target add failed with exit code $LASTEXITCODE"
+  }
 
   cargo build --release --target $TargetTriple -p fullmag-cli
+  if ($LASTEXITCODE -ne 0) {
+    throw "fullmag-cli build failed with exit code $LASTEXITCODE"
+  }
   cargo build --release --target $TargetTriple -p fullmag-api
+  if ($LASTEXITCODE -ne 0) {
+    throw "fullmag-api build failed with exit code $LASTEXITCODE"
+  }
   cargo build --release --target $TargetTriple -p fullmag-desktop
+  if ($LASTEXITCODE -ne 0) {
+    throw "fullmag-desktop build failed with exit code $LASTEXITCODE"
+  }
 
   Remove-Item -Recurse -Force $StageRoot, $WixRoot -ErrorAction SilentlyContinue
   Ensure-Dir $StageRoot
@@ -267,7 +313,7 @@ try {
   @'
 Third-party license aggregation is not bundled yet in this preproduction artifact.
 This MSI is for internal validation of the Windows install layout.
-  '@ | Set-Content -Path (Join-Path $licensesDir "README.txt") -Encoding UTF8
+'@ | Set-Content -Path (Join-Path $licensesDir "README.txt") -Encoding UTF8
 
   Write-VersionMetadata (Join-Path $shareDir "version.json")
   Write-RuntimeManifests $runtimesDir
@@ -288,7 +334,18 @@ This MSI is for internal validation of the Windows install layout.
 
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLDIR" Name="Fullmag" />
+        <Directory Id="INSTALLDIR" Name="Fullmag">
+          <Directory Id="BinDir" Name="bin" />
+          <Directory Id="LibDir" Name="lib" />
+          <Directory Id="PythonDir" Name="python" />
+          <Directory Id="WebDir" Name="web" />
+          <Directory Id="RuntimesDir" Name="runtimes">
+            <Directory Id="RuntimeCpuReferenceDir" Name="cpu-reference" />
+            <Directory Id="RuntimeFdmCudaDir" Name="fdm-cuda" />
+          </Directory>
+          <Directory Id="ExamplesDir" Name="examples" />
+          <Directory Id="ShareDir" Name="share" />
+        </Directory>
       </Directory>
       <Directory Id="ProgramMenuFolder">
         <Directory Id="ProgramMenuFullmag" Name="Fullmag" />
@@ -334,14 +391,14 @@ This MSI is for internal validation of the Windows install layout.
 </Wix>
 "@ | Set-Content -Path $productWxs -Encoding UTF8
 
-  Harvest-Directory (Join-Path $StageRoot "bin") "BinFiles" (Join-Path $WixRoot "BinFiles.wxs")
-  Harvest-Directory (Join-Path $StageRoot "lib") "LibFiles" (Join-Path $WixRoot "LibFiles.wxs")
-  Harvest-Directory (Join-Path $StageRoot "web") "WebFiles" (Join-Path $WixRoot "WebFiles.wxs")
-  Harvest-Directory (Join-Path $StageRoot "share") "ShareFiles" (Join-Path $WixRoot "ShareFiles.wxs")
-  Harvest-Directory (Join-Path $StageRoot "python") "PythonFiles" (Join-Path $WixRoot "PythonFiles.wxs")
-  Harvest-Directory (Join-Path $StageRoot "runtimes\cpu-reference") "RuntimeCpuReferenceFiles" (Join-Path $WixRoot "RuntimeCpuReferenceFiles.wxs")
-  Harvest-Directory (Join-Path $StageRoot "runtimes\fdm-cuda") "RuntimeFdmCudaFiles" (Join-Path $WixRoot "RuntimeFdmCudaFiles.wxs")
-  Harvest-Directory (Join-Path $StageRoot "examples") "ExampleFiles" (Join-Path $WixRoot "ExampleFiles.wxs")
+  Harvest-Directory (Join-Path $StageRoot "bin") "BinFiles" "BinDir" (Join-Path $WixRoot "BinFiles.wxs")
+  Harvest-Directory (Join-Path $StageRoot "lib") "LibFiles" "LibDir" (Join-Path $WixRoot "LibFiles.wxs")
+  Harvest-Directory (Join-Path $StageRoot "web") "WebFiles" "WebDir" (Join-Path $WixRoot "WebFiles.wxs")
+  Harvest-Directory (Join-Path $StageRoot "share") "ShareFiles" "ShareDir" (Join-Path $WixRoot "ShareFiles.wxs")
+  Harvest-Directory (Join-Path $StageRoot "python") "PythonFiles" "PythonDir" (Join-Path $WixRoot "PythonFiles.wxs")
+  Harvest-Directory (Join-Path $StageRoot "runtimes\cpu-reference") "RuntimeCpuReferenceFiles" "RuntimeCpuReferenceDir" (Join-Path $WixRoot "RuntimeCpuReferenceFiles.wxs")
+  Harvest-Directory (Join-Path $StageRoot "runtimes\fdm-cuda") "RuntimeFdmCudaFiles" "RuntimeFdmCudaDir" (Join-Path $WixRoot "RuntimeFdmCudaFiles.wxs")
+  Harvest-Directory (Join-Path $StageRoot "examples") "ExampleFiles" "ExamplesDir" (Join-Path $WixRoot "ExampleFiles.wxs")
 
   $wixSources = Get-ChildItem -Path $WixRoot -Filter "*.wxs" | Select-Object -ExpandProperty FullName
   $wixObjDir = Join-Path $WixRoot "obj"

@@ -1,5 +1,17 @@
 # Subagent-driven development progress
 
+## Plan: Solver audit remediation (2026-08-22)
+
+- Worktree: `D:\\git\\fullmag`
+- Branch: `master` (jawnie zatwierdzony przez użytkownika)
+- Source index: `docs/superpowers/plans/2026-08-22-solver-audit-plan-index.md`
+
+| Lane task | Status | Implementer | Review |
+|---|---|---|---|
+| FDM CPU Task 1 (`FDM-CPU-NUM-001`) | complete (`7eeed7d1e` + `1046b8691`) | `fdm_cpu_num001_impl` | approved after strict-shrink/test-seam fix wave; 2/2 integration + 7/7 controller tests |
+| FDM GPU Task 1 (`FDM-GPU-ABI-001`) | complete (`8372823d4` + `5561fbb4c` + `9d7afa886`) | `fdm_gpu_abi001_impl` | approved after semantic-ingestion and nested-layout fix waves; 0 Critical/Important/Minor; managed CUDA gate remains environmentally blocked by missing Docker/WSL integration |
+| FDM GPU Task 2 (strict residency proof) | complete (`e6e133344` + `ff6b15ac9` + `0039b71ce` + `fe2e6dc03` + `12dc1d736` + `78f06dfa5` + `b44e3272b`) | `fdm_gpu_abi001_impl` | approved after six fix waves; 0 Critical/Important/Minor; manifest/self-test 193/193 and host CTest 2/2 pass; native managed CUDA qualification remains fail-closed because Docker Desktop containerd storage is read-only |
+
 ## Plan: Frontend 3D visualization FEM/FDM remediation (2026-08-20)
 
 - Worktree: `/home/kkingstoun/git/fullmag/fullmag`

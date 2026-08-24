@@ -6,6 +6,7 @@
  */
 
 #include "context.hpp"
+#include "fsal_policy.hpp"
 
 #include <cuda_runtime.h>
 #include <cmath>
@@ -182,6 +183,7 @@ static bool compute_rhs_into_fp32(Context &ctx, DeviceVectorField &rhs_out,
         static_cast<float*>(rhs_out.x), static_cast<float*>(rhs_out.y), static_cast<float*>(rhs_out.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "DP45 fp32 LLG RHS launch");
     if (poll_interrupt(ctx)) {
         abort_step_after_interrupt(ctx);
         return false;
@@ -210,15 +212,16 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     const float A51 = 19372.0f/6561.0f, A52 = -25360.0f/2187.0f, A53 = 64448.0f/6561.0f, A54 = -212.0f/729.0f;
     const float A61 = 9017.0f/3168.0f, A62 = -355.0f/33.0f, A63 = 46732.0f/5247.0f, A64 = 49.0f/176.0f, A65 = -5103.0f/18656.0f;
     const float B1 = 35.0f/384.0f, B3 = 500.0f/1113.0f, B4 = 125.0f/192.0f, B5 = -2187.0f/6784.0f, B6 = 11.0f/84.0f;
-    const bool fsal_valid_before_step = ctx.fsal_valid;
 
     copy_field_d2d_fp32(ctx.tmp, ctx.m, ctx.cell_count, context_compute_stream(ctx));
 
     for (;;) {
-        ctx.current_dt = dt;
+        ctx.trial_dt = dt;
         dt_f = static_cast<float>(dt);
 
-        if (ctx.fsal_valid) {
+        const FsalReuseDecision fsal_decision = rhs_allows_fsal_reuse(ctx, dt);
+        context_note_fsal_decision(ctx, fsal_decision);
+        if (fsal_decision.allowed) {
             copy_field_d2d_fp32(ctx.k1, ctx.k_fsal, ctx.cell_count, context_compute_stream(ctx));
         } else {
             if (!compute_rhs_into_fp32(ctx, ctx.k1, n, grid, gamma_bar_f, alpha_f,
@@ -294,9 +297,10 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         if (abort_step_from_tmp(ctx)) return;
 
         if (!ctx.adaptive_enabled) {
-            ctx.step_count++;
-            ctx.current_time += dt;
-            ctx.fsal_valid = false;
+            if (!compute_rhs_into_fp32(ctx, ctx.k_fsal, n, grid, gamma_bar_f, alpha_f,
+                                       step_start_time + dt)) return;
+            if (abort_step_from_tmp(ctx)) return;
+            context_stage_fsal_accepted_step(ctx, dt);
             context_refresh_observables(ctx);
             if (!fullmag_fdm_should_fill_step_stats(ctx)) {
                 fullmag_fdm_fill_step_stats_metadata(ctx, stats, dt);
@@ -325,10 +329,8 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         AdaptiveErrorPolicy policy = reduce_error_policy(ctx, ctx.cell_count, dt);
 
         if (policy.dt_min_exhausted) {
-            if (fsal_valid_before_step) {
-                copy_field_d2d_fp32(ctx.k_fsal, ctx.k1, ctx.cell_count, context_compute_stream(ctx));
-            }
-            ctx.fsal_valid = fsal_valid_before_step;
+            context_invalidate_fsal_cache(
+                ctx, FULLMAG_FDM_FSAL_INVALIDATION_STEP_ERROR);
             copy_field_d2d_fp32(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx));
             context_refresh_observables(ctx);
             ctx.last_error = "dt_min_exhausted";
@@ -336,9 +338,7 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         }
 
         if (policy.accepted) {
-            ctx.step_count++;
-            ctx.current_time += dt;
-            ctx.fsal_valid = true;
+            context_stage_fsal_accepted_step(ctx, dt);
 
             double dt_next = policy.dt_candidate;
 
@@ -361,8 +361,8 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
                 ctx.m.x, ctx.m.y, ctx.m.z,
                 ctx.work.x, ctx.work.y, ctx.work.z, ctx.cell_count);
             double max_dm_dt = reduce_max_norm_fp32(ctx, ctx.k_fsal.x, ctx.k_fsal.y, ctx.k_fsal.z, ctx.cell_count);
-            stats->step = ctx.step_count;
-            stats->time_seconds = ctx.current_time;
+            stats->step = ctx.pending_step_count;
+            stats->time_seconds = ctx.pending_time;
             stats->dt_seconds = dt;
             stats->exchange_energy_joules = e_ex;
             stats->demag_energy_joules = e_demag;
@@ -380,8 +380,8 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         }
 
         dt = policy.dt_candidate;
-        copy_field_d2d_fp32(ctx.k_fsal, ctx.k1, ctx.cell_count, context_compute_stream(ctx));
-        ctx.fsal_valid = true;
+        context_invalidate_fsal_cache(
+            ctx, FULLMAG_FDM_FSAL_INVALIDATION_REJECTED_STEP); // fsal_rejected_step
         copy_field_d2d_fp32(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx));
     }
 }

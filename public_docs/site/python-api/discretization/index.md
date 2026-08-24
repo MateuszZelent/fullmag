@@ -1,26 +1,23 @@
 ---
-title: Discretization
-status: partial
+title: Low-Level Discretization Hints
+status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
 ---
 
 (public-docs-python-api-discretization-root)=
-# Discretization
+# Low-Level Discretization Hints
 
-Discretization turns the physical domain into FDM cells, FEM elements, or a hybrid of both. Choose
-cell sizes, mesh controls, and per-object meshing; the planner validates the combination against
-backend capabilities.
+This compatibility branch contains composite `DiscretizationHints` and `Hybrid` objects.
+
+FDM and FEM mesh authoring has moved to the dedicated {doc}`../meshing/index` branch. The old
+terminal URLs remain available through redirects, but they are no longer the canonical navigation
+owners.
 
 ```{toctree}
 :maxdepth: 1
 
 discretization-hints
-fdm
-fdm-multilayer-convolution
-fem
 hybrid
-mesh-controls
-per-object-meshing
 ```

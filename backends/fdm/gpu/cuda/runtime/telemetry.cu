@@ -55,8 +55,8 @@ bool context_fill_current_stats(Context &ctx, fullmag_fdm_step_stats *out_stats)
     }
 
     std::memset(out_stats, 0, sizeof(*out_stats));
-    out_stats->step = ctx.step_count;
-    out_stats->time_seconds = ctx.current_time;
+    out_stats->step = ctx.accepted_step_pending ? ctx.pending_step_count : ctx.step_count;
+    out_stats->time_seconds = ctx.accepted_step_pending ? ctx.pending_time : ctx.current_time;
 
     if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
         out_stats->exchange_energy_joules =

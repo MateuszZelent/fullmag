@@ -457,10 +457,17 @@ pub(crate) struct NativeFdmBackend {
     gpu_transport_bound: bool,
 }
 
+#[cfg(any(feature = "cuda", test))]
+pub(crate) mod residency;
+#[cfg(feature = "cuda")]
+mod device;
+#[cfg(feature = "cuda")]
+pub(crate) use device::DeviceInfo;
+
 #[cfg(feature = "cuda")]
 #[derive(Debug, Clone)]
-pub(crate) struct NativeLlgCheckpointV1 {
-    pub info: ffi::fullmag_fdm_llg_checkpoint_info_v1,
+pub(crate) struct NativeLlgCheckpointV3 {
+    pub info: ffi::fullmag_fdm_llg_checkpoint_info_v3,
     pub payload_sha256: [u8; 32],
     pub payload: Vec<u8>,
 }
@@ -1135,9 +1142,9 @@ impl NativeFdmBackend {
             } else {
                 0
             },
-            cubic_kc1: plan.material.cubic_anisotropy_kc1.unwrap_or(0.0),
-            cubic_kc2: plan.material.cubic_anisotropy_kc2.unwrap_or(0.0),
-            cubic_kc3: plan.material.cubic_anisotropy_kc3.unwrap_or(0.0),
+            cubic_Kc1: plan.material.cubic_anisotropy_kc1.unwrap_or(0.0),
+            cubic_Kc2: plan.material.cubic_anisotropy_kc2.unwrap_or(0.0),
+            cubic_Kc3: plan.material.cubic_anisotropy_kc3.unwrap_or(0.0),
             cubic_axis1: plan
                 .material
                 .cubic_anisotropy_axis1
@@ -1151,9 +1158,9 @@ impl NativeFdmBackend {
             kc3_field: std::ptr::null(),
 
             has_interfacial_dmi: if plan.interfacial_dmi.is_some() { 1 } else { 0 },
-            dmi_d_interfacial: plan.interfacial_dmi.unwrap_or(0.0),
+            dmi_D_interfacial: plan.interfacial_dmi.unwrap_or(0.0),
             has_bulk_dmi: if plan.bulk_dmi.is_some() { 1 } else { 0 },
-            dmi_d_bulk: plan.bulk_dmi.unwrap_or(0.0),
+            dmi_D_bulk: plan.bulk_dmi.unwrap_or(0.0),
             dind_field: plan
                 .dind_field
                 .as_ref()
@@ -1370,11 +1377,32 @@ impl NativeFdmBackend {
 
         let time_policy = native_time_policy(adaptive)?;
         let plan_desc_v2 = ffi::fullmag_fdm_plan_desc_v2 {
+            abi_version: ffi::FULLMAG_FDM_PLAN_DESC_ABI_V2,
+            struct_size: std::mem::size_of::<ffi::fullmag_fdm_plan_desc_v2>() as u32,
             base: plan_desc,
             time_policy,
         };
 
-        let handle = unsafe { ffi::fullmag_fdm_backend_create_time_policy_v2(&plan_desc_v2) };
+        let mut handle = std::ptr::null_mut();
+        let create_status = unsafe {
+            ffi::fullmag_fdm_backend_create_time_policy_v2_checked(&plan_desc_v2, &mut handle)
+        };
+        if create_status != ffi::FULLMAG_FDM_OK {
+            let message = match create_status {
+                ffi::FULLMAG_FDM_ERR_INVALID => "CUDA FDM plan descriptor is invalid",
+                ffi::FULLMAG_FDM_ERR_CUDA => "CUDA FDM backend initialization failed",
+                ffi::FULLMAG_FDM_ERR_INTERNAL => "CUDA FDM backend initialization failed internally",
+                ffi::FULLMAG_FDM_ERR_INTERRUPTED => "CUDA FDM backend initialization was interrupted",
+                ffi::FULLMAG_FDM_ERR_DT_MIN_EXHAUSTED => {
+                    "CUDA FDM backend exhausted dt_min during initialization"
+                }
+                ffi::FULLMAG_FDM_ERR_ABI => "CUDA FDM plan descriptor ABI mismatch",
+                _ => "CUDA FDM backend returned an unknown initialization status",
+            };
+            return Err(RunError {
+                message: format!("{message} (status {create_status})"),
+            });
+        }
         if handle.is_null() {
             return Err(RunError {
                 message: "CUDA FDM backend_create returned null".to_string(),
@@ -1580,10 +1608,118 @@ impl NativeFdmBackend {
             .ok_or_else(|| self.last_error_or("step interrupted without an interrupt signal"))
     }
 
-    pub(crate) fn export_llg_checkpoint(&self) -> Result<NativeLlgCheckpointV1, RunError> {
+    pub(crate) fn set_checkpoint_execution_identity(
+        &mut self,
+        requested_backend: fullmag_ir::BackendTarget,
+        requested_device: &str,
+        execution_mode: fullmag_ir::ExecutionMode,
+        integrator: fullmag_ir::IntegratorChoice,
+    ) -> Result<(), RunError> {
+        let requested_backend = match requested_backend {
+            fullmag_ir::BackendTarget::Auto => ffi::FULLMAG_FDM_CHECKPOINT_BACKEND_AUTO,
+            fullmag_ir::BackendTarget::Fdm => ffi::FULLMAG_FDM_CHECKPOINT_BACKEND_FDM,
+            other => {
+                return Err(RunError {
+                    message: format!(
+                        "FDM CUDA checkpoint identity cannot request backend '{other:?}'"
+                    ),
+                })
+            }
+        };
+        let requested_device = match requested_device {
+            "auto" => ffi::FULLMAG_FDM_CHECKPOINT_DEVICE_AUTO,
+            "gpu" | "cuda" => ffi::FULLMAG_FDM_CHECKPOINT_DEVICE_GPU,
+            other => {
+                return Err(RunError {
+                    message: format!(
+                        "FDM CUDA checkpoint identity cannot request device '{other}'"
+                    ),
+                })
+            }
+        };
+        let policy = match execution_mode {
+            fullmag_ir::ExecutionMode::Strict => ffi::FULLMAG_FDM_CHECKPOINT_POLICY_STRICT,
+            fullmag_ir::ExecutionMode::Extended => ffi::FULLMAG_FDM_CHECKPOINT_POLICY_EXTENDED,
+            fullmag_ir::ExecutionMode::Hybrid => {
+                return Err(RunError {
+                    message: "FDM CUDA checkpoint identity does not support hybrid execution"
+                        .to_string(),
+                })
+            }
+        };
+        let precision = match self.precision {
+            fullmag_ir::ExecutionPrecision::Single => {
+                ffi::fullmag_fdm_precision::FULLMAG_FDM_PRECISION_SINGLE as u32
+            }
+            fullmag_ir::ExecutionPrecision::Double => {
+                ffi::fullmag_fdm_precision::FULLMAG_FDM_PRECISION_DOUBLE as u32
+            }
+        };
+        let integrator = match integrator {
+            fullmag_ir::IntegratorChoice::Heun => {
+                ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_HEUN as u32
+            }
+            fullmag_ir::IntegratorChoice::Rk4 => {
+                ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_RK4 as u32
+            }
+            fullmag_ir::IntegratorChoice::Rk23 => {
+                ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_RK23 as u32
+            }
+            fullmag_ir::IntegratorChoice::Rk45 => {
+                ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_DP45 as u32
+            }
+            fullmag_ir::IntegratorChoice::Abm3 => {
+                ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_ABM3 as u32
+            }
+        };
+        let requested_realization = if requested_device == ffi::FULLMAG_FDM_CHECKPOINT_DEVICE_AUTO {
+            0
+        } else {
+            ffi::FULLMAG_FDM_CHECKPOINT_REALIZATION_CUDA_FDM
+        };
+        let device_ordinal = residency::query_execution_device_ordinal(self)?;
+        let identity = ffi::fullmag_fdm_checkpoint_execution_identity_v3 {
+            abi_version: ffi::FULLMAG_FDM_CHECKPOINT_EXECUTION_IDENTITY_ABI_V3,
+            struct_size: std::mem::size_of::<
+                ffi::fullmag_fdm_checkpoint_execution_identity_v3,
+            >() as u32,
+            requested_backend,
+            resolved_backend: ffi::FULLMAG_FDM_CHECKPOINT_BACKEND_FDM,
+            executed_backend: ffi::FULLMAG_FDM_CHECKPOINT_BACKEND_FDM,
+            requested_policy: policy,
+            resolved_policy: policy,
+            executed_policy: policy,
+            requested_realization,
+            resolved_realization: ffi::FULLMAG_FDM_CHECKPOINT_REALIZATION_CUDA_FDM,
+            executed_realization: ffi::FULLMAG_FDM_CHECKPOINT_REALIZATION_CUDA_FDM,
+            requested_device,
+            resolved_device: ffi::FULLMAG_FDM_CHECKPOINT_DEVICE_GPU,
+            executed_device: ffi::FULLMAG_FDM_CHECKPOINT_DEVICE_GPU,
+            requested_precision: precision,
+            resolved_precision: precision,
+            executed_precision: precision,
+            requested_integrator: integrator,
+            resolved_integrator: integrator,
+            executed_integrator: integrator,
+            device_ordinal,
+            reserved0: 0,
+        };
+        let rc = unsafe {
+            ffi::fullmag_fdm_backend_set_checkpoint_execution_identity_v3(
+                self.handle,
+                &identity,
+            )
+        };
+        if rc != ffi::FULLMAG_FDM_OK {
+            return Err(self.last_error_or("committing LLG checkpoint execution identity failed"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn export_llg_checkpoint(&self) -> Result<NativeLlgCheckpointV3, RunError> {
         let mut required_bytes = 0u64;
         let rc = unsafe {
-            ffi::fullmag_fdm_backend_llg_checkpoint_query_size_v1(self.handle, &mut required_bytes)
+            ffi::fullmag_fdm_backend_llg_checkpoint_query_size_v3(self.handle, &mut required_bytes)
         };
         if rc != ffi::FULLMAG_FDM_OK {
             return Err(self.last_error_or("LLG checkpoint size query failed"));
@@ -1598,26 +1734,9 @@ impl NativeFdmBackend {
                 message: format!("failed to allocate {required_bytes} bytes for LLG checkpoint"),
             })?;
         payload.resize(payload_len, 0);
-        let mut info = ffi::fullmag_fdm_llg_checkpoint_info_v1 {
-            schema_version: 0,
-            integrator: 0,
-            precision: 0,
-            array_mask: 0,
-            cell_count: 0,
-            payload_bytes: 0,
-            step_count: 0,
-            current_time: 0.0,
-            current_dt: 0.0,
-            transport_attempt_generation: 0,
-            fsal_valid: 0,
-            abm_startup: 0,
-            abm_last_dt: 0.0,
-            adaptive_has_previous_error: 0,
-            reserved0: 0,
-            adaptive_previous_error: 0.0,
-        };
+        let mut info = ffi::fullmag_fdm_llg_checkpoint_info_v3::default();
         let rc = unsafe {
-            ffi::fullmag_fdm_backend_llg_checkpoint_export_v1(
+            ffi::fullmag_fdm_backend_llg_checkpoint_export_v3(
                 self.handle,
                 payload.as_mut_ptr().cast(),
                 required_bytes,
@@ -1627,7 +1746,7 @@ impl NativeFdmBackend {
         if rc != ffi::FULLMAG_FDM_OK {
             return Err(self.last_error_or("LLG checkpoint export failed"));
         }
-        if info.schema_version != ffi::FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V1
+        if info.schema_version != ffi::FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V3
             || info.payload_bytes != required_bytes
             || info.cell_count != self.cell_count as u64
         {
@@ -1635,7 +1754,7 @@ impl NativeFdmBackend {
                 message: "native LLG checkpoint metadata does not match the backend".to_string(),
             });
         }
-        Ok(NativeLlgCheckpointV1 {
+        Ok(NativeLlgCheckpointV3 {
             info,
             payload_sha256: Sha256::digest(&payload).into(),
             payload,
@@ -1644,16 +1763,15 @@ impl NativeFdmBackend {
 
     pub(crate) fn restore_llg_checkpoint(
         &mut self,
-        checkpoint: &NativeLlgCheckpointV1,
+        checkpoint: &NativeLlgCheckpointV3,
     ) -> Result<(), RunError> {
         let payload_bytes = u64::try_from(checkpoint.payload.len()).map_err(|_| RunError {
             message: "LLG checkpoint payload exceeds u64".to_string(),
         })?;
         let payload_sha256: [u8; 32] = Sha256::digest(&checkpoint.payload).into();
-        if checkpoint.info.schema_version != ffi::FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V1
+        if checkpoint.info.schema_version != ffi::FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V3
             || checkpoint.info.payload_bytes != payload_bytes
             || checkpoint.info.cell_count != self.cell_count as u64
-            || checkpoint.info.reserved0 != 0
             || checkpoint.payload_sha256 != payload_sha256
         {
             return Err(RunError {
@@ -1661,7 +1779,7 @@ impl NativeFdmBackend {
             });
         }
         let rc = unsafe {
-            ffi::fullmag_fdm_backend_llg_checkpoint_import_v1(
+            ffi::fullmag_fdm_backend_llg_checkpoint_import_v3(
                 self.handle,
                 checkpoint.payload.as_ptr().cast(),
                 payload_bytes,
@@ -2449,37 +2567,6 @@ impl NativeFdmBackend {
         Ok(step_stats)
     }
 
-    /// Query device info.
-    pub fn device_info(&self) -> Result<DeviceInfo, RunError> {
-        let mut info = ffi::fullmag_fdm_device_info {
-            name: [0; 128],
-            compute_capability_major: 0,
-            compute_capability_minor: 0,
-            driver_version: 0,
-            runtime_version: 0,
-        };
-
-        let rc =
-            unsafe { ffi::fullmag_fdm_backend_get_device_info(self.handle as *mut _, &mut info) };
-        if rc != ffi::FULLMAG_FDM_OK {
-            return Err(self.last_error_or("get_device_info failed"));
-        }
-
-        let name = unsafe { CStr::from_ptr(info.name.as_ptr()) }
-            .to_string_lossy()
-            .to_string();
-
-        Ok(DeviceInfo {
-            name,
-            compute_capability: format!(
-                "{}.{}",
-                info.compute_capability_major, info.compute_capability_minor
-            ),
-            driver_version: info.driver_version,
-            runtime_version: info.runtime_version,
-        })
-    }
-
     fn last_error_or(&self, fallback: &str) -> RunError {
         let err = unsafe { ffi::fullmag_fdm_backend_last_error(self.handle as *mut _) };
         let msg = if err.is_null() {
@@ -2696,16 +2783,6 @@ impl Drop for NativeFdmPreviewSnapshot {
             self.handle = std::ptr::null_mut();
         }
     }
-}
-
-/// Parsed device info.
-#[cfg(feature = "cuda")]
-#[derive(Debug, Clone)]
-pub(crate) struct DeviceInfo {
-    pub name: String,
-    pub compute_capability: String,
-    pub driver_version: i32,
-    pub runtime_version: i32,
 }
 
 #[cfg(feature = "cuda")]
@@ -3123,8 +3200,19 @@ mod tests {
         plan.enable_exchange = false;
         plan.fixed_timestep = Some(1.0e-15);
         let dt = plan.fixed_timestep.expect("fixed timestep");
+        let configure_identity = |backend: &mut NativeFdmBackend| {
+            backend
+                .set_checkpoint_execution_identity(
+                    fullmag_ir::BackendTarget::Fdm,
+                    "gpu",
+                    fullmag_ir::ExecutionMode::Strict,
+                    plan.integrator.expect("checkpoint integrator"),
+                )
+                .expect("checkpoint execution identity");
+        };
 
         let mut continuous = NativeFdmBackend::create(&plan).expect("continuous backend");
+        configure_identity(&mut continuous);
         for _ in 0..4 {
             continuous.step(dt).expect("checkpoint prefix step");
         }
@@ -3139,6 +3227,7 @@ mod tests {
             .expect("continuous magnetization");
 
         let mut restored = NativeFdmBackend::create(&plan).expect("restored backend");
+        configure_identity(&mut restored);
         restored
             .restore_llg_checkpoint(&checkpoint)
             .expect("restore LLG checkpoint");
@@ -3155,10 +3244,122 @@ mod tests {
         let mut corrupt = checkpoint.clone();
         corrupt.payload[0] ^= 1;
         let mut corrupt_target = NativeFdmBackend::create(&plan).expect("corrupt target");
+        configure_identity(&mut corrupt_target);
         let error = corrupt_target
             .restore_llg_checkpoint(&corrupt)
             .expect_err("corrupt checkpoint must fail closed");
         assert!(error.message.contains("SHA-256 mismatch"));
+    }
+
+    struct StageFaultPoll {
+        polls: u32,
+        fail_at: u32,
+    }
+
+    unsafe extern "C" fn fail_at_stage_poll(user_data: *mut c_void) -> i32 {
+        let state = unsafe { &mut *user_data.cast::<StageFaultPoll>() };
+        state.polls += 1;
+        i32::from(state.polls == state.fail_at)
+    }
+
+    fn step_stats_bytes(stats: &ffi::fullmag_fdm_step_stats) -> Vec<u8> {
+        unsafe {
+            std::slice::from_raw_parts(
+                std::ptr::from_ref(stats).cast::<u8>(),
+                std::mem::size_of_val(stats),
+            )
+            .to_vec()
+        }
+    }
+
+    #[test]
+    fn public_cuda_step_rolls_back_after_every_integrator_and_final_stats_poll() {
+        for precision in [ExecutionPrecision::Single, ExecutionPrecision::Double] {
+            for integrator in [
+                IntegratorChoice::Heun,
+                IntegratorChoice::Rk4,
+                IntegratorChoice::Abm3,
+                IntegratorChoice::Rk23,
+                IntegratorChoice::Rk45,
+            ] {
+                let mut plan = make_masked_test_plan(false, precision);
+                plan.enable_exchange = false;
+                plan.external_field = Some([1.5e3, -2.0e3, 7.5e2]);
+                plan.integrator = Some(integrator);
+                plan.fixed_timestep = Some(1.0e-15);
+                let dt = plan.fixed_timestep.expect("fault-matrix timestep");
+
+                let mut baseline = NativeFdmBackend::create(&plan).expect("baseline backend");
+                baseline.step(dt).expect("baseline accepted step");
+                let expected = baseline
+                    .copy_m(plan.initial_magnetization.len())
+                    .expect("baseline magnetization");
+
+                let mut interrupted_polls = 0u32;
+                let mut completed_without_injection = false;
+                for fail_at in 1..=32u32 {
+                    let mut backend =
+                        NativeFdmBackend::create(&plan).expect("fault-injected backend");
+                    let initial = backend
+                        .copy_m(plan.initial_magnetization.len())
+                        .expect("initial magnetization");
+                    let mut poll = StageFaultPoll { polls: 0, fail_at };
+                    let rc = unsafe {
+                        ffi::fullmag_fdm_backend_set_interrupt_poll(
+                            backend.handle,
+                            Some(fail_at_stage_poll),
+                            std::ptr::from_mut(&mut poll).cast::<c_void>(),
+                        )
+                    };
+                    assert_eq!(rc, ffi::FULLMAG_FDM_OK);
+
+                    let mut stats: ffi::fullmag_fdm_step_stats = unsafe {
+                        let mut value = std::mem::MaybeUninit::uninit();
+                        std::ptr::write_bytes(value.as_mut_ptr(), 0x5a, 1);
+                        value.assume_init()
+                    };
+                    let stats_before = step_stats_bytes(&stats);
+                    let rc = unsafe {
+                        ffi::fullmag_fdm_backend_step(backend.handle, dt, &mut stats)
+                    };
+                    if rc == ffi::FULLMAG_FDM_OK {
+                        assert_eq!(fail_at, interrupted_polls + 1);
+                        completed_without_injection = true;
+                        break;
+                    }
+                    assert_eq!(rc, ffi::FULLMAG_FDM_ERR_INTERRUPTED);
+                    interrupted_polls += 1;
+                    assert_eq!(step_stats_bytes(&stats), stats_before);
+                    assert_eq!(
+                        backend
+                            .copy_m(plan.initial_magnetization.len())
+                            .expect("rolled-back magnetization"),
+                        initial
+                    );
+
+                    let rc = unsafe {
+                        ffi::fullmag_fdm_backend_set_interrupt_poll(
+                            backend.handle,
+                            None,
+                            std::ptr::null_mut(),
+                        )
+                    };
+                    assert_eq!(rc, ffi::FULLMAG_FDM_OK);
+                    backend.step(dt).expect("retry after injected fault");
+                    assert_eq!(
+                        backend
+                            .copy_m(plan.initial_magnetization.len())
+                            .expect("retried magnetization"),
+                        expected
+                    );
+                }
+                assert!(
+                    interrupted_polls >= 2,
+                    "{integrator:?}/{precision:?} must expose integrator and final-stats polls"
+                );
+                assert!(completed_without_injection, "fault poll matrix must terminate");
+            }
+        }
     }
 
     fn make_masked_test_plan(enable_demag: bool, precision: ExecutionPrecision) -> FdmPlanIR {

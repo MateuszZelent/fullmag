@@ -1,0 +1,307 @@
+{
+  "title": "FullMag LLG remediation package",
+  "audit_commit": "04e362df5dd51b1e6acca3aab9033c8124d3d6d0",
+  "finding_count": 52,
+  "files": [
+    {
+      "path": "IMPLEMENTATION_SEQUENCE.md",
+      "bytes": 3266,
+      "sha256": "b3fa5b2bd5fb7fae4afa133cbeff1eb223e4709a33eb6881752df68118cde594"
+    },
+    {
+      "path": "MAPPING_TO_AUDIT.md",
+      "bytes": 1035,
+      "sha256": "588045f1844d5e891fb260acc5117a65c98cf8a9f0378e3f996946899b082111"
+    },
+    {
+      "path": "README.md",
+      "bytes": 9667,
+      "sha256": "84eedcd32f3ad0af032551768b942b976b0ddce98cfe67b8cd037ba6514c1f60"
+    },
+    {
+      "path": "REVIEW_CHECKLIST.md",
+      "bytes": 2181,
+      "sha256": "5ab12eb48725acc3af94f110f3658bfb753f460f7baabba8518ff5bc5890c435"
+    },
+    {
+      "path": "fdm-cpu/FDM-CPU-ARCH-001.md",
+      "bytes": 7821,
+      "sha256": "c6442fa221c580ce9d138c41151ca338e13274fa2298c2bb41905d87f2a2333a"
+    },
+    {
+      "path": "fdm-cpu/FDM-CPU-NUM-001.md",
+      "bytes": 8817,
+      "sha256": "e2ee61573f6b4fc6bd1f8b67234faf1a2736c3f3e28d859cf4321e592377e834"
+    },
+    {
+      "path": "fdm-cpu/FDM-CPU-NUM-002.md",
+      "bytes": 7970,
+      "sha256": "856971f80e8c3918657912b3cdda4b7ea6f4d044972a661b8650e34d75accfa8"
+    },
+    {
+      "path": "fdm-cpu/FDM-CPU-NUM-003.md",
+      "bytes": 7640,
+      "sha256": "3629ff68e0cb9dba358bae38b49c81b2b9ea4d165cbb27dc80ae750759f04012"
+    },
+    {
+      "path": "fdm-cpu/FDM-CPU-PERF-001.md",
+      "bytes": 8290,
+      "sha256": "92e247b9f93df766c248ebe0ac0aa34547de06eb92333abd8b94729c26cbbcce"
+    },
+    {
+      "path": "fdm-cpu/FDM-CPU-PERF-002.md",
+      "bytes": 7970,
+      "sha256": "4e8cbce29f44c827010dfccd728aa15cb7216307842a8a4dae5f3c75a003af0a"
+    },
+    {
+      "path": "fdm-cpu/FDM-CPU-PERF-003.md",
+      "bytes": 7762,
+      "sha256": "f1c9e6e236883663c3010963cfd86b16e70d1af9ba1ad40c95075d5fe48c0b8b"
+    },
+    {
+      "path": "fdm-cpu/FDM-CPU-PHY-001.md",
+      "bytes": 7851,
+      "sha256": "d2a9bc5f07615aa95e1b5739cd1c75c8108e237c71658002d67098740aca93c3"
+    },
+    {
+      "path": "fdm-cpu/FDM-CPU-PHY-002.md",
+      "bytes": 7829,
+      "sha256": "f8e68ab68eb390e371cef10e7b495c4f40eb4d0de4e77129655eabcd9329a41e"
+    },
+    {
+      "path": "fdm-cpu/FDM-CPU-QUAL-001.md",
+      "bytes": 7768,
+      "sha256": "06f935ae270022c3d561b6b40386ff7235385c87e646777e58cf4ed898ae5bc6"
+    },
+    {
+      "path": "fdm-cpu/FDM-CPU-TRX-001.md",
+      "bytes": 8254,
+      "sha256": "f33bb02fea6443008cb121b04426a559bc9021435c7b5b5472082c9581fb6e6e"
+    },
+    {
+      "path": "fdm-cpu/README.md",
+      "bytes": 1554,
+      "sha256": "baeeeb6de3a80bfed6e66d7e4052f13012a51e458f5b1a4ddfce6ee5d6dfab58"
+    },
+    {
+      "path": "fdm-gpu/FDM-GPU-ABI-001.md",
+      "bytes": 8482,
+      "sha256": "27ceb532e4133fe2cb93e81cfaaad7665bf6acd3871630ffbf175ca86a0946ba"
+    },
+    {
+      "path": "fdm-gpu/FDM-GPU-ARCH-001.md",
+      "bytes": 8038,
+      "sha256": "c1115ba5a6b582aec757b54df6642d8053beb67a1921e57c608a479c08f087c1"
+    },
+    {
+      "path": "fdm-gpu/FDM-GPU-NUM-001.md",
+      "bytes": 7727,
+      "sha256": "b0250023296d740efbbaaf9d3b8df83b4fbc01e498bb3960262b65b8fbd371dc"
+    },
+    {
+      "path": "fdm-gpu/FDM-GPU-NUM-002.md",
+      "bytes": 7660,
+      "sha256": "68d630422311c17edc2ea2fe6e5d8e5f58efd41d14d56c176b2b1165cb09c5b6"
+    },
+    {
+      "path": "fdm-gpu/FDM-GPU-NUM-003.md",
+      "bytes": 7778,
+      "sha256": "3ba466cc092d0a5518cc0413fa00b3369ec459b035804174675e02c87432bd1c"
+    },
+    {
+      "path": "fdm-gpu/FDM-GPU-PERF-001.md",
+      "bytes": 7948,
+      "sha256": "5b52e6da8c206948fe9f57624a47519d8191ea454650f786fa9c7dea8a538a11"
+    },
+    {
+      "path": "fdm-gpu/FDM-GPU-PERF-002.md",
+      "bytes": 7878,
+      "sha256": "cea1b57a0d573deec8f34888c70298bc45bb1ae571ae8f43f73364197492836f"
+    },
+    {
+      "path": "fdm-gpu/FDM-GPU-PERF-003.md",
+      "bytes": 7792,
+      "sha256": "06d5df45d7d8b91986edad02539801cf8152ae3bee63865b2d8506122b5b1af5"
+    },
+    {
+      "path": "fdm-gpu/FDM-GPU-PERF-004.md",
+      "bytes": 7858,
+      "sha256": "d2972e7b472e536b5a6ddf0c4e90867712bd7a784743c68785cf739b8cabc664"
+    },
+    {
+      "path": "fdm-gpu/FDM-GPU-PHY-001.md",
+      "bytes": 7802,
+      "sha256": "c6467e67b87d6668514788471fc164769bd3a532a1e28a06226da463749ae8d4"
+    },
+    {
+      "path": "fdm-gpu/FDM-GPU-QUAL-001.md",
+      "bytes": 7713,
+      "sha256": "1b3287177296b8636c0ce9a8152aba149d5cf20ab1ced104532a416cbfb7b1cc"
+    },
+    {
+      "path": "fdm-gpu/FDM-GPU-TRX-001.md",
+      "bytes": 7986,
+      "sha256": "46ebb65227ebe76b225a734ff56947ae1e1cb8d9dbefac4be46d1c6e22fac4e8"
+    },
+    {
+      "path": "fdm-gpu/README.md",
+      "bytes": 1741,
+      "sha256": "158e60d45da933f5eca9145eeea4aab97b837e941e61ecf2e9c184aa55f6d21f"
+    },
+    {
+      "path": "fem-cpu/FEM-CPU-ARCH-001.md",
+      "bytes": 7776,
+      "sha256": "888b19ac72e34d61b040914f0d1bf09b8a7ec25d849e76b0766c52c3bf56608d"
+    },
+    {
+      "path": "fem-cpu/FEM-CPU-NUM-001.md",
+      "bytes": 7653,
+      "sha256": "4eee89738f889d810e203dff37a85dd577b3bf68431aa64e0484dd3bee762567"
+    },
+    {
+      "path": "fem-cpu/FEM-CPU-NUM-002.md",
+      "bytes": 7539,
+      "sha256": "c84cff3b9efe63dd17507a456ca148d979ecec1509f5f708409162ab883a7400"
+    },
+    {
+      "path": "fem-cpu/FEM-CPU-PERF-001.md",
+      "bytes": 8039,
+      "sha256": "916c4bd019153a7fae71f1616d7b57773ab5d9dcd90d8ba7ab3601487dd81ff6"
+    },
+    {
+      "path": "fem-cpu/FEM-CPU-PERF-002.md",
+      "bytes": 7900,
+      "sha256": "d0567cfd9a6329907aa6eb7bb88f278ecc4f4964dc7c136da88588574df99f59"
+    },
+    {
+      "path": "fem-cpu/FEM-CPU-PERF-003.md",
+      "bytes": 7690,
+      "sha256": "eff143dc1a560602d859e5200eddc48f4de635308f250e96fa7ad989b6e09185"
+    },
+    {
+      "path": "fem-cpu/FEM-CPU-PERF-004.md",
+      "bytes": 7635,
+      "sha256": "913374adddaa79ab7eb2e62437a10977f8f47c7fe83d1624b83b8a409130fc58"
+    },
+    {
+      "path": "fem-cpu/FEM-CPU-PERF-005.md",
+      "bytes": 8020,
+      "sha256": "0ec96d3b38be041fd6de53c24875c373925127006ff1785efbc9d85cbd68bce9"
+    },
+    {
+      "path": "fem-cpu/FEM-CPU-PERF-006.md",
+      "bytes": 7749,
+      "sha256": "fbfe614f70c720e5cf21f5d2bfb62506075716fb921fe904bfebf285f54b4923"
+    },
+    {
+      "path": "fem-cpu/FEM-CPU-PERF-007.md",
+      "bytes": 7377,
+      "sha256": "88eedb09ccfeb40696d9519b7a418feeb6ae0cf28a46b72bd6b6c174f68b171e"
+    },
+    {
+      "path": "fem-cpu/FEM-CPU-PHY-001.md",
+      "bytes": 7836,
+      "sha256": "44d23efa68a444b9bcf57b132e37904b6ffb5f58e8c49597875ba875e75abe9a"
+    },
+    {
+      "path": "fem-cpu/FEM-CPU-QUAL-001.md",
+      "bytes": 7559,
+      "sha256": "c81462942e19fa233851c4094189dbfda25bfff36db1f577cf746f26db895324"
+    },
+    {
+      "path": "fem-cpu/README.md",
+      "bytes": 1705,
+      "sha256": "0ec73fdac5016db5d06fbc23275fcfdefdff579c70fa798f41f292c0dece9cee"
+    },
+    {
+      "path": "fem-gpu/FEM-GPU-ARCH-001.md",
+      "bytes": 7628,
+      "sha256": "b06d17f9fc2e37302bf347b7eb0c5a69293d6ccad5ae98d9d67eb576a86e031f"
+    },
+    {
+      "path": "fem-gpu/FEM-GPU-NUM-001.md",
+      "bytes": 7297,
+      "sha256": "78bf741a23538bb7add9eee238a40a8f89dbdc3ce3bd66aac14958aece235418"
+    },
+    {
+      "path": "fem-gpu/FEM-GPU-NUM-002.md",
+      "bytes": 7188,
+      "sha256": "9924b41376f68e2f2cca1910aa68496150e48102da1594ec1d143f6199c033db"
+    },
+    {
+      "path": "fem-gpu/FEM-GPU-NUM-003.md",
+      "bytes": 7406,
+      "sha256": "17b494a92df1ff3fdb635b9fc671fd667826b8ff918c9b6411cfb19f3a5b508a"
+    },
+    {
+      "path": "fem-gpu/FEM-GPU-PERF-001.md",
+      "bytes": 7697,
+      "sha256": "afacfd7cc22abd76b844530ae6282116e3c24d42de7599586dde6c1e788ce8b3"
+    },
+    {
+      "path": "fem-gpu/FEM-GPU-PERF-002.md",
+      "bytes": 7542,
+      "sha256": "8b1a9bff390d885ede16dd70a177ac5d2e8bbcd98216a2f1f918359e86d52051"
+    },
+    {
+      "path": "fem-gpu/FEM-GPU-PERF-003.md",
+      "bytes": 7519,
+      "sha256": "05c3b58a1a1bf4cc7a5d396746d7b9a760484e690b3eafeeebae7c8774de0adb"
+    },
+    {
+      "path": "fem-gpu/FEM-GPU-PERF-004.md",
+      "bytes": 7494,
+      "sha256": "b9be9ca2b888375851852aed701efb54ca1faed8305fc757ca07c63e7f057ef7"
+    },
+    {
+      "path": "fem-gpu/FEM-GPU-PERF-005.md",
+      "bytes": 7277,
+      "sha256": "b0f208d59bdd1c9cc1ea3908806ee7d72f63bac187a42e15f75e8e40e2ff9021"
+    },
+    {
+      "path": "fem-gpu/FEM-GPU-PERF-006.md",
+      "bytes": 7119,
+      "sha256": "a886f654eb166ef384d7b036b7b6354415b438b276e643aa2a38046034f90018"
+    },
+    {
+      "path": "fem-gpu/FEM-GPU-PERF-007.md",
+      "bytes": 7314,
+      "sha256": "3f8726c63520e4e48b4959ebfcf45f39eb26a8cc8a178dfff876f0321649b726"
+    },
+    {
+      "path": "fem-gpu/FEM-GPU-PERF-008.md",
+      "bytes": 7291,
+      "sha256": "c79dbb6a5e36a359b602941c1440fdf36c4685f20e9937607f2653b454354761"
+    },
+    {
+      "path": "fem-gpu/FEM-GPU-PERF-009.md",
+      "bytes": 7446,
+      "sha256": "c2957716b5cded49dd2e2ca36a435e655d1c3122ed49467529061d072299d610"
+    },
+    {
+      "path": "fem-gpu/FEM-GPU-PERF-010.md",
+      "bytes": 7415,
+      "sha256": "34298715ea99a7d3737b6fee9e265e0babdd672100e8051e531650fd7b42e164"
+    },
+    {
+      "path": "fem-gpu/FEM-GPU-PHY-001.md",
+      "bytes": 7440,
+      "sha256": "51bb57ba4a7e3e9d7c76ec3e1f8bd76bf35687d804428d3f38ecc4d35c4b4c86"
+    },
+    {
+      "path": "fem-gpu/FEM-GPU-QUAL-001.md",
+      "bytes": 7427,
+      "sha256": "94074acf53c654112f00dde461e390b56fe33fd97df963ddacc85403f40e0baa"
+    },
+    {
+      "path": "fem-gpu/FEM-GPU-TRX-001.md",
+      "bytes": 7481,
+      "sha256": "cefa36e801da1c0103f167b012af6262bf94566ceca384c3902f22d0e5313f3d"
+    },
+    {
+      "path": "fem-gpu/README.md",
+      "bytes": 2390,
+      "sha256": "74b051099e0534a50b86f4f64fe930d1d45069857e5480e5b68b0938d52714a3"
+    }
+  ]
+}
