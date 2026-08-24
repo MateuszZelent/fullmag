@@ -131,6 +131,7 @@ export async function createMaterialThenAssign(
   draft: CreateMaterialDraft,
   baseRevision: number,
   onMaterialCreated?: (created: AuthoringTransactionResponse) => void,
+  shouldContinue?: () => boolean,
 ): Promise<{
   assigned: SceneResource;
   created: AuthoringTransactionResponse;
@@ -148,6 +149,15 @@ export async function createMaterialThenAssign(
     { baseRevision },
   );
   onMaterialCreated?.(created);
+  if (shouldContinue && !shouldContinue()) {
+    throw new MaterialAssignmentAfterCreateError(
+      objectId,
+      materialId,
+      created,
+      anisotropy,
+      new Error("Material assignment transaction scope is no longer active."),
+    );
+  }
   try {
     const assigned = await api.model.patchObject(objectId, {
       base_revision: created.scene_revision,

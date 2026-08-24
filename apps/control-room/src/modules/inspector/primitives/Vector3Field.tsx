@@ -54,6 +54,7 @@ export function Vector3Field({
                   type="text"
                   value={values[index] ?? ""}
                   onChange={(event) => onChange(index as 0 | 1 | 2, event.target.value)}
+                  onInput={(event) => onChange(index as 0 | 1 | 2, event.currentTarget.value)}
                 />
                 {errors?.[index] ? (
                   <span

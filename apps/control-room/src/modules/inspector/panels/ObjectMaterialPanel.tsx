@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import {
   acknowledgedAuthoringSceneRevision,
@@ -15,6 +15,7 @@ import {
   useObjectInteractionResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -78,6 +79,57 @@ type Feedback =
   | null;
 
 type PendingOperation = "anisotropy" | "assignment" | "create-assign" | "parameters" | "retry-assign";
+const EMPTY_PENDING_OPERATIONS: ReadonlySet<PendingOperation> = new Set();
+type AnisotropyField = keyof AnisotropyDraft;
+type MagneticDraftField = keyof MagneticParametersDraft;
+
+interface PanelScope {
+  key: string;
+  token: symbol;
+}
+
+interface PendingOperationsState {
+  operations: ReadonlySet<PendingOperation>;
+  scopeKey: string;
+  scopeToken: symbol;
+}
+
+interface AssignmentFailureState {
+  error: MaterialAssignmentAfterCreateError;
+  rebasedRevision: number | null;
+  refreshError: string | null;
+  refreshPhase: "idle" | "requested" | "loading" | "ready" | "error";
+  scopeKey: string;
+  scopeToken: symbol;
+  transactionId: number;
+}
+
+function effectiveAssignmentRefreshPhase(
+  failure: AssignmentFailureState,
+  scene: ReturnType<typeof useSceneResource>,
+): AssignmentFailureState["refreshPhase"] {
+  if (failure.refreshPhase === "requested") {
+    if (scene.status === "loading" || scene.status === "stale") return "loading";
+    if (
+      scene.status === "ready" &&
+      typeof scene.data?.revision === "number" &&
+      scene.data.revision > failure.error.assignmentBaseRevision
+    ) {
+      return "ready";
+    }
+    return "requested";
+  }
+  if (failure.refreshPhase !== "loading") return failure.refreshPhase;
+  if (scene.status === "error") return "error";
+  if (
+    scene.status === "ready" &&
+    typeof scene.data?.revision === "number" &&
+    scene.data.revision > failure.error.assignmentBaseRevision
+  ) {
+    return "ready";
+  }
+  return "loading";
+}
 
 function newMaterialDraft(objectName: string): CreateMaterialDraft {
   const slug = objectName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
@@ -98,8 +150,22 @@ function errorMessage(error: unknown): string {
 
 function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]) {
   const { api, resources } = useKernel();
+  const sessionIdentity = useSessionResourceIdentity();
   const scene = useSceneResource();
   const object = resolveGeometryObjectDraft(selection, scene.data);
+  const sessionIdentityKey = sessionIdentity
+    ? `${sessionIdentity.sessionId}:${sessionIdentity.sessionEpoch}`
+    : "session:unknown";
+  const scopeKey = `${sessionIdentityKey}|${object.mode}|${object.objectId}`;
+  const scopeRef = useRef<PanelScope>({ key: scopeKey, token: Symbol(scopeKey) });
+  if (scopeRef.current.key !== scopeKey) {
+    scopeRef.current = { key: scopeKey, token: Symbol(scopeKey) };
+  }
+  const scope = scopeRef.current;
+  const isCurrentScope = useCallback(
+    () => scopeRef.current.token === scope.token && scopeRef.current.key === scope.key,
+    [scope],
+  );
   const materialId = normalizeMaterialRef(object.material);
   const material = useMaterialResource(materialId);
   const anisotropyInteraction = useObjectInteractionResource(
@@ -116,15 +182,20 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
   );
   const [anisotropyDraftState, setAnisotropyDraftState] = useState<{
     draft: AnisotropyDraft;
+    dirtyFields: ReadonlySet<AnisotropyField>;
     key: string;
-  }>({ draft: baseAnisotropyDraft, key: "" });
+    scopeKey: string;
+    scopeToken: symbol;
+  }>({ draft: baseAnisotropyDraft, dirtyFields: new Set(), key: "", scopeKey, scopeToken: scope.token });
   const anisotropyDraftKey = [
     object.objectId,
     String(anisotropyInteraction.data?.present ?? false),
     String(anisotropyInteraction.data?.params ? JSON.stringify(anisotropyInteraction.data.params) : ""),
   ].join(":");
   const anisotropyDraft =
-    anisotropyDraftState.key === anisotropyDraftKey
+    anisotropyDraftState.scopeKey === scopeKey &&
+    anisotropyDraftState.scopeToken === scope.token &&
+    (anisotropyDraftState.key === anisotropyDraftKey || anisotropyDraftState.dirtyFields.size > 0)
       ? anisotropyDraftState.draft
       : baseAnisotropyDraft;
   const baseDraft = useMemo(
@@ -145,7 +216,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
     object.material,
     material.data ?? null,
   )}`;
-  const draftIdentityKey = [object.mode, object.objectId].join(":");
+  const draftIdentityKey = [scopeKey, object.mode, object.objectId].join(":");
   const [draftState, setDraftState] = useState<
     InspectorDraftState<MagneticParametersDraft>
   >(() =>
@@ -155,22 +226,48 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
       identityKey: draftIdentityKey,
     }),
   );
-  const [feedback, setFeedback] = useState<Feedback>(null);
-  const [pendingOperations, setPendingOperations] = useState<ReadonlySet<PendingOperation>>(
-    () => new Set(),
+  const [feedbackState, setFeedbackState] = useState<{
+    value: Feedback;
+    scopeToken: symbol;
+  }>(() => ({ value: null, scopeToken: scope.token }));
+  const feedback = feedbackState.scopeToken === scope.token ? feedbackState.value : null;
+  const setFeedback = useCallback(
+    (value: Feedback) => setFeedbackState({ value, scopeToken: scope.token }),
+    [scope],
+  );
+  const [pendingOperationsState, setPendingOperationsState] = useState<PendingOperationsState>(
+    () => ({ operations: new Set(), scopeKey, scopeToken: scope.token }),
   );
   const [createDraftState, setCreateDraftState] = useState<{
     draft: CreateMaterialDraft;
     objectId: string;
-  }>(() => ({ draft: newMaterialDraft(object.name), objectId: object.objectId }));
-  const createDraft = createDraftState.objectId === object.objectId
+    scopeKey: string;
+    scopeToken: symbol;
+  }>(() => ({ draft: newMaterialDraft(object.name), objectId: object.objectId, scopeKey, scopeToken: scope.token }));
+  const createDraft = createDraftState.scopeKey === scopeKey &&
+    createDraftState.scopeToken === scope.token &&
+    createDraftState.objectId === object.objectId
     ? createDraftState.draft
     : newMaterialDraft(object.name);
-  const [assignmentFailure, setAssignmentFailure] = useState<{
-    error: MaterialAssignmentAfterCreateError;
-    refreshCompleted: boolean;
-    rebasedRevision: number | null;
-  } | null>(null);
+  const [assignmentFailureState, setAssignmentFailureState] = useState<AssignmentFailureState | null>(null);
+  const pendingOperations = pendingOperationsState.scopeKey === scopeKey && pendingOperationsState.scopeToken === scope.token
+    ? pendingOperationsState.operations
+    : EMPTY_PENDING_OPERATIONS;
+  const assignmentFailure = assignmentFailureState?.scopeKey === scopeKey && assignmentFailureState.scopeToken === scope.token
+    ? {
+        ...assignmentFailureState,
+        refreshPhase: effectiveAssignmentRefreshPhase(assignmentFailureState, scene),
+        refreshError:
+          assignmentFailureState.refreshError ??
+          (assignmentFailureState.refreshPhase === "loading" && scene.status === "error"
+            ? errorMessage(scene.error)
+            : null),
+      }
+    : null;
+  const draftFieldRevisionsRef = useRef<Map<MagneticDraftField, number>>(new Map());
+  const anisotropyFieldRevisionsRef = useRef<Map<AnisotropyField, number>>(new Map());
+  const draftTransactionRevisionRef = useRef(0);
+
   const { draft } = resolveInspectorDraftState({
     baseDraft,
     baseKey: draftKey,
@@ -181,26 +278,59 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
   const draftMaterialId = normalizeMaterialRef(draft.materialRef);
   const parametersTargetChanged = draftMaterialId !== materialId;
 
-  function startPending(operation: PendingOperation): void {
-    setPendingOperations((current) => new Set(current).add(operation));
+  function startPending(operation: PendingOperation, pendingScope = scope): void {
+    setPendingOperationsState((current) => {
+      if (current.scopeToken !== pendingScope.token) {
+        draftFieldRevisionsRef.current.clear();
+        anisotropyFieldRevisionsRef.current.clear();
+        return {
+          operations: new Set([operation]),
+          scopeKey: pendingScope.key,
+          scopeToken: pendingScope.token,
+        };
+      }
+      return {
+        operations: new Set(current.operations).add(operation),
+        scopeKey: pendingScope.key,
+        scopeToken: pendingScope.token,
+      };
+    });
   }
 
-  function finishPending(operation: PendingOperation): void {
-    setPendingOperations((current) => {
-      const next = new Set(current);
+  function finishPending(operation: PendingOperation, pendingScope = scope): void {
+    setPendingOperationsState((current) => {
+      if (current.scopeToken !== pendingScope.token) return current;
+      const next = new Set(current.operations);
       next.delete(operation);
-      return next;
+      return { operations: next, scopeKey: pendingScope.key, scopeToken: pendingScope.token };
     });
   }
 
   function updateAnisotropyDraft(patch: Partial<AnisotropyDraft>): void {
-    setAnisotropyDraftState((current) => ({
-      draft: {
-        ...(current.key === anisotropyDraftKey ? current.draft : baseAnisotropyDraft),
-        ...patch,
-      },
-      key: anisotropyDraftKey,
-    }));
+    const fields = Object.keys(patch) as AnisotropyField[];
+    for (const field of fields) {
+      anisotropyFieldRevisionsRef.current.set(
+        field,
+        (anisotropyFieldRevisionsRef.current.get(field) ?? 0) + 1,
+      );
+    }
+    setAnisotropyDraftState((current) => {
+      const sameKey = current.scopeToken === scope.token && current.key === anisotropyDraftKey;
+      const dirtyFields = sameKey
+        ? new Set(current.dirtyFields)
+        : new Set<AnisotropyField>();
+      for (const field of fields) dirtyFields.add(field);
+      return {
+        draft: {
+          ...(sameKey ? current.draft : baseAnisotropyDraft),
+          ...patch,
+        },
+        dirtyFields,
+        key: anisotropyDraftKey,
+        scopeKey,
+        scopeToken: scope.token,
+      };
+    });
   }
 
   async function applyAnisotropy(): Promise<boolean> {
@@ -217,7 +347,8 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
       return false;
     }
     const value = anisotropy.value ?? { axis: [0, 0, 1] as [number, number, number], ku1: 0 };
-    startPending("anisotropy");
+    const operationScope = scope;
+    startPending("anisotropy", operationScope);
     try {
       const response = await api.model.patchObjectInteraction(
         object.objectId,
@@ -228,6 +359,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
         },
       );
       const revision = acknowledgedAuthoringSceneRevision(response);
+      if (!isCurrentScope()) return false;
       resources.invalidate(
         resolveObjectInteractionResourceKey(object.objectId, "uniaxial_anisotropy"),
         revision,
@@ -236,24 +368,59 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
       setFeedback({ kind: "success", message: "Uniaxial anisotropy updated." });
       return true;
     } catch (error) {
+      if (!isCurrentScope()) return false;
       setFeedback({ kind: "error", message: errorMessage(error) });
       return false;
     } finally {
-      finishPending("anisotropy");
+      finishPending("anisotropy", operationScope);
     }
   }
 
   function updateDraft(patch: Partial<MagneticParametersDraft>): void {
-    setDraftState(
+    const fields = Object.keys(patch) as MagneticDraftField[];
+    for (const field of fields) {
+      draftFieldRevisionsRef.current.set(
+        field,
+        (draftFieldRevisionsRef.current.get(field) ?? 0) + 1,
+      );
+    }
+    setDraftState((current) =>
       updateInspectorDraftState({
         baseDraft,
         baseKey: draftKey,
-        currentDraft: draft,
+        currentDraft:
+          current.identityKey === draftIdentityKey ? current.draft : baseDraft,
         identityKey: draftIdentityKey,
         isDirty: magneticParametersDraftDirty,
         patch,
       }),
     );
+  }
+
+  function mergeDraftPatch(
+    patch: Partial<MagneticParametersDraft>,
+    expectedRevisions: ReadonlyMap<MagneticDraftField, number>,
+    pendingScope: PanelScope,
+  ): void {
+    if (!isCurrentScope() || pendingScope.token !== scope.token) return;
+    setDraftState((current) => {
+      if (current.identityKey !== draftIdentityKey) return current;
+      const mergedPatch: Partial<MagneticParametersDraft> = {};
+      for (const [field, value] of Object.entries(patch) as [MagneticDraftField, MagneticParametersDraft[MagneticDraftField]][]) {
+        if ((draftFieldRevisionsRef.current.get(field) ?? 0) === (expectedRevisions.get(field) ?? 0)) {
+          mergedPatch[field] = value;
+        }
+      }
+      if (Object.keys(mergedPatch).length === 0) return current;
+      return updateInspectorDraftState({
+        baseDraft,
+        baseKey: draftKey,
+        currentDraft: current.draft,
+        identityKey: draftIdentityKey,
+        isDirty: magneticParametersDraftDirty,
+        patch: mergedPatch,
+      });
+    });
   }
 
   async function applyMaterial(): Promise<boolean> {
@@ -262,13 +429,15 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
       return false;
     }
 
-    startPending("assignment");
+    const operationScope = scope;
+    startPending("assignment", operationScope);
     try {
       const sceneResponse = await api.model.patchObject(
         object.objectId,
         buildMaterialAssignmentPatch(draft, object.baseRevision),
       );
       const revision = acknowledgedAuthoringSceneRevision(sceneResponse);
+      if (!isCurrentScope()) return false;
       invalidateMagneticParameterResources(revision);
       setFeedback({
         kind: "success",
@@ -276,10 +445,11 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
       });
       return true;
     } catch (error) {
+      if (!isCurrentScope()) return false;
       setFeedback({ kind: "error", message: errorMessage(error) });
       return false;
     } finally {
-      finishPending("assignment");
+      finishPending("assignment", operationScope);
     }
   }
 
@@ -305,10 +475,12 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
       return false;
     }
 
-    startPending("parameters");
+    const operationScope = scope;
+    startPending("parameters", operationScope);
     try {
       const response = await api.model.patchMaterial(materialId, result.patch);
       const revision = acknowledgedAuthoringSceneRevision(response);
+      if (!isCurrentScope()) return false;
       resources.invalidate(resolveMaterialResourceKey(materialId), revision);
       invalidateMagneticParameterResources(revision);
       setFeedback({
@@ -317,10 +489,11 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
       });
       return true;
     } catch (error) {
+      if (!isCurrentScope()) return false;
       setFeedback({ kind: "error", message: errorMessage(error) });
       return false;
     } finally {
-      finishPending("parameters");
+      finishPending("parameters", operationScope);
     }
   }
 
@@ -331,29 +504,43 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
   function updateCreateDraft(patch: Partial<CreateMaterialDraft>): void {
     setCreateDraftState((current) => ({
       draft: {
-        ...(current.objectId === object.objectId
+        ...(current.scopeToken === scope.token && current.objectId === object.objectId
           ? current.draft
           : newMaterialDraft(object.name)),
         ...patch,
       },
       objectId: object.objectId,
+      scopeKey,
+      scopeToken: scope.token,
     }));
     setFeedback(null);
   }
 
   function stageDeferredAnisotropy(
     anisotropy: { axis: [number, number, number]; ku1: number } | null,
+    pendingScope = scope,
   ): void {
-    if (!anisotropy) return;
-    setAnisotropyDraftState({
-      draft: {
-        axisX: String(anisotropy.axis[0]),
-        axisY: String(anisotropy.axis[1]),
-        axisZ: String(anisotropy.axis[2]),
-        ku1: String(anisotropy.ku1),
-        present: true,
-      },
-      key: anisotropyDraftKey,
+    if (!anisotropy || !isCurrentScope() || pendingScope.token !== scope.token) return;
+    const staged: Partial<AnisotropyDraft> = {
+      axisX: String(anisotropy.axis[0]),
+      axisY: String(anisotropy.axis[1]),
+      axisZ: String(anisotropy.axis[2]),
+      ku1: String(anisotropy.ku1),
+      present: true,
+    };
+    setAnisotropyDraftState((current) => {
+      const sameKey = current.scopeToken === scope.token && current.key === anisotropyDraftKey;
+      const merged: AnisotropyDraft = {
+        ...(sameKey ? current.draft : baseAnisotropyDraft),
+      };
+      const dirtyFields = sameKey ? new Set(current.dirtyFields) : new Set<AnisotropyField>();
+      for (const [field, value] of Object.entries(staged) as [AnisotropyField, AnisotropyDraft[AnisotropyField]][]) {
+        if (!dirtyFields.has(field)) {
+          Object.assign(merged, { [field]: value });
+          dirtyFields.add(field);
+        }
+      }
+      return { draft: merged, dirtyFields, key: anisotropyDraftKey, scopeKey, scopeToken: scope.token };
     });
   }
 
@@ -367,8 +554,13 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
       setFeedback({ kind: "error", message: validation.error });
       return;
     }
-    startPending("create-assign");
-    setAssignmentFailure(null);
+    const operationScope = scope;
+    const transactionId = ++draftTransactionRevisionRef.current;
+    const expectedDraftRevisions = new Map(draftFieldRevisionsRef.current);
+    startPending("create-assign", operationScope);
+    setAssignmentFailureState((current) =>
+      current?.scopeToken === operationScope.token ? null : current,
+    );
     try {
       const result = await createMaterialThenAssign(
         api,
@@ -376,6 +568,7 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
         createDraft,
         object.baseRevision,
         (created) => {
+          if (!isCurrentScope()) return;
           publishCommittedSceneResource(
             resources,
             created.committed_scene,
@@ -389,7 +582,9 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
           );
           invalidateMagneticParameterResources(created.scene_revision);
         },
+        isCurrentScope,
       );
+      if (!isCurrentScope()) return;
       const assignmentRevision = acknowledgedAuthoringSceneRevision(result.assigned);
       publishCommittedSceneResource(
         resources,
@@ -399,8 +594,8 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
         false,
       );
       invalidateMagneticParameterResources(assignmentRevision);
-      updateDraft({ materialRef: result.materialId });
-      stageDeferredAnisotropy(result.deferredAnisotropy);
+      mergeDraftPatch({ materialRef: result.materialId }, expectedDraftRevisions, operationScope);
+      stageDeferredAnisotropy(result.deferredAnisotropy, operationScope);
       setFeedback({
         kind: "success",
         message: result.deferredAnisotropy
@@ -408,9 +603,18 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
           : "Material created and assigned.",
       });
     } catch (error) {
+      if (!isCurrentScope()) return;
       if (error instanceof MaterialAssignmentAfterCreateError) {
-        stageDeferredAnisotropy(error.deferredAnisotropy);
-        setAssignmentFailure({ error, refreshCompleted: false, rebasedRevision: null });
+        stageDeferredAnisotropy(error.deferredAnisotropy, operationScope);
+        setAssignmentFailureState({
+          error,
+          rebasedRevision: null,
+          refreshError: null,
+          refreshPhase: "idle",
+          scopeKey: operationScope.key,
+          scopeToken: operationScope.token,
+          transactionId,
+        });
         setFeedback({
           kind: "error",
           message: "Material was created and remains in the library, but assignment failed. Refresh and explicitly rebase before retrying assignment.",
@@ -419,50 +623,70 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
         setFeedback({ kind: "error", message: errorMessage(error) });
       }
     } finally {
-      finishPending("create-assign");
+      finishPending("create-assign", operationScope);
     }
   }
 
   function rebaseFailedAssignment(): void {
     if (
       !assignmentFailure ||
-      !assignmentFailure.refreshCompleted ||
+      assignmentFailure.refreshPhase !== "ready" ||
       scene.status !== "ready" ||
       typeof scene.data?.revision !== "number" ||
       scene.data.revision <= assignmentFailure.error.assignmentBaseRevision
     ) return;
-    setAssignmentFailure({
-      ...assignmentFailure,
-      rebasedRevision: scene.data.revision,
+    const rebasedRevision = scene.data.revision;
+    setAssignmentFailureState((current) => {
+      if (!current || current.scopeToken !== scope.token || current.transactionId !== assignmentFailure.transactionId) {
+        return current;
+      }
+      return { ...current, rebasedRevision };
     });
-    setFeedback({ kind: "success", message: `Assignment rebased to scene revision ${scene.data.revision}.` });
+    setFeedback({ kind: "success", message: `Assignment rebased to scene revision ${rebasedRevision}.` });
   }
 
-  async function refreshFailedAssignment(): Promise<void> {
-    if (!assignmentFailure) return;
-    await scene.refetch();
-    setAssignmentFailure((current) =>
-      current?.error === assignmentFailure.error
-        ? { ...current, refreshCompleted: true }
+  function refreshFailedAssignment(): void {
+    if (!assignmentFailure || !isCurrentScope()) return;
+    const failure = assignmentFailure;
+    setAssignmentFailureState((current) =>
+      current?.scopeToken === scope.token && current.transactionId === failure.transactionId
+      ? {
+            ...current,
+            rebasedRevision: null,
+            refreshError: null,
+            refreshPhase: "loading",
+          }
         : current,
     );
+    scene.refetch();
   }
 
   async function retryFailedAssignment(): Promise<void> {
-    if (!assignmentFailure || assignmentFailure.rebasedRevision === null) return;
-    startPending("retry-assign");
+    if (!assignmentFailure || assignmentFailure.rebasedRevision === null || !isCurrentScope()) return;
+    const operationScope = scope;
+    const failure = assignmentFailure;
+    const rebasedRevision = failure.rebasedRevision;
+    if (rebasedRevision === null) return;
+    const expectedDraftRevisions = new Map(draftFieldRevisionsRef.current);
+    startPending("retry-assign", operationScope);
     try {
-      const assigned = await assignmentFailure.error.retry(api, assignmentFailure.rebasedRevision);
+      const assigned = await failure.error.retry(api, rebasedRevision);
+      if (!isCurrentScope()) return;
       const assignmentRevision = acknowledgedAuthoringSceneRevision(assigned);
       publishCommittedSceneResource(resources, assigned, assignmentRevision, undefined, false);
       invalidateMagneticParameterResources(assignmentRevision);
-      updateDraft({ materialRef: assignmentFailure.error.materialId });
-      setAssignmentFailure(null);
+      mergeDraftPatch({ materialRef: failure.error.materialId }, expectedDraftRevisions, operationScope);
+      setAssignmentFailureState((current) =>
+        current?.scopeToken === operationScope.token && current.transactionId === failure.transactionId
+          ? null
+          : current,
+      );
       setFeedback({ kind: "success", message: "Material assignment retry succeeded." });
     } catch (error) {
+      if (!isCurrentScope()) return;
       setFeedback({ kind: "error", message: errorMessage(error) });
     } finally {
-      finishPending("retry-assign");
+      finishPending("retry-assign", operationScope);
     }
   }
 
@@ -489,6 +713,8 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
     rebaseFailedAssignment,
     retryFailedAssignment,
     scene,
+    scopeKey,
+    scopeToken: scope.token,
     setAnisotropyDraftState,
     setDraftState,
     setFeedback,
@@ -548,6 +774,8 @@ function ObjectMaterialPanelView({
     rebaseFailedAssignment,
     retryFailedAssignment,
     scene,
+    scopeKey,
+    scopeToken,
     setAnisotropyDraftState,
     setDraftState,
     setFeedback,
@@ -600,13 +828,15 @@ function ObjectMaterialPanelView({
         identityKey: draftIdentityKey,
       }),
     );
-    setAnisotropyDraftState({ draft: baseAnisotropyDraft, key: "" });
+    setAnisotropyDraftState({ draft: baseAnisotropyDraft, dirtyFields: new Set(), key: "", scopeKey, scopeToken });
     setFeedback(null);
   }, [
     baseAnisotropyDraft,
     baseDraft,
     draftIdentityKey,
     draftKey,
+    scopeKey,
+    scopeToken,
     setAnisotropyDraftState,
     setDraftState,
     setFeedback,
@@ -722,7 +952,11 @@ function ObjectMaterialPanelView({
               />
               <div className="fm-inspector-toolbar">
                 <Button
-                  disabled={pendingOperations.has("create-assign") || object.mode !== "committed"}
+                  disabled={
+                    pendingOperations.has("create-assign") ||
+                    assignmentFailure !== null ||
+                    object.mode !== "committed"
+                  }
                   size="sm"
                   type="button"
                   variant="primary"
@@ -746,7 +980,7 @@ function ObjectMaterialPanelView({
                     disabled={
                       pendingOperations.has("retry-assign") ||
                       scene.status !== "ready" ||
-                      !assignmentFailure.refreshCompleted ||
+                      assignmentFailure.refreshPhase !== "ready" ||
                       (scene.data?.revision ?? 0) <= assignmentFailure.error.assignmentBaseRevision
                     }
                     size="sm"
@@ -765,6 +999,9 @@ function ObjectMaterialPanelView({
                   >
                     Retry assignment
                   </Button>
+                  {assignmentFailure.refreshError ? (
+                    <FieldRow label="Refresh error" value={assignmentFailure.refreshError} />
+                  ) : null}
                 </div>
               ) : null}
             </InspectorGroup>
@@ -916,7 +1153,7 @@ function ObjectMaterialPanelView({
                         identityKey: draftIdentityKey,
                       }),
                     );
-                    setAnisotropyDraftState({ draft: baseAnisotropyDraft, key: "" });
+                    setAnisotropyDraftState({ draft: baseAnisotropyDraft, dirtyFields: new Set(), key: "", scopeKey, scopeToken });
                     setFeedback(null);
                   }}
                 >
