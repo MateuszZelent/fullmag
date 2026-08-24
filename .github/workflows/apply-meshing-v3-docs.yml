@@ -135,10 +135,10 @@ jobs:
 
           swept = (root / "fem/ferromagnet/swept-prism.md").read_text(encoding="utf-8")
           for phrase in (
-              "Triangular-prism interpolation",
-              "Worked sizing example",
-              "Prism-to-tetrahedron transition",
-              "Control Room capability gate",
+              "### Reference `prism6` basis",
+              "### Worked sizing example",
+              "### Prism-to-tetrahedron transition",
+              "### Exact Control Room settings",
           ):
               assert phrase in swept, f"swept-prism page is missing {phrase!r}"
           print(f"Validated {len(pages)} pages, {sum(p.read_text().count('```{math}') for p in pages)} equations, and 28 executable examples.")
@@ -160,9 +160,10 @@ jobs:
 
           page="public_docs/site/_build/html/numerical-methods/meshing/fem/ferromagnet/swept-prism.html"
           test -s "$page"
-          grep -Fq 'Triangular-prism interpolation' "$page"
           grep -Fq 'Worked sizing example' "$page"
           grep -Fq 'Prism-to-tetrahedron transition' "$page"
+          grep -Fq 'partition of unity' "$page"
+          grep -Fq 'Exact Control Room settings' "$page"
 
       - name: Commit the verified documentation to the source branch
         shell: bash
