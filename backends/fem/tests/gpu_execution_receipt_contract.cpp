@@ -1,7 +1,9 @@
 #include "gpu/cuda/runtime/execution_receipt.hpp"
 
+#include "backend_handle.hpp"
 #include "fullmag_fem.h"
 
+#include <cstddef>
 #include <cstdlib>
 #include <iostream>
 
@@ -455,6 +457,73 @@ void begin_without_resolved_plan_fails_closed() {
     check(receipt.executed_device_operator_mask == 0, "empty commit must not publish device masks");
 }
 
+void public_abi_v1_rejects_invalid_handshake_without_writing_output() {
+    static_assert(sizeof(fullmag_fem_gpu_execution_receipt_v1) == 136);
+    static_assert(alignof(fullmag_fem_gpu_execution_receipt_v1) == 8);
+    static_assert(offsetof(fullmag_fem_gpu_execution_receipt_v1, abi_version) == 0);
+    static_assert(offsetof(fullmag_fem_gpu_execution_receipt_v1, struct_size) == 4);
+    static_assert(offsetof(fullmag_fem_gpu_execution_receipt_v1, execution_class) == 8);
+    static_assert(offsetof(fullmag_fem_gpu_execution_receipt_v1, precision) == 12);
+    static_assert(offsetof(fullmag_fem_gpu_execution_receipt_v1, integrator) == 16);
+    static_assert(offsetof(fullmag_fem_gpu_execution_receipt_v1, device_ordinal) == 20);
+    static_assert(offsetof(fullmag_fem_gpu_execution_receipt_v1, required_operator_mask) == 24);
+    static_assert(offsetof(fullmag_fem_gpu_execution_receipt_v1, resolved_device_operator_mask) == 32);
+    static_assert(offsetof(fullmag_fem_gpu_execution_receipt_v1, resolved_host_operator_mask) == 40);
+    static_assert(offsetof(fullmag_fem_gpu_execution_receipt_v1, resolved_unknown_operator_mask) == 48);
+    static_assert(offsetof(fullmag_fem_gpu_execution_receipt_v1, executed_device_operator_mask) == 56);
+    static_assert(offsetof(fullmag_fem_gpu_execution_receipt_v1, executed_host_operator_mask) == 64);
+    static_assert(offsetof(fullmag_fem_gpu_execution_receipt_v1, executed_unknown_operator_mask) == 72);
+    static_assert(offsetof(fullmag_fem_gpu_execution_receipt_v1, fallback_count) == 80);
+    static_assert(offsetof(fullmag_fem_gpu_execution_receipt_v1, accepted_step_count) == 88);
+    static_assert(offsetof(fullmag_fem_gpu_execution_receipt_v1, rejected_attempt_count) == 96);
+    static_assert(offsetof(fullmag_fem_gpu_execution_receipt_v1, failed_attempt_count) == 104);
+    static_assert(offsetof(fullmag_fem_gpu_execution_receipt_v1, hot_loop_compute_h2d_bytes) == 112);
+    static_assert(offsetof(fullmag_fem_gpu_execution_receipt_v1, hot_loop_compute_d2h_bytes) == 120);
+    static_assert(offsetof(fullmag_fem_gpu_execution_receipt_v1, hot_loop_compute_host_sync_count) == 128);
+
+    fullmag_fem_gpu_execution_receipt_v1 receipt{};
+    receipt.abi_version = FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1;
+    receipt.struct_size = sizeof(receipt);
+    receipt.execution_class = UINT32_C(0xfeedbeef);
+    check(
+        fullmag_fem_backend_gpu_execution_receipt_v1(nullptr, &receipt) ==
+            FULLMAG_FEM_ERR_INVALID,
+        "execution receipt ABI must reject null handles");
+    check(
+        receipt.execution_class == UINT32_C(0xfeedbeef),
+        "execution receipt ABI must not write output after a failed handshake");
+
+    fullmag_fem_backend handle{};
+    receipt.abi_version = FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1 + 1;
+    check(
+        fullmag_fem_backend_gpu_execution_receipt_v1(&handle, &receipt) ==
+            FULLMAG_FEM_ERR_INVALID,
+        "execution receipt ABI must reject unknown versions");
+    check(
+        receipt.execution_class == UINT32_C(0xfeedbeef),
+        "bad version must not mutate the receipt");
+
+    receipt.abi_version = FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1;
+    receipt.struct_size = sizeof(receipt) - 1;
+    check(
+        fullmag_fem_backend_gpu_execution_receipt_v1(&handle, &receipt) ==
+            FULLMAG_FEM_ERR_INVALID,
+        "execution receipt ABI must reject unknown struct sizes");
+    check(
+        receipt.execution_class == UINT32_C(0xfeedbeef),
+        "bad struct size must not mutate the receipt");
+
+    receipt.struct_size = sizeof(receipt);
+    check(
+        fullmag_fem_backend_gpu_execution_receipt_v1(&handle, &receipt) == FULLMAG_FEM_OK,
+        "execution receipt ABI must accept the exact v1 handshake");
+    check(
+        receipt.execution_class == FULLMAG_FEM_GPU_EXECUTION_UNKNOWN,
+        "unresolved execution receipt must fail closed as unknown");
+    check(receipt.required_operator_mask == 0, "unresolved receipt must not fabricate operators");
+    check(receipt.hot_loop_compute_h2d_bytes == 0, "fresh receipt must copy zero transfer audit");
+}
+
 } // namespace
 
 int main() {
@@ -468,5 +537,6 @@ int main() {
     invalid_lifecycle_is_sticky_and_preserves_last_commit();
     invalid_commit_preserves_last_accepted_snapshot();
     begin_without_resolved_plan_fails_closed();
+    public_abi_v1_rejects_invalid_handshake_without_writing_output();
     return 0;
 }

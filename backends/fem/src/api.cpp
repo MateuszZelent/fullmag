@@ -35,6 +35,7 @@
 #include "gpu/cuda/demag_poisson/stage_compute.hpp"
 #include "gpu/cuda/fields/vector_field_kernels.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
+#include "gpu/cuda/runtime/execution_receipt.hpp"
 #include "gpu/cuda/runtime/gpu_state_runtime.hpp"
 #include "gpu/cuda/interactions/zeeman/regional_field_kernels.cuh"
 #include "gpu/cuda/state/gpu_state.hpp"
@@ -3541,6 +3542,62 @@ int fullmag_fem_backend_get_gpu_rk_plan_info(
     if (!reason.empty()) {
         std::snprintf(out_info->reason, sizeof(out_info->reason), "%s", reason.c_str());
     }
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_gpu_execution_receipt_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_gpu_execution_receipt_v1 *out_receipt
+) {
+    if (out_receipt == nullptr) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_execution_receipt_v1 received null out_receipt");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_gpu_execution_receipt_v1 received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (out_receipt->abi_version != FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_execution_receipt_v1 received unsupported abi_version");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (out_receipt->struct_size != sizeof(fullmag_fem_gpu_execution_receipt_v1)) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_execution_receipt_v1 received unsupported struct_size");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+
+    const auto snapshot = fullmag::fem::gpu_execution_receipt_snapshot(
+        handle->context.gpu_state.execution_receipt);
+    const auto transfer_audit = fullmag::fem::transfer_audit_snapshot(handle->context);
+    fullmag_fem_gpu_execution_receipt_v1 receipt{};
+    receipt.abi_version = FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1;
+    receipt.struct_size = sizeof(receipt);
+    receipt.execution_class = static_cast<uint32_t>(snapshot.execution_class);
+    receipt.precision = snapshot.precision;
+    receipt.integrator = snapshot.integrator;
+    receipt.device_ordinal = snapshot.device_ordinal;
+    receipt.required_operator_mask = snapshot.required_operator_mask;
+    receipt.resolved_device_operator_mask = snapshot.resolved_device_operator_mask;
+    receipt.resolved_host_operator_mask = snapshot.resolved_host_operator_mask;
+    receipt.resolved_unknown_operator_mask = snapshot.resolved_unknown_operator_mask;
+    receipt.executed_device_operator_mask = snapshot.executed_device_operator_mask;
+    receipt.executed_host_operator_mask = snapshot.executed_host_operator_mask;
+    receipt.executed_unknown_operator_mask = snapshot.executed_unknown_operator_mask;
+    receipt.fallback_count = snapshot.fallback_count;
+    receipt.accepted_step_count = snapshot.accepted_step_count;
+    receipt.rejected_attempt_count = snapshot.rejected_attempt_count;
+    receipt.failed_attempt_count = snapshot.failed_attempt_count;
+    receipt.hot_loop_compute_h2d_bytes = transfer_audit.hot_loop_compute_h2d_bytes;
+    receipt.hot_loop_compute_d2h_bytes = transfer_audit.hot_loop_compute_d2h_bytes;
+    receipt.hot_loop_compute_host_sync_count = transfer_audit.hot_loop_compute_host_sync_count;
+    *out_receipt = receipt;
     return FULLMAG_FEM_OK;
 }
 

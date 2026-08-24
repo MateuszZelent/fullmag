@@ -112,9 +112,12 @@ apps/control-room/.next*
 apps/control-room/.artifacts/
 public_docs/site/
 .worktrees_old/
-build-contract-wave2/
-antenna-audit-target/
-cargo-targets/
-pnpm-store/
-playwright-browsers/
+
+# Local Windows build/cache outputs; keep these outside the repository.
+/build-contract-wave2/
+/antenna-audit-target/
+/cargo-targets/
+/pnpm-store/
+/pnpm-home/
+/playwright-browsers/
 *.diff

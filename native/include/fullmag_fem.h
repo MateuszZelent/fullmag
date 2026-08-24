@@ -1764,6 +1764,50 @@ typedef struct {
     char reason[256];
 } fullmag_fem_gpu_rk_plan_info;
 
+#define FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1 1u
+
+typedef enum {
+    FULLMAG_FEM_GPU_EXECUTION_UNKNOWN = 0,
+    FULLMAG_FEM_GPU_EXECUTION_DEVICE_RESIDENT = 1,
+    FULLMAG_FEM_GPU_EXECUTION_GPU_OPERATOR_HOST_SOLVER = 2,
+    FULLMAG_FEM_GPU_EXECUTION_HYBRID_CPU_POISSON = 3,
+    FULLMAG_FEM_GPU_EXECUTION_CPU = 4,
+} fullmag_fem_gpu_execution_class_v1;
+
+#define FULLMAG_FEM_GPU_OPERATOR_EXCHANGE (UINT64_C(1) << 0)
+#define FULLMAG_FEM_GPU_OPERATOR_DEMAG_RHS (UINT64_C(1) << 1)
+#define FULLMAG_FEM_GPU_OPERATOR_DEMAG_SOLVE (UINT64_C(1) << 2)
+#define FULLMAG_FEM_GPU_OPERATOR_DEMAG_RECOVERY (UINT64_C(1) << 3)
+#define FULLMAG_FEM_GPU_OPERATOR_LOCAL_FIELDS (UINT64_C(1) << 4)
+#define FULLMAG_FEM_GPU_OPERATOR_DIRECT_TORQUES (UINT64_C(1) << 5)
+#define FULLMAG_FEM_GPU_OPERATOR_LLG_RHS (UINT64_C(1) << 6)
+#define FULLMAG_FEM_GPU_OPERATOR_RK_STEPPER (UINT64_C(1) << 7)
+#define FULLMAG_FEM_GPU_OPERATOR_REDUCTIONS (UINT64_C(1) << 8)
+#define FULLMAG_FEM_GPU_OPERATOR_PRECONDITIONER (UINT64_C(1) << 9)
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t execution_class;
+    uint32_t precision;
+    uint32_t integrator;
+    int32_t device_ordinal;
+    uint64_t required_operator_mask;
+    uint64_t resolved_device_operator_mask;
+    uint64_t resolved_host_operator_mask;
+    uint64_t resolved_unknown_operator_mask;
+    uint64_t executed_device_operator_mask;
+    uint64_t executed_host_operator_mask;
+    uint64_t executed_unknown_operator_mask;
+    uint64_t fallback_count;
+    uint64_t accepted_step_count;
+    uint64_t rejected_attempt_count;
+    uint64_t failed_attempt_count;
+    uint64_t hot_loop_compute_h2d_bytes;
+    uint64_t hot_loop_compute_d2h_bytes;
+    uint64_t hot_loop_compute_host_sync_count;
+} fullmag_fem_gpu_execution_receipt_v1;
+
 typedef struct fullmag_fem_backend fullmag_fem_backend;
 typedef struct fullmag_fem_field_snapshot fullmag_fem_field_snapshot;
 typedef struct fullmag_fem_preview_snapshot fullmag_fem_preview_snapshot;
@@ -2096,6 +2140,11 @@ int fullmag_fem_backend_get_gpu_state_info(
 int fullmag_fem_backend_get_gpu_rk_plan_info(
     fullmag_fem_backend *handle,
     fullmag_fem_gpu_rk_plan_info *out_info
+);
+
+int fullmag_fem_backend_gpu_execution_receipt_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_gpu_execution_receipt_v1 *out_receipt
 );
 
 int fullmag_fem_backend_upload_strain(
