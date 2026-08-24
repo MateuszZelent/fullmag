@@ -150,6 +150,24 @@ class PublicDocumentationInformationArchitectureTests(unittest.TestCase):
         rendered = render_page(index, Path("public_docs/site"))
         self.assertIn("```{toctree}\n:maxdepth: 4\n", rendered)
 
+    def test_reference_front_matter_accepts_quoted_yaml_scalars(self) -> None:
+        spec = PageSpec(
+            path="guide.md",
+            title="Quoted guide",
+            label="quoted-guide",
+            status="implemented",
+            doc_kind="reference",
+            scope="quoted YAML metadata",
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / spec.path).write_text(
+                '---\ntitle: "Quoted guide"\nstatus: implemented\n'
+                'doc_kind: reference\n---\n\n(quoted-guide)=\n# Quoted guide\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(check_pages((spec,), root), [])
+
     def test_write_creates_missing_files_without_overwriting(self) -> None:
         spec = PageSpec(
             path="guide.md",
