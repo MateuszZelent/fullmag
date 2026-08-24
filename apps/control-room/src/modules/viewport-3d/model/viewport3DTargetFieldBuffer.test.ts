@@ -79,6 +79,23 @@ function responseMetadataFixture(
 }
 
 describe("viewport3DTargetFieldBuffer", () => {
+  it("fails closed when a malformed session identity omits string fields", () => {
+    const buffer = buildViewport3DTargetFieldBuffer({
+      fieldVector: vectorFixture(),
+      query: { component: "full", scope_kind: "full" },
+      sessionIdentity: {
+        sessionEpoch: undefined,
+        sessionId: undefined,
+      } as never,
+      targetIds: ["part-a"],
+    });
+
+    expect(buffer.availability).toEqual({
+      reason: "missing-session-identity",
+      status: "unavailable",
+    });
+  });
+
   it("returns typed unavailable and cannot be adopted without session identity", () => {
     const buffer = buildViewport3DTargetFieldBuffer({
       fieldVector: vectorFixture(),

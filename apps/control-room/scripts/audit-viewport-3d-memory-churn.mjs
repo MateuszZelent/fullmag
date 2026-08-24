@@ -1398,6 +1398,7 @@ function fdmStatusFixture(fixture) {
     session: {
       created_at: "0",
       name: "fdm-memory-churn-fixture",
+      session_epoch: "fdm-memory-churn-fixture@0",
       session_id: "fdm-memory-churn-fixture",
       workspace_root: "/tmp/fullmag-fdm-memory-fixture",
     },

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import type {
   FrozenSpinsSelectionExpression,
@@ -288,39 +288,55 @@ function NumberField({
   onChange: (value: number) => void;
   value: number;
 }) {
-  const [text, setText] = useState(() => String(value));
-  const [internalError, setInternalError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setText(String(value));
-    setInternalError(null);
-  }, [value]);
+  const [draft, setDraft] = useState(() => ({
+    internalError: null as string | null,
+    sourceValue: value,
+    text: String(value),
+  }));
+  if (draft.sourceValue !== value) {
+    setDraft({ internalError: null, sourceValue: value, text: String(value) });
+  }
 
   function handleChange(raw: string) {
-    setText(raw);
     const trimmed = raw.trim();
     if (trimmed === "") {
-      setInternalError("Value cannot be empty.");
+      setDraft({
+        internalError: "Value cannot be empty.",
+        sourceValue: value,
+        text: raw,
+      });
       return;
     }
     const parsed = Number(trimmed);
     if (!Number.isFinite(parsed)) {
-      setInternalError("Must be a valid finite number.");
+      setDraft({
+        internalError: "Must be a valid finite number.",
+        sourceValue: value,
+        text: raw,
+      });
       return;
     }
     if (min !== undefined && parsed < min) {
-      setInternalError(`Must be at least ${min}.`);
+      setDraft({
+        internalError: `Must be at least ${min}.`,
+        sourceValue: value,
+        text: raw,
+      });
       return;
     }
     if (max !== undefined && parsed > max) {
-      setInternalError(`Must be at most ${max}.`);
+      setDraft({
+        internalError: `Must be at most ${max}.`,
+        sourceValue: value,
+        text: raw,
+      });
       return;
     }
-    setInternalError(null);
+    setDraft({ internalError: null, sourceValue: value, text: raw });
     onChange(parsed);
   }
 
-  const effectiveError = externalError ?? internalError;
+  const effectiveError = externalError ?? draft.internalError;
 
   return (
     <div className="fm-inspector-field-wrapper">
@@ -329,7 +345,7 @@ function NumberField({
         <input
           className={`fm-inspector-input ${effectiveError ? "fm-inspector-input--invalid" : ""}`}
           type="number"
-          value={text}
+          value={draft.text}
           onChange={(event) => handleChange(event.target.value)}
         />
       </label>

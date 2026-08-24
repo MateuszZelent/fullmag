@@ -16,6 +16,3 @@
 [submodule "external_solvers/neuralmag"]
 	path = external_solvers/neuralmag
 	url = https://gitlab.com/neuralmag/neuralmag
-[submodule "Codex-Usage"]
-	path = Codex-Usage
-	url = https://github.com/MacSteini/Codex-Usage

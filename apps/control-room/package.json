@@ -27,7 +27,7 @@
     "generate:api": "pnpm run generate:openapi-v2 && pnpm run generate:api-v2-types && pnpm run generate:api-v2-client",
     "generate:api-v2-client": "node scripts/generate-v2-client.mjs",
     "generate:api-v2-types": "openapi-typescript src/kernel/api/generated/openapi-v2.json --output src/kernel/api/generated/openapi-v2-types.ts",
-    "generate:openapi-v2": "cargo run -p fullmag-api -- --print-openapi-v2 > src/kernel/api/generated/openapi-v2.json",
+    "generate:openapi-v2": "cargo run -p fullmag-api -- --print-openapi-v2 > src/kernel/api/generated/openapi-v2.json && node scripts/normalize-openapi-build-identity.mjs src/kernel/api/generated/openapi-v2.json",
     "start": "next start",
     "lint": "eslint . --max-warnings=0",
     "smoke:airbox-field-routing": "node scripts/smoke-airbox-field-routing.mjs",
