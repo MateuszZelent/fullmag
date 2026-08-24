@@ -1,0 +1,75 @@
+name: Apply verified meshing documentation payload
+
+on:
+  push:
+    branches:
+      - docs/meshing-production-rewrite-20260824
+    paths:
+      - ".fullmag-docs-payload/**"
+      - ".github/workflows/apply-meshing-docs-payload.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: meshing-docs-payload-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out payload branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: docs/meshing-production-rewrite-20260824
+
+      - name: Reconstruct and validate documentation archive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat .fullmag-docs-payload/chunk-* > /tmp/meshing_docs.tar.gz.b64
+          test "$(wc -c < /tmp/meshing_docs.tar.gz.b64)" -eq 84452
+          base64 --decode /tmp/meshing_docs.tar.gz.b64 > /tmp/meshing_docs.tar.gz
+          echo "baeb0812020bee8161c3dc745e61544bd3293fbcec9ab53c7f0c6282ca7e2933  /tmp/meshing_docs.tar.gz" | sha256sum --check --strict -
+
+          python - <<'PY'
+          from pathlib import PurePosixPath
+          import tarfile
+
+          archive = "/tmp/meshing_docs.tar.gz"
+          root = PurePosixPath("public_docs/site/numerical-methods/meshing")
+          with tarfile.open(archive, "r:gz") as handle:
+              members = handle.getmembers()
+
+          files = [member for member in members if member.isfile()]
+          markdown = [member for member in files if member.name.endswith(".md")]
+          assert len(markdown) == 28, f"expected 28 Markdown pages, found {len(markdown)}"
+
+          for member in members:
+              path = PurePosixPath(member.name)
+              assert not path.is_absolute(), f"absolute archive path: {path}"
+              assert ".." not in path.parts, f"path traversal component: {path}"
+              assert path == root or root in path.parents, f"unexpected archive path: {path}"
+          PY
+
+          tar -xzf /tmp/meshing_docs.tar.gz -C .
+          test "$(find public_docs/site/numerical-methods/meshing -type f -name '*.md' | wc -l)" -eq 28
+
+          rm -rf .fullmag-docs-payload
+          rm -f .github/workflows/apply-meshing-docs-payload.yml
+          git diff --check
+
+      - name: Commit production meshing documentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          test -n "$(git diff --cached --name-only)"
+          git commit -m "docs(meshing): rebuild numerical meshing documentation"
+          git push origin HEAD:refs/heads/docs/meshing-production-rewrite-20260824
