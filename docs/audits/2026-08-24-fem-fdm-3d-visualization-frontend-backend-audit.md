@@ -12,11 +12,10 @@
 
 Rdzeń wizualizacji 3D ma poprawną, bliską produkcyjnej architekturę. Fullmag rozdziela quantity, scope, target, carrier, generation, revision oraz renderer adoption. Payload nie jest przyjmowany tylko dlatego, że ma odpowiednią długość: FMVP v3 przenosi scope i identity, a frontend sprawdza zgodność nośnika, topologii oraz sesji.
 
-Nie należy jednak kwalifikować całego zakresu FEM/FDM 3D jako bezwarunkowo gotowego produkcyjnie. Pozostają trzy blokery o znaczeniu release:
+Nie należy jednak kwalifikować całego zakresu FEM/FDM 3D jako bezwarunkowo gotowego produkcyjnie. Pozostają dwa blokery o znaczeniu release:
 
-1. FEM `shared-domain-with-air` po zakończeniu etapu ma `immutable terminal snapshot`, a nie pełny dynamiczny observation runtime.
-2. Capability quantity nie jest jeszcze pojedynczym źródłem prawdy aż do konkretnego carriera. Frontend nadal ma ręczne mapy metadata, a część ścieżek Airboxa używa ogólnego `domain=full_domain`.
-3. `master` nie jest chroniony i nie wymaga żadnych status checks, mimo że repozytorium definiuje wymagane bramki 3D.
+1. Capability quantity nie jest jeszcze pojedynczym źródłem prawdy aż do konkretnego carriera. Frontend nadal ma ręczne mapy metadata, a część ścieżek Airboxa używa ogólnego `domain=full_domain`.
+2. `master` nie jest chroniony i nie wymaga żadnych status checks, mimo że repozytorium definiuje wymagane bramki 3D.
 
 ### Ocena obszarów
 
@@ -28,14 +27,14 @@ Nie należy jednak kwalifikować całego zakresu FEM/FDM 3D jako bezwarunkowo go
 | FDM multilayer | bardzo dobra | native layers i target-only Airbox są osobnymi nośnikami; common FFT grid nie jest geometrią |
 | Quantity contracts | dobra, niepełny parytet | 52 kanoniczne ID, ale wykonanie zależy od backendu, engine i planu |
 | Binary field plane | dobra | v3 jest rygorystyczne; legacy v2 osłabia identity po remeshu |
-| Post-stage interactive mode | poprawny poza shared-air | FDM regular, FDM multilayer i FEM magnetic-only są obsłużone |
+| Post-stage interactive mode | poprawny, z cold-path dla shared-air | shared-air rekonstruuje pola na żądanie, lecz nie ma warm switchingu ani retained operator cache |
 | CI/release governance | niewystarczająca | branch protection i required checks są wyłączone |
 
 ### Klasyfikacja
 
 - P0: 0
-- P1: 3
-- P2: 9
+- P1: 2
+- P2: 10
 - P3: 2
 
 ---
@@ -84,12 +83,14 @@ Obecna ścieżka v3 w dużej mierze to zapewnia. Ważną zaletą jest też to, �
 
 `manifestRenderableCarriers.ts` traktuje rzeczywiste `mesh_parts` jako field-capable carriery. `object_segments` są wyłącznie diagnostycznym fallbackiem, jeżeli nie istnieje potwierdzony nośnik. Jest to poprawne zachowanie fail-closed.
 
-`semanticRenderTargetCatalog.ts` buduje targety:
+`buildSemanticRenderTargetCatalog()` w `semanticRenderTargetCatalog.ts` buduje targety:
 
 - `airbox`;
 - `object:<object_id>`;
 - `part:<part_id>`;
-- `region:<...>`.
+- regiony nie należą do tego katalogu; `resolveViewport3DRegionTargetByPartId()` i
+  `resolveViewport3DRegionTargetsForMembershipOwnerParts()` w
+  `useViewport3DSceneModel.ts` składają osobne targety `region:<...>`.
 
 Część o roli Airboxa trafia do logicznego targetu `airbox`. Część przypisana do obiektu sceny trafia do targetu obiektu. Nieprzypisana część pozostaje targetem `part`. W efekcie Airbox i obiekty mają niezależne visibility, wireframe, points, bounds, vectors i active quantity.
 
@@ -168,60 +169,60 @@ Kontrakt quantity ma cztery poziomy:
 - `N` — bieżący spatial-preview gate odrzuca;
 - `S` — inna ścieżka, np. scalar history lub analysis overlay.
 
-| # | Quantity | Katalog | Domena | FDM | FDM-ML | FEM | Uwagi |
-|---:|---|---|---|---:|---:|---:|---|
-| 1 | `m` | 3D vector | magnetic | A | A | A | podstawowy carrier |
-| 2 | `H_ex` | 3D vector | magnetic | C | C | C | exchange |
-| 3 | `H_demag` | 3D vector | full | C | C | C | główne pole Airboxa |
-| 4 | `H_ext` | 3D vector | full | C | C | C | external field |
-| 5 | `H_ant` | 3D vector | full | C | N | C | multilayer IR bez anteny |
-| 6 | `H_drive` | 3D vector | magnetic | C | N | C | frontend ma alias `B_drive` |
-| 7 | `H_eff` | 3D vector | full | A | A | A | Airbox support musi być carrier-specific |
-| 8 | `torque` | 3D vector | magnetic | A | A | A | katalog: unit `T` |
-| 9 | `H_ani` | 3D vector | magnetic | C | C | C | anisotropy |
-| 10 | `H_dmi` | 3D vector | magnetic | C | C | C | CUDA FDM może być węższe niż CPU |
-| 11 | `H_mel` | 3D vector | magnetic | C | N | C | multilayer IR bez magnetoelastic |
-| 12 | `u` | deferred | full | N | N | N | mechanika bez live 3D |
-| 13 | `eps` | deferred, 6 comp. | full | N | N | N | shape `VectorField` jest nieprecyzyjny |
-| 14 | `sigma` | deferred, 6 comp. | full | N | N | N | powinien być symmetric tensor |
-| 15 | `H_ani_cubic` | 3D vector | magnetic | C | C | C | cubic anisotropy |
-| 16 | `H_dmi_bulk` | 3D vector | magnetic | C | C | C | bulk DMI |
-| 17 | `H_oe` | 3D vector | full | C | N | C | multilayer IR bez Oersteda |
-| 18 | `H_therm` | 3D vector | magnetic | C | N | C | aktywne dla temperatury |
-| 19 | `E_ex` | hist. | magnetic | S | S | S | global scalar |
-| 20 | `E_demag` | hist. | magnetic | S | S | S | global scalar |
-| 21 | `E_ext` | hist. | full | S | S | S | global scalar |
-| 22 | `E_drive` | hist. | magnetic | S | S | S | global scalar |
-| 23 | `E_ani` | hist. | magnetic | S | S | S | global scalar |
-| 24 | `E_dmi` | hist. | magnetic | S | S | S | global scalar |
-| 25 | `E_el` | hist. deferred | full | S | S | S | mechanika niewystawiona |
-| 26 | `E_kin_el` | hist. deferred | full | S | S | S | mechanika niewystawiona |
-| 27 | `elastic_residual_norm` | hist. deferred | full | S | S | S | diagnostyka mechaniki |
-| 28 | `E_total` | hist. | full | S | S | S | global scalar |
-| 29 | `mode_amplitude` | deferred analysis | magnetic | N | N | N | osobna ścieżka eigen |
-| 30 | `mode_real` | deferred analysis | magnetic | N | N | N | osobna ścieżka eigen |
-| 31 | `mode_imag` | deferred analysis | magnetic | N | N | N | osobna ścieżka eigen |
-| 32 | `mode_phase` | deferred analysis | magnetic | N | N | N | osobna ścieżka eigen |
-| 33 | `eden_ex` | 3D scalar | magnetic | C | C | C | cell field |
-| 34 | `eden_demag` | 3D scalar | magnetic | C | C | C | cell field |
-| 35 | `demag_phi` | deferred scalar | full | N | N | C | FEM może liczyć, UI 3D blokuje |
-| 36 | `eden_ext` | 3D scalar | magnetic | C | C | C | cell field |
-| 37 | `eden_drive` | 3D scalar | magnetic | C | N | C | multilayer bez drive |
-| 38 | `eden_ani` | 3D scalar | magnetic | C | C | C | cell field |
-| 39 | `eden_dmi` | 3D scalar | magnetic | C | C | C | cell field |
-| 40 | `eden_total` | 3D scalar | magnetic | A | A | A | cell field |
-| 41 | `mat_ms` | 3D scalar | magnetic | A | A | N | brak FEM material field provider |
-| 42 | `mat_aex` | 3D scalar | magnetic | A | A | N | brak FEM material field provider |
-| 43 | `mat_alpha` | 3D scalar | magnetic | A | A | N | brak FEM material field provider |
-| 44 | `mat_dind` | 3D scalar | magnetic | N | N | N | katalog wyprzedza lane providers |
-| 45 | `mat_dbulk` | 3D scalar | magnetic | N | N | N | katalog wyprzedza lane providers |
-| 46 | `dm_dt` | deferred vector | magnetic | N | N | N | preview flag bez UI exposure |
-| 47 | `V_electric` | deferred scalar | full | C | N | C | ui_exposed, ale preview 3D false |
-| 48 | `J_charge` | deferred vector | full | C | N | C | ui_exposed, ale preview 3D false |
-| 49 | `spin_potential` | deferred vector | full | N | N | C | brak standardowego renderera 3D |
-| 50 | `spin_current_tensor` | deferred tensor | full | N | N | C | wymaga jawnej projekcji tensora |
-| 51 | `torque_stt` | deferred vector | full | N | N | C | UI i interactive false |
-| 52 | `torque_sot` | deferred vector | magnetic | N | N | N | brak bieżącego lane provider |
+| # | Quantity | Katalog | Domena | FDM CPU | FDM GPU | FDM-ML | FEM CPU | FEM GPU | Uwagi |
+|---:|---|---|---|---:|---:|---:|---:|---:|---|
+| 1 | `m` | 3D vector | magnetic | A | A | A | A | A | podstawowy carrier |
+| 2 | `H_ex` | 3D vector | magnetic | C | C | C | C | C | exchange |
+| 3 | `H_demag` | 3D vector | full | C | C | C | C | C | główne pole Airboxa |
+| 4 | `H_ext` | 3D vector | full | C | C | C | C | C | external field |
+| 5 | `H_ant` | 3D vector | full | C | N | N | C | C | CUDA FDM i multilayer nie materializują anteny |
+| 6 | `H_drive` | 3D vector | magnetic | C | N | N | C | C | frontend ma alias `B_drive` |
+| 7 | `H_eff` | 3D vector | full | A | A | A | A | A | Airbox support musi być carrier-specific |
+| 8 | `torque` | 3D vector | magnetic | A | A | A | A | A | katalog: unit `T` |
+| 9 | `H_ani` | 3D vector | magnetic | C | C | C | C | C | anisotropy |
+| 10 | `H_dmi` | 3D vector | magnetic | C | N | C | C | C | `CudaSnapshotObservable::from_quantity()` nie obsługuje `H_dmi` |
+| 11 | `H_mel` | 3D vector | magnetic | C | N | N | C | C | CUDA FDM i multilayer bez materializatora magnetoelastic |
+| 12 | `u` | deferred | full | N | N | N | N | N | mechanika bez live 3D |
+| 13 | `eps` | deferred, 6 comp. | full | N | N | N | N | N | shape `VectorField` jest nieprecyzyjny |
+| 14 | `sigma` | deferred, 6 comp. | full | N | N | N | N | N | powinien być symmetric tensor |
+| 15 | `H_ani_cubic` | 3D vector | magnetic | C | N | C | C | C | CUDA FDM nie materializuje cubic anisotropy |
+| 16 | `H_dmi_bulk` | 3D vector | magnetic | C | N | C | C | C | CUDA FDM nie materializuje bulk DMI |
+| 17 | `H_oe` | 3D vector | full | C | C | N | C | C | multilayer IR bez Oersteda |
+| 18 | `H_therm` | 3D vector | magnetic | C | N | N | C | C | CUDA FDM i multilayer bez preview termicznego |
+| 19 | `E_ex` | hist. | magnetic | S | S | S | S | S | global scalar |
+| 20 | `E_demag` | hist. | magnetic | S | S | S | S | S | global scalar |
+| 21 | `E_ext` | hist. | full | S | S | S | S | S | global scalar |
+| 22 | `E_drive` | hist. | magnetic | S | S | S | S | S | global scalar |
+| 23 | `E_ani` | hist. | magnetic | S | S | S | S | S | global scalar |
+| 24 | `E_dmi` | hist. | magnetic | S | S | S | S | S | global scalar |
+| 25 | `E_el` | hist. deferred | full | S | S | S | S | S | mechanika niewystawiona |
+| 26 | `E_kin_el` | hist. deferred | full | S | S | S | S | S | mechanika niewystawiona |
+| 27 | `elastic_residual_norm` | hist. deferred | full | S | S | S | S | S | diagnostyka mechaniki |
+| 28 | `E_total` | hist. | full | S | S | S | S | S | global scalar |
+| 29 | `mode_amplitude` | deferred analysis | magnetic | N | N | N | N | N | osobna ścieżka eigen |
+| 30 | `mode_real` | deferred analysis | magnetic | N | N | N | N | N | osobna ścieżka eigen |
+| 31 | `mode_imag` | deferred analysis | magnetic | N | N | N | N | N | osobna ścieżka eigen |
+| 32 | `mode_phase` | deferred analysis | magnetic | N | N | N | N | N | osobna ścieżka eigen |
+| 33 | `eden_ex` | 3D scalar | magnetic | C | C | C | C | C | cell field |
+| 34 | `eden_demag` | 3D scalar | magnetic | C | C | C | C | C | cell field |
+| 35 | `demag_phi` | deferred scalar | full | N | N | N | C | C | FEM może liczyć, UI 3D blokuje |
+| 36 | `eden_ext` | 3D scalar | magnetic | C | C | C | C | C | cell field |
+| 37 | `eden_drive` | 3D scalar | magnetic | C | C | N | C | C | multilayer bez drive |
+| 38 | `eden_ani` | 3D scalar | magnetic | C | C | C | C | C | cell field |
+| 39 | `eden_dmi` | 3D scalar | magnetic | C | C | C | C | C | cell field |
+| 40 | `eden_total` | 3D scalar | magnetic | A | A | A | A | A | cell field |
+| 41 | `mat_ms` | 3D scalar | magnetic | A | N | A | N | N | brak CUDA FDM i FEM material field provider |
+| 42 | `mat_aex` | 3D scalar | magnetic | A | N | A | N | N | brak CUDA FDM i FEM material field provider |
+| 43 | `mat_alpha` | 3D scalar | magnetic | A | N | A | N | N | brak CUDA FDM i FEM material field provider |
+| 44 | `mat_dind` | 3D scalar | magnetic | N | N | N | N | N | katalog wyprzedza lane providers |
+| 45 | `mat_dbulk` | 3D scalar | magnetic | N | N | N | N | N | katalog wyprzedza lane providers |
+| 46 | `dm_dt` | deferred vector | magnetic | N | N | N | N | N | preview flag bez UI exposure |
+| 47 | `V_electric` | deferred scalar | full | C | N | N | C | C | ui_exposed, ale preview 3D false |
+| 48 | `J_charge` | deferred vector | full | C | N | N | C | C | ui_exposed, ale preview 3D false |
+| 49 | `spin_potential` | deferred vector | full | N | N | N | C | C | brak standardowego renderera 3D |
+| 50 | `spin_current_tensor` | deferred tensor | full | N | N | N | C | C | wymaga jawnej projekcji tensora |
+| 51 | `torque_stt` | deferred vector | full | N | N | N | C | C | UI i interactive false |
+| 52 | `torque_sot` | deferred vector | magnetic | N | N | N | N | N | brak bieżącego lane provider |
 
 ### Wnioski quantity
 
@@ -313,9 +314,11 @@ Wire payload jest `Float64`. Dla single-precision lane i dużych pól oznacza ok
 ```ts
 case 'boundsVisible':
   delete display.bounds;
+  break;
 
 case 'pointsVisible':
   delete display.points;
+  break;
 ```
 
 Reset `boundsVisible` może usunąć `bounds.opacity`, a reset `pointsVisible` może usunąć `points.opacity`. Należy usuwać wyłącznie leaf i zachowywać rodzeństwo. Wymagany jest parametryczny test, że reset pola X nie modyfikuje żadnego Y.
@@ -356,20 +359,20 @@ Orchestrator realizuje podstawowy scenariusz poprawnie:
 | FDM regular | retained runtime | dynamic observation |
 | FDM multilayer | deterministic reconstruction | poprawne dla wspieranych pól |
 | FEM magnetic-only | retained runtime | dynamic observation |
-| FEM shared-air | immutable terminal snapshot | tylko utrwalone pola |
+| FEM shared-air | deterministic reconstruction | `compute_fields` odtwarza snapshot; cold path bez retained operator cache |
 | FEM eigen/frequency | unavailable in this runtime | osobna analysis path |
 
 ### Shared-air gap
 
-Dla `SharedDomainMeshWithAir` dynamic idle preview jest jawnie wyłączone. Sesja pozostaje commandable, lecz zmiana na niezmaterializowane wcześniej quantity nie ma pełnego solver contextu.
+Dla `SharedDomainMeshWithAir` retained dynamic idle preview jest jawnie wyłączone, ale nie blokuje to nowej quantity. `InteractiveRuntimeHost::compute_current_fields()` przekazuje bieżącą lub continuation magnetization do `snapshot_problem_vector_field_batch()`. Gałąź FEM tworzy świeży `NativeFemBackend`, oblicza pola efektywne i materializuje aktywne żądane quantity.
 
-Możliwe rozwiązania:
+Pozostają więc problemy wydajności i UX, nie brak capability:
 
-- retained observation runtime zachowujący mesh, mapowanie DOF, Poisson/demag operator, BC, materiały i ostatnie `m`;
-- albo jawny snapshot-only kontrakt z terminal quantity inventory, reason code `unavailable_after_stage` i wyłączonym selektorem;
-- opcjonalna komenda rekonstrukcji tworząca tymczasowy observation context.
+- retained observation runtime zachowujący mesh, mapowanie DOF, Poisson/demag operator, BC, materiały i ostatnie `m` może usunąć koszt cold-path;
+- UI powinno jawnie pokazywać rekonstrukcję jako operację w toku z command ID, scope, generation i field revision;
+- warm switching i cache operatorów nie mogą zmieniać wyniku istniejącej ścieżki rekonstrukcji.
 
-Nie wolno prezentować snapshot-only jako nieskończonego `loading`.
+Nie wolno prezentować cold reconstruction jako nieskończonego `loading`.
 
 Lifecycle API poprawnie rozdziela solver, session resource, connectivity i commandability. Słabością jest `SolverLifecycle = string`; należy wygenerować wspólny zamknięty enum Rust/OpenAPI/TypeScript.
 
@@ -415,9 +418,9 @@ W `schemas/mesh.rs` część visualization-adjacent metadata pozostaje `serde_js
 
 ## 13. Ustalenia
 
-### F3D-AUD-001 — P1 — FEM shared-air jest snapshot-only po stage
+### F3D-AUD-001 — P2 — FEM shared-air używa kosztownej rekonstrukcji po stage
 
-Sesja przechodzi do `awaiting_command`, lecz provider nie może dynamicznie policzyć dowolnego nowego pola. Wymagany retained runtime albo jawne inventory i reason codes.
+Sesja przechodzi do `awaiting_command`, a `compute_fields` może policzyć nowe aktywne pole przez świeży `NativeFemBackend`. Brakuje warm switchingu i retained operator cache; wymagany jest test poprawności rekonstrukcji oraz pomiar kosztu cold-path.
 
 ### F3D-AUD-002 — P1 — wymagane bramki CI nie są egzekwowane
 
@@ -499,8 +502,7 @@ Identity payloadu jest bezpieczne, lecz Inspector powinien pokazywać `carrier_k
 ### Etap 0 — release blockers
 
 1. Włączyć branch protection i required checks.
-2. Dodać shared-air snapshot inventory oraz jednoznaczne reason codes.
-3. Naprawić leaf reset `boundsVisible` i `pointsVisible`.
+2. Zastąpić przybliżenie `full_domain` capability kontraktem per target/carrier (F3D-AUD-004).
 
 ### Etap 1 — pojedynczy kontrakt quantity/target
 
@@ -508,10 +510,11 @@ Identity payloadu jest bezpieczne, lecz Inspector powinien pokazywać `carrier_k
 2. Wprowadzić carrier-specific quantity capability.
 3. Wprowadzić typed lifecycle enum.
 4. Dodać parity tests dla wszystkich 52 ID.
+5. Naprawić leaf reset `boundsVisible` i `pointsVisible` (F3D-AUD-006).
 
 ### Etap 2 — pełna interaktywność
 
-1. Retained FEM shared-air observation context lub jawna snapshot-only policy.
+1. Zoptymalizować istniejącą rekonstrukcję FEM shared-air przez retained observation context lub cache operatorów.
 2. Dynamic `compute_fields` zwracające command ID, scope, generation i field revision.
 3. Quantity selector oparty wyłącznie na capability konkretnego carriera.
 
@@ -564,7 +567,7 @@ Identity payloadu jest bezpieczne, lecz Inspector powinien pokazywać `carrier_k
 - [ ] FDM regular: stage complete → awaiting_command → nowe pole;
 - [ ] FDM multilayer: deterministic reconstruction dla wspieranych pól;
 - [ ] FEM magnetic-only: retained runtime;
-- [ ] FEM shared-air: jawny snapshot-only, bez nieskończonego spinnera;
+- [ ] FEM shared-air: rekonstrukcja nowego aktywnego pola kończy się bez nieskończonego spinnera i zachowuje generation identity;
 - [ ] następny stage sekwencji nie publikuje przejściowego completed;
 - [ ] explicit close tombstonuje session resource;
 - [ ] reconnect nie adoptuje payloadu ze starego epoch.
@@ -595,30 +598,24 @@ Na moment audytu:
 
 ---
 
-## 18. Najważniejsze pliki
+## 18. Indeks źródeł i stabilnych symboli
 
-- `crates/fullmag-quantities/src/id.rs`
-- `crates/fullmag-quantities/src/catalog.rs`
-- `crates/fullmag-quantities/src/registry.rs`
-- `crates/fullmag-runner/src/quantities.rs`
-- `crates/fullmag-api/src/schemas/fields.rs`
-- `crates/fullmag-api/src/schemas/mesh.rs`
-- `crates/fullmag-api/src/schemas/status.rs`
-- `crates/fullmag-cli/src/interactive_runtime_host.rs`
-- `crates/fullmag-cli/src/orchestrator.rs`
-- `crates/fullmag-runner/src/observation.rs`
-- `apps/control-room/src/kernel/api/quantityIds.ts`
-- `apps/control-room/src/kernel/api/codecs/fieldVectorCodec.ts`
-- `apps/control-room/src/kernel/visualization/ObjectVisualizationController.ts`
-- `apps/control-room/src/kernel/visualization/targetFieldAvailability.ts`
-- `apps/control-room/src/kernel/visualization/visualizationTargetIdentity.ts`
-- `apps/control-room/src/kernel/selection/manifestRenderableCarriers.ts`
-- `apps/control-room/src/kernel/selection/semanticRenderTargetCatalog.ts`
-- `apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts`
-- `apps/control-room/src/modules/viewport-3d/model/viewport3DFieldDataPlan.ts`
-- `apps/control-room/src/modules/viewport-3d/model/viewport3DTargetFieldBuffer.ts`
-- `apps/control-room/src/modules/viewport-3d/model/viewport3DFdmMultilayerAirbox.ts`
-- `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts`
-- `apps/control-room/src/shared/domain/mesh/domainPresentation.ts`
-- `.github/workflows/frontend-3d-managed-fem.yml`
-- `docs/validation/frontend-3d-required-check-matrix.md`
+| Twierdzenie audytu | Ścieżka | Stabilny symbol / kotwica |
+|---|---|---|
+| Zamrożone wire IDs | `crates/fullmag-quantities/src/id.rs` | `QuantityId::as_str` |
+| Katalog 52 quantities | `crates/fullmag-quantities/src/catalog.rs` | `quantity_catalog` |
+| Parytet providerów | `crates/fullmag-quantities/src/registry.rs` | `standard_providers_register_every_canonical_quantity` |
+| Capability zależne od lane i planu | `crates/fullmag-runner/src/quantities.rs` | `fdm_quantity_is_active`, `fem_quantity_is_active` |
+| Zamknięta lista CUDA FDM | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `CudaSnapshotObservable::from_quantity` |
+| Zamknięta lista native FEM | `crates/fullmag-runner/src/native_fem.rs` | `NativeFemPreviewObservable::from_quantity` |
+| Polityka providerów post-stage | `crates/fullmag-runner/src/observation.rs` | `ObservationProviderResolver::uses_deterministic_reconstruction` |
+| Komenda post-stage | `crates/fullmag-cli/src/interactive_runtime_host.rs` | `InteractiveRuntimeHost::compute_current_fields` |
+| Rekonstrukcja bez retained runtime | `crates/fullmag-runner/src/lib.rs` | `snapshot_problem_vector_field_batch` |
+| Walidacja i serializacja FMVP | `crates/fullmag-api/src/field_store.rs` | `validate_field_vector_payload`, `serialize_field_vector_binary_v3` |
+| Dekodowanie i identity FMVP | `apps/control-room/src/kernel/api/codecs/fieldVectorCodec.ts` | `decodeFieldVector` |
+| Reset leaf target settings | `apps/control-room/src/kernel/visualization/ObjectVisualizationController.ts` | `removeSerializedOverrideField` |
+| Semanticzne targety Airbox/object/part | `apps/control-room/src/kernel/selection/semanticRenderTargetCatalog.ts` | `buildSemanticRenderTargetCatalog` |
+| Targety regionów | `apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts` | `resolveViewport3DRegionTargetByPartId`, `resolveViewport3DRegionTargetsForMembershipOwnerParts` |
+| Airbox capability multilayer | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `resolveFdmMultilayerAirboxFieldAvailability` |
+| Zarządzany gate FEM 3D | `.github/workflows/frontend-3d-managed-fem.yml` | job `frontend-3d-managed-fem` |
+| Wymagane dowody release | `docs/validation/frontend-3d-required-check-matrix.md` | tabela wymaganych checków |
