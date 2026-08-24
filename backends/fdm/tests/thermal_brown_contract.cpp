@@ -42,8 +42,8 @@ int main() {
           "native FDM plan ABI exposes the thermal seed");
     check(context.find("uint64_t thermal_seed") != std::string::npos,
           "CUDA Context retains the resolved thermal seed");
-    check(api.find("ctx->current_dt = dt_seconds") != std::string::npos,
-          "every native step supplies its requested timestep to the thermal field");
+    check(api.find("ctx.trial_dt = dt_seconds") != std::string::npos,
+          "every native attempt supplies its trial timestep to the thermal field");
     check(api.find("ctx->thermal_seed = plan->thermal_seed") != std::string::npos,
           "native plan seed is retained by the CUDA context");
     for (const auto *source : {&fp64, &fp32}) {
@@ -55,7 +55,7 @@ int main() {
               "Brown RNG key includes seed, accepted step, and cell");
     }
     for (const auto *source : {&rk23, &dp45}) {
-        check(source->find("ctx.current_dt = dt;") != std::string::npos,
+        check(source->find("ctx.trial_dt = dt;") != std::string::npos,
               "adaptive attempts update Brown variance with their attempted timestep");
     }
 

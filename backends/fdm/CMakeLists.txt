@@ -66,6 +66,9 @@ else()
 endif()
 
 add_library(fullmag_fdm SHARED ${FDM_SOURCES})
+if(WIN32)
+    set_target_properties(fullmag_fdm PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+endif()
 
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/context.cu" FDM_GPU_CONTEXT_SHA256)
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/transport/charge/device_solver.cu" FDM_GPU_CHARGE_SOLVER_SHA256)
