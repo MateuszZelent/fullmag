@@ -157,6 +157,7 @@ type StudyInspectorPanelAction =
       drafts: StudyStageDraft[];
       globalDraft: StudyGlobalDraft;
       preserveGlobalDraft?: StudyGlobalDraft;
+      preserveStageDrafts?: StudyStageDraft[];
       revision: number | string | null;
       selectedIndex: number;
       signature: string;
@@ -246,8 +247,11 @@ function studyInspectorPanelReducer(
         draftSceneRevision: action.revision,
         draftSceneSignature: action.signature,
         globalDraft: action.preserveGlobalDraft ?? action.globalDraft,
-        selectedDraftIndex: action.selectedIndex,
-        stageDrafts: action.drafts,
+        selectedDraftIndex:
+          action.preserveStageDrafts === undefined
+            ? action.selectedIndex
+            : clampIndex(state.selectedDraftIndex, action.preserveStageDrafts),
+        stageDrafts: action.preserveStageDrafts ?? action.drafts,
       };
     case "acceptGlobalDraft":
       return { ...state, baselineGlobalDraft: state.globalDraft };
@@ -674,6 +678,10 @@ export function useStudyInspectorPanelController(
         JSON.stringify(state.globalDraft) !== JSON.stringify(state.baselineGlobalDraft)
           ? state.globalDraft
           : undefined,
+      preserveStageDrafts:
+        JSON.stringify(state.stageDrafts) !== JSON.stringify(state.baselineStageDrafts)
+          ? state.stageDrafts
+          : undefined,
       revision: sceneRevision,
       selectedIndex:
         stageDrafts.length === 0
@@ -686,7 +694,9 @@ export function useStudyInspectorPanelController(
     sceneRevision,
     selectedStageIndex,
     state.baselineGlobalDraft,
+    state.baselineStageDrafts,
     state.globalDraft,
+    state.stageDrafts,
     studySignature,
   ]);
   const activeStageIndex = stageExecution.data?.active_stage_index ?? null;
@@ -781,10 +791,27 @@ export function useStudyInspectorPanelController(
       return false;
     }
 
+    const baseRevision = numericSceneRevision(sceneRevision);
+    if (baseRevision === null) {
+      dispatch({
+        type: "setAuthoringFeedback",
+        scope: "stages",
+        feedback: {
+          kind: "error",
+          message:
+            "The canonical scene revision is unavailable. Refetch before applying study stages.",
+        },
+      });
+      return false;
+    }
+
     dispatch({ type: "setAuthoringBusy", busy: true });
     try {
       const response = await kernel.api.model.commitTransaction(
-        buildStudyStagesMergePatch(state.stageDrafts),
+        buildStudyStagesMergePatch(
+          state.stageDrafts,
+          baseRevision,
+        ),
       );
       const revision = response.scene_revision;
       kernel.resources.invalidate(MODEL_SCENE_PATH, revision);
@@ -804,17 +831,35 @@ export function useStudyInspectorPanelController(
       dispatch({ type: "acceptStageDrafts" });
       return true;
     } catch (error) {
-      dispatch({
-        type: "setAuthoringFeedback",
-        scope: "stages",
-        feedback: {
-          kind: "error",
-          message:
-            error instanceof Error
-              ? error.message
-              : "Failed to commit study stages.",
-        },
-      });
+      if (
+        error instanceof ControlRoomApiError &&
+        (error.status === 409 ||
+          error.code === "revision_conflict" ||
+          error.code === "scene_revision_conflict")
+      ) {
+        scene.refetch();
+        dispatch({
+          type: "setAuthoringFeedback",
+          scope: "stages",
+          feedback: {
+            kind: "error",
+            message:
+              "Scene revision conflict. Refetched the canonical scene; the stage draft was preserved for review and retry.",
+          },
+        });
+      } else {
+        dispatch({
+          type: "setAuthoringFeedback",
+          scope: "stages",
+          feedback: {
+            kind: "error",
+            message:
+              error instanceof Error
+                ? error.message
+                : "Failed to commit study stages.",
+          },
+        });
+      }
       return false;
     } finally {
       dispatch({ type: "setAuthoringBusy", busy: false });
@@ -1112,7 +1157,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
             dispatch({ type: "updateStageDraft", index, patch })
           }
           runCommand={runCommand}
-          showDraftEditor={false}
+          showDraftEditor={state.stageDrafts.length === 0 || stagesDirty}
         />
 
         <StudyRecoverySection

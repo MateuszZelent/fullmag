@@ -1682,6 +1682,20 @@ function sceneRevision(value: unknown): string | number {
     : Date.now();
 }
 
+function sceneBaseRevision(value: unknown): number | null {
+  const payload = record(value);
+  const candidate =
+    payload.scene_revision ??
+    payload.revision ??
+    record(payload.scene).revision;
+  if (typeof candidate === "number") {
+    return Number.isFinite(candidate) ? candidate : null;
+  }
+  if (typeof candidate !== "string" || !candidate.trim()) return null;
+  const parsed = Number(candidate);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function invalidateStudyAuthoringResources(
   context: CommandContext,
   revision: string | number,
@@ -1717,6 +1731,13 @@ function addStageCommand(
       }
 
       const scene = await context.api.model.scene();
+      const baseRevision = sceneBaseRevision(scene);
+      if (baseRevision === null) {
+        return {
+          message: "Scene revision is unavailable; refresh the scene and retry.",
+          status: "failed",
+        };
+      }
       const currentStages = studyStages(scene);
       const addedStage = stageWithDefaultId(stage, currentStages.length);
       const nextStages = [
@@ -1725,6 +1746,7 @@ function addStageCommand(
       ];
       const response = await context.api.model.commitTransaction({
         kind: "merge_patch",
+        base_revision: baseRevision,
         merge_patch: {
           study: {
             stages: nextStages,
@@ -1778,6 +1800,13 @@ function continueHysteresisToNextStageCommand(): CommandContribution {
       }
 
       const scene = await context.api.model.scene();
+      const baseRevision = sceneBaseRevision(scene);
+      if (baseRevision === null) {
+        return {
+          message: "Scene revision is unavailable; refresh the scene and retry.",
+          status: "failed",
+        };
+      }
       const currentStages = studyStages(scene);
       const sourceIndex = currentStages.findIndex(
         (stage) => stage.stage_id === stageId,
@@ -1802,6 +1831,7 @@ function continueHysteresisToNextStageCommand(): CommandContribution {
       ];
       const response = await context.api.model.commitTransaction({
         kind: "merge_patch",
+        base_revision: baseRevision,
         merge_patch: {
           study: {
             stages: nextStages,
@@ -1845,6 +1875,13 @@ function removeSelectedStageCommand(): CommandContribution {
       }
 
       const scene = await context.api.model.scene();
+      const baseRevision = sceneBaseRevision(scene);
+      if (baseRevision === null) {
+        return {
+          message: "Scene revision is unavailable; refresh the scene and retry.",
+          status: "failed",
+        };
+      }
       const stages = studyStages(scene);
       if (!stages[index]) {
         return { message: "Selected study stage is no longer present.", status: "failed" };
@@ -1852,6 +1889,7 @@ function removeSelectedStageCommand(): CommandContribution {
       const nextStages = stages.filter((_, stageIndex) => stageIndex !== index);
       const response = await context.api.model.commitTransaction({
         kind: "merge_patch",
+        base_revision: baseRevision,
         merge_patch: {
           study: {
             stages: nextStages,

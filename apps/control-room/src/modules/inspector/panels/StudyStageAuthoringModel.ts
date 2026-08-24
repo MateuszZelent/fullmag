@@ -2020,9 +2020,13 @@ function joinOptions(options: readonly string[]): string {
 
 export function buildStudyStagesMergePatch(
   stages: readonly StudyStageDraft[],
+  baseRevision?: number | null,
 ): AuthoringTransactionRequest {
   return {
     kind: "merge_patch",
+    ...(baseRevision === undefined || baseRevision === null
+      ? {}
+      : { base_revision: baseRevision }),
     merge_patch: {
       study: {
         stages: stages.map(studyStageDraftToSceneStage),

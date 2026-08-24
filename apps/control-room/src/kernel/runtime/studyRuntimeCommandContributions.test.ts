@@ -424,6 +424,28 @@ describe("study runtime command contributions", () => {
     });
   });
 
+  it("fails closed when a stage mutation cannot obtain the scene revision", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const commitTransaction = vi.fn();
+
+    const result = await registry.execute("study.add-relax-stage", {
+      api: {
+        model: {
+          scene: vi.fn(async () => ({ study: { stages: [] } })),
+          commitTransaction,
+        },
+      } as never,
+      resourceData: runtimeResourceData(),
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "Scene revision is unavailable; refresh the scene and retry.",
+      status: "failed",
+    });
+    expect(commitTransaction).not.toHaveBeenCalled();
+  });
+
   it("adds each authored study stage kind through command registry merge patches", async () => {
     const registry = registryWithStudyRuntimeCommands();
     const bus = new EventBus<KernelEventMap>();
@@ -1366,6 +1388,7 @@ describe("study runtime command contributions", () => {
       status: "completed",
     });
     expect(commitTransaction).toHaveBeenCalledWith({
+      base_revision: 3,
       kind: "merge_patch",
       merge_patch: {
         study: {

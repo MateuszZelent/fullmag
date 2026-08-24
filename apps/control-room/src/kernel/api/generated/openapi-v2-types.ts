@@ -3721,6 +3721,8 @@ export interface components {
             kind: "replace_scene";
             scene: Record<string, never>;
         } | {
+            /** Format: int64 */
+            base_revision?: number | null;
             /** @enum {string} */
             kind: "merge_patch";
             merge_patch: Record<string, never>;

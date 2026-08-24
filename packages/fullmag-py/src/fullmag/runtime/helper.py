@@ -17,7 +17,11 @@ from fullmag.runtime.scene_document import (
     build_scene_document_from_builder,
     builder_overrides_from_scene_document,
 )
-from fullmag.runtime.script_builder import export_builder_draft, rewrite_loaded_problem_script
+from fullmag.runtime.script_builder import (
+    export_builder_draft,
+    render_scene_document_as_script,
+    rewrite_loaded_problem_script,
+)
 
 
 def _write_executed_problem_ir_identity(problem_ir: dict[str, object]) -> None:
@@ -153,6 +157,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Write the canonical script back to the original path.",
     )
+
+    render_scene = subparsers.add_parser(
+        "render-scene-document",
+        help="Render a canonical Python script from a complete SceneDocument without an input script.",
+    )
+    render_scene.add_argument("--scene-json", required=True, help="Path to SceneDocument JSON.")
+    render_scene.add_argument("--output", required=True, help="Atomic output path for the Python script.")
 
     read_state = subparsers.add_parser(
         "read-magnetization-state",
@@ -330,6 +341,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         emit_progress("SceneDocument rewrite completed")
+        return 0
+
+    if args.command == "render-scene-document":
+        scene_document = json.loads(Path(args.scene_json).read_text(encoding="utf-8"))
+        emit_progress("Rendering canonical Python from SceneDocument")
+        source = render_scene_document_as_script(scene_document)
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = output_path.with_name(
+            f".{output_path.name}.{os.getpid()}.tmp"
+        )
+        temporary_path.write_text(source, encoding="utf-8")
+        os.replace(temporary_path, output_path)
+        print(
+            json.dumps(
+                {
+                    "script_path": str(output_path.resolve()),
+                    "source_kind": "scene_document",
+                    "entrypoint_kind": "flat_workspace",
+                    "written": True,
+                    "bytes_written": len(source.encode("utf-8")),
+                }
+            )
+        )
+        emit_progress("SceneDocument script rendered")
         return 0
 
     if args.command == "read-magnetization-state":

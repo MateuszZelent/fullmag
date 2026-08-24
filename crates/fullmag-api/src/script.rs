@@ -27,44 +27,71 @@ pub(crate) async fn sync_current_live_script_with_request(
     state: &Arc<AppState>,
     req: ScriptSyncRequest,
 ) -> Result<ScriptSyncResponse, ApiError> {
-    let (script_path, scene_document) = {
+    let workspace_root = state.current_workspace_root.clone();
+    let (script_path, scene_document, has_input_script) = {
         let current = state.current_live_state.read().await;
         let snapshot = current
             .as_ref()
             .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-        let script_path = snapshot.session.script_path.trim();
-        if script_path.is_empty() {
-            return Err(ApiError::bad_request(
-                "active local live workspace does not expose a script path",
-            ));
-        }
-        (PathBuf::from(script_path), snapshot.scene_document.clone())
+        let authored_script_path = snapshot.session.script_path.trim();
+        let has_input_script = !authored_script_path.is_empty();
+        let script_path = if has_input_script {
+            PathBuf::from(authored_script_path)
+        } else {
+            workspace_root.join("scene_document.py")
+        };
+        (
+            script_path,
+            snapshot.scene_document.clone(),
+            has_input_script,
+        )
     };
 
-    if !script_path.is_file() {
-        return Err(ApiError::bad_request(format!(
-            "script path does not exist: {}",
-            script_path.display()
-        )));
-    }
-
-    let overrides = if let Some(overrides) = req.overrides.clone() {
-        Some(overrides)
-    } else if let Some(scene_document) = scene_document.as_ref() {
-        Some(scene_document_overrides(scene_document)?)
-    } else {
-        None
-    };
     eprintln!(
         "[fullmag-api] RX <- frontend script sync {}",
         script_path.display()
     );
-    let response = rewrite_script_via_python_helper(
-        &state.repo_root,
-        &state.current_workspace_root,
-        &script_path,
-        overrides.as_ref(),
-    )?;
+    let response = if has_input_script {
+        if !script_path.is_file() {
+            return Err(ApiError::bad_request(format!(
+                "script path does not exist: {}",
+                script_path.display()
+            )));
+        }
+        let overrides = if let Some(overrides) = req.overrides.clone() {
+            Some(overrides)
+        } else if let Some(scene_document) = scene_document.as_ref() {
+            Some(scene_document_overrides(scene_document)?)
+        } else {
+            None
+        };
+        rewrite_script_via_python_helper(
+            &state.repo_root,
+            &workspace_root,
+            &script_path,
+            overrides.as_ref(),
+        )?
+    } else {
+        let scene_document = scene_document.as_ref().ok_or_else(|| {
+            ApiError::bad_request(
+                "scratch workspace has no SceneDocument to render as a canonical script",
+            )
+        })?;
+        render_scene_document_via_python_helper(
+            &state.repo_root,
+            &workspace_root,
+            &script_path,
+            scene_document,
+        )?
+    };
+    if !has_input_script {
+        let mut current = state.current_live_state.write().await;
+        if let Some(snapshot) = current.as_mut() {
+            if snapshot.session.script_path.trim().is_empty() {
+                snapshot.session.script_path = response.script_path.clone();
+            }
+        }
+    }
     eprintln!(
         "[fullmag-api] TX -> frontend script sync ok {}",
         response.script_path
@@ -165,6 +192,49 @@ pub(crate) fn rewrite_script_via_python_helper(
     })
 }
 
+pub(crate) fn render_scene_document_via_python_helper(
+    repo_root: &Path,
+    workspace_root: &Path,
+    output_path: &Path,
+    scene_document: &SceneDocument,
+) -> Result<ScriptSyncResponse, ApiError> {
+    std::fs::create_dir_all(workspace_root).map_err(|error| {
+        ApiError::internal(format!("failed to prepare workspace: {}", error))
+    })?;
+    let scene_path = workspace_root.join(format!("scene-export-{}.json", uuid_v4_hex()));
+    let scene_body = serde_json::to_string_pretty(scene_document).map_err(|error| {
+        ApiError::internal(format!("failed to serialize SceneDocument: {}", error))
+    })?;
+    std::fs::write(&scene_path, scene_body).map_err(|error| {
+        ApiError::internal(format!("failed to persist SceneDocument: {}", error))
+    })?;
+    let helper_args = vec![
+        "-m".to_string(),
+        "fullmag.runtime.helper".to_string(),
+        "render-scene-document".to_string(),
+        "--scene-json".to_string(),
+        scene_path.display().to_string(),
+        "--output".to_string(),
+        output_path.display().to_string(),
+    ];
+    let output = run_python_helper(repo_root, &helper_args);
+    let _ = std::fs::remove_file(&scene_path);
+    let output = output?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(ApiError::internal(format!(
+            "python SceneDocument render helper failed: {}",
+            stderr.trim()
+        )));
+    }
+    serde_json::from_slice::<ScriptSyncResponse>(&output.stdout).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to deserialize SceneDocument render response: {}",
+            error
+        ))
+    })
+}
+
 pub(crate) fn load_scene_document_state(
     repo_root: &Path,
     _workspace_root: &Path,
@@ -211,22 +281,15 @@ pub(crate) fn python_executable(repo_root: &Path) -> String {
         return preferred;
     }
     let real_root = if repo_root.join("packages/fullmag-py/src/fullmag").exists() {
-        repo_root.to_path_buf()
+        repo_root
     } else {
-        self::repo_root()
+        &self::repo_root()
     };
-    let local_python = real_root
-        .join(".fullmag")
-        .join("local")
-        .join("python")
-        .join("bin")
-        .join("python");
-    if local_python.is_file() {
-        return local_python.display().to_string();
-    }
-    let repo_python = real_root.join(".venv").join("bin").join("python");
-    if repo_python.is_file() {
-        return repo_python.display().to_string();
+    if let Some(candidate) = python_path_candidates(real_root)
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+    {
+        return candidate.display().to_string();
     }
     "python3".to_string()
 }
@@ -235,19 +298,17 @@ pub(crate) fn run_python_helper(
     repo_root: &Path,
     args: &[String],
 ) -> Result<std::process::Output, ApiError> {
-    let local_python = repo_root
-        .join(".fullmag")
-        .join("local")
-        .join("python")
-        .join("bin")
-        .join("python");
-    let repo_python = repo_root.join(".venv").join("bin").join("python");
+    let real_root = if repo_root.join("packages/fullmag-py/src/fullmag").exists() {
+        repo_root.to_path_buf()
+    } else {
+        self::repo_root()
+    };
     let mut candidates = Vec::new();
 
     if let Ok(preferred) = std::env::var("FULLMAG_PYTHON") {
         candidates.push(preferred);
     } else {
-        for candidate in [local_python, repo_python] {
+        for candidate in python_path_candidates(&real_root) {
             if candidate.is_file() {
                 candidates.push(candidate.display().to_string());
             }
@@ -259,8 +320,8 @@ pub(crate) fn run_python_helper(
         }
     }
 
-    let pythonpath = repo_root.join("packages").join("fullmag-py").join("src");
-    let fem_mesh_cache_dir = repo_root
+    let pythonpath = real_root.join("packages").join("fullmag-py").join("src");
+    let fem_mesh_cache_dir = real_root
         .join(".fullmag")
         .join("local")
         .join("cache")
@@ -277,7 +338,7 @@ pub(crate) fn run_python_helper(
             let mut merged = pythonpath.display().to_string();
             if let Some(existing) = &inherited_pythonpath {
                 if !existing.is_empty() {
-                    merged.push(':');
+                    merged.push(if cfg!(windows) { ';' } else { ':' });
                     merged.push_str(existing);
                 }
             }
@@ -296,6 +357,39 @@ pub(crate) fn run_python_helper(
         "failed to spawn python helper ({})",
         last_error.unwrap_or_else(|| "unknown error".to_string())
     )))
+}
+
+fn python_path_candidates(repo_root: &Path) -> Vec<PathBuf> {
+    vec![
+        repo_root
+            .join(".fullmag")
+            .join("local")
+            .join("python")
+            .join("bin")
+            .join("python"),
+        repo_root
+            .join(".fullmag")
+            .join("local")
+            .join("python")
+            .join("python.exe"),
+        repo_root.join(".venv").join("bin").join("python"),
+        repo_root
+            .join(".venv")
+            .join("Scripts")
+            .join("python.exe"),
+        repo_root
+            .join("packages")
+            .join("fullmag-py")
+            .join(".venv")
+            .join("bin")
+            .join("python"),
+        repo_root
+            .join("packages")
+            .join("fullmag-py")
+            .join(".venv")
+            .join("Scripts")
+            .join("python.exe"),
+    ]
 }
 
 #[cfg(test)]

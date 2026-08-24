@@ -71,6 +71,26 @@ describe("StudyInspectorPanel", () => {
     expect(source).toContain("buildRuntimeCommandControlResourceData({");
   });
 
+  it("exposes Add Relax controls for an empty study without changing populated-stage routing", () => {
+    const source = readFileSync(
+      new URL("./StudyInspectorPanel.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain(
+      "showDraftEditor={state.stageDrafts.length === 0 || stagesDirty}",
+    );
+    expect(source).toContain("const stagesDirty =");
+    expect(source).toContain(
+      "The canonical scene revision is unavailable. Refetch before applying study stages.",
+    );
+    expect(source).toContain("preserveStageDrafts");
+    expect(source).toContain(
+      "the stage draft was preserved for review and retry.",
+    );
+    expect(source).toContain('onAddStage={(kind) => dispatch({ type: "addStageDraft", kind })}');
+  });
+
   it.each([
     {
       enabled: true,

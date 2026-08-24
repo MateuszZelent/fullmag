@@ -3028,8 +3028,12 @@ pub async fn commit_authoring_transaction(
                 crate::commit_current_live_scene_document(&state, scene_document).await?;
             ("replace_scene", committed)
         }
-        AuthoringTransactionRequest::MergePatch { merge_patch } => {
+        AuthoringTransactionRequest::MergePatch {
+            base_revision,
+            merge_patch,
+        } => {
             let current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            check_base_scene_revision(&current_scene, base_revision)?;
             let patched_scene = apply_scene_merge_patch(&current_scene, &merge_patch)?;
             let committed =
                 crate::commit_current_live_scene_document(&state, patched_scene).await?;

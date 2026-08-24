@@ -45,6 +45,10 @@ describe("PhysicsInteractionPanel lane contract", () => {
     expect(source).toContain("interactionMutationKey(");
     expect(source).toContain("mutations: Record<string");
     expect(source).toContain("base_revision: resource.scene_revision");
+    expect(source).toContain(
+      "base_revision: sceneBaseRevision",
+    );
+    expect(source).toContain("resolveSceneResourceRevision(scene.data)");
     expect(source).toContain("scene.refetch()");
     expect(source).toContain("Draft preserved; scene refetched");
     expect(source).not.toContain("JSON.stringify(draft)");

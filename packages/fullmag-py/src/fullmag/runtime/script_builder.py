@@ -4,6 +4,7 @@ import copy
 import json
 import math
 import re
+import tempfile
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -92,7 +93,7 @@ from fullmag.model.study import (
     TableAutosave,
     TimeEvolution,
 )
-from fullmag.runtime.loader import LoadedProblem, LoadedStage
+from fullmag.runtime.loader import LoadedProblem, LoadedStage, load_problem_from_script
 
 
 DEFAULT_ADAPTIVE_DT_MIN = 1e-15
@@ -245,6 +246,9 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
     draft = {
         "revision": 1,
         "backend": base_problem.runtime.backend_target.value,
+        "requested_backend": base_problem.runtime.backend_target.value,
+        "requested_device": base_problem.runtime.device_target.value,
+        "requested_precision": base_problem.runtime.execution_precision.value,
         "requested_mode": base_problem.runtime.execution_mode.value,
         "cpu_threads": base_problem.runtime.cpu_threads,
         "fem_demag_solver_policy": _export_fem_demag_solver_policy(base_problem),
@@ -575,6 +579,416 @@ def render_loaded_problem_as_flat_script(
     overrides: dict[str, object] | None = None,
 ) -> str:
     return render_loaded_problem_as_script(loaded, overrides=overrides)
+
+
+def render_scene_document_as_script(scene_document: Mapping[str, object]) -> str:
+    """Render a canonical Python script directly from a SceneDocument.
+
+    The scene is first validated through the existing SceneDocument → builder
+    adapter.  A small, deterministic capture script supplies the typed
+    ``Problem`` required by the established renderer; all authored values are
+    then applied through the same builder overrides used by script-backed UI
+    export.  No user script or placeholder magnet is required.
+    """
+    from fullmag.runtime.scene_document import (
+        build_builder_from_scene_document,
+        builder_overrides_from_scene_document,
+    )
+
+    scene = dict(scene_document)
+    builder = build_builder_from_scene_document(scene)
+    bootstrap = _render_scene_document_bootstrap(builder)
+    scene_for_render = copy.deepcopy(scene)
+    _inherit_scene_stage_timestep(scene_for_render, builder)
+    with tempfile.TemporaryDirectory(prefix="fullmag-scene-export-") as temporary:
+        script_path = Path(temporary) / "scene_document.py"
+        script_path.write_text(bootstrap, encoding="utf-8")
+        loaded = load_problem_from_script(script_path, lightweight_assets=True)
+        return render_loaded_problem_as_script(
+            loaded,
+            overrides=builder_overrides_from_scene_document(scene_for_render),
+        )
+
+
+def _inherit_scene_stage_timestep(
+    scene: dict[str, object], builder: Mapping[str, object]
+) -> None:
+    """Keep a valid global fixed step when 0.3 stages omit a duplicate field."""
+    solver = builder.get("solver")
+    if not isinstance(solver, Mapping):
+        return
+    fixed_timestep = solver.get("fixed_timestep")
+    if _finite_number(fixed_timestep) is None:
+        return
+    study = scene.get("study")
+    if not isinstance(study, dict) or not isinstance(study.get("stages"), list):
+        return
+    for stage in study["stages"]:
+        if isinstance(stage, dict) and str(stage.get("kind") or "relax") == "relax":
+            stage.setdefault("fixed_timestep", fixed_timestep)
+
+
+def _render_scene_document_bootstrap(builder: Mapping[str, object]) -> str:
+    """Build a minimal capture script that realizes the scene's typed objects."""
+    backend = str(builder.get("backend") or builder.get("requested_backend") or "auto")
+    mode = str(builder.get("requested_mode") or "strict")
+    device = str(builder.get("requested_device") or "auto")
+    precision = str(
+        builder.get("requested_precision")
+        or builder.get("execution_precision")
+        or "double"
+    )
+    lines = [
+        "import fullmag as fm",
+        "",
+        'study = fm.study("scene_document")',
+        f"study.engine({_python_literal(backend)})",
+        f"study.mode({_python_literal(mode)})",
+    ]
+    if device != "auto" or precision != "double":
+        lines.append(
+            f"study.device({_python_literal(device)}, precision={_python_literal(precision)})"
+        )
+    cpu_threads = _positive_int(builder.get("cpu_threads"))
+    if cpu_threads is not None:
+        lines.append(f"study.threads({cpu_threads})")
+
+    solver = builder.get("solver")
+    if isinstance(solver, Mapping):
+        solver_kwargs: dict[str, object] = {}
+        integrator = solver.get("integrator")
+        if isinstance(integrator, str) and integrator.strip():
+            solver_kwargs["integrator"] = integrator
+        for key, value in (
+            ("fixed_timestep", "fix_dt"),
+            ("dt_initial", "dt_initial"),
+            ("dt_max", "dt_max"),
+            ("max_err", "max_err"),
+        ):
+            numeric = _finite_number(solver.get(key))
+            if numeric is not None:
+                solver_kwargs[value] = numeric
+        if solver_kwargs:
+            lines.append(f"study.solver({_python_keyword_args(solver_kwargs)})")
+
+    fdm = builder.get("fdm")
+    if isinstance(fdm, Mapping):
+        fdm_line = _render_fdm_bootstrap(fdm)
+        if fdm_line:
+            lines.append(fdm_line)
+    fdm_per_magnet = (
+        fdm.get("per_magnet") or fdm.get("per_object_grid")
+        if isinstance(fdm, Mapping)
+        else None
+    )
+
+    objects = builder.get("geometries")
+    if not isinstance(objects, list) or not objects:
+        raise ValueError("SceneDocument export requires at least one geometry object.")
+    handles: list[str] = []
+    for index, raw_object in enumerate(objects):
+        if not isinstance(raw_object, Mapping):
+            raise ValueError(f"SceneDocument geometry {index} must be an object.")
+        role = str(raw_object.get("role") or "magnet").lower()
+        if role != "magnet":
+            continue
+        name = str(raw_object.get("name") or raw_object.get("id") or f"object_{index}")
+        object_id = str(raw_object.get("object_id") or raw_object.get("id") or name)
+        handle = f"object_{index}"
+        shape = _render_shape_expression(raw_object)
+        lines.append(
+            f"{handle} = study.geometry({shape}, name={_python_literal(name)}, "
+            f"object_id={_python_literal(object_id)})"
+        )
+        handles.append(handle)
+        material = raw_object.get("material")
+        if isinstance(material, Mapping):
+            for key in ("Ms", "Aex", "alpha", "Dind", "Dbulk", "Ku1", "Kc1"):
+                value = _finite_number(material.get(key))
+                if value is not None:
+                    lines.append(f"{handle}.{key} = {_python_literal(value)}")
+            anis_u = material.get("anisU") or material.get("anis_u")
+            if isinstance(anis_u, (list, tuple)) and len(anis_u) == 3:
+                lines.append(f"{handle}.anisU = {_python_literal(tuple(anis_u))}")
+        magnetization = raw_object.get("magnetization")
+        if isinstance(magnetization, Mapping):
+            texture_expression = _render_texture_expression(magnetization)
+            if texture_expression is not None:
+                lines.append(f"{handle}.m = {texture_expression}")
+        mesh = raw_object.get("mesh")
+        if isinstance(mesh, Mapping):
+            mesh_kwargs = _render_scene_mesh_kwargs(mesh)
+            if mesh_kwargs:
+                lines.append(f"{handle}.mesh({_python_keyword_args(mesh_kwargs)})")
+        elif isinstance(fdm_per_magnet, Mapping):
+            raw_grid = fdm_per_magnet.get(name) or fdm_per_magnet.get(object_id)
+            if isinstance(raw_grid, Mapping) and _is_vector3(raw_grid.get("cell")):
+                lines.append(
+                    f"{handle}.mesh(cell_size={_python_literal(tuple(raw_grid['cell']))})"
+                )
+
+    if not handles:
+        raise ValueError("SceneDocument export requires at least one magnetic object.")
+
+    if builder.get("exchange_enabled") is not None:
+        lines.append(f"study.exchange(enabled={bool(builder.get('exchange_enabled'))!r})")
+    if builder.get("demag_enabled") is not None:
+        demag_kwargs: dict[str, object] = {"enabled": bool(builder.get("demag_enabled"))}
+        realization = builder.get("demag_realization")
+        if isinstance(realization, str) and realization.strip():
+            demag_kwargs["realization"] = realization
+        lines.append(f"study.demag({_python_keyword_args(demag_kwargs)})")
+
+    external_field = builder.get("external_field")
+    if isinstance(external_field, (list, tuple)) and len(external_field) == 3:
+        values = tuple(_finite_number(value) for value in external_field)
+        if all(value is not None for value in values):
+            lines.append(
+                "fm.b_ext(" + ", ".join(_python_literal(value) for value in values) + ")"
+            )
+
+    universe = builder.get("universe")
+    if isinstance(universe, Mapping):
+        universe_kwargs = _render_universe_kwargs(universe)
+        if universe_kwargs:
+            lines.append(f"study.universe({_python_keyword_args(universe_kwargs)})")
+    mesh = builder.get("mesh")
+    if isinstance(mesh, Mapping) and backend.lower() == "fem":
+        object_mesh_kwargs = _render_scene_mesh_kwargs(mesh)
+        if object_mesh_kwargs:
+            lines.append(
+                "study.objects.mesh.defaults("
+                f"{_python_keyword_args(object_mesh_kwargs)})"
+            )
+    universe_mesh = universe if isinstance(universe, Mapping) else None
+    if universe_mesh is not None:
+        universe_mesh_kwargs = _render_universe_mesh_kwargs(universe_mesh, backend=backend)
+        if universe_mesh_kwargs:
+            lines.append(f"study.universe.mesh({_python_keyword_args(universe_mesh_kwargs)})")
+
+    for stage in builder.get("stages") or []:
+        if not isinstance(stage, Mapping) or str(stage.get("kind") or "relax") != "relax":
+            continue
+        kwargs: dict[str, object] = {"stage_id": str(stage.get("stage_id") or "relax")}
+        algorithm = stage.get("algorithm")
+        if isinstance(algorithm, str) and algorithm.strip():
+            kwargs["algorithm"] = algorithm
+        max_steps = _positive_int(stage.get("max_steps"))
+        if max_steps is not None:
+            kwargs["max_steps"] = max_steps
+        tolerance = _finite_number(stage.get("torque_tolerance"))
+        if tolerance is not None:
+            kwargs["tolA"] = tolerance
+        fixed_timestep = _finite_number(stage.get("fixed_timestep"))
+        if fixed_timestep is None and isinstance(solver, Mapping):
+            fixed_timestep = _finite_number(solver.get("fixed_timestep"))
+        if fixed_timestep is not None:
+            kwargs["dt"] = fixed_timestep
+        lines.append(f"study.stages.add_relax({_python_keyword_args(kwargs)})")
+
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def _render_shape_expression(entry: Mapping[str, object]) -> str:
+    kind = str(entry.get("geometry_kind") or "").strip().lower()
+    params = entry.get("geometry_params")
+    params = params if isinstance(params, Mapping) else {}
+    if kind == "box":
+        size = params.get("size") or params.get("dimensions")
+        if not _is_vector3(size):
+            raise ValueError("Box geometry requires three positive size values.")
+        expression = f"fm.Box(size={_python_literal(tuple(size))})"
+    elif kind == "cylinder":
+        radius = _finite_number(params.get("radius"))
+        height = _finite_number(params.get("height"))
+        if radius is None or height is None:
+            raise ValueError("Cylinder geometry requires finite radius and height.")
+        expression = f"fm.Cylinder(radius={radius!r}, height={height!r})"
+    elif kind in {"sphere", "ellipsoid"}:
+        radii = params.get("radii")
+        if kind == "sphere" and radii is None:
+            radius = _finite_number(params.get("radius"))
+            radii = (radius, radius, radius) if radius is not None else None
+        if not _is_vector3(radii):
+            raise ValueError("Ellipsoid geometry requires three finite radii.")
+        constructor = "fm.Sphere" if kind == "sphere" and len(set(radii)) == 1 else "fm.Ellipsoid"
+        if constructor == "fm.Sphere":
+            expression = f"fm.Sphere({_python_literal(float(radii[0]))})"
+        else:
+            expression = f"fm.Ellipsoid{_python_literal(tuple(radii))}"
+    elif kind in {"archwaveguide", "arch_waveguide"}:
+        values = [
+            _finite_number(params.get(key))
+            for key in ("length", "width", "height", "arch_height")
+        ]
+        if any(value is None for value in values):
+            raise ValueError("ArchWaveguide geometry requires finite dimensions.")
+        expression = f"fm.ArchWaveguide{_python_literal(tuple(values))}"
+    else:
+        raise ValueError(f"SceneDocument export does not support geometry kind '{kind}'.")
+    translation = params.get("translation")
+    if _is_vector3(translation) and any(float(value) != 0.0 for value in translation):
+        expression += f".translate({_python_literal(tuple(translation))})"
+    return expression
+
+
+def _render_texture_expression(magnetization: Mapping[str, object]) -> str | None:
+    kind = str(magnetization.get("kind") or "").lower()
+    preset_kind = str(magnetization.get("preset_kind") or "").lower()
+    params = magnetization.get("preset_params")
+    params = dict(params) if isinstance(params, Mapping) else {}
+    if kind in {"sampled_field", "sampled"}:
+        return None
+    if preset_kind == "uniform":
+        direction = params.get("direction")
+        if not _is_vector3(direction):
+            raise ValueError("Uniform magnetization requires a three-component direction.")
+        return f"fm.texture.uniform({_python_literal(tuple(direction))})"
+    if preset_kind in {"random", "random_seeded"}:
+        seed = _non_negative_int(params.get("seed"))
+        if seed is None:
+            raise ValueError("Random magnetization requires a non-negative integer seed.")
+        return f"fm.texture.random({seed})"
+    if preset_kind:
+        kwargs = {str(key): value for key, value in params.items()}
+        return f"fm.texture.{preset_kind}({_python_keyword_args(kwargs)})"
+    value = magnetization.get("value")
+    if _is_vector3(value):
+        return f"fm.texture.uniform({_python_literal(tuple(value))})"
+    return None
+
+
+def _render_fdm_bootstrap(fdm: Mapping[str, object]) -> str:
+    kwargs: dict[str, object] = {}
+    default_cell = fdm.get("default_cell")
+    if _is_vector3(default_cell):
+        kwargs["default_cell"] = tuple(default_cell)
+    per_magnet = fdm.get("per_magnet") or fdm.get("per_object_grid")
+    if isinstance(per_magnet, Mapping):
+        entries: list[str] = []
+        for name, raw_grid in per_magnet.items():
+            if isinstance(raw_grid, Mapping) and _is_vector3(raw_grid.get("cell")):
+                entries.append(
+                    f"{_python_literal(str(name))}: fm.FDMGrid(cell={_python_literal(tuple(raw_grid['cell']))})"
+                )
+        if entries:
+            kwargs["per_magnet"] = "{" + ", ".join(entries) + "}"
+    supported_keys = {"default_cell", "per_magnet", "per_object_grid"}
+    if any(
+        key not in supported_keys and fdm.get(key) not in (None, "", [], {})
+        for key in fdm
+    ):
+        if not kwargs:
+            return ""
+        rendered = ", ".join(
+            f"{key}={value}"
+            if isinstance(value, str) and value.startswith("{")
+            else f"{key}={_python_literal(value)}"
+            for key, value in kwargs.items()
+        )
+        return f"study.fdm({rendered})"
+    if _is_vector3(default_cell):
+        return f"study.objects.mesh.defaults(cell_size={_python_literal(tuple(default_cell))})"
+    return ""
+
+
+def _render_scene_mesh_kwargs(mesh: Mapping[str, object]) -> dict[str, object]:
+    allowed = {
+        "cell_size",
+        "maximum_element_size",
+        "minimum_element_size",
+        "order",
+        "compute_quality",
+        "per_element_quality",
+        "growth_rate",
+        "maximum_element_growth_rate",
+    }
+    result: dict[str, object] = {}
+    for key in allowed:
+        value = mesh.get(key)
+        if key == "cell_size" and _is_vector3(value):
+            result[key] = tuple(value)
+        elif key in {"maximum_element_size", "minimum_element_size"}:
+            numeric = _finite_number(value)
+            if numeric is not None:
+                result[key] = numeric
+        elif key == "order":
+            integer = _positive_int(value)
+            if integer is not None:
+                result[key] = integer
+        elif key in {"compute_quality", "per_element_quality"} and isinstance(value, bool):
+            result[key] = value
+    return result
+
+
+def _render_universe_kwargs(universe: Mapping[str, object]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key in ("mode", "center"):
+        value = universe.get(key)
+        if isinstance(value, str) and value.strip():
+            result[key] = value
+        elif key == "center" and _is_vector3(value):
+            result[key] = tuple(value)
+    padding = universe.get("padding")
+    if _is_vector3(padding):
+        result["padding"] = tuple(padding)
+    size = universe.get("size")
+    if _is_vector3(size):
+        result["size"] = tuple(size)
+    return result
+
+
+def _render_universe_mesh_kwargs(mesh: Mapping[str, object], *, backend: str) -> dict[str, object]:
+    if backend.lower() == "fdm":
+        cell_size = mesh.get("cell_size") or mesh.get("common_cell_size")
+        return {"cell_size": tuple(cell_size)} if _is_vector3(cell_size) else {}
+    result: dict[str, object] = {}
+    for key in ("maximum_element_size", "minimum_element_size", "growth_rate"):
+        numeric = _finite_number(mesh.get(key))
+        if numeric is not None:
+            result[key] = numeric
+    return result
+
+
+def _python_keyword_args(values: Mapping[str, object]) -> str:
+    return ", ".join(f"{key}={_python_literal(value)}" for key, value in values.items())
+
+
+def _python_literal(value: object) -> str:
+    if isinstance(value, tuple):
+        return "(" + ", ".join(_python_literal(item) for item in value) + ("," if len(value) == 1 else "") + ")"
+    if isinstance(value, list):
+        return "[" + ", ".join(_python_literal(item) for item in value) + "]"
+    return repr(value)
+
+
+def _is_vector3(value: object) -> bool:
+    return isinstance(value, (list, tuple)) and len(value) == 3 and all(_finite_number(item) is not None for item in value)
+
+
+def _finite_number(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        numeric = float(value) if value is not None and value != "" else None
+    except (TypeError, ValueError):
+        return None
+    return numeric if numeric is not None and math.isfinite(numeric) else None
+
+
+def _positive_int(value: object) -> int | None:
+    numeric = _finite_number(value)
+    if numeric is None or numeric < 1 or int(numeric) != numeric:
+        return None
+    return int(numeric)
+
+
+def _non_negative_int(value: object) -> int | None:
+    numeric = _finite_number(value)
+    if numeric is None or numeric < 0 or int(numeric) != numeric:
+        return None
+    return int(numeric)
 
 
 def _first_relax_stage(loaded: LoadedProblem) -> Relaxation | None:
@@ -1449,12 +1863,14 @@ def _render_geometry_and_materials(
 ) -> list[str]:
     geometries_override = overrides.get("geometries")
     if isinstance(geometries_override, list):
+        fdm = _fdm_from_overrides(problem, overrides)
         return _render_geometries_from_override(
             geometries_override,
             magnet_vars=magnet_vars,
             source_root=source_root,
             overrides=overrides,
             surface=surface,
+            fdm=fdm,
         )
 
     initial_state_override = _normalize_mapping(overrides.get("initial_state"))
@@ -2027,6 +2443,7 @@ def _render_geometries_from_override(
     source_root: Path,
     overrides: dict[str, object],
     surface: str,
+    fdm: FDM | None,
 ) -> list[str]:
     initial_state_override = _normalize_mapping(overrides.get("initial_state"))
     lines = ["# Geometry & Material"]
@@ -2061,6 +2478,15 @@ def _render_geometries_from_override(
         lines.append(
             f"{var_name} = {_surface_call(surface, 'geometry')}({expr}, name={_py_repr(name)}{object_id_arg})"
         )
+        if (
+            surface == "study"
+            and isinstance(fdm, FDM)
+            and _uses_canonical_fdm_mesh_authoring(fdm)
+            and isinstance(fdm.per_magnet, Mapping)
+        ):
+            grid = fdm.per_magnet.get(name)
+            if isinstance(grid, FDMGrid):
+                lines.append(f"{var_name}.mesh(cell_size={_py_tuple3(grid.cell)})")
         region_name = g.get("region_name")
         if isinstance(region_name, str) and region_name and region_name != name:
             lines.append(f"{var_name}.region_name = {_py_repr(region_name)}")
@@ -2131,6 +2557,7 @@ def _render_geometries_from_override(
                         preset_params,
                         mapping=mag.get("mapping") if isinstance(mag.get("mapping"), dict) else None,
                         transform=mag.get("texture_transform") if isinstance(mag.get("texture_transform"), dict) else None,
+                        preset_version=_positive_int(mag.get("preset_version")) or 2,
                         ui_label=mag.get("ui_label") if isinstance(mag.get("ui_label"), str) else None,
                     )
                     lines.append(f"{var_name}.m = {preset_expr}")
@@ -4731,6 +5158,8 @@ def _render_study_mesh_workflow(
     source_root: Path,
     overrides: dict[str, object],
 ) -> list[str]:
+    if _is_pure_fdm_problem(problem):
+        return []
     lines: list[str] = []
 
     global_mesh = _study_global_mesh_config(problem, overrides)
@@ -4783,6 +5212,8 @@ def _render_mesh_workflow(
     overrides: dict[str, object],
     surface: str,
 ) -> list[str]:
+    if _is_pure_fdm_problem(problem):
+        return []
     if surface == "study":
         return _render_study_mesh_workflow(
             problem,
@@ -6637,12 +7068,16 @@ def _export_global_mesh_state(problem: Problem) -> dict[str, object]:
     declared_hmax = default_mesh.get("hmax") if use_declared_defaults else (
         fem.hmax if isinstance(fem, FEM) else None
     )
+    declared_order = default_mesh.get("order") if use_declared_defaults else None
+    if declared_order is None and isinstance(fem, FEM):
+        declared_order = fem.order
 
     return {
         "algorithm_2d": int(mesh_options.get("algorithm_2d", 6)),
         "algorithm_3d": int(mesh_options.get("algorithm_3d", 1)),
         "hmax": _text_mesh_size(declared_hmax),
         "hmin": _text_number(_number_or_none(mesh_options.get("hmin"))),
+        "order": int(declared_order) if isinstance(declared_order, (int, float)) else None,
         "maximum_element_size": _text_mesh_size(declared_hmax),
         "minimum_element_size": _text_number(_number_or_none(mesh_options.get("hmin"))),
         "calibrate_for": str(mesh_options.get("calibrate_for", "") or ""),
@@ -6749,6 +7184,15 @@ def _export_global_mesh_state(problem: Problem) -> dict[str, object]:
             _number_or_none(adaptive_mesh.get("error_tolerance"))
         ),
     }
+
+
+def _is_pure_fdm_problem(problem: Problem) -> bool:
+    discretization = problem.discretization
+    return (
+        discretization is not None
+        and isinstance(discretization.fdm, FDM)
+        and discretization.fem is None
+    )
 
 
 def _mesh_workflow_per_geometry_entry(problem: Problem, magnet_name: str) -> dict[str, object]:

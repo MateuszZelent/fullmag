@@ -4345,6 +4345,20 @@ control-room-v2:
 control-room-stop:
     ./scripts/stop-control-room.sh
 
+run-scratch-authoring-fdm-browser-smoke:
+    pnpm --dir apps/control-room smoke:scratch-authoring-fdm
+
+run-scratch-authoring-fem-browser-smoke fem_execution="cpu":
+    case "{{fem_execution}}" in cpu|CPU) ;; *) echo "scratch FEM authoring smoke requires fem_execution=cpu" >&2; exit 2 ;; esac
+    just ensure-managed-fem-runtime
+    FULLMAG_FEM_EXECUTION=cpu pnpm --dir apps/control-room smoke:scratch-authoring-fem
+
+verify-scratch-authoring-browser-matrix:
+    node --test apps/control-room/scripts/lib/scratch-authoring-browser.test.mjs
+    just run-scratch-authoring-fdm-browser-smoke
+    just ensure-managed-fem-runtime
+    just run-scratch-authoring-fem-browser-smoke fem_execution=cpu
+
 run script:
     just ensure-python
     just build fullmag

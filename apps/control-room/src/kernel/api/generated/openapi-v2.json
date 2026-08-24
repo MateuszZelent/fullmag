@@ -502,6 +502,14 @@
           },
           {
             "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "kind": {
                 "enum": [
                   "merge_patch"

@@ -3,16 +3,15 @@
 import { HelpCircle } from "lucide-react";
 import { useCallback, useMemo, useReducer, useState } from "react";
 
-import {
-  MODEL_READINESS_PATH,
-  MODEL_SCENE_PATH,
-  MODEL_STUDY_PATH,
-} from "@/kernel/api/apiPaths";
 import type { ObjectInteractionKind } from "@/kernel/api/apiTypes";
-import { acknowledgedAuthoringSceneRevision } from "@/kernel/authoring/authoringMutationInvalidation";
+import {
+  acknowledgedAuthoringSceneRevision,
+  invalidateAuthoringMutationDependents,
+} from "@/kernel/authoring/authoringMutationInvalidation";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   resolveObjectInteractionResourceKey,
+  resolveSceneResourceRevision,
   useObjectInteractionResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
@@ -21,10 +20,7 @@ import {
   useActiveLaneCapabilities,
   type ActiveLaneCapabilitySnapshot,
 } from "@/kernel/resources/useActiveLaneCapabilities";
-import {
-  SESSION_STATUS_RESOURCE_KEY,
-  useSessionStatusSelector,
-} from "@/kernel/resources/useSessionStatus";
+import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import {
   interactionAvailabilityForDiscretization,
   interactionSpecsForDiscretization,
@@ -150,16 +146,6 @@ function isRevisionConflict(error: unknown): boolean {
 
 type PhysicsInteractionSpec = InteractionSpec;
 
-function invalidateInteractionDependents(
-  resources: { invalidate(resourceKey: string, revision: number): void },
-  revision: number,
-): void {
-  resources.invalidate(MODEL_SCENE_PATH, revision);
-  resources.invalidate(MODEL_READINESS_PATH, revision);
-  resources.invalidate(MODEL_STUDY_PATH, revision);
-  resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
-}
-
 export async function commitObjectInteractionMutation({
   interactionKind,
   objectId,
@@ -177,7 +163,7 @@ export async function commitObjectInteractionMutation({
     resolveObjectInteractionResourceKey(objectId, interactionKind),
     revision,
   );
-  invalidateInteractionDependents(resources, revision);
+  invalidateAuthoringMutationDependents(resources, "interaction", revision);
   return revision;
 }
 
@@ -398,12 +384,35 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
           resources,
         });
       } else {
+        const rawSceneBaseRevision = resolveSceneResourceRevision(scene.data);
+        const sceneBaseRevision =
+          rawSceneBaseRevision === null
+            ? null
+            : Number(rawSceneBaseRevision);
+        if (
+          sceneBaseRevision === null ||
+          !Number.isSafeInteger(sceneBaseRevision) ||
+          sceneBaseRevision < 0
+        ) {
+          dispatch({
+            type: "setMutation",
+            key: mutationKey,
+            feedback: {
+              kind: "error",
+              message:
+                "Scene revision unavailable; refresh before applying this interaction.",
+            },
+          });
+          return false;
+        }
         const response = await api.model.commitTransaction({
           kind: "merge_patch",
+          base_revision: sceneBaseRevision,
           merge_patch: result.patch,
         });
-        invalidateInteractionDependents(
+        invalidateAuthoringMutationDependents(
           resources,
+          "interaction",
           acknowledgedAuthoringSceneRevision(response),
         );
       }

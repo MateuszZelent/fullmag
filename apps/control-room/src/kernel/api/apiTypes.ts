@@ -438,7 +438,10 @@ export type StudyRuntimeResource =
   components["schemas"]["StudyRuntimeResource"];
 export type AuthoringTransactionRequest =
   | { kind: "replace_scene"; scene: JsonObject }
-  | { kind: "merge_patch"; merge_patch: JsonObject }
+  | (BaseAuthoringTransaction & {
+      kind: "merge_patch";
+      merge_patch: JsonObject;
+    })
   | (BaseAuthoringTransaction & {
       asset?: JsonObject | null;
       kind: "patch_magnetization";

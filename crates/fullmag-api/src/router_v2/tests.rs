@@ -15540,6 +15540,64 @@ study.run(1e-12)
 }
 
 #[tokio::test]
+async fn authoring_script_sync_renders_empty_workspace_scene_document() {
+    let mut state = test_app_state_with_live_session().await;
+    let script_dir = std::env::temp_dir().join(format!(
+        "fullmag-api-scratch-script-sync-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos(),
+    ));
+    {
+        let state_mut = Arc::get_mut(&mut state).expect("test state should be uniquely owned");
+        state_mut.repo_root = crate::script::repo_root();
+        state_mut.current_workspace_root = script_dir.clone();
+    }
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/syncs")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let json = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "scratch script sync response: {json:?}");
+    assert_eq!(json["written"], true);
+    assert_eq!(json["source_kind"], "scene_document");
+    let script_path = script_dir.join("scene_document.py");
+    assert_eq!(json["script_path"], script_path.display().to_string());
+    assert!(script_path.is_file());
+    assert!(fs::read_to_string(&script_path)
+        .expect("canonical scratch script should be readable")
+        .contains("study = fm.study"));
+    let guard = state.current_live_state.read().await;
+    assert_eq!(
+        guard
+            .as_ref()
+            .expect("live snapshot")
+            .session
+            .script_path,
+        script_path.display().to_string()
+    );
+
+    let _ = fs::remove_dir_all(&script_dir);
+}
+
+#[tokio::test]
 async fn authoring_scene_patch_applies_merge_patch() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -15636,6 +15694,7 @@ async fn authoring_transactions_merge_patch_commits_document() {
                 .body(Body::from(
                     serde_json::json!({
                         "kind": "merge_patch",
+                        "base_revision": 3,
                         "merge_patch": {
                             "scene": {
                                 "name": "Transaction Patch Scene"
@@ -15656,6 +15715,42 @@ async fn authoring_transactions_merge_patch_commits_document() {
         json["committed_scene"]["scene"]["name"],
         "Transaction Patch Scene"
     );
+}
+
+#[tokio::test]
+async fn authoring_transactions_merge_patch_rejects_stale_base_revision() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/transactions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "merge_patch",
+                        "base_revision": 2,
+                        "merge_patch": {
+                            "scene": {
+                                "name": "must-not-commit"
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let json = body_json(response).await;
+    assert_eq!(json["code"], "revision_conflict");
 }
 
 #[tokio::test]
