@@ -637,11 +637,6 @@ impl StepUpdateView {
             max_h_demag: self.max_h_demag,
             max_torque_Apm: self.max_torque_Apm,
             max_torque_T: self.max_torque_T,
-            max_torque_all_Apm: self.max_torque_all_Apm,
-            frozen_reference_max_drift: self.frozen_reference_max_drift,
-            active_dof_count: self.active_dof_count,
-            frozen_dof_count: self.frozen_dof_count,
-            free_dof_count: self.free_dof_count,
             per_object_scalars: self.per_object_scalars.clone(),
             ..Default::default()
         };

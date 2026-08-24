@@ -2793,11 +2793,6 @@ mod tests {
             max_h_demag: 0.0,
             max_torque_Apm: 0.0,
             max_torque_T: 0.0,
-            max_torque_all_Apm: 0.0,
-            frozen_reference_max_drift: 0.0,
-            active_dof_count: 0,
-            frozen_dof_count: 0,
-            free_dof_count: 0,
             per_object_scalars: HashMap::new(),
             table_expressions: Vec::new(),
         }
