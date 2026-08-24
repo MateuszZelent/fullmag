@@ -102,6 +102,9 @@ fn public_gpu_device_ordinal() -> Result<i32, RunError> {
 
 #[cfg(feature = "cuda")]
 pub(crate) fn execute_cuda_fdm(
+    requested_backend: fullmag_ir::BackendTarget,
+    requested_device: &str,
+    execution_mode: fullmag_ir::ExecutionMode,
     plan: &FdmPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
@@ -145,6 +148,19 @@ pub(crate) fn execute_cuda_fdm(
         backend.bind_gpu_transport(&binding)?;
     }
     let device_info = backend.device_info()?;
+    let (receipt_lifecycle, initial_execution_receipt) =
+        crate::fdm::gpu::cuda::native::residency::FdmGpuReceiptLifecycle::begin(
+            &backend,
+            requested_device,
+            execution_mode,
+        )?;
+    backend.set_checkpoint_execution_identity(
+        requested_backend,
+        requested_device,
+        execution_mode,
+        plan.integrator
+            .unwrap_or(fullmag_ir::IntegratorChoice::Heun),
+    )?;
     let cell_count = (plan.grid.cells[0] as usize)
         * (plan.grid.cells[1] as usize)
         * (plan.grid.cells[2] as usize);
@@ -175,7 +191,7 @@ pub(crate) fn execute_cuda_fdm(
     };
     let initial_dt = timestep_policy.as_ref().map(|policy| policy.initial_dt());
     let mut steps = Vec::new();
-    let provenance = ExecutionProvenance {
+    let mut provenance = ExecutionProvenance {
         execution_engine: "cuda_fdm".to_string(),
         precision: match plan.precision {
             fullmag_ir::ExecutionPrecision::Single => "single".to_string(),
@@ -198,6 +214,7 @@ pub(crate) fn execute_cuda_fdm(
         transport_modules: crate::fdm::cpu::spin_transport::fdm_gpu_transport_execution_provenance(
             plan,
         ),
+        fdm_gpu_execution_receipt: Some(initial_execution_receipt),
         timestep_policy,
         executed_physics_kinds: if direct_minimizer_control(plan.relaxation.as_ref()).is_none()
             && (plan.zhang_li_formula_version.is_some()
@@ -658,6 +675,12 @@ pub(crate) fn execute_cuda_fdm(
             message: format!("closing public GPU M1 transport session failed: {error}"),
         })?;
     }
+    receipt_lifecycle.finalize_after_outcome(
+        &backend,
+        &mut provenance,
+        Some(&mut artifacts),
+        Ok(()),
+    )?;
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
     let status = if cancelled {
         RunStatus::Cancelled
@@ -707,6 +730,9 @@ pub(crate) fn execute_cuda_fdm(
 
 #[cfg(not(feature = "cuda"))]
 pub(crate) fn execute_cuda_fdm(
+    _requested_backend: fullmag_ir::BackendTarget,
+    _requested_device: &str,
+    _execution_mode: fullmag_ir::ExecutionMode,
     _plan: &FdmPlanIR,
     _until_seconds: f64,
     _outputs: &[OutputIR],

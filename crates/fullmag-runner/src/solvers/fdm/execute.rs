@@ -21,6 +21,34 @@ pub(crate) fn execute_fdm<'a>(
     live: Option<LiveStepConsumer<'a>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    execute_fdm_in_mode(
+        engine,
+        fullmag_ir::BackendTarget::Fdm,
+        if engine == FdmEngine::CudaFdm {
+            "gpu"
+        } else {
+            "cpu"
+        },
+        fullmag_ir::ExecutionMode::Strict,
+        plan,
+        until_seconds,
+        outputs,
+        live,
+        artifact_writer,
+    )
+}
+
+pub(crate) fn execute_fdm_in_mode<'a>(
+    engine: FdmEngine,
+    requested_backend: fullmag_ir::BackendTarget,
+    requested_device: &str,
+    execution_mode: fullmag_ir::ExecutionMode,
+    plan: &FdmPlanIR,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    live: Option<LiveStepConsumer<'a>>,
+    artifact_writer: Option<ArtifactPipelineSender>,
+) -> Result<ExecutedRun, RunError> {
     if matches!(engine, FdmEngine::CpuReference) {
         let unsupported = unsupported_cpu_fdm_terms(plan, outputs);
         if !unsupported.is_empty() {
@@ -40,7 +68,16 @@ pub(crate) fn execute_fdm<'a>(
             live,
             artifact_writer,
         ),
-        FdmEngine::CudaFdm => execute_cuda_fdm(plan, until_seconds, outputs, live, artifact_writer),
+        FdmEngine::CudaFdm => execute_cuda_fdm(
+            requested_backend,
+            requested_device,
+            execution_mode,
+            plan,
+            until_seconds,
+            outputs,
+            live,
+            artifact_writer,
+        ),
     }
 }
 
