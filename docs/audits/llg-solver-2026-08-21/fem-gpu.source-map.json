@@ -1,0 +1,56 @@
+{
+  "document": {
+    "path": "docs/audits/llg-solver-2026-08-21/fem-gpu.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "Osobny raport lane FEM CPU."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "Osobny raport lane FDM CPU."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "Osobny raport lane FDM GPU."
+    }
+  ],
+  "equations": [],
+  "symbols": [
+    {
+      "id": "H_eff",
+      "latex": "H_{\\mathrm{eff}}",
+      "meaning": "efektywne pole magnetyczne na aktywnych DOF",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "dt",
+      "latex": "\\Delta t",
+      "meaning": "krok czasu integratora",
+      "si_unit": "\\mathrm{s}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "fem-gpu-plan",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp",
+      "symbol": "gpu_rk_plan_device_resident",
+      "responsibility": "Planuje device-resident krok RK dla FEM GPU."
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  }
+}

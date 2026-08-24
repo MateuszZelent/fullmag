@@ -11,4 +11,4 @@ Sprawdzono obecność czterech niezależnych raportów oraz wymaganych obszarów
 - plan remediacji;
 - jawne ograniczenia audytu statycznego.
 
-**Wynik: PASS.** Raporty są rozdzielone według FDM CPU, FDM GPU, FEM CPU i FEM GPU oraz nie deklarują przyspieszenia bez benchmarku sprzętowego.
+**Wynik strukturalny: PASS.** Raporty są rozdzielone według FDM CPU, FDM GPU, FEM CPU i FEM GPU oraz nie deklarują przyspieszenia bez benchmarku sprzętowego. Każdy raport ma sąsiadujący plik `.source-map.json`; wszystkie cztery mapy przeszły `validate_scientific_docs.py --repo-root .` z kodem `0`.

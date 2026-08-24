@@ -57,9 +57,9 @@ Norma błędu musi zachować kanoniczne maksimum wektorowe `LLG-TD-MAX-ERR-V1` p
 
 **Naprawa:** jawny precision policy per operator, parity na poziomie RHS/stage/step/trajectory oraz brak silent promotion/demotion.
 
-### P1 — rejected step i RNG muszą pozostać na urządzeniu
+### P1 — publiczna termika FDM jest ścieżką fixed-step
 
-Przy termice odrzucony krok nie może konsumować innej sekwencji losowej bez jawnego kontraktu. Kopiowanie RNG state na host jest niedopuszczalne wydajnościowo.
+Aktualny planner odrzuca połączenie adaptacyjnego FDM z Brown noise; wspierana publiczna ścieżka stochastyczna używa fixed-step. Kwalifikacja musi zatem testować poprawność wariancji i reprodukowalność wspieranego fixed-step lane oraz osobno jawne odrzucenie adaptive + Brown noise. Rollback RNG po odrzuconym kroku nie jest obecnie osiągalnym wymaganiem tej ścieżki i nie może być przedstawiany jako bieżąca remediacja runtime.
 
 ## Audyt fizyczny
 
@@ -75,7 +75,7 @@ Przy termice odrzucony krok nie może konsumować innej sekwencji losowej bez ja
 1. Porównać CPU/GPU: pojedynczy składnik pola, pełne `H_eff`, RHS, jeden stage, jeden krok i trajektorię.
 2. Sprawdzić, czy order adaptacyjnej metody zachowuje się po normalizacji i mixed precision.
 3. Ustalić tolerancje redukcji niedeterministycznych.
-4. Rejected step musi przywracać `m`, cache pól, RNG, `dt` i counters bez hostowej rekonstrukcji.
+4. Dla deterministycznych metod adaptacyjnych rejected step musi przywracać `m`, cache pól, `dt` i counters bez hostowej rekonstrukcji; adaptive + Brown noise jest osobno odrzucane przez planner.
 5. Stop criteria powinny używać urządzeniowych redukcji, nie pełnego readbacku.
 
 ## Plan optymalizacji
@@ -113,8 +113,87 @@ Raportować: kernels/step, launches/step, synchronizations/step, H2D/D2H bytes, 
 - CPU/GPU parity na każdym poziomie przepływu;
 - test strict no-fallback;
 - test bez readbacku pełnego pola przez zadany przedział kroków;
-- termiczny reproducibility/statistical test.
+- termiczny fixed-step reproducibility/statistical test oraz test odrzucenia adaptive + Brown noise.
 
 ## Ograniczenia
 
 Bez profilu Nsight/rocprof/WebGPU timestamp queries nie można uczciwie podać przyspieszenia. Raport rozróżnia ryzyko architektoniczne od wyniku benchmarku.
+
+(fdm-gpu-problem-statement)=
+## Kontrakt publikacyjny lane FDM GPU
+
+Audyt ocenia pełną rezydencję i receipts kroku LLG FDM GPU względem kanonicznych kontraktów.
+
+(fdm-gpu-governing-equations)=
+### Równania kanoniczne
+
+Wspólne równanie LLG i konwencje należą do `docs/physics/0960-canonical-llg-time-domain-solver-and-qualification-contract.md`; raport nie duplikuje ich jako fizyki backendowej.
+
+(fdm-gpu-symbols-and-si-units)=
+### Symbole i jednostki SI
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $H_{\mathrm{eff}}$ | efektywne pole magnetyczne używane przez RHS | $\mathrm{A\,m^{-1}}$ |
+| $\Delta t$ | krok czasu wspieranej ścieżki fixed-step | $\mathrm{s}$ |
+
+(fdm-gpu-assumptions-and-validity)=
+### Założenia i zakres ważności
+
+Kwalifikacja GPU wymaga receipt z faktycznym urządzeniem; obecna publiczna termika FDM jest fixed-step.
+
+(fdm-gpu-python-api)=
+### Python API
+
+Raport nie dodaje publicznego konstruktora. Minimalny wykonywalny znacznik lane:
+
+```python
+# %%
+audit_lane = "FDM GPU"
+assert audit_lane == "FDM GPU"
+```
+
+(fdm-gpu-problem-ir)=
+### ProblemIR
+
+Raport nie zmienia `ProblemIR`; sprawdza zgodność resolved execution z requested intent.
+
+(fdm-gpu-round-trip-and-failure-semantics)=
+### Round-trip i błędy
+
+`requested intent` i `resolved execution` są oddzielne. `validation errors` zachowują kontekst, a `unsupported combinations`, w tym adaptive + Brown noise, są jawnie odrzucane.
+
+(fdm-gpu-discrete-realization)=
+### Realizacja dyskretna
+
+| Solver | CPU | GPU | Status na tej stronie |
+|---|---|---|---|
+| FDM | nie | tak | lane FDM GPU udokumentowany |
+| FEM | nie | nie | lane FEM CPU/GPU mają osobne raporty |
+
+(fdm-gpu-implementation-mapping)=
+### Mapowanie implementacji
+
+Receipt backendu jest eksportowany przez `fullmag_fdm_backend_execution_receipt_v2`.
+
+(fdm-gpu-validation)=
+### Walidacja
+
+Wymagane są strict no-fallback, device receipt, parity i sprzętowy profil transferów.
+
+(fdm-gpu-limitations)=
+### Ograniczenia publikacyjne
+
+Obecność kerneli nie dowodzi pełnego device-resident kroku ani przyspieszenia.
+
+(fdm-gpu-scientific-bibliography)=
+### Bibliografia naukowa
+
+1. T. L. Gilbert, “A phenomenological theory of damping in ferromagnetic materials,” *IEEE Transactions on Magnetics* 40, 3443–3449 (2004), https://doi.org/10.1109/TMAG.2004.836740.
+
+(fdm-gpu-source-code-index)=
+### Indeks kodu źródłowego
+
+| Twierdzenie | Ścieżka | Symbol | Odpowiedzialność | Lane | Test/dowód | Status |
+|---|---|---|---|---|---|---|
+| Receipt faktycznego wykonania | `backends/fdm/api/c_api.cpp` | `fullmag_fdm_backend_execution_receipt_v2` | eksport wykonania backendu FDM | FDM GPU | contract tests receipt | dowód statyczny; runtime wymaga GPU |

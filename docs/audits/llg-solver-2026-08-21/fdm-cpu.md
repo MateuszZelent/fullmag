@@ -41,7 +41,7 @@ RK23/RK45 wymagają kilku buforów stage. `Vec`, `clone`, `to_vec`, tworzenie ma
 
 Dla najmniejszego kroku przestrzennego stabilny krok jawny skaluje się w przybliżeniu jak `h_min^2`. Samo przyspieszenie RHS nie rozwiązuje problemu time-to-solution dla bardzo drobnych siatek.
 
-**Naprawa:** benchmark dokładność–czas dla RK23/RK45/Heun oraz kwalifikacja tangent-plane, semi-implicit lub IMEX dla stiff exchange.
+**Naprawa:** benchmark dokładność–czas dla każdego wspieranego integratora FDM — Heun, RK4, RK23, RK45 i ABM3 — z każdą legalną dla niego polityką fixed/adaptive, oraz kwalifikacja tangent-plane, semi-implicit lub IMEX dla stiff exchange. Kombinacje nieobsługiwane mają być odrzucane i raportowane, a nie pomijane w macierzy.
 
 ### P1 — ponowna ewaluacja demag dominuje wielostopniowy integrator
 
@@ -93,3 +93,82 @@ Równoległość operatorów lokalnych i biblioteki FFT/Hypre nie może niezale�
 ## Ograniczenia
 
 Raport nie deklaruje uzyskanego przyspieszenia ani skalowania NUMA bez benchmarku sprzętowego. Brak jawnego wzorca w kodzie traktowany jest jako luka dowodowa, a nie automatycznie jako brak implementacji.
+
+(fdm-cpu-problem-statement)=
+## Kontrakt publikacyjny lane FDM CPU
+
+Audyt ocenia referencyjny krok LLG FDM CPU względem kanonicznych dokumentów fizycznych; nie ustanawia drugiej definicji równania.
+
+(fdm-cpu-governing-equations)=
+### Równania kanoniczne
+
+Równanie LLG, konwencja $H_{\mathrm{eff}}$/`gamma_0` i norma `LLG-TD-MAX-ERR-V1` pozostają własnością `docs/physics/0960-canonical-llg-time-domain-solver-and-qualification-contract.md`. Ta strona mapuje wyłącznie realizację lane i nie duplikuje wspólnej fizyki.
+
+(fdm-cpu-symbols-and-si-units)=
+### Symbole i jednostki SI
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $H_{\mathrm{eff}}$ | efektywne pole magnetyczne używane przez RHS | $\mathrm{A\,m^{-1}}$ |
+| $\gamma_0$ | bezwzględna stała żyromagnetyczna dla pola $H$ | $\mathrm{m\,A^{-1}\,s^{-1}}$ |
+
+(fdm-cpu-assumptions-and-validity)=
+### Założenia i zakres ważności
+
+Wnioski statyczne obowiązują dla kodu wskazanego w indeksie. Wydajność i skalowanie wymagają osobnego dowodu sprzętowego.
+
+(fdm-cpu-python-api)=
+### Python API
+
+Raport nie dodaje publicznego konstruktora. Minimalny wykonywalny znacznik lane:
+
+```python
+# %%
+audit_lane = "FDM CPU"
+assert audit_lane == "FDM CPU"
+```
+
+(fdm-cpu-problem-ir)=
+### ProblemIR
+
+Raport nie zmienia `ProblemIR`; ocenia realizację istniejącego requested intent.
+
+(fdm-cpu-round-trip-and-failure-semantics)=
+### Round-trip i błędy
+
+`requested intent` pozostaje oddzielony od `resolved execution`. `validation errors` muszą zachować authored intent, a `unsupported combinations` są jawnie odrzucane przez planner.
+
+(fdm-cpu-discrete-realization)=
+### Realizacja dyskretna
+
+| Solver | CPU | GPU | Status na tej stronie |
+|---|---|---|---|
+| FDM | tak | nie | lane FDM CPU udokumentowany; FDM GPU ma osobny raport |
+| FEM | nie | nie | lane FEM CPU/GPU mają osobne raporty |
+
+(fdm-cpu-implementation-mapping)=
+### Mapowanie implementacji
+
+Właścicielem bezalokacyjnego RHS jest `llg_rhs_into_ws_zero_alloc`.
+
+(fdm-cpu-validation)=
+### Walidacja
+
+Wymagane są oracles fizyczne, parity oraz pełna macierz legalnych integratorów opisana w kontrakcie benchmarków.
+
+(fdm-cpu-limitations)=
+### Ograniczenia publikacyjne
+
+Audyt statyczny nie jest dowodem wydajności ani kwalifikacji sprzętowej.
+
+(fdm-cpu-scientific-bibliography)=
+### Bibliografia naukowa
+
+1. T. L. Gilbert, “A phenomenological theory of damping in ferromagnetic materials,” *IEEE Transactions on Magnetics* 40, 3443–3449 (2004), https://doi.org/10.1109/TMAG.2004.836740.
+
+(fdm-cpu-source-code-index)=
+### Indeks kodu źródłowego
+
+| Twierdzenie | Ścieżka | Symbol | Odpowiedzialność | Lane | Test/dowód | Status |
+|---|---|---|---|---|---|---|
+| Bezalokacyjny RHS LLG | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `llg_rhs_into_ws_zero_alloc` | obliczenie RHS w trwałym workspace | FDM CPU | testy modułu FDM CPU | dowód statyczny |

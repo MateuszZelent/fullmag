@@ -54,7 +54,7 @@ Norma błędu, torque, energia i iteracje solvera powinny być agregowane na GPU
 
 ### P1 — preconditioner musi mieć jawną lokalizację wykonania
 
-GPU operator z hostowym preconditionerem lub hostowym sparse solve jest ścieżką hybrydową. Planner powinien nazwać ją `gpu_operator_host_solver`, nie `gpu` bez kwalifikatora.
+GPU operator z hostowym preconditionerem lub hostowym sparse solve jest ścieżką hybrydową. Planner i provenance muszą używać istniejącego, ograniczonego słownika kontraktu wykonania: między innymi `device_resident`, `hybrid_cpu_poisson` oraz obowiązujących pól FEM GPU execution contract. Audyt nie wprowadza wartości `gpu_operator_host_solver`; nowa wartość wymagałaby wspólnej zmiany ProblemIR, macierzy capability, runtime provenance i wszystkich konsumentów.
 
 ### P1 — mixed precision wymaga kontroli solvera i dynamiki
 
@@ -71,13 +71,13 @@ GPU przyspiesza krok, ale nie usuwa ograniczenia `dt ~ h_min^2`. Dla wysokiego o
 - zgodna konwencja `gamma`, `mu0`, `H/B` i mianownik Gilbert;
 - norm projection na magnetycznych DOF bez niejawnego hostowego round-trip;
 - poprawne material interfaces, periodic constraints i DMI boundary terms;
-- termika z urządzeniowym RNG, poprawną wariancją i rollbackiem po rejected step.
+- termika FEM GPU pozostaje obecnie nieobsługiwaną kombinacją publiczną: strict planning odrzuca `CAP-THERM-GPU-001`; wymagany jest test tego odrzucenia, a rollback RNG nie jest bieżącą ścieżką wykonawczą lane.
 
 ## Audyt numeryczny
 
 1. Parity na poziomie operator apply, RHS, stage, step i trajectory.
 2. Test temporal order z kontrolą tolerancji solverów liniowych.
-3. Norm/error reductions skalowane względem miary FEM, nie surowej liczby DOF.
+3. Adaptacyjna redukcja błędu zachowuje kanoniczne maksimum po aktywnych węzłach; normy ważone miarą FEM są wyłącznie odrębną diagnostyką globalną.
 4. Rejected step cofa wszystkie device buffers i RNG bez kopiowania pełnego stanu na host.
 5. Preconditioner reuse nie może zmieniać operatora po zmianie mesh/material constraints.
 6. Deterministyczność GPU reductions ma jawny tolerance policy.
@@ -128,3 +128,82 @@ Raportować: device memory, setup/assembly, apply, Krylov iterations, preconditi
 ## Ograniczenia
 
 Bez rzeczywistego GPU i timeline nie można potwierdzić przyspieszenia. Jeżeli obecna implementacja obejmuje wyłącznie wybrane operatory, status powinien pozostać eksperymentalny lub operator-accelerated do czasu spełnienia pełnego device-resident gate.
+
+(fem-gpu-problem-statement)=
+## Kontrakt publikacyjny lane FEM GPU
+
+Audyt ocenia rezydencję, routing i receipts realizacji FEM GPU bez utożsamiania operator acceleration z pełnym krokiem GPU.
+
+(fem-gpu-governing-equations)=
+### Równania kanoniczne
+
+Wspólne równanie LLG należy do `docs/physics/0960-canonical-llg-time-domain-solver-and-qualification-contract.md`; raport mapuje jedynie realizację urządzeniową.
+
+(fem-gpu-symbols-and-si-units)=
+### Symbole i jednostki SI
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $H_{\mathrm{eff}}$ | efektywne pole magnetyczne na aktywnych DOF | $\mathrm{A\,m^{-1}}$ |
+| $\Delta t$ | krok czasu integratora | $\mathrm{s}$ |
+
+(fem-gpu-assumptions-and-validity)=
+### Założenia i zakres ważności
+
+Produkcję dowodzi wyłącznie strict hardware runtime z device identity; termika FEM GPU jest obecnie odrzucana przez publiczny planner.
+
+(fem-gpu-python-api)=
+### Python API
+
+Raport nie dodaje publicznego konstruktora. Minimalny wykonywalny znacznik lane:
+
+```python
+# %%
+audit_lane = "FEM GPU"
+assert audit_lane == "FEM GPU"
+```
+
+(fem-gpu-problem-ir)=
+### ProblemIR
+
+Raport nie dodaje wartości capability ani residency; używa wyłącznie istniejącego słownika kontraktu.
+
+(fem-gpu-round-trip-and-failure-semantics)=
+### Round-trip i błędy
+
+`requested intent` pozostaje oddzielony od `resolved execution`. `validation errors` zachowują intencję, a `unsupported combinations`, w tym `CAP-THERM-GPU-001`, są jawnie odrzucane.
+
+(fem-gpu-discrete-realization)=
+### Realizacja dyskretna
+
+| Solver | CPU | GPU | Status na tej stronie |
+|---|---|---|---|
+| FEM | nie | tak | lane FEM GPU udokumentowany |
+| FDM | nie | nie | lane FDM CPU/GPU mają osobne raporty |
+
+(fem-gpu-implementation-mapping)=
+### Mapowanie implementacji
+
+Plan rezydentnego kroku jest własnością `gpu_rk_plan_device_resident`.
+
+(fem-gpu-validation)=
+### Walidacja
+
+Wymagane są strict no-fallback, receipt urządzenia, wszystkie legalne integratory i managed GPU runtime.
+
+(fem-gpu-limitations)=
+### Ograniczenia publikacyjne
+
+Statyczny kod nie dowodzi produkcyjnej rezydencji ani przyspieszenia.
+
+(fem-gpu-scientific-bibliography)=
+### Bibliografia naukowa
+
+1. W. F. Brown Jr., “Micromagnetics,” Wiley (1963), https://doi.org/10.1002/9780470172914.
+
+(fem-gpu-source-code-index)=
+### Indeks kodu źródłowego
+
+| Twierdzenie | Ścieżka | Symbol | Odpowiedzialność | Lane | Test/dowód | Status |
+|---|---|---|---|---|---|---|
+| Plan device-resident RK | `backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp` | `gpu_rk_plan_device_resident` | planowanie rezydentnego kroku FEM GPU | FEM GPU | testy planu i managed runtime | dowód statyczny; runtime wymaga GPU |

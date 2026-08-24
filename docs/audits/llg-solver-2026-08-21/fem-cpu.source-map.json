@@ -1,0 +1,56 @@
+{
+  "document": {
+    "path": "docs/audits/llg-solver-2026-08-21/fem-cpu.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "Osobny raport lane FEM GPU."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "Osobny raport lane FDM CPU."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "Osobny raport lane FDM GPU."
+    }
+  ],
+  "equations": [],
+  "symbols": [
+    {
+      "id": "H_eff",
+      "latex": "H_{\\mathrm{eff}}",
+      "meaning": "efektywne pole magnetyczne na aktywnych DOF",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "h_min",
+      "latex": "h_{\\min}",
+      "meaning": "najmniejszy charakterystyczny rozmiar elementu",
+      "si_unit": "\\mathrm{m}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "fem-cpu-step",
+      "path": "backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp",
+      "symbol": "context_step_explicit_rk_mfem",
+      "responsibility": "Steruje jawnym krokiem integratora FEM CPU w MFEM."
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  }
+}

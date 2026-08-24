@@ -11,5 +11,6 @@ Wynik każdej sesji powinien przechowywać:
 - transfery, synchronizacje, assembly/preconditioner rebuilds;
 - RNG algorithm, seed, counter i rejected-step policy dla termiki;
 - stop reason oraz jednostki torque/energy/error metrics.
+- pola kwalifikacyjne `TimestepExecutionIdentity`: capability IDs, qualification IDs, validation state, registry version, qualification artifact hash, runtime source hash oraz validated scope.
 
 Bez tych danych porównanie CPU/GPU i odtworzenie wyniku nie jest wiarygodne.

@@ -1,0 +1,56 @@
+{
+  "document": {
+    "path": "docs/audits/llg-solver-2026-08-21/fdm-gpu.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "Osobny raport lane FEM CPU."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "Osobny raport lane FEM GPU."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "Osobny raport lane FDM CPU."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [
+    {
+      "id": "H_eff",
+      "latex": "H_{\\mathrm{eff}}",
+      "meaning": "efektywne pole magnetyczne używane przez RHS",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "dt",
+      "latex": "\\Delta t",
+      "meaning": "krok czasu wspieranej ścieżki fixed-step",
+      "si_unit": "\\mathrm{s}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "fdm-gpu-receipt",
+      "path": "backends/fdm/api/c_api.cpp",
+      "symbol": "fullmag_fdm_backend_execution_receipt_v2",
+      "responsibility": "Eksportuje receipt faktycznego wykonania backendu FDM."
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  }
+}

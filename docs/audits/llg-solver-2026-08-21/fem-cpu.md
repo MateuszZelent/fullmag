@@ -53,9 +53,9 @@ Ponowne budowanie operatora, warunków brzegowych, gauge lub airbox mapping jest
 
 **Naprawa:** trwały operator i preconditioner, aktualizacja RHS, kontrola liczby iteracji per stage oraz polityka reuse/rebuild oparta na mierzalnej degradacji.
 
-### P1 — kryteria stopu muszą mieć sens dla nierównomiernej siatki
+### P1 — adaptacyjna norma błędu zachowuje maksimum po węzłach
 
-Surowa norma nodalna może nadmiernie ważyć gęsto zrefinowane obszary. Torque/error powinny używać odpowiedniej normy masowej lub fizycznie zdefiniowanej maksimum/średniej.
+Akceptacja kroku FEM zachowuje kanoniczny kontrakt `LLG-TD-MAX-ERR-V1`: `max_err` jest maksimum normy wektorowego błędu po aktywnych węzłach magnetycznych. Nie wolno zastępować go średnią ani normą ważoną macierzą masy, ponieważ lokalny duży błąd zostałby rozcieńczony wraz ze zmianą refinement. Normy masowe mogą służyć jako dodatkowa diagnostyka globalna, ale nie sterują akceptacją kroku. Kryterium stopu torque pozostaje fizycznie zdefiniowanym maksimum `max_torque_Apm` po aktywnych magnetycznych DOF.
 
 ### P1 — równoległość bibliotek może powodować oversubscription
 
@@ -77,7 +77,7 @@ OpenMP/TBB/Rayon, MFEM i Hypre nie mogą niezależnie zajmować wszystkich rdzen
 - kontrola kondycji macierzy masy i exchange;
 - rejected-step rollback wszystkich GridFunction/scratch/cache/RNG;
 - tolerancje solverów liniowych nie mogą dominować błędu integratora;
-- normy błędu i stopu powinny uwzględniać miarę FEM;
+- adaptacyjna norma błędu i stop torque zachowują maksimum po aktywnych węzłach; diagnostyki całkowe ważone miarą FEM są raportowane osobno i nie zmieniają akceptacji kroku;
 - remesh/state transfer musi zachowywać normę i nie zwiększać niekontrolowanie energii.
 
 ## Plan optymalizacji
@@ -109,3 +109,82 @@ Dla co najmniej trzech siatek raportować: DOF, `h_min`, order, assembly time, a
 ## Ograniczenia
 
 Statyczny audyt nie zastępuje profilu MFEM/Hypre. Wyniki solverów liniowych zależą od geometrii, partitioningu, preconditionera i sprzętu; raport wskazuje wymagane gates oraz najbardziej prawdopodobne źródła kosztu.
+
+(fem-cpu-problem-statement)=
+## Kontrakt publikacyjny lane FEM CPU
+
+Audyt ocenia realizację FEM CPU, w tym rozdzielenie setup/apply i jawne integratory RK.
+
+(fem-cpu-governing-equations)=
+### Równania kanoniczne
+
+Wspólne równanie LLG i norma maksymalna należą do `docs/physics/0960-canonical-llg-time-domain-solver-and-qualification-contract.md`; raport nie tworzy backendowej odmiany fizyki.
+
+(fem-cpu-symbols-and-si-units)=
+### Symbole i jednostki SI
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $H_{\mathrm{eff}}$ | efektywne pole magnetyczne na aktywnych DOF | $\mathrm{A\,m^{-1}}$ |
+| $h_{\min}$ | najmniejszy charakterystyczny rozmiar elementu | $\mathrm{m}$ |
+
+(fem-cpu-assumptions-and-validity)=
+### Założenia i zakres ważności
+
+Wnioski statyczne dotyczą wskazanego entry pointu MFEM; koszt wymaga profilu managed runtime.
+
+(fem-cpu-python-api)=
+### Python API
+
+Raport nie dodaje publicznego konstruktora. Minimalny wykonywalny znacznik lane:
+
+```python
+# %%
+audit_lane = "FEM CPU"
+assert audit_lane == "FEM CPU"
+```
+
+(fem-cpu-problem-ir)=
+### ProblemIR
+
+Raport nie zmienia `ProblemIR`; audytuje realizację istniejącej polityki wykonania.
+
+(fem-cpu-round-trip-and-failure-semantics)=
+### Round-trip i błędy
+
+`requested intent` pozostaje oddzielony od `resolved execution`. `validation errors` i `unsupported combinations` muszą być jawne i zachować authored intent.
+
+(fem-cpu-discrete-realization)=
+### Realizacja dyskretna
+
+| Solver | CPU | GPU | Status na tej stronie |
+|---|---|---|---|
+| FEM | tak | nie | lane FEM CPU udokumentowany |
+| FDM | nie | nie | lane FDM CPU/GPU mają osobne raporty |
+
+(fem-cpu-implementation-mapping)=
+### Mapowanie implementacji
+
+Entry point kroku MFEM to `context_step_explicit_rk_mfem`.
+
+(fem-cpu-validation)=
+### Walidacja
+
+Wymagane są wszystkie legalne jawne integratory, maksimum błędu po aktywnych węzłach i managed runtime evidence.
+
+(fem-cpu-limitations)=
+### Ograniczenia publikacyjne
+
+Audyt statyczny nie kwalifikuje kosztu MFEM/Hypre bez wykonania zarządzanego benchmarku.
+
+(fem-cpu-scientific-bibliography)=
+### Bibliografia naukowa
+
+1. W. F. Brown Jr., “Micromagnetics,” Wiley (1963), https://doi.org/10.1002/9780470172914.
+
+(fem-cpu-source-code-index)=
+### Indeks kodu źródłowego
+
+| Twierdzenie | Ścieżka | Symbol | Odpowiedzialność | Lane | Test/dowód | Status |
+|---|---|---|---|---|---|---|
+| Jawny krok RK w MFEM | `backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp` | `context_step_explicit_rk_mfem` | sterowanie krokiem FEM CPU | FEM CPU | testy integratorów FEM | dowód statyczny |

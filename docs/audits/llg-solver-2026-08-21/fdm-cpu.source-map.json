@@ -1,0 +1,56 @@
+{
+  "document": {
+    "path": "docs/audits/llg-solver-2026-08-21/fdm-cpu.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "Osobny raport lane FEM CPU."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "Osobny raport lane FEM GPU."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "Osobny raport lane FDM GPU."
+    }
+  ],
+  "equations": [],
+  "symbols": [
+    {
+      "id": "H_eff",
+      "latex": "H_{\\mathrm{eff}}",
+      "meaning": "efektywne pole magnetyczne używane przez RHS",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "gamma_0",
+      "latex": "\\gamma_0",
+      "meaning": "bezwzględna stała żyromagnetyczna dla pola $H$",
+      "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "fdm-cpu-rhs",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "symbol": "llg_rhs_into_ws_zero_alloc",
+      "responsibility": "Oblicza referencyjny RHS LLG w trwałym workspace FDM CPU."
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  }
+}
