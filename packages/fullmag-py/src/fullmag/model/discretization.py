@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from numbers import Integral
+from numbers import Integral, Real
 from typing import Any, Literal, Sequence
 
 from fullmag._validation import as_vector3, require_positive
@@ -661,6 +661,38 @@ class PerObjectMeshRecipe:
     operations: list[MeshOperation] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        for field_name in (
+            "maximum_element_size",
+            "minimum_element_size",
+            "hmax",
+            "hmin",
+        ):
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, Real):
+                raise TypeError(f"{field_name} must be a positive number")
+            require_positive(value, field_name)
+
+        effective_maximum = (
+            self.maximum_element_size
+            if self.maximum_element_size is not None
+            else self.hmax
+        )
+        effective_minimum = (
+            self.minimum_element_size
+            if self.minimum_element_size is not None
+            else self.hmin
+        )
+        if (
+            effective_minimum is not None
+            and effective_maximum is not None
+            and effective_minimum > effective_maximum
+        ):
+            raise ValueError(
+                "minimum_element_size/hmin must not exceed maximum_element_size/hmax"
+            )
+
         if self.through_thickness_elements is not None:
             if (
                 isinstance(self.through_thickness_elements, bool)
@@ -812,15 +844,16 @@ class PerObjectMeshRecipe:
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True, slots=True)
 class SharedMeshAssemblyPolicy:
-    """Controls how per-object recipes are assembled into one shared-domain mesh.
+    """Preserved compatibility record for shared-domain assembly policy.
+
+    The current shared-domain builder accepts this object for API compatibility
+    but does not consume its fields. Use explicit object, interface, and airbox
+    targets for effective sizing.
 
     Attributes:
-        interface_hmax_factor: Size factor at domain interfaces relative to
-            the local object maximum element size (< 1 = finer at boundaries).
-        enforce_conforming: Require a conforming mesh (shared vertices at
-            domain boundaries) via OCC ``fragment``.
-        airbox_hmax_factor: Element size in the airbox as a multiple of the
-            global maximum element size.  Larger = coarser airbox.
+        interface_hmax_factor: Validated, preserved compatibility value.
+        enforce_conforming: Preserved compatibility value.
+        airbox_hmax_factor: Validated, preserved compatibility value.
     """
 
     interface_hmax_factor: float = 0.5

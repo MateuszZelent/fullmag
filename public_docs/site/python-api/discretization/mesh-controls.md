@@ -30,7 +30,7 @@ FEM meshing is controlled at several nested scopes:
 | universe/airbox | `study.universe(...)` and `study.universe.mesh(...)` | `Airbox Mesh Parameters` | exterior geometry, air hmin/hmax, growth, grading |
 | magnetic object | `object.mesh(...)`, `object.mesh.thin_film(...)`, or `PerObjectMeshRecipe` | `Object Mesh Policy` | object target, topology, layers, local fields, operations |
 | authored object region | region mesh policy | `Region Mesh` | regional hmin/hmax, transition distance, order |
-| shared assembly | `SharedMeshAssemblyPolicy` and mesh workflow | backend-effective/read-only reports | conformity, interface and airbox assembly |
+| shared assembly compatibility record | `SharedMeshAssemblyPolicy` | not exposed as an effective UI policy | preserved API data; the current shared-domain builder does not consume its fields |
 | realized asset | `study.build_domain_mesh()` result | Mesh Build monitor/report/quality | exact nodes, elements, markers, quality, fallbacks, digest |
 
 A lower scope overrides only the keys it owns. Empty/`None` values inherit; they do not write zero.
@@ -60,10 +60,10 @@ followed by growth, conformity, geometry, and mesher constraints. Therefore:
 
 | Symbol/control | Meaning | SI unit |
 |---|---|---|
-| hmin, hmax, padding, size, center, interface/edge/corner distances | authored geometric length controls | m |
-| boundary-layer thickness and region transition distance | authored layer and transition lengths | m |
-| growth, curvature, stretching, size factor, element ratio | dimensionless grading controls | 1 |
-| element order, layers, algorithms, iterations, smoothing | discrete controls and identifiers | 1 |
+| hmin, hmax, padding, size, center, interface/edge/corner distances | authored geometric length controls | $\mathrm{m}$ |
+| boundary-layer thickness and region transition distance | authored layer and transition lengths | $\mathrm{m}$ |
+| growth, curvature, stretching, size factor, element ratio | dimensionless grading controls | $1$ |
+| element order, layers, algorithms, iterations, smoothing | discrete controls and identifiers | $1$ |
 | quality statistics | metric named by the realized report | metric-specific, named by the report |
 | $h_{\mathrm{target}}(\mathbf x)$ | resolved local target element size before mesher/conformity constraints | $\mathrm{m}$ |
 | $\mathcal S(\mathbf x)$ | active size fields at the spatial point | $1$ |
@@ -125,8 +125,10 @@ The public calibration vocabulary is:
 - `magnetostatics_dominated`;
 - `imported_surface_cleanup`.
 
-A calibration name selects policy defaults. It is not evidence that the resulting mesh is converged
-for a particular observable.
+A calibration name is normalized and preserved as provenance, but it does not currently select or
+change numerical defaults. `size_preset` and explicit numeric controls determine those defaults.
+Calibration provenance is not evidence that the resulting mesh is converged for a particular
+observable.
 
 ## Size presets
 
@@ -153,24 +155,25 @@ where the active mesh workflow applies that factor.
 
 | Python field | Type | Default | SI unit | Validation / meaning | ProblemIR |
 |---|---|---:|---:|---|---|
-| `MeshSizeControls.calibrate_for` | `str or None` | `None` | 1 | supported calibration family | size policy `calibrate_for` |
-| `MeshSizeControls.size_preset` | `str or None` | `None` | 1 | supported preset name | size policy `size_preset` |
-| `MeshSizeControls.maximum_element_size` | `float or None` | `None` | m | positive upper target | size policy `maximum_element_size` |
-| `MeshSizeControls.minimum_element_size` | `float or None` | `None` | m | positive lower target | size policy `minimum_element_size` |
-| `MeshSizeControls.maximum_element_growth_rate` | `float or None` | `None` | 1 | positive; stage-first public facade accepts the practical range through 2.5 | size policy `maximum_element_growth_rate` |
-| `MeshSizeControls.curvature_factor` | `float or None` | `None` | 1 | positive curvature size factor | size policy `curvature_factor` |
-| `MeshSizeControls.narrow_region_resolution` | `float or None` | `None` | 1 | positive narrow-feature target | size policy `narrow_region_resolution` |
+| `MeshSizeControls.calibrate_for` | `str or None` | `None` | $1$ | supported provenance vocabulary; currently no numerical effect | size policy `calibrate_for` |
+| `MeshSizeControls.size_preset` | `str or None` | `None` | $1$ | supported preset name | size policy `size_preset` |
+| `MeshSizeControls.maximum_element_size` | `float or None` | `None` | $\mathrm{m}$ | positive upper target | size policy `maximum_element_size` |
+| `MeshSizeControls.minimum_element_size` | `float or None` | `None` | $\mathrm{m}$ | positive lower target | size policy `minimum_element_size` |
+| `MeshSizeControls.maximum_element_growth_rate` | `float or None` | `None` | $1$ | positive; stage-first public facade accepts the practical range through 2.5 | size policy `maximum_element_growth_rate` |
+| `MeshSizeControls.curvature_factor` | `float or None` | `None` | $1$ | positive curvature size factor | size policy `curvature_factor` |
+| `MeshSizeControls.narrow_region_resolution` | `float or None` | `None` | $1$ | positive narrow-feature target | size policy `narrow_region_resolution` |
 
 ## `SharedMeshAssemblyPolicy`
 
 | Python field | Default | Validation | Meaning |
 |---|---:|---|---|
-| `SharedMeshAssemblyPolicy.interface_hmax_factor` | `0.5` | in `(0, 1]` | interface size relative to local object maximum |
-| `SharedMeshAssemblyPolicy.enforce_conforming` | `True` | Boolean | require shared vertices/traces through conforming assembly |
-| `SharedMeshAssemblyPolicy.airbox_hmax_factor` | `3.0` | positive | airbox size relative to global maximum |
+| `SharedMeshAssemblyPolicy.interface_hmax_factor` | `0.5` | in `(0, 1]` | preserved compatibility value; currently not consumed by assembly |
+| `SharedMeshAssemblyPolicy.enforce_conforming` | `True` | Boolean | preserved compatibility value; currently not consumed by assembly |
+| `SharedMeshAssemblyPolicy.airbox_hmax_factor` | `3.0` | positive | preserved compatibility value; currently not consumed by assembly |
 
-This low-level policy does not replace explicit interface or airbox targets. The resolved target
-report records which value actually controlled each partition.
+This low-level policy is currently inert: `_resolve_per_object_mesh_options` accepts it for API
+compatibility but does not read its fields. Use explicit interface, object, and airbox targets;
+the resolved target report records which effective value controlled each partition.
 
 ## Stage-first commands
 
@@ -431,16 +434,16 @@ contract and exposes object/region mesh membership read-only in the Control Room
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| MeshSizeControls.calibrate_for | str \| None | None | $1$ | Supported calibration vocabulary at the stage-first boundary. | Physics/workflow calibration family. | FEM/Gmsh policy | mesh_size_controls.calibrate_for |
+| MeshSizeControls.calibrate_for | str \| None | None | $1$ | Supported provenance vocabulary; currently no numerical effect. | Recorded physics/workflow calibration family. | Provenance only | mesh_size_controls.calibrate_for |
 | MeshSizeControls.size_preset | str \| None | None | $1$ | Supported preset vocabulary at the stage-first boundary. | Named size-policy preset. | FEM/Gmsh policy | mesh_size_controls.size_preset |
 | MeshSizeControls.maximum_element_size | float \| None | None | $\mathrm{m}$ | Finite and positive when authored. | Requested upper element-size target. | FEM | mesh_size_controls.maximum_element_size |
 | MeshSizeControls.minimum_element_size | float \| None | None | $\mathrm{m}$ | Finite and positive and no larger than effective maximum when authored. | Requested lower element-size target. | FEM | mesh_size_controls.minimum_element_size |
 | MeshSizeControls.maximum_element_growth_rate | float \| None | None | $1$ | Finite and positive; stage-first public authoring limits the practical range through 2.5. | Requested maximum growth between refinement regions. | FEM/Gmsh | mesh_size_controls.maximum_element_growth_rate |
 | MeshSizeControls.curvature_factor | float \| None | None | $1$ | Finite and positive when authored. | Curvature-derived sizing factor. | FEM/Gmsh | mesh_size_controls.curvature_factor |
 | MeshSizeControls.narrow_region_resolution | float \| None | None | $1$ | Finite and positive when authored. | Resolution target for narrow regions. | FEM/Gmsh | mesh_size_controls.narrow_region_resolution |
-| SharedMeshAssemblyPolicy.interface_hmax_factor | float | 0.5 | $1$ | Strictly greater than zero and no greater than one. | Interface size relative to the local object maximum. | FEM shared-domain assembly | shared_mesh_assembly_policy.interface_hmax_factor |
-| SharedMeshAssemblyPolicy.enforce_conforming | bool | True | $1$ | Boolean. | Require a conforming shared-domain mesh. | FEM shared-domain assembly | shared_mesh_assembly_policy.enforce_conforming |
-| SharedMeshAssemblyPolicy.airbox_hmax_factor | float | 3.0 | $1$ | Finite and positive. | Airbox target relative to the global maximum element size. | FEM shared-domain assembly | shared_mesh_assembly_policy.airbox_hmax_factor |
+| SharedMeshAssemblyPolicy.interface_hmax_factor | float | 0.5 | $1$ | Strictly greater than zero and no greater than one. | Preserved compatibility value; not consumed by the current builder. | Inert compatibility data | shared_mesh_assembly_policy.interface_hmax_factor |
+| SharedMeshAssemblyPolicy.enforce_conforming | bool | True | $1$ | Boolean. | Preserved compatibility value; not consumed by the current builder. | Inert compatibility data | shared_mesh_assembly_policy.enforce_conforming |
+| SharedMeshAssemblyPolicy.airbox_hmax_factor | float | 3.0 | $1$ | Finite and positive. | Preserved compatibility value; not consumed by the current builder. | Inert compatibility data | shared_mesh_assembly_policy.airbox_hmax_factor |
 
 ## Source-code index
 

@@ -288,6 +288,21 @@ class LayeredMeshDslValidationTests(unittest.TestCase):
             ):
                 self.film.mesh(**kwargs)
 
+    def test_per_object_recipe_rejects_invalid_direct_size_targets(self) -> None:
+        invalid = (
+            {"maximum_element_size": -1.0},
+            {"minimum_element_size": 0.0},
+            {"hmax": float("nan")},
+            {"hmin": float("inf")},
+            {"maximum_element_size": True},
+            {"maximum_element_size": "1e-9"},
+            {"minimum_element_size": 2.0, "maximum_element_size": 1.0},
+            {"hmin": 2.0, "hmax": 1.0},
+        )
+        for kwargs in invalid:
+            with self.subTest(kwargs=kwargs), self.assertRaises((TypeError, ValueError)):
+                PerObjectMeshRecipe(**kwargs)
+
     def test_per_object_recipe_rejects_invalid_or_incoherent_layered_intent(self) -> None:
         invalid = (
             {"through_thickness_elements": 0},
