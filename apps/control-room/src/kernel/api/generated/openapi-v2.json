@@ -1400,6 +1400,14 @@
       },
       "CheckpointCreateRequest": {
         "properties": {
+          "expected_state_version": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "profile": {
             "$ref": "#/components/schemas/SaveProfile"
           },
@@ -1548,6 +1556,14 @@
       },
       "CheckpointRestoreRequest": {
         "properties": {
+          "expected_state_version": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "reason": {
             "type": [
               "string",
@@ -44930,10 +44946,10 @@
     }
   ],
   "x-fullmag-build-identity": {
-    "built_at_utc": "2026-08-20T23:03:53Z",
-    "git_commit": "f79c65d43ef2ac550f89932b47940489f719acb0",
-    "source_snapshot_sha256": "unknown",
-    "worktree_state": "dirty"
+    "built_at_utc": "generated-artifact",
+    "git_commit": "generated-artifact",
+    "source_snapshot_sha256": "generated-artifact",
+    "worktree_state": "generated-artifact"
   },
   "x-fullmag-study-primitive-stage-kinds": [
     "relax",
