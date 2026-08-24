@@ -369,14 +369,12 @@ pub fn resolve_quantity_capability(
     } else {
         match spec.shape {
             fullmag_quantities::QuantityShape::VectorField
-            | fullmag_quantities::QuantityShape::SpatialScalar => {
+            | fullmag_quantities::QuantityShape::SpatialScalar
+            | fullmag_quantities::QuantityShape::TensorField => {
                 QuantityRequestCapability::FieldVector
             }
             fullmag_quantities::QuantityShape::GlobalScalar => {
                 QuantityRequestCapability::ScalarResource
-            }
-            fullmag_quantities::QuantityShape::TensorField => {
-                QuantityRequestCapability::UnsupportedShape
             }
         }
     };
@@ -1588,7 +1586,7 @@ mod tests {
     }
 
     #[test]
-    fn resolved_tensor_capability_is_scoped_unsupported_shape_not_a_vector_guess() {
+    fn resolved_tensor_capability_is_requestable_but_not_renderable() {
         let capabilities = with_resolved_quantity_providers(
             capabilities_for_fem_engine(FemEngine::CpuNative),
             &["spin_current_tensor"],
@@ -1611,10 +1609,17 @@ mod tests {
         assert_eq!(resolved.provider, QuantityProviderCapability::Available);
         assert_eq!(
             resolved.request,
-            QuantityRequestCapability::UnsupportedShape
+            QuantityRequestCapability::FieldVector
+        );
+        assert_eq!(
+            resolved.materialization,
+            QuantityMaterializationCapability::Unmaterialized
         );
         assert_eq!(resolved.render, QuantityRenderCapability::UnsupportedShape);
-        assert_eq!(resolved.reason_code.as_deref(), Some("unsupported_shape"));
+        assert_eq!(
+            resolved.reason_code.as_deref(),
+            Some("field_unmaterialized")
+        );
         assert!(resolved.carriers.is_empty());
     }
 

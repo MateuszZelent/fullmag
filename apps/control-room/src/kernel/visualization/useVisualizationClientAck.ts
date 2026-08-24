@@ -204,7 +204,6 @@ export function createVisualizationAckCoordinator(
         enabled = true,
         error,
         renderCommit = null,
-        resourceKey = null,
         revision,
         sessionEpoch,
         status,

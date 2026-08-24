@@ -26,6 +26,7 @@ mod oersted;
 mod physics_graph;
 pub mod quantities;
 mod region_conflict;
+mod region_textures;
 mod regional_field_drive;
 mod sampling;
 mod selection;

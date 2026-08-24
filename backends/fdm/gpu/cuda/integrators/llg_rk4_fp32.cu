@@ -6,6 +6,7 @@
  */
 
 #include "context.hpp"
+#include "fsal_policy.hpp"
 
 #include <cuda_runtime.h>
 #include <cmath>
@@ -128,6 +129,7 @@ static bool compute_rhs_into_fp32(Context &ctx, DeviceVectorField &rhs_out,
         static_cast<float*>(rhs_out.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "RK4 fp32 LLG RHS launch");
     if (poll_interrupt(ctx)) {
         abort_step_after_interrupt(ctx, false);
         return false;
@@ -195,8 +197,7 @@ void launch_rk4_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats
         n, dt_f / 6.0f);
     if (abort_step_from_tmp(ctx, false)) return;
 
-    ctx.step_count++;
-    ctx.current_time += dt;
+    context_stage_accepted_step(ctx, dt);
 
     if (!fullmag_fdm_should_fill_step_stats(ctx)) {
         fullmag_fdm_fill_step_stats_metadata(ctx, stats, dt);
@@ -206,7 +207,7 @@ void launch_rk4_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats
     // Diagnostics (fp64 accumulators)
     if (ctx.enable_exchange) launch_exchange_field_fp32(ctx);
     if (ctx.enable_demag)    launch_demag_field_fp32(ctx);
-    launch_effective_field_fp32(ctx, ctx.current_time);
+    launch_effective_field_fp32(ctx, ctx.pending_time);
 
     double e_ex = ctx.enable_exchange ? launch_exchange_energy_fp32(ctx) : 0.0;
     double e_demag = launch_demag_energy_fp32(ctx);
@@ -230,10 +231,11 @@ void launch_rk4_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats
         static_cast<float*>(ctx.k1.x), static_cast<float*>(ctx.k1.y), static_cast<float*>(ctx.k1.z),
         n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "RK4 fp32 LLG RHS launch");
     double max_dm_dt = reduce_max_norm_fp32(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
 
-    stats->step = ctx.step_count;
-    stats->time_seconds = ctx.current_time;
+    stats->step = ctx.pending_step_count;
+    stats->time_seconds = ctx.pending_time;
     stats->dt_seconds = dt;
     stats->exchange_energy_joules = e_ex;
     stats->demag_energy_joules = e_demag;

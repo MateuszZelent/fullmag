@@ -140,7 +140,17 @@ bool launch_multilayer_effective_field_impl(Context &ctx, const char *operation)
         context_end_compute_stream_work(ctx, operation);
         return false;
     }
-    return context_end_compute_stream_work(ctx, operation);
+    if (!context_end_compute_stream_work(ctx, operation)) return false;
+    fullmag_fdm_note_operator_device_execution(
+        ctx, FULLMAG_FDM_OPERATOR_MULTILAYER_INTERACTIONS);
+    if (ctx.has_external_field) {
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_EXTERNAL_FIELD);
+    }
+    if (ctx.has_active_mask || ctx.has_frozen_mask || ctx.has_region_mask) {
+        fullmag_fdm_note_operator_device_execution(ctx, FULLMAG_FDM_OPERATOR_MASKS);
+    }
+    return true;
 }
 
 } // namespace

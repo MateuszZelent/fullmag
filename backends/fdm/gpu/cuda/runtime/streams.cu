@@ -122,6 +122,15 @@ bool context_end_compute_stream_work(Context &ctx, const char *operation) {
     return true;
 }
 
+bool context_complete_solver_receipt_attempt(Context &ctx, const char *operation) {
+    const cudaError_t err = cudaStreamSynchronize(nullptr);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, operation, err);
+        return false;
+    }
+    return true;
+}
+
 bool context_test_copy_f64_on_compute_stream(
     Context &ctx, double *destination, const double *source, uint64_t values) {
     if (destination == nullptr || source == nullptr || values == 0 ||

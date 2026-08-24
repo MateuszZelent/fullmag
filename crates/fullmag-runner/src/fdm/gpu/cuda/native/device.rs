@@ -1,5 +1,5 @@
 use super::{ffi, NativeFdmBackend};
-use crate::types::RunError;
+use crate::types::{FdmGpuExecutionReceipt, RunError};
 use std::ffi::CStr;
 
 /// Parsed device info.
@@ -41,5 +41,19 @@ impl NativeFdmBackend {
             driver_version: info.driver_version,
             runtime_version: info.runtime_version,
         })
+    }
+
+    pub(crate) fn execution_receipt(
+        &self,
+        requested_device: &str,
+        requested_mode: fullmag_ir::ExecutionMode,
+    ) -> Result<FdmGpuExecutionReceipt, RunError> {
+        let device = self.device_info()?;
+        super::residency::query_execution_receipt(
+            self,
+            requested_device,
+            requested_mode,
+            &device.name,
+        )
     }
 }

@@ -1148,10 +1148,11 @@ pub fn field_materialization_quantity_ids() -> Vec<&'static str> {
         .iter()
         .filter(|spec| {
             spec.ui_exposed
-                && spec.interactive_preview
                 && matches!(
                     spec.shape,
-                    QuantityShape::VectorField | QuantityShape::SpatialScalar
+                    QuantityShape::VectorField
+                        | QuantityShape::SpatialScalar
+                        | QuantityShape::TensorField
                 )
         })
         .map(|spec| spec.id.as_str())
@@ -1297,6 +1298,10 @@ mod tests {
         }
 
         assert!(materialized.contains(&"m"));
+        assert!(materialized.contains(&"V_electric"));
+        assert!(materialized.contains(&"J_charge"));
+        assert!(materialized.contains(&"spin_potential"));
+        assert!(materialized.contains(&"spin_current_tensor"));
         assert!(!materialized.contains(&"E_total"));
     }
 }

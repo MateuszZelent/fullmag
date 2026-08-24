@@ -113,7 +113,7 @@ export function buildViewport3DTargetFieldBuffer({
   topologyRevision?: string | null;
 }): Viewport3DTargetFieldBuffer {
   const validSessionIdentity =
-    sessionIdentity?.sessionId.trim() && sessionIdentity.sessionEpoch.trim()
+    sessionIdentity?.sessionId?.trim() && sessionIdentity.sessionEpoch?.trim()
       ? sessionIdentity
       : null;
   const component = resolveTargetFieldBufferComponent(fieldVector, query);

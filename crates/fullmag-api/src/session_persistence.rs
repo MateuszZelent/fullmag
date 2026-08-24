@@ -7,6 +7,7 @@ use std::sync::Arc;
 use axum::extract::State;
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use utoipa::ToSchema;
 
 use crate::error::ApiError;
@@ -2204,8 +2205,14 @@ fn checkpoint_compatibility(snapshot: &SessionStateResponse) -> CheckpointCompat
         runtime_family,
         snapshot.session.resolved_engine_id.as_deref().unwrap_or("default")
     ));
-    let problem_hash = Some(format!("problem:rev-{}", snapshot.scene_revision));
-    let plan_hash = Some(format!("plan:rev-{}", snapshot.plan_revision));
+    let problem_hash = snapshot.scene_document.as_ref().and_then(|scene| {
+        serde_json::to_vec(scene)
+            .ok()
+            .map(|bytes| format!("problem:sha256:{:x}", Sha256::digest(bytes)))
+    });
+    let plan_hash = serde_json::to_vec(&snapshot.session.plan_summary)
+        .ok()
+        .map(|bytes| format!("plan:sha256:{:x}", Sha256::digest(bytes)));
 
     CheckpointCompatibility {
         restart_abi,

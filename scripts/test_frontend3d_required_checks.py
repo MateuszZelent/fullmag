@@ -178,6 +178,17 @@ def test_required_contexts_and_proof_output_are_fail_closed() -> None:
         assert jobs[job_id].get("if") is None
 
     browser_steps = jobs["browser-fixture-smoke"]["steps"]
+    browser_gate_steps = [
+        step
+        for step in browser_steps
+        if "run_frontend3d_required_gate.sh browser-fixture-smoke" in step.get("run", "")
+    ]
+    assert len(browser_gate_steps) == 2
+    assert all(
+        step["env"]["CONTROL_ROOM_AUDIT_ARTIFACTS_DIR"]
+        == "${{ runner.temp }}/viewport-3d-browser-audit"
+        for step in browser_gate_steps
+    )
     assert any(
         step.get("run") == "./scripts/ci/run_frontend3d_required_gate.sh browser-fixture-smoke"
         for step in browser_steps
@@ -185,6 +196,7 @@ def test_required_contexts_and_proof_output_are_fail_closed() -> None:
     assert any(
         step.get("uses") == "actions/upload-artifact@v7"
         and step["with"].get("if-no-files-found") == "error"
+        and step["with"].get("path") == "${{ runner.temp }}/viewport-3d-browser-audit"
         for step in browser_steps
     )
 
@@ -213,3 +225,13 @@ def test_required_contexts_and_proof_output_are_fail_closed() -> None:
         "frontend-3d-managed-fem / managed-fem-qualification",
     ):
         assert context in matrix
+
+
+def test_browser_audit_build_keeps_next_env_source_identity_stable() -> None:
+    next_env = (REPO_ROOT / "apps/control-room/next-env.d.ts").read_text()
+    assert 'import "./.next-audit/types/routes.d.ts";' in next_env
+
+
+def test_browser_source_verify_emits_dirty_paths_before_comparison() -> None:
+    dispatcher = (REPO_ROOT / "scripts/ci/run_frontend3d_required_gate.sh").read_text()
+    assert "git status --short" in dispatcher

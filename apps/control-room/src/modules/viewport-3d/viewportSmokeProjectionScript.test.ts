@@ -697,6 +697,9 @@ describe("viewport smoke projection round-trip", () => {
     const femTopologyAuditScript = readFileSync(femTopologyUploadAuditScriptUrl, "utf8");
 
     expect(femTopologyAuditScript).toContain("verifySemanticTargetExplorerInvariant");
+    expect(femTopologyAuditScript).toContain(
+      'session_epoch: "fem-topology-upload-fixture@0"',
+    );
     expect(femTopologyAuditScript).toContain('"model:airbox"');
     expect(femTopologyAuditScript).toContain('"model:object:semantic-magnet"');
     expect(femTopologyAuditScript).toContain(

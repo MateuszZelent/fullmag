@@ -454,12 +454,18 @@ void launch_newell_compute_spectra_fp64(Context &ctx) {
         std::vector<double> h_nxx(padded_len), h_nyy(padded_len), h_nzz(padded_len);
         std::vector<double> h_nxy(padded_len), h_nxz(padded_len), h_nyz(padded_len);
 
-        cudaMemcpy(h_nxx.data(), d_nxx, padded_bytes, cudaMemcpyDeviceToHost);
-        cudaMemcpy(h_nyy.data(), d_nyy, padded_bytes, cudaMemcpyDeviceToHost);
-        cudaMemcpy(h_nzz.data(), d_nzz, padded_bytes, cudaMemcpyDeviceToHost);
-        cudaMemcpy(h_nxy.data(), d_nxy, padded_bytes, cudaMemcpyDeviceToHost);
-        cudaMemcpy(h_nxz.data(), d_nxz, padded_bytes, cudaMemcpyDeviceToHost);
-        cudaMemcpy(h_nyz.data(), d_nyz, padded_bytes, cudaMemcpyDeviceToHost);
+        fullmag_fdm_receipt_cuda_memcpy(
+            ctx, h_nxx.data(), d_nxx, padded_bytes, cudaMemcpyDeviceToHost);
+        fullmag_fdm_receipt_cuda_memcpy(
+            ctx, h_nyy.data(), d_nyy, padded_bytes, cudaMemcpyDeviceToHost);
+        fullmag_fdm_receipt_cuda_memcpy(
+            ctx, h_nzz.data(), d_nzz, padded_bytes, cudaMemcpyDeviceToHost);
+        fullmag_fdm_receipt_cuda_memcpy(
+            ctx, h_nxy.data(), d_nxy, padded_bytes, cudaMemcpyDeviceToHost);
+        fullmag_fdm_receipt_cuda_memcpy(
+            ctx, h_nxz.data(), d_nxz, padded_bytes, cudaMemcpyDeviceToHost);
+        fullmag_fdm_receipt_cuda_memcpy(
+            ctx, h_nyz.data(), d_nyz, padded_bytes, cudaMemcpyDeviceToHost);
 
         // TODO: Replace this D→H→FFT→H→D round-trip with cuFFT D2Z in-place.
         // For now, the host-side FFT path is used via Rust after downloading.

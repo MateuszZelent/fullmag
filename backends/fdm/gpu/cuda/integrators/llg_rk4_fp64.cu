@@ -14,6 +14,7 @@
  */
 
 #include "context.hpp"
+#include "fsal_policy.hpp"
 
 #include <cuda_runtime.h>
 #include <cmath>
@@ -140,6 +141,7 @@ static bool compute_rhs_into(Context &ctx, DeviceVectorField &rhs_out,
         static_cast<double*>(rhs_out.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "RK4 fp64 LLG RHS launch");
     if (!launch_add_gpu_transport_torque_fp64(ctx, ctx.m, rhs_out)) return false;
     if (poll_interrupt(ctx)) {
         abort_step_after_interrupt(ctx, false);
@@ -213,8 +215,7 @@ void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats
             ctx, ctx.m, step_start_time + dt,
             ctx.gpu_transport_active_attempt_id, 5)) return;
 
-    ctx.step_count++;
-    ctx.current_time += dt;
+    context_stage_accepted_step(ctx, dt);
 
     if (!fullmag_fdm_should_fill_step_stats(ctx)) {
         if (!context_complete_gpu_transport_rhs(ctx)) return;
@@ -225,7 +226,7 @@ void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats
     // Diagnostics on accepted state
     if (ctx.enable_exchange) launch_exchange_field_fp64(ctx);
     if (ctx.enable_demag)    launch_demag_field_fp64(ctx);
-    launch_effective_field_fp64(ctx, ctx.current_time);
+    launch_effective_field_fp64(ctx, ctx.pending_time);
 
     double e_ex = ctx.enable_exchange ? launch_exchange_energy_fp64(ctx) : 0.0;
     double e_demag = launch_demag_energy_fp64(ctx);
@@ -256,11 +257,12 @@ void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats
         static_cast<double*>(ctx.k1.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "RK4 fp64 LLG RHS launch");
     if (!launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.k1)) return;
     double max_dm_dt = reduce_max_norm_fp64(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
 
-    stats->step = ctx.step_count;
-    stats->time_seconds = ctx.current_time;
+    stats->step = ctx.pending_step_count;
+    stats->time_seconds = ctx.pending_time;
     stats->dt_seconds = dt;
     stats->exchange_energy_joules = e_ex;
     stats->demag_energy_joules = e_demag;

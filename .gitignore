@@ -105,6 +105,7 @@ apps/control-room/.next-audit/*
 
 # === Agent worktrees ===
 .worktrees/
+worktrees/
 
 public_docs/_build/
 tests/vlad/
@@ -112,3 +113,9 @@ apps/control-room/.next*
 apps/control-room/.artifacts/
 public_docs/site/
 .worktrees_old/
+build-contract-wave2/
+antenna-audit-target/
+cargo-targets/
+pnpm-store/
+playwright-browsers/
+*.diff

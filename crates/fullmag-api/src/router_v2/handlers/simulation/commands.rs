@@ -1766,8 +1766,8 @@ mod tests {
                 "double",
                 &candidates,
             ),
-            vec!["m", "H_demag"],
-            "only runner-resolved spatial field vectors may be materialized; scalar resources and unsupported tensor shapes must stay out"
+            vec!["m", "H_demag", "spin_current_tensor"],
+            "all runner-resolved spatial fields may be materialized; scalar resources must stay out"
         );
     }
 

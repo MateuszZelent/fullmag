@@ -7,10 +7,14 @@
 
 #include "fullmag_fdm.h"
 #include "context.hpp"
+#include "plan_ingestion_v2.hpp"
+#include "../gpu/cuda/integrators/fsal_policy.hpp"
+#include "../gpu/cuda/runtime/step_transaction_controller.hpp"
 
 #include <cstdlib>
 #include <cstring>
 #include <new>
+#include <memory>
 #include <optional>
 #include <algorithm>
 #include <random>
@@ -44,6 +48,38 @@ extern void set_cuda_error(Context &ctx, const char *operation, cudaError_t err)
 
 namespace {
 
+class ReceiptSolverPhaseGuard {
+public:
+    explicit ReceiptSolverPhaseGuard(Context &context)
+        : context_(context), previous_(fullmag_fdm_set_solver_phase_active(
+              *context.execution_receipt, true))
+    {
+        fullmag_fdm_begin_operator_execution_attempt(*context.execution_receipt);
+    }
+
+    ~ReceiptSolverPhaseGuard() {
+        if (!committed_) {
+            fullmag_fdm_discard_operator_execution_attempt(
+                *context_.execution_receipt);
+        }
+        fullmag_fdm_accumulate_execution_receipt_audit(context_);
+        fullmag_fdm_set_solver_phase_active(*context_.execution_receipt, previous_);
+    }
+
+    void commit() {
+        fullmag_fdm_commit_operator_execution_attempt(*context_.execution_receipt);
+        committed_ = true;
+    }
+
+    ReceiptSolverPhaseGuard(const ReceiptSolverPhaseGuard &) = delete;
+    ReceiptSolverPhaseGuard &operator=(const ReceiptSolverPhaseGuard &) = delete;
+
+private:
+    Context &context_;
+    bool previous_;
+    bool committed_ = false;
+};
+
 std::optional<int> selected_cuda_device_from_env() {
     const char *specific = std::getenv("FULLMAG_FDM_GPU_INDEX");
     const char *generic = std::getenv("FULLMAG_CUDA_DEVICE_INDEX");
@@ -73,21 +109,127 @@ bool select_cuda_device_if_requested(Context &ctx) {
     return true;
 }
 
-bool rollback_bound_fp64_step(
-    Context &ctx, uint64_t accepted_step, double accepted_time)
+bool rollback_step_transaction(Context &ctx)
 {
-    if (!ctx.gpu_transport_rhs.active ||
-        ctx.precision != FULLMAG_FDM_PRECISION_DOUBLE || ctx.cell_count == 0) {
-        return true;
-    }
-    if (!context_restore_gpu_transport_pre_step_m(ctx)) return false;
-    ctx.step_count = accepted_step;
-    ctx.current_time = accepted_time;
-    if (!context_rollback_gpu_transport_step(ctx)) {
-        ctx.last_error = "failed to roll back bound spin-transport trial state";
-        return false;
-    }
-    return true;
+    const std::string primary_error = ctx.last_error;
+    const bool state_restored = context_rollback_pre_step_state(ctx);
+    context_invalidate_fsal_cache(
+        ctx, FULLMAG_FDM_FSAL_INVALIDATION_STEP_ERROR);
+    const bool transport_restored = context_rollback_gpu_transport_step(ctx);
+    context_invalidate_observables(ctx);
+    const bool observables_restored =
+        state_restored && context_refresh_observables(ctx);
+    ctx.last_error = primary_error;
+    return state_restored && transport_restored && observables_restored;
+}
+
+int execute_single_grid_step_transaction(
+    Context &ctx,
+    double dt_seconds,
+    fullmag_fdm_step_stats &trial_stats,
+    fullmag_fdm_step_stats &out_stats,
+    ReceiptSolverPhaseGuard &receipt_solver_phase)
+{
+    uint64_t transport_attempt_id = 0;
+    StepTransactionController transaction;
+    return transaction.run(
+        [&]() {
+            ctx.step_fsal_reused = false;
+            ctx.accepted_step_pending = false;
+            ctx.fsal_pending = false;
+            if (ctx.gpu_transport_rhs.active) {
+                if (ctx.gpu_transport_attempt_generation == UINT64_MAX) {
+                    ctx.last_error = "bound spin-transport attempt identity exhausted";
+                    return FULLMAG_FDM_ERR_INVALID;
+                }
+                transport_attempt_id = ++ctx.gpu_transport_attempt_generation;
+                ctx.gpu_transport_active_attempt_id = transport_attempt_id;
+            }
+            if (!context_begin_gpu_transport_step(ctx, transport_attempt_id)) {
+                ctx.gpu_transport_active_attempt_id = 0;
+                ctx.last_error = "failed to begin bound spin-transport step transaction";
+                return FULLMAG_FDM_ERR_CUDA;
+            }
+            return FULLMAG_FDM_OK;
+        },
+        [&]() {
+            if (!context_capture_pre_step_state(ctx)) return FULLMAG_FDM_ERR_CUDA;
+            ctx.trial_dt = dt_seconds;
+            return FULLMAG_FDM_OK;
+        },
+        [&]() {
+            if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+                switch (ctx.integrator) {
+                    case FULLMAG_FDM_INTEGRATOR_DP45:
+                        launch_dp45_step_fp64(ctx, dt_seconds, &trial_stats); break;
+                    case FULLMAG_FDM_INTEGRATOR_ABM3:
+                        launch_abm3_step_fp64(ctx, dt_seconds, &trial_stats); break;
+                    case FULLMAG_FDM_INTEGRATOR_RK4:
+                        launch_rk4_step_fp64(ctx, dt_seconds, &trial_stats); break;
+                    case FULLMAG_FDM_INTEGRATOR_RK23:
+                        launch_rk23_step_fp64(ctx, dt_seconds, &trial_stats); break;
+                    case FULLMAG_FDM_INTEGRATOR_HEUN:
+                    default:
+                        launch_heun_step_fp64(ctx, dt_seconds, &trial_stats); break;
+                }
+            } else {
+                switch (ctx.integrator) {
+                    case FULLMAG_FDM_INTEGRATOR_DP45:
+                        launch_dp45_step_fp32(ctx, dt_seconds, &trial_stats); break;
+                    case FULLMAG_FDM_INTEGRATOR_ABM3:
+                        launch_abm3_step_fp32(ctx, dt_seconds, &trial_stats); break;
+                    case FULLMAG_FDM_INTEGRATOR_RK4:
+                        launch_rk4_step_fp32(ctx, dt_seconds, &trial_stats); break;
+                    case FULLMAG_FDM_INTEGRATOR_RK23:
+                        launch_rk23_step_fp32(ctx, dt_seconds, &trial_stats); break;
+                    case FULLMAG_FDM_INTEGRATOR_HEUN:
+                    default:
+                        launch_heun_step_fp32(ctx, dt_seconds, &trial_stats); break;
+                }
+            }
+            if (ctx.step_interrupted) return FULLMAG_FDM_ERR_INTERRUPTED;
+            if (ctx.last_error == "dt_min_exhausted") {
+                return FULLMAG_FDM_ERR_DT_MIN_EXHAUSTED;
+            }
+            if (!ctx.last_error.empty()) return FULLMAG_FDM_ERR_CUDA;
+            const cudaError_t error = cudaGetLastError();
+            if (error != cudaSuccess) {
+                set_cuda_error(ctx, "integrator_step", error);
+                return FULLMAG_FDM_ERR_CUDA;
+            }
+            return FULLMAG_FDM_OK;
+        },
+        [&]() {
+            return poll_interrupt(ctx)
+                ? FULLMAG_FDM_ERR_INTERRUPTED : FULLMAG_FDM_OK;
+        },
+        [&]() {
+            return context_complete_solver_receipt_attempt(
+                ctx, "cudaStreamSynchronize(single-grid receipt attempt)")
+                ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_CUDA;
+        },
+        [&]() {
+            if (context_commit_gpu_transport_step(ctx)) return FULLMAG_FDM_OK;
+            ctx.last_error = "failed to commit bound spin-transport step transaction";
+            return FULLMAG_FDM_ERR_CUDA;
+        },
+        [&]() {
+            context_commit_accepted_step(ctx);
+            context_publish_pending_fsal(ctx);
+            context_discard_pre_step_state(ctx);
+        },
+        [&]() {
+            fullmag_fdm_publish_hot_loop_audit(ctx, &trial_stats);
+            fullmag_fdm_note_operator_device_execution(
+                ctx, FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR);
+            receipt_solver_phase.commit();
+            (void)context_publish_accepted_step_stats(
+                true, trial_stats, &out_stats);
+        },
+        [&]() {
+            return rollback_step_transaction(ctx)
+                ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_CUDA;
+        });
 }
 #endif
 
@@ -336,6 +478,12 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     if (!select_cuda_device_if_requested(*ctx)) {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
+    int device_ordinal = -1;
+    if (cudaGetDevice(&device_ordinal) != cudaSuccess) {
+        ctx->last_error = "failed to capture selected CUDA device for execution receipt";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    fullmag_fdm_set_device_ordinal(*ctx->execution_receipt, device_ordinal);
 
     // Copy grid
     ctx->nx = plan->grid.nx;
@@ -561,7 +709,17 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
         ctx->last_error = "grid has zero cells";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
-    uint64_t expected_len = ctx->cell_count * 3;
+    uint64_t setup_bytes = 0;
+    const uint64_t scalar_bytes =
+        ctx->precision == FULLMAG_FDM_PRECISION_DOUBLE
+            ? sizeof(double) : sizeof(float);
+    if (!fullmag_fdm_checked_vector_bytes(
+            ctx->cell_count, scalar_bytes, setup_bytes)) {
+        fullmag_fdm_invalidate_execution_receipt(*ctx->execution_receipt);
+        ctx->last_error = "initial magnetization byte count overflow";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    const uint64_t expected_len = setup_bytes / scalar_bytes;
     if (plan->initial_magnetization_len != expected_len) {
         ctx->last_error = "initial_magnetization_len mismatch: expected "
             + std::to_string(expected_len)
@@ -928,13 +1086,13 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
-
     if (!context_refresh_observables(*ctx)) {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
 
     // Query device info
     context_query_device_info(*ctx);
+    fullmag_fdm_commit_operator_residency(*ctx);
 
     return reinterpret_cast<fullmag_fdm_backend *>(ctx);
 #else
@@ -943,21 +1101,30 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
 #endif
 }
 
-fullmag_fdm_backend *fullmag_fdm_backend_create_time_policy_v2(
-    const fullmag_fdm_plan_desc_v2 *plan)
+int fullmag_fdm_backend_create_time_policy_v2_checked(
+    const fullmag_fdm_plan_desc_v2 *plan,
+    fullmag_fdm_backend **out_handle)
 {
+    if (!out_handle) return FULLMAG_FDM_ERR_INVALID;
+    *out_handle = nullptr;
+    fullmag_fdm_plan_ingestion_v2 *raw_ingestion = nullptr;
+    const int abi_status =
+        fullmag_fdm_plan_ingestion_v2_create_checked(plan, &raw_ingestion);
+    if (abi_status != FULLMAG_FDM_OK) return abi_status;
+    std::unique_ptr<fullmag_fdm_plan_ingestion_v2> ingestion(raw_ingestion);
 #if FULLMAG_HAS_CUDA
-    if (!plan) return nullptr;
+    plan = &plan_ingestion_descriptor(*ingestion);
     fullmag_fdm_backend *handle = fullmag_fdm_backend_create(&plan->base);
-    if (!handle) return nullptr;
+    if (!handle) return FULLMAG_FDM_ERR_CUDA;
+    *out_handle = handle;
     auto *ctx = reinterpret_cast<Context *>(handle);
-    if (!ctx->last_error.empty()) return handle;
+    if (!ctx->last_error.empty()) return FULLMAG_FDM_OK;
 
     const auto &policy = plan->time_policy;
     ctx->adaptive_enabled = policy.adaptive_enabled != 0;
     if (!ctx->adaptive_enabled) {
         ctx->fsal_valid = false;
-        return handle;
+        return FULLMAG_FDM_OK;
     }
     const bool compatible_integrator =
         plan->base.integrator == FULLMAG_FDM_INTEGRATOR_RK23 ||
@@ -991,7 +1158,7 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_time_policy_v2(
         !guards_disabled_until_enforced)
     {
         ctx->last_error = "invalid complete adaptive timestep policy in fullmag_fdm_plan_desc_v2";
-        return handle;
+        return FULLMAG_FDM_OK;
     }
 
     ctx->adaptive_tolerance_mode = policy.adaptive_tolerance_mode;
@@ -1009,11 +1176,19 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_time_policy_v2(
     ctx->adaptive_max_spin_rotation = policy.adaptive_max_spin_rotation;
     ctx->has_adaptive_norm_tolerance = policy.has_adaptive_norm_tolerance != 0;
     ctx->adaptive_norm_tolerance = policy.adaptive_norm_tolerance;
-    return handle;
+    return FULLMAG_FDM_OK;
 #else
     (void)plan;
-    return nullptr;
+    return FULLMAG_FDM_ERR_CUDA;
 #endif
+}
+
+fullmag_fdm_backend *fullmag_fdm_backend_create_time_policy_v2(
+    const fullmag_fdm_plan_desc_v2 *plan)
+{
+    fullmag_fdm_backend *handle = nullptr;
+    (void)fullmag_fdm_backend_create_time_policy_v2_checked(plan, &handle);
+    return handle;
 }
 
 fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
@@ -1027,6 +1202,12 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
     if (!select_cuda_device_if_requested(*ctx)) {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
+    int device_ordinal = -1;
+    if (cudaGetDevice(&device_ordinal) != cudaSuccess) {
+        ctx->last_error = "failed to capture selected CUDA device for execution receipt";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    fullmag_fdm_set_device_ordinal(*ctx->execution_receipt, device_ordinal);
 
     if (plan->kind == FULLMAG_FDM_PLAN_UNIFORM_GRID) {
         ctx->last_error =
@@ -1075,6 +1256,7 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
         "uploaded " + std::to_string(ctx->multilayer_layers.size())
         + " layers and " + std::to_string(ctx->multilayer_kernels.size())
         + " tensor kernels; prepared initial FFT workspace; native Heun/RK4/fixed-step RK23 timestep with optional demag and layer-local exchange is available for v2 multilayer handles";
+    fullmag_fdm_commit_operator_residency(*ctx);
     return reinterpret_cast<fullmag_fdm_backend *>(ctx);
 #else
     (void)plan;
@@ -1096,12 +1278,13 @@ int fullmag_fdm_backend_step(
         ctx->last_error = "FDM step requires dt_seconds > 0";
         return FULLMAG_FDM_ERR_INVALID;
     }
+    fullmag_fdm_step_stats trial_stats{};
     // A rejected transport-coupled attempt is retryable. Its diagnostic must
     // not poison the next explicit public step.
     if (ctx->gpu_transport_rhs.active) ctx->last_error.clear();
-    ctx->current_dt = dt_seconds;
     ctx->step_interrupted = false;
     fullmag_fdm_reset_hot_loop_audit(*ctx);
+    ReceiptSolverPhaseGuard receipt_solver_phase(*ctx);
     if (ctx->has_multilayer_plan_v2) {
         if (ctx->gpu_transport_rhs.active) {
             ctx->last_error =
@@ -1119,128 +1302,39 @@ int fullmag_fdm_backend_step(
 
         if (ctx->precision == FULLMAG_FDM_PRECISION_DOUBLE) {
             if (ctx->integrator == FULLMAG_FDM_INTEGRATOR_RK23) {
-                launch_multilayer_rk23_step_fp64(*ctx, dt_seconds, out_stats);
+                launch_multilayer_rk23_step_fp64(*ctx, dt_seconds, &trial_stats);
             } else if (ctx->integrator == FULLMAG_FDM_INTEGRATOR_RK4) {
-                launch_multilayer_rk4_step_fp64(*ctx, dt_seconds, out_stats);
+                launch_multilayer_rk4_step_fp64(*ctx, dt_seconds, &trial_stats);
             } else {
-                launch_multilayer_heun_step_fp64(*ctx, dt_seconds, out_stats);
+                launch_multilayer_heun_step_fp64(*ctx, dt_seconds, &trial_stats);
             }
         } else {
             if (ctx->integrator == FULLMAG_FDM_INTEGRATOR_RK23) {
-                launch_multilayer_rk23_step_fp32(*ctx, dt_seconds, out_stats);
+                launch_multilayer_rk23_step_fp32(*ctx, dt_seconds, &trial_stats);
             } else if (ctx->integrator == FULLMAG_FDM_INTEGRATOR_RK4) {
-                launch_multilayer_rk4_step_fp32(*ctx, dt_seconds, out_stats);
+                launch_multilayer_rk4_step_fp32(*ctx, dt_seconds, &trial_stats);
             } else {
-                launch_multilayer_heun_step_fp32(*ctx, dt_seconds, out_stats);
+                launch_multilayer_heun_step_fp32(*ctx, dt_seconds, &trial_stats);
             }
         }
         if (!ctx->last_error.empty()) {
             return FULLMAG_FDM_ERR_CUDA;
         }
-        fullmag_fdm_publish_hot_loop_audit(*ctx, out_stats);
-        fullmag_fdm_publish_multilayer_demag_stage_counters(*ctx, out_stats);
+        if (!context_complete_solver_receipt_attempt(
+                *ctx, "cudaStreamSynchronize(multilayer receipt attempt)")) {
+            return FULLMAG_FDM_ERR_CUDA;
+        }
+        fullmag_fdm_publish_hot_loop_audit(*ctx, &trial_stats);
+        fullmag_fdm_note_operator_device_execution(
+            *ctx, FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR);
+        receipt_solver_phase.commit();
+        fullmag_fdm_publish_multilayer_demag_stage_counters(*ctx, &trial_stats);
+        (void)context_publish_accepted_step_stats(true, trial_stats, out_stats);
         return FULLMAG_FDM_OK;
     }
 
-    const uint64_t accepted_step = ctx->step_count;
-    const double accepted_time = ctx->current_time;
-    uint64_t transport_attempt_id = 0;
-    if (ctx->gpu_transport_rhs.active) {
-        if (ctx->gpu_transport_attempt_generation == UINT64_MAX) {
-            ctx->last_error = "bound spin-transport attempt identity exhausted";
-            return FULLMAG_FDM_ERR_INVALID;
-        }
-        transport_attempt_id = ++ctx->gpu_transport_attempt_generation;
-        ctx->gpu_transport_active_attempt_id = transport_attempt_id;
-    }
-    if (!context_begin_gpu_transport_step(*ctx, transport_attempt_id)) {
-        ctx->gpu_transport_active_attempt_id = 0;
-        ctx->last_error = "failed to begin bound spin-transport step transaction";
-        return FULLMAG_FDM_ERR_CUDA;
-    }
-    if (!context_capture_gpu_transport_pre_step_m(*ctx)) {
-        (void)context_rollback_gpu_transport_step(*ctx);
-        return FULLMAG_FDM_ERR_CUDA;
-    }
-
-    if (ctx->precision == FULLMAG_FDM_PRECISION_DOUBLE) {
-        switch (ctx->integrator) {
-            case FULLMAG_FDM_INTEGRATOR_DP45:
-                launch_dp45_step_fp64(*ctx, dt_seconds, out_stats);
-                break;
-            case FULLMAG_FDM_INTEGRATOR_ABM3:
-                launch_abm3_step_fp64(*ctx, dt_seconds, out_stats);
-                break;
-            case FULLMAG_FDM_INTEGRATOR_RK4:
-                launch_rk4_step_fp64(*ctx, dt_seconds, out_stats);
-                break;
-            case FULLMAG_FDM_INTEGRATOR_RK23:
-                launch_rk23_step_fp64(*ctx, dt_seconds, out_stats);
-                break;
-            case FULLMAG_FDM_INTEGRATOR_HEUN:
-            default:
-                launch_heun_step_fp64(*ctx, dt_seconds, out_stats);
-                break;
-        }
-    } else {
-        // fp32: full integrator support
-        switch (ctx->integrator) {
-            case FULLMAG_FDM_INTEGRATOR_DP45:
-                launch_dp45_step_fp32(*ctx, dt_seconds, out_stats);
-                break;
-            case FULLMAG_FDM_INTEGRATOR_ABM3:
-                launch_abm3_step_fp32(*ctx, dt_seconds, out_stats);
-                break;
-            case FULLMAG_FDM_INTEGRATOR_RK4:
-                launch_rk4_step_fp32(*ctx, dt_seconds, out_stats);
-                break;
-            case FULLMAG_FDM_INTEGRATOR_RK23:
-                launch_rk23_step_fp32(*ctx, dt_seconds, out_stats);
-                break;
-            case FULLMAG_FDM_INTEGRATOR_HEUN:
-            default:
-                launch_heun_step_fp32(*ctx, dt_seconds, out_stats);
-                break;
-        }
-    }
-
-    if (ctx->step_interrupted) {
-        if (!rollback_bound_fp64_step(*ctx, accepted_step, accepted_time))
-            return FULLMAG_FDM_ERR_CUDA;
-        if (!context_fill_current_stats(*ctx, out_stats)) {
-            return FULLMAG_FDM_ERR_CUDA;
-        }
-        out_stats->dt_seconds = 0.0;
-        fullmag_fdm_publish_hot_loop_audit(*ctx, out_stats);
-        return FULLMAG_FDM_ERR_INTERRUPTED;
-    }
-
-    if (ctx->last_error == "dt_min_exhausted") {
-        (void)rollback_bound_fp64_step(*ctx, accepted_step, accepted_time);
-        return FULLMAG_FDM_ERR_DT_MIN_EXHAUSTED;
-    }
-    if (!ctx->last_error.empty()) {
-        (void)rollback_bound_fp64_step(*ctx, accepted_step, accepted_time);
-        return FULLMAG_FDM_ERR_CUDA;
-    }
-
-    // Check for CUDA errors
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        set_cuda_error(*ctx, "integrator_step", err);
-        (void)rollback_bound_fp64_step(*ctx, accepted_step, accepted_time);
-        return FULLMAG_FDM_ERR_CUDA;
-    }
-
-    if (!context_commit_gpu_transport_step(*ctx)) {
-        ctx->last_error = "failed to commit bound spin-transport step transaction";
-        (void)rollback_bound_fp64_step(*ctx, accepted_step, accepted_time);
-        return FULLMAG_FDM_ERR_CUDA;
-    }
-    context_invalidate_gpu_transport_pre_step_m(*ctx);
-
-    fullmag_fdm_publish_hot_loop_audit(*ctx, out_stats);
-    return FULLMAG_FDM_OK;
+    return execute_single_grid_step_transaction(
+        *ctx, dt_seconds, trial_stats, *out_stats, receipt_solver_phase);
 #else
     (void)handle; (void)dt_seconds; (void)out_stats;
     return FULLMAG_FDM_ERR_CUDA;
@@ -1259,9 +1353,12 @@ int fullmag_fdm_context_bind_gpu_transport_v1(
             "spin transport is unsupported for v2 multilayer handles";
         return FULLMAG_FDM_ERR_INVALID;
     }
-    return context_bind_gpu_transport_rhs(*ctx, *binding)
-        ? FULLMAG_FDM_OK
-        : FULLMAG_FDM_ERR_INVALID;
+    if (!context_bind_gpu_transport_rhs(*ctx, *binding)) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    context_note_transport_revision_change(*ctx);
+    fullmag_fdm_commit_operator_residency(*ctx);
+    return FULLMAG_FDM_OK;
 #else
     (void)handle;
     (void)binding;
@@ -1283,9 +1380,11 @@ extern "C" int fullmag_fdm_test_force_gpu_transport_adaptive_retry(
 int fullmag_fdm_context_unbind_gpu_transport_v1(fullmag_fdm_backend *handle) {
 #if FULLMAG_HAS_CUDA
     if (handle == nullptr) return FULLMAG_FDM_ERR_INVALID;
-    return context_unbind_gpu_transport_rhs(*reinterpret_cast<Context *>(handle))
-        ? FULLMAG_FDM_OK
-        : FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    if (!context_unbind_gpu_transport_rhs(*ctx)) return FULLMAG_FDM_ERR_INVALID;
+    context_note_transport_revision_change(*ctx);
+    fullmag_fdm_commit_operator_residency(*ctx);
+    return FULLMAG_FDM_OK;
 #else
     (void)handle;
     return FULLMAG_FDM_ERR_CUDA;
@@ -1570,8 +1669,8 @@ fullmag_fdm_field_snapshot *fullmag_fdm_backend_begin_field_snapshot(
 #if FULLMAG_HAS_CUDA
     if (!handle) return nullptr;
     auto *ctx = reinterpret_cast<Context *>(handle);
-    return reinterpret_cast<fullmag_fdm_field_snapshot *>(
-        context_begin_async_field_snapshot(*ctx, observable));
+    auto *snapshot = context_begin_async_field_snapshot(*ctx, observable);
+    return reinterpret_cast<fullmag_fdm_field_snapshot *>(snapshot);
 #else
     (void)handle;
     (void)observable;
@@ -1591,15 +1690,15 @@ fullmag_fdm_preview_snapshot *fullmag_fdm_backend_begin_preview_snapshot(
 #if FULLMAG_HAS_CUDA
     if (!handle) return nullptr;
     auto *ctx = reinterpret_cast<Context *>(handle);
-    return reinterpret_cast<fullmag_fdm_preview_snapshot *>(
-        context_begin_async_preview_snapshot(
+    auto *snapshot = context_begin_async_preview_snapshot(
             *ctx,
             observable,
             preview_nx,
             preview_ny,
             preview_nz,
             z_origin,
-            z_stride));
+            z_stride);
+    return reinterpret_cast<fullmag_fdm_preview_snapshot *>(snapshot);
 #else
     (void)handle;
     (void)observable;
@@ -1958,6 +2057,199 @@ int fullmag_fdm_backend_get_device_info(
 #endif
 }
 
+int fullmag_fdm_backend_llg_checkpoint_query_size_v2(
+    fullmag_fdm_backend *handle,
+    uint64_t *out_required_bytes)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !out_required_bytes) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    return context_llg_checkpoint_query_size_v2(*ctx, *out_required_bytes);
+#else
+    (void)handle; (void)out_required_bytes;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_llg_checkpoint_export_v2(
+    fullmag_fdm_backend *handle,
+    void *destination,
+    uint64_t exact_capacity,
+    fullmag_fdm_llg_checkpoint_info_v2 *out_info)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !destination || !out_info) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    return context_llg_checkpoint_export_v2(
+        *ctx, destination, exact_capacity, *out_info);
+#else
+    (void)handle; (void)destination; (void)exact_capacity; (void)out_info;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_llg_checkpoint_import_v2(
+    fullmag_fdm_backend *handle,
+    const void *source,
+    uint64_t exact_bytes,
+    const fullmag_fdm_llg_checkpoint_info_v2 *expected_info)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !source || !expected_info) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    return context_llg_checkpoint_import_v2(
+        *ctx, source, exact_bytes, *expected_info);
+#else
+    (void)handle; (void)source; (void)exact_bytes; (void)expected_info;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_set_checkpoint_execution_identity_v3(
+    fullmag_fdm_backend *handle,
+    const fullmag_fdm_checkpoint_execution_identity_v3 *identity)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !identity) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    return context_set_checkpoint_execution_identity_v3(*ctx, *identity)
+        ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_ABI;
+#else
+    (void)handle; (void)identity;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_llg_checkpoint_query_size_v3(
+    fullmag_fdm_backend *handle,
+    uint64_t *out_required_bytes)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !out_required_bytes) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    return context_llg_checkpoint_query_size_v3(*ctx, *out_required_bytes);
+#else
+    (void)handle; (void)out_required_bytes;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_llg_checkpoint_export_v3(
+    fullmag_fdm_backend *handle,
+    void *destination,
+    uint64_t exact_capacity,
+    fullmag_fdm_llg_checkpoint_info_v3 *out_info)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !destination || !out_info) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    return context_llg_checkpoint_export_v3(
+        *ctx, destination, exact_capacity, *out_info);
+#else
+    (void)handle; (void)destination; (void)exact_capacity; (void)out_info;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_llg_checkpoint_import_v3(
+    fullmag_fdm_backend *handle,
+    const void *source,
+    uint64_t exact_bytes,
+    const fullmag_fdm_llg_checkpoint_info_v3 *expected_info)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !source || !expected_info) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    return context_llg_checkpoint_import_v3(
+        *ctx, source, exact_bytes, *expected_info);
+#else
+    (void)handle; (void)source; (void)exact_bytes; (void)expected_info;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_get_fsal_telemetry_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_fsal_telemetry_v1 *out_telemetry)
+{
+    if (handle == nullptr || out_telemetry == nullptr) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context*>(handle);
+    return context_get_fsal_telemetry_v1(*ctx, out_telemetry)
+        ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_ABI;
+}
+
+int fullmag_fdm_backend_execution_receipt_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_execution_receipt_v1 *out_receipt)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !out_receipt) return FULLMAG_FDM_ERR_INVALID;
+    if (!fullmag_fdm_execution_receipt_request_valid(*out_receipt)) {
+        return FULLMAG_FDM_ERR_ABI;
+    }
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    const auto receipt = fullmag_fdm_make_execution_receipt(*ctx);
+    *out_receipt = receipt;
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle;
+    (void)out_receipt;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_execution_receipt_v2(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_execution_receipt_v2 *out_receipt)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !out_receipt) return FULLMAG_FDM_ERR_INVALID;
+    if (!fullmag_fdm_execution_receipt_request_valid(*out_receipt)) {
+        return FULLMAG_FDM_ERR_ABI;
+    }
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    const auto receipt = fullmag_fdm_make_execution_receipt_v2(*ctx);
+    *out_receipt = receipt;
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle;
+    (void)out_receipt;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+extern "C" int fullmag_fdm_test_record_residency_violation_v1(
+    fullmag_fdm_backend *handle,
+    uint32_t violation_kind,
+    uint64_t bytes)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    switch (violation_kind) {
+        case 1:
+            if (bytes == 0) return FULLMAG_FDM_ERR_INVALID;
+            fullmag_fdm_record_hot_loop_full_vector_h2d(*ctx, bytes);
+            return FULLMAG_FDM_OK;
+        case 2:
+            if (bytes == 0) return FULLMAG_FDM_ERR_INVALID;
+            fullmag_fdm_record_hot_loop_full_vector_d2h(*ctx, bytes);
+            return FULLMAG_FDM_OK;
+        case 3:
+            if (bytes != 0) return FULLMAG_FDM_ERR_INVALID;
+            fullmag_fdm_record_hot_loop_host_compute(*ctx);
+            return FULLMAG_FDM_OK;
+        default:
+            return FULLMAG_FDM_ERR_INVALID;
+    }
+#else
+    (void)handle;
+    (void)violation_kind;
+    (void)bytes;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
 int fullmag_fdm_backend_set_static_external_field_f64(
     fullmag_fdm_backend *handle,
     const double *field_xyz,
@@ -1966,9 +2258,11 @@ int fullmag_fdm_backend_set_static_external_field_f64(
 #if FULLMAG_HAS_CUDA
     if (!handle || !field_xyz) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
-    return context_mark_static_external_field_profile(*ctx, field_xyz, field_len)
-        ? FULLMAG_FDM_OK
-        : FULLMAG_FDM_ERR_INVALID;
+    if (!context_mark_static_external_field_profile(*ctx, field_xyz, field_len)) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    context_note_field_source_revision_change(*ctx);
+    return FULLMAG_FDM_OK;
 #else
     (void)handle;
     (void)field_xyz;

@@ -1979,6 +1979,54 @@ fn resolve_registry_runtime_for_backend(
     requested_device: &str,
     precision: &str,
 ) -> Option<RegistryRuntimeMatch> {
+    if backend == "fdm" {
+        let gpu = registry.resolve(backend, "gpu", precision);
+        let route = crate::fdm::gpu::cuda::route::resolve_fdm_gpu_availability_route(
+            if requested_device == "gpu" {
+                "cuda"
+            } else {
+                requested_device
+            },
+            gpu.is_some(),
+        )
+        .ok()?;
+        return match route {
+            crate::fdm::gpu::cuda::route::FdmGpuAvailabilityRoute::CpuRequested => registry
+                .resolve(backend, "cpu", precision)
+                .map(|resolved| RegistryRuntimeMatch {
+                    runtime_family: resolved.runtime_family,
+                    worker: resolved.worker,
+                    device: "cpu".to_string(),
+                    fallback: None,
+                }),
+            crate::fdm::gpu::cuda::route::FdmGpuAvailabilityRoute::Cuda => {
+                gpu.map(|resolved| RegistryRuntimeMatch {
+                    runtime_family: resolved.runtime_family,
+                    worker: resolved.worker,
+                    device: "gpu".to_string(),
+                    fallback: None,
+                })
+            }
+            crate::fdm::gpu::cuda::route::FdmGpuAvailabilityRoute::CpuAutoFallback {
+                reason,
+            } => registry.resolve(backend, "cpu", precision).map(|resolved| {
+                let (original_engine, fallback_engine) =
+                    registry_gpu_to_cpu_fallback_engine_ids(backend);
+                RegistryRuntimeMatch {
+                    runtime_family: resolved.runtime_family,
+                    worker: resolved.worker,
+                    device: "cpu".to_string(),
+                    fallback: Some(runtime_fallback(
+                        original_engine,
+                        fallback_engine,
+                        reason,
+                        "preferred FDM GPU runtime is unavailable; using CPU runtime"
+                            .to_string(),
+                    )),
+                }
+            }),
+        };
+    }
     if requested_device != "auto" {
         let resolved = registry.resolve(backend, requested_device, precision)?;
         return Some(RegistryRuntimeMatch {
@@ -2073,6 +2121,30 @@ pub(crate) fn execute_fdm<'a>(
     live: Option<LiveStepConsumer<'a>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    execute_fdm_in_mode(
+        engine,
+        fullmag_ir::BackendTarget::Fdm,
+        if engine == FdmEngine::CudaFdm { "gpu" } else { "cpu" },
+        fullmag_ir::ExecutionMode::Strict,
+        plan,
+        until_seconds,
+        outputs,
+        live,
+        artifact_writer,
+    )
+}
+
+pub(crate) fn execute_fdm_in_mode<'a>(
+    engine: FdmEngine,
+    requested_backend: fullmag_ir::BackendTarget,
+    requested_device: &str,
+    execution_mode: fullmag_ir::ExecutionMode,
+    plan: &FdmPlanIR,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    live: Option<LiveStepConsumer<'a>>,
+    artifact_writer: Option<ArtifactPipelineSender>,
+) -> Result<ExecutedRun, RunError> {
     use crate::fdm::gpu::cuda::route::{public_gpu_transport_route, PublicGpuTransportRoute};
 
     let transport_route = public_gpu_transport_route(plan, matches!(engine, FdmEngine::CudaFdm));
@@ -2136,7 +2208,16 @@ pub(crate) fn execute_fdm<'a>(
             live,
             artifact_writer,
         ),
-        FdmEngine::CudaFdm => execute_cuda_fdm(plan, until_seconds, outputs, live, artifact_writer),
+        FdmEngine::CudaFdm => execute_cuda_fdm(
+            requested_backend,
+            requested_device,
+            execution_mode,
+            plan,
+            until_seconds,
+            outputs,
+            live,
+            artifact_writer,
+        ),
     }?;
     if let Some(artifact) = crate::regional_field_drive_artifacts::regional_field_drive_artifact(
         &plan.field_drives,
@@ -5010,6 +5091,9 @@ fn eigen_path_created_at_label() -> String {
 
 #[cfg(feature = "cuda")]
 fn execute_cuda_fdm(
+    requested_backend: fullmag_ir::BackendTarget,
+    requested_device: &str,
+    execution_mode: fullmag_ir::ExecutionMode,
     plan: &FdmPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
@@ -5066,20 +5150,21 @@ fn execute_cuda_fdm(
         backend.bind_gpu_transport(&binding)?;
     }
     let device_info = backend.device_info()?;
+    let (receipt_lifecycle, initial_execution_receipt) =
+        crate::fdm::gpu::cuda::native::residency::FdmGpuReceiptLifecycle::begin(
+            &backend,
+            requested_device,
+            execution_mode,
+        )?;
+    backend.set_checkpoint_execution_identity(
+        requested_backend,
+        requested_device,
+        execution_mode,
+        plan.integrator.unwrap_or(fullmag_ir::IntegratorChoice::Heun),
+    )?;
     let cell_count = (plan.grid.cells[0] as usize)
         * (plan.grid.cells[1] as usize)
         * (plan.grid.cells[2] as usize);
-    let initial_magnetization = backend.copy_m(cell_count)?;
-    let timestep_policy = if direct_minimizer_control(plan.relaxation.as_ref()).is_some() {
-        None
-    } else {
-        Some(crate::resolve_timestep_policy(
-            plan.integrator,
-            plan.fixed_timestep,
-            plan.adaptive_timestep.as_ref(),
-            crate::types::TimestepExecutionLane::fdm_cuda(plan.precision),
-        )?)
-    };
     let mut steps = Vec::new();
     let mut provenance = ExecutionProvenance {
         execution_engine: "cuda_fdm".to_string(),
@@ -5104,7 +5189,8 @@ fn execute_cuda_fdm(
         transport_modules: crate::fdm::cpu::spin_transport::fdm_gpu_transport_execution_provenance(
             plan,
         ),
-        timestep_policy,
+        fdm_gpu_execution_receipt: Some(initial_execution_receipt),
+        timestep_policy: None,
         executed_physics_kinds: if direct_minimizer_control(plan.relaxation.as_ref()).is_none()
             && (plan.zhang_li_formula_version.is_some()
                 || plan.slonczewski_formula_version.is_some()
@@ -5138,12 +5224,6 @@ fn execute_cuda_fdm(
     } else {
         ArtifactRecorder::in_memory(provenance.clone())
     };
-    let mut scalar_schedules = collect_scalar_schedules(outputs)?;
-    let (mut transport_field_schedules, mut field_schedules) =
-        partition_cuda_field_schedules(outputs, !plan.spin_transport_plans.is_empty())?;
-    let default_scalar_trace = scalar_schedules.is_empty();
-    capture_initial_cuda_fields(&backend, cell_count, &mut field_schedules, &mut artifacts)?;
-
     let mut latest_stats: Option<StepStats> = None;
     let mut current_time = 0.0;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
@@ -5152,6 +5232,30 @@ fn execute_cuda_fdm(
     let mut cancelled = false;
     let mut numerical_stagnation = false;
     let mut direct_minimizer_torque_confirmed = false;
+    let mut initial_magnetization = Vec::new();
+    let mut final_magnetization = Vec::new();
+    let mut completion_steps = 0;
+    let mut completion_time_s = None;
+    let mut completion_max_torque_apm = None;
+    let execution_outcome = (|| -> Result<(), RunError> {
+    initial_magnetization = backend.copy_m(cell_count)?;
+    provenance.timestep_policy = if direct_minimizer_control(plan.relaxation.as_ref()).is_some() {
+        None
+    } else {
+        Some(crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            crate::types::TimestepExecutionLane::fdm_cuda(plan.precision),
+        )?)
+    };
+    artifacts.update_provenance(provenance.clone());
+    let mut scalar_schedules = collect_scalar_schedules(outputs)?;
+    let (mut transport_field_schedules, mut field_schedules) =
+        partition_cuda_field_schedules(outputs, !plan.spin_transport_plans.is_empty())?;
+    let default_scalar_trace = scalar_schedules.is_empty();
+    capture_initial_cuda_fields(&backend, cell_count, &mut field_schedules, &mut artifacts)?;
+
     let mut current_stats = backend.snapshot_step_stats(plan.grid.cells)?;
     ensure_single_object_scalars(&mut current_stats, "free");
 
@@ -5403,10 +5507,10 @@ fn execute_cuda_fdm(
         }
     }
 
-    let completion_steps = latest_stats.as_ref().map_or(0, |stats| stats.step);
-    let completion_time_s = latest_stats.as_ref().map(|stats| stats.time);
-    let completion_max_torque_apm = latest_stats.as_ref().map(|stats| stats.max_torque_Apm);
-    let final_magnetization = backend.copy_m(cell_count)?;
+    completion_steps = latest_stats.as_ref().map_or(0, |stats| stats.step);
+    completion_time_s = latest_stats.as_ref().map(|stats| stats.time);
+    completion_max_torque_apm = latest_stats.as_ref().map(|stats| stats.max_torque_Apm);
+    final_magnetization = backend.copy_m(cell_count)?;
     record_gpu_transport_final_outputs(
         gpu_transport.as_ref(),
         gpu_transport_module_id,
@@ -5436,6 +5540,14 @@ fn execute_cuda_fdm(
         &field_schedules,
         &mut steps,
         &mut artifacts,
+    )?;
+    Ok(())
+    })();
+    receipt_lifecycle.finalize_after_outcome(
+        &backend,
+        &mut provenance,
+        Some(&mut artifacts),
+        execution_outcome,
     )?;
 
     let diagnostic_trace = artifacts.take_solver_steps();
@@ -6204,6 +6316,9 @@ fn execute_native_fem(
 
 #[cfg(not(feature = "cuda"))]
 fn execute_cuda_fdm(
+    _requested_backend: fullmag_ir::BackendTarget,
+    _requested_device: &str,
+    _execution_mode: fullmag_ir::ExecutionMode,
     _plan: &FdmPlanIR,
     _until_seconds: f64,
     _outputs: &[OutputIR],
@@ -6896,23 +7011,13 @@ mod tests {
         );
         assert!(
             snapshots.contains("begin_field_snapshot(quantity, 0, 0.0, 0.0)?")
+                && native_fem.contains("QuantityId::HDmi => Self::HDmi")
+                && native_fem.contains("QuantityId::HDmiBulk => Self::HDmiBulk")
                 && native_fem.contains(
-                    &[
-                        "QuantityId::HDmi => ffi::",
-                        "fullmag_",
-                        "fem_observable::",
-                        "FULLMAG_FEM_OBSERVABLE_H_DMI",
-                    ]
-                    .concat()
+                    "NativeFemPreviewObservable::HDmi => {\n            ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DMI"
                 )
                 && native_fem.contains(
-                    &[
-                        "QuantityId::HDmiBulk => ffi::",
-                        "fullmag_",
-                        "fem_observable::",
-                        "FULLMAG_FEM_OBSERVABLE_H_DMI_BULK",
-                    ]
-                    .concat()
+                    "NativeFemPreviewObservable::HDmiBulk => {\n            ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DMI_BULK"
                 ),
             "native FEM field output helper must expose interfacial and bulk DMI fields"
         );

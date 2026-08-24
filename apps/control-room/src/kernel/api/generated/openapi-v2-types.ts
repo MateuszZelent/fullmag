@@ -3913,6 +3913,8 @@ export interface components {
             transport_authoring?: null | components["schemas"]["TransportAuthoringCapabilityMap"];
         };
         CheckpointCreateRequest: {
+            /** Format: int64 */
+            expected_state_version?: number | null;
             profile?: components["schemas"]["SaveProfile"];
             reason?: string | null;
         };
@@ -3951,6 +3953,8 @@ export interface components {
             checkpoints: components["schemas"]["CheckpointEntry"][];
         };
         CheckpointRestoreRequest: {
+            /** Format: int64 */
+            expected_state_version?: number | null;
             reason?: string | null;
         };
         CheckpointRestoreResponse: {
