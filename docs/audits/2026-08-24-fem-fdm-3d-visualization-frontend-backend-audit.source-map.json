@@ -1,0 +1,108 @@
+{
+  "document": {
+    "path": "docs/audits/2026-08-24-fem-fdm-3d-visualization-frontend-backend-audit.md",
+    "audited_source_revision": "5dd9414da76ae0ce3081204cffea39137db6951d",
+    "immutable_source_base_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/"
+  },
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "documented"},
+    {"solver": "FEM", "device": "GPU", "status": "documented_not_runtime_qualified"},
+    {"solver": "FDM", "device": "CPU", "status": "documented"},
+    {"solver": "FDM", "device": "GPU", "status": "documented_not_runtime_qualified"}
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "quantity-wire-ids",
+      "path": "crates/fullmag-quantities/src/id.rs",
+      "symbol": "normalize_quantity_id",
+      "responsibility": "Normalizuje kanoniczne identyfikatory wire quantities i ich jawne aliasy."
+    },
+    {
+      "id": "quantity-catalog",
+      "path": "crates/fullmag-quantities/src/catalog.rs",
+      "symbol": "quantity_catalog",
+      "responsibility": "Definiuje kanoniczny katalog quantities i metadata preview."
+    },
+    {
+      "id": "quantity-provider-parity",
+      "path": "crates/fullmag-quantities/src/registry.rs",
+      "symbol": "standard_providers_register_every_canonical_quantity",
+      "responsibility": "Testuje rejestrację każdego kanonicznego quantity przez provider registry."
+    },
+    {
+      "id": "fdm-quantity-capability",
+      "path": "crates/fullmag-runner/src/quantities.rs",
+      "symbol": "fdm_quantity_is_active",
+      "responsibility": "Rozstrzyga aktywność quantity dla planu i realizacji FDM."
+    },
+    {
+      "id": "fem-quantity-capability",
+      "path": "crates/fullmag-runner/src/quantities.rs",
+      "symbol": "fem_quantity_is_active",
+      "responsibility": "Rozstrzyga aktywność quantity dla planu i realizacji FEM."
+    },
+    {
+      "id": "cuda-fdm-preview-provider",
+      "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs",
+      "symbol": "from_quantity",
+      "responsibility": "Definiuje zamkniętą listę obserwabli preview CUDA FDM."
+    },
+    {
+      "id": "native-fem-preview-provider",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "from_quantity",
+      "responsibility": "Definiuje zamkniętą listę obserwabli preview native FEM."
+    },
+    {
+      "id": "post-stage-provider-policy",
+      "path": "crates/fullmag-runner/src/observation.rs",
+      "symbol": "observation_provider_policy",
+      "responsibility": "Rozstrzyga retained, reconstructed, immutable i unavailable provider policy per lane."
+    },
+    {
+      "id": "post-stage-compute-command",
+      "path": "crates/fullmag-cli/src/interactive_runtime_host.rs",
+      "symbol": "compute_current_fields",
+      "responsibility": "Obsługuje jawną komendę materializacji pól po stage."
+    },
+    {
+      "id": "cold-field-reconstruction",
+      "path": "crates/fullmag-runner/src/lib.rs",
+      "symbol": "snapshot_problem_vector_field_batch",
+      "responsibility": "Materializuje żądane pola bez retained runtime, w tym cold path FEM shared-air."
+    },
+    {
+      "id": "fmvp-v3-validation",
+      "path": "crates/fullmag-api/src/field_store.rs",
+      "symbol": "validate_field_vector_payload",
+      "responsibility": "Waliduje payload i identity przestrzennego pola."
+    },
+    {
+      "id": "fmvp-v3-decoder",
+      "path": "apps/control-room/src/kernel/api/codecs/fieldVectorCodec.ts",
+      "symbol": "decodeFieldVector",
+      "responsibility": "Dekoduje binarny payload pola i jego identity w Control Room."
+    },
+    {
+      "id": "leaf-settings-reset",
+      "path": "apps/control-room/src/kernel/visualization/ObjectVisualizationController.ts",
+      "symbol": "removeSerializedOverrideField",
+      "responsibility": "Usuwa pojedyncze override ustawienia targetu bez kasowania sibling fields."
+    },
+    {
+      "id": "semantic-render-targets",
+      "path": "apps/control-room/src/kernel/selection/semanticRenderTargetCatalog.ts",
+      "symbol": "buildSemanticRenderTargetCatalog",
+      "responsibility": "Buduje semantyczne targety object, part i Airbox."
+    },
+    {
+      "id": "multilayer-airbox-capability",
+      "path": "apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts",
+      "symbol": "resolveFdmMultilayerAirboxFieldAvailability",
+      "responsibility": "Rozstrzyga dostępność pól Airbox dla carrierów multilayer FDM."
+    }
+  ],
+  "public_api": {"parameters": []}
+}

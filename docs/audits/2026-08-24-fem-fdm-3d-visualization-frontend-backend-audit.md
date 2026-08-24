@@ -2,7 +2,7 @@
 
 **Projekt:** Fullmag
 **Data audytu:** 2026-08-24
-**Audytowany commit `master`:** `78cde18ee95b6d6ee1cd93e7a775bb7a8c7249de`
+**Audytowana rewizja źródeł:** [`5dd9414da76ae0ce3081204cffea39137db6951d`](https://github.com/MateuszZelent/fullmag/tree/5dd9414da76ae0ce3081204cffea39137db6951d)
 **Zakres:** Control Room, API v2, transport pól, targety i carriery FEM/FDM, Airbox, quantities oraz stan interaktywny po zakończeniu etapu solvera
 **Rodzaj audytu:** statyczna analiza kodu i kontraktów. Raport nie deklaruje wykonania managed FEM, browser/WebGL fixture ani testów runtime dla wskazanego SHA.
 
@@ -27,7 +27,7 @@ Nie należy jednak kwalifikować całego zakresu FEM/FDM 3D jako bezwarunkowo go
 | FDM multilayer | bardzo dobra | native layers i target-only Airbox są osobnymi nośnikami; common FFT grid nie jest geometrią |
 | Quantity contracts | dobra, niepełny parytet | 52 kanoniczne ID, ale wykonanie zależy od backendu, engine i planu |
 | Binary field plane | dobra | v3 jest rygorystyczne; legacy v2 osłabia identity po remeshu |
-| Post-stage interactive mode | poprawny, z cold-path dla shared-air | shared-air rekonstruuje pola na żądanie, lecz nie ma warm switchingu ani retained operator cache |
+| Post-stage interactive mode | poprawny, z odrębnym cold-path dla shared-air | provider shared-air pozostaje immutable terminal snapshot; jawna komenda `compute_fields` może uruchomić rekonstrukcję bez retained operator cache |
 | CI/release governance | niewystarczająca | branch protection i required checks są wyłączone |
 
 ### Klasyfikacja
@@ -373,12 +373,17 @@ Orchestrator realizuje podstawowy scenariusz poprawnie:
 | FDM regular | retained runtime | dynamic observation |
 | FDM multilayer | deterministic reconstruction | poprawne dla wspieranych pól |
 | FEM magnetic-only | retained runtime | dynamic observation |
-| FEM shared-air | deterministic reconstruction | `compute_fields` odtwarza snapshot; cold path bez retained operator cache |
+| FEM shared-air | immutable terminal snapshot | standardowy provider nie rekonstruuje; jawna komenda `compute_fields` uruchamia osobny cold path bez retained operator cache |
 | FEM eigen/frequency | unavailable in this runtime | osobna analysis path |
 
 ### Shared-air gap
 
-Dla `SharedDomainMeshWithAir` retained dynamic idle preview jest jawnie wyłączone, ale nie blokuje to nowej quantity. `InteractiveRuntimeHost::compute_current_fields()` przekazuje bieżącą lub continuation magnetization do `snapshot_problem_vector_field_batch()`. Gałąź FEM tworzy świeży `NativeFemBackend`, oblicza pola efektywne i materializuje aktywne żądane quantity.
+Dla `SharedDomainMeshWithAir` kanoniczne `observation_provider_policy()` zwraca
+`ImmutableTerminalSnapshot`, dlatego zwykły provider post-stage nie używa deterministic
+reconstruction. Nie blokuje to osobnej, jawnej komendy: `InteractiveRuntimeHost::compute_current_fields()`
+przekazuje bieżącą lub continuation magnetization do `snapshot_problem_vector_field_batch()`.
+Gałąź FEM tworzy wtedy świeży `NativeFemBackend`, oblicza pola efektywne i materializuje
+aktywne żądane quantity jako cold reconstruction niezależne od standardowej provider policy.
 
 Pozostają więc problemy wydajności i UX, nie brak capability:
 
@@ -614,18 +619,94 @@ Na moment audytu:
 
 ---
 
-## 18. Indeks źródeł i stabilnych symboli
+(f3d-audit-problem-statement)=
+## 18. Aneks kontraktu publikacyjnego
+
+### Problem badawczy
+
+Audyt sprawdza, czy frontend i backend zachowują jeden, fizycznie uczciwy kontrakt prezentacji trójwymiarowych pól FDM i FEM: od kanonicznego identyfikatora quantity, przez dostępność providera i identity payloadu, po semantyczny target renderera. Aneks nie wprowadza nowej fizyki ani nowej funkcji produktu; porządkuje dowody dla audytowanego kodu.
+
+(f3d-audit-governing-equations)=
+### Równania rządzące
+
+Zakres nie zmienia równań mikromagnetycznych. Audyt śledzi pola już zdefiniowane przez kanoniczne noty fizyczne oraz sprawdza, czy warstwa obserwacji nie zmienia ich znaczenia, nośnika ani dziedziny.
+
+(f3d-audit-symbols-and-si-units)=
+### Symbole i jednostki SI
+
+Nie zdefiniowano nowych symboli matematycznych. Jednostki każdego pola pochodzą z kanonicznego katalogu quantities; frontend nie może ich nadpisywać niezależną mapą.
+
+(f3d-audit-assumptions-and-validity)=
+### Założenia i zakres ważności
+
+Wnioski dotyczą wyłącznie audytowanego SHA i ścieżek wymienionych w mapie źródeł. Statyczny dowód architektury nie zastępuje kwalifikacji na rzeczywistym GPU, zarządzanym runnerze ani testu przeglądarkowego.
+
+(f3d-audit-python-api)=
+### Publiczne API Python
+
+Audyt nie zmienia publicznego API Python. Poniższy wykonywalny fragment sprawdza obecność dokumentu i jego sąsiedniej mapy źródeł; nie konstruuje alternatywnego modelu problemu.
+
+```python
+# %%
+from pathlib import Path
+
+# %%
+audit = Path("docs/audits/2026-08-24-fem-fdm-3d-visualization-frontend-backend-audit.md")
+source_map = audit.with_suffix(".source-map.json")
+assert audit.is_file()
+assert source_map.is_file()
+```
+
+(f3d-audit-problem-ir)=
+### ProblemIR
+
+Audyt nie dodaje ani nie zmienia pól `ProblemIR`. Dostępność wizualizacji musi wynikać z już znormalizowanego problemu, resolved lane i capability konkretnego carriera, a nie z nazwy targetu w UI.
+
+(f3d-audit-round-trip-and-failure-semantics)=
+### Round-trip i semantyka błędów
+
+`requested intent` musi pozostać widoczny obok `resolved execution`. `validation errors` muszą zatrzymać niezgodny payload lub target przed renderingiem, a `unsupported combinations` muszą dawać jawne unavailable zamiast ukrytego fallbacku. Eksport i ponowne wczytanie nie mogą zmieniać quantity ID, scope, generation ani topology identity.
+
+(f3d-audit-discrete-realization)=
+### Realizacja dyskretna
+
+FDM używa regularnych lub maskowanych carrierów siatki, a FEM carrierów nodalnych i powierzchniowych powiązanych z topologią. Wspólna nazwa quantity nie upoważnia renderera do zamiany tych realizacji ani do zgadywania membership.
+
+(f3d-audit-implementation-mapping)=
+### Mapowanie implementacji
+
+Sąsiedni plik `2026-08-24-fem-fdm-3d-visualization-frontend-backend-audit.source-map.json` wiąże każde krytyczne twierdzenie z niezmiennym SHA, ścieżką i deklaracją źródłową. Tabela poniżej jest czytelnym indeksem tego samego mapowania.
+
+(f3d-audit-validation)=
+### Walidacja
+
+Walidacja obejmuje parser dokumentacji naukowej, rozwiązywanie wszystkich symboli mapy źródeł względem audytowanego SHA oraz bramki wyszczególnione w sekcji 16. Wynik statyczny nie jest przedstawiany jako dowód wykonania testów sprzętowych.
+
+(f3d-audit-limitations)=
+### Ograniczenia
+
+Audyt nie dowodzi wydajności, stabilności sterownika, zachowania po utracie kontekstu WebGL ani kwalifikacji managed FEM bez odpowiadających im artefaktów CI. Otwarte ustalenia z sekcji 13 pozostają ograniczeniami audytowanego SHA.
+
+(f3d-audit-scientific-bibliography)=
+### Bibliografia naukowa
+
+Ten audyt nie formułuje nowych twierdzeń naukowych; podstawę fizyczną stanowią kanoniczne noty w `docs/physics/`, a podstawę kontraktu transportowego i runtime — specyfikacje oraz ADR-y wskazane w sekcjach źródłowych dokumentu.
+
+---
+
+(f3d-audit-source-code-index)=
+## 19. Indeks źródeł i stabilnych symboli
 
 | Twierdzenie audytu | Ścieżka | Stabilny symbol / kotwica |
 |---|---|---|
-| Zamrożone wire IDs | `crates/fullmag-quantities/src/id.rs` | `QuantityId::as_str` |
+| Kanoniczne wire IDs i jawne aliasy | `crates/fullmag-quantities/src/id.rs` | `normalize_quantity_id` |
 | Katalog 52 quantities | `crates/fullmag-quantities/src/catalog.rs` | `quantity_catalog` |
 | Parytet providerów | `crates/fullmag-quantities/src/registry.rs` | `standard_providers_register_every_canonical_quantity` |
 | Capability zależne od lane i planu | `crates/fullmag-runner/src/quantities.rs` | `fdm_quantity_is_active`, `fem_quantity_is_active` |
-| Zamknięta lista CUDA FDM | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `CudaSnapshotObservable::from_quantity` |
-| Zamknięta lista native FEM | `crates/fullmag-runner/src/native_fem.rs` | `NativeFemPreviewObservable::from_quantity` |
-| Polityka providerów post-stage | `crates/fullmag-runner/src/observation.rs` | `ObservationProviderResolver::uses_deterministic_reconstruction` |
-| Komenda post-stage | `crates/fullmag-cli/src/interactive_runtime_host.rs` | `InteractiveRuntimeHost::compute_current_fields` |
+| Zamknięta lista CUDA FDM | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `from_quantity` |
+| Zamknięta lista native FEM | `crates/fullmag-runner/src/native_fem.rs` | `from_quantity` |
+| Polityka providerów post-stage | `crates/fullmag-runner/src/observation.rs` | `observation_provider_policy` |
+| Komenda post-stage | `crates/fullmag-cli/src/interactive_runtime_host.rs` | `compute_current_fields` |
 | Rekonstrukcja bez retained runtime | `crates/fullmag-runner/src/lib.rs` | `snapshot_problem_vector_field_batch` |
 | Walidacja i serializacja FMVP | `crates/fullmag-api/src/field_store.rs` | `validate_field_vector_payload`, `serialize_field_vector_binary_v3` |
 | Dekodowanie i identity FMVP | `apps/control-room/src/kernel/api/codecs/fieldVectorCodec.ts` | `decodeFieldVector` |
