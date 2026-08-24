@@ -71,6 +71,23 @@ struct DrivenResponseCAbiDemagTangentContext {
 constexpr const char *kUnavailableMessage =
     "fullmag_fem native backend was built without the MFEM stack; rebuild with FULLMAG_USE_MFEM_STACK=ON and an installed MFEM toolchain";
 
+uint32_t gpu_execution_class_to_abi(fullmag::fem::FemGpuExecutionClass execution_class) {
+    switch (execution_class) {
+    case fullmag::fem::FemGpuExecutionClass::Unknown:
+        return FULLMAG_FEM_GPU_EXECUTION_UNKNOWN;
+    case fullmag::fem::FemGpuExecutionClass::DeviceResident:
+        return FULLMAG_FEM_GPU_EXECUTION_DEVICE_RESIDENT;
+    case fullmag::fem::FemGpuExecutionClass::GpuOperatorHostSolver:
+        return FULLMAG_FEM_GPU_EXECUTION_GPU_OPERATOR_HOST_SOLVER;
+    case fullmag::fem::FemGpuExecutionClass::HybridCpuPoisson:
+        return FULLMAG_FEM_GPU_EXECUTION_HYBRID_CPU_POISSON;
+    case fullmag::fem::FemGpuExecutionClass::Cpu:
+        return FULLMAG_FEM_GPU_EXECUTION_CPU;
+    default:
+        return FULLMAG_FEM_GPU_EXECUTION_UNKNOWN;
+    }
+}
+
 void apply_demag_solver_policy_to_step_stats(
     const fullmag::fem::Context &ctx,
     fullmag_fem_step_stats &stats)
@@ -3579,7 +3596,7 @@ int fullmag_fem_backend_gpu_execution_receipt_v1(
     fullmag_fem_gpu_execution_receipt_v1 receipt{};
     receipt.abi_version = FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1;
     receipt.struct_size = sizeof(receipt);
-    receipt.execution_class = static_cast<uint32_t>(snapshot.execution_class);
+    receipt.execution_class = gpu_execution_class_to_abi(snapshot.execution_class);
     receipt.precision = snapshot.precision;
     receipt.integrator = snapshot.integrator;
     receipt.device_ordinal = snapshot.device_ordinal;

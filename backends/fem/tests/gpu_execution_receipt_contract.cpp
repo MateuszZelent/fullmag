@@ -4,6 +4,7 @@
 #include "fullmag_fem.h"
 
 #include <cstddef>
+#include <cstring>
 #include <cstdlib>
 #include <iostream>
 
@@ -481,47 +482,105 @@ void public_abi_v1_rejects_invalid_handshake_without_writing_output() {
     static_assert(offsetof(fullmag_fem_gpu_execution_receipt_v1, hot_loop_compute_d2h_bytes) == 120);
     static_assert(offsetof(fullmag_fem_gpu_execution_receipt_v1, hot_loop_compute_host_sync_count) == 128);
 
-    fullmag_fem_gpu_execution_receipt_v1 receipt{};
+    fullmag_fem_gpu_execution_receipt_v1 receipt;
+    std::memset(&receipt, 0xa5, sizeof(receipt));
     receipt.abi_version = FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1;
     receipt.struct_size = sizeof(receipt);
-    receipt.execution_class = UINT32_C(0xfeedbeef);
+    auto before = receipt;
     check(
         fullmag_fem_backend_gpu_execution_receipt_v1(nullptr, &receipt) ==
             FULLMAG_FEM_ERR_INVALID,
         "execution receipt ABI must reject null handles");
     check(
-        receipt.execution_class == UINT32_C(0xfeedbeef),
-        "execution receipt ABI must not write output after a failed handshake");
+        std::memcmp(&receipt, &before, sizeof(receipt)) == 0,
+        "null handle must not write any output byte");
 
     fullmag_fem_backend handle{};
     receipt.abi_version = FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1 + 1;
+    before = receipt;
     check(
         fullmag_fem_backend_gpu_execution_receipt_v1(&handle, &receipt) ==
             FULLMAG_FEM_ERR_INVALID,
         "execution receipt ABI must reject unknown versions");
     check(
-        receipt.execution_class == UINT32_C(0xfeedbeef),
-        "bad version must not mutate the receipt");
+        std::memcmp(&receipt, &before, sizeof(receipt)) == 0,
+        "bad version must not write any output byte");
 
     receipt.abi_version = FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1;
     receipt.struct_size = sizeof(receipt) - 1;
+    before = receipt;
     check(
         fullmag_fem_backend_gpu_execution_receipt_v1(&handle, &receipt) ==
             FULLMAG_FEM_ERR_INVALID,
         "execution receipt ABI must reject unknown struct sizes");
     check(
-        receipt.execution_class == UINT32_C(0xfeedbeef),
-        "bad struct size must not mutate the receipt");
+        std::memcmp(&receipt, &before, sizeof(receipt)) == 0,
+        "bad struct size must not write any output byte");
+
+    check(
+        fullmag_fem_backend_gpu_execution_receipt_v1(&handle, nullptr) ==
+            FULLMAG_FEM_ERR_INVALID,
+        "execution receipt ABI must reject null output");
+
+    auto &state = handle.context.gpu_state.execution_receipt;
+    state.execution_class = FemGpuExecutionClass::HybridCpuPoisson;
+    state.device_ordinal = 17;
+    state.precision = 19;
+    state.integrator = 23;
+    state.required_operator_mask = UINT64_C(0x3ff);
+    state.resolved_device_operator_mask = UINT64_C(0x155);
+    state.resolved_host_operator_mask = UINT64_C(0x2aa);
+    state.resolved_unknown_operator_mask = UINT64_C(0x25);
+    state.executed_device_operator_mask = UINT64_C(0x149);
+    state.executed_host_operator_mask = UINT64_C(0x2b6);
+    state.executed_unknown_operator_mask = UINT64_C(0x12);
+    state.fallback_count = 29;
+    state.accepted_step_count = 31;
+    state.rejected_attempt_count = 37;
+    state.failed_attempt_count = 41;
+    auto &audit = handle.context.transfer_audit.audit.counters;
+    audit.hot_loop_compute_h2d_bytes = 43;
+    audit.hot_loop_compute_d2h_bytes = 47;
+    audit.hot_loop_compute_host_sync_count = 53;
 
     receipt.struct_size = sizeof(receipt);
     check(
         fullmag_fem_backend_gpu_execution_receipt_v1(&handle, &receipt) == FULLMAG_FEM_OK,
         "execution receipt ABI must accept the exact v1 handshake");
     check(
+        receipt.abi_version == FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1,
+        "receipt ABI version mismatch");
+    check(receipt.struct_size == sizeof(receipt), "receipt struct size mismatch");
+    check(
+        receipt.execution_class == FULLMAG_FEM_GPU_EXECUTION_HYBRID_CPU_POISSON,
+        "receipt execution class mismatch");
+    check(receipt.precision == 19, "receipt precision mismatch");
+    check(receipt.integrator == 23, "receipt integrator mismatch");
+    check(receipt.device_ordinal == 17, "receipt device ordinal mismatch");
+    check(receipt.required_operator_mask == UINT64_C(0x3ff), "required mask mismatch");
+    check(receipt.resolved_device_operator_mask == UINT64_C(0x155), "resolved device mask mismatch");
+    check(receipt.resolved_host_operator_mask == UINT64_C(0x2aa), "resolved host mask mismatch");
+    check(receipt.resolved_unknown_operator_mask == UINT64_C(0x25), "resolved unknown mask mismatch");
+    check(receipt.executed_device_operator_mask == UINT64_C(0x149), "executed device mask mismatch");
+    check(receipt.executed_host_operator_mask == UINT64_C(0x2b6), "executed host mask mismatch");
+    check(receipt.executed_unknown_operator_mask == UINT64_C(0x12), "executed unknown mask mismatch");
+    check(receipt.fallback_count == 29, "fallback count mismatch");
+    check(receipt.accepted_step_count == 31, "accepted step count mismatch");
+    check(receipt.rejected_attempt_count == 37, "rejected attempt count mismatch");
+    check(receipt.failed_attempt_count == 41, "failed attempt count mismatch");
+    check(receipt.hot_loop_compute_h2d_bytes == 43, "compute H2D counter mismatch");
+    check(receipt.hot_loop_compute_d2h_bytes == 47, "compute D2H counter mismatch");
+    check(receipt.hot_loop_compute_host_sync_count == 53, "compute sync counter mismatch");
+
+    state.execution_class = static_cast<FemGpuExecutionClass>(UINT32_C(0xfeedbeef));
+    receipt.abi_version = FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1;
+    receipt.struct_size = sizeof(receipt);
+    check(
+        fullmag_fem_backend_gpu_execution_receipt_v1(&handle, &receipt) == FULLMAG_FEM_OK,
+        "unknown internal execution class query must remain ABI-safe");
+    check(
         receipt.execution_class == FULLMAG_FEM_GPU_EXECUTION_UNKNOWN,
-        "unresolved execution receipt must fail closed as unknown");
-    check(receipt.required_operator_mask == 0, "unresolved receipt must not fabricate operators");
-    check(receipt.hot_loop_compute_h2d_bytes == 0, "fresh receipt must copy zero transfer audit");
+        "unknown internal execution class must map fail-closed to public unknown");
 }
 
 } // namespace
