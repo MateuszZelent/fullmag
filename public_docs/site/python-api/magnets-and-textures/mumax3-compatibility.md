@@ -1,6 +1,6 @@
 ---
 title: Mumax3 Texture Compatibility
-status: complete
+status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs

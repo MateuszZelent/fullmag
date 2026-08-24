@@ -85,6 +85,9 @@ def test_mumax_factories_reject_nonpositive_scales(factory, arguments) -> None:
             ),
             (2.0, 0.0, 0.0),
         ),
+        (fm.texture.antiskyrmion(2.0, 0.5), (3.0, 0.0, 0.0)),
+        (fm.texture.skyrmionium(1.0, 2.0, 0.5), (3.0, 0.0, 0.0)),
+        (fm.texture.hopfion(2.0), (3.0, 0.0, 0.0)),
     ],
 )
 @pytest.mark.parametrize("clamp_mode", ["clamp", "repeat", "mirror"])
