@@ -7,6 +7,13 @@ on:
     paths:
       - ".fullmag-docs-payload/**"
       - ".github/workflows/apply-meshing-docs-payload.yml"
+  pull_request:
+    branches:
+      - master
+    types:
+      - opened
+      - reopened
+      - synchronize
 
 permissions:
   contents: write
