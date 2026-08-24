@@ -16,10 +16,10 @@ try {
     pnpm.command,
     [...pnpm.argsPrefix, "--dir", appRoot, "exec", "next", "build", "--webpack"],
     {
-    cwd: appRoot,
-    env: { ...process.env, NEXT_PUBLIC_AUDIT_BUILD: "1" },
-    shell: pnpm.shell,
-    stdio: "inherit",
+      cwd: appRoot,
+      env: { ...process.env, NEXT_PUBLIC_AUDIT_BUILD: "1" },
+      shell: pnpm.shell,
+      stdio: "inherit",
     },
   );
 } finally {
