@@ -4,6 +4,7 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+source_of_truth: docs/validation/fem_cpu_validation_matrix.md
 ---
 
 (public-docs-validation-analytical-cases)=

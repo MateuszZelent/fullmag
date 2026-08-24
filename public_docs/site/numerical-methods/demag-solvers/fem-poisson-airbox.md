@@ -132,7 +132,7 @@ film.Ms = 8.0e5
 film.Aex = 1.3e-11
 film.alpha = 0.02
 film.m = fm.init.UniformMagnetization((1.0, 0.1, 0.0))
-study.demag(realization="poisson_robin")
+study.demag(model="airbox", variant="robin")
 study.fem_demag_solver(
     solver="CG",
     preconditioner="AMG",

@@ -1,10 +1,10 @@
 {
   "document": {"path": "public_docs/site/numerical-methods/demag-solvers/periodic-demag.md"},
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "The periodic CUDA lane requires policy-specific qualification."},
-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "A source-visible CPU reduction does not establish GPU parity."}
+    {"solver": "FDM", "device": "CPU", "status": "reference-executable"},
+    {"solver": "FDM", "device": "GPU", "status": "production-executable", "reason": "The CUDA convolution preserves the selected truncated-image policy and image counts; execution provenance remains required."},
+    {"solver": "FEM", "device": "CPU", "status": "partial-production-executable", "reason": "The periodic representative reduction is a bounded lane, not universal periodic FEM support."},
+    {"solver": "FEM", "device": "GPU", "status": "partial-production-executable", "reason": "The periodic-airbox device slice has separate bounded qualification."}
   ],
   "equations": [
     {"id": "eq-numerical-periodic-demag-reduction", "symbols": ["Ap", "P", "Ao", "bp", "b", "up"], "sources": ["fem"]},

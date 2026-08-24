@@ -143,7 +143,7 @@ sample mapping, analytical model, tolerance, solver diagnostics and the exact re
 Script export preserves validation objects and stage ordering. Requested intent and resolved execution
 are stored separately. Validation errors include missing geometries, too few samples, duplicate sample
 indices, invalid model names, invalid field/frequency windows and tolerance violations. Unsupported combinations
-combinations are rejected explicitly; validation metadata cannot make an unsupported solver lane
+are rejected explicitly; validation metadata cannot make an unsupported solver lane
 qualified.
 
 (numerical-methods-modal-validation-discrete-realization)=
@@ -164,6 +164,7 @@ qualified.
 | Dispersion validation schema | `packages/fullmag-py/src/fullmag/model/eigen.py` | `class ThinFilmDEBVDispersionValidation` | validates and serializes dispersion cases | Python |
 | Kittel validation schema | `packages/fullmag-py/src/fullmag/model/eigen.py` | `class K0KittelFieldSweepValidation` | validates and serializes field sweeps | Python |
 | Modal solver validation | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | `solve_modal_eigen_contract` | native modal diagnostics | FEM CPU |
+| Eigenvalue/frequency mapping | `backends/fem/src/frequency_domain/mode_kinematics.cpp` | `frequency_hz_from_omega_rad_s` | signed cyclic frequency from complex modal kinematics | FEM |
 
 (numerical-methods-modal-validation-validation)=
 ## Validation
@@ -195,3 +196,4 @@ bounded by the Python validators and does not represent arbitrary multilayer dis
 | Dispersion schema | `packages/fullmag-py/src/fullmag/model/eigen.py` | `class ThinFilmDEBVDispersionValidation` | typed validation payload | Python source |
 | Kittel schema | `packages/fullmag-py/src/fullmag/model/eigen.py` | `class K0KittelFieldSweepValidation` | typed validation payload | Python source |
 | Native modal diagnostics | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | `solve_modal_eigen_contract` | solver status and diagnostics | native source |
+| Eigenvalue/frequency mapping | `backends/fem/src/frequency_domain/mode_kinematics.cpp` | `frequency_hz_from_omega_rad_s` | signed cyclic frequency from the real part of complex angular frequency | native source/tests |

@@ -129,6 +129,11 @@ body.alpha = 0.02
 body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
 region = fm.RegionRef("film")
+study.current_transport(
+    name="charge",
+    model="prescribed_density",
+    current_density=(1.0e12, 0.0, 0.0),
+)
 spin = fm.SpinDriftDiffusion(
     id="spin",
     current_source_id="charge",

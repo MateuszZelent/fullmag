@@ -262,10 +262,10 @@ to FEM CPU or `llg_overdamped`. Requested intent is stored separately from resol
 
 | Solver | Device | Status | Realization and evidence boundary |
 |---|---|---|---|
-| FDM | CPU | source-backed | cellwise tangent projection, normalized retraction, energy-metric Armijo reference path |
-| FDM | GPU | source-backed | CUDA direct-minimizer path; runtime/device qualification is separate |
-| FEM | CPU | source-backed | MFEM nodal tangent gradient, lumped-mass products and native Armijo loop |
-| FEM | GPU | source-backed | CUDA tangent-gradient, mass-metric reduction and device relaxation state |
+| FDM | CPU | reference-executable | cellwise tangent projection, normalized retraction, energy-metric Armijo reference path |
+| FDM | GPU | development-executable | CUDA direct-minimizer path; multilayer FDM requests remain unsupported |
+| FEM | CPU | development-executable | MFEM nodal tangent gradient, lumped-mass products and native Armijo loop |
+| FEM | GPU | development-executable | CUDA tangent-gradient, mass-metric reduction and device relaxation state |
 
 FDM uses cell volumes and Cartesian fields. FEM uses finite-element node values and the selected
 mass metric. These are different discrete inner products even though the continuum minimization

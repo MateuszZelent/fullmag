@@ -33,8 +33,10 @@ A public script constructs a study, declares its numerical lane and physical dom
 material and magnetization data, registers interactions, and appends ordered stages:
 
 ```python
+# %% Imports.
 import fullmag as fm
 
+# %% Configure the requested execution lane and domain.
 nm = 1.0e-9
 
 study = fm.study("getting_started_workflow")
@@ -49,6 +51,7 @@ study.universe(
 )
 study.objects.mesh.defaults(cell_size=(4 * nm, 4 * nm, 4 * nm))
 
+# %% Define the magnetic object and its material state.
 film = study.geometry(
     fm.Box(size=(80 * nm, 120 * nm, 8 * nm), name="film"),
     name="film",
@@ -58,6 +61,7 @@ film.Aex = 13.0e-12
 film.alpha = 0.1
 film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 
+# %% Register physics, solver policy, and the ordered stage.
 study.exchange()
 study.demag()
 study.solver(fix_dt=5.0e-13, gamma=2.211e5)

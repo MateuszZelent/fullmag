@@ -88,7 +88,7 @@
         "type": "FDMDemag | None",
         "default": "None",
         "si_unit": "1",
-        "validation": "Typed, internally consistent demag policy.",
+        "validation": "No explicit `FDM` constructor type check; lowering requires `FDMDemag.to_ir()`.",
         "meaning": "Single-grid or multilayer common-grid request.",
         "backend_support": "FDM demagnetization lanes",
         "problem_ir": "backend_policy.discretization_hints.fdm.demag"
@@ -118,7 +118,7 @@
         "type": "float | None",
         "default": "None",
         "si_unit": "m",
-        "validation": "Finite and nonnegative.",
+        "validation": "Values below zero are rejected; zero and `NaN` currently pass the Python constructor.",
         "meaning": "Minimum geometric distance used by full correction.",
         "backend_support": "Boundary-correction lanes",
         "problem_ir": "backend_policy.discretization_hints.fdm.boundary_delta_min"

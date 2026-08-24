@@ -235,6 +235,76 @@
       "sources": [
         "rust-conical"
       ]
+    },
+    {
+      "id": "preset-texture-antiskyrmion-v2",
+      "symbols": [
+        "psi",
+        "phi",
+        "gamma_c",
+        "m",
+        "theta",
+        "p"
+      ],
+      "sources": [
+        "rust-skyrmion"
+      ]
+    },
+    {
+      "id": "preset-texture-skyrmionium-profile-v2",
+      "symbols": [
+        "a_profile",
+        "s_coord",
+        "theta",
+        "r",
+        "R_in",
+        "R_out",
+        "Delta"
+      ],
+      "sources": [
+        "rust-skyrmionium"
+      ]
+    },
+    {
+      "id": "preset-texture-skyrmionium-v2",
+      "symbols": [
+        "m",
+        "theta",
+        "psi",
+        "s_bg"
+      ],
+      "sources": [
+        "rust-skyrmionium"
+      ]
+    },
+    {
+      "id": "preset-texture-hopfion-spinor-v2",
+      "symbols": [
+        "z1",
+        "z2",
+        "X",
+        "Y",
+        "Z",
+        "rho",
+        "d"
+      ],
+      "sources": [
+        "rust-hopfion"
+      ]
+    },
+    {
+      "id": "preset-texture-hopfion-v2",
+      "symbols": [
+        "h",
+        "z1",
+        "z2",
+        "m",
+        "s_bg",
+        "varphi0"
+      ],
+      "sources": [
+        "rust-hopfion"
+      ]
     }
   ],
   "symbols": [
@@ -395,6 +465,12 @@
       "si_unit": "\\mathrm{rad}"
     },
     {
+      "id": "gamma_c",
+      "latex": "\\gamma_c",
+      "meaning": "antiskyrmion chirality-selected helicity",
+      "si_unit": "\\mathrm{rad}"
+    },
+    {
       "id": "chi",
       "latex": "\\chi",
       "meaning": "bimeron azimuthal phase",
@@ -423,6 +499,24 @@
       "latex": "r_{\\mathrm{core}}",
       "meaning": "exact radius of the two fully normal bimeron cores",
       "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "R_in",
+      "latex": "R_{\\mathrm{in}}",
+      "meaning": "skyrmionium inner-wall radius",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "R_out",
+      "latex": "R_{\\mathrm{out}}",
+      "meaning": "skyrmionium outer-wall radius",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "a_profile",
+      "latex": "a(s)",
+      "meaning": "skyrmionium wall-angle profile",
+      "si_unit": "\\mathrm{rad}"
     },
     {
       "id": "s_coord",
@@ -513,6 +607,66 @@
       "latex": "\\beta",
       "meaning": "conical-state angle",
       "si_unit": "\\mathrm{rad}"
+    },
+    {
+      "id": "X",
+      "latex": "X",
+      "meaning": "dimensionless Hopf-map x coordinate",
+      "si_unit": "1"
+    },
+    {
+      "id": "Y",
+      "latex": "Y",
+      "meaning": "dimensionless Hopf-map y coordinate",
+      "si_unit": "1"
+    },
+    {
+      "id": "Z",
+      "latex": "Z",
+      "meaning": "dimensionless Hopf-map z coordinate",
+      "si_unit": "1"
+    },
+    {
+      "id": "hopf_q",
+      "latex": "q",
+      "meaning": "Hopf-map orientation sign",
+      "si_unit": "1"
+    },
+    {
+      "id": "a_z",
+      "latex": "a_z",
+      "meaning": "Hopf-map axial scale",
+      "si_unit": "1"
+    },
+    {
+      "id": "rho",
+      "latex": "\\rho",
+      "meaning": "dimensionless Hopf-map radius",
+      "si_unit": "1"
+    },
+    {
+      "id": "d",
+      "latex": "d",
+      "meaning": "Hopf-map denominator 1 + rho squared",
+      "si_unit": "1"
+    },
+    {
+      "id": "z1",
+      "latex": "z_1",
+      "meaning": "first complex stereographic coordinate",
+      "si_unit": "1"
+    },
+    {
+      "id": "z2",
+      "latex": "z_2",
+      "meaning": "second complex stereographic coordinate",
+      "si_unit": "1"
+    },
+    {
+      "id": "h",
+      "latex": "\\mathbf h",
+      "meaning": "dimensionless Hopf-map unit vector",
+      "si_unit": "1"
     },
     {
       "id": "M",

@@ -1,10 +1,10 @@
 {
   "document": {"path": "public_docs/site/numerical-methods/relaxation/nonlinear-cg.md"},
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "Native CUDA step source exists; executed-device qualification is separate."},
-    {"solver": "FDM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FDM", "device": "GPU", "status": "source-backed", "reason": "CUDA/reference source exists; public planner support is separately bounded."}
+    {"solver": "FEM", "device": "CPU", "status": "development-executable"},
+    {"solver": "FEM", "device": "GPU", "status": "development-executable", "reason": "The native CUDA step executes, but production qualification is not claimed."},
+    {"solver": "FDM", "device": "CPU", "status": "reference-executable"},
+    {"solver": "FDM", "device": "GPU", "status": "development-executable", "reason": "The CUDA path is bounded; public multilayer planner support remains unsupported."}
   ],
   "equations": [
     {"id": "eq-relax-ncg-tangent-gradient", "symbols": ["g", "H_eff", "m"], "sources": ["ncg-reference"]},

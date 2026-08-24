@@ -76,14 +76,13 @@ nm = 1.0e-9
 study = fm.study("tangent_plane_relaxation")
 study.engine("fem")
 study.device("cpu", precision="double")
-study.mode("strict")
+study.mode("extended")
 film = study.geometry(fm.Box(40 * nm, 20 * nm, 5 * nm), name="film")
 film.Ms = 800.0e3
 film.Aex = 13.0e-12
 film.alpha = 0.02
 film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 study.exchange()
-study.solver(integrator="rk45", fix_dt=1.0e-15, gamma=2.211e5)
 study.stages.add_relax(
     algorithm="tangent_plane_implicit",
     tolT=1.0e-6,
@@ -114,7 +113,7 @@ that a native tangent-plane solve was run.
 
 Round-trip preserves requested intent, the algorithm request, and stop policy. Validation errors cover unknown
 algorithm names, non-positive stop values, and incompatible time-limit parameters. Unsupported combinations
-combinations are explicit: the FDM planner must reject `tangent_plane_implicit` rather than
+are explicit: the FDM planner must reject `tangent_plane_implicit` rather than
 silently selecting `llg_overdamped`. Requested intent and resolved execution remain separate in
 provenance.
 
@@ -123,8 +122,8 @@ provenance.
 
 | Lane | Status | Reason |
 |---|---|---|
-| FEM CPU | documented contract | relaxation algorithm is exposed as FEM-only in the public model |
-| FEM GPU | source-backed, qualification-dependent | device execution requires managed runtime evidence |
+| FEM CPU | development-executable | available only in extended mode as a relaxation algorithm |
+| FEM GPU | unsupported | a forced GPU request rejects; no fallback to CPU is permitted |
 | FDM CPU | unsupported | current algorithm contract is FEM-only |
 | FDM GPU | unsupported | current algorithm contract is FEM-only |
 
@@ -146,8 +145,8 @@ precision, and whether the GPU device actually executed.
 (time-integration-tangent-plane-methods-limitations)=
 ## Limitations
 
-The public documentation does not claim that this method is a general dynamic integrator, an
-FDM method, or a universally qualified FEM GPU method. The full linear-system policy and
+The public documentation does not claim that this method is a physical-time integrator, an FDM
+method, or a FEM GPU method. The full linear-system policy and
 preconditioner controls must be added only when their public and native contracts are present.
 
 (time-integration-tangent-plane-methods-scientific-bibliography)=

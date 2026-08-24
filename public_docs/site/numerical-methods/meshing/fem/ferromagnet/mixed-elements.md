@@ -18,3 +18,9 @@ statistics, deterministic inputs, fallback history, and a topology fingerprint.
 
 A valid CPU mesh does not prove GPU support. Every realized family (`prism6`, `pyramid5`, `tet4`)
 must be supported by every enabled device operator.
+
+The current executable mixed-prism slice is deliberately bounded: strict P1, double precision,
+one axis-aligned magnetic box in one airbox, exactly 1, 2, or 3 swept layers, prism6 magnetic
+cells, pyramid5 transition cells, and tet4 far-air cells. Explicit FEM CPU and FEM GPU lanes are
+implemented for that slice, but this is not universal production qualification. `auto`, `single`,
+extended fallback, broader geometry, or unsupported interactions must fail closed.

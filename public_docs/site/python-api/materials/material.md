@@ -33,6 +33,11 @@ Every owned input has its SI unit below; $1$ denotes dimensionless data.
 ## Assumptions and validity
 Constructor checks run immediately. Lowering and planning additionally check mesh cardinality, capability, and backend legality.
 
+The constructor checks positivity/finiteness for `Ms` and `A`, non-negative finiteness for
+`alpha`, and finiteness for `Ku1`, `Ku2`, `Dind`, and `Dbulk`. The current three-vector helper used
+by anisotropy axes checks cardinality and converts components to `float`, but does not reject
+non-finite components; that remains a downstream validation requirement.
+
 Both interfacial and isotropic bulk micromagnetic DMI coefficients multiply one spatial derivative
 of reduced magnetization in an energy density. Their dimension is therefore
 $\mathrm{J\,m^{-2}}$: coefficient $\times$ derivative $\mathrm{m^{-1}}$ gives
@@ -50,12 +55,12 @@ unit.
 | `Material.alpha` | `float` | `required` | $1$ | Finite non-negative Gilbert damping. | Finite non-negative Gilbert damping. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].damping` |
 | `Material.Ku1` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Finite signed first-order uniaxial anisotropy. | Finite signed first-order uniaxial anisotropy. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].uniaxial_anisotropy` |
 | `Material.Ku2` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Finite signed second-order uniaxial anisotropy. | Finite signed second-order uniaxial anisotropy. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].uniaxial_anisotropy_k2` |
-| `Material.anisU` | `three floats or None` | `None` | $1$ | Finite three-vector defining the uniaxial axis; normalization and legality are checked downstream. | Finite three-vector defining the uniaxial axis; normalization and legality are checked downstream. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].anisotropy_axis` |
+| `Material.anisU` | `three floats or None` | `None` | $1$ | Three float-convertible components; normalization, finiteness, and legality are checked downstream. | Uniaxial axis. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].anisotropy_axis` |
 | `Material.Kc1` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | First cubic-anisotropy coefficient; suspicious-SI values warn. | First cubic-anisotropy coefficient; suspicious-SI values warn. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].cubic_anisotropy_kc1` |
 | `Material.Kc2` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Second cubic-anisotropy coefficient; suspicious-SI values warn. | Second cubic-anisotropy coefficient; suspicious-SI values warn. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].cubic_anisotropy_kc2` |
 | `Material.Kc3` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Third cubic-anisotropy coefficient; suspicious-SI values warn. | Third cubic-anisotropy coefficient; suspicious-SI values warn. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].cubic_anisotropy_kc3` |
-| `Material.anisC1` | `three floats or None` | `None` | $1$ | Finite first cubic-anisotropy axis. | Finite first cubic-anisotropy axis. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].cubic_anisotropy_axis1` |
-| `Material.anisC2` | `three floats or None` | `None` | $1$ | Finite second cubic-anisotropy axis. | Finite second cubic-anisotropy axis. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].cubic_anisotropy_axis2` |
+| `Material.anisC1` | `three floats or None` | `None` | $1$ | Three float-convertible components; finiteness and basis legality are checked downstream. | First cubic-anisotropy axis. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].cubic_anisotropy_axis1` |
+| `Material.anisC2` | `three floats or None` | `None` | $1$ | Three float-convertible components; finiteness and basis legality are checked downstream. | Second cubic-anisotropy axis. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].cubic_anisotropy_axis2` |
 | `Material.Dind` | `float \| None` | `None` | $\mathrm{J\,m^{-2}}$ | Finite interfacial-DMI material coefficient; it does not enable DMI by itself. | Finite interfacial-DMI material coefficient; it does not enable DMI by itself. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].interfacial_dmi` |
 | `Material.Dbulk` | `float \| None` | `None` | $\mathrm{J\,m^{-2}}$ | Finite bulk-DMI material coefficient; it does not enable DMI by itself. | Finite bulk-DMI material coefficient; it does not enable DMI by itself. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].bulk_dmi` |
 | `Material.Ms_field` | `list[float] \| None` | `None` | $\mathrm{A\,m^{-1}}$ | Optional spatial values overriding scalar `Ms`; mesh cardinality and lane legality are checked downstream. | Optional spatial values overriding scalar `Ms`; mesh cardinality and lane legality are checked downstream. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].ms_field` |

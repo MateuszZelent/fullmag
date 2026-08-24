@@ -16,17 +16,19 @@ snapshot.
 
 ## What the example computes
 
-A film of size $160 \times 160 \times 24\ \mathrm{nm}$ is discretized on a regular FDM grid with
-$4\ \mathrm{nm}$ cells. The magnetic body is $80 \times 120 \times 8\ \mathrm{nm}$, so the resolved
-geometry sits inside the discretization universe. Exchange stiffness $A_{\mathrm{ex}}$ and the
+A study universe of size $160 \times 160 \times 24\ \mathrm{nm}$ is discretized on a regular FDM
+grid with $4\ \mathrm{nm}$ cells. The film itself is $80 \times 120 \times 8\ \mathrm{nm}$, so the
+resolved geometry sits inside the discretization universe. Exchange stiffness $A_{\mathrm{ex}}$ and the
 magnetostatic field drive the magnetization toward a local minimum; the overdamped LLG relaxation
 stage stops when the requested torque/field tolerance or step budget is reached.
 
 ## Author the study
 
 ```python
+# %% Imports.
 import fullmag as fm
 
+# %% Configure the requested execution lane and domain.
 nm = 1.0e-9
 study = fm.study("first_fdm_simulation")
 study.engine("fdm")
@@ -41,6 +43,7 @@ study.universe(
 )
 study.objects.mesh.defaults(cell_size=(4 * nm, 4 * nm, 4 * nm))
 
+# %% Define the magnetic object and its material state.
 film = study.geometry(
     fm.Box(size=(80 * nm, 120 * nm, 8 * nm), name="film"),
     name="film",
@@ -50,6 +53,7 @@ film.Aex = 13.0e-12
 film.alpha = 0.1
 film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 
+# %% Register physics, solver policy, and the ordered stage.
 study.exchange()
 study.demag()
 study.solver(fix_dt=5.0e-13, gamma=2.211e5)
@@ -99,9 +103,10 @@ Save the block above as `first_fdm_simulation.py` and run it through the reposit
 just run-headless first_fdm_simulation.py
 ```
 
-This builds the local runtime on first use, executes the stage, and writes per-stage scientific
-artifacts and the autosave table to the auto-derived output directory. For an interactive run with
-the Control Room use `just fullmag build=True fdm cpu first_fdm_simulation.py`.
+This runs the repository build recipe, executes the stage, and writes per-stage scientific
+artifacts and the autosave table to the auto-derived sibling `first_fdm_simulation.zarr` bundle.
+For an interactive run with the Control Room use
+`just fullmag build=True fdm cpu first_fdm_simulation.py`.
 
 ## Reading the result
 

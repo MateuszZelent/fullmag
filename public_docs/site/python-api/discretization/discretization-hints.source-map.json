@@ -61,9 +61,9 @@
         "type": "Hybrid | None",
         "default": "None",
         "si_unit": "1",
-        "validation": "Optional hybrid hint.",
-        "meaning": "Optional hybrid hint.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "validation": "Optional representable hint; current planner rejects hybrid backend/mode.",
+        "meaning": "Preserves intended hybrid demag policy.",
+        "backend_support": "Authoring/IR only; no executable planner lane",
         "problem_ir": "backend_policy.discretization_hints.hybrid"
       }
     ]

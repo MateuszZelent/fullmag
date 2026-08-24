@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import lru_cache
 from html import escape
 from pathlib import Path
@@ -103,11 +103,11 @@ def _configured_timezone(name: str):
     try:
         return ZoneInfo(name)
     except ZoneInfoNotFoundError:
-        LOGGER.warning(
+        LOGGER.info(
             "Timezone database does not contain %s; falling back to UTC for page metadata.",
             name,
         )
-        return ZoneInfo("UTC")
+        return timezone.utc
 
 
 def _first_document_title(doctree: nodes.document) -> nodes.title | None:

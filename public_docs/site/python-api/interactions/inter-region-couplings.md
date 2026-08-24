@@ -64,11 +64,12 @@ Only FDM GPU region-to-region exchange is materialized. FDM CPU and both FEM lan
 runtime couplings. RKKY/interlayer surface terms are authored-only on every lane.
 
 (api-inter-region-couplings-validation)=
-## Validation/source-map fixes
+## Validation boundary
 
-Validate `coupling_id` during construction rather than first use in `to_ir()`. Regenerate the
-source map: the current map leaves constructors and parameters empty despite this public API.
-Preserve endpoint kind in export; never coerce a surface term into a region link.
+Generated coupling identifiers are non-empty by construction. A supplied `coupling_id` is checked
+for non-empty content when the coupling is serialized, and duplicate identifiers are rejected when
+the complete `Problem` is validated. Endpoint kind is preserved in export; surface terms are never
+coerced into region links.
 
 (api-inter-region-couplings-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics

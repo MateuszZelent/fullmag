@@ -36,7 +36,7 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 |---|---|---|---|---|---|---|---|
 | `DiscretizationHints.fdm` | `FDM \| None` | `None` | $1$ | FDM-specific hint; it does not force FDM when backend selection remains `auto`. | FDM-specific hint; it does not force FDM when backend selection remains `auto`. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm` |
 | `DiscretizationHints.fem` | `FEM \| None` | `None` | $1$ | FEM-specific hint; it does not force FEM when backend selection remains `auto`. | FEM-specific hint; it does not force FEM when backend selection remains `auto`. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fem` |
-| `DiscretizationHints.hybrid` | `Hybrid \| None` | `None` | $1$ | Optional hybrid hint. | Optional hybrid hint. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.hybrid` |
+| `DiscretizationHints.hybrid` | `Hybrid \| None` | `None` | $1$ | Optional representable hint; current planner rejects hybrid backend/mode. | Preserves intended hybrid demag policy. | Authoring/IR only; no executable planner lane | `backend_policy.discretization_hints.hybrid` |
 
 
 ### Complete stage-first selection example

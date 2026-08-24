@@ -15,6 +15,7 @@ Use:
 study.universe(mode="manual", size=(Lx, Ly, Lz))
 ```
 
-The Control Room/API resource also supports `padding`, explicit `center`, and shape-specific
-generation options in advanced policy. All lengths are SI metres. The realized clearances and shape
-come from the build report.
+The same Python call supports `padding` and explicit `center`; all lengths are SI metres. The
+current `study.universe(...)` signature does not expose an airbox-shape selector. Runtime/API mesh
+resources may report a resolved shape, but that read model is not an additional Python authoring
+parameter. Realized clearances and shape come from the build report.

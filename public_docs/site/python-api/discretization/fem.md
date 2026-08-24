@@ -34,11 +34,11 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 ## Python API
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| `FEM.order` | `int` | `required` | $1$ | Positive finite-element order. | Positive finite-element order. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fem.order` |
-| `FEM.maximum_element_size` | `positive float` | `required unless hmax is supplied` | $\mathrm{m}$ | Canonical maximum element size. Construction fails if neither spelling is provided. | Canonical maximum element size. Construction fails if neither spelling is provided. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fem.maximum_element_size` |
-| `FEM.hmax` | `positive float \| None` | `None` | $\mathrm{m}$ | Alternate input spelling for the same required size; unequal simultaneous values are rejected. | Alternate input spelling for the same required size; unequal simultaneous values are rejected. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fem.maximum_element_size` |
-| `FEM.mesh` | `str \| None` | `None` | $1$ | Optional imported mesh reference. | Optional imported mesh reference. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fem.mesh` |
-| `FEM.demag_solver_policy` | `policy or None` | `None` | $1$ | Demagnetization linear-solver policy. | Demagnetization linear-solver policy. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fem.demag_solver_policy` |
+| `FEM.order` | `int` | `required` | $1$ | Must compare as at least one; the constructor currently does not reject Boolean or non-integral numeric values. | Requested finite-element order. | FEM CPU; GPU element/order capability-gated | `backend_policy.discretization_hints.fem.order` |
+| `FEM.maximum_element_size` | `float \| None` | `required unless hmax is supplied` | $\mathrm{m}$ | Finite and positive; construction fails if neither spelling is provided. | Canonical maximum element size. | FEM CPU/GPU subject to planner capability | `backend_policy.discretization_hints.fem.hmax` |
+| `FEM.hmax` | `float \| None` | `None` | $\mathrm{m}$ | Finite positive alias; unequal simultaneous values are rejected. | Compatibility spelling of the same size. | FEM CPU/GPU subject to planner capability | `backend_policy.discretization_hints.fem.hmax` |
+| `FEM.mesh` | `str \| None` | `None` | $1$ | Non-empty string when supplied; mesh content is validated during extraction. | Optional imported mesh reference. | FEM import/extraction path | `backend_policy.discretization_hints.fem.mesh` |
+| `FEM.demag_solver_policy` | `FemLinearSolverPolicy \| None` | `None` | $1$ | No explicit `FEM` constructor type check; lowering requires `to_ir()`. | Demagnetization linear-solver policy. | FEM demagnetization lanes | `backend_policy.discretization_hints.fem.demag_solver_policy` |
 
 
 ### Complete FEM stage scenario

@@ -131,13 +131,13 @@ is no second object-constructor workflow in this page.
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| `LLG.gamma` | `float` | `2.211e5` | $\mathrm{m\,A^{-1}\,s^{-1}}$ | finite and $>0$ | gyromagnetic ratio | FEM/FDM CPU/GPU | `study.dynamics.gyromagnetic_ratio` |
-| `LLG.integrator` | `str` | `"auto"` | $1$ | `heun`, `rk4`, `rk23`, `rk45`, `abm3`, `auto`; aliases `bs23`, `dp54` normalize | temporal method request | lane-dependent; planner resolves `auto` | `study.dynamics.integrator` |
-| `LLG.fixed_timestep` | `float \| None` | `None` | $\mathrm{s}$ | finite and $>0$ when set; exclusive with adaptive policy | requested fixed step | FEM/FDM CPU/GPU subject to lane support | `study.dynamics.fixed_timestep` |
+| `LLG.gamma` | `float` | `2.211e5` | $\mathrm{m\,A^{-1}\,s^{-1}}$ | finite and positive | gyromagnetic ratio | FEM/FDM CPU/GPU | `study.dynamics.gyromagnetic_ratio` |
+| `LLG.integrator` | `str` | `"auto"` | $1$ | one of auto, heun, rk4, rk23/bs23, rk45/dp54, abm3 according to lane | temporal method request | lane-dependent; planner resolves `auto` | `study.dynamics.integrator` |
+| `LLG.fixed_timestep` | `float \| None` | `None` | $\mathrm{s}$ | finite and positive when set; mutually exclusive with adaptive policy | requested fixed step | FEM/FDM CPU/GPU subject to lane support | `study.dynamics.fixed_timestep` |
 | `AdaptiveTimestep.atol` | `float` | `1e-6` | $1$ | non-negative; not both tolerances zero | absolute error tolerance | RK23/RK45 lanes | `study.dynamics.adaptive_timestep.atol` |
 | `AdaptiveTimestep.rtol` | `float` | `1e-3` | $1$ | non-negative; not both tolerances zero | relative error tolerance | RK23/RK45 lanes | `study.dynamics.adaptive_timestep.rtol` |
 | `AdaptiveTimestep.dt_min` | `float` | `1e-15` | $\mathrm{s}$ | positive; no larger than `dt_max` | lower step bound | RK23/RK45 lanes | `study.dynamics.adaptive_timestep.dt_min` |
-| `AdaptiveTimestep.dt_max` | `float \| None` | `None` | $\mathrm{s}$ | positive and >= `dt_min` | upper step bound | RK23/RK45 lanes | `study.dynamics.adaptive_timestep.dt_max` |
+| `AdaptiveTimestep.dt_max` | `float \| None` | `None` | $\mathrm{s}$ | positive and no smaller than dt_min when set | upper step bound | RK23/RK45 lanes | `study.dynamics.adaptive_timestep.dt_max` |
 | `StudyBuilder.solver(integrator=...)` | `str \| None` | `None` | $1$ | validated integrator name; aliases normalize | stage-workflow solver method request | FEM/FDM lanes according to planner | `study.dynamics.integrator` |
 | `StudyBuilder.solver(adaptive_timestep=...)` | `AdaptiveTimestep \| None` | `None` | $1$ | mutually exclusive with fixed/convenience controls | stage-workflow adaptive policy | RK23/RK45 lanes | `study.dynamics.adaptive_timestep` |
 

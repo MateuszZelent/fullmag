@@ -28,7 +28,8 @@ The translation offset is in metres.
 (python-api-geometry-transforms-assumptions-and-validity)=
 <!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
-The offset must be a finite length-3 vector; the optional override name must be non-empty.
+The offset must contain exactly three float-convertible values; the optional override name must be
+non-empty. The Python constructor currently does not reject non-finite offset components.
 
 (python-api-geometry-transforms-python-api)=
 <!-- (python-api)= -->
@@ -36,7 +37,7 @@ The offset must be a finite length-3 vector; the optional override name must be 
 | Python | Type | Default | Validation | Meaning | ProblemIR |
 |---|---|---|---|---|---|
 | `Translate.geometry` | `Geometry` | `required` | Geometry object | Base geometry | `base` |
-| `Translate.offset` | `tuple[float,float,float]` | `required` | Finite length-3 | Translation vector | `by` |
+| `Translate.offset` | `tuple[float,float,float]` | `required` | Length 3 and float-convertible; finite values are not enforced by the constructor | Translation vector | `by` |
 | `Translate.name` | `str \| None` | derived | Non-empty when set | Override name | `name` |
 
 ### Complete stage-first example
@@ -73,7 +74,8 @@ study.stages.add_run(stage_id="run", until=1.0e-12)
 (python-api-geometry-transforms-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
-A derived name embeds the requested offset; a malformed offset fails immediately.
+A derived name embeds the requested offset. Wrong-length or non-convertible offsets fail
+immediately; downstream validation must reject any non-finite value accepted by the constructor.
 
 (python-api-geometry-transforms-discrete-realization)=
 <!-- (discrete-realization)= -->

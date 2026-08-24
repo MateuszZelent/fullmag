@@ -1,0 +1,1757 @@
+diff --git a/public_docs/site/physics/conventions.md b/public_docs/site/physics/conventions.md
+index 9f418e870..7f3528d19 100644
+--- a/public_docs/site/physics/conventions.md
++++ b/public_docs/site/physics/conventions.md
+@@ -1,28 +1,136 @@
+ ---
+ title: Physical conventions and units
+-status: draft
++status: implemented
++doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
+-source_of_truth: docs/physics/llg_conventions.md
++source_of_truth: docs/physics/units.md
+ ---
+ 
++(public-docs-physics-conventions)=
+ # Physical conventions and units
+ 
+-FullMag uses SI units unless a page explicitly states otherwise. Every interaction page defines
+-symbols, signs, coordinate orientation, magnetization normalization and assumptions.
++This compatibility entry summarizes the project-wide contract. The exhaustive quantity table and
++backend discussion live in {doc}`foundations/conventions-and-units`; interaction pages may refine a
++term, but may not introduce a second sign or unit convention.
++
++(physics-conventions-problem-statement)=
++## Problem statement
++
++FullMag authoring, ProblemIR, planners, and runtimes exchange physical values in SI. Requested
++intent and resolved execution must preserve the same meaning across FDM/FEM and CPU/GPU lanes.
++
++(physics-conventions-governing-equations)=
++## Governing equation
++
++The solver state is reduced magnetization:
++
++```{math}
++:label: eq-public-conventions-reduced-m
++\mathbf m=\frac{\mathbf M}{M_s},\qquad |\mathbf m|=1
++```
++
++(physics-conventions-symbols-and-si-units)=
++## Symbols and SI units
+ 
+ | Symbol | Meaning | SI unit |
+-|---|---|---|
+-| m | normalized magnetization | dimensionless |
+-| M | magnetization | A/m |
+-| M_s | saturation magnetization | A/m |
+-| H | magnetic field | A/m |
+-| B | magnetic flux density | T |
+-| A | exchange stiffness | J/m |
+-| t | time | s |
+-| f | frequency | Hz |
+-| alpha | Gilbert damping parameter | dimensionless |
+-
+-The project-wide convention is maintained in docs/physics/llg_conventions.md and
+-docs/physics/0000-physics-documentation-standard.md. Public pages may summarize it, but may not
+-introduce a second sign or unit convention.
++|---|---|---:|
++| $\mathbf m$ | reduced magnetization | $1$ |
++| $\mathbf M$ | magnetization | $\mathrm{A\,m^{-1}}$ |
++| $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
++| $A$ | exchange stiffness | $\mathrm{J\,m^{-1}}$ |
++| $\alpha$ | Gilbert damping | $1$ |
++
++(physics-conventions-assumptions-and-validity)=
++## Assumptions and validity
++
++Geometry is authored in metres, fields in $\mathrm{A\,m^{-1}}$, energies in joules, and direct
++torques in $\mathrm{s^{-1}}$. No CGS conversion or backend-specific reinterpretation is implicit.
++
++(physics-conventions-python-api)=
++## Python API
++
++```python
++# %% SI-only stage-first authoring
++import fullmag as fm
++
++nm = 1.0e-9
++study = fm.study("si-conventions")
++study.engine("fdm")
++study.device("cpu", precision="double")
++study.mode("strict")
++study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
++body = study.geometry(fm.Box(40 * nm, 20 * nm, 4 * nm), name="film")
++body.Ms = 800.0e3
++body.Aex = 13.0e-12
++body.alpha = 0.02
++body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
++study.exchange()
++study.stages.add_relax(stage_id="relax", dt=1.0e-15, max_steps=10, tolT=1.0e-6)
++```
++
++| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
++|---|---|---|---|---|---|---|---|
++| `Material.Ms` | `float` | required | $\mathrm{A\,m^{-1}}$ | positive finite | saturation magnetization | FDM/FEM CPU/GPU subject to planner capability | `materials[].saturation_magnetisation` |
++| `Material.A` | `float` | required | $\mathrm{J\,m^{-1}}$ | positive finite | exchange stiffness | FDM/FEM CPU/GPU subject to planner capability | `materials[].exchange_stiffness` |
++| `Material.alpha` | `float` | required | $1$ | non-negative finite | Gilbert damping | FDM/FEM CPU/GPU subject to planner capability | `materials[].damping` |
++
++(physics-conventions-problem-ir)=
++## ProblemIR
++
++Python names are normalized without a unit conversion to
++`materials[].saturation_magnetisation`, `materials[].exchange_stiffness`, and
++`materials[].damping`. Dynamics records the reduced gyromagnetic constant separately under
++`study.dynamics.gyromagnetic_ratio`.
++
++(physics-conventions-round-trip-and-failure-semantics)=
++## Round-trip and failure semantics
++
++Requested intent retains authored SI values. Resolved execution records backend, device, precision,
++and any solver policy without changing units. Validation errors reject non-finite or out-of-domain
++material values; unsupported combinations fail in planning rather than silently converting units or
++falling back to another lane.
++
++(physics-conventions-discrete-realization)=
++## Discrete realization
++
++| Solver | Device | Status | Contract |
++|---|---|---|---|
++| FDM | CPU | reference | FP64 structured-grid reference uses the shared SI/LLG convention |
++| FDM | GPU | implemented | device kernels consume the same resolved values; qualification remains device-specific |
++| FEM | CPU | implemented | MFEM operators and LLG RHS consume the shared SI values |
++| FEM | GPU | implemented | device realization preserves units; host setup alone is not GPU qualification |
++
++(physics-conventions-implementation-mapping)=
++## Implementation mapping
++
++`Material` owns SI validation and lowering; `LLG` owns dynamics units. FDM and native FEM RHS
++implementations consume the reduced state and field convention.
++
++(physics-conventions-validation)=
++## Validation
++
++Constructor tests cover SI validation and lowering. Solver contracts cover the LLG sign, norm,
++field units, and CPU/GPU parity per qualified lane.
++
++(physics-conventions-limitations)=
++## Limitations
++
++This overview does not qualify every interaction or device. Interaction pages and planner
++capabilities remain authoritative for concrete availability.
++
++(physics-conventions-scientific-bibliography)=
++## Scientific bibliography
++
++1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers, 1963.
++2. C. Abert, "Micromagnetics and spintronics: models and numerical methods," *European Physical
++   Journal B* **92**, 120 (2019). [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
++
++(physics-conventions-source-code-index)=
++## Source-code index
++
++| Claim | Path | Stable symbol | Responsibility | Evidence |
++|---|---|---|---|---|
++| Material SI contract | `packages/fullmag-py/src/fullmag/model/structure.py` | `class Material` | validates and lowers material values | Python API tests |
++| Dynamics SI contract | `packages/fullmag-py/src/fullmag/model/dynamics.py` | `class LLG` | validates and lowers the reduced gyromagnetic constant | Python API tests |
++| Native FEM LLG convention | `backends/fem/cpu/mfem/integrators/llg_rhs.cpp` | `llg_rhs_aos` | converts $\mathbf H_{\mathrm{eff}}$ to the explicit Gilbert RHS | native LLG contract tests |
+diff --git a/public_docs/site/physics/foundations/boundary-conditions.md b/public_docs/site/physics/foundations/boundary-conditions.md
+index 52257f17c..613dafb97 100644
+--- a/public_docs/site/physics/foundations/boundary-conditions.md
++++ b/public_docs/site/physics/foundations/boundary-conditions.md
+@@ -25,13 +25,16 @@ The free exchange surface law, periodic identification, and airbox closure are r
+ 
+ ```{math}
+ :label: eq-boundary-conditions-contract
+-A\,\partial_n\mathbf m + D\,\mathbf n\times\mathbf m=\mathbf 0,
++2A\,\partial_{\boldsymbol\nu}\mathbf m
+++D\left[(\hat{\mathbf n}\times\boldsymbol\nu)\times\mathbf m\right]=\mathbf 0,
+ \qquad \mathbf m(\mathbf r+L_d\hat{\mathbf e}_d)=\mathbf m(\mathbf r),
+ \qquad \partial_n u+\beta u=0\;\text{on }\partial\Omega_{\mathrm{air}}.
+ ```
+ 
+-The DMI term is present only for the corresponding interfacial realization and $\beta$ is the
+-resolved Robin coefficient. A Dirichlet airbox closure $u=0$ is a different discrete problem.
++Here $\hat{\mathbf n}$ is the structural interface normal and $\boldsymbol\nu$ is the outward
++normal of the magnetic boundary. The DMI term is present only for the corresponding interfacial
++realization and $\beta$ is the resolved Robin coefficient. A Dirichlet airbox closure $u=0$ is a
++different discrete problem.
+ 
+ Boundary conditions define how the magnetization and auxiliary fields (scalar potential,
+ displacement) behave at the edges of the computational domain. FullMag implements
+@@ -44,15 +47,15 @@ condition on the reduced magnetization:
+ 
+ ```{math}
+ :label: eq-neumann-free-surface
+-A\,\partial_n\mathbf{m}
++A\,\partial_{\boldsymbol\nu}\mathbf{m}
+ =
+-A\,(\nabla\mathbf{m})\mathbf{n}
++A\,(\nabla\mathbf{m})\boldsymbol\nu
+ =
+ \mathbf{0}
+ \qquad\text{on }\partial\Omega_m,
+ ```
+ 
+-where $\mathbf{n}$ is the outward unit normal. This represents zero exchange torque at
++where $\boldsymbol\nu$ is the outward unit normal. This represents zero exchange torque at
+ free surfaces — the magnetization is free to rotate without constraint at the boundary.
+ 
+ In FEM implementations, this condition is the natural (variational) boundary condition
+@@ -66,13 +69,16 @@ $\partial\Omega_m$ is modified. The exchange-plus-DMI surface term becomes
+ 
+ ```{math}
+ :label: eq-dmi-modified-bc
+-A\,\partial_n\mathbf{m} + D\,\mathbf{n}\times\mathbf{m} = \mathbf{0}
++2A\,\partial_{\boldsymbol\nu}\mathbf m
+++D\left[(\hat{\mathbf n}\times\boldsymbol\nu)\times\mathbf m\right]=\mathbf 0
+ \qquad\text{(interfacial DMI)},
+ ```
+ 
+ or the corresponding bulk DMI form. This boundary condition arises naturally from the
+-variational principle when the DMI weak form is included. FullMag enforces it through the
+-FEM weak formulation; FDM implementations handle it through stencil-boundary modifications.
++variational principle when the DMI weak form is included. FullMag realizes that variational
++structure through the FEM weak formulation. Current FDM open-boundary clamping is an implemented
++stencil closure, not a proof that the continuum exchange+iDMI natural condition is enforced;
++non-periodic FDM boundary qualification remains interaction-specific.
+ 
+ See {doc}`../interactions/dmi/index` for the full DMI boundary-condition documentation.
+ 
+@@ -159,13 +165,19 @@ See {doc}`../interactions/magnetoelastic/index` for details.
+ 
+ | Symbol | Definition | SI unit |
+ |---|---|---:|
+-| $\mathbf{n}$ | outward unit normal | $1$ |
+-| $\partial_n$ | normal derivative | $\mathrm{m^{-1}}$ |
++| $\hat{\mathbf n}$ | structural interface normal for interfacial DMI | $1$ |
++| $\boldsymbol\nu$ | outward unit normal of the magnetic boundary | $1$ |
++| $\partial_{\boldsymbol\nu}$ | derivative along the outward magnetic-boundary normal | $\mathrm{m^{-1}}$ |
+ | $A$ | exchange stiffness | $\mathrm{J\,m^{-1}}$ |
+ | $D$ | DMI constant | $\mathrm{J\,m^{-2}}$ |
++| $\nabla\mathbf m$ | magnetization gradient | $\mathrm{m^{-1}}$ |
++| $\Omega_m$ | magnetic domain | $\mathrm{m^3}$ |
+ | $L_d$ | periodic cell size along axis $d$ | $\mathrm{m}$ |
++| $\hat{\mathbf e}_d$ | Cartesian basis vector along axis $d$ | $1$ |
+ | $u$ | magnetic scalar potential (demag) | $\mathrm{A}$ |
+-| $r$ | distance from magnetic body centre | $\mathrm{m}$ |
++| $\partial_n$ | derivative along the outward airbox normal | $\mathrm{m^{-1}}$ |
++| $\Omega_{\mathrm{air}}$ | auxiliary airbox domain | $\mathrm{m^3}$ |
++| $\mathbf r$ | position vector | $\mathrm{m}$ |
+ | $\mathbf{u}$ | elastic displacement | $\mathrm{m}$ |
+ | $\boldsymbol{\sigma}$ | stress tensor | $\mathrm{Pa}$ |
+ | $\mathbf{m}$ | reduced magnetization | $1$ |
+@@ -184,8 +196,8 @@ See {doc}`../interactions/magnetoelastic/index` for details.
+ (boundary-conditions-assumptions-and-validity)=
+ ## Assumptions and validity
+ 
+-- Normals are outward normals of the resolved physical boundary marker, not of an arbitrary mesh
+-  face selected after meshing.
++- $\boldsymbol\nu$ is the outward normal of the resolved physical magnetic boundary marker;
++  $\hat{\mathbf n}$ is the independent structural interface normal and the two must not be conflated.
+ - PBC pairs must be complete, orientation-consistent, and compatible with the selected mesh.
+ - Natural FEM conditions arise from the weak form; they are not interchangeable with strong nodal
+   clamps.
+@@ -199,9 +211,9 @@ interaction-specific pages own the detailed parameter contracts.
+ 
+ | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+ |---|---|---|---|---|---|---|---|
+-| `PeriodicBC.axes` | `tuple[bool, bool, bool]` | required | $1$ | exactly three boolean axes | periodic directions | FDM and FEM planners subject to mesh support | `pbc.axes` |
+-| `PeriodicBC.demag` | `str` | `open` | $1$ | supported demagnetization policy | closure for periodic demag | FDM/FEM lane-dependent | `pbc.demag` |
+-| `study.pbc(...)` | callable | — | $1$ | rejects incomplete or incompatible pairs | stage-first periodicity request | public authoring surface | `pbc` |
++| `study.pbc(x, y, z)` | three `bool` values | `False, False, False` | $1$ | at least one axis is required when `demag` is not `"open"` or `images` is supplied | periodic Cartesian axes | FDM and FEM planners subject to mesh support | `pbc.axes` |
++| `study.pbc(..., demag=...)` | `str` | `"open"` | $1$ | `"open"`, `"truncated_images"`, or `"periodic_airbox_k0"`; the last is rejected for FDM | requested demagnetization periodicity | lane-dependent | `pbc.demag` |
++| `study.pbc(..., images=...)` | `tuple[int, int, int] \| None` | `None` | $1$ | three non-negative counts and only with `demag="truncated_images"` | requested periodic image counts | FDM periodic-image lanes | `pbc.image_counts` |
+ 
+ (boundary-conditions-problem-ir)=
+ ## Canonical ProblemIR
+@@ -278,8 +290,8 @@ planned combination to implemented status.
+ 
+ | Responsibility | Repository path | Stable symbol |
+ |---|---|---|
+-| Periodic Python contract | `packages/fullmag-py/src/fullmag/model/study.py` | `PeriodicBC` |
+-| Stage-first declaration | `packages/fullmag-py/src/fullmag/world.py` | `study` |
++| Periodic Python contract and lowering | `packages/fullmag-py/src/fullmag/model/problem.py` | `class FdmPbc` |
++| Stage-first declaration | `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` |
+ | FDM neighbor policy | `crates/fullmag-engine/src/fdm/shared/types.rs` | `neighbor_index` |
+ | FEM periodic reduction | `backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp` | `apply_periodic_consistent_mass_component` |
+ | FEM interfacial DMI boundary field | `backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp` | `compute_interfacial_dmi_field` |
+diff --git a/public_docs/site/physics/foundations/boundary-conditions.source-map.json b/public_docs/site/physics/foundations/boundary-conditions.source-map.json
+index 34c3a7e78..ae78f1ef2 100644
+--- a/public_docs/site/physics/foundations/boundary-conditions.source-map.json
++++ b/public_docs/site/physics/foundations/boundary-conditions.source-map.json
+@@ -11,8 +11,8 @@
+     {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "GPU lane preserves reduced ordering and device transfer provenance; setup alone is not qualification."}
+   ],
+   "sources": [
+-    {"id": "boundary-python-periodic", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class PeriodicBC", "responsibility": "Python periodic-axis and demagnetization-policy validation."},
+-    {"id": "boundary-python-study", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "study", "responsibility": "Stage-first boundary request capture."},
++    {"id": "boundary-python-periodic", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "class FdmPbc", "responsibility": "Python periodic-axis and demagnetization-policy validation and lowering."},
++    {"id": "boundary-python-study", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyBuilder", "responsibility": "Stage-first boundary request capture through `StudyBuilder.pbc`."},
+     {"id": "boundary-fdm-neighbor", "path": "crates/fullmag-engine/src/fdm/shared/types.rs", "symbol": "neighbor_index", "responsibility": "FDM periodic/open neighbor resolution."},
+     {"id": "boundary-fem-periodic", "path": "backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp", "symbol": "apply_periodic_consistent_mass_component", "responsibility": "FEM periodic reduced-space mass projection."},
+     {"id": "boundary-fem-dmi", "path": "backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp", "symbol": "compute_interfacial_dmi_field", "responsibility": "FEM interfacial DMI weak-form field realization."},
+@@ -21,27 +21,33 @@
+   "symbols": [
+     {"id": "A", "latex": "$A$", "meaning": "exchange stiffness", "si_unit": "$\\mathrm{J\\,m^{-1}}$"},
+     {"id": "D", "latex": "$D$", "meaning": "DMI constant", "si_unit": "$\\mathrm{J\\,m^{-2}}$"},
+-    {"id": "n", "latex": "$\\mathbf{n}$", "meaning": "outward unit normal", "si_unit": "$1$"},
+-    {"id": "dn", "latex": "$\\partial_n$", "meaning": "normal derivative", "si_unit": "$\\mathrm{m^{-1}}$"},
++    {"id": "nhat", "latex": "$\\hat{\\mathbf n}$", "meaning": "structural interface normal for interfacial DMI", "si_unit": "$1$"},
++    {"id": "nu", "latex": "$\\boldsymbol\\nu$", "meaning": "outward unit normal of the magnetic boundary", "si_unit": "$1$"},
++    {"id": "dnu", "latex": "$\\partial_{\\boldsymbol\\nu}$", "meaning": "derivative along the outward magnetic-boundary normal", "si_unit": "$\\mathrm{m^{-1}}$"},
++    {"id": "gradm", "latex": "$\\nabla\\mathbf m$", "meaning": "magnetization gradient", "si_unit": "$\\mathrm{m^{-1}}$"},
++    {"id": "Omegam", "latex": "$\\Omega_m$", "meaning": "magnetic domain", "si_unit": "$\\mathrm{m^3}$"},
+     {"id": "Ld", "latex": "$L_d$", "meaning": "periodic cell size along axis $d$", "si_unit": "$\\mathrm{m}$"},
++    {"id": "ed", "latex": "$\\hat{\\mathbf e}_d$", "meaning": "Cartesian basis vector along axis $d$", "si_unit": "$1$"},
+     {"id": "u", "latex": "$u$", "meaning": "magnetic scalar potential (demag)", "si_unit": "$\\mathrm{A}$"},
+-    {"id": "r", "latex": "$r$", "meaning": "distance from magnetic body centre", "si_unit": "$\\mathrm{m}$"},
++    {"id": "dn", "latex": "$\\partial_n$", "meaning": "derivative along the outward airbox normal", "si_unit": "$\\mathrm{m^{-1}}$"},
++    {"id": "Omegaair", "latex": "$\\Omega_{\\mathrm{air}}$", "meaning": "auxiliary airbox domain", "si_unit": "$\\mathrm{m^3}$"},
++    {"id": "r", "latex": "$\\mathbf r$", "meaning": "position vector", "si_unit": "$\\mathrm{m}$"},
+     {"id": "disp", "latex": "$\\mathbf{u}$", "meaning": "elastic displacement", "si_unit": "$\\mathrm{m}$"},
+     {"id": "sigma", "latex": "$\\boldsymbol{\\sigma}$", "meaning": "stress tensor", "si_unit": "$\\mathrm{Pa}$"},
+     {"id": "m", "latex": "$\\mathbf{m}$", "meaning": "reduced magnetization", "si_unit": "$1$"},
+     {"id": "beta", "latex": "$\\beta$", "meaning": "Robin boundary coefficient", "si_unit": "$\\mathrm{m^{-1}}$"}
+   ],
+   "equations": [
+-    {"id": "eq-boundary-conditions-contract", "symbols": ["A", "dn", "n", "m", "D", "Ld", "u", "beta"], "sources": ["boundary-fem-dmi", "boundary-fdm-neighbor", "boundary-fem-demag"]},
+-    {"id": "eq-neumann-free-surface", "symbols": ["A", "dn", "n"], "sources": ["boundary-fem-dmi"]},
+-    {"id": "eq-dmi-modified-bc", "symbols": ["A", "dn", "n", "m", "D"], "sources": ["boundary-fem-dmi"]},
+-    {"id": "eq-pbc-magnetization", "symbols": ["m", "Ld"], "sources": ["boundary-fdm-neighbor", "boundary-fem-periodic"]}
++    {"id": "eq-boundary-conditions-contract", "symbols": ["A", "dnu", "nhat", "nu", "m", "D", "r", "Ld", "ed", "u", "dn", "beta", "Omegaair"], "sources": ["boundary-fem-dmi", "boundary-fdm-neighbor", "boundary-fem-demag"]},
++    {"id": "eq-neumann-free-surface", "symbols": ["A", "dnu", "gradm", "nu", "m", "Omegam"], "sources": ["boundary-fem-dmi"]},
++    {"id": "eq-dmi-modified-bc", "symbols": ["A", "dnu", "nhat", "nu", "m", "D"], "sources": ["boundary-fem-dmi"]},
++    {"id": "eq-pbc-magnetization", "symbols": ["m", "r", "Ld", "ed"], "sources": ["boundary-fdm-neighbor", "boundary-fem-periodic"]}
+   ],
+   "public_api": {
+     "parameters": [
+-      {"python": "PeriodicBC.axes", "type": "tuple[bool, bool, bool]", "default": "required", "si_unit": "$1$", "validation": "exactly three boolean axes", "meaning": "periodic directions", "backend_support": "FDM and FEM planners subject to mesh support", "problem_ir": "pbc.axes"},
+-      {"python": "PeriodicBC.demag", "type": "str", "default": "open", "si_unit": "$1$", "validation": "supported demagnetization policy", "meaning": "closure for periodic demag", "backend_support": "FDM/FEM lane-dependent", "problem_ir": "pbc.demag"},
+-      {"python": "study.pbc(...)" , "type": "callable", "default": "—", "si_unit": "$1$", "validation": "rejects incomplete or incompatible pairs", "meaning": "stage-first periodicity request", "backend_support": "public authoring surface", "problem_ir": "pbc"}
++      {"python": "study.pbc(x, y, z)", "type": "three `bool` values", "default": "False, False, False", "si_unit": "$1$", "validation": "at least one axis is required when `demag` is not `\"open\"` or `images` is supplied", "meaning": "periodic Cartesian axes", "backend_support": "FDM and FEM planners subject to mesh support", "problem_ir": "pbc.axes"},
++      {"python": "study.pbc(..., demag=...)", "type": "str", "default": "\"open\"", "si_unit": "$1$", "validation": "`\"open\"`, `\"truncated_images\"`, or `\"periodic_airbox_k0\"`; the last is rejected for FDM", "meaning": "requested demagnetization periodicity", "backend_support": "lane-dependent", "problem_ir": "pbc.demag"},
++      {"python": "study.pbc(..., images=...)", "type": "tuple[int, int, int] | None", "default": "None", "si_unit": "$1$", "validation": "three non-negative counts and only with `demag=\"truncated_images\"`", "meaning": "requested periodic image counts", "backend_support": "FDM periodic-image lanes", "problem_ir": "pbc.image_counts"}
+     ]
+   }
+ }
+diff --git a/public_docs/site/physics/foundations/conventions-and-units.md b/public_docs/site/physics/foundations/conventions-and-units.md
+index 9a5905552..6da3d5b3f 100644
+--- a/public_docs/site/physics/foundations/conventions-and-units.md
++++ b/public_docs/site/physics/foundations/conventions-and-units.md
+@@ -10,12 +10,20 @@ source_of_truth: docs/physics/units.md
+ (public-docs-physics-foundations-conventions-and-units)=
+ # Conventions and units
+ 
++(foundations-conventions-problem-statement)=
++<!-- (problem-statement)= -->
++## Problem statement
++
+ FullMag uses SI units throughout, with no implicit unit conversion. Every solver backend
+ (FDM CPU, FDM GPU, FEM CPU, FEM GPU) shares the same physical contract. This page defines
+ the canonical quantities, their symbols, SI units, and the solver field names used to store
+ them.
+ 
+-## Reduced magnetization
++(foundations-conventions-governing-equations)=
++<!-- (governing-equations)= -->
++## Governing equations
++
++### Reduced magnetization
+ 
+ The solver state variable is the reduced (normalised) magnetization
+ 
+@@ -55,17 +63,21 @@ $\mathrm{rad\,(T\,s)^{-1}}$. New code and documentation should prefer the explan
+ $\gamma_{\mu_0}$.
+ :::
+ 
+-## Canonical quantity table
++(foundations-conventions-symbols-and-si-units)=
++<!-- (symbols-and-si-units)= -->
++## Symbols and SI units
+ 
+ | Quantity | Symbol | SI unit | Solver field | Contract |
+ |---|---|---:|---|---|
+ | Vacuum permeability | $\mu_0$ | $\mathrm{N\,A^{-2}}$ | constant | exactly $4\pi\times10^{-7}$ |
+ | Boltzmann constant | $k_B$ | $\mathrm{J\,K^{-1}}$ | constant | exactly $1.380649\times10^{-23}$ |
++| Physical magnetization | $\mathbf M$ | $\mathrm{A\,m^{-1}}$ | derived from `m_xyz` and $M_s$ | $\mathbf M=M_s\mathbf m$ |
+ | Reduced magnetization | $\mathbf{m}$ | $1$ | `m_xyz` | $|\mathbf{m}|=1$ on magnetic DOFs |
+ | Saturation magnetization | $M_s$ | $\mathrm{A\,m^{-1}}$ | `saturation_magnetisation` | positive on magnetic nodes/cells |
+ | Exchange stiffness | $A$ | $\mathrm{J\,m^{-1}}$ | `exchange_stiffness` | non-negative |
+ | Gilbert damping | $\alpha$ | $1$ | `damping`, `alpha_field` | non-negative |
+ | Reduced gyromagnetic constant | $\gamma_{\mu_0}$ | $\mathrm{m\,(A\,s)^{-1}}$ | `gyromagnetic_ratio` | $\mu_0|\gamma_e|$ |
++| Electron gyromagnetic-ratio magnitude | $|\gamma_e|$ | $\mathrm{rad\,(T\,s)^{-1}}$ | physical constant | positive magnitude; the LLG equation carries the sign convention |
+ | Uniaxial anisotropy constants | $K_{u1},K_{u2}$ | $\mathrm{J\,m^{-3}}$ | `ku1`, `ku2` | sign distinguishes easy-axis from easy-plane |
+ | Cubic anisotropy constants | $K_{c1},K_{c2},K_{c3}$ | $\mathrm{J\,m^{-3}}$ | `kc1`, `kc2`, `kc3` | crystal axes finite, normalised, mutually orthogonal |
+ | Interfacial DMI constant | $D_i$ | $\mathrm{J\,m^{-2}}$ | `D` | module documents thin-film-effective or surface-boundary realization |
+@@ -76,6 +88,11 @@ $\gamma_{\mu_0}$.
+ | Time step | $\Delta t$ | $\mathrm{s}$ | `dt` | accepted step size |
+ | Effective field terms | $\mathbf{H}_{\ast}$ | $\mathrm{A\,m^{-1}}$ | `h_eff_xyz`, `H_ex`, … | field observables |
+ | Energy terms | $E_{\ast}$ | $\mathrm{J}$ | `E_ex`, `E_d`, … | global scalar unless documented otherwise |
++| Magnetic energy functional | $E$ | $\mathrm{J}$ | term-specific energy reduction | functional of $\mathbf m$ on $\Omega_m$ |
++| Conservative field contribution | $\mathbf H_{\mathrm{term}}$ | $\mathrm{A\,m^{-1}}$ | term field buffer | satisfies the documented variational identity |
++| Admissible perturbation | $\boldsymbol\eta$ | $1$ | validation/test vector | tangent to $\mathbf m$ |
++| Magnetic domain | $\Omega_m$ | $\mathrm{m^3}$ | active magnetic support | excludes non-magnetic airbox support from magnetic reductions |
++| Volume element | $\mathrm dV$ | $\mathrm{m^3}$ | quadrature/cell volume | follows the documented discrete metric |
+ | Direct torque terms | $\boldsymbol{\tau}_{\ast}$ | $\mathrm{s^{-1}}$ | torque RHS buffers | added directly to $\mathrm{d}\mathbf{m}/\mathrm{d}t$ |
+ 
+ ## Energy–field variational relation
+@@ -117,6 +134,15 @@ All geometry coordinates are interpreted in metres. The Python authoring path em
+ geometry natively. The native FEM mesh importer does not independently attach a unit tag to
+ coordinates, so the authoring contract is the source of truth for coordinate scale.
+ 
++(foundations-conventions-assumptions-and-validity)=
++<!-- (assumptions-and-validity)= -->
++## Assumptions and validity
++
++- The public contract accepts SI values; suspicious magnitudes may warn but are not converted.
++- Reduced magnetization is normalized on magnetic degrees of freedom after accepted steps.
++- Field-form interactions use $\mathrm{A\,m^{-1}}$; direct RHS torques use $\mathrm{s^{-1}}$.
++- Backend precision and storage layout may differ, but units and signs may not.
++
+ ## Backend universality
+ 
+ FDM CPU, FDM GPU, FEM CPU, and FEM GPU share this physical contract. Their differences are
+@@ -132,6 +158,89 @@ limited to:
+ The planner and native create paths must reject unsupported combinations before the solver
+ starts.
+ 
++(foundations-conventions-python-api)=
++<!-- (python-api)= -->
++## Python API
++
++```python
++# %% SI material and dynamics in a stage-first study
++import fullmag as fm
++
++nm = 1.0e-9
++study = fm.study("foundation-units")
++study.engine("fdm")
++study.device("cpu", precision="double")
++study.mode("strict")
++study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
++body = study.geometry(fm.Box(40 * nm, 20 * nm, 4 * nm), name="film")
++body.Ms = 800.0e3
++body.Aex = 13.0e-12
++body.alpha = 0.02
++body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
++study.exchange()
++study.solver(gamma=2.211e5, integrator="heun", fix_dt=1.0e-15)
++study.stages.add_run(stage_id="run", until=1.0e-12)
++```
++
++| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
++|---|---|---|---|---|---|---|---|
++| `Material.Ms` | `float` | required | $\mathrm{A\,m^{-1}}$ | positive finite | saturation magnetization | FDM/FEM CPU/GPU subject to planner capability | `materials[].saturation_magnetisation` |
++| `Material.A` | `float` | required | $\mathrm{J\,m^{-1}}$ | positive finite | exchange stiffness | FDM/FEM CPU/GPU subject to planner capability | `materials[].exchange_stiffness` |
++| `Material.alpha` | `float` | required | $1$ | non-negative finite | Gilbert damping | FDM/FEM CPU/GPU subject to planner capability | `materials[].damping` |
++| `LLG.gamma` | `float` | `221100.0` | $\mathrm{m\,(A\,s)^{-1}}$ | positive finite | reduced gyromagnetic constant | FDM/FEM CPU/GPU subject to planner capability | `study.dynamics.gyromagnetic_ratio` |
++
++(foundations-conventions-problem-ir)=
++<!-- (problem-ir)= -->
++## ProblemIR
++
++Material and dynamics values are serialized in SI without conversion. The authored names map to
++`materials[]` and `study.dynamics`; planner output adds backend/device/precision resolution rather
++than rewriting the values.
++
++(foundations-conventions-round-trip-and-failure-semantics)=
++<!-- (round-trip-and-failure-semantics)= -->
++## Round-trip and failure semantics
++
++Requested intent retains the authored SI values. Resolved execution records backend, device,
++precision, and integrator. Validation errors reject non-finite and out-of-domain inputs;
++unsupported combinations fail planning without hidden unit conversion or lane fallback.
++
++(foundations-conventions-discrete-realization)=
++<!-- (discrete-realization)= -->
++## Discrete realization
++
++| Solver | Device | Status | Qualification boundary |
++|---|---|---|---|
++| FDM | CPU | reference | FP64 structured-grid oracle |
++| FDM | GPU | implemented | same SI contract; device parity is a separate gate |
++| FEM | CPU | implemented | native MFEM operators consume the shared units |
++| FEM | GPU | implemented | shared units; host assembly is not device qualification |
++
++(foundations-conventions-implementation-mapping)=
++<!-- (implementation-mapping)= -->
++## Implementation mapping
++
++`Material` and `LLG` own Python validation/lowering. FDM and native FEM RHS implementations own
++the field-to-time conversion, while interaction modules own term-specific signs, units, and the
++energy/field pair used to test the variational identity. Exchange is the representative traced
++pair below; every other conservative interaction requires its own term-level trace and test.
++
++(foundations-conventions-validation)=
++<!-- (validation)= -->
++## Validation
++
++Validate constructor domains, Python-to-IR values, LLG sign and norm preservation, energy-field
++directional derivatives, and executed CPU/GPU parity for every qualified lane.
++
++(foundations-conventions-limitations)=
++<!-- (limitations)= -->
++## Limitations
++
++The shared unit contract does not imply that every interaction or precision is available on every
++lane. Planner capabilities and interaction qualification remain authoritative.
++
++(foundations-conventions-scientific-bibliography)=
++<!-- (scientific-bibliography)= -->
+ ## Scientific bibliography
+ 
+ 1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers, New York, 1963.
+@@ -142,3 +251,17 @@ starts.
+ 3. M. J. Donahue and D. G. Porter, *OOMMF User's Guide, Version 1.0*, NISTIR 6376,
+    National Institute of Standards and Technology, 1999.
+    [doi:10.6028/NIST.IR.6376](https://doi.org/10.6028/NIST.IR.6376).
++
++(foundations-conventions-source-code-index)=
++<!-- (source-code-index)= -->
++## Source-code index
++
++| Claim | Path | Stable symbol | Responsibility | Evidence |
++|---|---|---|---|---|
++| Material SI validation and lowering | `packages/fullmag-py/src/fullmag/model/structure.py` | `class Material` | public material contract | Python API tests |
++| LLG SI validation and lowering | `packages/fullmag-py/src/fullmag/model/dynamics.py` | `class LLG` | dynamics contract | Python API tests |
++| Native FEM LLG units | `backends/fem/cpu/mfem/integrators/llg_rhs.cpp` | `llg_rhs_aos` | explicit Gilbert RHS | native LLG tests |
++| FDM material/LLG units | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `llg_rhs_from_field` | FDM field-to-RHS conversion | FDM integrator tests |
++| FDM exchange field | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `exchange_field_add_into_soa` | representative conservative interaction field | FDM exchange derivative tests |
++| FDM exchange energy | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `exchange_energy_from_vectors` | energy paired with the representative FDM field | FDM exchange derivative tests |
++| Native FEM exchange field and energy | `backends/fem/cpu/mfem/interactions/exchange_field.cpp` | `compute_exchange_for_magnetization` | representative interaction path returning both observables | native FEM exchange derivative tests |
+diff --git a/public_docs/site/physics/foundations/effective-field.md b/public_docs/site/physics/foundations/effective-field.md
+index 68065e59c..b904805b2 100644
+--- a/public_docs/site/physics/foundations/effective-field.md
++++ b/public_docs/site/physics/foundations/effective-field.md
+@@ -10,12 +10,18 @@ source_of_truth: docs/physics/units.md
+ (public-docs-physics-foundations-effective-field)=
+ # Effective field
+ 
+-The effective field $\mathbf{H}_{\mathrm{eff}}$ is the central quantity that drives
+-magnetization dynamics in FullMag. It is not a physical magnetic field in the sense of
+-Maxwell's equations; it is the variational derivative of the total micromagnetic energy with
+-respect to the reduced magnetization, expressed in $\mathrm{A\,m^{-1}}$.
++(effective-field-problem-statement)=
++<!-- (problem-statement)= -->
++## Problem statement
+ 
+-## Definition
++The effective field $\mathbf{H}_{\mathrm{eff}}$ is the field-form quantity that drives
++magnetization dynamics in FullMag. It is expressed in $\mathrm{A\,m^{-1}}$ and may combine
++conservative variational fields, prescribed external fields, and the stochastic Brown thermal
++field. Only the conservative subset is defined by a total-energy derivative.
++
++(effective-field-governing-equations)=
++<!-- (governing-equations)= -->
++## Governing equations
+ 
+ The effective field is the superposition of all field-form interaction contributions
+ 
+@@ -34,7 +40,7 @@ The effective field is the superposition of all field-form interaction contribut
+ + \cdots
+ ```
+ 
+-Each term derives from the corresponding energy functional via
++Each **conservative** contribution derives from its corresponding energy functional via
+ 
+ ```{math}
+ :label: eq-heff-variational
+@@ -43,8 +49,11 @@ Each term derives from the corresponding energy functional via
+ -\frac{1}{\mu_0 M_s}\frac{\delta E_{\mathrm{term}}}{\delta\mathbf{m}}.
+ ```
+ 
+-All field contributions are expressed in $\mathrm{A\,m^{-1}}$ and added to a single
+-effective-field buffer before the LLG integrator evaluates the cross-product torque.
++Deterministic prescribed fields enter the same field path and may own a documented Zeeman-energy
++term. The stochastic Brown field $\mathbf H_{\mathrm{th}}$ has no standalone deterministic energy
++in `e_total`; it is sampled in $\mathrm{A\,m^{-1}}$ from the fluctuation-dissipation contract and
++then passed through the LLG field torque. All field-form contributions are added before the
++integrator evaluates the cross products.
+ 
+ ## Interaction field summary
+ 
+@@ -61,11 +70,11 @@ effective-field buffer before the LLG integrator evaluates the cross-product tor
+ 
+ ## Direct-torque contributions
+ 
+-Not every physical interaction contributes a field. Spin-transfer torque (STT) and
+-spin-orbit torque (SOT) are non-conservative: they cannot be written as
+-$-\delta E/(\mu_0 M_s \delta\mathbf{m})$. Instead, they contribute a direct torque
+-$\boldsymbol{\tau}$ in $\mathrm{s^{-1}}$ that is added to the right-hand side of the LLG
+-equation *after* the field-driven torque:
++Not every physical interaction contributes a field. Spin-transfer torque (STT) and spin-orbit
++torque (SOT) are non-conservative: they cannot be written as
++$-\delta E/(\mu_0 M_s \delta\mathbf{m})$. Their formula-version contract supplies a Gilbert-source
++or already-resolved direct RHS torque in $\mathrm{s^{-1}}$ outside the effective-field buffer. For
++the direct-RHS form,
+ 
+ ```{math}
+ :label: eq-direct-torque-rhs
+@@ -102,19 +111,135 @@ interaction module must:
+ 3. verify the **variational identity** $\delta E = -\mu_0\int M_s\mathbf{H}\cdot\delta\mathbf{m}\,\mathrm{d}V$,
+ 4. zero its contribution on **non-magnetic nodes** or cells.
+ 
++(effective-field-symbols-and-si-units)=
++<!-- (symbols-and-si-units)= -->
+ ## Symbols and SI units
+ 
+ | Symbol | Definition | SI unit |
+ |---|---|---:|
+ | $\mathbf{H}_{\mathrm{eff}}$ | total effective field | $\mathrm{A\,m^{-1}}$ |
+-| $\boldsymbol{\tau}_{\mathrm{direct}}$ | total direct torque | $\mathrm{s^{-1}}$ |
++| $\mathbf H_{\mathrm{ex}},\mathbf H_{\mathrm d},\mathbf H_{\mathrm{ext}},\mathbf H_{\mathrm{ani}},\mathbf H_{\mathrm{DMI}},\mathbf H_{\mathrm{oe}},\mathbf H_{\mathrm{mel}}$ | deterministic field-form contributions shown in the composition equation | $\mathrm{A\,m^{-1}}$ |
++| $\mathbf H_{\mathrm{th}}$ | stochastic Brown thermal field; no standalone deterministic energy | $\mathrm{A\,m^{-1}}$ |
++| $\mathbf H_{\mathrm{term}}$ | conservative interaction field contribution | $\mathrm{A\,m^{-1}}$ |
++| $E_{\mathrm{term}}$ | conservative interaction energy functional | $\mathrm J$ |
++| $\boldsymbol{\tau}_{\mathrm{direct}}$ | total non-field RHS torque | $\mathrm{s^{-1}}$ |
++| $\boldsymbol\tau_{\mathrm{Slonc}},\boldsymbol\tau_{\mathrm{ZL}},\boldsymbol\tau_{\mathrm{SOT}}$ | direct-torque components shown in the source sum | $\mathrm{s^{-1}}$ |
++| $t$ | physical time | $\mathrm s$ |
+ | $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
+ | $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
+ | $\mathbf{m}$ | reduced magnetization | $1$ |
+ 
++(effective-field-assumptions-and-validity)=
++<!-- (assumptions-and-validity)= -->
++## Assumptions and validity
++
++- $M_s$ is positive on magnetic degrees of freedom; non-magnetic support contributes no LLG RHS.
++- Conservative terms satisfy the stated variational identity in their documented discrete metric.
++- The Brown thermal contribution is a stochastic field in $\mathrm{A\,m^{-1}}$, not a direct
++  torque and not a standalone contribution to deterministic `e_total`.
++- Direct torques are already in $\mathrm{s^{-1}}$ and are not added to the field buffer.
++- Availability of an individual term is interaction-, stage-, backend-, and device-dependent.
++
++(effective-field-python-api)=
++<!-- (python-api)= -->
++## Python API
++
++```python
++# %% Request the composed field in a stage-first study
++import fullmag as fm
++
++nm = 1.0e-9
++study = fm.study("effective-field-foundation")
++study.engine("fdm")
++study.device("cpu", precision="double")
++study.mode("strict")
++study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
++body = study.geometry(fm.Box(40 * nm, 20 * nm, 4 * nm), name="film")
++body.Ms = 800.0e3
++body.Aex = 13.0e-12
++body.alpha = 0.02
++body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
++study.exchange()
++study.demag()
++study.stages.add_relax(
++    stage_id="relax", dt=1.0e-15, max_steps=10, tolT=1.0e-6
++).autosave(
++    fm.StageAutosave(fields=[fm.FieldAutosave("H_eff", every_steps=1)])
++)
++```
++
++| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
++|---|---|---|---|---|---|---|---|
++| `FieldAutosave.quantity` | `str` | required | $1$ | known field identifier; exactly one cadence is required | field to materialize | lane-dependent; planner rejects unavailable fields | `study.stages[].autosave.fields[].quantity` |
++
++(effective-field-problem-ir)=
++<!-- (problem-ir)= -->
++## ProblemIR
++
++The energy/interaction list records requested field-form terms, while output requests retain
++`"quantity": "H_eff"`. The planner resolves which contributions and materialization paths are
++legal for the selected lane; it does not serialize a hand-composed field vector into ProblemIR.
++
++(effective-field-round-trip-and-failure-semantics)=
++<!-- (round-trip-and-failure-semantics)= -->
++## Round-trip and failure semantics
++
++Requested intent preserves interaction and output identities. Resolved execution records backend,
++device, precision, support, and materialization. Validation errors reject malformed output requests
++or missing prerequisites; unsupported combinations fail closed without zero substitution or hidden
++CPU fallback.
++
++(effective-field-discrete-realization)=
++<!-- (discrete-realization)= -->
++## Discrete realization
++
++| Solver | Device | Status | Qualification boundary |
++|---|---|---|---|
++| FDM | CPU | reference | deterministic host composition over active cells |
++| FDM | GPU | implemented | device-resident composition where enabled; executed-device parity is separate |
++| FEM | CPU | implemented | MFEM interaction fields compose on the resolved magnetic support |
++| FEM | GPU | implemented | same physical sum with explicit residency/transfer provenance |
++
++(effective-field-implementation-mapping)=
++<!-- (implementation-mapping)= -->
++## Implementation mapping
++
++The FDM engine and native FEM interaction layer own field composition. `FieldAutosave` owns the
++public materialization request; the quantity catalog and planner own availability.
++
++(effective-field-validation)=
++<!-- (validation)= -->
++## Validation
++
++Validate individual field signs and units, conservative variational derivatives, Brown-field
++variance/replay, additive composition, non-magnetic masking, requested quantity legality, and
++executed CPU/GPU parity per lane.
++
++(effective-field-limitations)=
++<!-- (limitations)= -->
++## Limitations
++
++The composition equation is a catalog of possible terms, not a promise that every term is
++available simultaneously on every backend. Interaction pages and planner capabilities are
++authoritative.
++
++(effective-field-scientific-bibliography)=
++<!-- (scientific-bibliography)= -->
+ ## Scientific bibliography
+ 
+ 1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers, New York, 1963.
+ 2. C. Abert, "Micromagnetics and spintronics: models and numerical methods," *European
+    Physical Journal B* **92**, 120 (2019).
+    [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
++
++(effective-field-source-code-index)=
++<!-- (source-code-index)= -->
++## Source-code index
++
++| Claim | Path | Stable symbol | Responsibility | Evidence |
++|---|---|---|---|---|
++| FDM field composition | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `effective_field_into_soa_ws` | composes enabled FDM field terms | FDM field/integrator tests |
++| Native FEM field composition | `backends/fem/cpu/mfem/interactions/effective_field.cpp` | `compute_effective_fields_for_magnetization` | composes native FEM interaction fields | native interaction tests |
++| Direct-torque separation | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `llg_rhs_from_fields_with_direct_torques_into` | adds direct RHS torques after field evaluation | torque/integrator tests |
++| Brown thermal field | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `thermal_field_add_into_soa` | samples and adds stochastic field-form noise | thermal variance/replay tests |
++| Public field request | `packages/fullmag-py/src/fullmag/model/study.py` | `class FieldAutosave` | validates field identity and cadence | autosave tests |
+diff --git a/public_docs/site/physics/foundations/llg-equation.md b/public_docs/site/physics/foundations/llg-equation.md
+index 98eb24195..68155df69 100644
+--- a/public_docs/site/physics/foundations/llg-equation.md
++++ b/public_docs/site/physics/foundations/llg-equation.md
+@@ -10,131 +10,178 @@ source_of_truth: docs/physics/llg_conventions.md
+ (public-docs-physics-foundations-llg-equation)=
+ # Landau–Lifshitz–Gilbert equation
+ 
+-The Landau–Lifshitz–Gilbert (LLG) equation is the equation of motion for the reduced
+-magnetization $\mathbf{m}=\mathbf{M}/M_s$ in micromagnetics. FullMag uses the explicit
+-Gilbert form for all solver backends.
++(llg-foundation-problem-statement)=
++<!-- (problem-statement)= -->
++## Problem statement
+ 
+-## Governing equation
++FullMag evolves reduced magnetization $\mathbf m=\mathbf M/M_s$ with an explicit Gilbert-form
++right-hand side. Field-form interactions and already-converted direct torques remain separate.
+ 
+-The implemented LLG right-hand side is
++(llg-foundation-governing-equations)=
++<!-- (governing-equations)= -->
++## Governing equations
+ 
+ ```{math}
+ :label: eq-llg-full
+-\frac{\mathrm{d}\mathbf{m}}{\mathrm{d}t}
+-=
++\frac{\mathrm d\mathbf m}{\mathrm dt}=
+ -\frac{\gamma_{\mu_0}}{1+\alpha^2}
+-\left[
+-  \mathbf{m}\times\mathbf{H}_{\mathrm{eff}}
+-  + \alpha\,\mathbf{m}\times\left(\mathbf{m}\times\mathbf{H}_{\mathrm{eff}}\right)
+-\right]
+-+ \boldsymbol{\tau}_{\mathrm{direct}},
++\left[\mathbf m\times\mathbf H_{\mathrm{eff}}+
++\alpha\,\mathbf m\times(\mathbf m\times\mathbf H_{\mathrm{eff}})\right]
+++\boldsymbol\tau_{\mathrm{direct}}.
+ ```
+ 
+-where:
+-
+-- $\gamma_{\mu_0} = \mu_0|\gamma_e| \approx 2.211\times10^{5}\;\mathrm{m\,(A\,s)^{-1}}$
+-  is the reduced gyromagnetic constant (see {doc}`conventions-and-units`),
+-- $\alpha \geq 0$ is the dimensionless Gilbert damping parameter,
+-- $\mathbf{H}_{\mathrm{eff}}$ is the total effective field in $\mathrm{A\,m^{-1}}$
+-  (see {doc}`effective-field`),
+-- $\boldsymbol{\tau}_{\mathrm{direct}}$ is the sum of all direct-torque contributions
+-  (STT, SOT) in $\mathrm{s^{-1}}$.
+-
+-## Precessional and damping terms
+-
+-Eq. {eq}`eq-llg-full` contains two distinct physical effects:
+-
+-1. **Precessional torque**: $-\gamma_{\mu_0}\,\mathbf{m}\times\mathbf{H}_{\mathrm{eff}}$
+-   causes Larmor precession of the magnetization around the effective field.
+-
+-2. **Damping torque**: $-\gamma_{\mu_0}\alpha\,\mathbf{m}\times(\mathbf{m}\times\mathbf{H}_{\mathrm{eff}})$
+-   drives relaxation toward alignment with the effective field.
+-
+-For $\alpha \ll 1$, precession dominates. For $\alpha \gg 1$, the magnetization relaxes
+-with minimal precession. The $1/(1+\alpha^2)$ prefactor in the explicit Gilbert form ensures
+-correct damping rate regardless of $\alpha$.
+-
+-## Relaxation mode (overdamped LLG)
+-
+-FullMag exposes a pure-damping relaxation mode that disables the precessional term:
++The runtime flag `precession_enabled = false` removes the first cross-product term:
+ 
+ ```{math}
+ :label: eq-llg-relaxation
+-\frac{\mathrm{d}\mathbf{m}}{\mathrm{d}t}\bigg|_{\mathrm{relax}}
+-=
++\left.\frac{\mathrm d\mathbf m}{\mathrm dt}\right|_{\mathrm{pure\ damping}}=
+ -\frac{\gamma_{\mu_0}\alpha}{1+\alpha^2}
+-\,\mathbf{m}\times\left(\mathbf{m}\times\mathbf{H}_{\mathrm{eff}}\right)
+-+ \boldsymbol{\tau}_{\mathrm{direct}}.
++\mathbf m\times(\mathbf m\times\mathbf H_{\mathrm{eff}})
+++\boldsymbol\tau_{\mathrm{direct}}.
+ ```
+ 
+-This mode is selected by the runtime field `precession_enabled = false`. It converges
+-monotonically to the nearest energy minimum without oscillatory transients. Runtime
+-provenance logs expose the resolved mode as `llg_mode = precessional` or
+-`llg_mode = pure_damping`.
+-
+-## Magnetization normalization
+-
+-The LLG equation preserves $|\mathbf{m}|=1$ analytically, but explicit time integrators
+-introduce a numerical drift. FullMag re-normalises the magnetization on every magnetic
+-degree of freedom after each accepted integration step:
++This targets energy descent without precessional oscillation; discrete monotonicity is an
++algorithm- and acceptance-policy-specific validation obligation. After every accepted explicit
++step, magnetic degrees of freedom are normalized:
+ 
+ ```{math}
+-:label: eq-normalization
+-\mathbf{m}_i \leftarrow \frac{\mathbf{m}_i}{|\mathbf{m}_i|}
+-\quad\text{for all magnetic } i.
++:label: eq-llg-normalization
++\mathbf m_i\leftarrow\frac{\mathbf m_i}{|\mathbf m_i|}.
+ ```
+ 
+-Non-magnetic nodes (FEM airbox, visualisation padding) are **not** normalised and must not
+-contribute to the magnetic RHS.
+-
+-## Time integration
+-
+-FullMag integrates the LLG equation with explicit Runge–Kutta methods:
+-
+-| Integrator | Stages | Order | Adaptive | Current status |
+-|---|---:|---:|---|---|
+-| Heun | 2 | 2 | No | Baseline for all backends |
+-| RK4(5) Dormand–Prince | 7 | 4(5) | Yes | Production FDM GPU |
+-| RK2(3) Bogacki–Shampine | 4 | 2(3) | Yes | Available |
+-
+-Adaptive timestep control uses the embedded error estimate with user-specified `max_err`
+-(absolute maximum node/cell embedded vector error). A failed adaptive attempt at the minimum
+-timestep `dt_min` returns a typed error and cannot be accepted.
+-
+-Fixed-step mode (`fix_dt`) selects a true fixed physical timestep and cannot be combined
+-with adaptive parameters.
++The core explicit family includes Heun (order 2), classical RK4, Bogacki–Shampine RK23 (3(2)),
++and Dormand–Prince RK45 (5(4)). Availability, fixed/adaptive use, precision, and multilayer support
++are planner-dependent rather than universal consequences of the tableau existing.
+ 
++(llg-foundation-symbols-and-si-units)=
++<!-- (symbols-and-si-units)= -->
+ ## Symbols and SI units
+ 
+ | Symbol | Definition | SI unit |
+ |---|---|---:|
+-| $\mathbf{m}$ | reduced magnetization | $1$ |
+-| $\mathbf{H}_{\mathrm{eff}}$ | effective field | $\mathrm{A\,m^{-1}}$ |
+-| $\alpha$ | Gilbert damping parameter | $1$ |
++| $\mathbf m$ | reduced magnetization | $1$ |
++| $\mathbf H_{\mathrm{eff}}$ | effective field | $\mathrm{A\,m^{-1}}$ |
++| $\alpha$ | Gilbert damping | $1$ |
+ | $\gamma_{\mu_0}$ | reduced gyromagnetic constant | $\mathrm{m\,(A\,s)^{-1}}$ |
+-| $\boldsymbol{\tau}_{\mathrm{direct}}$ | direct torque | $\mathrm{s^{-1}}$ |
+-| $\Delta t$ | integration timestep | $\mathrm{s}$ |
++| $\boldsymbol\tau_{\mathrm{direct}}$ | direct RHS torque | $\mathrm{s^{-1}}$ |
++| $t$ | physical time | $\mathrm{s}$ |
++
++(llg-foundation-assumptions-and-validity)=
++<!-- (assumptions-and-validity)= -->
++## Assumptions and validity
++
++- $M_s>0$ on magnetic degrees of freedom; non-magnetic airbox support contributes no magnetic RHS.
++- $\gamma_{\mu_0}$ already includes $\mu_0$ and must not be replaced with the electron ratio in
++  $\mathrm{rad\,(T\,s)^{-1}}$.
++- Direct torques are post-conversion RHS terms in $\mathrm{s^{-1}}$.
++- Rejected adaptive attempts do not commit state; failure at `dt_min` is typed and fail-closed.
++
++(llg-foundation-python-api)=
++<!-- (python-api)= -->
++## Python API
++
++```python
++# %% LLG policy in a stage-first study
++import fullmag as fm
++
++nm = 1.0e-9
++study = fm.study("llg-foundation")
++study.engine("fdm")
++study.device("cpu", precision="double")
++study.mode("strict")
++study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
++body = study.geometry(fm.Box(40 * nm, 20 * nm, 4 * nm), name="film")
++body.Ms = 800.0e3
++body.Aex = 13.0e-12
++body.alpha = 0.02
++body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
++study.exchange()
++study.solver(
++    integrator="rk45",
++    adaptive_timestep=fm.AdaptiveTimestep(
++        atol=1.0e-6, rtol=1.0e-3, dt_min=1.0e-15, dt_max=1.0e-12
++    ),
++    gamma=2.211e5,
++)
++study.stages.add_run(stage_id="run", until=1.0e-9)
++```
+ 
++| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
++|---|---|---|---|---|---|---|---|
++| `LLG.gamma` | `float` | `221100.0` | $\mathrm{m\,(A\,s)^{-1}}$ | positive finite | reduced gyromagnetic constant | FDM/FEM CPU/GPU subject to planner capability | `study.dynamics.gyromagnetic_ratio` |
++| `LLG.integrator` | `str` | `"auto"` | $1$ | supported canonical name or alias | requested time integrator | lane-dependent; planner checks combinations | `study.dynamics.integrator` |
++| `LLG.fixed_timestep` | `float \| None` | `None` | $\mathrm{s}$ | positive and mutually exclusive with adaptive stepping | fixed physical timestep | lane-dependent | `study.dynamics.fixed_timestep` |
++| `LLG.adaptive_timestep` | `AdaptiveTimestep \| None` | `None` | $1$ | requires an embedded-error integrator | adaptive attempt policy | lane-dependent | `study.dynamics.adaptive_timestep` |
++
++(llg-foundation-problem-ir)=
++<!-- (problem-ir)= -->
++## ProblemIR
++
++`study.dynamics` preserves the requested gyromagnetic ratio, integrator, fixed/adaptive policy,
++and field-refresh policy. Stage intent remains separate. Planner/runtime provenance records the
++resolved integrator, timestep mode, LLG mode, backend, device, and precision.
++
++(llg-foundation-round-trip-and-failure-semantics)=
++<!-- (round-trip-and-failure-semantics)= -->
++## Round-trip and failure semantics
++
++Requested intent survives Python-to-IR lowering and script export. Resolved execution is
++planner-owned. Validation errors reject invalid gamma, timestep, and adaptive combinations;
++unsupported combinations fail without accepting a rejected step or silently selecting another
++backend or integrator.
++
++(llg-foundation-discrete-realization)=
++<!-- (discrete-realization)= -->
++## Discrete realization
++
++| Solver | Device | Status | Qualification boundary |
++|---|---|---|---|
++| FDM | CPU | reference | FP64 explicit-step oracle and norm/error contracts |
++| FDM | GPU | implemented | explicit CUDA paths subject to integrator/device qualification |
++| FEM | CPU | implemented | native MFEM explicit RHS and tableaus |
++| FEM | GPU | implemented | same native contract; executed-device evidence is required |
++
++(llg-foundation-implementation-mapping)=
++<!-- (implementation-mapping)= -->
+ ## Implementation mapping
+ 
+-| Responsibility | Source identity |
+-|---|---|
+-| FEM CPU LLG RHS | `backends/fem/cpu/mfem/integrators/llg_rhs.cpp` — `compute_llg_rhs` |
+-| FDM CPU LLG stepping | `crates/fullmag-engine/src/fdm/cpu/integrator.rs` |
+-| FDM GPU Heun/RK stages | `backends/fdm/gpu/cuda/runtime/` — RK stage kernels |
+-| Magnetization normalization | Per-backend post-step normalization routines |
+-| Relaxation mode flag | `precession_enabled` in native FEM ABI |
++`LLG` owns public validation/lowering. FDM and native FEM modules own the explicit Gilbert RHS;
++native tableau dispatch owns Heun/RK4/RK23/RK45 selection without a silent fallback.
++
++(llg-foundation-validation)=
++<!-- (validation)= -->
++## Validation
+ 
++Validate macrospin precession, damping sign, norm preservation, direct-torque units, tableau order,
++fixed/adaptive acceptance and rollback, `dt_min` exhaustion, and executed CPU/GPU parity.
++
++(llg-foundation-limitations)=
++<!-- (limitations)= -->
++## Limitations
++
++Representability of an integrator does not make it executable on every solver/device or multilayer
++path. Planner capabilities and lane-specific qualification remain authoritative.
++
++(llg-foundation-scientific-bibliography)=
++<!-- (scientific-bibliography)= -->
+ ## Scientific bibliography
+ 
+-1. L. D. Landau and E. M. Lifshitz, "On the theory of the dispersion of magnetic
+-   permeability in ferromagnetic bodies," *Phys. Z. Sowjetunion* **8**, 153 (1935).
+-2. T. L. Gilbert, "A phenomenological theory of damping in ferromagnetic materials,"
+-   *IEEE Trans. Magn.* **40**(6), 3443 (2004).
++1. L. D. Landau and E. M. Lifshitz, "On the theory of the dispersion of magnetic permeability in
++   ferromagnetic bodies," *Phys. Z. Sowjetunion* **8**, 153 (1935).
++2. T. L. Gilbert, "A phenomenological theory of damping in ferromagnetic materials," *IEEE
++   Transactions on Magnetics* **40**, 3443 (2004).
+    [doi:10.1109/TMAG.2004.836740](https://doi.org/10.1109/TMAG.2004.836740).
+-3. C. Abert, "Micromagnetics and spintronics: models and numerical methods," *European
+-   Physical Journal B* **92**, 120 (2019).
++3. C. Abert, "Micromagnetics and spintronics: models and numerical methods," *European Physical
++   Journal B* **92**, 120 (2019).
+    [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
+-4. M. J. Donahue and D. G. Porter, *OOMMF User's Guide, Version 1.0*, NISTIR 6376,
+-   National Institute of Standards and Technology, 1999.
+-   [doi:10.6028/NIST.IR.6376](https://doi.org/10.6028/NIST.IR.6376).
++
++(llg-foundation-source-code-index)=
++<!-- (source-code-index)= -->
++## Source-code index
++
++| Claim | Path | Stable symbol | Responsibility | Evidence |
++|---|---|---|---|---|
++| Public dynamics policy | `packages/fullmag-py/src/fullmag/model/dynamics.py` | `class LLG` | validation and lowering | Python API tests |
++| FDM explicit Gilbert RHS | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `llg_rhs_from_field` | field-to-RHS conversion | FDM integrator tests |
++| Native FEM explicit Gilbert RHS | `backends/fem/cpu/mfem/integrators/llg_rhs.cpp` | `llg_rhs_aos` | field/direct-torque RHS and precession flag | native LLG contract tests |
++| Native explicit tableau selection | `backends/fem/cpu/mfem/integrators/rk_explicit.cpp` | `tableau_for_integrator` | resolves Heun/RK4/RK23/RK45 tableaus | native integrator tests |
+diff --git a/public_docs/site/physics/foundations/micromagnetic-energy.md b/public_docs/site/physics/foundations/micromagnetic-energy.md
+index c75be7731..504c495ae 100644
+--- a/public_docs/site/physics/foundations/micromagnetic-energy.md
++++ b/public_docs/site/physics/foundations/micromagnetic-energy.md
+@@ -10,12 +10,20 @@ source_of_truth: docs/physics/units.md
+ (public-docs-physics-foundations-micromagnetic-energy)=
+ # Micromagnetic energy
+ 
++(micromagnetic-energy-problem-statement)=
++<!-- (problem-statement)= -->
++## Problem statement
++
+ FullMag solves the Landau–Lifshitz–Gilbert equation for the reduced magnetization
+ $\mathbf{m} = \mathbf{M}/M_s$ by computing effective fields from physical energy
+ functionals. This page defines the total energy, its decomposition into interaction terms,
+ and the variational principle that links energies to effective fields.
+ 
+-## Total energy functional
++(micromagnetic-energy-governing-equations)=
++<!-- (governing-equations)= -->
++## Governing equations
++
++### Total energy functional
+ 
+ The total micromagnetic energy is a sum of independent interaction contributions
+ 
+@@ -46,9 +54,11 @@ documented otherwise.
+ :::{admonition} Non-conservative interactions
+ :class: note
+ 
+-Spin-transfer torque (STT), spin-orbit torque (SOT), and thermal noise are **not** derived
+-from an energy functional. They contribute direct torques
+-$\boldsymbol{\tau}$ to the LLG right-hand side. See
++Spin-transfer torque (STT), spin-orbit torque (SOT), and Brown thermal noise are **not** derived
++from the deterministic micromagnetic energy functional, but they do not share one numerical path.
++STT/SOT contribute Gilbert-source or direct RHS torques in $\mathrm{s^{-1}}$. Brown noise is a
++stochastic effective field $\mathbf H_{\mathrm{th}}$ in $\mathrm{A\,m^{-1}}$ and passes through
++the LLG field cross products; it has no standalone deterministic contribution to `e_total`. See
+ {doc}`../interactions/spin-transfer-torque/index`,
+ {doc}`../interactions/spin-orbit-torque/index`, and
+ {doc}`../interactions/thermal-noise/index`.
+@@ -78,9 +88,9 @@ This means the directional derivative of the energy satisfies
+ for all admissible variations $\boldsymbol{\eta}$ tangent to the unit sphere
+ ($\boldsymbol{\eta}\cdot\mathbf{m}=0$).
+ 
+-This variational relation is the definition of the effective field — not a convenience
+-shortcut. Every interaction page must verify Eq. {eq}`eq-directional-derivative` for its
+-implemented equations.
++This variational relation defines the **conservative** effective-field subset. It does not apply
++to the sampled Brown field or to direct source torques. Every conservative interaction page must
++verify Eq. {eq}`eq-directional-derivative` for its implemented equations.
+ 
+ ## Energy minimization and equilibrium
+ 
+@@ -94,9 +104,9 @@ necessary condition is
+ \quad\text{on }\Omega_m,
+ ```
+ 
+-i.e. the magnetization is everywhere parallel to the effective field. FullMag's relaxation
+-algorithms (overdamped LLG, direct energy minimizers) converge to states satisfying this
+-condition within a documented tolerance.
++i.e. the magnetization is everywhere parallel to the effective field. FullMag relaxation
++algorithms target this condition and report explicit stopping evidence; convergence and energy
++monotonicity are qualified separately for each algorithm and backend.
+ 
+ ## Domain integration
+ 
+@@ -110,20 +120,124 @@ Energy integration is always over the magnetic domain $\Omega_m$:
+ The demagnetization field $\mathbf{H}_{\mathrm{d}}$ may be solved on a larger domain
+ (airbox or open boundary), but the energy integral uses only the magnetic subdomain.
+ 
++(micromagnetic-energy-symbols-and-si-units)=
++<!-- (symbols-and-si-units)= -->
+ ## Symbols and SI units
+ 
+ | Symbol | Definition | SI unit |
+ |---|---|---:|
+ | $E_{\mathrm{tot}}$ | total micromagnetic energy | $\mathrm{J}$ |
++| $E_{\mathrm{ex}},E_{\mathrm d},E_{\mathrm Z},E_{\mathrm{ani}},E_{\mathrm{DMI}},E_{\mathrm{mel}},E_{\mathrm{oe}}$ | energy contributions shown in the total-energy sum | $\mathrm J$ |
+ | $E_{\mathrm{term}}$ | individual interaction energy | $\mathrm{J}$ |
+ | $\mathbf{H}_{\mathrm{eff}}$ | total effective field | $\mathrm{A\,m^{-1}}$ |
+-| $\mathbf{H}_{\mathrm{term}}$ | interaction effective-field contribution | $\mathrm{A\,m^{-1}}$ |
++| $\mathbf{H}_{\mathrm{term}}$ | conservative interaction effective-field contribution | $\mathrm{A\,m^{-1}}$ |
++| $\mathbf{H}_{\mathrm{th}}$ | stochastic Brown field excluded from deterministic total energy | $\mathrm{A\,m^{-1}}$ |
++| $\boldsymbol\tau_{\mathrm{direct}}$ | non-field STT/SOT RHS contribution | $\mathrm{s^{-1}}$ |
++| $\mathbf m$ | reduced magnetization | $1$ |
+ | $\boldsymbol{\eta}$ | admissible magnetization variation | $1$ |
+ | $\Omega_m$ | magnetic domain | $\mathrm{m^3}$ |
++| $\mathrm dV$ | magnetic-domain volume element | $\mathrm{m^3}$ |
+ | $V_i$ | discrete cell or element volume | $\mathrm{m^3}$ |
+ | $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
+ | $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
+ 
++(micromagnetic-energy-assumptions-and-validity)=
++<!-- (assumptions-and-validity)= -->
++## Assumptions and validity
++
++- Energy reductions include magnetic support only; FEM airbox elements are excluded.
++- Conservative terms own an energy-field variational identity in their documented discrete metric.
++- Brown thermal noise is a stochastic field, but has no standalone deterministic energy reduction.
++- Non-conservative direct torques are excluded from $E_{\mathrm{tot}}$.
++- Availability of a term or reduction is backend-, stage-, and device-dependent.
++
++(micromagnetic-energy-python-api)=
++<!-- (python-api)= -->
++## Python API
++
++```python
++# %% Request total energy in a stage-first study
++import fullmag as fm
++
++nm = 1.0e-9
++study = fm.study("energy-foundation")
++study.engine("fdm")
++study.device("cpu", precision="double")
++study.mode("strict")
++study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
++body = study.geometry(fm.Box(40 * nm, 20 * nm, 4 * nm), name="film")
++body.Ms = 800.0e3
++body.Aex = 13.0e-12
++body.alpha = 0.02
++body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
++study.exchange()
++study.demag()
++study.stages.add_relax(
++    stage_id="relax", dt=1.0e-15, max_steps=10, tolT=1.0e-6
++).autosave(
++    fm.StageAutosave(
++        table=fm.TableAutosave(every_steps=1, quantities=["step", "e_total"])
++    )
++)
++```
++
++| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
++|---|---|---|---|---|---|---|---|
++| `TableAutosave.quantities` | `Sequence[str] \| None` | default registry | $1$ | non-empty supported scalar identifiers | scalar columns including `e_total` | lane-dependent; planner checks materialization | `study.stages[].autosave.table.quantities` |
++
++(micromagnetic-energy-problem-ir)=
++<!-- (problem-ir)= -->
++## ProblemIR
++
++The interaction list records authored interactions, including energy-bearing terms and separately
++typed non-energy stochastic/source terms, while the output request records `e_total`. The scalar
++reduction includes only contributions with a defined energy contract; Brown noise and direct
++torques are excluded. ProblemIR does not cache a numerical energy value. Planner/runtime provenance
++records the resolved backend, device, precision, support, enabled terms, and materialization path.
++
++(micromagnetic-energy-round-trip-and-failure-semantics)=
++<!-- (round-trip-and-failure-semantics)= -->
++## Round-trip and failure semantics
++
++Requested intent preserves interaction and quantity identifiers. Resolved execution preserves the
++actual reduction support and lane. Validation errors reject unknown quantities or malformed
++interaction inputs; unsupported combinations fail without substituting zero energy or silently
++changing backend.
++
++(micromagnetic-energy-discrete-realization)=
++<!-- (discrete-realization)= -->
++## Discrete realization
++
++| Solver | Device | Status | Qualification boundary |
++|---|---|---|---|
++| FDM | CPU | reference | active-cell volume-weighted reference reductions |
++| FDM | GPU | implemented | enabled device reductions; executed-device parity remains separate |
++| FEM | CPU | implemented | magnetic-support quadrature/lumped reductions |
++| FEM | GPU | implemented | same energy convention with explicit reduction/residency provenance |
++
++(micromagnetic-energy-implementation-mapping)=
++<!-- (implementation-mapping)= -->
++## Implementation mapping
++
++FDM field evaluation owns the cell energy sum. Native FEM step metrics aggregate enabled
++interaction energies. `TableAutosave` and the quantity registry own the public scalar request.
++
++(micromagnetic-energy-validation)=
++<!-- (validation)= -->
++## Validation
++
++Validate analytical uniform states, finite-difference directional derivatives, magnetic-support
++masking, per-term and total sums, relaxation stopping evidence, and executed CPU/GPU parity.
++
++(micromagnetic-energy-limitations)=
++<!-- (limitations)= -->
++## Limitations
++
++The catalog above does not imply every term is implemented or materializable on every lane.
++Interaction pages and planner capabilities are authoritative.
++
++(micromagnetic-energy-scientific-bibliography)=
++<!-- (scientific-bibliography)= -->
+ ## Scientific bibliography
+ 
+ 1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers, New York, 1963.
+@@ -133,3 +247,15 @@ The demagnetization field $\mathbf{H}_{\mathrm{d}}$ may be solved on a larger do
+ 3. C. Abert, "Micromagnetics and spintronics: models and numerical methods," *European
+    Physical Journal B* **92**, 120 (2019).
+    [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
++
++(micromagnetic-energy-source-code-index)=
++<!-- (source-code-index)= -->
++## Source-code index
++
++| Claim | Path | Stable symbol | Responsibility | Evidence |
++|---|---|---|---|---|
++| FDM total energy | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `total_energy_from_vectors_ws` | active-cell conservative energy sum | FDM energy/derivative tests |
++| Native FEM energy aggregation | `backends/fem/cpu/mfem/runtime/step_metrics.cpp` | `fill_common_step_metrics` | aggregates enabled interaction energies | native step-metric tests |
++| Scalar request | `packages/fullmag-py/src/fullmag/model/study.py` | `class TableAutosave` | validates and lowers quantity/cadence | autosave tests |
++| Quantity evaluation | `crates/fullmag-quantities/src/registry.rs` | `evaluate_by_name` | resolves canonical scalar identifiers | quantity registry tests |
++| Brown thermal field separation | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `thermal_field_add_into_soa` | adds stochastic field noise without an energy reduction | thermal variance/replay tests |
+diff --git a/public_docs/site/physics/geometry-and-materials.md b/public_docs/site/physics/geometry-and-materials.md
+index 730e3af96..1b3e744a5 100644
+--- a/public_docs/site/physics/geometry-and-materials.md
++++ b/public_docs/site/physics/geometry-and-materials.md
+@@ -1,64 +1,195 @@
+ ---
+ title: Geometry, regions, materials and meshes
+-status: planned
++status: partial
++doc_kind: overview
+ audience: user
+ owner: fullmag-public-docs
+ source_of_truth: docs/physics/0100-mesh-and-region-discretization.md
+ ---
+ 
++(public-docs-physics-geometry-and-materials)=
+ # Geometry, regions, materials and meshes
+ 
+-Geometry and material semantics are physics inputs, not renderer-specific data. The same physical
+-object and region intent must be lowered to the selected FDM or FEM realization.
+-
+-The first public scope covers geometry objects, transforms, region membership, material fields,
+-interfaces, FDM grids, FEM meshes, airboxes, periodicity, remeshing and invalidation.
+-
+-FDM uses structured cells, masks and grid ownership. FEM uses elements, material markers,
+-boundary markers and shared domains. These representations differ while the public region and
+-material meaning stays the same.
+-
+-The initial public fixtures are a rectangular object, a thin film and a shared-domain airbox.
+-Each fixture must expose mesh or grid identity, material regions, boundary policy and a
+-reproducible build report.
+-
+-## Physical model
+-
+-The public geometry contract describes a physical domain Omega, its magnetic subdomains Omega_i
+-and material fields assigned to those subdomains. A discretization must preserve the declared
+-region membership and boundary markers:
+-
+-$$
+-Omega = union_i Omega_i,
+-qquad
+-Omega_i intersection Omega_j = emptyset for i != j
+-$$
+-
+-This is the partition contract, not a claim that every overlapping authoring operation is valid.
+-Overlap resolution, interfaces and boolean operations must be documented explicitly before a mesh
+-is qualified.
+-
+-## API and ProblemIR impact
+-
+-The public authoring model must carry object geometry, transforms, region identity, material
+-assignment, discretization policy, boundary policy and mesh provenance. The planner resolves FDM
+-grid or FEM mesh capabilities without changing physical region meaning. Geometry changes invalidate
+-mesh-dependent artifacts; magnetization changes do not by themselves invalidate mesh identity.
+-
+-## Validation strategy
+-
+-The first fixtures are planned, not yet qualified:
+-
+-1. a rectangular object with one material region;
+-2. a thin film with through-thickness discretization;
+-3. a shared-domain magnetic object and airbox;
+-4. a region mutation followed by remesh and certificate comparison.
+-
+-Evidence must include mesh or grid identity, region markers, boundary policy and a reproducible
+-build report. No result is currently claimed by this page.
+-
+-## Known limits and deferred work
+-
+-This page does not yet qualify adaptive refinement, all boolean geometry operations, every
+-periodic boundary combination or every mixed FEM topology. Those topics remain deferred until
+-their public API, certificates and validation artifacts are linked.
++(geometry-materials-problem-statement)=
++<!-- (problem-statement)= -->
++## Problem statement
++
++Geometry and material semantics are physics inputs, not renderer data. Authored objects, region
++identity, material ownership, and boundary selections must survive lowering into either an FDM grid
++or an FEM mesh without becoming backend-specific public meanings.
++
++This is a non-terminal physics overview, not the exhaustive API reference for every geometry,
++region, material field, or mesher option. Terminal constructor contracts live under
++{doc}`../python-api/geometry/index`, {doc}`../python-api/materials/index`, and
++{doc}`../python-api/meshing/index`. The table below is exhaustive for the physical-authoring
++parameters exercised by this worked example and deliberately does not redefine those larger APIs.
++
++(geometry-materials-governing-equations)=
++<!-- (governing-equations)= -->
++## Governing equations
++
++Meshing introduces no new micromagnetic interaction. It realizes a physical domain $\Omega$ and
++magnetic subdomains $\Omega_i$ whose disjoint interiors form the authored magnetic support:
++
++```{math}
++:label: eq-geometry-region-partition
++\Omega_m=\bigcup_{i=1}^{N_r}\Omega_i,
++\qquad
++\operatorname{int}(\Omega_i)\cap\operatorname{int}(\Omega_j)=\varnothing
++\quad(i\ne j).
++```
++
++A discretization must preserve region membership, material assignment, and boundary identity. The
++equation is a post-resolution partition contract, not permission for unresolved overlapping
++authoring objects.
++
++(geometry-materials-symbols-and-si-units)=
++<!-- (symbols-and-si-units)= -->
++## Symbols and SI units
++
++| Symbol | Meaning | SI unit |
++|---|---|---:|
++| $\Omega_m$ | resolved magnetic domain | $\mathrm{m^3}$ |
++| $\Omega_i$ | resolved magnetic region $i$ | $\mathrm{m^3}$ |
++| $N_r$ | number of resolved magnetic regions | $1$ |
++| $\mathbf x_k$ | coordinate of node or cell location $k$ | $\mathrm{m}$ |
++| $m_e$ | canonical region marker of element or cell $e$ | $1$ |
++
++(geometry-materials-assumptions-and-validity)=
++<!-- (assumptions-and-validity)= -->
++## Assumptions and validity
++
++- Geometry coordinates are SI metres after import normalization.
++- Object and region identities are explicit; physics is not inferred from display names or types.
++- FDM cells/masks and FEM elements/markers are different realizations of the same authored intent.
++- External FEM meshes require unambiguous units and semantic mappings; unsupported topology fails
++  closed.
++
++(geometry-materials-python-api)=
++<!-- (python-api)= -->
++## Python API
++
++```python
++# %% Geometry, material, and mesh intent
++import fullmag as fm
++
++nm = 1.0e-9
++study = fm.study("geometry-material-foundation")
++study.engine("fem")
++study.device("cpu", precision="double")
++study.mode("strict")
++study.objects.mesh.defaults(maximum_element_size=20 * nm)
++study.universe(mode="auto", padding=(100 * nm, 100 * nm, 100 * nm))
++study.universe.mesh(maximum_element_size=40 * nm)
++film = study.geometry(fm.Box(500 * nm, 125 * nm, 3 * nm), name="film")
++film.Ms = 800.0e3
++film.Aex = 13.0e-12
++film.alpha = 0.02
++film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
++film.mesh.thin_film(
++    minimum_element_size=3 * nm,
++    maximum_element_size=3 * nm,
++    layers=1,
++    topology="prismatic",
++)
++study.exchange()
++study.stages.add_relax(stage_id="relax", dt=1.0e-15, max_steps=10, tolT=1.0e-6)
++```
++
++| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
++|---|---|---|---|---|---|---|---|
++| `study.objects.mesh.defaults(maximum_element_size=...)` | `float \| str \| None` | `None` | $\mathrm m$ | positive finite resolved size; cannot be mixed with FDM `cell_size` | default magnetic-object FEM size | FEM authoring; planner/generator checks realization | `problem_meta.runtime_metadata.mesh_workflow.default_mesh.maximum_element_size` |
++| `study.universe(mode=...)` | `"auto" \| "manual" \| None` | `"auto"` | $1$ | manual mode requires explicit positive `size` | domain extent policy | FDM/FEM authoring; realization is lane-dependent | `problem_meta.runtime_metadata.study_universe.mode` |
++| `study.universe(padding=...)` | `Sequence[float] \| None` | `(0, 0, 0)` | $\mathrm m$ | three finite non-negative components | padding around auto-resolved object bounds | FDM/FEM domain realization | `problem_meta.runtime_metadata.study_universe.padding` |
++| `study.universe.mesh(maximum_element_size=...)` | `float \| None` | `None` | $\mathrm m$ | positive finite; mutually exclusive with universe `cell_size` | FEM airbox/domain target size | FEM authoring; generator checks topology and grading | `problem_meta.runtime_metadata.study_universe.airbox_hmax` |
++| `fm.Box(x, y, z)` | three `float` values | required | $\mathrm m$ | positive finite extents | axis-aligned physical box size | FDM/FEM geometry authoring | `geometry.entries[].size` |
++| `study.geometry(shape=...)` | geometry object | required | $1$ | supported geometry with unique lowered identity | magnetic object's physical shape | FDM/FEM subject to geometry realization | `geometry.entries[]` and `magnets[].region` |
++| `study.geometry(name=...)` | `str` | `"body"` | $1$ | non-empty and unique in the study | user-facing magnetic object name | all authoring lanes | `magnets[].name` and `regions[].name` |
++| `film.Ms` | `float` | required | $\mathrm{A\,m^{-1}}$ | positive finite | saturation magnetization | FDM/FEM CPU/GPU subject to planner capability | `materials[].saturation_magnetisation` |
++| `film.Aex` | `float` | required | $\mathrm{J\,m^{-1}}$ | positive finite | exchange stiffness | FDM/FEM CPU/GPU subject to planner capability | `materials[].exchange_stiffness` |
++| `film.alpha` | `float` | required | $1$ | finite and non-negative | Gilbert damping | FDM/FEM CPU/GPU subject to planner capability | `materials[].damping` |
++| `film.m` | magnetization initializer | required | $1$ | valid initializer with finite vector data | initial reduced magnetization | FDM/FEM CPU/GPU subject to initializer support | `magnets[].initial_magnetization` |
++| `film.mesh.thin_film(minimum_element_size=...)` | `float \| None` | `None` | $\mathrm m$ | positive and no greater than maximum size | minimum object mesh size | FEM authoring; generator checks realization | `problem_meta.runtime_metadata.mesh_workflow.per_geometry[].minimum_element_size` |
++| `film.mesh.thin_film(maximum_element_size=...)` | `float \| str \| None` | inherited/`None` | $\mathrm m$ | positive finite resolved size | maximum object mesh size | FEM authoring; generator checks realization | `problem_meta.runtime_metadata.mesh_workflow.per_geometry[].maximum_element_size` |
++| `film.mesh.thin_film(layers=...)` | `int` | `1` | $1$ | integer at least one | through-thickness element count | FEM thin-film generators | `problem_meta.runtime_metadata.mesh_workflow.per_geometry[].through_thickness_elements` |
++| `film.mesh.thin_film(topology=...)` | `"tetrahedral" \| "prismatic" \| None` | `None` | $1$ | supported topology; prismatic mode requires compatible order/transition | requested element topology | FEM; planner/generator rejects unsupported combinations | `problem_meta.runtime_metadata.mesh_workflow.per_geometry[].topology` |
++
++(geometry-materials-problem-ir)=
++<!-- (problem-ir)= -->
++## ProblemIR
++
++Authored geometry, materials, regions, object-region assignments, and discretization hints remain
++separate from derived `geometry_assets`. FDM materialization records a structured-grid asset; FEM
++materialization records a validated typed `fem_domain_mesh_asset`. Requested mesh intent stays in
++mesh workflow metadata while resolved mesh identity and build provenance remain derived evidence.
++
++(geometry-materials-round-trip-and-failure-semantics)=
++<!-- (round-trip-and-failure-semantics)= -->
++## Round-trip and failure semantics
++
++Requested intent preserves immutable object identity, names, transforms, region/material ownership,
++and mesh policies. Resolved execution records grid/mesh identity, markers, builder, backend, device,
++precision, and certificates. Validation errors reject invalid geometry, ambiguous maps, stale
++artifacts, and unsupported topology; unsupported combinations never silently change solver family
++or infer physics from presentation metadata.
++
++(geometry-materials-discrete-realization)=
++<!-- (discrete-realization)= -->
++## Discrete realization
++
++| Solver | Device | Status | Qualification boundary |
++|---|---|---|---|
++| FDM | CPU | reference | structured cells, masks, and grid certificate |
++| FDM | GPU | implemented | same grid contract; CUDA availability and parity remain explicit |
++| FEM | CPU | implemented | typed linear mesh, markers, shared domains, persistence/import paths |
++| FEM | GPU | implemented | same typed mesh contract; runtime/device qualification remains separate |
++
++(geometry-materials-implementation-mapping)=
++<!-- (implementation-mapping)= -->
++## Implementation mapping
++
++`MagnetHandle` and `Material` own the worked material/initializer semantics. `StudyUniverseHandle`,
++`StudyObjectsMeshDefaultsHandle`, and `GeometryMeshHandle` own the domain/default/object mesh
++authoring shown above. `build_geometry_assets_for_request` materializes canonical assets, and
++`MeshData` owns typed FEM topology and validation.
++
++(geometry-materials-validation)=
++<!-- (validation)= -->
++## Validation
++
++Validate geometry/region round-trip, material ownership, marker preservation, grid/mesh
++fingerprints, stale/corrupt artifact rejection, coordinate-unit normalization, conformity, and
++CPU/GPU consumption of the same resolved identity.
++
++(geometry-materials-limitations)=
++<!-- (limitations)= -->
++## Limitations
++
++Not every boolean operation, adaptive refinement policy, periodic combination, higher-order FEM
++element, or mixed topology is qualified. The Python authoring surface may represent a request that
++the planner or current mesh generator rejects; those boundaries must remain explicit.
++
++(geometry-materials-scientific-bibliography)=
++<!-- (scientific-bibliography)= -->
++## Scientific bibliography
++
++1. C. Geuzaine and J.-F. Remacle, "Gmsh: a three-dimensional finite element mesh generator with
++   built-in pre- and post-processing facilities," *International Journal for Numerical Methods in
++   Engineering* **79**, 1309–1331 (2009). [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
++
++(geometry-materials-source-code-index)=
++<!-- (source-code-index)= -->
++## Source-code index
++
++| Claim | Path | Stable symbol | Responsibility | Evidence |
++|---|---|---|---|---|
++| Material semantics | `packages/fullmag-py/src/fullmag/model/structure.py` | `class Material` | SI validation and lowering | Python API tests |
++| Magnetic object facade | `packages/fullmag-py/src/fullmag/world.py` | `class MagnetHandle` | object identity, material aliases, initializer, and regions | Python API tests |
++| Universe/domain authoring | `packages/fullmag-py/src/fullmag/world.py` | `class StudyUniverseHandle` | domain extent and airbox mesh intent | universe/round-trip tests |
++| Study mesh defaults | `packages/fullmag-py/src/fullmag/world.py` | `class StudyObjectsMeshDefaultsHandle` | shared object mesh defaults | meshing/round-trip tests |
++| Box primitive | `packages/fullmag-py/src/fullmag/model/geometry.py` | `class Box` | validates and lowers axis-aligned extents | geometry tests |
++| Uniform initializer | `packages/fullmag-py/src/fullmag/init/magnetization.py` | `class UniformMagnetization` | validates and lowers reduced initial magnetization | initializer tests |
++| Object mesh authoring | `packages/fullmag-py/src/fullmag/world.py` | `class GeometryMeshHandle` | per-object mesh intent | meshing/round-trip tests |
++| Mesh persistence facade | `packages/fullmag-py/src/fullmag/world.py` | `class StudyMeshHandle` | save/load/import/export workflow | persistence tests |
++| Asset materialization | `packages/fullmag-py/src/fullmag/model/problem.py` | `build_geometry_assets_for_request` | canonical FDM/FEM asset lowering | ProblemIR materialization tests |
++| Typed FEM topology | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `class MeshData` | topology, markers, fingerprints, and strict validation | meshing/persistence tests |
+diff --git a/public_docs/site/physics/conventions.source-map.json b/public_docs/site/physics/conventions.source-map.json
+new file mode 100644
+index 000000000..115a23ee2
+--- /dev/null
++++ b/public_docs/site/physics/conventions.source-map.json
+@@ -0,0 +1,35 @@
++{
++  "document": {
++    "path": "public_docs/site/physics/conventions.md",
++    "title": "Physical conventions and units",
++    "scope": "project-wide SI and reduced-magnetization compatibility contract"
++  },
++  "backend_matrix": [
++    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "FP64 structured-grid reference lane."},
++    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "Device kernels consume the shared SI contract; qualification is device-specific."},
++    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "Native MFEM operators and LLG RHS consume the shared SI contract."},
++    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "GPU realization preserves units; host setup is not device qualification."}
++  ],
++  "sources": [
++    {"id": "conventions-material", "path": "packages/fullmag-py/src/fullmag/model/structure.py", "symbol": "class Material", "responsibility": "Validates and lowers public SI material values."},
++    {"id": "conventions-llg", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class LLG", "responsibility": "Validates and lowers the reduced gyromagnetic constant and dynamics policy."},
++    {"id": "conventions-fem-llg", "path": "backends/fem/cpu/mfem/integrators/llg_rhs.cpp", "symbol": "llg_rhs_aos", "responsibility": "Consumes reduced magnetization and A/m field values in the explicit Gilbert RHS."}
++  ],
++  "symbols": [
++    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
++    {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
++    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
++    {"id": "A", "latex": "$A$", "meaning": "exchange stiffness", "si_unit": "$\\mathrm{J\\,m^{-1}}$"},
++    {"id": "alpha", "latex": "$\\alpha$", "meaning": "Gilbert damping", "si_unit": "$1$"}
++  ],
++  "equations": [
++    {"id": "eq-public-conventions-reduced-m", "symbols": ["m", "M", "Ms"], "sources": ["conventions-material", "conventions-fem-llg"]}
++  ],
++  "public_api": {
++    "parameters": [
++      {"python": "Material.Ms", "type": "float", "default": "required", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "positive finite", "meaning": "saturation magnetization", "backend_support": "FDM/FEM CPU/GPU subject to planner capability", "problem_ir": "materials[].saturation_magnetisation"},
++      {"python": "Material.A", "type": "float", "default": "required", "si_unit": "$\\mathrm{J\\,m^{-1}}$", "validation": "positive finite", "meaning": "exchange stiffness", "backend_support": "FDM/FEM CPU/GPU subject to planner capability", "problem_ir": "materials[].exchange_stiffness"},
++      {"python": "Material.alpha", "type": "float", "default": "required", "si_unit": "$1$", "validation": "non-negative finite", "meaning": "Gilbert damping", "backend_support": "FDM/FEM CPU/GPU subject to planner capability", "problem_ir": "materials[].damping"}
++    ]
++  }
++}
+diff --git a/public_docs/site/physics/foundations/conventions-and-units.source-map.json b/public_docs/site/physics/foundations/conventions-and-units.source-map.json
+new file mode 100644
+index 000000000..1f55b5e07
+--- /dev/null
++++ b/public_docs/site/physics/foundations/conventions-and-units.source-map.json
+@@ -0,0 +1,48 @@
++{
++  "document": {
++    "path": "public_docs/site/physics/foundations/conventions-and-units.md",
++    "title": "Conventions and units",
++    "scope": "canonical SI quantities, reduced magnetization, energy-field relation, and field/direct-torque split"
++  },
++  "backend_matrix": [
++    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "FP64 structured-grid oracle."},
++    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "Same SI contract; executed-device parity is separate evidence."},
++    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "Native MFEM operators consume the shared SI contract."},
++    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "Same SI contract; host assembly is not GPU qualification."}
++  ],
++  "sources": [
++    {"id": "units-material", "path": "packages/fullmag-py/src/fullmag/model/structure.py", "symbol": "class Material", "responsibility": "Validates and lowers public material quantities in SI."},
++    {"id": "units-llg", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class LLG", "responsibility": "Validates and lowers the reduced gyromagnetic constant and integrator policy."},
++    {"id": "units-fem-llg", "path": "backends/fem/cpu/mfem/integrators/llg_rhs.cpp", "symbol": "llg_rhs_aos", "responsibility": "Applies the explicit Gilbert field-to-RHS conversion with native FEM units."},
++    {"id": "units-fdm-llg", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "llg_rhs_from_field", "responsibility": "Applies the FDM field-to-RHS conversion."},
++    {"id": "units-fdm-exchange-field", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "exchange_field_add_into_soa", "responsibility": "Computes a representative conservative FDM interaction field."},
++    {"id": "units-fdm-exchange-energy", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "exchange_energy_from_vectors", "responsibility": "Computes the matching representative FDM exchange energy."},
++    {"id": "units-fem-exchange", "path": "backends/fem/cpu/mfem/interactions/exchange_field.cpp", "symbol": "compute_exchange_for_magnetization", "responsibility": "Computes representative native FEM exchange field and energy outputs from one interaction path."}
++  ],
++  "symbols": [
++    {"id": "M", "latex": "$\\mathbf M$", "meaning": "Physical magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
++    {"id": "m", "latex": "$\\mathbf{m}$", "meaning": "Reduced magnetization", "si_unit": "$1$"},
++    {"id": "Ms", "latex": "$M_s$", "meaning": "Saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
++    {"id": "gamma", "latex": "$\\gamma_{\\mu_0}$", "meaning": "Reduced gyromagnetic constant", "si_unit": "$\\mathrm{m\\,(A\\,s)^{-1}}$"},
++    {"id": "gammae", "latex": "$|\\gamma_e|$", "meaning": "Electron gyromagnetic-ratio magnitude", "si_unit": "$\\mathrm{rad\\,(T\\,s)^{-1}}$"},
++    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "Vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
++    {"id": "E", "latex": "$E$", "meaning": "Magnetic energy functional", "si_unit": "$\\mathrm{J}$"},
++    {"id": "Hterm", "latex": "$\\mathbf H_{\\mathrm{term}}$", "meaning": "Conservative field contribution", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
++    {"id": "eta", "latex": "$\\boldsymbol\\eta$", "meaning": "Admissible perturbation", "si_unit": "$1$"},
++    {"id": "Omega", "latex": "$\\Omega_m$", "meaning": "Magnetic domain", "si_unit": "$\\mathrm{m^3}$"},
++    {"id": "dV", "latex": "$\\mathrm dV$", "meaning": "Volume element", "si_unit": "$\\mathrm{m^3}$"}
++  ],
++  "equations": [
++    {"id": "eq-reduced-magnetization", "symbols": ["m", "M", "Ms"], "sources": ["units-material", "units-fem-llg", "units-fdm-llg"]},
++    {"id": "eq-gamma-mu0", "symbols": ["gamma", "mu0", "gammae"], "sources": ["units-llg", "units-fem-llg", "units-fdm-llg"]},
++    {"id": "eq-energy-field-relation", "symbols": ["E", "m", "eta", "mu0", "Omega", "Ms", "Hterm", "dV"], "sources": ["units-fdm-exchange-field", "units-fdm-exchange-energy", "units-fem-exchange"]}
++  ],
++  "public_api": {
++    "parameters": [
++      {"python": "Material.Ms", "type": "float", "default": "required", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "positive finite", "meaning": "saturation magnetization", "backend_support": "FDM/FEM CPU/GPU subject to planner capability", "problem_ir": "materials[].saturation_magnetisation"},
++      {"python": "Material.A", "type": "float", "default": "required", "si_unit": "$\\mathrm{J\\,m^{-1}}$", "validation": "positive finite", "meaning": "exchange stiffness", "backend_support": "FDM/FEM CPU/GPU subject to planner capability", "problem_ir": "materials[].exchange_stiffness"},
++      {"python": "Material.alpha", "type": "float", "default": "required", "si_unit": "$1$", "validation": "non-negative finite", "meaning": "Gilbert damping", "backend_support": "FDM/FEM CPU/GPU subject to planner capability", "problem_ir": "materials[].damping"},
++      {"python": "LLG.gamma", "type": "float", "default": "221100.0", "si_unit": "$\\mathrm{m\\,(A\\,s)^{-1}}$", "validation": "positive finite", "meaning": "reduced gyromagnetic constant", "backend_support": "FDM/FEM CPU/GPU subject to planner capability", "problem_ir": "study.dynamics.gyromagnetic_ratio"}
++    ]
++  }
++}
+diff --git a/public_docs/site/physics/foundations/effective-field.source-map.json b/public_docs/site/physics/foundations/effective-field.source-map.json
+new file mode 100644
+index 000000000..64f5911d9
+--- /dev/null
++++ b/public_docs/site/physics/foundations/effective-field.source-map.json
+@@ -0,0 +1,44 @@
++{
++  "document": {
++    "path": "public_docs/site/physics/foundations/effective-field.md",
++    "title": "Effective field",
++    "scope": "conservative, prescribed, and stochastic field-form composition plus direct-torque separation"
++  },
++  "backend_matrix": [
++    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "Deterministic host composition over active cells."},
++    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "Device composition exists for enabled terms; parity is separate evidence."},
++    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "Native MFEM interaction fields compose on resolved magnetic support."},
++    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "Same physical sum with explicit residency and transfer provenance."}
++  ],
++  "sources": [
++    {"id": "heff-fdm", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "effective_field_into_soa_ws", "responsibility": "Composes enabled FDM field contributions."},
++    {"id": "heff-fem", "path": "backends/fem/cpu/mfem/interactions/effective_field.cpp", "symbol": "compute_effective_fields_for_magnetization", "responsibility": "Composes enabled native FEM field contributions."},
++    {"id": "heff-direct-torque", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "llg_rhs_from_fields_with_direct_torques_into", "responsibility": "Keeps direct RHS torques separate from the field buffer."},
++    {"id": "heff-thermal", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "thermal_field_add_into_soa", "responsibility": "Samples Brown noise as a stochastic field in A/m and adds it to the effective-field buffer."},
++    {"id": "heff-output", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class FieldAutosave", "responsibility": "Validates and lowers public field materialization requests."}
++  ],
++  "symbols": [
++    {"id": "Heff", "latex": "$\\mathbf{H}_{\\mathrm{eff}}$", "meaning": "total effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
++    {"id": "Hcomponents", "latex": "$\\mathbf H_{\\mathrm{ex}},\\mathbf H_{\\mathrm d},\\mathbf H_{\\mathrm{ext}},\\mathbf H_{\\mathrm{ani}},\\mathbf H_{\\mathrm{DMI}},\\mathbf H_{\\mathrm{oe}},\\mathbf H_{\\mathrm{mel}}$", "meaning": "deterministic field-form contributions shown in the composition equation", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
++    {"id": "Hth", "latex": "$\\mathbf H_{\\mathrm{th}}$", "meaning": "stochastic Brown thermal field; no standalone deterministic energy", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
++    {"id": "Hterm", "latex": "$\\mathbf H_{\\mathrm{term}}$", "meaning": "conservative interaction field contribution", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
++    {"id": "Eterm", "latex": "$E_{\\mathrm{term}}$", "meaning": "conservative interaction energy functional", "si_unit": "$\\mathrm J$"},
++    {"id": "tau", "latex": "$\\boldsymbol{\\tau}_{\\mathrm{direct}}$", "meaning": "total non-field RHS torque", "si_unit": "$\\mathrm{s^{-1}}$"},
++    {"id": "tauComponents", "latex": "$\\boldsymbol\\tau_{\\mathrm{Slonc}},\\boldsymbol\\tau_{\\mathrm{ZL}},\\boldsymbol\\tau_{\\mathrm{SOT}}$", "meaning": "direct-torque components shown in the source sum", "si_unit": "$\\mathrm{s^{-1}}$"},
++    {"id": "t", "latex": "$t$", "meaning": "physical time", "si_unit": "$\\mathrm s$"},
++    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
++    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
++    {"id": "m", "latex": "$\\mathbf{m}$", "meaning": "reduced magnetization", "si_unit": "$1$"}
++  ],
++  "equations": [
++    {"id": "eq-heff-composition", "symbols": ["Heff", "Hcomponents", "Hth"], "sources": ["heff-fdm", "heff-fem", "heff-thermal"]},
++    {"id": "eq-heff-variational", "symbols": ["Hterm", "mu0", "Ms", "Eterm", "m"], "sources": ["heff-fdm", "heff-fem"]},
++    {"id": "eq-direct-torque-rhs", "symbols": ["m", "t", "Heff", "tau"], "sources": ["heff-direct-torque"]},
++    {"id": "eq-tau-direct-sum", "symbols": ["tau", "tauComponents"], "sources": ["heff-direct-torque"]}
++  ],
++  "public_api": {
++    "parameters": [
++      {"python": "FieldAutosave.quantity", "type": "str", "default": "required", "si_unit": "$1$", "validation": "known field identifier; exactly one cadence is required", "meaning": "field to materialize", "backend_support": "lane-dependent; planner rejects unavailable fields", "problem_ir": "study.stages[].autosave.fields[].quantity"}
++    ]
++  }
++}
+diff --git a/public_docs/site/physics/foundations/llg-equation.source-map.json b/public_docs/site/physics/foundations/llg-equation.source-map.json
+new file mode 100644
+index 000000000..74592fccd
+--- /dev/null
++++ b/public_docs/site/physics/foundations/llg-equation.source-map.json
+@@ -0,0 +1,34 @@
++{
++  "document": {"path": "public_docs/site/physics/foundations/llg-equation.md", "title": "Landau–Lifshitz–Gilbert equation", "scope": "explicit Gilbert RHS, pure-damping mode, normalization, and integrator boundaries"},
++  "backend_matrix": [
++    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "FP64 explicit-step oracle and norm/error contracts."},
++    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "Explicit CUDA paths are integrator- and device-qualified separately."},
++    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "Native MFEM explicit RHS and tableaus."},
++    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "Same native contract; executed-device evidence remains required."}
++  ],
++  "sources": [
++    {"id": "llg-python", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class LLG", "responsibility": "Validates and lowers the public dynamics policy."},
++    {"id": "llg-fdm", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "llg_rhs_from_field", "responsibility": "FDM explicit Gilbert field-to-RHS conversion."},
++    {"id": "llg-fem", "path": "backends/fem/cpu/mfem/integrators/llg_rhs.cpp", "symbol": "llg_rhs_aos", "responsibility": "Native FEM explicit Gilbert RHS, direct torque, and precession flag."},
++    {"id": "llg-tableau", "path": "backends/fem/cpu/mfem/integrators/rk_explicit.cpp", "symbol": "tableau_for_integrator", "responsibility": "Fail-closed native Heun/RK4/RK23/RK45 tableau dispatch."}
++  ],
++  "symbols": [
++    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
++    {"id": "Heff", "latex": "$\\mathbf H_{\\mathrm{eff}}$", "meaning": "effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
++    {"id": "alpha", "latex": "$\\alpha$", "meaning": "Gilbert damping", "si_unit": "$1$"},
++    {"id": "gamma", "latex": "$\\gamma_{\\mu_0}$", "meaning": "reduced gyromagnetic constant", "si_unit": "$\\mathrm{m\\,(A\\,s)^{-1}}$"},
++    {"id": "tau", "latex": "$\\boldsymbol\\tau_{\\mathrm{direct}}$", "meaning": "direct RHS torque", "si_unit": "$\\mathrm{s^{-1}}$"},
++    {"id": "t", "latex": "$t$", "meaning": "physical time", "si_unit": "$\\mathrm{s}$"}
++  ],
++  "equations": [
++    {"id": "eq-llg-full", "symbols": ["m", "Heff", "alpha", "gamma", "tau", "t"], "sources": ["llg-fdm", "llg-fem"]},
++    {"id": "eq-llg-relaxation", "symbols": ["m", "Heff", "alpha", "gamma", "tau", "t"], "sources": ["llg-fdm", "llg-fem"]},
++    {"id": "eq-llg-normalization", "symbols": ["m"], "sources": ["llg-fdm", "llg-fem"]}
++  ],
++  "public_api": {"parameters": [
++    {"python": "LLG.gamma", "type": "float", "default": "221100.0", "si_unit": "$\\mathrm{m\\,(A\\,s)^{-1}}$", "validation": "positive finite", "meaning": "reduced gyromagnetic constant", "backend_support": "FDM/FEM CPU/GPU subject to planner capability", "problem_ir": "study.dynamics.gyromagnetic_ratio"},
++    {"python": "LLG.integrator", "type": "str", "default": "\"auto\"", "si_unit": "$1$", "validation": "supported canonical name or alias", "meaning": "requested time integrator", "backend_support": "lane-dependent; planner checks combinations", "problem_ir": "study.dynamics.integrator"},
++    {"python": "LLG.fixed_timestep", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{s}$", "validation": "positive and mutually exclusive with adaptive stepping", "meaning": "fixed physical timestep", "backend_support": "lane-dependent", "problem_ir": "study.dynamics.fixed_timestep"},
++    {"python": "LLG.adaptive_timestep", "type": "AdaptiveTimestep | None", "default": "None", "si_unit": "$1$", "validation": "requires an embedded-error integrator", "meaning": "adaptive attempt policy", "backend_support": "lane-dependent", "problem_ir": "study.dynamics.adaptive_timestep"}
++  ]}
++}
+diff --git a/public_docs/site/physics/foundations/micromagnetic-energy.source-map.json b/public_docs/site/physics/foundations/micromagnetic-energy.source-map.json
+new file mode 100644
+index 000000000..a2f20a0f2
+--- /dev/null
++++ b/public_docs/site/physics/foundations/micromagnetic-energy.source-map.json
+@@ -0,0 +1,40 @@
++{
++  "document": {"path": "public_docs/site/physics/foundations/micromagnetic-energy.md", "title": "Micromagnetic energy", "scope": "total conservative energy, variational field relation, stochastic-field/direct-torque exclusion, magnetic-support reduction, and equilibrium"},
++  "backend_matrix": [
++    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "Active-cell volume-weighted reference reductions."},
++    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "Enabled device reductions; executed-device parity remains separate."},
++    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "Magnetic-support quadrature and lumped reductions."},
++    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "Same energy convention with explicit reduction and residency provenance."}
++  ],
++  "sources": [
++    {"id": "energy-fdm", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "total_energy_from_vectors_ws", "responsibility": "Computes the enabled active-cell conservative energy sum."},
++    {"id": "energy-fem", "path": "backends/fem/cpu/mfem/runtime/step_metrics.cpp", "symbol": "fill_common_step_metrics", "responsibility": "Aggregates enabled native FEM interaction energies."},
++    {"id": "energy-output", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class TableAutosave", "responsibility": "Validates and lowers public scalar quantity requests."},
++    {"id": "energy-registry", "path": "crates/fullmag-quantities/src/registry.rs", "symbol": "evaluate_by_name", "responsibility": "Resolves canonical scalar quantity identifiers."},
++    {"id": "energy-thermal", "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs", "symbol": "thermal_field_add_into_soa", "responsibility": "Adds Brown noise as a stochastic effective field without a standalone deterministic energy reduction."}
++  ],
++  "symbols": [
++    {"id": "Etot", "latex": "$E_{\\mathrm{tot}}$", "meaning": "total micromagnetic energy", "si_unit": "$\\mathrm{J}$"},
++    {"id": "Ecomponents", "latex": "$E_{\\mathrm{ex}},E_{\\mathrm d},E_{\\mathrm Z},E_{\\mathrm{ani}},E_{\\mathrm{DMI}},E_{\\mathrm{mel}},E_{\\mathrm{oe}}$", "meaning": "energy contributions shown in the total-energy sum", "si_unit": "$\\mathrm J$"},
++    {"id": "Eterm", "latex": "$E_{\\mathrm{term}}$", "meaning": "individual interaction energy", "si_unit": "$\\mathrm{J}$"},
++    {"id": "Heff", "latex": "$\\mathbf{H}_{\\mathrm{eff}}$", "meaning": "total effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
++    {"id": "Hterm", "latex": "$\\mathbf{H}_{\\mathrm{term}}$", "meaning": "conservative interaction effective-field contribution", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
++    {"id": "Hth", "latex": "$\\mathbf{H}_{\\mathrm{th}}$", "meaning": "stochastic Brown field excluded from deterministic total energy", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
++    {"id": "tau", "latex": "$\\boldsymbol\\tau_{\\mathrm{direct}}$", "meaning": "non-field STT/SOT RHS contribution", "si_unit": "$\\mathrm{s^{-1}}$"},
++    {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
++    {"id": "eta", "latex": "$\\boldsymbol{\\eta}$", "meaning": "admissible magnetization variation", "si_unit": "$1$"},
++    {"id": "Omega", "latex": "$\\Omega_m$", "meaning": "magnetic domain", "si_unit": "$\\mathrm{m^3}$"},
++    {"id": "dV", "latex": "$\\mathrm dV$", "meaning": "magnetic-domain volume element", "si_unit": "$\\mathrm{m^3}$"},
++    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
++    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"}
++  ],
++  "equations": [
++    {"id": "eq-total-energy", "symbols": ["Etot", "m", "Ecomponents"], "sources": ["energy-fdm", "energy-fem"]},
++    {"id": "eq-variational-principle", "symbols": ["Hterm", "mu0", "Ms", "Eterm", "m"], "sources": ["energy-fdm", "energy-fem"]},
++    {"id": "eq-directional-derivative", "symbols": ["Eterm", "m", "eta", "mu0", "Omega", "Ms", "Hterm", "dV"], "sources": ["energy-fdm", "energy-fem"]},
++    {"id": "eq-equilibrium-condition", "symbols": ["m", "Heff", "Omega"], "sources": ["energy-fdm", "energy-fem"]}
++  ],
++  "public_api": {"parameters": [
++    {"python": "TableAutosave.quantities", "type": "Sequence[str] | None", "default": "default registry", "si_unit": "$1$", "validation": "non-empty supported scalar identifiers", "meaning": "scalar columns including `e_total`", "backend_support": "lane-dependent; planner checks materialization", "problem_ir": "study.stages[].autosave.table.quantities"}
++  ]}
++}
+diff --git a/public_docs/site/physics/geometry-and-materials.source-map.json b/public_docs/site/physics/geometry-and-materials.source-map.json
+new file mode 100644
+index 000000000..d59b31de5
+--- /dev/null
++++ b/public_docs/site/physics/geometry-and-materials.source-map.json
+@@ -0,0 +1,48 @@
++{
++  "document": {"path": "public_docs/site/physics/geometry-and-materials.md", "title": "Geometry, regions, materials and meshes", "scope": "non-terminal overview of authored physical-domain semantics plus the exact worked-example mapping"},
++  "backend_matrix": [
++    {"solver": "FDM", "device": "CPU", "status": "reference", "reason": "Structured cells, masks, and grid certificate."},
++    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "Same grid contract; CUDA availability and parity remain explicit."},
++    {"solver": "FEM", "device": "CPU", "status": "implemented", "reason": "Typed linear mesh, markers, shared domains, persistence, and import paths."},
++    {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "Same typed mesh contract; runtime/device qualification remains separate."}
++  ],
++  "sources": [
++    {"id": "geometry-material", "path": "packages/fullmag-py/src/fullmag/model/structure.py", "symbol": "class Material", "responsibility": "Validates and lowers SI material semantics."},
++    {"id": "geometry-magnet", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class MagnetHandle", "responsibility": "Owns magnetic object identity, material aliases, and initializer assignment."},
++    {"id": "geometry-universe", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyUniverseHandle", "responsibility": "Captures domain extent and airbox mesh intent."},
++    {"id": "geometry-mesh-defaults", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyObjectsMeshDefaultsHandle", "responsibility": "Captures shared magnetic-object mesh defaults."},
++    {"id": "geometry-object-mesh", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class GeometryMeshHandle", "responsibility": "Captures per-object mesh intent."},
++    {"id": "geometry-box", "path": "packages/fullmag-py/src/fullmag/model/geometry.py", "symbol": "class Box", "responsibility": "Validates and lowers the worked axis-aligned box primitive."},
++    {"id": "geometry-initializer", "path": "packages/fullmag-py/src/fullmag/init/magnetization.py", "symbol": "class UniformMagnetization", "responsibility": "Validates and lowers the worked reduced-magnetization initializer."},
++    {"id": "geometry-study-mesh", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyMeshHandle", "responsibility": "Owns mesh persistence and interchange facade."},
++    {"id": "geometry-assets", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "build_geometry_assets_for_request", "responsibility": "Materializes canonical FDM/FEM geometry assets."},
++    {"id": "geometry-mesh-data", "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py", "symbol": "class MeshData", "responsibility": "Owns typed FEM topology, markers, fingerprints, and strict validation."}
++  ],
++  "symbols": [
++    {"id": "Omega", "latex": "$\\Omega_m$", "meaning": "resolved magnetic domain", "si_unit": "$\\mathrm{m^3}$"},
++    {"id": "Omegai", "latex": "$\\Omega_i$", "meaning": "resolved magnetic region $i$", "si_unit": "$\\mathrm{m^3}$"},
++    {"id": "Nr", "latex": "$N_r$", "meaning": "number of resolved magnetic regions", "si_unit": "$1$"},
++    {"id": "xk", "latex": "$\\mathbf x_k$", "meaning": "coordinate of node or cell location $k$", "si_unit": "$\\mathrm{m}$"},
++    {"id": "marker", "latex": "$m_e$", "meaning": "canonical region marker of element or cell $e$", "si_unit": "$1$"}
++  ],
++  "equations": [
++    {"id": "eq-geometry-region-partition", "symbols": ["Omega", "Omegai", "Nr"], "sources": ["geometry-assets", "geometry-mesh-data"]}
++  ],
++  "public_api": {"parameters": [
++    {"python": "study.objects.mesh.defaults(maximum_element_size=...)", "type": "float | str | None", "default": "None", "si_unit": "$\\mathrm m$", "validation": "positive finite resolved size; cannot be mixed with FDM `cell_size`", "meaning": "default magnetic-object FEM size", "backend_support": "FEM authoring; planner/generator checks realization", "problem_ir": "problem_meta.runtime_metadata.mesh_workflow.default_mesh.maximum_element_size"},
++    {"python": "study.universe(mode=...)", "type": "`\"auto\" | \"manual\" | None`", "default": "`\"auto\"`", "si_unit": "$1$", "validation": "manual mode requires explicit positive `size`", "meaning": "domain extent policy", "backend_support": "FDM/FEM authoring; realization is lane-dependent", "problem_ir": "problem_meta.runtime_metadata.study_universe.mode"},
++    {"python": "study.universe(padding=...)", "type": "Sequence[float] | None", "default": "(0, 0, 0)", "si_unit": "$\\mathrm m$", "validation": "three finite non-negative components", "meaning": "padding around auto-resolved object bounds", "backend_support": "FDM/FEM domain realization", "problem_ir": "problem_meta.runtime_metadata.study_universe.padding"},
++    {"python": "study.universe.mesh(maximum_element_size=...)", "type": "float | None", "default": "None", "si_unit": "$\\mathrm m$", "validation": "positive finite; mutually exclusive with universe `cell_size`", "meaning": "FEM airbox/domain target size", "backend_support": "FEM authoring; generator checks topology and grading", "problem_ir": "problem_meta.runtime_metadata.study_universe.airbox_hmax"},
++    {"python": "fm.Box(x, y, z)", "type": "three `float` values", "default": "required", "si_unit": "$\\mathrm m$", "validation": "positive finite extents", "meaning": "axis-aligned physical box size", "backend_support": "FDM/FEM geometry authoring", "problem_ir": "geometry.entries[].size"},
++    {"python": "study.geometry(shape=...)", "type": "geometry object", "default": "required", "si_unit": "$1$", "validation": "supported geometry with unique lowered identity", "meaning": "magnetic object's physical shape", "backend_support": "FDM/FEM subject to geometry realization", "problem_ir": "`geometry.entries[]` and `magnets[].region`"},
++    {"python": "study.geometry(name=...)", "type": "str", "default": "`\"body\"`", "si_unit": "$1$", "validation": "non-empty and unique in the study", "meaning": "user-facing magnetic object name", "backend_support": "all authoring lanes", "problem_ir": "`magnets[].name` and `regions[].name`"},
++    {"python": "film.Ms", "type": "float", "default": "required", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "positive finite", "meaning": "saturation magnetization", "backend_support": "FDM/FEM CPU/GPU subject to planner capability", "problem_ir": "materials[].saturation_magnetisation"},
++    {"python": "film.Aex", "type": "float", "default": "required", "si_unit": "$\\mathrm{J\\,m^{-1}}$", "validation": "positive finite", "meaning": "exchange stiffness", "backend_support": "FDM/FEM CPU/GPU subject to planner capability", "problem_ir": "materials[].exchange_stiffness"},
++    {"python": "film.alpha", "type": "float", "default": "required", "si_unit": "$1$", "validation": "finite and non-negative", "meaning": "Gilbert damping", "backend_support": "FDM/FEM CPU/GPU subject to planner capability", "problem_ir": "materials[].damping"},
++    {"python": "film.m", "type": "magnetization initializer", "default": "required", "si_unit": "$1$", "validation": "valid initializer with finite vector data", "meaning": "initial reduced magnetization", "backend_support": "FDM/FEM CPU/GPU subject to initializer support", "problem_ir": "magnets[].initial_magnetization"},
++    {"python": "film.mesh.thin_film(minimum_element_size=...)", "type": "float | None", "default": "None", "si_unit": "$\\mathrm m$", "validation": "positive and no greater than maximum size", "meaning": "minimum object mesh size", "backend_support": "FEM authoring; generator checks realization", "problem_ir": "problem_meta.runtime_metadata.mesh_workflow.per_geometry[].minimum_element_size"},
++    {"python": "film.mesh.thin_film(maximum_element_size=...)", "type": "float | str | None", "default": "inherited/`None`", "si_unit": "$\\mathrm m$", "validation": "positive finite resolved size", "meaning": "maximum object mesh size", "backend_support": "FEM authoring; generator checks realization", "problem_ir": "problem_meta.runtime_metadata.mesh_workflow.per_geometry[].maximum_element_size"},
++    {"python": "film.mesh.thin_film(layers=...)", "type": "int", "default": "1", "si_unit": "$1$", "validation": "integer at least one", "meaning": "through-thickness element count", "backend_support": "FEM thin-film generators", "problem_ir": "problem_meta.runtime_metadata.mesh_workflow.per_geometry[].through_thickness_elements"},
++    {"python": "film.mesh.thin_film(topology=...)", "type": "`\"tetrahedral\" | \"prismatic\" | None`", "default": "None", "si_unit": "$1$", "validation": "supported topology; prismatic mode requires compatible order/transition", "meaning": "requested element topology", "backend_support": "FEM; planner/generator rejects unsupported combinations", "problem_ir": "problem_meta.runtime_metadata.mesh_workflow.per_geometry[].topology"}
++  ]}
++}

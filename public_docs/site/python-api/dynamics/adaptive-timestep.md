@@ -47,7 +47,8 @@ At least one of `atol`/`rtol` must be positive; step bounds must satisfy
 | `AdaptiveTimestep.max_spin_rotation` | `float \| None` | `None` | Positive | Spin-rotation cap | `adaptive_timestep.max_spin_rotation` |
 | `AdaptiveTimestep.norm_tolerance` | `float \| None` | `None` | Positive | Norm tolerance | `adaptive_timestep.norm_tolerance` |
 
-A `max_error` convenience mode sets `rtol=0` and records `tolerance_mode="max_error"`.
+The stage builder's `max_err=...` convenience form (with deprecated alias `max_error=...`) sets
+`atol=max_err`, `rtol=0`, and records `tolerance_mode="max_error"`.
 
 ### Complete stage-first example
 
@@ -113,7 +114,10 @@ Ownership tests compare this inventory with live signatures.
 (python-api-dynamics-adaptive-timestep-limitations)=
 <!-- (limitations)= -->
 ## Limitations
-Adaptive stepping requires an adaptive integrator; fixed-step schemes reject the policy.
+The Python model accepts adaptive control for `rk23`, `rk45`, and `coupled_imex_ark2`. The current
+canonical IR validator accepts adaptive control only for `rk23`, `rk45`, or `auto`; therefore an
+adaptive `coupled_imex_ark2` request is representable in Python but does not currently pass the
+end-to-end IR validation boundary. Fixed-step schemes reject the policy.
 
 (python-api-dynamics-adaptive-timestep-scientific-bibliography)=
 <!-- (scientific-bibliography)= -->

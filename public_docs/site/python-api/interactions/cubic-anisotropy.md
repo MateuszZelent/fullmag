@@ -57,15 +57,18 @@ study.stages.add_relax(stage_id="relax", algorithm="projected_gradient_bb", max_
 ```
 
 (api-cubic-anisotropy-validation)=
-## Parameters and validation
+## Parameters and constructor validation
 
-| Parameter | SI unit | Required check |
-|---|---:|---|
-| `kc1`, `kc2`, `kc3` | $\mathrm{J\,m^{-3}}$ | finite |
-| `axis1`, `axis2` | $1$ | finite, non-zero, non-collinear; build an orthonormal frame by a declared rule |
+| Parameter | Default | SI unit | Constructor check |
+|---|---|---:|---|
+| `kc1` | required | $\mathrm{J\,m^{-3}}$ | `float()` conversion |
+| `kc2`, `kc3` | `0.0` | $\mathrm{J\,m^{-3}}$ | `float()` conversion |
+| `axis1` | `(1,0,0)` | $1$ | exactly three float-convertible values |
+| `axis2` | `(0,1,0)` | $1$ | exactly three float-convertible values |
 
-At the audited revision, compatibility constructors mostly convert values; material cubic
-constants also lack the same explicit finite validation used by `Ku1/Ku2`. Harden both routes.
+The constructor does not currently reject non-finite constants, zero axes, or collinear axes.
+Downstream semantic validation must reject those inputs before execution; constructor success is
+not evidence that an anisotropy frame is executable.
 
 (api-cubic-anisotropy-problem-ir)=
 ## Lowering

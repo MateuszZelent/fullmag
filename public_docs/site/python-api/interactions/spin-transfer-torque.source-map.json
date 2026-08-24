@@ -2,7 +2,7 @@
   "document": {
     "path": "public_docs/site/python-api/interactions/spin-transfer-torque.md",
     "title": "Spin-Transfer Torque Python API",
-    "interaction": "spin transfer torque"
+    "interaction": "spin-transfer-torque"
   },
   "backend_matrix": [
     {
@@ -36,6 +36,12 @@
       "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
       "symbol": "class SlonczewskiSTT",
       "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+    },
+    {
+      "id": "zhang-li-owner",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
+      "symbol": "class ZhangLiSTT",
+      "responsibility": "Own the public CIP torque constructor and canonical module lowering."
     }
   ],
   "symbols": [],

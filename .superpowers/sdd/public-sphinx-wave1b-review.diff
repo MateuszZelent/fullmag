@@ -1,0 +1,839 @@
+# Review package: Fala 1B working-tree changes (final remediation)
+
+## Files changed
+- public_docs/site/architecture/*
+- public_docs/site/backend/index.md
+- public_docs/site/frontend/*
+- public_docs/site/validation/*
+
+## Diff
+
+diff --git a/public_docs/site/architecture/provenance.md b/public_docs/site/architecture/provenance.md
+index 26792f3f7..8cbd37fbe 100644
+--- a/public_docs/site/architecture/provenance.md
++++ b/public_docs/site/architecture/provenance.md
+@@ -1,17 +1,17 @@
+ ---
+ title: Provenance
+ status: partial
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
+-source_of_truth: docs/specs/provenance-contract.md
++source_of_truth: docs/specs/resource-first-control-room-api-v2.md, docs/specs/runtime-distribution-and-managed-backends-v1.md
+ ---
+ 
+ (public-docs-architecture-provenance)=
+ # Provenance
+ 
+ Provenance keeps requested intent separate from resolved execution and makes every meaningful
+ action reproducible.
+ 
+ ## Recorded identities
+ 
+diff --git a/public_docs/site/architecture/ui-architecture.md b/public_docs/site/architecture/ui-architecture.md
+index 72bc6be6b..dd8b5c46d 100644
+--- a/public_docs/site/architecture/ui-architecture.md
++++ b/public_docs/site/architecture/ui-architecture.md
+@@ -1,123 +1,127 @@
+ ---
+ title: Control Room Architecture
+ status: implemented
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
++source_of_truth: docs/specs/frontend-v2/01-module-kernel-architecture.md, docs/specs/resource-first-control-room-api-v2.md, apps/control-room/src/modules/inspector/manifest.ts
+ ---
+ 
+ (public-docs-architecture-ui-architecture)=
+ # Control Room Architecture
+ 
+-The **FullMag Control Room** (`apps/control-room`) is built as a modular, resource-first web application designed for interactive micromagnetic problem authoring, high-throughput WebGL visualization, and live runtime observation.
++The **FullMag Control Room** (`apps/control-room`) is a modular, resource-first web application for
++interactive micromagnetic problem authoring, WebGL visualization, and live runtime observation.
++It uses the generated OpenAPI v2 transport, one handwritten `ControlRoomApi` facade, resource hooks,
++and a WebSocket invalidation stream. Heavy mesh and field payloads remain on versioned HTTP binary
++resources; WebSocket messages announce lifecycle changes and resource invalidation rather than
++carrying an alternative state model.
+ 
+-It bridges browser interaction with FullMag's underlying Rust/C++ solvers through OpenAPI v2 contracts, canonical `ProblemIR` representations, and real-time binary transport streams.
+-
+----
+-
+-## Architectural Principles
++## Architectural principles
+ 
+ ```text
+-graph TD
+-    A["User Interactions (Ribbon / Explorer / Viewport / Inspector)"] --> B["Module Kernel & Registry"]
+-    B --> C["Zustand State Stores & Draft Isolation"]
+-    C --> D["OpenAPI v2 Client & SSE/WS Event Pipeline"]
+-    D --> E["FullMag Rust/C++ Backend Session Engine"]
+-    E --> F["Canonical ProblemIR Lowering & Validation"]
+-    F --> G["FDM & FEM CPU/GPU Solvers"]
+-    G --> H["Binary Vector Buffers & Realtime Metrics"]
+-    H --> I["Three.js / WebGL 3D Viewport & ECharts"]
++User interaction -> module kernel -> command/API facade -> v2 HTTP resources
++                                           ^                    |
++                                           |                    v
++                                  WebSocket invalidation <- revision change
+ ```
+ 
+-1. **Physical-Model Alignment**: The UI operates on micromagnetic domain concepts (geometry, materials, physical interactions, discretization, and stages) rather than exposing numerical storage details.
+-2. **Modular Kernel Architecture**: Feature areas are self-contained modules (`src/modules/*`) registered dynamically with the core shell.
+-3. **Explicit Draft Isolation**: Inspector property edits remain in an isolated draft state until committed by the user, preventing partial or corrupt configuration frames from reaching the active solver session.
+-4. **SSR Hydration Consistency**: Client components reading runtime state use `useSyncExternalStore` or hydration gates so the first client render matches the server-rendered state.
+-5. **Token-First Design System**: Styling is governed by central `--fm-*` CSS tokens (Catppuccin Mocha for dark mode, Latte for light mode), Tailwind CSS, and shadcn/ui shared primitives.
+-
+----
++1. **Physical-model alignment**: the UI operates on geometry, materials, interactions,
++   discretization, and stages rather than backend storage layouts.
++2. **One module kernel**: feature areas under `src/modules/*` register with the shell and contribute
++   to shared layout slots. FDM and FEM do not get separate application shells.
++3. **Draft isolation**: Inspector edits remain local until an explicit command applies them.
++4. **SSR hydration consistency**: client components reading external state use server snapshots or
++   explicit hydration gates so the first client render matches SSR.
++5. **Token-first design**: central `--fm-*` tokens, Tailwind utilities, and shared shadcn/ui-style
++   primitives define the visual system.
+ 
+-## Module Kernel & Layout Slots
++## Module kernel and layout slots
+ 
+-The Control Room shell layout is partitioned into flexible **Layout Slots** managed by `src/kernel/modules`:
++The implemented source layout keeps kernel services separate from UI modules:
+ 
+-```
++```text
+ apps/control-room/src/
+-├── kernel/              # Core shell runtime, layout manager, API client, event bus
+-│   ├── api/             # OpenAPI v2 client, generated types, binary codecs
+-│   ├── modules/         # Module registry, manifest resolver, slot contracts
+-│   └── state/           # Central session stores, selection, layout persistence
+-└── modules/             # Self-contained UI feature modules
+-    ├── ribbon/          # Header strip tabs & command groups
+-    ├── explorer/        # Semantic tree model browser
+-    ├── viewport-3d/     # WebGL canvas, Three.js scene, vector field shaders
+-    ├── inspector/       # Property panel, draft editor, unit converters
+-    ├── live-charts/     # ECharts time-series & energy component graphs
+-    ├── status-bar/      # Session state, solver engine, device metrics
+-    └── app-menu/        # Command palette (Ctrl+K) & workspace settings
++|-- kernel/
++|   |-- api/          # generated OpenAPI transport, facade, paths, binary codecs
++|   |-- module/       # registry, manifests, slot contracts
++|   |-- resources/    # revision-aware server-resource cache
++|   |-- selection/    # selected semantic entity
++|   |-- realtime/     # WebSocket invalidation bridge
++|   `-- workspace/    # layout and workspace state
++`-- modules/
++    |-- ribbon/
++    |-- explorer/
++    |-- viewport-3d/
++    |-- inspector/
++    |-- live-charts/
++    |-- status-bar/
++    `-- app-menu/
+ ```
+ 
+-### Module Manifest Contract
+-
+-Every UI module exports a standardized `manifest.ts` defining its identity, contributed layout slots, menu actions, and ribbon buttons:
++Every UI module exports a `manifest.ts` with its identity, lazy component, slots, declared events,
++optional capability gates, and optional command contributions. The implemented Inspector manifest
++is:
+ 
+ ```typescript
+-export const inspectorModuleManifest: ModuleManifest = {
++export const inspectorManifest: ModuleManifest = {
+   id: "inspector",
+-  name: "Inspector Panel",
+-  slots: [
+-    {
+-      slotId: "shell.right",
+-      component: InspectorShell,
+-      priority: 10,
+-    },
+-  ],
+-  commands: [
+-    {
+-      id: "inspector.apply-draft",
+-      label: "Apply Draft Changes",
+-      shortcut: "Ctrl+Enter",
+-    },
+-  ],
++  title: "Inspector",
++  version: "0.1.0",
++  slots: ["panel-right"],
++  component: () => import("./InspectorModule"),
++  contributes: {
++    commands: [
++      {
++        id: "workspace.toggle-right-panel",
++        title: "Toggle Inspector Panel",
++        group: "workspace",
++        category: "Window",
++        scope: "workspace",
++        run: (ctx) => {
++          ctx.layout?.togglePanel("right");
++          return { status: "completed" };
++        },
++      },
++    ],
++  },
++  emits: ["viewport:mesh-size-bin-hovered"],
++  listens: ["workspace:selection-changed"],
+ };
+ ```
+ 
+----
+-
+-## Viewport 3D & WebGL Lifecycle
+-
+-The 3D Viewport (`src/modules/viewport-3d`) renders geometric domains and 3D vector fields ($\mathbf{m}, \mathbf{H}_{\text{eff}}$) using **Three.js** and **React Three Fiber (R3F)**.
+-
+-### Performance & Memory Safeguards
++## Viewport and WebGL lifecycle
+ 
+-- **Instanced Mesh Glyphs**: Vector field arrows and cones are rendered using `THREE.InstancedMesh` with GPU instancing to reduce draw-call overhead for large vector datasets.
+-- **Binary ArrayBuffer Codecs**: Field samples stream directly from the backend over WebSocket/HTTP as unboxed `Float32Array` buffers, bypassing JSON parsing overhead.
+-- **Context Loss Recovery**: WebGL canvas lifecycle events (`webglcontextlost`, `webglcontextrestored`) are monitored so rendering resources can be reconstructed after context restoration.
+-- **Topology Caching**: FEM mesh element topologies and node coordinates are cached separately from per-step vector field data, avoiding redundant GPU geometry re-uploads during time integration.
+-
+----
++The 3D viewport under `src/modules/viewport-3d` renders geometry, meshes, and vector fields with
++Three.js and React Three Fiber. Its lifecycle contract includes bounded render work, explicit
++resource disposal, context-loss handling, and separation of topology uploads from changing field
++values. Field and mesh samples are fetched from versioned HTTP binary resources and decoded into
++typed arrays; they are not streamed as authoritative state over the event channel.
+ 
+-## State Management & Invalidation Pipeline
++## State and invalidation
+ 
+-Workspace state is maintained across three distinct tiers:
++Control Room state has three distinct ownership classes:
+ 
+-1. **Selection & Layout Store**: Tracks selected tree node IDs, panel visibility, ribbon tab index, and visual profile settings.
+-2. **Draft Property Store**: Holds transient uncommitted user edits in the Inspector before explicit application.
+-3. **Session & Runtime Store**: Synchronizes with the active backend session (`/v2/sessions/current/*`), listening to real-time SSE event channels for stage completions, metric updates, and field invalidations.
++1. **Selection and workspace state** tracks selected semantic IDs, layout, and presentation choices.
++2. **Inspector drafts** hold transient uncommitted edits until an explicit command applies them.
++3. **Server resources** are owned by revision-aware resource hooks and caches. Thin session status
++   advertises revisions; WebSocket events invalidate affected keys, and hooks refetch authoritative
++   HTTP resources.
+ 
++```text
++User input -> Draft -> Command -> HTTP resource revision -> WebSocket invalidation -> Refetch -> Redraw
+ ```
+-User Input ──> Draft Store ──(Apply Draft)──> Session API ──> SSE Event ──> Viewport Invalidated ──> GPU Redraw
+-```
+-
+----
+ 
+-## Technical Specifications
++## Implemented stack
+ 
+-| Subsystem | Stack / Technology | Key Files |
++| Subsystem | Stack / technology | Source area |
+ |---|---|---|
+-| Framework | Next.js 16 (React 19) | `apps/control-room/package.json` |
+-| 3D Graphics | Three.js / @react-three/fiber | `apps/control-room/src/modules/viewport-3d/` |
+-| 2D Charting | ECharts / Recharts | `apps/control-room/src/modules/live-charts/` |
+-| State | Zustand / `useSyncExternalStore` | `apps/control-room/src/kernel/state/` |
+-| Transport | OpenAPI v2 (`openapi-fetch`), WebSocket, SSE | `apps/control-room/src/kernel/api/` |
+-| Styling | CSS Custom Properties (`--fm-*`), Tailwind | `apps/control-room/src/design/styles/` |
++| Framework | Next.js 16, React 19 | `apps/control-room/package.json` |
++| 3D graphics | Three.js, React Three Fiber | `apps/control-room/src/modules/viewport-3d/` |
++| 2D charting | ECharts and chart modules | `apps/control-room/src/modules/live-charts/` |
++| State | Zustand, resource hooks, `useSyncExternalStore` | `apps/control-room/src/kernel/resources/`, `selection/`, `workspace/` |
++| Transport | OpenAPI v2 (`openapi-fetch`) and WebSocket invalidation | `apps/control-room/src/kernel/api/`, `realtime/` |
++| Styling | `--fm-*` CSS tokens, Tailwind, shared primitives | `apps/control-room/src/design/styles/` |
++
++The architecture described above is implemented in the current tree. Broader frontend lifecycle
++and cutover qualification remain separate target gates and are not implied by this page status.
+diff --git a/public_docs/site/backend/index.md b/public_docs/site/backend/index.md
+index 1e2f232d8..0871776b7 100644
+--- a/public_docs/site/backend/index.md
++++ b/public_docs/site/backend/index.md
+@@ -1,32 +1,39 @@
+ ---
+ title: Backend
+ status: implemented
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
++source_of_truth: docs/architecture/backend-golden-masterplan.md
+ ---
+ 
+ (public-docs-backend-root)=
+ # Backend
+ 
+ The Backend branch owns physical equations, numerical realization, data flow, runtime contracts, and
+ scientific evidence. It answers **what FullMag executes**, not how a UI widget is arranged or which
+ Python spelling a user types.
+ 
+ The branch is divided into:
+ 
+ - architecture and runtime boundaries;
+ - physics and interaction definitions;
+ - meshing and spatial discretization;
+ - numerical solvers and stage algorithms.
+ 
++Backend authority is explicit: production FDM implementations live under `backends/fdm`, production
++FEM implementations under `backends/fem`, and the Rust CPU/reference path remains the trusted oracle.
++Runner and session code orchestrate those lanes; they do not own a second copy of production physics.
++Source presence, successful compilation, executable runtime support, and scientific qualification are
++separate evidence levels.
++
+ Python authoring is documented separately under {doc}`../python-api/index`; Control Room behavior
+ under {doc}`../frontend/index`.
+ 
+ ```{toctree}
+ :maxdepth: 4
+ 
+ ../architecture/index
+ ../physics/index
+ ../numerical-methods/meshing/index
+ ../numerical-methods/index
+diff --git a/public_docs/site/frontend/control-room/index.md b/public_docs/site/frontend/control-room/index.md
+index 47184fd50..cce695259 100644
+--- a/public_docs/site/frontend/control-room/index.md
++++ b/public_docs/site/frontend/control-room/index.md
+@@ -1,16 +1,17 @@
+ ---
+ title: Control Room
+ status: implemented
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
++source_of_truth: docs/specs/frontend-v2/01-module-kernel-architecture.md, docs/specs/resource-first-control-room-api-v2.md
+ ---
+ 
+ (public-docs-frontend-control-room-root)=
+ # Control Room
+ 
+ The Control Room is the interactive authoring and inspection client. Its core rule is that every
+ write is explicit: form edits create a draft, **Apply** commits canonical authored policy, and a
+ separate build or run command materializes backend resources.
+ 
+ ## Workspace ownership
+diff --git a/public_docs/site/frontend/index.md b/public_docs/site/frontend/index.md
+index d2010a588..8dee8e160 100644
+--- a/public_docs/site/frontend/index.md
++++ b/public_docs/site/frontend/index.md
+@@ -1,16 +1,17 @@
+ ---
+ title: Frontend
+ status: implemented
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
++source_of_truth: docs/specs/frontend-v2/01-module-kernel-architecture.md, docs/specs/resource-first-control-room-api-v2.md
+ ---
+ 
+ (public-docs-frontend-root)=
+ # Frontend
+ 
+ The Frontend branch documents the browser Control Room as a client of the canonical FullMag
+ resources and commands. It does not redefine solver physics or claim that a displayed preview is the
+ solver mesh.
+ 
+ Use this branch for:
+diff --git a/public_docs/site/frontend/meshing/airbox-mesh.md b/public_docs/site/frontend/meshing/airbox-mesh.md
+index 74131eb68..a67ccff19 100644
+--- a/public_docs/site/frontend/meshing/airbox-mesh.md
++++ b/public_docs/site/frontend/meshing/airbox-mesh.md
+@@ -1,16 +1,17 @@
+ ---
+ title: FEM Airbox Mesh Panel
+ status: implemented
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
++source_of_truth: apps/control-room/src/modules/inspector/panels/airbox/AirboxMeshParametersPanel.tsx
+ ---
+ 
+ (public-docs-frontend-meshing-airbox-mesh)=
+ # FEM Airbox Mesh Panel
+ 
+ The airbox panel edits the universe-owned exterior geometry and air-mesh policy. Its typed draft is
+ defined in `airboxMeshPolicyDraft.ts`; the UI is implemented by
+ `AirboxMeshParametersPanel.tsx`.
+ 
+ ## Canonical controls
+diff --git a/public_docs/site/frontend/meshing/build-lifecycle.md b/public_docs/site/frontend/meshing/build-lifecycle.md
+index ee1287a99..7e92f2640 100644
+--- a/public_docs/site/frontend/meshing/build-lifecycle.md
++++ b/public_docs/site/frontend/meshing/build-lifecycle.md
+@@ -1,16 +1,17 @@
+ ---
+ title: Mesh Build Lifecycle
+ status: implemented
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
++source_of_truth: docs/specs/resource-first-control-room-api-v2.md
+ ---
+ 
+ (public-docs-frontend-meshing-build-lifecycle)=
+ # Mesh Build Lifecycle
+ 
+ The UI treats policy editing and mesh construction as separate transactions.
+ 
+ ```text
+ clean authored policy
+       │ edit
+@@ -24,18 +25,18 @@ new policy revision ──► current mesh becomes stale
+ requested/running build
+       ├─ failure ─► failed current build; latest-successful mesh remains available
+       └─ success ─► new current and latest-successful mesh resources
+ ```
+ 
+ ## Commands and resource invalidation
+ 
+ | Action | Command/resource consequence |
+ |---|---|
+ | Apply object policy | replaces object config; invalidates object report/quality, mesh build, and scene |
+-| Apply airbox policy | replaces universe config; invalidates current/latest mesh build |
++| Apply airbox policy | replaces universe config; marks the current mesh stale while retaining the latest-successful mesh as historical evidence |
+ | Build selected object | `mesh.build-selected` |
+ | Build shared domain | `mesh.build-shared-domain` |
+ | Geometry edit | invalidates every mesh derived from the previous geometry digest |
+ | Revert | discards only the local draft; it does not roll back a committed backend revision |
+ 
+ A success banner means the request was accepted, not that meshing completed. Completion and
+ qualification come from build/report resources.
+diff --git a/public_docs/site/frontend/meshing/fdm-grid-view.md b/public_docs/site/frontend/meshing/fdm-grid-view.md
+index cea01770a..b280df4eb 100644
+--- a/public_docs/site/frontend/meshing/fdm-grid-view.md
++++ b/public_docs/site/frontend/meshing/fdm-grid-view.md
+@@ -1,16 +1,17 @@
+ ---
+ title: FDM Grid Inspector
+ status: implemented
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
++source_of_truth: apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx, docs/specs/resource-first-control-room-api-v2.md
+ ---
+ 
+ (public-docs-frontend-meshing-fdm-grid-view)=
+ # FDM Grid Inspector
+ 
+ FDM meshing is planner-owned structured-grid execution, not an interactive tetrahedral build. The
+ Control Room therefore exposes FDM object and region grids as read-only resources.
+ 
+ Displayed evidence includes:
+ 
+diff --git a/public_docs/site/frontend/meshing/index.md b/public_docs/site/frontend/meshing/index.md
+index e0a1842d3..fbca7dc0b 100644
+--- a/public_docs/site/frontend/meshing/index.md
++++ b/public_docs/site/frontend/meshing/index.md
+@@ -1,16 +1,17 @@
+ ---
+ title: Meshing UI
+ status: implemented
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
++source_of_truth: docs/specs/resource-first-control-room-api-v2.md, docs/specs/frontend-v2/01-module-kernel-architecture.md
+ ---
+ 
+ (public-docs-frontend-meshing-root)=
+ # Meshing UI
+ 
+ Meshing controls are split by selected semantic owner rather than placed in one monolithic dialog.
+ 
+ | Selection | Canonical panel | Writable lane |
+ |---|---|---|
+ | magnetic object | Object Mesh Policy | FEM |
+diff --git a/public_docs/site/frontend/meshing/object-mesh.md b/public_docs/site/frontend/meshing/object-me…331 tokens truncated…Python are two authoring clients for the same canonical policy.
+ 
+ ## Equivalence rules
+ 
+ 1. UI lengths are written in SI metres.
+diff --git a/public_docs/site/frontend/meshing/quality-and-reports.md b/public_docs/site/frontend/meshing/quality-and-reports.md
+index 29e75b446..2af2e6e81 100644
+--- a/public_docs/site/frontend/meshing/quality-and-reports.md
++++ b/public_docs/site/frontend/meshing/quality-and-reports.md
+@@ -1,16 +1,17 @@
+ ---
+ title: Mesh Quality and Reports
+ status: implemented
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
++source_of_truth: docs/specs/resource-first-control-room-api-v2.md, apps/control-room/src/kernel/events/eventTypes.ts
+ ---
+ 
+ (public-docs-frontend-meshing-quality-and-reports)=
+ # Mesh Quality and Reports
+ 
+ Quality views are evidence views, not editable policy.
+ 
+ The frontend normalizes and presents:
+ 
+ - element and boundary counts;
+diff --git a/public_docs/site/frontend/meshing/region-mesh.md b/public_docs/site/frontend/meshing/region-mesh.md
+index 8ca3e1272..8e5b78663 100644
+--- a/public_docs/site/frontend/meshing/region-mesh.md
++++ b/public_docs/site/frontend/meshing/region-mesh.md
+@@ -1,16 +1,17 @@
+ ---
+ title: FEM Region Mesh Panel
+ status: implemented
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
++source_of_truth: apps/control-room/src/modules/inspector/panels/region/ObjectRegionMeshPanel.tsx
+ ---
+ 
+ (public-docs-frontend-meshing-region-mesh)=
+ # FEM Region Mesh Panel
+ 
+ Object-owned regions have a separate FEM mesh policy rather than silently mutating the parent
+ object policy. The region panel exposes:
+ 
+ - enable/disable of the region mesh override;
+ - maximum and minimum element size;
+diff --git a/public_docs/site/frontend/state-and-commands/index.md b/public_docs/site/frontend/state-and-commands/index.md
+index 73bb48dc8..d330337e6 100644
+--- a/public_docs/site/frontend/state-and-commands/index.md
++++ b/public_docs/site/frontend/state-and-commands/index.md
+@@ -1,16 +1,17 @@
+ ---
+ title: Frontend State and Commands
+ status: partial
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
++source_of_truth: docs/specs/frontend-v2/03-api-integration-layer.md, docs/specs/frontend-v2/04-state-management.md
+ ---
+ 
+ (public-docs-frontend-state-and-commands-root)=
+ # Frontend State and Commands
+ 
+ Frontend state is resource-oriented. Reads use versioned resource keys and caches; writes execute
+ commands or replace canonical resources. Components should not maintain a second hidden simulation
+ model.
+ 
+ Key invariants:
+diff --git a/public_docs/site/frontend/visualization/index.md b/public_docs/site/frontend/visualization/index.md
+index 8cfa9fec3..eb5910464 100644
+--- a/public_docs/site/frontend/visualization/index.md
++++ b/public_docs/site/frontend/visualization/index.md
+@@ -1,16 +1,17 @@
+ ---
+ title: Frontend Visualization
+ status: partial
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
++source_of_truth: docs/specs/frontend-v2/05-viewport-architecture.md, docs/specs/resource-first-control-room-api-v2.md
+ ---
+ 
+ (public-docs-frontend-visualization-root)=
+ # Frontend Visualization
+ 
+ Visualization consumes published geometry, mesh, field, and selection resources. It must distinguish
+ the authored CAD model, mesh preview, current solver mesh, magnetic submesh, airbox, and result
+ fields.
+ 
+ For meshing, the critical rule is that a rendered surface is not a topology certificate. The
+diff --git a/public_docs/site/validation/analytical-cases.md b/public_docs/site/validation/analytical-cases.md
+index 544ed97a7..4cd3a7d59 100644
+--- a/public_docs/site/validation/analytical-cases.md
++++ b/public_docs/site/validation/analytical-cases.md
+@@ -1,16 +1,17 @@
+ ---
+ title: Analytical Cases
+ status: partial
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
++source_of_truth: docs/validation/fem_cpu_validation_matrix.md
+ ---
+ 
+ (public-docs-validation-analytical-cases)=
+ # Analytical Cases
+ 
+ Analytical validation compares FullMag against closed-form micromagnetics results rather than
+ another solver. The cases below mirror the physical models behind the FEM/FDM terminals; the
+ public page states which ones have current executed evidence and which remain scripted but
+ runtime-open.
+ 
+diff --git a/public_docs/site/validation/cpu-gpu-parity.md b/public_docs/site/validation/cpu-gpu-parity.md
+index c6282cf74..b85739d3a 100644
+--- a/public_docs/site/validation/cpu-gpu-parity.md
++++ b/public_docs/site/validation/cpu-gpu-parity.md
+@@ -1,37 +1,39 @@
+ ---
+ title: CPU GPU Parity
+ status: partial
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
++source_of_truth: docs/specs/capability-matrix-v0.json, docs/audits/2026-08-20-relaxation-audit-v2-verification-remediation.md, docs/validation/2026-07-11-relaxation-qualification-matrix.md
+ ---
+ 
+ (public-docs-validation-cpu-gpu-parity)=
+ # CPU/GPU parity
+ 
+ Parity means the CPU and GPU execution lanes of one solver produce the same physical result within
+ per-interaction tolerances, with the rigorous GPU path provably not falling back to host work.
+ 
+ ## Relaxation parity
+ 
+-The production relaxation contract qualifies the minimizers across lanes. The 2026-07-11 relaxation
+-qualification matrix records:
++The 2026-07-11 relaxation report historically recorded:
+ 
+ | Coverage | Result |
+ |---|---|
+ | CPU/GPU consistency | `6/6` rows, `3/3` pairs passed |
+ | FEM PG-BB production benchmark | `39` comparison pairs, required coverage `21/21` |
+ 
+-These results apply to the qualified relaxation workloads; they do not transfer automatically to
+-heterogeneous CUDA material payloads, which fail capability checks instead of substituting a
+-looser path.
++That report is now explicitly superseded for current status. The authoritative capability matrix
++lists FDM CPU as the reference-executable relaxation lane and the FDM GPU and FEM CPU/GPU lanes as
++development-executable for overdamped LLG, PG-BB, and NCG. Validated workloads are empty because
++fresh source-bound managed receipts are missing. The historical counts therefore remain audit
++history, not a current production or parity claim.
+ 
+ ## Rigorous GPU residency
+ 
+ A real GPU claim requires the strict GPU path to report the device as source of truth and zero
+ host hot-loop traffic:
+ 
+ - `hot_loop_compute_h2d_bytes = 0`,
+ - `hot_loop_compute_d2h_bytes = 0`,
+ - `hot_loop_compute_host_sync_count = 0`.
+ 
+diff --git a/public_docs/site/validation/fem-fdm-comparison.md b/public_docs/site/validation/fem-fdm-comparison.md
+index f6c81ca49..0c87d3673 100644
+--- a/public_docs/site/validation/fem-fdm-comparison.md
++++ b/public_docs/site/validation/fem-fdm-comparison.md
+@@ -1,16 +1,17 @@
+ ---
+ title: FEM FDM Comparison
+ status: partial
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
++source_of_truth: docs/validation/fem_cpu_validation_matrix.md, docs/specs/capability-matrix-v0.json
+ ---
+ 
+ (public-docs-validation-fem-fdm-comparison)=
+ # FEM/FDM comparison
+ 
+ FEM and FDM are two realizations of one physical problem, so FullMag expects them to agree on
+ physics where a shared observable exists. The public contract separates what is genuinely compared
+ from what is still an individual-realization check.
+ 
+ ## Shared physical contract
+@@ -20,20 +21,24 @@ definition, and the same interaction parameters. A comparison is meaningful only
+ geometry, material and observable are identical and only the discretization differs.
+ 
+ ## Periodic demagnetization supercell check
+ 
+ The periodic airbox demagnetization validation compares the primitive periodic-cell magnetostatic
+ energy against a central-cell periodic-supercell reference. The recorded primitive-vs-central-cell
+ energy relative error is `2.4168e-3` against a `2.0e-2` tolerance, with lateral seam metrics at
+ `0.0` and `robin_periodic_seam_face_count = 0` (`tests/fem_demag_validation/periodic_airbox_validation.py`).
+ This is a FEM-side periodic consistency check, not yet a full FDM↔FEM cross-backend matrix.
+ 
++The recorded artifact is supporting historical evidence for the diagnostic FEM periodic-airbox
++slice. It does not promote periodic FEM demagnetization or any cross-backend lane to production
++qualification.
++
+ ## State transfer between backends
+ 
+ Backend continuation transfers Cartesian cell-centred FDM magnetization onto a FEM mesh, and FEM
+ nodal fields back onto FDM cell centres, with trilinear/P1 interpolation and explicit
+ outside-domain semantics. The transfer pages are:
+ {doc}`../numerical-methods/interpolation-and-state-transfer/fdm-to-fem` and
+ {doc}`../numerical-methods/interpolation-and-state-transfer/fem-to-fdm`.
+ 
+ ## Current status
+ 
+diff --git a/public_docs/site/validation/index.md b/public_docs/site/validation/index.md
+index 89703332a..af38a1084 100644
+--- a/public_docs/site/validation/index.md
++++ b/public_docs/site/validation/index.md
+@@ -1,45 +1,48 @@
+ ---
+ title: Validation
+ status: partial
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
++source_of_truth: docs/specs/capability-matrix-v0.json
+ ---
+ 
+ (public-docs-validation-root)=
+ # Validation
+ 
+-Validation is how FullMag separates executed numerical truth from source presence. A solver or lane
+-is qualified only when an executed gate, a recorded artifact, and an accepted tolerance all agree.
+-This family records the validation taxonomy, the current qualification state, and what remains open.
++Validation is how FullMag separates executed numerical truth from source presence. A validation
++claim requires an executed gate, a recorded artifact, and an accepted tolerance to agree. This
++family records the validation taxonomy, the current qualification state, and what remains open.
+ 
+ ## Taxonomy
+ 
+ - **Analytical cases** — known closed-form solutions such as sinusoidal exchange modes, a uniformly
+   magnetized sphere, Osborn ellipsoid demagnetization factors, and macrospin damping checkpoints.
+ - **µMAG standard problems** — community reference problems with published reference outputs,
+   primarily NIST µMAG Standard Problem 4 for FEM relaxation and reversal dynamics.
+ - **CPU/GPU parity** — same-workload agreement between the CPU and GPU execution lanes of one
+   backend.
+ - **FEM/FDM comparison** — cross-discretization agreement where a physical result can be evaluated
+   in both backends.
+ 
+ The authoritative per-lane support and qualification matrix lives on
+ {doc}`qualification-status`; individual pages below describe the cases and their evidence.
+ 
+ ## How to read the status
+ 
+ Each page distinguishes:
+ 
+-- **production / qualified** — an executed gate plus recorded artifact passed the acceptance
+-  tolerance;
++- **production executable** — the workload can execute on the intended production lane; this is an
++  availability claim, not by itself a validation claim;
++- **validated** — the documented workload is executable and has explicit benchmark or regression
++  evidence that passed its acceptance criteria;
+ - **scripted / runtime-open** — the gate or artifact validator exists, but the executed runtime
+   evidence is not yet current;
+ - **not evaluated** — artifacts do not yet carry a validation decision;
+ - **unsupported** — the lane rejects the workload instead of silently substituting another path.
+ 
+ Do not promote a lane from the presence of its source, a compiled binary, or a skipped test.
+ 
+ ```{toctree}
+ :maxdepth: 1
+ 
+diff --git a/public_docs/site/validation/mumag-standard-problems.md b/public_docs/site/validation/mumag-standard-problems.md
+index c4f3e7083..8958d9eed 100644
+--- a/public_docs/site/validation/mumag-standard-problems.md
++++ b/public_docs/site/validation/mumag-standard-problems.md
+@@ -1,16 +1,17 @@
+ ---
+ title: µMAG Standard Problems
+ status: partial
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
++source_of_truth: docs/physics/0980-mumag-standard-problem-4-fem-application-validation.md
+ ---
+ 
+ (public-docs-validation-mumag-standard-problems)=
+ # µMAG Standard Problems
+ 
+ µMAG standard problems are community reference benchmarks with published reference outputs.
+ FullMag's primary standard-problem target is **NIST µMAG Standard Problem 4** (SP4), solved with
+ the strict FEM backend in double precision.
+ 
+ ## Problem definition
+diff --git a/public_docs/site/validation/qualification-status.md b/public_docs/site/validation/qualification-status.md
+index 52fa61e54..aa908fec8 100644
+--- a/public_docs/site/validation/qualification-status.md
++++ b/public_docs/site/validation/qualification-status.md
+@@ -1,52 +1,56 @@
+ ---
+ title: Qualification Status
+ status: partial
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
++source_of_truth: docs/specs/capability-matrix-v0.json
+ ---
+ 
+ (public-docs-validation-qualification-status)=
+ # Qualification Status
+ 
+ Qualification is per workload, per lane, and evidence-backed. The table below is the current
+-production status for the **relaxation** workload; other workloads (time-domain reversal, spectral
+-response, GPU strict residency) have their own gates and must not inherit relaxation status.
++availability and validation status for the **relaxation** workload. Other workloads, including
++time-domain reversal, spectral response, and GPU strict residency, have independent gates and must
++not inherit relaxation status.
+ 
+ ## Relaxation algorithm and lane matrix
+ 
+-| Algorithm | FDM CPU | FDM CUDA | FEM CPU | FEM CUDA | Status |
++| Algorithm | FDM CPU | FDM CUDA | FEM CPU | FEM CUDA | Validation |
+ |---|---|---|---|---|---|
+-| `llg_overdamped` | qualified | qualified | qualified | qualified | production |
+-| `projected_gradient_bb` | qualified | qualified for supported payloads | qualified, demag `rtol<=1e-12` | qualified, demag `rtol<=1e-12` | production |
+-| `nonlinear_cg` | qualified | qualified for supported payloads | qualified, demag `rtol<=1e-12` | qualified, demag `rtol<=1e-12` | production |
+-| `tangent_plane_implicit` | unsupported | unsupported | development-only (`extended`) | unsupported | development-only, fail-closed elsewhere |
++| `llg_overdamped` | `reference_executable` | `development_executable` | `development_executable` | `development_executable` | unvalidated |
++| `projected_gradient_bb` | `reference_executable` | `development_executable` | `development_executable` | `development_executable` | unvalidated |
++| `nonlinear_cg` | `reference_executable` | `development_executable` | `development_executable` | `development_executable` | unvalidated |
++| `tangent_plane_implicit` | unsupported | unsupported | `development_executable` (`extended`) | unsupported | unvalidated |
+ 
+ Unsupported heterogeneous CUDA material payloads and unsupported adaptive/tableau combinations fail
+-capability checks; no lane silently substitutes Heun, CPU execution, another minimizer, or a looser
+-physical model.
++capability checks. No lane may silently substitute Heun, CPU execution, another minimizer, or a
++looser physical model.
+ 
+ ## Evidence basis
+ 
+-The relaxation promotion is backed by the managed production benchmark (`39` comparison pairs,
+-`21/21` required coverage), managed native source/operator/energy-derivative contracts, and
+-CPU/GPU consistency `6/6` rows / `3/3` pairs. The public method pages under
+-{doc}`../numerical-methods/relaxation/index` document the per-algorithm contracts this matrix
+-summarizes.
++The authoritative capability matrix was updated on 2026-08-20 after a fail-closed relaxation audit.
++It records no current validated relaxation workload because exact source-bound managed receipts are
++missing. The older 2026-07-11 report's production labels and benchmark counts are historical and
++must not promote a lane. Source and contract tests remain useful regression evidence, but they are
++not substitutes for managed runtime, device, parity, or scientific receipts. The public method pages
++under {doc}`../numerical-methods/relaxation/index` document the per-algorithm contracts.
+ 
+ ## Per-interaction support matrices
+ 
+ Physics and numerical terminal pages own their four-lane FDM/FEM CPU/GPU support and qualification
+ matrices. Those are the authoritative support status for an interaction; do not use the relaxation
+ table above to claim an interaction is validated outside relaxation. Start from:
+ 
+-- {doc}`../physics/interactions/index` — canonical interaction pages;
+-- {doc}`../numerical-methods/index` — method and solver-lane realizations.
++- {doc}`../physics/interactions/index` - canonical interaction pages;
++- {doc}`../numerical-methods/index` - method and solver-lane realizations.
+ 
+ ## Not yet qualified
+ 
+-- Time-domain NIST SP4 reversal (artifact `not_evaluated` / `unvalidated`).
++- Fresh source-bound relaxation receipts for every legal FDM/FEM CPU/GPU algorithm lane.
++- Time-domain NIST SP4 reversal.
+ - GPU strict-residency and hosted CPU/GPU field parity rerun in the CUDA-visible runtime.
+-- Full FDM↔FEM cross-backend comparison matrix.
++- Full FDM-to-FEM cross-backend comparison matrix.
+ 
+ These remain open until their dedicated gates pass with recorded artifacts.
+warning: in the working copy of 'public_docs/site/architecture/provenance.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/architecture/ui-architecture.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/backend/index.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/frontend/control-room/index.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/frontend/index.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/frontend/meshing/airbox-mesh.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/frontend/meshing/build-lifecycle.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/frontend/meshing/fdm-grid-view.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/frontend/meshing/index.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/frontend/meshing/object-mesh.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/frontend/meshing/python-round-trip.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/frontend/meshing/quality-and-reports.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/frontend/meshing/region-mesh.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/frontend/state-and-commands/index.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/frontend/visualization/index.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/validation/analytical-cases.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/validation/cpu-gpu-parity.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/validation/fem-fdm-comparison.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/validation/index.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/validation/mumag-standard-problems.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/validation/qualification-status.md', LF will be replaced by CRLF the next time Git touches it
+

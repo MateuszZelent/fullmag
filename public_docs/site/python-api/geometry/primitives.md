@@ -37,9 +37,8 @@ primitives (sinusoid phase is dimensionless).
 <!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
 
-Every primitive validates positive lengths/radii and a non-empty `name` immediately. The cylinder
-axis is normalized to a unit vector; a malformed axis fails authoring rather than being silently
-re-normalized.
+Every primitive validates positive lengths/radii and a non-empty `name` immediately. A non-zero,
+finite cylinder axis is normalized to a unit vector; only a zero or non-finite axis is rejected.
 
 (python-api-geometry-primitives-python-api)=
 <!-- (python-api)= -->
@@ -76,7 +75,7 @@ re-normalized.
 |---|---|---|---|---|---|---|
 | `Cylinder.radius` | `float` | `required` | $\mathrm{m}$ | Positive | Cylinder radius | `radius` |
 | `Cylinder.height` | `float` | `required` | $\mathrm{m}$ | Positive | Cylinder height | `height` |
-| `Cylinder.axis` | `tuple[float, float, float]` | `(0, 0, 1)` | $1$ | Non-zero, normalized to a unit vector | Cylinder axis | `axis` |
+| `Cylinder.axis` | `tuple[float, float, float]` | `(0, 0, 1)` | $1$ | Non-zero and finite; normalized to a unit vector | Cylinder axis | `axis` |
 | `Cylinder.name` | `str` | `"cylinder"` | $1$ | Non-empty | Geometry identity | `name` |
 
 ### Sphere and ellipsoid

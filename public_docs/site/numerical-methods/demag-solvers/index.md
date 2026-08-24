@@ -4,7 +4,7 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: demag solver terminal pages, their source maps, and source revision 88c7160080bc1e8519950df283d2dd02087cc3da
+source_of_truth: demag solver terminal pages, their source maps, and source revision 0388c3e7c4804923ee02a00b7ac4a789a44092d9
 ---
 
 (public-docs-numerical-methods-demag-solvers-root)=
@@ -277,7 +277,11 @@ study.fem_demag_solver(
     rtol=1.0e-10,
     max_iterations=500,
 )
-study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
+study.stages.add_relax(
+    stage_id="equilibrium",
+    algorithm="nonlinear_cg",
+    tolT=1.0e-6,
+)
 ```
 
 | Public value | Meaning | Validation consequence |

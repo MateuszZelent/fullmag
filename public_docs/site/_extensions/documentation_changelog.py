@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 import re
@@ -178,11 +178,11 @@ def _timezone(name: str):
     try:
         return ZoneInfo(name)
     except ZoneInfoNotFoundError:
-        LOGGER.warning(
+        LOGGER.info(
             "Timezone database does not contain %s; using UTC for changelog entries.",
             name,
         )
-        return ZoneInfo("UTC")
+        return timezone.utc
 
 
 def _subject_metadata(subject: str) -> tuple[str, str, str | None, bool]:

@@ -4,7 +4,7 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: docs/specs/provenance-contract.md
+source_of_truth: docs/specs/resource-first-control-room-api-v2.md, docs/specs/runtime-distribution-and-managed-backends-v1.md
 ---
 
 (public-docs-architecture-provenance)=

@@ -11,8 +11,8 @@
     {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "GPU lane preserves reduced ordering and device transfer provenance; setup alone is not qualification."}
   ],
   "sources": [
-    {"id": "boundary-python-periodic", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class PeriodicBC", "responsibility": "Python periodic-axis and demagnetization-policy validation."},
-    {"id": "boundary-python-study", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "study", "responsibility": "Stage-first boundary request capture."},
+    {"id": "boundary-python-periodic", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "class FdmPbc", "responsibility": "Python periodic-axis and demagnetization-policy validation and lowering."},
+    {"id": "boundary-python-study", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyBuilder", "responsibility": "Stage-first boundary request capture through `StudyBuilder.pbc`."},
     {"id": "boundary-fdm-neighbor", "path": "crates/fullmag-engine/src/fdm/shared/types.rs", "symbol": "neighbor_index", "responsibility": "FDM periodic/open neighbor resolution."},
     {"id": "boundary-fem-periodic", "path": "backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp", "symbol": "apply_periodic_consistent_mass_component", "responsibility": "FEM periodic reduced-space mass projection."},
     {"id": "boundary-fem-dmi", "path": "backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp", "symbol": "compute_interfacial_dmi_field", "responsibility": "FEM interfacial DMI weak-form field realization."},
@@ -21,27 +21,33 @@
   "symbols": [
     {"id": "A", "latex": "$A$", "meaning": "exchange stiffness", "si_unit": "$\\mathrm{J\\,m^{-1}}$"},
     {"id": "D", "latex": "$D$", "meaning": "DMI constant", "si_unit": "$\\mathrm{J\\,m^{-2}}$"},
-    {"id": "n", "latex": "$\\mathbf{n}$", "meaning": "outward unit normal", "si_unit": "$1$"},
-    {"id": "dn", "latex": "$\\partial_n$", "meaning": "normal derivative", "si_unit": "$\\mathrm{m^{-1}}$"},
+    {"id": "nhat", "latex": "$\\hat{\\mathbf n}$", "meaning": "structural interface normal for interfacial DMI", "si_unit": "$1$"},
+    {"id": "nu", "latex": "$\\boldsymbol\\nu$", "meaning": "outward unit normal of the magnetic boundary", "si_unit": "$1$"},
+    {"id": "dnu", "latex": "$\\partial_{\\boldsymbol\\nu}$", "meaning": "derivative along the outward magnetic-boundary normal", "si_unit": "$\\mathrm{m^{-1}}$"},
+    {"id": "gradm", "latex": "$\\nabla\\mathbf m$", "meaning": "magnetization gradient", "si_unit": "$\\mathrm{m^{-1}}$"},
+    {"id": "Omegam", "latex": "$\\Omega_m$", "meaning": "magnetic domain", "si_unit": "$\\mathrm{m^3}$"},
     {"id": "Ld", "latex": "$L_d$", "meaning": "periodic cell size along axis $d$", "si_unit": "$\\mathrm{m}$"},
+    {"id": "ed", "latex": "$\\hat{\\mathbf e}_d$", "meaning": "Cartesian basis vector along axis $d$", "si_unit": "$1$"},
     {"id": "u", "latex": "$u$", "meaning": "magnetic scalar potential (demag)", "si_unit": "$\\mathrm{A}$"},
-    {"id": "r", "latex": "$r$", "meaning": "distance from magnetic body centre", "si_unit": "$\\mathrm{m}$"},
+    {"id": "dn", "latex": "$\\partial_n$", "meaning": "derivative along the outward airbox normal", "si_unit": "$\\mathrm{m^{-1}}$"},
+    {"id": "Omegaair", "latex": "$\\Omega_{\\mathrm{air}}$", "meaning": "auxiliary airbox domain", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "r", "latex": "$\\mathbf r$", "meaning": "position vector", "si_unit": "$\\mathrm{m}$"},
     {"id": "disp", "latex": "$\\mathbf{u}$", "meaning": "elastic displacement", "si_unit": "$\\mathrm{m}$"},
     {"id": "sigma", "latex": "$\\boldsymbol{\\sigma}$", "meaning": "stress tensor", "si_unit": "$\\mathrm{Pa}$"},
     {"id": "m", "latex": "$\\mathbf{m}$", "meaning": "reduced magnetization", "si_unit": "$1$"},
     {"id": "beta", "latex": "$\\beta$", "meaning": "Robin boundary coefficient", "si_unit": "$\\mathrm{m^{-1}}$"}
   ],
   "equations": [
-    {"id": "eq-boundary-conditions-contract", "symbols": ["A", "dn", "n", "m", "D", "Ld", "u", "beta"], "sources": ["boundary-fem-dmi", "boundary-fdm-neighbor", "boundary-fem-demag"]},
-    {"id": "eq-neumann-free-surface", "symbols": ["A", "dn", "n"], "sources": ["boundary-fem-dmi"]},
-    {"id": "eq-dmi-modified-bc", "symbols": ["A", "dn", "n", "m", "D"], "sources": ["boundary-fem-dmi"]},
-    {"id": "eq-pbc-magnetization", "symbols": ["m", "Ld"], "sources": ["boundary-fdm-neighbor", "boundary-fem-periodic"]}
+    {"id": "eq-boundary-conditions-contract", "symbols": ["A", "dnu", "nhat", "nu", "m", "D", "r", "Ld", "ed", "u", "dn", "beta", "Omegaair"], "sources": ["boundary-fem-dmi", "boundary-fdm-neighbor", "boundary-fem-demag"]},
+    {"id": "eq-neumann-free-surface", "symbols": ["A", "dnu", "gradm", "nu", "m", "Omegam"], "sources": ["boundary-fem-dmi"]},
+    {"id": "eq-dmi-modified-bc", "symbols": ["A", "dnu", "nhat", "nu", "m", "D"], "sources": ["boundary-fem-dmi"]},
+    {"id": "eq-pbc-magnetization", "symbols": ["m", "r", "Ld", "ed"], "sources": ["boundary-fdm-neighbor", "boundary-fem-periodic"]}
   ],
   "public_api": {
     "parameters": [
-      {"python": "PeriodicBC.axes", "type": "tuple[bool, bool, bool]", "default": "required", "si_unit": "$1$", "validation": "exactly three boolean axes", "meaning": "periodic directions", "backend_support": "FDM and FEM planners subject to mesh support", "problem_ir": "pbc.axes"},
-      {"python": "PeriodicBC.demag", "type": "str", "default": "open", "si_unit": "$1$", "validation": "supported demagnetization policy", "meaning": "closure for periodic demag", "backend_support": "FDM/FEM lane-dependent", "problem_ir": "pbc.demag"},
-      {"python": "study.pbc(...)" , "type": "callable", "default": "—", "si_unit": "$1$", "validation": "rejects incomplete or incompatible pairs", "meaning": "stage-first periodicity request", "backend_support": "public authoring surface", "problem_ir": "pbc"}
+      {"python": "study.pbc(x, y, z)", "type": "three `bool` values", "default": "False, False, False", "si_unit": "$1$", "validation": "at least one axis is required when `demag` is not `\"open\"` or `images` is supplied", "meaning": "periodic Cartesian axes", "backend_support": "FDM and FEM planners subject to mesh support", "problem_ir": "pbc.axes"},
+      {"python": "study.pbc(..., demag=...)", "type": "str", "default": "\"open\"", "si_unit": "$1$", "validation": "`\"open\"`, `\"truncated_images\"`, or `\"periodic_airbox_k0\"`; the last is rejected for FDM", "meaning": "requested demagnetization periodicity", "backend_support": "lane-dependent", "problem_ir": "pbc.demag"},
+      {"python": "study.pbc(..., images=...)", "type": "tuple[int, int, int] | None", "default": "None", "si_unit": "$1$", "validation": "three non-negative counts and only with `demag=\"truncated_images\"`", "meaning": "requested periodic image counts", "backend_support": "FDM periodic-image lanes", "problem_ir": "pbc.image_counts"}
     ]
   }
 }

@@ -440,11 +440,13 @@ wavevector magnitude is retained.
 `fm.texture.antiskyrmion(...)` uses the same overflow-resistant radial profile as the skyrmion,
 but reverses the azimuthal winding:
 
-\[
+```{math}
+:label: preset-texture-antiskyrmion-v2
+
 \psi=-\phi+\gamma_c,\qquad
 \mathbf m_\mathrm{local}=
 (\sin\theta\cos\psi,\ \sin\theta\sin\psi,\ -p\cos\theta).
-\]
+```
 
 The implemented v2 preset is a Neel-type antiskyrmion ansatz. `chirality=+1` gives
 $\gamma_c=0$ and `chirality=-1` gives $\gamma_c=\pi$. It is sampled identically on FDM cell
@@ -463,18 +465,22 @@ centres and FEM magnetic nodes.
 
 `fm.texture.skyrmionium(...)` is a normalized two-wall, 2-pi target-state initializer. Defining
 
-\[
+```{math}
+:label: preset-texture-skyrmionium-profile-v2
+
 a(s)=\arccos[-\tanh(s)],\qquad
 \theta(r)=a\!\left(\frac{r-R_\mathrm{in}}{\Delta}\right)
 +a\!\left(\frac{r-R_\mathrm{out}}{\Delta}\right),
-\]
+```
 
 the local field is
 
-\[
+```{math}
+:label: preset-texture-skyrmionium-v2
+
 \mathbf m_\mathrm{local}=
 (\sin\theta\cos\psi,\ \sin\theta\sin\psi,\ s_\mathrm{bg}\cos\theta).
-\]
+```
 
 The centre and far field have the same background orientation; the annulus between the two walls
 is reversed. The continuum target has zero net skyrmion number when the full far field is included.
@@ -495,18 +501,22 @@ is reversed. The continuum target has zero net skyrmion number when the full far
 `fm.texture.hopfion(...)` is a three-dimensional Hopf-map initializer. With normalized coordinates
 $X=x/R$, $Y=qy/R$, $Z=z/(R a_z)$, $\rho^2=X^2+Y^2+Z^2$, and $d=1+\rho^2$,
 
-\[
+```{math}
+:label: preset-texture-hopfion-spinor-v2
+
 z_1=\frac{2(X+iY)}{d},\qquad
 z_2=\frac{2Z+i(\rho^2-1)}{d},
-\]
+```
 
-\[
+```{math}
+:label: preset-texture-hopfion-v2
+
 \mathbf h=
 \left(2\operatorname{Re}(z_1\overline{z_2}),
 2\operatorname{Im}(z_1\overline{z_2}),
 |z_1|^2-|z_2|^2\right),\qquad
 \mathbf m=-s_\mathrm{bg}\,\mathcal R_z(\varphi_0)\mathbf h.
-\]
+```
 
 The field is normalized analytically and renormalized once numerically to suppress roundoff.
 `hopf_charge=-1` reflects the second stereographic coordinate and reverses the texture orientation.
@@ -571,11 +581,15 @@ of version 2.
 | $R$ | nominal radial profile scale | $\mathrm{m}$ |
 | $\Delta$ | radial transition width | $\mathrm{m}$ |
 | $\gamma$ | fixed skyrmion helicity: 0 for Neel and pi/2 for Bloch | $\mathrm{rad}$ |
+| $\gamma_c$ | antiskyrmion chirality-selected helicity | $\mathrm{rad}$ |
 | $\chi$ | bimeron azimuthal phase | $\mathrm{rad}$ |
 | $\eta$ | bimeron helicity | $\mathrm{rad}$ |
 | $s_{\mathrm{bg}}$ | bimeron background-orientation sign | $1$ |
 | $Q$ | continuum topological charge in the oriented local plane | $1$ |
 | $r_{\mathrm{core}}$ | exact radius of the two fully normal bimeron cores | $\mathrm{m}$ |
+| $R_{\mathrm{in}}$ | skyrmionium inner-wall radius | $\mathrm{m}$ |
+| $R_{\mathrm{out}}$ | skyrmionium outer-wall radius | $\mathrm{m}$ |
+| $a(s)$ | skyrmionium wall-angle profile | $\mathrm{rad}$ |
 | $s$ | coordinate along the selected wall-normal axis | $\mathrm{m}$ |
 | $s_0$ | domain-wall centre offset | $\mathrm{m}$ |
 | $w$ | domain-wall or smooth two-domain width | $\mathrm{m}$ |
@@ -591,6 +605,16 @@ of version 2.
 | $\mathbf e_2$ | second spin-plane basis vector | $1$ |
 | $\mathbf a$ | normalized conical-state axis | $1$ |
 | $\beta$ | conical-state angle | $\mathrm{rad}$ |
+| $X$ | dimensionless Hopf-map x coordinate | $1$ |
+| $Y$ | dimensionless Hopf-map y coordinate | $1$ |
+| $Z$ | dimensionless Hopf-map z coordinate | $1$ |
+| $q$ | Hopf-map orientation sign | $1$ |
+| $a_z$ | Hopf-map axial scale | $1$ |
+| $\rho$ | dimensionless Hopf-map radius | $1$ |
+| $d$ | Hopf-map denominator 1 + rho squared | $1$ |
+| $z_1$ | first complex stereographic coordinate | $1$ |
+| $z_2$ | second complex stereographic coordinate | $1$ |
+| $\mathbf h$ | dimensionless Hopf-map unit vector | $1$ |
 | $\mathbf M$ | magnetization field | $\mathrm{A\,m^{-1}}$ |
 | $M_{\mathrm s}$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
 | $\mathbf m_0$ | authored nonzero uniform direction before normalization | $1$ |

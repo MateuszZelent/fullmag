@@ -4,6 +4,7 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+source_of_truth: docs/specs/frontend-v2/05-viewport-architecture.md, docs/specs/resource-first-control-room-api-v2.md
 ---
 
 (public-docs-frontend-visualization-root)=

@@ -21,14 +21,17 @@ This page is the public physical and authoring contract for the interaction. It 
 
 ### Analytic cylinder
 
-| Parameter | SI unit | Required validation |
-|---|---:|---|
-| `current` | $\mathrm A$ | finite and signed |
-| `radius` | $\mathrm m$ | finite and positive |
-| `center` | $\mathrm m$ | three finite values |
-| `axis` | $1$ | three finite values, non-zero, normalized once |
-| `time_dependence` | $1$ multiplier | supported tagged schedule |
-| `id` | $1$ | non-empty and unique |
+| Parameter | Default | SI unit | Constructor validation |
+|---|---|---:|---|
+| `current` | required | $\mathrm A$ | float conversion; signed |
+| `radius` | required | $\mathrm m$ | finite and positive |
+| `center` | `(0,0,0)` | $\mathrm m$ | exactly three float-convertible values |
+| `axis` | `(0,0,1)` | $1$ | exactly three float-convertible values |
+| `time_dependence` | `None` | $1$ multiplier | serialized when supplied |
+| `id` | `"oersted:cylinder"` | $1$ | non-empty |
+
+The constructor does not currently reject a non-finite `current`, non-finite vector components,
+or a zero axis. The planner/runtime boundary must reject these states before execution.
 
 ### Solved-current binding
 
@@ -56,7 +59,7 @@ page.
 
 ## Capability warning
 
-The analytic model and solved-current model have different support matrices. Front matter must be
+The analytic model and solved-current model have different support matrices. This page remains
 `partial`; semantic-only FEM solved-current slices do not make all four lanes implemented.
 
 (api-oersted-field-python-api)=

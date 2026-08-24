@@ -1,25 +1,25 @@
 {
   "document": {"path": "public_docs/site/numerical-methods/frequency-domain/floquet-response.md"},
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "partial", "reason": "Projected Floquet response is source-visible; dynamic demag is gated."},
-    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "Separate projected response qualification is required."},
+    {"solver": "FEM", "device": "CPU", "status": "partial-production-executable", "reason": "Projected nonzero-k driven response without dynamic demag is executable; full nonzero-k demag is gated."},
+    {"solver": "FEM", "device": "GPU", "status": "partial-production-executable", "reason": "The projected no-demag response slice is bounded and requires device-execution evidence."},
     {"solver": "FDM", "device": "CPU", "status": "unsupported", "reason": "No native FDM Floquet response lane."},
     {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "No public FDM CUDA Floquet response lane."}
   ],
   "equations": [
     {"id": "eq-numerical-floquet-phase", "symbols": ["mhat", "r", "dr", "k"], "sources": ["bc"]},
-    {"id": "eq-numerical-floquet-response", "symbols": ["K", "k", "omega", "G", "qhat", "bhat"], "sources": ["response"]}
+    {"id": "eq-numerical-floquet-response", "symbols": ["L", "k", "omega", "Balpha", "qhat", "bhat"], "sources": ["response"]}
   ],
   "symbols": [
     {"id": "mhat", "latex": "$\\widehat{\\mathbf m}$", "meaning": "complex dynamic magnetization amplitude", "si_unit": "$1$"},
     {"id": "r", "latex": "$\\mathbf r$", "meaning": "position", "si_unit": "$\\mathrm{m}$"},
     {"id": "dr", "latex": "$\\Delta\\mathbf r$", "meaning": "periodic face translation", "si_unit": "$\\mathrm{m}$"},
-    {"id": "k", "latex": "$\\mathbf k$", "meaning": "Bloch wave vector", "si_unit": "$\\mathrm{m^{-1}}$"},
-    {"id": "K", "latex": "$\\mathsf K(\\mathbf k)$", "meaning": "k-dependent tangent operator", "si_unit": "problem-dependent"},
-    {"id": "G", "latex": "$\\mathsf G(\\mathbf k)$", "meaning": "k-dependent gyrotropic/damping operator", "si_unit": "problem-dependent"},
+    {"id": "k", "latex": "$\\mathbf k$", "meaning": "Bloch wave vector", "si_unit": "$\\mathrm{rad\\,m^{-1}}$"},
+    {"id": "L", "latex": "$\\mathsf L(\\mathbf k)$", "meaning": "k-dependent tangent dynamic operator", "si_unit": "$\\mathrm{s^{-1}}$"},
+    {"id": "Balpha", "latex": "$\\mathsf B_{\\alpha}(\\mathbf k)$", "meaning": "k-dependent damping/mass operator", "si_unit": "$1$"},
     {"id": "omega", "latex": "$\\omega$", "meaning": "angular drive frequency", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"},
     {"id": "qhat", "latex": "$\\widehat{\\mathbf q}$", "meaning": "tangent response amplitude", "si_unit": "$1$"},
-    {"id": "bhat", "latex": "$\\widehat{\\mathbf b}$", "meaning": "harmonic right-hand side", "si_unit": "problem-dependent"}
+    {"id": "bhat", "latex": "$\\widehat{\\mathbf b}$", "meaning": "harmonic tangent-space forcing", "si_unit": "$\\mathrm{s^{-1}}$"}
   ],
   "sources": [
     {"id": "bc", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class FloquetBC", "responsibility": "Floquet pair and phase schema."},

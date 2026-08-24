@@ -285,10 +285,10 @@ silent fallback to another algorithm or device.
 
 | Solver | Device | Status | Realization and evidence boundary |
 |---|---|---|---|
-| FDM | CPU | source-backed | cellwise tangent gradient, energy-weighted products, retraction and reference Armijo loop |
-| FDM | GPU | source-backed with planner boundary | native CUDA direct-minimizer dispatcher exists; public multilayer planner currently permits only `llg_overdamped` |
-| FEM | CPU | source-backed | native MFEM nodal gradient, mass metric, direct-energy Armijo decision, rollback and persistent direction |
-| FEM | GPU | source-backed | native CUDA device-resident gradients, reductions, retraction, rollback and persistent direction; executed-device qualification is separate |
+| FDM | CPU | reference-executable | cellwise tangent gradient, energy-weighted products, retraction and reference Armijo loop |
+| FDM | GPU | development-executable with planner boundary | native CUDA direct-minimizer dispatcher; public multilayer planner permits only `llg_overdamped` |
+| FEM | CPU | development-executable | native MFEM nodal gradient, mass metric, direct-energy Armijo decision, rollback and persistent direction |
+| FEM | GPU | development-executable | native CUDA device-resident gradients, reductions, retraction, rollback and persistent direction |
 
 The continuum algorithm is shared, but the discrete metric is not. FDM uses cell-volume/material
 weights. FEM uses its finite-element mass/lumped-mass realization and native field operators.

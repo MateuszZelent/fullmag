@@ -1,0 +1,277 @@
+# Review package: Task 1 working-tree changes (refreshed)
+
+## Commits
+No task commit; shared dirty worktree policy.
+
+## Files changed
+- .agents/skills/scientific-documentation-contract/scripts/validate_changed_scientific_docs.py
+- .agents/skills/scientific-documentation-contract/scripts/test_validate_changed_scientific_docs.py
+- .github/workflows/documentation.yml
+- public_docs/site/_extensions/documentation_changelog.py
+- public_docs/site/_extensions/page_last_modified.py
+- scripts/test_public_docs_timezone_fallback.py
+
+## Diff
+
+diff --git a/.agents/skills/scientific-documentation-contract/scripts/test_validate_changed_scientific_docs.py b/.agents/skills/scientific-documentation-contract/scripts/test_validate_changed_scientific_docs.py
+index 7b3db2747..e1c6771ab 100644
+--- a/.agents/skills/scientific-documentation-contract/scripts/test_validate_changed_scientific_docs.py
++++ b/.agents/skills/scientific-documentation-contract/scripts/test_validate_changed_scientific_docs.py
+@@ -77,36 +77,36 @@ def render_page(spec: PageSpec, root: Path) -> str:
+     )
+ """,
+             encoding="utf-8",
+         )
+         page = self.repo / page_path
+         page.parent.mkdir(parents=True)
+         return page, page_path
+ 
+     def _render_registered_scaffold(self) -> tuple[Path, str]:
+         page, page_path = self._write_architecture_manifest()
+-        page.write_text(
+-            """---
++        scaffold = """---
+ title: Exchange
+ status: planned
+ doc_kind: scaffold
+ audience: user
+ owner: fullmag-public-docs
+ ---
+ 
+ (public-docs-physics-solvers-fdm-cpu-exchange)=
+ # Exchange
+ 
+ This page reserves the public documentation location for FDM CPU exchange.
+-""",
+-            encoding="utf-8",
+-        )
++"""
++        # Keep this regression deterministic on every CI platform: the
++        # repository checkout may materialize generated scaffolds as CRLF.
++        page.write_bytes(scaffold.replace("\n", "\r\n").encode("utf-8"))
+         return page, page_path
+ 
+     def tearDown(self) -> None:
+         self.temporary.cleanup()
+ 
+     def test_new_scientific_page_requires_adjacent_source_map(self) -> None:
+         page = self.repo / "public_docs/site/physics/exchange.md"
+         page.write_text("# Exchange\n", encoding="utf-8")
+         _git(self.repo, "add", ".")
+         _git(self.repo, "commit", "-qm", "add page")
+diff --git a/.agents/skills/scientific-documentation-contract/scripts/validate_changed_scientific_docs.py b/.agents/skills/scientific-documentation-contract/scripts/validate_changed_scientific_docs.py
+index 9cfad27b1..89c6d2931 100644
+--- a/.agents/skills/scientific-documentation-contract/scripts/validate_changed_scientific_docs.py
++++ b/.agents/skills/scientific-documentation-contract/scripts/validate_changed_scientific_docs.py
+@@ -138,21 +138,21 @@ def is_registered_scaffold(path: Path, repo_root: Path) -> bool:
+     matching = [spec for spec in page_specs if getattr(spec, "path", None) == manifest_path]
+     if len(matching) != 1:
+         return False
+     page_spec = matching[0]
+     if getattr(page_spec, "status", None) != "planned":
+         return False
+     if getattr(page_spec, "doc_kind", None) != "scaffold":
+         return False
+     try:
+         expected = _independent_scaffold_text(page_spec)
+-        return expected is not None and path.read_bytes() == expected.encode("utf-8")
++        return expected is not None and path.read_text(encoding="utf-8") == expected
+     except (OSError, UnicodeError, ValueError, TypeError):
+         return False
+ 
+ 
+ def validate_changed(repo: Path, base: str, head: str) -> list[str]:
+     diff = _git(
+         repo,
+         "diff",
+         "--name-only",
+         "-z",
+diff --git a/.github/workflows/documentation.yml b/.github/workflows/documentation.yml
+index 2582bc631..da8dc6503 100644
+--- a/.github/workflows/documentation.yml
++++ b/.github/workflows/documentation.yml
+@@ -90,20 +90,23 @@ jobs:
+           python .agents/skills/scientific-documentation-contract/scripts/validate_changed_scientific_docs.py
+           --base "${{ steps.docs-diff.outputs.base }}"
+           --head HEAD
+           --repo-root .
+ 
+       - name: Install public documentation dependencies
+         run: |
+           python -m pip install -r public_docs/site/requirements.txt
+           python -m pip install ./packages/fullmag-py
+ 
++      - name: Test public documentation extensions
++        run: python -m unittest scripts/test_public_docs_timezone_fallback.py -v
++
+       - name: Check public and internal documentation boundary
+         run: python scripts/check_public_docs_boundary.py
+ 
+       - name: Validate scientific documentation source contracts
+         env:
+           DOCS_DIFF_BASE: ${{ steps.docs-diff.outputs.base }}
+         run: |
+           set -euo pipefail
+           map_files="$(git diff --name-only "$DOCS_DIFF_BASE" HEAD -- public_docs/site/physics public_docs/site/python-api | grep -E '\\.source-map\\.json$' || true)"
+           if [[ -z "$map_files" ]]; then
+diff --git a/public_docs/site/_extensions/documentation_changelog.py b/public_docs/site/_extensions/documentation_changelog.py
+index 2c83c2156..d2a3b2318 100644
+--- a/public_docs/site/_extensions/documentation_changelog.py
++++ b/public_docs/site/_extensions/documentation_changelog.py
+@@ -1,17 +1,17 @@
+ """Render a deterministic public documentation changelog from Git history."""
+ 
+ from __future__ import annotations
+ 
+ from collections import defaultdict
+ from dataclasses import dataclass
+-from datetime import datetime
++from datetime import datetime, timezone
+ from functools import lru_cache
+ from pathlib import Path
+ import re
+ import subprocess
+ from typing import TYPE_CHECKING
+ from urllib.parse import quote
+ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+ 
+ from docutils import nodes
+ from docutils.parsers.rst import directives
+@@ -171,25 +171,25 @@ def _documentation_commits(
+     if output is None:
+         return ()
+     return _parse_git_log(output, requested)
+ 
+ 
+ @lru_cache(maxsize=None)
+ def _timezone(name: str):
+     try:
+         return ZoneInfo(name)
+     except ZoneInfoNotFoundError:
+-        LOGGER.warning(
++        LOGGER.info(
+             "Timezone database does not contain %s; using UTC for changelog entries.",
+             name,
+         )
+-        return ZoneInfo("UTC")
++        return timezone.utc
+ 
+ 
+ def _subject_metadata(subject: str) -> tuple[str, str, str | None, bool]:
+     match = _CONVENTIONAL_SUBJECT.match(subject)
+     if match is None:
+         return "Change", "change", None, False
+     kind = match.group("kind").lower()
+     category = _CATEGORY_LABELS.get(kind, kind.capitalize())
+     scope = match.group("scope")
+     slug = re.sub(r"[^a-z0-9]+", "-", kind).strip("-") or "change"
+diff --git a/public_docs/site/_extensions/page_last_modified.py b/public_docs/site/_extensions/page_last_modified.py
+index f14287c8a..c8b995c93 100644
+--- a/public_docs/site/_extensions/page_last_modified.py
++++ b/public_docs/site/_extensions/page_last_modified.py
+@@ -1,15 +1,15 @@
+ """Render page-specific Git last-change metadata below every document title."""
+ 
+ from __future__ import annotations
+ 
+-from datetime import datetime
++from datetime import datetime, timezone
+ from functools import lru_cache
+ from html import escape
+ from pathlib import Path
+ import re
+ import subprocess
+ from typing import TYPE_CHECKING
+ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+ 
+ from docutils import nodes
+ from sphinx.errors import ExtensionError
+@@ -96,25 +96,25 @@ def _source_last_change(source_path_text: str) -> datetime | None:
+         return datetime.fromtimestamp(source_path.stat().st_mtime).astimezone()
+     except OSError:
+         return None
+ 
+ 
+ @lru_cache(maxsize=None)
+ def _configured_timezone(name: str):
+     try:
+         return ZoneInfo(name)
+     except ZoneInfoNotFoundError:
+-        LOGGER.warning(
++        LOGGER.info(
+             "Timezone database does not contain %s; falling back to UTC for page metadata.",
+             name,
+         )
+-        return ZoneInfo("UTC")
++        return timezone.utc
+ 
+ 
+ def _first_document_title(doctree: nodes.document) -> nodes.title | None:
+     for child in doctree.children:
+         if not isinstance(child, nodes.section):
+             continue
+         for section_child in child.children:
+             if isinstance(section_child, nodes.title):
+                 return section_child
+     return next(iter(doctree.findall(nodes.title)), None)
+diff --git a/scripts/test_public_docs_timezone_fallback.py b/scripts/test_public_docs_timezone_fallback.py
+new file mode 100644
+index 000000000..c4f81defc
+--- /dev/null
++++ b/scripts/test_public_docs_timezone_fallback.py
+@@ -0,0 +1,49 @@
++from datetime import timezone
++from pathlib import Path
++import sys
++import unittest
++from unittest.mock import patch
++
++
++ROOT = Path(__file__).resolve().parents[1]
++EXTENSIONS = ROOT / "public_docs/site/_extensions"
++sys.path.insert(0, str(EXTENSIONS))
++
++import documentation_changelog
++import page_last_modified
++
++
++class PublicDocumentationTimezoneFallbackTests(unittest.TestCase):
++    def test_changelog_falls_back_without_a_timezone_database(self) -> None:
++        documentation_changelog._timezone.cache_clear()
++        with (
++            patch.object(
++                documentation_changelog,
++                "ZoneInfo",
++                side_effect=documentation_changelog.ZoneInfoNotFoundError("missing"),
++            ),
++            patch.object(documentation_changelog.LOGGER, "warning") as warning,
++        ):
++            resolved = documentation_changelog._timezone("Europe/Warsaw")
++
++        self.assertIs(resolved, timezone.utc)
++        warning.assert_not_called()
++
++    def test_page_metadata_falls_back_without_a_timezone_database(self) -> None:
++        page_last_modified._configured_timezone.cache_clear()
++        with (
++            patch.object(
++                page_last_modified,
++                "ZoneInfo",
++                side_effect=page_last_modified.ZoneInfoNotFoundError("missing"),
++            ),
++            patch.object(page_last_modified.LOGGER, "warning") as warning,
++        ):
++            resolved = page_last_modified._configured_timezone("Europe/Warsaw")
++
++        self.assertIs(resolved, timezone.utc)
++        warning.assert_not_called()
++
++
++if __name__ == "__main__":
++    unittest.main()
+warning: in the working copy of '.agents/skills/scientific-documentation-contract/scripts/test_validate_changed_scientific_docs.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.agents/skills/scientific-documentation-contract/scripts/validate_changed_scientific_docs.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.github/workflows/documentation.yml', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/_extensions/documentation_changelog.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/_extensions/page_last_modified.py', LF will be replaced by CRLF the next time Git touches it
+

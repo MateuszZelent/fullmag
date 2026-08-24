@@ -235,6 +235,7 @@ film.mesh(
     order=1,
 )
 film.Ms = 800.0e3
+film.Aex = 13.0e-12
 film.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
 study.demag(model="airbox", variant="robin")

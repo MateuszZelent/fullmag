@@ -4,7 +4,7 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: response-solver, floquet-response, their source maps, frequency-domain planner headers, and source revision 88c7160080bc1e8519950df283d2dd02087cc3da
+source_of_truth: response-solver, floquet-response, their source maps, frequency-domain planner headers, and source revision 0388c3e7c4804923ee02a00b7ac4a789a44092d9
 ---
 
 (public-docs-numerical-methods-frequency-domain-root)=
@@ -42,16 +42,14 @@ After tangent-space linearization, Fullmag represents the driven system as
 \mathsf A(\omega)\widehat{\mathbf q}
 =\widehat{\mathbf b},
 \qquad
-\mathsf A(\omega)=\mathsf K+\mathrm i\omega\mathsf G,
-\qquad
-\widehat{\mathbf b}=\mathsf C\widehat{\mathbf h}_{\mathrm{ext}}.
+\mathsf A(\omega)=\mathrm i\omega\mathsf B_{\alpha}-\mathsf L.
 ```
 
-$\mathsf K$ contains the tangent derivative of the enabled effective-field operators;
-$\mathsf G$ contains the gyrotropic, mass, and damping structure according to the native
-formulation; $\mathsf C$ maps the declared drive into tangent coordinates. The temporal sign,
-operator scaling, and field units are part of the operator digest and must be preserved with every
-response sample.
+$\mathsf L$ is the tangent dynamic operator with units $\mathrm{s^{-1}}$;
+$\mathsf B_{\alpha}$ is the dimensionless damping/mass operator; and
+$\widehat{\mathbf b}$ is the tangent-space harmonic forcing with units $\mathrm{s^{-1}}$.
+The temporal sign, operator scaling, drive mapping, and field units are part of the operator digest
+and must be preserved with every response sample.
 
 The frequency-domain and eigenvalue problems use related operators but different right-hand sides:
 
@@ -272,8 +270,8 @@ The $\mathbf k$-dependent driven system is
 
 ```{math}
 :label: eq-frequency-root-floquet-system
-\left[\mathsf K(\mathbf k)+
-\mathrm i\omega\mathsf G(\mathbf k)\right]
+\left[\mathrm i\omega\mathsf B_{\alpha}(\mathbf k)-
+\mathsf L(\mathbf k)\right]
 \widehat{\mathbf q}(\omega,\mathbf k)
 =\widehat{\mathbf b}(\omega,\mathbf k).
 ```
@@ -346,8 +344,8 @@ The terminal page {doc}`response-solver` owns exact `ProblemIR` paths and round-
 
 | Solver | Device | Status | Realization boundary |
 |---|---|---|---|
-| FEM | CPU | source-backed / partial | native validation and driven-response contract; exact lane selected by planner |
-| FEM | GPU | partial / qualification-dependent | GPU operator with host Krylov and device-Krylov lanes require independent capability proof |
+| FEM | CPU | partial-production-executable | bounded free/$k=0$ and no-demag nonzero-$k$ driven-response slices; diagnostic periodic-airbox Schur/provider paths remain narrow |
+| FEM | GPU | partial-production-executable | bounded free/$k=0$ and no-demag nonzero-$k$ slices; full nonzero-$k$ demag and broader device Krylov remain gated |
 | FDM | CPU | unsupported | planner rejects native frequency-domain studies |
 | FDM | GPU | unsupported | no public FDM CUDA frequency-domain lane |
 

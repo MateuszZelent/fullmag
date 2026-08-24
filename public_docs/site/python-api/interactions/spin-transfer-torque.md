@@ -48,8 +48,9 @@ study.spin_torque(stt)
 study.stages.add_run(stage_id="drive", until=1.0e-12)
 ```
 
-The previous page contained empty constructor sections and an invalid example. Use the actual
-signatures below.
+The canonical public constructors are `SlonczewskiSTT` for CPP/MTJ torque and `ZhangLiSTT` for
+CIP torque. Both can bind either prescribed current density or a named current source, subject to
+their constructor rules.
 
 ### Slonczewski CPP/MTJ
 
@@ -61,7 +62,12 @@ signatures below.
 | `lambda_asymmetry` | `1.0` | $1$ | angular asymmetry |
 | `epsilon_prime` | `0.0` | $1$ | field-like coefficient |
 | `free_layer_thickness_m` | `None` | $\mathrm m$ | local prefactor realization |
-| `id,target,stack_normal,interface_id` | `None` | mixed | canonical tagged-module identity/realization |
+| `fixed_layer_position` | `None` (resolves to `"top"` for legacy input) | $1$ | legacy stack ordering; incompatible with canonical `stack_normal` |
+| `current_source` | `None` | $1$ | named current module; exclusive with `current_density` |
+| `id` | `None` | $1$ | canonical module identity; supplying any canonical field requires the complete canonical set |
+| `target` | `None` | $1$ | canonical magnetic region target |
+| `stack_normal` | `None` | $1$ | canonical normalized stack direction |
+| `interface_id` | `None` | $1$ | optional interface-flux realization; exclusive with thickness |
 
 ### Zhang–Li CIP
 
@@ -71,7 +77,11 @@ signatures below.
 | `degree` | `0.4` | $1$ | polarization |
 | `beta` | `0.0` | $1$ | non-adiabaticity |
 | `xi` | `None` | $1$ | documented alias/variant parameter |
-| `id,target,lande_g,operator_version` | `None` | mixed | canonical module contract |
+| `current_source` | `None` | $1$ | named current module; exclusive with `current_density` |
+| `id` | `None` | $1$ | canonical module identity |
+| `target` | `None` | $1$ | canonical magnetic region target |
+| `lande_g` | `None` | $1$ | positive Landé factor; required for canonical input |
+| `operator_version` | `None` | $1$ | supported canonical spatial/formula realization |
 
 ## Example classification
 
@@ -81,10 +91,17 @@ register and accept the torque. Do not add a run stage to an otherwise disconnec
 (api-spin-transfer-torque-validation)=
 ## Validation
 
-Reject scalar `current_density`, non-finite data, zero polarization direction, conflicting
-prescribed/solved current, incomplete canonical target/orientation, invalid thickness/interface
-realization, and unsupported formula/backend. Preserve `formula_version` and legacy/canonical
-identity in round trips.
+Both constructors reject scalar or otherwise non-length-3 `current_density` values and conflicting
+prescribed/solved current bindings. Their shared legacy current-vector conversion does not reject
+`NaN` or infinity, so downstream canonical validation must reject non-finite current components.
+
+Canonical `SlonczewskiSTT` input uses normalized-axis validation and rejects non-finite or zero
+`spin_polarization` and `stack_normal`. Legacy `SlonczewskiSTT` uses `as_vector3` for
+`spin_polarization`, so zero and non-finite vectors can pass the constructor and must be rejected
+before execution. `ZhangLiSTT.beta`/`xi` rejects negative values and conflicting aliases, but its
+constructor does not reject `NaN`; downstream validation must do so. Incomplete canonical
+target/orientation, invalid thickness/interface realization, and unsupported formula/backend fail
+closed. Preserve `formula_version` and legacy/canonical identity in round trips.
 
 (api-spin-transfer-torque-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics

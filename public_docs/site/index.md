@@ -4,7 +4,7 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: readme.md
+source_of_truth: README.md
 ---
 
 (public-docs-root)=

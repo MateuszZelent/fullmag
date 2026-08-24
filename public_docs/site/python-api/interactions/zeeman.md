@@ -45,18 +45,17 @@ study.stages.add_run(stage_id="precession", until=1.0e-12)
 
 ## Parameter reference
 
-| Parameter | Type | Default | SI unit | Current Python check | Required semantic check |
-|---|---|---|---:|---|---|
-| `B` | sequence of 3 numbers | required | $\mathrm T$ | length and float conversion | all components finite |
-| zero vector | legal | — | $\mathrm T$ | accepted | zero field/energy |
-| spatial or time-varying source | not represented by this constructor | — | — | use typed field-source APIs | source-specific validation |
+| Parameter | Type | Default | SI unit | Constructor behavior |
+|---|---|---|---:|---|
+| `B` | sequence of 3 numbers | required | $\mathrm T$ | exactly three float-convertible components |
+| zero vector | legal | — | $\mathrm T$ | represents zero field and zero Zeeman energy |
+| spatial or time-varying source | not represented by this constructor | — | — | use typed field-source APIs |
 
 (api-zeeman-validation)=
-## Validation correction
+## Validation boundary
 
-At the audited revision, `as_vector3` does not reject `NaN` or infinity. Documentation must not
-claim constructor-level finite validation until the code uses a finite-vector validator. IR and
-planner validation must reject such values meanwhile.
+`Zeeman` uses the shared `as_vector3` conversion, which does not currently reject `NaN` or
+infinity. IR/planner validation must reject non-finite values before execution.
 
 (api-zeeman-problem-ir)=
 ## Lowering

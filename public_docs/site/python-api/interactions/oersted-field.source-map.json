@@ -2,7 +2,7 @@
   "document": {
     "path": "public_docs/site/python-api/interactions/oersted-field.md",
     "title": "Oersted field Python API",
-    "interaction": "oersted field"
+    "interaction": "oersted-field"
   },
   "backend_matrix": [
     {
@@ -36,6 +36,12 @@
       "path": "packages/fullmag-py/src/fullmag/model/energy.py",
       "symbol": "class OerstedField",
       "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+    },
+    {
+      "id": "analytic-owner",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class OerstedCylinder",
+      "responsibility": "Own the analytic cylindrical-current authoring and lowering boundary."
     }
   ],
   "symbols": [],

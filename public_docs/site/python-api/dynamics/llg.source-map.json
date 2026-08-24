@@ -44,7 +44,7 @@
         "validation": "Positive finite gyromagnetic ratio used by the H-field LLG convention.",
         "meaning": "Positive finite gyromagnetic ratio used by the H-field LLG convention.",
         "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "study.dynamics.gamma"
+        "problem_ir": "study.dynamics.gyromagnetic_ratio"
       },
       {
         "python": "LLG.integrator",

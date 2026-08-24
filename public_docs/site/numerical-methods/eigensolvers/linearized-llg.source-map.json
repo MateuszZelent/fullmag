@@ -1,14 +1,14 @@
 {
   "document": {"path": "public_docs/site/numerical-methods/eigensolvers/linearized-llg.md"},
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "Separate runtime and dependency qualification is required."},
+    {"solver": "FEM", "device": "CPU", "status": "partial-production-executable", "reason": "Reference/MVP artifacts and a bounded selected-spectrum no-demag Full2x2 Floquet slice exist; general Poisson-airbox/SLEPc production remains gated."},
+    {"solver": "FEM", "device": "GPU", "status": "partial-production-executable", "reason": "The executable slice is narrow: k=0, no-demag macrospin/Kittel through cuSolverDN; broader Poisson-airbox and nonzero-k paths remain gated."},
     {"solver": "FDM", "device": "CPU", "status": "unsupported", "reason": "No production FDM eigen lane is claimed by this reference."},
     {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "No public CUDA modal claim is made by this reference."}
   ],
   "equations": [
     {"id": "eq-numerical-linearized-llg-tangent", "symbols": ["m0", "dm", "e", "q"], "sources": ["stage", "native"]},
-    {"id": "eq-numerical-linearized-llg-pencil", "symbols": ["K", "qvec", "G", "lambda", "sigma", "omega", "f"], "sources": ["native"]}
+    {"id": "eq-numerical-linearized-llg-pencil", "symbols": ["L", "qvec", "Balpha", "lambda", "omega", "f"], "sources": ["native", "kinematics"]}
   ],
   "symbols": [
     {"id": "m", "latex": "$\\mathbf m$", "meaning": "unit magnetization", "si_unit": "$1$"},
@@ -16,18 +16,18 @@
     {"id": "dm", "latex": "$\\delta\\mathbf m$", "meaning": "first-order magnetization perturbation", "si_unit": "$1$"},
     {"id": "e", "latex": "$\\mathbf e_1,\\mathbf e_2$", "meaning": "local tangent basis", "si_unit": "$1$"},
     {"id": "q", "latex": "$q_1,q_2$", "meaning": "tangent perturbation amplitudes", "si_unit": "$1$"},
-    {"id": "K", "latex": "$\\mathsf K$", "meaning": "tangent stiffness/dynamic matrix", "si_unit": "problem-dependent"},
-    {"id": "G", "latex": "$\\mathsf G$", "meaning": "gyrotropic mass/operator matrix", "si_unit": "problem-dependent"},
+    {"id": "L", "latex": "$\\mathsf L$", "meaning": "tangent dynamic operator", "si_unit": "$\\mathrm{s^{-1}}$"},
+    {"id": "Balpha", "latex": "$\\mathsf B_{\\alpha}$", "meaning": "damping/mass operator", "si_unit": "$1$"},
     {"id": "qvec", "latex": "$\\mathbf q$", "meaning": "discrete tangent eigenvector", "si_unit": "$1$"},
     {"id": "lambda", "latex": "$\\lambda$", "meaning": "complex eigenvalue", "si_unit": "$\\mathrm{s^{-1}}$"},
-    {"id": "sigma", "latex": "$\\sigma$", "meaning": "modal growth/decay real part", "si_unit": "$\\mathrm{s^{-1}}$"},
-    {"id": "omega", "latex": "$\\omega$", "meaning": "angular frequency", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"},
-    {"id": "f", "latex": "$f$", "meaning": "eigenfrequency", "si_unit": "$\\mathrm{Hz}$"}
+    {"id": "omega", "latex": "$\\omega$", "meaning": "complex angular frequency, $-\\mathrm i\\lambda$", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"},
+    {"id": "f", "latex": "$f$", "meaning": "signed cyclic frequency, $\\operatorname{Re}(\\omega)/(2\\pi)$", "si_unit": "$\\mathrm{Hz}$"}
   ],
   "sources": [
     {"id": "stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class EigenmodesStageSpec", "responsibility": "Public modal stage schema."},
     {"id": "builder", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "eigenmodes_stage", "responsibility": "Public stage construction."},
-    {"id": "native", "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp", "symbol": "solve_modal_eigen_contract", "responsibility": "Native modal contract, validation and diagnostics."}
+    {"id": "native", "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp", "symbol": "solve_modal_eigen_contract", "responsibility": "Native modal contract, validation and diagnostics."},
+    {"id": "kinematics", "path": "backends/fem/src/frequency_domain/mode_kinematics.cpp", "symbol": "frequency_hz_from_omega_rad_s", "responsibility": "Converts the signed real angular-frequency component selected by map_eigenvalue to cyclic frequency."}
   ],
   "public_api": {
     "parameters": [

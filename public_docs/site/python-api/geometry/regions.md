@@ -29,6 +29,8 @@ All fields are names, priorities, and policy identifiers.
 <!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
 Names must be non-empty; frame and realization policy accept only the supported identifiers.
+`film.add_region(...)` rejects duplicate names and region IDs in the owning magnet registry;
+constructing a detached `Region` or `ObjectRegion` does not perform that registry-level check.
 
 (python-api-geometry-regions-python-api)=
 <!-- (python-api)= -->
@@ -38,7 +40,11 @@ Names must be non-empty; frame and realization policy accept only the supported 
 | `Region.name` | `str` | `required` | Non-empty | Region name | `name` |
 | `Region.geometry` | `Geometry` | `required` | Geometry object | Region domain | `geometry` |
 | `ObjectRegion.owner_object` | `str` | `required` | Non-empty | Owning magnet | region owner |
+| `ObjectRegion.name` | `str` | `required` | Non-empty | Region display name | `name` |
+| `ObjectRegion.shape` | `Geometry \| dict` | `required` | Supported region shape when lowered | Object-local subdomain | `shape` |
+| `ObjectRegion.region_id` | `str \| None` | `None` | Non-empty when explicit; builder allocates a stable ID | Region identity | `region_id` |
 | `ObjectRegion.frame` | `str` | `"object"` | `object` or `world` | Reference frame | `frame` |
+| `ObjectRegion.enabled` | `bool` | `True` | Serialized with `bool(...)` | Activation state | `enabled` |
 | `ObjectRegion.realization_policy` | `str` | `"inherit"` | `inherit`, `conformal`, or `project` | Realization policy | policy |
 | `ObjectRegion.priority` | `int` | `0` | Integer | Override priority | priority |
 | `ObjectRegion.mesh_policy` | `dict \| None` | `None` | Mapping | Region-local mesh policy | mesh policy |
@@ -48,7 +54,7 @@ Names must be non-empty; frame and realization policy accept only the supported 
 Regions are attached to authored geometry and consumed by material/texture overrides.
 
 ```python
-# %% Declare a region and later assign a localized material override
+# %% Declare a region and assign a localized material override
 import fullmag as fm
 
 nm = 1.0e-9
@@ -64,6 +70,14 @@ film.Ms = 800.0e3
 film.Aex = 13.0e-12
 film.alpha = 0.02
 film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+
+gradient_window = film.add_region(
+    "gradient_window",
+    fm.Box(40 * nm, 20 * nm, 5 * nm),
+    priority=10,
+)
+gradient_window.set_material("Ms", 760.0e3)
+
 study.exchange()
 study.stages.add_run(stage_id="run", until=1.0e-12)
 ```
@@ -71,13 +85,15 @@ study.stages.add_run(stage_id="run", until=1.0e-12)
 (python-api-geometry-regions-problem-ir)=
 <!-- (problem-ir)= -->
 ## ProblemIR
-`Region.to_ir()` emits `name` and the referenced `geometry` name; object regions carry owner and
-policy fields into the object-region mesh specs.
+`Region.to_ir()` emits `name` and the referenced geometry name. `ObjectRegion.to_ir()` emits the
+stable region ID, owner, supported shape, frame, activation, priority, overrides, realization
+policy, and optional mesh/transition/texture data into top-level `object_regions[]`.
 
 (python-api-geometry-regions-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
-Duplicate names and invalid policy identifiers fail immediately.
+Invalid policy identifiers fail at construction. Duplicate names and IDs fail when the region is
+registered through the owning magnet handle.
 
 (python-api-geometry-regions-discrete-realization)=
 <!-- (discrete-realization)= -->

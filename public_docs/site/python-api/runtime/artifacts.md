@@ -23,8 +23,9 @@ No physical equation is owned here.
 (python-api-runtime-artifacts-symbols-and-si-units)=
 <!-- (symbols-and-si-units)= -->
 ## Symbols and SI units
-Magnetization state is stored with its own unit metadata; table quantities carry the units defined
-by the corresponding observables.
+Magnetization state values represent the dimensionless unit-vector field `m`. The JSON state
+writer records `observable="m"` but no separate unit field; table and field-artifact units belong
+to their respective runtime schemas.
 
 (python-api-runtime-artifacts-assumptions-and-validity)=
 <!-- (assumptions-and-validity)= -->
@@ -81,7 +82,9 @@ writing a best-effort file.
 (python-api-runtime-artifacts-discrete-realization)=
 <!-- (discrete-realization)= -->
 ## Discrete realization
-State serialization lives in `fullmag/init/state_io.py` and supports JSON, Zarr, and HDF5.
+The lightweight `Result.save_state()` path delegates to `fullmag/init/state_io.py` and supports
+JSON, Zarr, and HDF5 (`h5`, with `hdf5` accepted as an alias). Session artifacts are separate v2
+resources under `/v2/sessions/current/data/artifacts`.
 
 (python-api-runtime-artifacts-implementation-mapping)=
 <!-- (implementation-mapping)= -->
@@ -97,8 +100,8 @@ State round-trip is covered by read/write tests; ownership tests validate the so
 (python-api-runtime-artifacts-limitations)=
 <!-- (limitations)= -->
 ## Limitations
-Artifact format support does not guarantee interchange with other tools; readers must honor the
-stored unit and dataset metadata.
+Artifact format support does not guarantee interchange with other tools. JSON magnetization state
+does not carry a separate unit field; Zarr/HDF5 readers must honor dataset and artifact metadata.
 
 (python-api-runtime-artifacts-scientific-bibliography)=
 <!-- (scientific-bibliography)= -->
@@ -112,3 +115,4 @@ No physical model is introduced.
 |---|---|---|---|---|
 | State persistence | `packages/fullmag-py/src/fullmag/runtime/simulation.py` | `Result.save_state` | Public save entrypoint | Ownership test |
 | Serialization formats | `packages/fullmag-py/src/fullmag/init/state_io.py` | `save_magnetization`, `load_magnetization` | JSON/Zarr/HDF5 round-trip | Read/write tests |
+| Session artifact resources | `crates/fullmag-api/src/router_v2/mod.rs` | `/v2/sessions/current/data/artifacts` | Canonical v2 artifact listing and detail routes | Router tests |

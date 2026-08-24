@@ -12,8 +12,9 @@ owner: fullmag-public-docs
 (python-api-runtime-results-problem-statement)=
 <!-- (problem-statement)= -->
 ## Contract
-`Result` is the executed (or planned) run outcome: status, resolved backend/mode/precision, step
-statistics, optional final magnetization, and output directory.
+`Result` is the lightweight direct-execution outcome: status, the backend/mode/precision selected
+on `Simulation`, step statistics, optional final magnetization, and output directory. It is not the
+session-scoped v2 run resource and does not expose separate requested/resolved identities.
 
 (python-api-runtime-results-governing-equations)=
 <!-- (governing-equations)= -->
@@ -30,20 +31,22 @@ Energy scalars are in joules; measure-like maxima `max_h_eff`, `max_h_demag` in 
 (python-api-runtime-results-assumptions-and-validity)=
 <!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
-`last()` and `series()` require step data; unknown quantities raise immediately.
+`last()` requires step data. `series()` returns an empty list when there are no steps. Unknown
+quantities raise immediately.
 
 (python-api-runtime-results-python-api)=
 <!-- (python-api)= -->
 ## Python API
-| Python | Type | Default | Meaning | ProblemIR |
+| Python | Type | Default | Meaning | Origin |
 |---|---|---|---|---|
-| `Result.status` | `str` | `required` | `completed`, `planned`, or `not-executable` | run status |
-| `Result.backend` | `BackendTarget` | `required` | Resolved backend | `requested_backend` |
-| `Result.mode` | `ExecutionMode` | `required` | Resolved execution mode | `execution_mode` |
-| `Result.precision` | `ExecutionPrecision` | `required` | Resolved precision | `execution_precision` |
-| `Result.steps` | `Sequence[StepStats]` | empty | Per-step statistics | steps array |
-| `Result.final_magnetization` | `list[list[float]] \| None` | `None` | Final vector samples | final magnetization |
-| `Result.output_dir` | `str \| None` | `None` | Artifact directory | output dir |
+| `Result.status` | `str` | `required` | Common values are `completed`, `planned`, and `not-executable` | lightweight runtime result |
+| `Result.backend` | `BackendTarget` | `required` | Backend selection copied from `Simulation` | `Simulation.backend` |
+| `Result.mode` | `ExecutionMode` | `required` | Mode selection copied from `Simulation` | `Simulation.mode` |
+| `Result.precision` | `ExecutionPrecision` | `required` | Precision selection copied from `Simulation` | `Simulation.precision` |
+| `Result.notes` | `Sequence[str]` | empty | Planner/runtime explanation strings | lightweight runtime result |
+| `Result.steps` | `Sequence[StepStats]` | empty | Per-step statistics | native runner payload |
+| `Result.final_magnetization` | `list[list[float]] \| None` | `None` | Final vector samples | native runner payload |
+| `Result.output_dir` | `str \| None` | `None` | Local artifact-directory reference | `Simulation.run(output_dir=...)` |
 
 ### Read access
 
@@ -84,7 +87,7 @@ study.stages.add_run(stage_id="run", until=1.0e-12)
 <!-- (problem-ir)= -->
 ## ProblemIR
 `Result` is runtime output, not lowering input; it has no `ProblemIR` destination. Its backend,
-mode, and precision fields echo the resolved execution record.
+mode, and precision fields echo the `Simulation` selection, not a separately resolved record.
 
 (python-api-runtime-results-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
@@ -111,7 +114,9 @@ Ownership tests compare this inventory with live signatures.
 (python-api-runtime-results-limitations)=
 <!-- (limitations)= -->
 ## Limitations
-A `planned` or `not-executable` result carries no step data; consumers must branch on `status`.
+A `planned` or missing-native-core `not-executable` result carries no step data; consumers must
+branch on `status`. For canonical session requested/resolved provenance, use
+`/v2/sessions/current/simulation/runs/current` rather than this class.
 
 (python-api-runtime-results-scientific-bibliography)=
 <!-- (scientific-bibliography)= -->

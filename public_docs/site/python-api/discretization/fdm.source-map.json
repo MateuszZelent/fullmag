@@ -38,32 +38,32 @@
     "parameters": [
       {
         "python": "FDM.cell",
-        "type": "three positive floats or `None`",
+        "type": "Sequence[float] | None",
         "default": "None",
         "si_unit": "\\mathrm{m}",
-        "validation": "Canonical uniform cell size; it also becomes `default_cell` when supplied.",
-        "meaning": "Canonical uniform cell size; it also becomes `default_cell` when supplied.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "validation": "Exactly three finite positive components; mutually exclusive with `default_cell`.",
+        "meaning": "Legacy alias copied to `default_cell`.",
+        "backend_support": "FDM CPU/GPU; planner checks the requested lane",
         "problem_ir": "backend_policy.discretization_hints.fdm.cell"
       },
       {
         "python": "FDM.default_cell",
-        "type": "three positive floats or `None`",
+        "type": "Sequence[float] | None",
         "default": "None",
         "si_unit": "\\mathrm{m}",
-        "validation": "Default cell size when per-magnet grids are present.",
-        "meaning": "Default cell size when per-magnet grids are present.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "validation": "Exactly three finite positive components; either this or non-empty `per_magnet` is required.",
+        "meaning": "Default cell size for magnets without an override.",
+        "backend_support": "FDM CPU/GPU; planner checks the requested lane",
         "problem_ir": "backend_policy.discretization_hints.fdm.default_cell"
       },
       {
         "python": "FDM.per_magnet",
-        "type": "mapping or `None`",
+        "type": "dict[str, FDMGrid] | None",
         "default": "None",
         "si_unit": "1",
-        "validation": "Optional explicit per-magnet FDM grids.",
-        "meaning": "Optional explicit per-magnet FDM grids.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "validation": "Non-empty string keys and `FDMGrid` values; may be the sole cell specification when non-empty.",
+        "meaning": "Explicit native grids keyed by magnet name.",
+        "backend_support": "FDM CPU/GPU; multilayer capability-gated",
         "problem_ir": "backend_policy.discretization_hints.fdm.per_magnet"
       },
       {
@@ -71,9 +71,9 @@
         "type": "FDMDemag | None",
         "default": "None",
         "si_unit": "1",
-        "validation": "Demagnetization hint.",
-        "meaning": "Demagnetization hint.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "validation": "No explicit constructor type check; lowering requires an object with `to_ir()`.",
+        "meaning": "Demagnetization grid/topology hint.",
+        "backend_support": "FDM demagnetization lanes",
         "problem_ir": "backend_policy.discretization_hints.fdm.demag"
       },
       {
@@ -81,9 +81,9 @@
         "type": "str | None",
         "default": "None",
         "si_unit": "1",
-        "validation": "Optional `T0`/`T1`-family sub-cell policy. Support differs by precision and device.",
-        "meaning": "Optional `T0`/`T1`-family sub-cell policy. Support differs by precision and device.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "validation": "`none`, `volume`, or `full`.",
+        "meaning": "Binary, T0 volume-fraction, or T1 full sub-cell policy.",
+        "backend_support": "FDM interaction/device capability-gated",
         "problem_ir": "backend_policy.discretization_hints.fdm.boundary_correction"
       },
       {
@@ -91,9 +91,9 @@
         "type": "float | None",
         "default": "None",
         "si_unit": "1",
-        "validation": "Optional lower bound $\\varphi_{\\mathrm{floor}}$ with strict domain $0<\\varphi_{\\mathrm{floor}}<1$.",
-        "meaning": "Optional lower bound $\\varphi_{\\mathrm{floor}}$ with strict domain $0<\\varphi_{\\mathrm{floor}}<1$.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "validation": "Strictly $0<\\varphi_{\\mathrm{floor}}<1$.",
+        "meaning": "Lower volume-fraction stability bound.",
+        "backend_support": "FDM boundary-correction lanes",
         "problem_ir": "backend_policy.discretization_hints.fdm.boundary_phi_floor"
       },
       {
@@ -101,9 +101,9 @@
         "type": "float | None",
         "default": "None",
         "si_unit": "\\mathrm{m}",
-        "validation": "Optional T1 distance floor $\\delta_{\\min}\\geq0$; zero is accepted.",
-        "meaning": "Optional T1 distance floor $\\delta_{\\min}\\geq0$; zero is accepted.",
-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "validation": "Values below zero are rejected; zero is accepted, but the constructor does not reject `NaN`.",
+        "meaning": "T1 distance floor.",
+        "backend_support": "FDM boundary-correction lanes",
         "problem_ir": "backend_policy.discretization_hints.fdm.boundary_delta_min"
       }
     ]

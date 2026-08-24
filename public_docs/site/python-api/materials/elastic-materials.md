@@ -39,9 +39,12 @@ Elastic constants and density must be positive; damping must be non-negative.
 | `ElasticMaterial.rho` | `float` | `required` | $\mathrm{kg\,m^{-3}}$ | Positive | Mass density | `density` |
 | `ElasticMaterial.eta_mech` | `float \| None` | `None` | $1$ | Non-negative | Mechanical damping | `mechanical_damping` |
 
-### Complete stage-first context
+### Stage-first boundary and object-level lowering
 
-Elastic materials are attached to elastic bodies rather than constructed in isolation.
+The fluent `study` builder does not currently expose an elastic-body attachment method. The
+stage-first study below therefore establishes the surrounding magnetic authoring context and
+inspects the standalone `ElasticMaterial` IR fragment; it does **not** attach mechanics to the
+study.
 
 ```python
 # %% Declare a cubic elastic material
@@ -65,6 +68,8 @@ film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 study.exchange()
 
 elastic = fm.ElasticMaterial(name="py_elastic", C11=2.0e11, C12=1.0e11, C44=1.0e11, rho=8.0e3)
+elastic_ir = elastic.to_ir()
+assert elastic_ir["density"] == 8.0e3
 study.stages.add_run(stage_id="run", until=1.0e-12)
 ```
 
@@ -97,7 +102,9 @@ Ownership tests compare this inventory with live signatures.
 (python-api-materials-elastic-materials-limitations)=
 <!-- (limitations)= -->
 ## Limitations
-Elastic material alone does not create a coupled problem; it must be assigned to an elastic body.
+Elastic material alone does not create a coupled problem. `Problem` can carry elastic materials
+and bodies, but the current fluent stage-first builder has no public attachment hook; this page
+does not imply that the example executes mechanics.
 
 (python-api-materials-elastic-materials-scientific-bibliography)=
 <!-- (scientific-bibliography)= -->

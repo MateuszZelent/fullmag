@@ -27,16 +27,22 @@ The value is a dimensionless reduced magnetization vector.
 (python-api-magnets-and-textures-initial-magnetization-assumptions-and-validity)=
 <!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
-The vector must be finite length-3; an explicit seed is required for random initialization.
+Uniform and sampled vectors must contain exactly three float-convertible components. Their Python
+constructors currently do not reject non-finite components. Random initialization requires an
+explicit non-negative integer seed; booleans are rejected.
 
 (python-api-magnets-and-textures-initial-magnetization-python-api)=
 <!-- (python-api)= -->
 ## Python API
 | Python | Type | Default | Validation | Meaning | ProblemIR |
 |---|---|---|---|---|---|
-| `UniformMagnetization.value` | `tuple[float,float,float]` | `required` | Finite length-3 | Uniform direction | `kind="uniform"` |
-| `RandomMagnetization.seed` | `int` | `required` | Positive integer | Random seed | `kind="random"` |
-| `SampledMagnetization.values` | `list[tuple]` | `required` | Vector samples | Sampled state | sampled state |
+| `UniformMagnetization.value` | `Sequence[float]` | `required` | Exactly three float-convertible components; not normalized or checked for finiteness | Uniform reduced magnetization | `kind="uniform"`, `value` |
+| `RandomMagnetization.seed` | `int` | `required` | Non-negative integer; bool rejected | Random seed | `kind="random"`, `seed` |
+| `SampledMagnetization.values` | `Sequence[Sequence[float]]` | `required` | Non-empty; every sample has three float-convertible components | Sampled state | `kind="sampled_field"`, `values` |
+| `SampledMagnetization.source_path` | `str \| None` | `None` | Stored without constructor validation | Source provenance hint | not emitted by current `to_ir()` |
+| `SampledMagnetization.source_format` | `str \| None` | `None` | Stored without constructor validation | Source-format hint | not emitted by current `to_ir()` |
+| `SampledMagnetization.dataset` | `str \| None` | `None` | Stored without constructor validation | Dataset hint | not emitted by current `to_ir()` |
+| `SampledMagnetization.sample_index` | `int \| None` | `None` | Stored without constructor validation | Source sample hint | not emitted by current `to_ir()` |
 
 ### Complete stage-first example
 
@@ -64,18 +70,22 @@ study.stages.add_run(stage_id="run", until=1.0e-12)
 (python-api-magnets-and-textures-initial-magnetization-problem-ir)=
 <!-- (problem-ir)= -->
 ## ProblemIR
-Initial magnetization lowers to the magnet's initial-condition record; preset textures materialize
-into sampled states at lowering.
+Initial magnetization lowers to the magnet's initial-condition record. Uniform, random, and sampled
+objects emit their declared payloads; analytic preset textures are materialized later when the
+final sample points are known.
 
 (python-api-magnets-and-textures-initial-magnetization-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
-Malformed vectors and non-positive seeds fail immediately.
+Empty sampled arrays, wrong-length vectors, non-convertible components, negative seeds, booleans,
+and non-integer seeds fail immediately. Non-finite uniform/sampled components and sampled source
+metadata are not rejected or preserved in `to_ir()` by this constructor layer.
 
 (python-api-magnets-and-textures-initial-magnetization-discrete-realization)=
 <!-- (discrete-realization)= -->
 ## Discrete realization
-Sampled values are mapped to FDM cells or FEM nodes during materialization.
+Sampled values must already match the ordering/cardinality expected by the selected realization;
+planner/runtime validation owns that check.
 
 (python-api-magnets-and-textures-initial-magnetization-implementation-mapping)=
 <!-- (implementation-mapping)= -->
@@ -91,7 +101,9 @@ Ownership tests compare this inventory with live signatures.
 (python-api-magnets-and-textures-initial-magnetization-limitations)=
 <!-- (limitations)= -->
 ## Limitations
-Initial state is not normalized by this surface; dynamics constraints handle $|\mathbf m|=1$.
+`UniformMagnetization` and `SampledMagnetization` do not normalize their vectors. Source metadata
+accepted by `SampledMagnetization` is currently Python-side only because `to_ir()` emits only
+`kind` and `values`.
 
 (python-api-magnets-and-textures-initial-magnetization-scientific-bibliography)=
 <!-- (scientific-bibliography)= -->

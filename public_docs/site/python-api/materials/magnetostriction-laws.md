@@ -40,9 +40,11 @@ The law kind selects the required constants; missing required constants fail imm
 | `MagnetostrictionLaw.B1` / `B2` | `float \| None` | `None` | $\mathrm{Pa}$ | Required for cubic | Cubic constants | `b1`, `b2` |
 | `MagnetostrictionLaw.lambda_s` | `float \| None` | `None` | $1$ | Required for isotropic | Saturation magnetostriction | `lambda_s` |
 
-### Complete stage-first context
+### Stage-first boundary and object-level lowering
 
-The law is referenced by an elastic body/magnetic coupling rather than applied directly.
+The fluent `study` builder does not currently expose a magnetostriction-law attachment method. The
+stage-first study below establishes the surrounding magnetic authoring context and inspects the
+standalone law IR fragment; it does **not** activate magnetoelastic coupling.
 
 ```python
 # %% Cubic magnetostriction law
@@ -66,6 +68,8 @@ film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 study.exchange()
 
 law = fm.MagnetostrictionLaw(name="py_ms", kind="cubic", B1=3.0e6, B2=3.0e6)
+law_ir = law.to_ir()
+assert law_ir["kind"] == "cubic"
 study.stages.add_run(stage_id="run", until=1.0e-12)
 ```
 
@@ -97,7 +101,9 @@ Ownership tests compare this inventory with live signatures.
 (python-api-materials-magnetostriction-laws-limitations)=
 <!-- (limitations)= -->
 ## Limitations
-A law alone does not create a coupled problem; it must be wired to the elastic/magnetic system.
+A law alone does not create a coupled problem. `Problem` can carry magnetostriction laws, but the
+current fluent stage-first builder has no public attachment hook; this page does not imply that the
+example executes magnetoelastic coupling.
 
 (python-api-materials-magnetostriction-laws-scientific-bibliography)=
 <!-- (scientific-bibliography)= -->

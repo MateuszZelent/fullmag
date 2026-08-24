@@ -4,6 +4,7 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+source_of_truth: docs/physics/0980-mumag-standard-problem-4-fem-application-validation.md
 ---
 
 (public-docs-validation-mumag-standard-problems)=

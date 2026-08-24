@@ -1,0 +1,310 @@
+{
+  "document": {
+    "path": "docs/audits/2026-08-24-microwave-antenna-module-production-audit-and-remediation-plan.md",
+    "title": "Fullmag — scalony audyt naukowo-techniczny i plan produkcyjnego wdrożenia modułu anten mikrofalowych",
+    "interaction": "microwave-antenna-field"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "unsupported",
+      "reason": "Solved antenna-basis consumption and legacy prescribed antenna masks are not executable on the production CUDA lane."
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "unsupported",
+      "reason": "Antenna field-source current modules are rejected before native FEM GPU execution and no solved-basis consumer is qualified."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-antenna-charge",
+      "symbols": ["J", "sigma", "V"],
+      "sources": ["planner-mask"]
+    },
+    {
+      "id": "eq-antenna-terminal-current",
+      "symbols": ["J", "I_p", "w_pq"],
+      "sources": ["legacy-evaluator"]
+    },
+    {
+      "id": "eq-antenna-conduction-weak",
+      "symbols": ["sigma", "V"],
+      "sources": ["planner-mask"]
+    },
+    {
+      "id": "eq-antenna-biot-savart",
+      "symbols": ["J", "H_ant", "r"],
+      "sources": ["legacy-evaluator"]
+    },
+    {
+      "id": "eq-antenna-time-field",
+      "symbols": ["H_ant", "I_p"],
+      "sources": ["antenna-runtime"]
+    },
+    {
+      "id": "eq-antenna-zeeman-energy",
+      "symbols": ["H_ant", "M_s", "m"],
+      "sources": ["fdm-consumer"]
+    },
+    {
+      "id": "eq-antenna-transverse-field",
+      "symbols": ["H_ant", "m"],
+      "sources": ["excitation-analysis-api"]
+    },
+    {
+      "id": "eq-antenna-source-spectrum",
+      "symbols": ["H_ant", "k", "W_H"],
+      "sources": ["excitation-analysis-api"]
+    },
+    {
+      "id": "eq-antenna-local-spectrum",
+      "symbols": ["H_ant", "k", "W_H"],
+      "sources": ["excitation-analysis-api"]
+    },
+    {
+      "id": "eq-antenna-dynamic-structure-factor",
+      "symbols": ["m", "k", "S_m"],
+      "sources": ["spin-wave-sampling"]
+    },
+    {
+      "id": "eq-antenna-mode-overlap",
+      "symbols": ["H_ant", "m"],
+      "sources": ["spin-wave-sampling"]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "V",
+      "latex": "$V$",
+      "meaning": "potencjał elektryczny",
+      "si_unit": "$\\mathrm{V}$"
+    },
+    {
+      "id": "J",
+      "latex": "$\\mathbf J$",
+      "meaning": "gęstość prądu",
+      "si_unit": "$\\mathrm{A\\,m^{-2}}$"
+    },
+    {
+      "id": "sigma",
+      "latex": "$\\sigma$",
+      "meaning": "przewodność elektryczna",
+      "si_unit": "$\\mathrm{S\\,m^{-1}}$"
+    },
+    {
+      "id": "I_p",
+      "latex": "$I_p$",
+      "meaning": "prąd port mode $p$",
+      "si_unit": "$\\mathrm{A}$"
+    },
+    {
+      "id": "w_pq",
+      "latex": "$w_{p,q}$",
+      "meaning": "signed current weight gałęzi $q$",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "H_ant",
+      "latex": "$\\mathbf H$",
+      "meaning": "natężenie pola magnetycznego",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "M_s",
+      "latex": "$M_s$",
+      "meaning": "magnetyzacja nasycenia",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "m",
+      "latex": "$\\mathbf m$",
+      "meaning": "zredukowana magnetyzacja",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "r",
+      "latex": "$\\mathbf r,\\mathbf r'$",
+      "meaning": "punkt obserwacji i punkt źródłowy",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "k",
+      "latex": "$\\mathbf k$",
+      "meaning": "wektor falowy",
+      "si_unit": "$\\mathrm{rad\\,m^{-1}}$"
+    },
+    {
+      "id": "W_H",
+      "latex": "$W_H$",
+      "meaning": "nienormalizowana moc widma pola źródła",
+      "si_unit": "$\\mathrm{(normalization\\ dependent)}$"
+    },
+    {
+      "id": "S_m",
+      "latex": "$S_m$",
+      "meaning": "nienormalizowana dynamic structure factor",
+      "si_unit": "$\\mathrm{(normalization\\ dependent)}$"
+    }
+  ],
+  "sources": [
+    {
+      "id": "planner-mask",
+      "path": "crates/fullmag-plan/src/antenna_zeeman.rs",
+      "symbol": "resolve_prescribed_zeeman_masks",
+      "responsibility": "Resolve the compatibility prescribed Zeeman antenna mask at backend sample points."
+    },
+    {
+      "id": "legacy-evaluator",
+      "path": "crates/fullmag-runner/src/antenna_fields.rs",
+      "symbol": "add_rectangular_conductor",
+      "responsibility": "Evaluate the current infinite-strip compatibility approximation."
+    },
+    {
+      "id": "antenna-runtime",
+      "path": "crates/fullmag-runner/src/antenna_fields.rs",
+      "symbol": "combined_antenna_field_at_time",
+      "responsibility": "Combine compatibility antenna fields and time-dependent amplitudes."
+    },
+    {
+      "id": "fdm-consumer",
+      "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs",
+      "symbol": "resolved_antenna_zeeman_field",
+      "responsibility": "Materialize the compatibility antenna field for the FDM CPU reference lane."
+    },
+    {
+      "id": "excitation-analysis-api",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class SpinWaveExcitationAnalysis",
+      "responsibility": "Expose semantic-only source-k-profile authoring."
+    },
+    {
+      "id": "spin-wave-sampling",
+      "path": "crates/fullmag-runner/src/spin_wave_sampling.rs",
+      "symbol": "dynamic_structure_factor_1d_with_axes",
+      "responsibility": "Compute the current bounded one-dimensional finite-k magnetization response artifact."
+    },
+    {
+      "id": "quantity-catalog",
+      "path": "crates/fullmag-quantities/src/catalog.rs",
+      "symbol": "quantity_catalog",
+      "responsibility": "Own canonical quantity metadata including H_ant and H_drive."
+    },
+    {
+      "id": "charge-transport-dsl",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class CurrentTransport",
+      "responsibility": "Own the public authoring contract for charge-current transport."
+    },
+    {
+      "id": "charge-transport-ir",
+      "path": "crates/fullmag-ir/src/validation.rs",
+      "symbol": "validate_charge_transport_definition",
+      "responsibility": "Validate the canonical ChargeTransportDefinitionIR consumed by the existing transport stack."
+    },
+    {
+      "id": "current-transport-planner",
+      "path": "crates/fullmag-plan/src/current_transport.rs",
+      "symbol": "resolve_current_transports",
+      "responsibility": "Resolve existing current-transport modules with lane-dependent capability semantics."
+    },
+    {
+      "id": "conservative-current-view",
+      "path": "backends/fem/cpu/mfem/transport/conservative_current_view.hpp",
+      "symbol": "class ConservativeCurrentView",
+      "responsibility": "Own the conservative RT0/H(div) current view, balance certificates, and stable source identity."
+    },
+    {
+      "id": "oersted-direct-tetra",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.hpp",
+      "symbol": "class DirectTetraQuadrature",
+      "responsibility": "Provide the bounded singular-aware CPU-double direct Oersted oracle over tetrahedral current data."
+    },
+    {
+      "id": "oersted-vector-potential",
+      "path": "backends/fem/cpu/mfem/interactions/oersted/vector_potential.hpp",
+      "symbol": "class VectorPotentialSolver",
+      "responsibility": "Provide the bounded reference vector-potential realization of the Oersted field."
+    },
+    {
+      "id": "oersted-steady-transport",
+      "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs",
+      "symbol": "execute_native_fem_steady_transport_plans",
+      "responsibility": "Execute resolved native FEM steady-transport plans and publish transport field artifacts."
+    },
+    {
+      "id": "oersted-stage-provider",
+      "path": "crates/fullmag-runner/src/native_fem/stage_oersted.rs",
+      "symbol": "plan_requests_stage_oersted_callback",
+      "responsibility": "Detect and activate the existing stage-time Oersted provider lifecycle."
+    },
+    {
+      "id": "oersted-quantity",
+      "path": "crates/fullmag-quantities/src/catalog.rs",
+      "symbol": "quantity_catalog",
+      "responsibility": "Own canonical quantity metadata for H_oe, V_electric, and J_charge."
+    },
+    {
+      "id": "solved-current-spin-gate",
+      "path": "crates/fullmag-plan/src/oersted.rs",
+      "symbol": "resolve_solved_current_source",
+      "responsibility": "Expose the current planner gate that binds solved-current Oersted to SpinDriftDiffusion."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "`AntennaFieldSource.model`",
+        "type": "`str`",
+        "default": "`mqs_2p5d_az`",
+        "si_unit": "$1$",
+        "validation": "jeden z `mqs_2p5d_az`, `prescribed_zeeman_mask`",
+        "meaning": "wybór modelu kompatybilności źródła antenowego",
+        "backend_support": "ograniczony FDM CPU reference; pozostałe lane'y unsupported albo niekwalifikowane",
+        "problem_ir": "`current_modules[].model`"
+      },
+      {
+        "python": "`RfDrive.current_a`",
+        "type": "`float`",
+        "default": "required",
+        "si_unit": "$\\mathrm{A}$",
+        "validation": "wartość skończona; dalsze ograniczenia modelu przy planning",
+        "meaning": "amplituda prądu mnożąca kompatybilne pole przestrzenne",
+        "backend_support": "wyłącznie ścieżka kompatybilności",
+        "problem_ir": "`current_modules[].drive.current_a`"
+      },
+      {
+        "python": "`RegionalFieldDrive.amplitude_B_T`",
+        "type": "`float`",
+        "default": "required",
+        "si_unit": "$\\mathrm{T}$",
+        "validation": "wartość skończona i nieujemna",
+        "meaning": "szczytowa amplituda indukcji idealizowanego regional drive",
+        "backend_support": "FDM CPU reference executable; pozostałe lane'y wymagają osobnej kwalifikacji",
+        "problem_ir": "`field_drives[].amplitude_B_T`"
+      },
+      {
+        "python": "`SpinWaveExcitationAnalysis.method`",
+        "type": "`str`",
+        "default": "`source_k_profile`",
+        "si_unit": "$1$",
+        "validation": "obecnie dokładnie `source_k_profile`",
+        "meaning": "żądanie analizy wektora falowego pola źródła",
+        "backend_support": "semantic-only we wszystkich lane'ach",
+        "problem_ir": "`excitation_analysis.method`"
+      }
+    ]
+  }
+}

@@ -106,10 +106,11 @@ second free choice.
 (python-api-materials-spatial-parameter-fields-assumptions-and-validity)=
 ## Assumptions and validity
 
-- Field values must be finite. The `unit` string is preserved as non-empty metadata when supplied;
-  the Python factories do not check parameter-specific dimensions or convert units. Authors must
-  provide SI-valued numbers according to the parameter table, while planner/runtime validation
-  remains responsible for lane-specific legality.
+- Scalar analytic values are checked for finiteness. Three-component constant values, gradients,
+  and centres are checked for cardinality and converted to `float`, but the current Python helper
+  does not reject non-finite components; resolved planner values are required to be finite. The
+  `unit` string is preserved as non-empty metadata when supplied; factories do not check
+  parameter-specific dimensions or convert units.
 - `frame` is exactly `object` or `world`. Object-frame fields move with the object; world-frame
   fields remain fixed in laboratory coordinates.
 - Scalar parameters use scalar fields. Directional parameters such as `AnisotropyAxis` require a
@@ -148,20 +149,20 @@ The serialized form always uses the canonical ProblemIR name.
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| `MaterialParameterField.constant.value` | `float \| tuple[float,float,float]` | required | parameter-dependent | finite scalar or finite three-vector | authored constant value | FDM/FEM CPU analytic fields; GPU lane checks apply | `material_parameter_fields[].value.value` |
+| `MaterialParameterField.constant.value` | `float \| tuple[float,float,float]` | required | parameter-dependent | finite scalar; three-vector is length-checked and float-converted but not checked for finiteness in Python | authored constant value | FDM/FEM CPU analytic fields; GPU lane checks apply | `material_parameter_fields[].value.value` |
 | `MaterialParameterField.constant.unit` | `str \| None` | `None` | $1$ | non-empty metadata when supplied; no dimensional check | authored value unit metadata | all lanes preserve metadata; runtime does not convert | `material_parameter_fields[].value.unit` |
 | `MaterialParameterField.linear.base` | `float` | required | parameter-dependent | finite scalar | affine-field base value | FDM/FEM CPU analytic fields; GPU lane checks apply | `material_parameter_fields[].value.base` |
-| `MaterialParameterField.linear.gradient` | `tuple[float,float,float]` | required | parameter unit per metre | three finite components | spatial gradient | FDM/FEM CPU analytic fields; GPU lane checks apply | `material_parameter_fields[].value.gradient` |
+| `MaterialParameterField.linear.gradient` | `tuple[float,float,float]` | required | parameter unit per metre | length 3 and float-convertible; Python does not reject non-finite components | spatial gradient | FDM/FEM CPU analytic fields; GPU lane checks apply | `material_parameter_fields[].value.gradient` |
 | `MaterialParameterField.linear.frame` | `str` | `"object"` | $1$ | exactly `object` or `world` | coordinate frame for evaluation | FDM/FEM CPU analytic fields; GPU lane checks apply | `material_parameter_fields[].value.frame` |
 | `MaterialParameterField.linear.unit` | `str \| None` | `None` | $1$ | non-empty metadata when supplied; no dimensional check | affine-field value unit metadata | all lanes preserve metadata; runtime does not convert | `material_parameter_fields[].value.unit` |
-| `MaterialParameterField.radial.center` | `tuple[float,float,float]` | required | $\mathrm m$ | three finite coordinates | radial centre in the declared frame | FDM/FEM CPU analytic fields; GPU lane checks apply | `material_parameter_fields[].value.center` |
+| `MaterialParameterField.radial.center` | `tuple[float,float,float]` | required | $\mathrm m$ | length 3 and float-convertible; Python does not reject non-finite components | radial centre in the declared frame | FDM/FEM CPU analytic fields; GPU lane checks apply | `material_parameter_fields[].value.center` |
 | `MaterialParameterField.radial.radius` | `float` | required | $\mathrm m$ | finite and positive | radial profile radius | FDM/FEM CPU analytic fields; GPU lane checks apply | `material_parameter_fields[].value.radius` |
 | `MaterialParameterField.radial.inside` | `float` | required | parameter-dependent | finite scalar inside radius | inside value | FDM/FEM CPU analytic fields; GPU lane checks apply | `material_parameter_fields[].value.inside` |
 | `MaterialParameterField.radial.outside` | `float` | required | parameter-dependent | finite scalar outside radius | outside value | FDM/FEM CPU analytic fields; GPU lane checks apply | `material_parameter_fields[].value.outside` |
 | `MaterialParameterField.radial.frame` | `str` | `"object"` | $1$ | exactly `object` or `world` | coordinate frame for evaluation | FDM/FEM CPU analytic fields; GPU lane checks apply | `material_parameter_fields[].value.frame` |
 | `MaterialParameterField.radial.unit` | `str \| None` | `None` | $1$ | non-empty metadata when supplied; no dimensional check | radial-field value unit metadata | all lanes preserve metadata; runtime does not convert | `material_parameter_fields[].value.unit` |
 | `MaterialParameterField.sampled.asset_id` | `str` | required | $1$ | non-empty immutable asset identity | reference to sampled data | authoring-only; planner rejects materialization on all lanes | `material_parameter_fields[].value.asset_id` |
-| `MaterialParameterField.sampled.component_count` | `int` | required | $1$ | integer >= 1 | components per sample | authoring-only; planner rejects materialization on all lanes | `material_parameter_fields[].value.component_count` |
+| `MaterialParameterField.sampled.component_count` | `int` | required | $1$ | value must compare as >= 1; current factory serializes `int(value)` and does not reject bool or non-integral numerics | components per sample | authoring-only; planner rejects materialization on all lanes | `material_parameter_fields[].value.component_count` |
 | `MaterialParameterField.sampled.location` | `str` | required | $1$ | one of `cell`, `node`, `element`, `quadrature` | location of sampled values | authoring-only; planner rejects materialization on all lanes | `material_parameter_fields[].value.location` |
 | `MaterialParameterField.sampled.unit` | `str` | required | $1$ | non-empty metadata; no dimensional check | sampled-value unit metadata | authoring-only; planner rejects materialization on all lanes | `material_parameter_fields[].value.unit` |
 

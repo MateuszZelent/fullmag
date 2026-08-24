@@ -4,6 +4,7 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+source_of_truth: docs/specs/resource-first-control-room-api-v2.md, docs/specs/frontend-v2/01-module-kernel-architecture.md
 ---
 
 (public-docs-frontend-meshing-root)=

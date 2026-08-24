@@ -34,9 +34,9 @@ Constructor checks run immediately. Lowering and planning additionally check mes
 ## Python API
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| `SaveField.field` | `str` | `required` | $1$ | Canonical field ID. For example, `H_ex` requires `Exchange()`. | Canonical field ID. For example, `H_ex` requires `Exchange()`. | FEM/FDM CPU/GPU; planner checks combinations | `study.sampling.outputs[].field` |
+| `SaveField.field` | `str` | `required` | $1$ | Canonical field ID. For example, `H_ex` requires `Exchange()`. | Canonical field ID. For example, `H_ex` requires `Exchange()`. | FEM/FDM CPU/GPU; planner checks combinations | `study.sampling.outputs[].name` |
 | `SaveField.every` | `positive float or "auto"` | `required` | $\mathrm{s}$ | Finite positive sampling period in seconds, or `"auto"`; step-count sampling is not accepted here. | Finite positive sampling period in seconds, or `"auto"`; step-count sampling is not accepted here. | FEM/FDM CPU/GPU; planner checks combinations | `study.sampling.outputs[].every` |
-| `SaveScalar.scalar` | `str` | `required` | $1$ | Canonical scalar ID. For example, `E_ex` requires `Exchange()`. | Canonical scalar ID. For example, `E_ex` requires `Exchange()`. | FEM/FDM CPU/GPU; planner checks combinations | `study.sampling.outputs[].scalar` |
+| `SaveScalar.scalar` | `str` | `required` | $1$ | Canonical scalar ID. For example, `E_ex` requires `Exchange()`. | Canonical scalar ID. For example, `E_ex` requires `Exchange()`. | FEM/FDM CPU/GPU; planner checks combinations | `study.sampling.outputs[].name` |
 | `SaveScalar.every` | `positive float or "auto"` | `required` | $\mathrm{s}$ | Finite positive sampling period in seconds, or `"auto"`; step-count sampling is not accepted here. | Finite positive sampling period in seconds, or `"auto"`; step-count sampling is not accepted here. | FEM/FDM CPU/GPU; planner checks combinations | `study.sampling.outputs[].every` |
 
 

@@ -28,8 +28,10 @@ All values are identifiers; no physical units are owned here.
 (python-api-runtime-backend-policy-assumptions-and-validity)=
 <!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
-Enum coercion is case-insensitive and fail-closed. Hybrid backend and hybrid mode must be selected
-together; any other pairing is rejected.
+The stage-builder helpers lowercase string identifiers before the canonical descriptor is built;
+direct enum construction uses the lowercase enum values shown below. `Simulation` requires hybrid
+backend and hybrid mode together. `RuntimeSelection` itself stores the two enum fields but does not
+enforce that pairing.
 
 (python-api-runtime-backend-policy-python-api)=
 <!-- (python-api)= -->
@@ -78,8 +80,10 @@ The enum values serialize as their lowercase strings inside the `runtime` block.
 (python-api-runtime-backend-policy-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
-Requested policy is preserved verbatim. Resolution is reported independently. Invalid identifiers
-and hybrid/non-hybrid mismatches fail immediately.
+Requested policy is normalized to canonical lowercase identifiers. Invalid enum identifiers fail
+when the canonical descriptor is constructed; hybrid/non-hybrid mismatches fail when constructing
+`Simulation` and at planner boundaries. Resolved execution is reported independently by the v2
+session/run resource.
 
 (python-api-runtime-backend-policy-discrete-realization)=
 <!-- (discrete-realization)= -->

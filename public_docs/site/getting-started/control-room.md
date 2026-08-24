@@ -9,9 +9,26 @@ owner: fullmag-public-docs
 (public-docs-getting-started-control-room)=
 # Control Room User Guide
 
-The **FullMag Control Room** is the interactive web interface and authoring companion for the FullMag micromagnetics platform. It provides a visual control environment for setting up physical micromagnetic models, configuring materials and geometry, visualizing 3D vector fields, running simulations across FDM and FEM backends, and analyzing numerical observables in real time.
+The **FullMag Control Room** is the interactive web interface and authoring companion for FullMag.
+It exposes the current session through an Explorer, Inspector, ribbon, 3D viewport, analysis docks,
+and runtime status surfaces. Supported authoring changes are committed through the v2 model API and
+can be exported as the canonical stage-first Python DSL. A visible but disabled control is not an
+implemented capability, and backend execution remains capability-gated.
 
-All interactive changes in the Control Room lower directly to FullMag's canonical `ProblemIR` and round-trip cleanly with the embedded Python DSL.
+## Start a session
+
+After completing {doc}`installation`, save a stage-first study script and launch it from the
+repository root. For example:
+
+```console
+just fullmag build=True fdm cpu first_fdm_simulation.py
+```
+
+The launcher reuses a ready FullMag API and a matching Control Room frontend when they are already
+available; otherwise it starts the missing service for this launch. It tracks only the API or
+frontend process that it starts, and opening the page does not give it ownership of the browser
+process. The authored engine and device remain requested intent; the status surfaces report the
+resolved runtime separately.
 
 ---
 
@@ -27,13 +44,13 @@ The Control Room interface is structured into an ergonomic, high-density scienti
 
 | Region | Component | Primary Purpose |
 |---|---|---|
-| **Top** | Ribbon Toolbar Strip | Access action groups for geometry creation, material assignment, physics setup, solver configuration, and script export. |
+| **Top** | Ribbon Toolbar Strip | Render active command-registry actions for authoring, mesh, study, visualization, and export; unavailable actions remain disabled. |
 | **Left** | Explorer Tree Panel | Inspect and navigate the hierarchical semantic tree of model objects, regions, materials, interactions, meshes, stages, and outputs. |
 | **Center** | 3D Interactive Viewport | High-performance WebGL canvas displaying geometry meshes, magnetization vector field glyphs, colormaps, and spatial bounding boxes. |
 | **Right** | Inspector Panel | Contextual property editor for configuring selected tree nodes, editing parameters with explicit draft isolation, and applying changes. |
-| **Bottom** | Analysis & Live Charts Panel | Real-time plotting workspace showing average magnetization trajectories, energy density breakdowns, and spectral FFT responses. |
-| **Footer** | Status & Governance Bar | Monitor WebSocket session connectivity, active backend engine (FDM/FEM), hardware device (CPU/GPU), precision, and stage execution progress. |
-| **Overlay** | Command Palette | Global `Ctrl+K` search launcher for executing workspace commands, toggling visual modes, and switching themes. |
+| **Bottom** | Analysis & Live Charts Panel | Plot materialized scalar, table, and analysis resources published by the active session. |
+| **Footer** | Status & Governance Bar | Show session connectivity, requested/resolved execution summaries, and stage or solver state exposed by v2 resources. |
+| **Overlay** | Command Palette | Global `Ctrl+Shift+P` launcher for currently registered and enabled commands. |
 
 ---
 
@@ -51,10 +68,12 @@ The **Geometry Tab** provides tools for building and transforming physical simul
 :width: 100%
 ```
 
-- **Primitive Objects**: Add standard geometric shapes including **Box**, **Cylinder**, **Sphere**, and **Ellipsoid**.
-- **CAD & STL Import**: Import STEP, IGES, or STL boundary representations for finite-element discretization.
-- **Transformations**: Translate, rotate, and scale selected geometry objects in global or local coordinate frames.
-- **Boolean Operations**: Perform CSG operations (**Union**, **Difference**, **Intersection**) between overlapping geometry objects.
+- **Active primitive drafts**: Add **Box**, **Thin Film**, **Cylinder**, and **Sphere** objects, then
+  commit the validated draft with **Apply Draft**.
+- **Mesh lifecycle**: A committed primitive can be shown before topology exists; **Build Mesh** is a
+  separate backend command.
+- **Current boundary**: Ellipsoid, Boolean composition, and direct move/rotate/scale ribbon tools are
+  present as disabled controls in the current UI. This guide does not present them as available.
 
 ### Physics & Interaction Tab
 
@@ -66,12 +85,12 @@ The **Physics Tab** enables physical interactions and external drive fields.
 :width: 100%
 ```
 
-- **Exchange Interaction**: Toggle Heisenberg exchange stiffness $A_{\text{ex}}$ and surface exchange coupling.
-- **Demagnetization**: Configure magnetostatic field calculations via FDM FFT convolution or FEM Poisson airbox/BEM solvers.
-- **Zeeman Field**: Apply uniform or spatially varying bias magnetic fields $\mathbf{H}_{\text{ext}}(t)$.
-- **Anisotropy**: Configure uniaxial ($\mathbf{u}_K$) or cubic crystalline anisotropy constants ($K_1, K_2$).
-- **Dzyaloshinskii–Moriya (DMI)**: Enable interfacial or bulk DMI vectors ($D$).
-- **Spin Torque & Transport**: Add Spin-Transfer Torque (STT), Spin-Orbit Torque (SOT), and Oersted field excitations.
+The interaction catalog and Inspector expose supported authoring forms for exchange,
+demagnetization, external fields, anisotropy, DMI, transport/torque, and Oersted sources. Authoring
+availability and executable backend support are separate: the active-session capability resource
+and disabled reason determine whether a command can be committed or run. See the canonical
+{ref}`interaction pages <public-docs-physics-interactions-root>` for physical and lane-specific
+support contracts.
 
 ---
 
@@ -111,8 +130,10 @@ The **3D Viewport** (`.fm-viewport-3d`) is a Three.js / WebGL rendering canvas t
 
 ### Key Viewport Features
 
-- **Vector Field Glyphs**: Render vector fields ($\mathbf{m}, \mathbf{H}_{\text{eff}}, \mathbf{H}_{\text{demag}}$) using arrows, cones, or stream ribbons scaled by magnitude.
-- **Colormaps & Components**: Colorize fields using standard scientific colormaps (**viridis**, **plasma**, **coolwarm**, **hsv**) mapped to vector components ($m_x, m_y, m_z$) or norm $|\mathbf{m}|$.
+- **Vector Field Glyphs**: Render available vector quantities such as $\mathbf{m}$ or materialized
+  field resources with bounded glyph budgets and explicit quantity identity.
+- **Colormaps & Components**: Colorize supported scalar or vector-component views through the
+  visualization resource, retaining the displayed quantity and unit.
 - **Surface Projection Modes**: For thin films and multi-layer structures, switch between:
   - **Raw Nodal**: Direct node-based field interpolation.
   - **Surface Faces**: Projection onto top and bottom boundary faces.
@@ -137,8 +158,9 @@ The **Inspector Panel** (`.fm-inspector-shell`) on the right side of the workspa
 To prevent accidental simulation state corruption during live execution, the Inspector enforces an **Explicit Draft Workflow**:
 
 1. Modifying numeric values or dropdown options puts the Inspector into **Draft Mode** (highlighted with an amber indicator border).
-2. Click **Apply Draft** to commit changes to the active session and trigger `ProblemIR` re-lowering.
-3. Click **Revert Draft** to discard uncommitted edits and restore active session parameters.
+2. Click **Apply Draft** to submit the corresponding v2 model transaction. A successful commit
+   refreshes the canonical scene; Python export serializes that authored state.
+3. Click **Revert** to discard uncommitted edits and restore active session parameters.
 
 ### Configurable Parameter Groups
 
@@ -158,17 +180,27 @@ The **Status Bar** (`.fm-status-bar`) at the bottom footer of the window provide
 :width: 100%
 ```
 
-- **Session Connectivity**: Indicates live HTTP/WebSocket connection to the backend runtime.
+- **Session Connectivity**: Indicates the live connection to the backend runtime. HTTP resources
+  remain authoritative; realtime messages invalidate them rather than replacing them.
 - **Active Engine & Device**: Displays active solver engine (**FDM** or **FEM**) and hardware lane (**CPU** or **GPU**).
 - **Execution Progress**: Displays stage execution percentage, current step count, physical time $t$ (in picoseconds/nanoseconds), and solver speed (steps/sec).
-- **Memory Footprint**: Monitors GPU VRAM and system RAM allocation for mesh topologies and field buffers.
 
 ---
 
 ## Command Palette & Keyboard Shortcuts
 
-Press **`Ctrl + K`** (or **`Cmd + K`** on macOS) anywhere in the workspace to launch the **Command Palette**:
+Press **`Ctrl + Shift + P`** anywhere in the workspace to launch the **Command Palette**:
 
-- Search for commands by name (e.g., *"Add Box Geometry"*, *"Export Python Script"*, *"Toggle Wireframe"*).
-- Switch workspace themes between **Catppuccin Mocha** (dark theme) and **Catppuccin Latte** (light theme).
-- Trigger camera framing (**`F`**) or reset camera view (**`R`**).
+- Search for commands by name (for example, *"Add Box"*, *"Export Python DSL"*, or
+  *"Focus Primitive"*).
+- Switch the workspace theme through **Toggle Theme**; the current themes are Catppuccin Mocha
+  (dark) and Catppuccin Latte (light).
+- Focus the selected primitive with **`F`** or frame the full scene with **`Shift + F`** when those
+  commands are enabled for the current context.
+
+## Current availability boundary
+
+The Control Room is still capability-driven. It does not make every authored interaction,
+visualization, solver, or device executable. Disabled controls and server rejection reasons are
+part of the user contract; they must not be interpreted as hidden fallback. For the concise
+ownership contract and links to detailed frontend pages, see {doc}`../frontend/control-room/index`.

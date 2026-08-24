@@ -30,21 +30,25 @@ Let $\mathbf m=\mathbf m_0+\delta\mathbf m$ with $|\mathbf m_0|=1$. The first-or
 \delta\mathbf m=\mathbf e_1 q_1+\mathbf e_2 q_2.
 ```
 
-After linearizing the effective field and assembling the tangent-space gyrotropic and stiffness
-operators, the discrete problem is represented as a generalized complex eigenproblem:
+After linearizing the effective field and assembling the tangent-space dynamic and damping/mass
+operators, the production modal contract is represented as a generalized complex eigenproblem:
 
 ```{math}
 :label: eq-numerical-linearized-llg-pencil
-\mathsf K\mathbf q=\lambda\mathsf G\mathbf q,
+\mathsf L\mathbf q=\lambda\mathsf B_{\alpha}\mathbf q,
 \qquad
-\lambda=\sigma+\mathrm i\omega,
+\lambda=\mathrm i\omega,
 \qquad
-f=\frac{|\omega|}{2\pi}.
+\omega=-\mathrm i\lambda,
+\qquad
+f=\frac{\operatorname{Re}\omega}{2\pi}.
 ```
 
-For the common $\exp(\mathrm i\omega t)$ convention, $-\sigma$ is the decay rate when the mode is
-stable. The reported mode must retain the phase convention and the normalization used by the
-solver; a complex phase rotation does not change the physical mode.
+For the recorded $\exp(\mathrm i\omega t)$ convention, damping can make the mapped frequency
+complex. Cyclic frequency uses only $\operatorname{Re}\omega$; $|\omega|$ would mix oscillation
+with damping and lose the branch sign. The reported mode must retain the phase convention,
+eigenvalue-to-frequency mapping, and normalization used by the solver; a complex phase rotation
+does not change the physical mode.
 
 (numerical-methods-eigensolver-linearized-llg-symbols-and-si-units)=
 ## Symbols and SI units
@@ -56,13 +60,12 @@ solver; a complex phase rotation does not change the physical mode.
 | $\delta\mathbf m$ | first-order magnetization perturbation | $1$ |
 | $\mathbf e_1,\mathbf e_2$ | local tangent basis | $1$ |
 | $q_1,q_2$ | tangent perturbation amplitudes | $1$ |
-| $\mathsf K$ | tangent stiffness/dynamic matrix | problem-dependent |
-| $\mathsf G$ | gyrotropic mass/operator matrix | problem-dependent |
+| $\mathsf L$ | tangent dynamic operator | $\mathrm{s^{-1}}$ |
+| $\mathsf B_{\alpha}$ | damping/mass operator | $1$ |
 | $\mathbf q$ | discrete tangent eigenvector | $1$ |
 | $\lambda$ | complex eigenvalue | $\mathrm{s^{-1}}$ |
-| $\sigma$ | modal growth/decay real part | $\mathrm{s^{-1}}$ |
-| $\omega$ | angular frequency | $\mathrm{rad\,s^{-1}}$ |
-| $f$ | eigenfrequency | $\mathrm{Hz}$ |
+| $\omega$ | complex angular frequency, $-\mathrm i\lambda$ | $\mathrm{rad\,s^{-1}}$ |
+| $f$ | signed cyclic frequency, $\operatorname{Re}(\omega)/(2\pi)$ | $\mathrm{Hz}$ |
 
 (numerical-methods-eigensolver-linearized-llg-assumptions-and-validity)=
 ## Assumptions and validity
@@ -74,8 +77,8 @@ solver; a complex phase rotation does not change the physical mode.
 - `damping_policy="ignore"` and `damping_policy="include"` define different operators. They must
   not be compared as CPU/GPU parity results.
 - Demagnetization is included only when `include_demag=True`; omitting it changes the spectrum.
-- The current native production modal route is FEM. FDM and GPU support must be reported by the
-  resolved planner, not inferred from the Python constructor.
+- The current modal routes are bounded FEM slices. FDM is unsupported; FEM CPU/GPU support must be
+  reported by the resolved planner, not inferred from the Python constructor.
 
 (numerical-methods-eigensolver-linearized-llg-python-api)=
 ## Python API
@@ -149,8 +152,8 @@ availability.
 
 | Solver | Device | Status | Realization |
 |---|---|---|---|
-| FEM | CPU | partial/source-backed | native tangent dynamic pencil and modal solver contract |
-| FEM | GPU | partial/qualification-dependent | separate runtime/dependency lane; CPU proof is not GPU proof |
+| FEM | CPU | partial-production-executable | reference/MVP artifacts and a bounded selected-spectrum, no-demag, Full2x2 Floquet slice; general Poisson-airbox/SLEPc production remains gated |
+| FEM | GPU | partial-production-executable | narrow $k=0$, no-demag macrospin/Kittel cuSolverDN slice; Poisson-airbox dense paths remain algebraic or gated |
 | FDM | CPU | unsupported for this native modal page | planner does not claim a production FDM eigen lane |
 | FDM | GPU | unsupported for this native modal page | no public CUDA modal claim |
 
@@ -162,6 +165,7 @@ availability.
 | Python stage schema | `packages/fullmag-py/src/fullmag/world.py` | `class EigenmodesStageSpec` | modal request fields | Python |
 | Python stage builder | `packages/fullmag-py/src/fullmag/world.py` | `eigenmodes_stage` | constructs modal stage | Python/IR |
 | Native modal contract | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | `solve_modal_eigen_contract` | validates and executes modal request | FEM CPU |
+| Eigenvalue/frequency mapping | `backends/fem/src/frequency_domain/mode_kinematics.cpp` | `frequency_hz_from_omega_rad_s` | converts the signed real angular-frequency component selected by `map_eigenvalue` to $f$ | FEM |
 
 (numerical-methods-eigensolver-linearized-llg-validation)=
 ## Validation
@@ -193,3 +197,4 @@ runtime qualification condition, not a mathematical assumption.
 | Python stage schema | `packages/fullmag-py/src/fullmag/world.py` | `class EigenmodesStageSpec` | modal parameters | Python API source |
 | Python stage construction | `packages/fullmag-py/src/fullmag/world.py` | `eigenmodes_stage` | stage lowering input | Python API source |
 | Native modal solve | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | `solve_modal_eigen_contract` | contract and diagnostics | native source contract |
+| Eigenvalue/frequency mapping | `backends/fem/src/frequency_domain/mode_kinematics.cpp` | `frequency_hz_from_omega_rad_s` | signed angular-to-cyclic frequency conversion used by modal kinematics | native source/tests |

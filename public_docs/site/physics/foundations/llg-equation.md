@@ -10,131 +10,178 @@ source_of_truth: docs/physics/llg_conventions.md
 (public-docs-physics-foundations-llg-equation)=
 # Landau–Lifshitz–Gilbert equation
 
-The Landau–Lifshitz–Gilbert (LLG) equation is the equation of motion for the reduced
-magnetization $\mathbf{m}=\mathbf{M}/M_s$ in micromagnetics. FullMag uses the explicit
-Gilbert form for all solver backends.
+(llg-foundation-problem-statement)=
+<!-- (problem-statement)= -->
+## Problem statement
 
-## Governing equation
+FullMag evolves reduced magnetization $\mathbf m=\mathbf M/M_s$ with an explicit Gilbert-form
+right-hand side. Field-form interactions and already-converted direct torques remain separate.
 
-The implemented LLG right-hand side is
+(llg-foundation-governing-equations)=
+<!-- (governing-equations)= -->
+## Governing equations
 
 ```{math}
 :label: eq-llg-full
-\frac{\mathrm{d}\mathbf{m}}{\mathrm{d}t}
-=
+\frac{\mathrm d\mathbf m}{\mathrm dt}=
 -\frac{\gamma_{\mu_0}}{1+\alpha^2}
-\left[
-  \mathbf{m}\times\mathbf{H}_{\mathrm{eff}}
-  + \alpha\,\mathbf{m}\times\left(\mathbf{m}\times\mathbf{H}_{\mathrm{eff}}\right)
-\right]
-+ \boldsymbol{\tau}_{\mathrm{direct}},
+\left[\mathbf m\times\mathbf H_{\mathrm{eff}}+
+\alpha\,\mathbf m\times(\mathbf m\times\mathbf H_{\mathrm{eff}})\right]
++\boldsymbol\tau_{\mathrm{direct}}.
 ```
 
-where:
-
-- $\gamma_{\mu_0} = \mu_0|\gamma_e| \approx 2.211\times10^{5}\;\mathrm{m\,(A\,s)^{-1}}$
-  is the reduced gyromagnetic constant (see {doc}`conventions-and-units`),
-- $\alpha \geq 0$ is the dimensionless Gilbert damping parameter,
-- $\mathbf{H}_{\mathrm{eff}}$ is the total effective field in $\mathrm{A\,m^{-1}}$
-  (see {doc}`effective-field`),
-- $\boldsymbol{\tau}_{\mathrm{direct}}$ is the sum of all direct-torque contributions
-  (STT, SOT) in $\mathrm{s^{-1}}$.
-
-## Precessional and damping terms
-
-Eq. {eq}`eq-llg-full` contains two distinct physical effects:
-
-1. **Precessional torque**: $-\gamma_{\mu_0}\,\mathbf{m}\times\mathbf{H}_{\mathrm{eff}}$
-   causes Larmor precession of the magnetization around the effective field.
-
-2. **Damping torque**: $-\gamma_{\mu_0}\alpha\,\mathbf{m}\times(\mathbf{m}\times\mathbf{H}_{\mathrm{eff}})$
-   drives relaxation toward alignment with the effective field.
-
-For $\alpha \ll 1$, precession dominates. For $\alpha \gg 1$, the magnetization relaxes
-with minimal precession. The $1/(1+\alpha^2)$ prefactor in the explicit Gilbert form ensures
-correct damping rate regardless of $\alpha$.
-
-## Relaxation mode (overdamped LLG)
-
-FullMag exposes a pure-damping relaxation mode that disables the precessional term:
+The runtime flag `precession_enabled = false` removes the first cross-product term:
 
 ```{math}
 :label: eq-llg-relaxation
-\frac{\mathrm{d}\mathbf{m}}{\mathrm{d}t}\bigg|_{\mathrm{relax}}
-=
+\left.\frac{\mathrm d\mathbf m}{\mathrm dt}\right|_{\mathrm{pure\ damping}}=
 -\frac{\gamma_{\mu_0}\alpha}{1+\alpha^2}
-\,\mathbf{m}\times\left(\mathbf{m}\times\mathbf{H}_{\mathrm{eff}}\right)
-+ \boldsymbol{\tau}_{\mathrm{direct}}.
+\mathbf m\times(\mathbf m\times\mathbf H_{\mathrm{eff}})
++\boldsymbol\tau_{\mathrm{direct}}.
 ```
 
-This mode is selected by the runtime field `precession_enabled = false`. It converges
-monotonically to the nearest energy minimum without oscillatory transients. Runtime
-provenance logs expose the resolved mode as `llg_mode = precessional` or
-`llg_mode = pure_damping`.
-
-## Magnetization normalization
-
-The LLG equation preserves $|\mathbf{m}|=1$ analytically, but explicit time integrators
-introduce a numerical drift. FullMag re-normalises the magnetization on every magnetic
-degree of freedom after each accepted integration step:
+This targets energy descent without precessional oscillation; discrete monotonicity is an
+algorithm- and acceptance-policy-specific validation obligation. After every accepted explicit
+step, magnetic degrees of freedom are normalized:
 
 ```{math}
-:label: eq-normalization
-\mathbf{m}_i \leftarrow \frac{\mathbf{m}_i}{|\mathbf{m}_i|}
-\quad\text{for all magnetic } i.
+:label: eq-llg-normalization
+\mathbf m_i\leftarrow\frac{\mathbf m_i}{|\mathbf m_i|}.
 ```
 
-Non-magnetic nodes (FEM airbox, visualisation padding) are **not** normalised and must not
-contribute to the magnetic RHS.
+The core explicit family includes Heun (order 2), classical RK4, Bogacki–Shampine RK23 (3(2)),
+and Dormand–Prince RK45 (5(4)). Availability, fixed/adaptive use, precision, and multilayer support
+are planner-dependent rather than universal consequences of the tableau existing.
 
-## Time integration
-
-FullMag integrates the LLG equation with explicit Runge–Kutta methods:
-
-| Integrator | Stages | Order | Adaptive | Current status |
-|---|---:|---:|---|---|
-| Heun | 2 | 2 | No | Baseline for all backends |
-| RK4(5) Dormand–Prince | 7 | 4(5) | Yes | Production FDM GPU |
-| RK2(3) Bogacki–Shampine | 4 | 2(3) | Yes | Available |
-
-Adaptive timestep control uses the embedded error estimate with user-specified `max_err`
-(absolute maximum node/cell embedded vector error). A failed adaptive attempt at the minimum
-timestep `dt_min` returns a typed error and cannot be accepted.
-
-Fixed-step mode (`fix_dt`) selects a true fixed physical timestep and cannot be combined
-with adaptive parameters.
-
+(llg-foundation-symbols-and-si-units)=
+<!-- (symbols-and-si-units)= -->
 ## Symbols and SI units
 
 | Symbol | Definition | SI unit |
 |---|---|---:|
-| $\mathbf{m}$ | reduced magnetization | $1$ |
-| $\mathbf{H}_{\mathrm{eff}}$ | effective field | $\mathrm{A\,m^{-1}}$ |
-| $\alpha$ | Gilbert damping parameter | $1$ |
+| $\mathbf m$ | reduced magnetization | $1$ |
+| $\mathbf H_{\mathrm{eff}}$ | effective field | $\mathrm{A\,m^{-1}}$ |
+| $\alpha$ | Gilbert damping | $1$ |
 | $\gamma_{\mu_0}$ | reduced gyromagnetic constant | $\mathrm{m\,(A\,s)^{-1}}$ |
-| $\boldsymbol{\tau}_{\mathrm{direct}}$ | direct torque | $\mathrm{s^{-1}}$ |
-| $\Delta t$ | integration timestep | $\mathrm{s}$ |
+| $\boldsymbol\tau_{\mathrm{direct}}$ | direct RHS torque | $\mathrm{s^{-1}}$ |
+| $t$ | physical time | $\mathrm{s}$ |
 
+(llg-foundation-assumptions-and-validity)=
+<!-- (assumptions-and-validity)= -->
+## Assumptions and validity
+
+- $M_s>0$ on magnetic degrees of freedom; non-magnetic airbox support contributes no magnetic RHS.
+- $\gamma_{\mu_0}$ already includes $\mu_0$ and must not be replaced with the electron ratio in
+  $\mathrm{rad\,(T\,s)^{-1}}$.
+- Direct torques are post-conversion RHS terms in $\mathrm{s^{-1}}$.
+- Rejected adaptive attempts do not commit state; failure at `dt_min` is typed and fail-closed.
+
+(llg-foundation-python-api)=
+<!-- (python-api)= -->
+## Python API
+
+```python
+# %% LLG policy in a stage-first study
+import fullmag as fm
+
+nm = 1.0e-9
+study = fm.study("llg-foundation")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
+body = study.geometry(fm.Box(40 * nm, 20 * nm, 4 * nm), name="film")
+body.Ms = 800.0e3
+body.Aex = 13.0e-12
+body.alpha = 0.02
+body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.exchange()
+study.solver(
+    integrator="rk45",
+    adaptive_timestep=fm.AdaptiveTimestep(
+        atol=1.0e-6, rtol=1.0e-3, dt_min=1.0e-15, dt_max=1.0e-12
+    ),
+    gamma=2.211e5,
+)
+study.stages.add_run(stage_id="run", until=1.0e-9)
+```
+
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `LLG.gamma` | `float` | `221100.0` | $\mathrm{m\,(A\,s)^{-1}}$ | positive finite | reduced gyromagnetic constant | FDM/FEM CPU/GPU subject to planner capability | `study.dynamics.gyromagnetic_ratio` |
+| `LLG.integrator` | `str` | `"auto"` | $1$ | supported canonical name or alias | requested time integrator | lane-dependent; planner checks combinations | `study.dynamics.integrator` |
+| `LLG.fixed_timestep` | `float \| None` | `None` | $\mathrm{s}$ | positive and mutually exclusive with adaptive stepping | fixed physical timestep | lane-dependent | `study.dynamics.fixed_timestep` |
+| `LLG.adaptive_timestep` | `AdaptiveTimestep \| None` | `None` | $1$ | requires an embedded-error integrator | adaptive attempt policy | lane-dependent | `study.dynamics.adaptive_timestep` |
+
+(llg-foundation-problem-ir)=
+<!-- (problem-ir)= -->
+## ProblemIR
+
+`study.dynamics` preserves the requested gyromagnetic ratio, integrator, fixed/adaptive policy,
+and field-refresh policy. Stage intent remains separate. Planner/runtime provenance records the
+resolved integrator, timestep mode, LLG mode, backend, device, and precision.
+
+(llg-foundation-round-trip-and-failure-semantics)=
+<!-- (round-trip-and-failure-semantics)= -->
+## Round-trip and failure semantics
+
+Requested intent survives Python-to-IR lowering and script export. Resolved execution is
+planner-owned. Validation errors reject invalid gamma, timestep, and adaptive combinations;
+unsupported combinations fail without accepting a rejected step or silently selecting another
+backend or integrator.
+
+(llg-foundation-discrete-realization)=
+<!-- (discrete-realization)= -->
+## Discrete realization
+
+| Solver | Device | Status | Qualification boundary |
+|---|---|---|---|
+| FDM | CPU | reference | FP64 explicit-step oracle and norm/error contracts |
+| FDM | GPU | implemented | explicit CUDA paths subject to integrator/device qualification |
+| FEM | CPU | implemented | native MFEM explicit RHS and tableaus |
+| FEM | GPU | implemented | same native contract; executed-device evidence is required |
+
+(llg-foundation-implementation-mapping)=
+<!-- (implementation-mapping)= -->
 ## Implementation mapping
 
-| Responsibility | Source identity |
-|---|---|
-| FEM CPU LLG RHS | `backends/fem/cpu/mfem/integrators/llg_rhs.cpp` — `compute_llg_rhs` |
-| FDM CPU LLG stepping | `crates/fullmag-engine/src/fdm/cpu/integrator.rs` |
-| FDM GPU Heun/RK stages | `backends/fdm/gpu/cuda/runtime/` — RK stage kernels |
-| Magnetization normalization | Per-backend post-step normalization routines |
-| Relaxation mode flag | `precession_enabled` in native FEM ABI |
+`LLG` owns public validation/lowering. FDM and native FEM modules own the explicit Gilbert RHS;
+native tableau dispatch owns Heun/RK4/RK23/RK45 selection without a silent fallback.
 
+(llg-foundation-validation)=
+<!-- (validation)= -->
+## Validation
+
+Validate macrospin precession, damping sign, norm preservation, direct-torque units, tableau order,
+fixed/adaptive acceptance and rollback, `dt_min` exhaustion, and executed CPU/GPU parity.
+
+(llg-foundation-limitations)=
+<!-- (limitations)= -->
+## Limitations
+
+Representability of an integrator does not make it executable on every solver/device or multilayer
+path. Planner capabilities and lane-specific qualification remain authoritative.
+
+(llg-foundation-scientific-bibliography)=
+<!-- (scientific-bibliography)= -->
 ## Scientific bibliography
 
-1. L. D. Landau and E. M. Lifshitz, "On the theory of the dispersion of magnetic
-   permeability in ferromagnetic bodies," *Phys. Z. Sowjetunion* **8**, 153 (1935).
-2. T. L. Gilbert, "A phenomenological theory of damping in ferromagnetic materials,"
-   *IEEE Trans. Magn.* **40**(6), 3443 (2004).
+1. L. D. Landau and E. M. Lifshitz, "On the theory of the dispersion of magnetic permeability in
+   ferromagnetic bodies," *Phys. Z. Sowjetunion* **8**, 153 (1935).
+2. T. L. Gilbert, "A phenomenological theory of damping in ferromagnetic materials," *IEEE
+   Transactions on Magnetics* **40**, 3443 (2004).
    [doi:10.1109/TMAG.2004.836740](https://doi.org/10.1109/TMAG.2004.836740).
-3. C. Abert, "Micromagnetics and spintronics: models and numerical methods," *European
-   Physical Journal B* **92**, 120 (2019).
+3. C. Abert, "Micromagnetics and spintronics: models and numerical methods," *European Physical
+   Journal B* **92**, 120 (2019).
    [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
-4. M. J. Donahue and D. G. Porter, *OOMMF User's Guide, Version 1.0*, NISTIR 6376,
-   National Institute of Standards and Technology, 1999.
-   [doi:10.6028/NIST.IR.6376](https://doi.org/10.6028/NIST.IR.6376).
+
+(llg-foundation-source-code-index)=
+<!-- (source-code-index)= -->
+## Source-code index
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Public dynamics policy | `packages/fullmag-py/src/fullmag/model/dynamics.py` | `class LLG` | validation and lowering | Python API tests |
+| FDM explicit Gilbert RHS | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `llg_rhs_from_field` | field-to-RHS conversion | FDM integrator tests |
+| Native FEM explicit Gilbert RHS | `backends/fem/cpu/mfem/integrators/llg_rhs.cpp` | `llg_rhs_aos` | field/direct-torque RHS and precession flag | native LLG contract tests |
+| Native explicit tableau selection | `backends/fem/cpu/mfem/integrators/rk_explicit.cpp` | `tableau_for_integrator` | resolves Heun/RK4/RK23/RK45 tableaus | native integrator tests |

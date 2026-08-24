@@ -4,6 +4,7 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+source_of_truth: docs/specs/frontend-v2/03-api-integration-layer.md, docs/specs/frontend-v2/04-state-management.md
 ---
 
 (public-docs-frontend-state-and-commands-root)=

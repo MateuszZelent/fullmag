@@ -4,6 +4,7 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+source_of_truth: docs/specs/resource-first-control-room-api-v2.md
 ---
 
 (public-docs-frontend-meshing-build-lifecycle)=
@@ -31,7 +32,7 @@ requested/running build
 | Action | Command/resource consequence |
 |---|---|
 | Apply object policy | replaces object config; invalidates object report/quality, mesh build, and scene |
-| Apply airbox policy | replaces universe config; invalidates current/latest mesh build |
+| Apply airbox policy | replaces universe config; marks the current mesh stale while retaining the latest-successful mesh as historical evidence |
 | Build selected object | `mesh.build-selected` |
 | Build shared domain | `mesh.build-shared-domain` |
 | Geometry edit | invalidates every mesh derived from the previous geometry digest |

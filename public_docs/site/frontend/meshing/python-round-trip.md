@@ -4,6 +4,7 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+source_of_truth: docs/specs/fullmag-application-architecture-v2.md, docs/specs/resource-first-control-room-api-v2.md
 ---
 
 (public-docs-frontend-meshing-python-round-trip)=

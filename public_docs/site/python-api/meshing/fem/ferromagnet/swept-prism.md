@@ -23,6 +23,6 @@ film.mesh.thin_film(
 )
 ```
 
-The equivalent advanced recipe requires `mesh_strategy="swept_prism"`,
+The equivalent internal recipe produced by the facade requires `mesh_strategy="swept_prism"`,
 `through_thickness_elements`, fixed distribution, triangular source faces, prism family,
 `pyramid_to_tetrahedra`, exact layer count, and P1 order. Missing companion fields fail validation.

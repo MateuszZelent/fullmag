@@ -84,7 +84,8 @@ the selected backend.
 (python-api-dynamics-field-refresh-discrete-realization)=
 <!-- (discrete-realization)= -->
 ## Discrete realization
-The cadence is consumed by demag-assembly schedules in the selected backend lane.
+The cadence is carried through ProblemIR and the planner into backend demagnetization cache/refresh
+schedules where that lane implements the policy.
 
 (python-api-dynamics-field-refresh-implementation-mapping)=
 <!-- (implementation-mapping)= -->
@@ -99,7 +100,9 @@ Ownership tests compare this inventory with live signatures.
 (python-api-dynamics-field-refresh-limitations)=
 <!-- (limitations)= -->
 ## Limitations
-Cadence control is an efficiency hint; solver correctness must not depend on refresh frequency.
+Between refreshes the runtime may reuse a previously computed demagnetization field. This is a
+numerical approximation that can change trajectory accuracy; lane support and convergence with
+respect to `demag_interval_s` require executed validation.
 
 (python-api-dynamics-field-refresh-scientific-bibliography)=
 <!-- (scientific-bibliography)= -->

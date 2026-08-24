@@ -4,6 +4,7 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+source_of_truth: docs/specs/capability-matrix-v0.json, docs/audits/2026-08-20-relaxation-audit-v2-verification-remediation.md, docs/validation/2026-07-11-relaxation-qualification-matrix.md
 ---
 
 (public-docs-validation-cpu-gpu-parity)=
@@ -14,17 +15,18 @@ per-interaction tolerances, with the rigorous GPU path provably not falling back
 
 ## Relaxation parity
 
-The production relaxation contract qualifies the minimizers across lanes. The 2026-07-11 relaxation
-qualification matrix records:
+The 2026-07-11 relaxation report historically recorded:
 
 | Coverage | Result |
 |---|---|
 | CPU/GPU consistency | `6/6` rows, `3/3` pairs passed |
 | FEM PG-BB production benchmark | `39` comparison pairs, required coverage `21/21` |
 
-These results apply to the qualified relaxation workloads; they do not transfer automatically to
-heterogeneous CUDA material payloads, which fail capability checks instead of substituting a
-looser path.
+That report is now explicitly superseded for current status. The authoritative capability matrix
+lists FDM CPU as the reference-executable relaxation lane and the FDM GPU and FEM CPU/GPU lanes as
+development-executable for overdamped LLG, PG-BB, and NCG. Validated workloads are empty because
+fresh source-bound managed receipts are missing. The historical counts therefore remain audit
+history, not a current production or parity claim.
 
 ## Rigorous GPU residency
 

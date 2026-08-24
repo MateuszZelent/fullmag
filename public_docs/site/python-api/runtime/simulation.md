@@ -28,8 +28,9 @@ The stop time `until` is in seconds. Other fields are identifiers.
 (python-api-runtime-simulation-assumptions-and-validity)=
 <!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
-Hybrid backend/mode coupling is validated on construction. `run(until=...)` requires a positive
-stop time.
+Hybrid backend/mode coupling is validated on construction. `run(until=None)` is planning-only; a
+supplied stop time is delegated to the native runner rather than validated as positive by this
+Python method.
 
 (python-api-runtime-simulation-python-api)=
 <!-- (python-api)= -->
@@ -37,9 +38,9 @@ stop time.
 | Python | Type | Default | Validation | Meaning | ProblemIR |
 |---|---|---|---|---|---|
 | `Simulation.problem` | `Problem` | `required` | Canonical problem | Problem to execute | problem body |
-| `Simulation.backend` | `BackendTarget \| str \| None` | problem runtime | Auto/cpu/gpu as enum | Resolved backend | `requested_backend` |
-| `Simulation.mode` | `ExecutionMode \| str \| None` | problem runtime | strict/extended/hybrid | Execution policy | `execution_mode` |
-| `Simulation.precision` | `ExecutionPrecision \| str \| None` | problem runtime | single/double | Floating-point precision | `execution_precision` |
+| `Simulation.backend` | `BackendTarget \| str \| None` | problem runtime | `auto`, `fdm`, `fem`, or `hybrid` | Requested backend override | `backend_policy.requested_backend` |
+| `Simulation.mode` | `ExecutionMode \| str \| None` | problem runtime | `strict`, `extended`, or `hybrid` | Requested execution policy override | `validation_profile.execution_mode` |
+| `Simulation.precision` | `ExecutionPrecision \| str \| None` | problem runtime | `single` or `double` | Requested precision override | `backend_policy.execution_precision` |
 
 ### Complete stage-first example
 
@@ -70,8 +71,10 @@ The normal public path does not construct `Simulation` directly; the study build
 (python-api-runtime-simulation-problem-ir)=
 <!-- (problem-ir)= -->
 ## ProblemIR
-`Simulation.to_ir()` delegates to `Problem.to_ir()` and injects `requested_backend`,
-`execution_mode`, and `execution_precision`.
+`Simulation.to_ir()` delegates to `Problem.to_ir()`. The overrides are serialized as
+`backend_policy.requested_backend`, `validation_profile.execution_mode`, and
+`backend_policy.execution_precision`; the runtime descriptor is also retained under
+`problem_meta.runtime_metadata.runtime_selection`.
 
 (python-api-runtime-simulation-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->

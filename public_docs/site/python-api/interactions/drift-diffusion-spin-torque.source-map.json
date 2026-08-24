@@ -2,7 +2,7 @@
   "document": {
     "path": "public_docs/site/python-api/interactions/drift-diffusion-spin-torque.md",
     "title": "Drift-diffusion spin torque Python API",
-    "interaction": "drift diffusion spin torque"
+    "interaction": "drift-diffusion-spin-torque"
   },
   "backend_matrix": [
     {
@@ -36,6 +36,12 @@
       "path": "packages/fullmag-py/src/fullmag/model/spin_transport.py",
       "symbol": "class SpinDriftDiffusion",
       "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+    },
+    {
+      "id": "torque-owner",
+      "path": "packages/fullmag-py/src/fullmag/model/spin_transport.py",
+      "symbol": "class DriftDiffusionSpinTorque",
+      "responsibility": "Bind an accepted spin solve to the magnetic region receiving transport torque."
     }
   ],
   "symbols": [],

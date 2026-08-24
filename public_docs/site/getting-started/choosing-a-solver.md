@@ -11,7 +11,10 @@ owner: fullmag-public-docs
 
 FullMag has one physical problem contract and several execution realizations. You select the
 numerical backend with `study.engine("fdm")` or `study.engine("fem")`, and the device with
-`study.device("cpu" | "gpu", precision="double")`. The rest of the study stays the same.
+`study.device("cpu" | "gpu", precision="double")`. Geometry, material state, interactions, and
+stage intent use the same authoring model, but discretization, meshing, demagnetization realization,
+and lane-specific solver policy are not interchangeable and must be configured for the selected
+backend.
 
 ## Finite difference (FDM)
 

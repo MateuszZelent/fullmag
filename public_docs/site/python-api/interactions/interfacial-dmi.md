@@ -25,7 +25,7 @@ This page is the public physical and authoring contract for the interaction. It 
 
 | Parameter | Default | SI unit | Current check | Required check |
 |---|---|---:|---|---|
-| `D` | required | $\mathrm{J\,m^{-2}}$ | float conversion | finite |
+| `D` | required | $\mathrm{J\,m^{-2}}$ | finite float conversion | finite |
 | `interface_normal` | `None` | $1$ | length/conversion | finite, non-zero; FDM requires canonical +z |
 
 Material-owned `dind` and an explicit interaction are alternative sources. Reject duplicates.

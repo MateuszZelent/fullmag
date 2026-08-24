@@ -40,18 +40,21 @@ validity, operator/target constraints, mesh cardinality, capability, and backend
 ## Python API
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| `Eigenmodes.outputs` | `Sequence[EigenOutputSpec]` | `required` | $1$ | At least one; `SaveResponse` is rejected | Mode/spectrum/dispersion/diagnostic outputs | FDM/FEM CPU/GPU; planner checks materialization | `sampling.outputs` |
-| `Eigenmodes.count` | `int` | `20` | $1$ | Positive | Number of eigenvectors requested | FEM/FDM CPU/GPU | `count` |
-| `Eigenmodes.target` | `str` | `"lowest"` | $1$ | `lowest`, `nearest`, or `frequency_window` | Eigenvalue selection policy | FEM/FDM CPU/GPU | `target` |
-| `Eigenmodes.target_frequency` | `float \| None` | `None` | $\mathrm{Hz}$ | Positive; required for `nearest` | Frequency target for nearest modes | FEM/FDM CPU/GPU | `target.frequency_hz` |
-| `Eigenmodes.frequency_min` / `frequency_max` | `float \| None` | `None` | $\mathrm{Hz}$ | Positive, `min < max`; `frequency_window` only | Window bounds | FEM/FDM CPU/GPU | `target.frequency_min_hz/max_hz` |
-| `Eigenmodes.operator` | `str` | `"linearized_llg"` | $1$ | `linearized_llg` or `full_2x2` | Linearized operator | FEM/FDM CPU/GPU | `operator.kind` |
-| `Eigenmodes.include_demag` | `bool` | `True` | $1$ | Boolean | Include the dynamic demagnetization term | FEM/FDM CPU/GPU | `operator.include_demag` |
-| `Eigenmodes.equilibrium_source` | `str` | `"relax"` (stage entry default) | $1$ | `provided`, `relax`, or `artifact` | Equilibrium acquisition | FEM/FDM CPU/GPU | `equilibrium` |
-| `Eigenmodes.k_sampling` | `object \| None` | `None` | $\mathrm{m^{-1}}$ | Valid k sampling or k vector | Wave-vector sampling | FEM/FDM CPU/GPU | `k_sampling` |
-| `Eigenmodes.normalization` | `str` | `"unit_l2"` | $1$ | `unit_l2` or `unit_max_amplitude` | Mode normalization | FEM/FDM CPU/GPU | `normalization` |
-| `Eigenmodes.damping_policy` | `str` | `"ignore"` | $1$ | `ignore` or `include` | Damping treatment | FEM/FDM CPU/GPU | `damping_policy` |
-| `Eigenmodes.spin_wave_bc` | `str \| mapping \| PeriodicBC \| FloquetBC` | `"free"` | $1$ | One of `free`, `pinned`, `periodic`, `floquet`, `surface_anisotropy` | Spin-wave boundary condition | FEM/FDM CPU/GPU | `spin_wave_bc` |
+| `Eigenmodes.outputs` | `Sequence[EigenOutputSpec]` | `required` | $1$ | At least one; `SaveResponse` is rejected | Mode/spectrum/dispersion/diagnostic outputs | FEM only in the current planner | `sampling.outputs` |
+| `Eigenmodes.count` | `int` | `20` (`10` in `add_eigenmodes`) | $1$ | Positive | Number of eigenvectors requested | FEM only in the current planner | `count` |
+| `Eigenmodes.target` | `str` | `"lowest"` | $1$ | `lowest`, `nearest`, or `frequency_window` | Eigenvalue selection policy | FEM only in the current planner | `target` |
+| `Eigenmodes.target_frequency` | `float \| None` | `None` | $\mathrm{Hz}$ | Positive; required for `nearest` | Frequency target for nearest modes | FEM only in the current planner | `target.frequency_hz` |
+| `Eigenmodes.frequency_min` / `frequency_max` | `float \| None` | `None` | $\mathrm{Hz}$ | Positive, `min < max`; `frequency_window` only | Window bounds | FEM only in the current planner | `target.frequency_min_hz/max_hz` |
+| `Eigenmodes.operator` | `str` | `"linearized_llg"` | $1$ | `linearized_llg` or `full_2x2` | Linearized operator | FEM only in the current planner | `operator.kind` |
+| `Eigenmodes.include_demag` | `bool` | `True` | $1$ | Boolean | Include the dynamic demagnetization term | FEM only in the current planner | `operator.include_demag` |
+| `Eigenmodes.equilibrium_source` | `str` | `"provided"` (`"relax"` in `add_eigenmodes`) | $1$ | `provided`, `relax`, or `artifact`; artifact source requires `equilibrium_artifact` | Equilibrium acquisition | FEM only in the current planner | `equilibrium` |
+| `Eigenmodes.equilibrium_artifact` | `str \| None` | `None` | $1$ | Required only for `equilibrium_source="artifact"` | Equilibrium artifact path | FEM only in the current planner | `equilibrium.path` |
+| `Eigenmodes.k_sampling` / `k_vector` | `object \| None` / vector | `None` | $\mathrm{m^{-1}}$ | Mutually normalized k-sampling forms | Wave-vector sampling | FEM only in the current planner | `k_sampling` |
+| `Eigenmodes.mode_tracking` | `ModeTracking \| None` | `None` | mixed | Typed tracking policy | Optional mode/branch tracking | FEM only in the current planner | `mode_tracking` |
+| `Eigenmodes.normalization` | `str` | `"unit_l2"` | $1$ | `unit_l2` or `unit_max_amplitude` | Mode normalization | FEM only in the current planner | `normalization` |
+| `Eigenmodes.damping_policy` | `str` | `"ignore"` | $1$ | `ignore` or `include` | Damping treatment | FEM only in the current planner | `damping_policy` |
+| `Eigenmodes.spin_wave_bc` | `str \| mapping \| PeriodicBC \| FloquetBC` | `"free"` | $1$ | One of `free`, `pinned`, `periodic`, `floquet`, `surface_anisotropy` | Spin-wave boundary condition | FEM only in the current planner | `spin_wave_bc` |
+| `Eigenmodes.dynamics` | `LLG` | `LLG()` | mixed | Typed LLG policy | Linearization dynamics | FEM only in the current planner | `dynamics` |
 
 ### Complete stage-first example
 
@@ -66,7 +69,7 @@ nm = 1.0e-9
 
 # %% Study and execution lane
 study = fm.study("eigenmodes_api_example")
-study.engine("fdm")
+study.engine("fem")
 study.device("cpu", precision="double")
 study.mode("strict")
 
@@ -126,8 +129,9 @@ Ownership tests compare this inventory with live signatures and validate the adj
 (python-api-studies-eigenmodes-limitations)=
 <!-- (limitations)= -->
 ## Limitations
-Representability does not prove every operator/equilibrium/boundary-condition combination
-executable on every backend; planner and eigensolver capability resolution are authoritative.
+The Python contract is backend-neutral, but the current planner executes `Eigenmodes` only with
+`backend="fem"` and rejects FDM. Within FEM, representability still does not prove every
+operator/equilibrium/boundary-condition combination executable.
 
 (python-api-studies-eigenmodes-scientific-bibliography)=
 <!-- (scientific-bibliography)= -->

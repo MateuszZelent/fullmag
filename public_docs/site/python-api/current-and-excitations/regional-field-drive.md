@@ -38,11 +38,13 @@ Non-negative amplitude, finite direction, and a typed profile/waveform are valid
 | `RegionalFieldDrive.id` / `name` | `str` | required | $1$ | Non-empty | Identity | `id`, `name` |
 | `RegionalFieldDrive.target` | `FieldTarget` | required | $1$ | Typed target | Field target | `target` |
 | `RegionalFieldDrive.amplitude_B_T` | `float` | required | $\mathrm{T}$ | Non-negative | Amplitude | `amplitude_B_T` |
-| `RegionalFieldDrive.direction` | `tuple[float,float,float]` | required | $1$ | Finite length-3 | Drive direction | `direction` |
+| `RegionalFieldDrive.direction` | `tuple[float,float,float]` | required | $1$ | Finite, non-zero length-3; normalized by constructor | Drive direction | `direction` |
 | `RegionalFieldDrive.spatial_profile` | `FieldSpatialProfile` | required | mixed | Typed profile | Spatial profile | `spatial_profile` |
 | `RegionalFieldDrive.waveform` | `TimeDependence` | required | mixed | Typed waveform | Time waveform | `waveform` |
 | `RegionalFieldDrive.time_origin` | `str` | `"stage_local"` | $1$ | Supported origin | Time origin | `time_origin` |
 | `RegionalFieldDrive.activation` | `DriveActivation` | all-time | $1$ | Typed | Stage activation | `activation` |
+| `RegionalFieldDrive.enabled` | `bool` | `True` | $1$ | Normalized with `bool(...)` | Authored enable flag | `enabled` |
+| `RegionalFieldDrive.migration` | `dict[str,str] \| None` | `None` | $1$ | Only `{"migrated_from": "prescribed_zeeman_mask"}` | Explicit migration provenance | `migration` |
 
 ### Complete stage-first context
 

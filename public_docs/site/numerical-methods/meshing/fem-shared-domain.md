@@ -255,16 +255,18 @@ film.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
 study.exchange()
 study.demag(model="airbox", variant="robin")
-study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
-```
+study.stages.add_relax(
+    stage_id="equilibrium",
+    algorithm="nonlinear_cg",
+    tolT=1.0e-6,
+)
 
-A lower-level typed default can be represented by
-
-```python
+# Equivalent lower-level typed defaults remain available for IR inspection.
 fem = fm.FEM(order=1, maximum_element_size=20 * nm)
 ```
 
-and per-object recipes by `PerObjectMeshRecipe`. The stage-first helpers lower to the same mesh
+A lower-level typed default is represented by `fm.FEM`; the executable scenario above constructs
+one explicitly. Per-object recipes use `PerObjectMeshRecipe`. The stage-first helpers lower to the same mesh
 workflow intent; the extracted mesh and build report remain authoritative.
 
 ### Core public parameters

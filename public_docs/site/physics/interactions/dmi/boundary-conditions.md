@@ -1,6 +1,6 @@
 ---
 title: DMI boundary conditions
-status: implemented
+status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
@@ -24,14 +24,15 @@ term
 
 ```{math}
 :label: eq-idmi-bc
-A\,\partial_n\mathbf{m}
-+ D\,\hat{\mathbf{n}}\times(\mathbf{n}_s\times\mathbf{m})
+2A\,\partial_{\boldsymbol\nu}\mathbf m
++D\left[(\hat{\mathbf n}\times\boldsymbol\nu)\times\mathbf m\right]
 = \mathbf{0}
 \qquad\text{on }\partial\Omega_m,
 ```
 
-where $\mathbf{n}_s$ is the outward surface normal and $\hat{\mathbf{n}}$ is the
-interface-symmetry normal. For $\hat{\mathbf{n}}=\hat{\mathbf{z}}$ this reduces to the
+where $\boldsymbol\nu$ is the outward normal of the magnetic boundary and
+$\hat{\mathbf n}$ is the independent structural interface normal. For
+$\hat{\mathbf n}=\hat{\mathbf z}$ this reduces to the
 Rohart–Thiaville condition.
 
 This boundary condition is physically significant: it modifies the equilibrium magnetization
@@ -49,16 +50,16 @@ together. The natural condition is homogeneous only when the DMI surface contrib
 
 ### FEM implementation
 
-In the FEM weak formulation, the natural boundary condition arises automatically from the
-variational principle. The DMI weak residual includes a boundary integral that implicitly
-enforces Eq. {eq}`eq-idmi-bc`. No explicit boundary penalty or constraint is needed.
+In the FEM weak formulation, the natural boundary contribution belongs to the same variation as
+the volume iDMI residual. It must not be added again as an independent boundary interaction without
+a proof that the residual is not double-counted. No separate strong nodal clamp is implied.
 
 ### FDM implementation
 
-In the FDM stencil, open or inactive boundary neighbours use the centre magnetization as
-the ghost value, which enforces the standard zero-flux exchange condition. The DMI stencil
-contribution at boundary cells uses one-sided finite differences or reflected values that
-encode the same surface condition.
+In the current FDM stencil, open or inactive neighbours are replaced by the centre magnetization,
+so the corresponding centered derivative is zero. This clamping is the implemented local closure;
+it is **not** a general discrete proof of Eq. {eq}`eq-idmi-bc`. The present FDM iDMI normal is
+restricted to $+\hat{\mathbf z}$, and non-periodic natural-boundary qualification remains open.
 
 ## Bulk DMI boundary condition
 
@@ -66,8 +67,8 @@ The combined exchange-plus-bulk-DMI natural boundary term is
 
 ```{math}
 :label: eq-bdmi-bc
-A\,\partial_n\mathbf{m}
-+ D\,\mathbf{n}_s\times\mathbf{m}
+2A\,\partial_{\boldsymbol\nu}\mathbf m
++D\left(\mathbf m\times\boldsymbol\nu\right)
 = \mathbf{0}
 \qquad\text{on }\partial\Omega_m.
 ```
@@ -105,8 +106,8 @@ centres.
 | $A$ | exchange stiffness | $\mathrm{J\,m^{-1}}$ |
 | $D$ | DMI constant | $\mathrm{J\,m^{-2}}$ |
 | $\hat{\mathbf{n}}$ | interface-symmetry normal | $1$ |
-| $\mathbf{n}_s$ | outward surface normal | $1$ |
-| $\partial_n$ | normal derivative | $\mathrm{m^{-1}}$ |
+| $\boldsymbol\nu$ | outward normal of the magnetic boundary | $1$ |
+| $\partial_{\boldsymbol\nu}$ | derivative along the outward magnetic-boundary normal | $\mathrm{m^{-1}}$ |
 | $\ell_{\mathrm{DMI}}$ | DMI boundary-twist length | $\mathrm{m}$ |
 | $\mathbf m$ | reduced magnetization | $1$ |
 

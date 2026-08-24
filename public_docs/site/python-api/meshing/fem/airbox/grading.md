@@ -20,5 +20,6 @@ study.universe.mesh(
 )
 ```
 
-Advanced policy keys include airbox hmin/hmax, growth, geometric/linear grading, curvature, and
-narrow-region resolution. These are targets, not guaranteed realized extrema.
+The public Python facade exposes hmin/hmax aliases, growth, and `auto`/`geometric`/`linear` grading.
+Curvature and narrow-region controls belong to object mesh policy, not the current
+`study.universe.mesh(...)` signature. These values are targets, not guaranteed realized extrema.

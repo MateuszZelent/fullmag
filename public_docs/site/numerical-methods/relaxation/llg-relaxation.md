@@ -381,10 +381,10 @@ different records.
 
 | Solver | Device | Status | Realization and evidence boundary |
 |---|---|---|---|
-| FDM | CPU | source-backed | reference grid runner and LLG relaxation path; numerical qualification is separate |
-| FDM | GPU | source-backed | CUDA execution path carries pure-damping selection; device tests are conditional |
-| FEM | CPU | source-backed | MFEM/native LLG relaxation lane; managed runtime evidence required for qualification |
-| FEM | GPU | source-backed | native CUDA/MFEM lane; source presence and compilation do not prove executed-device parity |
+| FDM | CPU | reference-executable | reference grid runner and LLG relaxation path |
+| FDM | GPU | development-executable | CUDA execution path carries pure-damping selection; production qualification is not claimed |
+| FEM | CPU | development-executable | MFEM/native LLG relaxation lane; managed runtime qualification remains pending |
+| FEM | GPU | development-executable | native CUDA/MFEM lane; compilation does not prove executed-device parity |
 
 FDM uses grid-local field evaluation. FEM uses the assembled finite-element field and the native
 MFEM/CUDA operator path. The equation and stop metric are shared; interpolation, mass weighting,
@@ -445,7 +445,7 @@ and their line-search contracts are described separately.
 | FDM adaptive error norm | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `max_error_norm_buf` / `max_error_norm_soa_buf` | AoS/SoA active-cell error norm, absolute or mixed mode | FDM CPU | engine integrator tests |
 | FDM GPU adaptive error reduction | `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` | `decide_adaptive_step` call site | CUDA reduction and typed dt-min failure | FDM GPU | CUDA policy contract tests |
 | Rust FEM reference adaptive loop | `crates/fullmag-engine/src/fem.rs` | `rk23_step_ws` / `rk45_step_ws` | legacy absolute `max_error` loop with 128-attempt guard | FEM reference | engine tests |
-| Native FDM integrator dispatch | `crates/fullmag-runner/src/fdm/gpu/cuda/native/construction.rs` | `build_native_fdm_plan` | maps canonical integrator to CUDA ABI | FDM GPU | device-gated tests |
+| Native FDM integrator dispatch | `crates/fullmag-runner/src/fdm/gpu/cuda/native/construction.rs` | `NativeFdmBackend::create` | maps canonical integrator to CUDA ABI | FDM GPU | device-gated tests |
 | FDM direct minimizer reference | `crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs` | `execute_projected_gradient_bb` | FDM reference BB relaxation | FDM CPU/reference | Rust unit tests |
 | FDM direct minimizer reference | `crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs` | `execute_nonlinear_cg` | FDM reference NCG relaxation | FDM CPU/reference | Rust unit tests |
 | Shared pure-damping predicate | `crates/fullmag-runner/src/relaxation/convergence.rs` | `llg_overdamped_uses_pure_damping` | selects precession-disabled relaxation mode | FEM/FDM orchestration | runner tests |

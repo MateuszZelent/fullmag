@@ -4,6 +4,7 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+source_of_truth: apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx, docs/specs/capability-matrix-v0.json
 ---
 
 (public-docs-frontend-meshing-object-mesh)=

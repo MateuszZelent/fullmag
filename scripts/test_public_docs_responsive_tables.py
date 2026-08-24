@@ -19,7 +19,10 @@ class ResponsivePublicDocumentationTableTests(unittest.TestCase):
 
     def test_sphinx_registers_fullmag_documentation_css(self) -> None:
         conf = CONF.read_text(encoding="utf-8")
-        self.assertIn('html_css_files = ["fullmag-docs.css"]', conf)
+        self.assertRegex(
+            conf,
+            r"html_css_files\s*=\s*\[[\s\S]*?['\"]fullmag-docs\.css['\"]",
+        )
         self.assertIn('"responsive_tables"', conf)
 
     def test_tables_own_horizontal_overflow_without_hiding_the_page(self) -> None:

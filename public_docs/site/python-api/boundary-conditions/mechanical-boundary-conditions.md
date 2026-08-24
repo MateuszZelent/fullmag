@@ -40,10 +40,11 @@ Keyword-required vectors are validated; the surface name must be non-empty.
 | `MechanicalBoundaryCondition.u` | `tuple \| None` | `None` | $\mathrm{m}$ | Required for displacement | Displacement vector | `u` |
 | `MechanicalBoundaryCondition.t` | `tuple \| None` | `None` | $\mathrm{Pa}$ | Required for traction | Traction vector | `t` |
 
-### Complete stage-first context
+### Constructor and lowering context
 
-Mechanical boundary conditions are mechanical models attached to elastic bodies; the stage-first
-study declares them through the problem model.
+The public constructor and `to_ir()` boundary are available. The stage-first study facade does not
+yet expose a complete mechanical-boundary registration path, so the object below is intentionally
+not presented as an attached simulation boundary condition.
 
 ```python
 # %% Clamped mechanical boundary condition
@@ -65,6 +66,7 @@ film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 study.exchange()
 
 bc = fm.MechanicalBoundaryCondition(kind="clamped", surface="bottom")
+assert bc.to_ir() == {"kind": "clamped", "surface": "bottom"}
 study.stages.add_run(stage_id="run", until=1.0e-12)
 ```
 
@@ -97,7 +99,8 @@ Ownership tests compare this inventory with live signatures.
 (python-api-boundary-conditions-mechanical-boundary-conditions-limitations)=
 <!-- (limitations)= -->
 ## Limitations
-The model object is public; wiring into the stage builder may lag the model surface.
+The model object is public, but the stage builder currently has no mechanical-boundary
+registration method. Constructing `bc` alone does not attach it to the study.
 
 (python-api-boundary-conditions-mechanical-boundary-conditions-scientific-bibliography)=
 <!-- (scientific-bibliography)= -->

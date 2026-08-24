@@ -477,15 +477,14 @@ def _interaction_subtree(
 PAGE_SPECS: tuple[PageSpec, ...] = (
     _reference(
         "index.md",
-        "FullMag public documentation",
+        "FullMag documentation",
         "the FullMag public documentation portal",
         (
             "getting-started/index.md",
+            "frontend/index.md",
+            "backend/index.md",
             "python-api/index.md",
-            "physics/index.md",
-            "numerical-methods/index.md",
             "validation/index.md",
-            "architecture/index.md",
         ),
         4,
     ),
@@ -495,10 +494,10 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
         "the getting-started documentation family",
         (
             "getting-started/installation.md",
-            "getting-started/control-room.md",
             "getting-started/first-fdm-simulation.md",
             "getting-started/first-fem-simulation.md",
             "getting-started/choosing-a-solver.md",
+            "getting-started/control-room.md",
         ),
     ),
     _reference("getting-started/installation.md", "Installation", "installation guidance"),
@@ -506,6 +505,8 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
     _reference("getting-started/first-fdm-simulation.md", "First FDM Simulation", "the first FDM simulation guide"),
     _reference("getting-started/first-fem-simulation.md", "First FEM Simulation", "the first FEM simulation guide"),
     _reference("getting-started/choosing-a-solver.md", "Choosing a Solver", "solver-selection guidance"),
+    _reference("frontend/index.md", "Frontend", "the frontend documentation family"),
+    _reference("backend/index.md", "Backend", "the backend documentation family"),
     _reference(
         "python-api/index.md",
         "Python API",
@@ -518,6 +519,7 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
             "python-api/interactions/index.md",
             "python-api/current-and-excitations/index.md",
             "python-api/boundary-conditions/index.md",
+            "python-api/meshing/index.md",
             "python-api/discretization/index.md",
             "python-api/dynamics/index.md",
             "python-api/studies/index.md",
@@ -548,7 +550,8 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
     ),
     *_section("python-api/current-and-excitations", "Current and Excitations", ("current-transport", "prescribed-current", "regional-field-drive", "rf-drive", "microstrip-antenna", "cpw-antenna"), "the Python API current and excitations reference"),
     *_section("python-api/boundary-conditions", "Boundary Conditions", ("periodic-boundary-conditions", "floquet-boundary-conditions", "mechanical-boundary-conditions"), "the Python API boundary-conditions reference"),
-    *_section("python-api/discretization", "Discretization", ("discretization-hints", "fdm", "fdm-multilayer-convolution", "fem", "hybrid", "mesh-controls", "per-object-meshing"), "the Python API discretization reference"),
+    *_section("python-api/discretization", "Low-Level Discretization Hints", ("discretization-hints", "hybrid"), "the Python API discretization reference"),
+    _reference("python-api/meshing/index.md", "Meshing", "the Python API meshing reference"),
     *_section("python-api/dynamics", "Dynamics", ("llg", "integrators", "adaptive-timestep", "field-refresh"), "the Python API dynamics reference"),
     *_section("python-api/studies", "Studies", ("time-evolution", "relaxation", "hysteresis", "eigenmodes", "frequency-response"), "the Python API studies reference"),
     *_section("python-api/outputs", "Outputs", ("fields-and-scalars", "quantities", "modes-and-spectra", "dispersion-and-response", "snapshots", "autosave"), "the Python API outputs reference"),
@@ -608,7 +611,6 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
             "numerical-methods/demag-solvers/index.md",
             "numerical-methods/eigensolvers/index.md",
             "numerical-methods/frequency-domain/index.md",
-            "numerical-methods/meshing/index.md",
             "numerical-methods/interpolation-and-state-transfer/index.md",
         ),
         status="partial",
@@ -618,7 +620,7 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
     *_section("numerical-methods/demag-solvers", "Demag Solvers", ("fdm-convolution", "fem-poisson-airbox", "fem-bem", "periodic-demag"), "the demagnetization-solvers reference"),
     *_section("numerical-methods/eigensolvers", "Eigensolvers", ("linearized-llg", "modal-validation"), "the eigensolvers reference"),
     *_section("numerical-methods/frequency-domain", "Frequency Domain", ("response-solver", "floquet-response"), "the frequency-domain methods reference"),
-    *_section("numerical-methods/meshing", "Meshing", ("fdm-grids", "fem-shared-domain", "airbox", "swept-meshes", "refinement"), "the meshing methods reference"),
+    _reference("numerical-methods/meshing/index.md", "Meshing", "the meshing methods reference"),
     *_section("numerical-methods/interpolation-and-state-transfer", "Interpolation and State Transfer", ("fem-to-fdm", "fdm-to-fem"), "the interpolation and state-transfer reference"),
     _reference(
         "validation/index.md",
@@ -747,15 +749,15 @@ def write_pages(specs: Iterable[PageSpec], root: Path) -> None:
             continue
         rendered = render_page(spec, root)
         if path.exists():
-            if path.read_text() != rendered:
+            if path.read_text(encoding="utf-8") != rendered:
                 raise FileExistsError(f"{path}: existing scaffold would need replacement")
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(rendered)
+        path.write_text(rendered, encoding="utf-8")
 
 
 def _front_matter(path: Path) -> dict[str, str] | None:
-    lines = path.read_text().splitlines()
+    lines = path.read_text(encoding="utf-8").splitlines()
     if not lines or lines[0] != "---":
         return None
     metadata: dict[str, str] = {}
@@ -796,7 +798,7 @@ def check_pages(specs: Iterable[PageSpec], root: Path) -> list[str]:
             errors.append(f"missing page: {spec.path}")
             continue
         if spec.doc_kind == "scaffold":
-            if path.read_text() != render_page(spec, root):
+            if path.read_text(encoding="utf-8") != render_page(spec, root):
                 errors.append(f"scaffold does not match manifest: {spec.path}")
             continue
         metadata = _front_matter(path)
@@ -808,9 +810,13 @@ def check_pages(specs: Iterable[PageSpec], root: Path) -> list[str]:
             "status": spec.status,
             "doc_kind": spec.doc_kind,
         }.items():
+            # A reference page promoted from partial to implemented remains
+            # compatible with the manifest's minimum publication status.
+            if key == "status" and expected == "partial" and metadata.get(key) == "implemented":
+                continue
             if metadata.get(key) != expected:
                 errors.append(f"reference metadata {key!r} does not match manifest: {spec.path}")
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         if f"({spec.label})=" not in text:
             errors.append(f"reference label does not match manifest: {spec.path}")
         if spec.children:

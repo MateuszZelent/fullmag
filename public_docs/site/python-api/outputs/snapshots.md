@@ -37,7 +37,7 @@ Field, component, and positive cadence are validated immediately.
 | `Snapshot.field` | `str` | `required` | Known field id | Base field | `snapshot.field` |
 | `Snapshot.component` | `str` | `required` | `x`, `y`, `z`, or `3D` | Component selector | `snapshot.component` |
 | `Snapshot.every` | `float` | `required` | Positive | Save interval | `snapshot.every_seconds` |
-| `Snapshot.layer` | `str \| None` | `None` | Non-empty when set | Layer/region scope | `snapshot.layer` |
+| `Snapshot.layer` | `str \| None` | `None` | Stored as supplied; this constructor does not reject an empty string | Layer/region scope | `snapshot.layer` |
 
 ### Complete stage-first example
 

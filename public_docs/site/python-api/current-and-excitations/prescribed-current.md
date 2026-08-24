@@ -27,14 +27,16 @@ Current density is in $\mathrm{A\,m^{-2}}$; solve-region and identity are names.
 (python-api-current-and-excitations-prescribed-current-assumptions-and-validity)=
 <!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
-A finite length-3 current-density vector is required for this model.
+A length-3, float-convertible current-density vector is required for this model. The constructor
+does not reject `NaN` or infinity; canonical IR/planner validation must reject non-finite values
+before execution.
 
 (python-api-current-and-excitations-prescribed-current-python-api)=
 <!-- (python-api)= -->
 ## Python API
 | Python | Type | Default | SI unit | Validation | Meaning | ProblemIR |
 |---|---|---|---|---|---|---|
-| `CurrentTransport(model="prescribed_density").current_density` | `tuple[float,float,float]` | required | $\mathrm{A\,m^{-2}}$ | Finite length-3 | Prescribed density | current density |
+| `CurrentTransport(model="prescribed_density").current_density` | `tuple[float,float,float]` | required | $\mathrm{A\,m^{-2}}$ | Constructor: length 3 and float conversion; downstream: finite components | Prescribed density | current density |
 | `CurrentTransport.solve_region` | `str \| None` | `None` | $1$ | Non-empty when set | Solve region | domain |
 
 ### Complete stage-first example
@@ -77,7 +79,9 @@ density vector.
 (python-api-current-and-excitations-prescribed-current-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
-Missing or malformed density fails immediately.
+Missing density, a non-length-3 value, or a component that cannot be converted to `float` fails
+during construction. Non-finite converted components require rejection at the canonical
+IR/planner boundary.
 
 (python-api-current-and-excitations-prescribed-current-discrete-realization)=
 <!-- (discrete-realization)= -->

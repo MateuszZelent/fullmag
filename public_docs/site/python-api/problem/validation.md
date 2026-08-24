@@ -23,8 +23,8 @@ This page introduces no governing equation.
 (python-api-problem-validation-symbols-and-si-units)=
 <!-- (symbols-and-si-units)= -->
 ## Symbols and SI units
-Parameter units follow their owning pages; validation checks domain and finite-ness, not unit
-conversion.
+Parameter units follow their owning pages. Finite-value validation is field-specific rather than
+a universal constructor guarantee; validation does not perform unit conversion.
 
 (python-api-problem-validation-assumptions-and-validity)=
 <!-- (assumptions-and-validity)= -->
@@ -37,7 +37,7 @@ still be rejected when its requested lane cannot execute it.
 ## Python API
 | Check stage | Rejects |
 |---|---|
-| Constructor validation | Malformed, non-finite, or out-of-domain parameter values |
+| Constructor validation | Malformed or out-of-domain values, plus non-finite values only where the owning constructor explicitly applies a finite-value check |
 | Lowering validation | Inconsistent runtime policies and FEM/FDM-specific authoring mistakes |
 | Planner capability checks | Unsupported combinations without a silent fallback |
 | Backend legality | Unavailable outputs, devices, or precisions |
@@ -46,6 +46,13 @@ still be rejected when its requested lane cannot execute it.
 
 Validation runs through the same study scenario as every other page; a rejected combination is
 reported by the planner rather than rewritten.
+
+The shared `as_vector3` helper checks length and converts components to `float`, but does not reject
+`NaN` or infinity. Consequently, `Translate.by`, material anisotropy axes (`anisU`, `anisC1`, and
+`anisC2`), and vector-valued material parameter-field inputs (`constant`, `gradient`, and radial
+`center`) are not covered by a general constructor-level finite-value guarantee. Their owning
+pages document the exact checks. Scalars and other vector APIs that call `require_finite` or an
+equivalent specialized validator retain their stricter contracts.
 
 (python-api-problem-validation-problem-ir)=
 <!-- (problem-ir)= -->

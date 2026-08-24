@@ -46,11 +46,18 @@ legality.
 | `Hysteresis.field_min_mT` / `field_max_mT` / `field_step_mT` | `float \| None` | `None` | $\mathrm{mT}$ | Finite; nonzero step | Uniform sweep definition | FEM/FDM CPU/GPU | `field_min_mT/max_mT/step_mT` |
 | `Hysteresis.field_values_mT` | `Sequence[float] \| None` | `None` | $\mathrm{mT}$ | Non-empty, finite | Explicit field-point schedule | FEM/FDM CPU/GPU | `field_values_mT` |
 | `Hysteresis.direction` | `tuple[float,float,float] \| None` | `None` | $1$ | Non-zero length-3 vector | Field sweep direction | FEM/FDM CPU/GPU | `direction` |
+| `Hysteresis.orientation` | `FieldOrientation \| None` | `None` | mixed | Typed preset/sample/global orientation | Field orientation policy | FEM/FDM CPU/GPU | `orientation` |
 | `Hysteresis.measurement_axis` | `str \| MeasurementAxis` | `"field_axis"` | $1$ | `field_axis`, `sample_normal`, `easy_axis`, or custom | Projection axis for the loop | FEM/FDM CPU/GPU | `measurement_axis` |
+| `Hysteresis.angular_family` | `HysteresisAngularFamily \| None` | `None` | mixed | Typed non-empty angular family | Angular variants | planner-dependent | `angular_family` |
 | `Hysteresis.initial_protocol` | `str` | `"positive_saturation"` | $1$ | One of `as_authored`, `zero_field_relaxed`, `positive_saturation`, `negative_saturation`, `checkpoint` | Initial-state preparation | FEM/FDM CPU/GPU | `initial_protocol` |
+| `Hysteresis.initial_state_ref` | `str \| None` | `None` | $1$ | Required and non-empty for `checkpoint` | Initial checkpoint reference | planner-dependent | `initial_state_ref` |
+| `Hysteresis.saturation` | `SaturationProbe \| None` | `None` | mixed | Typed saturation policy | Saturation qualification | planner-dependent | `saturation` |
 | `Hysteresis.branch_mode` | `str` | `"major_loop"` | $1$ | `major_loop`, `major_with_minor_loops`, `virgin_curve`, `virgin_then_major_loop` | Loop topology | FEM/FDM CPU/GPU | `branch_mode` |
 | `Hysteresis.settle_pipeline` | `SettlePipeline \| SettleTree \| None` | `None` | mixed | At least one step; `run_next_algorithm` needs a successor | Per-point settle program | FEM/FDM CPU/GPU | `settle_pipeline` |
 | `Hysteresis.storage` | `HysteresisStorage \| None` | `None` | mixed | Valid magnetization storage mode | Storage policy | FEM/FDM CPU/GPU | `storage` |
+| `Hysteresis.field_schedule` | `PiecewiseFieldSchedule \| None` | `None` | $\mathrm{mT}$ | Typed piecewise schedule | Nonuniform sweep schedule | planner-dependent | `field_schedule` |
+| `Hysteresis.schedule_refinements` / `adaptive_refinement` | optional refinement policies | `None` | mixed | Typed finite windows/policy | Dense/adaptive schedule refinement | planner-dependent | `schedule_refinements`, `adaptive_refinement` |
+| `Hysteresis.minor_loops` | `Sequence[MinorLoop] \| None` | `None` | $\mathrm{mT}$ | Typed minor-loop definitions | Minor loops | planner-dependent | `minor_loops` |
 
 The canonical stage entrypoint `add_hysteresis_sweep` exposes these fields by keyword; the sweep
 is not constructed as a standalone `Hysteresis(...)` object in a user script.

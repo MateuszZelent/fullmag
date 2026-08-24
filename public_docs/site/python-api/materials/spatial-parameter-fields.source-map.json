@@ -166,7 +166,7 @@
         "type": "float | tuple[float,float,float]",
         "default": "required",
         "si_unit": "parameter-dependent",
-        "validation": "finite scalar or finite three-vector",
+        "validation": "finite scalar; three-vector is length-checked and float-converted but not checked for finiteness in Python",
         "meaning": "authored constant value",
         "backend_support": "FDM/FEM CPU analytic fields; GPU lane checks apply",
         "problem_ir": "`material_parameter_fields[].value.value`"
@@ -196,7 +196,7 @@
         "type": "tuple[float,float,float]",
         "default": "required",
         "si_unit": "parameter unit per metre",
-        "validation": "three finite components",
+        "validation": "length 3 and float-convertible; Python does not reject non-finite components",
         "meaning": "spatial gradient",
         "backend_support": "FDM/FEM CPU analytic fields; GPU lane checks apply",
         "problem_ir": "`material_parameter_fields[].value.gradient`"
@@ -226,7 +226,7 @@
         "type": "tuple[float,float,float]",
         "default": "required",
         "si_unit": "$\\mathrm m$",
-        "validation": "three finite coordinates",
+        "validation": "length 3 and float-convertible; Python does not reject non-finite components",
         "meaning": "radial centre in the declared frame",
         "backend_support": "FDM/FEM CPU analytic fields; GPU lane checks apply",
         "problem_ir": "`material_parameter_fields[].value.center`"
@@ -296,7 +296,7 @@
         "type": "int",
         "default": "required",
         "si_unit": "$1$",
-        "validation": "integer >= 1",
+        "validation": "value must compare as >= 1; current factory serializes `int(value)` and does not reject bool or non-integral numerics",
         "meaning": "components per sample",
         "backend_support": "authoring-only; planner rejects materialization on all lanes",
         "problem_ir": "`material_parameter_fields[].value.component_count`"

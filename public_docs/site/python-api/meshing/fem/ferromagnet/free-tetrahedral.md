@@ -20,5 +20,7 @@ film.mesh(
 )
 ```
 
-Advanced recipes may set `mesh_strategy="free_tetrahedral"`, Gmsh algorithms, curvature and narrow
-region controls, smoothing, optimizer, boundary layers, size fields, and operations.
+The public `body.mesh(...)` facade may set `mesh_strategy="free_tetrahedral"`, Gmsh algorithms,
+curvature and narrow-region controls, smoothing, optimizer, boundary layers, and size fields.
+`PerObjectMeshRecipe` is the internal lowering carrier and is not available as
+`fm.PerObjectMeshRecipe`.

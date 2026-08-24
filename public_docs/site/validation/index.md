@@ -4,14 +4,15 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+source_of_truth: docs/specs/capability-matrix-v0.json
 ---
 
 (public-docs-validation-root)=
 # Validation
 
-Validation is how FullMag separates executed numerical truth from source presence. A solver or lane
-is qualified only when an executed gate, a recorded artifact, and an accepted tolerance all agree.
-This family records the validation taxonomy, the current qualification state, and what remains open.
+Validation is how FullMag separates executed numerical truth from source presence. A validation
+claim requires an executed gate, a recorded artifact, and an accepted tolerance to agree. This
+family records the validation taxonomy, the current qualification state, and what remains open.
 
 ## Taxonomy
 
@@ -31,8 +32,10 @@ The authoritative per-lane support and qualification matrix lives on
 
 Each page distinguishes:
 
-- **production / qualified** — an executed gate plus recorded artifact passed the acceptance
-  tolerance;
+- **production executable** — the workload can execute on the intended production lane; this is an
+  availability claim, not by itself a validation claim;
+- **validated** — the documented workload is executable and has explicit benchmark or regression
+  evidence that passed its acceptance criteria;
 - **scripted / runtime-open** — the gate or artifact validator exists, but the executed runtime
   evidence is not yet current;
 - **not evaluated** — artifacts do not yet carry a validation decision;

@@ -64,7 +64,7 @@
         "type": "int",
         "default": "required",
         "si_unit": "1",
-        "validation": "Integer greater than or equal to one.",
+        "validation": "Must compare as at least one; Boolean and non-integral numeric values are not rejected by this constructor.",
         "meaning": "Study-level finite-element field order.",
         "backend_support": "FEM CPU; GPU element/order capability-gated",
         "problem_ir": "backend_policy.discretization_hints.fem.order"
@@ -104,7 +104,7 @@
         "type": "FemLinearSolverPolicy | None",
         "default": "None",
         "si_unit": "1",
-        "validation": "Typed solver policy.",
+        "validation": "No explicit `FEM` constructor type check; lowering requires `to_ir()`.",
         "meaning": "Algebraic Poisson/demag solver request; not mesh geometry.",
         "backend_support": "FEM demagnetization lanes",
         "problem_ir": "backend_policy.discretization_hints.fem.demag_solver_policy"

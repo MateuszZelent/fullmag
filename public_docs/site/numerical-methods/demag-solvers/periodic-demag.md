@@ -53,7 +53,7 @@ vectors $\mathbf t_{\boldsymbol\ell}$ and image set $\mathcal I$, the discrete c
 ```{math}
 :label: eq-numerical-periodic-demag-fdm-sum
 \mathbf H_{\mathrm d}(\mathbf r_i)=
-\sum_{\boldsymbol\ell\in\mathcal I}
+-\sum_{\boldsymbol\ell\in\mathcal I}
 \mathbf N(\mathbf r_i-\mathbf r_j-\mathbf t_{\boldsymbol\ell})\mathbf M(\mathbf r_j),
 \qquad
 \mathcal I=\{-n_x,\ldots,n_x\}\times\{-n_y,\ldots,n_y\}\times\{-n_z,\ldots,n_z\}.
@@ -165,13 +165,13 @@ The periodic policy is lowered independently from the interaction term:
 ```json
 {
   "energy_terms": [{"kind": "demag"}],
+  "pbc": {
+    "axes": ["periodic", "periodic", "open"],
+    "demag": "truncated_images",
+    "image_counts": [4, 4, 0]
+  },
   "backend_policy": {
-    "engine": "fdm",
-    "pbc": {
-      "axes": ["periodic", "periodic", "open"],
-      "demag": "truncated_images",
-      "image_counts": [4, 4, 0]
-    }
+    "engine": "fdm"
   }
 }
 ```
@@ -196,10 +196,10 @@ unsupported lane, and the planner must report validation errors before runtime s
 
 | Solver | Device | Status | Realization |
 |---|---|---|---|
-| FDM | CPU | partial/source-backed | periodic Newell spectra with finite translated-image truncation |
-| FDM | GPU | partial/qualification-dependent | separate CUDA realization only when the selected policy is qualified |
-| FEM | CPU | partial/source-backed | periodic representative reduction of the Poisson system |
-| FEM | GPU | partial/qualification-dependent | separate device realization; CPU source presence does not establish parity |
+| FDM | CPU | reference-executable | periodic Newell spectra with finite translated-image truncation |
+| FDM | GPU | production-executable | CUDA convolution uses the same truncated-image policy and image counts; execution provenance remains required |
+| FEM | CPU | partial-production-executable | bounded periodic representative reduction and zero-mode policy |
+| FEM | GPU | partial-production-executable | bounded periodic-airbox lane with device-specific qualification; not universal periodic FEM support |
 
 For FDM, changing `image_counts` changes the convolution kernel and therefore the computed field.
 For FEM, changing the periodic node equivalence classes changes the matrix topology and right-hand

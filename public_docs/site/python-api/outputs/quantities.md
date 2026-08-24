@@ -74,6 +74,10 @@ study.stages.add_run(stage_id="run", until=1.0e-12)
 ## ProblemIR
 `SaveQuantity.to_ir()` emits the quantity id, cadence, and optional reduction/component.
 
+`study.save(...)` does not construct `SaveQuantity`: it constructs `SaveField` or `SaveScalar`
+for periodic time outputs, and dedicated eigen-output records for `spectrum`, `mode`, and
+`dispersion`. `SaveQuantity` is currently the lower-level generic quantity record.
+
 (python-api-outputs-quantities-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
@@ -100,7 +104,8 @@ Ownership tests compare this inventory with live ids and reduction sets.
 <!-- (limitations)= -->
 ## Limitations
 Requesting a quantity does not guarantee the configured interactions materialize it; planner
-legality is authoritative.
+legality is authoritative. The stage-first builder has no direct entrypoint for attaching a
+`SaveQuantity` instance to a study.
 
 (python-api-outputs-quantities-scientific-bibliography)=
 <!-- (scientific-bibliography)= -->

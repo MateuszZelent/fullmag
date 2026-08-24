@@ -28,17 +28,18 @@ Units carried by parameters follow their owning pages; exact lowering is unit-pr
 (python-api-problem-round-trip-assumptions-and-validity)=
 <!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
-Lowering resolves runtime selection and converts authored parameters to canonical quantities
-without changing requested intent. Validation failures happen at authoring or planning time.
+Lowering normalizes explicit requested backend, mode, and precision overrides and converts authored
+parameters to canonical quantities without changing requested intent. The planner/runtime resolves
+the actual execution lane later. Validation failures happen at authoring or planning time.
 
 (python-api-problem-round-trip-python-api)=
 <!-- (python-api)= -->
 ## Python API
 | Python | Meaning |
 |---|---|
-| `Problem.to_ir(requested_backend=..., execution_mode=..., execution_precision=...)` | Canonical lowering with explicit runtime intent |
-| `RuntimeSelection.resolved(backend=..., mode=..., precision=...)` | Resolve requested descriptors onto the runtime record |
-| `RuntimeSelection.to_runtime_metadata()` | Serialize the resolved selection into provenance metadata |
+| `Problem.to_ir(requested_backend=..., execution_mode=..., execution_precision=...)` | Canonical lowering with explicit requested runtime intent |
+| `RuntimeSelection.resolved(backend=..., mode=..., precision=...)` | Return a copied requested descriptor with the supplied fields overridden; despite the method name, this is not planner resolution |
+| `RuntimeSelection.to_runtime_metadata()` | Serialize that requested descriptor into request metadata |
 
 ### Complete stage-first context
 
@@ -68,13 +69,15 @@ study.stages.add_run(stage_id="run", until=1.0e-9)
 (python-api-problem-round-trip-problem-ir)=
 <!-- (problem-ir)= -->
 ## ProblemIR
-`Problem.to_ir()` builds the request with resolved runtime, geometry assets, materials, regions,
-study pipeline, and builder/script-sync manifests while preserving script-source hashing.
+`Problem.to_ir()` builds the request with normalized requested runtime metadata, geometry assets,
+materials, regions, study pipeline, and builder/script-sync manifests while preserving
+script-source hashing. Planner-resolved backend/device reality is a later execution/provenance
+record.
 
 (python-api-problem-round-trip-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
-Requested and resolved descriptors remain distinct. An FDM selection with FEM-only policy such as
+Requested and planner-resolved descriptors remain distinct. An FDM selection with FEM-only policy such as
 `pbc.demag="periodic_airbox_k0"` fails lowering rather than being silently converted.
 
 (python-api-problem-round-trip-discrete-realization)=
@@ -110,4 +113,5 @@ No physical model is introduced.
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
 | Canonical lowering | `packages/fullmag-py/src/fullmag/model/problem.py` | `Problem.to_ir` | Authoring-to-IR mapping | Round-trip tests |
-| Runtime resolution | `packages/fullmag-py/src/fullmag/model/problem.py` | `RuntimeSelection.resolved` | Requested-vs-resolved | Ownership test |
+| Requested-runtime override | `packages/fullmag-py/src/fullmag/model/problem.py` | `RuntimeSelection.resolved` | Copies and overrides the requested descriptor before planning | Ownership test |
+| Canonical script rewrite | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `render_loaded_problem_as_script` | Re-emits stage-first Python from a loaded problem/session model | Script-builder round-trip tests |

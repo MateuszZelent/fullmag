@@ -4,7 +4,7 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: linearized-llg, modal-validation, their source maps, and source revision 88c7160080bc1e8519950df283d2dd02087cc3da
+source_of_truth: linearized-llg, modal-validation, their source maps, and source revision 0388c3e7c4804923ee02a00b7ac4a789a44092d9
 ---
 
 (public-docs-numerical-methods-eigensolvers-root)=
@@ -14,9 +14,10 @@ source_of_truth: linearized-llg, modal-validation, their source maps, and source
 :class: important
 
 The public eigenmode request is not a promise of universal backend support. At the reviewed
-revision, the native production modal contract is FEM. FDM CPU and FDM CUDA modal execution are not
-claimed. FEM GPU and external eigensolver availability are separate runtime-qualification facts and
-must be demonstrated by resolved provenance.
+revision, FEM owns several bounded modal slices rather than one universally production-qualified
+lane. FDM CPU and FDM CUDA modal execution are unsupported. FEM CPU/GPU scope, demagnetization,
+Floquet sampling, and external eigensolver availability must be demonstrated by resolved
+provenance.
 :::
 
 ## Purpose
@@ -112,21 +113,26 @@ For the undamped conservative part, the first-order LLG structure contains
 ```
 
 with additional terms when damping or nonconservative torques are included. Fullmag assembles the
-final tangent problem as a generalized complex pencil
+final tangent problem as the production generalized complex pencil
 
 ```{math}
 :label: eq-eigen-root-pencil
-\mathsf K\mathbf q
-=\lambda\mathsf G\mathbf q,
+\mathsf L\mathbf q
+=\lambda\mathsf B_{\alpha}\mathbf q,
 \qquad
-\lambda=\sigma+\mathrm i\omega,
+\lambda=\mathrm i\omega,
 \qquad
-f=\frac{|\omega|}{2\pi}.
+\omega=-\mathrm i\lambda,
+\qquad
+f=\frac{\operatorname{Re}\omega}{2\pi}.
 ```
 
-`linearized-llg` is the public operator family. The exact placement of signs, gyromagnetic factors,
-mass matrices, and damping blocks is owned by the native operator and its provenance. The temporal
-ansatz must be recorded before interpreting $\sigma$ as growth or decay.
+`linearized-llg` is the public operator family. Here $\mathsf L$ has units $\mathrm{s^{-1}}$ and
+$\mathsf B_{\alpha}$ is dimensionless. The exact placement of signs, gyromagnetic factors, mass
+matrices, and damping blocks is owned by the native operator and its provenance. Damped spectra can
+make $\omega$ complex; cyclic frequency comes only from its real part. Taking $|\omega|$ would mix
+oscillation with damping and discard the branch sign. The temporal ansatz and recorded
+eigenvalue-to-frequency mapping must be consulted before interpreting decay or growth.
 
 ## Damping policy
 
@@ -201,12 +207,12 @@ For a computed pair $(\lambda,\mathbf q)$,
 
 ```{math}
 :label: eq-eigen-root-residual
-\mathbf r=\mathsf K\mathbf q-\lambda\mathsf G\mathbf q,
+\mathbf r=\mathsf L\mathbf q-\lambda\mathsf B_{\alpha}\mathbf q,
 \qquad
 \varepsilon_{\mathrm{eig}}
 =\frac{\lVert\mathbf r\rVert_2}
-{\lVert\mathsf K\mathbf q\rVert_2
-+|\lambda|\lVert\mathsf G\mathbf q\rVert_2}.
+{\lVert\mathsf L\mathbf q\rVert_2
++|\lambda|\lVert\mathsf B_{\alpha}\mathbf q\rVert_2}.
 ```
 
 The denominator convention above is a recommended scale-invariant diagnostic; the native solver's
@@ -248,7 +254,6 @@ study.stages.add_relax(
     max_steps=50_000,
 )
 study.stages.add_eigenmodes(
-    stage_id="modes",
     count=12,
     target="lowest",
     operator="linearized_llg",
@@ -286,8 +291,8 @@ diagnostics.
 
 | Solver | Device | Status | Meaning |
 |---|---|---|---|
-| FEM | CPU | source-backed native contract | public schema and native modal solver/diagnostics are present |
-| FEM | GPU | partial / qualification-dependent | requires explicit proof of device execution and dependency support for the selected operator |
+| FEM | CPU | partial-production-executable | reference/MVP artifacts and a bounded selected-spectrum, no-demag, Full2x2 Floquet slice; general Poisson-airbox/SLEPc production remains gated |
+| FEM | GPU | partial-production-executable | narrow $k=0$, no-demag macrospin/Kittel cuSolverDN slice; Poisson-airbox dense paths remain algebraic or gated |
 | FDM | CPU | unsupported | no native production FDM eigen lane is claimed |
 | FDM | GPU | unsupported | no public CUDA modal lane is claimed |
 
@@ -301,6 +306,7 @@ FEM CPU solve while retaining requested FDM/GPU provenance.
 | Public modal schema | `packages/fullmag-py/src/fullmag/world.py` | `class EigenmodesStageSpec` | validates modal request fields |
 | Ordered modal stage | `packages/fullmag-py/src/fullmag/world.py` | `eigenmodes_stage` | stage construction and lowering input |
 | Native modal contract | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | `solve_modal_eigen_contract` | FEM modal validation, execution contract, and diagnostics |
+| Eigenvalue/frequency mapping | `backends/fem/src/frequency_domain/mode_kinematics.cpp` | `frequency_hz_from_omega_rad_s` | converts the signed real angular-frequency component selected by `map_eigenvalue` to cyclic frequency |
 | Dispersion-validation schema | `packages/fullmag-py/src/fullmag/model/eigen.py` | `class ThinFilmDEBVDispersionValidation` | typed DE/BV validation intent |
 | Kittel-validation schema | `packages/fullmag-py/src/fullmag/model/eigen.py` | `class K0KittelFieldSweepValidation` | typed field-sweep validation intent |
 
@@ -367,7 +373,7 @@ partial result and the caller explicitly permits it.
 
 ## Limitations
 
-- The reviewed native modal lane is FEM, not FDM.
+- The reviewed modal implementations are bounded FEM slices, not one universal FEM production lane.
 - Universal FEM GPU qualification is not claimed.
 - A static periodic mesh does not establish a valid Floquet dynamic-demagnetization operator.
 - Linear modes do not predict nonlinear saturation amplitude or mode coupling.

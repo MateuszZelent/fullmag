@@ -1,0 +1,791 @@
+# Full explicit review diff — public Sphinx wave 2C
+
+This patch contains exactly the 23 changed documentation/source-map files from the 28-page wave 2C audit, including the swept-hex re-review correction.
+
+## Included files
+
+- public_docs/site/python-api/discretization/discretization-hints.md
+- public_docs/site/python-api/discretization/discretization-hints.source-map.json
+- public_docs/site/python-api/discretization/fdm-multilayer-convolution.md
+- public_docs/site/python-api/discretization/fdm-multilayer-convolution.source-map.json
+- public_docs/site/python-api/discretization/fdm.md
+- public_docs/site/python-api/discretization/fdm.source-map.json
+- public_docs/site/python-api/discretization/fem.md
+- public_docs/site/python-api/discretization/fem.source-map.json
+- public_docs/site/python-api/discretization/hybrid.md
+- public_docs/site/python-api/discretization/mesh-controls.md
+- public_docs/site/python-api/discretization/per-object-meshing.md
+- public_docs/site/python-api/meshing/fdm/boundary-correction.md
+- public_docs/site/python-api/meshing/fdm/index.md
+- public_docs/site/python-api/meshing/fdm/index.source-map.json
+- public_docs/site/python-api/meshing/fem/airbox/geometry.md
+- public_docs/site/python-api/meshing/fem/airbox/grading.md
+- public_docs/site/python-api/meshing/fem/ferromagnet/boundary-layers.md
+- public_docs/site/python-api/meshing/fem/ferromagnet/free-tetrahedral.md
+- public_docs/site/python-api/meshing/fem/ferromagnet/index.md
+- public_docs/site/python-api/meshing/fem/ferromagnet/swept-hex.md
+- public_docs/site/python-api/meshing/fem/ferromagnet/swept-prism.md
+- public_docs/site/python-api/meshing/fem/index.md
+- public_docs/site/python-api/meshing/fem/index.source-map.json
+
+## Diff
+
+diff --git a/public_docs/site/python-api/discretization/discretization-hints.md b/public_docs/site/python-api/discretization/discretization-hints.md
+index ede610673..898727614 100644
+--- a/public_docs/site/python-api/discretization/discretization-hints.md
++++ b/public_docs/site/python-api/discretization/discretization-hints.md
+@@ -36,7 +36,7 @@ Constructor checks run immediately. Lowering and planning additionally check mes
+ |---|---|---|---|---|---|---|---|
+ | `DiscretizationHints.fdm` | `FDM \| None` | `None` | $1$ | FDM-specific hint; it does not force FDM when backend selection remains `auto`. | FDM-specific hint; it does not force FDM when backend selection remains `auto`. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm` |
+ | `DiscretizationHints.fem` | `FEM \| None` | `None` | $1$ | FEM-specific hint; it does not force FEM when backend selection remains `auto`. | FEM-specific hint; it does not force FEM when backend selection remains `auto`. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fem` |
+-| `DiscretizationHints.hybrid` | `Hybrid \| None` | `None` | $1$ | Optional hybrid hint. | Optional hybrid hint. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.hybrid` |
++| `DiscretizationHints.hybrid` | `Hybrid \| None` | `None` | $1$ | Optional representable hint; current planner rejects hybrid backend/mode. | Preserves intended hybrid demag policy. | Authoring/IR only; no executable planner lane | `backend_policy.discretization_hints.hybrid` |
+ 
+ 
+ ### Complete stage-first selection example
+diff --git a/public_docs/site/python-api/discretization/discretization-hints.source-map.json b/public_docs/site/python-api/discretization/discretization-hints.source-map.json
+index 4844040bc..f96ef4a5b 100644
+--- a/public_docs/site/python-api/discretization/discretization-hints.source-map.json
++++ b/public_docs/site/python-api/discretization/discretization-hints.source-map.json
+@@ -61,9 +61,9 @@
+         "type": "Hybrid | None",
+         "default": "None",
+         "si_unit": "1",
+-        "validation": "Optional hybrid hint.",
+-        "meaning": "Optional hybrid hint.",
+-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
++        "validation": "Optional representable hint; current planner rejects hybrid backend/mode.",
++        "meaning": "Preserves intended hybrid demag policy.",
++        "backend_support": "Authoring/IR only; no executable planner lane",
+         "problem_ir": "backend_policy.discretization_hints.hybrid"
+       }
+     ]
+diff --git a/public_docs/site/python-api/discretization/fdm-multilayer-convolution.md b/public_docs/site/python-api/discretization/fdm-multilayer-convolution.md
+index 0426d4af0..b6a5772eb 100644
+--- a/public_docs/site/python-api/discretization/fdm-multilayer-convolution.md
++++ b/public_docs/site/python-api/discretization/fdm-multilayer-convolution.md
+@@ -131,7 +131,7 @@ adapters and are not canonical authoring syntax.
+ 
+ | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+ |---|---|---|---|---|---|---|---|
+-| `body.mesh(cell_size=...)` | `Sequence[float] of length 3` | required unless a default exists | $\mathrm{m}$ | Three finite positive values; each object extent must be exactly divisible. | Native Cartesian cell size for that magnetic object. | FDM CPU/GPU subject to planner capability gates. | `.fdm.per_magnet[object_name].cell` |
++| `body.mesh(cell_size=...)` | `Sequence[float] of length 3` | required unless a default exists | $\mathrm{m}$ | Three finite positive values immediately; exact divisibility of the object extent is checked during grid realization. | Native Cartesian cell size for that magnetic object. | FDM CPU/GPU subject to planner capability gates. | `.fdm.per_magnet[object_name].cell` |
+ | `study.objects.mesh.defaults(cell_size=...)` | `Sequence[float] of length 3` | `None` | $\mathrm{m}$ | Three finite positive values. | Default native cell size for objects without an override. | FDM CPU/GPU. | `.fdm.default_cell` |
+ | `study.universe.mesh(cell_size=...)` | `Sequence[float] of length 3` | inferred only for compatible grids | $\mathrm{m}$ | Three finite positive values; must divide the common envelope exactly. | Requested common convolution-grid resolution. | FDM multilayer CPU/GPU subject to lane qualification. | `.fdm.demag.common_cell_size` |
+ | `FDMGrid.cell` | `Sequence[float] of length 3` | required | $\mathrm{m}$ per component | Exactly three finite, strictly positive components. | Native Cartesian cell size for one named magnet. | FDM CPU/GPU multilayer authoring; planner and runtime still capability-gate the resolved lane. | `backend_policy.discretization_hints.fdm.per_magnet[magnet_name].cell` |
+@@ -139,6 +139,7 @@ adapters and are not canonical authoring syntax.
+ | `FDMDemag.mode` | `Literal["auto", "two_d_stack", "three_d"]` | `"auto"` | $1$ | Must be one of the three literal values. | Requested thin-film stack or full 3-D convolution mode. | FDM CPU/GPU subject to geometry and native-Z constraints. | `backend_policy.discretization_hints.fdm.demag.mode` |
+ | `FDMDemag.common_cells` | `tuple[int, int, int] \| None` | `None` | $1$ | Exactly three positive non-Boolean integers; mutually exclusive with `common_cells_xy`; invalid with `mode="two_d_stack"`. | Explicit 3-D common convolution-grid cell counts. | FDM CPU/GPU subject to planner memory and runtime capability. | `backend_policy.discretization_hints.fdm.demag.common_cells` |
+ | `FDMDemag.common_cells_xy` | `tuple[int, int] \| None` | `None` | $1$ | Exactly two positive non-Boolean integers; mutually exclusive with `common_cells`; valid only with `mode="auto"` or `mode="two_d_stack"`. | Explicit in-plane common-grid counts; planner resolves the Z count to one for a 2-D stack. | FDM CPU/GPU two-dimensional stack path. | `backend_policy.discretization_hints.fdm.demag.common_cells_xy` |
++| `FDMDemag.common_cell_size` | `Sequence[float] \| None` | `None` | $\mathrm{m}$ | Exactly three finite positive values; mutually exclusive with `common_cells` and `common_cells_xy`. | Requested physical cell size of the common convolution grid. | FDM CPU/GPU; planner resolves shape and mode. | `backend_policy.discretization_hints.fdm.demag.common_cell_size` |
+ | `FDMDemag.allow_single_grid_fallback` | `bool \| None` | `None` | $1$ | Every non-`None` value raises `ValueError`. | Removed compatibility input; silent fallback is forbidden. | Unsupported on every lane. | Not serialized |
+ | `FDMDemag.explain` | `bool` | `True` | $1$ | The raw script builder requires a Boolean; the constructor itself does not type-check it. | Requests a human-readable plan explanation; it is not physical intent. | Python/UI authoring helper only. | Not serialized |
+ | `FDM.cell` | `Sequence[float] \| None` | `None` | $\mathrm{m}$ per component | Legacy alias; cannot be supplied together with `default_cell`; when present, exactly three finite positive components. | Backward-compatible default Cartesian cell size. | FDM CPU/GPU; prefer `default_cell`. | Both `backend_policy.discretization_hints.fdm.cell` and `.default_cell` |
+@@ -289,17 +290,15 @@ part of the canonical contract, not an illustrative shorthand:
+     "execution_precision": "double",
+     "discretization_hints": {
+       "fdm": {
+-        "cell": [4e-09, 4e-09, 3e-09],
+-        "default_cell": [4e-09, 4e-09, 3e-09],
+         "per_magnet": {
+           "layer_bottom": {"cell": [4e-09, 4e-09, 3e-09]},
+           "layer_middle": {"cell": [4e-09, 4e-09, 3e-09]},
+           "layer_top": {"cell": [4e-09, 4e-09, 3e-09]}
+         },
+         "demag": {
+-          "strategy": "multilayer_convolution",
+-          "mode": "two_d_stack",
+-          "common_cells_xy": [8, 4]
++          "strategy": "auto",
++          "mode": "auto",
++          "common_cell_size": [4e-09, 4e-09, 3e-09]
+         }
+       }
+     }
+@@ -336,6 +335,7 @@ Python request.
+ | `FDMDemag(mode=...)` | `.fdm.demag.mode` | requested value is preserved; planner owns `resolved_mode` |
+ | `FDMDemag(common_cells=...)` | `.fdm.demag.common_cells` | tuple becomes a three-element integer array |
+ | `FDMDemag(common_cells_xy=...)` | `.fdm.demag.common_cells_xy` | tuple becomes a two-element integer array |
++| `FDMDemag(common_cell_size=...)` | `.fdm.demag.common_cell_size` | sequence becomes a three-element SI-metre array |
+ | `FDMDemag(explain=...)` | not serialized | retained only by authoring/UI round-trip |
+ | `FDM(boundary_correction=...)` | `.fdm.boundary_correction` | literal is preserved |
+ | `FDM(boundary_phi_floor=...)` | `.fdm.boundary_phi_floor` | scalar is preserved |
+diff --git a/public_docs/site/python-api/discretization/fdm-multilayer-convolution.source-map.json b/public_docs/site/python-api/discretization/fdm-multilayer-convolution.source-map.json
+index 5c05f32dc..9faf4e6fc 100644
+--- a/public_docs/site/python-api/discretization/fdm-multilayer-convolution.source-map.json
++++ b/public_docs/site/python-api/discretization/fdm-multilayer-convolution.source-map.json
+@@ -192,7 +192,7 @@
+   "public_api": {
+     "constructors": ["fullmag.FDMGrid", "fullmag.FDMDemag", "fullmag.FDM"],
+     "parameters": [
+-      {"python": "body.mesh(cell_size=...)", "type": "Sequence[float] of length 3", "default": "required unless a default exists", "si_unit": "$\\mathrm{m}$", "validation": "Three finite positive values; each object extent must be exactly divisible.", "meaning": "Native Cartesian cell size for that magnetic object.", "backend_support": "FDM CPU/GPU subject to planner capability gates.", "problem_ir": "`.fdm.per_magnet[object_name].cell`"},
++      {"python": "body.mesh(cell_size=...)", "type": "Sequence[float] of length 3", "default": "required unless a default exists", "si_unit": "$\\mathrm{m}$", "validation": "Three finite positive values immediately; exact divisibility of the object extent is checked during grid realization.", "meaning": "Native Cartesian cell size for that magnetic object.", "backend_support": "FDM CPU/GPU subject to planner capability gates.", "problem_ir": "`.fdm.per_magnet[object_name].cell`"},
+       {"python": "study.objects.mesh.defaults(cell_size=...)", "type": "Sequence[float] of length 3", "default": "`None`", "si_unit": "$\\mathrm{m}$", "validation": "Three finite positive values.", "meaning": "Default native cell size for objects without an override.", "backend_support": "FDM CPU/GPU.", "problem_ir": "`.fdm.default_cell`"},
+       {"python": "study.universe.mesh(cell_size=...)", "type": "Sequence[float] of length 3", "default": "inferred only for compatible grids", "si_unit": "$\\mathrm{m}$", "validation": "Three finite positive values; must divide the common envelope exactly.", "meaning": "Requested common convolution-grid resolution.", "backend_support": "FDM multilayer CPU/GPU subject to lane qualification.", "problem_ir": "`.fdm.demag.common_cell_size`"},
+       {"python": "FDMGrid.cell", "type": "Sequence[float] of length 3", "default": "required", "si_unit": "$\\mathrm{m}$ per component", "validation": "Exactly three finite, strictly positive components.", "meaning": "Native Cartesian cell size for one named magnet.", "backend_support": "FDM CPU/GPU multilayer authoring; planner and runtime still capability-gate the resolved lane.", "problem_ir": "`backend_policy.discretization_hints.fdm.per_magnet[magnet_name].cell`"},
+@@ -200,6 +200,7 @@
+       {"python": "FDMDemag.mode", "type": "Literal[\"auto\", \"two_d_stack\", \"three_d\"]", "default": "`\"auto\"`", "si_unit": "$1$", "validation": "Must be one of the three literal values.", "meaning": "Requested thin-film stack or full 3-D convolution mode.", "backend_support": "FDM CPU/GPU subject to geometry and native-Z constraints.", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.mode`"},
+       {"python": "FDMDemag.common_cells", "type": "tuple[int, int, int] | None", "default": "`None`", "si_unit": "$1$", "validation": "Exactly three positive non-Boolean integers; mutually exclusive with `common_cells_xy`; invalid with `mode=\"two_d_stack\"`.", "meaning": "Explicit 3-D common convolution-grid cell counts.", "backend_support": "FDM CPU/GPU subject to planner memory and runtime capability.", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.common_cells`"},
+       {"python": "FDMDemag.common_cells_xy", "type": "tuple[int, int] | None", "default": "`None`", "si_unit": "$1$", "validation": "Exactly two positive non-Boolean integers; mutually exclusive with `common_cells`; valid only with `mode=\"auto\"` or `mode=\"two_d_stack\"`.", "meaning": "Explicit in-plane common-grid counts; planner resolves the Z count to one for a 2-D stack.", "backend_support": "FDM CPU/GPU two-dimensional stack path.", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.common_cells_xy`"},
++      {"python": "FDMDemag.common_cell_size", "type": "Sequence[float] | None", "default": "`None`", "si_unit": "$\\mathrm{m}$", "validation": "Exactly three finite positive values; mutually exclusive with `common_cells` and `common_cells_xy`.", "meaning": "Requested physical cell size of the common convolution grid.", "backend_support": "FDM CPU/GPU; planner resolves shape and mode.", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.common_cell_size`"},
+       {"python": "FDMDemag.allow_single_grid_fallback", "type": "bool | None", "default": "`None`", "si_unit": "$1$", "validation": "Every non-`None` value raises `ValueError`.", "meaning": "Removed compatibility input; silent fallback is forbidden.", "backend_support": "Unsupported on every lane.", "problem_ir": "Not serialized"},
+       {"python": "FDMDemag.explain", "type": "bool", "default": "`True`", "si_unit": "$1$", "validation": "The raw script builder requires a Boolean; the constructor itself does not type-check it.", "meaning": "Requests a human-readable plan explanation; it is not physical intent.", "backend_support": "Python/UI authoring helper only.", "problem_ir": "Not serialized"},
+       {"python": "FDM.cell", "type": "Sequence[float] | None", "default": "`None`", "si_unit": "$\\mathrm{m}$ per component", "validation": "Legacy alias; cannot be supplied together with `default_cell`; when present, exactly three finite positive components.", "meaning": "Backward-compatible default Cartesian cell size.", "backend_support": "FDM CPU/GPU; prefer `default_cell`.", "problem_ir": "Both `backend_policy.discretization_hints.fdm.cell` and `.default_cell`"},
+diff --git a/public_docs/site/python-api/discretization/fdm.md b/public_docs/site/python-api/discretization/fdm.md
+index be1f7f503..8e31afdad 100644
+--- a/public_docs/site/python-api/discretization/fdm.md
++++ b/public_docs/site/python-api/discretization/fdm.md
+@@ -34,13 +34,13 @@ Constructor checks run immediately. Lowering and planning additionally check mes
+ ## Python API
+ | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+ |---|---|---|---|---|---|---|---|
+-| `FDM.cell` | `three positive floats or `None`` | `None` | $\mathrm{m}$ | Canonical uniform cell size; it also becomes `default_cell` when supplied. | Canonical uniform cell size; it also becomes `default_cell` when supplied. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.cell` |
+-| `FDM.default_cell` | `three positive floats or `None`` | `None` | $\mathrm{m}$ | Default cell size when per-magnet grids are present. | Default cell size when per-magnet grids are present. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.default_cell` |
+-| `FDM.per_magnet` | `mapping or `None`` | `None` | $1$ | Optional explicit per-magnet FDM grids. | Optional explicit per-magnet FDM grids. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.per_magnet` |
+-| `FDM.demag` | `FDMDemag \| None` | `None` | $1$ | Demagnetization hint. | Demagnetization hint. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.demag` |
+-| `FDM.boundary_correction` | `str \| None` | `None` | $1$ | Optional `T0`/`T1`-family sub-cell policy. Support differs by precision and device. | Optional `T0`/`T1`-family sub-cell policy. Support differs by precision and device. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.boundary_correction` |
+-| `FDM.boundary_phi_floor` | `float \| None` | `None` | $1$ | Optional lower bound $\varphi_{\mathrm{floor}}$ with strict domain $0<\varphi_{\mathrm{floor}}<1$. | Optional lower bound $\varphi_{\mathrm{floor}}$ with strict domain $0<\varphi_{\mathrm{floor}}<1$. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.boundary_phi_floor` |
+-| `FDM.boundary_delta_min` | `float \| None` | `None` | $\mathrm{m}$ | Optional T1 distance floor $\delta_{\min}\geq0$; zero is accepted. | Optional T1 distance floor $\delta_{\min}\geq0$; zero is accepted. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.boundary_delta_min` |
++| `FDM.cell` | `Sequence[float] \| None` | `None` | $\mathrm{m}$ | Exactly three finite positive components; mutually exclusive with `default_cell`. | Legacy alias copied to `default_cell`. | FDM CPU/GPU; planner checks the requested lane | `backend_policy.discretization_hints.fdm.cell` |
++| `FDM.default_cell` | `Sequence[float] \| None` | `None` | $\mathrm{m}$ | Exactly three finite positive components; either this or non-empty `per_magnet` is required. | Default cell size for magnets without an override. | FDM CPU/GPU; planner checks the requested lane | `backend_policy.discretization_hints.fdm.default_cell` |
++| `FDM.per_magnet` | `dict[str, FDMGrid] \| None` | `None` | $1$ | Non-empty string keys and `FDMGrid` values; may be the sole cell specification when non-empty. | Explicit native grids keyed by magnet name. | FDM CPU/GPU; multilayer capability-gated | `backend_policy.discretization_hints.fdm.per_magnet` |
++| `FDM.demag` | `FDMDemag \| None` | `None` | $1$ | No explicit constructor type check; lowering requires an object with `to_ir()`. | Demagnetization grid/topology hint. | FDM demagnetization lanes | `backend_policy.discretization_hints.fdm.demag` |
++| `FDM.boundary_correction` | `str \| None` | `None` | $1$ | `none`, `volume`, or `full`. | Binary, T0 volume-fraction, or T1 full sub-cell policy. | FDM interaction/device capability-gated | `backend_policy.discretization_hints.fdm.boundary_correction` |
++| `FDM.boundary_phi_floor` | `float \| None` | `None` | $1$ | Strictly $0<\varphi_{\mathrm{floor}}<1$. | Lower volume-fraction stability bound. | FDM boundary-correction lanes | `backend_policy.discretization_hints.fdm.boundary_phi_floor` |
++| `FDM.boundary_delta_min` | `float \| None` | `None` | $\mathrm{m}$ | Values below zero are rejected; zero is accepted, but the constructor does not reject `NaN`. | T1 distance floor. | FDM boundary-correction lanes | `backend_policy.discretization_hints.fdm.boundary_delta_min` |
+ 
+ 
+ ### Complete FDM stage scenario
+diff --git a/public_docs/site/python-api/discretization/fdm.source-map.json b/public_docs/site/python-api/discretization/fdm.source-map.json
+index 4ff549fb7..5c62084c7 100644
+--- a/public_docs/site/python-api/discretization/fdm.source-map.json
++++ b/public_docs/site/python-api/discretization/fdm.source-map.json
+@@ -38,32 +38,32 @@
+     "parameters": [
+       {
+         "python": "FDM.cell",
+-        "type": "three positive floats or `None`",
++        "type": "Sequence[float] | None",
+         "default": "None",
+         "si_unit": "\\mathrm{m}",
+-        "validation": "Canonical uniform cell size; it also becomes `default_cell` when supplied.",
+-        "meaning": "Canonical uniform cell size; it also becomes `default_cell` when supplied.",
+-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
++        "validation": "Exactly three finite positive components; mutually exclusive with `default_cell`.",
++        "meaning": "Legacy alias copied to `default_cell`.",
++        "backend_support": "FDM CPU/GPU; planner checks the requested lane",
+         "problem_ir": "backend_policy.discretization_hints.fdm.cell"
+       },
+       {
+         "python": "FDM.default_cell",
+-        "type": "three positive floats or `None`",
++        "type": "Sequence[float] | None",
+         "default": "None",
+         "si_unit": "\\mathrm{m}",
+-        "validation": "Default cell size when per-magnet grids are present.",
+-        "meaning": "Default cell size when per-magnet grids are present.",
+-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
++        "validation": "Exactly three finite positive components; either this or non-empty `per_magnet` is required.",
++        "meaning": "Default cell size for magnets without an override.",
++        "backend_support": "FDM CPU/GPU; planner checks the requested lane",
+         "problem_ir": "backend_policy.discretization_hints.fdm.default_cell"
+       },
+       {
+         "python": "FDM.per_magnet",
+-        "type": "mapping or `None`",
++        "type": "dict[str, FDMGrid] | None",
+         "default": "None",
+         "si_unit": "1",
+-        "validation": "Optional explicit per-magnet FDM grids.",
+-        "meaning": "Optional explicit per-magnet FDM grids.",
+-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
++        "validation": "Non-empty string keys and `FDMGrid` values; may be the sole cell specification when non-empty.",
++        "meaning": "Explicit native grids keyed by magnet name.",
++        "backend_support": "FDM CPU/GPU; multilayer capability-gated",
+         "problem_ir": "backend_policy.discretization_hints.fdm.per_magnet"
+       },
+       {
+@@ -71,9 +71,9 @@
+         "type": "FDMDemag | None",
+         "default": "None",
+         "si_unit": "1",
+-        "validation": "Demagnetization hint.",
+-        "meaning": "Demagnetization hint.",
+-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
++        "validation": "No explicit constructor type check; lowering requires an object with `to_ir()`.",
++        "meaning": "Demagnetization grid/topology hint.",
++        "backend_support": "FDM demagnetization lanes",
+         "problem_ir": "backend_policy.discretization_hints.fdm.demag"
+       },
+       {
+@@ -81,9 +81,9 @@
+         "type": "str | None",
+         "default": "None",
+         "si_unit": "1",
+-        "validation": "Optional `T0`/`T1`-family sub-cell policy. Support differs by precision and device.",
+-        "meaning": "Optional `T0`/`T1`-family sub-cell policy. Support differs by precision and device.",
+-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
++        "validation": "`none`, `volume`, or `full`.",
++        "meaning": "Binary, T0 volume-fraction, or T1 full sub-cell policy.",
++        "backend_support": "FDM interaction/device capability-gated",
+         "problem_ir": "backend_policy.discretization_hints.fdm.boundary_correction"
+       },
+       {
+@@ -91,9 +91,9 @@
+         "type": "float | None",
+         "default": "None",
+         "si_unit": "1",
+-        "validation": "Optional lower bound $\\varphi_{\\mathrm{floor}}$ with strict domain $0<\\varphi_{\\mathrm{floor}}<1$.",
+-        "meaning": "Optional lower bound $\\varphi_{\\mathrm{floor}}$ with strict domain $0<\\varphi_{\\mathrm{floor}}<1$.",
+-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
++        "validation": "Strictly $0<\\varphi_{\\mathrm{floor}}<1$.",
++        "meaning": "Lower volume-fraction stability bound.",
++        "backend_support": "FDM boundary-correction lanes",
+         "problem_ir": "backend_policy.discretization_hints.fdm.boundary_phi_floor"
+       },
+       {
+@@ -101,9 +101,9 @@
+         "type": "float | None",
+         "default": "None",
+         "si_unit": "\\mathrm{m}",
+-        "validation": "Optional T1 distance floor $\\delta_{\\min}\\geq0$; zero is accepted.",
+-        "meaning": "Optional T1 distance floor $\\delta_{\\min}\\geq0$; zero is accepted.",
+-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
++        "validation": "Values below zero are rejected; zero is accepted, but the constructor does not reject `NaN`.",
++        "meaning": "T1 distance floor.",
++        "backend_support": "FDM boundary-correction lanes",
+         "problem_ir": "backend_policy.discretization_hints.fdm.boundary_delta_min"
+       }
+     ]
+diff --git a/public_docs/site/python-api/discretization/fem.md b/public_docs/site/python-api/discretization/fem.md
+index 337209a1e..a262b18ee 100644
+--- a/public_docs/site/python-api/discretization/fem.md
++++ b/public_docs/site/python-api/discretization/fem.md
+@@ -34,11 +34,11 @@ Constructor checks run immediately. Lowering and planning additionally check mes
+ ## Python API
+ | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+ |---|---|---|---|---|---|---|---|
+-| `FEM.order` | `int` | `required` | $1$ | Positive finite-element order. | Positive finite-element order. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fem.order` |
+-| `FEM.maximum_element_size` | `positive float` | `required unless hmax is supplied` | $\mathrm{m}$ | Canonical maximum element size. Construction fails if neither spelling is provided. | Canonical maximum element size. Construction fails if neither spelling is provided. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fem.maximum_element_size` |
+-| `FEM.hmax` | `positive float \| None` | `None` | $\mathrm{m}$ | Alternate input spelling for the same required size; unequal simultaneous values are rejected. | Alternate input spelling for the same required size; unequal simultaneous values are rejected. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fem.maximum_element_size` |
+-| `FEM.mesh` | `str \| None` | `None` | $1$ | Optional imported mesh reference. | Optional imported mesh reference. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fem.mesh` |
+-| `FEM.demag_solver_policy` | `policy or None` | `None` | $1$ | Demagnetization linear-solver policy. | Demagnetization linear-solver policy. | FEM/FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fem.demag_solver_policy` |
++| `FEM.order` | `int` | `required` | $1$ | Must compare as at least one; the constructor currently does not reject Boolean or non-integral numeric values. | Requested finite-element order. | FEM CPU; GPU element/order capability-gated | `backend_policy.discretization_hints.fem.order` |
++| `FEM.maximum_element_size` | `float \| None` | `required unless hmax is supplied` | $\mathrm{m}$ | Finite and positive; construction fails if neither spelling is provided. | Canonical maximum element size. | FEM CPU/GPU subject to planner capability | `backend_policy.discretization_hints.fem.hmax` |
++| `FEM.hmax` | `float \| None` | `None` | $\mathrm{m}$ | Finite positive alias; unequal simultaneous values are rejected. | Compatibility spelling of the same size. | FEM CPU/GPU subject to planner capability | `backend_policy.discretization_hints.fem.hmax` |
++| `FEM.mesh` | `str \| None` | `None` | $1$ | Non-empty string when supplied; mesh content is validated during extraction. | Optional imported mesh reference. | FEM import/extraction path | `backend_policy.discretization_hints.fem.mesh` |
++| `FEM.demag_solver_policy` | `FemLinearSolverPolicy \| None` | `None` | $1$ | No explicit `FEM` constructor type check; lowering requires `to_ir()`. | Demagnetization linear-solver policy. | FEM demagnetization lanes | `backend_policy.discretization_hints.fem.demag_solver_policy` |
+ 
+ 
+ ### Complete FEM stage scenario
+diff --git a/public_docs/site/python-api/discretization/fem.source-map.json b/public_docs/site/python-api/discretization/fem.source-map.json
+index 69ea6731f..4fc2a0e14 100644
+--- a/public_docs/site/python-api/discretization/fem.source-map.json
++++ b/public_docs/site/python-api/discretization/fem.source-map.json
+@@ -41,49 +41,49 @@
+         "type": "int",
+         "default": "required",
+         "si_unit": "1",
+-        "validation": "Positive finite-element order.",
+-        "meaning": "Positive finite-element order.",
+-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
++        "validation": "Must compare as at least one; the constructor currently does not reject Boolean or non-integral numeric values.",
++        "meaning": "Requested finite-element order.",
++        "backend_support": "FEM CPU; GPU element/order capability-gated",
+         "problem_ir": "backend_policy.discretization_hints.fem.order"
+       },
+       {
+         "python": "FEM.maximum_element_size",
+-        "type": "positive float",
++        "type": "float | None",
+         "default": "required unless hmax is supplied",
+         "si_unit": "\\mathrm{m}",
+-        "validation": "Canonical maximum element size. Construction fails if neither spelling is provided.",
+-        "meaning": "Canonical maximum element size. Construction fails if neither spelling is provided.",
+-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+-        "problem_ir": "backend_policy.discretization_hints.fem.maximum_element_size"
++        "validation": "Finite and positive; construction fails if neither spelling is provided.",
++        "meaning": "Canonical maximum element size.",
++        "backend_support": "FEM CPU/GPU subject to planner capability",
++        "problem_ir": "backend_policy.discretization_hints.fem.hmax"
+       },
+       {
+         "python": "FEM.hmax",
+-        "type": "positive float | None",
++        "type": "float | None",
+         "default": "None",
+         "si_unit": "\\mathrm{m}",
+-        "validation": "Alternate input spelling for the same required size; unequal simultaneous values are rejected.",
+-        "meaning": "Alternate input spelling for the same required size; unequal simultaneous values are rejected.",
+-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+-        "problem_ir": "backend_policy.discretization_hints.fem.maximum_element_size"
++        "validation": "Finite positive alias; unequal simultaneous values are rejected.",
++        "meaning": "Compatibility spelling of the same size.",
++        "backend_support": "FEM CPU/GPU subject to planner capability",
++        "problem_ir": "backend_policy.discretization_hints.fem.hmax"
+       },
+       {
+         "python": "FEM.mesh",
+         "type": "str | None",
+         "default": "None",
+         "si_unit": "1",
+-        "validation": "Optional imported mesh reference.",
++        "validation": "Non-empty string when supplied; mesh content is validated during extraction.",
+         "meaning": "Optional imported mesh reference.",
+-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
++        "backend_support": "FEM import/extraction path",
+         "problem_ir": "backend_policy.discretization_hints.fem.mesh"
+       },
+       {
+         "python": "FEM.demag_solver_policy",
+-        "type": "policy or None",
++        "type": "FemLinearSolverPolicy | None",
+         "default": "None",
+         "si_unit": "1",
+-        "validation": "Demagnetization linear-solver policy.",
++        "validation": "No explicit `FEM` constructor type check; lowering requires `to_ir()`.",
+         "meaning": "Demagnetization linear-solver policy.",
+-        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
++        "backend_support": "FEM demagnetization lanes",
+         "problem_ir": "backend_policy.discretization_hints.fem.demag_solver_policy"
+       }
+     ]
+diff --git a/public_docs/site/python-api/discretization/hybrid.md b/public_docs/site/python-api/discretization/hybrid.md
+index c00fc4d80..f7881b2a9 100644
+--- a/public_docs/site/python-api/discretization/hybrid.md
++++ b/public_docs/site/python-api/discretization/hybrid.md
+@@ -12,7 +12,8 @@ owner: fullmag-public-docs
+ (python-api-discretization-hybrid-problem-statement)=
+ <!-- (problem-statement)= -->
+ ## Contract
+-Hybrid discretization pairs FDM and FEM domains in one problem via `DiscretizationHints`.
++`Hybrid` preserves an intended FDM/FEM coupling policy in `DiscretizationHints`. It is currently a
++representable authoring/IR contract, not an executable planner lane.
+ 
+ (python-api-discretization-hybrid-governing-equations)=
+ <!-- (governing-equations)= -->
+@@ -27,7 +28,8 @@ All fields are policy identifiers.
+ (python-api-discretization-hybrid-assumptions-and-validity)=
+ <!-- (assumptions-and-validity)= -->
+ ## Assumptions and validity
+-The hybrid demag selector must be non-empty; hybrid backend and mode must be selected together.
++The hybrid demag selector must be a non-empty string. The current planner rejects both
++`backend="hybrid"` and `execution_mode="hybrid"` before execution.
+ 
+ (python-api-discretization-hybrid-python-api)=
+ <!-- (python-api)= -->
+@@ -39,7 +41,9 @@ The hybrid demag selector must be non-empty; hybrid backend and mode must be sel
+ 
+ ### Complete stage-first context
+ 
+-Hybrid problems select both backend families; the planner enforces the hybrid mode coupling.
++The stage-first builder can preserve requested hybrid backend/mode, while the low-level hint is
++shown separately because there is no public builder hook that attaches a `DiscretizationHints`
++object to this study.
+ 
+ ```python
+ # %% Hybrid discretization hints
+@@ -60,6 +64,7 @@ film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+ study.exchange()
+ 
+ hints = fm.DiscretizationHints(hybrid=fm.Hybrid(demag="open"))
++assert hints.to_ir()["hybrid"] == {"demag": "open"}
+ study.stages.add_run(stage_id="run", until=1.0e-12)
+ ```
+ 
+@@ -72,12 +77,15 @@ non-null.
+ (python-api-discretization-hybrid-round-trip-and-failure-semantics)=
+ <!-- (round-trip-and-failure-semantics)= -->
+ ## Round-trip and failure semantics
+-Empty hybrid demag and hybrid/non-hybrid mismatch fail immediately.
++An empty `Hybrid.demag` fails during construction. A captured hybrid study remains non-executable:
++the Rust planner reports that the hybrid backend and hybrid execution mode are unsupported rather
++than falling back to FDM or FEM.
+ 
+ (python-api-discretization-hybrid-discrete-realization)=
+ <!-- (discrete-realization)= -->
+ ## Discrete realization
+-The planner resolves the FDM/FEM boundary and reports the derived discretization provenance.
++No FDM/FEM interface is currently resolved by the production planner. `Hybrid.to_ir()` only
++preserves requested intent for a future capability.
+ 
+ (python-api-discretization-hybrid-implementation-mapping)=
+ <!-- (implementation-mapping)= -->
+@@ -93,7 +101,8 @@ Ownership tests compare this inventory with live signatures.
+ (python-api-discretization-hybrid-limitations)=
+ <!-- (limitations)= -->
+ ## Limitations
+-Hybrid execution support is planner-resolved; the policy does not by itself prove executability.
++Hybrid execution is unavailable in the current planner entry point. The separate builder/hint
++attachment gap also prevents this example from claiming an end-to-end hybrid lowering path.
+ 
+ (python-api-discretization-hybrid-scientific-bibliography)=
+ <!-- (scientific-bibliography)= -->
+@@ -106,3 +115,4 @@ No physical model is introduced.
+ | Claim | Path | Stable symbol | Responsibility | Evidence |
+ |---|---|---|---|---|
+ | Hybrid hints | `packages/fullmag-py/src/fullmag/model/discretization.py` | `Hybrid`, `DiscretizationHints` | Hybrid lowering | Ownership test |
++| Planner rejection | `crates/fullmag-plan/src/lib.rs` | `plan` | Rejects hybrid backend and execution mode | Planner tests |
+diff --git a/public_docs/site/python-api/discretization/mesh-controls.md b/public_docs/site/python-api/discretization/mesh-controls.md
+index ee11ae26b..07e9b8182 100644
+--- a/public_docs/site/python-api/discretization/mesh-controls.md
++++ b/public_docs/site/python-api/discretization/mesh-controls.md
+@@ -28,19 +28,21 @@ Cell and element sizes are in metres; growth rate, curvature factor, and order a
+ (python-api-discretization-mesh-controls-assumptions-and-validity)=
+ <!-- (assumptions-and-validity)= -->
+ ## Assumptions and validity
+-Positive sizes, non-negative growth rates, and FEM order >= 1 are validated immediately.
++The public mesh facades validate positive sizes, `minimum <= maximum`, and positive growth rates up
++to 2.5. Low-level validation is class-specific: `MeshSizeControls` itself performs no constructor
++validation, and `FEM.order` currently checks only comparison with one rather than integer type.
+ 
+ (python-api-discretization-mesh-controls-python-api)=
+ <!-- (python-api)= -->
+ ## Python API
+ | Python | Type | Default | Validation | Meaning | ProblemIR |
+ |---|---|---|---|---|---|
+-| `FDM.default_cell` | `tuple[float,float,float] \| None` | alias of `cell` | Positive per-axis | Uniform FDM cell | `cell` / `default_cell` |
++| `FDM.default_cell` | `tuple[float,float,float] \| None` | `None` | Three finite positive components; `cell` is its legacy alias | Uniform FDM cell | `cell` / `default_cell` |
+ | `FDM.per_magnet` | `dict[str, FDMGrid] \| None` | `None` | Non-empty name keys | Per-magnet grids | `per_magnet` |
+ | `FDM.boundary_correction` | `str \| None` | `None` | `none`, `volume`, or `full` | Boundary correction | `boundary_correction` |
+-| `FEM.order` | `int \| None` | study/object default | `>= 1` | Element order | `order` |
++| `body.mesh(order=...)` / `FEM.order` | `int \| None` / `int` | inherited / required | Facade stores the value; low-level `FEM` requires comparison `>= 1` but does not reject Boolean or fractional numerics | Element order | `order` |
+ | `FEM.maximum_element_size` | `float \| None` | `hmax` alias | Positive | Maximum element size | `hmax` |
+-| `MeshSizeControls.*` | size knobs | `None` | Positive sizes etc. | COMSOL-style size semantics | size controls |
++| internal `MeshSizeControls.*` | size knobs | `None` | No constructor validation; not exported as `fm.MeshSizeControls` | Lowering carrier for COMSOL-style size semantics | size controls |
+ 
+ ### Complete stage-first example
+ 
+@@ -74,7 +76,8 @@ workflow/provenance.
+ (python-api-discretization-mesh-controls-round-trip-and-failure-semantics)=
+ <!-- (round-trip-and-failure-semantics)= -->
+ ## Round-trip and failure semantics
+-Invalid sizes, order, and boundary correction fail immediately.
++The public facades reject invalid sizes and boundary-correction names immediately. Some low-level
++carriers defer type/legality checks to lowering or mesh realization as described above.
+ 
+ (python-api-discretization-mesh-controls-discrete-realization)=
+ <!-- (discrete-realization)= -->
+diff --git a/public_docs/site/python-api/discretization/per-object-meshing.md b/public_docs/site/python-api/discretization/per-object-meshing.md
+index 2c7e6602f..c1eba5fa7 100644
+--- a/public_docs/site/python-api/discretization/per-object-meshing.md
++++ b/public_docs/site/python-api/discretization/per-object-meshing.md
+@@ -12,8 +12,9 @@ owner: fullmag-public-docs
+ (python-api-discretization-per-object-meshing-problem-statement)=
+ <!-- (problem-statement)= -->
+ ## Contract
+-Per-object meshing lets each magnetic object override the study-level mesh policy with its own
+-recipe, including thin-film and swept topologies.
++Per-object meshing lets each magnetic object override the study-level mesh policy through the
++public `body.mesh` facade, including thin-film and swept topologies. The resulting internal lowering
++carrier is `PerObjectMeshRecipe`.
+ 
+ (python-api-discretization-per-object-meshing-governing-equations)=
+ <!-- (governing-equations)= -->
+@@ -28,8 +29,10 @@ Element sizes and boundary-layer thickness are in metres; counts and ratios are
+ (python-api-discretization-per-object-meshing-assumptions-and-validity)=
+ <!-- (assumptions-and-validity)= -->
+ ## Assumptions and validity
+-Non-`None` fields override the global defaults; positive sizes and valid topology selectors are
+-validated.
++Non-`None` facade fields override global defaults. `body.mesh(...)` validates core sizes and
++layered-topology consistency, while several advanced scalar knobs are stored for later mesher
++validation. The internal `PerObjectMeshRecipe` dataclass validates layered/topology fields only and
++is not a top-level `fullmag` export.
+ 
+ (python-api-discretization-per-object-meshing-python-api)=
+ <!-- (python-api)= -->
+@@ -37,9 +40,9 @@ validated.
+ | Python | Type | Default | Validation | Meaning | ProblemIR |
+ |---|---|---|---|---|---|
+ | `body.mesh.thin_film(minimum_element_size, maximum_element_size, layers, topology, ...)` | method | per object | Positive sizes, supported topology | Thin-film prism/swept mesh | object mesh recipe |
+-| `PerObjectMeshRecipe.maximum_element_size` / `minimum_element_size` | `float \| None` | `None` | Positive | Local element sizes | object recipe |
+-| `PerObjectMeshRecipe.boundary_layer_count/thickness/stretching` | knobs | `None` | Positive counts/thickness, ratio 1–2 | Boundary layer | object recipe |
+-| `PerObjectMeshRecipe.mesh_strategy` | `str \| None` | `None` | `auto`, `free_tetrahedral`, `swept_prism`, `swept_hex` | Local topology | object recipe |
++| internal recipe `maximum_element_size` / `minimum_element_size` | `float \| None` | `None` | Public facade requires positive values and `minimum <= maximum`; internal dataclass defers checks | Local element sizes | object recipe |
++| internal recipe `boundary_layer_count/thickness/stretching` | knobs | `None` | Public facade requires count >= 1 and positive thickness/stretching; no upper bound of 2 is enforced | Boundary layer | object recipe |
++| internal recipe `mesh_strategy` | `str \| None` | `None` | `auto`, `free_tetrahedral`, `thin_film_tetrahedral`, `swept_prism`, or `swept_hex`; `swept_hex` is representable for authoring but unsupported by the current body-only realization | Local topology | object recipe |
+ 
+ ### Complete stage-first example
+ 
+@@ -81,29 +84,39 @@ Per-object recipes lower into object-region mesh specs and the derived mesh work
+ <!-- (round-trip-and-failure-semantics)= -->
+ ## Round-trip and failure semantics
+ Invalid topology selectors and sizes fail immediately; final conformity is validated at mesh build.
++An explicit `swept_hex` recipe survives authoring, but mesh generation rejects it with
++`ValueError` before starting Gmsh; it never silently realizes the request as a prism mesh.
+ 
+ (python-api-discretization-per-object-meshing-discrete-realization)=
+ <!-- (discrete-realization)= -->
+ ## Discrete realization
+-The FEM backend realizes thin-film and swept recipe; final conforming solver mesh consumes object
+-recipes without collapsing universe/object/final layers.
++The FEM backend realizes the documented thin-film and `swept_prism` recipes; the final conforming
++solver mesh consumes those object recipes without collapsing universe/object/final layers.
++`swept_hex` remains authoring-only and is unsupported by the current body-only mesh generator.
+ 
+ (python-api-discretization-per-object-meshing-implementation-mapping)=
+ <!-- (implementation-mapping)= -->
+ ## Implementation mapping
+ Anchor: `packages/fullmag-py/src/fullmag/model/discretization.py`
+-(`PerObjectMeshRecipe`, `SweptMeshControls`) and the `body.mesh` facade in
+-`packages/fullmag-py/src/fullmag/world.py`.
++(`PerObjectMeshRecipe`, `SweptMeshControls`) and the public `body.mesh` facade in
++`packages/fullmag-py/src/fullmag/world.py`. Runtime dispatch and explicit hex rejection live in
++`packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py`
++(`generate_swept_mesh`).
+ 
+ (python-api-discretization-per-object-meshing-validation)=
+ <!-- (validation)= -->
+ ## Validation
+-Ownership and meshing tests cover object-level overrides.
++Ownership and meshing tests cover object-level overrides. The mixed-element meshing test
++`test_explicit_swept_hex_never_silently_realizes_prism` proves the fail-closed `swept_hex`
++boundary.
+ 
+ (python-api-discretization-per-object-meshing-limitations)=
+ <!-- (limitations)= -->
+ ## Limitations
+-FDM realizes object grids per-magnet; FEM requires a conforming final assembly.
++FDM realizes object grids per magnet; FEM requires a conforming final assembly. Direct
++`fm.PerObjectMeshRecipe(...)` construction is unavailable because that internal carrier is not
++exported from the top-level namespace. Although `swept_hex` can be authored in the internal recipe,
++the current body-only FEM generator does not implement its realization.
+ 
+ (python-api-discretization-per-object-meshing-scientific-bibliography)=
+ <!-- (scientific-bibliography)= -->
+@@ -116,3 +129,4 @@ No physical model is introduced.
+ | Claim | Path | Stable symbol | Responsibility | Evidence |
+ |---|---|---|---|---|
+ | Object recipes | `packages/fullmag-py/src/fullmag/model/discretization.py` | `PerObjectMeshRecipe` | Object-level meshing | Ownership and meshing tests |
++| Swept realization boundary | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `generate_swept_mesh` | Realizes supported swept-prism paths and rejects explicit `swept_hex` before Gmsh startup | `packages/fullmag-py/tests/test_mixed_element_meshing.py::test_explicit_swept_hex_never_silently_realizes_prism` |
+diff --git a/public_docs/site/python-api/meshing/fdm/boundary-correction.md b/public_docs/site/python-api/meshing/fdm/boundary-correction.md
+index eb5f0756d..3120b98d0 100644
+--- a/public_docs/site/python-api/meshing/fdm/boundary-correction.md
++++ b/public_docs/site/python-api/meshing/fdm/boundary-correction.md
+@@ -17,6 +17,10 @@ owner: fullmag-public-docs
+ | `boundary_phi_floor` | 1 | value in `(0, 1)` |
+ | `boundary_delta_min` | m | nonnegative |
+ 
++`boundary_phi_floor` rejects values outside `(0, 1)`, including non-finite values. The current
++Python constructor checks `boundary_delta_min < 0` only, so `NaN` passes construction; planners and
++runtimes must not treat that validation gap as a finite resolved distance.
++
+ These values request a policy. The result provenance must state the resolved interaction/device
+ coverage. Do not infer that every CUDA or DMI kernel applied the correction from successful Python
+ construction alone.
+diff --git a/public_docs/site/python-api/meshing/fdm/index.md b/public_docs/site/python-api/meshing/fdm/index.md
+index 452f5330f..3fe0659f4 100644
+--- a/public_docs/site/python-api/meshing/fdm/index.md
++++ b/public_docs/site/python-api/meshing/fdm/index.md
+@@ -43,10 +43,10 @@ Boundary-correction support remains interaction/device capability-gated.
+ | `FDM.cell` | `Sequence[float] \| None` | `None` | m | Three finite positive values; cannot be combined with default_cell. | Legacy alias for the default native cell size. | FDM CPU/GPU | `backend_policy.discretization_hints.fdm.cell` |
+ | `FDM.default_cell` | `Sequence[float] \| None` | `None` | m | Three finite positive values. | Default native cell size inherited by magnets without an override. | FDM CPU/GPU | `backend_policy.discretization_hints.fdm.default_cell` |
+ | `FDM.per_magnet` | `dict[str, FDMGrid] \| None` | `None` | 1 | Nonempty names and FDMGrid values. | Object-owned native grid overrides. | FDM CPU/GPU; multilayer capability-gated | `backend_policy.discretization_hints.fdm.per_magnet` |
+-| `FDM.demag` | `FDMDemag \| None` | `None` | 1 | Typed, internally consistent demag policy. | Single-grid or multilayer common-grid request. | FDM demagnetization lanes | `backend_policy.discretization_hints.fdm.demag` |
++| `FDM.demag` | `FDMDemag \| None` | `None` | 1 | No explicit `FDM` constructor type check; lowering requires `FDMDemag.to_ir()`. | Single-grid or multilayer common-grid request. | FDM demagnetization lanes | `backend_policy.discretization_hints.fdm.demag` |
+ | `FDM.boundary_correction` | `str \| None` | `None` | 1 | `none`, `volume`, or `full`. | Requested embedded-boundary correction. | Interaction/device capability-gated | `backend_policy.discretization_hints.fdm.boundary_correction` |
+ | `FDM.boundary_phi_floor` | `float \| None` | `None` | 1 | Strictly between zero and one. | Minimum stable partial-cell volume fraction. | Boundary-correction lanes | `backend_policy.discretization_hints.fdm.boundary_phi_floor` |
+-| `FDM.boundary_delta_min` | `float \| None` | `None` | m | Finite and nonnegative. | Minimum geometric distance used by full correction. | Boundary-correction lanes | `backend_policy.discretization_hints.fdm.boundary_delta_min` |
++| `FDM.boundary_delta_min` | `float \| None` | `None` | m | Values below zero are rejected; zero and `NaN` currently pass the Python constructor. | Minimum geometric distance used by full correction. | Boundary-correction lanes | `backend_policy.discretization_hints.fdm.boundary_delta_min` |
+ 
+ ```python
+ # %% Complete stage-first FDM mesh scenario
+@@ -81,7 +81,8 @@ spacing, masks/fractions, FFT padding, common-grid transfer, kernel digest, devi
+ 
+ Requested intent is preserved independently from resolved execution. Validation errors reject
+ nonpositive cells, alias conflicts, invalid strategy/mode combinations, and invalid boundary
+-parameters. Unsupported combinations fail capability checks without silent fallback.
++parameters. `boundary_delta_min=NaN` is a known constructor-validation gap and must not be treated
++as a valid realized value. Unsupported combinations fail capability checks without silent fallback.
+ 
+ (python-api-meshing-fdm-discrete-realization)=
+ ## Discrete realization
+diff --git a/public_docs/site/python-api/meshing/fdm/index.source-map.json b/public_docs/site/python-api/meshing/fdm/index.source-map.json
+index 0e85c5f56..bee877f39 100644
+--- a/public_docs/site/python-api/meshing/fdm/index.source-map.json
++++ b/public_docs/site/python-api/meshing/fdm/index.source-map.json
+@@ -88,7 +88,7 @@
+         "type": "FDMDemag | None",
+         "default": "None",
+         "si_unit": "1",
+-        "validation": "Typed, internally consistent demag policy.",
++        "validation": "No explicit `FDM` constructor type check; lowering requires `FDMDemag.to_ir()`.",
+         "meaning": "Single-grid or multilayer common-grid request.",
+         "backend_support": "FDM demagnetization lanes",
+         "problem_ir": "backend_policy.discretization_hints.fdm.demag"
+@@ -118,7 +118,7 @@
+         "type": "float | None",
+         "default": "None",
+         "si_unit": "m",
+-        "validation": "Finite and nonnegative.",
++        "validation": "Values below zero are rejected; zero and `NaN` currently pass the Python constructor.",
+         "meaning": "Minimum geometric distance used by full correction.",
+         "backend_support": "Boundary-correction lanes",
+         "problem_ir": "backend_policy.discretization_hints.fdm.boundary_delta_min"
+diff --git a/public_docs/site/python-api/meshing/fem/airbox/geometry.md b/public_docs/site/python-api/meshing/fem/airbox/geometry.md
+index b9ba17e6e..4dca509c5 100644
+--- a/public_docs/site/python-api/meshing/fem/airbox/geometry.md
++++ b/public_docs/site/python-api/meshing/fem/airbox/geometry.md
+@@ -15,6 +15,7 @@ Use:
+ study.universe(mode="manual", size=(Lx, Ly, Lz))
+ ```
+ 
+-The Control Room/API resource also supports `padding`, explicit `center`, and shape-specific
+-generation options in advanced policy. All lengths are SI metres. The realized clearances and shape
+-come from the build report.
++The same Python call supports `padding` and explicit `center`; all lengths are SI metres. The
++current `study.universe(...)` signature does not expose an airbox-shape selector. Runtime/API mesh
++resources may report a resolved shape, but that read model is not an additional Python authoring
++parameter. Realized clearances and shape come from the build report.
+diff --git a/public_docs/site/python-api/meshing/fem/airbox/grading.md b/public_docs/site/python-api/meshing/fem/airbox/grading.md
+index 7e13d47e0..1f0185fb8 100644
+--- a/public_docs/site/python-api/meshing/fem/airbox/grading.md
++++ b/public_docs/site/python-api/meshing/fem/airbox/grading.md
+@@ -20,5 +20,6 @@ study.universe.mesh(
+ )
+ ```
+ 
+-Advanced policy keys include airbox hmin/hmax, growth, geometric/linear grading, curvature, and
+-narrow-region resolution. These are targets, not guaranteed realized extrema.
++The public Python facade exposes hmin/hmax aliases, growth, and `auto`/`geometric`/`linear` grading.
++Curvature and narrow-region controls belong to object mesh policy, not the current
++`study.universe.mesh(...)` signature. These values are targets, not guaranteed realized extrema.
+diff --git a/public_docs/site/python-api/meshing/fem/ferromagnet/boundary-layers.md b/public_docs/site/python-api/meshing/fem/ferromagnet/boundary-layers.md
+index bab8b16dc..1fff94e7a 100644
+--- a/public_docs/site/python-api/meshing/fem/ferromagnet/boundary-layers.md
++++ b/public_docs/site/python-api/meshing/fem/ferromagnet/boundary-layers.md
+@@ -9,8 +9,11 @@ owner: fullmag-public-docs
+ (public-docs-python-api-meshing-fem-ferromagnet-boundary-layers)=
+ # Boundary-Layer API
+ 
+-Boundary layers can be authored with recipe fields or an ordered
+-`MeshOperation(kind="boundary_layers", params=...)`.
++Public scripts author boundary layers through `body.mesh(boundary_layer_count=...,
++boundary_layer_thickness=..., boundary_layer_stretching=..., ...)`. The lowering carrier can also
++hold an ordered `MeshOperation(kind="boundary_layers", params=...)`, but `MeshOperation` is not
++exported from the top-level `fullmag` namespace.
+ 
+-Relevant keys include count, total thickness, stretching, semantic surface/curve selectors, and raw
+-Gmsh tags. Prefer selectors because numeric tags are not stable across geometry rebuilds.
++Relevant facade keys include count, total thickness, positive stretching, semantic surface/curve
++selectors, and raw Gmsh tags. No upper stretching bound of 2 is enforced by the Python facade.
++Prefer selectors because numeric tags are not stable across geometry rebuilds.
+diff --git a/public_docs/site/python-api/meshing/fem/ferromagnet/free-tetrahedral.md b/public_docs/site/python-api/meshing/fem/ferromagnet/free-tetrahedral.md
+index 57e0e80df..adf1b90e2 100644
+--- a/public_docs/site/python-api/meshing/fem/ferromagnet/free-tetrahedral.md
++++ b/public_docs/site/python-api/meshing/fem/ferromagnet/free-tetrahedral.md
+@@ -20,5 +20,7 @@ film.mesh(
+ )
+ ```
+ 
+-Advanced recipes may set `mesh_strategy="free_tetrahedral"`, Gmsh algorithms, curvature and narrow
+-region controls, smoothing, optimizer, boundary layers, size fields, and operations.
++The public `body.mesh(...)` facade may set `mesh_strategy="free_tetrahedral"`, Gmsh algorithms,
++curvature and narrow-region controls, smoothing, optimizer, boundary layers, and size fields.
++`PerObjectMeshRecipe` is the internal lowering carrier and is not available as
++`fm.PerObjectMeshRecipe`.
+diff --git a/public_docs/site/python-api/meshing/fem/ferromagnet/index.md b/public_docs/site/python-api/meshing/fem/ferromagnet/index.md
+index 1879a67cd..045f8eb74 100644
+--- a/public_docs/site/python-api/meshing/fem/ferromagnet/index.md
++++ b/public_docs/site/python-api/meshing/fem/ferromagnet/index.md
+@@ -12,8 +12,8 @@ owner: fullmag-public-docs
+ Ferromagnet mesh commands are object-owned.
+ 
+ Use ordinary `object.mesh(...)` for unstructured policies and
+-`object.mesh.thin_film(...)` for explicit thin-film topology. Advanced scripts can construct a
+-`PerObjectMeshRecipe` directly.
++`object.mesh.thin_film(...)` for explicit thin-film topology. `PerObjectMeshRecipe` is the internal
++lowering carrier and is not exported as a top-level `fullmag` constructor.
+ 
+ Every mode below has its own command, required companion fields, and capability boundary.
+ 
+diff --git a/public_docs/site/python-api/meshing/fem/ferromagnet/swept-hex.md b/public_docs/site/python-api/meshing/fem/ferromagnet/swept-hex.md
+index da048964d..75c1cdf5a 100644
+--- a/public_docs/site/python-api/meshing/fem/ferromagnet/swept-hex.md
++++ b/public_docs/site/python-api/meshing/fem/ferromagnet/swept-hex.md
+@@ -9,8 +9,9 @@ owner: fullmag-public-docs
+ (public-docs-python-api-meshing-fem-ferromagnet-swept-hex)=
+ # Swept-Hex API
+ 
+-`PerObjectMeshRecipe` represents `mesh_strategy="swept_hex"` with quadrilateral source faces and
+-`element_family="hex"`.
++The public helper `body.mesh.swept(face_meshing="quadrilateral", ...)` records
++`mesh_strategy="swept_hex"` with quadrilateral source faces and `element_family="hex"` in the
++internal recipe.
+ 
+ The prism-to-pyramid transition is contradictory and rejected. The current Control Room exposes the
+ option as unsupported; Python representability is not a production qualification.
+diff --git a/public_docs/site/python-api/meshing/fem/ferromagnet/swept-prism.md b/public_docs/site/python-api/meshing/fem/ferromagnet/swept-prism.md
+index 669861def..7f88e5ba0 100644
+--- a/public_docs/site/python-api/meshing/fem/ferromagnet/swept-prism.md
++++ b/public_docs/site/python-api/meshing/fem/ferromagnet/swept-prism.md
+@@ -23,6 +23,6 @@ film.mesh.thin_film(
+ )
+ ```
+ 
+-The equivalent advanced recipe requires `mesh_strategy="swept_prism"`,
++The equivalent internal recipe produced by the facade requires `mesh_strategy="swept_prism"`,
+ `through_thickness_elements`, fixed distribution, triangular source faces, prism family,
+ `pyramid_to_tetrahedra`, exact layer count, and P1 order. Missing companion fields fail validation.
+diff --git a/public_docs/site/python-api/meshing/fem/index.md b/public_docs/site/python-api/meshing/fem/index.md
+index 9a1150030..849218cc1 100644
+--- a/public_docs/site/python-api/meshing/fem/index.md
++++ b/public_docs/site/python-api/meshing/fem/index.md
+@@ -30,7 +30,8 @@ SI metres. Orders, counts, algorithms, ratios, and quality controls are dimensio
+ (python-api-meshing-fem-assumptions-and-validity)=
+ ## Assumptions and validity
+ 
+-Order is at least one. A positive maximum element size is required. `hmax` is an alias and must agree
++Order must compare as at least one, but the low-level constructor does not currently reject Boolean
++or non-integral numeric values. A positive maximum element size is required. `hmax` is an alias and must agree
+ with `maximum_element_size` when both are present. Imported mesh references are nonempty and remain
+ subject to native validation. Element-family/device support is capability-gated.
+ 
+@@ -39,11 +40,11 @@ subject to native validation. Element-family/device support is capability-gated.
+ 
+ | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+ |---|---|---:|---:|---|---|---|---|
+-| `FEM.order` | `int` | required | 1 | Integer greater than or equal to one. | Study-level finite-element field order. | FEM CPU; GPU element/order capability-gated | `backend_policy.discretization_hints.fem.order` |
++| `FEM.order` | `int` | required | 1 | Must compare as at least one; Boolean and non-integral numeric values are not rejected by this constructor. | Study-level finite-element field order. | FEM CPU; GPU element/order capability-gated | `backend_policy.discretization_hints.fem.order` |
+ | `FEM.maximum_element_size` | `float \| None` | `None` | m | Finite and positive; required unless hmax is supplied. | Canonical study-level maximum-size target. | FEM | `backend_policy.discretization_hints.fem.hmax` |
+ | `FEM.hmax` | `float \| None` | `None` | m | Finite positive alias; equal to maximum_element_size when both are supplied. | Compatibility spelling of the same target. | FEM | `backend_policy.discretization_hints.fem.hmax` |
+ | `FEM.mesh` | `str \| None` | `None` | 1 | Nonempty when present; asset is revalidated during extraction. | Imported or prebuilt FEM mesh reference. | FEM import/extraction path | `backend_policy.discretization_hints.fem.mesh` |
+-| `FEM.demag_solver_policy` | `FemLinearSolverPolicy \| None` | `None` | 1 | Typed solver policy. | Algebraic Poisson/demag solver request; not mesh geometry. | FEM demagnetization lanes | `backend_policy.discretization_hints.fem.demag_solver_policy` |
++| `FEM.demag_solver_policy` | `FemLinearSolverPolicy \| None` | `None` | 1 | No explicit `FEM` constructor type check; lowering requires `to_ir()`. | Algebraic Poisson/demag solver request; not mesh geometry. | FEM demagnetization lanes | `backend_policy.discretization_hints.fem.demag_solver_policy` |
+ 
+ ```python
+ # %% Complete stage-first FEM mesh scenario
+@@ -114,6 +115,10 @@ Meshing itself is normally a host/Gmsh operation even when the simulation execut
+ ferromagnet topology. Universe and region facades add airbox and local-region policy. Backend reports
+ are authoritative for what ran.
+ 
++`PerObjectMeshRecipe` and `MeshOperation` are internal model/lowering classes, not exports from the
++top-level `fullmag` namespace. Public scripts configure their equivalent state through `body.mesh`
++and its `thin_film`, `swept`, operation, and size-field helpers.
++
+ (python-api-meshing-fem-validation)=
+ ## Validation
+ 
+diff --git a/public_docs/site/python-api/meshing/fem/index.source-map.json b/public_docs/site/python-api/meshing/fem/index.source-map.json
+index a5ea0683b..853c0dd99 100644
+--- a/public_docs/site/python-api/meshing/fem/index.source-map.json
++++ b/public_docs/site/python-api/meshing/fem/index.source-map.json
+@@ -64,7 +64,7 @@
+         "type": "int",
+         "default": "required",
+         "si_unit": "1",
+-        "validation": "Integer greater than or equal to one.",
++        "validation": "Must compare as at least one; Boolean and non-integral numeric values are not rejected by this constructor.",
+         "meaning": "Study-level finite-element field order.",
+         "backend_support": "FEM CPU; GPU element/order capability-gated",
+         "problem_ir": "backend_policy.discretization_hints.fem.order"
+@@ -104,7 +104,7 @@
+         "type": "FemLinearSolverPolicy | None",
+         "default": "None",
+         "si_unit": "1",
+-        "validation": "Typed solver policy.",
++        "validation": "No explicit `FEM` constructor type check; lowering requires `to_ir()`.",
+         "meaning": "Algebraic Poisson/demag solver request; not mesh geometry.",
+         "backend_support": "FEM demagnetization lanes",
+         "problem_ir": "backend_policy.discretization_hints.fem.demag_solver_policy"

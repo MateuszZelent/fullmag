@@ -4,7 +4,7 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: explicit-runge-kutta, adaptive-stepping, tangent-plane-methods, their source maps, and source revision 88c7160080bc1e8519950df283d2dd02087cc3da
+source_of_truth: explicit-runge-kutta, adaptive-stepping, tangent-plane-methods, their source maps, and source revision 0388c3e7c4804923ee02a00b7ac4a789a44092d9
 ---
 
 (public-docs-numerical-methods-time-integration-root)=
@@ -72,7 +72,7 @@ policies that must be reported.
 | `rk23` | Bogacki--Shampine 3(2) | fixed or adaptive | lower-cost adaptive integration | FDM/FEM CPU/GPU; alias `bs23` normalizes to `rk23` |
 | `rk45` | Dormand--Prince 5(4) | fixed or adaptive | higher-order adaptive integration | FDM/FEM CPU/GPU; alias `dp54` normalizes to `rk45` |
 | `abm3` | Adams--Bashforth--Moulton predictor/corrector | fixed multistep | history-based stepping | FDM and reference FEM paths; native FEM GPU rejects it |
-| `tangent_plane_implicit` | linearly implicit tangent-plane family | implicit/FEM policy | constrained stiff integration/development relaxation | FEM contract; no FDM realization is claimed |
+| `tangent_plane_implicit` | linearly implicit tangent-plane family | implicit/FEM policy | development relaxation only; not physical-time integration | FEM CPU in extended mode; forced GPU and FDM reject |
 | `coupled_imex_ark2` | coupled implicit--explicit transport integrator | adaptive coupled solve | transient spin-transport coupling | valid only with the required transient transport module; not a plain LLG choice |
 | `auto` | planner request | resolved | lets the planner choose a legal method | provenance must record the resolved canonical name |
 
@@ -121,24 +121,29 @@ For active point $i$, Fullmag's documented normalized error is
 :label: eq-time-root-adaptive-error
 \eta_i=
 \frac{\lVert e_i\rVert_2}
-{a_{\mathrm{tol}}+r_{\mathrm{tol}}\max(\lVert m_i\rVert_2,1)},
+{a_{\mathrm{tol}}+r_{\mathrm{tol}}\max(\lVert m_i^n\rVert_2,\lVert m_i^{\mathrm{hi}}\rVert_2)},
 \qquad
 \eta=\max_i\eta_i.
 ```
 
-The trial is accepted exactly when $\eta\leq1$. For estimator order $q$, the proposed next step is
+The trial is accepted exactly when $\eta\leq1$. For estimator order $q$, the raw step ratio is
 
 ```{math}
 :label: eq-time-root-adaptive-controller
-\Delta t_{\mathrm{new}}
-=s\,\Delta t\,\eta^{-1/q},
+r_{\mathrm{raw}}=
+\begin{cases}
+s\,\eta_n^{-1/(q+1)}, & \text{startup, reset, zero history, or rejected trial},\\
+s\,\eta_n^{-0.7/(q+1)}\eta_{n-1}^{0.4/(q+1)}, & \text{accepted trial with positive history},
+\end{cases}
 \qquad
-\rho_{\mathrm{shrink}}\Delta t
-\leq\Delta t_{\mathrm{new}}
-\leq\rho_{\mathrm{growth}}\Delta t,
+\Delta t_{\mathrm{new}}=\Delta t\,\operatorname{clamp}
+(r_{\mathrm{raw}},\rho_{\mathrm{shrink}},\rho_{\mathrm{growth}}),
 ```
 
-followed by the absolute `dt_min` and optional `dt_max` bounds. The public defaults are
+then the absolute `dt_min`/`dt_max` bounds are applied. A rejected trial does not update
+$\eta_{n-1}$. RK23 uses $q=2$ and RK45 uses $q=4$.
+
+The public defaults are
 $a_{\mathrm{tol}}=10^{-6}$, $r_{\mathrm{tol}}=10^{-3}$,
 $\Delta t_{\min}=10^{-15}\,\mathrm s$, safety $s=0.9$, growth limit $2.0$, and shrink limit
 $0.2$. Hitting `dt_min` while $\eta>1$ is a controlled failure, not permission to accept an
@@ -184,8 +189,8 @@ P_i=I-\boldsymbol\mu_i\boldsymbol\mu_i^{\mathsf T},
 A tangent-plane method solves for an increment in the plane orthogonal to
 $\boldsymbol\mu_i$ and retracts or normalizes the updated state. This avoids treating the
 unit-length constraint as three independent unconstrained scalar equations. Fullmag's public
-`tangent_plane_implicit` vocabulary is FEM-only in the current contract. Its source-visible
-presence must not be interpreted as FDM or universally qualified GPU support. See
+`tangent_plane_implicit` vocabulary is a FEM CPU development relaxation in extended mode, not a
+physical-time stiff integrator. Strict mode, forced GPU, and FDM requests reject it. See
 {doc}`tangent-plane-methods`.
 
 ## Public Python contract

@@ -28,19 +28,21 @@ Cell and element sizes are in metres; growth rate, curvature factor, and order a
 (python-api-discretization-mesh-controls-assumptions-and-validity)=
 <!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
-Positive sizes, non-negative growth rates, and FEM order >= 1 are validated immediately.
+The public mesh facades validate positive sizes, `minimum <= maximum`, and positive growth rates up
+to 2.5. Low-level validation is class-specific: `MeshSizeControls` itself performs no constructor
+validation, and `FEM.order` currently checks only comparison with one rather than integer type.
 
 (python-api-discretization-mesh-controls-python-api)=
 <!-- (python-api)= -->
 ## Python API
 | Python | Type | Default | Validation | Meaning | ProblemIR |
 |---|---|---|---|---|---|
-| `FDM.default_cell` | `tuple[float,float,float] \| None` | alias of `cell` | Positive per-axis | Uniform FDM cell | `cell` / `default_cell` |
+| `FDM.default_cell` | `tuple[float,float,float] \| None` | `None` | Three finite positive components; `cell` is its legacy alias | Uniform FDM cell | `cell` / `default_cell` |
 | `FDM.per_magnet` | `dict[str, FDMGrid] \| None` | `None` | Non-empty name keys | Per-magnet grids | `per_magnet` |
 | `FDM.boundary_correction` | `str \| None` | `None` | `none`, `volume`, or `full` | Boundary correction | `boundary_correction` |
-| `FEM.order` | `int \| None` | study/object default | `>= 1` | Element order | `order` |
+| `body.mesh(order=...)` / `FEM.order` | `int \| None` / `int` | inherited / required | Facade stores the value; low-level `FEM` requires comparison `>= 1` but does not reject Boolean or fractional numerics | Element order | `order` |
 | `FEM.maximum_element_size` | `float \| None` | `hmax` alias | Positive | Maximum element size | `hmax` |
-| `MeshSizeControls.*` | size knobs | `None` | Positive sizes etc. | COMSOL-style size semantics | size controls |
+| internal `MeshSizeControls.*` | size knobs | `None` | No constructor validation; not exported as `fm.MeshSizeControls` | Lowering carrier for COMSOL-style size semantics | size controls |
 
 ### Complete stage-first example
 
@@ -74,7 +76,8 @@ workflow/provenance.
 (python-api-discretization-mesh-controls-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
-Invalid sizes, order, and boundary correction fail immediately.
+The public facades reject invalid sizes and boundary-correction names immediately. Some low-level
+carriers defer type/legality checks to lowering or mesh realization as described above.
 
 (python-api-discretization-mesh-controls-discrete-realization)=
 <!-- (discrete-realization)= -->

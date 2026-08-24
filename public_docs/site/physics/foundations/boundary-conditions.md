@@ -25,13 +25,16 @@ The free exchange surface law, periodic identification, and airbox closure are r
 
 ```{math}
 :label: eq-boundary-conditions-contract
-A\,\partial_n\mathbf m + D\,\mathbf n\times\mathbf m=\mathbf 0,
+2A\,\partial_{\boldsymbol\nu}\mathbf m
++D\left[(\hat{\mathbf n}\times\boldsymbol\nu)\times\mathbf m\right]=\mathbf 0,
 \qquad \mathbf m(\mathbf r+L_d\hat{\mathbf e}_d)=\mathbf m(\mathbf r),
 \qquad \partial_n u+\beta u=0\;\text{on }\partial\Omega_{\mathrm{air}}.
 ```
 
-The DMI term is present only for the corresponding interfacial realization and $\beta$ is the
-resolved Robin coefficient. A Dirichlet airbox closure $u=0$ is a different discrete problem.
+Here $\hat{\mathbf n}$ is the structural interface normal and $\boldsymbol\nu$ is the outward
+normal of the magnetic boundary. The DMI term is present only for the corresponding interfacial
+realization and $\beta$ is the resolved Robin coefficient. A Dirichlet airbox closure $u=0$ is a
+different discrete problem.
 
 Boundary conditions define how the magnetization and auxiliary fields (scalar potential,
 displacement) behave at the edges of the computational domain. FullMag implements
@@ -44,15 +47,15 @@ condition on the reduced magnetization:
 
 ```{math}
 :label: eq-neumann-free-surface
-A\,\partial_n\mathbf{m}
+A\,\partial_{\boldsymbol\nu}\mathbf{m}
 =
-A\,(\nabla\mathbf{m})\mathbf{n}
+A\,(\nabla\mathbf{m})\boldsymbol\nu
 =
 \mathbf{0}
 \qquad\text{on }\partial\Omega_m,
 ```
 
-where $\mathbf{n}$ is the outward unit normal. This represents zero exchange torque at
+where $\boldsymbol\nu$ is the outward unit normal. This represents zero exchange torque at
 free surfaces — the magnetization is free to rotate without constraint at the boundary.
 
 In FEM implementations, this condition is the natural (variational) boundary condition
@@ -66,13 +69,16 @@ $\partial\Omega_m$ is modified. The exchange-plus-DMI surface term becomes
 
 ```{math}
 :label: eq-dmi-modified-bc
-A\,\partial_n\mathbf{m} + D\,\mathbf{n}\times\mathbf{m} = \mathbf{0}
+2A\,\partial_{\boldsymbol\nu}\mathbf m
++D\left[(\hat{\mathbf n}\times\boldsymbol\nu)\times\mathbf m\right]=\mathbf 0
 \qquad\text{(interfacial DMI)},
 ```
 
 or the corresponding bulk DMI form. This boundary condition arises naturally from the
-variational principle when the DMI weak form is included. FullMag enforces it through the
-FEM weak formulation; FDM implementations handle it through stencil-boundary modifications.
+variational principle when the DMI weak form is included. FullMag realizes that variational
+structure through the FEM weak formulation. Current FDM open-boundary clamping is an implemented
+stencil closure, not a proof that the continuum exchange+iDMI natural condition is enforced;
+non-periodic FDM boundary qualification remains interaction-specific.
 
 See {doc}`../interactions/dmi/index` for the full DMI boundary-condition documentation.
 
@@ -159,13 +165,19 @@ See {doc}`../interactions/magnetoelastic/index` for details.
 
 | Symbol | Definition | SI unit |
 |---|---|---:|
-| $\mathbf{n}$ | outward unit normal | $1$ |
-| $\partial_n$ | normal derivative | $\mathrm{m^{-1}}$ |
+| $\hat{\mathbf n}$ | structural interface normal for interfacial DMI | $1$ |
+| $\boldsymbol\nu$ | outward unit normal of the magnetic boundary | $1$ |
+| $\partial_{\boldsymbol\nu}$ | derivative along the outward magnetic-boundary normal | $\mathrm{m^{-1}}$ |
 | $A$ | exchange stiffness | $\mathrm{J\,m^{-1}}$ |
 | $D$ | DMI constant | $\mathrm{J\,m^{-2}}$ |
+| $\nabla\mathbf m$ | magnetization gradient | $\mathrm{m^{-1}}$ |
+| $\Omega_m$ | magnetic domain | $\mathrm{m^3}$ |
 | $L_d$ | periodic cell size along axis $d$ | $\mathrm{m}$ |
+| $\hat{\mathbf e}_d$ | Cartesian basis vector along axis $d$ | $1$ |
 | $u$ | magnetic scalar potential (demag) | $\mathrm{A}$ |
-| $r$ | distance from magnetic body centre | $\mathrm{m}$ |
+| $\partial_n$ | derivative along the outward airbox normal | $\mathrm{m^{-1}}$ |
+| $\Omega_{\mathrm{air}}$ | auxiliary airbox domain | $\mathrm{m^3}$ |
+| $\mathbf r$ | position vector | $\mathrm{m}$ |
 | $\mathbf{u}$ | elastic displacement | $\mathrm{m}$ |
 | $\boldsymbol{\sigma}$ | stress tensor | $\mathrm{Pa}$ |
 | $\mathbf{m}$ | reduced magnetization | $1$ |
@@ -184,8 +196,8 @@ See {doc}`../interactions/magnetoelastic/index` for details.
 (boundary-conditions-assumptions-and-validity)=
 ## Assumptions and validity
 
-- Normals are outward normals of the resolved physical boundary marker, not of an arbitrary mesh
-  face selected after meshing.
+- $\boldsymbol\nu$ is the outward normal of the resolved physical magnetic boundary marker;
+  $\hat{\mathbf n}$ is the independent structural interface normal and the two must not be conflated.
 - PBC pairs must be complete, orientation-consistent, and compatible with the selected mesh.
 - Natural FEM conditions arise from the weak form; they are not interchangeable with strong nodal
   clamps.
@@ -199,9 +211,9 @@ interaction-specific pages own the detailed parameter contracts.
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| `PeriodicBC.axes` | `tuple[bool, bool, bool]` | required | $1$ | exactly three boolean axes | periodic directions | FDM and FEM planners subject to mesh support | `pbc.axes` |
-| `PeriodicBC.demag` | `str` | `open` | $1$ | supported demagnetization policy | closure for periodic demag | FDM/FEM lane-dependent | `pbc.demag` |
-| `study.pbc(...)` | callable | — | $1$ | rejects incomplete or incompatible pairs | stage-first periodicity request | public authoring surface | `pbc` |
+| `study.pbc(x, y, z)` | three `bool` values | `False, False, False` | $1$ | at least one axis is required when `demag` is not `"open"` or `images` is supplied | periodic Cartesian axes | FDM and FEM planners subject to mesh support | `pbc.axes` |
+| `study.pbc(..., demag=...)` | `str` | `"open"` | $1$ | `"open"`, `"truncated_images"`, or `"periodic_airbox_k0"`; the last is rejected for FDM | requested demagnetization periodicity | lane-dependent | `pbc.demag` |
+| `study.pbc(..., images=...)` | `tuple[int, int, int] \| None` | `None` | $1$ | three non-negative counts and only with `demag="truncated_images"` | requested periodic image counts | FDM periodic-image lanes | `pbc.image_counts` |
 
 (boundary-conditions-problem-ir)=
 ## Canonical ProblemIR
@@ -278,8 +290,8 @@ planned combination to implemented status.
 
 | Responsibility | Repository path | Stable symbol |
 |---|---|---|
-| Periodic Python contract | `packages/fullmag-py/src/fullmag/model/study.py` | `PeriodicBC` |
-| Stage-first declaration | `packages/fullmag-py/src/fullmag/world.py` | `study` |
+| Periodic Python contract and lowering | `packages/fullmag-py/src/fullmag/model/problem.py` | `class FdmPbc` |
+| Stage-first declaration | `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` |
 | FDM neighbor policy | `crates/fullmag-engine/src/fdm/shared/types.rs` | `neighbor_index` |
 | FEM periodic reduction | `backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp` | `apply_periodic_consistent_mass_component` |
 | FEM interfacial DMI boundary field | `backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp` | `compute_interfacial_dmi_field` |

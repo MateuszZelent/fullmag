@@ -12,8 +12,8 @@ owner: fullmag-public-docs
 Ferromagnet mesh commands are object-owned.
 
 Use ordinary `object.mesh(...)` for unstructured policies and
-`object.mesh.thin_film(...)` for explicit thin-film topology. Advanced scripts can construct a
-`PerObjectMeshRecipe` directly.
+`object.mesh.thin_film(...)` for explicit thin-film topology. `PerObjectMeshRecipe` is the internal
+lowering carrier and is not exported as a top-level `fullmag` constructor.
 
 Every mode below has its own command, required companion fields, and capability boundary.
 

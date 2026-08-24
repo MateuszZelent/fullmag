@@ -131,7 +131,7 @@ adapters and are not canonical authoring syntax.
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| `body.mesh(cell_size=...)` | `Sequence[float] of length 3` | required unless a default exists | $\mathrm{m}$ | Three finite positive values; each object extent must be exactly divisible. | Native Cartesian cell size for that magnetic object. | FDM CPU/GPU subject to planner capability gates. | `.fdm.per_magnet[object_name].cell` |
+| `body.mesh(cell_size=...)` | `Sequence[float] of length 3` | required unless a default exists | $\mathrm{m}$ | Three finite positive values immediately; exact divisibility of the object extent is checked during grid realization. | Native Cartesian cell size for that magnetic object. | FDM CPU/GPU subject to planner capability gates. | `.fdm.per_magnet[object_name].cell` |
 | `study.objects.mesh.defaults(cell_size=...)` | `Sequence[float] of length 3` | `None` | $\mathrm{m}$ | Three finite positive values. | Default native cell size for objects without an override. | FDM CPU/GPU. | `.fdm.default_cell` |
 | `study.universe.mesh(cell_size=...)` | `Sequence[float] of length 3` | inferred only for compatible grids | $\mathrm{m}$ | Three finite positive values; must divide the common envelope exactly. | Requested common convolution-grid resolution. | FDM multilayer CPU/GPU subject to lane qualification. | `.fdm.demag.common_cell_size` |
 | `FDMGrid.cell` | `Sequence[float] of length 3` | required | $\mathrm{m}$ per component | Exactly three finite, strictly positive components. | Native Cartesian cell size for one named magnet. | FDM CPU/GPU multilayer authoring; planner and runtime still capability-gate the resolved lane. | `backend_policy.discretization_hints.fdm.per_magnet[magnet_name].cell` |
@@ -139,6 +139,7 @@ adapters and are not canonical authoring syntax.
 | `FDMDemag.mode` | `Literal["auto", "two_d_stack", "three_d"]` | `"auto"` | $1$ | Must be one of the three literal values. | Requested thin-film stack or full 3-D convolution mode. | FDM CPU/GPU subject to geometry and native-Z constraints. | `backend_policy.discretization_hints.fdm.demag.mode` |
 | `FDMDemag.common_cells` | `tuple[int, int, int] \| None` | `None` | $1$ | Exactly three positive non-Boolean integers; mutually exclusive with `common_cells_xy`; invalid with `mode="two_d_stack"`. | Explicit 3-D common convolution-grid cell counts. | FDM CPU/GPU subject to planner memory and runtime capability. | `backend_policy.discretization_hints.fdm.demag.common_cells` |
 | `FDMDemag.common_cells_xy` | `tuple[int, int] \| None` | `None` | $1$ | Exactly two positive non-Boolean integers; mutually exclusive with `common_cells`; valid only with `mode="auto"` or `mode="two_d_stack"`. | Explicit in-plane common-grid counts; planner resolves the Z count to one for a 2-D stack. | FDM CPU/GPU two-dimensional stack path. | `backend_policy.discretization_hints.fdm.demag.common_cells_xy` |
+| `FDMDemag.common_cell_size` | `Sequence[float] \| None` | `None` | $\mathrm{m}$ | Exactly three finite positive values; mutually exclusive with `common_cells` and `common_cells_xy`. | Requested physical cell size of the common convolution grid. | FDM CPU/GPU; planner resolves shape and mode. | `backend_policy.discretization_hints.fdm.demag.common_cell_size` |
 | `FDMDemag.allow_single_grid_fallback` | `bool \| None` | `None` | $1$ | Every non-`None` value raises `ValueError`. | Removed compatibility input; silent fallback is forbidden. | Unsupported on every lane. | Not serialized |
 | `FDMDemag.explain` | `bool` | `True` | $1$ | The raw script builder requires a Boolean; the constructor itself does not type-check it. | Requests a human-readable plan explanation; it is not physical intent. | Python/UI authoring helper only. | Not serialized |
 | `FDM.cell` | `Sequence[float] \| None` | `None` | $\mathrm{m}$ per component | Legacy alias; cannot be supplied together with `default_cell`; when present, exactly three finite positive components. | Backward-compatible default Cartesian cell size. | FDM CPU/GPU; prefer `default_cell`. | Both `backend_policy.discretization_hints.fdm.cell` and `.default_cell` |
@@ -289,17 +290,15 @@ part of the canonical contract, not an illustrative shorthand:
     "execution_precision": "double",
     "discretization_hints": {
       "fdm": {
-        "cell": [4e-09, 4e-09, 3e-09],
-        "default_cell": [4e-09, 4e-09, 3e-09],
         "per_magnet": {
           "layer_bottom": {"cell": [4e-09, 4e-09, 3e-09]},
           "layer_middle": {"cell": [4e-09, 4e-09, 3e-09]},
           "layer_top": {"cell": [4e-09, 4e-09, 3e-09]}
         },
         "demag": {
-          "strategy": "multilayer_convolution",
-          "mode": "two_d_stack",
-          "common_cells_xy": [8, 4]
+          "strategy": "auto",
+          "mode": "auto",
+          "common_cell_size": [4e-09, 4e-09, 3e-09]
         }
       }
     }
@@ -336,6 +335,7 @@ Python request.
 | `FDMDemag(mode=...)` | `.fdm.demag.mode` | requested value is preserved; planner owns `resolved_mode` |
 | `FDMDemag(common_cells=...)` | `.fdm.demag.common_cells` | tuple becomes a three-element integer array |
 | `FDMDemag(common_cells_xy=...)` | `.fdm.demag.common_cells_xy` | tuple becomes a two-element integer array |
+| `FDMDemag(common_cell_size=...)` | `.fdm.demag.common_cell_size` | sequence becomes a three-element SI-metre array |
 | `FDMDemag(explain=...)` | not serialized | retained only by authoring/UI round-trip |
 | `FDM(boundary_correction=...)` | `.fdm.boundary_correction` | literal is preserved |
 | `FDM(boundary_phi_floor=...)` | `.fdm.boundary_phi_floor` | scalar is preserved |

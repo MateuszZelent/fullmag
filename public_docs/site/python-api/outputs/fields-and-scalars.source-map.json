@@ -50,7 +50,7 @@
         "validation": "Canonical field ID. For example, `H_ex` requires `Exchange()`.",
         "meaning": "Canonical field ID. For example, `H_ex` requires `Exchange()`.",
         "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "study.sampling.outputs[].field"
+        "problem_ir": "study.sampling.outputs[].name"
       },
       {
         "python": "SaveField.every",
@@ -70,7 +70,7 @@
         "validation": "Canonical scalar ID. For example, `E_ex` requires `Exchange()`.",
         "meaning": "Canonical scalar ID. For example, `E_ex` requires `Exchange()`.",
         "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "study.sampling.outputs[].scalar"
+        "problem_ir": "study.sampling.outputs[].name"
       },
       {
         "python": "SaveScalar.every",

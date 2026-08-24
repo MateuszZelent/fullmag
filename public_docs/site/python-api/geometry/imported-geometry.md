@@ -77,7 +77,9 @@ Invalid scale and unknown units fail immediately; later mesh build reports the r
 (python-api-geometry-imported-geometry-discrete-realization)=
 <!-- (discrete-realization)= -->
 ## Discrete realization
-FDM voxelizes imported geometry; FEM remeshes it with the selected meshing policy.
+The descriptor is backend-neutral. Realization depends on the inferred format and selected mesh
+workflow: an FDM path may voxelize a supported volume, while FEM may consume or remesh supported
+geometry/mesh assets.
 
 (python-api-geometry-imported-geometry-implementation-mapping)=
 <!-- (implementation-mapping)= -->
@@ -92,7 +94,9 @@ Ownership tests compare this inventory with live signatures.
 (python-api-geometry-imported-geometry-limitations)=
 <!-- (limitations)= -->
 ## Limitations
-Import format support and mesh build failures are resolved at import/mesh time.
+Serialization records unknown suffixes as `format="unknown"`; support is decided later by asset
+preparation and mesh building. Successful construction is therefore not proof that either backend
+can realize the source.
 
 (python-api-geometry-imported-geometry-scientific-bibliography)=
 <!-- (scientific-bibliography)= -->

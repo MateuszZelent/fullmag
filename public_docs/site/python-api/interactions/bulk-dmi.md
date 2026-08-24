@@ -46,8 +46,8 @@ study.stages.add_run(stage_id="sample", until=1.0e-12)
 
 ## Canonical material route
 
-The internal material field is `Dbulk`; the geometry facade should expose the documented canonical
-spelling consistently. Do not mix case variants between examples, exporter, and UI.
+The canonical material field and geometry-facade spelling is `Dbulk`. The compatibility
+`BulkDMI(D)` constructor lowers the same signed coefficient as an explicit energy term.
 
 ## Parameter reference
 
@@ -57,10 +57,8 @@ spelling consistently. Do not mix case variants between examples, exporter, and 
 | material bulk coefficient | float or spatial field | $\mathrm{J\,m^{-2}}$ | finite; mesh cardinality for fields |
 | periodicity/topology | planner policy | — | compatible with selected FDM bulk stencil |
 
-## Documentation/code correction
-
-`Material.Dbulk` emits a suspicious-SI warning labelled `J/m^2`, matching the public coefficient
-contract for $w=D\,\mathbf m\cdot\nabla\times\mathbf m$.
+`Material.Dbulk` uses the same $\mathrm{J\,m^{-2}}$ coefficient contract as
+$w=D\,\mathbf m\cdot\nabla\times\mathbf m$.
 
 (api-bulk-dmi-validation)=
 ## Failure semantics
@@ -92,7 +90,9 @@ The authored model is valid only within the continuum, discretization, boundary,
 (api-bulk-dmi-problem-ir)=
 ## ProblemIR
 
-Requested interaction data are serialized without replacing authored intent by backend-specific execution metadata.
+`BulkDMI(D).to_ir()` emits `{"kind": "bulk_dmi", "D": D}`. Stage-first material authoring
+stores the coefficient on the material and creates the corresponding interaction during lowering;
+resolved stencil and device information remain execution provenance.
 
 (api-bulk-dmi-discrete-realization)=
 ## Discrete realization

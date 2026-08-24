@@ -34,7 +34,7 @@ prescribed frequency therefore solves
 
 ```{math}
 :label: eq-numerical-floquet-response
-\left(\mathsf K(\mathbf k)+\mathrm i\omega\mathsf G(\mathbf k)\right)
+\left(\mathrm i\omega\mathsf B_{\alpha}(\mathbf k)-\mathsf L(\mathbf k)\right)
 \widehat{\mathbf q}(\omega,\mathbf k)=\widehat{\mathbf b}(\omega,\mathbf k).
 ```
 
@@ -50,12 +50,12 @@ $\delta\mathbf m/\delta\phi$ operator is qualified.
 | $\widehat{\mathbf m}$ | complex dynamic magnetization amplitude | $1$ |
 | $\mathbf r$ | position | $\mathrm{m}$ |
 | $\Delta\mathbf r$ | periodic face translation | $\mathrm{m}$ |
-| $\mathbf k$ | Bloch wave vector | $\mathrm{m^{-1}}$ |
-| $\mathsf K(\mathbf k)$ | k-dependent tangent operator | problem-dependent |
-| $\mathsf G(\mathbf k)$ | k-dependent gyrotropic/damping operator | problem-dependent |
+| $\mathbf k$ | Bloch wave vector | $\mathrm{rad\,m^{-1}}$ |
+| $\mathsf L(\mathbf k)$ | k-dependent tangent dynamic operator | $\mathrm{s^{-1}}$ |
+| $\mathsf B_{\alpha}(\mathbf k)$ | k-dependent damping/mass operator | $1$ |
 | $\omega$ | angular drive frequency | $\mathrm{rad\,s^{-1}}$ |
 | $\widehat{\mathbf q}$ | tangent response amplitude | $1$ |
-| $\widehat{\mathbf b}$ | harmonic right-hand side | problem-dependent |
+| $\widehat{\mathbf b}$ | harmonic tangent-space forcing | $\mathrm{s^{-1}}$ |
 
 (numerical-methods-floquet-response-assumptions-and-validity)=
 ## Assumptions and validity
@@ -124,8 +124,8 @@ they cannot silently become free boundaries or open demagnetization. Requested i
 
 | Solver | Device | Status | Realization |
 |---|---|---|---|
-| FEM | CPU | partial/source-backed | projected Floquet driven-response slice; dynamic demag gated |
-| FEM | GPU | partial/qualification-dependent | separate projected response slice and runtime dependency gate |
+| FEM | CPU | partial-production-executable | projected nonzero-$k$ driven-response slice without dynamic demag; full nonzero-$k$ demag is gated |
+| FEM | GPU | partial-production-executable | separate projected no-demag response slice; device execution evidence remains required |
 | FDM | CPU | unsupported | no native FDM Floquet response lane |
 | FDM | GPU | unsupported | no public FDM CUDA Floquet response lane |
 

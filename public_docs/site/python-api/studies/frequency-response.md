@@ -41,23 +41,31 @@ cardinality, capability, and backend legality.
 ## Python API
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| `FrequencyResponse.outputs` | `Sequence[FrequencyOutputSpec]` | `required` | $1$ | At least one | Response observables | FEM/FDM CPU/GPU; planner checks materialization | `sampling.outputs` |
-| `FrequencyResponse.frequencies_hz` | `Sequence[float]` | `required` | $\mathrm{Hz}$ | Non-empty, finite, positive | Sweep frequencies | FEM/FDM CPU/GPU | `frequencies_hz.values_hz` |
-| `FrequencyResponse.excitation_field_au_per_m` | `tuple[float, float, float]` | `(0,0,1)` | $\mathrm{A\,m^{-1}}$ | Length-3 finite vector | Small transverse excitation field | FEM/FDM CPU/GPU | `excitation.field_au_per_m` |
-| `FrequencyResponse.excitation_phase_rad` | `float` | `0.0` | $\mathrm{rad}$ | Finite | Excitation phase | FEM/FDM CPU/GPU | `excitation.phase_rad` |
-| `FrequencyResponse.operator` | `str` | `"linearized_llg"` | $1$ | `linearized_llg` or `full_2x2` | Linearized operator | FEM/FDM CPU/GPU | `operator.kind` |
-| `FrequencyResponse.include_demag` | `bool` | `True` | $1$ | Boolean | Include dynamic demagnetization | FEM/FDM CPU/GPU | `operator.include_demag` |
-| `FrequencyResponse.equilibrium_source` | `str` | `"provided"` | $1$ | `provided`, `relax`, or `artifact` | Equilibrium acquisition | FEM/FDM CPU/GPU | `equilibrium` |
-| `FrequencyResponse.magnetostatic_bc` | `str` | `"open"` | $1$ | `open`, `periodic_airbox_k0`, or `floquet_airbox` | Magnetostatic boundary condition | FEM/FDM CPU/GPU | `magnetostatic_bc` |
-| `FrequencyResponse.solver_policy` | `FrequencyResponseSolverPolicy \| None` | `None` | mixed | Valid method/preconditioner/tolerance/iteration values | Solver method and preconditioner overrides | FEM/FDM CPU/GPU; several methods are planned | `solver_policy` |
+| `FrequencyResponse.outputs` | `Sequence[FrequencyOutputSpec]` | `required` | $1$ | At least one | Response observables | FEM only in the current planner | `sampling.outputs` |
+| `FrequencyResponse.frequencies_hz` | `Sequence[float]` | `required` | $\mathrm{Hz}$ | Non-empty, finite, positive | Sweep frequencies | FEM only in the current planner | `frequencies_hz.values_hz` |
+| `FrequencyResponse.excitation_field_au_per_m` | `tuple[float, float, float]` | `(0,0,1)` | $\mathrm{A\,m^{-1}}$ | Length-3 finite vector | Small transverse excitation field | FEM only in the current planner | `excitation.field_au_per_m` |
+| `FrequencyResponse.excitation_phase_rad` | `float` | `0.0` | $\mathrm{rad}$ | Finite | Excitation phase | FEM only in the current planner | `excitation.phase_rad` |
+| `FrequencyResponse.operator` | `str` | `"linearized_llg"` | $1$ | `linearized_llg` or `full_2x2` | Linearized operator | FEM only in the current planner | `operator.kind` |
+| `FrequencyResponse.include_demag` | `bool` | `True` | $1$ | Boolean | Include dynamic demagnetization | FEM only in the current planner | `operator.include_demag` |
+| `FrequencyResponse.equilibrium_source` | `str` | `"provided"` | $1$ | `provided`, `relax`, or `artifact`; artifact source requires `equilibrium_artifact` | Equilibrium acquisition | FEM only in the current planner | `equilibrium` |
+| `FrequencyResponse.equilibrium_artifact` | `str \| None` | `None` | $1$ | Required only for `equilibrium_source="artifact"` | Equilibrium artifact path | FEM only in the current planner | `equilibrium.path` |
+| `FrequencyResponse.k_sampling` / `k_vector` | `object \| None` / vector | `None` | $\mathrm{m^{-1}}$ | Mutually normalized k-sampling forms | Wave-vector sampling | FEM only in the current planner | `k_sampling` |
+| `FrequencyResponse.normalization` | `str` | `"unit_l2"` | $1$ | `unit_l2` or `unit_max_amplitude` | Response normalization | FEM only in the current planner | `normalization` |
+| `FrequencyResponse.damping_policy` | `str` | `"ignore"` | $1$ | `ignore` or `include` | Damping treatment | FEM only in the current planner | `damping_policy` |
+| `FrequencyResponse.spin_wave_bc` | spin-wave BC | `"free"` | $1$ | Supported spin-wave boundary contract | Spin-wave boundary condition | FEM only in the current planner | `spin_wave_bc` |
+| `FrequencyResponse.magnetostatic_bc` | `str` | `"open"` | $1$ | `open`, `periodic_airbox_k0`, or `floquet_airbox` | Magnetostatic boundary condition | FEM only in the current planner | `magnetostatic_bc` |
+| `FrequencyResponse.solver_policy` | `FrequencyResponseSolverPolicy \| None` | `None` | mixed | Valid method/preconditioner/tolerance/iteration values | Solver method and preconditioner overrides | FEM only; method-specific runtime checks apply | `solver_policy` |
+| `FrequencyResponse.dynamics` | `LLG` | `LLG()` | mixed | Typed LLG policy | Linearized dynamics | FEM only in the current planner | `dynamics` |
 
 ### Supported solver methods
 
 | Method | Status |
 |---|---|
 | `auto` | planner selects a supported method |
-| `dense_reference`, `cpu_sparse_direct`, `full_coupled_field_split`, `schur_reduced`, `modal_reduced` | documented; execution state is backend-dependent |
-| `gpu_operator_host_krylov`, `gpu_device_krylov` | planned device Krylov lanes |
+| `dense_reference` | Executable for non-periodic FEM CPU validation requests |
+| `schur_reduced` | Executable for periodic/Floquet airbox FEM requests |
+| `gpu_operator_host_krylov` | Executable for requested FEM GPU runs; operator is on device and Krylov is host-driven |
+| `cpu_sparse_direct`, `full_coupled_field_split`, `modal_reduced`, `gpu_device_krylov` | Accepted authoring identifiers, not implemented by the current runtime |
 
 ### Complete stage-first example
 
@@ -71,7 +79,7 @@ nm = 1.0e-9
 
 # %% Study and execution lane
 study = fm.study("frequency_response_api_example")
-study.engine("fdm")
+study.engine("fem")
 study.device("cpu", precision="double")
 study.mode("strict")
 
@@ -131,8 +139,10 @@ Ownership tests compare this inventory with live signatures and validate the adj
 (python-api-studies-frequency-response-limitations)=
 <!-- (limitations)= -->
 ## Limitations
-Several solver methods and the GPU Krylov lanes are planned rather than production-qualified;
-planner resolution is authoritative and must be reported as provenance.
+The current planner rejects FDM frequency-response studies. Several accepted solver identifiers
+remain unimplemented; `gpu_operator_host_krylov` is the current FEM GPU route, while
+`gpu_device_krylov` remains unimplemented. Planner/runtime resolution is authoritative and must be
+reported as provenance.
 
 (python-api-studies-frequency-response-scientific-bibliography)=
 <!-- (scientific-bibliography)= -->

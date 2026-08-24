@@ -84,8 +84,7 @@ def render_page(spec: PageSpec, root: Path) -> str:
 
     def _render_registered_scaffold(self) -> tuple[Path, str]:
         page, page_path = self._write_architecture_manifest()
-        page.write_text(
-            """---
+        scaffold = """---
 title: Exchange
 status: planned
 doc_kind: scaffold
@@ -97,9 +96,10 @@ owner: fullmag-public-docs
 # Exchange
 
 This page reserves the public documentation location for FDM CPU exchange.
-""",
-            encoding="utf-8",
-        )
+"""
+        # Keep this regression deterministic on every CI platform: the
+        # repository checkout may materialize generated scaffolds as CRLF.
+        page.write_bytes(scaffold.replace("\n", "\r\n").encode("utf-8"))
         return page, page_path
 
     def tearDown(self) -> None:

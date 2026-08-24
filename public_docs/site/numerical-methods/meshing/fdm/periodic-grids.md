@@ -16,7 +16,8 @@ Relevant provenance includes:
 - periodic axes and cell counts;
 - lattice translations;
 - image counts for truncated-image approximations;
-- zero-mode or periodic-airbox policy;
+- FDM demagnetization policy (`open` or `truncated_images`); `periodic_airbox_k0` is FEM-only and
+  must be rejected for FDM;
 - padded/reciprocal convolution dimensions;
 - kernel-spectrum digest.
 

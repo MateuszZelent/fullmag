@@ -1,8 +1,8 @@
 {
   "document": {"path": "public_docs/site/numerical-methods/time-integration/tangent-plane-methods.md"},
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "documented"},
-    {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "The public algorithm is present, but native executed-device qualification is lane-specific."},
+    {"solver": "FEM", "device": "CPU", "status": "development-executable", "reason": "The relaxation algorithm is available only in extended mode."},
+    {"solver": "FEM", "device": "GPU", "status": "unsupported", "reason": "A forced GPU request rejects and may not fall back to CPU."},
     {"solver": "FDM", "device": "CPU", "status": "unsupported", "reason": "The current public contract marks tangent_plane_implicit as FEM-only."},
     {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "The current public contract marks tangent_plane_implicit as FEM-only."}
   ],

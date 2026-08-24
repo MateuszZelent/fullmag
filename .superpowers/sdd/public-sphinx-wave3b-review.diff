@@ -1,0 +1,583 @@
+diff --git a/public_docs/site/physics/interactions/dmi/boundary-conditions.md b/public_docs/site/physics/interactions/dmi/boundary-conditions.md
+index 9db5908f0..534fe6f06 100644
+--- a/public_docs/site/physics/interactions/dmi/boundary-conditions.md
++++ b/public_docs/site/physics/interactions/dmi/boundary-conditions.md
+@@ -1,6 +1,6 @@
+ ---
+ title: DMI boundary conditions
+-status: implemented
++status: partial
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
+@@ -24,14 +24,15 @@ term
+ 
+ ```{math}
+ :label: eq-idmi-bc
+-A\,\partial_n\mathbf{m}
+-+ D\,\hat{\mathbf{n}}\times(\mathbf{n}_s\times\mathbf{m})
++2A\,\partial_{\boldsymbol\nu}\mathbf m
+++D\left[(\hat{\mathbf n}\times\boldsymbol\nu)\times\mathbf m\right]
+ = \mathbf{0}
+ \qquad\text{on }\partial\Omega_m,
+ ```
+ 
+-where $\mathbf{n}_s$ is the outward surface normal and $\hat{\mathbf{n}}$ is the
+-interface-symmetry normal. For $\hat{\mathbf{n}}=\hat{\mathbf{z}}$ this reduces to the
++where $\boldsymbol\nu$ is the outward normal of the magnetic boundary and
++$\hat{\mathbf n}$ is the independent structural interface normal. For
++$\hat{\mathbf n}=\hat{\mathbf z}$ this reduces to the
+ Rohart–Thiaville condition.
+ 
+ This boundary condition is physically significant: it modifies the equilibrium magnetization
+@@ -49,16 +50,16 @@ together. The natural condition is homogeneous only when the DMI surface contrib
+ 
+ ### FEM implementation
+ 
+-In the FEM weak formulation, the natural boundary condition arises automatically from the
+-variational principle. The DMI weak residual includes a boundary integral that implicitly
+-enforces Eq. {eq}`eq-idmi-bc`. No explicit boundary penalty or constraint is needed.
++In the FEM weak formulation, the natural boundary contribution belongs to the same variation as
++the volume iDMI residual. It must not be added again as an independent boundary interaction without
++a proof that the residual is not double-counted. No separate strong nodal clamp is implied.
+ 
+ ### FDM implementation
+ 
+-In the FDM stencil, open or inactive boundary neighbours use the centre magnetization as
+-the ghost value, which enforces the standard zero-flux exchange condition. The DMI stencil
+-contribution at boundary cells uses one-sided finite differences or reflected values that
+-encode the same surface condition.
++In the current FDM stencil, open or inactive neighbours are replaced by the centre magnetization,
++so the corresponding centered derivative is zero. This clamping is the implemented local closure;
++it is **not** a general discrete proof of Eq. {eq}`eq-idmi-bc`. The present FDM iDMI normal is
++restricted to $+\hat{\mathbf z}$, and non-periodic natural-boundary qualification remains open.
+ 
+ ## Bulk DMI boundary condition
+ 
+@@ -66,8 +67,8 @@ The combined exchange-plus-bulk-DMI natural boundary term is
+ 
+ ```{math}
+ :label: eq-bdmi-bc
+-A\,\partial_n\mathbf{m}
+-+ D\,\mathbf{n}_s\times\mathbf{m}
++2A\,\partial_{\boldsymbol\nu}\mathbf m
+++D\left(\mathbf m\times\boldsymbol\nu\right)
+ = \mathbf{0}
+ \qquad\text{on }\partial\Omega_m.
+ ```
+@@ -105,8 +106,8 @@ centres.
+ | $A$ | exchange stiffness | $\mathrm{J\,m^{-1}}$ |
+ | $D$ | DMI constant | $\mathrm{J\,m^{-2}}$ |
+ | $\hat{\mathbf{n}}$ | interface-symmetry normal | $1$ |
+-| $\mathbf{n}_s$ | outward surface normal | $1$ |
+-| $\partial_n$ | normal derivative | $\mathrm{m^{-1}}$ |
++| $\boldsymbol\nu$ | outward normal of the magnetic boundary | $1$ |
++| $\partial_{\boldsymbol\nu}$ | derivative along the outward magnetic-boundary normal | $\mathrm{m^{-1}}$ |
+ | $\ell_{\mathrm{DMI}}$ | DMI boundary-twist length | $\mathrm{m}$ |
+ | $\mathbf m$ | reduced magnetization | $1$ |
+ 
+diff --git a/public_docs/site/physics/interactions/dmi/boundary-conditions.source-map.json b/public_docs/site/physics/interactions/dmi/boundary-conditions.source-map.json
+index a88e05ac6..0776e659a 100644
+--- a/public_docs/site/physics/interactions/dmi/boundary-conditions.source-map.json
++++ b/public_docs/site/physics/interactions/dmi/boundary-conditions.source-map.json
+@@ -18,14 +18,14 @@
+     {"id": "A", "latex": "$A$", "meaning": "exchange stiffness", "si_unit": "$\\mathrm{J\\,m^{-1}}$"},
+     {"id": "D", "latex": "$D$", "meaning": "DMI constant", "si_unit": "$\\mathrm{J\\,m^{-2}}$"},
+     {"id": "n-hat", "latex": "$\\hat{\\mathbf{n}}$", "meaning": "interface-symmetry normal", "si_unit": "$1$"},
+-    {"id": "ns", "latex": "$\\mathbf{n}_s$", "meaning": "outward surface normal", "si_unit": "$1$"},
+-    {"id": "partial-n", "latex": "$\\partial_n$", "meaning": "normal derivative", "si_unit": "$\\mathrm{m^{-1}}$"},
++    {"id": "nu", "latex": "$\\boldsymbol\\nu$", "meaning": "outward normal of the magnetic boundary", "si_unit": "$1$"},
++    {"id": "partial-nu", "latex": "$\\partial_{\\boldsymbol\\nu}$", "meaning": "derivative along the outward magnetic-boundary normal", "si_unit": "$\\mathrm{m^{-1}}$"},
+     {"id": "ell", "latex": "$\\ell_{\\mathrm{DMI}}$", "meaning": "DMI boundary-twist length", "si_unit": "$\\mathrm{m}$"},
+     {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"}
+   ],
+   "equations": [
+-    {"id": "eq-idmi-bc", "symbols": ["A", "partial-n", "m", "D", "n-hat", "ns"], "sources": ["interfacial-api", "fem-interfacial"]},
+-    {"id": "eq-bdmi-bc", "symbols": ["A", "partial-n", "m", "D", "ns"], "sources": ["bulk-api", "fem-bulk"]},
++    {"id": "eq-idmi-bc", "symbols": ["A", "partial-nu", "m", "D", "n-hat", "nu"], "sources": ["interfacial-api", "fem-interfacial"]},
++    {"id": "eq-bdmi-bc", "symbols": ["A", "partial-nu", "m", "D", "nu"], "sources": ["bulk-api", "fem-bulk"]},
+     {"id": "eq-dmi-bc-length", "symbols": ["ell", "A", "D"], "sources": ["interfacial-api", "bulk-api"]}
+   ],
+   "public_api": {
+diff --git a/public_docs/site/physics/interactions/dmi/index.md b/public_docs/site/physics/interactions/dmi/index.md
+index b2064d88a..6a478c790 100644
+--- a/public_docs/site/physics/interactions/dmi/index.md
++++ b/public_docs/site/physics/interactions/dmi/index.md
+@@ -132,7 +132,13 @@ body.Ku1 = 4.7e5
+ body.anisU = (0.0, 0.0, 1.0)
+ body.dind = 3.0e-3  # J/m^2
+ study.demag(realization="poisson_robin")
+-study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped", max_steps=500, tolT=1.0e-6)
++study.stages.add_relax(
++    stage_id="relax",
++    algorithm="llg_overdamped",
++    dt=1.0e-15,
++    max_steps=500,
++    tolT=1.0e-6,
++)
+ ```
+ 
+ The study facade already supports material-owned interfacial DMI. It must not be documented as
+diff --git a/public_docs/site/physics/interactions/drift-diffusion-spin-torque/index.md b/public_docs/site/physics/interactions/drift-diffusion-spin-torque/index.md
+index 7b206149d..bb96e9442 100644
+--- a/public_docs/site/physics/interactions/drift-diffusion-spin-torque/index.md
++++ b/public_docs/site/physics/interactions/drift-diffusion-spin-torque/index.md
+@@ -129,6 +129,11 @@ body.alpha = 0.02
+ body.m = fm.texture.uniform(1.0, 0.0, 0.0)
+ 
+ region = fm.RegionRef("film")
++study.current_transport(
++    name="charge",
++    model="prescribed_density",
++    current_density=(1.0e12, 0.0, 0.0),
++)
+ spin = fm.SpinDriftDiffusion(
+     id="spin",
+     current_source_id="charge",
+diff --git a/public_docs/site/physics/interactions/inter-region-couplings/index.md b/public_docs/site/physics/interactions/inter-region-couplings/index.md
+index 2dfbaf131..7a7f3f737 100644
+--- a/public_docs/site/physics/interactions/inter-region-couplings/index.md
++++ b/public_docs/site/physics/interactions/inter-region-couplings/index.md
+@@ -37,7 +37,8 @@ With this sign convention, positive $J_1$ favors parallel alignment. The sign an
+ $J_2$ control whether collinear or canted configurations are favored and must be interpreted
+ from the full polynomial.
+ 
+-For adjacent material regions, the default exchange link is
++For adjacent material regions with piecewise-constant exchange stiffnesses, the canonical
++`harmonic_mean` intent is
+ 
+ ```{math}
+ :label: eq-public-inter-region-couplings-coupling-harmonic
+@@ -50,7 +51,11 @@ A_{ab}=sA_{ab}^{\mathrm{harm}},
+ ```
+ 
+ An explicit mode uses authored $A_{ab}$; a disabled mode sets the link to zero. This cell-link
+-operator is not the same as a surface energy.
++operator is not the same as a surface energy. The current FDM CUDA realization is narrower than
++the canonical equation: it rejects region-owned or cellwise $A$ fields and therefore cannot
++derive distinct $A_a$ and $A_b$. Its executable `harmonic_mean` path has one uniform object
++coefficient $A$, for which $A_{ab}^{\mathrm{harm}}=A$, and materializes $sA$. Heterogeneous
++$A_a/A_b$ harmonic means remain non-executable and must fail closed.
+ 
+ (physics-inter-region-couplings-symbols-and-si-units)=
+ ## Symbols and SI units
+@@ -58,8 +63,12 @@ operator is not the same as a surface energy.
+ | Symbol | Meaning | SI unit |
+ |---|---|---:|
+ | $J_1,J_2$ | surface-coupling coefficients | $\mathrm{J\,m^{-2}}$ |
+-| $A_a,A_b,A_{ab}$ | exchange stiffness/link coefficient | $\mathrm{J\,m^{-1}}$ |
+-| $\Gamma_{ab}$ | coupled surface set | not applicable |
++| $\mathbf m_a,\mathbf m_b$ | reduced magnetization on the two coupled sides | $1$ |
++| $\sigma_{\mathrm{surf}}$ | local surface-coupling energy density | $\mathrm{J\,m^{-2}}$ |
++| $E_{\mathrm{surf}}$ | integrated surface-coupling energy | $\mathrm J$ |
++| $A_a,A_b,A_{ab}$ | canonical side coefficients and resulting exchange-link coefficient | $\mathrm{J\,m^{-1}}$ |
++| $A_{ab}^{\mathrm{harm}}$ | canonical harmonic-mean link; current CUDA realizes only the uniform-$A$ reduction | $\mathrm{J\,m^{-1}}$ |
++| $\Gamma_{ab}$ | coupled surface set | $1$ |
+ | $\mathrm dS$ | surface measure | $\mathrm{m^2}$ |
+ | $s$ | harmonic-mean scale | $1$ |
+ 
+@@ -69,7 +78,7 @@ operator is not the same as a surface energy.
+ | Solver | Device | Authoring / IR | Executable realization | Scientific qualification | Exact boundary |
+ |---|---|---|---|---|---|
+ | FDM | CPU | all coupling IR variants | unsupported for enabled runtime coupling | none | ordinary exchange does not imply coupling support |
+-| FDM | GPU | all coupling IR variants | partial: region-to-region exchange only | managed runtime evidence still required | RKKY/interlayer surfaces are not materialized |
++| FDM | GPU | all coupling IR variants | partial: explicit, disabled, and uniform-$A$ harmonic/scale region pairs | managed runtime evidence still required | region/cellwise $A$ fields and RKKY/interlayer surfaces are rejected or unsupported; the runtime LUT uses one uniform $A$ |
+ | FEM | CPU | all coupling IR variants | unsupported | none | surface trace/quadrature operator not implemented |
+ | FEM | GPU | all coupling IR variants | unsupported | none | no device surface or region materializer |
+ 
+@@ -97,12 +106,39 @@ body.m = fm.texture.uniform(1.0, 0.0, 0.0)
+ left = body.add_region("left", fm.Box(20 * nm, 20 * nm, 4 * nm).translate((-10 * nm, 0.0, 0.0)))
+ right = body.add_region("right", fm.Box(20 * nm, 20 * nm, 4 * nm).translate((10 * nm, 0.0, 0.0)))
+ study.couplings.exchange(source=left, target=right, mode="explicit", inter_exchange=13.0e-12)
+-study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped", max_steps=500, tolT=1.0e-6)
++study.stages.add_relax(
++    stage_id="relax",
++    algorithm="llg_overdamped",
++    dt=1.0e-15,
++    max_steps=500,
++    tolT=1.0e-6,
++)
+ ```
+ 
+ The two region shapes are explicitly displaced; overlapping identical boxes must not be presented
+ as a left/right partition.
+ 
++### Complete public parameter table
++
++| Python parameter | Type | Default | SI unit | Validation and failure | Physical meaning | Backend support | ProblemIR destination |
++|---|---|---|---:|---|---|---|---|
++| `study.couplings.exchange.source` | object, object region, surface, or name | required | $1$ | must resolve to a non-empty endpoint; executable FDM CUDA exchange requires a region endpoint | first side of the directed coupling declaration | authoring all lanes; runtime capability-gated | `couplings[].source` |
++| `study.couplings.exchange.target` | object, object region, surface, or name | required | $1$ | same endpoint validation as `source`; executable FDM CUDA exchange requires a region endpoint | second side of the coupling declaration | authoring all lanes; runtime capability-gated | `couplings[].target` |
++| `study.couplings.exchange.mode` | `str` | `"harmonic_mean"` | $1$ | `"harmonic_mean"`, `"explicit"`, or `"disabled"` | selects the region-link coefficient rule | FDM CUDA supports explicit/disabled and only the uniform-$A$ harmonic reduction | `couplings[].parameters.mode` |
++| `study.couplings.exchange.scale` | `float \| None` | `None` | $1$ | finite and non-negative; disabled mode accepts only `None` or `0.0` | multiplier for the canonical harmonic mean; CUDA currently applies it to one uniform object $A$ | FDM CUDA homogeneous-$A$ region exchange subset | `couplings[].parameters.scale` |
++| `study.couplings.exchange.inter_exchange` | `float \| None` | `None` | $\mathrm{J\,m^{-1}}$ | finite; required by explicit mode and forbidden by harmonic-mean mode; current executable FDM CUDA planner additionally requires non-negative | explicitly authored region-link exchange stiffness | FDM CUDA region exchange subset | `couplings[].parameters.inter_exchange` |
++| `study.couplings.exchange.coupling_id` | `str \| None` | `None` | $1$ | omitted value is generated deterministically; an authored empty value is rejected during lowering | stable coupling identity | authoring all lanes | `couplings[].coupling_id` |
++| `study.couplings.exchange.enabled` | `bool` | `True` | $1$ | currently normalized with `bool(...)` during lowering rather than strictly type-checked | enables or disables the declaration | authoring all lanes; disabled is executable as a no-op | `couplings[].enabled` |
++| `study.couplings.exchange.capability_policy` | `str` | `"require_runtime"` | $1$ | `"require_runtime"` or `"authored_only"`; strict executable planning rejects authored-only terms | separates executable intent from export-only intent | authoring all lanes | `couplings[].capability_policy` |
++| `study.couplings.rkky.J1` | `float` | required | $\mathrm{J\,m^{-2}}$ | finite; both endpoints must be surfaces | bilinear RKKY surface coefficient | authoring only; no executable lane | `couplings[].parameters.j1` |
++| `study.couplings.interlayer_exchange.J1` | `float` | required | $\mathrm{J\,m^{-2}}$ | finite; both endpoints must be surfaces | bilinear interlayer surface coefficient | authoring only; no executable lane | `couplings[].parameters.j1` |
++| `study.couplings.interlayer_exchange.J2` | `float \| None` | `None` | $\mathrm{J\,m^{-2}}$ | finite when supplied; both endpoints must be surfaces | biquadratic interlayer surface coefficient | authoring only; no executable lane | `couplings[].parameters.j2` |
++
++`rkky(...)` and `interlayer_exchange(...)` share the endpoint, `coupling_id`, `enabled`, and
++`capability_policy` semantics shown above. Their endpoint resolver accepts surface objects, but
++the public bounding-face selectors are limited to `top`, `bottom`, `left`, `right`, `front`, and
++`back`.
++
+ ### Authored-only surface term
+ 
+ RKKY/interlayer terms should use `capability_policy="authored_only"` only for export/inspection.
+@@ -114,10 +150,10 @@ authored-only term in a run stage and imply runtime support.
+ 
+ ```json
+ {
+-  "coupling_id": "exchange:bilayer_left:bilayer_right",
++  "coupling_id": "exchange:film_r1:film_r2",
+   "kind": "exchange",
+-  "source": {"kind": "region", "object": "bilayer", "region_id": "bilayer:left"},
+-  "target": {"kind": "region", "object": "bilayer", "region_id": "bilayer:right"},
++  "source": {"kind": "region", "object": "film", "region_id": "film:r1"},
++  "target": {"kind": "region", "object": "film", "region_id": "film:r2"},
+   "enabled": true,
+   "parameters": {
+     "kind": "exchange",
+@@ -129,21 +165,23 @@ authored-only term in a run stage and imply runtime support.
+ ```
+ 
+ (physics-inter-region-couplings-validation)=
+-## Validation boundary and source-map correction
++## Validation boundary
+ 
+ Python owns endpoint kind, selector names, mode/policy enums, and scalar consistency. Planner owns
+-resolved region IDs, material coefficients, backend capability, and link materialization.
++resolved region IDs, backend capability, and link materialization. On the current FDM CUDA path,
++the planner does not resolve separate $A_a/A_b$ values: it emits explicit overrides or a scaled
++uniform object coefficient, while validation rejects cellwise/region-owned $A$ fields.
+ `coupling_id` should be validated in `__post_init__`, not delayed until `to_ir()`.
+-
+-The current source map has an empty public constructor/parameter inventory despite a substantial
+-public table. Regenerate it from the actual `CouplingRegistry` API and current audited revision.
++The adjacent source map traces the public registry and study facade through canonical IR,
++capability resolution, FDM CUDA materialization, and focused round-trip/planner tests.
+ 
+ ## Required numerical validation
+ 
+ - parallel/antiparallel/canted energy ordering for $J_1,J_2$;
+ - derivative of surface energy versus torque/field;
+ - disabled-link exact decoupling;
+-- harmonic versus explicit region-link coefficients;
++- uniform-$A$ harmonic/scale versus explicit region-link coefficients;
++- fail-closed rejection of heterogeneous region/cellwise $A$ on FDM CUDA until a coefficient-aware LUT is implemented;
+ - interface and surface-area convergence;
+ - endpoint orientation and face-pair symmetry;
+ - strict rejection on all unsupported lanes;
+@@ -155,7 +193,9 @@ public table. Regenerate it from the actual `CouplingRegistry` API and current a
+ RKKY and interlayer exchange are presently representable, not executable. Future FEM support must
+ define trace spaces, face pairing, quadrature, normal orientation, energy reduction, and mesh
+ convergence. Curved contacts and spacer-mediated transport need separate typed geometry/physics
+-contracts.
++contracts. The FDM CUDA harmonic-mean mode is not a heterogeneous-material implementation: its LUT
++uses the single uniform exchange stiffness stored by the native context. Distinct region $A$
++coefficients require future coefficient-aware materialization and remain fail-closed.
+ 
+ (physics-inter-region-couplings-scientific-bibliography)=
+ ## Scientific bibliography
+@@ -169,11 +209,13 @@ contracts.
+ 
+ | Repository path | Stable symbol / area | Responsibility |
+ |---|---|---|
+-| `packages/fullmag-py/src/fullmag/model/couplings.py` | `CouplingRegistry, Coupling` | public endpoint and parameter validation |
+-| `packages/fullmag-py/src/fullmag/world.py` | `StudyCouplingsHandle` | stage-first coupling facade |
+-| `crates/fullmag-plan/src/fdm.rs` | `region coupling planning` | FDM capability and region resolution |
+-| `crates/fullmag-engine/src` | `materialize_region_exchange_couplings` | FDM GPU link overrides |
+-| `crates/fullmag-ir/src` | `CouplingKindIR/CouplingEndpointIR` | tagged canonical schema |
++| `packages/fullmag-py/src/fullmag/model/couplings.py` | `class CouplingRegistry` | public endpoint, parameter validation, and lowering |
++| `packages/fullmag-py/src/fullmag/world.py` | `class StudyCouplingsHandle` | stage-first coupling facade |
++| `crates/fullmag-plan/src/validate.rs` | `region_coupling_is_executable_for_backend` | exact executable capability boundary |
++| `crates/fullmag-plan/src/fdm.rs` | `materialize_region_exchange_couplings` | FDM CUDA region-link materialization |
++| `backends/fdm/api/c_api.cpp` | `fullmag_fdm_backend_create` | native LUT construction from uniform `ctx->A`, scale, and explicit pair overrides |
++| `packages/fullmag-py/tests/test_api.py` | `test_class_api_exchange_coupling_lowers_to_ir` | Python-to-IR exchange regression |
++| `crates/fullmag-plan/src/tests.rs` | `explicit_exchange_coupling_blocks_until_runtime_materialization_exists` | unsupported-lane rejection regression |
+ 
+ (physics-inter-region-couplings-round-trip-and-failure-semantics)=
+ ## Round-trip and failure semantics
+diff --git a/public_docs/site/physics/interactions/inter-region-couplings/index.source-map.json b/public_docs/site/physics/interactions/inter-region-couplings/index.source-map.json
+index ba8111271..bc846d071 100644
+--- a/public_docs/site/physics/interactions/inter-region-couplings/index.source-map.json
++++ b/public_docs/site/physics/interactions/inter-region-couplings/index.source-map.json
+@@ -2,45 +2,263 @@
+   "document": {
+     "path": "public_docs/site/physics/interactions/inter-region-couplings/index.md",
+     "title": "Inter-region couplings",
+-    "interaction": "inter region couplings"
++    "interaction": "exchange, RKKY, and interlayer region or surface coupling"
+   },
+   "backend_matrix": [
+     {
+       "solver": "FDM",
+       "device": "CPU",
+-      "status": "partial",
+-      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
++      "status": "unsupported",
++      "reason": "Enabled runtime coupling is rejected; ordinary homogeneous exchange is not an explicit coupling realization."
+     },
+     {
+       "solver": "FDM",
+       "device": "GPU",
+       "status": "partial",
+-      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
++      "reason": "Region-to-region explicit/disabled and uniform-A harmonic/scale exchange are materialized; cellwise or region-owned Aex is rejected, and surface RKKY/interlayer exchange remains unsupported."
+     },
+     {
+       "solver": "FEM",
+       "device": "CPU",
+-      "status": "partial",
+-      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
++      "status": "unsupported",
++      "reason": "No FEM trace/quadrature coupling operator is implemented."
+     },
+     {
+       "solver": "FEM",
+       "device": "GPU",
+-      "status": "partial",
+-      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
++      "status": "unsupported",
++      "reason": "No device surface or region coupling materializer is implemented."
+     }
+   ],
+   "sources": [
+     {
+-      "id": "python-owner",
++      "id": "python-registry",
+       "path": "packages/fullmag-py/src/fullmag/model/couplings.py",
+       "symbol": "class CouplingRegistry",
+-      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
++      "responsibility": "Public endpoint and parameter validation plus canonical lowering."
++    },
++    {
++      "id": "python-study-facade",
++      "path": "packages/fullmag-py/src/fullmag/world.py",
++      "symbol": "class StudyCouplingsHandle",
++      "responsibility": "Stage-first coupling authoring facade."
++    },
++    {
++      "id": "planner-capability",
++      "path": "crates/fullmag-plan/src/validate.rs",
++      "symbol": "region_coupling_is_executable_for_backend",
++      "responsibility": "Exact backend, device, endpoint, kind, mode, and coefficient capability boundary."
++    },
++    {
++      "id": "fdm-materialization",
++      "path": "crates/fullmag-plan/src/fdm.rs",
++      "symbol": "materialize_region_exchange_couplings",
++      "responsibility": "Resolve supported FDM CUDA region links; harmonic mode reduces to the uniform object exchange stiffness times scale rather than distinct region coefficients."
++    },
++    {
++      "id": "fdm-cuda-lut",
++      "path": "backends/fdm/api/c_api.cpp",
++      "symbol": "fullmag_fdm_backend_create",
++      "responsibility": "Build the native exchange LUT from uniform ctx->A, scale, and explicit pair overrides."
++    },
++    {
++      "id": "python-roundtrip-test",
++      "path": "packages/fullmag-py/tests/test_api.py",
++      "symbol": "test_class_api_exchange_coupling_lowers_to_ir",
++      "responsibility": "Prove Python-to-IR lowering of an explicit region exchange coupling."
++    },
++    {
++      "id": "planner-rejection-test",
++      "path": "crates/fullmag-plan/src/tests.rs",
++      "symbol": "explicit_exchange_coupling_blocks_until_runtime_materialization_exists",
++      "responsibility": "Prove fail-closed planning outside the supported runtime boundary."
++    }
++  ],
++  "symbols": [
++    {
++      "id": "J",
++      "latex": "$J_1,J_2$",
++      "meaning": "surface-coupling coefficients",
++      "si_unit": "$\\mathrm{J\\,m^{-2}}$"
++    },
++    {
++      "id": "mab",
++      "latex": "$\\mathbf m_a,\\mathbf m_b$",
++      "meaning": "reduced magnetization on the two coupled sides",
++      "si_unit": "$1$"
++    },
++    {
++      "id": "sigma",
++      "latex": "$\\sigma_{\\mathrm{surf}}$",
++      "meaning": "local surface-coupling energy density",
++      "si_unit": "$\\mathrm{J\\,m^{-2}}$"
++    },
++    {
++      "id": "Esurf",
++      "latex": "$E_{\\mathrm{surf}}$",
++      "meaning": "integrated surface-coupling energy",
++      "si_unit": "$\\mathrm J$"
++    },
++    {
++      "id": "A",
++      "latex": "$A_a,A_b,A_{ab}$",
++      "meaning": "canonical side coefficients and resulting exchange-link coefficient",
++      "si_unit": "$\\mathrm{J\\,m^{-1}}$"
++    },
++    {
++      "id": "Aharm",
++      "latex": "$A_{ab}^{\\mathrm{harm}}$",
++      "meaning": "canonical harmonic-mean link; current CUDA realizes only the uniform-$A$ reduction",
++      "si_unit": "$\\mathrm{J\\,m^{-1}}$"
++    },
++    {
++      "id": "Gamma",
++      "latex": "$\\Gamma_{ab}$",
++      "meaning": "coupled surface set",
++      "si_unit": "$1$"
++    },
++    {
++      "id": "dS",
++      "latex": "$\\mathrm dS$",
++      "meaning": "surface measure",
++      "si_unit": "$\\mathrm{m^2}$"
++    },
++    {
++      "id": "s",
++      "latex": "$s$",
++      "meaning": "harmonic-mean scale",
++      "si_unit": "$1$"
++    }
++  ],
++  "equations": [
++    {
++      "id": "eq-public-inter-region-couplings-coupling-surface-energy",
++      "symbols": ["J", "mab", "sigma", "Esurf", "Gamma", "dS"],
++      "sources": ["python-registry"]
++    },
++    {
++      "id": "eq-public-inter-region-couplings-coupling-harmonic",
++      "symbols": ["A", "Aharm", "s"],
++      "sources": ["fdm-materialization", "fdm-cuda-lut"]
+     }
+   ],
+-  "symbols": [],
+-  "equations": [],
+   "public_api": {
+-    "parameters": []
++    "constructors": [
++      "fullmag.StudyBuilder.couplings.exchange",
++      "fullmag.StudyBuilder.couplings.rkky",
++      "fullmag.StudyBuilder.couplings.interlayer_exchange"
++    ],
++    "parameters": [
++      {
++        "python": "study.couplings.exchange.source",
++        "type": "object, object region, surface, or name",
++        "default": "required",
++        "si_unit": "$1$",
++        "validation": "must resolve to a non-empty endpoint; executable FDM CUDA exchange requires a region endpoint",
++        "meaning": "first side of the directed coupling declaration",
++        "backend_support": "authoring all lanes; runtime capability-gated",
++        "problem_ir": "`couplings[].source`"
++      },
++      {
++        "python": "study.couplings.exchange.target",
++        "type": "object, object region, surface, or name",
++        "default": "required",
++        "si_unit": "$1$",
++        "validation": "same endpoint validation as `source`; executable FDM CUDA exchange requires a region endpoint",
++        "meaning": "second side of the coupling declaration",
++        "backend_support": "authoring all lanes; runtime capability-gated",
++        "problem_ir": "`couplings[].target`"
++      },
++      {
++        "python": "study.couplings.exchange.mode",
++        "type": "`str`",
++        "default": "`\"harmonic_mean\"`",
++        "si_unit": "$1$",
++        "validation": "`\"harmonic_mean\"`, `\"explicit\"`, or `\"disabled\"`",
++        "meaning": "selects the region-link coefficient rule",
++        "backend_support": "FDM CUDA supports explicit/disabled and only the uniform-$A$ harmonic reduction",
++        "problem_ir": "`couplings[].parameters.mode`"
++      },
++      {
++        "python": "study.couplings.exchange.scale",
++        "type": "`float | None`",
++        "default": "`None`",
++        "si_unit": "$1$",
++        "validation": "finite and non-negative; disabled mode accepts only `None` or `0.0`",
++        "meaning": "multiplier for the canonical harmonic mean; CUDA currently applies it to one uniform object $A$",
++        "backend_support": "FDM CUDA homogeneous-$A$ region exchange subset",
++        "problem_ir": "`couplings[].parameters.scale`"
++      },
++      {
++        "python": "study.couplings.exchange.inter_exchange",
++        "type": "`float | None`",
++        "default": "`None`",
++        "si_unit": "$\\mathrm{J\\,m^{-1}}$",
++        "validation": "finite; required by explicit mode and forbidden by harmonic-mean mode; current executable FDM CUDA planner additionally requires non-negative",
++        "meaning": "explicitly authored region-link exchange stiffness",
++        "backend_support": "FDM CUDA region exchange subset",
++        "problem_ir": "`couplings[].parameters.inter_exchange`"
++      },
++      {
++        "python": "study.couplings.exchange.coupling_id",
++        "type": "`str | None`",
++        "default": "`None`",
++        "si_unit": "$1$",
++        "validation": "omitted value is generated deterministically; an authored empty value is rejected during lowering",
++        "meaning": "stable coupling identity",
++        "backend_support": "authoring all lanes",
++        "problem_ir": "`couplings[].coupling_id`"
++      },
++      {
++        "python": "study.couplings.exchange.enabled",
++        "type": "`bool`",
++        "default": "`True`",
++        "si_unit": "$1$",
++        "validation": "currently normalized with `bool(...)` during lowering rather than strictly type-checked",
++        "meaning": "enables or disables the declaration",
++        "backend_support": "authoring all lanes; disabled is executable as a no-op",
++        "problem_ir": "`couplings[].enabled`"
++      },
++      {
++        "python": "study.couplings.exchange.capability_policy",
++        "type": "`str`",
++        "default": "`\"require_runtime\"`",
++        "si_unit": "$1$",
++        "validation": "`\"require_runtime\"` or `\"authored_only\"`; strict executable planning rejects authored-only terms",
++        "meaning": "separates executable intent from export-only intent",
++        "backend_support": "authoring all lanes",
++        "problem_ir": "`couplings[].capability_policy`"
++      },
++      {
++        "python": "study.couplings.rkky.J1",
++        "type": "`float`",
++        "default": "required",
++        "si_unit": "$\\mathrm{J\\,m^{-2}}$",
++        "validation": "finite; both endpoints must be surfaces",
++        "meaning": "bilinear RKKY surface coefficient",
++        "backend_support": "authoring only; no executable lane",
++        "problem_ir": "`couplings[].parameters.j1`"
++      },
++      {
++        "python": "study.couplings.interlayer_exchange.J1",
++        "type": "`float`",
++        "default": "required",
++        "si_unit": "$\\mathrm{J\\,m^{-2}}$",
++        "validation": "finite; both endpoints must be surfaces",
++        "meaning": "bilinear interlayer surface coefficient",
++        "backend_support": "authoring only; no executable lane",
++        "problem_ir": "`couplings[].parameters.j1`"
++      },
++      {
++        "python": "study.couplings.interlayer_exchange.J2",
++        "type": "`float | None`",
++        "default": "`None`",
++        "si_unit": "$\\mathrm{J\\,m^{-2}}$",
++        "validation": "finite when supplied; both endpoints must be surfaces",
++        "meaning": "biquadratic interlayer surface coefficient",
++        "backend_support": "authoring only; no executable lane",
++        "problem_ir": "`couplings[].parameters.j2`"
++      }
++    ]
+   }
+ }

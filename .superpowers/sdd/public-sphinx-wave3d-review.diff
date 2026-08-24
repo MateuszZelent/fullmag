@@ -1,0 +1,1025 @@
+diff --git a/public_docs/site/numerical-methods/demag-solvers/fem-poisson-airbox.md b/public_docs/site/numerical-methods/demag-solvers/fem-poisson-airbox.md
+index 5a041c410..58398e91d 100644
+--- a/public_docs/site/numerical-methods/demag-solvers/fem-poisson-airbox.md
++++ b/public_docs/site/numerical-methods/demag-solvers/fem-poisson-airbox.md
+@@ -132,7 +132,7 @@ film.Ms = 8.0e5
+ film.Aex = 1.3e-11
+ film.alpha = 0.02
+ film.m = fm.init.UniformMagnetization((1.0, 0.1, 0.0))
+-study.demag(realization="poisson_robin")
++study.demag(model="airbox", variant="robin")
+ study.fem_demag_solver(
+     solver="CG",
+     preconditioner="AMG",
+diff --git a/public_docs/site/numerical-methods/demag-solvers/index.md b/public_docs/site/numerical-methods/demag-solvers/index.md
+index 4011d0460..073af9d91 100644
+--- a/public_docs/site/numerical-methods/demag-solvers/index.md
++++ b/public_docs/site/numerical-methods/demag-solvers/index.md
+@@ -4,7 +4,7 @@ status: implemented
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
+-source_of_truth: demag solver terminal pages, their source maps, and source revision 88c7160080bc1e8519950df283d2dd02087cc3da
++source_of_truth: demag solver terminal pages, their source maps, and source revision 0388c3e7c4804923ee02a00b7ac4a789a44092d9
+ ---
+ 
+ (public-docs-numerical-methods-demag-solvers-root)=
+@@ -277,7 +277,11 @@ study.fem_demag_solver(
+     rtol=1.0e-10,
+     max_iterations=500,
+ )
+-study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
++study.stages.add_relax(
++    stage_id="equilibrium",
++    algorithm="nonlinear_cg",
++    tolT=1.0e-6,
++)
+ ```
+ 
+ | Public value | Meaning | Validation consequence |
+diff --git a/public_docs/site/numerical-methods/demag-solvers/periodic-demag.md b/public_docs/site/numerical-methods/demag-solvers/periodic-demag.md
+index ed0e4c486..0b328c009 100644
+--- a/public_docs/site/numerical-methods/demag-solvers/periodic-demag.md
++++ b/public_docs/site/numerical-methods/demag-solvers/periodic-demag.md
+@@ -53,7 +53,7 @@ vectors $\mathbf t_{\boldsymbol\ell}$ and image set $\mathcal I$, the discrete c
+ ```{math}
+ :label: eq-numerical-periodic-demag-fdm-sum
+ \mathbf H_{\mathrm d}(\mathbf r_i)=
+-\sum_{\boldsymbol\ell\in\mathcal I}
++-\sum_{\boldsymbol\ell\in\mathcal I}
+ \mathbf N(\mathbf r_i-\mathbf r_j-\mathbf t_{\boldsymbol\ell})\mathbf M(\mathbf r_j),
+ \qquad
+ \mathcal I=\{-n_x,\ldots,n_x\}\times\{-n_y,\ldots,n_y\}\times\{-n_z,\ldots,n_z\}.
+@@ -165,13 +165,13 @@ The periodic policy is lowered independently from the interaction term:
+ ```json
+ {
+   "energy_terms": [{"kind": "demag"}],
++  "pbc": {
++    "axes": ["periodic", "periodic", "open"],
++    "demag": "truncated_images",
++    "image_counts": [4, 4, 0]
++  },
+   "backend_policy": {
+-    "engine": "fdm",
+-    "pbc": {
+-      "axes": ["periodic", "periodic", "open"],
+-      "demag": "truncated_images",
+-      "image_counts": [4, 4, 0]
+-    }
++    "engine": "fdm"
+   }
+ }
+ ```
+@@ -196,10 +196,10 @@ unsupported lane, and the planner must report validation errors before runtime s
+ 
+ | Solver | Device | Status | Realization |
+ |---|---|---|---|
+-| FDM | CPU | partial/source-backed | periodic Newell spectra with finite translated-image truncation |
+-| FDM | GPU | partial/qualification-dependent | separate CUDA realization only when the selected policy is qualified |
+-| FEM | CPU | partial/source-backed | periodic representative reduction of the Poisson system |
+-| FEM | GPU | partial/qualification-dependent | separate device realization; CPU source presence does not establish parity |
++| FDM | CPU | reference-executable | periodic Newell spectra with finite translated-image truncation |
++| FDM | GPU | production-executable | CUDA convolution uses the same truncated-image policy and image counts; execution provenance remains required |
++| FEM | CPU | partial-production-executable | bounded periodic representative reduction and zero-mode policy |
++| FEM | GPU | partial-production-executable | bounded periodic-airbox lane with device-specific qualification; not universal periodic FEM support |
+ 
+ For FDM, changing `image_counts` changes the convolution kernel and therefore the computed field.
+ For FEM, changing the periodic node equivalence classes changes the matrix topology and right-hand
+diff --git a/public_docs/site/numerical-methods/demag-solvers/periodic-demag.source-map.json b/public_docs/site/numerical-methods/demag-solvers/periodic-demag.source-map.json
+index 7dce06899..3cf73b406 100644
+--- a/public_docs/site/numerical-methods/demag-solvers/periodic-demag.source-map.json
++++ b/public_docs/site/numerical-methods/demag-solvers/periodic-demag.source-map.json
+@@ -1,10 +1,10 @@
+ {
+   "document": {"path": "public_docs/site/numerical-methods/demag-solvers/periodic-demag.md"},
+   "backend_matrix": [
+-    {"solver": "FDM", "device": "CPU", "status": "source-backed"},
+-    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "The periodic CUDA lane requires policy-specific qualification."},
+-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
+-    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "A source-visible CPU reduction does not establish GPU parity."}
++    {"solver": "FDM", "device": "CPU", "status": "reference-executable"},
++    {"solver": "FDM", "device": "GPU", "status": "production-executable", "reason": "The CUDA convolution preserves the selected truncated-image policy and image counts; execution provenance remains required."},
++    {"solver": "FEM", "device": "CPU", "status": "partial-production-executable", "reason": "The periodic representative reduction is a bounded lane, not universal periodic FEM support."},
++    {"solver": "FEM", "device": "GPU", "status": "partial-production-executable", "reason": "The periodic-airbox device slice has separate bounded qualification."}
+   ],
+   "equations": [
+     {"id": "eq-numerical-periodic-demag-reduction", "symbols": ["Ap", "P", "Ao", "bp", "b", "up"], "sources": ["fem"]},
+diff --git a/public_docs/site/numerical-methods/eigensolvers/index.md b/public_docs/site/numerical-methods/eigensolvers/index.md
+index fa1b7311b..5cb8ede8f 100644
+--- a/public_docs/site/numerical-methods/eigensolvers/index.md
++++ b/public_docs/site/numerical-methods/eigensolvers/index.md
+@@ -4,7 +4,7 @@ status: implemented
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
+-source_of_truth: linearized-llg, modal-validation, their source maps, and source revision 88c7160080bc1e8519950df283d2dd02087cc3da
++source_of_truth: linearized-llg, modal-validation, their source maps, and source revision 0388c3e7c4804923ee02a00b7ac4a789a44092d9
+ ---
+ 
+ (public-docs-numerical-methods-eigensolvers-root)=
+@@ -14,9 +14,10 @@ source_of_truth: linearized-llg, modal-validation, their source maps, and source
+ :class: important
+ 
+ The public eigenmode request is not a promise of universal backend support. At the reviewed
+-revision, the native production modal contract is FEM. FDM CPU and FDM CUDA modal execution are not
+-claimed. FEM GPU and external eigensolver availability are separate runtime-qualification facts and
+-must be demonstrated by resolved provenance.
++revision, FEM owns several bounded modal slices rather than one universally production-qualified
++lane. FDM CPU and FDM CUDA modal execution are unsupported. FEM CPU/GPU scope, demagnetization,
++Floquet sampling, and external eigensolver availability must be demonstrated by resolved
++provenance.
+ :::
+ 
+ ## Purpose
+@@ -112,21 +113,26 @@ For the undamped conservative part, the first-order LLG structure contains
+ ```
+ 
+ with additional terms when damping or nonconservative torques are included. Fullmag assembles the
+-final tangent problem as a generalized complex pencil
++final tangent problem as the production generalized complex pencil
+ 
+ ```{math}
+ :label: eq-eigen-root-pencil
+-\mathsf K\mathbf q
+-=\lambda\mathsf G\mathbf q,
++\mathsf L\mathbf q
++=\lambda\mathsf B_{\alpha}\mathbf q,
+ \qquad
+-\lambda=\sigma+\mathrm i\omega,
++\lambda=\mathrm i\omega,
+ \qquad
+-f=\frac{|\omega|}{2\pi}.
++\omega=-\mathrm i\lambda,
++\qquad
++f=\frac{\operatorname{Re}\omega}{2\pi}.
+ ```
+ 
+-`linearized-llg` is the public operator family. The exact placement of signs, gyromagnetic factors,
+-mass matrices, and damping blocks is owned by the native operator and its provenance. The temporal
+-ansatz must be recorded before interpreting $\sigma$ as growth or decay.
++`linearized-llg` is the public operator family. Here $\mathsf L$ has units $\mathrm{s^{-1}}$ and
++$\mathsf B_{\alpha}$ is dimensionless. The exact placement of signs, gyromagnetic factors, mass
++matrices, and damping blocks is owned by the native operator and its provenance. Damped spectra can
++make $\omega$ complex; cyclic frequency comes only from its real part. Taking $|\omega|$ would mix
++oscillation with damping and discard the branch sign. The temporal ansatz and recorded
++eigenvalue-to-frequency mapping must be consulted before interpreting decay or growth.
+ 
+ ## Damping policy
+ 
+@@ -201,12 +207,12 @@ For a computed pair $(\lambda,\mathbf q)$,
+ 
+ ```{math}
+ :label: eq-eigen-root-residual
+-\mathbf r=\mathsf K\mathbf q-\lambda\mathsf G\mathbf q,
++\mathbf r=\mathsf L\mathbf q-\lambda\mathsf B_{\alpha}\mathbf q,
+ \qquad
+ \varepsilon_{\mathrm{eig}}
+ =\frac{\lVert\mathbf r\rVert_2}
+-{\lVert\mathsf K\mathbf q\rVert_2
+-+|\lambda|\lVert\mathsf G\mathbf q\rVert_2}.
++{\lVert\mathsf L\mathbf q\rVert_2
+++|\lambda|\lVert\mathsf B_{\alpha}\mathbf q\rVert_2}.
+ ```
+ 
+ The denominator convention above is a recommended scale-invariant diagnostic; the native solver's
+@@ -248,7 +254,6 @@ study.stages.add_relax(
+     max_steps=50_000,
+ )
+ study.stages.add_eigenmodes(
+-    stage_id="modes",
+     count=12,
+     target="lowest",
+     operator="linearized_llg",
+@@ -286,8 +291,8 @@ diagnostics.
+ 
+ | Solver | Device | Status | Meaning |
+ |---|---|---|---|
+-| FEM | CPU | source-backed native contract | public schema and native modal solver/diagnostics are present |
+-| FEM | GPU | partial / qualification-dependent | requires explicit proof of device execution and dependency support for the selected operator |
++| FEM | CPU | partial-production-executable | reference/MVP artifacts and a bounded selected-spectrum, no-demag, Full2x2 Floquet slice; general Poisson-airbox/SLEPc production remains gated |
++| FEM | GPU | partial-production-executable | narrow $k=0$, no-demag macrospin/Kittel cuSolverDN slice; Poisson-airbox dense paths remain algebraic or gated |
+ | FDM | CPU | unsupported | no native production FDM eigen lane is claimed |
+ | FDM | GPU | unsupported | no public CUDA modal lane is claimed |
+ 
+@@ -301,6 +306,7 @@ FEM CPU solve while retaining requested FDM/GPU provenance.
+ | Public modal schema | `packages/fullmag-py/src/fullmag/world.py` | `class EigenmodesStageSpec` | validates modal request fields |
+ | Ordered modal stage | `packages/fullmag-py/src/fullmag/world.py` | `eigenmodes_stage` | stage construction and lowering input |
+ | Native modal contract | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | `solve_modal_eigen_contract` | FEM modal validation, execution contract, and diagnostics |
++| Eigenvalue/frequency mapping | `backends/fem/src/frequency_domain/mode_kinematics.cpp` | `frequency_hz_from_omega_rad_s` | converts the signed real angular-frequency component selected by `map_eigenvalue` to cyclic frequency |
+ | Dispersion-validation schema | `packages/fullmag-py/src/fullmag/model/eigen.py` | `class ThinFilmDEBVDispersionValidation` | typed DE/BV validation intent |
+ | Kittel-validation schema | `packages/fullmag-py/src/fullmag/model/eigen.py` | `class K0KittelFieldSweepValidation` | typed field-sweep validation intent |
+ 
+@@ -367,7 +373,7 @@ partial result and the caller explicitly permits it.
+ 
+ ## Limitations
+ 
+-- The reviewed native modal lane is FEM, not FDM.
++- The reviewed modal implementations are bounded FEM slices, not one universal FEM production lane.
+ - Universal FEM GPU qualification is not claimed.
+ - A static periodic mesh does not establish a valid Floquet dynamic-demagnetization operator.
+ - Linear modes do not predict nonlinear saturation amplitude or mode coupling.
+diff --git a/public_docs/site/numerical-methods/eigensolvers/linearized-llg.md b/public_docs/site/numerical-methods/eigensolvers/linearized-llg.md
+index f3ad5f204..f90094c18 100644
+--- a/public_docs/site/numerical-methods/eigensolvers/linearized-llg.md
++++ b/public_docs/site/numerical-methods/eigensolvers/linearized-llg.md
+@@ -30,21 +30,25 @@ Let $\mathbf m=\mathbf m_0+\delta\mathbf m$ with $|\mathbf m_0|=1$. The first-or
+ \delta\mathbf m=\mathbf e_1 q_1+\mathbf e_2 q_2.
+ ```
+ 
+-After linearizing the effective field and assembling the tangent-space gyrotropic and stiffness
+-operators, the discrete problem is represented as a generalized complex eigenproblem:
++After linearizing the effective field and assembling the tangent-space dynamic and damping/mass
++operators, the production modal contract is represented as a generalized complex eigenproblem:
+ 
+ ```{math}
+ :label: eq-numerical-linearized-llg-pencil
+-\mathsf K\mathbf q=\lambda\mathsf G\mathbf q,
++\mathsf L\mathbf q=\lambda\mathsf B_{\alpha}\mathbf q,
+ \qquad
+-\lambda=\sigma+\mathrm i\omega,
++\lambda=\mathrm i\omega,
+ \qquad
+-f=\frac{|\omega|}{2\pi}.
++\omega=-\mathrm i\lambda,
++\qquad
++f=\frac{\operatorname{Re}\omega}{2\pi}.
+ ```
+ 
+-For the common $\exp(\mathrm i\omega t)$ convention, $-\sigma$ is the decay rate when the mode is
+-stable. The reported mode must retain the phase convention and the normalization used by the
+-solver; a complex phase rotation does not change the physical mode.
++For the recorded $\exp(\mathrm i\omega t)$ convention, damping can make the mapped frequency
++complex. Cyclic frequency uses only $\operatorname{Re}\omega$; $|\omega|$ would mix oscillation
++with damping and lose the branch sign. The reported mode must retain the phase convention,
++eigenvalue-to-frequency mapping, and normalization used by the solver; a complex phase rotation
++does not change the physical mode.
+ 
+ (numerical-methods-eigensolver-linearized-llg-symbols-and-si-units)=
+ ## Symbols and SI units
+@@ -56,13 +60,12 @@ solver; a complex phase rotation does not change the physical mode.
+ | $\delta\mathbf m$ | first-order magnetization perturbation | $1$ |
+ | $\mathbf e_1,\mathbf e_2$ | local tangent basis | $1$ |
+ | $q_1,q_2$ | tangent perturbation amplitudes | $1$ |
+-| $\mathsf K$ | tangent stiffness/dynamic matrix | problem-dependent |
+-| $\mathsf G$ | gyrotropic mass/operator matrix | problem-dependent |
++| $\mathsf L$ | tangent dynamic operator | $\mathrm{s^{-1}}$ |
++| $\mathsf B_{\alpha}$ | damping/mass operator | $1$ |
+ | $\mathbf q$ | discrete tangent eigenvector | $1$ |
+ | $\lambda$ | complex eigenvalue | $\mathrm{s^{-1}}$ |
+-| $\sigma$ | modal growth/decay real part | $\mathrm{s^{-1}}$ |
+-| $\omega$ | angular frequency | $\mathrm{rad\,s^{-1}}$ |
+-| $f$ | eigenfrequency | $\mathrm{Hz}$ |
++| $\omega$ | complex angular frequency, $-\mathrm i\lambda$ | $\mathrm{rad\,s^{-1}}$ |
++| $f$ | signed cyclic frequency, $\operatorname{Re}(\omega)/(2\pi)$ | $\mathrm{Hz}$ |
+ 
+ (numerical-methods-eigensolver-linearized-llg-assumptions-and-validity)=
+ ## Assumptions and validity
+@@ -74,8 +77,8 @@ solver; a complex phase rotation does not change the physical mode.
+ - `damping_policy="ignore"` and `damping_policy="include"` define different operators. They must
+   not be compared as CPU/GPU parity results.
+ - Demagnetization is included only when `include_demag=True`; omitting it changes the spectrum.
+-- The current native production modal route is FEM. FDM and GPU support must be reported by the
+-  resolved planner, not inferred from the Python constructor.
++- The current modal routes are bounded FEM slices. FDM is unsupported; FEM CPU/GPU support must be
++  reported by the resolved planner, not inferred from the Python constructor.
+ 
+ (numerical-methods-eigensolver-linearized-llg-python-api)=
+ ## Python API
+@@ -149,8 +152,8 @@ availability.
+ 
+ | Solver | Device | Status | Realization |
+ |---|---|---|---|
+-| FEM | CPU | partial/source-backed | native tangent dynamic pencil and modal solver contract |
+-| FEM | GPU | partial/qualification-dependent | separate runtime/dependency lane; CPU proof is not GPU proof |
++| FEM | CPU | partial-production-executable | reference/MVP artifacts and a bounded selected-spectrum, no-demag, Full2x2 Floquet slice; general Poisson-airbox/SLEPc production remains gated |
++| FEM | GPU | partial-production-executable | narrow $k=0$, no-demag macrospin/Kittel cuSolverDN slice; Poisson-airbox dense paths remain algebraic or gated |
+ | FDM | CPU | unsupported for this native modal page | planner does not claim a production FDM eigen lane |
+ | FDM | GPU | unsupported for this native modal page | no public CUDA modal claim |
+ 
+@@ -162,6 +165,7 @@ availability.
+ | Python stage schema | `packages/fullmag-py/src/fullmag/world.py` | `class EigenmodesStageSpec` | modal request fields | Python |
+ | Python stage builder | `packages/fullmag-py/src/fullmag/world.py` | `eigenmodes_stage` | constructs modal stage | Python/IR |
+ | Native modal contract | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | `solve_modal_eigen_contract` | validates and executes modal request | FEM CPU |
++| Eigenvalue/frequency mapping | `backends/fem/src/frequency_domain/mode_kinematics.cpp` | `frequency_hz_from_omega_rad_s` | converts the signed real angular-frequency component selected by `map_eigenvalue` to $f$ | FEM |
+ 
+ (numerical-methods-eigensolver-linearized-llg-validation)=
+ ## Validation
+@@ -193,3 +197,4 @@ runtime qualification condition, not a mathematical assumption.
+ | Python stage schema | `packages/fullmag-py/src/fullmag/world.py` | `class EigenmodesStageSpec` | modal parameters | Python API source |
+ | Python stage construction | `packages/fullmag-py/src/fullmag/world.py` | `eigenmodes_stage` | stage lowering input | Python API source |
+ | Native modal solve | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | `solve_modal_eigen_contract` | contract and diagnostics | native source contract |
++| Eigenvalue/frequency mapping | `backends/fem/src/frequency_domain/mode_kinematics.cpp` | `frequency_hz_from_omega_rad_s` | signed angular-to-cyclic frequency conversion used by modal kinematics | native source/tests |
+diff --git a/public_docs/site/numerical-methods/eigensolvers/linearized-llg.source-map.json b/public_docs/site/numerical-methods/eigensolvers/linearized-llg.source-map.json
+index d5c0bbad4..09bd8df13 100644
+--- a/public_docs/site/numerical-methods/eigensolvers/linearized-llg.source-map.json
++++ b/public_docs/site/numerical-methods/eigensolvers/linearized-llg.source-map.json
+@@ -1,14 +1,14 @@
+ {
+   "document": {"path": "public_docs/site/numerical-methods/eigensolvers/linearized-llg.md"},
+   "backend_matrix": [
+-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
+-    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "Separate runtime and dependency qualification is required."},
++    {"solver": "FEM", "device": "CPU", "status": "partial-production-executable", "reason": "Reference/MVP artifacts and a bounded selected-spectrum no-demag Full2x2 Floquet slice exist; general Poisson-airbox/SLEPc production remains gated."},
++    {"solver": "FEM", "device": "GPU", "status": "partial-production-executable", "reason": "The executable slice is narrow: k=0, no-demag macrospin/Kittel through cuSolverDN; broader Poisson-airbox and nonzero-k paths remain gated."},
+     {"solver": "FDM", "device": "CPU", "status": "unsupported", "reason": "No production FDM eigen lane is claimed by this reference."},
+     {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "No public CUDA modal claim is made by this reference."}
+   ],
+   "equations": [
+     {"id": "eq-numerical-linearized-llg-tangent", "symbols": ["m0", "dm", "e", "q"], "sources": ["stage", "native"]},
+-    {"id": "eq-numerical-linearized-llg-pencil", "symbols": ["K", "qvec", "G", "lambda", "sigma", "omega", "f"], "sources": ["native"]}
++    {"id": "eq-numerical-linearized-llg-pencil", "symbols": ["L", "qvec", "Balpha", "lambda", "omega", "f"], "sources": ["native", "kinematics"]}
+   ],
+   "symbols": [
+     {"id": "m", "latex": "$\\mathbf m$", "meaning": "unit magnetization", "si_unit": "$1$"},
+@@ -16,18 +16,18 @@
+     {"id": "dm", "latex": "$\\delta\\mathbf m$", "meaning": "first-order magnetization perturbation", "si_unit": "$1$"},
+     {"id": "e", "latex": "$\\mathbf e_1,\\mathbf e_2$", "meaning": "local tangent basis", "si_unit": "$1$"},
+     {"id": "q", "latex": "$q_1,q_2$", "meaning": "tangent perturbation amplitudes", "si_unit": "$1$"},
+-    {"id": "K", "latex": "$\\mathsf K$", "meaning": "tangent stiffness/dynamic matrix", "si_unit": "problem-dependent"},
+-    {"id": "G", "latex": "$\\mathsf G$", "meaning": "gyrotropic mass/operator matrix", "si_unit": "problem-dependent"},
++    {"id": "L", "latex": "$\\mathsf L$", "meaning": "tangent dynamic operator", "si_unit": "$\\mathrm{s^{-1}}$"},
++    {"id": "Balpha", "latex": "$\\mathsf B_{\\alpha}$", "meaning": "damping/mass operator", "si_unit": "$1$"},
+     {"id": "qvec", "latex": "$\\mathbf q$", "meaning": "discrete tangent eigenvector", "si_unit": "$1$"},
+     {"id": "lambda", "latex": "$\\lambda$", "meaning": "complex eigenvalue", "si_unit": "$\\mathrm{s^{-1}}$"},
+-    {"id": "sigma", "latex": "$\\sigma$", "meaning": "modal growth/decay real part", "si_unit": "$\\mathrm{s^{-1}}$"},
+-    {"id": "omega", "latex": "$\\omega$", "meaning": "angular frequency", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"},
+-    {"id": "f", "latex": "$f$", "meaning": "eigenfrequency", "si_unit": "$\\mathrm{Hz}$"}
++    {"id": "omega", "latex": "$\\omega$", "meaning": "complex angular frequency, $-\\mathrm i\\lambda$", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"},
++    {"id": "f", "latex": "$f$", "meaning": "signed cyclic frequency, $\\operatorname{Re}(\\omega)/(2\\pi)$", "si_unit": "$\\mathrm{Hz}$"}
+   ],
+   "sources": [
+     {"id": "stage", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class EigenmodesStageSpec", "responsibility": "Public modal stage schema."},
+     {"id": "builder", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "eigenmodes_stage", "responsibility": "Public stage construction."},
+-    {"id": "native", "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp", "symbol": "solve_modal_eigen_contract", "responsibility": "Native modal contract, validation and diagnostics."}
++    {"id": "native", "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp", "symbol": "solve_modal_eigen_contract", "responsibility": "Native modal contract, validation and diagnostics."},
++    {"id": "kinematics", "path": "backends/fem/src/frequency_domain/mode_kinematics.cpp", "symbol": "frequency_hz_from_omega_rad_s", "responsibility": "Converts the signed real angular-frequency component selected by map_eigenvalue to cyclic frequency."}
+   ],
+   "public_api": {
+     "parameters": [
+diff --git a/public_docs/site/numerical-methods/eigensolvers/modal-validation.md b/public_docs/site/numerical-methods/eigensolvers/modal-validation.md
+index bf2fc495a..f79aa69c9 100644
+--- a/public_docs/site/numerical-methods/eigensolvers/modal-validation.md
++++ b/public_docs/site/numerical-methods/eigensolvers/modal-validation.md
+@@ -143,7 +143,7 @@ sample mapping, analytical model, tolerance, solver diagnostics and the exact re
+ Script export preserves validation objects and stage ordering. Requested intent and resolved execution
+ are stored separately. Validation errors include missing geometries, too few samples, duplicate sample
+ indices, invalid model names, invalid field/frequency windows and tolerance violations. Unsupported combinations
+-combinations are rejected explicitly; validation metadata cannot make an unsupported solver lane
++are rejected explicitly; validation metadata cannot make an unsupported solver lane
+ qualified.
+ 
+ (numerical-methods-modal-validation-discrete-realization)=
+@@ -164,6 +164,7 @@ qualified.
+ | Dispersion validation schema | `packages/fullmag-py/src/fullmag/model/eigen.py` | `class ThinFilmDEBVDispersionValidation` | validates and serializes dispersion cases | Python |
+ | Kittel validation schema | `packages/fullmag-py/src/fullmag/model/eigen.py` | `class K0KittelFieldSweepValidation` | validates and serializes field sweeps | Python |
+ | Modal solver validation | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | `solve_modal_eigen_contract` | native modal diagnostics | FEM CPU |
++| Eigenvalue/frequency mapping | `backends/fem/src/frequency_domain/mode_kinematics.cpp` | `frequency_hz_from_omega_rad_s` | signed cyclic frequency from complex modal kinematics | FEM |
+ 
+ (numerical-methods-modal-validation-validation)=
+ ## Validation
+@@ -195,3 +196,4 @@ bounded by the Python validators and does not represent arbitrary multilayer dis
+ | Dispersion schema | `packages/fullmag-py/src/fullmag/model/eigen.py` | `class ThinFilmDEBVDispersionValidation` | typed validation payload | Python source |
+ | Kittel schema | `packages/fullmag-py/src/fullmag/model/eigen.py` | `class K0KittelFieldSweepValidation` | typed validation payload | Python source |
+ | Native modal diagnostics | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | `solve_modal_eigen_contract` | solver status and diagnostics | native source |
++| Eigenvalue/frequency mapping | `backends/fem/src/frequency_domain/mode_kinematics.cpp` | `frequency_hz_from_omega_rad_s` | signed cyclic frequency from the real part of complex angular frequency | native source/tests |
+diff --git a/public_docs/site/numerical-methods/eigensolvers/modal-validation.source-map.json b/public_docs/site/numerical-methods/eigensolvers/modal-validation.source-map.json
+index 5bb534fbf..ef4484795 100644
+--- a/public_docs/site/numerical-methods/eigensolvers/modal-validation.source-map.json
++++ b/public_docs/site/numerical-methods/eigensolvers/modal-validation.source-map.json
+@@ -7,8 +7,8 @@
+     {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "No native CUDA modal lane is claimed."}
+   ],
+   "equations": [
+-    {"id": "eq-numerical-modal-validation-relative-error", "symbols": ["fnum", "fref", "eps", "epsmax"], "sources": ["dispersion", "native"]},
+-    {"id": "eq-numerical-modal-validation-kittel", "symbols": ["fnum", "fkit", "H", "df"], "sources": ["kittel", "native"]}
++    {"id": "eq-numerical-modal-validation-relative-error", "symbols": ["fnum", "fref", "eps", "epsmax"], "sources": ["dispersion", "native", "kinematics"]},
++    {"id": "eq-numerical-modal-validation-kittel", "symbols": ["fnum", "fkit", "H", "df"], "sources": ["kittel", "native", "kinematics"]}
+   ],
+   "symbols": [
+     {"id": "fnum", "latex": "$f_j^{\\mathrm{num}}$", "meaning": "computed frequency at sample $j$", "si_unit": "$\\mathrm{Hz}$"},
+@@ -22,7 +22,8 @@
+   "sources": [
+     {"id": "dispersion", "path": "packages/fullmag-py/src/fullmag/model/eigen.py", "symbol": "class ThinFilmDEBVDispersionValidation", "responsibility": "Dispersion validation schema."},
+     {"id": "kittel", "path": "packages/fullmag-py/src/fullmag/model/eigen.py", "symbol": "class K0KittelFieldSweepValidation", "responsibility": "Kittel field-sweep validation schema."},
+-    {"id": "native", "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp", "symbol": "solve_modal_eigen_contract", "responsibility": "Native modal diagnostics and status."}
++    {"id": "native", "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp", "symbol": "solve_modal_eigen_contract", "responsibility": "Native modal diagnostics and status."},
++    {"id": "kinematics", "path": "backends/fem/src/frequency_domain/mode_kinematics.cpp", "symbol": "frequency_hz_from_omega_rad_s", "responsibility": "Converts the signed real angular-frequency component selected by map_eigenvalue to cyclic frequency."}
+   ],
+   "public_api": {
+     "parameters": [
+diff --git a/public_docs/site/numerical-methods/frequency-domain/floquet-response.md b/public_docs/site/numerical-methods/frequency-domain/floquet-response.md
+index 00ef12bbf..a909839ac 100644
+--- a/public_docs/site/numerical-methods/frequency-domain/floquet-response.md
++++ b/public_docs/site/numerical-methods/frequency-domain/floquet-response.md
+@@ -34,7 +34,7 @@ prescribed frequency therefore solves
+ 
+ ```{math}
+ :label: eq-numerical-floquet-response
+-\left(\mathsf K(\mathbf k)+\mathrm i\omega\mathsf G(\mathbf k)\right)
++\left(\mathrm i\omega\mathsf B_{\alpha}(\mathbf k)-\mathsf L(\mathbf k)\right)
+ \widehat{\mathbf q}(\omega,\mathbf k)=\widehat{\mathbf b}(\omega,\mathbf k).
+ ```
+ 
+@@ -50,12 +50,12 @@ $\delta\mathbf m/\delta\phi$ operator is qualified.
+ | $\widehat{\mathbf m}$ | complex dynamic magnetization amplitude | $1$ |
+ | $\mathbf r$ | position | $\mathrm{m}$ |
+ | $\Delta\mathbf r$ | periodic face translation | $\mathrm{m}$ |
+-| $\mathbf k$ | Bloch wave vector | $\mathrm{m^{-1}}$ |
+-| $\mathsf K(\mathbf k)$ | k-dependent tangent operator | problem-dependent |
+-| $\mathsf G(\mathbf k)$ | k-dependent gyrotropic/damping operator | problem-dependent |
++| $\mathbf k$ | Bloch wave vector | $\mathrm{rad\,m^{-1}}$ |
++| $\mathsf L(\mathbf k)$ | k-dependent tangent dynamic operator | $\mathrm{s^{-1}}$ |
++| $\mathsf B_{\alpha}(\mathbf k)$ | k-dependent damping/mass operator | $1$ |
+ | $\omega$ | angular drive frequency | $\mathrm{rad\,s^{-1}}$ |
+ | $\widehat{\mathbf q}$ | tangent response amplitude | $1$ |
+-| $\widehat{\mathbf b}$ | harmonic right-hand side | problem-dependent |
++| $\widehat{\mathbf b}$ | harmonic tangent-space forcing | $\mathrm{s^{-1}}$ |
+ 
+ (numerical-methods-floquet-response-assumptions-and-validity)=
+ ## Assumptions and validity
+@@ -124,8 +124,8 @@ they cannot silently become free boundaries or open demagnetization. Requested i
+ 
+ | Solver | Device | Status | Realization |
+ |---|---|---|---|
+-| FEM | CPU | partial/source-backed | projected Floquet driven-response slice; dynamic demag gated |
+-| FEM | GPU | partial/qualification-dependent | separate projected response slice and runtime dependency gate |
++| FEM | CPU | partial-production-executable | projected nonzero-$k$ driven-response slice without dynamic demag; full nonzero-$k$ demag is gated |
++| FEM | GPU | partial-production-executable | separate projected no-demag response slice; device execution evidence remains required |
+ | FDM | CPU | unsupported | no native FDM Floquet response lane |
+ | FDM | GPU | unsupported | no public FDM CUDA Floquet response lane |
+ 
+diff --git a/public_docs/site/numerical-methods/frequency-domain/floquet-response.source-map.json b/public_docs/site/numerical-methods/frequency-domain/floquet-response.source-map.json
+index 213507c1a..c5034d44c 100644
+--- a/public_docs/site/numerical-methods/frequency-domain/floquet-response.source-map.json
++++ b/public_docs/site/numerical-methods/frequency-domain/floquet-response.source-map.json
+@@ -1,25 +1,25 @@
+ {
+   "document": {"path": "public_docs/site/numerical-methods/frequency-domain/floquet-response.md"},
+   "backend_matrix": [
+-    {"solver": "FEM", "device": "CPU", "status": "partial", "reason": "Projected Floquet response is source-visible; dynamic demag is gated."},
+-    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "Separate projected response qualification is required."},
++    {"solver": "FEM", "device": "CPU", "status": "partial-production-executable", "reason": "Projected nonzero-k driven response without dynamic demag is executable; full nonzero-k demag is gated."},
++    {"solver": "FEM", "device": "GPU", "status": "partial-production-executable", "reason": "The projected no-demag response slice is bounded and requires device-execution evidence."},
+     {"solver": "FDM", "device": "CPU", "status": "unsupported", "reason": "No native FDM Floquet response lane."},
+     {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "No public FDM CUDA Floquet response lane."}
+   ],
+   "equations": [
+     {"id": "eq-numerical-floquet-phase", "symbols": ["mhat", "r", "dr", "k"], "sources": ["bc"]},
+-    {"id": "eq-numerical-floquet-response", "symbols": ["K", "k", "omega", "G", "qhat", "bhat"], "sources": ["response"]}
++    {"id": "eq-numerical-floquet-response", "symbols": ["L", "k", "omega", "Balpha", "qhat", "bhat"], "sources": ["response"]}
+   ],
+   "symbols": [
+     {"id": "mhat", "latex": "$\\widehat{\\mathbf m}$", "meaning": "complex dynamic magnetization amplitude", "si_unit": "$1$"},
+     {"id": "r", "latex": "$\\mathbf r$", "meaning": "position", "si_unit": "$\\mathrm{m}$"},
+     {"id": "dr", "latex": "$\\Delta\\mathbf r$", "meaning": "periodic face translation", "si_unit": "$\\mathrm{m}$"},
+-    {"id": "k", "latex": "$\\mathbf k$", "meaning": "Bloch wave vector", "si_unit": "$\\mathrm{m^{-1}}$"},
+-    {"id": "K", "latex": "$\\mathsf K(\\mathbf k)$", "meaning": "k-dependent tangent operator", "si_unit": "problem-dependent"},
+-    {"id": "G", "latex": "$\\mathsf G(\\mathbf k)$", "meaning": "k-dependent gyrotropic/damping operator", "si_unit": "problem-dependent"},
++    {"id": "k", "latex": "$\\mathbf k$", "meaning": "Bloch wave vector", "si_unit": "$\\mathrm{rad\\,m^{-1}}$"},
++    {"id": "L", "latex": "$\\mathsf L(\\mathbf k)$", "meaning": "k-dependent tangent dynamic operator", "si_unit": "$\\mathrm{s^{-1}}$"},
++    {"id": "Balpha", "latex": "$\\mathsf B_{\\alpha}(\\mathbf k)$", "meaning": "k-dependent damping/mass operator", "si_unit": "$1$"},
+     {"id": "omega", "latex": "$\\omega$", "meaning": "angular drive frequency", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"},
+     {"id": "qhat", "latex": "$\\widehat{\\mathbf q}$", "meaning": "tangent response amplitude", "si_unit": "$1$"},
+-    {"id": "bhat", "latex": "$\\widehat{\\mathbf b}$", "meaning": "harmonic right-hand side", "si_unit": "problem-dependent"}
++    {"id": "bhat", "latex": "$\\widehat{\\mathbf b}$", "meaning": "harmonic tangent-space forcing", "si_unit": "$\\mathrm{s^{-1}}$"}
+   ],
+   "sources": [
+     {"id": "bc", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class FloquetBC", "responsibility": "Floquet pair and phase schema."},
+diff --git a/public_docs/site/numerical-methods/frequency-domain/index.md b/public_docs/site/numerical-methods/frequency-domain/index.md
+index c68b09071..7d7091f4e 100644
+--- a/public_docs/site/numerical-methods/frequency-domain/index.md
++++ b/public_docs/site/numerical-methods/frequency-domain/index.md
+@@ -4,7 +4,7 @@ status: implemented
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
+-source_of_truth: response-solver, floquet-response, their source maps, frequency-domain planner headers, and source revision 88c7160080bc1e8519950df283d2dd02087cc3da
++source_of_truth: response-solver, floquet-response, their source maps, frequency-domain planner headers, and source revision 0388c3e7c4804923ee02a00b7ac4a789a44092d9
+ ---
+ 
+ (public-docs-numerical-methods-frequency-domain-root)=
+@@ -42,16 +42,14 @@ After tangent-space linearization, Fullmag represents the driven system as
+ \mathsf A(\omega)\widehat{\mathbf q}
+ =\widehat{\mathbf b},
+ \qquad
+-\mathsf A(\omega)=\mathsf K+\mathrm i\omega\mathsf G,
+-\qquad
+-\widehat{\mathbf b}=\mathsf C\widehat{\mathbf h}_{\mathrm{ext}}.
++\mathsf A(\omega)=\mathrm i\omega\mathsf B_{\alpha}-\mathsf L.
+ ```
+ 
+-$\mathsf K$ contains the tangent derivative of the enabled effective-field operators;
+-$\mathsf G$ contains the gyrotropic, mass, and damping structure according to the native
+-formulation; $\mathsf C$ maps the declared drive into tangent coordinates. The temporal sign,
+-operator scaling, and field units are part of the operator digest and must be preserved with every
+-response sample.
++$\mathsf L$ is the tangent dynamic operator with units $\mathrm{s^{-1}}$;
++$\mathsf B_{\alpha}$ is the dimensionless damping/mass operator; and
++$\widehat{\mathbf b}$ is the tangent-space harmonic forcing with units $\mathrm{s^{-1}}$.
++The temporal sign, operator scaling, drive mapping, and field units are part of the operator digest
++and must be preserved with every response sample.
+ 
+ The frequency-domain and eigenvalue problems use related operators but different right-hand sides:
+ 
+@@ -272,8 +270,8 @@ The $\mathbf k$-dependent driven system is
+ 
+ ```{math}
+ :label: eq-frequency-root-floquet-system
+-\left[\mathsf K(\mathbf k)+
+-\mathrm i\omega\mathsf G(\mathbf k)\right]
++\left[\mathrm i\omega\mathsf B_{\alpha}(\mathbf k)-
++\mathsf L(\mathbf k)\right]
+ \widehat{\mathbf q}(\omega,\mathbf k)
+ =\widehat{\mathbf b}(\omega,\mathbf k).
+ ```
+@@ -346,8 +344,8 @@ The terminal page {doc}`response-solver` owns exact `ProblemIR` paths and round-
+ 
+ | Solver | Device | Status | Realization boundary |
+ |---|---|---|---|
+-| FEM | CPU | source-backed / partial | native validation and driven-response contract; exact lane selected by planner |
+-| FEM | GPU | partial / qualification-dependent | GPU operator with host Krylov and device-Krylov lanes require independent capability proof |
++| FEM | CPU | partial-production-executable | bounded free/$k=0$ and no-demag nonzero-$k$ driven-response slices; diagnostic periodic-airbox Schur/provider paths remain narrow |
++| FEM | GPU | partial-production-executable | bounded free/$k=0$ and no-demag nonzero-$k$ slices; full nonzero-$k$ demag and broader device Krylov remain gated |
+ | FDM | CPU | unsupported | planner rejects native frequency-domain studies |
+ | FDM | GPU | unsupported | no public FDM CUDA frequency-domain lane |
+ 
+diff --git a/public_docs/site/numerical-methods/interpolation-and-state-transfer/index.md b/public_docs/site/numerical-methods/interpolation-and-state-transfer/index.md
+index 0c63da4aa..284e44add 100644
+--- a/public_docs/site/numerical-methods/interpolation-and-state-transfer/index.md
++++ b/public_docs/site/numerical-methods/interpolation-and-state-transfer/index.md
+@@ -4,7 +4,7 @@ status: implemented
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
+-source_of_truth: FEM-to-FDM and FDM-to-FEM terminal pages, source maps, and source revision 88c7160080bc1e8519950df283d2dd02087cc3da
++source_of_truth: FEM-to-FDM and FDM-to-FEM terminal pages, source maps, and source revision 0388c3e7c4804923ee02a00b7ac4a789a44092d9
+ ---
+ 
+ (public-docs-numerical-methods-interpolation-and-state-transfer-root)=
+diff --git a/public_docs/site/numerical-methods/relaxation/llg-relaxation.md b/public_docs/site/numerical-methods/relaxation/llg-relaxation.md
+index a49095b3b..4da2fe8f6 100644
+--- a/public_docs/site/numerical-methods/relaxation/llg-relaxation.md
++++ b/public_docs/site/numerical-methods/relaxation/llg-relaxation.md
+@@ -381,10 +381,10 @@ different records.
+ 
+ | Solver | Device | Status | Realization and evidence boundary |
+ |---|---|---|---|
+-| FDM | CPU | source-backed | reference grid runner and LLG relaxation path; numerical qualification is separate |
+-| FDM | GPU | source-backed | CUDA execution path carries pure-damping selection; device tests are conditional |
+-| FEM | CPU | source-backed | MFEM/native LLG relaxation lane; managed runtime evidence required for qualification |
+-| FEM | GPU | source-backed | native CUDA/MFEM lane; source presence and compilation do not prove executed-device parity |
++| FDM | CPU | reference-executable | reference grid runner and LLG relaxation path |
++| FDM | GPU | development-executable | CUDA execution path carries pure-damping selection; production qualification is not claimed |
++| FEM | CPU | development-executable | MFEM/native LLG relaxation lane; managed runtime qualification remains pending |
++| FEM | GPU | development-executable | native CUDA/MFEM lane; compilation does not prove executed-device parity |
+ 
+ FDM uses grid-local field evaluation. FEM uses the assembled finite-element field and the native
+ MFEM/CUDA operator path. The equation and stop metric are shared; interpolation, mass weighting,
+@@ -445,7 +445,7 @@ and their line-search contracts are described separately.
+ | FDM adaptive error norm | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `max_error_norm_buf` / `max_error_norm_soa_buf` | AoS/SoA active-cell error norm, absolute or mixed mode | FDM CPU | engine integrator tests |
+ | FDM GPU adaptive error reduction | `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` | `decide_adaptive_step` call site | CUDA reduction and typed dt-min failure | FDM GPU | CUDA policy contract tests |
+ | Rust FEM reference adaptive loop | `crates/fullmag-engine/src/fem.rs` | `rk23_step_ws` / `rk45_step_ws` | legacy absolute `max_error` loop with 128-attempt guard | FEM reference | engine tests |
+-| Native FDM integrator dispatch | `crates/fullmag-runner/src/fdm/gpu/cuda/native/construction.rs` | `build_native_fdm_plan` | maps canonical integrator to CUDA ABI | FDM GPU | device-gated tests |
++| Native FDM integrator dispatch | `crates/fullmag-runner/src/fdm/gpu/cuda/native/construction.rs` | `NativeFdmBackend::create` | maps canonical integrator to CUDA ABI | FDM GPU | device-gated tests |
+ | FDM direct minimizer reference | `crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs` | `execute_projected_gradient_bb` | FDM reference BB relaxation | FDM CPU/reference | Rust unit tests |
+ | FDM direct minimizer reference | `crates/fullmag-runner/src/relaxation/direct_minimizer_reference.rs` | `execute_nonlinear_cg` | FDM reference NCG relaxation | FDM CPU/reference | Rust unit tests |
+ | Shared pure-damping predicate | `crates/fullmag-runner/src/relaxation/convergence.rs` | `llg_overdamped_uses_pure_damping` | selects precession-disabled relaxation mode | FEM/FDM orchestration | runner tests |
+diff --git a/public_docs/site/numerical-methods/relaxation/llg-relaxation.source-map.json b/public_docs/site/numerical-methods/relaxation/llg-relaxation.source-map.json
+index b0422253e..1cd00200b 100644
+--- a/public_docs/site/numerical-methods/relaxation/llg-relaxation.source-map.json
++++ b/public_docs/site/numerical-methods/relaxation/llg-relaxation.source-map.json
+@@ -1,10 +1,10 @@
+ {
+   "document": {"path": "public_docs/site/numerical-methods/relaxation/llg-relaxation.md"},
+   "backend_matrix": [
+-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
+-    {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "Native GPU sources exist; executed-device qualification is reported separately."},
+-    {"solver": "FDM", "device": "CPU", "status": "source-backed"},
+-    {"solver": "FDM", "device": "GPU", "status": "source-backed", "reason": "CUDA path exists; device availability and parity evidence are separate gates."}
++    {"solver": "FEM", "device": "CPU", "status": "development-executable", "reason": "The native LLG relaxation lane executes, but production qualification is not claimed."},
++    {"solver": "FEM", "device": "GPU", "status": "development-executable", "reason": "The native GPU lane executes; device parity and production qualification remain separate gates."},
++    {"solver": "FDM", "device": "CPU", "status": "reference-executable"},
++    {"solver": "FDM", "device": "GPU", "status": "development-executable", "reason": "The CUDA path executes, but production qualification is not claimed."}
+   ],
+   "equations": [
+     {"id": "eq-relax-llg-damping", "symbols": ["m", "gamma0", "alpha", "H_eff"], "sources": ["physics-llg", "runner-mode"]},
+diff --git a/public_docs/site/numerical-methods/relaxation/nonlinear-cg.md b/public_docs/site/numerical-methods/relaxation/nonlinear-cg.md
+index 48bec3ea6..b62b42b4d 100644
+--- a/public_docs/site/numerical-methods/relaxation/nonlinear-cg.md
++++ b/public_docs/site/numerical-methods/relaxation/nonlinear-cg.md
+@@ -285,10 +285,10 @@ silent fallback to another algorithm or device.
+ 
+ | Solver | Device | Status | Realization and evidence boundary |
+ |---|---|---|---|
+-| FDM | CPU | source-backed | cellwise tangent gradient, energy-weighted products, retraction and reference Armijo loop |
+-| FDM | GPU | source-backed with planner boundary | native CUDA direct-minimizer dispatcher exists; public multilayer planner currently permits only `llg_overdamped` |
+-| FEM | CPU | source-backed | native MFEM nodal gradient, mass metric, direct-energy Armijo decision, rollback and persistent direction |
+-| FEM | GPU | source-backed | native CUDA device-resident gradients, reductions, retraction, rollback and persistent direction; executed-device qualification is separate |
++| FDM | CPU | reference-executable | cellwise tangent gradient, energy-weighted products, retraction and reference Armijo loop |
++| FDM | GPU | development-executable with planner boundary | native CUDA direct-minimizer dispatcher; public multilayer planner permits only `llg_overdamped` |
++| FEM | CPU | development-executable | native MFEM nodal gradient, mass metric, direct-energy Armijo decision, rollback and persistent direction |
++| FEM | GPU | development-executable | native CUDA device-resident gradients, reductions, retraction, rollback and persistent direction |
+ 
+ The continuum algorithm is shared, but the discrete metric is not. FDM uses cell-volume/material
+ weights. FEM uses its finite-element mass/lumped-mass realization and native field operators.
+diff --git a/public_docs/site/numerical-methods/relaxation/nonlinear-cg.source-map.json b/public_docs/site/numerical-methods/relaxation/nonlinear-cg.source-map.json
+index 7273cd348..ca72ad009 100644
+--- a/public_docs/site/numerical-methods/relaxation/nonlinear-cg.source-map.json
++++ b/public_docs/site/numerical-methods/relaxation/nonlinear-cg.source-map.json
+@@ -1,10 +1,10 @@
+ {
+   "document": {"path": "public_docs/site/numerical-methods/relaxation/nonlinear-cg.md"},
+   "backend_matrix": [
+-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
+-    {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "Native CUDA step source exists; executed-device qualification is separate."},
+-    {"solver": "FDM", "device": "CPU", "status": "source-backed"},
+-    {"solver": "FDM", "device": "GPU", "status": "source-backed", "reason": "CUDA/reference source exists; public planner support is separately bounded."}
++    {"solver": "FEM", "device": "CPU", "status": "development-executable"},
++    {"solver": "FEM", "device": "GPU", "status": "development-executable", "reason": "The native CUDA step executes, but production qualification is not claimed."},
++    {"solver": "FDM", "device": "CPU", "status": "reference-executable"},
++    {"solver": "FDM", "device": "GPU", "status": "development-executable", "reason": "The CUDA path is bounded; public multilayer planner support remains unsupported."}
+   ],
+   "equations": [
+     {"id": "eq-relax-ncg-tangent-gradient", "symbols": ["g", "H_eff", "m"], "sources": ["ncg-reference"]},
+diff --git a/public_docs/site/numerical-methods/relaxation/projected-gradient.md b/public_docs/site/numerical-methods/relaxation/projected-gradient.md
+index 221be0055..f639991ed 100644
+--- a/public_docs/site/numerical-methods/relaxation/projected-gradient.md
++++ b/public_docs/site/numerical-methods/relaxation/projected-gradient.md
+@@ -262,10 +262,10 @@ to FEM CPU or `llg_overdamped`. Requested intent is stored separately from resol
+ 
+ | Solver | Device | Status | Realization and evidence boundary |
+ |---|---|---|---|
+-| FDM | CPU | source-backed | cellwise tangent projection, normalized retraction, energy-metric Armijo reference path |
+-| FDM | GPU | source-backed | CUDA direct-minimizer path; runtime/device qualification is separate |
+-| FEM | CPU | source-backed | MFEM nodal tangent gradient, lumped-mass products and native Armijo loop |
+-| FEM | GPU | source-backed | CUDA tangent-gradient, mass-metric reduction and device relaxation state |
++| FDM | CPU | reference-executable | cellwise tangent projection, normalized retraction, energy-metric Armijo reference path |
++| FDM | GPU | development-executable | CUDA direct-minimizer path; multilayer FDM requests remain unsupported |
++| FEM | CPU | development-executable | MFEM nodal tangent gradient, lumped-mass products and native Armijo loop |
++| FEM | GPU | development-executable | CUDA tangent-gradient, mass-metric reduction and device relaxation state |
+ 
+ FDM uses cell volumes and Cartesian fields. FEM uses finite-element node values and the selected
+ mass metric. These are different discrete inner products even though the continuum minimization
+diff --git a/public_docs/site/numerical-methods/relaxation/projected-gradient.source-map.json b/public_docs/site/numerical-methods/relaxation/projected-gradient.source-map.json
+index a3c34a9d5..2a8fb58f9 100644
+--- a/public_docs/site/numerical-methods/relaxation/projected-gradient.source-map.json
++++ b/public_docs/site/numerical-methods/relaxation/projected-gradient.source-map.json
+@@ -1,10 +1,10 @@
+ {
+   "document": {"path": "public_docs/site/numerical-methods/relaxation/projected-gradient.md"},
+   "backend_matrix": [
+-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
+-    {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "Native CUDA step source exists; runtime qualification is separate."},
+-    {"solver": "FDM", "device": "CPU", "status": "source-backed"},
+-    {"solver": "FDM", "device": "GPU", "status": "source-backed", "reason": "CUDA/reference direct-minimizer path exists; executed-device evidence is separate."}
++    {"solver": "FEM", "device": "CPU", "status": "development-executable"},
++    {"solver": "FEM", "device": "GPU", "status": "development-executable", "reason": "The native CUDA step executes, but production qualification is not claimed."},
++    {"solver": "FDM", "device": "CPU", "status": "reference-executable"},
++    {"solver": "FDM", "device": "GPU", "status": "development-executable", "reason": "The CUDA direct-minimizer path is bounded; multilayer FDM requests remain unsupported."}
+   ],
+   "equations": [
+     {"id": "eq-pgbb-tangent-gradient", "symbols": ["g", "H_eff", "m", "tau"], "sources": ["physics-pgbb", "fdm-pgbb"]},
+diff --git a/public_docs/site/numerical-methods/time-integration/adaptive-stepping.md b/public_docs/site/numerical-methods/time-integration/adaptive-stepping.md
+index 9ea36f403..8e4e3ad21 100644
+--- a/public_docs/site/numerical-methods/time-integration/adaptive-stepping.md
++++ b/public_docs/site/numerical-methods/time-integration/adaptive-stepping.md
+@@ -27,7 +27,8 @@ The normalized error used by the adaptive policy is
+ 
+ ```{math}
+ :label: eq-adaptive-normalized-error
+-\eta_i=\frac{\lVert e_i\rVert_2}{a_{\mathrm{tol}}+r_{\mathrm{tol}}\max(\lVert m_i\rVert_2,1)}.
++\eta_i=\frac{\lVert e_i\rVert_2}
++{a_{\mathrm{tol}}+r_{\mathrm{tol}}\max(\lVert m_i^n\rVert_2,\lVert m_i^{\mathrm{hi}}\rVert_2)}.
+ ```
+ 
+ The global decision metric is
+@@ -38,15 +39,23 @@ The global decision metric is
+ \qquad \text{accept if }\eta\leq 1.
+ ```
+ 
+-For estimator order $q$, the unconstrained next step is
++For estimator order $q$, the raw step ratio is
+ 
+ ```{math}
+ :label: eq-adaptive-controller
+-\Delta t_{\mathrm{new}}=s\,\Delta t\,\eta^{-1/q},
++r_{\mathrm{raw}}=
++\begin{cases}
++s\,\eta_n^{-1/(q+1)}, & \text{startup, reset, zero history, or rejected trial},\\
++s\,\eta_n^{-0.7/(q+1)}\eta_{n-1}^{0.4/(q+1)}, & \text{accepted trial with positive history},
++\end{cases}
+ \qquad
+-\Delta t_{\mathrm{new}}\in[\rho_{\mathrm{shrink}}\Delta t,\rho_{\mathrm{growth}}\Delta t].
++\Delta t_{\mathrm{new}}=\Delta t\,\operatorname{clamp}
++(r_{\mathrm{raw}},\rho_{\mathrm{shrink}},\rho_{\mathrm{growth}}).
+ ```
+ 
++The ratio is clamped before the absolute `dt_min`/`dt_max` bounds. A rejected trial uses the
++startup exponent and does not update $\eta_{n-1}$. Here $q=2$ for RK23 and $q=4$ for RK45.
++
+ (time-integration-adaptive-stepping-symbols-and-si-units)=
+ ## Symbols and SI units
+ 
+@@ -57,7 +66,9 @@ For estimator order $q$, the unconstrained next step is
+ | $r_{\mathrm{tol}}$ | relative tolerance | $1$ |
+ | $\eta_i$ | local normalized error | $1$ |
+ | $\eta$ | global normalized error metric | $1$ |
+-| $m_i$ | reduced magnetization at active point i | $1$ |
++| $m_i^n,m_i^{\mathrm{hi}}$ | old and high-order candidate magnetization at active point i | $1$ |
++| $\eta_{n-1}$ | previous accepted normalized error | $1$ |
++| $r_{\mathrm{raw}}$ | unclamped proposed step ratio | $1$ |
+ | $s$ | controller safety factor | $1$ |
+ | $q$ | error-estimator order | $1$ |
+ | $\Delta t$ | current time step | $\mathrm{s}$ |
+@@ -117,10 +128,10 @@ integrator, bounds, tolerances, and device remain part of execution provenance.
+ | `AdaptiveTimestep.rtol` | `float` | `1e-3` | $1$ | non-negative; not both tolerances zero | relative error component | RK23/RK45 lanes | `adaptive_timestep.rtol` |
+ | `AdaptiveTimestep.dt_initial` | `float \| None` | `None` | $\mathrm{s}$ | positive and within bounds when set | first proposed step | lane-dependent | `adaptive_timestep.dt_initial` |
+ | `AdaptiveTimestep.dt_min` | `float` | `1e-15` | $\mathrm{s}$ | positive | minimum allowed step | RK23/RK45 lanes | `adaptive_timestep.dt_min` |
+-| `AdaptiveTimestep.dt_max` | `float \| None` | `None` | $\mathrm{s}$ | positive and >= `dt_min` when set | maximum allowed step | RK23/RK45 lanes | `adaptive_timestep.dt_max` |
+-| `AdaptiveTimestep.safety` | `float` | `0.9` | $1$ | safety factor in (0, 1] | conservative controller factor | RK23/RK45 lanes | `adaptive_timestep.safety` |
+-| `AdaptiveTimestep.growth_limit` | `float` | `2.0` | $1$ | growth_limit > 1 | maximum step growth ratio | RK23/RK45 lanes | `adaptive_timestep.growth_limit` |
+-| `AdaptiveTimestep.shrink_limit` | `float` | `0.2` | $1$ | shrink_limit in (0, 1) | minimum step ratio | RK23/RK45 lanes | `adaptive_timestep.shrink_limit` |
++| `AdaptiveTimestep.dt_max` | `float \| None` | `None` | $\mathrm{s}$ | positive and no smaller than dt_min when set | maximum allowed step | RK23/RK45 lanes | `adaptive_timestep.dt_max` |
++| `AdaptiveTimestep.safety` | `float` | `0.9` | $1$ | finite and in (0,1] | conservative controller factor | RK23/RK45 lanes | `adaptive_timestep.safety` |
++| `AdaptiveTimestep.growth_limit` | `float` | `2.0` | $1$ | finite and > 1 | maximum step growth ratio | RK23/RK45 lanes | `adaptive_timestep.growth_limit` |
++| `AdaptiveTimestep.shrink_limit` | `float` | `0.2` | $1$ | finite and in (0,1) | minimum step ratio | RK23/RK45 lanes | `adaptive_timestep.shrink_limit` |
+ 
+ (time-integration-adaptive-stepping-problem-ir)=
+ ## ProblemIR
+@@ -144,10 +155,10 @@ step. A step that reaches `dt_min` without meeting the error policy is a failed
+ 
+ | Lane | Realization | Status |
+ |---|---|---|
+-| FDM CPU | reference error decision over active structured-grid state | documented; order and rejection tests are required |
+-| FDM GPU | device-side error reduction and controller inputs, avoiding host error vectors | source-backed; executed-device evidence required |
+-| FEM CPU | error policy consumes FEM stage states and reusable RHS workspace | documented by FEM integrator contracts |
+-| FEM GPU | source-facade/device workspace path | source-backed; universal parity is not claimed |
++| FDM CPU | reference error decision over active structured-grid state | reference-executable |
++| FDM GPU | device-side error reduction and controller inputs, avoiding host error vectors | source-visible; executed-device qualification remains pending |
++| FEM CPU | error policy consumes FEM stage states and reusable RHS workspace | production-executable; registry qualification remains separate |
++| FEM GPU | device reduction and native adaptive workspace | production-executable; registry qualification remains separate |
+ 
+ The GPU distinction is material: error reductions and stage data can remain device-resident,
+ whereas the CPU reference uses host-visible state. These are two realizations of the same
+@@ -188,5 +199,12 @@ Tolerances are dimensionless state tolerances, not SI field tolerances.
+ |---|---|---|---|---|---|
+ | Public adaptive policy | `packages/fullmag-py/src/fullmag/model/dynamics.py` | `class AdaptiveTimestep` | validates and serializes controller parameters | public lanes | Python tests |
+ | LLG compatibility checks | `packages/fullmag-py/src/fullmag/model/dynamics.py` | `class LLG` | rejects incompatible fixed/adaptive requests | public lanes | Python tests |
++| FDM CPU PI controller | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `decide_adaptive_step` | history-aware acceptance/retry and bounded next-step decision | FDM CPU | engine integrator tests |
++| Shared native PI controller | `native/include/fullmag_adaptive_step_decision.hpp` | `decide_adaptive_step` | canonical history-aware PI exponents, rejection rule and clamping | FEM CPU/GPU | native adaptive contract tests |
++| FEM CPU controller bridge | `backends/fem/cpu/mfem/integrators/adaptive_dt.cpp` | `cpu_adaptive_step_decision` | maps FEM policy/input into the shared native decision | FEM CPU | native FEM adaptive tests |
++| FEM GPU controller bridge | `backends/fem/gpu/cuda/integrators/rk/rk_adaptive_runtime.cu` | `gpu_host_adaptive_step_decision` | maps device-lane metrics into the same shared decision | FEM GPU | CUDA adaptive contract tests |
++| FDM CPU error norm | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `max_error_norm_buf` / `max_error_norm_soa_buf` | AoS/SoA active-cell mixed error norm and maximum reduction | FDM CPU | engine integrator tests |
++| FEM CPU error norm | `backends/fem/cpu/mfem/integrators/adaptive_dt.cpp` | `compute_adaptive_error_norm` | active-node mixed error norm and maximum reduction | FEM CPU | native FEM contract tests |
++| FEM GPU error norm | `backends/fem/gpu/cuda/integrators/rk/adaptive_error_kernels.cu` | `fullmag_cuda_adaptive_error_norm_blocks` | device-block mixed error norm reduction | FEM GPU | CUDA contract tests |
+ | Device-side adaptive error policy | `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` | `reduce_adaptive_error_policy` | computes the adaptive error decision input | FDM GPU | FDM CUDA contract tests |
+ | Scalar reduction implementation | `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` | `reduce_max_scalar_sqrt` | reduces error/state scalars on the CUDA path | FDM GPU | FDM CUDA contract tests |
+diff --git a/public_docs/site/numerical-methods/time-integration/adaptive-stepping.source-map.json b/public_docs/site/numerical-methods/time-integration/adaptive-stepping.source-map.json
+index d113a93b8..811902e4e 100644
+--- a/public_docs/site/numerical-methods/time-integration/adaptive-stepping.source-map.json
++++ b/public_docs/site/numerical-methods/time-integration/adaptive-stepping.source-map.json
+@@ -1,15 +1,15 @@
+ {
+   "document": {"path": "public_docs/site/numerical-methods/time-integration/adaptive-stepping.md"},
+   "backend_matrix": [
+-    {"solver": "FEM", "device": "CPU", "status": "documented"},
+-    {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "FEM device-lane parity requires executed managed evidence."},
+-    {"solver": "FDM", "device": "CPU", "status": "documented"},
+-    {"solver": "FDM", "device": "GPU", "status": "source-backed", "reason": "Device-side reductions are contract-tested, but runtime qualification is separate."}
++    {"solver": "FEM", "device": "CPU", "status": "production-executable", "reason": "The adaptive RK lane is executable; registry qualification remains separate."},
++    {"solver": "FEM", "device": "GPU", "status": "production-executable", "reason": "The native device adaptive lane is executable; registry qualification remains separate."},
++    {"solver": "FDM", "device": "CPU", "status": "reference-executable"},
++    {"solver": "FDM", "device": "GPU", "status": "source-visible", "reason": "Device-side reductions are present, but current runtime qualification is pending."}
+   ],
+   "equations": [
+-    {"id": "eq-adaptive-normalized-error", "symbols": ["e", "atol", "rtol", "eta_i", "m"], "sources": ["adaptive-policy"]},
+-    {"id": "eq-adaptive-global-error", "symbols": ["eta", "eta_i"], "sources": ["fdm-adaptive-test"]},
+-    {"id": "eq-adaptive-controller", "symbols": ["dt", "s", "eta", "q", "rho_shrink", "rho_growth"], "sources": ["adaptive-policy"]}
++    {"id": "eq-adaptive-normalized-error", "symbols": ["e", "atol", "rtol", "eta_i", "m"], "sources": ["fdm-cpu-error-aos", "fdm-cpu-error-soa", "fdm-gpu-error", "fem-cpu-error", "fem-gpu-error"]},
++    {"id": "eq-adaptive-global-error", "symbols": ["eta", "eta_i"], "sources": ["fdm-cpu-error-aos", "fdm-cpu-error-soa", "fdm-gpu-error", "fem-cpu-error", "fem-gpu-error"]},
++    {"id": "eq-adaptive-controller", "symbols": ["dt", "s", "eta", "eta_prev", "q", "r_raw", "rho_shrink", "rho_growth"], "sources": ["fdm-cpu-controller", "shared-controller", "fem-cpu-controller", "fem-gpu-controller"]}
+   ],
+   "symbols": [
+     {"id": "e", "latex": "e_i", "meaning": "embedded error vector at active point i", "si_unit": "1"},
+@@ -17,7 +17,9 @@
+     {"id": "rtol", "latex": "r_{\\mathrm{tol}}", "meaning": "relative tolerance", "si_unit": "1"},
+     {"id": "eta_i", "latex": "\\eta_i", "meaning": "local normalized error", "si_unit": "1"},
+     {"id": "eta", "latex": "\\eta", "meaning": "global normalized error metric", "si_unit": "1"},
+-    {"id": "m", "latex": "m_i", "meaning": "reduced magnetization at active point i", "si_unit": "1"},
++    {"id": "m", "latex": "m_i^n,m_i^{\\mathrm{hi}}", "meaning": "old and high-order candidate magnetization at active point i", "si_unit": "1"},
++    {"id": "eta_prev", "latex": "\\eta_{n-1}", "meaning": "previous accepted normalized error", "si_unit": "1"},
++    {"id": "r_raw", "latex": "r_{\\mathrm{raw}}", "meaning": "unclamped proposed step ratio", "si_unit": "1"},
+     {"id": "dt", "latex": "\\Delta t", "meaning": "current time step", "si_unit": "\\mathrm{s}"},
+     {"id": "s", "latex": "s", "meaning": "controller safety factor", "si_unit": "1"},
+     {"id": "q", "latex": "q", "meaning": "error-estimator order", "si_unit": "1"},
+@@ -27,6 +29,15 @@
+   "sources": [
+     {"id": "adaptive-policy", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class AdaptiveTimestep", "responsibility": "Public adaptive controller validation and IR."},
+     {"id": "llg-policy", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class LLG", "responsibility": "Compatibility of integrator and adaptive policy."},
++    {"id": "fdm-cpu-controller", "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs", "symbol": "decide_adaptive_step", "responsibility": "FDM CPU history-aware PI acceptance and bounded next-step decision."},
++    {"id": "shared-controller", "path": "native/include/fullmag_adaptive_step_decision.hpp", "symbol": "decide_adaptive_step", "responsibility": "Shared native history-aware PI controller used by FEM CPU and GPU bridges."},
++    {"id": "fem-cpu-controller", "path": "backends/fem/cpu/mfem/integrators/adaptive_dt.cpp", "symbol": "cpu_adaptive_step_decision", "responsibility": "FEM CPU bridge into the shared native controller."},
++    {"id": "fem-gpu-controller", "path": "backends/fem/gpu/cuda/integrators/rk/rk_adaptive_runtime.cu", "symbol": "gpu_host_adaptive_step_decision", "responsibility": "FEM GPU runtime bridge into the shared native controller."},
++    {"id": "fdm-cpu-error-aos", "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs", "symbol": "max_error_norm_buf", "responsibility": "FDM CPU AoS active-cell mixed absolute/relative error norm and maximum reduction."},
++    {"id": "fdm-cpu-error-soa", "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs", "symbol": "max_error_norm_soa_buf", "responsibility": "FDM CPU SoA active-cell mixed absolute/relative error norm and maximum reduction."},
++    {"id": "fem-cpu-error", "path": "backends/fem/cpu/mfem/integrators/adaptive_dt.cpp", "symbol": "compute_adaptive_error_norm", "responsibility": "FEM CPU active-node mixed absolute/relative error norm and maximum reduction."},
++    {"id": "fem-gpu-error", "path": "backends/fem/gpu/cuda/integrators/rk/adaptive_error_kernels.cu", "symbol": "fullmag_cuda_adaptive_error_norm_blocks", "responsibility": "FEM GPU device-block mixed error norm reduction."},
++    {"id": "fdm-gpu-error", "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu", "symbol": "reduce_adaptive_error_policy", "responsibility": "FDM GPU device-side mixed error norm reduction and decision input."},
+     {"id": "fdm-adaptive-test", "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu", "symbol": "reduce_adaptive_error_policy", "responsibility": "FDM GPU device-side adaptive error policy."},
+     {"id": "fdm-stream-test", "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu", "symbol": "reduce_max_scalar_sqrt", "responsibility": "FDM GPU scalar reduction implementation."}
+   ],
+@@ -35,9 +46,9 @@
+     {"python": "AdaptiveTimestep.rtol", "type": "float", "default": "1e-3", "si_unit": "1", "validation": "non-negative; not both tolerances zero", "meaning": "relative error component", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.rtol"},
+     {"python": "AdaptiveTimestep.dt_initial", "type": "float | None", "default": "None", "si_unit": "\\mathrm{s}", "validation": "positive and within bounds when set", "meaning": "first proposed step", "backend_support": "lane-dependent", "problem_ir": "adaptive_timestep.dt_initial"},
+     {"python": "AdaptiveTimestep.dt_min", "type": "float", "default": "1e-15", "si_unit": "\\mathrm{s}", "validation": "positive", "meaning": "minimum allowed step", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.dt_min"},
+-    {"python": "AdaptiveTimestep.dt_max", "type": "float | None", "default": "None", "si_unit": "\\mathrm{s}", "validation": "positive and", "meaning": "maximum allowed step", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.dt_max"},
+-    {"python": "AdaptiveTimestep.safety", "type": "float", "default": "0.9", "si_unit": "1", "validation": "safety factor", "meaning": "conservative controller factor", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.safety"},
+-    {"python": "AdaptiveTimestep.growth_limit", "type": "float", "default": "2.0", "si_unit": "1", "validation": "growth_limit", "meaning": "maximum step growth ratio", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.growth_limit"},
+-    {"python": "AdaptiveTimestep.shrink_limit", "type": "float", "default": "0.2", "si_unit": "1", "validation": "shrink_limit", "meaning": "minimum step ratio", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.shrink_limit"}
++    {"python": "AdaptiveTimestep.dt_max", "type": "float | None", "default": "None", "si_unit": "\\mathrm{s}", "validation": "positive and no smaller than dt_min when set", "meaning": "maximum allowed step", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.dt_max"},
++    {"python": "AdaptiveTimestep.safety", "type": "float", "default": "0.9", "si_unit": "1", "validation": "finite and in (0,1]", "meaning": "conservative controller factor", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.safety"},
++    {"python": "AdaptiveTimestep.growth_limit", "type": "float", "default": "2.0", "si_unit": "1", "validation": "finite and > 1", "meaning": "maximum step growth ratio", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.growth_limit"},
++    {"python": "AdaptiveTimestep.shrink_limit", "type": "float", "default": "0.2", "si_unit": "1", "validation": "finite and in (0,1)", "meaning": "minimum step ratio", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.shrink_limit"}
+   ]}
+ }
+diff --git a/public_docs/site/numerical-methods/time-integration/explicit-runge-kutta.md b/public_docs/site/numerical-methods/time-integration/explicit-runge-kutta.md
+index 154f5da13..2c9c3fbe8 100644
+--- a/public_docs/site/numerical-methods/time-integration/explicit-runge-kutta.md
++++ b/public_docs/site/numerical-methods/time-integration/explicit-runge-kutta.md
+@@ -131,13 +131,13 @@ is no second object-constructor workflow in this page.
+ 
+ | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+ |---|---|---|---|---|---|---|---|
+-| `LLG.gamma` | `float` | `2.211e5` | $\mathrm{m\,A^{-1}\,s^{-1}}$ | finite and $>0$ | gyromagnetic ratio | FEM/FDM CPU/GPU | `study.dynamics.gyromagnetic_ratio` |
+-| `LLG.integrator` | `str` | `"auto"` | $1$ | `heun`, `rk4`, `rk23`, `rk45`, `abm3`, `auto`; aliases `bs23`, `dp54` normalize | temporal method request | lane-dependent; planner resolves `auto` | `study.dynamics.integrator` |
+-| `LLG.fixed_timestep` | `float \| None` | `None` | $\mathrm{s}$ | finite and $>0$ when set; exclusive with adaptive policy | requested fixed step | FEM/FDM CPU/GPU subject to lane support | `study.dynamics.fixed_timestep` |
++| `LLG.gamma` | `float` | `2.211e5` | $\mathrm{m\,A^{-1}\,s^{-1}}$ | finite and positive | gyromagnetic ratio | FEM/FDM CPU/GPU | `study.dynamics.gyromagnetic_ratio` |
++| `LLG.integrator` | `str` | `"auto"` | $1$ | one of auto, heun, rk4, rk23/bs23, rk45/dp54, abm3 according to lane | temporal method request | lane-dependent; planner resolves `auto` | `study.dynamics.integrator` |
++| `LLG.fixed_timestep` | `float \| None` | `None` | $\mathrm{s}$ | finite and positive when set; mutually exclusive with adaptive policy | requested fixed step | FEM/FDM CPU/GPU subject to lane support | `study.dynamics.fixed_timestep` |
+ | `AdaptiveTimestep.atol` | `float` | `1e-6` | $1$ | non-negative; not both tolerances zero | absolute error tolerance | RK23/RK45 lanes | `study.dynamics.adaptive_timestep.atol` |
+ | `AdaptiveTimestep.rtol` | `float` | `1e-3` | $1$ | non-negative; not both tolerances zero | relative error tolerance | RK23/RK45 lanes | `study.dynamics.adaptive_timestep.rtol` |
+ | `AdaptiveTimestep.dt_min` | `float` | `1e-15` | $\mathrm{s}$ | positive; no larger than `dt_max` | lower step bound | RK23/RK45 lanes | `study.dynamics.adaptive_timestep.dt_min` |
+-| `AdaptiveTimestep.dt_max` | `float \| None` | `None` | $\mathrm{s}$ | positive and >= `dt_min` | upper step bound | RK23/RK45 lanes | `study.dynamics.adaptive_timestep.dt_max` |
++| `AdaptiveTimestep.dt_max` | `float \| None` | `None` | $\mathrm{s}$ | positive and no smaller than dt_min when set | upper step bound | RK23/RK45 lanes | `study.dynamics.adaptive_timestep.dt_max` |
+ | `StudyBuilder.solver(integrator=...)` | `str \| None` | `None` | $1$ | validated integrator name; aliases normalize | stage-workflow solver method request | FEM/FDM lanes according to planner | `study.dynamics.integrator` |
+ | `StudyBuilder.solver(adaptive_timestep=...)` | `AdaptiveTimestep \| None` | `None` | $1$ | mutually exclusive with fixed/convenience controls | stage-workflow adaptive policy | RK23/RK45 lanes | `study.dynamics.adaptive_timestep` |
+ 
+diff --git a/public_docs/site/numerical-methods/time-integration/explicit-runge-kutta.source-map.json b/public_docs/site/numerical-methods/time-integration/explicit-runge-kutta.source-map.json
+index 163539bfd..5cab9259f 100644
+--- a/public_docs/site/numerical-methods/time-integration/explicit-runge-kutta.source-map.json
++++ b/public_docs/site/numerical-methods/time-integration/explicit-runge-kutta.source-map.json
+@@ -38,13 +38,13 @@
+     {"id": "fem-rk-contract", "path": "backends/fem/cpu/mfem/integrators/rk_explicit.cpp", "symbol": "stepper_workspace_allocate", "responsibility": "FEM reusable explicit-RK workspace implementation."}
+   ],
+   "public_api": {"parameters": [
+-    {"python": "LLG.gamma", "type": "float", "default": "2.211e5", "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}", "validation": "finite and", "meaning": "gyromagnetic ratio", "backend_support": "FEM/FDM CPU/GPU", "problem_ir": "study.dynamics.gyromagnetic_ratio"},
+-    {"python": "LLG.integrator", "type": "str", "default": "auto", "si_unit": "1", "validation": "heun", "meaning": "temporal method request", "backend_support": "lane-dependent", "problem_ir": "study.dynamics.integrator"},
+-    {"python": "LLG.fixed_timestep", "type": "float | None", "default": "None", "si_unit": "\\mathrm{s}", "validation": "finite and", "meaning": "requested fixed step", "backend_support": "FEM/FDM CPU/GPU subject to lane support", "problem_ir": "study.dynamics.fixed_timestep"},
++    {"python": "LLG.gamma", "type": "float", "default": "2.211e5", "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}", "validation": "finite and positive", "meaning": "gyromagnetic ratio", "backend_support": "FEM/FDM CPU/GPU", "problem_ir": "study.dynamics.gyromagnetic_ratio"},
++    {"python": "LLG.integrator", "type": "str", "default": "auto", "si_unit": "1", "validation": "one of auto, heun, rk4, rk23/bs23, rk45/dp54, abm3 according to lane", "meaning": "temporal method request", "backend_support": "lane-dependent", "problem_ir": "study.dynamics.integrator"},
++    {"python": "LLG.fixed_timestep", "type": "float | None", "default": "None", "si_unit": "\\mathrm{s}", "validation": "finite and positive when set; mutually exclusive with adaptive policy", "meaning": "requested fixed step", "backend_support": "FEM/FDM CPU/GPU subject to lane support", "problem_ir": "study.dynamics.fixed_timestep"},
+     {"python": "AdaptiveTimestep.atol", "type": "float", "default": "1e-6", "si_unit": "1", "validation": "non-negative; not both tolerances zero", "meaning": "absolute error tolerance", "backend_support": "RK23/RK45 lanes", "problem_ir": "study.dynamics.adaptive_timestep.atol"},
+     {"python": "AdaptiveTimestep.rtol", "type": "float", "default": "1e-3", "si_unit": "1", "validation": "non-negative; not both tolerances zero", "meaning": "relative error tolerance", "backend_support": "RK23/RK45 lanes", "problem_ir": "study.dynamics.adaptive_timestep.rtol"},
+     {"python": "AdaptiveTimestep.dt_min", "type": "float", "default": "1e-15", "si_unit": "\\mathrm{s}", "validation": "positive", "meaning": "lower step bound", "backend_support": "RK23/RK45 lanes", "problem_ir": "study.dynamics.adaptive_timestep.dt_min"},
+-    {"python": "AdaptiveTimestep.dt_max", "type": "float | None", "default": "None", "si_unit": "\\mathrm{s}", "validation": "positive and", "meaning": "upper step bound", "backend_support": "RK23/RK45 lanes", "problem_ir": "study.dynamics.adaptive_timestep.dt_max"},
++    {"python": "AdaptiveTimestep.dt_max", "type": "float | None", "default": "None", "si_unit": "\\mathrm{s}", "validation": "positive and no smaller than dt_min when set", "meaning": "upper step bound", "backend_support": "RK23/RK45 lanes", "problem_ir": "study.dynamics.adaptive_timestep.dt_max"},
+     {"python": "StudyBuilder.solver(integrator=...)", "type": "str | None", "default": "None", "si_unit": "1", "validation": "validated integrator name; aliases normalize", "meaning": "stage-workflow solver method request", "backend_support": "FEM/FDM lanes according to planner", "problem_ir": "study.dynamics.integrator"},
+     {"python": "StudyBuilder.solver(adaptive_timestep=...)", "type": "AdaptiveTimestep | None", "default": "None", "si_unit": "1", "validation": "mutually exclusive with fixed/convenience controls", "meaning": "stage-workflow adaptive policy", "backend_support": "RK23/RK45 lanes", "problem_ir": "study.dynamics.adaptive_timestep"}
+   ]}
+diff --git a/public_docs/site/numerical-methods/time-integration/index.md b/public_docs/site/numerical-methods/time-integration/index.md
+index 88885bfab..eb037ec53 100644
+--- a/public_docs/site/numerical-methods/time-integration/index.md
++++ b/public_docs/site/numerical-methods/time-integration/index.md
+@@ -4,7 +4,7 @@ status: implemented
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
+-source_of_truth: explicit-runge-kutta, adaptive-stepping, tangent-plane-methods, their source maps, and source revision 88c7160080bc1e8519950df283d2dd02087cc3da
++source_of_truth: explicit-runge-kutta, adaptive-stepping, tangent-plane-methods, their source maps, and source revision 0388c3e7c4804923ee02a00b7ac4a789a44092d9
+ ---
+ 
+ (public-docs-numerical-methods-time-integration-root)=
+@@ -72,7 +72,7 @@ policies that must be reported.
+ | `rk23` | Bogacki--Shampine 3(2) | fixed or adaptive | lower-cost adaptive integration | FDM/FEM CPU/GPU; alias `bs23` normalizes to `rk23` |
+ | `rk45` | Dormand--Prince 5(4) | fixed or adaptive | higher-order adaptive integration | FDM/FEM CPU/GPU; alias `dp54` normalizes to `rk45` |
+ | `abm3` | Adams--Bashforth--Moulton predictor/corrector | fixed multistep | history-based stepping | FDM and reference FEM paths; native FEM GPU rejects it |
+-| `tangent_plane_implicit` | linearly implicit tangent-plane family | implicit/FEM policy | constrained stiff integration/development relaxation | FEM contract; no FDM realization is claimed |
++| `tangent_plane_implicit` | linearly implicit tangent-plane family | implicit/FEM policy | development relaxation only; not physical-time integration | FEM CPU in extended mode; forced GPU and FDM reject |
+ | `coupled_imex_ark2` | coupled implicit--explicit transport integrator | adaptive coupled solve | transient spin-transport coupling | valid only with the required transient transport module; not a plain LLG choice |
+ | `auto` | planner request | resolved | lets the planner choose a legal method | provenance must record the resolved canonical name |
+ 
+@@ -121,24 +121,29 @@ For active point $i$, Fullmag's documented normalized error is
+ :label: eq-time-root-adaptive-error
+ \eta_i=
+ \frac{\lVert e_i\rVert_2}
+-{a_{\mathrm{tol}}+r_{\mathrm{tol}}\max(\lVert m_i\rVert_2,1)},
++{a_{\mathrm{tol}}+r_{\mathrm{tol}}\max(\lVert m_i^n\rVert_2,\lVert m_i^{\mathrm{hi}}\rVert_2)},
+ \qquad
+ \eta=\max_i\eta_i.
+ ```
+ 
+-The trial is accepted exactly when $\eta\leq1$. For estimator order $q$, the proposed next step is
++The trial is accepted exactly when $\eta\leq1$. For estimator order $q$, the raw step ratio is
+ 
+ ```{math}
+ :label: eq-time-root-adaptive-controller
+-\Delta t_{\mathrm{new}}
+-=s\,\Delta t\,\eta^{-1/q},
++r_{\mathrm{raw}}=
++\begin{cases}
++s\,\eta_n^{-1/(q+1)}, & \text{startup, reset, zero history, or rejected trial},\\
++s\,\eta_n^{-0.7/(q+1)}\eta_{n-1}^{0.4/(q+1)}, & \text{accepted trial with positive history},
++\end{cases}
+ \qquad
+-\rho_{\mathrm{shrink}}\Delta t
+-\leq\Delta t_{\mathrm{new}}
+-\leq\rho_{\mathrm{growth}}\Delta t,
++\Delta t_{\mathrm{new}}=\Delta t\,\operatorname{clamp}
++(r_{\mathrm{raw}},\rho_{\mathrm{shrink}},\rho_{\mathrm{growth}}),
+ ```
+ 
+-followed by the absolute `dt_min` and optional `dt_max` bounds. The public defaults are
++then the absolute `dt_min`/`dt_max` bounds are applied. A rejected trial does not update
++$\eta_{n-1}$. RK23 uses $q=2$ and RK45 uses $q=4$.
++
++The public defaults are
+ $a_{\mathrm{tol}}=10^{-6}$, $r_{\mathrm{tol}}=10^{-3}$,
+ $\Delta t_{\min}=10^{-15}\,\mathrm s$, safety $s=0.9$, growth limit $2.0$, and shrink limit
+ $0.2$. Hitting `dt_min` while $\eta>1$ is a controlled failure, not permission to accept an
+@@ -184,8 +189,8 @@ P_i=I-\boldsymbol\mu_i\boldsymbol\mu_i^{\mathsf T},
+ A tangent-plane method solves for an increment in the plane orthogonal to
+ $\boldsymbol\mu_i$ and retracts or normalizes the updated state. This avoids treating the
+ unit-length constraint as three independent unconstrained scalar equations. Fullmag's public
+-`tangent_plane_implicit` vocabulary is FEM-only in the current contract. Its source-visible
+-presence must not be interpreted as FDM or universally qualified GPU support. See
++`tangent_plane_implicit` vocabulary is a FEM CPU development relaxation in extended mode, not a
++physical-time stiff integrator. Strict mode, forced GPU, and FDM requests reject it. See
+ {doc}`tangent-plane-methods`.
+ 
+ ## Public Python contract
+diff --git a/public_docs/site/numerical-methods/time-integration/tangent-plane-methods.md b/public_docs/site/numerical-methods/time-integration/tangent-plane-methods.md
+index e9ff2f463..93e0e7794 100644
+--- a/public_docs/site/numerical-methods/time-integration/tangent-plane-methods.md
++++ b/public_docs/site/numerical-methods/time-integration/tangent-plane-methods.md
+@@ -76,14 +76,13 @@ nm = 1.0e-9
+ study = fm.study("tangent_plane_relaxation")
+ study.engine("fem")
+ study.device("cpu", precision="double")
+-study.mode("strict")
++study.mode("extended")
+ film = study.geometry(fm.Box(40 * nm, 20 * nm, 5 * nm), name="film")
+ film.Ms = 800.0e3
+ film.Aex = 13.0e-12
+ film.alpha = 0.02
+ film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+ study.exchange()
+-study.solver(integrator="rk45", fix_dt=1.0e-15, gamma=2.211e5)
+ study.stages.add_relax(
+     algorithm="tangent_plane_implicit",
+     tolT=1.0e-6,
+@@ -114,7 +113,7 @@ that a native tangent-plane solve was run.
+ 
+ Round-trip preserves requested intent, the algorithm request, and stop policy. Validation errors cover unknown
+ algorithm names, non-positive stop values, and incompatible time-limit parameters. Unsupported combinations
+-combinations are explicit: the FDM planner must reject `tangent_plane_implicit` rather than
++are explicit: the FDM planner must reject `tangent_plane_implicit` rather than
+ silently selecting `llg_overdamped`. Requested intent and resolved execution remain separate in
+ provenance.
+ 
+@@ -123,8 +122,8 @@ provenance.
+ 
+ | Lane | Status | Reason |
+ |---|---|---|
+-| FEM CPU | documented contract | relaxation algorithm is exposed as FEM-only in the public model |
+-| FEM GPU | source-backed, qualification-dependent | device execution requires managed runtime evidence |
++| FEM CPU | development-executable | available only in extended mode as a relaxation algorithm |
++| FEM GPU | unsupported | a forced GPU request rejects; no fallback to CPU is permitted |
+ | FDM CPU | unsupported | current algorithm contract is FEM-only |
+ | FDM GPU | unsupported | current algorithm contract is FEM-only |
+ 
+@@ -146,8 +145,8 @@ precision, and whether the GPU device actually executed.
+ (time-integration-tangent-plane-methods-limitations)=
+ ## Limitations
+ 
+-The public documentation does not claim that this method is a general dynamic integrator, an
+-FDM method, or a universally qualified FEM GPU method. The full linear-system policy and
++The public documentation does not claim that this method is a physical-time integrator, an FDM
++method, or a FEM GPU method. The full linear-system policy and
+ preconditioner controls must be added only when their public and native contracts are present.
+ 
+ (time-integration-tangent-plane-methods-scientific-bibliography)=
+diff --git a/public_docs/site/numerical-methods/time-integration/tangent-plane-methods.source-map.json b/public_docs/site/numerical-methods/time-integration/tangent-plane-methods.source-map.json
+index 641c1242e..03509c6b4 100644
+--- a/public_docs/site/numerical-methods/time-integration/tangent-plane-methods.source-map.json
++++ b/public_docs/site/numerical-methods/time-integration/tangent-plane-methods.source-map.json
+@@ -1,8 +1,8 @@
+ {
+   "document": {"path": "public_docs/site/numerical-methods/time-integration/tangent-plane-methods.md"},
+   "backend_matrix": [
+-    {"solver": "FEM", "device": "CPU", "status": "documented"},
+-    {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "The public algorithm is present, but native executed-device qualification is lane-specific."},
++    {"solver": "FEM", "device": "CPU", "status": "development-executable", "reason": "The relaxation algorithm is available only in extended mode."},
++    {"solver": "FEM", "device": "GPU", "status": "unsupported", "reason": "A forced GPU request rejects and may not fall back to CPU."},
+     {"solver": "FDM", "device": "CPU", "status": "unsupported", "reason": "The current public contract marks tangent_plane_implicit as FEM-only."},
+     {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "The current public contract marks tangent_plane_implicit as FEM-only."}
+   ],

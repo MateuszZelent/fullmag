@@ -101,8 +101,8 @@
         "type": "three floats or None",
         "default": "None",
         "si_unit": "1",
-        "validation": "Finite three-vector defining the uniaxial axis; normalization and legality are checked downstream.",
-        "meaning": "Finite three-vector defining the uniaxial axis; normalization and legality are checked downstream.",
+        "validation": "Three float-convertible components; normalization, finiteness, and legality are checked downstream.",
+        "meaning": "Uniaxial axis.",
         "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
         "problem_ir": "materials[].anisotropy_axis"
       },
@@ -141,8 +141,8 @@
         "type": "three floats or None",
         "default": "None",
         "si_unit": "1",
-        "validation": "Finite first cubic-anisotropy axis.",
-        "meaning": "Finite first cubic-anisotropy axis.",
+        "validation": "Three float-convertible components; finiteness and basis legality are checked downstream.",
+        "meaning": "First cubic-anisotropy axis.",
         "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
         "problem_ir": "materials[].cubic_anisotropy_axis1"
       },
@@ -151,8 +151,8 @@
         "type": "three floats or None",
         "default": "None",
         "si_unit": "1",
-        "validation": "Finite second cubic-anisotropy axis.",
-        "meaning": "Finite second cubic-anisotropy axis.",
+        "validation": "Three float-convertible components; finiteness and basis legality are checked downstream.",
+        "meaning": "Second cubic-anisotropy axis.",
         "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
         "problem_ir": "materials[].cubic_anisotropy_axis2"
       },

@@ -4,120 +4,124 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+source_of_truth: docs/specs/frontend-v2/01-module-kernel-architecture.md, docs/specs/resource-first-control-room-api-v2.md, apps/control-room/src/modules/inspector/manifest.ts
 ---
 
 (public-docs-architecture-ui-architecture)=
 # Control Room Architecture
 
-The **FullMag Control Room** (`apps/control-room`) is built as a modular, resource-first web application designed for interactive micromagnetic problem authoring, high-throughput WebGL visualization, and live runtime observation.
+The **FullMag Control Room** (`apps/control-room`) is a modular, resource-first web application for
+interactive micromagnetic problem authoring, WebGL visualization, and live runtime observation.
+It uses the generated OpenAPI v2 transport, one handwritten `ControlRoomApi` facade, resource hooks,
+and a WebSocket invalidation stream. Heavy mesh and field payloads remain on versioned HTTP binary
+resources; WebSocket messages announce lifecycle changes and resource invalidation rather than
+carrying an alternative state model.
 
-It bridges browser interaction with FullMag's underlying Rust/C++ solvers through OpenAPI v2 contracts, canonical `ProblemIR` representations, and real-time binary transport streams.
-
----
-
-## Architectural Principles
+## Architectural principles
 
 ```text
-graph TD
-    A["User Interactions (Ribbon / Explorer / Viewport / Inspector)"] --> B["Module Kernel & Registry"]
-    B --> C["Zustand State Stores & Draft Isolation"]
-    C --> D["OpenAPI v2 Client & SSE/WS Event Pipeline"]
-    D --> E["FullMag Rust/C++ Backend Session Engine"]
-    E --> F["Canonical ProblemIR Lowering & Validation"]
-    F --> G["FDM & FEM CPU/GPU Solvers"]
-    G --> H["Binary Vector Buffers & Realtime Metrics"]
-    H --> I["Three.js / WebGL 3D Viewport & ECharts"]
+User interaction -> module kernel -> command/API facade -> v2 HTTP resources
+                                           ^                    |
+                                           |                    v
+                                  WebSocket invalidation <- revision change
 ```
 
-1. **Physical-Model Alignment**: The UI operates on micromagnetic domain concepts (geometry, materials, physical interactions, discretization, and stages) rather than exposing numerical storage details.
-2. **Modular Kernel Architecture**: Feature areas are self-contained modules (`src/modules/*`) registered dynamically with the core shell.
-3. **Explicit Draft Isolation**: Inspector property edits remain in an isolated draft state until committed by the user, preventing partial or corrupt configuration frames from reaching the active solver session.
-4. **SSR Hydration Consistency**: Client components reading runtime state use `useSyncExternalStore` or hydration gates so the first client render matches the server-rendered state.
-5. **Token-First Design System**: Styling is governed by central `--fm-*` CSS tokens (Catppuccin Mocha for dark mode, Latte for light mode), Tailwind CSS, and shadcn/ui shared primitives.
+1. **Physical-model alignment**: the UI operates on geometry, materials, interactions,
+   discretization, and stages rather than backend storage layouts.
+2. **One module kernel**: feature areas under `src/modules/*` register with the shell and contribute
+   to shared layout slots. FDM and FEM do not get separate application shells.
+3. **Draft isolation**: Inspector edits remain local until an explicit command applies them.
+4. **SSR hydration consistency**: client components reading external state use server snapshots or
+   explicit hydration gates so the first client render matches SSR.
+5. **Token-first design**: central `--fm-*` tokens, Tailwind utilities, and shared shadcn/ui-style
+   primitives define the visual system.
 
----
+## Module kernel and layout slots
 
-## Module Kernel & Layout Slots
+The implemented source layout keeps kernel services separate from UI modules:
 
-The Control Room shell layout is partitioned into flexible **Layout Slots** managed by `src/kernel/modules`:
-
-```
+```text
 apps/control-room/src/
-├── kernel/              # Core shell runtime, layout manager, API client, event bus
-│   ├── api/             # OpenAPI v2 client, generated types, binary codecs
-│   ├── modules/         # Module registry, manifest resolver, slot contracts
-│   └── state/           # Central session stores, selection, layout persistence
-└── modules/             # Self-contained UI feature modules
-    ├── ribbon/          # Header strip tabs & command groups
-    ├── explorer/        # Semantic tree model browser
-    ├── viewport-3d/     # WebGL canvas, Three.js scene, vector field shaders
-    ├── inspector/       # Property panel, draft editor, unit converters
-    ├── live-charts/     # ECharts time-series & energy component graphs
-    ├── status-bar/      # Session state, solver engine, device metrics
-    └── app-menu/        # Command palette (Ctrl+K) & workspace settings
+|-- kernel/
+|   |-- api/          # generated OpenAPI transport, facade, paths, binary codecs
+|   |-- module/       # registry, manifests, slot contracts
+|   |-- resources/    # revision-aware server-resource cache
+|   |-- selection/    # selected semantic entity
+|   |-- realtime/     # WebSocket invalidation bridge
+|   `-- workspace/    # layout and workspace state
+`-- modules/
+    |-- ribbon/
+    |-- explorer/
+    |-- viewport-3d/
+    |-- inspector/
+    |-- live-charts/
+    |-- status-bar/
+    `-- app-menu/
 ```
 
-### Module Manifest Contract
-
-Every UI module exports a standardized `manifest.ts` defining its identity, contributed layout slots, menu actions, and ribbon buttons:
+Every UI module exports a `manifest.ts` with its identity, lazy component, slots, declared events,
+optional capability gates, and optional command contributions. The implemented Inspector manifest
+is:
 
 ```typescript
-export const inspectorModuleManifest: ModuleManifest = {
+export const inspectorManifest: ModuleManifest = {
   id: "inspector",
-  name: "Inspector Panel",
-  slots: [
-    {
-      slotId: "shell.right",
-      component: InspectorShell,
-      priority: 10,
-    },
-  ],
-  commands: [
-    {
-      id: "inspector.apply-draft",
-      label: "Apply Draft Changes",
-      shortcut: "Ctrl+Enter",
-    },
-  ],
+  title: "Inspector",
+  version: "0.1.0",
+  slots: ["panel-right"],
+  component: () => import("./InspectorModule"),
+  contributes: {
+    commands: [
+      {
+        id: "workspace.toggle-right-panel",
+        title: "Toggle Inspector Panel",
+        group: "workspace",
+        category: "Window",
+        scope: "workspace",
+        run: (ctx) => {
+          ctx.layout?.togglePanel("right");
+          return { status: "completed" };
+        },
+      },
+    ],
+  },
+  emits: ["viewport:mesh-size-bin-hovered"],
+  listens: ["workspace:selection-changed"],
 };
 ```
 
----
+## Viewport and WebGL lifecycle
 
-## Viewport 3D & WebGL Lifecycle
+The 3D viewport under `src/modules/viewport-3d` renders geometry, meshes, and vector fields with
+Three.js and React Three Fiber. Its lifecycle contract includes bounded render work, explicit
+resource disposal, context-loss handling, and separation of topology uploads from changing field
+values. Field and mesh samples are fetched from versioned HTTP binary resources and decoded into
+typed arrays; they are not streamed as authoritative state over the event channel.
 
-The 3D Viewport (`src/modules/viewport-3d`) renders geometric domains and 3D vector fields ($\mathbf{m}, \mathbf{H}_{\text{eff}}$) using **Three.js** and **React Three Fiber (R3F)**.
+## State and invalidation
 
-### Performance & Memory Safeguards
+Control Room state has three distinct ownership classes:
 
-- **Instanced Mesh Glyphs**: Vector field arrows and cones are rendered using `THREE.InstancedMesh` with GPU instancing to reduce draw-call overhead for large vector datasets.
-- **Binary ArrayBuffer Codecs**: Field samples stream directly from the backend over WebSocket/HTTP as unboxed `Float32Array` buffers, bypassing JSON parsing overhead.
-- **Context Loss Recovery**: WebGL canvas lifecycle events (`webglcontextlost`, `webglcontextrestored`) are monitored so rendering resources can be reconstructed after context restoration.
-- **Topology Caching**: FEM mesh element topologies and node coordinates are cached separately from per-step vector field data, avoiding redundant GPU geometry re-uploads during time integration.
+1. **Selection and workspace state** tracks selected semantic IDs, layout, and presentation choices.
+2. **Inspector drafts** hold transient uncommitted edits until an explicit command applies them.
+3. **Server resources** are owned by revision-aware resource hooks and caches. Thin session status
+   advertises revisions; WebSocket events invalidate affected keys, and hooks refetch authoritative
+   HTTP resources.
 
----
-
-## State Management & Invalidation Pipeline
-
-Workspace state is maintained across three distinct tiers:
-
-1. **Selection & Layout Store**: Tracks selected tree node IDs, panel visibility, ribbon tab index, and visual profile settings.
-2. **Draft Property Store**: Holds transient uncommitted user edits in the Inspector before explicit application.
-3. **Session & Runtime Store**: Synchronizes with the active backend session (`/v2/sessions/current/*`), listening to real-time SSE event channels for stage completions, metric updates, and field invalidations.
-
-```
-User Input ──> Draft Store ──(Apply Draft)──> Session API ──> SSE Event ──> Viewport Invalidated ──> GPU Redraw
+```text
+User input -> Draft -> Command -> HTTP resource revision -> WebSocket invalidation -> Refetch -> Redraw
 ```
 
----
+## Implemented stack
 
-## Technical Specifications
-
-| Subsystem | Stack / Technology | Key Files |
+| Subsystem | Stack / technology | Source area |
 |---|---|---|
-| Framework | Next.js 16 (React 19) | `apps/control-room/package.json` |
-| 3D Graphics | Three.js / @react-three/fiber | `apps/control-room/src/modules/viewport-3d/` |
-| 2D Charting | ECharts / Recharts | `apps/control-room/src/modules/live-charts/` |
-| State | Zustand / `useSyncExternalStore` | `apps/control-room/src/kernel/state/` |
-| Transport | OpenAPI v2 (`openapi-fetch`), WebSocket, SSE | `apps/control-room/src/kernel/api/` |
-| Styling | CSS Custom Properties (`--fm-*`), Tailwind | `apps/control-room/src/design/styles/` |
+| Framework | Next.js 16, React 19 | `apps/control-room/package.json` |
+| 3D graphics | Three.js, React Three Fiber | `apps/control-room/src/modules/viewport-3d/` |
+| 2D charting | ECharts and chart modules | `apps/control-room/src/modules/live-charts/` |
+| State | Zustand, resource hooks, `useSyncExternalStore` | `apps/control-room/src/kernel/resources/`, `selection/`, `workspace/` |
+| Transport | OpenAPI v2 (`openapi-fetch`) and WebSocket invalidation | `apps/control-room/src/kernel/api/`, `realtime/` |
+| Styling | `--fm-*` CSS tokens, Tailwind, shared primitives | `apps/control-room/src/design/styles/` |
+
+The architecture described above is implemented in the current tree. Broader frontend lifecycle
+and cutover qualification remain separate target gates and are not implied by this page status.

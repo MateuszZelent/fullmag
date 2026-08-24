@@ -1,0 +1,586 @@
+# Pakiet recenzji: zmiany working tree Python API 2B
+
+## Zmienione pliki (19)
+
+- public_docs/site/python-api/boundary-conditions/mechanical-boundary-conditions.md
+- public_docs/site/python-api/boundary-conditions/periodic-boundary-conditions.md
+- public_docs/site/python-api/current-and-excitations/current-transport.md
+- public_docs/site/python-api/current-and-excitations/prescribed-current.md
+- public_docs/site/python-api/current-and-excitations/regional-field-drive.md
+- public_docs/site/python-api/interactions/bulk-dmi.md
+- public_docs/site/python-api/interactions/cubic-anisotropy.md
+- public_docs/site/python-api/interactions/drift-diffusion-spin-torque.md
+- public_docs/site/python-api/interactions/drift-diffusion-spin-torque.source-map.json
+- public_docs/site/python-api/interactions/inter-region-couplings.md
+- public_docs/site/python-api/interactions/inter-region-couplings.source-map.json
+- public_docs/site/python-api/interactions/interfacial-dmi.md
+- public_docs/site/python-api/interactions/oersted-field.md
+- public_docs/site/python-api/interactions/oersted-field.source-map.json
+- public_docs/site/python-api/interactions/spin-transfer-torque.md
+- public_docs/site/python-api/interactions/spin-transfer-torque.source-map.json
+- public_docs/site/python-api/interactions/thermal-noise.md
+- public_docs/site/python-api/interactions/uniaxial-anisotropy.md
+- public_docs/site/python-api/interactions/zeeman.md
+
+## Diff
+
+diff --git a/public_docs/site/python-api/boundary-conditions/mechanical-boundary-conditions.md b/public_docs/site/python-api/boundary-conditions/mechanical-boundary-conditions.md
+index 84c250af8..85415d7f5 100644
+--- a/public_docs/site/python-api/boundary-conditions/mechanical-boundary-conditions.md
++++ b/public_docs/site/python-api/boundary-conditions/mechanical-boundary-conditions.md
+@@ -40,10 +40,11 @@ Keyword-required vectors are validated; the surface name must be non-empty.
+ | `MechanicalBoundaryCondition.u` | `tuple \| None` | `None` | $\mathrm{m}$ | Required for displacement | Displacement vector | `u` |
+ | `MechanicalBoundaryCondition.t` | `tuple \| None` | `None` | $\mathrm{Pa}$ | Required for traction | Traction vector | `t` |
+ 
+-### Complete stage-first context
++### Constructor and lowering context
+ 
+-Mechanical boundary conditions are mechanical models attached to elastic bodies; the stage-first
+-study declares them through the problem model.
++The public constructor and `to_ir()` boundary are available. The stage-first study facade does not
++yet expose a complete mechanical-boundary registration path, so the object below is intentionally
++not presented as an attached simulation boundary condition.
+ 
+ ```python
+ # %% Clamped mechanical boundary condition
+@@ -65,6 +66,7 @@ film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+ study.exchange()
+ 
+ bc = fm.MechanicalBoundaryCondition(kind="clamped", surface="bottom")
++assert bc.to_ir() == {"kind": "clamped", "surface": "bottom"}
+ study.stages.add_run(stage_id="run", until=1.0e-12)
+ ```
+ 
+@@ -97,7 +99,8 @@ Ownership tests compare this inventory with live signatures.
+ (python-api-boundary-conditions-mechanical-boundary-conditions-limitations)=
+ <!-- (limitations)= -->
+ ## Limitations
+-The model object is public; wiring into the stage builder may lag the model surface.
++The model object is public, but the stage builder currently has no mechanical-boundary
++registration method. Constructing `bc` alone does not attach it to the study.
+ 
+ (python-api-boundary-conditions-mechanical-boundary-conditions-scientific-bibliography)=
+ <!-- (scientific-bibliography)= -->
+diff --git a/public_docs/site/python-api/boundary-conditions/periodic-boundary-conditions.md b/public_docs/site/python-api/boundary-conditions/periodic-boundary-conditions.md
+index b340e637c..4acf6b7f2 100644
+--- a/public_docs/site/python-api/boundary-conditions/periodic-boundary-conditions.md
++++ b/public_docs/site/python-api/boundary-conditions/periodic-boundary-conditions.md
+@@ -37,7 +37,7 @@ At least one axis must be periodic when a periodic demag policy or image count i
+ |---|---|---|---|---|---|
+ | `study.pbc(x, y, z, demag, images)` | method | axes all `False`, `demag="open"` | One axis required for periodic policy | PBC declaration | `pbc` |
+ | `PeriodicBC.pair_ids` | `Sequence[str]` | `required` | Non-empty pair ids | Mesh pair reference | `spin_wave_bc` / mesh pairs |
+-| `FdmPbc.axes` | `tuple[bool,bool,bool]` | required | Boolean per axis | Periodic axes | `pbc.axes` |
++| `FdmPbc.axes` | `tuple[bool,bool,bool]` | required | Exactly three values, each normalized with `bool(...)` | Periodic axes | `pbc.axes` |
+ 
+ ### Complete stage-first example
+ 
+@@ -72,7 +72,9 @@ enforces FDM/FEM policy legality.
+ (python-api-boundary-conditions-periodic-boundary-conditions-round-trip-and-failure-semantics)=
+ <!-- (round-trip-and-failure-semantics)= -->
+ ## Round-trip and failure semantics
+-Image counts without a periodic axis and FEM-only policies on FDM fail immediately.
++Image counts without a periodic axis fail during authoring. Solver-specific policy legality is a
++planner decision: for example, an FDM request for `periodic_airbox_k0` must fail closed rather
++than being replaced by another demagnetization policy.
+ 
+ (python-api-boundary-conditions-periodic-boundary-conditions-discrete-realization)=
+ <!-- (discrete-realization)= -->
+diff --git a/public_docs/site/python-api/current-and-excitations/current-transport.md b/public_docs/site/python-api/current-and-excitations/current-transport.md
+index d5f6c428d..1d4a915d2 100644
+--- a/public_docs/site/python-api/current-and-excitations/current-transport.md
++++ b/public_docs/site/python-api/current-and-excitations/current-transport.md
+@@ -39,8 +39,17 @@ current-density vector.
+ | `CurrentTransport.name` | `str` | `required` | $1$ | Non-empty | Module identity | module name |
+ | `CurrentTransport.model` | `str` | `"prescribed_density"` | $1$ | `prescribed_density`, `ohmic_poisson`, alias `magnetoresistive_poisson` | Transport model | model |
+ | `CurrentTransport.current_density` | `tuple[float,float,float] \| None` | `None` | $\mathrm{A\,m^{-2}}$ | Required for prescribed density | Prescribed current density | current density |
+-| `CurrentTransport.conductivity_s_per_m` | `float \| None` | `None` | $\mathrm{S\,m^{-1}}$ | — | Conductivity | conductivity |
++| `CurrentTransport.solve_region` | `str \| None` | `None` | $1$ | Non-empty when supplied; legacy form only | Legacy solve-region name | solve region |
++| `CurrentTransport.conductivity_s_per_m` | `float \| None` | `None` | $\mathrm{S\,m^{-1}}$ | Finite and positive when supplied; legacy form only | Conductivity | conductivity |
+ | `CurrentTransport.coupling` | `str` | `"one_way"` | $1$ | `one_way` or `bidirectional` | Coupling policy | coupling |
++| `CurrentTransport.domain` | `Sequence[RegionRef]` | `()` | $1$ | Typed, non-empty for Poisson models | Solved regions | domain |
++| `CurrentTransport.materials` | `Sequence[ChargeTransportMaterialAssignment]` | `()` | mixed | Typed, non-empty for Poisson models | Conductivity assignments | materials |
++| `CurrentTransport.boundaries` | `Sequence[ChargeBoundary]` | `()` | mixed | Typed, non-empty for Poisson models | Charge boundary conditions | boundaries |
++| `CurrentTransport.gauge` | `ChargePotentialGauge \| None` | `None` | $\mathrm V$ | Required for Poisson models | Potential gauge | gauge |
++| `CurrentTransport.solver` | `ChargeSolverPolicy \| None` | `None` | mixed | Required for Poisson models; reciprocal mode requires `block_gmres` | Solver policy | solver |
++| `CurrentTransport.time_envelope` | `TimeEnvelope \| None` | `None` | $1$ | Canonical typed envelope | Time dependence | time envelope |
++| `CurrentTransport.conservative_current_view` | `ConservativeCurrentView \| None` | `None` | mixed | Exclusive with structured closure; one-way Ohmic only | Closure-aware FEM current view | conservative current view |
++| `CurrentTransport.structured_current_closure` | `StructuredCurrentClosure \| None` | `None` | mixed | Exclusive with conservative view; matching FDM operator required | Closed structured-current circuit | structured current closure |
+ 
+ ### Complete stage-first example
+ 
+@@ -82,8 +91,10 @@ materials, boundaries, gauge, and solver policy.
+ (python-api-current-and-excitations-current-transport-round-trip-and-failure-semantics)=
+ <!-- (round-trip-and-failure-semantics)= -->
+ ## Round-trip and failure semantics
+-Prescribed density without a current-density vector fails immediately; unsupported
+-bidirectional/reciprocal combinations are rejected by the planner.
++Prescribed density without a current-density vector fails immediately. Poisson models require the
++complete domain/material/boundary/gauge/solver contract and cannot be mixed with the legacy
++`solve_region`/`conductivity_s_per_m` pair. Invalid reciprocal combinations fail during
++construction; executable-lane legality remains planner-resolved.
+ 
+ (python-api-current-and-excitations-current-transport-discrete-realization)=
+ <!-- (discrete-realization)= -->
+diff --git a/public_docs/site/python-api/current-and-excitations/prescribed-current.md b/public_docs/site/python-api/current-and-excitations/prescribed-current.md
+index 0ccf95b71..002729e34 100644
+--- a/public_docs/site/python-api/current-and-excitations/prescribed-current.md
++++ b/public_docs/site/python-api/current-and-excitations/prescribed-current.md
+@@ -27,14 +27,16 @@ Current density is in $\mathrm{A\,m^{-2}}$; solve-region and identity are names.
+ (python-api-current-and-excitations-prescribed-current-assumptions-and-validity)=
+ <!-- (assumptions-and-validity)= -->
+ ## Assumptions and validity
+-A finite length-3 current-density vector is required for this model.
++A length-3, float-convertible current-density vector is required for this model. The constructor
++does not reject `NaN` or infinity; canonical IR/planner validation must reject non-finite values
++before execution.
+ 
+ (python-api-current-and-excitations-prescribed-current-python-api)=
+ <!-- (python-api)= -->
+ ## Python API
+ | Python | Type | Default | SI unit | Validation | Meaning | ProblemIR |
+ |---|---|---|---|---|---|---|
+-| `CurrentTransport(model="prescribed_density").current_density` | `tuple[float,float,float]` | required | $\mathrm{A\,m^{-2}}$ | Finite length-3 | Prescribed density | current density |
++| `CurrentTransport(model="prescribed_density").current_density` | `tuple[float,float,float]` | required | $\mathrm{A\,m^{-2}}$ | Constructor: length 3 and float conversion; downstream: finite components | Prescribed density | current density |
+ | `CurrentTransport.solve_region` | `str \| None` | `None` | $1$ | Non-empty when set | Solve region | domain |
+ 
+ ### Complete stage-first example
+@@ -77,7 +79,9 @@ density vector.
+ (python-api-current-and-excitations-prescribed-current-round-trip-and-failure-semantics)=
+ <!-- (round-trip-and-failure-semantics)= -->
+ ## Round-trip and failure semantics
+-Missing or malformed density fails immediately.
++Missing density, a non-length-3 value, or a component that cannot be converted to `float` fails
++during construction. Non-finite converted components require rejection at the canonical
++IR/planner boundary.
+ 
+ (python-api-current-and-excitations-prescribed-current-discrete-realization)=
+ <!-- (discrete-realization)= -->
+diff --git a/public_docs/site/python-api/current-and-excitations/regional-field-drive.md b/public_docs/site/python-api/current-and-excitations/regional-field-drive.md
+index 779f1254c..d22988807 100644
+--- a/public_docs/site/python-api/current-and-excitations/regional-field-drive.md
++++ b/public_docs/site/python-api/current-and-excitations/regional-field-drive.md
+@@ -38,11 +38,13 @@ Non-negative amplitude, finite direction, and a typed profile/waveform are valid
+ | `RegionalFieldDrive.id` / `name` | `str` | required | $1$ | Non-empty | Identity | `id`, `name` |
+ | `RegionalFieldDrive.target` | `FieldTarget` | required | $1$ | Typed target | Field target | `target` |
+ | `RegionalFieldDrive.amplitude_B_T` | `float` | required | $\mathrm{T}$ | Non-negative | Amplitude | `amplitude_B_T` |
+-| `RegionalFieldDrive.direction` | `tuple[float,float,float]` | required | $1$ | Finite length-3 | Drive direction | `direction` |
++| `RegionalFieldDrive.direction` | `tuple[float,float,float]` | required | $1$ | Finite, non-zero length-3; normalized by constructor | Drive direction | `direction` |
+ | `RegionalFieldDrive.spatial_profile` | `FieldSpatialProfile` | required | mixed | Typed profile | Spatial profile | `spatial_profile` |
+ | `RegionalFieldDrive.waveform` | `TimeDependence` | required | mixed | Typed waveform | Time waveform | `waveform` |
+ | `RegionalFieldDrive.time_origin` | `str` | `"stage_local"` | $1$ | Supported origin | Time origin | `time_origin` |
+ | `RegionalFieldDrive.activation` | `DriveActivation` | all-time | $1$ | Typed | Stage activation | `activation` |
++| `RegionalFieldDrive.enabled` | `bool` | `True` | $1$ | Normalized with `bool(...)` | Authored enable flag | `enabled` |
++| `RegionalFieldDrive.migration` | `dict[str,str] \| None` | `None` | $1$ | Only `{"migrated_from": "prescribed_zeeman_mask"}` | Explicit migration provenance | `migration` |
+ 
+ ### Complete stage-first context
+ 
+diff --git a/public_docs/site/python-api/interactions/bulk-dmi.md b/public_docs/site/python-api/interactions/bulk-dmi.md
+index 1af43b7d9..326f4a8d2 100644
+--- a/public_docs/site/python-api/interactions/bulk-dmi.md
++++ b/public_docs/site/python-api/interactions/bulk-dmi.md
+@@ -46,8 +46,8 @@ study.stages.add_run(stage_id="sample", until=1.0e-12)
+ 
+ ## Canonical material route
+ 
+-The internal material field is `Dbulk`; the geometry facade should expose the documented canonical
+-spelling consistently. Do not mix case variants between examples, exporter, and UI.
++The canonical material field and geometry-facade spelling is `Dbulk`. The compatibility
++`BulkDMI(D)` constructor lowers the same signed coefficient as an explicit energy term.
+ 
+ ## Parameter reference
+ 
+@@ -57,10 +57,8 @@ spelling consistently. Do not mix case variants between examples, exporter, and
+ | material bulk coefficient | float or spatial field | $\mathrm{J\,m^{-2}}$ | finite; mesh cardinality for fields |
+ | periodicity/topology | planner policy | — | compatible with selected FDM bulk stencil |
+ 
+-## Documentation/code correction
+-
+-`Material.Dbulk` emits a suspicious-SI warning labelled `J/m^2`, matching the public coefficient
+-contract for $w=D\,\mathbf m\cdot\nabla\times\mathbf m$.
++`Material.Dbulk` uses the same $\mathrm{J\,m^{-2}}$ coefficient contract as
++$w=D\,\mathbf m\cdot\nabla\times\mathbf m$.
+ 
+ (api-bulk-dmi-validation)=
+ ## Failure semantics
+@@ -92,7 +90,9 @@ The authored model is valid only within the continuum, discretization, boundary,
+ (api-bulk-dmi-problem-ir)=
+ ## ProblemIR
+ 
+-Requested interaction data are serialized without replacing authored intent by backend-specific execution metadata.
++`BulkDMI(D).to_ir()` emits `{"kind": "bulk_dmi", "D": D}`. Stage-first material authoring
++stores the coefficient on the material and creates the corresponding interaction during lowering;
++resolved stencil and device information remain execution provenance.
+ 
+ (api-bulk-dmi-discrete-realization)=
+ ## Discrete realization
+diff --git a/public_docs/site/python-api/interactions/cubic-anisotropy.md b/public_docs/site/python-api/interactions/cubic-anisotropy.md
+index 34e3e8d2d..2edb3e1b2 100644
+--- a/public_docs/site/python-api/interactions/cubic-anisotropy.md
++++ b/public_docs/site/python-api/interactions/cubic-anisotropy.md
+@@ -57,15 +57,18 @@ study.stages.add_relax(stage_id="relax", algorithm="projected_gradient_bb", max_
+ ```
+ 
+ (api-cubic-anisotropy-validation)=
+-## Parameters and validation
+-
+-| Parameter | SI unit | Required check |
+-|---|---:|---|
+-| `kc1`, `kc2`, `kc3` | $\mathrm{J\,m^{-3}}$ | finite |
+-| `axis1`, `axis2` | $1$ | finite, non-zero, non-collinear; build an orthonormal frame by a declared rule |
+-
+-At the audited revision, compatibility constructors mostly convert values; material cubic
+-constants also lack the same explicit finite validation used by `Ku1/Ku2`. Harden both routes.
++## Parameters and constructor validation
++
++| Parameter | Default | SI unit | Constructor check |
++|---|---|---:|---|
++| `kc1` | required | $\mathrm{J\,m^{-3}}$ | `float()` conversion |
++| `kc2`, `kc3` | `0.0` | $\mathrm{J\,m^{-3}}$ | `float()` conversion |
++| `axis1` | `(1,0,0)` | $1$ | exactly three float-convertible values |
++| `axis2` | `(0,1,0)` | $1$ | exactly three float-convertible values |
++
++The constructor does not currently reject non-finite constants, zero axes, or collinear axes.
++Downstream semantic validation must reject those inputs before execution; constructor success is
++not evidence that an anisotropy frame is executable.
+ 
+ (api-cubic-anisotropy-problem-ir)=
+ ## Lowering
+diff --git a/public_docs/site/python-api/interactions/drift-diffusion-spin-torque.md b/public_docs/site/python-api/interactions/drift-diffusion-spin-torque.md
+index 20dc79224..9797692d9 100644
+--- a/public_docs/site/python-api/interactions/drift-diffusion-spin-torque.md
++++ b/public_docs/site/python-api/interactions/drift-diffusion-spin-torque.md
+@@ -58,9 +58,9 @@ study.spin_torque(fm.DriftDiffusionSpinTorque("transport_torque", spin.id, regio
+ study.stages.add_run(stage_id="authoring_boundary", until=1.0e-15)
+ ```
+ 
+-The exported canonical classes live in `fullmag.model.spin_transport`. A duplicate placeholder
+-class named `DriftDiffusionSpinTorque` exists in `spin_torque.py`; remove or rename it. Public
+-documentation and type checking must bind only the canonical class.
++The public `fullmag.DriftDiffusionSpinTorque` export is the canonical class from
++`fullmag.model.spin_transport`. A similarly named compatibility implementation in
++`fullmag.model.spin_torque` is not part of this public contract.
+ 
+ ## `SpinDriftDiffusion` parameters
+ 
+diff --git a/public_docs/site/python-api/interactions/drift-diffusion-spin-torque.source-map.json b/public_docs/site/python-api/interactions/drift-diffusion-spin-torque.source-map.json
+index 873ff46a3..d86a29606 100644
+--- a/public_docs/site/python-api/interactions/drift-diffusion-spin-torque.source-map.json
++++ b/public_docs/site/python-api/interactions/drift-diffusion-spin-torque.source-map.json
+@@ -2,7 +2,7 @@
+   "document": {
+     "path": "public_docs/site/python-api/interactions/drift-diffusion-spin-torque.md",
+     "title": "Drift-diffusion spin torque Python API",
+-    "interaction": "drift diffusion spin torque"
++    "interaction": "drift-diffusion-spin-torque"
+   },
+   "backend_matrix": [
+     {
+@@ -36,6 +36,12 @@
+       "path": "packages/fullmag-py/src/fullmag/model/spin_transport.py",
+       "symbol": "class SpinDriftDiffusion",
+       "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
++    },
++    {
++      "id": "torque-owner",
++      "path": "packages/fullmag-py/src/fullmag/model/spin_transport.py",
++      "symbol": "class DriftDiffusionSpinTorque",
++      "responsibility": "Bind an accepted spin solve to the magnetic region receiving transport torque."
+     }
+   ],
+   "symbols": [],
+diff --git a/public_docs/site/python-api/interactions/inter-region-couplings.md b/public_docs/site/python-api/interactions/inter-region-couplings.md
+index 525d11e95..edb2c5307 100644
+--- a/public_docs/site/python-api/interactions/inter-region-couplings.md
++++ b/public_docs/site/python-api/interactions/inter-region-couplings.md
+@@ -64,11 +64,12 @@ Only FDM GPU region-to-region exchange is materialized. FDM CPU and both FEM lan
+ runtime couplings. RKKY/interlayer surface terms are authored-only on every lane.
+ 
+ (api-inter-region-couplings-validation)=
+-## Validation/source-map fixes
++## Validation boundary
+ 
+-Validate `coupling_id` during construction rather than first use in `to_ir()`. Regenerate the
+-source map: the current map leaves constructors and parameters empty despite this public API.
+-Preserve endpoint kind in export; never coerce a surface term into a region link.
++Generated coupling identifiers are non-empty by construction. A supplied `coupling_id` is checked
++for non-empty content when the coupling is serialized, and duplicate identifiers are rejected when
++the complete `Problem` is validated. Endpoint kind is preserved in export; surface terms are never
++coerced into region links.
+ 
+ (api-inter-region-couplings-round-trip-and-failure-semantics)=
+ ## Round-trip and failure semantics
+diff --git a/public_docs/site/python-api/interactions/inter-region-couplings.source-map.json b/public_docs/site/python-api/interactions/inter-region-couplings.source-map.json
+index 889baf7bb..18206e73a 100644
+--- a/public_docs/site/python-api/interactions/inter-region-couplings.source-map.json
++++ b/public_docs/site/python-api/interactions/inter-region-couplings.source-map.json
+@@ -2,7 +2,7 @@
+   "document": {
+     "path": "public_docs/site/python-api/interactions/inter-region-couplings.md",
+     "title": "Inter-region couplings Python API",
+-    "interaction": "inter region couplings"
++    "interaction": "inter-region-couplings"
+   },
+   "backend_matrix": [
+     {
+diff --git a/public_docs/site/python-api/interactions/interfacial-dmi.md b/public_docs/site/python-api/interactions/interfacial-dmi.md
+index 315b480bd..c7cd11a9e 100644
+--- a/public_docs/site/python-api/interactions/interfacial-dmi.md
++++ b/public_docs/site/python-api/interactions/interfacial-dmi.md
+@@ -25,7 +25,7 @@ This page is the public physical and authoring contract for the interaction. It
+ 
+ | Parameter | Default | SI unit | Current check | Required check |
+ |---|---|---:|---|---|
+-| `D` | required | $\mathrm{J\,m^{-2}}$ | float conversion | finite |
++| `D` | required | $\mathrm{J\,m^{-2}}$ | finite float conversion | finite |
+ | `interface_normal` | `None` | $1$ | length/conversion | finite, non-zero; FDM requires canonical +z |
+ 
+ Material-owned `dind` and an explicit interaction are alternative sources. Reject duplicates.
+diff --git a/public_docs/site/python-api/interactions/oersted-field.md b/public_docs/site/python-api/interactions/oersted-field.md
+index 42ca24c35..8340ab34d 100644
+--- a/public_docs/site/python-api/interactions/oersted-field.md
++++ b/public_docs/site/python-api/interactions/oersted-field.md
+@@ -21,14 +21,17 @@ This page is the public physical and authoring contract for the interaction. It
+ 
+ ### Analytic cylinder
+ 
+-| Parameter | SI unit | Required validation |
+-|---|---:|---|
+-| `current` | $\mathrm A$ | finite and signed |
+-| `radius` | $\mathrm m$ | finite and positive |
+-| `center` | $\mathrm m$ | three finite values |
+-| `axis` | $1$ | three finite values, non-zero, normalized once |
+-| `time_dependence` | $1$ multiplier | supported tagged schedule |
+-| `id` | $1$ | non-empty and unique |
++| Parameter | Default | SI unit | Constructor validation |
++|---|---|---:|---|
++| `current` | required | $\mathrm A$ | float conversion; signed |
++| `radius` | required | $\mathrm m$ | finite and positive |
++| `center` | `(0,0,0)` | $\mathrm m$ | exactly three float-convertible values |
++| `axis` | `(0,0,1)` | $1$ | exactly three float-convertible values |
++| `time_dependence` | `None` | $1$ multiplier | serialized when supplied |
++| `id` | `"oersted:cylinder"` | $1$ | non-empty |
++
++The constructor does not currently reject a non-finite `current`, non-finite vector components,
++or a zero axis. The planner/runtime boundary must reject these states before execution.
+ 
+ ### Solved-current binding
+ 
+@@ -56,7 +59,7 @@ page.
+ 
+ ## Capability warning
+ 
+-The analytic model and solved-current model have different support matrices. Front matter must be
++The analytic model and solved-current model have different support matrices. This page remains
+ `partial`; semantic-only FEM solved-current slices do not make all four lanes implemented.
+ 
+ (api-oersted-field-python-api)=
+diff --git a/public_docs/site/python-api/interactions/oersted-field.source-map.json b/public_docs/site/python-api/interactions/oersted-field.source-map.json
+index 2c463948f..ff9e155ca 100644
+--- a/public_docs/site/python-api/interactions/oersted-field.source-map.json
++++ b/public_docs/site/python-api/interactions/oersted-field.source-map.json
+@@ -2,7 +2,7 @@
+   "document": {
+     "path": "public_docs/site/python-api/interactions/oersted-field.md",
+     "title": "Oersted field Python API",
+-    "interaction": "oersted field"
++    "interaction": "oersted-field"
+   },
+   "backend_matrix": [
+     {
+@@ -36,6 +36,12 @@
+       "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+       "symbol": "class OerstedField",
+       "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
++    },
++    {
++      "id": "analytic-owner",
++      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
++      "symbol": "class OerstedCylinder",
++      "responsibility": "Own the analytic cylindrical-current authoring and lowering boundary."
+     }
+   ],
+   "symbols": [],
+diff --git a/public_docs/site/python-api/interactions/spin-transfer-torque.md b/public_docs/site/python-api/interactions/spin-transfer-torque.md
+index 79b084a7c..a7fb92fea 100644
+--- a/public_docs/site/python-api/interactions/spin-transfer-torque.md
++++ b/public_docs/site/python-api/interactions/spin-transfer-torque.md
+@@ -48,8 +48,9 @@ study.spin_torque(stt)
+ study.stages.add_run(stage_id="drive", until=1.0e-12)
+ ```
+ 
+-The previous page contained empty constructor sections and an invalid example. Use the actual
+-signatures below.
++The canonical public constructors are `SlonczewskiSTT` for CPP/MTJ torque and `ZhangLiSTT` for
++CIP torque. Both can bind either prescribed current density or a named current source, subject to
++their constructor rules.
+ 
+ ### Slonczewski CPP/MTJ
+ 
+@@ -61,7 +62,12 @@ signatures below.
+ | `lambda_asymmetry` | `1.0` | $1$ | angular asymmetry |
+ | `epsilon_prime` | `0.0` | $1$ | field-like coefficient |
+ | `free_layer_thickness_m` | `None` | $\mathrm m$ | local prefactor realization |
+-| `id,target,stack_normal,interface_id` | `None` | mixed | canonical tagged-module identity/realization |
++| `fixed_layer_position` | `None` (resolves to `"top"` for legacy input) | $1$ | legacy stack ordering; incompatible with canonical `stack_normal` |
++| `current_source` | `None` | $1$ | named current module; exclusive with `current_density` |
++| `id` | `None` | $1$ | canonical module identity; supplying any canonical field requires the complete canonical set |
++| `target` | `None` | $1$ | canonical magnetic region target |
++| `stack_normal` | `None` | $1$ | canonical normalized stack direction |
++| `interface_id` | `None` | $1$ | optional interface-flux realization; exclusive with thickness |
+ 
+ ### Zhang–Li CIP
+ 
+@@ -71,7 +77,11 @@ signatures below.
+ | `degree` | `0.4` | $1$ | polarization |
+ | `beta` | `0.0` | $1$ | non-adiabaticity |
+ | `xi` | `None` | $1$ | documented alias/variant parameter |
+-| `id,target,lande_g,operator_version` | `None` | mixed | canonical module contract |
++| `current_source` | `None` | $1$ | named current module; exclusive with `current_density` |
++| `id` | `None` | $1$ | canonical module identity |
++| `target` | `None` | $1$ | canonical magnetic region target |
++| `lande_g` | `None` | $1$ | positive Landé factor; required for canonical input |
++| `operator_version` | `None` | $1$ | supported canonical spatial/formula realization |
+ 
+ ## Example classification
+ 
+@@ -81,10 +91,17 @@ register and accept the torque. Do not add a run stage to an otherwise disconnec
+ (api-spin-transfer-torque-validation)=
+ ## Validation
+ 
+-Reject scalar `current_density`, non-finite data, zero polarization direction, conflicting
+-prescribed/solved current, incomplete canonical target/orientation, invalid thickness/interface
+-realization, and unsupported formula/backend. Preserve `formula_version` and legacy/canonical
+-identity in round trips.
++Both constructors reject scalar or otherwise non-length-3 `current_density` values and conflicting
++prescribed/solved current bindings. Their shared legacy current-vector conversion does not reject
++`NaN` or infinity, so downstream canonical validation must reject non-finite current components.
++
++Canonical `SlonczewskiSTT` input uses normalized-axis validation and rejects non-finite or zero
++`spin_polarization` and `stack_normal`. Legacy `SlonczewskiSTT` uses `as_vector3` for
++`spin_polarization`, so zero and non-finite vectors can pass the constructor and must be rejected
++before execution. `ZhangLiSTT.beta`/`xi` rejects negative values and conflicting aliases, but its
++constructor does not reject `NaN`; downstream validation must do so. Incomplete canonical
++target/orientation, invalid thickness/interface realization, and unsupported formula/backend fail
++closed. Preserve `formula_version` and legacy/canonical identity in round trips.
+ 
+ (api-spin-transfer-torque-round-trip-and-failure-semantics)=
+ ## Round-trip and failure semantics
+diff --git a/public_docs/site/python-api/interactions/spin-transfer-torque.source-map.json b/public_docs/site/python-api/interactions/spin-transfer-torque.source-map.json
+index cba472238..679ec3e67 100644
+--- a/public_docs/site/python-api/interactions/spin-transfer-torque.source-map.json
++++ b/public_docs/site/python-api/interactions/spin-transfer-torque.source-map.json
+@@ -2,7 +2,7 @@
+   "document": {
+     "path": "public_docs/site/python-api/interactions/spin-transfer-torque.md",
+     "title": "Spin-Transfer Torque Python API",
+-    "interaction": "spin transfer torque"
++    "interaction": "spin-transfer-torque"
+   },
+   "backend_matrix": [
+     {
+@@ -36,6 +36,12 @@
+       "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
+       "symbol": "class SlonczewskiSTT",
+       "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
++    },
++    {
++      "id": "zhang-li-owner",
++      "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
++      "symbol": "class ZhangLiSTT",
++      "responsibility": "Own the public CIP torque constructor and canonical module lowering."
+     }
+   ],
+   "symbols": [],
+diff --git a/public_docs/site/python-api/interactions/thermal-noise.md b/public_docs/site/python-api/interactions/thermal-noise.md
+index dcdcfc6da..5b550b39f 100644
+--- a/public_docs/site/python-api/interactions/thermal-noise.md
++++ b/public_docs/site/python-api/interactions/thermal-noise.md
+@@ -21,14 +21,18 @@ This page is the public physical and authoring contract for the interaction. It
+ 
+ ## Parameters
+ 
+-| Parameter | Type | Default | SI unit | Current behavior | Required behavior |
+-|---|---|---|---:|---|---|
+-| `temperature` | float | required | $\mathrm K$ | finite positive check | retain |
+-| `seed` | `int | None` | `None` | only positivity is checked when supplied | require an actual positive integer; reject `bool` and non-integral float |
++| Parameter | Type | Default | SI unit | Constructor behavior |
++|---|---|---|---:|---|
++| `temperature` | float | required | $\mathrm K$ | finite and positive |
++| `seed` | `int | None` | `None` | when supplied, compared with zero and required to be positive |
+ 
+ `seed=None` requests system entropy. `seed=0` is rejected and must not be documented as an entropy
+ alias.
+ 
++The constructor does not currently enforce that `seed` is an actual integer, so boolean and
++positive non-integral values can pass this boundary. Reproducible public input should use a
++positive integer; canonical validation must reject other types before execution.
++
+ (api-thermal-noise-python-api)=
+ ## Python API and stage-first example
+ 
+diff --git a/public_docs/site/python-api/interactions/uniaxial-anisotropy.md b/public_docs/site/python-api/interactions/uniaxial-anisotropy.md
+index 6a87219fa..603622ff9 100644
+--- a/public_docs/site/python-api/interactions/uniaxial-anisotropy.md
++++ b/public_docs/site/python-api/interactions/uniaxial-anisotropy.md
+@@ -27,18 +27,21 @@ w=-K_{u1}(\mathbf m\cdot\hat{\mathbf u})^2
+   -K_{u2}(\mathbf m\cdot\hat{\mathbf u})^4.
+ $$
+ 
+-The current `energy.py` docstring describing $K_{u1}\sin^2\theta+K_{u2}\sin^4\theta$ is not
+-parameter-identical for `ku2` and must be corrected.
++This polynomial is the serialized constructor convention. Material-owned `Ku1`, `Ku2`, and
++`anisU` are the canonical stage-first authoring route.
+ 
+ ## Canonical material authoring
+ 
+-## Parameters
++## Parameters and constructor validation
+ 
+-| Parameter | SI unit | Meaning | Current constructor check | Required semantic check |
+-|---|---:|---|---|---|
+-| `ku1` | $\mathrm{J\,m^{-3}}$ | coefficient of $-q^2$ | `float()` | finite |
+-| `ku2` | $\mathrm{J\,m^{-3}}$ | coefficient of $-q^4$ | `float()` | finite |
+-| `axis` | $1$ | easy-axis direction | length/conversion | finite, non-zero when active, normalized once |
++| Parameter | Default | SI unit | Meaning | Constructor check |
++|---|---|---:|---|---|
++| `ku1` | required | $\mathrm{J\,m^{-3}}$ | coefficient of $-q^2$ | `float()` conversion |
++| `ku2` | `0.0` | $\mathrm{J\,m^{-3}}$ | coefficient of $-q^4$ | `float()` conversion |
++| `axis` | `(0,0,1)` | $1$ | easy-axis direction | exactly three float-convertible values |
++
++The constructor does not currently reject non-finite constants or a non-finite/zero axis.
++Semantic validation must reject those states before execution.
+ 
+ (api-uniaxial-anisotropy-python-api)=
+ ## Python API and stage-first example
+diff --git a/public_docs/site/python-api/interactions/zeeman.md b/public_docs/site/python-api/interactions/zeeman.md
+index 61e5d039b..4e0bcace3 100644
+--- a/public_docs/site/python-api/interactions/zeeman.md
++++ b/public_docs/site/python-api/interactions/zeeman.md
+@@ -45,18 +45,17 @@ study.stages.add_run(stage_id="precession", until=1.0e-12)
+ 
+ ## Parameter reference
+ 
+-| Parameter | Type | Default | SI unit | Current Python check | Required semantic check |
+-|---|---|---|---:|---|---|
+-| `B` | sequence of 3 numbers | required | $\mathrm T$ | length and float conversion | all components finite |
+-| zero vector | legal | — | $\mathrm T$ | accepted | zero field/energy |
+-| spatial or time-varying source | not represented by this constructor | — | — | use typed field-source APIs | source-specific validation |
++| Parameter | Type | Default | SI unit | Constructor behavior |
++|---|---|---|---:|---|
++| `B` | sequence of 3 numbers | required | $\mathrm T$ | exactly three float-convertible components |
++| zero vector | legal | — | $\mathrm T$ | represents zero field and zero Zeeman energy |
++| spatial or time-varying source | not represented by this constructor | — | — | use typed field-source APIs |
+ 
+ (api-zeeman-validation)=
+-## Validation correction
++## Validation boundary
+ 
+-At the audited revision, `as_vector3` does not reject `NaN` or infinity. Documentation must not
+-claim constructor-level finite validation until the code uses a finite-vector validator. IR and
+-planner validation must reject such values meanwhile.
++`Zeeman` uses the shared `as_vector3` conversion, which does not currently reject `NaN` or
++infinity. IR/planner validation must reject non-finite values before execution.
+ 
+ (api-zeeman-problem-ir)=
+ ## Lowering
+

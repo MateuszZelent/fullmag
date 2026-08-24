@@ -37,7 +37,7 @@ At least one axis must be periodic when a periodic demag policy or image count i
 |---|---|---|---|---|---|
 | `study.pbc(x, y, z, demag, images)` | method | axes all `False`, `demag="open"` | One axis required for periodic policy | PBC declaration | `pbc` |
 | `PeriodicBC.pair_ids` | `Sequence[str]` | `required` | Non-empty pair ids | Mesh pair reference | `spin_wave_bc` / mesh pairs |
-| `FdmPbc.axes` | `tuple[bool,bool,bool]` | required | Boolean per axis | Periodic axes | `pbc.axes` |
+| `FdmPbc.axes` | `tuple[bool,bool,bool]` | required | Exactly three values, each normalized with `bool(...)` | Periodic axes | `pbc.axes` |
 
 ### Complete stage-first example
 
@@ -72,7 +72,9 @@ enforces FDM/FEM policy legality.
 (python-api-boundary-conditions-periodic-boundary-conditions-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
-Image counts without a periodic axis and FEM-only policies on FDM fail immediately.
+Image counts without a periodic axis fail during authoring. Solver-specific policy legality is a
+planner decision: for example, an FDM request for `periodic_airbox_k0` must fail closed rather
+than being replaced by another demagnetization policy.
 
 (python-api-boundary-conditions-periodic-boundary-conditions-discrete-realization)=
 <!-- (discrete-realization)= -->

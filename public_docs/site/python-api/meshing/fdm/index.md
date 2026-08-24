@@ -43,10 +43,10 @@ Boundary-correction support remains interaction/device capability-gated.
 | `FDM.cell` | `Sequence[float] \| None` | `None` | m | Three finite positive values; cannot be combined with default_cell. | Legacy alias for the default native cell size. | FDM CPU/GPU | `backend_policy.discretization_hints.fdm.cell` |
 | `FDM.default_cell` | `Sequence[float] \| None` | `None` | m | Three finite positive values. | Default native cell size inherited by magnets without an override. | FDM CPU/GPU | `backend_policy.discretization_hints.fdm.default_cell` |
 | `FDM.per_magnet` | `dict[str, FDMGrid] \| None` | `None` | 1 | Nonempty names and FDMGrid values. | Object-owned native grid overrides. | FDM CPU/GPU; multilayer capability-gated | `backend_policy.discretization_hints.fdm.per_magnet` |
-| `FDM.demag` | `FDMDemag \| None` | `None` | 1 | Typed, internally consistent demag policy. | Single-grid or multilayer common-grid request. | FDM demagnetization lanes | `backend_policy.discretization_hints.fdm.demag` |
+| `FDM.demag` | `FDMDemag \| None` | `None` | 1 | No explicit `FDM` constructor type check; lowering requires `FDMDemag.to_ir()`. | Single-grid or multilayer common-grid request. | FDM demagnetization lanes | `backend_policy.discretization_hints.fdm.demag` |
 | `FDM.boundary_correction` | `str \| None` | `None` | 1 | `none`, `volume`, or `full`. | Requested embedded-boundary correction. | Interaction/device capability-gated | `backend_policy.discretization_hints.fdm.boundary_correction` |
 | `FDM.boundary_phi_floor` | `float \| None` | `None` | 1 | Strictly between zero and one. | Minimum stable partial-cell volume fraction. | Boundary-correction lanes | `backend_policy.discretization_hints.fdm.boundary_phi_floor` |
-| `FDM.boundary_delta_min` | `float \| None` | `None` | m | Finite and nonnegative. | Minimum geometric distance used by full correction. | Boundary-correction lanes | `backend_policy.discretization_hints.fdm.boundary_delta_min` |
+| `FDM.boundary_delta_min` | `float \| None` | `None` | m | Values below zero are rejected; zero and `NaN` currently pass the Python constructor. | Minimum geometric distance used by full correction. | Boundary-correction lanes | `backend_policy.discretization_hints.fdm.boundary_delta_min` |
 
 ```python
 # %% Complete stage-first FDM mesh scenario
@@ -81,7 +81,8 @@ spacing, masks/fractions, FFT padding, common-grid transfer, kernel digest, devi
 
 Requested intent is preserved independently from resolved execution. Validation errors reject
 nonpositive cells, alias conflicts, invalid strategy/mode combinations, and invalid boundary
-parameters. Unsupported combinations fail capability checks without silent fallback.
+parameters. `boundary_delta_min=NaN` is a known constructor-validation gap and must not be treated
+as a valid realized value. Unsupported combinations fail capability checks without silent fallback.
 
 (python-api-meshing-fdm-discrete-realization)=
 ## Discrete realization

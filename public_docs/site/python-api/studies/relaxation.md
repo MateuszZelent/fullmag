@@ -27,8 +27,8 @@ owned by {doc}`../../numerical-methods/relaxation/index`.
 (python-api-studies-relaxation-symbols-and-si-units)=
 <!-- (symbols-and-si-units)= -->
 ## Symbols and SI units
-Every owned input has its SI unit below; $1$ denotes dimensionless data. Torque tolerance is
-accepted and reported in tesla, with the derived A/m value recorded in the stop contract.
+Every owned input has its SI unit below; $1$ denotes dimensionless data. The stage builder accepts
+unit-suffixed `tolT` or `tolA`; the canonical `RelaxStop` stores torque tolerance in A/m.
 
 (python-api-studies-relaxation-assumptions-and-validity)=
 <!-- (assumptions-and-validity)= -->
@@ -44,10 +44,13 @@ mesh cardinality, capability, stop-contract consistency, and backend legality.
 | `Relaxation.outputs` | `Sequence[TimeOutputSpec]` | `required` | $1$ | Field/scalar outputs; an empty sequence is valid | Output requests recorded during relaxation | FEM/FDM CPU/GPU; planner checks materialization | `sampling.outputs` |
 | `Relaxation.algorithm` | `str` | `"llg_overdamped"` | $1$ | One of `llg_overdamped`, `projected_gradient_bb`, `nonlinear_cg`, `tangent_plane_implicit` | Relaxation algorithm identifier | See algorithm lanes below; `tangent_plane_implicit` is FEM-only and not yet executable | `algorithm` |
 | `Relaxation.stop` | `RelaxStop` | `RelaxStop()` | mixed | Positive tolerances and step counts; one time bound at most | Canonical stop contract | FEM/FDM CPU/GPU | `stop` |
-| `Relaxation.torque_tolerance` | `float \| None` | `1e-5` (legacy alias) | $\mathrm{T}$ | Positive; conflicts with `stop.torque_tolerance_apm` are rejected | Convergence threshold on torque | FEM/FDM CPU/GPU | `stop.torque_tolerance_apm` |
+| `Relaxation.torque_tolerance` | `float \| None` | unset compatibility alias; `RelaxStop()` supplies `0.7957747154594766` A/m ($10^{-6}$ T) | selected by `torque_tolerance_unit` | Positive; conflicts with `stop.torque_tolerance_apm` are rejected | Legacy convergence-threshold input | FEM/FDM CPU/GPU | `stop.torque_tolerance_apm` |
+| `Relaxation.torque_tolerance_unit` | `str` | `"T"` | $1$ | `T` or `A/m` | Unit used to interpret the legacy `torque_tolerance` input | FEM/FDM CPU/GPU | normalization only; not serialized |
 | `Relaxation.energy_tolerance` | `float \| None` | `None` | $\mathrm{J}$ | Positive when set | Energy-delta stop bound | FEM/FDM CPU/GPU | `stop.energy_tolerance_j` |
 | `Relaxation.max_steps` | `int \| None` | `50000` (legacy alias) | $1$ | Positive integer | Maximum relaxation iterations | FEM/FDM CPU/GPU | `stop.max_steps` |
+| `Relaxation.max_relaxation_time_s` / `max_pseudotime_s` / `max_physical_time_s` | `float \| None` aliases | `None` | $\mathrm{s}$ | At most one distinct value; positive; overdamped LLG only | Relaxation time bound | LLG relaxation lanes | `stop.max_relaxation_time_s` |
 | `Relaxation.dynamics` | `LLG \| None` | `None` | mixed | Required by `llg_overdamped` only; direct minimizers reject it | LLG parameters for the overdamped lane | FDM/FEM CPU/GPU | `dynamics` |
+| `Relaxation.constraints` | `Sequence[FrozenSpins]` | `()` | $1$ | Typed constraint definitions | Stage-applicable frozen spins | capability-gated | canonical magnetization constraints |
 | `Relaxation.table_autosave` | `TableAutosave \| None` | `None` | mixed | See {doc}`../outputs/autosave` | Tabular autosave policy | FEM/FDM CPU/GPU | `sampling.table_autosave` |
 
 ### Algorithm lanes
@@ -102,8 +105,9 @@ study.stages.add_relax(
 )
 ```
 
-The torque tolerance keywords are unit-suffixed (`tolT`, `tolA`) to avoid unit ambiguity; the
-resolved stop contract records both the authored scale and the canonical A/m value.
+The torque tolerance keywords are unit-suffixed (`tolT`, `tolA`) to avoid unit ambiguity. Lowering
+converts either form to canonical `stop.torque_tolerance_apm`; the raw authored unit/value pair is
+not retained in `Relaxation.to_ir()`.
 
 (python-api-studies-relaxation-problem-ir)=
 <!-- (problem-ir)= -->
@@ -115,8 +119,9 @@ destination.
 (python-api-studies-relaxation-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
-Requested intent (algorithm choice, authored tolerances, time bound) is preserved in Python and
-IR. Resolved execution (backend, device, precision, solver) is selected by the planner. Validation
+Requested algorithm choice and the normalized canonical stop contract are preserved in IR;
+unit-suffixed tolerance input is normalized to A/m. Resolved execution (backend, device,
+precision, solver) is selected by the planner. Validation
 errors reject unsupported algorithms, non-positive tolerances/step counts, conflicting legacy and
 `RelaxStop` values, and `dynamics` supplied to a direct minimizer. Unsupported combinations fail
 capability checks without silent fallback.

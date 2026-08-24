@@ -353,3 +353,20 @@ source-layout and FEM physics-validation failures.
 - Task 1 FDM midplane RED: complete (commit `b1464b481`, expected RED `z=0.0` vs `-0.5`, independent review approved).
 - Task 2 cell-centered FDM default slice: complete (commits `a750062ca`, `d47029f97`; overflow RED then source tests 15/15 and endpoint 1/1 pass; independent re-review approved).
 - Task 3 source parity: complete (commit `48ed0c3f6`; field meta/vector/planar revision, generation, stats and payload parity; focused 1/1 pass; independent re-review approved).
+
+## Plan: domknięcie publicznej dokumentacji Sphinx (2026-08-23)
+
+- Worktree/branch: `C:/Users/admin/Documents/Fullmag`, `codex/fix-pr-ci-gates-20260823`.
+- Source plan: `docs/superpowers/plans/2026-08-23-public-sphinx-documentation-completion.md`.
+- Commit policy: bez automatycznych commitów; wspólny brudny worktree jest chroniony, a recenzje używają pakietów diff ograniczonych do plików zadania.
+- Manifest: 227/227 unikalnych plików Markdown, 10 rozłącznych partii.
+
+| Task | Status | Implementer | Review |
+|---:|---|---|---|
+| 1 | complete | root | approved after CRLF regression and refreshed package |
+| 2 | complete | response_solver_fix + fdm_grids_fix | approved after remediation loops |
+| 3 | pending | — | — |
+| 4 | pending | — | — |
+| 5 | pending | — | — |
+| 6 | pending | — | — |
+| 7 | pending | — | — |

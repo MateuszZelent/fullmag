@@ -29,7 +29,9 @@ observables.
 (python-api-outputs-autosave-assumptions-and-validity)=
 <!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
-Exactly one of the time or step cadence must be set; formats and layouts are validated immediately.
+Exactly one of the time or step cadence must be set for each table or field policy. A stage policy
+must contain a table policy or at least one field policy; formats and layouts are validated
+immediately.
 
 (python-api-outputs-autosave-python-api)=
 <!-- (python-api)= -->
@@ -39,12 +41,15 @@ Exactly one of the time or step cadence must be set; formats and layouts are val
 | `TableAutosave.t_sampl` / `every_steps` | `SamplingPeriod \| int` | exactly one required | Time or positive step cadence | Scalar table cadence | `table_autosave` |
 | `TableAutosave.quantities` | `Sequence[str] \| None` | default set | Supported quantity ids | Table columns | `table_autosave.quantities` |
 | `TableAutosave.extra_quantities` | `Sequence[str]` | `()` | Supported ids | Appended columns | merged quantities |
+| `TableAutosave.expressions` | `Sequence[str]` | `()` | Normalized non-empty expressions | Derived table columns | `table_autosave.expressions` |
 | `TableAutosave.table_id` | `str` | `"default"` | Non-empty | Table identity | `table_autosave.table_id` |
 | `FieldAutosave.quantity` | `str` | `required` | Known field id | Field cadence | `field_autosave.quantity` |
 | `FieldAutosave.every` / `every_steps` | `SamplingPeriod \| int` | exactly one required | Time or positive step cadence | Field cadence | field cadence |
 | `StageAutosave.target` | `str` | `"main"` | `[A-Za-z0-9][A-Za-z0-9._-]*` | Save target | `stage_autosave.target` |
 | `StageAutosave.format` | `str` | `"zarr"` | `zarr`, `hdf5`, or `txt` | Persistence format | `stage_autosave.format` |
 | `StageAutosave.layout` | `str` | `"continuous"` | `continuous` or `separate` | Layout policy | `stage_autosave.layout` |
+| `StageAutosave.table` | `TableAutosave \| None` | `None` | Table policy or `None` | Optional scalar table | `stage_autosave.table` |
+| `StageAutosave.fields` | `Sequence[FieldAutosave]` | `()` | Typed, unique quantities | Field policies | `stage_autosave.fields` |
 
 ### Complete stage-first example
 
@@ -94,7 +99,8 @@ field outputs fail immediately.
 (python-api-outputs-autosave-discrete-realization)=
 <!-- (discrete-realization)= -->
 ## Discrete realization
-Cadence is consumed by the runtime sampler; persistence formats map to JSON/Zarr/HDF5 writers.
+Cadence is consumed by the runtime sampler. The authoring format vocabulary is `zarr`, `hdf5`,
+and `txt`; actual writers and artifact production remain lane-dependent.
 
 (python-api-outputs-autosave-implementation-mapping)=
 <!-- (implementation-mapping)= -->

@@ -37,7 +37,7 @@ Response observable identifiers and dispersion names are validated immediately.
 | Python | Type | Default | Validation | Meaning | ProblemIR |
 |---|---|---|---|---|---|
 | `SaveDispersion.name` | `str` | `"dispersion"` | Non-empty | Curve name | `dispersion_curve.name` |
-| `SaveDispersion.include_branch_table` | `bool` | `True` | Boolean | Include branch table | `dispersion_curve.include_branch_table` |
+| `SaveDispersion.include_branch_table` | `bool` | `True` | Stored as supplied; no runtime type check in this constructor | Include branch table | `dispersion_curve.include_branch_table` |
 | `SaveResponse.observable` | `str` | `required` | One of the supported response observables | Response output | `frequency_response_output.observable` |
 
 Supported response observables include `susceptibility_tensor`, `m_complex`, `u_complex`,
@@ -53,7 +53,7 @@ import fullmag as fm
 nm = 1.0e-9
 
 study = fm.study("dispersion_response_api_example")
-study.engine("fdm")
+study.engine("fem")
 study.device("cpu", precision="double")
 study.mode("strict")
 
@@ -89,6 +89,8 @@ interpretation.
 <!-- (discrete-realization)= -->
 ## Discrete realization
 Response materialization follows the frequency-domain solvers; dispersion follows the eigensolver.
+The current planner routes both eigenmode and frequency-response studies through FEM and rejects
+the FDM backend for these study kinds.
 
 (python-api-outputs-dispersion-and-response-implementation-mapping)=
 <!-- (implementation-mapping)= -->

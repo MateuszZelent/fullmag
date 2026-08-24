@@ -4,6 +4,7 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+source_of_truth: docs/validation/fem_cpu_validation_matrix.md, docs/specs/capability-matrix-v0.json
 ---
 
 (public-docs-validation-fem-fdm-comparison)=
@@ -26,6 +27,10 @@ energy against a central-cell periodic-supercell reference. The recorded primiti
 energy relative error is `2.4168e-3` against a `2.0e-2` tolerance, with lateral seam metrics at
 `0.0` and `robin_periodic_seam_face_count = 0` (`tests/fem_demag_validation/periodic_airbox_validation.py`).
 This is a FEM-side periodic consistency check, not yet a full FDM↔FEM cross-backend matrix.
+
+The recorded artifact is supporting historical evidence for the diagnostic FEM periodic-airbox
+slice. It does not promote periodic FEM demagnetization or any cross-backend lane to production
+qualification.
 
 ## State transfer between backends
 

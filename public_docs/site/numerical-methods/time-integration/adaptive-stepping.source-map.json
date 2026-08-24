@@ -1,15 +1,15 @@
 {
   "document": {"path": "public_docs/site/numerical-methods/time-integration/adaptive-stepping.md"},
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "documented"},
-    {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "FEM device-lane parity requires executed managed evidence."},
-    {"solver": "FDM", "device": "CPU", "status": "documented"},
-    {"solver": "FDM", "device": "GPU", "status": "source-backed", "reason": "Device-side reductions are contract-tested, but runtime qualification is separate."}
+    {"solver": "FEM", "device": "CPU", "status": "production-executable", "reason": "The adaptive RK lane is executable; registry qualification remains separate."},
+    {"solver": "FEM", "device": "GPU", "status": "production-executable", "reason": "The native device adaptive lane is executable; registry qualification remains separate."},
+    {"solver": "FDM", "device": "CPU", "status": "reference-executable"},
+    {"solver": "FDM", "device": "GPU", "status": "source-visible", "reason": "Device-side reductions are present, but current runtime qualification is pending."}
   ],
   "equations": [
-    {"id": "eq-adaptive-normalized-error", "symbols": ["e", "atol", "rtol", "eta_i", "m"], "sources": ["adaptive-policy"]},
-    {"id": "eq-adaptive-global-error", "symbols": ["eta", "eta_i"], "sources": ["fdm-adaptive-test"]},
-    {"id": "eq-adaptive-controller", "symbols": ["dt", "s", "eta", "q", "rho_shrink", "rho_growth"], "sources": ["adaptive-policy"]}
+    {"id": "eq-adaptive-normalized-error", "symbols": ["e", "atol", "rtol", "eta_i", "m"], "sources": ["fdm-cpu-error-aos", "fdm-cpu-error-soa", "fdm-gpu-error", "fem-cpu-error", "fem-gpu-error"]},
+    {"id": "eq-adaptive-global-error", "symbols": ["eta", "eta_i"], "sources": ["fdm-cpu-error-aos", "fdm-cpu-error-soa", "fdm-gpu-error", "fem-cpu-error", "fem-gpu-error"]},
+    {"id": "eq-adaptive-controller", "symbols": ["dt", "s", "eta", "eta_prev", "q", "r_raw", "rho_shrink", "rho_growth"], "sources": ["fdm-cpu-controller", "shared-controller", "fem-cpu-controller", "fem-gpu-controller"]}
   ],
   "symbols": [
     {"id": "e", "latex": "e_i", "meaning": "embedded error vector at active point i", "si_unit": "1"},
@@ -17,7 +17,9 @@
     {"id": "rtol", "latex": "r_{\\mathrm{tol}}", "meaning": "relative tolerance", "si_unit": "1"},
     {"id": "eta_i", "latex": "\\eta_i", "meaning": "local normalized error", "si_unit": "1"},
     {"id": "eta", "latex": "\\eta", "meaning": "global normalized error metric", "si_unit": "1"},
-    {"id": "m", "latex": "m_i", "meaning": "reduced magnetization at active point i", "si_unit": "1"},
+    {"id": "m", "latex": "m_i^n,m_i^{\\mathrm{hi}}", "meaning": "old and high-order candidate magnetization at active point i", "si_unit": "1"},
+    {"id": "eta_prev", "latex": "\\eta_{n-1}", "meaning": "previous accepted normalized error", "si_unit": "1"},
+    {"id": "r_raw", "latex": "r_{\\mathrm{raw}}", "meaning": "unclamped proposed step ratio", "si_unit": "1"},
     {"id": "dt", "latex": "\\Delta t", "meaning": "current time step", "si_unit": "\\mathrm{s}"},
     {"id": "s", "latex": "s", "meaning": "controller safety factor", "si_unit": "1"},
     {"id": "q", "latex": "q", "meaning": "error-estimator order", "si_unit": "1"},
@@ -27,6 +29,15 @@
   "sources": [
     {"id": "adaptive-policy", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class AdaptiveTimestep", "responsibility": "Public adaptive controller validation and IR."},
     {"id": "llg-policy", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class LLG", "responsibility": "Compatibility of integrator and adaptive policy."},
+    {"id": "fdm-cpu-controller", "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs", "symbol": "decide_adaptive_step", "responsibility": "FDM CPU history-aware PI acceptance and bounded next-step decision."},
+    {"id": "shared-controller", "path": "native/include/fullmag_adaptive_step_decision.hpp", "symbol": "decide_adaptive_step", "responsibility": "Shared native history-aware PI controller used by FEM CPU and GPU bridges."},
+    {"id": "fem-cpu-controller", "path": "backends/fem/cpu/mfem/integrators/adaptive_dt.cpp", "symbol": "cpu_adaptive_step_decision", "responsibility": "FEM CPU bridge into the shared native controller."},
+    {"id": "fem-gpu-controller", "path": "backends/fem/gpu/cuda/integrators/rk/rk_adaptive_runtime.cu", "symbol": "gpu_host_adaptive_step_decision", "responsibility": "FEM GPU runtime bridge into the shared native controller."},
+    {"id": "fdm-cpu-error-aos", "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs", "symbol": "max_error_norm_buf", "responsibility": "FDM CPU AoS active-cell mixed absolute/relative error norm and maximum reduction."},
+    {"id": "fdm-cpu-error-soa", "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs", "symbol": "max_error_norm_soa_buf", "responsibility": "FDM CPU SoA active-cell mixed absolute/relative error norm and maximum reduction."},
+    {"id": "fem-cpu-error", "path": "backends/fem/cpu/mfem/integrators/adaptive_dt.cpp", "symbol": "compute_adaptive_error_norm", "responsibility": "FEM CPU active-node mixed absolute/relative error norm and maximum reduction."},
+    {"id": "fem-gpu-error", "path": "backends/fem/gpu/cuda/integrators/rk/adaptive_error_kernels.cu", "symbol": "fullmag_cuda_adaptive_error_norm_blocks", "responsibility": "FEM GPU device-block mixed error norm reduction."},
+    {"id": "fdm-gpu-error", "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu", "symbol": "reduce_adaptive_error_policy", "responsibility": "FDM GPU device-side mixed error norm reduction and decision input."},
     {"id": "fdm-adaptive-test", "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu", "symbol": "reduce_adaptive_error_policy", "responsibility": "FDM GPU device-side adaptive error policy."},
     {"id": "fdm-stream-test", "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu", "symbol": "reduce_max_scalar_sqrt", "responsibility": "FDM GPU scalar reduction implementation."}
   ],
@@ -35,9 +46,9 @@
     {"python": "AdaptiveTimestep.rtol", "type": "float", "default": "1e-3", "si_unit": "1", "validation": "non-negative; not both tolerances zero", "meaning": "relative error component", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.rtol"},
     {"python": "AdaptiveTimestep.dt_initial", "type": "float | None", "default": "None", "si_unit": "\\mathrm{s}", "validation": "positive and within bounds when set", "meaning": "first proposed step", "backend_support": "lane-dependent", "problem_ir": "adaptive_timestep.dt_initial"},
     {"python": "AdaptiveTimestep.dt_min", "type": "float", "default": "1e-15", "si_unit": "\\mathrm{s}", "validation": "positive", "meaning": "minimum allowed step", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.dt_min"},
-    {"python": "AdaptiveTimestep.dt_max", "type": "float | None", "default": "None", "si_unit": "\\mathrm{s}", "validation": "positive and", "meaning": "maximum allowed step", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.dt_max"},
-    {"python": "AdaptiveTimestep.safety", "type": "float", "default": "0.9", "si_unit": "1", "validation": "safety factor", "meaning": "conservative controller factor", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.safety"},
-    {"python": "AdaptiveTimestep.growth_limit", "type": "float", "default": "2.0", "si_unit": "1", "validation": "growth_limit", "meaning": "maximum step growth ratio", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.growth_limit"},
-    {"python": "AdaptiveTimestep.shrink_limit", "type": "float", "default": "0.2", "si_unit": "1", "validation": "shrink_limit", "meaning": "minimum step ratio", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.shrink_limit"}
+    {"python": "AdaptiveTimestep.dt_max", "type": "float | None", "default": "None", "si_unit": "\\mathrm{s}", "validation": "positive and no smaller than dt_min when set", "meaning": "maximum allowed step", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.dt_max"},
+    {"python": "AdaptiveTimestep.safety", "type": "float", "default": "0.9", "si_unit": "1", "validation": "finite and in (0,1]", "meaning": "conservative controller factor", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.safety"},
+    {"python": "AdaptiveTimestep.growth_limit", "type": "float", "default": "2.0", "si_unit": "1", "validation": "finite and > 1", "meaning": "maximum step growth ratio", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.growth_limit"},
+    {"python": "AdaptiveTimestep.shrink_limit", "type": "float", "default": "0.2", "si_unit": "1", "validation": "finite and in (0,1)", "meaning": "minimum step ratio", "backend_support": "RK23/RK45 lanes", "problem_ir": "adaptive_timestep.shrink_limit"}
   ]}
 }

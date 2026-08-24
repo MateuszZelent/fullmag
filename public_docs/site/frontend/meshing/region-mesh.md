@@ -4,6 +4,7 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+source_of_truth: apps/control-room/src/modules/inspector/panels/region/ObjectRegionMeshPanel.tsx
 ---
 
 (public-docs-frontend-meshing-region-mesh)=

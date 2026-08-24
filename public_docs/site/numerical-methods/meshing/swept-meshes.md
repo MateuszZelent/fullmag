@@ -230,22 +230,6 @@ observable controlled while increasing $N_z$.
 (numerical-methods-swept-python-api)=
 ## Python API
 
-### Typed controls
-
-```python
-# %% Typed sweep request used by the complete scenario below
-sweep = fm.SweptMeshControls(
-    distribution=fm.SweepDistribution(
-        kind="uniform",
-        num_layers=4,
-    ),
-    sweep_direction="z",
-    element_family="prism",
-    transition_policy="pyramid_to_tetrahedra",
-    exact_layer_count=True,
-)
-```
-
 ### Stage-first thin-film recipe
 
 ```python
@@ -259,11 +243,20 @@ study.device("cpu", precision="double")
 study.mode("strict")
 study.universe(mode="manual", size=(320 * nm, 320 * nm, 120 * nm))
 
+# The equivalent typed sweep request can be inspected independently of execution.
+sweep = fm.SweptMeshControls(
+    distribution=fm.SweepDistribution(kind="uniform", num_layers=2),
+    sweep_direction="z",
+    element_family="prism",
+    transition_policy="pyramid_to_tetrahedra",
+    exact_layer_count=True,
+)
+
 film = study.geometry(fm.Box(300 * nm, 300 * nm, 2 * nm), name="film")
 film.mesh.thin_film(
     minimum_element_size=4 * nm,
     maximum_element_size=6 * nm,
-    layers=1,
+    layers=2,
     topology="prismatic",
     exact_layers=True,
     transition="pyramid_to_tetrahedra",
@@ -338,13 +331,16 @@ or hex mesh.
 
 | Solver | Device | Status | Realization |
 |---|---|---|---|
-| FEM | CPU | partial / scenario-qualified | typed sweep generation and strict mixed topology for bounded geometry/build modes |
-| FEM | GPU | mesh source-backed, operator-gated | same certified linear mixed mesh where native GPU operators support all cell families |
+| FEM | CPU | partial-production-executable | bounded strict P1 lane: one axis-aligned box, one airbox, exactly 1, 2, or 3 layers, with prism6/pyramid5/tet4 cells |
+| FEM | GPU | partial-production-executable | the same bounded certified P1 mesh and layer set; every enabled operator must support all realized cell families |
 | FDM | CPU | not applicable | use Cartesian cells and explicit thickness count |
 | FDM | GPU | not applicable | use Cartesian cells and explicit thickness count |
 
 A GPU FEM claim additionally requires device kernels for every realized family (`prism6`,
 `pyramid5`, `tet4`, or `hex8`) and every enabled interaction. A valid CPU mesh is not sufficient.
+The current executable mixed-prism slice is double precision with explicit CPU or GPU selection;
+`auto`, `single`, extended-mode fallback, additional magnetic bodies, and layer counts outside
+`{1, 2, 3}` fail closed. Its implemented status is not a production-validation claim.
 
 (numerical-methods-swept-implementation-mapping)=
 ## Implementation mapping

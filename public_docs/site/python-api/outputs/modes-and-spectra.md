@@ -42,7 +42,7 @@ Mode index sets must be non-negative, unique, and non-empty (raw indices or bran
 | `SaveMode.sample_indices` / `sample_labels` | `Sequence` | `()` | Non-negative indices / non-empty labels | Sample selector | `eigen_mode.sample_selector` |
 | `SaveSpectrum.quantity` | `str` | `"eigenfrequency"` | Non-empty | Spectrum quantity | `eigen_spectrum.quantity` |
 | `SaveSpectrum.scope` | `str` | `"per_sample"` | `global` or `per_sample` | Spectrum scope | `eigen_spectrum.scope` |
-| `SaveEigenDiagnostics.*` | `bool` | `True` | Boolean | Diagnostic flags | `eigen_diagnostics` |
+| `SaveEigenDiagnostics.*` | `bool` | `True` | Stored as supplied; constructor does not runtime-check Boolean types | Diagnostic flags | `eigen_diagnostics` |
 
 ### Complete stage-first example
 
@@ -53,7 +53,7 @@ import fullmag as fm
 nm = 1.0e-9
 
 study = fm.study("modes_spectra_api_example")
-study.engine("fdm")
+study.engine("fem")
 study.device("cpu", precision="double")
 study.mode("strict")
 
@@ -101,7 +101,9 @@ Ownership tests compare this inventory with live signatures.
 (python-api-outputs-modes-and-spectra-limitations)=
 <!-- (limitations)= -->
 ## Limitations
-Output availability depends on the eigensolver realization and equilibrium source.
+Output availability depends on the eigensolver realization and equilibrium source. The current
+planner executes eigenmode studies only with `backend="fem"`; FDM authoring is rejected during
+planning.
 
 (python-api-outputs-modes-and-spectra-scientific-bibliography)=
 <!-- (scientific-bibliography)= -->

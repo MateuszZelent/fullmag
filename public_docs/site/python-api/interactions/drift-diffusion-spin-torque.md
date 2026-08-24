@@ -58,9 +58,9 @@ study.spin_torque(fm.DriftDiffusionSpinTorque("transport_torque", spin.id, regio
 study.stages.add_run(stage_id="authoring_boundary", until=1.0e-15)
 ```
 
-The exported canonical classes live in `fullmag.model.spin_transport`. A duplicate placeholder
-class named `DriftDiffusionSpinTorque` exists in `spin_torque.py`; remove or rename it. Public
-documentation and type checking must bind only the canonical class.
+The public `fullmag.DriftDiffusionSpinTorque` export is the canonical class from
+`fullmag.model.spin_transport`. A similarly named compatibility implementation in
+`fullmag.model.spin_torque` is not part of this public contract.
 
 ## `SpinDriftDiffusion` parameters
 

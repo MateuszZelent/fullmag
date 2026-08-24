@@ -1,0 +1,624 @@
+# Review package: Fala 1A working-tree changes (final remediation)
+
+## Files changed
+- public_docs/site/README.md
+- public_docs/site/index.md
+- public_docs/site/changelog/index.md
+- public_docs/site/getting-started/*
+
+## Diff
+
+diff --git a/public_docs/site/getting-started/choosing-a-solver.md b/public_docs/site/getting-started/choosing-a-solver.md
+index 2704e060a..3d7c616f9 100644
+--- a/public_docs/site/getting-started/choosing-a-solver.md
++++ b/public_docs/site/getting-started/choosing-a-solver.md
+@@ -4,21 +4,24 @@ status: partial
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
+ ---
+ 
+ (public-docs-getting-started-choosing-a-solver)=
+ # Choosing a Solver
+ 
+ FullMag has one physical problem contract and several execution realizations. You select the
+ numerical backend with `study.engine("fdm")` or `study.engine("fem")`, and the device with
+-`study.device("cpu" | "gpu", precision="double")`. The rest of the study stays the same.
++`study.device("cpu" | "gpu", precision="double")`. Geometry, material state, interactions, and
++stage intent use the same authoring model, but discretization, meshing, demagnetization realization,
++and lane-specific solver policy are not interchangeable and must be configured for the selected
++backend.
+ 
+ ## Finite difference (FDM)
+ 
+ FDM represents the domain on a regular cell grid and computes demagnetization through a
+ cell-averaged Newell tensor with FFT convolution.
+ 
+ Choose FDM when:
+ 
+ - the geometry is well represented by a regular grid (cuboids, thin films, multilayer stacks),
+ - you need open-boundary demagnetization with fast FFT convolution,
+diff --git a/public_docs/site/getting-started/control-room.md b/public_docs/site/getting-started/control-room.md
+index 6e0f6c2d2..50bd5fd77 100644
+--- a/public_docs/site/getting-started/control-room.md
++++ b/public_docs/site/getting-started/control-room.md
+@@ -2,83 +2,102 @@
+ title: Control Room User Guide
+ status: implemented
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
+ ---
+ 
+ (public-docs-getting-started-control-room)=
+ # Control Room User Guide
+ 
+-The **FullMag Control Room** is the interactive web interface and authoring companion for the FullMag micromagnetics platform. It provides a visual control environment for setting up physical micromagnetic models, configuring materials and geometry, visualizing 3D vector fields, running simulations across FDM and FEM backends, and analyzing numerical observables in real time.
++The **FullMag Control Room** is the interactive web interface and authoring companion for FullMag.
++It exposes the current session through an Explorer, Inspector, ribbon, 3D viewport, analysis docks,
++and runtime status surfaces. Supported authoring changes are committed through the v2 model API and
++can be exported as the canonical stage-first Python DSL. A visible but disabled control is not an
++implemented capability, and backend execution remains capability-gated.
+ 
+-All interactive changes in the Control Room lower directly to FullMag's canonical `ProblemIR` and round-trip cleanly with the embedded Python DSL.
++## Start a session
++
++After completing {doc}`installation`, save a stage-first study script and launch it from the
++repository root. For example:
++
++```console
++just fullmag build=True fdm cpu first_fdm_simulation.py
++```
++
++The launcher reuses a ready FullMag API and a matching Control Room frontend when they are already
++available; otherwise it starts the missing service for this launch. It tracks only the API or
++frontend process that it starts, and opening the page does not give it ownership of the browser
++process. The authored engine and device remain requested intent; the status surfaces report the
++resolved runtime separately.
+ 
+ ---
+ 
+ ## Workspace Layout Overview
+ 
+ The Control Room interface is structured into an ergonomic, high-density scientific workspace divided into seven specialized regions:
+ 
+ ```{image} /_static/images/ui/control-room-workspace-overview.png
+ :alt: FullMag Control Room Workspace Overview
+ :align: center
+ :width: 100%
+ ```
+ 
+ | Region | Component | Primary Purpose |
+ |---|---|---|
+-| **Top** | Ribbon Toolbar Strip | Access action groups for geometry creation, material assignment, physics setup, solver configuration, and script export. |
++| **Top** | Ribbon Toolbar Strip | Render active command-registry actions for authoring, mesh, study, visualization, and export; unavailable actions remain disabled. |
+ | **Left** | Explorer Tree Panel | Inspect and navigate the hierarchical semantic tree of model objects, regions, materials, interactions, meshes, stages, and outputs. |
+ | **Center** | 3D Interactive Viewport | High-performance WebGL canvas displaying geometry meshes, magnetization vector field glyphs, colormaps, and spatial bounding boxes. |
+ | **Right** | Inspector Panel | Contextual property editor for configuring selected tree nodes, editing parameters with explicit draft isolation, and applying changes. |
+-| **Bottom** | Analysis & Live Charts Panel | Real-time plotting workspace showing average magnetization trajectories, energy density breakdowns, and spectral FFT responses. |
+-| **Footer** | Status & Governance Bar | Monitor WebSocket session connectivity, active backend engine (FDM/FEM), hardware device (CPU/GPU), precision, and stage execution progress. |
+-| **Overlay** | Command Palette | Global `Ctrl+K` search launcher for executing workspace commands, toggling visual modes, and switching themes. |
++| **Bottom** | Analysis & Live Charts Panel | Plot materialized scalar, table, and analysis resources published by the active session. |
++| **Footer** | Status & Governance Bar | Show session connectivity, requested/resolved execution summaries, and stage or solver state exposed by v2 resources. |
++| **Overlay** | Command Palette | Global `Ctrl+Shift+P` launcher for currently registered and enabled commands. |
+ 
+ ---
+ 
+ ## Ribbon Toolbar Strip
+ 
+ The **Ribbon Toolbar Strip** (`.fm-ribbon-bar`) organizes authoring controls into contextual tabs located along the top of the workspace.
+ 
+ ### Geometry Tab
+ 
+ The **Geometry Tab** provides tools for building and transforming physical simulation domains.
+ 
+ ```{image} /_static/images/ui/ribbon-tabs-geometry.png
+ :alt: Geometry Ribbon Tab
+ :align: center
+ :width: 100%
+ ```
+ 
+-- **Primitive Objects**: Add standard geometric shapes including **Box**, **Cylinder**, **Sphere**, and **Ellipsoid**.
+-- **CAD & STL Import**: Import STEP, IGES, or STL boundary representations for finite-element discretization.
+-- **Transformations**: Translate, rotate, and scale selected geometry objects in global or local coordinate frames.
+-- **Boolean Operations**: Perform CSG operations (**Union**, **Difference**, **Intersection**) between overlapping geometry objects.
++- **Active primitive drafts**: Add **Box**, **Thin Film**, **Cylinder**, and **Sphere** objects, then
++  commit the validated draft with **Apply Draft**.
++- **Mesh lifecycle**: A committed primitive can be shown before topology exists; **Build Mesh** is a
++  separate backend command.
++- **Current boundary**: Ellipsoid, Boolean composition, and direct move/rotate/scale ribbon tools are
++  present as disabled controls in the current UI. This guide does not present them as available.
+ 
+ ### Physics & Interaction Tab
+ 
+ The **Physics Tab** enables physical interactions and external drive fields.
+ 
+ ```{image} /_static/images/ui/ribbon-tabs-physics.png
+ :alt: Physics Ribbon Tab
+ :align: center
+ :width: 100%
+ ```
+ 
+-- **Exchange Interaction**: Toggle Heisenberg exchange stiffness $A_{\text{ex}}$ and surface exchange coupling.
+-- **Demagnetization**: Configure magnetostatic field calculations via FDM FFT convolution or FEM Poisson airbox/BEM solvers.
+-- **Zeeman Field**: Apply uniform or spatially varying bias magnetic fields $\mathbf{H}_{\text{ext}}(t)$.
+-- **Anisotropy**: Configure uniaxial ($\mathbf{u}_K$) or cubic crystalline anisotropy constants ($K_1, K_2$).
+-- **Dzyaloshinskii–Moriya (DMI)**: Enable interfacial or bulk DMI vectors ($D$).
+-- **Spin Torque & Transport**: Add Spin-Transfer Torque (STT), Spin-Orbit Torque (SOT), and Oersted field excitations.
++The interaction catalog and Inspector expose supported authoring forms for exchange,
++demagnetization, external fields, anisotropy, DMI, transport/torque, and Oersted sources. Authoring
++availability and executable backend support are separate: the active-session capability resource
++and disabled reason determine whether a command can be committed or run. See the canonical
++{ref}`interaction pages <public-docs-physics-interactions-root>` for physical and lane-specific
++support contracts.
+ 
+ ---
+ 
+ ## Explorer Tree Panel
+ 
+ The **Explorer Tree Panel** (`.fm-explorer-shell`) on the left side of the workspace presents the hierarchical semantic structure of the simulation.
+ 
+ ```{image} /_static/images/ui/explorer-tree-structure.png
+ :alt: Explorer Tree Structure Panel
+ :align: center
+@@ -104,22 +123,24 @@ Selecting any node in the Explorer tree instantly focuses the corresponding prop
+ The **3D Viewport** (`.fm-viewport-3d`) is a Three.js / WebGL rendering canvas that visualizes 3D magnetization vector fields, geometry meshes, and spatial field distribution.
+ 
+ ```{image} /_static/images/ui/viewport-3d-interactive.png
+ :alt: Interactive 3D Viewport Displaying Magnetization Field
+ :align: center
+ :width: 100%
+ ```
+ 
+ ### Key Viewport Features
+ 
+-- **Vector Field Glyphs**: Render vector fields ($\mathbf{m}, \mathbf{H}_{\text{eff}}, \mathbf{H}_{\text{demag}}$) using arrows, cones, or stream ribbons scaled by magnitude.
+-- **Colormaps & Components**: Colorize fields using standard scientific colormaps (**viridis**, **plasma**, **coolwarm**, **hsv**) mapped to vector components ($m_x, m_y, m_z$) or norm $|\mathbf{m}|$.
++- **Vector Field Glyphs**: Render available vector quantities such as $\mathbf{m}$ or materialized
++  field resources with bounded glyph budgets and explicit quantity identity.
++- **Colormaps & Components**: Colorize supported scalar or vector-component views through the
++  visualization resource, retaining the displayed quantity and unit.
+ - **Surface Projection Modes**: For thin films and multi-layer structures, switch between:
+   - **Raw Nodal**: Direct node-based field interpolation.
+   - **Surface Faces**: Projection onto top and bottom boundary faces.
+   - **Thickness-Average ($z$)**: Depth-averaged 2D slice projection.
+ - **Bounding Box & Airbox Wireframe**: Overlay spatial dimensions, bounding box cages, and FEM Poisson airbox extent with hidden-edge visual semantics.
+ - **HUD & Camera Navigation**: Real-time HUD showing vector count, mesh element statistics, camera orientation gizmo, and view presets (Top, Front, Side, Isometric).
+ 
+ ---
+ 
+ ## Inspector Property Editor
+@@ -130,45 +151,56 @@ The **Inspector Panel** (`.fm-inspector-shell`) on the right side of the workspa
+ :alt: Inspector Property Editor Panel
+ :align: center
+ :width: 340px
+ ```
+ 
+ ### Explicit Draft Editing Workflow
+ 
+ To prevent accidental simulation state corruption during live execution, the Inspector enforces an **Explicit Draft Workflow**:
+ 
+ 1. Modifying numeric values or dropdown options puts the Inspector into **Draft Mode** (highlighted with an amber indicator border).
+-2. Click **Apply Draft** to commit changes to the active session and trigger `ProblemIR` re-lowering.
+-3. Click **Revert Draft** to discard uncommitted edits and restore active session parameters.
++2. Click **Apply Draft** to submit the corresponding v2 model transaction. A successful commit
++   refreshes the canonical scene; Python export serializes that authored state.
++3. Click **Revert** to discard uncommitted edits and restore active session parameters.
+ 
+ ### Configurable Parameter Groups
+ 
+ - **Material Parameters**: Saturation magnetization $M_{\text{s}}$, exchange constant $A_{\text{ex}}$, damping $\alpha$, gyromagnetic ratio $\gamma$.
+ - **Excitation Parameters**: Pulse rise time, frequency $f$, current density $\mathbf{J}$, bias field components.
+ - **Numerical Controls**: Integrator selection (`rk4`, `rk23`, `adaptive_heun`), error tolerances (`tolT`, `tolA`), maximum timestep $\Delta t_{\max}$.
+ 
+ ---
+ 
+ ## Status Bar & Session Governance
+ 
+ The **Status Bar** (`.fm-status-bar`) at the bottom footer of the window provides continuous operational feedback:
+ 
+ ```{image} /_static/images/ui/status-bar-footer.png
+ :alt: Status Bar and Session Footer
+ :align: center
+ :width: 100%
+ ```
+ 
+-- **Session Connectivity**: Indicates live HTTP/WebSocket connection to the backend runtime.
++- **Session Connectivity**: Indicates the live connection to the backend runtime. HTTP resources
++  remain authoritative; realtime messages invalidate them rather than replacing them.
+ - **Active Engine & Device**: Displays active solver engine (**FDM** or **FEM**) and hardware lane (**CPU** or **GPU**).
+ - **Execution Progress**: Displays stage execution percentage, current step count, physical time $t$ (in picoseconds/nanoseconds), and solver speed (steps/sec).
+-- **Memory Footprint**: Monitors GPU VRAM and system RAM allocation for mesh topologies and field buffers.
+ 
+ ---
+ 
+ ## Command Palette & Keyboard Shortcuts
+ 
+-Press **`Ctrl + K`** (or **`Cmd + K`** on macOS) anywhere in the workspace to launch the **Command Palette**:
++Press **`Ctrl + Shift + P`** anywhere in the workspace to launch the **Command Palette**:
++
++- Search for commands by name (for example, *"Add Box"*, *"Export Python DSL"*, or
++  *"Focus Primitive"*).
++- Switch the workspace theme through **Toggle Theme**; the current themes are Catppuccin Mocha
++  (dark) and Catppuccin Latte (light).
++- Focus the selected primitive with **`F`** or frame the full scene with **`Shift + F`** when those
++  commands are enabled for the current context.
++
++## Current availability boundary
+ 
+-- Search for commands by name (e.g., *"Add Box Geometry"*, *"Export Python Script"*, *"Toggle Wireframe"*).
+-- Switch workspace themes between **Catppuccin Mocha** (dark theme) and **Catppuccin Latte** (light theme).
+-- Trigger camera framing (**`F`**) or reset camera view (**`R`**).
++The Control Room is still capability-driven. It does not make every authored interaction,
++visualization, solver, or device executable. Disabled controls and server rejection reasons are
++part of the user contract; they must not be interpreted as hidden fallback. For the concise
++ownership contract and links to detailed frontend pages, see {doc}`../frontend/control-room/index`.
+diff --git a/public_docs/site/getting-started/first-fdm-simulation.md b/public_docs/site/getting-started/first-fdm-simulation.md
+index f7fe26413..5485e0d6e 100644
+--- a/public_docs/site/getting-started/first-fdm-simulation.md
++++ b/public_docs/site/getting-started/first-fdm-simulation.md
+@@ -9,54 +9,58 @@ owner: fullmag-public-docs
+ (public-docs-getting-started-first-fdm-simulation)=
+ # First FDM Simulation
+ 
+ This page runs a small finite-difference relaxation: a soft ferromagnetic film with exchange and
+ magnetostatic interactions relaxes from a uniform magnetization under its own effective field. The
+ example follows the stage-first `fm.study(...)` workflow and never constructs a `fm.Problem(...)`
+ snapshot.
+ 
+ ## What the example computes
+ 
+-A film of size $160 \times 160 \times 24\ \mathrm{nm}$ is discretized on a regular FDM grid with
+-$4\ \mathrm{nm}$ cells. The magnetic body is $80 \times 120 \times 8\ \mathrm{nm}$, so the resolved
+-geometry sits inside the discretization universe. Exchange stiffness $A_{\mathrm{ex}}$ and the
++A study universe of size $160 \times 160 \times 24\ \mathrm{nm}$ is discretized on a regular FDM
++grid with $4\ \mathrm{nm}$ cells. The film itself is $80 \times 120 \times 8\ \mathrm{nm}$, so the
++resolved geometry sits inside the discretization universe. Exchange stiffness $A_{\mathrm{ex}}$ and the
+ magnetostatic field drive the magnetization toward a local minimum; the overdamped LLG relaxation
+ stage stops when the requested torque/field tolerance or step budget is reached.
+ 
+ ## Author the study
+ 
+ ```python
++# %% Imports.
+ import fullmag as fm
+ 
++# %% Configure the requested execution lane and domain.
+ nm = 1.0e-9
+ study = fm.study("first_fdm_simulation")
+ study.engine("fdm")
+ study.device("cpu", precision="double")
+ study.mode("strict")
+ 
+ study.universe(
+     mode="manual",
+     size=(160 * nm, 160 * nm, 24 * nm),
+     center=(0.0, 0.0, 0.0),
+     padding=(0.0, 0.0, 0.0),
+ )
+ study.objects.mesh.defaults(cell_size=(4 * nm, 4 * nm, 4 * nm))
+ 
++# %% Define the magnetic object and its material state.
+ film = study.geometry(
+     fm.Box(size=(80 * nm, 120 * nm, 8 * nm), name="film"),
+     name="film",
+ )
+ film.Ms = 800.0e3
+ film.Aex = 13.0e-12
+ film.alpha = 0.1
+ film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+ 
++# %% Register physics, solver policy, and the ordered stage.
+ study.exchange()
+ study.demag()
+ study.solver(fix_dt=5.0e-13, gamma=2.211e5)
+ 
+ study.stages.add_relax(
+     stage_id="relax",
+     algorithm="llg_overdamped",
+     dt=5.0e-13,
+     tolA=1.0e-4,
+     max_steps=2000,
+@@ -92,23 +96,24 @@ The relaxation uses an explicit fixed timestep. `fix_dt=5.0e-13` defines the sol
+ while the stage-level `dt=5.0e-13` records the timestep requested for this relaxation stage.
+ 
+ ## Run headlessly
+ 
+ Save the block above as `first_fdm_simulation.py` and run it through the repository launcher:
+ 
+ ```console
+ just run-headless first_fdm_simulation.py
+ ```
+ 
+-This builds the local runtime on first use, executes the stage, and writes per-stage scientific
+-artifacts and the autosave table to the auto-derived output directory. For an interactive run with
+-the Control Room use `just fullmag build=True fdm cpu first_fdm_simulation.py`.
++This runs the repository build recipe, executes the stage, and writes per-stage scientific
++artifacts and the autosave table to the auto-derived sibling `first_fdm_simulation.zarr` bundle.
++For an interactive run with the Control Room use
++`just fullmag build=True fdm cpu first_fdm_simulation.py`.
+ 
+ ## Reading the result
+ 
+ The `tableautosave` quantities (`mx`, `my`, `mz`, `E_total`) are scalar observables: the spatially
+ averaged magnetization components and the total energy respectively. They are the first evidence
+ that the relaxation is progressing; per-cell field and magnetization snapshots are separate
+ artifacts selected through stage outputs.
+ 
+ ## Limits of this example
+ 
+diff --git a/public_docs/site/getting-started/first-fem-simulation.md b/public_docs/site/getting-started/first-fem-simulation.md
+index e37f1412e..c8c71c32c 100644
+--- a/public_docs/site/getting-started/first-fem-simulation.md
++++ b/public_docs/site/getting-started/first-fem-simulation.md
+@@ -17,41 +17,46 @@ magnetostatic field is solved with a Poisson airbox formulation instead of an FF
+ 
+ A universe of $160 \times 160 \times 24\ \mathrm{nm}$ surrounds a $80 \times 120 \times 8\ \mathrm{nm}$
+ ferromagnetic film. The film is resolved with $4\ \mathrm{nm}$ elements while the surrounding air
+ region is coarsened, so the airbox supports the magnetostatic Poisson solve without paying
+ four-nanometer resolution far from the magnet. The demagnetization linear system is solved with a
+ conjugate-gradient method and an algebraic multigrid preconditioner.
+ 
+ ## Author the study
+ 
+ ```python
++# %% Imports.
+ import fullmag as fm
+ 
++# %% Configure the requested execution lane and shared domain.
+ nm = 1.0e-9
+ study = fm.study("first_fem_simulation")
+ study.engine("fem")
+ study.device("cpu", precision="double")
+ study.mode("strict")
+ 
+ study.universe(mode="manual", size=(160 * nm, 160 * nm, 24 * nm))
+ study.universe.mesh(maximum_element_size=40 * nm, maximum_element_growth_rate=1.7)
+ 
++# %% Define the magnetic object, material state, and local mesh policy.
+ film = study.geometry(
+     fm.Box(size=(80 * nm, 120 * nm, 8 * nm), name="film"),
+     name="film",
+ )
+ film.Ms = 800.0e3
+ film.Aex = 13.0e-12
+ film.alpha = 0.1
+ film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+ film.mesh(maximum_element_size=4 * nm, order=1)
+ 
++# %% Register physics, build the mesh, and append the ordered stage.
++study.exchange()
+ study.demag(realization="poisson_robin")
+ study.fem_demag_solver(solver="CG", preconditioner="AMG", rtol=1.0e-10, max_iterations=500)
+ study.build_domain_mesh()
+ 
+ study.stages.add_relax(
+     stage_id="relax",
+     algorithm="projected_gradient_bb",
+     max_steps=2000,
+     tolT=5.0e-9,
+ ).tableautosave(
+@@ -60,43 +65,43 @@ study.stages.add_relax(
+ )
+ ```
+ 
+ ## What each part does
+ 
+ - `study.engine("fem")` selects the finite-element backend.
+ - `study.universe.mesh(...)` sizes the airbox elements with a growth-rate bound so the magnet is
+   resolved finely while air elements grow away from it.
+ - `film.mesh(maximum_element_size=4 * nm, order=1)` overrides the local element size on the magnetic
+   body.
++- `study.exchange()` registers the exchange interaction used by the `e_ex` observable.
+ - `study.demag(realization="poisson_robin")` chooses the scalar-potential Poisson demagnetization
+   formulation; the alternative public FEM strategy is the boundary-element method documented on the
+   {ref}`demagnetization pages <public-docs-physics-interactions-root>`.
+ - `study.fem_demag_solver(...)` configures the linear solver for the Poisson system.
+ - `study.build_domain_mesh()` realizes the domain mesh from the universe plus body before lowering.
+ - `study.stages.add_relax(algorithm="projected_gradient_bb", tolT=5.0e-9, ...)` relaxes with the
+   projected Barzilai-Borwein gradient method until the torque magnitude in tesla falls to the
+   requested tolerance or the step budget is spent. This projected-gradient method does not need an
+   LLG timestep, unlike the overdamped stage used on the FDM page.
+ 
+ ## Run headlessly
+ 
+ Save the block as `first_fem_simulation.py`. The FEM runtime is built and executed through the
+ repository's managed runtime recipes:
+ 
+ ```console
+-just ensure-managed-fem-runtime
+ just fem-managed-headless cpu first_fem_simulation.py
+ ```
+ 
+-The managed runtime records the resolved backend, device, and precision in the result. To request the
+-FEM GPU lane instead, pass `gpu` as the execution mode to the same recipe and verify the device
+-identity in the produced provenance.
++The recipe ensures the managed FEM runtime before execution and records the resolved backend,
++device, and precision in the result. To request the FEM GPU lane instead, pass `gpu` as the
++execution mode to the same recipe and verify the device identity in the produced provenance.
+ 
+ ## Reading the result
+ 
+ `max_torque_T` is the maximum torque magnitude reported in tesla and is the relaxation stop signal,
+ while `e_ex`, `e_demag` and `e_total` are the exchange, demagnetization and total energies. Autosave
+ tables are scalar time series; mesh and field snapshots are separate artifacts.
+ 
+ ## Limits of this example
+ 
+ Unstructured-mesh relaxation has stricter tolerance and meshing regimes than the small onboarding
+diff --git a/public_docs/site/getting-started/index.md b/public_docs/site/getting-started/index.md
+index 0d94c85d7..dfaa2212f 100644
+--- a/public_docs/site/getting-started/index.md
++++ b/public_docs/site/getting-started/index.md
+@@ -26,45 +26,49 @@ criteria, and expected artifacts.
+    documented capability and validation scope.
+ 5. **{doc}`Control Room <control-room>`** — author, launch, monitor, and inspect a study through the
+    browser interface.
+ 
+ ## Public authoring contract
+ 
+ A public script constructs a study, declares its numerical lane and physical domain, assigns
+ material and magnetization data, registers interactions, and appends ordered stages:
+ 
+ ```python
++# %% Imports.
+ import fullmag as fm
+ 
++# %% Configure the requested execution lane and domain.
+ nm = 1.0e-9
+ 
+ study = fm.study("getting_started_workflow")
+ study.engine("fdm")
+ study.device("cpu", precision="double")
+ study.mode("strict")
+ study.universe(
+     mode="manual",
+     size=(160 * nm, 160 * nm, 24 * nm),
+     center=(0.0, 0.0, 0.0),
+     padding=(0.0, 0.0, 0.0),
+ )
+ study.objects.mesh.defaults(cell_size=(4 * nm, 4 * nm, 4 * nm))
+ 
++# %% Define the magnetic object and its material state.
+ film = study.geometry(
+     fm.Box(size=(80 * nm, 120 * nm, 8 * nm), name="film"),
+     name="film",
+ )
+ film.Ms = 800.0e3
+ film.Aex = 13.0e-12
+ film.alpha = 0.1
+ film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+ 
++# %% Register physics, solver policy, and the ordered stage.
+ study.exchange()
+ study.demag()
+ study.solver(fix_dt=5.0e-13, gamma=2.211e5)
+ 
+ study.stages.add_relax(
+     stage_id="relax",
+     algorithm="llg_overdamped",
+     dt=5.0e-13,
+     tolA=1.0e-4,
+     max_steps=2000,
+diff --git a/public_docs/site/getting-started/installation.md b/public_docs/site/getting-started/installation.md
+index 9b0899883..6325ce6ee 100644
+--- a/public_docs/site/getting-started/installation.md
++++ b/public_docs/site/getting-started/installation.md
+@@ -9,23 +9,26 @@ owner: fullmag-public-docs
+ (public-docs-getting-started-installation)=
+ # Installation
+ 
+ FullMag separates the **Python authoring layer** from the **solver runtime**. The Python package
+ defines the `fm.study(...)` workflow and lowers it to the canonical `ProblemIR`; a compiled
+ backend then executes the solve. This page installs both from a source checkout.
+ 
+ ## Requirements
+ 
+ - Python 3.10 or newer.
+-- `pip` with network access to install runtime wheels and the Python dependencies.
+-- A Cargo/Rust toolchain is **not** required for Python authoring alone, but the repository build
+-  tooling uses it to produce the native FDM/FEM solver bundle.
++- `pip`; network access is needed unless the declared Python dependencies are already cached.
++- A Cargo/Rust toolchain is **not** required for Python authoring alone. Building the source-checkout
++  launcher and native runtime also requires the repository's `just`/Make workflow and its Rust,
++  C/C++, and CMake prerequisites; managed FEM builds additionally require the configured container
++  runtime. The checked-in recipes, rather than ad-hoc host commands, define the supported build
++  paths.
+ - Finite-element meshing with the geometry workflow additionally needs the optional `meshing`
+   extras (`gmsh`, `manifold3d`, `meshio`, `scipy`, `trimesh`).
+ 
+ ## Install the Python DSL
+ 
+ Clone the repository and install the embedded Python package:
+ 
+ ```console
+ git clone https://github.com/MateuszZelent/fullmag
+ cd fullmag
+@@ -40,45 +43,47 @@ python -m pip install "./packages/fullmag-py[meshing]"
+ 
+ Verify that the module imports:
+ 
+ ```console
+ python -c "import fullmag; print(fullmag.__file__)"
+ ```
+ 
+ ## Prepare a solver runtime
+ 
+ The `fm.study(...)` API is solver-agnostic, but execution needs a compiled backend. The repository
+-owns a `justfile` that wraps the container and host build paths. The default local runtime is built
+-with:
++owns a `justfile` that wraps the supported build paths. Build the source-checkout launcher and its
++local runtime with:
+ 
+ ```console
+ just build fullmag
+ ```
+ 
+-This stages the launcher and the finite-difference library under `.fullmag/local`. The easiest
+-headless run is then:
++This stages the launcher and available local native libraries under `.fullmag/local`. The easiest
++headless FDM check is then:
+ 
+ ```console
+ just run-headless examples/fdm_cpu_relax_smoke.py
+ ```
+ 
+-For a first interactive launch, `just fullmag build=True fdm cpu <script>` builds on first use and
+-then runs the script with the Control Room.
++For a first interactive launch, `just fullmag build=True fdm cpu <script>` requests an FDM CPU
++session, rebuilds as needed, and opens the script with the Control Room.
+ 
+ The finite-element runtime uses MFEM, hypre, libCEED and (on GPU) CUDA. It is built and executed
+ through the repository's managed container recipes rather than ad-hoc host commands:
+ 
+ ```console
+ just ensure-managed-fem-runtime
+ ```
+ 
+-FDM CUDA and FEM GPU paths additionally require a managed CUDA runtime. GPU execution must be
+-qualified with device identity recorded in the result; compiling on a host is not proof that GPU
+-code executed.
++With CUDA build tools present, `just build fullmag` can install a local CUDA-only launcher for the
++FDM GPU path when FEM GPU support is unavailable or managed FEM export is skipped. The FEM GPU path
++uses the separate managed MFEM, hypre, libCEED and CUDA runtime described above. Execution on either
++GPU lane must be qualified with device identity recorded in the result; compiling on a host is not
++proof that GPU code executed.
+ 
+ ## Checking the installation
+ 
+ Bare imports validate the Python layer only. A complete check is to run one of the repository's
+ small stage-first smoke scripts headlessly and confirm that a result artifact is produced. The
+ {ref}`first FDM simulation <public-docs-getting-started-first-fdm-simulation>` and
+ {ref}`first FEM simulation <public-docs-getting-started-first-fem-simulation>` pages use the same
+ workflow.
+diff --git a/public_docs/site/index.md b/public_docs/site/index.md
+index 8d2c43d4b..9ed4a99c2 100644
+--- a/public_docs/site/index.md
++++ b/public_docs/site/index.md
+@@ -1,17 +1,17 @@
+ ---
+ title: FullMag documentation
+ status: partial
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
+-source_of_truth: readme.md
++source_of_truth: README.md
+ ---
+ 
+ (public-docs-root)=
+ # FullMag
+ 
+ <div class="fm-home-masthead">
+   <div class="fm-home-masthead__brand">
+     <img src="https://raw.githubusercontent.com/MateuszZelent/fullmag/master/docs/fullmag-logo-traced-optimized.svg" alt="FullMag logo" loading="lazy" />
+     <p class="fm-home-eyebrow">Finite-difference and finite-element micromagnetics</p>
+   </div>
+warning: in the working copy of 'public_docs/site/getting-started/choosing-a-solver.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/getting-started/control-room.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/getting-started/first-fdm-simulation.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/getting-started/first-fem-simulation.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/getting-started/index.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/getting-started/installation.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/index.md', LF will be replaced by CRLF the next time Git touches it
+

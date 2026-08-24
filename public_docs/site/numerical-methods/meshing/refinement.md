@@ -276,13 +276,9 @@ study = fm.study("mesh_refinement")
 study.engine("fem")
 study.universe(mode="manual", size=(800 * nm, 400 * nm, 300 * nm))
 study.universe.mesh(
-    calibrate_for="micromagnetics_relaxation",
-    size_preset="normal",
     minimum_element_size=8 * nm,
     maximum_element_size=80 * nm,
     maximum_element_growth_rate=1.5,
-    curvature_factor=0.5,
-    narrow_region_resolution=0.6,
 )
 
 magnet = study.geometry(fm.Box(300 * nm, 100 * nm, 5 * nm), name="magnet")

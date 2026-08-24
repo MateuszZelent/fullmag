@@ -18,14 +18,14 @@
     {"id": "A", "latex": "$A$", "meaning": "exchange stiffness", "si_unit": "$\\mathrm{J\\,m^{-1}}$"},
     {"id": "D", "latex": "$D$", "meaning": "DMI constant", "si_unit": "$\\mathrm{J\\,m^{-2}}$"},
     {"id": "n-hat", "latex": "$\\hat{\\mathbf{n}}$", "meaning": "interface-symmetry normal", "si_unit": "$1$"},
-    {"id": "ns", "latex": "$\\mathbf{n}_s$", "meaning": "outward surface normal", "si_unit": "$1$"},
-    {"id": "partial-n", "latex": "$\\partial_n$", "meaning": "normal derivative", "si_unit": "$\\mathrm{m^{-1}}$"},
+    {"id": "nu", "latex": "$\\boldsymbol\\nu$", "meaning": "outward normal of the magnetic boundary", "si_unit": "$1$"},
+    {"id": "partial-nu", "latex": "$\\partial_{\\boldsymbol\\nu}$", "meaning": "derivative along the outward magnetic-boundary normal", "si_unit": "$\\mathrm{m^{-1}}$"},
     {"id": "ell", "latex": "$\\ell_{\\mathrm{DMI}}$", "meaning": "DMI boundary-twist length", "si_unit": "$\\mathrm{m}$"},
     {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"}
   ],
   "equations": [
-    {"id": "eq-idmi-bc", "symbols": ["A", "partial-n", "m", "D", "n-hat", "ns"], "sources": ["interfacial-api", "fem-interfacial"]},
-    {"id": "eq-bdmi-bc", "symbols": ["A", "partial-n", "m", "D", "ns"], "sources": ["bulk-api", "fem-bulk"]},
+    {"id": "eq-idmi-bc", "symbols": ["A", "partial-nu", "m", "D", "n-hat", "nu"], "sources": ["interfacial-api", "fem-interfacial"]},
+    {"id": "eq-bdmi-bc", "symbols": ["A", "partial-nu", "m", "D", "nu"], "sources": ["bulk-api", "fem-bulk"]},
     {"id": "eq-dmi-bc-length", "symbols": ["ell", "A", "D"], "sources": ["interfacial-api", "bulk-api"]}
   ],
   "public_api": {

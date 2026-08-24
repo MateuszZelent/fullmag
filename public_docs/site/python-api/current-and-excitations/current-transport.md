@@ -39,8 +39,17 @@ current-density vector.
 | `CurrentTransport.name` | `str` | `required` | $1$ | Non-empty | Module identity | module name |
 | `CurrentTransport.model` | `str` | `"prescribed_density"` | $1$ | `prescribed_density`, `ohmic_poisson`, alias `magnetoresistive_poisson` | Transport model | model |
 | `CurrentTransport.current_density` | `tuple[float,float,float] \| None` | `None` | $\mathrm{A\,m^{-2}}$ | Required for prescribed density | Prescribed current density | current density |
-| `CurrentTransport.conductivity_s_per_m` | `float \| None` | `None` | $\mathrm{S\,m^{-1}}$ | — | Conductivity | conductivity |
+| `CurrentTransport.solve_region` | `str \| None` | `None` | $1$ | Non-empty when supplied; legacy form only | Legacy solve-region name | solve region |
+| `CurrentTransport.conductivity_s_per_m` | `float \| None` | `None` | $\mathrm{S\,m^{-1}}$ | Finite and positive when supplied; legacy form only | Conductivity | conductivity |
 | `CurrentTransport.coupling` | `str` | `"one_way"` | $1$ | `one_way` or `bidirectional` | Coupling policy | coupling |
+| `CurrentTransport.domain` | `Sequence[RegionRef]` | `()` | $1$ | Typed, non-empty for Poisson models | Solved regions | domain |
+| `CurrentTransport.materials` | `Sequence[ChargeTransportMaterialAssignment]` | `()` | mixed | Typed, non-empty for Poisson models | Conductivity assignments | materials |
+| `CurrentTransport.boundaries` | `Sequence[ChargeBoundary]` | `()` | mixed | Typed, non-empty for Poisson models | Charge boundary conditions | boundaries |
+| `CurrentTransport.gauge` | `ChargePotentialGauge \| None` | `None` | $\mathrm V$ | Required for Poisson models | Potential gauge | gauge |
+| `CurrentTransport.solver` | `ChargeSolverPolicy \| None` | `None` | mixed | Required for Poisson models; reciprocal mode requires `block_gmres` | Solver policy | solver |
+| `CurrentTransport.time_envelope` | `TimeEnvelope \| None` | `None` | $1$ | Canonical typed envelope | Time dependence | time envelope |
+| `CurrentTransport.conservative_current_view` | `ConservativeCurrentView \| None` | `None` | mixed | Exclusive with structured closure; one-way Ohmic only | Closure-aware FEM current view | conservative current view |
+| `CurrentTransport.structured_current_closure` | `StructuredCurrentClosure \| None` | `None` | mixed | Exclusive with conservative view; matching FDM operator required | Closed structured-current circuit | structured current closure |
 
 ### Complete stage-first example
 
@@ -82,8 +91,10 @@ materials, boundaries, gauge, and solver policy.
 (python-api-current-and-excitations-current-transport-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
-Prescribed density without a current-density vector fails immediately; unsupported
-bidirectional/reciprocal combinations are rejected by the planner.
+Prescribed density without a current-density vector fails immediately. Poisson models require the
+complete domain/material/boundary/gauge/solver contract and cannot be mixed with the legacy
+`solve_region`/`conductivity_s_per_m` pair. Invalid reciprocal combinations fail during
+construction; executable-lane legality remains planner-resolved.
 
 (python-api-current-and-excitations-current-transport-discrete-realization)=
 <!-- (discrete-realization)= -->

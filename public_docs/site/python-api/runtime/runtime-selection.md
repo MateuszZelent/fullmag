@@ -28,8 +28,10 @@ All fields are identifiers or counts; no physical units are owned here.
 (python-api-runtime-runtime-selection-assumptions-and-validity)=
 <!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
-Selection values are validated immediately. The planner resolves the final backend/device lane and
-fails capability checks when the request cannot be satisfied.
+`RuntimeSelection` validates enum values, counts, indices, and thread counts on construction. The
+stage-builder helpers first capture normalized strings; invalid backend/device/precision values can
+therefore fail later when the canonical `RuntimeSelection` is built. The planner resolves the final
+lane and fails capability checks when the request cannot be satisfied.
 
 (python-api-runtime-runtime-selection-python-api)=
 <!-- (python-api)= -->
@@ -37,7 +39,7 @@ fails capability checks when the request cannot be satisfied.
 | Python | Type | Default | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|
 | `study.engine(backend)` | `str` | `"auto"` | One of `auto`, `fdm`, `fem`, `hybrid` | Requested backend target | planner-resolved | `runtime.backend_target` |
-| `study.device(spec, precision=...)` | `str` | `"auto"` | `cpu`, `cuda[:i]`, `gpu`, or a known device id | Requested device target and optional precision | planner-resolved | `runtime.device_target`, `runtime.execution_precision` |
+| `study.device(spec, precision=...)` | `str` | `"auto"` | Canonical values are `auto`, `cpu`, `cuda[:i]`, and `gpu`; descriptor construction rejects other values | Requested device target and optional precision | planner-resolved | `runtime.device_target`, `runtime.execution_precision` |
 | `study.mode(execution_mode)` | `str` | `"strict"` | `strict`, `extended`, or `hybrid` | Execution policy | planner-resolved | `runtime.execution_mode` |
 | `study.threads(cpu_threads)` | `int` | not set | `>= 1` | Requested CPU thread count | CPU lanes | `runtime.cpu_threads` |
 | `RuntimeSelection.gpu_count` | `int` | `0` | `0` or `1`; `> 1` rejected as unimplemented | Requested GPU count | CUDA lanes | `runtime.gpu_count` |
@@ -77,7 +79,7 @@ The runtime descriptor lowers into the `runtime` block carrying `backend_target`
 (python-api-runtime-runtime-selection-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
-Requested intent is preserved verbatim. Resolved execution is the planner's capability result and
+Requested intent is normalized into the canonical runtime descriptor. Resolved execution is the planner's capability result and
 must be recorded separately in provenance. Invalid values fail immediately; unsatisfiable lanes
 fail capability checks without silent fallback.
 

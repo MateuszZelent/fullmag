@@ -27,7 +27,9 @@ Size, center, and padding are in metres.
 (python-api-geometry-universe-and-domain-assumptions-and-validity)=
 <!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
-Manual universe mode requires an explicit size; padding/center are finite length-3 vectors.
+Manual universe mode requires an explicit size. `size`, `center`, and `padding` must be length-3
+sequences convertible to `float`; the shared `as_vector3` helper does not currently reject
+`NaN` or infinity in `center`.
 
 (python-api-geometry-universe-and-domain-python-api)=
 <!-- (python-api)= -->
@@ -83,7 +85,9 @@ mesh workflow metadata is recorded separately.
 (python-api-geometry-universe-and-domain-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
-Missing size in manual mode and malformed vectors fail immediately; FDM/FEM restrictions are
+Missing size in manual mode and vectors with the wrong length or non-convertible components fail
+immediately. Non-finite `center` components are not rejected by the Python constructor; later
+asset/planner behavior must not be presented as constructor validation. FDM/FEM restrictions are
 reported by the planner.
 
 (python-api-geometry-universe-and-domain-discrete-realization)=

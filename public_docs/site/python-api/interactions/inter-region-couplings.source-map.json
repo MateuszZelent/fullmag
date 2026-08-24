@@ -2,7 +2,7 @@
   "document": {
     "path": "public_docs/site/python-api/interactions/inter-region-couplings.md",
     "title": "Inter-region couplings Python API",
-    "interaction": "inter region couplings"
+    "interaction": "inter-region-couplings"
   },
   "backend_matrix": [
     {

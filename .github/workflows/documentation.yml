@@ -97,6 +97,9 @@ jobs:
           python -m pip install -r public_docs/site/requirements.txt
           python -m pip install ./packages/fullmag-py
 
+      - name: Test public documentation extensions
+        run: python -m unittest scripts/test_public_docs_timezone_fallback.py -v
+
       - name: Check public and internal documentation boundary
         run: python scripts/check_public_docs_boundary.py
 

@@ -1,0 +1,786 @@
+# Wave 2D explicit review diff
+#
+# Scope: 21 changed documentation/source-map files from the 25-page Wave 2D bucket.
+# Generated from the working-tree diff; this package intentionally excludes itself,
+# the Polish audit report, and the execution plan.
+diff --git a/public_docs/site/python-api/dynamics/adaptive-timestep.md b/public_docs/site/python-api/dynamics/adaptive-timestep.md
+index d572c327b..6831aa40c 100644
+--- a/public_docs/site/python-api/dynamics/adaptive-timestep.md
++++ b/public_docs/site/python-api/dynamics/adaptive-timestep.md
+@@ -47,7 +47,8 @@ At least one of `atol`/`rtol` must be positive; step bounds must satisfy
+ | `AdaptiveTimestep.max_spin_rotation` | `float \| None` | `None` | Positive | Spin-rotation cap | `adaptive_timestep.max_spin_rotation` |
+ | `AdaptiveTimestep.norm_tolerance` | `float \| None` | `None` | Positive | Norm tolerance | `adaptive_timestep.norm_tolerance` |
+ 
+-A `max_error` convenience mode sets `rtol=0` and records `tolerance_mode="max_error"`.
++The stage builder's `max_err=...` convenience form (with deprecated alias `max_error=...`) sets
++`atol=max_err`, `rtol=0`, and records `tolerance_mode="max_error"`.
+ 
+ ### Complete stage-first example
+ 
+@@ -113,7 +114,10 @@ Ownership tests compare this inventory with live signatures.
+ (python-api-dynamics-adaptive-timestep-limitations)=
+ <!-- (limitations)= -->
+ ## Limitations
+-Adaptive stepping requires an adaptive integrator; fixed-step schemes reject the policy.
++The Python model accepts adaptive control for `rk23`, `rk45`, and `coupled_imex_ark2`. The current
++canonical IR validator accepts adaptive control only for `rk23`, `rk45`, or `auto`; therefore an
++adaptive `coupled_imex_ark2` request is representable in Python but does not currently pass the
++end-to-end IR validation boundary. Fixed-step schemes reject the policy.
+ 
+ (python-api-dynamics-adaptive-timestep-scientific-bibliography)=
+ <!-- (scientific-bibliography)= -->
+diff --git a/public_docs/site/python-api/dynamics/field-refresh.md b/public_docs/site/python-api/dynamics/field-refresh.md
+index dd1d8486a..ac9de7615 100644
+--- a/public_docs/site/python-api/dynamics/field-refresh.md
++++ b/public_docs/site/python-api/dynamics/field-refresh.md
+@@ -84,7 +84,8 @@ the selected backend.
+ (python-api-dynamics-field-refresh-discrete-realization)=
+ <!-- (discrete-realization)= -->
+ ## Discrete realization
+-The cadence is consumed by demag-assembly schedules in the selected backend lane.
++The cadence is carried through ProblemIR and the planner into backend demagnetization cache/refresh
++schedules where that lane implements the policy.
+ 
+ (python-api-dynamics-field-refresh-implementation-mapping)=
+ <!-- (implementation-mapping)= -->
+@@ -99,7 +100,9 @@ Ownership tests compare this inventory with live signatures.
+ (python-api-dynamics-field-refresh-limitations)=
+ <!-- (limitations)= -->
+ ## Limitations
+-Cadence control is an efficiency hint; solver correctness must not depend on refresh frequency.
++Between refreshes the runtime may reuse a previously computed demagnetization field. This is a
++numerical approximation that can change trajectory accuracy; lane support and convergence with
++respect to `demag_interval_s` require executed validation.
+ 
+ (python-api-dynamics-field-refresh-scientific-bibliography)=
+ <!-- (scientific-bibliography)= -->
+diff --git a/public_docs/site/python-api/dynamics/llg.md b/public_docs/site/python-api/dynamics/llg.md
+index a4c00b7ca..a5d388e81 100644
+--- a/public_docs/site/python-api/dynamics/llg.md
++++ b/public_docs/site/python-api/dynamics/llg.md
+@@ -34,7 +34,7 @@ Constructor checks run immediately. Lowering and planning additionally check mes
+ ## Python API
+ | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+ |---|---|---|---|---|---|---|---|
+-| `LLG.gamma` | `float` | `221100.0` | $\mathrm{m\,A^{-1}\,s^{-1}}$ | Positive finite gyromagnetic ratio used by the H-field LLG convention. | Positive finite gyromagnetic ratio used by the H-field LLG convention. | FEM/FDM CPU/GPU; planner checks combinations | `study.dynamics.gamma` |
++| `LLG.gamma` | `float` | `221100.0` | $\mathrm{m\,A^{-1}\,s^{-1}}$ | Positive finite gyromagnetic ratio used by the H-field LLG convention. | Positive finite gyromagnetic ratio used by the H-field LLG convention. | FEM/FDM CPU/GPU; planner checks combinations | `study.dynamics.gyromagnetic_ratio` |
+ | `LLG.integrator` | `str` | `"auto"` | $1$ | Canonical supported integrator identifier or `auto`; planner and runtime legality are validated explicitly. | Canonical supported integrator identifier or `auto`; planner and runtime legality are validated explicitly. | FEM/FDM CPU/GPU; planner checks combinations | `study.dynamics.integrator` |
+ | `LLG.fixed_timestep` | `float \| None` | `None` | $\mathrm{s}$ | Positive fixed step when supplied; mutually constrained with adaptive stepping. | Positive fixed step when supplied; mutually constrained with adaptive stepping. | FEM/FDM CPU/GPU; planner checks combinations | `study.dynamics.fixed_timestep` |
+ | `LLG.adaptive_timestep` | `AdaptiveTimestep \| None` | `None` | $1$ | Optional adaptive-step contract. | Optional adaptive-step contract. | FEM/FDM CPU/GPU; planner checks combinations | `study.dynamics.adaptive_timestep` |
+diff --git a/public_docs/site/python-api/dynamics/llg.source-map.json b/public_docs/site/python-api/dynamics/llg.source-map.json
+index 5a40a489b..9f58d905b 100644
+--- a/public_docs/site/python-api/dynamics/llg.source-map.json
++++ b/public_docs/site/python-api/dynamics/llg.source-map.json
+@@ -44,7 +44,7 @@
+         "validation": "Positive finite gyromagnetic ratio used by the H-field LLG convention.",
+         "meaning": "Positive finite gyromagnetic ratio used by the H-field LLG convention.",
+         "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+-        "problem_ir": "study.dynamics.gamma"
++        "problem_ir": "study.dynamics.gyromagnetic_ratio"
+       },
+       {
+         "python": "LLG.integrator",
+diff --git a/public_docs/site/python-api/outputs/autosave.md b/public_docs/site/python-api/outputs/autosave.md
+index da8f3feea..2c7d06c9c 100644
+--- a/public_docs/site/python-api/outputs/autosave.md
++++ b/public_docs/site/python-api/outputs/autosave.md
+@@ -29,7 +29,9 @@ observables.
+ (python-api-outputs-autosave-assumptions-and-validity)=
+ <!-- (assumptions-and-validity)= -->
+ ## Assumptions and validity
+-Exactly one of the time or step cadence must be set; formats and layouts are validated immediately.
++Exactly one of the time or step cadence must be set for each table or field policy. A stage policy
++must contain a table policy or at least one field policy; formats and layouts are validated
++immediately.
+ 
+ (python-api-outputs-autosave-python-api)=
+ <!-- (python-api)= -->
+@@ -39,12 +41,15 @@ Exactly one of the time or step cadence must be set; formats and layouts are val
+ | `TableAutosave.t_sampl` / `every_steps` | `SamplingPeriod \| int` | exactly one required | Time or positive step cadence | Scalar table cadence | `table_autosave` |
+ | `TableAutosave.quantities` | `Sequence[str] \| None` | default set | Supported quantity ids | Table columns | `table_autosave.quantities` |
+ | `TableAutosave.extra_quantities` | `Sequence[str]` | `()` | Supported ids | Appended columns | merged quantities |
++| `TableAutosave.expressions` | `Sequence[str]` | `()` | Normalized non-empty expressions | Derived table columns | `table_autosave.expressions` |
+ | `TableAutosave.table_id` | `str` | `"default"` | Non-empty | Table identity | `table_autosave.table_id` |
+ | `FieldAutosave.quantity` | `str` | `required` | Known field id | Field cadence | `field_autosave.quantity` |
+ | `FieldAutosave.every` / `every_steps` | `SamplingPeriod \| int` | exactly one required | Time or positive step cadence | Field cadence | field cadence |
+ | `StageAutosave.target` | `str` | `"main"` | `[A-Za-z0-9][A-Za-z0-9._-]*` | Save target | `stage_autosave.target` |
+ | `StageAutosave.format` | `str` | `"zarr"` | `zarr`, `hdf5`, or `txt` | Persistence format | `stage_autosave.format` |
+ | `StageAutosave.layout` | `str` | `"continuous"` | `continuous` or `separate` | Layout policy | `stage_autosave.layout` |
++| `StageAutosave.table` | `TableAutosave \| None` | `None` | Table policy or `None` | Optional scalar table | `stage_autosave.table` |
++| `StageAutosave.fields` | `Sequence[FieldAutosave]` | `()` | Typed, unique quantities | Field policies | `stage_autosave.fields` |
+ 
+ ### Complete stage-first example
+ 
+@@ -94,7 +99,8 @@ field outputs fail immediately.
+ (python-api-outputs-autosave-discrete-realization)=
+ <!-- (discrete-realization)= -->
+ ## Discrete realization
+-Cadence is consumed by the runtime sampler; persistence formats map to JSON/Zarr/HDF5 writers.
++Cadence is consumed by the runtime sampler. The authoring format vocabulary is `zarr`, `hdf5`,
++and `txt`; actual writers and artifact production remain lane-dependent.
+ 
+ (python-api-outputs-autosave-implementation-mapping)=
+ <!-- (implementation-mapping)= -->
+diff --git a/public_docs/site/python-api/outputs/dispersion-and-response.md b/public_docs/site/python-api/outputs/dispersion-and-response.md
+index 0aea43fd8..5b67d64ba 100644
+--- a/public_docs/site/python-api/outputs/dispersion-and-response.md
++++ b/public_docs/site/python-api/outputs/dispersion-and-response.md
+@@ -37,7 +37,7 @@ Response observable identifiers and dispersion names are validated immediately.
+ | Python | Type | Default | Validation | Meaning | ProblemIR |
+ |---|---|---|---|---|---|
+ | `SaveDispersion.name` | `str` | `"dispersion"` | Non-empty | Curve name | `dispersion_curve.name` |
+-| `SaveDispersion.include_branch_table` | `bool` | `True` | Boolean | Include branch table | `dispersion_curve.include_branch_table` |
++| `SaveDispersion.include_branch_table` | `bool` | `True` | Stored as supplied; no runtime type check in this constructor | Include branch table | `dispersion_curve.include_branch_table` |
+ | `SaveResponse.observable` | `str` | `required` | One of the supported response observables | Response output | `frequency_response_output.observable` |
+ 
+ Supported response observables include `susceptibility_tensor`, `m_complex`, `u_complex`,
+@@ -53,7 +53,7 @@ import fullmag as fm
+ nm = 1.0e-9
+ 
+ study = fm.study("dispersion_response_api_example")
+-study.engine("fdm")
++study.engine("fem")
+ study.device("cpu", precision="double")
+ study.mode("strict")
+ 
+@@ -89,6 +89,8 @@ interpretation.
+ <!-- (discrete-realization)= -->
+ ## Discrete realization
+ Response materialization follows the frequency-domain solvers; dispersion follows the eigensolver.
++The current planner routes both eigenmode and frequency-response studies through FEM and rejects
++the FDM backend for these study kinds.
+ 
+ (python-api-outputs-dispersion-and-response-implementation-mapping)=
+ <!-- (implementation-mapping)= -->
+diff --git a/public_docs/site/python-api/outputs/fields-and-scalars.md b/public_docs/site/python-api/outputs/fields-and-scalars.md
+index 6d071eb54..e12b2d065 100644
+--- a/public_docs/site/python-api/outputs/fields-and-scalars.md
++++ b/public_docs/site/python-api/outputs/fields-and-scalars.md
+@@ -34,9 +34,9 @@ Constructor checks run immediately. Lowering and planning additionally check mes
+ ## Python API
+ | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+ |---|---|---|---|---|---|---|---|
+-| `SaveField.field` | `str` | `required` | $1$ | Canonical field ID. For example, `H_ex` requires `Exchange()`. | Canonical field ID. For example, `H_ex` requires `Exchange()`. | FEM/FDM CPU/GPU; planner checks combinations | `study.sampling.outputs[].field` |
++| `SaveField.field` | `str` | `required` | $1$ | Canonical field ID. For example, `H_ex` requires `Exchange()`. | Canonical field ID. For example, `H_ex` requires `Exchange()`. | FEM/FDM CPU/GPU; planner checks combinations | `study.sampling.outputs[].name` |
+ | `SaveField.every` | `positive float or "auto"` | `required` | $\mathrm{s}$ | Finite positive sampling period in seconds, or `"auto"`; step-count sampling is not accepted here. | Finite positive sampling period in seconds, or `"auto"`; step-count sampling is not accepted here. | FEM/FDM CPU/GPU; planner checks combinations | `study.sampling.outputs[].every` |
+-| `SaveScalar.scalar` | `str` | `required` | $1$ | Canonical scalar ID. For example, `E_ex` requires `Exchange()`. | Canonical scalar ID. For example, `E_ex` requires `Exchange()`. | FEM/FDM CPU/GPU; planner checks combinations | `study.sampling.outputs[].scalar` |
++| `SaveScalar.scalar` | `str` | `required` | $1$ | Canonical scalar ID. For example, `E_ex` requires `Exchange()`. | Canonical scalar ID. For example, `E_ex` requires `Exchange()`. | FEM/FDM CPU/GPU; planner checks combinations | `study.sampling.outputs[].name` |
+ | `SaveScalar.every` | `positive float or "auto"` | `required` | $\mathrm{s}$ | Finite positive sampling period in seconds, or `"auto"`; step-count sampling is not accepted here. | Finite positive sampling period in seconds, or `"auto"`; step-count sampling is not accepted here. | FEM/FDM CPU/GPU; planner checks combinations | `study.sampling.outputs[].every` |
+ 
+ 
+diff --git a/public_docs/site/python-api/outputs/fields-and-scalars.source-map.json b/public_docs/site/python-api/outputs/fields-and-scalars.source-map.json
+index 247a26f71..974469f4e 100644
+--- a/public_docs/site/python-api/outputs/fields-and-scalars.source-map.json
++++ b/public_docs/site/python-api/outputs/fields-and-scalars.source-map.json
+@@ -50,7 +50,7 @@
+         "validation": "Canonical field ID. For example, `H_ex` requires `Exchange()`.",
+         "meaning": "Canonical field ID. For example, `H_ex` requires `Exchange()`.",
+         "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+-        "problem_ir": "study.sampling.outputs[].field"
++        "problem_ir": "study.sampling.outputs[].name"
+       },
+       {
+         "python": "SaveField.every",
+@@ -70,7 +70,7 @@
+         "validation": "Canonical scalar ID. For example, `E_ex` requires `Exchange()`.",
+         "meaning": "Canonical scalar ID. For example, `E_ex` requires `Exchange()`.",
+         "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+-        "problem_ir": "study.sampling.outputs[].scalar"
++        "problem_ir": "study.sampling.outputs[].name"
+       },
+       {
+         "python": "SaveScalar.every",
+diff --git a/public_docs/site/python-api/outputs/modes-and-spectra.md b/public_docs/site/python-api/outputs/modes-and-spectra.md
+index fd275acaa..732d3e26c 100644
+--- a/public_docs/site/python-api/outputs/modes-and-spectra.md
++++ b/public_docs/site/python-api/outputs/modes-and-spectra.md
+@@ -42,7 +42,7 @@ Mode index sets must be non-negative, unique, and non-empty (raw indices or bran
+ | `SaveMode.sample_indices` / `sample_labels` | `Sequence` | `()` | Non-negative indices / non-empty labels | Sample selector | `eigen_mode.sample_selector` |
+ | `SaveSpectrum.quantity` | `str` | `"eigenfrequency"` | Non-empty | Spectrum quantity | `eigen_spectrum.quantity` |
+ | `SaveSpectrum.scope` | `str` | `"per_sample"` | `global` or `per_sample` | Spectrum scope | `eigen_spectrum.scope` |
+-| `SaveEigenDiagnostics.*` | `bool` | `True` | Boolean | Diagnostic flags | `eigen_diagnostics` |
++| `SaveEigenDiagnostics.*` | `bool` | `True` | Stored as supplied; constructor does not runtime-check Boolean types | Diagnostic flags | `eigen_diagnostics` |
+ 
+ ### Complete stage-first example
+ 
+@@ -53,7 +53,7 @@ import fullmag as fm
+ nm = 1.0e-9
+ 
+ study = fm.study("modes_spectra_api_example")
+-study.engine("fdm")
++study.engine("fem")
+ study.device("cpu", precision="double")
+ study.mode("strict")
+ 
+@@ -101,7 +101,9 @@ Ownership tests compare this inventory with live signatures.
+ (python-api-outputs-modes-and-spectra-limitations)=
+ <!-- (limitations)= -->
+ ## Limitations
+-Output availability depends on the eigensolver realization and equilibrium source.
++Output availability depends on the eigensolver realization and equilibrium source. The current
++planner executes eigenmode studies only with `backend="fem"`; FDM authoring is rejected during
++planning.
+ 
+ (python-api-outputs-modes-and-spectra-scientific-bibliography)=
+ <!-- (scientific-bibliography)= -->
+diff --git a/public_docs/site/python-api/outputs/quantities.md b/public_docs/site/python-api/outputs/quantities.md
+index 27f03dc67..337fd1a62 100644
+--- a/public_docs/site/python-api/outputs/quantities.md
++++ b/public_docs/site/python-api/outputs/quantities.md
+@@ -74,6 +74,10 @@ study.stages.add_run(stage_id="run", until=1.0e-12)
+ ## ProblemIR
+ `SaveQuantity.to_ir()` emits the quantity id, cadence, and optional reduction/component.
+ 
++`study.save(...)` does not construct `SaveQuantity`: it constructs `SaveField` or `SaveScalar`
++for periodic time outputs, and dedicated eigen-output records for `spectrum`, `mode`, and
++`dispersion`. `SaveQuantity` is currently the lower-level generic quantity record.
++
+ (python-api-outputs-quantities-round-trip-and-failure-semantics)=
+ <!-- (round-trip-and-failure-semantics)= -->
+ ## Round-trip and failure semantics
+@@ -100,7 +104,8 @@ Ownership tests compare this inventory with live ids and reduction sets.
+ <!-- (limitations)= -->
+ ## Limitations
+ Requesting a quantity does not guarantee the configured interactions materialize it; planner
+-legality is authoritative.
++legality is authoritative. The stage-first builder has no direct entrypoint for attaching a
++`SaveQuantity` instance to a study.
+ 
+ (python-api-outputs-quantities-scientific-bibliography)=
+ <!-- (scientific-bibliography)= -->
+diff --git a/public_docs/site/python-api/outputs/snapshots.md b/public_docs/site/python-api/outputs/snapshots.md
+index cdda5e233..7167bcd66 100644
+--- a/public_docs/site/python-api/outputs/snapshots.md
++++ b/public_docs/site/python-api/outputs/snapshots.md
+@@ -37,7 +37,7 @@ Field, component, and positive cadence are validated immediately.
+ | `Snapshot.field` | `str` | `required` | Known field id | Base field | `snapshot.field` |
+ | `Snapshot.component` | `str` | `required` | `x`, `y`, `z`, or `3D` | Component selector | `snapshot.component` |
+ | `Snapshot.every` | `float` | `required` | Positive | Save interval | `snapshot.every_seconds` |
+-| `Snapshot.layer` | `str \| None` | `None` | Non-empty when set | Layer/region scope | `snapshot.layer` |
++| `Snapshot.layer` | `str \| None` | `None` | Stored as supplied; this constructor does not reject an empty string | Layer/region scope | `snapshot.layer` |
+ 
+ ### Complete stage-first example
+ 
+diff --git a/public_docs/site/python-api/runtime/artifacts.md b/public_docs/site/python-api/runtime/artifacts.md
+index 4c9fc31e9..63e434eea 100644
+--- a/public_docs/site/python-api/runtime/artifacts.md
++++ b/public_docs/site/python-api/runtime/artifacts.md
+@@ -23,8 +23,9 @@ No physical equation is owned here.
+ (python-api-runtime-artifacts-symbols-and-si-units)=
+ <!-- (symbols-and-si-units)= -->
+ ## Symbols and SI units
+-Magnetization state is stored with its own unit metadata; table quantities carry the units defined
+-by the corresponding observables.
++Magnetization state values represent the dimensionless unit-vector field `m`. The JSON state
++writer records `observable="m"` but no separate unit field; table and field-artifact units belong
++to their respective runtime schemas.
+ 
+ (python-api-runtime-artifacts-assumptions-and-validity)=
+ <!-- (assumptions-and-validity)= -->
+@@ -81,7 +82,9 @@ writing a best-effort file.
+ (python-api-runtime-artifacts-discrete-realization)=
+ <!-- (discrete-realization)= -->
+ ## Discrete realization
+-State serialization lives in `fullmag/init/state_io.py` and supports JSON, Zarr, and HDF5.
++The lightweight `Result.save_state()` path delegates to `fullmag/init/state_io.py` and supports
++JSON, Zarr, and HDF5 (`h5`, with `hdf5` accepted as an alias). Session artifacts are separate v2
++resources under `/v2/sessions/current/data/artifacts`.
+ 
+ (python-api-runtime-artifacts-implementation-mapping)=
+ <!-- (implementation-mapping)= -->
+@@ -97,8 +100,8 @@ State round-trip is covered by read/write tests; ownership tests validate the so
+ (python-api-runtime-artifacts-limitations)=
+ <!-- (limitations)= -->
+ ## Limitations
+-Artifact format support does not guarantee interchange with other tools; readers must honor the
+-stored unit and dataset metadata.
++Artifact format support does not guarantee interchange with other tools. JSON magnetization state
++does not carry a separate unit field; Zarr/HDF5 readers must honor dataset and artifact metadata.
+ 
+ (python-api-runtime-artifacts-scientific-bibliography)=
+ <!-- (scientific-bibliography)= -->
+@@ -112,3 +115,4 @@ No physical model is introduced.
+ |---|---|---|---|---|
+ | State persistence | `packages/fullmag-py/src/fullmag/runtime/simulation.py` | `Result.save_state` | Public save entrypoint | Ownership test |
+ | Serialization formats | `packages/fullmag-py/src/fullmag/init/state_io.py` | `save_magnetization`, `load_magnetization` | JSON/Zarr/HDF5 round-trip | Read/write tests |
++| Session artifact resources | `crates/fullmag-api/src/router_v2/mod.rs` | `/v2/sessions/current/data/artifacts` | Canonical v2 artifact listing and detail routes | Router tests |
+diff --git a/public_docs/site/python-api/runtime/backend-policy.md b/public_docs/site/python-api/runtime/backend-policy.md
+index 9e24250a2..73d3e314f 100644
+--- a/public_docs/site/python-api/runtime/backend-policy.md
++++ b/public_docs/site/python-api/runtime/backend-policy.md
+@@ -28,8 +28,10 @@ All values are identifiers; no physical units are owned here.
+ (python-api-runtime-backend-policy-assumptions-and-validity)=
+ <!-- (assumptions-and-validity)= -->
+ ## Assumptions and validity
+-Enum coercion is case-insensitive and fail-closed. Hybrid backend and hybrid mode must be selected
+-together; any other pairing is rejected.
++The stage-builder helpers lowercase string identifiers before the canonical descriptor is built;
++direct enum construction uses the lowercase enum values shown below. `Simulation` requires hybrid
++backend and hybrid mode together. `RuntimeSelection` itself stores the two enum fields but does not
++enforce that pairing.
+ 
+ (python-api-runtime-backend-policy-python-api)=
+ <!-- (python-api)= -->
+@@ -78,8 +80,10 @@ The enum values serialize as their lowercase strings inside the `runtime` block.
+ (python-api-runtime-backend-policy-round-trip-and-failure-semantics)=
+ <!-- (round-trip-and-failure-semantics)= -->
+ ## Round-trip and failure semantics
+-Requested policy is preserved verbatim. Resolution is reported independently. Invalid identifiers
+-and hybrid/non-hybrid mismatches fail immediately.
++Requested policy is normalized to canonical lowercase identifiers. Invalid enum identifiers fail
++when the canonical descriptor is constructed; hybrid/non-hybrid mismatches fail when constructing
++`Simulation` and at planner boundaries. Resolved execution is reported independently by the v2
++session/run resource.
+ 
+ (python-api-runtime-backend-policy-discrete-realization)=
+ <!-- (discrete-realization)= -->
+diff --git a/public_docs/site/python-api/runtime/provenance.md b/public_docs/site/python-api/runtime/provenance.md
+index fc108c70c..0b40e1b8f 100644
+--- a/public_docs/site/python-api/runtime/provenance.md
++++ b/public_docs/site/python-api/runtime/provenance.md
+@@ -12,8 +12,11 @@ owner: fullmag-public-docs
+ (python-api-runtime-provenance-problem-statement)=
+ <!-- (problem-statement)= -->
+ ## Contract
+-Provenance keeps requested intent separate from resolved execution. A result records the requested
+-backend/mode/precision together with the actual run status and artifact directory.
++Fullmag has two distinct result surfaces. The lightweight Python `Result` records one
++backend/mode/precision tuple copied from `Simulation` plus status, notes, steps, and `output_dir`;
++it does not contain separate requested and resolved fields. The session-scoped v2 current-run
++resource is the authoritative surface that keeps requested intent separate from resolved
++execution.
+ 
+ (python-api-runtime-provenance-governing-equations)=
+ <!-- (governing-equations)= -->
+@@ -28,29 +31,33 @@ All fields are identifiers or status strings.
+ (python-api-runtime-provenance-assumptions-and-validity)=
+ <!-- (assumptions-and-validity)= -->
+ ## Assumptions and validity
+-Requested and resolved values are normalized but never conflated; a `planned` result is distinct
+-from a `completed` one.
++Requested and resolved values are separate in the v2 current-run resource. Do not infer that split
++from the lightweight Python `Result`, whose single tuple is the `Simulation` selection. A
++`planned` lightweight result is distinct from a `completed` one.
+ 
+ (python-api-runtime-provenance-python-api)=
+ <!-- (python-api)= -->
+ ## Python API
+-| Record | Meaning |
+-|---|---|
+-| requested backend/mode/precision | What the script asked for |
+-| resolved backend/mode/precision | What the planner selected after capability checks |
+-| `Result.status` | `completed`, `planned`, or `not-executable` |
+-| `Result.output_dir` | Directory of the produced artifacts |
++| Surface | Record | Meaning |
++|---|---|---|
++| Python `Result` | `backend`, `mode`, `precision` | Selection carried by `Simulation`; not a requested/resolved pair |
++| Python `Result` | `status`, `notes`, `output_dir` | Lightweight run outcome and local artifact-directory reference |
++| `GET /v2/sessions/current/simulation/runs/current` | `requested_backend/device/precision/mode` | Requested execution identity |
++| Same v2 resource | `resolved_backend/device/precision/mode` plus runtime family/engine/worker/fallback | Resolved execution identity and fallback provenance |
+ 
+ ### Complete stage-first context
+ 
+-Provenance is attached to the study the script authored; the resolved record is read from the
+-executed `Result` (see {doc}`../runtime/results`).
++For lightweight direct execution, inspect {doc}`../runtime/results` with the limitation above. For
++the control-room/session runtime, read the v2 current-run resource; HTTP v2 is authoritative and
++realtime events only invalidate cached resources.
+ 
+ (python-api-runtime-provenance-problem-ir)=
+ <!-- (problem-ir)= -->
+ ## ProblemIR
+-Lowering preserves the requested descriptors (`requested_backend`, `execution_mode`,
+-`execution_precision`); resolved execution is runtime output.
++Lowering preserves requested backend and precision in `backend_policy`, execution mode in
++`validation_profile`, and the full requested runtime descriptor in
++`problem_meta.runtime_metadata.runtime_selection`. Resolved execution is session/runtime output,
++not a field injected into ProblemIR by `Simulation.to_ir()`.
+ 
+ (python-api-runtime-provenance-round-trip-and-failure-semantics)=
+ <!-- (round-trip-and-failure-semantics)= -->
+@@ -66,19 +73,22 @@ Planner resolution and runner status are the authoritative provenance sources.
+ (python-api-runtime-provenance-implementation-mapping)=
+ <!-- (implementation-mapping)= -->
+ ## Implementation mapping
+-Anchors: `packages/fullmag-py/src/fullmag/model/problem.py` (`RuntimeSelection`) and
+-`packages/fullmag-py/src/fullmag/runtime/simulation.py` (`class Result`).
++Anchors: `packages/fullmag-py/src/fullmag/model/problem.py` (`RuntimeSelection`),
++`packages/fullmag-py/src/fullmag/runtime/simulation.py` (`class Result`), and
++`crates/fullmag-api/src/router_v2/handlers/simulation/runtime.rs` (`CurrentRunResource` handler).
+ 
+ (python-api-runtime-provenance-validation)=
+ <!-- (validation)= -->
+ ## Validation
+-Capability and round-trip tests require requested/resolved separation to remain observable.
++Python tests cover `Simulation` lowering and lightweight results. Router tests cover the v2
++current-run requested/resolved fields.
+ 
+ (python-api-runtime-provenance-limitations)=
+ <!-- (limitations)= -->
+ ## Limitations
+-Provenance records resolution; it does not by itself prove that a GPU lane executed on a current
+-device.
++The lightweight Python `Result` is not sufficient evidence of resolved execution. The v2
++current-run resource records resolution, but a resolved identity alone still does not prove that a
++GPU kernel executed; runtime diagnostics and qualified artifacts provide that evidence.
+ 
+ (python-api-runtime-provenance-scientific-bibliography)=
+ <!-- (scientific-bibliography)= -->
+@@ -91,4 +101,5 @@ No physical model is introduced.
+ | Claim | Path | Stable symbol | Responsibility | Evidence |
+ |---|---|---|---|---|
+ | Requested selection | `packages/fullmag-py/src/fullmag/model/problem.py` | `class RuntimeSelection` | Requested descriptors | Ownership test |
+-| Resolved result | `packages/fullmag-py/src/fullmag/runtime/simulation.py` | `class Result` | Resolved status | Ownership test |
++| Lightweight result | `packages/fullmag-py/src/fullmag/runtime/simulation.py` | `class Result` | Single selected tuple and local outcome | Python tests |
++| Session requested/resolved record | `crates/fullmag-api/src/router_v2/handlers/simulation/runtime.rs` | `get_current_run` | Canonical v2 run provenance | Router tests |
+diff --git a/public_docs/site/python-api/runtime/results.md b/public_docs/site/python-api/runtime/results.md
+index 20fd5c381..a286b80c5 100644
+--- a/public_docs/site/python-api/runtime/results.md
++++ b/public_docs/site/python-api/runtime/results.md
+@@ -12,8 +12,9 @@ owner: fullmag-public-docs
+ (python-api-runtime-results-problem-statement)=
+ <!-- (problem-statement)= -->
+ ## Contract
+-`Result` is the executed (or planned) run outcome: status, resolved backend/mode/precision, step
+-statistics, optional final magnetization, and output directory.
++`Result` is the lightweight direct-execution outcome: status, the backend/mode/precision selected
++on `Simulation`, step statistics, optional final magnetization, and output directory. It is not the
++session-scoped v2 run resource and does not expose separate requested/resolved identities.
+ 
+ (python-api-runtime-results-governing-equations)=
+ <!-- (governing-equations)= -->
+@@ -30,20 +31,22 @@ Energy scalars are in joules; measure-like maxima `max_h_eff`, `max_h_demag` in
+ (python-api-runtime-results-assumptions-and-validity)=
+ <!-- (assumptions-and-validity)= -->
+ ## Assumptions and validity
+-`last()` and `series()` require step data; unknown quantities raise immediately.
++`last()` requires step data. `series()` returns an empty list when there are no steps. Unknown
++quantities raise immediately.
+ 
+ (python-api-runtime-results-python-api)=
+ <!-- (python-api)= -->
+ ## Python API
+-| Python | Type | Default | Meaning | ProblemIR |
++| Python | Type | Default | Meaning | Origin |
+ |---|---|---|---|---|
+-| `Result.status` | `str` | `required` | `completed`, `planned`, or `not-executable` | run status |
+-| `Result.backend` | `BackendTarget` | `required` | Resolved backend | `requested_backend` |
+-| `Result.mode` | `ExecutionMode` | `required` | Resolved execution mode | `execution_mode` |
+-| `Result.precision` | `ExecutionPrecision` | `required` | Resolved precision | `execution_precision` |
+-| `Result.steps` | `Sequence[StepStats]` | empty | Per-step statistics | steps array |
+-| `Result.final_magnetization` | `list[list[float]] \| None` | `None` | Final vector samples | final magnetization |
+-| `Result.output_dir` | `str \| None` | `None` | Artifact directory | output dir |
++| `Result.status` | `str` | `required` | Common values are `completed`, `planned`, and `not-executable` | lightweight runtime result |
++| `Result.backend` | `BackendTarget` | `required` | Backend selection copied from `Simulation` | `Simulation.backend` |
++| `Result.mode` | `ExecutionMode` | `required` | Mode selection copied from `Simulation` | `Simulation.mode` |
++| `Result.precision` | `ExecutionPrecision` | `required` | Precision selection copied from `Simulation` | `Simulation.precision` |
++| `Result.notes` | `Sequence[str]` | empty | Planner/runtime explanation strings | lightweight runtime result |
++| `Result.steps` | `Sequence[StepStats]` | empty | Per-step statistics | native runner payload |
++| `Result.final_magnetization` | `list[list[float]] \| None` | `None` | Final vector samples | native runner payload |
++| `Result.output_dir` | `str \| None` | `None` | Local artifact-directory reference | `Simulation.run(output_dir=...)` |
+ 
+ ### Read access
+ 
+@@ -84,7 +87,7 @@ study.stages.add_run(stage_id="run", until=1.0e-12)
+ <!-- (problem-ir)= -->
+ ## ProblemIR
+ `Result` is runtime output, not lowering input; it has no `ProblemIR` destination. Its backend,
+-mode, and precision fields echo the resolved execution record.
++mode, and precision fields echo the `Simulation` selection, not a separately resolved record.
+ 
+ (python-api-runtime-results-round-trip-and-failure-semantics)=
+ <!-- (round-trip-and-failure-semantics)= -->
+@@ -111,7 +114,9 @@ Ownership tests compare this inventory with live signatures.
+ (python-api-runtime-results-limitations)=
+ <!-- (limitations)= -->
+ ## Limitations
+-A `planned` or `not-executable` result carries no step data; consumers must branch on `status`.
++A `planned` or missing-native-core `not-executable` result carries no step data; consumers must
++branch on `status`. For canonical session requested/resolved provenance, use
++`/v2/sessions/current/simulation/runs/current` rather than this class.
+ 
+ (python-api-runtime-results-scientific-bibliography)=
+ <!-- (scientific-bibliography)= -->
+diff --git a/public_docs/site/python-api/runtime/runtime-selection.md b/public_docs/site/python-api/runtime/runtime-selection.md
+index d2cba2fe9..c2dea5ec6 100644
+--- a/public_docs/site/python-api/runtime/runtime-selection.md
++++ b/public_docs/site/python-api/runtime/runtime-selection.md
+@@ -28,8 +28,10 @@ All fields are identifiers or counts; no physical units are owned here.
+ (python-api-runtime-runtime-selection-assumptions-and-validity)=
+ <!-- (assumptions-and-validity)= -->
+ ## Assumptions and validity
+-Selection values are validated immediately. The planner resolves the final backend/device lane and
+-fails capability checks when the request cannot be satisfied.
++`RuntimeSelection` validates enum values, counts, indices, and thread counts on construction. The
++stage-builder helpers first capture normalized strings; invalid backend/device/precision values can
++therefore fail later when the canonical `RuntimeSelection` is built. The planner resolves the final
++lane and fails capability checks when the request cannot be satisfied.
+ 
+ (python-api-runtime-runtime-selection-python-api)=
+ <!-- (python-api)= -->
+@@ -37,7 +39,7 @@ fails capability checks when the request cannot be satisfied.
+ | Python | Type | Default | Validation | Meaning | Backend support | ProblemIR |
+ |---|---|---|---|---|---|---|
+ | `study.engine(backend)` | `str` | `"auto"` | One of `auto`, `fdm`, `fem`, `hybrid` | Requested backend target | planner-resolved | `runtime.backend_target` |
+-| `study.device(spec, precision=...)` | `str` | `"auto"` | `cpu`, `cuda[:i]`, `gpu`, or a known device id | Requested device target and optional precision | planner-resolved | `runtime.device_target`, `runtime.execution_precision` |
++| `study.device(spec, precision=...)` | `str` | `"auto"` | Canonical values are `auto`, `cpu`, `cuda[:i]`, and `gpu`; descriptor construction rejects other values | Requested device target and optional precision | planner-resolved | `runtime.device_target`, `runtime.execution_precision` |
+ | `study.mode(execution_mode)` | `str` | `"strict"` | `strict`, `extended`, or `hybrid` | Execution policy | planner-resolved | `runtime.execution_mode` |
+ | `study.threads(cpu_threads)` | `int` | not set | `>= 1` | Requested CPU thread count | CPU lanes | `runtime.cpu_threads` |
+ | `RuntimeSelection.gpu_count` | `int` | `0` | `0` or `1`; `> 1` rejected as unimplemented | Requested GPU count | CUDA lanes | `runtime.gpu_count` |
+@@ -77,7 +79,7 @@ The runtime descriptor lowers into the `runtime` block carrying `backend_target`
+ (python-api-runtime-runtime-selection-round-trip-and-failure-semantics)=
+ <!-- (round-trip-and-failure-semantics)= -->
+ ## Round-trip and failure semantics
+-Requested intent is preserved verbatim. Resolved execution is the planner's capability result and
++Requested intent is normalized into the canonical runtime descriptor. Resolved execution is the planner's capability result and
+ must be recorded separately in provenance. Invalid values fail immediately; unsatisfiable lanes
+ fail capability checks without silent fallback.
+ 
+diff --git a/public_docs/site/python-api/runtime/simulation.md b/public_docs/site/python-api/runtime/simulation.md
+index f6d52203f..8a696cf5e 100644
+--- a/public_docs/site/python-api/runtime/simulation.md
++++ b/public_docs/site/python-api/runtime/simulation.md
+@@ -28,8 +28,9 @@ The stop time `until` is in seconds. Other fields are identifiers.
+ (python-api-runtime-simulation-assumptions-and-validity)=
+ <!-- (assumptions-and-validity)= -->
+ ## Assumptions and validity
+-Hybrid backend/mode coupling is validated on construction. `run(until=...)` requires a positive
+-stop time.
++Hybrid backend/mode coupling is validated on construction. `run(until=None)` is planning-only; a
++supplied stop time is delegated to the native runner rather than validated as positive by this
++Python method.
+ 
+ (python-api-runtime-simulation-python-api)=
+ <!-- (python-api)= -->
+@@ -37,9 +38,9 @@ stop time.
+ | Python | Type | Default | Validation | Meaning | ProblemIR |
+ |---|---|---|---|---|---|
+ | `Simulation.problem` | `Problem` | `required` | Canonical problem | Problem to execute | problem body |
+-| `Simulation.backend` | `BackendTarget \| str \| None` | problem runtime | Auto/cpu/gpu as enum | Resolved backend | `requested_backend` |
+-| `Simulation.mode` | `ExecutionMode \| str \| None` | problem runtime | strict/extended/hybrid | Execution policy | `execution_mode` |
+-| `Simulation.precision` | `ExecutionPrecision \| str \| None` | problem runtime | single/double | Floating-point precision | `execution_precision` |
++| `Simulation.backend` | `BackendTarget \| str \| None` | problem runtime | `auto`, `fdm`, `fem`, or `hybrid` | Requested backend override | `backend_policy.requested_backend` |
++| `Simulation.mode` | `ExecutionMode \| str \| None` | problem runtime | `strict`, `extended`, or `hybrid` | Requested execution policy override | `validation_profile.execution_mode` |
++| `Simulation.precision` | `ExecutionPrecision \| str \| None` | problem runtime | `single` or `double` | Requested precision override | `backend_policy.execution_precision` |
+ 
+ ### Complete stage-first example
+ 
+@@ -70,8 +71,10 @@ The normal public path does not construct `Simulation` directly; the study build
+ (python-api-runtime-simulation-problem-ir)=
+ <!-- (problem-ir)= -->
+ ## ProblemIR
+-`Simulation.to_ir()` delegates to `Problem.to_ir()` and injects `requested_backend`,
+-`execution_mode`, and `execution_precision`.
++`Simulation.to_ir()` delegates to `Problem.to_ir()`. The overrides are serialized as
++`backend_policy.requested_backend`, `validation_profile.execution_mode`, and
++`backend_policy.execution_precision`; the runtime descriptor is also retained under
++`problem_meta.runtime_metadata.runtime_selection`.
+ 
+ (python-api-runtime-simulation-round-trip-and-failure-semantics)=
+ <!-- (round-trip-and-failure-semantics)= -->
+diff --git a/public_docs/site/python-api/studies/eigenmodes.md b/public_docs/site/python-api/studies/eigenmodes.md
+index 102073535..1bd17a791 100644
+--- a/public_docs/site/python-api/studies/eigenmodes.md
++++ b/public_docs/site/python-api/studies/eigenmodes.md
+@@ -40,18 +40,21 @@ validity, operator/target constraints, mesh cardinality, capability, and backend
+ ## Python API
+ | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+ |---|---|---|---|---|---|---|---|
+-| `Eigenmodes.outputs` | `Sequence[EigenOutputSpec]` | `required` | $1$ | At least one; `SaveResponse` is rejected | Mode/spectrum/dispersion/diagnostic outputs | FDM/FEM CPU/GPU; planner checks materialization | `sampling.outputs` |
+-| `Eigenmodes.count` | `int` | `20` | $1$ | Positive | Number of eigenvectors requested | FEM/FDM CPU/GPU | `count` |
+-| `Eigenmodes.target` | `str` | `"lowest"` | $1$ | `lowest`, `nearest`, or `frequency_window` | Eigenvalue selection policy | FEM/FDM CPU/GPU | `target` |
+-| `Eigenmodes.target_frequency` | `float \| None` | `None` | $\mathrm{Hz}$ | Positive; required for `nearest` | Frequency target for nearest modes | FEM/FDM CPU/GPU | `target.frequency_hz` |
+-| `Eigenmodes.frequency_min` / `frequency_max` | `float \| None` | `None` | $\mathrm{Hz}$ | Positive, `min < max`; `frequency_window` only | Window bounds | FEM/FDM CPU/GPU | `target.frequency_min_hz/max_hz` |
+-| `Eigenmodes.operator` | `str` | `"linearized_llg"` | $1$ | `linearized_llg` or `full_2x2` | Linearized operator | FEM/FDM CPU/GPU | `operator.kind` |
+-| `Eigenmodes.include_demag` | `bool` | `True` | $1$ | Boolean | Include the dynamic demagnetization term | FEM/FDM CPU/GPU | `operator.include_demag` |
+-| `Eigenmodes.equilibrium_source` | `str` | `"relax"` (stage entry default) | $1$ | `provided`, `relax`, or `artifact` | Equilibrium acquisition | FEM/FDM CPU/GPU | `equilibrium` |
+-| `Eigenmodes.k_sampling` | `object \| None` | `None` | $\mathrm{m^{-1}}$ | Valid k sampling or k vector | Wave-vector sampling | FEM/FDM CPU/GPU | `k_sampling` |
+-| `Eigenmodes.normalization` | `str` | `"unit_l2"` | $1$ | `unit_l2` or `unit_max_amplitude` | Mode normalization | FEM/FDM CPU/GPU | `normalization` |
+-| `Eigenmodes.damping_policy` | `str` | `"ignore"` | $1$ | `ignore` or `include` | Damping treatment | FEM/FDM CPU/GPU | `damping_policy` |
+-| `Eigenmodes.spin_wave_bc` | `str \| mapping \| PeriodicBC \| FloquetBC` | `"free"` | $1$ | One of `free`, `pinned`, `periodic`, `floquet`, `surface_anisotropy` | Spin-wave boundary condition | FEM/FDM CPU/GPU | `spin_wave_bc` |
++| `Eigenmodes.outputs` | `Sequence[EigenOutputSpec]` | `required` | $1$ | At least one; `SaveResponse` is rejected | Mode/spectrum/dispersion/diagnostic outputs | FEM only in the current planner | `sampling.outputs` |
++| `Eigenmodes.count` | `int` | `20` (`10` in `add_eigenmodes`) | $1$ | Positive | Number of eigenvectors requested | FEM only in the current planner | `count` |
++| `Eigenmodes.target` | `str` | `"lowest"` | $1$ | `lowest`, `nearest`, or `frequency_window` | Eigenvalue selection policy | FEM only in the current planner | `target` |
++| `Eigenmodes.target_frequency` | `float \| None` | `None` | $\mathrm{Hz}$ | Positive; required for `nearest` | Frequency target for nearest modes | FEM only in the current planner | `target.frequency_hz` |
++| `Eigenmodes.frequency_min` / `frequency_max` | `float \| None` | `None` | $\mathrm{Hz}$ | Positive, `min < max`; `frequency_window` only | Window bounds | FEM only in the current planner | `target.frequency_min_hz/max_hz` |
++| `Eigenmodes.operator` | `str` | `"linearized_llg"` | $1$ | `linearized_llg` or `full_2x2` | Linearized operator | FEM only in the current planner | `operator.kind` |
++| `Eigenmodes.include_demag` | `bool` | `True` | $1$ | Boolean | Include the dynamic demagnetization term | FEM only in the current planner | `operator.include_demag` |
++| `Eigenmodes.equilibrium_source` | `str` | `"provided"` (`"relax"` in `add_eigenmodes`) | $1$ | `provided`, `relax`, or `artifact`; artifact source requires `equilibrium_artifact` | Equilibrium acquisition | FEM only in the current planner | `equilibrium` |
++| `Eigenmodes.equilibrium_artifact` | `str \| None` | `None` | $1$ | Required only for `equilibrium_source="artifact"` | Equilibrium artifact path | FEM only in the current planner | `equilibrium.path` |
++| `Eigenmodes.k_sampling` / `k_vector` | `object \| None` / vector | `None` | $\mathrm{m^{-1}}$ | Mutually normalized k-sampling forms | Wave-vector sampling | FEM only in the current planner | `k_sampling` |
++| `Eigenmodes.mode_tracking` | `ModeTracking \| None` | `None` | mixed | Typed tracking policy | Optional mode/branch tracking | FEM only in the current planner | `mode_tracking` |
++| `Eigenmodes.normalization` | `str` | `"unit_l2"` | $1$ | `unit_l2` or `unit_max_amplitude` | Mode normalization | FEM only in the current planner | `normalization` |
++| `Eigenmodes.damping_policy` | `str` | `"ignore"` | $1$ | `ignore` or `include` | Damping treatment | FEM only in the current planner | `damping_policy` |
++| `Eigenmodes.spin_wave_bc` | `str \| mapping \| PeriodicBC \| FloquetBC` | `"free"` | $1$ | One of `free`, `pinned`, `periodic`, `floquet`, `surface_anisotropy` | Spin-wave boundary condition | FEM only in the current planner | `spin_wave_bc` |
++| `Eigenmodes.dynamics` | `LLG` | `LLG()` | mixed | Typed LLG policy | Linearization dynamics | FEM only in the current planner | `dynamics` |
+ 
+ ### Complete stage-first example
+ 
+@@ -66,7 +69,7 @@ nm = 1.0e-9
+ 
+ # %% Study and execution lane
+ study = fm.study("eigenmodes_api_example")
+-study.engine("fdm")
++study.engine("fem")
+ study.device("cpu", precision="double")
+ study.mode("strict")
+ 
+@@ -126,8 +129,9 @@ Ownership tests compare this inventory with live signatures and validate the adj
+ (python-api-studies-eigenmodes-limitations)=
+ <!-- (limitations)= -->
+ ## Limitations
+-Representability does not prove every operator/equilibrium/boundary-condition combination
+-executable on every backend; planner and eigensolver capability resolution are authoritative.
++The Python contract is backend-neutral, but the current planner executes `Eigenmodes` only with
++`backend="fem"` and rejects FDM. Within FEM, representability still does not prove every
++operator/equilibrium/boundary-condition combination executable.
+ 
+ (python-api-studies-eigenmodes-scientific-bibliography)=
+ <!-- (scientific-bibliography)= -->
+diff --git a/public_docs/site/python-api/studies/frequency-response.md b/public_docs/site/python-api/studies/frequency-response.md
+index 7ffe0d893..54337d3e7 100644
+--- a/public_docs/site/python-api/studies/frequency-response.md
++++ b/public_docs/site/python-api/studies/frequency-response.md
+@@ -41,23 +41,31 @@ cardinality, capability, and backend legality.
+ ## Python API
+ | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+ |---|---|---|---|---|---|---|---|
+-| `FrequencyResponse.outputs` | `Sequence[FrequencyOutputSpec]` | `required` | $1$ | At least one | Response observables | FEM/FDM CPU/GPU; planner checks materialization | `sampling.outputs` |
+-| `FrequencyResponse.frequencies_hz` | `Sequence[float]` | `required` | $\mathrm{Hz}$ | Non-empty, finite, positive | Sweep frequencies | FEM/FDM CPU/GPU | `frequencies_hz.values_hz` |
+-| `FrequencyResponse.excitation_field_au_per_m` | `tuple[float, float, float]` | `(0,0,1)` | $\mathrm{A\,m^{-1}}$ | Length-3 finite vector | Small transverse excitation field | FEM/FDM CPU/GPU | `excitation.field_au_per_m` |
+-| `FrequencyResponse.excitation_phase_rad` | `float` | `0.0` | $\mathrm{rad}$ | Finite | Excitation phase | FEM/FDM CPU/GPU | `excitation.phase_rad` |
+-| `FrequencyResponse.operator` | `str` | `"linearized_llg"` | $1$ | `linearized_llg` or `full_2x2` | Linearized operator | FEM/FDM CPU/GPU | `operator.kind` |
+-| `FrequencyResponse.include_demag` | `bool` | `True` | $1$ | Boolean | Include dynamic demagnetization | FEM/FDM CPU/GPU | `operator.include_demag` |
+-| `FrequencyResponse.equilibrium_source` | `str` | `"provided"` | $1$ | `provided`, `relax`, or `artifact` | Equilibrium acquisition | FEM/FDM CPU/GPU | `equilibrium` |
+-| `FrequencyResponse.magnetostatic_bc` | `str` | `"open"` | $1$ | `open`, `periodic_airbox_k0`, or `floquet_airbox` | Magnetostatic boundary condition | FEM/FDM CPU/GPU | `magnetostatic_bc` |
+-| `FrequencyResponse.solver_policy` | `FrequencyResponseSolverPolicy \| None` | `None` | mixed | Valid method/preconditioner/tolerance/iteration values | Solver method and preconditioner overrides | FEM/FDM CPU/GPU; several methods are planned | `solver_policy` |
++| `FrequencyResponse.outputs` | `Sequence[FrequencyOutputSpec]` | `required` | $1$ | At least one | Response observables | FEM only in the current planner | `sampling.outputs` |
++| `FrequencyResponse.frequencies_hz` | `Sequence[float]` | `required` | $\mathrm{Hz}$ | Non-empty, finite, positive | Sweep frequencies | FEM only in the current planner | `frequencies_hz.values_hz` |
++| `FrequencyResponse.excitation_field_au_per_m` | `tuple[float, float, float]` | `(0,0,1)` | $\mathrm{A\,m^{-1}}$ | Length-3 finite vector | Small transverse excitation field | FEM only in the current planner | `excitation.field_au_per_m` |
++| `FrequencyResponse.excitation_phase_rad` | `float` | `0.0` | $\mathrm{rad}$ | Finite | Excitation phase | FEM only in the current planner | `excitation.phase_rad` |
++| `FrequencyResponse.operator` | `str` | `"linearized_llg"` | $1$ | `linearized_llg` or `full_2x2` | Linearized operator | FEM only in the current planner | `operator.kind` |
++| `FrequencyResponse.include_demag` | `bool` | `True` | $1$ | Boolean | Include dynamic demagnetization | FEM only in the current planner | `operator.include_demag` |
++| `FrequencyResponse.equilibrium_source` | `str` | `"provided"` | $1$ | `provided`, `relax`, or `artifact`; artifact source requires `equilibrium_artifact` | Equilibrium acquisition | FEM only in the current planner | `equilibrium` |
++| `FrequencyResponse.equilibrium_artifact` | `str \| None` | `None` | $1$ | Required only for `equilibrium_source="artifact"` | Equilibrium artifact path | FEM only in the current planner | `equilibrium.path` |
++| `FrequencyResponse.k_sampling` / `k_vector` | `object \| None` / vector | `None` | $\mathrm{m^{-1}}$ | Mutually normalized k-sampling forms | Wave-vector sampling | FEM only in the current planner | `k_sampling` |
++| `FrequencyResponse.normalization` | `str` | `"unit_l2"` | $1$ | `unit_l2` or `unit_max_amplitude` | Response normalization | FEM only in the current planner | `normalization` |
++| `FrequencyResponse.damping_policy` | `str` | `"ignore"` | $1$ | `ignore` or `include` | Damping treatment | FEM only in the current planner | `damping_policy` |
++| `FrequencyResponse.spin_wave_bc` | spin-wave BC | `"free"` | $1$ | Supported spin-wave boundary contract | Spin-wave boundary condition | FEM only in the current planner | `spin_wave_bc` |
++| `FrequencyResponse.magnetostatic_bc` | `str` | `"open"` | $1$ | `open`, `periodic_airbox_k0`, or `floquet_airbox` | Magnetostatic boundary condition | FEM only in the current planner | `magnetostatic_bc` |
++| `FrequencyResponse.solver_policy` | `FrequencyResponseSolverPolicy \| None` | `None` | mixed | Valid method/preconditioner/tolerance/iteration values | Solver method and preconditioner overrides | FEM only; method-specific runtime checks apply | `solver_policy` |
++| `FrequencyResponse.dynamics` | `LLG` | `LLG()` | mixed | Typed LLG policy | Linearized dynamics | FEM only in the current planner | `dynamics` |
+ 
+ ### Supported solver methods
+ 
+ | Method | Status |
+ |---|---|
+ | `auto` | planner selects a supported method |
+-| `dense_reference`, `cpu_sparse_direct`, `full_coupled_field_split`, `schur_reduced`, `modal_reduced` | documented; execution state is backend-dependent |
+-| `gpu_operator_host_krylov`, `gpu_device_krylov` | planned device Krylov lanes |
++| `dense_reference` | Executable for non-periodic FEM CPU validation requests |
++| `schur_reduced` | Executable for periodic/Floquet airbox FEM requests |
++| `gpu_operator_host_krylov` | Executable for requested FEM GPU runs; operator is on device and Krylov is host-driven |
++| `cpu_sparse_direct`, `full_coupled_field_split`, `modal_reduced`, `gpu_device_krylov` | Accepted authoring identifiers, not implemented by the current runtime |
+ 
+ ### Complete stage-first example
+ 
+@@ -71,7 +79,7 @@ nm = 1.0e-9
+ 
+ # %% Study and execution lane
+ study = fm.study("frequency_response_api_example")
+-study.engine("fdm")
++study.engine("fem")
+ study.device("cpu", precision="double")
+ study.mode("strict")
+ 
+@@ -131,8 +139,10 @@ Ownership tests compare this inventory with live signatures and validate the adj
+ (python-api-studies-frequency-response-limitations)=
+ <!-- (limitations)= -->
+ ## Limitations
+-Several solver methods and the GPU Krylov lanes are planned rather than production-qualified;
+-planner resolution is authoritative and must be reported as provenance.
++The current planner rejects FDM frequency-response studies. Several accepted solver identifiers
++remain unimplemented; `gpu_operator_host_krylov` is the current FEM GPU route, while
++`gpu_device_krylov` remains unimplemented. Planner/runtime resolution is authoritative and must be
++reported as provenance.
+ 
+ (python-api-studies-frequency-response-scientific-bibliography)=
+ <!-- (scientific-bibliography)= -->
+diff --git a/public_docs/site/python-api/studies/hysteresis.md b/public_docs/site/python-api/studies/hysteresis.md
+index 7d3c1fd13..5f7b93bb9 100644
+--- a/public_docs/site/python-api/studies/hysteresis.md
++++ b/public_docs/site/python-api/studies/hysteresis.md
+@@ -46,11 +46,18 @@ legality.
+ | `Hysteresis.field_min_mT` / `field_max_mT` / `field_step_mT` | `float \| None` | `None` | $\mathrm{mT}$ | Finite; nonzero step | Uniform sweep definition | FEM/FDM CPU/GPU | `field_min_mT/max_mT/step_mT` |
+ | `Hysteresis.field_values_mT` | `Sequence[float] \| None` | `None` | $\mathrm{mT}$ | Non-empty, finite | Explicit field-point schedule | FEM/FDM CPU/GPU | `field_values_mT` |
+ | `Hysteresis.direction` | `tuple[float,float,float] \| None` | `None` | $1$ | Non-zero length-3 vector | Field sweep direction | FEM/FDM CPU/GPU | `direction` |
++| `Hysteresis.orientation` | `FieldOrientation \| None` | `None` | mixed | Typed preset/sample/global orientation | Field orientation policy | FEM/FDM CPU/GPU | `orientation` |
+ | `Hysteresis.measurement_axis` | `str \| MeasurementAxis` | `"field_axis"` | $1$ | `field_axis`, `sample_normal`, `easy_axis`, or custom | Projection axis for the loop | FEM/FDM CPU/GPU | `measurement_axis` |
++| `Hysteresis.angular_family` | `HysteresisAngularFamily \| None` | `None` | mixed | Typed non-empty angular family | Angular variants | planner-dependent | `angular_family` |
+ | `Hysteresis.initial_protocol` | `str` | `"positive_saturation"` | $1$ | One of `as_authored`, `zero_field_relaxed`, `positive_saturation`, `negative_saturation`, `checkpoint` | Initial-state preparation | FEM/FDM CPU/GPU | `initial_protocol` |
++| `Hysteresis.initial_state_ref` | `str \| None` | `None` | $1$ | Required and non-empty for `checkpoint` | Initial checkpoint reference | planner-dependent | `initial_state_ref` |
++| `Hysteresis.saturation` | `SaturationProbe \| None` | `None` | mixed | Typed saturation policy | Saturation qualification | planner-dependent | `saturation` |
+ | `Hysteresis.branch_mode` | `str` | `"major_loop"` | $1$ | `major_loop`, `major_with_minor_loops`, `virgin_curve`, `virgin_then_major_loop` | Loop topology | FEM/FDM CPU/GPU | `branch_mode` |
+ | `Hysteresis.settle_pipeline` | `SettlePipeline \| SettleTree \| None` | `None` | mixed | At least one step; `run_next_algorithm` needs a successor | Per-point settle program | FEM/FDM CPU/GPU | `settle_pipeline` |
+ | `Hysteresis.storage` | `HysteresisStorage \| None` | `None` | mixed | Valid magnetization storage mode | Storage policy | FEM/FDM CPU/GPU | `storage` |
++| `Hysteresis.field_schedule` | `PiecewiseFieldSchedule \| None` | `None` | $\mathrm{mT}$ | Typed piecewise schedule | Nonuniform sweep schedule | planner-dependent | `field_schedule` |
++| `Hysteresis.schedule_refinements` / `adaptive_refinement` | optional refinement policies | `None` | mixed | Typed finite windows/policy | Dense/adaptive schedule refinement | planner-dependent | `schedule_refinements`, `adaptive_refinement` |
++| `Hysteresis.minor_loops` | `Sequence[MinorLoop] \| None` | `None` | $\mathrm{mT}$ | Typed minor-loop definitions | Minor loops | planner-dependent | `minor_loops` |
+ 
+ The canonical stage entrypoint `add_hysteresis_sweep` exposes these fields by keyword; the sweep
+ is not constructed as a standalone `Hysteresis(...)` object in a user script.
+diff --git a/public_docs/site/python-api/studies/relaxation.md b/public_docs/site/python-api/studies/relaxation.md
+index cda67b061..13932da69 100644
+--- a/public_docs/site/python-api/studies/relaxation.md
++++ b/public_docs/site/python-api/studies/relaxation.md
+@@ -27,8 +27,8 @@ owned by {doc}`../../numerical-methods/relaxation/index`.
+ (python-api-studies-relaxation-symbols-and-si-units)=
+ <!-- (symbols-and-si-units)= -->
+ ## Symbols and SI units
+-Every owned input has its SI unit below; $1$ denotes dimensionless data. Torque tolerance is
+-accepted and reported in tesla, with the derived A/m value recorded in the stop contract.
++Every owned input has its SI unit below; $1$ denotes dimensionless data. The stage builder accepts
++unit-suffixed `tolT` or `tolA`; the canonical `RelaxStop` stores torque tolerance in A/m.
+ 
+ (python-api-studies-relaxation-assumptions-and-validity)=
+ <!-- (assumptions-and-validity)= -->
+@@ -44,10 +44,13 @@ mesh cardinality, capability, stop-contract consistency, and backend legality.
+ | `Relaxation.outputs` | `Sequence[TimeOutputSpec]` | `required` | $1$ | Field/scalar outputs; an empty sequence is valid | Output requests recorded during relaxation | FEM/FDM CPU/GPU; planner checks materialization | `sampling.outputs` |
+ | `Relaxation.algorithm` | `str` | `"llg_overdamped"` | $1$ | One of `llg_overdamped`, `projected_gradient_bb`, `nonlinear_cg`, `tangent_plane_implicit` | Relaxation algorithm identifier | See algorithm lanes below; `tangent_plane_implicit` is FEM-only and not yet executable | `algorithm` |
+ | `Relaxation.stop` | `RelaxStop` | `RelaxStop()` | mixed | Positive tolerances and step counts; one time bound at most | Canonical stop contract | FEM/FDM CPU/GPU | `stop` |
+-| `Relaxation.torque_tolerance` | `float \| None` | `1e-5` (legacy alias) | $\mathrm{T}$ | Positive; conflicts with `stop.torque_tolerance_apm` are rejected | Convergence threshold on torque | FEM/FDM CPU/GPU | `stop.torque_tolerance_apm` |
++| `Relaxation.torque_tolerance` | `float \| None` | unset compatibility alias; `RelaxStop()` supplies `0.7957747154594766` A/m ($10^{-6}$ T) | selected by `torque_tolerance_unit` | Positive; conflicts with `stop.torque_tolerance_apm` are rejected | Legacy convergence-threshold input | FEM/FDM CPU/GPU | `stop.torque_tolerance_apm` |
++| `Relaxation.torque_tolerance_unit` | `str` | `"T"` | $1$ | `T` or `A/m` | Unit used to interpret the legacy `torque_tolerance` input | FEM/FDM CPU/GPU | normalization only; not serialized |
+ | `Relaxation.energy_tolerance` | `float \| None` | `None` | $\mathrm{J}$ | Positive when set | Energy-delta stop bound | FEM/FDM CPU/GPU | `stop.energy_tolerance_j` |
+ | `Relaxation.max_steps` | `int \| None` | `50000` (legacy alias) | $1$ | Positive integer | Maximum relaxation iterations | FEM/FDM CPU/GPU | `stop.max_steps` |
++| `Relaxation.max_relaxation_time_s` / `max_pseudotime_s` / `max_physical_time_s` | `float \| None` aliases | `None` | $\mathrm{s}$ | At most one distinct value; positive; overdamped LLG only | Relaxation time bound | LLG relaxation lanes | `stop.max_relaxation_time_s` |
+ | `Relaxation.dynamics` | `LLG \| None` | `None` | mixed | Required by `llg_overdamped` only; direct minimizers reject it | LLG parameters for the overdamped lane | FDM/FEM CPU/GPU | `dynamics` |
++| `Relaxation.constraints` | `Sequence[FrozenSpins]` | `()` | $1$ | Typed constraint definitions | Stage-applicable frozen spins | capability-gated | canonical magnetization constraints |
+ | `Relaxation.table_autosave` | `TableAutosave \| None` | `None` | mixed | See {doc}`../outputs/autosave` | Tabular autosave policy | FEM/FDM CPU/GPU | `sampling.table_autosave` |
+ 
+ ### Algorithm lanes
+@@ -102,8 +105,9 @@ study.stages.add_relax(
+ )
+ ```
+ 
+-The torque tolerance keywords are unit-suffixed (`tolT`, `tolA`) to avoid unit ambiguity; the
+-resolved stop contract records both the authored scale and the canonical A/m value.
++The torque tolerance keywords are unit-suffixed (`tolT`, `tolA`) to avoid unit ambiguity. Lowering
++converts either form to canonical `stop.torque_tolerance_apm`; the raw authored unit/value pair is
++not retained in `Relaxation.to_ir()`.
+ 
+ (python-api-studies-relaxation-problem-ir)=
+ <!-- (problem-ir)= -->
+@@ -115,8 +119,9 @@ destination.
+ (python-api-studies-relaxation-round-trip-and-failure-semantics)=
+ <!-- (round-trip-and-failure-semantics)= -->
+ ## Round-trip and failure semantics
+-Requested intent (algorithm choice, authored tolerances, time bound) is preserved in Python and
+-IR. Resolved execution (backend, device, precision, solver) is selected by the planner. Validation
++Requested algorithm choice and the normalized canonical stop contract are preserved in IR;
++unit-suffixed tolerance input is normalized to A/m. Resolved execution (backend, device,
++precision, solver) is selected by the planner. Validation
+ errors reject unsupported algorithms, non-positive tolerances/step counts, conflicting legacy and
+ `RelaxStop` values, and `dynamics` supplied to a direct minimizer. Unsupported combinations fail
+ capability checks without silent fallback.
+

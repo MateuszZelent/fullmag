@@ -30,7 +30,8 @@ SI metres. Orders, counts, algorithms, ratios, and quality controls are dimensio
 (python-api-meshing-fem-assumptions-and-validity)=
 ## Assumptions and validity
 
-Order is at least one. A positive maximum element size is required. `hmax` is an alias and must agree
+Order must compare as at least one, but the low-level constructor does not currently reject Boolean
+or non-integral numeric values. A positive maximum element size is required. `hmax` is an alias and must agree
 with `maximum_element_size` when both are present. Imported mesh references are nonempty and remain
 subject to native validation. Element-family/device support is capability-gated.
 
@@ -39,11 +40,11 @@ subject to native validation. Element-family/device support is capability-gated.
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---:|---:|---|---|---|---|
-| `FEM.order` | `int` | required | 1 | Integer greater than or equal to one. | Study-level finite-element field order. | FEM CPU; GPU element/order capability-gated | `backend_policy.discretization_hints.fem.order` |
+| `FEM.order` | `int` | required | 1 | Must compare as at least one; Boolean and non-integral numeric values are not rejected by this constructor. | Study-level finite-element field order. | FEM CPU; GPU element/order capability-gated | `backend_policy.discretization_hints.fem.order` |
 | `FEM.maximum_element_size` | `float \| None` | `None` | m | Finite and positive; required unless hmax is supplied. | Canonical study-level maximum-size target. | FEM | `backend_policy.discretization_hints.fem.hmax` |
 | `FEM.hmax` | `float \| None` | `None` | m | Finite positive alias; equal to maximum_element_size when both are supplied. | Compatibility spelling of the same target. | FEM | `backend_policy.discretization_hints.fem.hmax` |
 | `FEM.mesh` | `str \| None` | `None` | 1 | Nonempty when present; asset is revalidated during extraction. | Imported or prebuilt FEM mesh reference. | FEM import/extraction path | `backend_policy.discretization_hints.fem.mesh` |
-| `FEM.demag_solver_policy` | `FemLinearSolverPolicy \| None` | `None` | 1 | Typed solver policy. | Algebraic Poisson/demag solver request; not mesh geometry. | FEM demagnetization lanes | `backend_policy.discretization_hints.fem.demag_solver_policy` |
+| `FEM.demag_solver_policy` | `FemLinearSolverPolicy \| None` | `None` | 1 | No explicit `FEM` constructor type check; lowering requires `to_ir()`. | Algebraic Poisson/demag solver request; not mesh geometry. | FEM demagnetization lanes | `backend_policy.discretization_hints.fem.demag_solver_policy` |
 
 ```python
 # %% Complete stage-first FEM mesh scenario
@@ -113,6 +114,10 @@ Meshing itself is normally a host/Gmsh operation even when the simulation execut
 `FEM` owns study defaults. `PerObjectMeshRecipe`, `MeshOperation`, and `SweptMeshControls` own
 ferromagnet topology. Universe and region facades add airbox and local-region policy. Backend reports
 are authoritative for what ran.
+
+`PerObjectMeshRecipe` and `MeshOperation` are internal model/lowering classes, not exports from the
+top-level `fullmag` namespace. Public scripts configure their equivalent state through `body.mesh`
+and its `thin_film`, `swept`, operation, and size-field helpers.
 
 (python-api-meshing-fem-validation)=
 ## Validation

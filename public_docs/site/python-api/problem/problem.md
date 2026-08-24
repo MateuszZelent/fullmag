@@ -52,8 +52,8 @@ validated before execution.
 | `Problem.description` | `str \| None` | `None` | $1$ | optional human description | `problem_meta.description` |
 | `Problem.runtime` | `RuntimeSelection` | factory default | $1$ | requested backend/device/precision/mode | `backend_policy` and runtime metadata |
 | `Problem.runtime_metadata` | mapping | `{}` | $1$ | user/runtime provenance | `problem_meta.runtime_metadata` |
-| `Problem.auxiliary_geometries` | sequence | `()` | mixed | nonmagnetic/helper geometries | `geometry.entries` |
-| `Problem.auxiliary_geometry_roles` | mapping | `{}` | $1$ | role mapping; unknown geometry rejected | `geometry.entries[].type` |
+| `Problem.auxiliary_geometries` | sequence | `()` | mixed | nonmagnetic/helper geometries | shapes in `geometry.entries[]` |
+| `Problem.auxiliary_geometry_roles` | mapping | `{}` | $1$ | role mapping; unknown geometry rejected | non-antenna roles in separate `physics_objects[]`; antenna ownership retained by module/runtime metadata |
 | `Problem.current_modules` | sequence | `()` | mixed | current and Oersted source modules | `current_modules` |
 | `Problem.field_drives` | sequence | `()` | mixed | regional/time-dependent field drives | `field_drives` |
 | `Problem.couplings` | sequence | `()` | mixed | explicit coupling graph | `couplings` |
@@ -98,7 +98,9 @@ study.stages.add_run(stage_id="run", until=1e-12)
 
 Requested intent remains distinct from planner resolution and execution evidence. The serializer
 preserves selections and frozen-spin constraints as typed graph data; it must not flatten them to
-backend masks before planning.
+backend masks before planning. Auxiliary shapes remain ordinary `geometry.entries[]`; for every
+non-antenna entry in `auxiliary_geometry_roles`, lowering emits a separate `physics_objects[]`
+record. The role is not serialized as `geometry.entries[].type`.
 
 (python-api-problem-problem-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics

@@ -1,10 +1,10 @@
 {
   "document": {"path": "public_docs/site/numerical-methods/relaxation/llg-relaxation.md"},
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "Native GPU sources exist; executed-device qualification is reported separately."},
-    {"solver": "FDM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FDM", "device": "GPU", "status": "source-backed", "reason": "CUDA path exists; device availability and parity evidence are separate gates."}
+    {"solver": "FEM", "device": "CPU", "status": "development-executable", "reason": "The native LLG relaxation lane executes, but production qualification is not claimed."},
+    {"solver": "FEM", "device": "GPU", "status": "development-executable", "reason": "The native GPU lane executes; device parity and production qualification remain separate gates."},
+    {"solver": "FDM", "device": "CPU", "status": "reference-executable"},
+    {"solver": "FDM", "device": "GPU", "status": "development-executable", "reason": "The CUDA path executes, but production qualification is not claimed."}
   ],
   "equations": [
     {"id": "eq-relax-llg-damping", "symbols": ["m", "gamma0", "alpha", "H_eff"], "sources": ["physics-llg", "runner-mode"]},

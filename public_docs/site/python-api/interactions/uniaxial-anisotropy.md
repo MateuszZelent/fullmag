@@ -27,18 +27,21 @@ w=-K_{u1}(\mathbf m\cdot\hat{\mathbf u})^2
   -K_{u2}(\mathbf m\cdot\hat{\mathbf u})^4.
 $$
 
-The current `energy.py` docstring describing $K_{u1}\sin^2\theta+K_{u2}\sin^4\theta$ is not
-parameter-identical for `ku2` and must be corrected.
+This polynomial is the serialized constructor convention. Material-owned `Ku1`, `Ku2`, and
+`anisU` are the canonical stage-first authoring route.
 
 ## Canonical material authoring
 
-## Parameters
+## Parameters and constructor validation
 
-| Parameter | SI unit | Meaning | Current constructor check | Required semantic check |
-|---|---:|---|---|---|
-| `ku1` | $\mathrm{J\,m^{-3}}$ | coefficient of $-q^2$ | `float()` | finite |
-| `ku2` | $\mathrm{J\,m^{-3}}$ | coefficient of $-q^4$ | `float()` | finite |
-| `axis` | $1$ | easy-axis direction | length/conversion | finite, non-zero when active, normalized once |
+| Parameter | Default | SI unit | Meaning | Constructor check |
+|---|---|---:|---|---|
+| `ku1` | required | $\mathrm{J\,m^{-3}}$ | coefficient of $-q^2$ | `float()` conversion |
+| `ku2` | `0.0` | $\mathrm{J\,m^{-3}}$ | coefficient of $-q^4$ | `float()` conversion |
+| `axis` | `(0,0,1)` | $1$ | easy-axis direction | exactly three float-convertible values |
+
+The constructor does not currently reject non-finite constants or a non-finite/zero axis.
+Semantic validation must reject those states before execution.
 
 (api-uniaxial-anisotropy-python-api)=
 ## Python API and stage-first example

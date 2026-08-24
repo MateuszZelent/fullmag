@@ -4,6 +4,7 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+source_of_truth: docs/specs/resource-first-control-room-api-v2.md, apps/control-room/src/kernel/events/eventTypes.ts
 ---
 
 (public-docs-frontend-meshing-quality-and-reports)=

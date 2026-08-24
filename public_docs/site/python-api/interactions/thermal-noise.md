@@ -21,13 +21,17 @@ This page is the public physical and authoring contract for the interaction. It 
 
 ## Parameters
 
-| Parameter | Type | Default | SI unit | Current behavior | Required behavior |
-|---|---|---|---:|---|---|
-| `temperature` | float | required | $\mathrm K$ | finite positive check | retain |
-| `seed` | `int | None` | `None` | only positivity is checked when supplied | require an actual positive integer; reject `bool` and non-integral float |
+| Parameter | Type | Default | SI unit | Constructor behavior |
+|---|---|---|---:|---|
+| `temperature` | float | required | $\mathrm K$ | finite and positive |
+| `seed` | `int | None` | `None` | when supplied, compared with zero and required to be positive |
 
 `seed=None` requests system entropy. `seed=0` is rejected and must not be documented as an entropy
 alias.
+
+The constructor does not currently enforce that `seed` is an actual integer, so boolean and
+positive non-integral values can pass this boundary. Reproducible public input should use a
+positive integer; canonical validation must reject other types before execution.
 
 (api-thermal-noise-python-api)=
 ## Python API and stage-first example

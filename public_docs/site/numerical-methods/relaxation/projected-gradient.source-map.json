@@ -1,10 +1,10 @@
 {
   "document": {"path": "public_docs/site/numerical-methods/relaxation/projected-gradient.md"},
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "Native CUDA step source exists; runtime qualification is separate."},
-    {"solver": "FDM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FDM", "device": "GPU", "status": "source-backed", "reason": "CUDA/reference direct-minimizer path exists; executed-device evidence is separate."}
+    {"solver": "FEM", "device": "CPU", "status": "development-executable"},
+    {"solver": "FEM", "device": "GPU", "status": "development-executable", "reason": "The native CUDA step executes, but production qualification is not claimed."},
+    {"solver": "FDM", "device": "CPU", "status": "reference-executable"},
+    {"solver": "FDM", "device": "GPU", "status": "development-executable", "reason": "The CUDA direct-minimizer path is bounded; multilayer FDM requests remain unsupported."}
   ],
   "equations": [
     {"id": "eq-pgbb-tangent-gradient", "symbols": ["g", "H_eff", "m", "tau"], "sources": ["physics-pgbb", "fdm-pgbb"]},

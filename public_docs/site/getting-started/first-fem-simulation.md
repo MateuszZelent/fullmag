@@ -24,8 +24,10 @@ conjugate-gradient method and an algebraic multigrid preconditioner.
 ## Author the study
 
 ```python
+# %% Imports.
 import fullmag as fm
 
+# %% Configure the requested execution lane and shared domain.
 nm = 1.0e-9
 study = fm.study("first_fem_simulation")
 study.engine("fem")
@@ -35,6 +37,7 @@ study.mode("strict")
 study.universe(mode="manual", size=(160 * nm, 160 * nm, 24 * nm))
 study.universe.mesh(maximum_element_size=40 * nm, maximum_element_growth_rate=1.7)
 
+# %% Define the magnetic object, material state, and local mesh policy.
 film = study.geometry(
     fm.Box(size=(80 * nm, 120 * nm, 8 * nm), name="film"),
     name="film",
@@ -45,6 +48,8 @@ film.alpha = 0.1
 film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 film.mesh(maximum_element_size=4 * nm, order=1)
 
+# %% Register physics, build the mesh, and append the ordered stage.
+study.exchange()
 study.demag(realization="poisson_robin")
 study.fem_demag_solver(solver="CG", preconditioner="AMG", rtol=1.0e-10, max_iterations=500)
 study.build_domain_mesh()
@@ -67,6 +72,7 @@ study.stages.add_relax(
   resolved finely while air elements grow away from it.
 - `film.mesh(maximum_element_size=4 * nm, order=1)` overrides the local element size on the magnetic
   body.
+- `study.exchange()` registers the exchange interaction used by the `e_ex` observable.
 - `study.demag(realization="poisson_robin")` chooses the scalar-potential Poisson demagnetization
   formulation; the alternative public FEM strategy is the boundary-element method documented on the
   {ref}`demagnetization pages <public-docs-physics-interactions-root>`.
@@ -83,13 +89,12 @@ Save the block as `first_fem_simulation.py`. The FEM runtime is built and execut
 repository's managed runtime recipes:
 
 ```console
-just ensure-managed-fem-runtime
 just fem-managed-headless cpu first_fem_simulation.py
 ```
 
-The managed runtime records the resolved backend, device, and precision in the result. To request the
-FEM GPU lane instead, pass `gpu` as the execution mode to the same recipe and verify the device
-identity in the produced provenance.
+The recipe ensures the managed FEM runtime before execution and records the resolved backend,
+device, and precision in the result. To request the FEM GPU lane instead, pass `gpu` as the
+execution mode to the same recipe and verify the device identity in the produced provenance.
 
 ## Reading the result
 

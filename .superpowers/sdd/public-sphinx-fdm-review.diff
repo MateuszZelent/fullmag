@@ -1,0 +1,482 @@
+# Review package: Task 2 fdm-grids working-tree changes (final remediation)
+
+## Files changed
+- public_docs/site/numerical-methods/meshing/fdm-grids.md
+- public_docs/site/numerical-methods/meshing/fdm-grids.source-map.json
+
+## Diff
+
+diff --git a/public_docs/site/numerical-methods/meshing/fdm-grids.md b/public_docs/site/numerical-methods/meshing/fdm-grids.md
+index e12e05627..6032bd43f 100644
+--- a/public_docs/site/numerical-methods/meshing/fdm-grids.md
++++ b/public_docs/site/numerical-methods/meshing/fdm-grids.md
+@@ -1,415 +1,580 @@
+ ---
+ title: FDM Grids
+ status: implemented
+ doc_kind: reference
+ audience: user
+ owner: fullmag-public-docs
+-reviewed_revision: 88c7160080bc1e8519950df283d2dd02087cc3da
+-source_of_truth: fullmag.model.discretization FDM/FDMGrid/FDMDemag schemas and resolved FDM runtime provenance
++reviewed_revision: 0388c3e7c4804923ee02a00b7ac4a789a44092d9
++source_of_truth: canonical stage-first mesh authoring, FDM/FDMGrid/FDMDemag/FdmPbc schemas, ProblemIR, and planner-resolved FDM grid certificates
+ ---
+ 
+ (public-docs-numerical-methods-meshing-fdm-grids)=
+ # FDM Cartesian grids
+ 
+-:::{admonition} A cell size is an operator parameter
++:::{admonition} Cell size is part of the numerical operator
+ :class: important
+ 
+-Changing an FDM cell size changes the sampled geometry, cell volume, exchange/DMI stencils,
+-material interfaces, demagnetization tensor, FFT dimensions, stability limit, and discrete energy.
+-It is not a visualization-resolution setting. Requested cell sizes and the realized integer grid
+-must both be preserved.
++Changing an FDM cell size changes geometry sampling, cell volume, local stencils, the Newell
++demagnetization tensor, FFT padding, periodic-image work, and explicit time-step stability. It is
++not a viewport-resolution setting. Fullmag keeps the requested spacing separate from the
++planner-resolved integer grid and its provenance.
+ :::
+ 
+ (numerical-methods-fdm-grids-problem-statement)=
+-## Discrete state and coordinate convention
++## Problem statement
+ 
+-Fullmag represents each native FDM magnetization field on a cell-centred Cartesian tensor grid. For
+-origin $\mathbf x_0$, integer indices $(i,j,k)$, and spacings $(h_x,h_y,h_z)$,
++Fullmag represents an FDM magnetization field on an orthogonal, cell-centred Cartesian grid. The
++author supplies one default spacing or an object-owned spacing for every magnetic body. The
++planner combines that request with physical geometry, rejects extents that are not integer
++multiples of the spacing, samples supported non-box geometry at cell centres, and publishes an
++immutable grid certificate.
++
++The rectangular allocation and the magnetic domain are different objects. A box occupies every
++allocated cell; supported curved and constructive-solid-geometry bodies carry an active mask.
++Region membership is stored separately from the active mask. A multilayer problem may also have a
++common convolution grid, but that grid is scratch space for nonlocal communication and does not
++replace the native state owned by each magnet.
++
++This page owns coordinates, grid realization, masks, periodic indexing, and the grid-dependent
++Newell/FFT contract. Interaction pages own the complete exchange, DMI, and demagnetization physics.
++
++(numerical-methods-fdm-grids-governing-equations)=
++## Governing equations
++
++For cell-boundary origin $\mathbf x_0$, integer cell indices $(i,j,k)$, and cell spacings
++$(h_x,h_y,h_z)$, the implemented cell-centre convention is
+ 
+ ```{math}
+ :label: eq-numerical-fdm-grid-centre
+-\mathbf x_{ijk}
+-=\mathbf x_0+
++\mathbf x_{ijk}=\mathbf x_0+
+ \left((i+\tfrac12)h_x,(j+\tfrac12)h_y,(k+\tfrac12)h_z\right).
+ ```
+ 
+-The cell volume and total rectangular allocation are
++For a requested rectangular extent $L_\alpha$ on axis $\alpha\in\{x,y,z\}$, the planner tests the
++rounded count against the original extent:
++
++```{math}
++:label: eq-numerical-fdm-grid-realization
++N_\alpha=\operatorname{round}\!\left(\frac{L_\alpha}{h_\alpha}\right),
++\qquad
++L_{\alpha,h}=N_\alpha h_\alpha,
++\qquad
++\varepsilon_\alpha=
++\frac{\left|L_{\alpha,h}-L_\alpha\right|}{L_\alpha}.
++```
++
++The realization is rejected when $\varepsilon_\alpha$ exceeds the planner tolerance. The cell
++volume and rectangular allocation size are
+ 
+ ```{math}
+ :label: eq-numerical-fdm-grid-volume
+ V_{\mathrm{cell}}=h_xh_yh_z,
+ \qquad
+ N=N_xN_yN_z.
+ ```
+ 
+-The rectangular allocation is not necessarily the magnetic domain. An active/material mask selects
+-cells occupied by each magnetic object, and optional boundary fractions represent partially filled
+-cells. Consequently, production provenance distinguishes:
+-
+-- allocation bounds and integer dimensions;
+-- cell-centre origin and spacings;
+-- active and material masks;
+-- magnetic volume implied by the selected boundary policy;
+-- memory/component ordering;
+-- periodic and convolution-padding metadata.
+-
+-(numerical-methods-fdm-grid-geometry-sampling)=
+-## Geometry sampling and staircase error
+-
+-A geometry indicator $\mathbf 1_{\Omega_m}(\mathbf x)$ may be sampled at cell centres for a binary
+-mask. The corresponding discrete magnetic volume is
++For a binary active mask $\chi_{ijk}$, the sampled magnetic volume is
+ 
+ ```{math}
+ :label: eq-numerical-fdm-grid-binary-volume
+ V_{m,h}=V_{\mathrm{cell}}
+-\sum_{i,j,k}\chi_{ijk},
+-\qquad
+-\chi_{ijk}\in\{0,1\}.
++\sum_{i=0}^{N_x-1}\sum_{j=0}^{N_y-1}\sum_{k=0}^{N_z-1}\chi_{ijk}.
+ ```
+ 
+-With a volume fraction $\phi_{ijk}\in[0,1]$,
++When a qualified sub-cell boundary realization supplies a volume fraction
++$\phi_{ijk}\in[0,1]$, the corresponding fractional volume is
+ 
+ ```{math}
+ :label: eq-numerical-fdm-grid-fractional-volume
+-V_{m,h}=V_{\mathrm{cell}}
+-\sum_{i,j,k}\phi_{ijk}.
++V_{m,h}^{\phi}=V_{\mathrm{cell}}
++\sum_{i=0}^{N_x-1}\sum_{j=0}^{N_y-1}\sum_{k=0}^{N_z-1}\phi_{ijk}.
+ ```
+ 
+-Binary masks staircase curved or oblique boundaries. This changes volume, surface normal,
+-exchange connectivity, interfacial DMI, and magnetostatic surface charge. A cell-refinement study
+-should therefore report both the nominal spacing and the realized magnetic volume. Rotating the
+-same curved body relative to the grid is a useful diagnostic for discretization anisotropy.
+-
+-The public `FDM.boundary_correction` vocabulary is:
+-
+-| Value | Public intent | Additional parameters |
+-|---|---|---|
+-| `none` | ordinary binary/uncorrected boundary treatment | none |
+-| `volume` | T0 volume-fraction correction | `boundary_phi_floor` may limit very small active fractions |
+-| `full` | T1 full embedded/cut-boundary correction | `boundary_phi_floor` and optional `boundary_delta_min` stabilize the corrected stencil |
+-
+-This vocabulary records requested intent. The resolved runtime must report whether the selected
+-interactions and device lane actually used the requested correction. A source-visible field in the
+-Python schema is not proof that every interaction kernel implements it.
+-
+-`boundary_phi_floor` is validated in $(0,1)`. `boundary_delta_min` is a nonnegative SI length. The
+-latter is not a dimensionless tuning coefficient and must be compared with the minimum native cell
+-spacing.
+-
+-(numerical-methods-fdm-grid-native-and-common)=
+-## Native object grids and the demagnetization communication grid
+-
+-Fullmag permits a default native cell size and per-magnet overrides. For magnet $r$,
++The shared grid neighbour helper wraps an index on a periodic axis and clamps it on an open axis:
+ 
+ ```{math}
+-:label: eq-numerical-fdm-grid-per-magnet
+-\mathcal G_r
+-=\left(\mathbf x_{0,r},\mathbf N_r,\mathbf h_r,\chi_r\right).
++:label: eq-numerical-fdm-grid-neighbour
++q_\alpha^{\pm}=
++\begin{cases}
++(q_\alpha\pm1)\bmod N_\alpha, & \alpha\text{ periodic},\\
++\min\!\left(N_\alpha-1,\max(0,q_\alpha\pm1)\right), & \alpha\text{ open}.
++\end{cases}
+ ```
+ 
+-Local interactions act on the magnet's native state. A multilayer demagnetization solver may also
+-introduce a common convolution grid $\mathcal G_c$. This common grid is a numerical communication
+-space for the nonlocal field; it is not ownership of the physical state and must not silently
+-replace $\mathcal G_r$.
++Interaction-specific boundary stencils decide how those neighbours enter a field. The index rule
++alone does not define a universal exchange or DMI boundary condition.
+ 
+-A generic transfer can be written
++For truncated-image periodic demagnetization, the CPU Newell builder constructs the requested
++finite image sum
+ 
+ ```{math}
+-:label: eq-numerical-fdm-grid-common-transfer
+-\mathbf M_c=\mathcal P_{r\to c}\mathbf M_r,
+-\qquad
+-\mathbf H_r=\mathcal R_{c\to r}\mathbf H_c,
++:label: eq-numerical-fdm-grid-periodic-newell
++N_{ab}^{\mathrm{pbc}}(\boldsymbol\ell)=
++\sum_{n_x=-I_x}^{I_x}
++\sum_{n_y=-I_y}^{I_y}
++\sum_{n_z=-I_z}^{I_z}
++N_{ab}^{\mathrm{open}}
++\!\left(\boldsymbol\ell+(n_xN_x,n_yN_y,n_zN_z)\right),
+ ```
+ 
+-where $\mathcal P$ and $\mathcal R$ are explicitly defined prolongation/restriction operators. Their
+-normalization, masks, cell volumes, and adjoint/energy properties belong to the multilayer-demag
+-contract. Grid declaration alone does not establish conservative transfer.
+-
+-The `FDMDemag` public policy separates:
+-
+-| Field | Values | Meaning |
+-|---|---|---|
+-| `strategy` | `auto`, `single_grid`, `multilayer_convolution` | whether all magnets share one state/convolution grid or communicate through a multilayer path |
+-| `mode` | `auto`, `two_d_stack`, `three_d` | common in-plane stack model or full 3D common convolution |
+-| `common_cells` | positive integer triple | explicit 3D common-grid dimensions |
+-| `common_cells_xy` | positive integer pair | explicit in-plane dimensions for `two_d_stack` |
+-| `common_cell_size` | positive SI length triple | target common-grid spacing instead of counts |
+-| `explain` | Boolean | request a human-readable plan; not a numerical parameter |
+-
+-`common_cells`, `common_cells_xy`, and `common_cell_size` are mutually constrained. An explicit
+-common cell size cannot be combined with explicit counts. `common_cells_xy` is legal only for
+-`auto` or `two_d_stack`; `common_cells` is rejected with `two_d_stack`.
+-
+-The former `allow_single_grid_fallback` input is explicitly rejected. A requested multilayer
+-convolution cannot silently become a single-grid solve.
+-
+-(numerical-methods-fdm-grid-stencils)=
+-## Local finite-difference operators
+-
+-For a smooth scalar component $u$ on a uniform interior grid, the centred first and second
+-derivatives are
++where $I_\alpha=0$ on an open axis. The FFT allocation uses
+ 
+ ```{math}
+-:label: eq-numerical-fdm-grid-central-first
+-\left.\partial_xu\right|_{i,j,k}
+-\approx\frac{u_{i+1,j,k}-u_{i-1,j,k}}{2h_x},
++:label: eq-numerical-fdm-grid-padding
++P_\alpha=
++\begin{cases}
++N_\alpha, & \alpha\text{ periodic},\\
++2N_\alpha, & \alpha\text{ open}.
++\end{cases}
+ ```
+ 
++`compute_newell_kernels` evaluates the six tensor components from Newell base functions. For an
++$N_z=1$ grid it uses the exact double-volume corner sum at every in-plane lag. For a three-
++dimensional grid, lags at or beyond the hard-coded 40-cell threshold use the point-dipole
++asymptotic tensor
++
+ ```{math}
+-:label: eq-numerical-fdm-grid-central-second
+-\left.\partial_{xx}u\right|_{i,j,k}
+-\approx\frac{u_{i+1,j,k}-2u_{i,j,k}+u_{i-1,j,k}}{h_x^2}.
++:label: eq-numerical-fdm-grid-newell-asymptotic
++N_{ab}^{\mathrm{dip}}(\boldsymbol\rho)=
++\frac{V_s}{4\pi}
++\left(\frac{\delta_{ab}}{\rho^3}-\frac{3\rho_a\rho_b}{\rho^5}\right).
+ ```
+ 
+-The complete exchange, DMI, and boundary stencils are interaction-owned; these equations illustrate
+-why grid spacing enters the operator. At material boundaries, active-mask boundaries, PBC seams,
+-and cut cells, the interior formula is replaced by the interaction's declared boundary realization.
+-A documentation page for the grid must not invent a universal ghost-cell policy.
+-
+-The largest exchange eigenvalues scale approximately as $h_{\min}^{-2}$, so refining the grid also
+-reduces the stable step size of explicit LLG integrators. Spatial and temporal convergence must be
+-studied independently.
+-
+-(numerical-methods-fdm-grid-demag)=
+-## Demagnetization grid and FFT embedding
+-
+-The FDM demagnetizing field uses a cell-averaged Newell tensor whose geometry depends on
+-$(h_x,h_y,h_z)$. For an open boundary, the tensor convolution is embedded in a sufficiently padded
+-FFT grid. The following are distinct dimensions:
++The exact implementation condition is $N_z>1$ and either one absolute integer lag is at least 40
++or the squared integer-lag norm is at least $40^2$. No a-priori error bound is encoded, so
++large-grid demagnetization still requires numerical validation.
+ 
+-- native state dimensions $N_x\times N_y\times N_z$;
+-- magnetic active-mask extent;
+-- padded open-convolution dimensions;
+-- periodic-image or periodic-lattice dimensions;
+-- optional multilayer common-grid dimensions.
++For native magnet grid label $g_n$ and common convolution-grid label $g_c$, multilayer planning
++records an identity or push/pull transfer:
+ 
+-All must enter cache identity. Reusing a kernel spectrum after changing cell size, padding,
+-periodicity, common grid, or precision is invalid. See {doc}`../demag-solvers/fdm-convolution` and
+-{doc}`../demag-solvers/periodic-demag`.
+-
+-(numerical-methods-fdm-grid-thin-films)=
+-## Thin-film resolution
+-
+-A one-cell-thick FDM film stores one thickness-averaged magnetization vector per in-plane cell. It
+-can be appropriate when the state is demonstrably uniform through thickness for the target
+-observable. It does not resolve:
+-
+-- perpendicular standing spin-wave profiles;
+-- asymmetric surface anisotropy or surface DMI across thickness;
+-- strongly nonuniform thickness-dependent demagnetizing fields;
+-- depth-dependent current/torque or material layers;
+-- a vortex core or domain wall whose three-dimensional structure varies across the film.
++```{math}
++:label: eq-numerical-fdm-grid-common-transfer
++\mathbf M_{g_c}=\mathcal P_{g_n\to g_c}\mathbf M_{g_n},
++\qquad
++\mathbf H_{g_n}=\mathcal R_{g_c\to g_n}\mathbf H_{g_c}.
++```
+ 
+-A thickness study increases $N_z$ while preserving the physical thickness and refining time-step
+-control. Comparing one and two layers alone is rarely enough to establish an asymptotic trend.
++The descriptor and runtime must define $\mathcal P_{g_n\to g_c}$ and
++$\mathcal R_{g_c\to g_n}$; declaring a common grid does not prove conservation, adjointness, or
++energy consistency. The distinct grid labels avoid overloading the displacement magnitude used in
++the Newell asymptote.
+ 
+ (numerical-methods-fdm-grids-symbols-and-si-units)=
+ ## Symbols and SI units
+ 
+ | Symbol | Meaning | SI unit |
+ |---|---|---|
+-| $\mathbf x_{ijk}$ | cell centre | $\mathrm m$ |
+-| $\mathbf x_0$ | cell-boundary origin | $\mathrm m$ |
+-| $h_x,h_y,h_z$ | native cell spacings | $\mathrm m$ |
+-| $N_x,N_y,N_z$ | rectangular cell counts | $1$ |
+-| $V_{\mathrm{cell}}$ | cell volume | $\mathrm{m^3}$ |
+-| $\chi_{ijk}$ | binary active/material mask | $1$ |
+-| $\phi_{ijk}$ | magnetic volume fraction | $1$ |
+-| $\mathcal G_r$ | native grid of magnet $r$ | $1$ |
+-| $\mathcal G_c$ | common convolution grid | $1$ |
+-| $\mathcal P,\mathcal R$ | grid-transfer operators | implementation-dependent |
++| $\mathbf x_{ijk}$ | centre of Cartesian cell $(i,j,k)$ | $\mathrm{m}$ |
++| $\mathbf x_0$ | lower cell-boundary origin of the allocation | $\mathrm{m}$ |
++| $i,j,k$ | integer Cartesian cell indices | $1$ |
++| $h_x,h_y,h_z$ | requested or resolved cell spacings | $\mathrm{m}$ |
++| $h_\alpha$ | requested or resolved spacing on axis $\alpha$ | $\mathrm{m}$ |
++| $\alpha$ | Cartesian axis index in $\{x,y,z\}$ | $1$ |
++| $L_\alpha$ | requested physical extent on axis $\alpha$ | $\mathrm{m}$ |
++| $L_{\alpha,h}$ | realized grid extent on axis $\alpha$ | $\mathrm{m}$ |
++| $N_x,N_y,N_z$ | resolved cell counts | $1$ |
++| $N_\alpha$ | resolved cell count on axis $\alpha$ | $1$ |
++| $N$ | total rectangular allocation size | $1$ |
++| $\varepsilon_\alpha$ | relative extent mismatch on axis $\alpha$ | $1$ |
++| $\left|\cdot\right|$ | absolute-value operator used for the extent mismatch | unit inherited from its argument |
++| $\operatorname{round}$ | nearest-integer operator used for the dimensionless candidate count | $1$ |
++| $\sum$ | finite summation operator over cell or periodic-image indices | unit inherited from its summand |
++| $V_{\mathrm{cell}}$ | Cartesian cell volume | $\mathrm{m^3}$ |
++| $\chi_{ijk}$ | binary active-cell indicator | $1$ |
++| $\phi_{ijk}$ | qualified magnetic volume fraction | $1$ |
++| $V_{m,h}$ | binary-mask magnetic volume | $\mathrm{m^3}$ |
++| $V_{m,h}^{\phi}$ | fractional-mask magnetic volume | $\mathrm{m^3}$ |
++| $q_\alpha$ | cell index on axis $\alpha$ | $1$ |
++| $q_\alpha^{\pm}$ | neighbour index after open/periodic resolution | $1$ |
++| $\bmod$ | modulo operator used for periodic integer indices | $1$ |
++| $\min$ | minimum operator used to clamp an open-axis integer index | $1$ |
++| $\max$ | maximum operator used to clamp an open-axis integer index | $1$ |
++| $P_\alpha$ | FFT allocation count on axis $\alpha$ | $1$ |
++| $N_{ab}^{\mathrm{open}}$ | open-boundary cell demagnetization tensor component | $1$ |
++| $N_{ab}^{\mathrm{pbc}}$ | truncated-image periodic cell demagnetization tensor component | $1$ |
++| $N_{ab}^{\mathrm{dip}}$ | point-dipole asymptotic tensor component | $1$ |
++| $a,b$ | Cartesian tensor-component indices | $1$ |
++| $\boldsymbol\ell$ | integer cell-lag vector | $1$ |
++| $n_x,n_y,n_z$ | periodic image indices | $1$ |
++| $I_x,I_y,I_z$ | requested image counts | $1$ |
++| $I_\alpha$ | requested image count on axis $\alpha$; zero on an open axis | $1$ |
++| $\boldsymbol\rho$ | physical source-to-destination displacement | $\mathrm{m}$ |
++| $\rho$ | magnitude of $\boldsymbol\rho$ | $\mathrm{m}$ |
++| $\rho_a,\rho_b$ | Cartesian components of $\boldsymbol\rho$ | $\mathrm{m}$ |
++| $V_s$ | source-cell volume used by the dipole asymptote | $\mathrm{m^3}$ |
++| $\delta_{ab}$ | Kronecker delta | $1$ |
++| $\pi$ | circle constant in the dipole prefactor | $1$ |
++| $g_n$ | native-grid label | $1$ |
++| $g_c$ | common convolution-grid label | $1$ |
++| $\mathbf M_{g_n}$ | magnetization on native grid $g_n$ | $\mathrm{A\,m^{-1}}$ |
++| $\mathbf M_{g_c}$ | magnetization represented on common grid $g_c$ | $\mathrm{A\,m^{-1}}$ |
++| $\mathbf H_{g_c}$ | field on common grid $g_c$ | $\mathrm{A\,m^{-1}}$ |
++| $\mathbf H_{g_n}$ | field returned to native grid $g_n$ | $\mathrm{A\,m^{-1}}$ |
++| $\mathcal P_{g_n\to g_c}$ | native-to-common linear transfer | $1$ |
++| $\mathcal R_{g_c\to g_n}$ | common-to-native linear transfer | $1$ |
++
++(numerical-methods-fdm-grids-assumptions-and-validity)=
++## Assumptions and validity
++
++- Native FDM cells are uniform, orthogonal rectangular prisms. A nonuniform or body-fitted mesh is
++  a FEM problem, not an FDM-grid option.
++- Supported analytic bodies are sampled at cell centres. Curved and oblique surfaces therefore
++  have staircase error unless a separately qualified boundary correction is active.
++- The strict planner does not silently round a physical extent. It computes rounded counts only as
++  a candidate, then rejects a relative extent mismatch above `GRID_TOLERANCE`.
++- `boundary_correction="volume"` requests T0 volume weighting and `"full"` requests the T1
++  embedded/cut-boundary path. These requests are interaction-, precision-, and lane-gated; the
++  public field alone is not evidence that every operator used it.
++- The single-grid planner caps the resolved grid at $10^9$ cells and uses a conservative 256-byte
++  per-cell estimate with an 8 GiB pre-allocation budget.
++- Periodic local indexing and periodic demagnetization are separate semantics. With demagnetization
++  enabled, a periodic FDM axis requires `demag="truncated_images"`; ordinary open Newell padding is
++  rejected rather than reinterpreted.
++- Truncated images are a finite approximation, not an infinite Ewald sum. The planner caps the
++  image product at $10^6$ terms and the estimated periodic FFT workspace at 8 GiB.
++- The 3-D Newell implementation uses a point-dipole asymptote beyond its source-coded 40-cell lag
++  threshold. The code does not publish a universal error bound for anisotropic cells.
++- A one-cell-thick…11768 tokens truncated…rid $g_n$", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
++    {"id": "M_common", "latex": "$\\mathbf M_{g_c}$", "meaning": "magnetization represented on common grid $g_c$", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
++    {"id": "H_common", "latex": "$\\mathbf H_{g_c}$", "meaning": "field on common grid $g_c$", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
++    {"id": "H_native", "latex": "$\\mathbf H_{g_n}$", "meaning": "field returned to native grid $g_n$", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
++    {"id": "Push", "latex": "$\\mathcal P_{g_n\\to g_c}$", "meaning": "native-to-common linear transfer", "si_unit": "$1$"},
++    {"id": "Restrict", "latex": "$\\mathcal R_{g_c\\to g_n}$", "meaning": "common-to-native linear transfer", "si_unit": "$1$"}
+   ],
+   "sources": [
+-    {"id": "grid", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDMGrid", "responsibility": "Per-magnet native cell spacing and serialization."},
+-    {"id": "fdm", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDM", "responsibility": "Default/per-magnet grids and boundary-correction request."},
+-    {"id": "demag_policy", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDMDemag", "responsibility": "Single-grid and multilayer common-grid policy."},
+-    {"id": "newell", "path": "crates/fullmag-fdm-demag/src/newell.rs", "symbol": "compute_newell_kernels", "responsibility": "Cell-geometry-dependent Newell demagnetization tensor."},
+-    {"id": "fft", "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs", "symbol": "compute_newell_kernel_spectra; compute_periodic_newell_kernel_spectra", "responsibility": "Open/periodic tensor spectra and grid-dependent cache objects."},
+-    {"id": "interaction_owned", "path": "public_docs/site/physics/interactions/index.md", "symbol": "interaction-specific terminal pages", "responsibility": "Exact local stencils and boundary equations are interaction-owned."}
++    {"id": "object-mesh", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class GeometryMeshHandle", "responsibility": "Canonical object-owned FDM cell-size authoring and validation."},
++    {"id": "default-mesh", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyObjectsMeshDefaultsHandle", "responsibility": "Canonical default native cell-size authoring facade."},
++    {"id": "universe-mesh", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyUniverseHandle", "responsibility": "Canonical common convolution cell-size authoring and validation."},
++    {"id": "study-builder", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyBuilder", "responsibility": "Stage-first FDM, PBC, physics, and stage entrypoints."},
++    {"id": "python-lowering", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "_build_problem", "responsibility": "Normalize stage-first mesh state into FDM hints and ProblemIR."},
++    {"id": "grid-schema", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDMGrid", "responsibility": "Validate and serialize one native-grid cell triple."},
++    {"id": "fdm-schema", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDM", "responsibility": "Validate and serialize compatibility FDM hints and boundary intent."},
++    {"id": "demag-schema", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDMDemag", "responsibility": "Validate strategy, mode, common-grid controls, and removed fallback."},
++    {"id": "pbc-schema", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "class FdmPbc", "responsibility": "Validate and serialize FDM periodic axes, demag mode, and image counts."},
++    {"id": "cell-centres", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "resolved_fdm_cell_centers", "responsibility": "Materialize cell-centre coordinates from resolved origin, counts, and spacing."},
++    {"id": "voxelize", "path": "crates/fullmag-plan/src/geometry.rs", "symbol": "voxelize_shape", "responsibility": "Resolve Cartesian counts, origin, and cell-centre active mask for supported geometry."},
++    {"id": "extent-validation", "path": "crates/fullmag-plan/src/geometry.rs", "symbol": "validate_realized_grid", "responsibility": "Reject requested extents that are not integer multiples of cell size."},
++    {"id": "grid-budget", "path": "crates/fullmag-plan/src/geometry.rs", "symbol": "checked_fdm_grid_cost", "responsibility": "Check cell-count arithmetic and planner memory limits before allocation."},
++    {"id": "single-plan", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "Resolve single-grid masks, certificates, PBC work, boundary gates, and lane data."},
++    {"id": "multilayer-plan", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm_multilayer", "responsibility": "Resolve native/common multilayer grids, transfers, modes, and fail-closed boundaries."},
++    {"id": "demag-boundary", "path": "crates/fullmag-ir/src/execution.rs", "symbol": "resolve_demag_boundary", "responsibility": "Resolve legal FDM demag boundary semantics without erasing requested PBC."},
++    {"id": "periodic-images", "path": "crates/fullmag-ir/src/execution.rs", "symbol": "resolve_periodic_images", "responsibility": "Resolve and bound image counts, padding, term count, and workspace bytes."},
++    {"id": "neighbour-index", "path": "crates/fullmag-engine/src/fdm/shared/types.rs", "symbol": "neighbor_index", "responsibility": "Implement open-axis clamping and periodic-axis wrapping."},
++    {"id": "newell", "path": "crates/fullmag-fdm-demag/src/newell.rs", "symbol": "compute_newell_kernels", "responsibility": "Construct Newell tensor components and the source-coded 3-D dipole asymptote."},
++    {"id": "open-spectra", "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs", "symbol": "compute_newell_kernel_spectra", "responsibility": "Build open-boundary zero-padded Newell FFT spectra."},
++    {"id": "periodic-spectra", "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs", "symbol": "compute_periodic_newell_kernel_spectra", "responsibility": "Build truncated-image periodic Newell FFT spectra with per-axis padding."},
++    {"id": "cuda-construction", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs", "symbol": "create", "responsibility": "Consume the resolved grid/PBC contract and provide matching spectra to CUDA."},
++    {"id": "pbc-artifact", "path": "crates/fullmag-runner/src/fdm/artifacts.rs", "symbol": "pbc_provenance_artifacts", "responsibility": "Persist requested and resolved FDM grid/PBC provenance."}
+   ],
+   "public_api": {
+     "parameters": [
+-      {"python": "FDMGrid.cell", "type": "tuple[float,float,float]", "default": "required", "si_unit": "$\\mathrm{m}$", "validation": "exactly three finite positive values", "meaning": "per-magnet native spacing", "backend_support": "FDM CPU/GPU", "problem_ir": "`fdm.per_magnet.<name>.cell`"},
+-      {"python": "FDM.default_cell", "type": "tuple[float,float,float] | None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "exactly three finite positive values", "meaning": "default native spacing", "backend_support": "FDM CPU/GPU", "problem_ir": "`fdm.default_cell` and compatibility `fdm.cell`"},
+-      {"python": "FDM.per_magnet", "type": "dict[str,FDMGrid] | None", "default": "None", "si_unit": "$1$", "validation": "nonempty names and FDMGrid values", "meaning": "object-owned native grids", "backend_support": "FDM CPU/GPU capability-gated", "problem_ir": "`fdm.per_magnet`"},
+-      {"python": "FDM.boundary_correction", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "none, volume, or full", "meaning": "requested boundary correction", "backend_support": "interaction/device gated", "problem_ir": "`fdm.boundary_correction`"},
+-      {"python": "FDM.boundary_phi_floor", "type": "float | None", "default": "None", "si_unit": "$1$", "validation": "strictly in (0,1)", "meaning": "minimum boundary volume fraction", "backend_support": "boundary-correction gated", "problem_ir": "`fdm.boundary_phi_floor`"},
+-      {"python": "FDM.boundary_delta_min", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "nonnegative", "meaning": "minimum geometric distance for full correction", "backend_support": "boundary-correction gated", "problem_ir": "`fdm.boundary_delta_min`"},
+-      {"python": "FDMDemag.strategy", "type": "str", "default": "auto", "si_unit": "$1$", "validation": "auto, single_grid, or multilayer_convolution", "meaning": "nonlocal grid strategy", "backend_support": "FDM", "problem_ir": "`fdm.demag.strategy`"},
+-      {"python": "FDMDemag.mode", "type": "str", "default": "auto", "si_unit": "$1$", "validation": "auto, two_d_stack, or three_d", "meaning": "multilayer common-grid dimensionality", "backend_support": "FDM", "problem_ir": "`fdm.demag.mode`"},
+-      {"python": "FDMDemag.common_cells", "type": "tuple[int,int,int] | None", "default": "None", "si_unit": "$1$", "validation": "positive integer triple; incompatible with two_d_stack", "meaning": "explicit 3D common-grid dimensions", "backend_support": "FDM multilayer", "problem_ir": "`fdm.demag.common_cells`"},
+-      {"python": "FDMDemag.common_cells_xy", "type": "tuple[int,int] | None", "default": "None", "si_unit": "$1$", "validation": "positive integer pair; auto/two_d_stack only", "meaning": "explicit common in-plane dimensions", "backend_support": "FDM multilayer", "problem_ir": "`fdm.demag.common_cells_xy`"},
+-      {"python": "FDMDemag.common_cell_size", "type": "tuple[float,float,float] | None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "positive triple; mutually exclusive with explicit counts", "meaning": "requested common-grid spacing", "backend_support": "FDM multilayer", "problem_ir": "`fdm.demag.common_cell_size`"}
++      {"python": "body.mesh(cell_size=...)", "type": "Sequence[float] | None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "exactly three finite positive values; cannot be combined with FEM mesh controls", "meaning": "object-owned native FDM spacing", "backend_support": "FDM CPU/GPU authoring; planner and runtime capability-gated", "problem_ir": "`backend_policy.discretization_hints.fdm.per_magnet.<object>.cell`"},
++      {"python": "study.objects.mesh.defaults(cell_size=...)", "type": "Sequence[float] | None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "exactly three finite positive values; cannot be combined with FEM default-mesh controls", "meaning": "inherited native spacing for objects without overrides", "backend_support": "FDM CPU/GPU authoring", "problem_ir": "`backend_policy.discretization_hints.fdm.default_cell` and compatibility `backend_policy.discretization_hints.fdm.cell`"},
++      {"python": "study.universe.mesh(cell_size=...)", "type": "Sequence[float] | None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "exactly three finite positive values; cannot be combined with FEM universe controls; common extent must divide exactly", "meaning": "common convolution-grid target spacing for unequal native grids", "backend_support": "FDM multilayer CPU/GPU authoring; execution capability-gated", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.common_cell_size`"},
++      {"python": "study.pbc(x=...)", "type": "bool", "default": "False", "si_unit": "$1$", "validation": "coerced to Boolean; demag/images require at least one periodic axis", "meaning": "request periodic x indexing", "backend_support": "FDM CPU/GPU single-grid; multilayer FDM rejected", "problem_ir": "`pbc.axes[0]` as `periodic` or `open`"},
++      {"python": "study.pbc(y=...)", "type": "bool", "default": "False", "si_unit": "$1$", "validation": "coerced to Boolean; demag/images require at least one periodic axis", "meaning": "request periodic y indexing", "backend_support": "FDM CPU/GPU single-grid; multilayer FDM rejected", "problem_ir": "`pbc.axes[1]` as `periodic` or `open`"},
++      {"python": "study.pbc(z=...)", "type": "bool", "default": "False", "si_unit": "$1$", "validation": "coerced to Boolean; demag/images require at least one periodic axis", "meaning": "request periodic z indexing", "backend_support": "FDM CPU/GPU single-grid; multilayer FDM rejected", "problem_ir": "`pbc.axes[2]` as `periodic` or `open`"},
++      {"python": "study.pbc(demag=...)", "type": "Literal[\"open\", \"truncated_images\", \"periodic_airbox_k0\"]", "default": "\"open\"", "si_unit": "$1$", "validation": "normalized to lowercase enum; FDM rejects `periodic_airbox_k0`; periodic axes plus enabled FDM demag reject `open`", "meaning": "requested demag boundary realization", "backend_support": "FDM supports open without periodic axes and truncated images; periodic-airbox is FEM-only", "problem_ir": "`pbc.demag`"},
++      {"python": "study.pbc(images=...)", "type": "tuple[int, int, int] | None", "default": "None", "si_unit": "$1$", "validation": "exactly three values coercible to integers, nonnegative, and legal only with `truncated_images`; planner resolves open-axis counts to zero", "meaning": "finite periodic-image radius per axis", "backend_support": "FDM CPU/GPU single-grid; planner budget-gated", "problem_ir": "`pbc.image_counts`"},
++      {"python": "FDM.cell", "type": "Sequence[float] | None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "exactly three finite positive values; mutually exclusive with `default_cell`; one default or nonempty per-magnet map is required", "meaning": "legacy default native spacing", "backend_support": "FDM CPU/GPU compatibility authoring", "problem_ir": "`backend_policy.discretization_hints.fdm.cell` and `backend_policy.discretization_hints.fdm.default_cell`"},
++      {"python": "FDM.default_cell", "type": "Sequence[float] | None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "exactly three finite positive values; mutually exclusive with `cell`; one default or nonempty per-magnet map is required", "meaning": "explicit default native spacing", "backend_support": "FDM CPU/GPU compatibility authoring", "problem_ir": "`backend_policy.discretization_hints.fdm.default_cell` and compatibility `backend_policy.discretization_hints.fdm.cell`"},
++      {"python": "FDM.per_magnet", "type": "dict[str, FDMGrid] | None", "default": "None", "si_unit": "$1$", "validation": "keys must be nonempty strings and values must be `FDMGrid`; missing objects require a default", "meaning": "object-owned native grids", "backend_support": "FDM CPU/GPU; multilayer path capability-gated", "problem_ir": "`backend_policy.discretization_hints.fdm.per_magnet`"},
++      {"python": "FDM.demag", "type": "FDMDemag | None", "default": "None", "si_unit": "$1$", "validation": "annotated as `FDMDemag`, but the constructor performs no `isinstance` check; an incompatible value normally fails later when `FDM.to_ir()` calls `demag.to_ir()`", "meaning": "advanced nonlocal grid policy", "backend_support": "FDM CPU/GPU; strategy and mode capability-gated", "problem_ir": "`backend_policy.discretization_hints.fdm.demag`"},
++      {"python": "FDM.boundary_correction", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "`None`, `none`, `volume`, or `full`", "meaning": "requested binary, T0, or T1 boundary treatment", "backend_support": "single-grid interaction/precision gated; multilayer accepts only omitted/`none`", "problem_ir": "`backend_policy.discretization_hints.fdm.boundary_correction`"},
++      {"python": "FDM.boundary_phi_floor", "type": "float | None", "default": "None", "si_unit": "$1$", "validation": "strictly inside $(0,1)$ when supplied", "meaning": "minimum accepted volume fraction for T0/T1 stabilization", "backend_support": "boundary-correction gated; multilayer rejects it", "problem_ir": "`backend_policy.discretization_hints.fdm.boundary_phi_floor`"},
++      {"python": "FDM.boundary_delta_min", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "rejects values below zero; the current Python constructor has no separate finiteness guard", "meaning": "minimum T1 intersection distance", "backend_support": "boundary-correction gated; multilayer rejects it", "problem_ir": "`backend_policy.discretization_hints.fdm.boundary_delta_min`"},
++      {"python": "FDMGrid.cell", "type": "Sequence[float]", "default": "required", "si_unit": "$\\mathrm{m}$", "validation": "exactly three finite positive values", "meaning": "one magnet's native Cartesian spacing", "backend_support": "FDM CPU/GPU", "problem_ir": "`backend_policy.discretization_hints.fdm.per_magnet.<name>.cell`"},
++      {"python": "FDMDemag.strategy", "type": "Literal[\"auto\", \"single_grid\", \"multilayer_convolution\"]", "default": "\"auto\"", "si_unit": "$1$", "validation": "exact enum; multi-body planner rejects `single_grid`", "meaning": "requested nonlocal execution family", "backend_support": "FDM CPU/GPU, planner-resolved", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.strategy`"},
++      {"python": "FDMDemag.mode", "type": "Literal[\"auto\", \"two_d_stack\", \"three_d\"]", "default": "\"auto\"", "si_unit": "$1$", "validation": "exact enum; `two_d_stack` rejects 3-D counts and requires one native z cell per layer", "meaning": "requested common-grid dimensionality", "backend_support": "FDM multilayer CPU/GPU, planner-resolved", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.mode`"},
++      {"python": "FDMDemag.common_cells", "type": "tuple[int, int, int] | None", "default": "None", "si_unit": "$1$", "validation": "exactly three positive non-Boolean integers; mutually exclusive with XY counts and cell size; incompatible with `two_d_stack`", "meaning": "explicit 3-D common-grid counts", "backend_support": "FDM multilayer CPU/GPU, capability-gated", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.common_cells`"},
++      {"python": "FDMDemag.common_cells_xy", "type": "tuple[int, int] | None", "default": "None", "si_unit": "$1$", "validation": "exactly two positive non-Boolean integers; mutually exclusive with 3-D counts and cell size; valid only for `auto`/`two_d_stack`", "meaning": "explicit common in-plane counts", "backend_support": "FDM multilayer CPU/GPU, capability-gated", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.common_cells_xy`"},
++      {"python": "FDMDemag.common_cell_size", "type": "tuple[float, float, float] | None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "exactly three finite positive values; mutually exclusive with explicit counts; incompatible with explicit `two_d_stack` in Rust IR validation", "meaning": "target common-grid spacing", "backend_support": "canonical FDM multilayer authoring; execution capability-gated", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.common_cell_size`"},
++      {"python": "FDMDemag.allow_single_grid_fallback", "type": "bool | None", "default": "None", "si_unit": "$1$", "validation": "every non-`None` value raises because silent fallback was removed", "meaning": "rejected compatibility input", "backend_support": "unsupported", "problem_ir": "not serialized; rejected before ProblemIR lowering"},
++      {"python": "FDMDemag.explain", "type": "bool", "default": "True", "si_unit": "$1$", "validation": "stored as an authoring-only flag; it is not serialized by `to_ir()`", "meaning": "request human-readable legacy planning output", "backend_support": "authoring only; no execution semantics", "problem_ir": "not serialized; no ProblemIR destination"}
+     ]
+   }
+ }
+warning: in the working copy of 'public_docs/site/numerical-methods/meshing/fdm-grids.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'public_docs/site/numerical-methods/meshing/fdm-grids.source-map.json', LF will be replaced by CRLF the next time Git touches it
+

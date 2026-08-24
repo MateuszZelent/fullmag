@@ -7,8 +7,8 @@
     {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "No native CUDA modal lane is claimed."}
   ],
   "equations": [
-    {"id": "eq-numerical-modal-validation-relative-error", "symbols": ["fnum", "fref", "eps", "epsmax"], "sources": ["dispersion", "native"]},
-    {"id": "eq-numerical-modal-validation-kittel", "symbols": ["fnum", "fkit", "H", "df"], "sources": ["kittel", "native"]}
+    {"id": "eq-numerical-modal-validation-relative-error", "symbols": ["fnum", "fref", "eps", "epsmax"], "sources": ["dispersion", "native", "kinematics"]},
+    {"id": "eq-numerical-modal-validation-kittel", "symbols": ["fnum", "fkit", "H", "df"], "sources": ["kittel", "native", "kinematics"]}
   ],
   "symbols": [
     {"id": "fnum", "latex": "$f_j^{\\mathrm{num}}$", "meaning": "computed frequency at sample $j$", "si_unit": "$\\mathrm{Hz}$"},
@@ -22,7 +22,8 @@
   "sources": [
     {"id": "dispersion", "path": "packages/fullmag-py/src/fullmag/model/eigen.py", "symbol": "class ThinFilmDEBVDispersionValidation", "responsibility": "Dispersion validation schema."},
     {"id": "kittel", "path": "packages/fullmag-py/src/fullmag/model/eigen.py", "symbol": "class K0KittelFieldSweepValidation", "responsibility": "Kittel field-sweep validation schema."},
-    {"id": "native", "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp", "symbol": "solve_modal_eigen_contract", "responsibility": "Native modal diagnostics and status."}
+    {"id": "native", "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp", "symbol": "solve_modal_eigen_contract", "responsibility": "Native modal diagnostics and status."},
+    {"id": "kinematics", "path": "backends/fem/src/frequency_domain/mode_kinematics.cpp", "symbol": "frequency_hz_from_omega_rad_s", "responsibility": "Converts the signed real angular-frequency component selected by map_eigenvalue to cyclic frequency."}
   ],
   "public_api": {
     "parameters": [
