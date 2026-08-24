@@ -15,6 +15,7 @@
 #include "gpu/cuda/integrators/rk/rk.hpp"
 #include "gpu/cuda/integrators/rk/rk_fsal_policy.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
+#include "gpu/cuda/runtime/execution_receipt.hpp"
 
 #include <string>
 
@@ -72,6 +73,39 @@ bool gpu_rk_prepare_step_preflight(
     if (plan.exchange_operator_mode == nullptr ||
         std::string(plan.exchange_operator_mode) != "legacy_sparse_gpu") {
         reason = "GPU RK device-resident step requires legacy_sparse_gpu exchange operator mode";
+        return false;
+    }
+
+    if (plan.execution_class == FemGpuExecutionClass::DeviceResident &&
+        !gpu_rk_plan_is_strict_device_resident(plan, reason)) {
+        return false;
+    }
+    const auto current_receipt = gpu_execution_receipt_snapshot(
+        ctx.gpu_state.execution_receipt);
+    const bool same_plan =
+        current_receipt.plan_resolved &&
+        current_receipt.execution_class == plan.execution_class &&
+        current_receipt.device_ordinal == ctx.mfem_context.selected_device_index &&
+        current_receipt.precision == static_cast<uint32_t>(ctx.base_plan.precision) &&
+        current_receipt.integrator == static_cast<uint32_t>(ctx.base_plan.integrator) &&
+        current_receipt.required_operator_mask == plan.required_operator_mask &&
+        current_receipt.resolved_device_operator_mask == plan.resolved_device_operator_mask &&
+        current_receipt.resolved_host_operator_mask == plan.resolved_host_operator_mask &&
+        current_receipt.resolved_unknown_operator_mask == plan.resolved_unknown_operator_mask;
+    if (!same_plan) {
+        gpu_execution_receipt_resolve_plan(
+            ctx.gpu_state.execution_receipt,
+            plan.required_operator_mask,
+            plan.resolved_device_operator_mask,
+            plan.resolved_host_operator_mask,
+            plan.resolved_unknown_operator_mask,
+            plan.execution_class,
+            ctx.mfem_context.selected_device_index,
+            static_cast<uint32_t>(ctx.base_plan.precision),
+            static_cast<uint32_t>(ctx.base_plan.integrator));
+    }
+    if (!gpu_execution_receipt_snapshot(ctx.gpu_state.execution_receipt).accounting_valid) {
+        reason = "GPU RK execution receipt rejected the resolved operator plan";
         return false;
     }
 

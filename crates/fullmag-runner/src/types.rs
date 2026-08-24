@@ -2891,6 +2891,89 @@ mod fdm_gpu_execution_receipt_contract_tests {
     }
 }
 
+/// Execution class reported by the native FEM receipt ABI.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FemGpuExecutionClass {
+    DeviceResident,
+    GpuOperatorHostSolver,
+    HybridCpuPoisson,
+    Cpu,
+}
+
+/// Native FEM GPU execution evidence captured after execution.
+///
+/// The resolved and executed fields are derived only from the versioned
+/// native receipt. The Rust planner is not an execution oracle.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FemGpuExecutionReceipt {
+    pub requested: String,
+    pub resolved: String,
+    pub executed: String,
+    pub execution_class: FemGpuExecutionClass,
+    pub device_ordinal: i32,
+    pub precision: String,
+    pub integrator: String,
+    pub required_operator_mask: u64,
+    pub resolved_device_operator_mask: u64,
+    pub resolved_host_operator_mask: u64,
+    pub resolved_unknown_operator_mask: u64,
+    pub executed_device_operator_mask: u64,
+    pub executed_host_operator_mask: u64,
+    pub executed_unknown_operator_mask: u64,
+    pub fallback_count: u64,
+    pub accepted_step_count: u64,
+    pub rejected_attempt_count: u64,
+    pub failed_attempt_count: u64,
+    pub hot_loop_compute_h2d_bytes: u64,
+    pub hot_loop_compute_d2h_bytes: u64,
+    pub hot_loop_compute_host_sync_count: u64,
+    pub accounting_valid: bool,
+}
+
+#[cfg(test)]
+mod fem_gpu_execution_receipt_contract_tests {
+    use super::*;
+
+    #[test]
+    fn execution_provenance_serializes_explicit_fem_gpu_receipt() {
+        let mut provenance = ExecutionProvenance::default();
+        provenance.fem_gpu_execution_receipt = Some(FemGpuExecutionReceipt {
+            requested: "hybrid".into(),
+            resolved: "hybrid_cpu_poisson".into(),
+            executed: "cuda_fem_hybrid_cpu_poisson".into(),
+            execution_class: FemGpuExecutionClass::HybridCpuPoisson,
+            device_ordinal: 1,
+            precision: "double".into(),
+            integrator: "heun".into(),
+            required_operator_mask: 0x3ff,
+            resolved_device_operator_mask: 0x1fb,
+            resolved_host_operator_mask: 0x204,
+            resolved_unknown_operator_mask: 0,
+            executed_device_operator_mask: 0x1fb,
+            executed_host_operator_mask: 0x204,
+            executed_unknown_operator_mask: 0,
+            fallback_count: 0,
+            accepted_step_count: 2,
+            rejected_attempt_count: 1,
+            failed_attempt_count: 0,
+            hot_loop_compute_h2d_bytes: 24,
+            hot_loop_compute_d2h_bytes: 24,
+            hot_loop_compute_host_sync_count: 2,
+            accounting_valid: true,
+        });
+
+        let value = serde_json::to_value(provenance).expect("serialize provenance");
+        let receipt = &value["fem_gpu_execution_receipt"];
+        assert_eq!(receipt["requested"], "hybrid");
+        assert_eq!(receipt["resolved"], "hybrid_cpu_poisson");
+        assert_eq!(receipt["executed"], "cuda_fem_hybrid_cpu_poisson");
+        assert_eq!(receipt["execution_class"], "hybrid_cpu_poisson");
+        assert_eq!(receipt["executed_host_operator_mask"], 0x204);
+        assert_eq!(receipt["hot_loop_compute_d2h_bytes"], 24);
+    }
+}
+
 /// FEM demag solver provenance.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct FemPoissonDemagProvenance {
@@ -3078,6 +3161,10 @@ pub struct ExecutionProvenance {
     /// FDM LLG residency together with setup and hot-loop transfer counters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fdm_gpu_execution_receipt: Option<FdmGpuExecutionReceipt>,
+    /// Native FEM receipt preserving requested, resolved, and actually executed
+    /// GPU residency without inferring execution from the RK plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_gpu_execution_receipt: Option<FemGpuExecutionReceipt>,
     /// Legacy compatibility observations retained for historical artifacts.
     /// Physics-graph realization must never infer an executed module from a
     /// kind-only observation.

@@ -1074,6 +1074,21 @@ add_test(
     COMMAND fem_gpu_execution_receipt_contract
 )
 
+add_executable(
+    fem_gpu_strict_execution_contract
+    tests/gpu_strict_execution_contract.cpp
+)
+target_link_libraries(fem_gpu_strict_execution_contract PRIVATE fullmag_fem)
+target_include_directories(fem_gpu_strict_execution_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/native/include
+)
+add_test(
+    NAME fem_gpu_strict_execution_contract
+    COMMAND fem_gpu_strict_execution_contract
+)
+
 add_executable(fem_state_io_contract tests/state_io_contract.cpp)
 target_link_libraries(fem_state_io_contract PRIVATE fullmag_fem)
 target_include_directories(fem_state_io_contract PRIVATE

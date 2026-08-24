@@ -71,6 +71,23 @@ struct DrivenResponseCAbiDemagTangentContext {
 constexpr const char *kUnavailableMessage =
     "fullmag_fem native backend was built without the MFEM stack; rebuild with FULLMAG_USE_MFEM_STACK=ON and an installed MFEM toolchain";
 
+uint32_t gpu_execution_class_to_abi(fullmag::fem::FemGpuExecutionClass execution_class) {
+    switch (execution_class) {
+    case fullmag::fem::FemGpuExecutionClass::Unknown:
+        return FULLMAG_FEM_GPU_EXECUTION_UNKNOWN;
+    case fullmag::fem::FemGpuExecutionClass::DeviceResident:
+        return FULLMAG_FEM_GPU_EXECUTION_DEVICE_RESIDENT;
+    case fullmag::fem::FemGpuExecutionClass::GpuOperatorHostSolver:
+        return FULLMAG_FEM_GPU_EXECUTION_GPU_OPERATOR_HOST_SOLVER;
+    case fullmag::fem::FemGpuExecutionClass::HybridCpuPoisson:
+        return FULLMAG_FEM_GPU_EXECUTION_HYBRID_CPU_POISSON;
+    case fullmag::fem::FemGpuExecutionClass::Cpu:
+        return FULLMAG_FEM_GPU_EXECUTION_CPU;
+    default:
+        return FULLMAG_FEM_GPU_EXECUTION_UNKNOWN;
+    }
+}
+
 void apply_demag_solver_policy_to_step_stats(
     const fullmag::fem::Context &ctx,
     fullmag_fem_step_stats &stats)
@@ -3575,11 +3592,22 @@ int fullmag_fem_backend_gpu_execution_receipt_v1(
 
     const auto snapshot = fullmag::fem::gpu_execution_receipt_snapshot(
         handle->context.gpu_state.execution_receipt);
-    const auto transfer_audit = fullmag::fem::transfer_audit_snapshot(handle->context);
+    if (!snapshot.plan_resolved) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_execution_receipt_v1 has no resolved execution plan");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (!snapshot.accounting_valid) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_execution_receipt_v1 accounting is invalid");
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
     fullmag_fem_gpu_execution_receipt_v1 receipt{};
     receipt.abi_version = FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1;
     receipt.struct_size = sizeof(receipt);
-    receipt.execution_class = static_cast<uint32_t>(snapshot.execution_class);
+    receipt.execution_class = gpu_execution_class_to_abi(snapshot.execution_class);
     receipt.precision = snapshot.precision;
     receipt.integrator = snapshot.integrator;
     receipt.device_ordinal = snapshot.device_ordinal;
@@ -3594,9 +3622,9 @@ int fullmag_fem_backend_gpu_execution_receipt_v1(
     receipt.accepted_step_count = snapshot.accepted_step_count;
     receipt.rejected_attempt_count = snapshot.rejected_attempt_count;
     receipt.failed_attempt_count = snapshot.failed_attempt_count;
-    receipt.hot_loop_compute_h2d_bytes = transfer_audit.hot_loop_compute_h2d_bytes;
-    receipt.hot_loop_compute_d2h_bytes = transfer_audit.hot_loop_compute_d2h_bytes;
-    receipt.hot_loop_compute_host_sync_count = transfer_audit.hot_loop_compute_host_sync_count;
+    receipt.hot_loop_compute_h2d_bytes = snapshot.hot_loop_compute_h2d_bytes;
+    receipt.hot_loop_compute_d2h_bytes = snapshot.hot_loop_compute_d2h_bytes;
+    receipt.hot_loop_compute_host_sync_count = snapshot.hot_loop_compute_host_sync_count;
     *out_receipt = receipt;
     return FULLMAG_FEM_OK;
 }

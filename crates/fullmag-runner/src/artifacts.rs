@@ -5111,6 +5111,51 @@ mod tests {
     static FINAL_EXECUTION_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
+    fn artifact_provenance_preserves_fem_gpu_execution_receipt_verbatim() {
+        let context = FieldArtifactContext {
+            problem_name: "fem-receipt".into(),
+            ir_version: "v0".into(),
+            source_hash: Some("source-bound".into()),
+            execution_mode: ExecutionMode::Hybrid,
+            layout: serde_json::json!({"backend": "fem"}),
+            execution_resolution: None,
+        };
+        let mut provenance = ExecutionProvenance::default();
+        provenance.fem_gpu_execution_receipt = Some(crate::types::FemGpuExecutionReceipt {
+            requested: "hybrid".into(),
+            resolved: "hybrid_cpu_poisson".into(),
+            executed: "cuda_fem_hybrid_cpu_poisson".into(),
+            execution_class: crate::types::FemGpuExecutionClass::HybridCpuPoisson,
+            device_ordinal: 0,
+            precision: "double".into(),
+            integrator: "heun".into(),
+            required_operator_mask: 0x3ff,
+            resolved_device_operator_mask: 0x1fb,
+            resolved_host_operator_mask: 0x204,
+            resolved_unknown_operator_mask: 0,
+            executed_device_operator_mask: 0x1fb,
+            executed_host_operator_mask: 0x204,
+            executed_unknown_operator_mask: 0,
+            fallback_count: 0,
+            accepted_step_count: 1,
+            rejected_attempt_count: 0,
+            failed_attempt_count: 0,
+            hot_loop_compute_h2d_bytes: 24,
+            hot_loop_compute_d2h_bytes: 24,
+            hot_loop_compute_host_sync_count: 2,
+            accounting_valid: true,
+        });
+
+        let value = artifact_provenance_json(&context, &provenance);
+        let receipt = &value["fem_gpu_execution_receipt"];
+        assert_eq!(receipt["execution_class"], "hybrid_cpu_poisson");
+        assert_eq!(receipt["executed_host_operator_mask"], 0x204);
+        assert_eq!(receipt["hot_loop_compute_h2d_bytes"], 24);
+        assert_eq!(receipt["hot_loop_compute_d2h_bytes"], 24);
+        assert_eq!(receipt["hot_loop_compute_host_sync_count"], 2);
+    }
+
+    #[test]
     fn dmi_field_artifact_units_include_bulk_quantity() {
         assert_eq!(field_unit("H_dmi"), "A/m");
         assert_eq!(field_unit("H_dmi.x"), "A/m");
@@ -8565,6 +8610,7 @@ mod tests {
             transport_modules: Vec::new(),
             fdm_gpu_transport_telemetry: None,
             fdm_gpu_execution_receipt: None,
+            fem_gpu_execution_receipt: None,
             executed_physics_kinds: Vec::new(),
             executed_physics_module_ids: Vec::new(),
             execution_engine: "fem_cpu_native".to_string(),
@@ -9451,6 +9497,7 @@ mod tests {
             transport_modules: Vec::new(),
             fdm_gpu_transport_telemetry: None,
             fdm_gpu_execution_receipt: None,
+            fem_gpu_execution_receipt: None,
             executed_physics_kinds: Vec::new(),
             executed_physics_module_ids: Vec::new(),
             execution_engine: "fdm_gpu_native".to_string(),
