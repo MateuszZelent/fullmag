@@ -152,6 +152,7 @@ set(FEM_SOURCES
     cpu/mfem/runtime/eigen_dense.cpp
     cpu/mfem/runtime/field_refresh.cpp
     gpu/cuda/runtime/gpu_state_runtime.cpp
+    gpu/cuda/runtime/execution_receipt.cpp
     cpu/mfem/runtime/interrupt.cpp
     cpu/mfem/runtime/mfem_context.cpp
     cpu/mfem/runtime/mfem_device.cpp
@@ -1058,6 +1059,20 @@ target_include_directories(fem_gpu_state_runtime_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_gpu_state_runtime_contract COMMAND fem_gpu_state_runtime_contract)
+
+add_executable(
+    fem_gpu_execution_receipt_contract
+    tests/gpu_execution_receipt_contract.cpp
+)
+target_link_libraries(fem_gpu_execution_receipt_contract PRIVATE fullmag_fem)
+target_include_directories(fem_gpu_execution_receipt_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(
+    NAME fem_gpu_execution_receipt_contract
+    COMMAND fem_gpu_execution_receipt_contract
+)
 
 add_executable(fem_state_io_contract tests/state_io_contract.cpp)
 target_link_libraries(fem_state_io_contract PRIVATE fullmag_fem)

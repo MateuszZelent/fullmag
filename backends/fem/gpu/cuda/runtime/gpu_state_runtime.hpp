@@ -8,6 +8,7 @@
  */
 
 #include "gpu/cuda/state/gpu_state.hpp"
+#include "gpu/cuda/runtime/execution_receipt.hpp"
 #include "gpu/cuda/transfer/snapshot_pool.hpp"
 
 #include <cstddef>
@@ -128,6 +129,7 @@ struct GpuStateRuntimeState {
     CudaRuntimeState cuda{};
     GpuRkPhaseTimingRuntimeState rk_phase_timings{};
     GpuRkTransactionTelemetryRuntimeState rk_transaction_telemetry{};
+    FemGpuExecutionReceiptRuntimeState execution_receipt{};
 };
 
 /*
