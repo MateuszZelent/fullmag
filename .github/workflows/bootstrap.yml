@@ -125,8 +125,6 @@ jobs:
 
   browser-fixture-smoke:
     runs-on: ubuntu-latest
-    env:
-      CONTROL_ROOM_AUDIT_ARTIFACTS_DIR: ${{ runner.temp }}/viewport-3d-browser-audit
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -150,9 +148,13 @@ jobs:
         run: pnpm --dir apps/control-room exec playwright install --with-deps chromium
 
       - name: Run browser fixture smoke
+        env:
+          CONTROL_ROOM_AUDIT_ARTIFACTS_DIR: ${{ runner.temp }}/viewport-3d-browser-audit
         run: ./scripts/ci/run_frontend3d_required_gate.sh browser-fixture-smoke
 
       - name: Verify browser fixture smoke negative control
+        env:
+          CONTROL_ROOM_AUDIT_ARTIFACTS_DIR: ${{ runner.temp }}/viewport-3d-browser-audit
         run: |
           if FULLMAG_CI_INJECT_FAILURE=browser-fixture-proof-identity \
             ./scripts/ci/run_frontend3d_required_gate.sh browser-fixture-smoke; then

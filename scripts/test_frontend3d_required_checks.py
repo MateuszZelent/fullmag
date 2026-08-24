@@ -178,8 +178,16 @@ def test_required_contexts_and_proof_output_are_fail_closed() -> None:
         assert jobs[job_id].get("if") is None
 
     browser_steps = jobs["browser-fixture-smoke"]["steps"]
-    assert jobs["browser-fixture-smoke"]["env"]["CONTROL_ROOM_AUDIT_ARTIFACTS_DIR"] == (
-        "${{ runner.temp }}/viewport-3d-browser-audit"
+    browser_gate_steps = [
+        step
+        for step in browser_steps
+        if "run_frontend3d_required_gate.sh browser-fixture-smoke" in step.get("run", "")
+    ]
+    assert len(browser_gate_steps) == 2
+    assert all(
+        step["env"]["CONTROL_ROOM_AUDIT_ARTIFACTS_DIR"]
+        == "${{ runner.temp }}/viewport-3d-browser-audit"
+        for step in browser_gate_steps
     )
     assert any(
         step.get("run") == "./scripts/ci/run_frontend3d_required_gate.sh browser-fixture-smoke"
