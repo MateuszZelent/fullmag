@@ -1,0 +1,1653 @@
+# Review package: 05475556b..30b65e027
+
+## Commits
+30b65e027 feat(viewport): move authored objects
+
+## Files changed
+ .../kernel/authoring/objectTranslationMutation.ts  |  52 +++++
+ .../inspector/panels/GeometryObjectPanel.tsx       |  41 +++-
+ .../panels/geometryObjectPanelModel.test.ts        |  10 +-
+ .../inspector/panels/geometryObjectPanelModel.ts   |  10 +-
+ .../src/modules/ribbon/ribbonCommands.ts           |  22 ++
+ .../src/modules/ribbon/ribbonContributions.tsx     |   7 +-
+ .../src/modules/ribbon/ribbonStructure.test.ts     |  19 +-
+ .../modules/viewport-3d/MoveObjectGizmo.test.tsx   |  94 +++++++++
+ .../src/modules/viewport-3d/MoveObjectGizmo.tsx    | 233 +++++++++++++++++++++
+ .../src/modules/viewport-3d/Viewport3DModule.tsx   |  87 ++++++++
+ .../viewport-3d/hooks/useViewport3DSceneModel.ts   |   2 +
+ .../modules/viewport-3d/layers/CameraControls.tsx  |   2 +
+ .../modules/viewport-3d/layers/Viewport3DScene.tsx |  32 +++
+ .../viewport-3d/viewport3dPrimitiveModel.ts        |   2 +
+ 14 files changed, 585 insertions(+), 28 deletions(-)
+
+## Diff
+diff --git a/apps/control-room/src/kernel/authoring/objectTranslationMutation.ts b/apps/control-room/src/kernel/authoring/objectTranslationMutation.ts
+new file mode 100644
+index 000000000..ef45bea3f
+--- /dev/null
++++ b/apps/control-room/src/kernel/authoring/objectTranslationMutation.ts
+@@ -0,0 +1,52 @@
++import { ControlRoomApiError, type ControlRoomApi } from "@/kernel/api/ControlRoomApi";
++import type { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
++import type { SceneResource } from "@/kernel/api/apiTypes";
++
++import {
++  acknowledgedAuthoringSceneRevision,
++  invalidateAuthoringMutationDependents,
++} from "./authoringMutationInvalidation";
++import { commitObjectTransformTransaction } from "./geometryLifecycleCommands";
++import { publishCommittedSceneResource } from "@/kernel/resources/geometryLifecycleResources";
++
++export type ObjectTranslation = [number, number, number];
++export const PROBLEM_IR_03_RIGID_TRANSFORM_REASON =
++  "Rotate and Scale require a canonical geometry contract newer than ProblemIR 0.3.";
++
++export function isObjectTranslationRevisionConflict(error: unknown): boolean {
++  return error instanceof ControlRoomApiError &&
++    error.status === 409 &&
++    (error.code === "revision_conflict" || error.code === "scene_revision_conflict");
++}
++
++/** One revision-safe translation transaction shared by Inspector and viewport. */
++export async function commitObjectTranslation({
++  api,
++  baseRevision,
++  objectId,
++  resources,
++  translation,
++}: {
++  api: ControlRoomApi;
++  baseRevision: number;
++  objectId: string;
++  resources: ResourceInvalidationController;
++  translation: ObjectTranslation;
++}): Promise<{ committedScene?: SceneResource; revision: number }> {
++  const response = await commitObjectTransformTransaction(api, objectId, {
++    base_revision: baseRevision,
++    transform: { translation },
++  });
++  const revision = acknowledgedAuthoringSceneRevision(response);
++  if (response.committed_scene) {
++    publishCommittedSceneResource(
++      resources,
++      response.committed_scene,
++      revision,
++      undefined,
++      false,
++    );
++  }
++  invalidateAuthoringMutationDependents(resources, "geometry", revision);
++  return { committedScene: response.committed_scene, revision };
++}
+diff --git a/apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.tsx b/apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.tsx
+index 50a022682..2f3e9470b 100644
+--- a/apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.tsx
++++ b/apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.tsx
+@@ -1,23 +1,26 @@
+ import { useEffect, useMemo, useState } from "react";
+ 
+ import type { SceneResource } from "@/kernel/api/apiTypes";
+ import {
+   acknowledgedAuthoringSceneRevision,
+   invalidateAuthoringMutationDependents,
+ } from "@/kernel/authoring/authoringMutationInvalidation";
+ import {
+   createObjectTransaction,
+-  commitObjectTransformTransaction,
+   patchObjectGeometryTransaction,
+   primitiveDraftOverlayStore,
+ } from "@/kernel/authoring/geometryLifecycleCommands";
++import {
++  commitObjectTranslation,
++  PROBLEM_IR_03_RIGID_TRANSFORM_REASON,
++} from "@/kernel/authoring/objectTranslationMutation";
+ import { useKernel } from "@/kernel/KernelContext";
+ import {
+   publishCommittedSceneResource,
+   useGeometryValidationResource,
+   useSceneResource,
+ } from "@/kernel/resources/geometryLifecycleResources";
+ import { Button } from "@/shared/ui/Button";
+ 
+ import type { InspectorPanelProps } from "../inspectorTypes";
+ import { FeedbackBanner } from "../primitives/FeedbackBanner";
+@@ -109,20 +112,21 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
+   });
+   const [feedbackState, setFeedbackState] = useState<FeedbackState>({
+     feedback: null,
+     key: draftKey,
+   });
+   const [pending, setPending] = useState(false);
+   const [revisionConflictPhase, setRevisionConflictPhase] = useState<
+     "conflict" | "refresh-error" | "refreshing" | "rebased" | "refetched" | null
+   >(null);
+   const [conflictBaseRevision, setConflictBaseRevision] = useState<number | null>(null);
++  const [conflictOperation, setConflictOperation] = useState<"create" | "transform">("create");
+   const [refreshSawLoading, setRefreshSawLoading] = useState(false);
+   const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
+   const feedback =
+     feedbackState.key === draftKey ? feedbackState.feedback : null;
+   const validationMessages = summarizeGeometryValidationMessages(
+     validation.data,
+     draft.objectId,
+   );
+   const primitiveDraft = useMemo(() => resolvePrimitiveDraft(draft), [draft]);
+ 
+@@ -264,20 +268,21 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
+             objectId,
+             type: "scene-object",
+             visualizationTargetId: `object:${objectId}`,
+           },
+         },
+         "geometry-authoring",
+       );
+       setFeedback({ kind: "success", message: "Object draft committed." });
+     } catch (error) {
+       if (isPrimitiveDraftRevisionConflict(error)) {
++        setConflictOperation("create");
+         setRevisionConflictPhase("conflict");
+         setConflictBaseRevision(draft.baseRevision);
+         setRefreshSawLoading(false);
+       }
+       setFeedback({ kind: "error", message: errorMessage(error) });
+     } finally {
+       setPending(false);
+     }
+   }
+ 
+@@ -332,31 +337,36 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
+       return;
+     }
+     const transform = buildTransformDraftPatch(draft);
+     if (transform.error || !transform.transform) {
+       setFeedback({ kind: "error", message: transform.error ?? "Invalid transform draft." });
+       return;
+     }
+ 
+     setPending(true);
+     try {
+-      const response = await commitObjectTransformTransaction(api, draft.objectId, {
+-        base_revision: draft.baseRevision,
+-        transform: transform.transform,
+-      });
+-      invalidateAuthoringResources(
++      const translation = transform.transform.translation as [number, number, number];
++      await commitObjectTranslation({
++        api,
++        baseRevision: draft.baseRevision,
++        objectId: draft.objectId,
+         resources,
+-        response.scene_revision,
+-        response.committed_scene,
+-      );
++        translation,
++      });
+       setFeedback({ kind: "success", message: "Transform committed." });
+     } catch (error) {
++      if (isPrimitiveDraftRevisionConflict(error)) {
++        setConflictOperation("transform");
++        setRevisionConflictPhase("conflict");
++        setConflictBaseRevision(draft.baseRevision);
++        setRefreshSawLoading(false);
++      }
+       setFeedback({ kind: "error", message: errorMessage(error) });
+     } finally {
+       setPending(false);
+     }
+   }
+ 
+   function revertDraft(): void {
+     setDraftState({ draft: baseDraft, key: draftKey });
+     setFeedback(null);
+   }
+@@ -386,20 +396,23 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
+       <ActionsSection
+         draft={draft}
+         feedback={feedback}
+         pending={pending}
+         onApplyCreateDraft={applyCreateDraft}
+         onApplyGeometryPatch={applyGeometryPatch}
+         onApplyTransformPatch={applyTransformPatch}
+         onRevertDraft={revertDraft}
+         onRebaseAfterConflict={rebaseAfterConflict}
+         onRefetchAfterConflict={refetchAfterConflict}
++        onRetryAfterConflict={
++          conflictOperation === "transform" ? applyTransformPatch : applyCreateDraft
++        }
+         revisionConflictPhase={revisionConflictPhase}
+       />
+       <ValidationSection
+         messages={validationMessages}
+         status={validation.status}
+       />
+     </div>
+   );
+ }
+ 
+@@ -544,31 +557,34 @@ function TransformSection({
+           errors["translation.0"],
+           errors["translation.1"],
+           errors["translation.2"],
+         ]}
+         label="Translation"
+         unit="m"
+         values={draft.translation}
+         onChange={(index, value) => onVectorChange("translation", index, value)}
+       />
+       <DraftVectorFormField
++        disabled
+         label="Rotation"
+         unit="rad"
+         values={draft.rotation}
+         onChange={(index, value) => onVectorChange("rotation", index, value)}
+       />
+       <DraftVectorFormField
++        disabled
+         label="Scale"
+         unit="x"
+         values={draft.scale}
+         onChange={(index, value) => onVectorChange("scale", index, value)}
+       />
++      <FieldRow label="Rotate / Scale" value={PROBLEM_IR_03_RIGID_TRANSFORM_REASON} />
+     </InspectorGroup>
+   );
+ }
+ 
+ function DraftIdentitySection({
+   draft,
+   onFieldChange,
+ }: {
+   draft: GeometryObjectDraft;
+   onFieldChange: DraftFieldUpdater;
+@@ -603,31 +619,33 @@ function DraftIdentitySection({
+ }
+ 
+ function ActionsSection({
+   draft,
+   feedback,
+   onApplyCreateDraft,
+   onApplyGeometryPatch,
+   onApplyTransformPatch,
+   onRebaseAfterConflict,
+   onRefetchAfterConflict,
++  onRetryAfterConflict,
+   onRevertDraft,
+   pending,
+   revisionConflictPhase,
+ }: {
+   draft: GeometryObjectDraft;
+   feedback: Feedback | null;
+   onApplyCreateDraft: () => Promise<void>;
+   onApplyGeometryPatch: () => Promise<void>;
+   onApplyTransformPatch: () => Promise<void>;
+   onRebaseAfterConflict: () => void;
+   onRefetchAfterConflict: () => void;
++  onRetryAfterConflict: () => Promise<void>;
+   onRevertDraft: () => void;
+   pending: boolean;
+   revisionConflictPhase: "conflict" | "refresh-error" | "refreshing" | "rebased" | "refetched" | null;
+ }) {
+   return (
+     <InspectorGroup title="Actions">
+       <div className="fm-inspector-toolbar">
+         {draft.mode === "draft-new" ? (
+           <Button
+             disabled={
+@@ -673,21 +691,21 @@ function ActionsSection({
+             variant="ghost"
+             onClick={onRebaseAfterConflict}
+           >
+             Rebase Draft
+           </Button>
+           <Button
+             disabled={pending || revisionConflictPhase !== "rebased"}
+             size="sm"
+             type="button"
+             variant="primary"
+-            onClick={() => void onApplyCreateDraft()}
++            onClick={() => void onRetryAfterConflict()}
+           >
+             Retry Apply
+           </Button>
+         </div>
+       ) : null}
+     </InspectorGroup>
+   );
+ }
+ 
+ function CommittedObjectActions({
+@@ -757,32 +775,35 @@ function ValidationSection({
+           ))}
+         </ul>
+       ) : (
+         <FieldRow label="Backend validation" value="no object issues" />
+       )}
+     </InspectorGroup>
+   );
+ }
+ 
+ function DraftVectorFormField({
++  disabled,
+   errors,
+   label,
+   onChange,
+   unit,
+   values,
+ }: {
++  disabled?: boolean;
+   errors?: readonly (string | undefined)[];
+   label: string;
+   onChange: (index: 0 | 1 | 2, value: string) => void;
+   unit: string;
+   values: readonly [string, string, string];
+ }) {
+   return (
+     <Vector3Field
++      disabled={disabled}
+       errors={errors}
+       label={label}
+       unit={unit}
+       values={values}
+       onChange={onChange}
+     />
+   );
+ }
+diff --git a/apps/control-room/src/modules/inspector/panels/geometryObjectPanelModel.test.ts b/apps/control-room/src/modules/inspector/panels/geometryObjectPanelModel.test.ts
+index b0aa68084..7a2441cfc 100644
+--- a/apps/control-room/src/modules/inspector/panels/geometryObjectPanelModel.test.ts
++++ b/apps/control-room/src/modules/inspector/panels/geometryObjectPanelModel.test.ts
+@@ -235,31 +235,29 @@ describe("resolveGeometryObjectPanelModel", () => {
+     expect(buildGeometryDraftPatch(draft)).toEqual({
+       error: null,
+       geometry: {
+         geometry_kind: "Cylinder",
+         geometry_params: { height: 1e-8, radius: 5e-8 },
+       },
+     });
+     expect(buildTransformDraftPatch(draft)).toEqual({
+       error: null,
+       transform: {
+-        rotation: [0, 0, 0],
+-        scale: [1, 1, 1],
+         translation: [0, 0, 0],
+       },
+     });
+     expect(createDraftObjectId({ ...draft, name: "Free Layer" }, 12345)).toBe(
+       "free-layer-9ix",
+     );
+   });
+ 
+-  it("validates local geometry and transform draft values before transactions", () => {
++  it("validates local geometry and translation while excluding unsupported rigid transforms", () => {
+     const draft = resolveGeometryObjectDraft(baseSelection, {
+       objects: [
+         {
+           geometry: {
+             geometry_kind: "Box",
+             geometry_params: { size: [1e-8, 2e-8, 3e-8] },
+           },
+           id: "box",
+         },
+       ],
+@@ -271,24 +269,26 @@ describe("resolveGeometryObjectPanelModel", () => {
+         ...draft,
+         size: ["1e-8", "0", "3e-8"],
+       }),
+     ).toEqual({
+       error: "Box size 2 must be greater than 0.",
+       geometry: null,
+     });
+     expect(
+       buildTransformDraftPatch({
+         ...draft,
+-        scale: ["1", "bad", "1"],
++        rotation: ["bad", "bad", "bad"],
++        scale: ["bad", "bad", "bad"],
++        translation: ["1e-9", "bad", "0"],
+       }),
+     ).toEqual({
+-      error: "Scale 2 must be a finite SI value.",
++      error: "Translation 2 must be a finite SI value.",
+       transform: null,
+     });
+   });
+ 
+   it.each([
+     ["box", "geometry:draft:box", [1e-7, 1e-7, 1e-8]],
+     ["cylinder", "geometry:draft:cylinder", [1e-7, 1e-8, 1e-7]],
+     ["sphere", "geometry:draft:sphere", [1e-7, 1e-7, 1e-7]],
+   ] as const)("builds a valid %s preview in SI without a server request", (_, nodeId, dimensions) => {
+     const draft = resolveGeometryObjectDraft(
+diff --git a/apps/control-room/src/modules/inspector/panels/geometryObjectPanelModel.ts b/apps/control-room/src/modules/inspector/panels/geometryObjectPanelModel.ts
+index 79167bce6..0ba4aa988 100644
+--- a/apps/control-room/src/modules/inspector/panels/geometryObjectPanelModel.ts
++++ b/apps/control-room/src/modules/inspector/panels/geometryObjectPanelModel.ts
+@@ -468,32 +468,24 @@ export function buildGeometryDraftPatch(
+       geometry_params: { radius: radius.value },
+     },
+   };
+ }
+ 
+ export function buildTransformDraftPatch(
+   draft: GeometryObjectDraft,
+ ): GeometryDraftTransformResult {
+   const translation = parseVector(draft.translation, "Translation", false);
+   if (translation.error) return { error: translation.error, transform: null };
+-  const rotation = parseVector(draft.rotation, "Rotation", false);
+-  if (rotation.error) return { error: rotation.error, transform: null };
+-  const scale = parseVector(draft.scale, "Scale", true);
+-  if (scale.error) return { error: scale.error, transform: null };
+ 
+   return {
+     error: null,
+-    transform: {
+-      rotation: rotation.value,
+-      scale: scale.value,
+-      translation: translation.value,
+-    },
++    transform: { translation: translation.value },
+   };
+ }
+ 
+ export function createDraftObjectId(draft: GeometryObjectDraft, now = Date.now()): string {
+   const slug = draft.name
+     .trim()
+     .toLowerCase()
+     .replace(/[^a-z0-9]+/g, "-")
+     .replace(/^-|-$/g, "");
+   return `${slug || draft.geometryKind.toLowerCase()}-${now.toString(36)}`;
+diff --git a/apps/control-room/src/modules/ribbon/ribbonCommands.ts b/apps/control-room/src/modules/ribbon/ribbonCommands.ts
+index 304ac7e6a..a11714835 100644
+--- a/apps/control-room/src/modules/ribbon/ribbonCommands.ts
++++ b/apps/control-room/src/modules/ribbon/ribbonCommands.ts
+@@ -64,20 +64,21 @@ export const RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND =
+ export const RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND =
+   "ribbon.physics.create-field-drive";
+ export const RIBBON_PHYSICS_CREATE_SPIN_TRANSPORT_COMMAND =
+   "ribbon.physics.create-spin-transport";
+ export const RIBBON_PHYSICS_CREATE_SPIN_INTERFACE_COMMAND =
+   "ribbon.physics.create-spin-interface";
+ export const RIBBON_PHYSICS_CREATE_FROZEN_SPINS_COMMAND =
+   "ribbon.physics.create-frozen-spins";
+ export const RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND =
+   "ribbon.cross-section.begin-draft";
++export const RIBBON_GEOMETRY_MOVE_SELECTED_COMMAND = "geometry.move-selected";
+ 
+ interface PatchDefaultsInput {
+   patch: VisualizationTargetPatch;
+   targetKinds: VisualizationTargetKind[];
+ }
+ 
+ interface PatchTargetInput {
+   patch: VisualizationTargetPatch;
+   target: VisualizationTargetRef;
+ }
+@@ -123,20 +124,41 @@ export function visualizationTargetCommandInput(
+   return { patch, target };
+ }
+ 
+ export function visualizationAirboxCommandInput(
+   patch: VisualizationTargetPatch,
+ ): VisualizationTargetPatch {
+   return patch;
+ }
+ 
+ export const RIBBON_COMMANDS: CommandContribution[] = [
++  {
++    id: RIBBON_GEOMETRY_MOVE_SELECTED_COMMAND,
++    title: "Move selected object",
++    group: "ribbon-geometry",
++    category: "Geometry",
++    scope: "selection",
++    isEnabled: (context) =>
++      Boolean(context.api) && context.selection?.get().ref?.type === "scene-object",
++    disabledReason: (context) => {
++      if (!context.api) return "The current session API is unavailable.";
++      return context.selection?.get().ref?.type === "scene-object"
++        ? null
++        : "Select a canonical scene object to move.";
++    },
++    run: (context) => {
++      if (context.selection?.get().ref?.type !== "scene-object") {
++        return { message: "Select a canonical scene object to move.", status: "failed" };
++      }
++      return { status: "completed" };
++    },
++  },
+   {
+     id: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+     title: "Patch Visualization State",
+     group: "ribbon-visualization",
+     category: "View",
+     scope: "workspace",
+     isEnabled: (context) => Boolean(context.api),
+     disabledReason: (context) =>
+       context.api ? null : "Control Room API is not available.",
+     run: patchVisualizationStateFromCommand,
+diff --git a/apps/control-room/src/modules/ribbon/ribbonContributions.tsx b/apps/control-room/src/modules/ribbon/ribbonContributions.tsx
+index 6d89e36c9..189a52451 100644
+--- a/apps/control-room/src/modules/ribbon/ribbonContributions.tsx
++++ b/apps/control-room/src/modules/ribbon/ribbonContributions.tsx
+@@ -44,20 +44,21 @@ import {
+   Sigma,
+   SkipForward,
+   Sparkles,
+   Square,
+   Target,
+   Trash2,
+   Triangle,
+   Upload,
+   Zap,
+ } from "lucide-react";
++import { PROBLEM_IR_03_RIGID_TRANSFORM_REASON } from "@/kernel/authoring/objectTranslationMutation";
+ 
+ import {
+   MESHING_CAPABILITIES_PATH,
+   VISUALIZATION_STATE_PATH,
+ } from "@/kernel/api/apiPaths";
+ import type {
+   FieldCatalogResource,
+   LiveStatusResource,
+   MeshActiveBuildResource,
+   MeshCapabilitiesResource,
+@@ -346,23 +347,23 @@ const geometryTab: RibbonTabContent = {
+         { id: "builder-boolean-intersect", icon: icon(Plus),    label: "Intersect", disabled: true, iconColor: "text-slate-400" },
+       ],
+     },
+     // ── Transform ────────────────────────────────────────────────────────
+     {
+       id: "builder-transform",
+       title: "Transform",
+       subtitle: "Move / Rotate / Scale",
+       tone: "authoring",
+       actions: [
+-        { id: "builder-tool-move",   icon: icon(Move),      label: "Move",   shortcut: "W", disabled: true, iconColor: "text-red-400" },
+-        { id: "builder-tool-rotate", icon: icon(RotateCcw), label: "Rotate", shortcut: "E", disabled: true, iconColor: "text-green-400" },
+-        { id: "builder-tool-scale",  icon: icon(Maximize2), label: "Scale",  shortcut: "R", disabled: true, iconColor: "text-blue-400" },
++        { id: "builder-tool-move", commandId: "geometry.move-selected", icon: icon(Move), label: "Move", shortcut: "W", iconColor: "text-red-400" },
++        { id: "builder-tool-rotate", icon: icon(RotateCcw), label: "Rotate", shortcut: "E", disabled: true, tooltip: PROBLEM_IR_03_RIGID_TRANSFORM_REASON, iconColor: "text-green-400" },
++        { id: "builder-tool-scale", icon: icon(Maximize2), label: "Scale", shortcut: "R", disabled: true, tooltip: PROBLEM_IR_03_RIGID_TRANSFORM_REASON, iconColor: "text-blue-400" },
+       ],
+     },
+     // ── Viewport ─────────────────────────────────────────────────────────
+     {
+       id: "builder-viewport-mode",
+       title: "Viewport",
+       subtitle: "Interaction mode",
+       tone: "neutral",
+       actions: [
+         { id: "builder-mode-camera",     icon: icon(Camera),       label: "Camera",     shortcut: "Q", disabled: true, iconColor: "text-slate-300" },
+diff --git a/apps/control-room/src/modules/ribbon/ribbonStructure.test.ts b/apps/control-room/src/modules/ribbon/ribbonStructure.test.ts
+index 268944825..fc6ef8369 100644
+--- a/apps/control-room/src/modules/ribbon/ribbonStructure.test.ts
++++ b/apps/control-room/src/modules/ribbon/ribbonStructure.test.ts
+@@ -5053,38 +5053,55 @@ describe("ribbon structure", () => {
+       "builder-add-disk",
+       "builder-add-pillar",
+       "builder-add-nanowire",
+       "builder-add-ring",
+       "builder-add-triangular_prism",
+       "builder-add-cone",
+       "builder-add-capsule",
+       "builder-add-tube",
+       "builder-add-wedge",
+       "builder-add-polygon_prism",
+-      "builder-tool-move",
+       "builder-tool-rotate",
+       "builder-tool-scale",
+       "builder-mode-camera",
+       "builder-mode-manipulate",
+       "builder-toggle-snap",
+       "builder-validate",
+       "builder-show-universe",
+     ]);
+     const actions = ALL_TAB_CONTENT.geometry.groups.flatMap(
+       (group) => group.actions,
+     );
+ 
+     for (const action of actions) {
+       if (unsupportedIds.has(action.id)) {
+         expect(action.disabled, action.id).toBe(true);
+       }
+     }
++    const transformActions = actions.filter((action) =>
++      ["builder-tool-move", "builder-tool-rotate", "builder-tool-scale"].includes(action.id),
++    );
++    expect(transformActions).toEqual(
++      expect.arrayContaining([
++        expect.objectContaining({ id: "builder-tool-move", commandId: "geometry.move-selected" }),
++        expect.objectContaining({
++          disabled: true,
++          id: "builder-tool-rotate",
++          tooltip: "Rotate and Scale require a canonical geometry contract newer than ProblemIR 0.3.",
++        }),
++        expect.objectContaining({
++          disabled: true,
++          id: "builder-tool-scale",
++          tooltip: "Rotate and Scale require a canonical geometry contract newer than ProblemIR 0.3.",
++        }),
++      ]),
++    );
+     const frameAllAction = actions.find((action) => action.id === "builder-frame-all");
+ 
+     expect(frameAllAction).toMatchObject({
+       commandId: "viewport-3d.fit",
+     });
+     expect(frameAllAction).not.toHaveProperty("disabled");
+   });
+ 
+   it("exposes concrete study stage authoring commands in the Study ribbon", () => {
+     const addStageGroup = ALL_TAB_CONTENT.study.groups.find(
+diff --git a/apps/control-room/src/modules/viewport-3d/MoveObjectGizmo.test.tsx b/apps/control-room/src/modules/viewport-3d/MoveObjectGizmo.test.tsx
+new file mode 100644
+index 000000000..f0532d6f6
+--- /dev/null
++++ b/apps/control-room/src/modules/viewport-3d/MoveObjectGizmo.test.tsx
+@@ -0,0 +1,94 @@
++import { describe, expect, it, vi } from "vitest";
++
++import {
++  PROBLEM_IR_03_RIGID_TRANSFORM_REASON,
++  createMoveGestureController,
++} from "./MoveObjectGizmo";
++import { commitObjectTranslation } from "@/kernel/authoring/objectTranslationMutation";
++
++describe("MoveObjectGizmo", () => {
++  it("keeps pointer movement local and commits the final SI translation once", async () => {
++    const onDraftChange = vi.fn();
++    const onCommit = vi.fn().mockResolvedValue(undefined);
++    const capture = vi.fn();
++    const release = vi.fn();
++    const controller = createMoveGestureController({
++      baseRevision: 17,
++      objectId: "magnet-x",
++      onCommit,
++      onDraftChange,
++      origin: [1e-9, 2e-9, 3e-9],
++    });
++
++    controller.begin("x", 4, [0, 0, 0], capture);
++    controller.move(4, [2e-9, 8e-9, 0]);
++    controller.move(4, [5e-9, 9e-9, 0]);
++
++    expect(capture).toHaveBeenCalledWith(4);
++    expect(onCommit).not.toHaveBeenCalled();
++    expect(onDraftChange).toHaveBeenLastCalledWith({
++      objectId: "magnet-x",
++      origin: [1e-9, 2e-9, 3e-9],
++      translation: [6e-9, 2e-9, 3e-9],
++    });
++
++    await controller.end(4, release);
++
++    expect(release).toHaveBeenCalledWith(4);
++    expect(onCommit).toHaveBeenCalledTimes(1);
++    expect(onCommit).toHaveBeenCalledWith("magnet-x", [6e-9, 2e-9, 3e-9], 17);
++  });
++
++  it("cancels with Escape, restores origin, and sends no request", () => {
++    const onDraftChange = vi.fn();
++    const onCommit = vi.fn();
++    const controller = createMoveGestureController({
++      baseRevision: 9,
++      objectId: "magnet-y",
++      onCommit,
++      onDraftChange,
++      origin: [0, 0, 0],
++    });
++
++    controller.begin("z", 2, [0, 0, 0], vi.fn());
++    controller.move(2, [0, 0, 3e-9]);
++    expect(controller.cancel()).toBe(true);
++
++    expect(onDraftChange).toHaveBeenLastCalledWith({
++      objectId: "magnet-y",
++      origin: [0, 0, 0],
++      translation: [0, 0, 0],
++    });
++    expect(onCommit).not.toHaveBeenCalled();
++  });
++
++  it("publishes the exact canonical-contract reason for Rotate and Scale", () => {
++    expect(PROBLEM_IR_03_RIGID_TRANSFORM_REASON).toBe(
++      "Rotate and Scale require a canonical geometry contract newer than ProblemIR 0.3.",
++    );
++  });
++
++  it("uses one revision-safe API transaction and bounded ACK invalidations", async () => {
++    const commitTransaction = vi.fn().mockResolvedValue({ scene_revision: 22 });
++    const invalidate = vi.fn();
++
++    await commitObjectTranslation({
++      api: { model: { commitTransaction } } as never,
++      baseRevision: 21,
++      objectId: "magnet-z",
++      resources: { invalidate } as never,
++      translation: [4e-9, 5e-9, 6e-9],
++    });
++
++    expect(commitTransaction).toHaveBeenCalledOnce();
++    expect(commitTransaction).toHaveBeenCalledWith({
++      base_revision: 21,
++      kind: "commit_object_transform",
++      object_id: "magnet-z",
++      transform: { translation: [4e-9, 5e-9, 6e-9] },
++    });
++    expect(invalidate).toHaveBeenCalledTimes(7);
++    expect(new Set(invalidate.mock.calls.map(([resourceKey]) => resourceKey)).size).toBe(7);
++    expect(invalidate.mock.calls.every(([, revision]) => revision === 22)).toBe(true);
++  });
++});
+diff --git a/apps/control-room/src/modules/viewport-3d/MoveObjectGizmo.tsx b/apps/control-room/src/modules/viewport-3d/MoveObjectGizmo.tsx
+new file mode 100644
+index 000000000..4bae33080
+--- /dev/null
++++ b/apps/control-room/src/modules/viewport-3d/MoveObjectGizmo.tsx
+@@ -0,0 +1,233 @@
++"use client";
++
++import type { ThreeEvent } from "@react-three/fiber";
++import { useEffect, useMemo, useState } from "react";
++
++import type { Viewport3DPrimitiveObject } from "./viewport3dPrimitiveModel";
++export { PROBLEM_IR_03_RIGID_TRANSFORM_REASON } from "@/kernel/authoring/objectTranslationMutation";
++
++export type MoveAxis = "x" | "y" | "z";
++export type Translation3 = [number, number, number];
++
++export interface MoveDraft {
++  objectId: string;
++  origin: Translation3;
++  translation: Translation3;
++}
++
++interface MoveGestureControllerOptions {
++  baseRevision: number;
++  objectId: string;
++  onCommit: (
++    objectId: string,
++    translation: Translation3,
++    baseRevision: number,
++  ) => Promise<void> | void;
++  onDraftChange: (draft: MoveDraft | null) => void;
++  onGestureActiveChange?: (active: boolean) => void;
++  origin: Translation3;
++}
++
++export function createMoveGestureController({
++  baseRevision,
++  objectId,
++  onCommit,
++  onDraftChange,
++  onGestureActiveChange,
++  origin,
++}: MoveGestureControllerOptions) {
++  let active:
++    | { axis: MoveAxis; pointerId: number; start: Translation3 }
++    | null = null;
++  let translation: Translation3 = [...origin];
++
++  const publish = () =>
++    onDraftChange({ objectId, origin: [...origin], translation: [...translation] });
++
++  return {
++    begin(
++      axis: MoveAxis,
++      pointerId: number,
++      point: Translation3,
++      setPointerCapture: (pointerId: number) => void,
++    ): void {
++      active = { axis, pointerId, start: [...point] };
++      translation = [...origin];
++      setPointerCapture(pointerId);
++      onGestureActiveChange?.(true);
++      publish();
++    },
++    cancel(): boolean {
++      if (!active) return false;
++      active = null;
++      translation = [...origin];
++      publish();
++      onGestureActiveChange?.(false);
++      return true;
++    },
++    async end(
++      pointerId: number,
++      releasePointerCapture: (pointerId: number) => void,
++    ): Promise<void> {
++      if (!active || active.pointerId !== pointerId) return;
++      active = null;
++      releasePointerCapture(pointerId);
++      onGestureActiveChange?.(false);
++      await onCommit(objectId, [...translation], baseRevision);
++    },
++    move(pointerId: number, point: Translation3): void {
++      if (!active || active.pointerId !== pointerId) return;
++      const axisIndex = active.axis === "x" ? 0 : active.axis === "y" ? 1 : 2;
++      translation = [...origin];
++      translation[axisIndex] += point[axisIndex] - active.start[axisIndex];
++      publish();
++    },
++  };
++}
++
++export function MoveObjectGizmo({
++  baseRevision,
++  object,
++  onCommit,
++  onDraftChange,
++  onGestureActiveChange,
++}: {
++  baseRevision: number;
++  object: Viewport3DPrimitiveObject;
++  onCommit: MoveGestureControllerOptions["onCommit"];
++  onDraftChange?: (draft: MoveDraft | null) => void;
++  onGestureActiveChange?: (active: boolean) => void;
++}) {
++  const origin = object.translation ?? object.bounds.center;
++  const [originX, originY, originZ] = origin;
++  const [draft, setDraft] = useState<MoveDraft | null>(null);
++  const controller = useMemo(
++    () =>
++      createMoveGestureController({
++        baseRevision,
++        objectId: object.objectId,
++        origin: [originX, originY, originZ],
++        onCommit,
++        onDraftChange: (next) => {
++          setDraft(next);
++          onDraftChange?.(next);
++        },
++        onGestureActiveChange,
++      }),
++    [
++      baseRevision,
++      object.objectId,
++      onCommit,
++      onDraftChange,
++      onGestureActiveChange,
++      originX,
++      originY,
++      originZ,
++    ],
++  );
++
++  useEffect(() => {
++    const onKeyDown = (event: KeyboardEvent) => {
++      if (event.key === "Escape" && controller.cancel()) {
++        event.preventDefault();
++      }
++    };
++    window.addEventListener("keydown", onKeyDown);
++    return () => {
++      controller.cancel();
++      window.removeEventListener("keydown", onKeyDown);
++    };
++  }, [controller]);
++
++  const offset: Translation3 = draft
++    ? [
++        draft.translation[0] - draft.origin[0],
++        draft.translation[1] - draft.origin[1],
++        draft.translation[2] - draft.origin[2],
++      ]
++    : [0, 0, 0];
++  const length = Math.max(Math.max(...object.bounds.size) * 0.7, 1e-12);
++
++  return (
++    <group
++      position={offset}
++      userData={{ gizmo: "move", objectId: object.objectId }}
++    >
++      <mesh userData={{ draftPreview: true }}>
++        <boxGeometry args={object.bounds.size} />
++        <meshBasicMaterial color="#89b4fa" opacity={0.22} transparent wireframe />
++      </mesh>
++      {(["x", "y", "z"] as const).map((axis, index) => (
++        <mesh
++          key={axis}
++          position={axisPosition(axis, length)}
++          rotation={axisRotation(axis)}
++          userData={{ axis, gizmo: "move-axis", objectId: object.objectId }}
++          onPointerDown={(event) => beginAxisDrag(controller, axis, event)}
++          onPointerMove={(event) => moveAxisDrag(controller, event)}
++          onPointerUp={(event) => void endAxisDrag(controller, event)}
++        >
++          <cylinderGeometry args={[length * 0.035, length * 0.035, length, 10]} />
++          <meshBasicMaterial color={["#f38ba8", "#a6e3a1", "#89b4fa"][index]} depthTest={false} />
++        </mesh>
++      ))}
++    </group>
++  );
++}
++
++function eventPoint(event: ThreeEvent<PointerEvent>): Translation3 {
++  return [event.point.x, event.point.y, event.point.z];
++}
++
++function pointerTarget(event: ThreeEvent<PointerEvent>): Element & {
++  releasePointerCapture(pointerId: number): void;
++  setPointerCapture(pointerId: number): void;
++} {
++  return event.target as Element & {
++    releasePointerCapture(pointerId: number): void;
++    setPointerCapture(pointerId: number): void;
++  };
++}
++
++function beginAxisDrag(
++  controller: ReturnType<typeof createMoveGestureController>,
++  axis: MoveAxis,
++  event: ThreeEvent<PointerEvent>,
++): void {
++  event.stopPropagation();
++  const target = pointerTarget(event);
++  controller.begin(axis, event.pointerId, eventPoint(event), (pointerId) =>
++    target.setPointerCapture(pointerId),
++  );
++}
++
++function moveAxisDrag(
++  controller: ReturnType<typeof createMoveGestureController>,
++  event: ThreeEvent<PointerEvent>,
++): void {
++  event.stopPropagation();
++  controller.move(event.pointerId, eventPoint(event));
++}
++
++async function endAxisDrag(
++  controller: ReturnType<typeof createMoveGestureController>,
++  event: ThreeEvent<PointerEvent>,
++): Promise<void> {
++  event.stopPropagation();
++  const target = pointerTarget(event);
++  await controller.end(event.pointerId, (pointerId) =>
++    target.releasePointerCapture(pointerId),
++  );
++}
++
++function axisPosition(axis: MoveAxis, length: number): Translation3 {
++  if (axis === "x") return [length / 2, 0, 0];
++  if (axis === "y") return [0, length / 2, 0];
++  return [0, 0, length / 2];
++}
++
++function axisRotation(axis: MoveAxis): Translation3 {
++  if (axis === "x") return [0, 0, -Math.PI / 2];
++  if (axis === "z") return [Math.PI / 2, 0, 0];
++  return [0, 0, 0];
++}
+diff --git a/apps/control-room/src/modules/viewport-3d/Viewport3DModule.tsx b/apps/control-room/src/modules/viewport-3d/Viewport3DModule.tsx
+index c29abd84b..4a0cd41ca 100644
+--- a/apps/control-room/src/modules/viewport-3d/Viewport3DModule.tsx
++++ b/apps/control-room/src/modules/viewport-3d/Viewport3DModule.tsx
+@@ -25,20 +25,25 @@ import type {
+ } from "@/kernel/api/apiTypes";
+ import {
+   quantityUnitForColorbar,
+   resolveCanonicalQuantityId,
+ } from "@/kernel/api/quantityIds";
+ import {
+   viewport3DAuditRenderErrorInjectionEnabledFromBrowserConfig,
+   viewport3DOrbitDebugEnabledFromBrowserConfig,
+ } from "@/kernel/browserFullmagConfig";
+ import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
++import {
++  commitObjectTranslation,
++  isObjectTranslationRevisionConflict,
++  type ObjectTranslation,
++} from "@/kernel/authoring/objectTranslationMutation";
+ import { useMeshHistogramBinElementsResource } from "@/kernel/resources/geometryLifecycleResources";
+ import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
+ import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
+ import { useFieldMetaResource } from "@/kernel/resources/studyRuntimeResources";
+ import {
+   frozenSpinsMaskIdFromResource,
+   useFrozenSpinsActivePreviewId,
+   useFrozenSpinsMaskResource,
+   useFrozenSpinsPreviewResource,
+ } from "@/kernel/resources/frozenSpinsResources";
+@@ -1208,20 +1213,21 @@ function useMeshSizeHistogramHighlight(
+     [bus],
+   );
+   return highlight;
+ }
+ 
+ interface Viewport3DFrameProps
+   extends Omit<
+     Viewport3DSceneProps,
+     | "colors"
+     | "onOrbitDebugAnglesChange"
++    | "onMoveCommit"
+     | "onVisualizationFrameCommitted"
+     | "orbitDebugAngles"
+     | "orbitDebugCommitRevision"
+     | "orbitDebugRevision"
+   > {
+   cameraDialogOpen: boolean;
+   cameraDialogState: Viewport3DSceneProps["cameraState"];
+   cameraResource: VisualizationStateResource["camera"] | null;
+   clientReady: boolean;
+   colors: Viewport3DSceneProps["colors"] | null;
+@@ -1246,20 +1252,22 @@ interface Viewport3DFrameProps
+   onFdmUniverseOverlayVisibilityChange: (visible: boolean) => void;
+   onFrozenSpinsOverlayVisibilityChange: (visible: boolean) => void;
+   onRegionOverlaySourceChange: (source: RegionDiagnosticOverlaySource) => void;
+   onRegionOverlayVisibilityChange: (visible: boolean) => void;
+   regionDiagnosticOverlayState: RegionDiagnosticOverlayState;
+   quantityId: string;
+   renderedMeshRevision: number | string | null;
+   scalarColorPalette: string;
+   sessionIdentity: SessionResourceIdentity | null;
+   selectedLabel: string;
++  sceneRefetch: () => void;
++  sceneRevision: number | null;
+   slotId: ModuleProps["slotId"];
+   status: string;
+   topologyRevision: number | string | null;
+   visualizationEffectiveRenderMode: string;
+   visualizationError: string | null;
+   visualizationDebugSource: Viewport3DVisualizationDebugSource;
+ }
+ 
+ export default function Viewport3DModule({
+   kernel,
+@@ -1741,20 +1749,22 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
+   onCameraPatch,
+   onClearSelection,
+   onFdmUniverseOverlayVisibilityChange,
+   onFrozenSpinsOverlayVisibilityChange,
+   onRegionOverlaySourceChange,
+   onRegionOverlayVisibilityChange,
+   regionDiagnosticOverlayState,
+   quantityId,
+   sessionIdentity,
+   selectedLabel,
++  sceneRefetch,
++  sceneRevision,
+   slotId,
+   status,
+   visualizationEffectiveRenderMode,
+   visualizationError,
+   visualizationDebugSource,
+   ...sceneProps
+ }: Viewport3DFrameProps) {
+   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+   const pendingCaptureRevisionRef = useRef<number | null>(null);
+   const primitiveObjectIds =
+@@ -1780,20 +1790,26 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
+   const [orbitDebugAngles, setOrbitDebugAngles] =
+     useState<Viewport3DOrbitDebugAngles>(() =>
+       normalizeViewport3DOrbitDebugAngles(null),
+     );
+   const [orbitDebugRevision, setOrbitDebugRevision] = useState(0);
+   const [orbitDebugCommitRevision, setOrbitDebugCommitRevision] = useState(0);
+   const [dismissedResourceIssueKey, setDismissedResourceIssueKey] =
+     useState<string | null>(null);
+   const [inspectHover, setInspectHover] =
+     useState<Viewport3DInspectHover | null>(null);
++  const [moveConflict, setMoveConflict] = useState<{
++    baseRevision: number;
++    objectId: string;
++    phase: "conflict" | "refetched" | "rebased" | "retrying";
++    translation: ObjectTranslation;
++  } | null>(null);
+   const lastRenderedMeshRevision = useRef<number | string | null>(null);
+   const sendVisualizationAck = useVisualizationClientAckSender({ api: kernel.api });
+   const visualizationAckRevisionRef = useRef<{
+     resourceFrameKey: string;
+     revision: number;
+   } | null>(null);
+   const visualizationAckKindsRef = useRef(
+     new Map<number, {
+       changeKind: "data" | "style";
+       dataIdentity: VisualizationDataAdoptionIdentity | null;
+@@ -2242,20 +2258,58 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
+   const handleCanvasContextMenu = useCallback(
+     (event: ReactMouseEvent<HTMLDivElement>) => {
+       event.preventDefault();
+     },
+     [],
+   );
+   const handleCanvasPointerMissed = useCallback(() => {
+     clearInspectHover();
+     onClearSelection();
+   }, [clearInspectHover, onClearSelection]);
++  const commitMove = useCallback(async (
++    objectId: string,
++    translation: ObjectTranslation,
++    baseRevision: number,
++  ) => {
++    try {
++      await commitObjectTranslation({
++        api: kernel.api,
++        baseRevision,
++        objectId,
++        resources: kernel.resources,
++        translation,
++      });
++      setMoveConflict(null);
++    } catch (error) {
++      if (!isObjectTranslationRevisionConflict(error)) throw error;
++      setMoveConflict({ baseRevision, objectId, phase: "conflict", translation });
++    }
++  }, [kernel.api, kernel.resources]);
++  const rebaseMove = useCallback(() => {
++    if (
++      !moveConflict ||
++      sceneRevision === null ||
++      sceneRevision === moveConflict.baseRevision
++    ) return;
++    setMoveConflict({ ...moveConflict, baseRevision: sceneRevision, phase: "rebased" });
++  }, [moveConflict, sceneRevision]);
++  const retryMove = useCallback(async () => {
++    if (!moveConflict || moveConflict.phase !== "rebased") return;
++    const retry = { ...moveConflict, phase: "retrying" as const };
++    setMoveConflict(retry);
++    await commitMove(retry.objectId, retry.translation, retry.baseRevision);
++  }, [commitMove, moveConflict]);
++  const moveCanRebase = Boolean(
++    moveConflict?.phase === "conflict" &&
++      sceneRevision !== null &&
++      sceneRevision !== moveConflict.baseRevision,
++  );
+   const updateInspectHover = useCallback(
+     (
+       sample: Viewport3DInspectSample,
+       screenPosition: Viewport3DInspectScreenPosition,
+     ) => {
+       setInspectHover({ inspectRevision, sample, screenPosition });
+     },
+     [inspectRevision, setInspectHover],
+   );
+   const visibleInspectHover =
+@@ -2533,20 +2587,21 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
+             colors={colors}
+             hysteresisReplayGlyphModel={hysteresisReplayGlyphModel}
+             orbitDebugAngles={orbitDebugAngles}
+             orbitDebugCommitRevision={orbitDebugCommitRevision}
+             orbitDebugRevision={orbitDebugRevision}
+             onOrbitDebugAnglesChange={
+               orbitDebugEnabled ? syncOrbitDebugAngles : undefined
+             }
+             onInspectClear={clearInspectHover}
+             onInspectSample={updateInspectHover}
++            onMoveCommit={commitMove}
+             onVisualizationFrameCommitted={onVisualizationFrameCommitted}
+             visualProfileId={visualProfile.id}
+           />
+         </Viewport3DCanvas>
+       ) : (
+         <div className="fm-viewport-3d__placeholder">Preparing viewport</div>
+       )}
+       {discretizationKind && (
+         <div
+           aria-label={`Discretization method: ${discretizationKind}`}
+@@ -2561,20 +2616,52 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
+             <Viewport3DColorbar key={key} legend={legend} />
+           ))}
+         </div>
+       ) : null}
+       {visibleInspectHover ? (
+         <Viewport3DInspectTooltip
+           hover={visibleInspectHover}
+           provenance={visibleInspectProvenance}
+         />
+       ) : null}
++      {moveConflict ? (
++        <aside className="fm-viewport-3d__move-conflict" data-move-conflict={moveConflict.phase}>
++          <span>Scene changed. The move draft is preserved.</span>
++          <Button
++            disabled={moveConflict.phase !== "conflict"}
++            size="sm"
++            type="button"
++            variant="ghost"
++            onClick={sceneRefetch}
++          >
++            Refetch Scene
++          </Button>
++          <Button
++            disabled={!moveCanRebase}
++            size="sm"
++            type="button"
++            variant="ghost"
++            onClick={rebaseMove}
++          >
++            Rebase Draft
++          </Button>
++          <Button
++            disabled={moveConflict.phase !== "rebased"}
++            size="sm"
++            type="button"
++            variant="primary"
++            onClick={() => void retryMove()}
++          >
++            Retry Move
++          </Button>
++        </aside>
++      ) : null}
+       <Viewport3DFdmSelectionAnnouncement
+         announcement={fdmSelectionAnnouncement}
+       />
+       {orbitDebugEnabled && clientReady && colors ? (
+         <Viewport3DOrbitDebugPanel
+           angles={orbitDebugAngles}
+           onAnglesChange={applyOrbitDebugAngles}
+           onAnglesCommit={commitOrbitDebugAngles}
+           onInteractionStart={sceneProps.onCameraInteractionStart}
+         />
+diff --git a/apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts b/apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts
+index bd19e9929..47f1cb1ca 100644
+--- a/apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts
++++ b/apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts
+@@ -6356,20 +6356,22 @@ export function useViewport3DSceneModel({
+     ),
+     meshQualityColors,
+     meshQualityMetric,
+     meshQualityOverlayVisible,
+     meshRegionOverlayParts,
+     periodicOverlayModel,
+     meshSizeHighlightModel,
+     meshQualityRange: meshQualityColors?.range ?? null,
+     meshRegionOverlays,
+     primitiveModel,
++    sceneRefetch: scene.refetch,
++    sceneRevision: primitiveModel.sceneRevision,
+     quantityId: primaryFieldQuantityId,
+     regionOverlays,
+     resourceFrameKey,
+     selectedLabel,
+     selectedObjectId,
+     selectedRegionId,
+     selectionBounds,
+     scalarColorPalette,
+     semanticTargetCatalog,
+     status,
+diff --git a/apps/control-room/src/modules/viewport-3d/layers/CameraControls.tsx b/apps/control-room/src/modules/viewport-3d/layers/CameraControls.tsx
+index c8ebbcab0..69656e429 100644
+--- a/apps/control-room/src/modules/viewport-3d/layers/CameraControls.tsx
++++ b/apps/control-room/src/modules/viewport-3d/layers/CameraControls.tsx
+@@ -758,20 +758,21 @@ interface OrbitCameraControlsProps {
+   orbitDebugCommitRevision: number;
+   orbitDebugRevision: number;
+   onCameraChange: (
+     camera: Viewport3DCameraChange,
+     epoch?: number,
+   ) => Promise<void> | void;
+   onCameraInteractionEnd?: (epoch?: number) => void;
+   onCameraInteractionStart?: (epoch?: number) => void;
+   onOrbitDebugAnglesChange?: (angles: Viewport3DOrbitDebugAngles) => void;
+   tracker: Viewport3DResourceTracker;
++  interactionBlocked?: boolean;
+ }
+ 
+ 
+ function useOrbitCameraControlsModel({
+   bounds,
+   cameraGestureRef,
+   cameraOrthographicScale,
+   cameraProjection,
+   cameraState,
+   orbitDebugAngles,
+@@ -1242,20 +1243,21 @@ export function OrbitCameraControls(props: OrbitCameraControlsProps) {
+     handleEnd,
+     handleTransitionStart,
+     options,
+     recordOrbitControlFrame,
+   } = useOrbitCameraControlsModel(props);
+ 
+   return (
+     <DreiOrbitControls
+       ref={controlsRef}
+       makeDefault
++      enabled={!props.interactionBlocked}
+       domElement={domElement}
+       dampingFactor={options.dampingFactor}
+       enableDamping={options.enableDamping}
+       enablePan={options.enablePan}
+       enableRotate={options.enableRotate}
+       enableZoom={options.enableZoom}
+       panSpeed={options.panSpeed}
+       rotateSpeed={options.rotateSpeed}
+       screenSpacePanning
+       zoomSpeed={options.zoomSpeed}
+diff --git a/apps/control-room/src/modules/viewport-3d/layers/Viewport3DScene.tsx b/apps/control-room/src/modules/viewport-3d/layers/Viewport3DScene.tsx
+index d3f5c15ac..6eff92bf0 100644
+--- a/apps/control-room/src/modules/viewport-3d/layers/Viewport3DScene.tsx
++++ b/apps/control-room/src/modules/viewport-3d/layers/Viewport3DScene.tsx
+@@ -156,20 +156,21 @@ import { clampNumber, sameTuple3 } from "../viewport3dMath";
+ import { createViewport3DCameraGestureRef } from "./viewport3DCameraGesture";
+ import type { Viewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
+ import type { FdmUniverseOutsideSupportOverlayModel } from "../model/fdmUniverseOverlay";
+ import type { Viewport3DFdmTargetRenderView } from "../model/viewport3DFdmTargetViews";
+ import type { FdmAirboxPassPlan } from "./fdmAirboxPassPlan";
+ import type { Viewport3DVectorBuildReference } from "../viewport3dRenderModel";
+ import {
+   FrozenSpinsOverlay,
+   type FrozenSpinsOverlayModel,
+ } from "./FrozenSpinsOverlay";
++import { MoveObjectGizmo, type Translation3 } from "../MoveObjectGizmo";
+ 
+ const EMPTY_REGION_OVERLAYS: readonly RegionOverlayInput[] = [];
+ 
+ interface Viewport3DSceneProps {
+   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
+   sessionIdentity?: SessionResourceIdentity | null;
+   bounds: Viewport3DBounds | null;
+   cameraOrthographicScale: number | null;
+   cameraProjection: Viewport3DCameraProjection;
+   cameraState: Viewport3DCameraState;
+@@ -238,20 +239,25 @@ interface Viewport3DSceneProps {
+     airboxFrameState: Viewport3DAirboxFrameState,
+   ) => void;
+   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
+   onSelectPlanarMonitor: (monitorId: string, isDraft: boolean) => void;
+   onSelectRegion: (selection: RegionOverlaySelection) => void;
+   onSelectDomain: () => void;
+   onSelectFdmTarget: (target: VisualizationTargetRef) => void;
+   onSelectFdmUniverseOutsideSupport: () => void;
+   onSelectFdmCell?: (instanceId: number) => void;
+   onSelectPart: (selection: Viewport3DPartSelection) => void;
++  onMoveCommit: (
++    objectId: string,
++    translation: Translation3,
++    baseRevision: number,
++  ) => Promise<void> | void;
+   orbitDebugAngles: Viewport3DOrbitDebugAngles;
+   orbitDebugCommitRevision: number;
+   orbitDebugRevision: number;
+   fallbackSettings: VisualizationTargetSettings;
+   primitiveModel: Viewport3DPrimitiveRenderModel | null;
+   resetCameraRevision: number;
+   requestDiagnostics: RequestDiagnosticsController;
+   resourceFrameKey: string;
+   regionOverlayMode: RegionOverlayMode;
+   regionOverlays: readonly RegionOverlayInput[];
+@@ -1054,20 +1060,22 @@ function Viewport3DModelLayerStack({
+   magnetizationTexturePreviews,
+   materialProfile,
+   meshQualityColors,
+   meshQualityOverlayVisible,
+   meshRegionOverlayParts,
+   meshRegionOverlays,
+   periodicOverlayModel,
+   meshSizeHighlightModel,
+   onInspectClear,
+   onInspectSample,
++  onMoveCommit,
++  onMoveGestureActiveChange,
+   onSelectDomain,
+   onSelectFdmTarget,
+   onSelectFdmUniverseOutsideSupport,
+   onSelectFdmCell,
+   onSelectObject,
+   onSelectPart,
+   onSelectRegion,
+   primitiveModel,
+   regionOverlayMode,
+   regionOverlays,
+@@ -1108,20 +1116,21 @@ function Viewport3DModelLayerStack({
+   | "magnetizationTexturePreviews"
+   | "meshQualityColors"
+   | "meshQualityOverlayVisible"
+   | "meshRegionOverlayParts"
+   | "meshRegionOverlays"
+   | "periodicOverlayModel"
+   | "meshSizeHighlightModel"
+   | "inspectEnabled"
+   | "onInspectClear"
+   | "onInspectSample"
++  | "onMoveCommit"
+   | "onSelectDomain"
+   | "onSelectFdmTarget"
+   | "onSelectFdmUniverseOutsideSupport"
+   | "onSelectFdmCell"
+   | "onSelectObject"
+   | "onSelectPart"
+   | "onSelectRegion"
+   | "primitiveModel"
+   | "regionOverlayMode"
+   | "regionOverlays"
+@@ -1133,20 +1142,21 @@ function Viewport3DModelLayerStack({
+   | "topologyRevision"
+   | "tracker"
+   | "vectorColorMode"
+   | "vectorStyle"
+   | "visualizationRevision"
+ > & {
+   fdmCuboidLayerEnabled: boolean;
+   materialProfile: ReturnType<typeof resolveViewport3DMaterialProfile>;
+   sceneLayersEnabled: boolean;
+   stageVisibility: Viewport3DModelLayerStageVisibility;
++  onMoveGestureActiveChange: (active: boolean) => void;
+ }) {
+   const hasMeshBackedRegionOverlays = meshRegionOverlays.length > 0;
+   const overlayLayersEnabled = viewport3DOverlayLayersEnabledFromBrowserConfig();
+   const realizedRegionOverlaysVisible =
+     regionOverlayModeShowsRealized(
+       regionOverlayMode,
+       hasMeshBackedRegionOverlays,
+     ) &&
+     stageVisibility.realizedRegionOverlays &&
+     overlayLayersEnabled;
+@@ -1387,20 +1397,34 @@ function Viewport3DModelLayerStack({
+         <PrimitiveObjectLayer
+           colors={colors}
+           getObjectSettings={getObjectSettings}
+           materialProfile={materialProfile}
+           onSelectObject={onSelectObject}
+           primitiveModel={primitiveModel}
+           realizedObjectIds={realizedFdmObjectIds}
+           tracker={tracker}
+         />
+       ) : null}
++      {selectedObjectId && primitiveModel?.sceneRevision != null
++        ? primitiveModel.objects
++            .filter((object) => object.objectId === selectedObjectId)
++            .map((object) => (
++              <group key={`move:${object.objectId}`} position={object.bounds.center}>
++                <MoveObjectGizmo
++                  baseRevision={primitiveModel.sceneRevision as number}
++                  object={object}
++                  onCommit={onMoveCommit}
++                  onGestureActiveChange={onMoveGestureActiveChange}
++                />
++              </group>
++            ))
++        : null}
+       {!fdmLaneActive &&
+       stageVisibility.baseGeometry &&
+       viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (
+         <TopologyMeshLayer
+           adoptionRegistry={adoptionRegistry}
+           colors={colors}
+           sessionIdentity={sessionIdentity}
+           fieldModel={stagedFieldModel}
+           getPartSettings={getPartSettings}
+           materialProfile={materialProfile}
+@@ -1522,57 +1546,60 @@ function Viewport3DInteractionAndHudStack({
+   onCameraChange,
+   onCameraInteractionEnd,
+   onCameraInteractionStart,
+   onOrbitDebugAnglesChange,
+   orbitDebugAngles,
+   orbitDebugCommitRevision,
+   orbitDebugRevision,
+   rotationMode,
+   tracker,
+   viewCubeVisible,
++  moveGestureActive,
+ }: Pick<
+   Viewport3DSceneProps,
+   | "bounds"
+   | "cameraOrthographicScale"
+   | "cameraProjection"
+   | "cameraState"
+   | "colors"
+   | "hslReferenceVisible"
+   | "onCameraChange"
+   | "onCameraInteractionEnd"
+   | "onCameraInteractionStart"
+   | "onOrbitDebugAnglesChange"
+   | "orbitDebugAngles"
+   | "orbitDebugCommitRevision"
+   | "orbitDebugRevision"
+   | "rotationMode"
+   | "tracker"
+   | "viewCubeVisible"
+ > & {
+   cameraGestureRef: ReturnType<typeof createViewport3DCameraGestureRef>;
++  moveGestureActive: boolean;
+ }) {
+   return (
+     <>
+       <OrbitCameraControls
+         bounds={bounds}
+         cameraGestureRef={cameraGestureRef}
+         cameraOrthographicScale={cameraOrthographicScale}
+         cameraProjection={cameraProjection}
+         cameraState={cameraState}
+         orbitDebugAngles={orbitDebugAngles}
+         orbitDebugCommitRevision={orbitDebugCommitRevision}
+         orbitDebugRevision={orbitDebugRevision}
+         onCameraChange={onCameraChange}
+         onCameraInteractionEnd={onCameraInteractionEnd}
+         onCameraInteractionStart={onCameraInteractionStart}
+         onOrbitDebugAnglesChange={onOrbitDebugAnglesChange}
+         tracker={tracker}
++        interactionBlocked={moveGestureActive}
+       />
+       {viewport3DOrientationHudEnabledFromBrowserConfig() ? (
+         <OrientationHudLayer
+           colors={colors}
+           hslReferenceVisible={hslReferenceVisible}
+           onCameraChange={onCameraChange}
+           onCameraInteractionEnd={onCameraInteractionEnd}
+           onCameraInteractionStart={onCameraInteractionStart}
+           rotationMode={rotationMode}
+           tracker={tracker}
+@@ -1717,35 +1744,37 @@ export function Viewport3DScene({
+   topologyFreshness,
+   topologyModel,
+   topologyRevision,
+   vectorColorMode,
+   vectorStyle,
+   visualizationRevision,
+   hslReferenceVisible,
+   inspectEnabled,
+   onInspectClear,
+   onInspectSample,
++  onMoveCommit,
+   scaleLabelsVisible,
+   scaleUnitMode,
+   viewCubeVisible,
+   visualProfileId,
+ }: Viewport3DSceneProps) {
+   const invalidate = useBatchedInvalidate("camera");
+   const setThreeState = useThree((state) => state.set);
+   const viewportSize = useThree((state) => state.size);
+   const orthographicCameraRef = useRef<ThreeOrthographicCamera>(null);
+   const perspectiveCameraRef = useRef<ThreePerspectiveCamera>(null);
+   const appliedCameraClipRef = useRef<{
+     camera: Viewport3DProjectionCamera;
+     clip: Viewport3DCameraClip;
+   } | null>(null);
+   const cameraGestureRef = useMemo(() => createViewport3DCameraGestureRef(), []);
++  const [moveGestureActive, setMoveGestureActive] = useState(false);
+   const inspectClearArbitrator = useMemo(
+     () =>
+       createFdmInspectClearArbitrator({
+         // idle-audit-allow-one-shot-raf: coalesce pointer-inspection clear/sample callbacks.
+         cancelFrame: (frame) => window.cancelAnimationFrame(frame),
+         onClear: () => onInspectClear?.(),
+         requestFrame: (callback) => window.requestAnimationFrame(callback),
+       }),
+     [onInspectClear],
+   );
+@@ -2007,20 +2036,22 @@ export function Viewport3DScene({
+         magnetizationTexturePreviews={magnetizationTexturePreviews}
+         materialProfile={materialProfile}
+         meshQualityColors={meshQualityColors}
+         meshQualityOverlayVisible={meshQualityOverlayVisible}
+         meshRegionOverlayParts={meshRegionOverlayParts}
+         meshRegionOverlays={meshRegionOverlays}
+         periodicOverlayModel={periodicOverlayModel}
+         meshSizeHighlightModel={meshSizeHighlightModel}
+         onInspectClear={inspectClearArbitrator.clear}
+         onInspectSample={handleArbitratedInspectSample}
++        onMoveCommit={onMoveCommit}
++        onMoveGestureActiveChange={setMoveGestureActive}
+         onSelectDomain={onSelectDomain}
+         onSelectFdmTarget={onSelectFdmTarget}
+         onSelectFdmUniverseOutsideSupport={onSelectFdmUniverseOutsideSupport}
+         onSelectFdmCell={onSelectFdmCell}
+         onSelectObject={onSelectObject}
+         onSelectPart={onSelectPart}
+         onSelectRegion={onSelectRegion}
+         primitiveModel={primitiveModel}
+         regionOverlayMode={regionOverlayMode}
+         regionOverlays={regionOverlays}
+@@ -2059,14 +2090,15 @@ export function Viewport3DScene({
+         orbitDebugAngles={orbitDebugAngles}
+         orbitDebugCommitRevision={orbitDebugCommitRevision}
+         orbitDebugRevision={orbitDebugRevision}
+         onCameraChange={onCameraChange}
+         onCameraInteractionEnd={onCameraInteractionEnd}
+         onCameraInteractionStart={onCameraInteractionStart}
+         onOrbitDebugAnglesChange={onOrbitDebugAnglesChange}
+         rotationMode={rotationMode}
+         tracker={tracker}
+         viewCubeVisible={viewCubeVisible}
++        moveGestureActive={moveGestureActive}
+       />
+     </VectorGlyphDerivedBufferCacheProvider>
+   );
+ }
+diff --git a/apps/control-room/src/modules/viewport-3d/viewport3dPrimitiveModel.ts b/apps/control-room/src/modules/viewport-3d/viewport3dPrimitiveModel.ts
+index 9448bd14c..bddc7ebc8 100644
+--- a/apps/control-room/src/modules/viewport-3d/viewport3dPrimitiveModel.ts
++++ b/apps/control-room/src/modules/viewport-3d/viewport3dPrimitiveModel.ts
+@@ -27,20 +27,21 @@ export interface Viewport3DPrimitiveObject {
+   bounds: Viewport3DBounds;
+   csgPreview: Viewport3DPrimitiveCsgPreview | null;
+   fallbackLabel: string;
+   geometryKey: string;
+   kind: Viewport3DPrimitiveKind;
+   label: string;
+   magnetizationTexturePreview: Viewport3DMagnetizationTexturePreview | null;
+   meshState: Viewport3DPrimitiveMeshState;
+   objectId: string;
+   sceneRevision: number;
++  translation?: [number, number, number];
+ }
+ 
+ export interface Viewport3DBoxCylinderDifferencePreview {
+   boxSize: [number, number, number];
+   cylinderAxis: [number, number, number];
+   cylinderCenter: [number, number, number];
+   cylinderHeight: number;
+   cylinderRadius: number;
+   kind: "box-cylinder-difference";
+ }
+@@ -489,20 +490,21 @@ export function buildViewport3DPrimitiveRenderModel(
+         geometryKey: geometryKey(objectId, geometry, transform),
+         kind: primitiveKindFromGeometry(geometry),
+         label: asString(object.name) ?? objectId,
+         magnetizationTexturePreview: magnetizationTexturePreview(
+           sceneRecord,
+           object,
+         ),
+         meshState: state,
+         objectId,
+         sceneRevision,
++        translation: asVec3(transform?.translation) ?? [0, 0, 0],
+       },
+     ];
+   });
+ 
+   return {
+     objects,
+     sceneRevision,
+   };
+ }
+ 

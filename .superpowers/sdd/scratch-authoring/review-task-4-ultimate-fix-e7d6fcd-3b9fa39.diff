@@ -1,0 +1,230 @@
+# Review package: e7d6fcda9..3b9fa3919
+
+## Commits
+3b9fa3919 fix(control-room): honor interaction mutation ACK
+
+## Files changed
+ .../panels/PhysicsInteractionPanel.dom.test.tsx    | 54 +++++++++++++++++-
+ .../inspector/panels/PhysicsInteractionPanel.tsx   | 64 ++++++++++++++++------
+ 2 files changed, 101 insertions(+), 17 deletions(-)
+
+## Diff
+diff --git a/apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.dom.test.tsx b/apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.dom.test.tsx
+index 2b5a7c901..eb99b097b 100644
+--- a/apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.dom.test.tsx
++++ b/apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.dom.test.tsx
+@@ -1,12 +1,21 @@
+ import { readFileSync } from "node:fs";
+-import { describe, expect, it } from "vitest";
++import { describe, expect, it, vi } from "vitest";
++
++import {
++  MODEL_READINESS_PATH,
++  MODEL_SCENE_PATH,
++  MODEL_STUDY_PATH,
++} from "@/kernel/api/apiPaths";
++import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
++
++import { commitObjectInteractionMutation } from "./PhysicsInteractionPanel";
+ 
+ describe("PhysicsInteractionPanel lane contract", () => {
+   it("uses the resolved interaction catalog and blocks unresolved writes", () => {
+     const source = readFileSync(
+       new URL("./PhysicsInteractionPanel.tsx", import.meta.url),
+       "utf8",
+     );
+ 
+     expect(source).toContain("useActiveLaneCapabilities(");
+     expect(source).toContain("resolveActiveLaneOperation(");
+@@ -19,11 +28,54 @@ describe("PhysicsInteractionPanel lane contract", () => {
+ 
+   it("guards the write path with the authoritative active-lane operation", () => {
+     const source = readFileSync(
+       new URL("./PhysicsInteractionPanel.tsx", import.meta.url),
+       "utf8",
+     );
+ 
+     expect(source).toContain("if (!activeLaneOperation.enabled)");
+     expect(source).toContain("activeLaneOperation.reason");
+   });
++
++  it("invalidates from the final object interaction ACK without a synthetic fallback", async () => {
++    const patch = vi.fn(async () => ({ scene_revision: 41 }));
++    const invalidate = vi.fn();
++
++    await expect(
++      commitObjectInteractionMutation({
++        interactionKind: "uniaxial_anisotropy",
++        objectId: "body",
++        patch,
++        resources: { invalidate },
++      }),
++    ).resolves.toBe(41);
++
++    expect(patch).toHaveBeenCalledTimes(1);
++    for (const resourceKey of [
++      MODEL_SCENE_PATH,
++      MODEL_READINESS_PATH,
++      MODEL_STUDY_PATH,
++      SESSION_STATUS_RESOURCE_KEY,
++    ]) {
++      expect(invalidate).toHaveBeenCalledWith(resourceKey, 41);
++      expect(
++        invalidate.mock.calls.filter(([key]) => key === resourceKey),
++      ).toHaveLength(1);
++    }
++    const source = readFileSync(
++      new URL("./PhysicsInteractionPanel.tsx", import.meta.url),
++      "utf8",
++    );
++    expect(source).not.toContain("Date.now()");
++  });
++
++  it("fails closed when the interaction ACK omits scene_revision", async () => {
++    await expect(
++      commitObjectInteractionMutation({
++        interactionKind: "uniaxial_anisotropy",
++        objectId: "body",
++        patch: async () => ({}),
++        resources: { invalidate: vi.fn() },
++      }),
++    ).rejects.toThrow("Authoring mutation ACK omitted the scene revision.");
++  });
+ });
+diff --git a/apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx b/apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx
+index 518d8b2d1..dfebf4f5b 100644
+--- a/apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx
++++ b/apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx
+@@ -1,20 +1,22 @@
+ "use client";
+ 
+ import { HelpCircle } from "lucide-react";
+ import { useCallback, useMemo, useReducer, useState } from "react";
+ 
+ import {
+   MODEL_READINESS_PATH,
+   MODEL_SCENE_PATH,
+   MODEL_STUDY_PATH,
+ } from "@/kernel/api/apiPaths";
++import type { ObjectInteractionKind } from "@/kernel/api/apiTypes";
++import { acknowledgedAuthoringSceneRevision } from "@/kernel/authoring/authoringMutationInvalidation";
+ import { useKernel } from "@/kernel/KernelContext";
+ import {
+   resolveObjectInteractionResourceKey,
+   useObjectInteractionResource,
+   useSceneResource,
+ } from "@/kernel/resources/geometryLifecycleResources";
+ import {
+   resolveActiveLaneOperation,
+   useActiveLaneCapabilities,
+   type ActiveLaneCapabilitySnapshot,
+@@ -118,20 +120,51 @@ function physicsInteractionPanelReducer(
+       return { ...state, pending: action.pending };
+   }
+ }
+ 
+ function errorMessage(error: unknown): string {
+   return error instanceof Error ? error.message : String(error);
+ }
+ 
+ type PhysicsInteractionSpec = InteractionSpec;
+ 
++function invalidateInteractionDependents(
++  resources: { invalidate(resourceKey: string, revision: number): void },
++  revision: number,
++): void {
++  resources.invalidate(MODEL_SCENE_PATH, revision);
++  resources.invalidate(MODEL_READINESS_PATH, revision);
++  resources.invalidate(MODEL_STUDY_PATH, revision);
++  resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
++}
++
++export async function commitObjectInteractionMutation({
++  interactionKind,
++  objectId,
++  patch,
++  resources,
++}: {
++  interactionKind: ObjectInteractionKind;
++  objectId: string;
++  patch: () => Promise<{ revision?: unknown; scene_revision?: unknown }>;
++  resources: { invalidate(resourceKey: string, revision: number): void };
++}): Promise<number> {
++  const response = await patch();
++  const revision = acknowledgedAuthoringSceneRevision(response);
++  resources.invalidate(
++    resolveObjectInteractionResourceKey(objectId, interactionKind),
++    revision,
++  );
++  invalidateInteractionDependents(resources, revision);
++  return revision;
++}
++
+ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
+   const objectId = selection.objectId;
+   const selectedRegionId =
+     selection.ref?.type === "scene-object" ? selection.ref.regionId ?? null : null;
+   const { api, resources } = useKernel();
+   const sessionDiscretization = useSessionStatusSelector(
+     (status) => status.data?.domain.discretization ?? null,
+   );
+   const activeLane = useActiveLaneCapabilities();
+   const interactionDiscretization = normalizeInteractionDiscretization(
+@@ -303,42 +336,41 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
+       dispatch({
+         type: "setFeedback",
+         feedback: { kind: "error", message: result.error },
+       });
+       return false;
+     }
+ 
+     dispatch({ type: "setPending", pending: true });
+     try {
+       if (result.storage === "object_interaction") {
+-        await api.model.patchObjectInteraction(
+-          objectId ?? "",
+-          objectInteractionKind,
+-          result.patch,
+-        );
++        await commitObjectInteractionMutation({
++          interactionKind: objectInteractionKind,
++          objectId: objectId ?? "",
++          patch: () =>
++            api.model.patchObjectInteraction(
++              objectId ?? "",
++              objectInteractionKind,
++              result.patch,
++            ),
++          resources,
++        });
+       } else {
+-        await api.model.commitTransaction({
++        const response = await api.model.commitTransaction({
+           kind: "merge_patch",
+           merge_patch: result.patch,
+         });
+-      }
+-      const revision = Date.now();
+-      if (result.storage === "object_interaction" && objectId) {
+-        resources.invalidate(
+-          resolveObjectInteractionResourceKey(objectId, objectInteractionKind),
+-          revision,
++        invalidateInteractionDependents(
++          resources,
++          acknowledgedAuthoringSceneRevision(response),
+         );
+       }
+-      resources.invalidate(MODEL_SCENE_PATH, revision);
+-      resources.invalidate(MODEL_READINESS_PATH, revision);
+-      resources.invalidate(MODEL_STUDY_PATH, revision);
+-      resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
+       dispatch({
+         type: "setFeedback",
+         feedback: {
+         kind: "success",
+         message: `${spec?.label ?? interactionId} updated.`,
+         },
+       });
+       return true;
+     } catch (error) {
+       dispatch({

@@ -87,3 +87,32 @@ bezpośrednich fetchy. Nie zmieniono kontraktu websocket, semantyki eventów,
 kodeków binarnych, zunifikowanego viewportu ani ribbonu. Po mutacji odświeżane
 są kolekcja sesji oraz zasoby bieżącej sesji/modelu przez istniejący resource
 store; nie powstała równoległa ścieżka stanu.
+
+## Druga fala po ponownym review
+
+Dodano integracyjny test `WorkspaceNewProblemEntry.test.tsx`, który montuje
+`WorkspaceShellClient` w potwierdzonym stanie `no-session` z realnie
+zarejestrowanym manifestem `app-menu`, realnym `AppMenuModule`, `EmptyWorkspace`,
+`CommandRegistry`, `SHELL_COMMANDS` i kernelowym `EventBus`. Test nie sprawdza
+statycznego manifestu ani elementu mocka. Mockowane są wyłącznie granice portalu,
+focus management i widoczności współdzielonych prymitywów Radix, których nie
+obsługuje minimalny DOM testowy.
+
+### RED
+
+- Pierwsze uruchomienie: 3/3 testy nie przeszły, ponieważ dynamiczny import
+  manifestu pozostał w `Suspense` jako `Loading…`; AppMenu i jego listener nie
+  zostały zamontowane w minimalnym DOM. Był to brak fixture, nie błąd produkcji.
+- Fixture zachował prawdziwy manifest i moduł, ale podał statycznie zaimportowany
+  `AppMenuModule` przez jego pole `component`, co usuwa wyłącznie ograniczenie
+  dynamicznego importu w środowisku testowym.
+
+### GREEN
+
+- Nowy test fokusowy: 1 plik, 3/3 testy.
+- Regresja Task 3: 7 plików, 50/50 testów.
+- ESLint nowego testu: bez błędów i ostrzeżeń.
+- Zweryfikowane wejścia: File → New Problem, bezpośrednie wykonanie globalnej
+  komendy `workspace.new-problem` oraz dispatch `Ctrl+N`. Każde wejście otwiera
+  ten sam realny `NewProblemDialog` przez zarejestrowany AppMenu i kernelowy bus.
+- Kod produkcyjny nie wymagał zmiany.

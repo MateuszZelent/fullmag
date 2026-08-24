@@ -11,7 +11,9 @@ import {
   buildScratchObjectTransaction,
   buildScratchStudyPatch,
   buildScratchTextureTransaction,
+  commandStatusKind,
   finiteSceneRevision,
+  publishedMeshRevision,
   sceneAuthoringSummary,
   scratchApiUrl,
   webglHealthFromCanvasRecords,
@@ -46,9 +48,21 @@ test("scratch fixture transactions preserve one optimistic scene revision chain"
       pivot: [0, 0, 0],
     },
   });
-  assert.equal(buildScratchMaterialTransaction(fdm, 13).base_revision, 13);
+  const materialTransaction = buildScratchMaterialTransaction(fdm, 13);
+  assert.equal(materialTransaction.base_revision, 13);
+  assert.deepEqual(materialTransaction.properties, {
+    Ms: 1.1e6,
+    Aex: 1.3e-11,
+    alpha: 0.02,
+    Dind: 0,
+    Dbulk: 0,
+  });
   assert.equal(buildScratchTextureTransaction(fdm, 14).kind, "patch_magnetization");
-  assert.equal(buildScratchStudyPatch(fdm, 15).merge_patch.study.fdm.per_magnet["x-ferromagnet"].cell[0], 4e-9);
+  const study = buildScratchStudyPatch(fdm, 15).merge_patch.study;
+  assert.equal(study.fdm.per_magnet["x-ferromagnet"].cell[0], 4e-9);
+  assert.equal(study.solver.fixed_timestep, "1e-13");
+  assert.equal(study.stages[0].entrypoint_kind, "flat_relax");
+  assert.equal(study.stages[0].max_steps, "8");
   assert.deepEqual(buildScratchInteractionPatch(16), {
     base_revision: 16,
     enabled: true,
@@ -175,5 +189,19 @@ test("API paths are resolved without silently switching away from the current se
   assert.equal(
     scratchApiUrl("http://127.0.0.1:8190", "/v2/sessions/current/model/scene"),
     "http://127.0.0.1:8190/v2/sessions/current/model/scene",
+  );
+});
+
+test("command evidence normalizes lifecycle and published mesh revisions", () => {
+  assert.equal(commandStatusKind({ status: "running" }), "running");
+  assert.equal(commandStatusKind({ status: "", completion_status: "completed" }), "completed");
+  assert.equal(
+    publishedMeshRevision({
+      resource_invalidations: [
+        { resource_key: "simulation/commands", revision: 4 },
+        { resource_key: "meshing/shared-domain/manifest", revision: 9 },
+      ],
+    }),
+    9,
   );
 });

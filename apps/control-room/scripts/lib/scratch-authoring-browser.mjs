@@ -4,6 +4,15 @@ import { dirname, resolve } from "node:path";
 export const SCRATCH_AUTHORING_SCHEMA = "scratch-authoring-browser.v1";
 export const SCRATCH_AUTHORING_MAX_REQUESTS = 500;
 export const SCRATCH_AUTHORING_MAX_RENDER_MUTATIONS = 2500;
+export const DEFAULT_COMMAND_POLL_DELAYS_MS = [
+  0,
+  100,
+  250,
+  500,
+  750,
+  1000,
+  ...Array.from({ length: 30 }, () => 2000),
+];
 export const DEFAULT_SCRATCH_WORKSPACE_URL =
   process.env.CONTROL_ROOM_URL ?? "http://127.0.0.1:3100/workspace";
 export const DEFAULT_SCRATCH_API_BASE =
@@ -53,11 +62,11 @@ export function buildScratchMaterialTransaction(fixture, baseRevision) {
     material_id: material.id,
     name: material.name,
     properties: {
-      ms: material.Ms,
-      aex: material.Aex,
+      Ms: material.Ms,
+      Aex: material.Aex,
       alpha: material.alpha,
-      dind: material.Dind ?? null,
-      dbulk: material.Dbulk ?? null,
+      Dind: material.Dind ?? null,
+      Dbulk: material.Dbulk ?? null,
     },
     references: [],
   };
@@ -104,16 +113,17 @@ export function buildScratchStudyPatch(fixture, baseRevision) {
     external_field: null,
     solver: {
       integrator: "heun",
-      fixed_timestep: fixture.study.fixed_timestep,
+      fixed_timestep: String(fixture.study.fixed_timestep),
     },
     stages: [
       {
         kind: "relax",
+        entrypoint_kind: "flat_relax",
         stage_id: "relax-scratch",
         algorithm: "llg_overdamped",
-        max_steps: fixture.study.max_steps,
-        torque_tolerance: fixture.study.torque_tolerance,
-        fixed_timestep: fixture.study.fixed_timestep,
+        max_steps: String(fixture.study.max_steps),
+        torque_tolerance: String(fixture.study.torque_tolerance),
+        fixed_timestep: String(fixture.study.fixed_timestep),
       },
     ],
   };
@@ -289,6 +299,76 @@ async function requestJson(request, url, options = {}) {
   return body;
 }
 
+export function commandStatusKind(detail) {
+  return String(detail?.status || detail?.completion_status || "").toLowerCase();
+}
+
+export function publishedMeshRevision(detail) {
+  const invalidation = (detail?.resource_invalidations ?? []).find((entry) => {
+    const key = String(entry?.resource_key ?? "");
+    return (
+      key === "meshing/shared-domain/manifest" ||
+      key === "data/domain/topology" ||
+      (key.startsWith("meshing/objects/") && key.endsWith("/topology"))
+    );
+  });
+  const revision = Number(invalidation?.revision);
+  return Number.isFinite(revision) ? revision : null;
+}
+
+export async function awaitCommandTerminal(
+  request,
+  apiBase,
+  commandId,
+  { pollDelaysMs = DEFAULT_COMMAND_POLL_DELAYS_MS, baseMeshRevision = null } = {},
+) {
+  let lastDetail = null;
+  for (const delay of pollDelaysMs) {
+    if (delay > 0) await new Promise((resolvePromise) => setTimeout(resolvePromise, delay));
+    const detail = await requestJson(
+      request,
+      scratchApiUrl(apiBase, `/v2/sessions/current/simulation/commands/${encodeURIComponent(commandId)}`),
+    );
+    lastDetail = detail;
+    const status = commandStatusKind(detail);
+    if (status === "failed" || status === "rejected") {
+      return {
+        detail,
+        status: "failed",
+        message: detail.error ?? detail.reason ?? `Command ended with ${status}.`,
+      };
+    }
+    if (status === "cancelled") {
+      return {
+        detail,
+        status: "cancelled",
+        message: detail.error ?? detail.reason ?? "Command was cancelled.",
+      };
+    }
+    if (status !== "completed") continue;
+    if (baseMeshRevision != null) {
+      const meshRevision = publishedMeshRevision(detail);
+      if (meshRevision == null || meshRevision <= baseMeshRevision) {
+        return {
+          detail,
+          status: "failed",
+          message: "Mesh command completed without publishing a newer mesh revision.",
+        };
+      }
+    }
+    return { detail, status: "completed" };
+  }
+  const detail = lastDetail ?? (await requestJson(
+    request,
+    scratchApiUrl(apiBase, `/v2/sessions/current/simulation/commands/${encodeURIComponent(commandId)}`),
+  ));
+  return {
+    detail,
+    status: "timeout",
+    message: "Timed out waiting for the command terminal resource.",
+  };
+}
+
 async function commitTransaction(request, apiBase, transaction) {
   return requestJson(request, scratchApiUrl(apiBase, "/v2/sessions/current/model/transactions"), {
     method: "POST",
@@ -297,7 +377,7 @@ async function commitTransaction(request, apiBase, transaction) {
 }
 
 async function runPaletteCommand(page, title) {
-  const paletteButton = page.getByRole("button", { name: /command palette/i }).first();
+  const paletteButton = page.getByRole("button", { name: /command search/i }).first();
   await paletteButton.click();
   const input = page.getByPlaceholder("Search commands");
   await input.fill(title);
@@ -341,8 +421,10 @@ export async function runScratchAuthoringBrowser({
 }) {
   const playwright = await loadPlaywright();
   if (!playwright?.chromium) throw new Error("Playwright Chromium is required for scratch authoring smoke.");
+  const executablePath = process.env.CONTROL_ROOM_BROWSER_EXECUTABLE?.trim();
   const browser = await playwright.chromium.launch({
     headless: process.env.CONTROL_ROOM_HEADFUL !== "1",
+    ...(executablePath ? { executablePath } : {}),
   });
   const context = await browser.newContext({ viewport: { width: 1440, height: 960 } });
   const page = await context.newPage();
@@ -393,6 +475,7 @@ export async function runScratchAuthoringBrowser({
       session_id: created.session?.session_id ?? created.session_id ?? null,
       revisions: [],
       command_ids: [],
+      commands: [],
       screenshots: [],
       request_count: 0,
       page_request_count: 0,
@@ -492,6 +575,50 @@ export async function runScratchAuthoringBrowser({
     await waitForAuthoringSurface(page, backend, objectId);
     manifest.screenshots.push(await screenshot(page, evidenceDir, `${backend}-02-authored.png`));
 
+    const runtimeStatus = await requestJson(
+      context.request,
+      scratchApiUrl(apiBase, "/v2/sessions/current/status"),
+    );
+    const baseMeshRevision = Number(runtimeStatus.resources?.mesh_build_revision ?? 0);
+    const meshResponse = await requestJson(
+      context.request,
+      scratchApiUrl(apiBase, "/v2/sessions/current/simulation/commands"),
+      {
+        method: "POST",
+        body: {
+          kind: "mesh_build",
+          reason: "scratch_authoring_browser_smoke",
+          mesh_reason: "shared-domain",
+          mesh_target: { kind: "study_domain" },
+        },
+      },
+    );
+    if (!meshResponse.accepted || !meshResponse.command_id) {
+      throw new Error(`Mesh build command was not accepted: ${JSON.stringify(meshResponse)}`);
+    }
+    manifest.command_ids.push(meshResponse.command_id);
+    const meshTerminal = await awaitCommandTerminal(
+      context.request,
+      apiBase,
+      meshResponse.command_id,
+      { baseMeshRevision },
+    );
+    manifest.commands.push({
+      kind: "mesh_build",
+      command_id: meshResponse.command_id,
+      status: meshTerminal.status,
+      completion_status: meshTerminal.detail?.completion_status ?? null,
+      terminal_at_unix_ms: meshTerminal.detail?.terminal_at_unix_ms ?? null,
+      requested_execution: meshTerminal.detail?.requested_execution ?? null,
+      resolved_execution: meshTerminal.detail?.resolved_execution ?? null,
+      resource_invalidations: meshTerminal.detail?.resource_invalidations ?? [],
+      diagnostics: meshTerminal.detail?.diagnostics ?? [],
+      error: meshTerminal.detail?.error ?? meshTerminal.message ?? null,
+    });
+    if (meshTerminal.status !== "completed") {
+      throw new Error(`Mesh build did not complete: ${meshTerminal.message ?? JSON.stringify(meshTerminal.detail)}`);
+    }
+
     const runResponse = await requestJson(context.request, scratchApiUrl(apiBase, "/v2/sessions/current/simulation/commands"), {
       method: "POST",
       body: {
@@ -503,7 +630,32 @@ export async function runScratchAuthoringBrowser({
         fixed_timestep: fixture.study.fixed_timestep,
       },
     });
-    if (runResponse.command_id) manifest.command_ids.push(runResponse.command_id);
+    if (!runResponse.accepted || !runResponse.command_id) {
+      throw new Error(`Relax command was not accepted: ${JSON.stringify(runResponse)}`);
+    }
+    manifest.command_ids.push(runResponse.command_id);
+    const runTerminal = await awaitCommandTerminal(
+      context.request,
+      apiBase,
+      runResponse.command_id,
+    );
+    manifest.commands.push({
+      kind: "relax",
+      command_id: runResponse.command_id,
+      status: runTerminal.status,
+      completion_status: runTerminal.detail?.completion_status ?? null,
+      terminal_at_unix_ms: runTerminal.detail?.terminal_at_unix_ms ?? null,
+      requested_execution: runTerminal.detail?.requested_execution ?? null,
+      resolved_execution: runTerminal.detail?.resolved_execution ?? null,
+      resource_invalidations: runTerminal.detail?.resource_invalidations ?? [],
+      diagnostics: runTerminal.detail?.diagnostics ?? [],
+      artifact_refs: runTerminal.detail?.artifact_refs ?? [],
+      run_id: runTerminal.detail?.run_id ?? null,
+      error: runTerminal.detail?.error ?? runTerminal.message ?? null,
+    });
+    if (runTerminal.status !== "completed") {
+      throw new Error(`Relax did not complete: ${runTerminal.message ?? JSON.stringify(runTerminal.detail)}`);
+    }
     const sync = await requestJson(context.request, scratchApiUrl(apiBase, "/v2/sessions/current/model/syncs"), {
       method: "POST",
       body: {},

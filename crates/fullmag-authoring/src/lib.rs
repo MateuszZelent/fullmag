@@ -23,4 +23,6 @@ pub use physics_graph::*;
 pub use region_revisions::*;
 pub use scene::*;
 pub use spin_transport::*;
-pub use validation::{validate_scene_document, SceneDocumentValidationError};
+pub use validation::{
+    validate_scene_document, validate_scene_document_for_authoring, SceneDocumentValidationError,
+};

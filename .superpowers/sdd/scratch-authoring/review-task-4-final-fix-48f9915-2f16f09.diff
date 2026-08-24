@@ -1,0 +1,1614 @@
+# Review package: 48f9915bc..2f16f09f2
+
+## Commits
+2f16f09f2 fix(authoring): share readiness across run surfaces
+
+## Files changed
+ .../authoringMutationInvalidation.test.ts          |  42 ++++++++
+ .../authoring/authoringMutationInvalidation.ts     |  44 ++++++++
+ .../magnetization-texture/commands.test.ts         |   6 ++
+ .../authoring/magnetization-texture/commands.ts    |  16 +--
+ .../kernel/resources/studyRuntimeResources.test.ts |   4 +-
+ .../src/kernel/resources/studyRuntimeResources.ts  |  85 ++++++++++-----
+ .../panels/ObjectMagneticTexturePanel.tsx          |  14 +--
+ .../inspector/panels/ObjectMaterialPanel.tsx       |  14 +--
+ .../inspector/panels/StudyInspectorPanel.test.tsx  |  83 ++++++++++++++-
+ .../inspector/panels/StudyInspectorPanel.tsx       |  25 +++--
+ .../panels/region/ObjectRegionTexturePanel.tsx     |  14 +--
+ .../ribbon/RibbonModule.runtimeStatus.test.ts      |  61 ++++++++++-
+ .../src/modules/ribbon/RibbonModule.tsx            |  46 ++++----
+ .../src/modules/ribbon/ribbonStructure.test.ts     |  19 ++++
+ .../src/router_v2/handlers/model/readiness.rs      |  49 +++------
+ .../src/router_v2/handlers/simulation/commands.rs  |   9 +-
+ crates/fullmag-api/src/router_v2/tests.rs          | 118 +++++++++++++++++++++
+ .../fullmag-authoring/src/material_requirements.rs |   7 ++
+ 18 files changed, 514 insertions(+), 142 deletions(-)
+
+## Diff
+diff --git a/apps/control-room/src/kernel/authoring/authoringMutationInvalidation.test.ts b/apps/control-room/src/kernel/authoring/authoringMutationInvalidation.test.ts
+new file mode 100644
+index 000000000..1afd64ea9
+--- /dev/null
++++ b/apps/control-room/src/kernel/authoring/authoringMutationInvalidation.test.ts
+@@ -0,0 +1,42 @@
++import { readFileSync } from "node:fs";
++
++import { describe, expect, it, vi } from "vitest";
++
++import { MODEL_READINESS_PATH } from "@/kernel/api/apiPaths";
++
++import {
++  AUTHORING_MUTATION_DEPENDENTS,
++  invalidateAuthoringMutationDependents,
++} from "./authoringMutationInvalidation";
++
++describe("authoring mutation readiness invalidation", () => {
++  it.each([
++    "../../modules/inspector/panels/ObjectMaterialPanel.tsx",
++    "../../modules/inspector/panels/ObjectMagneticTexturePanel.tsx",
++    "../../modules/inspector/panels/region/ObjectRegionTexturePanel.tsx",
++    "./magnetization-texture/commands.ts",
++  ])("routes %s through the bounded dependent helper", (relativePath) => {
++    const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
++
++    expect(source).toContain("invalidateAuthoringMutationDependents");
++  });
++
++  it.each(["material", "magnetization"] as const)(
++    "invalidates readiness exactly once after a %s ACK without realtime",
++    (kind) => {
++      const invalidate = vi.fn();
++
++      invalidateAuthoringMutationDependents({ invalidate }, kind, 17);
++
++      expect(
++        invalidate.mock.calls.filter(([resourceKey]) => resourceKey === MODEL_READINESS_PATH),
++      ).toHaveLength(1);
++      expect(invalidate).toHaveBeenCalledTimes(
++        AUTHORING_MUTATION_DEPENDENTS[kind].length,
++      );
++      expect(new Set(AUTHORING_MUTATION_DEPENDENTS[kind]).size).toBe(
++        AUTHORING_MUTATION_DEPENDENTS[kind].length,
++      );
++    },
++  );
++});
+diff --git a/apps/control-room/src/kernel/authoring/authoringMutationInvalidation.ts b/apps/control-room/src/kernel/authoring/authoringMutationInvalidation.ts
+new file mode 100644
+index 000000000..5370e9f63
+--- /dev/null
++++ b/apps/control-room/src/kernel/authoring/authoringMutationInvalidation.ts
+@@ -0,0 +1,44 @@
++import {
++  MESHING_BUILDS_CURRENT_PATH,
++  MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
++  MODEL_GEOMETRY_DIAGNOSTICS_PATH,
++  MODEL_GEOMETRY_VALIDATION_PATH,
++  MODEL_READINESS_PATH,
++  MODEL_REGIONS_PATH,
++  MODEL_SCENE_PATH,
++  VISUALIZATION_STATE_PATH,
++} from "@/kernel/api/apiPaths";
++import type { ResourceRevision } from "@/kernel/api/apiTypes";
++
++export const AUTHORING_MUTATION_DEPENDENTS = {
++  magnetization: [
++    MODEL_SCENE_PATH,
++    MODEL_REGIONS_PATH,
++    MODEL_GEOMETRY_VALIDATION_PATH,
++    MODEL_GEOMETRY_DIAGNOSTICS_PATH,
++    MODEL_READINESS_PATH,
++    VISUALIZATION_STATE_PATH,
++  ],
++  material: [
++    MODEL_SCENE_PATH,
++    MODEL_GEOMETRY_VALIDATION_PATH,
++    MODEL_GEOMETRY_DIAGNOSTICS_PATH,
++    MODEL_READINESS_PATH,
++    MESHING_BUILDS_CURRENT_PATH,
++    MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
++  ],
++} as const;
++
++type AuthoringMutationKind = keyof typeof AUTHORING_MUTATION_DEPENDENTS;
++
++export function invalidateAuthoringMutationDependents(
++  resources: {
++    invalidate(resourceKey: string, revision: ResourceRevision): void;
++  },
++  kind: AuthoringMutationKind,
++  revision: ResourceRevision,
++): void {
++  for (const resourceKey of AUTHORING_MUTATION_DEPENDENTS[kind]) {
++    resources.invalidate(resourceKey, revision);
++  }
++}
+diff --git a/apps/control-room/src/kernel/authoring/magnetization-texture/commands.test.ts b/apps/control-room/src/kernel/authoring/magnetization-texture/commands.test.ts
+index 40fcd99cc..3f8392c72 100644
+--- a/apps/control-room/src/kernel/authoring/magnetization-texture/commands.test.ts
++++ b/apps/control-room/src/kernel/authoring/magnetization-texture/commands.test.ts
+@@ -1,41 +1,44 @@
+ import { describe, expect, it, vi } from "vitest";
+ 
+ import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
++import { MODEL_READINESS_PATH } from "@/kernel/api/apiPaths";
+ import type { CommandContext } from "@/kernel/commands/commandTypes";
+ 
+ import { MAGNETIZATION_TEXTURE_COMMANDS } from "./commands";
+ 
+ const uniformCommand = MAGNETIZATION_TEXTURE_COMMANDS.find(
+   (command) => command.id === "magnetization-texture.assign-uniform",
+ );
+ const activateLoadFileCommand = MAGNETIZATION_TEXTURE_COMMANDS.find(
+   (command) => command.id === "magnetization-texture.activate-load-file",
+ );
+ 
+ describe("magnetization texture commands", () => {
+   it("assigns a uniform texture to the selected region target", async () => {
+     const patchMagnetizationAsset = vi.fn(async () => ({
+       asset: { id: "mag:body:region:body:uniform" },
+       scene_revision: 6,
+     }));
+     const patchRegion = vi.fn(async () => ({ revision: 7 }));
++    const invalidate = vi.fn();
+     const context = {
+       api: {
+         model: {
+           patchMagnetizationAsset,
+           patchRegion,
+         },
+       },
+       resourceData: {
+         [MODEL_SCENE_PATH]: { revision: 5 },
+       },
++      resources: { invalidate },
+       selection: {
+         get: () => ({
+           kind: "object.region-magnetic-texture",
+           label: "Magnetic Texture",
+           moduleSource: "explorer",
+           nodeId: "node-1",
+           objectId: "body",
+           ref: {
+             kind: "object.region-magnetic-texture",
+             nodeId: "node-1",
+@@ -65,20 +68,23 @@ describe("magnetization texture commands", () => {
+         }),
+         base_revision: 5,
+       }),
+     );
+     expect(patchRegion).toHaveBeenCalledWith(
+       "region:body",
+       {
+         magnetization_ref: "mag:body:region:body:uniform",
+       },
+     );
++    expect(
++      invalidate.mock.calls.filter(([resourceKey]) => resourceKey === MODEL_READINESS_PATH),
++    ).toHaveLength(1);
+   });
+ 
+   it("disables assignment when no object or region target is selected", () => {
+     const context = {
+       selection: {
+         get: () => ({
+           kind: null,
+           label: null,
+           moduleSource: null,
+           nodeId: null,
+diff --git a/apps/control-room/src/kernel/authoring/magnetization-texture/commands.ts b/apps/control-room/src/kernel/authoring/magnetization-texture/commands.ts
+index 911bf5b98..e5ccf9c14 100644
+--- a/apps/control-room/src/kernel/authoring/magnetization-texture/commands.ts
++++ b/apps/control-room/src/kernel/authoring/magnetization-texture/commands.ts
+@@ -1,22 +1,18 @@
+ import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
++import { invalidateAuthoringMutationDependents } from "@/kernel/authoring/authoringMutationInvalidation";
+ import type { JsonObject } from "@/kernel/api/apiTypes";
+ import type {
+   CommandContext,
+   CommandContribution,
+   CommandResult,
+ } from "@/kernel/commands/commandTypes";
+-import {
+-  MODEL_REGIONS_RESOURCE_KEY,
+-  SCENE_RESOURCE_KEY,
+-  VISUALIZATION_STATE_RESOURCE_KEY,
+-} from "@/kernel/resources/geometryLifecycleResources";
+ 
+ import {
+   magnetizationTextureAssetId,
+   presetMagnetizationAsset,
+ } from "@/shared/domain/magnetization-texture/assetFactory";
+ import { resolveMagnetizationTextureTarget } from "@/shared/domain/magnetization-texture/targetResolver";
+ import type { MagnetizationTextureTarget } from "@/shared/domain/magnetization-texture/types";
+ 
+ function selectedTarget(context: CommandContext): MagnetizationTextureTarget | null {
+   const selection = context.selection?.get();
+@@ -94,23 +90,27 @@ async function assignPreset(
+       },
+     );
+   } else {
+     await context.api.model.patchObject(target.objectId, {
+       base_revision: assetResponse.scene_revision,
+       magnetization_ref: assetId,
+     });
+   }
+ 
+   const revision = assetResponse.scene_revision ?? Date.now();
+-  context.resources?.invalidate(SCENE_RESOURCE_KEY, revision);
+-  context.resources?.invalidate(MODEL_REGIONS_RESOURCE_KEY, revision);
+-  context.resources?.invalidate(VISUALIZATION_STATE_RESOURCE_KEY, revision);
++  if (context.resources) {
++    invalidateAuthoringMutationDependents(
++      context.resources,
++      "magnetization",
++      revision,
++    );
++  }
+   return { status: "completed" };
+ }
+ 
+ function presetCommand(
+   id: string,
+   title: string,
+   presetKind: MagnetizationTexturePresetId,
+   presetParams: JsonObject,
+ ): CommandContribution {
+   return {
+diff --git a/apps/control-room/src/kernel/resources/studyRuntimeResources.test.ts b/apps/control-room/src/kernel/resources/studyRuntimeResources.test.ts
+index 7b4b9b9ac..0eea546c5 100644
+--- a/apps/control-room/src/kernel/resources/studyRuntimeResources.test.ts
++++ b/apps/control-room/src/kernel/resources/studyRuntimeResources.test.ts
+@@ -243,23 +243,23 @@ describe("study runtime command resource bundles", () => {
+     const fullBundle = source.slice(
+       source.indexOf("export function useStudyRuntimeCommandResourceData"),
+       source.indexOf("export function useRuntimeCommandControlResourceData"),
+     );
+     const controlBundle = source.slice(
+       source.indexOf("export function useRuntimeCommandControlResourceData"),
+       source.indexOf("export function useObjectMetricsResource"),
+     );
+ 
+     expect(fullBundle).toContain("useModelReadinessResource");
+-    expect(fullBundle).toContain("[MODEL_READINESS_PATH]");
++    expect(fullBundle).toContain("buildRuntimeCommandControlResourceData");
+     expect(controlBundle).toContain("useModelReadinessResource");
+-    expect(controlBundle).toContain("[MODEL_READINESS_PATH]");
++    expect(controlBundle).toContain("buildRuntimeCommandControlResourceData");
+     expect(STUDY_RUNTIME_CONTROL_RESOURCE_KEYS).toContain(MODEL_READINESS_PATH);
+   });
+ 
+   it("withholds a retained readiness snapshot while its production resource is stale", () => {
+     const retained = {
+       blockers: [],
+       checks: [],
+       ready_to_export: true,
+       ready_to_run: true,
+       scene_revision: 3,
+diff --git a/apps/control-room/src/kernel/resources/studyRuntimeResources.ts b/apps/control-room/src/kernel/resources/studyRuntimeResources.ts
+index 918779620..7ff17c286 100644
+--- a/apps/control-room/src/kernel/resources/studyRuntimeResources.ts
++++ b/apps/control-room/src/kernel/resources/studyRuntimeResources.ts
+@@ -2305,20 +2305,58 @@ export function useModelReadinessResource({
+   });
+ }
+ 
+ export function readyCommandResourceData<T>(
+   data: T | null,
+   status: string,
+ ): T | null {
+   return status === "ready" ? data : null;
+ }
+ 
++interface RuntimeCommandControlResourceDataInput {
++  commandQueue: unknown;
++  geometryValidation: unknown;
++  meshBuildCurrent: unknown;
++  meshManifest: unknown;
++  modelReadinessData: ModelReadinessResource | null;
++  modelReadinessStatus: string;
++  sessionStatus: unknown;
++  solverStatus: unknown;
++  stageExecution: unknown;
++}
++
++export function buildRuntimeCommandControlResourceData({
++  commandQueue,
++  geometryValidation,
++  meshBuildCurrent,
++  meshManifest,
++  modelReadinessData,
++  modelReadinessStatus,
++  sessionStatus,
++  solverStatus,
++  stageExecution,
++}: RuntimeCommandControlResourceDataInput): Readonly<Record<string, unknown>> {
++  return {
++    [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: meshManifest,
++    [MESHING_BUILDS_CURRENT_PATH]: meshBuildCurrent,
++    [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation,
++    [MODEL_READINESS_PATH]: readyCommandResourceData(
++      modelReadinessData,
++      modelReadinessStatus,
++    ),
++    [SESSION_STATUS_RESOURCE_KEY]: sessionStatus,
++    [SIMULATION_COMMANDS_PATH]: commandQueue,
++    [SIMULATION_SOLVER_STATUS_PATH]: solverStatus,
++    [SIMULATION_STAGES_EXECUTION_PATH]: stageExecution,
++  };
++}
++
+ export function useStudyRuntimeCommandResourceData({
+   enabled = true,
+ }: RuntimeResourceOptions = {}): Readonly<Record<string, unknown>> {
+   const sessionStatus = useSessionStatusSelector(
+     selectStudyRuntimeCommandSessionStatus,
+     { enabled, isEqual: studyRuntimeCommandSessionStatusEquals },
+   );
+   const commandQueue = useCommandQueueResource({
+     enabled: shouldLoadRuntimeCommandQueue(enabled, sessionStatus),
+   });
+@@ -2342,37 +2380,37 @@ export function useStudyRuntimeCommandResourceData({
+   const scene = useSceneResource({ enabled });
+   const stageExecution = useStageExecutionResource({
+     enabled: shouldLoadRuntimeStageExecution(enabled, sessionStatus),
+   });
+   const solverStatus = useSolverStatusResource({ enabled });
+   const solverProfile = useSolverProfileResource({ enabled });
+   const checkpointCatalog = useCheckpointCatalogResource({ enabled });
+ 
+   return useMemo(
+     () => ({
++      ...buildRuntimeCommandControlResourceData({
++        commandQueue: commandQueue.data,
++        geometryValidation: geometryValidation.data,
++        meshBuildCurrent: meshBuildCurrent.data,
++        meshManifest: meshManifest.data,
++        modelReadinessData: modelReadiness.data,
++        modelReadinessStatus: modelReadiness.status,
++        sessionStatus: enabled ? sessionStatus : null,
++        solverStatus: solverStatus.data,
++        stageExecution: stageExecution.data,
++      }),
+       [DIAGNOSTICS_SOLVER_PROFILE_PATH]: solverProfile.data,
+-      [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: meshManifest.data,
+-      [MESHING_BUILDS_CURRENT_PATH]: meshBuildCurrent.data,
+       [MESHING_BUILDS_LATEST_SUCCESSFUL_PATH]: meshBuildLatest.data,
+       [MESHING_SUMMARY_PATH]: meshSummary.data,
+-      [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation.data,
+-      [MODEL_READINESS_PATH]: readyCommandResourceData(
+-        modelReadiness.data,
+-        modelReadiness.status,
+-      ),
+       [MODEL_SCENE_PATH]: scene.data,
+       [PERSISTENCE_CHECKPOINTS_PATH]: checkpointCatalog.data,
+-      [SESSION_STATUS_RESOURCE_KEY]: enabled ? sessionStatus : null,
+-      [SIMULATION_COMMANDS_PATH]: commandQueue.data,
+       [SIMULATION_RUN_CURRENT_PATH]: currentRun.data,
+-      [SIMULATION_SOLVER_STATUS_PATH]: solverStatus.data,
+-      [SIMULATION_STAGES_EXECUTION_PATH]: stageExecution.data,
+     }),
+     [
+       checkpointCatalog.data,
+       commandQueue.data,
+       currentRun.data,
+       enabled,
+       geometryValidation.data,
+       meshBuildCurrent.data,
+       meshBuildLatest.data,
+       meshManifest.data,
+@@ -2413,33 +2451,32 @@ export function useRuntimeCommandControlResourceData({
+       shouldLoadRuntimeMeshManifest(enabled, sessionStatus),
+   });
+   const solverStatus = useSolverStatusResource({ enabled });
+   const stageExecution = useStageExecutionResource({
+     enabled:
+       includeStageExecution &&
+       shouldLoadRuntimeStageExecution(enabled, sessionStatus),
+   });
+ 
+   return useMemo(
+-    () => ({
+-      [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: meshManifest.data,
+-      [MESHING_BUILDS_CURRENT_PATH]: meshBuildCurrent.data,
+-      [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation.data,
+-      [MODEL_READINESS_PATH]: readyCommandResourceData(
+-        modelReadiness.data,
+-        modelReadiness.status,
+-      ),
+-      [SESSION_STATUS_RESOURCE_KEY]: enabled ? sessionStatus : null,
+-      [SIMULATION_COMMANDS_PATH]: commandQueue.data,
+-      [SIMULATION_SOLVER_STATUS_PATH]: solverStatus.data,
+-      [SIMULATION_STAGES_EXECUTION_PATH]: stageExecution.data,
+-    }),
++    () =>
++      buildRuntimeCommandControlResourceData({
++        commandQueue: commandQueue.data,
++        geometryValidation: geometryValidation.data,
++        meshBuildCurrent: meshBuildCurrent.data,
++        meshManifest: meshManifest.data,
++        modelReadinessData: modelReadiness.data,
++        modelReadinessStatus: modelReadiness.status,
++        sessionStatus: enabled ? sessionStatus : null,
++        solverStatus: solverStatus.data,
++        stageExecution: stageExecution.data,
++      }),
+     [
+       commandQueue.data,
+       enabled,
+       geometryValidation.data,
+       meshBuildCurrent.data,
+       meshManifest.data,
+       modelReadiness.data,
+       modelReadiness.status,
+       sessionStatus,
+       solverStatus.data,
+diff --git a/apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx b/apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx
+index 18511cfbb..29b8e1268 100644
+--- a/apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx
++++ b/apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx
+@@ -1,25 +1,19 @@
+ "use client";
+ 
+ import { useMemo, useState } from "react";
+ 
+-import {
+-  MODEL_GEOMETRY_DIAGNOSTICS_PATH,
+-  MODEL_GEOMETRY_VALIDATION_PATH,
+-} from "@/kernel/api/apiPaths";
+ import type { RegionPatchRequest } from "@/kernel/api/apiTypes";
++import { invalidateAuthoringMutationDependents } from "@/kernel/authoring/authoringMutationInvalidation";
+ import { createCommandContext } from "@/kernel/commands/commandContext";
+ import { useKernel } from "@/kernel/KernelContext";
+ import {
+-  MODEL_REGIONS_RESOURCE_KEY,
+-  SCENE_RESOURCE_KEY,
+-  VISUALIZATION_STATE_RESOURCE_KEY,
+   useModelRegionsResource,
+   useSceneResource,
+ } from "@/kernel/resources/geometryLifecycleResources";
+ import {
+   buildMagnetizationAssetPatch as buildTextureAssetPatch,
+   buildMagnetizationAssignmentPatch as buildTextureAssignmentPatch,
+ } from "@/shared/domain/magnetization-texture/draftModel";
+ import { MAGNETIZATION_TEXTURE_PRESETS } from "@/shared/domain/magnetization-texture/texturePresets";
+ import type { MagnetizationTextureTarget } from "@/shared/domain/magnetization-texture/types";
+ import { Button } from "@/shared/ui/Button";
+@@ -745,25 +739,21 @@ export function ObjectMagneticTexturePanel({
+         baseKey: draftKey,
+         currentDraft: draft,
+         identityKey: draftIdentityKey,
+         isDirty: objectMagneticTextureDraftDirty,
+         patch,
+       }),
+     );
+   }
+ 
+   function invalidateTextureResources(revision: number): void {
+-    resources.invalidate(SCENE_RESOURCE_KEY, revision);
+-    resources.invalidate(MODEL_REGIONS_RESOURCE_KEY, revision);
+-    resources.invalidate(MODEL_GEOMETRY_VALIDATION_PATH, revision);
+-    resources.invalidate(MODEL_GEOMETRY_DIAGNOSTICS_PATH, revision);
+-    resources.invalidate(VISUALIZATION_STATE_RESOURCE_KEY, revision);
++    invalidateAuthoringMutationDependents(resources, "magnetization", revision);
+   }
+ 
+   async function saveTexture(): Promise<void> {
+     if (model.mode !== "committed") {
+       setFeedback({ kind: "error", message: "No committed scene object." });
+       return;
+     }
+     const target = targetFromModel(model);
+     if (!target) {
+       setFeedback({ kind: "error", message: "No selected texture target." });
+diff --git a/apps/control-room/src/modules/inspector/panels/ObjectMaterialPanel.tsx b/apps/control-room/src/modules/inspector/panels/ObjectMaterialPanel.tsx
+index a1ddbae50..3f8967564 100644
+--- a/apps/control-room/src/modules/inspector/panels/ObjectMaterialPanel.tsx
++++ b/apps/control-room/src/modules/inspector/panels/ObjectMaterialPanel.tsx
+@@ -1,25 +1,19 @@
+ "use client";
+ 
+ import { useCallback, useMemo, useState } from "react";
+ 
+-import {
+-  MODEL_GEOMETRY_DIAGNOSTICS_PATH,
+-  MODEL_GEOMETRY_VALIDATION_PATH,
+-} from "@/kernel/api/apiPaths";
++import { invalidateAuthoringMutationDependents } from "@/kernel/authoring/authoringMutationInvalidation";
+ import { useKernel } from "@/kernel/KernelContext";
+ import {
+-  MESH_BUILD_CURRENT_RESOURCE_KEY,
+-  MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY,
+   resolveMaterialResourceKey,
+   resolveObjectInteractionResourceKey,
+-  SCENE_RESOURCE_KEY,
+   useMaterialResource,
+   useObjectInteractionResource,
+   useSceneResource,
+ } from "@/kernel/resources/geometryLifecycleResources";
+ import { Button } from "@/shared/ui/Button";
+ 
+ import type { InspectorPanelProps } from "../inspectorTypes";
+ import { useRegisterInspectorEditSession } from "../InspectorEditSession";
+ import { FeedbackBanner } from "../primitives/FeedbackBanner";
+ import { FieldRow } from "../primitives/FieldRow";
+@@ -295,25 +289,21 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
+       return true;
+     } catch (error) {
+       setFeedback({ kind: "error", message: errorMessage(error) });
+       return false;
+     } finally {
+       setPending(false);
+     }
+   }
+ 
+   function invalidateMagneticParameterResources(revision: number): void {
+-    resources.invalidate(SCENE_RESOURCE_KEY, revision);
+-    resources.invalidate(MODEL_GEOMETRY_VALIDATION_PATH, revision);
+-    resources.invalidate(MODEL_GEOMETRY_DIAGNOSTICS_PATH, revision);
+-    resources.invalidate(MESH_BUILD_CURRENT_RESOURCE_KEY, revision);
+-    resources.invalidate(MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY, revision);
++    invalidateAuthoringMutationDependents(resources, "material", revision);
+   }
+ 
+   return {
+     anisotropyDraft,
+     applyAnisotropy,
+     applyMaterial,
+     applyParameters,
+     baseAnisotropyDraft,
+     baseDraft,
+     draft,
+diff --git a/apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.test.tsx b/apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.test.tsx
+index 49f407445..3602ea488 100644
+--- a/apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.test.tsx
++++ b/apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.test.tsx
+@@ -1,17 +1,22 @@
++import { readFileSync } from "node:fs";
++
+ import { renderToStaticMarkup } from "react-dom/server";
+ import type { ReactNode } from "react";
+ import { describe, expect, it, vi } from "vitest";
+ import { Accordion } from "@/shared/ui/Accordion";
+ 
+-import type { CommandDetailResource } from "@/kernel/api/apiTypes";
++import type { CommandDetailResource, LiveStatusResource } from "@/kernel/api/apiTypes";
++import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
+ import type { ResourceResult } from "@/kernel/resources/resourceTypes";
++import { buildRuntimeCommandControlResourceData } from "@/kernel/resources/studyRuntimeResources";
++import { STUDY_RUNTIME_COMMANDS } from "@/kernel/runtime/studyRuntimeCommandContributions";
+ 
+ vi.mock("@radix-ui/react-dialog", async (importOriginal) => {
+   const actual = await importOriginal<typeof import("@radix-ui/react-dialog")>();
+ 
+   return {
+     ...actual,
+     Portal: ({ children }: { children: ReactNode }) => <>{children}</>,
+   };
+ });
+ 
+@@ -49,20 +54,96 @@ function testRequested(overrides: Record<string, string> = {}) {
+     backend: "auto",
+     cpuThreads: "auto",
+     device: "auto",
+     mode: "strict",
+     precision: "double",
+     ...overrides,
+   };
+ }
+ 
+ describe("StudyInspectorPanel", () => {
++  it("uses the shared readiness-aware runtime command adapter", () => {
++    const source = readFileSync(
++      new URL("./StudyInspectorPanel.tsx", import.meta.url),
++      "utf8",
++    );
++
++    expect(source).toContain("useModelReadinessResource()");
++    expect(source).toContain("buildRuntimeCommandControlResourceData({");
++  });
++
++  it.each([
++    {
++      enabled: true,
++      name: "ready",
++      readiness: { blockers: [], ready_to_run: true, scene_revision: 9 },
++      reason: null,
++    },
++    {
++      enabled: false,
++      name: "blocked",
++      readiness: {
++        blockers: ["Assign initial magnetization to every magnetic object."],
++        ready_to_run: false,
++        scene_revision: 9,
++      },
++      reason: "Assign initial magnetization to every magnetic object.",
++    },
++    {
++      enabled: false,
++      name: "stale",
++      readiness: { blockers: [], ready_to_run: true, scene_revision: 8 },
++      reason: "Model readiness is stale for the current scene.",
++    },
++  ])("feeds $name readiness into the Study Inspector Run command", ({
++    enabled,
++    readiness,
++    reason,
++  }) => {
++    const commands = new CommandRegistry();
++    for (const command of STUDY_RUNTIME_COMMANDS) commands.register(command);
++    const status = {
++      capabilities: { binary_fields: true, explicit_topology: false },
++      domain: { discretization: "fdm" },
++      resources: { mesh_revision: 0, scene_revision: 9 },
++    } as unknown as LiveStatusResource;
++    const resourceData = buildRuntimeCommandControlResourceData({
++      commandQueue: { commands: [] },
++      geometryValidation: { diagnostics: [] },
++      meshBuildCurrent: null,
++      meshManifest: null,
++      modelReadinessData: {
++        capabilities: {} as never,
++        checks: [],
++        ready_to_export: readiness.ready_to_run,
++        ...readiness,
++      },
++      modelReadinessStatus: "ready",
++      sessionStatus: status,
++      solverStatus: { runtime_state: "idle" },
++      stageExecution: {
++        active_stage_index: null,
++        revision: 1,
++        runtime_state: "idle",
++        stages: [],
++      },
++    });
++    const context = {
++      api: {} as never,
++      resourceData,
++      source: "inspector" as const,
++    };
++
++    expect(commands.isEnabled("study.run", context)).toBe(enabled);
++    expect(commands.get("study.run")?.disabledReason?.(context)).toBe(reason);
++  });
++
+   it("renders requested, resolved, and fallback runtime provenance rows", () => {
+     const html = renderToStaticMarkup(
+       <StudyRuntimeSection
+         commandDisabledReason={() => null}
+         model={{
+           runtime: {
+             activeStageLabel: "Relax 1",
+             commandBadge: "running",
+             commandError: null,
+             commandId: null,
+diff --git a/apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx b/apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx
+index 250e14e84..16400c4fb 100644
+--- a/apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx
++++ b/apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx
+@@ -9,51 +9,49 @@ import {
+   Save,
+   Scissors,
+   SkipForward,
+   Square,
+   Upload,
+ } from "lucide-react";
+ import { useCallback, useEffect, useReducer, type ReactNode } from "react";
+ 
+ import { createCommandContext } from "@/kernel/commands/commandContext";
+ import {
+-  MESHING_BUILDS_CURRENT_PATH,
+   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+-  MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+   MESHING_SUMMARY_PATH,
+-  MODEL_GEOMETRY_VALIDATION_PATH,
+   MODEL_READINESS_PATH,
+   MODEL_SCENE_PATH,
+   MODEL_STUDY_PATH,
+   PERSISTENCE_CHECKPOINTS_PATH,
+   SIMULATION_COMMANDS_PATH,
+   SIMULATION_RUN_CURRENT_PATH,
+-  SIMULATION_SOLVER_STATUS_PATH,
+   SIMULATION_STAGES_EXECUTION_PATH,
+ } from "@/kernel/api/apiPaths";
+ import type {
+   CheckpointEntry,
+   LiveStatusResource,
+   SessionImportInspectResponse,
+ } from "@/kernel/api/apiTypes";
+ import {
+   shouldLoadRuntimeCurrentRun,
+   shouldLoadRuntimeCommandQueue,
+   shouldLoadRuntimeMeshBuild,
+   shouldLoadRuntimeMeshManifest,
+   shouldLoadRuntimeMeshSummary,
+   shouldLoadRuntimeScalars,
+   shouldLoadRuntimeStageExecution,
++  buildRuntimeCommandControlResourceData,
+   useCommandQueueResource,
+   useCommandDetailResource,
+   useCheckpointCatalogResource,
+   useCurrentRunResource,
++  useModelReadinessResource,
+   useSolverEnergyCurrentResource,
+   useSolverEnergyHistoryResource,
+   useSolverStatusResource,
+   useStageExecutionResource,
+ } from "@/kernel/resources/studyRuntimeResources";
+ import {
+   useGeometryValidationResource,
+   useMeshBuildCurrent,
+   useMeshBuildLatestSuccessful,
+   useMeshSharedDomainManifestResource,
+@@ -543,20 +541,21 @@ export function useStudyInspectorPanelController(
+   });
+   const stageExecution = useStageExecutionResource({
+     enabled: shouldLoadRuntimeStageExecution(true, runtimeStatus),
+   });
+   const solverStatus = useSolverStatusResource();
+   const commandQueue = useCommandQueueResource({
+     enabled: shouldLoadRuntimeCommandQueue(true, runtimeStatus),
+   });
+   const checkpointCatalog = useCheckpointCatalogResource();
+   const geometryValidation = useGeometryValidationResource();
++  const modelReadiness = useModelReadinessResource();
+   const meshBuildCurrent = useMeshBuildCurrent({
+     enabled: shouldLoadRuntimeMeshBuild(true, runtimeStatus),
+   });
+   const meshBuildLatest = useMeshBuildLatestSuccessful({
+     enabled: shouldLoadRuntimeMeshBuild(true, runtimeStatus),
+   });
+   const meshManifest = useMeshSharedDomainManifestResource({
+     enabled: shouldLoadRuntimeMeshManifest(true, runtimeStatus),
+   });
+   const meshSummary = useMeshSummaryResource({
+@@ -620,32 +619,36 @@ export function useStudyInspectorPanelController(
+       selectedIndex:
+         stageDrafts.length === 0
+           ? 0
+           : Math.min(selectedStageIndex, stageDrafts.length - 1),
+       signature: studySignature,
+     });
+   }, [scene.data, sceneRevision, selectedStageIndex, studySignature]);
+   const activeStageIndex = stageExecution.data?.active_stage_index ?? null;
+   const commandContext = createCommandContext("inspector", kernel, {
+     resourceData: {
+-      [MESHING_BUILDS_CURRENT_PATH]: meshBuildCurrent.data,
++      ...buildRuntimeCommandControlResourceData({
++        commandQueue: commandQueue.data,
++        geometryValidation: geometryValidation.data,
++        meshBuildCurrent: meshBuildCurrent.data,
++        meshManifest: meshManifest.data,
++        modelReadinessData: modelReadiness.data,
++        modelReadinessStatus: modelReadiness.status,
++        sessionStatus: runtimeStatus,
++        solverStatus: solverStatus.data,
++        stageExecution: stageExecution.data,
++      }),
+       [MESHING_BUILDS_LATEST_SUCCESSFUL_PATH]: meshBuildLatest.data,
+-      [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: meshManifest.data,
+       [MESHING_SUMMARY_PATH]: meshSummary.data,
+-      [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation.data,
+       [MODEL_SCENE_PATH]: scene.data,
+       [PERSISTENCE_CHECKPOINTS_PATH]: checkpointCatalog.data,
+-      [SESSION_STATUS_RESOURCE_KEY]: runtimeStatus,
+-      [SIMULATION_COMMANDS_PATH]: commandQueue.data,
+       [SIMULATION_RUN_CURRENT_PATH]: currentRun.data,
+-      [SIMULATION_SOLVER_STATUS_PATH]: solverStatus.data,
+-      [SIMULATION_STAGES_EXECUTION_PATH]: stageExecution.data,
+     },
+     sourceDetail: "study",
+   });
+   const runCommand = (commandId: string, input?: unknown) => {
+     void kernel.commands.execute(commandId, commandContext, input);
+   };
+   const inspectImportFile = async (file: File | null) => {
+     dispatch({
+       type: "prepareImportFile",
+       fileName: file?.name ?? null,
+diff --git a/apps/control-room/src/modules/inspector/panels/region/ObjectRegionTexturePanel.tsx b/apps/control-room/src/modules/inspector/panels/region/ObjectRegionTexturePanel.tsx
+index 1d69340e8..3beb9ab13 100644
+--- a/apps/control-room/src/modules/inspector/panels/region/ObjectRegionTexturePanel.tsx
++++ b/apps/control-room/src/modules/inspector/panels/region/ObjectRegionTexturePanel.tsx
+@@ -1,23 +1,17 @@
+ "use client";
+ 
+ import { useMemo, useState } from "react";
+-import {
+-  MODEL_GEOMETRY_DIAGNOSTICS_PATH,
+-  MODEL_GEOMETRY_VALIDATION_PATH,
+-} from "@/kernel/api/apiPaths";
++import { invalidateAuthoringMutationDependents } from "@/kernel/authoring/authoringMutationInvalidation";
+ import { createCommandContext } from "@/kernel/commands/commandContext";
+ import { useKernel } from "@/kernel/KernelContext";
+ import {
+-  MODEL_REGIONS_RESOURCE_KEY,
+-  SCENE_RESOURCE_KEY,
+-  VISUALIZATION_STATE_RESOURCE_KEY,
+   useModelRegionsResource,
+   useSceneResource,
+ } from "@/kernel/resources/geometryLifecycleResources";
+ import {
+   buildMagnetizationAssetPatch as buildTextureAssetPatch,
+   buildRegionTextureOverridePatch,
+ } from "@/shared/domain/magnetization-texture/draftModel";
+ import {
+   ObjectRegionMetadataSection,
+   type RegionSubPanelProps,
+@@ -114,25 +108,21 @@ export function ObjectRegionTexturePanel({
+         baseKey: draftKey,
+         currentDraft: draft,
+         identityKey: draftIdentityKey,
+         isDirty: objectMagneticTextureDraftDirty,
+         patch,
+       }),
+     );
+   }
+ 
+   function invalidateTextureResources(revision: number): void {
+-    resources.invalidate(SCENE_RESOURCE_KEY, revision);
+-    resources.invalidate(MODEL_REGIONS_RESOURCE_KEY, revision);
+-    resources.invalidate(MODEL_GEOMETRY_VALIDATION_PATH, revision);
+-    resources.invalidate(MODEL_GEOMETRY_DIAGNOSTICS_PATH, revision);
+-    resources.invalidate(VISUALIZATION_STATE_RESOURCE_KEY, revision);
++    invalidateAuthoringMutationDependents(resources, "magnetization", revision);
+   }
+ 
+   async function saveTexture(): Promise<void> {
+     if (model.mode !== "committed") {
+       setFeedback({ kind: "error", message: "No committed scene object." });
+       return;
+     }
+     const target = { kind: "region" as const, objectId: model.objectId, regionId: model.regionId! };
+     setPending(true);
+     try {
+diff --git a/apps/control-room/src/modules/ribbon/RibbonModule.runtimeStatus.test.ts b/apps/control-room/src/modules/ribbon/RibbonModule.runtimeStatus.test.ts
+index b6f14006c..4439a18fb 100644
+--- a/apps/control-room/src/modules/ribbon/RibbonModule.runtimeStatus.test.ts
++++ b/apps/control-room/src/modules/ribbon/RibbonModule.runtimeStatus.test.ts
+@@ -1,13 +1,18 @@
++import { readFileSync } from "node:fs";
++
+ import { describe, expect, it } from "vitest";
+ 
+ import type { LiveStatusResource } from "@/kernel/api/apiTypes";
++import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
++import { buildRuntimeCommandControlResourceData } from "@/kernel/resources/studyRuntimeResources";
++import { STUDY_RUNTIME_COMMANDS } from "@/kernel/runtime/studyRuntimeCommandContributions";
+ 
+ import { __ribbonModuleTestUtils } from "./RibbonModule";
+ 
+ const baseResources: LiveStatusResource["resources"] = {
+   artifact_revision: 0,
+   artifacts_revision: 0,
+   command_completion_revision: 0,
+   commands_revision: 4,
+   display_revision: 0,
+   domain_generation_id: "1",
+@@ -82,20 +87,75 @@ function statusWith({
+ function select(status: LiveStatusResource) {
+   return __ribbonModuleTestUtils.selectRibbonRuntimeStatus({ data: status });
+ }
+ 
+ describe("RibbonModule runtime status selection", () => {
+   it("wires the runtime field catalog into ribbon tab construction", () => {
+     const source = readFileSync(new URL("./RibbonModule.tsx", import.meta.url), "utf8");
+ 
+     expect(source).toContain("useFieldCatalogResource({");
+     expect(source).toContain("fieldCatalog: fieldCatalog.data,");
++    expect(source).toContain("useModelReadinessResource({");
++    expect(source).toContain("buildRuntimeCommandControlResourceData({");
++  });
++
++  it.each([
++    {
++      enabled: true,
++      name: "ready",
++      readiness: { blockers: [], ready_to_run: true, scene_revision: 1 },
++      reason: null,
++    },
++    {
++      enabled: false,
++      name: "blocked",
++      readiness: {
++        blockers: ["Assign a material to every magnetic object."],
++        ready_to_run: false,
++        scene_revision: 1,
++      },
++      reason: "Assign a material to every magnetic object.",
++    },
++    {
++      enabled: false,
++      name: "stale",
++      readiness: { blockers: [], ready_to_run: true, scene_revision: 0 },
++      reason: "Model readiness is stale for the current scene.",
++    },
++  ])("feeds $name readiness into the Ribbon Run command", ({ enabled, readiness, reason }) => {
++    const commands = new CommandRegistry();
++    for (const command of STUDY_RUNTIME_COMMANDS) commands.register(command);
++    const resourceData = buildRuntimeCommandControlResourceData({
++      commandQueue: { commands: [] },
++      geometryValidation: { diagnostics: [] },
++      meshBuildCurrent: null,
++      meshManifest: null,
++      modelReadinessData: {
++        capabilities: {} as never,
++        checks: [],
++        ready_to_export: readiness.ready_to_run,
++        ...readiness,
++      },
++      modelReadinessStatus: "ready",
++      sessionStatus: statusWith(),
++      solverStatus: { runtime_state: "idle" },
++      stageExecution: {
++        active_stage_index: null,
++        revision: 1,
++        runtime_state: "idle",
++        stages: [],
++      },
++    });
++    const context = { api: {} as never, resourceData, source: "ribbon" as const };
++
++    expect(commands.isEnabled("study.run", context)).toBe(enabled);
++    expect(commands.get("study.run")?.disabledReason?.(context)).toBe(reason);
+   });
+   it("treats session identity changes as runtime command state changes", () => {
+     const previous = select(statusWith({ sessionId: "session-old" }));
+     const next = select(statusWith({ sessionId: "session-new" }));
+ 
+     expect(
+       __ribbonModuleTestUtils.ribbonRuntimeStatusEquals(previous, next),
+     ).toBe(false);
+   });
+ 
+@@ -124,11 +184,10 @@ describe("RibbonModule runtime status selection", () => {
+         command_completion_revision: 4,
+         commands_revision: 4,
+       },
+     });
+ 
+     expect(
+       __ribbonModuleTestUtils.ribbonRuntimeStatusEquals(previous, next),
+     ).toBe(false);
+   });
+ });
+-import { readFileSync } from "node:fs";
+diff --git a/apps/control-room/src/modules/ribbon/RibbonModule.tsx b/apps/control-room/src/modules/ribbon/RibbonModule.tsx
+index 2a77ed615..68b0a7b16 100644
+--- a/apps/control-room/src/modules/ribbon/RibbonModule.tsx
++++ b/apps/control-room/src/modules/ribbon/RibbonModule.tsx
+@@ -1,27 +1,21 @@
+ "use client";
+ 
+ import { useMemo, useState, useSyncExternalStore } from "react";
+ 
+ import type { LiveStatusResource } from "@/kernel/api/apiTypes";
+ import {
+-  MESHING_BUILDS_CURRENT_PATH,
+   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+   MESHING_CAPABILITIES_PATH,
+-  MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+   MESHING_SUMMARY_PATH,
+   MODEL_GEOMETRY_CAPABILITIES_PATH,
+-  MODEL_GEOMETRY_VALIDATION_PATH,
+   PERSISTENCE_CHECKPOINTS_PATH,
+-  SIMULATION_COMMANDS_PATH,
+-  SIMULATION_SOLVER_STATUS_PATH,
+-  SIMULATION_STAGES_EXECUTION_PATH,
+   VISUALIZATION_STATE_PATH,
+ } from "@/kernel/api/apiPaths";
+ import type { ModuleProps } from "@/kernel/types";
+ import { createCommandContext } from "@/kernel/commands/commandContext";
+ import { useLayoutActions, useLayoutSelector } from "@/kernel/layout/useLayout";
+ import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
+ import {
+   useGeometryCapabilitiesResource,
+   useGeometryValidationResource,
+   useMeshBuildCurrent,
+@@ -32,32 +26,31 @@ import {
+   useMeshSummaryResource,
+   useSceneResource,
+ } from "@/kernel/resources/geometryLifecycleResources";
+ import { visualizationSceneObjectIds } from "@/kernel/selection/visualizationTargetResolver";
+ import {
+   shouldLoadRuntimeMeshBuild,
+   shouldLoadRuntimeMeshManifest,
+   shouldLoadRuntimeMeshSummary,
+   shouldLoadRuntimeCommandQueue,
+   shouldLoadRuntimeStageExecution,
++  buildRuntimeCommandControlResourceData,
+   useCommandQueueResource,
+   useCommandDetailResource,
+   useCheckpointCatalogResource,
+   useFieldCatalogResource,
+   useQuantityCatalogResource,
++  useModelReadinessResource,
+   useSolverStatusResource,
+   useStageExecutionResource,
+ } from "@/kernel/resources/studyRuntimeResources";
+-import {
+-  SESSION_STATUS_RESOURCE_KEY,
+-  useSessionStatusSelector,
+-} from "@/kernel/resources/useSessionStatus";
++import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+ import { useSelectionSelector } from "@/kernel/selection/useSelection";
+ import { EMPTY_SELECTION } from "@/kernel/selection/selectionTypes";
+ import {
+   EMPTY_OBJECT_VISUALIZATION_SNAPSHOT,
+   useObjectVisualizationController,
+   useObjectVisualizationSelector,
+ } from "@/kernel/visualization/useObjectVisualization";
+ import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
+ import { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
+ import { Button } from "@/shared/ui/Button";
+@@ -256,20 +249,23 @@ export default function RibbonModule({ kernel }: ModuleProps) {
+           ) ?? null
+         : null,
+     [meshManifest.data?.mesh_parts, selection.ref],
+   );
+   const commandQueue = useCommandQueueResource({
+     enabled: shouldLoadRuntimeCommandQueue(
+       needsRuntimeResources,
+       sessionStatusData,
+     ),
+   });
++  const modelReadiness = useModelReadinessResource({
++    enabled: needsRuntimeResources,
++  });
+   const solverStatus = useSolverStatusResource({
+     enabled: needsRuntimeResources,
+   });
+   const stageExecution = useStageExecutionResource({
+     enabled: shouldLoadRuntimeStageExecution(
+       needsRuntimeResources,
+       sessionStatusData,
+     ),
+   });
+   const checkpointCatalog = useCheckpointCatalogResource({
+@@ -290,60 +286,60 @@ export default function RibbonModule({ kernel }: ModuleProps) {
+         selection,
+         visualizationState: visualizationState.data,
+       }),
+     [sceneObjectIds, selectedMeshPart, selection, visualizationState.data],
+   );
+ 
+   const commandContext = useMemo(
+     () =>
+       createCommandContext("ribbon", kernel, {
+         resourceData: {
+-          [MESHING_BUILDS_CURRENT_PATH]: meshBuildCurrent.data,
++          ...buildRuntimeCommandControlResourceData({
++            commandQueue: needsRuntimeResources ? commandQueue.data : null,
++            geometryValidation: geometryValidation.data,
++            meshBuildCurrent: meshBuildCurrent.data,
++            meshManifest: meshManifest.data,
++            modelReadinessData: modelReadiness.data,
++            modelReadinessStatus: modelReadiness.status,
++            sessionStatus: needsSessionStatusResources
++              ? sessionStatusData
++              : null,
++            solverStatus: needsRuntimeResources ? solverStatus.data : null,
++            stageExecution: needsRuntimeResources ? stageExecution.data : null,
++          }),
+           [MESHING_BUILDS_LATEST_SUCCESSFUL_PATH]: meshBuildLatest.data,
+-          [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: meshManifest.data,
+           [MESHING_CAPABILITIES_PATH]: meshCapabilities.data,
+           [MESHING_SUMMARY_PATH]: meshSummary.data,
+           [MODEL_GEOMETRY_CAPABILITIES_PATH]: geometryCapabilities.data,
+-          [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation.data,
+           [PERSISTENCE_CHECKPOINTS_PATH]: needsRuntimeResources
+             ? checkpointCatalog.data
+             : null,
+-          [SIMULATION_COMMANDS_PATH]: needsRuntimeResources
+-            ? commandQueue.data
+-            : null,
+-          [SIMULATION_SOLVER_STATUS_PATH]: needsRuntimeResources
+-            ? solverStatus.data
+-            : null,
+-          [SIMULATION_STAGES_EXECUTION_PATH]: needsRuntimeResources
+-            ? stageExecution.data
+-            : null,
+-          [SESSION_STATUS_RESOURCE_KEY]: needsSessionStatusResources
+-            ? sessionStatusData
+-            : null,
+           [VISUALIZATION_STATE_PATH]: visualizationState.data,
+         },
+         sourceDetail: activeTab,
+         visualizationTarget,
+       }),
+     [
+       activeTab,
+       geometryCapabilities.data,
+       geometryValidation.data,
+       kernel,
+       checkpointCatalog.data,
+       commandQueue.data,
+       meshBuildCurrent.data,
+       needsRuntimeResources,
+       meshBuildLatest.data,
+       meshCapabilities.data,
+       meshManifest.data,
+       meshSummary.data,
++      modelReadiness.data,
++      modelReadiness.status,
+       needsSessionStatusResources,
+       sessionStatusData,
+       solverStatus.data,
+       stageExecution.data,
+       visualizationState.data,
+       visualizationTarget,
+     ],
+   );
+ 
+   const tabContent = useMemo(
+diff --git a/apps/control-room/src/modules/ribbon/ribbonStructure.test.ts b/apps/control-room/src/modules/ribbon/ribbonStructure.test.ts
+index 860a2f238..268944825 100644
+--- a/apps/control-room/src/modules/ribbon/ribbonStructure.test.ts
++++ b/apps/control-room/src/modules/ribbon/ribbonStructure.test.ts
+@@ -27,20 +27,21 @@ import {
+ import {
+   resolveRibbonActionTriggerState,
+   resolveRibbonIconColor,
+   RibbonGroupsRow,
+ } from "./RibbonGroupsRow";
+ import { RIBBON_TABS, type RibbonMenuNode, type RibbonTabContent } from "./ribbonTypes";
+ import { RibbonTabStrip } from "./RibbonTabStrip";
+ import {
+   MESHING_CAPABILITIES_PATH,
+   MODEL_GEOMETRY_VALIDATION_PATH,
++  MODEL_READINESS_PATH,
+   SIMULATION_COMMANDS_PATH,
+   SIMULATION_SOLVER_STATUS_PATH,
+   SIMULATION_STAGES_EXECUTION_PATH,
+   VISUALIZATION_STATE_PATH,
+ } from "@/kernel/api/apiPaths";
+ import type {
+   VisualizationStatePatch,
+   VisualizationStateResource,
+ } from "@/kernel/api/apiTypes";
+ import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
+@@ -52,27 +53,36 @@ import { STUDY_RUNTIME_COMMANDS } from "@/kernel/runtime/studyRuntimeCommandCont
+ import {
+   AIRBOX_VISUALIZATION_TARGET,
+   FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET,
+   ObjectVisualizationController,
+ } from "@/kernel/visualization/ObjectVisualizationController";
+ import { VISUALIZATION_TARGET_COMMANDS } from "@/kernel/visualization/visualizationCommandContributions";
+ import {
+   crossSectionWorkspaceStore,
+   resetCrossSectionWorkspaceForTests,
+ } from "@/kernel/workspace/crossSectionWorkspace";
++
+ import { GEOMETRY_LIFECYCLE_COMMANDS } from "@/kernel/authoring/geometryLifecycleCommandContributions";
+ import { MAGNETIZATION_TEXTURE_COMMANDS } from "@/kernel/authoring/magnetization-texture/commands";
+ import { REGION_COMMANDS } from "@/kernel/authoring/regionCommandContributions";
+ import { SHELL_COMMANDS } from "@/kernel/layout/shellCommands";
+ import { ANALYSIS_FIELD_OVERLAY_COMMANDS } from "@/kernel/visualization/analysisFieldOverlayCommandContributions";
+ import { ALL_MODULES } from "@/modules/registry";
+ 
++const READY_MODEL_READINESS = {
++  blockers: [],
++  checks: [],
++  ready_to_export: true,
++  ready_to_run: true,
++  scene_revision: 1,
++};
++
+ type DeepPartial<T> = {
+   [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K];
+ };
+ 
+ function createRibbonCommandRegistry(): CommandRegistry {
+   const registry = new CommandRegistry();
+   for (const command of [...RIBBON_COMMANDS, ...VISUALIZATION_TARGET_COMMANDS]) {
+     registry.register(command);
+   }
+   return registry;
+@@ -4615,20 +4625,21 @@ describe("ribbon structure", () => {
+     for (const command of STUDY_RUNTIME_COMMANDS) {
+       commands.register(command);
+     }
+ 
+     const content = buildRibbonTabContent("study", {
+       commands,
+       commandContext: {
+         api: { commands: { submit: vi.fn() } } as never,
+         resourceData: {
+           [MODEL_GEOMETRY_VALIDATION_PATH]: { diagnostics: [] },
++          [MODEL_READINESS_PATH]: READY_MODEL_READINESS,
+           [SESSION_STATUS_RESOURCE_KEY]: {
+             capabilities: {
+               binary_fields: true,
+               explicit_topology: false,
+             },
+             domain: {
+               discretization: "fdm",
+             },
+             resources: {
+               mesh_revision: 0,
+@@ -4682,20 +4693,21 @@ describe("ribbon structure", () => {
+     for (const command of STUDY_RUNTIME_COMMANDS) {
+       commands.register(command);
+     }
+ 
+     const content = buildRibbonTabContent("home", {
+       commands,
+       commandContext: {
+         api: { commands: { submit: vi.fn() } } as never,
+         resourceData: {
+           [MODEL_GEOMETRY_VALIDATION_PATH]: { diagnostics: [] },
++          [MODEL_READINESS_PATH]: READY_MODEL_READINESS,
+           [SESSION_STATUS_RESOURCE_KEY]: {
+             capabilities: {
+               binary_fields: true,
+               explicit_topology: false,
+             },
+             domain: {
+               discretization: "fdm",
+             },
+             resources: {
+               mesh_revision: 0,
+@@ -4815,20 +4827,27 @@ describe("ribbon structure", () => {
+ 
+   it("shows FEM mesh readiness reason on disabled Home and Study Compute actions", () => {
+     const commands = new CommandRegistry();
+     for (const command of STUDY_RUNTIME_COMMANDS) {
+       commands.register(command);
+     }
+     const commandContext = {
+       api: { commands: { submit: vi.fn() } } as never,
+       resourceData: {
+         [MODEL_GEOMETRY_VALIDATION_PATH]: { diagnostics: [] },
++        [MODEL_READINESS_PATH]: {
++          ...READY_MODEL_READINESS,
++          blockers: [
++            "Build a current shared-domain mesh before running. Open Mesh Jobs or Build Shared-Domain Mesh.",
++          ],
++          ready_to_run: false,
++        },
+         [SESSION_STATUS_RESOURCE_KEY]: {
+           capabilities: {
+             binary_fields: true,
+             explicit_topology: false,
+           },
+           domain: {
+             discretization: "fem",
+           },
+           resources: {
+             mesh_revision: 0,
+diff --git a/crates/fullmag-api/src/router_v2/handlers/model/readiness.rs b/crates/fullmag-api/src/router_v2/handlers/model/readiness.rs
+index 4718e2c6a..9d615df77 100644
+--- a/crates/fullmag-api/src/router_v2/handlers/model/readiness.rs
++++ b/crates/fullmag-api/src/router_v2/handlers/model/readiness.rs
+@@ -74,82 +74,67 @@ pub async fn get_model_readiness(
+         .scene_document
+         .as_ref()
+         .ok_or_else(|| ApiError::not_found("no authoring scene document"))?;
+     Ok(Json(build_model_readiness(snapshot, scene)))
+ }
+ 
+ fn build_model_readiness(
+     snapshot: &SessionStateResponse,
+     scene: &fullmag_authoring::SceneDocument,
+ ) -> ModelReadinessResource {
+-    let object_ids = scene
+-        .objects
+-        .iter()
+-        .filter(|object| object.visible && object.role == "magnet")
+-        .map(|object| object.id.as_str())
+-        .collect::<Vec<_>>();
++    let solve_objects = fullmag_authoring::scene_solve_objects(scene).collect::<Vec<_>>();
+     let textures = scene
+         .magnetization_assets
+         .iter()
+         .map(|texture| texture.id.as_str())
+         .collect::<BTreeSet<_>>();
+ 
+     let geometry = presence_check(
+         "geometry",
+         "Geometry",
+-        !object_ids.is_empty(),
++        !solve_objects.is_empty(),
+         "model/scene",
+         "Add at least one magnetic object.",
+     );
+-    let material_error = scene
+-        .objects
+-        .iter()
+-        .filter(|object| object_ids.contains(&object.id.as_str()))
+-        .find_map(|object| {
+-            fullmag_authoring::resolve_scene_object_solve_material(scene, object)
+-                .err()
+-                .map(|error| error.to_string())
+-        });
++    let material_error = solve_objects.iter().find_map(|object| {
++        fullmag_authoring::resolve_scene_object_solve_material(scene, object)
++            .err()
++            .map(|error| error.to_string())
++    });
+     let material = presence_check(
+         "material",
+         "Material",
+-        !object_ids.is_empty() && material_error.is_none(),
++        !solve_objects.is_empty() && material_error.is_none(),
+         "model/materials",
+         material_error
+             .as_deref()
+             .unwrap_or("Assign a material to every magnetic object."),
+     );
+     let texture = presence_check(
+         "texture",
+         "Initial magnetization",
+-        !object_ids.is_empty()
+-            && scene
+-                .objects
+-                .iter()
+-                .filter(|object| object_ids.contains(&object.id.as_str()))
+-                .all(|object| {
+-                    object
+-                        .magnetization_ref
+-                        .as_deref()
+-                        .is_some_and(|id| textures.contains(id))
+-                }),
++        !solve_objects.is_empty()
++            && solve_objects.iter().all(|object| {
++                object
++                    .magnetization_ref
++                    .as_deref()
++                    .is_some_and(|id| textures.contains(id))
++            }),
+         "model/magnetization-assets",
+         "Assign initial magnetization to every magnetic object.",
+     );
+     let interactions = presence_check(
+         "interactions",
+         "Interactions",
+-        !object_ids.is_empty()
+-            && scene
+-                .objects
++        !solve_objects.is_empty()
++            && solve_objects
+                 .iter()
+-                .filter(|object| object_ids.contains(&object.id.as_str()))
+                 .all(|object| object.physics_stack.iter().any(|entry| entry.enabled)),
+         "model/objects/interactions",
+         "Enable at least one interaction for every magnetic object.",
+     );
+     let discretization = discretization_check(snapshot, scene);
+     let study = presence_check(
+         "study",
+         "Study",
+         !scene.study.stages.is_empty() || scene.study.study_pipeline.is_some(),
+         "model/study",
+diff --git a/crates/fullmag-api/src/router_v2/handlers/simulation/commands.rs b/crates/fullmag-api/src/router_v2/handlers/simulation/commands.rs
+index ffd17f069..98d8e36b4 100644
+--- a/crates/fullmag-api/src/router_v2/handlers/simulation/commands.rs
++++ b/crates/fullmag-api/src/router_v2/handlers/simulation/commands.rs
+@@ -660,21 +660,26 @@ async fn validate_authoring_gate_for_command(
+         if realization.status == "blocked" {
+             let reason = realization
+                 .diagnostics
+                 .iter()
+                 .find(|diagnostic| diagnostic.blocks.iter().any(|block| block == "build_mesh"))
+                 .map(|diagnostic| diagnostic.message.clone())
+                 .unwrap_or_else(|| "Geometry realization is blocked.".to_string());
+             return Err(ApiError::bad_request(reason));
+         }
+         return Ok(Some((scene, realization)));
+-    } else if let Some(reason) = geometry_blocks_solver_run(&scene, backend_target) {
++    }
++    for object in fullmag_authoring::scene_solve_objects(&scene) {
++        fullmag_authoring::resolve_scene_object_solve_material(&scene, object)
++            .map_err(|error| ApiError::bad_request(error.to_string()))?;
++    }
++    if let Some(reason) = geometry_blocks_solver_run(&scene, backend_target) {
+         return Err(ApiError::conflict(reason));
+     }
+     Ok(None)
+ }
+ 
+ async fn current_authoring_gate_scene(
+     state: &Arc<AppState>,
+ ) -> Result<Option<fullmag_authoring::SceneDocument>, ApiError> {
+     let script_path = {
+         let current = state.current_live_state.read().await;
+@@ -787,21 +792,21 @@ fn scene_per_geometry_mesh_options(
+ }
+ 
+ fn scene_problem_patch_for_mesh(scene: &SceneDocument) -> Result<serde_json::Value, ApiError> {
+     let mut geometry_entries = Vec::with_capacity(scene.objects.len());
+     let mut regions = Vec::with_capacity(scene.objects.len());
+     let mut materials = Vec::with_capacity(scene.objects.len());
+     let mut magnets = Vec::with_capacity(scene.objects.len());
+ 
+     let mut object_regions = Vec::new();
+ 
+-    for object in &scene.objects {
++    for object in fullmag_authoring::scene_solve_objects(scene) {
+         let geometry_name = object.id.clone();
+         let region_name = object.id.clone();
+         let material_name = format!("material:{}", object.id);
+         let material = fullmag_authoring::resolve_scene_object_solve_material(scene, object)
+             .map_err(|error| ApiError::bad_request(error.to_string()))?;
+         let material_asset = material.asset;
+ 
+         geometry_entries.push(scene_object_geometry_entry(object, &geometry_name)?);
+         regions.push(RegionIR {
+             geometry: geometry_name,
+diff --git a/crates/fullmag-api/src/router_v2/tests.rs b/crates/fullmag-api/src/router_v2/tests.rs
+index d0d40d883..9573a54c7 100644
+--- a/crates/fullmag-api/src/router_v2/tests.rs
++++ b/crates/fullmag-api/src/router_v2/tests.rs
+@@ -1287,20 +1287,138 @@ async fn model_readiness_blocks_material_without_aex() {
+         .iter()
+         .find(|check| check["id"] == "material")
+         .unwrap();
+     assert_eq!(material["state"], "blocked");
+     assert_eq!(
+         material["reason"],
+         "missing Aex material property for object 'body'"
+     );
+ }
+ 
++#[tokio::test]
++async fn hidden_magnet_without_aex_is_blocked_by_readiness_and_solve() {
++    let state = test_app_state_with_live_session().await;
++    let mut scene = sample_scene_document_with_stage(serde_json::json!({
++        "entrypoint_kind": "flat_relax",
++        "kind": "relax",
++        "algorithm": "projected_gradient_bb",
++        "stage_id": "relax-1"
++    }));
++    scene.study.requested_backend = "fdm".into();
++    scene.study.fdm = Some(fullmag_authoring::SceneFdmDiscretizationState {
++        default_cell: Some([1.0e-9, 1.0e-9, 1.0e-9]),
++        ..Default::default()
++    });
++    scene.objects[0].visible = false;
++    scene.materials[0].properties.aex = None;
++    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
++        snapshot.scene_document = Some(scene);
++    }
++    let app = build_v2_router().with_state(state);
++
++    let readiness = app
++        .clone()
++        .oneshot(
++            Request::builder()
++                .uri("/v2/sessions/current/model/readiness")
++                .body(Body::empty())
++                .unwrap(),
++        )
++        .await
++        .unwrap();
++    assert_eq!(readiness.status(), StatusCode::OK);
++    let readiness = body_json(readiness).await;
++    assert_eq!(readiness["ready_to_run"], false);
++    assert!(readiness["blockers"]
++        .as_array()
++        .unwrap()
++        .iter()
++        .any(|reason| reason == "missing Aex material property for object 'body'"));
++
++    let solve = app
++        .oneshot(
++            Request::builder()
++                .method("POST")
++                .uri("/v2/sessions/current/simulation/commands")
++                .header("content-type", "application/json")
++                .body(Body::from(
++                    serde_json::json!({ "kind": "solve" }).to_string(),
++                ))
++                .unwrap(),
++        )
++        .await
++        .unwrap();
++    assert_eq!(solve.status(), StatusCode::BAD_REQUEST);
++    assert!(String::from_utf8_lossy(&body_bytes(solve).await)
++        .contains("missing Aex material property for object 'body'"));
++}
++
++#[tokio::test]
++async fn non_magnetic_carrier_is_ignored_by_readiness_and_solve_projection() {
++    let state = test_app_state_with_live_session().await;
++    let mut scene = sample_scene_document_with_stage(serde_json::json!({
++        "entrypoint_kind": "flat_relax",
++        "kind": "relax",
++        "algorithm": "projected_gradient_bb",
++        "stage_id": "relax-1"
++    }));
++    scene.study.requested_backend = "fdm".into();
++    scene.study.fdm = Some(fullmag_authoring::SceneFdmDiscretizationState {
++        default_cell: Some([1.0e-9, 1.0e-9, 1.0e-9]),
++        ..Default::default()
++    });
++    let mut carrier_material = scene.materials[0].clone();
++    carrier_material.id = "carrier-material".into();
++    carrier_material.properties.aex = None;
++    carrier_material.properties.ms = None;
++    scene.materials.push(carrier_material);
++    let mut carrier = scene.objects[0].clone();
++    carrier.id = "carrier".into();
++    carrier.name = "Carrier".into();
++    carrier.role = "carrier".into();
++    carrier.material_ref = "carrier-material".into();
++    scene.objects.push(carrier);
++    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
++        snapshot.scene_document = Some(scene);
++    }
++    let app = build_v2_router().with_state(state.clone());
++
++    let readiness = app
++        .clone()
++        .oneshot(
++            Request::builder()
++                .uri("/v2/sessions/current/model/readiness")
++                .body(Body::empty())
++                .unwrap(),
++        )
++        .await
++        .unwrap();
++    assert_eq!(readiness.status(), StatusCode::OK);
++    assert_eq!(body_json(readiness).await["ready_to_run"], true);
++
++    let solve = app
++        .oneshot(
++            Request::builder()
++                .method("POST")
++                .uri("/v2/sessions/current/simulation/commands")
++                .header("content-type", "application/json")
++                .body(Body::from(
++                    serde_json::json!({ "kind": "solve" }).to_string(),
++                ))
++                .unwrap(),
++        )
++        .await
++        .unwrap();
++    assert_eq!(solve.status(), StatusCode::OK);
++    assert_eq!(state.current_control_queue.lock().await.len(), 1);
++}
++
+ #[tokio::test]
+ async fn model_readiness_marks_fem_mesh_stale_against_scene_revision() {
+     let state = test_app_state_with_live_session().await;
+     let mut scene = sample_scene_document_with_stage(serde_json::json!({
+         "entrypoint_kind": "flat_relax",
+         "kind": "relax",
+         "algorithm": "projected_gradient_bb",
+         "stage_id": "relax-1"
+     }));
+     scene.study.requested_backend = "fem".into();
+diff --git a/crates/fullmag-authoring/src/material_requirements.rs b/crates/fullmag-authoring/src/material_requirements.rs
+index 5c925829f..e8c17b2f0 100644
+--- a/crates/fullmag-authoring/src/material_requirements.rs
++++ b/crates/fullmag-authoring/src/material_requirements.rs
+@@ -42,20 +42,27 @@ impl fmt::Display for SceneSolveMaterialError {
+ 
+ impl std::error::Error for SceneSolveMaterialError {}
+ 
+ #[derive(Debug, Clone, Copy)]
+ pub struct ResolvedSceneSolveMaterial<'a> {
+     pub asset: &'a SceneMaterialAsset,
+     pub exchange_stiffness: f64,
+     pub saturation_magnetisation: f64,
+ }
+ 
++pub fn scene_solve_objects(scene: &SceneDocument) -> impl Iterator<Item = &SceneObject> {
++    scene
++        .objects
++        .iter()
++        .filter(|object| object.role == "magnet")
++}
++
+ pub fn resolve_scene_object_solve_material<'a>(
+     scene: &'a SceneDocument,
+     object: &SceneObject,
+ ) -> Result<ResolvedSceneSolveMaterial<'a>, SceneSolveMaterialError> {
+     let material = scene
+         .materials
+         .iter()
+         .find(|candidate| candidate.id == object.material_ref)
+         .ok_or_else(|| SceneSolveMaterialError::MissingMaterial {
+             material_id: object.material_ref.clone(),

@@ -345,6 +345,31 @@ source-layout and FEM physics-validation failures.
   `carrier_fingerprint`. Nadal nie jest to świeży managed runtime ani dowód
   browser/WebGL z aktywną sesją.
 
+## Plan: Scratch simulation authoring (2026-08-23)
+
+- Worktree: `D:\git\fullmag\worktrees\scratch-authoring-ui`
+- Branch: `codex/scratch-authoring-ui`
+- Source plan: `docs/superpowers/plans/2026-08-23-scratch-simulation-authoring.md`
+- Plan commits: `b5454c822`, `ae2e800cc`
+
+| Task | Status | Implementer | Review |
+|---:|---|---|---|
+| 1 | complete (`ccf27947e..1e7805a08`) | `scratch_task1_impl` | spec clean; quality approved after three fix waves |
+| 2 | complete (`b7588f8a6..cad851bf2`) | `scratch_task2_impl` | spec clean; quality approved after one fix wave; full typecheck retains 6 baseline errors outside task |
+| 3 | complete (`1d16fdecf..2d7ffcd43`) | `scratch_task3_impl` + `scratch_task3_fix` | approved after two fix waves; typed session list, distinct loading/error/no-session, canonical invalidation and real AppMenu/EmptyWorkspace/Ctrl+N integration verified; 50/50 Task 3 regression, independent 25/25 |
+| 4 | complete (`3eb5cf186`, `48f9915bc`, `2f16f09f2`, `28fda14de`, `e7d6fcda9`, `3b9fa3919`) | `scratch_task4_impl` | definitively approved after five review waves; canonical readiness/material/object set, production Run providers, bounded invalidation and final ACK revisions verified |
+| 5 | complete (`1f2674a6d`, `f2762e998`, `05475556b`) | `scratch_task5_impl` | approved after two review waves; revision-safe primitive draft, real DOM conflict recovery and overlay isolation/lifecycle verified; browser/WebGL deferred only to mandatory Task 15 gate |
+| 6 | complete (`30b65e027`, `4df823171`, `9f3c346f8`) | `scratch_task6_impl` | approved after two review waves; mounted KernelContext Move flow, complete pointer lifecycle and stale activation/session cleanup verified; browser/WebGL deferred only to Task 15 |
+| 7 | complete (`0486448be`) | `scratch_task7_fix` | approved: real KernelContext/resource harness 12/12, targeted ESLint clean, TSC no Task7 errors |
+| 8 | pending | — | — |
+| 9 | pending | — | — |
+| 10 | pending | — | — |
+| 11 | pending | — | — |
+| 12 | pending | — | — |
+| 13 | pending | — | — |
+| 14 | pending | — | — |
+| 15 | pending | — | — |
+
 ## Plan: produkcyjny redesign mapy pola 2D (2026-08-18)
 
 - Worktree/branch: `/home/kkingstoun/git/fullmag/fullmag`, `master`.

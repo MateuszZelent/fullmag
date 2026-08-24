@@ -56,6 +56,23 @@ pub fn scene_solve_objects(scene: &SceneDocument) -> impl Iterator<Item = &Scene
         .filter(|object| object.role == "magnet")
 }
 
+/// Returns whether the scene still lacks a material or initial magnetization
+/// required to build an executable solver model.
+pub fn scene_document_has_unresolved_solve_prerequisites(scene: &SceneDocument) -> bool {
+    let magnetization_ids = scene
+        .magnetization_assets
+        .iter()
+        .map(|asset| asset.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    scene_solve_objects(scene).any(|object| {
+        resolve_scene_object_solve_material(scene, object).is_err()
+            || !object
+                .magnetization_ref
+                .as_deref()
+                .is_some_and(|reference| magnetization_ids.contains(reference))
+    })
+}
+
 pub fn resolve_scene_object_solve_material<'a>(
     scene: &'a SceneDocument,
     object: &SceneObject,

@@ -12,7 +12,8 @@ use axum::{
 use base64::Engine;
 use fullmag_authoring::{
     normalize_scene_document_magnetization_assets, normalize_scene_document_study_pipeline_labels,
-    validate_scene_document, MagnetizationAsset, SceneDocument,
+    scene_document_has_unresolved_solve_prerequisites, validate_scene_document_for_authoring,
+    MagnetizationAsset, SceneDocument,
 };
 use fullmag_ir::{TextureMappingIR, TextureProjectionMode, TextureTransform3DIR};
 use fullmag_plan::{sample_preset_texture_versioned, TextureSamplePoint};
@@ -3262,7 +3263,7 @@ pub(crate) async fn commit_current_live_scene_document(
 ) -> Result<SceneDocument, ApiError> {
     normalize_scene_document_magnetization_assets(&mut scene_document);
     normalize_scene_document_study_pipeline_labels(&mut scene_document);
-    validate_scene_document(&scene_document)
+    validate_scene_document_for_authoring(&scene_document)
         .map_err(|error| ApiError::bad_request(error.message))?;
     let preset_texture_count = scene_document
         .magnetization_assets
@@ -3330,7 +3331,18 @@ pub(crate) async fn commit_current_live_scene_document(
         scene_document.version = "scene.v2".to_string();
         scene_document.revision = next_revision;
         let builder_state = match scene_document_builder_projection(&scene_document) {
-            Ok(state) => state,
+            Ok(state) => Some(state),
+            Err(err) if scene_document_has_unresolved_solve_prerequisites(&scene_document) => {
+                info!(
+                    target: "fullmag_api::scene_sync",
+                    direction = "pending",
+                    revision = scene_document.revision,
+                    summary = %scene_magnetization_summary(&scene_document),
+                    error = %err.message,
+                    "frontend scene update stored before solve prerequisites are complete"
+                );
+                None
+            }
             Err(err) => {
                 info!(
                     target: "fullmag_api::scene_sync",
@@ -3343,7 +3355,7 @@ pub(crate) async fn commit_current_live_scene_document(
                 return Err(err);
             }
         };
-        snapshot.builder_adapter = Some(builder_state);
+        snapshot.builder_adapter = builder_state;
         let next_mesh_signature = scene_mesh_signature(&scene_document);
         snapshot.scene_document = Some(scene_document.clone());
         snapshot.region_realization_revisions =

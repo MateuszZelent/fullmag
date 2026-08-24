@@ -1,0 +1,1384 @@
+# Review package: 28fda14de..e7d6fcda9
+
+## Commits
+e7d6fcda9 fix(control-room): honor final authoring ACK revisions
+
+## Files changed
+ apps/control-room/src/kernel/api/apiTypes.ts       |   1 +
+ .../src/kernel/api/generated/openapi-v2-types.ts   |   4 +
+ .../src/kernel/api/generated/openapi-v2.json       |  16 +-
+ .../authoringMutationInvalidation.test.ts          |  75 ++-----
+ .../authoring/authoringMutationInvalidation.ts     |  11 ++
+ .../magnetization-texture/commands.test.ts         |  49 ++++-
+ .../authoring/magnetization-texture/commands.ts    |  29 ++-
+ .../kernel/resources/geometryLifecycleResources.ts |   1 +
+ .../studyRuntimeResources.provider.test.tsx        | 218 ++++++++++++++++++++-
+ .../panels/ObjectMagneticTexturePanel.tsx          |  15 +-
+ .../inspector/panels/ObjectMaterialPanel.tsx       |  47 ++---
+ .../panels/ObjectMaterialPanelModel.test.ts        |   1 +
+ .../panels/PhysicsInteractionPanelModel.ts         |   1 +
+ .../panels/region/ObjectRegionTexturePanel.tsx     |  15 +-
+ .../src/router_v2/handlers/model/authoring.rs      |   8 +
+ crates/fullmag-api/src/router_v2/tests.rs          |   1 +
+ crates/fullmag-api/src/schemas/authoring.rs        |   2 +
+ 17 files changed, 360 insertions(+), 134 deletions(-)
+
+## Diff
+diff --git a/apps/control-room/src/kernel/api/apiTypes.ts b/apps/control-room/src/kernel/api/apiTypes.ts
+index bf39f894a..a6eeea316 100644
+--- a/apps/control-room/src/kernel/api/apiTypes.ts
++++ b/apps/control-room/src/kernel/api/apiTypes.ts
+@@ -556,20 +556,21 @@ export interface ObjectInteractionPatchRequest {
+   enabled?: boolean | null;
+   params?: JsonObject;
+   present?: boolean | null;
+ }
+ export interface ObjectInteractionResource {
+   enabled: boolean;
+   interaction_kind: ObjectInteractionKind | string;
+   object_id: string;
+   params: JsonObject;
+   present: boolean;
++  scene_revision: number;
+ }
+ export interface ObjectPatchRequest extends BaseAuthoringTransaction {
+   absorbing_boundary?: JsonObject | null;
+   geometry?: JsonObject | null;
+   magnetization_ref?: string | null;
+   material_ref?: string | null;
+   name?: string | null;
+   notes?: string | null;
+   region_name?: string | null;
+   transform?: JsonObject | null;
+diff --git a/apps/control-room/src/kernel/api/generated/openapi-v2-types.ts b/apps/control-room/src/kernel/api/generated/openapi-v2-types.ts
+index 5b2c2ce2c..64f9de54c 100644
+--- a/apps/control-room/src/kernel/api/generated/openapi-v2-types.ts
++++ b/apps/control-room/src/kernel/api/generated/openapi-v2-types.ts
+@@ -6648,20 +6648,22 @@ export interface components {
+             label?: string | null;
+             url?: string | null;
+         };
+         MaterialResource: {
+             id: string;
+             name: string;
+             properties: components["schemas"]["MaterialPropertiesResource"];
+             references?: components["schemas"]["MaterialReferenceResource"][];
+             /** Format: int64 */
+             region_coefficients_revision?: number | null;
++            /** Format: int64 */
++            scene_revision: number;
+         };
+         MeshActiveBuildResource: {
+             /** @description Current active build descriptor and progress metadata. */
+             active_build?: Record<string, never> | null;
+             /** @description Resolved target for the current build. Summary-level copies are transitional dashboard projections. */
+             effective_airbox_target?: Record<string, never> | null;
+             /** @description Resolved per-object targets for the current build. Summary-level copies are transitional dashboard projections. */
+             effective_per_object_targets?: Record<string, never> | null;
+             /** Format: int64 */
+             geometry_realization_revision?: number | null;
+@@ -7488,20 +7490,22 @@ export interface components {
+             enabled?: boolean | null;
+             params: Record<string, never>;
+             present?: boolean | null;
+         };
+         ObjectInteractionResource: {
+             enabled: boolean;
+             interaction_kind: string;
+             object_id: string;
+             params: Record<string, never>;
+             present: boolean;
++            /** Format: int64 */
++            scene_revision: number;
+         };
+         ObjectMagnetizationAverage: {
+             /** Format: double */
+             mx: number;
+             /** Format: double */
+             my: number;
+             /** Format: double */
+             mz: number;
+         };
+         ObjectMetricsResource: {
+diff --git a/apps/control-room/src/kernel/api/generated/openapi-v2.json b/apps/control-room/src/kernel/api/generated/openapi-v2.json
+index 6f9e5e4ae..e7067d864 100644
+--- a/apps/control-room/src/kernel/api/generated/openapi-v2.json
++++ b/apps/control-room/src/kernel/api/generated/openapi-v2.json
+@@ -12052,23 +12052,29 @@
+             },
+             "type": "array"
+           },
+           "region_coefficients_revision": {
+             "format": "int64",
+             "minimum": 0,
+             "type": [
+               "integer",
+               "null"
+             ]
++          },
++          "scene_revision": {
++            "format": "int64",
++            "minimum": 0,
++            "type": "integer"
+           }
+         },
+         "required": [
++          "scene_revision",
+           "id",
+           "name",
+           "properties"
+         ],
+         "type": "object"
+       },
+       "MeshActiveBuildResource": {
+         "properties": {
+           "active_build": {
+             "description": "Current active build descriptor and progress metadata.",
+@@ -15464,23 +15470,29 @@
+             "type": "string"
+           },
+           "object_id": {
+             "type": "string"
+           },
+           "params": {
+             "type": "object"
+           },
+           "present": {
+             "type": "boolean"
++          },
++          "scene_revision": {
++            "format": "int64",
++            "minimum": 0,
++            "type": "integer"
+           }
+         },
+         "required": [
++          "scene_revision",
+           "object_id",
+           "interaction_kind",
+           "present",
+           "enabled",
+           "params"
+         ],
+         "type": "object"
+       },
+       "ObjectMagnetizationAverage": {
+         "properties": {
+@@ -45320,22 +45332,22 @@
+     {
+       "description": "Session checkpoints, exports, imports, assets, and recovery",
+       "name": "persistence"
+     },
+     {
+       "description": "Runtime diagnostics, GPU telemetry, and engine logs",
+       "name": "diagnostics"
+     }
+   ],
+   "x-fullmag-build-identity": {
+-    "built_at_utc": "2026-08-23T14:21:27Z",
+-    "git_commit": "2d7ffcd43b226f0f401ea26d3354dc78e6b71eff",
++    "built_at_utc": "2026-08-23T17:02:17Z",
++    "git_commit": "28fda14dea3c02610fe58b648f34677bd88d3212",
+     "source_snapshot_sha256": "unknown",
+     "worktree_state": "dirty"
+   },
+   "x-fullmag-study-primitive-stage-kinds": [
+     "relax",
+     "run",
+     "eigenmodes",
+     "frequency_response",
+     "hysteresis",
+     "change_device",
+diff --git a/apps/control-room/src/kernel/authoring/authoringMutationInvalidation.test.ts b/apps/control-room/src/kernel/authoring/authoringMutationInvalidation.test.ts
+index 1d92b69a1..92e264eaf 100644
+--- a/apps/control-room/src/kernel/authoring/authoringMutationInvalidation.test.ts
++++ b/apps/control-room/src/kernel/authoring/authoringMutationInvalidation.test.ts
+@@ -1,35 +1,44 @@
+ import { readFileSync } from "node:fs";
+ 
+ import { describe, expect, it, vi } from "vitest";
+ 
+ import { MODEL_READINESS_PATH } from "@/kernel/api/apiPaths";
+-import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
+-import { buildRuntimeCommandControlResourceData } from "@/kernel/resources/studyRuntimeResources";
+ import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
+-import { STUDY_RUNTIME_COMMANDS } from "@/kernel/runtime/studyRuntimeCommandContributions";
+ 
+ import {
++  acknowledgedAuthoringSceneRevision,
+   AUTHORING_MUTATION_DEPENDENTS,
+   invalidateAuthoringMutationDependents,
+ } from "./authoringMutationInvalidation";
+ 
+ describe("authoring mutation readiness invalidation", () => {
++  it("accepts only a scene revision acknowledged by the final mutation", () => {
++    expect(
++      acknowledgedAuthoringSceneRevision({ revision: 7, scene_revision: 8 }),
++    ).toBe(8);
++    expect(acknowledgedAuthoringSceneRevision({ revision: 7 })).toBe(7);
++    expect(() => acknowledgedAuthoringSceneRevision({})).toThrow(
++      "Authoring mutation ACK omitted the scene revision.",
++    );
++  });
++
+   it.each([
+     "../../modules/inspector/panels/ObjectMaterialPanel.tsx",
+     "../../modules/inspector/panels/ObjectMagneticTexturePanel.tsx",
+     "../../modules/inspector/panels/region/ObjectRegionTexturePanel.tsx",
+     "./magnetization-texture/commands.ts",
+   ])("routes %s through the bounded dependent helper", (relativePath) => {
+     const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
+ 
+     expect(source).toContain("invalidateAuthoringMutationDependents");
++    expect(source).toContain("acknowledgedAuthoringSceneRevision");
+   });
+ 
+   it.each(["material", "magnetization"] as const)(
+     "invalidates readiness exactly once after a %s ACK without realtime",
+     (kind) => {
+       const invalidate = vi.fn();
+ 
+       invalidateAuthoringMutationDependents({ invalidate }, kind, 17);
+ 
+       expect(
+@@ -42,71 +51,11 @@ describe("authoring mutation readiness invalidation", () => {
+       ).toHaveLength(1);
+       expect(invalidate).toHaveBeenCalledTimes(
+         AUTHORING_MUTATION_DEPENDENTS[kind].length,
+       );
+       expect(new Set(AUTHORING_MUTATION_DEPENDENTS[kind]).size).toBe(
+         AUTHORING_MUTATION_DEPENDENTS[kind].length,
+       );
+     },
+   );
+ 
+-  it.each(["material", "magnetization"] as const)(
+-    "recovers Run after a no-realtime %s ACK refetches status and readiness",
+-    (kind) => {
+-      const revision = 18;
+-      const invalidate = vi.fn();
+-      const registry = new CommandRegistry();
+-      for (const command of STUDY_RUNTIME_COMMANDS) registry.register(command);
+-
+-      const contextAt = (statusSceneRevision: number) => ({
+-        api: {} as never,
+-        resourceData: buildRuntimeCommandControlResourceData({
+-          commandQueue: { commands: [] },
+-          geometryValidation: { diagnostics: [] },
+-          meshBuildCurrent: null,
+-          meshManifest: null,
+-          modelReadinessData: {
+-            blockers: [],
+-            capabilities: {} as never,
+-            checks: [],
+-            ready_to_export: true,
+-            ready_to_run: true,
+-            scene_revision: revision,
+-          },
+-          modelReadinessStatus: "ready",
+-          sessionStatus: { resources: { scene_revision: statusSceneRevision } },
+-          solverStatus: { runtime_state: "idle" },
+-          stageExecution: {
+-            active_stage_index: null,
+-            revision: revision,
+-            runtime_state: "idle",
+-            stages: [],
+-          },
+-        }),
+-        source: "test" as const,
+-      });
+-
+-      expect(registry.isEnabled("study.run", contextAt(revision - 1))).toBe(false);
+-      expect(
+-        registry.get("study.run")?.disabledReason?.(contextAt(revision - 1)),
+-      ).toBe("Model readiness is stale for the current scene.");
+-
+-      invalidateAuthoringMutationDependents({ invalidate }, kind, revision);
+-
+-      expect(
+-        invalidate.mock.calls.filter(
+-          ([resourceKey, invalidationRevision]) =>
+-            resourceKey === MODEL_READINESS_PATH && invalidationRevision === revision,
+-        ),
+-      ).toHaveLength(1);
+-      expect(
+-        invalidate.mock.calls.filter(
+-          ([resourceKey, invalidationRevision]) =>
+-            resourceKey === SESSION_STATUS_RESOURCE_KEY &&
+-            invalidationRevision === revision,
+-        ),
+-      ).toHaveLength(1);
+-      expect(registry.isEnabled("study.run", contextAt(revision))).toBe(true);
+-      expect(registry.get("study.run")?.disabledReason?.(contextAt(revision))).toBeNull();
+-    },
+-  );
+ });
+diff --git a/apps/control-room/src/kernel/authoring/authoringMutationInvalidation.ts b/apps/control-room/src/kernel/authoring/authoringMutationInvalidation.ts
+index b80ce0d2b..3ac2be653 100644
+--- a/apps/control-room/src/kernel/authoring/authoringMutationInvalidation.ts
++++ b/apps/control-room/src/kernel/authoring/authoringMutationInvalidation.ts
+@@ -27,20 +27,31 @@ export const AUTHORING_MUTATION_DEPENDENTS = {
+     MODEL_GEOMETRY_DIAGNOSTICS_PATH,
+     MODEL_READINESS_PATH,
+     SESSION_STATUS_RESOURCE_KEY,
+     MESHING_BUILDS_CURRENT_PATH,
+     MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+   ],
+ } as const;
+ 
+ type AuthoringMutationKind = keyof typeof AUTHORING_MUTATION_DEPENDENTS;
+ 
++export function acknowledgedAuthoringSceneRevision(response: {
++  revision?: unknown;
++  scene_revision?: unknown;
++}): number {
++  const revision = response.scene_revision ?? response.revision;
++  if (typeof revision !== "number" || !Number.isFinite(revision)) {
++    throw new Error("Authoring mutation ACK omitted the scene revision.");
++  }
++  return revision;
++}
++
+ export function invalidateAuthoringMutationDependents(
+   resources: {
+     invalidate(resourceKey: string, revision: ResourceRevision): void;
+   },
+   kind: AuthoringMutationKind,
+   revision: ResourceRevision,
+ ): void {
+   for (const resourceKey of AUTHORING_MUTATION_DEPENDENTS[kind]) {
+     resources.invalidate(resourceKey, revision);
+   }
+diff --git a/apps/control-room/src/kernel/authoring/magnetization-texture/commands.test.ts b/apps/control-room/src/kernel/authoring/magnetization-texture/commands.test.ts
+index 3f8392c72..8bb943d96 100644
+--- a/apps/control-room/src/kernel/authoring/magnetization-texture/commands.test.ts
++++ b/apps/control-room/src/kernel/authoring/magnetization-texture/commands.test.ts
+@@ -1,15 +1,16 @@
+ import { describe, expect, it, vi } from "vitest";
+ 
+ import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
+ import { MODEL_READINESS_PATH } from "@/kernel/api/apiPaths";
+ import type { CommandContext } from "@/kernel/commands/commandTypes";
++import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
+ 
+ import { MAGNETIZATION_TEXTURE_COMMANDS } from "./commands";
+ 
+ const uniformCommand = MAGNETIZATION_TEXTURE_COMMANDS.find(
+   (command) => command.id === "magnetization-texture.assign-uniform",
+ );
+ const activateLoadFileCommand = MAGNETIZATION_TEXTURE_COMMANDS.find(
+   (command) => command.id === "magnetization-texture.activate-load-file",
+ );
+ 
+@@ -69,22 +70,68 @@ describe("magnetization texture commands", () => {
+         base_revision: 5,
+       }),
+     );
+     expect(patchRegion).toHaveBeenCalledWith(
+       "region:body",
+       {
+         magnetization_ref: "mag:body:region:body:uniform",
+       },
+     );
+     expect(
+-      invalidate.mock.calls.filter(([resourceKey]) => resourceKey === MODEL_READINESS_PATH),
++      invalidate.mock.calls.filter(
++        ([resourceKey, revision]) =>
++          resourceKey === MODEL_READINESS_PATH && revision === 7,
++      ),
+     ).toHaveLength(1);
++    expect(
++      invalidate.mock.calls.filter(
++        ([resourceKey, revision]) =>
++          resourceKey === SESSION_STATUS_RESOURCE_KEY && revision === 7,
++      ),
++    ).toHaveLength(1);
++  });
++
++  it("invalidates from the final object assignment ACK", async () => {
++    const patchMagnetizationAsset = vi.fn(async () => ({
++      asset: { id: "mag:body:uniform" },
++      scene_revision: 6,
++    }));
++    const patchObject = vi.fn(async () => ({ revision: 7 }));
++    const invalidate = vi.fn();
++    const context = {
++      api: { model: { patchMagnetizationAsset, patchObject } },
++      resourceData: { [MODEL_SCENE_PATH]: { revision: 5 } },
++      resources: { invalidate },
++      selection: {
++        get: () => ({
++          kind: "object.magnetic-texture",
++          objectId: "body",
++          ref: {
++            kind: "object.magnetic-texture",
++            objectId: "body",
++            type: "scene-object",
++          },
++        }),
++      },
++      source: "test",
++    } as unknown as CommandContext;
++
++    await expect(uniformCommand?.run(context)).resolves.toMatchObject({
++      status: "completed",
++    });
++
++    expect(patchObject).toHaveBeenCalledWith("body", {
++      base_revision: 6,
++      magnetization_ref: "mag:body:uniform",
++    });
++    expect(invalidate).toHaveBeenCalledWith(MODEL_READINESS_PATH, 7);
++    expect(invalidate).toHaveBeenCalledWith(SESSION_STATUS_RESOURCE_KEY, 7);
+   });
+ 
+   it("disables assignment when no object or region target is selected", () => {
+     const context = {
+       selection: {
+         get: () => ({
+           kind: null,
+           label: null,
+           moduleSource: null,
+           nodeId: null,
+diff --git a/apps/control-room/src/kernel/authoring/magnetization-texture/commands.ts b/apps/control-room/src/kernel/authoring/magnetization-texture/commands.ts
+index e5ccf9c14..f071b245f 100644
+--- a/apps/control-room/src/kernel/authoring/magnetization-texture/commands.ts
++++ b/apps/control-room/src/kernel/authoring/magnetization-texture/commands.ts
+@@ -1,12 +1,15 @@
+ import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
+-import { invalidateAuthoringMutationDependents } from "@/kernel/authoring/authoringMutationInvalidation";
++import {
++  acknowledgedAuthoringSceneRevision,
++  invalidateAuthoringMutationDependents,
++} from "@/kernel/authoring/authoringMutationInvalidation";
+ import type { JsonObject } from "@/kernel/api/apiTypes";
+ import type {
+   CommandContext,
+   CommandContribution,
+   CommandResult,
+ } from "@/kernel/commands/commandTypes";
+ 
+ import {
+   magnetizationTextureAssetId,
+   presetMagnetizationAsset,
+@@ -75,35 +78,31 @@ async function assignPreset(
+     {
+       asset: presetMagnetizationAsset({
+         id: assetId,
+         presetKind,
+         presetParams,
+       }),
+       base_revision: sceneRevision(context),
+     },
+   );
+ 
+-  if (target.kind === "region") {
+-    await context.api.model.patchRegion(
+-      target.regionId,
+-      {
+-        magnetization_ref: assetId,
+-      },
+-    );
+-  } else {
+-    await context.api.model.patchObject(target.objectId, {
+-      base_revision: assetResponse.scene_revision,
+-      magnetization_ref: assetId,
+-    });
+-  }
++  const assignmentResponse =
++    target.kind === "region"
++      ? await context.api.model.patchRegion(target.regionId, {
++          magnetization_ref: assetId,
++        })
++      : await context.api.model.patchObject(target.objectId, {
++          base_revision: assetResponse.scene_revision,
++          magnetization_ref: assetId,
++        });
+ 
+-  const revision = assetResponse.scene_revision ?? Date.now();
++  const revision = acknowledgedAuthoringSceneRevision(assignmentResponse);
+   if (context.resources) {
+     invalidateAuthoringMutationDependents(
+       context.resources,
+       "magnetization",
+       revision,
+     );
+   }
+   return { status: "completed" };
+ }
+ 
+diff --git a/apps/control-room/src/kernel/resources/geometryLifecycleResources.ts b/apps/control-room/src/kernel/resources/geometryLifecycleResources.ts
+index 7f60e1693..ff79561b9 100644
+--- a/apps/control-room/src/kernel/resources/geometryLifecycleResources.ts
++++ b/apps/control-room/src/kernel/resources/geometryLifecycleResources.ts
+@@ -1705,20 +1705,21 @@ export function defaultObjectMeshPolicyResource(
+ function defaultObjectInteractionResource(
+   objectId: string,
+   interactionKind: ObjectInteractionKind,
+ ): ObjectInteractionResource {
+   return {
+     enabled: false,
+     interaction_kind: interactionKind,
+     object_id: objectId,
+     params: {},
+     present: false,
++    scene_revision: 0,
+   };
+ }
+ 
+ function resolveRevisionProperty(
+   data: unknown,
+   property: string,
+ ): ResourceRevision | null {
+   if (!data || typeof data !== "object" || !(property in data)) {
+     return null;
+   }
+diff --git a/apps/control-room/src/kernel/resources/studyRuntimeResources.provider.test.tsx b/apps/control-room/src/kernel/resources/studyRuntimeResources.provider.test.tsx
+index e2945dc7c..7bd6985a7 100644
+--- a/apps/control-room/src/kernel/resources/studyRuntimeResources.provider.test.tsx
++++ b/apps/control-room/src/kernel/resources/studyRuntimeResources.provider.test.tsx
+@@ -1,29 +1,77 @@
+ import { act } from "react";
+ import { createRoot } from "react-dom/client";
+ import { afterEach, describe, expect, it, vi } from "vitest";
+ 
+-import { MODEL_READINESS_PATH } from "@/kernel/api/apiPaths";
++import { MODEL_READINESS_PATH, MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
++import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
++import type { CommandContext } from "@/kernel/commands/commandTypes";
+ import { KernelContext } from "@/kernel/KernelContext";
+ import { EventBus } from "@/kernel/events/EventBus";
+ import type { KernelEventMap } from "@/kernel/events/eventTypes";
+ import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
+ import { DiagnosticRecorderController } from "@/kernel/performance/diagnostic-recorder/DiagnosticRecorderController";
+ import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
+ import { resetSharedResourceRuntimeStoreForTests } from "@/kernel/resources/ResourceRuntimeStore";
++import {
++  resetRealtimeCommunicationPolicyForTests,
++  updateRealtimeCommunicationPolicy,
++} from "@/kernel/realtime/communicationPolicy";
++import { STUDY_RUNTIME_COMMANDS } from "@/kernel/runtime/studyRuntimeCommandContributions";
++import { MAGNETIZATION_TEXTURE_COMMANDS } from "@/kernel/authoring/magnetization-texture/commands";
+ import type { KernelApi } from "@/kernel/types";
+ 
+-import { useRuntimeCommandControlResourceData } from "./studyRuntimeResources";
++import {
++  buildRuntimeCommandControlResourceData,
++  runtimeCommandControlSessionStatusEquals,
++  selectRuntimeCommandControlSessionStatus,
++  useModelReadinessResource,
++  useRuntimeCommandControlResourceData,
++} from "./studyRuntimeResources";
++import {
++  SESSION_STATUS_RESOURCE_KEY,
++  useSessionStatusSelector,
++} from "./useSessionStatus";
++
++function deferred<T>() {
++  let resolve!: (value: T) => void;
++  const promise = new Promise<T>((resolvePromise) => {
++    resolve = resolvePromise;
++  });
++  return { promise, resolve };
++}
++
++function statusAt(sceneRevision: number) {
++  return {
++    capabilities: { binary_fields: true },
++    domain: { discretization: "fdm" },
++    resources: { scene_revision: sceneRevision },
++    run: null,
++    session: { session_id: "scratch-session" },
++  };
++}
++
++function readinessAt(sceneRevision: number) {
++  return {
++    blockers: [],
++    capabilities: {},
++    checks: [],
++    ready_to_export: true,
++    ready_to_run: true,
++    scene_revision: sceneRevision,
++  };
++}
+ 
+ describe("production runtime command resource provider", () => {
+   afterEach(() => {
+     resetSharedResourceRuntimeStoreForTests();
++    resetRealtimeCommunicationPolicyForTests();
+   });
+ 
+   it("publishes server-owned model readiness without manual command resource injection", async () => {
+     const readiness = {
+       blockers: [],
+       capabilities: {
+         move: { available: true, reason: null },
+         rotate: { available: false, reason: "unsupported" },
+         scale: { available: false, reason: "unsupported" },
+       },
+@@ -71,18 +119,180 @@ describe("production runtime command resource provider", () => {
+     try {
+       await act(async () => {
+         root.render(
+           <KernelContext.Provider value={kernel}>
+             <Harness />
+           </KernelContext.Provider>,
+         );
+       });
+       await act(async () => {});
+ 
+-      expect(readinessLoad).toHaveBeenCalledTimes(1);
+-      expect(container.textContent).toBe("7");
++      await vi.waitFor(() => {
++        expect(readinessLoad).toHaveBeenCalledTimes(1);
++        expect(container.textContent).toBe("7");
++      });
++    } finally {
++      await act(async () => root.unmount());
++      dom.restore();
++    }
++  });
++
++  it("refetches status and readiness from the final preset ACK before Run recovers without realtime", async () => {
++    updateRealtimeCommunicationPolicy({ status_refresh_ms: 1 });
++    const finalRevision = 7;
++    const nextStatus = deferred<ReturnType<typeof statusAt>>();
++    const nextReadiness = deferred<ReturnType<typeof readinessAt>>();
++    const statusLoad = vi
++      .fn()
++      .mockResolvedValueOnce(statusAt(5))
++      .mockImplementationOnce(() => nextStatus.promise);
++    const readinessLoad = vi
++      .fn()
++      .mockResolvedValueOnce(readinessAt(5))
++      .mockImplementationOnce(() => nextReadiness.promise);
++    const patchMagnetizationAsset = vi.fn(async () => ({
++      asset: { id: "mag:body:region:body:uniform" },
++      scene_revision: 6,
++    }));
++    const patchRegion = vi.fn(async () => ({ revision: finalRevision }));
++    const bus = new EventBus<KernelEventMap>();
++    const resources = new ResourceInvalidationController(bus);
++    const invalidations: Array<{ resourceKey: string; revision: unknown }> = [];
++    bus.on("resource:invalidated", ({ resourceKey, revision }) => {
++      invalidations.push({ resourceKey, revision });
++    });
++    const api = {
++      model: {
++        geometry: {
++          validation: async () => ({ diagnostics: [], revision: finalRevision }),
++        },
++        patchMagnetizationAsset,
++        patchRegion,
++        readiness: readinessLoad,
++      },
++      sessions: { current: { status: statusLoad } },
++    };
++    const kernel = {
++      api,
++      bus,
++      diagnosticRecorder: new DiagnosticRecorderController({
++        config: { enabled: false },
++      }),
++      resources,
++    } as unknown as KernelApi;
++    const registry = new CommandRegistry();
++    for (const command of STUDY_RUNTIME_COMMANDS) registry.register(command);
++    const presetCommand = MAGNETIZATION_TEXTURE_COMMANDS.find(
++      (command) => command.id === "magnetization-texture.assign-uniform",
++    );
++    let latestResourceData: Readonly<Record<string, unknown>> = {};
++    const dom = installSimulationPreparationTestDom();
++    const container = dom.document.createElement("div");
++    dom.document.body.appendChild(container);
++    const root = createRoot(container as unknown as Element);
++
++    function Harness() {
++      const status = useSessionStatusSelector(
++        selectRuntimeCommandControlSessionStatus,
++        { isEqual: runtimeCommandControlSessionStatusEquals },
++      );
++      const readiness = useModelReadinessResource();
++      latestResourceData = buildRuntimeCommandControlResourceData({
++        commandQueue: { commands: [] },
++        geometryValidation: { diagnostics: [] },
++        meshBuildCurrent: null,
++        meshManifest: null,
++        modelReadinessData: readiness.data,
++        modelReadinessStatus: readiness.status,
++        sessionStatus: status,
++        solverStatus: { runtime_state: "idle" },
++        stageExecution: {
++          active_stage_index: null,
++          revision: finalRevision,
++          runtime_state: "idle",
++          stages: [],
++        },
++      });
++      const context = {
++        api: {} as never,
++        resourceData: latestResourceData,
++        source: "test" as const,
++      };
++      const reason = registry.get("study.run")?.disabledReason?.(context);
++      return <div>{registry.isEnabled("study.run", context) ? "enabled" : reason}</div>;
++    }
++
++    try {
++      await act(async () => {
++        root.render(
++          <KernelContext.Provider value={kernel}>
++            <Harness />
++          </KernelContext.Provider>,
++        );
++      });
++      await vi.waitFor(() => expect(container.textContent).toBe("enabled"));
++
++      const mutationContext = {
++        api,
++        resourceData: {
++          ...latestResourceData,
++          [MODEL_SCENE_PATH]: { revision: 5 },
++        },
++        resources,
++        selection: {
++          get: () => ({
++            kind: "object.region-magnetic-texture",
++            objectId: "body",
++            ref: {
++              kind: "object.region-magnetic-texture",
++              objectId: "body",
++              regionId: "region:body",
++              type: "scene-object",
++            },
++          }),
++        },
++        source: "test" as const,
++      } as unknown as CommandContext;
++      await act(async () => {
++        await presetCommand?.run(mutationContext);
++        await vi.waitFor(() => {
++          expect(statusLoad).toHaveBeenCalledTimes(2);
++          expect(readinessLoad).toHaveBeenCalledTimes(2);
++        });
++      });
++
++      await act(async () => {
++        nextReadiness.resolve(readinessAt(finalRevision));
++        await nextReadiness.promise;
++        await vi.waitFor(() =>
++          expect(container.textContent).toBe(
++            "Model readiness is stale for the current scene.",
++          ),
++        );
++      });
++
++      await act(async () => {
++        nextStatus.resolve(statusAt(finalRevision));
++        await nextStatus.promise;
++        await vi.waitFor(() => expect(container.textContent).toBe("enabled"));
++      });
++
++      expect(
++        invalidations.filter(
++          ({ resourceKey, revision }) =>
++            resourceKey === MODEL_READINESS_PATH && revision === finalRevision,
++        ),
++      ).toHaveLength(1);
++      expect(
++        invalidations.filter(
++          ({ resourceKey, revision }) =>
++            resourceKey === SESSION_STATUS_RESOURCE_KEY && revision === finalRevision,
++        ),
++      ).toHaveLength(1);
++      expect(patchMagnetizationAsset).toHaveBeenCalledTimes(1);
++      expect(patchRegion).toHaveBeenCalledTimes(1);
+     } finally {
+       await act(async () => root.unmount());
+       dom.restore();
+     }
+   });
+ });
+diff --git a/apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx b/apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx
+index 29b8e1268..b09bddc96 100644
+--- a/apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx
++++ b/apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx
+@@ -1,16 +1,19 @@
+ "use client";
+ 
+ import { useMemo, useState } from "react";
+ 
+ import type { RegionPatchRequest } from "@/kernel/api/apiTypes";
+-import { invalidateAuthoringMutationDependents } from "@/kernel/authoring/authoringMutationInvalidation";
++import {
++  acknowledgedAuthoringSceneRevision,
++  invalidateAuthoringMutationDependents,
++} from "@/kernel/authoring/authoringMutationInvalidation";
+ import { createCommandContext } from "@/kernel/commands/commandContext";
+ import { useKernel } from "@/kernel/KernelContext";
+ import {
+   useModelRegionsResource,
+   useSceneResource,
+ } from "@/kernel/resources/geometryLifecycleResources";
+ import {
+   buildMagnetizationAssetPatch as buildTextureAssetPatch,
+   buildMagnetizationAssignmentPatch as buildTextureAssignmentPatch,
+ } from "@/shared/domain/magnetization-texture/draftModel";
+@@ -772,24 +775,21 @@ export function ObjectMagneticTexturePanel({
+         asset.id,
+         assetResponse.scene_revision ?? model.baseRevision,
+       );
+       const response =
+         target.kind === "region"
+           ? await api.model.patchRegion(
+               target.regionId,
+               patch.payload as RegionPatchRequest,
+             )
+           : await api.model.patchObject(model.objectId, patch.payload);
+-      const revision =
+-        typeof response.revision === "number"
+-          ? response.revision
+-          : assetResponse.scene_revision ?? model.baseRevision ?? 0;
++      const revision = acknowledgedAuthoringSceneRevision(response);
+       invalidateTextureResources(revision);
+       const syncWarning = await syncAuthoringScriptBestEffort(api);
+       setDraftState({
+         baseKey: draftKey,
+         dirty: false,
+         draft: { ...draft, magnetizationRef: asset.id },
+         identityKey: draftIdentityKey,
+       });
+       setFeedback({
+         kind: "success",
+@@ -818,24 +818,21 @@ export function ObjectMagneticTexturePanel({
+     setPending(true);
+     try {
+       const patch = buildTextureAssignmentPatch(target, null, model.baseRevision);
+       const response =
+         target.kind === "region"
+           ? await api.model.patchRegion(
+               target.regionId,
+               patch.payload as RegionPatchRequest,
+             )
+           : await api.model.patchObject(model.objectId, patch.payload);
+-      const revision =
+-        typeof response.revision === "number"
+-          ? response.revision
+-          : model.baseRevision ?? 0;
++      const revision = acknowledgedAuthoringSceneRevision(response);
+       invalidateTextureResources(revision);
+       const syncWarning = await syncAuthoringScriptBestEffort(api);
+       setDraftState({
+         baseKey: draftKey,
+         dirty: false,
+         draft: { ...baseDraft, magnetizationRef: "" },
+         identityKey: draftIdentityKey,
+       });
+       setFeedback({
+         kind: "success",
+diff --git a/apps/control-room/src/modules/inspector/panels/ObjectMaterialPanel.tsx b/apps/control-room/src/modules/inspector/panels/ObjectMaterialPanel.tsx
+index 3f8967564..0d48369a0 100644
+--- a/apps/control-room/src/modules/inspector/panels/ObjectMaterialPanel.tsx
++++ b/apps/control-room/src/modules/inspector/panels/ObjectMaterialPanel.tsx
+@@ -1,15 +1,18 @@
+ "use client";
+ 
+ import { useCallback, useMemo, useState } from "react";
+ 
+-import { invalidateAuthoringMutationDependents } from "@/kernel/authoring/authoringMutationInvalidation";
++import {
++  acknowledgedAuthoringSceneRevision,
++  invalidateAuthoringMutationDependents,
++} from "@/kernel/authoring/authoringMutationInvalidation";
+ import { useKernel } from "@/kernel/KernelContext";
+ import {
+   resolveMaterialResourceKey,
+   resolveObjectInteractionResourceKey,
+   useMaterialResource,
+   useObjectInteractionResource,
+   useSceneResource,
+ } from "@/kernel/resources/geometryLifecycleResources";
+ import { Button } from "@/shared/ui/Button";
+ 
+@@ -65,39 +68,20 @@ type Feedback =
+   | {
+       kind: "error" | "success";
+       message: string;
+     }
+   | null;
+ 
+ function errorMessage(error: unknown): string {
+   return error instanceof Error ? error.message : String(error);
+ }
+ 
+-function nextLocalRevision(
+-  ...revisions: Array<number | string | null | undefined>
+-): number {
+-  const numericRevisions = revisions.filter(
+-    (revision): revision is number =>
+-      typeof revision === "number" && Number.isFinite(revision),
+-  );
+-  return numericRevisions.length > 0 ? Math.max(...numericRevisions) + 1 : 0;
+-}
+-
+-function resolveMutationRevision(
+-  value: unknown,
+-  ...fallbacks: Array<number | string | null | undefined>
+-): number {
+-  return typeof value === "number" && Number.isFinite(value)
+-    ? value
+-    : nextLocalRevision(...fallbacks);
+-}
+-
+ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]) {
+   const { api, resources } = useKernel();
+   const scene = useSceneResource();
+   const object = resolveGeometryObjectDraft(selection, scene.data);
+   const materialId = normalizeMaterialRef(object.material);
+   const material = useMaterialResource(materialId);
+   const anisotropyInteraction = useObjectInteractionResource(
+     object.objectId || null,
+     "uniaxial_anisotropy",
+   );
+@@ -184,25 +168,29 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
+     }
+     const axisX = Number(anisotropyDraft.axisX);
+     const axisY = Number(anisotropyDraft.axisY);
+     const axisZ = Number(anisotropyDraft.axisZ);
+     if (!Number.isFinite(axisX) || !Number.isFinite(axisY) || !Number.isFinite(axisZ)) {
+       setFeedback({ kind: "error", message: "Anisotropy axis components must be finite numbers." });
+       return false;
+     }
+     setPending(true);
+     try {
+-      await api.model.patchObjectInteraction(object.objectId, "uniaxial_anisotropy", {
+-        present: anisotropyDraft.present,
+-        params: { ku1, axis: [axisX, axisY, axisZ] },
+-      });
+-      const revision = nextLocalRevision(object.baseRevision);
++      const response = await api.model.patchObjectInteraction(
++        object.objectId,
++        "uniaxial_anisotropy",
++        {
++          present: anisotropyDraft.present,
++          params: { ku1, axis: [axisX, axisY, axisZ] },
++        },
++      );
++      const revision = acknowledgedAuthoringSceneRevision(response);
+       resources.invalidate(
+         resolveObjectInteractionResourceKey(object.objectId, "uniaxial_anisotropy"),
+         revision,
+       );
+       invalidateMagneticParameterResources(revision);
+       setFeedback({ kind: "success", message: "Uniaxial anisotropy updated." });
+       return true;
+     } catch (error) {
+       setFeedback({ kind: "error", message: errorMessage(error) });
+       return false;
+@@ -229,24 +217,21 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
+       setFeedback({ kind: "error", message: "No committed scene object." });
+       return false;
+     }
+ 
+     setPending(true);
+     try {
+       const sceneResponse = await api.model.patchObject(
+         object.objectId,
+         buildMaterialAssignmentPatch(draft, object.baseRevision),
+       );
+-      const revision = resolveMutationRevision(
+-        sceneResponse.revision,
+-        object.baseRevision,
+-      );
++      const revision = acknowledgedAuthoringSceneRevision(sceneResponse);
+       invalidateMagneticParameterResources(revision);
+       setFeedback({
+         kind: "success",
+         message: "Object material assignment updated.",
+       });
+       return true;
+     } catch (error) {
+       setFeedback({ kind: "error", message: errorMessage(error) });
+       return false;
+     } finally {
+@@ -271,22 +256,22 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
+     }
+ 
+     const result = buildMaterialParametersPatch(draft);
+     if ("error" in result) {
+       setFeedback({ kind: "error", message: result.error });
+       return false;
+     }
+ 
+     setPending(true);
+     try {
+-      await api.model.patchMaterial(materialId, result.patch);
+-      const revision = nextLocalRevision(material.revision, object.baseRevision);
++      const response = await api.model.patchMaterial(materialId, result.patch);
++      const revision = acknowledgedAuthoringSceneRevision(response);
+       resources.invalidate(resolveMaterialResourceKey(materialId), revision);
+       invalidateMagneticParameterResources(revision);
+       setFeedback({
+         kind: "success",
+         message: "Magnetic parameters updated.",
+       });
+       return true;
+     } catch (error) {
+       setFeedback({ kind: "error", message: errorMessage(error) });
+       return false;
+diff --git a/apps/control-room/src/modules/inspector/panels/ObjectMaterialPanelModel.test.ts b/apps/control-room/src/modules/inspector/panels/ObjectMaterialPanelModel.test.ts
+index bb674b4e0..9cdb66ce2 100644
+--- a/apps/control-room/src/modules/inspector/panels/ObjectMaterialPanelModel.test.ts
++++ b/apps/control-room/src/modules/inspector/panels/ObjectMaterialPanelModel.test.ts
+@@ -45,20 +45,21 @@ describe("ObjectMaterialPanelModel", () => {
+     const resource = {
+       id: "mat-1",
+       name: "Material 1",
+       properties: {
+         Aex: 1e-11,
+         Dind: null,
+         Dbulk: null,
+         Ms: 800000,
+         alpha: 0.02,
+       },
++      scene_revision: 12,
+     };
+ 
+     const draft = magneticParametersDraftFromResource("mat-1", resource);
+     expect(draft).toEqual({
+       aex: "1e-11",
+       alpha: "0.02",
+       dind: "",
+       dbulk: "",
+       materialName: "Material 1",
+       materialRef: "mat-1",
+diff --git a/apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanelModel.ts b/apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanelModel.ts
+index 4ab907a65..ea05c6a01 100644
+--- a/apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanelModel.ts
++++ b/apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanelModel.ts
+@@ -50,20 +50,21 @@ export function isDeferredInteraction(id: PhysicsInteractionId): boolean {
+ export function defaultObjectInteractionResource(
+   objectId: string,
+   interactionKind: ObjectInteractionKind,
+ ): ObjectInteractionResource {
+   return {
+     enabled: false,
+     interaction_kind: interactionKind,
+     object_id: objectId,
+     params: {},
+     present: false,
++    scene_revision: 0,
+   };
+ }
+ 
+ export function draftFromInteractionResource(
+   interactionKind: ObjectInteractionKind,
+   resource: ObjectInteractionResource,
+ ): PhysicsInteractionDraft {
+   return draftFromObjectInteractionResource(
+     interactionKind,
+     resource.params,
+diff --git a/apps/control-room/src/modules/inspector/panels/region/ObjectRegionTexturePanel.tsx b/apps/control-room/src/modules/inspector/panels/region/ObjectRegionTexturePanel.tsx
+index 3beb9ab13..4057f9f46 100644
+--- a/apps/control-room/src/modules/inspector/panels/region/ObjectRegionTexturePanel.tsx
++++ b/apps/control-room/src/modules/inspector/panels/region/ObjectRegionTexturePanel.tsx
+@@ -1,14 +1,17 @@
+ "use client";
+ 
+ import { useMemo, useState } from "react";
+-import { invalidateAuthoringMutationDependents } from "@/kernel/authoring/authoringMutationInvalidation";
++import {
++  acknowledgedAuthoringSceneRevision,
++  invalidateAuthoringMutationDependents,
++} from "@/kernel/authoring/authoringMutationInvalidation";
+ import { createCommandContext } from "@/kernel/commands/commandContext";
+ import { useKernel } from "@/kernel/KernelContext";
+ import {
+   useModelRegionsResource,
+   useSceneResource,
+ } from "@/kernel/resources/geometryLifecycleResources";
+ import {
+   buildMagnetizationAssetPatch as buildTextureAssetPatch,
+   buildRegionTextureOverridePatch,
+ } from "@/shared/domain/magnetization-texture/draftModel";
+@@ -130,24 +133,21 @@ export function ObjectRegionTexturePanel({
+       const assetResponse = await api.model.patchMagnetizationAsset(
+         asset.id,
+         buildTextureAssetPatch(asset, model.baseRevision),
+       );
+       const response = await api.model.patchObjectRegionResource(
+         target.objectId,
+         target.regionId,
+         buildRegionTextureOverridePatch(asset),
+         { baseRevision: assetResponse.scene_revision ?? model.baseRevision ?? undefined },
+       );
+-      const revision =
+-        typeof response.revision === "number"
+-          ? response.revision
+-          : assetResponse.scene_revision ?? model.baseRevision ?? 0;
++      const revision = acknowledgedAuthoringSceneRevision(response);
+       invalidateTextureResources(revision);
+       const syncWarning = await syncAuthoringScriptBestEffort(api);
+       setDraftState({
+         baseKey: draftKey,
+         dirty: false,
+         draft: { ...draft, magnetizationRef: asset.id },
+         identityKey: draftIdentityKey,
+       });
+       setFeedback({
+         kind: "success",
+@@ -169,24 +169,21 @@ export function ObjectRegionTexturePanel({
+     }
+     const target = { kind: "region" as const, objectId: model.objectId, regionId: model.regionId! };
+     setPending(true);
+     try {
+       const response = await api.model.patchObjectRegionResource(
+         target.objectId,
+         target.regionId,
+         buildRegionTextureOverridePatch(null),
+         { baseRevision: model.baseRevision ?? undefined },
+       );
+-      const revision =
+-        typeof response.revision === "number"
+-          ? response.revision
+-          : model.baseRevision ?? 0;
++      const revision = acknowledgedAuthoringSceneRevision(response);
+       invalidateTextureResources(revision);
+       const syncWarning = await syncAuthoringScriptBestEffort(api);
+       setDraftState({
+         baseKey: draftKey,
+         dirty: false,
+         draft: { ...baseDraft, magnetizationRef: "" },
+         identityKey: draftIdentityKey,
+       });
+       setFeedback({
+         kind: "success",
+diff --git a/crates/fullmag-api/src/router_v2/handlers/model/authoring.rs b/crates/fullmag-api/src/router_v2/handlers/model/authoring.rs
+index fb4f18665..ff46d3fbe 100644
+--- a/crates/fullmag-api/src/router_v2/handlers/model/authoring.rs
++++ b/crates/fullmag-api/src/router_v2/handlers/model/authoring.rs
+@@ -2775,20 +2775,21 @@ pub async fn get_authoring_material(
+     let material = scene
+         .materials
+         .iter()
+         .find(|entry| entry.id == material_id)
+         .ok_or_else(|| ApiError::not_found(format!("material not found: {material_id}")))?;
+     let region_coefficients_revision = current_region_realization_revisions(&state)
+         .await
+         .coefficients;
+     Ok(Json(build_material_resource(
+         material,
++        scene.revision,
+         region_coefficients_revision,
+     )))
+ }
+ 
+ #[utoipa::path(
+     patch,
+     path = "/v2/sessions/current/model/materials/{material_id}",
+     params(
+         ("material_id" = String, Path, description = "Canonical material asset id")
+     ),
+@@ -2820,20 +2821,21 @@ pub async fn patch_authoring_material(
+     let material = committed
+         .materials
+         .iter()
+         .find(|entry| entry.id == material_id)
+         .ok_or_else(|| ApiError::internal(format!("committed material missing: {material_id}")))?;
+     let region_coefficients_revision = current_region_realization_revisions(&state)
+         .await
+         .coefficients;
+     Ok(Json(build_material_resource(
+         material,
++        committed.revision,
+         region_coefficients_revision,
+     )))
+ }
+ 
+ #[utoipa::path(
+     get,
+     path = "/v2/sessions/current/model/magnetization-assets/{asset_id}",
+     params(
+         ("asset_id" = String, Path, description = "Canonical magnetization asset id")
+     ),
+@@ -2933,20 +2935,21 @@ pub async fn get_authoring_object_interaction(
+     let interaction = find_interaction(object, kind);
+     if interaction.is_none() && !is_required_interaction(kind) {
+         return Err(ApiError::not_found(format!(
+             "interaction not found: {interaction_kind}"
+         )));
+     }
+     Ok(Json(build_object_interaction_resource(
+         object,
+         kind,
+         interaction,
++        scene.revision,
+     )))
+ }
+ 
+ #[utoipa::path(
+     patch,
+     path = "/v2/sessions/current/model/objects/{object_id}/interactions/{interaction_kind}",
+     params(
+         ("object_id" = String, Path, description = "Canonical scene object id"),
+         ("interaction_kind" = String, Path, description = "Interaction kind: exchange | demag | interfacial_dmi | uniaxial_anisotropy")
+     ),
+@@ -2979,20 +2982,21 @@ pub async fn patch_authoring_object_interaction(
+     let object = committed
+         .objects
+         .iter()
+         .find(|entry| entry.id == object_id)
+         .ok_or_else(|| ApiError::internal(format!("committed object missing: {object_id}")))?;
+     let interaction = find_interaction(object, kind);
+     Ok(Json(build_object_interaction_resource(
+         object,
+         kind,
+         interaction,
++        committed.revision,
+     )))
+ }
+ 
+ #[utoipa::path(
+     post,
+     path = "/v2/sessions/current/model/transactions",
+     request_body = AuthoringTransactionRequest,
+     responses(
+         (status = 200, description = "Committed authoring transaction", body = AuthoringTransactionResponse),
+         (status = 400, description = "Invalid authoring transaction payload"),
+@@ -4817,23 +4821,25 @@ async fn current_region_realization_revisions(
+         .current_live_state
+         .read()
+         .await
+         .as_ref()
+         .map(|snapshot| snapshot.region_realization_revisions)
+         .unwrap_or_default()
+ }
+ 
+ fn build_material_resource(
+     material: &fullmag_authoring::SceneMaterialAsset,
++    scene_revision: u64,
+     region_coefficients_revision: u64,
+ ) -> MaterialResource {
+     MaterialResource {
++        scene_revision,
+         region_coefficients_revision: Some(region_coefficients_revision),
+         id: material.id.clone(),
+         name: material.name.clone(),
+         properties: MaterialPropertiesResource {
+             ms: material.properties.ms,
+             aex: material.properties.aex,
+             alpha: material.properties.alpha,
+             dind: material.properties.dind,
+             dbulk: material.properties.dbulk,
+         },
+@@ -4972,33 +4978,35 @@ fn find_interaction(
+     object: &SceneObject,
+     kind: ScriptBuilderMagneticInteractionKind,
+ ) -> Option<&ScriptBuilderMagneticInteractionEntry> {
+     object.physics_stack.iter().find(|entry| entry.kind == kind)
+ }
+ 
+ fn build_object_interaction_resource(
+     object: &SceneObject,
+     kind: ScriptBuilderMagneticInteractionKind,
+     interaction: Option<&ScriptBuilderMagneticInteractionEntry>,
++    scene_revision: u64,
+ ) -> ObjectInteractionResource {
+     let (present, enabled, params) = match interaction {
+         Some(entry) => (
+             true,
+             entry.enabled,
+             entry
+                 .params
+                 .clone()
+                 .unwrap_or_else(|| Value::Object(Default::default())),
+         ),
+         None => (false, false, Value::Object(Default::default())),
+     };
+     ObjectInteractionResource {
++        scene_revision,
+         object_id: object.id.clone(),
+         interaction_kind: interaction_kind_str(kind).to_string(),
+         present,
+         enabled,
+         params,
+     }
+ }
+ 
+ fn apply_interaction_patch(
+     object: &mut SceneObject,
+diff --git a/crates/fullmag-api/src/router_v2/tests.rs b/crates/fullmag-api/src/router_v2/tests.rs
+index 9573a54c7..ec5bf3157 100644
+--- a/crates/fullmag-api/src/router_v2/tests.rs
++++ b/crates/fullmag-api/src/router_v2/tests.rs
+@@ -19834,20 +19834,21 @@ async fn authoring_material_patch_commits_requested_material() {
+     assert_eq!(json["name"], "Body Material");
+     assert!(json["properties"]["Ms"].is_null());
+     assert_eq!(json["properties"]["Aex"], 15e-12);
+     assert_eq!(json["properties"]["alpha"], 0.05);
+ 
+     let guard = state.current_live_state.read().await;
+     let committed = guard
+         .as_ref()
+         .and_then(|snapshot| snapshot.scene_document.as_ref())
+         .expect("scene document committed");
++    assert_eq!(json["scene_revision"], committed.revision);
+     let material = committed
+         .materials
+         .iter()
+         .find(|entry| entry.id == "mat:body")
+         .expect("mat:body material");
+     assert_eq!(material.name, "Body Material");
+     assert_eq!(material.properties.ms, None);
+     assert_eq!(material.properties.aex, Some(15e-12));
+     assert_eq!(material.properties.alpha, 0.05);
+ }
+diff --git a/crates/fullmag-api/src/schemas/authoring.rs b/crates/fullmag-api/src/schemas/authoring.rs
+index d12599c10..358555f0d 100644
+--- a/crates/fullmag-api/src/schemas/authoring.rs
++++ b/crates/fullmag-api/src/schemas/authoring.rs
+@@ -960,20 +960,21 @@ pub struct MaterialReferenceResource {
+     #[serde(default, skip_serializing_if = "Option::is_none")]
+     pub label: Option<String>,
+     #[serde(default, skip_serializing_if = "Option::is_none")]
+     pub url: Option<String>,
+     #[serde(default, skip_serializing_if = "Option::is_none")]
+     pub citation: Option<String>,
+ }
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+ pub struct MaterialResource {
++    pub scene_revision: u64,
+     pub region_coefficients_revision: Option<u64>,
+     pub id: String,
+     pub name: String,
+     pub properties: MaterialPropertiesResource,
+     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+     pub references: Vec<MaterialReferenceResource>,
+ }
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+ pub struct MagnetizationAssetResource {
+@@ -1011,20 +1012,21 @@ pub struct MaterialPropertiesPatchRequest {
+ #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+ pub struct MaterialPatchRequest {
+     pub name: Option<String>,
+     pub properties: Option<MaterialPropertiesPatchRequest>,
+     #[serde(default, skip_serializing_if = "Option::is_none")]
+     pub references: Option<Vec<MaterialReferenceResource>>,
+ }
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+ pub struct ObjectInteractionResource {
++    pub scene_revision: u64,
+     pub object_id: String,
+     pub interaction_kind: String,
+     pub present: bool,
+     pub enabled: bool,
+     #[schema(value_type = Object)]
+     pub params: Value,
+ }
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+ pub struct ObjectInteractionPatchRequest {

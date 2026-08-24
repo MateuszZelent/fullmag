@@ -17028,6 +17028,73 @@ async fn planar_field_snapshot_is_stage_scoped_and_uses_persisted_values() {
 }
 
 #[tokio::test]
+async fn authoring_transactions_create_geometry_before_material_and_texture() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 12;
+    scene.objects.clear();
+    scene.materials.clear();
+    scene.magnetization_assets.clear();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/transactions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "create_object",
+                        "base_revision": 12,
+                        "object_id": "magnet-x",
+                        "name": "Magnet X",
+                        "geometry": {
+                            "geometry_kind": "Box",
+                            "geometry_params": { "size": [100e-9, 100e-9, 10e-9] }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = body_json(response).await;
+    assert_eq!(payload["transaction_kind"], "create_object");
+    assert_eq!(payload["committed_scene"]["objects"][0]["id"], "magnet-x");
+    assert_eq!(payload["committed_scene"]["objects"][0]["material_ref"], "");
+    assert!(payload["committed_scene"]["objects"][0]["magnetization_ref"].is_null());
+
+    let readiness = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/model/readiness")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readiness.status(), StatusCode::OK);
+    let readiness = body_json(readiness).await;
+    assert_eq!(readiness["ready_to_run"], false);
+    assert!(readiness["blockers"]
+        .as_array()
+        .is_some_and(|blockers| blockers.iter().any(|blocker| {
+            blocker
+                .as_str()
+                .is_some_and(|message| message.contains("missing material"))
+        })));
+}
+
+#[tokio::test]
 async fn authoring_transactions_create_transform_and_delete_objects() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();

@@ -1,0 +1,1481 @@
+# Review package: 9f3c346f8..a85ba0a87
+
+## Commits
+a85ba0a87 feat(authoring): create and assign materials
+
+## Files changed
+ .../src/kernel/layout/MaterialLibraryDialog.tsx    |  23 +-
+ .../ScratchAuthoringInspectorStability.test.tsx    | 268 ++++++++++++++++
+ .../inspector/panels/ObjectMaterialPanel.tsx       | 354 +++++++++++++++++++--
+ .../panels/ObjectMaterialPanelModel.test.ts        | 127 +++++++-
+ .../inspector/panels/ObjectMaterialPanelModel.ts   | 161 ++++++++++
+ 5 files changed, 896 insertions(+), 37 deletions(-)
+
+## Diff
+diff --git a/apps/control-room/src/kernel/layout/MaterialLibraryDialog.tsx b/apps/control-room/src/kernel/layout/MaterialLibraryDialog.tsx
+index 3294b4952..cc48d43f0 100644
+--- a/apps/control-room/src/kernel/layout/MaterialLibraryDialog.tsx
++++ b/apps/control-room/src/kernel/layout/MaterialLibraryDialog.tsx
+@@ -2,33 +2,34 @@
+ 
+ import { BookOpen, Plus, Save, Trash2, X } from "lucide-react";
+ import { useMemo, useState } from "react";
+ 
+ import type {
+   MaterialPatchRequest,
+   MaterialPropertiesResource,
+   MaterialReferenceResource,
+   SceneResource,
+ } from "@/kernel/api/apiTypes";
++import { invalidateAuthoringMutationDependents } from "@/kernel/authoring/authoringMutationInvalidation";
+ import { useKernel } from "@/kernel/KernelContext";
+ import {
+   resolveMaterialResourceKey,
+-  SCENE_RESOURCE_KEY,
+   useSceneResource,
+ } from "@/kernel/resources/geometryLifecycleResources";
+ import {
+   MATERIAL_LIBRARY_PRESETS,
+   materialNameToId,
+   materialPresetIdToSceneMaterialId,
+   type MaterialLibraryPreset,
+ } from "@/shared/domain/material/materialLibrary";
+ import { Button } from "@/shared/ui/Button";
++import { Input } from "@/shared/ui/Input";
+ import {
+   Dialog,
+   DialogClose,
+   DialogContent,
+   DialogDescription,
+   DialogHeader,
+   DialogTitle,
+ } from "@/shared/ui/Dialog";
+ 
+ interface MaterialLibraryDialogProps {
+@@ -230,21 +231,21 @@ export function MaterialLibraryDialog({
+   function updateDraft(patch: Partial<MaterialDraft>): void {
+     setDraft((current) => ({
+       ...current,
+       ...patch,
+       id: patch.name && !selectedMaterial ? materialNameToId(patch.name) : (patch.id ?? current.id),
+     }));
+     setFeedback(null);
+   }
+ 
+   function invalidateMaterialResources(revision: number, materialId: string): void {
+-    resources.invalidate(SCENE_RESOURCE_KEY, revision);
++    invalidateAuthoringMutationDependents(resources, "material", revision);
+     resources.invalidate(resolveMaterialResourceKey(materialId), revision);
+   }
+ 
+   async function saveDraft(): Promise<void> {
+     const result = materialPatchFromDraft(draft);
+     if ("error" in result) {
+       setFeedback({ kind: "error", message: result.error });
+       return;
+     }
+     const materialId = draft.id.trim();
+@@ -359,62 +360,62 @@ export function MaterialLibraryDialog({
+               {materials.length === 0 ? (
+                 <div className="fm-material-library__empty">No scene materials.</div>
+               ) : null}
+             </div>
+           </section>
+ 
+           <section className="fm-material-library__editor" aria-label="Material editor">
+             <div className="fm-material-library__grid">
+               <label>
+                 <span>Name</span>
+-                <input value={draft.name} onChange={(event) => updateDraft({ name: event.target.value })} />
++                <Input value={draft.name} onChange={(event) => updateDraft({ name: event.target.value })} />
+               </label>
+               <label>
+                 <span>Material ID</span>
+-                <input
++                <Input
+                   disabled={Boolean(selectedMaterial)}
+                   value={draft.id}
+                   onChange={(event) => updateDraft({ id: event.target.value })}
+                 />
+               </label>
+               <label>
+                 <span>Ms</span>
+-                <input inputMode="decimal" value={draft.Ms} onChange={(event) => updateDraft({ Ms: event.target.value })} />
++                <Input inputMode="decimal" value={draft.Ms} onChange={(event) => updateDraft({ Ms: event.target.value })} />
+                 <small>A/m</small>
+               </label>
+               <label>
+                 <span>Aex</span>
+-                <input inputMode="decimal" value={draft.Aex} onChange={(event) => updateDraft({ Aex: event.target.value })} />
++                <Input inputMode="decimal" value={draft.Aex} onChange={(event) => updateDraft({ Aex: event.target.value })} />
+                 <small>J/m</small>
+               </label>
+               <label>
+                 <span>alpha</span>
+-                <input inputMode="decimal" value={draft.alpha} onChange={(event) => updateDraft({ alpha: event.target.value })} />
++                <Input inputMode="decimal" value={draft.alpha} onChange={(event) => updateDraft({ alpha: event.target.value })} />
+                 <small>1</small>
+               </label>
+               <label>
+                 <span>Dind</span>
+-                <input inputMode="decimal" value={draft.Dind} onChange={(event) => updateDraft({ Dind: event.target.value })} />
++                <Input inputMode="decimal" value={draft.Dind} onChange={(event) => updateDraft({ Dind: event.target.value })} />
+                 <small>J/m²</small>
+               </label>
+               <label>
+                 <span>Dbulk</span>
+-                <input inputMode="decimal" value={draft.Dbulk} onChange={(event) => updateDraft({ Dbulk: event.target.value })} />
++                <Input inputMode="decimal" value={draft.Dbulk} onChange={(event) => updateDraft({ Dbulk: event.target.value })} />
+                 <small>J/m³</small>
+               </label>
+               <label>
+                 <span>Reference label</span>
+-                <input value={draft.referenceLabel} onChange={(event) => updateDraft({ referenceLabel: event.target.value })} />
++                <Input value={draft.referenceLabel} onChange={(event) => updateDraft({ referenceLabel: event.target.value })} />
+               </label>
+               <label className="fm-material-library__wide">
+                 <span>Literature URL</span>
+-                <input value={draft.referenceUrl} onChange={(event) => updateDraft({ referenceUrl: event.target.value })} />
++                <Input value={draft.referenceUrl} onChange={(event) => updateDraft({ referenceUrl: event.target.value })} />
+               </label>
+               <label className="fm-material-library__wide">
+                 <span>Citation</span>
+                 <textarea value={draft.citation} onChange={(event) => updateDraft({ citation: event.target.value })} />
+               </label>
+             </div>
+             <div className="fm-material-library__actions">
+               <Button disabled={pending} type="button" variant="primary" onClick={() => void saveDraft()}>
+                 <Save size={14} aria-hidden="true" />
+                 Save material
+diff --git a/apps/control-room/src/modules/inspector/ScratchAuthoringInspectorStability.test.tsx b/apps/control-room/src/modules/inspector/ScratchAuthoringInspectorStability.test.tsx
+new file mode 100644
+index 000000000..44a625947
+--- /dev/null
++++ b/apps/control-room/src/modules/inspector/ScratchAuthoringInspectorStability.test.tsx
+@@ -0,0 +1,268 @@
++import { act } from "react";
++import { beforeEach, describe, expect, it, vi } from "vitest";
++
++import { MODEL_READINESS_PATH, MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
++import {
++  findElement,
++  findElements,
++  installSimulationPreparationTestDom,
++  TestElement,
++  TestEvent,
++  type TestNode,
++} from "@/kernel/layout/simulationPreparationTestDom.test-support";
++import type { Selection } from "@/kernel/selection/selectionTypes";
++import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
++
++import { ObjectMaterialPanel } from "./panels/ObjectMaterialPanel";
++
++const mocks = vi.hoisted(() => ({
++  createMaterial: vi.fn(),
++  invalidate: vi.fn(),
++  patchObject: vi.fn(),
++  patchObjectInteraction: vi.fn(),
++  patchMaterial: vi.fn(),
++  publishScene: vi.fn(),
++  refetchScene: vi.fn(),
++  scene: {
++    data: {
++      materials: [] as unknown[],
++      objects: [{ id: "object-7", material_ref: null, name: "Free layer" }] as unknown[],
++      revision: 21,
++    },
++    error: null,
++    revision: 21,
++    status: "ready",
++  },
++}));
++
++vi.mock("@/kernel/KernelContext", () => ({
++  useKernel: () => ({
++    api: {
++      model: {
++        createMaterial: mocks.createMaterial,
++        patchMaterial: mocks.patchMaterial,
++        patchObject: mocks.patchObject,
++        patchObjectInteraction: mocks.patchObjectInteraction,
++      },
++    },
++    resources: { invalidate: mocks.invalidate },
++  }),
++}));
++
++vi.mock("@/kernel/resources/geometryLifecycleResources", async (importOriginal) => {
++  const original = await importOriginal<typeof import("@/kernel/resources/geometryLifecycleResources")>();
++  return {
++    ...original,
++    publishCommittedSceneResource: mocks.publishScene,
++    useMaterialResource: () => ({ data: null, error: null, revision: null, status: "ready" }),
++    useObjectInteractionResource: () => ({
++      data: { params: {}, present: false, scene_revision: 21 },
++      error: null,
++      revision: 21,
++      status: "ready",
++    }),
++    useSceneResource: () => ({ ...mocks.scene, refetch: mocks.refetchScene }),
++  };
++});
++
++const selection: Selection = {
++  kind: "object.magnetic-parameters",
++  label: "Free layer",
++  moduleSource: "inspector",
++  nodeId: "object:object-7:magnetic-parameters",
++  objectId: "object-7",
++  ref: null,
++};
++
++describe("scratch material Inspector stability", () => {
++  beforeEach(() => {
++    vi.clearAllMocks();
++    mocks.createMaterial.mockReset();
++    mocks.patchObject.mockReset();
++    mocks.scene.data = {
++      materials: [],
++      objects: [{ id: "object-7", material_ref: null, name: "Free layer" }],
++      revision: 21,
++    };
++    mocks.scene.revision = 21;
++    mocks.scene.status = "ready";
++  });
++
++  it("keeps the Object Inspector root, focus, scroll, and unrelated controls stable through both ACKs", async () => {
++    let resolveAssignment!: (value: { objects: unknown[]; revision: number }) => void;
++    mocks.createMaterial.mockResolvedValue({
++      committed_scene: {
++        materials: [{ id: "mat:cofeb", name: "CoFeB" }],
++        objects: mocks.scene.data.objects,
++        revision: 22,
++      },
++      scene_revision: 22,
++      transaction_kind: "create_material",
++    });
++    mocks.patchObject.mockImplementation(() => new Promise((resolve) => {
++      resolveAssignment = resolve;
++    }));
++    const dom = installSimulationPreparationTestDom();
++    const container = dom.document.createElement("div");
++    const { createRoot } = await import("react-dom/client");
++    const root = createRoot(container as unknown as Element);
++    let milestone = "initial render";
++    try {
++      await act(async () => root.render(<ObjectMaterialPanel selection={selection} />));
++      const panelRoot = container.querySelector(".fm-inspector-panel");
++      if (!panelRoot) throw new Error("Object Inspector root missing");
++      panelRoot.scrollTop = 73;
++      const nameInput = input(container, "New material name");
++      nameInput.focus();
++      milestone = "input edits";
++      await act(async () => {
++        changeInput(nameInput, "CoFeB");
++        changeInput(input(container, "New material ID"), "mat:cofeb");
++        changeInput(input(container, "New Ms"), "1.1e6");
++        changeInput(input(container, "New A"), "1.3e-11");
++        changeInput(input(container, "New Ku1"), "4e5");
++      });
++
++      milestone = "create ACK and assignment pending";
++      await act(async () => {
++        button(container, "Create and assign").click();
++        await Promise.resolve();
++      });
++
++      expect(container.querySelector(".fm-inspector-panel") === panelRoot).toBe(true);
++      expect(dom.document.activeElement === nameInput).toBe(true);
++      expect(panelRoot.scrollTop).toBe(73);
++      expect(button(container, "Create and assign").disabled).toBe(true);
++      expect(button(container, "Apply Assignment").disabled).toBe(false);
++      expect(button(container, "Apply Anisotropy").disabled).toBe(false);
++      expect(button(container, "Revert").disabled).toBe(false);
++      expect(mocks.publishScene).toHaveBeenCalledWith(
++        expect.anything(),
++        expect.objectContaining({ revision: 22 }),
++        22,
++        undefined,
++        false,
++      );
++
++      milestone = "assignment ACK";
++      await act(async () => resolveAssignment({
++        objects: [{ id: "object-7", material_ref: "mat:cofeb" }],
++        revision: 23,
++      }));
++
++      expect(container.querySelector(".fm-inspector-panel") === panelRoot).toBe(true);
++      expect(dom.document.activeElement === nameInput).toBe(true);
++      expect(panelRoot.scrollTop).toBe(73);
++      expect(container.textContent).toContain("Ku1 draft is ready; apply anisotropy separately.");
++      expect(mocks.createMaterial).toHaveBeenCalledOnce();
++      expect(mocks.patchObject).toHaveBeenCalledWith("object-7", {
++        base_revision: 22,
++        material_ref: "mat:cofeb",
++      });
++      const invalidationCounts = new Map<string, number>();
++      for (const [resourceKey] of mocks.invalidate.mock.calls as [string, unknown][]) {
++        invalidationCounts.set(resourceKey, (invalidationCounts.get(resourceKey) ?? 0) + 1);
++      }
++      expect(invalidationCounts.get(MODEL_SCENE_PATH)).toBe(2);
++      expect(invalidationCounts.get(MODEL_READINESS_PATH)).toBe(2);
++      expect(invalidationCounts.get(SESSION_STATUS_RESOURCE_KEY)).toBe(2);
++      expect(Math.max(...invalidationCounts.values())).toBeLessThanOrEqual(2);
++      expect([...invalidationCounts.keys()].join(" ")).not.toContain("topology");
++      expect(findElements(container, (element) => {
++        const className = element.getAttribute("class") ?? "";
++        return className.includes("animate-opacity") ||
++          className.includes("transition-opacity") ||
++          (element.getAttribute("style") ?? "").includes("opacity");
++      }).length).toBe(0);
++    } catch (error) {
++      throw new Error(
++        `Stability failure after ${milestone}: ${error instanceof Error ? error.stack ?? error.message : String(error)}`,
++      );
++    } finally {
++      await act(async () => root.unmount());
++      dom.restore();
++    }
++  });
++
++  it("keeps the created material after assignment conflict and requires refetch plus explicit rebase before retry", async () => {
++    mocks.createMaterial.mockResolvedValue({
++      committed_scene: {
++        materials: [{ id: "mat:free-layer", name: "Free layer material" }],
++        objects: mocks.scene.data.objects,
++        revision: 22,
++      },
++      scene_revision: 22,
++      transaction_kind: "create_material",
++    });
++    mocks.patchObject
++      .mockRejectedValueOnce(new Error("revision conflict"))
++      .mockResolvedValueOnce({
++        materials: [{ id: "mat:free-layer", name: "Free layer material" }],
++        objects: [{ id: "object-7", material_ref: "mat:free-layer" }],
++        revision: 25,
++      });
++    const dom = installSimulationPreparationTestDom();
++    const container = dom.document.createElement("div");
++    const { createRoot } = await import("react-dom/client");
++    const root = createRoot(container as unknown as Element);
++    try {
++      await act(async () => root.render(<ObjectMaterialPanel selection={selection} />));
++      await act(async () => button(container, "Create and assign").click());
++
++      expect(container.textContent).toContain("Material was created and remains in the library");
++      expect(mocks.publishScene).toHaveBeenCalledWith(
++        expect.anything(),
++        expect.objectContaining({ revision: 22 }),
++        22,
++        undefined,
++        false,
++      );
++      expect(button(container, "Rebase assignment").disabled).toBe(true);
++      expect(button(container, "Retry assignment").disabled).toBe(true);
++
++      await act(async () => button(container, "Refresh scene").click());
++      mocks.scene.data = {
++        materials: [{ id: "mat:free-layer", name: "Free layer material" }],
++        objects: [{ id: "object-7", material_ref: null, name: "Free layer" }],
++        revision: 24,
++      };
++      mocks.scene.revision = 24;
++      await act(async () => root.render(<ObjectMaterialPanel selection={selection} />));
++      expect(button(container, "Rebase assignment").disabled).toBe(false);
++      await act(async () => button(container, "Rebase assignment").click());
++      expect(button(container, "Retry assignment").disabled).toBe(false);
++      await act(async () => button(container, "Retry assignment").click());
++
++      expect(mocks.createMaterial).toHaveBeenCalledOnce();
++      expect(mocks.patchObject).toHaveBeenCalledTimes(2);
++      expect(mocks.patchObject).toHaveBeenLastCalledWith("object-7", {
++        base_revision: 24,
++        material_ref: "mat:free-layer",
++      });
++    } finally {
++      await act(async () => root.unmount());
++      dom.restore();
++    }
++  });
++});
++
++function input(root: TestNode, label: string): TestElement {
++  return findElement(
++    root,
++    (element) => element.tagName === "INPUT" && element.getAttribute("aria-label") === label,
++    `input ${label}`,
++  );
++}
++
++function button(root: TestNode, text: string): TestElement {
++  return findElement(
++    root,
++    (element) => element.tagName === "BUTTON" && element.textContent.includes(text),
++    `button ${text}`,
++  );
++}
++
++function changeInput(element: TestElement, value: string): void {
++  element.value = value;
++  element.dispatchEvent(new TestEvent("input", { bubbles: true }));
++}
+diff --git a/apps/control-room/src/modules/inspector/panels/ObjectMaterialPanel.tsx b/apps/control-room/src/modules/inspector/panels/ObjectMaterialPanel.tsx
+index 0d48369a0..68c81954a 100644
+--- a/apps/control-room/src/modules/inspector/panels/ObjectMaterialPanel.tsx
++++ b/apps/control-room/src/modules/inspector/panels/ObjectMaterialPanel.tsx
+@@ -1,20 +1,21 @@
+ "use client";
+ 
+ import { useCallback, useMemo, useState } from "react";
+ 
+ import {
+   acknowledgedAuthoringSceneRevision,
+   invalidateAuthoringMutationDependents,
+ } from "@/kernel/authoring/authoringMutationInvalidation";
+ import { useKernel } from "@/kernel/KernelContext";
+ import {
++  publishCommittedSceneResource,
+   resolveMaterialResourceKey,
+   resolveObjectInteractionResourceKey,
+   useMaterialResource,
+   useObjectInteractionResource,
+   useSceneResource,
+ } from "@/kernel/resources/geometryLifecycleResources";
+ import { Button } from "@/shared/ui/Button";
+ 
+ import type { InspectorPanelProps } from "../inspectorTypes";
+ import { useRegisterInspectorEditSession } from "../InspectorEditSession";
+@@ -25,26 +26,31 @@ import { InspectorGroup } from "../primitives/InspectorGroup";
+ import { Vector3Field } from "../primitives/Vector3Field";
+ import { ObjectAbsorbingBoundaryPanel } from "./ObjectAbsorbingBoundaryPanel";
+ import {
+   initialInspectorDraftState,
+   resolveInspectorDraftState,
+   updateInspectorDraftState,
+   type InspectorDraftState,
+ } from "./inspectorDraftState";
+ import { resolveGeometryObjectDraft } from "./geometryObjectPanelModel";
+ import {
++  buildCreateMaterialDraft,
+   buildMaterialAssignmentPatch,
+   buildMaterialParametersPatch,
++  buildUniaxialAnisotropyPatch,
++  createMaterialThenAssign,
+   magneticParametersDraftFromResource,
+   magneticParametersDraftDirty,
+   materialParametersDraftKey,
+   normalizeMaterialRef,
++  MaterialAssignmentAfterCreateError,
++  type CreateMaterialDraft,
+   type MagneticParametersDraft,
+ } from "./ObjectMaterialPanelModel";
+ 
+ interface AnisotropyDraft {
+   present: boolean;
+   ku1: string;
+   axisX: string;
+   axisY: string;
+   axisZ: string;
+ }
+@@ -64,20 +70,35 @@ function anisotropyDraftFromParams(
+   };
+ }
+ 
+ type Feedback =
+   | {
+       kind: "error" | "success";
+       message: string;
+     }
+   | null;
+ 
++type PendingOperation = "anisotropy" | "assignment" | "create-assign" | "parameters" | "retry-assign";
++
++function newMaterialDraft(objectName: string): CreateMaterialDraft {
++  const slug = objectName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
++  return {
++    aex: "1.3e-11",
++    alpha: "0.01",
++    anisotropyAxis: ["0", "0", "1"],
++    ku1: "",
++    materialId: `mat:${slug || "new-material"}`,
++    ms: "8e5",
++    name: `${objectName || "New object"} material`,
++  };
++}
++
+ function errorMessage(error: unknown): string {
+   return error instanceof Error ? error.message : String(error);
+ }
+ 
+ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]) {
+   const { api, resources } = useKernel();
+   const scene = useSceneResource();
+   const object = resolveGeometryObjectDraft(selection, scene.data);
+   const materialId = normalizeMaterialRef(object.material);
+   const material = useMaterialResource(materialId);
+@@ -128,81 +149,104 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
+   const [draftState, setDraftState] = useState<
+     InspectorDraftState<MagneticParametersDraft>
+   >(() =>
+     initialInspectorDraftState({
+       baseDraft,
+       baseKey: draftKey,
+       identityKey: draftIdentityKey,
+     }),
+   );
+   const [feedback, setFeedback] = useState<Feedback>(null);
+-  const [pending, setPending] = useState(false);
++  const [pendingOperations, setPendingOperations] = useState<ReadonlySet<PendingOperation>>(
++    () => new Set(),
++  );
++  const [createDraftState, setCreateDraftState] = useState<{
++    draft: CreateMaterialDraft;
++    objectId: string;
++  }>(() => ({ draft: newMaterialDraft(object.name), objectId: object.objectId }));
++  const createDraft = createDraftState.objectId === object.objectId
++    ? createDraftState.draft
++    : newMaterialDraft(object.name);
++  const [assignmentFailure, setAssignmentFailure] = useState<{
++    error: MaterialAssignmentAfterCreateError;
++    refreshCompleted: boolean;
++    rebasedRevision: number | null;
++  } | null>(null);
+   const { draft } = resolveInspectorDraftState({
+     baseDraft,
+     baseKey: draftKey,
+     identityKey: draftIdentityKey,
+     isDirty: magneticParametersDraftDirty,
+     state: draftState,
+   });
+   const draftMaterialId = normalizeMaterialRef(draft.materialRef);
+   const parametersTargetChanged = draftMaterialId !== materialId;
+ 
++  function startPending(operation: PendingOperation): void {
++    setPendingOperations((current) => new Set(current).add(operation));
++  }
++
++  function finishPending(operation: PendingOperation): void {
++    setPendingOperations((current) => {
++      const next = new Set(current);
++      next.delete(operation);
++      return next;
++    });
++  }
++
+   function updateAnisotropyDraft(patch: Partial<AnisotropyDraft>): void {
+     setAnisotropyDraftState((current) => ({
+       draft: {
+         ...(current.key === anisotropyDraftKey ? current.draft : baseAnisotropyDraft),
+         ...patch,
+       },
+       key: anisotropyDraftKey,
+     }));
+   }
+ 
+   async function applyAnisotropy(): Promise<boolean> {
+     if (!object.objectId || object.mode !== "committed") {
+       setFeedback({ kind: "error", message: "No committed scene object." });
+       return false;
+     }
+-    const ku1 = Number(anisotropyDraft.ku1);
+-    if (!Number.isFinite(ku1)) {
+-      setFeedback({ kind: "error", message: "Ku1 must be a finite number." });
+-      return false;
+-    }
+-    const axisX = Number(anisotropyDraft.axisX);
+-    const axisY = Number(anisotropyDraft.axisY);
+-    const axisZ = Number(anisotropyDraft.axisZ);
+-    if (!Number.isFinite(axisX) || !Number.isFinite(axisY) || !Number.isFinite(axisZ)) {
+-      setFeedback({ kind: "error", message: "Anisotropy axis components must be finite numbers." });
++    const anisotropy = buildUniaxialAnisotropyPatch(
++      anisotropyDraft.ku1,
++      [anisotropyDraft.axisX, anisotropyDraft.axisY, anisotropyDraft.axisZ],
++    );
++    if ("error" in anisotropy) {
++      setFeedback({ kind: "error", message: anisotropy.error });
+       return false;
+     }
+-    setPending(true);
++    const value = anisotropy.value ?? { axis: [0, 0, 1] as [number, number, number], ku1: 0 };
++    startPending("anisotropy");
+     try {
+       const response = await api.model.patchObjectInteraction(
+         object.objectId,
+         "uniaxial_anisotropy",
+         {
+           present: anisotropyDraft.present,
+-          params: { ku1, axis: [axisX, axisY, axisZ] },
++          params: { ku1: value.ku1, axis: value.axis },
+         },
+       );
+       const revision = acknowledgedAuthoringSceneRevision(response);
+       resources.invalidate(
+         resolveObjectInteractionResourceKey(object.objectId, "uniaxial_anisotropy"),
+         revision,
+       );
+       invalidateMagneticParameterResources(revision);
+       setFeedback({ kind: "success", message: "Uniaxial anisotropy updated." });
+       return true;
+     } catch (error) {
+       setFeedback({ kind: "error", message: errorMessage(error) });
+       return false;
+     } finally {
+-      setPending(false);
++      finishPending("anisotropy");
+     }
+   }
+ 
+   function updateDraft(patch: Partial<MagneticParametersDraft>): void {
+     setDraftState(
+       updateInspectorDraftState({
+         baseDraft,
+         baseKey: draftKey,
+         currentDraft: draft,
+         identityKey: draftIdentityKey,
+@@ -211,38 +255,38 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
+       }),
+     );
+   }
+ 
+   async function applyMaterial(): Promise<boolean> {
+     if (object.mode !== "committed") {
+       setFeedback({ kind: "error", message: "No committed scene object." });
+       return false;
+     }
+ 
+-    setPending(true);
++    startPending("assignment");
+     try {
+       const sceneResponse = await api.model.patchObject(
+         object.objectId,
+         buildMaterialAssignmentPatch(draft, object.baseRevision),
+       );
+       const revision = acknowledgedAuthoringSceneRevision(sceneResponse);
+       invalidateMagneticParameterResources(revision);
+       setFeedback({
+         kind: "success",
+         message: "Object material assignment updated.",
+       });
+       return true;
+     } catch (error) {
+       setFeedback({ kind: "error", message: errorMessage(error) });
+       return false;
+     } finally {
+-      setPending(false);
++      finishPending("assignment");
+     }
+   }
+ 
+   async function applyParameters(): Promise<boolean> {
+     if (!materialId || !material.data) {
+       setFeedback({
+         kind: "error",
+         message: "No committed material asset is assigned to this object.",
+       });
+       return false;
+@@ -254,64 +298,209 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
+       });
+       return false;
+     }
+ 
+     const result = buildMaterialParametersPatch(draft);
+     if ("error" in result) {
+       setFeedback({ kind: "error", message: result.error });
+       return false;
+     }
+ 
+-    setPending(true);
++    startPending("parameters");
+     try {
+       const response = await api.model.patchMaterial(materialId, result.patch);
+       const revision = acknowledgedAuthoringSceneRevision(response);
+       resources.invalidate(resolveMaterialResourceKey(materialId), revision);
+       invalidateMagneticParameterResources(revision);
+       setFeedback({
+         kind: "success",
+         message: "Magnetic parameters updated.",
+       });
+       return true;
+     } catch (error) {
+       setFeedback({ kind: "error", message: errorMessage(error) });
+       return false;
+     } finally {
+-      setPending(false);
++      finishPending("parameters");
+     }
+   }
+ 
+   function invalidateMagneticParameterResources(revision: number): void {
+     invalidateAuthoringMutationDependents(resources, "material", revision);
+   }
+ 
++  function updateCreateDraft(patch: Partial<CreateMaterialDraft>): void {
++    setCreateDraftState((current) => ({
++      draft: {
++        ...(current.objectId === object.objectId
++          ? current.draft
++          : newMaterialDraft(object.name)),
++        ...patch,
++      },
++      objectId: object.objectId,
++    }));
++    setFeedback(null);
++  }
++
++  function stageDeferredAnisotropy(
++    anisotropy: { axis: [number, number, number]; ku1: number } | null,
++  ): void {
++    if (!anisotropy) return;
++    setAnisotropyDraftState({
++      draft: {
++        axisX: String(anisotropy.axis[0]),
++        axisY: String(anisotropy.axis[1]),
++        axisZ: String(anisotropy.axis[2]),
++        ku1: String(anisotropy.ku1),
++        present: true,
++      },
++      key: anisotropyDraftKey,
++    });
++  }
++
++  async function createAndAssignMaterial(): Promise<void> {
++    if (!object.objectId || object.mode !== "committed" || object.baseRevision === null) {
++      setFeedback({ kind: "error", message: "No committed scene object with a known revision." });
++      return;
++    }
++    const validation = buildCreateMaterialDraft(createDraft);
++    if ("error" in validation) {
++      setFeedback({ kind: "error", message: validation.error });
++      return;
++    }
++    startPending("create-assign");
++    setAssignmentFailure(null);
++    try {
++      const result = await createMaterialThenAssign(
++        api,
++        object.objectId,
++        createDraft,
++        object.baseRevision,
++        (created) => {
++          publishCommittedSceneResource(
++            resources,
++            created.committed_scene,
++            created.scene_revision,
++            undefined,
++            false,
++          );
++          resources.invalidate(
++            resolveMaterialResourceKey(validation.value.materialId),
++            created.scene_revision,
++          );
++          invalidateMagneticParameterResources(created.scene_revision);
++        },
++      );
++      const assignmentRevision = acknowledgedAuthoringSceneRevision(result.assigned);
++      publishCommittedSceneResource(
++        resources,
++        result.assigned,
++        assignmentRevision,
++        undefined,
++        false,
++      );
++      invalidateMagneticParameterResources(assignmentRevision);
++      updateDraft({ materialRef: result.materialId });
++      stageDeferredAnisotropy(result.deferredAnisotropy);
++      setFeedback({
++        kind: "success",
++        message: result.deferredAnisotropy
++          ? "Material created and assigned. Ku1 draft is ready; apply anisotropy separately."
++          : "Material created and assigned.",
++      });
++    } catch (error) {
++      if (error instanceof MaterialAssignmentAfterCreateError) {
++        stageDeferredAnisotropy(error.deferredAnisotropy);
++        setAssignmentFailure({ error, refreshCompleted: false, rebasedRevision: null });
++        setFeedback({
++          kind: "error",
++          message: "Material was created and remains in the library, but assignment failed. Refresh and explicitly rebase before retrying assignment.",
++        });
++      } else {
++        setFeedback({ kind: "error", message: errorMessage(error) });
++      }
++    } finally {
++      finishPending("create-assign");
++    }
++  }
++
++  function rebaseFailedAssignment(): void {
++    if (
++      !assignmentFailure ||
++      !assignmentFailure.refreshCompleted ||
++      scene.status !== "ready" ||
++      typeof scene.data?.revision !== "number" ||
++      scene.data.revision <= assignmentFailure.error.assignmentBaseRevision
++    ) return;
++    setAssignmentFailure({
++      ...assignmentFailure,
++      rebasedRevision: scene.data.revision,
++    });
++    setFeedback({ kind: "success", message: `Assignment rebased to scene revision ${scene.data.revision}.` });
++  }
++
++  async function refreshFailedAssignment(): Promise<void> {
++    if (!assignmentFailure) return;
++    await scene.refetch();
++    setAssignmentFailure((current) =>
++      current?.error === assignmentFailure.error
++        ? { ...current, refreshCompleted: true }
++        : current,
++    );
++  }
++
++  async function retryFailedAssignment(): Promise<void> {
++    if (!assignmentFailure || assignmentFailure.rebasedRevision === null) return;
++    startPending("retry-assign");
++    try {
++      const assigned = await assignmentFailure.error.retry(api, assignmentFailure.rebasedRevision);
++      const assignmentRevision = acknowledgedAuthoringSceneRevision(assigned);
++      publishCommittedSceneResource(resources, assigned, assignmentRevision, undefined, false);
++      invalidateMagneticParameterResources(assignmentRevision);
++      updateDraft({ materialRef: assignmentFailure.error.materialId });
++      setAssignmentFailure(null);
++      setFeedback({ kind: "success", message: "Material assignment retry succeeded." });
++    } catch (error) {
++      setFeedback({ kind: "error", message: errorMessage(error) });
++    } finally {
++      finishPending("retry-assign");
++    }
++  }
++
+   return {
+     anisotropyDraft,
+     applyAnisotropy,
+     applyMaterial,
+     applyParameters,
++    assignmentFailure,
+     baseAnisotropyDraft,
+     baseDraft,
++    createAndAssignMaterial,
++    createDraft,
+     draft,
+     draftIdentityKey,
+     draftKey,
+     feedback,
+     material,
+     materialId,
+     object,
+     parametersTargetChanged,
+-    pending,
++    pendingOperations,
++    refreshFailedAssignment,
++    rebaseFailedAssignment,
++    retryFailedAssignment,
+     scene,
+     setAnisotropyDraftState,
+     setDraftState,
+     setFeedback,
+     updateAnisotropyDraft,
++    updateCreateDraft,
+     updateDraft,
+   } as const;
+ }
+ 
+ type ObjectMaterialPanelState = ReturnType<typeof useObjectMaterialPanelState>;
+ 
+ function materialInspectorSections(selectionKind: string | null): string[] {
+   switch (selectionKind) {
+     case "object.material":
+       return ["parameters", "material-parameters", "absorbing-boundary", "actions"];
+@@ -334,36 +523,43 @@ function ObjectMaterialPanelView({
+   showSection,
+ }: {
+   panel: ObjectMaterialPanelState;
+   showSection: (section: string) => boolean;
+ }) {
+   const {
+     anisotropyDraft,
+     applyAnisotropy,
+     applyMaterial,
+     applyParameters,
++    assignmentFailure,
+     baseAnisotropyDraft,
+     baseDraft,
++    createAndAssignMaterial,
++    createDraft,
+     draft,
+     draftIdentityKey,
+     draftKey,
+     feedback,
+     material,
+     materialId,
+     object,
+     parametersTargetChanged,
+-    pending,
++    pendingOperations,
++    refreshFailedAssignment,
++    rebaseFailedAssignment,
++    retryFailedAssignment,
+     scene,
+     setAnisotropyDraftState,
+     setDraftState,
+     setFeedback,
+     updateAnisotropyDraft,
++    updateCreateDraft,
+     updateDraft,
+   } = panel;
+   const draftDirty = magneticParametersDraftDirty(draft, baseDraft);
+   const parametersDirty = magneticParametersDraftDirty(
+     { ...draft, materialRef: baseDraft.materialRef },
+     baseDraft,
+   );
+   const anisotropyDirty = JSON.stringify(anisotropyDraft) !== JSON.stringify(baseAnisotropyDraft);
+   const parametersValidation = buildMaterialParametersPatch(draft);
+   const anisotropyValid = [
+@@ -410,21 +606,23 @@ function ObjectMaterialPanelView({
+     baseAnisotropyDraft,
+     baseDraft,
+     draftIdentityKey,
+     draftKey,
+     setAnisotropyDraftState,
+     setDraftState,
+     setFeedback,
+   ]);
+   useRegisterInspectorEditSession(
+     "staged",
+-    pending,
++    pendingOperations.has("assignment") ||
++      pendingOperations.has("parameters") ||
++      pendingOperations.has("anisotropy"),
+     draftDirty || anisotropyDirty,
+     !("error" in parametersValidation) && anisotropyValid,
+     undefined,
+     applyInspectorDraft,
+     resetInspectorDraft,
+   );
+   return (
+     <div className="fm-inspector-panel">
+       <div className="grid min-w-0 gap-fm-inspector-group">
+           {showSection("parameters") ? (
+@@ -462,20 +660,122 @@ function ObjectMaterialPanelView({
+               </FormField>
+               <FieldRow
+                 label="Selected"
+                 value={
+                   scene.data?.materials?.find((material) => material.id === draft.materialRef)
+                     ?.name ?? draft.materialRef ?? "unassigned"
+                 }
+               />
+             </InspectorGroup>
+           ) : null}
++          {showSection("assignment") ? (
++            <InspectorGroup title="Create and Assign Material">
++              <FormField
++                label="New material name"
++                mono={false}
++                type="text"
++                value={createDraft.name}
++                onChange={(event) => updateCreateDraft({ name: event.target.value })}
++              />
++              <FormField
++                label="New material ID"
++                type="text"
++                value={createDraft.materialId}
++                onChange={(event) => updateCreateDraft({ materialId: event.target.value })}
++              />
++              <FormField
++                label="New Ms"
++                type="number"
++                unit="A/m"
++                value={createDraft.ms}
++                onChange={(event) => updateCreateDraft({ ms: event.target.value })}
++              />
++              <FormField
++                label="New A"
++                type="number"
++                unit="J/m"
++                value={createDraft.aex}
++                onChange={(event) => updateCreateDraft({ aex: event.target.value })}
++              />
++              <FormField
++                label="New alpha"
++                type="number"
++                value={createDraft.alpha}
++                onChange={(event) => updateCreateDraft({ alpha: event.target.value })}
++              />
++              <FormField
++                label="New Ku1"
++                hint="Optional interaction draft. It is not part of the material ACK and must be applied separately below."
++                type="number"
++                unit="J/m³"
++                value={createDraft.ku1}
++                onChange={(event) => updateCreateDraft({ ku1: event.target.value })}
++              />
++              <Vector3Field
++                label="New anisotropy axis"
++                disabled={!createDraft.ku1.trim()}
++                values={[...createDraft.anisotropyAxis]}
++                onChange={(index, value) => {
++                  const axis = [...createDraft.anisotropyAxis] as [string, string, string];
++                  axis[index] = value;
++                  updateCreateDraft({ anisotropyAxis: axis });
++                }}
++              />
++              <div className="fm-inspector-toolbar">
++                <Button
++                  disabled={pendingOperations.has("create-assign") || object.mode !== "committed"}
++                  size="sm"
++                  type="button"
++                  variant="primary"
++                  onClick={() => void createAndAssignMaterial()}
++                >
++                  Create and assign
++                </Button>
++              </div>
++              {assignmentFailure ? (
++                <div className="fm-inspector-toolbar" data-material-assignment-conflict="true">
++                  <Button
++                    disabled={pendingOperations.has("retry-assign")}
++                    size="sm"
++                    type="button"
++                    variant="ghost"
++                    onClick={() => void refreshFailedAssignment()}
++                  >
++                    Refresh scene
++                  </Button>
++                  <Button
++                    disabled={
++                      pendingOperations.has("retry-assign") ||
++                      scene.status !== "ready" ||
++                      !assignmentFailure.refreshCompleted ||
++                      (scene.data?.revision ?? 0) <= assignmentFailure.error.assignmentBaseRevision
++                    }
++                    size="sm"
++                    type="button"
++                    variant="ghost"
++                    onClick={rebaseFailedAssignment}
++                  >
++                    Rebase assignment
++                  </Button>
++                  <Button
++                    disabled={pendingOperations.has("retry-assign") || assignmentFailure.rebasedRevision === null}
++                    size="sm"
++                    type="button"
++                    variant="primary"
++                    onClick={() => void retryFailedAssignment()}
++                  >
++                    Retry assignment
++                  </Button>
++                </div>
++              ) : null}
++            </InspectorGroup>
++          ) : null}
+       </div>
+ 
+       <div className="grid min-w-0 gap-fm-inspector-group">
+           {showSection("material-parameters") ? (
+             <InspectorGroup title="Material Parameters">
+               <FormField
+                 label="Name"
+                 mono={false}
+                 type="text"
+                 disabled={!material.data}
+@@ -561,53 +861,57 @@ function ObjectMaterialPanelView({
+             </InspectorGroup>
+           ) : null}
+       </div>
+ 
+       <div className="grid min-w-0 gap-fm-inspector-group">
+           {showSection("actions") ? (
+             <InspectorGroup title="Actions">
+               <div className="fm-inspector-toolbar">
+                 {showSection("assignment") ? (
+                   <Button
+-                    disabled={pending || object.mode !== "committed"}
++                    disabled={pendingOperations.has("assignment") || object.mode !== "committed"}
+                     size="sm"
+                     type="button"
+                     variant="primary"
+                     onClick={() => void applyMaterial()}
+                   >
+                     Apply Assignment
+                   </Button>
+                 ) : null}
+                 {showSection("material-parameters") ? (
+                   <Button
+-                    disabled={pending || !material.data || parametersTargetChanged}
++                    disabled={pendingOperations.has("parameters") || !material.data || parametersTargetChanged}
+                     size="sm"
+                     type="button"
+                     variant="primary"
+                     onClick={() => void applyParameters()}
+                   >
+                     Apply Parameters
+                   </Button>
+                 ) : null}
+                 {showSection("uniaxial-anisotropy") ? (
+                   <Button
+-                    disabled={pending || object.mode !== "committed"}
++                    disabled={pendingOperations.has("anisotropy") || object.mode !== "committed"}
+                     size="sm"
+                     type="button"
+                     variant="primary"
+                     onClick={() => void applyAnisotropy()}
+                   >
+                     Apply Anisotropy
+                   </Button>
+                 ) : null}
+                 <Button
+-                  disabled={pending}
++                  disabled={
++                    pendingOperations.has("assignment") ||
++                    pendingOperations.has("parameters") ||
++                    pendingOperations.has("anisotropy")
++                  }
+                   size="sm"
+                   type="button"
+                   variant="ghost"
+                   onClick={() => {
+                     setDraftState(
+                       initialInspectorDraftState({
+                         baseDraft,
+                         baseKey: draftKey,
+                         identityKey: draftIdentityKey,
+                       }),
+diff --git a/apps/control-room/src/modules/inspector/panels/ObjectMaterialPanelModel.test.ts b/apps/control-room/src/modules/inspector/panels/ObjectMaterialPanelModel.test.ts
+index 9cdb66ce2..14b97ebcd 100644
+--- a/apps/control-room/src/modules/inspector/panels/ObjectMaterialPanelModel.test.ts
++++ b/apps/control-room/src/modules/inspector/panels/ObjectMaterialPanelModel.test.ts
+@@ -1,23 +1,148 @@
+-import { describe, expect, it } from "vitest";
++import { describe, expect, it, vi } from "vitest";
+ 
+ import {
++  buildCreateMaterialDraft,
+   buildMaterialAssignmentPatch,
+   buildMaterialParametersPatch,
++  buildUniaxialAnisotropyPatch,
++  createMaterialThenAssign,
++  MaterialAssignmentAfterCreateError,
+   magneticParametersDraftFromResource,
+   magneticParametersDraftDirty,
+   materialAssignmentDraftFromRef,
+   materialParametersDraftKey,
+   normalizeMaterialRef,
+ } from "./ObjectMaterialPanelModel";
+ 
+ describe("ObjectMaterialPanelModel", () => {
++  it("validates canonical SI values for a new material and optional anisotropy", () => {
++    expect(buildCreateMaterialDraft({
++      aex: "1.3e-11",
++      alpha: "0.02",
++      anisotropyAxis: ["0", "1", "0"],
++      ku1: "4e5",
++      materialId: "mat:cofeb",
++      name: "CoFeB",
++      ms: "1.1e6",
++    })).toEqual({
++      value: {
++        anisotropy: { axis: [0, 1, 0], ku1: 4e5 },
++        materialId: "mat:cofeb",
++        name: "CoFeB",
++        properties: { Aex: 1.3e-11, Dbulk: null, Dind: null, Ms: 1.1e6, alpha: 0.02 },
++      },
++    });
++
++    expect(buildCreateMaterialDraft({
++      aex: "0",
++      alpha: "0.02",
++      anisotropyAxis: ["0", "0", "1"],
++      ku1: "",
++      materialId: "mat:bad",
++      name: "Bad",
++      ms: "1e6",
++    })).toEqual({ error: "A must be greater than 0 J/m." });
++    expect(buildUniaxialAnisotropyPatch("1e5", ["0", "0", "0"])).toEqual({
++      error: "Anisotropy axis must be non-zero.",
++    });
++  });
++
++  it("creates a material and assigns its immutable id using the authoritative first ACK revision", async () => {
++    const created = {
++      committed_scene: { materials: [{ id: "mat:cofeb", name: "CoFeB", properties: {} }], revision: 22 },
++      scene_revision: 22,
++      transaction_kind: "create_material",
++    };
++    const assigned = { objects: [{ id: "object-7", material_ref: "mat:cofeb" }], revision: 23 };
++    const api = {
++      model: {
++        createMaterial: vi.fn(async () => created),
++        patchObject: vi.fn(async () => assigned),
++      },
++    };
++    const onMaterialCreated = vi.fn();
++
++    const result = await createMaterialThenAssign(api, "object-7", {
++      aex: "1.3e-11",
++      alpha: "0.02",
++      anisotropyAxis: ["0", "0", "1"],
++      ku1: "",
++      materialId: "mat:cofeb",
++      name: "CoFeB",
++      ms: "1.1e6",
++    }, 21, onMaterialCreated);
++
++    expect(api.model.createMaterial).toHaveBeenCalledWith(
++      "mat:cofeb",
++      "CoFeB",
++      expect.objectContaining({ Aex: 1.3e-11, Ms: 1.1e6 }),
++      [],
++      { baseRevision: 21 },
++    );
++    expect(onMaterialCreated).toHaveBeenCalledWith(created);
++    expect(api.model.patchObject).toHaveBeenCalledWith("object-7", {
++      base_revision: 22,
++      material_ref: "mat:cofeb",
++    });
++    expect(result).toEqual({
++      assigned,
++      created,
++      deferredAnisotropy: null,
++      materialId: "mat:cofeb",
++    });
++  });
++
++  it("keeps the created material and exposes an explicit latest-revision assignment retry", async () => {
++    const conflict = new Error("revision conflict");
++    const created = {
++      committed_scene: { materials: [{ id: "mat:cofeb", name: "CoFeB", properties: {} }], revision: 22 },
++      scene_revision: 22,
++      transaction_kind: "create_material",
++    };
++    const api = {
++      model: {
++        createMaterial: vi.fn(async () => created),
++        patchObject: vi.fn().mockRejectedValueOnce(conflict).mockResolvedValueOnce({ revision: 25 }),
++      },
++    };
++
++    let failure: unknown;
++    try {
++      await createMaterialThenAssign(api, "object-7", {
++        aex: "1e-11",
++        alpha: "0.01",
++        anisotropyAxis: ["0", "1", "0"],
++        ku1: "4e5",
++        materialId: "mat:cofeb",
++        name: "CoFeB",
++        ms: "8e5",
++      }, 21);
++    } catch (error) {
++      failure = error;
++    }
++
++    expect(failure).toBeInstanceOf(MaterialAssignmentAfterCreateError);
++    expect(failure).toMatchObject({
++      assignmentBaseRevision: 22,
++      deferredAnisotropy: { axis: [0, 1, 0], ku1: 4e5 },
++      materialId: "mat:cofeb",
++      objectId: "object-7",
++    });
++    await (failure as MaterialAssignmentAfterCreateError).retry(api, 24);
++    expect(api.model.createMaterial).toHaveBeenCalledOnce();
++    expect(api.model.patchObject).toHaveBeenLastCalledWith("object-7", {
++      base_revision: 24,
++      material_ref: "mat:cofeb",
++    });
++  });
++
+   it("normalizes empty and unassigned material references as cleared assignments", () => {
+     expect(normalizeMaterialRef("")).toBeNull();
+     expect(normalizeMaterialRef("   ")).toBeNull();
+     expect(normalizeMaterialRef("unassigned")).toBeNull();
+     expect(normalizeMaterialRef("  permalloy ")).toBe("permalloy");
+   });
+ 
+   it("creates a material assignment draft from the current object material", () => {
+     expect(materialAssignmentDraftFromRef("permalloy")).toEqual({
+       materialRef: "permalloy",
+diff --git a/apps/control-room/src/modules/inspector/panels/ObjectMaterialPanelModel.ts b/apps/control-room/src/modules/inspector/panels/ObjectMaterialPanelModel.ts
+index c485d2a4b..31f702db0 100644
+--- a/apps/control-room/src/modules/inspector/panels/ObjectMaterialPanelModel.ts
++++ b/apps/control-room/src/modules/inspector/panels/ObjectMaterialPanelModel.ts
+@@ -1,16 +1,177 @@
+ import type {
++  AuthoringTransactionResponse,
+   MaterialPatchRequest,
++  MaterialPropertiesResource,
+   MaterialResource,
+   ObjectPatchRequest,
++  SceneResource,
+ } from "@/kernel/api/apiTypes";
+ 
++export interface CreateMaterialDraft {
++  aex: string;
++  alpha: string;
++  anisotropyAxis: readonly [string, string, string];
++  ku1: string;
++  materialId: string;
++  ms: string;
++  name: string;
++}
++
++export interface ValidatedCreateMaterialDraft {
++  anisotropy: { axis: [number, number, number]; ku1: number } | null;
++  materialId: string;
++  name: string;
++  properties: MaterialPropertiesResource;
++}
++
++interface MaterialCreateAssignApi {
++  model: {
++    createMaterial(
++      materialId: string,
++      name: string,
++      properties: MaterialPropertiesResource,
++      references: [],
++      options: { baseRevision: number },
++    ): Promise<AuthoringTransactionResponse>;
++    patchObject(objectId: string, patch: ObjectPatchRequest): Promise<SceneResource>;
++  };
++}
++
++export class MaterialAssignmentAfterCreateError extends Error {
++  readonly assignmentBaseRevision: number;
++  readonly created: AuthoringTransactionResponse;
++  readonly deferredAnisotropy: ValidatedCreateMaterialDraft["anisotropy"];
++  readonly materialId: string;
++  readonly objectId: string;
++
++  constructor(
++    objectId: string,
++    materialId: string,
++    created: AuthoringTransactionResponse,
++    deferredAnisotropy: ValidatedCreateMaterialDraft["anisotropy"],
++    cause: unknown,
++  ) {
++    super(cause instanceof Error ? cause.message : String(cause), { cause });
++    this.name = "MaterialAssignmentAfterCreateError";
++    this.assignmentBaseRevision = created.scene_revision;
++    this.created = created;
++    this.deferredAnisotropy = deferredAnisotropy;
++    this.materialId = materialId;
++    this.objectId = objectId;
++  }
++
++  retry(api: MaterialCreateAssignApi, latestBaseRevision: number): Promise<SceneResource> {
++    return api.model.patchObject(this.objectId, {
++      base_revision: latestBaseRevision,
++      material_ref: this.materialId,
++    });
++  }
++}
++
++export function buildUniaxialAnisotropyPatch(
++  ku1Text: string,
++  axisText: readonly [string, string, string],
++): { error: string } | { value: { axis: [number, number, number]; ku1: number } | null } {
++  if (!ku1Text.trim()) return { value: null };
++  const ku1 = Number(ku1Text.trim());
++  if (!Number.isFinite(ku1)) {
++    return { error: "Ku1 must be a finite SI value." };
++  }
++  const axis = axisText.map((component) => Number(component.trim()));
++  if (axis.some((component) => !Number.isFinite(component))) {
++    return { error: "Anisotropy axis components must be finite SI values." };
++  }
++  const norm = Math.hypot(...axis);
++  if (norm === 0) return { error: "Anisotropy axis must be non-zero." };
++  return {
++    value: {
++      axis: axis.map((component) => component / norm) as [number, number, number],
++      ku1,
++    },
++  };
++}
++
++export function buildCreateMaterialDraft(
++  draft: CreateMaterialDraft,
++): { error: string } | { value: ValidatedCreateMaterialDraft } {
++  const materialId = draft.materialId.trim();
++  if (!materialId) return { error: "Material id must not be empty." };
++  const name = draft.name.trim();
++  if (!name) return { error: "Material name must not be empty." };
++  const ms = Number(draft.ms.trim());
++  if (!Number.isFinite(ms)) return { error: "Ms must be a finite SI value." };
++  if (ms <= 0) return { error: "Ms must be greater than 0 A/m." };
++  const aex = Number(draft.aex.trim());
++  if (!Number.isFinite(aex)) return { error: "A must be a finite SI value." };
++  if (aex <= 0) return { error: "A must be greater than 0 J/m." };
++  const alpha = Number(draft.alpha.trim());
++  if (!Number.isFinite(alpha)) return { error: "alpha must be a finite SI value." };
++  if (alpha < 0) return { error: "alpha must be greater than or equal to 0." };
++  const anisotropy = buildUniaxialAnisotropyPatch(draft.ku1, draft.anisotropyAxis);
++  if ("error" in anisotropy) return anisotropy;
++  return {
++    value: {
++      anisotropy: anisotropy.value,
++      materialId,
++      name,
++      properties: {
++        Aex: aex,
++        Dbulk: null,
++        Dind: null,
++        Ms: ms,
++        alpha,
++      },
++    },
++  };
++}
++
++export async function createMaterialThenAssign(
++  api: MaterialCreateAssignApi,
++  objectId: string,
++  draft: CreateMaterialDraft,
++  baseRevision: number,
++  onMaterialCreated?: (created: AuthoringTransactionResponse) => void,
++): Promise<{
++  assigned: SceneResource;
++  created: AuthoringTransactionResponse;
++  deferredAnisotropy: ValidatedCreateMaterialDraft["anisotropy"];
++  materialId: string;
++}> {
++  const validated = buildCreateMaterialDraft(draft);
++  if ("error" in validated) throw new Error(validated.error);
++  const { anisotropy, materialId, name, properties } = validated.value;
++  const created = await api.model.createMaterial(
++    materialId,
++    name,
++    properties,
++    [],
++    { baseRevision },
++  );
++  onMaterialCreated?.(created);
++  try {
++    const assigned = await api.model.patchObject(objectId, {
++      base_revision: created.scene_revision,
++      material_ref: materialId,
++    });
++    return { assigned, created, deferredAnisotropy: anisotropy, materialId };
++  } catch (error) {
++    throw new MaterialAssignmentAfterCreateError(
++      objectId,
++      materialId,
++      created,
++      anisotropy,
++      error,
++    );
++  }
++}
++
+ export interface MaterialAssignmentDraft {
+   materialRef: string;
+ }
+ 
+ export interface MagneticParametersDraft extends MaterialAssignmentDraft {
+   aex: string;
+   alpha: string;
+   dind: string;
+   dbulk: string;
+   materialName: string;

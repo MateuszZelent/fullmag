@@ -1,0 +1,1360 @@
+# Review package: 4df823171..9f3c346f8
+
+## Commits
+9f3c346f8 fix(viewport): expire stale move activations
+
+## Files changed
+ .../kernel/authoring/ObjectMoveToolController.ts   |   4 +-
+ .../authoring/objectMoveConflictWorkflow.test.tsx  | 531 +++++++++++++++------
+ .../src/modules/ribbon/ribbonStructure.test.ts     |   6 +-
+ .../src/modules/viewport-3d/MoveObjectGizmo.tsx    |   8 +-
+ .../src/modules/viewport-3d/Viewport3DModule.tsx   | 110 +----
+ .../Viewport3DObjectMoveInteraction.tsx            | 298 ++++++++++++
+ .../viewport-3d/hooks/useViewport3DSceneModel.ts   |   1 +
+ .../viewport-3d/viewport3dPrimitiveModel.ts        |   2 +
+ 8 files changed, 734 insertions(+), 226 deletions(-)
+
+## Diff
+diff --git a/apps/control-room/src/kernel/authoring/ObjectMoveToolController.ts b/apps/control-room/src/kernel/authoring/ObjectMoveToolController.ts
+index 75c7f29b1..90eace82c 100644
+--- a/apps/control-room/src/kernel/authoring/ObjectMoveToolController.ts
++++ b/apps/control-room/src/kernel/authoring/ObjectMoveToolController.ts
+@@ -1,32 +1,34 @@
+ "use client";
+ 
+ import { useSyncExternalStore } from "react";
+ 
+ export interface ObjectMoveToolState {
++  activationId: number;
+   mode: "move";
+   objectId: string;
+ }
+ 
+ type Listener = () => void;
+ 
+ export class ObjectMoveToolController {
+   private state: ObjectMoveToolState | null = null;
++  private nextActivationId = 1;
+   private readonly listeners = new Set<Listener>();
+ 
+   getSnapshot(): ObjectMoveToolState | null {
+     return this.state;
+   }
+ 
+   activate(objectId: string): void {
+     if (this.state?.objectId === objectId) return;
+-    this.state = { mode: "move", objectId };
++    this.state = { activationId: this.nextActivationId++, mode: "move", objectId };
+     this.notify();
+   }
+ 
+   clear(): void {
+     if (this.state === null) return;
+     this.state = null;
+     this.notify();
+   }
+ 
+   subscribe(listener: Listener): () => void {
+diff --git a/apps/control-room/src/kernel/authoring/objectMoveConflictWorkflow.test.tsx b/apps/control-room/src/kernel/authoring/objectMoveConflictWorkflow.test.tsx
+index 859aa43d8..5c02bc1a2 100644
+--- a/apps/control-room/src/kernel/authoring/objectMoveConflictWorkflow.test.tsx
++++ b/apps/control-room/src/kernel/authoring/objectMoveConflictWorkflow.test.tsx
+@@ -1,161 +1,414 @@
+-import { createElement } from "react";
+-import { renderToStaticMarkup } from "react-dom/server";
+-import { describe, expect, it, vi } from "vitest";
++import { act } from "react";
++import { hydrateRoot, type Root } from "react-dom/client";
++import { renderToString } from "react-dom/server";
++import { afterEach, describe, expect, it, vi } from "vitest";
+ 
+ import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
+ import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
+ import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
++import { DiagnosticRecorderController } from "@/kernel/performance/diagnostic-recorder/DiagnosticRecorderController";
+ import { EventBus } from "@/kernel/events/EventBus";
+ import type { KernelEventMap } from "@/kernel/events/eventTypes";
+ import { KernelContext } from "@/kernel/KernelContext";
+ import { LayoutController } from "@/kernel/layout/LayoutController";
++import {
++  TestEvent,
++  TestElement,
++  installSimulationPreparationTestDom,
++} from "@/kernel/layout/simulationPreparationTestDom.test-support";
++import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
++import {
++  resetSharedResourceRuntimeStoreForTests,
++  sharedResourceRuntimeStore,
++} from "@/kernel/resources/ResourceRuntimeStore";
++import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
+ import { SelectionController } from "@/kernel/selection/SelectionController";
++import type { KernelApi } from "@/kernel/types";
+ import { RIBBON_COMMANDS } from "@/modules/ribbon/ribbonCommands";
+-import {
+-  createMoveGestureController,
+-  Viewport3DMoveToolLayer,
+-} from "@/modules/viewport-3d/MoveObjectGizmo";
+-import { buildViewport3DPrimitiveRenderModel } from "@/modules/viewport-3d/viewport3dPrimitiveModel";
++import { Viewport3DObjectMoveResourceSurface } from "@/modules/viewport-3d/Viewport3DObjectMoveInteraction";
+ 
+ import { ObjectMoveToolController } from "./ObjectMoveToolController";
+-import {
+-  commitObjectMoveWorkflow,
+-  rebaseObjectMoveConflict,
+-  type ObjectMoveConflict,
+-} from "./objectMoveConflictWorkflow";
+-
+-describe("object move integration", () => {
+-  it("runs Ribbon Move, preserves an absolute draft through 409/refetch/rebase, and clears it only after retry ACK", async () => {
+-    const bus = new EventBus<KernelEventMap>();
+-    const layout = new LayoutController(bus);
+-    const selection = new SelectionController(bus);
+-    const objectMoveTool = new ObjectMoveToolController();
+-    selection.set({
+-      kind: "object.root",
+-      label: "Magnet",
+-      nodeId: "model:object:magnet",
+-      objectId: "magnet",
+-      ref: {
+-        kind: "object.root",
+-        nodeId: "model:object:magnet",
+-        objectId: "magnet",
+-        type: "scene-object",
+-        visualizationTargetId: "object:magnet",
+-      },
+-    }, "test");
+-    const sceneAt41 = {
+-      objects: [{
+-        geometry: { geometry_kind: "Box", geometry_params: { size: [2e-9, 2e-9, 2e-9] } },
+-        id: "magnet",
+-        name: "Magnet",
+-        role: "magnet",
+-        transform: { translation: [1e-9, 0, 0] },
+-      }],
+-      revision: 41,
+-    };
+-    const commands = new CommandRegistry();
+-    for (const command of RIBBON_COMMANDS) commands.register(command);
+-    const commandContext = {
+-      api: {} as never,
+-      layout,
+-      objectMoveTool,
+-      resourceData: { [MODEL_SCENE_PATH]: sceneAt41 },
+-      selection,
+-      source: "test" as const,
+-    };
+-
+-    expect(await commands.execute("geometry.move-selected", commandContext)).toEqual({
+-      status: "completed",
+-    });
+-    const primitiveModel = buildViewport3DPrimitiveRenderModel(sceneAt41, null);
+-    const mounted = renderToStaticMarkup(
+-      createElement(
+-        KernelContext.Provider,
+-        { value: { objectMoveTool } as never },
+-        createElement(Viewport3DMoveToolLayer, {
+-          moveDraftResetRevision: 0,
+-          moveToolObjectId: objectMoveTool.getSnapshot()?.objectId ?? null,
+-          onCommit: vi.fn(),
+-          primitiveModel,
+-          selectedObjectId: "magnet",
+-        }),
+-      ),
+-    );
+-    expect(mounted).toContain("name=\"move-gizmo:magnet\"");
+ 
++const SCENE_A_41 = scene(41, [
++  { id: "magnet-a", role: "magnet", translation: [1e-9, 0, 0] },
++  { id: "magnet-b", role: "magnet", translation: [0, 0, 0] },
++]);
++
++describe("mounted viewport object move integration", () => {
++  afterEach(() => resetSharedResourceRuntimeStoreForTests());
++
++  it("hydrates stably and drives command, pointer gesture, 409, real refetch, rebase, retry and ACK", async () => {
++    const scene42 = scene(42, [
++      { id: "magnet-a", role: "magnet", translation: [1e-9, 0, 0] },
++      { id: "magnet-b", role: "magnet", translation: [0, 0, 0] },
++    ]);
++    const secondScene = deferred<typeof scene42>();
++    const sceneLoad = vi
++      .fn()
++      .mockResolvedValueOnce(SCENE_A_41)
++      .mockImplementationOnce(() => secondScene.promise)
++      .mockResolvedValue(scene(43, [
++        { id: "magnet-a", role: "magnet", translation: [5e-9, 0, 0] },
++        { id: "magnet-b", role: "magnet", translation: [0, 0, 0] },
++      ]));
+     const commitTransaction = vi
+       .fn()
+       .mockRejectedValueOnce(
+         new ControlRoomApiError("stale", 409, "request-1", "revision_conflict"),
+       )
+       .mockResolvedValueOnce({ scene_revision: 43 });
+-    const invalidate = vi.fn();
+-    const draftChanges = vi.fn();
+-    const gestureActiveChanges = vi.fn();
+-    const release = vi.fn();
+-    let conflict: ObjectMoveConflict | null = null;
+-    let resetRevision = 0;
+-    const commit = (objectId: string, translation: [number, number, number], baseRevision: number) =>
+-      commitObjectMoveWorkflow({
+-        api: { model: { commitTransaction } } as never,
+-        baseRevision,
+-        objectId,
+-        onAcknowledged: () => {
+-          draftChanges(null);
+-          resetRevision += 1;
+-          conflict = null;
+-        },
+-        onConflict: (next) => { conflict = next; },
+-        resources: { invalidate } as never,
+-        translation,
++    const fixture = createFixture({ commitTransaction, sceneLoad });
++    selectObject(fixture.selection, "magnet-a");
++    const serverHtml = renderToString(
++      <KernelContext.Provider value={fixture.kernel}>
++        <Viewport3DObjectMoveResourceSurface />
++      </KernelContext.Provider>,
++    );
++    expect(serverHtml).toContain('data-scene-status="loading"');
++    expect(serverHtml).not.toContain("move-gizmo:magnet-a");
++
++    const mounted = await hydrateFixture(fixture, serverHtml);
++    try {
++      expect(mounted.consoleError.mock.calls.flat().join(" ")).not.toContain("hydration");
++      expect(surface(mounted.container).getAttribute("data-scene-status")).toBe("ready");
++
++      await act(async () => {
++        await fixture.commands.execute("geometry.move-selected", commandContext(fixture, SCENE_A_41));
++      });
++      const axis = moveAxis(mounted.container, "x", "magnet-a");
++      const release = installPointerCapture(axis);
++
++      await act(async () => {
++        axis.dispatchEvent(pointerEvent("pointerdown", 7, [0, 0, 0]));
++        axis.dispatchEvent(pointerEvent("pointermove", 7, [4e-9, 0, 0]));
++      });
++      expect(surface(mounted.container).getAttribute("data-orbit-blocked")).toBe("true");
++      expect(commitTransaction).not.toHaveBeenCalled();
++
++      await act(async () => {
++        axis.dispatchEvent(pointerEvent("pointerup", 7, [4e-9, 0, 0]));
++        await Promise.resolve();
++      });
++      expect(release).toHaveBeenCalledOnce();
++      expect(surface(mounted.container).getAttribute("data-orbit-blocked")).toBe("false");
++      expect(commitTransaction).toHaveBeenCalledTimes(1);
++      expect(commitTransaction.mock.calls[0]?.[0]).toMatchObject({
++        base_revision: 41,
++        object_id: "magnet-a",
++        transform: { translation: [5e-9, 0, 0] },
++      });
++      expect(conflictPanel(mounted.container)).not.toBeNull();
++      expect(fixture.invalidate).not.toHaveBeenCalled();
++      expect(surface(mounted.container).getAttribute("data-scene-status")).toBe("ready");
++      expect(findButton(mounted.container, "Refetch Scene")?.disabled).toBe(false);
++
++      await act(async () => clickButton(mounted.container, "Refetch Scene"));
++      await act(async () => {
++        await new Promise((resolve) => setTimeout(resolve, 0));
++      });
++      expect(conflictPanel(mounted.container)).not.toBeNull();
++      expect(sceneLoad).toHaveBeenCalledTimes(2);
++      expect(surface(mounted.container).getAttribute("data-scene-status")).toBe("stale");
++      secondScene.resolve(scene42);
++      await flushResource();
++      expect(surface(mounted.container).getAttribute("data-scene-status")).toBe("ready");
++
++      await act(async () => clickButton(mounted.container, "Rebase Draft"));
++      expect(conflictPanel(mounted.container)?.getAttribute("data-move-conflict")).toBe("rebased");
++      await act(async () => {
++        clickButton(mounted.container, "Retry Move");
++        await Promise.resolve();
++      });
++      await act(async () => {
++        await new Promise((resolve) => setTimeout(resolve, 0));
++      });
++
++      expect(commitTransaction).toHaveBeenCalledTimes(2);
++      expect(sceneLoad).toHaveBeenCalledTimes(3);
++      expect(commitTransaction.mock.calls[1]?.[0]).toMatchObject({
++        base_revision: 42,
++        object_id: "magnet-a",
++        transform: { translation: [5e-9, 0, 0] },
++      });
++      expect(fixture.invalidate).toHaveBeenCalledTimes(7);
++      expect(fixture.invalidate.mock.calls.every(([, revision]) => revision === 43)).toBe(true);
++      expect(conflictPanel(mounted.container)).toBeNull();
++      expect(surface(mounted.container).getAttribute("data-draft-reset-revision")).toBe("1");
++      expect(surface(mounted.container).getAttribute("data-orbit-blocked")).toBe("false");
++    } finally {
++      await mounted.cleanup();
++    }
++  });
++
++  it("expires A atomically for A to B to A, removal and role change without implicit reactivation", async () => {
++    const fixture = createFixture();
++    selectObject(fixture.selection, "magnet-a");
++    const mounted = await hydrateFixture(fixture);
++    try {
++      await activateMove(fixture, SCENE_A_41);
++      expect(moveAxis(mounted.container, "x", "magnet-a")).not.toBeNull();
++
++      await act(async () => selectObject(fixture.selection, "magnet-b"));
++      expect(fixture.objectMoveTool.getSnapshot()).toBeNull();
++      await act(async () => selectObject(fixture.selection, "magnet-a"));
++      expect(mounted.container.querySelector('[name="move-gizmo:magnet-a"]')).toBeNull();
++
++      await activateMove(fixture, SCENE_A_41);
++      sharedResourceRuntimeStore.updateData(
++        MODEL_SCENE_PATH,
++        scene(42, [{ id: "magnet-b", role: "magnet", translation: [0, 0, 0] }]),
++        42,
++      );
++      await flushResource();
++      expect(fixture.objectMoveTool.getSnapshot()).toBeNull();
++
++      sharedResourceRuntimeStore.updateData(MODEL_SCENE_PATH, SCENE_A_41, 43);
++      await flushResource();
++      await activateMove(fixture, SCENE_A_41);
++      sharedResourceRuntimeStore.updateData(
++        MODEL_SCENE_PATH,
++        scene(44, [{ id: "magnet-a", role: "auxiliary", translation: [1e-9, 0, 0] }]),
++        44,
++      );
++      await flushResource();
++      expect(fixture.objectMoveTool.getSnapshot()).toBeNull();
++      expect(mounted.container.querySelector('[name="move-gizmo:magnet-a"]')).toBeNull();
++    } finally {
++      await mounted.cleanup();
++    }
++  });
++
++  it("clears a 409 conflict on session identity change and cannot retry the stale object", async () => {
++    const commitTransaction = vi.fn().mockRejectedValueOnce(
++      new ControlRoomApiError("stale", 409, "request-1", "revision_conflict"),
++    );
++    const fixture = createFixture({ commitTransaction });
++    selectObject(fixture.selection, "magnet-a");
++    const mounted = await hydrateFixture(fixture);
++    try {
++      await activateMove(fixture, SCENE_A_41);
++      const axis = moveAxis(mounted.container, "x", "magnet-a");
++      installPointerCapture(axis);
++      await act(async () => {
++        axis.dispatchEvent(pointerEvent("pointerdown", 5, [0, 0, 0]));
++        axis.dispatchEvent(pointerEvent("pointermove", 5, [2e-9, 0, 0]));
++        axis.dispatchEvent(pointerEvent("pointerup", 5, [2e-9, 0, 0]));
++        await Promise.resolve();
+       });
+-    const gesture = createMoveGestureController({
+-      baseRevision: 41,
+-      objectId: "magnet",
+-      onCommit: commit,
+-      onDraftChange: draftChanges,
+-      onGestureActiveChange: gestureActiveChanges,
+-      origin: [1e-9, 0, 0],
+-    });
+-
+-    gesture.begin("x", 7, [0, 0, 0], vi.fn(), release);
+-    gesture.move(7, [4e-9, 0, 0]);
+-    await gesture.end(7);
+-
+-    expect(commitTransaction).toHaveBeenCalledTimes(1);
+-    expect(commitTransaction.mock.calls[0]?.[0]).toMatchObject({
+-      base_revision: 41,
+-      transform: { translation: [5e-9, 0, 0] },
+-    });
+-    expect(draftChanges).not.toHaveBeenLastCalledWith(null);
+-    expect(conflict).toMatchObject({
+-      baseRevision: 41,
+-      phase: "conflict",
+-      translation: [5e-9, 0, 0],
+-    });
+-    expect(invalidate).not.toHaveBeenCalled();
+-    expect(release).toHaveBeenCalledOnce();
+-    expect(gestureActiveChanges.mock.calls).toEqual([[true], [false]]);
+-
+-    const refetchStates: string[] = [];
+-    refetchStates.push("loading");
+-    const sceneAt42 = { ...sceneAt41, revision: 42 };
+-    refetchStates.push("ready");
+-    conflict = rebaseObjectMoveConflict(conflict!, sceneAt42.revision);
+-    expect(conflict.translation).toEqual([5e-9, 0, 0]);
+-    expect(refetchStates).toEqual(["loading", "ready"]);
+-
+-    await commit(conflict.objectId, conflict.translation, conflict.baseRevision);
+-
+-    expect(commitTransaction).toHaveBeenCalledTimes(2);
+-    expect(commitTransaction.mock.calls[1]?.[0]).toMatchObject({
+-      base_revision: 42,
+-      transform: { translation: [5e-9, 0, 0] },
+-    });
+-    expect(invalidate).toHaveBeenCalledTimes(7);
+-    expect(invalidate.mock.calls.every(([, revision]) => revision === 43)).toBe(true);
+-    expect(draftChanges).toHaveBeenLastCalledWith(null);
+-    expect(resetRevision).toBe(1);
+-    expect(conflict).toBeNull();
++      expect(conflictPanel(mounted.container)).not.toBeNull();
++
++      sharedResourceRuntimeStore.updateData(
++        SESSION_STATUS_RESOURCE_KEY,
++        sessionStatus("session-b", "session-b@2", 42),
++        42,
++      );
++      await flushResource();
++
++      expect(fixture.objectMoveTool.getSnapshot()).toBeNull();
++      expect(conflictPanel(mounted.container)).toBeNull();
++      expect(surface(mounted.container).getAttribute("data-orbit-blocked")).toBe("false");
++      expect(commitTransaction).toHaveBeenCalledOnce();
++      expect(findButton(mounted.container, "Retry Move")).toBeNull();
++    } finally {
++      await mounted.cleanup();
++    }
+   });
+ });
++
++function createFixture(options: {
++  commitTransaction?: ReturnType<typeof vi.fn>;
++  sceneLoad?: ReturnType<typeof vi.fn>;
++} = {}) {
++  const bus = new EventBus<KernelEventMap>();
++  const resources = new ResourceInvalidationController(bus);
++  const selection = new SelectionController(bus);
++  const layout = new LayoutController(bus);
++  const objectMoveTool = new ObjectMoveToolController();
++  const commands = new CommandRegistry();
++  for (const command of RIBBON_COMMANDS) commands.register(command);
++  const invalidate = vi.spyOn(resources, "invalidate");
++  const sceneLoad = options.sceneLoad ?? vi.fn().mockResolvedValue(SCENE_A_41);
++  const commitTransaction = options.commitTransaction ??
++    vi.fn().mockResolvedValue({ scene_revision: 43 });
++  const kernel = {
++    api: {
++      model: { commitTransaction, scene: sceneLoad },
++      sessions: { current: { status: vi.fn().mockResolvedValue(sessionStatus("session-a", "session-a@1", 41)) } },
++    },
++    bus,
++    commands,
++    diagnosticRecorder: new DiagnosticRecorderController({ config: { enabled: false } }),
++    layout,
++    objectMoveTool,
++    resources,
++    selection,
++  } as unknown as KernelApi;
++  return { commands, commitTransaction, invalidate, kernel, layout, objectMoveTool, resources, sceneLoad, selection };
++}
++
++async function hydrateFixture(
++  fixture: ReturnType<typeof createFixture>,
++  serverHtml = renderToString(
++    <KernelContext.Provider value={fixture.kernel}>
++      <Viewport3DObjectMoveResourceSurface />
++    </KernelContext.Provider>,
++  ),
++) {
++  const dom = installSimulationPreparationTestDom();
++  const container = dom.document.createElement("div");
++  container.innerHTML = serverHtml;
++  const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
++  let root: Root;
++  await act(async () => {
++    root = hydrateRoot(
++      container as unknown as Element,
++      <KernelContext.Provider value={fixture.kernel}>
++        <Viewport3DObjectMoveResourceSurface />
++      </KernelContext.Provider>,
++    );
++    await Promise.resolve();
++    await Promise.resolve();
++  });
++  await flushResource();
++  return {
++    consoleError,
++    container,
++    cleanup: async () => {
++      await act(async () => root.unmount());
++      consoleError.mockRestore();
++      dom.restore();
++    },
++  };
++}
++
++async function activateMove(
++  fixture: ReturnType<typeof createFixture>,
++  currentScene: typeof SCENE_A_41,
++) {
++  await act(async () => {
++    await fixture.commands.execute("geometry.move-selected", commandContext(fixture, currentScene));
++  });
++}
++
++function commandContext(fixture: ReturnType<typeof createFixture>, currentScene: unknown) {
++  return {
++    api: fixture.kernel.api,
++    layout: fixture.layout,
++    objectMoveTool: fixture.objectMoveTool,
++    resourceData: { [MODEL_SCENE_PATH]: currentScene },
++    selection: fixture.selection,
++    source: "test" as const,
++  };
++}
++
++function selectObject(selection: SelectionController, objectId: string): void {
++  selection.set({
++    kind: "object.root",
++    label: objectId,
++    nodeId: `model:object:${objectId}`,
++    objectId,
++    ref: {
++      kind: "object.root",
++      nodeId: `model:object:${objectId}`,
++      objectId,
++      type: "scene-object",
++      visualizationTargetId: `object:${objectId}`,
++    },
++  }, "test");
++}
++
++function scene(
++  revision: number,
++  objects: Array<{ id: string; role: string; translation: number[] }>,
++) {
++  return {
++    objects: objects.map((object) => ({
++      geometry: { geometry_kind: "Box", geometry_params: { size: [2e-9, 2e-9, 2e-9] } },
++      id: object.id,
++      name: object.id,
++      role: object.role,
++      transform: { translation: object.translation },
++    })),
++    revision,
++  };
++}
++
++function sessionStatus(sessionId: string, sessionEpoch: string, revision: number) {
++  return {
++    resources: { scene_revision: revision },
++    session: { session_epoch: sessionEpoch, session_id: sessionId },
++  } as never;
++}
++
++function deferred<T>() {
++  let resolve!: (value: T) => void;
++  const promise = new Promise<T>((next) => { resolve = next; });
++  return { promise, resolve };
++}
++
++async function flushResource(): Promise<void> {
++  await act(async () => {
++    await new Promise((resolve) => setTimeout(resolve, 0));
++    await Promise.resolve();
++    await Promise.resolve();
++  });
++}
++
++function surface(container: TestElement): TestElement {
++  return container.querySelector(".fm-viewport-3d__move-resource-surface")!;
++}
++
++function conflictPanel(container: TestElement): TestElement | null {
++  return container.querySelector(".fm-viewport-3d__move-conflict");
++}
++
++function moveAxis(container: TestElement, axis: string, objectId: string): TestElement {
++  return descendants(container, "mesh")
++    .find((element) => element.getAttribute("name") === `move-axis:${axis}:${objectId}`)!;
++}
++
++function findButton(container: TestElement, label: string): TestElement | null {
++  return descendants(container, "button").find((button) => button.textContent === label) ?? null;
++}
++
++function descendants(container: TestElement, tagName: string): TestElement[] {
++  const matches: TestElement[] = [];
++  const visit = (element: TestElement) => {
++    for (const child of element.childNodes) {
++      if (!(child instanceof TestElement)) continue;
++      if (child.tagName.toLowerCase() === tagName) matches.push(child);
++      visit(child);
++    }
++  };
++  visit(container);
++  return matches;
++}
++
++function clickButton(container: TestElement, label: string): void {
++  const button = findButton(container, label);
++  if (!button) throw new Error(`Button not found: ${label}`);
++  button.click();
++}
++
++function pointerEvent(
++  type: string,
++  pointerId: number,
++  point: [number, number, number],
++): TestEvent {
++  const event = new TestEvent(type, { bubbles: true }) as TestEvent & {
++    point: { x: number; y: number; z: number };
++    pointerId: number;
++  };
++  event.pointerId = pointerId;
++  event.point = { x: point[0], y: point[1], z: point[2] };
++  return event;
++}
++
++function installPointerCapture(element: TestElement) {
++  const release = vi.fn();
++  Object.assign(element, {
++    releasePointerCapture: release,
++    setPointerCapture: vi.fn(),
++  });
++  return release;
++}
+diff --git a/apps/control-room/src/modules/ribbon/ribbonStructure.test.ts b/apps/control-room/src/modules/ribbon/ribbonStructure.test.ts
+index 82af2f8b1..7a901c822 100644
+--- a/apps/control-room/src/modules/ribbon/ribbonStructure.test.ts
++++ b/apps/control-room/src/modules/ribbon/ribbonStructure.test.ts
+@@ -5130,21 +5130,25 @@ describe("ribbon structure", () => {
+       selection,
+       source: "test" as const,
+     };
+ 
+     expect(registry.isEnabled("geometry.move-selected", context)).toBe(true);
+     expect(objectMoveTool.getSnapshot()).toBeNull();
+ 
+     expect(await registry.execute("geometry.move-selected", context)).toEqual({
+       status: "completed",
+     });
+-    expect(objectMoveTool.getSnapshot()).toEqual({ mode: "move", objectId: "box" });
++    expect(objectMoveTool.getSnapshot()).toEqual({
++      activationId: 1,
++      mode: "move",
++      objectId: "box",
++    });
+     expect(layout.get().activeViewportMainModuleId).toBe("viewport-3d");
+     expect(layout.get().focusedSlot).toBe("viewport-main");
+     expect(registry.isActive("geometry.move-selected", context)).toBe(true);
+   });
+ 
+   it("fails Move closed while scene readiness is unavailable and leaves Rotate/Scale request-free", async () => {
+     const bus = new EventBus<KernelEventMap>();
+     const selection = new SelectionController(bus);
+     selection.set(selectedMeshObject(), "test");
+     const objectMoveTool = new ObjectMoveToolController();
+diff --git a/apps/control-room/src/modules/viewport-3d/MoveObjectGizmo.tsx b/apps/control-room/src/modules/viewport-3d/MoveObjectGizmo.tsx
+index 002baed26..9b92c76aa 100644
+--- a/apps/control-room/src/modules/viewport-3d/MoveObjectGizmo.tsx
++++ b/apps/control-room/src/modules/viewport-3d/MoveObjectGizmo.tsx
+@@ -167,20 +167,21 @@ export function MoveObjectGizmo({
+       userData={{ gizmo: "move", objectId: object.objectId }}
+     >
+       <mesh userData={{ draftPreview: true }}>
+         <boxGeometry args={object.bounds.size} />
+         <meshBasicMaterial color="#89b4fa" opacity={0.22} transparent wireframe />
+       </mesh>
+       {(["x", "y", "z"] as const).map((axis, index) => (
+         <mesh
+           {...moveAxisPointerHandlers(controller, axis)}
+           key={axis}
++          name={`move-axis:${axis}:${object.objectId}`}
+           position={axisPosition(axis, length)}
+           rotation={axisRotation(axis)}
+           userData={{ axis, gizmo: "move-axis", objectId: object.objectId }}
+         >
+           <cylinderGeometry args={[length * 0.035, length * 0.035, length, 10]} />
+           <meshBasicMaterial color={["#f38ba8", "#a6e3a1", "#89b4fa"][index]} depthTest={false} />
+         </mesh>
+       ))}
+     </group>
+   );
+@@ -252,21 +253,26 @@ export function Viewport3DMoveToolLayer({
+           baseRevision={primitiveModel.sceneRevision as number}
+           object={object}
+           onCommit={onCommit}
+           onGestureActiveChange={onGestureActiveChange}
+         />
+       </group>
+     ));
+ }
+ 
+ function eventPoint(event: ThreeEvent<PointerEvent>): Translation3 {
+-  return [event.point.x, event.point.y, event.point.z];
++  const point = event.point ??
++    (event.nativeEvent as PointerEvent & {
++      point?: { x: number; y: number; z: number };
++    }).point;
++  if (!point) return [0, 0, 0];
++  return [point.x, point.y, point.z];
+ }
+ 
+ function pointerTarget(event: ThreeEvent<PointerEvent>): Element & {
+   releasePointerCapture(pointerId: number): void;
+   setPointerCapture(pointerId: number): void;
+ } {
+   return event.target as Element & {
+     releasePointerCapture(pointerId: number): void;
+     setPointerCapture(pointerId: number): void;
+   };
+diff --git a/apps/control-room/src/modules/viewport-3d/Viewport3DModule.tsx b/apps/control-room/src/modules/viewport-3d/Viewport3DModule.tsx
+index 3add61cf7..9ac03abd9 100644
+--- a/apps/control-room/src/modules/viewport-3d/Viewport3DModule.tsx
++++ b/apps/control-room/src/modules/viewport-3d/Viewport3DModule.tsx
+@@ -25,29 +25,20 @@ import type {
+ } from "@/kernel/api/apiTypes";
+ import {
+   quantityUnitForColorbar,
+   resolveCanonicalQuantityId,
+ } from "@/kernel/api/quantityIds";
+ import {
+   viewport3DAuditRenderErrorInjectionEnabledFromBrowserConfig,
+   viewport3DOrbitDebugEnabledFromBrowserConfig,
+ } from "@/kernel/browserFullmagConfig";
+ import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
+-import {
+-  type ObjectTranslation,
+-} from "@/kernel/authoring/objectTranslationMutation";
+-import {
+-  commitObjectMoveWorkflow,
+-  rebaseObjectMoveConflict,
+-  type ObjectMoveConflict,
+-} from "@/kernel/authoring/objectMoveConflictWorkflow";
+-import { useObjectMoveTool } from "@/kernel/authoring/ObjectMoveToolController";
+ import { useMeshHistogramBinElementsResource } from "@/kernel/resources/geometryLifecycleResources";
+ import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
+ import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
+ import { useFieldMetaResource } from "@/kernel/resources/studyRuntimeResources";
+ import {
+   frozenSpinsMaskIdFromResource,
+   useFrozenSpinsActivePreviewId,
+   useFrozenSpinsMaskResource,
+   useFrozenSpinsPreviewResource,
+ } from "@/kernel/resources/frozenSpinsResources";
+@@ -111,20 +102,24 @@ import { createViewport3DRenderAdoptionRegistry } from "./model/viewport3DRender
+ import {
+   resolveViewport3DCameraFit,
+   normalizeViewport3DOrbitDebugAngles,
+   shouldApplyViewport3DOrbitDebugAngles,
+   type Viewport3DCameraChange,
+   type Viewport3DOrbitDebugAngles,
+   VIEWPORT_3D_WORLD_UP,
+   VIEWPORT_3D_ORBIT_DEBUG_LIMITS,
+ } from "./layers/CameraControls";
+ import { Viewport3DScene } from "./layers/Viewport3DScene";
++import {
++  useViewport3DObjectMoveInteraction,
++  Viewport3DMoveConflictPanel,
++} from "./Viewport3DObjectMoveInteraction";
+ import type { Viewport3DAirboxFrameState } from "./layers/Viewport3DScene";
+ import { recordViewport3DCameraTrajectorySample } from "./layers/viewport3DCameraTrajectoryProbe";
+ import { resolveViewport3DTargetSurfaceLayerInput } from "./layers/viewport3DLayerPassInputs";
+ import type { RegionOverlaySelection } from "./layers/RegionOverlayLayer";
+ import { buildFrozenSpinsOverlayModel } from "./layers/FrozenSpinsOverlay";
+ import {
+   DEFAULT_REGION_DIAGNOSTIC_OVERLAY_STATE,
+   regionDiagnosticOverlayMode,
+   type RegionDiagnosticOverlaySource,
+   type RegionDiagnosticOverlayState,
+@@ -1260,20 +1255,21 @@ interface Viewport3DFrameProps
+   onRegionOverlaySourceChange: (source: RegionDiagnosticOverlaySource) => void;
+   onRegionOverlayVisibilityChange: (visible: boolean) => void;
+   regionDiagnosticOverlayState: RegionDiagnosticOverlayState;
+   quantityId: string;
+   renderedMeshRevision: number | string | null;
+   scalarColorPalette: string;
+   sessionIdentity: SessionResourceIdentity | null;
+   selectedLabel: string;
+   sceneRefetch: () => void;
+   sceneRevision: number | null;
++  sceneStatus: string;
+   slotId: ModuleProps["slotId"];
+   status: string;
+   topologyRevision: number | string | null;
+   visualizationEffectiveRenderMode: string;
+   visualizationError: string | null;
+   visualizationDebugSource: Viewport3DVisualizationDebugSource;
+ }
+ 
+ export default function Viewport3DModule({
+   kernel,
+@@ -1757,20 +1753,21 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
+   onFdmUniverseOverlayVisibilityChange,
+   onFrozenSpinsOverlayVisibilityChange,
+   onRegionOverlaySourceChange,
+   onRegionOverlayVisibilityChange,
+   regionDiagnosticOverlayState,
+   quantityId,
+   sessionIdentity,
+   selectedLabel,
+   sceneRefetch,
+   sceneRevision,
++  sceneStatus,
+   slotId,
+   status,
+   visualizationEffectiveRenderMode,
+   visualizationError,
+   visualizationDebugSource,
+   ...sceneProps
+ }: Viewport3DFrameProps) {
+   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+   const pendingCaptureRevisionRef = useRef<number | null>(null);
+   const primitiveObjectIds =
+@@ -1796,23 +1793,36 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
+   const [orbitDebugAngles, setOrbitDebugAngles] =
+     useState<Viewport3DOrbitDebugAngles>(() =>
+       normalizeViewport3DOrbitDebugAngles(null),
+     );
+   const [orbitDebugRevision, setOrbitDebugRevision] = useState(0);
+   const [orbitDebugCommitRevision, setOrbitDebugCommitRevision] = useState(0);
+   const [dismissedResourceIssueKey, setDismissedResourceIssueKey] =
+     useState<string | null>(null);
+   const [inspectHover, setInspectHover] =
+     useState<Viewport3DInspectHover | null>(null);
+-  const [moveConflict, setMoveConflict] = useState<ObjectMoveConflict | null>(null);
+-  const [moveDraftResetRevision, setMoveDraftResetRevision] = useState(0);
+-  const moveTool = useObjectMoveTool(kernel.objectMoveTool);
++  const moveTargetEligible = Boolean(
++    sceneProps.selectedObjectId &&
++      sceneProps.primitiveModel?.objects.some(
++        (object) =>
++          object.objectId === sceneProps.selectedObjectId &&
++          object.role === "magnet",
++      ),
++  );
++  const moveInteraction = useViewport3DObjectMoveInteraction({
++    moveTargetEligible,
++    sceneRefetch,
++    sceneRevision,
++    sceneStatus,
++    selectedObjectId: sceneProps.selectedObjectId,
++    sessionId: sessionIdentity?.sessionId ?? null,
++  });
+   const lastRenderedMeshRevision = useRef<number | string | null>(null);
+   const sendVisualizationAck = useVisualizationClientAckSender({ api: kernel.api });
+   const visualizationAckRevisionRef = useRef<{
+     resourceFrameKey: string;
+     revision: number;
+   } | null>(null);
+   const visualizationAckKindsRef = useRef(
+     new Map<number, {
+       changeKind: "data" | "style";
+       dataIdentity: VisualizationDataAdoptionIdentity | null;
+@@ -2261,57 +2271,20 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
+   const handleCanvasContextMenu = useCallback(
+     (event: ReactMouseEvent<HTMLDivElement>) => {
+       event.preventDefault();
+     },
+     [],
+   );
+   const handleCanvasPointerMissed = useCallback(() => {
+     clearInspectHover();
+     onClearSelection();
+   }, [clearInspectHover, onClearSelection]);
+-  const commitMove = useCallback(async (
+-    objectId: string,
+-    translation: ObjectTranslation,
+-    baseRevision: number,
+-  ) => {
+-    return commitObjectMoveWorkflow({
+-      api: kernel.api,
+-      baseRevision,
+-      objectId,
+-      onAcknowledged: () => {
+-        setMoveConflict(null);
+-        setMoveDraftResetRevision((revision) => revision + 1);
+-      },
+-      onConflict: setMoveConflict,
+-      resources: kernel.resources,
+-      translation,
+-    });
+-  }, [kernel.api, kernel.resources]);
+-  const rebaseMove = useCallback(() => {
+-    if (
+-      !moveConflict ||
+-      sceneRevision === null ||
+-      sceneRevision === moveConflict.baseRevision
+-    ) return;
+-    setMoveConflict(rebaseObjectMoveConflict(moveConflict, sceneRevision));
+-  }, [moveConflict, sceneRevision]);
+-  const retryMove = useCallback(async () => {
+-    if (!moveConflict || moveConflict.phase !== "rebased") return;
+-    const retry = { ...moveConflict, phase: "retrying" as const };
+-    setMoveConflict(retry);
+-    await commitMove(retry.objectId, retry.translation, retry.baseRevision);
+-  }, [commitMove, moveConflict]);
+-  const moveCanRebase = Boolean(
+-    moveConflict?.phase === "conflict" &&
+-      sceneRevision !== null &&
+-      sceneRevision !== moveConflict.baseRevision,
+-  );
+   const updateInspectHover = useCallback(
+     (
+       sample: Viewport3DInspectSample,
+       screenPosition: Viewport3DInspectScreenPosition,
+     ) => {
+       setInspectHover({ inspectRevision, sample, screenPosition });
+     },
+     [inspectRevision, setInspectHover],
+   );
+   const visibleInspectHover =
+@@ -2589,23 +2562,23 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
+             colors={colors}
+             hysteresisReplayGlyphModel={hysteresisReplayGlyphModel}
+             orbitDebugAngles={orbitDebugAngles}
+             orbitDebugCommitRevision={orbitDebugCommitRevision}
+             orbitDebugRevision={orbitDebugRevision}
+             onOrbitDebugAnglesChange={
+               orbitDebugEnabled ? syncOrbitDebugAngles : undefined
+             }
+             onInspectClear={clearInspectHover}
+             onInspectSample={updateInspectHover}
+-            onMoveCommit={commitMove}
+-            moveToolObjectId={moveTool?.objectId ?? null}
+-            moveDraftResetRevision={moveDraftResetRevision}
++            onMoveCommit={moveInteraction.commitMove}
++            moveToolObjectId={moveInteraction.moveToolObjectId}
++            moveDraftResetRevision={moveInteraction.moveDraftResetRevision}
+             onVisualizationFrameCommitted={onVisualizationFrameCommitted}
+             visualProfileId={visualProfile.id}
+           />
+         </Viewport3DCanvas>
+       ) : (
+         <div className="fm-viewport-3d__placeholder">Preparing viewport</div>
+       )}
+       {discretizationKind && (
+         <div
+           aria-label={`Discretization method: ${discretizationKind}`}
+@@ -2620,52 +2593,21 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
+             <Viewport3DColorbar key={key} legend={legend} />
+           ))}
+         </div>
+       ) : null}
+       {visibleInspectHover ? (
+         <Viewport3DInspectTooltip
+           hover={visibleInspectHover}
+           provenance={visibleInspectProvenance}
+         />
+       ) : null}
+-      {moveConflict ? (
+-        <aside className="fm-viewport-3d__move-conflict" data-move-conflict={moveConflict.phase}>
+-          <span>Scene changed. The move draft is preserved.</span>
+-          <Button
+-            disabled={moveConflict.phase !== "conflict"}
+-            size="sm"
+-            type="button"
+-            variant="ghost"
+-            onClick={sceneRefetch}
+-          >
+-            Refetch Scene
+-          </Button>
+-          <Button
+-            disabled={!moveCanRebase}
+-            size="sm"
+-            type="button"
+-            variant="ghost"
+-            onClick={rebaseMove}
+-          >
+-            Rebase Draft
+-          </Button>
+-          <Button
+-            disabled={moveConflict.phase !== "rebased"}
+-            size="sm"
+-            type="button"
+-            variant="primary"
+-            onClick={() => void retryMove()}
+-          >
+-            Retry Move
+-          </Button>
+-        </aside>
+-      ) : null}
++      <Viewport3DMoveConflictPanel interaction={moveInteraction} />
+       <Viewport3DFdmSelectionAnnouncement
+         announcement={fdmSelectionAnnouncement}
+       />
+       {orbitDebugEnabled && clientReady && colors ? (
+         <Viewport3DOrbitDebugPanel
+           angles={orbitDebugAngles}
+           onAnglesChange={applyOrbitDebugAngles}
+           onAnglesCommit={commitOrbitDebugAngles}
+           onInteractionStart={sceneProps.onCameraInteractionStart}
+         />
+diff --git a/apps/control-room/src/modules/viewport-3d/Viewport3DObjectMoveInteraction.tsx b/apps/control-room/src/modules/viewport-3d/Viewport3DObjectMoveInteraction.tsx
+new file mode 100644
+index 000000000..f2dbac80c
+--- /dev/null
++++ b/apps/control-room/src/modules/viewport-3d/Viewport3DObjectMoveInteraction.tsx
+@@ -0,0 +1,298 @@
++"use client";
++
++import { useCallback, useEffect, useMemo, useRef, useState } from "react";
++
++import { useKernel } from "@/kernel/KernelContext";
++import {
++  commitObjectMoveWorkflow,
++  rebaseObjectMoveConflict,
++  type ObjectMoveConflict,
++} from "@/kernel/authoring/objectMoveConflictWorkflow";
++import { useObjectMoveTool } from "@/kernel/authoring/ObjectMoveToolController";
++import type { ObjectTranslation } from "@/kernel/authoring/objectTranslationMutation";
++import { Button } from "@/shared/ui/Button";
++import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
++import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
++import { useSelectionSelector } from "@/kernel/selection/useSelection";
++
++import { Viewport3DMoveToolLayer } from "./MoveObjectGizmo";
++import { buildViewport3DPrimitiveRenderModel } from "./viewport3dPrimitiveModel";
++
++interface ActiveMoveIdentity {
++  activationId: number;
++  sessionId: string | null;
++}
++
++export interface Viewport3DMoveConflict extends ObjectMoveConflict {
++  activationId: number;
++  sessionId: string | null;
++}
++
++export function useViewport3DObjectMoveInteraction({
++  moveTargetEligible,
++  sceneRefetch,
++  sceneRevision,
++  sceneStatus,
++  selectedObjectId,
++  sessionId,
++}: {
++  moveTargetEligible: boolean;
++  sceneRefetch: () => void;
++  sceneRevision: number | null;
++  sceneStatus: string;
++  selectedObjectId: string | null;
++  sessionId: string | null;
++}) {
++  const kernel = useKernel();
++  const moveTool = useObjectMoveTool(kernel.objectMoveTool);
++  const activationIdentityRef = useRef<ActiveMoveIdentity | null>(null);
++  const [moveConflict, setMoveConflict] =
++    useState<Viewport3DMoveConflict | null>(null);
++  const [moveDraftResetRevision, setMoveDraftResetRevision] = useState(0);
++
++  const expire = useCallback(() => {
++    activationIdentityRef.current = null;
++    setMoveConflict(null);
++    setMoveDraftResetRevision((revision) => revision + 1);
++    kernel.objectMoveTool.clear();
++  }, [kernel.objectMoveTool]);
++  const expireCanonicalActivation = useCallback(() => {
++    activationIdentityRef.current = null;
++    kernel.objectMoveTool.clear();
++  }, [kernel.objectMoveTool]);
++
++  useEffect(() => {
++    if (!moveTool) {
++      activationIdentityRef.current = null;
++      return;
++    }
++    if (
++      moveTool.objectId !== selectedObjectId ||
++      !moveTargetEligible
++    ) {
++      expireCanonicalActivation();
++      return;
++    }
++    const activeIdentity = activationIdentityRef.current;
++    if (!activeIdentity || activeIdentity.activationId !== moveTool.activationId) {
++      activationIdentityRef.current = {
++        activationId: moveTool.activationId,
++        sessionId,
++      };
++      return;
++    }
++    if (activeIdentity.sessionId === null && sessionId !== null) {
++      activeIdentity.sessionId = sessionId;
++      return;
++    }
++    if (activeIdentity.sessionId !== sessionId) expireCanonicalActivation();
++  }, [
++    expireCanonicalActivation,
++    moveTargetEligible,
++    moveTool,
++    selectedObjectId,
++    sessionId,
++  ]);
++
++  useEffect(
++    () => () => {
++      kernel.objectMoveTool.clear();
++    },
++    [kernel.objectMoveTool],
++  );
++
++  const targetIsCurrent = useCallback(
++    (objectId: string, activationId: number) =>
++      moveTool?.activationId === activationId &&
++      moveTool.objectId === objectId &&
++      selectedObjectId === objectId &&
++      moveTargetEligible &&
++      activationIdentityRef.current?.sessionId === sessionId,
++    [moveTargetEligible, moveTool, selectedObjectId, sessionId],
++  );
++  const activeMoveConflict =
++    moveConflict &&
++    moveTool?.activationId === moveConflict.activationId &&
++    moveTool.objectId === moveConflict.objectId &&
++    selectedObjectId === moveConflict.objectId &&
++    moveTargetEligible &&
++    moveConflict.sessionId === sessionId
++      ? moveConflict
++      : null;
++
++  const commitMove = useCallback(async (
++    objectId: string,
++    translation: ObjectTranslation,
++    baseRevision: number,
++  ) => {
++    const activationId = moveTool?.activationId;
++    if (activationId === undefined || !targetIsCurrent(objectId, activationId)) {
++      expire();
++      return false;
++    }
++    return commitObjectMoveWorkflow({
++      api: kernel.api,
++      baseRevision,
++      objectId,
++      onAcknowledged: () => {
++        setMoveConflict(null);
++        setMoveDraftResetRevision((revision) => revision + 1);
++      },
++      onConflict: (conflict) => {
++        if (targetIsCurrent(objectId, activationId)) {
++          setMoveConflict({ ...conflict, activationId, sessionId });
++        }
++      },
++      resources: kernel.resources,
++      translation,
++    });
++  }, [expire, kernel.api, kernel.resources, moveTool?.activationId, sessionId, targetIsCurrent]);
++
++  const refetchMoveScene = useCallback(() => {
++    if (!activeMoveConflict) {
++      expire();
++      return;
++    }
++    sceneRefetch();
++  }, [activeMoveConflict, expire, sceneRefetch]);
++
++  const rebaseMove = useCallback(() => {
++    if (
++      !activeMoveConflict ||
++      sceneStatus !== "ready" ||
++      sceneRevision === null ||
++      sceneRevision === activeMoveConflict.baseRevision
++    ) return;
++    setMoveConflict({
++      ...rebaseObjectMoveConflict(activeMoveConflict, sceneRevision),
++      activationId: activeMoveConflict.activationId,
++      sessionId: activeMoveConflict.sessionId,
++    });
++  }, [activeMoveConflict, sceneRevision, sceneStatus]);
++
++  const retryMove = useCallback(async () => {
++    if (
++      !activeMoveConflict ||
++      activeMoveConflict.phase !== "rebased"
++    ) {
++      if (moveConflict) expire();
++      return;
++    }
++    const retry = { ...activeMoveConflict, phase: "retrying" as const };
++    setMoveConflict(retry);
++    await commitMove(retry.objectId, retry.translation, retry.baseRevision);
++  }, [activeMoveConflict, commitMove, expire, moveConflict]);
++
++  const canRebase = Boolean(
++    activeMoveConflict?.phase === "conflict" &&
++      sceneStatus === "ready" &&
++      sceneRevision !== null &&
++      sceneRevision !== activeMoveConflict.baseRevision,
++  );
++
++  return {
++    canRebase,
++    commitMove,
++    moveConflict: activeMoveConflict,
++    moveDraftResetRevision,
++    moveToolObjectId: moveTool?.objectId ?? null,
++    rebaseMove,
++    refetchMoveScene,
++    retryMove,
++    sceneStatus,
++  };
++}
++
++export function Viewport3DMoveConflictPanel({
++  interaction,
++}: {
++  interaction: ReturnType<typeof useViewport3DObjectMoveInteraction>;
++}) {
++  const { moveConflict } = interaction;
++  if (!moveConflict) return null;
++  return (
++    <aside
++      className="fm-viewport-3d__move-conflict"
++      data-move-conflict={moveConflict.phase}
++    >
++      <span>Scene changed. The move draft is preserved.</span>
++      <Button
++        disabled={
++          moveConflict.phase !== "conflict" ||
++          interaction.sceneStatus === "loading" ||
++          interaction.sceneStatus === "stale"
++        }
++        size="sm"
++        type="button"
++        variant="ghost"
++        onClick={interaction.refetchMoveScene}
++      >
++        Refetch Scene
++      </Button>
++      <Button
++        disabled={!interaction.canRebase}
++        size="sm"
++        type="button"
++        variant="ghost"
++        onClick={interaction.rebaseMove}
++      >
++        Rebase Draft
++      </Button>
++      <Button
++        disabled={moveConflict.phase !== "rebased"}
++        size="sm"
++        type="button"
++        variant="primary"
++        onClick={() => void interaction.retryMove()}
++      >
++        Retry Move
++      </Button>
++    </aside>
++  );
++}
++
++/** Production integration boundary used by qualification tests without mounting WebGL. */
++export function Viewport3DObjectMoveResourceSurface() {
++  const scene = useSceneResource();
++  const sessionIdentity = useSessionResourceIdentity();
++  const selectedObjectId = useSelectionSelector((selection) =>
++    selection.ref?.type === "scene-object"
++      ? selection.ref.objectId ?? selection.objectId
++      : null,
++  );
++  const primitiveModel = useMemo(
++    () => buildViewport3DPrimitiveRenderModel(scene.data, null),
++    [scene.data],
++  );
++  const moveTargetEligible = primitiveModel.objects.some(
++    (object) => object.objectId === selectedObjectId && object.role === "magnet",
++  );
++  const interaction = useViewport3DObjectMoveInteraction({
++    moveTargetEligible,
++    sceneRefetch: scene.refetch,
++    sceneRevision: primitiveModel.sceneRevision,
++    sceneStatus: scene.status,
++    selectedObjectId,
++    sessionId: sessionIdentity?.sessionId ?? null,
++  });
++  const [orbitBlocked, setOrbitBlocked] = useState(false);
++
++  return (
++    <div
++      className="fm-viewport-3d__move-resource-surface"
++      data-draft-reset-revision={interaction.moveDraftResetRevision}
++      data-orbit-blocked={orbitBlocked ? "true" : "false"}
++      data-scene-status={scene.status}
++    >
++      <Viewport3DMoveToolLayer
++        moveDraftResetRevision={interaction.moveDraftResetRevision}
++        moveToolObjectId={interaction.moveToolObjectId}
++        onCommit={interaction.commitMove}
++        onGestureActiveChange={setOrbitBlocked}
++        primitiveModel={primitiveModel}
++        selectedObjectId={selectedObjectId}
++      />
++      <Viewport3DMoveConflictPanel interaction={interaction} />
++    </div>
++  );
++}
+diff --git a/apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts b/apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts
+index 47f1cb1ca..da7d7aaa9 100644
+--- a/apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts
++++ b/apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts
+@@ -6358,20 +6358,21 @@ export function useViewport3DSceneModel({
+     meshQualityMetric,
+     meshQualityOverlayVisible,
+     meshRegionOverlayParts,
+     periodicOverlayModel,
+     meshSizeHighlightModel,
+     meshQualityRange: meshQualityColors?.range ?? null,
+     meshRegionOverlays,
+     primitiveModel,
+     sceneRefetch: scene.refetch,
+     sceneRevision: primitiveModel.sceneRevision,
++    sceneStatus: scene.status,
+     quantityId: primaryFieldQuantityId,
+     regionOverlays,
+     resourceFrameKey,
+     selectedLabel,
+     selectedObjectId,
+     selectedRegionId,
+     selectionBounds,
+     scalarColorPalette,
+     semanticTargetCatalog,
+     status,
+diff --git a/apps/control-room/src/modules/viewport-3d/viewport3dPrimitiveModel.ts b/apps/control-room/src/modules/viewport-3d/viewport3dPrimitiveModel.ts
+index bddc7ebc8..ee5c6f6b0 100644
+--- a/apps/control-room/src/modules/viewport-3d/viewport3dPrimitiveModel.ts
++++ b/apps/control-room/src/modules/viewport-3d/viewport3dPrimitiveModel.ts
+@@ -26,20 +26,21 @@ type Viewport3DPrimitiveMeshState =
+ export interface Viewport3DPrimitiveObject {
+   bounds: Viewport3DBounds;
+   csgPreview: Viewport3DPrimitiveCsgPreview | null;
+   fallbackLabel: string;
+   geometryKey: string;
+   kind: Viewport3DPrimitiveKind;
+   label: string;
+   magnetizationTexturePreview: Viewport3DMagnetizationTexturePreview | null;
+   meshState: Viewport3DPrimitiveMeshState;
+   objectId: string;
++  role?: string | null;
+   sceneRevision: number;
+   translation?: [number, number, number];
+ }
+ 
+ export interface Viewport3DBoxCylinderDifferencePreview {
+   boxSize: [number, number, number];
+   cylinderAxis: [number, number, number];
+   cylinderCenter: [number, number, number];
+   cylinderHeight: number;
+   cylinderRadius: number;
+@@ -489,20 +490,21 @@ export function buildViewport3DPrimitiveRenderModel(
+         fallbackLabel: fallbackLabel(state),
+         geometryKey: geometryKey(objectId, geometry, transform),
+         kind: primitiveKindFromGeometry(geometry),
+         label: asString(object.name) ?? objectId,
+         magnetizationTexturePreview: magnetizationTexturePreview(
+           sceneRecord,
+           object,
+         ),
+         meshState: state,
+         objectId,
++        role: objectRole,
+         sceneRevision,
+         translation: asVec3(transform?.translation) ?? [0, 0, 0],
+       },
+     ];
+   });
+ 
+   return {
+     objects,
+     sceneRevision,
+   };

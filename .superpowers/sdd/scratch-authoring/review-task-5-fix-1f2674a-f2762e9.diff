@@ -1,0 +1,1424 @@
+# Review package: 1f2674a6d..f2762e998
+
+## Commits
+f2762e998 fix(authoring): enforce revision-safe primitive drafts
+
+## Files changed
+ .../geometryLifecycleCommandContributions.test.ts  |  33 ++++++
+ .../geometryLifecycleCommandContributions.ts       |  16 ++-
+ .../kernel/resources/geometryLifecycleResources.ts |   3 +-
+ .../panels/GeometryObjectPanel.dom.test.tsx        | 124 +++++++++++++++++++--
+ .../inspector/panels/GeometryObjectPanel.tsx       |  99 +++++++++++++---
+ .../modules/inspector/primitives/Vector3Field.tsx  |   7 +-
+ .../hooks/usePrimitiveDraftOverlay.test.tsx        |  57 ++++++++++
+ .../viewport-3d/hooks/usePrimitiveDraftOverlay.ts  |  14 +++
+ .../hooks/useViewport3DSceneModel.test.ts          |   7 --
+ .../viewport-3d/hooks/useViewport3DSceneModel.ts   |  15 +--
+ .../layers/PrimitiveObjectLayer.test.tsx           |  66 ++++++++++-
+ crates/fullmag-api/src/error.rs                    |  55 +++++----
+ .../src/router_v2/handlers/model/authoring.rs      |  11 +-
+ .../src/router_v2/handlers/sessions/create.rs      |   1 +
+ crates/fullmag-api/src/router_v2/mod.rs            |   1 +
+ crates/fullmag-api/src/router_v2/tests.rs          |  30 +++++
+ 16 files changed, 468 insertions(+), 71 deletions(-)
+
+## Diff
+diff --git a/apps/control-room/src/kernel/authoring/geometryLifecycleCommandContributions.test.ts b/apps/control-room/src/kernel/authoring/geometryLifecycleCommandContributions.test.ts
+index 8b9fb6764..d94e57c4f 100644
+--- a/apps/control-room/src/kernel/authoring/geometryLifecycleCommandContributions.test.ts
++++ b/apps/control-room/src/kernel/authoring/geometryLifecycleCommandContributions.test.ts
+@@ -456,25 +456,27 @@ describe("geometry lifecycle command contributions", () => {
+         objectId: null,
+         ref: null,
+       });
+ 
+       expect(
+         await registry.execute("geometry.commit-object-draft", {
+           api: {
+             model: { commitTransaction },
+           } as never,
+           resources,
++          resourceData: { [MODEL_SCENE_PATH]: { revision: 21 } },
+           selection,
+           source: "test",
+         }),
+       ).toEqual({ status: "completed" });
+       expect(commitTransaction).toHaveBeenCalledWith({
++        base_revision: 21,
+         geometry: {
+           geometry_kind: "Box",
+           geometry_params: { size: [1e-7, 1e-7, 1e-8] },
+         },
+         kind: "create_object",
+         name: "New thin film",
+         object_id: "box-9ix",
+         transform: {
+           rotation: [0, 0, 0],
+           scale: [1, 1, 1],
+@@ -755,37 +757,68 @@ describe("geometry lifecycle command contributions", () => {
+     );
+ 
+     const result = await registry.execute("geometry.commit-object-draft", {
+       api: {
+         model: {
+           commitTransaction: vi.fn(async () => {
+             throw new Error("base revision conflict");
+           }),
+         },
+       } as never,
++      resourceData: { [MODEL_SCENE_PATH]: { revision: 21 } },
+       selection,
+       source: "test",
+     });
+ 
+     expect(result).toEqual({
+       message: "base revision conflict",
+       status: "failed",
+     });
+     expect(selection.get()).toMatchObject({
+       kind: "builder.primitive",
+       label: "New sphere",
+       nodeId: "geometry:draft:sphere",
+       objectId: null,
+       ref: null,
+     });
+   });
+ 
++  it("fails closed without a canonical scene revision", async () => {
++    const registry = registryWithLifecycleCommands();
++    const selection = new SelectionController(new EventBus<KernelEventMap>());
++    selection.set(
++      {
++        kind: "builder.primitive",
++        label: "New box",
++        nodeId: "geometry:draft:box",
++        objectId: null,
++        ref: null,
++      },
++      "test",
++    );
++    const commitTransaction = vi.fn();
++
++    expect(registry.isEnabled("geometry.commit-object-draft", { selection, source: "test" }))
++      .toBe(false);
++    expect(
++      await registry.execute("geometry.commit-object-draft", {
++        api: { model: { commitTransaction } } as never,
++        selection,
++        source: "test",
++      }),
++    ).toEqual({
++      message: "The canonical scene revision is unavailable. Refetch the scene before committing.",
++      status: "failed",
++    });
++    expect(commitTransaction).not.toHaveBeenCalled();
++  });
++
+   it("fails closed for every FEM mesh command and navigation route without a lane", async () => {
+     const registry = registryWithLifecycleCommands();
+     const bus = new EventBus<KernelEventMap>();
+     const selection = new SelectionController(bus);
+     selectBox(selection);
+     const context = { selection, source: "test" as const };
+     const ids = [
+       "mesh.build-selected",
+       "mesh.build-shared-domain",
+       "mesh.refine-worst-quality-element",
+diff --git a/apps/control-room/src/kernel/authoring/geometryLifecycleCommandContributions.ts b/apps/control-room/src/kernel/authoring/geometryLifecycleCommandContributions.ts
+index 9204712cd..0a3fd2330 100644
+--- a/apps/control-room/src/kernel/authoring/geometryLifecycleCommandContributions.ts
++++ b/apps/control-room/src/kernel/authoring/geometryLifecycleCommandContributions.ts
+@@ -734,34 +734,44 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
+     },
+   },
+   {
+     id: "geometry.commit-object-draft",
+     title: "Commit Object Draft",
+     category: "Geometry",
+     group: "geometry",
+     shortcut: "Ctrl+Enter",
+     scope: "selection",
+     isEnabled: (context) =>
+-      context.selection?.get().kind === "builder.primitive",
+-    disabledReason: () => "Open a primitive draft before committing.",
++      context.selection?.get().kind === "builder.primitive" &&
++      sceneBaseRevision(context) !== null,
++    disabledReason: (context) =>
++      context.selection?.get().kind !== "builder.primitive"
++        ? "Open a primitive draft before committing."
++        : "The canonical scene revision is unavailable. Refetch the scene before committing.",
+     run: async (context) => {
+       const selection = context.selection?.get();
+       const primitiveKind = primitiveKindFromDraftSelection(selection);
+       const objectId = draftObjectId(primitiveKind);
+       const name = selection?.label ?? `New ${primitiveKind}`;
+       const baseRevision = sceneBaseRevision(context);
+       if (!context.api) {
+         return { message: "Control-room API is unavailable.", status: "failed" };
+       }
++      if (baseRevision === null) {
++        return {
++          message: "The canonical scene revision is unavailable. Refetch the scene before committing.",
++          status: "failed",
++        };
++      }
+ 
+       const response = await createObjectTransaction(context.api, {
+-        ...(baseRevision !== null ? { base_revision: baseRevision } : {}),
++        base_revision: baseRevision,
+         geometry: defaultPrimitiveGeometry(primitiveKind),
+         name,
+         object_id: objectId,
+         transform: {
+           rotation: [0, 0, 0],
+           scale: [1, 1, 1],
+           translation: [0, 0, 0],
+         },
+       });
+       invalidateSceneAuthoringResources(context, response.scene_revision);
+diff --git a/apps/control-room/src/kernel/resources/geometryLifecycleResources.ts b/apps/control-room/src/kernel/resources/geometryLifecycleResources.ts
+index ff79561b9..a1eefd4c1 100644
+--- a/apps/control-room/src/kernel/resources/geometryLifecycleResources.ts
++++ b/apps/control-room/src/kernel/resources/geometryLifecycleResources.ts
+@@ -504,23 +504,24 @@ export function resolveMeshRegionMembershipListRevision(
+       .join(","),
+   ].join(":");
+ }
+ 
+ export function publishCommittedSceneResource(
+   resources: ResourceInvalidationController,
+   scene: SceneResource,
+   revision: ResourceRevision,
+   runtimeStore: ResourceRuntimeStore<SceneResource> =
+     sharedResourceRuntimeStore as ResourceRuntimeStore<SceneResource>,
++  invalidate = true,
+ ): void {
+   runtimeStore.updateData(SCENE_RESOURCE_KEY, scene, revision);
+-  resources.invalidate(SCENE_RESOURCE_KEY, revision);
++  if (invalidate) resources.invalidate(SCENE_RESOURCE_KEY, revision);
+ }
+ 
+ export function useSceneResource(options: ResourceHookOptions = {}) {
+   const { api } = useKernel();
+   const load = useCallback(
+     ({ signal }: { signal: AbortSignal }) => api.model.scene({ signal }),
+     [api],
+   );
+ 
+   return useResource<SceneResource>({
+diff --git a/apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.dom.test.tsx b/apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.dom.test.tsx
+index c8c2a8a2e..bda93e9ba 100644
+--- a/apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.dom.test.tsx
++++ b/apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.dom.test.tsx
+@@ -1,107 +1,211 @@
+ import { act } from "react";
+ import { createRoot } from "react-dom/client";
+ import { beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
+ import {
+   installSimulationPreparationTestDom,
+   TestElement,
++  TestEvent,
+   TestNode,
+ } from "@/kernel/layout/simulationPreparationTestDom.test-support";
+ import type { Selection } from "@/kernel/selection/selectionTypes";
+ 
+ import { GeometryObjectPanel } from "./GeometryObjectPanel";
+ 
+ const mocks = vi.hoisted(() => ({
+   commitTransaction: vi.fn(),
+   invalidate: vi.fn(),
+   refetch: vi.fn(),
+-  scene: { objects: [] as unknown[], revision: 12 },
++  sceneResource: {
++    data: { objects: [] as unknown[], revision: 12 },
++    error: null as Error | null,
++    revision: 12,
++    status: "ready",
++  },
+   select: vi.fn(),
++  publishCommittedScene: vi.fn(),
+ }));
+ 
+ vi.mock("@/kernel/KernelContext", () => ({
+   useKernel: () => ({
+     api: { model: { commitTransaction: mocks.commitTransaction } },
+     resources: { invalidate: mocks.invalidate },
+     selection: { set: mocks.select },
+   }),
+ }));
+ 
+ vi.mock("@/kernel/resources/geometryLifecycleResources", async (importOriginal) => {
+   const original = await importOriginal<typeof import("@/kernel/resources/geometryLifecycleResources")>();
+   return {
+     ...original,
+-    publishCommittedSceneResource: vi.fn(),
++    publishCommittedSceneResource: mocks.publishCommittedScene,
+     useGeometryValidationResource: () => ({ data: null, status: "ready" }),
+-    useSceneResource: () => ({ data: mocks.scene, refetch: mocks.refetch }),
++    useSceneResource: () => ({ ...mocks.sceneResource, refetch: mocks.refetch }),
+   };
+ });
+ 
+ const selection: Selection = {
+   kind: "builder.primitive",
+   label: "New box",
+   moduleSource: "test",
+   nodeId: "geometry:draft:box",
+   objectId: null,
+   ref: null,
+ };
+ 
+ describe("GeometryObjectPanel primitive transaction", () => {
+   beforeEach(() => {
+     vi.clearAllMocks();
+-    mocks.scene.objects = [];
+-    mocks.scene.revision = 12;
+-    mocks.refetch.mockImplementation(async () => {
+-      mocks.scene = { objects: [], revision: 13 };
+-    });
++    mocks.commitTransaction.mockReset();
++    mocks.sceneResource.data = { objects: [], revision: 12 };
++    mocks.sceneResource.error = null;
++    mocks.sceneResource.revision = 12;
++    mocks.sceneResource.status = "ready";
++    mocks.refetch.mockImplementation(() => undefined);
+   });
+ 
+   it("requires refetch and rebase after 409 before issuing one retry", async () => {
+     mocks.commitTransaction
+       .mockRejectedValueOnce(
+         new ControlRoomApiError("scene changed", 409, "request-1", "revision_conflict"),
+       )
+       .mockResolvedValueOnce({
+         committed_scene: { objects: [{ id: "dirty-box" }], revision: 14 },
+         scene_revision: 14,
+       });
+     const dom = installSimulationPreparationTestDom();
+     const container = dom.document.createElement("div");
+     const root = createRoot(container as unknown as Element);
+     try {
+       await act(async () => root.render(<GeometryObjectPanel selection={selection} />));
++      await act(async () => changeInput(container, "Size X", "2.5e-7"));
+       await act(async () => findButton(container, "Apply Draft").click());
+       expect(mocks.commitTransaction).toHaveBeenCalledTimes(1);
+       expect(mocks.commitTransaction).toHaveBeenLastCalledWith(
+-        expect.objectContaining({ base_revision: 12, kind: "create_object", name: "New box" }),
++        expect.objectContaining({
++          base_revision: 12,
++          geometry: expect.objectContaining({ geometry_params: { size: [2.5e-7, 1e-7, 1e-8] } }),
++          kind: "create_object",
++          name: "New box",
++        }),
+       );
+       expect(findButton(container, "Retry Apply").disabled).toBe(true);
+ 
+       await act(async () => findButton(container, "Refetch Scene").click());
++      expect(mocks.refetch).toHaveBeenCalledOnce();
++      expect(findButton(container, "Rebase Draft").disabled).toBe(true);
++
++      mocks.sceneResource.status = "loading";
++      await act(async () => root.render(<GeometryObjectPanel selection={selection} />));
++      expect(findButton(container, "Rebase Draft").disabled).toBe(true);
++
++      mocks.sceneResource.data = { objects: [], revision: 13 };
++      mocks.sceneResource.revision = 13;
++      mocks.sceneResource.status = "ready";
+       await act(async () => root.render(<GeometryObjectPanel selection={selection} />));
+       expect(findButton(container, "Rebase Draft").disabled).toBe(false);
+       await act(async () => findButton(container, "Rebase Draft").click());
+       await act(async () => findButton(container, "Retry Apply").click());
+ 
+       expect(mocks.commitTransaction).toHaveBeenCalledTimes(2);
+       expect(mocks.commitTransaction).toHaveBeenLastCalledWith(
+-        expect.objectContaining({ base_revision: 13, kind: "create_object", name: "New box" }),
++        expect.objectContaining({
++          base_revision: 13,
++          geometry: expect.objectContaining({ geometry_params: { size: [2.5e-7, 1e-7, 1e-8] } }),
++          kind: "create_object",
++          name: "New box",
++        }),
+       );
++      expect(mocks.publishCommittedScene).toHaveBeenCalledWith(
++        expect.anything(),
++        expect.objectContaining({ revision: 14 }),
++        14,
++        undefined,
++        false,
++      );
++      expect(mocks.invalidate).toHaveBeenCalledTimes(7);
++    } finally {
++      await act(async () => root.unmount());
++      dom.restore();
++    }
++  });
++
++  it("keeps rebase locked when refetch ends in an error", async () => {
++    mocks.commitTransaction.mockRejectedValueOnce(
++      new ControlRoomApiError("scene changed", 409, "request-2", "revision_conflict"),
++    );
++    const dom = installSimulationPreparationTestDom();
++    const container = dom.document.createElement("div");
++    const root = createRoot(container as unknown as Element);
++    try {
++      await act(async () => root.render(<GeometryObjectPanel selection={selection} />));
++      await act(async () => findButton(container, "Apply Draft").click());
++      await act(async () => findButton(container, "Refetch Scene").click());
++      mocks.sceneResource.status = "loading";
++      await act(async () => root.render(<GeometryObjectPanel selection={selection} />));
++      mocks.sceneResource.status = "error";
++      mocks.sceneResource.error = new Error("network unavailable");
++      await act(async () => root.render(<GeometryObjectPanel selection={selection} />));
++
++      expect(findButton(container, "Rebase Draft").disabled).toBe(true);
++      expect(container.textContent).toContain("network unavailable");
++      expect(mocks.commitTransaction).toHaveBeenCalledOnce();
++    } finally {
++      await act(async () => root.unmount());
++      dom.restore();
++    }
++  });
++
++  it("fails closed and sends no request when the scene revision is unavailable", async () => {
++    mocks.sceneResource.data = { objects: [] } as never;
++    mocks.sceneResource.revision = null as never;
++    const dom = installSimulationPreparationTestDom();
++    const container = dom.document.createElement("div");
++    const root = createRoot(container as unknown as Element);
++    try {
++      await act(async () => root.render(<GeometryObjectPanel selection={selection} />));
++      expect(findButton(container, "Apply Draft").disabled).toBe(true);
++      expect(mocks.commitTransaction).not.toHaveBeenCalled();
++    } finally {
++      await act(async () => root.unmount());
++      dom.restore();
++    }
++  });
++
++  it("sends no request for an invalid primitive dimension", async () => {
++    const dom = installSimulationPreparationTestDom();
++    const container = dom.document.createElement("div");
++    const root = createRoot(container as unknown as Element);
++    try {
++      await act(async () => root.render(<GeometryObjectPanel selection={selection} />));
++      await act(async () => changeInput(container, "Size X", "0"));
++      await act(async () => findButton(container, "Apply Draft").click());
++
++      expect(mocks.commitTransaction).not.toHaveBeenCalled();
++      expect(container.textContent).toContain("greater than 0");
+     } finally {
+       await act(async () => root.unmount());
+       dom.restore();
+     }
+   });
+ });
+ 
++function changeInput(root: TestNode, label: string, value: string): void {
++  const input = findElements(root, (element) =>
++    element.tagName === "INPUT" && element.getAttribute("aria-label") === label)[0];
++  if (!input) throw new Error(`Missing input ${label}`);
++  input.value = value;
++  input.dispatchEvent(new TestEvent("input", { bubbles: true }));
++}
++
+ function findButton(root: TestNode, text: string): TestElement {
+   const button = findElements(root, (element) =>
+     element.tagName === "BUTTON" && element.textContent.includes(text))[0];
+   if (!button) throw new Error(`Missing button ${text}`);
+   return button;
+ }
+ 
+ function findElements(root: TestNode, predicate: (element: TestElement) => boolean): TestElement[] {
+   const found: TestElement[] = [];
+   const visit = (node: TestNode): void => {
+diff --git a/apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.tsx b/apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.tsx
+index 778d5dd57..50a022682 100644
+--- a/apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.tsx
++++ b/apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.tsx
+@@ -80,21 +80,21 @@ function optionalRef(value: string): string | undefined {
+   const trimmed = value.trim();
+   return trimmed && trimmed !== "unassigned" ? trimmed : undefined;
+ }
+ 
+ function invalidateAuthoringResources(
+   resources: ReturnType<typeof useKernel>["resources"],
+   revision: number,
+   committedScene?: SceneResource,
+ ): void {
+   if (committedScene) {
+-    publishCommittedSceneResource(resources, committedScene, revision);
++    publishCommittedSceneResource(resources, committedScene, revision, undefined, false);
+   }
+   invalidateAuthoringMutationDependents(resources, "geometry", revision);
+ }
+ 
+ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
+   const { api, resources, selection: selectionController } = useKernel();
+   const scene = useSceneResource();
+   const validation = useGeometryValidationResource();
+   const object = resolveGeometryObjectPanelModel(selection, scene.data);
+ 
+@@ -106,39 +106,93 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
+   const [draftState, setDraftState] = useState<DraftState>({
+     draft: baseDraft,
+     key: draftKey,
+   });
+   const [feedbackState, setFeedbackState] = useState<FeedbackState>({
+     feedback: null,
+     key: draftKey,
+   });
+   const [pending, setPending] = useState(false);
+   const [revisionConflictPhase, setRevisionConflictPhase] = useState<
+-    "conflict" | "rebased" | "refetched" | null
++    "conflict" | "refresh-error" | "refreshing" | "rebased" | "refetched" | null
+   >(null);
++  const [conflictBaseRevision, setConflictBaseRevision] = useState<number | null>(null);
++  const [refreshSawLoading, setRefreshSawLoading] = useState(false);
+   const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
+   const feedback =
+     feedbackState.key === draftKey ? feedbackState.feedback : null;
+   const validationMessages = summarizeGeometryValidationMessages(
+     validation.data,
+     draft.objectId,
+   );
+   const primitiveDraft = useMemo(() => resolvePrimitiveDraft(draft), [draft]);
+ 
+   useEffect(() => {
+     if (draft.mode === "draft-new") {
+       primitiveDraftOverlayStore.publish(primitiveDraft);
+     } else {
+       primitiveDraftOverlayStore.clear();
+     }
+   }, [draft.mode, primitiveDraft]);
+   useEffect(() => () => primitiveDraftOverlayStore.clear(), []);
++  useEffect(() => {
++    if (revisionConflictPhase !== "refreshing") return;
++    let cancelled = false;
++    const updateAfterResourceTransition = (update: () => void) => {
++      queueMicrotask(() => {
++        if (!cancelled) update();
++      });
++    };
++    if (scene.status === "loading") {
++      updateAfterResourceTransition(() => setRefreshSawLoading(true));
++    } else if (scene.status === "error") {
++      updateAfterResourceTransition(() => {
++        setRevisionConflictPhase("refresh-error");
++        setFeedbackState({
++          feedback: {
++            kind: "error",
++            message:
++              scene.error?.message ??
++              "Scene refetch failed. Retry refetch before rebasing.",
++          },
++          key: draftKey,
++        });
++      });
++    } else if (
++      refreshSawLoading &&
++      scene.status === "ready" &&
++      baseDraft.baseRevision !== null &&
++      baseDraft.baseRevision !== conflictBaseRevision
++    ) {
++      updateAfterResourceTransition(() => {
++        setRevisionConflictPhase("refetched");
++        setFeedbackState({
++          feedback: {
++            kind: "error",
++            message: "Scene refetched. Rebase the preserved draft before retrying.",
++          },
++          key: draftKey,
++        });
++      });
++    }
++    return () => {
++      cancelled = true;
++    };
++  }, [
++    baseDraft.baseRevision,
++    conflictBaseRevision,
++    draftKey,
++    refreshSawLoading,
++    revisionConflictPhase,
++    scene.error,
++    scene.status,
++  ]);
+ 
+   function updateDraft(updater: (current: GeometryObjectDraft) => GeometryObjectDraft): void {
+     setDraftState((current) => ({
+       draft: updater(current.key === draftKey ? current.draft : baseDraft),
+       key: draftKey,
+     }));
+   }
+ 
+   function setFeedback(feedbackValue: Feedback | null): void {
+     setFeedbackState({
+@@ -157,20 +211,24 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
+     value: string,
+   ): void {
+     updateDraft((current) => {
+       const next = [...current[field]] as [string, string, string];
+       next[index] = value;
+       return { ...current, [field]: next };
+     });
+   }
+ 
+   async function applyCreateDraft(): Promise<void> {
++    if (draft.baseRevision === null) {
++      setFeedback({ kind: "error", message: "The canonical scene revision is unavailable. Refetch the scene before applying." });
++      return;
++    }
+     const geometry = buildGeometryDraftPatch(draft);
+     if (geometry.error || !geometry.geometry) {
+       setFeedback({ kind: "error", message: geometry.error ?? "Invalid geometry draft." });
+       return;
+     }
+     const transform = buildTransformDraftPatch(draft);
+     if (transform.error || !transform.transform) {
+       setFeedback({ kind: "error", message: transform.error ?? "Invalid transform draft." });
+       return;
+     }
+@@ -207,42 +265,49 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
+             type: "scene-object",
+             visualizationTargetId: `object:${objectId}`,
+           },
+         },
+         "geometry-authoring",
+       );
+       setFeedback({ kind: "success", message: "Object draft committed." });
+     } catch (error) {
+       if (isPrimitiveDraftRevisionConflict(error)) {
+         setRevisionConflictPhase("conflict");
++        setConflictBaseRevision(draft.baseRevision);
++        setRefreshSawLoading(false);
+       }
+       setFeedback({ kind: "error", message: errorMessage(error) });
+     } finally {
+       setPending(false);
+     }
+   }
+ 
+-  async function refetchAfterConflict(): Promise<void> {
+-    await scene.refetch();
+-    setRevisionConflictPhase("refetched");
+-    setFeedback({ kind: "error", message: "Scene refetched. Rebase the preserved draft before retrying." });
++  function refetchAfterConflict(): void {
++    setRefreshSawLoading(false);
++    setRevisionConflictPhase("refreshing");
++    setFeedback({ kind: "error", message: "Refetching the canonical scene…" });
++    scene.refetch();
+   }
+ 
+   function rebaseAfterConflict(): void {
+     updateDraft((current) =>
+       rebaseGeometryObjectDraft(current, baseDraft.baseRevision),
+     );
+     setRevisionConflictPhase("rebased");
+     setFeedback({ kind: "error", message: "Draft rebased to the latest scene revision. Review and retry Apply." });
+   }
+ 
+   async function applyGeometryPatch(): Promise<void> {
++    if (draft.baseRevision === null) {
++      setFeedback({ kind: "error", message: "The canonical scene revision is unavailable. Refetch the scene before applying." });
++      return;
++    }
+     const geometry = buildGeometryDraftPatch(draft);
+     if (geometry.error || !geometry.geometry) {
+       setFeedback({ kind: "error", message: geometry.error ?? "Invalid geometry draft." });
+       return;
+     }
+ 
+     setPending(true);
+     try {
+       const response = await patchObjectGeometryTransaction(api, draft.objectId, {
+         base_revision: draft.baseRevision,
+@@ -255,20 +320,24 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
+       );
+       setFeedback({ kind: "success", message: "Geometry patch committed." });
+     } catch (error) {
+       setFeedback({ kind: "error", message: errorMessage(error) });
+     } finally {
+       setPending(false);
+     }
+   }
+ 
+   async function applyTransformPatch(): Promise<void> {
++    if (draft.baseRevision === null) {
++      setFeedback({ kind: "error", message: "The canonical scene revision is unavailable. Refetch the scene before applying." });
++      return;
++    }
+     const transform = buildTransformDraftPatch(draft);
+     if (transform.error || !transform.transform) {
+       setFeedback({ kind: "error", message: transform.error ?? "Invalid transform draft." });
+       return;
+     }
+ 
+     setPending(true);
+     try {
+       const response = await commitObjectTransformTransaction(api, draft.objectId, {
+         base_revision: draft.baseRevision,
+@@ -544,31 +613,35 @@ function ActionsSection({
+   onRevertDraft,
+   pending,
+   revisionConflictPhase,
+ }: {
+   draft: GeometryObjectDraft;
+   feedback: Feedback | null;
+   onApplyCreateDraft: () => Promise<void>;
+   onApplyGeometryPatch: () => Promise<void>;
+   onApplyTransformPatch: () => Promise<void>;
+   onRebaseAfterConflict: () => void;
+-  onRefetchAfterConflict: () => Promise<void>;
++  onRefetchAfterConflict: () => void;
+   onRevertDraft: () => void;
+   pending: boolean;
+-  revisionConflictPhase: "conflict" | "rebased" | "refetched" | null;
++  revisionConflictPhase: "conflict" | "refresh-error" | "refreshing" | "rebased" | "refetched" | null;
+ }) {
+   return (
+     <InspectorGroup title="Actions">
+       <div className="fm-inspector-toolbar">
+         {draft.mode === "draft-new" ? (
+           <Button
+-            disabled={pending || revisionConflictPhase !== null}
++            disabled={
++              pending ||
++              draft.baseRevision === null ||
++              revisionConflictPhase !== null
++            }
+             size="sm"
+             type="button"
+             variant="primary"
+             onClick={() => void onApplyCreateDraft()}
+           >
+             Apply Draft
+           </Button>
+         ) : (
+           <CommittedObjectActions
+             draft={draft}
+@@ -578,25 +651,25 @@ function ActionsSection({
+             onRevertDraft={onRevertDraft}
+           />
+         )}
+       </div>
+       {feedback ? (
+         <FeedbackBanner kind={feedback.kind} message={feedback.message} />
+       ) : null}
+       {revisionConflictPhase ? (
+         <div className="fm-inspector-toolbar" data-revision-conflict="true">
+           <Button
+-            disabled={pending}
++            disabled={pending || revisionConflictPhase === "refreshing"}
+             size="sm"
+             type="button"
+             variant="ghost"
+-            onClick={() => void onRefetchAfterConflict()}
++            onClick={onRefetchAfterConflict}
+           >
+             Refetch Scene
+           </Button>
+           <Button
+             disabled={pending || revisionConflictPhase !== "refetched"}
+             size="sm"
+             type="button"
+             variant="ghost"
+             onClick={onRebaseAfterConflict}
+           >
+@@ -626,30 +699,30 @@ function CommittedObjectActions({
+ }: {
+   draft: GeometryObjectDraft;
+   onApplyGeometryPatch: () => Promise<void>;
+   onApplyTransformPatch: () => Promise<void>;
+   onRevertDraft: () => void;
+   pending: boolean;
+ }) {
+   return (
+     <>
+       <Button
+-        disabled={pending || draft.mode !== "committed"}
++        disabled={pending || draft.mode !== "committed" || draft.baseRevision === null}
+         size="sm"
+         type="button"
+         variant="primary"
+         onClick={() => void onApplyGeometryPatch()}
+       >
+         Apply Geometry
+       </Button>
+       <Button
+-        disabled={pending || draft.mode !== "committed"}
++        disabled={pending || draft.mode !== "committed" || draft.baseRevision === null}
+         size="sm"
+         type="button"
+         onClick={() => void onApplyTransformPatch()}
+       >
+         Apply Transform
+       </Button>
+       <Button
+         disabled={pending}
+         size="sm"
+         type="button"
+diff --git a/apps/control-room/src/modules/inspector/primitives/Vector3Field.tsx b/apps/control-room/src/modules/inspector/primitives/Vector3Field.tsx
+index 4c1500573..4d5da802e 100644
+--- a/apps/control-room/src/modules/inspector/primitives/Vector3Field.tsx
++++ b/apps/control-room/src/modules/inspector/primitives/Vector3Field.tsx
+@@ -46,21 +46,26 @@ export function Vector3Field({
+                   {axis.toUpperCase()}
+                 </label>
+                 <input
+                   id={elementId}
+                   aria-label={`${label} ${axis.toUpperCase()}`}
+                   aria-invalid={Boolean(errors?.[index]) || undefined}
+                   className="fm-inspector-input"
+                   disabled={disabled}
+                   type="text"
+                   value={values[index] ?? ""}
+-                  onChange={(event) => onChange(index as 0 | 1 | 2, event.target.value)}
++                  onInput={(event) =>
++                    onChange(
++                      index as 0 | 1 | 2,
++                      (event.target as HTMLInputElement).value,
++                    )
++                  }
+                 />
+                 {errors?.[index] ? (
+                   <span
+                     className="fm-inspector-form-field__hint fm-inspector-form-field__hint--error"
+                     role="alert"
+                   >
+                     {errors[index]}
+                   </span>
+                 ) : null}
+               </div>
+diff --git a/apps/control-room/src/modules/viewport-3d/hooks/usePrimitiveDraftOverlay.test.tsx b/apps/control-room/src/modules/viewport-3d/hooks/usePrimitiveDraftOverlay.test.tsx
+new file mode 100644
+index 000000000..89d2f0b38
+--- /dev/null
++++ b/apps/control-room/src/modules/viewport-3d/hooks/usePrimitiveDraftOverlay.test.tsx
+@@ -0,0 +1,57 @@
++import { act } from "react";
++import { createRoot } from "react-dom/client";
++import { afterEach, describe, expect, it, vi } from "vitest";
++
++import { primitiveDraftOverlayStore } from "@/kernel/authoring/geometryLifecycleCommands";
++import {
++  installSimulationPreparationTestDom,
++  TestElement,
++  type TestNode,
++} from "@/kernel/layout/simulationPreparationTestDom.test-support";
++
++import { usePrimitiveDraftOverlay } from "./usePrimitiveDraftOverlay";
++
++function Probe() {
++  const overlay = usePrimitiveDraftOverlay();
++  return <div data-geometry-key={overlay?.geometryKey ?? "none"} />;
++}
++
++describe("usePrimitiveDraftOverlay", () => {
++  afterEach(() => primitiveDraftOverlayStore.clear());
++
++  it("reacts to the local draft store without requesting mesh data", async () => {
++    const meshRequest = vi.fn();
++    const dom = installSimulationPreparationTestDom();
++    const container = dom.document.createElement("div");
++    const root = createRoot(container as unknown as Element);
++    try {
++      await act(async () => root.render(<Probe />));
++      expect(probe(container).getAttribute("data-geometry-key")).toBe("none");
++
++      await act(async () =>
++        primitiveDraftOverlayStore.publish({
++          dimensions: [2e-7, 4e-7, 6e-8],
++          errors: {},
++          kind: "Box",
++          translation: [7e-9, 8e-9, 9e-9],
++        }),
++      );
++
++      expect(probe(container).getAttribute("data-geometry-key")).toBe(
++        "draft:Box:2e-7,4e-7,6e-8:7e-9,8e-9,9e-9",
++      );
++      expect(meshRequest).not.toHaveBeenCalled();
++    } finally {
++      await act(async () => root.unmount());
++      dom.restore();
++    }
++  });
++});
++
++function probe(root: TestNode): TestElement {
++  const found = root.childNodes.find(
++    (node): node is TestElement => node instanceof TestElement,
++  );
++  if (!found) throw new Error("Missing overlay probe");
++  return found;
++}
+diff --git a/apps/control-room/src/modules/viewport-3d/hooks/usePrimitiveDraftOverlay.ts b/apps/control-room/src/modules/viewport-3d/hooks/usePrimitiveDraftOverlay.ts
+new file mode 100644
+index 000000000..d89d5022c
+--- /dev/null
++++ b/apps/control-room/src/modules/viewport-3d/hooks/usePrimitiveDraftOverlay.ts
+@@ -0,0 +1,14 @@
++import { useSyncExternalStore } from "react";
++
++import { primitiveDraftOverlayStore } from "@/kernel/authoring/geometryLifecycleCommands";
++
++import { primitiveDraftOverlayObject } from "../layers/PrimitiveObjectLayerModel";
++
++export function usePrimitiveDraftOverlay() {
++  const draft = useSyncExternalStore(
++    primitiveDraftOverlayStore.subscribe,
++    primitiveDraftOverlayStore.getSnapshot,
++    primitiveDraftOverlayStore.getServerSnapshot,
++  );
++  return draft ? primitiveDraftOverlayObject(draft) : null;
++}
+diff --git a/apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.test.ts b/apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.test.ts
+index 1030ae878..31055b668 100644
+--- a/apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.test.ts
++++ b/apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.test.ts
+@@ -695,27 +695,20 @@ function fieldVectorFixture(
+     nComp,
+     pointCount,
+     quantityId: "m",
+     valueCount: pointCount * nComp,
+     values: new Float64Array(pointCount * nComp),
+     ...overrides,
+   };
+ }
+ 
+ describe("useViewport3DSceneModel", () => {
+-  it("subscribes to the local primitive draft overlay without fetching mesh data", () => {
+-    const source = readFileSync(sceneModelSourceUrl, "utf8");
+-
+-    expect(source).toContain("primitiveDraftOverlayStore.subscribe");
+-    expect(source).toContain("primitiveDraftOverlayObject");
+-    expect(source).not.toContain("api.model.primitiveDraft");
+-  });
+   it("propagates FEM Airbox per-carrier field states into scene and debug models", () => {
+     const source = readFileSync(sceneModelSourceUrl, "utf8");
+ 
+     expect(source).toContain(
+       "airboxFieldVectorPartStates: airboxFieldVectors.partStates,",
+     );
+     expect(
+       source.match(
+         /airboxFieldVectorPartStates: airboxFieldVectors\.partStates,/g,
+       ),
+diff --git a/apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts b/apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts
+index 576fe1f09..bd19e9929 100644
+--- a/apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts
++++ b/apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts
+@@ -23,21 +23,20 @@ import type {
+   ResourceRevision,
+   QuantityCatalogResource,
+   VisualizationStateResource,
+ } from "@/kernel/api/apiTypes";
+ import {
+   asDecodedComplexFieldVector,
+   FMRM_INACTIVE_REGION_ID,
+   type DecodedFieldVector,
+ } from "@/kernel/api/codecs";
+ import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
+-import { primitiveDraftOverlayStore } from "@/kernel/authoring/geometryLifecycleCommands";
+ import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
+ import {
+   isAnalysisFieldQuantityId,
+   fieldCatalogQuantitySupportsAirbox,
+   isScalarSpatialQuantityId,
+   quantityCatalogSupportsQuantity,
+   quantityCatalogEntrySupportsSpatialVisualization,
+   resolveCanonicalQuantityId,
+   sameQuantityId,
+ } from "@/kernel/api/quantityIds";
+@@ -262,21 +261,21 @@ import {
+   type ScalarRange,
+ } from "../viewport3dFieldMapping";
+ import { buildViewport3DResourceFrameKey } from "../viewport3dInvalidation";
+ import type { Viewport3DResourceFrameState } from "../viewport3dInvalidation";
+ import {
+   buildViewport3DMagnetizationTexturePreviewMap,
+   buildViewport3DPrimitiveRenderModel,
+   resolvePrimitiveSelectionBounds,
+   type Viewport3DPrimitiveObject,
+ } from "../viewport3dPrimitiveModel";
+-import { primitiveDraftOverlayObject } from "../layers/PrimitiveObjectLayerModel";
++import { usePrimitiveDraftOverlay } from "./usePrimitiveDraftOverlay";
+ import {
+   buildMeshQualityVertexColors,
+   topologySupportsTet4FmmqQuality,
+   type MeshQualityColorMetric,
+ } from "../viewport3dQualityMapping";
+ import { buildViewport3DMeshSizeHighlightModel } from "../viewport3dMeshSizeHighlight";
+ import {
+   buildViewport3DFieldRenderModel,
+   buildViewport3DTopologyRenderModel,
+   combineViewport3DBounds,
+@@ -2616,25 +2615,21 @@ export function useViewport3DSceneModel({
+   resourceCounts,
+   selection,
+ }: {
+   commandState: ReturnType<typeof useViewport3DCommandState>;
+   colors: Viewport3DSceneProps["colors"] | null;
+   meshSizeHighlight: MeshSizeHistogramHighlight | null;
+   meshSizeHighlightSelection: MeshHistogramBinElementsResource | null;
+   resourceCounts: Viewport3DResourceCounts;
+   selection: Selection;
+ }) {
+-  const primitiveDraft = useSyncExternalStore(
+-    primitiveDraftOverlayStore.subscribe,
+-    primitiveDraftOverlayStore.getSnapshot,
+-    primitiveDraftOverlayStore.getServerSnapshot,
+-  );
++  const primitiveDraftOverlay = usePrimitiveDraftOverlay();
+   const { analysisFieldOverlay } = useKernel();
+   const analysisOverlay = useRenderableAnalysisFieldOverlay(analysisFieldOverlay);
+   useEffect(() => {
+     const handle = startAnalysisFieldOverlayPhaseAnimation(analysisFieldOverlay);
+     return () => {
+       handle.stop();
+     };
+   }, [analysisFieldOverlay]);
+   const visualizationState = useVisualizationStateResource();
+   const crossSectionFramePreview = useCrossSectionWorkspaceSelector(
+@@ -2957,25 +2952,23 @@ export function useViewport3DSceneModel({
+       topologyIndexState,
+     ],
+   );
+   const primitiveModel = useMemo(() => {
+     const committed = buildViewport3DPrimitiveRenderModel(
+       scene.data,
+       sharedDomainManifest.data,
+     );
+     return {
+       ...committed,
+-      draftOverlay: primitiveDraft
+-        ? primitiveDraftOverlayObject(primitiveDraft)
+-        : null,
++      draftOverlay: primitiveDraftOverlay,
+     };
+-  }, [primitiveDraft, scene.data, sharedDomainManifest.data]);
++  }, [primitiveDraftOverlay, scene.data, sharedDomainManifest.data]);
+   const objectTransformsById = useMemo(() => {
+     const sceneRecord = asJsonRecord(scene.data);
+     const transforms = new Map<string, unknown>();
+     if (!sceneRecord || !Array.isArray(sceneRecord.objects)) {
+       return transforms;
+     }
+ 
+     for (const value of sceneRecord.objects) {
+       const object = asJsonRecord(value);
+       const objectId = asNonEmptyString(object?.id);
+diff --git a/apps/control-room/src/modules/viewport-3d/layers/PrimitiveObjectLayer.test.tsx b/apps/control-room/src/modules/viewport-3d/layers/PrimitiveObjectLayer.test.tsx
+index fe9d96aef..7715812a0 100644
+--- a/apps/control-room/src/modules/viewport-3d/layers/PrimitiveObjectLayer.test.tsx
++++ b/apps/control-room/src/modules/viewport-3d/layers/PrimitiveObjectLayer.test.tsx
+@@ -1,18 +1,31 @@
+ import { readFileSync } from "node:fs";
+ import { fileURLToPath } from "node:url";
+ 
++import { act } from "react";
++import { createRoot } from "react-dom/client";
+ import { describe, expect, it, vi } from "vitest";
+ 
++import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
++
+ import { DEFAULT_OBJECT_VISUALIZATION } from "@/kernel/visualization/ObjectVisualizationController";
+ import { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+ import type { Viewport3DPrimitiveObject } from "../viewport3dPrimitiveModel";
++import type { Viewport3DColors } from "../viewport3dTypes";
++import { getViewport3DVisualProfile } from "../viewport3dVisualProfile";
++
++vi.mock("../viewport3dBatchedInvalidate", () => ({
++  useBatchedInvalidate: () => vi.fn(),
++}));
++
++import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
++import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
+ 
+ import {
+   buildPrimitiveTransformGizmoSegments,
+   createPrimitiveObjectGeometry,
+   releasePrimitiveObjectGeometry,
+   resolvePrimitiveObjectRenderSettings,
+   shouldRenderPrimitiveObject,
+   shouldRenderPrimitiveTransformGizmo,
+   trackPrimitiveObjectGeometry,
+   primitiveDraftOverlayObject,
+@@ -33,31 +46,80 @@ function primitiveObject(
+     kind,
+     label: "Object",
+     magnetizationTexturePreview: null,
+     meshState: "primitive-only",
+     objectId: `object-${kind}`,
+     sceneRevision: 1,
+   };
+ }
+ 
+ describe("PrimitiveObjectLayer geometry resources", () => {
++  it("releases tracked geometry across mount, draft change, and unmount", async () => {
++    const dom = installSimulationPreparationTestDom();
++    const container = dom.document.createElement("div");
++    const root = createRoot(container as unknown as Element);
++    const tracker = new Viewport3DResourceTracker();
++    const colors: Viewport3DColors = {
++      accent: "#89b4fa",
++      background: "#11111b",
++      field: "#a6e3a1",
++      mesh: "#313244",
++      textPrimary: "#cdd6f4",
++      textSecondary: "#bac2de",
++      wire: "#6c7086",
++    };
++    const render = (size: number) => (
++      <PrimitiveObjectLayer
++        colors={colors}
++        getObjectSettings={() => DEFAULT_OBJECT_VISUALIZATION}
++        materialProfile={resolveViewport3DMaterialProfile(
++          getViewport3DVisualProfile("interactive"),
++        )}
++        onSelectObject={() => undefined}
++        primitiveModel={{
++          draftOverlay: primitiveDraftOverlayObject({
++            dimensions: [size, 4e-7, 6e-8],
++            errors: {},
++            kind: "Box",
++            translation: [0, 0, 0],
++          }),
++          objects: [],
++          sceneRevision: -1,
++        }}
++        tracker={tracker}
++      />
++    );
++    try {
++      await act(async () => root.render(render(2e-7)));
++      expect(tracker.getSnapshot().geometries).toBeGreaterThan(0);
++      const mountedCount = tracker.getSnapshot().geometries;
++
++      await act(async () => root.render(render(3e-7)));
++      expect(tracker.getSnapshot().geometries).toBe(mountedCount);
++
++      await act(async () => root.unmount());
++      expect(tracker.getSnapshot().geometries).toBe(0);
++    } finally {
++      dom.restore();
++    }
++  });
+   it("adapts a draft to a separate stable overlay carrier without topology provenance", () => {
+     const overlay = primitiveDraftOverlayObject({
+       dimensions: [2e-7, 4e-7, 6e-8],
+       errors: {},
+-      kind: "box",
++      kind: "Box",
+       translation: [7e-9, 8e-9, 9e-9],
+     });
+ 
+     expect(overlay).not.toBeNull();
+     expect(overlay!).toMatchObject({
+-      geometryKey: "draft:box:2e-7,4e-7,6e-8:7e-9,8e-9,9e-9",
++      geometryKey: "draft:Box:2e-7,4e-7,6e-8:7e-9,8e-9,9e-9",
+       objectId: "draft:primitive",
+       sceneRevision: -1,
+       bounds: { center: [7e-9, 8e-9, 9e-9], size: [2e-7, 4e-7, 6e-8] },
+     });
+     expect(overlay!.meshState).toBe("primitive-only");
+   });
+   it("uses unlit materials for primitive preview surfaces", () => {
+     const source = readFileSync(
+       fileURLToPath(new URL("./PrimitiveObjectLayer.tsx", import.meta.url)),
+       "utf8",
+diff --git a/crates/fullmag-api/src/error.rs b/crates/fullmag-api/src/error.rs
+index 6c7c41b33..cddda9b03 100644
+--- a/crates/fullmag-api/src/error.rs
++++ b/crates/fullmag-api/src/error.rs
+@@ -8,110 +8,127 @@ use std::fmt;
+ 
+ #[derive(Debug, Clone, Serialize)]
+ pub(crate) struct ApiDiagnostic {
+     pub code: String,
+     pub message: String,
+ }
+ 
+ #[derive(Debug)]
+ pub(crate) struct ApiError {
+     pub status: StatusCode,
++    pub code: Option<String>,
+     pub message: String,
+     pub diagnostics: Vec<ApiDiagnostic>,
+ }
+ 
+ impl fmt::Display for ApiError {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+         write!(f, "{}: {}", self.status, self.message)
+     }
+ }
+ 
+ impl ApiError {
+     pub fn not_found(message: impl Into<String>) -> Self {
+         Self {
+             status: StatusCode::NOT_FOUND,
++            code: None,
+             message: message.into(),
+             diagnostics: Vec::new(),
+         }
+     }
+ 
+     pub fn bad_request(message: impl Into<String>) -> Self {
+         Self {
+             status: StatusCode::BAD_REQUEST,
++            code: None,
+             message: message.into(),
+             diagnostics: Vec::new(),
+         }
+     }
+ 
+     pub fn internal(message: impl Into<String>) -> Self {
+         Self {
+             status: StatusCode::INTERNAL_SERVER_ERROR,
++            code: None,
+             message: message.into(),
+             diagnostics: Vec::new(),
+         }
+     }
+ 
+     pub fn conflict(message: impl Into<String>) -> Self {
+         Self {
+             status: StatusCode::CONFLICT,
++            code: None,
++            message: message.into(),
++            diagnostics: Vec::new(),
++        }
++    }
++
++    pub fn conflict_with_code(code: impl Into<String>, message: impl Into<String>) -> Self {
++        Self {
++            status: StatusCode::CONFLICT,
++            code: Some(code.into()),
+             message: message.into(),
+             diagnostics: Vec::new(),
+         }
+     }
+ 
+     pub fn unprocessable(message: impl Into<String>) -> Self {
+         Self {
+             status: StatusCode::UNPROCESSABLE_ENTITY,
++            code: None,
+             message: message.into(),
+             diagnostics: Vec::new(),
+         }
+     }
+ 
+     pub fn unprocessable_with_diagnostics(
+         message: impl Into<String>,
+         diagnostics: Vec<ApiDiagnostic>,
+     ) -> Self {
+         Self {
+             status: StatusCode::UNPROCESSABLE_ENTITY,
++            code: None,
+             message: message.into(),
+             diagnostics,
+         }
+     }
+ }
+ 
+ impl From<std::io::Error> for ApiError {
+     fn from(error: std::io::Error) -> Self {
+         ApiError::internal(error.to_string())
+     }
+ }
+ 
+ impl IntoResponse for ApiError {
+     fn into_response(self) -> Response {
+-        let code = self
+-            .message
+-            .split_once(':')
+-            .map(|(candidate, _)| candidate)
+-            .filter(|candidate| {
+-                !candidate.is_empty()
+-                    && candidate
+-                        .chars()
+-                        .all(|character| character.is_ascii_lowercase() || character == '_')
+-            })
+-            .unwrap_or_else(|| match self.status {
+-                StatusCode::BAD_REQUEST => "bad_request",
+-                StatusCode::NOT_FOUND => "not_found",
+-                StatusCode::CONFLICT => "conflict",
+-                StatusCode::UNPROCESSABLE_ENTITY => "unsupported_capability",
+-                StatusCode::SERVICE_UNAVAILABLE => "service_unavailable",
+-                _ => "internal_error",
+-            })
+-            .to_string();
++        let code = self.code.unwrap_or_else(|| {
++            self.message
++                .split_once(':')
++                .map(|(candidate, _)| candidate)
++                .filter(|candidate| {
++                    !candidate.is_empty()
++                        && candidate
++                            .chars()
++                            .all(|character| character.is_ascii_lowercase() || character == '_')
++                })
++                .unwrap_or_else(|| match self.status {
++                    StatusCode::BAD_REQUEST => "bad_request",
++                    StatusCode::NOT_FOUND => "not_found",
++                    StatusCode::CONFLICT => "conflict",
++                    StatusCode::UNPROCESSABLE_ENTITY => "unsupported_capability",
++                    StatusCode::SERVICE_UNAVAILABLE => "service_unavailable",
++                    _ => "internal_error",
++                })
++                .to_string()
++        });
+         let message = self.message;
+         let diagnostics = if self.diagnostics.is_empty() {
+             serde_json::Value::Null
+         } else {
+             serde_json::json!(self.diagnostics)
+         };
+         (
+             self.status,
+             Json(serde_json::json!({
+                 "code": code,
+diff --git a/crates/fullmag-api/src/router_v2/handlers/model/authoring.rs b/crates/fullmag-api/src/router_v2/handlers/model/authoring.rs
+index ff46d3fbe..c265e211f 100644
+--- a/crates/fullmag-api/src/router_v2/handlers/model/authoring.rs
++++ b/crates/fullmag-api/src/router_v2/handlers/model/authoring.rs
+@@ -4405,24 +4405,27 @@ fn apply_object_patch(
+     }
+     Ok(())
+ }
+ 
+ fn check_base_scene_revision(
+     scene: &SceneDocument,
+     base_revision: Option<u64>,
+ ) -> Result<(), ApiError> {
+     if let Some(base_revision) = base_revision {
+         if base_revision != scene.revision {
+-            return Err(ApiError::conflict(format!(
+-                "scene revision mismatch: base={base_revision}, current={}",
+-                scene.revision
+-            )));
++            return Err(ApiError::conflict_with_code(
++                "revision_conflict",
++                format!(
++                    "scene revision mismatch: base={base_revision}, current={}",
++                    scene.revision
++                ),
++            ));
+         }
+     }
+     Ok(())
+ }
+ 
+ fn find_scene_object_mut<'a>(
+     scene: &'a mut SceneDocument,
+     object_id: &str,
+ ) -> Result<&'a mut SceneObject, ApiError> {
+     scene
+diff --git a/crates/fullmag-api/src/router_v2/handlers/sessions/create.rs b/crates/fullmag-api/src/router_v2/handlers/sessions/create.rs
+index c32fba84b..70c02d1d9 100644
+--- a/crates/fullmag-api/src/router_v2/handlers/sessions/create.rs
++++ b/crates/fullmag-api/src/router_v2/handlers/sessions/create.rs
+@@ -36,20 +36,21 @@ pub async fn create(
+     let execution = validated_execution(&request)?;
+     let scene_document = create_empty_scene_document(&request)?;
+     let session_id = scene_document.scene.id.clone();
+     let snapshot = scratch_snapshot(&session_id, name, &execution, scene_document.clone());
+ 
+     let _transition = state.current_live_session_transition.lock().await;
+     let replacing = state.current_live_state.read().await.is_some();
+     if replacing && !request.replace_current {
+         return Err(ApiError {
+             status: StatusCode::CONFLICT,
++            code: None,
+             message: "an active local session already exists; set replace_current to replace it"
+                 .to_string(),
+             diagnostics: Vec::new(),
+         });
+     }
+     if replacing {
+         reset_current_live_session_resources(&state).await;
+     }
+     state
+         .current_live_session_epoch
+diff --git a/crates/fullmag-api/src/router_v2/mod.rs b/crates/fullmag-api/src/router_v2/mod.rs
+index eb9ec02a9..76c8a8e6e 100644
+--- a/crates/fullmag-api/src/router_v2/mod.rs
++++ b/crates/fullmag-api/src/router_v2/mod.rs
+@@ -1032,20 +1032,21 @@ async fn get_current_session(State(state): State<Arc<AppState>>) -> Result<Json<
+         "name": snapshot.session.problem_name,
+         "status": snapshot.session.status,
+         "script_path": snapshot.session.script_path,
+         "current": true,
+     })))
+ }
+ 
+ async fn patch_current_session() -> Result<Json<Value>, ApiError> {
+     Err(ApiError {
+         status: StatusCode::BAD_REQUEST,
++        code: None,
+         message: "session metadata mutation is not yet supported by the local runtime".to_string(),
+         diagnostics: Vec::new(),
+     })
+ }
+ 
+ #[derive(Debug, Deserialize)]
+ struct EigenmodeByIdQuery {
+     sample_index: Option<u32>,
+ }
+ 
+diff --git a/crates/fullmag-api/src/router_v2/tests.rs b/crates/fullmag-api/src/router_v2/tests.rs
+index ec5bf3157..30acdbb7e 100644
+--- a/crates/fullmag-api/src/router_v2/tests.rs
++++ b/crates/fullmag-api/src/router_v2/tests.rs
+@@ -16970,20 +16970,50 @@ async fn authoring_transactions_create_transform_and_delete_objects() {
+                     .to_string(),
+                 ))
+                 .unwrap(),
+         )
+         .await
+         .unwrap();
+     assert_eq!(create_response.status(), StatusCode::OK);
+     let create_json = body_json(create_response).await;
+     assert_eq!(create_json["transaction_kind"], "create_object");
+     let created_revision = create_json["scene_revision"].as_u64().unwrap();
++    let stale_create = app
++        .clone()
++        .oneshot(
++            Request::builder()
++                .method("POST")
++                .uri("/v2/sessions/current/model/transactions")
++                .header("content-type", "application/json")
++                .body(Body::from(
++                    serde_json::json!({
++                        "kind": "create_object",
++                        "base_revision": 12,
++                        "object_id": "stale_box",
++                        "name": "Stale box",
++                        "geometry": {
++                            "geometry_kind": "Box",
++                            "geometry_params": { "size": [100e-9, 100e-9, 30e-9] }
++                        }
++                    })
++                    .to_string(),
++                ))
++                .unwrap(),
++        )
++        .await
++        .unwrap();
++    assert_eq!(stale_create.status(), StatusCode::CONFLICT);
++    let stale_create_json = body_json(stale_create).await;
++    assert_eq!(stale_create_json["code"], "revision_conflict");
++    assert!(stale_create_json["message"]
++        .as_str()
++        .is_some_and(|message| message.contains("base=12")));
+     let created_object = create_json["committed_scene"]["objects"]
+         .as_array()
+         .unwrap()
+         .iter()
+         .find(|object| object["id"] == "box_001")
+         .expect("created object present");
+     assert_eq!(created_object["geometry"]["geometry_kind"], "Box");
+     assert!(created_object["tags"]
+         .as_array()
+         .is_some_and(|tags| tags.iter().any(|tag| tag == "mesh:dirty")));
