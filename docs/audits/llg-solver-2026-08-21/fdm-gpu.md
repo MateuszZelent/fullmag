@@ -11,6 +11,18 @@ Najważniejszym kryterium nie jest obecność kerneli FDM, lecz pełna rezydencj
 
 ## Ustalenia priorytetowe
 
+### Rejestr dowodów
+
+| Ustalenie | Stan i pewność | Implementacja (`ścieżka + symbol`) | Test/reproducer |
+|---|---|---|---|
+| Requested/resolved/executed GPU | potwierdzone dla kontraktu receipt, wysoka | `backends/fdm/api/c_api.cpp` — `fullmag_fdm_backend_execution_receipt_v2`; `crates/fullmag-runner/src/types.rs` — `FdmGpuExecutionReceipt` | `fdm_gpu_execution_receipt_contract_tests` oraz `backends/fdm/tests/device_residency_receipt_contract.cpp` |
+| Transfery i synchronizacje hot loop | potwierdzone liczniki, wynik sprzętowy otwarty | `backends/fdm/include/execution_receipt.hpp` — `ExecutionReceiptState`; `backends/fdm/api/c_api.cpp` — `execute_single_grid_step_transaction` | `backends/fdm/tests/fdm_gpu_host_transfer_callsites_v1.json` i sprzętowy strict-residency gate |
+| Granulacja kerneli | luka profilowa, niska | `backends/fdm/api/c_api.cpp` — `launch_heun_step_fp64`, `launch_rk4_step_fp64`, `launch_rk23_step_fp64`, `launch_dp45_step_fp64` | Nsight: kernels/step, launch latency, occupancy i bandwidth |
+| Trwałość buforów i FFT | częściowo potwierdzone statycznie, średnia | `backends/fdm/include/context.hpp` — `Context`; `backends/fdm/gpu/cuda/runtime/context.cu` — `context_alloc_device`, `context_prepare_multilayer_fft_workspace_v2` | test repeated-step bez wzrostu alokacji oraz licznik tworzenia planów FFT |
+| Redukcja maksymalnego błędu | potwierdzone semantycznie, wysoka | `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` — `vector_max_norm_blocks_kernel`, `adaptive_error_policy_kernel` | parity z `max_error_norm_buf` FDM CPU na lokalizowanym błędzie |
+| Precyzja | częściowo potwierdzone, średnia | `backends/fdm/api/c_api.cpp` — `valid_precision`; osobne entry pointy `*_fp32` i `*_fp64` | field/RHS/stage/trajectory parity dla FP32 i FP64 |
+| Rollback i FSAL | potwierdzone kontraktowo, wysoka | `backends/fdm/gpu/cuda/runtime/step_transaction_controller.hpp` — `StepTransactionController`; `backends/fdm/gpu/cuda/integrators/fsal_policy.hpp` — `context_reject_staged_step` | `backends/fdm/tests/fsal_retry_transaction_contract.cpp` |
+
 ### P0 — requested GPU nie może oznaczać częściowego lub niejawnego CPU fallbacku
 
 Planner i wynik muszą rozróżniać requested backend, resolved plan i faktycznie wykonane urządzenie dla RHS, demag, exchange, redukcji, integratora i outputu.
@@ -37,7 +49,7 @@ Każdy `create_buffer`, alokacja scratch albo plan FFT w hot path jest błędem 
 
 ### P1 — adaptacyjny integrator wymaga redukcji skalowalnej względem N
 
-Norma błędu musi być RMS/per-spin lub kątowa. Redukcja powinna być hierarchiczna na urządzeniu; atomiki do jednego skalara dla milionów komórek mogą stać się bottleneckiem i źródłem niedeterministyczności.
+Norma błędu musi zachować kanoniczne maksimum wektorowe `LLG-TD-MAX-ERR-V1` po aktywnych komórkach, identycznie jak FDM CPU. Redukcja powinna być hierarchiczna na urządzeniu; atomiki do jednego skalara dla milionów komórek mogą stać się bottleneckiem i źródłem niedeterministyczności.
 
 ### P1 — precyzja i mixed precision nie mogą zmieniać fizyki
 

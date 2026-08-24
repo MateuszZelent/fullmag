@@ -11,6 +11,18 @@ FEM CPU ma największe ryzyko kosztu algorytmicznego, nie samej algebry LLG. Je�
 
 ## Ustalenia priorytetowe
 
+### Rejestr dowodów
+
+| Ustalenie | Stan i pewność | Implementacja (`ścieżka + symbol`) | Test/reproducer |
+|---|---|---|---|
+| Setup/assembly a stage RHS | częściowo potwierdzone rozdzielenie, wysoka | `backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp` — `context_step_explicit_rk_mfem`; `backends/fem/cpu/mfem/integrators/rk_stage_rhs.cpp` — `evaluate_rk_stage_rhs` | profiler faz: brak assembly/rebuild po warm-up |
+| Ograniczenie przez `h_min` | luka pomiarowa, średnia | `backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp` — `context_step_explicit_rk_mfem` | refinement siatki i time-to-error dla Heun, RK4, RK23, RK45 |
+| Reprezentacja state/DOF | potwierdzone właścicielstwo, wysoka | `backends/fem/include/context.hpp` — `Context`; `backends/fem/cpu/mfem/runtime/state_io.cpp` — `context_upload_magnetization_f64`, `context_sync_gpu_magnetization_to_host` | transfer-audit i parity true/local DOF |
+| Projekcja przez macierz masy | potwierdzone istnienie operatora, koszt otwarty | `backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp` — `apply_exchange_component_mass_projection` | sweep tolerancji i liczby iteracji względem błędu RK |
+| Reuse demag | częściowo potwierdzone, średnia | `backends/fem/cpu/mfem/interactions/demag_poisson_cache.cpp` — `demag_poisson_try_load_cached_field`; `demag_poisson_solve.cpp` — `context_compute_demag_poisson` | licznik rebuildów i iteracji per stage |
+| Norma/stop na siatce FEM | potwierdzone maksimum torque, wysoka | `crates/fullmag-runner/src/derived_fields.rs` — `max_torque_residual_apm_from_field`; `backends/fem/cpu/mfem/runtime/stage_completion.cpp` — `update_stage_completion_from_stats` | nonuniform-mesh fixture i kanoniczny trzypróbkowy stop torque |
+| Oversubscription | częściowo potwierdzona polityka, koszt otwarty | `backends/fem/cpu/mfem/runtime/cpu_threads.cpp` — `configure_fem_host_runtime_threads`; `backends/fem/include/context.hpp` — `Context::cpu_threads` | sweep OpenMP/MFEM/Hypre threads z NUMA affinity |
+
 ### P0/P1 — assembly i konfiguracja solvera nie mogą występować per stage
 
 Macierze masy/exchange, sparsity, restrykcje, essential DOF, mapy regionów, quadrature data i preconditionery powinny być budowane po zmianie zależności, nie po zmianie `m`.
@@ -80,7 +92,7 @@ OpenMP/TBB/Rayon, MFEM i Hypre nie mogą niezależnie zajmować wszystkich rdzen
 
 ## Obowiązkowe benchmarki
 
-Dla co najmniej trzech siatek raportować: DOF, `h_min`, order, assembly time, apply time, linear iterations, preconditioner rebuilds, field evaluations, accepted/rejected steps, pamięć peak/steady-state oraz time-to-solution przy ustalonym błędzie fizycznym.
+Dla co najmniej trzech siatek raportować: DOF, `h_min`, order, assembly time, apply time, linear iterations, preconditioner rebuilds, field evaluations, accepted/rejected steps, pamięć peak/steady-state oraz time-to-solution przy ustalonym błędzie fizycznym. Pełną macierz należy wykonać dla każdego wspieranego jawnego integratora — Heun, RK4, RK23 i RK45 — oraz każdej legalnej dla niego polityki fixed/adaptive; pojedynczy wynik Heuna nie kwalifikuje pozostałych hot loopów.
 
 ## Minimalne testy akceptacyjne
 

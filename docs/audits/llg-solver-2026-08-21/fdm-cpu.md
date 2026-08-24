@@ -7,21 +7,29 @@
 
 ## Werdykt
 
-FDM CPU powinien pozostać referencyjną ścieżką poprawności, ale nie może być traktowany jako wzorzec wydajności bez osobnego profilu kosztu pól, algebry LLG, redukcji i alokacji. Główne ryzyka to rozproszenie kontraktu LLG między warstwami authoring/planner/runtime, brak twardego gate dla konwencji `gamma` i `mu0`, możliwość zależności adaptacyjnej normy błędu od liczby aktywnych komórek oraz ponowne tworzenie danych tymczasowych w wielostopniowych integratorach.
+FDM CPU pozostaje referencyjną ścieżką poprawności, ale nie może być traktowany jako wzorzec wydajności bez osobnego profilu kosztu pól, algebry LLG, redukcji i alokacji. Konwencja `H_eff`/`gamma_0` oraz maksymalna norma błędu są już rozstrzygnięte przez kanoniczny kontrakt i implementację; otwarte pozostają pomiary alokacji, kosztu demag, stiffness i polityki wątków.
 
 ## Ustalenia priorytetowe
 
-### P0/P1 — konwencja LLG musi mieć jednego właściciela
+### Rejestr dowodów
 
-Należy jawnie udokumentować, czy solver przyjmuje pole `H_eff` w A/m i `gamma0` w m/(A s), czy pole `B_eff` w T i `gamma` w rad/(s T). Dopuszczenie obu skal bez typowanego kontraktu grozi błędem rzędu `mu0`.
+| Ustalenie | Stan i pewność | Implementacja (`ścieżka + symbol`) | Test/reproducer |
+|---|---|---|---|
+| Konwencja LLG | potwierdzone, wysoka | `crates/fullmag-engine/src/fdm/cpu/fields.rs` — `ExchangeLlgProblem::llg_rhs_from_field_at` | `sot_macrospin_is_converted_to_rhs_with_gilbert_projection` w tym samym module |
+| Maksymalna norma adaptacyjna | potwierdzone, wysoka | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` — `max_error_norm_buf`, `max_error_norm_soa_buf` | `direct_cpu_entry_points_propagate_injected_nonfinite_error_norm` |
+| Brak alokacji w RHS | częściowo potwierdzone, wysoka | `crates/fullmag-engine/src/fdm/cpu/fields.rs` — `llg_rhs_into_ws_zero_alloc`; `crates/fullmag-engine/src/fdm/cpu/integrators.rs` — `rk23_step_soa_state_buf`, `rk45_step_soa_state_buf` | profil alokatora dla steady state; wynik sprzętowy nadal wymagany |
+| Stiffness exchange | luka pomiarowa, średnia | `crates/fullmag-engine/src/fdm/cpu/fields.rs` — `exchange_field_add_into` | refinement `h_min` i time-to-error dla każdego legalnego integratora |
+| Koszt demag per stage | luka pomiarowa, średnia | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` — `rk23_step_soa_state_buf`, `rk45_step_soa_state_buf`; `crates/fullmag-engine/src/fdm/cpu/fields.rs` — `demag_field_add_into_soa_fft_backend` | licznik `demag_solves` i profil accepted/rejected step |
+| Oversubscription CPU/FFT | luka pomiarowa, niska | `crates/fullmag-engine/src/fdm/cpu/fft.rs` — `FftWorkspace`; `crates/fullmag-engine/src/fdm/cpu/fft_backend.rs` — `RustFftBackend` | sweep liczby wątków z affinity, bandwidth i LLC misses |
+| Stop relaksacji | potwierdzone, wysoka | `crates/fullmag-runner/src/relaxation.rs` — `effective_max_torque_apm`; `crates/fullmag-runner/src/types.rs` — `relaxation_torque_confirmation_count` | kontrakty zakończenia w `crates/fullmag-runner/src/dispatch.rs` |
 
-**Naprawa:** jeden kanoniczny RHS, jawny typ/enum konwencji, test jednorodnego spinu w stałym polu oraz przegląd czynnika `1/(1+alpha^2)`.
+### Stan potwierdzony — kanoniczna konwencja LLG
 
-### P1 — adaptacyjna norma błędu nie może zależeć od rozmiaru siatki
+Konwencja nie jest otwartą decyzją: `docs/physics/0960-canonical-llg-time-domain-solver-and-qualification-contract.md` (identyfikator `LLG-TD-POLICY-V1`) oraz `docs/physics/llg_conventions.md` (sekcja `Gamma Convention`) definiują `H_eff` w A/m, `gamma_0` w m/(A s) i mianownik Gilberta `1/(1+alpha^2)`. Implementacja FDM CPU realizuje ją w `crates/fullmag-engine/src/fdm/cpu/fields.rs` (`ExchangeLlgProblem::llg_rhs_from_field_at`). Ustalenie audytowe brzmi więc: zachować ten kontrakt i jego testy, a nie dodawać drugi enum konwencji.
 
-Surowa globalna norma L2 rośnie z liczbą komórek i powoduje inne kroki czasu po samym zagęszczeniu przestrzennym. Norma powinna być RMS/per-spin albo kątowa na sferze z jawnym `atol/rtol`.
+### Stan potwierdzony — kanoniczna maksymalna norma błędu
 
-**Test:** ten sam gładki stan na kolejnych siatkach przy identycznym błędzie przestrzennym powinien dawać porównywalny harmonogram kroków.
+`LLG-TD-MAX-ERR-V1` wymaga maksimum wektorowego błędu po aktywnych komórkach, a nie RMS. Właścicielami implementacji są `crates/fullmag-engine/src/fdm/cpu/integrators.rs` (`max_error_norm_buf`, `max_error_norm_soa_buf`). Maksimum chroni przed rozcieńczeniem lokalnego dużego błędu wraz ze wzrostem siatki. Test refinement ma potwierdzać zachowanie tej normy; nie wolno zastępować jej RMS bez wcześniejszej zmiany kanonicznego kontraktu fizycznego.
 
 ### P1 — alokacje i kopie w `step/RHS` są niedopuszczalne w steady state
 
@@ -60,7 +68,7 @@ Równoległość operatorów lokalnych i biblioteki FFT/Hypre nie może niezale�
 - rejected step musi cofać stan, cache, RNG i liczniki outputów;
 - projekcja na sferę nie może obniżać rzędu metody;
 - `dt_min`, `dt_max`, growth/shrink limiter i diagnostyka stagnacji muszą być jawne;
-- kryterium relaksacji powinno łączyć torque, `dm/dt`, zmianę energii i minimalne okno czasu;
+- kryterium równowagi zachowuje kanoniczne trzy kolejne świeże próbki `max_torque_Apm` poniżej progu; plateau energii pozostaje wyłącznie opcjonalnym sygnałem sterownika, zgodnie z `docs/physics/0580-canonical-relaxation-equilibrium-contract.md` (`discrete-realization`) i `crates/fullmag-runner/src/relaxation.rs` (`effective_max_torque_apm`);
 - redukcje równoległe wymagają polityki deterministyczności i tolerancji.
 
 ## Plan optymalizacji

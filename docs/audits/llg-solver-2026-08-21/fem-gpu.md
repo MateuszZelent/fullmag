@@ -11,6 +11,19 @@ FEM GPU należy klasyfikować według faktycznego poziomu rezydencji: (1) etykie
 
 ## Ustalenia priorytetowe
 
+### Rejestr dowodów
+
+| Ustalenie | Stan i pewność | Implementacja (`ścieżka + symbol`) | Test/reproducer |
+|---|---|---|---|
+| Executed-device proof | potwierdzone planowanie, kwalifikacja runtime otwarta | `backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp` — `gpu_rk_plan_device_resident`; `crates/fullmag-runner/src/types.rs` — `fem_gpu_rk_stage_exchange_device_resident` | `backends/fem/tests/gpu_rk_plan.cpp` plus managed GPU runtime receipt |
+| Device-resident integrator | częściowo potwierdzone, wysoka | `backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp` — `gpu_rk_device_resident_step`; `backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp` — `context_step_explicit_rk_mfem` | strict no-fallback dla Heun, RK4, RK23 i RK45 |
+| Trwałość danych FEM | potwierdzone struktury, wynik hot-loop otwarty | `backends/fem/gpu/cuda/state/gpu_state.cpp` — `gpu_state_initialize`; `backends/fem/include/context.hpp` — `Context` | `backends/fem/tests/gpu_state_runtime_contract.cpp` i profiler alokacji |
+| Partial assembly/matrix-free | zależne od operatora, średnia | `backends/fem/gpu/cuda/exchange/exchange_plan.cpp` — `gpu_exchange_plan_stage_exchange` | `backends/fem/examples/pa_benchmark.cpp` dla macierzy rozmiarów/operatorów |
+| Redukcje i transfery | potwierdzone liczniki, wynik runtime otwarty | `backends/fem/cpu/mfem/runtime/state_io.cpp` — `record_device_to_host`; `backends/fem/gpu/cuda/transfer/transfer_audit.hpp` — `TransferAuditRuntimeState` | `backends/fem/tests/transfer_audit.cpp` plus hardware strict-residency |
+| Lokalizacja preconditionera | jawna dla planów demag, średnia | `backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp` — `initialize_demag_poisson_hypre_device_solver`, `configure_demag_poisson_hypre_preconditioner` | telemetryka backendu i sweep preconditionera bez host fallbacku |
+| Mixed precision | luka kwalifikacyjna, średnia | `backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp` — `gpu_rk_plan_device_resident` | parity pola/RHS/kroku/trajektorii i time-to-accuracy |
+| Stiffness explicit RK | luka pomiarowa, średnia | `backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp` — `gpu_rk_device_resident_step` | sweep `h_min` dla każdego wspieranego integratora |
+
 ### P0 — brak executed-device proof blokuje deklarację produkcyjną
 
 Requested `gpu` nie wystarcza. Wynik musi potwierdzać urządzenie i implementację dla mass/exchange/demag/local fields, LLG algebra, integrator, redukcje i output.
