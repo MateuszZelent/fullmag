@@ -106,47 +106,36 @@ long-ranged and remains present through the cross kernels.
 import fullmag as fm
 
 nm = 1.0e-9
-py = fm.Material(name="Py", Ms=800.0e3, A=13.0e-12, alpha=0.05)
-
-free = fm.Ferromagnet(
-    name="free",
-    geometry=fm.Box(size=(80 * nm, 40 * nm, 2 * nm), name="free_geom"),
-    material=py,
-    m0=fm.texture.uniform((1.0, 0.0, 0.0)),
+study = fm.study("fdm_two_magnet_stack")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.fdm(
+    default_cell=(2 * nm, 2 * nm, 1 * nm),
+    demag=fm.FDMDemag(
+        strategy="multilayer_convolution",
+        mode="two_d_stack",
+        explain=True,
+    ),
 )
-reference = fm.Ferromagnet(
-    name="reference",
-    geometry=fm.Box(size=(80 * nm, 40 * nm, 2 * nm), name="reference_geom").translate(
+
+free = study.geometry(
+    fm.Box(size=(80 * nm, 40 * nm, 2 * nm), name="free_geom"), name="free"
+)
+reference = study.geometry(
+    fm.Box(size=(80 * nm, 40 * nm, 2 * nm), name="reference_geom").translate(
         (0.0, 0.0, 5 * nm)
     ),
-    material=py,
-    m0=fm.texture.uniform((0.0, 1.0, 0.0)),
+    name="reference",
 )
+for magnet, direction in ((free, (1.0, 0.0, 0.0)), (reference, (0.0, 1.0, 0.0))):
+    magnet.Ms = 800.0e3
+    magnet.Aex = 13.0e-12
+    magnet.alpha = 0.05
+    magnet.m = fm.texture.uniform(*direction)
 
-problem = fm.Problem(
-    name="fdm_two_magnet_stack",
-    magnets=[free, reference],
-    energy=[fm.Exchange(), fm.Demag()],
-    study=fm.TimeEvolution(
-        dynamics=fm.LLG(fixed_timestep=1.0e-13),
-        outputs=[
-            fm.SaveScalar("E_ex", every=1.0e-13),
-            fm.SaveScalar("E_demag", every=1.0e-13),
-            fm.SaveScalar("E_total", every=1.0e-13),
-        ],
-    ),
-    discretization=fm.DiscretizationHints(
-        fdm=fm.FDM(
-            default_cell=(2 * nm, 2 * nm, 1 * nm),
-            demag=fm.FDMDemag(
-                strategy="multilayer_convolution",
-                mode="two_d_stack",
-                explain=True,
-            ),
-        ),
-    ),
-    runtime=fm.backend.engine("fdm"),
-)
+study.exchange()
+study.demag()
+study.stages.add_relax(stage_id="equilibrium", dt=1.0e-13, max_steps=10_000)
 ```
 
 ## Control Room workflow

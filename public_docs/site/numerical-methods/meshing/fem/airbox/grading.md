@@ -115,8 +115,6 @@ study.universe.mesh(
     maximum_element_size=100 * nm,
     maximum_element_growth_rate=1.35,
     grading="geometric",
-    curvature_factor=0.6,
-    narrow_region_resolution=0.5,
 )
 
 film = study.geometry(
@@ -141,6 +139,7 @@ film.m = fm.texture.uniform(1.0, 0.0, 0.0)
 study.exchange()
 study.demag(realization="poisson_robin")
 study.build_domain_mesh()
+study.stages.add_relax(stage_id="equilibrium", max_steps=10_000, tolT=1.0e-6)
 ```
 
 ## Control Room workflow

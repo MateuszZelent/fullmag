@@ -150,6 +150,7 @@ film.m = fm.texture.uniform(1.0, 0.0, 0.0)
 study.exchange()
 study.demag(realization="poisson_robin")
 study.build_domain_mesh()
+study.stages.add_relax(stage_id="equilibrium", max_steps=10_000, tolT=1.0e-6)
 # In strict mode, an unsupported exact request must fail instead of returning
 # an unreported tetrahedral substitute.
 ```

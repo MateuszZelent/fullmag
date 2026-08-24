@@ -102,27 +102,27 @@ different discretizations.
 import fullmag as fm
 
 nm = 1.0e-9
-fm.engine("fdm")
-fm.device("cpu", precision="double")
-fm.cell(5 * nm, 5 * nm, 10 * nm)
+study = fm.study("fdm_boundary_correction")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.cell(5 * nm, 5 * nm, 10 * nm)
 
 # Select: "none", "volume", or "full".
-fm.boundary_correction("volume")
+study.boundary_correction("volume")
 
 film_with_hole = fm.Box(600 * nm, 600 * nm, 10 * nm) - fm.Cylinder(
     radius=75 * nm,
     height=10 * nm,
 )
-magnet = fm.geometry(film_with_hole, name="permalloy_with_hole")
+magnet = study.geometry(film_with_hole, name="permalloy_with_hole")
 magnet.Ms = 800.0e3
 magnet.Aex = 13.0e-12
 magnet.alpha = 0.5
 magnet.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
-fm.exchange()
-fm.demag()
-fm.solver(fix_dt=1.0e-13)
-fm.relax()
+study.exchange()
+study.demag()
+study.stages.add_relax(stage_id="equilibrium", dt=1.0e-13, max_steps=10_000)
 ```
 
 ## Control Room workflow
