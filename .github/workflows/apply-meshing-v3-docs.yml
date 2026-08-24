@@ -1,0 +1,177 @@
+name: Validate and install meshing v3 documentation
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - .fullmag-docs-payload/**
+      - .github/workflows/apply-meshing-v3-docs.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: meshing-v3-docs-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  validate-and-install:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the source branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            public_docs/site/requirements.txt
+            packages/fullmag-py/pyproject.toml
+
+      - name: Reconstruct and verify the documentation payload
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          payload_b64="$RUNNER_TEMP/meshing-v3-docs.tar.xz.b64"
+          payload="$RUNNER_TEMP/meshing-v3-docs.tar.xz"
+          extracted="$RUNNER_TEMP/meshing-v3-docs"
+          destination="public_docs/site/numerical-methods/meshing"
+
+          cat .fullmag-docs-payload/meshing-v3-part-*.b64 > "$payload_b64"
+          echo '7cb20039f7fd9d714d547dea12bbe1991ca8b73c755fed86ca13eef9c8b3b411  '"$payload_b64" | sha256sum --check --strict
+          base64 --decode "$payload_b64" > "$payload"
+          echo '6b1823093feed872ecc90dcd4a3694030f174a5f57c8fdeeb1f2d09747f47eda  '"$payload" | sha256sum --check --strict
+
+          rm -rf "$extracted"
+          mkdir -p "$extracted"
+          tar --extract --xz --file "$payload" --directory "$extracted" --no-same-owner --no-same-permissions
+
+          test "$(find "$extracted" -type f | wc -l)" -eq 28
+          test "$(find "$extracted" -type f -name '*.md' | wc -l)" -eq 28
+          if find "$extracted" -type l -print -quit | grep -q .; then
+            echo 'Symbolic links are not allowed in the documentation payload.' >&2
+            exit 1
+          fi
+
+          (cd "$extracted" && sha256sum --check --strict "$GITHUB_WORKSPACE/.fullmag-docs-payload/SHA256SUMS")
+
+          find "$destination" -type f -name '*.md' -delete
+          cp -a "$extracted"/. "$destination"/
+          (cd "$destination" && sha256sum --check --strict "$GITHUB_WORKSPACE/.fullmag-docs-payload/SHA256SUMS")
+
+      - name: Install documentation and Python API dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r public_docs/site/requirements.txt
+          python -m pip install ./packages/fullmag-py
+
+      - name: Validate information architecture and executable examples
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest scripts/test_public_docs_information_architecture.py -v
+          python -m unittest scripts/test_check_public_doc_examples.py -v
+          python scripts/check_public_docs_information_architecture.py --root public_docs/site
+          python scripts/check_public_doc_examples.py --root public_docs/site
+          PYTHONPATH=packages/fullmag-py/src \
+            python scripts/check_public_doc_examples.py \
+              --root public_docs/site/numerical-methods/meshing \
+              --execute
+
+      - name: Enforce the meshing documentation contract
+        shell: bash
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import re
+          from collections import Counter
+          from pathlib import Path
+
+          site = Path("public_docs/site")
+          root = site / "numerical-methods/meshing"
+          pages = sorted(root.rglob("*.md"))
+          required_sections = (
+              "## Scope and purpose",
+              "## Scientific and numerical model",
+              "## Parameters",
+              "## Python API",
+              "## Control Room workflow",
+              "## Diagnostics and failure semantics",
+              "## Where this is implemented",
+          )
+
+          assert len(pages) == 28, f"expected 28 meshing pages, found {len(pages)}"
+          for page in pages:
+              text = page.read_text(encoding="utf-8")
+              lines = text.splitlines()
+              assert len(lines) >= 250, f"{page}: only {len(lines)} lines"
+              assert text.count("```{math}") >= 3, f"{page}: fewer than three math blocks"
+              assert text.count("```python") == 1, f"{page}: expected exactly one Python example"
+              for section in required_sections:
+                  assert section in text, f"{page}: missing {section}"
+
+          all_targets: list[str] = []
+          all_equations: list[str] = []
+          for page in site.rglob("*.md"):
+              text = page.read_text(encoding="utf-8")
+              all_targets.extend(re.findall(r"^\(([^)]+)\)=\s*$", text, flags=re.MULTILINE))
+              all_equations.extend(re.findall(r"^:label:\s*(\S+)\s*$", text, flags=re.MULTILINE))
+
+          duplicate_targets = sorted(key for key, count in Counter(all_targets).items() if count > 1)
+          duplicate_equations = sorted(key for key, count in Counter(all_equations).items() if count > 1)
+          assert not duplicate_targets, f"duplicate explicit targets: {duplicate_targets}"
+          assert not duplicate_equations, f"duplicate equation labels: {duplicate_equations}"
+
+          swept = (root / "fem/ferromagnet/swept-prism.md").read_text(encoding="utf-8")
+          for phrase in (
+              "Triangular-prism interpolation",
+              "Worked sizing example",
+              "Prism-to-tetrahedron transition",
+              "Control Room capability gate",
+          ):
+              assert phrase in swept, f"swept-prism page is missing {phrase!r}"
+          print(f"Validated {len(pages)} pages, {sum(p.read_text().count('```{math}') for p in pages)} equations, and 28 executable examples.")
+          PY
+
+      - name: Build the complete public documentation with warnings as errors
+        env:
+          FULLMAG_DOCS_VERSION: meshing-v3-validation
+          FULLMAG_DOCS_BUILD_TIME: 2026-08-24 22:45 UTC
+        run: |
+          rm -rf public_docs/site/_build/html
+          sphinx-build \
+            -b html \
+            -W \
+            -n \
+            --keep-going \
+            public_docs/site \
+            public_docs/site/_build/html
+
+          page="public_docs/site/_build/html/numerical-methods/meshing/fem/ferromagnet/swept-prism.html"
+          test -s "$page"
+          grep -Fq 'Triangular-prism interpolation' "$page"
+          grep -Fq 'Worked sizing example' "$page"
+          grep -Fq 'Prism-to-tetrahedron transition' "$page"
+
+      - name: Commit the verified documentation to the source branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -f public_docs/site/numerical-methods/meshing
+          if git diff --cached --quiet; then
+            echo 'The branch already contains the verified meshing documentation.'
+            exit 0
+          fi
+          git diff --cached --check
+          git commit -m 'docs(meshing): complete production scientific reference'
+          git push origin HEAD:docs/meshing-v3-production-20260824
