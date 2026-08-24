@@ -215,7 +215,7 @@ każdego engine innego niż `CpuReference`.
 | 32 | `mode_phase` | deferred analysis | magnetic | N | N | N | N | N | osobna ścieżka eigen |
 | 33 | `eden_ex` | 3D scalar | magnetic | C | C | C | C | C | FDM: cell field; native FEM: nodal visualization/conservative tetra projection mimo katalogowej lokalizacji cell |
 | 34 | `eden_demag` | 3D scalar | magnetic | C | C | C | C | C | FDM: cell field; native FEM: nodal visualization/conservative tetra projection mimo katalogowej lokalizacji cell |
-| 35 | `demag_phi` | deferred scalar | full | N | N | N | C | C | FEM może liczyć, UI 3D blokuje |
+| 35 | `demag_phi` | deferred scalar | full | N | N | N | N | N | native FEM może liczyć skalar wewnętrznie, ale katalog wyłącza materializację i preview 3D |
 | 36 | `eden_ext` | 3D scalar | magnetic | C | C | C | C | C | FDM: cell field; native FEM: nodal visualization/conservative tetra projection mimo katalogowej lokalizacji cell |
 | 37 | `eden_drive` | 3D scalar | magnetic | N | C | N | N | N | FDM CPU, multilayer i native FEM bez materializatora drive-density |
 | 38 | `eden_ani` | 3D scalar | magnetic | C | C | C | C | C | FDM: cell field; native FEM: nodal visualization/conservative tetra projection mimo katalogowej lokalizacji cell |
