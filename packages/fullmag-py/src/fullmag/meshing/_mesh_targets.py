@@ -204,9 +204,15 @@ def resolve_object_preview_target(
     # Level 1: PerObjectMeshRecipe.hmax (highest priority)
     if per_object_recipes:
         recipe = _lookup_geometry_name_alias(per_object_recipes, geometry.geometry_name)
-        if isinstance(recipe, PerObjectMeshRecipe) and recipe.hmax is not None and float(recipe.hmax) > 0:
-            hmax = float(recipe.hmax)
-            source = "recipe_override"
+        if isinstance(recipe, PerObjectMeshRecipe):
+            recipe_hmax = (
+                recipe.maximum_element_size
+                if recipe.maximum_element_size is not None
+                else recipe.hmax
+            )
+            if recipe_hmax is not None and float(recipe_hmax) > 0:
+                hmax = float(recipe_hmax)
+                source = "recipe_override"
         if isinstance(recipe, PerObjectMeshRecipe) and recipe.order is not None:
             order = int(recipe.order)
 
@@ -258,9 +264,14 @@ def _resolve_requested_partition_hmaxs(
 
     if per_object_recipes:
         for geometry_name, recipe in per_object_recipes.items():
-            if recipe.hmax is not None and float(recipe.hmax) > 0.0:
+            recipe_hmax = (
+                recipe.maximum_element_size
+                if recipe.maximum_element_size is not None
+                else recipe.hmax
+            )
+            if recipe_hmax is not None and float(recipe_hmax) > 0.0:
                 for alias in _geometry_name_aliases(geometry_name):
-                    override_by_name[alias] = float(recipe.hmax)
+                    override_by_name[alias] = float(recipe_hmax)
 
     object_hmax_by_geometry: dict[str, float | None] = {}
     for geometry in geometries:

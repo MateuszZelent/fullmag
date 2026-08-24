@@ -8401,7 +8401,24 @@ class FieldStackAcceptanceTests(unittest.TestCase):
                 "left": PerObjectMeshRecipe(hmax=20e-9),
             },
         )
-        self.assertAlmostEqual(resolved.per_object["left"].hmax, 20e-9)
+        self.assertAlmostEqual(resolved.per_object["left"].hmax, 20e-9, delta=1e-18)
+        self.assertEqual(resolved.per_object["left"].source, "recipe_override")
+
+    def test_resolve_shared_domain_targets_uses_canonical_recipe_maximum(self) -> None:
+        left = fm.Box(2.0, 2.0, 2.0, name="left")
+        resolved = resolve_shared_domain_targets(
+            [left],
+            fm.FEM(order=1, hmax=100e-9),
+            airbox_hmax=200e-9,
+            mesh_workflow={
+                "per_geometry": [{"geometry": "left", "hmax": "50e-9"}],
+            },
+            per_object_recipes={
+                "left": PerObjectMeshRecipe(maximum_element_size=20e-9),
+            },
+        )
+
+        self.assertAlmostEqual(resolved.per_object["left"].hmax, 20e-9, delta=1e-18)
         self.assertEqual(resolved.per_object["left"].source, "recipe_override")
 
     def test_shared_domain_size_fields_keep_airbox_hmax_as_outer_target(self) -> None:

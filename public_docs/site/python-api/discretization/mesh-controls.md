@@ -58,13 +58,13 @@ followed by growth, conformity, geometry, and mesher constraints. Therefore:
 (python-api-discretization-mesh-controls-symbols-and-si-units)=
 ## Symbols and SI units
 
-| Control | SI unit |
-|---|---|
-| hmin, hmax, padding, size, center, interface/edge/corner distances | m |
-| boundary-layer thickness and region transition distance | m |
-| growth, curvature, stretching, size factor, element ratio | 1 |
-| element order, layers, algorithms, iterations, smoothing | 1 |
-| quality statistics | metric-specific, named by the report |
+| Symbol/control | Meaning | SI unit |
+|---|---|---|
+| hmin, hmax, padding, size, center, interface/edge/corner distances | authored geometric length controls | m |
+| boundary-layer thickness and region transition distance | authored layer and transition lengths | m |
+| growth, curvature, stretching, size factor, element ratio | dimensionless grading controls | 1 |
+| element order, layers, algorithms, iterations, smoothing | discrete controls and identifiers | 1 |
+| quality statistics | metric named by the realized report | metric-specific, named by the report |
 | $h_{\mathrm{target}}(\mathbf x)$ | resolved local target element size before mesher/conformity constraints | $\mathrm{m}$ |
 | $\mathcal S(\mathbf x)$ | active size fields at the spatial point | $1$ |
 
@@ -431,13 +431,13 @@ contract and exposes object/region mesh membership read-only in the Control Room
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| MeshSizeControls.calibrate_for | str | None | None | $1$ | Supported calibration vocabulary at the stage-first boundary. | Physics/workflow calibration family. | FEM/Gmsh policy | mesh_size_controls.calibrate_for |
-| MeshSizeControls.size_preset | str | None | None | $1$ | Supported preset vocabulary at the stage-first boundary. | Named size-policy preset. | FEM/Gmsh policy | mesh_size_controls.size_preset |
-| MeshSizeControls.maximum_element_size | float | None | None | $\mathrm{m}$ | Finite and positive when authored. | Requested upper element-size target. | FEM | mesh_size_controls.maximum_element_size |
-| MeshSizeControls.minimum_element_size | float | None | None | $\mathrm{m}$ | Finite and positive and no larger than effective maximum when authored. | Requested lower element-size target. | FEM | mesh_size_controls.minimum_element_size |
-| MeshSizeControls.maximum_element_growth_rate | float | None | None | $1$ | Finite and positive; stage-first public authoring limits the practical range through 2.5. | Requested maximum growth between refinement regions. | FEM/Gmsh | mesh_size_controls.maximum_element_growth_rate |
-| MeshSizeControls.curvature_factor | float | None | None | $1$ | Finite and positive when authored. | Curvature-derived sizing factor. | FEM/Gmsh | mesh_size_controls.curvature_factor |
-| MeshSizeControls.narrow_region_resolution | float | None | None | $1$ | Finite and positive when authored. | Resolution target for narrow regions. | FEM/Gmsh | mesh_size_controls.narrow_region_resolution |
+| MeshSizeControls.calibrate_for | str \| None | None | $1$ | Supported calibration vocabulary at the stage-first boundary. | Physics/workflow calibration family. | FEM/Gmsh policy | mesh_size_controls.calibrate_for |
+| MeshSizeControls.size_preset | str \| None | None | $1$ | Supported preset vocabulary at the stage-first boundary. | Named size-policy preset. | FEM/Gmsh policy | mesh_size_controls.size_preset |
+| MeshSizeControls.maximum_element_size | float \| None | None | $\mathrm{m}$ | Finite and positive when authored. | Requested upper element-size target. | FEM | mesh_size_controls.maximum_element_size |
+| MeshSizeControls.minimum_element_size | float \| None | None | $\mathrm{m}$ | Finite and positive and no larger than effective maximum when authored. | Requested lower element-size target. | FEM | mesh_size_controls.minimum_element_size |
+| MeshSizeControls.maximum_element_growth_rate | float \| None | None | $1$ | Finite and positive; stage-first public authoring limits the practical range through 2.5. | Requested maximum growth between refinement regions. | FEM/Gmsh | mesh_size_controls.maximum_element_growth_rate |
+| MeshSizeControls.curvature_factor | float \| None | None | $1$ | Finite and positive when authored. | Curvature-derived sizing factor. | FEM/Gmsh | mesh_size_controls.curvature_factor |
+| MeshSizeControls.narrow_region_resolution | float \| None | None | $1$ | Finite and positive when authored. | Resolution target for narrow regions. | FEM/Gmsh | mesh_size_controls.narrow_region_resolution |
 | SharedMeshAssemblyPolicy.interface_hmax_factor | float | 0.5 | $1$ | Strictly greater than zero and no greater than one. | Interface size relative to the local object maximum. | FEM shared-domain assembly | shared_mesh_assembly_policy.interface_hmax_factor |
 | SharedMeshAssemblyPolicy.enforce_conforming | bool | True | $1$ | Boolean. | Require a conforming shared-domain mesh. | FEM shared-domain assembly | shared_mesh_assembly_policy.enforce_conforming |
 | SharedMeshAssemblyPolicy.airbox_hmax_factor | float | 3.0 | $1$ | Finite and positive. | Airbox target relative to the global maximum element size. | FEM shared-domain assembly | shared_mesh_assembly_policy.airbox_hmax_factor |
