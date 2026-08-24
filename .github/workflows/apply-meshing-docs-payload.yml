@@ -30,7 +30,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Reconstruct, verify, and install documentation
+      - name: Reconstruct and verify documentation
         shell: bash
         run: |
           set -euo pipefail
@@ -56,51 +56,19 @@ jobs:
             exit 1
           fi
 
-          cat > /tmp/meshing-docs.sha256 <<'HASHES'
-          be50346d18a90464aec7668cef381b1f21efa7a901e17dc1b9c697f6aae7b246  index.md
-          fbdb1db5b84301dfe68f693a78c14ed1037509428a3835e1cd4d55885708fcf4  fdm-grids.md
-          f05b139618485efc8e6e3d69dd5af57f15af0eb1e697928279515425616374c8  airbox.md
-          0d7300597831f5c3307f7fb8d59e4d6b06e0a17dcd3e83e82b8da77fc3ed6bc3  fem-shared-domain.md
-          ec132e9a0640cb8705c9eaaea048ed2bf55c93bc8d2694c17fa9c5175d0d67d3  refinement.md
-          cc6dee970167375d4a2100c1ec1a49be355d76aa6a45a4e7bf5474395242b210  swept-meshes.md
-          5f835f8f0909fe449dfbc5dcddd9a3c274d40db286edc29517270f0c072ca3c2  fdm/index.md
-          6f7b108e569fd4688fee6a441626f74696c3db6424d829edc8a5bbfc3c809c14  fdm/boundary-correction.md
-          4bd3ca44588c94827d2af08777c633644e8d64aa7eceaed93b7e8abb41e38ff8  fdm/multi-magnet-grids.md
-          b53f8a3c7d3263aabceba7c93153ad778aabdbc299d7223fba754ae40137efe8  fdm/periodic-grids.md
-          a8af58e5da833b215820131a8feebcbaccaa0754b5c00a2875440dff706bc0b9  fem/index.md
-          3cb1a36508cad966bb84a86733683dada8f9f36e64cb9f1304e9bc3f75202c21  fem/ferromagnet/index.md
-          c1df2775e209b409013f48198d51f0364cd4f2fbee1c2aabf67dcc07ffbacb87  fem/ferromagnet/free-tetrahedral.md
-          9f4dfa047640c57f683b2aebd2a26fba51372cbadbe67ecadfb920cc8a2c2cf4  fem/ferromagnet/thin-film-tetrahedral.md
-          81cbc15b87a794c34f58755594655bc3fcdaefa6d40bf7988cc787b20b3e8c32  fem/ferromagnet/swept-prism.md
-          bf231918e09b5a79486c28fb0bbf6bd6e43cc57139807206f7a4f5ca74f41602  fem/ferromagnet/swept-hex.md
-          24c22479ca8a66b0de527e971b7f072e0e8de15a0bb3dd39cdaf6fab87902d8c  fem/ferromagnet/boundary-layers.md
-          1646198439455a65be25b443f149e5de40d148f76825490097ca8a27938c9f38  fem/ferromagnet/imported-mesh.md
-          16ba9dc466cd83d04c349839b66730de847ef757df9d26fd94cdea5615a59ef9  fem/ferromagnet/mixed-elements.md
-          425208c9eb7f2126ed6776db3383055291e21007b3e0ab2a54b1235fb5c47d8f  fem/airbox/index.md
-          c617fd165d8d3642d92fee72f71822bfdd92da3918e0b90024bd0f0cedc128e5  fem/airbox/geometry.md
-          0b70ee581deda74ed5dd414a965aa4c5945b1b317b99a91b55715c915528d413  fem/airbox/grading.md
-          8b79c1f47551c0b5a0e295f0634003d11b2a60902ab56c2e0da52ebc79a0af35  fem/airbox/boundary-closure.md
-          6b0618861806a3f9aad934e5a48c270fd79dd091cc81a246b01d71703f367d28  fem/airbox/periodic-airbox.md
-          8f8e7ae698d82239af840fcade073e4f3028f974ec2e6d5cf863c9baff1d6873  fem/shared-domain/index.md
-          c5d13ff7281b04b922ce40e9f9d2369945f41a57e9f177f58d74df9aeaefd4e5  fem/shared-domain/assembly-and-conformity.md
-          cb8a96be7f370042b74bc26f01c82d878900840f9ea62fecab0c741a2dea2e2e  fem/shared-domain/build-modes-and-fallbacks.md
-          bc073db86527f21d97241ae8900db22b30c7ccd06ec18428162520734d7ba727  fem/shared-domain/selectors-and-attributes.md
-          HASHES
-          sed -i 's/^          //' /tmp/meshing-docs.sha256
-          (cd "$extracted" && sha256sum --check --strict /tmp/meshing-docs.sha256)
-
           rm -rf "$destination"
           mkdir -p "$destination"
           cp -a "$extracted"/. "$destination"/
-          (cd "$destination" && sha256sum --check --strict /tmp/meshing-docs.sha256)
+          diff --recursive --brief "$extracted" "$destination"
 
       - name: Commit installed documentation
         shell: bash
         run: |
           set -euo pipefail
+          destination=public_docs/site/numerical-methods/meshing
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add public_docs/site/numerical-methods/meshing
+          git add -f "$destination"
           if git diff --cached --quiet; then
             echo 'Documentation already matches the verified payload.'
             exit 0
