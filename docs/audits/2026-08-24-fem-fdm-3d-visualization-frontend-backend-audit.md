@@ -33,7 +33,7 @@ Nie należy jednak kwalifikować całego zakresu FEM/FDM 3D jako bezwarunkowo go
 ### Klasyfikacja
 
 - P0: 0
-- P1: 3
+- P1: 5
 - P2: 9
 - P3: 2
 
@@ -205,9 +205,9 @@ każdego engine innego niż `CpuReference`.
 | 22 | `E_drive` | hist. | magnetic | N | N | N | N | N | `StepStats.e_drive` istnieje, ale cztery kanoniczne ścieżki scalar API pomijają klucz `e_drive` |
 | 23 | `E_ani` | hist. | magnetic | S | S | S | S | S | global scalar |
 | 24 | `E_dmi` | hist. | magnetic | S | S | S | S | S | global scalar |
-| 25 | `E_el` | hist. deferred | full | S | S | S | S | S | mechanika niewystawiona |
-| 26 | `E_kin_el` | hist. deferred | full | S | S | S | S | S | mechanika niewystawiona |
-| 27 | `elastic_residual_norm` | hist. deferred | full | S | S | S | S | S | diagnostyka mechaniki |
+| 25 | `E_el` | hist. deferred | full | N | N | N | N | N | descriptor ma `ui_exposed: false`, a scalar API nie materializuje metryki |
+| 26 | `E_kin_el` | hist. deferred | full | N | N | N | N | N | descriptor ma `ui_exposed: false`, a scalar API nie materializuje metryki |
+| 27 | `elastic_residual_norm` | hist. deferred | full | N | N | N | N | N | descriptor ma `ui_exposed: false`, a scalar API nie materializuje metryki |
 | 28 | `E_total` | hist. | full | S | S | S | S | S | global scalar |
 | 29 | `mode_amplitude` | deferred analysis | magnetic | N | N | N | N | N | osobna ścieżka eigen |
 | 30 | `mode_real` | deferred analysis | magnetic | N | N | N | N | N | osobna ścieżka eigen |
@@ -718,13 +718,14 @@ Ten audyt nie formułuje nowych twierdzeń naukowych; podstawę fizyczną stanow
 | Kanoniczne wire IDs i jawne aliasy | wszystkie | `crates/fullmag-quantities/src/id.rs` | `normalize_quantity_id` | inspekcja źródła | audited | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-quantities/src/id.rs) |
 | Katalog quantities | wszystkie | `crates/fullmag-quantities/src/catalog.rs` | `quantity_catalog` | testy katalogu i inspekcja | audited | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-quantities/src/catalog.rs) |
 | Parytet providerów | wszystkie | `crates/fullmag-quantities/src/registry.rs` | `standard_providers_register_every_canonical_quantity` | test rejestru | tested | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-quantities/src/registry.rs) |
-| Capability quantity FDM | FDM CPU/GPU/ML | `crates/fullmag-runner/src/quantities.rs` | `fdm_quantity_is_active` | testy capability runnera | tested | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-runner/src/quantities.rs) |
+| Capability quantity FDM | FDM CPU/GPU | `crates/fullmag-runner/src/quantities.rs` | `fdm_quantity_is_active` | testy capability runnera | tested | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-runner/src/quantities.rs) |
+| Capability quantity FDM multilayer | FDM ML | `crates/fullmag-runner/src/quantities.rs` | `fdm_multilayer_quantity_is_active` | inspekcja źródła | audited | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-runner/src/quantities.rs) |
 | Capability quantity FEM | FEM CPU/GPU | `crates/fullmag-runner/src/quantities.rs` | `fem_quantity_is_active` | testy capability runnera | tested | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-runner/src/quantities.rs) |
 | Zamknięta lista CUDA FDM | FDM GPU | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `from_quantity` | inspekcja źródła | audited | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-runner/src/fdm/gpu/cuda/native.rs) |
 | Zamknięta lista native FEM | FEM CPU/GPU | `crates/fullmag-runner/src/native_fem.rs` | `from_quantity` | inspekcja źródła | audited | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-runner/src/native_fem.rs) |
 | Polityka providerów post-stage | wszystkie | `crates/fullmag-runner/src/observation.rs` | `observation_provider_policy` | testy provider policy | tested | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-runner/src/observation.rs) |
 | Komenda post-stage | wszystkie | `crates/fullmag-cli/src/interactive_runtime_host.rs` | `compute_current_fields` | inspekcja źródła | audited | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-cli/src/interactive_runtime_host.rs) |
-| Rekonstrukcja bez retained runtime | wszystkie | `crates/fullmag-runner/src/lib.rs` | `snapshot_problem_vector_field_batch` | testy rekonstrukcji | tested | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-runner/src/lib.rs) |
+| Rekonstrukcja bez retained runtime | wszystkie | `crates/fullmag-runner/src/lib.rs` | `snapshot_problem_vector_field_batch` | inspekcja źródła; brak testu wykonania | audited | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-runner/src/lib.rs) |
 | Walidacja wartości FMVP | wszystkie | `crates/fullmag-api/src/field_store.rs` | `validate_field_vector_payload` | testy field store | tested; bez identity | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-api/src/field_store.rs) |
 | Serializacja identity FMVP v3 | wszystkie | `crates/fullmag-api/src/field_store.rs` | `serialize_field_vector_binary_v3` | testy field store | tested | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-api/src/field_store.rs) |
 | Dekodowanie FMVP | frontend | `apps/control-room/src/kernel/api/codecs/fieldVectorCodec.ts` | `decodeFieldVector` | testy kodeka | tested | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/apps/control-room/src/kernel/api/codecs/fieldVectorCodec.ts) |

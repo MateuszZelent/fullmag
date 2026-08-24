@@ -45,13 +45,23 @@
     },
     {
       "id": "fdm-quantity-capability",
-      "lanes": ["fdm-cpu","fdm-gpu","fdm-multilayer"],
+      "lanes": ["fdm-cpu","fdm-gpu"],
       "evidence": ["runner quantity capability tests"],
       "evidence_status": "tested",
       "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-runner/src/quantities.rs",
       "path": "crates/fullmag-runner/src/quantities.rs",
       "symbol": "fdm_quantity_is_active",
       "responsibility": "Rozstrzyga aktywność quantity dla planu i realizacji FDM."
+    },
+    {
+      "id": "fdm-multilayer-quantity-capability",
+      "lanes": ["fdm-multilayer"],
+      "evidence": ["source inspection"],
+      "evidence_status": "audited",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-runner/src/quantities.rs",
+      "path": "crates/fullmag-runner/src/quantities.rs",
+      "symbol": "fdm_multilayer_quantity_is_active",
+      "responsibility": "Rozstrzyga aktywność quantity dla publicznego planu i realizacji FDM multilayer."
     },
     {
       "id": "fem-quantity-capability",
@@ -106,8 +116,8 @@
     {
       "id": "cold-field-reconstruction",
       "lanes": ["all"],
-      "evidence": ["runner reconstruction tests"],
-      "evidence_status": "tested",
+      "evidence": ["source inspection; execution test missing"],
+      "evidence_status": "audited",
       "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-runner/src/lib.rs",
       "path": "crates/fullmag-runner/src/lib.rs",
       "symbol": "snapshot_problem_vector_field_batch",
