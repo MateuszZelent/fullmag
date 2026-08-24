@@ -14,6 +14,7 @@
 #include "gpu/cuda/integrators/rk/rk_error_norm_runtime.hpp"
 #include "gpu/cuda/integrators/rk/rk_stage_schedule.hpp"
 #include "cpu/mfem/integrators/rk_step_transaction.hpp"
+#include "gpu/cuda/runtime/execution_receipt.hpp"
 
 #include <cstdio>
 #include <memory>
@@ -22,6 +23,37 @@
 namespace fullmag::fem {
 
 namespace {
+
+class ReceiptAttemptGuard {
+public:
+    explicit ReceiptAttemptGuard(FemGpuExecutionReceiptRuntimeState &receipt)
+        : receipt_(receipt)
+    {
+        gpu_execution_receipt_begin_attempt(receipt_);
+    }
+
+    ~ReceiptAttemptGuard()
+    {
+        if (active_) {
+            gpu_execution_receipt_fail_attempt(receipt_);
+        }
+    }
+
+    void reject()
+    {
+        gpu_execution_receipt_reject_attempt(receipt_);
+        active_ = false;
+    }
+
+    void release()
+    {
+        active_ = false;
+    }
+
+private:
+    FemGpuExecutionReceiptRuntimeState &receipt_;
+    bool active_ = true;
+};
 
 std::string format_scientific(double value)
 {
@@ -59,6 +91,7 @@ bool gpu_rk_run_accepted_attempt_loop(
     ctx.stepper.attempt_trace.records.clear();
 
     for (;;) {
+        ReceiptAttemptGuard receipt_attempt(ctx.gpu_state.execution_receipt);
         ctx.adaptive_dt.current_dt = active_dt;
         const uint32_t demag_solves_before_attempt = ctx.poisson_demag.solves_current_step;
         const uint32_t rhs_before_attempt = total_stage_rhs_evaluations;
@@ -171,6 +204,7 @@ bool gpu_rk_run_accepted_attempt_loop(
                 ctx.base_plan.dt_seconds = active_dt;
                 ctx.adaptive_dt.current_dt = active_dt;
                 rejected_attempts += 1;
+                receipt_attempt.reject();
                 if (rejected_attempts > ctx.adaptive_dt.max_reject) {
                     reason =
                         "adaptive GPU RK exceeded adaptive_config.max_reject rejected attempts "
@@ -206,6 +240,7 @@ bool gpu_rk_run_accepted_attempt_loop(
                 tableau.order_est,
             });
         }
+        receipt_attempt.release();
         break;
     }
 

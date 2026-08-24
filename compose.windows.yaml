@@ -1,0 +1,66 @@
+services:
+  fullmag-wsl-gpu:
+    build:
+      context: .
+      dockerfile: docker/fem-gpu/Dockerfile
+      args:
+        FULLMAG_CUDA_ARCHITECTURES: ${FULLMAG_CUDA_ARCHITECTURES:-80-real;89-real;90-real;90-virtual}
+        FULLMAG_HYPRE_GPU_ARCHITECTURES: "${FULLMAG_HYPRE_GPU_ARCHITECTURES:-60 70 80 89 90}"
+        FULLMAG_HYPRE_MEMORY_VARIANT: "${FULLMAG_HYPRE_MEMORY_VARIANT:-baseline}"
+    image: ${FULLMAG_FEM_GPU_IMAGE:-fullmag/fem-gpu:local}
+    working_dir: /workspace
+    command: ["sleep", "infinity"]
+    volumes:
+      - type: bind
+        source: ${FULLMAG_WINDOWS_SOURCE_ROOT:?FULLMAG_WINDOWS_SOURCE_ROOT must be set}
+        target: /workspace
+      - type: bind
+        source: ${FULLMAG_WINDOWS_STATE_ROOT:?FULLMAG_WINDOWS_STATE_ROOT must be set}
+        target: /workspace/.fullmag
+      - type: bind
+        source: ${FULLMAG_WINDOWS_BUILD_ROOT:?FULLMAG_WINDOWS_BUILD_ROOT must be set}
+        target: /workspace/.fullmag-build
+      - type: bind
+        source: ${FULLMAG_WINDOWS_CACHE_ROOT:?FULLMAG_WINDOWS_CACHE_ROOT must be set}
+        target: /workspace/.fullmag-cache
+      - type: bind
+        source: ${FULLMAG_WINDOWS_TMP_ROOT:?FULLMAG_WINDOWS_TMP_ROOT must be set}
+        target: /tmp
+    environment:
+      HOME: /workspace/.fullmag-cache/home
+      CARGO_HOME: /workspace/.fullmag-cache/cargo
+      RUSTUP_HOME: /workspace/.fullmag-cache/rustup
+      CARGO_TARGET_DIR: /workspace/.fullmag-build/cargo-targets/fullmag-cli
+      CARGO_INCREMENTAL: "0"
+      PNPM_HOME: /workspace/.fullmag-cache/pnpm-home
+      npm_config_store_dir: /workspace/.fullmag-cache/pnpm-store
+      npm_config_cache: /workspace/.fullmag-cache/npm-cache
+      COREPACK_HOME: /workspace/.fullmag-cache/corepack
+      PIP_CACHE_DIR: /workspace/.fullmag-cache/pip-cache
+      UV_CACHE_DIR: /workspace/.fullmag-cache/uv
+      UV_PYTHON_INSTALL_DIR: /workspace/.fullmag-cache/python/managed
+      XDG_CACHE_HOME: /workspace/.fullmag-cache/xdg
+      CUDA_CACHE_PATH: /workspace/.fullmag-cache/cuda
+      PLAYWRIGHT_BROWSERS_PATH: /workspace/.fullmag-cache/playwright-browsers
+      PYTHONPYCACHEPREFIX: /workspace/.fullmag-cache/python-bytecode
+      PYTHONDONTWRITEBYTECODE: "1"
+      TMPDIR: /tmp
+      TEMP: /tmp
+      TMP: /tmp
+      FULLMAG_PYTHON: /usr/bin/python3
+      PYTHONPATH: /workspace/packages/fullmag-py/src
+      FULLMAG_REPO_ROOT: /workspace
+      FULLMAG_USE_MFEM_STACK: "ON"
+      FULLMAG_FEM_REQUIRE_GPU: "1"
+      FULLMAG_FEM_REQUIRE_CEED: "1"
+      FULLMAG_FEM_MFEM_DEVICE: ceed-cuda:/gpu/cuda/shared
+      FULLMAG_CUDA_ARCHITECTURES: ${FULLMAG_CUDA_ARCHITECTURES:-80-real;89-real;90-real;90-virtual}
+      CMAKE_PREFIX_PATH: /opt/fullmag-deps
+      PKG_CONFIG_PATH: /opt/fullmag-deps/lib/pkgconfig:/opt/fullmag-deps/lib64/pkgconfig
+      LD_LIBRARY_PATH: /usr/local/cuda/lib64:/opt/fullmag-deps/lib
+    ports:
+      - "${FULLMAG_WINDOWS_WEB_PORT:-3100}:3100"
+    gpus: all
+    profiles:
+      - windows-wsl
+      - gpu

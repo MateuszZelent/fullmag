@@ -136,6 +136,12 @@ void gpu_execution_receipt_begin_attempt(FemGpuExecutionReceiptRuntimeState &sta
     state.attempt_fallback_count = 0;
 }
 
+bool gpu_execution_receipt_attempt_active(
+    const FemGpuExecutionReceiptRuntimeState &state) {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    return state.attempt_active;
+}
+
 void gpu_execution_receipt_note_device(
     FemGpuExecutionReceiptRuntimeState &state,
     uint64_t operator_mask) {

@@ -37,8 +37,10 @@ void accepted_device_attempt_publishes_complete_receipt() {
         FULLMAG_FEM_PRECISION_DOUBLE,
         FULLMAG_FEM_INTEGRATOR_HEUN);
     gpu_execution_receipt_begin_attempt(state);
+    check(gpu_execution_receipt_attempt_active(state), "begun attempt must be active");
     gpu_execution_receipt_note_device(state, required);
     gpu_execution_receipt_commit_attempt(state);
+    check(!gpu_execution_receipt_attempt_active(state), "committed attempt must be inactive");
 
     const FemGpuExecutionSnapshot receipt = gpu_execution_receipt_snapshot(state);
     check(

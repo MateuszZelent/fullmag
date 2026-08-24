@@ -23,6 +23,7 @@
 #include "cpu/mfem/runtime/stage_completion.hpp"
 #include "cpu/mfem/runtime/step_metrics.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
+#include "gpu/cuda/runtime/execution_receipt.hpp"
 #include "gpu/cuda/relaxation/nonlinear_cg.hpp"
 #include "gpu/cuda/relaxation/pgbb.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
@@ -76,6 +77,9 @@ int run_backend_step_attempt(
         fill_step_profiler_timing_stats(ctx, out_stats);
     };
     auto rollback = [&]() {
+        if (gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
+            gpu_execution_receipt_fail_attempt(ctx.gpu_state.execution_receipt);
+        }
         const std::string original_error = error;
         std::string callback_error;
         if (!rollback_transport_stage_attempt(ctx, callback_error)) {
@@ -216,6 +220,9 @@ int run_backend_step_attempt(
             return FULLMAG_FEM_ERR_INTERNAL;
         }
         if (energy_decision.kind == RelaxationEnergyAcceptanceKind::rejected_increase) {
+            if (gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
+                gpu_execution_receipt_reject_attempt(ctx.gpu_state.execution_receipt);
+            }
             rollback();
             energy_rejected = true;
             refresh_transaction_stats();
@@ -232,6 +239,40 @@ int run_backend_step_attempt(
             0.0,
             0.0);
         return FULLMAG_FEM_ERR_INTERNAL;
+    }
+    if (gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
+        gpu_execution_receipt_commit_attempt(ctx.gpu_state.execution_receipt);
+        const auto execution_receipt = gpu_execution_receipt_snapshot(
+            ctx.gpu_state.execution_receipt);
+        if (!execution_receipt.accounting_valid ||
+            execution_receipt.executed_unknown_operator_mask != 0 ||
+            execution_receipt.executed_device_operator_mask !=
+                execution_receipt.resolved_device_operator_mask ||
+            execution_receipt.executed_host_operator_mask !=
+                execution_receipt.resolved_host_operator_mask) {
+            error = "GPU-requested native FEM step completed without a valid executed-operator receipt";
+            rollback();
+            set_stage_completion(
+                ctx,
+                FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+                nullptr,
+                0.0,
+                0.0);
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+        if (execution_receipt.execution_class == FemGpuExecutionClass::DeviceResident &&
+            (execution_receipt.executed_host_operator_mask != 0 ||
+             execution_receipt.fallback_count != 0)) {
+            error = "strict FEM GPU step reported host execution or fallback";
+            rollback();
+            set_stage_completion(
+                ctx,
+                FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+                nullptr,
+                0.0,
+                0.0);
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
     }
     transaction.commit();
     refresh_transaction_stats();

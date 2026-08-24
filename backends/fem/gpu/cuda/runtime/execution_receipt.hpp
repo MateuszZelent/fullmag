@@ -104,6 +104,8 @@ void gpu_execution_receipt_resolve_plan(
     uint32_t integrator);
 
 void gpu_execution_receipt_begin_attempt(FemGpuExecutionReceiptRuntimeState &state);
+bool gpu_execution_receipt_attempt_active(
+    const FemGpuExecutionReceiptRuntimeState &state);
 void gpu_execution_receipt_note_device(
     FemGpuExecutionReceiptRuntimeState &state,
     uint64_t operator_mask);

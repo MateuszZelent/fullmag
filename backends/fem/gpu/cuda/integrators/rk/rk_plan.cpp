@@ -20,6 +20,48 @@
 
 namespace fullmag::fem {
 
+namespace {
+
+bool has_local_field_operator(const Context &ctx)
+{
+    return ctx.dmi.interfacial_enabled || ctx.dmi.bulk_enabled ||
+        ctx.zeeman.has_external_field ||
+        ctx.anisotropy.uniaxial_enabled || ctx.anisotropy.cubic_enabled ||
+        ctx.magnetoelastic.enabled ||
+        ctx.oersted.has_cylinder || ctx.oersted.has_explicit_field ||
+        ctx.thermal_brown.temperature > 0.0;
+}
+
+bool has_direct_torque_operator(const Context &ctx)
+{
+    return ctx.stt.slonczewski_enabled || ctx.stt.zhang_li_enabled || ctx.sot.enabled;
+}
+
+} // namespace
+
+uint64_t gpu_rk_required_operator_mask(const Context &ctx)
+{
+    uint64_t mask =
+        FEM_GPU_OPERATOR_EXCHANGE |
+        FEM_GPU_OPERATOR_LLG_RHS |
+        FEM_GPU_OPERATOR_RK_STEPPER |
+        FEM_GPU_OPERATOR_REDUCTIONS;
+    if (has_local_field_operator(ctx)) {
+        mask |= FEM_GPU_OPERATOR_LOCAL_FIELDS;
+    }
+    if (has_direct_torque_operator(ctx)) {
+        mask |= FEM_GPU_OPERATOR_DIRECT_TORQUES;
+    }
+    if (ctx.demag.enabled) {
+        mask |=
+            FEM_GPU_OPERATOR_DEMAG_RHS |
+            FEM_GPU_OPERATOR_DEMAG_SOLVE |
+            FEM_GPU_OPERATOR_DEMAG_RECOVERY |
+            FEM_GPU_OPERATOR_PRECONDITIONER;
+    }
+    return mask;
+}
+
 uint32_t gpu_rk_stage_count(fullmag_fem_integrator integrator)
 {
     return gpu_state_stage_count(integrator);
@@ -77,6 +119,8 @@ GpuRkPlan gpu_rk_plan_device_resident(const Context &ctx, std::string &reason)
 {
     GpuRkPlan plan{};
     plan.stage_count = gpu_rk_stage_count(ctx.base_plan.integrator);
+    plan.required_operator_mask = gpu_rk_required_operator_mask(ctx);
+    plan.resolved_unknown_operator_mask = plan.required_operator_mask;
 
     if (ctx.frozen_spins.enabled() &&
         (ctx.gpu_state.device.mesh_regions.frozen_mask == nullptr ||
@@ -192,6 +236,7 @@ GpuRkPlan gpu_rk_plan_device_resident(const Context &ctx, std::string &reason)
             plan.demag_operator_mode = "hybrid_cpu_poisson";
             plan.hypre_execution_policy = "host";
             plan.demag_residency = "host_device_roundtrip";
+            plan.execution_class = FemGpuExecutionClass::HybridCpuPoisson;
         } else {
             plan.demag_operator_mode = gpu_demag_poisson_operator_mode(ctx);
             plan.hypre_execution_policy = gpu_demag_poisson_hypre_policy(ctx);
@@ -224,8 +269,67 @@ GpuRkPlan gpu_rk_plan_device_resident(const Context &ctx, std::string &reason)
     plan.enabled = true;
     plan.uses_cuda_kernels = true;
     plan.allows_exchange_host_sync = false;
+    const uint64_t hybrid_host_mask =
+        plan.execution_class == FemGpuExecutionClass::HybridCpuPoisson
+        ? FEM_GPU_OPERATOR_DEMAG_SOLVE | FEM_GPU_OPERATOR_PRECONDITIONER
+        : 0;
+    plan.resolved_host_operator_mask = hybrid_host_mask;
+    plan.resolved_device_operator_mask = plan.required_operator_mask & ~hybrid_host_mask;
+    plan.resolved_unknown_operator_mask = 0;
+    if (plan.execution_class == FemGpuExecutionClass::Unknown) {
+        plan.execution_class = FemGpuExecutionClass::DeviceResident;
+    }
     reason.clear();
     return plan;
+}
+
+bool gpu_rk_plan_is_strict_device_resident(
+    const GpuRkPlan &plan,
+    std::string &reason)
+{
+    if (!plan.enabled) {
+        if (reason.empty()) {
+            reason = "strict FEM GPU execution plan is disabled";
+        }
+        return false;
+    }
+    if (plan.execution_class == FemGpuExecutionClass::HybridCpuPoisson) {
+        reason = "strict FEM GPU execution rejects explicit hybrid_cpu_poisson compatibility mode";
+        return false;
+    }
+    if (plan.execution_class != FemGpuExecutionClass::DeviceResident) {
+        reason = "strict FEM GPU execution requires device_resident execution class";
+        return false;
+    }
+    if (plan.resolved_unknown_operator_mask != 0) {
+        reason = "strict FEM GPU execution has unresolved required operators";
+        return false;
+    }
+    if (plan.resolved_host_operator_mask != 0) {
+        reason = "strict FEM GPU execution rejects host operator apply or preconditioner";
+        return false;
+    }
+    if (plan.required_operator_mask == 0 ||
+        plan.resolved_device_operator_mask != plan.required_operator_mask) {
+        reason = "strict FEM GPU execution requires every required operator on device";
+        return false;
+    }
+    reason.clear();
+    return true;
+}
+
+bool gpu_rk_strict_transfer_audit_is_clean(
+    const fullmag_fem_transfer_audit &transfer,
+    std::string &reason)
+{
+    if (transfer.hot_loop_compute_h2d_bytes != 0 ||
+        transfer.hot_loop_compute_d2h_bytes != 0 ||
+        transfer.hot_loop_compute_host_sync_count != 0) {
+        reason = "strict FEM GPU execution rejected hot-loop compute host transfer or synchronization";
+        return false;
+    }
+    reason.clear();
+    return true;
 }
 
 #if !FULLMAG_HAS_CUDA_RUNTIME
