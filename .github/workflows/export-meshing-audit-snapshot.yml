@@ -1,0 +1,70 @@
+name: Export meshing audit snapshot
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - ".github/workflows/export-meshing-audit-snapshot.yml"
+      - "public_docs/site/**"
+      - "packages/fullmag-py/**"
+      - "apps/control-room/**"
+      - "crates/fullmag-api/**"
+      - "crates/fullmag-ir/**"
+      - "docs/physics/**"
+      - "scripts/**"
+      - ".agents/skills/scientific-documentation-contract/**"
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Create deterministic audit snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/fullmag-meshing-audit"
+          rm -rf "$root"
+          mkdir -p "$root"
+          paths=(
+            public_docs/site
+            packages/fullmag-py/src/fullmag
+            packages/fullmag-py/tests
+            apps/control-room/src/modules/inspector
+            apps/control-room/src/shared/domain/mesh
+            crates/fullmag-api/src/schemas/mesh.rs
+            crates/fullmag-ir/src/mesh_assets.rs
+            docs/physics/0100-mesh-and-region-discretization.md
+            docs/physics/0103-rectangular-waveguide-edge-corner-mesh-refinement.md
+            docs/physics/0104-thin-film-shared-domain-meshing.md
+            scripts/check_public_doc_examples.py
+            scripts/check_public_docs_information_architecture.py
+            scripts/public_docs_information_architecture.py
+            scripts/test_check_public_doc_examples.py
+            scripts/test_public_docs_information_architecture.py
+            .agents/skills/scientific-documentation-contract
+            .github/workflows/documentation.yml
+          )
+          for path in "${paths[@]}"; do
+            if [[ -e "$path" ]]; then
+              mkdir -p "$root/$(dirname "$path")"
+              cp -a "$path" "$root/$path"
+            fi
+          done
+          git rev-parse HEAD > "$root/HEAD.txt"
+          find "$root" -type f -print0 | sort -z | xargs -0 sha256sum > "$root/SHA256SUMS"
+
+      - name: Upload audit snapshot
+        uses: actions/upload-artifact@v7
+        with:
+          name: fullmag-meshing-audit-${{ github.sha }}
+          path: ${{ runner.temp }}/fullmag-meshing-audit
+          if-no-files-found: error
+          retention-days: 1
