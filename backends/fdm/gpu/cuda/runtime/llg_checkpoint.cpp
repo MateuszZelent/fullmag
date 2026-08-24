@@ -683,7 +683,7 @@ int context_llg_checkpoint_import_v3(
           header.info.fsal_transport_state_identity == 0 ||
           header.info.fsal_projection_policy_identity == 0 ||
           header.info.fsal_integrator_identity == 0 ||
-          header.info.fsal_precision_identity == 0)) {
+          header.info.fsal_precision_identity == 0))) {
         ctx.last_error = "LLG checkpoint v3 integrity or state identity mismatch";
         return FULLMAG_FDM_ERR_ABI;
     }

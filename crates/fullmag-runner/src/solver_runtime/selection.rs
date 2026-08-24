@@ -7,7 +7,7 @@ use crate::fdm::gpu::cuda::native as native_fdm;
 use crate::runtime_registry::RuntimeRegistry;
 use crate::solver_runtime::diagnostics::{runtime_fallback, runtime_warn_once};
 use crate::solver_runtime::engine::{fdm_engine_id, EngineResolution, FdmEngine};
-use crate::types::{ResolvedFallback, RunError};
+use crate::types::{ExecutionRequestProvenance, ResolvedFallback, RunError};
 
 pub(crate) fn runtime_selection(problem: &ProblemIR) -> Option<&serde_json::Map<String, Value>> {
     problem
@@ -52,6 +52,24 @@ pub(crate) fn requested_registry_device_for_fdm(problem: &ProblemIR) -> String {
             .unwrap_or("auto")
             .replace("cuda", "gpu"),
         Some(other) => other.replace("cuda", "gpu"),
+    }
+}
+
+pub(crate) fn fdm_execution_request_provenance(problem: &ProblemIR) -> ExecutionRequestProvenance {
+    ExecutionRequestProvenance {
+        backend: problem
+            .backend_policy
+            .requested_backend
+            .as_str()
+            .to_string(),
+        device: requested_registry_device_for_fdm(problem),
+        precision: runtime_precision(problem).to_string(),
+        mode: match problem.validation_profile.execution_mode {
+            fullmag_ir::ExecutionMode::Strict => "strict",
+            fullmag_ir::ExecutionMode::Extended => "extended",
+            fullmag_ir::ExecutionMode::Hybrid => "hybrid",
+        }
+        .to_string(),
     }
 }
 
