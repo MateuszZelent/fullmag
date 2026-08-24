@@ -11237,6 +11237,7 @@ mod tests {
             geometry: "film_geometry".to_string(),
         }];
         problem.magnets = vec![MagnetIR {
+            object_id: Some("film".to_string()),
             name: "film".to_string(),
             region: "film_region".to_string(),
             material: "mat".to_string(),
@@ -13779,6 +13780,7 @@ mod tests {
             fe_order: 1,
             hmax: 1.0,
             initial_magnetization: vec![[0.0, 0.0, 1.0]; 4],
+            frozen_spins: None,
             material: MaterialIR {
                 name: "Py".to_string(),
                 saturation_magnetisation: 800e3,
@@ -13919,6 +13921,7 @@ mod tests {
             fe_order: 1,
             hmax: 1.0,
             initial_magnetization: vec![[0.0, 0.0, 1.0]; 8],
+            frozen_spins: None,
             material: MaterialIR {
                 name: "Py".to_string(),
                 saturation_magnetisation: 800e3,
@@ -14009,6 +14012,8 @@ mod tests {
     fn tiny_problem_with_shared_domain_asset() -> ProblemIR {
         ProblemIR {
             spin_transport_modules: Vec::new(),
+            selections: Vec::new(),
+            magnetization_constraints: Vec::new(),
             ir_version: "test-ir".to_string(),
             problem_meta: ProblemMeta {
                 name: "shared-domain-test".to_string(),
@@ -14974,6 +14979,7 @@ mod tests {
             object_regions: Vec::new(),
             magnets: vec![
                 MagnetIR {
+                    object_id: Some("left_magnet".to_string()),
                     name: "left_magnet".to_string(),
                     region: "left_region".to_string(),
                     material: "mat_left".to_string(),
@@ -14983,6 +14989,7 @@ mod tests {
                     }),
                 },
                 MagnetIR {
+                    object_id: Some("right_magnet".to_string()),
                     name: "right_magnet".to_string(),
                     region: "right_region".to_string(),
                     material: "mat_right".to_string(),

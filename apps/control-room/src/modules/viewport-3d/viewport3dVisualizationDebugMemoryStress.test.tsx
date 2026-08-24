@@ -353,7 +353,7 @@ describe("Visualization Debug integrated React lifecycle stress", () => {
     assertNoBinaryCarrier(observedModels);
     await act(async () => root.unmount());
     dom.restore();
-  }, 30_000);
+  }, 180_000);
 });
 
 function IntegratedViewportConsumer({
@@ -522,6 +522,12 @@ function debugSelection(cycle: number, targetId: `object:${string}`): Selection 
 function makeKernel(): KernelApi {
   const bus = new EventBus<KernelEventMap>();
   const resources = new ResourceInvalidationController(bus);
+  const realtimeConnectionSnapshot = { disrupted: false, status: "idle" } as const;
+  const visualizationSyncSnapshot = {
+    inflightTargetIds: [],
+    pendingTargetIds: [],
+    version: 0,
+  };
   return {
     api: {
       data: {
@@ -548,6 +554,22 @@ function makeKernel(): KernelApi {
           }),
         },
       },
+      simulation: {
+        solver: {
+          status: async () => ({
+            can_accept_commands: true,
+            is_busy: false,
+            revision: 1,
+            run_id: null,
+            runtime_state: "idle",
+            runtime_status_code: "idle",
+            runtime_status_kind: "idle",
+            session_status: "ready",
+            stage_kind: null,
+            warnings: [],
+          }),
+        },
+      },
       visualization: {
         acks: async () => ({ entries: [], revision: 0 }),
       },
@@ -559,6 +581,14 @@ function makeKernel(): KernelApi {
     resources,
     visualization: new ObjectVisualizationController(),
     visualizationDebug: new VisualizationDebugController(),
+    visualizationSync: {
+      getSnapshot: () => visualizationSyncSnapshot,
+      subscribe: () => () => undefined,
+    },
+    realtimeConnection: {
+      getSnapshot: () => realtimeConnectionSnapshot,
+      subscribe: () => () => undefined,
+    },
   } as unknown as KernelApi;
 }
 

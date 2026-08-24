@@ -205,13 +205,6 @@ function safeUint64(view: DataView, offset: number, label: string): number {
   return Number(value);
 }
 
-function revisionedKey(
-  resourceKey: string,
-  revision: ResourceRevision | null,
-): string {
-  return `${resourceKey}#revision=${String(revision ?? "none")}`;
-}
-
 function useResourceRevision(resourceKey: string): ResourceRevision | null {
   const { resources } = useKernel();
   const subscribe = useCallback(

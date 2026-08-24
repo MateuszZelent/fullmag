@@ -49,6 +49,10 @@ function buildViewport3DTargetFieldBuffer(
 ) {
   return buildViewport3DTargetFieldBufferWithResourceKey({
     ...options,
+    sessionIdentity:
+      "sessionIdentity" in options
+        ? options.sessionIdentity
+        : { sessionEpoch: "test-session@1000", sessionId: "test-session" },
     resourceKey: serializeCanonicalFieldVectorResourceKey(
       canonicalFieldVectorQuery(options.fieldVector.quantityId, options.query),
     ),
