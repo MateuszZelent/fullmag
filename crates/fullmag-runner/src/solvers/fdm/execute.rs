@@ -49,6 +49,50 @@ pub(crate) fn execute_fdm_in_mode<'a>(
     live: Option<LiveStepConsumer<'a>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    use crate::fdm::gpu::cuda::route::{public_gpu_transport_route, PublicGpuTransportRoute};
+
+    let transport_route = public_gpu_transport_route(plan, matches!(engine, FdmEngine::CudaFdm));
+    if matches!(transport_route, PublicGpuTransportRoute::InvalidGpuSpinPlan) {
+        let _ = (until_seconds, outputs, live, artifact_writer);
+        return Err(RunError {
+            message: "public FDM GPU M1 spin execution requires exactly one requested/resolved GPU plan with exactly one fdm_gpu_double descriptor; fallback and partial execution are forbidden"
+                .to_string(),
+        });
+    }
+    if matches!(
+        transport_route,
+        PublicGpuTransportRoute::SpinOnNonCudaForbidden
+    ) {
+        let _ = (until_seconds, outputs, live, artifact_writer);
+        return Err(RunError {
+            message: "public FDM GPU M1 spin plan resolved to a non-CUDA engine; hidden fallback is forbidden"
+                .to_string(),
+        });
+    }
+    if matches!(transport_route, PublicGpuTransportRoute::ChargeOnly) {
+        if !matches!(engine, FdmEngine::CudaFdm) {
+            return Err(RunError {
+                message: "public FDM GPU charge-only plan resolved to a non-CUDA engine; fallback is forbidden"
+                    .to_string(),
+            });
+        }
+        #[cfg(feature = "cuda")]
+        {
+            let _ = (until_seconds, outputs, live);
+            return crate::fdm::gpu::cuda::charge_transport::execute_public_gpu_charge_only(
+                plan,
+                artifact_writer,
+            );
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            let _ = (until_seconds, outputs, live, artifact_writer);
+            return Err(RunError {
+                message: "public FDM GPU charge-only execution requires a runner built with the cuda feature; fallback is forbidden"
+                    .to_string(),
+            });
+        }
+    }
     if matches!(engine, FdmEngine::CpuReference) {
         let unsupported = unsupported_cpu_fdm_terms(plan, outputs);
         if !unsupported.is_empty() {
@@ -60,7 +104,7 @@ pub(crate) fn execute_fdm_in_mode<'a>(
             });
         }
     }
-    match engine {
+    let mut executed = match engine {
         FdmEngine::CpuReference => cpu_reference::execute_reference_fdm(
             plan,
             until_seconds,
@@ -78,7 +122,17 @@ pub(crate) fn execute_fdm_in_mode<'a>(
             live,
             artifact_writer,
         ),
+    }?;
+    if let Some(artifact) = crate::regional_field_drive_artifacts::regional_field_drive_artifact(
+        &plan.field_drives,
+        &plan.time_stage,
+        until_seconds,
+        outputs,
+        &executed.provenance,
+    )? {
+        executed.auxiliary_artifacts.push(artifact);
     }
+    Ok(executed)
 }
 
 /// Execute a multilayer FDM plan using the selected engine.
