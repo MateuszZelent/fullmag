@@ -303,6 +303,26 @@ class LayeredMeshDslValidationTests(unittest.TestCase):
             with self.subTest(kwargs=kwargs), self.assertRaises((TypeError, ValueError)):
                 PerObjectMeshRecipe(**kwargs)
 
+    def test_per_object_recipe_rejects_invalid_direct_numeric_controls(self) -> None:
+        invalid = (
+            {"size_factor": 0.0},
+            {"curvature_factor": float("nan")},
+            {"growth_rate": -1.0},
+            {"growth_rate": float("inf")},
+            {"narrow_region_resolution": 0.0},
+            {"boundary_layer_thickness": -1.0},
+            {"boundary_layer_stretching": float("nan")},
+            {"through_thickness_element_ratio": 0.0},
+            {"size_from_curvature": -1},
+            {"narrow_regions": -1},
+            {"smoothing_steps": 0},
+            {"optimize_iters": 0},
+            {"boundary_layer_count": 0},
+        )
+        for kwargs in invalid:
+            with self.subTest(kwargs=kwargs), self.assertRaises((TypeError, ValueError)):
+                PerObjectMeshRecipe(**kwargs)
+
     def test_per_object_recipe_rejects_invalid_or_incoherent_layered_intent(self) -> None:
         invalid = (
             {"through_thickness_elements": 0},

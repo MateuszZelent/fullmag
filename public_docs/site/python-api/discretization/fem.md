@@ -132,7 +132,7 @@ from fullmag.model import MeshOperation, MeshSizeControls, PerObjectMeshRecipe, 
 |---|---|---|
 | `PerObjectMeshRecipe` | object sizes, algorithms, topology, layers, boundary layers, quality, size fields, operation sequence | overrides one magnetic object's inherited mesh intent |
 | `MeshOperation` | `kind`, `params`, `enabled` | ordered COMSOL-like meshing operation |
-| `MeshSizeControls` | calibration, preset, hmin/hmax, growth, curvature, narrow-region resolution | reusable size-policy payload |
+| `MeshSizeControls` | calibration, preset, hmin/hmax, growth, curvature, narrow-region resolution | standalone compatibility payload; currently unattached to ProblemIR |
 | `SweepDistribution` | `kind`, `num_layers`, `growth_rate` | typed through-thickness distribution |
 | `SweptMeshControls` | distribution, direction, family, transition, exact-layer flag | strict typed swept-mesh intent |
 | `SharedMeshAssemblyPolicy` | interface factor, conformity, airbox factor | low-level shared-domain assembly policy |

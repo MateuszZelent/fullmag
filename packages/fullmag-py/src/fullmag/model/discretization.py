@@ -693,6 +693,44 @@ class PerObjectMeshRecipe:
                 "minimum_element_size/hmin must not exceed maximum_element_size/hmax"
             )
 
+        for field_name in (
+            "size_factor",
+            "curvature_factor",
+            "growth_rate",
+            "narrow_region_resolution",
+            "boundary_layer_thickness",
+            "boundary_layer_stretching",
+            "through_thickness_element_ratio",
+        ):
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, Real):
+                raise TypeError(f"{field_name} must be a positive number")
+            require_positive(value, field_name)
+
+        for field_name in ("size_from_curvature", "narrow_regions"):
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, Integral):
+                raise TypeError(f"{field_name} must be an integer")
+            if value < 0:
+                raise ValueError(f"{field_name} must be >= 0")
+
+        for field_name in (
+            "smoothing_steps",
+            "optimize_iters",
+            "boundary_layer_count",
+        ):
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, Integral):
+                raise TypeError(f"{field_name} must be an integer")
+            if value < 1:
+                raise ValueError(f"{field_name} must be >= 1")
+
         if self.through_thickness_elements is not None:
             if (
                 isinstance(self.through_thickness_elements, bool)

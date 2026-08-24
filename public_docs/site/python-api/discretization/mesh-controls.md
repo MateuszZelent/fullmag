@@ -434,13 +434,13 @@ contract and exposes object/region mesh membership read-only in the Control Room
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| MeshSizeControls.calibrate_for | str \| None | None | $1$ | Supported provenance vocabulary; currently no numerical effect. | Recorded physics/workflow calibration family. | Provenance only | mesh_size_controls.calibrate_for |
-| MeshSizeControls.size_preset | str \| None | None | $1$ | Supported preset vocabulary at the stage-first boundary. | Named size-policy preset. | FEM/Gmsh policy | mesh_size_controls.size_preset |
-| MeshSizeControls.maximum_element_size | float \| None | None | $\mathrm{m}$ | Finite and positive when authored. | Requested upper element-size target. | FEM | mesh_size_controls.maximum_element_size |
-| MeshSizeControls.minimum_element_size | float \| None | None | $\mathrm{m}$ | Finite and positive and no larger than effective maximum when authored. | Requested lower element-size target. | FEM | mesh_size_controls.minimum_element_size |
-| MeshSizeControls.maximum_element_growth_rate | float \| None | None | $1$ | Finite and positive; stage-first public authoring limits the practical range through 2.5. | Requested maximum growth between refinement regions. | FEM/Gmsh | mesh_size_controls.maximum_element_growth_rate |
-| MeshSizeControls.curvature_factor | float \| None | None | $1$ | Finite and positive when authored. | Curvature-derived sizing factor. | FEM/Gmsh | mesh_size_controls.curvature_factor |
-| MeshSizeControls.narrow_region_resolution | float \| None | None | $1$ | Finite and positive when authored. | Resolution target for narrow regions. | FEM/Gmsh | mesh_size_controls.narrow_region_resolution |
+| MeshSizeControls.calibrate_for | str \| None | None | $1$ | Standalone compatibility payload; no authoring facade attaches it to ProblemIR. | Recorded calibration-family data. | Unattached | none |
+| MeshSizeControls.size_preset | str \| None | None | $1$ | Standalone compatibility payload; no authoring facade attaches it to ProblemIR. | Named size-policy data. | Unattached | none |
+| MeshSizeControls.maximum_element_size | float \| None | None | $\mathrm{m}$ | Standalone compatibility payload; constructor does not validate it. | Upper element-size data. | Unattached | none |
+| MeshSizeControls.minimum_element_size | float \| None | None | $\mathrm{m}$ | Standalone compatibility payload; constructor does not validate it. | Lower element-size data. | Unattached | none |
+| MeshSizeControls.maximum_element_growth_rate | float \| None | None | $1$ | Standalone compatibility payload; constructor does not validate it. | Element-growth data. | Unattached | none |
+| MeshSizeControls.curvature_factor | float \| None | None | $1$ | Standalone compatibility payload; constructor does not validate it. | Curvature-sizing data. | Unattached | none |
+| MeshSizeControls.narrow_region_resolution | float \| None | None | $1$ | Standalone compatibility payload; constructor does not validate it. | Narrow-region data. | Unattached | none |
 | SharedMeshAssemblyPolicy.interface_hmax_factor | float | 0.5 | $1$ | Strictly greater than zero and no greater than one. | Preserved compatibility value; not consumed by the current builder. | Inert compatibility data | shared_mesh_assembly_policy.interface_hmax_factor |
 | SharedMeshAssemblyPolicy.enforce_conforming | bool | True | $1$ | Boolean. | Preserved compatibility value; not consumed by the current builder. | Inert compatibility data | shared_mesh_assembly_policy.enforce_conforming |
 | SharedMeshAssemblyPolicy.airbox_hmax_factor | float | 3.0 | $1$ | Finite and positive. | Preserved compatibility value; not consumed by the current builder. | Inert compatibility data | shared_mesh_assembly_policy.airbox_hmax_factor |
@@ -449,7 +449,7 @@ contract and exposes object/region mesh membership read-only in the Control Room
 
 | Claim | Lane | Path | Stable symbol | Evidence | Evidence status | Immutable revision |
 |---|---|---|---|---|---|---|
-| size-control fields | FEM CPU/GPU authoring | `packages/fullmag-py/src/fullmag/model/discretization.py` | `MeshSizeControls.to_ir` | source/round-trip tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/packages/fullmag-py/src/fullmag/model/discretization.py) |
+| unattached compatibility payload | Python data model only | `packages/fullmag-py/src/fullmag/model/discretization.py` | `MeshSizeControls.to_ir` | repository-wide attachment audit | limitation documented | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/packages/fullmag-py/src/fullmag/model/discretization.py) |
 | UI object lifecycle | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx` | `applyPolicy`, `buildMesh` | component tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx) |
 | UI airbox lifecycle | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/airbox/AirboxMeshParametersPanel.tsx` | `submitAirboxPolicyDraft`, `build` | panel/model tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/apps/control-room/src/modules/inspector/panels/airbox/AirboxMeshParametersPanel.tsx) |
 | UI region controls | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/region/ObjectRegionMeshPanel.tsx` | `ObjectRegionMeshPanel` | component tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/apps/control-room/src/modules/inspector/panels/region/ObjectRegionMeshPanel.tsx) |
