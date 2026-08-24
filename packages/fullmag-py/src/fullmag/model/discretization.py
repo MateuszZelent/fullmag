@@ -651,8 +651,8 @@ class PerObjectMeshRecipe:
     exact_layer_count: bool | None = None
 
     # ── quality assessment ──
-    compute_quality: bool = False
-    per_element_quality: bool = False
+    compute_quality: bool | None = None
+    per_element_quality: bool | None = None
 
     # ── extra size fields (appended to global list) ──
     size_fields: list[dict[str, Any]] = field(default_factory=list)
@@ -661,6 +661,12 @@ class PerObjectMeshRecipe:
     operations: list[MeshOperation] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        if self.source is not None:
+            raise ValueError(
+                "per-object mesh source is unavailable; use FEM(mesh=...) for "
+                "the supported study-level imported mesh route"
+            )
+
         for field_name in (
             "maximum_element_size",
             "minimum_element_size",
@@ -771,6 +777,10 @@ class PerObjectMeshRecipe:
             self.exact_layer_count, bool
         ):
             raise TypeError("exact_layer_count must be bool")
+        for field_name in ("compute_quality", "per_element_quality"):
+            value = getattr(self, field_name)
+            if value is not None and not isinstance(value, bool):
+                raise TypeError(f"{field_name} must be bool")
 
         if self.topology == "tetrahedral" and any(
             value is not None

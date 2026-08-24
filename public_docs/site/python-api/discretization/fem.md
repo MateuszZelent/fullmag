@@ -63,13 +63,13 @@ CAD geometry and nominal `hmax` match.
 
 | Quantity | Meaning | SI unit |
 |---|---|---|
-| `maximum_element_size`, `hmax` | requested upper element-size target | m |
-| `minimum_element_size`, `hmin` | requested lower element-size target | m |
-| airbox `padding`, `size`, `center` | exterior-domain geometry | m |
-| interface/edge/corner distances and thicknesses | local refinement zones | m |
-| `order`, layer counts, algorithm IDs | integer controls | 1 |
-| growth, stretching, ratios, curvature factor | dimensionless policy factors | 1 |
-| quality metrics | metric-dependent; always named in the report | 1 |
+| `maximum_element_size`, `hmax` | requested upper element-size target | $\mathrm{m}$ |
+| `minimum_element_size`, `hmin` | requested lower element-size target | $\mathrm{m}$ |
+| airbox `padding`, `size`, `center` | exterior-domain geometry | $\mathrm{m}$ |
+| interface/edge/corner distances and thicknesses | local refinement zones | $\mathrm{m}$ |
+| `order`, layer counts, algorithm IDs | integer controls | $1$ |
+| growth, stretching, ratios, curvature factor | dimensionless policy factors | $1$ |
+| quality metrics | metric-dependent; always named in the report | $1$ |
 
 All public lengths are SI metres. Control Room displays the same canonical values; it does not
 apply an implicit nanometre conversion when writing the backend resource.
@@ -101,7 +101,7 @@ apply an implicit nanometre conversion when writing the backend resource.
 | exact layered prism | complete `swept_prism` recipe | `Layered prism (exact)` | prisms in the film plus certified transition elements | UI capability-gated; exact 1/2/3 element layers in the reviewed scope |
 | swept hex | complete `swept_hex` recipe | visible but disabled as unsupported | hexahedra, where a conforming route exists | represented by the Python schema but not production-enabled in the reviewed Control Room gate |
 | boundary-layer sequence | `MeshOperation("boundary_layers", ...)` or boundary-layer fields | boundary-layer count/thickness/stretching plus semantic selectors or raw tags | prismatic layers adjacent to selected entities | requires successful selector resolution and compatible shared-domain topology |
-| imported/prebuilt mesh | `FEM(mesh=...)` or object `source=...` | `Mesh source` / advanced JSON | asset-defined | source asset must pass extraction and semantic validation |
+| imported/prebuilt mesh | `FEM(mesh=...)`; per-object `source=...` is rejected | study-level advanced JSON only | asset-defined | only the study-level source is consumed and validated |
 | strict mixed prism–pyramid–tetrahedron | complete exact prism request with `pyramid_to_tetrahedra` | canonicalized automatically by `Layered prism (exact)` | prism film, pyramid transition, tetrahedral exterior | bounded, certificate-driven production route; no silent free-tetra fallback |
 
 `mesh_strategy` describes requested topology. `build_mode` and `operation_statuses` describe what
@@ -114,11 +114,11 @@ actually ran. They must not be collapsed into one field.
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---:|---:|---|---|---|---|
-| `FEM.order` | `int` | required | 1 | integer >= 1; production planners require 1 | study-level finite-element field order | FEM CPU/GPU production: P1 only; higher order planned | `backend_policy.discretization_hints.fem.order` |
-| `FEM.maximum_element_size` | `float` | required unless `hmax` is supplied | m | finite and > 0 | canonical study-level maximum-size target | FEM | `backend_policy.discretization_hints.fem.hmax` |
-| `FEM.hmax` | `float or None` | `None` | m | alias; must equal `maximum_element_size` when both are present | compatibility spelling of the same target | FEM | `backend_policy.discretization_hints.fem.hmax` |
-| `FEM.mesh` | `str or None` | `None` | 1 | nonempty when present | imported/prebuilt mesh reference | FEM import/extraction path | `backend_policy.discretization_hints.fem.mesh` |
-| `FEM.demag_solver_policy` | `FemLinearSolverPolicy or None` | `None` | 1 | typed policy | Poisson/demag algebraic solver request; does not alter mesh geometry | FEM demag lanes | `backend_policy.discretization_hints.fem.demag_solver_policy` |
+| `FEM.order` | `int` | required | $1$ | integer >= 1; production planners require 1 | study-level finite-element field order | FEM CPU/GPU production: P1 only; higher order planned | `backend_policy.discretization_hints.fem.order` |
+| `FEM.maximum_element_size` | `float` | required unless `hmax` is supplied | $\mathrm{m}$ | finite and > 0 | canonical study-level maximum-size target | FEM | `backend_policy.discretization_hints.fem.hmax` |
+| `FEM.hmax` | `float or None` | `None` | $\mathrm{m}$ | alias; must equal `maximum_element_size` when both are present | compatibility spelling of the same target | FEM | `backend_policy.discretization_hints.fem.hmax` |
+| `FEM.mesh` | `str or None` | `None` | $1$ | nonempty when present | imported/prebuilt mesh reference | FEM import/extraction path | `backend_policy.discretization_hints.fem.mesh` |
+| `FEM.demag_solver_policy` | `FemLinearSolverPolicy or None` | `None` | $1$ | typed policy | Poisson/demag algebraic solver request; does not alter mesh geometry | FEM demag lanes | `backend_policy.discretization_hints.fem.demag_solver_policy` |
 
 ### Related typed objects
 

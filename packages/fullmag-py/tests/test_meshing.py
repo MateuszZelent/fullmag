@@ -323,6 +323,10 @@ class LayeredMeshDslValidationTests(unittest.TestCase):
             with self.subTest(kwargs=kwargs), self.assertRaises((TypeError, ValueError)):
                 PerObjectMeshRecipe(**kwargs)
 
+    def test_per_object_recipe_rejects_unavailable_object_mesh_source(self) -> None:
+        with self.assertRaisesRegex(ValueError, "FEM\(mesh=\.\.\.\)"):
+            PerObjectMeshRecipe(source="object.mesh")
+
     def test_per_object_recipe_rejects_invalid_or_incoherent_layered_intent(self) -> None:
         invalid = (
             {"through_thickness_elements": 0},
@@ -3067,6 +3071,28 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(mesh_options.smoothing_steps, 4)
         self.assertEqual(mesh_options.optimize, "Netgen")
         self.assertEqual(mesh_options.optimize_iters, 6)
+
+    def test_size_only_recipe_inherits_global_quality_flags(self) -> None:
+        geometry = fm.Box(20e-9, 20e-9, 5e-9, name="sample")
+
+        mesh_options = _mesh_options_from_runtime_metadata(
+            {
+                "mesh_options": {
+                    "compute_quality": True,
+                    "per_element_quality": True,
+                },
+                "per_geometry": [],
+            },
+            geometries=[geometry],
+            default_hmax=20e-9,
+            component_aware=True,
+            per_object_recipes={
+                "sample": PerObjectMeshRecipe(maximum_element_size=10e-9),
+            },
+        )
+
+        self.assertTrue(mesh_options.compute_quality)
+        self.assertTrue(mesh_options.per_element_quality)
 
     def test_runtime_mesh_options_reject_conflicting_recipe_global_controls(self) -> None:
         left = fm.Box(20e-9, 20e-9, 5e-9, name="left")

@@ -23,8 +23,8 @@ without the final shared-domain report.
 (python-api-discretization-per-object-meshing-problem-statement)=
 ## Authoring model
 
-`PerObjectMeshRecipe` contains every typed object-level FEM mesh field. All optional values default
-to inheritance. The stage-first object facade writes the same canonical recipe through
+`PerObjectMeshRecipe` contains the typed object-level FEM mesh fields. Optional values, including
+quality flags, default to inheritance. The stage-first object facade writes the same canonical recipe through
 `object.mesh(...)` and its specialized helpers such as `object.mesh.thin_film(...)`.
 
 The effective policy is assembled in this order:
@@ -117,7 +117,7 @@ qualified UI scope, not a mathematical limit of prism meshes in general.
 | `PerObjectMeshRecipe.hmax` | `float or None` | `None` | $\mathrm{m}$ | compatibility spelling used when canonical value is absent | `hmax` and resolved `maximum_element_size` |
 | `PerObjectMeshRecipe.hmin` | `float or None` | `None` | $\mathrm{m}$ | compatibility spelling used when canonical value is absent | `hmin` and resolved `minimum_element_size` |
 | `PerObjectMeshRecipe.order` | `int or None` | `None` | $1$ | object finite-element order; prismatic route accepts only 1 | `order` |
-| `PerObjectMeshRecipe.source` | `str or None` | `None` | $1$ | imported/prebuilt object mesh source | `source` |
+| `PerObjectMeshRecipe.source` | `str or None` | `None` | $1$ | reserved; any authored value is rejected in favor of study-level `FEM(mesh=...)` | unavailable |
 | `PerObjectMeshRecipe.calibrate_for` | `str or None` | `None` | $1$ | provenance label; currently no numerical effect | `calibrate_for` |
 | `PerObjectMeshRecipe.size_preset` | `str or None` | `None` | $1$ | named size preset | `size_preset` |
 
@@ -177,8 +177,8 @@ pyramid-to-tetra transition.
 
 | Python field | Type | Default | Meaning | ProblemIR key |
 |---|---|---:|---|---|
-| `PerObjectMeshRecipe.compute_quality` | `bool` | `False` | aggregate quality report | `compute_quality` |
-| `PerObjectMeshRecipe.per_element_quality` | `bool` | `False` | per-element arrays in addition to aggregates | `per_element_quality` |
+| `PerObjectMeshRecipe.compute_quality` | `bool or None` | `None` | aggregate quality report; omitted value inherits | `compute_quality` |
+| `PerObjectMeshRecipe.per_element_quality` | `bool or None` | `None` | per-element arrays in addition to aggregates; omitted value inherits | `per_element_quality` |
 | `PerObjectMeshRecipe.size_fields` | `list[dict]` | empty | ordered extra Gmsh size-field descriptions | `size_fields` |
 | `PerObjectMeshRecipe.operations` | `list[MeshOperation]` | empty | ordered COMSOL-like meshing sequence | `operations` |
 
@@ -404,7 +404,7 @@ layer convergence rather than treating one layer as universally sufficient.
 | PerObjectMeshRecipe.hmax | float \| None | None | $\mathrm{m}$ | Compatibility alias used when maximum_element_size is absent. | Object maximum-size alias. | FEM | mesh_workflow.per_geometry.<object>.hmax |
 | PerObjectMeshRecipe.hmin | float \| None | None | $\mathrm{m}$ | Compatibility alias used when minimum_element_size is absent. | Object minimum-size alias. | FEM | mesh_workflow.per_geometry.<object>.hmin |
 | PerObjectMeshRecipe.order | int \| None | None | $1$ | Prismatic topology permits only order one. | Object finite-element order. | FEM | mesh_workflow.per_geometry.<object>.order |
-| PerObjectMeshRecipe.source | str \| None | None | $1$ | Imported source is checked during build/extraction. | Prebuilt object mesh source. | FEM import path | mesh_workflow.per_geometry.<object>.source |
+| PerObjectMeshRecipe.source | str \| None | None | $1$ | Any authored value is rejected; use study-level `FEM(mesh=...)`. | Reserved object mesh source. | Unavailable | none |
 | PerObjectMeshRecipe.calibrate_for | str \| None | None | $1$ | Supported provenance vocabulary; currently no numerical effect. | Recorded physics/workflow calibration family. | Provenance only | mesh_workflow.per_geometry.<object>.calibrate_for |
 | PerObjectMeshRecipe.size_preset | str \| None | None | $1$ | Supported size-preset vocabulary. | Named mesh-size preset. | FEM | mesh_workflow.per_geometry.<object>.size_preset |
 | PerObjectMeshRecipe.algorithm_2d | int \| None | None | $1$ | Finite integer algorithm identifier. | Gmsh surface meshing algorithm. | FEM/Gmsh | mesh_workflow.per_geometry.<object>.algorithm_2d |
@@ -432,8 +432,8 @@ layer convergence rather than treating one layer as universally sufficient.
 | PerObjectMeshRecipe.element_family | str \| None | None | $1$ | prism or hex with matching strategy/source faces. | Swept volume element family. | FEM capability-gated | mesh_workflow.per_geometry.<object>.element_family |
 | PerObjectMeshRecipe.transition_policy | str \| None | None | $1$ | pyramid_to_tetrahedra or reject. | Transition into surrounding topology. | FEM capability-gated | mesh_workflow.per_geometry.<object>.transition_policy |
 | PerObjectMeshRecipe.exact_layer_count | bool \| None | None | $1$ | Boolean; strict prism may not set false. | Require exact requested layer count. | FEM capability-gated | mesh_workflow.per_geometry.<object>.exact_layer_count |
-| PerObjectMeshRecipe.compute_quality | bool | False | $1$ | Boolean. | Request aggregate quality statistics. | FEM | mesh_workflow.per_geometry.<object>.compute_quality |
-| PerObjectMeshRecipe.per_element_quality | bool | False | $1$ | Boolean. | Request per-element quality arrays. | FEM | mesh_workflow.per_geometry.<object>.per_element_quality |
+| PerObjectMeshRecipe.compute_quality | bool \| None | None | $1$ | Boolean when authored; `None` inherits. | Request aggregate quality statistics. | FEM | mesh_workflow.per_geometry.<object>.compute_quality |
+| PerObjectMeshRecipe.per_element_quality | bool \| None | None | $1$ | Boolean when authored; `None` inherits. | Request per-element quality arrays. | FEM | mesh_workflow.per_geometry.<object>.per_element_quality |
 | PerObjectMeshRecipe.size_fields | list[dict] | [] | $1$ | Each field is validated/resolved by its field kind and selectors. | Additional ordered size fields. | FEM/Gmsh | mesh_workflow.per_geometry.<object>.size_fields |
 | PerObjectMeshRecipe.operations | list[MeshOperation] | [] | $1$ | Any nonempty list is rejected before mesh generation. | Authored operation intent; no public executor is currently available. | Unavailable | mesh_workflow.per_geometry.<object>.operations |
 | MeshOperation.kind | str | required | $1$ | Representable values are free_tetrahedral, boundary_layers, refine, adapt, swept, or size_field; execution is unavailable. | Authored operation family. | Unavailable | mesh_workflow.per_geometry.<object>.operations[].kind |
