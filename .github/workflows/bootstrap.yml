@@ -12,11 +12,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: packages/fullmag-py/pyproject.toml
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
+
+      - name: Install Python runtime dependencies
+        run: python -m pip install -e packages/fullmag-py
 
       - name: Run Rust quantity, API and CLI contracts
         run: ./scripts/ci/run_frontend3d_required_gate.sh rust-quantity-api-cli-contracts

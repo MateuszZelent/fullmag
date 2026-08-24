@@ -9,6 +9,17 @@ const GENERATED_IDENTITY = Object.freeze({
 });
 
 export function normalizeOpenApiBuildIdentity(document) {
+  const identity = document?.["x-fullmag-build-identity"];
+  if (!identity || typeof identity !== "object" || Array.isArray(identity)) {
+    throw new TypeError("x-fullmag-build-identity must be an object");
+  }
+  for (const field of Object.keys(GENERATED_IDENTITY)) {
+    if (typeof identity[field] !== "string" || identity[field].trim() === "") {
+      throw new TypeError(
+        `x-fullmag-build-identity.${field} must be a non-empty string`,
+      );
+    }
+  }
   document["x-fullmag-build-identity"] = { ...GENERATED_IDENTITY };
 }
 

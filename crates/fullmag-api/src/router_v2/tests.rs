@@ -727,7 +727,7 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
             is_busy: false,
             can_accept_commands: true,
         },
-        capabilities: None,
+        capabilities: Some(resolved_compute_fields_capabilities(&["m"])),
         metadata: None,
         mesh_workspace: None,
         stage_execution: None,
@@ -33144,8 +33144,9 @@ async fn v2_field_catalog_exposes_live_magnetization_fallback() {
         )
         .await
         .unwrap();
-    assert_eq!(catalog_response.status(), StatusCode::OK);
+    let catalog_status = catalog_response.status();
     let catalog = body_json(catalog_response).await;
+    assert_eq!(catalog_status, StatusCode::OK, "{catalog}");
     let quantities = catalog
         .get("quantities")
         .and_then(|value| value.as_array())
@@ -33186,7 +33187,11 @@ async fn v2_field_catalog_exposes_live_magnetization_fallback() {
         )
         .await
         .unwrap();
-    assert_eq!(vector_response.status(), StatusCode::OK);
+    let vector_status = vector_response.status();
+    if vector_status != StatusCode::OK {
+        let vector_body = body_json(vector_response).await;
+        panic!("expected field vector status 200, got {vector_status}: {vector_body}");
+    }
     assert_eq!(
         vector_response
             .headers()

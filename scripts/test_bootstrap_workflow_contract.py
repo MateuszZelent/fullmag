@@ -11,9 +11,10 @@ def _workflow_uses(workflow: str) -> list[str]:
     references: list[str] = []
     for line in workflow.splitlines():
         stripped = line.strip().removeprefix("-").strip()
-        if not stripped.startswith("uses:"):
+        key, separator, value = stripped.partition(":")
+        if not separator or key.strip().strip("'\"") != "uses":
             continue
-        reference = stripped.removeprefix("uses:").strip().strip("'\"")
+        reference = value.strip().strip("'\"")
         if reference:
             references.append(reference)
     return references
@@ -96,6 +97,24 @@ jobs:
                 "actions/checkout@v7",
             )
 
+    def test_action_version_contract_accepts_whitespace_before_yaml_separator(self) -> None:
+        workflow = """
+jobs:
+  test:
+    steps:
+      - uses : actions/checkout@v6
+"""
+
+        with self.assertRaisesRegex(
+            AssertionError,
+            r"actions/checkout.*actions/checkout@v7.*actions/checkout@v6",
+        ):
+            _assert_required_action_version(
+                workflow,
+                "actions/checkout",
+                "actions/checkout@v7",
+            )
+
     def test_submodule_metadata_requires_nonempty_url(self) -> None:
         gitmodules = """
 [submodule "external_solvers/example"]
@@ -144,6 +163,18 @@ jobs:
         for action, expected_reference in required.items():
             with self.subTest(action=action):
                 _assert_required_action_version(workflow, action, expected_reference)
+
+    def test_rust_contracts_install_python_runtime_dependencies(self) -> None:
+        workflow = (ROOT / ".github/workflows/bootstrap.yml").read_text()
+        rust_job = workflow.split("  rust-contracts:\n", 1)[1].split(
+            "\n  generated-api-determinism:", 1
+        )[0]
+
+        self.assertIn("uses: actions/setup-python@v7", rust_job)
+        install = "python -m pip install -e packages/fullmag-py"
+        run = "./scripts/ci/run_frontend3d_required_gate.sh rust-quantity-api-cli-contracts"
+        self.assertIn(install, rust_job)
+        self.assertLess(rust_job.index(install), rust_job.index(run))
 
     def test_meshing_extra_provides_trimesh_boolean_backend(self) -> None:
         pyproject = (ROOT / "packages/fullmag-py/pyproject.toml").read_text()
