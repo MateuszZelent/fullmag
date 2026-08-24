@@ -3592,7 +3592,6 @@ int fullmag_fem_backend_gpu_execution_receipt_v1(
 
     const auto snapshot = fullmag::fem::gpu_execution_receipt_snapshot(
         handle->context.gpu_state.execution_receipt);
-    const auto transfer_audit = fullmag::fem::transfer_audit_snapshot(handle->context);
     fullmag_fem_gpu_execution_receipt_v1 receipt{};
     receipt.abi_version = FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1;
     receipt.struct_size = sizeof(receipt);
@@ -3611,9 +3610,9 @@ int fullmag_fem_backend_gpu_execution_receipt_v1(
     receipt.accepted_step_count = snapshot.accepted_step_count;
     receipt.rejected_attempt_count = snapshot.rejected_attempt_count;
     receipt.failed_attempt_count = snapshot.failed_attempt_count;
-    receipt.hot_loop_compute_h2d_bytes = transfer_audit.hot_loop_compute_h2d_bytes;
-    receipt.hot_loop_compute_d2h_bytes = transfer_audit.hot_loop_compute_d2h_bytes;
-    receipt.hot_loop_compute_host_sync_count = transfer_audit.hot_loop_compute_host_sync_count;
+    receipt.hot_loop_compute_h2d_bytes = snapshot.hot_loop_compute_h2d_bytes;
+    receipt.hot_loop_compute_d2h_bytes = snapshot.hot_loop_compute_d2h_bytes;
+    receipt.hot_loop_compute_host_sync_count = snapshot.hot_loop_compute_host_sync_count;
     *out_receipt = receipt;
     return FULLMAG_FEM_OK;
 }

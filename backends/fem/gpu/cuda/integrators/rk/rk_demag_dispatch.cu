@@ -16,6 +16,7 @@
 #include "gpu/cuda/demag_poisson/stage_compute.hpp"
 #include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
+#include "gpu/cuda/runtime/execution_receipt.hpp"
 
 #include <cuda_runtime.h>
 
@@ -67,12 +68,23 @@ bool gpu_rk_compute_hybrid_cpu_demag_for_device_stage(
     }
     ctx.demag.h_xyz = gpu.demag_poisson.hybrid_demag_xyz;
     gpu.demag_poisson.hybrid_demag_energy_joules = demag_energy;
-    return gpu_state_upload_demag_field_aos(
+    if (!gpu_state_upload_demag_field_aos(
         gpu,
         gpu.demag_poisson.hybrid_demag_xyz.data(),
         static_cast<uint64_t>(gpu.demag_poisson.hybrid_demag_xyz.size()),
         ctx.transfer_audit.audit,
-        reason);
+        reason)) {
+        return false;
+    }
+    if (gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
+        gpu_execution_receipt_note_host(
+            ctx.gpu_state.execution_receipt,
+            FEM_GPU_OPERATOR_DEMAG_RHS |
+                FEM_GPU_OPERATOR_DEMAG_SOLVE |
+                FEM_GPU_OPERATOR_DEMAG_RECOVERY |
+                FEM_GPU_OPERATOR_PRECONDITIONER);
+    }
+    return true;
 #else
     reason = "GPU RK hybrid CPU demag requires MFEM stack";
     return false;

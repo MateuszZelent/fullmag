@@ -2,6 +2,7 @@
 
 #include "backend_handle.hpp"
 #include "fullmag_fem.h"
+#include "gpu/cuda/transfer/transfer_audit.hpp"
 
 #include <cstddef>
 #include <cstring>
@@ -37,8 +38,10 @@ void accepted_device_attempt_publishes_complete_receipt() {
         FULLMAG_FEM_PRECISION_DOUBLE,
         FULLMAG_FEM_INTEGRATOR_HEUN);
     gpu_execution_receipt_begin_attempt(state);
+    check(gpu_execution_receipt_attempt_active(state), "begun attempt must be active");
     gpu_execution_receipt_note_device(state, required);
     gpu_execution_receipt_commit_attempt(state);
+    check(!gpu_execution_receipt_attempt_active(state), "committed attempt must be inactive");
 
     const FemGpuExecutionSnapshot receipt = gpu_execution_receipt_snapshot(state);
     check(
@@ -57,24 +60,121 @@ void accepted_device_attempt_publishes_complete_receipt() {
     check(receipt.accepted_step_count == 1, "accepted attempt count mismatch");
 }
 
+void committed_transfer_snapshot_is_scoped_to_the_current_attempt() {
+    FemGpuExecutionReceiptRuntimeState state{};
+    gpu_execution_receipt_resolve_plan(
+        state,
+        FEM_GPU_OPERATOR_EXCHANGE,
+        FEM_GPU_OPERATOR_EXCHANGE,
+        0,
+        0,
+        FemGpuExecutionClass::DeviceResident,
+        0,
+        FULLMAG_FEM_PRECISION_DOUBLE,
+        FULLMAG_FEM_INTEGRATOR_HEUN);
+
+    fullmag_fem_transfer_audit audit{};
+    audit.hot_loop_compute_h2d_bytes = 101;
+    audit.hot_loop_compute_d2h_bytes = 103;
+    audit.hot_loop_compute_host_sync_count = 107;
+    gpu_execution_receipt_begin_attempt(state, audit);
+    gpu_execution_receipt_note_device(state, FEM_GPU_OPERATOR_EXCHANGE);
+    gpu_execution_receipt_update_attempt_transfer(state, audit);
+    gpu_execution_receipt_commit_attempt(state);
+
+    auto receipt = gpu_execution_receipt_snapshot(state);
+    check(receipt.hot_loop_compute_h2d_bytes == 0,
+          "earlier H2D history must not contaminate the current attempt");
+    check(receipt.hot_loop_compute_d2h_bytes == 0,
+          "earlier D2H history must not contaminate the current attempt");
+    check(receipt.hot_loop_compute_host_sync_count == 0,
+          "earlier sync history must not contaminate the current attempt");
+
+    gpu_execution_receipt_begin_attempt(state, audit);
+    gpu_execution_receipt_note_device(state, FEM_GPU_OPERATOR_EXCHANGE);
+    audit.hot_loop_compute_d2h_bytes += sizeof(double);
+    gpu_execution_receipt_update_attempt_transfer(state, audit);
+    gpu_execution_receipt_commit_attempt(state);
+    receipt = gpu_execution_receipt_snapshot(state);
+    check(!receipt.accounting_valid,
+          "strict current-attempt compute traffic must fail closed");
+    check(receipt.hot_loop_compute_d2h_bytes == 0,
+          "invalid attempt must preserve the last committed transfer snapshot");
+
+    FemGpuExecutionReceiptRuntimeState wrapped{};
+    gpu_execution_receipt_resolve_plan(
+        wrapped,
+        FEM_GPU_OPERATOR_EXCHANGE,
+        FEM_GPU_OPERATOR_EXCHANGE,
+        0,
+        0,
+        FemGpuExecutionClass::DeviceResident,
+        0,
+        FULLMAG_FEM_PRECISION_DOUBLE,
+        FULLMAG_FEM_INTEGRATOR_HEUN);
+    fullmag_fem_transfer_audit before_wrap{};
+    before_wrap.hot_loop_compute_h2d_bytes = UINT64_MAX;
+    gpu_execution_receipt_begin_attempt(wrapped, before_wrap);
+    fullmag_fem_transfer_audit after_wrap = before_wrap;
+    after_wrap.hot_loop_compute_h2d_bytes = 0;
+    check(!gpu_execution_receipt_update_attempt_transfer(wrapped, after_wrap),
+          "wrapped or decreasing transfer totals must fail closed");
+    check(!gpu_execution_receipt_snapshot(wrapped).accounting_valid,
+          "transfer counter underflow/overflow must invalidate accounting");
+}
+
+void late_outer_attempt_transfer_is_rejected_before_commit() {
+    FemGpuExecutionReceiptRuntimeState state{};
+    gpu_execution_receipt_resolve_plan(
+        state,
+        FEM_GPU_OPERATOR_EXCHANGE,
+        FEM_GPU_OPERATOR_EXCHANGE,
+        0,
+        0,
+        FemGpuExecutionClass::DeviceResident,
+        0,
+        FULLMAG_FEM_PRECISION_DOUBLE,
+        FULLMAG_FEM_INTEGRATOR_HEUN);
+    TransferAudit audit{};
+    audit.counters.hot_loop_compute_d2h_bytes = 29;
+    gpu_execution_receipt_begin_attempt(state, audit.counters);
+    gpu_execution_receipt_note_device(state, FEM_GPU_OPERATOR_EXCHANGE);
+
+    {
+        TransferAuditScope outer_attempt(audit, TransferAuditScopeKind::HotLoop);
+        record_device_to_host(audit, sizeof(double));
+    }
+    check(!gpu_execution_receipt_update_attempt_transfer(state, audit.counters),
+          "transfer after RK execution but before outer commit must reject strict receipt");
+    gpu_execution_receipt_fail_attempt(state);
+    const auto receipt = gpu_execution_receipt_snapshot(state);
+    check(!receipt.accounting_valid,
+          "late outer-attempt transfer violation must remain fail-closed");
+    check(receipt.accepted_step_count == 0,
+          "late transfer violation must not publish an accepted receipt");
+}
+
 void explicit_hybrid_publishes_device_and_host_masks() {
     FemGpuExecutionReceiptRuntimeState state{};
-    const uint64_t required = FEM_GPU_OPERATOR_DEMAG_SOLVE |
+    const uint64_t demag = FEM_GPU_OPERATOR_DEMAG_RHS |
+        FEM_GPU_OPERATOR_DEMAG_SOLVE |
+        FEM_GPU_OPERATOR_DEMAG_RECOVERY |
         FEM_GPU_OPERATOR_PRECONDITIONER;
+    const uint64_t required = FEM_GPU_OPERATOR_EXCHANGE | demag;
 
     gpu_execution_receipt_resolve_plan(
         state,
         required,
-        FEM_GPU_OPERATOR_DEMAG_SOLVE,
-        FEM_GPU_OPERATOR_PRECONDITIONER,
+        FEM_GPU_OPERATOR_EXCHANGE,
+        demag,
         0,
         FemGpuExecutionClass::HybridCpuPoisson,
         1,
         FULLMAG_FEM_PRECISION_DOUBLE,
         FULLMAG_FEM_INTEGRATOR_RK4);
     gpu_execution_receipt_begin_attempt(state);
-    gpu_execution_receipt_note_device(state, FEM_GPU_OPERATOR_DEMAG_SOLVE);
-    gpu_execution_receipt_note_host(state, FEM_GPU_OPERATOR_PRECONDITIONER);
+    gpu_execution_receipt_note_device(state, FEM_GPU_OPERATOR_EXCHANGE);
+    gpu_execution_receipt_note_host(state, demag);
     gpu_execution_receipt_commit_attempt(state);
 
     const FemGpuExecutionSnapshot receipt = gpu_execution_receipt_snapshot(state);
@@ -82,8 +182,8 @@ void explicit_hybrid_publishes_device_and_host_masks() {
         receipt.execution_class == FemGpuExecutionClass::HybridCpuPoisson,
         "explicit hybrid plan must preserve its execution class");
     check(
-        receipt.executed_host_operator_mask == FEM_GPU_OPERATOR_PRECONDITIONER,
-        "host operator mask mismatch");
+        receipt.executed_host_operator_mask == demag,
+        "hybrid CPU Poisson must publish the complete demag family as host execution");
     check(
         receipt.executed_unknown_operator_mask == 0,
         "valid hybrid must not publish unknown operators");
@@ -538,10 +638,9 @@ void public_abi_v1_rejects_invalid_handshake_without_writing_output() {
     state.accepted_step_count = 31;
     state.rejected_attempt_count = 37;
     state.failed_attempt_count = 41;
-    auto &audit = handle.context.transfer_audit.audit.counters;
-    audit.hot_loop_compute_h2d_bytes = 43;
-    audit.hot_loop_compute_d2h_bytes = 47;
-    audit.hot_loop_compute_host_sync_count = 53;
+    state.hot_loop_compute_h2d_bytes = 43;
+    state.hot_loop_compute_d2h_bytes = 47;
+    state.hot_loop_compute_host_sync_count = 53;
 
     receipt.struct_size = sizeof(receipt);
     check(
@@ -587,6 +686,8 @@ void public_abi_v1_rejects_invalid_handshake_without_writing_output() {
 
 int main() {
     accepted_device_attempt_publishes_complete_receipt();
+    committed_transfer_snapshot_is_scoped_to_the_current_attempt();
+    late_outer_attempt_transfer_is_rejected_before_commit();
     explicit_hybrid_publishes_device_and_host_masks();
     rejected_attempt_does_not_publish_partial_masks();
     failed_attempt_does_not_publish_partial_masks();
