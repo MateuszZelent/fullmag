@@ -169,7 +169,17 @@ Kontrakt quantity ma cztery poziomy:
 - `N` — bieżący spatial-preview gate odrzuca;
 - `S` — inna ścieżka, np. scalar history lub analysis overlay.
 
-| # | Quantity | Katalog | Domena | FDM CPU | FDM GPU | FDM-ML | FEM CPU | FEM GPU | Uwagi |
+FDM multilayer jest rozdzielony urządzeniowo: szczegółowa kolumna `FDM-ML CPU` poniżej dotyczy
+wyłącznie `CpuReference`. Dla `FDM-ML GPU` każda z 52 pozycji ma status `N`, ponieważ
+`snapshot_problem_vector_field_batch()` jawnie odrzuca interaktywny snapshot multilayer dla
+każdego engine innego niż `CpuReference`.
+
+| Lane | Zakres quantities | Status spatial preview | Właściciel |
+|---|---|---|---|
+| FDM-ML CPU | wartości per-row w głównej macierzy | zależny od dokładnego providera | `fdm_multilayer_quantity_is_active` i `select_observables` |
+| FDM-ML GPU | wszystkie 52 | N | `snapshot_problem_vector_field_batch` — jawne odrzucenie engine CUDA |
+
+| # | Quantity | Katalog | Domena | FDM CPU | FDM GPU | FDM-ML CPU | FEM CPU | FEM GPU | Uwagi |
 |---:|---|---|---|---:|---:|---:|---:|---:|---|
 | 1 | `m` | 3D vector | magnetic | A | A | A | A | A | podstawowy carrier |
 | 2 | `H_ex` | 3D vector | magnetic | C | C | C | C | C | exchange |
@@ -185,8 +195,8 @@ Kontrakt quantity ma cztery poziomy:
 | 12 | `u` | deferred | full | N | N | N | N | N | mechanika bez live 3D |
 | 13 | `eps` | deferred, 6 comp. | full | N | N | N | N | N | shape `VectorField` jest nieprecyzyjny |
 | 14 | `sigma` | deferred, 6 comp. | full | N | N | N | N | N | powinien być symmetric tensor |
-| 15 | `H_ani_cubic` | 3D vector | magnetic | N | N | C | C | C | FDM CPU/GPU nie materializują cubic anisotropy |
-| 16 | `H_dmi_bulk` | 3D vector | magnetic | N | N | C | C | C | FDM CPU/GPU nie materializują bulk DMI |
+| 15 | `H_ani_cubic` | 3D vector | magnetic | N | N | N | C | C | zwykły FDM CPU/GPU oraz multilayer selector nie materializują cubic anisotropy |
+| 16 | `H_dmi_bulk` | 3D vector | magnetic | N | N | N | C | C | zwykły FDM CPU/GPU oraz multilayer selector nie materializują bulk DMI |
 | 17 | `H_oe` | 3D vector | full | C | C | N | C | C | multilayer IR bez Oersteda |
 | 18 | `H_therm` | 3D vector | magnetic | N | N | N | C | C | FDM CPU/GPU i multilayer bez preview termicznego |
 | 19 | `E_ex` | hist. | magnetic | S | S | S | S | S | global scalar |
@@ -207,10 +217,10 @@ Kontrakt quantity ma cztery poziomy:
 | 34 | `eden_demag` | 3D scalar | magnetic | C | C | C | C | C | cell field |
 | 35 | `demag_phi` | deferred scalar | full | N | N | N | C | C | FEM może liczyć, UI 3D blokuje |
 | 36 | `eden_ext` | 3D scalar | magnetic | C | C | C | C | C | cell field |
-| 37 | `eden_drive` | 3D scalar | magnetic | N | C | N | C | C | FDM CPU i multilayer bez materializatora drive-density |
+| 37 | `eden_drive` | 3D scalar | magnetic | N | C | N | N | N | FDM CPU, multilayer i native FEM bez materializatora drive-density |
 | 38 | `eden_ani` | 3D scalar | magnetic | C | C | C | C | C | cell field |
 | 39 | `eden_dmi` | 3D scalar | magnetic | C | C | C | C | C | cell field |
-| 40 | `eden_total` | 3D scalar | magnetic | A | A | A | A | A | cell field |
+| 40 | `eden_total` | 3D scalar | magnetic | C | A | A | C | C | FDM CPU i native FEM są poprawne tylko bez regional drive; ich suma pomija `eden_drive` |
 | 41 | `mat_ms` | 3D scalar | magnetic | A | N | A | N | N | brak CUDA FDM i FEM material field provider |
 | 42 | `mat_aex` | 3D scalar | magnetic | A | N | A | N | N | brak CUDA FDM i FEM material field provider |
 | 43 | `mat_alpha` | 3D scalar | magnetic | A | N | A | N | N | brak CUDA FDM i FEM material field provider |
@@ -229,6 +239,8 @@ Kontrakt quantity ma cztery poziomy:
 - Katalog jest kompletny semantycznie, ale nie oznacza parytetu backendów. UI musi używać `resolved_capability`.
 - FEM nie publikuje obecnie pięciu pól materiałowych: `mat_ms`, `mat_aex`, `mat_alpha`, `mat_dind`, `mat_dbulk`.
 - FDM multilayer świadomie ma ograniczony IR i zestaw obserwabli.
+- FDM multilayer GPU nie ma ścieżki interactive snapshot; wszystkie quantities są tam `N`, niezależnie od CPU multilayer providerów.
+- `eden_total` w FDM CPU i native FEM nie jest pełnym totalem przy aktywnym regional drive, ponieważ bieżące sumatory pomijają `eden_drive`.
 - Transport jest canonical, lecz standardowy renderer 3D nie ma jeszcze pełnej semantyki scalar/vector/tensor dla tych pól.
 - `eps` i `sigma` powinny otrzymać `SymmetricTensorField` lub równoważny descriptor przed ekspozycją.
 - `B_drive` i skalowanie przez `mu0` powinny być descriptor-driven, a nie zaszyte ręcznie w TypeScript.
@@ -617,5 +629,5 @@ Na moment audytu:
 | Semanticzne targety Airbox/object/part | `apps/control-room/src/kernel/selection/semanticRenderTargetCatalog.ts` | `buildSemanticRenderTargetCatalog` |
 | Targety regionów | `apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts` | `resolveViewport3DRegionTargetByPartId`, `resolveViewport3DRegionTargetsForMembershipOwnerParts` |
 | Airbox capability multilayer | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `resolveFdmMultilayerAirboxFieldAvailability` |
-| Zarządzany gate FEM 3D | `.github/workflows/frontend-3d-managed-fem.yml` | job `frontend-3d-managed-fem` |
+| Zarządzany gate FEM 3D | `.github/workflows/frontend-3d-managed-fem.yml` | workflow `frontend-3d-managed-fem`; job `managed-fem-qualification` |
 | Wymagane dowody release | `docs/validation/frontend-3d-required-check-matrix.md` | tabela wymaganych checków |
