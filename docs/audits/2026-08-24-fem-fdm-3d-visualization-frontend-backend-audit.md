@@ -196,13 +196,13 @@ każdego engine innego niż `CpuReference`.
 | 13 | `eps` | deferred, 6 comp. | full | N | N | N | N | N | shape `VectorField` jest nieprecyzyjny |
 | 14 | `sigma` | deferred, 6 comp. | full | N | N | N | N | N | powinien być symmetric tensor |
 | 15 | `H_ani_cubic` | 3D vector | magnetic | N | N | C | C | C | multilayer CPU materializuje osobny payload po aktywacji cubic anisotropy; zwykły FDM CPU/GPU nie materializuje |
-| 16 | `H_dmi_bulk` | 3D vector | magnetic | N | N | C | C | C | multilayer CPU materializuje osobny payload po aktywacji bulk DMI; zwykły FDM CPU/GPU nie materializuje |
+| 16 | `H_dmi_bulk` | 3D vector | magnetic | N | N | N | C | C | publiczny planner multilayer odrzuca bulk DMI do czasu realizacji naturalnego warunku brzegowego exchange+DMI |
 | 17 | `H_oe` | 3D vector | full | C | C | N | C | C | multilayer IR bez Oersteda |
-| 18 | `H_therm` | 3D vector | magnetic | N | N | N | C | C | FDM CPU/GPU i multilayer bez preview termicznego |
+| 18 | `H_therm` | 3D vector | magnetic | N | N | N | C | N | `plan_fem` odrzuca ThermalNoise na FEM GPU przez `CAP-THERM-GPU-001`; obecność kernela nie jest publiczną capability |
 | 19 | `E_ex` | hist. | magnetic | S | S | S | S | S | global scalar |
 | 20 | `E_demag` | hist. | magnetic | S | S | S | S | S | global scalar |
 | 21 | `E_ext` | hist. | full | S | S | S | S | S | global scalar |
-| 22 | `E_drive` | hist. | magnetic | S | S | S | S | S | global scalar |
+| 22 | `E_drive` | hist. | magnetic | N | N | N | N | N | `StepStats.e_drive` istnieje, ale cztery kanoniczne ścieżki scalar API pomijają klucz `e_drive` |
 | 23 | `E_ani` | hist. | magnetic | S | S | S | S | S | global scalar |
 | 24 | `E_dmi` | hist. | magnetic | S | S | S | S | S | global scalar |
 | 25 | `E_el` | hist. deferred | full | S | S | S | S | S | mechanika niewystawiona |
@@ -217,7 +217,7 @@ każdego engine innego niż `CpuReference`.
 | 34 | `eden_demag` | 3D scalar | magnetic | C | C | C | C | C | FDM: cell field; native FEM: nodal visualization/conservative tetra projection mimo katalogowej lokalizacji cell |
 | 35 | `demag_phi` | deferred scalar | full | N | N | N | N | N | native FEM może liczyć skalar wewnętrznie, ale katalog wyłącza materializację i preview 3D |
 | 36 | `eden_ext` | 3D scalar | magnetic | C | C | C | C | C | FDM: cell field; native FEM: nodal visualization/conservative tetra projection mimo katalogowej lokalizacji cell |
-| 37 | `eden_drive` | 3D scalar | magnetic | N | C | N | N | N | FDM CPU, multilayer i native FEM bez materializatora drive-density |
+| 37 | `eden_drive` | 3D scalar | magnetic | N | N | N | N | N | wewnętrzny arm CUDA istnieje, lecz publiczny `plan_fdm` odrzuca regional drive przez `fdm_cuda_regional_field_drive_unsupported` |
 | 38 | `eden_ani` | 3D scalar | magnetic | C | C | C | C | C | FDM: cell field; native FEM: nodal visualization/conservative tetra projection mimo katalogowej lokalizacji cell |
 | 39 | `eden_dmi` | 3D scalar | magnetic | C | C | C | C | C | FDM: cell field; native FEM: nodal visualization/conservative tetra projection mimo katalogowej lokalizacji cell |
 | 40 | `eden_total` | 3D scalar | magnetic | C | A | A | C | C | native FEM publikuje nodal projection zamiast katalogowego cell field; FDM CPU i native FEM pomijają `eden_drive` przy regional drive |
@@ -445,9 +445,9 @@ Sesja przechodzi do `awaiting_command`, a `compute_fields` może policzyć nowe 
 
 Branch API raportuje `master` jako `protected: false` z pustą listą required checks. Należy włączyć ruleset i wymagać wszystkich contextów z `frontend-3d-required-check-matrix.md`.
 
-### F3D-AUD-003 — P1 — frontend duplikuje quantity metadata i błędnie renderuje `eden_drive`
+### F3D-AUD-003 — P1 — frontend duplikuje quantity metadata dla latentnego `eden_drive`
 
-Ręczne aliases, units, scalar IDs i display transforms są już rozjechane z katalogiem Rust: aktywne na CUDA FDM `eden_drive` nie jest klasyfikowane jako scalar-spatial, otrzymuje wektorowe kontrolki/kolorowanie i pustą jednostkę colorbara. Wymagany jest generated descriptor/parity test dla 52 ID oraz browser regression, który materializuje jednoskładnikowy `eden_drive`, wymaga scalar renderer/controller i jednostki `J/m³`.
+Ręczne aliases, units, scalar IDs i display transforms są rozjechane z katalogiem Rust: `eden_drive` nie jest klasyfikowane jako scalar-spatial i po przyszłym udostępnieniu otrzymałoby wektorowe kontrolki/kolorowanie oraz pustą jednostkę colorbara. Nie jest to obecnie osiągalne przez wspierany publiczny CUDA plan, ponieważ regional drive kończy się błędem `fdm_cuda_regional_field_drive_unsupported`. Wymagany jest generated descriptor/parity test dla 52 ID oraz test aktywowany razem z przyszłą promocją capability.
 
 ### F3D-AUD-004 — P1 — full-domain jest używane jako przybliżenie Airbox capability
 
@@ -492,6 +492,21 @@ Identity payloadu jest bezpieczne, lecz Inspector powinien pokazywać `carrier_k
 ### F3D-AUD-014 — P3 — równoległe definicje Airbox capability
 
 `resolveFdmMultilayerAirboxFieldAvailability()` i request builder definiują pokrywające się reguły. Należy generować UI capability i request plan z jednego descriptora.
+
+### F3D-AUD-015 — P1 — `E_drive` nie ma kanonicznej ścieżki scalar API
+
+CPU FDM i FEM mogą wytworzyć niezerowe `StepStats.e_drive`, ale `scalar_metric_is_active`,
+`scalar_row_metric_value`, `live_step_metric_value` oraz `run_manifest_scalar_value` pomijają
+klucz `e_drive`. Quantity pozostaje niedostępne zarówno live, jak i w historii, dopóki wszystkie
+cztery ścieżki nie zostaną spięte globalnie i objęte jednym testem materializacji.
+
+### F3D-AUD-016 — P1 — required managed gate nie obejmuje FEM magnetic-only
+
+Workflow `frontend-3d-managed-fem.yml` uruchamia `managed-fem-qualification`, a obecny target
+`verify-fem-mixed-prism-airbox-runtime` kwalifikuje wyłącznie scenariusz mixed-prism shared-air
+`poisson_robin`. Osobna sesja FEM magnetic-only, jej retained runtime oraz dynamic observation nie
+mają wykonanego managed proof artifact. Pełna kwalifikacja pozostaje zablokowana do dodania osobnego
+managed przypadku magnetic-only i powiązania jego artefaktu z wymaganym checkiem.
 
 ---
 
@@ -588,6 +603,7 @@ Identity payloadu jest bezpieczne, lecz Inspector powinien pokazywać `carrier_k
 - [ ] FDM regular: stage complete → awaiting_command → nowe pole;
 - [ ] FDM multilayer: deterministic reconstruction dla wspieranych pól;
 - [ ] FEM magnetic-only: retained runtime;
+- [ ] osobny managed FEM magnetic-only uruchamia retained runtime i zapisuje proof artifact związany z dokładnym head SHA;
 - [ ] FEM shared-air: rekonstrukcja nowego aktywnego pola kończy się bez nieskończonego spinnera i zachowuje generation identity;
 - [ ] następny stage sekwencji nie publikuje przejściowego completed;
 - [ ] explicit close tombstonuje session resource;
@@ -608,7 +624,7 @@ Identity payloadu jest bezpieczne, lecz Inspector powinien pokazywać `carrier_k
 
 Na moment audytu:
 
-- `master` wskazywał `78cde18ee95b6d6ee1cd93e7a775bb7a8c7249de`;
+- źródła audytu przypięto do `5dd9414da76ae0ce3081204cffea39137db6951d`;
 - branch API raportował `protected: false`;
 - required status checks były puste;
 - zapytanie o PR-triggered workflow runs dla SHA nie zwróciło wyników. Nie dowodzi to braku push-triggered runs;
@@ -697,22 +713,30 @@ Ten audyt nie formułuje nowych twierdzeń naukowych; podstawę fizyczną stanow
 (f3d-audit-source-code-index)=
 ## 19. Indeks źródeł i stabilnych symboli
 
-| Twierdzenie audytu | Ścieżka | Stabilny symbol / kotwica |
-|---|---|---|
-| Kanoniczne wire IDs i jawne aliasy | `crates/fullmag-quantities/src/id.rs` | `normalize_quantity_id` |
-| Katalog 52 quantities | `crates/fullmag-quantities/src/catalog.rs` | `quantity_catalog` |
-| Parytet providerów | `crates/fullmag-quantities/src/registry.rs` | `standard_providers_register_every_canonical_quantity` |
-| Capability zależne od lane i planu | `crates/fullmag-runner/src/quantities.rs` | `fdm_quantity_is_active`, `fem_quantity_is_active` |
-| Zamknięta lista CUDA FDM | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `from_quantity` |
-| Zamknięta lista native FEM | `crates/fullmag-runner/src/native_fem.rs` | `from_quantity` |
-| Polityka providerów post-stage | `crates/fullmag-runner/src/observation.rs` | `observation_provider_policy` |
-| Komenda post-stage | `crates/fullmag-cli/src/interactive_runtime_host.rs` | `compute_current_fields` |
-| Rekonstrukcja bez retained runtime | `crates/fullmag-runner/src/lib.rs` | `snapshot_problem_vector_field_batch` |
-| Walidacja i serializacja FMVP | `crates/fullmag-api/src/field_store.rs` | `validate_field_vector_payload`, `serialize_field_vector_binary_v3` |
-| Dekodowanie i identity FMVP | `apps/control-room/src/kernel/api/codecs/fieldVectorCodec.ts` | `decodeFieldVector` |
-| Reset leaf target settings | `apps/control-room/src/kernel/visualization/ObjectVisualizationController.ts` | `removeSerializedOverrideField` |
-| Semanticzne targety Airbox/object/part | `apps/control-room/src/kernel/selection/semanticRenderTargetCatalog.ts` | `buildSemanticRenderTargetCatalog` |
-| Targety regionów | `apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts` | `resolveViewport3DRegionTargetByPartId`, `resolveViewport3DRegionTargetsForMembershipOwnerParts` |
-| Airbox capability multilayer | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `resolveFdmMultilayerAirboxFieldAvailability` |
-| Zarządzany gate FEM 3D | `.github/workflows/frontend-3d-managed-fem.yml` | workflow `frontend-3d-managed-fem`; job `managed-fem-qualification` |
-| Wymagane dowody release | `docs/validation/frontend-3d-required-check-matrix.md` | tabela wymaganych checków |
+| Twierdzenie audytu | Lane | Ścieżka | Stabilny symbol / kotwica | Dowód / test | Status dowodu | Niezmienny link |
+|---|---|---|---|---|---|---|
+| Kanoniczne wire IDs i jawne aliasy | wszystkie | `crates/fullmag-quantities/src/id.rs` | `normalize_quantity_id` | inspekcja źródła | audited | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-quantities/src/id.rs) |
+| Katalog quantities | wszystkie | `crates/fullmag-quantities/src/catalog.rs` | `quantity_catalog` | testy katalogu i inspekcja | audited | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-quantities/src/catalog.rs) |
+| Parytet providerów | wszystkie | `crates/fullmag-quantities/src/registry.rs` | `standard_providers_register_every_canonical_quantity` | test rejestru | tested | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-quantities/src/registry.rs) |
+| Capability quantity FDM | FDM CPU/GPU/ML | `crates/fullmag-runner/src/quantities.rs` | `fdm_quantity_is_active` | testy capability runnera | tested | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-runner/src/quantities.rs) |
+| Capability quantity FEM | FEM CPU/GPU | `crates/fullmag-runner/src/quantities.rs` | `fem_quantity_is_active` | testy capability runnera | tested | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-runner/src/quantities.rs) |
+| Zamknięta lista CUDA FDM | FDM GPU | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `from_quantity` | inspekcja źródła | audited | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-runner/src/fdm/gpu/cuda/native.rs) |
+| Zamknięta lista native FEM | FEM CPU/GPU | `crates/fullmag-runner/src/native_fem.rs` | `from_quantity` | inspekcja źródła | audited | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-runner/src/native_fem.rs) |
+| Polityka providerów post-stage | wszystkie | `crates/fullmag-runner/src/observation.rs` | `observation_provider_policy` | testy provider policy | tested | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-runner/src/observation.rs) |
+| Komenda post-stage | wszystkie | `crates/fullmag-cli/src/interactive_runtime_host.rs` | `compute_current_fields` | inspekcja źródła | audited | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-cli/src/interactive_runtime_host.rs) |
+| Rekonstrukcja bez retained runtime | wszystkie | `crates/fullmag-runner/src/lib.rs` | `snapshot_problem_vector_field_batch` | testy rekonstrukcji | tested | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-runner/src/lib.rs) |
+| Walidacja wartości FMVP | wszystkie | `crates/fullmag-api/src/field_store.rs` | `validate_field_vector_payload` | testy field store | tested; bez identity | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-api/src/field_store.rs) |
+| Serializacja identity FMVP v3 | wszystkie | `crates/fullmag-api/src/field_store.rs` | `serialize_field_vector_binary_v3` | testy field store | tested | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-api/src/field_store.rs) |
+| Dekodowanie FMVP | frontend | `apps/control-room/src/kernel/api/codecs/fieldVectorCodec.ts` | `decodeFieldVector` | testy kodeka | tested | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/apps/control-room/src/kernel/api/codecs/fieldVectorCodec.ts) |
+| Walidacja i adopcja identity w kliencie | frontend | `apps/control-room/src/kernel/api/ControlRoomApi.ts` | `requestFieldVector` | testy API klienta | tested | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/apps/control-room/src/kernel/api/ControlRoomApi.ts) |
+| Reset leaf target settings | frontend | `apps/control-room/src/kernel/visualization/ObjectVisualizationController.ts` | `removeSerializedOverrideField` | inspekcja; F3D-AUD-006 | gap-confirmed | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/apps/control-room/src/kernel/visualization/ObjectVisualizationController.ts) |
+| Semanticzne targety | frontend | `apps/control-room/src/kernel/selection/semanticRenderTargetCatalog.ts` | `buildSemanticRenderTargetCatalog` | testy katalogu targetów | tested | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/apps/control-room/src/kernel/selection/semanticRenderTargetCatalog.ts) |
+| Airbox capability multilayer | FDM ML/frontend | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `resolveFdmMultilayerAirboxFieldAvailability` | testy adaptera | tested | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts) |
+| Publiczny planner FDM | FDM CPU/GPU | `crates/fullmag-plan/src/fdm.rs` | `plan_fdm` | testy odrzuceń plannera | tested | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-plan/src/fdm.rs) |
+| Publiczny planner FDM multilayer | FDM ML | `crates/fullmag-plan/src/fdm.rs` | `plan_fdm_multilayer` | testy odrzuceń plannera | tested | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-plan/src/fdm.rs) |
+| Publiczny planner FEM | FEM CPU/GPU | `crates/fullmag-plan/src/fem.rs` | `plan_fem` | testy capability plannera | tested | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-plan/src/fem.rs) |
+| Aktywacja metryk skalarnych | wszystkie | `crates/fullmag-api/src/quantities.rs` | `scalar_metric_is_active` | inspekcja; F3D-AUD-015 | gap-confirmed | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-api/src/quantities.rs) |
+| Wiersz metryki skalarnej | wszystkie | `crates/fullmag-api/src/main.rs` | `scalar_row_metric_value` | inspekcja; F3D-AUD-015 | gap-confirmed | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-api/src/main.rs) |
+| Live-step metryki skalarnej | wszystkie | `crates/fullmag-api/src/preview.rs` | `live_step_metric_value` | inspekcja; F3D-AUD-015 | gap-confirmed | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-api/src/preview.rs) |
+| Manifest metryki skalarnej | wszystkie | `crates/fullmag-api/src/quantities.rs` | `run_manifest_scalar_value` | inspekcja; F3D-AUD-015 | gap-confirmed | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-api/src/quantities.rs) |
+| Zarządzany gate mixed-prism shared-air | FEM CPU/GPU | `justfile` | `verify-fem-mixed-prism-airbox-runtime` | zarządzany workflow | partial; brak magnetic-only | [5dd9414](https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/justfile) |
