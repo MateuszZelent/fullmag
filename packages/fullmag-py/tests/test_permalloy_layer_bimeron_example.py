@@ -51,3 +51,20 @@ def test_bimeron_example_contains_only_one_centered_layer_and_one_prism_layer() 
     assert ast.literal_eval(mesh_keywords["topology"]) == "prismatic"
     assert ast.literal_eval(mesh_keywords["exact_layers"]) is True
     assert ast.literal_eval(mesh_keywords["transition"]) == "pyramid_to_tetrahedra"
+
+
+def test_bimeron_minimization_uses_accepted_step_table_autosave() -> None:
+    tree = ast.parse(EXAMPLE.read_text(encoding="utf-8"), filename=str(EXAMPLE))
+
+    table_calls = _calls(tree, "tableautosave")
+    assert len(table_calls) == 1
+    table_call = table_calls[0]
+    assert isinstance(table_call.func.value, ast.Call)
+    assert isinstance(table_call.func.value.func, ast.Attribute)
+    assert table_call.func.value.func.attr == "add_relax"
+    table_keywords = {keyword.arg: keyword.value for keyword in table_call.keywords if keyword.arg}
+    assert ast.literal_eval(table_keywords["every_steps"]) == 1
+    assert not any(
+        isinstance(call.func.value, ast.Name) and call.func.value.id == "study"
+        for call in table_calls
+    )
