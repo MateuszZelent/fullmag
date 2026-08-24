@@ -181,6 +181,10 @@ enum ArtifactJob {
         snapshot: NativeFemFieldSnapshot,
         provenance: ExecutionProvenance,
     },
+    UpdateProvenance {
+        provenance: ExecutionProvenance,
+        acknowledgement: mpsc::Sender<Result<(), String>>,
+    },
     FailedRunProvenance {
         provenance: ExecutionProvenance,
         primary_error: String,
@@ -203,6 +207,7 @@ impl ArtifactJob {
             #[cfg(feature = "fem-gpu")]
             ArtifactJob::NativeFemFieldSnapshot { .. } => 0,
             ArtifactJob::FailedRunProvenance { .. } => 0,
+            ArtifactJob::UpdateProvenance { .. } => 0,
             ArtifactJob::Shutdown => 0,
         }
     }
@@ -262,6 +267,62 @@ impl ArtifactPipelineSender {
             primary_error,
             Duration::from_secs(10),
         )
+    }
+
+    fn update_provenance(&self, provenance: ExecutionProvenance) -> Result<(), RunError> {
+        self.update_provenance_with_timeout(provenance, Duration::from_secs(10))
+    }
+
+    fn update_provenance_with_timeout(
+        &self,
+        provenance: ExecutionProvenance,
+        timeout: Duration,
+    ) -> Result<(), RunError> {
+        let deadline = std::time::Instant::now() + timeout;
+        let (acknowledgement, completed) = mpsc::channel();
+        let mut job = ArtifactJob::UpdateProvenance {
+            provenance,
+            acknowledgement,
+        };
+        let queue_depth_after = self.queue_depth.fetch_add(1, Ordering::Relaxed) + 1;
+        self.diagnostics
+            .current_queue_depth
+            .store(queue_depth_after as u64, Ordering::Relaxed);
+        update_atomic_max(&self.diagnostics.max_queue_depth, queue_depth_after as u64);
+        loop {
+            match self.tx.try_send(job) {
+                Ok(()) => break,
+                Err(mpsc::TrySendError::Full(returned)) => {
+                    job = returned;
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    if remaining.is_zero() {
+                        self.rollback_queue_depth();
+                        return Err(RunError {
+                            message: "timed out enqueueing artifact provenance update".into(),
+                        });
+                    }
+                    thread::park_timeout(remaining.min(Duration::from_millis(1)));
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    self.rollback_queue_depth();
+                    return Err(RunError {
+                        message: "artifact writer stopped before provenance update was queued"
+                            .into(),
+                    });
+                }
+            }
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        match completed.recv_timeout(remaining) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(message)) => Err(RunError { message }),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(RunError {
+                message: "timed out waiting for artifact provenance update".into(),
+            }),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(RunError {
+                message: "artifact writer stopped before provenance update completed".into(),
+            }),
+        }
     }
 
     fn publish_failed_run_provenance_with_timeout(
@@ -689,6 +750,11 @@ struct FieldCadenceState {
 }
 
 impl StageAutosaveRuntime {
+    fn update_provenance(&mut self, provenance: &serde_json::Value) -> Result<(), String> {
+        self.state.update_active_provenance(provenance.clone())?;
+        self.writer.update_provenance(provenance)
+    }
+
     fn new(output_dir: &Path, config: StageAutosavePipelineConfig) -> Result<Self, String> {
         let policy = config.policy;
         let writer = match policy.format {
@@ -1006,6 +1072,23 @@ impl ArtifactRecorder {
         self.provenance = provenance;
     }
 
+    #[cfg(feature = "fem-gpu")]
+    pub(crate) fn provenance_snapshot(&self) -> ExecutionProvenance {
+        self.provenance.clone()
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    pub(crate) fn replace_provenance_synchronously(
+        &mut self,
+        provenance: ExecutionProvenance,
+    ) -> Result<(), RunError> {
+        if let Some(pipeline) = self.pipeline.as_ref() {
+            pipeline.update_provenance(provenance.clone())?;
+        }
+        self.provenance = provenance;
+        Ok(())
+    }
+
     pub(crate) fn publish_failed_run_provenance(
         &mut self,
         primary: &RunError,
@@ -1233,6 +1316,23 @@ impl ZarrFieldSeriesWriter {
         };
         writer.write_zarray_metadata()?;
         Ok(writer)
+    }
+
+    fn update_provenance(
+        &self,
+        context: &FieldArtifactContext,
+        provenance: &ExecutionProvenance,
+    ) -> Result<(), String> {
+        let path = self.root_dir.join(".zattrs");
+        let mut attrs: serde_json::Value = serde_json::from_slice(
+            &fs::read(&path).map_err(|error| {
+                format!("failed to read Zarr attrs '{}': {error}", path.display())
+            })?,
+        )
+        .map_err(|error| format!("failed to decode Zarr attrs '{}': {error}", path.display()))?;
+        attrs["provenance"] = crate::artifacts::artifact_provenance_json(context, provenance);
+        crate::autosave_zarr::write_json_atomic(&path, &attrs)
+            .map_err(|error| format!("failed to update Zarr attrs '{}': {error}", path.display()))
     }
 
     #[cfg(feature = "cuda")]
@@ -1718,6 +1818,24 @@ fn writer_loop(
                 );
                 let _ = acknowledgement.send(result);
             }
+            ArtifactJob::UpdateProvenance {
+                provenance,
+                acknowledgement,
+            } => {
+                let artifact_provenance =
+                    crate::artifacts::artifact_provenance_json(&field_context, &provenance);
+                let result = (|| -> Result<(), String> {
+                    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+                    for writer in zarr_writers.values() {
+                        writer.update_provenance(&field_context, &provenance)?;
+                    }
+                    if let Some(runtime) = stage_autosave.as_mut() {
+                        runtime.update_provenance(&artifact_provenance)?;
+                    }
+                    Ok(())
+                })();
+                let _ = acknowledgement.send(result);
+            }
             ArtifactJob::Shutdown => break,
         }
     }
@@ -1747,6 +1865,17 @@ fn writer_loop(
     }
 
     Ok(summary)
+}
+
+impl StageAutosaveWriter {
+    fn update_provenance(&mut self, provenance: &serde_json::Value) -> Result<(), String> {
+        match self {
+            Self::Zarr(writer) => writer.update_provenance(provenance),
+            Self::Txt(_) => Ok(()),
+            #[cfg(feature = "stage-autosave-hdf5")]
+            Self::Hdf5(_) => Ok(()),
+        }
+    }
 }
 
 fn write_failed_run_provenance_atomic(
@@ -2001,6 +2130,54 @@ mod tests {
             .expect_err("disconnected queue must fail");
         assert!(error.message.contains("unavailable"));
         assert!(started.elapsed() < Duration::from_millis(50));
+    }
+
+    #[test]
+    fn provenance_update_full_queue_obeys_one_deadline() {
+        let (tx, receiver) = mpsc::sync_channel(1);
+        tx.send(ArtifactJob::Shutdown).expect("fill queue");
+        let sender = isolated_pipeline_sender(tx, 1);
+        let error = sender
+            .update_provenance_with_timeout(
+                ExecutionProvenance::default(),
+                Duration::from_millis(25),
+            )
+            .expect_err("full queue must time out");
+        assert!(error.message.contains("enqueueing artifact provenance update"));
+        drop(receiver);
+    }
+
+    #[test]
+    fn provenance_update_disconnected_queue_fails_without_waiting_for_ack() {
+        let (tx, receiver) = mpsc::sync_channel(1);
+        drop(receiver);
+        let sender = isolated_pipeline_sender(tx, 0);
+        let error = sender
+            .update_provenance_with_timeout(
+                ExecutionProvenance::default(),
+                Duration::from_millis(25),
+            )
+            .expect_err("disconnected queue must fail");
+        assert!(error.message.contains("before provenance update was queued"));
+    }
+
+    #[test]
+    fn provenance_update_stalled_ack_uses_remaining_deadline() {
+        let (tx, receiver) = mpsc::sync_channel(1);
+        let sender = isolated_pipeline_sender(tx, 0);
+        let stalled = thread::spawn(move || {
+            let job = receiver.recv().expect("receive update job");
+            thread::sleep(Duration::from_millis(75));
+            drop(job);
+        });
+        let error = sender
+            .update_provenance_with_timeout(
+                ExecutionProvenance::default(),
+                Duration::from_millis(25),
+            )
+            .expect_err("stalled acknowledgement must time out");
+        assert!(error.message.contains("waiting for artifact provenance update"));
+        stalled.join().expect("stalled receiver exits");
     }
 
     #[test]
@@ -2352,5 +2529,160 @@ mod tests {
         );
         fs::remove_dir_all(output_dir).expect("remove autosave output fixture");
         fs::remove_dir_all(autosave_root).expect("remove autosave provenance fixture");
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn streaming_capture_writes_fem_gpu_receipt_to_field_zattrs() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-fem-receipt-stream-output-{}-{unique}",
+            std::process::id()
+        ));
+        let autosave_root = std::env::temp_dir().join(format!(
+            "fullmag-fem-receipt-stream-autosave-{}-{unique}",
+            std::process::id()
+        ));
+        let context = FieldArtifactContext {
+            problem_name: "fem-receipt-stream".into(),
+            ir_version: "v0".into(),
+            source_hash: None,
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            layout: serde_json::json!({"kind": "fem", "node_count": 1}),
+            execution_resolution: None,
+        };
+        let stage_autosave = StageAutosavePipelineConfig {
+            stage_id: "relax".into(),
+            policy: fullmag_ir::StageAutosaveIR {
+                kind: "stage_autosave".into(),
+                target: "state".into(),
+                layout: fullmag_ir::AutosaveLayoutIR::Separate,
+                format: fullmag_ir::AutosaveFormatIR::Zarr,
+                table: None,
+                fields: vec![fullmag_ir::FieldAutosaveIR {
+                    kind: "field_autosave".into(),
+                    quantity: "m".into(),
+                    every_seconds: None,
+                    sample_period_policy: None,
+                    every_steps: Some(1),
+                }],
+            },
+        };
+        let mut pipeline = ArtifactPipeline::start_with_stage_autosave_roots(
+            output_dir.clone(),
+            autosave_root.clone(),
+            context.clone(),
+            2,
+            Some(stage_autosave),
+            None,
+        )
+        .expect("start streaming pipeline");
+        let mut recorder =
+            ArtifactRecorder::streaming(ExecutionProvenance::default(), pipeline.sender());
+        let receipt = crate::types::FemGpuExecutionReceipt {
+            requested: "strict_device".into(),
+            resolved: "device_resident".into(),
+            executed: "cuda_fem".into(),
+            execution_class: crate::types::FemGpuExecutionClass::DeviceResident,
+            device_ordinal: 0,
+            precision: "double".into(),
+            integrator: "heun".into(),
+            required_operator_mask: 0x3ff,
+            resolved_device_operator_mask: 0x3ff,
+            resolved_host_operator_mask: 0,
+            resolved_unknown_operator_mask: 0,
+            executed_device_operator_mask: 0x3ff,
+            executed_host_operator_mask: 0,
+            executed_unknown_operator_mask: 0,
+            fallback_count: 0,
+            accepted_step_count: 1,
+            rejected_attempt_count: 0,
+            failed_attempt_count: 0,
+            hot_loop_compute_h2d_bytes: 0,
+            hot_loop_compute_d2h_bytes: 0,
+            hot_loop_compute_host_sync_count: 0,
+            accounting_valid: true,
+        };
+        recorder
+            .record_field_snapshot(
+                FieldSnapshot::new(
+                    "m",
+                    1,
+                    1.0e-13,
+                    1.0e-13,
+                    3,
+                    "xyz",
+                    "node",
+                    "full",
+                    1,
+                    vec![1.0, 0.0, 0.0],
+                )
+                .expect("valid FEM snapshot"),
+            )
+            .expect("enqueue accepted FEM snapshot before receipt");
+        let mut final_provenance = recorder.provenance_snapshot();
+        final_provenance.fem_gpu_execution_receipt = Some(receipt.clone());
+        recorder
+            .replace_provenance_synchronously(final_provenance)
+            .expect("update already-open stores before terminal capture");
+        recorder
+            .record_field_snapshot(
+                FieldSnapshot::new(
+                    "m",
+                    2,
+                    2.0e-13,
+                    1.0e-13,
+                    3,
+                    "xyz",
+                    "node",
+                    "full",
+                    2,
+                    vec![0.0, 1.0, 0.0],
+                )
+                .expect("valid terminal FEM snapshot"),
+            )
+            .expect("enqueue terminal FEM snapshot after receipt update");
+        let expected_full_provenance = crate::artifacts::artifact_provenance_json(
+            &context,
+            &recorder.provenance_snapshot(),
+        );
+        drop(recorder);
+        pipeline.finish().expect("finish streaming pipeline");
+
+        let zattrs: serde_json::Value = serde_json::from_slice(
+            &fs::read(autosave_root.join(
+                "state.zarr/stages/stage_0000_relax/fields/m/.zattrs",
+            ))
+            .expect("read streamed FEM field zattrs"),
+        )
+        .expect("decode streamed FEM field zattrs");
+        let root_zattrs: serde_json::Value = serde_json::from_slice(
+            &fs::read(autosave_root.join("state.zarr/.zattrs"))
+                .expect("read existing autosave root zattrs"),
+        )
+        .expect("decode existing autosave root zattrs");
+        let stage_manifest: serde_json::Value = serde_json::from_slice(
+            &fs::read(autosave_root.join(
+                "state.zarr/stages/stage_0000_relax/manifest.json",
+            ))
+            .expect("read finished stage manifest"),
+        )
+        .expect("decode finished stage manifest");
+        assert_eq!(root_zattrs["provenance"], expected_full_provenance);
+        assert_eq!(stage_manifest["provenance"], root_zattrs["provenance"]);
+        assert_eq!(zattrs["provenance"], root_zattrs["provenance"]);
+        assert_eq!(
+            zattrs["provenance"]["fem_gpu_execution_receipt"],
+            serde_json::to_value(receipt).expect("serialize FEM receipt")
+        );
+        assert_eq!(
+            root_zattrs["provenance"]["fem_gpu_execution_receipt"],
+            zattrs["provenance"]["fem_gpu_execution_receipt"]
+        );
+        fs::remove_dir_all(output_dir).expect("remove streaming output fixture");
+        fs::remove_dir_all(autosave_root).expect("remove streaming autosave fixture");
     }
 }

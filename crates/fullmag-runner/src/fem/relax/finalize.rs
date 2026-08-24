@@ -8,6 +8,7 @@ use fullmag_ir::FemPlanIR;
 
 use crate::artifact_pipeline::ArtifactRecorder;
 use crate::dispatch::{apply_native_fem_runtime_contract, fem_poisson_demag_provenance, FemEngine};
+use crate::fem::execution_receipt::validate_strict_fem_gpu_execution_receipt;
 use crate::native_fem::NativeFemBackend;
 use crate::relaxation::{resolve_stage_completion, RelaxationCompletionMetrics};
 use crate::schedules::{same_time, OutputSchedule};
@@ -22,8 +23,9 @@ use super::snapshots::copy_native_fem_field_snapshot;
 
 #[cfg(test)]
 mod tests {
-    use super::terminal_scheduled_field_actions;
+    use super::{run_after_strict_receipt_gate, terminal_scheduled_field_actions};
     use crate::schedules::OutputSchedule;
+    use crate::types::{FemGpuExecutionClass, FemGpuExecutionReceipt};
 
     fn schedule(name: &str, last_sampled_time: Option<f64>) -> OutputSchedule {
         OutputSchedule {
@@ -53,6 +55,41 @@ mod tests {
             (true, false)
         );
     }
+
+    #[test]
+    fn invalid_strict_receipt_executes_zero_terminal_success_side_effects() {
+        let receipt = FemGpuExecutionReceipt {
+            requested: "strict_device".into(), resolved: "device_resident".into(),
+            executed: "cuda_fem".into(), execution_class: FemGpuExecutionClass::DeviceResident,
+            device_ordinal: 0, precision: "double".into(), integrator: "heun".into(),
+            required_operator_mask: 0x3ff, resolved_device_operator_mask: 0x3ff,
+            resolved_host_operator_mask: 0, resolved_unknown_operator_mask: 0,
+            executed_device_operator_mask: 0x3ff, executed_host_operator_mask: 1,
+            executed_unknown_operator_mask: 0, fallback_count: 0, accepted_step_count: 1,
+            rejected_attempt_count: 0, failed_attempt_count: 0,
+            hot_loop_compute_h2d_bytes: 0, hot_loop_compute_d2h_bytes: 0,
+            hot_loop_compute_host_sync_count: 0, accounting_valid: true,
+        };
+        let mut terminal_side_effects = 0;
+        let result = run_after_strict_receipt_gate(&receipt, "strict_device", || {
+            terminal_side_effects += 1;
+        });
+        assert!(result.is_err());
+        assert_eq!(terminal_side_effects, 0);
+    }
+}
+
+fn run_after_strict_receipt_gate<T>(
+    receipt: &crate::types::FemGpuExecutionReceipt,
+    request: &str,
+    success: impl FnOnce() -> T,
+) -> Result<T, RunError> {
+    if request == "strict_device" {
+        validate_strict_fem_gpu_execution_receipt(receipt).map_err(|error| RunError {
+            message: format!("strict native FEM GPU execution receipt rejected: {}", error.token()),
+        })?;
+    }
+    Ok(success())
 }
 
 pub(crate) struct NativeFemRelaxationFinalization {
@@ -62,6 +99,7 @@ pub(crate) struct NativeFemRelaxationFinalization {
     pub(crate) cancelled: bool,
     pub(crate) paused: bool,
     pub(crate) preview_handoff: FemPreviewHandoff,
+    pub(crate) fem_gpu_receipt_request: String,
 }
 
 fn terminal_scheduled_field_actions(
@@ -105,6 +143,32 @@ pub(crate) fn finalize_native_fem_relaxation(
         wall_time_ns: 0,
         ..StepStats::default()
     });
+    // Construct the one final provenance value before any terminal success
+    // side effect. The same value is published to open stores and returned in
+    // ExecutedRun; no later provenance mutation is permitted.
+    let mut final_provenance = artifacts.provenance_snapshot();
+    final_provenance.fem_poisson_demag =
+        fem_poisson_demag_provenance(plan, Some(&final_stats));
+    let gpu_state_info = backend.gpu_state_info()?;
+    let gpu_rk_plan_info = backend.gpu_rk_plan_info()?;
+    apply_native_fem_runtime_contract(
+        &mut final_provenance,
+        plan,
+        Some(&final_stats),
+        Some(&gpu_state_info),
+        Some(&gpu_rk_plan_info),
+    );
+    if engine == FemEngine::NativeGpu {
+        let receipt = backend
+            .gpu_execution_receipt()?
+            .into_provenance(&finalization.fem_gpu_receipt_request);
+        run_after_strict_receipt_gate(
+            &receipt,
+            &finalization.fem_gpu_receipt_request,
+            || final_provenance.fem_gpu_execution_receipt = Some(receipt.clone()),
+        )?;
+    }
+    artifacts.replace_provenance_synchronously(final_provenance)?;
     if let Some(mut terminal_stats) = finalization.terminal_stats {
         // Retain a terminal torque-confirmation observation for final-state
         // provenance. The artifact writer marks same-step observations as
@@ -317,7 +381,7 @@ pub(crate) fn finalize_native_fem_relaxation(
         finalization_field_copy_wall_time_ns.saturating_add(elapsed_ns(copy_start));
     finalization_field_copy_bytes =
         finalization_field_copy_bytes.saturating_add(vector3_f64_bytes(final_magnetization.len()));
-    let (mut field_snapshots, field_snapshot_count, mut provenance) = artifacts.finish();
+    let (mut field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
     let mut auxiliary_artifacts = Vec::new();
     if let Some(telemetry) = backend.stage_oersted_telemetry() {
         auxiliary_artifacts.push(AuxiliaryArtifact {
@@ -351,16 +415,6 @@ pub(crate) fn finalize_native_fem_relaxation(
             .wall_time_ns
             .saturating_add(finalization_wall_time_ns);
     }
-    provenance.fem_poisson_demag = fem_poisson_demag_provenance(plan, Some(&final_stats));
-    let gpu_state_info = backend.gpu_state_info()?;
-    let gpu_rk_plan_info = backend.gpu_rk_plan_info()?;
-    apply_native_fem_runtime_contract(
-        &mut provenance,
-        plan,
-        Some(&final_stats),
-        Some(&gpu_state_info),
-        Some(&gpu_rk_plan_info),
-    );
     let status = if finalization.paused {
         RunStatus::Paused
     } else if finalization.cancelled {

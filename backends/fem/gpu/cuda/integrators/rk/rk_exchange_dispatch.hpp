@@ -20,11 +20,14 @@
 
 namespace fullmag::fem {
 
+struct FemGpuExecutionReceiptRuntimeState;
+
 bool gpu_rk_compute_legacy_sparse_exchange(
     FemGpuState &gpu,
     const FemGpuComponentField &m,
     cudaStream_t stream,
-    std::string &reason);
+    std::string &reason,
+    FemGpuExecutionReceiptRuntimeState *execution_receipt = nullptr);
 
 } // namespace fullmag::fem
 #endif

@@ -20,6 +20,7 @@
 #include "gpu/cuda/integrators/rk/rk.hpp"
 #include "gpu/cuda/integrators/rk/rk_llg_rhs_dispatch.hpp"
 #include "gpu/cuda/integrators/rk/rk_local_fields.hpp"
+#include "gpu/cuda/runtime/execution_receipt.hpp"
 
 #include <string>
 #include <vector>
@@ -120,7 +121,12 @@ bool gpu_rk_accumulate_effective_field_for_magnetization(
             reason)) {
         return false;
     }
-    if (!gpu_rk_compute_legacy_sparse_exchange(ctx.gpu_state.device, m, stream, reason)) {
+    if (!gpu_rk_compute_legacy_sparse_exchange(
+            ctx.gpu_state.device,
+            m,
+            stream,
+            reason,
+            &ctx.gpu_state.execution_receipt)) {
         return false;
     }
     if (!exchange_timer.finish(reason)) {
@@ -137,6 +143,11 @@ bool gpu_rk_accumulate_effective_field_for_magnetization(
     }
     if (!gpu_rk_compute_local_field_contributions(ctx, m, stream, n, reason)) {
         return false;
+    }
+    if (gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt) &&
+        (gpu_rk_required_operator_mask(ctx) & FEM_GPU_OPERATOR_LOCAL_FIELDS) != 0) {
+        gpu_execution_receipt_note_device(
+            ctx.gpu_state.execution_receipt, FEM_GPU_OPERATOR_LOCAL_FIELDS);
     }
     return gpu_rk_accumulate_effective_field(ctx, stream, n, evaluation_time_s, label, reason);
 }
@@ -199,8 +210,17 @@ bool gpu_rk_compute_rhs_for_magnetization(
     if (!gpu_rk_compute_llg_rhs(ctx, m, rhs, stream, n, reason)) {
         return false;
     }
+    if (gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
+        gpu_execution_receipt_note_device(
+            ctx.gpu_state.execution_receipt, FEM_GPU_OPERATOR_LLG_RHS);
+    }
     if (!gpu_rk_add_direct_torques(ctx, m, rhs, stream, n, evaluation_time_s, reason)) {
         return false;
+    }
+    if (gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt) &&
+        (gpu_rk_required_operator_mask(ctx) & FEM_GPU_OPERATOR_DIRECT_TORQUES) != 0) {
+        gpu_execution_receipt_note_device(
+            ctx.gpu_state.execution_receipt, FEM_GPU_OPERATOR_DIRECT_TORQUES);
     }
     if (ctx.frozen_spins.enabled()) {
         gpu_zero_frozen_rhs(rhs, ctx.gpu_state.device.mesh_regions.frozen_mask, n, stream);

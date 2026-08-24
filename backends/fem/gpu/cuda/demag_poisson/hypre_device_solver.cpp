@@ -15,6 +15,7 @@
 #include "cpu/mfem/interactions/demag_poisson_periodic.hpp"
 #include "cpu/mfem/runtime/mpi_init.hpp"
 #include "fem_common.hpp"
+#include "gpu/cuda/runtime/execution_receipt.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
@@ -46,25 +47,34 @@ void configure_demag_amg(mfem::HypreBoomerAMG &amg, const Context &ctx)
     if (policy.max_levels_is_set) amg.SetMaxLevels(policy.max_levels);
 }
 
-void configure_hypre_device_vendor_kernels()
+bool configure_hypre_device_vendor_kernels(std::string &error)
 {
 #if defined(HYPRE_USING_CUDA) || defined(HYPRE_USING_GPU) || defined(HYPRE_USING_HIP) || defined(HYPRE_USING_DEVICE_OPENMP)
     if (HYPRE_SetMemoryLocation(HYPRE_MEMORY_DEVICE) != 0) {
-        HYPRE_ClearAllErrors();
+        error = "strict FEM GPU demag failed to select Hypre device memory";
+        return false;
     }
     if (HYPRE_SetExecutionPolicy(HYPRE_EXEC_DEVICE) != 0) {
-        HYPRE_ClearAllErrors();
+        error = "strict FEM GPU demag failed to select Hypre device execution";
+        return false;
     }
     if (HYPRE_SetSpTransUseVendor(1) != 0) {
-        HYPRE_ClearAllErrors();
+        error = "strict FEM GPU demag failed to enable vendor SpTrans kernels";
+        return false;
     }
     if (HYPRE_SetSpMVUseVendor(1) != 0) {
-        HYPRE_ClearAllErrors();
+        error = "strict FEM GPU demag failed to enable vendor SpMV kernels";
+        return false;
     }
     if (HYPRE_SetSpGemmUseVendor(1) != 0) {
-        HYPRE_ClearAllErrors();
+        error = "strict FEM GPU demag failed to enable vendor SpGEMM kernels";
+        return false;
     }
+#else
+    error = "strict FEM GPU demag requires a device-enabled Hypre build";
+    return false;
 #endif
+    return true;
 }
 
 bool configure_demag_poisson_hypre_preconditioner(
@@ -155,7 +165,9 @@ bool initialize_demag_poisson_hypre_device_solver(
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
     mfem::Hypre::Init();
     mfem::Hypre::InitDevice();
-    configure_hypre_device_vendor_kernels();
+    if (!configure_hypre_device_vendor_kernels(error)) {
+        return false;
+    }
 
     auto *A_bc = static_cast<mfem::SparseMatrix *>(
         demag_periodic_poisson_reduction_requested(ctx)
@@ -336,7 +348,7 @@ void read_demag_poisson_hypre_solver_stats(
 }
 
 bool validate_demag_poisson_hypre_device_solve(
-    const Context &ctx,
+    Context &ctx,
     GpuDemagPoissonWorkspace &workspace,
     int &iterations,
     double &residual,
@@ -385,7 +397,15 @@ bool validate_demag_poisson_hypre_device_solve(
     result.has_absolute_tolerance = ctx.demag.solver.has_absolute_tolerance != 0;
     result.absolute_tolerance = ctx.demag.solver.absolute_tolerance;
     result.max_iterations = ctx.demag.solver.max_iterations;
-    return validate_demag_linear_solve_result(result, error);
+    if (!validate_demag_linear_solve_result(result, error)) {
+        return false;
+    }
+    if (gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
+        gpu_execution_receipt_note_device(
+            ctx.gpu_state.execution_receipt,
+            FEM_GPU_OPERATOR_DEMAG_SOLVE | FEM_GPU_OPERATOR_PRECONDITIONER);
+    }
+    return true;
 #else
     (void)ctx;
     (void)workspace;

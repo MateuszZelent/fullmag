@@ -2,8 +2,10 @@
 
 #include "backend_handle.hpp"
 #include "fullmag_fem.h"
+#include "gpu/cuda/transfer/transfer_audit.hpp"
 
 #include <cstddef>
+#include <cstring>
 #include <cstdlib>
 #include <iostream>
 
@@ -36,8 +38,10 @@ void accepted_device_attempt_publishes_complete_receipt() {
         FULLMAG_FEM_PRECISION_DOUBLE,
         FULLMAG_FEM_INTEGRATOR_HEUN);
     gpu_execution_receipt_begin_attempt(state);
+    check(gpu_execution_receipt_attempt_active(state), "begun attempt must be active");
     gpu_execution_receipt_note_device(state, required);
     gpu_execution_receipt_commit_attempt(state);
+    check(!gpu_execution_receipt_attempt_active(state), "committed attempt must be inactive");
 
     const FemGpuExecutionSnapshot receipt = gpu_execution_receipt_snapshot(state);
     check(
@@ -56,24 +60,121 @@ void accepted_device_attempt_publishes_complete_receipt() {
     check(receipt.accepted_step_count == 1, "accepted attempt count mismatch");
 }
 
+void committed_transfer_snapshot_is_scoped_to_the_current_attempt() {
+    FemGpuExecutionReceiptRuntimeState state{};
+    gpu_execution_receipt_resolve_plan(
+        state,
+        FEM_GPU_OPERATOR_EXCHANGE,
+        FEM_GPU_OPERATOR_EXCHANGE,
+        0,
+        0,
+        FemGpuExecutionClass::DeviceResident,
+        0,
+        FULLMAG_FEM_PRECISION_DOUBLE,
+        FULLMAG_FEM_INTEGRATOR_HEUN);
+
+    fullmag_fem_transfer_audit audit{};
+    audit.hot_loop_compute_h2d_bytes = 101;
+    audit.hot_loop_compute_d2h_bytes = 103;
+    audit.hot_loop_compute_host_sync_count = 107;
+    gpu_execution_receipt_begin_attempt(state, audit);
+    gpu_execution_receipt_note_device(state, FEM_GPU_OPERATOR_EXCHANGE);
+    gpu_execution_receipt_update_attempt_transfer(state, audit);
+    gpu_execution_receipt_commit_attempt(state);
+
+    auto receipt = gpu_execution_receipt_snapshot(state);
+    check(receipt.hot_loop_compute_h2d_bytes == 0,
+          "earlier H2D history must not contaminate the current attempt");
+    check(receipt.hot_loop_compute_d2h_bytes == 0,
+          "earlier D2H history must not contaminate the current attempt");
+    check(receipt.hot_loop_compute_host_sync_count == 0,
+          "earlier sync history must not contaminate the current attempt");
+
+    gpu_execution_receipt_begin_attempt(state, audit);
+    gpu_execution_receipt_note_device(state, FEM_GPU_OPERATOR_EXCHANGE);
+    audit.hot_loop_compute_d2h_bytes += sizeof(double);
+    gpu_execution_receipt_update_attempt_transfer(state, audit);
+    gpu_execution_receipt_commit_attempt(state);
+    receipt = gpu_execution_receipt_snapshot(state);
+    check(!receipt.accounting_valid,
+          "strict current-attempt compute traffic must fail closed");
+    check(receipt.hot_loop_compute_d2h_bytes == 0,
+          "invalid attempt must preserve the last committed transfer snapshot");
+
+    FemGpuExecutionReceiptRuntimeState wrapped{};
+    gpu_execution_receipt_resolve_plan(
+        wrapped,
+        FEM_GPU_OPERATOR_EXCHANGE,
+        FEM_GPU_OPERATOR_EXCHANGE,
+        0,
+        0,
+        FemGpuExecutionClass::DeviceResident,
+        0,
+        FULLMAG_FEM_PRECISION_DOUBLE,
+        FULLMAG_FEM_INTEGRATOR_HEUN);
+    fullmag_fem_transfer_audit before_wrap{};
+    before_wrap.hot_loop_compute_h2d_bytes = UINT64_MAX;
+    gpu_execution_receipt_begin_attempt(wrapped, before_wrap);
+    fullmag_fem_transfer_audit after_wrap = before_wrap;
+    after_wrap.hot_loop_compute_h2d_bytes = 0;
+    check(!gpu_execution_receipt_update_attempt_transfer(wrapped, after_wrap),
+          "wrapped or decreasing transfer totals must fail closed");
+    check(!gpu_execution_receipt_snapshot(wrapped).accounting_valid,
+          "transfer counter underflow/overflow must invalidate accounting");
+}
+
+void late_outer_attempt_transfer_is_rejected_before_commit() {
+    FemGpuExecutionReceiptRuntimeState state{};
+    gpu_execution_receipt_resolve_plan(
+        state,
+        FEM_GPU_OPERATOR_EXCHANGE,
+        FEM_GPU_OPERATOR_EXCHANGE,
+        0,
+        0,
+        FemGpuExecutionClass::DeviceResident,
+        0,
+        FULLMAG_FEM_PRECISION_DOUBLE,
+        FULLMAG_FEM_INTEGRATOR_HEUN);
+    TransferAudit audit{};
+    audit.counters.hot_loop_compute_d2h_bytes = 29;
+    gpu_execution_receipt_begin_attempt(state, audit.counters);
+    gpu_execution_receipt_note_device(state, FEM_GPU_OPERATOR_EXCHANGE);
+
+    {
+        TransferAuditScope outer_attempt(audit, TransferAuditScopeKind::HotLoop);
+        record_device_to_host(audit, sizeof(double));
+    }
+    check(!gpu_execution_receipt_update_attempt_transfer(state, audit.counters),
+          "transfer after RK execution but before outer commit must reject strict receipt");
+    gpu_execution_receipt_fail_attempt(state);
+    const auto receipt = gpu_execution_receipt_snapshot(state);
+    check(!receipt.accounting_valid,
+          "late outer-attempt transfer violation must remain fail-closed");
+    check(receipt.accepted_step_count == 0,
+          "late transfer violation must not publish an accepted receipt");
+}
+
 void explicit_hybrid_publishes_device_and_host_masks() {
     FemGpuExecutionReceiptRuntimeState state{};
-    const uint64_t required = FEM_GPU_OPERATOR_DEMAG_SOLVE |
+    const uint64_t demag = FEM_GPU_OPERATOR_DEMAG_RHS |
+        FEM_GPU_OPERATOR_DEMAG_SOLVE |
+        FEM_GPU_OPERATOR_DEMAG_RECOVERY |
         FEM_GPU_OPERATOR_PRECONDITIONER;
+    const uint64_t required = FEM_GPU_OPERATOR_EXCHANGE | demag;
 
     gpu_execution_receipt_resolve_plan(
         state,
         required,
-        FEM_GPU_OPERATOR_DEMAG_SOLVE,
-        FEM_GPU_OPERATOR_PRECONDITIONER,
+        FEM_GPU_OPERATOR_EXCHANGE,
+        demag,
         0,
         FemGpuExecutionClass::HybridCpuPoisson,
         1,
         FULLMAG_FEM_PRECISION_DOUBLE,
         FULLMAG_FEM_INTEGRATOR_RK4);
     gpu_execution_receipt_begin_attempt(state);
-    gpu_execution_receipt_note_device(state, FEM_GPU_OPERATOR_DEMAG_SOLVE);
-    gpu_execution_receipt_note_host(state, FEM_GPU_OPERATOR_PRECONDITIONER);
+    gpu_execution_receipt_note_device(state, FEM_GPU_OPERATOR_EXCHANGE);
+    gpu_execution_receipt_note_host(state, demag);
     gpu_execution_receipt_commit_attempt(state);
 
     const FemGpuExecutionSnapshot receipt = gpu_execution_receipt_snapshot(state);
@@ -81,8 +182,8 @@ void explicit_hybrid_publishes_device_and_host_masks() {
         receipt.execution_class == FemGpuExecutionClass::HybridCpuPoisson,
         "explicit hybrid plan must preserve its execution class");
     check(
-        receipt.executed_host_operator_mask == FEM_GPU_OPERATOR_PRECONDITIONER,
-        "host operator mask mismatch");
+        receipt.executed_host_operator_mask == demag,
+        "hybrid CPU Poisson must publish the complete demag family as host execution");
     check(
         receipt.executed_unknown_operator_mask == 0,
         "valid hybrid must not publish unknown operators");
@@ -481,53 +582,134 @@ void public_abi_v1_rejects_invalid_handshake_without_writing_output() {
     static_assert(offsetof(fullmag_fem_gpu_execution_receipt_v1, hot_loop_compute_d2h_bytes) == 120);
     static_assert(offsetof(fullmag_fem_gpu_execution_receipt_v1, hot_loop_compute_host_sync_count) == 128);
 
-    fullmag_fem_gpu_execution_receipt_v1 receipt{};
+    fullmag_fem_gpu_execution_receipt_v1 receipt;
+    std::memset(&receipt, 0xa5, sizeof(receipt));
     receipt.abi_version = FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1;
     receipt.struct_size = sizeof(receipt);
-    receipt.execution_class = UINT32_C(0xfeedbeef);
+    auto before = receipt;
     check(
         fullmag_fem_backend_gpu_execution_receipt_v1(nullptr, &receipt) ==
             FULLMAG_FEM_ERR_INVALID,
         "execution receipt ABI must reject null handles");
     check(
-        receipt.execution_class == UINT32_C(0xfeedbeef),
-        "execution receipt ABI must not write output after a failed handshake");
+        std::memcmp(&receipt, &before, sizeof(receipt)) == 0,
+        "null handle must not write any output byte");
 
     fullmag_fem_backend handle{};
     receipt.abi_version = FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1 + 1;
+    before = receipt;
     check(
         fullmag_fem_backend_gpu_execution_receipt_v1(&handle, &receipt) ==
             FULLMAG_FEM_ERR_INVALID,
         "execution receipt ABI must reject unknown versions");
     check(
-        receipt.execution_class == UINT32_C(0xfeedbeef),
-        "bad version must not mutate the receipt");
+        std::memcmp(&receipt, &before, sizeof(receipt)) == 0,
+        "bad version must not write any output byte");
 
     receipt.abi_version = FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1;
     receipt.struct_size = sizeof(receipt) - 1;
+    before = receipt;
     check(
         fullmag_fem_backend_gpu_execution_receipt_v1(&handle, &receipt) ==
             FULLMAG_FEM_ERR_INVALID,
         "execution receipt ABI must reject unknown struct sizes");
     check(
-        receipt.execution_class == UINT32_C(0xfeedbeef),
-        "bad struct size must not mutate the receipt");
+        std::memcmp(&receipt, &before, sizeof(receipt)) == 0,
+        "bad struct size must not write any output byte");
+
+    check(
+        fullmag_fem_backend_gpu_execution_receipt_v1(&handle, nullptr) ==
+            FULLMAG_FEM_ERR_INVALID,
+        "execution receipt ABI must reject null output");
+
+    auto &state = handle.context.gpu_state.execution_receipt;
+    receipt.struct_size = sizeof(receipt);
+    before = receipt;
+    check(
+        fullmag_fem_backend_gpu_execution_receipt_v1(&handle, &receipt) ==
+            FULLMAG_FEM_ERR_INVALID,
+        "execution receipt ABI must reject an unresolved native plan");
+    check(
+        std::memcmp(&receipt, &before, sizeof(receipt)) == 0,
+        "unresolved native plan must not write any output byte");
+
+    state.plan_resolved = true;
+    state.accounting_valid = false;
+    before = receipt;
+    check(
+        fullmag_fem_backend_gpu_execution_receipt_v1(&handle, &receipt) ==
+            FULLMAG_FEM_ERR_INTERNAL,
+        "execution receipt ABI must reject invalid native accounting");
+    check(
+        std::memcmp(&receipt, &before, sizeof(receipt)) == 0,
+        "invalid native accounting must not write any output byte");
+
+    state.accounting_valid = true;
+    state.execution_class = FemGpuExecutionClass::HybridCpuPoisson;
+    state.device_ordinal = 17;
+    state.precision = 19;
+    state.integrator = 23;
+    state.required_operator_mask = UINT64_C(0x3ff);
+    state.resolved_device_operator_mask = UINT64_C(0x155);
+    state.resolved_host_operator_mask = UINT64_C(0x2aa);
+    state.resolved_unknown_operator_mask = UINT64_C(0x25);
+    state.executed_device_operator_mask = UINT64_C(0x149);
+    state.executed_host_operator_mask = UINT64_C(0x2b6);
+    state.executed_unknown_operator_mask = UINT64_C(0x12);
+    state.fallback_count = 29;
+    state.accepted_step_count = 31;
+    state.rejected_attempt_count = 37;
+    state.failed_attempt_count = 41;
+    state.hot_loop_compute_h2d_bytes = 43;
+    state.hot_loop_compute_d2h_bytes = 47;
+    state.hot_loop_compute_host_sync_count = 53;
 
     receipt.struct_size = sizeof(receipt);
     check(
         fullmag_fem_backend_gpu_execution_receipt_v1(&handle, &receipt) == FULLMAG_FEM_OK,
         "execution receipt ABI must accept the exact v1 handshake");
     check(
+        receipt.abi_version == FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1,
+        "receipt ABI version mismatch");
+    check(receipt.struct_size == sizeof(receipt), "receipt struct size mismatch");
+    check(
+        receipt.execution_class == FULLMAG_FEM_GPU_EXECUTION_HYBRID_CPU_POISSON,
+        "receipt execution class mismatch");
+    check(receipt.precision == 19, "receipt precision mismatch");
+    check(receipt.integrator == 23, "receipt integrator mismatch");
+    check(receipt.device_ordinal == 17, "receipt device ordinal mismatch");
+    check(receipt.required_operator_mask == UINT64_C(0x3ff), "required mask mismatch");
+    check(receipt.resolved_device_operator_mask == UINT64_C(0x155), "resolved device mask mismatch");
+    check(receipt.resolved_host_operator_mask == UINT64_C(0x2aa), "resolved host mask mismatch");
+    check(receipt.resolved_unknown_operator_mask == UINT64_C(0x25), "resolved unknown mask mismatch");
+    check(receipt.executed_device_operator_mask == UINT64_C(0x149), "executed device mask mismatch");
+    check(receipt.executed_host_operator_mask == UINT64_C(0x2b6), "executed host mask mismatch");
+    check(receipt.executed_unknown_operator_mask == UINT64_C(0x12), "executed unknown mask mismatch");
+    check(receipt.fallback_count == 29, "fallback count mismatch");
+    check(receipt.accepted_step_count == 31, "accepted step count mismatch");
+    check(receipt.rejected_attempt_count == 37, "rejected attempt count mismatch");
+    check(receipt.failed_attempt_count == 41, "failed attempt count mismatch");
+    check(receipt.hot_loop_compute_h2d_bytes == 43, "compute H2D counter mismatch");
+    check(receipt.hot_loop_compute_d2h_bytes == 47, "compute D2H counter mismatch");
+    check(receipt.hot_loop_compute_host_sync_count == 53, "compute sync counter mismatch");
+
+    state.execution_class = static_cast<FemGpuExecutionClass>(UINT32_C(0xfeedbeef));
+    receipt.abi_version = FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1;
+    receipt.struct_size = sizeof(receipt);
+    check(
+        fullmag_fem_backend_gpu_execution_receipt_v1(&handle, &receipt) == FULLMAG_FEM_OK,
+        "unknown internal execution class query must remain ABI-safe");
+    check(
         receipt.execution_class == FULLMAG_FEM_GPU_EXECUTION_UNKNOWN,
-        "unresolved execution receipt must fail closed as unknown");
-    check(receipt.required_operator_mask == 0, "unresolved receipt must not fabricate operators");
-    check(receipt.hot_loop_compute_h2d_bytes == 0, "fresh receipt must copy zero transfer audit");
+        "unknown internal execution class must map fail-closed to public unknown");
 }
 
 } // namespace
 
 int main() {
     accepted_device_attempt_publishes_complete_receipt();
+    committed_transfer_snapshot_is_scoped_to_the_current_attempt();
+    late_outer_attempt_transfer_is_rejected_before_commit();
     explicit_hybrid_publishes_device_and_host_masks();
     rejected_attempt_does_not_publish_partial_masks();
     failed_attempt_does_not_publish_partial_masks();
