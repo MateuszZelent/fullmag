@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildObjectMagneticTextureAssetDraft,
   buildMagnetizationAssignmentPatch,
+  buildMagnetizationTransactionRequest,
+  normalizeUniformMagnetizationDirection,
   normalizeMagnetizationRef,
   objectMagneticTextureDraftFromModel,
   objectMagneticTextureDraftDirty,
@@ -599,6 +601,78 @@ describe("ObjectMagneticTexturePanelModel", () => {
       directionY: "0",
       directionZ: "0",
       presetKind: "uniform",
+    });
+  });
+
+  it("normalizes non-zero uniform directions and rejects the zero vector", () => {
+    const model = {
+      assignment: "object",
+      asset: null,
+      assetId: "unassigned",
+      assetKind: "unassigned",
+      assetLabel: "unassigned",
+      baseRevision: 12,
+      mapping: "not configured",
+      mode: "committed" as const,
+      objectId: "body",
+      presetKind: "uniform",
+      regionId: null,
+      targetKind: "object" as const,
+      textureTransform: "not configured",
+    };
+    const draft = {
+      ...objectMagneticTextureDraftFromModel(model),
+      directionX: "3",
+      directionY: "4",
+      directionZ: "0",
+    };
+
+    expect(normalizeUniformMagnetizationDirection([3, 4, 0])).toEqual([
+      0.6, 0.8, 0,
+    ]);
+    expect(() => normalizeUniformMagnetizationDirection([0, 0, 0])).toThrow(
+      "Uniform magnetization direction must be nonzero.",
+    );
+    expect(buildObjectMagneticTextureAssetDraft(model, draft)).toMatchObject({
+      preset_params: { direction: [0.6, 0.8, 0] },
+    });
+  });
+
+  it("builds one revision-checked transaction for object and region assignments", () => {
+    const objectModel = {
+      assignment: "object",
+      asset: null,
+      assetId: "unassigned",
+      assetKind: "unassigned",
+      assetLabel: "unassigned",
+      baseRevision: 12,
+      mapping: "not configured",
+      mode: "committed" as const,
+      objectId: "body",
+      presetKind: "uniform",
+      regionId: null,
+      targetKind: "object" as const,
+      textureTransform: "not configured",
+    };
+    const asset = buildObjectMagneticTextureAssetDraft(
+      objectModel,
+      objectMagneticTextureDraftFromModel(objectModel),
+    );
+    expect(buildMagnetizationTransactionRequest(objectModel, asset, asset.id)).toEqual({
+      base_revision: 12,
+      kind: "patch_magnetization",
+      object_id: "body",
+      asset,
+      magnetization_ref: asset.id,
+    });
+
+    const regionModel = { ...objectModel, regionId: "region:body", targetKind: "region" as const };
+    expect(buildMagnetizationTransactionRequest(regionModel, asset, null)).toMatchObject({
+      base_revision: 12,
+      kind: "patch_magnetization",
+      object_id: "body",
+      region_id: "region:body",
+      magnetization_ref: null,
     });
   });
 });

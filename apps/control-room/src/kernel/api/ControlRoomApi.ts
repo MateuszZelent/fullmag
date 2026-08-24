@@ -263,6 +263,7 @@ import type {
   GpuTelemetryResource,
   HealthResource,
   ImportSessionAssetRequest,
+  JsonObject,
   LiveStatusResource,
   PlatformCapabilitiesResource,
   MagnetizationAssetPatchRequest,
@@ -1790,6 +1791,24 @@ export class ControlRoomApi {
       this.postJson<AuthoringTransactionResponse, AuthoringTransactionRequest>(
         MODEL_TRANSACTIONS_PATH,
         transaction,
+        options,
+      ),
+    patchMagnetization: (
+      objectId: string,
+      regionId: string | null,
+      asset: JsonObject | null,
+      magnetizationRef: string | null,
+      options?: AuthoringWriteOptions,
+    ) =>
+      this.model.commitTransaction(
+        {
+          ...baseRevisionPayload(options),
+          ...(asset ? { asset } : {}),
+          kind: "patch_magnetization",
+          magnetization_ref: magnetizationRef,
+          object_id: objectId,
+          ...(regionId ? { region_id: regionId } : {}),
+        },
         options,
       ),
     createObject: (request: ObjectCreateRequest, options?: RequestOptions) =>

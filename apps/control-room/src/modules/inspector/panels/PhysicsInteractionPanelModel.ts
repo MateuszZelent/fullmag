@@ -130,6 +130,76 @@ export function draftKeyForInteraction(
   ].join(":");
 }
 
+export function interactionMutationKey({
+  interactionId,
+  objectId,
+  regionId,
+  sessionId,
+}: {
+  interactionId: PhysicsInteractionId;
+  objectId: string | null | undefined;
+  regionId: string | null | undefined;
+  sessionId: string | null | undefined;
+}): string {
+  const scope = regionId
+    ? regionId.startsWith("region:")
+      ? regionId
+      : `region:${regionId}`
+    : objectId
+      ? `object:${objectId}`
+      : "study";
+  return `${sessionId ?? "current"}:${scope}:${interactionId}`;
+}
+
+export function physicsInteractionDraftDirty(
+  draft: PhysicsInteractionDraft,
+  baseDraft: PhysicsInteractionDraft,
+): boolean {
+  if (
+    draft.id !== baseDraft.id ||
+    draft.enabled !== baseDraft.enabled ||
+    draft.present !== baseDraft.present
+  ) {
+    return true;
+  }
+  const keys = new Set([
+    ...Object.keys(draft.values),
+    ...Object.keys(baseDraft.values),
+  ]);
+  for (const key of keys) {
+    if (interactionDraftValueDirty(draft.values[key], baseDraft.values[key])) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function interactionDraftValueDirty(
+  value: string | string[] | undefined,
+  baseValue: string | string[] | undefined,
+): boolean {
+  if (Array.isArray(value) || Array.isArray(baseValue)) {
+    if (!Array.isArray(value) || !Array.isArray(baseValue) || value.length !== baseValue.length) {
+      return true;
+    }
+    return value.some((entry, index) =>
+      interactionDraftValueDirty(entry, baseValue[index]),
+    );
+  }
+  if (value === undefined || baseValue === undefined) return value !== baseValue;
+  const trimmedValue = value.trim();
+  const trimmedBaseValue = baseValue.trim();
+  if (trimmedValue === "" || trimmedBaseValue === "") {
+    return trimmedValue !== trimmedBaseValue;
+  }
+  const numeric = Number(trimmedValue);
+  const baseNumeric = Number(trimmedBaseValue);
+  if (Number.isFinite(numeric) && Number.isFinite(baseNumeric)) {
+    return numeric !== baseNumeric;
+  }
+  return trimmedValue !== trimmedBaseValue;
+}
+
 export function buildInteractionApplyPatch(
   draft: PhysicsInteractionDraft,
 ): InteractionApplyPatchResult {

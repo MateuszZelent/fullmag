@@ -178,9 +178,10 @@ describe("ObjectRegionsPanel physical scalar inputs", () => {
       "utf8",
     );
 
-    expect(texturePanel).toContain("buildRegionTextureOverridePatch(");
-    expect(texturePanel).toContain("api.model.patchObjectRegionResource(");
-    expect(texturePanel).not.toContain("api.model.patchRegion(");
+    expect(texturePanel).toContain("buildMagnetizationTransactionRequest(");
+    expect(texturePanel).toContain("api.model.commitTransaction(");
+    expect(texturePanel).not.toContain("patchMagnetizationAsset(");
+    expect(texturePanel).not.toContain("patchObjectRegionResource(");
   });
 
   it("syncs the canonical authoring script after region edits", () => {

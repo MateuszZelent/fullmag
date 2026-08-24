@@ -58,9 +58,11 @@ import {
   draftFromInteractionResource,
   draftFromStudyScene,
   draftKeyForInteraction,
+  interactionMutationKey,
   isDeferredInteraction,
   isWritableObjectInteraction,
   isWritableStudyInteraction,
+  physicsInteractionDraftDirty,
   type PhysicsInteractionDraft,
   type PhysicsInteractionId,
 } from "./PhysicsInteractionPanelModel";
@@ -89,40 +91,61 @@ type Feedback =
   | null;
 
 interface PhysicsInteractionPanelState {
-  feedback: Feedback;
   helpOpen: boolean;
   interactionSelection: InteractionSelectionState;
-  pending: boolean;
+  mutations: Record<string, { feedback: Feedback; pending: boolean }>;
 }
 
 type PhysicsInteractionPanelAction =
-  | { type: "setFeedback"; feedback: Feedback }
   | { type: "setHelpOpen"; open: boolean }
   | { type: "setInteractionSelection"; selection: InteractionSelectionState }
-  | { type: "setPending"; pending: boolean };
+  | { type: "setMutation"; key: string; pending?: boolean; feedback?: Feedback };
 
 function physicsInteractionPanelReducer(
   state: PhysicsInteractionPanelState,
   action: PhysicsInteractionPanelAction,
 ): PhysicsInteractionPanelState {
   switch (action.type) {
-    case "setFeedback":
-      return { ...state, feedback: action.feedback };
     case "setHelpOpen":
       return { ...state, helpOpen: action.open };
     case "setInteractionSelection":
       return {
         ...state,
-        feedback: null,
         interactionSelection: action.selection,
       };
-    case "setPending":
-      return { ...state, pending: action.pending };
+    case "setMutation": {
+      const previous = state.mutations[action.key] ?? {
+        feedback: null,
+        pending: false,
+      };
+      return {
+        ...state,
+        mutations: {
+          ...state.mutations,
+          [action.key]: {
+            feedback:
+              action.feedback === undefined ? previous.feedback : action.feedback,
+            pending: action.pending === undefined ? previous.pending : action.pending,
+          },
+        },
+      };
+    }
   }
 }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isRevisionConflict(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: unknown; status?: unknown };
+  return (
+    candidate.status === 409 &&
+    (candidate.code === "revision_conflict" ||
+      candidate.code === "scene_revision_conflict" ||
+      candidate.code == null)
+  );
 }
 
 type PhysicsInteractionSpec = InteractionSpec;
@@ -166,6 +189,9 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
   const sessionDiscretization = useSessionStatusSelector(
     (status) => status.data?.domain.discretization ?? null,
   );
+  const sessionId = useSessionStatusSelector(
+    (status) => status.data?.session.session_id ?? "current",
+  );
   const activeLane = useActiveLaneCapabilities();
   const interactionDiscretization = normalizeInteractionDiscretization(
     sessionDiscretization,
@@ -176,18 +202,27 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
   const selectedInteractionId =
     interactionIdFromSelection(selection.nodeId) ?? "exchange";
   const [state, dispatch] = useReducer(physicsInteractionPanelReducer, {
-    feedback: null,
     helpOpen: false,
     interactionSelection: {
       interactionId: selectedInteractionId,
       nodeId: selection.nodeId,
     },
-    pending: false,
+    mutations: {},
   });
   const interactionId =
     state.interactionSelection.nodeId === selection.nodeId
       ? state.interactionSelection.interactionId
       : selectedInteractionId;
+  const mutationKey = interactionMutationKey({
+    interactionId,
+    objectId,
+    regionId: selectedRegionId,
+    sessionId,
+  });
+  const mutation = state.mutations[mutationKey] ?? {
+    feedback: null,
+    pending: false,
+  };
 
   const spec = interactionOptions.find((entry) => entry.id === interactionId);
   const interactionAvailability = interactionAvailabilityForDiscretization(
@@ -219,7 +254,8 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     enabled:
       interactionAvailability.status === "supported" &&
       activeLaneOperation.enabled &&
-      isWritableStudyInteraction(interactionId),
+      (isWritableStudyInteraction(interactionId) ||
+        isWritableObjectInteraction(interactionId)),
   });
   const resource =
     objectInteraction.data ??
@@ -307,7 +343,8 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
   const applyInteraction = useCallback(async (): Promise<boolean> => {
     if (!activeLaneOperation.enabled) {
       dispatch({
-        type: "setFeedback",
+        type: "setMutation",
+        key: mutationKey,
         feedback: { kind: "error", message: activeLaneOperation.reason },
       });
       return false;
@@ -318,14 +355,16 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     );
     if (currentLaneIssue) {
       dispatch({
-        type: "setFeedback",
+        type: "setMutation",
+        key: mutationKey,
         feedback: { kind: "error", message: currentLaneIssue.error },
       });
       return false;
     }
     if (isWritableObjectInteraction(interactionId) && !objectId) {
       dispatch({
-        type: "setFeedback",
+        type: "setMutation",
+        key: mutationKey,
         feedback: { kind: "error", message: "No selected scene object." },
       });
       return false;
@@ -334,13 +373,14 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     const result = buildInteractionApplyPatch(draft);
     if ("error" in result) {
       dispatch({
-        type: "setFeedback",
+        type: "setMutation",
+        key: mutationKey,
         feedback: { kind: "error", message: result.error },
       });
       return false;
     }
 
-    dispatch({ type: "setPending", pending: true });
+    dispatch({ type: "setMutation", key: mutationKey, pending: true });
     try {
       if (result.storage === "object_interaction") {
         await commitObjectInteractionMutation({
@@ -350,7 +390,10 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
             api.model.patchObjectInteraction(
               objectId ?? "",
               objectInteractionKind,
-              result.patch,
+              {
+                ...result.patch,
+                base_revision: resource.scene_revision,
+              },
             ),
           resources,
         });
@@ -365,21 +408,36 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
         );
       }
       dispatch({
-        type: "setFeedback",
+        type: "setMutation",
+        key: mutationKey,
         feedback: {
-        kind: "success",
-        message: `${spec?.label ?? interactionId} updated.`,
+          kind: "success",
+          message: `${spec?.label ?? interactionId} updated.`,
         },
       });
       return true;
     } catch (error) {
+      if (isRevisionConflict(error)) {
+        scene.refetch();
+        dispatch({
+          type: "setMutation",
+          key: mutationKey,
+          feedback: {
+            kind: "error",
+            message:
+              "Scene changed while applying this interaction. Draft preserved; scene refetched. Review and retry.",
+          },
+        });
+        return false;
+      }
       dispatch({
-        type: "setFeedback",
+        type: "setMutation",
+        key: mutationKey,
         feedback: { kind: "error", message: errorMessage(error) },
       });
       return false;
     } finally {
-      dispatch({ type: "setPending", pending: false });
+      dispatch({ type: "setMutation", key: mutationKey, pending: false });
     }
   }, [
     activeLaneOperation,
@@ -391,7 +449,10 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     objectId,
     objectInteractionKind,
     resources,
+    scene,
     spec,
+    mutationKey,
+    resource.scene_revision,
   ]);
 
   if (interactionDiscretization === "unknown") {
@@ -431,7 +492,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
   const physicsStatus = !activeLaneOperation.enabled
     ? interactionAvailability.status === "unsupported" ? "unsupported" as const : "blocked" as const
     : draft.enabled ? "active" as const : "inactive" as const;
-  const draftDirty = JSON.stringify(draft) !== JSON.stringify(baseDraft);
+  const draftDirty = physicsInteractionDraftDirty(draft, baseDraft);
   const editSessionValid = Boolean(
     spec &&
       activeLaneOperation.enabled &&
@@ -445,13 +506,13 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     : laneIssue?.error;
   const resetInteractionDraft = () => {
     setDraftState({ draft: baseDraft, key: draftKey });
-    dispatch({ type: "setFeedback", feedback: null });
+    dispatch({ type: "setMutation", key: mutationKey, feedback: null });
   };
   return (
     <PhysicsInspectorOverview
       editSession={{
         apply: applyInteraction,
-        applying: state.pending,
+        applying: mutation.pending,
         dirty: draftDirty,
         lockReason: editSessionLockReason,
         mode: "staged",
@@ -552,12 +613,12 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
       />
       <PhysicsInteractionActionsSection
         canApply={canApply}
-        feedback={state.feedback}
-        pending={state.pending}
+        feedback={mutation.feedback}
+        pending={mutation.pending}
         onApply={() => void applyInteraction()}
         onRevert={() => {
           setDraftState({ draft: baseDraft, key: draftKey });
-          dispatch({ type: "setFeedback", feedback: null });
+          dispatch({ type: "setMutation", key: mutationKey, feedback: null });
         }}
       />
       {spec ? (

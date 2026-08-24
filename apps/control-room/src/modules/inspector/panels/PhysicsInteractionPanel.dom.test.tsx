@@ -36,6 +36,20 @@ describe("PhysicsInteractionPanel lane contract", () => {
     expect(source).toContain("activeLaneOperation.reason");
   });
 
+  it("keeps pending and revision-conflict recovery scoped to one interaction", () => {
+    const source = readFileSync(
+      new URL("./PhysicsInteractionPanel.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("interactionMutationKey(");
+    expect(source).toContain("mutations: Record<string");
+    expect(source).toContain("base_revision: resource.scene_revision");
+    expect(source).toContain("scene.refetch()");
+    expect(source).toContain("Draft preserved; scene refetched");
+    expect(source).not.toContain("JSON.stringify(draft)");
+  });
+
   it("invalidates from the final object interaction ACK without a synthetic fallback", async () => {
     const patch = vi.fn(async () => ({ scene_revision: 41 }));
     const invalidate = vi.fn();

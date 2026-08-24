@@ -439,6 +439,13 @@ export type StudyRuntimeResource =
 export type AuthoringTransactionRequest =
   | { kind: "replace_scene"; scene: JsonObject }
   | { kind: "merge_patch"; merge_patch: JsonObject }
+  | (BaseAuthoringTransaction & {
+      asset?: JsonObject | null;
+      kind: "patch_magnetization";
+      magnetization_ref?: string | null;
+      object_id: string;
+      region_id?: string | null;
+    })
   | (BaseAuthoringTransaction & ObjectGeometryPatchRequest & {
       kind: "patch_object_geometry";
       object_id: string;
@@ -553,6 +560,7 @@ export interface ObjectRegionPatchRequest extends BaseAuthoringTransaction {
 export type ObjectRegionReorderRequest =
   components["schemas"]["ObjectRegionReorderRequest"];
 export interface ObjectInteractionPatchRequest {
+  base_revision?: number | null;
   enabled?: boolean | null;
   params?: JsonObject;
   present?: boolean | null;

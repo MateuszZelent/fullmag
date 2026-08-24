@@ -3725,6 +3725,15 @@ export interface components {
             kind: "merge_patch";
             merge_patch: Record<string, never>;
         } | {
+            asset?: Record<string, never> | null;
+            /** Format: int64 */
+            base_revision?: number | null;
+            /** @enum {string} */
+            kind: "patch_magnetization";
+            magnetization_ref?: string | null;
+            object_id: string;
+            region_id?: string | null;
+        } | {
             /** Format: int64 */
             base_revision?: number | null;
             geometry: Record<string, never>;
@@ -7487,6 +7496,8 @@ export interface components {
             transform?: Record<string, never> | null;
         };
         ObjectInteractionPatchRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
             enabled?: boolean | null;
             params: Record<string, never>;
             present?: boolean | null;

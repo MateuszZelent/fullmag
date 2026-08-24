@@ -520,6 +520,50 @@
           },
           {
             "properties": {
+              "asset": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "patch_magnetization"
+                ],
+                "type": "string"
+              },
+              "magnetization_ref": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "object_id": {
+                "type": "string"
+              },
+              "region_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "object_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
               "base_revision": {
                 "format": "int64",
                 "minimum": 0,
@@ -15440,6 +15484,14 @@
       },
       "ObjectInteractionPatchRequest": {
         "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "enabled": {
             "type": [
               "boolean",

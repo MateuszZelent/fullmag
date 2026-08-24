@@ -3507,6 +3507,14 @@ async fn status_exposes_planner_owned_active_lane_capability_snapshot() {
         "capability_supported"
     );
     assert_eq!(
+        active_lane["operations"]["initial_magnetization.uniform"]["state"],
+        "supported"
+    );
+    assert_eq!(
+        active_lane["operations"]["initial_magnetization.vortex"]["state"],
+        "supported"
+    );
+    assert_eq!(
         active_lane["operations"]["study.frequency_response"]["state"],
         "semantic_only"
     );
@@ -3527,7 +3535,7 @@ async fn status_exposes_planner_owned_active_lane_capability_snapshot() {
             .as_object()
             .expect("operation capability map")
             .len(),
-        29
+        33
     );
     assert!(active_lane["operations"]["study.frequency_response"]["reason"].is_string());
     assert!(active_lane["operations"]["study.frequency_response"]["requires"].is_array());
@@ -3558,6 +3566,8 @@ async fn status_active_lane_fails_closed_when_planner_capabilities_are_missing()
         "surface_coloring",
         "region_membership",
         "interaction.demag",
+        "initial_magnetization.uniform",
+        "initial_magnetization.vortex",
         "study.relaxation",
         "study.fft",
     ] {
@@ -3759,6 +3769,8 @@ fn active_lane_operation_catalog_covers_the_canonical_interaction_catalog() {
         "interaction.oersted_field",
         "interaction.magnetoelastic",
         "interaction.thermal",
+        "initial_magnetization.uniform",
+        "initial_magnetization.vortex",
     ] {
         assert!(
             crate::router_v2::handlers::sessions::status::ACTIVE_LANE_OPERATION_IDS
@@ -19425,6 +19437,75 @@ async fn authoring_region_patch_commits_magnetization_override_without_mesh_dirt
 }
 
 #[tokio::test]
+async fn authoring_magnetization_transaction_commits_asset_and_assignment_atomically() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 30;
+    let mut asset = serde_json::to_value(&scene.magnetization_assets[0]).unwrap();
+    asset["id"] = serde_json::json!("mag-atomic");
+    asset["name"] = serde_json::json!("Atomic uniform");
+    asset["ui_label"] = serde_json::json!("Atomic uniform");
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/transactions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "patch_magnetization",
+                        "base_revision": 30,
+                        "object_id": "body",
+                        "asset": asset,
+                        "magnetization_ref": "mag-atomic"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["transaction_kind"], "patch_magnetization");
+    assert_eq!(json["scene_revision"], 31);
+    assert_eq!(json["committed_scene"]["objects"][0]["magnetization_ref"], "mag-atomic");
+    assert!(json["committed_scene"]["magnetization_assets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["id"] == "mag-atomic"));
+
+    let stale = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/transactions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "patch_magnetization",
+                        "base_revision": 30,
+                        "object_id": "body",
+                        "magnetization_ref": null
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
 async fn authoring_material_field_transaction_commits_without_mesh_dirty() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
@@ -19984,6 +20065,39 @@ async fn authoring_object_interaction_patch_updates_uniaxial_params() {
         })
         .expect("uniaxial interaction");
     assert_eq!(interaction.enabled, true);
+}
+
+#[tokio::test]
+async fn authoring_object_interaction_patch_rejects_stale_base_revision() {
+    let mut scene = sample_scene_document();
+    scene.revision = 50;
+    let object_id = scene.objects[0].id.clone();
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state);
+    let request = || {
+        Request::builder()
+            .method("PATCH")
+            .uri(format!(
+                "/v2/sessions/current/model/objects/{object_id}/interactions/uniaxial_anisotropy"
+            ))
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "base_revision": 50,
+                    "present": true,
+                    "enabled": true,
+                    "params": {"ku1": 42.0, "axis": [1.0, 0.0, 0.0]}
+                })
+                .to_string(),
+            ))
+            .unwrap()
+    };
+
+    assert_eq!(app.clone().oneshot(request()).await.unwrap().status(), StatusCode::OK);
+    assert_eq!(app.oneshot(request()).await.unwrap().status(), StatusCode::CONFLICT);
 }
 
 #[tokio::test]

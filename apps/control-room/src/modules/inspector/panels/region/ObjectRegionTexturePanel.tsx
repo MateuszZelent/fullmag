@@ -12,15 +12,17 @@ import {
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import {
-  buildMagnetizationAssetPatch as buildTextureAssetPatch,
-  buildRegionTextureOverridePatch,
-} from "@/shared/domain/magnetization-texture/draftModel";
+  resolveActiveLaneOperation,
+  useActiveLaneCapabilities,
+  type ActiveLaneOperationResolution,
+} from "@/kernel/resources/useActiveLaneCapabilities";
 import {
   ObjectRegionMetadataSection,
   type RegionSubPanelProps,
 } from "./shared";
 import {
   buildObjectMagneticTextureAssetDraft,
+  buildMagnetizationTransactionRequest,
   objectMagneticTextureDraftFromModel,
   objectMagneticTextureDraftDirty,
   objectMagneticTextureDraftIdentityKey,
@@ -50,6 +52,7 @@ export function ObjectRegionTexturePanel({
 }: RegionSubPanelProps) {
   const kernel = useKernel();
   const { api, resources } = kernel;
+  const activeLane = useActiveLaneCapabilities();
   const scene = useSceneResource();
   const regions = useModelRegionsResource();
   
@@ -103,6 +106,16 @@ export function ObjectRegionTexturePanel({
     isDirty: objectMagneticTextureDraftDirty,
     state: draftState,
   });
+  const textureCapabilityOperation =
+    draft.presetKind === "uniform"
+      ? "initial_magnetization.uniform"
+      : draft.presetKind === "vortex"
+        ? "initial_magnetization.vortex"
+        : null;
+  const textureCapability: ActiveLaneOperationResolution | null =
+    textureCapabilityOperation
+      ? resolveActiveLaneOperation(activeLane, textureCapabilityOperation)
+      : null;
 
   function updateDraft(patch: Partial<ObjectMagneticTextureDraft>): void {
     setDraftState(
@@ -126,19 +139,19 @@ export function ObjectRegionTexturePanel({
       setFeedback({ kind: "error", message: "No committed scene object." });
       return;
     }
-    const target = { kind: "region" as const, objectId: model.objectId, regionId: model.regionId! };
+    if (textureCapability && !textureCapability.enabled) {
+      setFeedback({ kind: "error", message: textureCapability.reason });
+      return;
+    }
+    if (!model.regionId) {
+      setFeedback({ kind: "error", message: "No selected texture target." });
+      return;
+    }
     setPending(true);
     try {
       const asset = buildObjectMagneticTextureAssetDraft(model, draft);
-      const assetResponse = await api.model.patchMagnetizationAsset(
-        asset.id,
-        buildTextureAssetPatch(asset, model.baseRevision),
-      );
-      const response = await api.model.patchObjectRegionResource(
-        target.objectId,
-        target.regionId,
-        buildRegionTextureOverridePatch(asset),
-        { baseRevision: assetResponse.scene_revision ?? model.baseRevision ?? undefined },
+      const response = await api.model.commitTransaction(
+        buildMagnetizationTransactionRequest(model, asset, asset.id),
       );
       const revision = acknowledgedAuthoringSceneRevision(response);
       invalidateTextureResources(revision);
@@ -167,14 +180,14 @@ export function ObjectRegionTexturePanel({
       setFeedback({ kind: "error", message: "No committed scene object." });
       return;
     }
-    const target = { kind: "region" as const, objectId: model.objectId, regionId: model.regionId! };
+    if (!model.regionId) {
+      setFeedback({ kind: "error", message: "No selected texture target." });
+      return;
+    }
     setPending(true);
     try {
-      const response = await api.model.patchObjectRegionResource(
-        target.objectId,
-        target.regionId,
-        buildRegionTextureOverridePatch(null),
-        { baseRevision: model.baseRevision ?? undefined },
+      const response = await api.model.commitTransaction(
+        buildMagnetizationTransactionRequest(model, null, null),
       );
       const revision = acknowledgedAuthoringSceneRevision(response);
       invalidateTextureResources(revision);
@@ -233,6 +246,7 @@ export function ObjectRegionTexturePanel({
       <MagneticTextureRawAssetSection model={model} />
 
       <MagneticTextureActionsSection
+        capability={textureCapability}
         dirty={dirty}
         feedback={feedback}
         model={model}

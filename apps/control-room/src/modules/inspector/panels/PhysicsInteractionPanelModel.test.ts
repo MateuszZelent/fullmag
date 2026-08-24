@@ -12,6 +12,8 @@ import {
   interactionSelectOptions,
   isWritableObjectInteraction,
   isWritableStudyInteraction,
+  interactionMutationKey,
+  physicsInteractionDraftDirty,
 } from "./PhysicsInteractionPanelModel";
 
 describe("PhysicsInteractionPanelModel", () => {
@@ -138,5 +140,51 @@ describe("PhysicsInteractionPanelModel", () => {
 
     expect(draftKeyForInteraction("body", draft)).toContain("demag");
     expect(draftKeyForInteraction("body", draft)).toContain("poisson_dirichlet");
+  });
+
+  it("scopes interaction mutations by session, target, region, and interaction", () => {
+    expect(
+      interactionMutationKey({
+        interactionId: "demag",
+        objectId: "body",
+        regionId: "region:body",
+        sessionId: "session-1",
+      }),
+    ).toBe("session-1:region:body:demag");
+    expect(
+      interactionMutationKey({
+        interactionId: "exchange",
+        objectId: "body",
+        regionId: null,
+        sessionId: "session-1",
+      }),
+    ).toBe("session-1:object:body:exchange");
+  });
+
+  it("compares interaction drafts semantically instead of serializing key order", () => {
+    const base = {
+      enabled: true,
+      id: "uniaxial_anisotropy" as const,
+      present: true,
+      values: { axis: ["1", "0", "0"], ku1: "1200" },
+    };
+    expect(
+      physicsInteractionDraftDirty(
+        { ...base, values: { ku1: "1200.0", axis: ["1.0", "0", "0"] } },
+        base,
+      ),
+    ).toBe(false);
+    expect(
+      physicsInteractionDraftDirty(
+        { ...base, values: { ...base.values, ku1: "1201" } },
+        base,
+      ),
+    ).toBe(true);
+    expect(
+      physicsInteractionDraftDirty(
+        { ...base, values: { ...base.values, ku1: "" } },
+        { ...base, values: { ...base.values, ku1: "0" } },
+      ),
+    ).toBe(true);
   });
 });

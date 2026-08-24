@@ -16,6 +16,8 @@ export type ActiveLaneOperationId =
   | "air_void_overlay"
   | "region_membership"
   | "hover_select_cell"
+  | "initial_magnetization.uniform"
+  | "initial_magnetization.vortex"
   | "interaction.exchange"
   | "interaction.demag"
   | "interaction.dmi"
