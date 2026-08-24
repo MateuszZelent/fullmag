@@ -55,6 +55,7 @@ run_gate() {
       ;;
     browser-fixture-source-verify)
       artifact_root="${CONTROL_ROOM_AUDIT_ARTIFACTS_DIR:-apps/control-room/.artifacts/viewport-3d-browser-audit}"
+      git status --short
       python3 scripts/capture_source_snapshot_identity.py \
         --repo-root . \
         --compare "$artifact_root/source-snapshot.v2.json"

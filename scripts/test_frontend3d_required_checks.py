@@ -218,3 +218,8 @@ def test_required_contexts_and_proof_output_are_fail_closed() -> None:
 def test_browser_audit_build_keeps_next_env_source_identity_stable() -> None:
     next_env = (REPO_ROOT / "apps/control-room/next-env.d.ts").read_text()
     assert 'import "./.next-audit/types/routes.d.ts";' in next_env
+
+
+def test_browser_source_verify_emits_dirty_paths_before_comparison() -> None:
+    dispatcher = (REPO_ROOT / "scripts/ci/run_frontend3d_required_gate.sh").read_text()
+    assert "git status --short" in dispatcher
