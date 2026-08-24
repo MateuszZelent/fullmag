@@ -175,20 +175,20 @@ Kontrakt quantity ma cztery poziomy:
 | 2 | `H_ex` | 3D vector | magnetic | C | C | C | C | C | exchange |
 | 3 | `H_demag` | 3D vector | full | C | C | C | C | C | główne pole Airboxa |
 | 4 | `H_ext` | 3D vector | full | C | C | C | C | C | external field |
-| 5 | `H_ant` | 3D vector | full | C | N | N | C | C | CUDA FDM i multilayer nie materializują anteny |
-| 6 | `H_drive` | 3D vector | magnetic | C | N | N | C | C | frontend ma alias `B_drive` |
+| 5 | `H_ant` | 3D vector | full | C | N | N | N | N | tylko FDM CPU ma bieżący materializator; CUDA FDM, multilayer i native FEM odrzucają |
+| 6 | `H_drive` | 3D vector | magnetic | N | N | N | C | C | FDM CPU/GPU i multilayer nie materializują; frontend ma alias `B_drive` |
 | 7 | `H_eff` | 3D vector | full | A | A | A | A | A | Airbox support musi być carrier-specific |
 | 8 | `torque` | 3D vector | magnetic | A | A | A | A | A | katalog: unit `T` |
 | 9 | `H_ani` | 3D vector | magnetic | C | C | C | C | C | anisotropy |
 | 10 | `H_dmi` | 3D vector | magnetic | C | N | C | C | C | `CudaSnapshotObservable::from_quantity()` nie obsługuje `H_dmi` |
-| 11 | `H_mel` | 3D vector | magnetic | C | N | N | C | C | CUDA FDM i multilayer bez materializatora magnetoelastic |
+| 11 | `H_mel` | 3D vector | magnetic | N | N | N | C | C | FDM CPU/GPU i multilayer bez materializatora magnetoelastic |
 | 12 | `u` | deferred | full | N | N | N | N | N | mechanika bez live 3D |
 | 13 | `eps` | deferred, 6 comp. | full | N | N | N | N | N | shape `VectorField` jest nieprecyzyjny |
 | 14 | `sigma` | deferred, 6 comp. | full | N | N | N | N | N | powinien być symmetric tensor |
-| 15 | `H_ani_cubic` | 3D vector | magnetic | C | N | C | C | C | CUDA FDM nie materializuje cubic anisotropy |
-| 16 | `H_dmi_bulk` | 3D vector | magnetic | C | N | C | C | C | CUDA FDM nie materializuje bulk DMI |
+| 15 | `H_ani_cubic` | 3D vector | magnetic | N | N | C | C | C | FDM CPU/GPU nie materializują cubic anisotropy |
+| 16 | `H_dmi_bulk` | 3D vector | magnetic | N | N | C | C | C | FDM CPU/GPU nie materializują bulk DMI |
 | 17 | `H_oe` | 3D vector | full | C | C | N | C | C | multilayer IR bez Oersteda |
-| 18 | `H_therm` | 3D vector | magnetic | C | N | N | C | C | CUDA FDM i multilayer bez preview termicznego |
+| 18 | `H_therm` | 3D vector | magnetic | N | N | N | C | C | FDM CPU/GPU i multilayer bez preview termicznego |
 | 19 | `E_ex` | hist. | magnetic | S | S | S | S | S | global scalar |
 | 20 | `E_demag` | hist. | magnetic | S | S | S | S | S | global scalar |
 | 21 | `E_ext` | hist. | full | S | S | S | S | S | global scalar |
@@ -207,7 +207,7 @@ Kontrakt quantity ma cztery poziomy:
 | 34 | `eden_demag` | 3D scalar | magnetic | C | C | C | C | C | cell field |
 | 35 | `demag_phi` | deferred scalar | full | N | N | N | C | C | FEM może liczyć, UI 3D blokuje |
 | 36 | `eden_ext` | 3D scalar | magnetic | C | C | C | C | C | cell field |
-| 37 | `eden_drive` | 3D scalar | magnetic | C | C | N | C | C | multilayer bez drive |
+| 37 | `eden_drive` | 3D scalar | magnetic | N | C | N | C | C | FDM CPU i multilayer bez materializatora drive-density |
 | 38 | `eden_ani` | 3D scalar | magnetic | C | C | C | C | C | cell field |
 | 39 | `eden_dmi` | 3D scalar | magnetic | C | C | C | C | C | cell field |
 | 40 | `eden_total` | 3D scalar | magnetic | A | A | A | A | A | cell field |
@@ -217,11 +217,11 @@ Kontrakt quantity ma cztery poziomy:
 | 44 | `mat_dind` | 3D scalar | magnetic | N | N | N | N | N | katalog wyprzedza lane providers |
 | 45 | `mat_dbulk` | 3D scalar | magnetic | N | N | N | N | N | katalog wyprzedza lane providers |
 | 46 | `dm_dt` | deferred vector | magnetic | N | N | N | N | N | preview flag bez UI exposure |
-| 47 | `V_electric` | deferred scalar | full | C | N | N | C | C | ui_exposed, ale preview 3D false |
-| 48 | `J_charge` | deferred vector | full | C | N | N | C | C | ui_exposed, ale preview 3D false |
-| 49 | `spin_potential` | deferred vector | full | N | N | N | C | C | brak standardowego renderera 3D |
-| 50 | `spin_current_tensor` | deferred tensor | full | N | N | N | C | C | wymaga jawnej projekcji tensora |
-| 51 | `torque_stt` | deferred vector | full | N | N | N | C | C | UI i interactive false |
+| 47 | `V_electric` | deferred scalar | full | N | N | N | N | N | brak live 3D providera; ui_exposed, ale preview 3D false |
+| 48 | `J_charge` | deferred vector | full | N | N | N | N | N | brak live 3D providera; ui_exposed, ale preview 3D false |
+| 49 | `spin_potential` | deferred vector | full | N | N | N | N | N | brak native FEM preview providera i standardowego renderera 3D |
+| 50 | `spin_current_tensor` | deferred tensor | full | N | N | N | N | N | brak native FEM preview providera; wymaga jawnej projekcji tensora |
+| 51 | `torque_stt` | deferred vector | full | N | N | N | N | N | brak native FEM preview providera; UI i interactive false |
 | 52 | `torque_sot` | deferred vector | magnetic | N | N | N | N | N | brak bieżącego lane provider |
 
 ### Wnioski quantity
