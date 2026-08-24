@@ -771,7 +771,7 @@ function defaultPresetDraftPatch(
     return {
       circulation: "1",
       core_polarity: "1",
-      core_radius: numberText(2e-9),
+      core_radius: numberText(1e-9),
       left_mx: "1",
       plane: "xy",
       right_mx: "-1",

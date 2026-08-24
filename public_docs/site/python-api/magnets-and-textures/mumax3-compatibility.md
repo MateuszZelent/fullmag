@@ -191,8 +191,10 @@ study.stages.add_save_state(
 Both factories lower to `kind="preset_texture"`, `preset_version=2`, the listed
 `preset_params`, a versioned mapping descriptor, and a texture transform. The Python
 factory names are authoring helpers; the canonical serialized names are `vortex_wall`
-and `hopfion_compact_support`. Browser authoring lowers to the same descriptors and
-exports the same canonical Python calls.
+and `hopfion_compact_support`. Browser authoring lowers to the same descriptors. Its
+Python export uses the generic `fm.PresetTexture(...)` form so `ui_label`, mapping,
+transform, preview metadata, and every authored parameter round-trip unchanged; a
+factory-authored texture without extra metadata may use the shorter factory call.
 
 (round-trip-and-failure-semantics)=
 ## Round-trip, provenance, and failure semantics

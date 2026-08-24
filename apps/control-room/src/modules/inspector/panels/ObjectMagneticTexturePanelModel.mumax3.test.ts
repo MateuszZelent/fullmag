@@ -78,6 +78,13 @@ describe("Mumax3 magnetic texture UI coverage", () => {
     }
   });
 
+  it("uses the canonical one-nanometre vortex-wall core default", () => {
+    const baseDraft = objectMagneticTextureDraftFromModel(MODEL);
+    expect(
+      objectMagneticTexturePresetChangePatch(MODEL, baseDraft, "vortex_wall"),
+    ).toMatchObject({ core_radius: "1e-9" });
+  });
+
   it("rejects invalid vortex domains and compact-hopfion radii", () => {
     const baseDraft = objectMagneticTextureDraftFromModel(MODEL);
     const vortexDraft = {
