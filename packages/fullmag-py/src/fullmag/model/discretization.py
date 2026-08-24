@@ -667,6 +667,11 @@ class PerObjectMeshRecipe:
                 "the supported study-level imported mesh route"
             )
 
+        if self.order is not None:
+            if isinstance(self.order, bool) or not isinstance(self.order, Integral):
+                raise TypeError("order must be an integer")
+            object.__setattr__(self, "order", int(self.order))
+
         for field_name in (
             "maximum_element_size",
             "minimum_element_size",

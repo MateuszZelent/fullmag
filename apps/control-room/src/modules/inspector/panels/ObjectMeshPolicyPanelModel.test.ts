@@ -152,6 +152,37 @@ describe("ObjectMeshPolicyPanelModel", () => {
     );
   });
 
+  it("rejects an Advanced JSON prism layer count outside capability scope", () => {
+    const capabilities = resolveObjectMeshTopologyCapabilities({
+      mesh_capabilities: {
+        "mesh.topology.mixed_p1": { status: "validated" },
+        "mesh.swept.prism": { status: "validated" },
+        "mesh.transition.pyramid_tet": { status: "validated" },
+        "mesh.exact_layer_count": {
+          status: "validated",
+          supported_layer_counts: [1, 2, 3],
+        },
+      },
+    });
+    const draft = objectMeshPolicyDraft({
+      configText: JSON.stringify({
+        element_family: "prism",
+        exact_layer_count: true,
+        mesh_strategy: "swept_prism",
+        through_thickness_elements: 4,
+        topology: "prismatic",
+      }),
+      exactLayerCount: "",
+      meshStrategy: "",
+      throughThicknessElements: "",
+      topology: "",
+    });
+
+    expect(validateObjectMeshTopologyCapabilities(draft, capabilities)).toBe(
+      "Exact layered prism supports 1, 2, 3 through-thickness elements.",
+    );
+  });
+
   it("formats nullable backend config as an editable object draft", () => {
     expect(formatObjectMeshPolicyConfig(null)).toBe("{}");
     expect(

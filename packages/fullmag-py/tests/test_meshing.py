@@ -327,6 +327,14 @@ class LayeredMeshDslValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "FEM\(mesh=\.\.\.\)"):
             PerObjectMeshRecipe(source="object.mesh")
 
+    def test_per_object_recipe_rejects_boolean_order_and_normalizes_integral(self) -> None:
+        with self.assertRaisesRegex(TypeError, "order must be an integer"):
+            PerObjectMeshRecipe(order=True)
+
+        recipe = PerObjectMeshRecipe(order=np.int64(2))
+        self.assertEqual(recipe.order, 2)
+        self.assertIs(type(recipe.order), int)
+
     def test_per_object_recipe_rejects_invalid_or_incoherent_layered_intent(self) -> None:
         invalid = (
             {"through_thickness_elements": 0},
@@ -8481,6 +8489,26 @@ class FieldStackAcceptanceTests(unittest.TestCase):
 
         self.assertAlmostEqual(resolved.per_object["left"].hmax, 20e-9, delta=1e-18)
         self.assertEqual(resolved.per_object["left"].source, "recipe_override")
+
+    def test_shared_target_source_tracks_the_field_that_supplies_hmax(self) -> None:
+        left = fm.Box(2.0, 2.0, 2.0, name="left")
+        resolved = resolve_shared_domain_targets(
+            [left],
+            fm.FEM(order=1, hmax=100e-9),
+            airbox_hmax=None,
+            mesh_workflow={
+                "default_mesh": {"hmax": 80e-9},
+                "per_geometry": [
+                    {"geometry": "left", "mode": "custom", "hmax": 50e-9},
+                ],
+            },
+            per_object_recipes={
+                "left": PerObjectMeshRecipe(compute_quality=True),
+            },
+        )
+
+        self.assertAlmostEqual(resolved.per_object["left"].hmax, 50e-9, delta=1e-18)
+        self.assertEqual(resolved.per_object["left"].source, "local_override")
 
     def test_shared_domain_size_fields_keep_airbox_hmax_as_outer_target(self) -> None:
         """Airbox hmax must not replace FEM.hmax, but fields need it as VOut."""

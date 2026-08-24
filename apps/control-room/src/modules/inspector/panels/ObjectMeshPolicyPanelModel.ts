@@ -226,8 +226,27 @@ export function validateObjectMeshTopologyCapabilities(
     built.request.config !== null &&
     requestsExactLayeredPrism(built.request.config ?? {});
   if (!rawRequestsMixed && !builtRequestsMixed) return null;
-  if (capabilities.layeredPrism.enabled) return null;
-  return `Exact layered prism authoring is unavailable: ${capabilities.layeredPrism.reason}`;
+  if (!capabilities.layeredPrism.enabled) {
+    return `Exact layered prism authoring is unavailable: ${capabilities.layeredPrism.reason}`;
+  }
+  const builtConfig = "request" in built ? built.request.config : null;
+  const requestedLayerCounts = [
+    rawConfig.ok ? rawConfig.value.through_thickness_elements : undefined,
+    builtConfig?.through_thickness_elements,
+  ].filter(
+    (value): value is number => typeof value === "number" && Number.isInteger(value),
+  );
+  if (
+    requestedLayerCounts.some(
+      (layerCount) =>
+        !capabilities.layeredPrism.supportedLayerCounts.includes(layerCount),
+    )
+  ) {
+    return `Exact layered prism supports ${capabilities.layeredPrism.supportedLayerCounts.join(
+      ", ",
+    )} through-thickness elements.`;
+  }
+  return null;
 }
 
 export function formatObjectMeshPolicyConfig(
