@@ -9,6 +9,7 @@
 #include "fullmag_fdm.h"
 #include "../gpu/cuda/integrators/fsal_policy.hpp"
 #include "../gpu/cuda/runtime/llg_checkpoint_policy.hpp"
+#include "../gpu/cuda/runtime/step_transaction_controller.hpp"
 
 namespace {
 
@@ -151,9 +152,13 @@ int main() {
     bool every_realization_is_transactional = true;
     bool every_realization_reuses_retry_rng_key = true;
     bool every_fault_boundary_rolls_back = true;
-    constexpr std::array<const char *, 10> fault_boundaries{
-        "begin", "capture", "stage-1", "stage-2", "stage-3",
-        "stage-4", "stage-final", "final-stats", "receipt", "transport"};
+    constexpr std::array<StepTransactionPhase, 6> fault_boundaries{
+        StepTransactionPhase::Begin,
+        StepTransactionPhase::Capture,
+        StepTransactionPhase::Integrator,
+        StepTransactionPhase::FinalStats,
+        StepTransactionPhase::Receipt,
+        StepTransactionPhase::TransportCommit};
     for (const auto integrator : public_integrators) {
         for (const auto precision : public_precisions) {
             Context state{};
@@ -184,8 +189,7 @@ int main() {
                 state.transaction_commit_count == 2 &&
                 state.current_dt == 3.0e-14;
             for (const bool transport_bound : {false, true}) {
-                for (const char *fault_boundary : fault_boundaries) {
-                    (void)fault_boundary;
+                for (const auto fault_boundary : fault_boundaries) {
                     Context failed{};
                     failed.integrator = integrator;
                     failed.precision = precision;
@@ -203,24 +207,72 @@ int main() {
                     const auto failed_output_before = failed_output;
                     fullmag_fdm_step_stats failed_trial{};
                     failed_trial.step = 8;
-                    context_stage_accepted_step(failed, failed.trial_dt);
-                    context_reject_staged_step(failed);
-                    failed.trial_dt = 0.0;
-                    context_invalidate_fsal_cache(
-                        failed, FULLMAG_FDM_FSAL_INVALIDATION_STEP_ERROR);
-                    (void)context_publish_accepted_step_stats(
-                        false, failed_trial, &failed_output);
+                    const auto before_step_count = failed.step_count;
+                    const auto before_accepted_step_index = failed.accepted_step_index;
+                    const auto before_accepted_state_revision =
+                        failed.accepted_state_revision;
+                    const auto before_current_time = failed.current_time;
+                    const auto before_current_dt = failed.current_dt;
+                    const auto before_transport_attempt_generation =
+                        failed.gpu_transport_attempt_generation;
+                    StepTransactionController controller(fault_boundary, true);
+                    const auto success = []() { return 0; };
+                    const int rc = controller.run(
+                        success,
+                        success,
+                        [&]() {
+                            context_stage_accepted_step(failed, failed.trial_dt);
+                            return 0;
+                        },
+                        success,
+                        success,
+                        success,
+                        [&]() {
+                            context_commit_accepted_step(failed);
+                        },
+                        [&]() {
+                            (void)context_publish_accepted_step_stats(
+                                true, failed_trial, &failed_output);
+                        },
+                        [&]() {
+                            failed.step_count = before_step_count;
+                            failed.accepted_step_index = before_accepted_step_index;
+                            failed.accepted_state_revision =
+                                before_accepted_state_revision;
+                            failed.current_time = before_current_time;
+                            failed.current_dt = before_current_dt;
+                            failed.trial_dt = 0.0;
+                            failed.gpu_transport_attempt_generation =
+                                before_transport_attempt_generation;
+                            failed.accepted_step_pending = false;
+                            context_invalidate_fsal_cache(
+                                failed, FULLMAG_FDM_FSAL_INVALIDATION_STEP_ERROR);
+                            return 0;
+                        });
                     every_fault_boundary_rolls_back =
                         every_fault_boundary_rolls_back &&
+                        rc != 0 &&
+                        ((fault_boundary == StepTransactionPhase::Begin &&
+                          controller.phase_count() == 1 &&
+                          controller.phase_trace()[0] ==
+                              StepTransactionPhase::Begin) ||
+                         (fault_boundary != StepTransactionPhase::Begin &&
+                          controller.phase_count() >= 2 &&
+                          controller.phase_trace()[controller.phase_count() - 1] ==
+                              StepTransactionPhase::Rollback)) &&
                         failed.step_count == 7 &&
                         failed.accepted_step_index == 7 &&
                         failed.accepted_state_revision == 8 &&
                         failed.current_time == 7.0e-13 &&
                         failed.current_dt == 4.0e-14 &&
-                        failed.trial_dt == 0.0 &&
+                        failed.trial_dt ==
+                            (fault_boundary == StepTransactionPhase::Begin
+                                 ? 9.0e-14 : 0.0) &&
                         failed.gpu_transport_rhs.active == transport_bound &&
                         failed.gpu_transport_attempt_generation == 11 &&
-                        !failed.fsal_valid && !failed.accepted_step_pending &&
+                        failed.fsal_valid ==
+                            (fault_boundary == StepTransactionPhase::Begin) &&
+                        !failed.accepted_step_pending &&
                         std::memcmp(&failed_output, &failed_output_before,
                                     sizeof(failed_output)) == 0;
                 }
@@ -260,8 +312,12 @@ int main() {
     const auto step_api_end = api.find(
         "int fullmag_fdm_context_bind_gpu_transport_v1", step_api_begin);
     const auto step_api = api.substr(step_api_begin, step_api_end - step_api_begin);
+    const auto inactive_legacy_begin = step_api.find("#if 0");
+    const auto active_step_api = step_api.substr(0, inactive_legacy_begin);
     const auto runtime = read(fdm / "gpu/cuda/runtime/context.cu");
     const auto checkpoint = read(fdm / "gpu/cuda/runtime/llg_checkpoint.cpp");
+    const auto transaction_controller = read(
+        fdm / "gpu/cuda/runtime/step_transaction_controller.hpp");
     const auto thermal64 = read(fdm / "gpu/cuda/interactions/demag_fp64.cu");
     const auto thermal32 = read(fdm / "gpu/cuda/interactions/demag_fp32.cu");
     const auto rk23_64 = read(fdm / "gpu/cuda/integrators/llg_rk23_fp64.cu");
@@ -280,6 +336,71 @@ int main() {
         root / "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs");
     const std::string integrators = rk23_64 + rk23_32 + dp45_64 + dp45_32;
     int failures = 0;
+
+    report(
+        !contains(rk4_64, "stats->step = ctx.step_count") &&
+            !contains(rk4_64, "stats->time_seconds = ctx.current_time") &&
+            !contains(rk4_32, "stats->step = ctx.step_count") &&
+            !contains(rk4_32, "stats->time_seconds = ctx.current_time") &&
+            contains(rk4_64, "stats->step = ctx.pending_step_count") &&
+            contains(rk4_64, "stats->time_seconds = ctx.pending_time") &&
+            contains(rk4_32, "stats->step = ctx.pending_step_count") &&
+            contains(rk4_32, "stats->time_seconds = ctx.pending_time"),
+        "FDM-GPU-TRX-001-I1-RED",
+        "RK4 full-stats metadata describes the staged accepted endpoint",
+        failures);
+    report(
+        contains(header, "FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V3") &&
+            contains(header, "fullmag_fdm_checkpoint_execution_identity_v3") &&
+            contains(header, "fullmag_fdm_llg_checkpoint_info_v3") &&
+            contains(header, "thermal_seed") &&
+            contains(header, "rng_algorithm") &&
+            contains(header, "rng_realization") &&
+            contains(checkpoint, "legacy LLG checkpoint v2 import is unsupported") &&
+            contains(checkpoint, "!checkpoint_identity_v3_valid(") &&
+            contains(checkpoint, "checkpoint_execution_receipt_v3_exportable") &&
+            contains(checkpoint,
+                "fullmag_fdm_executed_unknown_operator_mask_locked(receipt) == 0") &&
+            contains(checkpoint, "receipt.fallback_count == 0") &&
+            contains(checkpoint, "context_llg_checkpoint_import_v3") &&
+            contains(checkpoint, "context_prepare_checkpoint_import_staging") &&
+            contains(checkpoint, "context_commit_checkpoint_import_staging") &&
+            contains(checkpoint, "ctx.gpu_transport_pre_step_m") &&
+            contains(rust, "pub struct fullmag_fdm_llg_checkpoint_info_v3") &&
+            contains(runner, "NativeLlgCheckpointV3") &&
+            contains(runner, "fullmag_fdm_backend_llg_checkpoint_import_v3") &&
+            !contains(runner, "fullmag_fdm_backend_llg_checkpoint_import_v2"),
+        "FDM-GPU-TRX-001-I2-RED",
+        "checkpoint v3 binds committed plan/receipt execution and RNG identity",
+        failures);
+    report(
+        contains(transaction_controller, "StepTransactionController") &&
+            contains(transaction_controller, "StepTransactionPhase") &&
+            contains(transaction_controller, "StepTransactionPhase::FinalStats") &&
+            contains(transaction_controller, "accepted_commit();") &&
+            contains(transaction_controller, "publish();") &&
+            contains(transaction_controller, "phase_trace") &&
+            contains(api, "StepTransactionController transaction") &&
+            contains(api, "transaction.run") &&
+            contains(api, "if (ctx.step_interrupted)") &&
+            contains(api, "rollback_step_transaction(ctx)") &&
+            contains(heun64, "abort_step_from_tmp") &&
+            contains(heun32, "abort_step_from_tmp") &&
+            contains(rk4_64, "poll_interrupt") &&
+            contains(rk4_32, "poll_interrupt") &&
+            contains(abm3_64, "abort_step_from_tmp") &&
+            contains(abm3_32, "abort_step_from_tmp") &&
+            contains(rk23_64, "poll_interrupt") &&
+            contains(rk23_32, "poll_interrupt") &&
+            contains(dp45_64, "poll_interrupt") &&
+            contains(dp45_32, "poll_interrupt") &&
+            contains(runner,
+                "public_cuda_step_rolls_back_after_every_integrator_and_final_stats_poll") &&
+            contains(runner, "ffi::fullmag_fdm_backend_step(backend.handle") &&
+            !contains(active_step_api, "context_capture_pre_step_state(*ctx)"),
+        "FDM-GPU-TRX-001-I3-RED",
+        "production step orchestration owns a distinct fault-injectable phase trace",
+        failures);
 
     report(
         exact_decision.allowed &&
@@ -314,11 +435,11 @@ int main() {
             contains(step_api, "fullmag_fdm_step_stats trial_stats{}") &&
             contains(step_api, "&trial_stats") &&
             contains(step_api, "context_publish_accepted_step_stats") &&
-            contains(step_api, "context_capture_pre_step_state(*ctx)") &&
-            contains(step_api, "ctx->trial_dt = dt_seconds") &&
-            step_api.find("context_capture_pre_step_state(*ctx)") <
-                step_api.find("ctx->trial_dt = dt_seconds") &&
-            !contains(step_api, "ctx->current_dt = dt_seconds") &&
+            contains(api, "context_capture_pre_step_state(ctx)") &&
+            contains(api, "ctx.trial_dt = dt_seconds") &&
+            api.find("context_capture_pre_step_state(ctx)") <
+                api.find("ctx.trial_dt = dt_seconds") &&
+            !contains(active_step_api, "ctx->current_dt = dt_seconds") &&
             contains(runtime, "gpu_transport_pre_step_abm_f_n") &&
             contains(runtime, "context_invalidate_observables") &&
             !contains(context, "M_PI") &&
@@ -328,21 +449,21 @@ int main() {
         failures);
     report(
         wrong_identity_rejects_without_mutation &&
-            contains(header, "FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V2") &&
-            contains(header, "fullmag_fdm_llg_checkpoint_info_v2") &&
+            contains(header, "FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V3") &&
+            contains(header, "fullmag_fdm_llg_checkpoint_info_v3") &&
             contains(header, "device_ordinal") &&
             contains(header, "requested_backend") &&
             contains(header, "resolved_backend") &&
             contains(header, "executed_backend") &&
             contains(header, "accepted_step_index") &&
             contains(checkpoint, "legacy LLG checkpoint v1 import is unsupported") &&
-            contains(checkpoint, "context_llg_checkpoint_import_v2") &&
-            contains(rust, "pub struct fullmag_fdm_llg_checkpoint_info_v2") &&
-            contains(runner, "NativeLlgCheckpointV2") &&
-            contains(runner, "fullmag_fdm_backend_llg_checkpoint_import_v2") &&
+            contains(checkpoint, "context_llg_checkpoint_import_v3") &&
+            contains(rust, "pub struct fullmag_fdm_llg_checkpoint_info_v3") &&
+            contains(runner, "NativeLlgCheckpointV3") &&
+            contains(runner, "fullmag_fdm_backend_llg_checkpoint_import_v3") &&
             !contains(runner, "fullmag_fdm_backend_llg_checkpoint_import_v1"),
         "FDM-GPU-TRX-001-F",
-        "checkpoint v2 binds exact execution and accepted stochastic identity while v1 fails closed",
+        "checkpoint v3 binds exact execution and accepted stochastic identity while legacy imports fail closed",
         failures);
     report(
         !unknown_decision.allowed &&
@@ -410,12 +531,13 @@ int main() {
         failures);
     report(
         contains(checkpoint, "legacy LLG checkpoint v1 import is unsupported") &&
+            contains(checkpoint, "context_llg_checkpoint_import_v3") &&
             contains(checkpoint, "ctx.accepted_step_index = header.info.accepted_step_index") &&
             contains(checkpoint, "ctx.fsal_valid = header.info.fsal_valid != 0") &&
             contains(checkpoint, "ctx.fsal_accepted_state_revision =") &&
-            contains(checkpoint, "llg_checkpoint_execution_identity_matches"),
+            contains(checkpoint, "checkpoint_identity_v3_valid"),
         "FDM-GPU-NUM-003-D",
-        "checkpoint v2 restores exact RNG/FSAL identity and legacy v1 import fails closed",
+        "checkpoint v3 restores exact RNG/FSAL identity and legacy imports fail closed",
         failures);
     report(
         contains(header, "fullmag_fdm_fsal_invalidation_reason") &&
@@ -452,6 +574,18 @@ int main() {
                   "checkpoint v2 accepted identity offset changed");
     static_assert(offsetof(fullmag_fdm_llg_checkpoint_info_v2, fsal_integrator_identity) == 240,
                   "checkpoint v2 FSAL realization offset changed");
+    static_assert(sizeof(fullmag_fdm_checkpoint_execution_identity_v3) == 88,
+                  "checkpoint v3 execution identity layout changed");
+    static_assert(offsetof(fullmag_fdm_checkpoint_execution_identity_v3, device_ordinal) == 80,
+                  "checkpoint v3 device ordinal offset changed");
+    static_assert(sizeof(fullmag_fdm_llg_checkpoint_info_v3) == 320,
+                  "checkpoint v3 exact-execution layout changed");
+    static_assert(offsetof(fullmag_fdm_llg_checkpoint_info_v3, execution_identity) == 8,
+                  "checkpoint v3 execution identity offset changed");
+    static_assert(offsetof(fullmag_fdm_llg_checkpoint_info_v3, thermal_seed) == 160,
+                  "checkpoint v3 thermal seed offset changed");
+    static_assert(offsetof(fullmag_fdm_llg_checkpoint_info_v3, fsal_integrator_identity) == 312,
+                  "checkpoint v3 FSAL realization offset changed");
 
     if (failures != 0) {
         std::fprintf(stderr, "FDM FSAL/retry transaction contract: %d RED checks\n", failures);

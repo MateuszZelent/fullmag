@@ -2202,6 +2202,44 @@ void context_discard_pre_step_state(Context &ctx) {
     ctx.gpu_transport_pre_step_abm_valid = false;
 }
 
+bool context_prepare_checkpoint_import_staging(
+    Context &ctx, bool include_fsal, bool include_abm_history)
+{
+    if (ctx.gpu_transport_pre_step_m.x == nullptr &&
+        !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_m)) {
+        return false;
+    }
+    if ((include_fsal || include_abm_history) &&
+        ctx.gpu_transport_pre_step_abm_f_n.x == nullptr &&
+        !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n)) {
+        return false;
+    }
+    if (include_abm_history &&
+        ((ctx.gpu_transport_pre_step_abm_f_n1.x == nullptr &&
+          !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n1)) ||
+         (ctx.gpu_transport_pre_step_abm_f_n2.x == nullptr &&
+          !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n2)))) {
+        return false;
+    }
+    return true;
+}
+
+void context_commit_checkpoint_import_staging(
+    Context &ctx, bool include_fsal, bool include_abm_history)
+{
+    std::swap(ctx.m, ctx.gpu_transport_pre_step_m);
+    if (include_fsal) {
+        std::swap(ctx.k_fsal, ctx.gpu_transport_pre_step_abm_f_n);
+    }
+    if (include_abm_history) {
+        std::swap(ctx.abm_f_n, ctx.gpu_transport_pre_step_abm_f_n);
+        std::swap(ctx.abm_f_n1, ctx.gpu_transport_pre_step_abm_f_n1);
+        std::swap(ctx.abm_f_n2, ctx.gpu_transport_pre_step_abm_f_n2);
+    }
+    ctx.gpu_transport_pre_step_m_valid = false;
+    ctx.gpu_transport_pre_step_abm_valid = false;
+}
+
 void context_free_device(Context &ctx) {
     destroy_async_preview_snapshot_pool(ctx);
     destroy_async_field_snapshot_pool(ctx);

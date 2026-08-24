@@ -261,8 +261,8 @@ void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats
     if (!launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.k1)) return;
     double max_dm_dt = reduce_max_norm_fp64(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
 
-    stats->step = ctx.step_count;
-    stats->time_seconds = ctx.current_time;
+    stats->step = ctx.pending_step_count;
+    stats->time_seconds = ctx.pending_time;
     stats->dt_seconds = dt;
     stats->exchange_energy_joules = e_ex;
     stats->demag_energy_joules = e_demag;

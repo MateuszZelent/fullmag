@@ -524,6 +524,87 @@ pub struct fullmag_fdm_llg_checkpoint_info_v2 {
     pub fsal_precision_identity: u32,
 }
 
+pub const FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V3: u32 = 3;
+pub const FULLMAG_FDM_CHECKPOINT_EXECUTION_IDENTITY_ABI_V3: u32 = 3;
+pub const FULLMAG_FDM_CHECKPOINT_BACKEND_AUTO: u32 = 2;
+pub const FULLMAG_FDM_CHECKPOINT_POLICY_STRICT: u32 = 1;
+pub const FULLMAG_FDM_CHECKPOINT_POLICY_EXTENDED: u32 = 2;
+pub const FULLMAG_FDM_CHECKPOINT_DEVICE_AUTO: u32 = 1;
+pub const FULLMAG_FDM_CHECKPOINT_DEVICE_GPU: u32 = 2;
+pub const FULLMAG_FDM_CHECKPOINT_RNG_NONE: u32 = 0;
+pub const FULLMAG_FDM_CHECKPOINT_RNG_CURAND_PHILOX4X32_10: u32 = 1;
+pub const FULLMAG_FDM_CHECKPOINT_RNG_REALIZATION_DISABLED: u32 = 0;
+pub const FULLMAG_FDM_CHECKPOINT_RNG_REALIZATION_CUDA_FP32: u32 = 1;
+pub const FULLMAG_FDM_CHECKPOINT_RNG_REALIZATION_CUDA_FP64: u32 = 2;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct fullmag_fdm_checkpoint_execution_identity_v3 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub requested_backend: u32,
+    pub resolved_backend: u32,
+    pub executed_backend: u32,
+    pub requested_policy: u32,
+    pub resolved_policy: u32,
+    pub executed_policy: u32,
+    pub requested_realization: u32,
+    pub resolved_realization: u32,
+    pub executed_realization: u32,
+    pub requested_device: u32,
+    pub resolved_device: u32,
+    pub executed_device: u32,
+    pub requested_precision: u32,
+    pub resolved_precision: u32,
+    pub executed_precision: u32,
+    pub requested_integrator: u32,
+    pub resolved_integrator: u32,
+    pub executed_integrator: u32,
+    pub device_ordinal: i32,
+    pub reserved0: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct fullmag_fdm_llg_checkpoint_info_v3 {
+    pub schema_version: u32,
+    pub struct_size: u32,
+    pub execution_identity: fullmag_fdm_checkpoint_execution_identity_v3,
+    pub array_mask: u32,
+    pub reserved0: u32,
+    pub cell_count: u64,
+    pub payload_bytes: u64,
+    pub step_count: u64,
+    pub accepted_step_index: u64,
+    pub accepted_state_revision: u64,
+    pub current_time: f64,
+    pub current_dt: f64,
+    pub thermal_seed: u64,
+    pub rng_algorithm: u32,
+    pub rng_realization: u32,
+    pub transport_attempt_generation: u64,
+    pub rhs_source_revision: u64,
+    pub rhs_field_revision: u64,
+    pub rhs_transport_revision: u64,
+    pub projection_policy_identity: u64,
+    pub fsal_valid: u32,
+    pub abm_startup: u32,
+    pub abm_last_dt: f64,
+    pub adaptive_enabled: u32,
+    pub adaptive_has_previous_error: u32,
+    pub adaptive_previous_error: f64,
+    pub fsal_accepted_state_revision: u64,
+    pub fsal_accepted_time_bits: u64,
+    pub fsal_accepted_dt_bits: u64,
+    pub fsal_source_revision: u64,
+    pub fsal_field_revision: u64,
+    pub fsal_transport_revision: u64,
+    pub fsal_transport_state_identity: u64,
+    pub fsal_projection_policy_identity: u64,
+    pub fsal_integrator_identity: u32,
+    pub fsal_precision_identity: u32,
+}
+
 // ── Step stats ──
 
 #[repr(C)]
@@ -1603,6 +1684,30 @@ extern "C" {
         expected_info: *const fullmag_fdm_llg_checkpoint_info_v2,
     ) -> i32;
 
+    pub fn fullmag_fdm_backend_set_checkpoint_execution_identity_v3(
+        handle: *mut fullmag_fdm_backend,
+        identity: *const fullmag_fdm_checkpoint_execution_identity_v3,
+    ) -> i32;
+
+    pub fn fullmag_fdm_backend_llg_checkpoint_query_size_v3(
+        handle: *mut fullmag_fdm_backend,
+        out_required_bytes: *mut u64,
+    ) -> i32;
+
+    pub fn fullmag_fdm_backend_llg_checkpoint_export_v3(
+        handle: *mut fullmag_fdm_backend,
+        destination: *mut c_void,
+        exact_capacity: u64,
+        out_info: *mut fullmag_fdm_llg_checkpoint_info_v3,
+    ) -> i32;
+
+    pub fn fullmag_fdm_backend_llg_checkpoint_import_v3(
+        handle: *mut fullmag_fdm_backend,
+        source: *const c_void,
+        exact_bytes: u64,
+        expected_info: *const fullmag_fdm_llg_checkpoint_info_v3,
+    ) -> i32;
+
     pub fn fullmag_fdm_backend_execution_receipt_v1(
         handle: *mut fullmag_fdm_backend,
         out_receipt: *mut fullmag_fdm_execution_receipt_v1,
@@ -2367,6 +2472,32 @@ mod tests {
         assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v2, adaptive_previous_error), 168);
         assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v2, fsal_accepted_state_revision), 176);
         assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v2, fsal_integrator_identity), 240);
+    }
+
+    #[test]
+    fn llg_checkpoint_info_v3_matches_the_exact_execution_and_rng_layout() {
+        assert_eq!(FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V3, 3);
+        assert_eq!(size_of::<fullmag_fdm_checkpoint_execution_identity_v3>(), 88);
+        assert_eq!(align_of::<fullmag_fdm_checkpoint_execution_identity_v3>(), 4);
+        assert_eq!(
+            offset_of!(fullmag_fdm_checkpoint_execution_identity_v3, device_ordinal),
+            80
+        );
+        assert_eq!(size_of::<fullmag_fdm_llg_checkpoint_info_v3>(), 320);
+        assert_eq!(align_of::<fullmag_fdm_llg_checkpoint_info_v3>(), 8);
+        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v3, execution_identity), 8);
+        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v3, cell_count), 104);
+        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v3, thermal_seed), 160);
+        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v3, rng_algorithm), 168);
+        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v3, fsal_valid), 216);
+        assert_eq!(
+            offset_of!(fullmag_fdm_llg_checkpoint_info_v3, fsal_accepted_state_revision),
+            248
+        );
+        assert_eq!(
+            offset_of!(fullmag_fdm_llg_checkpoint_info_v3, fsal_integrator_identity),
+            312
+        );
     }
 
     #[test]

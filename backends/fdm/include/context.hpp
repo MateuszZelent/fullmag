@@ -320,6 +320,8 @@ struct Context {
     // allocation-free and never invokes CUDA APIs or synchronization.
     std::shared_ptr<ExecutionReceiptState> execution_receipt =
         std::make_shared<ExecutionReceiptState>();
+    fullmag_fdm_checkpoint_execution_identity_v3 checkpoint_execution_identity_v3{};
+    bool checkpoint_execution_identity_v3_valid = false;
 
 
     // Step counter
@@ -584,6 +586,10 @@ bool context_test_copy_f64_on_compute_stream(
 bool context_capture_pre_step_state(Context &ctx);
 bool context_rollback_pre_step_state(Context &ctx);
 void context_discard_pre_step_state(Context &ctx);
+bool context_prepare_checkpoint_import_staging(
+    Context &ctx, bool include_fsal, bool include_abm_history);
+void context_commit_checkpoint_import_staging(
+    Context &ctx, bool include_fsal, bool include_abm_history);
 int context_llg_checkpoint_query_size_v1(
     Context &ctx, uint64_t &out_required_bytes);
 int context_llg_checkpoint_export_v1(
@@ -608,6 +614,21 @@ int context_llg_checkpoint_import_v2(
     const void *source,
     uint64_t exact_bytes,
     const fullmag_fdm_llg_checkpoint_info_v2 &expected_info);
+bool context_set_checkpoint_execution_identity_v3(
+    Context &ctx,
+    const fullmag_fdm_checkpoint_execution_identity_v3 &identity);
+int context_llg_checkpoint_query_size_v3(
+    Context &ctx, uint64_t &out_required_bytes);
+int context_llg_checkpoint_export_v3(
+    Context &ctx,
+    void *destination,
+    uint64_t exact_capacity,
+    fullmag_fdm_llg_checkpoint_info_v3 &out_info);
+int context_llg_checkpoint_import_v3(
+    Context &ctx,
+    const void *source,
+    uint64_t exact_bytes,
+    const fullmag_fdm_llg_checkpoint_info_v3 &expected_info);
 
 bool context_bind_gpu_transport_rhs(
     Context &ctx,
