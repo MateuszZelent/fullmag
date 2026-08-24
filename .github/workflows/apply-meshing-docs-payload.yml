@@ -38,9 +38,15 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "Payload chunk sizes:"
+          wc -c .fullmag-docs-payload/chunk-*
           cat .fullmag-docs-payload/chunk-* > /tmp/meshing_docs.tar.gz.b64
-          test "$(wc -c < /tmp/meshing_docs.tar.gz.b64)" -eq 84452
+          echo "Combined Base64: $(wc -c < /tmp/meshing_docs.tar.gz.b64) bytes"
+          sha256sum /tmp/meshing_docs.tar.gz.b64
           base64 --decode /tmp/meshing_docs.tar.gz.b64 > /tmp/meshing_docs.tar.gz
+          echo "Decoded archive: $(wc -c < /tmp/meshing_docs.tar.gz) bytes"
+          sha256sum /tmp/meshing_docs.tar.gz
+          test "$(wc -c < /tmp/meshing_docs.tar.gz.b64)" -eq 84452
           echo "baeb0812020bee8161c3dc745e61544bd3293fbcec9ab53c7f0c6282ca7e2933  /tmp/meshing_docs.tar.gz" | sha256sum --check --strict -
 
           python - <<'PY'
