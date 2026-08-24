@@ -3592,6 +3592,18 @@ int fullmag_fem_backend_gpu_execution_receipt_v1(
 
     const auto snapshot = fullmag::fem::gpu_execution_receipt_snapshot(
         handle->context.gpu_state.execution_receipt);
+    if (!snapshot.plan_resolved) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_execution_receipt_v1 has no resolved execution plan");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (!snapshot.accounting_valid) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_execution_receipt_v1 accounting is invalid");
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
     fullmag_fem_gpu_execution_receipt_v1 receipt{};
     receipt.abi_version = FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1;
     receipt.struct_size = sizeof(receipt);

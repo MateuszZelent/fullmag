@@ -623,6 +623,28 @@ void public_abi_v1_rejects_invalid_handshake_without_writing_output() {
         "execution receipt ABI must reject null output");
 
     auto &state = handle.context.gpu_state.execution_receipt;
+    receipt.struct_size = sizeof(receipt);
+    before = receipt;
+    check(
+        fullmag_fem_backend_gpu_execution_receipt_v1(&handle, &receipt) ==
+            FULLMAG_FEM_ERR_INVALID,
+        "execution receipt ABI must reject an unresolved native plan");
+    check(
+        std::memcmp(&receipt, &before, sizeof(receipt)) == 0,
+        "unresolved native plan must not write any output byte");
+
+    state.plan_resolved = true;
+    state.accounting_valid = false;
+    before = receipt;
+    check(
+        fullmag_fem_backend_gpu_execution_receipt_v1(&handle, &receipt) ==
+            FULLMAG_FEM_ERR_INTERNAL,
+        "execution receipt ABI must reject invalid native accounting");
+    check(
+        std::memcmp(&receipt, &before, sizeof(receipt)) == 0,
+        "invalid native accounting must not write any output byte");
+
+    state.accounting_valid = true;
     state.execution_class = FemGpuExecutionClass::HybridCpuPoisson;
     state.device_ordinal = 17;
     state.precision = 19;
