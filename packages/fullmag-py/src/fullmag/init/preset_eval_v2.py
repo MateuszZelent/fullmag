@@ -335,9 +335,9 @@ def _vortex_wall(params: Mapping[str, object], point: Sequence[float]) -> Vec3:
     wall_half_width = _positive(params, "wall_half_width")
     left_mx = _number(params, "left_mx", 1.0)
     right_mx = _number(params, "right_mx", -1.0)
-    if abs(left_mx) <= _EPSILON:
+    if left_mx == 0.0:
         raise _invalid("left_mx", "must be finite and nonzero")
-    if abs(right_mx) <= _EPSILON:
+    if right_mx == 0.0:
         raise _invalid("right_mx", "must be finite and nonzero")
     if point[0] < -wall_half_width:
         return (math.copysign(1.0, left_mx), 0.0, 0.0)

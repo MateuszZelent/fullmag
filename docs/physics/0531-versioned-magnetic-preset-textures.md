@@ -122,14 +122,14 @@ nie zależy od rozmiaru siatki ani bieżących granic symulacji.
 
 Kompaktowy hopfion używa współrzędnych toroidalnych. Dla promienia głównego
 $R_H>0$, promienia przekroju $r_H>0$ i
-$\psi=\operatorname{atan2}(y,x)$ definiujemy
-$a=x\cos\psi+y\sin\psi-R_H$ oraz $\rho=\sqrt{z^2+a^2}$. Dla
+$\psi=\operatorname{atan2}(y,x)$ definiujemy toroidalną współrzędną radialną
+$a_H=x\cos\psi+y\sin\psi-R_H$ oraz $\rho=\sqrt{z^2+a_H^2}$. Dla
 $\rho<r_H$:
 
 ```{math}
 :label: texture-hopfion-compact-support-v2
 
-\alpha=\operatorname{atan2}(z,a),\qquad
+\alpha=\operatorname{atan2}(z,a_H),\qquad
 \Phi=-\alpha+\psi,\qquad
 \Theta=\pi\exp\!\left(1-\frac{1}{1-(\rho/r_H)^2}\right),
 ```
@@ -214,6 +214,7 @@ Skale muszą być skończone i niezerowe.
 | $s_R$ | znak prawej domeny | $1$ |
 | $R_H$ | promień główny torusa hopfionu | $\mathrm{m}$ |
 | $r_H$ | promień przekroju i nośnika hopfionu | $\mathrm{m}$ |
+| $a_H$ | toroidalna współrzędna radialna względem linii centralnej | $\mathrm{m}$ |
 | $\rho$ | odległość od linii centralnej torusa | $\mathrm{m}$ |
 | $\alpha$ | lokalny kąt przekroju torusa | $\mathrm{rad}$ |
 | $\Phi$ | azymut magnetyzacji hopfionu | $\mathrm{rad}$ |

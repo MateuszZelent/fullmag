@@ -540,10 +540,10 @@ fn vortex_wall(
     let wall_half_width = positive(params, "wall_half_width", None)?;
     let left_mx = finite_number(params, "left_mx", Some(1.0))?;
     let right_mx = finite_number(params, "right_mx", Some(-1.0))?;
-    if left_mx.abs() <= EPSILON {
+    if left_mx == 0.0 {
         return Err(invalid("left_mx", "must be finite and nonzero"));
     }
-    if right_mx.abs() <= EPSILON {
+    if right_mx == 0.0 {
         return Err(invalid("right_mx", "must be finite and nonzero"));
     }
     if point[0] < -wall_half_width {

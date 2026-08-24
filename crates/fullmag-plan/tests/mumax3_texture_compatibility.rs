@@ -88,6 +88,25 @@ fn mumax_compact_hopfion_is_exactly_uniform_outside_support() {
 }
 
 #[test]
+fn mumax_vortex_wall_accepts_every_finite_nonzero_domain_component() {
+    let values = sample(
+        "vortex_wall",
+        params([
+            ("wall_half_width", json!(2.0)),
+            ("left_mx", json!(1.0e-15)),
+            ("right_mx", json!(-1.0e-15)),
+            ("circulation", json!(1)),
+            ("core_polarity", json!(1)),
+            ("core_radius", json!(0.5)),
+            ("plane", json!("xy")),
+        ]),
+        &[point(-3.0, 0.0, 0.0), point(3.0, 0.0, 0.0)],
+    );
+
+    assert_eq!(values, [[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]]);
+}
+
+#[test]
 fn compact_hopfion_rejects_minor_radius_larger_than_major_radius() {
     let error = sample_preset_texture_versioned(
         "hopfion_compact_support",

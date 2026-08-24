@@ -84,13 +84,13 @@ compact_hopfion = fm.texture.hopfion_compact_support(
 )
 ```
 
-For $\psi=\operatorname{atan2}(y,x)$, $a=x\cos\psi+y\sin\psi-R$ and
-$\rho=\sqrt{z^2+a^2}$, the interior profile is
+For $\psi=\operatorname{atan2}(y,x)$, the toroidal radial coordinate is
+$a_H=x\cos\psi+y\sin\psi-R$ and $\rho=\sqrt{z^2+a_H^2}$; the interior profile is
 
 ```{math}
 :label: mumax3-compact-hopfion-profile
 
-\Phi=-\operatorname{atan2}(z,a)+\psi,\qquad
+\Phi=-\operatorname{atan2}(z,a_H)+\psi,\qquad
 \Theta=\pi\exp\!\left(1-\frac{1}{1-(\rho/r)^2}\right),\qquad
 \mathbf m=(\cos\Phi\sin\Theta,\sin\Phi\sin\Theta,\cos\Theta).
 ```
@@ -114,6 +114,7 @@ requires `mapping.projection="object_local"`.
 | $\mathbf e_u$ | first axis of the selected right-handed plane | $1$ |
 | $R$ | hopfion major radius | $\mathrm{m}$ |
 | $r$ | hopfion minor radius and support radius | $\mathrm{m}$ |
+| $a_H$ | toroidal radial coordinate relative to the centreline | $\mathrm{m}$ |
 | $\rho$ | distance from the torus centreline | $\mathrm{m}$ |
 | $\psi$ | spatial azimuth | $\mathrm{rad}$ |
 | $\Phi$ | hopfion magnetization azimuth | $\mathrm{rad}$ |
@@ -230,14 +231,16 @@ mesh and session state.
   `vortex_wall` and `hopfion_compact_support`.
 - Python factories and reference evaluator:
   `packages/fullmag-py/src/fullmag/init/textures.py` and `preset_eval_v2.py`.
-- Rust/Python parity: `crates/fullmag-plan/tests/mumax3_texture_compatibility.rs` and
-  `packages/fullmag-py/tests/test_mumax3_texture_compatibility.py`.
+- Rust/Python parity: the shared 1000-point fixture
+  `crates/fullmag-plan/tests/fixtures/magnetization_textures_v2_parity.json`, consumed by
+  `crates/fullmag-plan/tests/magnetization_textures_v2_parity.rs` and
+  `packages/fullmag-py/tests/test_preset_texture_v2_parity.py`.
 - Browser registry and round-trip:
   `apps/control-room/src/shared/domain/magnetization-texture/texturePresets.ts` and
   `ObjectMagneticTexturePanelModel.mumax3.test.ts`.
 
 The compatibility equations are mapped directly to the immutable upstream Mumax3 submodule file
-`external_solvers/3/engine/config.go` at `f656494b29516bead825b444b1f0b38c6e6c7dbf` and compared by the independent Rust/Python fixtures named above. Fullmag replaces Mumax3's mesh-derived vortex core and world-derived
+`external_solvers/3/engine/config.go` at `f656494b29516bead825b444b1f0b38c6e6c7dbf` and compared by the shared Rust/Python fixture named above. Fullmag replaces Mumax3's mesh-derived vortex core and world-derived
 wall half-width with explicit SI parameters; this is a deliberate reproducibility
 adaptation, not bitwise sampling parity.
 
