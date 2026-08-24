@@ -134,7 +134,7 @@ describe("VisualizationDebugPanel mounted interaction", () => {
 
     await act(async () => keyboardActivate(copySnapshot, "Enter"));
     expect(clipboardWrite).toHaveBeenLastCalledWith(
-      expect.stringContaining("fullmag.visualization-debug.v1"),
+      expect.stringContaining("fullmag.visualization-debug.v2"),
     );
     expect(findAlert(container, "Snapshot copied").textContent).toContain("Snapshot copied");
 
@@ -155,7 +155,7 @@ describe("VisualizationDebugPanel mounted interaction", () => {
     expect(rawJson.getAttribute("aria-expanded")).toBe("false");
     await act(async () => keyboardActivate(rawJson, "Enter"));
     expect(rawJson.getAttribute("aria-expanded")).toBe("true");
-    expect(container.textContent).toContain('"schemaVersion": "fullmag.visualization-debug.v1"');
+    expect(container.textContent).toContain('"schemaVersion": "fullmag.visualization-debug.v2"');
 
     clipboardWrite.mockRejectedValueOnce(new Error("clipboard denied"));
     await act(async () => keyboardActivate(copySnapshot, "Enter"));
@@ -410,6 +410,7 @@ function makeKernel(): KernelApi {
     pendingTargetIds: [],
     version: 0,
   };
+  const realtimeConnectionSnapshot = { disrupted: false, status: "idle" } as const;
   return {
     api: {
       data: {
@@ -459,6 +460,22 @@ function makeKernel(): KernelApi {
           }),
         },
       },
+      simulation: {
+        solver: {
+          status: async () => ({
+            can_accept_commands: true,
+            is_busy: false,
+            revision: 42,
+            run_id: null,
+            runtime_state: "idle",
+            runtime_status_code: "idle",
+            runtime_status_kind: "idle",
+            session_status: "ready",
+            stage_kind: null,
+            warnings: [],
+          }),
+        },
+      },
       visualization: {
         acks: async () => ({ entries: [], revision: 42 }),
         state: () => new Promise(() => undefined),
@@ -478,6 +495,10 @@ function makeKernel(): KernelApi {
       subscribe: () => () => undefined,
     },
     visualizationDebug: new VisualizationDebugController(),
+    realtimeConnection: {
+      getSnapshot: () => realtimeConnectionSnapshot,
+      subscribe: () => () => undefined,
+    },
   } as unknown as KernelApi;
 }
 

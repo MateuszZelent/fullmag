@@ -2071,12 +2071,12 @@ static bool copy_field_d2d_async(
     size_t bytes,
     cudaStream_t stream)
 {
-    return cudaMemcpyAsync(destination.x, source.x, bytes,
-                           cudaMemcpyDeviceToDevice, stream) == cudaSuccess &&
-        cudaMemcpyAsync(destination.y, source.y, bytes,
-                        cudaMemcpyDeviceToDevice, stream) == cudaSuccess &&
-        cudaMemcpyAsync(destination.z, source.z, bytes,
-                        cudaMemcpyDeviceToDevice, stream) == cudaSuccess;
+    return (::cudaMemcpyAsync)(destination.x, source.x, bytes,
+                               cudaMemcpyDeviceToDevice, stream) == cudaSuccess &&
+        (::cudaMemcpyAsync)(destination.y, source.y, bytes,
+                            cudaMemcpyDeviceToDevice, stream) == cudaSuccess &&
+        (::cudaMemcpyAsync)(destination.z, source.z, bytes,
+                            cudaMemcpyDeviceToDevice, stream) == cudaSuccess;
 }
 
 bool context_capture_pre_step_state(Context &ctx) {

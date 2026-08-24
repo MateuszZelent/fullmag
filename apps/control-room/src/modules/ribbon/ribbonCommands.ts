@@ -901,6 +901,7 @@ async function patchVisualizationState(
   const state = await context.api?.visualization.patch(patch);
   if (state) {
     invalidateVisualizationState(context, state);
+    return { transactionId: `direct-api:${state.revision}` };
   }
   return null;
 }
