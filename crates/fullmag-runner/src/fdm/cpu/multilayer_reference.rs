@@ -153,6 +153,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
         transport_modules: Vec::new(),
         fdm_gpu_transport_telemetry: None,
         fdm_gpu_execution_receipt: None,
+        fem_gpu_execution_receipt: None,
         executed_physics_kinds: Vec::new(),
         executed_physics_module_ids: Vec::new(),
         execution_engine: "cpu_reference_multilayer".to_string(),

@@ -4,12 +4,13 @@ use crate::autosave_storage::{
 use fullmag_ir::AutosaveLayoutIR;
 use serde_json::json;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 pub struct ZarrAutosaveWriter {
     root: PathBuf,
     current: Option<ZarrStage>,
+    latest_provenance: Option<serde_json::Value>,
 }
 
 struct ZarrStage {
@@ -24,43 +25,97 @@ impl ZarrAutosaveWriter {
         Self {
             root: root.into(),
             current: None,
+            latest_provenance: None,
         }
     }
 
     pub fn store_path(&self, target: &str) -> PathBuf {
         self.root.join(format!("{target}.zarr"))
     }
+
+    pub fn update_provenance(&mut self, provenance: &serde_json::Value) -> Result<(), String> {
+        self.latest_provenance = Some(provenance.clone());
+        let root = self.root.clone();
+        let current = self
+            .current
+            .as_mut()
+            .ok_or_else(|| "Zarr autosave has no active stage".to_string())?;
+        current.manifest.provenance = Some(provenance.clone());
+        update_json_property(
+            &root
+                .join(format!("{}.zarr", current.manifest.target))
+                .join(".zattrs"),
+            "provenance",
+            provenance.clone(),
+        )?;
+        update_json_property(
+            &current.path.join("manifest.json"),
+            "provenance",
+            provenance.clone(),
+        )?;
+        for quantity in &current.manifest.field_quantities {
+            let path = current.path.join("fields").join(quantity).join(".zattrs");
+            if path.is_file() {
+                update_json_property(&path, "provenance", provenance.clone())?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn update_json_property(
+    path: &Path,
+    property: &str,
+    value: serde_json::Value,
+) -> Result<(), String> {
+    let mut document: serde_json::Value = serde_json::from_slice(
+        &fs::read(path).map_err(|error| format!("failed to read '{}': {error}", path.display()))?,
+    )
+    .map_err(|error| format!("failed to decode '{}': {error}", path.display()))?;
+    document[property] = value;
+    write_json(path, &document)
 }
 
 impl AutosaveTargetWriter for ZarrAutosaveWriter {
     fn begin_stage(&mut self, manifest: &StageManifest) -> Result<(), String> {
-        update_artifact_manifest(&self.root, manifest)?;
-        let store = self.store_path(&manifest.target);
+        let mut effective_manifest = manifest.clone();
+        if effective_manifest.provenance.is_none() {
+            effective_manifest.provenance = self.latest_provenance.clone();
+        }
+        if let Some(provenance) = effective_manifest.provenance.clone() {
+            self.latest_provenance = Some(provenance);
+        }
+        update_artifact_manifest(&self.root, &effective_manifest)?;
+        let store = self.store_path(&effective_manifest.target);
         initialize_group(&store)?;
-        write_json(
-            &store.join(".zattrs"),
-            &json!({"schema_version": "fullmag.stage_autosave.v1", "target": manifest.target}),
-        )?;
+        let mut root_attrs = json!({
+            "schema_version": "fullmag.stage_autosave.v1",
+            "target": effective_manifest.target,
+        });
+        if let Some(provenance) = effective_manifest.provenance.clone() {
+            root_attrs["provenance"] = provenance;
+        }
+        write_json(&store.join(".zattrs"), &root_attrs)?;
         initialize_group(&store.join("stages"))?;
         let stage_path = store.join("stages").join(format!(
             "stage_{:04}_{}",
-            manifest.stage_index, manifest.stage_id
+            effective_manifest.stage_index, effective_manifest.stage_id
         ));
         initialize_group(&stage_path)?;
-        write_json(&stage_path.join("manifest.json"), manifest)?;
-        if !manifest.table_quantities.is_empty() {
+        write_json(&stage_path.join("manifest.json"), &effective_manifest)?;
+        if !effective_manifest.table_quantities.is_empty() {
             let table = stage_path.join("table");
-            initialize_array(&table, 0, manifest.table_quantities.len())?;
+                initialize_array(&table, 0, effective_manifest.table_quantities.len())?;
             write_json(
                 &table.join(".zattrs"),
-                &json!({"quantities": manifest.table_quantities, "dimension_order": ["sample", "quantity"]}),
+                &json!({"quantities": effective_manifest.table_quantities, "dimension_order": ["sample", "quantity"]}),
             )?;
         }
         let fields = stage_path.join("fields");
-        if !manifest.field_quantities.is_empty() {
+        if !effective_manifest.field_quantities.is_empty() {
             initialize_group(&fields)?;
         }
-        if manifest.layout == AutosaveLayoutIR::Continuous {
+        if effective_manifest.layout == AutosaveLayoutIR::Continuous {
             let continuous = store.join("continuous");
             initialize_group(&continuous)?;
             write_json(
@@ -69,7 +124,7 @@ impl AutosaveTargetWriter for ZarrAutosaveWriter {
             )?;
         }
         self.current = Some(ZarrStage {
-            manifest: manifest.clone(),
+            manifest: effective_manifest,
             path: stage_path,
             table_samples: 0,
             field_samples: std::collections::BTreeMap::new(),
@@ -116,10 +171,14 @@ impl AutosaveTargetWriter for ZarrAutosaveWriter {
         let sample = *current.field_samples.get(quantity).unwrap_or(&0);
         if sample == 0 {
             initialize_array(&field, 0, values.len())?;
-            write_json(
-                &field.join(".zattrs"),
-                &json!({"quantity": quantity, "dimension_order": ["sample", "value"]}),
-            )?;
+            let mut attrs = json!({
+                "quantity": quantity,
+                "dimension_order": ["sample", "value"],
+            });
+            if let Some(provenance) = current.manifest.provenance.clone() {
+                attrs["provenance"] = provenance;
+            }
+            write_json(&field.join(".zattrs"), &attrs)?;
         }
         write_f64_chunk(&field.join(format!("{sample}.0")), values)?;
         let sample_count = sample + 1;
@@ -135,8 +194,15 @@ impl AutosaveTargetWriter for ZarrAutosaveWriter {
             .current
             .take()
             .ok_or_else(|| "Zarr autosave has no active stage".to_string())?;
-        write_json(&current.path.join("manifest.json"), manifest)?;
-        update_artifact_manifest(&self.root, manifest)
+        let mut effective_manifest = manifest.clone();
+        if effective_manifest.provenance.is_none() {
+            effective_manifest.provenance = current
+                .manifest
+                .provenance
+                .or_else(|| self.latest_provenance.clone());
+        }
+        write_json(&current.path.join("manifest.json"), &effective_manifest)?;
+        update_artifact_manifest(&self.root, &effective_manifest)
     }
 }
 
@@ -171,9 +237,71 @@ fn initialize_array(path: &Path, sample_count: usize, width: usize) -> Result<()
     )
 }
 
-fn write_json(path: &Path, value: &impl serde::Serialize) -> Result<(), String> {
+pub(crate) fn write_json_atomic(
+    path: &Path,
+    value: &impl serde::Serialize,
+) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
-    fs::write(path, bytes).map_err(|error| error.to_string())
+    let temporary = path.with_extension(format!("tmp.{}", std::process::id()));
+    let file = fs::File::create(&temporary).map_err(|error| error.to_string())?;
+    let mut writer = BufWriter::new(file);
+    writer.write_all(&bytes).map_err(|error| error.to_string())?;
+    writer.flush().map_err(|error| error.to_string())?;
+    writer.get_ref().sync_all().map_err(|error| error.to_string())?;
+    replace_file_atomically(&temporary, path)?;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn replace_file_atomically(temporary: &Path, destination: &Path) -> Result<(), String> {
+    fs::rename(temporary, destination).map_err(|error| error.to_string())
+}
+
+#[cfg(windows)]
+fn replace_file_atomically(temporary: &Path, destination: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    if !destination.exists() {
+        return fs::rename(temporary, destination).map_err(|error| error.to_string());
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn ReplaceFileW(
+            replaced: *const u16,
+            replacement: *const u16,
+            backup: *const u16,
+            flags: u32,
+            exclude: *mut std::ffi::c_void,
+            reserved: *mut std::ffi::c_void,
+        ) -> i32;
+    }
+    let replaced = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let replacement = temporary
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let replaced_ok = unsafe {
+        ReplaceFileW(
+            replaced.as_ptr(),
+            replacement.as_ptr(),
+            std::ptr::null(),
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if replaced_ok == 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(())
+}
+
+fn write_json(path: &Path, value: &impl serde::Serialize) -> Result<(), String> {
+    write_json_atomic(path, value)
 }
 
 fn write_f64_chunk(path: &Path, values: &[f64]) -> Result<(), String> {
@@ -270,6 +398,93 @@ mod tests {
         assert_eq!(index.len(), 2);
         assert_eq!(index[0].sample_kind, AutosaveSampleKind::Table);
         assert_eq!(index[1].payload_ref, "stages/stage_0000_relax/fields/m/0");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn lazy_field_after_provenance_update_keeps_full_provenance_through_finish() {
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-zarr-lazy-provenance-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let mut state = AutosaveTargetState::resume(&root, "main").unwrap();
+        let mut writer = ZarrAutosaveWriter::new(&root);
+        state
+            .begin_stage(
+                &mut writer,
+                "relax",
+                AutosaveLayoutIR::Separate,
+                AutosaveFormatIR::Zarr,
+                vec![],
+                vec!["m".into()],
+            )
+            .unwrap();
+        let provenance = json!({
+            "execution_engine": "fem_native_gpu",
+            "fem_gpu_execution_receipt": {"executed": "cuda_fem"},
+            "requested_backend": "fem",
+        });
+        state
+            .update_active_provenance(provenance.clone())
+            .unwrap();
+        writer.update_provenance(&provenance).unwrap();
+        state
+            .append_field_sample(
+                &mut writer,
+                StageSampleCoordinate::AcceptedStep { accepted_step: 1 },
+                "m",
+                &[1.0, 0.0, 0.0],
+            )
+            .unwrap();
+        state.finish_stage(&mut writer).unwrap();
+
+        let store = root.join("main.zarr");
+        let stage = store.join("stages/stage_0000_relax");
+        let root_attrs: serde_json::Value =
+            serde_json::from_slice(&fs::read(store.join(".zattrs")).unwrap()).unwrap();
+        let field_attrs: serde_json::Value = serde_json::from_slice(
+            &fs::read(stage.join("fields/m/.zattrs")).unwrap(),
+        )
+        .unwrap();
+        let final_manifest: StageManifest = serde_json::from_slice(
+            &fs::read(stage.join("manifest.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(root_attrs["provenance"], provenance);
+        assert_eq!(field_attrs["provenance"], provenance);
+        assert_eq!(final_manifest.provenance, Some(provenance.clone()));
+
+        state
+            .begin_stage(
+                &mut writer,
+                "run",
+                AutosaveLayoutIR::Separate,
+                AutosaveFormatIR::Zarr,
+                vec![],
+                vec!["m".into()],
+            )
+            .unwrap();
+        state
+            .append_field_sample(
+                &mut writer,
+                StageSampleCoordinate::AcceptedStep { accepted_step: 1 },
+                "m",
+                &[0.0, 1.0, 0.0],
+            )
+            .unwrap();
+        state.finish_stage(&mut writer).unwrap();
+
+        let inherited_stage = store.join("stages/stage_0001_run");
+        let inherited_field_attrs: serde_json::Value = serde_json::from_slice(
+            &fs::read(inherited_stage.join("fields/m/.zattrs")).unwrap(),
+        )
+        .unwrap();
+        let inherited_manifest: StageManifest = serde_json::from_slice(
+            &fs::read(inherited_stage.join("manifest.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(inherited_field_attrs["provenance"], provenance);
+        assert_eq!(inherited_manifest.provenance, Some(provenance));
         fs::remove_dir_all(root).unwrap();
     }
 }

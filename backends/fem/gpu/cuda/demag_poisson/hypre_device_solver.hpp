@@ -39,7 +39,7 @@ void read_demag_poisson_hypre_solver_stats(
     bool &solver_reported_converged);
 
 bool validate_demag_poisson_hypre_device_solve(
-    const Context &ctx,
+    Context &ctx,
     GpuDemagPoissonWorkspace &workspace,
     int &iterations,
     double &residual,

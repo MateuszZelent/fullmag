@@ -66,6 +66,8 @@ bool gpu_rk_finalize_step_stats(
     fullmag_fem_step_stats &stats,
     std::string &reason);
 
+void gpu_rk_note_completed_final_reductions(Context &ctx);
+
 bool gpu_rk_finalize_step_stats_control_readback(
     Context &ctx,
     fullmag_fem_step_stats &stats,

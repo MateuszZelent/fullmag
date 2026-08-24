@@ -7,6 +7,21 @@
 
 #include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
 
+#include "context.hpp"
+#include "gpu/cuda/runtime/execution_receipt.hpp"
+
+namespace fullmag::fem {
+
+void gpu_rk_note_completed_final_reductions(Context &ctx)
+{
+    if (gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
+        gpu_execution_receipt_note_device(
+            ctx.gpu_state.execution_receipt, FEM_GPU_OPERATOR_REDUCTIONS);
+    }
+}
+
+} // namespace fullmag::fem
+
 #if !FULLMAG_HAS_CUDA_RUNTIME
 
 namespace fullmag::fem {
@@ -53,9 +68,9 @@ bool gpu_rk_finalize_step_stats(
     fullmag_fem_step_stats &stats,
     std::string &reason)
 {
-    (void)ctx;
     (void)stats;
     (void)reason;
+    gpu_rk_note_completed_final_reductions(ctx);
     return true;
 }
 
