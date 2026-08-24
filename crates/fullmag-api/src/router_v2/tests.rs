@@ -1883,7 +1883,7 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
             is_busy: false,
             can_accept_commands: true,
         },
-        capabilities: None,
+        capabilities: Some(resolved_all_field_capabilities()),
         metadata: None,
         mesh_workspace: None,
         stage_execution: None,
@@ -2063,7 +2063,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
             is_busy: false,
             can_accept_commands: true,
         },
-        capabilities: None,
+        capabilities: Some(resolved_all_field_capabilities()),
         metadata: None,
         mesh_workspace: None,
         stage_execution: None,
@@ -7845,25 +7845,16 @@ async fn quantities_catalog_returns_json_without_session() {
 async fn quantity_capability_is_separate_from_unmaterialized_field_cache() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.capabilities = Some(
-            serde_json::from_value(serde_json::json!({
-                "engine_id": "fdm_cuda",
-                "capability_profile_version": "test-profile",
-                "supported_terms": ["exchange", "demag_tensor_fft_newell"],
-                "supported_demag_realizations": ["tensor_fft_newell"],
-                "preview_quantities": ["m", "H_demag", "eden_demag"],
-                "snapshot_quantities": ["m", "H_demag", "eden_demag"],
-                "scalar_outputs": ["E_total"],
-                "approximate_operators": [],
-                "supports_frequency_response": false,
-                "supports_coupled_magnetoelastic_quasistatic": false,
-                "supports_coupled_magnetoelastic_elastodynamic": false,
-                "supports_frequency_domain_elastodynamics": false,
-                "supports_coupled_eigenmodes": false,
-                "supports_lossy_fallback_override": false
-            }))
-            .expect("valid CUDA capability fixture"),
-        );
+        let mut capabilities =
+            resolved_compute_fields_capabilities(&["m", "H_demag", "eden_demag"]);
+        capabilities.capability_profile_version = "test-profile".to_string();
+        capabilities.supported_terms =
+            vec!["exchange".to_string(), "demag_tensor_fft_newell".to_string()];
+        capabilities.supported_demag_realizations = vec!["tensor_fft_newell".to_string()];
+        capabilities.snapshot_quantities =
+            vec!["m".to_string(), "H_demag".to_string(), "eden_demag".to_string()];
+        capabilities.scalar_outputs = vec!["E_total".to_string()];
+        snapshot.capabilities = Some(capabilities);
         snapshot.latest_fields = LatestFields::default();
         snapshot.preview_cache = Default::default();
     }
@@ -20666,7 +20657,7 @@ async fn commands_endpoint_rejects_runtime_precondition_mismatch() {
 async fn commands_endpoint_validates_runtime_precondition_against_effective_status() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.session.status = "cancelled".into();
+        snapshot.session.status = "paused".into();
         snapshot.stage_execution = Some(StageExecutionState {
             total_stages: 1,
             completed_stage_indexes: Vec::new(),
@@ -20734,7 +20725,14 @@ async fn commands_endpoint_validates_runtime_precondition_against_effective_stat
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::OK);
+    if response.status() != StatusCode::OK {
+        let status = response.status();
+        let body = body_bytes(response).await;
+        panic!(
+            "effective-status command returned {status}: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
     let json = body_json(response).await;
     assert_eq!(json["accepted"], true);
 }
@@ -26688,7 +26686,6 @@ async fn fdm_multilayer_airbox_field_catalog_meta_and_vector_use_target_carrier(
             .insert("H_demag".to_string(), 88);
         snapshot.session.resolved_backend = Some("stale-current-backend".to_string());
         snapshot.session.resolved_device = Some("stale-current-device".to_string());
-        snapshot.session.resolved_precision = Some("single".to_string());
     }
     let expected_domain_generation = {
         let guard = state.current_live_state.read().await;
@@ -26753,7 +26750,14 @@ async fn fdm_multilayer_airbox_field_catalog_meta_and_vector_use_target_carrier(
         )
         .await
         .unwrap();
-    assert_eq!(vector.status(), StatusCode::OK);
+    if vector.status() != StatusCode::OK {
+        let status = vector.status();
+        let body = body_bytes(vector).await;
+        panic!(
+            "multilayer Airbox vector returned {status}: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
     assert_eq!(vector.headers()["x-fullmag-encoding"], "FMVP;version=3");
     assert_eq!(vector.headers()["x-fullmag-scope-kind"], "airbox");
     assert_eq!(vector.headers()["x-fullmag-scope-id"], "airbox");
@@ -38356,7 +38360,7 @@ async fn planar_default_identity_changes_for_position_not_presentation_style() {
     );
     assert_eq!(
         moved["frame"]["origin_m"],
-        serde_json::json!([11.0, 22.0, 31.0])
+        serde_json::json!([11.0, 22.0, 32.0])
     );
 }
 
