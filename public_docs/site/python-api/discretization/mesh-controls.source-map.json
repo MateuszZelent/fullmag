@@ -131,70 +131,70 @@
         "type": "str | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "Supported calibration vocabulary at the stage-first boundary.",
-        "meaning": "Physics/workflow calibration family.",
-        "backend_support": "FEM/Gmsh policy",
-        "problem_ir": "mesh_size_controls.calibrate_for"
+        "validation": "Standalone compatibility payload; no authoring facade attaches it to ProblemIR.",
+        "meaning": "Recorded calibration-family data.",
+        "backend_support": "Unattached",
+        "problem_ir": "none"
       },
       {
         "python": "MeshSizeControls.size_preset",
         "type": "str | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "Supported preset vocabulary at the stage-first boundary.",
-        "meaning": "Named size-policy preset.",
-        "backend_support": "FEM/Gmsh policy",
-        "problem_ir": "mesh_size_controls.size_preset"
+        "validation": "Standalone compatibility payload; no authoring facade attaches it to ProblemIR.",
+        "meaning": "Named size-policy data.",
+        "backend_support": "Unattached",
+        "problem_ir": "none"
       },
       {
         "python": "MeshSizeControls.maximum_element_size",
         "type": "float | None",
         "default": "None",
         "si_unit": "$\\mathrm{m}$",
-        "validation": "Finite and positive when authored.",
-        "meaning": "Requested upper element-size target.",
-        "backend_support": "FEM",
-        "problem_ir": "mesh_size_controls.maximum_element_size"
+        "validation": "Standalone compatibility payload; constructor does not validate it.",
+        "meaning": "Upper element-size data.",
+        "backend_support": "Unattached",
+        "problem_ir": "none"
       },
       {
         "python": "MeshSizeControls.minimum_element_size",
         "type": "float | None",
         "default": "None",
         "si_unit": "$\\mathrm{m}$",
-        "validation": "Finite and positive and no larger than effective maximum when authored.",
-        "meaning": "Requested lower element-size target.",
-        "backend_support": "FEM",
-        "problem_ir": "mesh_size_controls.minimum_element_size"
+        "validation": "Standalone compatibility payload; constructor does not validate it.",
+        "meaning": "Lower element-size data.",
+        "backend_support": "Unattached",
+        "problem_ir": "none"
       },
       {
         "python": "MeshSizeControls.maximum_element_growth_rate",
         "type": "float | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "Finite and positive; stage-first public authoring limits the practical range through 2.5.",
-        "meaning": "Requested maximum growth between refinement regions.",
-        "backend_support": "FEM/Gmsh",
-        "problem_ir": "mesh_size_controls.maximum_element_growth_rate"
+        "validation": "Standalone compatibility payload; constructor does not validate it.",
+        "meaning": "Element-growth data.",
+        "backend_support": "Unattached",
+        "problem_ir": "none"
       },
       {
         "python": "MeshSizeControls.curvature_factor",
         "type": "float | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "Finite and positive when authored.",
-        "meaning": "Curvature-derived sizing factor.",
-        "backend_support": "FEM/Gmsh",
-        "problem_ir": "mesh_size_controls.curvature_factor"
+        "validation": "Standalone compatibility payload; constructor does not validate it.",
+        "meaning": "Curvature-sizing data.",
+        "backend_support": "Unattached",
+        "problem_ir": "none"
       },
       {
         "python": "MeshSizeControls.narrow_region_resolution",
         "type": "float | None",
         "default": "None",
         "si_unit": "$1$",
-        "validation": "Finite and positive when authored.",
-        "meaning": "Resolution target for narrow regions.",
-        "backend_support": "FEM/Gmsh",
-        "problem_ir": "mesh_size_controls.narrow_region_resolution"
+        "validation": "Standalone compatibility payload; constructor does not validate it.",
+        "meaning": "Narrow-region data.",
+        "backend_support": "Unattached",
+        "problem_ir": "none"
       },
       {
         "python": "SharedMeshAssemblyPolicy.interface_hmax_factor",
@@ -202,8 +202,8 @@
         "default": "0.5",
         "si_unit": "$1$",
         "validation": "Strictly greater than zero and no greater than one.",
-        "meaning": "Interface size relative to the local object maximum.",
-        "backend_support": "FEM shared-domain assembly",
+        "meaning": "Preserved compatibility value; not consumed by the current builder.",
+        "backend_support": "Inert compatibility data",
         "problem_ir": "shared_mesh_assembly_policy.interface_hmax_factor"
       },
       {
@@ -212,8 +212,8 @@
         "default": "True",
         "si_unit": "$1$",
         "validation": "Boolean.",
-        "meaning": "Require a conforming shared-domain mesh.",
-        "backend_support": "FEM shared-domain assembly",
+        "meaning": "Preserved compatibility value; not consumed by the current builder.",
+        "backend_support": "Inert compatibility data",
         "problem_ir": "shared_mesh_assembly_policy.enforce_conforming"
       },
       {
@@ -222,8 +222,8 @@
         "default": "3.0",
         "si_unit": "$1$",
         "validation": "Finite and positive.",
-        "meaning": "Airbox target relative to the global maximum element size.",
-        "backend_support": "FEM shared-domain assembly",
+        "meaning": "Preserved compatibility value; not consumed by the current builder.",
+        "backend_support": "Inert compatibility data",
         "problem_ir": "shared_mesh_assembly_policy.airbox_hmax_factor"
       }
     ]

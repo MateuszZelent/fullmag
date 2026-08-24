@@ -195,6 +195,12 @@ study.stages.add_relax(
 )
 ```
 
+Ten dokładny blok przeszedł podczas przeglądu test wykonania kontraktu authoringu z zastąpioną
+wyłącznie kosztowną materializacją siatki; konstrukcja domeny, polityk i etapu zakończyła się bez
+wyjątku. Integracyjnym wzorcem repozytoryjnym jest
+`tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py`; dokumentacyjna
+wersja zachowuje stage-first kontrakt współdzielonej domeny, filmu, demag i etapu relaksacji.
+
 The explicit `study.build_domain_mesh()` request materializes the authored geometry and mesh policy.
 A later geometry or mesh-policy change invalidates that mesh; the UI marks the current realization
 stale until it is rebuilt.

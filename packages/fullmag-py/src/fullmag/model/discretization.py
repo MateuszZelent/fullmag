@@ -580,6 +580,44 @@ class MeshSizeControls:
         }
 
 
+_MESH_SIZE_CALIBRATIONS = (
+    "general_physics",
+    "micromagnetics_static",
+    "micromagnetics_relaxation",
+    "micromagnetics_frequency_domain",
+    "magnetostatics_dominated",
+    "imported_surface_cleanup",
+)
+_MESH_SIZE_PRESETS = (
+    "extremely_fine",
+    "extra_fine",
+    "finer",
+    "fine",
+    "normal",
+    "coarse",
+    "coarser",
+    "extra_coarse",
+    "extremely_coarse",
+)
+
+
+def _normalize_mesh_recipe_vocabulary(
+    field_name: str,
+    value: str | None,
+    supported: tuple[str, ...],
+) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a string or None")
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    if not normalized:
+        return None
+    if normalized not in supported:
+        raise ValueError(f"{field_name} must be one of {supported!r}, got {value!r}")
+    return normalized
+
+
 @dataclass(frozen=True, slots=True)
 class PerObjectMeshRecipe:
     """Full mesh recipe for a single ferromagnetic object.
@@ -666,6 +704,21 @@ class PerObjectMeshRecipe:
                 "per-object mesh source is unavailable; use FEM(mesh=...) for "
                 "the supported study-level imported mesh route"
             )
+
+        object.__setattr__(
+            self,
+            "calibrate_for",
+            _normalize_mesh_recipe_vocabulary(
+                "calibrate_for", self.calibrate_for, _MESH_SIZE_CALIBRATIONS
+            ),
+        )
+        object.__setattr__(
+            self,
+            "size_preset",
+            _normalize_mesh_recipe_vocabulary(
+                "size_preset", self.size_preset, _MESH_SIZE_PRESETS
+            ),
+        )
 
         if self.order is not None:
             if isinstance(self.order, bool) or not isinstance(self.order, Integral):

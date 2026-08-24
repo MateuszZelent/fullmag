@@ -237,6 +237,12 @@ study.stages.add_relax(
 )
 ```
 
+Ten dokładny blok przeszedł podczas przeglądu test wykonania kontraktu authoringu z zastąpioną
+wyłącznie kosztowną materializacją siatki; konstrukcja domeny, polityk i etapu zakończyła się bez
+wyjątku. Integracyjnym wzorcem repozytoryjnym jest
+`tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py`; przykład skraca
+kwalifikację SP4, ale zachowuje jej stage-first budowę domeny, filmu i etapu relaksacji.
+
 ## Control Room crosswalk
 
 ### Airbox Mesh Parameters

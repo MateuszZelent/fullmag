@@ -336,6 +336,19 @@ class LayeredMeshDslValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"FEM\(mesh=\.\.\.\)"):
             PerObjectMeshRecipe(source="object.mesh")
 
+    def test_per_object_recipe_validates_and_normalizes_size_vocabulary(self) -> None:
+        with self.assertRaisesRegex(ValueError, "calibrate_for"):
+            PerObjectMeshRecipe(calibrate_for="unknown")
+        with self.assertRaisesRegex(ValueError, "size_preset"):
+            PerObjectMeshRecipe(size_preset="unknown")
+
+        recipe = PerObjectMeshRecipe(
+            calibrate_for="Micromagnetics Relaxation",
+            size_preset="Extra Fine",
+        )
+        self.assertEqual(recipe.calibrate_for, "micromagnetics_relaxation")
+        self.assertEqual(recipe.size_preset, "extra_fine")
+
     def test_per_object_recipe_rejects_boolean_order_and_normalizes_integral(self) -> None:
         with self.assertRaisesRegex(TypeError, "order must be an integer"):
             PerObjectMeshRecipe(order=True)

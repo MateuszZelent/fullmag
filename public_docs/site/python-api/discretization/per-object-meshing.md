@@ -120,8 +120,8 @@ general.
 | `PerObjectMeshRecipe.hmin` | `float or None` | `None` | $\mathrm{m}$ | compatibility spelling used when canonical value is absent | `hmin` and resolved `minimum_element_size` |
 | `PerObjectMeshRecipe.order` | `int or None` | `None` | $1$ | object finite-element order; prismatic route accepts only 1 | `order` |
 | `PerObjectMeshRecipe.source` | `str or None` | `None` | $1$ | reserved; any authored value is rejected in favor of study-level `FEM(mesh=...)` | unavailable |
-| `PerObjectMeshRecipe.calibrate_for` | `str or None` | `None` | $1$ | provenance label; currently no numerical effect | `calibrate_for` |
-| `PerObjectMeshRecipe.size_preset` | `str or None` | `None` | $1$ | named size preset | `size_preset` |
+| `PerObjectMeshRecipe.calibrate_for` | `str or None` | `None` | $1$ | normalized supported provenance vocabulary; currently no numerical effect | `calibrate_for` |
+| `PerObjectMeshRecipe.size_preset` | `str or None` | `None` | $1$ | normalized supported size-preset vocabulary | `size_preset` |
 
 ### Gmsh algorithms, sizing, and smoothing
 
@@ -244,6 +244,12 @@ study.stages.add_relax(
     max_steps=50_000,
 )
 ```
+
+Ten dokładny blok przeszedł podczas przeglądu test wykonania kontraktu authoringu z zastąpioną
+wyłącznie kosztowną materializacją siatki; konstrukcja receptury i etapu zakończyła się bez wyjątku.
+Integracyjnym wzorcem repozytoryjnym jest
+`tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py`; przykład izoluje
+z tego scenariusza stage-first kontrakt receptury obiektowej i dokładnych warstw filmu.
 
 ## Control Room object-mesh editor
 
@@ -407,8 +413,8 @@ layer convergence rather than treating one layer as universally sufficient.
 | PerObjectMeshRecipe.hmin | float \| None | None | $\mathrm{m}$ | Compatibility alias used when minimum_element_size is absent. | Object minimum-size alias. | FEM | mesh_workflow.per_geometry.<object>.hmin |
 | PerObjectMeshRecipe.order | int \| None | None | $1$ | Non-Boolean `Integral`, normalized to `int`; prismatic topology permits only order one. | Object finite-element order. | FEM | mesh_workflow.per_geometry.<object>.order |
 | PerObjectMeshRecipe.source | str \| None | None | $1$ | Any authored value is rejected; use study-level `FEM(mesh=...)`. | Reserved object mesh source. | Unavailable | none |
-| PerObjectMeshRecipe.calibrate_for | str \| None | None | $1$ | Supported provenance vocabulary; currently no numerical effect. | Recorded physics/workflow calibration family. | Provenance only | mesh_workflow.per_geometry.<object>.calibrate_for |
-| PerObjectMeshRecipe.size_preset | str \| None | None | $1$ | Supported size-preset vocabulary. | Named mesh-size preset. | FEM | mesh_workflow.per_geometry.<object>.size_preset |
+| PerObjectMeshRecipe.calibrate_for | str \| None | None | $1$ | Normalized and rejected at construction unless it belongs to the supported provenance vocabulary; currently no numerical effect. | Recorded physics/workflow calibration family. | Provenance only | mesh_workflow.per_geometry.<object>.calibrate_for |
+| PerObjectMeshRecipe.size_preset | str \| None | None | $1$ | Normalized and rejected at construction unless it belongs to the supported size-preset vocabulary. | Named mesh-size preset. | FEM | mesh_workflow.per_geometry.<object>.size_preset |
 | PerObjectMeshRecipe.algorithm_2d | int \| None | None | $1$ | Finite integer algorithm identifier. | Gmsh surface meshing algorithm. | FEM/Gmsh | mesh_workflow.per_geometry.<object>.algorithm_2d |
 | PerObjectMeshRecipe.algorithm_3d | int \| None | None | $1$ | Finite integer algorithm identifier. | Gmsh volume meshing algorithm. | FEM/Gmsh | mesh_workflow.per_geometry.<object>.algorithm_3d |
 | PerObjectMeshRecipe.size_factor | float \| None | None | $1$ | Positive when authored by structured controls. | Preset-derived size multiplier. | FEM | mesh_workflow.per_geometry.<object>.size_factor |
