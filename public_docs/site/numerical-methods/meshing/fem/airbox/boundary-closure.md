@@ -233,9 +233,9 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 
 ## Related documentation
 
-- [Airbox geometry](geometry.html)
-- [Periodic airbox](periodic-airbox.html)
-- [Demag solvers](../../../demag-solvers/index.html)
+- [Airbox geometry](geometry.md)
+- [Periodic airbox](periodic-airbox.md)
+- [Demag solvers](../../../demag-solvers/index.md)
 
 ## References
 

@@ -266,8 +266,8 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 
 ## Related documentation
 
-- [Free tetrahedral](free-tetrahedral.html)
-- [Mixed elements](mixed-elements.html)
+- [Free tetrahedral](free-tetrahedral.md)
+- [Mixed elements](mixed-elements.md)
 
 ## References
 

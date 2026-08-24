@@ -198,8 +198,8 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 
 ## Related documentation
 
-- [Periodic demagnetization](../../demag-solvers/periodic-demag.html)
-- [FDM Cartesian grids](../fdm-grids.html)
+- [Periodic demagnetization](../../demag-solvers/periodic-demag.md)
+- [FDM Cartesian grids](../fdm-grids.md)
 
 ## References
 

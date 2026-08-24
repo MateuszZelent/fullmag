@@ -213,8 +213,8 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 
 ## Related documentation
 
-- [Swept meshes](../../swept-meshes.html)
-- [Assembly and conformity](assembly-and-conformity.html)
+- [Swept meshes](../../swept-meshes.md)
+- [Assembly and conformity](assembly-and-conformity.md)
 
 ## References
 

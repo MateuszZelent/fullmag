@@ -20,6 +20,7 @@ governance form an independent subsystem.
 ```{toctree}
 :maxdepth: 2
 
+meshing/index
 time-integration/index
 relaxation/index
 demag-solvers/index

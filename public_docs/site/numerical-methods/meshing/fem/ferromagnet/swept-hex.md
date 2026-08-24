@@ -169,8 +169,8 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 
 ## Related documentation
 
-- [Swept prism](swept-prism.html)
-- [General swept meshes](../../swept-meshes.html)
+- [Swept prism](swept-prism.md)
+- [General swept meshes](../../swept-meshes.md)
 
 ## References
 

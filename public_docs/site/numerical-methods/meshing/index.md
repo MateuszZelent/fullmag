@@ -277,25 +277,27 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 
 ## Related documentation
 
-- [FDM grids](fdm-grids.html)
-- [FEM shared domain](fem-shared-domain.html)
-- [Refinement and convergence](refinement.html)
-- [Swept meshes](swept-meshes.html)
+- [FDM grids](fdm-grids.md)
+- [FEM shared domain](fem-shared-domain.md)
+- [Refinement and convergence](refinement.md)
+- [Swept meshes](swept-meshes.md)
 
 ## References
 
 - C. Geuzaine and J.-F. Remacle, “Gmsh: a three-dimensional finite element mesh generator with built-in pre- and post-processing facilities,” *International Journal for Numerical Methods in Engineering* **79** (2009), 1309–1331, [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
 - C. Abert, “Micromagnetics and spintronics: models and numerical methods,” *European Physical Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
-- Gmsh reference manual, mesh algorithms, size fields, extrusion and physical groups: [gmsh.info/doc/texinfo](https://gmsh.info/doc/texinfo/).## Documentation tree
+- Gmsh reference manual, mesh algorithms, size fields, extrusion and physical groups: [gmsh.info/doc/texinfo](https://gmsh.info/doc/texinfo/).
 
-    ```{toctree}
-    :maxdepth: 2
+## Documentation tree
 
-    fdm/index
+```{toctree}
+:maxdepth: 2
+
+fdm/index
 fdm-grids
 fem/index
 airbox
 fem-shared-domain
 refinement
 swept-meshes
-    ```
+```

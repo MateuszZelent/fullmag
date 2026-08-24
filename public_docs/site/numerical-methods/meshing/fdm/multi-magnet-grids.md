@@ -204,8 +204,8 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 
 ## Related documentation
 
-- [FDM Cartesian grids](../fdm-grids.html)
-- [Periodic grids](periodic-grids.html)
+- [FDM Cartesian grids](../fdm-grids.md)
+- [Periodic grids](periodic-grids.md)
 
 ## References
 

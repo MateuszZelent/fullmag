@@ -195,8 +195,8 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 
 ## Related documentation
 
-- [FDM Cartesian grids](../fdm-grids.html)
-- [Demagnetization](../../../physics/interactions/demagnetization/index.html)
+- [FDM Cartesian grids](../fdm-grids.md)
+- [Demagnetization](../../../physics/interactions/demagnetization/index.md)
 
 ## References
 

@@ -200,9 +200,9 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 
 ## Related documentation
 
-- [Refinement](../../refinement.html)
-- [Boundary layers](../ferromagnet/boundary-layers.html)
-- [Periodic airbox](../airbox/periodic-airbox.html)
+- [Refinement](../../refinement.md)
+- [Boundary layers](../ferromagnet/boundary-layers.md)
+- [Periodic airbox](../airbox/periodic-airbox.md)
 
 ## References
 

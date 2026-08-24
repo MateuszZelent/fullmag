@@ -270,9 +270,9 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 
 ## Related documentation
 
-- [Shared-domain branch](fem/shared-domain/index.html)
-- [Airbox](airbox.html)
-- [Mixed elements](fem/ferromagnet/mixed-elements.html)
+- [Shared-domain branch](fem/shared-domain/index.md)
+- [Airbox](airbox.md)
+- [Mixed elements](fem/ferromagnet/mixed-elements.md)
 
 ## References
 

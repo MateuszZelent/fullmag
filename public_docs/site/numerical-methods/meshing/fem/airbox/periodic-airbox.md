@@ -229,9 +229,9 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 
 ## Related documentation
 
-- [Periodic demagnetization](../../../demag-solvers/periodic-demag.html)
-- [Boundary closure](boundary-closure.html)
-- [FDM periodic grids](../../fdm/periodic-grids.html)
+- [Periodic demagnetization](../../../demag-solvers/periodic-demag.md)
+- [Boundary closure](boundary-closure.md)
+- [FDM periodic grids](../../fdm/periodic-grids.md)
 
 ## References
 

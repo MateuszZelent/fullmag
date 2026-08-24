@@ -256,8 +256,8 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 
 ## Related documentation
 
-- [Swept prism](swept-prism.html)
-- [Free tetrahedral](free-tetrahedral.html)
+- [Swept prism](swept-prism.md)
+- [Free tetrahedral](free-tetrahedral.md)
 
 ## References
 

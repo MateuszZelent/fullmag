@@ -305,9 +305,9 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 
 ## Related documentation
 
-- [FDM grids](fdm-grids.html)
-- [FEM ferromagnet meshes](fem/ferromagnet/index.html)
-- [Airbox grading](fem/airbox/grading.html)
+- [FDM grids](fdm-grids.md)
+- [FEM ferromagnet meshes](fem/ferromagnet/index.md)
+- [Airbox grading](fem/airbox/grading.md)
 
 ## References
 

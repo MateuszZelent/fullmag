@@ -229,8 +229,8 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 
 ## Related documentation
 
-- [Airbox geometry](geometry.html)
-- [Refinement](../../refinement.html)
+- [Airbox geometry](geometry.md)
+- [Refinement](../../refinement.md)
 
 ## References
 
