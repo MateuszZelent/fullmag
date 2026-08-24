@@ -12,7 +12,7 @@ from types import ModuleType
 from validate_scientific_docs import validate_page
 
 
-SCIENTIFIC_ROOTS = ("docs/physics", "public_docs/site/physics")
+SCIENTIFIC_ROOTS = ("docs/physics", "docs/audits", "public_docs/site/physics")
 EXEMPT_NAMES = {"README.md", "index.md"}
 EXEMPT_PATHS = {
     # Governance for authoring physics notes, not a physical/numerical model note.

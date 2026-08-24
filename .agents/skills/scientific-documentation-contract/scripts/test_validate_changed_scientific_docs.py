@@ -119,6 +119,21 @@ This page reserves the public documentation location for FDM CPU exchange.
             errors,
         )
 
+    def test_new_internal_audit_requires_adjacent_source_map(self) -> None:
+        audit = self.repo / "docs/audits/backend-audit.md"
+        audit.parent.mkdir(parents=True)
+        audit.write_text("# Backend audit\n", encoding="utf-8")
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "add audit")
+
+        errors = validate_changed(self.repo, self.base, "HEAD")
+
+        self.assertIn(
+            "changed scientific page requires sidecar manifest: "
+            "docs/audits/backend-audit.source-map.json",
+            errors,
+        )
+
     def test_registered_canonical_scaffold_does_not_require_source_map(self) -> None:
         self._render_registered_scaffold()
         _git(self.repo, "add", ".")

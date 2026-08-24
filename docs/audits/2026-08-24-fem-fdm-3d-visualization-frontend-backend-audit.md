@@ -696,7 +696,11 @@ Sąsiedni plik `2026-08-24-fem-fdm-3d-visualization-frontend-backend-audit.sourc
 (f3d-audit-validation)=
 ### Walidacja
 
-Walidacja obejmuje parser dokumentacji naukowej, rozwiązywanie wszystkich symboli mapy źródeł względem audytowanego SHA oraz bramki wyszczególnione w sekcji 16. Wynik statyczny nie jest przedstawiany jako dowód wykonania testów sprzętowych.
+Walidacja obejmuje parser dokumentacji naukowej, rozwiązywanie wszystkich symboli mapy źródeł
+względem bieżącego checkoutu oraz bramki wyszczególnione w sekcji 16. Pole
+`audited_source_revision` i niezmienne odsyłacze przypinają historyczny zakres twierdzeń, ale obecny
+walidator nie odczytuje treści źródeł z tego obiektu Git. Wynik statyczny nie jest przedstawiany jako
+dowód wykonania testów sprzętowych.
 
 (f3d-audit-limitations)=
 ### Ograniczenia
