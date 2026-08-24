@@ -1,0 +1,2 @@
+trigger: 2026-08-24T20:59:00+02:00
+purpose: apply verified 28-file meshing documentation payload
