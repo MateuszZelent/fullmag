@@ -33794,15 +33794,6 @@ async fn assert_v2_field_data_plane_reads_canonical_transport_field_artifacts() 
             )
             .await
             .unwrap();
-        if quantity == "spin_current_tensor" {
-            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-            let body = body_json(response).await;
-            assert_eq!(body["code"], "bad_request");
-            assert!(body["message"]
-                .as_str()
-                .is_some_and(|message| message.contains("unsupported_shape")));
-            continue;
-        }
         if response.status() != StatusCode::OK {
             let status = response.status();
             let body = body_bytes(response).await;
