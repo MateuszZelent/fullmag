@@ -5,11 +5,16 @@ export type MagnetizationTexturePresetId =
   | "antivortex"
   | "bloch_skyrmion"
   | "neel_skyrmion"
+  | "antiskyrmion"
+  | "skyrmionium"
   | "bimeron"
   | "domain_wall"
   | "two_domain"
+  | "vortex_wall"
   | "helical"
-  | "conical";
+  | "conical"
+  | "hopfion"
+  | "hopfion_compact_support";
 
 export interface MagnetizationTexturePreset {
   defaultParams: Record<string, unknown>;
@@ -49,6 +54,16 @@ export const MAGNETIZATION_TEXTURE_PRESETS: readonly MagnetizationTexturePreset[
     label: "Néel Skyrmion",
   },
   {
+    defaultParams: { plane: "xy", radius: 10e-9, wall_width: 2e-9, core_polarity: -1, chirality: 1 },
+    id: "antiskyrmion",
+    label: "Antiskyrmion",
+  },
+  {
+    defaultParams: { plane: "xy", inner_radius: 8e-9, outer_radius: 16e-9, wall_width: 2e-9, kind: "neel", chirality: 1, background_sign: 1 },
+    id: "skyrmionium",
+    label: "Skyrmionium",
+  },
+  {
     defaultParams: { plane: "xy", radius: 10e-9, wall_width: 2e-9, vorticity: 1, helicity_rad: 0, background_sign: 1 },
     id: "bimeron",
     label: "Bimeron",
@@ -64,6 +79,11 @@ export const MAGNETIZATION_TEXTURE_PRESETS: readonly MagnetizationTexturePreset[
     label: "Two Domain",
   },
   {
+    defaultParams: { plane: "xy", wall_half_width: 25e-9, left_mx: 1, right_mx: -1, circulation: 1, core_polarity: 1, core_radius: 2e-9 },
+    id: "vortex_wall",
+    label: "Vortex Wall",
+  },
+  {
     defaultParams: { wavevector: [1, 0, 0], e1: [1, 0, 0], e2: [0, 1, 0], phase_rad: 0.0 },
     id: "helical",
     label: "Helical",
@@ -72,5 +92,15 @@ export const MAGNETIZATION_TEXTURE_PRESETS: readonly MagnetizationTexturePreset[
     defaultParams: { wavevector: [1, 0, 0], cone_axis: [0, 0, 1], phase_rad: 0.0, cone_angle_rad: 0.785398 },
     id: "conical",
     label: "Conical",
+  },
+  {
+    defaultParams: { radius: 20e-9, hopf_charge: 1, background_sign: 1, axial_scale: 1, phase_rad: 0 },
+    id: "hopfion",
+    label: "Hopfion",
+  },
+  {
+    defaultParams: { major_radius: 20e-9, minor_radius: 8e-9 },
+    id: "hopfion_compact_support",
+    label: "Hopfion (Compact Support)",
   },
 ] as const;

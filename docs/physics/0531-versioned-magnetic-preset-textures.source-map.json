@@ -3,7 +3,7 @@
     "path": "docs/physics/0531-versioned-magnetic-preset-textures.md",
     "title": "Wersjonowany kontrakt analitycznych tekstur magnetyzacji",
     "status": "accepted_contract_not_production_qualified",
-    "updated": "2026-08-19"
+    "updated": "2026-08-24"
   },
   "backend_matrix": [
     {
@@ -61,6 +61,21 @@
       "id": "texture-conical-v2",
       "symbols": ["beta", "a", "e_1", "e_2"],
       "sources": ["rust-evaluator", "python-evaluator"]
+    },
+    {
+      "id": "texture-vortex-wall-v2",
+      "symbols": ["w", "s_L", "s_R"],
+      "sources": ["rust-vortex-wall", "python-vortex-wall"]
+    },
+    {
+      "id": "texture-hopfion-compact-support-v2",
+      "symbols": ["R_H", "r_H", "rho", "psi", "alpha", "Phi", "Theta"],
+      "sources": ["rust-compact-hopfion", "python-compact-hopfion"]
+    },
+    {
+      "id": "texture-hopfion-compact-vector-v2",
+      "symbols": ["Phi", "Theta"],
+      "sources": ["rust-compact-hopfion", "python-compact-hopfion"]
     }
   ],
   "symbols": [
@@ -84,7 +99,16 @@
     {"id": "e_v", "latex": "\\mathbf e_v", "meaning": "druga oś frame", "si_unit": "1"},
     {"id": "e_n", "latex": "\\mathbf e_n", "meaning": "normalna frame", "si_unit": "1"},
     {"id": "e_1", "latex": "\\mathbf e_1", "meaning": "pierwsza oś płaszczyzny spinowej", "si_unit": "1"},
-    {"id": "e_2", "latex": "\\mathbf e_2", "meaning": "druga oś płaszczyzny spinowej", "si_unit": "1"}
+    {"id": "e_2", "latex": "\\mathbf e_2", "meaning": "druga oś płaszczyzny spinowej", "si_unit": "1"},
+    {"id": "w", "latex": "w", "meaning": "połówkowa szerokość ściany vortexowej", "si_unit": "\\mathrm{m}"},
+    {"id": "s_L", "latex": "s_L", "meaning": "znak lewej domeny", "si_unit": "1"},
+    {"id": "s_R", "latex": "s_R", "meaning": "znak prawej domeny", "si_unit": "1"},
+    {"id": "R_H", "latex": "R_H", "meaning": "promień główny torusa hopfionu", "si_unit": "\\mathrm{m}"},
+    {"id": "r_H", "latex": "r_H", "meaning": "promień przekroju i nośnika hopfionu", "si_unit": "\\mathrm{m}"},
+    {"id": "rho", "latex": "\\rho", "meaning": "odległość od linii centralnej torusa", "si_unit": "\\mathrm{m}"},
+    {"id": "alpha", "latex": "\\alpha", "meaning": "lokalny kąt przekroju torusa", "si_unit": "\\mathrm{rad}"},
+    {"id": "Phi", "latex": "\\Phi", "meaning": "azymut magnetyzacji hopfionu", "si_unit": "\\mathrm{rad}"},
+    {"id": "Theta", "latex": "\\Theta", "meaning": "kąt polarny magnetyzacji hopfionu", "si_unit": "\\mathrm{rad}"}
   ],
   "sources": [
     {
@@ -134,6 +158,30 @@
       "path": "packages/fullmag-py/src/fullmag/_core.py",
       "symbol": "sample_preset_texture_v2",
       "responsibility": "optional native dispatch with explicit fallback"
+    },
+    {
+      "id": "rust-vortex-wall",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "vortex_wall",
+      "responsibility": "kanoniczny profil ściany vortexowej v2"
+    },
+    {
+      "id": "python-vortex-wall",
+      "path": "packages/fullmag-py/src/fullmag/init/preset_eval_v2.py",
+      "symbol": "_vortex_wall",
+      "responsibility": "referencyjny profil ściany vortexowej v2"
+    },
+    {
+      "id": "rust-compact-hopfion",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "hopfion_compact_support",
+      "responsibility": "kanoniczny profil zwartego hopfionu v2"
+    },
+    {
+      "id": "python-compact-hopfion",
+      "path": "packages/fullmag-py/src/fullmag/init/preset_eval_v2.py",
+      "symbol": "_hopfion_compact_support",
+      "responsibility": "referencyjny profil zwartego hopfionu v2"
     }
   ],
   "public_api": {
@@ -177,6 +225,96 @@
         "meaning": "kierunek magnetyzacji w środku ściany",
         "backend_support": "FEM/FDM CPU/GPU",
         "problem_ir": "preset_params.wall_center_direction"
+      },
+      {
+        "python": "texture.vortex_wall.wall_half_width",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite and > 0",
+        "meaning": "połówkowa szerokość centralnego pasa vortexu",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "preset_params.wall_half_width"
+      },
+      {
+        "python": "texture.vortex_wall.left_mx",
+        "type": "float",
+        "default": "1",
+        "si_unit": "1",
+        "validation": "finite and nonzero",
+        "meaning": "znak lewej jednorodnej domeny",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "preset_params.left_mx"
+      },
+      {
+        "python": "texture.vortex_wall.right_mx",
+        "type": "float",
+        "default": "-1",
+        "si_unit": "1",
+        "validation": "finite and nonzero",
+        "meaning": "znak prawej jednorodnej domeny",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "preset_params.right_mx"
+      },
+      {
+        "python": "texture.vortex_wall.circulation",
+        "type": "int",
+        "default": "1",
+        "si_unit": "1",
+        "validation": "-1 or 1",
+        "meaning": "circulation centralnego vortexu",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "preset_params.circulation"
+      },
+      {
+        "python": "texture.vortex_wall.core_polarity",
+        "type": "int",
+        "default": "1",
+        "si_unit": "1",
+        "validation": "-1 or 1",
+        "meaning": "polarity centralnego rdzenia",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "preset_params.core_polarity"
+      },
+      {
+        "python": "texture.vortex_wall.core_radius",
+        "type": "float",
+        "default": "1e-9",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite and > 0",
+        "meaning": "promień centralnego rdzenia",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "preset_params.core_radius"
+      },
+      {
+        "python": "texture.vortex_wall.plane",
+        "type": "str",
+        "default": "xy",
+        "si_unit": "1",
+        "validation": "xy, xz or yz",
+        "meaning": "prawoskrętny frame ściany",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "preset_params.plane"
+      },
+      {
+        "python": "texture.hopfion_compact_support.major_radius",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite and > 0",
+        "meaning": "promień główny torusa",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "preset_params.major_radius"
+      },
+      {
+        "python": "texture.hopfion_compact_support.minor_radius",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite and > 0",
+        "meaning": "promień przekroju i zwartego nośnika",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "preset_params.minor_radius"
       }
     ]
   }

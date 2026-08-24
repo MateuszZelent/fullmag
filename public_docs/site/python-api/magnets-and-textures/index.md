@@ -23,4 +23,5 @@ ferromagnet
 initial-magnetization
 uniform-texture
 preset-textures
+mumax3-compatibility
 ```

@@ -195,6 +195,37 @@ const BIMERON_FIELDS = [
   { field: "background_sign", label: "Background Sign" },
 ] as const satisfies readonly DraftNumberFieldSpec[];
 
+
+const SKYRMIONIUM_FIELDS = [
+  { field: "inner_radius", label: "Inner Radius", unit: "m" },
+  { field: "outer_radius", label: "Outer Radius", unit: "m" },
+  { field: "wall_width", label: "Wall Width", unit: "m" },
+  { field: "chirality", label: "Chirality" },
+  { field: "background_sign", label: "Background Sign" },
+] as const satisfies readonly DraftNumberFieldSpec[];
+
+const HOPFION_FIELDS = [
+  { field: "radius", label: "Radius", unit: "m" },
+  { field: "hopf_charge", label: "Hopf Charge" },
+  { field: "background_sign", label: "Background Sign" },
+  { field: "axial_scale", label: "Axial Scale" },
+  { field: "phase_rad", label: "Phase", unit: "rad" },
+] as const satisfies readonly DraftNumberFieldSpec[];
+
+const COMPACT_HOPFION_FIELDS = [
+  { field: "major_radius", label: "Major Radius", unit: "m" },
+  { field: "minor_radius", label: "Minor Radius", unit: "m" },
+] as const satisfies readonly DraftNumberFieldSpec[];
+
+const VORTEX_WALL_FIELDS = [
+  { field: "wall_half_width", label: "Wall Half-Width", unit: "m" },
+  { field: "left_mx", label: "Left mx" },
+  { field: "right_mx", label: "Right mx" },
+  { field: "circulation", label: "Circulation" },
+  { field: "core_polarity", label: "Core Polarity" },
+  { field: "core_radius", label: "Core Radius", unit: "m" },
+] as const satisfies readonly DraftNumberFieldSpec[];
+
 function patchDraftField(
   updateDraft: UpdateMagneticTextureDraft,
   field: MagneticTextureDraftField,
@@ -342,10 +373,53 @@ export function MagneticTexturePresetParametersSection({
         </>
       ) : null}
       {draft.presetKind === "bloch_skyrmion" ||
-      draft.presetKind === "neel_skyrmion" ? (
+      draft.presetKind === "neel_skyrmion" ||
+      draft.presetKind === "antiskyrmion" ? (
         <>
           <PlaneSelect draft={draft} updateDraft={updateDraft} />
           <DraftNumberFields draft={draft} fields={SKYRMION_FIELDS} updateDraft={updateDraft} />
+        </>
+      ) : null}
+
+      {draft.presetKind === "skyrmionium" ? (
+        <>
+          <PlaneSelect draft={draft} updateDraft={updateDraft} />
+          <DraftSelectField
+            draft={draft}
+            field="kind"
+            label="Kind"
+            options={WALL_KIND_OPTIONS}
+            updateDraft={updateDraft}
+          />
+          <DraftNumberFields
+            draft={draft}
+            fields={SKYRMIONIUM_FIELDS}
+            updateDraft={updateDraft}
+          />
+        </>
+      ) : null}
+      {draft.presetKind === "hopfion" ? (
+        <DraftNumberFields
+          draft={draft}
+          fields={HOPFION_FIELDS}
+          updateDraft={updateDraft}
+        />
+      ) : null}
+      {draft.presetKind === "hopfion_compact_support" ? (
+        <DraftNumberFields
+          draft={draft}
+          fields={COMPACT_HOPFION_FIELDS}
+          updateDraft={updateDraft}
+        />
+      ) : null}
+      {draft.presetKind === "vortex_wall" ? (
+        <>
+          <PlaneSelect draft={draft} updateDraft={updateDraft} />
+          <DraftNumberFields
+            draft={draft}
+            fields={VORTEX_WALL_FIELDS}
+            updateDraft={updateDraft}
+          />
         </>
       ) : null}
       {draft.presetKind === "bimeron" ? (

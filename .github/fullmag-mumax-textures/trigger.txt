@@ -1,1 +1,0 @@
-Trigger the corrected pull-request validation workflow.

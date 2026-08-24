@@ -2,7 +2,7 @@
 
 - Status: accepted_contract_not_production_qualified
 - Owners: Fullmag physics and runtime
-- Last updated: 2026-08-19
+- Last updated: 2026-08-24
 - Related ADRs: docs/adr/0011-resource-first-api.md
 - Related specs: docs/specs/magnetization-init-policy-v0.md
 
@@ -100,6 +100,49 @@ Profil ma normę jeden dla każdego $\xi$, właściwe granice domen i nie reduku
 się do skoku. two_domain v2 ma jawny wall_width, chyba że użytkownik wybierze
 jawny tryb ostrej granicy.
 
+Preset `vortex_wall` łączy dokładnie jednorodne domeny z regularnym profilem
+vortexu w centralnym pasie. Dla lokalnej współrzędnej $u$, połówkowej szerokości
+$w>0$ i niezerowych znaków domen $s_L=\operatorname{sgn}(m_{x,L})$ oraz
+$s_R=\operatorname{sgn}(m_{x,R})$:
+
+```{math}
+:label: texture-vortex-wall-v2
+
+\mathbf m(u,v)=
+\begin{cases}
+s_L\mathbf e_u, & u < -w,\\
+\mathbf m_{\mathrm{vortex}}(u,v), & -w\leq u\leq w,\\
+s_R\mathbf e_u, & u > w.
+\end{cases}
+```
+
+Centralny profil używa tego samego równania, frame, `circulation`,
+`core_polarity` i `core_radius` co vortex v2. Parametr $w$ jest jawny w metrach;
+nie zależy od rozmiaru siatki ani bieżących granic symulacji.
+
+Kompaktowy hopfion używa współrzędnych toroidalnych. Dla promienia głównego
+$R_H>0$, promienia przekroju $r_H>0$ i
+$\psi=\operatorname{atan2}(y,x)$ definiujemy
+$a=x\cos\psi+y\sin\psi-R_H$ oraz $\rho=\sqrt{z^2+a^2}$. Dla
+$\rho<r_H$:
+
+```{math}
+:label: texture-hopfion-compact-support-v2
+
+\alpha=\operatorname{atan2}(z,a),\qquad
+\Phi=-\alpha+\psi,\qquad
+\Theta=\pi\exp\!\left(1-\frac{1}{1-(\rho/r_H)^2}\right),
+```
+
+```{math}
+:label: texture-hopfion-compact-vector-v2
+
+\mathbf m=(\cos\Phi\sin\Theta,\;\sin\Phi\sin\Theta,\;\cos\Theta).
+```
+
+Dla $\rho\geq r_H$ kontrakt zwraca dokładnie $+\mathbf e_z$, także na granicy
+nośnika. Profil jest trójwymiarowy i wymaga projekcji `object_local`.
+
 ### 2.3 Helical i conical
 
 Dla fizycznego wektora falowego $\mathbf q$ w $\mathrm{m^{-1}}$:
@@ -166,6 +209,15 @@ Skale muszą być skończone i niezerowe.
 | $\mathbf e_n$ | normalna frame | $1$ |
 | $\mathbf e_1$ | pierwsza oś płaszczyzny spinowej | $1$ |
 | $\mathbf e_2$ | druga oś płaszczyzny spinowej | $1$ |
+| $w$ | połówkowa szerokość ściany vortexowej | $\mathrm{m}$ |
+| $s_L$ | znak lewej domeny | $1$ |
+| $s_R$ | znak prawej domeny | $1$ |
+| $R_H$ | promień główny torusa hopfionu | $\mathrm{m}$ |
+| $r_H$ | promień przekroju i nośnika hopfionu | $\mathrm{m}$ |
+| $\rho$ | odległość od linii centralnej torusa | $\mathrm{m}$ |
+| $\alpha$ | lokalny kąt przekroju torusa | $\mathrm{rad}$ |
+| $\Phi$ | azymut magnetyzacji hopfionu | $\mathrm{rad}$ |
+| $\Theta$ | kąt polarny magnetyzacji hopfionu | $\mathrm{rad}$ |
 
 (assumptions-and-validity)=
 ## 4. Założenia i granice ważności
@@ -223,6 +275,15 @@ texture_transform bez zmiany nazw fizycznych.
 | texture.vortex.core_radius | float | required for v2 | $\mathrm{m}$ | finite and > 0 | promień regularizacji rdzenia | FEM/FDM CPU/GPU | preset_params.core_radius |
 | texture.helical.wavevector | Sequence[float] | required | $\mathrm{m^{-1}}$ | finite and nonzero | fizyczny wektor falowy | FEM/FDM CPU/GPU | preset_params.wavevector |
 | texture.domain_wall.wall_center_direction | Sequence[float] | derived when possible; explicit for degenerate geometry | 1 | finite, nonzero, orthogonal to domain direction | kierunek magnetyzacji w środku ściany | FEM/FDM CPU/GPU | preset_params.wall_center_direction |
+| texture.vortex_wall.wall_half_width | float | required | $\mathrm{m}$ | finite and > 0 | połówkowa szerokość centralnego pasa vortexu | FEM/FDM CPU/GPU | preset_params.wall_half_width |
+| texture.vortex_wall.left_mx | float | 1 | $1$ | finite and nonzero | znak lewej jednorodnej domeny | FEM/FDM CPU/GPU | preset_params.left_mx |
+| texture.vortex_wall.right_mx | float | -1 | $1$ | finite and nonzero | znak prawej jednorodnej domeny | FEM/FDM CPU/GPU | preset_params.right_mx |
+| texture.vortex_wall.circulation | int | 1 | $1$ | -1 or 1 | circulation centralnego vortexu | FEM/FDM CPU/GPU | preset_params.circulation |
+| texture.vortex_wall.core_polarity | int | 1 | $1$ | -1 or 1 | polarity centralnego rdzenia | FEM/FDM CPU/GPU | preset_params.core_polarity |
+| texture.vortex_wall.core_radius | float | 1e-9 | $\mathrm{m}$ | finite and > 0 | promień centralnego rdzenia | FEM/FDM CPU/GPU | preset_params.core_radius |
+| texture.vortex_wall.plane | str | xy | $1$ | xy, xz or yz | prawoskrętny frame ściany | FEM/FDM CPU/GPU | preset_params.plane |
+| texture.hopfion_compact_support.major_radius | float | required | $\mathrm{m}$ | finite and > 0 | promień główny torusa | FEM/FDM CPU/GPU | preset_params.major_radius |
+| texture.hopfion_compact_support.minor_radius | float | required | $\mathrm{m}$ | finite and > 0 | promień przekroju i zwartego nośnika | FEM/FDM CPU/GPU | preset_params.minor_radius |
 
 (problem-ir)=
 ## 6. ProblemIR i lowering
@@ -266,6 +327,12 @@ q. Round-trip z UI przez API v2 do ProblemIR i canonical Python zachowuje
 znaczenie fizyczne; brak pola preset_version w danych historycznych oznacza
 jawnie wariant v1. Zmiana tekstury korzysta z istniejącej resource-first
 ścieżki i nie dodaje endpointu.
+
+`vortex_wall` odrzuca $w\leq0$, zerowe lub niefinityczne wartości domen oraz
+niepoprawny profil vortexu. `hopfion_compact_support` odrzuca nieodatnie lub
+niefinityczne $R_H$ i $r_H$. Granica $\rho=r_H$ należy do dokładnie
+jednorodnego zewnętrza; implementacje nie mogą oceniać tam osobliwego
+mianownika profilu wewnętrznego.
 
 (discrete-realization)=
 ## 8. Realizacja dyskretna
@@ -314,12 +381,19 @@ runtime; obecność kodu nie jest kwalifikacją.
   apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanelModel.ts,
   katalog i komendy legacy.
 - Existing bimeron contract: docs/physics/0530-magnetic-preset-textures.md.
+- Mumax3-compatible v2 extensions: crates/fullmag-plan/src/magnetization_textures_v2.rs
+  (`vortex_wall`, `hopfion_compact_support`) oraz odpowiadające im factory
+  w packages/fullmag-py/src/fullmag/init/textures.py.
 
 (validation)=
 ## 10. Walidacja
 
 Testy analityczne sprawdzają normę, skończoność, limity centrum, winding,
 okres, stożek, profile domenowe, determinant frame i rigid covariance.
+Testy `vortex_wall` sprawdzają obie dokładnie jednorodne domeny i centralny
+rdzeń. Testy kompaktowego hopfionu sprawdzają $-\mathbf e_z$ na linii
+centralnej torusa, dokładne $+\mathbf e_z$ na granicy i poza nośnikiem oraz
+normę jeden dla wszystkich próbek.
 Testy migracyjne sprawdzają brak wersji jako v1 oraz pełny round-trip.
 Parity Rust–Python używa wspólnego zestawu co najmniej 1000 deterministycznych
 punktów na preset i porównuje komponenty oraz klasę błędu.
@@ -362,3 +436,9 @@ native i jest objęty tym samym fixture parity.
 | FDM sampling | crates/fullmag-plan/src/fdm.rs | materialize_initial_magnetization | planner tests | FDM |
 | FEM sampling | crates/fullmag-plan/src/mesh.rs | materialize_initial_magnetization | planner tests | FEM |
 | UI serialization | apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanelModel.ts | buildObjectMagneticTextureAssetDraft | Control Room tests | browser |
+| vortex-wall profile | crates/fullmag-plan/src/magnetization_textures_v2.rs | vortex_wall | mumax_vortex_wall_has_domains_and_vortex_core | FDM/FEM CPU/GPU semantic sampling |
+| compact-hopfion profile | crates/fullmag-plan/src/magnetization_textures_v2.rs | hopfion_compact_support | mumax_compact_hopfion_is_exactly_uniform_outside_support | FDM/FEM CPU/GPU semantic sampling |
+| python-vortex-wall | packages/fullmag-py/src/fullmag/init/preset_eval_v2.py | _vortex_wall | test_mumax_vortex_wall_factory_and_profile | Python reference |
+| python-compact-hopfion | packages/fullmag-py/src/fullmag/init/preset_eval_v2.py | _hopfion_compact_support | test_mumax_compact_hopfion_factory_and_support_boundary | Python reference |
+| Python factory parity | packages/fullmag-py/src/fullmag/init/textures.py | texture.vortex_wall; texture.hopfion_compact_support | test_mumax3_texture_compatibility.py | authoring |
+| UI Mumax3 coverage | apps/control-room/src/shared/domain/magnetization-texture/texturePresets.ts | MAGNETIZATION_TEXTURE_PRESETS | ObjectMagneticTexturePanelModel.mumax3.test.ts | browser |

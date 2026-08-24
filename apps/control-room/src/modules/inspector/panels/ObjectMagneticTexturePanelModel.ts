@@ -97,6 +97,15 @@ export interface ObjectMagneticTextureDraft {
   cone_axisY: string;
   cone_axisZ: string;
   cone_angle_rad: string;
+  inner_radius: string;
+  outer_radius: string;
+  hopf_charge: string;
+  axial_scale: string;
+  major_radius: string;
+  minor_radius: string;
+  wall_half_width: string;
+  left_mx: string;
+  right_mx: string;
 }
 
 function asRecord(value: unknown): JsonRecord | null {
@@ -127,11 +136,16 @@ const PRESET_IDS = new Set<string>([
   "antivortex",
   "bloch_skyrmion",
   "neel_skyrmion",
+  "antiskyrmion",
+  "skyrmionium",
   "bimeron",
   "domain_wall",
   "two_domain",
+  "vortex_wall",
   "helical",
   "conical",
+  "hopfion",
+  "hopfion_compact_support",
 ]);
 
 function asPresetKind(value: unknown): MagnetizationTexturePresetId | null {
@@ -532,6 +546,15 @@ export function objectMagneticTextureDraftFromModel(
     cone_axisY: cone_axis[1],
     cone_axisZ: cone_axis[2],
     cone_angle_rad: numberText(asNumber(params?.cone_angle_rad) ?? 0.785398),
+    inner_radius: numberText(asNumber(params?.inner_radius) ?? 8e-9),
+    outer_radius: numberText(asNumber(params?.outer_radius) ?? 16e-9),
+    hopf_charge: numberText(asNumber(params?.hopf_charge) ?? 1),
+    axial_scale: numberText(asNumber(params?.axial_scale) ?? 1),
+    major_radius: numberText(asNumber(params?.major_radius) ?? 20e-9),
+    minor_radius: numberText(asNumber(params?.minor_radius) ?? 8e-9),
+    wall_half_width: numberText(asNumber(params?.wall_half_width) ?? 25e-9),
+    left_mx: numberText(asNumber(params?.left_mx) ?? 1),
+    right_mx: numberText(asNumber(params?.right_mx) ?? -1),
   };
 }
 
@@ -558,6 +581,7 @@ export function objectMagneticTextureDraftIdentityKey(
 }
 
 const NUMERIC_TEXTURE_DRAFT_FIELDS = new Set<keyof ObjectMagneticTextureDraft>([
+  "axial_scale",
   "center_offset",
   "cone_angle_rad",
   "cone_axisX",
@@ -573,9 +597,15 @@ const NUMERIC_TEXTURE_DRAFT_FIELDS = new Set<keyof ObjectMagneticTextureDraft>([
   "e2X",
   "e2Y",
   "e2Z",
+  "hopf_charge",
+  "inner_radius",
+  "left_mx",
   "leftX",
   "leftY",
   "leftZ",
+  "major_radius",
+  "minor_radius",
+  "outer_radius",
   "phase_rad",
   "pivotX",
   "pivotY",
@@ -594,6 +624,8 @@ const NUMERIC_TEXTURE_DRAFT_FIELDS = new Set<keyof ObjectMagneticTextureDraft>([
   "translationX",
   "translationY",
   "translationZ",
+  "right_mx",
+  "wall_half_width",
   "wallX",
   "wallY",
   "wallZ",
@@ -685,13 +717,56 @@ function defaultPresetDraftPatch(
     };
   }
 
-  if (presetKind === "bloch_skyrmion" || presetKind === "neel_skyrmion") {
+  if (presetKind === "bloch_skyrmion" || presetKind === "neel_skyrmion" || presetKind === "antiskyrmion") {
     return {
       chirality: "1",
       core_polarity: "-1",
       plane: "xy",
       radius: numberText(10e-9),
       wall_width: numberText(2e-9),
+    };
+  }
+
+
+  if (presetKind === "skyrmionium") {
+    return {
+      background_sign: "1",
+      chirality: "1",
+      inner_radius: numberText(8e-9),
+      kind: "neel",
+      outer_radius: numberText(16e-9),
+      plane: "xy",
+      wall_width: numberText(2e-9),
+    };
+  }
+
+  if (presetKind === "hopfion") {
+    return {
+      axial_scale: "1",
+      background_sign: "1",
+      hopf_charge: "1",
+      phase_rad: "0",
+      radius: numberText(20e-9),
+    };
+  }
+
+  if (presetKind === "hopfion_compact_support") {
+    return {
+      major_radius: numberText(20e-9),
+      minor_radius: numberText(8e-9),
+      mappingProjection: "object_local",
+    };
+  }
+
+  if (presetKind === "vortex_wall") {
+    return {
+      circulation: "1",
+      core_polarity: "1",
+      core_radius: numberText(2e-9),
+      left_mx: "1",
+      plane: "xy",
+      right_mx: "-1",
+      wall_half_width: numberText(25e-9),
     };
   }
 
@@ -871,13 +946,60 @@ function presetParamsFromDraft(
     };
   }
 
-  if (presetKind === "bloch_skyrmion" || presetKind === "neel_skyrmion") {
+  if (presetKind === "bloch_skyrmion" || presetKind === "neel_skyrmion" || presetKind === "antiskyrmion") {
     return {
       plane: stringOrDefault(draft.plane, "xy"),
       radius: requiredPositiveNumber(draft.radius, "Radius"),
       wall_width: requiredPositiveNumber(draft.wall_width, "Wall width"),
       core_polarity: requiredSign(draft.core_polarity, "Core polarity"),
       chirality: requiredSign(draft.chirality, "Chirality"),
+    };
+  }
+
+
+  if (presetKind === "skyrmionium") {
+    const innerRadius = requiredPositiveNumber(draft.inner_radius, "Inner radius");
+    const outerRadius = requiredPositiveNumber(draft.outer_radius, "Outer radius");
+    if (outerRadius <= innerRadius) {
+      throw new Error("Outer radius must be greater than inner radius.");
+    }
+    return {
+      plane: requiredPlane(draft.plane, "Plane"),
+      inner_radius: innerRadius,
+      outer_radius: outerRadius,
+      wall_width: requiredPositiveNumber(draft.wall_width, "Wall width"),
+      kind: stringOrDefault(draft.kind, "neel"),
+      chirality: requiredSign(draft.chirality, "Chirality"),
+      background_sign: requiredSign(draft.background_sign, "Background sign"),
+    };
+  }
+
+  if (presetKind === "hopfion") {
+    return {
+      radius: requiredPositiveNumber(draft.radius, "Radius"),
+      hopf_charge: requiredSign(draft.hopf_charge, "Hopf charge"),
+      background_sign: requiredSign(draft.background_sign, "Background sign"),
+      axial_scale: requiredPositiveNumber(draft.axial_scale, "Axial scale"),
+      phase_rad: requiredNumber(draft.phase_rad, "Phase (rad)"),
+    };
+  }
+
+  if (presetKind === "hopfion_compact_support") {
+    return {
+      major_radius: requiredPositiveNumber(draft.major_radius, "Major radius"),
+      minor_radius: requiredPositiveNumber(draft.minor_radius, "Minor radius"),
+    };
+  }
+
+  if (presetKind === "vortex_wall") {
+    return {
+      plane: requiredPlane(draft.plane, "Plane"),
+      wall_half_width: requiredPositiveNumber(draft.wall_half_width, "Wall half-width"),
+      left_mx: requiredNumber(draft.left_mx, "Left mx"),
+      right_mx: requiredNumber(draft.right_mx, "Right mx"),
+      circulation: requiredSign(draft.circulation, "Circulation"),
+      core_polarity: requiredSign(draft.core_polarity, "Core polarity"),
+      core_radius: requiredPositiveNumber(draft.core_radius, "Core radius"),
     };
   }
 
@@ -998,16 +1120,26 @@ function defaultLabel(presetKind: MagnetizationTexturePresetId): string {
       return "Bloch Skyrmion texture";
     case "neel_skyrmion":
       return "Néel Skyrmion texture";
+    case "antiskyrmion":
+      return "Antiskyrmion texture";
+    case "skyrmionium":
+      return "Skyrmionium texture";
     case "bimeron":
       return "Bimeron texture";
     case "domain_wall":
       return "Domain Wall texture";
     case "two_domain":
       return "Two Domain texture";
+    case "vortex_wall":
+      return "Vortex Wall texture";
     case "helical":
       return "Helical texture";
     case "conical":
       return "Conical texture";
+    case "hopfion":
+      return "Hopfion texture";
+    case "hopfion_compact_support":
+      return "Hopfion compact-support texture";
     default:
       return "Custom texture";
   }
