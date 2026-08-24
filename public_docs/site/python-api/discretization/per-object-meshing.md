@@ -102,8 +102,10 @@ Selecting `Layered prism (exact)` in Control Room writes the following invariant
 | `exact_layer_count` | `true` |
 
 The reviewed UI capability gate accepts exactly one, two, or three through-thickness element layers.
-The corresponding number of nodal planes is the layer count plus one. These values describe the
-qualified UI scope, not a mathematical limit of prism meshes in general.
+It applies the advertised `supported_layer_counts` to both structured controls and complete policies
+authored through Advanced JSON. The corresponding number of nodal planes is the layer count plus
+one. These values describe the qualified UI scope, not a mathematical limit of prism meshes in
+general.
 
 (python-api-discretization-per-object-meshing-python-api)=
 ## Complete `PerObjectMeshRecipe` parameter inventory
@@ -403,7 +405,7 @@ layer convergence rather than treating one layer as universally sufficient.
 | PerObjectMeshRecipe.minimum_element_size | float \| None | None | $\mathrm{m}$ | Positive and no larger than the effective maximum when authored by the public facade. | Canonical object minimum element-size target. | FEM | mesh_workflow.per_geometry.<object>.minimum_element_size |
 | PerObjectMeshRecipe.hmax | float \| None | None | $\mathrm{m}$ | Compatibility alias used when maximum_element_size is absent. | Object maximum-size alias. | FEM | mesh_workflow.per_geometry.<object>.hmax |
 | PerObjectMeshRecipe.hmin | float \| None | None | $\mathrm{m}$ | Compatibility alias used when minimum_element_size is absent. | Object minimum-size alias. | FEM | mesh_workflow.per_geometry.<object>.hmin |
-| PerObjectMeshRecipe.order | int \| None | None | $1$ | Prismatic topology permits only order one. | Object finite-element order. | FEM | mesh_workflow.per_geometry.<object>.order |
+| PerObjectMeshRecipe.order | int \| None | None | $1$ | Non-Boolean `Integral`, normalized to `int`; prismatic topology permits only order one. | Object finite-element order. | FEM | mesh_workflow.per_geometry.<object>.order |
 | PerObjectMeshRecipe.source | str \| None | None | $1$ | Any authored value is rejected; use study-level `FEM(mesh=...)`. | Reserved object mesh source. | Unavailable | none |
 | PerObjectMeshRecipe.calibrate_for | str \| None | None | $1$ | Supported provenance vocabulary; currently no numerical effect. | Recorded physics/workflow calibration family. | Provenance only | mesh_workflow.per_geometry.<object>.calibrate_for |
 | PerObjectMeshRecipe.size_preset | str \| None | None | $1$ | Supported size-preset vocabulary. | Named mesh-size preset. | FEM | mesh_workflow.per_geometry.<object>.size_preset |
@@ -444,8 +446,8 @@ layer convergence rather than treating one layer as universally sufficient.
 
 | Claim | Lane | Path | Stable symbol | Evidence | Evidence status | Immutable revision |
 |---|---|---|---|---|---|---|
-| complete typed field inventory | FEM CPU/GPU authoring | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class PerObjectMeshRecipe` | source and constructor tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/packages/fullmag-py/src/fullmag/model/discretization.py) |
-| exact prism canonical tuple | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts` | `buildObjectMeshPolicyReplaceRequest` | model and DOM tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts) |
-| capability scope | Control Room, FEM CPU/GPU | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts` | `resolveObjectMeshTopologyCapabilities` | capability tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts) |
-| rendered groups and transactions | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx` | `ObjectMeshPolicyPanel` | component tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx) |
-| realized topology and fallback | FEM CPU/GPU shared mesh | `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py` | `_build_shared_domain_build_report` | meshing fallback/report tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py) |
+| complete typed field inventory | FEM CPU/GPU authoring | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class PerObjectMeshRecipe` | source and constructor tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/f4eb12bd622f8a8fa61d882013c7ea5a1e4c88e6/packages/fullmag-py/src/fullmag/model/discretization.py) |
+| exact prism canonical tuple | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts` | `buildObjectMeshPolicyReplaceRequest` | model and DOM tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/f4eb12bd622f8a8fa61d882013c7ea5a1e4c88e6/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts) |
+| capability scope | Control Room, FEM CPU/GPU | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts` | `resolveObjectMeshTopologyCapabilities` | capability tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/f4eb12bd622f8a8fa61d882013c7ea5a1e4c88e6/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts) |
+| rendered groups and transactions | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx` | `ObjectMeshPolicyPanel` | component tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/f4eb12bd622f8a8fa61d882013c7ea5a1e4c88e6/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx) |
+| realized topology and fallback | FEM CPU/GPU shared mesh | `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py` | `_build_shared_domain_build_report` | meshing fallback/report tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/f4eb12bd622f8a8fa61d882013c7ea5a1e4c88e6/packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py) |

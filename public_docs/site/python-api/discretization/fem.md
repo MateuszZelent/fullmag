@@ -41,8 +41,10 @@ The precedence for an object maximum-size target is, from highest to lowest:
 3. mesh-workflow object default;
 4. study-level `FEM.maximum_element_size` or `hmax`.
 
-The realized mesh report records which level supplied every effective target. An inherited value in
-the UI is therefore not equivalent to a numeric zero or to deleting the mesh policy.
+The realized mesh report derives provenance from the field that supplied the effective maximum-size
+target, not merely from the presence of an object recipe. It reports `recipe_override`,
+`local_override`, `workflow_default`, or `study_default` for the four levels above. An inherited
+value in the UI is therefore not equivalent to a numeric zero or to deleting the mesh policy.
 
 (python-api-discretization-fem-governing-equations)=
 ## Numerical meaning
