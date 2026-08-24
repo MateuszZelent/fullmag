@@ -91,14 +91,14 @@ study.objects.mesh.defaults(
 study.build_domain_mesh()
 
 # study.solver(dt=1e-18, integrator="heun", g=2.115)
-# study.save("m", every=1e-16)
-# study.save("E_total", every=1e-16)
-study.tableautosave(1e-16, quantities=["t", "step", "mx", "my", "mz", "E_total"])
-
-study.stages.add_minimize(
-    method="bb",
+study.stages.add_relax(
+    stage_id="bimeron_minimize",
+    algorithm="projected_gradient_bb",
     max_steps=MINIMIZE_MAX_STEPS,
     tolA=1e-4,
+).tableautosave(
+    every_steps=1,
+    quantities=["t", "step", "mx", "my", "mz", "E_total"],
 )
 
 # study.stages.add_relax(

@@ -26,6 +26,8 @@ NON_RUNTIME_PREFIXES = (
     ".agents/",
     ".claude/",
     ".codex/",
+    # Codex-Usage is a local tooling checkout, not runtime source.
+    "Codex-Usage/",
     ".impl-racetrack/",
     ".worktrees/",
     ".github/",
@@ -39,6 +41,7 @@ NON_RUNTIME_PREFIXES = (
 )
 NON_RUNTIME_FILES = {"AGENTS.md", "CHANGELOG.md", "README.md"}
 NON_RUNTIME_EXACT_PATHS = {
+    "Codex-Usage",
     ".impl-racetrack",
     # The repository tracks this as an absolute worktree-administration link.
     # It is not a runtime source input and must not be materialized.

@@ -282,6 +282,30 @@ mutable hot-loop implementation. Unsupported lane, device, precision, guard,
 or demag semantics fail before execution. There is no hidden explicit-to-stiff fallback
 and no hidden GPU-to-CPU fallback.
 
+Dla FEM GPU plan nie jest dowodem wykonania. `GpuRkPlan` wyznacza wyłącznie
+required/resolved operator masks; faktyczne wykonanie publikuje append-only
+`FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1` po zaakceptowanej próbie.
+`gpu_execution_receipt_commit_attempt` jest granicą atomic publication:
+reject/failure/cancel nie zastępuje ostatnich `executed_*_operator_mask`
+częściową próbą. Strict `device_resident` wymaga pełnej równości required,
+resolved-device i executed-device, pustych masek host/unknown, zera fallbacków
+oraz zera compute H2D/D2H/host-sync. `hybrid_cpu_poisson` zachowuje osobną
+klasę execution i nie może być prezentowany jako strict.
+
+Kwalifikacja CPU/GPU musi wiązać receipt z identycznym
+`source_snapshot_sha256`. Source contracts potwierdzają implementację, lecz
+bez świeżego managed GPU artefaktu status pozostaje
+`implemented/unvalidated`; nie przyznaje to `production_executable` ani
+`validated`.
+
+Trwały artefakt receipt używa dokładnego schematu
+`fullmag.fem_gpu_execution_receipt.native_projection.v1` oraz projekcji Rust
+`FemGpuExecutionReceipt.v1`. Przenosi bezstratnie handshake ABI v1, jawne
+`requested`/`resolved`/`executed`, maski, liczniki accepted/rejected/failed,
+compute transfer/sync counters, `accounting_valid` i operator IDs. Pole
+brakujące, nieznane albo zniekształcone jest błędem kwalifikacji; plan nie może
+uzupełniać brakującego dowodu wykonania.
+
 `crates/fullmag-runner/src/native_fem.rs` i powiązane moduły runnera są
 fasadami ABI i orkiestracji. Można je dzielić dla utrzymania kodu, ale ich nazwy
 i dokumentacja muszą nadal mówić, że implementacja natywnego FEM żyje w
