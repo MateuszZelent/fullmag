@@ -53,8 +53,11 @@ jobs:
           mkdir -p "$extracted"
           tar --extract --xz --file "$payload" --directory "$extracted" --no-same-owner --no-same-permissions
 
-          test "$(find "$extracted" -type f | wc -l)" -eq 28
+          test "$(find "$extracted" -type f | wc -l)" -eq 29
           test "$(find "$extracted" -type f -name '*.md' | wc -l)" -eq 28
+          test -f "$extracted/fdm-grids.source-map.json"
+          rm "$extracted/fdm-grids.source-map.json"
+          test "$(find "$extracted" -type f | wc -l)" -eq 28
           if find "$extracted" -type l -print -quit | grep -q .; then
             echo 'Symbolic links are not allowed in the documentation payload.' >&2
             exit 1
