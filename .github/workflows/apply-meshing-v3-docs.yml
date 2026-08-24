@@ -148,15 +148,30 @@ jobs:
         env:
           FULLMAG_DOCS_VERSION: meshing-v3-validation
           FULLMAG_DOCS_BUILD_TIME: 2026-08-24 22:45 UTC
+        shell: bash
         run: |
+          set -uo pipefail
+          log="$RUNNER_TEMP/sphinx-meshing-v3.log"
           rm -rf public_docs/site/_build/html
+          set +e
           sphinx-build \
             -b html \
             -W \
             -n \
             --keep-going \
             public_docs/site \
-            public_docs/site/_build/html
+            public_docs/site/_build/html \
+            >"$log" 2>&1
+          status=$?
+          set -e
+          if [[ $status -ne 0 ]]; then
+            echo '=== Filtered Sphinx diagnostics ==='
+            grep -nE 'WARNING:|ERROR:|CRITICAL:|Exception occurred|Traceback|build finished with problems' "$log" | tail -n 300 || true
+            echo '=== Tail of Sphinx log ==='
+            tail -n 250 "$log"
+            exit "$status"
+          fi
+          tail -n 60 "$log"
 
           page="public_docs/site/_build/html/numerical-methods/meshing/fem/ferromagnet/swept-prism.html"
           test -s "$page"
