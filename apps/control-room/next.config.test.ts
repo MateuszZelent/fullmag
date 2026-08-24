@@ -40,6 +40,32 @@ describe("control-room Next dev proxy config", () => {
     expect(configSource).toContain("resolveControlRoomDistDir");
   });
 
+  it("keeps generated Next route types stable across dev and audit builds", () => {
+    const nextEnvSource = readFileSync(
+      new URL("./next-env.d.ts", import.meta.url),
+      "utf8",
+    );
+    const packageSource = readFileSync(
+      new URL("./package.json", import.meta.url),
+      "utf8",
+    );
+    const auditBuildSource = readFileSync(
+      new URL("./scripts/build-audit-control-room.mjs", import.meta.url),
+      "utf8",
+    );
+
+    expect(nextEnvSource).toContain(
+      './.next-control-room-3100/dev/types/routes.d.ts',
+    );
+    expect(packageSource).toContain(
+      '"build:audit:webpack": "node scripts/build-audit-control-room.mjs"',
+    );
+    expect(auditBuildSource).toContain("const nextEnvSnapshot = readFileSync");
+    expect(auditBuildSource).toContain(
+      "writeFileSync(nextEnvPath, nextEnvSnapshot)",
+    );
+  });
+
   it("allows the public Traefik origin used by the HMR websocket", () => {
     expect(nextConfig.allowedDevOrigins).toContain(
       "fullmag.amucontainers.orion.zfns.eu.org",

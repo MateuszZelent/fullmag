@@ -11,7 +11,7 @@ import {
   serializeCanonicalFieldVectorResourceKey,
 } from "@/kernel/api/fieldQueryIdentity";
 
-import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
+import { createViewport3DRenderAdoptionRegistry as createUnscopedViewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 import { buildViewport3DTargetFieldBuffer } from "../model/viewport3DTargetFieldBuffer";
 import { recordFdmCuboidSurfaceAdoption } from "../layers/FdmCuboidLayer";
 import { recordMeshPartSurfaceAdoption } from "../layers/MeshPartLayer";
@@ -25,6 +25,28 @@ import {
   type Viewport3DVisualizationDebugSource,
 } from "./useViewport3DVisualizationDebugPublisher";
 import type { Viewport3DRenderAdoptionReceipt } from "../model/viewport3DRenderAdoptionRegistry";
+
+function createViewport3DRenderAdoptionRegistry() {
+  const registry = createUnscopedViewport3DRenderAdoptionRegistry();
+  const sessionIdentity = {
+    sessionEpoch: "test-session@1000",
+    sessionId: "test-session",
+  } as const;
+  registry.setSessionIdentity(sessionIdentity);
+  return {
+    ...registry,
+    recordSurfaceAdoption(
+      input: Parameters<typeof registry.recordSurfaceAdoption>[0],
+    ) {
+      return registry.recordSurfaceAdoption({ ...input, sessionIdentity });
+    },
+    recordVectorAdoption(
+      input: Parameters<typeof registry.recordVectorAdoption>[0],
+    ) {
+      return registry.recordVectorAdoption({ ...input, sessionIdentity });
+    },
+  };
+}
 
 function snapshot(targetId: string, frameCommitId: string): VisualizationDebugSnapshot {
   return {

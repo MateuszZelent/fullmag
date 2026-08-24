@@ -173,7 +173,7 @@ const QUANTITY_UNITS: Record<string, string> = {
   m: "1",
   mat_aex: "J/m",
   mat_alpha: "1",
-  mat_dbulk: "J/m³",
+  mat_dbulk: "J/m²",
   mat_dind: "J/m²",
   mat_ms: "A/m",
   torque: "T",

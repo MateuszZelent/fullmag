@@ -562,7 +562,17 @@ pub(crate) struct StepUpdateView {
     #[serde(default)]
     pub max_torque_Apm: f64,
     #[serde(default)]
+    pub max_torque_all_Apm: f64,
+    #[serde(default)]
     pub max_torque_T: f64,
+    #[serde(default)]
+    pub frozen_reference_max_drift: f64,
+    #[serde(default)]
+    pub active_dof_count: u64,
+    #[serde(default)]
+    pub frozen_dof_count: u64,
+    #[serde(default)]
+    pub free_dof_count: u64,
     pub wall_time_ns: u64,
     pub grid: [u32; 3],
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -605,6 +615,11 @@ impl StepUpdateView {
             time: self.time,
             dt: self.dt,
             wall_time_ns: self.wall_time_ns,
+            max_torque_all_Apm: self.max_torque_all_Apm,
+            frozen_reference_max_drift: self.frozen_reference_max_drift,
+            active_dof_count: self.active_dof_count,
+            frozen_dof_count: self.frozen_dof_count,
+            free_dof_count: self.free_dof_count,
             ..Default::default()
         };
 
@@ -1724,6 +1739,11 @@ mod tests {
             max_h_demag: 0.0,
             max_torque_Apm: 0.0,
             max_torque_T: 0.0,
+            max_torque_all_Apm: 0.0,
+            frozen_reference_max_drift: 0.0,
+            active_dof_count: 0,
+            frozen_dof_count: 0,
+            free_dof_count: 0,
             wall_time_ns: 0,
             grid: [2, 1, 1],
             fem_mesh_generation_id: None,

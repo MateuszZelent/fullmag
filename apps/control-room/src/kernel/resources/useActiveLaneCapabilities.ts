@@ -32,6 +32,8 @@ export type ActiveLaneOperationId =
   | "interaction.oersted_field"
   | "interaction.magnetoelastic"
   | "interaction.thermal"
+  | "interaction.frozen_spins"
+  | "constraint.frozen_spins"
   | "study.relaxation"
   | "study.time_integration"
   | "study.eigenmodes"

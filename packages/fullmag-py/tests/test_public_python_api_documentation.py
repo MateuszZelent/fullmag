@@ -19,14 +19,40 @@ API_PARAMETER_OWNERS: dict[str, Path] = {
     "Box": Path("python-api/geometry/primitives.md"),
     "Ferromagnet": Path("python-api/magnets-and-textures/ferromagnet.md"),
     "texture.uniform": Path("python-api/magnets-and-textures/uniform-texture.md"),
+    "texture.random": Path("python-api/magnets-and-textures/preset-textures.md"),
+    "texture.random_seeded": Path("python-api/magnets-and-textures/preset-textures.md"),
+    "texture.vortex": Path("python-api/magnets-and-textures/preset-textures.md"),
+    "texture.antivortex": Path("python-api/magnets-and-textures/preset-textures.md"),
+    "texture.bloch_skyrmion": Path("python-api/magnets-and-textures/preset-textures.md"),
+    "texture.neel_skyrmion": Path("python-api/magnets-and-textures/preset-textures.md"),
+    "texture.antiskyrmion": Path("python-api/magnets-and-textures/preset-textures.md"),
+    "texture.skyrmionium": Path("python-api/magnets-and-textures/preset-textures.md"),
+    "texture.hopfion": Path("python-api/magnets-and-textures/preset-textures.md"),
+    "texture.bimeron": Path("python-api/magnets-and-textures/preset-textures.md"),
+    "texture.domain_wall": Path("python-api/magnets-and-textures/preset-textures.md"),
+    "texture.two_domain": Path("python-api/magnets-and-textures/preset-textures.md"),
+    "texture.helical": Path("python-api/magnets-and-textures/preset-textures.md"),
+    "texture.conical": Path("python-api/magnets-and-textures/preset-textures.md"),
     "TimeEvolution": Path("python-api/studies/time-evolution.md"),
     "LLG": Path("python-api/dynamics/llg.md"),
     "SaveField": Path("python-api/outputs/fields-and-scalars.md"),
     "SaveScalar": Path("python-api/outputs/fields-and-scalars.md"),
     "Problem": Path("python-api/problem/problem.md"),
     "DiscretizationHints": Path("python-api/discretization/discretization-hints.md"),
-    "FDM": Path("python-api/discretization/fdm.md"),
-    "FEM": Path("python-api/discretization/fem.md"),
+    "FDM": Path("python-api/meshing/fdm/index.md"),
+    "FEM": Path("python-api/meshing/fem/index.md"),
+    "MaterialParameterField.constant": Path(
+        "python-api/materials/spatial-parameter-fields.md"
+    ),
+    "MaterialParameterField.linear": Path(
+        "python-api/materials/spatial-parameter-fields.md"
+    ),
+    "MaterialParameterField.radial": Path(
+        "python-api/materials/spatial-parameter-fields.md"
+    ),
+    "MaterialParameterField.sampled": Path(
+        "python-api/materials/spatial-parameter-fields.md"
+    ),
 }
 
 API_CONSTRUCTORS = {
@@ -34,6 +60,20 @@ API_CONSTRUCTORS = {
     "Box": fm.Box,
     "Ferromagnet": fm.Ferromagnet,
     "texture.uniform": fm.texture.uniform,
+    "texture.random": fm.texture.random,
+    "texture.random_seeded": fm.texture.random_seeded,
+    "texture.vortex": fm.texture.vortex,
+    "texture.antivortex": fm.texture.antivortex,
+    "texture.bloch_skyrmion": fm.texture.bloch_skyrmion,
+    "texture.neel_skyrmion": fm.texture.neel_skyrmion,
+    "texture.antiskyrmion": fm.texture.antiskyrmion,
+    "texture.skyrmionium": fm.texture.skyrmionium,
+    "texture.hopfion": fm.texture.hopfion,
+    "texture.bimeron": fm.texture.bimeron,
+    "texture.domain_wall": fm.texture.domain_wall,
+    "texture.two_domain": fm.texture.two_domain,
+    "texture.helical": fm.texture.helical,
+    "texture.conical": fm.texture.conical,
     "TimeEvolution": fm.TimeEvolution,
     "LLG": fm.LLG,
     "SaveField": fm.SaveField,
@@ -42,6 +82,10 @@ API_CONSTRUCTORS = {
     "DiscretizationHints": fm.DiscretizationHints,
     "FDM": fm.FDM,
     "FEM": fm.FEM,
+    "MaterialParameterField.constant": fm.MaterialParameterField.constant,
+    "MaterialParameterField.linear": fm.MaterialParameterField.linear,
+    "MaterialParameterField.radial": fm.MaterialParameterField.radial,
+    "MaterialParameterField.sampled": fm.MaterialParameterField.sampled,
 }
 
 

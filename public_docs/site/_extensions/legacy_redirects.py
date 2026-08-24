@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 
-from public_docs_information_architecture import LEGACY_REDIRECTS
+from public_docs_information_architecture_v2 import LEGACY_REDIRECTS
 
 
 def _redirects() -> dict[str, str]:
@@ -57,4 +57,4 @@ def _write_redirects(app: Sphinx, exception: Exception | None) -> None:
 
 def setup(app: Sphinx) -> dict[str, object]:
     app.connect("build-finished", _write_redirects)
-    return {"version": "1", "parallel_read_safe": True, "parallel_write_safe": True}
+    return {"version": "2", "parallel_read_safe": True, "parallel_write_safe": True}

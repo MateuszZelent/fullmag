@@ -541,7 +541,7 @@ function ObjectMaterialPanelView({
               <FormField
                 label="Dbulk"
                 type="number"
-                unit="J/m³"
+                unit="J/m²"
                 disabled={!material.data}
                 value={draft.dbulk}
                 onChange={(event) => updateDraft({ dbulk: event.target.value })}

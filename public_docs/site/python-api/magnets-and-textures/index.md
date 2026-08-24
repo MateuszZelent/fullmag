@@ -10,8 +10,11 @@ owner: fullmag-public-docs
 # Magnets and Textures
 
 Magnets carry magnetization, and textures define their initial magnetic state. Author a
-ferromagnet, assign a uniform magnetization, and build initial magnetization or preset textures
-such as skyrmions and domain walls.
+ferromagnet, assign a uniform or deterministic-random state, or initialize vortices, antivortices,
+Bloch and Neel skyrmions, antiskyrmions, skyrmionium targets, three-dimensional hopfions,
+bimerons, domain walls, two-domain states, helices, and conical spirals.
+The preset reference documents the implemented equations, versioning, coordinate mapping, FEM/FDM
+materialization, validation, and current limitations.
 
 ```{toctree}
 :maxdepth: 1

@@ -65,7 +65,7 @@ pub enum QuantityId {
     MatAlpha,
     /// Resolved interfacial DMI material parameter (J/m²).
     MatDind,
-    /// Resolved bulk DMI material parameter (J/m³).
+    /// Resolved bulk DMI material parameter (J/m²).
     MatDbulk,
     /// Magnetization rate of change (spatial vector field).
     DmDt,

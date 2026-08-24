@@ -221,18 +221,6 @@ pub(crate) fn validate_region_owned_planning(
             }
         }
     }
-    if resolved_backend != BackendTarget::Fdm
-        && problem
-            .object_regions
-            .iter()
-            .any(|region| region.enabled && region.texture_override.is_some())
-    {
-        errors.push(format!(
-            "object region texture_override is authored in ProblemIR but not yet executable for backend='{}'; planner must not silently ignore region texture overrides",
-            resolved_backend.as_str()
-        ));
-    }
-
     if resolved_backend != BackendTarget::Fem
         && problem.object_regions.iter().any(|region| {
             region.enabled

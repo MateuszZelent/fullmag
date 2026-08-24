@@ -277,81 +277,76 @@ fn rotate_by_quaternion(point: [f64; 3], quaternion: [f64; 4]) -> [f64; 3] {
     add(add(point, scale(t, quaternion[3])), cross(q, t))
 }
 
-fn inverse_transform(
-    point: [f64; 3],
-    transform: &TextureTransform3DIR,
-) -> Result<[f64; 3], TextureError> {
-    let components = transform
-        .translation
-        .into_iter()
-        .chain(transform.scale)
-        .chain(transform.pivot)
-        .chain(transform.rotation_quat)
-        .collect::<Vec<_>>();
-    if components.iter().any(|component| !component.is_finite()) {
-        return Err(invalid(
-            "texture_transform",
-            "all components must be finite",
-        ));
-    }
-    if transform.scale.iter().any(|scale| scale.abs() <= EPSILON) {
-        return Err(invalid(
-            "texture_transform.scale",
-            "all components must be nonzero",
-        ));
-    }
-    let quaternion_norm = transform
-        .rotation_quat
-        .iter()
-        .map(|component| component * component)
-        .sum::<f64>()
-        .sqrt();
-    if !quaternion_norm.is_finite() || quaternion_norm <= EPSILON {
-        return Err(invalid(
-            "texture_transform.rotation_quat",
-            "quaternion must be nonzero and finite",
-        ));
-    }
-    let inverse_quaternion = [
-        -transform.rotation_quat[0] / quaternion_norm,
-        -transform.rotation_quat[1] / quaternion_norm,
-        -transform.rotation_quat[2] / quaternion_norm,
-        transform.rotation_quat[3] / quaternion_norm,
-    ];
-    let shifted = sub(sub(point, transform.translation), transform.pivot);
-    let rotated = rotate_by_quaternion(shifted, inverse_quaternion);
-    Ok([
-        rotated[0] / transform.scale[0] + transform.pivot[0],
-        rotated[1] / transform.scale[1] + transform.pivot[1],
-        rotated[2] / transform.scale[2] + transform.pivot[2],
-    ])
+/// Validated affine transform shared by FDM and FEM texture sampling.
+///
+/// Coordinates are mapped with `S^-1 R^-1 (x - t - pivot) + pivot`. Magnetization
+/// vectors are transformed only by the proper rotation `R`; translation, pivot,
+/// and coordinate scale never scale or translate a spin vector.
+#[derive(Debug, Clone, Copy)]
+struct PreparedTextureTransform {
+    translation: [f64; 3],
+    pivot: [f64; 3],
+    inverse_scale: [f64; 3],
+    rotation: [f64; 4],
+    inverse_rotation: [f64; 4],
 }
 
-fn forward_rotate(
-    vector: [f64; 3],
-    transform: &TextureTransform3DIR,
-) -> Result<[f64; 3], TextureError> {
-    let quaternion_norm = transform
-        .rotation_quat
-        .iter()
-        .map(|component| component * component)
-        .sum::<f64>()
-        .sqrt();
-    if !quaternion_norm.is_finite() || quaternion_norm <= EPSILON {
-        return Err(invalid(
-            "texture_transform.rotation_quat",
-            "quaternion must be nonzero and finite",
-        ));
+impl PreparedTextureTransform {
+    fn prepare(transform: &TextureTransform3DIR) -> Result<Self, TextureError> {
+        if transform
+            .translation
+            .iter()
+            .chain(transform.scale.iter())
+            .chain(transform.pivot.iter())
+            .chain(transform.rotation_quat.iter())
+            .any(|component| !component.is_finite())
+        {
+            return Err(invalid(
+                "texture_transform",
+                "all components must be finite",
+            ));
+        }
+        if transform.scale.iter().any(|value| value.abs() <= EPSILON) {
+            return Err(invalid(
+                "texture_transform.scale",
+                "all components must be nonzero",
+            ));
+        }
+        let quaternion_norm = transform
+            .rotation_quat
+            .iter()
+            .map(|component| component * component)
+            .sum::<f64>()
+            .sqrt();
+        if !quaternion_norm.is_finite() || quaternion_norm <= EPSILON {
+            return Err(invalid(
+                "texture_transform.rotation_quat",
+                "quaternion must be nonzero and finite",
+            ));
+        }
+        let rotation = transform.rotation_quat.map(|value| value / quaternion_norm);
+        Ok(Self {
+            translation: transform.translation,
+            pivot: transform.pivot,
+            inverse_scale: transform.scale.map(f64::recip),
+            rotation,
+            inverse_rotation: [-rotation[0], -rotation[1], -rotation[2], rotation[3]],
+        })
     }
-    Ok(rotate_by_quaternion(
-        vector,
+
+    fn point_to_texture(self, point: [f64; 3]) -> [f64; 3] {
+        let shifted = sub(sub(point, self.translation), self.pivot);
+        let rotated = rotate_by_quaternion(shifted, self.inverse_rotation);
         [
-            transform.rotation_quat[0] / quaternion_norm,
-            transform.rotation_quat[1] / quaternion_norm,
-            transform.rotation_quat[2] / quaternion_norm,
-            transform.rotation_quat[3] / quaternion_norm,
-        ],
-    ))
+            rotated[0] * self.inverse_scale[0] + self.pivot[0],
+            rotated[1] * self.inverse_scale[1] + self.pivot[1],
+            rotated[2] * self.inverse_scale[2] + self.pivot[2],
+        ]
+    }
+
+    fn vector_to_source(self, vector: [f64; 3]) -> [f64; 3] {
+        rotate_by_quaternion(vector, self.rotation)
+    }
 }
 
 fn splitmix64(mut state: u64) -> u64 {
@@ -434,10 +429,30 @@ fn skyrmion_theta(radius: f64, distance: f64, wall_width: f64) -> f64 {
     }
 }
 
+#[derive(Clone, Copy)]
+enum SkyrmionWallType {
+    Bloch,
+    Neel,
+}
+
+fn wall_helicity(wall_type: SkyrmionWallType, chirality: f64) -> f64 {
+    match wall_type {
+        SkyrmionWallType::Bloch => chirality * std::f64::consts::FRAC_PI_2,
+        SkyrmionWallType::Neel => {
+            if chirality > 0.0 {
+                0.0
+            } else {
+                std::f64::consts::PI
+            }
+        }
+    }
+}
+
 fn skyrmion(
     params: &BTreeMap<String, Value>,
     point: [f64; 3],
-    helicity: f64,
+    winding: f64,
+    wall_type: SkyrmionWallType,
 ) -> Result<[f64; 3], TextureError> {
     let radius = positive(params, "radius", None)?;
     let wall_width = positive(params, "wall_width", None)?;
@@ -446,13 +461,76 @@ fn skyrmion(
     let distance = point[0].hypot(point[1]);
     let phi = point[1].atan2(point[0]);
     let theta = skyrmion_theta(radius, distance, wall_width);
-    let phase = phi + chirality * helicity;
+    let phase = winding * phi + wall_helicity(wall_type, chirality);
     let sin_theta = theta.sin();
     Ok([
         sin_theta * phase.cos(),
         sin_theta * phase.sin(),
         -polarity * theta.cos(),
     ])
+}
+
+fn skyrmionium(
+    params: &BTreeMap<String, Value>,
+    point: [f64; 3],
+) -> Result<[f64; 3], TextureError> {
+    let inner_radius = positive(params, "inner_radius", None)?;
+    let outer_radius = positive(params, "outer_radius", None)?;
+    if outer_radius <= inner_radius {
+        return Err(invalid("outer_radius", "must be greater than inner_radius"));
+    }
+    let wall_width = positive(params, "wall_width", None)?;
+    let chirality = sign(params, "chirality", 1)?;
+    let background = sign(params, "background_sign", 1)?;
+    let kind = string(params, "kind", Some("neel"))?;
+    let wall_type = match kind.as_str() {
+        "bloch" => SkyrmionWallType::Bloch,
+        "neel" => SkyrmionWallType::Neel,
+        _ => return Err(invalid("kind", "must be either 'bloch' or 'neel'")),
+    };
+    let distance = point[0].hypot(point[1]);
+    let wall_angle = |coordinate: f64| (-coordinate.tanh()).acos();
+    let theta = wall_angle((distance - inner_radius) / wall_width)
+        + wall_angle((distance - outer_radius) / wall_width);
+    let phase = point[1].atan2(point[0]) + wall_helicity(wall_type, chirality);
+    let sin_theta = theta.sin();
+    Ok([
+        sin_theta * phase.cos(),
+        sin_theta * phase.sin(),
+        background * theta.cos(),
+    ])
+}
+
+fn hopfion(params: &BTreeMap<String, Value>, point: [f64; 3]) -> Result<[f64; 3], TextureError> {
+    let radius = positive(params, "radius", None)?;
+    let charge = sign(params, "hopf_charge", 1)?;
+    let background = sign(params, "background_sign", 1)?;
+    let axial_scale = positive(params, "axial_scale", Some(1.0))?;
+    let phase = finite_number(params, "phase_rad", Some(0.0))?;
+
+    let x = point[0] / radius;
+    let y = charge * point[1] / radius;
+    let z = point[2] / (radius * axial_scale);
+    let rho_squared = x * x + y * y + z * z;
+    if !rho_squared.is_finite() {
+        return Ok([0.0, 0.0, background]);
+    }
+    let denominator = 1.0 + rho_squared;
+    let z1_re = 2.0 * x / denominator;
+    let z1_im = 2.0 * y / denominator;
+    let z2_re = 2.0 * z / denominator;
+    let z2_im = (rho_squared - 1.0) / denominator;
+
+    let hopf_x = 2.0 * (z1_re * z2_re + z1_im * z2_im);
+    let hopf_y = 2.0 * (z1_im * z2_re - z1_re * z2_im);
+    let hopf_z = z1_re * z1_re + z1_im * z1_im - z2_re * z2_re - z2_im * z2_im;
+    let rotated_x = phase.cos() * hopf_x - phase.sin() * hopf_y;
+    let rotated_y = phase.sin() * hopf_x + phase.cos() * hopf_y;
+
+    normalize_checked(
+        scale([rotated_x, rotated_y, hopf_z], -background),
+        "hopfion",
+    )
 }
 
 fn axis_vector(axis: &str) -> Result<[f64; 3], TextureError> {
@@ -662,8 +740,11 @@ fn local_evaluate(
         }
         "vortex" => vortex(params, point, 1.0),
         "antivortex" => vortex(params, point, -1.0),
-        "bloch_skyrmion" => skyrmion(params, point, std::f64::consts::FRAC_PI_2),
-        "neel_skyrmion" => skyrmion(params, point, 0.0),
+        "bloch_skyrmion" => skyrmion(params, point, 1.0, SkyrmionWallType::Bloch),
+        "neel_skyrmion" => skyrmion(params, point, 1.0, SkyrmionWallType::Neel),
+        "antiskyrmion" => skyrmion(params, point, -1.0, SkyrmionWallType::Neel),
+        "skyrmionium" => skyrmionium(params, point),
+        "hopfion" => hopfion(params, point),
         "bimeron" => bimeron(params, point),
         "domain_wall" => domain_wall(params, point),
         "two_domain" => two_domain(params, point),
@@ -683,6 +764,8 @@ fn is_metric(preset_kind: &str) -> bool {
             | "antivortex"
             | "bloch_skyrmion"
             | "neel_skyrmion"
+            | "antiskyrmion"
+            | "skyrmionium"
             | "bimeron"
             | "domain_wall"
             | "two_domain"
@@ -697,9 +780,15 @@ fn sample_v2(
     points: &[TextureSamplePoint],
 ) -> Result<Vec<[f64; 3]>, TextureError> {
     let frame = resolve_frame(params, mapping)?;
-    inverse_transform([0.0, 0.0, 0.0], transform)?;
-    forward_rotate([0.0, 0.0, 0.0], transform)?;
+    if preset_kind == "hopfion" && frame.is_some() {
+        return Err(invalid(
+            "mapping.projection",
+            "hopfion is three-dimensional and requires object_local projection",
+        ));
+    }
+    let prepared_transform = PreparedTextureTransform::prepare(transform)?;
     local_evaluate(preset_kind, params, [0.0, 0.0, 0.0])?;
+
     let mut output = Vec::with_capacity(points.len());
     for point in points {
         let source_position = if mapping.space.eq_ignore_ascii_case("object") {
@@ -717,7 +806,8 @@ fn sample_v2(
             output.push([0.0, 0.0, 0.0]);
             continue;
         }
-        let transformed = inverse_transform(source_position, transform)?;
+
+        let transformed = prepared_transform.point_to_texture(source_position);
         if transformed.iter().any(|component| !component.is_finite()) {
             return Err(invalid(
                 "sample_point",
@@ -730,12 +820,12 @@ fn sample_v2(
             transformed
         };
         let local_vector = local_evaluate(preset_kind, params, local_point)?;
-        let world_vector = if is_metric(preset_kind) {
+        let source_vector = if is_metric(preset_kind) {
             metric_vector(local_vector, frame)
         } else {
             local_vector
         };
-        output.push(forward_rotate(world_vector, transform)?);
+        output.push(prepared_transform.vector_to_source(source_vector));
     }
     Ok(output)
 }

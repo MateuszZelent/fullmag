@@ -11,8 +11,11 @@ import type {
   CommandResult,
 } from "@/kernel/commands/commandTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
-import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
-import { MODEL_FROZEN_SPINS_PATH } from "@/kernel/api/apiPaths";
+import {
+  MODEL_FROZEN_SPIN_PATH,
+  MODEL_FROZEN_SPINS_PATH,
+  VISUALIZATION_STATE_PATH,
+} from "@/kernel/api/apiPaths";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 import { resolveActiveLaneOperation } from "@/kernel/resources/useActiveLaneCapabilities";
 import { beginPlanarMonitorDraft } from "@/kernel/workspace/crossSectionWorkspace";
@@ -306,11 +309,22 @@ function frozenSpinsSelection(context: CommandContext): {
 }
 
 function frozenSpinsCommandEnabled(context: CommandContext): boolean {
-  const lane = ribbonInteractionDiscretization(context);
-  return Boolean(
-    context.api &&
-      frozenSpinsSelection(context) &&
-      lane === "fdm",
+  return frozenSpinsCommandDisabledReason(context) === null;
+}
+
+function frozenSpinsInteractionOperation(context: CommandContext) {
+  const rawStatus = context.resourceData?.[SESSION_STATUS_RESOURCE_KEY];
+  const record = asRecord(rawStatus);
+  const status = (record?.data ?? rawStatus) as
+    | LiveStatusResource
+    | null
+    | undefined;
+  if (!status?.capabilities?.active_lane) {
+    return null;
+  }
+  return resolveActiveLaneOperation(
+    status.capabilities.active_lane,
+    "interaction.frozen_spins",
   );
 }
 
@@ -321,13 +335,21 @@ function frozenSpinsCommandDisabledReason(
   if (!frozenSpinsSelection(context)) {
     return "Select a ferromagnet or one of its regions first.";
   }
-  const lane = ribbonInteractionDiscretization(context);
-  if (lane === "unknown") {
-    return "Frozen-spins capability is unavailable while the execution lane is unresolved.";
+  const op = frozenSpinsInteractionOperation(context);
+  if (op) {
+    if (!op.enabled) {
+      return op.reason || "Frozen spins constraint is not supported by the active execution lane.";
+    }
+  } else {
+    const lane = ribbonInteractionDiscretization(context);
+    if (lane === "unknown") {
+      return "Frozen-spins capability is unavailable while the execution lane is unresolved.";
+    }
+    if (lane !== "fdm") {
+      return "Frozen spins constraints are currently available on FDM lanes only.";
+    }
   }
-  return lane === "fem"
-    ? "Frozen-spins preview is unavailable until the FEM runtime publishes an exact true-DOF carrier."
-    : null;
+  return null;
 }
 
 async function createFrozenSpinsFromCommand(
@@ -341,57 +363,70 @@ async function createFrozenSpinsFromCommand(
   if (!target) {
     return { message: "Select a ferromagnet or region first.", status: "failed" };
   }
-  const collection = await context.api.model.frozenSpins.list();
-  const id = nextFrozenSpinsId(collection.definitions.map((entry) => entry.id));
-  const definition: FrozenSpinsDefinition = {
-    activation: { kind: "all_stages" },
-    empty_selection: "error",
-    enabled: true,
-    id,
-    inactive_selection: "warn_and_intersect",
-    membership: { kind: "static" },
-    name: target.regionId ? `Frozen spins · ${target.regionId}` : "Frozen spins",
-    reference: { kind: "capture_current_at_activation" },
-    schema_version: "frozen_spins.v1",
-    selector: target.regionId
-      ? {
-          kind: "in_region",
-          object_id: target.objectId,
-          region_id: target.regionId,
-        }
-      : { kind: "in_object", object_id: target.objectId },
-  };
-  const created = await context.api.model.frozenSpins.create({
-    definition,
-    expected_revision: collection.revision,
-  });
-  context.resources?.invalidate(
-    MODEL_FROZEN_SPINS_PATH,
-    created.revision,
-  );
-  const nodeParent = target.regionId
-    ? `model:object:${target.objectId}:regions:${target.regionId}`
-    : `model:object:${target.objectId}`;
-  const nodeId = `${nodeParent}:frozen-spins:${encodeURIComponent(id)}`;
-  context.selection?.set(
-    {
-      kind: "object.frozen-spins",
-      label: "Frozen Spins",
-      nodeId,
-      objectId: target.objectId,
-      ref: {
-        constraintId: id,
+  try {
+    const collection = await context.api.model.frozenSpins.list();
+    const id = nextFrozenSpinsId(collection.definitions.map((entry) => entry.id));
+    const definition: FrozenSpinsDefinition = {
+      activation: { kind: "all_stages" },
+      empty_selection: "error",
+      enabled: true,
+      id,
+      inactive_selection: "warn_and_intersect",
+      membership: { kind: "static" },
+      name: target.regionId ? `Frozen spins · ${target.regionId}` : "Frozen spins",
+      reference: { kind: "capture_current_at_activation" },
+      schema_version: "frozen_spins.v1",
+      selector: target.regionId
+        ? {
+            kind: "in_region",
+            object_id: target.objectId,
+            region_id: target.regionId,
+          }
+        : { kind: "in_object", object_id: target.objectId },
+    };
+    const created = await context.api.model.frozenSpins.create({
+      definition,
+      expected_revision: collection.revision,
+    });
+    context.resources?.invalidate(
+      MODEL_FROZEN_SPINS_PATH,
+      created.revision,
+    );
+    const definitionKey = MODEL_FROZEN_SPIN_PATH.replace(
+      "{constraint_id}",
+      encodeURIComponent(id),
+    );
+    context.resources?.invalidate(definitionKey, created.revision);
+    const nodeParent = target.regionId
+      ? `model:object:${target.objectId}:regions:${target.regionId}`
+      : `model:object:${target.objectId}`;
+    const nodeId = `${nodeParent}:frozen-spins:${encodeURIComponent(id)}`;
+    context.selection?.set(
+      {
         kind: "object.frozen-spins",
+        label: "Frozen Spins",
         nodeId,
         objectId: target.objectId,
-        ...(target.regionId ? { regionId: target.regionId } : {}),
-        type: "frozen-spins",
+        ref: {
+          constraintId: id,
+          kind: "object.frozen-spins",
+          nodeId,
+          objectId: target.objectId,
+          ...(target.regionId ? { regionId: target.regionId } : {}),
+          type: "frozen-spins",
+        },
       },
-    },
-    context.source,
-  );
-  context.layout?.setPanelVisible("right", true);
-  return { status: "completed" };
+      context.source,
+    );
+    context.layout?.setPanelVisible("right", true);
+    return { status: "completed" };
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Failed to create frozen-spins constraint.";
+    return { message, status: "failed" };
+  }
 }
 
 function nextFrozenSpinsId(existing: readonly string[]): string {
@@ -866,6 +901,7 @@ async function patchVisualizationState(
   const state = await context.api?.visualization.patch(patch);
   if (state) {
     invalidateVisualizationState(context, state);
+    return { transactionId: `direct-api:${state.revision}` };
   }
   return null;
 }

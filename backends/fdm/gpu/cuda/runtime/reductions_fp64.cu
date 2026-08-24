@@ -692,7 +692,7 @@ static uint64_t launch_grid_for(uint64_t n) {
     return blocks;
 }
 
-static double finalize_sum_reduction(double *device_values, uint64_t n) {
+static double finalize_sum_reduction(Context &ctx, double *device_values, uint64_t n) {
     uint64_t current = n;
     while (current > 1) {
         uint64_t blocks = (current + REDUCTION_BLOCK_SIZE * 2 - 1) / (REDUCTION_BLOCK_SIZE * 2);
@@ -703,11 +703,19 @@ static double finalize_sum_reduction(double *device_values, uint64_t n) {
         current = blocks;
     }
     double result = 0.0;
-    cudaMemcpy(&result, device_values, sizeof(double), cudaMemcpyDeviceToHost);
+    if (cudaMemcpy(&result, device_values, sizeof(double), cudaMemcpyDeviceToHost) ==
+            cudaSuccess) {
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_REDUCTION);
+        if (fullmag_fdm_solver_phase_active(*ctx.execution_receipt)) {
+            fullmag_fdm_record_control_scalar_d2h(ctx, sizeof(double));
+            fullmag_fdm_record_control_scalar_host_sync(ctx);
+        }
+    }
     return result;
 }
 
-static double finalize_max_reduction(double *device_values, uint64_t n) {
+static double finalize_max_reduction(Context &ctx, double *device_values, uint64_t n) {
     uint64_t current = n;
     while (current > 1) {
         uint64_t blocks = (current + REDUCTION_BLOCK_SIZE * 2 - 1) / (REDUCTION_BLOCK_SIZE * 2);
@@ -718,7 +726,15 @@ static double finalize_max_reduction(double *device_values, uint64_t n) {
         current = blocks;
     }
     double result = 0.0;
-    cudaMemcpy(&result, device_values, sizeof(double), cudaMemcpyDeviceToHost);
+    if (cudaMemcpy(&result, device_values, sizeof(double), cudaMemcpyDeviceToHost) ==
+            cudaSuccess) {
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_REDUCTION);
+        if (fullmag_fdm_solver_phase_active(*ctx.execution_receipt)) {
+            fullmag_fdm_record_control_scalar_d2h(ctx, sizeof(double));
+            fullmag_fdm_record_control_scalar_host_sync(ctx);
+        }
+    }
     return result;
 }
 
@@ -753,13 +769,13 @@ double reduce_max_scalar_sqrt(Context &ctx, double *device_values, uint64_t n) {
         context_end_compute_stream_work(ctx, "reduce_max_scalar_sqrt");
         return 0.0;
     }
-    fullmag_fdm_record_control_scalar_d2h(ctx, sizeof(double));
     err = cudaStreamSynchronize(stream);
     if (err != cudaSuccess) {
         set_cuda_error(ctx, "cudaStreamSynchronize(reduce_max_scalar_sqrt)", err);
         context_end_compute_stream_work(ctx, "reduce_max_scalar_sqrt");
         return 0.0;
     }
+    fullmag_fdm_record_control_scalar_d2h(ctx, sizeof(double));
     fullmag_fdm_record_control_scalar_host_sync(ctx);
     if (!context_end_compute_stream_work(ctx, "reduce_max_scalar_sqrt")) {
         return 0.0;
@@ -808,13 +824,13 @@ AdaptiveErrorPolicy reduce_adaptive_error_policy(
             context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy");
             return policy;
         }
-        fullmag_fdm_record_control_scalar_d2h(ctx, sizeof(double));
         err = cudaStreamSynchronize(stream);
         if (err != cudaSuccess) {
             set_cuda_error(ctx, "cudaStreamSynchronize(reduce_adaptive_error_policy)", err);
             context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy");
             return policy;
         }
+        fullmag_fdm_record_control_scalar_d2h(ctx, sizeof(double));
         fullmag_fdm_record_control_scalar_host_sync(ctx);
         if (!context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy")) return policy;
         policy.error = max_sq > 0.0 ? std::sqrt(max_sq) : 0.0;
@@ -856,13 +872,13 @@ AdaptiveErrorPolicy reduce_adaptive_error_policy(
         context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy");
         return policy;
     }
-    fullmag_fdm_record_control_scalar_d2h(ctx, 3 * sizeof(double));
     err = cudaStreamSynchronize(stream);
     if (err != cudaSuccess) {
         set_cuda_error(ctx, "cudaStreamSynchronize(reduce_adaptive_error_policy)", err);
         context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy");
         return policy;
     }
+    fullmag_fdm_record_control_scalar_d2h(ctx, 3 * sizeof(double));
     fullmag_fdm_record_control_scalar_host_sync(ctx);
     if (!context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy")) {
         return policy;
@@ -882,7 +898,7 @@ double reduce_max_norm_fp64(Context &ctx, const void *vx, const void *vy, const 
         static_cast<const double *>(vz),
         ctx.reduction_scratch,
         n);
-    double max_norm_sq = finalize_max_reduction(ctx.reduction_scratch, blocks);
+    double max_norm_sq = finalize_max_reduction(ctx, ctx.reduction_scratch, blocks);
     return std::sqrt(max_norm_sq);
 }
 
@@ -894,7 +910,7 @@ double reduce_max_norm_fp32(Context &ctx, const void *vx, const void *vy, const 
         static_cast<const float *>(vz),
         ctx.reduction_scratch,
         n);
-    double max_norm_sq = finalize_max_reduction(ctx.reduction_scratch, blocks);
+    double max_norm_sq = finalize_max_reduction(ctx, ctx.reduction_scratch, blocks);
     return std::sqrt(max_norm_sq);
 }
 
@@ -946,7 +962,7 @@ double reduce_max_cross_norm_fp64(Context &ctx,
         static_cast<const double *>(ax), static_cast<const double *>(ay), static_cast<const double *>(az),
         static_cast<const double *>(bx), static_cast<const double *>(by), static_cast<const double *>(bz),
         ctx.reduction_scratch, n);
-    double max_norm_sq = finalize_max_reduction(ctx.reduction_scratch, blocks);
+    double max_norm_sq = finalize_max_reduction(ctx, ctx.reduction_scratch, blocks);
     return std::sqrt(max_norm_sq);
 }
 
@@ -959,7 +975,7 @@ double reduce_max_cross_norm_fp32(Context &ctx,
         static_cast<const float *>(ax), static_cast<const float *>(ay), static_cast<const float *>(az),
         static_cast<const float *>(bx), static_cast<const float *>(by), static_cast<const float *>(bz),
         ctx.reduction_scratch, n);
-    double max_norm_sq = finalize_max_reduction(ctx.reduction_scratch, blocks);
+    double max_norm_sq = finalize_max_reduction(ctx, ctx.reduction_scratch, blocks);
     return std::sqrt(max_norm_sq);
 }
 
@@ -1048,7 +1064,7 @@ static double reduce_exchange_energy_dispatch(Context &ctx) {
             ctx.periodic_y ? 1 : 0,
             ctx.periodic_z ? 1 : 0);
     }
-    return finalize_sum_reduction(ctx.reduction_scratch, blocks);
+    return finalize_sum_reduction(ctx, ctx.reduction_scratch, blocks);
 }
 
 double reduce_exchange_energy_fp64(Context &ctx) {
@@ -1078,7 +1094,7 @@ double reduce_demag_energy_fp64(Context &ctx) {
         ctx.cell_count,
         has_vf,
         coeff);
-    return finalize_sum_reduction(ctx.reduction_scratch, blocks);
+    return finalize_sum_reduction(ctx, ctx.reduction_scratch, blocks);
 }
 
 double reduce_demag_energy_fp32(Context &ctx) {
@@ -1100,7 +1116,7 @@ double reduce_demag_energy_fp32(Context &ctx) {
         ctx.cell_count,
         has_vf,
         coeff);
-    return finalize_sum_reduction(ctx.reduction_scratch, blocks);
+    return finalize_sum_reduction(ctx, ctx.reduction_scratch, blocks);
 }
 
 double reduce_external_energy_fp64(Context &ctx) {
@@ -1129,7 +1145,7 @@ double reduce_external_energy_fp64(Context &ctx) {
         oe_y,
         oe_z,
         ctx.has_static_external_field_profile ? 1.0 : oersted_field_scale(ctx, ctx.current_time));
-    return finalize_sum_reduction(ctx.reduction_scratch, blocks);
+    return finalize_sum_reduction(ctx, ctx.reduction_scratch, blocks);
 }
 
 double reduce_external_energy_fp32(Context &ctx) {
@@ -1158,7 +1174,7 @@ double reduce_external_energy_fp32(Context &ctx) {
         oe_y,
         oe_z,
         ctx.has_static_external_field_profile ? 1.0 : oersted_field_scale(ctx, ctx.current_time));
-    return finalize_sum_reduction(ctx.reduction_scratch, blocks);
+    return finalize_sum_reduction(ctx, ctx.reduction_scratch, blocks);
 }
 
 double reduce_uniaxial_anisotropy_energy_fp64(Context &ctx) {
@@ -1184,7 +1200,7 @@ double reduce_uniaxial_anisotropy_energy_fp64(Context &ctx) {
         ctx.anisU[2],
         ctx.ku1_field,
         ctx.ku2_field);
-    return finalize_sum_reduction(ctx.reduction_scratch, blocks);
+    return finalize_sum_reduction(ctx, ctx.reduction_scratch, blocks);
 }
 
 double reduce_uniaxial_anisotropy_energy_fp32(Context &ctx) {
@@ -1210,7 +1226,7 @@ double reduce_uniaxial_anisotropy_energy_fp32(Context &ctx) {
         ctx.anisU[2],
         ctx.ku1_field,
         ctx.ku2_field);
-    return finalize_sum_reduction(ctx.reduction_scratch, blocks);
+    return finalize_sum_reduction(ctx, ctx.reduction_scratch, blocks);
 }
 
 // --- Cubic anisotropy energy kernel ---
@@ -1379,7 +1395,7 @@ double reduce_cubic_anisotropy_energy_fp64(Context &ctx) {
         ctx.cubic_axis1[0], ctx.cubic_axis1[1], ctx.cubic_axis1[2],
         ctx.cubic_axis2[0], ctx.cubic_axis2[1], ctx.cubic_axis2[2],
         ctx.kc1_field, ctx.kc2_field, ctx.kc3_field);
-    return finalize_sum_reduction(ctx.reduction_scratch, blocks);
+    return finalize_sum_reduction(ctx, ctx.reduction_scratch, blocks);
 }
 
 double reduce_cubic_anisotropy_energy_fp32(Context &ctx) {
@@ -1396,7 +1412,7 @@ double reduce_cubic_anisotropy_energy_fp32(Context &ctx) {
         ctx.cubic_axis1[0], ctx.cubic_axis1[1], ctx.cubic_axis1[2],
         ctx.cubic_axis2[0], ctx.cubic_axis2[1], ctx.cubic_axis2[2],
         ctx.kc1_field, ctx.kc2_field, ctx.kc3_field);
-    return finalize_sum_reduction(ctx.reduction_scratch, blocks);
+    return finalize_sum_reduction(ctx, ctx.reduction_scratch, blocks);
 }
 
 double reduce_dmi_energy_fp64(Context &ctx) {
@@ -1415,7 +1431,7 @@ double reduce_dmi_energy_fp64(Context &ctx) {
         0.5 / ctx.dx, 0.5 / ctx.dy, 0.5 / ctx.dz,
         ctx.A,
         ctx.active_mask, ctx.has_active_mask ? 1 : 0);
-    return finalize_sum_reduction(ctx.reduction_scratch, blocks);
+    return finalize_sum_reduction(ctx, ctx.reduction_scratch, blocks);
 }
 
 double reduce_dmi_energy_fp32(Context &ctx) {
@@ -1434,7 +1450,7 @@ double reduce_dmi_energy_fp32(Context &ctx) {
         0.5 / ctx.dx, 0.5 / ctx.dy, 0.5 / ctx.dz,
         ctx.A,
         ctx.active_mask, ctx.has_active_mask ? 1 : 0);
-    return finalize_sum_reduction(ctx.reduction_scratch, blocks);
+    return finalize_sum_reduction(ctx, ctx.reduction_scratch, blocks);
 }
 
 } // namespace fdm

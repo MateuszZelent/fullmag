@@ -9,6 +9,7 @@
 #define FULLMAG_FDM_CONTEXT_HPP
 
 #include "fullmag_fdm.h"
+#include "execution_receipt.hpp"
 #include "multilayer_batch_contract.hpp"
 #include "spin_torque.hpp"
 
@@ -241,6 +242,7 @@ struct Context {
     double temperature = 0.0;  // Kelvin
     double thermal_sigma = 0.0;  // Precomputed noise amplitude (A/m)
     double current_dt = 1e-13;   // Current timestep for thermal sigma computation
+    double trial_dt = 0.0;       // Internal attempt dt; never authoritative/public
     uint64_t thermal_seed = 0;   // Resolved counter-based Brown-noise seed
 
     // Zhang-Li STT (CIP)
@@ -314,10 +316,24 @@ struct Context {
     uint64_t hot_loop_control_scalar_d2h_bytes = 0;
     uint64_t hot_loop_control_scalar_host_sync_count = 0;
 
+    // Measured host-boundary and operator realization receipt. Accounting is
+    // allocation-free and never invokes CUDA APIs or synchronization.
+    std::shared_ptr<ExecutionReceiptState> execution_receipt =
+        std::make_shared<ExecutionReceiptState>();
+    fullmag_fdm_checkpoint_execution_identity_v3 checkpoint_execution_identity_v3{};
+    bool checkpoint_execution_identity_v3_valid = false;
+
 
     // Step counter
     uint64_t step_count = 0;
     double current_time = 0.0;
+    // Accepted stochastic interval identity is independent of retry attempts.
+    uint64_t accepted_step_index = 0;
+    uint64_t accepted_state_revision = 1;
+    uint64_t rhs_source_revision = 1;
+    uint64_t rhs_field_revision = 1;
+    uint64_t rhs_transport_revision = 1;
+    uint64_t projection_policy_identity = 1;
 
     // Non-owning adapter to transport-owned stage solve and torque storage.
     GpuTransportRhsBinding gpu_transport_rhs;
@@ -356,7 +372,18 @@ struct Context {
     // Transaction-owned accepted m snapshot for an active bound transport
     // step.  Integrators may freely reuse tmp without weakening rollback.
     DeviceVectorField gpu_transport_pre_step_m;
+    DeviceVectorField gpu_transport_pre_step_abm_f_n;
+    DeviceVectorField gpu_transport_pre_step_abm_f_n1;
+    DeviceVectorField gpu_transport_pre_step_abm_f_n2;
     bool gpu_transport_pre_step_m_valid = false;
+    bool gpu_transport_pre_step_abm_valid = false;
+    uint64_t gpu_transport_pre_step_step_count = 0;
+    uint64_t gpu_transport_pre_step_accepted_step_index = 0;
+    uint64_t gpu_transport_pre_step_accepted_state_revision = 1;
+    double gpu_transport_pre_step_current_time = 0.0;
+    double gpu_transport_pre_step_current_dt = 0.0;
+    bool gpu_transport_pre_step_adaptive_has_previous_error = false;
+    double gpu_transport_pre_step_adaptive_previous_error = 0.0;
     uint32_t gpu_transport_pre_step_abm_startup = 0;
     double gpu_transport_pre_step_abm_last_dt = 0.0;
     DeviceVectorField work;   // effective field / scratch
@@ -365,6 +392,40 @@ struct Context {
     DeviceVectorField k2, k3, k4, k5, k6;
     DeviceVectorField k_fsal; // FSAL: k7 from prev accepted step = k1 for next
     bool              fsal_valid = false;
+    bool fsal_pending = false;
+    uint64_t fsal_accepted_state_revision = 0;
+    uint64_t fsal_accepted_time_bits = 0;
+    uint64_t fsal_accepted_dt_bits = 0;
+    uint64_t fsal_source_revision = 0;
+    uint64_t fsal_field_revision = 0;
+    uint64_t fsal_transport_revision = 0;
+    uint64_t fsal_transport_state_identity = 0;
+    uint64_t fsal_projection_policy_identity = 0;
+    uint32_t fsal_integrator_identity = 0;
+    uint32_t fsal_precision_identity = 0;
+    uint64_t pending_fsal_accepted_state_revision = 0;
+    uint64_t pending_fsal_accepted_time_bits = 0;
+    uint64_t pending_fsal_accepted_dt_bits = 0;
+    uint64_t pending_fsal_source_revision = 0;
+    uint64_t pending_fsal_field_revision = 0;
+    uint64_t pending_fsal_transport_revision = 0;
+    uint64_t pending_fsal_transport_state_identity = 0;
+    uint64_t pending_fsal_projection_policy_identity = 0;
+    uint32_t pending_fsal_integrator_identity = 0;
+    uint32_t pending_fsal_precision_identity = 0;
+    bool accepted_step_pending = false;
+    uint64_t pending_step_count = 0;
+    double pending_time = 0.0;
+    double pending_dt = 0.0;
+    bool step_fsal_reused = false;
+    fullmag_fdm_fsal_invalidation_reason fsal_invalidation_reason =
+        FULLMAG_FDM_FSAL_INVALIDATION_CACHE_EMPTY;
+    uint64_t fsal_invalidation_count = 0;
+    uint64_t rhs_evaluations_saved = 0;
+    uint64_t thermal_rng_draws = 0;
+    uint64_t stale_publication_count = 0;
+    uint64_t transaction_commit_count = 0;
+    bool observables_valid = false;
 
     // Complete v2 timestep policy (fixed unless explicitly enabled).
     bool adaptive_enabled = false;
@@ -484,8 +545,8 @@ struct Context {
     // Error state
     std::string last_error;
 
-    AsyncFieldSnapshotPool async_field_snapshot_pool;
-    AsyncPreviewSnapshotPool async_preview_snapshot_pool;
+    std::shared_ptr<AsyncFieldSnapshotPool> async_field_snapshot_pool;
+    std::shared_ptr<AsyncPreviewSnapshotPool> async_preview_snapshot_pool;
 
     // Native FDM ABI v2 multilayer staging. These buffers are uploaded and
     // stepped separately from the legacy single-grid state.
@@ -503,14 +564,32 @@ struct Context {
 bool context_create_compute_stream(Context &ctx);
 void context_destroy_compute_stream(Context &ctx);
 cudaStream_t context_compute_stream(Context &ctx);
+cudaError_t fullmag_fdm_receipt_cuda_memcpy(
+    Context &ctx,
+    void *destination,
+    const void *source,
+    size_t bytes,
+    cudaMemcpyKind kind);
+cudaError_t fullmag_fdm_receipt_cuda_memcpy_async(
+    Context &ctx,
+    void *destination,
+    const void *source,
+    size_t bytes,
+    cudaMemcpyKind kind,
+    cudaStream_t stream);
 #endif
 bool context_begin_compute_stream_work(Context &ctx, const char *operation);
 bool context_end_compute_stream_work(Context &ctx, const char *operation);
+bool context_complete_solver_receipt_attempt(Context &ctx, const char *operation);
 bool context_test_copy_f64_on_compute_stream(
     Context &ctx, double *destination, const double *source, uint64_t values);
-bool context_capture_gpu_transport_pre_step_m(Context &ctx);
-bool context_restore_gpu_transport_pre_step_m(Context &ctx);
-void context_invalidate_gpu_transport_pre_step_m(Context &ctx);
+bool context_capture_pre_step_state(Context &ctx);
+bool context_rollback_pre_step_state(Context &ctx);
+void context_discard_pre_step_state(Context &ctx);
+bool context_prepare_checkpoint_import_staging(
+    Context &ctx, bool include_fsal, bool include_abm_history);
+void context_commit_checkpoint_import_staging(
+    Context &ctx, bool include_fsal, bool include_abm_history);
 int context_llg_checkpoint_query_size_v1(
     Context &ctx, uint64_t &out_required_bytes);
 int context_llg_checkpoint_export_v1(
@@ -523,6 +602,33 @@ int context_llg_checkpoint_import_v1(
     const void *source,
     uint64_t exact_bytes,
     const fullmag_fdm_llg_checkpoint_info_v1 &expected_info);
+int context_llg_checkpoint_query_size_v2(
+    Context &ctx, uint64_t &out_required_bytes);
+int context_llg_checkpoint_export_v2(
+    Context &ctx,
+    void *destination,
+    uint64_t exact_capacity,
+    fullmag_fdm_llg_checkpoint_info_v2 &out_info);
+int context_llg_checkpoint_import_v2(
+    Context &ctx,
+    const void *source,
+    uint64_t exact_bytes,
+    const fullmag_fdm_llg_checkpoint_info_v2 &expected_info);
+bool context_set_checkpoint_execution_identity_v3(
+    Context &ctx,
+    const fullmag_fdm_checkpoint_execution_identity_v3 &identity);
+int context_llg_checkpoint_query_size_v3(
+    Context &ctx, uint64_t &out_required_bytes);
+int context_llg_checkpoint_export_v3(
+    Context &ctx,
+    void *destination,
+    uint64_t exact_capacity,
+    fullmag_fdm_llg_checkpoint_info_v3 &out_info);
+int context_llg_checkpoint_import_v3(
+    Context &ctx,
+    const void *source,
+    uint64_t exact_bytes,
+    const fullmag_fdm_llg_checkpoint_info_v3 &expected_info);
 
 bool context_bind_gpu_transport_rhs(
     Context &ctx,
@@ -557,8 +663,9 @@ struct AsyncFieldSnapshot {
     void *done_event = nullptr;  // cudaEvent_t
     bool needs_wait = false;
     bool done_event_recorded = false;
-    AsyncFieldSnapshotPool *pool = nullptr;
+    std::shared_ptr<AsyncFieldSnapshotPool> pool;
     std::size_t pool_slot = kFdmAsyncFieldSnapshotPoolCapacity;
+    std::shared_ptr<AsyncTransferReceiptToken> receipt_token;
 };
 
 struct AsyncPreviewSnapshot {
@@ -573,8 +680,9 @@ struct AsyncPreviewSnapshot {
     void *done_event = nullptr;  // cudaEvent_t
     bool needs_wait = false;
     bool done_event_recorded = false;
-    AsyncPreviewSnapshotPool *pool = nullptr;
+    std::shared_ptr<AsyncPreviewSnapshotPool> pool;
     std::size_t pool_slot = kFdmAsyncPreviewSnapshotPoolCapacity;
+    std::shared_ptr<AsyncTransferReceiptToken> receipt_token;
 };
 
 bool initialize_async_field_snapshot_pool(Context &ctx);
@@ -647,7 +755,8 @@ inline double oersted_field_scale(const Context &ctx, double evaluation_time) {
             const double f = ctx.oersted_time_dep_freq;
             const double phi = ctx.oersted_time_dep_phase;
             const double off = ctx.oersted_time_dep_offset;
-            scale *= sin(2.0 * M_PI * f * t + phi) + off;
+            constexpr double pi = 3.141592653589793238462643383279502884;
+            scale *= sin(2.0 * pi * f * t + phi) + off;
             break;
         }
         case 2: {
@@ -702,6 +811,9 @@ inline SttParams stt_params_from_ctx(const Context &ctx) {
 /// State replacement invalidates every multistep/FSAL derivative cache.
 inline void context_reset_integrator_history(Context &ctx) {
     ctx.fsal_valid = false;
+    ctx.fsal_pending = false;
+    ctx.accepted_step_pending = false;
+    ++ctx.accepted_state_revision;
     ctx.abm_startup = 0;
     ctx.abm_last_dt = 0.0;
 }
@@ -715,7 +827,8 @@ inline bool fullmag_fdm_should_fill_step_stats_for_step(const Context &ctx, uint
 }
 
 inline bool fullmag_fdm_should_fill_step_stats(const Context &ctx) {
-    return fullmag_fdm_should_fill_step_stats_for_step(ctx, ctx.step_count);
+    return fullmag_fdm_should_fill_step_stats_for_step(
+        ctx, ctx.accepted_step_pending ? ctx.pending_step_count : ctx.step_count);
 }
 
 inline void fullmag_fdm_reset_hot_loop_audit(Context &ctx) {
@@ -726,13 +839,22 @@ inline void fullmag_fdm_reset_hot_loop_audit(Context &ctx) {
 }
 
 inline void fullmag_fdm_record_control_scalar_d2h(Context &ctx, uint64_t bytes) {
-    ctx.hot_loop_d2h_bytes += bytes;
-    ctx.hot_loop_control_scalar_d2h_bytes += bytes;
+    std::lock_guard<std::mutex> lock(ctx.execution_receipt->accounting_mutex);
+    fullmag_fdm_checked_add(
+        *ctx.execution_receipt, ctx.hot_loop_d2h_bytes, bytes);
+    fullmag_fdm_checked_add(
+        *ctx.execution_receipt, ctx.hot_loop_control_scalar_d2h_bytes, bytes);
 }
 
-inline void fullmag_fdm_record_control_scalar_host_sync(Context &ctx) {
-    ctx.hot_loop_host_sync_count += 1;
-    ctx.hot_loop_control_scalar_host_sync_count += 1;
+inline void fullmag_fdm_record_control_scalar_host_sync(
+    Context &ctx,
+    uint64_t count = 1)
+{
+    std::lock_guard<std::mutex> lock(ctx.execution_receipt->accounting_mutex);
+    fullmag_fdm_checked_add(
+        *ctx.execution_receipt, ctx.hot_loop_host_sync_count, count);
+    fullmag_fdm_checked_add(
+        *ctx.execution_receipt, ctx.hot_loop_control_scalar_host_sync_count, count);
 }
 
 inline void fullmag_fdm_publish_hot_loop_audit(
@@ -747,6 +869,420 @@ inline void fullmag_fdm_publish_hot_loop_audit(
     stats->hot_loop_control_scalar_d2h_bytes = ctx.hot_loop_control_scalar_d2h_bytes;
     stats->hot_loop_control_scalar_host_sync_count =
         ctx.hot_loop_control_scalar_host_sync_count;
+}
+
+inline void fullmag_fdm_accumulate_execution_receipt_audit(Context &ctx) {
+    auto &state = *ctx.execution_receipt;
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
+    fullmag_fdm_checked_add(state, state.hot_loop_host_sync_count,
+                            ctx.hot_loop_host_sync_count);
+    fullmag_fdm_checked_add(state, state.hot_loop_control_scalar_d2h_bytes,
+                            ctx.hot_loop_control_scalar_d2h_bytes);
+    fullmag_fdm_checked_add(state, state.hot_loop_control_scalar_host_sync_count,
+                            ctx.hot_loop_control_scalar_host_sync_count);
+}
+
+inline void fullmag_fdm_record_counted_bytes(
+    ExecutionReceiptState &state,
+    uint64_t &count,
+    uint64_t &bytes_total,
+    uint64_t bytes)
+{
+    fullmag_fdm_checked_add(state, count, 1);
+    fullmag_fdm_checked_add(state, bytes_total, bytes);
+}
+
+inline void fullmag_fdm_record_setup_full_vector_h2d(Context &ctx, uint64_t bytes) {
+    auto &state = *ctx.execution_receipt;
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
+    fullmag_fdm_record_counted_bytes(
+        state, state.setup_full_vector_h2d_count,
+        state.setup_full_vector_h2d_bytes, bytes);
+}
+
+inline void fullmag_fdm_record_setup_full_vector_d2h(Context &ctx, uint64_t bytes) {
+    auto &state = *ctx.execution_receipt;
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
+    fullmag_fdm_record_counted_bytes(
+        state, state.setup_full_vector_d2h_count,
+        state.setup_full_vector_d2h_bytes, bytes);
+}
+
+inline void fullmag_fdm_record_observation_full_vector_h2d(Context &ctx, uint64_t bytes) {
+    auto &state = *ctx.execution_receipt;
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
+    fullmag_fdm_record_counted_bytes(
+        state, state.observation_full_vector_h2d_count,
+        state.observation_full_vector_h2d_bytes, bytes);
+}
+
+inline void fullmag_fdm_record_observation_full_vector_d2h(Context &ctx, uint64_t bytes) {
+    auto &state = *ctx.execution_receipt;
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
+    fullmag_fdm_record_counted_bytes(
+        state, state.observation_full_vector_d2h_count,
+        state.observation_full_vector_d2h_bytes, bytes);
+}
+
+inline void fullmag_fdm_record_hot_loop_full_vector_h2d(Context &, uint64_t);
+inline void fullmag_fdm_record_hot_loop_full_vector_d2h(Context &, uint64_t);
+
+inline void fullmag_fdm_record_cuda_transfer_success(
+    Context &ctx,
+    bool host_to_device,
+    uint64_t bytes)
+{
+    auto &state = *ctx.execution_receipt;
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
+    if (state.solver_phase_active) {
+        if (host_to_device) {
+            fullmag_fdm_record_counted_bytes(
+                state, state.hot_loop_full_vector_h2d_count,
+                state.hot_loop_full_vector_h2d_bytes, bytes);
+        } else {
+            fullmag_fdm_record_counted_bytes(
+                state, state.hot_loop_full_vector_d2h_count,
+                state.hot_loop_full_vector_d2h_bytes, bytes);
+        }
+        return;
+    }
+    if (!state.setup_complete) {
+        if (host_to_device) {
+            fullmag_fdm_record_counted_bytes(
+                state, state.setup_full_vector_h2d_count,
+                state.setup_full_vector_h2d_bytes, bytes);
+        } else {
+            fullmag_fdm_record_counted_bytes(
+                state, state.setup_full_vector_d2h_count,
+                state.setup_full_vector_d2h_bytes, bytes);
+        }
+        return;
+    }
+    if (host_to_device) {
+        fullmag_fdm_record_counted_bytes(
+            state, state.observation_full_vector_h2d_count,
+            state.observation_full_vector_h2d_bytes, bytes);
+    } else {
+        fullmag_fdm_record_counted_bytes(
+            state, state.observation_full_vector_d2h_count,
+            state.observation_full_vector_d2h_bytes, bytes);
+    }
+}
+
+inline void fullmag_fdm_record_hot_loop_full_vector_h2d(
+    Context &ctx,
+    uint64_t bytes)
+{
+    auto &state = *ctx.execution_receipt;
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
+    fullmag_fdm_record_counted_bytes(
+        state, state.hot_loop_full_vector_h2d_count,
+        state.hot_loop_full_vector_h2d_bytes, bytes);
+}
+
+inline void fullmag_fdm_record_hot_loop_full_vector_d2h(
+    Context &ctx,
+    uint64_t bytes)
+{
+    auto &state = *ctx.execution_receipt;
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
+    fullmag_fdm_record_counted_bytes(
+        state, state.hot_loop_full_vector_d2h_count,
+        state.hot_loop_full_vector_d2h_bytes, bytes);
+}
+
+inline void fullmag_fdm_record_hot_loop_host_compute(Context &ctx) {
+    std::lock_guard<std::mutex> lock(ctx.execution_receipt->accounting_mutex);
+    fullmag_fdm_checked_add(
+        *ctx.execution_receipt,
+        ctx.execution_receipt->hot_loop_host_compute_count,
+        1);
+}
+
+enum class TransportReceiptCategory : uint8_t {
+    Ignore,
+    SetupH2D,
+    ScalarD2H,
+    SolverHotLoopH2D,
+    SolverHotLoopD2H,
+    ScalarHostSync,
+    ObservationH2D,
+    ObservationD2H,
+    ObservationHostSync,
+    DeviceExecution,
+    Invalid,
+};
+
+inline TransportReceiptCategory fullmag_fdm_classify_transport_telemetry(
+    const fullmag_fdm_gpu_transport_telemetry_v1 &record)
+{
+    if (record.status != FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS) {
+        return TransportReceiptCategory::Ignore;
+    }
+    const bool transfer =
+        (record.event_flags & FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER) != 0;
+    const bool synchronization =
+        (record.event_flags &
+         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_SYNCHRONIZATION) != 0;
+    const bool cadence =
+        (record.event_flags &
+         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_CADENCE_AUTHORIZED) != 0;
+    const bool provisional =
+        (record.event_flags &
+         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_PROVISIONAL) != 0;
+    switch (record.reason) {
+        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_STATIC_UPLOAD_H2D:
+            return transfer && record.direction ==
+                       FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_H2D
+                ? TransportReceiptCategory::SetupH2D
+                : TransportReceiptCategory::Invalid;
+        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SCALAR_REDUCTION_D2H:
+            if (!transfer || record.direction !=
+                    FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H) {
+                return TransportReceiptCategory::Invalid;
+            }
+            return cadence ? TransportReceiptCategory::ObservationD2H
+                           : TransportReceiptCategory::ScalarD2H;
+        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_ARTIFACT_READBACK_D2H:
+        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_CHECKPOINT_EXPORT_D2H:
+            return transfer && cadence && record.direction ==
+                       FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H
+                ? TransportReceiptCategory::ObservationD2H
+                : TransportReceiptCategory::Invalid;
+        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_CHECKPOINT_IMPORT_H2D:
+            return transfer && cadence && record.direction ==
+                       FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_H2D
+                ? TransportReceiptCategory::ObservationH2D
+                : TransportReceiptCategory::Invalid;
+        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_CONTROL_STATE_H2D:
+            return transfer && provisional && record.direction ==
+                       FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_H2D
+                ? TransportReceiptCategory::SolverHotLoopH2D
+                : TransportReceiptCategory::Invalid;
+        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_STREAM_SYNCHRONIZE:
+        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_EVENT_WAIT:
+            if (!synchronization || record.direction !=
+                    FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL) {
+                return TransportReceiptCategory::Invalid;
+            }
+            return cadence ? TransportReceiptCategory::ObservationHostSync
+                 : TransportReceiptCategory::ScalarHostSync;
+        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVE_STATE_D2D:
+            return record.direction ==
+                       FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2D
+                ? TransportReceiptCategory::Ignore
+                : TransportReceiptCategory::Invalid;
+        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVED_TRANSPORT_RHS:
+            return record.direction ==
+                       FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL
+                ? TransportReceiptCategory::DeviceExecution
+                : TransportReceiptCategory::Invalid;
+        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_REJECTED_ATTEMPT:
+            return TransportReceiptCategory::Ignore;
+        default:
+            return TransportReceiptCategory::Invalid;
+    }
+}
+
+inline uint64_t fullmag_fdm_required_operator_mask(const Context &ctx) {
+    uint64_t required_operator_mask =
+        FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR | FULLMAG_FDM_OPERATOR_REDUCTION;
+    if (ctx.enable_exchange) required_operator_mask |= FULLMAG_FDM_OPERATOR_EXCHANGE;
+    if (ctx.enable_demag) required_operator_mask |= FULLMAG_FDM_OPERATOR_DEMAG;
+    if (ctx.has_interfacial_dmi || ctx.has_bulk_dmi) {
+        required_operator_mask |= FULLMAG_FDM_OPERATOR_DMI;
+    }
+    if (ctx.has_uniaxial_anisotropy || ctx.has_cubic_anisotropy) {
+        required_operator_mask |= FULLMAG_FDM_OPERATOR_ANISOTROPY;
+    }
+    if (ctx.has_external_field || ctx.has_static_external_field_profile) {
+        required_operator_mask |= FULLMAG_FDM_OPERATOR_EXTERNAL_FIELD;
+    }
+    if (ctx.has_active_mask || ctx.has_frozen_mask || ctx.has_region_mask ||
+        ctx.has_slonczewski_active_mask || ctx.has_sot_active_mask) {
+        required_operator_mask |= FULLMAG_FDM_OPERATOR_MASKS;
+    }
+    if (ctx.has_magnetoelastic) required_operator_mask |= FULLMAG_FDM_OPERATOR_MAGNETOELASTIC;
+    if (ctx.temperature > 0.0) required_operator_mask |= FULLMAG_FDM_OPERATOR_THERMAL;
+    if (ctx.has_zhang_li_stt) required_operator_mask |= FULLMAG_FDM_OPERATOR_ZHANG_LI_STT;
+    if (ctx.has_slonczewski_stt) required_operator_mask |= FULLMAG_FDM_OPERATOR_SLONCZEWSKI_STT;
+    if (ctx.has_sot) required_operator_mask |= FULLMAG_FDM_OPERATOR_SOT;
+    if (ctx.has_oersted_field) required_operator_mask |= FULLMAG_FDM_OPERATOR_OERSTED;
+    if (ctx.boundary_tier != 0 || ctx.has_demag_boundary_corr) {
+        required_operator_mask |= FULLMAG_FDM_OPERATOR_BOUNDARY_CORRECTION;
+    }
+    if (ctx.has_multilayer_plan_v2) {
+        if (!ctx.multilayer_layers.empty()) {
+            required_operator_mask |= FULLMAG_FDM_OPERATOR_MULTILAYER_INTERACTIONS;
+        }
+        if (ctx.enable_demag && !ctx.multilayer_kernels.empty()) {
+            required_operator_mask |= FULLMAG_FDM_OPERATOR_MULTILAYER_TRANSFER |
+                                      FULLMAG_FDM_OPERATOR_MULTILAYER_DEMAG;
+        }
+    }
+    if (ctx.gpu_transport_rhs.active) required_operator_mask |= FULLMAG_FDM_OPERATOR_GPU_TRANSPORT;
+    return required_operator_mask;
+}
+
+inline void fullmag_fdm_commit_operator_residency(Context &ctx) {
+    auto &state = *ctx.execution_receipt;
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
+    const uint64_t required = fullmag_fdm_required_operator_mask(ctx);
+    state.required_operator_mask |= required;
+    for (uint64_t bit = 1; bit <= FULLMAG_FDM_OPERATOR_GPU_TRANSPORT; bit <<= 1) {
+        if ((required & bit) != 0) {
+            state.device_operator_mask |= bit;
+            state.host_operator_mask &= ~bit;
+        }
+    }
+    state.reduction_location = FULLMAG_FDM_LOCATION_DEVICE;
+    state.setup_complete = true;
+}
+
+inline void fullmag_fdm_note_operator_device_execution(
+    Context &ctx,
+    uint64_t operator_mask)
+{
+    fullmag_fdm_note_operator_device_launch(
+        *ctx.execution_receipt, operator_mask);
+}
+
+inline bool fullmag_fdm_note_llg_rhs_torque_device_launch(
+    Context &ctx,
+    const char *operation)
+{
+#if FULLMAG_HAS_CUDA
+    const cudaError_t launch_error = cudaGetLastError();
+    if (launch_error != cudaSuccess) {
+        ctx.last_error = std::string(operation) + ": " + cudaGetErrorString(launch_error);
+        return false;
+    }
+#else
+    (void)operation;
+#endif
+    if (ctx.has_zhang_li_stt) {
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_ZHANG_LI_STT);
+    }
+    if (ctx.has_slonczewski_stt) {
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_SLONCZEWSKI_STT);
+    }
+    if (ctx.has_sot) {
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_SOT);
+    }
+    return true;
+}
+
+inline void fullmag_fdm_mark_actual_operator_host(Context &ctx, uint64_t operator_mask) {
+    fullmag_fdm_commit_operator_host_execution(*ctx.execution_receipt, operator_mask);
+}
+
+inline fullmag_fdm_execution_class_v1 fullmag_fdm_execution_class_locked(
+    const ExecutionReceiptState &state)
+{
+    if (state.required_operator_mask == 0 ||
+        fullmag_fdm_resolved_unknown_operator_mask_locked(state) != 0) {
+        return FULLMAG_FDM_EXECUTION_UNKNOWN;
+    }
+    if (state.host_operator_mask == 0 &&
+        (state.device_operator_mask & state.required_operator_mask) ==
+            state.required_operator_mask) {
+        return FULLMAG_FDM_EXECUTION_DEVICE_RESIDENT;
+    }
+    if (state.device_operator_mask == 0) return FULLMAG_FDM_EXECUTION_CPU;
+    return FULLMAG_FDM_EXECUTION_HYBRID;
+}
+
+inline fullmag_fdm_execution_receipt_v2 fullmag_fdm_make_execution_receipt_v2(
+    const Context &ctx)
+{
+    const auto &state = *ctx.execution_receipt;
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
+
+    fullmag_fdm_execution_receipt_v2 receipt{};
+    receipt.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2;
+    receipt.struct_size = sizeof(receipt);
+    receipt.execution_class = fullmag_fdm_execution_class_locked(state);
+    receipt.executed_backend =
+        fullmag_fdm_executed_unknown_operator_mask_locked(state) == 0 &&
+                state.executed_host_operator_mask == 0
+            ? FULLMAG_FDM_EXECUTED_CUDA_FDM
+            : FULLMAG_FDM_EXECUTED_UNKNOWN;
+    receipt.device_ordinal = state.device_ordinal;
+    receipt.precision = ctx.precision;
+    receipt.integrator = ctx.integrator;
+    receipt.required_operator_mask = state.required_operator_mask;
+    receipt.device_operator_mask = state.device_operator_mask;
+    receipt.host_operator_mask = state.host_operator_mask;
+    receipt.resolved_unknown_operator_mask =
+        fullmag_fdm_resolved_unknown_operator_mask_locked(state);
+    receipt.executed_device_operator_mask = state.executed_device_operator_mask;
+    receipt.executed_host_operator_mask = state.executed_host_operator_mask;
+    receipt.executed_unknown_operator_mask =
+        fullmag_fdm_executed_unknown_operator_mask_locked(state);
+    receipt.reduction_location = state.reduction_location;
+    receipt.control_location = state.control_location;
+    receipt.fallback_count = state.fallback_count;
+    receipt.setup_full_vector_h2d_count = state.setup_full_vector_h2d_count;
+    receipt.setup_full_vector_h2d_bytes = state.setup_full_vector_h2d_bytes;
+    receipt.hot_loop_full_vector_h2d_count = state.hot_loop_full_vector_h2d_count;
+    receipt.hot_loop_full_vector_h2d_bytes = state.hot_loop_full_vector_h2d_bytes;
+    receipt.hot_loop_full_vector_d2h_count = state.hot_loop_full_vector_d2h_count;
+    receipt.hot_loop_full_vector_d2h_bytes = state.hot_loop_full_vector_d2h_bytes;
+    receipt.hot_loop_host_compute_count = state.hot_loop_host_compute_count;
+    receipt.hot_loop_host_sync_count = state.hot_loop_host_sync_count;
+    receipt.hot_loop_control_scalar_d2h_bytes = state.hot_loop_control_scalar_d2h_bytes;
+    receipt.hot_loop_control_scalar_host_sync_count =
+        state.hot_loop_control_scalar_host_sync_count;
+    receipt.setup_full_vector_d2h_count = state.setup_full_vector_d2h_count;
+    receipt.setup_full_vector_d2h_bytes = state.setup_full_vector_d2h_bytes;
+    receipt.observation_full_vector_h2d_count = state.observation_full_vector_h2d_count;
+    receipt.observation_full_vector_h2d_bytes = state.observation_full_vector_h2d_bytes;
+    receipt.observation_full_vector_d2h_count = state.observation_full_vector_d2h_count;
+    receipt.observation_full_vector_d2h_bytes = state.observation_full_vector_d2h_bytes;
+    receipt.accounting_valid = state.accounting_valid ? 1u : 0u;
+    return receipt;
+}
+
+inline fullmag_fdm_execution_receipt_v1 fullmag_fdm_make_execution_receipt(
+    const Context &ctx)
+{
+    const auto source = fullmag_fdm_make_execution_receipt_v2(ctx);
+    fullmag_fdm_execution_receipt_v1 receipt{};
+    receipt.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1;
+    receipt.struct_size = sizeof(receipt);
+    receipt.execution_class = source.execution_class;
+    receipt.executed_backend = source.executed_backend;
+    receipt.device_ordinal = source.device_ordinal;
+    receipt.precision = source.precision;
+    receipt.integrator = source.integrator;
+    receipt.required_operator_mask = source.required_operator_mask;
+    receipt.device_operator_mask = source.device_operator_mask;
+    receipt.host_operator_mask = source.host_operator_mask;
+    receipt.reduction_location = source.reduction_location;
+    receipt.control_location = source.control_location;
+    receipt.fallback_count = source.fallback_count;
+    receipt.setup_full_vector_h2d_count = source.setup_full_vector_h2d_count;
+    receipt.setup_full_vector_h2d_bytes = source.setup_full_vector_h2d_bytes;
+    receipt.hot_loop_full_vector_h2d_count = source.hot_loop_full_vector_h2d_count;
+    receipt.hot_loop_full_vector_h2d_bytes = source.hot_loop_full_vector_h2d_bytes;
+    receipt.hot_loop_full_vector_d2h_count = source.hot_loop_full_vector_d2h_count;
+    receipt.hot_loop_full_vector_d2h_bytes = source.hot_loop_full_vector_d2h_bytes;
+    receipt.hot_loop_host_compute_count = source.hot_loop_host_compute_count;
+    receipt.hot_loop_host_sync_count = source.hot_loop_host_sync_count;
+    receipt.hot_loop_control_scalar_d2h_bytes = source.hot_loop_control_scalar_d2h_bytes;
+    receipt.hot_loop_control_scalar_host_sync_count =
+        source.hot_loop_control_scalar_host_sync_count;
+    receipt.setup_full_vector_d2h_count = source.setup_full_vector_d2h_count;
+    receipt.setup_full_vector_d2h_bytes = source.setup_full_vector_d2h_bytes;
+    receipt.observation_full_vector_h2d_count = source.observation_full_vector_h2d_count;
+    receipt.observation_full_vector_h2d_bytes = source.observation_full_vector_h2d_bytes;
+    receipt.observation_full_vector_d2h_count = source.observation_full_vector_d2h_count;
+    receipt.observation_full_vector_d2h_bytes = source.observation_full_vector_d2h_bytes;
+    receipt.accounting_valid = source.accounting_valid;
+    return receipt;
 }
 
 inline void fullmag_fdm_publish_multilayer_demag_stage_counters(
@@ -774,8 +1310,8 @@ inline void fullmag_fdm_fill_step_stats_metadata(
         return;
     }
     std::memset(stats, 0, sizeof(*stats));
-    stats->step = ctx.step_count;
-    stats->time_seconds = ctx.current_time;
+    stats->step = ctx.accepted_step_pending ? ctx.pending_step_count : ctx.step_count;
+    stats->time_seconds = ctx.accepted_step_pending ? ctx.pending_time : ctx.current_time;
     stats->dt_seconds = dt;
     stats->suggested_next_dt = suggested_next_dt;
     fullmag_fdm_publish_hot_loop_audit(ctx, stats);
@@ -1076,6 +1612,7 @@ bool context_query_device_info(Context &ctx);
 
 /// Populate H_ex / H_demag / H_eff for the current state without advancing time.
 bool context_refresh_observables(Context &ctx);
+void context_invalidate_observables(Context &ctx);
 
 /// Populate only H_demag for the current state without advancing time.
 bool context_refresh_demag_observable(Context &ctx);

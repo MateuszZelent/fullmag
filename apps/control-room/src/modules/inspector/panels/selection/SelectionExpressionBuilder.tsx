@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 import type {
   FrozenSpinsSelectionExpression,
   SelectionGeometryPredicate,
@@ -81,6 +83,7 @@ export function SelectionExpressionBuilder({
           label="Object ID"
           value={expression.object_id}
           onChange={(value) => onChange({ ...expression, object_id: value })}
+          error={expression.object_id.trim() === "" ? "Object ID cannot be empty." : undefined}
         />
       ) : null}
       {expression.kind === "in_region" ? (
@@ -89,11 +92,13 @@ export function SelectionExpressionBuilder({
             label="Object ID"
             value={expression.object_id}
             onChange={(value) => onChange({ ...expression, object_id: value })}
+            error={expression.object_id.trim() === "" ? "Object ID cannot be empty." : undefined}
           />
           <TextField
             label="Region ID"
             value={expression.region_id}
             onChange={(value) => onChange({ ...expression, region_id: value })}
+            error={expression.region_id.trim() === "" ? "Region ID cannot be empty." : undefined}
           />
         </>
       ) : null}
@@ -102,10 +107,16 @@ export function SelectionExpressionBuilder({
           label="Selection ID"
           value={expression.selection_id}
           onChange={(value) => onChange({ ...expression, selection_id: value })}
+          error={expression.selection_id.trim() === "" ? "Selection ID cannot be empty." : undefined}
         />
       ) : null}
       {expression.kind === "and" || expression.kind === "or" || expression.kind === "xor" ? (
         <div className="fm-inspector-panel">
+          {expression.expressions.length === 0 ? (
+            <p className="fm-inspector-feedback" data-kind="error">
+              At least one sub-expression clause is required.
+            </p>
+          ) : null}
           {expression.expressions.map((child, index) => (
             <div className="fm-inspector-panel" key={index}>
               <SelectionExpressionBuilder
@@ -165,7 +176,7 @@ export function SelectionExpressionBuilder({
         />
       ) : null}
       {expression.kind === "compare" ? (
-        <div className="fm-inspector-panel grid gap-2">
+        <div className="fm-inspector-panel">
           <ScalarExpressionBuilder
             label="Left value"
             expression={expression.lhs}
@@ -191,23 +202,28 @@ export function SelectionExpressionBuilder({
         </div>
       ) : null}
       {expression.kind === "approx" ? (
-        <div className="fm-inspector-panel grid gap-2">
+        <div className="fm-inspector-panel">
           <ScalarExpressionBuilder label="Value" expression={expression.value} objectId={objectId} onChange={(value) => onChange({ ...expression, value })} />
           <ScalarExpressionBuilder label="Target" expression={expression.target} objectId={objectId} onChange={(target) => onChange({ ...expression, target })} />
-          <NumberField label="Absolute tolerance" value={expression.atol} onChange={(atol) => onChange({ ...expression, atol })} />
-          <NumberField label="Relative tolerance" value={expression.rtol} onChange={(rtol) => onChange({ ...expression, rtol })} />
+          <NumberField min={0} label="Absolute tolerance" value={expression.atol} onChange={(atol) => onChange({ ...expression, atol })} />
+          <NumberField min={0} label="Relative tolerance" value={expression.rtol} onChange={(rtol) => onChange({ ...expression, rtol })} />
         </div>
       ) : null}
       {expression.kind === "between" ? (
-        <div className="fm-inspector-panel grid gap-2">
+        <div className="fm-inspector-panel">
           <ScalarExpressionBuilder label="Value" expression={expression.value} objectId={objectId} onChange={(value) => onChange({ ...expression, value })} />
           <NumberField label="Lower bound" value={expression.lower} onChange={(lower) => onChange({ ...expression, lower })} />
           <NumberField label="Upper bound" value={expression.upper} onChange={(upper) => onChange({ ...expression, upper })} />
+          {expression.lower > expression.upper ? (
+            <p className="fm-inspector-feedback" data-kind="error">
+              Lower bound cannot exceed upper bound.
+            </p>
+          ) : null}
           <SelectField label="Closed interval" value={expression.closed} options={[["none", "Open"], ["left", "Closed left"], ["right", "Closed right"], ["both", "Closed both"]]} onChange={(closed) => onChange({ ...expression, closed: closed as typeof expression.closed })} />
         </div>
       ) : null}
       {expression.kind === "inside_geometry" ? (
-        <div className="fm-inspector-panel grid gap-2">
+        <div className="fm-inspector-panel">
           <SelectField
             label="Frame"
             value={expression.frame.kind}
@@ -215,12 +231,12 @@ export function SelectionExpressionBuilder({
             onChange={(kind) => onChange({ ...expression, frame: kind === "object" ? { kind, object_id: objectId } : { kind: "world" } })}
           />
           {expression.frame.kind === "object" ? (
-            <TextField label="Frame object ID" value={expression.frame.object_id} onChange={(object_id) => onChange({ ...expression, frame: { kind: "object", object_id } })} />
+            <TextField label="Frame object ID" value={expression.frame.object_id} onChange={(object_id) => onChange({ ...expression, frame: { kind: "object", object_id } })} error={expression.frame.object_id.trim() === "" ? "Frame object ID cannot be empty." : undefined} />
           ) : null}
           <GeometryPredicateBuilder geometry={expression.geometry} onChange={(geometry) => onChange({ ...expression, geometry })} />
           <SelectField label="Boundary" value={expression.boundary.kind} options={[["inclusive", "Inclusive"], ["exclusive", "Exclusive"]]} onChange={(kind) => onChange({ ...expression, boundary: { ...expression.boundary, kind: kind as typeof expression.boundary.kind } })} />
-          <NumberField label="Boundary absolute tolerance (m)" value={expression.boundary.absolute_tolerance_m} onChange={(absolute_tolerance_m) => onChange({ ...expression, boundary: { ...expression.boundary, absolute_tolerance_m } })} />
-          <NumberField label="Boundary relative tolerance" value={expression.boundary.relative_tolerance} onChange={(relative_tolerance) => onChange({ ...expression, boundary: { ...expression.boundary, relative_tolerance } })} />
+          <NumberField min={0} label="Boundary absolute tolerance (m)" value={expression.boundary.absolute_tolerance_m} onChange={(absolute_tolerance_m) => onChange({ ...expression, boundary: { ...expression.boundary, absolute_tolerance_m } })} />
+          <NumberField min={0} label="Boundary relative tolerance" value={expression.boundary.relative_tolerance} onChange={(relative_tolerance) => onChange({ ...expression, boundary: { ...expression.boundary, relative_tolerance } })} />
         </div>
       ) : null}
     </fieldset>
@@ -228,45 +244,117 @@ export function SelectionExpressionBuilder({
 }
 
 function TextField({
+  error,
   label,
   onChange,
   value,
 }: {
+  error?: string;
   label: string;
   onChange: (value: string) => void;
   value: string;
 }) {
   return (
-    <label className="fm-inspector-field">
-      <span>{label}</span>
-      <input
-        className="fm-inspector-input"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      />
-    </label>
+    <div className="fm-inspector-field-wrapper">
+      <label className="fm-inspector-field">
+        <span>{label}</span>
+        <input
+          className={`fm-inspector-input ${error ? "fm-inspector-input--invalid" : ""}`}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      </label>
+      {error ? (
+        <p className="fm-inspector-feedback" data-kind="error">
+          {error}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
 function NumberField({
+  error: externalError,
   label,
+  max,
+  min,
   onChange,
   value,
 }: {
+  error?: string;
   label: string;
+  max?: number;
+  min?: number;
   onChange: (value: number) => void;
   value: number;
 }) {
+  const [draft, setDraft] = useState(() => ({
+    internalError: null as string | null,
+    sourceValue: value,
+    text: String(value),
+  }));
+  if (draft.sourceValue !== value) {
+    setDraft({ internalError: null, sourceValue: value, text: String(value) });
+  }
+
+  function handleChange(raw: string) {
+    const trimmed = raw.trim();
+    if (trimmed === "") {
+      setDraft({
+        internalError: "Value cannot be empty.",
+        sourceValue: value,
+        text: raw,
+      });
+      return;
+    }
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed)) {
+      setDraft({
+        internalError: "Must be a valid finite number.",
+        sourceValue: value,
+        text: raw,
+      });
+      return;
+    }
+    if (min !== undefined && parsed < min) {
+      setDraft({
+        internalError: `Must be at least ${min}.`,
+        sourceValue: value,
+        text: raw,
+      });
+      return;
+    }
+    if (max !== undefined && parsed > max) {
+      setDraft({
+        internalError: `Must be at most ${max}.`,
+        sourceValue: value,
+        text: raw,
+      });
+      return;
+    }
+    setDraft({ internalError: null, sourceValue: value, text: raw });
+    onChange(parsed);
+  }
+
+  const effectiveError = externalError ?? draft.internalError;
+
   return (
-    <label className="fm-inspector-field">
-      <span>{label}</span>
-      <input
-        className="fm-inspector-input"
-        type="number"
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
-      />
-    </label>
+    <div className="fm-inspector-field-wrapper">
+      <label className="fm-inspector-field">
+        <span>{label}</span>
+        <input
+          className={`fm-inspector-input ${effectiveError ? "fm-inspector-input--invalid" : ""}`}
+          type="number"
+          value={draft.text}
+          onChange={(event) => handleChange(event.target.value)}
+        />
+      </label>
+      {effectiveError ? (
+        <p className="fm-inspector-feedback" data-kind="error">
+          {effectiveError}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -304,9 +392,12 @@ function VectorField({
     <TextField
       label={label}
       value={value.join(", ")}
-      onChange={(raw) =>
-        onChange(raw.split(",").map((entry) => Number(entry.trim())).filter(Number.isFinite))
-      }
+      onChange={(raw) => {
+        const parsed = raw.split(",").map((entry) => Number(entry.trim())).filter(Number.isFinite);
+        if (parsed.length > 0) {
+          onChange(parsed);
+        }
+      }}
     />
   );
 }
@@ -320,8 +411,8 @@ function ToleranceFields({
 }) {
   return (
     <>
-      <NumberField label="Absolute tolerance" value={tolerance.atol} onChange={(atol) => onChange({ ...tolerance, atol })} />
-      <NumberField label="Relative tolerance" value={tolerance.rtol} onChange={(rtol) => onChange({ ...tolerance, rtol })} />
+      <NumberField min={0} label="Absolute tolerance" value={tolerance.atol} onChange={(atol) => onChange({ ...tolerance, atol })} />
+      <NumberField min={0} label="Relative tolerance" value={tolerance.rtol} onChange={(rtol) => onChange({ ...tolerance, rtol })} />
     </>
   );
 }

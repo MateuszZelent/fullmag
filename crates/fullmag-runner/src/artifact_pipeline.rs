@@ -34,6 +34,7 @@ use std::sync::{
     Arc,
 };
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 pub(crate) const DEFAULT_ARTIFACT_PIPELINE_CAPACITY: usize = 4;
 
@@ -180,6 +181,11 @@ enum ArtifactJob {
         snapshot: NativeFemFieldSnapshot,
         provenance: ExecutionProvenance,
     },
+    FailedRunProvenance {
+        provenance: ExecutionProvenance,
+        primary_error: String,
+        acknowledgement: mpsc::Sender<Result<(), String>>,
+    },
     Shutdown,
 }
 
@@ -196,6 +202,7 @@ impl ArtifactJob {
             ArtifactJob::NativeFieldSnapshot { .. } => 0,
             #[cfg(feature = "fem-gpu")]
             ArtifactJob::NativeFemFieldSnapshot { .. } => 0,
+            ArtifactJob::FailedRunProvenance { .. } => 0,
             ArtifactJob::Shutdown => 0,
         }
     }
@@ -243,6 +250,91 @@ impl ArtifactPipelineSender {
             queue_depth_after,
             diagnostics: self.diagnostics.snapshot(),
         })
+    }
+
+    fn publish_failed_run_provenance(
+        &self,
+        provenance: ExecutionProvenance,
+        primary_error: String,
+    ) -> Result<(), RunError> {
+        self.publish_failed_run_provenance_with_timeout(
+            provenance,
+            primary_error,
+            Duration::from_secs(10),
+        )
+    }
+
+    fn publish_failed_run_provenance_with_timeout(
+        &self,
+        provenance: ExecutionProvenance,
+        primary_error: String,
+        timeout: Duration,
+    ) -> Result<(), RunError> {
+        let deadline = std::time::Instant::now() + timeout;
+        let (acknowledgement, completed) = mpsc::channel();
+        let mut job = ArtifactJob::FailedRunProvenance {
+            provenance,
+            primary_error,
+            acknowledgement,
+        };
+        let queue_depth_after = self.queue_depth.fetch_add(1, Ordering::Relaxed) + 1;
+        self.diagnostics
+            .current_queue_depth
+            .store(queue_depth_after as u64, Ordering::Relaxed);
+        update_atomic_max(&self.diagnostics.max_queue_depth, queue_depth_after as u64);
+
+        loop {
+            match self.tx.try_send(job) {
+                Ok(()) => break,
+                Err(mpsc::TrySendError::Full(returned_job)) => {
+                    job = returned_job;
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    if remaining.is_zero() {
+                        self.rollback_queue_depth();
+                        return Err(RunError {
+                            message:
+                                "timed out enqueueing durable failed-run provenance publication"
+                                    .into(),
+                        });
+                    }
+                    thread::park_timeout(remaining.min(Duration::from_millis(1)));
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    self.rollback_queue_depth();
+                    return Err(RunError {
+                        message: "artifact writer became unavailable before failed-run provenance could be queued"
+                            .into(),
+                    });
+                }
+            }
+        }
+
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        match completed.recv_timeout(remaining) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(message)) => Err(RunError { message }),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(RunError {
+                message: "timed out waiting for durable failed-run provenance publication"
+                    .into(),
+            }),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(RunError {
+                message: "artifact writer stopped before failed-run provenance was durable"
+                    .into(),
+            }),
+        }
+    }
+
+    fn rollback_queue_depth(&self) {
+        let queue_depth_after_rollback = self
+            .queue_depth
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
+                Some(depth.saturating_sub(1))
+            })
+            .map(|previous| previous.saturating_sub(1))
+            .unwrap_or(0);
+        self.diagnostics
+            .current_queue_depth
+            .store(queue_depth_after_rollback as u64, Ordering::Relaxed);
     }
 }
 
@@ -912,6 +1004,19 @@ impl ArtifactRecorder {
     /// their immutable capture-time provenance.
     pub(crate) fn update_provenance(&mut self, provenance: ExecutionProvenance) {
         self.provenance = provenance;
+    }
+
+    pub(crate) fn publish_failed_run_provenance(
+        &mut self,
+        primary: &RunError,
+    ) -> Result<(), RunError> {
+        if let Some(pipeline) = self.pipeline.as_ref() {
+            pipeline.publish_failed_run_provenance(
+                self.provenance.clone(),
+                primary.message.clone(),
+            )?;
+        }
+        Ok(())
     }
 
     #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
@@ -1601,6 +1706,18 @@ fn writer_loop(
                     job_start.elapsed(),
                 );
             }
+            ArtifactJob::FailedRunProvenance {
+                provenance,
+                primary_error,
+                acknowledgement,
+            } => {
+                let result = write_failed_run_provenance_atomic(
+                    output_dir,
+                    &provenance,
+                    &primary_error,
+                );
+                let _ = acknowledgement.send(result);
+            }
             ArtifactJob::Shutdown => break,
         }
     }
@@ -1630,6 +1747,58 @@ fn writer_loop(
     }
 
     Ok(summary)
+}
+
+fn write_failed_run_provenance_atomic(
+    output_dir: &Path,
+    provenance: &ExecutionProvenance,
+    primary_error: &str,
+) -> Result<(), String> {
+    static TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let final_path = output_dir.join("failed-run-provenance.v1.json");
+    let temporary_path = output_dir.join(format!(
+        ".failed-run-provenance.v1.json.{}.{}.tmp",
+        std::process::id(),
+        TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let payload = serde_json::to_vec_pretty(&serde_json::json!({
+        "schema_version": "fullmag_failed_run_provenance.v1",
+        "primary_error": primary_error,
+        "execution_provenance": provenance,
+    }))
+    .map_err(|error| format!("failed to serialize failed-run provenance: {error}"))?;
+    let result = (|| -> Result<(), String> {
+        let file = File::create(&temporary_path).map_err(|error| {
+            format!(
+                "failed to create temporary failed-run provenance '{}': {error}",
+                temporary_path.display()
+            )
+        })?;
+        let mut writer = BufWriter::new(file);
+        writer.write_all(&payload).map_err(|error| {
+            format!("failed to write failed-run provenance: {error}")
+        })?;
+        writer.write_all(b"\n").map_err(|error| {
+            format!("failed to terminate failed-run provenance: {error}")
+        })?;
+        writer.flush().map_err(|error| {
+            format!("failed to flush failed-run provenance: {error}")
+        })?;
+        writer.get_ref().sync_all().map_err(|error| {
+            format!("failed to sync failed-run provenance: {error}")
+        })?;
+        fs::rename(&temporary_path, &final_path).map_err(|error| {
+            format!(
+                "failed to atomically publish failed-run provenance '{}': {error}",
+                final_path.display()
+            )
+        })?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary_path);
+    }
+    result
 }
 
 enum ArtifactWriterJobKind {
@@ -1723,6 +1892,115 @@ mod tests {
             job.estimated_bytes(),
             18 * std::mem::size_of::<f64>() as u64
         );
+    }
+
+    #[test]
+    fn failed_run_provenance_is_durable_without_success_finish() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-failed-run-provenance-{}-{unique}",
+            std::process::id()
+        ));
+        let context = FieldArtifactContext {
+            problem_name: "failed-fdm-gpu-run".into(),
+            ir_version: "v0".into(),
+            source_hash: None,
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            layout: serde_json::json!({"kind": "fdm", "cell_count": 1}),
+            execution_resolution: None,
+        };
+        let pipeline = ArtifactPipeline::start(output_dir.clone(), context, 2)
+            .expect("start artifact pipeline");
+        let mut provenance = ExecutionProvenance {
+            execution_engine: "cuda_fdm".into(),
+            precision: "double".into(),
+            ..ExecutionProvenance::default()
+        };
+        provenance.fdm_gpu_execution_receipt =
+            Some(crate::types::FdmGpuExecutionReceipt::strict_unvalidated("double"));
+        let mut recorder = ArtifactRecorder::streaming(provenance, pipeline.sender());
+        let primary = RunError {
+            message: "injected failure after create/step".into(),
+        };
+
+        recorder
+            .publish_failed_run_provenance(&primary)
+            .expect("failed-run provenance publication");
+        drop(recorder);
+        drop(pipeline);
+
+        let document: serde_json::Value = serde_json::from_slice(
+            &fs::read(output_dir.join("failed-run-provenance.v1.json"))
+                .expect("durable failed-run provenance"),
+        )
+        .expect("valid failed-run provenance JSON");
+        assert_eq!(document["schema_version"], "fullmag_failed_run_provenance.v1");
+        assert_eq!(document["primary_error"], primary.message);
+        assert_eq!(
+            document["execution_provenance"]["fdm_gpu_execution_receipt"]
+                ["validation_state"],
+            "unvalidated"
+        );
+        for success_marker in ["metadata.json", "manifest.json", "run-result.json"] {
+            assert!(
+                !output_dir.join(success_marker).exists(),
+                "failed-run publication must not create {success_marker}"
+            );
+        }
+        fs::remove_dir_all(output_dir).expect("remove failed-run fixture");
+    }
+
+    fn isolated_pipeline_sender(
+        tx: SyncSender<ArtifactJob>,
+        initial_depth: usize,
+    ) -> ArtifactPipelineSender {
+        ArtifactPipelineSender {
+            tx,
+            queue_depth: Arc::new(AtomicUsize::new(initial_depth)),
+            diagnostics: Arc::new(ArtifactPipelineDiagnosticsState::default()),
+            physics_execution_context: None,
+            #[cfg(feature = "fem-gpu")]
+            accepted_step_fields: Arc::new(Vec::new()),
+        }
+    }
+
+    #[test]
+    fn failed_run_provenance_full_queue_obeys_one_bounded_deadline() {
+        let (tx, receiver) = mpsc::sync_channel(1);
+        tx.send(ArtifactJob::Shutdown).expect("fill test queue");
+        let sender = isolated_pipeline_sender(tx, 1);
+        let deadline = Duration::from_millis(25);
+        let started = std::time::Instant::now();
+        let error = sender
+            .publish_failed_run_provenance_with_timeout(
+                ExecutionProvenance::default(),
+                "primary".into(),
+                deadline,
+            )
+            .expect_err("full queue must time out without blocking forever");
+        assert!(error.message.contains("timed out"));
+        assert!(started.elapsed() < Duration::from_millis(250));
+        drop(receiver);
+    }
+
+    #[test]
+    fn failed_run_provenance_disconnected_queue_returns_immediately() {
+        let (tx, receiver) = mpsc::sync_channel(1);
+        drop(receiver);
+        let sender = isolated_pipeline_sender(tx, 0);
+        let started = std::time::Instant::now();
+        let error = sender
+            .publish_failed_run_provenance_with_timeout(
+                ExecutionProvenance::default(),
+                "primary".into(),
+                Duration::from_millis(100),
+            )
+            .expect_err("disconnected queue must fail");
+        assert!(error.message.contains("unavailable"));
+        assert!(started.elapsed() < Duration::from_millis(50));
     }
 
     #[test]

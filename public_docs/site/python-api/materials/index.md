@@ -58,7 +58,9 @@ Material authoring, numerical materialization, and scientific qualification are 
 
 ## Common failure modes
 
-- supplying CGS values to an SI-only constructor;
+- supplying non-SI values to spatial fields: their constructors preserve a non-empty `unit` string
+  as metadata but do not validate parameter dimensions or convert units, so authors must provide
+  SI-valued numbers;
 - interpreting a linear gradient as having the same unit as its value rather than value per metre;
 - using a region override to model an interlayer coupling;
 - assuming a sampled cell field can be consumed as a nodal or quadrature field without an explicit

@@ -69,6 +69,9 @@ bool evaluate_rk_stage_rhs(
             ctx, m_state, out_k, max_rhs, evaluation_time_s, ctx.zeeman.stage_start_time_s);
         add_transport_stage_rhs(ctx, out_k, max_rhs);
         zero_non_magnetic_nodes_aos(out_k, ctx.mesh.magnetic_node_mask);
+        if (ctx.frozen_spins.enabled()) {
+            ctx.frozen_spins.zero_frozen_rhs(out_k);
+        }
     }
     if (out_max_rhs != nullptr) {
         *out_max_rhs = max_rhs;

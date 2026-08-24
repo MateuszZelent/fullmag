@@ -23,6 +23,12 @@ struct FemGpuMeshRegionDeviceState {
     // explicit all-magnetic-element target; ownership stays with GPU state.
     uint8_t *stt_active_element_mask = nullptr;
     uint64_t stt_active_element_count = 0;
+    // Optional canonical Frozen Spins constraint mask and reference.
+    uint8_t *frozen_mask = nullptr;
+    double *frozen_reference_x = nullptr;
+    double *frozen_reference_y = nullptr;
+    double *frozen_reference_z = nullptr;
+    uint64_t frozen_node_count = 0;
     uint32_t *periodic_reduced_node = nullptr;
     uint32_t *periodic_representative_nodes = nullptr;
 };

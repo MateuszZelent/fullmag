@@ -16,7 +16,7 @@ def test_v2_matches_shared_rust_fixture_for_all_presets_and_1000_points() -> Non
         / "magnetization_textures_v2_parity.json"
     )
     cases = json.loads(fixture.read_text(encoding="utf-8"))
-    assert len(cases) == 11
+    assert len(cases) == 14
 
     for case in cases:
         result = evaluate_preset_texture_v2(

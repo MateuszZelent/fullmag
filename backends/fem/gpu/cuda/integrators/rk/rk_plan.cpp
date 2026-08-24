@@ -78,6 +78,12 @@ GpuRkPlan gpu_rk_plan_device_resident(const Context &ctx, std::string &reason)
     GpuRkPlan plan{};
     plan.stage_count = gpu_rk_stage_count(ctx.base_plan.integrator);
 
+    if (ctx.frozen_spins.enabled() &&
+        (ctx.gpu_state.device.mesh_regions.frozen_mask == nullptr ||
+         ctx.gpu_state.device.mesh_regions.frozen_node_count != ctx.mesh.n_nodes)) {
+        reason = "GPU RK frozen spins requires canonical target-node mask on device";
+        return plan;
+    }
     if (!ctx.gpu_state.device.lifecycle.allocated) {
         reason = "GPU RK device-resident path requires allocated FemGpuState";
         return plan;
@@ -156,6 +162,13 @@ GpuRkPlan gpu_rk_plan_device_resident(const Context &ctx, std::string &reason)
                 ctx.gpu_state.device.mesh_regions.stt_active_node_count !=
                     static_cast<uint64_t>(ctx.mesh.n_nodes))) {
             reason = "GPU RK prescribed SOT requires the canonical target-node mask on device";
+            return plan;
+        }
+    }
+    if (ctx.frozen_spins.enabled()) {
+        if (ctx.gpu_state.device.mesh_regions.frozen_mask == nullptr ||
+            ctx.gpu_state.device.mesh_regions.frozen_node_count != static_cast<uint64_t>(ctx.mesh.n_nodes)) {
+            reason = "GPU RK device-resident path requires uploaded frozen spins mask on device";
             return plan;
         }
     }

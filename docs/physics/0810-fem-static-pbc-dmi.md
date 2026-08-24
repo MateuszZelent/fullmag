@@ -23,7 +23,7 @@ directions.  The two standard DMI forms are:
 
   $$\mathbf{H}_\text{DMI}^{\text{bulk}} = -\frac{2D_b}{\mu_0 M_s} \nabla \times \mathbf{m}$$
 
-  where $D_b$ [J/m³] is the bulk DMI constant.
+  where $D_b$ [J/m²] is the bulk DMI constant in the current Fullmag convention.
 
 ---
 
@@ -44,7 +44,7 @@ integral contributions) should appear on periodic seam faces.
 | Symbol | Meaning | Unit |
 |---|---|---|
 | $D$ | interfacial DMI constant | J/m² |
-| $D_b$ | bulk DMI constant | J/m³ |
+| $D_b$ | bulk DMI constant | J/m² |
 | $M_s$ | saturation magnetisation | A/m |
 | $\mu_0$ | permeability of free space | H/m |
 | $\hat{n}$ | interface normal (unit vector) | — |

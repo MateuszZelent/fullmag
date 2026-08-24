@@ -39,25 +39,33 @@ For a scalar material parameter $p$, the base material supplies $p_0$. An active
 $a$ supplies $p_a(\mathbf x)$. After ownership, region membership, priority, and conflict resolution,
 the realized value is
 
-```math
+```{math}
+:label: eq-material-spatial-effective
 p_{\mathrm{eff}}(\mathbf x)=
-\begin{cases}
-p_{a_*}(\mathbf x), & \text{if one winning assignment }a_*\text{ owns }\mathbf x,\\
-p_0, & \text{otherwise.}
-\end{cases}
+p_0+w_{a_*}(\mathbf x)\bigl(p_{a_*}(\mathbf x)-p_0\bigr),
+\qquad 0\le w_{a_*}(\mathbf x)\le 1,
 ```
+
+Here $w_{a_*}=0$ when no assignment owns the point. A sharp transition has binary weight
+$w_{a_*}\in\{0,1\}$; a weighted transition blends the winning field with the base value. For
+`Ms` and `Aex`, omitting `material_transition` resolves to
+`mesh_relative(cells=3, scope="boundary")`, so the default boundary width is three local mesh
+spacings and points on both sides of the boundary can have $0<w_{a_*}<1$.
 
 The built-in analytic field families are:
 
-```math
+```{math}
+:label: eq-material-spatial-constant
 p_{\mathrm{constant}}(\mathbf x)=p_c,
 ```
 
-```math
+```{math}
+:label: eq-material-spatial-linear
 p_{\mathrm{linear}}(\mathbf x)=p_b+\mathbf g\cdot\mathbf x_f,
 ```
 
-```math
+```{math}
+:label: eq-material-spatial-radial
 p_{\mathrm{radial}}(\mathbf x)=
 \begin{cases}
 p_{\mathrm{in}}, & \lVert\mathbf x_f-\mathbf c\rVert\le r,\\
@@ -66,7 +74,8 @@ p_{\mathrm{out}}, & \lVert\mathbf x_f-\mathbf c\rVert>r,
 ```
 
 where $\mathbf x_f$ is evaluated in the authored `object` or `world` frame. A sampled field instead
-references an immutable asset and declares its component count, mesh location, and SI unit.
+references an immutable asset and declares its component count, mesh location, and unit metadata;
+sampled material-field materialization is currently authoring-only and is rejected by the planner.
 
 (python-api-materials-spatial-parameter-fields-symbols-and-si-units)=
 ## Symbols and SI units
@@ -75,28 +84,39 @@ references an immutable asset and declares its component count, mesh location, a
 |---|---|---:|
 | $p_0$ | base material value | parameter-dependent |
 | $p_{\mathrm{eff}}$ | value consumed by the realized operator | parameter-dependent |
-| $p_b,p_c,p_{\mathrm{in}},p_{\mathrm{out}}$ | authored scalar field values | parameter-dependent |
+| $p_{a_*}$ | field value from the winning assignment | parameter-dependent |
+| $p_b$ | linear-field base value | parameter-dependent |
+| $p_c$ | constant-field value | parameter-dependent |
+| $p_{\mathrm{in}}$ | radial inside value | parameter-dependent |
+| $p_{\mathrm{out}}$ | radial outside value | parameter-dependent |
 | $\mathbf g$ | spatial gradient of a scalar parameter | parameter unit per metre |
-| $\mathbf x_f,\mathbf c$ | position and radial centre in the declared frame | $\mathrm m$ |
+| $\mathbf x_f$ | position evaluated in the declared frame | $\mathrm m$ |
+| $\mathbf c$ | radial centre in the declared frame | $\mathrm m$ |
 | $r$ | radial transition radius | $\mathrm m$ |
+| $w_{a_*}$ | transition weight for the winning assignment | $1$ |
 | `priority` | integer precedence input | $1$ |
 | `component_count` | number of stored components per sample | $1$ |
 
 For example, an `Ms` field has values in $\mathrm{A\,m^{-1}}$, while its linear gradient has units
 $\mathrm{A\,m^{-2}}$. `Aex` values use $\mathrm{J\,m^{-1}}$ and their spatial gradients use
-$\mathrm{J\,m^{-2}}$. The `unit` string records the value unit; the gradient unit follows from the
-spatial derivative and is not a second free choice.
+$\mathrm{J\,m^{-2}}$. The `unit` string records the authored value-unit metadata without checking
+its dimensional consistency; the gradient unit follows from the spatial derivative and is not a
+second free choice.
 
 (python-api-materials-spatial-parameter-fields-assumptions-and-validity)=
 ## Assumptions and validity
 
-- Field data are expressed in SI units and finite numeric values.
+- Field values must be finite. The `unit` string is preserved as non-empty metadata when supplied;
+  the Python factories do not check parameter-specific dimensions or convert units. Authors must
+  provide SI-valued numbers according to the parameter table, while planner/runtime validation
+  remains responsible for lane-specific legality.
 - `frame` is exactly `object` or `world`. Object-frame fields move with the object; world-frame
   fields remain fixed in laboratory coordinates.
 - Scalar parameters use scalar fields. Directional parameters such as `AnisotropyAxis` require a
   three-component constant or sampled representation supported by the selected lane.
 - `sampled` fields require a non-empty asset identity, `component_count >= 1`, an explicit location
-  from `cell`, `node`, `element`, or `quadrature`, and a non-empty unit.
+  from `cell`, `node`, `element`, or `quadrature`, and a non-empty unit. They are currently
+  authoring-only: `evaluate_parameter_field` rejects sampled values before materialization.
 - Region membership is evaluated before conflict resolution. A region-local assignment does not
   affect points outside that region.
 - Equal-precedence overlaps with `conflict_policy="error"` fail closed. They are not resolved by
@@ -124,14 +144,26 @@ The serialized form always uses the canonical ProblemIR name.
 (python-api-materials-spatial-parameter-fields-python-api)=
 ## Python API
 
-### Typed field factories
+### Typed field factories and parameters
 
-| Factory | Required inputs | Optional inputs | Validation and semantics |
-|---|---|---|---|
-| `MaterialParameterField.constant(...)` | `value` | `unit` | finite scalar or finite three-vector; uniform over its assignment support |
-| `MaterialParameterField.linear(...)` | `base`, `gradient` | `frame="object"`, `unit` | scalar affine field $p_b+\mathbf g\cdot\mathbf x_f$ |
-| `MaterialParameterField.radial(...)` | `center`, `radius`, `inside`, `outside` | `frame="object"`, `unit` | positive radius and finite inside/outside values |
-| `MaterialParameterField.sampled(...)` | `asset_id`, `component_count`, `location`, `unit` | none | typed reference to immutable sampled data |
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `MaterialParameterField.constant.value` | `float \| tuple[float,float,float]` | required | parameter-dependent | finite scalar or finite three-vector | authored constant value | FDM/FEM CPU analytic fields; GPU lane checks apply | `material_parameter_fields[].value.value` |
+| `MaterialParameterField.constant.unit` | `str \| None` | `None` | $1$ | non-empty metadata when supplied; no dimensional check | authored value unit metadata | all lanes preserve metadata; runtime does not convert | `material_parameter_fields[].value.unit` |
+| `MaterialParameterField.linear.base` | `float` | required | parameter-dependent | finite scalar | affine-field base value | FDM/FEM CPU analytic fields; GPU lane checks apply | `material_parameter_fields[].value.base` |
+| `MaterialParameterField.linear.gradient` | `tuple[float,float,float]` | required | parameter unit per metre | three finite components | spatial gradient | FDM/FEM CPU analytic fields; GPU lane checks apply | `material_parameter_fields[].value.gradient` |
+| `MaterialParameterField.linear.frame` | `str` | `"object"` | $1$ | exactly `object` or `world` | coordinate frame for evaluation | FDM/FEM CPU analytic fields; GPU lane checks apply | `material_parameter_fields[].value.frame` |
+| `MaterialParameterField.linear.unit` | `str \| None` | `None` | $1$ | non-empty metadata when supplied; no dimensional check | affine-field value unit metadata | all lanes preserve metadata; runtime does not convert | `material_parameter_fields[].value.unit` |
+| `MaterialParameterField.radial.center` | `tuple[float,float,float]` | required | $\mathrm m$ | three finite coordinates | radial centre in the declared frame | FDM/FEM CPU analytic fields; GPU lane checks apply | `material_parameter_fields[].value.center` |
+| `MaterialParameterField.radial.radius` | `float` | required | $\mathrm m$ | finite and positive | radial profile radius | FDM/FEM CPU analytic fields; GPU lane checks apply | `material_parameter_fields[].value.radius` |
+| `MaterialParameterField.radial.inside` | `float` | required | parameter-dependent | finite scalar inside radius | inside value | FDM/FEM CPU analytic fields; GPU lane checks apply | `material_parameter_fields[].value.inside` |
+| `MaterialParameterField.radial.outside` | `float` | required | parameter-dependent | finite scalar outside radius | outside value | FDM/FEM CPU analytic fields; GPU lane checks apply | `material_parameter_fields[].value.outside` |
+| `MaterialParameterField.radial.frame` | `str` | `"object"` | $1$ | exactly `object` or `world` | coordinate frame for evaluation | FDM/FEM CPU analytic fields; GPU lane checks apply | `material_parameter_fields[].value.frame` |
+| `MaterialParameterField.radial.unit` | `str \| None` | `None` | $1$ | non-empty metadata when supplied; no dimensional check | radial-field value unit metadata | all lanes preserve metadata; runtime does not convert | `material_parameter_fields[].value.unit` |
+| `MaterialParameterField.sampled.asset_id` | `str` | required | $1$ | non-empty immutable asset identity | reference to sampled data | authoring-only; planner rejects materialization on all lanes | `material_parameter_fields[].value.asset_id` |
+| `MaterialParameterField.sampled.component_count` | `int` | required | $1$ | integer >= 1 | components per sample | authoring-only; planner rejects materialization on all lanes | `material_parameter_fields[].value.component_count` |
+| `MaterialParameterField.sampled.location` | `str` | required | $1$ | one of `cell`, `node`, `element`, `quadrature` | location of sampled values | authoring-only; planner rejects materialization on all lanes | `material_parameter_fields[].value.location` |
+| `MaterialParameterField.sampled.unit` | `str` | required | $1$ | non-empty metadata; no dimensional check | sampled-value unit metadata | authoring-only; planner rejects materialization on all lanes | `material_parameter_fields[].value.unit` |
 
 The public convenience namespace `fm.fields` may expose the same typed factories. The serialized
 payload is identical; the factory spelling is not a second physical model.
@@ -236,11 +268,13 @@ intent.
 **Requested intent** preserves the factory kind, authored values, coordinate frame, asset identity,
 object/region ownership, priority, conflict policy, and assignment ID. **Resolved execution** adds
 the concrete mesh location, interpolation/projection rule, normalized field storage, precision,
-device placement, and materialization digest.
+device placement, and any emitted materialization statistics/provenance. No materialization digest
+is currently part of `MaterialParameterAssignmentIR` or the resolved field asset contract.
 
 **Validation errors** reject non-finite data, invalid frames, non-positive radii, unknown parameter
-names, invalid sampled locations, missing assets, malformed component counts, and unresolved
-references. **Unsupported combinations** fail capability checks explicitly; FullMag does not
+names, invalid sampled locations, empty asset identities, malformed component counts, and unresolved
+references. Asset existence and sampled-value loading are not performed by the current factories.
+**Unsupported combinations** fail capability checks explicitly; FullMag does not
 silently replace a sampled field by a scalar, move a world-frame field into object coordinates, or
 fall back from GPU to CPU in strict mode.
 
@@ -253,10 +287,10 @@ such a change is not a legal round-trip.
 
 | Solver | Device | Realization contract | Qualification boundary |
 |---|---|---|---|
-| FDM | CPU | evaluate or import values on active cells under object/region masks | cell-centre frame transform, overlap policy, cardinality, and stencil use must be tested |
-| FDM | GPU | upload/materialize the same canonical cell field | executed-device precision, transfer, masking, and no-fallback evidence are separate |
-| FEM | CPU | evaluate analytic fields or map sampled data to node/element/quadrature locations | interpolation, projection, discontinuities, mass/quadrature ownership, and mesh convergence are explicit |
-| FEM | GPU | consume the same resolved FEM field representation on device | residency, precision, projection, and reduction parity require executed-device evidence |
+| FDM | CPU | evaluate constant, linear, and radial fields on active cells under object/region masks; sampled fields are authoring-only | cell-centre frame transform, overlap policy, cardinality, and stencil use must be tested |
+| FDM | GPU | unsupported for region-owned `Ms`, `Aex`, and `Alpha` fields; planner rejects the request before upload | no CUDA material-field upload or no-fallback claim is valid until runtime support and qualification exist |
+| FEM | CPU | evaluate analytic fields on the selected FEM representation; sampled fields are authoring-only | interpolation, projection, discontinuities, mass/quadrature ownership, and mesh convergence are explicit |
+| FEM | GPU | consume only a resolved FEM field representation that the selected GPU planner/runtime accepts; sampled fields are authoring-only | residency, precision, projection, and reduction parity require executed-device evidence |
 
 A field being representable in Python and ProblemIR is not proof that every parameter, location,
 interpolation, or device combination is executable. The planner's capability decision is
@@ -281,8 +315,12 @@ the consuming interaction's interface contract. In particular:
 - `MaterialParameterAssignment` owns object/region scope, canonical parameter name, identity,
   priority, and conflict policy.
 - `ObjectRegion` owns local overrides and optional material-transition intent.
-- `Ferromagnet.material_parameter_fields` carries assignments through canonical problem lowering.
+- The `Ferromagnet` `material_parameter_fields` collection carries assignments through canonical
+  problem lowering.
 - FDM/FEM planners and runners own mesh-specific materialization and capability decisions.
+- `crates/fullmag-plan/src/material.rs` owns analytic evaluation, transition weighting, and the
+  fail-closed sampled-field boundary.
+- `crates/fullmag-plan/src/material_transition.rs` resolves the default `Ms`/`Aex` transition.
 
 (python-api-materials-spatial-parameter-fields-validation)=
 ## Validation
@@ -293,7 +331,8 @@ The minimum validation suite is:
 2. exact normalization of parameter aliases to canonical ProblemIR names;
 3. region support tests at inside, outside, and boundary points;
 4. deterministic overlap tests for every conflict policy and equal-priority failure;
-5. sampled asset digest, component-count, location, and mesh-cardinality checks;
+5. sampled asset identity, component-count, location, and mesh-cardinality checks (materialization
+   remains unsupported until the asset-loading path exists);
 6. scalar-versus-vector compatibility tests;
 7. round-trip preservation of IDs, units, frames, priorities, and region references;
 8. FDM/FEM refinement tests that separate field interpolation error from operator error;
@@ -332,5 +371,5 @@ requires interaction-specific observables, convergence, and device evidence.
 | typed field factories | `packages/fullmag-py/src/fullmag/model/structure.py` | `class MaterialParameterField` | constant, linear, radial, and sampled payloads | constructor and round-trip tests |
 | scoped assignment | `packages/fullmag-py/src/fullmag/model/structure.py` | `class MaterialParameterAssignment` | object/region ownership and conflict metadata | region-field tests |
 | region overrides | `packages/fullmag-py/src/fullmag/model/structure.py` | `class ObjectRegion` | local material and transition policy | region transition tests |
-| canonical object owner | `packages/fullmag-py/src/fullmag/model/structure.py` | `class Ferromagnet` | assignment collection in the magnetic object graph | problem-lowering tests |
+| canonical object owner | `packages/fullmag-py/src/fullmag/model/structure.py` | `class Ferromagnet` | `material_parameter_fields` collection in the magnetic object graph | problem-lowering tests |
 | runnable example | `examples/region_owned_gradient_ms.py` | module-level stage-first study | region-owned FEM gradient scenario | documentation example validation |

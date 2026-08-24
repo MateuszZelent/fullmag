@@ -92,6 +92,20 @@ impl FrozenSpinsCheckpointV1 {
                     .min(self.mask_len),
             });
         }
+        if !self
+            .reference
+            .iter()
+            .chain(&self.magnetization)
+            .flatten()
+            .all(|value| value.is_finite())
+            || !self.time_s.is_finite()
+            || !self.dt.is_finite()
+            || self.dt < 0.0
+        {
+            return Err(FrozenSpinsCheckpointError::Invalid(
+                "frozen_spins_checkpoint_non_finite_state".to_string(),
+            ));
+        }
         let mask = unpack_mask(&self.mask_bits, self.mask_len)?;
         let frozen_dof_count = mask.iter().filter(|value| **value).count() as u64;
         if frozen_dof_count != self.frozen_dof_count
@@ -106,20 +120,6 @@ impl FrozenSpinsCheckpointV1 {
         {
             return Err(FrozenSpinsCheckpointError::Invalid(
                 "frozen_spins_checkpoint_payload_integrity_mismatch".to_string(),
-            ));
-        }
-        if !self
-            .reference
-            .iter()
-            .chain(&self.magnetization)
-            .flatten()
-            .all(|value| value.is_finite())
-            || !self.time_s.is_finite()
-            || !self.dt.is_finite()
-            || self.dt < 0.0
-        {
-            return Err(FrozenSpinsCheckpointError::Invalid(
-                "frozen_spins_checkpoint_non_finite_state".to_string(),
             ));
         }
         Ok(())
@@ -152,7 +152,7 @@ impl FrozenSpinsCheckpointV1 {
             plan.source_state_revision,
             plan.grid_or_mesh_fingerprint.clone(),
         )
-        .map_err(FrozenSpinsCheckpointError::Invalid)?;
+        .map_err(|err| FrozenSpinsCheckpointError::Invalid(err.to_string()))?;
         let mask_bits = pack_mask(frozen.mask());
         let reference = frozen.reference().to_vec();
         let checkpoint = Self {
@@ -205,6 +205,20 @@ impl FrozenSpinsCheckpointV1 {
                 "frozen_spins_checkpoint_source_revision_mismatch".to_string(),
             ));
         }
+        if !self
+            .reference
+            .iter()
+            .chain(&self.magnetization)
+            .flatten()
+            .all(|value| value.is_finite())
+            || !self.time_s.is_finite()
+            || !self.dt.is_finite()
+            || self.dt < 0.0
+        {
+            return Err(FrozenSpinsCheckpointError::Invalid(
+                "frozen_spins_checkpoint_non_finite_state".to_string(),
+            ));
+        }
         if self.mask_len != plan.frozen_mask.len()
             || self.mask_sha256 != plan.mask_sha256
             || unpack_mask(&self.mask_bits, self.mask_len)? != plan.frozen_mask
@@ -225,20 +239,6 @@ impl FrozenSpinsCheckpointV1 {
         {
             return Err(FrozenSpinsCheckpointError::Invalid(
                 "frozen_spins_checkpoint_payload_integrity_mismatch".to_string(),
-            ));
-        }
-        if !self
-            .reference
-            .iter()
-            .chain(&self.magnetization)
-            .flatten()
-            .all(|value| value.is_finite())
-            || !self.time_s.is_finite()
-            || !self.dt.is_finite()
-            || self.dt < 0.0
-        {
-            return Err(FrozenSpinsCheckpointError::Invalid(
-                "frozen_spins_checkpoint_non_finite_state".to_string(),
             ));
         }
         Ok(())
@@ -409,5 +409,122 @@ mod tests {
             checkpoint.restore_engine_state(&plan),
             Err(FrozenSpinsCheckpointError::TopologyMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn checkpoint_validates_structure_and_rejects_corrupted_payloads() {
+        let plan = plan(vec![true, false, true, false]);
+        let state =
+            FrozenSpinsState::capture_at_activation(&plan, None, &[[1.0, 0.0, 0.0]; 4]).unwrap();
+        let checkpoint = FrozenSpinsCheckpointV1::from_runtime(
+            &plan,
+            &state,
+            &[[1.0, 0.0, 0.0]; 4],
+            5,
+            1e-9,
+            1e-12,
+            "fdm_cpu_reference",
+            "cpu",
+            "double",
+        )
+        .unwrap();
+
+        assert!(checkpoint.validate_structure(4).is_ok());
+
+        // Length mismatch
+        assert!(matches!(
+            checkpoint.validate_structure(3),
+            Err(FrozenSpinsCheckpointError::StateLengthMismatch { .. })
+        ));
+
+        // Corrupted schema
+        let mut invalid_schema = checkpoint.clone();
+        invalid_schema.schema = "unknown.schema".to_string();
+        assert_eq!(
+            invalid_schema.validate_structure(4),
+            Err(FrozenSpinsCheckpointError::Invalid(
+                "frozen_spins_checkpoint_schema_unsupported".to_string()
+            ))
+        );
+
+        // Non-finite reference vector
+        let mut non_finite = checkpoint.clone();
+        non_finite.reference[0] = [f64::NAN, 0.0, 0.0];
+        assert_eq!(
+            non_finite.validate_structure(4),
+            Err(FrozenSpinsCheckpointError::Invalid(
+                "frozen_spins_checkpoint_non_finite_state".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn checkpoint_validates_plan_identity_and_source_revision() {
+        let plan_a = plan(vec![true, false]);
+        let state =
+            FrozenSpinsState::capture_at_activation(&plan_a, None, &[[1.0, 0.0, 0.0]; 2]).unwrap();
+        let checkpoint = FrozenSpinsCheckpointV1::from_runtime(
+            &plan_a,
+            &state,
+            &[[1.0, 0.0, 0.0]; 2],
+            1,
+            0.0,
+            1e-12,
+            "fdm_cpu_reference",
+            "cpu",
+            "double",
+        )
+        .unwrap();
+
+        // Different constraint ID
+        let mut plan_b = plan_a.clone();
+        plan_b.constraint_ids = vec!["other-constraint".to_string()];
+        assert_eq!(
+            checkpoint.validate_for_plan(&plan_b),
+            Err(FrozenSpinsCheckpointError::ConstraintIdentityMismatch)
+        );
+
+        // Different source revision
+        let mut plan_c = plan_a.clone();
+        plan_c.source_state_revision = Some(999);
+        assert_eq!(
+            checkpoint.validate_for_plan(&plan_c),
+            Err(FrozenSpinsCheckpointError::Invalid(
+                "frozen_spins_checkpoint_source_revision_mismatch".to_string()
+            ))
+        );
+
+        // Different mask
+        let plan_d = plan(vec![false, true]);
+        assert_eq!(
+            checkpoint.validate_for_plan(&plan_d),
+            Err(FrozenSpinsCheckpointError::MaskMismatch)
+        );
+    }
+
+    #[test]
+    fn all_frozen_checkpoint_restores_without_nan() {
+        let plan_all = plan(vec![true, true, true, true]);
+        let state =
+            FrozenSpinsState::capture_at_activation(&plan_all, None, &[[0.0, 1.0, 0.0]; 4]).unwrap();
+        let checkpoint = FrozenSpinsCheckpointV1::from_runtime(
+            &plan_all,
+            &state,
+            &[[0.0, 1.0, 0.0]; 4],
+            10,
+            1e-9,
+            1e-12,
+            "fdm_cpu_reference",
+            "cpu",
+            "double",
+        )
+        .unwrap();
+
+        assert_eq!(checkpoint.frozen_dof_count, 4);
+        assert_eq!(checkpoint.free_dof_count, 0);
+        assert!(checkpoint.validate_structure(4).is_ok());
+        let restored = checkpoint.restore_engine_state(&plan_all).unwrap();
+        assert_eq!(restored.mask().iter().filter(|&&v| v).count(), 4);
+        assert_eq!(restored.mask().iter().filter(|&&v| !v).count(), 0);
     }
 }

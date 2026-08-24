@@ -43,7 +43,8 @@ std::filesystem::path repo_root() {
 }
 
 void region_owned_material_fields_are_public_abi() {
-    const std::string header = read_text_file(repo_root() / "include" / "fullmag_fdm.h");
+    const std::string header =
+        read_text_file(repo_root() / "native" / "include" / "fullmag_fdm.h");
 
     check(header.find("const double              *ms_field") != std::string::npos,
           "fullmag_fdm_plan_desc must include ms_field");
@@ -59,8 +60,27 @@ void region_owned_material_fields_are_public_abi() {
           "fullmag_fdm_plan_desc must include dbulk_field");
 }
 
+void complete_plan_descriptor_is_versioned_and_checked() {
+    const std::string header =
+        read_text_file(repo_root() / "native" / "include" / "fullmag_fdm.h");
+    const std::string source =
+        read_text_file(repo_root() / "backends" / "fdm" / "api" / "c_api.cpp") +
+        read_text_file(repo_root() / "backends" / "fdm" / "api" / "plan_ingestion_v2.cpp");
+
+    check(header.find("FULLMAG_FDM_PLAN_DESC_ABI_V2") != std::string::npos,
+          "complete FDM descriptor must publish its ABI version");
+    check(header.find("fullmag_fdm_backend_create_time_policy_v2_checked") != std::string::npos,
+          "complete FDM descriptor must use a typed checked constructor");
+    check(source.find("header.struct_size != sizeof(fullmag_fdm_plan_desc_v2)") !=
+              std::string::npos,
+          "checked constructor must reject truncated and oversized descriptors");
+    check(source.find("return FULLMAG_FDM_ERR_ABI") != std::string::npos,
+          "checked constructor must return the typed ABI error");
+}
+
 void exchange_pair_descriptors_are_public_abi() {
-    const std::string header = read_text_file(repo_root() / "include" / "fullmag_fdm.h");
+    const std::string header =
+        read_text_file(repo_root() / "native" / "include" / "fullmag_fdm.h");
 
     check(header.find("FULLMAG_FDM_EXCHANGE_PAIR_UNSPECIFIED   = 0") != std::string::npos,
           "exchange pair default must preserve zero-initialized legacy compatibility");
@@ -75,7 +95,8 @@ void exchange_pair_descriptors_are_public_abi() {
 }
 
 void region_lut_capacity_is_explicit_and_fail_closed() {
-    const std::string header = read_text_file(repo_root() / "include" / "fullmag_fdm.h");
+    const std::string header =
+        read_text_file(repo_root() / "native" / "include" / "fullmag_fdm.h");
     const std::string source = read_text_file(repo_root() / "backends" / "fdm" / "api" / "c_api.cpp");
 
     check(header.find("FULLMAG_FDM_MAX_REGION_ID") != std::string::npos,
@@ -99,13 +120,39 @@ void native_backend_fails_fast_for_unimplemented_cellwise_material_fields() {
           "native FDM backend must reject non-zero dbulk_field_len even when pointer is null");
 }
 
+void reviewed_gpu_abi_proof_is_semantic_and_strict() {
+    const auto root = repo_root();
+    const std::string sentinel =
+        read_text_file(root / "backends" / "fdm" / "tests" / "plan_desc_sentinel_contract.cpp");
+    const std::string construction = read_text_file(
+        root / "crates" / "fullmag-runner" / "src" / "fdm" / "gpu" / "cuda" / "native" /
+        "construction.rs");
+    const std::string runner = read_text_file(
+        root / "crates" / "fullmag-runner" / "src" / "fdm" / "gpu" / "cuda" / "native.rs");
+    const std::string justfile = read_text_file(root / "justfile");
+
+    check(sentinel.find("fullmag_fdm_plan_ingestion_v2_create_checked") != std::string::npos,
+          "sentinel must exercise the canonical owner-side ingestion constructor");
+    check(sentinel.find("std::memcmp(&plan, &receipt") == std::string::npos,
+          "sentinel must compare semantic fields, not padding bytes");
+    check(construction.find("fullmag_fdm_backend_create_time_policy_v2_checked") ==
+              std::string::npos,
+          "dead construction duplicate must not carry the canonical v2 ingestion path");
+    check(runner.find("match create_status") != std::string::npos,
+          "active runner must map every typed create status explicitly");
+    check(justfile.find("--no-tests=error") != std::string::npos,
+          "managed CTest invocation must fail when no ABI sentinel test is discovered");
+}
+
 } // namespace
 
 int main() {
     region_owned_material_fields_are_public_abi();
+    complete_plan_descriptor_is_versioned_and_checked();
     exchange_pair_descriptors_are_public_abi();
     region_lut_capacity_is_explicit_and_fail_closed();
     native_backend_fails_fast_for_unimplemented_cellwise_material_fields();
+    reviewed_gpu_abi_proof_is_semantic_and_strict();
     std::printf("region-owned FDM ABI contract OK\n");
     return 0;
 }

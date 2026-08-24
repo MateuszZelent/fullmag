@@ -1336,7 +1336,7 @@ export default function Viewport3DModule({
       buildFrozenSpinsOverlayModel({
         current: frozenSpinsPreview.data?.current ?? false,
         fdmDomain: sceneModel.fdmDomain,
-        // No API resource currently publishes exact FEM true-DOF coordinates.
+        // No OpenAPI resource currently publishes exact FEM true-DOF coordinates.
         // Never substitute topology vertices: higher-order true DOFs are not nodes.
         femTrueDofPositions: null,
         mask: frozenSpinsMask.data,
@@ -2126,13 +2126,18 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     sceneProps.resourceFrameKey,
     sendVisualizationAck,
     sessionIdentity?.sessionEpoch,
-    sessionIdentity?.sessionId,
     slotId,
     visualizationDebugPublisher,
     visualizationDebugAdoptionRegistry,
     visualizationEffectiveRenderMode,
     visualizationError,
   ]);
+  const fullFieldBufferIdentity = visualizationDebugSource.fullFieldBufferIdentity;
+  const fullFieldBufferId = fullFieldBufferIdentity?.bufferId;
+  const fullFieldRevision = fullFieldBufferIdentity?.fieldRevision;
+  const fullFieldResourceKey = fullFieldBufferIdentity?.resourceKey;
+  const fullFieldSessionEpoch = fullFieldBufferIdentity?.sessionEpoch;
+  const fullFieldSessionId = fullFieldBufferIdentity?.sessionId;
   useEffect(() => {
     const revision = sceneProps.visualizationRevision;
     if (revision == null) return;
@@ -2140,20 +2145,18 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     const changeKind = previous?.resourceFrameKey === sceneProps.resourceFrameKey
       ? "style"
       : "data";
-    const resourceKey =
-      visualizationDebugSource.fullFieldBufferIdentity?.resourceKey ??
-      sceneProps.resourceFrameKey;
-    const bufferIdentity = visualizationDebugSource.fullFieldBufferIdentity;
+    const resourceKey = fullFieldResourceKey ?? sceneProps.resourceFrameKey;
     const dataIdentity =
-      bufferIdentity?.resourceKey &&
-      bufferIdentity.sessionEpoch &&
-      bufferIdentity.sessionId
+      fullFieldBufferId &&
+      fullFieldResourceKey &&
+      fullFieldSessionEpoch &&
+      fullFieldSessionId
         ? {
-            fieldBufferId: bufferIdentity.bufferId,
-            fieldRevision: bufferIdentity.fieldRevision ?? null,
-            resourceKey: bufferIdentity.resourceKey,
-            sessionEpoch: bufferIdentity.sessionEpoch,
-            sessionId: bufferIdentity.sessionId,
+            fieldBufferId: fullFieldBufferId,
+            fieldRevision: fullFieldRevision ?? null,
+            resourceKey: fullFieldResourceKey,
+            sessionEpoch: fullFieldSessionEpoch,
+            sessionId: fullFieldSessionId,
             visualizationRevision: revision,
           }
         : null;
@@ -2181,12 +2184,16 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     });
   }, [
     clientReady,
+    fullFieldBufferId,
+    fullFieldResourceKey,
+    fullFieldRevision,
+    fullFieldSessionEpoch,
+    fullFieldSessionId,
     sceneProps.resourceFrameKey,
     sceneProps.visualizationRevision,
     sendVisualizationAck,
     sessionIdentity?.sessionEpoch,
     slotId,
-    visualizationDebugSource.fullFieldBufferIdentity?.resourceKey,
     visualizationEffectiveRenderMode,
     visualizationError,
   ]);

@@ -178,7 +178,11 @@ bool launch_multilayer_dmi_field_impl(Context &ctx, const char *operation)
         context_end_compute_stream_work(ctx, operation);
         return false;
     }
-    return context_end_compute_stream_work(ctx, operation);
+    if (!context_end_compute_stream_work(ctx, operation)) return false;
+    if (ctx.has_interfacial_dmi || ctx.has_bulk_dmi) {
+        fullmag_fdm_note_operator_device_execution(ctx, FULLMAG_FDM_OPERATOR_DMI);
+    }
+    return true;
 }
 
 } // namespace

@@ -17,5 +17,6 @@ cd "$REPO_ROOT"
 ./scripts/ci/deny_direct_fetch_in_react.sh "$MODE"
 ./scripts/ci/deny_legacy_viewports.sh "$MODE"
 ./scripts/ci/deny_capability_from_discretization.sh "$MODE"
+python3 scripts/update_readme_version_dashboard.py --check
 
 echo "Contract guard checks passed."

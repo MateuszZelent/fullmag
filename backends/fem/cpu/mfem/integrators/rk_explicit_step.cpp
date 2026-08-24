@@ -109,6 +109,10 @@ bool context_step_explicit_rk_mfem(
     }
 
     if (mfem_device_requests_gpu(ctx)) {
+        if (ctx.frozen_spins.enabled()) {
+            error = "GPU RK cannot execute frozen spins constraints before a device-resident lane is qualified (frozen_spins_fem_gpu_unqualified)";
+            return false;
+        }
         if (ctx.oersted.has_stage_callback) {
             error = "GPU RK cannot use the CPU-only stage Oersted callback before a device-resident lane is qualified";
             return false;
@@ -181,6 +185,9 @@ bool context_step_explicit_rk_mfem(
             attempt_cache = std::make_unique<RkAttemptCacheSnapshot>(ctx);
         }
         ws.m_backup = ctx.state.m_xyz;
+        if (ctx.frozen_spins.enabled()) {
+            ctx.frozen_spins.project_onto_reference(ctx.state.m_xyz);
+        }
         fsal_used = false;
         final_stage_cache_valid = false;
 
@@ -203,6 +210,9 @@ bool context_step_explicit_rk_mfem(
                     error)) {
                 if (ctx.interrupt.step_interrupted) {
                     ctx.state.m_xyz = ws.m_backup;
+                    if (ctx.frozen_spins.enabled()) {
+                        ctx.frozen_spins.project_onto_reference(ctx.state.m_xyz);
+                    }
                     ws.fsal_valid = false;
                     return true;
                 }
@@ -212,6 +222,9 @@ bool context_step_explicit_rk_mfem(
         }
         if (poll_interrupt(ctx)) {
             ctx.state.m_xyz = ws.m_backup;
+            if (ctx.frozen_spins.enabled()) {
+                ctx.frozen_spins.project_onto_reference(ctx.state.m_xyz);
+            }
             ws.fsal_valid = false;
             return true;
         }
@@ -226,11 +239,17 @@ bool context_step_explicit_rk_mfem(
             }
             if (!normalize_active_magnetization_aos(ctx, ws.m_stage, error)) {
                 ctx.state.m_xyz = ws.m_backup;
+                if (ctx.frozen_spins.enabled()) {
+                    ctx.frozen_spins.project_onto_reference(ctx.state.m_xyz);
+                }
                 ws.fsal_valid = false;
                 error = "explicit RK stage candidate normalization failed: " + error;
                 return false;
             }
             project_static_periodic_aos(ctx, ws.m_stage);
+            if (ctx.frozen_spins.enabled()) {
+                ctx.frozen_spins.project_onto_reference(ws.m_stage);
+            }
 
             double *stage_exchange_energy = nullptr;
             double *stage_demag_energy = nullptr;
@@ -252,6 +271,9 @@ bool context_step_explicit_rk_mfem(
                                        error)) {
                 if (ctx.interrupt.step_interrupted) {
                     ctx.state.m_xyz = ws.m_backup;
+                    if (ctx.frozen_spins.enabled()) {
+                        ctx.frozen_spins.project_onto_reference(ctx.state.m_xyz);
+                    }
                     ws.fsal_valid = false;
                     return true;
                 }
@@ -259,6 +281,9 @@ bool context_step_explicit_rk_mfem(
             }
             if (poll_interrupt(ctx)) {
                 ctx.state.m_xyz = ws.m_backup;
+                if (ctx.frozen_spins.enabled()) {
+                    ctx.frozen_spins.project_onto_reference(ctx.state.m_xyz);
+                }
                 ws.fsal_valid = false;
                 return true;
             }
@@ -276,6 +301,9 @@ bool context_step_explicit_rk_mfem(
             ws.m_candidate[i] = ws.m_backup[i] + dt * accum;
         }
         project_static_periodic_aos(ctx, ws.m_candidate);
+        if (ctx.frozen_spins.enabled()) {
+            ctx.frozen_spins.project_onto_reference(ws.m_candidate);
+        }
 
         AdaptiveAttemptGuardMetrics guard_metrics{};
         double acceptance_metric = 0.0;
@@ -338,6 +366,9 @@ bool context_step_explicit_rk_mfem(
             });
             if (result.kind == adaptive::AdaptiveDecisionKind::failed) {
                 ctx.state.m_xyz = ws.m_backup;
+                if (ctx.frozen_spins.enabled()) {
+                    ctx.frozen_spins.project_onto_reference(ctx.state.m_xyz);
+                }
                 ws.fsal_valid = false;
                 error = std::string("adaptive RK decision failed: ") +
                     adaptive::adaptive_decision_reason_id(result.reason);
@@ -345,6 +376,9 @@ bool context_step_explicit_rk_mfem(
             }
             if (result.kind == adaptive::AdaptiveDecisionKind::retry) {
                 ctx.state.m_xyz = ws.m_backup;
+                if (ctx.frozen_spins.enabled()) {
+                    ctx.frozen_spins.project_onto_reference(ctx.state.m_xyz);
+                }
                 attempt_cache->restore_preserving_attempt_counters();
                 if (!rollback_transport_stage_attempt(ctx, error) ||
                     !rollback_oersted_stage_attempt(ctx, error)) {
@@ -365,6 +399,9 @@ bool context_step_explicit_rk_mfem(
             }
             if (poll_interrupt(ctx)) {
                 ctx.state.m_xyz = ws.m_backup;
+                if (ctx.frozen_spins.enabled()) {
+                    ctx.frozen_spins.project_onto_reference(ctx.state.m_xyz);
+                }
                 ws.fsal_valid = false;
                 return true;
             }
@@ -382,6 +419,9 @@ bool context_step_explicit_rk_mfem(
                     guard_metrics,
                     error)) {
                 ctx.state.m_xyz = ws.m_backup;
+                if (ctx.frozen_spins.enabled()) {
+                    ctx.frozen_spins.project_onto_reference(ctx.state.m_xyz);
+                }
                 ws.fsal_valid = false;
                 error = "fixed RK candidate guard failed: " + error;
                 return false;
@@ -413,6 +453,9 @@ bool context_step_explicit_rk_mfem(
             return false;
         }
         project_static_periodic_aos(ctx, ws.m_candidate);
+        if (ctx.frozen_spins.enabled()) {
+            ctx.frozen_spins.project_onto_reference(ws.m_candidate);
+        }
         if (poll_interrupt(ctx)) {
             ws.fsal_valid = false;
             return true;
@@ -455,6 +498,9 @@ bool context_step_explicit_rk_mfem(
                 stage_identity(target_step, attempt_identity, 0xffffu))) {
             if (ctx.interrupt.step_interrupted) {
                 ctx.state.m_xyz = ws.m_backup;
+                if (ctx.frozen_spins.enabled()) {
+                    ctx.frozen_spins.project_onto_reference(ctx.state.m_xyz);
+                }
                 ws.fsal_valid = false;
                 return true;
             }
@@ -479,6 +525,9 @@ bool context_step_explicit_rk_mfem(
         return false;
     }
     ctx.state.m_xyz.swap(ws.m_candidate);
+    if (ctx.frozen_spins.enabled()) {
+        ctx.frozen_spins.project_onto_reference(ctx.state.m_xyz);
+    }
     ctx.state.current_time += dt;
     ctx.state.step_count += 1;
     ctx.exchange.mfem.ready = true;
@@ -512,6 +561,9 @@ bool context_step_explicit_rk_mfem(
             ctx.zeeman.stage_start_time_s);
         add_transport_stage_rhs(ctx, ws.k[0], max_rhs_final);
         zero_non_magnetic_nodes_aos(ws.k[0], ctx.mesh.magnetic_node_mask);
+        if (ctx.frozen_spins.enabled()) {
+            ctx.frozen_spins.zero_frozen_rhs(ws.k[0]);
+        }
         max_rhs_final = max_norm_aos(ws.k[0]);
         total_rhs += 1;
     }

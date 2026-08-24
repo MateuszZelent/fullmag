@@ -1,0 +1,114 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/meshing/fem/index.md",
+    "reviewed_revision": "79b66a75b250e508743aca478eb20b5f62c93878"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source-backed",
+      "reason": "Study defaults, per-object mesh recipes, and host shared-domain meshing are source-backed."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "The same mesh asset can feed GPU operators, but element-family, order, and interaction coverage is capability-gated."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM uses structured Cartesian grids rather than the FEM mesh contract."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM uses structured Cartesian grids rather than the FEM mesh contract."
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "fem",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FEM",
+      "responsibility": "Owns study-level order, hmax alias, imported mesh, demag policy, and IR lowering."
+    },
+    {
+      "id": "recipe",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class PerObjectMeshRecipe",
+      "responsibility": "Owns object size, topology, layers, fields, operations, and validation."
+    },
+    {
+      "id": "operation",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class MeshOperation",
+      "responsibility": "Owns one ordered COMSOL-like mesh operation."
+    },
+    {
+      "id": "swept",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class SweptMeshControls",
+      "responsibility": "Owns typed sweep distribution, direction, family, transition, and exact-layer policy."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "FEM.order",
+        "type": "int",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "Integer greater than or equal to one.",
+        "meaning": "Study-level finite-element field order.",
+        "backend_support": "FEM CPU; GPU element/order capability-gated",
+        "problem_ir": "backend_policy.discretization_hints.fem.order"
+      },
+      {
+        "python": "FEM.maximum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "Finite and positive; required unless hmax is supplied.",
+        "meaning": "Canonical study-level maximum-size target.",
+        "backend_support": "FEM",
+        "problem_ir": "backend_policy.discretization_hints.fem.hmax"
+      },
+      {
+        "python": "FEM.hmax",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "Finite positive alias; equal to maximum_element_size when both are supplied.",
+        "meaning": "Compatibility spelling of the same target.",
+        "backend_support": "FEM",
+        "problem_ir": "backend_policy.discretization_hints.fem.hmax"
+      },
+      {
+        "python": "FEM.mesh",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Nonempty when present; asset is revalidated during extraction.",
+        "meaning": "Imported or prebuilt FEM mesh reference.",
+        "backend_support": "FEM import/extraction path",
+        "problem_ir": "backend_policy.discretization_hints.fem.mesh"
+      },
+      {
+        "python": "FEM.demag_solver_policy",
+        "type": "FemLinearSolverPolicy | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Typed solver policy.",
+        "meaning": "Algebraic Poisson/demag solver request; not mesh geometry.",
+        "backend_support": "FEM demagnetization lanes",
+        "problem_ir": "backend_policy.discretization_hints.fem.demag_solver_policy"
+      }
+    ]
+  }
+}

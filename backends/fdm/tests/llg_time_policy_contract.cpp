@@ -129,6 +129,8 @@ int main() {
 #if FULLMAG_FDM_CONTRACT_HAS_CUDA
     double m[3] = {1.0, 0.0, 0.0};
     fullmag_fdm_plan_desc_v2 invalid{};
+    invalid.abi_version = FULLMAG_FDM_PLAN_DESC_ABI_V2;
+    invalid.struct_size = sizeof(invalid);
     invalid.base.grid = {1, 1, 1, 1e-9, 1e-9, 1e-9};
     invalid.base.material = {8e5, 1.3e-11, 0.1, 2.211e5};
     invalid.base.precision = FULLMAG_FDM_PRECISION_DOUBLE;

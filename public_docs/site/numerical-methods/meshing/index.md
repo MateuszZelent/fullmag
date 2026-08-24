@@ -1,6 +1,6 @@
 ---
 title: Meshing
-status: partial
+status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
@@ -9,17 +9,21 @@ owner: fullmag-public-docs
 (public-docs-numerical-methods-meshing-root)=
 # Meshing
 
-Meshing is split by realization: Cartesian FDM cells, shared-domain FEM meshes, airbox extent,
-swept thin-film topology and refinement controls. Mesh choices are numerical semantics and must be
-recorded with solver, backend, precision and provenance; they are not interchangeable presentation
-settings.
+Meshing converts authored geometry and policy into the discrete spatial asset consumed by the
+backend. FDM and FEM are separate branches because they use different spaces, topology, ownership,
+and failure semantics.
+
+| Branch | State location | Geometry realization | Primary nonlocal method |
+|---|---|---|---|
+| FDM | cell centres | Cartesian allocation plus masks/fractions | Newell tensor convolution |
+| FEM | finite-element degrees of freedom | conforming shared-domain elements | Poisson airbox or FEM/BEM |
+
+For both branches, requested policy and realized mesh/grid provenance are retained separately.
 
 ```{toctree}
-:maxdepth: 1
+:maxdepth: 4
 
-fdm-grids
-fem-shared-domain
-airbox
-swept-meshes
+fdm/index
+fem/index
 refinement
 ```

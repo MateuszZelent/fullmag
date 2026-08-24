@@ -144,6 +144,29 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
             error)) {
         return gpu_bootstrap_failed(ctx, error);
     }
+    if (ctx.frozen_spins.enabled()) {
+        if (!gpu_state_upload_frozen_spins(
+                ctx.gpu_state.device,
+                ctx.frozen_spins.mask().data(),
+                static_cast<uint64_t>(ctx.frozen_spins.mask().size()),
+                ctx.frozen_spins.reference().data(),
+                static_cast<uint64_t>(ctx.frozen_spins.reference().size()),
+                ctx.transfer_audit.audit,
+                error)) {
+            return gpu_bootstrap_failed(ctx, error);
+        }
+    } else {
+        if (!gpu_state_upload_frozen_spins(
+                ctx.gpu_state.device,
+                nullptr,
+                0,
+                nullptr,
+                0,
+                ctx.transfer_audit.audit,
+                error)) {
+            return gpu_bootstrap_failed(ctx, error);
+        }
+    }
     if (ctx.magnetoelastic.enabled && !ctx.magnetoelastic.uniform_strain) {
         if (!gpu_state_upload_magnetoelastic_strain(
                 ctx.gpu_state.device,

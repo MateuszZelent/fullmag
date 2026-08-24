@@ -6,6 +6,7 @@
  */
 
 #include "context.hpp"
+#include "fsal_policy.hpp"
 
 #include <cuda_runtime.h>
 #include <cmath>
@@ -341,6 +342,25 @@ __global__ void heun_corrector_fp32_kernel(
     mz[idx] = cz * inv_norm;
 }
 
+__global__ void project_frozen_fp32_kernel(
+    float * __restrict__ mx,
+    float * __restrict__ my,
+    float * __restrict__ mz,
+    const uint8_t * __restrict__ mask,
+    const float * __restrict__ ref_x,
+    const float * __restrict__ ref_y,
+    const float * __restrict__ ref_z,
+    int n)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n) return;
+    if (mask != nullptr && mask[idx] != 0) {
+        mx[idx] = ref_x[idx];
+        my[idx] = ref_y[idx];
+        mz[idx] = ref_z[idx];
+    }
+}
+
 /* ── Full Heun step (fp32) ── */
 
 static const int BLOCK_SIZE = 256;
@@ -363,6 +383,7 @@ double reduce_current_rhs_norm_fp32(Context &ctx) {
         static_cast<float*>(ctx.k1.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "Euler fp32 LLG RHS launch");
 
     return reduce_max_norm_fp32(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
 }
@@ -399,6 +420,7 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         (float*)ctx.k1.x, (float*)ctx.k1.y, (float*)ctx.k1.z,
         n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "Heun fp32 LLG RHS launch");
     if (abort_step_from_tmp(ctx, false)) return;
 
     // Step 3: predictor → m
@@ -407,6 +429,15 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         (const float*)ctx.k1.x, (const float*)ctx.k1.y, (const float*)ctx.k1.z,
         (float*)ctx.m.x, (float*)ctx.m.y, (float*)ctx.m.z,
         n, dt_f);
+    if (ctx.has_frozen_mask) {
+        project_frozen_fp32_kernel<<<grid, BLOCK_SIZE>>>(
+            (float*)ctx.m.x, (float*)ctx.m.y, (float*)ctx.m.z,
+            ctx.frozen_mask,
+            (const float*)ctx.frozen_reference.x,
+            (const float*)ctx.frozen_reference.y,
+            (const float*)ctx.frozen_reference.z,
+            n);
+    }
     if (abort_step_from_tmp(ctx, false)) return;
 
     // Step 4: field contributions at predicted m
@@ -426,6 +457,7 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         (float*)ctx.h_ex.x, (float*)ctx.h_ex.y, (float*)ctx.h_ex.z,
         n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "minimize fp32 LLG RHS launch");
     if (abort_step_from_tmp(ctx, false)) return;
 
     // Step 6: corrector → m
@@ -435,11 +467,19 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         (const float*)ctx.k1.x, (const float*)ctx.k1.y, (const float*)ctx.k1.z,
         (const float*)ctx.h_ex.x, (const float*)ctx.h_ex.y, (const float*)ctx.h_ex.z,
         n, 0.5f * dt_f);
+    if (ctx.has_frozen_mask) {
+        project_frozen_fp32_kernel<<<grid, BLOCK_SIZE>>>(
+            (float*)ctx.m.x, (float*)ctx.m.y, (float*)ctx.m.z,
+            ctx.frozen_mask,
+            (const float*)ctx.frozen_reference.x,
+            (const float*)ctx.frozen_reference.y,
+            (const float*)ctx.frozen_reference.z,
+            n);
+    }
     if (abort_step_from_tmp(ctx, false)) return;
 
     if (!fullmag_fdm_should_fill_step_stats_for_step(ctx, ctx.step_count + 1)) {
-        ctx.step_count++;
-        ctx.current_time += dt;
+        context_stage_accepted_step(ctx, dt);
         fullmag_fdm_fill_step_stats_metadata(ctx, stats, dt);
         return;
     }
@@ -477,11 +517,10 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
 
     double max_dm_dt = reduce_current_rhs_norm_fp32(ctx);
 
-    ctx.step_count++;
-    ctx.current_time += dt;
+    context_stage_accepted_step(ctx, dt);
 
-    stats->step = ctx.step_count;
-    stats->time_seconds = ctx.current_time;
+    stats->step = ctx.pending_step_count;
+    stats->time_seconds = ctx.pending_time;
     stats->dt_seconds = dt;
     stats->exchange_energy_joules = e_ex;
     stats->demag_energy_joules = e_demag;

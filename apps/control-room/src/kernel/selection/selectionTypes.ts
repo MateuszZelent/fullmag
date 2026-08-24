@@ -274,7 +274,7 @@ export type SelectionRef =
       constraintId: string;
       kind: "object.frozen-spins";
       nodeId: string;
-      objectId: string;
+      objectId?: string;
       regionId?: string;
       type: "frozen-spins";
     }
@@ -745,7 +745,7 @@ export function selectionRefEquals(
         right.type === "frozen-spins" &&
         left.constraintId === right.constraintId &&
         left.nodeId === right.nodeId &&
-        left.objectId === right.objectId &&
+        nullableStringEquals(left.objectId, right.objectId) &&
         nullableStringEquals(left.regionId, right.regionId)
       );
     case "runtime-explorer":

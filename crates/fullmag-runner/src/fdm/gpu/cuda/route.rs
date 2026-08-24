@@ -7,6 +7,35 @@ pub(crate) enum PublicGpuTransportRoute {
     SpinCoupled,
 }
 
+pub(crate) const FDM_CUDA_UNAVAILABLE_FALLBACK_REASON: &str = "fdm_cuda_unavailable";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FdmGpuAvailabilityRoute {
+    CpuRequested,
+    Cuda,
+    CpuAutoFallback { reason: &'static str },
+}
+
+pub(crate) fn resolve_fdm_gpu_availability_route(
+    requested_policy: &str,
+    cuda_available: bool,
+) -> Result<FdmGpuAvailabilityRoute, crate::types::RunError> {
+    match (requested_policy, cuda_available) {
+        ("cpu", _) => Ok(FdmGpuAvailabilityRoute::CpuRequested),
+        ("cuda", true) | ("auto", true) => Ok(FdmGpuAvailabilityRoute::Cuda),
+        ("cuda", false) => Err(crate::types::RunError {
+            message: "FDM CUDA execution was requested, but the CUDA backend is not available"
+                .to_string(),
+        }),
+        ("auto", false) => Ok(FdmGpuAvailabilityRoute::CpuAutoFallback {
+            reason: FDM_CUDA_UNAVAILABLE_FALLBACK_REASON,
+        }),
+        (other, _) => Err(crate::types::RunError {
+            message: format!("unsupported FDM execution policy '{other}'"),
+        }),
+    }
+}
+
 fn route_from_shape(
     charge_only: bool,
     spin_plan_count: usize,
@@ -59,6 +88,46 @@ pub(crate) fn public_gpu_transport_route(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forced_gpu_unavailable_fails_before_cpu_route_is_called() {
+        let cpu_calls = std::cell::Cell::new(0_u64);
+        let result = resolve_fdm_gpu_availability_route("cuda", false).and_then(|route| {
+            if matches!(route, FdmGpuAvailabilityRoute::CpuAutoFallback { .. }) {
+                cpu_calls.set(cpu_calls.get() + 1);
+            }
+            Ok(route)
+        });
+
+        let error = result.expect_err("forced CUDA must fail closed");
+        assert!(error.message.contains("CUDA backend is not available"));
+        assert_eq!(cpu_calls.get(), 0, "CPU route must not be called");
+    }
+
+    #[test]
+    fn auto_gpu_unavailable_falls_back_only_with_reason() {
+        let route = resolve_fdm_gpu_availability_route("auto", false)
+            .expect("auto may select the CPU fallback");
+        assert_eq!(
+            route,
+            FdmGpuAvailabilityRoute::CpuAutoFallback {
+                reason: FDM_CUDA_UNAVAILABLE_FALLBACK_REASON,
+            }
+        );
+        assert!(!FDM_CUDA_UNAVAILABLE_FALLBACK_REASON.is_empty());
+    }
+
+    #[test]
+    fn available_gpu_never_routes_through_cpu() {
+        assert_eq!(
+            resolve_fdm_gpu_availability_route("cuda", true).expect("CUDA route"),
+            FdmGpuAvailabilityRoute::Cuda,
+        );
+        assert_eq!(
+            resolve_fdm_gpu_availability_route("auto", true).expect("CUDA route"),
+            FdmGpuAvailabilityRoute::Cuda,
+        );
+    }
 
     #[test]
     fn spin_route_fails_closed_before_any_charge_only_return() {

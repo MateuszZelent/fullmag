@@ -2547,6 +2547,27 @@ mod tests {
     }
 
     #[test]
+    fn frozen_spins_extension_is_append_only_after_sot_extension() {
+        let sot_tail = std::mem::offset_of!(fullmag_fem_plan_desc, sot_envelope);
+        assert!(
+            std::mem::offset_of!(fullmag_fem_plan_desc, frozen_mask) > sot_tail,
+            "frozen spins descriptor must remain strictly after the prescribed SOT extension"
+        );
+        assert!(
+            std::mem::offset_of!(fullmag_fem_plan_desc, frozen_mask_len)
+                > std::mem::offset_of!(fullmag_fem_plan_desc, frozen_mask)
+        );
+        assert!(
+            std::mem::offset_of!(fullmag_fem_plan_desc, frozen_reference_xyz)
+                > std::mem::offset_of!(fullmag_fem_plan_desc, frozen_mask_len)
+        );
+        assert!(
+            std::mem::offset_of!(fullmag_fem_plan_desc, frozen_reference_len)
+                > std::mem::offset_of!(fullmag_fem_plan_desc, frozen_reference_xyz)
+        );
+    }
+
+    #[test]
     fn steady_transport_v1_request_and_result_are_self_describing_and_append_only() {
         assert_eq!(FULLMAG_FEM_STEADY_TRANSPORT_ABI_VERSION, 1);
         assert_eq!(

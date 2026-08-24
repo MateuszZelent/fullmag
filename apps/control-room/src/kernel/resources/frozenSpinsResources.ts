@@ -73,7 +73,6 @@ export function useFrozenSpinsCollectionResource(
 ) {
   const { api } = useKernel();
   const baseKey = frozenSpinsCollectionResourceKey();
-  const invalidationRevision = useResourceRevision(baseKey);
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
       api.model.frozenSpins.list({ signal }),
@@ -83,7 +82,7 @@ export function useFrozenSpinsCollectionResource(
     enabled: options.enabled,
     load,
     resolveRevision: frozenSpinsRevision,
-    resourceKey: revisionedKey(baseKey, invalidationRevision),
+    resourceKey: baseKey,
   });
 }
 
@@ -93,7 +92,6 @@ export function useFrozenSpinsDefinitionResource(
 ) {
   const { api } = useKernel();
   const baseKey = frozenSpinsDefinitionResourceKey(constraintId);
-  const invalidationRevision = useResourceRevision(baseKey);
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
       api.model.frozenSpins.get(constraintId, { signal }),
@@ -103,7 +101,7 @@ export function useFrozenSpinsDefinitionResource(
     enabled: options.enabled !== false && constraintId.length > 0,
     load,
     resolveRevision: frozenSpinsRevision,
-    resourceKey: revisionedKey(baseKey, invalidationRevision),
+    resourceKey: baseKey,
   });
 }
 
@@ -113,7 +111,6 @@ export function useFrozenSpinsMaskResource(
 ) {
   const { api } = useKernel();
   const baseKey = frozenSpinsMaskResourceKey(maskId);
-  const invalidationRevision = useResourceRevision(baseKey);
   const load = useCallback(
     async ({ signal }: { signal: AbortSignal }) => {
       const response = await api.model.frozenSpins.resolvedMask(maskId, {
@@ -129,7 +126,7 @@ export function useFrozenSpinsMaskResource(
     enabled: options.enabled !== false && maskId.length > 0,
     load,
     resolveRevision: (mask) => mask?.maskSha256 ?? null,
-    resourceKey: revisionedKey(baseKey, invalidationRevision),
+    resourceKey: baseKey,
   });
 }
 
@@ -139,7 +136,6 @@ export function useFrozenSpinsPreviewResource(
 ) {
   const { api } = useKernel();
   const baseKey = frozenSpinsPreviewResourceKey(previewId);
-  const invalidationRevision = useResourceRevision(baseKey);
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
       api.model.frozenSpins.getPreview(previewId, { signal }),
@@ -149,7 +145,7 @@ export function useFrozenSpinsPreviewResource(
     enabled: options.enabled !== false && previewId.length > 0,
     load,
     resolveRevision: (preview) => preview?.revision ?? null,
-    resourceKey: revisionedKey(baseKey, invalidationRevision),
+    resourceKey: baseKey,
   });
 }
 
@@ -207,13 +203,6 @@ function safeUint64(view: DataView, offset: number, label: string): number {
     throw new Error(`Frozen-spins mask ${label} exceeds JavaScript safe integer range.`);
   }
   return Number(value);
-}
-
-function revisionedKey(
-  resourceKey: string,
-  revision: ResourceRevision | null,
-): string {
-  return `${resourceKey}#revision=${String(revision ?? "none")}`;
 }
 
 function useResourceRevision(resourceKey: string): ResourceRevision | null {

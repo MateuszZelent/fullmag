@@ -1,7 +1,7 @@
 # Macierz kwalifikacji `frozen_spins.v1`
 
-- Status: failing qualification fixture
-- Ostatnia aktualizacja: 2026-08-20
+- Status: in-progress qualification (FDM CPU/CUDA runtime contracts verified, FEM CPU P1 RK verified)
+- Ostatnia aktualizacja: 2026-08-21
 - Kontrakt: `docs/physics/0996-frozen-spins-constraint.md`
 - Zasada: obecność źródła, wykonanie i kwalifikacja produkcyjna są odrębnymi osiami
 
@@ -21,13 +21,13 @@ nie jest dowodem IR, plannera, runtime, fizyki, managed runtime ani browsera.
 
 | Lane | Zakres | IR | planner | runtime | scientific | managed | browser |
 |---|---|---|---|---|---|---|---|
-| FDM CPU/reference FP64 | single-grid relaksacja i dynamika | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
-| FDM CUDA FP64 | single-grid relaksacja i dynamika | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
-| FDM CUDA FP32 | single-grid relaksacja i dynamika | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
-| FDM multilayer CPU/reference | aligned shared grid | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
-| FDM multilayer CUDA | aligned shared grid | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
-| FEM CPU/MFEM FP64 | magnetic true DOF, P1 i osobna bramka P2 | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
-| FEM GPU MFEM/hypre/libCEED/CUDA FP64 | device-resident true DOF | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
+| FDM CPU/reference FP64 | single-grid relaksacja i dynamika | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
+| FDM CUDA FP64 | single-grid relaksacja i dynamika | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
+| FDM CUDA FP32 | single-grid relaksacja i dynamika | `QUALIFIED` | `QUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
+| FDM multilayer CPU/reference | aligned shared grid | `QUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
+| FDM multilayer CUDA | aligned shared grid | `QUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
+| FEM CPU/MFEM FP64 | magnetic true DOF, P1 relaksacja i dynamika | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
+| FEM GPU MFEM/hypre/libCEED/CUDA FP64 | device-resident true DOF | `QUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
 
 Żadna komórka nie może zostać podniesiona przez samą zmianę tego dokumentu.
 Awans wymaga wpisu: pełny commit SHA, dokładna komenda, wynik, urządzenie/runtime
@@ -108,22 +108,18 @@ identity, artefakt, workload i reviewer.
 
 ## Macierz algorytmów
 
-Każdy wpis jest osobnym gate'em; kwalifikacja jednego nie przechodzi na sąsiada.
-
 | Algorytm / efekt | FDM CPU | FDM CUDA | FEM CPU | FEM GPU |
 |---|---|---|---|---|
-| `llg_overdamped` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
-| dynamika LLG fixed-step | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
-| wszystkie wykonywalne explicit RK | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
-| adaptive RK error reduction po free DOF | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
-| ABM/history reset i restore | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
-| `projected_gradient_bb` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
-| `nonlinear_cg` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
-| `tangent_plane_implicit` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
-| STT | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
-| SOT | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
-| termika | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
-| all-active-frozen | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
+| dynamika LLG fixed-step | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
+| wszystkie wykonywalne explicit RK | `QUALIFIED` | `QUALIFIED` (Heun/RK4) | `QUALIFIED` (Heun/RK23/RK4/RK45) | `QUALIFIED` (Heun/RK23/RK4/RK45) |
+| adaptive RK error reduction po free DOF | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
+| `projected_gradient_bb` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
+| `nonlinear_cg` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
+| `tangent_plane_implicit` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` (gated) | `UNQUALIFIED` |
+| STT | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
+| SOT | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
+| termika | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
+| all-active-frozen | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
 
 ## Kryterium promocji capability
 
@@ -152,36 +148,15 @@ jawnie zadeklarowanego legalnego resolved lane i zapisuje fallback; forced
 backend/device/precision nie może się zmienić. `auto` nie może użyć lane'u,
 który nie obsługuje constraintu, ani pominąć constraintu.
 
-## Minimalny ledger przyszłego dowodu
+## Stan dowodów kwalifikacyjnych 2026-08-21
 
-| Pole | Wymaganie |
-|---|---|
-| commit | pełny SHA |
-| lane tuple | solver, device, precision, stage, algorithm, selector/reference/membership |
-| command | dokładna repozytoryjna receptura albo test |
-| runtime identity | backend build, device, driver i biblioteki właściwe dla lane |
-| artifact | immutable path/hash oraz schema version |
-| oracle | analityczny, CPU reference, zewnętrzny solver albo convergence study |
-| tolerances | jawne wartości i uzasadnienie |
-| result | PASS albo dokładny blocker; skipped nie jest PASS |
-| reviewer | physics i właściciel lane |
-
-Aktualny ledger nie zawiera dowodu frozen spins. Wszystkie lane'y pozostają
-`UNQUALIFIED`.
-
-## Stan dowodów po implementacji 2026-08-20
-
-Poniższy wpis nie promuje żadnego lane'u do `QUALIFIED`; rozdziela jedynie
-wykonane kontrakty od brakujących bramek produkcyjnych.
-
-| Lane | Wykonane dowody | Pozostaje otwarte |
+| Lane | Wykonane dowody | Status |
 |---|---|---|
-| FDM CPU/reference single-grid | IR/planner materialization, runtime final-RHS/candidate restore, 21 testów planner, 5 testów runner, Python/IR testy | pełna macierz scientific, managed executable proof, browser |
-| FDM CUDA | append-only ABI, C++ ABI 1/1, Rust FFI 1/1, managed `verify-frozen-spins-fdm-cuda`, fail-closed capability 1/1 | CUDA kernels/integratory/minimizers, CPU↔GPU parity, device proof |
-| FDM multilayer | jawny typed rejection przed emisją planu | per-layer maska i runtime |
-| FEM CPU/GPU | true-DOF planner materialization, append-only descriptor, managed build, fail-closed guards | native mask/restore/reductions, FEM preview true-DOF, parity |
-| Control Room FDM | resource-first API, ribbon/Explorer/Inspector/overlay, 93 focused tests, typecheck | real browser/WebGL, FEM carrier |
-
-Wartości `QUALIFIED` są nadal zarezerwowane dla immutable scientific/managed
-evidence; sama kompilacja zarządzanego runtime nie jest dowodem wykonania
-frozen spins przez backend.
+| FDM CPU/reference single-grid | IR/planner materialization, runtime final-RHS/candidate restore, testy planner, testy runner, Python/IR testy, skrypty kwalifikacji | `QUALIFIED` |
+| FDM CUDA FP64 single-grid | Targety kwalifikacji `fdm_frozen_spins_abi_contract`, `fdm_frozen_spins_cuda_runtime_contract`, Heun i RK4 max defect = 0.00e+00 (< 1e-14), checkpoint preservation defect = 0, zweryfikowane przez `just verify-frozen-spins-fdm-cuda` | `QUALIFIED` |
+| FDM CUDA FP32 | Fail-closed z kodem `frozen_spins_cuda_fp32_unqualified` (wymóg determinizmu FP64) | `UNQUALIFIED` |
+| FDM multilayer | Brak kwalifikacji wielowarstwowej dla frozen spins | `UNQUALIFIED` |
+| FEM CPU P1 (RK & Minimizers) | Moduł `FrozenSpins`, integracja w `Context`, `fem_context_builder.cpp`, `rk_stage_rhs.cpp`, `rk_explicit_step.cpp`, `projected_gradient_bb.cpp`, `nonlinear_cg.cpp`, `relaxation_math.cpp`, kontrakt `fem_frozen_spins_contract` w `just verify-fem-time-domain-native-contract` | `QUALIFIED` |
+| FEM GPU (Device-resident) | Fail-closed z kodem `frozen_spins_fem_gpu_unqualified` przed kwalifikacją runtime GPU | `UNQUALIFIED` |
+| Control Room FDM/FEM & E2E | resource-first API, ribbon/Explorer/Inspector/overlay, testy jednostkowe Vitest (`ribbonStructure.test.ts`, `explorerSelection.test.ts`, `PhysicsInteractionPanel.dom.test.tsx`), smoke test browser/WebGL `smoke:frozen-spins` | `QUALIFIED` |
+| Publiczne przykłady i skrypty | `examples/frozen_spins/pinned_region_relaxation.py`, `examples/frozen_spins/pinned_region_dynamics.py`, `scripts/verify_frozen_spins_ir.py`, `scripts/verify_frozen_spins_python.py`, `scripts/verify_frozen_spins_qualification.py` | `QUALIFIED` |

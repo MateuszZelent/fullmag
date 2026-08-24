@@ -1,0 +1,1544 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/magnets-and-textures/preset-textures.md",
+    "title": "Preset Textures",
+    "status": "implemented_with_explicit_mapping_and_runtime_qualification_limits",
+    "updated": "2026-08-23",
+    "source_revision": "0343d94d37b7c69e0eef36eee2ca42a8ca3c3135"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "role": "planner sampling at active cell centres",
+      "status": "documented",
+      "qualification": "source, formula, parity, and planner evidence; application convergence remains separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "role": "shared planner-materialized initial vector consumed by the GPU lane",
+      "status": "documented",
+      "qualification": "no separate device-side texture evaluator; subsequent GPU runtime qualification is separate"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "role": "planner sampling at magnetic mesh nodes",
+      "status": "documented",
+      "qualification": "source, formula, parity, and planner evidence; application convergence remains separate"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "role": "shared planner-materialized initial vector consumed by the GPU lane",
+      "status": "documented",
+      "qualification": "no separate device-side texture evaluator; subsequent GPU runtime qualification is separate"
+    }
+  ],
+  "equations": [
+    {
+      "id": "preset-texture-local-coordinate",
+      "symbols": [
+        "x_loc",
+        "x_s",
+        "x_p",
+        "S",
+        "Rq",
+        "t_vec"
+      ],
+      "sources": [
+        "rust-inverse-transform",
+        "rust-v2-sampler"
+      ]
+    },
+    {
+      "id": "preset-texture-plane-frame",
+      "symbols": [
+        "u",
+        "v",
+        "r",
+        "phi",
+        "e_u",
+        "e_v",
+        "x_loc"
+      ],
+      "sources": [
+        "rust-metric-point",
+        "rust-metric-vector",
+        "rust-v2-sampler"
+      ]
+    },
+    {
+      "id": "preset-texture-uniform-v2",
+      "symbols": [
+        "m",
+        "m0"
+      ],
+      "sources": [
+        "rust-local-evaluate"
+      ]
+    },
+    {
+      "id": "preset-texture-random-v2",
+      "symbols": [
+        "m",
+        "u1",
+        "u2",
+        "zeta",
+        "varphi_r"
+      ],
+      "sources": [
+        "rust-random"
+      ]
+    },
+    {
+      "id": "preset-texture-vortex-v2",
+      "symbols": [
+        "m",
+        "r",
+        "phi",
+        "r_c",
+        "g",
+        "q_v",
+        "c",
+        "p",
+        "psi"
+      ],
+      "sources": [
+        "rust-vortex"
+      ]
+    },
+    {
+      "id": "preset-texture-skyrmion-v2",
+      "symbols": [
+        "m",
+        "r",
+        "phi",
+        "theta",
+        "R",
+        "Delta",
+        "c",
+        "gamma",
+        "p",
+        "psi"
+      ],
+      "sources": [
+        "rust-skyrmion",
+        "rust-skyrmion-theta"
+      ]
+    },
+    {
+      "id": "preset-texture-bimeron-v2",
+      "symbols": [
+        "m",
+        "r",
+        "phi",
+        "theta",
+        "R",
+        "Delta",
+        "q_v",
+        "eta",
+        "chi",
+        "s_bg"
+      ],
+      "sources": [
+        "rust-bimeron"
+      ]
+    },
+    {
+      "id": "preset-texture-bimeron-charge",
+      "symbols": [
+        "Q",
+        "m",
+        "u",
+        "v",
+        "s_bg",
+        "q_v",
+        "theta",
+        "r"
+      ],
+      "sources": [
+        "rust-bimeron"
+      ]
+    },
+    {
+      "id": "preset-texture-bimeron-core-radius",
+      "symbols": [
+        "r_core",
+        "R",
+        "Delta"
+      ],
+      "sources": [
+        "rust-bimeron",
+        "rust-v2-bimeron-core-test"
+      ]
+    },
+    {
+      "id": "preset-texture-domain-wall-v2",
+      "symbols": [
+        "m",
+        "m_L",
+        "m_W",
+        "xi",
+        "s_coord",
+        "s0",
+        "w"
+      ],
+      "sources": [
+        "rust-domain-wall"
+      ]
+    },
+    {
+      "id": "preset-texture-two-domain-v2",
+      "symbols": [
+        "m",
+        "m_L",
+        "m_R",
+        "m_W",
+        "tau",
+        "s_coord",
+        "w"
+      ],
+      "sources": [
+        "rust-two-domain"
+      ]
+    },
+    {
+      "id": "preset-texture-helical-v2",
+      "symbols": [
+        "m",
+        "e1",
+        "e2",
+        "varphi",
+        "q_vec",
+        "x_loc",
+        "varphi0"
+      ],
+      "sources": [
+        "rust-helical"
+      ]
+    },
+    {
+      "id": "preset-texture-conical-v2",
+      "symbols": [
+        "m",
+        "a_vec",
+        "e1",
+        "e2",
+        "beta",
+        "varphi",
+        "q_vec",
+        "x_loc",
+        "varphi0"
+      ],
+      "sources": [
+        "rust-conical"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "m",
+      "latex": "\\mathbf m",
+      "meaning": "reduced magnetization vector",
+      "si_unit": "1"
+    },
+    {
+      "id": "x_s",
+      "latex": "\\mathbf x_{\\mathrm s}",
+      "meaning": "sample point selected in object or world space",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "x_loc",
+      "latex": "\\mathbf x_{\\mathrm{loc}}",
+      "meaning": "texture-local sample coordinate",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "x_p",
+      "latex": "\\mathbf x_{\\mathrm p}",
+      "meaning": "texture-transform pivot",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "t_vec",
+      "latex": "\\mathbf t",
+      "meaning": "texture translation",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "S",
+      "latex": "\\mathbf S",
+      "meaning": "diagonal coordinate-scale operator",
+      "si_unit": "1"
+    },
+    {
+      "id": "Rq",
+      "latex": "\\mathcal R_q",
+      "meaning": "active rotation represented by the normalized quaternion q",
+      "si_unit": "1"
+    },
+    {
+      "id": "e_u",
+      "latex": "\\mathbf e_u",
+      "meaning": "first axis of the right-handed texture-plane frame",
+      "si_unit": "1"
+    },
+    {
+      "id": "e_v",
+      "latex": "\\mathbf e_v",
+      "meaning": "second axis of the right-handed texture-plane frame",
+      "si_unit": "1"
+    },
+    {
+      "id": "e_n",
+      "latex": "\\mathbf e_n",
+      "meaning": "normal of the right-handed texture-plane frame",
+      "si_unit": "1"
+    },
+    {
+      "id": "u",
+      "latex": "u",
+      "meaning": "first local planar coordinate",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "v",
+      "latex": "v",
+      "meaning": "second local planar coordinate",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "r",
+      "latex": "r",
+      "meaning": "local radial coordinate",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "phi",
+      "latex": "\\phi",
+      "meaning": "local spatial azimuth",
+      "si_unit": "\\mathrm{rad}"
+    },
+    {
+      "id": "u1",
+      "latex": "u_1",
+      "meaning": "first deterministic uniform variate derived from SplitMix64",
+      "si_unit": "1"
+    },
+    {
+      "id": "u2",
+      "latex": "u_2",
+      "meaning": "second deterministic uniform variate derived from SplitMix64",
+      "si_unit": "1"
+    },
+    {
+      "id": "zeta",
+      "latex": "\\zeta",
+      "meaning": "sampled cosine of the random polar angle",
+      "si_unit": "1"
+    },
+    {
+      "id": "g",
+      "latex": "g",
+      "meaning": "Gaussian vortex-core amplitude",
+      "si_unit": "1"
+    },
+    {
+      "id": "r_c",
+      "latex": "r_{\\mathrm c}",
+      "meaning": "vortex core radius",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "q_v",
+      "latex": "Q_{\\mathrm v}",
+      "meaning": "vorticity or winding sign",
+      "si_unit": "1"
+    },
+    {
+      "id": "c",
+      "latex": "c",
+      "meaning": "circulation or chirality sign, according to the preset",
+      "si_unit": "1"
+    },
+    {
+      "id": "p",
+      "latex": "p",
+      "meaning": "normal-core polarity sign",
+      "si_unit": "1"
+    },
+    {
+      "id": "theta",
+      "latex": "\\theta",
+      "meaning": "radial polar profile angle",
+      "si_unit": "\\mathrm{rad}"
+    },
+    {
+      "id": "R",
+      "latex": "R",
+      "meaning": "nominal radial profile scale",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "Delta",
+      "latex": "\\Delta",
+      "meaning": "radial transition width",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "gamma",
+      "latex": "\\gamma",
+      "meaning": "fixed skyrmion helicity: 0 for Neel and pi/2 for Bloch",
+      "si_unit": "\\mathrm{rad}"
+    },
+    {
+      "id": "chi",
+      "latex": "\\chi",
+      "meaning": "bimeron azimuthal phase",
+      "si_unit": "\\mathrm{rad}"
+    },
+    {
+      "id": "eta",
+      "latex": "\\eta",
+      "meaning": "bimeron helicity",
+      "si_unit": "\\mathrm{rad}"
+    },
+    {
+      "id": "s_bg",
+      "latex": "s_{\\mathrm{bg}}",
+      "meaning": "bimeron background-orientation sign",
+      "si_unit": "1"
+    },
+    {
+      "id": "Q",
+      "latex": "Q",
+      "meaning": "continuum topological charge in the oriented local plane",
+      "si_unit": "1"
+    },
+    {
+      "id": "r_core",
+      "latex": "r_{\\mathrm{core}}",
+      "meaning": "exact radius of the two fully normal bimeron cores",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "s_coord",
+      "latex": "s",
+      "meaning": "coordinate along the selected wall-normal axis",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "s0",
+      "latex": "s_0",
+      "meaning": "domain-wall centre offset",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "w",
+      "latex": "w",
+      "meaning": "domain-wall or smooth two-domain width",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "xi",
+      "latex": "\\xi",
+      "meaning": "dimensionless wall coordinate",
+      "si_unit": "1"
+    },
+    {
+      "id": "m_L",
+      "latex": "\\mathbf m_{\\mathrm L}",
+      "meaning": "negative-side domain direction",
+      "si_unit": "1"
+    },
+    {
+      "id": "m_R",
+      "latex": "\\mathbf m_{\\mathrm R}",
+      "meaning": "positive-side domain direction",
+      "si_unit": "1"
+    },
+    {
+      "id": "m_W",
+      "latex": "\\mathbf m_{\\mathrm W}",
+      "meaning": "wall-centre or zero-mixture fallback direction",
+      "si_unit": "1"
+    },
+    {
+      "id": "tau",
+      "latex": "\\tau",
+      "meaning": "smooth two-domain interpolation weight",
+      "si_unit": "1"
+    },
+    {
+      "id": "q_vec",
+      "latex": "\\mathbf q",
+      "meaning": "physical helical or conical wavevector",
+      "si_unit": "\\mathrm{m^{-1}}"
+    },
+    {
+      "id": "varphi",
+      "latex": "\\varphi",
+      "meaning": "helical or conical phase",
+      "si_unit": "\\mathrm{rad}"
+    },
+    {
+      "id": "varphi0",
+      "latex": "\\varphi_0",
+      "meaning": "authored phase offset",
+      "si_unit": "\\mathrm{rad}"
+    },
+    {
+      "id": "e1",
+      "latex": "\\mathbf e_1",
+      "meaning": "first spin-plane basis vector",
+      "si_unit": "1"
+    },
+    {
+      "id": "e2",
+      "latex": "\\mathbf e_2",
+      "meaning": "second spin-plane basis vector",
+      "si_unit": "1"
+    },
+    {
+      "id": "a_vec",
+      "latex": "\\mathbf a",
+      "meaning": "normalized conical-state axis",
+      "si_unit": "1"
+    },
+    {
+      "id": "beta",
+      "latex": "\\beta",
+      "meaning": "conical-state angle",
+      "si_unit": "\\mathrm{rad}"
+    },
+    {
+      "id": "M",
+      "latex": "\\mathbf M",
+      "meaning": "magnetization field",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "Ms",
+      "latex": "M_{\\mathrm s}",
+      "meaning": "saturation magnetization",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "m0",
+      "latex": "\\mathbf m_0",
+      "meaning": "authored nonzero uniform direction before normalization",
+      "si_unit": "1"
+    },
+    {
+      "id": "m_n",
+      "latex": "m_n",
+      "meaning": "component of reduced magnetization along the local plane normal",
+      "si_unit": "1"
+    },
+    {
+      "id": "psi",
+      "latex": "\\psi",
+      "meaning": "in-plane spin phase of a vortex or skyrmion",
+      "si_unit": "\\mathrm{rad}"
+    },
+    {
+      "id": "varphi_r",
+      "latex": "\\varphi_{\\mathrm r}",
+      "meaning": "random-texture spherical azimuth",
+      "si_unit": "\\mathrm{rad}"
+    },
+    {
+      "id": "ell",
+      "latex": "\\ell",
+      "meaning": "shortest physical profile length used in a resolution study",
+      "si_unit": "\\mathrm{m}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "python-texture-factory",
+      "path": "packages/fullmag-py/src/fullmag/init/textures.py",
+      "symbol": "class texture",
+      "responsibility": "public analytic preset factories and factory-level validation"
+    },
+    {
+      "id": "python-preset-ir",
+      "path": "packages/fullmag-py/src/fullmag/init/textures.py",
+      "symbol": "class PresetTexture",
+      "responsibility": "versioned preset descriptor, immutable transform chaining, and ProblemIR serialization"
+    },
+    {
+      "id": "python-mapping",
+      "path": "packages/fullmag-py/src/fullmag/init/textures.py",
+      "symbol": "class TextureMapping",
+      "responsibility": "public object/world, projection, and clamp descriptor"
+    },
+    {
+      "id": "python-transform",
+      "path": "packages/fullmag-py/src/fullmag/init/textures.py",
+      "symbol": "class TextureTransform3D",
+      "responsibility": "public translation, quaternion rotation, component scale, and pivot descriptor"
+    },
+    {
+      "id": "rust-version-dispatch",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "sample_preset_texture_versioned",
+      "responsibility": "canonical v1/v2 dispatch used by planners"
+    },
+    {
+      "id": "rust-v2-sampler",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "sample_v2",
+      "responsibility": "v2 mapping, active-point handling, local evaluation, frame embedding, and output-vector rotation"
+    },
+    {
+      "id": "rust-inverse-transform",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "prepare",
+      "responsibility": "validated inverse texture-coordinate transform"
+    },
+    {
+      "id": "rust-metric-point",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "metric_point",
+      "responsibility": "right-handed planar coordinate projection for metric presets"
+    },
+    {
+      "id": "rust-metric-vector",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "metric_vector",
+      "responsibility": "embedding of local texture vectors into the world frame"
+    },
+    {
+      "id": "rust-local-evaluate",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "local_evaluate",
+      "responsibility": "canonical v2 preset-kind dispatch and uniform evaluation"
+    },
+    {
+      "id": "rust-random",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "random_unit_vector",
+      "responsibility": "SplitMix64 coordinate-hashed random unit-vector realization"
+    },
+    {
+      "id": "rust-vortex",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "vortex",
+      "responsibility": "regularized vortex and antivortex profile"
+    },
+    {
+      "id": "rust-skyrmion",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "skyrmion",
+      "responsibility": "Bloch and Neel skyrmion vector profile"
+    },
+    {
+      "id": "rust-skyrmion-theta",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "skyrmion_theta",
+      "responsibility": "overflow-resistant radial skyrmion profile"
+    },
+    {
+      "id": "rust-bimeron",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "bimeron",
+      "responsibility": "bimeron profile, winding, helicity, and background convention"
+    },
+    {
+      "id": "rust-domain-wall",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "domain_wall",
+      "responsibility": "validated Bloch or Neel one-dimensional wall"
+    },
+    {
+      "id": "rust-two-domain",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "two_domain",
+      "responsibility": "sharp or smooth two-domain profile"
+    },
+    {
+      "id": "rust-helical",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "helical",
+      "responsibility": "physical-wavevector helical profile"
+    },
+    {
+      "id": "rust-conical",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "conical",
+      "responsibility": "physical-wavevector conical profile and deterministic transverse basis"
+    },
+    {
+      "id": "ir-version-default",
+      "path": "crates/fullmag-ir/src/model.rs",
+      "symbol": "default_preset_version",
+      "responsibility": "legacy-safe preset_version default for serialized ProblemIR"
+    },
+    {
+      "id": "fdm-sample-points",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "grid_sample_points",
+      "responsibility": "FDM cell-centre world/object coordinates and active mask"
+    },
+    {
+      "id": "fdm-plan",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "plan_fdm",
+      "responsibility": "FDM initial-state materialization and region texture overrides"
+    },
+    {
+      "id": "fem-initial-vectors",
+      "path": "crates/fullmag-plan/src/mesh.rs",
+      "symbol": "initial_vectors_for_magnet",
+      "responsibility": "FEM magnetic-node initial-state materialization"
+    },
+    {
+      "id": "python-reference-v2",
+      "path": "packages/fullmag-py/src/fullmag/init/preset_eval_v2.py",
+      "symbol": "evaluate_preset_texture_v2",
+      "responsibility": "Python reference evaluator and optional native parity route"
+    },
+    {
+      "id": "python-runtime-sampler",
+      "path": "packages/fullmag-py/src/fullmag/runtime/initial_state.py",
+      "symbol": "prepare_initial_magnetization",
+      "responsibility": "secondary Python runtime pre-sampling path and sampled-field normalization"
+    },
+    {
+      "id": "native-python-bridge",
+      "path": "crates/fullmag-py-core/src/lib.rs",
+      "symbol": "sample_preset_texture_v2_json",
+      "responsibility": "PyO3 bridge to the canonical Rust v2 evaluator"
+    },
+    {
+      "id": "rust-v2-parity-test",
+      "path": "crates/fullmag-plan/tests/magnetization_textures_v2_parity.rs",
+      "symbol": "v2_matches_shared_python_parity_fixture_for_all_presets",
+      "responsibility": "shared Rust/Python parity fixture for all v2 presets"
+    },
+    {
+      "id": "rust-v2-contract-test",
+      "path": "crates/fullmag-plan/tests/magnetization_textures_v2_contract.rs",
+      "symbol": "v2_texture_rotation_rotates_the_output_vector",
+      "responsibility": "contract test for output-vector rotation"
+    },
+    {
+      "id": "python-bimeron-test",
+      "path": "packages/fullmag-py/tests/test_bimeron_textures.py",
+      "symbol": "test_bimeron_matches_shared_rust_python_parity_fixture",
+      "responsibility": "Python bimeron serialization, validation, profile, and parity evidence"
+    },
+    {
+      "id": "rust-v2-bimeron-core-test",
+      "path": "crates/fullmag-plan/tests/magnetization_textures_v2_contract.rs",
+      "symbol": "v2_bimeron_uses_exact_meron_core_radius",
+      "responsibility": "regression test for the analytic core-radius relation and opposite normal cores"
+    },
+    {
+      "id": "rust-skyrmionium",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "skyrmionium",
+      "responsibility": "normalized two-wall skyrmionium target-state profile"
+    },
+    {
+      "id": "rust-hopfion",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "hopfion",
+      "responsibility": "three-dimensional stereographic Hopf-map profile"
+    },
+    {
+      "id": "fem-object-space-sampling",
+      "path": "crates/fullmag-plan/src/mesh.rs",
+      "symbol": "object_space_sample_points",
+      "responsibility": "world-to-object coordinate mapping for translated FEM texture samples"
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "texture.random.seed",
+        "type": "int",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "non-negative integer; bool rejected by v2",
+        "meaning": "deterministic seed for coordinate-hashed unit vectors",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.seed"
+      },
+      {
+        "python": "texture.random.preset_version",
+        "type": "int",
+        "default": "2",
+        "si_unit": "1",
+        "validation": "exactly 1 or 2; bool rejected",
+        "meaning": "selects the serialized evaluator contract",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_version"
+      },
+      {
+        "python": "texture.random_seeded.seed",
+        "type": "int",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "non-negative integer; bool rejected by v2",
+        "meaning": "deterministic seed for coordinate-hashed unit vectors",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.seed"
+      },
+      {
+        "python": "texture.random_seeded.preset_version",
+        "type": "int",
+        "default": "2",
+        "si_unit": "1",
+        "validation": "exactly 1 or 2; bool rejected",
+        "meaning": "selects the serialized evaluator contract",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_version"
+      },
+      {
+        "python": "texture.vortex.circulation",
+        "type": "int",
+        "default": "1",
+        "si_unit": "1",
+        "validation": "-1 or +1 in v2",
+        "meaning": "sign of the in-plane circulation offset",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.circulation"
+      },
+      {
+        "python": "texture.vortex.core_polarity",
+        "type": "int",
+        "default": "1",
+        "si_unit": "1",
+        "validation": "-1 or +1 in v2",
+        "meaning": "sign of the regularized normal core",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.core_polarity"
+      },
+      {
+        "python": "texture.vortex.core_radius",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{m}",
+        "validation": "None or finite and positive; v2 evaluator default is 1e-9 m",
+        "meaning": "Gaussian core length",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.core_radius"
+      },
+      {
+        "python": "texture.vortex.plane",
+        "type": "str",
+        "default": "\"xy\"",
+        "si_unit": "1",
+        "validation": "\"xy\", \"xz\", or \"yz\"",
+        "meaning": "right-handed local texture plane",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.plane"
+      },
+      {
+        "python": "texture.vortex.preset_version",
+        "type": "int",
+        "default": "2",
+        "si_unit": "1",
+        "validation": "exactly 1 or 2; bool rejected",
+        "meaning": "selects the serialized evaluator contract",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_version"
+      },
+      {
+        "python": "texture.antivortex.circulation",
+        "type": "int",
+        "default": "1",
+        "si_unit": "1",
+        "validation": "-1 or +1 in v2",
+        "meaning": "sign of the in-plane circulation offset",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.circulation"
+      },
+      {
+        "python": "texture.antivortex.core_polarity",
+        "type": "int",
+        "default": "1",
+        "si_unit": "1",
+        "validation": "-1 or +1 in v2",
+        "meaning": "sign of the regularized normal core",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.core_polarity"
+      },
+      {
+        "python": "texture.antivortex.core_radius",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{m}",
+        "validation": "None or finite and positive; v2 evaluator default is 1e-9 m",
+        "meaning": "Gaussian core length",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.core_radius"
+      },
+      {
+        "python": "texture.antivortex.plane",
+        "type": "str",
+        "default": "\"xy\"",
+        "si_unit": "1",
+        "validation": "\"xy\", \"xz\", or \"yz\"",
+        "meaning": "right-handed local texture plane",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.plane"
+      },
+      {
+        "python": "texture.antivortex.preset_version",
+        "type": "int",
+        "default": "2",
+        "si_unit": "1",
+        "validation": "exactly 1 or 2; bool rejected",
+        "meaning": "selects the serialized evaluator contract",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_version"
+      },
+      {
+        "python": "texture.bloch_skyrmion.radius",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite and positive in v2",
+        "meaning": "radial profile scale R",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.radius"
+      },
+      {
+        "python": "texture.bloch_skyrmion.wall_width",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite and positive in v2",
+        "meaning": "radial transition width Delta",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.wall_width"
+      },
+      {
+        "python": "texture.bloch_skyrmion.chirality",
+        "type": "int",
+        "default": "1",
+        "si_unit": "1",
+        "validation": "-1 or +1 in v2",
+        "meaning": "multiplies the fixed helicity \\pi/2",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.chirality"
+      },
+      {
+        "python": "texture.bloch_skyrmion.core_polarity",
+        "type": "int",
+        "default": "-1",
+        "si_unit": "1",
+        "validation": "-1 or +1 in v2",
+        "meaning": "actual normal-axis sign at r=0 in v2",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.core_polarity"
+      },
+      {
+        "python": "texture.bloch_skyrmion.plane",
+        "type": "str",
+        "default": "\"xy\"",
+        "si_unit": "1",
+        "validation": "\"xy\", \"xz\", or \"yz\"",
+        "meaning": "right-handed local texture plane",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.plane"
+      },
+      {
+        "python": "texture.bloch_skyrmion.preset_version",
+        "type": "int",
+        "default": "2",
+        "si_unit": "1",
+        "validation": "exactly 1 or 2; bool rejected",
+        "meaning": "selects the serialized evaluator contract",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_version"
+      },
+      {
+        "python": "texture.neel_skyrmion.radius",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite and positive in v2",
+        "meaning": "radial profile scale R",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.radius"
+      },
+      {
+        "python": "texture.neel_skyrmion.wall_width",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite and positive in v2",
+        "meaning": "radial transition width Delta",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.wall_width"
+      },
+      {
+        "python": "texture.neel_skyrmion.chirality",
+        "type": "int",
+        "default": "1",
+        "si_unit": "1",
+        "validation": "-1 or +1 in v2",
+        "meaning": "multiplies the fixed helicity 0",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.chirality"
+      },
+      {
+        "python": "texture.neel_skyrmion.core_polarity",
+        "type": "int",
+        "default": "-1",
+        "si_unit": "1",
+        "validation": "-1 or +1 in v2",
+        "meaning": "actual normal-axis sign at r=0 in v2",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.core_polarity"
+      },
+      {
+        "python": "texture.neel_skyrmion.plane",
+        "type": "str",
+        "default": "\"xy\"",
+        "si_unit": "1",
+        "validation": "\"xy\", \"xz\", or \"yz\"",
+        "meaning": "right-handed local texture plane",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.plane"
+      },
+      {
+        "python": "texture.neel_skyrmion.preset_version",
+        "type": "int",
+        "default": "2",
+        "si_unit": "1",
+        "validation": "exactly 1 or 2; bool rejected",
+        "meaning": "selects the serialized evaluator contract",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_version"
+      },
+      {
+        "python": "texture.bimeron.radius",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite and positive",
+        "meaning": "nominal radial transition scale R; not the exact meron-core radius",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.radius"
+      },
+      {
+        "python": "texture.bimeron.wall_width",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite and positive",
+        "meaning": "transition width Delta",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.wall_width"
+      },
+      {
+        "python": "texture.bimeron.vorticity",
+        "type": "int",
+        "default": "1",
+        "si_unit": "1",
+        "validation": "-1 or +1; bool rejected",
+        "meaning": "azimuthal winding Q_v",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.vorticity"
+      },
+      {
+        "python": "texture.bimeron.helicity_rad",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "\\mathrm{rad}",
+        "validation": "finite",
+        "meaning": "rotates the meron pair in the local plane",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.helicity_rad"
+      },
+      {
+        "python": "texture.bimeron.background_sign",
+        "type": "int",
+        "default": "1",
+        "si_unit": "1",
+        "validation": "-1 or +1; bool rejected",
+        "meaning": "global orientation sign s_bg",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.background_sign"
+      },
+      {
+        "python": "texture.bimeron.plane",
+        "type": "str",
+        "default": "\"xy\"",
+        "si_unit": "1",
+        "validation": "\"xy\", \"xz\", or \"yz\"",
+        "meaning": "right-handed local texture plane",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.plane"
+      },
+      {
+        "python": "texture.bimeron.preset_version",
+        "type": "int",
+        "default": "2",
+        "si_unit": "1",
+        "validation": "exactly 1 or 2; bool rejected",
+        "meaning": "selects the serialized evaluator contract",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_version"
+      },
+      {
+        "python": "texture.domain_wall.width",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite and positive in v2",
+        "meaning": "one-dimensional wall scale w",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.width"
+      },
+      {
+        "python": "texture.domain_wall.kind",
+        "type": "str",
+        "default": "\"neel\"",
+        "si_unit": "1",
+        "validation": "\"neel\" or \"bloch\"",
+        "meaning": "selects the derived wall-centre direction",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.kind"
+      },
+      {
+        "python": "texture.domain_wall.center_offset",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite",
+        "meaning": "wall-centre coordinate along normal_axis",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.center_offset"
+      },
+      {
+        "python": "texture.domain_wall.normal_axis",
+        "type": "str",
+        "default": "\"x\"",
+        "si_unit": "1",
+        "validation": "\"x\", \"y\", or \"z\"",
+        "meaning": "Cartesian coordinate normal to the wall",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.normal_axis"
+      },
+      {
+        "python": "texture.domain_wall.left",
+        "type": "Sequence[float]",
+        "default": "(1, 0, 0)",
+        "si_unit": "1",
+        "validation": "finite nonzero 3-vector; normalized in v2",
+        "meaning": "magnetization as xi tends to negative infinity",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.left"
+      },
+      {
+        "python": "texture.domain_wall.right",
+        "type": "Sequence[float]",
+        "default": "(-1, 0, 0)",
+        "si_unit": "1",
+        "validation": "finite nonzero 3-vector antiparallel to left in v2",
+        "meaning": "magnetization as xi tends to positive infinity",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.right"
+      },
+      {
+        "python": "texture.domain_wall.wall_center_direction",
+        "type": "Sequence[float] | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "None or finite nonzero 3-vector orthogonal to left",
+        "meaning": "magnetization direction at the wall centre",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.wall_center_direction"
+      },
+      {
+        "python": "texture.domain_wall.preset_version",
+        "type": "int",
+        "default": "2",
+        "si_unit": "1",
+        "validation": "exactly 1 or 2; bool rejected",
+        "meaning": "selects the serialized evaluator contract",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_version"
+      },
+      {
+        "python": "texture.two_domain.left",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "finite nonzero 3-vector; normalized in v2",
+        "meaning": "negative-side domain direction",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.left"
+      },
+      {
+        "python": "texture.two_domain.right",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "finite nonzero 3-vector; normalized in v2",
+        "meaning": "positive-side domain direction",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.right"
+      },
+      {
+        "python": "texture.two_domain.wall",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "finite nonzero 3-vector; normalized in v2",
+        "meaning": "fallback or exact interface direction",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.wall"
+      },
+      {
+        "python": "texture.two_domain.normal_axis",
+        "type": "str",
+        "default": "\"x\"",
+        "si_unit": "1",
+        "validation": "\"x\", \"y\", or \"z\"",
+        "meaning": "Cartesian coordinate separating the domains",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.normal_axis"
+      },
+      {
+        "python": "texture.two_domain.wall_width",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{m}",
+        "validation": "required finite positive value for smooth mode; forbidden for sharp mode",
+        "meaning": "smooth transition width",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.wall_width"
+      },
+      {
+        "python": "texture.two_domain.sharp",
+        "type": "bool | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "bool or None; None infers sharp when wall_width is None",
+        "meaning": "selects discontinuous or tanh interpolation",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.sharp"
+      },
+      {
+        "python": "texture.two_domain.preset_version",
+        "type": "int",
+        "default": "2",
+        "si_unit": "1",
+        "validation": "exactly 1 or 2; bool rejected",
+        "meaning": "selects the serialized evaluator contract",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_version"
+      },
+      {
+        "python": "texture.helical.wavevector",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "\\mathrm{m^{-1}}",
+        "validation": "finite nonzero 3-vector in v2",
+        "meaning": "physical wavevector q",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.wavevector"
+      },
+      {
+        "python": "texture.helical.e1",
+        "type": "Sequence[float]",
+        "default": "(1, 0, 0)",
+        "si_unit": "1",
+        "validation": "finite nonzero 3-vector; normalized in v2",
+        "meaning": "first spin-plane basis vector",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.e1"
+      },
+      {
+        "python": "texture.helical.e2",
+        "type": "Sequence[float]",
+        "default": "(0, 1, 0)",
+        "si_unit": "1",
+        "validation": "finite nonzero 3-vector orthogonal to e1 in v2",
+        "meaning": "second spin-plane basis vector",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.e2"
+      },
+      {
+        "python": "texture.helical.phase_rad",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "\\mathrm{rad}",
+        "validation": "finite in v2",
+        "meaning": "phase offset",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.phase_rad"
+      },
+      {
+        "python": "texture.helical.preset_version",
+        "type": "int",
+        "default": "2",
+        "si_unit": "1",
+        "validation": "exactly 1 or 2; bool rejected",
+        "meaning": "selects the serialized evaluator contract",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_version"
+      },
+      {
+        "python": "texture.conical.wavevector",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "\\mathrm{m^{-1}}",
+        "validation": "finite nonzero 3-vector in v2",
+        "meaning": "physical wavevector q",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.wavevector"
+      },
+      {
+        "python": "texture.conical.cone_axis",
+        "type": "Sequence[float]",
+        "default": "(0, 0, 1)",
+        "si_unit": "1",
+        "validation": "finite nonzero 3-vector; normalized in v2",
+        "meaning": "cone axis a",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.cone_axis"
+      },
+      {
+        "python": "texture.conical.cone_angle_rad",
+        "type": "float",
+        "default": "pi/4",
+        "si_unit": "\\mathrm{rad}",
+        "validation": "finite and in [0, pi] in v2",
+        "meaning": "cone angle beta",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.cone_angle_rad"
+      },
+      {
+        "python": "texture.conical.phase_rad",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "\\mathrm{rad}",
+        "validation": "finite in v2",
+        "meaning": "phase offset",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.phase_rad"
+      },
+      {
+        "python": "texture.conical.preset_version",
+        "type": "int",
+        "default": "2",
+        "si_unit": "1",
+        "validation": "exactly 1 or 2; bool rejected",
+        "meaning": "selects the serialized evaluator contract",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_version"
+      },
+      {
+        "python": "texture.antiskyrmion.radius",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite and positive",
+        "meaning": "nominal radial profile scale",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.radius"
+      },
+      {
+        "python": "texture.antiskyrmion.wall_width",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite and positive",
+        "meaning": "radial transition width",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.wall_width"
+      },
+      {
+        "python": "texture.antiskyrmion.chirality",
+        "type": "int",
+        "default": "1",
+        "si_unit": "1",
+        "validation": "-1 or +1",
+        "meaning": "Neel wall orientation",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.chirality"
+      },
+      {
+        "python": "texture.antiskyrmion.core_polarity",
+        "type": "int",
+        "default": "-1",
+        "si_unit": "1",
+        "validation": "-1 or +1",
+        "meaning": "normal core sign",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.core_polarity"
+      },
+      {
+        "python": "texture.antiskyrmion.plane",
+        "type": "str",
+        "default": "\"xy\"",
+        "si_unit": "1",
+        "validation": "\"xy\", \"xz\", or \"yz\"",
+        "meaning": "right-handed texture plane",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.plane"
+      },
+      {
+        "python": "texture.antiskyrmion.preset_version",
+        "type": "int",
+        "default": "2",
+        "si_unit": "1",
+        "validation": "exactly 2",
+        "meaning": "selects the v2 antiskyrmion contract",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_version"
+      },
+      {
+        "python": "texture.skyrmionium.inner_radius",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite and positive",
+        "meaning": "inner radial wall position",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.inner_radius"
+      },
+      {
+        "python": "texture.skyrmionium.outer_radius",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite, positive, and greater than inner_radius",
+        "meaning": "outer radial wall position",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.outer_radius"
+      },
+      {
+        "python": "texture.skyrmionium.wall_width",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite and positive",
+        "meaning": "common radial wall width",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.wall_width"
+      },
+      {
+        "python": "texture.skyrmionium.kind",
+        "type": "str",
+        "default": "\"neel\"",
+        "si_unit": "1",
+        "validation": "\"neel\" or \"bloch\"",
+        "meaning": "wall helicity family",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.kind"
+      },
+      {
+        "python": "texture.skyrmionium.chirality",
+        "type": "int",
+        "default": "1",
+        "si_unit": "1",
+        "validation": "-1 or +1",
+        "meaning": "wall orientation",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.chirality"
+      },
+      {
+        "python": "texture.skyrmionium.background_sign",
+        "type": "int",
+        "default": "1",
+        "si_unit": "1",
+        "validation": "-1 or +1",
+        "meaning": "common centre and far-field normal sign",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.background_sign"
+      },
+      {
+        "python": "texture.skyrmionium.plane",
+        "type": "str",
+        "default": "\"xy\"",
+        "si_unit": "1",
+        "validation": "\"xy\", \"xz\", or \"yz\"",
+        "meaning": "right-handed texture plane",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.plane"
+      },
+      {
+        "python": "texture.skyrmionium.preset_version",
+        "type": "int",
+        "default": "2",
+        "si_unit": "1",
+        "validation": "exactly 2",
+        "meaning": "selects the v2 skyrmionium contract",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_version"
+      },
+      {
+        "python": "texture.hopfion.radius",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite and positive",
+        "meaning": "Hopf-map spatial scale",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.radius"
+      },
+      {
+        "python": "texture.hopfion.hopf_charge",
+        "type": "int",
+        "default": "1",
+        "si_unit": "1",
+        "validation": "-1 or +1",
+        "meaning": "Hopf-map orientation sign",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.hopf_charge"
+      },
+      {
+        "python": "texture.hopfion.background_sign",
+        "type": "int",
+        "default": "1",
+        "si_unit": "1",
+        "validation": "-1 or +1",
+        "meaning": "uniform far-field axis sign",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.background_sign"
+      },
+      {
+        "python": "texture.hopfion.axial_scale",
+        "type": "float",
+        "default": "1.0",
+        "si_unit": "1",
+        "validation": "finite and positive",
+        "meaning": "dimensionless z-axis scale",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.axial_scale"
+      },
+      {
+        "python": "texture.hopfion.phase_rad",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "\\mathrm{rad}",
+        "validation": "finite",
+        "meaning": "global target-space phase",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_params.phase_rad"
+      },
+      {
+        "python": "texture.hopfion.preset_version",
+        "type": "int",
+        "default": "2",
+        "si_unit": "1",
+        "validation": "exactly 2",
+        "meaning": "selects the v2 hopfion contract",
+        "backend_support": "FDM/FEM; CPU/GPU via planner materialization",
+        "problem_ir": "initial_magnetization.preset_version"
+      }
+    ]
+  }
+}

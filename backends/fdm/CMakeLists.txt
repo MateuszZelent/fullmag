@@ -10,6 +10,7 @@ set(FDM_PUBLIC_HEADERS
 set(FDM_SOURCES
     api/c_api.cpp
     api/error.cpp
+    api/plan_ingestion_v2.cpp
     gpu/cuda/transport/layout_abi_v1.cpp
     gpu/cuda/transport/checkpoint_abi_v1.cpp
     gpu/cuda/transport/charge/checkpoint_codec.cpp
@@ -223,8 +224,55 @@ target_compile_definitions(frozen_spins_abi_contract PRIVATE
 )
 add_test(NAME fdm_frozen_spins_abi_contract COMMAND frozen_spins_abi_contract)
 
+if(FULLMAG_ENABLE_CUDA)
+    add_executable(fdm_frozen_spins_cuda_runtime_contract tests/frozen_spins_cuda_runtime.cpp)
+    target_include_directories(fdm_frozen_spins_cuda_runtime_contract PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+    )
+    target_link_libraries(fdm_frozen_spins_cuda_runtime_contract PRIVATE fullmag_fdm)
+    add_test(NAME fdm_frozen_spins_cuda_runtime_contract COMMAND fdm_frozen_spins_cuda_runtime_contract)
+endif()
+
 add_executable(region_owned_abi_contract tests/region_owned_abi_contract.cpp)
 add_test(NAME fdm_region_owned_abi_contract COMMAND region_owned_abi_contract)
+
+add_executable(fdm_plan_desc_sentinel_contract tests/plan_desc_sentinel_contract.cpp)
+target_include_directories(fdm_plan_desc_sentinel_contract PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+if(FULLMAG_ENABLE_CUDA)
+    target_link_libraries(fdm_plan_desc_sentinel_contract PRIVATE fullmag_fdm)
+    target_compile_definitions(fdm_plan_desc_sentinel_contract PRIVATE FULLMAG_FDM_CONTRACT_HAS_CUDA=1)
+else()
+    target_sources(fdm_plan_desc_sentinel_contract PRIVATE api/plan_ingestion_v2.cpp)
+    target_compile_definitions(fdm_plan_desc_sentinel_contract PRIVATE FULLMAG_FDM_CONTRACT_HAS_CUDA=0)
+endif()
+add_test(NAME fdm_plan_desc_sentinel_contract COMMAND fdm_plan_desc_sentinel_contract)
+
+add_executable(fdm_device_residency_receipt_contract
+    tests/device_residency_receipt_contract.cpp
+    tests/execution_receipt_v1_legacy_client.c)
+target_include_directories(fdm_device_residency_receipt_contract PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include)
+if(FULLMAG_ENABLE_CUDA)
+    target_link_libraries(fdm_device_residency_receipt_contract PRIVATE fullmag_fdm)
+endif()
+target_compile_definitions(fdm_device_residency_receipt_contract PRIVATE
+    FULLMAG_FDM_CONTRACT_HAS_CUDA=$<BOOL:${FULLMAG_ENABLE_CUDA}>)
+add_test(NAME fdm_device_residency_receipt_contract
+    COMMAND fdm_device_residency_receipt_contract)
+
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME fdm_gpu_transfer_manifest_contract
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/generate_fdm_gpu_transfer_manifest.py
+            --check
+            --self-test
+            --root ${CMAKE_SOURCE_DIR}/..)
+endif()
 
 add_executable(periodic_exchange_fp32_contract tests/periodic_exchange_fp32_contract.cpp)
 add_test(NAME fdm_periodic_exchange_fp32_contract COMMAND periodic_exchange_fp32_contract)
@@ -265,6 +313,14 @@ else()
     target_compile_definitions(fdm_llg_time_policy_contract PRIVATE FULLMAG_FDM_CONTRACT_HAS_CUDA=0)
 endif()
 add_test(NAME fdm_llg_time_policy_contract COMMAND fdm_llg_time_policy_contract)
+
+add_executable(fdm_fsal_retry_transaction_contract
+    tests/fsal_retry_transaction_contract.cpp)
+target_include_directories(fdm_fsal_retry_transaction_contract PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME fdm_fsal_retry_transaction_contract
+    COMMAND fdm_fsal_retry_transaction_contract)
 
 add_executable(prescribed_sot_contract tests/prescribed_sot_contract.cpp)
 target_include_directories(prescribed_sot_contract PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

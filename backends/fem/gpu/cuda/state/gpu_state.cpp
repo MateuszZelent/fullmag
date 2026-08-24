@@ -532,6 +532,107 @@ bool gpu_state_upload_stt_element_mask(
 #endif
 }
 
+bool gpu_state_upload_frozen_spins(
+    FemGpuState &state,
+    const uint8_t *frozen_mask,
+    uint64_t frozen_mask_len,
+    const double *frozen_reference_xyz,
+    uint64_t frozen_reference_len,
+    TransferAudit &audit,
+    std::string &error)
+{
+    if ((frozen_mask == nullptr) != (frozen_mask_len == 0)) {
+        error = "FEM GPU Frozen Spins mask requires a pointer and non-zero length together";
+        return false;
+    }
+    if ((frozen_reference_xyz == nullptr) != (frozen_reference_len == 0)) {
+        error = "FEM GPU Frozen Spins reference requires a pointer and non-zero length together";
+        return false;
+    }
+    if (frozen_mask != nullptr && frozen_reference_len != frozen_mask_len * 3u) {
+        error = "FEM GPU Frozen Spins reference length must be 3x the mask length";
+        return false;
+    }
+    if (!state.lifecycle.allocated) {
+        return true;
+    }
+
+#if FULLMAG_HAS_CUDA_RUNTIME
+    auto &mesh_regions = state.mesh_regions;
+    if (mesh_regions.frozen_mask != nullptr) {
+        gpu_device_free_u8(mesh_regions.frozen_mask);
+        gpu_device_free_double(mesh_regions.frozen_reference_x);
+        gpu_device_free_double(mesh_regions.frozen_reference_y);
+        gpu_device_free_double(mesh_regions.frozen_reference_z);
+        mesh_regions.frozen_mask = nullptr;
+        mesh_regions.frozen_reference_x = nullptr;
+        mesh_regions.frozen_reference_y = nullptr;
+        mesh_regions.frozen_reference_z = nullptr;
+        mesh_regions.frozen_node_count = 0;
+    }
+    if (frozen_mask == nullptr) {
+        return true;
+    }
+
+    uint8_t *d_mask = nullptr;
+    if (!gpu_device_allocate_u8(d_mask, frozen_mask_len, state.lifecycle.device_bytes, error)) {
+        return false;
+    }
+    if (cudaMemcpy(d_mask, frozen_mask, static_cast<size_t>(frozen_mask_len), cudaMemcpyHostToDevice) != cudaSuccess) {
+        gpu_device_free_u8(d_mask);
+        error = "cudaMemcpy FemGpuState frozen mask host->device failed";
+        return false;
+    }
+    record_host_to_device(audit, frozen_mask_len);
+
+    std::vector<double> rx(frozen_mask_len);
+    std::vector<double> ry(frozen_mask_len);
+    std::vector<double> rz(frozen_mask_len);
+    for (uint64_t i = 0; i < frozen_mask_len; ++i) {
+        rx[i] = frozen_reference_xyz[3u * i + 0u];
+        ry[i] = frozen_reference_xyz[3u * i + 1u];
+        rz[i] = frozen_reference_xyz[3u * i + 2u];
+    }
+
+    double *d_rx = nullptr;
+    double *d_ry = nullptr;
+    double *d_rz = nullptr;
+    if (!gpu_device_allocate_double(d_rx, frozen_mask_len, state.lifecycle.device_bytes, error) ||
+        !gpu_device_allocate_double(d_ry, frozen_mask_len, state.lifecycle.device_bytes, error) ||
+        !gpu_device_allocate_double(d_rz, frozen_mask_len, state.lifecycle.device_bytes, error)) {
+        gpu_device_free_u8(d_mask);
+        gpu_device_free_double(d_rx);
+        gpu_device_free_double(d_ry);
+        gpu_device_free_double(d_rz);
+        return false;
+    }
+
+    const size_t bytes = static_cast<size_t>(frozen_mask_len * sizeof(double));
+    if (cudaMemcpy(d_rx, rx.data(), bytes, cudaMemcpyHostToDevice) != cudaSuccess ||
+        cudaMemcpy(d_ry, ry.data(), bytes, cudaMemcpyHostToDevice) != cudaSuccess ||
+        cudaMemcpy(d_rz, rz.data(), bytes, cudaMemcpyHostToDevice) != cudaSuccess) {
+        gpu_device_free_u8(d_mask);
+        gpu_device_free_double(d_rx);
+        gpu_device_free_double(d_ry);
+        gpu_device_free_double(d_rz);
+        error = "cudaMemcpy FemGpuState frozen reference host->device failed";
+        return false;
+    }
+    record_host_to_device(audit, 3u * frozen_mask_len * sizeof(double));
+
+    mesh_regions.frozen_mask = d_mask;
+    mesh_regions.frozen_reference_x = d_rx;
+    mesh_regions.frozen_reference_y = d_ry;
+    mesh_regions.frozen_reference_z = d_rz;
+    mesh_regions.frozen_node_count = frozen_mask_len;
+    return true;
+#else
+    (void)audit;
+    error = "FEM GPU Frozen Spins upload requires CUDA runtime support";
+    return false;
+#endif
+}
+
 bool gpu_state_upload_exchange_legacy_sparse(
     FemGpuState &state,
     uint64_t rows,

@@ -362,8 +362,8 @@ executed-device parity.
 - Multilayer FDM Bulk DMI is rejected.
 - Lower-symmetry/tensorial DMI families are outside this contract.
 - The material-field element reduction is an arithmetic nodal mean.
-- Historical Material.Dbulk warning text uses $\mathrm{J\,m^{-3}}$, while the
-  public coefficient contract uses $\mathrm{J\,m^{-2}}$.
+- Material.Dbulk warning text and the public coefficient contract use
+  $\mathrm{J\,m^{-2}}$.
 
 (bulk-dmi-scientific-bibliography)=
 ## 12. Scientific bibliography

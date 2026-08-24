@@ -207,6 +207,15 @@ bool gpu_state_upload_mesh_geometry(
     TransferAudit &audit,
     std::string &error);
 
+bool gpu_state_upload_frozen_spins(
+    FemGpuState &state,
+    const uint8_t *frozen_mask,
+    uint64_t frozen_mask_len,
+    const double *frozen_reference_xyz,
+    uint64_t frozen_reference_len,
+    TransferAudit &audit,
+    std::string &error);
+
 bool gpu_state_upload_exchange_legacy_sparse(
     FemGpuState &state,
     uint64_t rows,

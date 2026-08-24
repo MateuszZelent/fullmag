@@ -181,7 +181,11 @@ def _insert_page_last_modified(
 
 def _validate_rendered_metadata(app: Sphinx, exception: BaseException | None) -> None:
     """Fail the HTML build unless every source document renders one valid marker."""
-    if exception is not None or app.builder.format != "html":
+    if (
+        exception is not None
+        or app.builder.format != "html"
+        or getattr(app.builder, "name", "") == "changes"
+    ):
         return
 
     failures: list[str] = []

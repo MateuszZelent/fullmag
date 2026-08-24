@@ -2016,7 +2016,9 @@ describe("ribbon structure", () => {
           definition: expect.objectContaining({ selector: expectedSelector }),
         }),
       ]);
-      expect(invalidations).toEqual([[expect.stringContaining("frozen-spins"), 5]]);
+      expect(invalidations).toEqual(
+        expect.arrayContaining([[expect.stringContaining("frozen-spins"), 5]]),
+      );
       expect(selections[0]).toMatchObject({
         kind: "object.frozen-spins",
         objectId: "film",

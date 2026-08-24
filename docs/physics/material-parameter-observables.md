@@ -40,7 +40,7 @@ They are displayed as scalar fields over the magnetic domain.
 | `mat_aex` | \(A\) | J/m | spatial scalar |
 | `mat_alpha` | \(\alpha\) | 1 | spatial scalar |
 | `mat_dind` | \(D_\mathrm{ind}\) | J/m^2 | spatial scalar |
-| `mat_dbulk` | \(D_\mathrm{bulk}\) | J/m^3 | spatial scalar |
+| `mat_dbulk` | \(D_\mathrm{bulk}\) | J/m^2 | spatial scalar |
 
 ### 2.3 Assumptions and approximations
 

@@ -388,6 +388,16 @@ pub struct IntegratorBuffers {
     pub h_scratch: Vec<Vector3>,
     /// RHS output buffer for zero-alloc report computation.
     pub rhs: Vec<Vector3>,
+    /// Test-only controller input and observation seam.
+    #[cfg(test)]
+    adaptive_test_seam: Option<AdaptiveTestSeam>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone)]
+struct AdaptiveTestSeam {
+    error_script: Vec<f64>,
+    attempt_dts: Vec<f64>,
 }
 
 impl IntegratorBuffers {
@@ -403,6 +413,46 @@ impl IntegratorBuffers {
             h_eff: zero(),
             h_scratch: zero(),
             rhs: zero(),
+            #[cfg(test)]
+            adaptive_test_seam: None,
+        }
+    }
+
+    /// Configure a test-only sequence of adaptive error estimates. Values are
+    /// consumed once per adaptive attempt at the estimator/controller boundary.
+    #[cfg(test)]
+    pub(crate) fn set_adaptive_error_script_for_tests(
+        &mut self,
+        errors: impl IntoIterator<Item = f64>,
+    ) {
+        let mut error_script: Vec<_> = errors.into_iter().collect();
+        error_script.reverse();
+        self.adaptive_test_seam = Some(AdaptiveTestSeam {
+            error_script,
+            attempt_dts: Vec::new(),
+        });
+    }
+
+    /// Return every `dt` submitted to the adaptive controller by a configured
+    /// test seam.
+    #[cfg(test)]
+    pub(crate) fn adaptive_attempt_dts_for_tests(&self) -> &[f64] {
+        self.adaptive_test_seam
+            .as_ref()
+            .map_or(&[], |seam| seam.attempt_dts.as_slice())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_adaptive_error_for_tests(&mut self) -> Option<f64> {
+        self.adaptive_test_seam
+            .as_mut()
+            .and_then(|seam| seam.error_script.pop())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_adaptive_attempt_for_tests(&mut self, dt: f64) {
+        if let Some(seam) = &mut self.adaptive_test_seam {
+            seam.attempt_dts.push(dt);
         }
     }
 }
