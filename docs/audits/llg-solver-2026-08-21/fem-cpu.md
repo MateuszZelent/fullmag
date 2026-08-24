@@ -1,8 +1,8 @@
 # Audyt solvera LLG — FEM CPU
 
-**Repozytorium:** `MateuszZelent/fullmag`  
-**Gałąź bazowa:** `master`  
-**Data:** 2026-08-21  
+**Repozytorium:** `MateuszZelent/fullmag`
+**Gałąź bazowa:** `master`
+**Data:** 2026-08-21
 **Metoda:** audyt statyczny kontraktów FEM, assembly/apply, pól efektywnych, integratora i kosztu solverów pomocniczych. Wydajność wymaga profilu z MFEM/Hypre na reprezentatywnej siatce.
 
 ## Werdykt

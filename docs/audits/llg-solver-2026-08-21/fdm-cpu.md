@@ -1,8 +1,8 @@
 # Audyt solvera LLG — FDM CPU
 
-**Repozytorium:** `MateuszZelent/fullmag`  
-**Gałąź bazowa:** `master`  
-**Data:** 2026-08-21  
+**Repozytorium:** `MateuszZelent/fullmag`
+**Gałąź bazowa:** `master`
+**Data:** 2026-08-21
 **Metoda:** audyt statyczny architektury, fizyki, numeryki, testów i hot path; zalecenia wydajnościowe wymagają potwierdzenia profilem na reprezentatywnym CPU.
 
 ## Werdykt

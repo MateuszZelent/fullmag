@@ -1,8 +1,8 @@
 # Audyt solvera LLG — FEM GPU
 
-**Repozytorium:** `MateuszZelent/fullmag`  
-**Gałąź bazowa:** `master`  
-**Data:** 2026-08-21  
+**Repozytorium:** `MateuszZelent/fullmag`
+**Gałąź bazowa:** `master`
+**Data:** 2026-08-21
 **Metoda:** statyczny audyt kompletności device lane, host/device ownership, operatorów FEM, redukcji, integratora, fizyki i testów executed-device.
 
 ## Werdykt

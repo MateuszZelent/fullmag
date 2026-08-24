@@ -1,8 +1,8 @@
 # Audyt solvera LLG — FDM GPU
 
-**Repozytorium:** `MateuszZelent/fullmag`  
-**Gałąź bazowa:** `master`  
-**Data:** 2026-08-21  
+**Repozytorium:** `MateuszZelent/fullmag`
+**Gałąź bazowa:** `master`
+**Data:** 2026-08-21
 **Metoda:** statyczny audyt ścieżki GPU, kontraktów planner/runtime, pamięci, synchronizacji, fizyki i numeryki. Rzeczywistą wydajność musi potwierdzić timeline na docelowym GPU.
 
 ## Werdykt
