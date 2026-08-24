@@ -2123,6 +2123,7 @@ pub(crate) fn execute_fdm<'a>(
 ) -> Result<ExecutedRun, RunError> {
     execute_fdm_in_mode(
         engine,
+        fullmag_ir::BackendTarget::Fdm,
         if engine == FdmEngine::CudaFdm { "gpu" } else { "cpu" },
         fullmag_ir::ExecutionMode::Strict,
         plan,
@@ -2135,6 +2136,7 @@ pub(crate) fn execute_fdm<'a>(
 
 pub(crate) fn execute_fdm_in_mode<'a>(
     engine: FdmEngine,
+    requested_backend: fullmag_ir::BackendTarget,
     requested_device: &str,
     execution_mode: fullmag_ir::ExecutionMode,
     plan: &FdmPlanIR,
@@ -2207,6 +2209,7 @@ pub(crate) fn execute_fdm_in_mode<'a>(
             artifact_writer,
         ),
         FdmEngine::CudaFdm => execute_cuda_fdm(
+            requested_backend,
             requested_device,
             execution_mode,
             plan,
@@ -5088,6 +5091,7 @@ fn eigen_path_created_at_label() -> String {
 
 #[cfg(feature = "cuda")]
 fn execute_cuda_fdm(
+    requested_backend: fullmag_ir::BackendTarget,
     requested_device: &str,
     execution_mode: fullmag_ir::ExecutionMode,
     plan: &FdmPlanIR,
@@ -5152,6 +5156,12 @@ fn execute_cuda_fdm(
             requested_device,
             execution_mode,
         )?;
+    backend.set_checkpoint_execution_identity(
+        requested_backend,
+        requested_device,
+        execution_mode,
+        plan.integrator.unwrap_or(fullmag_ir::IntegratorChoice::Heun),
+    )?;
     let cell_count = (plan.grid.cells[0] as usize)
         * (plan.grid.cells[1] as usize)
         * (plan.grid.cells[2] as usize);

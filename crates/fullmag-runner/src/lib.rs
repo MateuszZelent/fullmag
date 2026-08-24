@@ -2268,6 +2268,7 @@ pub fn run_planned_problem(
             let resolution = dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?;
             let mut executed = dispatch::execute_fdm_in_mode(
                 resolution.engine,
+                plan.common.requested_backend,
                 &solver_runtime::selection::requested_registry_device_for_fdm(problem),
                 plan.common.execution_mode,
                 fdm,
@@ -2600,6 +2601,7 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
             let resolution = dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?;
             let mut executed = dispatch::execute_fdm_in_mode(
                 resolution.engine,
+                plan.common.requested_backend,
                 &solver_runtime::selection::requested_registry_device_for_fdm(problem),
                 plan.common.execution_mode,
                 fdm,
@@ -3022,6 +3024,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             };
             let mut executed = dispatch::execute_fdm_in_mode(
                 resolution.engine,
+                plan.common.requested_backend,
                 &solver_runtime::selection::requested_registry_device_for_fdm(problem),
                 plan.common.execution_mode,
                 fdm,

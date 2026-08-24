@@ -308,13 +308,8 @@ fn push_operator(
 }
 
 #[cfg(feature = "cuda")]
-pub(super) fn query_execution_receipt(
-    backend: &NativeFdmBackend,
-    requested_device: &str,
-    requested_mode: fullmag_ir::ExecutionMode,
-    device_name: &str,
-) -> Result<FdmGpuExecutionReceipt, RunError> {
-    let mut native = ffi::fullmag_fdm_execution_receipt_v2 {
+fn execution_receipt_v2_request() -> ffi::fullmag_fdm_execution_receipt_v2 {
+    ffi::fullmag_fdm_execution_receipt_v2 {
         abi_version: ffi::FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2,
         struct_size: std::mem::size_of::<ffi::fullmag_fdm_execution_receipt_v2>() as u32,
         execution_class: ffi::FULLMAG_FDM_EXECUTION_UNKNOWN,
@@ -351,7 +346,14 @@ pub(super) fn query_execution_receipt(
         observation_full_vector_d2h_bytes: 0,
         accounting_valid: 0,
         reserved1: 0,
-    };
+    }
+}
+
+#[cfg(feature = "cuda")]
+pub(super) fn query_execution_device_ordinal(
+    backend: &NativeFdmBackend,
+) -> Result<i32, RunError> {
+    let mut native = execution_receipt_v2_request();
     let status = unsafe {
         ffi::fullmag_fdm_backend_execution_receipt_v2(backend.handle as *mut _, &mut native)
     };
@@ -359,6 +361,29 @@ pub(super) fn query_execution_receipt(
         return Err(backend.last_error_or("FDM CUDA execution receipt query failed"));
     }
 
+    if native.device_ordinal < 0 {
+        return Err(preflight_error(format!(
+            "device_ordinal={} expected non-negative CUDA ordinal",
+            native.device_ordinal
+        )));
+    }
+    Ok(native.device_ordinal)
+}
+
+#[cfg(feature = "cuda")]
+pub(super) fn query_execution_receipt(
+    backend: &NativeFdmBackend,
+    requested_device: &str,
+    requested_mode: fullmag_ir::ExecutionMode,
+    device_name: &str,
+) -> Result<FdmGpuExecutionReceipt, RunError> {
+    let mut native = execution_receipt_v2_request();
+    let status = unsafe {
+        ffi::fullmag_fdm_backend_execution_receipt_v2(backend.handle as *mut _, &mut native)
+    };
+    if status != ffi::FULLMAG_FDM_OK {
+        return Err(backend.last_error_or("FDM CUDA execution receipt query failed"));
+    }
     if native.device_ordinal < 0 {
         return Err(preflight_error(format!(
             "device_ordinal={} expected non-negative CUDA ordinal",
