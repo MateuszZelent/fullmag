@@ -352,6 +352,8 @@ def _hopfion_compact_support(
 ) -> Vec3:
     major_radius = _positive(params, "major_radius")
     minor_radius = _positive(params, "minor_radius")
+    if minor_radius > major_radius:
+        raise _invalid("minor_radius", "minor_radius must be <= major_radius")
     psi = math.atan2(point[1], point[0])
     toroidal_radial = point[0] * math.cos(psi) + point[1] * math.sin(psi) - major_radius
     rho = math.hypot(point[2], toroidal_radial)
@@ -572,10 +574,10 @@ def evaluate_preset_texture_v2(
         )
 
     frame = _resolve_frame(params, projection)
-    if preset_kind == "hopfion" and frame is not None:
+    if preset_kind in {"hopfion", "hopfion_compact_support"} and frame is not None:
         raise _invalid(
             "mapping.projection",
-            "hopfion is three-dimensional and requires object_local projection",
+            "the selected hopfion preset is three-dimensional and requires object_local projection",
         )
     quaternion = _normalized_quaternion(rotation_quat) if rotation_quat is not None else None
     _local(preset_kind, params, (0.0, 0.0, 0.0))

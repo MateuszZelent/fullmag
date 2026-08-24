@@ -12,8 +12,9 @@ owner: fullmag-public-docs
 (problem-statement)=
 ## Physical problem
 
-Fullmag exposes every analytic initial-magnetization configuration listed by the Mumax3
-initial-magnetization API. The names below refer to the public Python factories and the
+Fullmag exposes the analytic initial-magnetization configurations listed in the pinned Mumax3
+submodule revision `f656494b29516bead825b444b1f0b38c6e6c7dbf`, subject to the explicit exceptions
+below. The names refer to the public Python factories and the
 version-2 canonical Rust sampler used by both FEM and FDM planning. The canonical
 physics contract is `docs/physics/0531-versioned-magnetic-preset-textures.md`.
 
@@ -32,6 +33,7 @@ physics contract is `docs/physics/0531-versioned-magnetic-preset-textures.md`.
 | `Conical` | `fm.texture.conical(...)` | implemented with SI wavevector |
 | `HopfionCompactSupport` | `fm.texture.hopfion_compact_support(...)` | exact compact-support profile |
 | `CurrentMag` | stage continuation or checkpoint restore | runtime state transfer, not an analytic preset |
+| `Radial` | none | not present in the pinned Mumax3 `engine/config.go`; unsupported in Fullmag |
 
 Fullmag additionally provides `antiskyrmion`, `skyrmionium`, `bimeron`, `domain_wall`,
 and a stereographic `hopfion` initializer. These are Fullmag extensions rather than named
@@ -43,7 +45,7 @@ Mumax3 `Config` constructors.
 ## Mumax3-compatible vortex wall
 
 ```python
-film.m = fm.texture.vortex_wall(
+wall = fm.texture.vortex_wall(
     wall_half_width=25e-9,
     left_mx=1,
     right_mx=-1,
@@ -57,6 +59,10 @@ For local coordinate $u$, Fullmag returns the normalized left domain for
 $u<-w$, the normalized right domain for $u>w$, and its version-2 vortex profile in
 the central interval. Mumax3 derives $w$ from half the simulation width; Fullmag makes
 that physical scale explicit so the same texture is reproducible for FEM and FDM meshes.
+Upstream `VortexWall` returns raw vectors `(mleft, 0, 0)` and `(mright, 0, 0)`, after which
+`magnetization.SetArray` normalizes the field. Therefore every finite nonzero authored magnitude
+reduces to its sign; preserving `0.5` as a final x component would not match Mumax3. Fullmag rejects
+zero explicitly because its canonical reduced-magnetization field must be unit length.
 
 ```{math}
 :label: mumax3-vortex-wall-profile
@@ -72,7 +78,7 @@ that physical scale explicit so the same texture is reproducible for FEM and FDM
 ## Compact-support hopfion
 
 ```python
-film.m = fm.texture.hopfion_compact_support(
+compact_hopfion = fm.texture.hopfion_compact_support(
     major_radius=20e-9,
     minor_radius=8e-9,
 )
@@ -176,7 +182,7 @@ study.stages.add_save_state(
 | texture.vortex_wall.plane | str | xy | $1$ | xy, xz or yz | right-handed local frame | FDM/FEM via planner materialization | preset_params.plane |
 | texture.vortex_wall.preset_version | int | 2 | $1$ | exactly 2 | selects the version-2 profile | FDM/FEM via planner materialization | preset_version |
 | texture.hopfion_compact_support.major_radius | float | required | $\mathrm{m}$ | finite and > 0 | torus major radius | FDM/FEM via planner materialization | preset_params.major_radius |
-| texture.hopfion_compact_support.minor_radius | float | required | $\mathrm{m}$ | finite and > 0 | cross-section and compact-support radius | FDM/FEM via planner materialization | preset_params.minor_radius |
+| texture.hopfion_compact_support.minor_radius | float | required | $\mathrm{m}$ | finite, > 0 and <= major_radius | cross-section and compact-support radius | FDM/FEM via planner materialization | preset_params.minor_radius |
 | texture.hopfion_compact_support.preset_version | int | 2 | $1$ | exactly 2 | selects the version-2 profile | FDM/FEM via planner materialization | preset_version |
 
 (problem-ir)=
@@ -228,8 +234,8 @@ mesh and session state.
   `apps/control-room/src/shared/domain/magnetization-texture/texturePresets.ts` and
   `ObjectMagneticTexturePanelModel.mumax3.test.ts`.
 
-The compatibility equations are checked against the upstream Mumax3 implementation in
-`engine/config.go`. Fullmag replaces Mumax3's mesh-derived vortex core and world-derived
+The compatibility equations are mapped directly to the immutable upstream Mumax3 submodule file
+`external_solvers/3/engine/config.go` at `f656494b29516bead825b444b1f0b38c6e6c7dbf` and compared by the independent Rust/Python fixtures named above. Fullmag replaces Mumax3's mesh-derived vortex core and world-derived
 wall half-width with explicit SI parameters; this is a deliberate reproducibility
 adaptation, not bitwise sampling parity.
 
@@ -256,7 +262,7 @@ relaxation or dynamics qualification for a scientific study.
 ## Scientific bibliography
 
 1. Mumax3, `engine/config.go`, `VortexWall` and `HopfionCompactSupport`,
-   <https://github.com/mumax/3/blob/master/engine/config.go>.
+   <https://github.com/mumax/3/blob/f656494b29516bead825b444b1f0b38c6e6c7dbf/engine/config.go>.
 2. A. Vansteenkiste et al., *The design and verification of MuMax3*, AIP Advances 4,
    107133 (2014), <https://doi.org/10.1063/1.4899186>.
 
@@ -279,3 +285,5 @@ specific resolved mesh and simulation state.
 | python-compact-hopfion | packages/fullmag-py/src/fullmag/init/preset_eval_v2.py | _hopfion_compact_support | test_mumax_compact_hopfion_factory_and_support_boundary |
 | python-vortex-wall-factory | packages/fullmag-py/src/fullmag/init/textures.py | vortex_wall | test_mumax_vortex_wall_factory_and_profile |
 | python-compact-hopfion-factory | packages/fullmag-py/src/fullmag/init/textures.py | hopfion_compact_support | test_mumax_compact_hopfion_factory_and_support_boundary |
+| mumax3-vortex-wall | external_solvers/3/engine/config.go | func VortexWall | pinned submodule f656494b29516bead825b444b1f0b38c6e6c7dbf + independent parity fixtures |
+| mumax3-compact-hopfion | external_solvers/3/engine/config.go | func HopfionCompactSupport | pinned submodule f656494b29516bead825b444b1f0b38c6e6c7dbf + independent parity fixtures |

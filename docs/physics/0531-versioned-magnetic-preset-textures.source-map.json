@@ -297,6 +297,16 @@
         "problem_ir": "preset_params.plane"
       },
       {
+        "python": "texture.vortex_wall.preset_version",
+        "type": "int",
+        "default": "2",
+        "si_unit": "1",
+        "validation": "exactly 2",
+        "meaning": "wybór wersji profilu vortex wall",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "preset_version"
+      },
+      {
         "python": "texture.hopfion_compact_support.major_radius",
         "type": "float",
         "default": "required",
@@ -311,10 +321,20 @@
         "type": "float",
         "default": "required",
         "si_unit": "\\mathrm{m}",
-        "validation": "finite and > 0",
+        "validation": "finite, > 0 and <= major_radius",
         "meaning": "promień przekroju i zwartego nośnika",
         "backend_support": "FEM/FDM CPU/GPU",
         "problem_ir": "preset_params.minor_radius"
+      },
+      {
+        "python": "texture.hopfion_compact_support.preset_version",
+        "type": "int",
+        "default": "2",
+        "si_unit": "1",
+        "validation": "exactly 2",
+        "meaning": "wybór wersji zwartego profilu hopfionu",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "preset_version"
       }
     ]
   }

@@ -282,8 +282,10 @@ texture_transform bez zmiany nazw fizycznych.
 | texture.vortex_wall.core_polarity | int | 1 | $1$ | -1 or 1 | polarity centralnego rdzenia | FEM/FDM CPU/GPU | preset_params.core_polarity |
 | texture.vortex_wall.core_radius | float | 1e-9 | $\mathrm{m}$ | finite and > 0 | promień centralnego rdzenia | FEM/FDM CPU/GPU | preset_params.core_radius |
 | texture.vortex_wall.plane | str | xy | $1$ | xy, xz or yz | prawoskrętny frame ściany | FEM/FDM CPU/GPU | preset_params.plane |
+| texture.vortex_wall.preset_version | int | 2 | $1$ | exactly 2 | wybór wersji profilu vortex wall | FEM/FDM CPU/GPU | preset_version |
 | texture.hopfion_compact_support.major_radius | float | required | $\mathrm{m}$ | finite and > 0 | promień główny torusa | FEM/FDM CPU/GPU | preset_params.major_radius |
-| texture.hopfion_compact_support.minor_radius | float | required | $\mathrm{m}$ | finite and > 0 | promień przekroju i zwartego nośnika | FEM/FDM CPU/GPU | preset_params.minor_radius |
+| texture.hopfion_compact_support.minor_radius | float | required | $\mathrm{m}$ | finite, > 0 and <= major_radius | promień przekroju i zwartego nośnika | FEM/FDM CPU/GPU | preset_params.minor_radius |
+| texture.hopfion_compact_support.preset_version | int | 2 | $1$ | exactly 2 | wybór wersji zwartego profilu hopfionu | FEM/FDM CPU/GPU | preset_version |
 
 (problem-ir)=
 ## 6. ProblemIR i lowering

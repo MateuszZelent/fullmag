@@ -35,12 +35,12 @@
     {
       "id": "mumax3-vortex-wall-profile",
       "symbols": ["m", "u", "v", "w", "m_x_L", "m_x_R", "e_u"],
-      "sources": ["rust-vortex-wall", "python-vortex-wall"]
+      "sources": ["mumax3-vortex-wall", "rust-vortex-wall", "python-vortex-wall"]
     },
     {
       "id": "mumax3-compact-hopfion-profile",
       "symbols": ["m", "R", "r", "rho", "psi", "Phi", "Theta"],
-      "sources": ["rust-compact-hopfion", "python-compact-hopfion"]
+      "sources": ["mumax3-compact-hopfion", "rust-compact-hopfion", "python-compact-hopfion"]
     }
   ],
   "symbols": [
@@ -59,6 +59,18 @@
     {"id": "Theta", "latex": "\\Theta", "meaning": "hopfion polar profile", "si_unit": "\\mathrm{rad}"}
   ],
   "sources": [
+    {
+      "id": "mumax3-vortex-wall",
+      "path": "external_solvers/3/engine/config.go",
+      "symbol": "func VortexWall",
+      "responsibility": "immutable upstream VortexWall definition at submodule revision f656494b29516bead825b444b1f0b38c6e6c7dbf"
+    },
+    {
+      "id": "mumax3-compact-hopfion",
+      "path": "external_solvers/3/engine/config.go",
+      "symbol": "func HopfionCompactSupport",
+      "responsibility": "immutable upstream compact-hopfion definition at submodule revision f656494b29516bead825b444b1f0b38c6e6c7dbf"
+    },
     {
       "id": "rust-vortex-wall",
       "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
@@ -107,7 +119,7 @@
       {"python": "texture.vortex_wall.plane", "type": "str", "default": "xy", "si_unit": "1", "validation": "xy, xz or yz", "meaning": "right-handed local frame", "backend_support": "FDM/FEM via planner materialization", "problem_ir": "preset_params.plane"},
       {"python": "texture.vortex_wall.preset_version", "type": "int", "default": "2", "si_unit": "1", "validation": "exactly 2", "meaning": "selects the version-2 profile", "backend_support": "FDM/FEM via planner materialization", "problem_ir": "preset_version"},
       {"python": "texture.hopfion_compact_support.major_radius", "type": "float", "default": "required", "si_unit": "\\mathrm{m}", "validation": "finite and > 0", "meaning": "torus major radius", "backend_support": "FDM/FEM via planner materialization", "problem_ir": "preset_params.major_radius"},
-      {"python": "texture.hopfion_compact_support.minor_radius", "type": "float", "default": "required", "si_unit": "\\mathrm{m}", "validation": "finite and > 0", "meaning": "cross-section and compact-support radius", "backend_support": "FDM/FEM via planner materialization", "problem_ir": "preset_params.minor_radius"},
+      {"python": "texture.hopfion_compact_support.minor_radius", "type": "float", "default": "required", "si_unit": "\\mathrm{m}", "validation": "finite, > 0 and <= major_radius", "meaning": "cross-section and compact-support radius", "backend_support": "FDM/FEM via planner materialization", "problem_ir": "preset_params.minor_radius"},
       {"python": "texture.hopfion_compact_support.preset_version", "type": "int", "default": "2", "si_unit": "1", "validation": "exactly 2", "meaning": "selects the version-2 profile", "backend_support": "FDM/FEM via planner materialization", "problem_ir": "preset_version"}
     ]
   }

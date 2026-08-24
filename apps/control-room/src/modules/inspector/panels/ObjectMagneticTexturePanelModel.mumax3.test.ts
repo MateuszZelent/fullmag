@@ -65,4 +65,40 @@ describe("Mumax3 magnetic texture UI coverage", () => {
     expect(asset.preset_version).toBe(2);
     expect(asset.preset_params).toBeTruthy();
   });
+
+  it("resets both hopfion presets to object-local projection", () => {
+    const baseDraft = {
+      ...objectMagneticTextureDraftFromModel(MODEL),
+      mappingProjection: "planar_xy",
+    };
+    for (const presetKind of ["hopfion", "hopfion_compact_support"] as const) {
+      expect(objectMagneticTexturePresetChangePatch(MODEL, baseDraft, presetKind)).toMatchObject({
+        mappingProjection: "object_local",
+      });
+    }
+  });
+
+  it("rejects invalid vortex domains and compact-hopfion radii", () => {
+    const baseDraft = objectMagneticTextureDraftFromModel(MODEL);
+    const vortexDraft = {
+      ...baseDraft,
+      ...objectMagneticTexturePresetChangePatch(MODEL, baseDraft, "vortex_wall"),
+      left_mx: "0",
+      presetKind: "vortex_wall" as const,
+    };
+    expect(() => buildObjectMagneticTextureAssetDraft(MODEL, vortexDraft)).toThrow(
+      "Left mx must be nonzero.",
+    );
+
+    const hopfionDraft = {
+      ...baseDraft,
+      ...objectMagneticTexturePresetChangePatch(MODEL, baseDraft, "hopfion_compact_support"),
+      major_radius: "1",
+      minor_radius: "2",
+      presetKind: "hopfion_compact_support" as const,
+    };
+    expect(() => buildObjectMagneticTextureAssetDraft(MODEL, hopfionDraft)).toThrow(
+      "Minor radius must be less than or equal to major radius.",
+    );
+  });
 });

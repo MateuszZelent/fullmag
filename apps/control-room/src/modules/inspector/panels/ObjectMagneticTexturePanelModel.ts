@@ -295,6 +295,14 @@ function requiredPositiveNumber(value: string | undefined, label: string): numbe
   return parsed;
 }
 
+function requiredNonzeroNumber(value: string | undefined, label: string): number {
+  const parsed = requiredNumber(value, label);
+  if (parsed === 0) {
+    throw new Error(`${label} must be nonzero.`);
+  }
+  return parsed;
+}
+
 function requiredSign(value: string | undefined, label: string): number {
   const parsed = requiredInteger(value, label);
   if (parsed !== -1 && parsed !== 1) {
@@ -747,6 +755,7 @@ function defaultPresetDraftPatch(
       hopf_charge: "1",
       phase_rad: "0",
       radius: numberText(20e-9),
+      mappingProjection: "object_local",
     };
   }
 
@@ -985,9 +994,14 @@ function presetParamsFromDraft(
   }
 
   if (presetKind === "hopfion_compact_support") {
+    const majorRadius = requiredPositiveNumber(draft.major_radius, "Major radius");
+    const minorRadius = requiredPositiveNumber(draft.minor_radius, "Minor radius");
+    if (minorRadius > majorRadius) {
+      throw new Error("Minor radius must be less than or equal to major radius.");
+    }
     return {
-      major_radius: requiredPositiveNumber(draft.major_radius, "Major radius"),
-      minor_radius: requiredPositiveNumber(draft.minor_radius, "Minor radius"),
+      major_radius: majorRadius,
+      minor_radius: minorRadius,
     };
   }
 
@@ -995,8 +1009,8 @@ function presetParamsFromDraft(
     return {
       plane: requiredPlane(draft.plane, "Plane"),
       wall_half_width: requiredPositiveNumber(draft.wall_half_width, "Wall half-width"),
-      left_mx: requiredNumber(draft.left_mx, "Left mx"),
-      right_mx: requiredNumber(draft.right_mx, "Right mx"),
+      left_mx: requiredNonzeroNumber(draft.left_mx, "Left mx"),
+      right_mx: requiredNonzeroNumber(draft.right_mx, "Right mx"),
       circulation: requiredSign(draft.circulation, "Circulation"),
       core_polarity: requiredSign(draft.core_polarity, "Core polarity"),
       core_radius: requiredPositiveNumber(draft.core_radius, "Core radius"),

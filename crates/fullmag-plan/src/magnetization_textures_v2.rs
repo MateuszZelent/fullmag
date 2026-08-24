@@ -561,6 +561,12 @@ fn hopfion_compact_support(
 ) -> Result<[f64; 3], TextureError> {
     let major_radius = positive(params, "major_radius", None)?;
     let minor_radius = positive(params, "minor_radius", None)?;
+    if minor_radius > major_radius {
+        return Err(invalid(
+            "minor_radius",
+            "minor_radius must be <= major_radius",
+        ));
+    }
 
     let psi = point[1].atan2(point[0]);
     let toroidal_radial = point[0] * psi.cos() + point[1] * psi.sin() - major_radius;

@@ -42,6 +42,19 @@ def test_mumax_compact_hopfion_factory_and_support_boundary() -> None:
     assert all(math.isclose(sum(component * component for component in value), 1.0) for value in values)
 
 
+def test_compact_hopfion_rejects_invalid_radius_relation_and_planar_projection() -> None:
+    with pytest.raises(ValueError, match="minor_radius must be <= major_radius"):
+        fm.texture.hopfion_compact_support(major_radius=1.0, minor_radius=2.0)
+
+    with pytest.raises(ValueError, match="requires object_local projection"):
+        evaluate_preset_texture_v2(
+            "hopfion_compact_support",
+            {"major_radius": 2.0, "minor_radius": 0.5},
+            [(2.0, 0.0, 0.0)],
+            projection="planar_xy",
+        )
+
+
 @pytest.mark.parametrize(
     ("factory", "arguments"),
     [

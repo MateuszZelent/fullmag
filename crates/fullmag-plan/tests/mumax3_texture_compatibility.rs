@@ -86,3 +86,20 @@ fn mumax_compact_hopfion_is_exactly_uniform_outside_support() {
         assert!((norm - 1.0).abs() < 1.0e-12);
     }
 }
+
+#[test]
+fn compact_hopfion_rejects_minor_radius_larger_than_major_radius() {
+    let error = sample_preset_texture_versioned(
+        "hopfion_compact_support",
+        2,
+        &params([("major_radius", json!(1.0)), ("minor_radius", json!(2.0))]),
+        &TextureMappingIR::default(),
+        &TextureTransform3DIR::default(),
+        &[point(0.0, 0.0, 0.0)],
+    )
+    .unwrap_err();
+
+    assert!(error
+        .to_string()
+        .contains("minor_radius must be <= major_radius"));
+}

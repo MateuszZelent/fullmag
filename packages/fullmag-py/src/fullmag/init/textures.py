@@ -630,6 +630,8 @@ class texture:
         _require_v2_preset(preset_version, "hopfion_compact_support")
         major_radius = _require_finite_positive(major_radius, "major_radius")
         minor_radius = _require_finite_positive(minor_radius, "minor_radius")
+        if minor_radius > major_radius:
+            raise ValueError("minor_radius must be <= major_radius")
         return PresetTexture(
             preset_version=2,
             preset_kind="hopfion_compact_support",
