@@ -11,6 +11,8 @@
 #include <cstdint>
 #include <mutex>
 
+#include "fullmag_fem.h"
+
 namespace fullmag::fem {
 
 enum class FemGpuExecutionClass : uint32_t {
@@ -64,6 +66,9 @@ struct FemGpuExecutionSnapshot {
     uint64_t accepted_step_count = 0;
     uint64_t rejected_attempt_count = 0;
     uint64_t failed_attempt_count = 0;
+    uint64_t hot_loop_compute_h2d_bytes = 0;
+    uint64_t hot_loop_compute_d2h_bytes = 0;
+    uint64_t hot_loop_compute_host_sync_count = 0;
 };
 
 struct FemGpuExecutionReceiptRuntimeState {
@@ -85,11 +90,21 @@ struct FemGpuExecutionReceiptRuntimeState {
     uint64_t accepted_step_count = 0;
     uint64_t rejected_attempt_count = 0;
     uint64_t failed_attempt_count = 0;
+    uint64_t hot_loop_compute_h2d_bytes = 0;
+    uint64_t hot_loop_compute_d2h_bytes = 0;
+    uint64_t hot_loop_compute_host_sync_count = 0;
     bool attempt_active = false;
     uint64_t attempt_device_operator_mask = 0;
     uint64_t attempt_host_operator_mask = 0;
     uint64_t attempt_unknown_operator_mask = 0;
     uint64_t attempt_fallback_count = 0;
+    uint64_t attempt_transfer_start_h2d_bytes = 0;
+    uint64_t attempt_transfer_start_d2h_bytes = 0;
+    uint64_t attempt_transfer_start_host_sync_count = 0;
+    uint64_t attempt_transfer_h2d_bytes = 0;
+    uint64_t attempt_transfer_d2h_bytes = 0;
+    uint64_t attempt_transfer_host_sync_count = 0;
+    bool attempt_transfer_valid = true;
 };
 
 void gpu_execution_receipt_resolve_plan(
@@ -104,6 +119,14 @@ void gpu_execution_receipt_resolve_plan(
     uint32_t integrator);
 
 void gpu_execution_receipt_begin_attempt(FemGpuExecutionReceiptRuntimeState &state);
+void gpu_execution_receipt_begin_attempt(
+    FemGpuExecutionReceiptRuntimeState &state,
+    const fullmag_fem_transfer_audit &transfer);
+bool gpu_execution_receipt_update_attempt_transfer(
+    FemGpuExecutionReceiptRuntimeState &state,
+    const fullmag_fem_transfer_audit &transfer);
+bool gpu_execution_receipt_attempt_active(
+    const FemGpuExecutionReceiptRuntimeState &state);
 void gpu_execution_receipt_note_device(
     FemGpuExecutionReceiptRuntimeState &state,
     uint64_t operator_mask);

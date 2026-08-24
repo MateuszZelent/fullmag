@@ -10,6 +10,7 @@
 #include "gpu/cuda/integrators/rk/rk_exchange_dispatch.hpp"
 
 #include "gpu/cuda/exchange/exchange_kernels.hpp"
+#include "gpu/cuda/runtime/execution_receipt.hpp"
 
 #include <cuda_runtime.h>
 
@@ -41,7 +42,8 @@ bool gpu_rk_compute_legacy_sparse_exchange(
     FemGpuState &gpu,
     const FemGpuComponentField &m,
     cudaStream_t stream,
-    std::string &reason)
+    std::string &reason,
+    FemGpuExecutionReceiptRuntimeState *execution_receipt)
 {
     if (!gpu.legacy_exchange.uploaded ||
         gpu.legacy_exchange.csr_row_offsets == nullptr ||
@@ -141,7 +143,15 @@ bool gpu_rk_compute_legacy_sparse_exchange(
             rows,
             stream);
     }
-    return cuda_launch_ok("launch GPU legacy sparse exchange", reason);
+    if (!cuda_launch_ok("launch GPU legacy sparse exchange", reason)) {
+        return false;
+    }
+    if (execution_receipt != nullptr &&
+        gpu_execution_receipt_attempt_active(*execution_receipt)) {
+        gpu_execution_receipt_note_device(
+            *execution_receipt, FEM_GPU_OPERATOR_EXCHANGE);
+    }
+    return true;
 }
 
 } // namespace fullmag::fem

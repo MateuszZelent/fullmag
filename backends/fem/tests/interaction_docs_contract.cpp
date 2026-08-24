@@ -142,6 +142,81 @@ void required_release_gate_docs_exist() {
     }
 }
 
+void fem_gpu_execution_receipt_qualification_is_documented_and_source_bound() {
+    const std::filesystem::path root = repo_root();
+    const std::string architecture =
+        read_text_file(root / "docs" / "architecture" / "backend-golden-masterplan.md");
+    const std::string physics = read_text_file(
+        root / "docs" / "physics" /
+        "0900-native-fem-operator-contracts-and-validation.md");
+    const std::string capabilities =
+        read_text_file(root / "docs" / "specs" / "capability-matrix-v0.md");
+    const std::string capability_json =
+        read_text_file(root / "docs" / "specs" / "capability-matrix-v0.json");
+    const std::string comparator = read_text_file(
+        root / "scripts" / "compare_fem_llg_time_domain_qualification.py");
+    const std::string comparator_tests = read_text_file(
+        root / "scripts" / "test_compare_fem_llg_time_domain_qualification.py");
+    const std::string recipes = read_text_file(root / "justfile");
+
+    const char *operator_ids[] = {
+        "exchange", "demag_rhs", "demag_solve", "demag_recovery",
+        "local_fields", "direct_torques", "llg_rhs", "rk_stepper",
+        "reductions", "preconditioner",
+    };
+    for (const char *operator_id : operator_ids) {
+        check(
+            physics.find(operator_id) != std::string::npos,
+            "native FEM operator contract must name every receipt operator ID");
+    }
+    check(
+        physics.find("FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1") !=
+                std::string::npos &&
+            physics.find("fullmag.fem_gpu_execution_receipt.native_projection.v1") !=
+                std::string::npos &&
+            physics.find("FemGpuExecutionReceipt.v1") != std::string::npos &&
+            physics.find("executed_device_operator_mask") != std::string::npos &&
+            physics.find("accounting_valid") != std::string::npos &&
+            physics.find("hybrid_cpu_poisson") != std::string::npos,
+        "native FEM operator contract must define the receipt schema, ABI, executed boundary, accounting, and hybrid class");
+    check(
+        architecture.find("plan nie jest dowodem wykonania") != std::string::npos &&
+            architecture.find("atomic") != std::string::npos,
+        "backend masterplan must separate plan from atomically published execution evidence");
+    check(
+        capabilities.find("implemented/unvalidated") != std::string::npos &&
+            capabilities.find("fullmag.fem_gpu_execution_receipt.native_projection.v1") !=
+                std::string::npos &&
+            capability_json.find("source_bound_execution_receipt") !=
+                std::string::npos &&
+            capability_json.find("require_accounting_valid") != std::string::npos,
+        "capability matrices must keep the exact FEM GPU receipt binding implemented and unvalidated");
+    check(
+        comparator.find("GPU qualification execution_receipt is required") !=
+                std::string::npos &&
+            comparator.find("CPU/GPU source snapshot hashes must match") !=
+                std::string::npos &&
+            comparator.find("hybrid execution cannot satisfy strict qualification") !=
+                std::string::npos &&
+            comparator.find("GPU execution receipt operator_ids are incomplete") !=
+                std::string::npos,
+        "LLG comparator must reject missing/stale/hybrid/incomplete receipt evidence");
+    check(
+        comparator_tests.find("test_cli_accepts_complete_versioned_receipt") !=
+                std::string::npos &&
+            comparator_tests.find("test_cli_rejects_missing_hybrid_incomplete_or_malformed_receipt") !=
+                std::string::npos &&
+            comparator_tests.find("test_function_rejects_invalid_versioned_projection_semantics") !=
+                std::string::npos,
+        "LLG comparator must have durable positive and fail-closed behavioral tests");
+    check(
+        recipes.find("FULLMAG_FEM_QUALIFICATION_SOURCE_SNAPSHOT_SHA256") !=
+                std::string::npos &&
+            recipes.find("test_compare_fem_llg_time_domain_qualification.py") !=
+                std::string::npos,
+        "managed LLG qualification recipes must persist source identity and run comparator tests");
+}
+
 void validation_matrix_names_closed_fixture_owners() {
     const std::filesystem::path root = repo_root();
     const std::string matrix =
@@ -482,6 +557,7 @@ int main() {
     required_interaction_docs_exist_and_name_their_implementation();
     required_interaction_docs_have_physics_contract_sections();
     required_release_gate_docs_exist();
+    fem_gpu_execution_receipt_qualification_is_documented_and_source_bound();
     validation_matrix_names_closed_fixture_owners();
     validation_matrix_names_leaf_header_gate_rows();
     validation_matrix_names_mfem_stack_fixture_statuses();

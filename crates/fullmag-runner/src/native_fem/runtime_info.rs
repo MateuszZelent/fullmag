@@ -1,7 +1,7 @@
 use fullmag_fem_sys as ffi;
 use fullmag_ir::{StageCompletionIR, StageMetricKind, StageStopReason};
 
-use crate::types::RunError;
+use crate::types::{FemGpuExecutionClass, FemGpuExecutionReceipt, RunError};
 
 use std::ffi::CStr;
 
@@ -274,6 +274,183 @@ pub(crate) struct NativeFemGpuRkPlanInfo {
     pub(crate) reason: String,
 }
 
+const FEM_GPU_KNOWN_OPERATOR_MASK: u64 = ffi::FULLMAG_FEM_GPU_OPERATOR_EXCHANGE
+    | ffi::FULLMAG_FEM_GPU_OPERATOR_DEMAG_RHS
+    | ffi::FULLMAG_FEM_GPU_OPERATOR_DEMAG_SOLVE
+    | ffi::FULLMAG_FEM_GPU_OPERATOR_DEMAG_RECOVERY
+    | ffi::FULLMAG_FEM_GPU_OPERATOR_LOCAL_FIELDS
+    | ffi::FULLMAG_FEM_GPU_OPERATOR_DIRECT_TORQUES
+    | ffi::FULLMAG_FEM_GPU_OPERATOR_LLG_RHS
+    | ffi::FULLMAG_FEM_GPU_OPERATOR_RK_STEPPER
+    | ffi::FULLMAG_FEM_GPU_OPERATOR_REDUCTIONS
+    | ffi::FULLMAG_FEM_GPU_OPERATOR_PRECONDITIONER;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NativeFemGpuExecutionReceipt {
+    execution_class: FemGpuExecutionClass,
+    device_ordinal: i32,
+    precision: &'static str,
+    integrator: &'static str,
+    required_operator_mask: u64,
+    resolved_device_operator_mask: u64,
+    resolved_host_operator_mask: u64,
+    resolved_unknown_operator_mask: u64,
+    executed_device_operator_mask: u64,
+    executed_host_operator_mask: u64,
+    executed_unknown_operator_mask: u64,
+    fallback_count: u64,
+    accepted_step_count: u64,
+    rejected_attempt_count: u64,
+    failed_attempt_count: u64,
+    hot_loop_compute_h2d_bytes: u64,
+    hot_loop_compute_d2h_bytes: u64,
+    hot_loop_compute_host_sync_count: u64,
+}
+
+impl NativeFemGpuExecutionReceipt {
+    pub(crate) fn from_ffi(
+        receipt: ffi::fullmag_fem_gpu_execution_receipt_v1,
+    ) -> Result<Self, RunError> {
+        if receipt.abi_version != ffi::FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1
+            || receipt.struct_size
+                != std::mem::size_of::<ffi::fullmag_fem_gpu_execution_receipt_v1>() as u32
+        {
+            return Err(receipt_error("abi_mismatch"));
+        }
+        let execution_class = match receipt.execution_class {
+            value if value
+                == ffi::fullmag_fem_gpu_execution_class_v1::FULLMAG_FEM_GPU_EXECUTION_DEVICE_RESIDENT
+                    as u32 => FemGpuExecutionClass::DeviceResident,
+            value if value
+                == ffi::fullmag_fem_gpu_execution_class_v1::FULLMAG_FEM_GPU_EXECUTION_GPU_OPERATOR_HOST_SOLVER
+                    as u32 => FemGpuExecutionClass::GpuOperatorHostSolver,
+            value if value
+                == ffi::fullmag_fem_gpu_execution_class_v1::FULLMAG_FEM_GPU_EXECUTION_HYBRID_CPU_POISSON
+                    as u32 => FemGpuExecutionClass::HybridCpuPoisson,
+            value if value
+                == ffi::fullmag_fem_gpu_execution_class_v1::FULLMAG_FEM_GPU_EXECUTION_CPU as u32 => {
+                    FemGpuExecutionClass::Cpu
+                }
+            _ => return Err(receipt_error("unknown_execution_class")),
+        };
+        let precision = match receipt.precision {
+            value if value == ffi::fullmag_fem_precision::FULLMAG_FEM_PRECISION_SINGLE as u32 => {
+                "single"
+            }
+            value if value == ffi::fullmag_fem_precision::FULLMAG_FEM_PRECISION_DOUBLE as u32 => {
+                "double"
+            }
+            _ => return Err(receipt_error("unknown_precision")),
+        };
+        let integrator = match receipt.integrator {
+            value if value == ffi::fullmag_fem_integrator::FULLMAG_FEM_INTEGRATOR_HEUN as u32 => {
+                "heun"
+            }
+            value if value == ffi::fullmag_fem_integrator::FULLMAG_FEM_INTEGRATOR_RK4 as u32 => {
+                "rk4"
+            }
+            value
+                if value == ffi::fullmag_fem_integrator::FULLMAG_FEM_INTEGRATOR_RK23_BS as u32 =>
+            {
+                "rk23"
+            }
+            value
+                if value
+                    == ffi::fullmag_fem_integrator::FULLMAG_FEM_INTEGRATOR_RK45_DP54 as u32 =>
+            {
+                "rk45"
+            }
+            _ => return Err(receipt_error("unknown_integrator")),
+        };
+        let all_masks = receipt.required_operator_mask
+            | receipt.resolved_device_operator_mask
+            | receipt.resolved_host_operator_mask
+            | receipt.resolved_unknown_operator_mask
+            | receipt.executed_device_operator_mask
+            | receipt.executed_host_operator_mask
+            | receipt.executed_unknown_operator_mask;
+        if all_masks & !FEM_GPU_KNOWN_OPERATOR_MASK != 0 {
+            return Err(receipt_error("unknown_operator_bits"));
+        }
+        Ok(Self {
+            execution_class,
+            device_ordinal: receipt.device_ordinal,
+            precision,
+            integrator,
+            required_operator_mask: receipt.required_operator_mask,
+            resolved_device_operator_mask: receipt.resolved_device_operator_mask,
+            resolved_host_operator_mask: receipt.resolved_host_operator_mask,
+            resolved_unknown_operator_mask: receipt.resolved_unknown_operator_mask,
+            executed_device_operator_mask: receipt.executed_device_operator_mask,
+            executed_host_operator_mask: receipt.executed_host_operator_mask,
+            executed_unknown_operator_mask: receipt.executed_unknown_operator_mask,
+            fallback_count: receipt.fallback_count,
+            accepted_step_count: receipt.accepted_step_count,
+            rejected_attempt_count: receipt.rejected_attempt_count,
+            failed_attempt_count: receipt.failed_attempt_count,
+            hot_loop_compute_h2d_bytes: receipt.hot_loop_compute_h2d_bytes,
+            hot_loop_compute_d2h_bytes: receipt.hot_loop_compute_d2h_bytes,
+            hot_loop_compute_host_sync_count: receipt.hot_loop_compute_host_sync_count,
+        })
+    }
+
+    pub(crate) fn into_provenance(self, requested: &str) -> FemGpuExecutionReceipt {
+        let resolved = execution_class_name(self.execution_class);
+        let executed = if self.accepted_step_count == 0 {
+            "none"
+        } else {
+            match self.execution_class {
+                FemGpuExecutionClass::DeviceResident => "cuda_fem",
+                FemGpuExecutionClass::GpuOperatorHostSolver => "cuda_fem_host_solver",
+                FemGpuExecutionClass::HybridCpuPoisson => "cuda_fem_hybrid_cpu_poisson",
+                FemGpuExecutionClass::Cpu => "cpu_fem",
+            }
+        };
+        FemGpuExecutionReceipt {
+            requested: requested.to_string(),
+            resolved: resolved.to_string(),
+            executed: executed.to_string(),
+            execution_class: self.execution_class,
+            device_ordinal: self.device_ordinal,
+            precision: self.precision.to_string(),
+            integrator: self.integrator.to_string(),
+            required_operator_mask: self.required_operator_mask,
+            resolved_device_operator_mask: self.resolved_device_operator_mask,
+            resolved_host_operator_mask: self.resolved_host_operator_mask,
+            resolved_unknown_operator_mask: self.resolved_unknown_operator_mask,
+            executed_device_operator_mask: self.executed_device_operator_mask,
+            executed_host_operator_mask: self.executed_host_operator_mask,
+            executed_unknown_operator_mask: self.executed_unknown_operator_mask,
+            fallback_count: self.fallback_count,
+            accepted_step_count: self.accepted_step_count,
+            rejected_attempt_count: self.rejected_attempt_count,
+            failed_attempt_count: self.failed_attempt_count,
+            hot_loop_compute_h2d_bytes: self.hot_loop_compute_h2d_bytes,
+            hot_loop_compute_d2h_bytes: self.hot_loop_compute_d2h_bytes,
+            hot_loop_compute_host_sync_count: self.hot_loop_compute_host_sync_count,
+            // ABI v1 intentionally omits this field. Native query success is
+            // fail-closed on both plan_resolved and accounting_valid, so Rust
+            // may publish true only after that successful query.
+            accounting_valid: true,
+        }
+    }
+}
+
+fn execution_class_name(class: FemGpuExecutionClass) -> &'static str {
+    match class {
+        FemGpuExecutionClass::DeviceResident => "device_resident",
+        FemGpuExecutionClass::GpuOperatorHostSolver => "gpu_operator_host_solver",
+        FemGpuExecutionClass::HybridCpuPoisson => "hybrid_cpu_poisson",
+        FemGpuExecutionClass::Cpu => "cpu",
+    }
+}
+
+fn receipt_error(token: &str) -> RunError {
+    RunError {
+        message: format!("native FEM GPU execution receipt rejected: {token}"),
+    }
+}
+
 impl NativeFemGpuRkPlanInfo {
     pub(crate) fn from_ffi(info: ffi::fullmag_fem_gpu_rk_plan_info) -> Self {
         let exchange_operator_mode =
@@ -441,6 +618,86 @@ pub(crate) fn stage_completion_is_representability_stationary(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn execution_receipt_fixture() -> ffi::fullmag_fem_gpu_execution_receipt_v1 {
+        ffi::fullmag_fem_gpu_execution_receipt_v1 {
+            abi_version: ffi::FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_gpu_execution_receipt_v1>() as u32,
+            execution_class:
+                ffi::fullmag_fem_gpu_execution_class_v1::FULLMAG_FEM_GPU_EXECUTION_DEVICE_RESIDENT
+                    as u32,
+            precision: ffi::fullmag_fem_precision::FULLMAG_FEM_PRECISION_DOUBLE as u32,
+            integrator: ffi::fullmag_fem_integrator::FULLMAG_FEM_INTEGRATOR_HEUN as u32,
+            device_ordinal: 0,
+            required_operator_mask: FEM_GPU_KNOWN_OPERATOR_MASK,
+            resolved_device_operator_mask: FEM_GPU_KNOWN_OPERATOR_MASK,
+            resolved_host_operator_mask: 0,
+            resolved_unknown_operator_mask: 0,
+            executed_device_operator_mask: FEM_GPU_KNOWN_OPERATOR_MASK,
+            executed_host_operator_mask: 0,
+            executed_unknown_operator_mask: 0,
+            fallback_count: 0,
+            accepted_step_count: 1,
+            rejected_attempt_count: 0,
+            failed_attempt_count: 0,
+            hot_loop_compute_h2d_bytes: 0,
+            hot_loop_compute_d2h_bytes: 0,
+            hot_loop_compute_host_sync_count: 0,
+        }
+    }
+
+    #[test]
+    fn gpu_execution_receipt_maps_only_native_executed_evidence() {
+        let parsed = NativeFemGpuExecutionReceipt::from_ffi(execution_receipt_fixture()).unwrap();
+        let receipt = parsed.into_provenance("strict_device");
+        assert_eq!(receipt.resolved, "device_resident");
+        assert_eq!(receipt.executed, "cuda_fem");
+        assert_eq!(
+            receipt.executed_device_operator_mask,
+            FEM_GPU_KNOWN_OPERATOR_MASK
+        );
+        assert!(
+            receipt.accounting_valid,
+            "the safe wrapper exposes accounting validity only after native query success"
+        );
+    }
+
+    #[test]
+    fn gpu_execution_receipt_preserves_explicit_hybrid_host_evidence() {
+        let mut raw = execution_receipt_fixture();
+        raw.execution_class =
+            ffi::fullmag_fem_gpu_execution_class_v1::FULLMAG_FEM_GPU_EXECUTION_HYBRID_CPU_POISSON
+                as u32;
+        raw.resolved_device_operator_mask = FEM_GPU_KNOWN_OPERATOR_MASK & !0x204;
+        raw.resolved_host_operator_mask = 0x204;
+        raw.executed_device_operator_mask = FEM_GPU_KNOWN_OPERATOR_MASK & !0x204;
+        raw.executed_host_operator_mask = 0x204;
+        raw.hot_loop_compute_h2d_bytes = 24;
+        raw.hot_loop_compute_d2h_bytes = 24;
+        raw.hot_loop_compute_host_sync_count = 2;
+        let receipt = NativeFemGpuExecutionReceipt::from_ffi(raw)
+            .unwrap()
+            .into_provenance("hybrid");
+        assert_eq!(receipt.resolved, "hybrid_cpu_poisson");
+        assert_eq!(receipt.executed, "cuda_fem_hybrid_cpu_poisson");
+        assert_eq!(receipt.executed_host_operator_mask, 0x204);
+        assert_eq!(receipt.hot_loop_compute_d2h_bytes, 24);
+    }
+
+    #[test]
+    fn gpu_execution_receipt_rejects_unknown_abi_values_and_operator_bits() {
+        for mutation in 0..4 {
+            let mut raw = execution_receipt_fixture();
+            match mutation {
+                0 => raw.execution_class = u32::MAX,
+                1 => raw.precision = u32::MAX,
+                2 => raw.integrator = u32::MAX,
+                3 => raw.executed_unknown_operator_mask = 1 << 63,
+                _ => unreachable!(),
+            }
+            assert!(NativeFemGpuExecutionReceipt::from_ffi(raw).is_err());
+        }
+    }
 
     fn metric_name(name: &str) -> [i8; 64] {
         let mut buffer = [0; 64];

@@ -9,6 +9,13 @@ void clear_attempt(FemGpuExecutionReceiptRuntimeState &state) {
     state.attempt_host_operator_mask = 0;
     state.attempt_unknown_operator_mask = 0;
     state.attempt_fallback_count = 0;
+    state.attempt_transfer_start_h2d_bytes = 0;
+    state.attempt_transfer_start_d2h_bytes = 0;
+    state.attempt_transfer_start_host_sync_count = 0;
+    state.attempt_transfer_h2d_bytes = 0;
+    state.attempt_transfer_d2h_bytes = 0;
+    state.attempt_transfer_host_sync_count = 0;
+    state.attempt_transfer_valid = true;
 }
 
 void note_operator(
@@ -73,7 +80,12 @@ bool attempt_is_valid(const FemGpuExecutionReceiptRuntimeState &state) {
         device == state.resolved_device_operator_mask &&
         host == state.resolved_host_operator_mask &&
         state.resolved_unknown_operator_mask == 0 &&
-        state.attempt_fallback_count == 0;
+        state.attempt_fallback_count == 0 &&
+        state.attempt_transfer_valid &&
+        (state.execution_class != FemGpuExecutionClass::DeviceResident ||
+         (state.attempt_transfer_h2d_bytes == 0 &&
+          state.attempt_transfer_d2h_bytes == 0 &&
+          state.attempt_transfer_host_sync_count == 0));
 }
 
 } // namespace
@@ -109,6 +121,9 @@ void gpu_execution_receipt_resolve_plan(
     state.accepted_step_count = 0;
     state.rejected_attempt_count = 0;
     state.failed_attempt_count = 0;
+    state.hot_loop_compute_h2d_bytes = 0;
+    state.hot_loop_compute_d2h_bytes = 0;
+    state.hot_loop_compute_host_sync_count = 0;
     clear_attempt(state);
     state.plan_resolved = plan_masks_are_valid(
             required_operator_mask,
@@ -123,6 +138,12 @@ void gpu_execution_receipt_resolve_plan(
 }
 
 void gpu_execution_receipt_begin_attempt(FemGpuExecutionReceiptRuntimeState &state) {
+    gpu_execution_receipt_begin_attempt(state, fullmag_fem_transfer_audit{});
+}
+
+void gpu_execution_receipt_begin_attempt(
+    FemGpuExecutionReceiptRuntimeState &state,
+    const fullmag_fem_transfer_audit &transfer) {
     std::lock_guard<std::mutex> lock(state.mutex);
     if (state.attempt_active || !state.accounting_valid || !state.plan_resolved) {
         state.accounting_valid = false;
@@ -134,6 +155,50 @@ void gpu_execution_receipt_begin_attempt(FemGpuExecutionReceiptRuntimeState &sta
     state.attempt_host_operator_mask = 0;
     state.attempt_unknown_operator_mask = 0;
     state.attempt_fallback_count = 0;
+    state.attempt_transfer_start_h2d_bytes = transfer.hot_loop_compute_h2d_bytes;
+    state.attempt_transfer_start_d2h_bytes = transfer.hot_loop_compute_d2h_bytes;
+    state.attempt_transfer_start_host_sync_count = transfer.hot_loop_compute_host_sync_count;
+    state.attempt_transfer_h2d_bytes = 0;
+    state.attempt_transfer_d2h_bytes = 0;
+    state.attempt_transfer_host_sync_count = 0;
+    state.attempt_transfer_valid = true;
+}
+
+bool gpu_execution_receipt_update_attempt_transfer(
+    FemGpuExecutionReceiptRuntimeState &state,
+    const fullmag_fem_transfer_audit &transfer) {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    if (!state.attempt_active ||
+        transfer.hot_loop_compute_h2d_bytes < state.attempt_transfer_start_h2d_bytes ||
+        transfer.hot_loop_compute_d2h_bytes < state.attempt_transfer_start_d2h_bytes ||
+        transfer.hot_loop_compute_host_sync_count < state.attempt_transfer_start_host_sync_count) {
+        state.accounting_valid = false;
+        state.execution_class = FemGpuExecutionClass::Unknown;
+        state.attempt_transfer_valid = false;
+        return false;
+    }
+    state.attempt_transfer_h2d_bytes =
+        transfer.hot_loop_compute_h2d_bytes - state.attempt_transfer_start_h2d_bytes;
+    state.attempt_transfer_d2h_bytes =
+        transfer.hot_loop_compute_d2h_bytes - state.attempt_transfer_start_d2h_bytes;
+    state.attempt_transfer_host_sync_count =
+        transfer.hot_loop_compute_host_sync_count - state.attempt_transfer_start_host_sync_count;
+    const bool clean = state.execution_class != FemGpuExecutionClass::DeviceResident ||
+        (state.attempt_transfer_h2d_bytes == 0 &&
+         state.attempt_transfer_d2h_bytes == 0 &&
+         state.attempt_transfer_host_sync_count == 0);
+    if (!clean) {
+        state.accounting_valid = false;
+        state.execution_class = FemGpuExecutionClass::Unknown;
+        state.attempt_transfer_valid = false;
+    }
+    return clean;
+}
+
+bool gpu_execution_receipt_attempt_active(
+    const FemGpuExecutionReceiptRuntimeState &state) {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    return state.attempt_active;
 }
 
 void gpu_execution_receipt_note_device(
@@ -185,6 +250,9 @@ void gpu_execution_receipt_commit_attempt(FemGpuExecutionReceiptRuntimeState &st
     state.executed_device_operator_mask = state.attempt_device_operator_mask;
     state.executed_host_operator_mask = state.attempt_host_operator_mask;
     state.executed_unknown_operator_mask = 0;
+    state.hot_loop_compute_h2d_bytes = state.attempt_transfer_h2d_bytes;
+    state.hot_loop_compute_d2h_bytes = state.attempt_transfer_d2h_bytes;
+    state.hot_loop_compute_host_sync_count = state.attempt_transfer_host_sync_count;
     ++state.accepted_step_count;
     clear_attempt(state);
 }
@@ -232,6 +300,9 @@ FemGpuExecutionSnapshot gpu_execution_receipt_snapshot(
     snapshot.accepted_step_count = state.accepted_step_count;
     snapshot.rejected_attempt_count = state.rejected_attempt_count;
     snapshot.failed_attempt_count = state.failed_attempt_count;
+    snapshot.hot_loop_compute_h2d_bytes = state.hot_loop_compute_h2d_bytes;
+    snapshot.hot_loop_compute_d2h_bytes = state.hot_loop_compute_d2h_bytes;
+    snapshot.hot_loop_compute_host_sync_count = state.hot_loop_compute_host_sync_count;
     return snapshot;
 }
 

@@ -15,6 +15,7 @@
 #include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
 #include "gpu/cuda/runtime/gpu_state_runtime.hpp"
+#include "gpu/cuda/runtime/execution_receipt.hpp"
 #include "gpu/cuda/runtime/nvtx_ranges.hpp"
 
 #if FULLMAG_HAS_CUDA_RUNTIME
@@ -413,6 +414,11 @@ bool compute_device_demag_for_device_stage_impl(
     }
     if (!energy_timer.finish(reason)) {
         return false;
+    }
+    if (gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
+        gpu_execution_receipt_note_device(
+            ctx.gpu_state.execution_receipt,
+            FEM_GPU_OPERATOR_DEMAG_RHS | FEM_GPU_OPERATOR_DEMAG_RECOVERY);
     }
     ctx.poisson_demag.solves_current_step += 1;
     return true;

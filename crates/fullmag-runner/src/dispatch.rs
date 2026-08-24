@@ -6234,6 +6234,13 @@ fn execute_native_fem(
             cancelled,
             paused,
             preview_handoff,
+            fem_gpu_receipt_request: if execution_mode == ExecutionMode::Strict {
+                "strict_device".to_string()
+            } else if native_execution_mode == "hybrid_legacy_sparse" {
+                "hybrid".to_string()
+            } else {
+                "gpu".to_string()
+            },
         },
     )
 }
