@@ -7,6 +7,7 @@ import {
   FDM_SINGLE_GRID_MULTI_BODY_REASON,
   isExplicitFdmStudy,
   normalizeDemagRealizationForLane,
+  resolveFdmGridPreview,
   validateStudyGlobalDraft,
 } from "./StudyGlobalAuthoringModel";
 
@@ -337,6 +338,110 @@ describe("StudyGlobalAuthoringModel", () => {
     })).toEqual([]);
   });
 
+  it.each([
+    ["0, 2e-9, 1e-9", "FDM default cell must contain three finite positive SI values."],
+    ["2e-9, -1e-9, 1e-9", "FDM default cell must contain three finite positive SI values."],
+    ["2e-9, NaN, 1e-9", "FDM default cell must contain three finite positive SI values."],
+  ])("rejects non-positive or non-finite FDM default_cell (%s)", (defaultCell, message) => {
+    const draft = {
+      ...createStudyGlobalDraft({ study: { requested_backend: "fdm" } }),
+      fdm: {
+        ...createStudyGlobalDraft({ study: { requested_backend: "fdm" } }).fdm!,
+        defaultCell,
+      },
+    };
+    expect(
+      validateStudyGlobalDraft(draft, { sessionDiscretization: "fdm" }).map(
+        (issue) => issue.message,
+      ),
+    ).toContain(message);
+  });
+
+  it("validates per-object FDM overrides by canonical object_id and SI cell values", () => {
+    const draft = {
+      ...createStudyGlobalDraft({ study: { requested_backend: "fdm" } }),
+      fdm: {
+        ...createStudyGlobalDraft({ study: { requested_backend: "fdm" } }).fdm!,
+        defaultCell: "2e-9, 2e-9, 1e-9",
+        perMagnet: JSON.stringify({
+          magnet_a: { cell: [2e-9, 0, 1e-9] },
+          magnet_b: { cell: [1e-9, 1e-9, 1e-9] },
+          unknown: { cell: [1e-9, 1e-9, 1e-9] },
+        }),
+      },
+    };
+    const messages = validateStudyGlobalDraft(draft, {
+      magneticObjectIds: ["magnet_a", "magnet_b"],
+      sessionDiscretization: "fdm",
+    }).map((issue) => issue.message);
+    expect(messages).toContain(
+      "FDM per-magnet grid magnet_a cell must contain three finite positive SI values.",
+    );
+    expect(messages).toContain(
+      "FDM per-magnet grid unknown does not match a magnetic object_id.",
+    );
+  });
+
+  it("derives positive FDM grid counts and covered extent from magnetic object geometry", () => {
+    const draft = createStudyGlobalDraft({
+      study: {
+        requested_backend: "fdm",
+        fdm: {
+          default_cell: [2e-9, 2e-9, 1e-9],
+          per_magnet: { magnet_b: { cell: [1e-9, 2e-9, 2e-9] } },
+        },
+      },
+    });
+    expect(
+      resolveFdmGridPreview(
+        {
+          objects: [
+            {
+              id: "magnet_a",
+              role: "magnet",
+              geometry: {
+                geometry_kind: "Box",
+                geometry_params: { size: [5e-9, 4e-9, 1e-9] },
+              },
+              transform: { translation: [1e-9, -2e-9, 0] },
+            },
+            {
+              id: "magnet_b",
+              role: "magnet",
+              geometry: {
+                geometry_kind: "Cylinder",
+                geometry_params: { radius: 2e-9, height: 5e-9 },
+              },
+            },
+            { id: "void", role: "void", geometry: { geometry_kind: "Box" } },
+          ],
+        },
+        draft,
+      ),
+    ).toEqual({
+      lane: "fdm",
+      entries: [
+        {
+          objectId: "magnet_a",
+          cell: [2e-9, 2e-9, 1e-9],
+          geometryExtent: [5e-9, 4e-9, 1e-9],
+          extent: [6e-9, 4e-9, 1e-9],
+          counts: [3, 2, 1],
+          cellCount: 6,
+        },
+        {
+          objectId: "magnet_b",
+          cell: [1e-9, 2e-9, 2e-9],
+          geometryExtent: [4e-9, 4e-9, 5e-9],
+          extent: [4e-9, 4e-9, 6e-9],
+          counts: [4, 2, 3],
+          cellCount: 24,
+        },
+      ],
+      totalCellCount: 30,
+    });
+  });
+
   it("creates a global study draft from scene study settings", () => {
     expect(
       createStudyGlobalDraft({
@@ -498,6 +603,25 @@ describe("StudyGlobalAuthoringModel", () => {
           },
         },
       },
+    });
+  });
+
+  it("carries the authored scene revision on an FDM grid transaction", () => {
+    const draft = createStudyGlobalDraft({
+      study: {
+        requested_backend: "fdm",
+        fdm: { default_cell: [2e-9, 2e-9, 1e-9] },
+      },
+    });
+    expect(
+      buildStudyGlobalMergePatch(draft, {
+        baseRevision: 17,
+        sessionDiscretization: "fdm",
+      }),
+    ).toMatchObject({
+      kind: "merge_patch",
+      base_revision: 17,
+      merge_patch: { study: { fdm: { default_cell: [2e-9, 2e-9, 1e-9] } } },
     });
   });
 

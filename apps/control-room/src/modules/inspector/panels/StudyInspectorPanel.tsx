@@ -16,7 +16,16 @@ import { useCallback, useEffect, useReducer, type ReactNode } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
+  MESHING_BUILDS_CURRENT_PATH,
+  MESHING_BUILDS_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+  MESHING_SEMANTICS_PATH,
+  MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+  MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
+  MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH,
+  MESHING_SHARED_DOMAIN_QUALITY_PATH,
+  MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
+  MESHING_SHARED_DOMAIN_REPORT_PATH,
   MESHING_SUMMARY_PATH,
   MODEL_READINESS_PATH,
   MODEL_SCENE_PATH,
@@ -26,6 +35,7 @@ import {
   SIMULATION_RUN_CURRENT_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
 } from "@/kernel/api/apiPaths";
+import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import type {
   CheckpointEntry,
   LiveStatusResource,
@@ -87,6 +97,7 @@ import {
   createStudyGlobalDraft,
   isExplicitFdmStudy,
   normalizeDemagRealizationForLane,
+  resolveFdmGridPreview,
   validateStudyGlobalDraft,
   type StudyGlobalDraft,
 } from "./StudyGlobalAuthoringModel";
@@ -145,6 +156,7 @@ type StudyInspectorPanelAction =
       type: "resetStageDrafts";
       drafts: StudyStageDraft[];
       globalDraft: StudyGlobalDraft;
+      preserveGlobalDraft?: StudyGlobalDraft;
       revision: number | string | null;
       selectedIndex: number;
       signature: string;
@@ -233,7 +245,7 @@ function studyInspectorPanelReducer(
         baselineStageDrafts: action.drafts,
         draftSceneRevision: action.revision,
         draftSceneSignature: action.signature,
-        globalDraft: action.globalDraft,
+        globalDraft: action.preserveGlobalDraft ?? action.globalDraft,
         selectedDraftIndex: action.selectedIndex,
         stageDrafts: action.drafts,
       };
@@ -406,6 +418,48 @@ function magneticObjectCount(scene: unknown): number {
   const objects = asRecord(scene)?.objects;
   if (!Array.isArray(objects)) return 0;
   return objects.filter((object) => asRecord(object)?.role === "magnet").length;
+}
+
+function magneticObjectIds(scene: unknown): string[] {
+  const objects = asRecord(scene)?.objects;
+  if (!Array.isArray(objects)) return [];
+  return objects
+    .map((object) => asRecord(object))
+    .filter((object) => object?.role === "magnet")
+    .map((object) => (typeof object?.id === "string" ? object.id.trim() : ""))
+    .filter(Boolean);
+}
+
+function numericSceneRevision(value: number | string | null): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value !== "string" || !value.trim()) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function invalidateFdmGridResources(
+  resources: { invalidate: (resourceKey: string, revision: number) => void },
+  revision: number,
+): void {
+  for (const resourceKey of [
+    MESHING_BUILDS_PATH,
+    MESHING_BUILDS_CURRENT_PATH,
+    MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+    MESHING_SUMMARY_PATH,
+    MESHING_SEMANTICS_PATH,
+    MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+    MESHING_SHARED_DOMAIN_REPORT_PATH,
+    MESHING_SHARED_DOMAIN_QUALITY_PATH,
+    MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
+    MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH,
+    MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
+  ]) {
+    resources.invalidate(resourceKey, revision);
+  }
+}
+
+function formatGridVector(values: readonly number[]): string {
+  return values.map((value) => value.toExponential(3)).join(" × ");
 }
 
 function sceneRevisionValue(scene: unknown): number | string | null {
@@ -604,6 +658,7 @@ export function useStudyInspectorPanelController(
   const sceneRevision = sceneRevisionValue(scene.data);
   const sceneHasPayload = sceneHasAuthoringPayload(scene.data);
   const sceneMagneticObjectCount = magneticObjectCount(scene.data);
+  const sceneMagneticObjectIds = magneticObjectIds(scene.data);
   const sceneStageCount = rawStudyStages(scene.data).length;
   const studySignature = studyAuthoringSignature(scene.data);
   useEffect(() => {
@@ -615,6 +670,10 @@ export function useStudyInspectorPanelController(
       type: "resetStageDrafts",
       drafts: stageDrafts,
       globalDraft: createStudyGlobalDraft(scene.data),
+      preserveGlobalDraft:
+        JSON.stringify(state.globalDraft) !== JSON.stringify(state.baselineGlobalDraft)
+          ? state.globalDraft
+          : undefined,
       revision: sceneRevision,
       selectedIndex:
         stageDrafts.length === 0
@@ -622,7 +681,14 @@ export function useStudyInspectorPanelController(
           : Math.min(selectedStageIndex, stageDrafts.length - 1),
       signature: studySignature,
     });
-  }, [scene.data, sceneRevision, selectedStageIndex, studySignature]);
+  }, [
+    scene.data,
+    sceneRevision,
+    selectedStageIndex,
+    state.baselineGlobalDraft,
+    state.globalDraft,
+    studySignature,
+  ]);
   const activeStageIndex = stageExecution.data?.active_stage_index ?? null;
   const commandContext = createCommandContext("inspector", kernel, {
     resourceData: {
@@ -755,10 +821,24 @@ export function useStudyInspectorPanelController(
     }
   };
   const commitGlobalDraft = async () => {
+    const baseRevision = numericSceneRevision(sceneRevision);
+    if (baseRevision === null) {
+      dispatch({
+        type: "setAuthoringFeedback",
+        scope: "global",
+        feedback: {
+          kind: "error",
+          message:
+            "The canonical scene revision is unavailable. Refetch before applying the grid.",
+        },
+      });
+      return false;
+    }
     const errors = validateStudyGlobalDraft(state.globalDraft, {
       activeLane: runtimeStatus?.capabilities.active_lane ?? null,
       algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
       magneticObjectCount: sceneMagneticObjectCount,
+      magneticObjectIds: sceneMagneticObjectIds,
       sessionDiscretization: runtimeStatus?.domain.discretization,
     }).filter(
       (issue) => issue.severity === "error",
@@ -779,6 +859,7 @@ export function useStudyInspectorPanelController(
     try {
       const response = await kernel.api.model.commitTransaction(
         buildStudyGlobalMergePatch(state.globalDraft, {
+          baseRevision,
           sessionDiscretization: runtimeStatus?.domain.discretization,
         }),
       );
@@ -789,6 +870,14 @@ export function useStudyInspectorPanelController(
       kernel.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
       kernel.resources.invalidate(SIMULATION_STAGES_EXECUTION_PATH, revision);
       kernel.resources.invalidate(SIMULATION_COMMANDS_PATH, revision);
+      if (
+        isExplicitFdmStudy({
+          requestedBackend: state.globalDraft.requestedBackend,
+          sessionDiscretization: runtimeStatus?.domain.discretization,
+        })
+      ) {
+        invalidateFdmGridResources(kernel.resources, revision);
+      }
       dispatch({
         type: "setAuthoringFeedback",
         scope: "global",
@@ -800,17 +889,35 @@ export function useStudyInspectorPanelController(
       dispatch({ type: "acceptGlobalDraft" });
       return true;
     } catch (error) {
-      dispatch({
-        type: "setAuthoringFeedback",
-        scope: "global",
-        feedback: {
-          kind: "error",
-          message:
-            error instanceof Error
-              ? error.message
-              : "Failed to commit global study settings.",
-        },
-      });
+      if (
+        error instanceof ControlRoomApiError &&
+        (error.status === 409 ||
+          error.code === "revision_conflict" ||
+          error.code === "scene_revision_conflict")
+      ) {
+        scene.refetch();
+        dispatch({
+          type: "setAuthoringFeedback",
+          scope: "global",
+          feedback: {
+            kind: "error",
+            message:
+              "Scene revision conflict. Refetched the canonical scene; the grid draft was preserved for review and retry.",
+          },
+        });
+      } else {
+        dispatch({
+          type: "setAuthoringFeedback",
+          scope: "global",
+          feedback: {
+            kind: "error",
+            message:
+              error instanceof Error
+                ? error.message
+                : "Failed to commit global study settings.",
+          },
+        });
+      }
       return false;
     } finally {
       dispatch({ type: "setAuthoringBusy", busy: false });
@@ -876,10 +983,12 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
     stageExecution,
     state,
   } = useStudyInspectorPanelController(selection);
+  const sceneMagneticObjectIds = magneticObjectIds(scene.data);
   const globalValidation = validateStudyGlobalDraft(state.globalDraft, {
     activeLane: runtimeStatus?.capabilities.active_lane ?? null,
     algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
     magneticObjectCount: sceneMagneticObjectCount,
+    magneticObjectIds: sceneMagneticObjectIds,
     sessionDiscretization: runtimeStatus?.domain.discretization,
   });
   const workflowValidation = validateStudyWorkflow(state.stageDrafts);
@@ -961,6 +1070,10 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
           draft={state.globalDraft}
           model={model}
           magneticObjectCount={sceneMagneticObjectCount}
+          magneticObjectIds={sceneMagneticObjectIds}
+          scene={scene.data}
+          sceneRevision={sceneRevision}
+          sceneStatus={scene.status}
           sessionDiscretization={runtimeStatus?.domain.discretization}
           snapshot={snapshot}
           onCommit={() => void commitGlobalDraft()}
@@ -1427,12 +1540,16 @@ export function StudyBoundarySection({
   authoringBusy,
   authoringFeedback,
   draft,
+  magneticObjectIds: _magneticObjectIds,
   model,
   magneticObjectCount,
   onCommit,
   onUpdate,
   sessionDiscretization,
   requestedDiscretization,
+  scene,
+  sceneRevision,
+  sceneStatus,
   snapshot,
 }: {
   activeLane?: ActiveLaneCapabilitySnapshot | null;
@@ -1443,12 +1560,16 @@ export function StudyBoundarySection({
     message: string;
   } | null;
   draft: StudyGlobalDraft;
+  magneticObjectIds?: readonly string[];
   model: StudyInspectorModel;
   magneticObjectCount?: number;
   onCommit: () => void;
   onUpdate: (patch: Partial<StudyGlobalDraft>) => void;
   requestedDiscretization?: string | null;
   sessionDiscretization?: string | null;
+  scene?: unknown;
+  sceneRevision?: number | string | null;
+  sceneStatus?: string;
   snapshot: StudyInspectorSnapshot;
 }) {
   const explicitFdm = isExplicitFdmStudy({
@@ -1480,11 +1601,19 @@ export function StudyBoundarySection({
     activeLane,
     algorithmsAvailable,
     magneticObjectCount,
+    magneticObjectIds: _magneticObjectIds,
     requestedDiscretization,
     sessionDiscretization,
   });
   const hasErrors = validation.some((issue) => issue.severity === "error");
   const singleGridUnsupported = explicitFdm && (magneticObjectCount ?? 0) > 1;
+  const gridPreview = explicitFdm
+    ? resolveFdmGridPreview(scene, draft)
+    : null;
+  const gridApplyDisabled =
+    authoringBusy ||
+    hasErrors ||
+    (sceneStatus !== undefined && sceneStatus !== "ready");
   return (
     <InspectorGroup
       title="Global Study Settings"
@@ -1620,9 +1749,35 @@ export function StudyBoundarySection({
               onUpdate({ fdm: { ...fdm, defaultCell: event.target.value } })
             }
           />
+          <InspectorGroup title="FDM Grid Preview" badge={gridPreview ? "derived" : "not available"}>
+            <FieldRow label="Base scene revision" value={sceneRevision ?? "not available"} />
+            {gridPreview && gridPreview.entries.length > 0 ? (
+              <>
+                {gridPreview.entries.map((entry) => (
+                  <div className="fm-inspector-grid-preview" key={entry.objectId}>
+                    <FieldRow label={`${entry.objectId} cells`} value={entry.counts.join(" × ")} />
+                    <FieldRow
+                      label={`${entry.objectId} covered extent`}
+                      value={`${formatGridVector(entry.extent)} m`}
+                    />
+                  </div>
+                ))}
+                <FieldRow label="Total cells (preview)" value={String(gridPreview.totalCellCount)} />
+              </>
+            ) : (
+              <FieldRow
+                label="Grid preview"
+                value="Add a valid FDM cell and magnetic object geometry."
+              />
+            )}
+            <FieldRow
+              label="Topology after Apply Grid"
+              value={sceneStatus === "ready" ? "stale until the next FDM realization" : "waiting for current scene"}
+            />
+          </InspectorGroup>
           <FormField
             label="FDM per-magnet grids"
-            hint='JSON object keyed by canonical magnet name, for example {"free":{"cell":[2e-9,2e-9,1e-9]}}.'
+            hint='JSON object keyed by canonical magnet object_id, for example {"free":{"cell":[2e-9,2e-9,1e-9]}}.'
             rows={3}
             type="textarea"
             value={fdm.perMagnet}
@@ -1749,19 +1904,21 @@ export function StudyBoundarySection({
       ) : null}
       <div className="fm-inspector-toolbar">
         <Button
-          disabled={authoringBusy || hasErrors}
+          disabled={gridApplyDisabled}
           size="sm"
           title={
             hasErrors
-              ? "Fix global study validation errors before saving."
-              : "Save global study settings"
+              ? "Fix global study validation errors before applying the grid."
+              : explicitFdm
+                ? "Apply the FDM grid policy to the canonical scene"
+                : "Save global study settings"
           }
           type="button"
           variant="primary"
           onClick={onCommit}
         >
           <Save size={13} aria-hidden="true" />
-          {authoringBusy ? "Saving" : "Save globals"}
+          {authoringBusy ? "Saving" : explicitFdm ? "Apply Grid" : "Save globals"}
         </Button>
       </div>
     </InspectorGroup>

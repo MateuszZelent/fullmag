@@ -117,6 +117,17 @@ class FdmUiRoundTripTests(unittest.TestCase):
             )
             loaded = load_problem_from_script(source, lightweight_assets=True)
             scene = build_scene_document_from_builder(export_builder_draft(loaded))
+            # The canonical SceneDocument uses object ids for per-object FDM
+            # overrides.  The public Python renderer must accept that name
+            # while continuing to emit the stable ``per_magnet`` DSL keyword.
+            scene["study"]["fdm"]["per_object_grid"] = scene["study"]["fdm"].pop(
+                "per_magnet"
+            )
+            scene["study"]["fdm"]["per_object_grid"]["free"]["cell"] = [
+                3e-9,
+                3e-9,
+                3e-9,
+            ]
             scene["study"]["fdm"]["demag"].update(
                 {
                     "strategy": "multilayer_convolution",
@@ -134,7 +145,7 @@ class FdmUiRoundTripTests(unittest.TestCase):
             ]
             assert isinstance(rendered, str)
             self.assertIn(
-                'fm.fdm(default_cell=(2e-09, 2e-09, 1e-09), per_magnet={"free": fm.FDMGrid',
+                'fm.fdm(default_cell=(2e-09, 2e-09, 1e-09), per_magnet={"free": fm.FDMGrid(cell=(3e-09, 3e-09, 3e-09))',
                 rendered,
             )
             self.assertIn(

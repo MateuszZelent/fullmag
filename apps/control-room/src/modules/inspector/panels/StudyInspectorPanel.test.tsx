@@ -1374,6 +1374,135 @@ describe("StudyInspectorPanel", () => {
     expect(html).not.toContain("Poisson Robin");
   });
 
+  it("renders an FDM grid preview and exposes Apply Grid without a mesh-build command", () => {
+    const onCommit = vi.fn();
+    const html = renderToStaticMarkup(
+      <StudyBoundarySection
+        authoringBusy={false}
+        authoringFeedback={null}
+        draft={createStudyGlobalDraft({
+          study: {
+            requested_backend: "fdm",
+            fdm: {
+              default_cell: [2e-9, 2e-9, 1e-9],
+              per_magnet: { magnet_b: { cell: [1e-9, 1e-9, 1e-9] } },
+            },
+          },
+        })}
+        magneticObjectCount={2}
+        magneticObjectIds={["magnet_a", "magnet_b"]}
+        model={{
+          boundary: testBoundary({ demagRealization: "auto" }),
+          requested: testRequested({ backend: "fdm" }),
+          runtime: {
+            activeStageLabel: "No active stage",
+            commandBadge: "idle",
+            commandError: null,
+            commandId: null,
+            commandLabel: "No queued commands",
+            maxTorque: "unavailable",
+            progressPercent: 0,
+            relaxEnergyStop: null,
+            relaxTimeStop: null,
+            relaxTorqueStop: null,
+            runId: "none",
+            state: "idle",
+          },
+          selectedStage: null,
+          stages: [],
+        }}
+        onCommit={onCommit}
+        onUpdate={() => undefined}
+        scene={{
+          objects: [
+            {
+              id: "magnet_a",
+              role: "magnet",
+              geometry: {
+                geometry_kind: "Box",
+                geometry_params: { size: [5e-9, 4e-9, 1e-9] },
+              },
+            },
+            {
+              id: "magnet_b",
+              role: "magnet",
+              geometry: {
+                geometry_kind: "Sphere",
+                geometry_params: { radius: 2e-9 },
+              },
+            },
+          ],
+        }}
+        sceneRevision={12}
+        sceneStatus="ready"
+        sessionDiscretization="fdm"
+        snapshot={{
+          boundary: testBoundary({ demagRealization: "auto" }),
+          requested: testRequested({ backend: "fdm" }),
+          stages: [],
+        }}
+      />,
+    );
+
+    expect(html).toContain("FDM Grid Preview");
+    expect(html).toContain("magnet_a cells");
+    expect(html).toContain("3 × 2 × 1");
+    expect(html).toContain("Total cells (preview)");
+    expect(html).toContain("Topology after Apply Grid");
+    expect(html).toMatch(/<button[^>]*>.*Apply Grid<\/button>/);
+    expect(html).not.toContain("mesh-build");
+  });
+
+  it("disables Apply Grid while the canonical scene is stale or the cell draft is invalid", () => {
+    const html = renderToStaticMarkup(
+      <StudyBoundarySection
+        authoringBusy={false}
+        authoringFeedback={null}
+        draft={{
+          ...createStudyGlobalDraft({
+            study: {
+              requested_backend: "fdm",
+              fdm: { default_cell: [0, 2e-9, 1e-9] },
+            },
+          }),
+        }}
+        magneticObjectCount={1}
+        model={{
+          boundary: testBoundary(),
+          requested: testRequested({ backend: "fdm" }),
+          runtime: {
+            activeStageLabel: "No active stage",
+            commandBadge: "idle",
+            commandError: null,
+            commandId: null,
+            commandLabel: "No queued commands",
+            maxTorque: "unavailable",
+            progressPercent: 0,
+            relaxEnergyStop: null,
+            relaxTimeStop: null,
+            relaxTorqueStop: null,
+            runId: "none",
+            state: "idle",
+          },
+          selectedStage: null,
+          stages: [],
+        }}
+        onCommit={() => undefined}
+        onUpdate={() => undefined}
+        sceneStatus="stale"
+        sessionDiscretization="fdm"
+        snapshot={{
+          boundary: testBoundary(),
+          requested: testRequested({ backend: "fdm" }),
+          stages: [],
+        }}
+      />,
+    );
+
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*Apply Grid<\/button>/);
+    expect(html).toContain("FDM default cell must contain three finite positive SI values.");
+  });
+
   it("marks FDM single grid unsupported for a multi-magnet draft without hiding auto or multilayer", () => {
     const html = renderToStaticMarkup(
       <StudyBoundarySection
@@ -1432,7 +1561,7 @@ describe("StudyInspectorPanel", () => {
     );
     expect(html).toContain('<option value="auto">Auto</option>');
     expect(html).toContain('<option value="multilayer_convolution">FDM multilayer convolution</option>');
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*Save globals<\/button>/);
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*Apply Grid<\/button>/);
   });
 
   it("renders spectral stage authoring fields", () => {

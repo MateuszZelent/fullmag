@@ -977,24 +977,29 @@ def _fdm_from_overrides(
     else:
         default_cell = base.default_cell if isinstance(base, FDM) else None
 
-    if "per_magnet" in raw:
-        raw_per_magnet = raw.get("per_magnet")
+    # ``per_object_grid`` is the scene-facing alias.  Keep accepting the
+    # public ``per_magnet`` spelling and prefer it when both are present so a
+    # legacy export remains deterministic.
+    per_magnet_key = "per_magnet" if "per_magnet" in raw else "per_object_grid"
+    if per_magnet_key in raw:
+        raw_per_magnet = raw.get(per_magnet_key)
+        per_magnet_label = f"fdm.{per_magnet_key}"
         if raw_per_magnet is None:
             per_magnet = None
         elif isinstance(raw_per_magnet, Mapping):
             per_magnet = {}
             for name, raw_grid in raw_per_magnet.items():
                 if not isinstance(raw_grid, Mapping):
-                    raise ValueError(f"fdm.per_magnet[{name!r}] must be an object")
+                    raise ValueError(f"{per_magnet_label}[{name!r}] must be an object")
                 per_magnet[str(name)] = FDMGrid(
                     cell=_fdm_vector(
                         raw_grid.get("cell"),
-                        f"fdm.per_magnet[{name!r}].cell",
+                        f"{per_magnet_label}[{name!r}].cell",
                         3,
                     )
                 )
         else:
-            raise ValueError("fdm.per_magnet must be an object or null")
+            raise ValueError(f"{per_magnet_label} must be an object or null")
     else:
         per_magnet = base.per_magnet if isinstance(base, FDM) else None
 
