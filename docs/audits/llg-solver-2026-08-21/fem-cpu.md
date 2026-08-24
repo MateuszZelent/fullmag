@@ -2,6 +2,7 @@
 
 **Repozytorium:** `MateuszZelent/fullmag`
 **Gałąź bazowa:** `master`
+**Audytowana rewizja źródeł:** [`364ecd08666aede16b86f7a48774eb594d70ce16`](https://github.com/MateuszZelent/fullmag/tree/364ecd08666aede16b86f7a48774eb594d70ce16)
 **Data:** 2026-08-21
 **Metoda:** audyt statyczny kontraktów FEM, assembly/apply, pól efektywnych, integratora i kosztu solverów pomocniczych. Wydajność wymaga profilu z MFEM/Hypre na reprezentatywnej siatce.
 

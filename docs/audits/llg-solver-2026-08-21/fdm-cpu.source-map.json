@@ -1,6 +1,8 @@
 {
   "document": {
-    "path": "docs/audits/llg-solver-2026-08-21/fdm-cpu.md"
+    "path": "docs/audits/llg-solver-2026-08-21/fdm-cpu.md",
+    "audited_source_revision": "364ecd08666aede16b86f7a48774eb594d70ce16",
+    "immutable_source_base_url": "https://github.com/MateuszZelent/fullmag/blob/364ecd08666aede16b86f7a48774eb594d70ce16/"
   },
   "backend_matrix": [
     {

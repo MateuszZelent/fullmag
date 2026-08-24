@@ -2,6 +2,7 @@
 
 **Repozytorium:** `MateuszZelent/fullmag`
 **Gałąź bazowa:** `master`
+**Audytowana rewizja źródeł:** [`364ecd08666aede16b86f7a48774eb594d70ce16`](https://github.com/MateuszZelent/fullmag/tree/364ecd08666aede16b86f7a48774eb594d70ce16)
 **Data:** 2026-08-21
 **Metoda:** audyt statyczny architektury, fizyki, numeryki, testów i hot path; zalecenia wydajnościowe wymagają potwierdzenia profilem na reprezentatywnym CPU.
 
@@ -16,7 +17,7 @@ FDM CPU pozostaje referencyjną ścieżką poprawności, ale nie może być trak
 | Ustalenie | Stan i pewność | Implementacja (`ścieżka + symbol`) | Test/reproducer |
 |---|---|---|---|
 | Konwencja LLG | implementacja potwierdzona, test bezpośredni brak | `crates/fullmag-engine/src/fdm/cpu/fields.rs` — `effective_field_into_soa_ws_at_time`, `llg_rhs_soa_into` | wymagany analityczny constant-field RHS/trajectory; test SOT nie pokrywa tej ścieżki |
-| Maksymalna norma adaptacyjna | potwierdzone, wysoka | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` — `max_error_norm_buf`, `max_error_norm_soa_buf` | `direct_cpu_entry_points_propagate_injected_nonfinite_error_norm` |
+| Maksymalna norma adaptacyjna | implementacja potwierdzona statycznie, test redukcji brak | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` — `max_error_norm_buf`, `max_error_norm_soa_buf` | wymagany test nierównych, skończonych błędów per-cell dla obu redukcji; `direct_cpu_entry_points_propagate_injected_nonfinite_error_norm` potwierdza tylko propagację `NaN` i rollback |
 | Brak alokacji w live RHS | częściowo potwierdzone statycznie, wysoka | `crates/fullmag-engine/src/fdm/cpu/fields.rs` — `effective_field_into_soa_ws_at_time`, `llg_rhs_soa_into`; `crates/fullmag-engine/src/fdm/cpu/integrators.rs` — `rk23_step_soa_state_buf`, `rk45_step_soa_state_buf` | profil alokatora live SoA steady state; wynik sprzętowy nadal wymagany |
 | Stiffness exchange | luka pomiarowa, średnia | `crates/fullmag-engine/src/fdm/cpu/fields.rs` — `exchange_field_add_into` | refinement `h_min` i time-to-error dla każdego legalnego integratora |
 | Koszt demag per stage | luka pomiarowa, średnia | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` — `rk23_step_soa_state_buf`, `rk45_step_soa_state_buf`; `crates/fullmag-engine/src/fdm/cpu/fields.rs` — `demag_field_add_into_soa_fft_backend` | licznik `demag_solves` i profil accepted/rejected step |
@@ -29,7 +30,7 @@ Konwencja nie jest otwartą decyzją: `docs/physics/0960-canonical-llg-time-doma
 
 ### Stan potwierdzony — kanoniczna maksymalna norma błędu
 
-`LLG-TD-MAX-ERR-V1` wymaga maksimum wektorowego błędu po aktywnych komórkach, a nie RMS. Właścicielami implementacji są `crates/fullmag-engine/src/fdm/cpu/integrators.rs` (`max_error_norm_buf`, `max_error_norm_soa_buf`). Maksimum chroni przed rozcieńczeniem lokalnego dużego błędu wraz ze wzrostem siatki. Test refinement ma potwierdzać zachowanie tej normy; nie wolno zastępować jej RMS bez wcześniejszej zmiany kanonicznego kontraktu fizycznego.
+`LLG-TD-MAX-ERR-V1` wymaga maksimum wektorowego błędu po aktywnych komórkach, a nie RMS. Właścicielami implementacji są `crates/fullmag-engine/src/fdm/cpu/integrators.rs` (`max_error_norm_buf`, `max_error_norm_soa_buf`). Maksimum chroni przed rozcieńczeniem lokalnego dużego błędu wraz ze wzrostem siatki. Obecny test `direct_cpu_entry_points_propagate_injected_nonfinite_error_norm` zwraca wstrzyknięty `NaN` przed obliczeniem błędów per-cell, więc potwierdza propagację wartości niefinitywnej i rollback, ale nie samą redukcję maksimum. Brakującą bramką jest test z nierównymi, skończonymi błędami per-cell, wywołujący osobno `max_error_norm_buf` i `max_error_norm_soa_buf`; do tego czasu kontrakt redukcji ma wyłącznie dowód statyczny.
 
 ### P1 — alokacje i kopie w `step/RHS` są niedopuszczalne w steady state
 
@@ -173,7 +174,7 @@ Audyt statyczny nie jest dowodem wydajności ani kwalifikacji sprzętowej.
 |---|---|---|---|---|---|---|
 | Live effective field | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `effective_field_into_soa_ws_at_time` | składa pole dla integratorów SoA | FDM CPU | call chain RK23/RK45 | dowód statyczny |
 | Live RHS LLG | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `llg_rhs_soa_into` | oblicza RHS z pola w trwałych buforach SoA | FDM CPU | wymagany constant-field oracle i profil alokatora | implementacja potwierdzona; test bezpośredni brak |
-| Maksymalna norma adaptacyjna | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `max_error_norm_soa_buf` | maksimum błędu po aktywnych komórkach | FDM CPU | `direct_cpu_entry_points_propagate_injected_nonfinite_error_norm` | dowód statyczny i test kontraktu |
+| Maksymalna norma adaptacyjna | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `max_error_norm_soa_buf` | maksimum błędu po aktywnych komórkach | FDM CPU | brak testu z nierównymi, skończonymi błędami per-cell; test `direct_cpu_entry_points_propagate_injected_nonfinite_error_norm` nie wchodzi w redukcję | wyłącznie dowód statyczny |
 | RK23 SoA | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `rk23_step_soa_state_buf` | live adaptacyjny krok RK23 | FDM CPU | profil steady-state | dowód statyczny |
 | RK45 SoA | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `rk45_step_soa_state_buf` | live adaptacyjny krok RK45 | FDM CPU | profil steady-state | dowód statyczny |
 | Exchange | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `exchange_field_add_into` | operator lokalny wyznaczający stiffness | FDM CPU | refinement `h_min` | hipoteza pomiarowa |
