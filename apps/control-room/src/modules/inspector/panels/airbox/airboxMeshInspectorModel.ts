@@ -59,7 +59,9 @@ export interface AirboxMeshBuildModel {
   reason: string;
   resolvedPolicy: JsonRecord | null;
   revision: number | null;
+  sceneRevision: number | null;
   sourceSceneRevision: number | null;
+  freshness: "current" | "stale" | "unknown";
   status: "current" | "degraded" | "missing";
   latestSuccess: {
     effectiveAirboxTarget: JsonRecord | null;
@@ -73,10 +75,12 @@ export interface AirboxMeshBuildModel {
 
 export function buildAirboxMeshBuildModel({
   current,
+  currentSceneRevision = null,
   latest = null,
   report,
 }: {
   current: MeshActiveBuildResource | null;
+  currentSceneRevision?: number | null;
   latest?: MeshLastSuccessfulBuildResource | null;
   report: MeshUniverseReportResource | null;
 }): AirboxMeshBuildModel {
@@ -111,6 +115,17 @@ export function buildAirboxMeshBuildModel({
     stringField(reportRecord, "error"),
   );
   const missing = !current && !report;
+  const sourceSceneRevision =
+    current?.source_scene_revision ??
+    current?.provenance?.source_scene_revision ??
+    null;
+  const sceneRevision = finiteRevision(currentSceneRevision);
+  const freshness =
+    sourceSceneRevision === null || sceneRevision === null
+      ? "unknown"
+      : sourceSceneRevision === sceneRevision
+        ? "current"
+        : "stale";
   return {
     buildMode: boundedDisplayText(buildReport?.build_mode),
     effectiveAirboxTarget: asJsonRecord(
@@ -144,7 +159,8 @@ export function buildAirboxMeshBuildModel({
       meshRevision: current?.provenance?.mesh_revision ?? null,
       requestedPolicyRevision:
         current?.provenance?.requested_policy_revision ?? null,
-      sourceSceneRevision: current?.provenance?.source_scene_revision ?? null,
+      sourceSceneRevision:
+        current?.provenance?.source_scene_revision ?? sourceSceneRevision,
     },
     publishedResources: current?.published_resources
       ? {
@@ -174,7 +190,9 @@ export function buildAirboxMeshBuildModel({
           : "Mesh build evidence is available.") ?? "not available",
     resolvedPolicy: asJsonRecord(current?.resolved_policy),
     revision: current?.revision ?? report?.revision ?? null,
-    sourceSceneRevision: current?.source_scene_revision ?? null,
+    sceneRevision,
+    sourceSceneRevision,
+    freshness,
     status: missing ? "missing" : degraded ? "degraded" : "current",
     latestSuccess: {
       effectiveAirboxTarget: asJsonRecord(latest?.effective_airbox_target),
@@ -319,6 +337,46 @@ export function aggregateAirboxMeshParts(
   };
 }
 
+export function aggregateAirboxBounds(
+  parts: readonly AirboxMeshPart[] | null | undefined,
+): { max: readonly number[]; min: readonly number[] } | null {
+  if (!parts?.length) return null;
+  const bounds = parts.map((part) => {
+    const min = finiteBounds(part.bounds_min);
+    const max = finiteBounds(part.bounds_max);
+    return min && max ? { max, min } : null;
+  });
+  if (bounds.some((value) => value === null)) return null;
+
+  const first = bounds[0];
+  if (!first) return null;
+  const min = [...first.min];
+  const max = [...first.max];
+  for (const value of bounds.slice(1)) {
+    if (!value) return null;
+    for (let index = 0; index < 3; index += 1) {
+      min[index] = Math.min(min[index], value.min[index]);
+      max[index] = Math.max(max[index], value.max[index]);
+    }
+  }
+  return { max, min };
+}
+
+function finiteBounds(value: unknown): [number, number, number] | null {
+  if (!Array.isArray(value) || value.length < 3) return null;
+  const first = value[0];
+  const second = value[1];
+  const third = value[2];
+  if (
+    typeof first !== "number" || !Number.isFinite(first) ||
+    typeof second !== "number" || !Number.isFinite(second) ||
+    typeof third !== "number" || !Number.isFinite(third)
+  ) {
+    return null;
+  }
+  return [first, second, third];
+}
+
 function sumPartCount(
   parts: readonly AirboxMeshPart[],
   key: "boundary_face_count" | "element_count",
@@ -441,12 +499,14 @@ function safeMeshCount(value: unknown): number | null {
 }
 
 export function buildAirboxMeshInspectorModel({
+  currentSceneRevision = null,
   manifest,
   policy,
   quality,
   report,
   summary,
 }: {
+  currentSceneRevision?: number | null;
   manifest: MeshSharedDomainManifestResource | null;
   policy: MeshUniverseConfigResource;
   quality: MeshUniverseQualityResource | null;
@@ -456,6 +516,7 @@ export function buildAirboxMeshInspectorModel({
   const airboxPart = findCanonicalAirboxPart(manifest?.mesh_parts);
   const airboxParts = findAirboxParts(manifest?.mesh_parts);
   const meshPartAggregate = aggregateAirboxMeshParts(airboxParts);
+  const airboxBounds = aggregateAirboxBounds(airboxParts);
   const reportRecord = asJsonRecord(report?.report);
   const qualityRecord = asJsonRecord(quality?.quality);
   const resolvedTarget = asJsonRecord(summary?.effective_airbox_target);
@@ -466,6 +527,11 @@ export function buildAirboxMeshInspectorModel({
     : null;
   const stale =
     oldestEvidenceRevision !== null && oldestEvidenceRevision < policy.revision;
+  const sceneRevision = finiteRevision(currentSceneRevision);
+  const sourceSceneRevision = finiteRevision(manifest?.source_scene_revision);
+  const sceneEvidenceStale =
+    sceneRevision !== null &&
+    (sourceSceneRevision === null || sourceSceneRevision !== sceneRevision);
   const reportStatus = stringField(reportRecord, "status");
   const reportReason = stringField(reportRecord, "reason");
   const reportError = stringField(reportRecord, "error");
@@ -509,9 +575,13 @@ export function buildAirboxMeshInspectorModel({
             revision: report.revision,
             status: "complete",
           },
-    lifecycle: stale
+    lifecycle: stale || sceneEvidenceStale
       ? {
-          reason: `Mesh evidence revision ${oldestEvidenceRevision} is older than policy revision ${policy.revision}.`,
+          reason: sceneEvidenceStale
+            ? sourceSceneRevision === null
+              ? "Mesh evidence does not publish a source scene revision."
+              : `Mesh source scene revision ${sourceSceneRevision} is older than current scene revision ${sceneRevision}.`
+            : `Mesh evidence revision ${oldestEvidenceRevision} is older than policy revision ${policy.revision}.`,
           status: "stale",
         }
       : oldestEvidenceRevision === null
@@ -522,7 +592,9 @@ export function buildAirboxMeshInspectorModel({
       effective: policy.effective_config ?? null,
       resolvedTarget,
     },
-    qualityGates: buildAirboxQualityGateModel(qualityRecord),
+    qualityGates: buildAirboxQualityGateModel(qualityRecord, {
+      stale: sceneEvidenceStale,
+    }),
     statistics: {
       boundaryFaceCount: meshPartAggregate.boundaryFaceCount,
       elementCount: meshPartAggregate.elementCount,
@@ -535,9 +607,9 @@ export function buildAirboxMeshInspectorModel({
     },
     topology: {
       bounds:
-        airboxPart?.bounds_min && airboxPart.bounds_max
+        airboxBounds ?? (airboxPart?.bounds_min && airboxPart.bounds_max
           ? { max: airboxPart.bounds_max, min: airboxPart.bounds_min }
-          : null,
+          : null),
       sharedInterfaceNodes: {
         count: numericField(reportRecord, "shared_interface_node_count"),
         label: "Shared interface nodes",
@@ -547,12 +619,22 @@ export function buildAirboxMeshInspectorModel({
   };
 }
 
-function buildAirboxQualityGateModel(quality: JsonRecord | null) {
+function buildAirboxQualityGateModel(
+  quality: JsonRecord | null,
+  options: { stale?: boolean } = {},
+) {
   const scoped = asJsonRecord(quality?.airbox_quality_gates);
   if (!scoped) {
     return {
       evidence: "backend" as const,
       reason: "Airbox-scoped quality gates are not published by the backend.",
+      status: "unknown" as const,
+    };
+  }
+  if (options.stale) {
+    return {
+      evidence: "backend" as const,
+      reason: "Airbox quality gates are stale for the current scene revision.",
       status: "unknown" as const,
     };
   }
@@ -579,5 +661,9 @@ function stringField(record: JsonRecord | null, key: string): string | null {
 
 function numericField(record: JsonRecord | null, key: string): number | null {
   const value = record?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function finiteRevision(value: number | null | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }

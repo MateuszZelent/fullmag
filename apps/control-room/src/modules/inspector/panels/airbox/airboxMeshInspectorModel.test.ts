@@ -7,6 +7,7 @@ import type {
 } from "@/kernel/api/apiTypes";
 
 import {
+  aggregateAirboxBounds,
   buildAirboxMeshBuildModel,
   buildAirboxMeshInspectorModel,
   aggregateAirboxMeshParts,
@@ -34,6 +35,88 @@ const part = (
 });
 
 describe("airboxMeshInspectorModel", () => {
+  it("unions the complete Airbox extent across every published carrier", () => {
+    const first = part({
+      bounds_max: [0, 1, 2],
+      bounds_min: [-2, -1, -3],
+      id: "part:air-a",
+    });
+    const second = part({
+      bounds_max: [4, 3, 1],
+      bounds_min: [0, -4, -1],
+      id: "part:air-b",
+    });
+
+    expect(aggregateAirboxBounds([first, second])).toEqual({
+      max: [4, 3, 2],
+      min: [-2, -4, -3],
+    });
+
+    const model = buildAirboxMeshInspectorModel({
+      manifest: {
+        mesh_id: "mesh-airbox-extent",
+        mesh_name: "Shared mesh",
+        mesh_parts: [first, second],
+        revision: 4,
+        topology_fingerprint: "topology-airbox-extent",
+      },
+      policy: { config: {}, effective_config: {}, revision: 4 },
+      quality: null,
+      report: null,
+      summary: null,
+    });
+
+    expect(model.topology.bounds).toEqual({
+      max: [4, 3, 2],
+      min: [-2, -4, -3],
+    });
+  });
+
+  it("marks a build stale when its ACK source scene revision lags the current scene", () => {
+    const model = buildAirboxMeshBuildModel({
+      current: ({
+        provenance: { source_scene_revision: 6 },
+        revision: 12,
+        source_scene_revision: 6,
+      } as unknown) as Parameters<typeof buildAirboxMeshBuildModel>[0]["current"],
+      currentSceneRevision: 7,
+      latest: null,
+      report: null,
+    });
+
+    expect(model).toMatchObject({
+      freshness: "stale",
+      sceneRevision: 7,
+      sourceSceneRevision: 6,
+    });
+  });
+
+  it("withholds a passing Airbox quality gate when the realized mesh predates the scene", () => {
+    const model = buildAirboxMeshInspectorModel({
+      currentSceneRevision: 11,
+      manifest: {
+        mesh_id: "mesh-stale-quality",
+        mesh_name: "Shared mesh",
+        mesh_parts: [part()],
+        revision: 12,
+        source_scene_revision: 10,
+        topology_fingerprint: "topology-stale-quality",
+      },
+      policy: { config: {}, effective_config: {}, revision: 12 },
+      quality: ({
+        quality: { airbox_quality_gates: { status: "pass" } },
+        revision: 12,
+      } as unknown) as MeshUniverseQualityResource,
+      report: null,
+      summary: null,
+    });
+
+    expect(model.qualityGates).toMatchObject({
+      reason: "Airbox quality gates are stale for the current scene revision.",
+      status: "unknown",
+    });
+  });
+
   it("distinguishes missing fallback evidence from an explicit strict empty list", () => {
     const missing = buildAirboxMeshBuildModel({
       current: ({

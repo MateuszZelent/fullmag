@@ -6,12 +6,14 @@ const testState = vi.hoisted(() => ({
     current: [] as boolean[],
     latest: [] as boolean[],
     report: [] as boolean[],
+    scene: [] as boolean[],
   },
   current: null as Record<string, unknown> | null,
   latest: null as Record<string, unknown> | null,
   meshBuildRevision: 0,
   meshRevision: 3,
   report: null as Record<string, unknown> | null,
+  sceneRevision: 3,
 }));
 
 vi.mock("@/kernel/resources/useSessionStatus", async (importOriginal) => {
@@ -47,6 +49,13 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
     testState.calls.report.push(enabled);
     return { data: testState.report, status: enabled ? "ready" : "disabled" };
   },
+  useSceneResource: ({ enabled }: { enabled: boolean }) => {
+    testState.calls.scene.push(enabled);
+    return {
+      data: enabled ? { scene_revision: testState.sceneRevision } : null,
+      status: enabled ? "ready" : "disabled",
+    };
+  },
 }));
 
 import type { Selection } from "@/kernel/selection/selectionTypes";
@@ -68,13 +77,35 @@ describe("AirboxMeshBuildPanel", () => {
     testState.calls.current.length = 0;
     testState.calls.latest.length = 0;
     testState.calls.report.length = 0;
+    testState.calls.scene.length = 0;
 
     renderToStaticMarkup(<AirboxMeshBuildPanel selection={selection} />);
-    expect(testState.calls).toEqual({ current: [false], latest: [false], report: [false] });
+    expect(testState.calls).toEqual({ current: [false], latest: [false], report: [false], scene: [false] });
 
     testState.meshBuildRevision = 4;
     renderToStaticMarkup(<AirboxMeshBuildPanel selection={selection} />);
-    expect(testState.calls).toEqual({ current: [false, true], latest: [false, true], report: [false, true] });
+    expect(testState.calls).toEqual({ current: [false, true], latest: [false, true], report: [false, true], scene: [false, true] });
+  });
+
+  it("renders current scene provenance and stale freshness after a build ACK", () => {
+    testState.meshBuildRevision = 10;
+    testState.sceneRevision = 7;
+    testState.current = {
+      provenance: { source_scene_revision: 6 },
+      revision: 10,
+      source_scene_revision: 6,
+    };
+    testState.latest = null;
+    testState.report = null;
+
+    const html = renderToStaticMarkup(
+      <AirboxMeshBuildPanel selection={selection} />,
+    );
+
+    expect(html).toContain("Current scene revision");
+    expect(html).toContain(">7<");
+    expect(html).toContain("Mesh freshness");
+    expect(html).toContain(">stale<");
   });
 
   it("renders typed degraded phase, report, fallback, operation, policy, and provenance data", () => {
