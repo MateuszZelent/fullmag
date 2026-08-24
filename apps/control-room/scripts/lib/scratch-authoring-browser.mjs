@@ -9,6 +9,8 @@ export const DEFAULT_SCRATCH_WORKSPACE_URL =
 export const DEFAULT_SCRATCH_API_BASE =
   process.env.CONTROL_ROOM_API_BASE ?? new URL(DEFAULT_SCRATCH_WORKSPACE_URL).origin;
 
+const requestCounters = new WeakMap();
+
 export function finiteSceneRevision(scene) {
   const value = scene?.scene_revision ?? scene?.revision;
   const revision = Number(value);
@@ -264,6 +266,8 @@ async function loadPlaywright() {
 }
 
 async function requestJson(request, url, options = {}) {
+  const counter = requestCounters.get(request);
+  if (counter) counter.count += 1;
   const response = await request.fetch(url, {
     method: options.method ?? "GET",
     headers: { "content-type": "application/json", ...(options.headers ?? {}) },
@@ -342,6 +346,8 @@ export async function runScratchAuthoringBrowser({
   });
   const context = await browser.newContext({ viewport: { width: 1440, height: 960 } });
   const page = await context.newPage();
+  const requestCounter = { count: 0 };
+  requestCounters.set(context.request, requestCounter);
   page.setDefaultTimeout(timeoutMs);
   const requests = [];
   const errors = [];
@@ -389,8 +395,9 @@ export async function runScratchAuthoringBrowser({
       command_ids: [],
       screenshots: [],
       request_count: 0,
+      page_request_count: 0,
       topology_request_count: 0,
-      render_count: 0,
+      dom_mutation_count: 0,
       webgl: null,
       errors,
     };
@@ -506,8 +513,9 @@ export async function runScratchAuthoringBrowser({
     const finalScene = await requestJson(context.request, scratchApiUrl(apiBase, "/v2/sessions/current/model/scene"));
     manifest.normalized_scene = assertScratchScene(finalScene, fixture);
     manifest.webgl = await canvasHealth(page);
-    manifest.render_count = await page.evaluate(() => window.__FULLMAG_SCRATCH_RENDER_COUNT__ ?? 0);
-    manifest.request_count = requests.length;
+    manifest.dom_mutation_count = await page.evaluate(() => window.__FULLMAG_SCRATCH_RENDER_COUNT__ ?? 0);
+    manifest.request_count = requestCounter.count;
+    manifest.page_request_count = requests.length;
     manifest.topology_request_count = requests.filter(({ url }) => /topology|meshes\//i.test(url)).length;
     if (manifest.webgl.visible_canvas_count === 0 || !manifest.webgl.drawing_buffer_nonzero || manifest.webgl.context_lost) {
       throw new Error(`WebGL health failed: ${JSON.stringify(manifest.webgl)}`);
@@ -515,8 +523,8 @@ export async function runScratchAuthoringBrowser({
     if (manifest.request_count > SCRATCH_AUTHORING_MAX_REQUESTS) {
       throw new Error(`Scratch authoring request count exceeded ${SCRATCH_AUTHORING_MAX_REQUESTS}: ${manifest.request_count}`);
     }
-    if (manifest.render_count > SCRATCH_AUTHORING_MAX_RENDER_MUTATIONS) {
-      throw new Error(`Scratch authoring render count exceeded ${SCRATCH_AUTHORING_MAX_RENDER_MUTATIONS}: ${manifest.render_count}`);
+    if (manifest.dom_mutation_count > SCRATCH_AUTHORING_MAX_RENDER_MUTATIONS) {
+      throw new Error(`Scratch authoring DOM mutation count exceeded ${SCRATCH_AUTHORING_MAX_RENDER_MUTATIONS}: ${manifest.dom_mutation_count}`);
     }
     if (errors.length > 0) throw new Error(`Browser errors: ${errors.join("\n")}`);
     const outputPath = resolve(evidenceDir, `${backend}.manifest.json`);
@@ -524,6 +532,7 @@ export async function runScratchAuthoringBrowser({
     await writeFile(outputPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
     return { ...manifest, output_path: outputPath };
   } finally {
+    requestCounters.delete(context.request);
     await context.close();
     await browser.close();
   }

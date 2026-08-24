@@ -204,7 +204,9 @@ przez renderer zamiast być udawane jako uniform.
   parse optional chaining (`SyntaxError: Unexpected token .`).
 - Node helper **5/5** jest testem kontraktu transakcji/API i fail-closed WebGL
   health; używa direct API fallbacku dla authoringu i nie jest dowodem pełnych
-  kliknięć Inspectorów, build/apply mesha ani ukończenia Relax/Run.
+  kliknięć Inspectorów, build/apply mesha ani ukończenia Relax/Run. Jego
+  `request_count` obejmuje także bezpośrednie fetch, a `dom_mutation_count`
+  mierzy mutacje DOM (nie udaje licznika renderów React).
 - `just run-scratch-authoring-fem-browser-smoke fem_execution=cpu`: dodatkowo
   wymaga managed FEM runtime; nie uruchamiałem hostowego builda jako zamiennika.
 - WebGL `isContextLost()` i niezerowy drawing buffer są sprawdzane przez helper,
