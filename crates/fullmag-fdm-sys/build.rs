@@ -6,7 +6,7 @@ fn main() {
     if let Ok(lib_dir) = std::env::var("FULLMAG_FDM_LIB_DIR") {
         println!("cargo:rustc-link-search=native={}", lib_dir);
         println!("cargo:rustc-link-lib=dylib=fullmag_fdm");
-        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir);
+        emit_unix_runtime_rpath(&lib_dir);
         println!("cargo:metadata=lib_dir={}", lib_dir);
         println!("cargo:rerun-if-env-changed=FULLMAG_FDM_LIB_DIR");
         return;
@@ -82,11 +82,17 @@ fn main() {
         build_dir.join("backends/fdm").display()
     );
     println!("cargo:rustc-link-lib=dylib=fullmag_fdm");
-    println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/../lib");
+    emit_unix_runtime_rpath("$ORIGIN/../lib");
     println!(
         "cargo:metadata=lib_dir={}",
         build_dir.join("backends/fdm").display()
     );
+}
+
+fn emit_unix_runtime_rpath(path: &str) {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{path}");
+    }
 }
 
 fn generate_execution_receipt_value_assertions() {

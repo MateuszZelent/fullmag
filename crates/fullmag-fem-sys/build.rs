@@ -29,7 +29,48 @@ fn rerun_if_changed_tree(path: impl AsRef<std::path::Path>) {
     }
 }
 
+fn generate_gpu_execution_receipt_abi_assertions(out_dir: &std::path::Path) {
+    const FIELDS: &[(&str, usize)] = &[
+        ("abi_version", 0),
+        ("struct_size", 4),
+        ("execution_class", 8),
+        ("precision", 12),
+        ("integrator", 16),
+        ("device_ordinal", 20),
+        ("required_operator_mask", 24),
+        ("resolved_device_operator_mask", 32),
+        ("resolved_host_operator_mask", 40),
+        ("resolved_unknown_operator_mask", 48),
+        ("executed_device_operator_mask", 56),
+        ("executed_host_operator_mask", 64),
+        ("executed_unknown_operator_mask", 72),
+        ("fallback_count", 80),
+        ("accepted_step_count", 88),
+        ("rejected_attempt_count", 96),
+        ("failed_attempt_count", 104),
+        ("hot_loop_compute_h2d_bytes", 112),
+        ("hot_loop_compute_d2h_bytes", 120),
+        ("hot_loop_compute_host_sync_count", 128),
+    ];
+    let mut generated = String::from(
+        "const _: () = {\n    assert!(std::mem::size_of::<fullmag_fem_gpu_execution_receipt_v1>() == 136);\n    assert!(std::mem::align_of::<fullmag_fem_gpu_execution_receipt_v1>() == 8);\n",
+    );
+    for (field, offset) in FIELDS {
+        generated.push_str(&format!(
+            "    assert!(std::mem::offset_of!(fullmag_fem_gpu_execution_receipt_v1, {field}) == {offset});\n"
+        ));
+    }
+    generated.push_str("};\n");
+    std::fs::write(
+        out_dir.join("gpu_execution_receipt_abi_assertions.rs"),
+        generated,
+    )
+    .expect("writing GPU execution receipt ABI assertions should succeed");
+}
+
 fn main() {
+    let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    generate_gpu_execution_receipt_abi_assertions(&out_dir);
     println!("cargo:rerun-if-env-changed=FULLMAG_CUDA_ARCHITECTURES");
     if let Ok(lib_dir) = std::env::var("FULLMAG_FEM_LIB_DIR") {
         println!("cargo:rustc-link-search=native={}", lib_dir);
@@ -60,7 +101,6 @@ fn main() {
 
     let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let native_root = manifest_dir.join("../../native");
-    let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let build_dir = out_dir.join("native-build");
 
     std::fs::create_dir_all(&build_dir).expect("creating native build dir should succeed");
