@@ -318,13 +318,22 @@ class LayeredMeshDslValidationTests(unittest.TestCase):
             {"smoothing_steps": 0},
             {"optimize_iters": 0},
             {"boundary_layer_count": 0},
+            {"algorithm_2d": True},
+            {"algorithm_3d": 1.5},
+            {"algorithm_2d": float("inf")},
+            {"through_thickness_symmetric": "false"},
         )
         for kwargs in invalid:
             with self.subTest(kwargs=kwargs), self.assertRaises((TypeError, ValueError)):
                 PerObjectMeshRecipe(**kwargs)
 
+        recipe = PerObjectMeshRecipe(algorithm_2d=np.int64(6), algorithm_3d=np.int64(10))
+        self.assertEqual((recipe.algorithm_2d, recipe.algorithm_3d), (6, 10))
+        self.assertIs(type(recipe.algorithm_2d), int)
+        self.assertIs(type(recipe.algorithm_3d), int)
+
     def test_per_object_recipe_rejects_unavailable_object_mesh_source(self) -> None:
-        with self.assertRaisesRegex(ValueError, "FEM\(mesh=\.\.\.\)"):
+        with self.assertRaisesRegex(ValueError, r"FEM\(mesh=\.\.\.\)"):
             PerObjectMeshRecipe(source="object.mesh")
 
     def test_per_object_recipe_rejects_boolean_order_and_normalizes_integral(self) -> None:

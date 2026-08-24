@@ -236,10 +236,12 @@ export function validateObjectMeshTopologyCapabilities(
   ].filter(
     (value): value is number => typeof value === "number" && Number.isInteger(value),
   );
+  const supportedLayerCounts = new Set(
+    capabilities.layeredPrism.supportedLayerCounts,
+  );
   if (
     requestedLayerCounts.some(
-      (layerCount) =>
-        !capabilities.layeredPrism.supportedLayerCounts.includes(layerCount),
+      (layerCount) => !supportedLayerCounts.has(layerCount),
     )
   ) {
     return `Exact layered prism supports ${capabilities.layeredPrism.supportedLayerCounts.join(

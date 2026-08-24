@@ -672,6 +672,17 @@ class PerObjectMeshRecipe:
                 raise TypeError("order must be an integer")
             object.__setattr__(self, "order", int(self.order))
 
+        for field_name in ("algorithm_2d", "algorithm_3d"):
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, Integral):
+                raise TypeError(f"{field_name} must be an integer")
+            object.__setattr__(self, field_name, int(value))
+
+        if not isinstance(self.through_thickness_symmetric, bool):
+            raise TypeError("through_thickness_symmetric must be a boolean")
+
         for field_name in (
             "maximum_element_size",
             "minimum_element_size",
