@@ -33,8 +33,8 @@ Nie należy jednak kwalifikować całego zakresu FEM/FDM 3D jako bezwarunkowo go
 ### Klasyfikacja
 
 - P0: 0
-- P1: 2
-- P2: 10
+- P1: 3
+- P2: 9
 - P3: 2
 
 ---
@@ -195,8 +195,8 @@ każdego engine innego niż `CpuReference`.
 | 12 | `u` | deferred | full | N | N | N | N | N | mechanika bez live 3D |
 | 13 | `eps` | deferred, 6 comp. | full | N | N | N | N | N | shape `VectorField` jest nieprecyzyjny |
 | 14 | `sigma` | deferred, 6 comp. | full | N | N | N | N | N | powinien być symmetric tensor |
-| 15 | `H_ani_cubic` | 3D vector | magnetic | N | N | N | C | C | zwykły FDM CPU/GPU oraz multilayer selector nie materializują cubic anisotropy |
-| 16 | `H_dmi_bulk` | 3D vector | magnetic | N | N | N | C | C | zwykły FDM CPU/GPU oraz multilayer selector nie materializują bulk DMI |
+| 15 | `H_ani_cubic` | 3D vector | magnetic | N | N | C | C | C | multilayer CPU materializuje osobny payload po aktywacji cubic anisotropy; zwykły FDM CPU/GPU nie materializuje |
+| 16 | `H_dmi_bulk` | 3D vector | magnetic | N | N | C | C | C | multilayer CPU materializuje osobny payload po aktywacji bulk DMI; zwykły FDM CPU/GPU nie materializuje |
 | 17 | `H_oe` | 3D vector | full | C | C | N | C | C | multilayer IR bez Oersteda |
 | 18 | `H_therm` | 3D vector | magnetic | N | N | N | C | C | FDM CPU/GPU i multilayer bez preview termicznego |
 | 19 | `E_ex` | hist. | magnetic | S | S | S | S | S | global scalar |
@@ -213,14 +213,14 @@ każdego engine innego niż `CpuReference`.
 | 30 | `mode_real` | deferred analysis | magnetic | N | N | N | N | N | osobna ścieżka eigen |
 | 31 | `mode_imag` | deferred analysis | magnetic | N | N | N | N | N | osobna ścieżka eigen |
 | 32 | `mode_phase` | deferred analysis | magnetic | N | N | N | N | N | osobna ścieżka eigen |
-| 33 | `eden_ex` | 3D scalar | magnetic | C | C | C | C | C | cell field |
-| 34 | `eden_demag` | 3D scalar | magnetic | C | C | C | C | C | cell field |
+| 33 | `eden_ex` | 3D scalar | magnetic | C | C | C | C | C | FDM: cell field; native FEM: nodal visualization/conservative tetra projection mimo katalogowej lokalizacji cell |
+| 34 | `eden_demag` | 3D scalar | magnetic | C | C | C | C | C | FDM: cell field; native FEM: nodal visualization/conservative tetra projection mimo katalogowej lokalizacji cell |
 | 35 | `demag_phi` | deferred scalar | full | N | N | N | C | C | FEM może liczyć, UI 3D blokuje |
-| 36 | `eden_ext` | 3D scalar | magnetic | C | C | C | C | C | cell field |
+| 36 | `eden_ext` | 3D scalar | magnetic | C | C | C | C | C | FDM: cell field; native FEM: nodal visualization/conservative tetra projection mimo katalogowej lokalizacji cell |
 | 37 | `eden_drive` | 3D scalar | magnetic | N | C | N | N | N | FDM CPU, multilayer i native FEM bez materializatora drive-density |
-| 38 | `eden_ani` | 3D scalar | magnetic | C | C | C | C | C | cell field |
-| 39 | `eden_dmi` | 3D scalar | magnetic | C | C | C | C | C | cell field |
-| 40 | `eden_total` | 3D scalar | magnetic | C | A | A | C | C | FDM CPU i native FEM są poprawne tylko bez regional drive; ich suma pomija `eden_drive` |
+| 38 | `eden_ani` | 3D scalar | magnetic | C | C | C | C | C | FDM: cell field; native FEM: nodal visualization/conservative tetra projection mimo katalogowej lokalizacji cell |
+| 39 | `eden_dmi` | 3D scalar | magnetic | C | C | C | C | C | FDM: cell field; native FEM: nodal visualization/conservative tetra projection mimo katalogowej lokalizacji cell |
+| 40 | `eden_total` | 3D scalar | magnetic | C | A | A | C | C | native FEM publikuje nodal projection zamiast katalogowego cell field; FDM CPU i native FEM pomijają `eden_drive` przy regional drive |
 | 41 | `mat_ms` | 3D scalar | magnetic | A | N | A | N | N | brak CUDA FDM i FEM material field provider |
 | 42 | `mat_aex` | 3D scalar | magnetic | A | N | A | N | N | brak CUDA FDM i FEM material field provider |
 | 43 | `mat_alpha` | 3D scalar | magnetic | A | N | A | N | N | brak CUDA FDM i FEM material field provider |
@@ -239,7 +239,9 @@ każdego engine innego niż `CpuReference`.
 - Katalog jest kompletny semantycznie, ale nie oznacza parytetu backendów. UI musi używać `resolved_capability`.
 - FEM nie publikuje obecnie pięciu pól materiałowych: `mat_ms`, `mat_aex`, `mat_alpha`, `mat_dind`, `mat_dbulk`.
 - FDM multilayer świadomie ma ograniczony IR i zestaw obserwabli.
+- FDM multilayer CPU materializuje `H_ani_cubic` i `H_dmi_bulk`, gdy odpowiadająca fizyka jest aktywna; testy wymagają osobnych, niezerowych payloadów.
 - FDM multilayer GPU nie ma ścieżki interactive snapshot; wszystkie quantities są tam `N`, niezależnie od CPU multilayer providerów.
+- Native FEM materializuje przestrzenne gęstości energii jako tablice `node_count` z metodą `fem_nodal_visualization_projection` albo `fem_nodal_conservative_tetra_projection`. To warunkowa wizualizacja, nie realizacja katalogowego kontraktu cell-located; provenance i UI muszą ujawniać projekcję.
 - `eden_total` w FDM CPU i native FEM nie jest pełnym totalem przy aktywnym regional drive, ponieważ bieżące sumatory pomijają `eden_drive`.
 - Transport jest canonical, lecz standardowy renderer 3D nie ma jeszcze pełnej semantyki scalar/vector/tensor dla tych pól.
 - `eps` i `sigma` powinny otrzymać `SymmetricTensorField` lub równoważny descriptor przed ekspozycją.
@@ -257,7 +259,7 @@ każdego engine innego niż `CpuReference`.
 - `B_drive -> H_drive`;
 - skalowanie przez `mu0`.
 
-Mapy nie pokrywają pełnych 52 ID. Po aktywacji nowych quantity może to dać błędną jednostkę, niewłaściwy component selector, błędny colorbar lub potraktowanie scalar/tensor field jako vector3.
+Mapy nie pokrywają pełnych 52 ID. Dla aktywnego `eden_drive` na CUDA FDM błąd jest już osiągalny: brak ID w `SCALAR_SPATIAL_QUANTITY_IDS` wybiera kontrolki i kolorowanie wektorowe dla jednoskładnikowego payloadu, a brak wpisu w `QUANTITY_UNITS` daje pustą jednostkę colorbara. Kolejne quantity mogą powtórzyć ten sam defekt.
 
 Docelowo descriptor OpenAPI/TypeScript powinien zawierać ID, aliases, shape, components, unit, domain, location, preview policy, renderer kind i opcjonalny display transform. `quantityIds.ts` powinien ograniczyć się do typowanych helperów, bez niezależnej tabeli prawdy.
 
@@ -438,9 +440,9 @@ Sesja przechodzi do `awaiting_command`, a `compute_fields` może policzyć nowe 
 
 Branch API raportuje `master` jako `protected: false` z pustą listą required checks. Należy włączyć ruleset i wymagać wszystkich contextów z `frontend-3d-required-check-matrix.md`.
 
-### F3D-AUD-003 — P2 — frontend duplikuje quantity metadata
+### F3D-AUD-003 — P1 — frontend duplikuje quantity metadata i błędnie renderuje `eden_drive`
 
-Ręczne aliases, units, scalar IDs i display transforms mogą rozjechać się z katalogiem Rust. Wymagany generated descriptor/parity test dla 52 ID.
+Ręczne aliases, units, scalar IDs i display transforms są już rozjechane z katalogiem Rust: aktywne na CUDA FDM `eden_drive` nie jest klasyfikowane jako scalar-spatial, otrzymuje wektorowe kontrolki/kolorowanie i pustą jednostkę colorbara. Wymagany jest generated descriptor/parity test dla 52 ID oraz browser regression, który materializuje jednoskładnikowy `eden_drive`, wymaga scalar renderer/controller i jednostki `J/m³`.
 
 ### F3D-AUD-004 — P1 — full-domain jest używane jako przybliżenie Airbox capability
 
@@ -521,7 +523,7 @@ Identity payloadu jest bezpieczne, lecz Inspector powinien pokazywać `carrier_k
 1. Usunąć ręczne frontend metadata maps.
 2. Wprowadzić carrier-specific quantity capability.
 3. Wprowadzić typed lifecycle enum.
-4. Dodać parity tests dla wszystkich 52 ID.
+4. Dodać parity tests dla wszystkich 52 ID, w tym jawny test `eden_drive` jako scalar-spatial `J/m³` z poprawnym colorbarem i bez kontrolek wektorowych.
 5. Naprawić leaf reset `boundsVisible` i `pointsVisible` (F3D-AUD-006).
 
 ### Etap 2 — pełna interaktywność
@@ -547,6 +549,7 @@ Identity payloadu jest bezpieczne, lecz Inspector powinien pokazywać `carrier_k
 - [ ] 52 IDs mają dokładnie jeden canonical descriptor i provider registry entry.
 - [ ] Frontend nie ma niezależnych units/shape/aliases.
 - [ ] Każda quantity ma jawny wynik per lane i per carrier.
+- [ ] `eden_drive` używa scalar renderer/controller, publikuje jednostkę `J/m³` i nie pokazuje kontrolek wektorowych.
 - [ ] `eps`/`sigma` mają tensor contract przed ekspozycją.
 - [ ] `spin_current_tensor` nie trafia do vector3 renderer bez projekcji.
 
@@ -563,6 +566,7 @@ Identity payloadu jest bezpieczne, lecz Inspector powinien pokazywać `carrier_k
 - [ ] obiekt i Airbox mają niezależną widoczność i quantity;
 - [ ] part bez field-capable carriera nie żąda pola;
 - [ ] Airbox aggregate zachowuje per-part failure state;
+- [ ] każda native FEM gęstość energii oznacza nodal projection w provenance i nie jest przedstawiana jako katalogowe cell field;
 - [ ] opcjonalnie dwa parts jednego obiektu mają niezależne overrides.
 
 ### FDM
