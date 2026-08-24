@@ -1,9 +1,9 @@
 # Audyt frontendu wizualizacji 3D FEM/FDM i kontraktów backend–frontend
 
-**Projekt:** Fullmag  
-**Data audytu:** 2026-08-24  
-**Audytowany commit `master`:** `78cde18ee95b6d6ee1cd93e7a775bb7a8c7249de`  
-**Zakres:** Control Room, API v2, transport pól, targety i carriery FEM/FDM, Airbox, quantities oraz stan interaktywny po zakończeniu etapu solvera  
+**Projekt:** Fullmag
+**Data audytu:** 2026-08-24
+**Audytowany commit `master`:** `78cde18ee95b6d6ee1cd93e7a775bb7a8c7249de`
+**Zakres:** Control Room, API v2, transport pól, targety i carriery FEM/FDM, Airbox, quantities oraz stan interaktywny po zakończeniu etapu solvera
 **Rodzaj audytu:** statyczna analiza kodu i kontraktów. Raport nie deklaruje wykonania managed FEM, browser/WebGL fixture ani testów runtime dla wskazanego SHA.
 
 ---
@@ -593,7 +593,7 @@ Na moment audytu:
 - zapytanie o PR-triggered workflow runs dla SHA nie zwróciło wyników. Nie dowodzi to braku push-triggered runs;
 - managed FEM i browser fixture nie zostały wykonane w ramach tego audytu.
 
-> **ARCHITECTURE REVIEW: PASS WITH FINDINGS**  
+> **ARCHITECTURE REVIEW: PASS WITH FINDINGS**
 > **FULL PRODUCTION QUALIFICATION FOR SHA: NOT PROVEN / BLOCKED PENDING REQUIRED CI EVIDENCE**
 
 ---
