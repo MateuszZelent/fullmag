@@ -7128,7 +7128,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let (
         mut stage_execution_plans,
         mut current_plan_summary,
-        initial_execution_plan,
+        mut initial_execution_plan,
         initial_live_state,
         initial_fem_mesh,
         mut initial_fem_mesh_asset,
@@ -8070,9 +8070,23 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         }
 
         loop {
+            if display_selection_handle.owner_session_lost() {
+                live_workspace.push_log(
+                    "warning",
+                    "Attached runtime owner session was replaced — stopping before compute",
+                );
+                return Ok(());
+            }
             let Some(cmd) =
                 display_selection_handle.wait_next_command_coalesced(Duration::from_millis(250))
             else {
+                if display_selection_handle.owner_session_lost() {
+                    live_workspace.push_log(
+                        "warning",
+                        "Attached runtime owner session was replaced — stopping before compute",
+                    );
+                    return Ok(());
+                }
                 continue;
             };
 
@@ -8212,11 +8226,86 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     continue;
                 }
                 WaitForSolveCommandAction::StartSolver => {
+                    if matches!(cmd.kind.as_str(), "relax" | "run" | "solve") {
+                        let Some(mut command_stage) =
+                            (match build_interactive_command_stage(&stages[0].ir, &cmd) {
+                                Ok(Some(stage)) => Some(stage),
+                                Ok(None) => {
+                                    let message = format!(
+                                        "wait_for_solve command '{}' did not produce an executable stage",
+                                        cmd.kind
+                                    );
+                                    live_workspace.push_log("error", message.clone());
+                                    eprintln!("[fullmag] {message}");
+                                    None
+                                }
+                                Err(error) => {
+                                    let message = format!(
+                                        "wait_for_solve command '{}' rejected: {}",
+                                        cmd.kind, error
+                                    );
+                                    live_workspace.push_log("error", message.clone());
+                                    eprintln!("[fullmag] {message}");
+                                    None
+                                }
+                            })
+                        else {
+                            continue;
+                        };
+                        apply_current_fem_overrides(
+                            &mut command_stage.ir,
+                            current_fem_mesh_override.as_ref(),
+                            current_fem_hmax_override,
+                            current_adaptive_runtime_state.as_ref(),
+                        );
+                        attach_region_realization_revisions(
+                            &mut command_stage.ir,
+                            cmd.precondition.as_ref(),
+                        );
+                        if let Err(error) = validate_ir(&command_stage.ir) {
+                            let message = format!(
+                                "wait_for_solve command '{}' rejected by validation: {}",
+                                cmd.kind, error
+                            );
+                            live_workspace.push_log("error", message.clone());
+                            eprintln!("[fullmag] {message}");
+                            continue;
+                        }
+                        let command_plan = match fullmag_plan::plan(&command_stage.ir) {
+                            Ok(plan) => plan,
+                            Err(error) => {
+                                let message = format!(
+                                    "wait_for_solve command '{}' could not be planned: {}",
+                                    cmd.kind, error
+                                );
+                                live_workspace.push_log("error", message.clone());
+                                eprintln!("[fullmag] {message}");
+                                continue;
+                            }
+                        };
+                        stages[0] = command_stage;
+                        stage_execution_plans[0] = command_plan.clone();
+                        initial_execution_plan = command_plan;
+                        current_plan_summary = stages[0]
+                            .ir
+                            .plan_for(args.backend.map(BackendTarget::from))
+                            .map_err(join_errors)?;
+                        if stages.len() == 1 {
+                            interactive_template_ir = stages[0].ir.clone();
+                        }
+                        live_workspace.push_log(
+                            "info",
+                            format!(
+                                "Applied solver command payload overrides for {}",
+                                cmd.kind
+                            ),
+                        );
+                    }
                     eprintln!("[fullmag] compute requested — starting solver");
                     // The attached scratch runtime admits the command here, while the
-                    // canonical SceneDocument stage remains the source of solver controls.
+                    // canonical SceneDocument stage remains the source of solver defaults.
                     // UI edits must be committed to the scene before issuing relax/run;
-                    // command payload overrides are handled by the regular interactive loop.
+                    // explicit command payload overrides were materialized and replanned above.
                     start_solver_command_id = Some(cmd.command_id.clone());
                     live_workspace.push_log("system", "Compute requested — starting solver");
                     live_workspace.update(|state| {
@@ -9307,6 +9396,13 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         // Each completed/skipped stage pops from the front. Break aborts the whole sequence.
         let mut active_sequence: Option<ActiveSequenceState> = None;
         loop {
+            if display_selection_handle.owner_session_lost() {
+                live_workspace.push_log(
+                    "warning",
+                    "Attached runtime owner session was replaced — closing workspace",
+                );
+                break;
+            }
             if paused_stage.is_some() {
                 match interactive_runtime_host.take_running_interrupt() {
                     Some(crate::interactive_runtime_host::InteractiveStageInterrupt::Break) => {
@@ -9389,6 +9485,13 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             let Some(command) =
                 interactive_runtime_host.wait_next_command_coalesced(Duration::from_millis(250))
             else {
+                if display_selection_handle.owner_session_lost() {
+                    live_workspace.push_log(
+                        "warning",
+                        "Attached runtime owner session was replaced — closing workspace",
+                    );
+                    break;
+                }
                 continue;
             };
 
@@ -10757,6 +10860,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             paused_stage = None;
         }
         interactive_runtime_host.mark_closed(&live_workspace);
+        if display_selection_handle.owner_session_lost() {
+            return Ok(());
+        }
         live_workspace.update(|state| {
             set_live_state_status(&mut state.live_state, "completed", Some(true));
         });
@@ -11317,6 +11423,7 @@ mod tests {
             geometry: "film_geometry".to_string(),
         }];
         problem.magnets = vec![MagnetIR {
+            object_id: None,
             name: "film".to_string(),
             region: "film_region".to_string(),
             material: "mat".to_string(),
@@ -13859,6 +13966,7 @@ mod tests {
             fe_order: 1,
             hmax: 1.0,
             initial_magnetization: vec![[0.0, 0.0, 1.0]; 4],
+            frozen_spins: None,
             material: MaterialIR {
                 name: "Py".to_string(),
                 saturation_magnetisation: 800e3,
@@ -13999,6 +14107,7 @@ mod tests {
             fe_order: 1,
             hmax: 1.0,
             initial_magnetization: vec![[0.0, 0.0, 1.0]; 8],
+            frozen_spins: None,
             material: MaterialIR {
                 name: "Py".to_string(),
                 saturation_magnetisation: 800e3,
@@ -14139,6 +14248,8 @@ mod tests {
             regions: Vec::new(),
             materials: Vec::new(),
             magnets: Vec::new(),
+            selections: Vec::new(),
+            magnetization_constraints: Vec::new(),
             energy_terms: Vec::new(),
             study: StudyIR::TimeEvolution {
                 dynamics: DynamicsIR::Llg {
@@ -15058,6 +15169,7 @@ mod tests {
             object_regions: Vec::new(),
             magnets: vec![
                 MagnetIR {
+                    object_id: None,
                     name: "left_magnet".to_string(),
                     region: "left_region".to_string(),
                     material: "mat_left".to_string(),
@@ -15067,6 +15179,7 @@ mod tests {
                     }),
                 },
                 MagnetIR {
+                    object_id: None,
                     name: "right_magnet".to_string(),
                     region: "right_region".to_string(),
                     material: "mat_right".to_string(),

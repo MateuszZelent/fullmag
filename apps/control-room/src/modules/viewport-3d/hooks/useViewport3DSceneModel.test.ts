@@ -769,6 +769,9 @@ describe("useViewport3DSceneModel", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 
     expect(source).toContain(
+      'domainMeta.data?.discretization === "fdm" && domainMeta.data.grid',
+    );
+    expect(source).toContain(
       "adaptFdmDomainPresentation(fdmDomainPresentation, FDM_DISPLAY_CELL_BUDGET)",
     );
     expect(source).toContain("formatFdmDisplaySamplingSummary({");

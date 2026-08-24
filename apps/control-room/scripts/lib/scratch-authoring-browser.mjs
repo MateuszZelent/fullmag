@@ -33,6 +33,19 @@ export function scratchApiUrl(apiBase, path) {
   return new URL(path, apiBase).toString();
 }
 
+export function isExpectedScratchHttpError(entry) {
+  if (entry.status === 404 && /\/simulation\/(preparation|runs\/current)$/.test(entry.url)) {
+    return true;
+  }
+  if (entry.status === 404 && /\/interactions\/uniaxial_anisotropy$/.test(entry.url)) {
+    return true;
+  }
+  return entry.status === 409 &&
+    entry.method === "POST" &&
+    /\/simulation\/commands$/.test(entry.url) &&
+    String(entry.body ?? "").includes("session_completed_read_only");
+}
+
 export function buildScratchObjectTransaction(fixture, baseRevision) {
   const object = fixture.object;
   return {
@@ -419,7 +432,9 @@ export async function runScratchAuthoringBrowser({
   fixture,
   workspaceUrl = DEFAULT_SCRATCH_WORKSPACE_URL,
   apiBase = DEFAULT_SCRATCH_API_BASE,
-  evidenceDir = resolve(process.cwd(), ".fullmag/test-results/scratch-authoring"),
+  evidenceDir = process.env.CONTROL_ROOM_SCRATCH_EVIDENCE_DIR
+    ? resolve(process.env.CONTROL_ROOM_SCRATCH_EVIDENCE_DIR)
+    : resolve(process.cwd(), ".fullmag/test-results/scratch-authoring"),
   timeoutMs = Number(process.env.CONTROL_ROOM_SCRATCH_AUTHORING_TIMEOUT_MS ?? 120_000),
 }) {
   const playwright = await loadPlaywright();
@@ -435,14 +450,51 @@ export async function runScratchAuthoringBrowser({
   requestCounters.set(context.request, requestCounter);
   page.setDefaultTimeout(timeoutMs);
   const requests = [];
+  const httpErrors = [];
+  const httpErrorDetails = [];
+  const pendingResponseReads = new Set();
+  const requestFailures = [];
   const errors = [];
+  const consoleErrorLocations = [];
   page.on("request", (request) => {
     if (request.url().includes("/v2/")) requests.push({ method: request.method(), url: request.url() });
   });
-  page.on("console", (message) => {
-    if (message.type() === "error") errors.push(message.text());
+  page.on("response", async (response) => {
+    if (response.status() >= 400) {
+      const summary = `${response.status()} ${response.request().method()} ${response.url()}`;
+      httpErrors.push(summary);
+      const read = response
+        .text()
+        .catch(() => "")
+        .then((body) => {
+          httpErrorDetails.push({
+            status: response.status(),
+            method: response.request().method(),
+            url: response.url(),
+            body,
+          });
+        })
+        .finally(() => pendingResponseReads.delete(read));
+      pendingResponseReads.add(read);
+    }
   });
-  page.on("pageerror", (error) => errors.push(error.stack ?? error.message));
+  page.on("requestfailed", (request) => {
+    requestFailures.push({
+      method: request.method(),
+      url: request.url(),
+      failure: request.failure()?.errorText ?? "unknown request failure",
+    });
+  });
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      errors.push(message.text());
+      consoleErrorLocations.push(message.location().url || null);
+    }
+  });
+  page.on("pageerror", (error) => {
+    errors.push(error.stack ?? error.message);
+    consoleErrorLocations.push(null);
+  });
   await page.addInitScript(({ apiBase: configuredApiBase }) => {
     window.__FULLMAG_CONFIG__ = {
       ...(window.__FULLMAG_CONFIG__ ?? {}),
@@ -674,6 +726,11 @@ export async function runScratchAuthoringBrowser({
     manifest.request_count = requestCounter.count;
     manifest.page_request_count = requests.length;
     manifest.topology_request_count = requests.filter(({ url }) => /topology|meshes\//i.test(url)).length;
+    await Promise.all([...pendingResponseReads]);
+    manifest.http_errors = httpErrorDetails;
+    const unexpectedHttpErrors = httpErrorDetails.filter((entry) => !isExpectedScratchHttpError(entry));
+    manifest.unexpected_http_errors = unexpectedHttpErrors;
+    manifest.request_failures = requestFailures;
     if (manifest.webgl.visible_canvas_count === 0 || !manifest.webgl.drawing_buffer_nonzero || manifest.webgl.context_lost) {
       throw new Error(`WebGL health failed: ${JSON.stringify(manifest.webgl)}`);
     }
@@ -683,7 +740,27 @@ export async function runScratchAuthoringBrowser({
     if (manifest.dom_mutation_count > SCRATCH_AUTHORING_MAX_RENDER_MUTATIONS) {
       throw new Error(`Scratch authoring DOM mutation count exceeded ${SCRATCH_AUTHORING_MAX_RENDER_MUTATIONS}: ${manifest.dom_mutation_count}`);
     }
-    if (errors.length > 0) throw new Error(`Browser errors: ${errors.join("\n")}`);
+    let expectedResourceConsoleErrors = httpErrorDetails.filter(isExpectedScratchHttpError).length;
+    const consoleErrors = errors.filter((error, index) => {
+      if (!error.startsWith("Failed to load resource:")) return true;
+      const location = consoleErrorLocations[index];
+      const matchedExpectedResponse = httpErrorDetails.some(
+        (entry) => isExpectedScratchHttpError(entry) && location && location === entry.url,
+      );
+      if (matchedExpectedResponse) return false;
+      if (expectedResourceConsoleErrors > 0) {
+        expectedResourceConsoleErrors -= 1;
+        return false;
+      }
+      return true;
+    });
+    if (consoleErrors.length > 0 || unexpectedHttpErrors.length > 0 || requestFailures.length > 0) {
+      const httpSummary = httpErrors.length > 0 ? `\nHTTP responses:\n${httpErrors.join("\n")}` : "";
+      const requestFailureSummary = requestFailures.length > 0
+        ? `\nRequest failures:\n${requestFailures.map(({ method, url, failure }) => `${failure} ${method} ${url}`).join("\n")}`
+        : "";
+      throw new Error(`Browser errors: ${consoleErrors.join("\n")}${httpSummary}${requestFailureSummary}`);
+    }
     const outputPath = resolve(evidenceDir, `${backend}.manifest.json`);
     await mkdir(dirname(outputPath), { recursive: true });
     await writeFile(outputPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");

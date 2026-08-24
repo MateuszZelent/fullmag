@@ -2784,7 +2784,7 @@ export function useViewport3DSceneModel({
   });
   const fdmDomainPresentation = useMemo(
     () =>
-      domainMeta.data?.discretization === "fdm"
+      domainMeta.data?.discretization === "fdm" && domainMeta.data.grid
         ? adaptDomainPresentation({
             domainMeta: domainMeta.data,
             expectedFdmGridFingerprint:

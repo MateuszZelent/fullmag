@@ -1915,6 +1915,14 @@ describe("ControlRoomApi", () => {
           url: String(url),
         });
         const requestUrl = String(url);
+        if (requestUrl.endsWith("/v2/sessions/current/model/geometry/validation")) {
+          return jsonResponse({ dirty: false, scene_revision: 1 });
+        }
+        if (requestUrl.endsWith("/v2/sessions/current/status")) {
+          return jsonResponse({
+            resources: { mesh_revision: 1, mesh_build_revision: 1 },
+          });
+        }
         if (requestUrl.endsWith("/v2/sessions/current/simulation/commands")) {
           return jsonResponse({
             accepted: true,
@@ -2071,6 +2079,14 @@ describe("ControlRoomApi", () => {
           url: String(url),
         });
         const requestUrl = String(url);
+        if (requestUrl.endsWith("/v2/sessions/current/model/geometry/validation")) {
+          return jsonResponse({ dirty: false, scene_revision: 1 });
+        }
+        if (requestUrl.endsWith("/v2/sessions/current/status")) {
+          return jsonResponse({
+            resources: { mesh_revision: 1, mesh_build_revision: 1 },
+          });
+        }
         if (requestUrl.endsWith("/v2/sessions/current/simulation/commands")) {
           return jsonResponse({
             accepted: true,
@@ -2124,6 +2140,95 @@ describe("ControlRoomApi", () => {
       reason: "field_on_demand",
       target: { kind: "study" },
     });
+  });
+
+  it("does not enqueue field materialization while the authored mesh is stale", async () => {
+    const calls: Array<{ method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        const requestUrl = String(url);
+        calls.push({ method: init?.method, url: requestUrl });
+        if (requestUrl.includes("/data/fields/H_demag/samples/vector")) {
+          return new Response(null, { headers: contractHeaders, status: 204 });
+        }
+        if (requestUrl.includes("/data/fields/H_demag/meta")) {
+          return jsonResponse(
+            { message: "field 'H_demag' not available in memory" },
+            { status: 404 },
+          );
+        }
+        if (requestUrl.endsWith("/v2/sessions/current/simulation/solver/status")) {
+          return jsonResponse({ is_busy: false, runtime_state: "waiting_for_compute" });
+        }
+        if (requestUrl.endsWith("/v2/sessions/current/model/geometry/validation")) {
+          return jsonResponse({ dirty: true });
+        }
+        if (requestUrl.endsWith("/v2/sessions/current/status")) {
+          return jsonResponse({
+            resources: { mesh_revision: 2, mesh_build_revision: 1 },
+          });
+        }
+        throw new Error(`Unexpected request ${requestUrl}`);
+      },
+    });
+
+    await expect(
+      api.data.fields.vector("H_demag", {
+        component: "full",
+        scope_id: "body",
+        scope_kind: "part",
+      }),
+    ).resolves.toMatchObject({ status: "not-applicable" });
+    expect(
+      calls.filter(
+        (call) =>
+          call.method === "POST" &&
+          call.url.endsWith("/v2/sessions/current/simulation/commands"),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("fails closed when mesh freshness validation is unavailable", async () => {
+    const calls: Array<{ method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        const requestUrl = String(url);
+        calls.push({ method: init?.method, url: requestUrl });
+        if (requestUrl.includes("/data/fields/H_demag/samples/vector")) {
+          return new Response(null, { headers: contractHeaders, status: 204 });
+        }
+        if (requestUrl.includes("/data/fields/H_demag/meta")) {
+          return jsonResponse(
+            { message: "field 'H_demag' not available in memory" },
+            { status: 404 },
+          );
+        }
+        if (requestUrl.endsWith("/v2/sessions/current/model/geometry/validation")) {
+          throw new Error("validation unavailable");
+        }
+        if (requestUrl.endsWith("/v2/sessions/current/simulation/solver/status")) {
+          return jsonResponse({ is_busy: false, runtime_state: "waiting_for_compute" });
+        }
+        throw new Error(`Unexpected request ${requestUrl}`);
+      },
+    });
+
+    await expect(
+      api.data.fields.vector("H_demag", {
+        component: "full",
+        scope_id: "body",
+        scope_kind: "part",
+      }),
+    ).resolves.toMatchObject({ status: "not-applicable" });
+    expect(
+      calls.filter(
+        (call) =>
+          call.method === "POST" &&
+          call.url.endsWith("/v2/sessions/current/simulation/commands"),
+      ),
+    ).toHaveLength(0);
   });
 
   it("retries a pending field vector without enqueueing a duplicate compute command", async () => {

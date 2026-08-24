@@ -214,6 +214,47 @@ def test_scene_document_normalizes_fdm_grid_object_ids_to_magnet_names() -> None
         assert loaded.problem.to_ir()["ir_version"] == "0.3.0"
 
 
+def test_zero_dmi_material_defaults_do_not_activate_fdm_interactions() -> None:
+    from fullmag.runtime.script_builder import render_scene_document_as_script
+
+    builder = _builder(backend="fdm")
+    builder["geometries"][0]["material"] = {
+        "Ms": 800e3,
+        "Aex": 13e-12,
+        "alpha": 0.02,
+        "Dind": 0.0,
+        "Dbulk": 0.0,
+    }
+    scene = build_scene_document_from_builder(builder)
+
+    assert all(
+        entry["kind"] not in {"interfacial_dmi", "bulk_dmi"}
+        for entry in scene["objects"][0]["physics_stack"]
+    )
+    source = render_scene_document_as_script(scene)
+    assert ".Dind =" not in source
+    assert ".Dbulk =" not in source
+
+
+def test_explicit_zero_dmi_modules_are_preserved_in_python_export() -> None:
+    from fullmag.runtime.script_builder import render_scene_document_as_script
+
+    builder = _builder(backend="fdm")
+    builder["geometries"][0]["physics_stack"] = [
+        {"kind": "exchange", "enabled": True},
+        {"kind": "demag", "enabled": True},
+        {"kind": "interfacial_dmi", "enabled": True, "params": {"dind": 0.0}},
+        {"kind": "bulk_dmi", "enabled": True, "params": {"dbulk": 0.0}},
+    ]
+
+    scene = build_scene_document_from_builder(builder)
+    stack = scene["objects"][0]["physics_stack"]
+    assert {entry["kind"] for entry in stack} >= {"interfacial_dmi", "bulk_dmi"}
+    source = render_scene_document_as_script(scene)
+    assert ".Dind = 0" in source
+    assert ".Dbulk = 0" in source
+
+
 def test_scene_document_export_rejects_an_incomplete_scene() -> None:
     from fullmag.runtime.script_builder import render_scene_document_as_script
 

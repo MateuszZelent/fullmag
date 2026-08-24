@@ -301,12 +301,38 @@ Dopiero po kodzie wyjścia `0`, screenshotach, manifestach i potwierdzeniu
 Wniosek: ścieżka authoringu i runtime FDM jest zaimplementowana oraz
 zweryfikowana kontraktowo i przez API; pozostałe punkty celu dotyczą
 zewnętrznej bramki browser/WebGL i kwalifikacji managed FEM.
-- `cargo test -p fullmag-cli wait_for_solve -- --nocapture` nie zbudował targetu
-  testowego przez istniejące fixture’y z brakującymi polami `object_id`,
-  `frozen_spins`, `selections` i `magnetization_constraints` w
-  `orchestrator.rs`, `step_utils.rs` i `main.rs`. Produkcyjny
-  `cargo check -p fullmag-cli --bin fullmag` pozostaje **PASS**; nie
-  rozszerzano zakresu o naprawę niezwiązanych fixture’ów testowych.
+
+### Aktualizacja dowodowa 2026-08-24 (pełny smoke FDM)
+
+- Pełny scenariusz Control Room + API + attached CLI dla FDM zakończył się
+  **PASS**. Manifest: `C:\Users\admin\Documents\Fullmag\.fullmag\scratch-evidence\browser-fdm-filtered\fdm.manifest.json`.
+- Scenariusz potwierdził rewizje `0..8`, obiekt `x-ferromagnet`, geometrię Box,
+  teksturę `uniform`, parametry `Ms/Aex/alpha/Dind/Dbulk`, grid globalny i
+  per-object, a następnie `mesh_build: completed` i `relax: completed`.
+- WebGL: jeden widoczny i zdrowy canvas, `context_lost=false`, drawing buffer
+  `617x525`; 30 żądań kontrolnych, 158 żądań strony, 39 mutacji DOM,
+  `unexpected_http_errors=[]`.
+- Wykryta luka lifecycle została naprawiona w fasadzie `ControlRoomApi`:
+  viewport nie wysyła `compute_fields`, gdy `model/geometry/validation` ma
+  `dirty=true`; równoległe odczyty walidacji są współdzielone tylko in-flight,
+  bez cache wyniku, a brak autorytatywnej odpowiedzi blokuje materializację.
+  Przed poprawką smoke ujawniał `409 Mesh out of date - build mesh before
+  compute`; po poprawce 409 zniknął. Oczekiwane `404` dla opcjonalnych zasobów
+  preparation/current-run i nieistniejącej interakcji są zapisane w manifeście,
+  ale nie są klasyfikowane jako regresje.
+- FDM smoke nie jest już `NOT RUN`: E1 dla FDM ma dowód browser/WebGL/runtime.
+  FEM E2 nadal pozostaje **BLOCKED** przez brak managed FEM runtime; nie użyto
+  hostowego builda jako substytutu.
+- Aktualne testy: `ControlRoomApi` **129/129**, helper browser **7/7**, Python
+  scratch round-trip **9 passed**, focused guard viewport **1 passed**.
+- Harness browserowy zapisuje teraz także `request_failures` i rozróżnia
+  jawnie allowlistowane odpowiedzi opcjonalnych zasobów od nieoczekiwanych
+  HTTP/network failures. Eksporter zachowuje jawnie authored moduły DMI z
+  wartością `0`, jednocześnie nie aktywując ich automatycznie z zerowego
+  material default.
+- Wcześniejsza blokada kompilacji testów CLI wynikała z fixture’ów bez pól
+  `object_id`, `frozen_spins`, `selections` i `magnetization_constraints`;
+  fixture’y zostały uzupełnione, a filtr `wait_for_solve` ma obecnie **4 passed**.
 - Supervisor ma teraz RAII guard `ScratchRuntimeHandle`: przy każdej ścieżce
   wyjścia ustawia stop flag i dołącza worker, więc nie zostawia osieroconego
   pollera po zakończeniu attached/script mode.
@@ -327,15 +353,21 @@ zewnętrznej bramki browser/WebGL i kwalifikacji managed FEM.
   potem raportuje failure; eliminuje to wyścig końcowego snapshotu z procesem
   zamykającym się z kodem 0. Właściciel runtime obejmuje także `scene_revision`,
   więc zmiana sceny/backendu nie uruchamia starego skryptu na nowym modelu.
-- W bramce wait-for-solve komenda `relax/run` jest admission signal; parametry
-  solvera pochodzą z kanonicznego `SceneDocument` stage. Payload override jest
-  stosowany przez regularną pętlę interactive, dlatego UI musi zapisać zmiany
-  stage przed wysłaniem komendy.
+- W bramce wait-for-solve kanoniczny `SceneDocument` stage pozostaje bazą, a
+  payload `relax/run/solve` jest teraz materializowany przez
+  `build_interactive_command_stage` i ponownie planowany przed startem solvera.
+  Zmiany zapisane w stage nadal są źródłem domyślnym, gdy payload nie zawiera
+  danego override.
 - Publisher attached scriptu sprawdza aktualne `session_id` przed heartbeat
   i kazdym cyklem publikacji; po zmianie sesji konczy worker zamiast retryowac
   stare snapshoty bez konca. Zamykanie drzewa procesow potomnych Windows
   pozostaje osobnym ryzykiem infrastrukturalnym.
-- Glowna petla starego skryptu nie ma jeszcze twardego cancellation tokenu po
-  utracie sesji; publisher konczy sie poprawnie, ale sam solver moze przez
-  pewien czas kontynuowac obliczenia, a nowy supervisor moze uruchomic drugi
-  child. To pozostaje otwartym zadaniem P1/P2, a nie zaliczona bramka.
+- Główna pętla starego skryptu ma teraz wspólny sygnał utraty właściciela:
+  worker publishera budzi runner, oznacza interrupt `Close` i zamyka solver
+  przed dalszym oczekiwaniem na komendy. Zamykanie całego drzewa potomnego
+  Windows przez `Child::kill()` pozostaje osobnym ryzykiem infrastrukturalnym.
+
+Po tej aktualizacji: `cargo check -p fullmag-cli --bin fullmag` **PASS**,
+test owner-loss **1 passed**, filtr `wait_for_solve` **4 passed**. Uzupełniono
+też stare fixture’y CLI o aktualne pola ProblemIR, dzięki czemu ta bramka nie
+jest już blokowana błędem kompilacji testów.

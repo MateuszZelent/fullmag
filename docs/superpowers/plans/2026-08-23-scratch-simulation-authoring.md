@@ -795,7 +795,29 @@ supervisor czeka na terminalny ACK po wyjściu procesu i wiąże attached runtim
 z `(session_id, backend, scene_revision)`. Te zmiany nie zmieniają statusu
 bramek browser/WebGL ani managed FEM, które nadal wymagają infrastruktury.
 
-Pozostaje także ryzyko P1/P2: publisher reaguje na utratę sesji, lecz główna
-pętla starego skryptu nie ma jeszcze twardego cancellation tokenu; proces może
-kontynuować obliczenia po podmianie sesji, a Windows `Child::kill()` nie daje
-gwarancji zamknięcia całego drzewa potomnego. Nie oznaczam tego jako ukończone.
+Aktualizacja cancellation: worker owner-loss budzi runner i kończy główną
+pętlę solvera po podmianie sesji. Nadal pozostaje ryzyko, że Windows
+`Child::kill()` nie zamknie całego drzewa potomnego; wymaga to osobnej bramki
+procesowej na docelowym launcherze.
+
+Po tej aktualizacji `cargo check -p fullmag-cli --bin fullmag` przechodzi,
+test owner-loss ma **1 passed**, a filtr `wait_for_solve` ma **4 passed**.
+
+### Aktualizacja realizacji 2026-08-24 — E1 FDM zamknięte dowodem
+
+- Pełny browser smoke FDM przeszedł w osobnym worktree: rewizje authoringu
+  `0..8`, `mesh_build` i `relax` zakończone terminalnie, eksport skryptu
+  wygenerowany, a manifest zawiera `requested/resolved` lane oraz provenance.
+- WebGL smoke potwierdził jeden widoczny canvas, brak utraty kontekstu i niezerowy
+  drawing buffer `617x525`; limit żądań i mutacji DOM został zachowany.
+- Naprawiono realną regresję lifecycle: żądania pól z viewportu nie wysyłają
+  `compute_fields` przed buildem nieaktualnego mesha. Gate korzysta z
+  `model/geometry/validation`, a równoległe odczyty świeżości są współdzielone
+  tylko in-flight; brak autorytatywnej odpowiedzi jest traktowany fail-closed.
+- Zaktualizowana weryfikacja: `ControlRoomApi` **129/129**, helper **7/7**,
+  Python scratch round-trip **9 passed**, focused viewport guard **1 passed**.
+- Harness kwalifikuje również request failures i tylko jawnie znane odpowiedzi
+  opcjonalnych zasobów; jawnie authored DMI z wartością `0` pozostaje w
+  eksporcie, bez automatycznej aktywacji z material defaults.
+- E2 FEM pozostaje otwarte wyłącznie z powodu niedostępnego managed FEM runtime;
+  wymagane są `just ensure-managed-fem-runtime` i późniejszy smoke FEM/CPU.

@@ -730,6 +730,7 @@ export class ControlRoomApi {
   private readonly requestIdFactory: () => string;
   private readonly transport: OpenApiV2Transport;
   private readonly fieldMaterializationRequests = new Map<string, Promise<void>>();
+  private meshFreshnessRequest: Promise<boolean> | null = null;
 
   readonly sessions = {
     list: (options?: RequestOptions) =>
@@ -2547,6 +2548,9 @@ export class ControlRoomApi {
       if (!shouldMaterializeFieldAfterJsonError(error)) {
         throw error;
       }
+      if (await this.meshIsStale(options)) {
+        throw error;
+      }
       await this.materializeFieldsForQuantity(quantityId, options);
       return this.retryFieldMetaUntilReady(quantityId, path, params, options);
     }
@@ -2997,6 +3001,9 @@ export class ControlRoomApi {
     if (await this.livePublisherOwnsFieldMaterialization(quantityId, metaQuery, options)) {
       return result;
     }
+    if (await this.meshIsStale(options)) {
+      return result;
+    }
     await this.materializeFieldsForQuantity(quantityId, options);
     return this.retryFieldVectorUntilReady(
       path,
@@ -3067,6 +3074,37 @@ export class ControlRoomApi {
       });
     this.fieldMaterializationRequests.set(key, request);
     return request;
+  }
+
+  private async meshIsStale(options: RequestOptions = {}): Promise<boolean> {
+    throwIfAborted(options.signal);
+    if (this.meshFreshnessRequest) {
+      const stale = await this.meshFreshnessRequest;
+      throwIfAborted(options.signal);
+      return stale;
+    }
+
+    const request = (async () => {
+      try {
+        // Do not bind the shared request to one component's abort signal.
+        return (await this.model.geometry.validation()).dirty;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          throw error;
+        }
+        // Field materialization is unsafe without authoritative freshness.
+        return true;
+      }
+    })();
+    this.meshFreshnessRequest = request;
+    void request
+      .finally(() => {
+        if (this.meshFreshnessRequest === request) this.meshFreshnessRequest = null;
+      })
+      .catch(() => undefined);
+    const stale = await request;
+    throwIfAborted(options.signal);
+    return stale;
   }
 
   private async retryFieldMetaUntilReady(

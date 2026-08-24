@@ -13,6 +13,7 @@ import {
   buildScratchTextureTransaction,
   commandStatusKind,
   finiteSceneRevision,
+  isExpectedScratchHttpError,
   publishedMeshRevision,
   sceneAuthoringSummary,
   scratchApiUrl,
@@ -189,6 +190,36 @@ test("API paths are resolved without silently switching away from the current se
   assert.equal(
     scratchApiUrl("http://127.0.0.1:8190", "/v2/sessions/current/model/scene"),
     "http://127.0.0.1:8190/v2/sessions/current/model/scene",
+  );
+});
+
+test("browser smoke allowlists only known optional HTTP responses", () => {
+  assert.equal(
+    isExpectedScratchHttpError({
+      status: 404,
+      method: "GET",
+      url: "http://127.0.0.1:8765/v2/sessions/current/simulation/preparation",
+      body: "",
+    }),
+    true,
+  );
+  assert.equal(
+    isExpectedScratchHttpError({
+      status: 409,
+      method: "POST",
+      url: "http://127.0.0.1:8765/v2/sessions/current/simulation/commands",
+      body: '{"reason":"session_completed_read_only"}',
+    }),
+    true,
+  );
+  assert.equal(
+    isExpectedScratchHttpError({
+      status: 409,
+      method: "POST",
+      url: "http://127.0.0.1:8765/v2/sessions/current/simulation/commands",
+      body: '{"reason":"mesh_out_of_date"}',
+    }),
+    false,
   );
 });
 

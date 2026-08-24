@@ -1044,13 +1044,15 @@ def _ensure_physics_stack(
     for required in ("exchange", "demag"):
         if required not in by_kind:
             by_kind[required] = {"kind": required, "enabled": True, "params": None}
-    if material_dind is not None and "interfacial_dmi" not in by_kind:
+    material_dind_value = _number_or_none(material_dind)
+    material_dbulk_value = _number_or_none(material_dbulk)
+    if material_dind_value not in (None, 0.0) and "interfacial_dmi" not in by_kind:
         by_kind["interfacial_dmi"] = _normalize_interaction_entry(
             {"kind": "interfacial_dmi", "enabled": True, "params": None},
             material_dind=material_dind,
             material_dbulk=None,
         ) or {"kind": "interfacial_dmi", "enabled": True, "params": {"dind": 1e-3}}
-    if material_dbulk is not None and "bulk_dmi" not in by_kind:
+    if material_dbulk_value not in (None, 0.0) and "bulk_dmi" not in by_kind:
         by_kind["bulk_dmi"] = _normalize_interaction_entry(
             {"kind": "bulk_dmi", "enabled": True, "params": None},
             material_dind=None,
