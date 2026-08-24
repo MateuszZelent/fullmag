@@ -3,20 +3,28 @@ from pathlib import Path
 import subprocess
 import unittest
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def _workflow_uses(workflow: str) -> list[str]:
+    document = yaml.safe_load(workflow)
     references: list[str] = []
-    for line in workflow.splitlines():
-        stripped = line.strip().removeprefix("-").strip()
-        key, separator, value = stripped.partition(":")
-        if not separator or key.strip().strip("'\"") != "uses":
-            continue
-        reference = value.strip().strip("'\"")
-        if reference:
-            references.append(reference)
+
+    def visit(value: object) -> None:
+        if isinstance(value, dict):
+            reference = value.get("uses")
+            if isinstance(reference, str) and reference.strip():
+                references.append(reference.strip())
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(document)
     return references
 
 
@@ -115,6 +123,24 @@ jobs:
                 "actions/checkout@v7",
             )
 
+    def test_action_version_contract_reads_flow_style_action_steps(self) -> None:
+        workflow = """
+jobs:
+  test:
+    steps:
+      - { name: Checkout, uses: actions/checkout@v6 }
+"""
+
+        with self.assertRaisesRegex(
+            AssertionError,
+            r"actions/checkout.*actions/checkout@v7.*actions/checkout@v6",
+        ):
+            _assert_required_action_version(
+                workflow,
+                "actions/checkout",
+                "actions/checkout@v7",
+            )
+
     def test_submodule_metadata_requires_nonempty_url(self) -> None:
         gitmodules = """
 [submodule "external_solvers/example"]
@@ -163,6 +189,22 @@ jobs:
         for action, expected_reference in required.items():
             with self.subTest(action=action):
                 _assert_required_action_version(workflow, action, expected_reference)
+
+    def test_ci_runs_openapi_build_identity_regressions(self) -> None:
+        workflow = (ROOT / ".github/workflows/bootstrap.yml").read_text()
+        generated_job = workflow.split("  generated-api-determinism:\n", 1)[1].split(
+            "\n  api-hygiene-rg13:", 1
+        )[0]
+
+        test_command = (
+            "node --test "
+            "apps/control-room/scripts/normalize-openapi-build-identity.node-test.mjs"
+        )
+        gate_command = (
+            "./scripts/ci/run_frontend3d_required_gate.sh generated-api-determinism"
+        )
+        self.assertIn(test_command, generated_job)
+        self.assertLess(generated_job.index(test_command), generated_job.index(gate_command))
 
     def test_rust_contracts_install_python_runtime_dependencies(self) -> None:
         workflow = (ROOT / ".github/workflows/bootstrap.yml").read_text()

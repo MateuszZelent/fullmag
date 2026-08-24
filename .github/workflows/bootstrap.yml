@@ -53,7 +53,9 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Verify generated API determinism
-        run: ./scripts/ci/run_frontend3d_required_gate.sh generated-api-determinism
+        run: |
+          node --test apps/control-room/scripts/normalize-openapi-build-identity.node-test.mjs
+          ./scripts/ci/run_frontend3d_required_gate.sh generated-api-determinism
 
   api-hygiene-rg13:
     runs-on: ubuntu-22.04
@@ -213,7 +215,9 @@ jobs:
         run: python scripts/test_audit_fem_cpu_only_runtime.py -v
 
       - name: Run bootstrap workflow contract
-        run: python scripts/test_bootstrap_workflow_contract.py -v
+        run: |
+          python -m pip install PyYAML==6.0.3
+          python scripts/test_bootstrap_workflow_contract.py -v
 
       - name: Install Python package
         run: python -m pip install -e 'packages/fullmag-py[meshing]'

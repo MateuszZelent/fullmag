@@ -20,7 +20,10 @@ export function normalizeOpenApiBuildIdentity(document) {
       );
     }
   }
-  document["x-fullmag-build-identity"] = { ...GENERATED_IDENTITY };
+  document["x-fullmag-build-identity"] = {
+    ...identity,
+    ...GENERATED_IDENTITY,
+  };
 }
 
 async function main(path) {

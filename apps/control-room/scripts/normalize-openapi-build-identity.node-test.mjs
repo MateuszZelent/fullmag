@@ -11,6 +11,7 @@ test("normalizes volatile build identity in generated OpenAPI artifacts", () => 
       git_commit: "a".repeat(40),
       source_snapshot_sha256: "unknown",
       worktree_state: "dirty",
+      runtime_bundle: "fullmag-api-v2",
     },
   };
 
@@ -21,6 +22,7 @@ test("normalizes volatile build identity in generated OpenAPI artifacts", () => 
     git_commit: "generated-artifact",
     source_snapshot_sha256: "generated-artifact",
     worktree_state: "generated-artifact",
+    runtime_bundle: "fullmag-api-v2",
   });
 });
 
