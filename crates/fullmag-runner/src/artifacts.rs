@@ -7799,6 +7799,7 @@ mod tests {
         let provenance = ExecutionProvenance {
             execution_engine: "fem_cpu_native".to_string(),
             precision: "double".to_string(),
+            fdm_gpu_execution_receipt: None,
             resolved_energy_minimizer: Some("projected_gradient_bb".to_string()),
             energy_minimizer_realization: Some("native_mfem_pgbb".to_string()),
             fem_assembly_mode: Some("legacy_sparse".to_string()),

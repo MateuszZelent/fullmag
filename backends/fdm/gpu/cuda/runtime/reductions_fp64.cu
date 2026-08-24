@@ -834,6 +834,7 @@ AdaptiveErrorPolicy reduce_adaptive_error_policy(
         fullmag_fdm_record_control_scalar_host_sync(ctx);
         if (!context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy")) return policy;
         policy.error = max_sq > 0.0 ? std::sqrt(max_sq) : 0.0;
+        fullmag_fdm_record_hot_loop_host_compute(ctx);
         const int order_est = exponent == 0.2 ? 4 : 2;
         const auto decision = adaptive::decide_adaptive_step(
             {order_est, ctx.adaptive_dt_min, ctx.adaptive_dt_max, ctx.adaptive_safety,

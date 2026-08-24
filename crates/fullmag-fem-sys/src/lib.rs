@@ -31,6 +31,17 @@ pub const FULLMAG_FEM_SOT_FORMULA_NONE: u32 = 0;
 pub const FULLMAG_FEM_SOT_FORMULA_PRESCRIBED_V1: u32 = 1;
 pub const FULLMAG_FEM_SOT_ENVELOPE_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_FROZEN_SPINS_ABI_VERSION: u32 = 1;
+pub const FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1: u32 = 1;
+pub const FULLMAG_FEM_GPU_OPERATOR_EXCHANGE: u64 = 1 << 0;
+pub const FULLMAG_FEM_GPU_OPERATOR_DEMAG_RHS: u64 = 1 << 1;
+pub const FULLMAG_FEM_GPU_OPERATOR_DEMAG_SOLVE: u64 = 1 << 2;
+pub const FULLMAG_FEM_GPU_OPERATOR_DEMAG_RECOVERY: u64 = 1 << 3;
+pub const FULLMAG_FEM_GPU_OPERATOR_LOCAL_FIELDS: u64 = 1 << 4;
+pub const FULLMAG_FEM_GPU_OPERATOR_DIRECT_TORQUES: u64 = 1 << 5;
+pub const FULLMAG_FEM_GPU_OPERATOR_LLG_RHS: u64 = 1 << 6;
+pub const FULLMAG_FEM_GPU_OPERATOR_RK_STEPPER: u64 = 1 << 7;
+pub const FULLMAG_FEM_GPU_OPERATOR_REDUCTIONS: u64 = 1 << 8;
+pub const FULLMAG_FEM_GPU_OPERATOR_PRECONDITIONER: u64 = 1 << 9;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1902,6 +1913,46 @@ pub struct fullmag_fem_gpu_rk_plan_info {
 }
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_gpu_execution_class_v1 {
+    FULLMAG_FEM_GPU_EXECUTION_UNKNOWN = 0,
+    FULLMAG_FEM_GPU_EXECUTION_DEVICE_RESIDENT = 1,
+    FULLMAG_FEM_GPU_EXECUTION_GPU_OPERATOR_HOST_SOLVER = 2,
+    FULLMAG_FEM_GPU_EXECUTION_HYBRID_CPU_POISSON = 3,
+    FULLMAG_FEM_GPU_EXECUTION_CPU = 4,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_gpu_execution_receipt_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub execution_class: u32,
+    pub precision: u32,
+    pub integrator: u32,
+    pub device_ordinal: i32,
+    pub required_operator_mask: u64,
+    pub resolved_device_operator_mask: u64,
+    pub resolved_host_operator_mask: u64,
+    pub resolved_unknown_operator_mask: u64,
+    pub executed_device_operator_mask: u64,
+    pub executed_host_operator_mask: u64,
+    pub executed_unknown_operator_mask: u64,
+    pub fallback_count: u64,
+    pub accepted_step_count: u64,
+    pub rejected_attempt_count: u64,
+    pub failed_attempt_count: u64,
+    pub hot_loop_compute_h2d_bytes: u64,
+    pub hot_loop_compute_d2h_bytes: u64,
+    pub hot_loop_compute_host_sync_count: u64,
+}
+
+include!(concat!(
+    env!("OUT_DIR"),
+    "/gpu_execution_receipt_abi_assertions.rs"
+));
+
+#[repr(C)]
 pub struct fullmag_fem_backend {
     _private: [u8; 0],
 }
@@ -2198,6 +2249,11 @@ extern "C" {
     pub fn fullmag_fem_backend_get_gpu_rk_plan_info(
         handle: *mut fullmag_fem_backend,
         out_info: *mut fullmag_fem_gpu_rk_plan_info,
+    ) -> i32;
+
+    pub fn fullmag_fem_backend_gpu_execution_receipt_v1(
+        handle: *mut fullmag_fem_backend,
+        out_receipt: *mut fullmag_fem_gpu_execution_receipt_v1,
     ) -> i32;
 
     pub fn fullmag_fem_backend_last_error(handle: *mut fullmag_fem_backend) -> *const c_char;
@@ -3931,5 +3987,40 @@ mod tests {
         assert_eq!(info.hypre_execution_policy[0], 0);
         assert_eq!(info.demag_residency[0], 0);
         assert_eq!(info.reason[0], 0);
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn gpu_execution_receipt_v1_has_stable_layout_and_symbol() {
+        use std::mem::{align_of, offset_of, size_of};
+
+        assert_eq!(FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1, 1);
+        assert_eq!(size_of::<fullmag_fem_gpu_execution_receipt_v1>(), 136);
+        assert_eq!(align_of::<fullmag_fem_gpu_execution_receipt_v1>(), 8);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v1, abi_version), 0);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v1, struct_size), 4);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v1, execution_class), 8);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v1, precision), 12);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v1, integrator), 16);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v1, device_ordinal), 20);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v1, required_operator_mask), 24);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v1, resolved_device_operator_mask), 32);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v1, resolved_host_operator_mask), 40);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v1, resolved_unknown_operator_mask), 48);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v1, executed_device_operator_mask), 56);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v1, executed_host_operator_mask), 64);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v1, executed_unknown_operator_mask), 72);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v1, fallback_count), 80);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v1, accepted_step_count), 88);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v1, rejected_attempt_count), 96);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v1, failed_attempt_count), 104);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v1, hot_loop_compute_h2d_bytes), 112);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v1, hot_loop_compute_d2h_bytes), 120);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v1, hot_loop_compute_host_sync_count), 128);
+
+        let _symbol: unsafe extern "C" fn(
+            *mut fullmag_fem_backend,
+            *mut fullmag_fem_gpu_execution_receipt_v1,
+        ) -> i32 = fullmag_fem_backend_gpu_execution_receipt_v1;
     }
 }

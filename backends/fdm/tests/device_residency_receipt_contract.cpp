@@ -453,6 +453,10 @@ int main() {
     check(fullmag_fdm_backend_last_error(handle) == nullptr,
           "managed CUDA fixture creation has no deferred error");
 
+    fullmag_fdm_execution_receipt_v2 receipt_v2{};
+    receipt_v2.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2;
+    receipt_v2.struct_size = sizeof(receipt_v2);
+
     auto check_rejected_query_unchanged = [&](uint32_t abi_version,
                                                uint32_t struct_size,
                                                const char *message) {
@@ -477,7 +481,7 @@ int main() {
                                    sizeof(receipt) + 1,
                                    "native query rejects an oversized receipt");
 
-    check(fullmag_fdm_backend_execution_receipt_v1(handle, &receipt) == FULLMAG_FDM_OK,
+    check(fullmag_fdm_backend_execution_receipt_v2(handle, &receipt_v2) == FULLMAG_FDM_OK,
           "created Context publishes execution receipt");
     uint32_t legacy_abi = 0;
     uint32_t legacy_size = 0;
@@ -487,44 +491,45 @@ int main() {
               handle, &legacy_abi, &legacy_size, &legacy_required,
               &legacy_setup_h2d) == FULLMAG_FDM_OK &&
               legacy_abi == 1 && legacy_size == 208 &&
-              legacy_required == receipt.required_operator_mask &&
-              legacy_setup_h2d == receipt.setup_full_vector_h2d_count,
+              legacy_required == receipt_v2.required_operator_mask &&
+              legacy_setup_h2d == receipt_v2.setup_full_vector_h2d_count,
           "frozen old-client translation unit queries the restored v1 ABI");
-    check(receipt.execution_class == FULLMAG_FDM_EXECUTION_DEVICE_RESIDENT,
+    check(receipt_v2.execution_class == FULLMAG_FDM_EXECUTION_DEVICE_RESIDENT,
           "native context resolves device-resident execution");
-    check(receipt.executed_backend == FULLMAG_FDM_EXECUTED_UNKNOWN &&
-              receipt.executed_unknown_operator_mask == receipt.required_operator_mask,
+    check(receipt_v2.executed_backend == FULLMAG_FDM_EXECUTED_UNKNOWN &&
+              receipt_v2.executed_unknown_operator_mask ==
+                  receipt_v2.required_operator_mask,
           "native context does not claim execution before the first successful step");
-    check(receipt.precision == FULLMAG_FDM_PRECISION_DOUBLE,
+    check(receipt_v2.precision == FULLMAG_FDM_PRECISION_DOUBLE,
           "native receipt preserves executed precision");
-    check((receipt.required_operator_mask & FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR) != 0,
+    check((receipt_v2.required_operator_mask & FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR) != 0,
           "native receipt requires the LLG integrator");
-    check((receipt.device_operator_mask & receipt.required_operator_mask) ==
-              receipt.required_operator_mask,
+    check((receipt_v2.device_operator_mask & receipt_v2.required_operator_mask) ==
+              receipt_v2.required_operator_mask,
           "every required operator is device resident");
-    check(receipt.setup_full_vector_h2d_count > 0,
+    check(receipt_v2.setup_full_vector_h2d_count > 0,
           "initial magnetization is reported as setup H2D");
-    check(receipt.setup_full_vector_h2d_bytes == 3u * sizeof(double),
+    check(receipt_v2.setup_full_vector_h2d_bytes == 3u * sizeof(double),
           "setup H2D bytes match one FP64 vector");
 
     fullmag_fdm_step_stats stats{};
     check(fullmag_fdm_backend_step(handle, 1e-15, &stats) == FULLMAG_FDM_OK,
           "managed CUDA fixture executes one GPU step");
-    check(fullmag_fdm_backend_execution_receipt_v1(handle, &receipt) == FULLMAG_FDM_OK,
+    check(fullmag_fdm_backend_execution_receipt_v2(handle, &receipt_v2) == FULLMAG_FDM_OK,
           "final receipt is queryable");
-    check(receipt.executed_backend == FULLMAG_FDM_EXECUTED_CUDA_FDM &&
-              receipt.executed_device_operator_mask == receipt.required_operator_mask &&
-              receipt.executed_unknown_operator_mask == 0,
+    check(receipt_v2.executed_backend == FULLMAG_FDM_EXECUTED_CUDA_FDM &&
+              receipt_v2.executed_device_operator_mask == receipt_v2.required_operator_mask &&
+              receipt_v2.executed_unknown_operator_mask == 0,
           "successful step proves every required device operator family");
-    check(receipt.hot_loop_full_vector_h2d_count == 0,
+    check(receipt_v2.hot_loop_full_vector_h2d_count == 0,
           "strict hot loop has zero full-vector H2D");
-    check(receipt.hot_loop_full_vector_d2h_count == 0,
+    check(receipt_v2.hot_loop_full_vector_d2h_count == 0,
           "strict hot loop has zero full-vector D2H");
-    check(receipt.hot_loop_host_compute_count == 0,
+    check(receipt_v2.hot_loop_host_compute_count == 0,
           "strict hot loop has zero host compute");
-    check(receipt.fallback_count == 0,
+    check(receipt_v2.fallback_count == 0,
           "strict native context has no fallback");
-    check(receipt.hot_loop_control_scalar_d2h_bytes ==
+    check(receipt_v2.hot_loop_control_scalar_d2h_bytes ==
               stats.hot_loop_control_scalar_d2h_bytes,
           "scalar control D2H remains separately accounted");
 
@@ -540,59 +545,59 @@ int main() {
             << "  \"requested\": \"gpu\",\n"
             << "  \"resolved\": \"device_resident\",\n"
             << "  \"executed\": \"cuda_fdm\",\n"
-            << "  \"device_ordinal\": " << receipt.device_ordinal << ",\n"
+            << "  \"device_ordinal\": " << receipt_v2.device_ordinal << ",\n"
             << "  \"precision\": \"double\",\n"
             << "  \"integrator\": \"heun\",\n"
             << "  \"required_operator_mask\": "
-            << receipt.required_operator_mask << ",\n"
+            << receipt_v2.required_operator_mask << ",\n"
             << "  \"resolved_device_operator_mask\": "
-            << receipt.device_operator_mask << ",\n"
+            << receipt_v2.device_operator_mask << ",\n"
             << "  \"resolved_host_operator_mask\": "
-            << receipt.host_operator_mask << ",\n"
+            << receipt_v2.host_operator_mask << ",\n"
             << "  \"resolved_unknown_operator_mask\": "
-            << receipt.resolved_unknown_operator_mask << ",\n"
+            << receipt_v2.resolved_unknown_operator_mask << ",\n"
             << "  \"executed_device_operator_mask\": "
-            << receipt.executed_device_operator_mask << ",\n"
+            << receipt_v2.executed_device_operator_mask << ",\n"
             << "  \"executed_host_operator_mask\": "
-            << receipt.executed_host_operator_mask << ",\n"
+            << receipt_v2.executed_host_operator_mask << ",\n"
             << "  \"executed_unknown_operator_mask\": "
-            << receipt.executed_unknown_operator_mask << ",\n"
-            << "  \"fallback_count\": " << receipt.fallback_count << ",\n"
+            << receipt_v2.executed_unknown_operator_mask << ",\n"
+            << "  \"fallback_count\": " << receipt_v2.fallback_count << ",\n"
             << "  \"accounting_valid\": "
-            << (receipt.accounting_valid == 1 ? "true" : "false") << ",\n"
+            << (receipt_v2.accounting_valid == 1 ? "true" : "false") << ",\n"
             << "  \"transfer_counts\": {\n"
             << "    \"setup_full_vector_h2d_count\": "
-            << receipt.setup_full_vector_h2d_count << ",\n"
+            << receipt_v2.setup_full_vector_h2d_count << ",\n"
             << "    \"setup_full_vector_h2d_bytes\": "
-            << receipt.setup_full_vector_h2d_bytes << ",\n"
+            << receipt_v2.setup_full_vector_h2d_bytes << ",\n"
             << "    \"setup_full_vector_d2h_count\": "
-            << receipt.setup_full_vector_d2h_count << ",\n"
+            << receipt_v2.setup_full_vector_d2h_count << ",\n"
             << "    \"setup_full_vector_d2h_bytes\": "
-            << receipt.setup_full_vector_d2h_bytes << ",\n"
+            << receipt_v2.setup_full_vector_d2h_bytes << ",\n"
             << "    \"hot_loop_full_vector_h2d_count\": "
-            << receipt.hot_loop_full_vector_h2d_count << ",\n"
+            << receipt_v2.hot_loop_full_vector_h2d_count << ",\n"
             << "    \"hot_loop_full_vector_h2d_bytes\": "
-            << receipt.hot_loop_full_vector_h2d_bytes << ",\n"
+            << receipt_v2.hot_loop_full_vector_h2d_bytes << ",\n"
             << "    \"hot_loop_full_vector_d2h_count\": "
-            << receipt.hot_loop_full_vector_d2h_count << ",\n"
+            << receipt_v2.hot_loop_full_vector_d2h_count << ",\n"
             << "    \"hot_loop_full_vector_d2h_bytes\": "
-            << receipt.hot_loop_full_vector_d2h_bytes << ",\n"
+            << receipt_v2.hot_loop_full_vector_d2h_bytes << ",\n"
             << "    \"hot_loop_host_compute_count\": "
-            << receipt.hot_loop_host_compute_count << ",\n"
+            << receipt_v2.hot_loop_host_compute_count << ",\n"
             << "    \"hot_loop_host_sync_count\": "
-            << receipt.hot_loop_host_sync_count << ",\n"
+            << receipt_v2.hot_loop_host_sync_count << ",\n"
             << "    \"hot_loop_control_scalar_d2h_bytes\": "
-            << receipt.hot_loop_control_scalar_d2h_bytes << ",\n"
+            << receipt_v2.hot_loop_control_scalar_d2h_bytes << ",\n"
             << "    \"hot_loop_control_scalar_host_sync_count\": "
-            << receipt.hot_loop_control_scalar_host_sync_count << ",\n"
+            << receipt_v2.hot_loop_control_scalar_host_sync_count << ",\n"
             << "    \"observation_full_vector_h2d_count\": "
-            << receipt.observation_full_vector_h2d_count << ",\n"
+            << receipt_v2.observation_full_vector_h2d_count << ",\n"
             << "    \"observation_full_vector_h2d_bytes\": "
-            << receipt.observation_full_vector_h2d_bytes << ",\n"
+            << receipt_v2.observation_full_vector_h2d_bytes << ",\n"
             << "    \"observation_full_vector_d2h_count\": "
-            << receipt.observation_full_vector_d2h_count << ",\n"
+            << receipt_v2.observation_full_vector_d2h_count << ",\n"
             << "    \"observation_full_vector_d2h_bytes\": "
-            << receipt.observation_full_vector_d2h_bytes << "\n"
+            << receipt_v2.observation_full_vector_d2h_bytes << "\n"
             << "  }\n"
             << "}\n";
         check(static_cast<bool>(evidence), "managed receipt evidence is complete");
@@ -601,22 +606,22 @@ int main() {
     check(fullmag_fdm_test_record_residency_violation_v1(handle, 1, 24) ==
               FULLMAG_FDM_OK,
           "fixture injects one full-vector H2D violation through central hook");
-    check(fullmag_fdm_backend_execution_receipt_v1(handle, &receipt) == FULLMAG_FDM_OK &&
-              receipt.hot_loop_full_vector_h2d_count == 1 &&
-              receipt.hot_loop_full_vector_h2d_bytes == 24,
+    check(fullmag_fdm_backend_execution_receipt_v2(handle, &receipt_v2) == FULLMAG_FDM_OK &&
+              receipt_v2.hot_loop_full_vector_h2d_count == 1 &&
+              receipt_v2.hot_loop_full_vector_h2d_bytes == 24,
           "receipt exposes injected full-vector H2D violation");
     check(fullmag_fdm_test_record_residency_violation_v1(handle, 2, 24) ==
               FULLMAG_FDM_OK,
           "fixture injects one full-vector D2H violation through central hook");
-    check(fullmag_fdm_backend_execution_receipt_v1(handle, &receipt) == FULLMAG_FDM_OK &&
-              receipt.hot_loop_full_vector_d2h_count == 1 &&
-              receipt.hot_loop_full_vector_d2h_bytes == 24,
+    check(fullmag_fdm_backend_execution_receipt_v2(handle, &receipt_v2) == FULLMAG_FDM_OK &&
+              receipt_v2.hot_loop_full_vector_d2h_count == 1 &&
+              receipt_v2.hot_loop_full_vector_d2h_bytes == 24,
           "receipt exposes injected full-vector D2H violation");
     check(fullmag_fdm_test_record_residency_violation_v1(handle, 3, 0) ==
               FULLMAG_FDM_OK,
           "fixture injects one host-compute violation through central hook");
-    check(fullmag_fdm_backend_execution_receipt_v1(handle, &receipt) == FULLMAG_FDM_OK &&
-              receipt.hot_loop_host_compute_count == 1,
+    check(fullmag_fdm_backend_execution_receipt_v2(handle, &receipt_v2) == FULLMAG_FDM_OK &&
+              receipt_v2.hot_loop_host_compute_count == 1,
           "receipt exposes injected host-compute violation");
     fullmag_fdm_backend_destroy(handle);
 
