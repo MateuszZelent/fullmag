@@ -443,6 +443,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::simulation::get_command_detail),
         )
         .route(
+            "/v2/sessions/current/simulation/commands/:command_id/failure",
+            post(handlers::simulation::report_command_failure),
+        )
+        .route(
             "/v2/sessions/current/diagnostics/solver-profile",
             get(handlers::diagnostics::get_solver_profile),
         )

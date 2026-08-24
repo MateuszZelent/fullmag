@@ -41,6 +41,26 @@ const DEFERRED_DOMAIN_COMPLETION_DETAIL: &str =
 const DEFERRED_MESH_COMPLETION_DETAIL: &str =
     "Mesh completed during deferred materialization; timing unavailable";
 
+fn attached_session_id_or(generated: String) -> String {
+    std::env::var("FULLMAG_ATTACHED_SESSION_ID")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(generated)
+}
+
+fn control_room_bootstrap_disabled() -> bool {
+    std::env::var("FULLMAG_SKIP_CONTROL_ROOM")
+        .ok()
+        .is_some_and(|value| matches!(value.trim(), "1" | "true" | "yes"))
+}
+
+fn attached_wait_for_solve_enabled() -> bool {
+    std::env::var("FULLMAG_ATTACHED_WAIT_FOR_SOLVE")
+        .ok()
+        .is_some_and(|value| matches!(value.trim(), "1" | "true" | "yes"))
+}
+
 fn frozen_spins_checkpoint_from_stage_artifacts(
     stage_artifact_dir: &Path,
 ) -> Result<Option<serde_json::Value>> {
@@ -4934,10 +4954,36 @@ fn execute_manual_interactive_remesh(
             }
         }
     } else {
-        eprintln!("[fullmag] ✗ cannot remesh — no FEM plan available (wrong backend?)");
+        eprintln!(
+            "[fullmag] structured-grid mesh is already materialized for the active FDM plan"
+        );
+        let source_scene_revision = mesh_source_scene_revision(&opts);
+        let mesh_summary = serde_json::json!({
+            "kind": "mesh_build_summary",
+            "mesh_target": mesh_target_label,
+            "mesh_reason": mesh_reason,
+            "geometry_realization": mesh_geometry_realization_json(&opts),
+            "source_scene_revision": source_scene_revision,
+            "realization_revision": opts
+                .get("geometry_realization")
+                .and_then(|value| value.get("realization_revision"))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        });
+        live_workspace.update(|state| {
+            let mut workspace = state
+                .mesh_workspace
+                .clone()
+                .unwrap_or_else(|| serde_json::json!({}));
+            workspace["active_build"] = serde_json::Value::Null;
+            workspace["last_build_error"] = serde_json::Value::Null;
+            workspace["last_build_summary"] = mesh_summary.clone();
+            workspace["mesh_pipeline_status"] = serde_json::Value::String("ready".to_string());
+            state.mesh_workspace = Some(workspace);
+        });
         live_workspace.push_log(
-            "warn",
-            "Cannot remesh — no FEM plan available (wrong backend?)",
+            "success",
+            "Remesh complete — FDM structured grid is current; no FEM remesh is required",
         );
     }
 
@@ -5879,7 +5925,10 @@ fn is_control_checkpoint_only(update: &fullmag_runner::StepUpdate) -> bool {
 }
 
 fn wait_for_solve_supported(backend_plan: &BackendPlanIR) -> bool {
-    matches!(backend_plan, BackendPlanIR::Fdm(_) | BackendPlanIR::Fem(_))
+    matches!(
+        backend_plan,
+        BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) | BackendPlanIR::Fem(_)
+    )
 }
 
 fn wait_for_solve_should_block(requested: bool, supported: bool, headless: bool) -> bool {
@@ -5922,7 +5971,7 @@ fn classify_wait_for_solve_command(kind: &str) -> WaitForSolveCommandAction {
         "compute_fields" => WaitForSolveCommandAction::RefreshFields,
         "compute_energies" => WaitForSolveCommandAction::RefreshEnergies,
         "set_solver_profile" => WaitForSolveCommandAction::ConfigureProfiler,
-        "solve" | "compute" | "run" => WaitForSolveCommandAction::StartSolver,
+        "solve" | "compute" | "run" | "relax" => WaitForSolveCommandAction::StartSolver,
         "remesh" => WaitForSolveCommandAction::Remesh,
         "stop" => WaitForSolveCommandAction::Stop,
         _ => WaitForSolveCommandAction::Ignore,
@@ -6615,7 +6664,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         .map(|value| value.to_possible_value().unwrap().get_name().to_string())
         .unwrap_or_else(|| "double".to_string());
 
-    let session_id = format!("session-{}-{}", started_at_unix_ms, std::process::id());
+    let session_id = attached_session_id_or(format!(
+        "session-{}-{}",
+        started_at_unix_ms,
+        std::process::id()
+    ));
     let run_id = format!("run-{}", session_id);
     let output_paths = resolve_script_output_paths(
         &script_path,
@@ -6707,7 +6760,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         },
         current_live_publisher.clone(),
     );
-    let display_selection_handle = CurrentLiveDisplaySelectionHandle::spawn();
+    let display_selection_handle =
+        CurrentLiveDisplaySelectionHandle::spawn_for_session(Some(session_id.clone()));
     live_workspace.push_log(
         "system",
         format!(
@@ -6816,7 +6870,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
     eprintln!("fullmag materializing script");
 
-    if !args.headless {
+    if !args.headless && !control_room_bootstrap_disabled() {
         let (web_port, child, frontend_child) = own_preparation_boundary_failure(
             &live_workspace,
             "control_room_bootstrap_failed",
@@ -6841,6 +6895,21 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             });
         });
     }
+
+    // Keep a small bridge alive for a Control Room-created scratch session.
+    // The bridge ignores this script-backed session and only attaches a fresh
+    // runtime after the browser explicitly replaces it with a runnable scene.
+    let _scratch_runtime = if !args.headless {
+        std::env::current_exe().ok().map(|executable| {
+            crate::scratch_runtime::spawn(
+                api_port(),
+                executable,
+                Some(session_id.clone()),
+            )
+        })
+    } else {
+        None
+    };
 
     // Join Phase 1 and push early metadata to the already-loaded frontend.
     let early_config = match phase1_handle
@@ -7656,8 +7725,15 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         }
     }
 
+    // The attached scratch runtime may use `wait_for_solve` to consume the
+    // initial remesh/solve command before the general interactive host is
+    // constructed. Materialization is complete at this point, so command
+    // polling is safe to enable and no command can be lost during startup.
+    display_selection_handle.enable_command_polling();
+
     // ── wait_for_solve gate ──────────────────────────────────────────────
-    let wait_for_solve_requested = stages
+    let wait_for_solve_requested = attached_wait_for_solve_enabled()
+        || stages
         .first()
         .map(|stage| {
             stage
@@ -8137,6 +8213,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 }
                 WaitForSolveCommandAction::StartSolver => {
                     eprintln!("[fullmag] compute requested — starting solver");
+                    // The attached scratch runtime admits the command here, while the
+                    // canonical SceneDocument stage remains the source of solver controls.
+                    // UI edits must be committed to the scene before issuing relax/run;
+                    // command payload overrides are handled by the regular interactive loop.
                     start_solver_command_id = Some(cmd.command_id.clone());
                     live_workspace.push_log("system", "Compute requested — starting solver");
                     live_workspace.update(|state| {
@@ -14549,6 +14629,10 @@ mod tests {
         );
         assert_eq!(
             classify_wait_for_solve_command("compute"),
+            WaitForSolveCommandAction::StartSolver
+        );
+        assert_eq!(
+            classify_wait_for_solve_command("relax"),
             WaitForSolveCommandAction::StartSolver
         );
         assert_eq!(

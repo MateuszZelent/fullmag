@@ -671,9 +671,27 @@ def _render_scene_document_bootstrap(builder: Mapping[str, object]) -> str:
         if solver_kwargs:
             lines.append(f"study.solver({_python_keyword_args(solver_kwargs)})")
 
+    objects = builder.get("geometries")
+    if not isinstance(objects, list) or not objects:
+        raise ValueError("SceneDocument export requires at least one geometry object.")
+    object_names_by_id: dict[str, str] = {}
+    for raw_object in objects:
+        if not isinstance(raw_object, Mapping):
+            continue
+        object_id = raw_object.get("object_id") or raw_object.get("id")
+        name = raw_object.get("name") or object_id
+        if name is not None:
+            for alias in (
+                object_id,
+                raw_object.get("id"),
+                raw_object.get("region_name"),
+            ):
+                if alias is not None:
+                    object_names_by_id[str(alias)] = str(name)
+
     fdm = builder.get("fdm")
     if isinstance(fdm, Mapping):
-        fdm_line = _render_fdm_bootstrap(fdm)
+        fdm_line = _render_fdm_bootstrap(fdm, object_names_by_id=object_names_by_id)
         if fdm_line:
             lines.append(fdm_line)
     fdm_per_magnet = (
@@ -682,9 +700,6 @@ def _render_scene_document_bootstrap(builder: Mapping[str, object]) -> str:
         else None
     )
 
-    objects = builder.get("geometries")
-    if not isinstance(objects, list) or not objects:
-        raise ValueError("SceneDocument export requires at least one geometry object.")
     handles: list[str] = []
     for index, raw_object in enumerate(objects):
         if not isinstance(raw_object, Mapping):
@@ -859,7 +874,11 @@ def _render_texture_expression(magnetization: Mapping[str, object]) -> str | Non
     return None
 
 
-def _render_fdm_bootstrap(fdm: Mapping[str, object]) -> str:
+def _render_fdm_bootstrap(
+    fdm: Mapping[str, object],
+    *,
+    object_names_by_id: Mapping[str, str] | None = None,
+) -> str:
     kwargs: dict[str, object] = {}
     default_cell = fdm.get("default_cell")
     if _is_vector3(default_cell):
@@ -869,8 +888,9 @@ def _render_fdm_bootstrap(fdm: Mapping[str, object]) -> str:
         entries: list[str] = []
         for name, raw_grid in per_magnet.items():
             if isinstance(raw_grid, Mapping) and _is_vector3(raw_grid.get("cell")):
+                rendered_name = (object_names_by_id or {}).get(str(name), str(name))
                 entries.append(
-                    f"{_python_literal(str(name))}: fm.FDMGrid(cell={_python_literal(tuple(raw_grid['cell']))})"
+                    f"{_python_literal(rendered_name)}: fm.FDMGrid(cell={_python_literal(tuple(raw_grid['cell']))})"
                 )
         if entries:
             kwargs["per_magnet"] = "{" + ", ".join(entries) + "}"

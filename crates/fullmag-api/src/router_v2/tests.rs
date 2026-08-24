@@ -20725,6 +20725,59 @@ async fn compute_fields_command_contract_resolves_fdm_full_requirement() {
 }
 
 #[tokio::test]
+async fn command_failure_endpoint_unblocks_dispatched_command() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v2_router().with_state(state.clone());
+    let detail = enqueue_compute_fields_and_get_detail(&app).await;
+    let command_id = detail["command_id"]
+        .as_str()
+        .expect("failure contract should expose command_id")
+        .to_string();
+    dispatch_compute_fields_command(&state, &command_id).await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v2/sessions/current/simulation/commands/{command_id}/failure"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"error": "attached runtime exited"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let failed = body_json(response).await;
+    assert_eq!(failed["status"], "failed");
+    assert_eq!(failed["completion_status"], "failed");
+    assert_eq!(failed["error"], "attached runtime exited");
+
+    let repeat = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v2/sessions/current/simulation/commands/{command_id}/failure"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"error": "second report"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(repeat.status(), StatusCode::OK);
+    let repeat_body = body_json(repeat).await;
+    assert_eq!(repeat_body["error"], "attached runtime exited");
+}
+
+#[tokio::test]
 async fn compute_fields_command_contract_resolves_multilayer_full_and_airbox_requirements() {
     let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
     write_test_fdm_multilayer_airbox_carrier(&artifact_dir);

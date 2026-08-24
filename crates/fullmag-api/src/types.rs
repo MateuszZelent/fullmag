@@ -1037,6 +1037,8 @@ pub(crate) struct ControlWaitQuery {
     pub after_seq: u64,
     #[serde(rename = "timeoutMs", default = "default_preview_wait_timeout_ms")]
     pub timeout_ms: u64,
+    #[serde(rename = "sessionId")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

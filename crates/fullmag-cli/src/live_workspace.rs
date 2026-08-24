@@ -14,7 +14,8 @@ use crate::communication_policy::{
     LIVE_PUBLISH_FAST_INTERVAL, LIVE_PUBLISH_MIN_INTERVAL, LIVE_SCALAR_TELEMETRY_INTERVAL,
 };
 use crate::control_room::{
-    api_is_ready, api_port, sync_current_live_delta, sync_current_live_snapshot,
+    api_base_url, api_is_ready, api_port, current_live_api_client, sync_current_live_delta,
+    sync_current_live_snapshot,
 };
 use crate::feature_flags::FeatureFlags;
 use crate::formatting::{push_engine_log, unix_time_millis};
@@ -5021,6 +5022,9 @@ fn current_live_publisher_loop(
         match wake_rx.recv_timeout(LIVENESS_HEARTBEAT_INTERVAL) {
             Ok(()) => {}
             Err(mpsc::RecvTimeoutError::Timeout) => {
+                if owner_session_lost(&session_id, enable_api_fallback) {
+                    return;
+                }
                 if let Err(error) = publish_idle_liveness_heartbeat(&session_id, &delta_sink) {
                     eprintln!("fullmag live liveness heartbeat warning: {error:#}");
                 }
@@ -5028,10 +5032,16 @@ fn current_live_publisher_loop(
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
+        if owner_session_lost(&session_id, enable_api_fallback) {
+            return;
+        }
         if !coalesce_delay.is_zero() {
             std::thread::sleep(coalesce_delay);
         }
         while pending.swap(false, Ordering::AcqRel) {
+            if owner_session_lost(&session_id, enable_api_fallback) {
+                return;
+            }
             let min_interval = if fast_mode.load(Ordering::Acquire) {
                 LIVE_PUBLISH_FAST_INTERVAL
             } else {
@@ -5235,6 +5245,35 @@ fn current_live_publisher_loop(
             eprintln!("fullmag final live scalar sync warning: {error:#}");
         }
     }
+}
+
+fn owner_session_lost(session_id: &str, enabled: bool) -> bool {
+    if !enabled || !api_is_ready(api_port()) {
+        return false;
+    }
+    let Ok(response) = current_live_api_client()
+        .get(format!("{}/v2/sessions/current/status", api_base_url()))
+        .send()
+    else {
+        return false;
+    };
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return true;
+    }
+    let Some(current_session_id) = response
+        .error_for_status()
+        .ok()
+        .and_then(|response| response.json::<serde_json::Value>().ok())
+        .and_then(|body| {
+            body.get("session")
+                .and_then(|session| session.get("session_id"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+    else {
+        return false;
+    };
+    current_session_id != session_id
 }
 
 fn publish_idle_liveness_heartbeat(session_id: &str, delta_sink: &LivePublishSink) -> Result<()> {

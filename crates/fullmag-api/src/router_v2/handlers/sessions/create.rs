@@ -1,5 +1,5 @@
 use axum::{extract::State, http::StatusCode, Json};
-use fullmag_authoring::{SceneDocument, SceneMetadata};
+use fullmag_authoring::{SceneDocument, SceneMetadata, SceneStudyState};
 use serde_json::json;
 use std::sync::{atomic::Ordering, Arc};
 
@@ -140,7 +140,13 @@ pub(crate) fn create_empty_scene_document(
         spin_transports: Vec::new(),
         spin_torques: Vec::new(),
         oersted_fields: Vec::new(),
-        study: Default::default(),
+        study: SceneStudyState {
+            requested_backend: request.backend.clone(),
+            requested_device: request.device.clone(),
+            requested_precision: request.precision.clone(),
+            requested_mode: "strict".to_string(),
+            ..Default::default()
+        },
         outputs: Default::default(),
         editor: Default::default(),
     })
@@ -237,5 +243,8 @@ mod tests {
         assert_eq!(scene.scene.name, "Scratch");
         assert!(scene.scene.id.starts_with("session-"));
         assert!(scene.objects.is_empty());
+        assert_eq!(scene.study.requested_backend, "fdm");
+        assert_eq!(scene.study.requested_device, "cpu");
+        assert_eq!(scene.study.requested_precision, "double");
     }
 }

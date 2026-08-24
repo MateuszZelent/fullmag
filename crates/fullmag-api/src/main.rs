@@ -2825,20 +2825,31 @@ async fn wait_current_live_control(
     Query(query): Query<ControlWaitQuery>,
 ) -> Result<Response, ApiError> {
     let _ = current_live_session_id(&state).await?;
-    if let Some(command) = take_next_current_control_command_after(&state, query.after_seq).await {
+    if let Some(command) = take_current_control_command_for_session(
+        &state,
+        query.after_seq,
+        query.session_id.as_deref(),
+    )
+    .await?
+    {
         return Ok(Json(command).into_response());
     }
 
     let timeout_ms = query.timeout_ms.clamp(100, 20_000);
     let mut rx = state.current_control_events.subscribe();
     let state_for_wait = Arc::clone(&state);
+    let requested_session_id = query.session_id.clone();
     let waited = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), async move {
         loop {
             rx.changed()
                 .await
                 .map_err(|_| ApiError::internal("control command stream closed"))?;
-            if let Some(command) =
-                take_next_current_control_command_after(&state_for_wait, query.after_seq).await
+            if let Some(command) = take_current_control_command_for_session(
+                &state_for_wait,
+                query.after_seq,
+                requested_session_id.as_deref(),
+            )
+            .await?
             {
                 return Ok::<SessionCommand, ApiError>(command);
             }
@@ -2851,6 +2862,21 @@ async fn wait_current_live_control(
         Ok(Err(error)) => Err(error),
         Err(_) => Ok(StatusCode::NO_CONTENT.into_response()),
     }
+}
+
+async fn take_current_control_command_for_session(
+    state: &Arc<AppState>,
+    after_seq: u64,
+    requested_session_id: Option<&str>,
+) -> Result<Option<SessionCommand>, ApiError> {
+    let _transition = state.current_live_session_transition.lock().await;
+    if let Some(requested_session_id) = requested_session_id {
+        let current_session_id = current_live_session_id(state).await?;
+        if current_session_id != requested_session_id {
+            return Ok(None);
+        }
+    }
+    Ok(take_next_current_control_command_after(state, after_seq).await)
 }
 
 #[allow(dead_code)]

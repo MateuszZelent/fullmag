@@ -261,3 +261,81 @@ Dopiero po kodzie wyjścia `0`, screenshotach, manifestach i potwierdzeniu
 - Nie oznaczam E1/E2/E5 jako PASS. Kod authoringu i testy kontraktowe są gotowe,
   lecz dowód wykonania solvera oraz pełnych kliknięć Inspectorów nadal wymaga
   działającego runtime.
+
+
+### Aktualizacja bramki 2026-08-24 (stabilizacja runtime i eksportu)
+
+- CLI uruchamia tryb skryptowy na stosie 16 MiB. Usuwa to potwierdzony
+  overflow stosu podczas materializacji scratchowego ProblemIR i eksportu.
+- Detached scratch supervisor przekazuje `FULLMAG_ATTACHED_SESSION_ID`,
+  `FULLMAG_ATTACHED_WAIT_FOR_SOLVE=1` oraz `FULLMAG_SKIP_CONTROL_ROOM=1`.
+  Polling komend jest włączany dopiero po materializacji sesji, a worker
+  sprawdza właściciela sesji przed każdym poll’em. API przyjmuje
+  `sessionId` w `wait_current_live_control` i blokuje przejęcie komendy
+  przez poller poprzedniej sesji.
+- Dla FDM `mesh_build` ma terminalny ACK: publikuje aktualny
+  `mesh_build_summary`, czyści `active_build` i ustawia stan pipeline’u na
+  `ready`. Klasyfikacja `relax` w bramce wait-for-solve uruchamia solver,
+  zamiast ją ignorować.
+- Eksporter SceneDocument normalizuje klucze `fdm.per_magnet` i
+  `fdm.per_object_grid` z `object_id`/ `region_name` do user-facing
+  `geometry.name`. Dodano regresję round-trip, aby pierwszy attached start
+  nie kończył się błędem nieznanego magnesu.
+- FDM API/runtime E2-like scenario przeszedł pełną sekwencję:
+  pusty projekt → ferromagnetyk Box nazwany X → materiał → tekstura
+  magnetyczna → exchange/demag → translacja → stage Relax → FDM grid →
+  `mesh_build` → `relax` → eksport skryptu. Potwierdzone są rewizje,
+  invalidacje, terminalne statusy komend i plan FDM; dla przebiegu po poprawce
+  aliasów log silnika nie zawiera błędów.
+- Bramka Node helpera: **6/6 PASS**. Python focused round-trip:
+  **7 passed**. Buildy `fullmag` i `fullmag-api` przechodzą na
+  `D:\\fullmag-fullmag-target` z ostrzeżeniami, bez błędów kompilacji.
+- Pełny browser smoke nadal jest **BLOCKED** na warstwie SSR Next:
+  `page.goto(/workspace)` przekracza 120 s podczas kompilacji i nie powstaje
+  manifest kliknięć/WebGL. Nie oznaczam E1/E2/E5 jako PASS bez tego dowodu.
+- Managed FEM pozostaje **BLOCKED**: kanoniczne `just
+  ensure-managed-fem-runtime` zatrzymuje się na launcherze Windows/WSL
+  (`E_ACCESSDENIED`, a następnie brak `setsid`/`flock` i quoting).
+  Nie użyto hostowego builda jako substytutu.
+
+Wniosek: ścieżka authoringu i runtime FDM jest zaimplementowana oraz
+zweryfikowana kontraktowo i przez API; pozostałe punkty celu dotyczą
+zewnętrznej bramki browser/WebGL i kwalifikacji managed FEM.
+- `cargo test -p fullmag-cli wait_for_solve -- --nocapture` nie zbudował targetu
+  testowego przez istniejące fixture’y z brakującymi polami `object_id`,
+  `frozen_spins`, `selections` i `magnetization_constraints` w
+  `orchestrator.rs`, `step_utils.rs` i `main.rs`. Produkcyjny
+  `cargo check -p fullmag-cli --bin fullmag` pozostaje **PASS**; nie
+  rozszerzano zakresu o naprawę niezwiązanych fixture’ów testowych.
+- Supervisor ma teraz RAII guard `ScratchRuntimeHandle`: przy każdej ścieżce
+  wyjścia ustawia stop flag i dołącza worker, więc nie zostawia osieroconego
+  pollera po zakończeniu attached/script mode.
+- Pusta sesja zapisuje żądany backend/device/precision w
+  `SceneStudyState` już podczas `POST /v2/sessions`; supervisor pobiera
+  rzeczywisty `session_id` ze statusu, a backend z `model/scene` (z fallbackiem
+  na pole `backend`) i normalizuje `fdm/fem`, w tym `cpu-fdm/cpu-fem`.
+  Wartość `auto`/nieznana jest traktowana jako `unknown`, więc nie ma cichego
+  startu FDM dla sesji FEM. Po synchronizacji sceny supervisor ponawia
+  walidację pary `(session_id, backend)` przed spawnem.
+- Awaria attached childa nie zostawia już komendy w stanie `dispatched`:
+  supervisor raportuje terminalny failure przez resource-first endpoint
+  `/simulation/commands/{command_id}/failure` i ponawia raport przy chwilowej
+  niedostępności API. Błąd odczytu sceny przy zachowanym statusie sesji jest
+  traktowany jako `backend=unknown`, a nie jako brak sesji, więc nie zabija
+  aktywnego solvera.
+- Supervisor odczekuje do 2 s na terminalny status po wyjściu childa i dopiero
+  potem raportuje failure; eliminuje to wyścig końcowego snapshotu z procesem
+  zamykającym się z kodem 0. Właściciel runtime obejmuje także `scene_revision`,
+  więc zmiana sceny/backendu nie uruchamia starego skryptu na nowym modelu.
+- W bramce wait-for-solve komenda `relax/run` jest admission signal; parametry
+  solvera pochodzą z kanonicznego `SceneDocument` stage. Payload override jest
+  stosowany przez regularną pętlę interactive, dlatego UI musi zapisać zmiany
+  stage przed wysłaniem komendy.
+- Publisher attached scriptu sprawdza aktualne `session_id` przed heartbeat
+  i kazdym cyklem publikacji; po zmianie sesji konczy worker zamiast retryowac
+  stare snapshoty bez konca. Zamykanie drzewa procesow potomnych Windows
+  pozostaje osobnym ryzykiem infrastrukturalnym.
+- Glowna petla starego skryptu nie ma jeszcze twardego cancellation tokenu po
+  utracie sesji; publisher konczy sie poprawnie, ale sam solver moze przez
+  pewien czas kontynuowac obliczenia, a nowy supervisor moze uruchomic drugi
+  child. To pozostaje otwartym zadaniem P1/P2, a nie zaliczona bramka.

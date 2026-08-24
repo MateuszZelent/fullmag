@@ -202,6 +202,7 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::simulation::commands::submit_command,
         crate::router_v2::handlers::simulation::runtime::get_command_status,
         crate::router_v2::handlers::simulation::runtime::get_command_detail,
+        crate::router_v2::handlers::simulation::runtime::report_command_failure,
         crate::router_v2::handlers::persistence::assets::import_asset,
         crate::router_v2::handlers::simulation::runtime::get_current_run,
         crate::router_v2::handlers::simulation::runtime::get_simulation_preparation,

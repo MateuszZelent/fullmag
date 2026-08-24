@@ -15,6 +15,7 @@ use crate::router_v2::handlers::analysis::hysteresis::{
     hysteresis_bookmarks_resource, read_hysteresis_minor_loops_if_available,
     read_hysteresis_points_if_available, read_hysteresis_settle_trace_if_available,
 };
+use crate::schemas::commands::CommandFailureRequest;
 use crate::schemas::hysteresis::{
     HysteresisBookmarkSchema, HysteresisExecutionTreeNode, HysteresisExecutionTreeResource,
     HysteresisFieldUnitProvenanceSchema, HysteresisMinorLoopSchema, HysteresisOrientationSchema,
@@ -2018,6 +2019,76 @@ fn has_active_compute_command(ledger: &std::collections::VecDeque<TrackedCommand
                 | CommandLifecycleState::Running
         )
     })
+}
+
+#[utoipa::path(
+    post,
+    path = "/v2/sessions/current/simulation/commands/{command_id}/failure",
+    params(
+        ("command_id" = String, Path, description = "Command identifier"),
+    ),
+    request_body = CommandFailureRequest,
+    responses(
+        (status = 200, description = "Command marked as failed", body = CommandDetailResource),
+        (status = 404, description = "Command or workspace not found"),
+    ),
+    tag = "simulation"
+)]
+pub async fn report_command_failure(
+    State(state): State<Arc<AppState>>,
+    Path(command_id): Path<String>,
+    Json(request): Json<CommandFailureRequest>,
+) -> Result<Json<CommandDetailResource>, ApiError> {
+    ensure_workspace(&state).await?;
+    let error = request.error.trim();
+    if error.is_empty() {
+        return Err(ApiError::bad_request(
+            "command failure error must not be empty",
+        ));
+    }
+    let completed_at_unix_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let mut changed = false;
+    {
+        let mut ledger = state.current_command_ledger.lock().await;
+        let record = ledger
+            .iter_mut()
+            .find(|record| record.command.command_id == command_id)
+            .ok_or_else(|| ApiError::not_found("command not found"))?;
+        if !matches!(
+            record.status,
+            CommandLifecycleState::Completed
+                | CommandLifecycleState::Rejected
+                | CommandLifecycleState::Failed
+        ) {
+            record.status = CommandLifecycleState::Failed;
+            record.completed_at_unix_ms = Some(completed_at_unix_ms);
+            record.completion_status = Some(CommandCompletionState::Failed);
+            record.error = Some(error.to_string());
+            changed = true;
+        }
+    }
+    if changed {
+        state
+            .current_control_queue
+            .lock()
+            .await
+            .retain(|command| command.command_id != command_id);
+        if let Some(snapshot) = state.current_live_state.read().await.as_ref().cloned() {
+            let display_revision = state.current_display_selection.read().await.revision;
+            let realtime_state = crate::current_live_realtime_state_from_snapshot(
+                &state,
+                &snapshot,
+                display_revision,
+            )
+            .await;
+            crate::publish_current_live_realtime_batch_changed(&state, &realtime_state, false, 0)
+                .await?;
+        }
+    }
+    get_command_detail(State(state), Path(command_id)).await
 }
 
 #[utoipa::path(

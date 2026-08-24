@@ -1586,7 +1586,30 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
     _copy_present_collection(builder, overrides, "spin_transports")
     _copy_present_collection(builder, overrides, "oersted_terms")
     if "fdm" in builder:
-        overrides["fdm"] = copy.deepcopy(builder.get("fdm"))
+        fdm = copy.deepcopy(builder.get("fdm"))
+        if isinstance(fdm, dict):
+            aliases: dict[str, str] = {}
+            for geometry in builder.get("geometries") or []:
+                if not isinstance(geometry, dict):
+                    continue
+                name = geometry.get("name") or geometry.get("object_id") or geometry.get("id")
+                if name is None:
+                    continue
+                for alias in (
+                    geometry.get("object_id"),
+                    geometry.get("id"),
+                    geometry.get("region_name"),
+                ):
+                    if alias is not None:
+                        aliases[str(alias)] = str(name)
+            for grid_key in ("per_magnet", "per_object_grid"):
+                raw_grid = fdm.get(grid_key)
+                if isinstance(raw_grid, dict):
+                    fdm[grid_key] = {
+                        aliases.get(str(key), str(key)): value
+                        for key, value in raw_grid.items()
+                    }
+        overrides["fdm"] = fdm
     return overrides
 
 

@@ -186,6 +186,34 @@ def test_scene_document_exports_without_a_base_script(backend: str) -> None:
     assert _semantic_scene(round_tripped) == _semantic_scene(scene)
 
 
+def test_scene_document_normalizes_fdm_grid_object_ids_to_magnet_names() -> None:
+    from fullmag.runtime.script_builder import render_scene_document_as_script
+
+    builder = _builder(backend="fdm")
+    builder["geometries"][0]["name"] = "X ferromagnet"
+    builder["geometries"][0]["region_name"] = "x-ferromagnet"
+    builder["fdm"]["per_magnet"] = {
+        builder["geometries"][0]["object_id"]: {"cell": [2e-9, 2e-9, 2e-9]}
+    }
+    builder["fdm"]["demag"] = {
+        "strategy": "multilayer_convolution",
+        "mode": "auto",
+        "explain": True,
+    }
+    scene = build_scene_document_from_builder(builder)
+
+    source = render_scene_document_as_script(scene)
+
+    assert 'per_magnet={"X ferromagnet": fm.FDMGrid' in source
+    assert 'per_magnet={"x-ferromagnet": fm.FDMGrid' not in source
+    assert 'per_magnet={"x-ferromagnet-id": fm.FDMGrid' not in source
+    with TemporaryDirectory() as temporary:
+        script = Path(temporary) / "fdm-object-id-grid.py"
+        script.write_text(source, encoding="utf-8")
+        loaded = load_problem_from_script(script, lightweight_assets=True)
+        assert loaded.problem.to_ir()["ir_version"] == "0.3.0"
+
+
 def test_scene_document_export_rejects_an_incomplete_scene() -> None:
     from fullmag.runtime.script_builder import render_scene_document_as_script
 

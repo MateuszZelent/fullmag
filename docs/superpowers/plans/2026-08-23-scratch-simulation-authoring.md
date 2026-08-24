@@ -759,3 +759,43 @@
 ## Definicja ukończenia
 
 Implementacja jest ukończona tylko wtedy, gdy prawdziwe E1 FDM i E2 FEM zaczynają się od API bez bieżącej sesji i kończą wynikiem oraz eksportem, E3 dowodzi poprawnej invalidacji/stabilności, E4 porównuje przeładowany ProblemIR 0.3, a E5 przechodzi na rzeczywistych błędach i konflikcie. Zielone testy komponentowe bez tych browserowych i semantycznych dowodów nie spełniają planu.
+
+
+## Stan realizacji 2026-08-24
+
+Zrealizowane w worktree:
+
+- implementacja scratch authoringu obejmująca SceneDocument, primitive geometry,
+  materiał, teksturę magnetyczną, interactions, transform, stage, FDM/FEM
+  study settings oraz canonical script export;
+- pełny FDM API/runtime scenario z `mesh_build`, `relax`, rewizjami,
+  invalidacjami i terminalnym ACK;
+- stabilizacja attached-session handoff, owner-scoped command polling i
+  ochrona API przed przejęciem komendy starej sesji;
+- normalizacja kluczy FDM grid z object ID/region ID do nazwy użytkownika oraz
+  regresja eksportu.
+
+Bramki:
+
+- helper kontraktowy: **6/6 PASS**;
+- Python scratch round-trip: **7 passed**;
+- buildy CLI/API: **PASS**;
+- FDM API/runtime E2-like: **PASS**;
+- pełny browser/WebGL E1/E2/E5: **BLOCKED** przez timeout SSR Next przy
+  `page.goto(/workspace)`;
+- managed FEM i FEM browser qualification: **BLOCKED** przez launcher
+  Windows/WSL i brak managed runtime.
+
+Plan pozostaje otwarty wyłącznie dla bramek zależnych od działającej
+infrastruktury browser/WebGL oraz managed FEM; nie są one oznaczone jako
+ukończone na podstawie testów kontraktowych.
+
+Aktualizacja stabilizacji runtime: failure endpoint ma test API **1 passed**,
+supervisor czeka na terminalny ACK po wyjściu procesu i wiąże attached runtime
+z `(session_id, backend, scene_revision)`. Te zmiany nie zmieniają statusu
+bramek browser/WebGL ani managed FEM, które nadal wymagają infrastruktury.
+
+Pozostaje także ryzyko P1/P2: publisher reaguje na utratę sesji, lecz główna
+pętla starego skryptu nie ma jeszcze twardego cancellation tokenu; proces może
+kontynuować obliczenia po podmianie sesji, a Windows `Child::kill()` nie daje
+gwarancji zamknięcia całego drzewa potomnego. Nie oznaczam tego jako ukończone.

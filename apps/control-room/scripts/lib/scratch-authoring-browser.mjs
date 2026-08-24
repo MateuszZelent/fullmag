@@ -225,7 +225,10 @@ export function assertScratchScene(scene, fixture) {
   if (summary.backend !== fixture.backend) failures.push("backend");
   if (fixture.backend === "fdm") {
     if (!sameJson(summary.fdm_grid?.default_cell, fixture.grid.default_cell)) failures.push("FDM default cell");
-    if (!sameJson(summary.fdm_grid?.per_magnet, fixture.grid.per_magnet)) failures.push("FDM per-magnet cell");
+    const perMagnetGrid = summary.fdm_grid?.per_magnet && Object.keys(summary.fdm_grid.per_magnet).length > 0
+      ? summary.fdm_grid.per_magnet
+      : summary.fdm_grid?.per_object_grid;
+    if (!sameJson(perMagnetGrid, fixture.grid.per_magnet)) failures.push("FDM per-magnet cell");
   }
   if (fixture.backend === "fem") {
     if (!matchesExpectedFields(summary.fem_mesh, fixture.mesh)) failures.push("FEM mesh");
@@ -579,7 +582,9 @@ export async function runScratchAuthoringBrowser({
       context.request,
       scratchApiUrl(apiBase, "/v2/sessions/current/status"),
     );
-    const baseMeshRevision = Number(runtimeStatus.resources?.mesh_build_revision ?? 0);
+    const baseMeshRevision = backend === "fem"
+      ? Number(runtimeStatus.resources?.mesh_build_revision ?? 0)
+      : null;
     const meshResponse = await requestJson(
       context.request,
       scratchApiUrl(apiBase, "/v2/sessions/current/simulation/commands"),
