@@ -38,6 +38,7 @@ import {
 } from "./inspectorDraftState";
 import {
   buildObjectMagneticTextureAssetDraft,
+  magneticTextureProjectionOptions,
   objectMagneticTextureDraftFromModel,
   objectMagneticTextureDraftDirty,
   objectMagneticTextureDraftIdentityKey,
@@ -629,6 +630,7 @@ export function MagneticTextureMappingSection({
   draft: ObjectMagneticTextureDraft;
   updateDraft: UpdateMagneticTextureDraft;
 }) {
+  const projectionOptions = magneticTextureProjectionOptions(draft.presetKind);
   return (
     <InspectorGroup title="Mapping" collapsible defaultOpen={false}>
       <FormField label="Space" type="select" value={draft.mappingSpace} onChange={(event) => updateDraft({ mappingSpace: event.target.value })}>
@@ -636,10 +638,10 @@ export function MagneticTextureMappingSection({
         <option value="world">World</option>
       </FormField>
       <FormField label="Projection" type="select" value={draft.mappingProjection} onChange={(event) => updateDraft({ mappingProjection: event.target.value })}>
-        <option value="object_local">Object local</option>
-        <option value="planar_xy">Planar XY</option>
-        <option value="planar_xz">Planar XZ</option>
-        <option value="planar_yz">Planar YZ</option>
+        {projectionOptions.includes("object_local") && <option value="object_local">Object local</option>}
+        {projectionOptions.includes("planar_xy") && <option value="planar_xy">Planar XY</option>}
+        {projectionOptions.includes("planar_xz") && <option value="planar_xz">Planar XZ</option>}
+        {projectionOptions.includes("planar_yz") && <option value="planar_yz">Planar YZ</option>}
       </FormField>
       <FormField label="Clamp" type="select" value={draft.clampMode} onChange={(event) => updateDraft({ clampMode: event.target.value })}>
         <option value="none">None</option>

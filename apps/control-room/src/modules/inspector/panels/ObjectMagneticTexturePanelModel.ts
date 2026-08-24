@@ -295,6 +295,19 @@ function requiredPositiveNumber(value: string | undefined, label: string): numbe
   return parsed;
 }
 
+const OBJECT_LOCAL_ONLY_PRESETS = new Set<MagnetizationTexturePresetId>([
+  "hopfion",
+  "hopfion_compact_support",
+]);
+
+export function magneticTextureProjectionOptions(
+  presetKind: MagnetizationTexturePresetId,
+): readonly string[] {
+  return OBJECT_LOCAL_ONLY_PRESETS.has(presetKind)
+    ? ["object_local"]
+    : ["object_local", "planar_xy", "planar_xz", "planar_yz"];
+}
+
 function requiredNonzeroNumber(value: string | undefined, label: string): number {
   const parsed = requiredNumber(value, label);
   if (parsed === 0) {
@@ -875,6 +888,13 @@ export function buildObjectMagneticTextureAssetDraft(
   }
 
   const presetKind = asPresetKind(draft.presetKind) ?? "uniform";
+  const mappingProjection = stringOrDefault(
+    draft.mappingProjection,
+    "object_local",
+  );
+  if (!magneticTextureProjectionOptions(presetKind).includes(mappingProjection)) {
+    throw new Error(`${presetKind} requires object-local projection.`);
+  }
   const target =
     model.targetKind === "region" && model.regionId
       ? {
@@ -903,7 +923,7 @@ export function buildObjectMagneticTextureAssetDraft(
     label,
     mapping: {
       clamp_mode: stringOrDefault(draft.clampMode, "none"),
-      projection: stringOrDefault(draft.mappingProjection, "object_local"),
+      projection: mappingProjection,
       space: stringOrDefault(draft.mappingSpace, "object"),
     },
     presetKind,

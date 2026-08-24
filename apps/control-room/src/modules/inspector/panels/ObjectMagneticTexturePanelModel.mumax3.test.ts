@@ -4,6 +4,7 @@ import { MAGNETIZATION_TEXTURE_PRESETS } from "@/shared/domain/magnetization-tex
 
 import {
   buildObjectMagneticTextureAssetDraft,
+  magneticTextureProjectionOptions,
   objectMagneticTextureDraftFromModel,
   objectMagneticTexturePresetChangePatch,
   type ObjectMagneticTexturePanelModel,
@@ -77,6 +78,23 @@ describe("Mumax3 magnetic texture UI coverage", () => {
       });
     }
   });
+
+  it.each(["hopfion", "hopfion_compact_support"] as const)(
+    "restricts %s to object-local projection before save",
+    (presetKind) => {
+      expect(magneticTextureProjectionOptions(presetKind)).toEqual(["object_local"]);
+      const baseDraft = objectMagneticTextureDraftFromModel(MODEL);
+      const draft = {
+        ...baseDraft,
+        ...objectMagneticTexturePresetChangePatch(MODEL, baseDraft, presetKind),
+        mappingProjection: "planar_xy",
+        presetKind,
+      };
+      expect(() => buildObjectMagneticTextureAssetDraft(MODEL, draft)).toThrow(
+        `${presetKind} requires object-local projection.`,
+      );
+    },
+  );
 
   it("uses the canonical one-nanometre vortex-wall core default", () => {
     const baseDraft = objectMagneticTextureDraftFromModel(MODEL);
