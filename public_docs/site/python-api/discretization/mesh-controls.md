@@ -65,6 +65,8 @@ followed by growth, conformity, geometry, and mesher constraints. Therefore:
 | growth, curvature, stretching, size factor, element ratio | 1 |
 | element order, layers, algorithms, iterations, smoothing | 1 |
 | quality statistics | metric-specific, named by the report |
+| $h_{\mathrm{target}}(\mathbf x)$ | resolved local target element size before mesher/conformity constraints | $\mathrm{m}$ |
+| $\mathcal S(\mathbf x)$ | active size fields at the spatial point | $1$ |
 
 All Control Room length inputs are canonical SI metres. The interface does not silently convert a
 number entered as `5` into five nanometres.
@@ -197,13 +199,9 @@ study.mode("strict")
 
 study.universe(mode="manual", size=(1.0e-6, 500 * nm, 400 * nm))
 study.universe.mesh(
-    calibrate_for="micromagnetics_relaxation",
-    size_preset="normal",
     minimum_element_size=8 * nm,
     maximum_element_size=90 * nm,
     maximum_element_growth_rate=1.3,
-    curvature_factor=0.5,
-    narrow_region_resolution=0.6,
     grading="geometric",
 )
 
@@ -316,8 +314,11 @@ published in the realization report.
 | `swept` | structured extrusion | geometry and capability dependent |
 | `size_field` | inject an additional size field | field kind and selectors must resolve |
 
-Every operation remains in authored order with an enabled flag. The build report classifies each as
-applied, ignored, skipped, degraded, or failed and records the reason.
+The operation schema is representable, but the current public build boundary rejects every authored
+operation with `mesh operation executor unavailable` before mesh generation, including entries with
+`enabled=False`. Therefore no operation is currently classified as applied, ignored, skipped,
+degraded, or failed in a build report. The table above describes intended families, not executable
+public capability.
 
 (python-api-discretization-mesh-controls-problem-ir)=
 ## ProblemIR and provenance
@@ -355,6 +356,12 @@ then rejects or explicitly degrades:
 
 A failed build must not overwrite the latest successful mesh. A green policy request without a green
 mesh build is not a usable solver discretization.
+
+### Round-trip contract
+
+The exported Python preserves **requested intent**. ProblemIR and the build report preserve
+**resolved execution** separately. Invalid values produce explicit **validation errors**, while
+**unsupported combinations** are rejected before meshing rather than silently degraded.
 
 (python-api-discretization-mesh-controls-discrete-realization)=
 ## Discrete realization
@@ -420,12 +427,27 @@ contract and exposes object/region mesh membership read-only in the Control Room
    [doi:10.1016/j.camwa.2020.06.009](https://doi.org/10.1016/j.camwa.2020.06.009).
 
 (python-api-discretization-mesh-controls-source-code-index)=
+### Exhaustive public-API and Python-to-ProblemIR mapping
+
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| MeshSizeControls.calibrate_for | str | None | None | $1$ | Supported calibration vocabulary at the stage-first boundary. | Physics/workflow calibration family. | FEM/Gmsh policy | mesh_size_controls.calibrate_for |
+| MeshSizeControls.size_preset | str | None | None | $1$ | Supported preset vocabulary at the stage-first boundary. | Named size-policy preset. | FEM/Gmsh policy | mesh_size_controls.size_preset |
+| MeshSizeControls.maximum_element_size | float | None | None | $\mathrm{m}$ | Finite and positive when authored. | Requested upper element-size target. | FEM | mesh_size_controls.maximum_element_size |
+| MeshSizeControls.minimum_element_size | float | None | None | $\mathrm{m}$ | Finite and positive and no larger than effective maximum when authored. | Requested lower element-size target. | FEM | mesh_size_controls.minimum_element_size |
+| MeshSizeControls.maximum_element_growth_rate | float | None | None | $1$ | Finite and positive; stage-first public authoring limits the practical range through 2.5. | Requested maximum growth between refinement regions. | FEM/Gmsh | mesh_size_controls.maximum_element_growth_rate |
+| MeshSizeControls.curvature_factor | float | None | None | $1$ | Finite and positive when authored. | Curvature-derived sizing factor. | FEM/Gmsh | mesh_size_controls.curvature_factor |
+| MeshSizeControls.narrow_region_resolution | float | None | None | $1$ | Finite and positive when authored. | Resolution target for narrow regions. | FEM/Gmsh | mesh_size_controls.narrow_region_resolution |
+| SharedMeshAssemblyPolicy.interface_hmax_factor | float | 0.5 | $1$ | Strictly greater than zero and no greater than one. | Interface size relative to the local object maximum. | FEM shared-domain assembly | shared_mesh_assembly_policy.interface_hmax_factor |
+| SharedMeshAssemblyPolicy.enforce_conforming | bool | True | $1$ | Boolean. | Require a conforming shared-domain mesh. | FEM shared-domain assembly | shared_mesh_assembly_policy.enforce_conforming |
+| SharedMeshAssemblyPolicy.airbox_hmax_factor | float | 3.0 | $1$ | Finite and positive. | Airbox target relative to the global maximum element size. | FEM shared-domain assembly | shared_mesh_assembly_policy.airbox_hmax_factor |
+
 ## Source-code index
 
-| Claim | Path | Stable symbol | Evidence |
-|---|---|---|---|
-| size-control fields | `packages/fullmag-py/src/fullmag/model/discretization.py` | `MeshSizeControls.to_ir` | source/round-trip tests |
-| UI object lifecycle | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx` | `applyPolicy`, `buildMesh` | component tests |
-| UI airbox lifecycle | `apps/control-room/src/modules/inspector/panels/airbox/AirboxMeshParametersPanel.tsx` | `submitAirboxPolicyDraft`, `build` | panel/model tests |
-| UI region controls | `apps/control-room/src/modules/inspector/panels/region/ObjectRegionMeshPanel.tsx` | `ObjectRegionMeshPanel` | component tests |
-| final provenance | `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py` | `_build_shared_domain_build_report` | fallback/report tests |
+| Claim | Lane | Path | Stable symbol | Evidence | Evidence status | Immutable revision |
+|---|---|---|---|---|---|---|
+| size-control fields | FEM CPU/GPU authoring | `packages/fullmag-py/src/fullmag/model/discretization.py` | `MeshSizeControls.to_ir` | source/round-trip tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/packages/fullmag-py/src/fullmag/model/discretization.py) |
+| UI object lifecycle | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx` | `applyPolicy`, `buildMesh` | component tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx) |
+| UI airbox lifecycle | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/airbox/AirboxMeshParametersPanel.tsx` | `submitAirboxPolicyDraft`, `build` | panel/model tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/apps/control-room/src/modules/inspector/panels/airbox/AirboxMeshParametersPanel.tsx) |
+| UI region controls | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/region/ObjectRegionMeshPanel.tsx` | `ObjectRegionMeshPanel` | component tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/apps/control-room/src/modules/inspector/panels/region/ObjectRegionMeshPanel.tsx) |
+| final provenance | FEM CPU/GPU shared mesh | `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py` | `_build_shared_domain_build_report` | fallback/report tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py) |

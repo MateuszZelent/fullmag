@@ -78,7 +78,7 @@
     {
       "id": "size_field_plan",
       "path": "packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py",
-      "symbol": "class SizeFieldPlan",
+      "symbol": "_build_field_stack",
       "responsibility": "Composition and ordering of local Gmsh size fields."
     },
     {

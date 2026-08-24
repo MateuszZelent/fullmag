@@ -35,6 +35,12 @@ from fullmag.model.problem import build_geometry_assets_for_request
 
 
 class ProblemApiTests(unittest.TestCase):
+    def test_fem_order_rejects_boolean_and_noninteger_values(self) -> None:
+        for invalid_order in (True, False, 1.5):
+            with self.subTest(order=invalid_order):
+                with self.assertRaisesRegex(ValueError, "order must be an integer >= 1"):
+                    fm.FEM(order=invalid_order, maximum_element_size=1e-9)
+
     def test_geometry_asset_cache_copies_by_default_and_can_be_borrowed_internally(self) -> None:
         cached_assets = {"fem_domain_mesh_asset": {"mesh": {"nodes": [[0.0, 0.0, 0.0]]}}}
         cache = {"cached": cached_assets}

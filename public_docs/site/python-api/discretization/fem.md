@@ -143,8 +143,6 @@ study.mode("strict")
 
 study.universe(mode="manual", size=(1.2e-6, 600 * nm, 550 * nm))
 study.universe.mesh(
-    calibrate_for="micromagnetics_relaxation",
-    size_preset="normal",
     minimum_element_size=8 * nm,
     maximum_element_size=100 * nm,
     maximum_element_growth_rate=1.3,
@@ -327,10 +325,10 @@ A production mesh study should include:
 (python-api-discretization-fem-source-code-index)=
 ## Source-code index
 
-| Claim | Path | Stable symbol | Responsibility | Evidence |
-|---|---|---|---|---|
-| constructor and aliases | `packages/fullmag-py/src/fullmag/model/discretization.py` | `FEM.__init__`, `FEM.to_ir` | validation and canonical lowering | signature/round-trip tests |
-| complete object recipe | `packages/fullmag-py/src/fullmag/model/discretization.py` | `PerObjectMeshRecipe.__post_init__`, `PerObjectMeshRecipe.to_ir` | topology legality and object policy | unit and meshing tests |
-| Control Room canonicalization | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts` | `buildObjectMeshPolicyReplaceRequest` | typed draft to canonical JSON | model/DOM tests |
-| airbox transaction | `apps/control-room/src/modules/inspector/panels/airbox/airboxMeshPolicyDraft.ts` | `buildAirboxMeshPolicyReplaceRequest` | universe policy and FEM-only filtering | panel/model tests |
-| realized report | `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py` | `_build_shared_domain_build_report` | requested/resolved provenance | meshing fallback and report tests |
+| Claim | Lane | Path | Stable symbol | Responsibility | Evidence | Evidence status | Immutable revision |
+|---|---|---|---|---|---|---|---|
+| constructor and aliases | FEM CPU/GPU authoring | `packages/fullmag-py/src/fullmag/model/discretization.py` | `FEM.__init__`, `FEM.to_ir` | validation and canonical lowering | signature/round-trip tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/packages/fullmag-py/src/fullmag/model/discretization.py) |
+| complete object recipe | FEM CPU/GPU authoring | `packages/fullmag-py/src/fullmag/model/discretization.py` | `PerObjectMeshRecipe.__post_init__`, `PerObjectMeshRecipe.to_ir` | topology legality and object policy | unit and meshing tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/packages/fullmag-py/src/fullmag/model/discretization.py) |
+| Control Room canonicalization | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts` | `buildObjectMeshPolicyReplaceRequest` | typed draft to canonical JSON | model/DOM tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts) |
+| airbox transaction | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/airbox/airboxMeshPolicyDraft.ts` | `buildAirboxMeshPolicyReplaceRequest` | universe policy and FEM-only filtering | panel/model tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/apps/control-room/src/modules/inspector/panels/airbox/airboxMeshPolicyDraft.ts) |
+| realized report | FEM CPU/GPU shared mesh | `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py` | `_build_shared_domain_build_report` | requested/resolved provenance | meshing fallback and report tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py) |

@@ -473,8 +473,8 @@ class FEM:
         return self.maximum_element_size
 
     def __post_init__(self) -> None:
-        if self.order < 1:
-            raise ValueError("order must be >= 1")
+        if isinstance(self.order, bool) or not isinstance(self.order, int) or self.order < 1:
+            raise ValueError("order must be an integer >= 1")
         require_positive(self.maximum_element_size, "maximum_element_size")
         if self.mesh is not None and not self.mesh.strip():
             raise ValueError("mesh must not be empty when provided")
