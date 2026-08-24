@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/discretization/fem.md",
-    "reviewed_revision": "043201a94f769307c6b6e0db971da9a8a5eec57c"
+    "reviewed_revision": "ec6f2374e04cbd0d1e75b94c81da07af50da3789"
   },
   "backend_matrix": [
     {
@@ -94,9 +94,9 @@
         "type": "int",
         "default": "required",
         "si_unit": "1",
-        "validation": "integer >= 1",
+        "validation": "integer >= 1; production planners require 1",
         "meaning": "study-level finite-element field order",
-        "backend_support": "FEM; device support is element/order/interaction gated",
+        "backend_support": "FEM CPU/GPU production: P1 only; higher order planned",
         "problem_ir": "backend_policy.discretization_hints.fem.order"
       },
       {

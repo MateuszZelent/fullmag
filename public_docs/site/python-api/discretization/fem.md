@@ -4,7 +4,7 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-reviewed_revision: 043201a94f769307c6b6e0db971da9a8a5eec57c
+reviewed_revision: ec6f2374e04cbd0d1e75b94c81da07af50da3789
 source_of_truth: FEM, PerObjectMeshRecipe, StudyBuilder mesh facades, shared-domain target resolution, and Control Room mesh resources
 ---
 
@@ -49,8 +49,9 @@ the UI is therefore not equivalent to a numeric zero or to deleting the mesh pol
 
 This API page introduces no new physical interaction. It selects the finite-element trial/test
 space used by all enabled operators. For a scalar P1 basis `phi_a`, each component of reduced
-magnetization is represented by nodal coefficients; higher `order` requests a correspondingly higher
-finite-element space where the selected native lane supports it. Geometry order, field order,
+magnetization is represented by nodal coefficients. The public schema can represent higher `order`
+values, but every current production native FEM planner accepts only `order=1`; higher orders are
+planned capability and are rejected before execution. Geometry order, field order,
 quadrature, material attributes, and airbox closure remain separate numerical choices.
 
 Changing the mesh changes the discrete exchange, DMI, anisotropy, demagnetization, mass, tangent,
@@ -77,6 +78,8 @@ apply an implicit nanometre conversion when writing the backend resource.
 ## Assumptions and validity
 
 - `FEM.order` is an integer greater than or equal to one.
+- current production FEM CPU/GPU execution is P1-only (`FEM.order == 1`); higher integer values are
+  representable authoring intent but fail planner capability validation.
 - `FEM.maximum_element_size` is required and strictly positive; `hmax` is a compatibility spelling
   for the same value.
 - when both `maximum_element_size` and `hmax` are supplied, their floating-point values must be
@@ -111,13 +114,19 @@ actually ran. They must not be collapsed into one field.
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---:|---:|---|---|---|---|
-| `FEM.order` | `int` | required | 1 | integer >= 1 | study-level finite-element field order | FEM; device support is element/order/interaction gated | `backend_policy.discretization_hints.fem.order` |
+| `FEM.order` | `int` | required | 1 | integer >= 1; production planners require 1 | study-level finite-element field order | FEM CPU/GPU production: P1 only; higher order planned | `backend_policy.discretization_hints.fem.order` |
 | `FEM.maximum_element_size` | `float` | required unless `hmax` is supplied | m | finite and > 0 | canonical study-level maximum-size target | FEM | `backend_policy.discretization_hints.fem.hmax` |
 | `FEM.hmax` | `float or None` | `None` | m | alias; must equal `maximum_element_size` when both are present | compatibility spelling of the same target | FEM | `backend_policy.discretization_hints.fem.hmax` |
 | `FEM.mesh` | `str or None` | `None` | 1 | nonempty when present | imported/prebuilt mesh reference | FEM import/extraction path | `backend_policy.discretization_hints.fem.mesh` |
 | `FEM.demag_solver_policy` | `FemLinearSolverPolicy or None` | `None` | 1 | typed policy | Poisson/demag algebraic solver request; does not alter mesh geometry | FEM demag lanes | `backend_policy.discretization_hints.fem.demag_solver_policy` |
 
 ### Related typed objects
+
+These types are exported from `fullmag.model`, not from the top-level `fullmag` namespace:
+
+```python
+from fullmag.model import MeshOperation, MeshSizeControls, PerObjectMeshRecipe, SharedMeshAssemblyPolicy
+```
 
 | Object | Owned controls | Purpose |
 |---|---|---|
@@ -327,8 +336,8 @@ A production mesh study should include:
 
 | Claim | Lane | Path | Stable symbol | Responsibility | Evidence | Evidence status | Immutable revision |
 |---|---|---|---|---|---|---|---|
-| constructor and aliases | FEM CPU/GPU authoring | `packages/fullmag-py/src/fullmag/model/discretization.py` | `FEM.__init__`, `FEM.to_ir` | validation and canonical lowering | signature/round-trip tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/packages/fullmag-py/src/fullmag/model/discretization.py) |
-| complete object recipe | FEM CPU/GPU authoring | `packages/fullmag-py/src/fullmag/model/discretization.py` | `PerObjectMeshRecipe.__post_init__`, `PerObjectMeshRecipe.to_ir` | topology legality and object policy | unit and meshing tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/packages/fullmag-py/src/fullmag/model/discretization.py) |
-| Control Room canonicalization | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts` | `buildObjectMeshPolicyReplaceRequest` | typed draft to canonical JSON | model/DOM tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts) |
-| airbox transaction | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/airbox/airboxMeshPolicyDraft.ts` | `buildAirboxMeshPolicyReplaceRequest` | universe policy and FEM-only filtering | panel/model tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/apps/control-room/src/modules/inspector/panels/airbox/airboxMeshPolicyDraft.ts) |
-| realized report | FEM CPU/GPU shared mesh | `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py` | `_build_shared_domain_build_report` | requested/resolved provenance | meshing fallback and report tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py) |
+| constructor and aliases | FEM CPU/GPU authoring | `packages/fullmag-py/src/fullmag/model/discretization.py` | `FEM.__init__`, `FEM.to_ir` | validation and canonical lowering | signature/round-trip tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/ec6f2374e04cbd0d1e75b94c81da07af50da3789/packages/fullmag-py/src/fullmag/model/discretization.py) |
+| complete object recipe | FEM CPU/GPU authoring | `packages/fullmag-py/src/fullmag/model/discretization.py` | `PerObjectMeshRecipe.__post_init__`, `PerObjectMeshRecipe.to_ir` | topology legality and object policy | unit and meshing tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/ec6f2374e04cbd0d1e75b94c81da07af50da3789/packages/fullmag-py/src/fullmag/model/discretization.py) |
+| Control Room canonicalization | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts` | `buildObjectMeshPolicyReplaceRequest` | typed draft to canonical JSON | model/DOM tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/ec6f2374e04cbd0d1e75b94c81da07af50da3789/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts) |
+| airbox transaction | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/airbox/airboxMeshPolicyDraft.ts` | `buildAirboxMeshPolicyReplaceRequest` | universe policy and FEM-only filtering | panel/model tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/ec6f2374e04cbd0d1e75b94c81da07af50da3789/apps/control-room/src/modules/inspector/panels/airbox/airboxMeshPolicyDraft.ts) |
+| realized report | FEM CPU/GPU shared mesh | `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py` | `_build_shared_domain_build_report` | requested/resolved provenance | meshing fallback and report tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/ec6f2374e04cbd0d1e75b94c81da07af50da3789/packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py) |

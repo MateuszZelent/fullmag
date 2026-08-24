@@ -41,6 +41,12 @@ class ProblemApiTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "order must be an integer >= 1"):
                     fm.FEM(order=invalid_order, maximum_element_size=1e-9)
 
+    def test_fem_order_accepts_and_normalizes_numpy_integral(self) -> None:
+        fem = fm.FEM(order=np.int64(1), maximum_element_size=1e-9)
+
+        self.assertEqual(fem.order, 1)
+        self.assertIs(type(fem.order), int)
+
     def test_geometry_asset_cache_copies_by_default_and_can_be_borrowed_internally(self) -> None:
         cached_assets = {"fem_domain_mesh_asset": {"mesh": {"nodes": [[0.0, 0.0, 0.0]]}}}
         cache = {"cached": cached_assets}

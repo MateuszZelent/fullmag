@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from numbers import Integral
 from typing import Any, Literal, Sequence
 
 from fullmag._validation import as_vector3, require_positive
@@ -473,8 +474,9 @@ class FEM:
         return self.maximum_element_size
 
     def __post_init__(self) -> None:
-        if isinstance(self.order, bool) or not isinstance(self.order, int) or self.order < 1:
+        if isinstance(self.order, bool) or not isinstance(self.order, Integral) or self.order < 1:
             raise ValueError("order must be an integer >= 1")
+        object.__setattr__(self, "order", int(self.order))
         require_positive(self.maximum_element_size, "maximum_element_size")
         if self.mesh is not None and not self.mesh.strip():
             raise ValueError("mesh must not be empty when provided")
