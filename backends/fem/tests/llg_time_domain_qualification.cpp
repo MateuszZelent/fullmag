@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -14,6 +15,7 @@
 #include <limits>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -56,6 +58,19 @@ const std::array<uint32_t, 4> kFacetRoles = {
 const std::array<uint32_t, 5> kFacetOffsets = {0, 3, 6, 9, 12};
 const std::array<uint64_t, 4> kFacetOrdinals = {0, 1, 2, 3};
 bool g_use_gpu = false;
+
+constexpr std::array<std::pair<uint64_t, const char *>, 10> kGpuOperatorIds = {{
+    {FULLMAG_FEM_GPU_OPERATOR_EXCHANGE, "exchange"},
+    {FULLMAG_FEM_GPU_OPERATOR_DEMAG_RHS, "demag_rhs"},
+    {FULLMAG_FEM_GPU_OPERATOR_DEMAG_SOLVE, "demag_solve"},
+    {FULLMAG_FEM_GPU_OPERATOR_DEMAG_RECOVERY, "demag_recovery"},
+    {FULLMAG_FEM_GPU_OPERATOR_LOCAL_FIELDS, "local_fields"},
+    {FULLMAG_FEM_GPU_OPERATOR_DIRECT_TORQUES, "direct_torques"},
+    {FULLMAG_FEM_GPU_OPERATOR_LLG_RHS, "llg_rhs"},
+    {FULLMAG_FEM_GPU_OPERATOR_RK_STEPPER, "rk_stepper"},
+    {FULLMAG_FEM_GPU_OPERATOR_REDUCTIONS, "reductions"},
+    {FULLMAG_FEM_GPU_OPERATOR_PRECONDITIONER, "preconditioner"},
+}};
 
 [[noreturn]] void fail(const std::string &message)
 {
@@ -197,6 +212,69 @@ void require_strict_gpu_hot_loop(fullmag_fem_backend *backend)
     require(audit.hot_loop_compute_host_sync_count == 0, "GPU qualification used hot-loop compute host synchronization");
 }
 
+uint64_t known_gpu_operator_mask()
+{
+    uint64_t mask = 0;
+    for (const auto &[bit, operator_id] : kGpuOperatorIds) {
+        (void)operator_id;
+        mask |= bit;
+    }
+    return mask;
+}
+
+fullmag_fem_gpu_execution_receipt_v1 require_strict_gpu_execution_receipt(
+    fullmag_fem_backend *backend)
+{
+    fullmag_fem_gpu_execution_receipt_v1 receipt{};
+    if (!g_use_gpu) {
+        return receipt;
+    }
+    receipt.abi_version = FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1;
+    receipt.struct_size = sizeof(receipt);
+    require(
+        fullmag_fem_backend_gpu_execution_receipt_v1(backend, &receipt) ==
+            FULLMAG_FEM_OK,
+        std::string("query strict GPU execution receipt: ") + last_error(backend));
+    require(
+        receipt.abi_version == FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1,
+        "GPU qualification receipt ABI is not v1");
+    require(
+        receipt.struct_size == sizeof(fullmag_fem_gpu_execution_receipt_v1),
+        "GPU qualification receipt struct_size does not match ABI v1");
+    require(
+        receipt.execution_class == FULLMAG_FEM_GPU_EXECUTION_DEVICE_RESIDENT,
+        "GPU qualification receipt is not device_resident");
+    require(receipt.device_ordinal >= 0, "GPU qualification receipt has no device ordinal");
+    require(
+        receipt.precision == FULLMAG_FEM_PRECISION_DOUBLE,
+        "GPU qualification receipt precision is not double");
+    require(
+        receipt.integrator == FULLMAG_FEM_INTEGRATOR_RK45_DP54,
+        "GPU qualification receipt integrator is not RK45");
+    require(
+        receipt.required_operator_mask != 0 &&
+            (receipt.required_operator_mask & ~known_gpu_operator_mask()) == 0,
+        "GPU qualification receipt has an empty or unknown required operator mask");
+    require(
+        receipt.resolved_device_operator_mask == receipt.required_operator_mask &&
+            receipt.resolved_host_operator_mask == 0 &&
+            receipt.resolved_unknown_operator_mask == 0,
+        "GPU qualification receipt did not resolve every required operator to device");
+    require(
+        receipt.executed_device_operator_mask == receipt.required_operator_mask &&
+            receipt.executed_host_operator_mask == 0 &&
+            receipt.executed_unknown_operator_mask == 0,
+        "GPU qualification receipt does not prove complete device execution");
+    require(receipt.fallback_count == 0, "GPU qualification receipt observed fallback");
+    require(receipt.accepted_step_count > 0, "GPU qualification receipt has no accepted step");
+    require(
+        receipt.hot_loop_compute_h2d_bytes == 0 &&
+            receipt.hot_loop_compute_d2h_bytes == 0 &&
+            receipt.hot_loop_compute_host_sync_count == 0,
+        "GPU qualification receipt observed strict compute transfer or host synchronization");
+    return receipt;
+}
+
 std::array<double, 3> first_node_m(fullmag_fem_backend *backend)
 {
     std::vector<double> m(kFieldLength, 0.0);
@@ -286,6 +364,7 @@ MacrospinResult qualify_macrospin(double alpha)
         std::abs(stats.time_seconds - target_time) <= 1.0e-27,
         "macrospin qualification must end at the declared common physical time");
     require_strict_gpu_hot_loop(backend);
+    require_strict_gpu_execution_receipt(backend);
 
     const auto actual = first_node_m(backend);
     const auto exact = exact_macrospin(alpha, stats.time_seconds);
@@ -486,6 +565,7 @@ ExchangeRun run_exchange_mode_fixed(
         require(stats.rejected_attempts == 0, "fixed exchange run cannot report adaptive retries");
     }
     require_strict_gpu_hot_loop(backend);
+    require_strict_gpu_execution_receipt(backend);
     const auto m = copy_field(backend, FULLMAG_FEM_OBSERVABLE_M, "exchange M");
     double q2 = 0.0;
     double real = 0.0;
@@ -639,6 +719,7 @@ FastModeResult qualify_fast_mode(const ExchangeModeDefinition &mode)
     require(accepted.eta <= 1.0, "accepted fast-mode eta must not exceed one");
     require(accepted.dt_attempt_seconds < first_dt, "fast-mode accepted dt must shrink from first proposal");
     require_strict_gpu_hot_loop(backend);
+    require_strict_gpu_execution_receipt(backend);
     const auto final_m = copy_field(backend, FULLMAG_FEM_OBSERVABLE_M, "fast-mode M");
     const double amplitude_ratio =
         projected_mode_amplitude(final_m, mode.shape) /
@@ -675,6 +756,7 @@ struct RelaxToRunResult {
     bool state_replay_within_budget = false;
     double state_replay_max_abs_error = 0.0;
     double demag_residual_replay_abs_error = 0.0;
+    fullmag_fem_gpu_execution_receipt_v1 execution_receipt{};
 };
 
 double max_vector_norm(const std::vector<double> &field)
@@ -797,6 +879,7 @@ RelaxToRunResult execute_relax_to_run_once()
         take_accepted_energy_proof().accepted_energy_proof_available == 0,
         "LLG backend step must not expose a prior PG-BB proof");
     require_strict_gpu_hot_loop(backend);
+    const auto execution_receipt = require_strict_gpu_execution_receipt(backend);
     uint64_t attempt_count = 0;
     require(
         fullmag_fem_backend_solver_attempt_count_v1(backend, &attempt_count) == FULLMAG_FEM_OK && attempt_count > 0,
@@ -863,6 +946,7 @@ RelaxToRunResult execute_relax_to_run_once()
         false,
         0.0,
         0.0,
+        execution_receipt,
     };
     fullmag_fem_backend_destroy(backend);
     return result;
@@ -985,6 +1069,68 @@ std::string json_number(double value)
     return out.str();
 }
 
+std::string qualification_source_snapshot_sha256()
+{
+    const char *value =
+        std::getenv("FULLMAG_FEM_QUALIFICATION_SOURCE_SNAPSHOT_SHA256");
+    require(
+        value != nullptr,
+        "FULLMAG_FEM_QUALIFICATION_SOURCE_SNAPSHOT_SHA256 is required");
+    const std::string hash(value);
+    require(hash.size() == 64, "qualification source snapshot hash must contain 64 hex digits");
+    require(
+        std::all_of(hash.begin(), hash.end(), [](unsigned char ch) {
+            return std::isxdigit(ch) != 0;
+        }),
+        "qualification source snapshot hash must be hexadecimal");
+    return hash;
+}
+
+void write_gpu_execution_receipt(
+    std::ofstream &file,
+    const fullmag_fem_gpu_execution_receipt_v1 &receipt)
+{
+    file << "  \"qualification_mode\": \"strict\",\n"
+         << "  \"execution_receipt\": {\n"
+         << "    \"schema_version\": \"fullmag.fem_gpu_execution_receipt.native_projection.v1\",\n"
+         << "    \"native_abi_version\": " << receipt.abi_version << ",\n"
+         << "    \"native_struct_size\": " << receipt.struct_size << ",\n"
+         << "    \"rust_projection\": \"FemGpuExecutionReceipt.v1\",\n"
+         << "    \"requested\": \"strict_device\",\n"
+         << "    \"resolved\": \"device_resident\",\n"
+         << "    \"executed\": \"cuda_fem\",\n"
+         << "    \"execution_class\": \"device_resident\",\n"
+         << "    \"device_ordinal\": " << receipt.device_ordinal << ",\n"
+         << "    \"precision\": \"double\",\n"
+         << "    \"integrator\": \"rk45\",\n"
+         << "    \"required_operator_mask\": " << receipt.required_operator_mask << ",\n"
+         << "    \"resolved_device_operator_mask\": " << receipt.resolved_device_operator_mask << ",\n"
+         << "    \"resolved_host_operator_mask\": " << receipt.resolved_host_operator_mask << ",\n"
+         << "    \"resolved_unknown_operator_mask\": " << receipt.resolved_unknown_operator_mask << ",\n"
+         << "    \"executed_device_operator_mask\": " << receipt.executed_device_operator_mask << ",\n"
+         << "    \"executed_host_operator_mask\": " << receipt.executed_host_operator_mask << ",\n"
+         << "    \"executed_unknown_operator_mask\": " << receipt.executed_unknown_operator_mask << ",\n"
+         << "    \"fallback_count\": " << receipt.fallback_count << ",\n"
+         << "    \"accepted_step_count\": " << receipt.accepted_step_count << ",\n"
+         << "    \"rejected_attempt_count\": " << receipt.rejected_attempt_count << ",\n"
+         << "    \"failed_attempt_count\": " << receipt.failed_attempt_count << ",\n"
+         << "    \"hot_loop_compute_h2d_bytes\": " << receipt.hot_loop_compute_h2d_bytes << ",\n"
+         << "    \"hot_loop_compute_d2h_bytes\": " << receipt.hot_loop_compute_d2h_bytes << ",\n"
+         << "    \"hot_loop_compute_host_sync_count\": " << receipt.hot_loop_compute_host_sync_count << ",\n"
+         << "    \"accounting_valid\": true,\n"
+         << "    \"operator_ids\": [";
+    bool first = true;
+    for (const auto &[bit, operator_id] : kGpuOperatorIds) {
+        if ((receipt.required_operator_mask & bit) == 0) {
+            continue;
+        }
+        file << (first ? "" : ", ") << "\"" << operator_id << "\"";
+        first = false;
+    }
+    file << "]\n"
+         << "  },\n";
+}
+
 void write_partial_artifact(
     const std::filesystem::path &output,
     const std::vector<MacrospinResult> &macrospin,
@@ -992,6 +1138,8 @@ void write_partial_artifact(
     const FastModeResult &fast_mode,
     const RelaxToRunResult &relax_to_run)
 {
+    const std::string source_snapshot_sha256 =
+        qualification_source_snapshot_sha256();
     std::filesystem::create_directories(output.parent_path());
     std::ofstream file(output);
     require(static_cast<bool>(file), "open qualification artifact output");
@@ -1000,6 +1148,12 @@ void write_partial_artifact(
          << "  \"status\": \"pass\",\n"
          << "  \"backend\": \"fem\",\n"
          << "  \"device\": \"" << (g_use_gpu ? "gpu" : "cpu") << "\",\n"
+         << "  \"source_identity\": {\"source_snapshot_sha256\": \""
+         << source_snapshot_sha256 << "\"},\n";
+    if (g_use_gpu) {
+        write_gpu_execution_receipt(file, relax_to_run.execution_receipt);
+    }
+    file
          << "  \"precision\": \"fp64\",\n"
          << "  \"integrator\": \"rk45\",\n"
          << "  \"timestep_policies\": [\"adaptive\", \"fixed\"],\n"
