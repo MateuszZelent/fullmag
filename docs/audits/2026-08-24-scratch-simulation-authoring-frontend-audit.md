@@ -244,3 +244,20 @@ just run-scratch-authoring-fem-browser-smoke fem_execution=cpu
 
 Dopiero po kodzie wyjścia `0`, screenshotach, manifestach i potwierdzeniu
 `requested/effective/resolved == FEM/CPU` można oznaczyć E1/E2 jako PASS.
+
+### Aktualizacja bramki 2026-08-24 (kontynuacja)
+
+- Browser helper ma teraz polling terminalnego stanu komendy, oczekiwanie na
+  nową rewizję mesha po `mesh_build` oraz zapis `commands[]` z provenance,
+  invalidacjami i diagnostyką. Test kontraktu helpera: **6/6 PASS**.
+- FDM smoke został uruchomiony z rzeczywistym API i Control Room (`8191`/`3101`),
+  ale proces nadrzędny CLI zakończył się `thread 'main' has overflowed its
+  stack` po materializacji ProblemIR i eksporcie konfiguracji. Brak manifestu
+  browser/runtime: **BLOCKED**, nie błąd potwierdzony jako UI.
+- Kanoniczne `ensure-managed-fem-runtime` zostało uruchomione przez repozytoryjny
+  `just`; Windowsowy launcher WSL zwracał `E_ACCESSDENIED`, a po przełączeniu na
+  Git Bash brakowało `setsid`/`flock`. Próba POSIX w WSL zakończyła się błędem
+  quoting nested shell; managed bundla nadal nie ma. FEM smoke: **BLOCKED**.
+- Nie oznaczam E1/E2/E5 jako PASS. Kod authoringu i testy kontraktowe są gotowe,
+  lecz dowód wykonania solvera oraz pełnych kliknięć Inspectorów nadal wymaga
+  działającego runtime.
