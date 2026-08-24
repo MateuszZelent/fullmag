@@ -6316,6 +6316,7 @@ fn execute_native_fem(
 
 #[cfg(not(feature = "cuda"))]
 fn execute_cuda_fdm(
+    _requested_backend: fullmag_ir::BackendTarget,
     _requested_device: &str,
     _execution_mode: fullmag_ir::ExecutionMode,
     _plan: &FdmPlanIR,
