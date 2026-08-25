@@ -109,9 +109,15 @@ Oczekiwane: błąd kompilacji, ponieważ typ i symbol Rust jeszcze nie istnieją
 
 Odwzorować wszystkie pola C jako `u32`/`u64` w `#[repr(C)]`, dodać stałą ABI oraz deklarację `extern "C"` bez wrappera i bez wartości domyślnych.
 
-- [ ] **Krok 7: Potwierdzić GREEN obu kontraktów**
+- [ ] **Krok 7: Potwierdzić GREEN kontraktu C i kompilacyjny GREEN layoutu Rust**
 
-Powtórzyć CTest i Cargo z kroków 2 oraz 5. Oczekiwane: PASS.
+Powtórzyć CTest z kroku 2, a dla Rust uruchomić:
+
+```powershell
+$env:CARGO_TARGET_DIR='D:\fullmag-builds\audit1-fdm-gpu-trx\cargo'; cargo check -p fullmag-fdm-sys --tests
+```
+
+Oczekiwane: CTest PASS i Rust check PASS. Pełny `cargo test` jest bramką Task 2 po dodaniu natywnej definicji gettera; Task 1 celowo zamraża deklarację i layout bez przesuwania implementacji runtime do warstwy ABI.
 
 - [ ] **Krok 8: Commit**
 
@@ -199,7 +205,7 @@ ctest --test-dir D:\fullmag-builds\audit1-fdm-gpu-trx\fdm-contract -R "fdm_fsal_
 $env:CARGO_TARGET_DIR='D:\fullmag-builds\audit1-fdm-gpu-trx\cargo'; cargo test -p fullmag-fdm-sys
 ```
 
-Oczekiwane: PASS.
+Oczekiwane: PASS. Ten przebieg jest obowiązkowym link-time dowodem nowego gettera oraz istniejących deklaracji FFI po dodaniu natywnej definicji w Task 2.
 
 - [ ] **Krok 11: Commit**
 
