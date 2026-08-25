@@ -218,25 +218,13 @@ export function validateObjectMeshTopologyCapabilities(
   draft: ObjectMeshPolicyDraft,
   capabilities: ObjectMeshTopologyCapabilities,
 ): string | null {
-  const rawConfig = parseConfig(draft.configText);
   const built = buildObjectMeshPolicyReplaceRequest(draft);
-  const rawRequestsMixed = rawConfig.ok && requestsExactLayeredPrism(rawConfig.value);
-  const builtRequestsMixed =
-    "request" in built &&
-    built.request.config !== null &&
-    requestsExactLayeredPrism(built.request.config ?? {});
-  if (!rawRequestsMixed && !builtRequestsMixed) return null;
+  const builtConfig = "request" in built ? built.request.config : null;
+  if (!builtConfig || !requestsExactLayeredPrism(builtConfig)) return null;
   if (!capabilities.layeredPrism.enabled) {
     return `Exact layered prism authoring is unavailable: ${capabilities.layeredPrism.reason}`;
   }
-  const builtConfig = "request" in built ? built.request.config : null;
-  const requestedLayerCounts = [
-    draft.throughThicknessElements.trim()
-      ? builtConfig?.through_thickness_elements
-      : rawConfig.ok
-        ? rawConfig.value.through_thickness_elements
-        : undefined,
-  ].filter(
+  const requestedLayerCounts = [builtConfig.through_thickness_elements].filter(
     (value): value is number => typeof value === "number" && Number.isInteger(value),
   );
   const supportedLayerCounts = new Set(
@@ -587,6 +575,13 @@ export function buildObjectMeshPolicyReplaceRequest({
   ];
 
   for (const [key, text, label, integer, allowZero] of numericFields) {
+    if (
+      key === "through_thickness_elements" &&
+      !text.trim() &&
+      Object.prototype.hasOwnProperty.call(value, key)
+    ) {
+      continue;
+    }
     const parsed = parsePositiveNumber(text, label, integer, allowZero);
     if (!parsed.ok) return { error: parsed.error };
     applyOptionalNumber(value, key, parsed.value);
@@ -630,7 +625,12 @@ export function buildObjectMeshPolicyReplaceRequest({
     cornerTransitionDistanceValue.value,
   );
 
-  applyOptionalString(value, "mesh_strategy", meshStrategy);
+  if (
+    meshStrategy.trim() ||
+    !Object.prototype.hasOwnProperty.call(value, "mesh_strategy")
+  ) {
+    applyOptionalString(value, "mesh_strategy", meshStrategy);
+  }
   applyOptionalString(value, "topology", topology);
   applyOptionalString(value, "transition_policy", transitionPolicy);
   applyOptionalString(value, "optimize", optimize);
@@ -650,7 +650,12 @@ export function buildObjectMeshPolicyReplaceRequest({
     "through_thickness_symmetric",
     throughThicknessSymmetric,
   );
-  applyOptionalBoolean(value, "exact_layer_count", exactLayerCount);
+  if (
+    exactLayerCount.trim() ||
+    !Object.prototype.hasOwnProperty.call(value, "exact_layer_count")
+  ) {
+    applyOptionalBoolean(value, "exact_layer_count", exactLayerCount);
+  }
   if (meshStrategy === "swept_prism") {
     const layerCount = value.through_thickness_elements;
     if (

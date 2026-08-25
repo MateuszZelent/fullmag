@@ -328,10 +328,14 @@ solver-mesh/shared-domain manifest resource as `topology_fingerprint`; it is not
 (python-api-discretization-per-object-meshing-round-trip-and-failure-semantics)=
 ## Failure semantics
 
-Immediate authoring failures include unsupported strategy/distribution/family values, incomplete
-layered recipes, contradictory tetrahedral/swept intent, invalid prism/hex combinations, and invalid
-exact-layer types/counts. UI numeric parsing additionally rejects nonfinite, nonpositive, or
-noninteger values according to each field.
+The Python constructor and structured Control Room controls fail before a mesh replacement for
+unsupported strategy/distribution/family values, incomplete layered recipes, contradictory
+tetrahedral/swept intent, invalid prism/hex combinations, and invalid exact-layer types/counts.
+UI numeric parsing additionally rejects nonfinite, nonpositive, or noninteger values according to
+each field. Advanced JSON is an authored payload rather than a complete validation boundary: the
+PUT path preserves its keys and validates the effective combination when the mesh is built, so an
+incomplete JSON object can be persisted and fail at build time. Use the typed recipe or structured
+controls when immediate completeness validation is required.
 
 Build-time failures include selector resolution failure, nonextrudable geometry, incompatible shared
 interfaces, marker collisions, inverted/collapsed elements, unsupported element family/order,

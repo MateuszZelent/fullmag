@@ -144,6 +144,7 @@ describe("ObjectMeshPolicyPanelModel", () => {
       }),
       exactLayerCount: "",
       meshStrategy: "",
+      present: true,
       topology: "",
     });
 
@@ -174,6 +175,7 @@ describe("ObjectMeshPolicyPanelModel", () => {
       }),
       exactLayerCount: "",
       meshStrategy: "",
+      present: true,
       throughThicknessElements: "",
       topology: "",
     });
@@ -202,6 +204,31 @@ describe("ObjectMeshPolicyPanelModel", () => {
       }),
       meshStrategy: "swept_prism",
       throughThicknessElements: "2",
+    });
+
+    expect(validateObjectMeshTopologyCapabilities(draft, capabilities)).toBeNull();
+  });
+
+  it("ignores stale Advanced JSON layers after switching to free tetrahedral", () => {
+    const capabilities = resolveObjectMeshTopologyCapabilities({
+      mesh_capabilities: {
+        "mesh.topology.mixed_p1": { status: "validated" },
+        "mesh.swept.prism": { status: "validated" },
+        "mesh.transition.pyramid_tet": { status: "validated" },
+        "mesh.exact_layer_count": {
+          status: "validated",
+          supported_layer_counts: [1, 2, 3],
+        },
+      },
+    });
+    const draft = objectMeshPolicyDraft({
+      configText: JSON.stringify({
+        mesh_strategy: "swept_prism",
+        through_thickness_elements: 4,
+      }),
+      meshStrategy: "free_tetrahedral",
+      present: true,
+      throughThicknessElements: "",
     });
 
     expect(validateObjectMeshTopologyCapabilities(draft, capabilities)).toBeNull();

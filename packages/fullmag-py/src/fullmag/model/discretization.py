@@ -599,12 +599,30 @@ _MESH_SIZE_PRESETS = (
     "extra_coarse",
     "extremely_coarse",
 )
+_MESH_SIZE_PRESET_ALIASES = {
+    "extra fine": "extra_fine",
+    "extra_fine": "extra_fine",
+    "extremely fine": "extremely_fine",
+    "extremely_fine": "extremely_fine",
+    "extrafine": "extra_fine",
+    "extremelyfine": "extremely_fine",
+    "very fine": "extra_fine",
+    "very_fine": "extra_fine",
+    "coarser_mesh": "coarser",
+    "extra coarse": "extra_coarse",
+    "extra_coarse": "extra_coarse",
+    "extremely coarse": "extremely_coarse",
+    "extremely_coarse": "extremely_coarse",
+    "extracoarse": "extra_coarse",
+    "extremelycoarse": "extremely_coarse",
+}
 
 
 def _normalize_mesh_recipe_vocabulary(
     field_name: str,
     value: str | None,
     supported: tuple[str, ...],
+    aliases: dict[str, str] | None = None,
 ) -> str | None:
     if value is None:
         return None
@@ -613,6 +631,8 @@ def _normalize_mesh_recipe_vocabulary(
     normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
     if not normalized:
         return None
+    if aliases is not None:
+        normalized = aliases.get(normalized, normalized)
     if normalized not in supported:
         raise ValueError(f"{field_name} must be one of {supported!r}, got {value!r}")
     return normalized
@@ -716,7 +736,10 @@ class PerObjectMeshRecipe:
             self,
             "size_preset",
             _normalize_mesh_recipe_vocabulary(
-                "size_preset", self.size_preset, _MESH_SIZE_PRESETS
+                "size_preset",
+                self.size_preset,
+                _MESH_SIZE_PRESETS,
+                _MESH_SIZE_PRESET_ALIASES,
             ),
         )
 

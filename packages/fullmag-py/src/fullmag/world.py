@@ -152,7 +152,14 @@ from fullmag.model.problem import (
     resolve_geometry_sources,
     RuntimeSelection,
 )
-from fullmag.model.discretization import FDM, FDMGrid, FEM, FDMDemag, FemLinearSolverPolicy
+from fullmag.model.discretization import (
+    FDM,
+    FDMGrid,
+    FEM,
+    FDMDemag,
+    FemLinearSolverPolicy,
+    _MESH_SIZE_PRESET_ALIASES,
+)
 from fullmag.model.geometry import Box, Translate
 from fullmag.model.eigen import serialize_dispersion_validation, serialize_k0_kittel_validation
 
@@ -164,17 +171,6 @@ _MESH_SIZE_CALIBRATIONS = (
     "magnetostatics_dominated",
     "imported_surface_cleanup",
 )
-_MESH_SIZE_PRESET_ALIASES = {
-    "extremely fine": "extremely_fine",
-    "extremelyfine": "extremely_fine",
-    "extra fine": "extra_fine",
-    "extrafine": "extra_fine",
-    "very_fine": "extra_fine",
-    "extra coarse": "extra_coarse",
-    "extracoarse": "extra_coarse",
-    "extremely coarse": "extremely_coarse",
-    "extremelycoarse": "extremely_coarse",
-}
 _MESH_SIZE_PRESETS = (
     "extremely_fine",
     "extra_fine",

@@ -14,6 +14,8 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+from fullmag.model.discretization import _MESH_SIZE_PRESET_ALIASES
+
 
 FEM_TOPOLOGY_VOLUME_EPS = 1.0e-30 / 6.0
 FEM_TOPOLOGY_RELATIVE_DETERMINANT_EPS = 64.0 * np.finfo(np.float64).eps
@@ -220,20 +222,6 @@ _MESH_SIZE_PRESET_DEFAULTS: dict[str, dict[str, float]] = {
     "extra_coarse": {"growth_rate": 2.2, "curvature_factor": 1.2, "narrow_region_resolution": 0.15},
     "extremely_coarse": {"growth_rate": 2.4, "curvature_factor": 1.5, "narrow_region_resolution": 0.1},
 }
-
-_MESH_SIZE_PRESET_ALIASES = {
-    "extra fine": "extra_fine",
-    "extremely fine": "extremely_fine",
-    "extrafine": "extra_fine",
-    "extremelyfine": "extremely_fine",
-    "very_fine": "extra_fine",
-    "coarser_mesh": "coarser",
-    "extra coarse": "extra_coarse",
-    "extracoarse": "extra_coarse",
-    "extremely coarse": "extremely_coarse",
-    "extremelycoarse": "extremely_coarse",
-}
-
 
 @dataclass(frozen=True, slots=True)
 class MeshOptions:

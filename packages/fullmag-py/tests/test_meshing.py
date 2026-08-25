@@ -349,6 +349,17 @@ class LayeredMeshDslValidationTests(unittest.TestCase):
         self.assertEqual(recipe.calibrate_for, "micromagnetics_relaxation")
         self.assertEqual(recipe.size_preset, "extra_fine")
 
+        for alias, canonical in (
+            ("very_fine", "extra_fine"),
+            ("extrafine", "extra_fine"),
+            ("coarser_mesh", "coarser"),
+        ):
+            with self.subTest(alias=alias):
+                self.assertEqual(
+                    PerObjectMeshRecipe(size_preset=alias).size_preset,
+                    canonical,
+                )
+
     def test_per_object_recipe_rejects_boolean_order_and_normalizes_integral(self) -> None:
         with self.assertRaisesRegex(TypeError, "order must be an integer"):
             PerObjectMeshRecipe(order=True)
