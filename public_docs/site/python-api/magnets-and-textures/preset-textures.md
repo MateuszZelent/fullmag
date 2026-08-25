@@ -27,6 +27,8 @@ $\mathbf m=\mathbf M/M_\mathrm s$. Fullmag currently exposes the following publi
 | `fm.texture.antiskyrmion(...)` | `antiskyrmion` | skyrmion profile with opposite azimuthal winding |
 | `fm.texture.skyrmionium(...)` | `skyrmionium` | normalized 2-pi target state with equal centre and far-field backgrounds |
 | `fm.texture.hopfion(...)` | `hopfion` | three-dimensional unit-vector Hopf-map initializer |
+| `fm.texture.vortex_wall(...)` | `vortex_wall` | Mumax3-compatible vortex-wall initializer; parameter ownership is on the [Mumax3 compatibility](mumax3-compatibility.md) page |
+| `fm.texture.hopfion_compact_support(...)` | `hopfion_compact_support` | Mumax3-compatible compact-support hopfion; parameter ownership is on the [Mumax3 compatibility](mumax3-compatibility.md) page |
 | `fm.texture.bimeron(...)` | `bimeron` | in-plane skyrmion analogue represented as a meron pair |
 | `fm.texture.domain_wall(...)` | `domain_wall` | smooth Bloch or Neel wall between antiparallel domains |
 | `fm.texture.two_domain(...)` | `two_domain` | sharp or smooth two-domain initializer |

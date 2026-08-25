@@ -51,6 +51,15 @@ describe("explorer Inspector browser smoke script", () => {
     expect(smokeScript).toContain("mutation changed Inspector opacity");
     expect(smokeScript).toContain("mutation changed Inspector scroll position");
     expect(smokeScript).toContain("mutation lost control focus");
+    expect(smokeScript).toContain("qualifyMagneticTextureMutationStability");
+    expect(smokeScript).toContain("model:object:film:magnetic-texture:asset");
+    expect(smokeScript).toContain("Magnetic Texture Inspector remounted during mutation");
+    expect(smokeScript).toContain("unrelated Asset label control was disabled");
+    expect(smokeScript).toContain("Magnetic Texture mutation changed Inspector opacity");
+    expect(smokeScript).toContain("Magnetic Texture mutation changed Inspector scroll position");
+    expect(smokeScript).toContain("Magnetic Texture mutation lost control focus");
+    expect(smokeScript).toContain("fullmag.react.render.InspectorModule");
+    expect(smokeScript).toContain("Magnetic texture request budget");
     expect(smokeScript).toContain("mutation budget: 20");
     expect(smokeScript).toContain("[360, 416, 560]");
     expect(smokeScript).toContain('document.body.style.zoom = "200%"');

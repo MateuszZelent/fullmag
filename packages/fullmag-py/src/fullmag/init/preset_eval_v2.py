@@ -330,6 +330,54 @@ def _hopfion(params: Mapping[str, object], point: Sequence[float]) -> Vec3:
     return _normalize(_scale(rotated, -background), "hopfion")
 
 
+
+def _vortex_wall(params: Mapping[str, object], point: Sequence[float]) -> Vec3:
+    wall_half_width = _positive(params, "wall_half_width")
+    left_mx = _number(params, "left_mx", 1.0)
+    right_mx = _number(params, "right_mx", -1.0)
+    if left_mx == 0.0:
+        raise _invalid("left_mx", "must be finite and nonzero")
+    if right_mx == 0.0:
+        raise _invalid("right_mx", "must be finite and nonzero")
+    circulation = params.get("circulation")
+    if circulation is None:
+        circulation = 1 if left_mx * right_mx > 0.0 else -1
+    else:
+        circulation = int(_sign(params, "circulation"))
+    vortex_params = dict(params)
+    vortex_params["circulation"] = circulation
+    if point[0] < -wall_half_width:
+        return (math.copysign(1.0, left_mx), 0.0, 0.0)
+    if point[0] > wall_half_width:
+        return (math.copysign(1.0, right_mx), 0.0, 0.0)
+    return _vortex(vortex_params, point, 1.0)
+
+
+def _hopfion_compact_support(
+    params: Mapping[str, object],
+    point: Sequence[float],
+) -> Vec3:
+    major_radius = _positive(params, "major_radius")
+    minor_radius = _positive(params, "minor_radius")
+    if minor_radius > major_radius:
+        raise _invalid("minor_radius", "minor_radius must be <= major_radius")
+    psi = math.atan2(point[1], point[0])
+    toroidal_radial = point[0] * math.cos(psi) + point[1] * math.sin(psi) - major_radius
+    rho = math.hypot(point[2], toroidal_radial)
+    if rho >= minor_radius:
+        return (0.0, 0.0, 1.0)
+    local_phi = math.atan2(point[2], toroidal_radial)
+    phi = -local_phi + psi
+    normalized_radius = rho / minor_radius
+    compact_denominator = 1.0 - normalized_radius * normalized_radius
+    theta = math.pi * math.exp(1.0 - 1.0 / compact_denominator)
+    return (
+        math.cos(phi) * math.sin(theta),
+        math.sin(phi) * math.sin(theta),
+        math.cos(theta),
+    )
+
+
 def _sech(value: float) -> float:
     absolute = abs(value)
     if absolute > 350.0:
@@ -446,6 +494,8 @@ def _local(preset_kind: str, params: Mapping[str, object], point: Sequence[float
         return _vortex(params, point, 1.0)
     if preset_kind == "antivortex":
         return _vortex(params, point, -1.0)
+    if preset_kind == "vortex_wall":
+        return _vortex_wall(params, point)
     if preset_kind == "bloch_skyrmion":
         return _skyrmion(params, point, 1.0, "bloch")
     if preset_kind == "neel_skyrmion":
@@ -456,6 +506,8 @@ def _local(preset_kind: str, params: Mapping[str, object], point: Sequence[float
         return _skyrmionium(params, point)
     if preset_kind == "hopfion":
         return _hopfion(params, point)
+    if preset_kind == "hopfion_compact_support":
+        return _hopfion_compact_support(params, point)
     if preset_kind == "bimeron":
         return _bimeron(params, point)
     if preset_kind == "domain_wall":
@@ -472,6 +524,7 @@ def _local(preset_kind: str, params: Mapping[str, object], point: Sequence[float
 _METRIC_PRESETS = {
     "vortex",
     "antivortex",
+    "vortex_wall",
     "bloch_skyrmion",
     "neel_skyrmion",
     "antiskyrmion",
@@ -528,10 +581,10 @@ def evaluate_preset_texture_v2(
         )
 
     frame = _resolve_frame(params, projection)
-    if preset_kind == "hopfion" and frame is not None:
+    if preset_kind in {"hopfion", "hopfion_compact_support"} and frame is not None:
         raise _invalid(
             "mapping.projection",
-            "hopfion is three-dimensional and requires object_local projection",
+            "the selected hopfion preset is three-dimensional and requires object_local projection",
         )
     quaternion = _normalized_quaternion(rotation_quat) if rotation_quat is not None else None
     _local(preset_kind, params, (0.0, 0.0, 0.0))

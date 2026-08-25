@@ -11,6 +11,18 @@ const INSPECTOR_REQUEST_TIMEOUT_MS = 5_000;
 const INSPECTOR_MAX_REQUESTS_PER_PATH = 8;
 const INSPECTOR_REQUEST_LIMITS = new Map([
   [
+    "PATCH /v2/sessions/current/model/magnetization-assets/mag%3Afilm%3Avortex_wall",
+    1,
+  ],
+  [
+    "PATCH /v2/sessions/current/model/objects/film",
+    1,
+  ],
+  [
+    "POST /v2/sessions/current/model/syncs",
+    1,
+  ],
+  [
     "PATCH /v2/sessions/current/visualization/state",
     32,
   ],
@@ -61,6 +73,7 @@ page.on("request", (request) => {
 });
 
 await page.addInitScript((baseUrl) => {
+  window.__FULLMAG_REACT_PROFILER__ = true;
   window.__FULLMAG_CONFIG__ = {
     ...(window.__FULLMAG_CONFIG__ ?? {}),
     allowMissingSessionSmoke: true,
@@ -84,6 +97,7 @@ try {
   const screenshotFiles = [];
   await qualifyExplorerKeyboardNavigation(page);
   await qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles, fixture);
+  await qualifyMagneticTextureMutationStability(page, inspector, fixture);
 
   await ensureModelNodeVisible(page, "model:object:film:visualization");
   const visualizationNode = page.locator(
@@ -322,6 +336,20 @@ try {
     exact: true,
   });
   if ((await vectorsToggle.getAttribute("aria-pressed")) !== "true") {
+    if (await vectorsToggle.isDisabled()) {
+      const passState = await overview.locator('[data-slot="visualization-display-passes"]').first().evaluate((element) => ({
+        buttons: Array.from(element.querySelectorAll("button")).map((button) => ({
+          disabled: button.disabled,
+          label: button.getAttribute("aria-label"),
+          pressed: button.getAttribute("aria-pressed"),
+        })),
+        text: element.textContent,
+      }));
+      throw new Error(
+        `Vector toggle remained disabled. Display passes: ${JSON.stringify(passState)}. ` +
+        `Recent requests: ${JSON.stringify(fixture.requests.slice(-30))}.`,
+      );
+    }
     await vectorsToggle.click();
     await page.waitForTimeout(150);
   }
@@ -578,7 +606,20 @@ try {
     `Inspector fixture received unknown mutations: ${JSON.stringify(fixture.unknownMutationPaths)}`,
   );
   assert(previewRequests.length === 0, `Inspector caused preview requests: ${previewRequests.join(", ")}`);
-  assert(consoleErrors.length === 0, `Browser errors:\n${consoleErrors.join("\n")}`);
+  const unexpectedConsoleErrors = consoleErrors.filter(
+    (message) => !message.includes("the server responded with a status of 409 (Conflict)"),
+  );
+  const expectedConflictErrors = consoleErrors.filter(
+    (message) => message.includes("the server responded with a status of 409 (Conflict)"),
+  );
+  assert(
+    unexpectedConsoleErrors.length === 0,
+    `Browser errors:\n${unexpectedConsoleErrors.join("\n")}`,
+  );
+  assert(
+    expectedConflictErrors.length <= 1,
+    `Unexpected repeated 409 responses:\n${expectedConflictErrors.join("\n")}`,
+  );
 
   const viewportCanvas = page.locator('[data-testid="panel-viewport-main"] canvas, [data-testid="viewport-3d-canvas"], canvas').first();
   if (await viewportCanvas.count()) {
@@ -734,6 +775,156 @@ async function qualifyVisualizationMutationStability(page, inspector, fixture) {
     fixture.visualizationPatchDelayMs = 0;
     fixture.visualizationPatchRejectOnce = false;
   }
+}
+
+async function qualifyMagneticTextureMutationStability(page, inspector, fixture) {
+  const fixtureSnapshot = structuredClone({
+    manifest: fixture.manifest,
+    revision: fixture.revision,
+    scene: fixture.scene,
+    visualization: fixture.visualization,
+  });
+  const nodeId = "model:object:film:magnetic-texture:asset";
+  await selectInspectorNode(page, inspector, nodeId, {
+    owner: "object-magnetic-texture-asset",
+    label: "Vortex wall texture",
+  });
+  const panel = inspector.locator(".fm-inspector-panel").first();
+  await panel.waitFor({ state: "visible" });
+  const preset = panel.locator('select[aria-label="Preset"]');
+  const magnetizationRef = panel.locator('input[aria-label="Magnetization ref"]');
+  const unrelatedControl = panel.locator('input[aria-label="Asset label"]');
+  const saveButton = panel.getByRole("button", { name: "Save Texture", exact: true });
+  await preset.selectOption("vortex_wall");
+  await magnetizationRef.fill("mag:film:vortex_wall");
+  await unrelatedControl.fill("Vortex wall browser regression");
+
+  const identity = "object-magnetic-texture-mutation-stability";
+  const baseline = await panel.evaluate((element, marker) => {
+    element.dataset.mutationStabilityMarker = marker;
+    const scroller = element.closest(".fm-inspector");
+    if (scroller) scroller.scrollTop = Math.min(80, scroller.scrollHeight - scroller.clientHeight);
+    performance.clearMeasures("fullmag.react.render.InspectorModule.mount");
+    performance.clearMeasures("fullmag.react.render.InspectorModule.update");
+    return {
+      opacity: getComputedStyle(element).opacity,
+      scrollTop: scroller?.scrollTop ?? 0,
+    };
+  }, identity);
+  await page.waitForTimeout(1_100);
+  const requestStart = fixture.requests.length;
+  fixture.texturePatchDelayMs = 180;
+  await unrelatedControl.focus();
+  await saveButton.evaluate((button) => button.click());
+  await page.waitForTimeout(40);
+
+  const duringMutation = await panel.evaluate((element) => {
+    const scroller = element.closest(".fm-inspector");
+    const opacityAnimations = element
+      .getAnimations({ subtree: true })
+      .filter((animation) => {
+        const frames = animation.effect?.getKeyframes?.() ?? [];
+        return frames.some((frame) => Object.hasOwn(frame, "opacity"));
+      });
+    return {
+      connected: element.isConnected,
+      focusedLabel:
+        document.activeElement?.getAttribute("aria-label") ??
+        document.activeElement?.textContent?.trim() ??
+        null,
+      marker: element.dataset.mutationStabilityMarker,
+      opacity: getComputedStyle(element).opacity,
+      opacityAnimations: opacityAnimations.length,
+      scrollTop: scroller?.scrollTop ?? 0,
+    };
+  });
+  assert(
+    duringMutation.connected && duringMutation.marker === identity,
+    "Magnetic Texture Inspector remounted during mutation.",
+  );
+  assert(
+    !(await unrelatedControl.isDisabled()),
+    "Magnetic Texture: unrelated Asset label control was disabled during mutation.",
+  );
+  assert(
+    duringMutation.opacity === baseline.opacity && duringMutation.opacityAnimations === 0,
+    "Magnetic Texture mutation changed Inspector opacity or started an opacity animation.",
+  );
+  assert(
+    Math.abs(duringMutation.scrollTop - baseline.scrollTop) <= 1,
+    "Magnetic Texture mutation changed Inspector scroll position.",
+  );
+  assert(
+    duringMutation.focusedLabel === "Asset label",
+    "Magnetic Texture mutation lost control focus.",
+  );
+
+  try {
+    await page.waitForFunction(
+      () => document.querySelector(".fm-inspector-panel")?.textContent?.includes("Magnetic texture saved."),
+      undefined,
+      { timeout: 5_000 },
+    );
+  } catch (error) {
+    const panelText = await panel.textContent();
+    throw new Error(
+      `Magnetic Texture save did not acknowledge. Requests: ${JSON.stringify(fixture.requests.slice(requestStart))}. ` +
+      `Unknown mutations: ${JSON.stringify(fixture.unknownMutationPaths)}. Panel: ${JSON.stringify(panelText)}. ${error}`,
+    );
+  }
+  assert(
+    (await panel.getAttribute("data-mutation-stability-marker")) === identity,
+    "Magnetic Texture Inspector remounted after mutation ACK.",
+  );
+  const evidence = await panel.evaluate((element) => {
+    const scroller = element.closest(".fm-inspector");
+    return {
+      focusedLabel: document.activeElement?.getAttribute("aria-label") ?? null,
+      opacity: getComputedStyle(element).opacity,
+      opacityAnimations: element
+        .getAnimations({ subtree: true })
+        .filter((animation) => {
+          const frames = animation.effect?.getKeyframes?.() ?? [];
+          return frames.some((frame) => Object.hasOwn(frame, "opacity"));
+        }).length,
+      renderCount: performance
+        .getEntriesByType("measure")
+        .filter((entry) => entry.name.startsWith("fullmag.react.render.InspectorModule")).length,
+      scrollTop: scroller?.scrollTop ?? 0,
+    };
+  });
+  assert(evidence.opacity === baseline.opacity && evidence.opacityAnimations === 0,
+    "Magnetic Texture mutation changed Inspector opacity after ACK.");
+  assert(Math.abs(evidence.scrollTop - baseline.scrollTop) <= 1,
+    "Magnetic Texture mutation changed Inspector scroll position after ACK.");
+  assert(evidence.focusedLabel === "Asset label",
+    "Magnetic Texture mutation lost control focus after ACK.");
+  assert(evidence.renderCount <= 3,
+    `Magnetic Texture render count exceeded budget: ${evidence.renderCount}.`);
+  const mutationRequests = fixture.requests.slice(requestStart);
+  assert(mutationRequests.length <= 12,
+    `Magnetic texture request budget exceeded: ${JSON.stringify(mutationRequests)}.`);
+  assert(
+    mutationRequests.filter((entry) => entry === "PATCH /v2/sessions/current/model/magnetization-assets/mag%3Afilm%3Avortex_wall").length === 1 &&
+      mutationRequests.filter((entry) => entry === "PATCH /v2/sessions/current/model/objects/film").length === 1 &&
+      mutationRequests.filter((entry) => entry === "POST /v2/sessions/current/model/syncs").length === 1,
+    `Magnetic texture request budget did not contain exactly one mutation transaction: ${JSON.stringify(mutationRequests)}.`,
+  );
+  fixture.texturePatchDelayMs = 0;
+  fixture.manifest = fixtureSnapshot.manifest;
+  fixture.revision = fixtureSnapshot.revision;
+  fixture.scene = fixtureSnapshot.scene;
+  fixture.visualization = fixtureSnapshot.visualization;
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.locator(".fm-inspector").waitFor({ state: "visible", timeout: 30_000 });
+  const unexpectedResetErrors = consoleErrors.filter(
+    (message) => !message.includes("the server responded with a status of 409 (Conflict)"),
+  );
+  assert(
+    unexpectedResetErrors.length === 0,
+    `Unexpected browser errors before fixture reset: ${unexpectedResetErrors.join("\n")}`,
+  );
+  consoleErrors.length = 0;
 }
 
 async function qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles, fixture) {
@@ -1022,8 +1213,10 @@ async function ensureModelNodeVisible(page, nodeId) {
   }
   const parentIds = nodeId.startsWith("model:airbox:")
     ? ["model:universe", "model:airbox"]
-    : nodeId.startsWith("model:object:film:")
-      ? ["model:objects", "model:object:film"]
+    : nodeId.startsWith("model:object:film:magnetic-texture:")
+      ? ["model:objects", "model:object:film", "model:object:film:magnetic-texture"]
+      : nodeId.startsWith("model:object:film:")
+        ? ["model:objects", "model:object:film"]
       : nodeId.startsWith("model:mesh:unassigned:")
         ? ["model:mesh", "model:mesh:unassigned"]
         : [];
@@ -1095,7 +1288,32 @@ function createInspectorFixture() {
     revision,
     current_modules: { excitation_analysis: null, modules: [] },
     editor: {},
-    magnetization_assets: [],
+    magnetization_assets: [
+      {
+        id: "inspector-vortex-wall",
+        kind: "preset_texture",
+        mapping: { clamp_mode: "none", projection: "object_local", space: "object" },
+        preset_kind: "vortex_wall",
+        preset_params: {
+          circulation: 1,
+          core_polarity: 1,
+          core_radius: 1e-9,
+          left_mx: 1,
+          plane: "xy",
+          right_mx: -1,
+          wall_half_width: 25e-9,
+        },
+        preset_version: 2,
+        preview_proxy: "box",
+        texture_transform: {
+          pivot: [0, 0, 0],
+          rotation_quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
+          translation: [0, 0, 0],
+        },
+        ui_label: "Vortex wall texture",
+      },
+    ],
     materials: [],
     objects: [
       {
@@ -1104,6 +1322,7 @@ function createInspectorFixture() {
           geometry_params: { size: [200e-9, 80e-9, 5e-9] },
         },
         id: "film",
+        magnetization_ref: "inspector-vortex-wall",
         material_ref: null,
         name: "Film",
         region_name: "film",
@@ -1167,6 +1386,8 @@ function createInspectorFixture() {
     revision,
     scene,
     topology: inspectorTopologyBuffer(),
+    texturePatchDelayMs: 0,
+    textureMutationBodies: [],
     visualizationPatchDelayMs: 0,
     visualizationPatchRejectOnce: false,
     visualization: inspectorVisualizationState(),
@@ -1290,6 +1511,43 @@ async function installInspectorFixtureApi(page, fixture) {
         status: body.status ?? "ready",
       });
     }
+    if (
+      path === "/v2/sessions/current/model/magnetization-assets/mag%3Afilm%3Avortex_wall" &&
+      request.method() === "PATCH"
+    ) {
+      const body = request.postDataJSON() ?? {};
+      fixture.textureMutationBodies.push(body);
+      if (fixture.texturePatchDelayMs > 0) {
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, fixture.texturePatchDelayMs));
+      }
+      const asset = body.asset ?? fixture.scene.magnetization_assets[0];
+      fixture.revision += 1;
+      fixture.scene.revision = fixture.revision;
+      fixture.manifest.source_scene_revision = fixture.revision;
+      fixture.visualization.revision = fixture.revision;
+      fixture.scene.magnetization_assets = [asset];
+      return fulfillJson(route, { asset, scene_revision: fixture.revision });
+    }
+    if (path === "/v2/sessions/current/model/objects/film" && request.method() === "PATCH") {
+      const body = request.postDataJSON() ?? {};
+      fixture.textureMutationBodies.push(body);
+      fixture.revision += 1;
+      fixture.scene.revision = fixture.revision;
+      fixture.manifest.source_scene_revision = fixture.revision;
+      fixture.visualization.revision = fixture.revision;
+      fixture.scene.objects[0] = {
+        ...fixture.scene.objects[0],
+        magnetization_ref:
+          body.magnetization_ref ?? fixture.scene.objects[0].magnetization_ref,
+      };
+      return fulfillJson(route, fixture.scene);
+    }
+    if (path === "/v2/sessions/current/model/syncs" && request.method() === "POST") {
+      return fulfillJson(route, {
+        revision: fixture.revision,
+        status: "synced",
+      });
+    }
     if (request.method() !== "GET") {
       fixture.unknownMutationPaths.push(`${request.method()} ${path}${url.search}`);
       return fulfillJson(
@@ -1342,6 +1600,11 @@ async function installInspectorFixtureApi(page, fixture) {
       });
     }
     if (path === "/v2/sessions/current/model/scene") return fulfillJson(route, fixture.scene);
+    if (path === "/v2/sessions/current/model/frozen-spins") return fulfillJson(route, {
+      count: 0,
+      definitions: [],
+      revision: fixture.revision,
+    });
     if (path === "/v2/sessions/current/model/regions") return fulfillJson(route, { regions: [], revision: fixture.revision });
     if (path === "/v2/sessions/current/model/material-fields") return fulfillJson(route, { fields: [], revision: fixture.revision });
     if (path === "/v2/sessions/current/model/couplings") return fulfillJson(route, { couplings: [], revision: fixture.revision });

@@ -4,7 +4,7 @@
     "title": "Preset Textures",
     "status": "implemented_with_explicit_mapping_and_runtime_qualification_limits",
     "updated": "2026-08-23",
-    "source_revision": "0343d94d37b7c69e0eef36eee2ca42a8ca3c3135"
+    "source_revision": "2a04975375242346a9d656a360f8fc4b1a124cdb"
   },
   "backend_matrix": [
     {
@@ -569,6 +569,18 @@
       "path": "packages/fullmag-py/src/fullmag/init/textures.py",
       "symbol": "class PresetTexture",
       "responsibility": "versioned preset descriptor, immutable transform chaining, and ProblemIR serialization"
+    },
+    {
+      "id": "python-vortex-wall-factory",
+      "path": "packages/fullmag-py/src/fullmag/init/textures.py",
+      "symbol": "vortex_wall",
+      "responsibility": "public Mumax3-compatible vortex-wall factory and parameter validation"
+    },
+    {
+      "id": "python-compact-hopfion-factory",
+      "path": "packages/fullmag-py/src/fullmag/init/textures.py",
+      "symbol": "hopfion_compact_support",
+      "responsibility": "public Mumax3-compatible compact-support hopfion factory and parameter validation"
     },
     {
       "id": "python-mapping",

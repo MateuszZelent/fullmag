@@ -282,6 +282,31 @@ fn generated_cases() -> Vec<ParityCase> {
             None,
             &points,
         ),
+        make_case(
+            "vortex_wall",
+            BTreeMap::from([
+                ("wall_half_width".to_string(), json!(6.0e-9)),
+                ("left_mx".to_string(), json!(1.0e-15)),
+                ("right_mx".to_string(), json!(-1.0e-15)),
+                ("circulation".to_string(), json!(-1)),
+                ("core_polarity".to_string(), json!(1)),
+                ("core_radius".to_string(), json!(2.0e-9)),
+                ("plane".to_string(), json!("xy")),
+            ]),
+            "object_local",
+            None,
+            &points,
+        ),
+        make_case(
+            "hopfion_compact_support",
+            BTreeMap::from([
+                ("major_radius".to_string(), json!(12.0e-9)),
+                ("minor_radius".to_string(), json!(6.0e-9)),
+            ]),
+            "object_local",
+            Some([0.0, 0.0, quarter_turn, quarter_turn]),
+            &points,
+        ),
     ]
 }
 
@@ -302,7 +327,7 @@ fn v2_matches_shared_python_parity_fixture_for_all_presets() {
         .expect("run with FULLMAG_GENERATE_V2_PARITY=1 once to create the fixture");
     let cases: Vec<ParityCase> =
         serde_json::from_str(&content).expect("parity fixture should be valid JSON");
-    assert_eq!(cases.len(), 14);
+    assert_eq!(cases.len(), 16);
     for case in cases {
         assert_eq!(case.preset_version, 2);
         assert_eq!(case.points.len(), POINT_COUNT);

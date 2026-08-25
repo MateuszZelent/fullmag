@@ -1,0 +1,127 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/magnets-and-textures/mumax3-compatibility.md",
+    "title": "Mumax3 Texture Compatibility",
+    "status": "implemented_with_explicit_reproducibility_adaptations",
+    "updated": "2026-08-24"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "role": "planner sampling at active cell centres",
+      "status": "source_and_test_evidence"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "role": "consumes the shared planner-materialized initial field",
+      "status": "semantic_parity_runtime_qualification_separate"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "role": "planner sampling at magnetic mesh points",
+      "status": "source_and_test_evidence"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "role": "consumes the shared planner-materialized initial field",
+      "status": "semantic_parity_runtime_qualification_separate"
+    }
+  ],
+  "equations": [
+    {
+      "id": "mumax3-vortex-wall-profile",
+      "symbols": ["m", "u", "v", "w", "m_x_L", "m_x_R", "e_u"],
+      "sources": ["mumax3-vortex-wall", "rust-vortex-wall", "python-vortex-wall"]
+    },
+    {
+      "id": "mumax3-compact-hopfion-profile",
+      "symbols": ["m", "R", "r", "a_H", "rho", "psi", "Phi", "Theta"],
+      "sources": ["mumax3-compact-hopfion", "rust-compact-hopfion", "python-compact-hopfion"]
+    }
+  ],
+  "symbols": [
+    {"id": "m", "latex": "\\mathbf m", "meaning": "reduced magnetization", "si_unit": "1"},
+    {"id": "u", "latex": "u", "meaning": "first local wall coordinate", "si_unit": "\\mathrm{m}"},
+    {"id": "v", "latex": "v", "meaning": "second local wall coordinate", "si_unit": "\\mathrm{m}"},
+    {"id": "w", "latex": "w", "meaning": "vortex-wall half-width", "si_unit": "\\mathrm{m}"},
+    {"id": "m_x_L", "latex": "m_{x,L}", "meaning": "left-domain authored component", "si_unit": "1"},
+    {"id": "m_x_R", "latex": "m_{x,R}", "meaning": "right-domain authored component", "si_unit": "1"},
+    {"id": "e_u", "latex": "\\mathbf e_u", "meaning": "first axis of the selected right-handed plane", "si_unit": "1"},
+    {"id": "R", "latex": "R", "meaning": "hopfion major radius", "si_unit": "\\mathrm{m}"},
+    {"id": "r", "latex": "r", "meaning": "hopfion minor radius and support radius", "si_unit": "\\mathrm{m}"},
+    {"id": "a_H", "latex": "a_H", "meaning": "toroidal radial coordinate relative to the centreline", "si_unit": "\\mathrm{m}"},
+    {"id": "rho", "latex": "\\rho", "meaning": "distance from the torus centreline", "si_unit": "\\mathrm{m}"},
+    {"id": "psi", "latex": "\\psi", "meaning": "spatial azimuth", "si_unit": "\\mathrm{rad}"},
+    {"id": "Phi", "latex": "\\Phi", "meaning": "hopfion magnetization azimuth", "si_unit": "\\mathrm{rad}"},
+    {"id": "Theta", "latex": "\\Theta", "meaning": "hopfion polar profile", "si_unit": "\\mathrm{rad}"}
+  ],
+  "sources": [
+    {
+      "id": "mumax3-vortex-wall",
+      "path": "external_solvers/3/engine/config.go",
+      "symbol": "func VortexWall",
+      "responsibility": "immutable upstream VortexWall definition at submodule revision f656494b29516bead825b444b1f0b38c6e6c7dbf"
+    },
+    {
+      "id": "mumax3-compact-hopfion",
+      "path": "external_solvers/3/engine/config.go",
+      "symbol": "func HopfionCompactSupport",
+      "responsibility": "immutable upstream compact-hopfion definition at submodule revision f656494b29516bead825b444b1f0b38c6e6c7dbf"
+    },
+    {
+      "id": "rust-vortex-wall",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "vortex_wall",
+      "responsibility": "canonical version-2 vortex-wall evaluator"
+    },
+    {
+      "id": "rust-compact-hopfion",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "hopfion_compact_support",
+      "responsibility": "canonical version-2 compact-hopfion evaluator"
+    },
+    {
+      "id": "python-vortex-wall",
+      "path": "packages/fullmag-py/src/fullmag/init/preset_eval_v2.py",
+      "symbol": "_vortex_wall",
+      "responsibility": "Python reference evaluator"
+    },
+    {
+      "id": "python-compact-hopfion",
+      "path": "packages/fullmag-py/src/fullmag/init/preset_eval_v2.py",
+      "symbol": "_hopfion_compact_support",
+      "responsibility": "Python reference evaluator"
+    },
+    {
+      "id": "python-vortex-wall-factory",
+      "path": "packages/fullmag-py/src/fullmag/init/textures.py",
+      "symbol": "vortex_wall",
+      "responsibility": "public vortex-wall validation and ProblemIR serialization"
+    },
+    {
+      "id": "python-compact-hopfion-factory",
+      "path": "packages/fullmag-py/src/fullmag/init/textures.py",
+      "symbol": "hopfion_compact_support",
+      "responsibility": "public compact-hopfion validation and ProblemIR serialization"
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "texture.vortex_wall.wall_half_width", "type": "float", "default": "required", "si_unit": "\\mathrm{m}", "validation": "finite and > 0", "meaning": "central vortex-strip half-width", "backend_support": "FDM/FEM via planner materialization", "problem_ir": "preset_params.wall_half_width"},
+      {"python": "texture.vortex_wall.left_mx", "type": "float", "default": "1.0", "si_unit": "1", "validation": "finite and nonzero", "meaning": "left-domain sign", "backend_support": "FDM/FEM via planner materialization", "problem_ir": "preset_params.left_mx"},
+      {"python": "texture.vortex_wall.right_mx", "type": "float", "default": "-1.0", "si_unit": "1", "validation": "finite and nonzero", "meaning": "right-domain sign", "backend_support": "FDM/FEM via planner materialization", "problem_ir": "preset_params.right_mx"},
+      {"python": "texture.vortex_wall.circulation", "type": "int | None", "default": "sign(left_mx * right_mx)", "si_unit": "1", "validation": "-1 or 1 after default resolution", "meaning": "central-vortex circulation; omitted value follows the domain-sign product", "backend_support": "FDM/FEM via planner materialization", "problem_ir": "preset_params.circulation"},
+      {"python": "texture.vortex_wall.core_polarity", "type": "int", "default": "1", "si_unit": "1", "validation": "-1 or 1", "meaning": "central-vortex core polarity", "backend_support": "FDM/FEM via planner materialization", "problem_ir": "preset_params.core_polarity"},
+      {"python": "texture.vortex_wall.core_radius", "type": "float", "default": "1e-9", "si_unit": "\\mathrm{m}", "validation": "finite and > 0", "meaning": "central-vortex core radius", "backend_support": "FDM/FEM via planner materialization", "problem_ir": "preset_params.core_radius"},
+      {"python": "texture.vortex_wall.plane", "type": "str", "default": "xy", "si_unit": "1", "validation": "xy, xz or yz", "meaning": "right-handed local frame", "backend_support": "FDM/FEM via planner materialization", "problem_ir": "preset_params.plane"},
+      {"python": "texture.vortex_wall.preset_version", "type": "int", "default": "2", "si_unit": "1", "validation": "exactly 2", "meaning": "selects the version-2 profile", "backend_support": "FDM/FEM via planner materialization", "problem_ir": "preset_version"},
+      {"python": "texture.hopfion_compact_support.major_radius", "type": "float", "default": "required", "si_unit": "\\mathrm{m}", "validation": "finite and > 0", "meaning": "torus major radius", "backend_support": "FDM/FEM via planner materialization", "problem_ir": "preset_params.major_radius"},
+      {"python": "texture.hopfion_compact_support.minor_radius", "type": "float", "default": "required", "si_unit": "\\mathrm{m}", "validation": "finite, > 0 and <= major_radius", "meaning": "cross-section and compact-support radius", "backend_support": "FDM/FEM via planner materialization", "problem_ir": "preset_params.minor_radius"},
+      {"python": "texture.hopfion_compact_support.preset_version", "type": "int", "default": "2", "si_unit": "1", "validation": "exactly 2", "meaning": "selects the version-2 profile", "backend_support": "FDM/FEM via planner materialization", "problem_ir": "preset_version"}
+    ]
+  }
+}
