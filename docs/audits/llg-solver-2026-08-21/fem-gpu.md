@@ -20,7 +20,9 @@ FEM GPU należy klasyfikować według faktycznego poziomu rezydencji: (1) etykie
 | Device-resident integrator | częściowo potwierdzone, wysoka | `backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp` — `gpu_rk_plan_device_resident`; `backends/fem/gpu/cuda/integrators/rk/rk_step.cu` — `gpu_rk_device_resident_step`; `backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp` — `context_step_explicit_rk_mfem` | strict no-fallback dla Heun, RK4, RK23 i RK45 |
 | Trwałość danych FEM | potwierdzone struktury, wynik hot-loop otwarty | `backends/fem/gpu/cuda/state/gpu_state.cpp` — `gpu_state_initialize`; `backends/fem/include/context.hpp` — `Context` | `backends/fem/tests/gpu_state_runtime_contract.cpp` i profiler alokacji |
 | Partial assembly/matrix-free | zależne od operatora, średnia | `backends/fem/gpu/cuda/exchange/exchange_plan.cpp` — `gpu_exchange_plan_stage_exchange` | `backends/fem/examples/pa_benchmark.cpp` dla macierzy rozmiarów/operatorów |
-| Redukcje i transfery | potwierdzone liczniki, wynik runtime otwarty | `backends/fem/cpu/mfem/runtime/state_io.cpp` — `record_device_to_host`; `backends/fem/gpu/cuda/transfer/transfer_audit.hpp` — `TransferAuditRuntimeState` | `backends/fem/tests/transfer_audit.cpp` plus hardware strict-residency |
+| Redukcje i transfery | potwierdzone liczniki, wynik runtime otwarty | `backends/fem/gpu/cuda/transfer/transfer_audit.cpp` — `record_device_to_host`; `backends/fem/gpu/cuda/transfer/transfer_audit.hpp` — `TransferAuditRuntimeState` | `backends/fem/tests/transfer_audit.cpp` plus hardware strict-residency |
+| Free-set torque reduction | potwierdzony defekt: frozen mask nie jest przekazywany do końcowej redukcji torque | `backends/fem/gpu/cuda/observables/observable_kernels.cu` — `fullmag_cuda_field_metric_blocks`, `field_metric_blocks_kernel`; `crates/fullmag-runner/src/fem/relax/llg_overdamped.rs` — `execute_llg_overdamped` | wymagane pinned-spin i all-frozen fixtures |
+| Adaptive decision readback | potwierdzona synchronizacja per-attempt; `cudaStreamSynchronize` przed decyzją accept/reject jest bezwarunkowe | `backends/fem/gpu/cuda/integrators/rk/rk_adaptive_decision_readback.cu` — `gpu_rk_read_adaptive_error_norm_decision_host`; `backends/fem/gpu/cuda/integrators/rk/rk_scalar_readback.cu` — `gpu_rk_read_control_scalar_results` | benchmark readbacków i managed GPU |
 | Lokalizacja preconditionera | jawna dla planów demag, średnia | `backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp` — `initialize_demag_poisson_hypre_device_solver`, `configure_demag_poisson_hypre_preconditioner` | telemetryka backendu i sweep preconditionera bez host fallbacku |
 | Single/mixed precision | single obecnie nieobsługiwane, wysoka | `crates/fullmag-runner/src/native_fem/tests/runtime_smoke.rs` — `native_fem_single_precision_rejection_is_gpu_specific` | najpierw zachować jawne odrzucenie; po przyszłej implementacji osobno parity i time-to-accuracy |
 | Stiffness explicit RK | luka pomiarowa, średnia | `backends/fem/gpu/cuda/integrators/rk/rk_step.cu` — `gpu_rk_device_resident_step` | sweep `h_min` dla każdego wspieranego integratora |
@@ -42,6 +44,15 @@ Jeśli wektory są odczytywane albo mapowane na host per stage/iteration, akcele
 Rebuilding partial-assembly data, essential constraints, prolongation/restriction lub preconditioner w kroku LLG jest krytycznym defektem wydajności.
 
 **Naprawa:** cache zależny od mesh/material/boundary revision; osobne setup/apply; jawne invalidation receipts.
+
+### P1 — free-set torque metric wymaga poprawki i fixture'ów
+
+Końcowa redukcja FEM GPU wywołuje `fullmag_cuda_field_metric_blocks` z samą maską
+`magnetic_node_mask`; kernel `field_metric_blocks_kernel` nie otrzymuje maski frozen-spin.
+`max_torque_Apm` trafia następnie do `execute_llg_overdamped` i `torque_confirmation.observe_stats`.
+Przypięty spin niezgodny z lokalnym polem może więc blokować zbieżność, a przypadek all-frozen
+nie gwarantuje zerowej metryki wolnego zbioru. Do czasu naprawy raport klasyfikuje to jako
+potwierdzony defekt poprawności i wymaga osobnych fixture'ów pinned-spin oraz all-frozen.
 
 ### P1 — matrix-free/partial assembly powinno być domyślne dla repeated apply
 
@@ -178,7 +189,7 @@ magnet.mesh(maximum_element_size=8 * nm, order=1)
 study.demag(realization="poisson_robin")
 study.fem_demag_solver(solver="CG", preconditioner="AMG", rtol=1.0e-8, max_iterations=20)
 study.build_domain_mesh()
-study.stages.add_relax(stage_id="audit", algorithm="projected_gradient_bb", tolT=5.0e-9, max_steps=1)
+study.stages.add_relax(stage_id="audit", algorithm="llg_overdamped", dt=5.0e-13, tolA=1.0e-4, max_steps=1)
 ```
 
 (fem-gpu-problem-ir)=

@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
@@ -22,6 +24,21 @@ SCIENTIFIC_ROOTS = (
     "public_docs/site/numerical-methods",
 )
 NUMERICAL_METHODS_ROOT = "public_docs/site/numerical-methods"
+NUMERICAL_METHOD_REQUIRED_MARKERS = (
+    "## Scope and purpose",
+    "## Scientific and numerical model",
+    "## Parameters",
+    "## Python API",
+    "## Control Room workflow",
+    "## Diagnostics and failure semantics",
+    "## Where this is implemented",
+)
+NUMERICAL_PYTHON_BLOCK_RE = re.compile(r"```python\s*\n(.*?)```", re.DOTALL)
+NUMERICAL_EXPECTED_LANES = {
+    (solver, device)
+    for solver in ("FEM", "FDM")
+    for device in ("CPU", "GPU")
+}
 EXEMPT_NAMES = {"README.md", "index.md"}
 EXEMPT_PATHS = {
     # Governance for authoring physics notes, not a physical/numerical model note.
@@ -69,13 +86,13 @@ def _is_numerical_method_page(path: str) -> bool:
 
 
 def _validate_numerical_method_manifest(
-    repo: Path, manifest_path: str, manifest: object
+    repo: Path, head: str, manifest_path: str, manifest: object
 ) -> list[str]:
-    """Validate the lighter source contract used by numerical-method reference pages.
+    """Validate the reference-page contract used by numerical-method pages.
 
-    These pages are implementation references, not publication-style physics notes. They
-    still require a pinned revision and executable path+symbol evidence, but do not inherit
-    the physics-note equation and parameter-table contract.
+    These pages use a smaller sidecar than publication-style physics notes, but the page
+    itself still has to carry the scientific model, lane matrix, executable example,
+    parameter/IR table, verification semantics and source index.
     """
     errors: list[str] = []
     if not isinstance(manifest, dict):
@@ -89,14 +106,54 @@ def _validate_numerical_method_manifest(
     reviewed_revision = document.get("reviewed_revision")
     if not isinstance(reviewed_revision, str) or len(reviewed_revision) != 40:
         errors.append("document.reviewed_revision must be a full 40-character commit")
-    elif _git(repo, "cat-file", "-e", reviewed_revision).returncode != 0:
-        errors.append(f"document.reviewed_revision is not present in the repository: {reviewed_revision}")
+    else:
+        revision_type = _git(repo, "cat-file", "-t", reviewed_revision)
+        if revision_type.returncode != 0 or revision_type.stdout.strip() != b"commit":
+            errors.append(
+                "document.reviewed_revision must name a commit in the repository: "
+                f"{reviewed_revision}"
+            )
+        elif _git(repo, "merge-base", "--is-ancestor", reviewed_revision, head).returncode != 0:
+            errors.append(
+                "document.reviewed_revision must be an ancestor of the validated head: "
+                f"{reviewed_revision}"
+            )
+
+    page_bytes = _read(repo, head, expected_page)
+    page = page_bytes.decode("utf-8", errors="replace") if page_bytes is not None else ""
+    if page_bytes is None:
+        errors.append(f"document page does not exist at {head}: {expected_page}")
+    else:
+        for marker in NUMERICAL_METHOD_REQUIRED_MARKERS:
+            if marker not in page:
+                errors.append(f"page missing required numerical-method section: {marker}")
+        if "```{math}" not in page or ":label:" not in page:
+            errors.append("page requires at least one labelled MyST math equation")
+        if not re.search(r"(?i)\\mathrm|\bSI\b|\bunit", page):
+            errors.append("page requires explicit symbol/unit evidence")
+        if "Python / IR" not in page and "ProblemIR" not in page:
+            errors.append("page requires a Python-to-ProblemIR mapping table")
+        python_blocks = NUMERICAL_PYTHON_BLOCK_RE.findall(page)
+        if not python_blocks:
+            errors.append("page requires an executable Python example")
+        for index, block in enumerate(python_blocks):
+            try:
+                ast.parse(block)
+            except SyntaxError as exc:
+                errors.append(
+                    f"python block {index + 1} does not parse: {exc.msg} at line {exc.lineno}"
+                )
+            if "fm.Problem(" in block:
+                errors.append(
+                    f"python block {index + 1} uses fm.Problem(); use the stage-first study API"
+                )
 
     sources = manifest.get("sources")
     if not isinstance(sources, list) or not sources:
         errors.append("sources must be a non-empty list")
         return errors
     source_ids: set[str] = set()
+    source_index_seen = False
     for index, source in enumerate(sources):
         label = f"sources[{index}]"
         if not isinstance(source, dict):
@@ -114,16 +171,33 @@ def _validate_numerical_method_manifest(
         symbol = source.get("symbol")
         if path is None or not isinstance(symbol, str) or not symbol.strip():
             continue
-        source_file = repo / path
-        if not source_file.is_file():
-            errors.append(f"{label} source path does not exist: {path}")
+        source_bytes = _read(repo, reviewed_revision, path) if isinstance(reviewed_revision, str) else None
+        if source_bytes is None:
+            errors.append(f"{label} source path does not exist at {reviewed_revision}: {path}")
             continue
-        source_text = source_file.read_text(encoding="utf-8", errors="replace")
+        source_text = source_bytes.decode("utf-8", errors="replace")
         declarations = _source_symbol_declarations(path, source_text, symbol)
         if not declarations:
             errors.append(f"{label} declaration not found in {path}: {symbol}")
         elif len(declarations) != 1:
             errors.append(f"{label} declaration is not unique in {path}: {symbol}")
+        page_symbol = symbol.removeprefix("class ").removeprefix("DOC-ANCHOR:")
+        if page and (path in page or page_symbol in page):
+            source_index_seen = True
+
+    if page and not source_index_seen:
+        errors.append("source index must name at least one mapped path and symbol")
+
+    lanes = sources = manifest.get("backend_matrix")
+    if not isinstance(lanes, list):
+        errors.append("backend_matrix must cover all four backend lanes: FEM/FDM CPU/GPU")
+    else:
+        actual_lanes = {(lane.get("solver"), lane.get("device")) for lane in lanes if isinstance(lane, dict)}
+        if actual_lanes != NUMERICAL_EXPECTED_LANES:
+            errors.append("backend_matrix must cover all four backend lanes: FEM/FDM CPU/GPU")
+        for lane in lanes:
+            if isinstance(lane, dict) and lane.get("status") in {"unsupported", "not-applicable"} and not lane.get("reason"):
+                errors.append("unsupported backend lane requires an evidence-based reason")
     return errors
 
 
@@ -279,7 +353,7 @@ def validate_changed(repo: Path, base: str, head: str) -> list[str]:
         errors.extend(
             f"{manifest_path}: {error}"
             for error in (
-                _validate_numerical_method_manifest(repo, manifest_path, manifest)
+                _validate_numerical_method_manifest(repo, head, manifest_path, manifest)
                 if _is_numerical_method_page(expected_page)
                 else validate_page(repo, manifest)
             )

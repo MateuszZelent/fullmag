@@ -3,7 +3,12 @@
     "path": "public_docs/site/numerical-methods/meshing/fem/ferromagnet/imported-mesh.md",
     "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
   },
-  "sources": [
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
+    {"solver": "FEM", "device": "GPU", "status": "source-backed-capability-gated"},
+    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."},
+    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."}
+  ],  "sources": [
     {
       "id": "mesh_import",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py",

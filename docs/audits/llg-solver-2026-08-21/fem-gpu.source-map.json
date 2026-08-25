@@ -94,6 +94,30 @@
       "responsibility": "Rejestruje transfery D2H wymagane przez residency audit."
     },
     {
+      "id": "fem-gpu-adaptive-readback",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_adaptive_decision_readback.cu",
+      "symbol": "gpu_rk_read_adaptive_error_norm_decision_host",
+      "responsibility": "Odczytuje skalarne wyniki adaptacji i przygotowuje decyzję accept/reject po synchronizacji strumienia."
+    },
+    {
+      "id": "fem-gpu-scalar-readback",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_scalar_readback.cu",
+      "symbol": "gpu_rk_read_control_scalar_results",
+      "responsibility": "Publikuje kontrolne skalary RK po bezwarunkowym cudaStreamSynchronize."
+    },
+    {
+      "id": "fem-gpu-torque-metric",
+      "path": "backends/fem/gpu/cuda/observables/observable_kernels.cu",
+      "symbol": "fullmag_cuda_field_metric_blocks",
+      "responsibility": "Redukuje końcową metrykę pola/torque FEM GPU; obecnie bez frozen-spin mask."
+    },
+    {
+      "id": "fem-gpu-torque-kernel",
+      "path": "backends/fem/gpu/cuda/observables/observable_kernels.cu",
+      "symbol": "field_metric_blocks_kernel",
+      "responsibility": "Kernel końcowej redukcji metryki, który wymaga osobnego free-set contract."
+    },
+    {
       "id": "fem-gpu-demag-solver",
       "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp",
       "symbol": "initialize_demag_poisson_hypre_device_solver",

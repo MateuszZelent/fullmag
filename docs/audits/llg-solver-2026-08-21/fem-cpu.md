@@ -159,7 +159,7 @@ magnet.mesh(maximum_element_size=8 * nm, order=1)
 study.demag(realization="poisson_robin")
 study.fem_demag_solver(solver="CG", preconditioner="AMG", rtol=1.0e-8, max_iterations=20)
 study.build_domain_mesh()
-study.stages.add_relax(stage_id="audit", algorithm="projected_gradient_bb", tolT=5.0e-9, max_steps=1)
+study.stages.add_relax(stage_id="audit", algorithm="llg_overdamped", dt=5.0e-13, tolA=1.0e-4, max_steps=1)
 ```
 
 (fem-cpu-problem-ir)=
