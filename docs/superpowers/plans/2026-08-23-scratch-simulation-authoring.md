@@ -884,7 +884,7 @@ FEM w kanonicznym managed runtime.
 
 - [x] Re-review zamknął wcześniejsze blokery fail-closed, strict-TS fixture,
   komplet pól Airbox oraz browser stability regression.
-- [x] Końcowy targeted Vitest: **198/198 PASS**; ESLint, `node --check` i
+- [x] Końcowy targeted Vitest: **21 plików / 356/356 PASS**; ESLint, `node --check` i
   `git diff --check`: **PASS**.
 - [x] Świeży smoke UI FDM i FEM na ostatniej wersji worktree: oba scenariusze
   zakończone kodem `0`, w tym FEM `fem_airbox_policy=true`.
@@ -904,3 +904,14 @@ FEM w kanonicznym managed runtime.
 - Bieżący re-run dowodów semantycznych: helper browser **7/7 PASS**, Python
   UI→ProblemIR **9 passed**. Targeted Rust API przekroczył 5-minutowy limit
   cache D: bez wyniku i pozostaje do odtworzenia w poprawnym środowisku.
+
+### Re-run dowodów frontendowych po wznowieniu celu 2026-08-25
+
+- [x] Powtórzono 21 plików testów Vitest dla scratch authoringu: **356/356
+  PASS**.
+- [x] Powtórzono helper browser: **7/7 PASS** oraz Python UI→ProblemIR:
+  **9 passed**.
+- [x] Potwierdzono czysty worktree po testach i brak błędów `git diff --check`.
+- [ ] Managed FEM nadal wymaga poprawnego obrazu/storage; bieżący host ma
+  tylko dystrybucję WSL `Ubuntu`, 0-bajtowy `fullmag-native.ext4`, brak
+  `fem-gpu-host-latest.tar` i brak obrazu `fullmag/fem-gpu:local`.

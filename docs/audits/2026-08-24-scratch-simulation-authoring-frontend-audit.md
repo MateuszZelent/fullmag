@@ -551,3 +551,22 @@ użyciu zgodnego środowiska `uv`. Próba targeted `cargo test -p fullmag-api
 create_scratch_session` na cache D: przekroczyła limit 5 minut bez wyniku;
 nie używam jej jako dowodu sukcesu i nie zastępuję nią wymaganej ścieżki
 container-backed `just`.
+
+### Weryfikacja ponowiona po wznowieniu celu 2026-08-25
+
+- Powtórny targeted Vitest dla 21 plików ścieżki scratch authoring zakończył
+  się wynikiem **21/21 plików, 356/356 testów PASS**.
+- `scratch-authoring-browser.test.mjs` ponownie: **7/7 PASS**.
+- `test_scratch_authoring_ui_roundtrip.py` ponownie w zgodnym środowisku `uv`:
+  **9 passed**.
+- Po testach worktree pozostał czysty, a `git diff --check` nie zgłosił błędów.
+- Preflight wykonany w dostępnej dystrybucji WSL `Ubuntu` (wcześniej używana
+  nazwa `Ubuntu2` nie istnieje w bieżącym hoście): obraz
+  `/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4` nadal ma
+  **0 B**, nie jest zamontowany jako ext4, brak archiwum
+  `fem-gpu-host-latest.tar`, aktywnego bundla oraz lokalnego obrazu
+  `fullmag/fem-gpu:local`.
+
+Nie powstał nowy kod produkcyjny, ponieważ ponowna kwalifikacja potwierdziła,
+że jedyną brakującą bramką jest zewnętrzny managed runtime FEM; nie wolno jej
+zastąpić hostowym buildem ani testem kontraktowym.
