@@ -119,18 +119,27 @@ This page reserves the public documentation location for FDM CPU exchange.
             errors,
         )
 
-    def test_new_internal_audit_requires_adjacent_source_map(self) -> None:
-        audit = self.repo / "docs/audits/backend-audit.md"
+    def test_non_scientific_internal_audit_does_not_require_source_map(self) -> None:
+        audit = self.repo / "docs/audits/dependency-security-remediation.md"
+        audit.parent.mkdir(parents=True)
+        audit.write_text("# Dependency remediation\n", encoding="utf-8")
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "add audit")
+
+        self.assertEqual(validate_changed(self.repo, self.base, "HEAD"), [])
+
+    def test_solver_audit_requires_adjacent_source_map(self) -> None:
+        audit = self.repo / "docs/audits/llg-solver/backend-audit.md"
         audit.parent.mkdir(parents=True)
         audit.write_text("# Backend audit\n", encoding="utf-8")
         _git(self.repo, "add", ".")
-        _git(self.repo, "commit", "-qm", "add audit")
+        _git(self.repo, "commit", "-qm", "add solver audit")
 
         errors = validate_changed(self.repo, self.base, "HEAD")
 
         self.assertIn(
             "changed scientific page requires sidecar manifest: "
-            "docs/audits/backend-audit.source-map.json",
+            "docs/audits/llg-solver/backend-audit.source-map.json",
             errors,
         )
 

@@ -537,6 +537,8 @@ managed przypadku magnetic-only i powiązania jego artefaktu z wymaganym checkie
 
 1. Włączyć branch protection i required checks.
 2. Zastąpić przybliżenie `full_domain` capability kontraktem per target/carrier (F3D-AUD-004).
+3. Uruchomić osobny managed FEM magnetic-only proof, zachować jego retained-runtime artifact i
+   powiązać go z wymaganym checkiem (F3D-AUD-016); bez tego pełna kwalifikacja pozostaje BLOCKED.
 
 ### Etap 1 — pojedynczy kontrakt quantity/target
 
