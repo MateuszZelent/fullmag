@@ -219,8 +219,8 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 
 ## Related documentation
 
-- [Airbox grading](grading.html)
-- [Boundary closure](boundary-closure.html)
+- [Airbox grading](grading.md)
+- [Boundary closure](boundary-closure.md)
 
 ## References
 

@@ -225,10 +225,10 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 
 ## Related documentation
 
-- [FDM overview](fdm/index.html)
-- [Boundary correction](fdm/boundary-correction.html)
-- [Multi-magnet grids](fdm/multi-magnet-grids.html)
-- [Periodic grids](fdm/periodic-grids.html)
+- [FDM overview](fdm/index.md)
+- [Boundary correction](fdm/boundary-correction.md)
+- [Multi-magnet grids](fdm/multi-magnet-grids.md)
+- [Periodic grids](fdm/periodic-grids.md)
 
 ## References
 

@@ -294,9 +294,9 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 
 ## Related documentation
 
-- [General swept meshes](../../swept-meshes.html)
-- [Mixed elements](mixed-elements.html)
-- [Swept hex](swept-hex.html)
+- [General swept meshes](../../swept-meshes.md)
+- [Mixed elements](mixed-elements.md)
+- [Swept hex](swept-hex.md)
 
 ## References
 

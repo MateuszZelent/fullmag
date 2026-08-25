@@ -403,6 +403,13 @@ pub fn validate_coupled_m3_checkpoint_value(
     fdm::cpu::spin_transport::validate_coupled_m3_checkpoint_value(value, vector_count)
 }
 
+/// Compute the canonical payload digest used by coupled-M3 checkpoint envelopes.
+pub fn coupled_m3_checkpoint_payload_sha256(
+    value: &serde_json::Value,
+) -> Result<String, RunError> {
+    fdm::cpu::spin_transport::coupled_checkpoint_payload_sha256_value(value)
+}
+
 /// Require exact bidirectional equality of coupled-M3 accepted module IDs and
 /// their runtime identity contracts.
 pub fn compare_coupled_m3_checkpoint_module_identity_values(

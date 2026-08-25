@@ -257,9 +257,9 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 
 ## Related documentation
 
-- [Airbox branch](fem/airbox/index.html)
-- [Shared-domain FEM](fem-shared-domain.html)
-- [Demagnetization solvers](../demag-solvers/index.html)
+- [Airbox branch](fem/airbox/index.md)
+- [Shared-domain FEM](fem-shared-domain.md)
+- [Demagnetization solvers](../demag-solvers/index.md)
 
 ## References
 
