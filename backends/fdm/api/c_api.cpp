@@ -2178,6 +2178,16 @@ int fullmag_fdm_backend_get_fsal_telemetry_v1(
         ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_ABI;
 }
 
+int fullmag_fdm_backend_get_fsal_telemetry_v2(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_fsal_telemetry_v2 *out_telemetry)
+{
+    if (handle == nullptr || out_telemetry == nullptr) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    return context_get_fsal_telemetry_v2(*ctx, out_telemetry)
+        ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_ABI;
+}
+
 int fullmag_fdm_backend_execution_receipt_v1(
     fullmag_fdm_backend *handle,
     fullmag_fdm_execution_receipt_v1 *out_receipt)

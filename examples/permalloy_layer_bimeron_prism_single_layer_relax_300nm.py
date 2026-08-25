@@ -78,12 +78,12 @@ layer.mesh.thin_film(
 study.demag(realization="poisson_robin")
 study.objects.mesh.defaults(
     algorithm_2d=6,
-    algorithm_3d=10,
+    algorithm_3d=1,
     size_factor=1,
     size_from_curvature=0,
     smoothing_steps=4,
-    optimize="Gmsh",
-    optimize_iterations=4,
+    optimize=None,
+    optimize_iterations=0,
     narrow_regions=0,
     compute_quality=True,
     per_element_quality=True,

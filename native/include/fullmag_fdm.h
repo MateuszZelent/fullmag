@@ -659,6 +659,8 @@ typedef enum {
     FULLMAG_FDM_FSAL_INVALIDATION_STALE_PUBLICATION = 15,
 } fullmag_fdm_fsal_invalidation_reason;
 
+#define FULLMAG_FDM_FSAL_INVALIDATION_REASON_COUNT 16u
+
 typedef struct {
     uint32_t abi_version;
     uint32_t struct_size;
@@ -708,6 +710,21 @@ typedef struct {
     uint64_t stale_publication_count;
     uint64_t transaction_commit_count;
 } fullmag_fdm_fsal_telemetry_v1;
+
+#define FULLMAG_FDM_FSAL_TELEMETRY_ABI_V2 2u
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t fsal_reused;
+    fullmag_fdm_fsal_invalidation_reason fsal_invalidation_reason;
+    uint64_t fsal_invalidation_count;
+    uint64_t rhs_evaluations_saved;
+    uint64_t thermal_rng_draws;
+    uint64_t accepted_step_index;
+    uint64_t stale_publication_count;
+    uint64_t transaction_commit_count;
+    uint64_t invalidation_reason_counts[FULLMAG_FDM_FSAL_INVALIDATION_REASON_COUNT];
+} fullmag_fdm_fsal_telemetry_v2;
 
 /* ── Device info ── */
 
@@ -915,6 +932,10 @@ int fullmag_fdm_backend_step(
 int fullmag_fdm_backend_get_fsal_telemetry_v1(
     fullmag_fdm_backend *handle,
     fullmag_fdm_fsal_telemetry_v1 *out_telemetry);
+
+int fullmag_fdm_backend_get_fsal_telemetry_v2(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_fsal_telemetry_v2 *out_telemetry);
 
 /* Bind/unbind the stage-wise GPU transport torque source for Heun or RK4. */
 int fullmag_fdm_context_bind_gpu_transport_v1(

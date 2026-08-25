@@ -88,7 +88,9 @@ def _source_symbol_declarations(path: str, text: str, symbol: str) -> list[str]:
         pattern = re.compile(rf"^\s*(?:async\s+)?def\s+{escaped}\s*\(", re.MULTILINE)
     elif path.endswith(".rs"):
         pattern = re.compile(
-            rf"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:unsafe\s+)?fn\s+{escaped}\s*\(",
+            rf"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:"
+            rf"(?:unsafe\s+)?fn\s+{escaped}(?:<[^>\n]+>)?\s*\("
+            rf"|(?:struct|enum|type|trait|const|static)\s+{escaped}\b)",
             re.MULTILINE,
         )
     elif Path(path).name == "justfile":

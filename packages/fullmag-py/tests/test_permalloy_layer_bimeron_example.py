@@ -68,3 +68,20 @@ def test_bimeron_minimization_uses_accepted_step_table_autosave() -> None:
         isinstance(call.func.value, ast.Name) and call.func.value.id == "study"
         for call in table_calls
     )
+
+
+def test_bimeron_example_uses_the_qualified_shared_domain_mesh_route() -> None:
+    tree = ast.parse(EXAMPLE.read_text(encoding="utf-8"), filename=str(EXAMPLE))
+
+    defaults = next(
+        call
+        for call in _calls(tree, "defaults")
+        if any(keyword.arg == "algorithm_3d" for keyword in call.keywords)
+    )
+    keywords = {keyword.arg: keyword.value for keyword in defaults.keywords if keyword.arg}
+
+    assert ast.literal_eval(keywords["algorithm_2d"]) == 6
+    assert ast.literal_eval(keywords["algorithm_3d"]) == 1
+    assert isinstance(keywords["optimize"], ast.Constant)
+    assert keywords["optimize"].value is None
+    assert ast.literal_eval(keywords["optimize_iterations"]) == 0

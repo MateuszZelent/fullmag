@@ -28,6 +28,7 @@ mod derived_fields;
 mod dispatch;
 pub mod eigen;
 mod fdm;
+mod solvers;
 #[allow(dead_code)]
 pub(crate) mod fem;
 #[path = "fem_reference.rs"]

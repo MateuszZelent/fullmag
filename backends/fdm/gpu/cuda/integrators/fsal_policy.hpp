@@ -113,19 +113,31 @@ inline FsalReuseDecision rhs_allows_fsal_reuse(const Context &ctx, double dt) {
     return rhs_allows_fsal_reuse(input);
 }
 
+inline void context_record_fsal_invalidation(
+    Context &ctx, fullmag_fdm_fsal_invalidation_reason reason) {
+    ctx.fsal_invalidation_reason = reason;
+    ++ctx.fsal_invalidation_count;
+    const auto reason_index = static_cast<uint32_t>(reason);
+    if (reason_index < FULLMAG_FDM_FSAL_INVALIDATION_REASON_COUNT)
+        ++ctx.fsal_invalidation_reason_counts[reason_index];
+}
+
 inline void context_invalidate_fsal_cache(
     Context &ctx, fullmag_fdm_fsal_invalidation_reason reason)
 {
     ctx.fsal_valid = false;
     ctx.fsal_pending = false;
-    ctx.fsal_invalidation_reason = reason;
-    ++ctx.fsal_invalidation_count;
+    context_record_fsal_invalidation(ctx, reason);
 }
 
 inline void context_note_fsal_decision(Context &ctx, const FsalReuseDecision &decision) {
     ctx.step_fsal_reused = decision.allowed;
     ctx.fsal_invalidation_reason = decision.reason;
-    if (decision.allowed) ++ctx.rhs_evaluations_saved;
+    if (decision.allowed) {
+        ++ctx.rhs_evaluations_saved;
+    } else {
+        context_record_fsal_invalidation(ctx, decision.reason);
+    }
 }
 
 inline void context_note_transport_revision_change(Context &ctx) {
@@ -144,12 +156,8 @@ inline void context_note_field_source_revision_change(Context &ctx) {
 inline void context_stage_pending_fsal(Context &ctx, double dt) {
     if (ctx.temperature > 0.0 || ctx.oersted_time_dep_kind != 0 ||
         ctx.gpu_transport_rhs.active) {
-        context_invalidate_fsal_cache(
-            ctx, ctx.temperature > 0.0
-                ? FULLMAG_FDM_FSAL_INVALIDATION_THERMAL_ACTIVE
-                : (ctx.gpu_transport_rhs.active
-                    ? FULLMAG_FDM_FSAL_INVALIDATION_TRANSPORT_STATE_MISMATCH
-                    : FULLMAG_FDM_FSAL_INVALIDATION_WAVEFORM_DISCONTINUITY));
+        ctx.fsal_valid = false;
+        ctx.fsal_pending = false;
         return;
     }
     ctx.fsal_pending = true;
@@ -245,6 +253,32 @@ inline bool context_get_fsal_telemetry_v1(
     result.accepted_step_index = ctx.accepted_step_index;
     result.stale_publication_count = ctx.stale_publication_count;
     result.transaction_commit_count = ctx.transaction_commit_count;
+    *out_telemetry = result;
+    return true;
+}
+
+inline bool context_get_fsal_telemetry_v2(
+    const Context &ctx, fullmag_fdm_fsal_telemetry_v2 *out_telemetry)
+{
+    if (out_telemetry == nullptr ||
+        out_telemetry->abi_version != FULLMAG_FDM_FSAL_TELEMETRY_ABI_V2 ||
+        out_telemetry->struct_size != sizeof(fullmag_fdm_fsal_telemetry_v2)) {
+        return false;
+    }
+    fullmag_fdm_fsal_telemetry_v2 result{};
+    result.abi_version = FULLMAG_FDM_FSAL_TELEMETRY_ABI_V2;
+    result.struct_size = sizeof(result);
+    result.fsal_reused = ctx.step_fsal_reused ? 1U : 0U;
+    result.fsal_invalidation_reason = ctx.fsal_invalidation_reason;
+    result.fsal_invalidation_count = ctx.fsal_invalidation_count;
+    result.rhs_evaluations_saved = ctx.rhs_evaluations_saved;
+    result.thermal_rng_draws = ctx.thermal_rng_draws;
+    result.accepted_step_index = ctx.accepted_step_index;
+    result.stale_publication_count = ctx.stale_publication_count;
+    result.transaction_commit_count = ctx.transaction_commit_count;
+    std::memcpy(result.invalidation_reason_counts,
+                ctx.fsal_invalidation_reason_counts,
+                sizeof(result.invalidation_reason_counts));
     *out_telemetry = result;
     return true;
 }

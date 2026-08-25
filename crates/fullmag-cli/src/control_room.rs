@@ -861,7 +861,8 @@ pub(crate) fn bootstrap_control_plane(
             let _ = fs::write(&url_file, web_public_url(web_port));
             let _ = fs::write(&mode_file, &desired_signature);
 
-            for _ in 0..300 {
+            let bootstrap_deadline = Instant::now() + Duration::from_secs(90);
+            while Instant::now() < bootstrap_deadline {
                 if frontend_is_ready_for_bootstrap(web_port) {
                     break;
                 }
@@ -1905,8 +1906,11 @@ pub(crate) fn spawn_fullmag_api(
 
 #[cfg(unix)]
 fn configure_child_process(command: &mut ProcessCommand) {
+    #[cfg(target_os = "linux")]
+    let launcher_is_init = std::process::id() == 1;
+
     unsafe {
-        command.pre_exec(|| {
+        command.pre_exec(move || {
             if libc::setpgid(0, 0) != 0 {
                 return Err(io::Error::last_os_error());
             }
@@ -1915,12 +1919,40 @@ fn configure_child_process(command: &mut ProcessCommand) {
                 if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) != 0 {
                     return Err(io::Error::last_os_error());
                 }
-                if libc::getppid() == 1 {
+                if should_reject_reparented_child(launcher_is_init, libc::getppid()) {
                     return Err(io::Error::from_raw_os_error(libc::ECHILD));
                 }
             }
             Ok(())
         });
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn should_reject_reparented_child(
+    launcher_is_init: bool,
+    observed_parent_pid: libc::pid_t,
+) -> bool {
+    !launcher_is_init && observed_parent_pid == 1
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod child_process_tests {
+    use super::should_reject_reparented_child;
+
+    #[test]
+    fn allows_pid_one_when_fullmag_is_the_container_init() {
+        assert!(!should_reject_reparented_child(true, 1));
+    }
+
+    #[test]
+    fn rejects_reparented_child_when_fullmag_is_not_init() {
+        assert!(should_reject_reparented_child(false, 1));
+    }
+
+    #[test]
+    fn allows_child_with_live_non_init_parent() {
+        assert!(!should_reject_reparented_child(false, 4242));
     }
 }
 

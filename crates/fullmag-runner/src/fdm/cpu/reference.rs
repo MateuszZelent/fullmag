@@ -6,11 +6,12 @@
 use fullmag_engine::{
     magnetoelastic::{MagnetoelasticParams, PrescribedStrainField},
     AdaptiveStepConfig, AxisBoundary, CellSize, CubicAnisotropyConfig, EffectiveFieldTerms,
-    EngineError, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA,
-    ExternalStageTerms, FdmBoundaryPolicy, FftWorkspace, GridShape, IntegratorBuffers, LlgConfig,
-    MagnetoelasticTermConfig, MaterialParameters, OerstedCylinderConfig, RegionalFieldDriveTerm,
-    ResolvedFdmPeriodicWorkspace, SlonczewskiSttConfig, SotConfig, SotFormula, StepReport,
-    TimeIntegrator, UniaxialAnisotropyConfig, Vector3, ZhangLiFormula, ZhangLiSttConfig,
+    EngineError, EngineErrorCode, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState,
+    ExchangeLlgStateSoA, ExternalStageTerms, FdmBoundaryPolicy, FftWorkspace, GridShape,
+    IntegratorBuffers, LlgConfig, MagnetoelasticTermConfig, MaterialParameters,
+    OerstedCylinderConfig, RegionalFieldDriveTerm, ResolvedFdmPeriodicWorkspace,
+    SlonczewskiSttConfig, SotConfig, SotFormula, StepReport, TimeIntegrator,
+    UniaxialAnisotropyConfig, Vector3, ZhangLiFormula, ZhangLiSttConfig,
 };
 use fullmag_ir::{
     ExecutionPrecision, FdmPlanIR, IntegratorChoice, OutputIR, RelaxationAlgorithmIR,
@@ -20,7 +21,7 @@ use fullmag_ir::{
 use super::spin_transport::{
     FdmCoupledCheckpoint, FdmSpinTransportEvaluation, FdmSpinTransportWorkflow,
 };
-use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
+use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder, CpuAdaptiveAttemptBatch};
 use crate::constraints::{FrozenSpinsCheckpointV1, FROZEN_SPINS_CHECKPOINT_SCHEMA};
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 use crate::fdm::{artifacts::select_state_observable_field, validate_single_grid_budget};
@@ -764,6 +765,50 @@ fn build_reference_problem(plan: &FdmPlanIR) -> Result<ExchangeLlgProblem, RunEr
     materialize_reference_problem(problem, plan)
 }
 
+fn apply_cpu_adaptive_attempt_telemetry(
+    stats: &mut StepStats,
+    buffers: &IntegratorBuffers,
+    plan: &FdmPlanIR,
+) {
+    let Some(adaptive) = plan.adaptive_timestep.as_ref() else {
+        return;
+    };
+    match plan.integrator.unwrap_or(IntegratorChoice::Heun) {
+        IntegratorChoice::Rk23 | IntegratorChoice::Rk45 => {}
+        _ => return,
+    }
+    stats.rejected_attempts = buffers.adaptive_rejected_attempts();
+    stats.dt_suggested = buffers
+        .adaptive_attempts()
+        .last()
+        .map(|attempt| attempt.dt_next);
+    stats.error_estimate = buffers.adaptive_attempts().last().map(|attempt| {
+        if matches!(
+            adaptive.tolerance_mode,
+            fullmag_ir::AdaptiveToleranceModeIR::MaxError
+        ) {
+            attempt.normalized_error * adaptive.atol
+        } else {
+            attempt.normalized_error
+        }
+    });
+    stats.max_error = matches!(
+        adaptive.tolerance_mode,
+        fullmag_ir::AdaptiveToleranceModeIR::MaxError
+    )
+    .then_some(adaptive.atol);
+    stats.rhs_evals = buffers
+        .adaptive_attempts()
+        .iter()
+        .map(|attempt| attempt.rhs_evals)
+        .sum();
+    stats.demag_solves = plan.enable_demag.then_some(stats.rhs_evals).unwrap_or(0);
+    stats.fsal_reused = buffers
+        .adaptive_attempts()
+        .iter()
+        .any(|attempt| attempt.rhs_evals == 6);
+}
+
 pub(crate) fn build_snapshot_problem_and_state(
     plan: &FdmPlanIR,
 ) -> Result<(ExchangeLlgProblem, ExchangeLlgState), RunError> {
@@ -803,7 +848,9 @@ pub(crate) fn execute_coupled_ars_trial(
             let previous_stage = candidate.as_ref();
             let evaluation = trial_workflow
                 .evaluate_coupled_ars_stage(magnetization, time_s, dt, stage, previous_stage)
-                .map_err(|error| EngineError::new(error.message))?;
+                .map_err(|error| {
+                    EngineError::with_code(EngineErrorCode::CoupledSolverFailure, error.message)
+                })?;
             let terms = ExternalStageTerms {
                 additional_field_apm: evaluation
                     .combined_oersted_field_apm
@@ -817,17 +864,107 @@ pub(crate) fn execute_coupled_ars_trial(
     );
     match result {
         Ok(report) => {
-            let accepted = candidate.ok_or_else(|| RunError {
-                message: "coupled ARS step produced no final spin-transport evaluation".into(),
-            })?;
-            trial_workflow.commit(accepted)?;
+            let accepted = match candidate {
+                Some(accepted) => accepted,
+                None => {
+                    trial_workflow.rollback();
+                    workflow.absorb_rollback_telemetry(&trial_workflow);
+                    return Err(RunError {
+                        message: "coupled ARS step produced no final spin-transport evaluation"
+                            .into(),
+                    });
+                }
+            };
+            if let Err(error) = trial_workflow.commit(accepted) {
+                trial_workflow.rollback();
+                workflow.absorb_rollback_telemetry(&trial_workflow);
+                return Err(coupled_solver_run_error(error.message));
+            }
             *state = trial_state;
             *workflow = trial_workflow;
             Ok(report)
         }
-        Err(error) => Err(RunError {
-            message: error.to_string(),
-        }),
+        Err(error) => {
+            trial_workflow.rollback();
+            workflow.absorb_rollback_telemetry(&trial_workflow);
+            Err(engine_run_error(error))
+        }
+    }
+}
+
+pub(crate) fn execute_coupled_heun_trial(
+    problem: &ExchangeLlgProblem,
+    state: &mut ExchangeLlgState,
+    workflow: &mut FdmSpinTransportWorkflow,
+    dt: f64,
+    fft_workspace: &mut FftWorkspace,
+    integrator_bufs: &mut IntegratorBuffers,
+) -> Result<StepReport, RunError> {
+    let mut candidate: Option<FdmSpinTransportEvaluation> = None;
+    workflow.begin_attempt()?;
+    let result = problem.heun_trial_with_external_stage_terms_and_lte(
+        state,
+        dt,
+        fft_workspace,
+        integrator_bufs,
+        EvaluationRequest::Full,
+        |magnetization, time_s, stage_error_budget| {
+            let previous_stage = candidate.as_ref();
+            let evaluation = workflow
+                .evaluate_stage_with_lte(magnetization, time_s, stage_error_budget, previous_stage)
+                .map_err(|error| {
+                    EngineError::with_code(EngineErrorCode::CoupledSolverFailure, error.message)
+                })?;
+            let terms = ExternalStageTerms {
+                additional_field_apm: evaluation
+                    .combined_oersted_field_apm
+                    .clone()
+                    .unwrap_or_else(|| vec![[0.0; 3]; magnetization.len()]),
+                direct_torque_per_s: evaluation.combined_transport_torque_per_s.clone(),
+            };
+            candidate = Some(evaluation);
+            Ok(terms)
+        },
+    );
+    match result {
+        Ok(report) => {
+            let accepted = match candidate {
+                Some(accepted) => accepted,
+                None => {
+                    workflow.rollback();
+                    return Err(RunError {
+                        message: "coupled Heun step produced no final spin-transport evaluation"
+                            .into(),
+                    });
+                }
+            };
+            if let Err(error) = workflow.commit(accepted) {
+                workflow.rollback();
+                return Err(coupled_solver_run_error(error.message));
+            }
+            problem.commit_heun_trial(state, integrator_bufs, dt);
+            Ok(report)
+        }
+        Err(error) => {
+            workflow.rollback();
+            Err(engine_run_error(error))
+        }
+    }
+}
+
+fn engine_run_error(error: EngineError) -> RunError {
+    RunError {
+        message: format!("[{}] {error}", error.code().as_str()),
+    }
+}
+
+fn coupled_solver_run_error(message: impl Into<String>) -> RunError {
+    RunError {
+        message: format!(
+            "[{}] {}",
+            EngineErrorCode::CoupledSolverFailure.as_str(),
+            message.into()
+        ),
     }
 }
 
@@ -1463,67 +1600,65 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                         report
                     }
                 } else {
-                    let mut candidate: Option<FdmSpinTransportEvaluation> = None;
-                    workflow.begin_attempt()?;
-                    let result = problem.heun_step_with_external_stage_terms_and_lte(
+                    execute_coupled_heun_trial(
+                        &problem,
                         &mut state,
+                        workflow,
                         dt_step,
                         &mut fft_workspace,
                         &mut integrator_bufs,
-                        EvaluationRequest::Full,
-                        |magnetization, time_s, stage_error_budget| {
-                            let previous_stage = candidate.as_ref();
-                            let evaluation = workflow
-                                .evaluate_stage_with_lte(
-                                    magnetization,
-                                    time_s,
-                                    stage_error_budget,
-                                    previous_stage,
-                                )
-                                .map_err(|error| EngineError::new(error.message))?;
-                            let terms = ExternalStageTerms {
-                                additional_field_apm: evaluation
-                                    .combined_oersted_field_apm
-                                    .clone()
-                                    .unwrap_or_else(|| vec![[0.0; 3]; magnetization.len()]),
-                                direct_torque_per_s: evaluation
-                                    .combined_transport_torque_per_s
-                                    .clone(),
-                            };
-                            candidate = Some(evaluation);
-                            Ok(terms)
-                        },
-                    );
-                    match result {
-                        Ok(report) => {
-                            let accepted = candidate.take().ok_or_else(|| RunError {
-                                message:
-                                    "coupled Heun step produced no final spin-transport evaluation"
-                                        .to_string(),
-                            })?;
-                            workflow.commit(accepted)?;
-                            report
-                        }
-                        Err(error) => {
-                            workflow.rollback();
-                            return Err(RunError {
-                                message: format!("Step {}: {}", step_count, error),
-                            });
-                        }
-                    }
+                    )
+                    .map_err(|error| RunError {
+                        message: format!("Step {}: {}", step_count, error.message),
+                    })?
                 }
             } else {
-                step_reference_fdm_problem(
+                let result = step_reference_fdm_problem(
                     &problem,
                     &mut state,
                     &mut state_soa,
                     dt_step,
                     &mut fft_workspace,
                     &mut integrator_bufs,
-                )
-                .map_err(|e| RunError {
-                    message: format!("Step {}: {}", step_count, e),
-                })?
+                );
+                match result {
+                    Ok(report) => report,
+                    Err(error) => {
+                        let primary = RunError {
+                            message: format!("Step {}: {}", step_count, error),
+                        };
+                        if plan.adaptive_timestep.is_some()
+                            && !integrator_bufs.adaptive_attempts().is_empty()
+                        {
+                            let estimator_order =
+                                match plan.integrator.unwrap_or(IntegratorChoice::Heun) {
+                                    IntegratorChoice::Rk23 => Some(2),
+                                    IntegratorChoice::Rk45 => Some(4),
+                                    _ => None,
+                                };
+                            if let Some(estimator_order) = estimator_order {
+                                let batch = CpuAdaptiveAttemptBatch::new(
+                                    integrator_bufs.adaptive_attempts(),
+                                    step_count + 1,
+                                    state.time_seconds,
+                                    plan.enable_demag,
+                                    estimator_order,
+                                );
+                                if let Err(publication) =
+                                    artifacts.publish_terminal_cpu_adaptive_attempts(batch)
+                                {
+                                    return Err(RunError {
+                                        message: format!(
+                                            "{}; terminal solver-attempt publication failed: {}",
+                                            primary.message, publication.message
+                                        ),
+                                    });
+                                }
+                            }
+                        }
+                        return Err(primary);
+                    }
+                }
             };
             if let (Some(target), Some(workflow)) =
                 (canonical_fixed_target, spin_transport.as_mut())
@@ -1563,6 +1698,26 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                 wall_time_ns: wall_elapsed,
                 ..StepStats::default()
             };
+            if spin_transport.is_none() {
+                apply_cpu_adaptive_attempt_telemetry(&mut latest_stats, &integrator_bufs, plan);
+                if matches!(
+                    plan.integrator.unwrap_or(IntegratorChoice::Heun),
+                    IntegratorChoice::Rk23 | IntegratorChoice::Rk45
+                ) && plan.adaptive_timestep.is_some()
+                {
+                    artifacts.record_cpu_adaptive_attempts(CpuAdaptiveAttemptBatch::new(
+                        integrator_bufs.adaptive_attempts(),
+                        latest_stats.step,
+                        latest_stats.time - latest_stats.dt,
+                        plan.enable_demag,
+                        match plan.integrator.unwrap_or(IntegratorChoice::Heun) {
+                            IntegratorChoice::Rk23 => 2,
+                            IntegratorChoice::Rk45 => 4,
+                            _ => unreachable!("embedded RK checked above"),
+                        },
+                    ));
+                }
+            }
             apply_frozen_spin_step_telemetry(&mut latest_stats, &problem, state.magnetization());
             current_stats = latest_stats.clone();
             // Preserve every accepted adaptive/fixed controller step for the
@@ -3048,6 +3203,162 @@ mod tests {
         assert!(adaptive_problem.dynamics.adaptive_enabled);
         assert_eq!(adaptive_problem.dynamics.adaptive.dt_min, 1e-16);
         assert_eq!(adaptive_problem.dynamics.adaptive.dt_max, 1e-14);
+    }
+
+    #[test]
+    fn reference_runner_publishes_cpu_adaptive_attempt_trace() {
+        for integrator in [IntegratorChoice::Rk23, IntegratorChoice::Rk45] {
+            let plan = FdmPlanIR {
+                integrator: Some(integrator),
+                fixed_timestep: None,
+                adaptive_timestep: Some(AdaptiveTimeStepIR {
+                    tolerance_mode: AdaptiveToleranceModeIR::MaxError,
+                    atol: 1e-8,
+                    rtol: 0.0,
+                    dt_initial: Some(1e-12),
+                    dt_min: 1e-18,
+                    dt_max: Some(1e-12),
+                    safety: 0.2,
+                    growth_limit: 2.0,
+                    shrink_limit: 0.2,
+                    max_spin_rotation: None,
+                    norm_tolerance: None,
+                }),
+                ..make_test_plan()
+            };
+
+            let executed = execute_reference_fdm(&plan, 3e-12, &[], None, None)
+                .expect("adaptive reference run");
+            let artifact = executed
+                .auxiliary_artifacts
+                .iter()
+                .find(|artifact| artifact.relative_path == "solver/accepted_steps.v1.json")
+                .expect("solver diagnostic trace artifact");
+            let trace: serde_json::Value =
+                serde_json::from_slice(&artifact.bytes).expect("trace JSON");
+            let steps = trace["steps"]
+                .as_array()
+                .expect("adaptive diagnostic steps");
+
+            assert!(steps.len() >= 3, "{integrator:?}: {steps:?}");
+            for step in steps {
+                let attempts = step["solver_attempts"].as_array().expect("attempt records");
+                assert!(!attempts.is_empty(), "{integrator:?}: {step:?}");
+                assert_eq!(
+                    step["rejected_attempts"].as_u64().unwrap() as usize + 1,
+                    attempts.len(),
+                    "{integrator:?}: {step:?}"
+                );
+                assert_eq!(attempts.last().unwrap()["decision"], "accepted");
+                assert_eq!(step["dt_suggested"], attempts.last().unwrap()["dt_next"]);
+                for (index, attempt) in attempts.iter().enumerate() {
+                    assert_eq!(attempt["attempt"], (index + 1) as u64);
+                    assert_eq!(attempt["target_step"], step["step"]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn adaptive_step_defers_attempt_record_materialization_outside_hot_path() {
+        let plan = FdmPlanIR {
+            integrator: Some(IntegratorChoice::Rk23),
+            fixed_timestep: None,
+            adaptive_timestep: Some(AdaptiveTimeStepIR {
+                tolerance_mode: AdaptiveToleranceModeIR::MaxError,
+                atol: 1e-8,
+                rtol: 0.0,
+                dt_initial: Some(1e-12),
+                dt_min: 1e-18,
+                dt_max: Some(1e-12),
+                safety: 0.2,
+                growth_limit: 2.0,
+                shrink_limit: 0.2,
+                max_spin_rotation: None,
+                norm_tolerance: None,
+            }),
+            ..make_test_plan()
+        };
+        let (problem, mut state) = build_snapshot_problem_and_state(&plan).expect("problem");
+        let mut state_soa = problem.soa_fast_path_supported().then(|| state.to_soa());
+        let mut fft_workspace = problem.create_workspace();
+        let mut integrator_bufs = problem.create_integrator_buffers();
+        let report = step_reference_fdm_problem(
+            &problem,
+            &mut state,
+            &mut state_soa,
+            1e-12,
+            &mut fft_workspace,
+            &mut integrator_bufs,
+        )
+        .expect("adaptive step");
+        let mut stats = StepStats {
+            step: 1,
+            time: report.time_seconds,
+            dt: report.dt_used,
+            ..StepStats::default()
+        };
+
+        apply_cpu_adaptive_attempt_telemetry(&mut stats, &integrator_bufs, &plan);
+
+        assert!(!integrator_bufs.adaptive_attempts().is_empty());
+        assert_eq!(stats.solver_attempts.capacity(), 0);
+        assert!(stats.solver_attempts.is_empty());
+    }
+
+    #[test]
+    fn reference_runner_publishes_terminal_adaptive_attempt_before_error() {
+        let plan = FdmPlanIR {
+            integrator: Some(IntegratorChoice::Rk23),
+            fixed_timestep: None,
+            adaptive_timestep: Some(AdaptiveTimeStepIR {
+                tolerance_mode: AdaptiveToleranceModeIR::MaxError,
+                atol: 1e-30,
+                rtol: 0.0,
+                dt_initial: Some(1e-6),
+                dt_min: 1e-6,
+                dt_max: Some(1e-6),
+                safety: 0.2,
+                growth_limit: 2.0,
+                shrink_limit: 0.2,
+                max_spin_rotation: None,
+                norm_tolerance: None,
+            }),
+            external_field: Some([0.0, 1.0e6, 0.0]),
+            ..make_test_plan()
+        };
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-terminal-adaptive-attempt-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        let context = crate::artifacts::FieldArtifactContext {
+            problem_name: "terminal-adaptive-attempt".to_string(),
+            ir_version: "v0".to_string(),
+            source_hash: None,
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            layout: serde_json::json!({"kind": "fdm", "cell_count": 16}),
+            execution_resolution: None,
+        };
+        let mut pipeline =
+            crate::artifact_pipeline::ArtifactPipeline::start(output_dir.clone(), context, 2)
+                .expect("artifact pipeline");
+
+        let error = execute_reference_fdm(&plan, 1e-6, &[], None, Some(pipeline.sender()))
+            .expect_err("adaptive step must exhaust dt_min");
+        assert!(error.message.contains("dt_min_exhausted"), "{error:?}");
+        pipeline.finish().expect("artifact pipeline shutdown");
+
+        let attempts = std::fs::read_to_string(output_dir.join("solver_attempts.csv"))
+            .expect("terminal solver attempt artifact");
+        let rows = attempts.lines().collect::<Vec<_>>();
+        assert_eq!(rows.len(), 2, "{attempts}");
+        assert!(rows[1].contains(",failed,dt_min_exhausted,"), "{attempts}");
+
+        std::fs::remove_dir_all(output_dir).expect("remove test output");
     }
 
     #[test]

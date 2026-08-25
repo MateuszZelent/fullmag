@@ -732,7 +732,6 @@ int context_llg_checkpoint_import_v3(
     ctx.adaptive_has_previous_error =
         header.info.adaptive_has_previous_error != 0;
     ctx.adaptive_previous_error = header.info.adaptive_previous_error;
-    ctx.fsal_valid = header.info.fsal_valid != 0;
     ctx.fsal_pending = false;
     ctx.fsal_accepted_state_revision = header.info.fsal_accepted_state_revision;
     ctx.fsal_accepted_time_bits = header.info.fsal_accepted_time_bits;
@@ -745,6 +744,8 @@ int context_llg_checkpoint_import_v3(
         header.info.fsal_projection_policy_identity;
     ctx.fsal_integrator_identity = header.info.fsal_integrator_identity;
     ctx.fsal_precision_identity = header.info.fsal_precision_identity;
+    context_invalidate_fsal_cache(
+        ctx, FULLMAG_FDM_FSAL_INVALIDATION_CHECKPOINT_RESTORE);
     context_discard_pre_step_state(ctx);
     context_invalidate_observables(ctx);
     ctx.last_error.clear();
