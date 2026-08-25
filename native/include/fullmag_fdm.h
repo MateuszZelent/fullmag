@@ -726,6 +726,24 @@ typedef struct {
     uint64_t invalidation_reason_counts[FULLMAG_FDM_FSAL_INVALIDATION_REASON_COUNT];
 } fullmag_fdm_fsal_telemetry_v2;
 
+#define FULLMAG_FDM_STEP_TRANSACTION_TELEMETRY_ABI_V1 1u
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t accounting_valid;
+    uint32_t reserved0;
+    uint64_t capture_count;
+    uint64_t rollback_count;
+    uint64_t capture_d2d_bytes;
+    uint64_t rollback_d2d_bytes;
+    uint64_t rollback_latency_total_ns;
+    uint64_t rollback_latency_max_ns;
+    uint64_t accepted_step_index;
+    uint64_t attempt_generation;
+    uint64_t thermal_rng_draws;
+    uint64_t stale_publication_count;
+} fullmag_fdm_step_transaction_telemetry_v1;
+
 /* ── Device info ── */
 
 typedef struct {
@@ -936,6 +954,10 @@ int fullmag_fdm_backend_get_fsal_telemetry_v1(
 int fullmag_fdm_backend_get_fsal_telemetry_v2(
     fullmag_fdm_backend *handle,
     fullmag_fdm_fsal_telemetry_v2 *out_telemetry);
+
+int fullmag_fdm_backend_get_step_transaction_telemetry_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_step_transaction_telemetry_v1 *out_telemetry);
 
 /* Bind/unbind the stage-wise GPU transport torque source for Heun or RK4. */
 int fullmag_fdm_context_bind_gpu_transport_v1(
