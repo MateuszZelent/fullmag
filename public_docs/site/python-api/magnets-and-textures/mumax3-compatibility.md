@@ -10,7 +10,7 @@ source_of_truth: docs/physics/0531-versioned-magnetic-preset-textures.md
 (public-docs-python-api-mumax3-texture-compatibility)=
 # Mumax3 Texture Compatibility
 
-(problem-statement)=
+(mumax3-problem-statement)=
 ## Physical problem
 
 Fullmag exposes the analytic initial-magnetization configurations listed in the pinned Mumax3
@@ -40,7 +40,7 @@ Fullmag additionally provides `antiskyrmion`, `skyrmionium`, `bimeron`, `domain_
 and a stereographic `hopfion` initializer. These are Fullmag extensions rather than named
 Mumax3 `Config` constructors.
 
-(governing-equations)=
+(mumax3-governing-equations)=
 ## Governing equations
 
 ## Mumax3-compatible vortex wall
@@ -92,7 +92,7 @@ $\rho\geq r$, including the support boundary. At the torus centreline,
 the magnetization is $-\hat{\mathbf z}$. The profile is three-dimensional and therefore
 requires `mapping.projection="object_local"`.
 
-(symbols-and-si-units)=
+(mumax3-symbols-and-si-units)=
 ## Symbols and SI units
 
 | Symbol | Meaning | SI unit |
@@ -112,7 +112,7 @@ requires `mapping.projection="object_local"`.
 | $\Phi$ | hopfion magnetization azimuth | $\mathrm{rad}$ |
 | $\Theta$ | hopfion polar profile | $\mathrm{rad}$ |
 
-(assumptions-and-validity)=
+(mumax3-assumptions-and-validity)=
 ## Assumptions and validity
 
 Both profiles define reduced initial magnetization, not an energy term, equilibrium
@@ -122,7 +122,7 @@ nonzero authored domain component because the resolved magnetization is normaliz
 The compact-hopfion denominator is evaluated only for $\rho<r$; the support boundary
 belongs to the exact uniform exterior.
 
-(python-api)=
+(mumax3-python-api)=
 ## Python API and parameters
 
 ```python
@@ -179,7 +179,7 @@ study.stages.add_save_state(
 | `texture.hopfion_compact_support.minor_radius` | float | required | $\mathrm{m}$ | finite, > 0 and <= major_radius | cross-section and compact-support radius | FDM/FEM via planner materialization | preset_params.minor_radius |
 | `texture.hopfion_compact_support.preset_version` | int | 2 | $1$ | exactly 2 | selects the version-2 profile | FDM/FEM via planner materialization | preset_version |
 
-(problem-ir)=
+(mumax3-problem-ir)=
 ## ProblemIR lowering
 
 Both factories lower to `kind="preset_texture"`, `preset_version=2`, the listed
@@ -190,7 +190,7 @@ Python export uses the generic `fm.PresetTexture(...)` form so `ui_label`, mappi
 transform, preview metadata, and every authored parameter round-trip unchanged; a
 factory-authored texture without extra metadata may use the shorter factory call.
 
-(round-trip-and-failure-semantics)=
+(mumax3-round-trip-and-failure-semantics)=
 ## Round-trip, provenance, and failure semantics
 
 The requested intent preserves the preset kind, version, authored SI parameters,
@@ -202,7 +202,7 @@ Unsupported combinations, including a three-dimensional hopfion without
 uniform magnetization. Python, UI, ProblemIR, session state, and exported Python must
 round-trip every authored parameter unchanged.
 
-(discrete-realization)=
+(mumax3-discrete-realization)=
 ## Discrete realization and backend semantics
 
 | Solver | Device | Realization | Qualification status |
@@ -224,7 +224,7 @@ is no fallback to a different preset or to a uniform state. `CurrentMag` remains
 state transfer rather than an analytic preset because its value depends on a resolved
 mesh and session state.
 
-(implementation-mapping)=
+(mumax3-implementation-mapping)=
 ## Implementation mapping
 
 - Rust evaluator: `crates/fullmag-plan/src/magnetization_textures_v2.rs`, symbols
@@ -244,7 +244,7 @@ The compatibility equations are mapped directly to the immutable upstream Mumax3
 wall half-width with explicit SI parameters; this is a deliberate reproducibility
 adaptation, not bitwise sampling parity.
 
-(validation)=
+(mumax3-validation)=
 ## Validation
 
 Rust contract tests check both uniform wall domains, the central vortex core, exact
@@ -254,7 +254,7 @@ default hydration, serialization, and version preservation. Public examples and 
 scientific source-map validator run in CI. GPU runtime qualification remains separate
 because the planner materializes the shared field before device execution.
 
-(limitations)=
+(mumax3-limitations)=
 ## Limitations and deferred qualification
 
 “Mumax3-compatible” means matching the analytic family and parameter signs while making
@@ -263,7 +263,7 @@ grid-dependent vortex core, automatic world-size lookup, random-number stream, o
 solver trajectory. The profiles are initial conditions and require an independent
 relaxation or dynamics qualification for a scientific study.
 
-(scientific-bibliography)=
+(mumax3-scientific-bibliography)=
 ## Scientific bibliography
 
 1. Mumax3, `engine/config.go`, `VortexWall` and `HopfionCompactSupport`,
@@ -279,7 +279,7 @@ stage-to-stage continuation, interactive-session state, and checkpoint restore. 
 intentionally not presented as an analytic texture preset because its value depends on a
 specific resolved mesh and simulation state.
 
-(source-code-index)=
+(mumax3-source-code-index)=
 ## Source-code index
 
 | Source ID | Repository path | Stable symbol | Evidence |
