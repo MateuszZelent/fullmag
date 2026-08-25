@@ -427,6 +427,13 @@ struct Context {
     uint64_t thermal_rng_draws = 0;
     uint64_t stale_publication_count = 0;
     uint64_t transaction_commit_count = 0;
+    bool step_transaction_accounting_valid = true;
+    uint64_t step_transaction_capture_count = 0;
+    uint64_t step_transaction_rollback_count = 0;
+    uint64_t step_transaction_capture_d2d_bytes = 0;
+    uint64_t step_transaction_rollback_d2d_bytes = 0;
+    uint64_t step_transaction_rollback_latency_total_ns = 0;
+    uint64_t step_transaction_rollback_latency_max_ns = 0;
     bool observables_valid = false;
 
     // Complete v2 timestep policy (fixed unless explicitly enabled).
@@ -585,6 +592,69 @@ bool context_end_compute_stream_work(Context &ctx, const char *operation);
 bool context_complete_solver_receipt_attempt(Context &ctx, const char *operation);
 bool context_test_copy_f64_on_compute_stream(
     Context &ctx, double *destination, const double *source, uint64_t values);
+inline bool context_step_transaction_payload_bytes(
+    uint64_t cell_count,
+    uint64_t scalar_bytes,
+    bool include_abm_history,
+    uint64_t &out_bytes)
+{
+    uint64_t payload_bytes = 0;
+    if (!fullmag_fdm_checked_vector_bytes(
+            cell_count, scalar_bytes, payload_bytes)) {
+        return false;
+    }
+    if (include_abm_history) {
+        constexpr uint64_t captured_vector_fields = 4;
+        if (payload_bytes >
+            std::numeric_limits<uint64_t>::max() / captured_vector_fields) {
+            return false;
+        }
+        payload_bytes *= captured_vector_fields;
+    }
+    out_bytes = payload_bytes;
+    return true;
+}
+inline bool context_step_transaction_checked_add(
+    Context &ctx, uint64_t &destination, uint64_t value)
+{
+    if (value > std::numeric_limits<uint64_t>::max() - destination) {
+        ctx.step_transaction_accounting_valid = false;
+        return false;
+    }
+    destination += value;
+    return true;
+}
+inline bool context_get_step_transaction_telemetry_v1(
+    const Context &ctx,
+    fullmag_fdm_step_transaction_telemetry_v1 *out_telemetry)
+{
+    if (out_telemetry == nullptr ||
+        out_telemetry->abi_version !=
+            FULLMAG_FDM_STEP_TRANSACTION_TELEMETRY_ABI_V1 ||
+        out_telemetry->struct_size !=
+            sizeof(fullmag_fdm_step_transaction_telemetry_v1)) {
+        return false;
+    }
+    fullmag_fdm_step_transaction_telemetry_v1 result{};
+    result.abi_version = FULLMAG_FDM_STEP_TRANSACTION_TELEMETRY_ABI_V1;
+    result.struct_size = sizeof(result);
+    result.accounting_valid =
+        ctx.step_transaction_accounting_valid ? 1U : 0U;
+    result.capture_count = ctx.step_transaction_capture_count;
+    result.rollback_count = ctx.step_transaction_rollback_count;
+    result.capture_d2d_bytes = ctx.step_transaction_capture_d2d_bytes;
+    result.rollback_d2d_bytes = ctx.step_transaction_rollback_d2d_bytes;
+    result.rollback_latency_total_ns =
+        ctx.step_transaction_rollback_latency_total_ns;
+    result.rollback_latency_max_ns =
+        ctx.step_transaction_rollback_latency_max_ns;
+    result.accepted_step_index = ctx.accepted_step_index;
+    result.attempt_generation = ctx.gpu_transport_attempt_generation;
+    result.thermal_rng_draws = ctx.thermal_rng_draws;
+    result.stale_publication_count = ctx.stale_publication_count;
+    *out_telemetry = result;
+    return true;
+}
 bool context_capture_pre_step_state(Context &ctx);
 bool context_rollback_pre_step_state(Context &ctx);
 void context_discard_pre_step_state(Context &ctx);

@@ -26,6 +26,16 @@ bool contains(const std::string &source, const char *token) {
     return source.find(token) != std::string::npos;
 }
 
+std::size_t count_occurrences(const std::string &source, const char *token) {
+    std::size_t count = 0;
+    std::size_t offset = 0;
+    while ((offset = source.find(token, offset)) != std::string::npos) {
+        ++count;
+        offset += std::char_traits<char>::length(token);
+    }
+    return count;
+}
+
 void report(bool condition, const char *id, const char *message, int &failures) {
     std::printf("%s %s: %s\n", condition ? "PASS" : "RED", id, message);
     if (!condition) ++failures;
@@ -35,6 +45,27 @@ void report(bool condition, const char *id, const char *message, int &failures) 
 
 int main() {
     using namespace fullmag::fdm;
+    uint64_t magnetization_payload_bytes = 0;
+    uint64_t abm3_payload_bytes = 0;
+    uint64_t overflow_payload_bytes = UINT64_C(0xa5a5a5a5a5a5a5a5);
+    const bool transaction_payload_bytes_are_exact =
+        context_step_transaction_payload_bytes(
+            7, sizeof(double), false, magnetization_payload_bytes) &&
+        magnetization_payload_bytes == UINT64_C(3) * 7 * sizeof(double) &&
+        context_step_transaction_payload_bytes(
+            7, sizeof(double), true, abm3_payload_bytes) &&
+        abm3_payload_bytes == UINT64_C(12) * 7 * sizeof(double) &&
+        !context_step_transaction_payload_bytes(
+            UINT64_MAX, sizeof(double), true, overflow_payload_bytes) &&
+        overflow_payload_bytes == UINT64_C(0xa5a5a5a5a5a5a5a5);
+    Context transaction_accounting_overflow{};
+    transaction_accounting_overflow.step_transaction_capture_count = UINT64_MAX;
+    const bool transaction_accounting_fails_closed =
+        !context_step_transaction_checked_add(
+            transaction_accounting_overflow,
+            transaction_accounting_overflow.step_transaction_capture_count, 1) &&
+        !transaction_accounting_overflow.step_transaction_accounting_valid &&
+        transaction_accounting_overflow.step_transaction_capture_count == UINT64_MAX;
     const FsalEndpointIdentity exact_identity{
         7, fsal_double_bits(1.0e-12), fsal_double_bits(1.0e-13),
         2, 3, 4, 5, 6, 7, 8};
@@ -101,6 +132,66 @@ int main() {
         !context_get_fsal_telemetry_v1(transaction_context, &invalid_telemetry) &&
         std::memcmp(&invalid_telemetry, &invalid_telemetry_before,
                     sizeof(invalid_telemetry)) == 0;
+    Context step_transaction_telemetry_context{};
+    step_transaction_telemetry_context.step_transaction_accounting_valid = false;
+    step_transaction_telemetry_context.step_transaction_capture_count = 11;
+    step_transaction_telemetry_context.step_transaction_rollback_count = 13;
+    step_transaction_telemetry_context.step_transaction_capture_d2d_bytes = 17;
+    step_transaction_telemetry_context.step_transaction_rollback_d2d_bytes = 19;
+    step_transaction_telemetry_context.step_transaction_rollback_latency_total_ns = 23;
+    step_transaction_telemetry_context.step_transaction_rollback_latency_max_ns = 29;
+    step_transaction_telemetry_context.accepted_step_index = 31;
+    step_transaction_telemetry_context.gpu_transport_attempt_generation = 37;
+    step_transaction_telemetry_context.thermal_rng_draws = 41;
+    step_transaction_telemetry_context.stale_publication_count = 43;
+    fullmag_fdm_step_transaction_telemetry_v1 step_transaction_telemetry{};
+    step_transaction_telemetry.abi_version =
+        FULLMAG_FDM_STEP_TRANSACTION_TELEMETRY_ABI_V1;
+    step_transaction_telemetry.struct_size = sizeof(step_transaction_telemetry);
+    const bool step_transaction_snapshot_is_exact =
+        context_get_step_transaction_telemetry_v1(
+            step_transaction_telemetry_context, &step_transaction_telemetry) &&
+        step_transaction_telemetry.abi_version ==
+            FULLMAG_FDM_STEP_TRANSACTION_TELEMETRY_ABI_V1 &&
+        step_transaction_telemetry.struct_size == sizeof(step_transaction_telemetry) &&
+        step_transaction_telemetry.accounting_valid == 0 &&
+        step_transaction_telemetry.reserved0 == 0 &&
+        step_transaction_telemetry.capture_count == 11 &&
+        step_transaction_telemetry.rollback_count == 13 &&
+        step_transaction_telemetry.capture_d2d_bytes == 17 &&
+        step_transaction_telemetry.rollback_d2d_bytes == 19 &&
+        step_transaction_telemetry.rollback_latency_total_ns == 23 &&
+        step_transaction_telemetry.rollback_latency_max_ns == 29 &&
+        step_transaction_telemetry.accepted_step_index == 31 &&
+        step_transaction_telemetry.attempt_generation == 37 &&
+        step_transaction_telemetry.thermal_rng_draws == 41 &&
+        step_transaction_telemetry.stale_publication_count == 43;
+    fullmag_fdm_step_transaction_telemetry_v1 invalid_step_transaction_abi{};
+    invalid_step_transaction_abi.abi_version =
+        FULLMAG_FDM_STEP_TRANSACTION_TELEMETRY_ABI_V1 + 1;
+    invalid_step_transaction_abi.struct_size = sizeof(invalid_step_transaction_abi);
+    invalid_step_transaction_abi.capture_count = UINT64_C(0xa5a5a5a5a5a5a5a5);
+    const auto invalid_step_transaction_abi_before = invalid_step_transaction_abi;
+    fullmag_fdm_step_transaction_telemetry_v1 invalid_step_transaction_size{};
+    invalid_step_transaction_size.abi_version =
+        FULLMAG_FDM_STEP_TRANSACTION_TELEMETRY_ABI_V1;
+    invalid_step_transaction_size.struct_size =
+        sizeof(invalid_step_transaction_size) - 1;
+    invalid_step_transaction_size.rollback_count = UINT64_C(0x5a5a5a5a5a5a5a5a);
+    const auto invalid_step_transaction_size_before = invalid_step_transaction_size;
+    const bool invalid_step_transaction_requests_are_unchanged =
+        !context_get_step_transaction_telemetry_v1(
+            step_transaction_telemetry_context, &invalid_step_transaction_abi) &&
+        std::memcmp(
+            &invalid_step_transaction_abi, &invalid_step_transaction_abi_before,
+            sizeof(invalid_step_transaction_abi)) == 0 &&
+        !context_get_step_transaction_telemetry_v1(
+            step_transaction_telemetry_context, &invalid_step_transaction_size) &&
+        std::memcmp(
+            &invalid_step_transaction_size, &invalid_step_transaction_size_before,
+            sizeof(invalid_step_transaction_size)) == 0 &&
+        !context_get_step_transaction_telemetry_v1(
+            step_transaction_telemetry_context, nullptr);
     Context commit_gate{};
     commit_gate.integrator = FULLMAG_FDM_INTEGRATOR_RK23;
     commit_gate.precision = FULLMAG_FDM_PRECISION_DOUBLE;
@@ -329,6 +420,14 @@ int main() {
     const auto fdm = root / "backends/fdm";
     const auto policy = read(fdm / "gpu/cuda/integrators/fsal_policy.hpp");
     const auto context = read(fdm / "include/context.hpp");
+    const auto context_telemetry_getter_begin =
+        context.find("inline bool context_get_step_transaction_telemetry_v1(");
+    const auto context_telemetry_getter_end =
+        context.find("bool context_capture_pre_step_state(",
+                     context_telemetry_getter_begin);
+    const auto context_telemetry_getter = context.substr(
+        context_telemetry_getter_begin,
+        context_telemetry_getter_end - context_telemetry_getter_begin);
     const auto api = read(fdm / "api/c_api.cpp");
     const auto step_api_begin = api.find("int fullmag_fdm_backend_step(");
     const auto step_api_end = api.find(
@@ -336,7 +435,25 @@ int main() {
     const auto step_api = api.substr(step_api_begin, step_api_end - step_api_begin);
     const auto inactive_legacy_begin = step_api.find("#if 0");
     const auto active_step_api = step_api.substr(0, inactive_legacy_begin);
+    const auto transaction_telemetry_api_begin = api.find(
+        "int fullmag_fdm_backend_get_step_transaction_telemetry_v1(");
+    const auto transaction_telemetry_api_end = api.find(
+        "int fullmag_fdm_backend_execution_receipt_v1(",
+        transaction_telemetry_api_begin);
+    const auto transaction_telemetry_api = api.substr(
+        transaction_telemetry_api_begin,
+        transaction_telemetry_api_end - transaction_telemetry_api_begin);
     const auto runtime = read(fdm / "gpu/cuda/runtime/context.cu");
+    const auto capture_runtime_begin =
+        runtime.find("bool context_capture_pre_step_state(");
+    const auto rollback_runtime_begin =
+        runtime.find("bool context_rollback_pre_step_state(");
+    const auto discard_runtime_begin =
+        runtime.find("void context_discard_pre_step_state(");
+    const auto capture_runtime = runtime.substr(
+        capture_runtime_begin, rollback_runtime_begin - capture_runtime_begin);
+    const auto rollback_runtime = runtime.substr(
+        rollback_runtime_begin, discard_runtime_begin - rollback_runtime_begin);
     const auto checkpoint = read(fdm / "gpu/cuda/runtime/llg_checkpoint.cpp");
     const auto transaction_controller = read(
         fdm / "gpu/cuda/runtime/step_transaction_controller.hpp");
@@ -365,6 +482,13 @@ int main() {
         root / "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs");
     const std::string integrators = rk23_64 + rk23_32 + dp45_64 + dp45_32;
     int failures = 0;
+
+    report(
+        transaction_payload_bytes_are_exact &&
+            transaction_accounting_fails_closed,
+        "FDM-GPU-TRX-001-B1-RED",
+        "step transaction payload bytes are exact and overflow-safe",
+        failures);
 
     report(
         !contains(rk4_64, "stats->step = ctx.step_count") &&
@@ -603,6 +727,38 @@ int main() {
                 "fullmag_fdm_step_transaction_telemetry_v1"),
         "FDM-GPU-TRX-001-A",
         "step transaction telemetry must have an independent public ABI",
+        failures);
+    report(
+        step_transaction_snapshot_is_exact &&
+            invalid_step_transaction_requests_are_unchanged &&
+            !contains(context_telemetry_getter, "cuda") &&
+            !contains(context_telemetry_getter, "malloc") &&
+            !contains(context_telemetry_getter, "new "),
+        "FDM-GPU-TRX-001-B2-RED",
+        "step transaction telemetry snapshots Context counters fail-closed",
+        failures);
+    report(
+        contains(runtime, "step_transaction_capture_d2d_bytes") &&
+            contains(runtime, "step_transaction_rollback_d2d_bytes") &&
+            contains(runtime, "steady_clock") &&
+            contains(runtime, "step_transaction_rollback_latency_total_ns") &&
+            contains(runtime, "step_transaction_rollback_latency_max_ns") &&
+            count_occurrences(capture_runtime, "cudaStreamSynchronize(") == 3 &&
+            count_occurrences(rollback_runtime, "cudaStreamSynchronize(") == 3,
+        "FDM-GPU-TRX-001-B3-RED",
+        "capture and rollback account real D2D bytes and rollback latency without new synchronization",
+        failures);
+    report(
+        contains(transaction_telemetry_api, "#if FULLMAG_HAS_CUDA") &&
+            contains(transaction_telemetry_api,
+                "if (!handle || !out_telemetry) return FULLMAG_FDM_ERR_INVALID;") &&
+            contains(transaction_telemetry_api,
+                "context_get_step_transaction_telemetry_v1(*ctx, out_telemetry)") &&
+            contains(transaction_telemetry_api,
+                "? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_ABI") &&
+            contains(transaction_telemetry_api, "FULLMAG_FDM_ERR_CUDA"),
+        "FDM-GPU-TRX-001-B4-RED",
+        "native C ABI exposes the transaction telemetry snapshot and CPU-only failure",
         failures);
 
     static_assert(sizeof(fullmag_fdm_step_stats) == 192,
