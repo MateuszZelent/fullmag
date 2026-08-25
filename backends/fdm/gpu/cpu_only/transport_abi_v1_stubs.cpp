@@ -34,6 +34,12 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_accept_charge_snapshot_v1(
     return FULLMAG_FDM_GPU_TRANSPORT_ERROR_UNSUPPORTED;
 }
 
+extern "C" uint32_t fullmag_fdm_gpu_transport_solve_steady_spin_v1(
+    const fullmag_fdm_gpu_steady_spin_solve_request_v1 *,
+    fullmag_fdm_gpu_steady_spin_solve_result_v1 *) {
+    return FULLMAG_FDM_GPU_TRANSPORT_ERROR_UNSUPPORTED;
+}
+
 extern "C" uint32_t fullmag_fdm_gpu_transport_query_telemetry_v1(
     fullmag_fdm_gpu_transport_context_handle_v1, uint64_t,
     fullmag_fdm_gpu_transport_telemetry_v1 *, uint64_t, uint64_t *) {

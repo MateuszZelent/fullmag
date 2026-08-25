@@ -38,15 +38,18 @@ pub use fdm::shared::frozen_spins::FrozenSpinsState;
 pub use fdm::{
     compute_newell_kernel_spectra, compute_newell_kernel_spectra_thin_film_2d,
     compute_periodic_newell_kernel_spectra, run_reference_exchange_demo, AbmHistory, AbmHistorySoA,
-    AdaptiveStepConfig, AxisBoundary, CellSize, CoupledImexArk2Stage, CoupledImexArk2Tableau,
-    CubicAnisotropyConfig, DemagKernelSpectra, EffectiveFieldObservables, EffectiveFieldTerms,
-    EngineError, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA,
+    AdaptiveAttemptDecision, AdaptiveAttemptReason, AdaptiveAttemptRecord, AdaptiveStepConfig,
+    AxisBoundary, CellSize, CoupledImexArk2Stage, CoupledImexArk2Tableau, CubicAnisotropyConfig,
+    DemagKernelSpectra, EffectiveFieldObservables, EffectiveFieldTerms, EngineError,
+    EngineErrorCode, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA,
     ExternalStageTerms, FdmBoundaryPolicy, FdmDemagBoundary, FftWorkspace, GridShape,
     IntegratorBuffers, LlgConfig, MagnetoelasticTermConfig, MaterialParameters,
     OerstedCylinderConfig, ReferenceDemoReport, RegionalFieldDriveTerm,
     ResolvedFdmPeriodicWorkspace, Result, RhsEvaluation, SlonczewskiFormula, SlonczewskiSttConfig,
     SolverSession, SotConfig, SotFormula, StepReport, TimeIntegrator, UniaxialAnisotropyConfig,
     VectorFieldSoA, ZhangLiFormula, ZhangLiSttConfig,
+    FDM_CPU_ADAPTIVE_RK23_MAX_RHS_EVALS_TO_ORACLE, FDM_CPU_ADAPTIVE_RK45_MAX_RHS_EVALS_TO_ORACLE,
+    MAX_ADAPTIVE_ATTEMPT_RECORDS,
 };
 
 // ── Vector math utilities ─────────────────────────────────────────────

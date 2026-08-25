@@ -1,4 +1,6 @@
-FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS deps
+ARG FULLMAG_CUDA_BASE_IMAGE="nvidia/cuda:12.4.1-devel-ubuntu22.04"
+
+FROM ${FULLMAG_CUDA_BASE_IMAGE} AS deps
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -139,7 +141,7 @@ RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build \
     cmake --build /tmp/build/mfem/build -j"$(nproc)" && \
     cmake --install /tmp/build/mfem/build
 
-FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS fem-gpu-dev
+FROM ${FULLMAG_CUDA_BASE_IMAGE} AS fem-gpu-dev
 
 ARG FULLMAG_CUDA_ARCHITECTURES="80-real;89-real;90-real;90-virtual"
 ARG NODE_VERSION=24.18.0
@@ -211,9 +213,12 @@ RUN corepack enable && corepack prepare pnpm@10.8.1 --activate
 
 COPY --from=deps /opt/fullmag-deps /opt/fullmag-deps
 
-ENV FULLMAG_NSIGHT_SYSTEMS_ROOT=/opt/nvidia/nsight-compute/2024.1.1/host/target-linux-x64
-ENV PATH=${FULLMAG_NSIGHT_SYSTEMS_ROOT}:${PATH}
-RUN nsys --version && ncu --version
+ENV FULLMAG_NSIGHT_SYSTEMS_ROOT=/opt/nvidia
+RUN if command -v nsys >/dev/null 2>&1 && command -v ncu >/dev/null 2>&1; then \
+      nsys --version && ncu --version; \
+    else \
+      echo "Nsight Systems/Compute not present in this CUDA image; profiler tools are optional."; \
+    fi
 
 ARG FULLMAG_HYPRE_MEMORY_VARIANT="baseline"
 ENV FULLMAG_HYPRE_MEMORY_VARIANT=${FULLMAG_HYPRE_MEMORY_VARIANT}

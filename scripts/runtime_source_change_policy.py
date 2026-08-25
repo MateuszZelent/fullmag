@@ -16,6 +16,8 @@ from typing import Any
 NON_RUNTIME_PREFIXES = (
     ".agents/",
     ".codex/",
+    # Codex-Usage is a local tooling checkout, not runtime source.
+    "Codex-Usage/",
     ".impl-racetrack/",
     ".worktrees/",
     ".github/",
@@ -31,6 +33,7 @@ NON_RUNTIME_FILES = {
     "README.md",
 }
 NON_RUNTIME_EXACT_PATHS = {
+    "Codex-Usage",
     ".impl-racetrack",
     ".worktrees",
     "apps/control-room/next-env.d.ts",

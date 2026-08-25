@@ -368,6 +368,51 @@ impl AbmHistory {
 
 // ── IntegratorBuffers ──────────────────────────────────────────────────
 
+/// Maximum number of records for one adaptive outer-step transaction: up to
+/// 50 rejected attempts followed by one accepted or terminal attempt.
+pub const MAX_ADAPTIVE_ATTEMPT_RECORDS: usize = 51;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdaptiveAttemptDecision {
+    Accepted,
+    Retry,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdaptiveAttemptReason {
+    WithinTolerance,
+    ErrorAboveTolerance,
+    DtMinExhausted,
+    NonFiniteError,
+    RetryLimitExhausted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AdaptiveAttemptRecord {
+    pub attempt: u32,
+    pub dt_attempt: f64,
+    pub normalized_error: f64,
+    pub decision: AdaptiveAttemptDecision,
+    pub reason: AdaptiveAttemptReason,
+    pub dt_next: f64,
+    pub rhs_evals: u32,
+}
+
+impl Default for AdaptiveAttemptRecord {
+    fn default() -> Self {
+        Self {
+            attempt: 0,
+            dt_attempt: 0.0,
+            normalized_error: 0.0,
+            decision: AdaptiveAttemptDecision::Failed,
+            reason: AdaptiveAttemptReason::NonFiniteError,
+            dt_next: 0.0,
+            rhs_evals: 0,
+        }
+    }
+}
+
 /// Preallocated workspace buffers for time integrator stages.
 #[derive(Debug, Clone)]
 pub struct IntegratorBuffers {
@@ -388,6 +433,10 @@ pub struct IntegratorBuffers {
     pub h_scratch: Vec<Vector3>,
     /// RHS output buffer for zero-alloc report computation.
     pub rhs: Vec<Vector3>,
+    adaptive_attempts: [AdaptiveAttemptRecord; MAX_ADAPTIVE_ATTEMPT_RECORDS],
+    adaptive_attempt_count: usize,
+    adaptive_accepted_attempts: u32,
+    adaptive_rejected_attempts: u32,
     /// Test-only controller input and observation seam.
     #[cfg(test)]
     adaptive_test_seam: Option<AdaptiveTestSeam>,
@@ -413,9 +462,53 @@ impl IntegratorBuffers {
             h_eff: zero(),
             h_scratch: zero(),
             rhs: zero(),
+            adaptive_attempts: [AdaptiveAttemptRecord::default(); MAX_ADAPTIVE_ATTEMPT_RECORDS],
+            adaptive_attempt_count: 0,
+            adaptive_accepted_attempts: 0,
+            adaptive_rejected_attempts: 0,
             #[cfg(test)]
             adaptive_test_seam: None,
         }
+    }
+
+    pub fn adaptive_attempts(&self) -> &[AdaptiveAttemptRecord] {
+        &self.adaptive_attempts[..self.adaptive_attempt_count]
+    }
+
+    pub fn adaptive_accepted_attempts(&self) -> u32 {
+        self.adaptive_accepted_attempts
+    }
+
+    pub fn adaptive_rejected_attempts(&self) -> u32 {
+        self.adaptive_rejected_attempts
+    }
+
+    pub(crate) fn begin_adaptive_step(&mut self) {
+        self.adaptive_attempt_count = 0;
+        self.adaptive_accepted_attempts = 0;
+        self.adaptive_rejected_attempts = 0;
+        #[cfg(test)]
+        if let Some(seam) = &mut self.adaptive_test_seam {
+            seam.attempt_dts.clear();
+        }
+    }
+
+    pub(crate) fn adaptive_retry_budget_exhausted(&self) -> bool {
+        self.adaptive_rejected_attempts >= 50
+    }
+
+    pub(crate) fn record_adaptive_attempt(&mut self, mut record: AdaptiveAttemptRecord) {
+        if self.adaptive_attempt_count >= MAX_ADAPTIVE_ATTEMPT_RECORDS {
+            return;
+        }
+        record.attempt = self.adaptive_attempt_count as u32 + 1;
+        match record.decision {
+            AdaptiveAttemptDecision::Accepted => self.adaptive_accepted_attempts += 1,
+            AdaptiveAttemptDecision::Retry => self.adaptive_rejected_attempts += 1,
+            AdaptiveAttemptDecision::Failed => {}
+        }
+        self.adaptive_attempts[self.adaptive_attempt_count] = record;
+        self.adaptive_attempt_count += 1;
     }
 
     /// Configure a test-only sequence of adaptive error estimates. Values are

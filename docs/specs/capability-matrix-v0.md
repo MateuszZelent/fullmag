@@ -205,6 +205,20 @@ resolved device-resident operator modes and hot-loop synchronization audit are
 clean; it must not publish `validated` until the documented validation workload
 has passed.
 
+Dla natywnego FEM GPU kwalifikacja receipt ma stan
+`implemented/unvalidated`. Artefakt musi mieć dokładny schemat
+`fullmag.fem_gpu_execution_receipt.native_projection.v1`, projekcję Rust
+`FemGpuExecutionReceipt.v1` i bezstratny handshake append-only ABI v1.
+Wymaga jawnych `requested`, `resolved`, `executed`,
+`execution_class=device_resident`, pełnej równości required/resolved/executed
+device masks, zerowych host/unknown masks, `fallback_count=0`, kompletnych
+liczników accepted/rejected/failed, `accounting_valid=true` oraz zerowych
+compute H2D/D2H/host-sync. Artefakt i parity muszą mieć ten sam
+`source_snapshot_sha256` oraz kompletną listę operator IDs wynikającą z
+required mask. Brak receipt, source-hash mismatch, pole nieznane/niekompletne
+albo `hybrid_cpu_poisson` oznacza fail-closed i nie zmienia statusu na
+`production_executable` lub `validated`.
+
 Canonical references:
 
 - `docs/adr/0014-native-fem-backend-modularization.md`
@@ -536,7 +550,7 @@ timestep policy. Missing or mismatched artifact/source evidence fails closed to
 | explicit fixed | FEM | CPU | single | `unsupported` | absent | unvalidated | native FEM CPU is double-only |
 | explicit fixed | FEM | GPU | double | `production_executable` | executable | unvalidated | native explicit fixed execution; no FP32 implication |
 | explicit fixed | FEM | GPU | single | `unsupported` | absent | unvalidated | no qualified native FEM GPU FP32 lane |
-| explicit adaptive | FDM | CPU | double | `reference_executable` | executable | unvalidated | AoS/SoA contract tests reject above-tolerance attempts at `dt_min` with no state commit; scientific trajectory and guard qualification pending |
+| explicit adaptive | FDM | CPU | double | `reference_executable` | executable | unvalidated | RK23/RK45 AoS, buffer-SoA, and persistent-SoA retries use one bounded controller with typed terminal failure and no trial-state/RNG commit; constant-field Gilbert oracle, exact RHS accounting, durable accepted/terminal attempt traces, and the bounded steady-state allocation/work-to-accuracy gate pass. SoA permits zero measured allocations; parallel AoS permits only the process-measured Rayon scheduler injection budget of at most one allocation per accepted step. Registry promotion remains fail-closed until a clean hash-bound qualification artifact covers the exact integrator/interaction tuple. |
 | explicit adaptive | FDM | CPU | single | `unsupported` | absent | unvalidated | CPU reference is double-only |
 | explicit adaptive | FDM | CUDA | double | `source_visible` | executable | unvalidated | v2 ABI behavior, canonical PI vectors, fixed/adaptive separation, typed floor failure, and batch `dt_next` consumption are contract evidence; guard-enabled policies fail closed; trajectory/trace qualification pending |
 | explicit adaptive | FDM | CUDA | single | `source_visible` | executable | unvalidated | shared PI controller and FP32 compile/contract budget only; guards fail closed; separate runtime accuracy/trajectory qualification pending and no FP64 promotion |
@@ -578,7 +592,7 @@ timestep policy. Missing or mismatched artifact/source evidence fails closed to
 | `LLG` (Heun) | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Heun stepper in `fullmag-engine` |
 | LLG explicit fixed | see LLG time-domain evidence overlay | see LLG time-domain evidence overlay | `unsupported` | lane-specific | Existing fixed execution is retained, but `fix_dt` API/IR round-trip is not complete until Task 5. |
 | LLG explicit adaptive | `source_visible` | `source_visible` | `unsupported` | **`source_visible`** | RK23/RK45 source exists, but production publication is blocked by findings `LLG-TD-API-001` through `LLG-TD-TEST-011`. |
-| LLG timestep qualification registry | implemented, current state `unvalidated` | implemented, current state `unvalidated` | `unsupported` | **fail-closed evidence owner** | Exact lane identity includes integrator and timestep policy. Promotion requires artifact and clean runtime-source hashes, validated scope, timestamp, validator schema, and prerequisite gates; status is exposed unchanged through provenance, API, and Control Room. |
+| LLG timestep qualification registry | implemented, current state `unvalidated` | implemented, current state `unvalidated` | `unsupported` | **fail-closed evidence owner; FEM GPU receipt `implemented/unvalidated`** | Exact lane identity includes integrator and timestep policy. FEM GPU additionally requires source-bound `FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1` with `device_resident`, complete executed-device masks, zero fallback, zero strict compute transfers, matching CPU/GPU source hash, and complete operator IDs. Missing, hybrid, stale, or incomplete evidence fails closed. No fresh managed artifact was produced by this documentation change, so `production_executable` and `validated` remain unchanged. |
 | LLG stiff time-domain | `unsupported` | `unsupported` | `unsupported` | **`unsupported`** | The existing `Relaxation(tangent_plane_implicit)` is an energy minimizer, not full physical-time LLG. No explicit-to-stiff or GPU-to-CPU fallback is legal. |
 | `Relaxation(llg_overdamped)` | FDM CPU reference executable; CUDA development executable | FEM CPU/GPU development executable | planned | **unvalidated** | Shared `StudyIR::Relaxation` with `RelaxStop` and structured execution-owned completion. This is the only relaxation algorithm that owns `dynamics`, RK, `dt`, and a stage-local relaxation clock. No exact source-bound managed receipt exists, so it is not production-qualified. |
 | `Relaxation(projected_gradient_bb)` | FDM CPU reference executable; CUDA development executable | FEM CPU/GPU development executable | **planned** | **unvalidated** | Direct minimization with the physical `mu0 Ms V` energy metric, norm-preserving retraction, and native Armijo/BB control. Its accepted line-search step is in `m/A`; it owns no RK, `dt`, physical time, or pseudo-time. No exact source-bound managed receipt exists for PG-BB, including demag, so it is not production-qualified. Unsupported heterogeneous cellwise FDM CUDA material fields remain fail-closed. |

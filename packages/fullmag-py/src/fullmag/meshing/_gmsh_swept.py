@@ -1400,7 +1400,11 @@ def generate_swept_box_mesh(
 
         # Extract → same pipeline as cylinder
         if airbox is not None:
-            raw_mesh = _extract_mesh_data(gmsh, has_physical_groups=True)
+            raw_mesh = _extract_mesh_data(
+                gmsh,
+                has_physical_groups=True,
+                boundary_role_markers=(10, int(airbox.boundary_marker)),
+            )
             mesh = MeshData(
                 nodes=np.asarray(raw_mesh.nodes, dtype=np.float64) / SCALE,
                 cell_types=raw_mesh.cell_types,

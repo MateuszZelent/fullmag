@@ -116,6 +116,9 @@ public_docs/site/
 
 # Local Windows build/cache outputs; keep these outside the repository.
 /build-contract-wave2/
+/build-target-*/
+/build-volumes/
+/.codex-target-review/
 /antenna-audit-target/
 /cargo-targets/
 /pnpm-store/

@@ -78,12 +78,12 @@ layer.mesh.thin_film(
 study.demag(realization="poisson_robin")
 study.objects.mesh.defaults(
     algorithm_2d=6,
-    algorithm_3d=10,
+    algorithm_3d=1,
     size_factor=1,
     size_from_curvature=0,
     smoothing_steps=4,
-    optimize="Gmsh",
-    optimize_iterations=4,
+    optimize=None,
+    optimize_iterations=0,
     narrow_regions=0,
     compute_quality=True,
     per_element_quality=True,
@@ -91,14 +91,14 @@ study.objects.mesh.defaults(
 study.build_domain_mesh()
 
 # study.solver(dt=1e-18, integrator="heun", g=2.115)
-# study.save("m", every=1e-16)
-# study.save("E_total", every=1e-16)
-study.tableautosave(1e-16, quantities=["t", "step", "mx", "my", "mz", "E_total"])
-
-study.stages.add_minimize(
-    method="bb",
+study.stages.add_relax(
+    stage_id="bimeron_minimize",
+    algorithm="projected_gradient_bb",
     max_steps=MINIMIZE_MAX_STEPS,
     tolA=1e-4,
+).tableautosave(
+    every_steps=1,
+    quantities=["t", "step", "mx", "my", "mz", "E_total"],
 )
 
 # study.stages.add_relax(
