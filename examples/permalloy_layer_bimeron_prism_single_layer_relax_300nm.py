@@ -35,7 +35,7 @@ study.engine("fem")
 study.device("gpu", precision="double")
 study.universe(
     mode="auto",
-    size=(2.0e-6, 2.0e-6, 1.0e-6),
+    size=(2.1e-6, 2.0e-6, 1.0e-6),
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )

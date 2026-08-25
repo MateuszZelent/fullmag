@@ -119,7 +119,7 @@ Model Explorer
 The **Object Mesh Policy** inspector: the *Backend Mesh Parameters* group holds
 the boundary-layer fields; the *Advanced JSON* group accepts the full canonical
 recipe payload (including `operations`). Full panel description:
-{doc}`../../../frontend/meshing/object-mesh`.
+{doc}`../../../../frontend/meshing/object-mesh`.
 
 ## 6. Backend support
 

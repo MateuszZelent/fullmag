@@ -69,7 +69,7 @@ Model Explorer
 
 The **Object Mesh Policy** inspector: the `swept_hex` option appears as
 **unsupported/disabled** — the UI gate refuses to save it. Full panel description:
-{doc}`../../../frontend/meshing/object-mesh`.
+{doc}`../../../../frontend/meshing/object-mesh`.
 
 ## 6. Backend support
 
