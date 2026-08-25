@@ -5527,6 +5527,39 @@ fn validate_native_fem_gpu_engine_runtime_contract(
 }
 
 #[cfg(feature = "fem-gpu")]
+fn validate_strict_native_fem_gpu_execution_mode(
+    engine: FemEngine,
+    execution_mode: ExecutionMode,
+    native_execution_mode: &str,
+) -> Result<(), RunError> {
+    if execution_mode == ExecutionMode::Strict
+        && engine == FemEngine::NativeGpu
+        && native_execution_mode != "all_in_gpu_legacy_sparse"
+    {
+        return Err(RunError {
+            message: format!(
+                "strict native FEM GPU preflight rejected a non-device-resident plan \
+                 (native_execution_mode={}, \
+                 preflight_reason=fem_gpu_strict_preflight_device_residency_unmet)",
+                native_execution_mode,
+            ),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(feature = "fem-gpu")]
+fn create_native_fem_backend_after_strict_gpu_mode_preflight<T>(
+    engine: FemEngine,
+    execution_mode: ExecutionMode,
+    native_execution_mode: &str,
+    create_backend: impl FnOnce() -> Result<T, RunError>,
+) -> Result<T, RunError> {
+    validate_strict_native_fem_gpu_execution_mode(engine, execution_mode, native_execution_mode)?;
+    create_backend()
+}
+
+#[cfg(feature = "fem-gpu")]
 fn validate_strict_native_fem_gpu_preflight(
     engine: FemEngine,
     execution_mode: ExecutionMode,
@@ -5534,12 +5567,11 @@ fn validate_strict_native_fem_gpu_preflight(
     plan: &FemPlanIR,
     gpu_rk_plan: &NativeFemGpuRkPlanInfo,
 ) -> Result<(), RunError> {
+    validate_strict_native_fem_gpu_execution_mode(engine, execution_mode, native_execution_mode)?;
     if execution_mode != ExecutionMode::Strict || engine != FemEngine::NativeGpu {
         return Ok(());
     }
-    if native_execution_mode == "all_in_gpu_legacy_sparse"
-        && native_fem_gpu_rk_plan_is_device_resident_for_plan(plan, gpu_rk_plan)
-    {
+    if native_fem_gpu_rk_plan_is_device_resident_for_plan(plan, gpu_rk_plan) {
         return Ok(());
     }
 
@@ -5566,6 +5598,25 @@ fn validate_strict_native_fem_gpu_preflight(
             }
         ),
     })
+}
+
+#[cfg(feature = "fem-gpu")]
+fn begin_native_fem_stage_after_strict_gpu_preflight(
+    engine: FemEngine,
+    execution_mode: ExecutionMode,
+    native_execution_mode: &str,
+    plan: &FemPlanIR,
+    gpu_rk_plan: &NativeFemGpuRkPlanInfo,
+    begin_stage: impl FnOnce() -> Result<(), RunError>,
+) -> Result<(), RunError> {
+    validate_strict_native_fem_gpu_preflight(
+        engine,
+        execution_mode,
+        native_execution_mode,
+        plan,
+        gpu_rk_plan,
+    )?;
+    begin_stage()
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -5842,17 +5893,14 @@ fn execute_native_fem(
         !field_schedules.is_empty(),
     );
 
-    let mut backend =
-        NativeFemBackend::create_with_initial_effective_field(plan, needs_initial_snapshot)?;
     let native_execution_mode = native_fem_execution_mode(plan);
-    let gpu_rk_plan_info = backend.gpu_rk_plan_info()?;
-    validate_strict_native_fem_gpu_preflight(
+    let mut backend = create_native_fem_backend_after_strict_gpu_mode_preflight(
         engine,
         execution_mode,
         native_execution_mode,
-        plan,
-        &gpu_rk_plan_info,
+        || NativeFemBackend::create_with_initial_effective_field(plan, needs_initial_snapshot),
     )?;
+    let gpu_rk_plan_info = backend.gpu_rk_plan_info()?;
     if let Some(provider) =
         StageOerstedProvider::from_plan_with_coupled(plan, coupled_stage_provider.clone())?
     {
@@ -5878,7 +5926,14 @@ fn execute_native_fem(
             message: "FEM stage transport callback was requested by the planner but no provider could be materialized".into(),
         });
     }
-    backend.begin_stage(plan.time_stage.start_time_s)?;
+    begin_native_fem_stage_after_strict_gpu_preflight(
+        engine,
+        execution_mode,
+        native_execution_mode,
+        plan,
+        &gpu_rk_plan_info,
+        || backend.begin_stage(plan.time_stage.start_time_s),
+    )?;
     let device_info = backend.device_info()?;
     let gpu_state_info = backend.gpu_state_info()?;
     validate_native_fem_gpu_engine_runtime_contract(engine, &gpu_rk_plan_info)?;
@@ -8073,19 +8128,36 @@ mod tests {
 
     #[cfg(feature = "fem-gpu")]
     #[test]
-    fn strict_native_gpu_preflight_rejects_hybrid_or_incomplete_plans() {
+    fn strict_native_gpu_preflight_rejects_before_lifecycle_mutation() {
+        #[derive(Default)]
+        struct RecordingLifecycle {
+            backend_creation: u8,
+            begin_stage: u8,
+            step: u8,
+            receipt: u8,
+            provenance: u8,
+        }
+
         let mut plan = tiny_fem_plan();
         plan.mfem_device_string = Some("cuda".to_string());
         let mut incomplete = gpu_rk_ready_plan_for_log_test();
         incomplete.stage_exchange_device_resident = false;
         incomplete.reason = "stage H_ex is not device-resident".to_string();
 
-        let incomplete_err = validate_strict_native_fem_gpu_preflight(
+        let mut rejected_lifecycle = RecordingLifecycle::default();
+        let incomplete_err = begin_native_fem_stage_after_strict_gpu_preflight(
             FemEngine::NativeGpu,
             ExecutionMode::Strict,
             "all_in_gpu_legacy_sparse",
             &plan,
             &incomplete,
+            || {
+                rejected_lifecycle.begin_stage += 1;
+                rejected_lifecycle.step += 1;
+                rejected_lifecycle.receipt += 1;
+                rejected_lifecycle.provenance += 1;
+                Ok(())
+            },
         )
         .expect_err("strict native GPU must reject an incomplete device-resident plan");
         assert!(incomplete_err
@@ -8094,18 +8166,34 @@ mod tests {
         assert!(incomplete_err
             .message
             .contains("stage_exchange_device_resident=false"));
+        assert_eq!(rejected_lifecycle.begin_stage, 0);
+        assert_eq!(rejected_lifecycle.step, 0);
+        assert_eq!(rejected_lifecycle.receipt, 0);
+        assert_eq!(rejected_lifecycle.provenance, 0);
 
-        let hybrid_err = validate_strict_native_fem_gpu_preflight(
+        let mut hybrid_lifecycle = RecordingLifecycle::default();
+        let hybrid_err = create_native_fem_backend_after_strict_gpu_mode_preflight(
             FemEngine::NativeGpu,
             ExecutionMode::Strict,
             "hybrid_legacy_sparse",
-            &plan,
-            &gpu_rk_ready_plan_for_log_test(),
+            || {
+                hybrid_lifecycle.backend_creation += 1;
+                hybrid_lifecycle.begin_stage += 1;
+                hybrid_lifecycle.step += 1;
+                hybrid_lifecycle.receipt += 1;
+                hybrid_lifecycle.provenance += 1;
+                Ok(())
+            },
         )
         .expect_err("strict native GPU must reject a hybrid runtime plan");
         assert!(hybrid_err
             .message
             .contains("native_execution_mode=hybrid_legacy_sparse"));
+        assert_eq!(hybrid_lifecycle.backend_creation, 0);
+        assert_eq!(hybrid_lifecycle.begin_stage, 0);
+        assert_eq!(hybrid_lifecycle.step, 0);
+        assert_eq!(hybrid_lifecycle.receipt, 0);
+        assert_eq!(hybrid_lifecycle.provenance, 0);
 
         assert!(validate_strict_native_fem_gpu_preflight(
             FemEngine::CpuNative,
@@ -8123,6 +8211,26 @@ mod tests {
             &incomplete,
         )
         .is_ok());
+
+        let mut accepted_lifecycle = RecordingLifecycle::default();
+        let mut exchange_only = gpu_rk_ready_plan_for_log_test();
+        exchange_only.uses_gpu_poisson = false;
+        exchange_only.demag_operator_mode = "none".to_string();
+        exchange_only.hypre_execution_policy = "none".to_string();
+        exchange_only.demag_residency = "none".to_string();
+        assert!(begin_native_fem_stage_after_strict_gpu_preflight(
+            FemEngine::NativeGpu,
+            ExecutionMode::Strict,
+            "all_in_gpu_legacy_sparse",
+            &plan,
+            &exchange_only,
+            || {
+                accepted_lifecycle.begin_stage += 1;
+                Ok(())
+            },
+        )
+        .is_ok());
+        assert_eq!(accepted_lifecycle.begin_stage, 1);
     }
 
     #[cfg(feature = "fem-gpu")]
@@ -10830,8 +10938,14 @@ mod tests {
             .map(|offset| start + offset)
             .expect("execute_fem_with_registry should follow execute_native_fem");
         let execute_native_source = &source[start..end];
+        let mode_preflight = execute_native_source
+            .find("create_native_fem_backend_after_strict_gpu_mode_preflight")
+            .expect("strict native GPU execution must preflight hybrid mode before backend creation");
+        let backend_creation = execute_native_source
+            .find("NativeFemBackend::create_with_initial_effective_field")
+            .expect("native FEM must create a backend after mode preflight");
         let strict_preflight = execute_native_source
-            .find("validate_strict_native_fem_gpu_preflight")
+            .find("begin_native_fem_stage_after_strict_gpu_preflight")
             .expect("strict native GPU execution must preflight device residency");
         let begin_stage = execute_native_source
             .find("backend.begin_stage")
@@ -10844,7 +10958,8 @@ mod tests {
             .expect("native FEM must materialize execution provenance");
 
         assert!(
-            strict_preflight < begin_stage
+            mode_preflight < backend_creation
+                && strict_preflight < begin_stage
                 && begin_stage < execution_engine
                 && execution_engine < provenance,
             "a strict native GPU plan must fail before stage lifecycle or provenance is published"
