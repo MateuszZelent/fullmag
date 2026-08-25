@@ -761,6 +761,40 @@ def _validate_declared_mesh_operations(
         )
 
 
+def _validate_per_object_recipe_operations(
+    per_object_recipes: Mapping[str, PerObjectMeshRecipe] | None,
+) -> None:
+    """Reject operation sequences authored directly on object recipes."""
+    if not isinstance(per_object_recipes, Mapping):
+        return
+
+    for geometry_name, recipe in per_object_recipes.items():
+        operations = getattr(recipe, "operations", None)
+        if operations is None:
+            continue
+        if not isinstance(operations, list):
+            raise ValueError(
+                "mesh operation executor unavailable: operations for scope "
+                f"{geometry_name!r} must be a list"
+            )
+        for index, operation in enumerate(operations):
+            kind = (
+                operation.get("kind")
+                if isinstance(operation, Mapping)
+                else getattr(operation, "kind", None)
+            )
+            if not isinstance(kind, str) or not kind.strip():
+                raise ValueError(
+                    "mesh operation executor unavailable: operation kind for "
+                    f"scope {geometry_name!r}[{index}] must be a non-empty string"
+                )
+            raise ValueError(
+                "mesh operation executor unavailable: "
+                f"kind={kind.strip()!r} scope={str(geometry_name).strip()!r}; "
+                "shared-domain realization has no validated executor for authored operations"
+            )
+
+
 def _frozen_magnetic_submesh_air_mesh_source(
     mesh_workflow: Mapping[str, object] | None,
 ) -> str | None:
@@ -2301,6 +2335,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
     if not geometries:
         raise ValueError("shared FEM domain mesh requires at least one geometry")
     _validate_declared_mesh_operations(mesh_workflow)
+    _validate_per_object_recipe_operations(per_object_recipes)
     frozen_payload = _validate_domain_mesh_workflow(mesh_workflow)
 
     airbox = _study_universe_airbox_options(geometries, study_universe)

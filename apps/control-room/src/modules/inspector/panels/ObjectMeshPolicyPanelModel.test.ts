@@ -376,6 +376,40 @@ describe("ObjectMeshPolicyPanelModel", () => {
     });
   });
 
+  it("preserves a complete raw prism tuple when structured controls are blank", () => {
+    const rawConfig = {
+      mesh_strategy: "swept_prism",
+      topology: "prismatic",
+      element_family: "prism",
+      order: 1,
+      sweep_direction: "y",
+      sweep_face_meshing: "triangular",
+      through_thickness_distribution: "geometric",
+      through_thickness_element_ratio: 1.25,
+      through_thickness_elements: 2,
+      through_thickness_symmetric: true,
+      transition_policy: "pyramid_to_tetrahedra",
+      exact_layer_count: true,
+    };
+
+    const result = buildObjectMeshPolicyReplaceRequest(objectMeshPolicyDraft({
+      configText: JSON.stringify(rawConfig),
+      exactLayerCount: "",
+      meshStrategy: "",
+      order: "",
+      sweepFaceMeshing: "",
+      throughThicknessDistribution: "",
+      throughThicknessElementRatio: "",
+      throughThicknessElements: "",
+      throughThicknessSymmetric: "",
+      topology: "",
+      transitionPolicy: "",
+      present: true,
+    }));
+
+    expect(result).toMatchObject({ request: { config: rawConfig } });
+  });
+
   it("rejects per-object imported mesh sources from structured and Advanced JSON input", () => {
     const expected = {
       error:

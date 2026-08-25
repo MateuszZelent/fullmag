@@ -70,7 +70,11 @@ from fullmag.meshing._gmsh_extraction import (
     _extract_gmsh_typed_connectivity,
     _orient_periodic_boundary_faces,
 )
-from fullmag.model.discretization import PerObjectMeshRecipe, SharedMeshAssemblyPolicy
+from fullmag.model.discretization import (
+    MeshOperation,
+    PerObjectMeshRecipe,
+    SharedMeshAssemblyPolicy,
+)
 from fullmag.meshing.gmsh_bridge import (
     ALGO_3D_DELAUNAY,
     ALGO_3D_FRONTAL,
@@ -330,6 +334,14 @@ class LayeredMeshDslValidationTests(unittest.TestCase):
         self.assertEqual((recipe.algorithm_2d, recipe.algorithm_3d), (6, 10))
         self.assertIs(type(recipe.algorithm_2d), int)
         self.assertIs(type(recipe.algorithm_3d), int)
+        recipe = PerObjectMeshRecipe(
+            size_from_curvature=np.int64(6),
+            narrow_regions=np.int64(10),
+        )
+        self.assertEqual((recipe.size_from_curvature, recipe.narrow_regions), (6, 10))
+        self.assertIs(type(recipe.size_from_curvature), int)
+        self.assertIs(type(recipe.narrow_regions), int)
+        json.dumps(recipe.to_ir())
         self.assertEqual(PerObjectMeshRecipe(smoothing_steps=0).smoothing_steps, 0)
 
     def test_shared_mesh_assembly_policy_rejects_invalid_contract_values(self) -> None:
@@ -6042,6 +6054,23 @@ class MeshScaffoldTests(unittest.TestCase):
                     "operations": [
                         {"geometry": "film", "kind": "refine", "params": {"steps": 1}}
                     ],
+                },
+            )
+
+    def test_direct_per_object_mesh_operation_without_executor_fails_closed(self) -> None:
+        film = fm.Box(size=(200e-9, 200e-9, 10e-9), name="film")
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "mesh operation executor unavailable: kind='refine' scope='film'",
+        ):
+            realize_fem_domain_mesh_asset_from_components_with_report(
+                [film],
+                fm.FEM(order=1, hmax=20e-9),
+                per_object_recipes={
+                    "film": PerObjectMeshRecipe(
+                        operations=[MeshOperation(kind="refine")]
+                    )
                 },
             )
 

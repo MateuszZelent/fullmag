@@ -502,6 +502,12 @@ export function buildObjectMeshPolicyReplaceRequest({
   const config = parseConfig(configText);
   if (!config.ok) return { error: config.error };
   const value = { ...config.value };
+  const preserveRawLayeredPrism =
+    value.mesh_strategy === "swept_prism" && !meshStrategy.trim();
+  const preserveRawLayeredPrismField = (key: string, text: string): boolean =>
+    preserveRawLayeredPrism &&
+    !text.trim() &&
+    Object.prototype.hasOwnProperty.call(value, key);
   const advancedSource = value.source;
   if (
     source.trim() ||
@@ -575,6 +581,7 @@ export function buildObjectMeshPolicyReplaceRequest({
   ];
 
   for (const [key, text, label, integer, allowZero] of numericFields) {
+    if (preserveRawLayeredPrismField(key, text)) continue;
     if (
       key === "through_thickness_elements" &&
       !text.trim() &&
@@ -631,24 +638,57 @@ export function buildObjectMeshPolicyReplaceRequest({
   ) {
     applyOptionalString(value, "mesh_strategy", meshStrategy);
   }
-  applyOptionalString(value, "topology", topology);
-  applyOptionalString(value, "transition_policy", transitionPolicy);
+  applyOptionalString(
+    value,
+    "topology",
+    topology,
+    preserveRawLayeredPrismField("topology", topology),
+  );
+  applyOptionalString(
+    value,
+    "transition_policy",
+    transitionPolicy,
+    preserveRawLayeredPrismField("transition_policy", transitionPolicy),
+  );
   applyOptionalString(value, "optimize", optimize);
   applyOptionalString(value, "source", source);
   applyOptionalString(
     value,
     "through_thickness_distribution",
     throughThicknessDistribution,
+    preserveRawLayeredPrismField(
+      "through_thickness_distribution",
+      throughThicknessDistribution,
+    ),
   );
-  applyOptionalString(value, "sweep_face_meshing", sweepFaceMeshing);
-  applyOptionalString(value, "sweep_source", sweepSource);
-  applyOptionalString(value, "sweep_destination", sweepDestination);
+  applyOptionalString(
+    value,
+    "sweep_face_meshing",
+    sweepFaceMeshing,
+    preserveRawLayeredPrismField("sweep_face_meshing", sweepFaceMeshing),
+  );
+  applyOptionalString(
+    value,
+    "sweep_source",
+    sweepSource,
+    preserveRawLayeredPrismField("sweep_source", sweepSource),
+  );
+  applyOptionalString(
+    value,
+    "sweep_destination",
+    sweepDestination,
+    preserveRawLayeredPrismField("sweep_destination", sweepDestination),
+  );
   applyOptionalString(value, "calibrate_for", calibrateFor);
   applyOptionalString(value, "size_preset", sizePreset);
   applyOptionalBoolean(
     value,
     "through_thickness_symmetric",
     throughThicknessSymmetric,
+    preserveRawLayeredPrismField(
+      "through_thickness_symmetric",
+      throughThicknessSymmetric,
+    ),
   );
   if (
     exactLayerCount.trim() ||
@@ -1415,9 +1455,13 @@ function applyOptionalString(
   config: JsonObject,
   key: string,
   value: string,
+  preserveExistingWhenBlank = false,
 ): void {
   const trimmed = value.trim();
   if (!trimmed) {
+    if (preserveExistingWhenBlank && Object.prototype.hasOwnProperty.call(config, key)) {
+      return;
+    }
     delete config[key];
     return;
   }
@@ -1429,9 +1473,13 @@ function applyOptionalBoolean(
   config: JsonObject,
   key: string,
   value: string,
+  preserveExistingWhenBlank = false,
 ): void {
   const trimmed = value.trim();
   if (!trimmed) {
+    if (preserveExistingWhenBlank && Object.prototype.hasOwnProperty.call(config, key)) {
+      return;
+    }
     delete config[key];
     return;
   }

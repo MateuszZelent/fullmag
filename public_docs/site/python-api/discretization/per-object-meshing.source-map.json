@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/discretization/per-object-meshing.md",
-    "reviewed_revision": "888a82b9c4b0fea3bca4d7fff973f629c7080409"
+    "reviewed_revision": "398bd26fedaed39bd9b70ada1509f220894d6f4c"
   },
   "backend_matrix": [
     {
@@ -99,7 +99,7 @@
       {"python":"PerObjectMeshRecipe.growth_rate","type":"float | None","default":"None","si_unit":"1","validation":"Positive; stage-first facade limits the practical range.","meaning":"Maximum requested local size growth.","backend_support":"FEM","problem_ir":"mesh_workflow.per_geometry.<object>.growth_rate"},
       {"python":"PerObjectMeshRecipe.narrow_regions","type":"int | None","default":"None","si_unit":"1","validation":"Integer at least zero.","meaning":"Gmsh narrow-region sizing switch/count.","backend_support":"FEM/Gmsh","problem_ir":"mesh_workflow.per_geometry.<object>.narrow_regions"},
       {"python":"PerObjectMeshRecipe.narrow_region_resolution","type":"float | None","default":"None","si_unit":"1","validation":"Positive when authored.","meaning":"Narrow-region resolution target.","backend_support":"FEM","problem_ir":"mesh_workflow.per_geometry.<object>.narrow_region_resolution"},
-      {"python":"PerObjectMeshRecipe.smoothing_steps","type":"int | None","default":"None","si_unit":"1","validation":"Positive integer when authored.","meaning":"Gmsh smoothing passes.","backend_support":"FEM/Gmsh","problem_ir":"mesh_workflow.per_geometry.<object>.smoothing_steps"},
+      {"python":"PerObjectMeshRecipe.smoothing_steps","type":"int | None","default":"None","si_unit":"1","validation":"Nonnegative integer when authored; zero disables smoothing.","meaning":"Gmsh smoothing passes.","backend_support":"FEM/Gmsh","problem_ir":"mesh_workflow.per_geometry.<object>.smoothing_steps"},
       {"python":"PerObjectMeshRecipe.optimize","type":"str | None","default":"None","si_unit":"1","validation":"Optimizer must be supported by the active Gmsh path.","meaning":"Post-generation optimizer.","backend_support":"FEM/Gmsh","problem_ir":"mesh_workflow.per_geometry.<object>.optimize"},
       {"python":"PerObjectMeshRecipe.optimize_iters","type":"int | None","default":"None","si_unit":"1","validation":"Positive integer when authored.","meaning":"Optimizer iteration count.","backend_support":"FEM/Gmsh","problem_ir":"mesh_workflow.per_geometry.<object>.optimize_iters"},
       {"python":"PerObjectMeshRecipe.boundary_layer_count","type":"int | None","default":"None","si_unit":"1","validation":"Positive integer when authored.","meaning":"Boundary-layer element count.","backend_support":"FEM/Gmsh selector-gated","problem_ir":"mesh_workflow.per_geometry.<object>.boundary_layer_count"},

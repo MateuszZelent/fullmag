@@ -193,7 +193,8 @@ pyramid-to-tetra transition.
 | `MeshOperation.enabled` | `bool` | `True` | disabled operations remain authored but are not executed |
 
 Operations are representable as authored intent, but the current public build boundary rejects any
-nonempty operation list with `mesh operation executor unavailable`, including disabled entries.
+nonempty operation list with `mesh operation executor unavailable`, including disabled entries and
+operations supplied directly through `per_object_recipes`.
 Consequently `refine`, `adapt`, `swept`, and `size_field` do not currently reach execution or report
 classification. An empty operation list is required for an executable public build.
 
@@ -427,7 +428,7 @@ layer convergence rather than treating one layer as universally sufficient.
 | PerObjectMeshRecipe.growth_rate | float \| None | None | $1$ | Positive; stage-first facade limits the practical range. | Maximum requested local size growth. | FEM | mesh_workflow.per_geometry.<object>.growth_rate |
 | PerObjectMeshRecipe.narrow_regions | int \| None | None | $1$ | Integer at least zero. | Gmsh narrow-region sizing switch/count. | FEM/Gmsh | mesh_workflow.per_geometry.<object>.narrow_regions |
 | PerObjectMeshRecipe.narrow_region_resolution | float \| None | None | $1$ | Positive when authored. | Narrow-region resolution target. | FEM | mesh_workflow.per_geometry.<object>.narrow_region_resolution |
-| PerObjectMeshRecipe.smoothing_steps | int \| None | None | $1$ | Positive integer when authored. | Gmsh smoothing passes. | FEM/Gmsh | mesh_workflow.per_geometry.<object>.smoothing_steps |
+| PerObjectMeshRecipe.smoothing_steps | int \| None | None | $1$ | Nonnegative integer when authored; zero disables smoothing. | Gmsh smoothing passes. | FEM/Gmsh | mesh_workflow.per_geometry.<object>.smoothing_steps |
 | PerObjectMeshRecipe.optimize | str \| None | None | $1$ | Optimizer must be supported by the active Gmsh path. | Post-generation optimizer. | FEM/Gmsh | mesh_workflow.per_geometry.<object>.optimize |
 | PerObjectMeshRecipe.optimize_iters | int \| None | None | $1$ | Positive integer when authored. | Optimizer iteration count. | FEM/Gmsh | mesh_workflow.per_geometry.<object>.optimize_iters |
 | PerObjectMeshRecipe.boundary_layer_count | int \| None | None | $1$ | Positive integer when authored. | Boundary-layer element count. | FEM/Gmsh selector-gated | mesh_workflow.per_geometry.<object>.boundary_layer_count |

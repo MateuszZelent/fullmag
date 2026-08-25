@@ -447,9 +447,9 @@ contract and exposes object/region mesh membership read-only in the Control Room
 | MeshSizeControls.maximum_element_growth_rate | float \| None | None | $1$ | Standalone compatibility payload; constructor does not validate it. | Element-growth data. | Unattached | none |
 | MeshSizeControls.curvature_factor | float \| None | None | $1$ | Standalone compatibility payload; constructor does not validate it. | Curvature-sizing data. | Unattached | none |
 | MeshSizeControls.narrow_region_resolution | float \| None | None | $1$ | Standalone compatibility payload; constructor does not validate it. | Narrow-region data. | Unattached | none |
-| SharedMeshAssemblyPolicy.interface_hmax_factor | float | 0.5 | $1$ | Strictly greater than zero and no greater than one. | Preserved compatibility value; not consumed by the current builder. | Inert compatibility data | shared_mesh_assembly_policy.interface_hmax_factor |
-| SharedMeshAssemblyPolicy.enforce_conforming | bool | True | $1$ | Boolean. | Preserved compatibility value; not consumed by the current builder. | Inert compatibility data | shared_mesh_assembly_policy.enforce_conforming |
-| SharedMeshAssemblyPolicy.airbox_hmax_factor | float | 3.0 | $1$ | Finite and positive. | Preserved compatibility value; not consumed by the current builder. | Inert compatibility data | shared_mesh_assembly_policy.airbox_hmax_factor |
+| SharedMeshAssemblyPolicy.interface_hmax_factor | float | 0.5 | $1$ | Strictly greater than zero and no greater than one. | Preserved compatibility value; not consumed by the current builder. | Inert compatibility data | none |
+| SharedMeshAssemblyPolicy.enforce_conforming | bool | True | $1$ | Boolean. | Preserved compatibility value; not consumed by the current builder. | Inert compatibility data | none |
+| SharedMeshAssemblyPolicy.airbox_hmax_factor | float | 3.0 | $1$ | Finite and positive. | Preserved compatibility value; not consumed by the current builder. | Inert compatibility data | none |
 
 ## Source-code index
 

@@ -815,6 +815,7 @@ class PerObjectMeshRecipe:
                 raise TypeError(f"{field_name} must be an integer")
             if value < 0:
                 raise ValueError(f"{field_name} must be >= 0")
+            object.__setattr__(self, field_name, int(value))
 
         for field_name in ("optimize_iters", "boundary_layer_count"):
             value = getattr(self, field_name)
