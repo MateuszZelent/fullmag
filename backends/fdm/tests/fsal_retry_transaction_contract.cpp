@@ -353,6 +353,13 @@ int main() {
     const auto abm3_32 = read(fdm / "gpu/cuda/integrators/llg_abm3_fp32.cu");
     const auto header = read(root / "native/include/fullmag_fdm.h");
     const auto rust = read(root / "crates/fullmag-fdm-sys/src/lib.rs");
+    const auto fsal_telemetry_v2_begin =
+        header.find("#define FULLMAG_FDM_FSAL_TELEMETRY_ABI_V2");
+    const auto fsal_telemetry_v2_end =
+        header.find("} fullmag_fdm_fsal_telemetry_v2;", fsal_telemetry_v2_begin);
+    const auto fsal_telemetry_v2_declaration = header.substr(
+        fsal_telemetry_v2_begin,
+        fsal_telemetry_v2_end - fsal_telemetry_v2_begin);
     const auto runner = read(
         root / "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs");
     const std::string integrators = rk23_64 + rk23_32 + dp45_64 + dp45_32;
@@ -585,6 +592,16 @@ int main() {
             contains(rust, "pub transaction_commit_count"),
         "FDM-GPU-NUM-003-E",
         "typed C/Rust telemetry exposes reuse, invalidation, RNG and transaction proof",
+        failures);
+    report(
+        contains(header, "FULLMAG_FDM_STEP_TRANSACTION_TELEMETRY_ABI_V1") &&
+            contains(header, "fullmag_fdm_step_transaction_telemetry_v1") &&
+            contains(header,
+                "fullmag_fdm_backend_get_step_transaction_telemetry_v1") &&
+            !contains(fsal_telemetry_v2_declaration,
+                "fullmag_fdm_step_transaction_telemetry_v1"),
+        "FDM-GPU-TRX-001-A",
+        "step transaction telemetry must have an independent public ABI",
         failures);
 
     static_assert(sizeof(fullmag_fdm_step_stats) == 192,

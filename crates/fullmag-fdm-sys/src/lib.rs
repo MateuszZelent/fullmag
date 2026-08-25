@@ -725,6 +725,27 @@ pub struct fullmag_fdm_fsal_telemetry_v2 {
     pub invalidation_reason_counts: [u64; FULLMAG_FDM_FSAL_INVALIDATION_REASON_COUNT],
 }
 
+pub const FULLMAG_FDM_STEP_TRANSACTION_TELEMETRY_ABI_V1: u32 = 1;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_step_transaction_telemetry_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub accounting_valid: u32,
+    pub reserved0: u32,
+    pub capture_count: u64,
+    pub rollback_count: u64,
+    pub capture_d2d_bytes: u64,
+    pub rollback_d2d_bytes: u64,
+    pub rollback_latency_total_ns: u64,
+    pub rollback_latency_max_ns: u64,
+    pub accepted_step_index: u64,
+    pub attempt_generation: u64,
+    pub thermal_rng_draws: u64,
+    pub stale_publication_count: u64,
+}
+
 pub const FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1: u32 = 1;
 pub const FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2: u32 = 2;
 pub type fullmag_fdm_execution_class_v1 = u32;
@@ -1521,6 +1542,11 @@ extern "C" {
         out_telemetry: *mut fullmag_fdm_fsal_telemetry_v2,
     ) -> i32;
 
+    pub fn fullmag_fdm_backend_get_step_transaction_telemetry_v1(
+        handle: *mut fullmag_fdm_backend,
+        out_telemetry: *mut fullmag_fdm_step_transaction_telemetry_v1,
+    ) -> i32;
+
     pub fn fullmag_fdm_backend_set_interrupt_poll(
         handle: *mut fullmag_fdm_backend,
         poll_fn: fullmag_fdm_interrupt_poll_fn,
@@ -2233,6 +2259,26 @@ mod tests {
             *mut fullmag_fdm_backend,
             *mut fullmag_fdm_fsal_telemetry_v2,
         ) -> i32 = fullmag_fdm_backend_get_fsal_telemetry_v2;
+    }
+
+    #[test]
+    fn step_transaction_telemetry_v1_has_frozen_layout_and_ffi_symbol() {
+        assert_eq!(size_of::<fullmag_fdm_step_transaction_telemetry_v1>(), 96);
+        assert_eq!(
+            offset_of!(fullmag_fdm_step_transaction_telemetry_v1, capture_count),
+            16
+        );
+        assert_eq!(
+            offset_of!(
+                fullmag_fdm_step_transaction_telemetry_v1,
+                stale_publication_count
+            ),
+            88
+        );
+        let _query: unsafe extern "C" fn(
+            *mut fullmag_fdm_backend,
+            *mut fullmag_fdm_step_transaction_telemetry_v1,
+        ) -> i32 = fullmag_fdm_backend_get_step_transaction_telemetry_v1;
     }
 
     #[test]
