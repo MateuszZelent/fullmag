@@ -273,9 +273,9 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 
 ## Related documentation
 
-- [Swept prism](swept-prism.html)
-- [Imported mesh](imported-mesh.html)
-- [Shared-domain conformity](../shared-domain/assembly-and-conformity.html)
+- [Swept prism](swept-prism.md)
+- [Imported mesh](imported-mesh.md)
+- [Shared-domain conformity](../shared-domain/assembly-and-conformity.md)
 
 ## References
 

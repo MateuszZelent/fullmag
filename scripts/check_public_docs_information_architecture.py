@@ -33,6 +33,12 @@ def _front_matter_status(path: Path) -> str | None:
             break
         if stripped.startswith("status:"):
             value = stripped.partition(":")[2].strip()
+            if (
+                len(value) >= 2
+                and value[0] == value[-1]
+                and value[0] in {"'", '"'}
+            ):
+                value = value[1:-1]
             return value or None
     return None
 
