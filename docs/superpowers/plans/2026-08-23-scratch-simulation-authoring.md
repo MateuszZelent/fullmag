@@ -901,3 +901,6 @@ FEM w kanonicznym managed runtime.
 - Nie uruchamiam hostowego ani ręcznie składanego buildu jako substytutu; po
   dostarczeniu poprawnego obrazu/storage należy wykonać `just ensure-managed-fem-runtime`,
   następnie managed FEM smoke i `mesh_build`/`relax` qualification.
+- Bieżący re-run dowodów semantycznych: helper browser **7/7 PASS**, Python
+  UI→ProblemIR **9 passed**. Targeted Rust API przekroczył 5-minutowy limit
+  cache D: bez wyniku i pozostaje do odtworzenia w poprawnym środowisku.

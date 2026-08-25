@@ -544,3 +544,10 @@ pozostaje zwykłym katalogiem na głównym systemie ext4. Brakuje również
 `/zfn2/mateuszz/git/fullmag/runtimes/fem-gpu-host-latest.tar` oraz aktywnego
 `.fullmag/runtimes/fem-gpu-host`. Receptura `ensure-managed-fem-runtime` nie
 może więc odtworzyć ani zwalidować bundla bez zewnętrznego obrazu/storage.
+
+Weryfikacja semantyczna po wznowieniu: `scratch-authoring-browser.test.mjs`
+**7/7 PASS**, a `test_scratch_authoring_ui_roundtrip.py` **9 passed** przy
+użyciu zgodnego środowiska `uv`. Próba targeted `cargo test -p fullmag-api
+create_scratch_session` na cache D: przekroczyła limit 5 minut bez wyniku;
+nie używam jej jako dowodu sukcesu i nie zastępuję nią wymaganej ścieżki
+container-backed `just`.
