@@ -4,6 +4,7 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+source_of_truth: docs/physics/0531-versioned-magnetic-preset-textures.md
 ---
 
 (public-docs-python-api-mumax3-texture-compatibility)=
