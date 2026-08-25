@@ -23,6 +23,7 @@ use fullmag_ir::{
     ResolvedSpinInterfaceLawIR, StructuredBoundaryFaceIR,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::types::RunError;
 
@@ -247,6 +248,7 @@ pub(crate) struct FdmSpinTransportWorkflow {
     transient_stage_one_residuals: BTreeMap<String, Vec<[f64; 3]>>,
     accepted_steps: u64,
     rejected_steps: u64,
+    rollback_count: u64,
     error_controller: TransientErrorControllerState,
     checkpoint_identity: FdmCoupledCheckpointIdentity,
     charge_nonlinear_history: BTreeMap<String, Vec<f64>>,
@@ -464,12 +466,26 @@ pub(crate) struct FdmCoupledCheckpoint {
     pub refresh_count: u64,
     pub accepted_steps: u64,
     pub rejected_steps: u64,
+    #[serde(default)]
+    pub rollback_count: u64,
     pub error_controller: TransientErrorControllerState,
     pub charge_nonlinear_history: BTreeMap<String, Vec<f64>>,
     pub telemetry_cursor: u64,
     pub thermal_rng_algorithm: String,
     pub thermal_seed: u64,
     pub thermal_counter: u64,
+    #[serde(default)]
+    pub payload_sha256: String,
+}
+
+fn coupled_checkpoint_payload_sha256(
+    checkpoint: &FdmCoupledCheckpoint,
+) -> Result<String, RunError> {
+    let mut canonical = checkpoint.clone();
+    canonical.payload_sha256.clear();
+    let payload = serde_json::to_vec(&canonical)
+        .map_err(|error| run_error(format!("serializing coupled checkpoint digest: {error}")))?;
+    Ok(format!("{:x}", Sha256::digest(payload)))
 }
 
 pub(crate) fn validate_coupled_m3_checkpoint_value(
@@ -569,6 +585,19 @@ fn validate_complete_coupled_checkpoint(
     checkpoint: &FdmCoupledCheckpoint,
     vector_count: usize,
 ) -> Result<(), RunError> {
+    if checkpoint.payload_sha256.len() != 64
+        || !checkpoint
+            .payload_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(run_error(
+            "coupled checkpoint payload_sha256 is missing or malformed",
+        ));
+    }
+    if coupled_checkpoint_payload_sha256(checkpoint)? != checkpoint.payload_sha256 {
+        return Err(run_error("coupled checkpoint payload_sha256 mismatch"));
+    }
     let valid_vectors = |values: &[[f64; 3]]| {
         values.len() == vector_count && values.iter().flatten().all(|value| value.is_finite())
     };
@@ -897,6 +926,7 @@ impl FdmSpinTransportWorkflow {
             transient_stage_one_residuals: BTreeMap::new(),
             accepted_steps: 0,
             rejected_steps: 0,
+            rollback_count: 0,
             error_controller: TransientErrorControllerState {
                 next_dt_s,
                 last_normalized_error: 0.0,
@@ -1131,13 +1161,20 @@ impl FdmSpinTransportWorkflow {
     /// Discard uncommitted stage evaluations. Accepted state is immutable
     /// until a newer evaluation is explicitly committed.
     pub(crate) fn rollback(&mut self) {
-        if let Some((next_revision, refresh_count)) = self.attempt_checkpoint.take() {
-            self.next_revision = next_revision;
-            self.refresh_count = refresh_count;
-        }
+        let rolled_back =
+            if let Some((next_revision, refresh_count)) = self.attempt_checkpoint.take() {
+                self.next_revision = next_revision;
+                self.refresh_count = refresh_count;
+                true
+            } else {
+                false
+            };
         self.transient_attempt_origin = None;
         self.transient_candidates.clear();
         self.transient_stage_one_residuals.clear();
+        if rolled_back {
+            self.rollback_count = self.rollback_count.saturating_add(1);
+        }
     }
 
     pub(crate) fn accepted(&self) -> Option<&FdmSpinTransportEvaluation> {
@@ -1150,6 +1187,10 @@ impl FdmSpinTransportWorkflow {
 
     pub(crate) fn rejected_steps(&self) -> u64 {
         self.rejected_steps
+    }
+
+    pub(crate) fn absorb_rollback_telemetry(&mut self, trial: &Self) {
+        self.rollback_count = self.rollback_count.max(trial.rollback_count);
     }
 
     pub(crate) fn set_step_counters(&mut self, accepted_steps: u64, rejected_steps: u64) {
@@ -1214,7 +1255,7 @@ impl FdmSpinTransportWorkflow {
                 "coupled checkpoint magnetization/history shape is invalid",
             ));
         }
-        Ok(FdmCoupledCheckpoint {
+        let mut checkpoint = FdmCoupledCheckpoint {
             schema: "fullmag.fdm.coupled_m3_checkpoint.v1".into(),
             problem_ir_abi: "fullmag.problem_ir.v1".into(),
             scalar_layout: "f64".into(),
@@ -1234,13 +1275,17 @@ impl FdmSpinTransportWorkflow {
             refresh_count: self.refresh_count,
             accepted_steps: self.accepted_steps,
             rejected_steps: self.rejected_steps,
+            rollback_count: self.rollback_count,
             error_controller: self.error_controller,
             charge_nonlinear_history: self.charge_nonlinear_history.clone(),
             telemetry_cursor: self.telemetry_cursor,
             thermal_rng_algorithm: "counter_hash_box_muller.fullmag.v1".into(),
             thermal_seed,
             thermal_counter,
-        })
+            payload_sha256: String::new(),
+        };
+        checkpoint.payload_sha256 = coupled_checkpoint_payload_sha256(&checkpoint)?;
+        Ok(checkpoint)
     }
 
     pub(crate) fn restore_coupled_checkpoint(
@@ -1275,6 +1320,7 @@ impl FdmSpinTransportWorkflow {
         self.refresh_count = checkpoint.refresh_count;
         self.accepted_steps = checkpoint.accepted_steps;
         self.rejected_steps = checkpoint.rejected_steps;
+        self.rollback_count = checkpoint.rollback_count;
         self.error_controller = checkpoint.error_controller;
         self.charge_nonlinear_history = checkpoint.charge_nonlinear_history.clone();
         self.telemetry_cursor = checkpoint.telemetry_cursor;
@@ -3545,6 +3591,7 @@ mod tests {
             let mut workflow = initial_workflow.clone();
             workflow.inject_coupled_failure(failure);
             let expected_workflow = workflow.clone();
+            let rollback_count_before = workflow.rollback_count;
             let thermal_before = problem.thermal_step();
             let mut fft_workspace = problem.create_workspace();
             let mut integrator_bufs = problem.create_integrator_buffers();
@@ -3557,11 +3604,17 @@ mod tests {
                 &mut integrator_bufs,
             )
             .expect_err("injected coupled failure must reject the whole transaction");
+            assert!(
+                error.message.starts_with("[coupled_solver_failure] "),
+                "coupled failure lost its stable reason code: {error:?}"
+            );
             assert!(error.message.contains("injected coupled"));
             assert_eq!(state, initial_state, "LLG state changed after {failure:?}");
+            assert_eq!(workflow.rollback_count, rollback_count_before + 1);
+            workflow.rollback_count = rollback_count_before;
             assert_eq!(
                 workflow, expected_workflow,
-                "transport state changed after {failure:?}"
+                "accepted transport state changed after {failure:?}"
             );
             assert_eq!(
                 problem.thermal_step(),
@@ -3600,6 +3653,87 @@ mod tests {
             after_failure_workflow.accepted(),
             pristine_workflow.accepted()
         );
+    }
+
+    #[test]
+    fn coupled_heun_workflow_commit_failure_rolls_back_llg_transport_and_thermal_state() {
+        let mut plan = fixed_transient_plan(1.0e-3);
+        let resolved = &mut plan.spin_transport_plans[0];
+        let transient = resolved
+            .fdm_cpu_double_transient
+            .take()
+            .expect("transient fixture");
+        resolved.capabilities = vec!["transport.spin.steady_drift_diffusion".into()];
+        resolved.fdm_cpu_double = Some(transient.steady_operator);
+        plan.integrator = Some(IntegratorChoice::Heun);
+        plan.temperature = Some(300.0);
+
+        let (problem, mut state) =
+            super::super::reference::build_snapshot_problem_and_state(&plan).unwrap();
+        let state_before = state.clone();
+        let mut workflow = FdmSpinTransportWorkflow::from_plan(&plan).unwrap().unwrap();
+        workflow.inject_coupled_failure(CoupledFailureInjection::WorkflowCommit);
+        let workflow_before = workflow.clone();
+        let rollback_count_before = workflow.rollback_count;
+        let thermal_before = problem.thermal_step();
+        let mut fft_workspace = problem.create_workspace();
+        let mut integrator_bufs = problem.create_integrator_buffers();
+
+        let error = super::super::reference::execute_coupled_heun_trial(
+            &problem,
+            &mut state,
+            &mut workflow,
+            1.0e-3,
+            &mut fft_workspace,
+            &mut integrator_bufs,
+        )
+        .expect_err("workflow commit failure must reject the whole coupled Heun transaction");
+
+        assert!(error
+            .message
+            .contains("injected coupled workflow commit failure"));
+        assert!(
+            error.message.starts_with("[coupled_solver_failure] "),
+            "coupled failure lost its stable reason code: {error:?}"
+        );
+        assert_eq!(state, state_before, "LLG state committed before transport");
+        assert_eq!(workflow.rollback_count, rollback_count_before + 1);
+        let rollback_count_after_failure = workflow.rollback_count;
+        workflow.rollback_count = rollback_count_before;
+        assert_eq!(
+            workflow, workflow_before,
+            "transport state was not rolled back"
+        );
+        workflow.rollback_count = rollback_count_after_failure;
+        assert_eq!(
+            problem.thermal_step(),
+            thermal_before,
+            "thermal RNG committed before transport"
+        );
+
+        workflow.coupled_failure_injection = None;
+        super::super::reference::execute_coupled_heun_trial(
+            &problem,
+            &mut state,
+            &mut workflow,
+            1.0e-3,
+            &mut fft_workspace,
+            &mut integrator_bufs,
+        )
+        .expect("retry");
+        let checkpoint = workflow
+            .coupled_checkpoint(
+                state.magnetization(),
+                state_before.magnetization(),
+                1.0e-3,
+                problem.thermal_seed,
+                problem.thermal_step(),
+            )
+            .expect("checkpoint");
+        assert_eq!(checkpoint.rollback_count, 1);
+        assert_eq!(checkpoint.accepted_steps, 1);
+        assert_eq!(checkpoint.thermal_counter, checkpoint.accepted_steps);
+        assert_eq!(checkpoint.payload_sha256.len(), 64);
     }
 
     #[test]
@@ -3784,6 +3918,20 @@ mod tests {
                 problem.thermal_step(),
             )
             .unwrap();
+        assert_eq!(checkpoint.payload_sha256.len(), 64);
+        assert_eq!(
+            coupled_checkpoint_payload_sha256(&checkpoint).unwrap(),
+            checkpoint.payload_sha256
+        );
+
+        let pristine = workflow.clone();
+        let mut legacy_without_digest = checkpoint.clone();
+        legacy_without_digest.payload_sha256.clear();
+        let error = workflow
+            .restore_coupled_checkpoint(legacy_without_digest)
+            .expect_err("checkpoint without payload digest must fail closed");
+        assert!(error.message.contains("payload_sha256 is missing"));
+        assert_eq!(workflow, pristine, "digest rejection mutated workflow");
 
         for label in ["V", "J", "mu", "Q", "torque", "H", "previous spin history"] {
             let mut raw = serde_json::to_value(&checkpoint).unwrap();
@@ -3820,6 +3968,14 @@ mod tests {
 
         type Mutation = Box<dyn Fn(&mut FdmCoupledCheckpoint)>;
         let mutations: Vec<(&str, Mutation)> = vec![
+            (
+                "rollback telemetry digest",
+                Box::new(|value| value.rollback_count = value.rollback_count.saturating_add(1)),
+            ),
+            (
+                "magnetization finite corruption",
+                Box::new(|value| value.magnetization[0][0] += f64::EPSILON),
+            ),
             (
                 "V shape",
                 Box::new(|value| value.accepted.modules[0].potential_volts.clear()),

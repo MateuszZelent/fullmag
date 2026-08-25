@@ -291,6 +291,61 @@ def _canonical_gmsh_nodes(element_type: int, nodes: list[int]) -> list[int]:
             f"canonical permutation expects {len(permutation)}"
         )
     return [nodes[index] for index in permutation]
+
+
+def _canonical_gmsh_connectivity(
+    element_type: int,
+    node_tags: Any,
+    node_index: dict[int, int],
+    node_lookup: NDArray[np.int32] | None,
+) -> NDArray[np.int32]:
+    """Remap one Gmsh connectivity block without iterating element-by-element.
+
+    Large shared-domain meshes can contain millions of volume elements.  The
+    previous extraction path converted every element through Python lists,
+    which made materialization quadratic in allocation overhead and consumed
+    several gigabytes before the FEM runtime could start.  Keep the same
+    explicit local-node permutation while remapping the whole block in NumPy.
+    """
+    permutation = _GMSH_TO_FULLMAG_NODE_PERMUTATION.get(int(element_type))
+    if permutation is None:
+        raise ValueError(
+            f"missing canonical Fullmag node permutation for Gmsh element type {element_type}"
+        )
+    raw = np.asarray(node_tags, dtype=np.int64).reshape(-1)
+    arity = len(permutation)
+    if raw.size % arity:
+        raise ValueError(
+            f"Gmsh element type {element_type} connectivity has {raw.size} nodes; "
+            f"expected a multiple of {arity}"
+        )
+    if node_lookup is not None:
+        mapped = node_lookup[raw]
+        if np.any(mapped < 0):
+            raise ValueError(f"Gmsh connectivity references an unknown node tag for element type {element_type}")
+    else:
+        mapped = np.fromiter(
+            (node_index[int(tag)] for tag in raw),
+            dtype=np.int32,
+            count=raw.size,
+        )
+    return mapped.reshape(-1, arity)[:, permutation]
+
+
+def _build_node_lookup(node_tags: NDArray[Any]) -> tuple[dict[int, int], NDArray[np.int32] | None]:
+    """Build a compact array lookup when Gmsh tags are close to contiguous."""
+    tags = np.asarray(node_tags, dtype=np.int64).reshape(-1)
+    node_index = {int(tag): index for index, tag in enumerate(tags)}
+    if tags.size == 0:
+        return node_index, None
+    max_tag = int(tags.max())
+    # Gmsh normally emits dense positive tags.  Avoid allocating a huge table
+    # for imported meshes whose tags are sparse or externally assigned.
+    if max_tag > max(1024, tags.size * 4):
+        return node_index, None
+    lookup = np.full(max_tag + 1, -1, dtype=np.int32)
+    lookup[tags] = np.arange(tags.size, dtype=np.int32)
+    return node_index, lookup
 _MESHIO_VOLUME_TYPES = {
     "tetra": "tet4",
     "wedge": "prism6",
@@ -364,7 +419,7 @@ def _is_tet4_provisional_interface_topology(
     return bool(len(types) > 0 and np.all(types == "tet4"))
 
 
-def _derive_facet_roles(
+def _derive_facet_roles_reference(
     cell_types: object,
     cell_offsets: object,
     cell_nodes: object,
@@ -420,6 +475,257 @@ def _derive_facet_roles(
                 f"facet {ordinal} cannot derive a canonical role from volume adjacency {adjacent}"
             )
     return roles
+
+
+class _FacetRoleVectorizationUnavailable(Exception):
+    """Internal signal to retain the reference path for irregular meshes."""
+
+
+def _face_key_view(faces: NDArray[np.int32]) -> np.ndarray:
+    """Return sortable structured keys for fixed-arity face rows."""
+    arity = int(faces.shape[1])
+    dtype = np.dtype([(f"node_{index}", np.int32) for index in range(arity)])
+    return np.ascontiguousarray(faces, dtype=np.int32).view(dtype).reshape(-1)
+
+
+def _build_face_adjacency(
+    cell_types: NDArray[np.str_],
+    cell_offsets: NDArray[np.int64],
+    cell_nodes: NDArray[np.int32],
+    element_markers: NDArray[np.int32],
+) -> dict[int, tuple[np.ndarray, NDArray[np.int32], NDArray[np.int32], NDArray[np.int32]]]:
+    """Build fixed-arity volume-face adjacency tables in vectorized blocks."""
+    face_blocks: dict[int, list[NDArray[np.int32]]] = {}
+    marker_blocks: dict[int, list[NDArray[np.int32]]] = {}
+    for cell_type, local_facets in _CELL_LOCAL_FACETS.items():
+        ordinals = np.flatnonzero(cell_types == cell_type)
+        if ordinals.size == 0:
+            continue
+        widths = cell_offsets[ordinals + 1] - cell_offsets[ordinals]
+        if np.any(widths != widths[0]):
+            raise _FacetRoleVectorizationUnavailable(
+                f"non-uniform {cell_type} cell widths cannot be vectorized"
+            )
+        cell_width = int(widths[0])
+        starts = cell_offsets[ordinals]
+        elements = cell_nodes[starts[:, None] + np.arange(cell_width, dtype=np.int64)]
+        markers = element_markers[ordinals]
+        for local_facet in local_facets:
+            arity = len(local_facet)
+            faces = np.sort(elements[:, local_facet], axis=1).astype(np.int32, copy=False)
+            face_blocks.setdefault(arity, []).append(faces)
+            marker_blocks.setdefault(arity, []).append(markers)
+
+    adjacency: dict[int, tuple[np.ndarray, NDArray[np.int32], NDArray[np.int32], NDArray[np.int32]]] = {}
+    for arity, blocks in face_blocks.items():
+        faces = np.concatenate(blocks, axis=0)
+        markers = np.concatenate(marker_blocks[arity]).astype(np.int32, copy=False)
+        order = np.lexsort(faces[:, ::-1].T)
+        sorted_faces = faces[order]
+        sorted_markers = markers[order]
+        first = np.empty(len(sorted_faces), dtype=bool)
+        first[0] = True
+        first[1:] = np.any(sorted_faces[1:] != sorted_faces[:-1], axis=1)
+        group_starts = np.flatnonzero(first)
+        group_ids = np.cumsum(first, dtype=np.int64) - 1
+        group_counts = np.bincount(group_ids, minlength=len(group_starts)).astype(
+            np.int32, copy=False
+        )
+        group_first_markers = sorted_markers[group_starts]
+        group_second_markers = np.full(len(group_starts), -1, dtype=np.int32)
+        row_positions = np.arange(len(sorted_faces), dtype=np.int64) - np.maximum.accumulate(
+            np.where(first, np.arange(len(sorted_faces), dtype=np.int64), 0)
+        )
+        second_rows = np.flatnonzero(row_positions == 1)
+        group_second_markers[group_ids[second_rows]] = sorted_markers[second_rows]
+        adjacency[arity] = (
+            _face_key_view(sorted_faces[group_starts]),
+            group_counts,
+            group_first_markers,
+            group_second_markers,
+        )
+    return adjacency
+
+
+def _derive_facet_roles(
+    cell_types: object,
+    cell_offsets: object,
+    cell_nodes: object,
+    element_markers: object,
+    facet_offsets: object,
+    facet_nodes: object,
+    boundary_markers: object,
+    *,
+    periodic_markers: set[int] | None = None,
+    provisional_interface_markers: set[int] | None = None,
+    boundary_role_markers: tuple[int, int] | None = None,
+) -> list[str]:
+    """Derive canonical boundary roles from topology or qualified markers."""
+    types = np.asarray(cell_types, dtype=np.str_)
+    offsets = np.asarray(cell_offsets, dtype=np.int64)
+    nodes = np.asarray(cell_nodes, dtype=np.int32)
+    markers = np.asarray(element_markers, dtype=np.int32)
+    face_offsets = np.asarray(facet_offsets, dtype=np.int64)
+    face_nodes = np.asarray(facet_nodes, dtype=np.int32)
+    face_markers = np.asarray(boundary_markers, dtype=np.int32)
+    if len(face_offsets) <= 1:
+        return []
+    seams = periodic_markers or set()
+    if boundary_role_markers is not None:
+        interface_marker, exterior_marker = (
+            int(boundary_role_markers[0]),
+            int(boundary_role_markers[1]),
+        )
+        if interface_marker == exterior_marker:
+            raise ValueError(
+                "qualified boundary interface and exterior markers must be distinct"
+            )
+        seam_mask = np.isin(face_markers, tuple(seams))
+        interface_mask = face_markers == interface_marker
+        exterior_mask = face_markers == exterior_marker
+        unknown = ~(seam_mask | interface_mask | exterior_mask)
+        if np.any(unknown):
+            failed = int(np.flatnonzero(unknown)[0])
+            raise ValueError(
+                "qualified boundary role extraction encountered unsupported "
+                f"marker {int(face_markers[failed])} at facet {failed}"
+            )
+        roles = np.empty(len(face_markers), dtype=object)
+        roles[seam_mask] = "periodic_seam"
+        roles[interface_mask & ~seam_mask] = "material_interface"
+        roles[exterior_mask & ~seam_mask] = "exterior"
+        return roles.tolist()
+    provisional_interfaces = provisional_interface_markers or set()
+    provisional_interface_allowed = _is_tet4_provisional_interface_topology(types)
+    face_arities = np.diff(face_offsets)
+    n_facets = len(face_arities)
+    roles = np.empty(n_facets, dtype=object)
+    roles[:] = ""
+
+    # Boundary faces are the only faces whose role is requested.  Keep their
+    # sorted keys and match volume faces against them block-by-block; storing a
+    # dictionary entry for every volume face is prohibitive for 500k+ node
+    # shared-domain meshes.
+    boundary_tables: dict[int, tuple[np.ndarray, NDArray[np.int64]]] = {}
+    for arity in np.unique(face_arities):
+        ordinal_indices = np.flatnonzero(face_arities == int(arity))
+        starts = face_offsets[ordinal_indices]
+        faces = np.sort(
+            face_nodes[starts[:, None] + np.arange(int(arity), dtype=np.int64)], axis=1
+        ).astype(np.int32, copy=False)
+        keys = _face_key_view(faces)
+        order = np.argsort(keys, kind="stable")
+        boundary_tables[int(arity)] = (keys[order], ordinal_indices[order])
+
+    owner_count = np.zeros(n_facets, dtype=np.int8)
+    owner_first = np.full(n_facets, -1, dtype=np.int32)
+    owner_second = np.full(n_facets, -1, dtype=np.int32)
+    owner_overflow = np.zeros(n_facets, dtype=bool)
+
+    for cell_type, local_facets in _CELL_LOCAL_FACETS.items():
+        cell_ordinals = np.flatnonzero(types == cell_type)
+        if cell_ordinals.size == 0:
+            continue
+        widths = offsets[cell_ordinals + 1] - offsets[cell_ordinals]
+        if np.any(widths != widths[0]):
+            return _derive_facet_roles_reference(
+                cell_types,
+                cell_offsets,
+                cell_nodes,
+                element_markers,
+                facet_offsets,
+                facet_nodes,
+                boundary_markers,
+                periodic_markers=periodic_markers,
+                provisional_interface_markers=provisional_interface_markers,
+            )
+        starts = offsets[cell_ordinals]
+        elements = nodes[starts[:, None] + np.arange(int(widths[0]), dtype=np.int64)]
+        element_markers = markers[cell_ordinals]
+        for local_facet in local_facets:
+            arity = len(local_facet)
+            table = boundary_tables.get(arity)
+            if table is None:
+                continue
+            faces = np.sort(elements[:, local_facet], axis=1).astype(np.int32, copy=False)
+            keys = _face_key_view(faces)
+            table_keys, table_ordinals = table
+            positions = np.searchsorted(table_keys, keys)
+            valid = positions < len(table_keys)
+            if np.any(valid):
+                valid_positions = positions[valid]
+                valid[valid] &= table_keys[valid_positions] == keys[valid]
+            if not np.any(valid):
+                continue
+            matched_ordinals = table_ordinals[positions[valid]]
+            matched_markers = element_markers[valid]
+            order = np.argsort(matched_ordinals, kind="stable")
+            sorted_ordinals = matched_ordinals[order]
+            sorted_markers = matched_markers[order]
+            first = np.empty(len(sorted_ordinals), dtype=bool)
+            first[0] = True
+            first[1:] = sorted_ordinals[1:] != sorted_ordinals[:-1]
+            group_starts = np.flatnonzero(first)
+            group_ids = np.cumsum(first, dtype=np.int64) - 1
+            group_counts = np.bincount(
+                group_ids, minlength=len(group_starts)
+            ).astype(np.int8, copy=False)
+            unique_ordinals = sorted_ordinals[group_starts]
+            group_first_markers = sorted_markers[group_starts]
+            group_second_markers = np.full(len(group_starts), -1, dtype=np.int32)
+            row_positions = np.arange(len(sorted_ordinals), dtype=np.int64) - np.maximum.accumulate(
+                np.where(first, np.arange(len(sorted_ordinals), dtype=np.int64), 0)
+            )
+            second_rows = np.flatnonzero(row_positions == 1)
+            group_second_markers[group_ids[second_rows]] = sorted_markers[second_rows]
+
+            previous_counts = owner_count[unique_ordinals]
+            owner_overflow[unique_ordinals] |= (
+                (group_counts > 2) | (previous_counts + group_counts > 2)
+            )
+            empty = previous_counts == 0
+            owner_first[unique_ordinals[empty]] = group_first_markers[empty]
+            owner_second[unique_ordinals[empty & (group_counts >= 2)]] = group_second_markers[
+                empty & (group_counts >= 2)
+            ]
+            one_existing = previous_counts == 1
+            owner_second[unique_ordinals[one_existing]] = group_first_markers[one_existing]
+            owner_count[unique_ordinals] = np.minimum(2, previous_counts + group_counts)
+
+    provisional_values = np.asarray(tuple(provisional_interfaces), dtype=np.int32)
+    for arity in np.unique(face_arities):
+        ordinal_indices = np.flatnonzero(face_arities == int(arity))
+        seam_mask = np.isin(face_markers[ordinal_indices], tuple(seams))
+        roles[ordinal_indices[seam_mask]] = "periodic_seam"
+        active_ordinals = ordinal_indices[~seam_mask]
+        if active_ordinals.size == 0:
+            continue
+        counts = owner_count[active_ordinals]
+        external = counts == 1
+        interface = (counts == 2) & (
+            owner_first[active_ordinals] != owner_second[active_ordinals]
+        )
+        if provisional_values.size and provisional_interface_allowed:
+            interface |= (counts == 2) & np.isin(
+                face_markers[active_ordinals], provisional_values
+            )
+        accepted = (external | interface) & ~owner_overflow[active_ordinals]
+        roles[active_ordinals[external & accepted]] = "exterior"
+        roles[active_ordinals[interface & accepted]] = "material_interface"
+        invalid = ~accepted
+        if np.any(invalid):
+            failed_position = int(np.flatnonzero(invalid)[0])
+            failed = int(active_ordinals[failed_position])
+            count = int(counts[failed_position])
+            adjacent = [] if count == 0 else [int(owner_first[failed])]
+            if count >= 2:
+                adjacent.append(int(owner_second[failed]))
+            raise ValueError(
+                f"facet {failed} cannot derive a canonical role from volume adjacency {adjacent}"
+            )
+    return roles.tolist()
+
+
 _MESHIO_FACET_TYPES = {"triangle": "tri3", "quad": "quad4"}
 _MESHIO_IGNORED_LOWER_DIM_ELEMENTS: dict[str, tuple[int, int, int]] = {
     "vertex": (0, 1, 1),
@@ -496,13 +802,14 @@ def _extract_mesh_data(
     per_domain_quality: dict[int, MeshQualityReport] | None = None,
     periodic_pair_specs: list[dict[str, object]] | None = None,
     provisional_interface_markers: set[int] | None = None,
+    boundary_role_markers: tuple[int, int] | None = None,
 ) -> MeshData:
     emit_progress("Gmsh: extracting mesh data")
     node_tags, coords, _ = gmsh.model.mesh.getNodes()
     if len(node_tags) == 0:
         raise ValueError("gmsh produced an empty node set")
 
-    node_index = {int(tag): idx for idx, tag in enumerate(node_tags)}
+    node_index, node_lookup = _build_node_lookup(node_tags)
     nodes = np.asarray(coords, dtype=np.float64).reshape(-1, 3)
 
     # Validate the complete topology, including ungrouped entities, before
@@ -523,9 +830,11 @@ def _extract_mesh_data(
             for _dim, phys_tag in gmsh.model.getPhysicalGroups(dim=2)
         }
         cell_types: list[str] = []
-        cell_offsets = [0]
-        cell_nodes: list[int] = []
-        markers_list: list[int] = []
+        cell_offset_blocks: list[NDArray[np.int64]] = []
+        cell_node_blocks: list[NDArray[np.int32]] = []
+        marker_blocks: list[NDArray[np.int32]] = []
+        extracted_tag_blocks: list[NDArray[np.int64]] = []
+        cell_node_offset = 0
         for _dim, phys_tag in gmsh.model.getPhysicalGroups(dim=3):
             semantic_marker = _semantic_marker_from_name(
                 physical_names_3d.get(int(phys_tag)),
@@ -542,25 +851,36 @@ def _extract_mesh_data(
                         supported=SUPPORTED_VOLUME_ELEMENTS,
                         context="volume extraction",
                     )
-                    flat = [node_index[int(t)] for t in nids]
-                    block_tags = [int(tag) for tag in tags]
-                    for element_offset, start in enumerate(range(0, len(flat), num_nodes)):
-                        cell_types.append(kind)
-                        cell_nodes.extend(
-                            _canonical_gmsh_nodes(
-                                int(etype),
-                                flat[start : start + num_nodes],
-                            )
+                    block_nodes = _canonical_gmsh_connectivity(
+                        int(etype), nids, node_index, node_lookup
+                    )
+                    block_count = int(block_nodes.shape[0])
+                    if block_count == 0:
+                        continue
+                    cell_types.extend([kind] * block_count)
+                    cell_node_blocks.append(block_nodes.reshape(-1))
+                    cell_offset_blocks.append(
+                        cell_node_offset
+                        + np.arange(
+                            num_nodes,
+                            (block_count + 1) * num_nodes,
+                            num_nodes,
+                            dtype=np.int64,
                         )
-                        cell_offsets.append(len(cell_nodes))
-                        markers_list.append(semantic_marker)
-                        if element_offset < len(block_tags):
-                            extracted_element_tags.append(block_tags[element_offset])
+                    )
+                    marker_blocks.append(
+                        np.full(block_count, semantic_marker, dtype=np.int32)
+                    )
+                    extracted_tag_blocks.append(
+                        np.asarray(tags, dtype=np.int64).reshape(-1)
+                    )
+                    cell_node_offset += block_count * num_nodes
 
         facet_types: list[str] = []
-        facet_offsets = [0]
-        facet_nodes: list[int] = []
-        bmarkers_list: list[int] = []
+        facet_offset_blocks: list[NDArray[np.int64]] = []
+        facet_node_blocks: list[NDArray[np.int32]] = []
+        facet_marker_blocks: list[NDArray[np.int32]] = []
+        facet_node_offset = 0
         for _dim, phys_tag in gmsh.model.getPhysicalGroups(dim=2):
             semantic_marker = _semantic_marker_from_name(
                 physical_names_2d.get(int(phys_tag)),
@@ -577,30 +897,61 @@ def _extract_mesh_data(
                         supported=SUPPORTED_BOUNDARY_ELEMENTS,
                         context="boundary extraction",
                     )
-                    flat = [node_index[int(t)] for t in nids]
-                    for start in range(0, len(flat), num_nodes):
-                        facet_types.append(kind)
-                        facet_nodes.extend(
-                            _canonical_gmsh_nodes(
-                                int(etype),
-                                flat[start : start + num_nodes],
-                            )
+                    block_nodes = _canonical_gmsh_connectivity(
+                        int(etype), nids, node_index, node_lookup
+                    )
+                    block_count = int(block_nodes.shape[0])
+                    if block_count == 0:
+                        continue
+                    facet_types.extend([kind] * block_count)
+                    facet_node_blocks.append(block_nodes.reshape(-1))
+                    facet_offset_blocks.append(
+                        facet_node_offset
+                        + np.arange(
+                            num_nodes,
+                            (block_count + 1) * num_nodes,
+                            num_nodes,
+                            dtype=np.int64,
                         )
-                        facet_offsets.append(len(facet_nodes))
-                        bmarkers_list.append(semantic_marker)
+                    )
+                    facet_marker_blocks.append(
+                        np.full(block_count, semantic_marker, dtype=np.int32)
+                    )
+                    facet_node_offset += block_count * num_nodes
 
-        cell_offsets_array = np.asarray(cell_offsets, dtype=np.int64)
-        cell_nodes_array = np.asarray(cell_nodes, dtype=np.int32)
-        element_markers = (
-            np.asarray(markers_list, dtype=np.int32)
-            if markers_list
+        extracted_element_tags = (
+            np.concatenate(extracted_tag_blocks).astype(np.int64, copy=False).tolist()
+            if extracted_tag_blocks
+            else []
+        )
+        cell_offsets_array = (
+            np.concatenate([np.array([0], dtype=np.int64), *cell_offset_blocks])
+            if cell_offset_blocks
+            else np.zeros(1, dtype=np.int64)
+        )
+        cell_nodes_array = (
+            np.concatenate(cell_node_blocks).astype(np.int32, copy=False)
+            if cell_node_blocks
             else np.zeros(0, dtype=np.int32)
         )
-        facet_offsets_array = np.asarray(facet_offsets, dtype=np.int64)
-        facet_nodes_array = np.asarray(facet_nodes, dtype=np.int32)
+        element_markers = (
+            np.concatenate(marker_blocks).astype(np.int32, copy=False)
+            if marker_blocks
+            else np.zeros(0, dtype=np.int32)
+        )
+        facet_offsets_array = (
+            np.concatenate([np.array([0], dtype=np.int64), *facet_offset_blocks])
+            if facet_offset_blocks
+            else np.zeros(1, dtype=np.int64)
+        )
+        facet_nodes_array = (
+            np.concatenate(facet_node_blocks).astype(np.int32, copy=False)
+            if facet_node_blocks
+            else np.zeros(0, dtype=np.int32)
+        )
         boundary_markers = (
-            np.asarray(bmarkers_list, dtype=np.int32)
-            if bmarkers_list
+            np.concatenate(facet_marker_blocks).astype(np.int32, copy=False)
+            if facet_marker_blocks
             else np.zeros(0, dtype=np.int32)
         )
     else:
@@ -708,6 +1059,7 @@ def _extract_mesh_data(
             if marker is not None
         },
         provisional_interface_markers=provisional_interface_markers,
+        boundary_role_markers=boundary_role_markers,
     )
     return MeshData(
         nodes=nodes,

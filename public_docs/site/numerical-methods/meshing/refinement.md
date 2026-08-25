@@ -1,428 +1,316 @@
 ---
-title: Refinement
+title: "Mesh sizing, local refinement and convergence"
+description: "Physics-guided mesh-size selection, Gmsh size fields and convergence evidence."
+summary: "Refinement should be driven by physical length scales and observable error. Fullmag combines calibrated presets, explicit min/max sizes, interface/edge/corner controls and structured size fields."
 status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-reviewed_revision: 88c7160080bc1e8519950df283d2dd02087cc3da
-source_of_truth: MeshSizeControls, MeshOptions, size-field planner, quality/statistics reports, and realized mesh provenance
+last_updated: 2026-08-24
+reviewed_revision: 5db00ccf0113b9756fec2d46feb36ade762b12c2
+source_of_truth: "Mesh-size resolution pipeline, semantic size fields, Control Room object/airbox policies and quality resources"
 ---
 
 (public-docs-numerical-methods-meshing-refinement)=
-# Mesh refinement, size fields, and convergence
+# Mesh sizing, local refinement and convergence
 
-:::{admonition} “Fine” is not a convergence result
+**Last changes: 12:31 24.08.2026**
+
+Refinement should be driven by physical length scales and observable error. Fullmag combines calibrated presets, explicit min/max sizes, interface/edge/corner controls and structured size fields.
+
+::::{admonition} Implementation status
 :class: important
 
-A preset or nominal `hmax` selects a meshing policy. It does not establish that the target observable
-is spatially converged, that the realized mesh satisfies the target everywhere, or that time,
-linear-solver, airbox, and equilibrium errors are negligible. Production studies publish the
-realized mesh sequence and observable changes.
-:::
+Named calibrations, presets, explicit size bounds, interface/edge/corner controls, manual boxes and semantic size fields are implemented. Adaptive solve–estimate–remesh loops are documented separately and must not be inferred from static authoring controls.
+::::
 
-(numerical-methods-refinement-problem-statement)=
-## Refinement dimensions
+## Scope and purpose
 
-Fullmag distinguishes several independent limits:
+Use this page to choose element/cell sizes, construct local grading zones and design a convergence
+study. Refinement is not synonymous with globally decreasing `hmax`: it should target regions
+responsible for the dominant discretization error while preserving acceptable element quality
+and solver conditioning.
 
-- **FDM $h$ refinement:** reduce Cartesian spacings and rebuild masks/stencils/FFT kernels;
-- **FEM $h$ refinement:** reduce element sizes while keeping polynomial order fixed;
-- **FEM $p$ refinement:** increase finite-element order on a controlled geometry/mesh;
-- **geometry refinement:** improve curved boundaries or CAD tessellation;
-- **layer refinement:** increase FDM thickness cells or FEM swept layers;
-- **airbox refinement:** enlarge the exterior and refine/graduating its mesh;
-- **periodic-image refinement:** increase finite image counts where that approximation is used;
-- **frequency/time/algebraic refinement:** separate nonspatial errors required before interpreting a
-  mesh sequence.
+## Scientific and numerical model
 
-A result is “mesh converged” only relative to a declared observable, parameter region, and tolerance.
+### FDM scientific invariants
 
-(numerical-methods-refinement-characteristic-scales)=
-## Physics-informed starting scales
-
-The exchange length
+An FDM grid stores the magnetization on a Cartesian lattice with cell dimensions
+$\Delta x$, $\Delta y$ and $\Delta z$. Cell centers are
 
 ```{math}
-:label: eq-numerical-refinement-exchange-length
-\ell_{\mathrm{ex}}
-=\sqrt{\frac{2A}{\mu_0M_s^2}}
+:label: eq-meshing-fdm-cell-centres-refinement
+\mathbf r_{ijk}=\mathbf r_0+
+\left(i+\tfrac12,j+\tfrac12,k+\tfrac12\right)
+\odot(\Delta x,\Delta y,\Delta z).
 ```
 
-and uniaxial wall parameter
+The cell size simultaneously controls geometry voxelization, finite-difference exchange and the
+accuracy/cost of FFT demagnetization. It must therefore resolve the smallest magnetic length scale,
+the smallest geometric feature and the desired boundary accuracy. The exchange-length expression
 
 ```{math}
-:label: eq-numerical-refinement-wall-width
-\Delta=\sqrt{\frac{A}{K_{\mathrm{eff}}}}
+:label: eq-meshing-fdm-exchange-length-refinement
+\ell_{\mathrm{ex}}=\sqrt{\frac{2A}{\mu_0M_s^2}}
 ```
 
-are useful initial estimates. They are not universal cell-size criteria. The shortest relevant scale
-can instead come from DMI, interfacial exchange, notches, vortex/skyrmion cores, surface anisotropy,
-localized modes, thin layers, current injection, or geometric curvature.
+is a useful initial guide, but final values require a grid-refinement study. A one-cell film thickness
+is a thickness-averaged discretization; it cannot represent a nonuniform mode across the thickness.
 
-A practical initial target might use several cells/elements across the smallest expected feature,
-but the accepted resolution is determined by the convergence sequence, not by a rule-of-thumb
-ratio alone.
 
-(numerical-methods-refinement-size-targets)=
-## Global and local size controls
+### FEM scientific invariants
 
-The typed size-control surface contains:
+A finite-element mesh is not only a visualization asset. It defines the trial/test spaces used by
+exchange, anisotropy, DMI, magnetostatic and dynamic operators. The following conditions are therefore
+part of the numerical contract:
 
-| Control | Numerical role |
-|---|---|
-| `maximum_element_size` | upper target in unconstrained bulk/far field |
-| `minimum_element_size` | lower target that prevents uncontrolled overrefinement |
-| `maximum_element_growth_rate` | limits requested size growth between neighbouring regions |
-| `curvature_factor` | converts local curvature scale to a boundary target |
-| `narrow_region_resolution` | requests resolution across small gaps or thin regions |
-| `calibrate_for` | names a physics/workflow calibration family |
-| `size_preset` | selects a named bundle of growth/curvature/narrow-region defaults |
-| per-object/interface/edge/corner fields | localize refinement to physical features |
-| ordered `MeshOperation` objects | add free tetrahedral, boundary layer, refine, adapt, swept, or size-field operations |
+1. Every magnetic volume has an unambiguous region marker and every exterior-air volume has the
+   canonical air role.
+2. Interfaces used by coupled operators are conforming, or an explicitly supported nonconforming
+   coupling operator is selected. Fullmag's ordinary shared-domain path expects conformity.
+3. Cell orientation is valid: the element mapping has a positive Jacobian at all required evaluation
+   points. Inverted or collapsed cells are build failures, not warnings to ignore.
+4. Requested topology, polynomial order, layer count and mesh-size controls are compared with the
+   realized mesh. A topology change is legal only when the build mode permits fallback and the report
+   names the actual method and reason.
+5. Mesh convergence is assessed on physical observables—energy, average magnetization, switching
+   field, eigenfrequency, linewidth or field error—not only on element count.
 
-The effective target is conceptually
+For exchange-dominated variation, a useful *starting* scale is the magnetostatic exchange length
 
 ```{math}
-:label: eq-numerical-refinement-size-field-min
-h_{\mathrm{target}}(\mathbf x)
-=\min_{s\in\mathcal S(\mathbf x)}h_s(\mathbf x),
+:label: eq-meshing-exchange-length-refinement
+\ell_{\mathrm{ex}}=\sqrt{\frac{2A}{\mu_0M_s^2}}.
 ```
 
-with growth and mesher constraints applied afterward. Because `min` composition is global through
-field overlap, one unexpectedly fine field can dominate much more of the domain than its visual
-selector suggests.
+Using an element size below roughly one half of the smallest relevant magnetic length scale is a
+common initial choice, not a proof of convergence. Curved boundaries, surface charges, DMI, defects,
+interfaces and through-thickness modes can demand a smaller local size.
 
-(numerical-methods-refinement-calibrations)=
-## Calibration and preset vocabulary
-
-`MESH_SIZE_CALIBRATIONS` contains:
-
-- `general_physics`;
-- `micromagnetics_static`;
-- `micromagnetics_relaxation`;
-- `micromagnetics_frequency_domain`;
-- `magnetostatics_dominated`;
-- `imported_surface_cleanup`.
-
-These names normalize policy defaults; they are not accuracy certifications.
-
-The reviewed preset resolver supplies the following fallback targets when the corresponding value
-is not explicitly authored:
-
-| Preset | Growth rate | Curvature factor | Narrow-region resolution |
-|---|---:|---:|---:|
-| `extremely_fine` | 1.2 | 0.20 | 1.00 |
-| `extra_fine` | 1.3 | 0.25 | 0.85 |
-| `finer` | 1.4 | 0.40 | 0.70 |
-| `fine` | 1.5 | 0.50 | 0.60 |
-| `normal` | 1.6 | 0.60 | 0.50 |
-| `coarse` | 1.8 | 0.80 | 0.30 |
-| `coarser` | 2.0 | 1.00 | 0.20 |
-| `extra_coarse` | 2.2 | 1.20 | 0.15 |
-| `extremely_coarse` | 2.4 | 1.50 | 0.10 |
-
-An explicit user value has precedence over a preset fallback. The resolved controls are serialized by
-`ResolvedMeshSizeControls`; provenance should preserve both requested preset and every resolved
-numeric value.
-
-(numerical-methods-refinement-curvature-and-narrow)=
-## Curvature and narrow-region fields
-
-For local radius of curvature $R(\mathbf x)$, a curvature target can be viewed schematically as
+A generic size field is a spatial target $h(\mathbf r)$. When several upper-bound fields are
+active, the mesher normally receives their minimum,
 
 ```{math}
-:label: eq-numerical-refinement-curvature
-h_{\kappa}(\mathbf x)
-\lesssim c_{\kappa}R(\mathbf x),
+:label: eq-refinement-size-field-min-refinement
+h_{target}(\mathbf r)=\min_j h_j(\mathbf r),
 ```
 
-where `curvature_factor` controls $c_{\kappa}$. The exact Gmsh points-per-curve mapping is resolved in
-`_gmsh_types.py`; the schematic equation should not be used to reverse-engineer exact element sizes.
+followed by global lower/upper clamps and growth controls. This means overlapping refinement
+fields do not average; the finest request dominates. `ObjectCoreRelaxation` explicitly keeps a
+fine surface/edge shell while allowing a coarser interior. Distance-threshold fields interpolate
+from `SizeMin` near a selected entity to `SizeMax` over a specified distance.
 
-Narrow-region controls seek enough elements across a local separation $g$. Conceptually,
+Presets fill defaults. Explicit parameters and object-specific fields can override them. The
+effective configuration resource is therefore the only reliable record of the resolved values.
 
-```{math}
-:label: eq-numerical-refinement-narrow
-h_g\lesssim\frac{g}{n_g},
-```
+## Selection guide
 
-with $n_g$ determined by the resolved narrow-region policy. Thin magnetic bodies should generally use
-an explicit swept/layer recipe rather than rely only on a generic narrow-gap field.
+| Use case | Recommended choice | Reason |
+| --- | --- | --- |
+| Unknown problem / first mesh | `calibrate_for` + `normal` or `fine` | Provides a reproducible baseline before explicit convergence |
+| Exchange/DMI texture localized in the bulk | local box or physics-driven field | Refine around the expected soliton/domain-wall region |
+| Demag edge singularity / antidot | edge and corner refinement | Targets strong surface-charge gradients |
+| Large 3-D body with smooth core | `ObjectCoreRelaxation` | Fine boundary shell, coarser interior |
+| Magnet/air interface | interface shell + controlled transition | Protects field accuracy and conformity |
 
-Selector-based edge/corner/interface fields require native geometric tags. The shared-domain build
-report marks them `ignored` when a fallback such as concatenated STL loses the required component
-tags. A successful mesh with an ignored field is not the requested refinement.
+## Parameters
 
-(numerical-methods-refinement-quality)=
-## Mesh-quality metrics
+| Python / IR key | Unit | Default | Validation | Numerical effect |
+| --- | --- | --- | --- | --- |
+| `maximum_element_size` | m | required for direct FEM generation | positive finite | coarse upper target; local size fields may request smaller elements |
+| `minimum_element_size` | m | unset | positive and not greater than the maximum | lower size clamp for local refinement and curvature sizing |
+| `maximum_element_growth_rate` | 1 | preset/backend dependent | positive | limits requested growth between neighboring size zones |
+| `calibrate_for` | 1 | unset | named calibration family | selects physics-aware preset calibration |
+| `size_preset` | 1 | unset | extremely fine through extremely coarse | fills common size/growth/curvature controls before explicit overrides |
+| `size_factor` | 1 | `1` | positive | multiplies preset-derived target sizes |
+| `curvature_factor` | 1 | unset | positive when set | controls curvature-driven refinement; smaller values generally refine more |
+| `narrow_region_resolution` | 1 | unset | positive when set | requests additional resolution in narrow geometric gaps/features |
+| `order` | 1 | `1` | positive integer; topology/device support may be narrower | finite-element polynomial order |
+| `algorithm_2d` | Gmsh ID | `6` | supported Gmsh 2-D algorithm number | surface triangulation before volume meshing |
+| `algorithm_3d` | Gmsh ID | `1` | supported Gmsh 3-D algorithm number | volume tetrahedralization algorithm |
+| `smoothing_steps` | passes | `1` | non-negative integer | post-generation node smoothing |
+| `optimize` | 1 | unset | Gmsh optimizer name | optional quality optimization; does not replace convergence checks |
+| `optimize_iterations` | passes | `1` | positive integer | number of optimizer passes |
+| `compute_quality` | 1 | `True` in Control Room defaults | Boolean | requests aggregate quality metrics |
+| `per_element_quality` | 1 | `True` in Control Room defaults | Boolean | requests per-element quality arrays and scoped distributions |
+| `interface_maximum_element_size` | m | unset | positive | near-interface target size |
+| `interface_thickness` | m | unset | positive | distance over which interface sizing remains active |
+| `transition_distance` | m or symbolic | unset | positive or `airbox_boundary` when supported | ramp length from fine interface to coarse far field |
+| `transition_growth` | 1 | unset | positive | requested growth across the transition |
+| `edge_maximum_element_size` | m | unset | positive | target along selected/recovered object edges |
+| `edge_thickness` | m | unset | positive | width of the finest edge band |
+| `edge_transition_distance` | m or symbolic | unset | positive or supported symbolic value | edge-to-far-field ramp |
+| `corner_maximum_element_size` | m | unset | positive and no larger than edge target | target at corners |
+| `size_fields` | mixed | `[]` | validated field descriptors | composable spatial target fields |
 
-Fullmag's `MeshQualityReport` includes:
-
-- element count;
-- signed inverse condition number (SICN): minimum, maximum, mean, 5th percentile, histogram;
-- gamma/radius quality: minimum, mean, histogram;
-- element volume: minimum, maximum, mean, standard deviation;
-- Gmsh average quality;
-- optional per-element quality, volume, and tag arrays;
-- quality source.
-
-`MeshStatisticsScope` adds node/element/boundary counts, volume totals and ratios, characteristic-size
-and edge-length statistics, inverted and degenerate counts, optional SICN/gamma summaries, and
-warnings for each region/scope.
-
-The reviewed general warning constants are
-
-```{math}
-:label: eq-numerical-refinement-quality-thresholds
-\gamma_{\min}^{\mathrm{warn}}=0.08,
-\qquad
-\operator{SICN}_{p05}^{\mathrm{warn}}=0.1.
-```
-
-These are implementation warning thresholds, not universal mathematical guarantees. Any inverted
-element or topologically degenerate element is a hard failure regardless of average quality.
-
-A quality average can hide a small population of catastrophic elements. Report the minimum,
-lower-tail percentile, histogram, and worst-element locations by metric.
-
-(numerical-methods-refinement-observed-convergence)=
-## Observed convergence
-
-For observable $Q_h$ on a geometrically similar sequence with refinement ratio $r>1$, an observed
-order estimate is
-
-```{math}
-:label: eq-numerical-refinement-observed-order
-p_{\mathrm{obs}}
-=\frac{\log\left|
-(Q_h-Q_{h/r})/(Q_{h/r}-Q_{h/r^2})
-\right|}{\log r}.
-```
-
-This estimate is meaningful only when:
-
-- the same physical branch/state is compared;
-- all meshes resolve the same geometry and boundary problem;
-- time, relaxation, linear, and sampling errors are smaller;
-- the sequence is inside an asymptotic regime;
-- the denominator is not dominated by roundoff or branch switching.
-
-For a monotone sequence with known order $p$, a Richardson extrapolate is
-
-```{math}
-:label: eq-numerical-refinement-richardson
-Q_{\mathrm{ext}}
-\approx Q_{h/r^2}
-+\frac{Q_{h/r^2}-Q_{h/r}}{r^p-1}.
-```
-
-Use this only when its assumptions are demonstrated. Topological transitions, switching thresholds,
-localized modes, and nearly degenerate eigenbranches can make scalar order estimates misleading.
-
-(numerical-methods-refinement-mode-convergence)=
-## Fields, modes, and branch-sensitive observables
-
-For fields on different meshes, transfer both to a common comparison space. A weighted relative
-error is
-
-```{math}
-:label: eq-numerical-refinement-field-error
-\varepsilon_h
-=\frac{\lVert u_h-u_{\mathrm{ref}}\rVert_W}
-{\lVert u_{\mathrm{ref}}\rVert_W}.
-```
-
-For complex normalized modes,
-
-```{math}
-:label: eq-numerical-refinement-mode-overlap
-\mathcal O_h
-=\frac{|\langle u_h,u_{\mathrm{ref}}\rangle_W|}
-{\lVert u_h\rVert_W\lVert u_{\mathrm{ref}}\rVert_W}.
-```
-
-Frequency convergence without overlap can compare different branches. Equilibrium textures should
-also compare energy, maximum torque, angular field error, topological charge under the same
-discretization definition, and relevant geometric feature location.
-
-(numerical-methods-refinement-study-design)=
-## Production convergence protocol
-
-A recommended sequence is:
-
-1. define physical geometry, materials, interactions, boundary conditions, and observable;
-2. choose a baseline mesh from physical length scales;
-3. tighten time/relaxation/linear-solver tolerances until they do not limit the observable;
-4. generate at least three controlled spatial levels;
-5. preserve the same branch using continuation and mode-overlap checks;
-6. report realized element/cell counts, sizes, quality, region volume, and mesh digest;
-7. compare scalar and field observables with explicit norms;
-8. refine geometry/order/thickness/airbox independently when relevant;
-9. repeat the study for critical parameter extremes, not only one nominal state;
-10. set an acceptance threshold before selecting the production mesh.
-
-For hysteretic switching or phase boundaries, mesh convergence should bracket the critical parameter
-and quantify threshold shift rather than compare only one trajectory.
-
-(numerical-methods-refinement-python-api)=
 ## Python API
 
+**Complete Python example**
+
 ```python
-# %% Explicit size controls and local object refinement
 import fullmag as fm
 
 nm = 1.0e-9
-study = fm.study("mesh_refinement")
+study = fm.study("fem_local_refinement_reference")
 study.engine("fem")
-study.universe(mode="manual", size=(800 * nm, 400 * nm, 300 * nm))
+study.device("cpu", precision="double")
+study.mode("strict")
+study.universe(
+    mode="manual",
+    size=(800 * nm, 500 * nm, 260 * nm),
+    center=(0.0, 0.0, 0.0),
+    padding=(0.0, 0.0, 0.0),
+)
 study.universe.mesh(
-    calibrate_for="micromagnetics_relaxation",
-    size_preset="normal",
-    minimum_element_size=8 * nm,
-    maximum_element_size=80 * nm,
-    maximum_element_growth_rate=1.5,
-    curvature_factor=0.5,
-    narrow_region_resolution=0.6,
+    minimum_element_size=15 * nm,
+    maximum_element_size=100 * nm,
+    maximum_element_growth_rate=1.6,
+    grading="geometric",
 )
 
-magnet = study.geometry(fm.Box(300 * nm, 100 * nm, 5 * nm), name="magnet")
-magnet.mesh(
-    minimum_element_size=2.5 * nm,
-    maximum_element_size=5 * nm,
+film = study.geometry(
+    fm.Box(size=(600 * nm, 250 * nm, 10 * nm), name="film"),
+    name="film",
+)
+film.mesh(
+    mesh_strategy="free_tetrahedral",
+    calibrate_for="micromagnetics_relaxation",
+    size_preset="fine",
+    size_factor=1.0,
+    minimum_element_size=3 * nm,
+    maximum_element_size=10 * nm,
+    maximum_element_growth_rate=1.35,
+    size_fields=[
+        fm.mesh.object_core_relaxation(
+            "film",
+            maximum_element_size=10 * nm,
+            surface_maximum_element_size=6 * nm,
+            surface_distance=15 * nm,
+            edge_maximum_element_size=3 * nm,
+            edge_distance=20 * nm,
+        ),
+        fm.mesh.edge_distance_threshold(
+            "film",
+            maximum_element_size=3 * nm,
+            far_maximum_element_size=10 * nm,
+            distance=30 * nm,
+        ),
+    ],
     order=1,
     compute_quality=True,
     per_element_quality=True,
 )
-magnet.Ms = 800.0e3
-magnet.Aex = 13.0e-12
-magnet.m = fm.texture.uniform(1.0, 0.0, 0.0)
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.alpha = 0.02
+film.m = fm.texture.uniform(1.0, 1.0e-4, 0.0)
 
 study.exchange()
+study.demag(realization="poisson_robin")
+study.build_domain_mesh()
 study.stages.add_relax(
     stage_id="equilibrium",
-    algorithm="nonlinear_cg",
-    tolT=1.0e-6,
-    max_steps=50_000,
+    algorithm="llg_overdamped",
+    tolA=1.0e-4,
+    max_steps=20_000,
 )
 ```
 
-Typed per-object recipes additionally expose algorithms, optimization, boundary layers, swept
-parameters, extra size fields, and an ordered operation sequence. Unsupported operations must be
-reported as skipped/ignored/degraded rather than disappearing.
+## Control Room workflow
 
-### Public resolution semantics
+1. In **Explorer**, select the magnetic object's **Mesh** child (the object mesh-policy route).
+2. In **Inspector → Object Mesh Policy**, enable **Use object policy** when an object-specific override
+   is required.
+3. Configure the relevant groups: **Mesh Size Presets**, **Element Size Parameters**,
+   **Thin-Film Sweep Strategy**, **Interface and Transition Refinement**, **Backend Mesh Parameters**,
+   **Core Relaxation**, **Manual Size Field**, and **Edge and Corner Refinement**.
+4. Select **Apply Object Policy**. This stores authoring intent and invalidates mesh resources whose
+   revision no longer matches the model.
+5. Select **Build Mesh**. If the draft is dirty, the panel applies it first and dispatches the canonical
+   `mesh.build-selected` command.
+6. Open the **Quality** and **History** tabs. Compare requested and realized values, then inspect the
+   scoped size/quality distributions and the raw build report before running a solver.
 
-| Layer | Examples | Precedence/meaning |
-|---|---|---|
-| explicit local recipe | per-object `hmax`, interface/edge/corner fields | highest local intent |
-| workflow per-geometry | frontend/control-room object override | below typed recipe |
-| workflow default | global object default | inherited by objects without override |
-| study FEM default | `FEM.hmax`, `FEM.order` | lowest object fallback |
-| preset fallback | growth/curvature/narrow defaults | used only where numeric control is absent |
-| realized mesh | extracted sizes/quality/attributes | authoritative solver input |
+The read-only effective values come from backend resources. They must not be reconstructed from the
+current form fields because presets, capability gates and backend normalization can change the
+resolved configuration.
 
-(numerical-methods-refinement-problem-ir)=
-## ProblemIR and provenance
+Use **Mesh Size Presets** for the reproducible baseline. Use **Element Size Parameters** for
+explicit clamps and Gmsh controls. Configure **Interface and Transition Refinement**, **Core
+Relaxation**, **Manual Size Field**, or **Edge and Corner Refinement** only where the physics
+justifies them. The size histogram and scoped quality views should show the realized distribution;
+a filled form is not evidence that a field matched any entity.
 
-Store:
+## Verification, quality and provenance
 
-- requested calibration, preset, and all explicit numeric controls;
-- resolved numeric controls after alias/preset/default resolution;
-- every size field's ID, kind, target, source, status, reason, and native field ID;
-- ordered mesh operations and requested/actual method;
-- mesher algorithms, optimization, smoothing, version, and deterministic inputs;
-- build mode, fallback/degradation status;
-- mesh digest, region/submesh signatures, order, cell/facet families;
-- size, edge, volume, SICN, gamma, inversion, and degeneracy statistics by scope;
-- worst-element locations and markers;
-- convergence-study level, observable values, transfer/branch correspondence, and acceptance result.
+After every build, inspect the **realized** resource rather than assuming that the authored request
+was applied. The production check is:
 
-The generated mesh must be retained or content-addressed. Preset name plus `hmax` does not uniquely
-identify a triangulation.
+- geometry and mesh revisions match the current model;
+- requested and realized discretization/topology/order are recorded;
+- node, element and boundary-facet counts are nonzero for every required region;
+- region and boundary markers cover the complete topology;
+- inverted and degenerate element counts are zero;
+- interface diagnostics report no orphan, coincident, nonmanifold or unmatched facets;
+- local size distributions are consistent with the intended edge/interface/core grading;
+- any fallback or degradation has an explicit reason and an actual method;
+- a mesh-refinement sequence demonstrates convergence of the scientific observable.
 
-(numerical-methods-refinement-round-trip-and-failure-semantics)=
-## Round-trip and failure semantics
+`MeshQualityReport` exposes signed inverse condition number (SICN), gamma/radius quality, volume
+statistics and optional per-element arrays. The source constants `gamma_min=0.08` and
+`SICN p05=0.1` are implementation gates for named report paths; they are not universal physical
+acceptance thresholds for every element family or study.
 
-Reject invalid calibration/preset names, nonpositive/nonfinite controls, inconsistent min/max,
-invalid growth/curvature/narrow targets, inverted/degenerate topology, missing selectors under strict
-intent, and unsupported operations. Report skipped optimizer intent when `optimize_iters>0` but no
-optimizer is selected.
+## Mesh-convergence protocol
 
-A fallback to another 3D meshing algorithm may be accepted only with recorded requested/actual
-algorithm and preserved topology/region semantics. A local field ignored after component tags are
-lost is degradation, not successful refinement.
+A production result should include at least three discretizations. Refine only the parameter under
+study while holding geometry, material parameters, solver tolerances, initial state and output
+sampling fixed. Let $Q_h$ denote the observable for characteristic size $h$. Report
 
-(numerical-methods-refinement-discrete-realization)=
-## Discrete realization by lane
+```{math}
+:label: eq-meshing-relative-change-refinement
+\varepsilon_h=\frac{|Q_h-Q_{h/\rho}|}{\max(|Q_{h/\rho}|,Q_{\mathrm{scale}})},
+\qquad \rho>1,
+```
 
-| Discretization | Device | Status | Refinement realization |
-|---|---|---|---|
-| FDM | CPU/GPU | implemented | explicit cell-size/count sequence; rebuild masks and all grid-dependent operators |
-| FEM | CPU | source-backed | Gmsh size fields, algorithms, quality/statistics, extracted mesh |
-| FEM | GPU | mesh source-backed, operator-gated | same extracted mesh; supported element/order families required |
+with a documented scale for observables that can cross zero. For dynamics, compare resonance
+frequency, linewidth and mode profile; for relaxation, compare total energy and texture; for demag,
+compare field/energy and verify that moving the outer boundary does not change the result beyond the
+chosen tolerance.
 
-Adaptive `SizeFieldData` exists as a typed nodal target representation, but this page does not claim
-a universally qualified automatic solve–estimate–remesh–transfer loop for all Fullmag studies.
+## Diagnostics and failure semantics
 
-(numerical-methods-refinement-implementation-mapping)=
-## Implementation mapping
+- A semantic selector resolving zero entities is an error or explicit no-op, never silent success.
+- Raw Gmsh tags are fragile across geometry rebuilds; prefer semantic selectors.
+- An aggressive size jump can create poor quality or solver-conditioning problems despite a
+  locally fine mesh.
+- A preset name without effective numeric values is insufficient provenance.
+- Refine geometry and field sampling together for imported/curved boundaries; very small `hmin`
+  cannot repair a defective surface asset.
+- A lower element count after adding refinement can indicate that another size field was replaced
+  rather than combined; inspect the normalized field plan.
 
-| Responsibility | Repository path | Stable symbol/owner |
-|---|---|---|
-| Mesh option and preset vocabulary | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `MeshOptions`, `MESH_SIZE_CALIBRATIONS`, `MESH_SIZE_PRESETS` |
-| User-to-resolved controls | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `resolve_user_mesh_size_controls`, `ResolvedMeshSizeControls` |
-| Per-object recipe | `packages/fullmag-py/src/fullmag/model/discretization.py` | `PerObjectMeshRecipe`, `MeshOperation` |
-| Size-field composition | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | size-field plan owner |
-| Typed public controls | `packages/fullmag-py/src/fullmag/meshing/mesh_controls.py` | mesh-control validation owner |
-| Quality and statistics | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `MeshQualityReport`, `MeshStatisticsReport`, `MeshStatisticsScope` |
-| Realized status reporting | `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py` | `_realized_size_field_report`, `_build_mesh_operation_statuses` |
-| Nodal adaptation field | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `SizeFieldData` |
+## Where this is implemented
 
-(numerical-methods-refinement-validation)=
-## Verification requirements
+| Responsibility | Repository source | Stable owner / symbol |
+| --- | --- | --- |
+| Mesh-size presets and resolution | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py) | `MESH_SIZE_PRESETS, resolve_mesh_size_controls` |
+| Semantic field constructors | [`packages/fullmag-py/src/fullmag/meshing/mesh_controls.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/mesh_controls.py) | `object_core_relaxation, edge_distance_threshold, interface_shell` |
+| Field-plan normalization | [`packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py) | `size-field plan` |
+| Gmsh field application | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py) | `_apply_mesh_options` |
+| Object policy UI | [`apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx) | `ObjectMeshPolicyPanel` |
+| Size-field preview resource | [`apps/control-room/src/kernel/resources/geometryLifecycleResources.ts`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/apps/control-room/src/kernel/resources/geometryLifecycleResources.ts) | `object mesh size-field resource` |
 
-1. Resolve preset/default/override precedence with exact IR round-trip tests.
-2. Measure realized element size by each intended scope; do not infer it from authored fields.
-3. Validate positive Jacobians, zero inverted/degenerate count, quality tails, and worst elements.
-4. Verify selector coverage and requested/applied/ignored/degraded operation statuses.
-5. Use analytical/manufactured fields to establish formal interior convergence.
-6. Validate geometry volume/area convergence independently of field error.
-7. Establish target-observable convergence with at least three levels where possible.
-8. Track field/mode correspondence, not only scalar values.
-9. Repeat with tighter temporal, relaxation, linear, and airbox settings to exclude error pollution.
-10. Compare CPU/GPU on the identical mesh/grid digest.
-11. Archive the complete sequence, not only the selected production level.
+Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b12c2` on 2026-08-24.
 
-(numerical-methods-refinement-limitations)=
-## Limitations
+## Related documentation
 
-- Named presets are convenience policies, not accuracy grades.
-- `hmax` is a target and may not be the realized maximum in constrained regions.
-- Average quality can hide unacceptable tail elements.
-- Observed order can be invalidated by branch changes or mixed error sources.
-- Curvature and narrow-region fields depend on preserved CAD/component tags.
-- Uniform refinement can be prohibitively expensive for nonlocal demag and explicit time integration.
-- Typed adaptation fields do not establish a production automatic-adaptivity workflow.
-- Mesh convergence at one parameter point does not qualify the entire parameter sweep.
+- [FDM grids](fdm-grids.html)
+- [FEM ferromagnet meshes](fem/ferromagnet/index.html)
+- [Airbox grading](fem/airbox/grading.html)
 
-(numerical-methods-refinement-scientific-bibliography)=
-## Scientific bibliography
+## References
 
-1. S. C. Brenner and L. R. Scott, *The Mathematical Theory of Finite Element Methods*, 3rd ed.,
-   Springer, 2008, [doi:10.1007/978-0-387-75934-0](https://doi.org/10.1007/978-0-387-75934-0).
-2. P. G. Ciarlet, *The Finite Element Method for Elliptic Problems*, SIAM Classics, 2002,
-   [doi:10.1137/1.9780898719208](https://doi.org/10.1137/1.9780898719208).
-3. C. Geuzaine and J.-F. Remacle, “Gmsh: A three-dimensional finite element mesh generator with
-   built-in pre- and post-processing facilities,” *International Journal for Numerical Methods in
-   Engineering* **79**, 1309--1331 (2009),
-   [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
-
-(numerical-methods-refinement-source-code-index)=
-## Source-code index
-
-| Claim | Path | Stable symbol | Responsibility | Evidence |
-|---|---|---|---|---|
-| Preset values | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `_MESH_SIZE_PRESET_DEFAULTS` | resolved growth/curvature/narrow defaults | source/tests |
-| Quality fields | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `MeshQualityReport`, `MeshStatisticsScope` | durable quality/statistics schema | serialization/tests |
-| Warning gates | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `GAMMA_MIN_QUALITY_THRESHOLD`, `SICN_P05_QUALITY_THRESHOLD` | reviewed warning thresholds | source/tests |
-| Operation outcomes | `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py` | `_build_mesh_operation_statuses` | requested versus actual meshing operations | fallback tests |
+- C. Geuzaine and J.-F. Remacle, “Gmsh: a three-dimensional finite element mesh generator with built-in pre- and post-processing facilities,” *International Journal for Numerical Methods in Engineering* **79** (2009), 1309–1331, [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
+- C. Abert, “Micromagnetics and spintronics: models and numerical methods,” *European Physical Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
+- Gmsh reference manual, mesh algorithms, size fields, extrusion and physical groups: [gmsh.info/doc/texinfo](https://gmsh.info/doc/texinfo/).

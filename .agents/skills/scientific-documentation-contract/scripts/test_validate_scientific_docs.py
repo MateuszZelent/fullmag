@@ -153,6 +153,47 @@ Requested intent is preserved; planner-resolved execution is recorded. Validatio
         errors = self.errors(manifest)
         self.assertTrue(any("declaration not found" in error for error in errors))
 
+    def test_generic_rust_function_is_a_stable_source_symbol(self) -> None:
+        source = self.repo / "src/integrator.rs"
+        source.parent.mkdir(exist_ok=True)
+        source.write_text(
+            "pub fn heun_trial<F>(callback: F) where F: FnMut() {}\n",
+            encoding="utf-8",
+        )
+        manifest = copy.deepcopy(self.manifest)
+        manifest["sources"][0]["path"] = "src/integrator.rs"
+        manifest["sources"][0]["symbol"] = "heun_trial"
+        self.page_path.write_text(
+            self.page_path.read_text(encoding="utf-8")
+            + "\n| coupled trial | src/integrator.rs | heun_trial |\n",
+            encoding="utf-8",
+        )
+
+        self.assertEqual([], self.errors(manifest))
+
+    def test_rust_enum_is_a_stable_source_symbol(self) -> None:
+        source = self.repo / "src/error.rs"
+        source.parent.mkdir(exist_ok=True)
+        source.write_text(
+            "pub enum EngineErrorCode { NaNValue, InfiniteValue }\n",
+            encoding="utf-8",
+        )
+        manifest = copy.deepcopy(self.manifest)
+        manifest["sources"][0].update(
+            {
+                "path": "src/error.rs",
+                "symbol": "EngineErrorCode",
+                "evidence_status": "unit_integration_proof",
+            }
+        )
+        self.page_path.write_text(
+            self.page_path.read_text(encoding="utf-8")
+            + "\n| typed engine error | src/error.rs | EngineErrorCode |\n",
+            encoding="utf-8",
+        )
+
+        self.assertEqual([], self.errors(manifest))
+
     def test_justfile_recipe_is_a_stable_source_symbol(self) -> None:
         justfile = self.repo / "justfile"
         justfile.write_text("verify-managed-charge:\n    echo proof\n", encoding="utf-8")

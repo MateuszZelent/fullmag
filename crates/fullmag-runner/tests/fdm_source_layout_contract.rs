@@ -172,6 +172,22 @@ fn native_m1_v1_build_inputs_and_abi_translation_unit_are_fail_closed() {
 }
 
 #[test]
+fn windows_native_fdm_build_links_the_selected_cmake_configuration() {
+    let root = crate_root();
+    let build_rs = std::fs::read_to_string(root.join("../fullmag-fdm-sys/build.rs"))
+        .expect("read fullmag-fdm-sys build script");
+
+    assert!(
+        build_rs.contains(".arg(\"--config\")"),
+        "multi-config CMake builds must select the configuration explicitly"
+    );
+    assert!(
+        build_rs.contains("build_dir.join(\"backends/fdm\").join(&cmake_config)"),
+        "Windows link search must include the selected CMake configuration directory"
+    );
+}
+
+#[test]
 fn explicit_multilayer_cuda_device_resident_lane_has_no_warm_vector_roundtrips() {
     let root = crate_root();
     let source = std::fs::read_to_string(root.join("src/fdm/gpu/cuda/multilayer.rs"))

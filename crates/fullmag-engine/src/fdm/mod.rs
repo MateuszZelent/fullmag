@@ -16,9 +16,19 @@ pub use cpu::fft::{
 
 pub use shared::problem::ExchangeLlgProblem;
 
+/// Maximum RK23 RHS evaluations for the canonical adaptive CPU oracle workload.
+///
+/// The gate allows five percent over the measured 2,364-evaluation baseline.
+pub const FDM_CPU_ADAPTIVE_RK23_MAX_RHS_EVALS_TO_ORACLE: u32 = 2_483;
+/// Maximum RK45 RHS evaluations for the canonical adaptive CPU oracle workload.
+///
+/// The gate allows five percent over the measured 128-evaluation baseline.
+pub const FDM_CPU_ADAPTIVE_RK45_MAX_RHS_EVALS_TO_ORACLE: u32 = 135;
+
 pub use cpu::state::{
-    AbmHistory, AbmHistorySoA, ExchangeLlgState, ExchangeLlgStateSoA, IntegratorBuffers,
-    SolverSession,
+    AbmHistory, AbmHistorySoA, AdaptiveAttemptDecision, AdaptiveAttemptReason,
+    AdaptiveAttemptRecord, ExchangeLlgState, ExchangeLlgStateSoA, IntegratorBuffers, SolverSession,
+    MAX_ADAPTIVE_ATTEMPT_RECORDS,
 };
 pub use shared::observables::{EffectiveFieldObservables, RhsEvaluation, StepReport};
 
@@ -31,7 +41,7 @@ pub use shared::terms::{
 };
 pub use shared::types::{
     neighbor_index, AdaptiveStepConfig, AxisBoundary, CellSize, CoupledImexArk2Stage,
-    CoupledImexArk2Tableau, EngineError, EvaluationRequest, ExternalStageTerms, FdmBoundaryPolicy,
-    FdmDemagBoundary, GridShape, LlgConfig, MaterialParameters, ResolvedFdmPeriodicWorkspace,
-    Result, TimeIntegrator, TransportStageErrorBudget,
+    CoupledImexArk2Tableau, EngineError, EngineErrorCode, EvaluationRequest, ExternalStageTerms,
+    FdmBoundaryPolicy, FdmDemagBoundary, GridShape, LlgConfig, MaterialParameters,
+    ResolvedFdmPeriodicWorkspace, Result, TimeIntegrator, TransportStageErrorBudget,
 };

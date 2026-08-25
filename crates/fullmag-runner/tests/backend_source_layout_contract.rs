@@ -308,6 +308,24 @@ fn cuda_fdm_execution_loop_has_cuda_owner() {
 }
 
 #[test]
+fn cuda_fdm_execution_owner_keeps_strict_receipt_lifecycle() {
+    let owner_path = crate_root().join("src/fdm/gpu/cuda/execute.rs");
+    let owner = source(&owner_path);
+
+    for needle in [
+        "FdmGpuReceiptLifecycle::begin(",
+        "receipt_lifecycle.finalize_after_outcome(",
+        "fdm_gpu_execution_receipt: Some(initial_execution_receipt)",
+    ] {
+        assert!(
+            owner.contains(needle),
+            "{} must own the strict CUDA receipt lifecycle: {needle}",
+            owner_path.display()
+        );
+    }
+}
+
+#[test]
 fn fdm_execution_routing_has_fdm_owner() {
     let root = crate_root();
     let dispatch = production_source(&root.join("src/dispatch.rs"));

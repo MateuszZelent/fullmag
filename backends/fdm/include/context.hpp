@@ -421,6 +421,8 @@ struct Context {
     fullmag_fdm_fsal_invalidation_reason fsal_invalidation_reason =
         FULLMAG_FDM_FSAL_INVALIDATION_CACHE_EMPTY;
     uint64_t fsal_invalidation_count = 0;
+    uint64_t fsal_invalidation_reason_counts
+        [FULLMAG_FDM_FSAL_INVALIDATION_REASON_COUNT]{};
     uint64_t rhs_evaluations_saved = 0;
     uint64_t thermal_rng_draws = 0;
     uint64_t stale_publication_count = 0;

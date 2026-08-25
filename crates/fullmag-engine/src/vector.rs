@@ -10,7 +10,29 @@ use crate::Vector3;
 
 /// Normalize a vector. Returns `[0, 0, 0]` for zero vectors (inactive cells).
 pub fn normalized(vector: Vector3) -> crate::Result<Vector3> {
+    if vector.iter().any(|component| component.is_nan()) {
+        return Err(crate::EngineError::with_code(
+            crate::EngineErrorCode::NaNValue,
+            "cannot normalize a non-finite vector",
+        ));
+    }
+    if vector.iter().any(|component| component.is_infinite()) {
+        return Err(crate::EngineError::with_code(
+            crate::EngineErrorCode::InfiniteValue,
+            "cannot normalize a non-finite vector",
+        ));
+    }
     let n = norm(vector);
+    if !n.is_finite() {
+        return Err(crate::EngineError::with_code(
+            if n.is_nan() {
+                crate::EngineErrorCode::NaNValue
+            } else {
+                crate::EngineErrorCode::InfiniteValue
+            },
+            "cannot normalize a non-finite vector",
+        ));
+    }
     if n <= 0.0 {
         // Inactive cell (masked out by active_mask) — preserve zero vector
         return Ok([0.0, 0.0, 0.0]);
@@ -92,4 +114,25 @@ pub fn squared_norm(vector: Vector3) -> f64 {
 /// Euclidean norm.
 pub fn norm(vector: Vector3) -> f64 {
     squared_norm(vector).sqrt()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalized;
+    use crate::EngineErrorCode;
+
+    #[test]
+    fn normalization_rejects_nonfinite_vectors_with_a_typed_reason() {
+        for (vector, expected) in [
+            ([f64::NAN, 0.0, 0.0], EngineErrorCode::NaNValue),
+            ([f64::INFINITY, 0.0, 0.0], EngineErrorCode::InfiniteValue),
+            (
+                [f64::NEG_INFINITY, 0.0, 0.0],
+                EngineErrorCode::InfiniteValue,
+            ),
+        ] {
+            let error = normalized(vector).expect_err("non-finite vector must be rejected");
+            assert_eq!(error.code(), expected);
+        }
+    }
 }

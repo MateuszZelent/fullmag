@@ -1,0 +1,150 @@
+{
+  "document": {
+    "path": "docs/physics/0900-native-fem-operator-contracts-and-validation.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "implemented-unvalidated"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "Strona definiuje natywny kontrakt operatorów FEM; kontrakty FDM mają osobnych właścicieli."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "Receipt ABI v1 opisany na tej stronie należy wyłącznie do natywnego backendu FEM GPU."
+    }
+  ],
+  "equations": [
+    {
+      "id": "fem-native-reduced-magnetization",
+      "symbols": ["m", "x", "t", "M", "Ms"],
+      "sources": ["cpu-llg", "gpu-llg"]
+    },
+    {
+      "id": "fem-native-explicit-llg",
+      "symbols": ["m", "t", "gamma0", "alpha", "Heff", "tau"],
+      "sources": ["cpu-llg", "gpu-llg"]
+    },
+    {
+      "id": "fem-native-overdamped-llg",
+      "symbols": ["m", "t", "gamma0", "alpha", "Heff", "tau"],
+      "sources": ["cpu-llg", "gpu-llg"]
+    },
+    {
+      "id": "fem-native-energy-field-variation",
+      "symbols": ["deltaE", "mu0", "Omega", "Ms", "Hterm", "deltam", "dV"],
+      "sources": ["demag-energy"]
+    },
+    {
+      "id": "fem-native-directional-derivative",
+      "symbols": ["E", "m", "epsilon", "vvec", "mu0", "Omega", "Ms", "H", "dV"],
+      "sources": ["demag-energy"]
+    },
+    {
+      "id": "fem-native-demag-poisson",
+      "symbols": ["D", "u", "vtest", "dV", "Omega", "M", "Hdemag", "Edemag", "mu0", "Eboundary"],
+      "sources": ["demag-rhs", "demag-recovery", "demag-energy"]
+    }
+  ],
+  "symbols": [
+    {"id": "m", "latex": "\\mathbf{m}", "meaning": "zredukowana magnetyzacja", "si_unit": "1"},
+    {"id": "M", "latex": "\\mathbf{M}", "meaning": "magnetyzacja", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "Ms", "latex": "M_s", "meaning": "magnetyzacja nasycenia", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "Heff", "latex": "\\mathbf{H}_{\\mathrm{eff}}", "meaning": "pole efektywne", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "Hterm", "latex": "\\mathbf{H}_{\\mathrm{term}}", "meaning": "wkład pola energetycznego", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "H", "latex": "\\mathbf{H}", "meaning": "ogólne pole skuteczne w teście wariacyjnym", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "Hdemag", "latex": "\\mathbf{H}_{\\mathrm{demag}}", "meaning": "pole demagnetyzacji", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "deltam", "latex": "\\delta\\mathbf{m}", "meaning": "zaburzenie styczne", "si_unit": "1"},
+    {"id": "vvec", "latex": "\\mathbf{v}", "meaning": "kierunek testu różnicowego", "si_unit": "1"},
+    {"id": "gamma0", "latex": "\\gamma_0", "meaning": "współczynnik żyromagnetyczny solvera", "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}"},
+    {"id": "alpha", "latex": "\\alpha", "meaning": "tłumienie Gilberta", "si_unit": "1"},
+    {"id": "tau", "latex": "\\boldsymbol{\\tau}_{\\mathrm{direct}}", "meaning": "bezpośredni moment", "si_unit": "\\mathrm{s^{-1}}"},
+    {"id": "mu0", "latex": "\\mu_0", "meaning": "przenikalność próżni", "si_unit": "\\mathrm{N\\,A^{-2}}"},
+    {"id": "E", "latex": "E", "meaning": "energia", "si_unit": "\\mathrm{J}"},
+    {"id": "Edemag", "latex": "E_{\\mathrm{demag}}", "meaning": "energia demagnetyzacji", "si_unit": "\\mathrm{J}"},
+    {"id": "Eboundary", "latex": "E_{\\partial D}", "meaning": "wkład energii brzegowej", "si_unit": "\\mathrm{J}"},
+    {"id": "deltaE", "latex": "\\delta E", "meaning": "wariacja energii", "si_unit": "\\mathrm{J}"},
+    {"id": "epsilon", "latex": "\\varepsilon", "meaning": "parametr różnicy centralnej", "si_unit": "1"},
+    {"id": "Omega", "latex": "\\Omega_m", "meaning": "dziedzina magnetyczna", "si_unit": "\\mathrm{m^3}"},
+    {"id": "D", "latex": "D", "meaning": "pełna dziedzina Poissona", "si_unit": "\\mathrm{m^3}"},
+    {"id": "vtest", "latex": "v", "meaning": "funkcja testowa Poissona", "si_unit": "\\mathrm{A}"},
+    {"id": "dV", "latex": "\\mathrm{d}V", "meaning": "miara objętości", "si_unit": "\\mathrm{m^3}"},
+    {"id": "t", "latex": "t", "meaning": "czas", "si_unit": "\\mathrm{s}"},
+    {"id": "x", "latex": "\\mathbf{x}", "meaning": "położenie", "si_unit": "\\mathrm{m}"},
+    {"id": "u", "latex": "u", "meaning": "scalar magnetic potential", "si_unit": "\\mathrm{A}"}
+  ],
+  "sources": [
+    {"id": "python-study", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyBuilder", "responsibility": "Buduje stage-first authoring i obniża je do kanonicznego problemu."},
+    {"id": "python-stages", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyStagesBuilder", "responsibility": "Waliduje i zapisuje uporządkowane etapy, w tym add_run(until)."},
+    {"id": "python-problem-lowering", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "class Problem", "responsibility": "Serializuje rzeczywisty ProblemIR 0.3, w tym geometry, materials, magnets, study i runtime metadata."},
+    {"id": "python-stage-exporter", "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py", "symbol": "export_study_pipeline_document", "responsibility": "Eksportuje study_pipeline.v1 i zachowuje run until poza fizycznym StudyIR."},
+    {"id": "python-universe", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyUniverseHandle", "responsibility": "Konfiguruje jawną domenę i kontrolki siatki airbox FEM."},
+    {"id": "python-magnet", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class MagnetHandle", "responsibility": "Przenosi materiał, stan początkowy i per-object mesh do struktury problemu."},
+    {"id": "python-mesh", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class GeometryMeshHandle", "responsibility": "Waliduje maximum_element_size i order dla geometrii magnetycznej."},
+    {"id": "python-box", "path": "packages/fullmag-py/src/fullmag/model/geometry.py", "symbol": "class Box", "responsibility": "Waliduje i obniża dodatni trójwymiarowy rozmiar bryły."},
+    {"id": "python-uniform-m", "path": "packages/fullmag-py/src/fullmag/init/magnetization.py", "symbol": "class UniformMagnetization", "responsibility": "Waliduje i obniża jednorodny wektor magnetyzacji początkowej."},
+    {"id": "python-fem-linear-policy", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FemLinearSolverPolicy", "responsibility": "Waliduje i serializuje politykę liniowego solve demag FEM."},
+    {"id": "cpu-llg", "path": "backends/fem/cpu/mfem/integrators/llg_rhs.cpp", "symbol": "llg_rhs_aos", "responsibility": "Realizuje backend-neutralne równanie LLG na FEM CPU."},
+    {"id": "gpu-llg", "path": "backends/fem/gpu/cuda/integrators/llg/llg_rhs_kernels.cu", "symbol": "fullmag_cuda_llg_rhs_fused", "responsibility": "Realizuje RHS LLG na urządzeniu CUDA."},
+    {"id": "demag-rhs", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp", "symbol": "assemble_demag_poisson_rhs", "responsibility": "Składa prawą stronę słabej postaci Poissona."},
+    {"id": "demag-recovery", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp", "symbol": "recover_demag_poisson_field", "responsibility": "Odzyskuje pole demagnetyzacji z potencjału."},
+    {"id": "demag-energy", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp", "symbol": "demag_poisson_energy_from_field", "responsibility": "Liczy energię demagnetyzacji z odzyskanego pola."},
+    {"id": "gpu-plan", "path": "backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp", "symbol": "gpu_rk_plan_device_resident", "responsibility": "Wyznacza required i resolved operator masks bez deklarowania wykonania."},
+    {"id": "receipt-commit", "path": "backends/fem/gpu/cuda/runtime/execution_receipt.cpp", "symbol": "gpu_execution_receipt_commit_attempt", "responsibility": "Atomowo publikuje wykonanie ostatniej zaakceptowanej próby."},
+    {"id": "receipt-abi", "path": "backends/fem/src/api.cpp", "symbol": "fullmag_fem_backend_gpu_execution_receipt_v1", "responsibility": "Udostępnia fail-closed append-only ABI receipt v1."},
+    {"id": "receipt-rust", "path": "crates/fullmag-runner/src/fem/execution_receipt.rs", "symbol": "validate_strict_fem_gpu_execution_receipt", "responsibility": "Waliduje strict receipt i przekazuje rzeczywiste wykonanie do provenance."},
+    {"id": "receipt-qualification", "path": "backends/fem/tests/llg_time_domain_qualification.cpp", "symbol": "main", "responsibility": "Uruchamia kwalifikację, która wymaga ABI v1, pełnych masek, zera fallbacków i zera compute transferów."},
+    {"id": "receipt-comparator", "path": "scripts/compare_fem_llg_time_domain_qualification.py", "symbol": "validate_gpu_execution_receipt", "responsibility": "Wiąże parity z source hash i odrzuca hybrid lub niepełne operator IDs."},
+    {"id": "receipt-comparator-tests", "path": "scripts/test_compare_fem_llg_time_domain_qualification.py", "symbol": "class ComparatorBehaviorTests", "responsibility": "Uruchamia funkcję i CLI dla pełnego receipt oraz wymaganych przypadków fail-closed."},
+    {"id": "semantic-lowering-check", "path": "scripts/check_llg_time_domain_contract_docs.py", "symbol": "_lowered_example_values", "responsibility": "Uruchamia dokładny przykład strony przez canonical export-run-config i porównuje 32 wartości oraz granice."},
+    {"id": "managed-gpu-gate", "path": "justfile", "symbol": "verify-fem-llg-time-domain-qualification-gpu", "responsibility": "Uruchamia container-first kwalifikację i zapisuje source snapshot identity."}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "fm.study.problem_name", "type": "str | None", "default": "None", "si_unit": "1", "validation": "non-empty string when provided", "meaning": "stable problem name", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "problem_meta.name"},
+      {"python": "StudyBuilder.engine.backend", "type": "str", "default": "required", "si_unit": "1", "validation": "auto, fdm, or fem; unknown value rejected during lowering", "meaning": "requested solver family", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "backend_policy.requested_backend"},
+      {"python": "StudyBuilder.device.spec", "type": "str", "default": "required", "si_unit": "1", "validation": "cpu, gpu, auto, or cuda:N with non-negative N; unavailable forced GPU fails closed", "meaning": "requested execution device", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "problem_meta.runtime_metadata.runtime_selection.device (normalized requested runtime metadata)"},
+      {"python": "StudyBuilder.device.precision", "type": "str | None", "default": "None", "si_unit": "1", "validation": "single or double; this lane requires double", "meaning": "requested arithmetic precision", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "backend_policy.execution_precision"},
+      {"python": "StudyBuilder.mode.execution_mode", "type": "str", "default": "required", "si_unit": "1", "validation": "strict, extended, or hybrid", "meaning": "fallback and legality policy", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "validation_profile.execution_mode"},
+      {"python": "StudyUniverseHandle.mode", "type": "str | None", "default": "None (inherits auto)", "si_unit": "1", "validation": "auto or manual; manual requires size", "meaning": "universe authoring policy", "backend_support": "FEM CPU/GPU", "problem_ir": "problem_meta.runtime_metadata.study_universe.mode (authoring metadata)"},
+      {"python": "StudyUniverseHandle.size", "type": "Sequence[float] | None", "default": "None", "si_unit": "\\mathrm{m}", "validation": "finite positive three-vector for manual mode", "meaning": "full Poisson-domain extent", "backend_support": "FEM CPU/GPU", "problem_ir": "problem_meta.runtime_metadata.study_universe.size (authoring metadata)"},
+      {"python": "StudyUniverseHandle.mesh.maximum_element_size", "type": "float | None", "default": "None", "si_unit": "\\mathrm{m}", "validation": "finite and greater than zero", "meaning": "target airbox element size", "backend_support": "FEM CPU/GPU", "problem_ir": "problem_meta.runtime_metadata.study_universe.airbox_hmax (authoring metadata)"},
+      {"python": "Box.size", "type": "tuple[float, float, float]", "default": "required", "si_unit": "\\mathrm{m}", "validation": "finite positive three-vector", "meaning": "magnetic box dimensions", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "geometry.entries[0].size"},
+      {"python": "Box.name", "type": "str", "default": "box", "si_unit": "1", "validation": "non-empty string; the study geometry owner normalizes the emitted asset name", "meaning": "geometry constructor name before owner normalization", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "geometry.entries[0].name (normalized to film_geom; Box.name is not preserved independently)"},
+      {"python": "StudyBuilder.geometry.shape", "type": "object", "default": "required", "si_unit": "1", "validation": "object must lower through to_ir", "meaning": "magnetic geometry", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "geometry.entries[0]"},
+      {"python": "StudyBuilder.geometry.name", "type": "str", "default": "body", "si_unit": "1", "validation": "non-empty string at lowering", "meaning": "user-facing magnet name", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "magnets[0].name"},
+      {"python": "MagnetHandle.Ms", "type": "float", "default": "required before lowering", "si_unit": "\\mathrm{A\\,m^{-1}}", "validation": "finite and greater than zero", "meaning": "saturation magnetization", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "materials[0].saturation_magnetisation"},
+      {"python": "MagnetHandle.Aex", "type": "float", "default": "required before lowering", "si_unit": "\\mathrm{J\\,m^{-1}}", "validation": "finite and greater than zero", "meaning": "exchange stiffness", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "materials[0].exchange_stiffness"},
+      {"python": "MagnetHandle.alpha", "type": "float", "default": "0.01", "si_unit": "1", "validation": "finite and non-negative", "meaning": "Gilbert damping", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "materials[0].damping"},
+      {"python": "MagnetHandle.m", "type": "InitialMagnetization", "default": "uniform (1,0,0)", "si_unit": "1", "validation": "supported initial-magnetization object", "meaning": "initial reduced magnetization", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "magnets[0].initial_magnetization"},
+      {"python": "UniformMagnetization.value", "type": "Sequence[float]", "default": "required", "si_unit": "1", "validation": "finite three-vector", "meaning": "uniform initial vector", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "magnets[0].initial_magnetization.value"},
+      {"python": "GeometryMeshHandle.maximum_element_size", "type": "float | str | None", "default": "None", "si_unit": "\\mathrm{m}", "validation": "positive SI value or supported calibrated token", "meaning": "target magnetic element size", "backend_support": "FEM CPU/GPU", "problem_ir": "problem_meta.runtime_metadata.mesh_workflow.per_geometry[0].maximum_element_size (authoring metadata)"},
+      {"python": "GeometryMeshHandle.order", "type": "int | None", "default": "None (resolves 1)", "si_unit": "1", "validation": "strict qualified slice requires exactly 1", "meaning": "FEM basis order", "backend_support": "FEM CPU/GPU", "problem_ir": "problem_meta.runtime_metadata.mesh_workflow.per_geometry[0].order (authoring metadata)"},
+      {"python": "StudyBuilder.exchange.enabled", "type": "bool", "default": "True", "si_unit": "1", "validation": "boolean", "meaning": "enable exchange energy", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "energy_terms[kind=exchange] presence/absence (no enabled field)"},
+      {"python": "StudyBuilder.demag.realization", "type": "str | None", "default": "None", "si_unit": "1", "validation": "supported demag realization; this slice uses poisson_robin", "meaning": "requested demag realization", "backend_support": "FEM CPU/GPU", "problem_ir": "energy_terms[kind=demag].realization"},
+      {"python": "StudyBuilder.fem_demag_solver.solver", "type": "str", "default": "CG", "si_unit": "1", "validation": "CG or GMRES", "meaning": "Poisson linear solver", "backend_support": "FEM CPU/GPU", "problem_ir": "backend_policy.discretization_hints.fem.demag_solver_policy.solver"},
+      {"python": "StudyBuilder.fem_demag_solver.preconditioner", "type": "str", "default": "AMG", "si_unit": "1", "validation": "AMG, JACOBI, or NONE", "meaning": "Poisson preconditioner", "backend_support": "FEM CPU/GPU", "problem_ir": "backend_policy.discretization_hints.fem.demag_solver_policy.preconditioner"},
+      {"python": "StudyBuilder.fem_demag_solver.rtol", "type": "float", "default": "1e-8", "si_unit": "1", "validation": "finite and greater than zero", "meaning": "relative linear tolerance", "backend_support": "FEM CPU/GPU", "problem_ir": "backend_policy.discretization_hints.fem.demag_solver_policy.rtol"},
+      {"python": "StudyBuilder.fem_demag_solver.max_iterations", "type": "int", "default": "500", "si_unit": "1", "validation": "integer at least 1", "meaning": "linear iteration limit", "backend_support": "FEM CPU/GPU", "problem_ir": "backend_policy.discretization_hints.fem.demag_solver_policy.max_iterations"},
+      {"python": "StudyBuilder.solver.integrator", "type": "str | None", "default": "None", "si_unit": "1", "validation": "heun, rk4, rk23, or rk45", "meaning": "time integrator", "backend_support": "FDM/FEM CPU/GPU; strict FEM GPU here uses rk45", "problem_ir": "study.dynamics.integrator"},
+      {"python": "StudyBuilder.solver.dt_initial", "type": "float | None", "default": "None", "si_unit": "\\mathrm{s}", "validation": "positive and between dt_min and dt_max", "meaning": "initial adaptive timestep", "backend_support": "FDM/FEM CPU/GPU where adaptive integrator is supported", "problem_ir": "study.dynamics.adaptive_timestep.dt_initial"},
+      {"python": "StudyBuilder.solver.dt_min", "type": "float | None", "default": "None", "si_unit": "\\mathrm{s}", "validation": "finite and greater than zero", "meaning": "minimum adaptive timestep", "backend_support": "FDM/FEM CPU/GPU where adaptive integrator is supported", "problem_ir": "study.dynamics.adaptive_timestep.dt_min"},
+      {"python": "StudyBuilder.solver.dt_max", "type": "float | None", "default": "None", "si_unit": "\\mathrm{s}", "validation": "finite, positive, and not below dt_min", "meaning": "maximum adaptive timestep", "backend_support": "FDM/FEM CPU/GPU where adaptive integrator is supported", "problem_ir": "study.dynamics.adaptive_timestep.dt_max"},
+      {"python": "StudyBuilder.solver.max_err", "type": "float | None", "default": "None", "si_unit": "1", "validation": "finite and greater than zero; required by convenience adaptive controls", "meaning": "embedded vector-error budget", "backend_support": "FDM/FEM CPU/GPU where adaptive integrator is supported", "problem_ir": "study.dynamics.adaptive_timestep.atol"},
+      {"python": "StudyBuilder.solver.g", "type": "float | None", "default": "None", "si_unit": "1", "validation": "finite and greater than zero; mutually exclusive with gamma", "meaning": "electron g-factor normalized to the stored gyromagnetic ratio", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "study.dynamics.gyromagnetic_ratio (normalized from g; g is not stored)"},
+      {"python": "StudyStagesBuilder.add_run.until", "type": "float | None", "default": "required", "si_unit": "\\mathrm{s}", "validation": "finite and greater than zero", "meaning": "physical stage end time", "backend_support": "FDM/FEM CPU/GPU", "problem_ir": "canonical stage exporter stages[0].default_until_seconds; ProblemIR metadata problem_meta.runtime_metadata.study_pipeline.nodes[0].payload.until_seconds"}
+    ]
+  }
+}

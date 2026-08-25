@@ -10,6 +10,27 @@
 | Audytowany snapshot | `04e362df5dd51b1e6acca3aab9033c8124d3d6d0` |
 | Zależności | `FDM-GPU-TRX-001` |
 
+## Stan implementacji — 2026-08-24
+
+Stan ogólny: **PARTIALLY CONFIRMED**. Kontrakt źródłowy i ABI zostały
+naprawione, ale finding nie jest zamknięty bez świeżego dowodu wykonania CUDA,
+niezależnego oracle trajektorii i artefaktu wydajnościowego.
+
+- `rhs_allows_fsal_reuse` jest jednym właścicielem decyzji dla RK23/DP45,
+  FP32/FP64 i odrzuca termikę, nieznaną lub zmienioną tożsamość źródła,
+  waveform, transport, projection oraz realization.
+- Udany import checkpointu v3 zachowuje accepted stochastic identity, lecz
+  zawsze unieważnia cache FSAL z typed reason `CHECKPOINT_RESTORE`.
+- Append-only `fullmag_fdm_fsal_telemetry_v2` zachowuje ABI v1 i publikuje
+  osobne liczniki dla każdego stabilnego reason code; odmowa reuse jest liczona
+  dokładnie raz, bez podwójnego naliczania podczas accepted stage.
+- Natywny build CPU-off, kontrakty FSAL/termiki/time-policy i linkowany test
+  layoutu C/Rust przechodzą. Windows DLL generuje import library przez
+  `WINDOWS_EXPORT_ALL_SYMBOLS`; buildy pozostają poza repozytorium.
+- Managed CUDA runtime, CPU/GPU trajectory parity, stochastic oracle,
+  `RHS saved/step` oraz time-to-accuracy pozostają **NOT VERIFIED**. Capability
+  nie może zostać promowana ponad `unvalidated`.
+
 ## 1. Cel dokumentu
 
 Ten plik jest wykonawczym planem zamknięcia ustalenia `FDM-GPU-NUM-003`. Nie opisuje jedynie kierunku refaktoryzacji: definiuje docelowy invariant, właścicieli danych, wymagane zmiany w kodzie, testy regresyjne, dowody fizyczne i numeryczne oraz kryteria promocji do statusu produkcyjnego.

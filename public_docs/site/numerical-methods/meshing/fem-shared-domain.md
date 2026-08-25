@@ -1,406 +1,281 @@
 ---
-title: FEM Shared Domain
+title: "FEM shared-domain meshing"
+description: "Conforming assembly of magnetic bodies, interfaces and the exterior air domain."
+summary: "A shared-domain mesh is one immutable topology containing all magnetic and air regions required by coupled FEM operators, with conforming interfaces and semantic markers."
 status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-reviewed_revision: 88c7160080bc1e8519950df283d2dd02087cc3da
-source_of_truth: FEM and per-object mesh schemas, shared Gmsh assembly/extraction, target resolution, and SharedDomainBuildReport
+last_updated: 2026-08-24
+reviewed_revision: 5db00ccf0113b9756fec2d46feb36ade762b12c2
+source_of_truth: "Shared-domain assembly policy, Gmsh OCC fragmentation, typed topology extraction, manifest certificates and solver capability checks"
 ---
 
 (public-docs-numerical-methods-meshing-fem-shared-domain)=
 # FEM shared-domain meshing
 
-:::{admonition} One solver mesh, several physical regions
+**Last changes: 12:31 24.08.2026**
+
+A shared-domain mesh is one immutable topology containing all magnetic and air regions required by coupled FEM operators, with conforming interfaces and semantic markers.
+
+::::{admonition} Implementation status
 :class: important
 
-Fullmag's FEM workflow builds one conforming mesh for magnetic objects and, when required, the
-nonmagnetic air region. Region attributes determine where magnetization, material coefficients,
-scalar potential, and boundary terms exist. Concatenating independently meshed objects is not
-mathematically equivalent to a conforming shared domain.
-:::
+Conforming tetrahedral shared-domain builds are implemented. Mixed prism–pyramid–tetrahedron assembly is supported only in advertised scenarios; generic silent fallback is forbidden in strict mode.
+::::
 
-(numerical-methods-fem-shared-domain-problem-statement)=
-## Discrete domain
+## Scope and purpose
 
-Let
+Use a shared-domain build whenever an operator spans more than one geometry or requires an
+exterior region. Fullmag assembles geometry, object policies, airbox policy and semantic
+selections before generating one mesh. Per-object preview meshes are not substitutes for the
+final shared domain because boolean fragmentation can change nodes, facets and markers.
 
-```{math}
-:label: eq-numerical-fem-shared-domain
-\Omega_h
-=\left(\bigcup_{r=1}^{R}\Omega_{m,r,h}\right)
-\cup\Omega_{a,h}
-```
+## Scientific and numerical model
 
-be the realized solver domain, with magnetic subdomains $\Omega_{m,r,h}$ and optional air region
-$\Omega_{a,h}$. A conforming mesh $\mathcal T_h$ satisfies
+### Scientific invariants
 
-```{math}
-:label: eq-numerical-fem-shared-conformity
-\overline T_i\cap\overline T_j
-\in\{\varnothing,\text{shared vertex},\text{shared edge},\text{shared face},
-\overline T_i=\overline T_j\}
-```
+A finite-element mesh is not only a visualization asset. It defines the trial/test spaces used by
+exchange, anisotropy, DMI, magnetostatic and dynamic operators. The following conditions are therefore
+part of the numerical contract:
 
-for distinct elements, excluding invalid overlaps. At an internal material interface, neighbouring
-elements share the same geometric trace rather than duplicate coincident nodes.
+1. Every magnetic volume has an unambiguous region marker and every exterior-air volume has the
+   canonical air role.
+2. Interfaces used by coupled operators are conforming, or an explicitly supported nonconforming
+   coupling operator is selected. Fullmag's ordinary shared-domain path expects conformity.
+3. Cell orientation is valid: the element mapping has a positive Jacobian at all required evaluation
+   points. Inverted or collapsed cells are build failures, not warnings to ignore.
+4. Requested topology, polynomial order, layer count and mesh-size controls are compared with the
+   realized mesh. A topology change is legal only when the build mode permits fallback and the report
+   names the actual method and reason.
+5. Mesh convergence is assessed on physical observables—energy, average magnetization, switching
+   field, eigenfrequency, linewidth or field error—not only on element count.
 
-For a P1 scalar basis $\{\phi_a\}$, one component of reduced magnetization is
-
-```{math}
-:label: eq-numerical-fem-shared-field
-m_q^h(\mathbf x)=\sum_{a\in\mathcal I_m}m_{q,a}\phi_a(\mathbf x),
-\qquad q\in\{x,y,z\},
-```
-
-where $\mathcal I_m$ contains magnetic degrees of freedom. A demagnetizing scalar potential may be
-defined on a larger index set spanning magnetic and air elements. The two fields therefore share a
-geometric mesh without necessarily sharing their algebraic spaces.
-
-(numerical-methods-fem-shared-region-semantics)=
-## Region and boundary attributes
-
-The native solver does not infer physics from display names or mesh colour. The realized mesh must
-carry stable integer attributes for:
-
-- every magnetic object/material region;
-- nonmagnetic air;
-- external airbox boundary;
-- physical outer surfaces of magnetic bodies;
-- selected interfaces, edges, or corners used by size fields;
-- periodic source/target faces and their orientation/translation;
-- any boundary subset used by Dirichlet, Robin, surface anisotropy, DMI, or coupling terms.
-
-For a piecewise coefficient $c(\mathbf x)$,
+For exchange-dominated variation, a useful *starting* scale is the magnetostatic exchange length
 
 ```{math}
-:label: eq-numerical-fem-shared-piecewise-coefficient
-c_h(\mathbf x)
-=\sum_r c_r\mathbf 1_{\Omega_{r,h}}(\mathbf x).
+:label: eq-meshing-exchange-length-fem-shared-domain
+\ell_{\mathrm{ex}}=\sqrt{\frac{2A}{\mu_0M_s^2}}.
 ```
 
-A wrong region marker therefore changes the assembled operator even when all nodes and elements are
-geometrically correct. Production validation checks both topology and attribute ownership.
+Using an element size below roughly one half of the smallest relevant magnetic length scale is a
+common initial choice, not a proof of convergence. Curved boundaries, surface charges, DMI, defects,
+interfaces and through-thickness modes can demand a smaller local size.
 
-Air is not automatically a magnetic material with $M_s=0$. Magnetization integration and torque
-reduction must use the magnetic mask/submesh explicitly; scalar-potential operators may use the
-shared magnetic-plus-air space.
-
-(numerical-methods-fem-shared-resolution-precedence)=
-## Resolution precedence
-
-Fullmag resolves each object's target size through one code-owned precedence chain. At the reviewed
-revision, `_mesh_targets.py` specifies highest to lowest:
-
-1. `PerObjectMeshRecipe.hmax`;
-2. `mesh_workflow.per_geometry[...].hmax`;
-3. `mesh_workflow.default_mesh.hmax`;
-4. study-level `FEM.hmax` / `FEM.maximum_element_size`.
-
-For object $r$, denote the resolved target by $h_{r,\max}^{\mathrm{req}}$. The airbox has its own
-$h_{a,\max}^{\mathrm{req}}$, optional $h_{a,\min}^{\mathrm{req}}$, and growth target. These are
-mesher targets, not guarantees. The build report records the source and effective value selected for
-each partition.
-
-The public `FEM` schema requires:
+Let the computational domain be partitioned as
 
 ```{math}
-:label: eq-numerical-fem-shared-order-size
-p\geq1,
-\qquad
-h_{\max}>0.
+:label: eq-shared-domain-partition-fem-shared-domain
+\overline\Omega=\bigcup_{r=0}^{R}\overline\Omega_r,
+\qquad \Omega_r\cap\Omega_s=\varnothing\;(r\ne s),
 ```
 
-`hmax` is a compatibility alias for `maximum_element_size`; when both are supplied they must agree.
-A nonempty `mesh` path may select a prebuilt mesh, but that asset still requires region, boundary,
-coordinate, order, and compatibility validation.
+with region $r=0$ reserved for air in the canonical realization and positive semantic markers
+assigned to magnetic/material regions. For a conforming interface $\Gamma_{rs}$, both adjacent
+cells reference the same facet node set. This permits direct assembly of continuous FEM spaces
+and unambiguous surface roles.
 
-(numerical-methods-fem-shared-size-fields)=
-## Local targets and transition zones
+`SharedMeshAssemblyPolicy` controls interface size relative to object size, conformity and a
+coarse airbox factor. These are assembly hints; the manifest must still certify the actual
+topology. Boolean OCC fragmentation is performed before meshing so coincident boundaries become
+shared entities rather than overlapping duplicate surfaces.
 
-A shared mesh may combine:
+## Selection guide
 
-- bulk object target `hmax`;
-- explicit interface target and thickness;
-- transition distance and growth;
-- edge target and edge-zone thickness;
-- corner target and extent;
-- airbox near/far targets;
-- boundary-layer, swept, or generic size-field operations.
+| Use case | Recommended choice | Reason |
+| --- | --- | --- |
+| Open-boundary demag with one/many magnets | conforming shared domain | one scalar-potential domain and explicit material interfaces |
+| Object-only exchange without exterior solve | object mesh may suffice | shared air region is unnecessary if no coupled operator needs it |
+| Mixed prism magnetic film plus tetrahedral air | strict mixed build only when capability advertised | requires pyramidal transition and a mixed-family certificate |
+| Imported nonconforming component meshes | reject or remesh into shared domain | ordinary continuous FEM assembly cannot assume duplicated interfaces are conforming |
 
-The resolved target is conceptually a minimum over active fields,
+## Parameters
 
-```{math}
-:label: eq-numerical-fem-shared-size-min
-h_{\mathrm{target}}(\mathbf x)
-=\min_s h_s(\mathbf x),
-```
+| Python / IR key | Unit | Default | Validation | Numerical effect |
+| --- | --- | --- | --- | --- |
+| `interface_hmax_factor` | 1 | `0.5` | strictly in `(0,1]` | interface target relative to object maximum size |
+| `enforce_conforming` | 1 | `True` | Boolean | requires a shared-node interface for ordinary shared-domain operators |
+| `airbox_hmax_factor` | 1 | `3.0` | positive | coarse exterior target relative to magnetic size |
+| object mesh policies | mixed | inherited/object-specific | valid per object | supply local size, topology and selector intent |
+| universe/airbox policy | mixed | required for exterior solves | valid enclosure and outer marker | supplies exterior geometry and grading |
+| `build_mode` | 1 | planner-resolved | advertised build-mode vocabulary | chooses OCC shared assembly, strict mixed route or documented fallback |
 
-subject to mesher algorithms, conformity, and growth constraints. An unexpectedly small active
-field can therefore refine a much larger region. Fullmag records realized size-field IDs, kinds,
-targets, status, source, reason, Gmsh field ID, and parameters through
-`_realized_size_field_report`.
-
-Interface refinement is not auto-enabled by a hidden factor in the current target resolver. The
-source explicitly avoids an older automatic `0.6 × bulk` rule because it throttled smooth growth
-through the airbox. A fine interface target must therefore be requested and should appear in the
-build report.
-
-(numerical-methods-fem-shared-build-modes)=
-## CAD assembly, fallback, and degradation
-
-The preferred shared-domain path preserves conformal CAD/OCC identities. Runtime build mode and
-fallback history are first-class provenance. `_build_shared_domain_build_report` marks a report
-`degraded` when topology or identity was simplified, including
-`build_mode="concatenated_stl_fallback"`, except for a bounded set of nondegrading algorithm retries
-that preserve the conformal CAD path.
-
-The report separates:
-
-| Field | Meaning |
-|---|---|
-| `build_mode` | actual assembly/extraction route |
-| `fallbacks_triggered` | ordered fallback/retry reasons |
-| `degraded` | whether topology/identity semantics were simplified |
-| `effective_airbox_target` | resolved airbox size/growth request |
-| `effective_per_object_targets` | resolved object/interface/edge/corner targets and markers |
-| `region_markers` | geometry-to-native attribute mapping |
-| `size_fields_realized` | requested/applied/ignored/degraded size fields |
-| `operation_statuses` | algorithm, optimizer, airbox shape, swept, boundary-layer and other outcomes |
-| `thin_film_diagnostics` | requested versus actual thin-film topology/layers |
-| `magnetic_submesh_signatures` | identities of extracted magnetic portions |
-| `selector_resolution` | geometric selector to native-tag resolution |
-| `orphan_entities` | entities not assigned to the intended region/topology |
-| `authored_regions_count` / `realized_regions_count` | authoring-to-mesher coverage check |
-
-A fallback is not necessarily invalid. It is invalid to present a degraded result as if it retained
-all requested region, selector, airbox-shape, or swept-topology semantics.
-
-(numerical-methods-fem-shared-extraction)=
-## Native extraction and solver identity
-
-After Gmsh generation, Fullmag extracts nodes, elements, attributes, and boundaries into the native
-solver representation. The authoritative mesh identity is the extracted asset, not an in-memory
-Gmsh preview. At minimum the digest covers:
-
-- SI-scaled coordinates and coordinate dimension;
-- element connectivity, type, order, and orientation;
-- volume and boundary attributes;
-- magnetic submesh selection;
-- periodic pair map and translations;
-- geometry and mesh-order metadata;
-- build mode, generation options, and relevant Gmsh version.
-
-The extraction must preserve positive element orientation. For an affine tetrahedron with mapping
-Jacobian $J_T$,
-
-```{math}
-:label: eq-numerical-fem-shared-jacobian
-\det J_T>0.
-```
-
-For curved/high-order elements, the Jacobian must remain positive at all required evaluation points,
-not only at vertices.
-
-(numerical-methods-fem-shared-interface-checks)=
-## Interface and topology checks
-
-A production shared-domain certificate verifies:
-
-1. every expected magnetic object has at least one volume element and one stable region marker;
-2. air and magnetic volumes are disjoint except at conforming interfaces;
-3. shared interfaces contain no duplicate disconnected node layers unless the physical formulation
-   explicitly requires them;
-4. every internal face has the expected adjacent region tuple;
-5. every external face belongs to exactly the intended boundary category;
-6. no orphan volume/surface/curve entities remain after Boolean fragmentation and extraction;
-7. material and boundary selectors resolve to nonempty native tags;
-8. periodic faces have compatible topology and one-to-one algebraic pairing;
-9. magnetic submesh signatures agree with the field/operator asset consumed by the solver;
-10. reported physical bounds and volume agree with the intended geometry within the mesh tolerance.
-
-A viewport can hide duplicate coincident interfaces, inverted elements, and wrong region attributes.
-These checks must use mesh topology and native attributes.
-
-(numerical-methods-fem-shared-python-api)=
 ## Python API
 
+**Complete Python example**
+
 ```python
-# %% Shared FEM domain with independent air and object targets
 import fullmag as fm
 
 nm = 1.0e-9
-study = fm.study("shared_domain")
+study = fm.study("shared_domain_reference")
 study.engine("fem")
 study.device("cpu", precision="double")
 study.mode("strict")
-study.universe(mode="manual", size=(1.2e-6, 600 * nm, 550 * nm))
+study.universe(
+    mode="manual",
+    size=(700 * nm, 500 * nm, 260 * nm),
+    center=(0.0, 0.0, 0.0),
+    padding=(0.0, 0.0, 0.0),
+)
 study.universe.mesh(
-    minimum_element_size=10 * nm,
-    maximum_element_size=110 * nm,
-    maximum_element_growth_rate=1.9,
+    minimum_element_size=12 * nm,
+    maximum_element_size=90 * nm,
+    maximum_element_growth_rate=1.5,
     grading="geometric",
 )
 
-film = study.geometry(fm.Box(500 * nm, 125 * nm, 3 * nm), name="film")
-film.mesh(
-    minimum_element_size=3 * nm,
-    maximum_element_size=5 * nm,
-    order=1,
-    compute_quality=True,
+left = study.geometry(
+    fm.Box(size=(180 * nm, 80 * nm, 10 * nm), name="left_geom").translate(
+        (-120 * nm, 0.0, 0.0)
+    ),
+    name="left",
 )
-film.Ms = 800.0e3
-film.Aex = 13.0e-12
-film.m = fm.texture.uniform(1.0, 0.0, 0.0)
+right = study.geometry(
+    fm.Box(size=(180 * nm, 80 * nm, 10 * nm), name="right_geom").translate(
+        (120 * nm, 0.0, 0.0)
+    ),
+    name="right",
+)
+for body, direction in ((left, (1.0, 0.0, 0.0)), (right, (0.0, 1.0, 0.0))):
+    body.mesh(
+        mesh_strategy="free_tetrahedral",
+        minimum_element_size=4 * nm,
+        maximum_element_size=8 * nm,
+        interface_maximum_element_size=6 * nm,
+        interface_thickness=15 * nm,
+        transition_distance="airbox_boundary",
+        transition_growth=1.4,
+        order=1,
+        compute_quality=True,
+    )
+    body.Ms = 800.0e3
+    body.Aex = 13.0e-12
+    body.alpha = 0.02
+    body.m = fm.texture.uniform(*direction)
 
 study.exchange()
-study.demag(model="airbox", variant="robin")
-study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
+study.demag(realization="poisson_robin")
+study.build_domain_mesh()
+study.stages.add_relax(
+    stage_id="equilibrium",
+    algorithm="llg_overdamped",
+    tolA=1.0e-4,
+    max_steps=20_000,
+)
 ```
 
-A lower-level typed default can be represented by
+## Control Room workflow
 
-```python
-fem = fm.FEM(order=1, maximum_element_size=20 * nm)
+### Magnetic-object workflow
+
+1. In **Explorer**, select the magnetic object's **Mesh** child (the object mesh-policy route).
+2. In **Inspector → Object Mesh Policy**, enable **Use object policy** when an object-specific override
+   is required.
+3. Configure the relevant groups: **Mesh Size Presets**, **Element Size Parameters**,
+   **Thin-Film Sweep Strategy**, **Interface and Transition Refinement**, **Backend Mesh Parameters**,
+   **Core Relaxation**, **Manual Size Field**, and **Edge and Corner Refinement**.
+4. Select **Apply Object Policy**. This stores authoring intent and invalidates mesh resources whose
+   revision no longer matches the model.
+5. Select **Build Mesh**. If the draft is dirty, the panel applies it first and dispatches the canonical
+   `mesh.build-selected` command.
+6. Open the **Quality** and **History** tabs. Compare requested and realized values, then inspect the
+   scoped size/quality distributions and the raw build report before running a solver.
+
+The read-only effective values come from backend resources. They must not be reconstructed from the
+current form fields because presets, capability gates and backend normalization can change the
+resolved configuration.
+
+
+### Universe / airbox workflow
+
+1. In **Explorer**, select **Universe / Airbox Mesh**.
+2. Choose **Domain mode** and enter either explicit **Size X/Y/Z** and **Center X/Y/Z**, or automatic
+   **Padding X/Y/Z**.
+3. For FEM, set **Maximum element size**, **Minimum element size**, **Maximum element growth rate**,
+   **Element grading**, **Curvature factor** and **Narrow-region resolution** as needed.
+4. Select **Apply Airbox Policy** to store the universe-owned exterior-domain intent. This makes any
+   older shared-domain realization stale.
+5. Select **Apply & Build Shared-Domain Mesh** to dispatch `mesh.build-shared-domain`.
+6. Inspect the effective configuration, shared-domain manifest, outer-boundary marker, interface
+   conformity and mesh-quality scopes. The effective configuration returned by the backend is the
+   source of truth.
+
+For FDM, the panel filters FEM-only air-mesh controls and exposes structured-domain geometry only.
+
+After applying object and universe policies, use **Apply & Build Shared-Domain Mesh**. Inspect the
+manifest scopes for every object, airbox and interface. An object-level **Build Mesh** is useful
+for local debugging but does not certify the final coupled mesh.
+
+## Verification, quality and provenance
+
+After every build, inspect the **realized** resource rather than assuming that the authored request
+was applied. The production check is:
+
+- geometry and mesh revisions match the current model;
+- requested and realized discretization/topology/order are recorded;
+- node, element and boundary-facet counts are nonzero for every required region;
+- region and boundary markers cover the complete topology;
+- inverted and degenerate element counts are zero;
+- interface diagnostics report no orphan, coincident, nonmanifold or unmatched facets;
+- local size distributions are consistent with the intended edge/interface/core grading;
+- any fallback or degradation has an explicit reason and an actual method;
+- a mesh-refinement sequence demonstrates convergence of the scientific observable.
+
+`MeshQualityReport` exposes signed inverse condition number (SICN), gamma/radius quality, volume
+statistics and optional per-element arrays. The source constants `gamma_min=0.08` and
+`SICN p05=0.1` are implementation gates for named report paths; they are not universal physical
+acceptance thresholds for every element family or study.
+
+## Mesh-convergence protocol
+
+A production result should include at least three discretizations. Refine only the parameter under
+study while holding geometry, material parameters, solver tolerances, initial state and output
+sampling fixed. Let $Q_h$ denote the observable for characteristic size $h$. Report
+
+```{math}
+:label: eq-meshing-relative-change-fem-shared-domain
+\varepsilon_h=\frac{|Q_h-Q_{h/\rho}|}{\max(|Q_{h/\rho}|,Q_{\mathrm{scale}})},
+\qquad \rho>1,
 ```
 
-and per-object recipes by `PerObjectMeshRecipe`. The stage-first helpers lower to the same mesh
-workflow intent; the extracted mesh and build report remain authoritative.
+with a documented scale for observables that can cross zero. For dynamics, compare resonance
+frequency, linewidth and mode profile; for relaxation, compare total energy and texture; for demag,
+compare field/energy and verify that moving the outer boundary does not change the result beyond the
+chosen tolerance.
 
-### Core public parameters
+## Diagnostics and failure semantics
 
-| Python field | Default | SI unit | Validation and meaning |
-|---|---:|---:|---|
-| `FEM.order` | required | $1$ | integer $\geq1$; finite-element field order |
-| `FEM.maximum_element_size` / `hmax` | required | $\mathrm m$ | positive study-level default target |
-| `FEM.mesh` | `None` | path/ID | nonempty prebuilt asset reference when provided |
-| `PerObjectMeshRecipe.maximum_element_size` / `hmax` | inherited | $\mathrm m$ | highest-precedence object target |
-| `PerObjectMeshRecipe.minimum_element_size` / `hmin` | inherited | $\mathrm m$ | lower target bound |
-| `PerObjectMeshRecipe.order` | inherited | $1$ | object-specific order where supported |
-| interface/edge/corner fields | inherited | $\mathrm m$ or $1$ | local target and transition controls |
-| `compute_quality` | `False` | $1$ | request quality summary |
-| `per_element_quality` | `False` | $1$ | request per-element quality where supported |
-| `operations` | empty | $1$ | ordered COMSOL-like mesh operations |
+- Overlapping magnetic volumes without an explicit material/region rule are invalid.
+- Coincident but duplicate interface facets are not conforming; inspect adjacency and orphan
+  diagnostics rather than surface coordinates alone.
+- Region-marker count must match semantic objects after boolean fragmentation.
+- A strict mixed request must fail if it realizes only tetrahedra or loses exact layer planes.
+- Fallback is acceptable only when the build mode permits it and the report records request,
+  reason, actual method and realized families.
+- A solver must reject cell families it does not support even if the mesher produced valid cells.
 
-The exact per-object API inventory is documented under the Python discretization section; this page
-owns the mathematical and runtime meaning of the realized shared mesh.
+## Where this is implemented
 
-(numerical-methods-fem-shared-problem-ir)=
-## ProblemIR and provenance
+| Responsibility | Repository source | Stable owner / symbol |
+| --- | --- | --- |
+| Shared assembly schema | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/model/discretization.py) | `SharedMeshAssemblyPolicy` |
+| OCC geometry assembly | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py) | `shared OCC construction` |
+| Shared mesh generation | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py) | `shared-domain generators` |
+| Typed topology extraction | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py) | `_extract_gmsh_connectivity` |
+| Build report/certificate | [`packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py) | `shared-domain build report` |
+| Control Room mesh resources | [`apps/control-room/src/kernel/resources/geometryLifecycleResources.ts`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/apps/control-room/src/kernel/resources/geometryLifecycleResources.ts) | `shared-domain resource hooks` |
 
-Requested intent stores geometry, universe, FEM defaults, object recipes, size fields, selectors,
-and ordered operations. Resolved execution stores:
+Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b12c2` on 2026-08-24.
 
-- exact source of every effective object/airbox target;
-- native mesh digest and magnetic submesh signatures;
-- Gmsh/build versions and generation options;
-- build mode, fallbacks, degradation status, and reasons;
-- node/element counts by type, order, and region;
-- boundary-element counts by attribute;
-- bounds, region volumes, surface areas, and connectivity components;
-- Jacobian/quality statistics and rejected-element count;
-- selector and periodic-pair certificates;
-- requested/applied/ignored/degraded operation inventory;
-- authored versus realized region/size-field counts.
+## Related documentation
 
-A rerun from the same high-level size targets is not necessarily the same discrete problem after a
-mesher-version or algorithm change. Save or content-address the realized asset.
+- [Shared-domain branch](fem/shared-domain/index.html)
+- [Airbox](airbox.html)
+- [Mixed elements](fem/ferromagnet/mixed-elements.html)
 
-(numerical-methods-fem-shared-round-trip-and-failure-semantics)=
-## Round-trip and failure semantics
+## References
 
-Invalid order/size/path values fail at the public boundary. Mesh construction fails or is explicitly
-marked degraded for:
-
-- Boolean fragmentation or conformal assembly failure;
-- empty/missing magnetic partitions;
-- inverted, collapsed, or unsupported elements;
-- unresolved material/boundary selectors;
-- duplicate or orphan entities;
-- attribute loss during extraction;
-- incompatible periodic faces;
-- unsupported swept/boundary-layer operation;
-- a fallback that violates strict-mode requested semantics.
-
-Algorithm retry may be acceptable when the build report proves that region/topology identities were
-preserved. `concatenated_stl_fallback` is explicitly degradation evidence and cannot be hidden by a
-successful tetrahedral solve.
-
-(numerical-methods-fem-shared-discrete-realization)=
-## Discrete realization by lane
-
-| Solver | Device | Status | Realization |
-|---|---|---|---|
-| FEM | CPU | source-backed | Gmsh shared-domain asset extracted into MFEM/native host structures |
-| FEM | GPU | mesh source-backed, execution-gated | the same content-addressed mesh uploaded/consumed by supported device operators |
-| FDM | CPU | not applicable | use Cartesian grid and active-mask pages |
-| FDM | GPU | not applicable | use Cartesian grid and active-mask pages |
-
-CPU/GPU parity requires the same mesh digest, attributes, magnetic submesh, polynomial order, and
-quadrature policy. Regenerating a nominally equivalent mesh separately invalidates strict parity.
-
-(numerical-methods-fem-shared-implementation-mapping)=
-## Implementation mapping
-
-| Responsibility | Repository path | Stable symbol/owner |
-|---|---|---|
-| Study FEM defaults | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FEM` |
-| Per-object mesh intent | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class PerObjectMeshRecipe`, `class MeshOperation` |
-| Target precedence and typing | `packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py` | `resolve_shared_domain_targets`, `ResolvedSharedObjectTarget` |
-| Shared CAD/Gmsh infrastructure | `packages/fullmag-py/src/fullmag/meshing/_gmsh_infra.py` | shared assembly owner |
-| Native mesh extraction | `packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py` | extraction owner |
-| Build report and degradation | `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py` | `_build_shared_domain_build_report` |
-| Realized size-field reporting | `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py` | `_realized_size_field_report` |
-
-(numerical-methods-fem-shared-validation)=
-## Verification and convergence
-
-1. **Constant/affine interpolation:** reproduce the polynomial degree expected from the field space.
-2. **Mass/volume:** integrate one over each attribute and compare with analytical/CAD volume.
-3. **Region coefficients:** assemble a piecewise constant coefficient and verify element-wise values.
-4. **Interface conformity:** compare face-node identities and adjacent region tuples.
-5. **Operator null cases:** constant magnetization gives zero compatible exchange contribution.
-6. **Quality:** enforce positive Jacobian and declared scaled-Jacobian/aspect/angle thresholds.
-7. **Target realization:** compare requested and measured element sizes by region/interface/edge/corner.
-8. **Fallback tests:** intentionally trigger algorithm retry and degraded STL fallback; verify status
-   semantics and strict rejection.
-9. **Mesh convergence:** refine $h$, optionally $p$, and geometry order independently for a declared
-   observable.
-10. **Backend identity:** CPU/GPU consume the same extracted mesh and marker digests.
-11. **Application benchmarks:** validate equilibrium, switching, demag, and eigen/response cases on
-    converged mesh families rather than one generated mesh.
-
-(numerical-methods-fem-shared-limitations)=
-## Limitations
-
-- High-order field approximation does not automatically improve a low-order curved boundary.
-- Mesher size values are targets, not exact realized bounds.
-- Fallback can preserve solvability while degrading region, selector, airbox-shape, or swept intent.
-- A shared mesh does not imply that all physical unknowns are defined on every region.
-- Successful extraction does not by itself prove positive high-order Jacobians or good conditioning.
-- Current swept support is geometry- and shared-domain-scenario-dependent; see
-  {doc}`swept-meshes`.
-- This page does not claim production adaptive remeshing or a posteriori error estimation.
-
-(numerical-methods-fem-shared-scientific-bibliography)=
-## Scientific bibliography
-
-1. C. Geuzaine and J.-F. Remacle, “Gmsh: A three-dimensional finite element mesh generator with
-   built-in pre- and post-processing facilities,” *International Journal for Numerical Methods in
-   Engineering* **79**, 1309--1331 (2009),
-   [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
-2. R. Anderson et al., “MFEM: A modular finite element methods library,” *Computers & Mathematics
-   with Applications* **81**, 42--74 (2021),
-   [doi:10.1016/j.camwa.2020.06.009](https://doi.org/10.1016/j.camwa.2020.06.009).
-3. S. C. Brenner and L. R. Scott, *The Mathematical Theory of Finite Element Methods*, 3rd ed.,
-   Springer, 2008, [doi:10.1007/978-0-387-75934-0](https://doi.org/10.1007/978-0-387-75934-0).
-
-(numerical-methods-fem-shared-source-code-index)=
-## Source-code index
-
-| Claim | Path | Stable symbol | Responsibility | Evidence |
-|---|---|---|---|---|
-| Target precedence | `packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py` | `resolve_shared_domain_targets` | typed air/object target resolution | source/unit tests |
-| Shared build report | `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py` | `_build_shared_domain_build_report` | fallback/degradation and realized operations | source/tests |
-| Native extraction | `packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py` | extraction module | nodes/elements/attributes | meshing tests |
-| Authoring contract | `packages/fullmag-py/src/fullmag/model/discretization.py` | `FEM`, `PerObjectMeshRecipe` | defaults and per-object overrides | Python validation/IR tests |
+- C. Geuzaine and J.-F. Remacle, “Gmsh: a three-dimensional finite element mesh generator with built-in pre- and post-processing facilities,” *International Journal for Numerical Methods in Engineering* **79** (2009), 1309–1331, [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
+- C. Abert, “Micromagnetics and spintronics: models and numerical methods,” *European Physical Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
+- Gmsh reference manual, mesh algorithms, size fields, extrusion and physical groups: [gmsh.info/doc/texinfo](https://gmsh.info/doc/texinfo/).
