@@ -1,0 +1,278 @@
+{
+  "document": {
+    "path": "docs/audits/2026-08-24-fem-fdm-3d-visualization-frontend-backend-audit.md",
+    "audited_source_revision": "5dd9414da76ae0ce3081204cffea39137db6951d",
+    "immutable_source_base_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/"
+  },
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "documented"},
+    {"solver": "FEM", "device": "GPU", "status": "documented_not_runtime_qualified"},
+    {"solver": "FDM", "device": "CPU", "status": "documented"},
+    {"solver": "FDM", "device": "GPU", "status": "documented_not_runtime_qualified"}
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "quantity-wire-ids",
+      "lanes": ["all"],
+      "evidence": ["source inspection"],
+      "evidence_status": "audited",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-quantities/src/id.rs",
+      "path": "crates/fullmag-quantities/src/id.rs",
+      "symbol": "normalize_quantity_id",
+      "responsibility": "Normalizuje kanoniczne identyfikatory wire quantities i ich jawne aliasy."
+    },
+    {
+      "id": "quantity-catalog",
+      "lanes": ["all"],
+      "evidence": ["catalog tests and source inspection"],
+      "evidence_status": "audited",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-quantities/src/catalog.rs",
+      "path": "crates/fullmag-quantities/src/catalog.rs",
+      "symbol": "quantity_catalog",
+      "responsibility": "Definiuje kanoniczny katalog quantities i metadata preview."
+    },
+    {
+      "id": "quantity-provider-parity",
+      "lanes": ["all"],
+      "evidence": ["standard_providers_register_every_canonical_quantity"],
+      "evidence_status": "tested",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-quantities/src/registry.rs",
+      "path": "crates/fullmag-quantities/src/registry.rs",
+      "symbol": "standard_providers_register_every_canonical_quantity",
+      "responsibility": "Testuje rejestrację każdego kanonicznego quantity przez provider registry."
+    },
+    {
+      "id": "fdm-quantity-capability",
+      "lanes": ["fdm-cpu","fdm-gpu"],
+      "evidence": ["runner quantity capability tests"],
+      "evidence_status": "tested",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-runner/src/quantities.rs",
+      "path": "crates/fullmag-runner/src/quantities.rs",
+      "symbol": "fdm_quantity_is_active",
+      "responsibility": "Rozstrzyga aktywność quantity dla planu i realizacji FDM."
+    },
+    {
+      "id": "fdm-multilayer-quantity-capability",
+      "lanes": ["fdm-multilayer"],
+      "evidence": ["source inspection"],
+      "evidence_status": "audited",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-runner/src/quantities.rs",
+      "path": "crates/fullmag-runner/src/quantities.rs",
+      "symbol": "fdm_multilayer_quantity_is_active",
+      "responsibility": "Rozstrzyga aktywność quantity dla publicznego planu i realizacji FDM multilayer."
+    },
+    {
+      "id": "fem-quantity-capability",
+      "lanes": ["fem-cpu","fem-gpu"],
+      "evidence": ["runner quantity capability tests"],
+      "evidence_status": "tested",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-runner/src/quantities.rs",
+      "path": "crates/fullmag-runner/src/quantities.rs",
+      "symbol": "fem_quantity_is_active",
+      "responsibility": "Rozstrzyga aktywność quantity dla planu i realizacji FEM."
+    },
+    {
+      "id": "cuda-fdm-preview-provider",
+      "lanes": ["fdm-gpu"],
+      "evidence": ["source inspection"],
+      "evidence_status": "audited",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-runner/src/fdm/gpu/cuda/native.rs",
+      "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs",
+      "symbol": "from_quantity",
+      "responsibility": "Definiuje zamkniętą listę obserwabli preview CUDA FDM."
+    },
+    {
+      "id": "native-fem-preview-provider",
+      "lanes": ["fem-cpu","fem-gpu"],
+      "evidence": ["source inspection"],
+      "evidence_status": "audited",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-runner/src/native_fem.rs",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "from_quantity",
+      "responsibility": "Definiuje zamkniętą listę obserwabli preview native FEM."
+    },
+    {
+      "id": "post-stage-provider-policy",
+      "lanes": ["all"],
+      "evidence": ["observation provider policy tests"],
+      "evidence_status": "tested",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-runner/src/observation.rs",
+      "path": "crates/fullmag-runner/src/observation.rs",
+      "symbol": "observation_provider_policy",
+      "responsibility": "Rozstrzyga retained, reconstructed, immutable i unavailable provider policy per lane."
+    },
+    {
+      "id": "post-stage-compute-command",
+      "lanes": ["all"],
+      "evidence": ["source inspection"],
+      "evidence_status": "audited",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-cli/src/interactive_runtime_host.rs",
+      "path": "crates/fullmag-cli/src/interactive_runtime_host.rs",
+      "symbol": "compute_current_fields",
+      "responsibility": "Obsługuje jawną komendę materializacji pól po stage."
+    },
+    {
+      "id": "cold-field-reconstruction",
+      "lanes": ["all"],
+      "evidence": ["source inspection; execution test missing"],
+      "evidence_status": "audited",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-runner/src/lib.rs",
+      "path": "crates/fullmag-runner/src/lib.rs",
+      "symbol": "snapshot_problem_vector_field_batch",
+      "responsibility": "Materializuje żądane pola bez retained runtime, w tym cold path FEM shared-air."
+    },
+    {
+      "id": "fmvp-v3-validation",
+      "lanes": ["all"],
+      "evidence": ["field_store unit tests"],
+      "evidence_status": "tested",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-api/src/field_store.rs",
+      "path": "crates/fullmag-api/src/field_store.rs",
+      "symbol": "validate_field_vector_payload",
+      "responsibility": "Waliduje liczebność oraz skończone wartości numeryczne payloadu pola; nie waliduje identity."
+    },
+    {
+      "id": "fmvp-v3-decoder",
+      "lanes": ["all"],
+      "evidence": ["fieldVectorCodec tests"],
+      "evidence_status": "tested",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/apps/control-room/src/kernel/api/codecs/fieldVectorCodec.ts",
+      "path": "apps/control-room/src/kernel/api/codecs/fieldVectorCodec.ts",
+      "symbol": "decodeFieldVector",
+      "responsibility": "Dekoduje binarny payload pola i jego identity w Control Room."
+    },
+    {
+      "id": "leaf-settings-reset",
+      "lanes": ["frontend"],
+      "evidence": ["source inspection; F3D-AUD-006"],
+      "evidence_status": "gap-confirmed",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/apps/control-room/src/kernel/visualization/ObjectVisualizationController.ts",
+      "path": "apps/control-room/src/kernel/visualization/ObjectVisualizationController.ts",
+      "symbol": "removeSerializedOverrideField",
+      "responsibility": "Usuwa wskazany leaf override; dla zagnieżdżonych display.bounds i display.points bieżąca implementacja usuwa cały obiekt nadrzędny wraz z sibling fields."
+    },
+    {
+      "id": "semantic-render-targets",
+      "lanes": ["frontend"],
+      "evidence": ["semantic render target tests"],
+      "evidence_status": "tested",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/apps/control-room/src/kernel/selection/semanticRenderTargetCatalog.ts",
+      "path": "apps/control-room/src/kernel/selection/semanticRenderTargetCatalog.ts",
+      "symbol": "buildSemanticRenderTargetCatalog",
+      "responsibility": "Buduje semantyczne targety object, part i Airbox."
+    },
+    {
+      "id": "multilayer-airbox-capability",
+      "lanes": ["fdm-multilayer","frontend"],
+      "evidence": ["viewport3dDomainAdapter tests"],
+      "evidence_status": "tested",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts",
+      "path": "apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts",
+      "symbol": "resolveFdmMultilayerAirboxFieldAvailability",
+      "responsibility": "Rozstrzyga dostępność pól Airbox dla carrierów multilayer FDM."
+    },
+    {
+      "id": "fmvp-v3-serializer",
+      "lanes": ["all"],
+      "evidence": ["field_store unit tests"],
+      "evidence_status": "tested",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-api/src/field_store.rs",
+      "path": "crates/fullmag-api/src/field_store.rs",
+      "symbol": "serialize_field_vector_binary_v3",
+      "responsibility": "Serializuje identity i wartości przestrzennego pola do FMVP v3."
+    },
+    {
+      "id": "fmvp-v3-client-identity",
+      "lanes": ["frontend"],
+      "evidence": ["ControlRoomApi identity checks"],
+      "evidence_status": "tested",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/apps/control-room/src/kernel/api/ControlRoomApi.ts",
+      "path": "apps/control-room/src/kernel/api/ControlRoomApi.ts",
+      "symbol": "requestFieldVector",
+      "responsibility": "Dekoduje pole, odczytuje metadata odpowiedzi i dołącza wynik porównania identity do zasobu Control Room."
+    },
+    {
+      "id": "fdm-public-planner",
+      "lanes": ["fdm-cpu","fdm-gpu"],
+      "evidence": ["planner rejection tests"],
+      "evidence_status": "tested",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-plan/src/fdm.rs",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "plan_fdm",
+      "responsibility": "Egzekwuje publiczne ograniczenia planu FDM, w tym brak regional field drive w CUDA."
+    },
+    {
+      "id": "fdm-multilayer-public-planner",
+      "lanes": ["fdm-multilayer"],
+      "evidence": ["planner rejection tests"],
+      "evidence_status": "tested",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-plan/src/fdm.rs",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "plan_fdm_multilayer",
+      "responsibility": "Egzekwuje ograniczenia publicznego planu FDM multilayer, w tym brak bulk DMI."
+    },
+    {
+      "id": "fem-public-planner",
+      "lanes": ["fem-cpu","fem-gpu"],
+      "evidence": ["planner capability tests"],
+      "evidence_status": "tested",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-plan/src/fem.rs",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "plan_fem",
+      "responsibility": "Egzekwuje publiczne ograniczenia planu FEM, w tym brak thermal noise na GPU."
+    },
+    {
+      "id": "scalar-metric-activation",
+      "lanes": ["all"],
+      "evidence": ["source inspection; F3D-AUD-015"],
+      "evidence_status": "gap-confirmed",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-api/src/quantities.rs",
+      "path": "crates/fullmag-api/src/quantities.rs",
+      "symbol": "scalar_metric_is_active",
+      "responsibility": "Określa aktywne metryki skalarne udostępniane przez API."
+    },
+    {
+      "id": "scalar-row-materialization",
+      "lanes": ["all"],
+      "evidence": ["source inspection; F3D-AUD-015"],
+      "evidence_status": "gap-confirmed",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-api/src/main.rs",
+      "path": "crates/fullmag-api/src/main.rs",
+      "symbol": "scalar_row_metric_value",
+      "responsibility": "Materializuje wartości metryk w wierszach skalarnego API."
+    },
+    {
+      "id": "live-step-scalar-materialization",
+      "lanes": ["all"],
+      "evidence": ["source inspection; F3D-AUD-015"],
+      "evidence_status": "gap-confirmed",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-api/src/preview.rs",
+      "path": "crates/fullmag-api/src/preview.rs",
+      "symbol": "live_step_metric_value",
+      "responsibility": "Materializuje metryki skalarne bieżącego kroku preview."
+    },
+    {
+      "id": "manifest-scalar-materialization",
+      "lanes": ["all"],
+      "evidence": ["source inspection; F3D-AUD-015"],
+      "evidence_status": "gap-confirmed",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/crates/fullmag-api/src/quantities.rs",
+      "path": "crates/fullmag-api/src/quantities.rs",
+      "symbol": "run_manifest_scalar_value",
+      "responsibility": "Odczytuje metryki skalarne z manifestu runu."
+    },
+    {
+      "id": "managed-mixed-prism-airbox-gate",
+      "lanes": ["fem-cpu","fem-gpu"],
+      "evidence": ["managed mixed-prism shared-air workflow"],
+      "evidence_status": "partial-magnetic-only-missing",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/5dd9414da76ae0ce3081204cffea39137db6951d/justfile",
+      "path": "justfile",
+      "symbol": "verify-fem-mixed-prism-airbox-runtime",
+      "responsibility": "Uruchamia zarządzany dowód mixed-prism shared-air; nie stanowi osobnego dowodu magnetic-only."
+    }
+  ],
+  "public_api": {"parameters": []}
+}

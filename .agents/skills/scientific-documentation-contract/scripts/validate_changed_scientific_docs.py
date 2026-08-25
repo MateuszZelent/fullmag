@@ -12,7 +12,16 @@ from types import ModuleType
 from validate_scientific_docs import validate_page
 
 
-SCIENTIFIC_ROOTS = ("docs/physics", "public_docs/site/physics")
+SCIENTIFIC_ROOTS = (
+    "docs/physics",
+    "docs/audits",
+    "public_docs/site/physics",
+    "public_docs/site/numerical-methods",
+)
+SCIENTIFIC_AUDIT_ROOTS = ("docs/audits/llg-solver",)
+SCIENTIFIC_AUDIT_FILES = {
+    "docs/audits/2026-08-24-fem-fdm-3d-visualization-frontend-backend-audit.md",
+}
 EXEMPT_NAMES = {"README.md", "index.md"}
 EXEMPT_PATHS = {
     # Governance for authoring physics notes, not a physical/numerical model note.
@@ -39,10 +48,17 @@ def _read(repo: Path, revision: str, path: str) -> bytes | None:
 
 def _is_scientific_page(path: str) -> bool:
     candidate = PurePosixPath(path)
-    return (
-        candidate.suffix == ".md"
-        and candidate.name not in EXEMPT_NAMES
-        and any(candidate.is_relative_to(root) for root in SCIENTIFIC_ROOTS)
+    if candidate.suffix != ".md" or candidate.name in EXEMPT_NAMES:
+        return False
+    if candidate.is_relative_to("docs/audits"):
+        return (
+            path in SCIENTIFIC_AUDIT_FILES
+            or any(candidate.is_relative_to(root) for root in SCIENTIFIC_AUDIT_ROOTS)
+        )
+    return any(
+        candidate.is_relative_to(root)
+        for root in SCIENTIFIC_ROOTS
+        if root != "docs/audits"
     )
 
 
