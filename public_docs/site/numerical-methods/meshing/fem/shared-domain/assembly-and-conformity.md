@@ -216,8 +216,8 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 
 ## Related documentation
 
-- [Build modes and fallbacks](build-modes-and-fallbacks.html)
-- [Selectors and attributes](selectors-and-attributes.html)
+- [Build modes and fallbacks](build-modes-and-fallbacks.md)
+- [Selectors and attributes](selectors-and-attributes.md)
 
 ## References
 

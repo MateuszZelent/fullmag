@@ -765,7 +765,14 @@ def _front_matter(path: Path) -> dict[str, str] | None:
         if ":" not in line:
             return None
         key, value = line.split(":", 1)
-        metadata[key.strip()] = value.strip()
+        normalized = value.strip()
+        if (
+            len(normalized) >= 2
+            and normalized[0] == normalized[-1]
+            and normalized[0] in {"'", '"'}
+        ):
+            normalized = normalized[1:-1]
+        metadata[key.strip()] = normalized
     return None
 
 

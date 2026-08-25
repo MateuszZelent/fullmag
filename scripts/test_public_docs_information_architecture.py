@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "public_docs/site/_extensions
 
 import public_docs_information_architecture_v2 as information_architecture
 import legacy_redirects
+from check_public_docs_information_architecture import _front_matter_status
 
 from public_docs_information_architecture_v2 import (
     INTERACTION_SLUGS,
@@ -149,6 +150,30 @@ class PublicDocumentationInformationArchitectureTests(unittest.TestCase):
         )
         rendered = render_page(index, Path("public_docs/site"))
         self.assertIn("```{toctree}\n:maxdepth: 4\n", rendered)
+
+    def test_reference_front_matter_accepts_quoted_yaml_scalars(self) -> None:
+        spec = PageSpec(
+            path="guide.md",
+            title="Quoted guide",
+            label="quoted-guide",
+            status="implemented",
+            doc_kind="reference",
+            scope="quoted YAML metadata",
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / spec.path).write_text(
+                '---\ntitle: "Quoted guide"\nstatus: implemented\n'
+                'doc_kind: reference\n---\n\n(quoted-guide)=\n# Quoted guide\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(check_pages((spec,), root), [])
+
+    def test_effective_status_normalizes_quoted_yaml_scalar(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "guide.md"
+            path.write_text('---\nstatus: "implemented"\n---\n', encoding="utf-8")
+            self.assertEqual(_front_matter_status(path), "implemented")
 
     def test_write_creates_missing_files_without_overwriting(self) -> None:
         spec = PageSpec(

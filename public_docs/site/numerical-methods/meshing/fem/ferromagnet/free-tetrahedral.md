@@ -246,8 +246,8 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 
 ## Related documentation
 
-- [Thin-film tetrahedral](thin-film-tetrahedral.html)
-- [Refinement](../../refinement.html)
+- [Thin-film tetrahedral](thin-film-tetrahedral.md)
+- [Refinement](../../refinement.md)
 
 ## References
 

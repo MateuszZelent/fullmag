@@ -163,6 +163,7 @@ study.exchange()
 study.demag()
 # Execution is legal only when the active FEM periodic capability is advertised.
 study.build_domain_mesh()
+study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, max_steps=10_000, tolT=1.0e-6)
 ```
 
 ## Control Room workflow
@@ -228,9 +229,9 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 
 ## Related documentation
 
-- [Periodic demagnetization](../../../demag-solvers/periodic-demag.html)
-- [Boundary closure](boundary-closure.html)
-- [FDM periodic grids](../../fdm/periodic-grids.html)
+- [Periodic demagnetization](../../../demag-solvers/periodic-demag.md)
+- [Boundary closure](boundary-closure.md)
+- [FDM periodic grids](../../fdm/periodic-grids.md)
 
 ## References
 

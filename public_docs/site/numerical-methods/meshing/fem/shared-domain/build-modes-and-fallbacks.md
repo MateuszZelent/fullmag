@@ -150,6 +150,7 @@ film.m = fm.texture.uniform(1.0, 0.0, 0.0)
 study.exchange()
 study.demag(realization="poisson_robin")
 study.build_domain_mesh()
+study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, max_steps=10_000, tolT=1.0e-6)
 # In strict mode, an unsupported exact request must fail instead of returning
 # an unreported tetrahedral substitute.
 ```
@@ -212,8 +213,8 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 
 ## Related documentation
 
-- [Swept meshes](../../swept-meshes.html)
-- [Assembly and conformity](assembly-and-conformity.html)
+- [Swept meshes](../../swept-meshes.md)
+- [Assembly and conformity](assembly-and-conformity.md)
 
 ## References
 
