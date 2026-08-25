@@ -855,3 +855,38 @@ test owner-loss ma **1 passed**, a filtr `wait_for_solve` ma **4 passed**.
   **2/2**, test domyślnego solvera **1/1**. Pozostaje wyłącznie infrastruktura
   E2/E5: managed FEM, `mesh_build`/`relax` i browser qualification z
   `requested/effective/resolved == FEM/CPU`.
+
+### Aktualizacja realizacji 2026-08-25 — domknięcie ścieżki pusty FEM → Airbox
+
+- [x] Zidentyfikowano lukę w realnym smoke: `Universe` było niezbieralne, a
+  active lane FEM przegrywał z domyślnym legacy `domain=fdm`.
+- [x] Dodano rozstrzyganie linii authoringu z
+  `capabilities.active_lane.{resolved,requested,authored}` w Explorerze,
+  resource-hookach mesha i inspektorze Airbox.
+- [x] `model:universe` jest teraz wybieralne; jego inspektor renderuje
+  `FEM Airbox setup` i korzysta z istniejącego `AirboxMeshParametersPanel`.
+- [x] Zapis polityki `manual` odświeża kanoniczne zasoby i materializuje
+  `model:airbox`; przed zapisem węzeł nie jest fabrykowany.
+- [x] Dodano testy RED/GREEN dla active lane, wyboru Universe, inspektora i
+  bramki manifestu shared-domain; pakiet zmian ma 281/281 testów targeted PASS.
+- [x] Powtórzono smoke UI na świeżym frontendzie dla FDM i FEM; oba scenariusze
+  kończą się kodem `0`, a FEM sprawdza `fem_airbox_policy=true`.
+- [ ] Uruchomić `just ensure-managed-fem-runtime`, następnie rzeczywisty
+  `mesh_build`/`relax` i browser qualification FEM/CPU. Ta bramka pozostaje
+  otwarta z powodu braku obrazu runtime i storage `/zfn2`; nie zastępować jej
+  hostowym buildem.
+
+Aktualna ocena celu: około **97%**. Warstwa authoringu UI dla pustego FDM/FEM
+jest dowiedziona; pozostałe ~3% to wyłącznie wykonanie i kwalifikacja solvera
+FEM w kanonicznym managed runtime.
+
+### Weryfikacja końcowa 2026-08-25
+
+- [x] Re-review zamknął wcześniejsze blokery fail-closed, strict-TS fixture,
+  komplet pól Airbox oraz browser stability regression.
+- [x] Końcowy targeted Vitest: **198/198 PASS**; ESLint, `node --check` i
+  `git diff --check`: **PASS**.
+- [x] Świeży smoke UI FDM i FEM na ostatniej wersji worktree: oba scenariusze
+  zakończone kodem `0`, w tym FEM `fem_airbox_policy=true`.
+- [ ] Managed FEM `mesh_build`/`relax` i browser qualification pozostają
+  zależne od niedostępnego obrazu runtime oraz storage `/zfn2`.

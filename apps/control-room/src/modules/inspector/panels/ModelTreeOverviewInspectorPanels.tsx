@@ -4,6 +4,13 @@ import type { InspectorPanelProps } from "../inspectorTypes";
 import { ScientificInspectorTemplate } from "../components/ScientificInspectorTemplate";
 import { CrossSectionInspectorPanel } from "./CrossSectionInspectorPanel";
 import { MeshPartVisualizationPanel } from "./MeshPartVisualizationPanel";
+import { InspectorGroup } from "../primitives/InspectorGroup";
+import { AirboxMeshParametersPanel } from "./airbox/AirboxMeshParametersPanel";
+import {
+  isExplicitFdmAirboxRuntime,
+  isExplicitFemAirboxRuntime,
+  useAirboxInspectorRuntimeStatus,
+} from "./airbox/airboxInspectorRuntimeStatus";
 
 function ContextInspector({
   breadcrumbs,
@@ -11,10 +18,14 @@ function ContextInspector({
   methodLabel,
   physicalLabel,
   properties = [],
+  diagnostics = [
+    "This is a semantic navigator node. Select a child to inspect its owned resource or definition.",
+  ],
   title,
 }: {
   breadcrumbs: readonly string[];
   children?: ReactNode;
+  diagnostics?: readonly string[];
   methodLabel: string;
   physicalLabel: string;
   properties?: readonly { label: string; mono?: boolean; value: string }[];
@@ -23,7 +34,7 @@ function ContextInspector({
   return (
     <ScientificInspectorTemplate
       breadcrumbs={breadcrumbs}
-      diagnostics={["This is a semantic navigator node. Select a child to inspect its owned resource or definition."]}
+      diagnostics={diagnostics}
       methodLabel={methodLabel}
       physicalLabel={physicalLabel}
       properties={[
@@ -50,14 +61,38 @@ export function SessionRootInspectorPanel({}: InspectorPanelProps) {
   );
 }
 
-export function UniverseRootInspectorPanel({}: InspectorPanelProps) {
+export function UniverseRootInspectorPanel({ selection }: InspectorPanelProps) {
+  const runtimeStatus = useAirboxInspectorRuntimeStatus();
+  const showFemAirboxSetup = isExplicitFemAirboxRuntime(runtimeStatus);
+  const showFdmAirboxExplanation = isExplicitFdmAirboxRuntime(runtimeStatus);
   return (
     <ContextInspector
       breadcrumbs={["Model", "Universe"]}
+      diagnostics={
+        runtimeStatus === null || (!showFemAirboxSetup && !showFdmAirboxExplanation)
+          ? ["Loading the resolved execution lane before exposing mesh authoring controls."]
+          : showFemAirboxSetup
+            ? [
+                "The FEM Airbox policy is authored here before the Airbox child is materialized in Explorer.",
+              ]
+            : [
+                "FDM uses the structured-grid policy in Study; FEM Airbox controls are not applicable to this lane.",
+              ]
+      }
       methodLabel="Physical domain navigator"
       physicalLabel="Simulation universe"
       title="Universe"
-    />
+    >
+      {showFemAirboxSetup ? (
+        <InspectorGroup title="FEM Airbox setup" badge="authoring">
+          <p>
+            Start with a canonical Airbox policy, then build the shared-domain mesh.
+            The Explorer Airbox node appears after the policy is committed.
+          </p>
+          <AirboxMeshParametersPanel lane="fem" selection={selection} />
+        </InspectorGroup>
+      ) : null}
+    </ContextInspector>
   );
 }
 

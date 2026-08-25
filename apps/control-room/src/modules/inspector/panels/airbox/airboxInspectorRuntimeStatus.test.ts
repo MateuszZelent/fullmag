@@ -7,6 +7,7 @@ import {
 import {
   airboxInspectorRuntimeStatusEquals,
   isExplicitFdmAirboxRuntime,
+  isExplicitFemAirboxRuntime,
   resolveAirboxInspectorLane,
   selectAirboxInspectorRuntimeStatus,
 } from "./airboxInspectorRuntimeStatus";
@@ -82,6 +83,60 @@ describe("airboxInspectorRuntimeStatus", () => {
         resources: { mesh_build_revision: 4, mesh_revision: 5 },
       }),
     ).toBe(true);
+  });
+
+  it("uses the resolved active lane when an empty FEM domain still reports the default FDM domain", () => {
+    const status = selectAirboxInspectorRuntimeStatus({
+      data: {
+        capabilities: {
+          explicit_topology: false,
+          active_lane: {
+            resolved: { discretization: "fem" },
+          },
+        },
+        domain: { discretization: "fdm" },
+        resources: { mesh_build_revision: 0, mesh_revision: 0 },
+      } as never,
+    });
+    expect(
+      isExplicitFdmAirboxRuntime(status),
+    ).toBe(false);
+    expect(isExplicitFemAirboxRuntime(status)).toBe(true);
+  });
+
+  it("does not infer an Airbox lane from requested FEM when resolution is absent", () => {
+    const status = selectAirboxInspectorRuntimeStatus({
+      data: {
+        capabilities: {
+          explicit_topology: false,
+          active_lane: {
+            requested: { discretization: "fem" },
+            resolved: null,
+          },
+        },
+        domain: { discretization: "fdm" },
+        resources: { mesh_build_revision: 0, mesh_revision: 0 },
+      } as never,
+    });
+
+    expect(isExplicitFdmAirboxRuntime(status)).toBe(false);
+    expect(isExplicitFemAirboxRuntime(status)).toBe(false);
+  });
+
+  it("fails closed when the active lane field is present but null", () => {
+    const status = selectAirboxInspectorRuntimeStatus({
+      data: {
+        capabilities: {
+          explicit_topology: false,
+          active_lane: null,
+        },
+        domain: { discretization: "fdm" },
+        resources: { mesh_build_revision: 0, mesh_revision: 0 },
+      } as never,
+    });
+
+    expect(isExplicitFdmAirboxRuntime(status)).toBe(false);
+    expect(isExplicitFemAirboxRuntime(status)).toBe(false);
   });
 
   it("keeps the multilayer target on the FDM lane even though its display target is Airbox", () => {

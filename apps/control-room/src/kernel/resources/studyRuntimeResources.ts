@@ -415,7 +415,10 @@ export function shouldLoadRuntimeMeshManifest(
         capabilities: Pick<
           LiveStatusResource["capabilities"],
           "explicit_topology"
-        >;
+        > & {
+          active_lane_discretization?: string | null;
+          active_lane?: LiveStatusResource["capabilities"]["active_lane"] | null;
+        };
         domain: Pick<LiveStatusResource["domain"], "discretization">;
         resources: Pick<LiveStatusResource["resources"], "mesh_revision"> &
           Partial<
@@ -426,9 +429,26 @@ export function shouldLoadRuntimeMeshManifest(
     | undefined,
 ): boolean {
   if (!enabled || !status) return false;
+  const hasActiveLaneDiscretization = Object.prototype.hasOwnProperty.call(
+    status.capabilities,
+    "active_lane_discretization",
+  );
+  const hasActiveLane = Object.prototype.hasOwnProperty.call(
+    status.capabilities,
+    "active_lane",
+  );
+  const activeLaneDiscretization = hasActiveLaneDiscretization
+    ? status.capabilities.active_lane_discretization
+    : hasActiveLane
+      ? status.capabilities.active_lane?.resolved?.discretization ?? null
+      : undefined;
+  const laneDiscretization =
+    activeLaneDiscretization !== undefined
+      ? activeLaneDiscretization
+      : status.domain.discretization;
   const requiresSharedDomain =
     status.capabilities.explicit_topology ||
-    status.domain.discretization.toLowerCase() === "fem";
+    laneDiscretization?.toLowerCase() === "fem";
   return (
     requiresSharedDomain &&
     (hasPositiveRevision(status.resources.mesh_revision) ||

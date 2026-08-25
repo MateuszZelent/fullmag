@@ -159,7 +159,7 @@ export function buildUniverseNode(
     parentId: "model:session",
     badge: formatSize(universe.size),
     icon: "shield",
-    selectable: false,
+    selectable: true,
     status: "ready",
     children,
   });

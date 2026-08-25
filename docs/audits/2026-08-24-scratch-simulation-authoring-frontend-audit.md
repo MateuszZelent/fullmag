@@ -470,3 +470,67 @@ rzeczywiste `mesh_build`/`relax` i browser qualification FEM z manifestem
 `requested/effective/resolved == FEM/CPU`. Bez dostępnego `/zfn2`, obrazu
 `fullmag-native.ext4` i archiwum runtime nie oznaczam tej bramki jako PASS ani
 nie zastępuję jej hostowym buildem.
+
+### Aktualizacja dowodowa 2026-08-25 — FEM Airbox z pustego Universe
+
+Pełny smoke UI ujawnił dodatkową lukę, której same testy panelu nie mogły
+wykryć: węzeł `model:universe` był niezbieralny, a pusty FEM miał w polu
+legacy `domain.discretization` wartość `fdm`, mimo że
+`capabilities.active_lane.resolved.discretization` było `fem`. W efekcie
+formularz polityki Airbox nie był osiągalny z drzewa, a zasoby FEM nie były
+aktywowane.
+
+Zastosowany i zaimplementowany wariant jest opisany w
+`docs/superpowers/specs/2026-08-25-fem-airbox-from-empty-universe-design.md`:
+
+- `Universe` jest teraz wybieralnym węzłem semantycznym z własnym
+  `UniverseRootInspectorPanel`;
+- dla jawnego FEM inspektor pokazuje istniejący
+  `AirboxMeshParametersPanel`, zapisujący kanoniczny zasób
+  `/v2/sessions/current/meshing/policies/universe`;
+- Explorer i bramki resource-hooków rozstrzygają lane z active lane, a pole
+  `domain` pozostaje danymi domeny zrealizowanej;
+- po zapisaniu polityki `manual` Explorer materializuje `model:airbox`, ale nie
+  fabrykuje go przed pierwszym autorskim zapisem;
+- jawny FDM nadal prowadzi przez `StudyGlobalAuthoringModel` i structured grid,
+  bez pokazywania kontrolek FEM.
+
+Dowody regresji:
+
+- testy kontraktowe i panelowe po zmianie: **281/281 PASS**;
+- ESLint zmienionych plików: **PASS**;
+- smoke Playwright na świeżym Next.js, API `8312`, frontend `3113`:
+  **FDM PASS** (rewizja sceny `11`) oraz **FEM PASS** (rewizja sceny `12`);
+- manifest FEM potwierdza Box `X ferromagnet`, translację, CoFeB,
+  `Uniform Y`, parametry `Ms/Aex/alpha/Dind/Dbulk`, exchange/demag,
+  politykę demag oraz `fem_airbox_policy=true`; manifest FDM potwierdza
+  analogiczny przepływ z globalnym i per-object gridem;
+- bezpośredni TypeScript typecheck nie zgłasza błędów w zmienionych plikach,
+  ale repozytoryjna bramka pozostaje czerwona przez istniejące błędy w
+  `visualizationCommandContributions.ts`, `FrozenSpinsInspectorPanel.tsx`,
+  `StudyGlobalAuthoringModel*`, `ribbonCommands.ts` i `Resizable.tsx`;
+- pełny frontendowy suite ma **5757 PASS / 60 FAIL** w niezależnych,
+  wcześniejszych kontraktach viewport/performance/mocków; nie przypisuję tych
+  awarii zmianie Airbox bez osobnego triage.
+
+Ta aktualizacja podnosi ocenę warstwy authoringu UI do około **97% celu**.
+Pozostałe ~3% to nadal wyłącznie bramka wykonawcza: dostęp do kanonicznego
+managed FEM, rzeczywisty `mesh_build`/`relax`, WebGL qualification FEM oraz
+manifest `requested/effective/resolved == FEM/CPU`. Bez obrazu runtime i
+storage `/zfn2` nie oznaczam tej części jako PASS.
+
+### Weryfikacja końcowa po re-review 2026-08-25
+
+- Re-review zmian nie wykazał nowych P0/P1. Gating active lane rozróżnia
+  legacy payload bez pola (`undefined`) od istniejącego, nierozstrzygniętego
+  pola (`null`) i w tym drugim przypadku zatrzymuje się fail-closed.
+- Końcowy targeted Vitest: **9 plików, 198/198 PASS**; ESLint zmienionych
+  plików, `node --check` smoke oraz `git diff --check`: **PASS**.
+- Po ostatniej zmianie wykonano świeży browser smoke na Next `3113` i API
+  `8312`: **FDM PASS** oraz **FEM PASS**. Scenariusz FEM obejmuje opóźniony
+  PUT policy i regresję stabilności Inspectora (identity, focus, scroll,
+  opacity, animacje i niezależne pole).
+- Strict TypeScript nadal kończy się kodem `2`, ale lista zawiera wyłącznie
+  znane błędy bazowe poza zmienionymi plikami. Managed FEM pozostaje jedyną
+  niezamkniętą bramką wykonawczą; ocena celu pozostaje na poziomie **około
+  97%**.

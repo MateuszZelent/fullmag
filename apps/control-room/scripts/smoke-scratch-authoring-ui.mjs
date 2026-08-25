@@ -59,6 +59,56 @@ async function selectNode(nodeId) {
   if (await prompt.isVisible().catch(() => false)) await prompt.click();
 }
 
+async function qualifyAirboxInspectorMutationStability(universeInspector, applyButton) {
+  const marker = "scratch-fem-airbox-policy-stability";
+  const viewport = universeInspector.locator(".fm-scroll-area__viewport");
+  await viewport.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
+  const baseline = await universeInspector.evaluate((element, identity) => {
+    element.dataset.mutationStabilityMarker = identity;
+    const scrollViewport = element.querySelector(".fm-scroll-area__viewport");
+    return {
+      opacity: getComputedStyle(element).opacity,
+      scrollTop: scrollViewport?.scrollTop ?? 0,
+    };
+  }, marker);
+
+  await applyButton.focus();
+  await applyButton.click();
+  await page.waitForTimeout(40);
+  const duringMutation = await universeInspector.evaluate((element) => {
+    const scrollViewport = element.querySelector(".fm-scroll-area__viewport");
+    const opacityAnimations = element
+      .getAnimations({ subtree: true })
+      .filter((animation) => {
+        const frames = animation.effect?.getKeyframes?.() ?? [];
+        return frames.some((frame) => Object.hasOwn(frame, "opacity"));
+      });
+    return {
+      connected: element.isConnected,
+      focusedText: document.activeElement?.textContent?.trim() ?? null,
+      marker: element.dataset.mutationStabilityMarker,
+      opacity: getComputedStyle(element).opacity,
+      opacityAnimations: opacityAnimations.length,
+      scrollTop: scrollViewport?.scrollTop ?? 0,
+    };
+  });
+  if (!duringMutation.connected || duringMutation.marker !== marker) {
+    throw new Error("FEM Airbox Inspector remounted during policy mutation.");
+  }
+  if (duringMutation.opacity !== baseline.opacity || duringMutation.opacityAnimations !== 0) {
+    throw new Error("FEM Airbox policy mutation changed Inspector opacity or started an opacity animation.");
+  }
+  if (Math.abs(duringMutation.scrollTop - baseline.scrollTop) > 1) {
+    throw new Error("FEM Airbox policy mutation changed Inspector scroll position.");
+  }
+  if (!duringMutation.focusedText?.includes("Apply Airbox Policy")) {
+    throw new Error("FEM Airbox policy mutation lost Apply control focus.");
+  }
+  if (!(await universeInspector.locator('select[aria-label="Domain mode"]').isEnabled())) {
+    throw new Error("FEM Airbox policy mutation disabled an unrelated authoring field.");
+  }
+}
+
 const runtimeErrors = [];
 const failedResponses = [];
 const notFoundResponses = [];
@@ -256,6 +306,55 @@ try {
         next.study?.fem_demag_solver_policy?.linear_solver === "cg",
       "FEM demag policy",
     );
+
+    await selectNode("model:universe");
+    await page.getByText("FEM Airbox setup").waitFor({ state: "visible" });
+    const universeInspector = page.locator(
+      '.fm-inspector[data-inspector-owner="universe-root"]',
+    );
+    await universeInspector.waitFor({ state: "visible" });
+    const universePolicyUrl = `${apiBase}/v2/sessions/current/meshing/policies/universe`;
+    const delayedUniversePolicyRoute = async (route) => {
+      if (route.request().method() === "PUT") {
+        const response = await route.fetch();
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        await route.fulfill({ response });
+        return;
+      }
+      await route.continue();
+    };
+    await page.route(universePolicyUrl, delayedUniversePolicyRoute);
+    await page
+      .getByRole("combobox", { name: "Domain mode", exact: true })
+      .selectOption("manual");
+    await fill("Maximum element size", 4e-8);
+    await fill("Minimum element size", 1e-8);
+    await page
+      .getByRole("combobox", { name: "Element grading", exact: true })
+      .selectOption("linear");
+    await fill("Size X", 4e-7);
+    await fill("Size Y", 3e-7);
+    await fill("Size Z", 8e-8);
+    await qualifyAirboxInspectorMutationStability(
+      universeInspector,
+      page.getByRole("button", { name: "Apply Airbox Policy", exact: true }),
+    );
+    await page.unroute(universePolicyUrl, delayedUniversePolicyRoute);
+    await page
+      .getByText("Canonical Airbox policy saved. The realized shared-domain mesh is stale until rebuilt.")
+      .waitFor({ state: "visible" });
+    scene = await waitForScene(
+      (next) =>
+        next.universe?.mode === "manual" &&
+        next.universe?.size?.[0] === 4e-7 &&
+        next.universe?.size?.[1] === 3e-7 &&
+        next.universe?.size?.[2] === 8e-8 &&
+        next.universe?.airbox_hmax === 4e-8 &&
+        next.universe?.airbox_hmin === 1e-8 &&
+        next.universe?.airbox_grading === "linear",
+      "FEM Airbox policy",
+    );
+    await page.locator('[data-node-id="model:airbox"]').waitFor({ state: "visible" });
   }
 
   const object = scene.objects.find((entry) => entry.id === objectId);
@@ -304,6 +403,16 @@ try {
         backend === "fem"
           ? scene.study?.fem_demag_solver_policy?.solver === "CG" ||
             scene.study?.fem_demag_solver_policy?.linear_solver === "cg"
+          : true,
+      fem_airbox_policy:
+        backend === "fem"
+          ? scene.universe?.mode === "manual" &&
+            scene.universe?.size?.[0] === 4e-7 &&
+            scene.universe?.size?.[1] === 3e-7 &&
+            scene.universe?.size?.[2] === 8e-8 &&
+            scene.universe?.airbox_hmax === 4e-8 &&
+            scene.universe?.airbox_hmin === 1e-8 &&
+            scene.universe?.airbox_grading === "linear"
           : true,
     },
   };
