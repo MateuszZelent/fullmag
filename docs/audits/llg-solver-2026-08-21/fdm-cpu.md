@@ -66,7 +66,7 @@ Równoległość operatorów lokalnych, Rayon i RustFFT nie może powodować kon
 
 ## Audyt numeryczny
 
-- rejected step musi cofać stan, cache, RNG i liczniki outputów;
+- dla wspieranych deterministycznych polityk rejected step musi cofać stan, cache i liczniki outputów; adaptive + Brown noise jest obecnie odrzucane przez planner (`adaptive_fdm_rejects_brown_thermal_noise_until_sde_replay_is_qualified`), więc rollback RNG pozostaje bramką przyszłej kwalifikacji SDE;
 - projekcja na sferę nie może obniżać rzędu metody;
 - `dt_min`, `dt_max`, growth/shrink limiter i diagnostyka stagnacji muszą być jawne;
 - kryterium równowagi zachowuje kanoniczne trzy kolejne świeże próbki `max_torque_Apm` poniżej progu; plateau energii pozostaje wyłącznie opcjonalnym sygnałem sterownika, zgodnie z `docs/physics/0580-canonical-relaxation-equilibrium-contract.md` (`discrete-realization`) i `crates/fullmag-runner/src/relaxation.rs` (`effective_max_torque_apm`);

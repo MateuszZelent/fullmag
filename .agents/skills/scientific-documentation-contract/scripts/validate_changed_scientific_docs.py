@@ -188,11 +188,21 @@ def _validate_numerical_method_manifest(
     if page and not source_index_seen:
         errors.append("source index must name at least one mapped path and symbol")
 
-    lanes = sources = manifest.get("backend_matrix")
+    lanes = manifest.get("backend_matrix")
     if not isinstance(lanes, list):
         errors.append("backend_matrix must cover all four backend lanes: FEM/FDM CPU/GPU")
     else:
-        actual_lanes = {(lane.get("solver"), lane.get("device")) for lane in lanes if isinstance(lane, dict)}
+        actual_lanes: set[tuple[str, str]] = set()
+        for lane in lanes:
+            if not isinstance(lane, dict):
+                errors.append("backend_matrix entries must be objects")
+                continue
+            solver = lane.get("solver")
+            device = lane.get("device")
+            if not isinstance(solver, str) or not isinstance(device, str):
+                errors.append("backend_matrix lane solver/device must be strings")
+                continue
+            actual_lanes.add((solver, device))
         if actual_lanes != NUMERICAL_EXPECTED_LANES:
             errors.append("backend_matrix must cover all four backend lanes: FEM/FDM CPU/GPU")
         for lane in lanes:

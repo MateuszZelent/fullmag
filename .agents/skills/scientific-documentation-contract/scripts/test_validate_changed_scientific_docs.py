@@ -283,6 +283,21 @@ Invalid mesh requests fail closed.
 
         self.assertEqual(validate_changed(self.repo, self.base, "HEAD"), [])
 
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(
+                '"solver": "FEM"', '"solver": []', 1
+            ),
+            encoding="utf-8",
+        )
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "reject malformed backend lane")
+        errors = validate_changed(self.repo, self.base, "HEAD")
+
+        self.assertTrue(
+            any("backend_matrix lane solver/device must be strings" in error for error in errors),
+            errors,
+        )
+
     def test_numerical_method_source_map_rejects_blob_revision(self) -> None:
         page = self.repo / "public_docs/site/numerical-methods/meshing/example.md"
         page.parent.mkdir(parents=True)
