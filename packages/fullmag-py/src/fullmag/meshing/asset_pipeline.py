@@ -2404,7 +2404,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 "n_nodes": merged_mesh.n_nodes,
                 "n_elements": merged_mesh.n_elements,
                 "n_boundary_faces": merged_mesh.n_boundary_faces,
-                "mesh_statistics": merged_mesh.to_ir("shared_domain").get("mesh_statistics"),
+                "mesh_statistics": merged_mesh.statistics_ir("shared_domain"),
                 **{k: v for k, v in report.to_dict().items() if k != "build_mode"},
                 "message": "Frozen magnetic submesh and air mesh merge finished",
             }
@@ -3214,7 +3214,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 "n_nodes": classified_mesh.n_nodes,
                 "n_elements": classified_mesh.n_elements,
                 "n_boundary_faces": classified_mesh.n_boundary_faces,
-                "mesh_statistics": classified_mesh.to_ir("shared_domain").get("mesh_statistics"),
+                "mesh_statistics": classified_mesh.statistics_ir("shared_domain"),
                 **{k: v for k, v in report.to_dict().items() if k != "build_mode"},
                 "message": "Shared-domain mesh build finished",
             }

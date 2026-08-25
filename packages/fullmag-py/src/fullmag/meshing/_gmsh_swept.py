@@ -30,7 +30,7 @@ from typing import Any, Iterator, Literal
 import numpy as np
 from numpy.typing import NDArray
 
-from fullmag._progress import emit_progress
+from fullmag._progress import emit_progress, indeterminate_progress_phase
 from fullmag.model.geometry import ArchWaveguide, Box, Cylinder, Geometry
 
 from ._gmsh_types import (
@@ -146,6 +146,19 @@ def _apply_mixed_source_face_mesh_options(
     gmsh.model.mesh.field.setNumbers(restricted, "SurfacesList", [source_surface])
     gmsh.model.mesh.field.setAsBackgroundMesh(restricted)
     return int(restricted)
+
+
+def _set_mixed_volume_mesh_size_options(
+    gmsh: Any,
+    *,
+    maximum_element_size_scaled: float,
+) -> None:
+    gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 1)
+    gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
+    gmsh.option.setNumber(
+        "Mesh.CharacteristicLengthMax",
+        maximum_element_size_scaled,
+    )
 
 
 def _apply_mixed_air_interface_mesh_options(
@@ -1273,11 +1286,9 @@ def generate_swept_box_mesh(
                 hscale=SCALE,
             )
             gmsh.model.mesh.generate(2)
-            gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 1)
-            gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 1)
-            gmsh.option.setNumber(
-                "Mesh.CharacteristicLengthMax",
-                (
+            _set_mixed_volume_mesh_size_options(
+                gmsh,
+                maximum_element_size_scaled=(
                     float(airbox.maximum_element_size) * SCALE
                     if airbox.maximum_element_size is not None
                     else hmax_scaled
@@ -1308,11 +1319,9 @@ def generate_swept_box_mesh(
                 [(0, tag) for tag in (p1, p2, p3, p4)],
                 hmax_scaled,
             )
-            gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 1)
-            gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
-            gmsh.option.setNumber(
-                "Mesh.CharacteristicLengthMax",
-                (
+            _set_mixed_volume_mesh_size_options(
+                gmsh,
+                maximum_element_size_scaled=(
                     float(airbox.maximum_element_size) * SCALE
                     if airbox.maximum_element_size is not None
                     else hmax_scaled
@@ -1395,16 +1404,31 @@ def generate_swept_box_mesh(
         with _GmshProgressLogger(gmsh):
             gmsh.model.mesh.generate(3)
         if airbox is not None:
-            _repair_mixed_tetrahedra(gmsh)
-            _optimize_mixed_pyramid_apices(gmsh)
+            with indeterminate_progress_phase(
+                phase="meshing",
+                progress_label="repairing mixed-domain tetrahedra",
+                message="Repairing mixed-domain tetrahedra",
+            ):
+                _repair_mixed_tetrahedra(gmsh)
+            with indeterminate_progress_phase(
+                phase="meshing",
+                progress_label="optimizing mixed-pyramid apices",
+                message="Optimizing mixed-pyramid apices",
+            ):
+                _optimize_mixed_pyramid_apices(gmsh)
 
         # Extract → same pipeline as cylinder
         if airbox is not None:
-            raw_mesh = _extract_mesh_data(
-                gmsh,
-                has_physical_groups=True,
-                boundary_role_markers=(10, int(airbox.boundary_marker)),
-            )
+            with indeterminate_progress_phase(
+                phase="meshing",
+                progress_label="extracting mesh data",
+                message="Extracting mesh nodes, elements, and boundary facets",
+            ):
+                raw_mesh = _extract_mesh_data(
+                    gmsh,
+                    has_physical_groups=True,
+                    boundary_role_markers=(10, int(airbox.boundary_marker)),
+                )
             mesh = MeshData(
                 nodes=np.asarray(raw_mesh.nodes, dtype=np.float64) / SCALE,
                 cell_types=raw_mesh.cell_types,

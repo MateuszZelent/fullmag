@@ -3,6 +3,9 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
+from fullmag.runtime.loader import load_problem_from_script
 
 ROOT = Path(__file__).resolve().parents[3]
 EXAMPLE = ROOT / "examples" / "permalloy_layer_bimeron_prism_single_layer_relax_300nm.py"
@@ -85,3 +88,12 @@ def test_bimeron_example_uses_the_qualified_shared_domain_mesh_route() -> None:
     assert isinstance(keywords["optimize"], ast.Constant)
     assert keywords["optimize"].value is None
     assert ast.literal_eval(keywords["optimize_iterations"]) == 0
+def test_bimeron_example_rejects_unsupported_mixed_p1_before_geometry_assets() -> None:
+    loaded = load_problem_from_script(EXAMPLE, lightweight_assets=True)
+
+    with pytest.raises(ValueError) as captured:
+        loaded.problem.to_ir(include_geometry_assets=False)
+
+    detail = str(captured.value)
+    assert "fem_mixed_p1_scope_rejected" in detail
+    assert "unsupported_uniaxial_anisotropy" in detail

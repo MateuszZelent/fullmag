@@ -10,7 +10,11 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from fullmag._progress import emit_progress, emit_progress_event
+from fullmag._progress import (
+    emit_progress,
+    emit_progress_event,
+    indeterminate_progress_phase,
+)
 from fullmag._validation import ensure_unique_names, require_non_empty
 from fullmag.init.textures import PresetTexture
 from fullmag.model.antenna import (
@@ -680,8 +684,13 @@ def build_geometry_assets_for_request(
                     object_regions=authored_regions,
                 )
             )
-            domain_mesh_ir = domain_mesh.to_ir("study_domain")
-            is_valid = validate_mesh_ir(domain_mesh_ir)
+            with indeterminate_progress_phase(
+                phase="postprocessing",
+                progress_label="serializing and validating shared-domain mesh",
+                message="Serializing and validating the shared-domain mesh",
+            ):
+                domain_mesh_ir = domain_mesh.to_ir("study_domain")
+                is_valid = validate_mesh_ir(domain_mesh_ir)
             if is_valid is False:
                 raise ValueError(
                     "generated shared FEM domain mesh asset failed Rust validation"
@@ -1414,6 +1423,109 @@ def _validate_constraint_selector_references(
         )
 
 
+def _validate_authored_mixed_p1_scope(
+    *,
+    runtime_selection: dict[str, object],
+    mesh_workflow: dict[str, object] | None,
+    materials: Sequence[object],
+    energy_terms: Sequence[object],
+) -> None:
+    if (
+        runtime_selection.get("backend") != "fem"
+        or runtime_selection.get("execution_mode") != "strict"
+    ):
+        return
+    per_geometry = (
+        mesh_workflow.get("per_geometry")
+        if isinstance(mesh_workflow, dict)
+        else None
+    )
+    if not isinstance(per_geometry, list):
+        return
+    requests_mixed_p1 = any(
+        isinstance(recipe, dict)
+        and recipe.get("mesh_strategy") == "swept_prism"
+        and recipe.get("transition_policy") == "pyramid_to_tetrahedra"
+        and recipe.get("order") == 1
+        for recipe in per_geometry
+    )
+    if not requests_mixed_p1:
+        return
+
+    material_payloads = [
+        material.to_ir()
+        for material in materials
+        if hasattr(material, "to_ir")
+    ]
+    energy_payloads = [
+        term.to_ir()
+        for term in energy_terms
+        if hasattr(term, "to_ir")
+    ]
+    failed: list[str] = []
+    exchange_count = sum(
+        payload.get("kind") == "exchange" for payload in energy_payloads
+    )
+    qualified_demag_count = sum(
+        payload.get("kind") == "demag"
+        and payload.get("realization") in {"poisson_robin", "poisson_dirichlet"}
+        for payload in energy_payloads
+    )
+    if exchange_count == 0:
+        failed.append("missing_exchange")
+    elif exchange_count != 1:
+        failed.append("exchange_term_count_not_one")
+    if qualified_demag_count == 0:
+        failed.append("missing_qualified_demag")
+    elif qualified_demag_count != 1:
+        failed.append("demag_term_count_not_one")
+    if any(
+        payload.get("kind") not in {"exchange", "demag", "zeeman"}
+        for payload in energy_payloads
+    ):
+        failed.append("unsupported_energy_term")
+    if len(material_payloads) != 1:
+        failed.append("material_count_not_one")
+    if any(
+        payload.get("uniaxial_anisotropy") is not None
+        or payload.get("uniaxial_anisotropy_k2") is not None
+        or payload.get("anisotropy_axis") is not None
+        for payload in material_payloads
+    ):
+        failed.append("unsupported_uniaxial_anisotropy")
+    if any(
+        payload.get(key) is not None
+        for payload in material_payloads
+        for key in (
+            "cubic_anisotropy_kc1",
+            "cubic_anisotropy_kc2",
+            "cubic_anisotropy_kc3",
+            "cubic_anisotropy_axis1",
+            "cubic_anisotropy_axis2",
+            "interfacial_dmi",
+            "bulk_dmi",
+            "ms_field",
+            "a_field",
+            "alpha_field",
+            "ku_field",
+            "ku2_field",
+            "kc1_field",
+            "kc2_field",
+            "kc3_field",
+            "dind_field",
+            "dbulk_field",
+        )
+    ):
+        failed.append("unsupported_material_field_or_dmi")
+
+    if failed:
+        raise ValueError(
+            "fem_mixed_p1_scope_rejected: "
+            f"phase=authored_preflight; failed_predicates=[{','.join(failed)}]; "
+            "qualified_scope=exchange+poisson_robin_or_dirichlet; fallback=none"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class Problem:
     name: str
@@ -1771,6 +1883,12 @@ class Problem:
         mesh_workflow = runtime_metadata.get("mesh_workflow")
         if not isinstance(mesh_workflow, dict):
             mesh_workflow = None
+        _validate_authored_mixed_p1_scope(
+            runtime_selection=runtime_metadata["runtime_selection"],
+            mesh_workflow=mesh_workflow,
+            materials=materials,
+            energy_terms=self.energy,
+        )
         study_universe = (
             runtime_metadata.get("study_universe")
             if isinstance(runtime_metadata.get("study_universe"), dict)

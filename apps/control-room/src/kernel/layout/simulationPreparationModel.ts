@@ -31,6 +31,7 @@ export interface SimulationPreparationLogEntryView {
 
 export interface SimulationPreparationFailureView {
   readonly correlationId: string | null;
+  readonly detail: string | null;
   readonly errorCode: string;
   readonly stageLabel: string;
   readonly summary: string;
@@ -95,6 +96,7 @@ export function resolveSimulationPreparationViewModel(
   const failure = snapshot.failure
     ? {
         correlationId: snapshot.failure.diagnostics_correlation_id ?? null,
+        detail: snapshot.failure.detail ?? null,
         errorCode: snapshot.failure.error_code,
         stageLabel:
           stageLabels.get(snapshot.failure.stage_id) ?? snapshot.failure.stage_id,

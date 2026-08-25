@@ -15138,6 +15138,30 @@ fn fem_planner_rejects_every_mixed_p1_execution_tuple_outside_bounded_strict_sp4
 }
 
 #[test]
+fn fem_planner_reports_every_failed_mixed_p1_scope_predicate() {
+    let mut ir = mixed_cpu_relaxation_ir(
+        fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+        fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+    );
+    ir.energy_terms
+        .retain(|term| !matches!(term, fullmag_ir::EnergyTermIR::Exchange));
+    ir.materials[0].uniaxial_anisotropy = Some(1.0e5);
+    ir.materials[0].anisotropy_axis = Some([0.0, 0.0, 1.0]);
+
+    let reason = plan(&ir)
+        .expect_err("mixed P1 must report every failed scope predicate")
+        .reasons
+        .join("\n");
+
+    assert!(reason.contains("fem_mixed_p1_scope_rejected"), "{reason}");
+    assert!(reason.contains("missing_exchange"), "{reason}");
+    assert!(
+        reason.contains("unsupported_uniaxial_anisotropy"),
+        "{reason}"
+    );
+}
+
+#[test]
 fn fem_planner_rejects_uncertified_mixed_topology_before_backend_startup() {
     let mut ir = fem_minimal_test_ir();
     let mut asset = valid_mixed_certificate_asset();

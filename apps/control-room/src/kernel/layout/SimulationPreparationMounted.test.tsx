@@ -216,6 +216,7 @@ describe("mounted simulation preparation UI", () => {
         </KernelContext.Provider>,
       );
     });
+    expect(findButton(container, "View error details")).toBeTruthy();
 
     await act(async () => {
       findButton(container, "Copy diagnostics").click();
@@ -580,6 +581,7 @@ function failedPreparationFixture(): SimulationPreparationResource {
     active_stage_id: null,
     failure: {
       diagnostics_correlation_id: "diag-42",
+      detail: "failed_predicates=[unsupported_uniaxial_anisotropy]",
       error_code: "mesh_generation_failed",
       stage_id: "meshing",
       summary: "Mesh generation did not converge.",

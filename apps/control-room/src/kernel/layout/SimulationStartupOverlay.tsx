@@ -15,6 +15,7 @@ import type { LiveStatusResource } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
 import { statusRefreshIntervalMs } from "../realtime/communicationPolicy";
 import { useRealtimeConnection } from "../realtime/useRealtimeConnection";
+import { SimulationPreparationFailureDialog } from "./SimulationPreparationFailureDialog";
 import type { ResourceResult } from "../resources/resourceTypes";
 import { useSessionStatusSelector } from "../resources/useSessionStatus";
 import { useSimulationPreparation } from "../resources/useSimulationPreparation";
@@ -216,7 +217,7 @@ export function SimulationStartupOverlayView({
           </p>
           {(state.failure && state.preparation) || state.kind === "resource-error" ? (
             <SimulationPreparationFailureActions
-              snapshot={state.preparation}
+              state={state}
             />
           ) : null}
         </footer>
@@ -344,48 +345,73 @@ export function openSimulationPreparationDiagnostics(
 }
 
 function SimulationPreparationFailureActions({
-  snapshot,
+  state,
 }: {
-  snapshot: SimulationStartupOverlayState["preparation"];
+  state: SimulationStartupOverlayState;
 }) {
   const kernel = useKernel();
+  const snapshot = state.preparation;
   const [copyState, setCopyState] = useState<"copied" | "failed" | "idle">(
     "idle",
   );
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const diagnosticReport = snapshot
+    ? serializeSimulationPreparationDiagnostics(snapshot)
+    : "";
 
   const copyDiagnostics = async () => {
     if (!snapshot) return;
 
     try {
-      await navigator.clipboard.writeText(
-        serializeSimulationPreparationDiagnostics(snapshot),
-      );
+      await navigator.clipboard.writeText(diagnosticReport);
       setCopyState("copied");
     } catch {
       setCopyState("failed");
     }
   };
 
+  const openDiagnostics = () => openSimulationPreparationDiagnostics(kernel);
+
   return (
-    <div className="fm-simulation-startup__actions">
-      {snapshot ? (
-        <Button onClick={copyDiagnostics} size="sm" type="button">
-          {copyState === "copied"
-            ? "Diagnostics copied"
-            : copyState === "failed"
-              ? "Copy failed"
-              : "Copy diagnostics"}
+    <>
+      <div className="fm-simulation-startup__actions">
+        {snapshot ? (
+          <>
+            <Button onClick={copyDiagnostics} size="sm" type="button">
+              {copyState === "copied"
+                ? "Diagnostics copied"
+                : copyState === "failed"
+                  ? "Copy failed"
+                  : "Copy diagnostics"}
+            </Button>
+            <Button
+              onClick={() => setDialogOpen(true)}
+              size="sm"
+              type="button"
+            >
+              View error details
+            </Button>
+          </>
+        ) : null}
+        <Button
+          onClick={openDiagnostics}
+          size="sm"
+          type="button"
+          variant="primary"
+        >
+          Open full diagnostics
         </Button>
-      ) : null}
-      <Button
-        onClick={() => openSimulationPreparationDiagnostics(kernel)}
-        size="sm"
-        type="button"
-        variant="primary"
-      >
-        Open full diagnostics
-      </Button>
-    </div>
+      </div>
+      <SimulationPreparationFailureDialog
+        copyState={copyState}
+        diagnosticReport={diagnosticReport}
+        onCopy={copyDiagnostics}
+        onOpenChange={setDialogOpen}
+        onOpenDiagnostics={openDiagnostics}
+        open={dialogOpen}
+        state={state}
+      />
+    </>
   );
 }
 

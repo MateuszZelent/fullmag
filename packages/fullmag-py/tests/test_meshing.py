@@ -700,6 +700,55 @@ class MeshScaffoldTests(unittest.TestCase):
 
         self.assertIs(cleaned, mesh)
 
+    def test_mixed_mesh_statistics_skip_full_ir_serialization(self) -> None:
+        mesh = MeshData(
+            nodes=np.asarray(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 0.0, 1.0],
+                    [0.0, 1.0, 1.0],
+                ],
+                dtype=np.float64,
+            ),
+            cell_types=np.asarray(["prism6"]),
+            cell_offsets=np.asarray([0, 6]),
+            cell_nodes=np.asarray([0, 1, 2, 3, 4, 5]),
+            element_markers=np.asarray([1]),
+            facet_types=np.asarray([], dtype=np.str_),
+            facet_roles=np.asarray([], dtype=np.str_),
+            facet_offsets=np.asarray([0]),
+            facet_nodes=np.asarray([], dtype=np.int32),
+            boundary_markers=np.asarray([], dtype=np.int32),
+            cell_global_ordinals=np.asarray([0]),
+            facet_global_ordinals=np.asarray([], dtype=np.int64),
+        )
+
+        self.assertIsNone(mesh.statistics_ir("shared_domain"))
+
+    def test_mixed_volume_size_options_disable_boundary_extension(self) -> None:
+        from fullmag.meshing import _gmsh_swept
+
+        calls: list[tuple[str, float]] = []
+
+        class _Option:
+            @staticmethod
+            def setNumber(name: str, value: float) -> None:
+                calls.append((name, value))
+
+        gmsh = SimpleNamespace(option=_Option())
+
+        _gmsh_swept._set_mixed_volume_mesh_size_options(
+            gmsh,
+            maximum_element_size_scaled=8.0,
+        )
+
+        self.assertIn(("Mesh.MeshSizeFromPoints", 1), calls)
+        self.assertIn(("Mesh.MeshSizeExtendFromBoundary", 0), calls)
+        self.assertIn(("Mesh.CharacteristicLengthMax", 8.0), calls)
+
     def test_drop_degenerate_tetrahedra_rejects_invalid_mixed_cell_families(self) -> None:
         reference_cells = {
             "prism6": np.asarray(

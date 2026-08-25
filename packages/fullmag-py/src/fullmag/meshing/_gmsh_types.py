@@ -1919,6 +1919,16 @@ class MeshData:
             cell_mesh_parts=payload.get("cell_mesh_parts", np.asarray([], dtype=np.str_)),
         )
 
+    def statistics_ir(self, mesh_name: str) -> dict[str, object] | None:
+        if not (
+            np.all(self.cell_types == "tet4")
+            and np.all(self.facet_types == "tri3")
+        ):
+            return None
+        return _mesh_statistics_report_to_ir(
+            _build_mesh_statistics_report(self, mesh_name)
+        )
+
     def to_ir(self, mesh_name: str) -> dict[str, object]:
         mesh = self.oriented_copy()
         mesh.validate_strict(require_positive_orientation=True)
@@ -1976,10 +1986,9 @@ class MeshData:
                     }
                     for marker, q in mesh.per_domain_quality.items()
             }
-        if np.all(mesh.cell_types == "tet4") and np.all(mesh.facet_types == "tri3"):
-            ir["mesh_statistics"] = _mesh_statistics_report_to_ir(
-                _build_mesh_statistics_report(mesh, mesh_name)
-            )
+        mesh_statistics = mesh.statistics_ir(mesh_name)
+        if mesh_statistics is not None:
+            ir["mesh_statistics"] = mesh_statistics
         return ir
 
 

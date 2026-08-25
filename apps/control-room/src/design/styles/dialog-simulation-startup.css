@@ -504,3 +504,18 @@
     transform: translateX(70%) !important;
   }
 }
+.fm-simulation-preparation-failure-dialog {
+  width: min(760px, calc(100vw - (2 * var(--fm-space-6))));
+  max-height: min(820px, calc(100vh - (2 * var(--fm-space-6))));
+}
+
+.fm-simulation-preparation-failure-dialog__report {
+  max-height: 280px;
+  overflow: auto;
+  margin: 0;
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
+  line-height: 1.45;
+  white-space: pre-wrap;
+}

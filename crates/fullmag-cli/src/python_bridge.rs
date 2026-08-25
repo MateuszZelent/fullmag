@@ -47,22 +47,35 @@ pub(crate) fn python_mesh_preparation_update(
     kind: &str,
     payload: &serde_json::Value,
 ) -> Option<PythonMeshPreparationUpdate> {
-    let progress_percent = payload
+    let reported_progress_percent = payload
         .get("progress_percent")
         .or_else(|| payload.get("percent"))
         .and_then(serde_json::Value::as_u64)
         .filter(|value| *value <= 100)
         .and_then(|value| u8::try_from(value).ok());
+    let is_indeterminate = payload
+        .get("progress_kind")
+        .and_then(serde_json::Value::as_str)
+        == Some("indeterminate");
+    let progress_percent = (!is_indeterminate)
+        .then_some(reported_progress_percent)
+        .flatten();
     let progress_label = payload
         .get("progress_label")
         .or_else(|| payload.get("label"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(sanitize_preparation_progress_label);
+    let message = payload
+        .get("message")
         .and_then(serde_json::Value::as_str)
         .and_then(sanitize_preparation_progress_label);
 
     let stage_progress = |stage_id, fallback_detail: &str| {
         Some(PythonMeshPreparationUpdate::StageProgress {
             stage_id,
-            detail: fallback_detail.to_string(),
+            detail: message
+                .clone()
+                .unwrap_or_else(|| fallback_detail.to_string()),
             progress_percent,
             progress_label: progress_label.clone(),
         })
@@ -1803,6 +1816,31 @@ mod tests {
             ),
             Some(PythonMeshPreparationUpdate::Completed {
                 detail: "Shared-domain mesh preparation complete".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn structured_indeterminate_mesh_heartbeat_preserves_message_and_clears_percent() {
+        assert_eq!(
+            python_mesh_preparation_update(
+                "mesh_build_phase",
+                &serde_json::json!({
+                    "phase": "postprocessing",
+                    "progress_kind": "indeterminate",
+                    "progress_percent": 63,
+                    "progress_label": "serializing and validating shared-domain mesh",
+                    "message": "Serializing and validating the shared-domain mesh (45.0s elapsed)",
+                }),
+            ),
+            Some(PythonMeshPreparationUpdate::StageProgress {
+                stage_id: PreparationStageId::MeshPostprocessing,
+                detail: "Serializing and validating the shared-domain mesh (45.0s elapsed)"
+                    .to_string(),
+                progress_percent: None,
+                progress_label: Some(
+                    "serializing and validating shared-domain mesh".to_string()
+                ),
             })
         );
     }

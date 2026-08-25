@@ -12,6 +12,7 @@ export function serializeSimulationPreparationDiagnostics(
       ? {
           diagnostics_correlation_id:
             snapshot.failure.diagnostics_correlation_id ?? null,
+          detail: snapshot.failure.detail ?? null,
           error_code: snapshot.failure.error_code,
           stage_id: snapshot.failure.stage_id,
           summary: snapshot.failure.summary,

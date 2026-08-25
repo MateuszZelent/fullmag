@@ -211,10 +211,12 @@ fn fail_owned_preparation_stage_with_diagnostics(
     stage_id: PreparationStageId,
     error_code: &str,
     safe_summary: &str,
+    detail: Option<String>,
 ) -> Result<()> {
     let timestamp_unix_ms = preparation_unix_time_millis()?;
     transition_preparation(workspace, |preparation| {
         preparation.fail_stage(stage_id, timestamp_unix_ms, error_code, safe_summary)?;
+        preparation.set_failure_detail(detail);
         let correlation_id = format!(
             "preparation-{}-{}-{}",
             stage_id.as_str(),
@@ -289,7 +291,7 @@ fn sanitized_preparation_error_message(message: &str) -> Option<String> {
     is_bounded.then_some(sanitized)
 }
 
-fn fail_active_preparation_stage_with_detail(
+fn fail_active_preparation_stage_with_diagnostics(
     workspace: &LocalLiveWorkspace,
     error_code: &str,
     safe_summary: &str,
@@ -301,7 +303,7 @@ fn fail_active_preparation_stage_with_detail(
         .as_ref()
         .and_then(|preparation| preparation.active_stage_id);
     if let Some(active_stage_id) = active_stage_id {
-        fail_owned_preparation_stage_with_detail(
+        fail_owned_preparation_stage_with_diagnostics(
             workspace,
             active_stage_id,
             error_code,
@@ -321,7 +323,7 @@ fn run_active_preparation_operation<T>(
     match operation() {
         Ok(value) => Ok(value),
         Err(error) => {
-            fail_active_preparation_stage_with_detail(
+            fail_active_preparation_stage_with_diagnostics(
                 workspace,
                 error_code,
                 safe_failure_summary,
@@ -341,7 +343,7 @@ fn own_preparation_boundary_failure<T>(
     match result {
         Ok(value) => Ok(value),
         Err(error) => {
-            if let Err(record_error) = fail_owned_preparation_stage_with_detail(
+            if let Err(record_error) = fail_owned_preparation_stage_with_diagnostics(
                 workspace,
                 PreparationStageId::ScriptMaterialization,
                 error_code,
@@ -486,7 +488,11 @@ fn run_owned_preparation_stage<T>(
             if expose_safe_operation_error {
                 let summary = safe_validation_failure_summary(&error, safe_failure_summary);
                 fail_owned_preparation_stage_with_diagnostics(
-                    workspace, stage_id, error_code, &summary,
+                    workspace,
+                    stage_id,
+                    error_code,
+                    &summary,
+                    safe_preparation_error_detail(&error),
                 )?;
             } else {
                 fail_owned_preparation_stage(
@@ -521,11 +527,12 @@ fn run_solver_initialization_safety_check<T>(
     match operation() {
         Ok(value) => Ok(value),
         Err(error) => {
-            fail_owned_preparation_stage(
+            fail_owned_preparation_stage_with_diagnostics(
                 workspace,
                 PreparationStageId::SolverInitialization,
                 error_code,
                 safe_failure_summary,
+                safe_preparation_error_detail(&error),
             )?;
             Err(error)
         }
@@ -735,6 +742,58 @@ fn project_deferred_mesh_failure(
     Ok(())
 }
 
+fn project_authoritative_authored_preflight_failure(
+    workspace: &LocalLiveWorkspace,
+    error: &anyhow::Error,
+) -> Result<bool> {
+    let Some(detail) = safe_preparation_error_detail(error) else {
+        return Ok(false);
+    };
+    if !detail.contains("fem_mixed_p1_scope_rejected: phase=authored_preflight;") {
+        return Ok(false);
+    }
+
+    let timestamp_unix_ms = preparation_unix_time_millis()?;
+    transition_preparation(workspace, |preparation| {
+        project_completed_preparation_stage(
+            preparation,
+            PreparationStageId::ScriptMaterialization,
+            timestamp_unix_ms,
+            "Python authored simulation materialized for capability preflight",
+        )?;
+        skip_preparation_stage(
+            preparation,
+            PreparationStageId::Validation,
+            timestamp_unix_ms,
+            "Full canonical validation was not reached after authored capability rejection",
+        )?;
+        preparation.project_failed_stage(
+            PreparationStageId::Planning,
+            "fem_mixed_p1_scope_rejected",
+            "Simulation planning rejected unsupported mixed-P1 capability",
+        )?;
+        preparation.set_failure_detail(Some(detail.clone()));
+        let correlation_id = format!(
+            "preparation-{}-{}-{}",
+            PreparationStageId::Planning.as_str(),
+            preparation.preparation_id,
+            timestamp_unix_ms
+        );
+        if let Some(failure) = preparation.failure.as_mut() {
+            failure.diagnostics_correlation_id = Some(correlation_id);
+        }
+        push_preparation_log_once(
+            preparation,
+            timestamp_unix_ms,
+            PreparationLogLevel::Error,
+            PreparationStageId::Planning,
+            "Simulation planning rejected unsupported mixed-P1 capability",
+        );
+        Ok(())
+    })?;
+    Ok(true)
+}
+
 fn project_script_export_failure(
     workspace: &LocalLiveWorkspace,
     early_preflight_completed: bool,
@@ -773,7 +832,7 @@ fn project_script_export_failure(
             project_deferred_mesh_failure(preparation, failure_stage_id, timestamp_unix_ms)
         })?;
     } else {
-        fail_active_preparation_stage_with_detail(
+        fail_active_preparation_stage_with_diagnostics(
             workspace,
             "materialization_failed",
             "Simulation materialization failed",
@@ -6912,7 +6971,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     };
 
     // Join Phase 1 and push early metadata to the already-loaded frontend.
-    let early_config = match phase1_handle
+    let (early_config, authoritative_preflight_error) = match phase1_handle
         .join()
         .unwrap_or_else(|_| Err(anyhow::anyhow!("phase-1 thread panicked")))
     {
@@ -6954,23 +7013,28 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     geometry_names.len()
                 ),
             );
-            Some(early_config)
+            (Some(early_config), None)
         }
         Err(err) => {
-            // Phase 1 failure is non-fatal — Phase 2 will produce the real error if needed.
-            eprintln!("[fullmag] phase-1 pre-pass skipped: {:#}", err);
-            let timestamp_unix_ms = preparation_unix_time_millis()?;
-            transition_preparation(&live_workspace, |preparation| {
-                push_preparation_log_once(
-                    preparation,
-                    timestamp_unix_ms,
-                    PreparationLogLevel::Warning,
-                    PreparationStageId::ScriptMaterialization,
-                    "Lightweight script preflight was unavailable; using full materialization",
-                );
-                Ok(())
-            })?;
-            None
+            if project_authoritative_authored_preflight_failure(&live_workspace, &err)? {
+                eprintln!("[fullmag] authored capability preflight rejected the execution plan");
+                (None, Some(err))
+            } else {
+                // A transport or helper failure remains non-fatal; Phase 2 owns the real result.
+                eprintln!("[fullmag] phase-1 pre-pass skipped: {:#}", err);
+                let timestamp_unix_ms = preparation_unix_time_millis()?;
+                transition_preparation(&live_workspace, |preparation| {
+                    push_preparation_log_once(
+                        preparation,
+                        timestamp_unix_ms,
+                        PreparationLogLevel::Warning,
+                        PreparationStageId::ScriptMaterialization,
+                        "Lightweight script preflight was unavailable; using full materialization",
+                    );
+                    Ok(())
+                })?;
+                (None, None)
+            }
         }
     };
     let early_preflight_completed = if let Some(early_config) = early_config {
@@ -7005,32 +7069,36 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     } else {
         false
     };
-    let script_config = match export_script_execution_config_via_python(
-        &script_path,
-        &args,
-        Some({
-            let live_workspace = live_workspace.clone();
-            Arc::new(move |event: PythonProgressEvent| {
-                let terminal_line = match &event {
-                    PythonProgressEvent::Message(message) => {
-                        (!message.trim_start().starts_with("json:"))
-                            .then(|| format!("[fullmag] materialize - {}", message))
+    let export_full_script = || {
+        export_script_execution_config_via_python(
+            &script_path,
+            &args,
+            Some({
+                let live_workspace = live_workspace.clone();
+                Arc::new(move |event: PythonProgressEvent| {
+                    let terminal_line = match &event {
+                        PythonProgressEvent::Message(message) => {
+                            (!message.trim_start().starts_with("json:"))
+                                .then(|| format!("[fullmag] materialize - {}", message))
+                        }
+                        PythonProgressEvent::FemSurfacePreview { message, .. } => message
+                            .as_ref()
+                            .map(|text| format!("[fullmag] materialize - {}", text)),
+                        PythonProgressEvent::Structured { payload, .. } => payload
+                            .get("message")
+                            .and_then(|value| value.as_str())
+                            .map(|message| format!("[fullmag] materialize - {}", message)),
+                    };
+                    apply_python_progress_event(&live_workspace, event);
+                    if let Some(line) = terminal_line {
+                        eprintln!("{}", line);
                     }
-                    PythonProgressEvent::FemSurfacePreview { message, .. } => message
-                        .as_ref()
-                        .map(|text| format!("[fullmag] materialize - {}", text)),
-                    PythonProgressEvent::Structured { payload, .. } => payload
-                        .get("message")
-                        .and_then(|value| value.as_str())
-                        .map(|message| format!("[fullmag] materialize - {}", message)),
-                };
-                apply_python_progress_event(&live_workspace, event);
-                if let Some(line) = terminal_line {
-                    eprintln!("{}", line);
-                }
-            })
-        }),
-    ) {
+                })
+            }),
+        )
+    };
+    let script_export = authoritative_preflight_error.map_or_else(export_full_script, Err);
+    let script_config = match script_export {
         Ok(config) => config,
         Err(error) => {
             let error =
@@ -12163,6 +12231,59 @@ mod tests {
     }
 
     #[test]
+    fn authored_mixed_p1_preflight_failure_is_owned_by_planning_with_diagnostics() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = concat!(
+            "ValueError: fem_mixed_p1_scope_rejected: phase=authored_preflight;",
+            " failed_predicates=[unsupported_uniaxial_anisotropy]"
+        );
+
+        assert!(super::project_authoritative_authored_preflight_failure(
+            &workspace,
+            &anyhow::anyhow!(raw_error),
+        )
+        .expect("authored capability failure should project"),);
+
+        let preparation = workspace
+            .snapshot()
+            .simulation_preparation
+            .expect("preparation state");
+        for (stage_id, expected_status) in [
+            (
+                PreparationStageId::ScriptMaterialization,
+                PreparationStageStatus::Completed,
+            ),
+            (
+                PreparationStageId::Validation,
+                PreparationStageStatus::Skipped,
+            ),
+            (PreparationStageId::Planning, PreparationStageStatus::Failed),
+        ] {
+            let stage = preparation
+                .stages
+                .iter()
+                .find(|stage| stage.id == stage_id)
+                .expect("projected preflight stage");
+            assert_eq!(stage.status, expected_status);
+        }
+        let failure = preparation.failure.as_ref().expect("owned failure");
+        assert_eq!(failure.error_code, "fem_mixed_p1_scope_rejected");
+        assert_eq!(
+            failure.summary,
+            "Simulation planning rejected unsupported mixed-P1 capability"
+        );
+        assert_eq!(failure.detail.as_deref(), Some(raw_error));
+        assert!(failure
+            .diagnostics_correlation_id
+            .as_deref()
+            .is_some_and(|value| value.starts_with("preparation-planning-")));
+        assert!(preparation.log_tail.iter().all(|entry| {
+            entry.message
+                != "Lightweight script preflight was unavailable; using full materialization"
+        }));
+    }
+
+    #[test]
     fn generic_materialization_failure_preserves_safe_root_cause_detail() {
         let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
         let raw_error = "python helper failed: FDM universe membership is unavailable";
@@ -12382,6 +12503,14 @@ mod tests {
             .snapshot()
             .simulation_preparation
             .expect("preparation state");
+        let failure = preparation.failure.as_ref().expect("owned failure");
+        assert_eq!(
+            failure.detail.as_deref(),
+            Some("materialized validator leaked <path>")
+        );
+        assert!(failure.diagnostics_correlation_id.as_deref().is_some_and(
+            |value| value.starts_with("preparation-solver_initialization-")
+        ));
         assert!(preparation.log_tail.iter().any(|entry| {
             entry.stage_id == PreparationStageId::SolverInitialization
                 && entry.message == "Checking fully materialized runtime validity"
@@ -12426,6 +12555,14 @@ mod tests {
             .snapshot()
             .simulation_preparation
             .expect("preparation state");
+        let failure = preparation.failure.as_ref().expect("owned failure");
+        assert_eq!(
+            failure.detail.as_deref(),
+            Some("materialized planner leaked backend internals")
+        );
+        assert!(failure.diagnostics_correlation_id.as_deref().is_some_and(
+            |value| value.starts_with("preparation-solver_initialization-")
+        ));
         assert!(preparation.log_tail.iter().any(|entry| {
             entry.stage_id == PreparationStageId::SolverInitialization
                 && entry.message == "Checking the fully materialized execution plan"
