@@ -45,10 +45,18 @@ void report(bool condition, const char *id, const char *message, int &failures) 
 
 int main() {
     using namespace fullmag::fdm;
+    uint64_t single_magnetization_payload_bytes = 0;
+    uint64_t single_abm3_payload_bytes = 0;
     uint64_t magnetization_payload_bytes = 0;
     uint64_t abm3_payload_bytes = 0;
     uint64_t overflow_payload_bytes = UINT64_C(0xa5a5a5a5a5a5a5a5);
     const bool transaction_payload_bytes_are_exact =
+        context_step_transaction_payload_bytes(
+            7, sizeof(float), false, single_magnetization_payload_bytes) &&
+        single_magnetization_payload_bytes == UINT64_C(3) * 7 * sizeof(float) &&
+        context_step_transaction_payload_bytes(
+            7, sizeof(float), true, single_abm3_payload_bytes) &&
+        single_abm3_payload_bytes == UINT64_C(12) * 7 * sizeof(float) &&
         context_step_transaction_payload_bytes(
             7, sizeof(double), false, magnetization_payload_bytes) &&
         magnetization_payload_bytes == UINT64_C(3) * 7 * sizeof(double) &&
@@ -66,6 +74,156 @@ int main() {
             transaction_accounting_overflow.step_transaction_capture_count, 1) &&
         !transaction_accounting_overflow.step_transaction_accounting_valid &&
         transaction_accounting_overflow.step_transaction_capture_count == UINT64_MAX;
+
+    Context capture_sample{};
+    const bool capture_sample_commits_atomically =
+        context_commit_step_transaction_capture_sample(capture_sample, 24) &&
+        capture_sample.step_transaction_accounting_valid &&
+        capture_sample.step_transaction_capture_count == 1 &&
+        capture_sample.step_transaction_capture_d2d_bytes == 24;
+    Context capture_bytes_overflow{};
+    capture_bytes_overflow.step_transaction_capture_count = 5;
+    capture_bytes_overflow.step_transaction_capture_d2d_bytes = UINT64_MAX;
+    const bool capture_bytes_overflow_fails_closed =
+        !context_commit_step_transaction_capture_sample(
+            capture_bytes_overflow, 1) &&
+        !capture_bytes_overflow.step_transaction_accounting_valid &&
+        capture_bytes_overflow.step_transaction_capture_count == 5 &&
+        capture_bytes_overflow.step_transaction_capture_d2d_bytes == UINT64_MAX;
+    Context capture_count_overflow{};
+    capture_count_overflow.step_transaction_capture_count = UINT64_MAX;
+    capture_count_overflow.step_transaction_capture_d2d_bytes = 7;
+    const bool capture_count_overflow_fails_closed =
+        !context_commit_step_transaction_capture_sample(
+            capture_count_overflow, 1) &&
+        !capture_count_overflow.step_transaction_accounting_valid &&
+        capture_count_overflow.step_transaction_capture_count == UINT64_MAX &&
+        capture_count_overflow.step_transaction_capture_d2d_bytes == 7;
+
+    Context rollback_samples{};
+    const bool rollback_first_sample_staged =
+        context_stage_step_transaction_rollback_sample(
+            rollback_samples, 30, 7) &&
+        rollback_samples.step_transaction_rollback_count == 0 &&
+        rollback_samples.step_transaction_rollback_d2d_bytes == 0 &&
+        rollback_samples.step_transaction_rollback_latency_total_ns == 0 &&
+        rollback_samples.step_transaction_rollback_latency_max_ns == 0;
+    const bool rollback_first_sample_committed =
+        context_commit_step_transaction_rollback_sample(rollback_samples) &&
+        rollback_samples.step_transaction_rollback_count == 1 &&
+        rollback_samples.step_transaction_rollback_d2d_bytes == 30 &&
+        rollback_samples.step_transaction_rollback_latency_total_ns == 7 &&
+        rollback_samples.step_transaction_rollback_latency_max_ns == 7;
+    const bool rollback_second_sample_committed =
+        context_stage_step_transaction_rollback_sample(
+            rollback_samples, 50, 11) &&
+        context_commit_step_transaction_rollback_sample(rollback_samples) &&
+        rollback_samples.step_transaction_rollback_count == 2 &&
+        rollback_samples.step_transaction_rollback_d2d_bytes == 80 &&
+        rollback_samples.step_transaction_rollback_latency_total_ns == 18 &&
+        rollback_samples.step_transaction_rollback_latency_max_ns == 11;
+
+    Context discarded_rollback_sample{};
+    const bool rollback_failure_staged =
+        context_stage_step_transaction_rollback_sample(
+            discarded_rollback_sample, 90, 13);
+    context_discard_step_transaction_rollback_sample(discarded_rollback_sample);
+    fullmag_fdm_step_transaction_telemetry_v1 discarded_rollback_telemetry{};
+    discarded_rollback_telemetry.abi_version =
+        FULLMAG_FDM_STEP_TRANSACTION_TELEMETRY_ABI_V1;
+    discarded_rollback_telemetry.struct_size =
+        sizeof(discarded_rollback_telemetry);
+    const bool rollback_failure_discards_public_sample =
+        rollback_failure_staged &&
+        context_get_step_transaction_telemetry_v1(
+            discarded_rollback_sample, &discarded_rollback_telemetry) &&
+        discarded_rollback_telemetry.accounting_valid == 0 &&
+        discarded_rollback_telemetry.rollback_count == 0 &&
+        discarded_rollback_telemetry.rollback_d2d_bytes == 0 &&
+        discarded_rollback_telemetry.rollback_latency_total_ns == 0 &&
+        discarded_rollback_telemetry.rollback_latency_max_ns == 0;
+
+    Context rollback_total_overflow{};
+    rollback_total_overflow.step_transaction_rollback_count = 2;
+    rollback_total_overflow.step_transaction_rollback_d2d_bytes = 7;
+    rollback_total_overflow.step_transaction_rollback_latency_total_ns = UINT64_MAX;
+    rollback_total_overflow.step_transaction_rollback_latency_max_ns = 5;
+    const bool rollback_total_overflow_fails_closed =
+        context_stage_step_transaction_rollback_sample(
+            rollback_total_overflow, 3, 1) &&
+        !context_commit_step_transaction_rollback_sample(
+            rollback_total_overflow) &&
+        !rollback_total_overflow.step_transaction_accounting_valid &&
+        rollback_total_overflow.step_transaction_rollback_count == 2 &&
+        rollback_total_overflow.step_transaction_rollback_d2d_bytes == 7 &&
+        rollback_total_overflow.step_transaction_rollback_latency_total_ns ==
+            UINT64_MAX &&
+        rollback_total_overflow.step_transaction_rollback_latency_max_ns == 5;
+    Context rollback_bytes_overflow{};
+    rollback_bytes_overflow.step_transaction_rollback_count = 2;
+    rollback_bytes_overflow.step_transaction_rollback_d2d_bytes = UINT64_MAX;
+    rollback_bytes_overflow.step_transaction_rollback_latency_total_ns = 5;
+    rollback_bytes_overflow.step_transaction_rollback_latency_max_ns = 5;
+    const bool rollback_bytes_overflow_fails_closed =
+        context_stage_step_transaction_rollback_sample(
+            rollback_bytes_overflow, 1, 1) &&
+        !context_commit_step_transaction_rollback_sample(
+            rollback_bytes_overflow) &&
+        !rollback_bytes_overflow.step_transaction_accounting_valid &&
+        rollback_bytes_overflow.step_transaction_rollback_count == 2 &&
+        rollback_bytes_overflow.step_transaction_rollback_d2d_bytes == UINT64_MAX &&
+        rollback_bytes_overflow.step_transaction_rollback_latency_total_ns == 5 &&
+        rollback_bytes_overflow.step_transaction_rollback_latency_max_ns == 5;
+    Context rollback_count_overflow{};
+    rollback_count_overflow.step_transaction_rollback_count = UINT64_MAX;
+    rollback_count_overflow.step_transaction_rollback_d2d_bytes = 7;
+    rollback_count_overflow.step_transaction_rollback_latency_total_ns = 5;
+    rollback_count_overflow.step_transaction_rollback_latency_max_ns = 5;
+    const bool rollback_count_overflow_fails_closed =
+        context_stage_step_transaction_rollback_sample(
+            rollback_count_overflow, 1, 1) &&
+        !context_commit_step_transaction_rollback_sample(
+            rollback_count_overflow) &&
+        !rollback_count_overflow.step_transaction_accounting_valid &&
+        rollback_count_overflow.step_transaction_rollback_count == UINT64_MAX &&
+        rollback_count_overflow.step_transaction_rollback_d2d_bytes == 7 &&
+        rollback_count_overflow.step_transaction_rollback_latency_total_ns == 5 &&
+        rollback_count_overflow.step_transaction_rollback_latency_max_ns == 5;
+    Context rollback_max_boundary{};
+    const bool rollback_max_boundary_is_monotonic =
+        context_stage_step_transaction_rollback_sample(
+            rollback_max_boundary, 1, UINT64_MAX) &&
+        context_commit_step_transaction_rollback_sample(rollback_max_boundary) &&
+        rollback_max_boundary.step_transaction_rollback_count == 1 &&
+        rollback_max_boundary.step_transaction_rollback_d2d_bytes == 1 &&
+        rollback_max_boundary.step_transaction_rollback_latency_total_ns ==
+            UINT64_MAX &&
+        rollback_max_boundary.step_transaction_rollback_latency_max_ns ==
+            UINT64_MAX &&
+        context_stage_step_transaction_rollback_sample(
+            rollback_max_boundary, 1, 1) &&
+        !context_commit_step_transaction_rollback_sample(
+            rollback_max_boundary) &&
+        !rollback_max_boundary.step_transaction_accounting_valid &&
+        rollback_max_boundary.step_transaction_rollback_count == 1 &&
+        rollback_max_boundary.step_transaction_rollback_d2d_bytes == 1 &&
+        rollback_max_boundary.step_transaction_rollback_latency_total_ns ==
+            UINT64_MAX &&
+        rollback_max_boundary.step_transaction_rollback_latency_max_ns ==
+            UINT64_MAX;
+    Context rollback_saturated_max{};
+    rollback_saturated_max.step_transaction_rollback_latency_max_ns = UINT64_MAX;
+    const bool rollback_saturated_max_is_preserved =
+        context_stage_step_transaction_rollback_sample(
+            rollback_saturated_max, 2, 3) &&
+        context_commit_step_transaction_rollback_sample(
+            rollback_saturated_max) &&
+        rollback_saturated_max.step_transaction_accounting_valid &&
+        rollback_saturated_max.step_transaction_rollback_count == 1 &&
+        rollback_saturated_max.step_transaction_rollback_d2d_bytes == 2 &&
+        rollback_saturated_max.step_transaction_rollback_latency_total_ns == 3 &&
+        rollback_saturated_max.step_transaction_rollback_latency_max_ns ==
+            UINT64_MAX;
     const FsalEndpointIdentity exact_identity{
         7, fsal_double_bits(1.0e-12), fsal_double_bits(1.0e-13),
         2, 3, 4, 5, 6, 7, 8};
@@ -429,6 +587,14 @@ int main() {
         context_telemetry_getter_begin,
         context_telemetry_getter_end - context_telemetry_getter_begin);
     const auto api = read(fdm / "api/c_api.cpp");
+    const auto rollback_transaction_api_begin =
+        api.find("bool rollback_step_transaction(");
+    const auto rollback_transaction_api_end = api.find(
+        "int execute_single_grid_step_transaction(",
+        rollback_transaction_api_begin);
+    const auto rollback_transaction_api = api.substr(
+        rollback_transaction_api_begin,
+        rollback_transaction_api_end - rollback_transaction_api_begin);
     const auto step_api_begin = api.find("int fullmag_fdm_backend_step(");
     const auto step_api_end = api.find(
         "int fullmag_fdm_context_bind_gpu_transport_v1", step_api_begin);
@@ -738,15 +904,74 @@ int main() {
         "step transaction telemetry snapshots Context counters fail-closed",
         failures);
     report(
+        capture_sample_commits_atomically &&
+            capture_bytes_overflow_fails_closed &&
+            capture_count_overflow_fails_closed &&
+            rollback_first_sample_staged &&
+            rollback_first_sample_committed &&
+            rollback_second_sample_committed &&
+            rollback_failure_discards_public_sample &&
+            rollback_total_overflow_fails_closed &&
+            rollback_bytes_overflow_fails_closed &&
+            rollback_count_overflow_fails_closed &&
+            rollback_max_boundary_is_monotonic &&
+            rollback_saturated_max_is_preserved,
+        "FDM-GPU-TRX-001-B5-RED",
+        "transaction samples stage, commit, discard, and overflow atomically",
+        failures);
+    report(
         contains(runtime, "step_transaction_capture_d2d_bytes") &&
             contains(runtime, "step_transaction_rollback_d2d_bytes") &&
             contains(runtime, "steady_clock") &&
-            contains(runtime, "step_transaction_rollback_latency_total_ns") &&
-            contains(runtime, "step_transaction_rollback_latency_max_ns") &&
+            contains(context, "step_transaction_rollback_latency_total_ns") &&
+            contains(context, "step_transaction_rollback_latency_max_ns") &&
             count_occurrences(capture_runtime, "cudaStreamSynchronize(") == 3 &&
             count_occurrences(rollback_runtime, "cudaStreamSynchronize(") == 3,
         "FDM-GPU-TRX-001-B3-RED",
         "capture and rollback account real D2D bytes and rollback latency without new synchronization",
+        failures);
+    const auto rollback_state_restore = rollback_transaction_api.find(
+        "context_rollback_pre_step_state(ctx)");
+    const auto rollback_fsal_invalidation = rollback_transaction_api.find(
+        "context_invalidate_fsal_cache(");
+    const auto rollback_transport_restore = rollback_transaction_api.find(
+        "context_rollback_gpu_transport_step(ctx)");
+    const auto rollback_observables_invalidation = rollback_transaction_api.find(
+        "context_invalidate_observables(ctx)");
+    const auto rollback_observables_refresh = rollback_transaction_api.find(
+        "context_refresh_observables(ctx)");
+    const auto rollback_commit = rollback_transaction_api.find(
+        "context_commit_step_transaction_rollback_sample(ctx)");
+    const auto rollback_discard = rollback_transaction_api.find(
+        "context_discard_step_transaction_rollback_sample(ctx)");
+    const auto rollback_timestamp_end = rollback_runtime.find(
+        "const auto rollback_finished_at = std::chrono::steady_clock::now()");
+    const auto rollback_host_bookkeeping = rollback_runtime.find(
+        "ctx.gpu_transport_pre_step_m_valid = false");
+    const auto rollback_payload_accounting = rollback_runtime.find(
+        "context_step_transaction_payload_bytes(");
+    const auto rollback_last_restore_sync = rollback_runtime.rfind(
+        "cudaStreamSynchronize(", rollback_timestamp_end);
+    report(
+        contains(rollback_runtime,
+            "context_stage_step_transaction_rollback_sample(") &&
+            !contains(rollback_runtime,
+                "context_commit_step_transaction_rollback_sample(") &&
+            rollback_timestamp_end != std::string::npos &&
+            rollback_last_restore_sync != std::string::npos &&
+            rollback_last_restore_sync < rollback_timestamp_end &&
+            rollback_timestamp_end < rollback_host_bookkeeping &&
+            rollback_timestamp_end < rollback_payload_accounting &&
+            rollback_state_restore < rollback_fsal_invalidation &&
+            rollback_fsal_invalidation < rollback_transport_restore &&
+            rollback_transport_restore < rollback_observables_invalidation &&
+            rollback_observables_invalidation < rollback_observables_refresh &&
+            rollback_observables_refresh < rollback_commit &&
+            rollback_commit < rollback_discard &&
+            contains(rollback_transaction_api, "if (rollback_succeeded)") &&
+            contains(rollback_transaction_api, "else"),
+        "FDM-GPU-TRX-001-B6-RED",
+        "rollback publishes only after full transport and observables success",
         failures);
     report(
         contains(transaction_telemetry_api, "#if FULLMAG_HAS_CUDA") &&
