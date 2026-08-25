@@ -1,0 +1,231 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/discretization/mesh-controls.md",
+    "reviewed_revision": "043201a94f769307c6b6e0db971da9a8a5eec57c"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source-backed",
+      "reason": "The shared-domain Gmsh, extraction, reporting, and CPU consumption paths are source-backed."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "partial",
+      "reason": "GPU consumption requires capability coverage for the realized element families, order, interactions, and auxiliary operators."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM uses Cartesian cell controls; the FEM controls on this page are filtered or read-only on the FDM lane."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM uses Cartesian cell controls; the FEM controls on this page are filtered or read-only on the FDM lane."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-python-api-mesh-controls-min-field",
+      "symbols": ["h_target", "size_fields"],
+      "sources": ["size_field_plan"]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "h_target",
+      "latex": "$h_{\\mathrm{target}}(\\mathbf x)$",
+      "meaning": "resolved local target element size before mesher/conformity constraints",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "size_fields",
+      "latex": "$\\mathcal S(\\mathbf x)$",
+      "meaning": "active size fields at the spatial point",
+      "si_unit": "$1$"
+    }
+  ],
+  "sources": [
+    {
+      "id": "size_controls",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class MeshSizeControls",
+      "responsibility": "Reusable calibration, preset, size, growth, curvature, and narrow-region policy."
+    },
+    {
+      "id": "assembly_policy",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class SharedMeshAssemblyPolicy",
+      "responsibility": "Conforming shared-domain interface and airbox assembly policy."
+    },
+    {
+      "id": "public_validation",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "_validate_mesh_control_values",
+      "responsibility": "Stage-first public size, order, growth, and narrow-region validation."
+    },
+    {
+      "id": "preset_resolution",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "resolve_user_mesh_size_controls",
+      "responsibility": "Preset/default resolution and durable resolved size controls."
+    },
+    {
+      "id": "size_field_plan",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py",
+      "symbol": "_build_field_stack",
+      "responsibility": "Composition and ordering of local Gmsh size fields."
+    },
+    {
+      "id": "target_resolution",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py",
+      "symbol": "resolve_shared_domain_targets",
+      "responsibility": "Study, workflow, object, and airbox target precedence."
+    },
+    {
+      "id": "mesh_report",
+      "path": "packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py",
+      "symbol": "_build_shared_domain_build_report",
+      "responsibility": "Requested/effective/realized topology, operations, fallbacks, selectors, and quality provenance."
+    },
+    {
+      "id": "object_ui",
+      "path": "apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx",
+      "symbol": "ObjectMeshPolicyPanel",
+      "responsibility": "Object policy editing, Apply Policy, build-selected command, quality, and history."
+    },
+    {
+      "id": "object_ui_model",
+      "path": "apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts",
+      "symbol": "buildObjectMeshPolicyReplaceRequest",
+      "responsibility": "Structured object fields and advanced JSON to canonical policy request."
+    },
+    {
+      "id": "airbox_ui",
+      "path": "apps/control-room/src/modules/inspector/panels/airbox/AirboxMeshParametersPanel.tsx",
+      "symbol": "AirboxMeshParametersPanel",
+      "responsibility": "Universe/Airbox mesh controls, transaction lifecycle, and shared-domain build command."
+    },
+    {
+      "id": "airbox_ui_model",
+      "path": "apps/control-room/src/modules/inspector/panels/airbox/airboxMeshPolicyDraft.ts",
+      "symbol": "buildAirboxMeshPolicyReplaceRequest",
+      "responsibility": "Universe policy parsing, FEM-only filtering, and canonical request."
+    },
+    {
+      "id": "region_ui",
+      "path": "apps/control-room/src/modules/inspector/panels/region/ObjectRegionMeshPanel.tsx",
+      "symbol": "ObjectRegionMeshPanel",
+      "responsibility": "FEM regional mesh overrides and realized region quality."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "MeshSizeControls.calibrate_for",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "Standalone compatibility payload; no authoring facade attaches it to ProblemIR.",
+        "meaning": "Recorded calibration-family data.",
+        "backend_support": "Unattached",
+        "problem_ir": "none"
+      },
+      {
+        "python": "MeshSizeControls.size_preset",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "Standalone compatibility payload; no authoring facade attaches it to ProblemIR.",
+        "meaning": "Named size-policy data.",
+        "backend_support": "Unattached",
+        "problem_ir": "none"
+      },
+      {
+        "python": "MeshSizeControls.maximum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "Standalone compatibility payload; constructor does not validate it.",
+        "meaning": "Upper element-size data.",
+        "backend_support": "Unattached",
+        "problem_ir": "none"
+      },
+      {
+        "python": "MeshSizeControls.minimum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "Standalone compatibility payload; constructor does not validate it.",
+        "meaning": "Lower element-size data.",
+        "backend_support": "Unattached",
+        "problem_ir": "none"
+      },
+      {
+        "python": "MeshSizeControls.maximum_element_growth_rate",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "Standalone compatibility payload; constructor does not validate it.",
+        "meaning": "Element-growth data.",
+        "backend_support": "Unattached",
+        "problem_ir": "none"
+      },
+      {
+        "python": "MeshSizeControls.curvature_factor",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "Standalone compatibility payload; constructor does not validate it.",
+        "meaning": "Curvature-sizing data.",
+        "backend_support": "Unattached",
+        "problem_ir": "none"
+      },
+      {
+        "python": "MeshSizeControls.narrow_region_resolution",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "Standalone compatibility payload; constructor does not validate it.",
+        "meaning": "Narrow-region data.",
+        "backend_support": "Unattached",
+        "problem_ir": "none"
+      },
+      {
+        "python": "SharedMeshAssemblyPolicy.interface_hmax_factor",
+        "type": "float",
+        "default": "0.5",
+        "si_unit": "$1$",
+        "validation": "Strictly greater than zero and no greater than one.",
+        "meaning": "Preserved compatibility value; not consumed by the current builder.",
+        "backend_support": "Inert compatibility data",
+        "problem_ir": "shared_mesh_assembly_policy.interface_hmax_factor"
+      },
+      {
+        "python": "SharedMeshAssemblyPolicy.enforce_conforming",
+        "type": "bool",
+        "default": "True",
+        "si_unit": "$1$",
+        "validation": "Boolean.",
+        "meaning": "Preserved compatibility value; not consumed by the current builder.",
+        "backend_support": "Inert compatibility data",
+        "problem_ir": "shared_mesh_assembly_policy.enforce_conforming"
+      },
+      {
+        "python": "SharedMeshAssemblyPolicy.airbox_hmax_factor",
+        "type": "float",
+        "default": "3.0",
+        "si_unit": "$1$",
+        "validation": "Finite and positive.",
+        "meaning": "Preserved compatibility value; not consumed by the current builder.",
+        "backend_support": "Inert compatibility data",
+        "problem_ir": "shared_mesh_assembly_policy.airbox_hmax_factor"
+      }
+    ]
+  }
+}

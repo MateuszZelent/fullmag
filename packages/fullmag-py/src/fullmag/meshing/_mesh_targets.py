@@ -204,9 +204,15 @@ def resolve_object_preview_target(
     # Level 1: PerObjectMeshRecipe.hmax (highest priority)
     if per_object_recipes:
         recipe = _lookup_geometry_name_alias(per_object_recipes, geometry.geometry_name)
-        if isinstance(recipe, PerObjectMeshRecipe) and recipe.hmax is not None and float(recipe.hmax) > 0:
-            hmax = float(recipe.hmax)
-            source = "recipe_override"
+        if isinstance(recipe, PerObjectMeshRecipe):
+            recipe_hmax = (
+                recipe.maximum_element_size
+                if recipe.maximum_element_size is not None
+                else recipe.hmax
+            )
+            if recipe_hmax is not None and float(recipe_hmax) > 0:
+                hmax = float(recipe_hmax)
+                source = "recipe_override"
         if isinstance(recipe, PerObjectMeshRecipe) and recipe.order is not None:
             order = int(recipe.order)
 
@@ -258,16 +264,21 @@ def _resolve_requested_partition_hmaxs(
 
     if per_object_recipes:
         for geometry_name, recipe in per_object_recipes.items():
-            if recipe.hmax is not None and float(recipe.hmax) > 0.0:
+            recipe_hmax = (
+                recipe.maximum_element_size
+                if recipe.maximum_element_size is not None
+                else recipe.hmax
+            )
+            if recipe_hmax is not None and float(recipe_hmax) > 0.0:
                 for alias in _geometry_name_aliases(geometry_name):
-                    override_by_name[alias] = float(recipe.hmax)
+                    override_by_name[alias] = float(recipe_hmax)
 
     object_hmax_by_geometry: dict[str, float | None] = {}
     for geometry in geometries:
         requested = _lookup_geometry_name_alias(override_by_name, geometry.geometry_name)
         if requested is None:
             requested = default_object_hmax
-        if requested is None and (airbox_hmax is None):
+        if requested is None:
             requested = float(hints.hmax) if hints.hmax is not None else None
         object_hmax_by_geometry[geometry.geometry_name] = requested
     return requested_airbox_hmax, object_hmax_by_geometry
@@ -390,12 +401,30 @@ def resolve_shared_domain_targets(
             if isinstance(workflow_entry, Mapping)
             else None
         )
+        recipe_hmax = (
+            recipe.maximum_element_size
+            if isinstance(recipe, PerObjectMeshRecipe)
+            and recipe.maximum_element_size is not None
+            else recipe.hmax if isinstance(recipe, PerObjectMeshRecipe) else None
+        )
+        workflow_hmax = (
+            _coerce_positive_float(workflow_entry.get("hmax"))
+            if isinstance(workflow_entry, Mapping)
+            else None
+        )
+        workflow_default_hmax = None
+        if isinstance(mesh_workflow, Mapping):
+            default_mesh = mesh_workflow.get("default_mesh")
+            if isinstance(default_mesh, Mapping):
+                workflow_default_hmax = _coerce_positive_float(default_mesh.get("hmax"))
+
         source = "study_default"
-        if isinstance(recipe, PerObjectMeshRecipe):
+        if recipe_hmax is not None:
             source = "recipe_override"
-        elif isinstance(workflow_entry, Mapping):
-            mode = workflow_entry.get("mode")
-            source = "local_override" if mode == "custom" else "study_default"
+        elif workflow_hmax is not None:
+            source = "local_override"
+        elif workflow_default_hmax is not None:
+            source = "workflow_default"
 
         per_object[geometry.geometry_name] = ResolvedSharedObjectTarget(
             geometry_name=geometry.geometry_name,

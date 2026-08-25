@@ -1688,6 +1688,7 @@ def _mesh_options_from_runtime_metadata(
         ]
 
     raw_optimize_iters = _mesh_option_value("optimize_iterations", "optimize_iters")
+    raw_smoothing_steps = _mesh_option_value("smoothing_steps")
 
     return MeshOptions(
         algorithm_2d=int(_mesh_option_value("algorithm_2d") or 6),
@@ -1715,7 +1716,9 @@ def _mesh_options_from_runtime_metadata(
         narrow_region_resolution=_coerce_positive_float(
             _mesh_option_value("narrow_region_resolution")
         ),
-        smoothing_steps=int(_mesh_option_value("smoothing_steps") or 1),
+        smoothing_steps=(
+            int(raw_smoothing_steps) if raw_smoothing_steps is not None else 1
+        ),
         optimize=str(optimize) if isinstance(optimize, str) and optimize.strip() else None,
         optimize_iters=int(raw_optimize_iters) if raw_optimize_iters is not None else 1,
         size_fields=size_fields,

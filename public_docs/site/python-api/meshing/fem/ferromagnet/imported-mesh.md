@@ -108,7 +108,7 @@ The **Object Mesh Policy** inspector: the *Element Size Parameters* group holds
 the `source` field (path/asset reference). An imported mesh is read-only with
 respect to generation parameters; quality and history inspection remain available
 (*Quality / History tabs*). Full panel description:
-{doc}`../../../frontend/meshing/object-mesh`.
+{doc}`../../../../frontend/meshing/object-mesh`.
 
 ## 6. Backend support
 

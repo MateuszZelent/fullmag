@@ -134,7 +134,7 @@ The **Object Mesh Policy** inspector (`ObjectMeshPolicyPanel.tsx`): the
 *Element Size Parameters*, *Mesh Size Presets*, and *Backend Mesh Parameters*
 groups (Gmsh algorithms, optimizer, quality). **Apply Object Policy** writes the
 recipe; **Build Mesh** materializes it. Full description:
-{doc}`../../../frontend/meshing/object-mesh`.
+{doc}`../../../../frontend/meshing/object-mesh`.
 
 ## 6. Backend support
 

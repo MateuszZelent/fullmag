@@ -31,10 +31,36 @@ from fullmag.runtime.scene_document import build_builder_from_scene_document
 from fullmag.runtime.scene_document import builder_overrides_from_scene_document
 from fullmag.runtime.script_builder import export_builder_draft, rewrite_loaded_problem_script
 from fullmag.meshing.gmsh_bridge import MeshData
+from fullmag.model.discretization import PerObjectMeshRecipe
 from fullmag.model.problem import build_geometry_assets_for_request
 
 
 class ProblemApiTests(unittest.TestCase):
+    def test_fem_order_rejects_boolean_and_noninteger_values(self) -> None:
+        for invalid_order in (True, False, 1.5):
+            with self.subTest(order=invalid_order):
+                with self.assertRaisesRegex(ValueError, "order must be an integer >= 1"):
+                    fm.FEM(order=invalid_order, maximum_element_size=1e-9)
+
+    def test_fem_order_accepts_and_normalizes_numpy_integral(self) -> None:
+        fem = fm.FEM(order=np.int64(1), maximum_element_size=1e-9)
+
+        self.assertEqual(fem.order, 1)
+        self.assertIs(type(fem.order), int)
+
+    def test_fem_size_rejects_boolean_values(self) -> None:
+        for field_name, kwargs in (
+            ("maximum_element_size", {"maximum_element_size": True}),
+            ("hmax", {"hmax": True}),
+            (
+                "hmax alongside maximum_element_size",
+                {"maximum_element_size": 1e-9, "hmax": True},
+            ),
+        ):
+            with self.subTest(field=field_name):
+                with self.assertRaisesRegex(TypeError, "not bool"):
+                    fm.FEM(order=1, **kwargs)
+
     def test_geometry_asset_cache_copies_by_default_and_can_be_borrowed_internally(self) -> None:
         cached_assets = {"fem_domain_mesh_asset": {"mesh": {"nodes": [[0.0, 0.0, 0.0]]}}}
         cache = {"cached": cached_assets}
@@ -595,6 +621,24 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(
             object_regions[0]["owner_geometry_name"],
             "track_geom",
+        )
+
+    def test_problem_asset_build_receives_direct_object_mesh_recipe(self) -> None:
+        problem = self._build_problem()
+        recipe = PerObjectMeshRecipe(
+            maximum_element_size=4e-9,
+        )
+        problem = replace(problem, magnets=[replace(problem.magnets[0], mesh=recipe)])
+
+        with patch(
+            "fullmag.model.problem.build_geometry_assets_for_request",
+            return_value=None,
+        ) as build_assets:
+            problem.to_ir(include_geometry_assets=True)
+
+        self.assertEqual(
+            build_assets.call_args.kwargs["per_object_recipes"],
+            {"track": recipe},
         )
 
     def test_object_region_rejects_zero_ms_override(self) -> None:
@@ -3217,6 +3261,17 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(workflow["fem"]["hmax"], 25e-9)
         self.assertEqual(loaded.problem.runtime_metadata["study_universe"]["airbox_hmax"], 80e-9)
         self.assertEqual(workflow["per_geometry"][0]["hmax"], 25e-9)
+
+    def test_object_mesh_rejects_imported_mesh_source(self) -> None:
+        fm.reset()
+        study = fm.study("object_mesh_source_rejected")
+        body = study.geometry(fm.Box(20e-9, 20e-9, 10e-9), name="body")
+
+        with self.assertRaisesRegex(
+            ValueError,
+            r"per-object mesh source is unavailable; use FEM\(mesh=\.\.\.\)",
+        ):
+            body.mesh(source="object.mesh")
 
     def test_study_build_domain_mesh_requires_explicit_airbox_hmax(self) -> None:
         script = """

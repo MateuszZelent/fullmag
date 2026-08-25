@@ -135,7 +135,7 @@ triangular source faces, fixed distribution, exact layer count, prism family,
 `mesh.exact_layer_count`; `swept_hex` remains disabled.
 
 **Apply Object Policy** writes the recipe; **Build Mesh** materializes the mesh.
-Full panel description: {doc}`../../../frontend/meshing/object-mesh`.
+Full panel description: {doc}`../../../../frontend/meshing/object-mesh`.
 
 ## 6. Backend support
 

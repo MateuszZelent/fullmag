@@ -109,8 +109,8 @@ Model Explorer
 The **Airbox Mesh Build** inspector (`AirboxMeshBuildLanePanel`) runs the build;
 the Quality/History tabs show the realized report. In the object panel,
 **Build Mesh** executes `mesh.build-selected`. Full build lifecycle description:
-{doc}`../../../frontend/meshing/build-lifecycle`; reports and quality:
-{doc}`../../../frontend/meshing/quality-and-reports`.
+{doc}`../../../../frontend/meshing/build-lifecycle`; reports and quality:
+{doc}`../../../../frontend/meshing/quality-and-reports`.
 
 ## 6. Backend support
 

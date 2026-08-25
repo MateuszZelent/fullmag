@@ -116,7 +116,7 @@ Model Explorer
 The **Airbox Mesh Parameters** inspector edits air sizing; exterior geometry
 (size/padding/center) lives in the universe geometry panels; the magnetostatic
 realization choice (`study.demag`) is made in the Physics/Demag panel. Full
-description: {doc}`../../../frontend/meshing/airbox-mesh`.
+description: {doc}`../../../../frontend/meshing/airbox-mesh`.
 
 ## 6. Backend support
 
@@ -144,3 +144,11 @@ description: {doc}`../../../frontend/meshing/airbox-mesh`.
 | air sizing | `packages/fullmag-py/src/fullmag/world.py` | `StudyUniverseMeshHandle.mesh` | validation and `_configure_study_universe` |
 | universe geometry | `packages/fullmag-py/src/fullmag/world.py` | `StudyBuilder.universe` | facade signature |
 | FDM/FEM mutual exclusion | `packages/fullmag-py/src/fullmag/world.py` | `StudyUniverseMeshHandle.mesh` | `cell_size` vs FEM controls branch |
+
+```{toctree}
+:maxdepth: 2
+
+geometry
+grading
+build
+```
