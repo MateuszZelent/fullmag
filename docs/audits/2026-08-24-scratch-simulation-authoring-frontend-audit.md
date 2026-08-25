@@ -534,3 +534,13 @@ storage `/zfn2` nie oznaczam tej części jako PASS.
   znane błędy bazowe poza zmienionymi plikami. Managed FEM pozostaje jedyną
   niezamkniętą bramką wykonawczą; ocena celu pozostaje na poziomie **około
   97%**.
+
+### Preflight managed FEM po wznowieniu celu 2026-08-25
+
+Ponowny odczyt środowiska nie potwierdził dostępności runtime. `/zfn2` jest
+utworzone, lecz `/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4`
+ma rozmiar **0 B** i nie jest zamontowane jako ext4; `/mnt/fullmag-zfn2-native`
+pozostaje zwykłym katalogiem na głównym systemie ext4. Brakuje również
+`/zfn2/mateuszz/git/fullmag/runtimes/fem-gpu-host-latest.tar` oraz aktywnego
+`.fullmag/runtimes/fem-gpu-host`. Receptura `ensure-managed-fem-runtime` nie
+może więc odtworzyć ani zwalidować bundla bez zewnętrznego obrazu/storage.

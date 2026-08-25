@@ -890,3 +890,14 @@ FEM w kanonicznym managed runtime.
   zakończone kodem `0`, w tym FEM `fem_airbox_policy=true`.
 - [ ] Managed FEM `mesh_build`/`relax` i browser qualification pozostają
   zależne od niedostępnego obrazu runtime oraz storage `/zfn2`.
+
+### Preflight blokera środowiskowego 2026-08-25
+
+- `/zfn2` istnieje, ale wymagany obraz `fullmag-native.ext4` ma **0 B** i nie
+  jest zamontowany jako ext4.
+- Brak `fem-gpu-host-latest.tar`, aktywnego bundla
+  `.fullmag/runtimes/fem-gpu-host` oraz katalogu `managed-fem-runtime` na
+  `/mnt/fullmag-zfn2-native`.
+- Nie uruchamiam hostowego ani ręcznie składanego buildu jako substytutu; po
+  dostarczeniu poprawnego obrazu/storage należy wykonać `just ensure-managed-fem-runtime`,
+  następnie managed FEM smoke i `mesh_build`/`relax` qualification.
