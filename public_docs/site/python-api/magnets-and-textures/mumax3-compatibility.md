@@ -52,6 +52,8 @@ For local coordinate $u$, Fullmag returns the normalized left domain for
 $u<-w$, the normalized right domain for $u>w$, and its version-2 vortex profile in
 the central interval. Mumax3 derives $w$ from half the simulation width; Fullmag makes
 that physical scale explicit so the same texture is reproducible for FEM and FDM meshes.
+When `circulation` is omitted, Fullmag derives its sign from `left_mx * right_mx`, matching
+the domain orientation; an explicit `-1` or `1` overrides that compatibility default.
 Upstream `VortexWall` returns raw vectors `(mleft, 0, 0)` and `(mright, 0, 0)`, after which
 `magnetization.SetArray` normalizes the field. Therefore every finite nonzero authored magnitude
 reduces to its sign; preserving `0.5` as a final x component would not match Mumax3. Fullmag rejects
@@ -145,6 +147,7 @@ study.engine("fdm")
 study.device("cpu", precision="double")
 study.mode("strict")
 study.universe(mode="manual", size=(200e-9, 100e-9, 10e-9))
+study.objects.mesh.defaults(cell_size=(4e-9, 4e-9, 5e-9))
 film = study.geometry(
     fm.Box(size=(160e-9, 80e-9, 5e-9), name="film"),
     name="film",
@@ -163,17 +166,17 @@ study.stages.add_save_state(
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| texture.vortex_wall.wall_half_width | float | required | $\mathrm{m}$ | finite and > 0 | central vortex-strip half-width | FDM/FEM via planner materialization | preset_params.wall_half_width |
-| texture.vortex_wall.left_mx | float | 1.0 | $1$ | finite and nonzero | left-domain sign | FDM/FEM via planner materialization | preset_params.left_mx |
-| texture.vortex_wall.right_mx | float | -1.0 | $1$ | finite and nonzero | right-domain sign | FDM/FEM via planner materialization | preset_params.right_mx |
-| texture.vortex_wall.circulation | int | 1 | $1$ | -1 or 1 | central-vortex circulation | FDM/FEM via planner materialization | preset_params.circulation |
-| texture.vortex_wall.core_polarity | int | 1 | $1$ | -1 or 1 | central-vortex core polarity | FDM/FEM via planner materialization | preset_params.core_polarity |
-| texture.vortex_wall.core_radius | float | 1e-9 | $\mathrm{m}$ | finite and > 0 | central-vortex core radius | FDM/FEM via planner materialization | preset_params.core_radius |
-| texture.vortex_wall.plane | str | xy | $1$ | xy, xz or yz | right-handed local frame | FDM/FEM via planner materialization | preset_params.plane |
-| texture.vortex_wall.preset_version | int | 2 | $1$ | exactly 2 | selects the version-2 profile | FDM/FEM via planner materialization | preset_version |
-| texture.hopfion_compact_support.major_radius | float | required | $\mathrm{m}$ | finite and > 0 | torus major radius | FDM/FEM via planner materialization | preset_params.major_radius |
-| texture.hopfion_compact_support.minor_radius | float | required | $\mathrm{m}$ | finite, > 0 and <= major_radius | cross-section and compact-support radius | FDM/FEM via planner materialization | preset_params.minor_radius |
-| texture.hopfion_compact_support.preset_version | int | 2 | $1$ | exactly 2 | selects the version-2 profile | FDM/FEM via planner materialization | preset_version |
+| `texture.vortex_wall.wall_half_width` | float | required | $\mathrm{m}$ | finite and > 0 | central vortex-strip half-width | FDM/FEM via planner materialization | preset_params.wall_half_width |
+| `texture.vortex_wall.left_mx` | float | 1.0 | $1$ | finite and nonzero | left-domain sign | FDM/FEM via planner materialization | preset_params.left_mx |
+| `texture.vortex_wall.right_mx` | float | -1.0 | $1$ | finite and nonzero | right-domain sign | FDM/FEM via planner materialization | preset_params.right_mx |
+| `texture.vortex_wall.circulation` | int \| None | sign(left_mx * right_mx) | $1$ | -1 or 1 after default resolution | central-vortex circulation; omitted value follows the domain-sign product | FDM/FEM via planner materialization | preset_params.circulation |
+| `texture.vortex_wall.core_polarity` | int | 1 | $1$ | -1 or 1 | central-vortex core polarity | FDM/FEM via planner materialization | preset_params.core_polarity |
+| `texture.vortex_wall.core_radius` | float | 1e-9 | $\mathrm{m}$ | finite and > 0 | central-vortex core radius | FDM/FEM via planner materialization | preset_params.core_radius |
+| `texture.vortex_wall.plane` | str | xy | $1$ | xy, xz or yz | right-handed local frame | FDM/FEM via planner materialization | preset_params.plane |
+| `texture.vortex_wall.preset_version` | int | 2 | $1$ | exactly 2 | selects the version-2 profile | FDM/FEM via planner materialization | preset_version |
+| `texture.hopfion_compact_support.major_radius` | float | required | $\mathrm{m}$ | finite and > 0 | torus major radius | FDM/FEM via planner materialization | preset_params.major_radius |
+| `texture.hopfion_compact_support.minor_radius` | float | required | $\mathrm{m}$ | finite, > 0 and <= major_radius | cross-section and compact-support radius | FDM/FEM via planner materialization | preset_params.minor_radius |
+| `texture.hopfion_compact_support.preset_version` | int | 2 | $1$ | exactly 2 | selects the version-2 profile | FDM/FEM via planner materialization | preset_version |
 
 (problem-ir)=
 ## ProblemIR lowering

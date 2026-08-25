@@ -723,17 +723,6 @@ These rows complete the canonical Python-to-`ProblemIR` contract for the antisky
 | `texture.hopfion.axial_scale` | `float` | `1.0` | $1$ | finite and positive | dimensionless z-axis scale | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.axial_scale` |
 | `texture.hopfion.phase_rad` | `float` | `0.0` | $\mathrm{rad}$ | finite | global target-space phase | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.phase_rad` |
 | `texture.hopfion.preset_version` | `int` | `2` | $1$ | exactly 2 | selects the v2 hopfion contract | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_version` |
-| `texture.vortex_wall.wall_half_width` | `float` | `required` | $\mathrm{m}$ | finite and positive | central vortex-strip half-width | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.wall_half_width` |
-| `texture.vortex_wall.left_mx` | `float` | `1.0` | $1$ | finite and nonzero | left-domain sign before normalization | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.left_mx` |
-| `texture.vortex_wall.right_mx` | `float` | `-1.0` | $1$ | finite and nonzero | right-domain sign before normalization | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.right_mx` |
-| `texture.vortex_wall.circulation` | `int` | `1` | $1$ | -1 or +1 | central-vortex circulation | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.circulation` |
-| `texture.vortex_wall.core_polarity` | `int` | `1` | $1$ | -1 or +1 | central-vortex core polarity | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.core_polarity` |
-| `texture.vortex_wall.core_radius` | `float` | `1e-9` | $\mathrm{m}$ | finite and positive | central-vortex core radius | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.core_radius` |
-| `texture.vortex_wall.plane` | `str` | `"xy"` | $1$ | "xy", "xz", or "yz" | right-handed local texture frame | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.plane` |
-| `texture.vortex_wall.preset_version` | `int` | `2` | $1$ | exactly 2 | selects the v2 vortex-wall contract | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_version` |
-| `texture.hopfion_compact_support.major_radius` | `float` | `required` | $\mathrm{m}$ | finite and positive | torus major radius | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.major_radius` |
-| `texture.hopfion_compact_support.minor_radius` | `float` | `required` | $\mathrm{m}$ | finite, positive, and no greater than major_radius | cross-section and compact-support radius | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_params.minor_radius` |
-| `texture.hopfion_compact_support.preset_version` | `int` | `2` | $1$ | exactly 2 | selects the v2 compact-support hopfion contract | FDM/FEM; CPU/GPU via planner materialization | `initial_magnetization.preset_version` |
 
 ### Mapping and transform methods
 

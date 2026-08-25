@@ -29,6 +29,18 @@ def test_mumax_vortex_wall_factory_and_profile() -> None:
     assert values[2] == pytest.approx((-1.0, 0.0, 0.0))
 
 
+def test_mumax_vortex_wall_derives_default_circulation_from_domains() -> None:
+    texture = fm.texture.vortex_wall(wall_half_width=2.0, core_radius=0.5)
+
+    assert texture.params["circulation"] == -1
+    values = evaluate_preset_texture_v2(
+        "vortex_wall",
+        texture.params,
+        [(0.75, 0.0, 0.0)],
+    ).values
+    assert values[0][1] < -0.9
+
+
 def test_mumax_compact_hopfion_factory_and_support_boundary() -> None:
     texture = fm.texture.hopfion_compact_support(major_radius=2.0, minor_radius=0.5)
     assert texture.to_ir()["preset_kind"] == "hopfion_compact_support"

@@ -39,7 +39,7 @@
     },
     {
       "id": "mumax3-compact-hopfion-profile",
-      "symbols": ["m", "R", "r", "rho", "psi", "Phi", "Theta"],
+      "symbols": ["m", "R", "r", "a_H", "rho", "psi", "Phi", "Theta"],
       "sources": ["mumax3-compact-hopfion", "rust-compact-hopfion", "python-compact-hopfion"]
     }
   ],
@@ -53,6 +53,7 @@
     {"id": "e_u", "latex": "\\mathbf e_u", "meaning": "first axis of the selected right-handed plane", "si_unit": "1"},
     {"id": "R", "latex": "R", "meaning": "hopfion major radius", "si_unit": "\\mathrm{m}"},
     {"id": "r", "latex": "r", "meaning": "hopfion minor radius and support radius", "si_unit": "\\mathrm{m}"},
+    {"id": "a_H", "latex": "a_H", "meaning": "toroidal radial coordinate relative to the centreline", "si_unit": "\\mathrm{m}"},
     {"id": "rho", "latex": "\\rho", "meaning": "distance from the torus centreline", "si_unit": "\\mathrm{m}"},
     {"id": "psi", "latex": "\\psi", "meaning": "spatial azimuth", "si_unit": "\\mathrm{rad}"},
     {"id": "Phi", "latex": "\\Phi", "meaning": "hopfion magnetization azimuth", "si_unit": "\\mathrm{rad}"},
@@ -113,7 +114,7 @@
       {"python": "texture.vortex_wall.wall_half_width", "type": "float", "default": "required", "si_unit": "\\mathrm{m}", "validation": "finite and > 0", "meaning": "central vortex-strip half-width", "backend_support": "FDM/FEM via planner materialization", "problem_ir": "preset_params.wall_half_width"},
       {"python": "texture.vortex_wall.left_mx", "type": "float", "default": "1.0", "si_unit": "1", "validation": "finite and nonzero", "meaning": "left-domain sign", "backend_support": "FDM/FEM via planner materialization", "problem_ir": "preset_params.left_mx"},
       {"python": "texture.vortex_wall.right_mx", "type": "float", "default": "-1.0", "si_unit": "1", "validation": "finite and nonzero", "meaning": "right-domain sign", "backend_support": "FDM/FEM via planner materialization", "problem_ir": "preset_params.right_mx"},
-      {"python": "texture.vortex_wall.circulation", "type": "int", "default": "1", "si_unit": "1", "validation": "-1 or 1", "meaning": "central-vortex circulation", "backend_support": "FDM/FEM via planner materialization", "problem_ir": "preset_params.circulation"},
+      {"python": "texture.vortex_wall.circulation", "type": "int | None", "default": "sign(left_mx * right_mx)", "si_unit": "1", "validation": "-1 or 1 after default resolution", "meaning": "central-vortex circulation; omitted value follows the domain-sign product", "backend_support": "FDM/FEM via planner materialization", "problem_ir": "preset_params.circulation"},
       {"python": "texture.vortex_wall.core_polarity", "type": "int", "default": "1", "si_unit": "1", "validation": "-1 or 1", "meaning": "central-vortex core polarity", "backend_support": "FDM/FEM via planner materialization", "problem_ir": "preset_params.core_polarity"},
       {"python": "texture.vortex_wall.core_radius", "type": "float", "default": "1e-9", "si_unit": "\\mathrm{m}", "validation": "finite and > 0", "meaning": "central-vortex core radius", "backend_support": "FDM/FEM via planner materialization", "problem_ir": "preset_params.core_radius"},
       {"python": "texture.vortex_wall.plane", "type": "str", "default": "xy", "si_unit": "1", "validation": "xy, xz or yz", "meaning": "right-handed local frame", "backend_support": "FDM/FEM via planner materialization", "problem_ir": "preset_params.plane"},

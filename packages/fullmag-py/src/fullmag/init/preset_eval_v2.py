@@ -339,11 +339,18 @@ def _vortex_wall(params: Mapping[str, object], point: Sequence[float]) -> Vec3:
         raise _invalid("left_mx", "must be finite and nonzero")
     if right_mx == 0.0:
         raise _invalid("right_mx", "must be finite and nonzero")
+    circulation = params.get("circulation")
+    if circulation is None:
+        circulation = 1 if left_mx * right_mx > 0.0 else -1
+    else:
+        circulation = int(_sign(params, "circulation"))
+    vortex_params = dict(params)
+    vortex_params["circulation"] = circulation
     if point[0] < -wall_half_width:
         return (math.copysign(1.0, left_mx), 0.0, 0.0)
     if point[0] > wall_half_width:
         return (math.copysign(1.0, right_mx), 0.0, 0.0)
-    return _vortex(params, point, 1.0)
+    return _vortex(vortex_params, point, 1.0)
 
 
 def _hopfion_compact_support(

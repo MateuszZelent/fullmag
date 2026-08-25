@@ -582,7 +582,7 @@ class texture:
         wall_half_width: float,
         left_mx: float = 1.0,
         right_mx: float = -1.0,
-        circulation: int = 1,
+        circulation: int | None = None,
         core_polarity: int = 1,
         core_radius: float = 1.0e-9,
         plane: Literal["xy", "xz", "yz"] = "xy",
@@ -599,7 +599,10 @@ class texture:
             raise ValueError("left_mx must be finite and nonzero")
         if not math.isfinite(right_mx) or right_mx == 0.0:
             raise ValueError("right_mx must be finite and nonzero")
-        circulation = _require_sign(circulation, "circulation")
+        if circulation is None:
+            circulation = 1 if left_mx * right_mx > 0.0 else -1
+        else:
+            circulation = _require_sign(circulation, "circulation")
         core_polarity = _require_sign(core_polarity, "core_polarity")
         core_radius = _require_finite_positive(core_radius, "core_radius")
         plane = _require_plane(plane)
