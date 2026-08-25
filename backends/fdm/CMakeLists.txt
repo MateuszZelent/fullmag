@@ -322,6 +322,7 @@ add_executable(fdm_fsal_retry_transaction_contract
 target_include_directories(fdm_fsal_retry_transaction_contract PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(fdm_fsal_retry_transaction_contract PRIVATE fullmag_fdm)
 add_test(NAME fdm_fsal_retry_transaction_contract
     COMMAND fdm_fsal_retry_transaction_contract)
 
