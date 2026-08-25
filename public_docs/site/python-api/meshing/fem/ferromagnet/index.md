@@ -118,7 +118,7 @@ Model Explorer
 The **Object Mesh Policy** inspector (`ObjectMeshPolicyPanel.tsx`) groups all
 authoring levels: size presets, element size parameters, thin-film strategy,
 interface/edge refinement, backend parameters, advanced JSON, and the
-Quality/History tabs. Full description: {doc}`../../../frontend/meshing/object-mesh`.
+Quality/History tabs. Full description: {doc}`../../../../frontend/meshing/object-mesh`.
 
 ## 6. Backend support
 

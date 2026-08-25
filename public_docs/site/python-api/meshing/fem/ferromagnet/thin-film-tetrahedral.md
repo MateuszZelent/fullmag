@@ -36,7 +36,7 @@ Impact on the simulation: elements that are too coarse through the film thicknes
 underestimate exchange energy and distort vertical magnetization profiles; the
 tetrahedral mode treats `layers` as a **resolution request**, not a guarantee —
 verify the realized subdivision in the mesh report
-({doc}`../../../frontend/meshing/quality-and-reports`).
+({doc}`../../../../frontend/meshing/quality-and-reports`).
 
 ## 2. Physical and mathematical explanation
 
@@ -170,7 +170,7 @@ Panel groups relevant to this mode:
 
 Transaction: **Apply Object Policy** writes the recipe and invalidates mesh
 resources; **Build Mesh** executes `mesh.build-selected` (applying a dirty draft
-first). Full panel description: {doc}`../../../frontend/meshing/object-mesh`.
+first). Full panel description: {doc}`../../../../frontend/meshing/object-mesh`.
 
 ## 6. Backend support
 

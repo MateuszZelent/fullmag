@@ -108,7 +108,7 @@ Model Explorer
 ```
 
 The **Airbox Mesh Parameters** inspector: hmin/hmax, growth rate, grading type.
-Full description: {doc}`../../../frontend/meshing/airbox-mesh`.
+Full description: {doc}`../../../../frontend/meshing/airbox-mesh`.
 
 ## 6. Backend support
 

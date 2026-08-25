@@ -116,7 +116,7 @@ Model Explorer
 The **Airbox Mesh Parameters** inspector edits air sizing; exterior geometry
 (size/padding/center) lives in the universe geometry panels; the magnetostatic
 realization choice (`study.demag`) is made in the Physics/Demag panel. Full
-description: {doc}`../../../frontend/meshing/airbox-mesh`.
+description: {doc}`../../../../frontend/meshing/airbox-mesh`.
 
 ## 6. Backend support
 

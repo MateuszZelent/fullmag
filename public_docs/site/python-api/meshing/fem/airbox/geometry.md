@@ -92,8 +92,8 @@ Model Explorer
 
 Exterior geometry (size, padding, center) is editable in the universe geometry
 panels; air sizing lives in **Airbox Mesh Parameters**
-({doc}`../../../frontend/meshing/airbox-mesh`). Full panel overview:
-{doc}`../../../frontend/meshing/index`.
+({doc}`../../../../frontend/meshing/airbox-mesh`). Full panel overview:
+{doc}`../../../../frontend/meshing/index`.
 
 ## 6. Backend support
 
