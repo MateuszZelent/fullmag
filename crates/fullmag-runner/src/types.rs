@@ -2811,6 +2811,22 @@ pub struct FdmGpuExecutionReceipt {
     pub accounting_valid: bool,
 }
 
+/// Native CUDA step-transaction counters captured after FDM GPU execution.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FdmGpuStepTransactionTelemetry {
+    pub accounting_valid: bool,
+    pub capture_count: u64,
+    pub rollback_count: u64,
+    pub capture_d2d_bytes: u64,
+    pub rollback_d2d_bytes: u64,
+    pub rollback_latency_total_ns: u64,
+    pub rollback_latency_max_ns: u64,
+    pub accepted_step_index: u64,
+    pub attempt_generation: u64,
+    pub thermal_rng_draws: u64,
+    pub stale_publication_count: u64,
+}
+
 impl FdmGpuExecutionReceipt {
     pub fn strict_unvalidated(precision: &str) -> Self {
         Self {
@@ -2838,6 +2854,31 @@ impl FdmGpuExecutionReceipt {
 #[cfg(test)]
 mod fdm_gpu_execution_receipt_contract_tests {
     use super::*;
+
+    #[test]
+    fn execution_provenance_serializes_fdm_gpu_step_transaction_telemetry() {
+        let mut provenance = ExecutionProvenance::default();
+        provenance.fdm_gpu_step_transaction_telemetry = Some(FdmGpuStepTransactionTelemetry {
+            accounting_valid: true,
+            capture_count: 12,
+            rollback_count: 3,
+            capture_d2d_bytes: 3_072,
+            rollback_d2d_bytes: 1_536,
+            rollback_latency_total_ns: 1_800,
+            rollback_latency_max_ns: 900,
+            accepted_step_index: 7,
+            attempt_generation: 8,
+            thermal_rng_draws: 144,
+            stale_publication_count: 2,
+        });
+
+        let value = serde_json::to_value(provenance).expect("serialize provenance");
+        let telemetry = &value["fdm_gpu_step_transaction_telemetry"];
+        assert_eq!(telemetry["capture_d2d_bytes"], 3_072);
+        assert_eq!(telemetry["rollback_latency_max_ns"], 900);
+        assert_eq!(telemetry["attempt_generation"], 8);
+        assert_eq!(telemetry["accounting_valid"], true);
+    }
 
     #[test]
     fn execution_provenance_serializes_explicit_fdm_gpu_receipt() {
@@ -3161,6 +3202,9 @@ pub struct ExecutionProvenance {
     /// FDM LLG residency together with setup and hot-loop transfer counters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fdm_gpu_execution_receipt: Option<FdmGpuExecutionReceipt>,
+    /// Native CUDA counters for FDM GPU step-transaction capture and rollback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fdm_gpu_step_transaction_telemetry: Option<FdmGpuStepTransactionTelemetry>,
     /// Native FEM receipt preserving requested, resolved, and actually executed
     /// GPU residency without inferring execution from the RK plan.
     #[serde(default, skip_serializing_if = "Option::is_none")]

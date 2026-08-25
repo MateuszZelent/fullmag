@@ -3,7 +3,9 @@ use crate::types::{FdmGpuExecutionReceipt, RunError};
 #[cfg(feature = "cuda")]
 use super::{ffi, NativeFdmBackend};
 #[cfg(feature = "cuda")]
-use crate::types::{FdmGpuOperatorResidency, FdmGpuTransferCounts};
+use crate::types::{
+    FdmGpuOperatorResidency, FdmGpuStepTransactionTelemetry, FdmGpuTransferCounts,
+};
 
 fn preflight_error(detail: impl AsRef<str>) -> RunError {
     RunError {
@@ -138,6 +140,14 @@ impl FdmGpuReceiptLifecycle {
                 }
                 Ok(receipt)
             });
+        let telemetry_result = query_step_transaction_telemetry(backend);
+        if let Ok(telemetry) = &telemetry_result {
+            provenance.fdm_gpu_step_transaction_telemetry = Some(telemetry.clone());
+        }
+        let outcome = match outcome {
+            Ok(value) => telemetry_result.map(|_| value),
+            Err(primary) => Err(primary),
+        };
         finalize_receipt_result(receipt_result, provenance, artifacts, outcome)
     }
 }
@@ -367,6 +377,72 @@ fn execution_receipt_v2_request() -> ffi::fullmag_fdm_execution_receipt_v2 {
         accounting_valid: 0,
         reserved1: 0,
     }
+}
+
+#[cfg(feature = "cuda")]
+fn step_transaction_telemetry_v1_request() -> ffi::fullmag_fdm_step_transaction_telemetry_v1 {
+    ffi::fullmag_fdm_step_transaction_telemetry_v1 {
+        abi_version: ffi::FULLMAG_FDM_STEP_TRANSACTION_TELEMETRY_ABI_V1,
+        struct_size: std::mem::size_of::<ffi::fullmag_fdm_step_transaction_telemetry_v1>() as u32,
+        accounting_valid: 0,
+        reserved0: 0,
+        capture_count: 0,
+        rollback_count: 0,
+        capture_d2d_bytes: 0,
+        rollback_d2d_bytes: 0,
+        rollback_latency_total_ns: 0,
+        rollback_latency_max_ns: 0,
+        accepted_step_index: 0,
+        attempt_generation: 0,
+        thermal_rng_draws: 0,
+        stale_publication_count: 0,
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn step_transaction_telemetry_from_native(
+    native: ffi::fullmag_fdm_step_transaction_telemetry_v1,
+) -> FdmGpuStepTransactionTelemetry {
+    FdmGpuStepTransactionTelemetry {
+        accounting_valid: native.accounting_valid == 1,
+        capture_count: native.capture_count,
+        rollback_count: native.rollback_count,
+        capture_d2d_bytes: native.capture_d2d_bytes,
+        rollback_d2d_bytes: native.rollback_d2d_bytes,
+        rollback_latency_total_ns: native.rollback_latency_total_ns,
+        rollback_latency_max_ns: native.rollback_latency_max_ns,
+        accepted_step_index: native.accepted_step_index,
+        attempt_generation: native.attempt_generation,
+        thermal_rng_draws: native.thermal_rng_draws,
+        stale_publication_count: native.stale_publication_count,
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn query_step_transaction_telemetry(
+    backend: &NativeFdmBackend,
+) -> Result<FdmGpuStepTransactionTelemetry, RunError> {
+    let mut native = step_transaction_telemetry_v1_request();
+    let status = unsafe {
+        ffi::fullmag_fdm_backend_get_step_transaction_telemetry_v1(
+            backend.handle as *mut _,
+            &mut native,
+        )
+    };
+    if status != ffi::FULLMAG_FDM_OK {
+        return Err(RunError {
+            message: "fdm_gpu_step_transaction_telemetry_query_failed".to_string(),
+        });
+    }
+    if native.abi_version != ffi::FULLMAG_FDM_STEP_TRANSACTION_TELEMETRY_ABI_V1
+        || native.struct_size
+            != std::mem::size_of::<ffi::fullmag_fdm_step_transaction_telemetry_v1>() as u32
+    {
+        return Err(RunError {
+            message: "fdm_gpu_step_transaction_telemetry_abi_mismatch".to_string(),
+        });
+    }
+    Ok(step_transaction_telemetry_from_native(native))
 }
 
 #[cfg(feature = "cuda")]
@@ -602,6 +678,97 @@ pub(super) fn query_execution_receipt(
 #[cfg(test)]
 mod tests {
     use crate::types::{FdmGpuExecutionReceipt, FdmGpuOperatorResidency, FdmGpuTransferCounts};
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn fdm_gpu_step_transaction_telemetry_maps_all_fields() {
+        let request = super::step_transaction_telemetry_v1_request();
+        assert_eq!(
+            request.abi_version,
+            super::ffi::FULLMAG_FDM_STEP_TRANSACTION_TELEMETRY_ABI_V1
+        );
+        assert_eq!(
+            request.struct_size as usize,
+            std::mem::size_of::<super::ffi::fullmag_fdm_step_transaction_telemetry_v1>()
+        );
+
+        let native = super::ffi::fullmag_fdm_step_transaction_telemetry_v1 {
+            abi_version: super::ffi::FULLMAG_FDM_STEP_TRANSACTION_TELEMETRY_ABI_V1,
+            struct_size: std::mem::size_of::<
+                super::ffi::fullmag_fdm_step_transaction_telemetry_v1,
+            >() as u32,
+            accounting_valid: 1,
+            reserved0: 0,
+            capture_count: 11,
+            rollback_count: 13,
+            capture_d2d_bytes: 17,
+            rollback_d2d_bytes: 19,
+            rollback_latency_total_ns: 23,
+            rollback_latency_max_ns: 29,
+            accepted_step_index: 31,
+            attempt_generation: 37,
+            thermal_rng_draws: 41,
+            stale_publication_count: 43,
+        };
+
+        assert_eq!(
+            super::step_transaction_telemetry_from_native(native),
+            crate::types::FdmGpuStepTransactionTelemetry {
+                accounting_valid: true,
+                capture_count: 11,
+                rollback_count: 13,
+                capture_d2d_bytes: 17,
+                rollback_d2d_bytes: 19,
+                rollback_latency_total_ns: 23,
+                rollback_latency_max_ns: 29,
+                accepted_step_index: 31,
+                attempt_generation: 37,
+                thermal_rng_draws: 41,
+                stale_publication_count: 43,
+            }
+        );
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn fdm_gpu_step_transaction_telemetry_preserves_invalid_accounting() {
+        let native = super::ffi::fullmag_fdm_step_transaction_telemetry_v1 {
+            abi_version: super::ffi::FULLMAG_FDM_STEP_TRANSACTION_TELEMETRY_ABI_V1,
+            struct_size: std::mem::size_of::<
+                super::ffi::fullmag_fdm_step_transaction_telemetry_v1,
+            >() as u32,
+            accounting_valid: 0,
+            reserved0: 0,
+            capture_count: 11,
+            rollback_count: 13,
+            capture_d2d_bytes: 17,
+            rollback_d2d_bytes: 19,
+            rollback_latency_total_ns: 23,
+            rollback_latency_max_ns: 29,
+            accepted_step_index: 31,
+            attempt_generation: 37,
+            thermal_rng_draws: 41,
+            stale_publication_count: 43,
+        };
+
+        let telemetry = super::step_transaction_telemetry_from_native(native);
+        assert!(!telemetry.accounting_valid);
+        assert_eq!(telemetry.capture_count, 11);
+        assert_eq!(telemetry.rollback_latency_max_ns, 29);
+        assert_eq!(telemetry.stale_publication_count, 43);
+
+        let mut provenance = crate::types::ExecutionProvenance::default();
+        provenance.fdm_gpu_step_transaction_telemetry = Some(telemetry);
+        let value = serde_json::to_value(provenance).expect("serialize provenance");
+        assert_eq!(
+            value["fdm_gpu_step_transaction_telemetry"]["accounting_valid"],
+            false
+        );
+        assert_eq!(
+            value["fdm_gpu_step_transaction_telemetry"]["capture_count"],
+            11
+        );
+    }
 
     #[test]
     fn strict_preflight_rejects_non_device_operator_before_first_step() {
