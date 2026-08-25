@@ -96,6 +96,24 @@ def assignment(text: str, pattern: str, source: str, label: str) -> str:
     return match.group("value").strip()
 
 
+def cuda_base_version(text: str, source: str) -> str:
+    """Read the CUDA version from the configurable Docker build argument."""
+
+    argument = re.search(
+        r'(?m)^ARG\s+FULLMAG_CUDA_BASE_IMAGE\s*=\s*"?'
+        r'nvidia/cuda:(?P<value>[^-\s"]+)-devel-ubuntu[^\s"]+"?\s*$',
+        text,
+    )
+    if argument is not None:
+        return argument.group("value").strip()
+    return assignment(
+        text,
+        r"^FROM nvidia/cuda:(?P<value>[^-\s]+)-devel-ubuntu[^\s]+ AS deps$",
+        source,
+        "CUDA base image",
+    )
+
+
 def collect_versions(root: Path) -> dict[str, str]:
     cargo_path = "Cargo.toml"
     pyproject_path = "packages/fullmag-py/pyproject.toml"
@@ -178,12 +196,7 @@ def collect_versions(root: Path) -> dict[str, str]:
         "tauri": toml_dependency(
             cargo, "workspace.dependencies", "tauri", cargo_path
         ),
-        "cuda": assignment(
-            docker,
-            r"^FROM nvidia/cuda:(?P<value>[^-\s]+)-devel-ubuntu[^\s]+ AS deps$",
-            docker_path,
-            "CUDA base image",
-        ),
+        "cuda": cuda_base_version(docker, docker_path),
         "cmake": assignment(
             docker,
             r"^ENV CMAKE_VERSION=(?P<value>[^\s]+)$",
