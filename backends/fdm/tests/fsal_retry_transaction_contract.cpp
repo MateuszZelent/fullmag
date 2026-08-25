@@ -5,6 +5,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <type_traits>
 
 #include "fullmag_fdm.h"
 #include "../gpu/cuda/integrators/fsal_policy.hpp"
@@ -608,6 +609,19 @@ int main() {
                   "legacy step-stats v1 ABI size must remain frozen");
     static_assert(offsetof(fullmag_fdm_step_stats, multilayer_pair_accumulation_count) == 184,
                   "legacy step-stats v1 tail must remain frozen");
+    static_assert(sizeof(fullmag_fdm_step_transaction_telemetry_v1) == 96,
+                  "step transaction telemetry v1 ABI size changed");
+    static_assert(offsetof(fullmag_fdm_step_transaction_telemetry_v1, capture_count) == 16,
+                  "step transaction telemetry v1 capture offset changed");
+    static_assert(
+        offsetof(fullmag_fdm_step_transaction_telemetry_v1, stale_publication_count) == 88,
+        "step transaction telemetry v1 stale-publication offset changed");
+    using StepTransactionTelemetryGetter = int (*) (
+        fullmag_fdm_backend *, fullmag_fdm_step_transaction_telemetry_v1 *);
+    static_assert(
+        std::is_same_v<decltype(&fullmag_fdm_backend_get_step_transaction_telemetry_v1),
+                       StepTransactionTelemetryGetter>,
+        "step transaction telemetry getter signature changed");
     static_assert(sizeof(fullmag_fdm_llg_checkpoint_info_v1) == 96,
                   "checkpoint v1 layout must remain frozen");
     static_assert(sizeof(fullmag_fdm_llg_checkpoint_info_v2) == 248,
