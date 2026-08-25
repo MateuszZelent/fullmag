@@ -3,9 +3,7 @@ use crate::types::{FdmGpuExecutionReceipt, RunError};
 #[cfg(feature = "cuda")]
 use super::{ffi, NativeFdmBackend};
 #[cfg(feature = "cuda")]
-use crate::types::{
-    FdmGpuOperatorResidency, FdmGpuStepTransactionTelemetry, FdmGpuTransferCounts,
-};
+use crate::types::{FdmGpuOperatorResidency, FdmGpuStepTransactionTelemetry, FdmGpuTransferCounts};
 
 fn preflight_error(detail: impl AsRef<str>) -> RunError {
     RunError {
@@ -694,9 +692,8 @@ mod tests {
 
         let native = super::ffi::fullmag_fdm_step_transaction_telemetry_v1 {
             abi_version: super::ffi::FULLMAG_FDM_STEP_TRANSACTION_TELEMETRY_ABI_V1,
-            struct_size: std::mem::size_of::<
-                super::ffi::fullmag_fdm_step_transaction_telemetry_v1,
-            >() as u32,
+            struct_size: std::mem::size_of::<super::ffi::fullmag_fdm_step_transaction_telemetry_v1>(
+            ) as u32,
             accounting_valid: 1,
             reserved0: 0,
             capture_count: 11,
@@ -734,9 +731,8 @@ mod tests {
     fn fdm_gpu_step_transaction_telemetry_preserves_invalid_accounting() {
         let native = super::ffi::fullmag_fdm_step_transaction_telemetry_v1 {
             abi_version: super::ffi::FULLMAG_FDM_STEP_TRANSACTION_TELEMETRY_ABI_V1,
-            struct_size: std::mem::size_of::<
-                super::ffi::fullmag_fdm_step_transaction_telemetry_v1,
-            >() as u32,
+            struct_size: std::mem::size_of::<super::ffi::fullmag_fdm_step_transaction_telemetry_v1>(
+            ) as u32,
             accounting_valid: 0,
             reserved0: 0,
             capture_count: 11,
