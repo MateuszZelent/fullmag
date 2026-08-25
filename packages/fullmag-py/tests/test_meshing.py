@@ -341,6 +341,13 @@ class LayeredMeshDslValidationTests(unittest.TestCase):
         self.assertEqual((recipe.size_from_curvature, recipe.narrow_regions), (6, 10))
         self.assertIs(type(recipe.size_from_curvature), int)
         self.assertIs(type(recipe.narrow_regions), int)
+        recipe = PerObjectMeshRecipe(
+            optimize_iters=np.int64(2),
+            boundary_layer_count=np.int64(3),
+        )
+        self.assertEqual((recipe.optimize_iters, recipe.boundary_layer_count), (2, 3))
+        self.assertIs(type(recipe.optimize_iters), int)
+        self.assertIs(type(recipe.boundary_layer_count), int)
         json.dumps(recipe.to_ir())
         self.assertEqual(PerObjectMeshRecipe(smoothing_steps=0).smoothing_steps, 0)
 

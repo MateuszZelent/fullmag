@@ -1102,6 +1102,7 @@ def realize_fem_mesh_asset(
     precedence chain: recipe > per_geometry > default_mesh > FEM.
     """
     _ = study_universe  # reserved for future airbox-aware preview
+    _validate_per_object_recipe_operations(per_object_recipes)
 
     target = resolve_object_preview_target(
         geometry, hints,

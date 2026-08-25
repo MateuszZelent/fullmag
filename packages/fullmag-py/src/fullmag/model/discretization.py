@@ -827,6 +827,8 @@ class PerObjectMeshRecipe:
                 raise TypeError(f"{field_name} must be an integer")
             if value < 1:
                 raise ValueError(f"{field_name} must be >= 1")
+            object.__setattr__(self, field_name, int(value))
+            object.__setattr__(self, field_name, int(value))
 
         if self.smoothing_steps is not None:
             if isinstance(self.smoothing_steps, bool) or not isinstance(
@@ -835,6 +837,8 @@ class PerObjectMeshRecipe:
                 raise TypeError("smoothing_steps must be an integer")
             if self.smoothing_steps < 0:
                 raise ValueError("smoothing_steps must be >= 0")
+            object.__setattr__(self, "smoothing_steps", int(self.smoothing_steps))
+            object.__setattr__(self, "smoothing_steps", int(self.smoothing_steps))
 
         if self.through_thickness_elements is not None:
             if (
