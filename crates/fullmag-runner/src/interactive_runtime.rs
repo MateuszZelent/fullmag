@@ -5740,6 +5740,7 @@ fn fem_gpu_execution_provenance(
         transport_modules: Vec::new(),
         fdm_gpu_transport_telemetry: None,
         fdm_gpu_execution_receipt: None,
+        fdm_gpu_step_transaction_telemetry: None,
         fem_gpu_execution_receipt: None,
         executed_physics_kinds: if timestep_policy.is_some() && plan.spin_torque_contract.is_some()
         {
