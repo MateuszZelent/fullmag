@@ -4,6 +4,7 @@ import type { MeshObjectConfigResource } from "@/kernel/api/apiTypes";
 
 import {
   buildObjectMeshPolicyReplaceRequest,
+  clearObjectMeshStrategyFromConfig,
   defaultObjectMeshPolicyResource,
   draftFromObjectMeshPolicyResource,
   draftIdentityKeyForObjectMeshPolicyResource,
@@ -276,8 +277,6 @@ describe("ObjectMeshPolicyPanelModel", () => {
         source: "mesh.msh",
         smoothing_steps: 4,
         sweep_face_meshing: "triangular",
-        sweep_destination: "top",
-        sweep_source: "bottom",
         through_thickness_distribution: "fixed",
         through_thickness_elements: 1,
         transition_distance: "airbox_boundary",
@@ -317,8 +316,6 @@ describe("ObjectMeshPolicyPanelModel", () => {
       source: "mesh.msh",
       smoothingSteps: "4",
       sweepFaceMeshing: "triangular",
-      sweepDestination: "top",
-      sweepSource: "bottom",
       throughThicknessDistribution: "fixed",
       throughThicknessElements: "1",
       transitionDistance: "airbox_boundary",
@@ -408,6 +405,28 @@ describe("ObjectMeshPolicyPanelModel", () => {
     }));
 
     expect(result).toMatchObject({ request: { config: rawConfig } });
+  });
+
+  it("removes the raw layered strategy after selecting inherited", () => {
+    const configText = clearObjectMeshStrategyFromConfig(
+      JSON.stringify({
+        maximum_element_size: 5e-9,
+        mesh_strategy: "swept_prism",
+        topology: "prismatic",
+        exact_layer_count: true,
+      }),
+    );
+
+    const result = buildObjectMeshPolicyReplaceRequest(objectMeshPolicyDraft({
+      configText,
+      meshStrategy: "",
+      present: true,
+    }));
+
+    expect(result).toMatchObject({ request: { config: {} } });
+    expect(result).not.toHaveProperty("request.config.mesh_strategy");
+    expect(result).not.toHaveProperty("request.config.topology");
+    expect(result).not.toHaveProperty("request.config.exact_layer_count");
   });
 
   it("rejects per-object imported mesh sources from structured and Advanced JSON input", () => {
@@ -723,8 +742,6 @@ describe("ObjectMeshPolicyPanelModel", () => {
         sizeFromCurvature: "16",
         smoothingSteps: "2",
         sweepFaceMeshing: "triangular",
-        sweepDestination: "top",
-        sweepSource: "bottom",
         throughThicknessDistribution: "fixed",
         throughThicknessElements: "1",
       })),
@@ -766,9 +783,7 @@ describe("ObjectMeshPolicyPanelModel", () => {
           size_from_curvature: 16,
           smoothing_steps: 2,
           sweep_face_meshing: "triangular",
-          sweep_destination: "top",
           sweep_direction: "auto",
-          sweep_source: "bottom",
           through_thickness_distribution: "fixed",
           through_thickness_element_ratio: 1,
           through_thickness_elements: 1,
@@ -787,6 +802,29 @@ describe("ObjectMeshPolicyPanelModel", () => {
     ).toEqual({
       request: { config: null },
     });
+  });
+
+  it("does not persist unsupported sweep source and destination selectors", () => {
+    const result = buildObjectMeshPolicyReplaceRequest(objectMeshPolicyDraft({
+      configText: JSON.stringify({
+        mesh_strategy: "swept_prism",
+        sweep_destination: "top",
+        sweep_source: "bottom",
+      }),
+      meshStrategy: "swept_prism",
+      present: true,
+      throughThicknessElements: "1",
+    }));
+
+    expect(result).toMatchObject({
+      request: {
+        config: {
+          mesh_strategy: "swept_prism",
+        },
+      },
+    });
+    expect(result).not.toHaveProperty("request.config.sweep_source");
+    expect(result).not.toHaveProperty("request.config.sweep_destination");
   });
 
   it("builds a structured ObjectCoreRelaxation size field without dropping other fields", () => {

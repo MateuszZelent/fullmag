@@ -70,8 +70,6 @@ export interface ObjectMeshPolicyDraft {
   source: string;
   smoothingSteps: string;
   sweepFaceMeshing: string;
-  sweepDestination: string;
-  sweepSource: string;
   calibrateFor: string;
   sizePreset: string;
   sizeFactor: string;
@@ -249,6 +247,29 @@ export function formatObjectMeshPolicyConfig(
   return JSON.stringify(config, null, 2);
 }
 
+const LAYERED_MESH_POLICY_KEYS = [
+  "element_family",
+  "exact_layer_count",
+  "mesh_strategy",
+  "order",
+  "sweep_direction",
+  "sweep_face_meshing",
+  "through_thickness_distribution",
+  "through_thickness_element_ratio",
+  "through_thickness_elements",
+  "through_thickness_symmetric",
+  "topology",
+  "transition_policy",
+] as const;
+
+export function clearObjectMeshStrategyFromConfig(configText: string): string {
+  const parsed = parseConfig(configText);
+  if (!parsed.ok) return configText;
+  const value = { ...parsed.value };
+  for (const key of LAYERED_MESH_POLICY_KEYS) delete value[key];
+  return formatObjectMeshPolicyConfig(value);
+}
+
 export function draftFromObjectMeshPolicyResource(
   resource: MeshObjectConfigResource,
   options: {
@@ -340,8 +361,6 @@ export function draftFromObjectMeshPolicyResource(
     sizePreset: readStringText(config.size_preset),
     smoothingSteps: readNumberText(config.smoothing_steps),
     sweepFaceMeshing: readStringText(config.sweep_face_meshing),
-    sweepDestination: readStringText(config.sweep_destination),
-    sweepSource: readStringText(config.sweep_source),
     throughThicknessDistribution: readStringText(
       config.through_thickness_distribution,
     ),
@@ -482,8 +501,6 @@ export function buildObjectMeshPolicyReplaceRequest({
   sizeFactor,
   sizeFromCurvature,
   sweepFaceMeshing,
-  sweepDestination,
-  sweepSource,
   throughThicknessDistribution,
   throughThicknessElementRatio,
   throughThicknessElements,
@@ -502,6 +519,8 @@ export function buildObjectMeshPolicyReplaceRequest({
   const config = parseConfig(configText);
   if (!config.ok) return { error: config.error };
   const value = { ...config.value };
+  delete value.sweep_source;
+  delete value.sweep_destination;
   const preserveRawLayeredPrism =
     value.mesh_strategy === "swept_prism" && !meshStrategy.trim();
   const preserveRawLayeredPrismField = (key: string, text: string): boolean =>
@@ -666,18 +685,6 @@ export function buildObjectMeshPolicyReplaceRequest({
     "sweep_face_meshing",
     sweepFaceMeshing,
     preserveRawLayeredPrismField("sweep_face_meshing", sweepFaceMeshing),
-  );
-  applyOptionalString(
-    value,
-    "sweep_source",
-    sweepSource,
-    preserveRawLayeredPrismField("sweep_source", sweepSource),
-  );
-  applyOptionalString(
-    value,
-    "sweep_destination",
-    sweepDestination,
-    preserveRawLayeredPrismField("sweep_destination", sweepDestination),
   );
   applyOptionalString(value, "calibrate_for", calibrateFor);
   applyOptionalString(value, "size_preset", sizePreset);

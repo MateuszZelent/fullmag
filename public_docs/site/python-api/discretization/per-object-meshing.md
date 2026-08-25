@@ -26,6 +26,8 @@ without the final shared-domain report.
 `PerObjectMeshRecipe` contains the typed object-level FEM mesh fields. Optional values, including
 quality flags, default to inheritance. The stage-first object facade writes the same canonical recipe through
 `object.mesh(...)` and its specialized helpers such as `object.mesh.thin_film(...)`.
+Class-based `Ferromagnet(mesh=...)` authoring is materialized through the same shared-domain
+realization path; the recipe is passed to the FEM target resolver before mesh options are built.
 
 The effective policy is assembled in this order:
 

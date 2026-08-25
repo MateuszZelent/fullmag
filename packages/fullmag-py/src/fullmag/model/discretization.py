@@ -458,6 +458,8 @@ class FEM:
         )
         if resolved_maximum_element_size is None:
             raise TypeError("FEM requires maximum_element_size")
+        if isinstance(maximum_element_size, bool) or isinstance(hmax, bool):
+            raise TypeError("maximum_element_size must be a real number, not bool")
         if hmax is not None and maximum_element_size is not None:
             if float(hmax) != float(maximum_element_size):
                 raise ValueError("hmax must match maximum_element_size when both are provided")

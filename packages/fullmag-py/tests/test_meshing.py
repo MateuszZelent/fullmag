@@ -2816,6 +2816,17 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertAlmostEqual(bulk_field["VIn"], 8e-9)
         self.assertGreater(float(bulk_field["VOut"]), 1e21)
 
+    def test_mesh_options_preserve_zero_smoothing_steps(self) -> None:
+        geometry = fm.Box(2.0, 2.0, 2.0, name="left")
+        mesh_options = _mesh_options_from_runtime_metadata(
+            {"mesh_options": {"smoothing_steps": 0}},
+            geometries=[geometry],
+            default_hmax=20e-9,
+            include_size_fields=False,
+        )
+
+        self.assertEqual(mesh_options.smoothing_steps, 0)
+
     def test_surface_prep_mesh_options_skip_component_only_size_fields(self) -> None:
         geometry = fm.ArchWaveguide(
             length=100e-9,

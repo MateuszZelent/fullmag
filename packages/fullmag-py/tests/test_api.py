@@ -31,6 +31,7 @@ from fullmag.runtime.scene_document import build_builder_from_scene_document
 from fullmag.runtime.scene_document import builder_overrides_from_scene_document
 from fullmag.runtime.script_builder import export_builder_draft, rewrite_loaded_problem_script
 from fullmag.meshing.gmsh_bridge import MeshData
+from fullmag.model.discretization import PerObjectMeshRecipe
 from fullmag.model.problem import build_geometry_assets_for_request
 
 
@@ -46,6 +47,19 @@ class ProblemApiTests(unittest.TestCase):
 
         self.assertEqual(fem.order, 1)
         self.assertIs(type(fem.order), int)
+
+    def test_fem_size_rejects_boolean_values(self) -> None:
+        for field_name, kwargs in (
+            ("maximum_element_size", {"maximum_element_size": True}),
+            ("hmax", {"hmax": True}),
+            (
+                "hmax alongside maximum_element_size",
+                {"maximum_element_size": 1e-9, "hmax": True},
+            ),
+        ):
+            with self.subTest(field=field_name):
+                with self.assertRaisesRegex(TypeError, "not bool"):
+                    fm.FEM(order=1, **kwargs)
 
     def test_geometry_asset_cache_copies_by_default_and_can_be_borrowed_internally(self) -> None:
         cached_assets = {"fem_domain_mesh_asset": {"mesh": {"nodes": [[0.0, 0.0, 0.0]]}}}
@@ -607,6 +621,24 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(
             object_regions[0]["owner_geometry_name"],
             "track_geom",
+        )
+
+    def test_problem_asset_build_receives_direct_object_mesh_recipe(self) -> None:
+        problem = self._build_problem()
+        recipe = PerObjectMeshRecipe(
+            maximum_element_size=4e-9,
+        )
+        problem = replace(problem, magnets=[replace(problem.magnets[0], mesh=recipe)])
+
+        with patch(
+            "fullmag.model.problem.build_geometry_assets_for_request",
+            return_value=None,
+        ) as build_assets:
+            problem.to_ir(include_geometry_assets=True)
+
+        self.assertEqual(
+            build_assets.call_args.kwargs["per_object_recipes"],
+            {"track": recipe},
         )
 
     def test_object_region_rejects_zero_ms_override(self) -> None:
