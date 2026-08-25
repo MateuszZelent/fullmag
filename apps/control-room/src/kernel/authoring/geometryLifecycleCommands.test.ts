@@ -6,10 +6,30 @@ import {
   createObjectTransaction,
   deleteObjectTransaction,
   patchObjectGeometryTransaction,
+  primitiveDraftOverlayStore,
   submitObjectMeshBuild,
 } from "./geometryLifecycleCommands";
 
 describe("geometry lifecycle command adapters", () => {
+  it("keeps primitive preview state local and revision-independent", () => {
+    const listener = vi.fn();
+    const unsubscribe = primitiveDraftOverlayStore.subscribe(listener);
+    const draft = {
+      dimensions: [1e-7, 2e-7, 3e-8] as [number, number, number],
+      errors: {},
+      kind: "Box" as const,
+      translation: [4e-9, 0, 0] as [number, number, number],
+    };
+
+    primitiveDraftOverlayStore.publish(draft);
+
+    expect(primitiveDraftOverlayStore.getSnapshot()).toEqual(draft);
+    expect(listener).toHaveBeenCalledOnce();
+    primitiveDraftOverlayStore.clear();
+    expect(primitiveDraftOverlayStore.getSnapshot()).toBeNull();
+    unsubscribe();
+  });
+
   it("commits object authoring through model transactions", async () => {
     const commitTransaction = vi.fn(async (request: unknown) => ({
       committed_scene: { revision: 12 },

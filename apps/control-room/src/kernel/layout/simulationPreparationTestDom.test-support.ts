@@ -164,7 +164,15 @@ export class TestElement extends TestNode {
     setProperty: (name: string, value: string) => void;
   };
   readonly tagName: string;
-  value = "";
+  private controlValue = "";
+
+  get value(): string {
+    return this.controlValue;
+  }
+
+  set value(value: string) {
+    this.controlValue = String(value);
+  }
 
   get innerHTML(): string {
     return this.childNodes.map(serializeTestNode).join("");
@@ -306,6 +314,7 @@ export class TestDocument extends TestNode {
   readonly body: TestElement;
   readonly documentElement: TestElement;
   defaultView: Record<string, unknown> | null = null;
+  oninput: ((event: TestEvent) => void) | null = null;
 
   constructor() {
     super(null as unknown as TestDocument, 9, "#document");
@@ -389,7 +398,7 @@ export function installSimulationPreparationTestDom({
     return 1;
   };
   const cancelAnimationFrame = () => undefined;
-  const navigator = { clipboard };
+  const navigator = { clipboard, userAgent: "FullmagTestDom/1.0" };
   const window = {
     document,
     navigator,

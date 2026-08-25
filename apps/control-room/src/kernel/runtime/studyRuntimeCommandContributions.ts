@@ -8,6 +8,7 @@ import {
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_READINESS_PATH,
   MODEL_REGION_DIAGNOSTICS_PATH,
   MODEL_SCENE_PATH,
   MODEL_STUDY_PATH,
@@ -35,6 +36,7 @@ import type {
   LiveStatusResource,
   MeshActiveBuildResource,
   MeshSharedDomainManifestResource,
+  ModelReadinessResource,
   CurrentRunResource,
   FieldStateTargetRef,
   HysteresisBookmarkPointRequest,
@@ -437,6 +439,23 @@ function runtimeReadinessDisabledReason(
     SESSION_STATUS_RESOURCE_KEY,
   );
   if (!status) return "Session status is unavailable.";
+
+  if (kind === "solve") {
+    const readiness = resourceData<ModelReadinessResource>(
+      context,
+      MODEL_READINESS_PATH,
+    );
+    if (!readiness) return "Model readiness is unavailable.";
+    const sceneRevision = status.resources.scene_revision;
+    if (sceneRevision == null) return "No scene model is loaded.";
+    if (readiness.scene_revision !== sceneRevision) {
+      return "Model readiness is stale for the current scene.";
+    }
+    return readiness.ready_to_run
+      ? null
+      : readiness.blockers[0] ??
+          "Complete the model checklist before running.";
+  }
 
   if (kind === "compute_fields" && !status.capabilities.binary_fields) {
     return "Field data plane is unavailable.";
@@ -1034,6 +1053,7 @@ function invalidateImportedSessionResources(
   invalidateRestoredStateResources(context, revision);
   context.resources?.invalidate(PERSISTENCE_IMPORTS_PATH, revision);
   context.resources?.invalidate(MODEL_SCENE_PATH, revision);
+  context.resources?.invalidate(MODEL_READINESS_PATH, revision);
   context.resources?.invalidate(MODEL_STUDY_PATH, revision);
   context.resources?.invalidate(SIMULATION_RUN_CURRENT_PATH, revision);
   context.resources?.invalidate(SIMULATION_STAGES_EXECUTION_PATH, revision);
@@ -1662,11 +1682,26 @@ function sceneRevision(value: unknown): string | number {
     : Date.now();
 }
 
+function sceneBaseRevision(value: unknown): number | null {
+  const payload = record(value);
+  const candidate =
+    payload.scene_revision ??
+    payload.revision ??
+    record(payload.scene).revision;
+  if (typeof candidate === "number") {
+    return Number.isFinite(candidate) ? candidate : null;
+  }
+  if (typeof candidate !== "string" || !candidate.trim()) return null;
+  const parsed = Number(candidate);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function invalidateStudyAuthoringResources(
   context: CommandContext,
   revision: string | number,
 ): void {
   context.resources?.invalidate(MODEL_SCENE_PATH, revision);
+  context.resources?.invalidate(MODEL_READINESS_PATH, revision);
   context.resources?.invalidate(MODEL_STUDY_PATH, revision);
   context.resources?.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
   context.resources?.invalidate(SIMULATION_STAGES_EXECUTION_PATH, revision);
@@ -1696,6 +1731,13 @@ function addStageCommand(
       }
 
       const scene = await context.api.model.scene();
+      const baseRevision = sceneBaseRevision(scene);
+      if (baseRevision === null) {
+        return {
+          message: "Scene revision is unavailable; refresh the scene and retry.",
+          status: "failed",
+        };
+      }
       const currentStages = studyStages(scene);
       const addedStage = stageWithDefaultId(stage, currentStages.length);
       const nextStages = [
@@ -1704,6 +1746,7 @@ function addStageCommand(
       ];
       const response = await context.api.model.commitTransaction({
         kind: "merge_patch",
+        base_revision: baseRevision,
         merge_patch: {
           study: {
             stages: nextStages,
@@ -1757,6 +1800,13 @@ function continueHysteresisToNextStageCommand(): CommandContribution {
       }
 
       const scene = await context.api.model.scene();
+      const baseRevision = sceneBaseRevision(scene);
+      if (baseRevision === null) {
+        return {
+          message: "Scene revision is unavailable; refresh the scene and retry.",
+          status: "failed",
+        };
+      }
       const currentStages = studyStages(scene);
       const sourceIndex = currentStages.findIndex(
         (stage) => stage.stage_id === stageId,
@@ -1781,6 +1831,7 @@ function continueHysteresisToNextStageCommand(): CommandContribution {
       ];
       const response = await context.api.model.commitTransaction({
         kind: "merge_patch",
+        base_revision: baseRevision,
         merge_patch: {
           study: {
             stages: nextStages,
@@ -1824,6 +1875,13 @@ function removeSelectedStageCommand(): CommandContribution {
       }
 
       const scene = await context.api.model.scene();
+      const baseRevision = sceneBaseRevision(scene);
+      if (baseRevision === null) {
+        return {
+          message: "Scene revision is unavailable; refresh the scene and retry.",
+          status: "failed",
+        };
+      }
       const stages = studyStages(scene);
       if (!stages[index]) {
         return { message: "Selected study stage is no longer present.", status: "failed" };
@@ -1831,6 +1889,7 @@ function removeSelectedStageCommand(): CommandContribution {
       const nextStages = stages.filter((_, stageIndex) => stageIndex !== index);
       const response = await context.api.model.commitTransaction({
         kind: "merge_patch",
+        base_revision: baseRevision,
         merge_patch: {
           study: {
             stages: nextStages,

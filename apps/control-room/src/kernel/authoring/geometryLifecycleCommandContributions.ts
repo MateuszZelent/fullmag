@@ -15,8 +15,8 @@ import {
   MESHING_SEMANTICS_PATH,
   MESHING_SUMMARY_PATH,
   MODEL_GEOMETRY_CAPABILITIES_PATH,
-  MODEL_GEOMETRY_DIAGNOSTICS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_READINESS_PATH,
   MODEL_SCENE_PATH,
 } from "../api/apiPaths";
 import type { JsonObject, JsonValue, MeshCapabilitiesResource } from "../api/apiTypes";
@@ -38,6 +38,7 @@ import {
   deleteObjectTransaction,
   submitObjectMeshBuild,
 } from "./geometryLifecycleCommands";
+import { invalidateAuthoringMutationDependents } from "./authoringMutationInvalidation";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 
 type JsonRecord = Record<string, unknown>;
@@ -54,6 +55,13 @@ function asString(value: unknown): string | null {
 
 function resourceData(context: CommandContext, resourceKey: string): unknown {
   return context.resourceData?.[resourceKey] ?? null;
+}
+
+function sceneBaseRevision(context: CommandContext): number | null {
+  const revision = asRecord(resourceData(context, MODEL_SCENE_PATH))?.revision;
+  return typeof revision === "number" && Number.isFinite(revision)
+    ? revision
+    : null;
 }
 
 export type MeshCommandLane = "fdm" | "fem" | "unknown";
@@ -324,14 +332,13 @@ function invalidateSceneAuthoringResources(
   context: CommandContext,
   sceneRevision: number,
 ): void {
-  context.resources?.invalidate(MODEL_SCENE_PATH, sceneRevision);
-  context.resources?.invalidate(MODEL_GEOMETRY_VALIDATION_PATH, sceneRevision);
-  context.resources?.invalidate(MODEL_GEOMETRY_DIAGNOSTICS_PATH, sceneRevision);
-  context.resources?.invalidate(MESHING_BUILDS_CURRENT_PATH, sceneRevision);
-  context.resources?.invalidate(
-    MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
-    sceneRevision,
-  );
+  if (context.resources) {
+    invalidateAuthoringMutationDependents(
+      context.resources,
+      "geometry",
+      sceneRevision,
+    );
+  }
 }
 
 function objectResourceKey(path: string, objectId: string): string {
@@ -344,6 +351,7 @@ function invalidateObjectMeshResources(
   revision: string | number,
 ): void {
   context.resources?.invalidate(MESHING_BUILDS_CURRENT_PATH, revision);
+  context.resources?.invalidate(MODEL_READINESS_PATH, revision);
   context.resources?.invalidate(MESHING_SUMMARY_PATH, revision);
   context.resources?.invalidate(MESHING_SEMANTICS_PATH, revision);
   context.resources?.invalidate(MESHING_BUILDS_LATEST_SUCCESSFUL_PATH, revision);
@@ -367,6 +375,7 @@ function invalidateSharedDomainMeshResources(
   revision: string | number,
 ): void {
   context.resources?.invalidate(MESHING_BUILDS_PATH, revision);
+  context.resources?.invalidate(MODEL_READINESS_PATH, revision);
   context.resources?.invalidate(MESHING_SUMMARY_PATH, revision);
   context.resources?.invalidate(MESHING_SEMANTICS_PATH, revision);
   context.resources?.invalidate(MESHING_BUILDS_CURRENT_PATH, revision);
@@ -732,18 +741,30 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
     shortcut: "Ctrl+Enter",
     scope: "selection",
     isEnabled: (context) =>
-      context.selection?.get().kind === "builder.primitive",
-    disabledReason: () => "Open a primitive draft before committing.",
+      context.selection?.get().kind === "builder.primitive" &&
+      sceneBaseRevision(context) !== null,
+    disabledReason: (context) =>
+      context.selection?.get().kind !== "builder.primitive"
+        ? "Open a primitive draft before committing."
+        : "The canonical scene revision is unavailable. Refetch the scene before committing.",
     run: async (context) => {
       const selection = context.selection?.get();
       const primitiveKind = primitiveKindFromDraftSelection(selection);
       const objectId = draftObjectId(primitiveKind);
       const name = selection?.label ?? `New ${primitiveKind}`;
+      const baseRevision = sceneBaseRevision(context);
       if (!context.api) {
         return { message: "Control-room API is unavailable.", status: "failed" };
       }
+      if (baseRevision === null) {
+        return {
+          message: "The canonical scene revision is unavailable. Refetch the scene before committing.",
+          status: "failed",
+        };
+      }
 
       const response = await createObjectTransaction(context.api, {
+        base_revision: baseRevision,
         geometry: defaultPrimitiveGeometry(primitiveKind),
         name,
         object_id: objectId,

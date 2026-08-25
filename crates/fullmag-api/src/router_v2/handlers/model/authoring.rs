@@ -2782,6 +2782,7 @@ pub async fn get_authoring_material(
         .coefficients;
     Ok(Json(build_material_resource(
         material,
+        scene.revision,
         region_coefficients_revision,
     )))
 }
@@ -2827,6 +2828,7 @@ pub async fn patch_authoring_material(
         .coefficients;
     Ok(Json(build_material_resource(
         material,
+        committed.revision,
         region_coefficients_revision,
     )))
 }
@@ -2940,6 +2942,7 @@ pub async fn get_authoring_object_interaction(
         object,
         kind,
         interaction,
+        scene.revision,
     )))
 }
 
@@ -2964,6 +2967,7 @@ pub async fn patch_authoring_object_interaction(
     Json(req): Json<ObjectInteractionPatchRequest>,
 ) -> Result<Json<ObjectInteractionResource>, ApiError> {
     let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    check_base_scene_revision(&scene, req.base_revision)?;
     let kind = parse_interaction_kind(&interaction_kind)?;
     let material_dind = material_dind_for_object(&scene, &object_id);
     let material_dbulk = material_dbulk_for_object(&scene, &object_id);
@@ -2986,6 +2990,7 @@ pub async fn patch_authoring_object_interaction(
         object,
         kind,
         interaction,
+        committed.revision,
     )))
 }
 
@@ -3023,12 +3028,36 @@ pub async fn commit_authoring_transaction(
                 crate::commit_current_live_scene_document(&state, scene_document).await?;
             ("replace_scene", committed)
         }
-        AuthoringTransactionRequest::MergePatch { merge_patch } => {
+        AuthoringTransactionRequest::MergePatch {
+            base_revision,
+            merge_patch,
+        } => {
             let current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            check_base_scene_revision(&current_scene, base_revision)?;
             let patched_scene = apply_scene_merge_patch(&current_scene, &merge_patch)?;
             let committed =
                 crate::commit_current_live_scene_document(&state, patched_scene).await?;
             ("merge_patch", committed)
+        }
+        AuthoringTransactionRequest::PatchMagnetization {
+            base_revision,
+            object_id,
+            region_id,
+            asset,
+            magnetization_ref,
+        } => {
+            let mut current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
+            apply_patch_magnetization_transaction(
+                &mut current_scene,
+                base_revision,
+                &object_id,
+                region_id.as_deref(),
+                asset,
+                magnetization_ref,
+            )?;
+            let committed =
+                crate::commit_current_live_scene_document(&state, current_scene).await?;
+            ("patch_magnetization", committed)
         }
         AuthoringTransactionRequest::PatchObjectGeometry {
             object_id,
@@ -3373,6 +3402,62 @@ fn apply_scene_merge_patch(
     merge_patch_value(&mut scene_value, merge_patch);
     serde_json::from_value(scene_value)
         .map_err(|error| ApiError::bad_request(format!("invalid scene patch payload: {error}")))
+}
+
+fn apply_patch_magnetization_transaction(
+    scene: &mut SceneDocument,
+    base_revision: Option<u64>,
+    object_id: &str,
+    region_id: Option<&str>,
+    asset: Option<Value>,
+    magnetization_ref: Option<NullableStringPatchValue>,
+) -> Result<(), ApiError> {
+    check_base_scene_revision(scene, base_revision)?;
+    if let Some(asset_value) = asset {
+        let asset: MagnetizationAsset = serde_json::from_value(asset_value).map_err(|error| {
+            ApiError::bad_request(format!("invalid magnetization asset payload: {error}"))
+        })?;
+        upsert_magnetization_asset(scene, asset);
+    }
+    if region_id.is_none() && magnetization_ref.is_none() {
+        return Err(ApiError::bad_request(
+            "patch_magnetization requires magnetization_ref for an object target",
+        ));
+    }
+    let object = find_scene_object_mut(scene, object_id)?;
+    if let Some(region_id) = region_id {
+        let region_override_id = canonical_region_id_for_object(object, region_id);
+        match magnetization_ref {
+            Some(NullableStringPatchValue::Value(value)) => {
+                let value = value.trim();
+                if value.is_empty() {
+                    object.region_overrides.remove(&region_override_id);
+                } else {
+                    object
+                        .region_overrides
+                        .entry(region_override_id)
+                        .or_insert_with(SceneRegionOverride::default)
+                        .magnetization_ref = Some(value.to_string());
+                }
+            }
+            Some(NullableStringPatchValue::Null) => {
+                object.region_overrides.remove(&region_override_id);
+            }
+            None => {}
+        }
+        return Ok(());
+    }
+
+    if let Some(magnetization_ref) = magnetization_ref {
+        object.magnetization_ref = match magnetization_ref {
+            NullableStringPatchValue::Value(value) => {
+                let value = value.trim();
+                (!value.is_empty()).then(|| value.to_string())
+            }
+            NullableStringPatchValue::Null => None,
+        };
+    }
+    Ok(())
 }
 
 fn merge_patch_value(target: &mut Value, patch: &Value) {
@@ -4408,10 +4493,13 @@ fn check_base_scene_revision(
 ) -> Result<(), ApiError> {
     if let Some(base_revision) = base_revision {
         if base_revision != scene.revision {
-            return Err(ApiError::conflict(format!(
-                "scene revision mismatch: base={base_revision}, current={}",
-                scene.revision
-            )));
+            return Err(ApiError::conflict_with_code(
+                "revision_conflict",
+                format!(
+                    "scene revision mismatch: base={base_revision}, current={}",
+                    scene.revision
+                ),
+            ));
         }
     }
     Ok(())
@@ -4824,9 +4912,11 @@ async fn current_region_realization_revisions(
 
 fn build_material_resource(
     material: &fullmag_authoring::SceneMaterialAsset,
+    scene_revision: u64,
     region_coefficients_revision: u64,
 ) -> MaterialResource {
     MaterialResource {
+        scene_revision,
         region_coefficients_revision: Some(region_coefficients_revision),
         id: material.id.clone(),
         name: material.name.clone(),
@@ -4979,6 +5069,7 @@ fn build_object_interaction_resource(
     object: &SceneObject,
     kind: ScriptBuilderMagneticInteractionKind,
     interaction: Option<&ScriptBuilderMagneticInteractionEntry>,
+    scene_revision: u64,
 ) -> ObjectInteractionResource {
     let (present, enabled, params) = match interaction {
         Some(entry) => (
@@ -4992,6 +5083,7 @@ fn build_object_interaction_resource(
         None => (false, false, Value::Object(Default::default())),
     };
     ObjectInteractionResource {
+        scene_revision,
         object_id: object.id.clone(),
         interaction_kind: interaction_kind_str(kind).to_string(),
         present,

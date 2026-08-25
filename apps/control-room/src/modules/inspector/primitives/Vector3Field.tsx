@@ -1,6 +1,7 @@
 import { useId } from "react";
 
 interface Vector3FieldProps {
+  errors?: readonly (string | undefined)[];
   label: string;
   values: readonly [string, string, string];
   onChange: (index: 0 | 1 | 2, value: string) => void;
@@ -13,6 +14,7 @@ interface Vector3FieldProps {
  * Renders color-coded X, Y, Z badges (Red, Green, Blue) mimicking professional 3D tools.
  */
 export function Vector3Field({
+  errors,
   label,
   values,
   onChange,
@@ -46,12 +48,22 @@ export function Vector3Field({
                 <input
                   id={elementId}
                   aria-label={`${label} ${axis.toUpperCase()}`}
+                  aria-invalid={Boolean(errors?.[index]) || undefined}
                   className="fm-inspector-input"
                   disabled={disabled}
                   type="text"
                   value={values[index] ?? ""}
                   onChange={(event) => onChange(index as 0 | 1 | 2, event.target.value)}
+                  onInput={(event) => onChange(index as 0 | 1 | 2, event.currentTarget.value)}
                 />
+                {errors?.[index] ? (
+                  <span
+                    className="fm-inspector-form-field__hint fm-inspector-form-field__hint--error"
+                    role="alert"
+                  >
+                    {errors[index]}
+                  </span>
+                ) : null}
               </div>
             );
           })}

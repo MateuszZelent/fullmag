@@ -439,7 +439,7 @@ pub(crate) fn session_epoch(
     }
 }
 
-pub(crate) const ACTIVE_LANE_OPERATION_IDS: [&str; 31] = [
+pub(crate) const ACTIVE_LANE_OPERATION_IDS: [&str; 33] = [
     "grid_build",
     "shared_mesh_build",
     "field_quantity",
@@ -448,6 +448,8 @@ pub(crate) const ACTIVE_LANE_OPERATION_IDS: [&str; 31] = [
     "air_void_overlay",
     "region_membership",
     "hover_select_cell",
+    "initial_magnetization.uniform",
+    "initial_magnetization.vortex",
     "interaction.exchange",
     "interaction.demag",
     "interaction.dmi",
@@ -812,6 +814,34 @@ fn active_lane_operations(
                 unsupported(
                     "Cell hover and selection are specific to structured FDM domains.",
                     &["discretization:fdm"],
+                )
+            },
+        ),
+        (
+            "initial_magnetization.uniform".into(),
+            if is_fdm || is_fem {
+                supported(
+                    "Uniform initial magnetization is executable in the resolved FDM/FEM lane.",
+                    &["initial_magnetization:uniform", "resolved_lane_identity"],
+                )
+            } else {
+                unsupported(
+                    "Uniform initial magnetization requires a resolved FDM or FEM lane.",
+                    &["discretization:fdm_or_fem"],
+                )
+            },
+        ),
+        (
+            "initial_magnetization.vortex".into(),
+            if is_fdm || is_fem {
+                supported(
+                    "Vortex initial magnetization is executable in the resolved FDM/FEM lane.",
+                    &["initial_magnetization:vortex", "resolved_lane_identity"],
+                )
+            } else {
+                unsupported(
+                    "Vortex initial magnetization requires a resolved FDM or FEM lane.",
+                    &["discretization:fdm_or_fem"],
                 )
             },
         ),

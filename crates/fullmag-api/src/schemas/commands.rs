@@ -68,6 +68,11 @@ pub struct RuntimeCommandPrecondition {
     pub command_revision: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CommandFailureRequest {
+    pub error: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FixedSolverIntegratorRequest {

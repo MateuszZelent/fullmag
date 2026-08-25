@@ -1,10 +1,15 @@
+import { readFileSync } from "node:fs";
+
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { Accordion } from "@/shared/ui/Accordion";
 
-import type { CommandDetailResource } from "@/kernel/api/apiTypes";
+import type { CommandDetailResource, LiveStatusResource } from "@/kernel/api/apiTypes";
+import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
+import { buildRuntimeCommandControlResourceData } from "@/kernel/resources/studyRuntimeResources";
+import { STUDY_RUNTIME_COMMANDS } from "@/kernel/runtime/studyRuntimeCommandContributions";
 
 vi.mock("@radix-ui/react-dialog", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@radix-ui/react-dialog")>();
@@ -56,6 +61,102 @@ function testRequested(overrides: Record<string, string> = {}) {
 }
 
 describe("StudyInspectorPanel", () => {
+  it("uses the shared readiness-aware runtime command adapter", () => {
+    const source = readFileSync(
+      new URL("./StudyInspectorPanel.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("useModelReadinessResource()");
+    expect(source).toContain("buildRuntimeCommandControlResourceData({");
+  });
+
+  it("exposes Add Relax controls for an empty study without changing populated-stage routing", () => {
+    const source = readFileSync(
+      new URL("./StudyInspectorPanel.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain(
+      "showDraftEditor={state.stageDrafts.length === 0 || stagesDirty}",
+    );
+    expect(source).toContain("const stagesDirty =");
+    expect(source).toContain(
+      "The canonical scene revision is unavailable. Refetch before applying study stages.",
+    );
+    expect(source).toContain("preserveStageDrafts");
+    expect(source).toContain(
+      "the stage draft was preserved for review and retry.",
+    );
+    expect(source).toContain('onAddStage={(kind) => dispatch({ type: "addStageDraft", kind })}');
+  });
+
+  it.each([
+    {
+      enabled: true,
+      name: "ready",
+      readiness: { blockers: [], ready_to_run: true, scene_revision: 9 },
+      reason: null,
+    },
+    {
+      enabled: false,
+      name: "blocked",
+      readiness: {
+        blockers: ["Assign initial magnetization to every magnetic object."],
+        ready_to_run: false,
+        scene_revision: 9,
+      },
+      reason: "Assign initial magnetization to every magnetic object.",
+    },
+    {
+      enabled: false,
+      name: "stale",
+      readiness: { blockers: [], ready_to_run: true, scene_revision: 8 },
+      reason: "Model readiness is stale for the current scene.",
+    },
+  ])("feeds $name readiness into the Study Inspector Run command", ({
+    enabled,
+    readiness,
+    reason,
+  }) => {
+    const commands = new CommandRegistry();
+    for (const command of STUDY_RUNTIME_COMMANDS) commands.register(command);
+    const status = {
+      capabilities: { binary_fields: true, explicit_topology: false },
+      domain: { discretization: "fdm" },
+      resources: { mesh_revision: 0, scene_revision: 9 },
+    } as unknown as LiveStatusResource;
+    const resourceData = buildRuntimeCommandControlResourceData({
+      commandQueue: { commands: [] },
+      geometryValidation: { diagnostics: [] },
+      meshBuildCurrent: null,
+      meshManifest: null,
+      modelReadinessData: {
+        capabilities: {} as never,
+        checks: [],
+        ready_to_export: readiness.ready_to_run,
+        ...readiness,
+      },
+      modelReadinessStatus: "ready",
+      sessionStatus: status,
+      solverStatus: { runtime_state: "idle" },
+      stageExecution: {
+        active_stage_index: null,
+        revision: 1,
+        runtime_state: "idle",
+        stages: [],
+      },
+    });
+    const context = {
+      api: {} as never,
+      resourceData,
+      source: "inspector" as const,
+    };
+
+    expect(commands.isEnabled("study.run", context)).toBe(enabled);
+    expect(commands.get("study.run")?.disabledReason?.(context)).toBe(reason);
+  });
+
   it("renders requested, resolved, and fallback runtime provenance rows", () => {
     const html = renderToStaticMarkup(
       <StudyRuntimeSection
@@ -1293,6 +1394,135 @@ describe("StudyInspectorPanel", () => {
     expect(html).not.toContain("Poisson Robin");
   });
 
+  it("renders an FDM grid preview and exposes Apply Grid without a mesh-build command", () => {
+    const onCommit = vi.fn();
+    const html = renderToStaticMarkup(
+      <StudyBoundarySection
+        authoringBusy={false}
+        authoringFeedback={null}
+        draft={createStudyGlobalDraft({
+          study: {
+            requested_backend: "fdm",
+            fdm: {
+              default_cell: [2e-9, 2e-9, 1e-9],
+              per_magnet: { magnet_b: { cell: [1e-9, 1e-9, 1e-9] } },
+            },
+          },
+        })}
+        magneticObjectCount={2}
+        magneticObjectIds={["magnet_a", "magnet_b"]}
+        model={{
+          boundary: testBoundary({ demagRealization: "auto" }),
+          requested: testRequested({ backend: "fdm" }),
+          runtime: {
+            activeStageLabel: "No active stage",
+            commandBadge: "idle",
+            commandError: null,
+            commandId: null,
+            commandLabel: "No queued commands",
+            maxTorque: "unavailable",
+            progressPercent: 0,
+            relaxEnergyStop: null,
+            relaxTimeStop: null,
+            relaxTorqueStop: null,
+            runId: "none",
+            state: "idle",
+          },
+          selectedStage: null,
+          stages: [],
+        }}
+        onCommit={onCommit}
+        onUpdate={() => undefined}
+        scene={{
+          objects: [
+            {
+              id: "magnet_a",
+              role: "magnet",
+              geometry: {
+                geometry_kind: "Box",
+                geometry_params: { size: [5e-9, 4e-9, 1e-9] },
+              },
+            },
+            {
+              id: "magnet_b",
+              role: "magnet",
+              geometry: {
+                geometry_kind: "Sphere",
+                geometry_params: { radius: 2e-9 },
+              },
+            },
+          ],
+        }}
+        sceneRevision={12}
+        sceneStatus="ready"
+        sessionDiscretization="fdm"
+        snapshot={{
+          boundary: testBoundary({ demagRealization: "auto" }),
+          requested: testRequested({ backend: "fdm" }),
+          stages: [],
+        }}
+      />,
+    );
+
+    expect(html).toContain("FDM Grid Preview");
+    expect(html).toContain("magnet_a cells");
+    expect(html).toContain("3 × 2 × 1");
+    expect(html).toContain("Total cells (preview)");
+    expect(html).toContain("Topology after Apply Grid");
+    expect(html).toMatch(/<button[^>]*>.*Apply Grid<\/button>/);
+    expect(html).not.toContain("mesh-build");
+  });
+
+  it("disables Apply Grid while the canonical scene is stale or the cell draft is invalid", () => {
+    const html = renderToStaticMarkup(
+      <StudyBoundarySection
+        authoringBusy={false}
+        authoringFeedback={null}
+        draft={{
+          ...createStudyGlobalDraft({
+            study: {
+              requested_backend: "fdm",
+              fdm: { default_cell: [0, 2e-9, 1e-9] },
+            },
+          }),
+        }}
+        magneticObjectCount={1}
+        model={{
+          boundary: testBoundary(),
+          requested: testRequested({ backend: "fdm" }),
+          runtime: {
+            activeStageLabel: "No active stage",
+            commandBadge: "idle",
+            commandError: null,
+            commandId: null,
+            commandLabel: "No queued commands",
+            maxTorque: "unavailable",
+            progressPercent: 0,
+            relaxEnergyStop: null,
+            relaxTimeStop: null,
+            relaxTorqueStop: null,
+            runId: "none",
+            state: "idle",
+          },
+          selectedStage: null,
+          stages: [],
+        }}
+        onCommit={() => undefined}
+        onUpdate={() => undefined}
+        sceneStatus="stale"
+        sessionDiscretization="fdm"
+        snapshot={{
+          boundary: testBoundary(),
+          requested: testRequested({ backend: "fdm" }),
+          stages: [],
+        }}
+      />,
+    );
+
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*Apply Grid<\/button>/);
+    expect(html).toContain("FDM default cell must contain three finite positive SI values.");
+  });
+
   it("marks FDM single grid unsupported for a multi-magnet draft without hiding auto or multilayer", () => {
     const html = renderToStaticMarkup(
       <StudyBoundarySection
@@ -1351,7 +1581,7 @@ describe("StudyInspectorPanel", () => {
     );
     expect(html).toContain('<option value="auto">Auto</option>');
     expect(html).toContain('<option value="multilayer_convolution">FDM multilayer convolution</option>');
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*Save globals<\/button>/);
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*Apply Grid<\/button>/);
   });
 
   it("renders spectral stage authoring fields", () => {

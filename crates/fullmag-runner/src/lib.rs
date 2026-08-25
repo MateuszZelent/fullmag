@@ -439,7 +439,8 @@ pub fn validate_frozen_spins_checkpoint_value(
 
 // Public re-exports (unchanged API surface).
 pub use capabilities::{
-    resolve_quantity_capability, BackendCapabilities, FeatureCapability, FeatureCapabilityStatus,
+    resolve_quantity_capability, scratch_authoring_capabilities, BackendCapabilities,
+    FeatureCapability, FeatureCapabilityStatus,
     FieldCarrierDescriptor, FieldPayloadState, QuantityMaterializationCapability,
     QuantityProviderCapability, QuantityProviderRegistrySource, QuantityPublicationCapability,
     QuantityRenderCapability, QuantityRequestCapability, ResolvedQuantityCapability,

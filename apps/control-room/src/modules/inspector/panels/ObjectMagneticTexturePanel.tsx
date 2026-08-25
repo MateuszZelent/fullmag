@@ -3,25 +3,21 @@
 import { useMemo, useState } from "react";
 
 import {
-  MODEL_GEOMETRY_DIAGNOSTICS_PATH,
-  MODEL_GEOMETRY_VALIDATION_PATH,
-} from "@/kernel/api/apiPaths";
-import type { RegionPatchRequest } from "@/kernel/api/apiTypes";
+  acknowledgedAuthoringSceneRevision,
+  invalidateAuthoringMutationDependents,
+} from "@/kernel/authoring/authoringMutationInvalidation";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import {
-  MODEL_REGIONS_RESOURCE_KEY,
-  SCENE_RESOURCE_KEY,
-  VISUALIZATION_STATE_RESOURCE_KEY,
   useModelRegionsResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import {
-  buildMagnetizationAssetPatch as buildTextureAssetPatch,
-  buildMagnetizationAssignmentPatch as buildTextureAssignmentPatch,
-} from "@/shared/domain/magnetization-texture/draftModel";
+  resolveActiveLaneOperation,
+  useActiveLaneCapabilities,
+  type ActiveLaneOperationResolution,
+} from "@/kernel/resources/useActiveLaneCapabilities";
 import { magnetizationTexturePresetOptions } from "@/shared/domain/magnetization-texture/texturePresets";
-import type { MagnetizationTextureTarget } from "@/shared/domain/magnetization-texture/types";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -38,6 +34,7 @@ import {
 } from "./inspectorDraftState";
 import {
   buildObjectMagneticTextureAssetDraft,
+  buildMagnetizationTransactionRequest,
   magneticTextureProjectionOptions,
   objectMagneticTextureDraftFromModel,
   objectMagneticTextureDraftDirty,
@@ -62,17 +59,6 @@ export type MagneticTextureFeedback =
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function targetFromModel(
-  model: ReturnType<typeof resolveObjectMagneticTexturePanelModel>,
-): MagnetizationTextureTarget | null {
-  if (model.targetKind === "region") {
-    return model.regionId
-      ? { kind: "region", objectId: model.objectId, regionId: model.regionId }
-      : null;
-  }
-  return { kind: "object", objectId: model.objectId };
 }
 
 export type UpdateMagneticTextureDraft = (
@@ -708,6 +694,7 @@ export function MagneticTextureLoadFileSection({
 }
 
 export function MagneticTextureActionsSection({
+  capability = null,
   dirty,
   feedback,
   model,
@@ -717,6 +704,7 @@ export function MagneticTextureActionsSection({
   onSave,
   pending,
 }: {
+  capability?: ActiveLaneOperationResolution | null;
   dirty: boolean;
   feedback: MagneticTextureFeedback;
   model: MagneticTexturePanelModel;
@@ -730,7 +718,11 @@ export function MagneticTextureActionsSection({
     <InspectorGroup title="Actions">
       <div className="fm-inspector-toolbar">
         <Button
-          disabled={pending || model.mode !== "committed"}
+          disabled={
+            pending ||
+            model.mode !== "committed" ||
+            (capability !== null && !capability.enabled)
+          }
           size="sm"
           type="button"
           variant="primary"
@@ -767,6 +759,12 @@ export function MagneticTextureActionsSection({
         </Button>
       </div>
       <FieldRow label="Draft" value={dirty ? "modified" : "clean"} />
+      {capability ? (
+        <FieldRow
+          label="Capability"
+          value={`${capability.state}: ${capability.reason}`}
+        />
+      ) : null}
       {feedback && <FeedbackBanner kind={feedback.kind} message={feedback.message} />}
     </InspectorGroup>
   );
@@ -777,6 +775,7 @@ export function ObjectMagneticTexturePanel({
 }: InspectorPanelProps) {
   const kernel = useKernel();
   const { api, resources } = kernel;
+  const activeLane = useActiveLaneCapabilities();
   const scene = useSceneResource();
   const regions = useModelRegionsResource();
   const model = useMemo(
@@ -812,6 +811,15 @@ export function ObjectMagneticTexturePanel({
     isDirty: objectMagneticTextureDraftDirty,
     state: draftState,
   });
+  const textureCapabilityOperation =
+    draft.presetKind === "uniform"
+      ? "initial_magnetization.uniform"
+      : draft.presetKind === "vortex"
+        ? "initial_magnetization.vortex"
+        : null;
+  const textureCapability = textureCapabilityOperation
+    ? resolveActiveLaneOperation(activeLane, textureCapabilityOperation)
+    : null;
   const inspectorView = magneticTextureInspectorView(selection.kind);
 
   function updateDraft(patch: Partial<ObjectMagneticTextureDraft>): void {
@@ -828,11 +836,7 @@ export function ObjectMagneticTexturePanel({
   }
 
   function invalidateTextureResources(revision: number): void {
-    resources.invalidate(SCENE_RESOURCE_KEY, revision);
-    resources.invalidate(MODEL_REGIONS_RESOURCE_KEY, revision);
-    resources.invalidate(MODEL_GEOMETRY_VALIDATION_PATH, revision);
-    resources.invalidate(MODEL_GEOMETRY_DIAGNOSTICS_PATH, revision);
-    resources.invalidate(VISUALIZATION_STATE_RESOURCE_KEY, revision);
+    invalidateAuthoringMutationDependents(resources, "magnetization", revision);
   }
 
   async function saveTexture(): Promise<void> {
@@ -840,8 +844,11 @@ export function ObjectMagneticTexturePanel({
       setFeedback({ kind: "error", message: "No committed scene object." });
       return;
     }
-    const target = targetFromModel(model);
-    if (!target) {
+    if (textureCapability && !textureCapability.enabled) {
+      setFeedback({ kind: "error", message: textureCapability.reason });
+      return;
+    }
+    if (model.targetKind === "region" && !model.regionId) {
       setFeedback({ kind: "error", message: "No selected texture target." });
       return;
     }
@@ -849,26 +856,10 @@ export function ObjectMagneticTexturePanel({
     setPending(true);
     try {
       const asset = buildObjectMagneticTextureAssetDraft(model, draft);
-      const assetResponse = await api.model.patchMagnetizationAsset(
-        asset.id,
-        buildTextureAssetPatch(asset, model.baseRevision),
+      const response = await api.model.commitTransaction(
+        buildMagnetizationTransactionRequest(model, asset, asset.id),
       );
-      const patch = buildTextureAssignmentPatch(
-        target,
-        asset.id,
-        assetResponse.scene_revision ?? model.baseRevision,
-      );
-      const response =
-        target.kind === "region"
-          ? await api.model.patchRegion(
-              target.regionId,
-              patch.payload as RegionPatchRequest,
-            )
-          : await api.model.patchObject(model.objectId, patch.payload);
-      const revision =
-        typeof response.revision === "number"
-          ? response.revision
-          : assetResponse.scene_revision ?? model.baseRevision ?? 0;
+      const revision = acknowledgedAuthoringSceneRevision(response);
       invalidateTextureResources(revision);
       const syncWarning = await syncAuthoringScriptBestEffort(api);
       setDraftState({
@@ -895,26 +886,17 @@ export function ObjectMagneticTexturePanel({
       setFeedback({ kind: "error", message: "No committed scene object." });
       return;
     }
-    const target = targetFromModel(model);
-    if (!target) {
+    if (model.targetKind === "region" && !model.regionId) {
       setFeedback({ kind: "error", message: "No selected texture target." });
       return;
     }
 
     setPending(true);
     try {
-      const patch = buildTextureAssignmentPatch(target, null, model.baseRevision);
-      const response =
-        target.kind === "region"
-          ? await api.model.patchRegion(
-              target.regionId,
-              patch.payload as RegionPatchRequest,
-            )
-          : await api.model.patchObject(model.objectId, patch.payload);
-      const revision =
-        typeof response.revision === "number"
-          ? response.revision
-          : model.baseRevision ?? 0;
+      const response = await api.model.commitTransaction(
+        buildMagnetizationTransactionRequest(model, null, null),
+      );
+      const revision = acknowledgedAuthoringSceneRevision(response);
       invalidateTextureResources(revision);
       const syncWarning = await syncAuthoringScriptBestEffort(api);
       setDraftState({
@@ -1019,6 +1001,7 @@ export function ObjectMagneticTexturePanel({
       ) : null}
       {inspectorView !== "load" ? (
         <MagneticTextureActionsSection
+          capability={textureCapability}
           dirty={dirty}
           feedback={feedback}
           model={model}

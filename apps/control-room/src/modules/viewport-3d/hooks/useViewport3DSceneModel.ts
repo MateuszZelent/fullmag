@@ -268,6 +268,7 @@ import {
   resolvePrimitiveSelectionBounds,
   type Viewport3DPrimitiveObject,
 } from "../viewport3dPrimitiveModel";
+import { usePrimitiveDraftOverlay } from "./usePrimitiveDraftOverlay";
 import {
   buildMeshQualityVertexColors,
   topologySupportsTet4FmmqQuality,
@@ -2621,6 +2622,7 @@ export function useViewport3DSceneModel({
   resourceCounts: Viewport3DResourceCounts;
   selection: Selection;
 }) {
+  const primitiveDraftOverlay = usePrimitiveDraftOverlay();
   const { analysisFieldOverlay } = useKernel();
   const analysisOverlay = useRenderableAnalysisFieldOverlay(analysisFieldOverlay);
   useEffect(() => {
@@ -2782,7 +2784,7 @@ export function useViewport3DSceneModel({
   });
   const fdmDomainPresentation = useMemo(
     () =>
-      domainMeta.data?.discretization === "fdm"
+      domainMeta.data?.discretization === "fdm" && domainMeta.data.grid
         ? adaptDomainPresentation({
             domainMeta: domainMeta.data,
             expectedFdmGridFingerprint:
@@ -2950,14 +2952,16 @@ export function useViewport3DSceneModel({
       topologyIndexState,
     ],
   );
-  const primitiveModel = useMemo(
-    () =>
-      buildViewport3DPrimitiveRenderModel(
-        scene.data,
-        sharedDomainManifest.data,
-      ),
-    [scene.data, sharedDomainManifest.data],
-  );
+  const primitiveModel = useMemo(() => {
+    const committed = buildViewport3DPrimitiveRenderModel(
+      scene.data,
+      sharedDomainManifest.data,
+    );
+    return {
+      ...committed,
+      draftOverlay: primitiveDraftOverlay,
+    };
+  }, [primitiveDraftOverlay, scene.data, sharedDomainManifest.data]);
   const objectTransformsById = useMemo(() => {
     const sceneRecord = asJsonRecord(scene.data);
     const transforms = new Map<string, unknown>();
@@ -6359,6 +6363,9 @@ export function useViewport3DSceneModel({
     meshQualityRange: meshQualityColors?.range ?? null,
     meshRegionOverlays,
     primitiveModel,
+    sceneRefetch: scene.refetch,
+    sceneRevision: primitiveModel.sceneRevision,
+    sceneStatus: scene.status,
     quantityId: primaryFieldQuantityId,
     regionOverlays,
     resourceFrameKey,

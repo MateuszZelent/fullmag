@@ -1,8 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
+  buildCreateMaterialDraft,
   buildMaterialAssignmentPatch,
   buildMaterialParametersPatch,
+  buildUniaxialAnisotropyPatch,
+  createMaterialThenAssign,
+  MaterialAssignmentAfterCreateError,
   magneticParametersDraftFromResource,
   magneticParametersDraftDirty,
   materialAssignmentDraftFromRef,
@@ -11,6 +15,127 @@ import {
 } from "./ObjectMaterialPanelModel";
 
 describe("ObjectMaterialPanelModel", () => {
+  it("validates canonical SI values for a new material and optional anisotropy", () => {
+    expect(buildCreateMaterialDraft({
+      aex: "1.3e-11",
+      alpha: "0.02",
+      anisotropyAxis: ["0", "1", "0"],
+      ku1: "4e5",
+      materialId: "mat:cofeb",
+      name: "CoFeB",
+      ms: "1.1e6",
+    })).toEqual({
+      value: {
+        anisotropy: { axis: [0, 1, 0], ku1: 4e5 },
+        materialId: "mat:cofeb",
+        name: "CoFeB",
+        properties: { Aex: 1.3e-11, Dbulk: null, Dind: null, Ms: 1.1e6, alpha: 0.02 },
+      },
+    });
+
+    expect(buildCreateMaterialDraft({
+      aex: "0",
+      alpha: "0.02",
+      anisotropyAxis: ["0", "0", "1"],
+      ku1: "",
+      materialId: "mat:bad",
+      name: "Bad",
+      ms: "1e6",
+    })).toEqual({ error: "A must be greater than 0 J/m." });
+    expect(buildUniaxialAnisotropyPatch("1e5", ["0", "0", "0"])).toEqual({
+      error: "Anisotropy axis must be non-zero.",
+    });
+  });
+
+  it("creates a material and assigns its immutable id using the authoritative first ACK revision", async () => {
+    const created = {
+      committed_scene: { materials: [{ id: "mat:cofeb", name: "CoFeB", properties: {} }], revision: 22 },
+      scene_revision: 22,
+      transaction_kind: "create_material",
+    };
+    const assigned = { objects: [{ id: "object-7", material_ref: "mat:cofeb" }], revision: 23 };
+    const api = {
+      model: {
+        createMaterial: vi.fn(async () => created),
+        patchObject: vi.fn(async () => assigned),
+      },
+    };
+    const onMaterialCreated = vi.fn();
+
+    const result = await createMaterialThenAssign(api, "object-7", {
+      aex: "1.3e-11",
+      alpha: "0.02",
+      anisotropyAxis: ["0", "0", "1"],
+      ku1: "",
+      materialId: "mat:cofeb",
+      name: "CoFeB",
+      ms: "1.1e6",
+    }, 21, onMaterialCreated);
+
+    expect(api.model.createMaterial).toHaveBeenCalledWith(
+      "mat:cofeb",
+      "CoFeB",
+      expect.objectContaining({ Aex: 1.3e-11, Ms: 1.1e6 }),
+      [],
+      { baseRevision: 21 },
+    );
+    expect(onMaterialCreated).toHaveBeenCalledWith(created);
+    expect(api.model.patchObject).toHaveBeenCalledWith("object-7", {
+      base_revision: 22,
+      material_ref: "mat:cofeb",
+    });
+    expect(result).toEqual({
+      assigned,
+      created,
+      deferredAnisotropy: null,
+      materialId: "mat:cofeb",
+    });
+  });
+
+  it("keeps the created material and exposes an explicit latest-revision assignment retry", async () => {
+    const conflict = new Error("revision conflict");
+    const created = {
+      committed_scene: { materials: [{ id: "mat:cofeb", name: "CoFeB", properties: {} }], revision: 22 },
+      scene_revision: 22,
+      transaction_kind: "create_material",
+    };
+    const api = {
+      model: {
+        createMaterial: vi.fn(async () => created),
+        patchObject: vi.fn().mockRejectedValueOnce(conflict).mockResolvedValueOnce({ revision: 25 }),
+      },
+    };
+
+    let failure: unknown;
+    try {
+      await createMaterialThenAssign(api, "object-7", {
+        aex: "1e-11",
+        alpha: "0.01",
+        anisotropyAxis: ["0", "1", "0"],
+        ku1: "4e5",
+        materialId: "mat:cofeb",
+        name: "CoFeB",
+        ms: "8e5",
+      }, 21);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(MaterialAssignmentAfterCreateError);
+    expect(failure).toMatchObject({
+      assignmentBaseRevision: 22,
+      deferredAnisotropy: { axis: [0, 1, 0], ku1: 4e5 },
+      materialId: "mat:cofeb",
+      objectId: "object-7",
+    });
+    await (failure as MaterialAssignmentAfterCreateError).retry(api, 24);
+    expect(api.model.createMaterial).toHaveBeenCalledOnce();
+    expect(api.model.patchObject).toHaveBeenLastCalledWith("object-7", {
+      base_revision: 24,
+      material_ref: "mat:cofeb",
+    });
+  });
+
   it("normalizes empty and unassigned material references as cleared assignments", () => {
     expect(normalizeMaterialRef("")).toBeNull();
     expect(normalizeMaterialRef("   ")).toBeNull();
@@ -52,6 +177,7 @@ describe("ObjectMaterialPanelModel", () => {
         Ms: 800000,
         alpha: 0.02,
       },
+      scene_revision: 12,
     };
 
     const draft = magneticParametersDraftFromResource("mat-1", resource);

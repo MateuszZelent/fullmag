@@ -14,6 +14,7 @@ import type { Selection } from "@/kernel/selection/selectionTypes";
 import {
   MODEL_FROZEN_SPIN_PATH,
   MODEL_FROZEN_SPINS_PATH,
+  MODEL_SCENE_PATH,
   VISUALIZATION_STATE_PATH,
 } from "@/kernel/api/apiPaths";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
@@ -71,6 +72,7 @@ export const RIBBON_PHYSICS_CREATE_FROZEN_SPINS_COMMAND =
   "ribbon.physics.create-frozen-spins";
 export const RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND =
   "ribbon.cross-section.begin-draft";
+export const RIBBON_GEOMETRY_MOVE_SELECTED_COMMAND = "geometry.move-selected";
 
 interface PatchDefaultsInput {
   patch: VisualizationTargetPatch;
@@ -130,6 +132,32 @@ export function visualizationAirboxCommandInput(
 }
 
 export const RIBBON_COMMANDS: CommandContribution[] = [
+  {
+    id: RIBBON_GEOMETRY_MOVE_SELECTED_COMMAND,
+    title: "Move selected object",
+    group: "ribbon-geometry",
+    category: "Geometry",
+    scope: "selection",
+    isEnabled: (context) => moveSelectedDisabledReason(context) === null,
+    disabledReason: moveSelectedDisabledReason,
+    isActive: (context) => {
+      const objectId = selectedSceneObjectId(context);
+      return Boolean(
+        objectId && context.objectMoveTool?.getSnapshot()?.objectId === objectId,
+      );
+    },
+    run: (context) => {
+      const reason = moveSelectedDisabledReason(context);
+      const objectId = selectedSceneObjectId(context);
+      if (reason || !objectId || !context.objectMoveTool) {
+        return { message: reason ?? "Move tool state is unavailable.", status: "failed" };
+      }
+      context.objectMoveTool.activate(objectId);
+      context.layout?.setActiveViewportMainModule("viewport-3d");
+      context.layout?.setFocusedSlot("viewport-main");
+      return { status: "completed" };
+    },
+  },
   {
     id: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
     title: "Patch Visualization State",
@@ -280,6 +308,35 @@ export const RIBBON_COMMANDS: CommandContribution[] = [
     run: selectPhysicsInteractionFromCommand,
   },
 ];
+
+function selectedSceneObjectId(context: CommandContext): string | null {
+  const selection = context.selection?.get();
+  if (selection?.ref?.type !== "scene-object") return null;
+  return selection.ref.objectId ?? selection.objectId ?? null;
+}
+
+function moveSelectedDisabledReason(context: CommandContext): string | null {
+  if (!context.api) return "The current session API is unavailable.";
+  if (!context.objectMoveTool) return "Move tool state is unavailable.";
+  const objectId = selectedSceneObjectId(context);
+  if (!objectId) return "Select a canonical magnetic scene object to move.";
+  const scene = context.resourceData?.[MODEL_SCENE_PATH];
+  if (!scene || typeof scene !== "object" || Array.isArray(scene)) {
+    return "The revisioned model scene is not ready.";
+  }
+  const record = scene as Record<string, unknown>;
+  if (typeof record.revision !== "number") {
+    return "The revisioned model scene is not ready.";
+  }
+  const objects = Array.isArray(record.objects) ? record.objects : [];
+  const object = objects.find((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return false;
+    return (candidate as Record<string, unknown>).id === objectId;
+  }) as Record<string, unknown> | undefined;
+  return object?.role === "magnet"
+    ? null
+    : "Select a canonical magnetic scene object to move.";
+}
 
 function frozenSpinsSelection(context: CommandContext): {
   objectId: string;

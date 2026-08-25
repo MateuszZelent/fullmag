@@ -1,0 +1,1876 @@
+# Review package: 15ded3196..48f9915bc
+
+## Commits
+48f9915bc fix(authoring): enforce canonical model readiness
+
+## Files changed
+ .../geometryLifecycleCommandContributions.ts       |  4 +
+ .../kernel/authoring/regionCommandContributions.ts |  2 +
+ .../src/kernel/layout/NewProblemDialog.tsx         |  2 +
+ .../realtime/RealtimeInvalidationBridge.test.ts    |  5 ++
+ .../kernel/realtime/RealtimeInvalidationBridge.ts  | 35 ++++++++
+ .../studyRuntimeResources.provider.test.tsx        | 88 +++++++++++++++++++++
+ .../kernel/resources/studyRuntimeResources.test.ts | 34 ++++++++
+ .../src/kernel/resources/studyRuntimeResources.ts  | 41 ++++++++++
+ .../studyRuntimeCommandContributions.test.ts       | 68 +++++++++++++++-
+ .../runtime/studyRuntimeCommandContributions.ts    | 28 ++++---
+ .../inspector/panels/AntennaObjectPanel.tsx        |  3 +-
+ .../inspector/panels/GeometryObjectPanel.tsx       |  2 +
+ .../inspector/panels/ObjectGeneralPanel.tsx        |  2 +
+ .../inspector/panels/PhysicsInteractionPanel.tsx   |  7 +-
+ .../inspector/panels/StudyInspectorPanel.tsx       |  3 +
+ .../src/router_v2/handlers/model/readiness.rs      | 25 +++---
+ .../src/router_v2/handlers/simulation/commands.rs  | 27 ++-----
+ crates/fullmag-api/src/router_v2/tests.rs          | 92 ++++++++++++++++++++++
+ crates/fullmag-authoring/src/lib.rs                |  2 +
+ .../fullmag-authoring/src/material_requirements.rs | 83 +++++++++++++++++++
+ 20 files changed, 503 insertions(+), 50 deletions(-)
+
+## Diff
+diff --git a/apps/control-room/src/kernel/authoring/geometryLifecycleCommandContributions.ts b/apps/control-room/src/kernel/authoring/geometryLifecycleCommandContributions.ts
+index 855b38c4a..5e2bba011 100644
+--- a/apps/control-room/src/kernel/authoring/geometryLifecycleCommandContributions.ts
++++ b/apps/control-room/src/kernel/authoring/geometryLifecycleCommandContributions.ts
+@@ -10,20 +10,21 @@ import {
+   MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
+   MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH,
+   MESHING_SHARED_DOMAIN_QUALITY_PATH,
+   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
+   MESHING_SHARED_DOMAIN_REPORT_PATH,
+   MESHING_SEMANTICS_PATH,
+   MESHING_SUMMARY_PATH,
+   MODEL_GEOMETRY_CAPABILITIES_PATH,
+   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
+   MODEL_GEOMETRY_VALIDATION_PATH,
++  MODEL_READINESS_PATH,
+   MODEL_SCENE_PATH,
+ } from "../api/apiPaths";
+ import type { JsonObject, JsonValue, MeshCapabilitiesResource } from "../api/apiTypes";
+ import type { CommandDetailResource } from "../api/apiTypes";
+ import type { CommandContext, CommandContribution } from "../commands/commandTypes";
+ import type { Selection } from "../selection/selectionTypes";
+ import {
+   meshEditorCapabilityBlocks,
+   resolveMeshEditorCapabilities,
+ } from "@/shared/domain/mesh/meshEditorCapabilityModel";
+@@ -318,39 +319,41 @@ function selectedObjectTarget(
+     kind: "object",
+     label: selection?.label,
+   };
+ }
+ 
+ function invalidateSceneAuthoringResources(
+   context: CommandContext,
+   sceneRevision: number,
+ ): void {
+   context.resources?.invalidate(MODEL_SCENE_PATH, sceneRevision);
++  context.resources?.invalidate(MODEL_READINESS_PATH, sceneRevision);
+   context.resources?.invalidate(MODEL_GEOMETRY_VALIDATION_PATH, sceneRevision);
+   context.resources?.invalidate(MODEL_GEOMETRY_DIAGNOSTICS_PATH, sceneRevision);
+   context.resources?.invalidate(MESHING_BUILDS_CURRENT_PATH, sceneRevision);
+   context.resources?.invalidate(
+     MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+     sceneRevision,
+   );
+ }
+ 
+ function objectResourceKey(path: string, objectId: string): string {
+   return path.replace("{object_id}", encodeURIComponent(objectId));
+ }
+ 
+ function invalidateObjectMeshResources(
+   context: CommandContext,
+   objectId: string,
+   revision: string | number,
+ ): void {
+   context.resources?.invalidate(MESHING_BUILDS_CURRENT_PATH, revision);
++  context.resources?.invalidate(MODEL_READINESS_PATH, revision);
+   context.resources?.invalidate(MESHING_SUMMARY_PATH, revision);
+   context.resources?.invalidate(MESHING_SEMANTICS_PATH, revision);
+   context.resources?.invalidate(MESHING_BUILDS_LATEST_SUCCESSFUL_PATH, revision);
+   context.resources?.invalidate(MESHING_SHARED_DOMAIN_MANIFEST_PATH, revision);
+   context.resources?.invalidate(
+     objectResourceKey(MESHING_OBJECT_TOPOLOGY_PATH, objectId),
+     revision,
+   );
+   context.resources?.invalidate(
+     objectResourceKey(MESHING_OBJECT_REPORT_PATH, objectId),
+@@ -360,20 +363,21 @@ function invalidateObjectMeshResources(
+     objectResourceKey(MESHING_OBJECT_QUALITY_PATH, objectId),
+     revision,
+   );
+ }
+ 
+ function invalidateSharedDomainMeshResources(
+   context: CommandContext,
+   revision: string | number,
+ ): void {
+   context.resources?.invalidate(MESHING_BUILDS_PATH, revision);
++  context.resources?.invalidate(MODEL_READINESS_PATH, revision);
+   context.resources?.invalidate(MESHING_SUMMARY_PATH, revision);
+   context.resources?.invalidate(MESHING_SEMANTICS_PATH, revision);
+   context.resources?.invalidate(MESHING_BUILDS_CURRENT_PATH, revision);
+   context.resources?.invalidate(MESHING_BUILDS_LATEST_SUCCESSFUL_PATH, revision);
+   context.resources?.invalidate(MESHING_SHARED_DOMAIN_MANIFEST_PATH, revision);
+   context.resources?.invalidate(MESHING_SHARED_DOMAIN_REPORT_PATH, revision);
+   context.resources?.invalidate(MESHING_SHARED_DOMAIN_QUALITY_PATH, revision);
+   context.resources?.invalidate(MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH, revision);
+   context.resources?.invalidate(MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH, revision);
+   context.resources?.invalidate(
+diff --git a/apps/control-room/src/kernel/authoring/regionCommandContributions.ts b/apps/control-room/src/kernel/authoring/regionCommandContributions.ts
+index ca896e066..653be1e2e 100644
+--- a/apps/control-room/src/kernel/authoring/regionCommandContributions.ts
++++ b/apps/control-room/src/kernel/authoring/regionCommandContributions.ts
+@@ -1,13 +1,14 @@
+ import {
+   MODEL_COUPLINGS_PATH,
+   MODEL_REGIONS_PATH,
++  MODEL_READINESS_PATH,
+   MODEL_SCENE_PATH,
+ } from "../api/apiPaths";
+ import type { RegionListResource } from "../api/apiTypes";
+ import type { CommandContext, CommandContribution } from "../commands/commandTypes";
+ 
+ function selectedRegion(
+   context: Pick<CommandContext, "selection">,
+ ): { objectId: string; regionId: string } | null {
+   const selection = context.selection?.get();
+   if (selection?.ref?.type !== "scene-object") return null;
+@@ -37,20 +38,21 @@ function regionOrderDisabledReason(context: CommandContext): string | null {
+ }
+ 
+ function couplingDisabledReason(context: CommandContext): string | null {
+   if (!selectedCouplingId(context)) return "Select an authored coupling.";
+   return context.api ? null : "Control Room API is not available.";
+ }
+ 
+ function invalidateAuthoringModel(context: CommandContext): void {
+   const revision = `${Date.now()}`;
+   context.resources?.invalidate(MODEL_SCENE_PATH, revision);
++  context.resources?.invalidate(MODEL_READINESS_PATH, revision);
+   context.resources?.invalidate(MODEL_REGIONS_PATH, revision);
+   context.resources?.invalidate(MODEL_COUPLINGS_PATH, revision);
+ }
+ 
+ function focusSelection(context: CommandContext): void {
+   context.layout?.setActiveTab("view");
+   context.layout?.setFocusedSlot("viewport-main");
+ }
+ 
+ function ownerRegionOrder(context: CommandContext): string[] | null {
+diff --git a/apps/control-room/src/kernel/layout/NewProblemDialog.tsx b/apps/control-room/src/kernel/layout/NewProblemDialog.tsx
+index bd8b54389..746bc903d 100644
+--- a/apps/control-room/src/kernel/layout/NewProblemDialog.tsx
++++ b/apps/control-room/src/kernel/layout/NewProblemDialog.tsx
+@@ -1,16 +1,17 @@
+ "use client";
+ 
+ import { useState, type ReactNode } from "react";
+ 
+ import {
+   MODEL_SCENE_PATH,
++  MODEL_READINESS_PATH,
+   SESSIONS_PATH,
+   SESSION_CURRENT_PATH,
+ } from "../api/apiPaths";
+ import { useKernel } from "../KernelContext";
+ import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
+ import { Button } from "@/shared/ui/Button";
+ import { Checkbox } from "@/shared/ui/Checkbox";
+ import {
+   Dialog,
+   DialogClose,
+@@ -50,20 +51,21 @@ export function NewProblemDialog({
+         device: "cpu",
+         name,
+         precision: "double",
+         replace_current: hasActiveSession,
+       });
+       const revision = response.revisions.state_version;
+       kernel.resources.invalidate(SESSIONS_PATH, revision);
+       kernel.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
+       kernel.resources.invalidatePrefix(SESSION_CURRENT_PATH, revision);
+       kernel.resources.invalidate(MODEL_SCENE_PATH, revision);
++      kernel.resources.invalidate(MODEL_READINESS_PATH, revision);
+       onOpenChange(false);
+     } catch (cause) {
+       setError(cause instanceof Error ? cause.message : "Unable to create the simulation.");
+     } finally {
+       setPending(false);
+     }
+   };
+ 
+   return (
+     <Dialog open={open} onOpenChange={onOpenChange}>
+diff --git a/apps/control-room/src/kernel/realtime/RealtimeInvalidationBridge.test.ts b/apps/control-room/src/kernel/realtime/RealtimeInvalidationBridge.test.ts
+index 5c5c1f70c..161f34fdf 100644
+--- a/apps/control-room/src/kernel/realtime/RealtimeInvalidationBridge.test.ts
++++ b/apps/control-room/src/kernel/realtime/RealtimeInvalidationBridge.test.ts
+@@ -38,20 +38,21 @@ import {
+   MESHING_OBJECT_QUALITY_PATH,
+   MESHING_OBJECT_REPORT_PATH,
+   MESHING_OBJECT_SIZE_FIELD_PATH,
+   MESHING_OBJECT_TOPOLOGY_PATH,
+   MESHING_PERIODIC_PAIRS_PATH,
+   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+   MESHING_SHARED_DOMAIN_QUALITY_PATH,
+   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
+   MESHING_SUMMARY_PATH,
+   MODEL_MATERIAL_FIELDS_PATH,
++  MODEL_READINESS_PATH,
+   MODEL_REALIZED_REGIONS_PATH,
+   MODEL_REGION_DIAGNOSTICS_PATH,
+   MODEL_REGIONS_PATH,
+   MODEL_SCENE_PATH,
+   SIMULATION_COMMANDS_PATH,
+   SIMULATION_OBJECT_METRICS_PATH,
+   SIMULATION_PREPARATION_PATH,
+   SIMULATION_RUN_CURRENT_PATH,
+   SIMULATION_SOLVER_STATUS_PATH,
+   SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
+@@ -253,20 +254,23 @@ describe("RealtimeInvalidationBridge", () => {
+     );
+     expect(resources.getRevision(MODEL_REALIZED_REGIONS_PATH)).toBe(
+       dependentRevision(MODEL_SCENE_PATH, 12),
+     );
+     expect(resources.getRevision(MODEL_REGION_DIAGNOSTICS_PATH)).toBe(
+       dependentRevision(MODEL_SCENE_PATH, 12),
+     );
+     expect(resources.getRevision(MODEL_MATERIAL_FIELDS_PATH)).toBe(
+       dependentRevision(MODEL_SCENE_PATH, 12),
+     );
++    expect(resources.getRevision(MODEL_READINESS_PATH)).toBe(
++      dependentRevision(MODEL_SCENE_PATH, 12),
++    );
+     expect(resources.getRevision("session:status")).toBe(
+       dependentRevision(MODEL_SCENE_PATH, 12),
+     );
+     expect(resources.getRevision(MESHING_BUILDS_CURRENT_PATH)).toBeNull();
+     expect(
+       resources.getRevision(MESHING_BUILDS_LATEST_SUCCESSFUL_PATH),
+     ).toBeNull();
+     expect(resources.getRevision(DATA_DOMAIN_TOPOLOGY_PATH)).toBeNull();
+   });
+ 
+@@ -1307,20 +1311,21 @@ describe("RealtimeInvalidationBridge", () => {
+         ],
+       },
+       type: "resource.batch_changed",
+     });
+ 
+     expect(handled).toBe(true);
+     expect(resources.getRevision(MESHING_BUILDS_LATEST_SUCCESSFUL_PATH)).toBe(
+       "mesh-build-9",
+     );
+     expect(resources.getRevision(MODEL_SCENE_PATH)).toBe("mesh-build-9");
++    expect(resources.getRevision(MODEL_READINESS_PATH)).toBe("mesh-build-9");
+     expect(resources.getRevision(MESHING_BUILDS_CURRENT_PATH)).toBe(
+       "mesh-build-9",
+     );
+     expect(resources.getRevision(MESHING_SUMMARY_PATH)).toBe("mesh-build-9");
+     expect(resources.getRevision(MESHING_SEMANTICS_PATH)).toBe("mesh-build-9");
+     expect(resources.getRevision(MESHING_SHARED_DOMAIN_MANIFEST_PATH)).toBe(
+       "mesh-build-9",
+     );
+     expect(resources.getRevision(MESHING_PERIODIC_PAIRS_PATH)).toBe(
+       "mesh-build-9",
+diff --git a/apps/control-room/src/kernel/realtime/RealtimeInvalidationBridge.ts b/apps/control-room/src/kernel/realtime/RealtimeInvalidationBridge.ts
+index ef774f0b2..872808b56 100644
+--- a/apps/control-room/src/kernel/realtime/RealtimeInvalidationBridge.ts
++++ b/apps/control-room/src/kernel/realtime/RealtimeInvalidationBridge.ts
+@@ -32,24 +32,30 @@ import {
+   MESHING_OBJECT_REPORT_PATH,
+   MESHING_OBJECT_SIZE_FIELD_PATH,
+   MESHING_OBJECT_TOPOLOGY_PATH,
+   MESHING_PERIODIC_PAIRS_PATH,
+   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+   MESHING_SHARED_DOMAIN_QUALITY_PATH,
+   MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
+   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
+   MESHING_SUMMARY_PATH,
+   MODEL_MATERIAL_FIELDS_PATH,
++  MODEL_MAGNETIZATION_ASSET_PATH,
++  MODEL_MATERIAL_PATH,
++  MODEL_OBJECT_GEOMETRY_PATH,
++  MODEL_OBJECT_INTERACTION_PATH,
++  MODEL_READINESS_PATH,
+   MODEL_REALIZED_REGIONS_PATH,
+   MODEL_REGION_DIAGNOSTICS_PATH,
+   MODEL_REGIONS_PATH,
+   MODEL_SCENE_PATH,
++  MODEL_STUDY_PATH,
+   SESSION_CURRENT_PATH,
+   SIMULATION_COMMANDS_PATH,
+   SIMULATION_OBJECT_METRICS_PATH,
+   SIMULATION_SOLVER_STATUS_PATH,
+   SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
+   SIMULATION_STAGE_HYSTERESIS_ORIENTATION_PATH,
+   SIMULATION_STAGE_HYSTERESIS_PLAN_PATH,
+   SIMULATION_STAGE_HYSTERESIS_PROGRESS_PATH,
+   SIMULATION_STAGE_HYSTERESIS_PROTOCOL_PATH,
+   SIMULATION_STAGE_HYSTERESIS_SATURATION_PATH,
+@@ -326,20 +332,35 @@ function escapeResourcePathTemplate(pathTemplate: string): string {
+     )
+     .join("");
+ }
+ 
+ const SESSION_STATUS_RECOMMENDED_FETCHES = new Set<string>([
+   MODEL_SCENE_PATH,
+   SIMULATION_SOLVER_STATUS_PATH,
+   SIMULATION_STAGES_EXECUTION_PATH,
+ ]);
+ 
++const MODEL_READINESS_DEPENDENCY_PATHS = [
++  MODEL_STUDY_PATH,
++  MODEL_MATERIAL_PATH,
++  MODEL_MAGNETIZATION_ASSET_PATH,
++  MODEL_OBJECT_GEOMETRY_PATH,
++  MODEL_OBJECT_INTERACTION_PATH,
++  MESHING_BUILDS_CURRENT_PATH,
++] as const;
++
++function isModelReadinessDependency(resourceKey: string): boolean {
++  return MODEL_READINESS_DEPENDENCY_PATHS.some((pathTemplate) =>
++    stageScopedRegex(pathTemplate).test(resourceKey),
++  );
++}
++
+ function shouldInvalidateSessionStatus(recommendedFetch?: string): boolean {
+   return (
+     recommendedFetch !== undefined &&
+     SESSION_STATUS_RECOMMENDED_FETCHES.has(recommendedFetch)
+   );
+ }
+ 
+ function latestRevision(
+   current: ResourceRevision | null,
+   next: ResourceRevision,
+@@ -714,20 +735,21 @@ export class RealtimeInvalidationBridge {
+     this.pendingFetches = new Map<string, ResourceRevision>();
+     this.pendingPrefixes = new Map();
+     this.pendingMatchers = [];
+     this.pendingStatusRevision = null;
+ 
+     for (const [resourceKey, revision] of pendingFetches) {
+       this.invalidateResource(resourceKey, revision);
+       this.resources.invalidatePrefix(resourceKey, revision);
+       this.invalidateSceneDocumentDependents(resourceKey, revision);
+       this.invalidateMeshBuildCompletionDependents(resourceKey, revision);
++      this.invalidateModelReadinessDependent(resourceKey, revision);
+       this.invalidateFdmMembershipDependents(resourceKey, revision);
+       this.invalidateHysteresisAnalysisDependents(resourceKey, revision);
+       const dependentStatusRevision =
+         this.invalidateRuntimeLifecycleDependents(resourceKey, revision);
+       if (dependentStatusRevision !== null && statusRevision === null) {
+         statusRevision = latestRevision(statusRevision, dependentStatusRevision);
+       }
+     }
+     for (const [resourceKey, pending] of pendingPrefixes) {
+       const invalidated = this.resources.invalidatePrefix(
+@@ -775,20 +797,21 @@ export class RealtimeInvalidationBridge {
+     this.resources.invalidate(resourceKey, revision);
+   }
+ 
+   private invalidateMeshBuildCompletionDependents(
+     recommendedFetch: string,
+     revision: ResourceRevision,
+   ): void {
+     if (recommendedFetch !== MESHING_BUILDS_LATEST_SUCCESSFUL_PATH) return;
+ 
+     this.resources.invalidate(MODEL_SCENE_PATH, revision);
++    this.resources.invalidate(MODEL_READINESS_PATH, revision);
+     this.resources.invalidate(MESHING_BUILDS_CURRENT_PATH, revision);
+     this.resources.invalidate(MESHING_SUMMARY_PATH, revision);
+     this.resources.invalidate(MESHING_SEMANTICS_PATH, revision);
+     this.resources.invalidate(MESHING_SHARED_DOMAIN_MANIFEST_PATH, revision);
+     this.resources.invalidate(MESHING_PERIODIC_PAIRS_PATH, revision);
+     this.resources.invalidate(VISUALIZATION_STATE_PATH, revision);
+     this.resources.invalidate(DATA_DOMAIN_META_PATH, revision);
+     this.resources.invalidate(DATA_DOMAIN_TOPOLOGY_PATH, revision);
+     this.resources.invalidate(DATA_FDM_REGION_MEMBERSHIPS_PATH, revision);
+     this.resources.invalidate(
+@@ -847,20 +870,21 @@ export class RealtimeInvalidationBridge {
+     recommendedFetch: string,
+     revision: ResourceRevision,
+   ): void {
+     if (recommendedFetch !== MODEL_SCENE_PATH) return;
+     const dependentRevision = dependentResourceRevision(MODEL_SCENE_PATH, revision);
+     this.resources.invalidate(PHYSICS_GRAPH_RESOURCE_KEY, dependentRevision);
+     this.resources.invalidate(MODEL_REGIONS_PATH, dependentRevision);
+     this.resources.invalidate(MODEL_REALIZED_REGIONS_PATH, dependentRevision);
+     this.resources.invalidate(MODEL_REGION_DIAGNOSTICS_PATH, dependentRevision);
+     this.resources.invalidate(MODEL_MATERIAL_FIELDS_PATH, dependentRevision);
++    this.resources.invalidate(MODEL_READINESS_PATH, dependentRevision);
+     this.resources.invalidateMatching(
+       (resourceKey) =>
+         matchesStageScopedResource(
+           resourceKey,
+           SIMULATION_STAGE_HYSTERESIS_PLAN_PATH,
+         ) ||
+         matchesStageScopedResource(
+           resourceKey,
+           SIMULATION_STAGE_HYSTERESIS_PROTOCOL_PATH,
+         ) ||
+@@ -877,20 +901,31 @@ export class RealtimeInvalidationBridge {
+           SIMULATION_STAGE_HYSTERESIS_SETTLE_PIPELINE_PATH,
+         ) ||
+         matchesStageScopedResource(
+           resourceKey,
+           SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
+         ),
+       dependentRevision,
+     );
+   }
+ 
++  private invalidateModelReadinessDependent(
++    recommendedFetch: string,
++    revision: ResourceRevision,
++  ): void {
++    if (!isModelReadinessDependency(recommendedFetch)) return;
++    this.resources.invalidate(
++      MODEL_READINESS_PATH,
++      dependentResourceRevision(recommendedFetch, revision),
++    );
++  }
++
+   private invalidateRuntimeLifecycleDependents(
+     recommendedFetch: string,
+     revision: ResourceRevision,
+   ): ResourceRevision | null {
+     const dependentRevision = dependentResourceRevision(
+       recommendedFetch,
+       revision,
+     );
+     if (recommendedFetch === SIMULATION_COMMANDS_PATH) {
+       this.resources.invalidate(SIMULATION_SOLVER_STATUS_PATH, dependentRevision);
+diff --git a/apps/control-room/src/kernel/resources/studyRuntimeResources.provider.test.tsx b/apps/control-room/src/kernel/resources/studyRuntimeResources.provider.test.tsx
+new file mode 100644
+index 000000000..e2945dc7c
+--- /dev/null
++++ b/apps/control-room/src/kernel/resources/studyRuntimeResources.provider.test.tsx
+@@ -0,0 +1,88 @@
++import { act } from "react";
++import { createRoot } from "react-dom/client";
++import { afterEach, describe, expect, it, vi } from "vitest";
++
++import { MODEL_READINESS_PATH } from "@/kernel/api/apiPaths";
++import { KernelContext } from "@/kernel/KernelContext";
++import { EventBus } from "@/kernel/events/EventBus";
++import type { KernelEventMap } from "@/kernel/events/eventTypes";
++import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
++import { DiagnosticRecorderController } from "@/kernel/performance/diagnostic-recorder/DiagnosticRecorderController";
++import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
++import { resetSharedResourceRuntimeStoreForTests } from "@/kernel/resources/ResourceRuntimeStore";
++import type { KernelApi } from "@/kernel/types";
++
++import { useRuntimeCommandControlResourceData } from "./studyRuntimeResources";
++
++describe("production runtime command resource provider", () => {
++  afterEach(() => {
++    resetSharedResourceRuntimeStoreForTests();
++  });
++
++  it("publishes server-owned model readiness without manual command resource injection", async () => {
++    const readiness = {
++      blockers: [],
++      capabilities: {
++        move: { available: true, reason: null },
++        rotate: { available: false, reason: "unsupported" },
++        scale: { available: false, reason: "unsupported" },
++      },
++      checks: [],
++      ready_to_export: true,
++      ready_to_run: true,
++      scene_revision: 7,
++    };
++    const readinessLoad = vi.fn(async () => readiness);
++    const bus = new EventBus<KernelEventMap>();
++    const resources = new ResourceInvalidationController(bus);
++    const kernel = {
++      api: {
++        model: {
++          geometry: {
++            validation: async () => ({ diagnostics: [], revision: 7 }),
++          },
++          readiness: readinessLoad,
++        },
++        sessions: { current: { status: async () => null } },
++        simulation: { solver: { status: async () => null } },
++      },
++      bus,
++      diagnosticRecorder: new DiagnosticRecorderController({
++        config: { enabled: false },
++      }),
++      resources,
++    } as unknown as KernelApi;
++    const dom = installSimulationPreparationTestDom();
++    const container = dom.document.createElement("div");
++    dom.document.body.appendChild(container);
++    const root = createRoot(container as unknown as Element);
++
++    function Harness() {
++      const resourceData = useRuntimeCommandControlResourceData({
++        includeSharedDomainReadiness: false,
++        includeStageExecution: false,
++      });
++      const value = resourceData[MODEL_READINESS_PATH] as
++        | typeof readiness
++        | null;
++      return <div>{value?.scene_revision ?? "unavailable"}</div>;
++    }
++
++    try {
++      await act(async () => {
++        root.render(
++          <KernelContext.Provider value={kernel}>
++            <Harness />
++          </KernelContext.Provider>,
++        );
++      });
++      await act(async () => {});
++
++      expect(readinessLoad).toHaveBeenCalledTimes(1);
++      expect(container.textContent).toBe("7");
++    } finally {
++      await act(async () => root.unmount());
++      dom.restore();
++    }
++  });
++});
+diff --git a/apps/control-room/src/kernel/resources/studyRuntimeResources.test.ts b/apps/control-room/src/kernel/resources/studyRuntimeResources.test.ts
+index 052d62585..7b4b9b9ac 100644
+--- a/apps/control-room/src/kernel/resources/studyRuntimeResources.test.ts
++++ b/apps/control-room/src/kernel/resources/studyRuntimeResources.test.ts
+@@ -23,32 +23,34 @@ import {
+   ANALYSIS_HYSTERESIS_STAGE_SETTLE_TRACE_PATH,
+   ANALYSIS_HYSTERESIS_FAMILY_PATH,
+   DATA_FIELD_META_PATH,
+   DATA_TABLE_COLUMNS_PATH,
+   DATA_TABLE_PATH,
+   DIAGNOSTICS_SOLVER_PROFILE_PATH,
+   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+   MESHING_PERIODIC_PAIRS_PATH,
+   MESHING_SUMMARY_PATH,
+   MODEL_SCENE_PATH,
++  MODEL_READINESS_PATH,
+   PERSISTENCE_CHECKPOINTS_PATH,
+   SIMULATION_RUN_CURRENT_PATH,
+   SIMULATION_RUN_PATH,
+   SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
+   DATA_TABLE_ROWS_PATH,
+   DATA_TABLES_PATH,
+ } from "../api/apiPaths";
+ import type { LiveStatusResource } from "../api/apiTypes";
+ import { activeLaneCapabilityFixture } from "./activeLaneCapabilityFixture.testSupport";
+ 
+ import {
+   STUDY_RUNTIME_CONTROL_RESOURCE_KEYS,
++  readyCommandResourceData,
+   frequencyDomainManifestRevision,
+   frequencyDomainSweepProgressRevision,
+   frequencyDomainTextArtifactRevision,
+   fieldMetaFreshnessRevision,
+   resolveHysteresisExecutionTreeResourceKey,
+   resolveFieldMetaResourceKey,
+   runtimeCommandControlSessionStatusEquals,
+   selectStudyRuntimeCommandSessionStatus,
+   shouldLoadRuntimeCommandQueue,
+   shouldLoadRuntimeCurrentRun,
+@@ -229,20 +231,52 @@ function statusWith({
+       name: "Test session",
+       session_epoch:
+         sessionEpoch ?? `${sessionId}@2026-05-29T00:00:00.000Z`,
+       session_id: sessionId,
+       workspace_root: "/tmp/fullmag-test",
+     },
+   };
+ }
+ 
+ describe("study runtime command resource bundles", () => {
++  it("loads model readiness into both production command resource bundles", () => {
++    const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
++    const fullBundle = source.slice(
++      source.indexOf("export function useStudyRuntimeCommandResourceData"),
++      source.indexOf("export function useRuntimeCommandControlResourceData"),
++    );
++    const controlBundle = source.slice(
++      source.indexOf("export function useRuntimeCommandControlResourceData"),
++      source.indexOf("export function useObjectMetricsResource"),
++    );
++
++    expect(fullBundle).toContain("useModelReadinessResource");
++    expect(fullBundle).toContain("[MODEL_READINESS_PATH]");
++    expect(controlBundle).toContain("useModelReadinessResource");
++    expect(controlBundle).toContain("[MODEL_READINESS_PATH]");
++    expect(STUDY_RUNTIME_CONTROL_RESOURCE_KEYS).toContain(MODEL_READINESS_PATH);
++  });
++
++  it("withholds a retained readiness snapshot while its production resource is stale", () => {
++    const retained = {
++      blockers: [],
++      checks: [],
++      ready_to_export: true,
++      ready_to_run: true,
++      scene_revision: 3,
++    };
++
++    expect(readyCommandResourceData(retained, "ready")).toBe(retained);
++    expect(readyCommandResourceData(retained, "stale")).toBeNull();
++    expect(readyCommandResourceData(retained, "loading")).toBeNull();
++    expect(readyCommandResourceData(retained, "error")).toBeNull();
++  });
+   it("measures the sampled solver trace at load and commit without polling", () => {
+     const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
+     const profileHook = source.slice(
+       source.indexOf("export function useSolverProfileResource"),
+       source.indexOf("export function useStudyRuntimeCommandResourceData"),
+     );
+ 
+     expect(profileHook).toContain("solverTraceObserver.observeProfileLoad");
+     expect(profileHook).toContain("solverTraceObserver.observeProfileCommit");
+     expect(profileHook).toContain("solverTraceObserver.mergeProfile");
+diff --git a/apps/control-room/src/kernel/resources/studyRuntimeResources.ts b/apps/control-room/src/kernel/resources/studyRuntimeResources.ts
+index 052c27856..918779620 100644
+--- a/apps/control-room/src/kernel/resources/studyRuntimeResources.ts
++++ b/apps/control-room/src/kernel/resources/studyRuntimeResources.ts
+@@ -42,20 +42,21 @@ import {
+   DIAGNOSTICS_CPU_PATH,
+   DIAGNOSTICS_ENGINE_LOG_PATH,
+   DIAGNOSTICS_GPU_PATH,
+   DIAGNOSTICS_SOLVER_PROFILE_PATH,
+   MESHING_PERIODIC_PAIRS_PATH,
+   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+   MESHING_BUILDS_CURRENT_PATH,
+   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+   MESHING_SUMMARY_PATH,
+   MODEL_GEOMETRY_VALIDATION_PATH,
++  MODEL_READINESS_PATH,
+   MODEL_SCENE_PATH,
+   PERSISTENCE_CHECKPOINT_PATH,
+   PERSISTENCE_CHECKPOINTS_PATH,
+   SIMULATION_COMMAND_DETAIL_PATH,
+   SIMULATION_COMMANDS_PATH,
+   SIMULATION_OBJECT_METRICS_PATH,
+   SIMULATION_RUN_CURRENT_PATH,
+   SIMULATION_RUN_PATH,
+   SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
+   SIMULATION_STAGE_HYSTERESIS_ORIENTATION_PATH,
+@@ -87,20 +88,21 @@ import type {
+   GpuTelemetryResource,
+   LiveStatusResource,
+   FrequencyDomainFieldResource,
+   FrequencyDomainJsonArtifactResource,
+   FrequencyDomainManifestResource,
+   FrequencyDomainSweepProgressResource,
+   FrequencyDomainTextArtifactResource,
+   JsonValue,
+   MagneticResponseSweepResource,
+   MeshPeriodicPairsResource,
++  ModelReadinessResource,
+   ObjectMetricsResource,
+   SolverEnergyCurrentResource,
+   SolverEnergyHistoryResource,
+   SolverProfileResource,
+   SolverStatusResource,
+   StageExecutionResource,
+   ScalarWindowQuery,
+   ScalarWindowResource,
+   TableColumnMeta,
+   TableListResource,
+@@ -193,20 +195,21 @@ interface RuntimeResourceOptions {
+ 
+ interface RuntimeCommandControlResourceOptions extends RuntimeResourceOptions {
+   includeSharedDomainReadiness?: boolean;
+   includeStageExecution?: boolean;
+ }
+ 
+ export const STUDY_RUNTIME_CONTROL_RESOURCE_KEYS = [
+   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+   MESHING_BUILDS_CURRENT_PATH,
+   MODEL_GEOMETRY_VALIDATION_PATH,
++  MODEL_READINESS_PATH,
+   SESSION_STATUS_RESOURCE_KEY,
+   SIMULATION_COMMANDS_PATH,
+   SIMULATION_SOLVER_STATUS_PATH,
+   SIMULATION_STAGES_EXECUTION_PATH,
+ ] as const;
+ 
+ const RUNTIME_COMMAND_CONTROL_STATUS_RESOURCE_KEYS = [
+   "command_completion_revision",
+   "commands_revision",
+   "domain_generation_id",
+@@ -2278,34 +2281,59 @@ export function useSolverProfileResource({
+     solverTraceObserver.observeProfileCommit(resource.data);
+   }, [enabled, resource.data]);
+ 
+   const mergedProfile = useMemo(
+     () => solverTraceObserver.mergeProfile(resource.data),
+     [resource.data],
+   );
+   return { ...resource, data: mergedProfile };
+ }
+ 
++export function useModelReadinessResource({
++  enabled = true,
++}: RuntimeResourceOptions = {}) {
++  const { api } = useKernel();
++  const load = useCallback(
++    ({ signal }: { signal: AbortSignal }) => api.model.readiness({ signal }),
++    [api],
++  );
++
++  return useResource<ModelReadinessResource>({
++    enabled,
++    load,
++    resolveRevision: (data) => data.scene_revision,
++    resourceKey: MODEL_READINESS_PATH,
++  });
++}
++
++export function readyCommandResourceData<T>(
++  data: T | null,
++  status: string,
++): T | null {
++  return status === "ready" ? data : null;
++}
++
+ export function useStudyRuntimeCommandResourceData({
+   enabled = true,
+ }: RuntimeResourceOptions = {}): Readonly<Record<string, unknown>> {
+   const sessionStatus = useSessionStatusSelector(
+     selectStudyRuntimeCommandSessionStatus,
+     { enabled, isEqual: studyRuntimeCommandSessionStatusEquals },
+   );
+   const commandQueue = useCommandQueueResource({
+     enabled: shouldLoadRuntimeCommandQueue(enabled, sessionStatus),
+   });
+   const currentRun = useCurrentRunResource({
+     enabled: shouldLoadRuntimeCurrentRun(enabled, sessionStatus),
+   });
+   const geometryValidation = useGeometryValidationResource({ enabled });
++  const modelReadiness = useModelReadinessResource({ enabled });
+   const meshBuildCurrent = useMeshBuildCurrent({
+     enabled: shouldLoadRuntimeMeshBuild(enabled, sessionStatus),
+   });
+   const meshBuildLatest = useMeshBuildLatestSuccessful({
+     enabled: shouldLoadRuntimeMeshBuild(enabled, sessionStatus),
+   });
+   const meshManifest = useMeshSharedDomainManifestResource({
+     enabled: shouldLoadRuntimeMeshManifest(enabled, sessionStatus),
+   });
+   const meshSummary = useMeshSummaryResource({
+@@ -2320,38 +2348,44 @@ export function useStudyRuntimeCommandResourceData({
+   const checkpointCatalog = useCheckpointCatalogResource({ enabled });
+ 
+   return useMemo(
+     () => ({
+       [DIAGNOSTICS_SOLVER_PROFILE_PATH]: solverProfile.data,
+       [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: meshManifest.data,
+       [MESHING_BUILDS_CURRENT_PATH]: meshBuildCurrent.data,
+       [MESHING_BUILDS_LATEST_SUCCESSFUL_PATH]: meshBuildLatest.data,
+       [MESHING_SUMMARY_PATH]: meshSummary.data,
+       [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation.data,
++      [MODEL_READINESS_PATH]: readyCommandResourceData(
++        modelReadiness.data,
++        modelReadiness.status,
++      ),
+       [MODEL_SCENE_PATH]: scene.data,
+       [PERSISTENCE_CHECKPOINTS_PATH]: checkpointCatalog.data,
+       [SESSION_STATUS_RESOURCE_KEY]: enabled ? sessionStatus : null,
+       [SIMULATION_COMMANDS_PATH]: commandQueue.data,
+       [SIMULATION_RUN_CURRENT_PATH]: currentRun.data,
+       [SIMULATION_SOLVER_STATUS_PATH]: solverStatus.data,
+       [SIMULATION_STAGES_EXECUTION_PATH]: stageExecution.data,
+     }),
+     [
+       checkpointCatalog.data,
+       commandQueue.data,
+       currentRun.data,
+       enabled,
+       geometryValidation.data,
+       meshBuildCurrent.data,
+       meshBuildLatest.data,
+       meshManifest.data,
+       meshSummary.data,
++      modelReadiness.data,
++      modelReadiness.status,
+       scene.data,
+       sessionStatus,
+       solverProfile.data,
+       solverStatus.data,
+       stageExecution.data,
+     ],
+   );
+ }
+ 
+ export function useRuntimeCommandControlResourceData({
+@@ -2360,20 +2394,21 @@ export function useRuntimeCommandControlResourceData({
+   includeStageExecution = true,
+ }: RuntimeCommandControlResourceOptions = {}): Readonly<Record<string, unknown>> {
+   const sessionStatus = useSessionStatusSelector(selectRuntimeCommandControlSessionStatus, {
+     enabled,
+     isEqual: runtimeCommandControlSessionStatusEquals,
+   });
+   const commandQueue = useCommandQueueResource({
+     enabled: shouldLoadRuntimeCommandQueue(enabled, sessionStatus),
+   });
+   const geometryValidation = useGeometryValidationResource({ enabled });
++  const modelReadiness = useModelReadinessResource({ enabled });
+   const meshBuildCurrent = useMeshBuildCurrent({
+     enabled:
+       includeSharedDomainReadiness &&
+       shouldLoadRuntimeMeshBuild(enabled, sessionStatus),
+   });
+   const meshManifest = useMeshSharedDomainManifestResource({
+     enabled:
+       includeSharedDomainReadiness &&
+       shouldLoadRuntimeMeshManifest(enabled, sessionStatus),
+   });
+@@ -2382,31 +2417,37 @@ export function useRuntimeCommandControlResourceData({
+     enabled:
+       includeStageExecution &&
+       shouldLoadRuntimeStageExecution(enabled, sessionStatus),
+   });
+ 
+   return useMemo(
+     () => ({
+       [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: meshManifest.data,
+       [MESHING_BUILDS_CURRENT_PATH]: meshBuildCurrent.data,
+       [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation.data,
++      [MODEL_READINESS_PATH]: readyCommandResourceData(
++        modelReadiness.data,
++        modelReadiness.status,
++      ),
+       [SESSION_STATUS_RESOURCE_KEY]: enabled ? sessionStatus : null,
+       [SIMULATION_COMMANDS_PATH]: commandQueue.data,
+       [SIMULATION_SOLVER_STATUS_PATH]: solverStatus.data,
+       [SIMULATION_STAGES_EXECUTION_PATH]: stageExecution.data,
+     }),
+     [
+       commandQueue.data,
+       enabled,
+       geometryValidation.data,
+       meshBuildCurrent.data,
+       meshManifest.data,
++      modelReadiness.data,
++      modelReadiness.status,
+       sessionStatus,
+       solverStatus.data,
+       stageExecution.data,
+     ],
+   );
+ }
+ 
+ export function useObjectMetricsResource(objectId: string | null | undefined) {
+   const { api } = useKernel();
+   const resourceKey = objectId
+diff --git a/apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.test.ts b/apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.test.ts
+index 04f7d3ffb..99661f1e1 100644
+--- a/apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.test.ts
++++ b/apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.test.ts
+@@ -178,20 +178,21 @@ function runtimeResourceData({
+   discretization = "fdm",
+   eigenModes = false,
+   explicitTopology = false,
+   geometryValidation = { diagnostics: [] },
+   regionDiagnostics = { diagnostics: [], scene_revision: 0 },
+   meshBuildCurrent = null,
+   meshBuildStatus = "idle",
+   meshPipelineStatus = null,
+   meshSourceSceneRevision = null,
+   meshRevision = 0,
++  modelReadinessBlocker = null,
+   runtimeState = "idle",
+   runtimeControls = null,
+   regionCoefficientsRevision,
+   regionInitialStateRevision,
+   regionMembershipRevision,
+   regionTopologyRevision,
+   sceneRevision = 3,
+   solverProfile = null,
+   stageRevision = 7,
+ }: {
+@@ -215,20 +216,21 @@ function runtimeResourceData({
+   regionDiagnostics?: unknown;
+   meshBuildCurrent?: unknown;
+   meshBuildStatus?: string;
+   meshPipelineStatus?: Array<{
+     id: string;
+     label?: string;
+     status: string;
+   }> | null;
+   meshRevision?: number;
+   meshSourceSceneRevision?: number | null;
++  modelReadinessBlocker?: string | null;
+   runtimeState?: string;
+   runtimeControls?: Array<{
+     enabled: boolean;
+     kind: string;
+     reason?: string | null;
+   }> | null;
+   regionCoefficientsRevision?: number;
+   regionInitialStateRevision?: number;
+   regionMembershipRevision?: number;
+   regionTopologyRevision?: number;
+@@ -244,20 +246,27 @@ function runtimeResourceData({
+         ? { mesh_pipeline_status: meshPipelineStatus }
+         : { status: meshBuildStatus }),
+     [MESHING_SHARED_DOMAIN_MANIFEST_PATH]:
+       meshRevision > 0
+         ? {
+             revision: meshRevision,
+             source_scene_revision: meshSourceSceneRevision ?? sceneRevision,
+           }
+         : null,
+     [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation,
++    [MODEL_READINESS_PATH]: {
++      blockers: modelReadinessBlocker ? [modelReadinessBlocker] : [],
++      checks: [],
++      ready_to_export: modelReadinessBlocker == null,
++      ready_to_run: modelReadinessBlocker == null,
++      scene_revision: sceneRevision ?? 0,
++    },
+     [MODEL_REGION_DIAGNOSTICS_PATH]: regionDiagnostics,
+     [SESSION_STATUS_RESOURCE_KEY]: {
+       capabilities: {
+         active_lane: {
+           ...activeLaneCapabilityFixture(),
+           operations: activeLaneOperations,
+           resolved: {
+             backend: discretization,
+             device: "cpu",
+             discretization,
+@@ -2456,20 +2465,22 @@ describe("study runtime command contributions", () => {
+       api: {} as never,
+       resourceData: runtimeResourceData({
+         geometryValidation: {
+           diagnostics: [
+             {
+               message: "Geometry self-intersection",
+               severity: "error",
+             },
+           ],
+         },
++        modelReadinessBlocker:
++          "Resolve geometry validation blockers before running runtime commands.",
+       }),
+       source: "test" as const,
+     };
+ 
+     expect(registry.isEnabled("study.run", context)).toBe(false);
+     expect(registry.get("study.run")?.disabledReason?.(context)).toBe(
+       "Resolve geometry validation blockers before running runtime commands.",
+     );
+   });
+ 
+@@ -2493,33 +2504,36 @@ describe("study runtime command contributions", () => {
+       registry.get("study.compute-fields")?.disabledReason?.(context),
+     ).toBe(
+       "Resolve geometry validation blockers before running runtime commands.",
+     );
+   });
+ 
+   it("blocks runtime start commands while a mesh build is active", () => {
+     const registry = registryWithStudyRuntimeCommands();
+     const context = {
+       api: {} as never,
+-      resourceData: runtimeResourceData({ meshBuildStatus: "running" }),
++      resourceData: runtimeResourceData({
++        meshBuildStatus: "running",
++        modelReadinessBlocker: "A mesh build is still running.",
++      }),
+       source: "test" as const,
+     };
+ 
+     expect(registry.isEnabled("study.run", context)).toBe(false);
+     expect(registry.get("study.run")?.disabledReason?.(context)).toBe(
+       "A mesh build is still running.",
+     );
+ 
+     const pipelineContext = {
+       api: {} as never,
+       resourceData: {
+-        ...runtimeResourceData(),
++        ...runtimeResourceData({ modelReadinessBlocker: "A mesh build is still running." }),
+         [MESHING_BUILDS_CURRENT_PATH]: {
+           mesh_pipeline_status: [
+             { id: "generate", label: "Generate", status: "running" },
+           ],
+         },
+       },
+       source: "test" as const,
+     };
+ 
+     expect(registry.isEnabled("study.run", pipelineContext)).toBe(false);
+@@ -2539,20 +2553,22 @@ describe("study runtime command contributions", () => {
+               diagnostic_id: "region:r1:world-frame-materialization",
+               message:
+                 "World-frame authored regions require explicit materialization before execution.",
+               owner_object_id: "obj1",
+               realization_status: "authored",
+               region_id: "r1",
+               severity: "warning",
+             },
+           ],
+         },
++        modelReadinessBlocker:
++          "Region materialization support blocker: World-frame authored regions require explicit materialization before execution.",
+       }),
+       source: "test" as const,
+     };
+ 
+     expect(registry.isEnabled("study.run", context)).toBe(false);
+     expect(registry.get("study.run")?.disabledReason?.(context)).toBe(
+       "Region materialization support blocker: World-frame authored regions require explicit materialization before execution.",
+     );
+   });
+ 
+@@ -2583,29 +2599,35 @@ describe("study runtime command contributions", () => {
+ 
+     expect(registry.isEnabled("study.run", context)).toBe(true);
+     expect(registry.get("study.run")?.disabledReason?.(context)).toBeNull();
+   });
+ 
+   it("requires current shared-domain mesh provenance for FEM runtime start commands", () => {
+     const registry = registryWithStudyRuntimeCommands();
+     const api = {} as never;
+     const noMeshContext = {
+       api,
+-      resourceData: runtimeResourceData({ discretization: "fem" }),
++      resourceData: runtimeResourceData({
++        discretization: "fem",
++        modelReadinessBlocker:
++          "Build a current shared-domain mesh before running. Open Mesh Jobs or Build Shared-Domain Mesh.",
++      }),
+       source: "test" as const,
+     };
+     const staleMeshContext = {
+       api,
+       resourceData: runtimeResourceData({
+         discretization: "fem",
+         meshRevision: 5,
+         meshSourceSceneRevision: 2,
++        modelReadinessBlocker:
++          "Build a current shared-domain mesh before running. Open Mesh Jobs or Build Shared-Domain Mesh.",
+         sceneRevision: 3,
+       }),
+       source: "test" as const,
+     };
+     const currentMeshContext = {
+       api,
+       resourceData: runtimeResourceData({
+         discretization: "fem",
+         meshRevision: 5,
+         meshSourceSceneRevision: 3,
+@@ -2623,20 +2645,22 @@ describe("study runtime command contributions", () => {
+       "Build a current shared-domain mesh before running. Open Mesh Jobs or Build Shared-Domain Mesh.",
+     );
+     expect(registry.isEnabled("study.run", currentMeshContext)).toBe(true);
+   });
+ 
+   it("does not bypass local FEM mesh readiness when backend reports compute enabled", () => {
+     const registry = registryWithStudyRuntimeCommands();
+     const resourceData = runtimeResourceData({
+       discretization: "fem",
+       meshRevision: 5,
++      modelReadinessBlocker:
++        "Build a current shared-domain mesh before running. Open Mesh Jobs or Build Shared-Domain Mesh.",
+       runtimeControls: [
+         { kind: "compute_fields", enabled: true },
+         { kind: "compute_energies", enabled: true },
+         { kind: "solve", enabled: true },
+       ],
+     });
+     const manifest = resourceData[MESHING_SHARED_DOMAIN_MANIFEST_PATH] as {
+       source_scene_revision?: number | null;
+     };
+     manifest.source_scene_revision = null;
+@@ -3122,20 +3146,58 @@ describe("study runtime command contributions", () => {
+       checks: [],
+       ready_to_export: true,
+       ready_to_run: true,
+       scene_revision: 3,
+     };
+ 
+     expect(registry.isEnabled("study.run", blockedContext)).toBe(true);
+     expect(registry.get("study.run")?.disabledReason?.(blockedContext)).toBeNull();
+   });
+ 
++  it("fails study Run closed when model readiness is unavailable", () => {
++    const registry = registryWithStudyRuntimeCommands();
++    const resourceData = runtimeResourceData();
++    delete resourceData[MODEL_READINESS_PATH];
++    const context = {
++      api: {} as never,
++      resourceData,
++      source: "test" as const,
++    };
++
++    expect(registry.isEnabled("study.run", context)).toBe(false);
++    expect(registry.get("study.run")?.disabledReason?.(context)).toBe(
++      "Model readiness is unavailable.",
++    );
++  });
++
++  it("fails study Run closed when model readiness is from another scene revision", () => {
++    const registry = registryWithStudyRuntimeCommands();
++    const resourceData = runtimeResourceData({ sceneRevision: 4 });
++    resourceData[MODEL_READINESS_PATH] = {
++      blockers: [],
++      checks: [],
++      ready_to_export: true,
++      ready_to_run: true,
++      scene_revision: 3,
++    };
++    const context = {
++      api: {} as never,
++      resourceData,
++      source: "test" as const,
++    };
++
++    expect(registry.isEnabled("study.run", context)).toBe(false);
++    expect(registry.get("study.run")?.disabledReason?.(context)).toBe(
++      "Model readiness is stale for the current scene.",
++    );
++  });
++
+   it("does not let stale active command queue block a newer inactive lifecycle state", () => {
+     const registry = registryWithStudyRuntimeCommands();
+     const context = {
+       api: {} as never,
+       resourceData: runtimeResourceData({
+         commands: [
+           {
+             command_id: "cmd-stale-solve",
+             kind: "solve",
+             status: "running",
+diff --git a/apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts b/apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts
+index bda83541c..dca009520 100644
+--- a/apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts
++++ b/apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts
+@@ -427,39 +427,43 @@ function backendRuntimeControl(
+   return queue?.runtime_controls?.find((entry) => entry.kind === kind) ?? null;
+ }
+ 
+ function runtimeReadinessDisabledReason(
+   context: CommandContext,
+   kind: Extract<
+     SimpleStudyRuntimeCommandKind,
+     "compute_energies" | "compute_fields" | "solve"
+   >,
+ ): string | null {
++  const status = resourceData<LiveStatusResource>(
++    context,
++    SESSION_STATUS_RESOURCE_KEY,
++  );
++  if (!status) return "Session status is unavailable.";
++
+   if (kind === "solve") {
+     const readiness = resourceData<ModelReadinessResource>(
+       context,
+       MODEL_READINESS_PATH,
+     );
+-    if (readiness) {
+-      return readiness.ready_to_run
+-        ? null
+-        : readiness.blockers[0] ??
+-            "Complete the model checklist before running.";
++    if (!readiness) return "Model readiness is unavailable.";
++    const sceneRevision = status.resources.scene_revision;
++    if (sceneRevision == null) return "No scene model is loaded.";
++    if (readiness.scene_revision !== sceneRevision) {
++      return "Model readiness is stale for the current scene.";
+     }
++    return readiness.ready_to_run
++      ? null
++      : readiness.blockers[0] ??
++          "Complete the model checklist before running.";
+   }
+ 
+-  const status = resourceData<LiveStatusResource>(
+-    context,
+-    SESSION_STATUS_RESOURCE_KEY,
+-  );
+-  if (!status) return "Session status is unavailable.";
+-
+   if (kind === "compute_fields" && !status.capabilities.binary_fields) {
+     return "Field data plane is unavailable.";
+   }
+ 
+   const sceneRevision = status.resources.scene_revision;
+   if (sceneRevision == null) return "No scene model is loaded.";
+ 
+   if (hasRuntimeGeometryBlocker(context)) {
+     return "Resolve geometry validation blockers before running runtime commands.";
+   }
+@@ -1042,20 +1046,21 @@ function invalidateHysteresisReturnToLiveResources(context: CommandContext): voi
+   );
+ }
+ 
+ function invalidateImportedSessionResources(
+   context: CommandContext,
+   revision: string | number,
+ ): void {
+   invalidateRestoredStateResources(context, revision);
+   context.resources?.invalidate(PERSISTENCE_IMPORTS_PATH, revision);
+   context.resources?.invalidate(MODEL_SCENE_PATH, revision);
++  context.resources?.invalidate(MODEL_READINESS_PATH, revision);
+   context.resources?.invalidate(MODEL_STUDY_PATH, revision);
+   context.resources?.invalidate(SIMULATION_RUN_CURRENT_PATH, revision);
+   context.resources?.invalidate(SIMULATION_STAGES_EXECUTION_PATH, revision);
+   context.resources?.invalidate(SIMULATION_SOLVER_STATUS_PATH, revision);
+ }
+ 
+ function maybeDownloadFmsExport(filename: string, fmsBase64: string): void {
+   if (
+     typeof document === "undefined" ||
+     typeof URL === "undefined" ||
+@@ -1675,20 +1680,21 @@ function sceneRevision(value: unknown): string | number {
+   return typeof revision === "number" || typeof revision === "string"
+     ? revision
+     : Date.now();
+ }
+ 
+ function invalidateStudyAuthoringResources(
+   context: CommandContext,
+   revision: string | number,
+ ): void {
+   context.resources?.invalidate(MODEL_SCENE_PATH, revision);
++  context.resources?.invalidate(MODEL_READINESS_PATH, revision);
+   context.resources?.invalidate(MODEL_STUDY_PATH, revision);
+   context.resources?.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
+   context.resources?.invalidate(SIMULATION_STAGES_EXECUTION_PATH, revision);
+ }
+ 
+ function addStageCommand(
+   id: string,
+   title: string,
+   stage: JsonObject,
+   successMessage: string,
+diff --git a/apps/control-room/src/modules/inspector/panels/AntennaObjectPanel.tsx b/apps/control-room/src/modules/inspector/panels/AntennaObjectPanel.tsx
+index 2e55a3b72..2f6ac3966 100644
+--- a/apps/control-room/src/modules/inspector/panels/AntennaObjectPanel.tsx
++++ b/apps/control-room/src/modules/inspector/panels/AntennaObjectPanel.tsx
+@@ -1,13 +1,13 @@
+ import { useMemo, useState } from "react";
+ 
+-import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
++import { MODEL_READINESS_PATH, MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
+ import type { JsonObject, RegionalFieldDriveResource } from "@/kernel/api/apiTypes";
+ import { useKernel } from "@/kernel/KernelContext";
+ import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
+ import { Button } from "@/shared/ui/Button";
+ 
+ import type { InspectorPanelProps } from "../inspectorTypes";
+ import { FeedbackBanner } from "../primitives/FeedbackBanner";
+ import { FieldRow } from "../primitives/FieldRow";
+ import { FormField } from "../primitives/FormField";
+ import { InspectorGroup } from "../primitives/InspectorGroup";
+@@ -36,20 +36,21 @@ interface FeedbackState {
+ 
+ function errorMessage(error: unknown): string {
+   return error instanceof Error ? error.message : String(error);
+ }
+ 
+ function invalidateSceneResource(
+   resources: ReturnType<typeof useKernel>["resources"],
+   revision: number,
+ ): void {
+   resources.invalidate(MODEL_SCENE_PATH, revision);
++  resources.invalidate(MODEL_READINESS_PATH, revision);
+ }
+ 
+ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
+   const { api, resources } = useKernel();
+   const scene = useSceneResource();
+   const model = resolveAntennaObjectPanelModel(selection, scene.data);
+   const baseDraft = useMemo(
+     () => resolveAntennaObjectDraft(selection, scene.data),
+     [scene.data, selection],
+   );
+diff --git a/apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.tsx b/apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.tsx
+index 5c8978839..0e7398b84 100644
+--- a/apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.tsx
++++ b/apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.tsx
+@@ -1,15 +1,16 @@
+ import { useMemo, useState } from "react";
+ 
+ import {
+   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
+   MODEL_GEOMETRY_VALIDATION_PATH,
++  MODEL_READINESS_PATH,
+   MODEL_SCENE_PATH,
+ } from "@/kernel/api/apiPaths";
+ import type { SceneResource } from "@/kernel/api/apiTypes";
+ import {
+   createObjectTransaction,
+   commitObjectTransformTransaction,
+   patchObjectGeometryTransaction,
+ } from "@/kernel/authoring/geometryLifecycleCommands";
+ import { useKernel } from "@/kernel/KernelContext";
+ import {
+@@ -84,20 +85,21 @@ function invalidateAuthoringResources(
+   resources: ReturnType<typeof useKernel>["resources"],
+   revision: number,
+   committedScene?: SceneResource,
+ ): void {
+   if (committedScene) {
+     publishCommittedSceneResource(resources, committedScene, revision);
+   } else {
+     resources.invalidate(MODEL_SCENE_PATH, revision);
+   }
+   resources.invalidate(MODEL_GEOMETRY_VALIDATION_PATH, revision);
++  resources.invalidate(MODEL_READINESS_PATH, revision);
+   resources.invalidate(MODEL_GEOMETRY_DIAGNOSTICS_PATH, revision);
+   resources.invalidate(MESH_BUILD_CURRENT_RESOURCE_KEY, revision);
+   resources.invalidate(MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY, revision);
+ }
+ 
+ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
+   const { api, resources, selection: selectionController } = useKernel();
+   const scene = useSceneResource();
+   const validation = useGeometryValidationResource();
+   const object = resolveGeometryObjectPanelModel(selection, scene.data);
+diff --git a/apps/control-room/src/modules/inspector/panels/ObjectGeneralPanel.tsx b/apps/control-room/src/modules/inspector/panels/ObjectGeneralPanel.tsx
+index d3fc2ce64..5fd3b49e7 100644
+--- a/apps/control-room/src/modules/inspector/panels/ObjectGeneralPanel.tsx
++++ b/apps/control-room/src/modules/inspector/panels/ObjectGeneralPanel.tsx
+@@ -1,15 +1,16 @@
+ import { useState } from "react";
+ 
+ import {
+   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
+   MODEL_GEOMETRY_VALIDATION_PATH,
++  MODEL_READINESS_PATH,
+   MODEL_SCENE_PATH,
+   VISUALIZATION_STATE_PATH,
+ } from "@/kernel/api/apiPaths";
+ import type { SceneResource } from "@/kernel/api/apiTypes";
+ import {
+   deleteObjectTransaction,
+   patchObjectTransaction,
+ } from "@/kernel/authoring/geometryLifecycleCommands";
+ import { createCommandContext } from "@/kernel/commands/commandContext";
+ import { useKernel } from "@/kernel/KernelContext";
+@@ -101,20 +102,21 @@ function invalidateAuthoringResources(
+   resources: ReturnType<typeof useKernel>["resources"],
+   revision: number,
+   committedScene?: SceneResource,
+ ): void {
+   if (committedScene) {
+     publishCommittedSceneResource(resources, committedScene, revision);
+   } else {
+     resources.invalidate(MODEL_SCENE_PATH, revision);
+   }
+   resources.invalidate(MODEL_GEOMETRY_VALIDATION_PATH, revision);
++  resources.invalidate(MODEL_READINESS_PATH, revision);
+   resources.invalidate(MODEL_GEOMETRY_DIAGNOSTICS_PATH, revision);
+   resources.invalidate(MESH_BUILD_CURRENT_RESOURCE_KEY, revision);
+   resources.invalidate(MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY, revision);
+ }
+ 
+ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
+   const kernel = useKernel();
+   const { api, resources, selection: selectionController } = kernel;
+   const scene = useSceneResource();
+   const validation = useGeometryValidationResource();
+diff --git a/apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx b/apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx
+index 9e14c7b15..518d8b2d1 100644
+--- a/apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx
++++ b/apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx
+@@ -1,16 +1,20 @@
+ "use client";
+ 
+ import { HelpCircle } from "lucide-react";
+ import { useCallback, useMemo, useReducer, useState } from "react";
+ 
+-import { MODEL_SCENE_PATH, MODEL_STUDY_PATH } from "@/kernel/api/apiPaths";
++import {
++  MODEL_READINESS_PATH,
++  MODEL_SCENE_PATH,
++  MODEL_STUDY_PATH,
++} from "@/kernel/api/apiPaths";
+ import { useKernel } from "@/kernel/KernelContext";
+ import {
+   resolveObjectInteractionResourceKey,
+   useObjectInteractionResource,
+   useSceneResource,
+ } from "@/kernel/resources/geometryLifecycleResources";
+ import {
+   resolveActiveLaneOperation,
+   useActiveLaneCapabilities,
+   type ActiveLaneCapabilitySnapshot,
+@@ -318,20 +322,21 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
+         });
+       }
+       const revision = Date.now();
+       if (result.storage === "object_interaction" && objectId) {
+         resources.invalidate(
+           resolveObjectInteractionResourceKey(objectId, objectInteractionKind),
+           revision,
+         );
+       }
+       resources.invalidate(MODEL_SCENE_PATH, revision);
++      resources.invalidate(MODEL_READINESS_PATH, revision);
+       resources.invalidate(MODEL_STUDY_PATH, revision);
+       resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
+       dispatch({
+         type: "setFeedback",
+         feedback: {
+         kind: "success",
+         message: `${spec?.label ?? interactionId} updated.`,
+         },
+       });
+       return true;
+diff --git a/apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx b/apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx
+index 564566bb0..250e14e84 100644
+--- a/apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx
++++ b/apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx
+@@ -14,20 +14,21 @@ import {
+ } from "lucide-react";
+ import { useCallback, useEffect, useReducer, type ReactNode } from "react";
+ 
+ import { createCommandContext } from "@/kernel/commands/commandContext";
+ import {
+   MESHING_BUILDS_CURRENT_PATH,
+   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+   MESHING_SUMMARY_PATH,
+   MODEL_GEOMETRY_VALIDATION_PATH,
++  MODEL_READINESS_PATH,
+   MODEL_SCENE_PATH,
+   MODEL_STUDY_PATH,
+   PERSISTENCE_CHECKPOINTS_PATH,
+   SIMULATION_COMMANDS_PATH,
+   SIMULATION_RUN_CURRENT_PATH,
+   SIMULATION_SOLVER_STATUS_PATH,
+   SIMULATION_STAGES_EXECUTION_PATH,
+ } from "@/kernel/api/apiPaths";
+ import type {
+   CheckpointEntry,
+@@ -711,20 +712,21 @@ export function useStudyInspectorPanelController(
+       return false;
+     }
+ 
+     dispatch({ type: "setAuthoringBusy", busy: true });
+     try {
+       const response = await kernel.api.model.commitTransaction(
+         buildStudyStagesMergePatch(state.stageDrafts),
+       );
+       const revision = response.scene_revision;
+       kernel.resources.invalidate(MODEL_SCENE_PATH, revision);
++      kernel.resources.invalidate(MODEL_READINESS_PATH, revision);
+       kernel.resources.invalidate(MODEL_STUDY_PATH, revision);
+       kernel.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
+       kernel.resources.invalidate(SIMULATION_STAGES_EXECUTION_PATH, revision);
+       kernel.resources.invalidate(SIMULATION_COMMANDS_PATH, revision);
+       dispatch({
+         type: "setAuthoringFeedback",
+         scope: "stages",
+         feedback: {
+           kind: "success",
+           message: `Committed ${state.stageDrafts.length} study stage${state.stageDrafts.length === 1 ? "" : "s"}.`,
+@@ -772,20 +774,21 @@ export function useStudyInspectorPanelController(
+ 
+     dispatch({ type: "setAuthoringBusy", busy: true });
+     try {
+       const response = await kernel.api.model.commitTransaction(
+         buildStudyGlobalMergePatch(state.globalDraft, {
+           sessionDiscretization: runtimeStatus?.domain.discretization,
+         }),
+       );
+       const revision = response.scene_revision;
+       kernel.resources.invalidate(MODEL_SCENE_PATH, revision);
++      kernel.resources.invalidate(MODEL_READINESS_PATH, revision);
+       kernel.resources.invalidate(MODEL_STUDY_PATH, revision);
+       kernel.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
+       kernel.resources.invalidate(SIMULATION_STAGES_EXECUTION_PATH, revision);
+       kernel.resources.invalidate(SIMULATION_COMMANDS_PATH, revision);
+       dispatch({
+         type: "setAuthoringFeedback",
+         scope: "global",
+         feedback: {
+           kind: "success",
+           message: "Committed global study settings.",
+diff --git a/crates/fullmag-api/src/router_v2/handlers/model/readiness.rs b/crates/fullmag-api/src/router_v2/handlers/model/readiness.rs
+index b2db0cb3e..4718e2c6a 100644
+--- a/crates/fullmag-api/src/router_v2/handlers/model/readiness.rs
++++ b/crates/fullmag-api/src/router_v2/handlers/model/readiness.rs
+@@ -80,49 +80,50 @@ pub async fn get_model_readiness(
+ fn build_model_readiness(
+     snapshot: &SessionStateResponse,
+     scene: &fullmag_authoring::SceneDocument,
+ ) -> ModelReadinessResource {
+     let object_ids = scene
+         .objects
+         .iter()
+         .filter(|object| object.visible && object.role == "magnet")
+         .map(|object| object.id.as_str())
+         .collect::<Vec<_>>();
+-    let materials = scene
+-        .materials
+-        .iter()
+-        .map(|material| material.id.as_str())
+-        .collect::<BTreeSet<_>>();
+     let textures = scene
+         .magnetization_assets
+         .iter()
+         .map(|texture| texture.id.as_str())
+         .collect::<BTreeSet<_>>();
+ 
+     let geometry = presence_check(
+         "geometry",
+         "Geometry",
+         !object_ids.is_empty(),
+         "model/scene",
+         "Add at least one magnetic object.",
+     );
++    let material_error = scene
++        .objects
++        .iter()
++        .filter(|object| object_ids.contains(&object.id.as_str()))
++        .find_map(|object| {
++            fullmag_authoring::resolve_scene_object_solve_material(scene, object)
++                .err()
++                .map(|error| error.to_string())
++        });
+     let material = presence_check(
+         "material",
+         "Material",
+-        !object_ids.is_empty()
+-            && scene
+-                .objects
+-                .iter()
+-                .filter(|object| object_ids.contains(&object.id.as_str()))
+-                .all(|object| materials.contains(object.material_ref.as_str())),
++        !object_ids.is_empty() && material_error.is_none(),
+         "model/materials",
+-        "Assign a material to every magnetic object.",
++        material_error
++            .as_deref()
++            .unwrap_or("Assign a material to every magnetic object."),
+     );
+     let texture = presence_check(
+         "texture",
+         "Initial magnetization",
+         !object_ids.is_empty()
+             && scene
+                 .objects
+                 .iter()
+                 .filter(|object| object_ids.contains(&object.id.as_str()))
+                 .all(|object| {
+diff --git a/crates/fullmag-api/src/router_v2/handlers/simulation/commands.rs b/crates/fullmag-api/src/router_v2/handlers/simulation/commands.rs
+index b13cfba62..ffd17f069 100644
+--- a/crates/fullmag-api/src/router_v2/handlers/simulation/commands.rs
++++ b/crates/fullmag-api/src/router_v2/handlers/simulation/commands.rs
+@@ -791,68 +791,51 @@ fn scene_problem_patch_for_mesh(scene: &SceneDocument) -> Result<serde_json::Val
+     let mut regions = Vec::with_capacity(scene.objects.len());
+     let mut materials = Vec::with_capacity(scene.objects.len());
+     let mut magnets = Vec::with_capacity(scene.objects.len());
+ 
+     let mut object_regions = Vec::new();
+ 
+     for object in &scene.objects {
+         let geometry_name = object.id.clone();
+         let region_name = object.id.clone();
+         let material_name = format!("material:{}", object.id);
+-        let material_asset = scene
+-            .materials
+-            .iter()
+-            .find(|candidate| candidate.id == object.material_ref)
+-            .ok_or_else(|| {
+-                ApiError::bad_request(format!(
+-                    "missing material '{}' for object '{}'",
+-                    object.material_ref, object.id
+-                ))
+-            })?;
++        let material = fullmag_authoring::resolve_scene_object_solve_material(scene, object)
++            .map_err(|error| ApiError::bad_request(error.to_string()))?;
++        let material_asset = material.asset;
+ 
+         geometry_entries.push(scene_object_geometry_entry(object, &geometry_name)?);
+         regions.push(RegionIR {
+             geometry: geometry_name,
+             name: region_name.clone(),
+         });
+         for region in &object.regions {
+             let ir: ObjectRegionIR = region.clone().into();
+             object_regions.push(ir);
+         }
+         materials.push(MaterialIR {
+             alpha_field: None,
+             a_field: None,
+             cubic_anisotropy_axis1: None,
+             cubic_anisotropy_axis2: None,
+             cubic_anisotropy_kc1: None,
+             cubic_anisotropy_kc2: None,
+             cubic_anisotropy_kc3: None,
+             damping: material_asset.properties.alpha,
+-            exchange_stiffness: material_asset.properties.aex.ok_or_else(|| {
+-                ApiError::bad_request(format!(
+-                    "missing Aex material property for object '{}'",
+-                    object.id
+-                ))
+-            })?,
++            exchange_stiffness: material.exchange_stiffness,
+             kc1_field: None,
+             kc2_field: None,
+             kc3_field: None,
+             ku2_field: None,
+             ku_field: None,
+             ms_field: None,
+             name: material_name.clone(),
+-            saturation_magnetisation: material_asset.properties.ms.ok_or_else(|| {
+-                ApiError::bad_request(format!(
+-                    "missing Ms material property for object '{}'",
+-                    object.id
+-                ))
+-            })?,
++            saturation_magnetisation: material.saturation_magnetisation,
+             uniaxial_anisotropy: None,
+             uniaxial_anisotropy_k2: None,
+             anisotropy_axis: None,
+             interfacial_dmi: material_asset.properties.dind,
+             bulk_dmi: material_asset.properties.dbulk,
+             dind_field: None,
+             dbulk_field: None,
+         });
+         magnets.push(MagnetIR {
+             object_id: Some(object.id.clone()),
+diff --git a/crates/fullmag-api/src/router_v2/tests.rs b/crates/fullmag-api/src/router_v2/tests.rs
+index 8485f9bc0..d0d40d883 100644
+--- a/crates/fullmag-api/src/router_v2/tests.rs
++++ b/crates/fullmag-api/src/router_v2/tests.rs
+@@ -1195,20 +1195,112 @@ async fn model_readiness_accepts_complete_fdm_scene() {
+         .await
+         .unwrap();
+ 
+     assert_eq!(response.status(), StatusCode::OK);
+     let body = body_json(response).await;
+     assert_eq!(body["ready_to_run"], true);
+     assert_eq!(body["ready_to_export"], true);
+     assert_eq!(body["blockers"], serde_json::json!([]));
+ }
+ 
++#[tokio::test]
++async fn model_readiness_blocks_material_without_ms() {
++    let state = test_app_state_with_live_session().await;
++    let mut scene = sample_scene_document_with_stage(serde_json::json!({
++        "entrypoint_kind": "flat_relax",
++        "kind": "relax",
++        "algorithm": "projected_gradient_bb",
++        "stage_id": "relax-1"
++    }));
++    scene.study.requested_backend = "fdm".into();
++    scene.study.fdm = Some(fullmag_authoring::SceneFdmDiscretizationState {
++        default_cell: Some([1.0e-9, 1.0e-9, 1.0e-9]),
++        ..Default::default()
++    });
++    scene.materials[0].properties.ms = None;
++    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
++        snapshot.scene_document = Some(scene);
++    }
++
++    let response = build_v2_router()
++        .with_state(state)
++        .oneshot(
++            Request::builder()
++                .uri("/v2/sessions/current/model/readiness")
++                .body(Body::empty())
++                .unwrap(),
++        )
++        .await
++        .unwrap();
++
++    assert_eq!(response.status(), StatusCode::OK);
++    let body = body_json(response).await;
++    assert_eq!(body["ready_to_run"], false);
++    let material = body["checks"]
++        .as_array()
++        .unwrap()
++        .iter()
++        .find(|check| check["id"] == "material")
++        .unwrap();
++    assert_eq!(material["state"], "blocked");
++    assert_eq!(
++        material["reason"],
++        "missing Ms material property for object 'body'"
++    );
++}
++
++#[tokio::test]
++async fn model_readiness_blocks_material_without_aex() {
++    let state = test_app_state_with_live_session().await;
++    let mut scene = sample_scene_document_with_stage(serde_json::json!({
++        "entrypoint_kind": "flat_relax",
++        "kind": "relax",
++        "algorithm": "projected_gradient_bb",
++        "stage_id": "relax-1"
++    }));
++    scene.study.requested_backend = "fdm".into();
++    scene.study.fdm = Some(fullmag_authoring::SceneFdmDiscretizationState {
++        default_cell: Some([1.0e-9, 1.0e-9, 1.0e-9]),
++        ..Default::default()
++    });
++    scene.materials[0].properties.aex = None;
++    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
++        snapshot.scene_document = Some(scene);
++    }
++
++    let response = build_v2_router()
++        .with_state(state)
++        .oneshot(
++            Request::builder()
++                .uri("/v2/sessions/current/model/readiness")
++                .body(Body::empty())
++                .unwrap(),
++        )
++        .await
++        .unwrap();
++
++    assert_eq!(response.status(), StatusCode::OK);
++    let body = body_json(response).await;
++    assert_eq!(body["ready_to_run"], false);
++    let material = body["checks"]
++        .as_array()
++        .unwrap()
++        .iter()
++        .find(|check| check["id"] == "material")
++        .unwrap();
++    assert_eq!(material["state"], "blocked");
++    assert_eq!(
++        material["reason"],
++        "missing Aex material property for object 'body'"
++    );
++}
++
+ #[tokio::test]
+ async fn model_readiness_marks_fem_mesh_stale_against_scene_revision() {
+     let state = test_app_state_with_live_session().await;
+     let mut scene = sample_scene_document_with_stage(serde_json::json!({
+         "entrypoint_kind": "flat_relax",
+         "kind": "relax",
+         "algorithm": "projected_gradient_bb",
+         "stage_id": "relax-1"
+     }));
+     scene.study.requested_backend = "fem".into();
+diff --git a/crates/fullmag-authoring/src/lib.rs b/crates/fullmag-authoring/src/lib.rs
+index 2d2c48068..941356011 100644
+--- a/crates/fullmag-authoring/src/lib.rs
++++ b/crates/fullmag-authoring/src/lib.rs
+@@ -1,24 +1,26 @@
+ #![recursion_limit = "512"]
+ 
+ mod adapters;
+ mod builder;
+ mod geometry;
++mod material_requirements;
+ mod physics_graph;
+ mod region_revisions;
+ mod scene;
+ mod spin_transport;
+ mod validation;
+ 
+ pub use adapters::{
+     normalize_scene_document_magnetization_assets, normalize_scene_document_study_pipeline_labels,
+     scene_document_from_script_builder, scene_document_problem_projection,
+     scene_document_to_script_builder, scene_document_to_script_builder_overrides,
+     SceneProblemProjection,
+ };
+ pub use builder::*;
+ pub use geometry::*;
++pub use material_requirements::*;
+ pub use physics_graph::*;
+ pub use region_revisions::*;
+ pub use scene::*;
+ pub use spin_transport::*;
+ pub use validation::{validate_scene_document, SceneDocumentValidationError};
+diff --git a/crates/fullmag-authoring/src/material_requirements.rs b/crates/fullmag-authoring/src/material_requirements.rs
+new file mode 100644
+index 000000000..5c925829f
+--- /dev/null
++++ b/crates/fullmag-authoring/src/material_requirements.rs
+@@ -0,0 +1,83 @@
++use std::fmt;
++
++use crate::{SceneDocument, SceneMaterialAsset, SceneObject};
++
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub enum SceneSolveMaterialError {
++    MissingMaterial {
++        material_id: String,
++        object_id: String,
++    },
++    MissingMs {
++        object_id: String,
++    },
++    MissingAex {
++        object_id: String,
++    },
++}
++
++impl fmt::Display for SceneSolveMaterialError {
++    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            Self::MissingMaterial {
++                material_id,
++                object_id,
++            } => write!(
++                formatter,
++                "missing material '{material_id}' for object '{object_id}'"
++            ),
++            Self::MissingMs { object_id } => {
++                write!(
++                    formatter,
++                    "missing Ms material property for object '{object_id}'"
++                )
++            }
++            Self::MissingAex { object_id } => write!(
++                formatter,
++                "missing Aex material property for object '{object_id}'"
++            ),
++        }
++    }
++}
++
++impl std::error::Error for SceneSolveMaterialError {}
++
++#[derive(Debug, Clone, Copy)]
++pub struct ResolvedSceneSolveMaterial<'a> {
++    pub asset: &'a SceneMaterialAsset,
++    pub exchange_stiffness: f64,
++    pub saturation_magnetisation: f64,
++}
++
++pub fn resolve_scene_object_solve_material<'a>(
++    scene: &'a SceneDocument,
++    object: &SceneObject,
++) -> Result<ResolvedSceneSolveMaterial<'a>, SceneSolveMaterialError> {
++    let material = scene
++        .materials
++        .iter()
++        .find(|candidate| candidate.id == object.material_ref)
++        .ok_or_else(|| SceneSolveMaterialError::MissingMaterial {
++            material_id: object.material_ref.clone(),
++            object_id: object.id.clone(),
++        })?;
++    let exchange_stiffness =
++        material
++            .properties
++            .aex
++            .ok_or_else(|| SceneSolveMaterialError::MissingAex {
++                object_id: object.id.clone(),
++            })?;
++    let saturation_magnetisation =
++        material
++            .properties
++            .ms
++            .ok_or_else(|| SceneSolveMaterialError::MissingMs {
++                object_id: object.id.clone(),
++            })?;
++    Ok(ResolvedSceneSolveMaterial {
++        asset: material,
++        exchange_stiffness,
++        saturation_magnetisation,
++    })
++}

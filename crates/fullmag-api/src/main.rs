@@ -12,7 +12,8 @@ use axum::{
 use base64::Engine;
 use fullmag_authoring::{
     normalize_scene_document_magnetization_assets, normalize_scene_document_study_pipeline_labels,
-    validate_scene_document, MagnetizationAsset, SceneDocument,
+    scene_document_has_unresolved_solve_prerequisites, validate_scene_document_for_authoring,
+    MagnetizationAsset, SceneDocument,
 };
 use fullmag_ir::{TextureMappingIR, TextureProjectionMode, TextureTransform3DIR};
 use fullmag_plan::{sample_preset_texture_versioned, TextureSamplePoint};
@@ -1164,6 +1165,208 @@ mod terminal_snapshot_route_tests {
 }
 
 #[cfg(test)]
+mod scratch_session_lifecycle_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn stale_runner_snapshot_cannot_reinstall_a_replaced_session() {
+        let state = crate::router_v2::tests::test_app_state();
+        let (_, Json(first)) = crate::router_v2::handlers::sessions::create(
+            State(state.clone()),
+            Json(crate::schemas::sessions::CreateSessionRequest {
+                name: "First".to_string(),
+                backend: "fdm".to_string(),
+                device: "cpu".to_string(),
+                precision: "double".to_string(),
+                replace_current: false,
+            }),
+        )
+        .await
+        .expect("first session must be created");
+        let (_, Json(replacement)) = crate::router_v2::handlers::sessions::create(
+            State(state.clone()),
+            Json(crate::schemas::sessions::CreateSessionRequest {
+                name: "Replacement".to_string(),
+                backend: "fem".to_string(),
+                device: "cpu".to_string(),
+                precision: "double".to_string(),
+                replace_current: true,
+            }),
+        )
+        .await
+        .expect("replacement session must be created");
+        state.current_display_selection.write().await.revision = 7;
+
+        let stale = sync_current_live_snapshot(
+            State(state.clone()),
+            Json(CurrentLiveSnapshotRequest {
+                session_id: first.session_id,
+                session: None,
+                session_status: None,
+                metadata: None,
+                mesh_workspace: None,
+                stage_execution: None,
+                simulation_preparation: None,
+                run: None,
+                live_state: None,
+                coupled_checkpoint: None,
+                latest_scalar_row: None,
+                latest_fields: None,
+                replace_latest_fields: false,
+                field_generation: None,
+                preview_fields: None,
+                clear_preview_cache: false,
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(stale.expect_err("stale session must be rejected").status, StatusCode::CONFLICT);
+        assert_eq!(
+            state
+                .current_live_state
+                .read()
+                .await
+                .as_ref()
+                .map(|snapshot| snapshot.session.session_id.as_str()),
+            Some(replacement.session_id.as_str())
+        );
+        assert_eq!(state.current_display_selection.read().await.revision, 7);
+    }
+
+    #[tokio::test]
+    async fn admitted_runner_publication_blocks_scratch_replacement_until_send() {
+        let state = crate::router_v2::tests::test_app_state();
+        let (_, Json(first)) = crate::router_v2::handlers::sessions::create(
+            State(state.clone()),
+            Json(crate::schemas::sessions::CreateSessionRequest {
+                name: "First".to_string(),
+                backend: "fdm".to_string(),
+                device: "cpu".to_string(),
+                precision: "double".to_string(),
+                replace_current: false,
+            }),
+        )
+        .await
+        .expect("first session must be created");
+        let hook = crate::types::CurrentLiveRealtimeBeforeSendHook {
+            admitted: Arc::new(tokio::sync::Notify::new()),
+            resume: Arc::new(tokio::sync::Notify::new()),
+        };
+        *state.current_live_realtime_before_send_hook.lock().await = Some(hook.clone());
+        let mut events = state.current_live_realtime_events.subscribe();
+
+        let runner_state = state.clone();
+        let runner_session_id = first.session_id.clone();
+        let runner = tokio::spawn(async move {
+            sync_current_live_snapshot(
+                State(runner_state),
+                Json(CurrentLiveSnapshotRequest {
+                    session_id: runner_session_id,
+                    session: None,
+                    session_status: None,
+                    metadata: None,
+                    mesh_workspace: None,
+                    stage_execution: None,
+                    simulation_preparation: None,
+                    run: None,
+                    live_state: None,
+                    coupled_checkpoint: None,
+                    latest_scalar_row: None,
+                    latest_fields: Some(
+                        serde_json::from_value(serde_json::json!({
+                            "H_eff": {
+                                "values": [[0.0, 1.0, 0.0]],
+                                "layout": { "grid_cells": [1, 1, 1] }
+                            }
+                        }))
+                        .expect("runner terminal field frame must deserialize"),
+                    ),
+                    replace_latest_fields: true,
+                    field_generation: Some(CurrentLiveFieldGeneration {
+                        run_id: "runner-test".to_string(),
+                        sequence: 1,
+                    }),
+                    preview_fields: None,
+                    clear_preview_cache: true,
+                    engine_log: None,
+                    solver_profile: None,
+                    fem_mesh: None,
+                }),
+            )
+            .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(1), hook.admitted.notified())
+            .await
+            .expect("runner must pause after publication admission");
+
+        let replacement_state = state.clone();
+        let replacement = tokio::spawn(async move {
+            crate::router_v2::handlers::sessions::create(
+                State(replacement_state),
+                Json(crate::schemas::sessions::CreateSessionRequest {
+                    name: "Replacement".to_string(),
+                    backend: "fem".to_string(),
+                    device: "cpu".to_string(),
+                    precision: "double".to_string(),
+                    replace_current: true,
+                }),
+            )
+            .await
+        });
+        tokio::task::yield_now().await;
+        assert!(
+            !replacement.is_finished(),
+            "scratch replacement must wait for the admitted runner publication"
+        );
+
+        hook.resume.notify_one();
+        let _ = runner
+            .await
+            .expect("runner task must complete")
+            .expect("runner publication must be accepted");
+        let (_, Json(replacement)) = replacement
+            .await
+            .expect("replacement task must complete")
+            .expect("replacement must be created");
+
+        let runner_event = tokio::time::timeout(std::time::Duration::from_millis(100), events.recv())
+            .await
+            .expect("runner must publish before replacement")
+            .expect("realtime channel must remain open");
+        let runner_event: LiveRealtimeServerEvent =
+            serde_json::from_str(&runner_event.json).expect("runner event must serialize");
+        assert!(matches!(
+            runner_event,
+            LiveRealtimeServerEvent::ResourceBatchChanged { ref session_id, .. }
+                if session_id == &first.session_id
+        ));
+        let replacement_event =
+            tokio::time::timeout(std::time::Duration::from_millis(100), events.recv())
+                .await
+                .expect("replacement must publish after runner")
+                .expect("realtime channel must remain open");
+        let replacement_event: LiveRealtimeServerEvent =
+            serde_json::from_str(&replacement_event.json).expect("replacement event must serialize");
+        assert!(matches!(
+            replacement_event,
+            LiveRealtimeServerEvent::ResourceBatchChanged { ref session_id, .. }
+                if session_id == &replacement.session_id
+        ));
+        let replay = state.current_live_realtime_replay.lock().await;
+        assert!(replay.iter().all(|record| {
+            matches!(
+                serde_json::from_str::<LiveRealtimeServerEvent>(&record.json),
+                Ok(LiveRealtimeServerEvent::ResourceBatchChanged { ref session_id, .. })
+                    if session_id == &replacement.session_id
+            )
+        }));
+    }
+}
+
+#[cfg(test)]
 fn current_live_realtime_event_coalesce_window_ms(event: &LiveRealtimeServerEvent) -> Option<u32> {
     if let LiveRealtimeServerEvent::ResourceBatchChanged { payload, .. } = event {
         if payload.changes.iter().any(|change| {
@@ -1187,6 +1390,8 @@ async fn publish_current_live_realtime_event(
     state: &AppState,
     event: LiveRealtimeServerEvent,
 ) -> Result<(), ApiError> {
+    #[cfg(test)]
+    pause_current_live_realtime_before_send(state).await;
     publish_current_live_realtime_event_with_parts(
         &state.current_live_realtime_events,
         &state.current_live_realtime_replay,
@@ -1194,6 +1399,19 @@ async fn publish_current_live_realtime_event(
         event,
     )
     .await
+}
+
+#[cfg(test)]
+async fn pause_current_live_realtime_before_send(state: &AppState) {
+    let hook = state
+        .current_live_realtime_before_send_hook
+        .lock()
+        .await
+        .take();
+    if let Some(hook) = hook {
+        hook.admitted.notify_one();
+        hook.resume.notified().await;
+    }
 }
 
 async fn publish_current_live_realtime_event_with_parts(
@@ -1337,6 +1555,7 @@ async fn queue_current_live_realtime_resource_batch(
     };
 
     if should_spawn {
+        let session_transition = state.current_live_session_transition.clone();
         let pending_batches = state.current_live_realtime_pending_batches.clone();
         let events = state.current_live_realtime_events.clone();
         let replay = state.current_live_realtime_replay.clone();
@@ -1344,6 +1563,7 @@ async fn queue_current_live_realtime_resource_batch(
         let policy = state.current_live_realtime_policy.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(u64::from(window_ms))).await;
+            let _session_transition = session_transition.lock().await;
             let Some(pending) = pending_batches.lock().await.remove(&key) else {
                 return;
             };
@@ -1678,6 +1898,10 @@ async fn main() {
         repo_root: repo_root.clone(),
         current_workspace_root,
         current_live_state: Arc::new(RwLock::new(None)),
+        current_live_session_transition: Arc::new(Mutex::new(())),
+        current_live_session_epoch: Arc::new(AtomicU64::new(0)),
+        #[cfg(test)]
+        current_live_realtime_before_send_hook: Arc::new(Mutex::new(None)),
         current_live_connectivity: Arc::new(RwLock::new(
             crate::schemas::status::SessionConnectivity::Connected,
         )),
@@ -2320,6 +2544,35 @@ impl CurrentLiveSyncKind {
     }
 }
 
+pub(crate) async fn reset_current_live_session_resources(state: &AppState) {
+    *state.current_display_selection.write().await = CurrentDisplaySelection::default();
+    *state.current_display_presentation.write().await = DisplayPresentationState::default();
+    state.current_visualization_client_acks.write().await.clear();
+    state
+        .current_visualization_client_ack_revision
+        .store(0, Ordering::Relaxed);
+    *state.current_workspace_selection.write().await = CurrentWorkspaceSelection::default();
+    *state.current_workspace_ribbon.write().await = CurrentWorkspaceRibbon::default();
+    *state.current_workspace_layout.write().await = CurrentWorkspaceLayout::default();
+    state.current_hysteresis_bookmarks.write().await.clear();
+    state.current_control_queue.lock().await.clear();
+    state.current_command_responses.lock().await.clear();
+    state.current_command_ledger.lock().await.clear();
+    *state.current_control_next_seq.lock().await = 0;
+    let _ = state.current_control_events.send(0);
+    state.current_live_realtime_replay.lock().await.clear();
+    state.current_live_realtime_pending_batches.lock().await.clear();
+    state
+        .current_live_realtime_next_seq
+        .store(0, Ordering::Relaxed);
+    *state.frozen_spins_previews.write().await = Default::default();
+    *state.current_live_connectivity.write().await =
+        crate::schemas::status::SessionConnectivity::Connected;
+    state
+        .current_live_last_seen_unix_ms
+        .store(0, Ordering::Relaxed);
+}
+
 async fn sync_current_live_frame_update<F>(
     state: &Arc<AppState>,
     kind: CurrentLiveSyncKind,
@@ -2336,24 +2589,9 @@ async fn sync_current_live_frame_update<F>(
 where
     F: FnOnce(&mut SessionStateResponse) -> Result<(), ApiError>,
 {
+    let _session_transition = state.current_live_session_transition.lock().await;
     let sync_start = std::time::Instant::now();
-    let reset_preview = state
-        .current_live_state
-        .read()
-        .await
-        .as_ref()
-        .map(|existing| existing.session.session_id != session_id)
-        .unwrap_or(false);
-    if reset_preview {
-        let display_selection = CurrentDisplaySelection::default();
-        *state.current_display_selection.write().await = display_selection.clone();
-        state.current_control_queue.lock().await.clear();
-        state.current_command_responses.lock().await.clear();
-        state.current_command_ledger.lock().await.clear();
-        let current_seq = *state.current_control_next_seq.lock().await;
-        let _ = state.current_control_events.send(current_seq);
-        let _ = std::fs::remove_dir_all(&state.current_workspace_root);
-    }
+    let admission_epoch = state.current_live_session_epoch.load(Ordering::Relaxed);
     let display_selection = state.current_display_selection.read().await.clone();
     let selected_cached_display_fields_match_selection = preview_fields
         .as_ref()
@@ -2366,6 +2604,10 @@ where
         Some(existing) if existing.session.session_id == session_id => {
             let previous_snapshot = existing.clone();
             (existing, Some(previous_snapshot))
+        }
+        Some(existing) => {
+            *current = Some(existing);
+            return Err(ApiError::conflict("current_live_session_mismatch"));
         }
         _ => (
             default_current_live_state(&CurrentLiveSnapshotRequest {
@@ -2520,6 +2762,10 @@ where
     } else {
         None
     };
+    if state.current_live_session_epoch.load(Ordering::Relaxed) != admission_epoch {
+        *current = Some(next);
+        return Err(ApiError::conflict("current_live_session_transitioned"));
+    }
     *current = Some(next);
     drop(current);
     crate::router_v2::handlers::sessions::status::record_current_live_heartbeat(state).await;
@@ -2579,20 +2825,31 @@ async fn wait_current_live_control(
     Query(query): Query<ControlWaitQuery>,
 ) -> Result<Response, ApiError> {
     let _ = current_live_session_id(&state).await?;
-    if let Some(command) = take_next_current_control_command_after(&state, query.after_seq).await {
+    if let Some(command) = take_current_control_command_for_session(
+        &state,
+        query.after_seq,
+        query.session_id.as_deref(),
+    )
+    .await?
+    {
         return Ok(Json(command).into_response());
     }
 
     let timeout_ms = query.timeout_ms.clamp(100, 20_000);
     let mut rx = state.current_control_events.subscribe();
     let state_for_wait = Arc::clone(&state);
+    let requested_session_id = query.session_id.clone();
     let waited = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), async move {
         loop {
             rx.changed()
                 .await
                 .map_err(|_| ApiError::internal("control command stream closed"))?;
-            if let Some(command) =
-                take_next_current_control_command_after(&state_for_wait, query.after_seq).await
+            if let Some(command) = take_current_control_command_for_session(
+                &state_for_wait,
+                query.after_seq,
+                requested_session_id.as_deref(),
+            )
+            .await?
             {
                 return Ok::<SessionCommand, ApiError>(command);
             }
@@ -2605,6 +2862,21 @@ async fn wait_current_live_control(
         Ok(Err(error)) => Err(error),
         Err(_) => Ok(StatusCode::NO_CONTENT.into_response()),
     }
+}
+
+async fn take_current_control_command_for_session(
+    state: &Arc<AppState>,
+    after_seq: u64,
+    requested_session_id: Option<&str>,
+) -> Result<Option<SessionCommand>, ApiError> {
+    let _transition = state.current_live_session_transition.lock().await;
+    if let Some(requested_session_id) = requested_session_id {
+        let current_session_id = current_live_session_id(state).await?;
+        if current_session_id != requested_session_id {
+            return Ok(None);
+        }
+    }
+    Ok(take_next_current_control_command_after(state, after_seq).await)
 }
 
 #[allow(dead_code)]
@@ -3017,7 +3289,7 @@ pub(crate) async fn commit_current_live_scene_document(
 ) -> Result<SceneDocument, ApiError> {
     normalize_scene_document_magnetization_assets(&mut scene_document);
     normalize_scene_document_study_pipeline_labels(&mut scene_document);
-    validate_scene_document(&scene_document)
+    validate_scene_document_for_authoring(&scene_document)
         .map_err(|error| ApiError::bad_request(error.message))?;
     let preset_texture_count = scene_document
         .magnetization_assets
@@ -3085,7 +3357,18 @@ pub(crate) async fn commit_current_live_scene_document(
         scene_document.version = "scene.v2".to_string();
         scene_document.revision = next_revision;
         let builder_state = match scene_document_builder_projection(&scene_document) {
-            Ok(state) => state,
+            Ok(state) => Some(state),
+            Err(err) if scene_document_has_unresolved_solve_prerequisites(&scene_document) => {
+                info!(
+                    target: "fullmag_api::scene_sync",
+                    direction = "pending",
+                    revision = scene_document.revision,
+                    summary = %scene_magnetization_summary(&scene_document),
+                    error = %err.message,
+                    "frontend scene update stored before solve prerequisites are complete"
+                );
+                None
+            }
             Err(err) => {
                 info!(
                     target: "fullmag_api::scene_sync",
@@ -3098,7 +3381,7 @@ pub(crate) async fn commit_current_live_scene_document(
                 return Err(err);
             }
         };
-        snapshot.builder_adapter = Some(builder_state);
+        snapshot.builder_adapter = builder_state;
         let next_mesh_signature = scene_mesh_signature(&scene_document);
         snapshot.scene_document = Some(scene_document.clone());
         snapshot.region_realization_revisions =

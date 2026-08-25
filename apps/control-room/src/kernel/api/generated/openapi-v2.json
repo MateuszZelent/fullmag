@@ -502,6 +502,14 @@
           },
           {
             "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "kind": {
                 "enum": [
                   "merge_patch"
@@ -514,6 +522,50 @@
             },
             "required": [
               "merge_patch",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "asset": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "patch_magnetization"
+                ],
+                "type": "string"
+              },
+              "magnetization_ref": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "object_id": {
+                "type": "string"
+              },
+              "region_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "object_id",
               "kind"
             ],
             "type": "object"
@@ -2633,6 +2685,55 @@
           "memory_total_mb",
           "process_rss_mb",
           "process_threads"
+        ],
+        "type": "object"
+      },
+      "CreateSessionRequest": {
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/ScratchSessionBackend"
+          },
+          "device": {
+            "$ref": "#/components/schemas/ScratchSessionDevice"
+          },
+          "name": {
+            "type": "string"
+          },
+          "precision": {
+            "$ref": "#/components/schemas/ScratchSessionPrecision"
+          },
+          "replace_current": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "backend",
+          "device",
+          "precision"
+        ],
+        "type": "object"
+      },
+      "CreateSessionResponse": {
+        "properties": {
+          "revisions": {
+            "$ref": "#/components/schemas/ScratchSessionRevisionsResource"
+          },
+          "scene_document": {
+            "$ref": "#/components/schemas/ScratchSceneDocumentResource"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ScratchSessionStatusResource"
+          }
+        },
+        "required": [
+          "session_id",
+          "status",
+          "scene_document",
+          "revisions"
         ],
         "type": "object"
       },
@@ -12010,9 +12111,15 @@
               "integer",
               "null"
             ]
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
+          "scene_revision",
           "id",
           "name",
           "properties"
@@ -15096,6 +15203,120 @@
         ],
         "type": "object"
       },
+      "ModelAuthoringCapabilities": {
+        "properties": {
+          "move": {
+            "$ref": "#/components/schemas/ModelAuthoringCapability"
+          },
+          "rotate": {
+            "$ref": "#/components/schemas/ModelAuthoringCapability"
+          },
+          "scale": {
+            "$ref": "#/components/schemas/ModelAuthoringCapability"
+          }
+        },
+        "required": [
+          "move",
+          "rotate",
+          "scale"
+        ],
+        "type": "object"
+      },
+      "ModelAuthoringCapability": {
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "available"
+        ],
+        "type": "object"
+      },
+      "ModelReadinessCheck": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/ModelReadinessCheckState"
+          },
+          "target_resource": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "state",
+          "label"
+        ],
+        "type": "object"
+      },
+      "ModelReadinessCheckState": {
+        "enum": [
+          "complete",
+          "blocked",
+          "stale"
+        ],
+        "type": "string"
+      },
+      "ModelReadinessResource": {
+        "properties": {
+          "blockers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/ModelAuthoringCapabilities"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/ModelReadinessCheck"
+            },
+            "type": "array"
+          },
+          "ready_to_export": {
+            "type": "boolean"
+          },
+          "ready_to_run": {
+            "type": "boolean"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "ready_to_run",
+          "ready_to_export",
+          "checks",
+          "blockers",
+          "capabilities"
+        ],
+        "type": "object"
+      },
       "NullableF64PatchValue": {
         "oneOf": [
           {
@@ -15271,6 +15492,14 @@
       },
       "ObjectInteractionPatchRequest": {
         "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "enabled": {
             "type": [
               "boolean",
@@ -15308,9 +15537,15 @@
           },
           "present": {
             "type": "boolean"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
+          "scene_revision",
           "object_id",
           "interaction_kind",
           "present",
@@ -22476,6 +22711,114 @@
         ],
         "type": "string"
       },
+      "ScratchSceneDocumentResource": {
+        "properties": {
+          "objects": {
+            "items": {
+              "$ref": "#/components/schemas/SceneObjectResource"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "scene": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneMetadataResource"
+              }
+            ]
+          },
+          "schema_version": {
+            "$ref": "#/components/schemas/ScratchSceneSchemaVersion"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "schema_version",
+          "objects"
+        ],
+        "type": "object"
+      },
+      "ScratchSceneSchemaVersion": {
+        "enum": [
+          "0.3"
+        ],
+        "type": "string"
+      },
+      "ScratchSessionBackend": {
+        "enum": [
+          "fdm",
+          "fem"
+        ],
+        "type": "string"
+      },
+      "ScratchSessionDevice": {
+        "enum": [
+          "cpu"
+        ],
+        "type": "string"
+      },
+      "ScratchSessionPrecision": {
+        "enum": [
+          "double"
+        ],
+        "type": "string"
+      },
+      "ScratchSessionRevisionsResource": {
+        "properties": {
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state_version": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "state_version",
+          "scene_revision"
+        ],
+        "type": "object"
+      },
+      "ScratchSessionStatusResource": {
+        "properties": {
+          "effective_execution": {
+            "$ref": "#/components/schemas/SessionExecutionResource"
+          },
+          "fallback": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requested_execution": {
+            "$ref": "#/components/schemas/SessionExecutionResource"
+          }
+        },
+        "required": [
+          "requested_execution",
+          "effective_execution",
+          "fallback"
+        ],
+        "type": "object"
+      },
       "ScriptSourceResponse": {
         "properties": {
           "bytes": {
@@ -23489,6 +23832,25 @@
         ],
         "type": "string"
       },
+      "SessionExecutionResource": {
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/ScratchSessionBackend"
+          },
+          "device": {
+            "$ref": "#/components/schemas/ScratchSessionDevice"
+          },
+          "precision": {
+            "$ref": "#/components/schemas/ScratchSessionPrecision"
+          }
+        },
+        "required": [
+          "backend",
+          "device",
+          "precision"
+        ],
+        "type": "object"
+      },
       "SessionExportRequest": {
         "properties": {
           "compression": {
@@ -23705,6 +24067,24 @@
         ],
         "type": "object"
       },
+      "SessionListResource": {
+        "properties": {
+          "schema_version": {
+            "type": "string"
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/SessionSummaryResource"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "sessions"
+        ],
+        "type": "object"
+      },
       "SessionResourceLifecycle": {
         "enum": [
           "active",
@@ -23737,6 +24117,29 @@
           "name",
           "created_at",
           "workspace_root"
+        ],
+        "type": "object"
+      },
+      "SessionSummaryResource": {
+        "properties": {
+          "current": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "name",
+          "status",
+          "current"
         ],
         "type": "object"
       },
@@ -30768,6 +31171,13 @@
         "operationId": "sessions_get_sessions",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionListResource"
+                }
+              }
+            },
             "description": "Available sessions"
           }
         },
@@ -30777,12 +31187,32 @@
       },
       "post": {
         "operationId": "sessions_post_sessions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
-          "200": {
-            "description": "Current session returned"
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateSessionResponse"
+                }
+              }
+            },
+            "description": "Scratch session created"
           },
           "400": {
-            "description": "The local runtime only exposes the current session"
+            "description": "Invalid scratch session request"
+          },
+          "409": {
+            "description": "An active local session already exists"
           }
         },
         "tags": [
@@ -42549,6 +42979,29 @@
           },
           "409": {
             "description": "Revision conflict"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/readiness": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_readiness",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelReadinessResource"
+                }
+              }
+            },
+            "description": "Derived readiness of the current canonical authoring model"
+          },
+          "404": {
+            "description": "No active workspace or scene document"
           }
         },
         "tags": [

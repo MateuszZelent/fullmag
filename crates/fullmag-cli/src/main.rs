@@ -20,6 +20,7 @@ mod nvtx_range;
 mod orchestrator;
 mod python_bridge;
 mod runtime_supervisor;
+mod scratch_runtime;
 mod simulation_preparation;
 mod solver_profile_persistence;
 mod stage_heartbeat;
@@ -33,11 +34,20 @@ use python_bridge::*;
 use step_utils::*;
 use types::*;
 
+const SCRIPT_MODE_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
+
 fn main() -> Result<()> {
     fullmag_build_info::print_startup_stamp();
     let raw_args = std::env::args_os().collect::<Vec<_>>();
     if is_script_mode(&raw_args) {
-        return orchestrator::run_script_mode(raw_args);
+        let script_mode = std::thread::Builder::new()
+            .name("fullmag-script-mode".to_string())
+            .stack_size(SCRIPT_MODE_STACK_SIZE_BYTES)
+            .spawn(move || orchestrator::run_script_mode(raw_args))
+            .context("failed to spawn script-mode worker")?;
+        return script_mode
+            .join()
+            .map_err(|_| anyhow!("script-mode worker panicked"))?;
     }
 
     #[cfg(windows)]
@@ -483,12 +493,24 @@ fn launch_ui(ui: UiCli) -> Result<()> {
         live_workspace.as_ref(),
     )?;
     let mut ui_child = crate::control_room::open_in_tauri(&ready, intent)?;
-    let _control_room_guard = crate::control_room::ControlRoomGuard::active(
+    let scratch_runtime = if live_workspace.is_none() {
+        let executable = std::env::current_exe().context("failed to resolve fullmag executable")?;
+        Some(crate::scratch_runtime::spawn(
+            crate::control_room::api_port(),
+            executable,
+            None,
+        ))
+    } else {
+        None
+    };
+    let control_room_guard = crate::control_room::ControlRoomGuard::active(
         ready.web_port,
         ready.api_child,
         ready.frontend_child,
     );
     let _ = ui_child.wait();
+    drop(control_room_guard);
+    drop(scratch_runtime);
     Ok(())
 }
 

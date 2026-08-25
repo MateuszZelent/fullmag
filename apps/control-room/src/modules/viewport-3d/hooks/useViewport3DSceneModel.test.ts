@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync as readFileSyncRaw } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
@@ -75,6 +75,7 @@ import {
   resolveViewport3DResolvedPartFieldBuffers,
   sameViewport3DQuantityId,
 } from "./useViewport3DSceneModel";
+
 import {
   resolveHysteresisStepViewportTarget,
 } from "../model/viewport3DTargets";
@@ -103,6 +104,13 @@ import {
 import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 import { resolveViewport3DFieldVectorForDomain } from "../model/viewport3DFieldDomainCompatibility";
 import { buildFdmSampledScalarColors } from "../viewport3dFieldMapping";
+
+function readFileSync(
+  path: Parameters<typeof readFileSyncRaw>[0],
+  encoding: "utf8",
+): string {
+  return readFileSyncRaw(path, encoding).replace(/\r\n/g, "\n");
+}
 
 const sceneModelSourceUrl = new URL("./useViewport3DSceneModel.ts", import.meta.url);
 const planarPreviewSourceUrl = new URL("../../../kernel/workspace/planarMonitorFramePreview.ts", import.meta.url);
@@ -767,6 +775,9 @@ describe("useViewport3DSceneModel", () => {
   it("publishes the central FDM display sampling provenance in the HUD summary", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 
+    expect(source).toContain(
+      'domainMeta.data?.discretization === "fdm" && domainMeta.data.grid',
+    );
     expect(source).toContain(
       "adaptFdmDomainPresentation(fdmDomainPresentation, FDM_DISPLAY_CELL_BUDGET)",
     );

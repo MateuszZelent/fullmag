@@ -21,7 +21,7 @@ import type {
   LiveStatusResource,
   SimulationPreparationResource,
 } from "./apiTypes";
-import { SIMULATION_PREPARATION_PATH } from "./apiPaths";
+import { SESSIONS_PATH, SIMULATION_PREPARATION_PATH } from "./apiPaths";
 import type { DecodedFieldVector } from "./codecs";
 import { RequestDiagnosticsController } from "./RequestDiagnosticsController";
 import { activeLaneCapabilityFixture } from "../resources/activeLaneCapabilityFixture.testSupport";
@@ -891,6 +891,78 @@ describe("ControlRoomApi", () => {
     expect(observedInit?.method).toBe("GET");
     expect(headers.get("x-request-id")).toBe("req-1");
     expect(headers.get("x-fullmag-contract-version")).toBeNull();
+  });
+
+  it("creates a scratch session through the typed sessions facade", async () => {
+    let observedInit: RequestInit | undefined;
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        observedUrl = String(url);
+        observedInit = init;
+        return jsonResponse(
+          {
+            session_id: "session-scratch",
+            status: {
+              requested_execution: {
+                backend: "fem",
+                device: "cpu",
+                precision: "double",
+              },
+              effective_execution: {
+                backend: "fem",
+                device: "cpu",
+                precision: "double",
+              },
+              fallback: null,
+            },
+            scene_document: {
+              schema_version: "0.3",
+              version: "scene.v2",
+              revision: 0,
+              scene: null,
+              objects: [],
+            },
+            revisions: { scene_revision: 0, state_version: 1 },
+          },
+          { status: 201 },
+        );
+      },
+    });
+
+    const created = await api.sessions.create({
+      name: "Scratch FEM",
+      backend: "fem",
+      device: "cpu",
+      precision: "double",
+    });
+
+    type CreateScratchSessionInput = Parameters<typeof api.sessions.create>[0];
+    expectTypeOf<CreateScratchSessionInput>().toEqualTypeOf<{
+      backend: "fdm" | "fem";
+      device: "cpu";
+      name: string;
+      precision: "double";
+      replace_current?: boolean;
+    }>();
+    expectTypeOf<typeof created.scene_document.schema_version>().toEqualTypeOf<"0.3">();
+    expectTypeOf<typeof created.status.fallback>().toEqualTypeOf<string | null>();
+
+    // @ts-expect-error The typed facade rejects unsupported execution requests before transport.
+    void ({ backend: "gpu", device: "cpu", name: "Invalid", precision: "double" } satisfies CreateScratchSessionInput);
+
+    expect(created.session_id).toBe("session-scratch");
+    expect(created.status.fallback).toBeNull();
+    expect(created.scene_document.schema_version).toBe("0.3");
+    expect(observedUrl).toBe(`http://127.0.0.1:8765${SESSIONS_PATH}`);
+    expect(observedInit?.method).toBe("POST");
+    expect(parseRequestJsonBody(observedInit?.body)).toMatchObject({
+      backend: "fem",
+      device: "cpu",
+      name: "Scratch FEM",
+      precision: "double",
+    });
   });
 
   it("loads magnetic response sweep artifacts through the analysis facade", async () => {
@@ -1843,6 +1915,14 @@ describe("ControlRoomApi", () => {
           url: String(url),
         });
         const requestUrl = String(url);
+        if (requestUrl.endsWith("/v2/sessions/current/model/geometry/validation")) {
+          return jsonResponse({ dirty: false, scene_revision: 1 });
+        }
+        if (requestUrl.endsWith("/v2/sessions/current/status")) {
+          return jsonResponse({
+            resources: { mesh_revision: 1, mesh_build_revision: 1 },
+          });
+        }
         if (requestUrl.endsWith("/v2/sessions/current/simulation/commands")) {
           return jsonResponse({
             accepted: true,
@@ -1999,6 +2079,14 @@ describe("ControlRoomApi", () => {
           url: String(url),
         });
         const requestUrl = String(url);
+        if (requestUrl.endsWith("/v2/sessions/current/model/geometry/validation")) {
+          return jsonResponse({ dirty: false, scene_revision: 1 });
+        }
+        if (requestUrl.endsWith("/v2/sessions/current/status")) {
+          return jsonResponse({
+            resources: { mesh_revision: 1, mesh_build_revision: 1 },
+          });
+        }
         if (requestUrl.endsWith("/v2/sessions/current/simulation/commands")) {
           return jsonResponse({
             accepted: true,
@@ -2052,6 +2140,95 @@ describe("ControlRoomApi", () => {
       reason: "field_on_demand",
       target: { kind: "study" },
     });
+  });
+
+  it("does not enqueue field materialization while the authored mesh is stale", async () => {
+    const calls: Array<{ method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        const requestUrl = String(url);
+        calls.push({ method: init?.method, url: requestUrl });
+        if (requestUrl.includes("/data/fields/H_demag/samples/vector")) {
+          return new Response(null, { headers: contractHeaders, status: 204 });
+        }
+        if (requestUrl.includes("/data/fields/H_demag/meta")) {
+          return jsonResponse(
+            { message: "field 'H_demag' not available in memory" },
+            { status: 404 },
+          );
+        }
+        if (requestUrl.endsWith("/v2/sessions/current/simulation/solver/status")) {
+          return jsonResponse({ is_busy: false, runtime_state: "waiting_for_compute" });
+        }
+        if (requestUrl.endsWith("/v2/sessions/current/model/geometry/validation")) {
+          return jsonResponse({ dirty: true });
+        }
+        if (requestUrl.endsWith("/v2/sessions/current/status")) {
+          return jsonResponse({
+            resources: { mesh_revision: 2, mesh_build_revision: 1 },
+          });
+        }
+        throw new Error(`Unexpected request ${requestUrl}`);
+      },
+    });
+
+    await expect(
+      api.data.fields.vector("H_demag", {
+        component: "full",
+        scope_id: "body",
+        scope_kind: "part",
+      }),
+    ).resolves.toMatchObject({ status: "not-applicable" });
+    expect(
+      calls.filter(
+        (call) =>
+          call.method === "POST" &&
+          call.url.endsWith("/v2/sessions/current/simulation/commands"),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("fails closed when mesh freshness validation is unavailable", async () => {
+    const calls: Array<{ method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        const requestUrl = String(url);
+        calls.push({ method: init?.method, url: requestUrl });
+        if (requestUrl.includes("/data/fields/H_demag/samples/vector")) {
+          return new Response(null, { headers: contractHeaders, status: 204 });
+        }
+        if (requestUrl.includes("/data/fields/H_demag/meta")) {
+          return jsonResponse(
+            { message: "field 'H_demag' not available in memory" },
+            { status: 404 },
+          );
+        }
+        if (requestUrl.endsWith("/v2/sessions/current/model/geometry/validation")) {
+          throw new Error("validation unavailable");
+        }
+        if (requestUrl.endsWith("/v2/sessions/current/simulation/solver/status")) {
+          return jsonResponse({ is_busy: false, runtime_state: "waiting_for_compute" });
+        }
+        throw new Error(`Unexpected request ${requestUrl}`);
+      },
+    });
+
+    await expect(
+      api.data.fields.vector("H_demag", {
+        component: "full",
+        scope_id: "body",
+        scope_kind: "part",
+      }),
+    ).resolves.toMatchObject({ status: "not-applicable" });
+    expect(
+      calls.filter(
+        (call) =>
+          call.method === "POST" &&
+          call.url.endsWith("/v2/sessions/current/simulation/commands"),
+      ),
+    ).toHaveLength(0);
   });
 
   it("retries a pending field vector without enqueueing a duplicate compute command", async () => {
@@ -4192,7 +4369,7 @@ describe("ControlRoomApi", () => {
     });
   });
 
-  it("exposes scene, universe, and shared-domain manifest through facade methods", async () => {
+  it("exposes scene readiness, universe, and shared-domain manifest through facade methods", async () => {
     const seenUrls: string[] = [];
     const api = new ControlRoomApi({
       baseUrl: "http://127.0.0.1:8765",
@@ -4203,12 +4380,14 @@ describe("ControlRoomApi", () => {
     });
 
     await api.model.scene();
+    await api.model.readiness();
     await api.model.physicsGraph();
     await api.model.universe();
     await api.meshing.sharedDomainManifest();
 
     expect(seenUrls).toEqual([
       "http://127.0.0.1:8765/v2/sessions/current/model/scene",
+      "http://127.0.0.1:8765/v2/sessions/current/model/readiness",
       "http://127.0.0.1:8765/v2/sessions/current/model/physics-graph",
       "http://127.0.0.1:8765/v2/sessions/current/model/universe",
       "http://127.0.0.1:8765/v2/sessions/current/meshing/meshes/shared-domain/manifest",

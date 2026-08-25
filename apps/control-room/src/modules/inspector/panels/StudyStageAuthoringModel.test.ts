@@ -1394,6 +1394,16 @@ describe("StudyStageAuthoringModel", () => {
     });
   });
 
+  it("carries the scene revision when saving a newly authored Relax stage", () => {
+    const relax = createDefaultStudyStageDraft("relax", 0);
+
+    expect(buildStudyStagesMergePatch([relax], 17)).toMatchObject({
+      kind: "merge_patch",
+      base_revision: 17,
+      merge_patch: { study: { stages: [{ kind: "relax" }] } },
+    });
+  });
+
   it("serializes fixed relax dt as a numeric timestep", () => {
     expect(
       studyStageDraftToSceneStage({

@@ -10,12 +10,40 @@ import {
 } from "three";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+import type { PrimitiveDraft } from "@/kernel/authoring/geometryLifecycleCommands";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type {
   Viewport3DBoxCylinderDifferencePreview,
   Viewport3DPrimitiveObject,
 } from "../viewport3dPrimitiveModel";
+
+export function primitiveDraftOverlayObject(
+  draft: PrimitiveDraft,
+): Viewport3DPrimitiveObject | null {
+  if (!draft.dimensions || !draft.translation || Object.keys(draft.errors).length > 0) {
+    return null;
+  }
+  const dimensions = draft.dimensions;
+  const translation = draft.translation;
+  const kind = draft.kind.toLowerCase() as "box" | "cylinder" | "sphere";
+  return {
+    bounds: {
+      center: translation,
+      radius: Math.hypot(...dimensions) / 2,
+      size: dimensions,
+    },
+    csgPreview: null,
+    fallbackLabel: "draft preview",
+    geometryKey: `draft:${draft.kind}:${dimensions.join(",")}:${translation.join(",")}`,
+    kind,
+    label: `New ${kind}`,
+    magnetizationTexturePreview: null,
+    meshState: "primitive-only",
+    objectId: "draft:primitive",
+    sceneRevision: -1,
+  };
+}
 
 export function trackPrimitiveObjectGeometry(
   tracker: Viewport3DResourceTracker,

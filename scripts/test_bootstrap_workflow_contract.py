@@ -241,6 +241,18 @@ jobs:
             "packages/fullmag-py/tests/test_preset_texture_v2_parity.py",
             python_job,
         )
+        self.assertNotIn("actions/checkout@v4", workflow)
+        self.assertEqual(
+            workflow.count("actions/checkout@v7"),
+            workflow.count("- name: Checkout"),
+        )
+        self.assertEqual(
+            workflow.count("actions/setup-node@v7"),
+            workflow.count("- name: Setup Node.js"),
+        )
+        self.assertIn("actions/setup-python@v7", workflow)
+        self.assertIn("actions/upload-artifact@v7", workflow)
+        self.assertIn("pnpm/action-setup@v6", workflow)
 
     def test_meshing_extra_provides_trimesh_boolean_backend(self) -> None:
         pyproject = (ROOT / "packages/fullmag-py/pyproject.toml").read_text()
@@ -274,6 +286,8 @@ jobs:
             set(gitlinks),
             "tracked gitlinks and complete .gitmodules records must match exactly",
         )
+        for path in gitlinks:
+            self.assertIn(f"path = {path}", gitmodules)
 
 
 if __name__ == "__main__":

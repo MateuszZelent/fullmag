@@ -110,6 +110,7 @@ import {
   MODEL_GEOMETRY_REALIZATION_CURRENT_PATH,
   MODEL_GEOMETRY_REALIZATIONS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_READINESS_PATH,
   MODEL_FROZEN_SPIN_PATH,
   MODEL_FROZEN_SPINS_PATH,
   MODEL_FROZEN_SPINS_PREVIEW_PATH,
@@ -164,6 +165,7 @@ import {
   PERSISTENCE_IMPORTS_PATH,
   PLATFORM_CAPABILITIES_PATH,
   PLATFORM_HEALTH_PATH,
+  SESSIONS_PATH,
   SESSION_EVENTS_COMMUNICATION_POLICY_PATH,
   SESSION_STATUS_PATH,
   SIMULATION_COMMAND_DETAIL_PATH,
@@ -261,6 +263,7 @@ import type {
   GpuTelemetryResource,
   HealthResource,
   ImportSessionAssetRequest,
+  JsonObject,
   LiveStatusResource,
   PlatformCapabilitiesResource,
   MagnetizationAssetPatchRequest,
@@ -323,6 +326,7 @@ import type {
   MeshSharedDomainQualityResource,
   MeshSharedDomainReportResource,
   MeshSharedDomainManifestResource,
+  ModelReadinessResource,
   MeshSummaryResource,
   MeshUniverseConfigReplaceRequest,
   MeshUniverseConfigResource,
@@ -388,6 +392,7 @@ import type {
   SessionAssetImportResponse,
   SessionExportRequest,
   SessionExportResponse,
+  SessionListResource,
   SessionImportCommitRequest,
   SessionImportCommitResponse,
   SessionImportInspectRequest,
@@ -409,6 +414,9 @@ import type {
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "./apiTypes";
+
+type CreateSessionRequest = components["schemas"]["CreateSessionRequest"];
+type CreateSessionResponse = components["schemas"]["CreateSessionResponse"];
 
 function optionalIntegerHeader(headers: Headers, name: string): number | null {
   const raw = headers.get(name);
@@ -722,8 +730,17 @@ export class ControlRoomApi {
   private readonly requestIdFactory: () => string;
   private readonly transport: OpenApiV2Transport;
   private readonly fieldMaterializationRequests = new Map<string, Promise<void>>();
+  private meshFreshnessRequest: Promise<boolean> | null = null;
 
   readonly sessions = {
+    list: (options?: RequestOptions) =>
+      this.requestJson<SessionListResource>(SESSIONS_PATH, options),
+    create: (input: CreateSessionRequest, options?: RequestOptions) =>
+      this.postJson<CreateSessionResponse, CreateSessionRequest>(
+        SESSIONS_PATH,
+        input,
+        options,
+      ),
     current: {
       status: (options?: RequestOptions) =>
         this.requestJson<LiveStatusResource>(SESSION_STATUS_PATH, options),
@@ -1777,6 +1794,24 @@ export class ControlRoomApi {
         transaction,
         options,
       ),
+    patchMagnetization: (
+      objectId: string,
+      regionId: string | null,
+      asset: JsonObject | null,
+      magnetizationRef: string | null,
+      options?: AuthoringWriteOptions,
+    ) =>
+      this.model.commitTransaction(
+        {
+          ...baseRevisionPayload(options),
+          ...(asset ? { asset } : {}),
+          kind: "patch_magnetization",
+          magnetization_ref: magnetizationRef,
+          object_id: objectId,
+          ...(regionId ? { region_id: regionId } : {}),
+        },
+        options,
+      ),
     createObject: (request: ObjectCreateRequest, options?: RequestOptions) =>
       this.postJson<SceneResource, ObjectCreateRequest>(
         MODEL_OBJECTS_PATH,
@@ -2158,6 +2193,8 @@ export class ControlRoomApi {
       ),
     scene: (options?: RequestOptions) =>
       this.requestJson<SceneResource>(MODEL_SCENE_PATH, options),
+    readiness: (options?: RequestOptions) =>
+      this.requestJson<ModelReadinessResource>(MODEL_READINESS_PATH, options),
     physicsGraph: (options?: RequestOptions) =>
       this.requestJson<PhysicsGraphResource>(MODEL_PHYSICS_GRAPH_PATH, options),
     authoringScript: (options?: RequestOptions) =>
@@ -2509,6 +2546,9 @@ export class ControlRoomApi {
       return await this.requestJson<FieldMetaResource>(path, options, params);
     } catch (error) {
       if (!shouldMaterializeFieldAfterJsonError(error)) {
+        throw error;
+      }
+      if (await this.meshIsStale(options)) {
         throw error;
       }
       await this.materializeFieldsForQuantity(quantityId, options);
@@ -2961,6 +3001,9 @@ export class ControlRoomApi {
     if (await this.livePublisherOwnsFieldMaterialization(quantityId, metaQuery, options)) {
       return result;
     }
+    if (await this.meshIsStale(options)) {
+      return result;
+    }
     await this.materializeFieldsForQuantity(quantityId, options);
     return this.retryFieldVectorUntilReady(
       path,
@@ -3031,6 +3074,37 @@ export class ControlRoomApi {
       });
     this.fieldMaterializationRequests.set(key, request);
     return request;
+  }
+
+  private async meshIsStale(options: RequestOptions = {}): Promise<boolean> {
+    throwIfAborted(options.signal);
+    if (this.meshFreshnessRequest) {
+      const stale = await this.meshFreshnessRequest;
+      throwIfAborted(options.signal);
+      return stale;
+    }
+
+    const request = (async () => {
+      try {
+        // Do not bind the shared request to one component's abort signal.
+        return (await this.model.geometry.validation()).dirty;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          throw error;
+        }
+        // Field materialization is unsafe without authoritative freshness.
+        return true;
+      }
+    })();
+    this.meshFreshnessRequest = request;
+    void request
+      .finally(() => {
+        if (this.meshFreshnessRequest === request) this.meshFreshnessRequest = null;
+      })
+      .catch(() => undefined);
+    const stale = await request;
+    throwIfAborted(options.signal);
+    return stale;
   }
 
   private async retryFieldMetaUntilReady(

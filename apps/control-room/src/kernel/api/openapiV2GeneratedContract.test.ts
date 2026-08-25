@@ -56,6 +56,22 @@ describe("generated OpenAPI v2 transport", () => {
     );
   });
 
+  it("generates typed content for the session collection", () => {
+    const document = JSON.parse(
+      readFileSync(new URL("./generated/openapi-v2.json", import.meta.url), "utf8"),
+    );
+    const sessionList =
+      document.paths["/v2/sessions"].get.responses["200"].content?.[
+        "application/json"
+      ];
+
+    expect(sessionList?.schema?.$ref).toBe(
+      "#/components/schemas/SessionListResource",
+    );
+    expect(document.components.schemas.SessionListResource).toBeDefined();
+    expect(document.components.schemas.SessionSummaryResource).toBeDefined();
+  });
+
   it("publishes immutable planar sample tokens and separated stale revisions", () => {
     const document = JSON.parse(
       readFileSync(new URL("./generated/openapi-v2.json", import.meta.url), "utf8"),

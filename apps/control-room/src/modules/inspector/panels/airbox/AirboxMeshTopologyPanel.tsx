@@ -6,7 +6,12 @@ import { shouldLoadRuntimeMeshManifest } from "@/kernel/resources/studyRuntimeRe
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { AirboxFieldRow as FieldRow } from "./airboxDisplay";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
-import { aggregateAirboxMeshParts, findCanonicalAirboxPart, findAirboxParts } from "./airboxMeshInspectorModel";
+import {
+  aggregateAirboxBounds,
+  aggregateAirboxMeshParts,
+  findCanonicalAirboxPart,
+  findAirboxParts,
+} from "./airboxMeshInspectorModel";
 import { useAirboxInspectorRuntimeStatus } from "./airboxInspectorRuntimeStatus";
 
 const vector = (value: readonly number[] | null | undefined) =>
@@ -20,6 +25,7 @@ export function AirboxMeshTopologyPanel({ selection }: InspectorPanelProps) {
   });
   const airboxParts = findAirboxParts(manifest.data?.mesh_parts);
   const aggregate = aggregateAirboxMeshParts(airboxParts);
+  const bounds = aggregateAirboxBounds(airboxParts);
   const part = findCanonicalAirboxPart(manifest.data?.mesh_parts);
 
   return (
@@ -36,8 +42,8 @@ export function AirboxMeshTopologyPanel({ selection }: InspectorPanelProps) {
         <FieldRow label="Carrier id" value={part?.id ?? "not available"} />
         <FieldRow label="Carrier role" value={part?.role ?? "not available"} />
         <FieldRow label="Carrier count" value={aggregate.carrierCount.toLocaleString("en-US")} />
-        <FieldRow label="Bounds min" value={vector(part?.bounds_min)} unit="m" />
-        <FieldRow label="Bounds max" value={vector(part?.bounds_max)} unit="m" />
+        <FieldRow label="Bounds min (full Airbox extent)" value={vector(bounds?.min ?? part?.bounds_min)} unit="m" />
+        <FieldRow label="Bounds max (full Airbox extent)" value={vector(bounds?.max ?? part?.bounds_max)} unit="m" />
         <FieldRow
           label="Node source"
           value={

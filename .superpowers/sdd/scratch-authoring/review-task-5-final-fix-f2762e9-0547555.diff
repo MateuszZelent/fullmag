@@ -1,0 +1,414 @@
+# Review package: f2762e998..05475556b
+
+## Commits
+05475556b test(authoring): verify draft overlay isolation
+
+## Files changed
+ .../simulationPreparationTestDom.test-support.ts   |  13 ++-
+ .../panels/GeometryObjectPanel.dom.test.tsx        |  12 ++-
+ .../modules/inspector/primitives/Vector3Field.tsx  |   7 +-
+ .../hooks/usePrimitiveDraftOverlay.test.tsx        | 113 +++++++++++++++++++--
+ 4 files changed, 129 insertions(+), 16 deletions(-)
+
+## Diff
+diff --git a/apps/control-room/src/kernel/layout/simulationPreparationTestDom.test-support.ts b/apps/control-room/src/kernel/layout/simulationPreparationTestDom.test-support.ts
+index 4ebfc868b..1c0762770 100644
+--- a/apps/control-room/src/kernel/layout/simulationPreparationTestDom.test-support.ts
++++ b/apps/control-room/src/kernel/layout/simulationPreparationTestDom.test-support.ts
+@@ -157,21 +157,29 @@ export class TestElement extends TestNode {
+   offsetWidth = 0;
+   scrollHeight = 0;
+   scrollLeft = 0;
+   scrollTop = 0;
+   scrollWidth = 0;
+   readonly style: Record<string, string> & {
+     removeProperty: (name: string) => void;
+     setProperty: (name: string, value: string) => void;
+   };
+   readonly tagName: string;
+-  value = "";
++  private controlValue = "";
++
++  get value(): string {
++    return this.controlValue;
++  }
++
++  set value(value: string) {
++    this.controlValue = String(value);
++  }
+ 
+   get innerHTML(): string {
+     return this.childNodes.map(serializeTestNode).join("");
+   }
+ 
+   set innerHTML(markup: string) {
+     for (const child of this.childNodes) child.parentNode = null;
+     this.childNodes.length = 0;
+     const stack: TestElement[] = [this];
+     for (const token of markup.match(/<!--[\s\S]*?-->|<[^>]+>|[^<]+/g) ?? []) {
+@@ -299,20 +307,21 @@ function serializeTestNode(node: TestNode): string {
+     .join("");
+   if (isVoidHtmlElement(node.tagName)) return `<${node.tagName.toLowerCase()}${attributes}>`;
+   return `<${node.tagName.toLowerCase()}${attributes}>${node.childNodes.map(serializeTestNode).join("")}</${node.tagName.toLowerCase()}>`;
+ }
+ 
+ export class TestDocument extends TestNode {
+   activeElement: TestElement | null = null;
+   readonly body: TestElement;
+   readonly documentElement: TestElement;
+   defaultView: Record<string, unknown> | null = null;
++  oninput: ((event: TestEvent) => void) | null = null;
+ 
+   constructor() {
+     super(null as unknown as TestDocument, 9, "#document");
+     this.ownerDocument = this;
+     this.documentElement = new TestElement(this, "html");
+     this.body = new TestElement(this, "body");
+     this.documentElement.appendChild(this.body);
+     this.appendChild(this.documentElement);
+   }
+ 
+@@ -382,21 +391,21 @@ export function installSimulationPreparationTestDom({
+     takeRecords(): never[] {
+       return [];
+     }
+   }
+   const getComputedStyle = () => ({ direction: "ltr" });
+   const requestAnimationFrame = (callback: FrameRequestCallback) => {
+     callback(0);
+     return 1;
+   };
+   const cancelAnimationFrame = () => undefined;
+-  const navigator = { clipboard };
++  const navigator = { clipboard, userAgent: "FullmagTestDom/1.0" };
+   const window = {
+     document,
+     navigator,
+     Element: TestElement,
+     Event: TestEvent,
+     HTMLElement: TestElement,
+     HTMLIFrameElement: TestHtmlIFrameElement,
+     location: { search: "" },
+     MutationObserver: TestMutationObserver,
+     Node: TestNode,
+diff --git a/apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.dom.test.tsx b/apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.dom.test.tsx
+index bda93e9ba..e6528525e 100644
+--- a/apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.dom.test.tsx
++++ b/apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.dom.test.tsx
+@@ -1,12 +1,11 @@
+ import { act } from "react";
+-import { createRoot } from "react-dom/client";
+ import { beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
+ import {
+   installSimulationPreparationTestDom,
+   TestElement,
+   TestEvent,
+   TestNode,
+ } from "@/kernel/layout/simulationPreparationTestDom.test-support";
+ import type { Selection } from "@/kernel/selection/selectionTypes";
+@@ -69,20 +68,21 @@ describe("GeometryObjectPanel primitive transaction", () => {
+     mocks.commitTransaction
+       .mockRejectedValueOnce(
+         new ControlRoomApiError("scene changed", 409, "request-1", "revision_conflict"),
+       )
+       .mockResolvedValueOnce({
+         committed_scene: { objects: [{ id: "dirty-box" }], revision: 14 },
+         scene_revision: 14,
+       });
+     const dom = installSimulationPreparationTestDom();
+     const container = dom.document.createElement("div");
++    const { createRoot } = await import("react-dom/client");
+     const root = createRoot(container as unknown as Element);
+     try {
+       await act(async () => root.render(<GeometryObjectPanel selection={selection} />));
+       await act(async () => changeInput(container, "Size X", "2.5e-7"));
+       await act(async () => findButton(container, "Apply Draft").click());
+       expect(mocks.commitTransaction).toHaveBeenCalledTimes(1);
+       expect(mocks.commitTransaction).toHaveBeenLastCalledWith(
+         expect.objectContaining({
+           base_revision: 12,
+           geometry: expect.objectContaining({ geometry_params: { size: [2.5e-7, 1e-7, 1e-8] } }),
+@@ -130,20 +130,21 @@ describe("GeometryObjectPanel primitive transaction", () => {
+       dom.restore();
+     }
+   });
+ 
+   it("keeps rebase locked when refetch ends in an error", async () => {
+     mocks.commitTransaction.mockRejectedValueOnce(
+       new ControlRoomApiError("scene changed", 409, "request-2", "revision_conflict"),
+     );
+     const dom = installSimulationPreparationTestDom();
+     const container = dom.document.createElement("div");
++    const { createRoot } = await import("react-dom/client");
+     const root = createRoot(container as unknown as Element);
+     try {
+       await act(async () => root.render(<GeometryObjectPanel selection={selection} />));
+       await act(async () => findButton(container, "Apply Draft").click());
+       await act(async () => findButton(container, "Refetch Scene").click());
+       mocks.sceneResource.status = "loading";
+       await act(async () => root.render(<GeometryObjectPanel selection={selection} />));
+       mocks.sceneResource.status = "error";
+       mocks.sceneResource.error = new Error("network unavailable");
+       await act(async () => root.render(<GeometryObjectPanel selection={selection} />));
+@@ -155,54 +156,61 @@ describe("GeometryObjectPanel primitive transaction", () => {
+       await act(async () => root.unmount());
+       dom.restore();
+     }
+   });
+ 
+   it("fails closed and sends no request when the scene revision is unavailable", async () => {
+     mocks.sceneResource.data = { objects: [] } as never;
+     mocks.sceneResource.revision = null as never;
+     const dom = installSimulationPreparationTestDom();
+     const container = dom.document.createElement("div");
++    const { createRoot } = await import("react-dom/client");
+     const root = createRoot(container as unknown as Element);
+     try {
+       await act(async () => root.render(<GeometryObjectPanel selection={selection} />));
+       expect(findButton(container, "Apply Draft").disabled).toBe(true);
+       expect(mocks.commitTransaction).not.toHaveBeenCalled();
+     } finally {
+       await act(async () => root.unmount());
+       dom.restore();
+     }
+   });
+ 
+   it("sends no request for an invalid primitive dimension", async () => {
+     const dom = installSimulationPreparationTestDom();
+     const container = dom.document.createElement("div");
++    const { createRoot } = await import("react-dom/client");
+     const root = createRoot(container as unknown as Element);
+     try {
+       await act(async () => root.render(<GeometryObjectPanel selection={selection} />));
+       await act(async () => changeInput(container, "Size X", "0"));
+       await act(async () => findButton(container, "Apply Draft").click());
+ 
+       expect(mocks.commitTransaction).not.toHaveBeenCalled();
+       expect(container.textContent).toContain("greater than 0");
+     } finally {
+       await act(async () => root.unmount());
+       dom.restore();
+     }
+   });
+ });
+ 
+ function changeInput(root: TestNode, label: string, value: string): void {
+   const input = findElements(root, (element) =>
+     element.tagName === "INPUT" && element.getAttribute("aria-label") === label)[0];
+   if (!input) throw new Error(`Missing input ${label}`);
+-  input.value = value;
++  const nativeValueSetter = Object.getOwnPropertyDescriptor(
++    TestElement.prototype,
++    "value",
++  )?.set;
++  if (!nativeValueSetter) throw new Error("Missing native test input value setter");
++  nativeValueSetter.call(input, value);
+   input.dispatchEvent(new TestEvent("input", { bubbles: true }));
+ }
+ 
+ function findButton(root: TestNode, text: string): TestElement {
+   const button = findElements(root, (element) =>
+     element.tagName === "BUTTON" && element.textContent.includes(text))[0];
+   if (!button) throw new Error(`Missing button ${text}`);
+   return button;
+ }
+ 
+diff --git a/apps/control-room/src/modules/inspector/primitives/Vector3Field.tsx b/apps/control-room/src/modules/inspector/primitives/Vector3Field.tsx
+index 4d5da802e..4c1500573 100644
+--- a/apps/control-room/src/modules/inspector/primitives/Vector3Field.tsx
++++ b/apps/control-room/src/modules/inspector/primitives/Vector3Field.tsx
+@@ -46,26 +46,21 @@ export function Vector3Field({
+                   {axis.toUpperCase()}
+                 </label>
+                 <input
+                   id={elementId}
+                   aria-label={`${label} ${axis.toUpperCase()}`}
+                   aria-invalid={Boolean(errors?.[index]) || undefined}
+                   className="fm-inspector-input"
+                   disabled={disabled}
+                   type="text"
+                   value={values[index] ?? ""}
+-                  onInput={(event) =>
+-                    onChange(
+-                      index as 0 | 1 | 2,
+-                      (event.target as HTMLInputElement).value,
+-                    )
+-                  }
++                  onChange={(event) => onChange(index as 0 | 1 | 2, event.target.value)}
+                 />
+                 {errors?.[index] ? (
+                   <span
+                     className="fm-inspector-form-field__hint fm-inspector-form-field__hint--error"
+                     role="alert"
+                   >
+                     {errors[index]}
+                   </span>
+                 ) : null}
+               </div>
+diff --git a/apps/control-room/src/modules/viewport-3d/hooks/usePrimitiveDraftOverlay.test.tsx b/apps/control-room/src/modules/viewport-3d/hooks/usePrimitiveDraftOverlay.test.tsx
+index 89d2f0b38..b39dcd8ca 100644
+--- a/apps/control-room/src/modules/viewport-3d/hooks/usePrimitiveDraftOverlay.test.tsx
++++ b/apps/control-room/src/modules/viewport-3d/hooks/usePrimitiveDraftOverlay.test.tsx
+@@ -1,53 +1,154 @@
+ import { act } from "react";
+ import { createRoot } from "react-dom/client";
+ import { afterEach, describe, expect, it, vi } from "vitest";
+ 
++import { MODEL_SCENE_PATH, DATA_DOMAIN_TOPOLOGY_PATH } from "@/kernel/api/apiPaths";
+ import { primitiveDraftOverlayStore } from "@/kernel/authoring/geometryLifecycleCommands";
++import { KernelContext } from "@/kernel/KernelContext";
++import { EventBus } from "@/kernel/events/EventBus";
++import type { KernelEventMap } from "@/kernel/events/eventTypes";
+ import {
+   installSimulationPreparationTestDom,
+   TestElement,
+   type TestNode,
+ } from "@/kernel/layout/simulationPreparationTestDom.test-support";
++import { DiagnosticRecorderController } from "@/kernel/performance/diagnostic-recorder/DiagnosticRecorderController";
++import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
++import {
++  resetSharedResourceRuntimeStoreForTests,
++  sharedResourceRuntimeStore,
++} from "@/kernel/resources/ResourceRuntimeStore";
++import { sessionScopedResourceKey } from "@/kernel/resources/sessionResourceIdentity";
++import type { KernelApi } from "@/kernel/types";
++
++import {
++  synchronizeViewport3DSessionIdentity,
++  useViewport3DDomainTopology,
++  useViewport3DScene,
++} from "../viewport3dResources";
+ 
+ import { usePrimitiveDraftOverlay } from "./usePrimitiveDraftOverlay";
+ 
++const SESSION_IDENTITY = {
++  sessionEpoch: "epoch-task-5",
++  sessionId: "session-task-5",
++} as const;
++
++vi.mock("@/kernel/resources/useSessionStatus", async (importOriginal) => ({
++  ...(await importOriginal<typeof import("@/kernel/resources/useSessionStatus")>()),
++  useSessionResourceIdentity: () => SESSION_IDENTITY,
++}));
++
+ function Probe() {
+   const overlay = usePrimitiveDraftOverlay();
+-  return <div data-geometry-key={overlay?.geometryKey ?? "none"} />;
++  const scene = useViewport3DScene();
++  const topology = useViewport3DDomainTopology();
++  return (
++    <div
++      data-geometry-key={overlay?.geometryKey ?? "none"}
++      data-scene-revision={scene.data?.revision ?? "none"}
++      data-topology-provenance={
++        (topology.data as { meshTopologyHash?: string } | null)?.meshTopologyHash ??
++        "none"
++      }
++    />
++  );
+ }
+ 
+ describe("usePrimitiveDraftOverlay", () => {
+-  afterEach(() => primitiveDraftOverlayStore.clear());
++  afterEach(() => {
++    primitiveDraftOverlayStore.clear();
++    resetSharedResourceRuntimeStoreForTests();
++    synchronizeViewport3DSessionIdentity(null);
++  });
+ 
+-  it("reacts to the local draft store without requesting mesh data", async () => {
+-    const meshRequest = vi.fn();
++  it("updates the overlay without reloading topology or mutating committed resources", async () => {
++    const bus = new EventBus<KernelEventMap>();
++    const resources = new ResourceInvalidationController(bus);
++    const topologyChunked = vi.fn();
++    const loadScene = vi.fn();
++    const kernel = {
++      api: {
++        data: { domain: { topologyChunked } },
++        model: { scene: loadScene },
++      },
++      bus,
++      diagnosticRecorder: new DiagnosticRecorderController({
++        config: { enabled: false },
++      }),
++      resources,
++    } as unknown as KernelApi;
++    const sceneKey = sessionScopedResourceKey(SESSION_IDENTITY, MODEL_SCENE_PATH);
++    const topologyKey = sessionScopedResourceKey(
++      SESSION_IDENTITY,
++      DATA_DOMAIN_TOPOLOGY_PATH,
++    );
++    const committedScene = { objects: [{ id: "committed-box" }], revision: 41 };
++    const committedTopology = {
++      meshRevision: 17,
++      meshTopologyHash: "sha256:committed-topology",
++    };
++    synchronizeViewport3DSessionIdentity(SESSION_IDENTITY);
++    sharedResourceRuntimeStore.updateData(sceneKey, committedScene, 41);
++    sharedResourceRuntimeStore.updateData(
++      topologyKey,
++      committedTopology,
++      "topology-etag-17",
++    );
++    resources.invalidate(sceneKey, 41);
++    resources.invalidate(topologyKey, "topology-etag-17");
++    const sceneSnapshotBefore = sharedResourceRuntimeStore.getSnapshot(sceneKey);
++    const topologySnapshotBefore = sharedResourceRuntimeStore.getSnapshot(topologyKey);
+     const dom = installSimulationPreparationTestDom();
+     const container = dom.document.createElement("div");
+     const root = createRoot(container as unknown as Element);
+     try {
+-      await act(async () => root.render(<Probe />));
++      await act(async () =>
++        root.render(
++          <KernelContext.Provider value={kernel}>
++            <Probe />
++          </KernelContext.Provider>,
++        ),
++      );
+       expect(probe(container).getAttribute("data-geometry-key")).toBe("none");
++      expect(probe(container).getAttribute("data-scene-revision")).toBe("41");
++      expect(probe(container).getAttribute("data-topology-provenance")).toBe(
++        "sha256:committed-topology",
++      );
++      expect(loadScene).not.toHaveBeenCalled();
++      expect(topologyChunked).not.toHaveBeenCalled();
+ 
+       await act(async () =>
+         primitiveDraftOverlayStore.publish({
+           dimensions: [2e-7, 4e-7, 6e-8],
+           errors: {},
+           kind: "Box",
+           translation: [7e-9, 8e-9, 9e-9],
+         }),
+       );
+ 
+       expect(probe(container).getAttribute("data-geometry-key")).toBe(
+         "draft:Box:2e-7,4e-7,6e-8:7e-9,8e-9,9e-9",
+       );
+-      expect(meshRequest).not.toHaveBeenCalled();
++      expect(probe(container).getAttribute("data-scene-revision")).toBe("41");
++      expect(probe(container).getAttribute("data-topology-provenance")).toBe(
++        "sha256:committed-topology",
++      );
++      expect(loadScene).not.toHaveBeenCalled();
++      expect(topologyChunked).not.toHaveBeenCalled();
++      expect(sharedResourceRuntimeStore.getSnapshot(sceneKey)).toBe(
++        sceneSnapshotBefore,
++      );
++      expect(sharedResourceRuntimeStore.getSnapshot(topologyKey)).toBe(
++        topologySnapshotBefore,
++      );
+     } finally {
+       await act(async () => root.unmount());
+       dom.restore();
+     }
+   });
+ });
+ 
+ function probe(root: TestNode): TestElement {
+   const found = root.childNodes.find(
+     (node): node is TestElement => node instanceof TestElement,

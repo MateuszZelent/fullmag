@@ -1,15 +1,14 @@
 import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
+import {
+  acknowledgedAuthoringSceneRevision,
+  invalidateAuthoringMutationDependents,
+} from "@/kernel/authoring/authoringMutationInvalidation";
 import type { JsonObject } from "@/kernel/api/apiTypes";
 import type {
   CommandContext,
   CommandContribution,
   CommandResult,
 } from "@/kernel/commands/commandTypes";
-import {
-  MODEL_REGIONS_RESOURCE_KEY,
-  SCENE_RESOURCE_KEY,
-  VISUALIZATION_STATE_RESOURCE_KEY,
-} from "@/kernel/resources/geometryLifecycleResources";
 
 import {
   magnetizationTextureAssetId,
@@ -86,24 +85,24 @@ async function assignPreset(
     },
   );
 
-  if (target.kind === "region") {
-    await context.api.model.patchRegion(
-      target.regionId,
-      {
-        magnetization_ref: assetId,
-      },
-    );
-  } else {
-    await context.api.model.patchObject(target.objectId, {
-      base_revision: assetResponse.scene_revision,
-      magnetization_ref: assetId,
-    });
-  }
+  const assignmentResponse =
+    target.kind === "region"
+      ? await context.api.model.patchRegion(target.regionId, {
+          magnetization_ref: assetId,
+        })
+      : await context.api.model.patchObject(target.objectId, {
+          base_revision: assetResponse.scene_revision,
+          magnetization_ref: assetId,
+        });
 
-  const revision = assetResponse.scene_revision ?? Date.now();
-  context.resources?.invalidate(SCENE_RESOURCE_KEY, revision);
-  context.resources?.invalidate(MODEL_REGIONS_RESOURCE_KEY, revision);
-  context.resources?.invalidate(VISUALIZATION_STATE_RESOURCE_KEY, revision);
+  const revision = acknowledgedAuthoringSceneRevision(assignmentResponse);
+  if (context.resources) {
+    invalidateAuthoringMutationDependents(
+      context.resources,
+      "magnetization",
+      revision,
+    );
+  }
   return { status: "completed" };
 }
 

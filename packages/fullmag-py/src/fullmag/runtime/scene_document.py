@@ -1044,13 +1044,15 @@ def _ensure_physics_stack(
     for required in ("exchange", "demag"):
         if required not in by_kind:
             by_kind[required] = {"kind": required, "enabled": True, "params": None}
-    if material_dind is not None and "interfacial_dmi" not in by_kind:
+    material_dind_value = _number_or_none(material_dind)
+    material_dbulk_value = _number_or_none(material_dbulk)
+    if material_dind_value not in (None, 0.0) and "interfacial_dmi" not in by_kind:
         by_kind["interfacial_dmi"] = _normalize_interaction_entry(
             {"kind": "interfacial_dmi", "enabled": True, "params": None},
             material_dind=material_dind,
             material_dbulk=None,
         ) or {"kind": "interfacial_dmi", "enabled": True, "params": {"dind": 1e-3}}
-    if material_dbulk is not None and "bulk_dmi" not in by_kind:
+    if material_dbulk_value not in (None, 0.0) and "bulk_dmi" not in by_kind:
         by_kind["bulk_dmi"] = _normalize_interaction_entry(
             {"kind": "bulk_dmi", "enabled": True, "params": None},
             material_dind=None,
@@ -1072,6 +1074,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
 
     for geometry in geometries:
         name = str(geometry.get("name", "object"))
+        object_id = str(geometry.get("object_id") or name)
         geometry_params = dict(geometry.get("geometry_params") or {})
         translation = geometry_params.pop("translation", geometry_params.pop("translate", [0, 0, 0]))
         role = str(geometry.get("role") or "magnet")
@@ -1099,7 +1102,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
 
         objects.append(
             {
-                "id": name,
+                "id": object_id,
                 "name": name,
                 "role": role,
                 "geometry": {
@@ -1171,6 +1174,16 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         else:
             legacy_current_modules.append(copy.deepcopy(module))
 
+    requested_backend = str(
+        builder.get("requested_backend") or builder.get("backend") or "auto"
+    )
+    requested_device = str(builder.get("requested_device") or "auto")
+    requested_precision = str(
+        builder.get("requested_precision")
+        or builder.get("execution_precision")
+        or "double"
+    )
+
     document = {
         "version": "scene.v2",
         "revision": int(builder.get("revision", 0)),
@@ -1194,9 +1207,9 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         "monitors": {"planar": copy.deepcopy(builder.get("planar_monitors") or [])},
         "study": {
             "backend": builder.get("backend"),
-            "requested_backend": "auto",
-            "requested_device": "auto",
-            "requested_precision": "double",
+            "requested_backend": requested_backend,
+            "requested_device": requested_device,
+            "requested_precision": requested_precision,
             "requested_mode": builder.get("requested_mode", "strict"),
             "requested_cpu_threads": builder.get("cpu_threads"),
             "fem_demag_solver_policy": builder.get("fem_demag_solver_policy"),
@@ -1307,6 +1320,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         )
 
         entry: dict[str, Any] = {
+            "object_id": str(obj.get("id") or obj.get("name") or ""),
             "name": str(obj.get("name") or obj.get("id") or ""),
             "role": role,
             "region_name": obj.get("region_name"),
@@ -1352,7 +1366,10 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("current_transports contains duplicate names")
     builder = {
         "revision": int(scene.get("revision", 0)),
-        "backend": study.get("backend"),
+        "backend": study.get("backend") or study.get("requested_backend"),
+        "requested_backend": study.get("requested_backend", "auto"),
+        "requested_device": study.get("requested_device", "auto"),
+        "requested_precision": study.get("requested_precision", "double"),
         "requested_mode": study.get("requested_mode", "strict"),
         "cpu_threads": study.get("requested_cpu_threads"),
         "fem_demag_solver_policy": study.get("fem_demag_solver_policy"),
@@ -1429,8 +1446,15 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
     if "integrator" in solver:
         solver_override["integrator"] = solver.get("integrator") or None
     for key in ("fixed_timestep", "dt_initial", "dt_min", "dt_max", "max_err"):
-        if key in solver:
-            solver_override[key] = _number_or_none(solver.get(key))
+        if key not in solver:
+            continue
+        raw_value = solver.get(key)
+        # The Rust builder adapter serializes unset text fields as empty strings;
+        # those are absence, while an explicit JSON null remains a deliberate
+        # clear request and must stay visible to the override validator.
+        if isinstance(raw_value, str) and not raw_value.strip():
+            continue
+        solver_override[key] = _number_or_none(raw_value)
     if "adaptive_timestep" in solver:
         solver_override["adaptive_timestep"] = advanced_adaptive_override
     solver_override["relax"] = {
@@ -1443,6 +1467,8 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
     overrides = {
         "runtime_selection": {
             "cpu_threads": _int_or_none(builder.get("cpu_threads")),
+            "device": builder.get("requested_device", "auto"),
+            "precision": builder.get("requested_precision", "double"),
         },
         "fem_demag_solver_policy": (
             dict(builder.get("fem_demag_solver_policy"))
@@ -1466,6 +1492,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
             "hmin": _number_or_none(mesh.get("minimum_element_size") or mesh.get("hmin")),
             "maximum_element_size": _number_or_auto(mesh.get("maximum_element_size") or mesh.get("hmax")),
             "minimum_element_size": _number_or_none(mesh.get("minimum_element_size") or mesh.get("hmin")),
+            "order": _int_or_none(mesh.get("order")),
             "calibrate_for": mesh.get("calibrate_for") or None,
             "size_preset": mesh.get("size_preset") or None,
             "size_factor": mesh.get("size_factor"),
@@ -1561,7 +1588,30 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
     _copy_present_collection(builder, overrides, "spin_transports")
     _copy_present_collection(builder, overrides, "oersted_terms")
     if "fdm" in builder:
-        overrides["fdm"] = copy.deepcopy(builder.get("fdm"))
+        fdm = copy.deepcopy(builder.get("fdm"))
+        if isinstance(fdm, dict):
+            aliases: dict[str, str] = {}
+            for geometry in builder.get("geometries") or []:
+                if not isinstance(geometry, dict):
+                    continue
+                name = geometry.get("name") or geometry.get("object_id") or geometry.get("id")
+                if name is None:
+                    continue
+                for alias in (
+                    geometry.get("object_id"),
+                    geometry.get("id"),
+                    geometry.get("region_name"),
+                ):
+                    if alias is not None:
+                        aliases[str(alias)] = str(name)
+            for grid_key in ("per_magnet", "per_object_grid"):
+                raw_grid = fdm.get(grid_key)
+                if isinstance(raw_grid, dict):
+                    fdm[grid_key] = {
+                        aliases.get(str(key), str(key)): value
+                        for key, value in raw_grid.items()
+                    }
+        overrides["fdm"] = fdm
     return overrides
 
 

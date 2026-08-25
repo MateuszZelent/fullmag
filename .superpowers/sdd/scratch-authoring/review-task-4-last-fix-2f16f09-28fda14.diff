@@ -1,0 +1,241 @@
+# Review package: 2f16f09f2..28fda14de
+
+## Commits
+28fda14de fix(authoring): refresh status with readiness
+
+## Files changed
+ .../authoringMutationInvalidation.test.ts          | 70 ++++++++++++++++++++++
+ .../authoring/authoringMutationInvalidation.ts     |  3 +
+ crates/fullmag-authoring/src/adapters.rs           | 30 ++++++++--
+ 3 files changed, 99 insertions(+), 4 deletions(-)
+
+## Diff
+diff --git a/apps/control-room/src/kernel/authoring/authoringMutationInvalidation.test.ts b/apps/control-room/src/kernel/authoring/authoringMutationInvalidation.test.ts
+index 1afd64ea9..1d92b69a1 100644
+--- a/apps/control-room/src/kernel/authoring/authoringMutationInvalidation.test.ts
++++ b/apps/control-room/src/kernel/authoring/authoringMutationInvalidation.test.ts
+@@ -1,15 +1,19 @@
+ import { readFileSync } from "node:fs";
+ 
+ import { describe, expect, it, vi } from "vitest";
+ 
+ import { MODEL_READINESS_PATH } from "@/kernel/api/apiPaths";
++import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
++import { buildRuntimeCommandControlResourceData } from "@/kernel/resources/studyRuntimeResources";
++import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
++import { STUDY_RUNTIME_COMMANDS } from "@/kernel/runtime/studyRuntimeCommandContributions";
+ 
+ import {
+   AUTHORING_MUTATION_DEPENDENTS,
+   invalidateAuthoringMutationDependents,
+ } from "./authoringMutationInvalidation";
+ 
+ describe("authoring mutation readiness invalidation", () => {
+   it.each([
+     "../../modules/inspector/panels/ObjectMaterialPanel.tsx",
+     "../../modules/inspector/panels/ObjectMagneticTexturePanel.tsx",
+@@ -24,19 +28,85 @@ describe("authoring mutation readiness invalidation", () => {
+   it.each(["material", "magnetization"] as const)(
+     "invalidates readiness exactly once after a %s ACK without realtime",
+     (kind) => {
+       const invalidate = vi.fn();
+ 
+       invalidateAuthoringMutationDependents({ invalidate }, kind, 17);
+ 
+       expect(
+         invalidate.mock.calls.filter(([resourceKey]) => resourceKey === MODEL_READINESS_PATH),
+       ).toHaveLength(1);
++      expect(
++        invalidate.mock.calls.filter(
++          ([resourceKey]) => resourceKey === SESSION_STATUS_RESOURCE_KEY,
++        ),
++      ).toHaveLength(1);
+       expect(invalidate).toHaveBeenCalledTimes(
+         AUTHORING_MUTATION_DEPENDENTS[kind].length,
+       );
+       expect(new Set(AUTHORING_MUTATION_DEPENDENTS[kind]).size).toBe(
+         AUTHORING_MUTATION_DEPENDENTS[kind].length,
+       );
+     },
+   );
++
++  it.each(["material", "magnetization"] as const)(
++    "recovers Run after a no-realtime %s ACK refetches status and readiness",
++    (kind) => {
++      const revision = 18;
++      const invalidate = vi.fn();
++      const registry = new CommandRegistry();
++      for (const command of STUDY_RUNTIME_COMMANDS) registry.register(command);
++
++      const contextAt = (statusSceneRevision: number) => ({
++        api: {} as never,
++        resourceData: buildRuntimeCommandControlResourceData({
++          commandQueue: { commands: [] },
++          geometryValidation: { diagnostics: [] },
++          meshBuildCurrent: null,
++          meshManifest: null,
++          modelReadinessData: {
++            blockers: [],
++            capabilities: {} as never,
++            checks: [],
++            ready_to_export: true,
++            ready_to_run: true,
++            scene_revision: revision,
++          },
++          modelReadinessStatus: "ready",
++          sessionStatus: { resources: { scene_revision: statusSceneRevision } },
++          solverStatus: { runtime_state: "idle" },
++          stageExecution: {
++            active_stage_index: null,
++            revision: revision,
++            runtime_state: "idle",
++            stages: [],
++          },
++        }),
++        source: "test" as const,
++      });
++
++      expect(registry.isEnabled("study.run", contextAt(revision - 1))).toBe(false);
++      expect(
++        registry.get("study.run")?.disabledReason?.(contextAt(revision - 1)),
++      ).toBe("Model readiness is stale for the current scene.");
++
++      invalidateAuthoringMutationDependents({ invalidate }, kind, revision);
++
++      expect(
++        invalidate.mock.calls.filter(
++          ([resourceKey, invalidationRevision]) =>
++            resourceKey === MODEL_READINESS_PATH && invalidationRevision === revision,
++        ),
++      ).toHaveLength(1);
++      expect(
++        invalidate.mock.calls.filter(
++          ([resourceKey, invalidationRevision]) =>
++            resourceKey === SESSION_STATUS_RESOURCE_KEY &&
++            invalidationRevision === revision,
++        ),
++      ).toHaveLength(1);
++      expect(registry.isEnabled("study.run", contextAt(revision))).toBe(true);
++      expect(registry.get("study.run")?.disabledReason?.(contextAt(revision))).toBeNull();
++    },
++  );
+ });
+diff --git a/apps/control-room/src/kernel/authoring/authoringMutationInvalidation.ts b/apps/control-room/src/kernel/authoring/authoringMutationInvalidation.ts
+index 5370e9f63..b80ce0d2b 100644
+--- a/apps/control-room/src/kernel/authoring/authoringMutationInvalidation.ts
++++ b/apps/control-room/src/kernel/authoring/authoringMutationInvalidation.ts
+@@ -2,35 +2,38 @@ import {
+   MESHING_BUILDS_CURRENT_PATH,
+   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
+   MODEL_GEOMETRY_VALIDATION_PATH,
+   MODEL_READINESS_PATH,
+   MODEL_REGIONS_PATH,
+   MODEL_SCENE_PATH,
+   VISUALIZATION_STATE_PATH,
+ } from "@/kernel/api/apiPaths";
+ import type { ResourceRevision } from "@/kernel/api/apiTypes";
++import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
+ 
+ export const AUTHORING_MUTATION_DEPENDENTS = {
+   magnetization: [
+     MODEL_SCENE_PATH,
+     MODEL_REGIONS_PATH,
+     MODEL_GEOMETRY_VALIDATION_PATH,
+     MODEL_GEOMETRY_DIAGNOSTICS_PATH,
+     MODEL_READINESS_PATH,
++    SESSION_STATUS_RESOURCE_KEY,
+     VISUALIZATION_STATE_PATH,
+   ],
+   material: [
+     MODEL_SCENE_PATH,
+     MODEL_GEOMETRY_VALIDATION_PATH,
+     MODEL_GEOMETRY_DIAGNOSTICS_PATH,
+     MODEL_READINESS_PATH,
++    SESSION_STATUS_RESOURCE_KEY,
+     MESHING_BUILDS_CURRENT_PATH,
+     MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+   ],
+ } as const;
+ 
+ type AuthoringMutationKind = keyof typeof AUTHORING_MUTATION_DEPENDENTS;
+ 
+ export function invalidateAuthoringMutationDependents(
+   resources: {
+     invalidate(resourceKey: string, revision: ResourceRevision): void;
+diff --git a/crates/fullmag-authoring/src/adapters.rs b/crates/fullmag-authoring/src/adapters.rs
+index 1827c3b3f..6b8514191 100644
+--- a/crates/fullmag-authoring/src/adapters.rs
++++ b/crates/fullmag-authoring/src/adapters.rs
+@@ -132,24 +132,21 @@ pub fn scene_document_to_script_builder(
+         .materials
+         .iter()
+         .map(|material| (material.id.clone(), material.properties.clone()))
+         .collect::<BTreeMap<_, _>>();
+     let magnetization_assets = scene
+         .magnetization_assets
+         .iter()
+         .map(|asset| (asset.id.clone(), asset.clone()))
+         .collect::<BTreeMap<_, _>>();
+ 
+-    let geometries = scene
+-        .objects
+-        .iter()
+-        .filter(|object| object.role == "magnet")
++    let geometries = crate::scene_solve_objects(scene)
+         .map(|object| {
+             let material = materials
+                 .get(&object.material_ref)
+                 .cloned()
+                 .ok_or_else(|| {
+                     SceneDocumentValidationError::new(format!(
+                         "missing material '{}' for object '{}'",
+                         object.material_ref, object.id
+                     ))
+                 })?;
+@@ -2578,20 +2575,45 @@ mod tests {
+         assert_eq!(
+             scene
+                 .study
+                 .study_pipeline
+                 .as_ref()
+                 .map(|document| document.version.as_str()),
+             Some("study_pipeline.v1")
+         );
+     }
+ 
++    #[test]
++    fn solve_object_projection_includes_hidden_magnets_and_excludes_non_magnets() {
++        let mut scene = scene_document_from_script_builder(&sample_builder());
++        scene.objects[0].visible = false;
++        let hidden_magnet_name = scene.objects[0].name.clone();
++        let mut carrier = scene.objects[0].clone();
++        carrier.id = "carrier".to_string();
++        carrier.name = "Carrier".to_string();
++        carrier.role = "carrier".to_string();
++        carrier.regions.clear();
++        carrier.allocated_region_ids.clear();
++        scene.objects.push(carrier);
++
++        let projection =
++            scene_document_problem_projection(&scene).expect("scene projection should build");
++        let projected_names = projection
++            .builder
++            .geometries
++            .iter()
++            .map(|geometry| geometry.name.as_str())
++            .collect::<Vec<_>>();
++
++        assert_eq!(projected_names, vec![hidden_magnet_name.as_str()]);
++    }
++
+     #[test]
+     fn scene_document_round_trips_requested_prismatic_layered_mesh_fields() {
+         let mut builder = sample_builder();
+         let mesh = builder.geometries[0].mesh.as_mut().unwrap();
+         mesh.topology = Some("prismatic".to_string());
+         mesh.sweep_direction = Some("auto".to_string());
+         mesh.element_family = Some("prism".to_string());
+         mesh.transition_policy = Some("pyramid_to_tetrahedra".to_string());
+         mesh.exact_layer_count = Some(true);
+         mesh.order = Some(1);

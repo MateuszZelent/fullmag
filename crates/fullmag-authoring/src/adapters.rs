@@ -139,10 +139,7 @@ pub fn scene_document_to_script_builder(
         .map(|asset| (asset.id.clone(), asset.clone()))
         .collect::<BTreeMap<_, _>>();
 
-    let geometries = scene
-        .objects
-        .iter()
-        .filter(|object| object.role == "magnet")
+    let geometries = crate::scene_solve_objects(scene)
         .map(|object| {
             let material = materials
                 .get(&object.material_ref)
@@ -2583,6 +2580,31 @@ mod tests {
                 .map(|document| document.version.as_str()),
             Some("study_pipeline.v1")
         );
+    }
+
+    #[test]
+    fn solve_object_projection_includes_hidden_magnets_and_excludes_non_magnets() {
+        let mut scene = scene_document_from_script_builder(&sample_builder());
+        scene.objects[0].visible = false;
+        let hidden_magnet_name = scene.objects[0].name.clone();
+        let mut carrier = scene.objects[0].clone();
+        carrier.id = "carrier".to_string();
+        carrier.name = "Carrier".to_string();
+        carrier.role = "carrier".to_string();
+        carrier.regions.clear();
+        carrier.allocated_region_ids.clear();
+        scene.objects.push(carrier);
+
+        let projection =
+            scene_document_problem_projection(&scene).expect("scene projection should build");
+        let projected_names = projection
+            .builder
+            .geometries
+            .iter()
+            .map(|geometry| geometry.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(projected_names, vec![hidden_magnet_name.as_str()]);
     }
 
     #[test]

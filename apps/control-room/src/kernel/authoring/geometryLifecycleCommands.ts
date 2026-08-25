@@ -42,6 +42,47 @@ interface SimulationCommandApi {
   };
 }
 
+export type PrimitiveDraftKind = "Box" | "Cylinder" | "Sphere";
+
+export interface PrimitiveDraft {
+  dimensions: [number, number, number] | null;
+  errors: Readonly<Record<string, string>>;
+  kind: PrimitiveDraftKind;
+  translation: [number, number, number] | null;
+}
+
+type PrimitiveDraftListener = () => void;
+
+class PrimitiveDraftOverlayStore {
+  private listeners = new Set<PrimitiveDraftListener>();
+  private snapshot: PrimitiveDraft | null = null;
+
+  readonly getSnapshot = (): PrimitiveDraft | null => this.snapshot;
+  readonly getServerSnapshot = (): null => null;
+  readonly subscribe = (listener: PrimitiveDraftListener): (() => void) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
+
+  publish(draft: PrimitiveDraft): void {
+    this.snapshot = draft;
+    this.emit();
+  }
+
+  clear(): void {
+    if (this.snapshot === null) return;
+    this.snapshot = null;
+    this.emit();
+  }
+
+  private emit(): void {
+    for (const listener of this.listeners) listener();
+  }
+}
+
+/** Inspector-owned draft overlay; never stores a committed SceneDocument. */
+export const primitiveDraftOverlayStore = new PrimitiveDraftOverlayStore();
+
 export interface MeshCommandTerminalOptions {
   baseMeshRevision?: number | null;
   pollDelaysMs?: readonly number[];

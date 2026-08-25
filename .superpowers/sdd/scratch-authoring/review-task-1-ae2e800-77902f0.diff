@@ -1,0 +1,1717 @@
+# Review package: ae2e800cc..77902f0c6
+
+## Commits
+77902f0c6 feat(api): create empty authoring sessions
+ccf27947e fix(api): restore baseline compilation
+
+## Files changed
+ crates/fullmag-api/src/main.rs                     |  38 ++-
+ crates/fullmag-api/src/quantities.rs               |   5 +
+ .../fullmag-api/src/router_v2/handlers/sessions.rs |   2 +
+ .../src/router_v2/handlers/sessions/create.rs      | 201 ++++++++++++++++
+ crates/fullmag-api/src/router_v2/mod.rs            |  13 +-
+ crates/fullmag-api/src/router_v2/tests.rs          | 255 +++++++++++++++++++++
+ crates/fullmag-api/src/schemas/mod.rs              |   1 +
+ crates/fullmag-api/src/schemas/sessions.rs         |  48 ++++
+ crates/fullmag-api/src/session.rs                  |  45 ++++
+ crates/fullmag-api/src/session_persistence.rs      |   4 +-
+ crates/fullmag-api/src/types.rs                    |   5 +
+ 11 files changed, 598 insertions(+), 19 deletions(-)
+
+## Diff
+diff --git a/crates/fullmag-api/src/main.rs b/crates/fullmag-api/src/main.rs
+index 4d8a1b0ed..8c746beae 100644
+--- a/crates/fullmag-api/src/main.rs
++++ b/crates/fullmag-api/src/main.rs
+@@ -2313,20 +2313,49 @@ impl CurrentLiveSyncKind {
+         match self {
+             Self::Snapshot => "snapshot",
+             Self::Session => "session",
+             Self::Runtime => "runtime",
+             Self::Scalars => "scalars",
+             Self::Fields => "fields",
+         }
+     }
+ }
+ 
++pub(crate) async fn reset_current_live_session_resources(state: &AppState) {
++    *state.current_display_selection.write().await = CurrentDisplaySelection::default();
++    *state.current_display_presentation.write().await = DisplayPresentationState::default();
++    state.current_visualization_client_acks.write().await.clear();
++    state
++        .current_visualization_client_ack_revision
++        .store(0, Ordering::Relaxed);
++    *state.current_workspace_selection.write().await = CurrentWorkspaceSelection::default();
++    *state.current_workspace_ribbon.write().await = CurrentWorkspaceRibbon::default();
++    *state.current_workspace_layout.write().await = CurrentWorkspaceLayout::default();
++    state.current_hysteresis_bookmarks.write().await.clear();
++    state.current_control_queue.lock().await.clear();
++    state.current_command_responses.lock().await.clear();
++    state.current_command_ledger.lock().await.clear();
++    *state.current_control_next_seq.lock().await = 0;
++    let _ = state.current_control_events.send(0);
++    state.current_live_realtime_replay.lock().await.clear();
++    state.current_live_realtime_pending_batches.lock().await.clear();
++    state
++        .current_live_realtime_next_seq
++        .store(0, Ordering::Relaxed);
++    *state.frozen_spins_previews.write().await = Default::default();
++    *state.current_live_connectivity.write().await =
++        crate::schemas::status::SessionConnectivity::Connected;
++    state
++        .current_live_last_seen_unix_ms
++        .store(0, Ordering::Relaxed);
++}
++
+ async fn sync_current_live_frame_update<F>(
+     state: &Arc<AppState>,
+     kind: CurrentLiveSyncKind,
+     session_id: &str,
+     allow_previous_preview_fallback: bool,
+     has_live_state_update: bool,
+     has_scalar_row_update: bool,
+     has_latest_fields_update: bool,
+     preview_fields: Option<Vec<LivePreviewField>>,
+     clear_preview_cache: bool,
+@@ -2338,28 +2367,21 @@ where
+ {
+     let sync_start = std::time::Instant::now();
+     let reset_preview = state
+         .current_live_state
+         .read()
+         .await
+         .as_ref()
+         .map(|existing| existing.session.session_id != session_id)
+         .unwrap_or(false);
+     if reset_preview {
+-        let display_selection = CurrentDisplaySelection::default();
+-        *state.current_display_selection.write().await = display_selection.clone();
+-        state.current_control_queue.lock().await.clear();
+-        state.current_command_responses.lock().await.clear();
+-        state.current_command_ledger.lock().await.clear();
+-        let current_seq = *state.current_control_next_seq.lock().await;
+-        let _ = state.current_control_events.send(current_seq);
+-        let _ = std::fs::remove_dir_all(&state.current_workspace_root);
++        reset_current_live_session_resources(state).await;
+     }
+     let display_selection = state.current_display_selection.read().await.clone();
+     let selected_cached_display_fields_match_selection = preview_fields
+         .as_ref()
+         .is_some_and(|fields| cached_display_fields_match_selection(fields, &display_selection));
+     let has_cached_display_fields =
+         clear_preview_cache || selected_cached_display_fields_match_selection;
+     let preview_config = display_selection.preview_request();
+     let mut current = state.current_live_state.write().await;
+     let (mut next, previous_snapshot) = match current.take() {
+diff --git a/crates/fullmag-api/src/quantities.rs b/crates/fullmag-api/src/quantities.rs
+index 2f58867b1..89b655b3a 100644
+--- a/crates/fullmag-api/src/quantities.rs
++++ b/crates/fullmag-api/src/quantities.rs
+@@ -209,20 +209,25 @@ mod tests {
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 0,
+                 grid: [2, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+                 preview_field: None,
+                 finished: false,
+             },
+diff --git a/crates/fullmag-api/src/router_v2/handlers/sessions.rs b/crates/fullmag-api/src/router_v2/handlers/sessions.rs
+index 8508e4585..1aee4d7ed 100644
+--- a/crates/fullmag-api/src/router_v2/handlers/sessions.rs
++++ b/crates/fullmag-api/src/router_v2/handlers/sessions.rs
+@@ -1,3 +1,5 @@
++pub mod create;
+ pub mod status;
+ 
++pub use create::*;
+ pub use status::*;
+diff --git a/crates/fullmag-api/src/router_v2/handlers/sessions/create.rs b/crates/fullmag-api/src/router_v2/handlers/sessions/create.rs
+new file mode 100644
+index 000000000..476be76b7
+--- /dev/null
++++ b/crates/fullmag-api/src/router_v2/handlers/sessions/create.rs
+@@ -0,0 +1,201 @@
++use axum::{extract::State, http::StatusCode, Json};
++use fullmag_authoring::{SceneDocument, SceneMetadata};
++use serde_json::json;
++use std::sync::Arc;
++
++use crate::{
++    default_current_live_state, reset_current_live_session_resources,
++    schemas::{
++        authoring::SceneResource,
++        sessions::{
++            CreateSessionRequest, CreateSessionResponse, ScratchSceneDocumentResource,
++            ScratchSessionRevisionsResource, ScratchSessionStatusResource,
++            SessionExecutionResource,
++        },
++    },
++    types::{AppState, CurrentLiveSnapshotRequest, SessionManifest},
++    unix_time_millis_now, uuid_v4_hex, ApiError,
++};
++
++#[utoipa::path(
++    post,
++    path = "/v2/sessions",
++    request_body = CreateSessionRequest,
++    responses((status = 201, body = CreateSessionResponse), (status = 400), (status = 409)),
++    tag = "sessions"
++)]
++pub async fn create(
++    State(state): State<Arc<AppState>>,
++    Json(request): Json<CreateSessionRequest>,
++) -> Result<(StatusCode, Json<CreateSessionResponse>), ApiError> {
++    let name = request.name.trim();
++    if name.is_empty() {
++        return Err(ApiError::bad_request("session name must not be empty"));
++    }
++    let execution = validated_execution(&request)?;
++    let session_id = format!("session-{}", uuid_v4_hex());
++    let scene_document = empty_scene_document(&session_id, name);
++    let snapshot = scratch_snapshot(&session_id, name, &execution, scene_document.clone());
++
++    let replacing = {
++        let current = state.current_live_state.read().await;
++        current.is_some()
++    };
++    if replacing && !request.replace_current {
++        return Err(ApiError {
++            status: StatusCode::CONFLICT,
++            message: "an active local session already exists; set replace_current to replace it"
++                .to_string(),
++            diagnostics: Vec::new(),
++        });
++    }
++    if replacing {
++        reset_current_live_session_resources(&state).await;
++    }
++    *state.current_live_state.write().await = Some(snapshot.clone());
++
++    let scene = SceneResource::from_scene_document(scene_document).map_err(|error| {
++        ApiError::internal(format!("failed to serialize empty authoring scene: {error}"))
++    })?;
++    Ok((
++        StatusCode::CREATED,
++        Json(CreateSessionResponse {
++            session_id,
++            status: ScratchSessionStatusResource {
++                requested_execution: execution.clone(),
++                effective_execution: execution,
++            },
++            scene_document: ScratchSceneDocumentResource {
++                schema_version: "0.3".to_string(),
++                scene,
++                objects: Vec::new(),
++            },
++            revisions: ScratchSessionRevisionsResource {
++                state_version: snapshot.state_version,
++                scene_revision: snapshot
++                    .scene_document
++                    .as_ref()
++                    .map(|scene| scene.revision)
++                    .unwrap_or_default(),
++            },
++        }),
++    ))
++}
++
++fn validated_execution(
++    request: &CreateSessionRequest,
++) -> Result<SessionExecutionResource, ApiError> {
++    let supported_backend = matches!(request.backend.as_str(), "fdm" | "fem");
++    if !supported_backend || request.device != "cpu" || request.precision != "double" {
++        return Err(ApiError::bad_request(
++            "supported scratch execution is exactly fdm|fem with cpu device and double precision",
++        ));
++    }
++    Ok(SessionExecutionResource {
++        backend: request.backend.clone(),
++        device: request.device.clone(),
++        precision: request.precision.clone(),
++    })
++}
++
++fn empty_scene_document(session_id: &str, name: &str) -> SceneDocument {
++    SceneDocument {
++        version: "scene.v2".to_string(),
++        revision: 0,
++        scene: SceneMetadata {
++            id: session_id.to_string(),
++            name: name.to_string(),
++            source_of_truth: "ui".to_string(),
++            authoring_schema: "0.3".to_string(),
++        },
++        universe: None,
++        objects: Vec::new(),
++        couplings: Vec::new(),
++        materials: Vec::new(),
++        magnetization_assets: Vec::new(),
++        field_drives: Default::default(),
++        monitors: Default::default(),
++        selections: Vec::new(),
++        magnetization_constraints: Vec::new(),
++        current_modules: Default::default(),
++        current_transports: Vec::new(),
++        spin_transports: Vec::new(),
++        spin_torques: Vec::new(),
++        oersted_fields: Vec::new(),
++        study: Default::default(),
++        outputs: Default::default(),
++        editor: Default::default(),
++    }
++}
++
++fn scratch_snapshot(
++    session_id: &str,
++    name: &str,
++    execution: &SessionExecutionResource,
++    scene_document: SceneDocument,
++) -> crate::types::SessionStateResponse {
++    let now = unix_time_millis_now();
++    let manifest = SessionManifest {
++        session_id: session_id.to_string(),
++        run_id: format!("run-{session_id}"),
++        status: "awaiting_command".to_string(),
++        interactive_session_requested: true,
++        script_path: String::new(),
++        problem_name: name.to_string(),
++        requested_backend: execution.backend.clone(),
++        explicit_selection: true,
++        authored_requested_device: execution.device.clone(),
++        requested_device: execution.device.clone(),
++        requested_precision: execution.precision.clone(),
++        requested_mode: "strict".to_string(),
++        requested_cpu_threads: None,
++        execution_mode: "strict".to_string(),
++        precision: execution.precision.clone(),
++        resolved_backend: Some(execution.backend.clone()),
++        resolved_device: Some(execution.device.clone()),
++        resolved_precision: Some(execution.precision.clone()),
++        resolved_mode: Some("strict".to_string()),
++        resolved_runtime_family: Some(format!("{}_cpu_reference", execution.backend)),
++        resolved_engine_id: None,
++        resolved_worker: None,
++        resolved_cpu_threads: None,
++        resolved_fallback: None,
++        fem_crossover_decision: None,
++        artifact_dir: String::new(),
++        started_at_unix_ms: now,
++        finished_at_unix_ms: 0,
++        plan_summary: json!({
++            "requested_execution": execution,
++            "effective_execution": execution,
++            "fallback": null,
++        }),
++    };
++    let mut snapshot = default_current_live_state(&CurrentLiveSnapshotRequest {
++        session_id: session_id.to_string(),
++        session: Some(manifest),
++        session_status: None,
++        metadata: None,
++        mesh_workspace: None,
++        stage_execution: None,
++        simulation_preparation: None,
++        run: None,
++        live_state: None,
++        coupled_checkpoint: None,
++        latest_scalar_row: None,
++        latest_fields: None,
++        replace_latest_fields: false,
++        field_generation: None,
++        preview_fields: None,
++        clear_preview_cache: true,
++        engine_log: None,
++        solver_profile: None,
++        fem_mesh: None,
++    });
++    snapshot.metadata = Some(json!({
++        "requested_execution": execution,
++        "effective_execution": execution,
++        "fallback": null,
++    }));
++    snapshot.scene_document = Some(scene_document);
++    snapshot
++}
+diff --git a/crates/fullmag-api/src/router_v2/mod.rs b/crates/fullmag-api/src/router_v2/mod.rs
+index 3956cb8e1..6e337f0b2 100644
+--- a/crates/fullmag-api/src/router_v2/mod.rs
++++ b/crates/fullmag-api/src/router_v2/mod.rs
+@@ -33,21 +33,24 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
+             get(handlers::platform::get_capabilities),
+         )
+         .route(
+             "/v2/platform/asyncapi.json",
+             get(handlers::platform::get_asyncapi_document),
+         )
+         .route(
+             "/v2/platform/docs/asyncapi",
+             get(handlers::platform::get_asyncapi_docs),
+         )
+-        .route("/v2/sessions", get(list_sessions).post(create_session))
++        .route(
++            "/v2/sessions",
++            get(list_sessions).post(handlers::sessions::create),
++        )
+         .route(
+             "/v2/sessions/current",
+             get(get_current_session).patch(patch_current_session),
+         )
+         .route(
+             "/v2/sessions/current/status",
+             get(handlers::sessions::get_status),
+         )
+         .route(
+             "/v2/sessions/current/events/ws",
+@@ -1005,28 +1008,20 @@ async fn list_sessions(State(state): State<Arc<AppState>>) -> Json<Value> {
+                 "current": true,
+             })]
+         })
+         .unwrap_or_default();
+     Json(json!({
+         "schema_version": "2.0.0",
+         "sessions": sessions,
+     }))
+ }
+ 
+-async fn create_session() -> Result<Json<Value>, ApiError> {
+-    Err(ApiError {
+-        status: StatusCode::BAD_REQUEST,
+-        message: "the local runtime currently exposes only /v2/sessions/current".to_string(),
+-        diagnostics: Vec::new(),
+-    })
+-}
+-
+ async fn get_current_session(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
+     let guard = state.current_live_state.read().await;
+     let snapshot = guard
+         .as_ref()
+         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+     Ok(Json(json!({
+         "schema_version": "2.0.0",
+         "session_id": snapshot.session.session_id,
+         "name": snapshot.session.problem_name,
+         "status": snapshot.session.status,
+diff --git a/crates/fullmag-api/src/router_v2/tests.rs b/crates/fullmag-api/src/router_v2/tests.rs
+index 768be1b19..9b4a6ce44 100644
+--- a/crates/fullmag-api/src/router_v2/tests.rs
++++ b/crates/fullmag-api/src/router_v2/tests.rs
+@@ -1097,20 +1097,120 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64)
+             runtime_state: RuntimeLifecycleState::Running,
+         });
+         snapshot.state_version = state_version;
+     }
+ }
+ 
+ fn test_router() -> axum::Router {
+     build_v2_router().with_state(test_app_state())
+ }
+ 
++#[tokio::test]
++async fn create_scratch_session_accepts_explicit_fdm_and_fem_cpu_double_requests() {
++    let app = test_router();
++
++    let response = app
++        .clone()
++        .oneshot(
++            Request::builder()
++                .method("POST")
++                .uri("/v2/sessions")
++                .header(header::CONTENT_TYPE, "application/json")
++                .body(Body::from(
++                    r#"{"name":"Scratch FDM","backend":"fdm","device":"cpu","precision":"double"}"#,
++                ))
++                .unwrap(),
++        )
++        .await
++        .unwrap();
++    assert_eq!(response.status(), StatusCode::CREATED);
++    let body = body_json(response).await;
++    assert_eq!(body["scene_document"]["schema_version"], "0.3");
++    assert_eq!(body["scene_document"]["objects"], serde_json::json!([]));
++    assert_eq!(body["status"]["requested_execution"]["backend"], "fdm");
++    assert_eq!(body["status"]["requested_execution"]["device"], "cpu");
++    assert_eq!(body["status"]["requested_execution"]["precision"], "double");
++
++    let response = app
++        .oneshot(
++            Request::builder()
++                .method("POST")
++                .uri("/v2/sessions")
++                .header(header::CONTENT_TYPE, "application/json")
++                .body(Body::from(
++                    r#"{"name":"Scratch FEM","backend":"fem","device":"cpu","precision":"double","replace_current":true}"#,
++                ))
++                .unwrap(),
++        )
++        .await
++        .unwrap();
++    assert_eq!(response.status(), StatusCode::CREATED);
++    let body = body_json(response).await;
++    assert_eq!(body["scene_document"]["schema_version"], "0.3");
++    assert_eq!(body["scene_document"]["objects"], serde_json::json!([]));
++    assert_eq!(body["status"]["requested_execution"]["backend"], "fem");
++    assert_eq!(body["status"]["requested_execution"]["device"], "cpu");
++    assert_eq!(body["status"]["requested_execution"]["precision"], "double");
++}
++
++#[tokio::test]
++async fn create_scratch_session_rejects_unknown_execution_and_implicit_replacement() {
++    let app = test_router();
++
++    let invalid = app
++        .clone()
++        .oneshot(
++            Request::builder()
++                .method("POST")
++                .uri("/v2/sessions")
++                .header(header::CONTENT_TYPE, "application/json")
++                .body(Body::from(
++                    r#"{"name":"Invalid","backend":"unknown","device":"cpu","precision":"double"}"#,
++                ))
++                .unwrap(),
++        )
++        .await
++        .unwrap();
++    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
++
++    let created = app
++        .clone()
++        .oneshot(
++            Request::builder()
++                .method("POST")
++                .uri("/v2/sessions")
++                .header(header::CONTENT_TYPE, "application/json")
++                .body(Body::from(
++                    r#"{"name":"Scratch FDM","backend":"fdm","device":"cpu","precision":"double"}"#,
++                ))
++                .unwrap(),
++        )
++        .await
++        .unwrap();
++    assert_eq!(created.status(), StatusCode::CREATED);
++
++    let conflict = app
++        .oneshot(
++            Request::builder()
++                .method("POST")
++                .uri("/v2/sessions")
++                .header(header::CONTENT_TYPE, "application/json")
++                .body(Body::from(
++                    r#"{"name":"Replacement","backend":"fem","device":"cpu","precision":"double"}"#,
++                ))
++                .unwrap(),
++        )
++        .await
++        .unwrap();
++    assert_eq!(conflict.status(), StatusCode::CONFLICT);
++}
++
+ async fn test_router_with_session() -> axum::Router {
+     build_v2_router().with_state(test_app_state_with_live_session().await)
+ }
+ 
+ async fn test_v2_router_with_session() -> axum::Router {
+     build_v2_router().with_state(test_app_state_with_live_session().await)
+ }
+ 
+ #[tokio::test]
+ async fn stale_runner_heartbeat_disconnects_status_and_rejects_mutating_commands() {
+@@ -1495,20 +1595,25 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
+                 e_demag: 2.0,
+                 e_ext: 3.0,
+                 e_ani: 4.0,
+                 e_dmi: 5.0,
+                 e_total: 15.0,
+                 max_dm_dt: 10.0,
+                 max_h_eff: 11.0,
+                 max_h_demag: 12.0,
+                 max_torque_Apm: 13.0,
+                 max_torque_T: 13.0 * 4.0 * std::f64::consts::PI * 1.0e-7,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 per_object_scalars: HashMap::new(),
+                 wall_time_ns: 100,
+                 grid: [4, 4, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: None,
+                 field_materialization_states: Vec::new(),
+                 preview_field: None,
+                 finished: false,
+             },
+@@ -2028,20 +2133,25 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
+                 e_demag: 2.0,
+                 e_ext: 3.0,
+                 e_ani: 4.0,
+                 e_dmi: 5.0,
+                 e_total: 15.0,
+                 max_dm_dt: 10.0,
+                 max_h_eff: 11.0,
+                 max_h_demag: 12.0,
+                 max_torque_Apm: 13.0,
+                 max_torque_T: 13.0 * 4.0 * std::f64::consts::PI * 1.0e-7,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 100,
+                 grid: [2, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+                 preview_field: None,
+                 finished: false,
+             },
+@@ -3120,20 +3230,25 @@ async fn domain_meta_uses_fdm_physical_cell_size_for_grid_and_bounds() {
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 0,
+                 grid: [4, 3, 2],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: None,
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+                 preview_field: None,
+                 finished: false,
+             },
+@@ -3960,20 +4075,25 @@ async fn domain_meta_accepts_planar_fdm_zero_spacing_axis() {
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 0,
+                 grid: [4, 3, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: None,
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+                 preview_field: None,
+                 finished: false,
+             },
+@@ -4532,20 +4652,25 @@ async fn field_vector_returns_pending_metadata_for_materializer_request() {
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 0,
+                 grid: [1, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: None,
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: vec![LiveFieldMaterializationStatus {
+                     quantity: "H_eff".into(),
+                     source_step: 4,
+                     request_revision: 12,
+@@ -4684,20 +4809,25 @@ async fn field_vector_keeps_unknown_scope_not_found_while_materialization_is_pen
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 0,
+                 grid: [1, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: None,
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: vec![LiveFieldMaterializationStatus {
+                     quantity: "H_eff".into(),
+                     source_step: 4,
+                     request_revision: 12,
+@@ -4761,20 +4891,25 @@ async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_
+                         e_demag: 0.0,
+                         e_ext: 0.0,
+                         e_ani: 0.0,
+                         e_dmi: 0.0,
+                         e_total: 0.0,
+                         max_dm_dt: 0.0,
+                         max_h_eff: 0.0,
+                         max_h_demag: 0.0,
+                         max_torque_Apm: 0.0,
+                         max_torque_T: 0.0,
++                        max_torque_all_Apm: 0.0,
++                        frozen_reference_max_drift: 0.0,
++                        active_dof_count: 0,
++                        frozen_dof_count: 0,
++                        free_dof_count: 0,
+                         wall_time_ns: 100,
+                         grid: [2, 1, 1],
+                         fem_mesh_generation_id: None,
+                         fem_mesh: None,
+                         magnetization: None,
+                         per_object_scalars: Default::default(),
+                         field_materialization_states: Vec::new(),
+                         preview_field: Some(LivePreviewField {
+                             config_revision: 4,
+                             source_step: 0,
+@@ -20162,20 +20297,25 @@ async fn commands_endpoint_keeps_compute_enabled_during_wait_for_compute_gate()
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 0,
+                 grid: [1, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: None,
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+                 preview_field: None,
+                 finished: false,
+             },
+@@ -21964,20 +22104,25 @@ async fn stage_execution_endpoint_projects_frequency_response_live_progress() {
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 1.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 0,
+                 grid: [0, 0, 0],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: None,
+                 per_object_scalars: HashMap::from([(
+                     "fem_frequency_response_progress".into(),
+                     HashMap::from([
+                         ("completed_frequency_count".into(), 1.0),
+                         ("total_frequency_count".into(), 7.0),
+@@ -23917,20 +24062,25 @@ async fn solver_status_does_not_infer_convergence_from_finished_sample() {
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 2.0,
+                 max_h_eff: 3.0,
+                 max_h_demag: 4.0,
+                 max_torque_Apm: 5.0,
+                 max_torque_T: 6.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 1,
+                 grid: [1, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: None,
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+                 preview_field: None,
+                 finished: true,
+             },
+@@ -24010,20 +24160,25 @@ async fn solver_status_endpoint_prefers_waiting_for_compute_gate_over_stale_live
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 0,
+                 grid: [1, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: None,
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+                 preview_field: None,
+                 finished: false,
+             },
+@@ -24140,20 +24295,25 @@ async fn object_metrics_endpoint_prefers_per_object_solver_scalars() {
+                 e_demag: 2.0,
+                 e_ext: 3.0,
+                 e_ani: 4.0,
+                 e_dmi: 5.0,
+                 e_total: 15.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 0,
+                 grid: [1, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: Some(vec![0.1, 0.2, 0.3]),
+                 per_object_scalars: HashMap::from([(
+                     "body".to_string(),
+                     HashMap::from([
+                         ("mx".to_string(), 0.25),
+                         ("my".to_string(), 0.5),
+@@ -24215,20 +24375,25 @@ async fn object_metrics_keep_step_and_energy_without_inventing_magnetization() {
+                 e_demag: 2.0,
+                 e_ext: 3.0,
+                 e_ani: 4.0,
+                 e_dmi: 5.0,
+                 e_total: 23.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 0,
+                 grid: [1, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 per_object_scalars: HashMap::new(),
+                 magnetization: None,
+                 field_materialization_states: Vec::new(),
+                 preview_field: None,
+                 finished: false,
+             },
+@@ -24272,20 +24437,25 @@ async fn object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_node
+                 e_demag: 2.0,
+                 e_ext: 3.0,
+                 e_ani: 4.0,
+                 e_dmi: 5.0,
+                 e_total: 15.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 0,
+                 grid: [1, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: Some(FemMeshPayload {
+                     mesh_name: "shared-node-test-mesh".to_string(),
+                     mesh_id: "shared-node-test-mesh:1".to_string(),
+                     nodes: vec![
+                         [0.0, 0.0, 0.0],
+                         [1.0, 0.0, 0.0],
+                         [0.0, 1.0, 0.0],
+@@ -29651,20 +29821,25 @@ async fn test_router_with_live_magnetization() -> axum::Router {
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 100,
+                 grid: [2, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+                 preview_field: None,
+                 finished: false,
+             },
+@@ -32416,20 +32591,25 @@ async fn field_meta_component_query_uses_live_magnetization_before_stale_latest_
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 100,
+                 grid: [2, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+                 preview_field: None,
+                 finished: false,
+             },
+@@ -32476,20 +32656,25 @@ async fn v2_magnetization_meta_vector_revision_and_etag_follow_provenance_field_
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 100,
+                 grid: [2, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: Some(legacy_a.clone()),
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+                 preview_field: None,
+                 finished: false,
+             },
+@@ -33128,20 +33313,25 @@ async fn v2_field_catalog_rejects_non_finite_live_magnetization() {
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 100,
+                 grid: [1, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: Some(vec![f64::NAN, 0.0, 0.0]),
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+                 preview_field: None,
+                 finished: false,
+             },
+@@ -33201,20 +33391,25 @@ async fn v2_field_catalog_rejects_fem_live_magnetization_with_wrong_point_count(
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 100,
+                 grid: [6, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: Some(vec![
+                     1.0, 0.0, 0.0, //
+                     0.0, 1.0, 0.0, //
+                     0.0, 0.0, 1.0, //
+                     1.0, 0.0, 0.0, //
+                     0.0, 1.0, 0.0, //
+@@ -33293,20 +33488,25 @@ async fn v2_field_vector_accepts_fem_live_magnetization_on_magnetic_nodes() {
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 100,
+                 grid: [4, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: Some(vec![
+                     1.0, 0.0, 0.0, //
+                     0.0, 1.0, 0.0, //
+                     0.0, 0.0, 1.0, //
+                     -1.0, 0.0, 0.0,
+                 ]),
+@@ -33438,20 +33638,25 @@ async fn v2_field_vector_prefers_live_magnetization_over_stale_latest_field() {
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 100,
+                 grid: [2, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+                 preview_field: None,
+                 finished: false,
+             },
+@@ -33932,20 +34137,25 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 100,
+                 grid: [2, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: None,
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+                 preview_field: None,
+                 finished: false,
+             },
+@@ -34067,20 +34277,25 @@ async fn v2_fdm_vector_respects_max_samples_when_preview_would_be_downscaled() {
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 100,
+                 grid: [4, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: Some(vec![
+                     1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0,
+                 ]),
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+                 preview_field: None,
+@@ -34269,20 +34484,25 @@ async fn v2_h_demag_resource_prefers_newer_preview_cache_over_stale_latest_field
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 100,
+                 grid: [2, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: None,
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+                 preview_field: None,
+                 finished: true,
+             },
+@@ -34400,20 +34620,25 @@ async fn v2_h_demag_meta_prefers_equal_generation_latest_with_source_time() {
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 100,
+                 grid: [2, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: None,
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+                 preview_field: None,
+                 finished: true,
+             },
+@@ -34471,20 +34696,25 @@ async fn v2_terminal_eden_demag_metadata_keeps_final_solver_provenance() {
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 100,
+                 grid: [2, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: None,
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+                 preview_field: None,
+                 finished: false,
+             },
+@@ -34551,20 +34781,25 @@ async fn v2_optional_field_materialization_pending_and_error_preserve_solver_and
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 100,
+                 grid: [2, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: None,
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: vec![
+                     LiveFieldMaterializationStatus {
+                         quantity: "H_demag".to_string(),
+                         source_step: 9,
+@@ -34813,20 +35048,25 @@ async fn topological_charge_reports_empty_support_when_m_field_exists_without_us
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 100,
+                 grid: [4, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: Some(vec![
+                     0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0,
+                 ]),
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+                 preview_field: None,
+@@ -34880,20 +35120,25 @@ async fn topological_charge_computes_uniform_fdm_grid_without_fem_mesh() {
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 100,
+                 grid: [3, 3, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: Some(vec![
+                     0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0,
+                     0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0,
+                 ]),
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+@@ -34962,20 +35207,25 @@ async fn topological_charge_cache_key_tracks_field_revision() {
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 100,
+                 grid: [3, 3, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: Some(vec![
+                     0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0,
+                     0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0,
+                 ]),
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+@@ -35088,20 +35338,25 @@ async fn topological_charge_default_fdm_support_uses_one_midplane_of_thinnest_ax
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 100,
+                 grid: [5, 5, 3],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: Some(uniform_3d_m),
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+                 preview_field: None,
+                 finished: false,
+             },
+diff --git a/crates/fullmag-api/src/schemas/mod.rs b/crates/fullmag-api/src/schemas/mod.rs
+index 35c93a233..faacca733 100644
+--- a/crates/fullmag-api/src/schemas/mod.rs
++++ b/crates/fullmag-api/src/schemas/mod.rs
+@@ -12,18 +12,19 @@ pub mod hysteresis;
+ pub mod logs;
+ pub mod mesh;
+ pub mod planar_fields;
+ pub mod planar_monitors;
+ pub mod preparation;
+ pub mod quantities;
+ pub mod realtime;
+ pub mod relaxation;
+ pub mod runtime;
+ pub mod scalars;
++pub mod sessions;
+ pub mod status;
+ pub mod tables;
+ pub mod visualization_state;
+ pub mod workspace;
+ 
+ pub use frozen_spins::*;
+ pub use planar_fields::*;
+ pub use planar_monitors::*;
+diff --git a/crates/fullmag-api/src/schemas/sessions.rs b/crates/fullmag-api/src/schemas/sessions.rs
+new file mode 100644
+index 000000000..2e34a2e02
+--- /dev/null
++++ b/crates/fullmag-api/src/schemas/sessions.rs
+@@ -0,0 +1,48 @@
++use crate::schemas::authoring::{SceneObjectResource, SceneResource};
++use serde::{Deserialize, Serialize};
++use utoipa::ToSchema;
++
++#[derive(Debug, Deserialize, ToSchema)]
++pub struct CreateSessionRequest {
++    pub name: String,
++    pub backend: String,
++    pub device: String,
++    pub precision: String,
++    #[serde(default)]
++    pub replace_current: bool,
++}
++
++#[derive(Debug, Clone, Serialize, ToSchema)]
++pub struct SessionExecutionResource {
++    pub backend: String,
++    pub device: String,
++    pub precision: String,
++}
++
++#[derive(Debug, Serialize, ToSchema)]
++pub struct ScratchSessionStatusResource {
++    pub requested_execution: SessionExecutionResource,
++    pub effective_execution: SessionExecutionResource,
++}
++
++#[derive(Debug, Serialize, ToSchema)]
++pub struct ScratchSceneDocumentResource {
++    pub schema_version: String,
++    #[serde(flatten)]
++    pub scene: SceneResource,
++    pub objects: Vec<SceneObjectResource>,
++}
++
++#[derive(Debug, Serialize, ToSchema)]
++pub struct ScratchSessionRevisionsResource {
++    pub state_version: u64,
++    pub scene_revision: u64,
++}
++
++#[derive(Debug, Serialize, ToSchema)]
++pub struct CreateSessionResponse {
++    pub session_id: String,
++    pub status: ScratchSessionStatusResource,
++    pub scene_document: ScratchSceneDocumentResource,
++    pub revisions: ScratchSessionRevisionsResource,
++}
+diff --git a/crates/fullmag-api/src/session.rs b/crates/fullmag-api/src/session.rs
+index fdd44c965..f3bca3d37 100644
+--- a/crates/fullmag-api/src/session.rs
++++ b/crates/fullmag-api/src/session.rs
+@@ -2811,20 +2811,25 @@ mod tests {
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 0,
+                 grid: [2, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: Some(magnetization),
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+                 preview_field: None,
+                 finished: false,
+             },
+@@ -3508,20 +3513,25 @@ mod tests {
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 0,
+                 grid: [1, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: None,
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+                 preview_field: None,
+                 finished: false,
+             },
+@@ -3562,20 +3572,25 @@ mod tests {
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 0,
+                 grid: [1, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: None,
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+                 preview_field: None,
+                 finished: false,
+             },
+@@ -4434,20 +4449,25 @@ mod tests {
+                         e_demag: 0.0,
+                         e_ext: 0.0,
+                         e_ani: 0.0,
+                         e_dmi: 0.0,
+                         e_total: 0.0,
+                         max_dm_dt: 0.0,
+                         max_h_eff: 0.0,
+                         max_h_demag: 0.0,
+                         max_torque_Apm: 0.0,
+                         max_torque_T: 0.0,
++                        max_torque_all_Apm: 0.0,
++                        frozen_reference_max_drift: 0.0,
++                        active_dof_count: 0,
++                        frozen_dof_count: 0,
++                        free_dof_count: 0,
+                         wall_time_ns: 0,
+                         grid: [1, 1, 1],
+                         fem_mesh_generation_id: None,
+                         fem_mesh: None,
+                         magnetization: Some(vec![0.0, 0.0, 1.0]),
+                         per_object_scalars: Default::default(),
+                         field_materialization_states: Vec::new(),
+                         preview_field: None,
+                         finished: true,
+                     },
+@@ -4626,20 +4646,25 @@ mod tests {
+                     e_demag: 0.0,
+                     e_ext: 0.0,
+                     e_ani: 0.0,
+                     e_dmi: 0.0,
+                     e_total: 0.0,
+                     max_dm_dt: 0.0,
+                     max_h_eff: 0.0,
+                     max_h_demag: 0.0,
+                     max_torque_Apm: 0.0,
+                     max_torque_T: 0.0,
++                    max_torque_all_Apm: 0.0,
++                    frozen_reference_max_drift: 0.0,
++                    active_dof_count: 0,
++                    frozen_dof_count: 0,
++                    free_dof_count: 0,
+                     wall_time_ns: 100,
+                     grid: [1, 1, 1],
+                     fem_mesh_generation_id: None,
+                     fem_mesh: Some(legacy_mesh),
+                     magnetization: None,
+                     per_object_scalars: Default::default(),
+                     field_materialization_states: Vec::new(),
+                     preview_field: Some(preview_field("H_eff")),
+                     finished: false,
+                 },
+@@ -4756,20 +4781,25 @@ mod tests {
+                     e_demag: 0.0,
+                     e_ext: 0.0,
+                     e_ani: 0.0,
+                     e_dmi: 0.0,
+                     e_total: 0.0,
+                     max_dm_dt: 0.0,
+                     max_h_eff: 0.0,
+                     max_h_demag: 0.0,
+                     max_torque_Apm: 0.0,
+                     max_torque_T: 0.0,
++                    max_torque_all_Apm: 0.0,
++                    frozen_reference_max_drift: 0.0,
++                    active_dof_count: 0,
++                    frozen_dof_count: 0,
++                    free_dof_count: 0,
+                     wall_time_ns: 100,
+                     grid: [1, 1, 1],
+                     fem_mesh_generation_id: None,
+                     fem_mesh: None,
+                     magnetization: None,
+                     per_object_scalars: Default::default(),
+                     field_materialization_states: Vec::new(),
+                     preview_field: Some(carried_active),
+                     finished: true,
+                 },
+@@ -5425,20 +5455,25 @@ mod tests {
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 100,
+                 grid: [1, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: None,
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+                 preview_field: Some(preview_field("H_eff")),
+                 finished: false,
+             },
+@@ -5507,20 +5542,25 @@ mod tests {
+                 e_demag: 0.0,
+                 e_ext: 0.0,
+                 e_ani: 0.0,
+                 e_dmi: 0.0,
+                 e_total: 0.0,
+                 max_dm_dt: 0.0,
+                 max_h_eff: 0.0,
+                 max_h_demag: 0.0,
+                 max_torque_Apm: 0.0,
+                 max_torque_T: 0.0,
++                max_torque_all_Apm: 0.0,
++                frozen_reference_max_drift: 0.0,
++                active_dof_count: 0,
++                frozen_dof_count: 0,
++                free_dof_count: 0,
+                 wall_time_ns: 100,
+                 grid: [1, 1, 1],
+                 fem_mesh_generation_id: None,
+                 fem_mesh: None,
+                 magnetization: None,
+                 per_object_scalars: Default::default(),
+                 field_materialization_states: Vec::new(),
+                 preview_field: Some(preview_field("H_eff")),
+                 finished: false,
+             },
+@@ -5542,20 +5582,25 @@ mod tests {
+                         e_demag: 0.0,
+                         e_ext: 0.0,
+                         e_ani: 0.0,
+                         e_dmi: 0.0,
+                         e_total: 0.0,
+                         max_dm_dt: 0.0,
+                         max_h_eff: 0.0,
+                         max_h_demag: 0.0,
+                         max_torque_Apm: 0.0,
+                         max_torque_T: 0.0,
++                        max_torque_all_Apm: 0.0,
++                        frozen_reference_max_drift: 0.0,
++                        active_dof_count: 0,
++                        frozen_dof_count: 0,
++                        free_dof_count: 0,
+                         wall_time_ns: 100,
+                         grid: [1, 1, 1],
+                         fem_mesh_generation_id: None,
+                         fem_mesh: None,
+                         magnetization: None,
+                         per_object_scalars: Default::default(),
+                         field_materialization_states: Vec::new(),
+                         preview_field: None,
+                         finished: false,
+                     },
+diff --git a/crates/fullmag-api/src/session_persistence.rs b/crates/fullmag-api/src/session_persistence.rs
+index 9154a4883..3c14e7d16 100644
+--- a/crates/fullmag-api/src/session_persistence.rs
++++ b/crates/fullmag-api/src/session_persistence.rs
+@@ -2197,22 +2197,22 @@ fn checkpoint_compatibility(snapshot: &SessionStateResponse) -> CheckpointCompat
+         .resolved_runtime_family
+         .clone()
+         .or_else(|| snapshot.session.resolved_device.clone())
+         .unwrap_or_else(|| "fdm_cpu_reference".to_string());
+ 
+     let restart_abi = Some(format!(
+         "{}:{}",
+         runtime_family,
+         snapshot.session.resolved_engine_id.as_deref().unwrap_or("default")
+     ));
+-    let problem_hash = Some(format!("problem:rev-{}", snapshot.scene_revision));
+-    let plan_hash = Some(format!("plan:rev-{}", snapshot.plan_revision));
++    let problem_hash = None;
++    let plan_hash = None;
+ 
+     CheckpointCompatibility {
+         restart_abi,
+         problem_hash,
+         plan_hash,
+         state_schema_version: Some("fullmag.checkpoint.v1".to_string()),
+         engine_id: snapshot.session.resolved_engine_id.clone(),
+         runtime_family: Some(runtime_family),
+         precision: Some(
+             snapshot
+diff --git a/crates/fullmag-api/src/types.rs b/crates/fullmag-api/src/types.rs
+index 7cbd04be0..8adefcd58 100644
+--- a/crates/fullmag-api/src/types.rs
++++ b/crates/fullmag-api/src/types.rs
+@@ -1732,20 +1732,25 @@ mod tests {
+             e_demag: 0.0,
+             e_ext: 0.0,
+             e_ani: 0.0,
+             e_dmi: 0.0,
+             e_total: 0.0,
+             max_dm_dt: 0.0,
+             max_h_eff: 0.0,
+             max_h_demag: 0.0,
+             max_torque_Apm: 0.0,
+             max_torque_T: 0.0,
++            max_torque_all_Apm: 0.0,
++            frozen_reference_max_drift: 0.0,
++            active_dof_count: 0,
++            frozen_dof_count: 0,
++            free_dof_count: 0,
+             wall_time_ns: 0,
+             grid: [2, 1, 1],
+             fem_mesh_generation_id: None,
+             fem_mesh: None,
+             magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+             per_object_scalars: Default::default(),
+             field_materialization_states: Vec::new(),
+             preview_field: None,
+             finished: false,
+         };

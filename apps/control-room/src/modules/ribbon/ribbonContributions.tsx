@@ -51,6 +51,7 @@ import {
   Upload,
   Zap,
 } from "lucide-react";
+import { PROBLEM_IR_03_RIGID_TRANSFORM_REASON } from "@/kernel/authoring/objectTranslationMutation";
 
 import {
   MESHING_CAPABILITIES_PATH,
@@ -353,9 +354,9 @@ const geometryTab: RibbonTabContent = {
       subtitle: "Move / Rotate / Scale",
       tone: "authoring",
       actions: [
-        { id: "builder-tool-move",   icon: icon(Move),      label: "Move",   shortcut: "W", disabled: true, iconColor: "text-red-400" },
-        { id: "builder-tool-rotate", icon: icon(RotateCcw), label: "Rotate", shortcut: "E", disabled: true, iconColor: "text-green-400" },
-        { id: "builder-tool-scale",  icon: icon(Maximize2), label: "Scale",  shortcut: "R", disabled: true, iconColor: "text-blue-400" },
+        { id: "builder-tool-move", commandId: "geometry.move-selected", icon: icon(Move), label: "Move", shortcut: "W", iconColor: "text-red-400" },
+        { id: "builder-tool-rotate", icon: icon(RotateCcw), label: "Rotate", shortcut: "E", disabled: true, tooltip: PROBLEM_IR_03_RIGID_TRANSFORM_REASON, iconColor: "text-green-400" },
+        { id: "builder-tool-scale", icon: icon(Maximize2), label: "Scale", shortcut: "R", disabled: true, tooltip: PROBLEM_IR_03_RIGID_TRANSFORM_REASON, iconColor: "text-blue-400" },
       ],
     },
     // ── Viewport ─────────────────────────────────────────────────────────

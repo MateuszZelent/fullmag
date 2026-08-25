@@ -3,6 +3,8 @@ import type {
   SceneResource,
 } from "@/kernel/api/apiTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
+import type { PrimitiveDraft } from "@/kernel/authoring/geometryLifecycleCommands";
+import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 
 export interface GeometryObjectPanelModel {
   dimensions: string;
@@ -50,6 +52,19 @@ export interface GeometryDraftTransformResult {
 }
 
 type JsonRecord = Record<string, unknown>;
+
+export function isPrimitiveDraftRevisionConflict(error: unknown): boolean {
+  return error instanceof ControlRoomApiError &&
+    error.status === 409 &&
+    (error.code === "revision_conflict" || error.code === "scene_revision_conflict");
+}
+
+export function rebaseGeometryObjectDraft(
+  draft: GeometryObjectDraft,
+  baseRevision: number | null,
+): GeometryObjectDraft {
+  return { ...draft, baseRevision };
+}
 
 function asRecord(value: unknown): JsonRecord | null {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
@@ -299,6 +314,72 @@ function parseVector(
   return { error: null, value: result as [number, number, number] };
 }
 
+function primitiveDraftKind(kind: string): PrimitiveDraft["kind"] {
+  const normalized = kind.trim().toLowerCase();
+  if (normalized === "cylinder") return "Cylinder";
+  if (normalized === "sphere") return "Sphere";
+  return "Box";
+}
+
+function parseDraftComponent(
+  value: string,
+  label: string,
+  positive: boolean,
+): { error: string | null; value: number | null } {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return { error: `${label} must be a finite SI value.`, value: null };
+  }
+  if (positive && parsed <= 0) {
+    return { error: `${label} must be greater than 0.`, value: null };
+  }
+  return { error: null, value: parsed };
+}
+
+export function resolvePrimitiveDraft(draft: GeometryObjectDraft): PrimitiveDraft {
+  const kind = primitiveDraftKind(draft.geometryKind);
+  const errors: Record<string, string> = {};
+  const translationValues = draft.translation.map((value, index) => {
+    const parsed = parseDraftComponent(value, `Translation ${"XYZ"[index]}`, false);
+    if (parsed.error) errors[`translation.${index}`] = parsed.error;
+    return parsed.value;
+  });
+  let dimensionInputs: readonly string[];
+  let dimensionLabels: readonly string[];
+  if (kind === "Box") {
+    dimensionInputs = draft.size;
+    dimensionLabels = ["Box size X", "Box size Y", "Box size Z"];
+  } else if (kind === "Cylinder") {
+    dimensionInputs = [draft.radius, draft.height, draft.radius];
+    dimensionLabels = ["Cylinder radius", "Cylinder height", "Cylinder radius"];
+  } else {
+    dimensionInputs = [draft.radius, draft.radius, draft.radius];
+    dimensionLabels = ["Sphere radius", "Sphere radius", "Sphere radius"];
+  }
+  const parsedDimensions = dimensionInputs.map((value, index) => {
+    const parsed = parseDraftComponent(value, dimensionLabels[index], true);
+    if (parsed.error && !(kind !== "Box" && index > 0 && value === dimensionInputs[0])) {
+      errors[kind === "Box" ? `size.${index}` : index === 1 ? "height" : "radius"] = parsed.error;
+    }
+    return parsed.value;
+  });
+  const dimensions = parsedDimensions.every((value): value is number => value !== null)
+    ? kind === "Box"
+      ? parsedDimensions
+      : parsedDimensions.map((value, index) => index === 1 && kind === "Cylinder" ? value : value * 2)
+    : null;
+  const translation = translationValues.every((value): value is number => value !== null)
+    ? translationValues
+    : null;
+
+  return {
+    dimensions: dimensions as [number, number, number] | null,
+    errors,
+    kind,
+    translation: translation as [number, number, number] | null,
+  };
+}
+
 function normalizedGeometryKind(
   kind: string,
 ): "ArchWaveguide" | "Box" | "Cylinder" | "Sphere" | null {
@@ -394,18 +475,10 @@ export function buildTransformDraftPatch(
 ): GeometryDraftTransformResult {
   const translation = parseVector(draft.translation, "Translation", false);
   if (translation.error) return { error: translation.error, transform: null };
-  const rotation = parseVector(draft.rotation, "Rotation", false);
-  if (rotation.error) return { error: rotation.error, transform: null };
-  const scale = parseVector(draft.scale, "Scale", true);
-  if (scale.error) return { error: scale.error, transform: null };
 
   return {
     error: null,
-    transform: {
-      rotation: rotation.value,
-      scale: scale.value,
-      translation: translation.value,
-    },
+    transform: { translation: translation.value },
   };
 }
 

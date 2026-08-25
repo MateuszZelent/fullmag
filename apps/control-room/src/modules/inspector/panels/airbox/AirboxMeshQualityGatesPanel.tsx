@@ -1,7 +1,14 @@
 "use client";
 
-import { useMeshUniverseQualityResource } from "@/kernel/resources/geometryLifecycleResources";
-import { shouldLoadRuntimeMeshSummary } from "@/kernel/resources/studyRuntimeResources";
+import {
+  useMeshSharedDomainManifestResource,
+  useMeshUniverseQualityResource,
+  useSceneResource,
+} from "@/kernel/resources/geometryLifecycleResources";
+import {
+  shouldLoadRuntimeMeshManifest,
+  shouldLoadRuntimeMeshSummary,
+} from "@/kernel/resources/studyRuntimeResources";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { AirboxFieldRow as FieldRow } from "./airboxDisplay";
@@ -15,8 +22,16 @@ export function AirboxMeshQualityGatesPanel({ selection }: InspectorPanelProps) 
   const quality = useMeshUniverseQualityResource({
     enabled: shouldLoadRuntimeMeshSummary(true, runtimeStatus),
   });
+  const manifest = useMeshSharedDomainManifestResource({
+    enabled: shouldLoadRuntimeMeshManifest(true, runtimeStatus),
+  });
+  const scene = useSceneResource({
+    enabled: shouldLoadRuntimeMeshSummary(true, runtimeStatus),
+  });
   const model = buildAirboxMeshInspectorModel({
-    manifest: null,
+    currentSceneRevision:
+      scene.data?.scene_revision ?? scene.data?.revision ?? null,
+    manifest: manifest.data ?? null,
     policy: { config: null, effective_config: null, revision: quality.data?.revision ?? 0 },
     quality: quality.data ?? null,
     report: null,

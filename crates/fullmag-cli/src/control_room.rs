@@ -91,6 +91,12 @@ pub(crate) fn resolve_api_port() -> Result<u16> {
         if port == 0 {
             return Ok(0);
         }
+        if std::env::var_os("FULLMAG_ATTACHED_SESSION_ID").is_some() {
+            // The scratch supervisor already verified this API before spawning
+            // the attached child.  Re-reading the large OpenAPI document here
+            // races with the first live snapshot on busy local Windows hosts.
+            return Ok(port);
+        }
         if api_bridge_is_ready(port) || port_is_bindable(port) {
             return Ok(port);
         }
@@ -1267,7 +1273,11 @@ fn api_openapi_is_compatible(port: u16) -> bool {
         Ok(stream) => stream,
         Err(_) => return false,
     };
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(1500)));
+    // The v2 document is intentionally comprehensive and can exceed half a
+    // megabyte on a local Windows checkout.  Keep the compatibility probe
+    // bounded, but allow the full response to arrive before rejecting a
+    // healthy API as incompatible.
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let _ = stream.set_write_timeout(Some(Duration::from_millis(750)));
     if stream
         .write_all(b"GET /v2/platform/openapi.json HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")

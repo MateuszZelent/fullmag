@@ -23,14 +23,17 @@ use tokio::sync::{watch, Mutex, RwLock};
 
 use crate::feature_flags::FeatureFlags;
 use crate::schemas::realtime::{
-    RealtimeResourceChange, RealtimeResourceName, RealtimeResourceRevisionMap,
+    LiveRealtimeServerEvent, RealtimeResourceChange, RealtimeResourceName,
+    RealtimeResourceRevisionMap,
 };
+use crate::schemas::commands::CommandResponse;
 use crate::types::{
     AppState, CommandCompletionState, CommandLifecycleState, CurrentDisplaySelection,
     CurrentLiveFieldFrameRequest, CurrentLiveSnapshotRequest, CurrentWorkspaceLayout,
     CurrentWorkspaceRibbon, CurrentWorkspaceSelection, DisplayPresentationState, LatestFields,
-    LiveState, RunManifest, RuntimeLifecycleState, RuntimeStatusView, ScalarRow, SessionCommand,
-    SessionManifest, SessionStateResponse, SimulationPreparationClockAdjustmentSnapshot,
+    GlobalScalarPreviewState, LiveState, PreviewState, RunManifest, RuntimeLifecycleState,
+    RuntimeStatusView, ScalarRow, SessionCommand, SessionManifest, SessionStateResponse,
+    SimulationPreparationClockAdjustmentSnapshot,
     SimulationPreparationFailureSnapshot, SimulationPreparationLogEntrySnapshot,
     SimulationPreparationSnapshot, SimulationPreparationStageSnapshot, StageExecutionRecord,
     StageExecutionState, StageLifecycleState, StepUpdateView, TrackedCommandRecord,
@@ -639,6 +642,9 @@ pub(crate) fn test_app_state() -> Arc<AppState> {
         repo_root: PathBuf::from("."),
         current_workspace_root: PathBuf::from("."),
         current_live_state: Arc::new(RwLock::new(None)),
+        current_live_session_transition: Arc::new(Mutex::new(())),
+        current_live_session_epoch: Arc::new(AtomicU64::new(0)),
+        current_live_realtime_before_send_hook: Arc::new(Mutex::new(None)),
         current_live_connectivity: Arc::new(RwLock::new(
             crate::schemas::status::SessionConnectivity::Connected,
         )),
@@ -1102,6 +1108,745 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) 
 
 fn test_router() -> axum::Router {
     build_v2_router().with_state(test_app_state())
+}
+
+#[tokio::test]
+async fn model_readiness_reports_all_empty_scene_blockers_in_stable_order() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(
+            crate::router_v2::handlers::sessions::create::create_empty_scene_document(
+                &crate::schemas::sessions::CreateSessionRequest {
+                    backend: "fdm".into(),
+                    device: "cpu".into(),
+                    name: "Empty".into(),
+                    precision: "double".into(),
+                    replace_current: false,
+                },
+            )
+            .expect("empty scratch scene"),
+        );
+    }
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/model/readiness")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["ready_to_run"], false);
+    assert_eq!(body["ready_to_export"], false);
+    assert_eq!(
+        body["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|check| check["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec![
+            "geometry",
+            "material",
+            "texture",
+            "interactions",
+            "discretization",
+            "study",
+        ]
+    );
+    assert_eq!(body["blockers"][0], "Add at least one magnetic object.");
+    assert_eq!(body["capabilities"]["move"]["available"], true);
+    assert_eq!(body["capabilities"]["rotate"]["available"], false);
+    assert_eq!(
+        body["capabilities"]["rotate"]["reason"],
+        "Rotate and Scale require a canonical geometry contract newer than ProblemIR 0.3."
+    );
+}
+
+#[tokio::test]
+async fn model_readiness_accepts_complete_fdm_scene() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document_with_stage(serde_json::json!({
+        "entrypoint_kind": "flat_relax",
+        "kind": "relax",
+        "algorithm": "projected_gradient_bb",
+        "stage_id": "relax-1"
+    }));
+    scene.study.requested_backend = "fdm".into();
+    scene.study.fdm = Some(fullmag_authoring::SceneFdmDiscretizationState {
+        default_cell: Some([1.0e-9, 1.0e-9, 1.0e-9]),
+        ..Default::default()
+    });
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/model/readiness")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["ready_to_run"], true);
+    assert_eq!(body["ready_to_export"], true);
+    assert_eq!(body["blockers"], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn model_readiness_blocks_material_without_ms() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document_with_stage(serde_json::json!({
+        "entrypoint_kind": "flat_relax",
+        "kind": "relax",
+        "algorithm": "projected_gradient_bb",
+        "stage_id": "relax-1"
+    }));
+    scene.study.requested_backend = "fdm".into();
+    scene.study.fdm = Some(fullmag_authoring::SceneFdmDiscretizationState {
+        default_cell: Some([1.0e-9, 1.0e-9, 1.0e-9]),
+        ..Default::default()
+    });
+    scene.materials[0].properties.ms = None;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/model/readiness")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["ready_to_run"], false);
+    let material = body["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["id"] == "material")
+        .unwrap();
+    assert_eq!(material["state"], "blocked");
+    assert_eq!(
+        material["reason"],
+        "missing Ms material property for object 'body'"
+    );
+}
+
+#[tokio::test]
+async fn model_readiness_blocks_material_without_aex() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document_with_stage(serde_json::json!({
+        "entrypoint_kind": "flat_relax",
+        "kind": "relax",
+        "algorithm": "projected_gradient_bb",
+        "stage_id": "relax-1"
+    }));
+    scene.study.requested_backend = "fdm".into();
+    scene.study.fdm = Some(fullmag_authoring::SceneFdmDiscretizationState {
+        default_cell: Some([1.0e-9, 1.0e-9, 1.0e-9]),
+        ..Default::default()
+    });
+    scene.materials[0].properties.aex = None;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/model/readiness")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["ready_to_run"], false);
+    let material = body["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["id"] == "material")
+        .unwrap();
+    assert_eq!(material["state"], "blocked");
+    assert_eq!(
+        material["reason"],
+        "missing Aex material property for object 'body'"
+    );
+}
+
+#[tokio::test]
+async fn hidden_magnet_without_aex_is_blocked_by_readiness_and_solve() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document_with_stage(serde_json::json!({
+        "entrypoint_kind": "flat_relax",
+        "kind": "relax",
+        "algorithm": "projected_gradient_bb",
+        "stage_id": "relax-1"
+    }));
+    scene.study.requested_backend = "fdm".into();
+    scene.study.fdm = Some(fullmag_authoring::SceneFdmDiscretizationState {
+        default_cell: Some([1.0e-9, 1.0e-9, 1.0e-9]),
+        ..Default::default()
+    });
+    scene.objects[0].visible = false;
+    scene.materials[0].properties.aex = None;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let readiness = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/model/readiness")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readiness.status(), StatusCode::OK);
+    let readiness = body_json(readiness).await;
+    assert_eq!(readiness["ready_to_run"], false);
+    assert!(readiness["blockers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|reason| reason == "missing Aex material property for object 'body'"));
+
+    let solve = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "kind": "solve" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(solve.status(), StatusCode::BAD_REQUEST);
+    assert!(String::from_utf8_lossy(&body_bytes(solve).await)
+        .contains("missing Aex material property for object 'body'"));
+}
+
+#[tokio::test]
+async fn non_magnetic_carrier_is_ignored_by_readiness_and_solve_projection() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document_with_stage(serde_json::json!({
+        "entrypoint_kind": "flat_relax",
+        "kind": "relax",
+        "algorithm": "projected_gradient_bb",
+        "stage_id": "relax-1"
+    }));
+    scene.study.requested_backend = "fdm".into();
+    scene.study.fdm = Some(fullmag_authoring::SceneFdmDiscretizationState {
+        default_cell: Some([1.0e-9, 1.0e-9, 1.0e-9]),
+        ..Default::default()
+    });
+    let mut carrier_material = scene.materials[0].clone();
+    carrier_material.id = "carrier-material".into();
+    carrier_material.properties.aex = None;
+    carrier_material.properties.ms = None;
+    scene.materials.push(carrier_material);
+    let mut carrier = scene.objects[0].clone();
+    carrier.id = "carrier".into();
+    carrier.name = "Carrier".into();
+    carrier.role = "carrier".into();
+    carrier.material_ref = "carrier-material".into();
+    scene.objects.push(carrier);
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let readiness = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/model/readiness")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readiness.status(), StatusCode::OK);
+    assert_eq!(body_json(readiness).await["ready_to_run"], true);
+
+    let solve = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "kind": "solve" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(solve.status(), StatusCode::OK);
+    assert_eq!(state.current_control_queue.lock().await.len(), 1);
+}
+
+#[tokio::test]
+async fn model_readiness_marks_fem_mesh_stale_against_scene_revision() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document_with_stage(serde_json::json!({
+        "entrypoint_kind": "flat_relax",
+        "kind": "relax",
+        "algorithm": "projected_gradient_bb",
+        "stage_id": "relax-1"
+    }));
+    scene.study.requested_backend = "fem".into();
+    let scene_revision = scene.revision;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.mesh_revision = 9;
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "last_build_summary": { "source_scene_revision": scene_revision - 1 }
+        }));
+    }
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/model/readiness")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["ready_to_run"], false);
+    let discretization = body["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["id"] == "discretization")
+        .unwrap();
+    assert_eq!(discretization["state"], "stale");
+    assert_eq!(
+        discretization["reason"],
+        "Build a current shared-domain mesh before running."
+    );
+}
+
+#[tokio::test]
+async fn create_scratch_session_accepts_explicit_fdm_and_fem_cpu_double_requests() {
+    let app = test_router();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"name":"Scratch FDM","backend":"fdm","device":"cpu","precision":"double"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = body_json(response).await;
+    assert_eq!(body["scene_document"]["schema_version"], "0.3");
+    assert_eq!(body["scene_document"]["objects"], serde_json::json!([]));
+    assert_eq!(body["status"]["requested_execution"]["backend"], "fdm");
+    assert_eq!(body["status"]["requested_execution"]["device"], "cpu");
+    assert_eq!(body["status"]["requested_execution"]["precision"], "double");
+    assert_eq!(body["status"]["effective_execution"]["backend"], "fdm");
+    assert_eq!(body["status"]["effective_execution"]["device"], "cpu");
+    assert_eq!(body["status"]["effective_execution"]["precision"], "double");
+    assert!(body["status"].get("fallback").is_some());
+    assert!(body["status"]["fallback"].is_null());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"name":"Scratch FEM","backend":"fem","device":"cpu","precision":"double","replace_current":true}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = body_json(response).await;
+    assert_eq!(body["scene_document"]["schema_version"], "0.3");
+    assert_eq!(body["scene_document"]["objects"], serde_json::json!([]));
+    assert_eq!(body["status"]["requested_execution"]["backend"], "fem");
+    assert_eq!(body["status"]["requested_execution"]["device"], "cpu");
+    assert_eq!(body["status"]["requested_execution"]["precision"], "double");
+    assert_eq!(body["status"]["effective_execution"]["backend"], "fem");
+    assert_eq!(body["status"]["effective_execution"]["device"], "cpu");
+    assert_eq!(body["status"]["effective_execution"]["precision"], "double");
+    assert!(body["status"].get("fallback").is_some());
+    assert!(body["status"]["fallback"].is_null());
+}
+
+#[tokio::test]
+async fn create_scratch_session_rejects_unknown_execution_and_implicit_replacement() {
+    let app = test_router();
+
+    let invalid = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"name":"Invalid","backend":"unknown","device":"cpu","precision":"double"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"name":"Scratch FDM","backend":"fdm","device":"cpu","precision":"double"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+
+    let conflict = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"name":"Replacement","backend":"fem","device":"cpu","precision":"double"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn create_scratch_session_serializes_one_canonical_objects_key() {
+    let response = test_router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"name":"Scratch","backend":"fdm","device":"cpu","precision":"double"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let raw = String::from_utf8(body_bytes(response).await).expect("response must be UTF-8");
+    assert_eq!(raw.matches("\"objects\"").count(), 1, "{raw}");
+}
+
+#[tokio::test]
+async fn concurrent_create_scratch_sessions_admit_only_one_without_replacement() {
+    let app = test_router();
+    let request = || {
+        Request::builder()
+            .method("POST")
+            .uri("/v2/sessions")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                r#"{"name":"Concurrent","backend":"fdm","device":"cpu","precision":"double"}"#,
+            ))
+            .unwrap()
+    };
+    let (left, right) = tokio::join!(app.clone().oneshot(request()), app.oneshot(request()));
+    let statuses = [left.unwrap().status(), right.unwrap().status()];
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|status| **status == StatusCode::CREATED)
+            .count(),
+        1
+    );
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|status| **status == StatusCode::CONFLICT)
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn delayed_scratch_session_publication_cannot_enter_replacement_realtime_stream() {
+    let state = test_app_state();
+    let hook = crate::types::CurrentLiveRealtimeBeforeSendHook {
+        admitted: Arc::new(tokio::sync::Notify::new()),
+        resume: Arc::new(tokio::sync::Notify::new()),
+    };
+    *state
+        .current_live_realtime_before_send_hook
+        .lock()
+        .await = Some(hook.clone());
+    let mut events = state.current_live_realtime_events.subscribe();
+
+    let first_state = state.clone();
+    let first = tokio::spawn(async move {
+        crate::router_v2::handlers::sessions::create(
+            axum::extract::State(first_state),
+            axum::Json(crate::schemas::sessions::CreateSessionRequest {
+                name: "First".to_string(),
+                backend: "fdm".to_string(),
+                device: "cpu".to_string(),
+                precision: "double".to_string(),
+                replace_current: false,
+            }),
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(1), hook.admitted.notified())
+        .await
+        .expect("first session must pause after publication admission");
+
+    let replacement_state = state.clone();
+    let replacement = tokio::spawn(async move {
+        crate::router_v2::handlers::sessions::create(
+            axum::extract::State(replacement_state),
+            axum::Json(crate::schemas::sessions::CreateSessionRequest {
+                name: "Replacement".to_string(),
+                backend: "fem".to_string(),
+                device: "cpu".to_string(),
+                precision: "double".to_string(),
+                replace_current: true,
+            }),
+        )
+        .await
+    });
+    tokio::task::yield_now().await;
+    assert!(
+        !replacement.is_finished(),
+        "replacement must wait for the admitted publication to leave replay/send"
+    );
+
+    hook.resume.notify_one();
+    let (_, axum::Json(first)) = first
+        .await
+        .expect("first task must complete")
+        .expect("first session creation must succeed");
+    let (_, axum::Json(replacement)) = replacement
+        .await
+        .expect("replacement task must complete")
+        .expect("replacement must be created");
+
+    let first_event = tokio::time::timeout(std::time::Duration::from_millis(100), events.recv())
+        .await
+        .expect("first session must publish realtime invalidation")
+        .expect("realtime channel must remain open");
+    let first_event: LiveRealtimeServerEvent =
+        serde_json::from_str(&first_event.json).expect("realtime event must serialize");
+    let LiveRealtimeServerEvent::ResourceBatchChanged { session_id, .. } = first_event else {
+        panic!("first session must publish a resource invalidation");
+    };
+    assert_eq!(session_id, first.session_id);
+
+    let event = tokio::time::timeout(std::time::Duration::from_millis(100), events.recv())
+        .await
+        .expect("replacement must publish realtime invalidation")
+        .expect("realtime channel must remain open");
+    let event: LiveRealtimeServerEvent =
+        serde_json::from_str(&event.json).expect("realtime event must serialize");
+    let LiveRealtimeServerEvent::ResourceBatchChanged { session_id, .. } = event else {
+        panic!("replacement must publish a resource invalidation");
+    };
+    assert_eq!(session_id, replacement.session_id);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), events.recv())
+            .await
+            .is_err(),
+        "the delayed first-session invalidation must not enter the replacement stream"
+    );
+
+    let replay = state.current_live_realtime_replay.lock().await;
+    assert!(replay.iter().all(|record| {
+        matches!(
+            serde_json::from_str::<LiveRealtimeServerEvent>(&record.json),
+            Ok(LiveRealtimeServerEvent::ResourceBatchChanged { ref session_id, .. })
+                if session_id == &replacement.session_id
+        )
+    }));
+}
+
+#[tokio::test]
+async fn create_scratch_session_replacement_resets_resources_and_invalidates() {
+    let state = test_app_state();
+    let app = build_v2_router().with_state(state.clone());
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"name":"First","backend":"fdm","device":"cpu","precision":"double"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::CREATED);
+    let mut events = state.current_live_realtime_events.subscribe();
+
+    let command: SessionCommand = serde_json::from_value(serde_json::json!({
+        "seq": 1,
+        "command_id": "stale-command",
+        "kind": "run",
+        "created_at_unix_ms": 1
+    }))
+    .expect("test command must deserialize");
+    state.current_control_queue.lock().await.push_back(command.clone());
+    state.current_command_responses.lock().await.push_back((
+        "stale-request".to_string(),
+        CommandResponse {
+            accepted: true,
+            command_id: command.command_id.clone(),
+            request_id: Some("stale-request".to_string()),
+            error: None,
+        },
+    ));
+    state.current_command_ledger.lock().await.push_back(TrackedCommandRecord {
+        command,
+        request_id: Some("stale-request".to_string()),
+        status: CommandLifecycleState::Queued,
+        dispatched_at_unix_ms: None,
+        completed_at_unix_ms: None,
+        completion_status: None,
+        error: None,
+    });
+    state.current_display_selection.write().await.revision = 9;
+    state.current_visualization_client_acks.write().await.insert(
+        "stale-client".to_string(),
+        crate::schemas::visualization_state::VisualizationClientAckEntry {
+            client_id: "stale-client".to_string(),
+            client_label: None,
+            viewport_id: None,
+            revision: 9,
+            status: crate::schemas::visualization_state::VisualizationClientAckStatus::Applied,
+            effective_render_mode: None,
+            error: None,
+            received_at_unix_ms: 1,
+        },
+    );
+    state
+        .current_visualization_client_ack_revision
+        .store(9, std::sync::atomic::Ordering::Relaxed);
+    state.current_live_state.write().await.as_mut().unwrap().preview = Some(
+        PreviewState::GlobalScalar(GlobalScalarPreviewState {
+            display_kind: "global_scalar".to_string(),
+            config_revision: 9,
+            source_step: 1,
+            source_time: 0.0,
+            quantity: "E_total".to_string(),
+            unit: "J".to_string(),
+            value: 1.0,
+        }),
+    );
+
+    let replacement = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"name":"Second","backend":"fem","device":"cpu","precision":"double","replace_current":true}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(replacement.status(), StatusCode::CREATED);
+    assert!(state.current_control_queue.lock().await.is_empty());
+    assert!(state.current_command_responses.lock().await.is_empty());
+    assert!(state.current_command_ledger.lock().await.is_empty());
+    assert_eq!(state.current_display_selection.read().await.revision, 0);
+    assert!(state.current_visualization_client_acks.read().await.is_empty());
+    assert_eq!(
+        state
+            .current_visualization_client_ack_revision
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    assert!(state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .unwrap()
+        .preview
+        .is_none());
+
+    let event = tokio::time::timeout(std::time::Duration::from_millis(100), events.recv())
+        .await
+        .expect("replacement must publish an invalidation event")
+        .expect("realtime channel must remain open");
+    let event: LiveRealtimeServerEvent =
+        serde_json::from_str(&event.json).expect("invalidation must serialize");
+    let LiveRealtimeServerEvent::ResourceBatchChanged { payload, .. } = event else {
+        panic!("replacement must publish resource invalidation");
+    };
+    assert!(payload.changes.iter().any(|change| {
+        matches!(change.resource, RealtimeResourceName::SceneDocument)
+            && change.recommended_fetch.as_deref() == Some("/v2/sessions/current/model/scene")
+    }));
+    assert!(payload.changes.iter().any(|change| {
+        matches!(change.resource, RealtimeResourceName::Display)
+            && change.recommended_fetch.as_deref()
+                == Some("/v2/sessions/current/visualization/display")
+    }));
 }
 
 async fn test_router_with_session() -> axum::Router {
@@ -1947,6 +2692,9 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         repo_root: repo_root.clone(),
         current_workspace_root: repo_root.clone(),
         current_live_state: Arc::new(RwLock::new(None)),
+        current_live_session_transition: Arc::new(Mutex::new(())),
+        current_live_session_epoch: Arc::new(AtomicU64::new(0)),
+        current_live_realtime_before_send_hook: Arc::new(Mutex::new(None)),
         current_live_connectivity: Arc::new(RwLock::new(
             crate::schemas::status::SessionConnectivity::Connected,
         )),
@@ -2759,6 +3507,14 @@ async fn status_exposes_planner_owned_active_lane_capability_snapshot() {
         "capability_supported"
     );
     assert_eq!(
+        active_lane["operations"]["initial_magnetization.uniform"]["state"],
+        "supported"
+    );
+    assert_eq!(
+        active_lane["operations"]["initial_magnetization.vortex"]["state"],
+        "supported"
+    );
+    assert_eq!(
         active_lane["operations"]["study.frequency_response"]["state"],
         "semantic_only"
     );
@@ -2779,7 +3535,7 @@ async fn status_exposes_planner_owned_active_lane_capability_snapshot() {
             .as_object()
             .expect("operation capability map")
             .len(),
-        31
+        33
     );
     assert!(active_lane["operations"]["study.frequency_response"]["reason"].is_string());
     assert!(active_lane["operations"]["study.frequency_response"]["requires"].is_array());
@@ -2817,6 +3573,8 @@ async fn status_active_lane_fails_closed_when_planner_capabilities_are_missing()
         "surface_coloring",
         "region_membership",
         "interaction.demag",
+        "initial_magnetization.uniform",
+        "initial_magnetization.vortex",
         "study.relaxation",
         "study.fft",
     ] {
@@ -3018,6 +3776,8 @@ fn active_lane_operation_catalog_covers_the_canonical_interaction_catalog() {
         "interaction.oersted_field",
         "interaction.magnetoelastic",
         "interaction.thermal",
+        "initial_magnetization.uniform",
+        "initial_magnetization.vortex",
     ] {
         assert!(
             crate::router_v2::handlers::sessions::status::ACTIVE_LANE_OPERATION_IDS
@@ -14778,6 +15538,64 @@ study.run(1e-12)
 }
 
 #[tokio::test]
+async fn authoring_script_sync_renders_empty_workspace_scene_document() {
+    let mut state = test_app_state_with_live_session().await;
+    let script_dir = std::env::temp_dir().join(format!(
+        "fullmag-api-scratch-script-sync-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos(),
+    ));
+    {
+        let state_mut = Arc::get_mut(&mut state).expect("test state should be uniquely owned");
+        state_mut.repo_root = crate::script::repo_root();
+        state_mut.current_workspace_root = script_dir.clone();
+    }
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/syncs")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let json = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "scratch script sync response: {json:?}");
+    assert_eq!(json["written"], true);
+    assert_eq!(json["source_kind"], "scene_document");
+    let script_path = script_dir.join("scene_document.py");
+    assert_eq!(json["script_path"], script_path.display().to_string());
+    assert!(script_path.is_file());
+    assert!(fs::read_to_string(&script_path)
+        .expect("canonical scratch script should be readable")
+        .contains("study = fm.study"));
+    let guard = state.current_live_state.read().await;
+    assert_eq!(
+        guard
+            .as_ref()
+            .expect("live snapshot")
+            .session
+            .script_path,
+        script_path.display().to_string()
+    );
+
+    let _ = fs::remove_dir_all(&script_dir);
+}
+
+#[tokio::test]
 async fn authoring_scene_patch_applies_merge_patch() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -14874,6 +15692,7 @@ async fn authoring_transactions_merge_patch_commits_document() {
                 .body(Body::from(
                     serde_json::json!({
                         "kind": "merge_patch",
+                        "base_revision": 3,
                         "merge_patch": {
                             "scene": {
                                 "name": "Transaction Patch Scene"
@@ -14894,6 +15713,42 @@ async fn authoring_transactions_merge_patch_commits_document() {
         json["committed_scene"]["scene"]["name"],
         "Transaction Patch Scene"
     );
+}
+
+#[tokio::test]
+async fn authoring_transactions_merge_patch_rejects_stale_base_revision() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/transactions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "merge_patch",
+                        "base_revision": 2,
+                        "merge_patch": {
+                            "scene": {
+                                "name": "must-not-commit"
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let json = body_json(response).await;
+    assert_eq!(json["code"], "revision_conflict");
 }
 
 #[tokio::test]
@@ -16171,6 +17026,73 @@ async fn planar_field_snapshot_is_stage_scoped_and_uses_persisted_values() {
 }
 
 #[tokio::test]
+async fn authoring_transactions_create_geometry_before_material_and_texture() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 12;
+    scene.objects.clear();
+    scene.materials.clear();
+    scene.magnetization_assets.clear();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/transactions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "create_object",
+                        "base_revision": 12,
+                        "object_id": "magnet-x",
+                        "name": "Magnet X",
+                        "geometry": {
+                            "geometry_kind": "Box",
+                            "geometry_params": { "size": [100e-9, 100e-9, 10e-9] }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = body_json(response).await;
+    assert_eq!(payload["transaction_kind"], "create_object");
+    assert_eq!(payload["committed_scene"]["objects"][0]["id"], "magnet-x");
+    assert_eq!(payload["committed_scene"]["objects"][0]["material_ref"], "");
+    assert!(payload["committed_scene"]["objects"][0]["magnetization_ref"].is_null());
+
+    let readiness = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/model/readiness")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readiness.status(), StatusCode::OK);
+    let readiness = body_json(readiness).await;
+    assert_eq!(readiness["ready_to_run"], false);
+    assert!(readiness["blockers"]
+        .as_array()
+        .is_some_and(|blockers| blockers.iter().any(|blocker| {
+            blocker
+                .as_str()
+                .is_some_and(|message| message.contains("missing material"))
+        })));
+}
+
+#[tokio::test]
 async fn authoring_transactions_create_transform_and_delete_objects() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
@@ -16227,6 +17149,36 @@ async fn authoring_transactions_create_transform_and_delete_objects() {
     let create_json = body_json(create_response).await;
     assert_eq!(create_json["transaction_kind"], "create_object");
     let created_revision = create_json["scene_revision"].as_u64().unwrap();
+    let stale_create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/transactions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "create_object",
+                        "base_revision": 12,
+                        "object_id": "stale_box",
+                        "name": "Stale box",
+                        "geometry": {
+                            "geometry_kind": "Box",
+                            "geometry_params": { "size": [100e-9, 100e-9, 30e-9] }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale_create.status(), StatusCode::CONFLICT);
+    let stale_create_json = body_json(stale_create).await;
+    assert_eq!(stale_create_json["code"], "revision_conflict");
+    assert!(stale_create_json["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("base=12")));
     let created_object = create_json["committed_scene"]["objects"]
         .as_array()
         .unwrap()
@@ -18645,6 +19597,75 @@ async fn authoring_region_patch_commits_magnetization_override_without_mesh_dirt
 }
 
 #[tokio::test]
+async fn authoring_magnetization_transaction_commits_asset_and_assignment_atomically() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 30;
+    let mut asset = serde_json::to_value(&scene.magnetization_assets[0]).unwrap();
+    asset["id"] = serde_json::json!("mag-atomic");
+    asset["name"] = serde_json::json!("Atomic uniform");
+    asset["ui_label"] = serde_json::json!("Atomic uniform");
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/transactions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "patch_magnetization",
+                        "base_revision": 30,
+                        "object_id": "body",
+                        "asset": asset,
+                        "magnetization_ref": "mag-atomic"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["transaction_kind"], "patch_magnetization");
+    assert_eq!(json["scene_revision"], 31);
+    assert_eq!(json["committed_scene"]["objects"][0]["magnetization_ref"], "mag-atomic");
+    assert!(json["committed_scene"]["magnetization_assets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["id"] == "mag-atomic"));
+
+    let stale = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/transactions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "patch_magnetization",
+                        "base_revision": 30,
+                        "object_id": "body",
+                        "magnetization_ref": null
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
 async fn authoring_material_field_transaction_commits_without_mesh_dirty() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
@@ -19091,6 +20112,7 @@ async fn authoring_material_patch_commits_requested_material() {
         .as_ref()
         .and_then(|snapshot| snapshot.scene_document.as_ref())
         .expect("scene document committed");
+    assert_eq!(json["scene_revision"], committed.revision);
     let material = committed
         .materials
         .iter()
@@ -19203,6 +20225,39 @@ async fn authoring_object_interaction_patch_updates_uniaxial_params() {
         })
         .expect("uniaxial interaction");
     assert_eq!(interaction.enabled, true);
+}
+
+#[tokio::test]
+async fn authoring_object_interaction_patch_rejects_stale_base_revision() {
+    let mut scene = sample_scene_document();
+    scene.revision = 50;
+    let object_id = scene.objects[0].id.clone();
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state);
+    let request = || {
+        Request::builder()
+            .method("PATCH")
+            .uri(format!(
+                "/v2/sessions/current/model/objects/{object_id}/interactions/uniaxial_anisotropy"
+            ))
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "base_revision": 50,
+                    "present": true,
+                    "enabled": true,
+                    "params": {"ku1": 42.0, "axis": [1.0, 0.0, 0.0]}
+                })
+                .to_string(),
+            ))
+            .unwrap()
+    };
+
+    assert_eq!(app.clone().oneshot(request()).await.unwrap().status(), StatusCode::OK);
+    assert_eq!(app.oneshot(request()).await.unwrap().status(), StatusCode::CONFLICT);
 }
 
 #[tokio::test]
@@ -19681,6 +20736,59 @@ async fn compute_fields_command_contract_resolves_fdm_full_requirement() {
         .await
         .unwrap();
     assert_eq!(field_after_completion.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn command_failure_endpoint_unblocks_dispatched_command() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v2_router().with_state(state.clone());
+    let detail = enqueue_compute_fields_and_get_detail(&app).await;
+    let command_id = detail["command_id"]
+        .as_str()
+        .expect("failure contract should expose command_id")
+        .to_string();
+    dispatch_compute_fields_command(&state, &command_id).await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v2/sessions/current/simulation/commands/{command_id}/failure"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"error": "attached runtime exited"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let failed = body_json(response).await;
+    assert_eq!(failed["status"], "failed");
+    assert_eq!(failed["completion_status"], "failed");
+    assert_eq!(failed["error"], "attached runtime exited");
+
+    let repeat = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v2/sessions/current/simulation/commands/{command_id}/failure"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"error": "second report"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(repeat.status(), StatusCode::OK);
+    let repeat_body = body_json(repeat).await;
+    assert_eq!(repeat_body["error"], "attached runtime exited");
 }
 
 #[tokio::test]
@@ -38883,6 +39991,80 @@ fn openapi_v2_exposes_professional_session_tree() {
 }
 
 #[test]
+fn openapi_session_creation_declares_typed_request_and_outcomes() {
+    let openapi = crate::openapi_v2::openapi_json();
+    let post = &openapi["paths"]["/v2/sessions"]["post"];
+
+    assert_eq!(
+        post["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/CreateSessionRequest"
+    );
+    assert_eq!(
+        post["responses"]["201"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/CreateSessionResponse"
+    );
+    assert!(post["responses"].get("400").is_some());
+    assert!(post["responses"].get("409").is_some());
+
+    let schemas = &openapi["components"]["schemas"];
+    for schema in [
+        "CreateSessionRequest",
+        "CreateSessionResponse",
+        "ScratchSessionStatusResource",
+        "SessionExecutionResource",
+        "ScratchSessionBackend",
+        "ScratchSessionDevice",
+        "ScratchSessionPrecision",
+        "ScratchSceneSchemaVersion",
+    ] {
+        assert!(schemas.get(schema).is_some(), "OpenAPI missing {schema}");
+    }
+
+    let request = &schemas["CreateSessionRequest"];
+    assert_eq!(
+        request["properties"]["backend"]["$ref"],
+        "#/components/schemas/ScratchSessionBackend"
+    );
+    assert_eq!(
+        request["properties"]["device"]["$ref"],
+        "#/components/schemas/ScratchSessionDevice"
+    );
+    assert_eq!(
+        request["properties"]["precision"]["$ref"],
+        "#/components/schemas/ScratchSessionPrecision"
+    );
+    assert_eq!(schemas["ScratchSessionBackend"]["enum"], serde_json::json!(["fdm", "fem"]));
+    assert_eq!(schemas["ScratchSessionDevice"]["enum"], serde_json::json!(["cpu"]));
+    assert_eq!(
+        schemas["ScratchSessionPrecision"]["enum"],
+        serde_json::json!(["double"])
+    );
+
+    let scene_document = &schemas["ScratchSceneDocumentResource"];
+    assert_eq!(
+        scene_document["properties"]["schema_version"]["$ref"],
+        "#/components/schemas/ScratchSceneSchemaVersion"
+    );
+    assert_eq!(
+        schemas["ScratchSceneSchemaVersion"]["enum"],
+        serde_json::json!(["0.3"])
+    );
+
+    let status = &schemas["ScratchSessionStatusResource"];
+    let required = status["required"]
+        .as_array()
+        .expect("scratch session status must declare required properties");
+    assert!(
+        required.iter().any(|field| field == "fallback"),
+        "scratch session fallback must always be present"
+    );
+    assert_eq!(
+        status["properties"]["fallback"]["type"],
+        serde_json::json!(["string", "null"])
+    );
+}
+
+#[test]
 fn openapi_v2_has_no_public_v1_paths() {
     let value = crate::openapi_v2::openapi_json();
     let paths = value
@@ -44999,4 +46181,31 @@ async fn frozen_spins_preview_rejects_an_unknown_stage_context() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body_json(response).await["code"], "selection_unknown_stage");
+}
+
+#[test]
+fn openapi_session_collection_declares_typed_response() {
+    let openapi = crate::openapi_v2::openapi_json();
+    let get = &openapi["paths"]["/v2/sessions"]["get"];
+
+    assert_eq!(
+        get["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/SessionListResource"
+    );
+    assert!(openapi["components"]["schemas"]
+        .get("SessionListResource")
+        .is_some());
+    assert!(openapi["components"]["schemas"]
+        .get("SessionSummaryResource")
+        .is_some());
+}
+
+#[tokio::test]
+async fn session_collection_handler_returns_a_typed_confirmed_empty_resource() {
+    let state = test_app_state();
+    let axum::Json(resource): axum::Json<crate::schemas::sessions::SessionListResource> =
+        super::list_sessions(axum::extract::State(state)).await;
+
+    assert_eq!(resource.schema_version, "2.0.0");
+    assert!(resource.sessions.is_empty());
 }

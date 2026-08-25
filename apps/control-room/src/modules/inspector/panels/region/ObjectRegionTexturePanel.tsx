@@ -2,28 +2,27 @@
 
 import { useMemo, useState } from "react";
 import {
-  MODEL_GEOMETRY_DIAGNOSTICS_PATH,
-  MODEL_GEOMETRY_VALIDATION_PATH,
-} from "@/kernel/api/apiPaths";
+  acknowledgedAuthoringSceneRevision,
+  invalidateAuthoringMutationDependents,
+} from "@/kernel/authoring/authoringMutationInvalidation";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import {
-  MODEL_REGIONS_RESOURCE_KEY,
-  SCENE_RESOURCE_KEY,
-  VISUALIZATION_STATE_RESOURCE_KEY,
   useModelRegionsResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import {
-  buildMagnetizationAssetPatch as buildTextureAssetPatch,
-  buildRegionTextureOverridePatch,
-} from "@/shared/domain/magnetization-texture/draftModel";
+  resolveActiveLaneOperation,
+  useActiveLaneCapabilities,
+  type ActiveLaneOperationResolution,
+} from "@/kernel/resources/useActiveLaneCapabilities";
 import {
   ObjectRegionMetadataSection,
   type RegionSubPanelProps,
 } from "./shared";
 import {
   buildObjectMagneticTextureAssetDraft,
+  buildMagnetizationTransactionRequest,
   objectMagneticTextureDraftFromModel,
   objectMagneticTextureDraftDirty,
   objectMagneticTextureDraftIdentityKey,
@@ -53,6 +52,7 @@ export function ObjectRegionTexturePanel({
 }: RegionSubPanelProps) {
   const kernel = useKernel();
   const { api, resources } = kernel;
+  const activeLane = useActiveLaneCapabilities();
   const scene = useSceneResource();
   const regions = useModelRegionsResource();
   
@@ -106,6 +106,16 @@ export function ObjectRegionTexturePanel({
     isDirty: objectMagneticTextureDraftDirty,
     state: draftState,
   });
+  const textureCapabilityOperation =
+    draft.presetKind === "uniform"
+      ? "initial_magnetization.uniform"
+      : draft.presetKind === "vortex"
+        ? "initial_magnetization.vortex"
+        : null;
+  const textureCapability: ActiveLaneOperationResolution | null =
+    textureCapabilityOperation
+      ? resolveActiveLaneOperation(activeLane, textureCapabilityOperation)
+      : null;
 
   function updateDraft(patch: Partial<ObjectMagneticTextureDraft>): void {
     setDraftState(
@@ -121,11 +131,7 @@ export function ObjectRegionTexturePanel({
   }
 
   function invalidateTextureResources(revision: number): void {
-    resources.invalidate(SCENE_RESOURCE_KEY, revision);
-    resources.invalidate(MODEL_REGIONS_RESOURCE_KEY, revision);
-    resources.invalidate(MODEL_GEOMETRY_VALIDATION_PATH, revision);
-    resources.invalidate(MODEL_GEOMETRY_DIAGNOSTICS_PATH, revision);
-    resources.invalidate(VISUALIZATION_STATE_RESOURCE_KEY, revision);
+    invalidateAuthoringMutationDependents(resources, "magnetization", revision);
   }
 
   async function saveTexture(): Promise<void> {
@@ -133,24 +139,21 @@ export function ObjectRegionTexturePanel({
       setFeedback({ kind: "error", message: "No committed scene object." });
       return;
     }
-    const target = { kind: "region" as const, objectId: model.objectId, regionId: model.regionId! };
+    if (textureCapability && !textureCapability.enabled) {
+      setFeedback({ kind: "error", message: textureCapability.reason });
+      return;
+    }
+    if (!model.regionId) {
+      setFeedback({ kind: "error", message: "No selected texture target." });
+      return;
+    }
     setPending(true);
     try {
       const asset = buildObjectMagneticTextureAssetDraft(model, draft);
-      const assetResponse = await api.model.patchMagnetizationAsset(
-        asset.id,
-        buildTextureAssetPatch(asset, model.baseRevision),
+      const response = await api.model.commitTransaction(
+        buildMagnetizationTransactionRequest(model, asset, asset.id),
       );
-      const response = await api.model.patchObjectRegionResource(
-        target.objectId,
-        target.regionId,
-        buildRegionTextureOverridePatch(asset),
-        { baseRevision: assetResponse.scene_revision ?? model.baseRevision ?? undefined },
-      );
-      const revision =
-        typeof response.revision === "number"
-          ? response.revision
-          : assetResponse.scene_revision ?? model.baseRevision ?? 0;
+      const revision = acknowledgedAuthoringSceneRevision(response);
       invalidateTextureResources(revision);
       const syncWarning = await syncAuthoringScriptBestEffort(api);
       setDraftState({
@@ -177,19 +180,16 @@ export function ObjectRegionTexturePanel({
       setFeedback({ kind: "error", message: "No committed scene object." });
       return;
     }
-    const target = { kind: "region" as const, objectId: model.objectId, regionId: model.regionId! };
+    if (!model.regionId) {
+      setFeedback({ kind: "error", message: "No selected texture target." });
+      return;
+    }
     setPending(true);
     try {
-      const response = await api.model.patchObjectRegionResource(
-        target.objectId,
-        target.regionId,
-        buildRegionTextureOverridePatch(null),
-        { baseRevision: model.baseRevision ?? undefined },
+      const response = await api.model.commitTransaction(
+        buildMagnetizationTransactionRequest(model, null, null),
       );
-      const revision =
-        typeof response.revision === "number"
-          ? response.revision
-          : model.baseRevision ?? 0;
+      const revision = acknowledgedAuthoringSceneRevision(response);
       invalidateTextureResources(revision);
       const syncWarning = await syncAuthoringScriptBestEffort(api);
       setDraftState({
@@ -246,6 +246,7 @@ export function ObjectRegionTexturePanel({
       <MagneticTextureRawAssetSection model={model} />
 
       <MagneticTextureActionsSection
+        capability={textureCapability}
         dirty={dirty}
         feedback={feedback}
         model={model}

@@ -1,0 +1,1398 @@
+# Review package: 2d7ffcd43..3eb5cf186
+
+## Commits
+3eb5cf186 feat(authoring): expose model readiness
+
+## Files changed
+ .../src/kernel/api/ControlRoomApi.test.ts          |   4 +-
+ apps/control-room/src/kernel/api/ControlRoomApi.ts |   4 +
+ apps/control-room/src/kernel/api/apiPaths.ts       |   4 +
+ apps/control-room/src/kernel/api/apiTypes.ts       |   3 +
+ .../src/kernel/api/generated/openapi-v2-paths.ts   |   1 +
+ .../src/kernel/api/generated/openapi-v2-types.ts   |  70 ++++++
+ .../src/kernel/api/generated/openapi-v2.json       | 141 ++++++++++-
+ .../authoring/scratchAuthoringReadiness.test.ts    |  67 +++++
+ .../kernel/authoring/scratchAuthoringReadiness.ts  |  42 ++++
+ .../studyRuntimeCommandContributions.test.ts       |  34 +++
+ .../runtime/studyRuntimeCommandContributions.ts    |  15 ++
+ crates/fullmag-api/src/openapi_v2.rs               |   1 +
+ .../src/router_v2/handlers/meshing/mesh.rs         |   4 +
+ crates/fullmag-api/src/router_v2/handlers/model.rs |   2 +
+ .../src/router_v2/handlers/model/readiness.rs      | 278 +++++++++++++++++++++
+ crates/fullmag-api/src/router_v2/mod.rs            |   4 +
+ crates/fullmag-api/src/router_v2/tests.rs          | 138 ++++++++++
+ 17 files changed, 809 insertions(+), 3 deletions(-)
+
+## Diff
+diff --git a/apps/control-room/src/kernel/api/ControlRoomApi.test.ts b/apps/control-room/src/kernel/api/ControlRoomApi.test.ts
+index 70df2c74b..4920de5f2 100644
+--- a/apps/control-room/src/kernel/api/ControlRoomApi.test.ts
++++ b/apps/control-room/src/kernel/api/ControlRoomApi.test.ts
+@@ -4257,37 +4257,39 @@ describe("ControlRoomApi", () => {
+     expect(observedInit?.method).toBe("POST");
+     expect(parseRequestBody(observedInit?.body)).toEqual({
+       client_id: "browser-1",
+       effective_render_mode: "surface",
+       revision: 41,
+       status: "rendered",
+       viewport_id: "viewport-main",
+     });
+   });
+ 
+-  it("exposes scene, universe, and shared-domain manifest through facade methods", async () => {
++  it("exposes scene readiness, universe, and shared-domain manifest through facade methods", async () => {
+     const seenUrls: string[] = [];
+     const api = new ControlRoomApi({
+       baseUrl: "http://127.0.0.1:8765",
+       fetchImpl: async (url) => {
+         seenUrls.push(String(url));
+         return jsonResponse({ revision: seenUrls.length });
+       },
+     });
+ 
+     await api.model.scene();
++    await api.model.readiness();
+     await api.model.physicsGraph();
+     await api.model.universe();
+     await api.meshing.sharedDomainManifest();
+ 
+     expect(seenUrls).toEqual([
+       "http://127.0.0.1:8765/v2/sessions/current/model/scene",
++      "http://127.0.0.1:8765/v2/sessions/current/model/readiness",
+       "http://127.0.0.1:8765/v2/sessions/current/model/physics-graph",
+       "http://127.0.0.1:8765/v2/sessions/current/model/universe",
+       "http://127.0.0.1:8765/v2/sessions/current/meshing/meshes/shared-domain/manifest",
+     ]);
+   });
+ 
+   it("commits geometry authoring transactions through the v2 model transaction resource", async () => {
+     let observedInit: RequestInit | undefined;
+     let observedUrl = "";
+     const api = new ControlRoomApi({
+diff --git a/apps/control-room/src/kernel/api/ControlRoomApi.ts b/apps/control-room/src/kernel/api/ControlRoomApi.ts
+index c9224c5fe..4f497bfee 100644
+--- a/apps/control-room/src/kernel/api/ControlRoomApi.ts
++++ b/apps/control-room/src/kernel/api/ControlRoomApi.ts
+@@ -103,20 +103,21 @@ import {
+   MESHING_SUMMARY_PATH,
+   MESHING_UNIVERSE_POLICY_PATH,
+   MESHING_UNIVERSE_QUALITY_PATH,
+   MESHING_UNIVERSE_REPORT_PATH,
+   MODEL_GEOMETRY_CAPABILITIES_PATH,
+   MODEL_GEOMETRY_DIAGNOSTIC_PATH,
+   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
+   MODEL_GEOMETRY_REALIZATION_CURRENT_PATH,
+   MODEL_GEOMETRY_REALIZATIONS_PATH,
+   MODEL_GEOMETRY_VALIDATION_PATH,
++  MODEL_READINESS_PATH,
+   MODEL_FROZEN_SPIN_PATH,
+   MODEL_FROZEN_SPINS_PATH,
+   MODEL_FROZEN_SPINS_PREVIEW_PATH,
+   MODEL_FROZEN_SPINS_PREVIEWS_PATH,
+   MODEL_COUPLINGS_PATH,
+   MODEL_CURRENT_TRANSPORT_PATH,
+   MODEL_CURRENT_TRANSPORTS_PATH,
+   MODEL_FIELD_DRIVE_PATH,
+   MODEL_FIELD_DRIVES_PATH,
+   MODEL_SPIN_TRANSPORT_PATH,
+@@ -317,20 +318,21 @@ import type {
+   MeshRegionMembershipResource,
+   FdmRegionMembershipResource,
+   PendingJsonResourceResult,
+   MeshRegionQualityResource,
+   MeshSemanticsResource,
+   MeshSharedDomainConfigReplaceRequest,
+   MeshSharedDomainConfigResource,
+   MeshSharedDomainQualityResource,
+   MeshSharedDomainReportResource,
+   MeshSharedDomainManifestResource,
++  ModelReadinessResource,
+   MeshSummaryResource,
+   MeshUniverseConfigReplaceRequest,
+   MeshUniverseConfigResource,
+   MeshUniverseQualityResource,
+   MeshUniverseReportResource,
+   ObjectCreateRequest,
+   ObjectGeometryPatchRequest,
+   ObjectMetricsResource,
+   ObjectInteractionKind,
+   ObjectInteractionPatchRequest,
+@@ -2164,20 +2166,22 @@ export class ControlRoomApi {
+       options?: RequestOptions,
+     ) =>
+       this.patchJson<SceneResource, RegionPatchRequest>(
+         MODEL_REGION_PATH,
+         patch,
+         options,
+         { path: { region_id: regionId } },
+       ),
+     scene: (options?: RequestOptions) =>
+       this.requestJson<SceneResource>(MODEL_SCENE_PATH, options),
++    readiness: (options?: RequestOptions) =>
++      this.requestJson<ModelReadinessResource>(MODEL_READINESS_PATH, options),
+     physicsGraph: (options?: RequestOptions) =>
+       this.requestJson<PhysicsGraphResource>(MODEL_PHYSICS_GRAPH_PATH, options),
+     authoringScript: (options?: RequestOptions) =>
+       this.requestJson<ScriptSourceResponse>(MODEL_SCRIPT_PATH, options),
+     syncAuthoringScript: (
+       request: ScriptSyncRequest,
+       options?: RequestOptions,
+     ) =>
+       this.postJson<ScriptSyncResponse, ScriptSyncRequest>(
+         MODEL_SYNCS_PATH,
+diff --git a/apps/control-room/src/kernel/api/apiPaths.ts b/apps/control-room/src/kernel/api/apiPaths.ts
+index 715925212..282b8564f 100644
+--- a/apps/control-room/src/kernel/api/apiPaths.ts
++++ b/apps/control-room/src/kernel/api/apiPaths.ts
+@@ -566,20 +566,24 @@ export const MODEL_UNIVERSE_PATH = openApiV2Path(
+ );
+ 
+ export const MODEL_UNIVERSE_FIT_PATH = openApiV2Path(
+   "/v2/sessions/current/model/universe/fit",
+ );
+ 
+ export const MODEL_SCENE_PATH = openApiV2Path(
+   "/v2/sessions/current/model/scene",
+ );
+ 
++export const MODEL_READINESS_PATH = openApiV2Path(
++  "/v2/sessions/current/model/readiness",
++);
++
+ export const MODEL_FROZEN_SPINS_PATH = openApiV2Path(
+   "/v2/sessions/current/model/frozen-spins",
+ );
+ 
+ export const MODEL_FROZEN_SPIN_PATH = openApiV2Path(
+   "/v2/sessions/current/model/frozen-spins/{constraint_id}",
+ );
+ 
+ export const MODEL_FROZEN_SPINS_PREVIEWS_PATH = openApiV2Path(
+   "/v2/sessions/current/model/frozen-spins/previews",
+diff --git a/apps/control-room/src/kernel/api/apiTypes.ts b/apps/control-room/src/kernel/api/apiTypes.ts
+index d46e150cd..bf39f894a 100644
+--- a/apps/control-room/src/kernel/api/apiTypes.ts
++++ b/apps/control-room/src/kernel/api/apiTypes.ts
+@@ -1,18 +1,21 @@
+ import type { components } from "./generated/openapi-v2-types";
+ 
+ export type ResourceRevision = string | number;
+ type JsonPrimitive = boolean | null | number | string;
+ export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
+ export type JsonObject = { [key: string]: JsonValue };
+ 
+ export type SessionListResource = components["schemas"]["SessionListResource"];
++export type ModelReadinessResource =
++  components["schemas"]["ModelReadinessResource"];
++export type ModelReadinessCheck = components["schemas"]["ModelReadinessCheck"];
+ 
+ export type ObjectInteractionKind =
+   | "exchange"
+   | "demag"
+   | "interfacial_dmi"
+   | "uniaxial_anisotropy";
+ 
+ interface BaseAuthoringTransaction {
+   base_revision?: number | null;
+ }
+diff --git a/apps/control-room/src/kernel/api/generated/openapi-v2-paths.ts b/apps/control-room/src/kernel/api/generated/openapi-v2-paths.ts
+index cd648e471..efb6d2518 100644
+--- a/apps/control-room/src/kernel/api/generated/openapi-v2-paths.ts
++++ b/apps/control-room/src/kernel/api/generated/openapi-v2-paths.ts
+@@ -163,20 +163,21 @@ export const openApiV2PathLiterals = [
+   "/v2/sessions/current/model/objects/{object_id}/regions",
+   "/v2/sessions/current/model/objects/{object_id}/regions/reorder",
+   "/v2/sessions/current/model/objects/{object_id}/regions/{region_id}",
+   "/v2/sessions/current/model/objects/{object_id}/regions/{region_id}/duplicate",
+   "/v2/sessions/current/model/oersted-fields",
+   "/v2/sessions/current/model/oersted-fields/{id}",
+   "/v2/sessions/current/model/physics-graph",
+   "/v2/sessions/current/model/planar-monitors",
+   "/v2/sessions/current/model/planar-monitors/{monitor_id}",
+   "/v2/sessions/current/model/planar-monitors/{monitor_id}/duplicate",
++  "/v2/sessions/current/model/readiness",
+   "/v2/sessions/current/model/realized-regions",
+   "/v2/sessions/current/model/region-diagnostics",
+   "/v2/sessions/current/model/regions",
+   "/v2/sessions/current/model/regions/{region_id}",
+   "/v2/sessions/current/model/scene",
+   "/v2/sessions/current/model/script",
+   "/v2/sessions/current/model/spin-interfaces",
+   "/v2/sessions/current/model/spin-torques",
+   "/v2/sessions/current/model/spin-torques/{id}",
+   "/v2/sessions/current/model/spin-transports",
+diff --git a/apps/control-room/src/kernel/api/generated/openapi-v2-types.ts b/apps/control-room/src/kernel/api/generated/openapi-v2-types.ts
+index 96f3984ce..5b2c2ce2c 100644
+--- a/apps/control-room/src/kernel/api/generated/openapi-v2-types.ts
++++ b/apps/control-room/src/kernel/api/generated/openapi-v2-types.ts
+@@ -2724,20 +2724,36 @@ export interface paths {
+         };
+         get?: never;
+         put?: never;
+         post: operations["model_post_sessions_current_model_planar_monitors_monitor_id_duplicate"];
+         delete?: never;
+         options?: never;
+         head?: never;
+         patch?: never;
+         trace?: never;
+     };
++    "/v2/sessions/current/model/readiness": {
++        parameters: {
++            query?: never;
++            header?: never;
++            path?: never;
++            cookie?: never;
++        };
++        get: operations["model_get_sessions_current_model_readiness"];
++        put?: never;
++        post?: never;
++        delete?: never;
++        options?: never;
++        head?: never;
++        patch?: never;
++        trace?: never;
++    };
+     "/v2/sessions/current/model/realized-regions": {
+         parameters: {
+             query?: never;
+             header?: never;
+             path?: never;
+             cookie?: never;
+         };
+         get: operations["model_get_sessions_current_model_realized_regions"];
+         put?: never;
+         post?: never;
+@@ -7396,20 +7412,47 @@ export interface components {
+              * Format: double
+              * @deprecated
+              * @description Deprecated compatibility alias of the diagnostics end-to-end rate.
+              */
+             steps_per_second?: number | null;
+             /** Format: int64 */
+             total_steps: number;
+             /** Format: int64 */
+             uptime_seconds: number;
+         };
++        ModelAuthoringCapabilities: {
++            move: components["schemas"]["ModelAuthoringCapability"];
++            rotate: components["schemas"]["ModelAuthoringCapability"];
++            scale: components["schemas"]["ModelAuthoringCapability"];
++        };
++        ModelAuthoringCapability: {
++            available: boolean;
++            reason?: string | null;
++        };
++        ModelReadinessCheck: {
++            id: string;
++            label: string;
++            reason?: string | null;
++            state: components["schemas"]["ModelReadinessCheckState"];
++            target_resource?: string | null;
++        };
++        /** @enum {string} */
++        ModelReadinessCheckState: "complete" | "blocked" | "stale";
++        ModelReadinessResource: {
++            blockers: string[];
++            capabilities: components["schemas"]["ModelAuthoringCapabilities"];
++            checks: components["schemas"]["ModelReadinessCheck"][];
++            ready_to_export: boolean;
++            ready_to_run: boolean;
++            /** Format: int64 */
++            scene_revision: number;
++        };
+         NullableF64PatchValue: number | null;
+         NullableStringPatchValue: string | null;
+         NullableU32PatchValue: number | null;
+         ObjectCreateRequest: {
+             /** Format: int64 */
+             base_revision?: number | null;
+             geometry: Record<string, never>;
+             magnetization_asset?: Record<string, never> | null;
+             magnetization_ref?: string | null;
+             material_asset?: Record<string, never> | null;
+@@ -19282,20 +19325,47 @@ export interface operations {
+             };
+             /** @description Revision conflict */
+             409: {
+                 headers: {
+                     [name: string]: unknown;
+                 };
+                 content?: never;
+             };
+         };
+     };
++    model_get_sessions_current_model_readiness: {
++        parameters: {
++            query?: never;
++            header?: never;
++            path?: never;
++            cookie?: never;
++        };
++        requestBody?: never;
++        responses: {
++            /** @description Derived readiness of the current canonical authoring model */
++            200: {
++                headers: {
++                    [name: string]: unknown;
++                };
++                content: {
++                    "application/json": components["schemas"]["ModelReadinessResource"];
++                };
++            };
++            /** @description No active workspace or scene document */
++            404: {
++                headers: {
++                    [name: string]: unknown;
++                };
++                content?: never;
++            };
++        };
++    };
+     model_get_sessions_current_model_realized_regions: {
+         parameters: {
+             query?: never;
+             header?: never;
+             path?: never;
+             cookie?: never;
+         };
+         requestBody?: never;
+         responses: {
+             /** @description Current geometry-realized body region resources */
+diff --git a/apps/control-room/src/kernel/api/generated/openapi-v2.json b/apps/control-room/src/kernel/api/generated/openapi-v2.json
+index e9134dde7..6f9e5e4ae 100644
+--- a/apps/control-room/src/kernel/api/generated/openapi-v2.json
++++ b/apps/control-room/src/kernel/api/generated/openapi-v2.json
+@@ -15138,20 +15138,134 @@
+             "minimum": 0,
+             "type": "integer"
+           }
+         },
+         "required": [
+           "uptime_seconds",
+           "total_steps"
+         ],
+         "type": "object"
+       },
++      "ModelAuthoringCapabilities": {
++        "properties": {
++          "move": {
++            "$ref": "#/components/schemas/ModelAuthoringCapability"
++          },
++          "rotate": {
++            "$ref": "#/components/schemas/ModelAuthoringCapability"
++          },
++          "scale": {
++            "$ref": "#/components/schemas/ModelAuthoringCapability"
++          }
++        },
++        "required": [
++          "move",
++          "rotate",
++          "scale"
++        ],
++        "type": "object"
++      },
++      "ModelAuthoringCapability": {
++        "properties": {
++          "available": {
++            "type": "boolean"
++          },
++          "reason": {
++            "type": [
++              "string",
++              "null"
++            ]
++          }
++        },
++        "required": [
++          "available"
++        ],
++        "type": "object"
++      },
++      "ModelReadinessCheck": {
++        "properties": {
++          "id": {
++            "type": "string"
++          },
++          "label": {
++            "type": "string"
++          },
++          "reason": {
++            "type": [
++              "string",
++              "null"
++            ]
++          },
++          "state": {
++            "$ref": "#/components/schemas/ModelReadinessCheckState"
++          },
++          "target_resource": {
++            "type": [
++              "string",
++              "null"
++            ]
++          }
++        },
++        "required": [
++          "id",
++          "state",
++          "label"
++        ],
++        "type": "object"
++      },
++      "ModelReadinessCheckState": {
++        "enum": [
++          "complete",
++          "blocked",
++          "stale"
++        ],
++        "type": "string"
++      },
++      "ModelReadinessResource": {
++        "properties": {
++          "blockers": {
++            "items": {
++              "type": "string"
++            },
++            "type": "array"
++          },
++          "capabilities": {
++            "$ref": "#/components/schemas/ModelAuthoringCapabilities"
++          },
++          "checks": {
++            "items": {
++              "$ref": "#/components/schemas/ModelReadinessCheck"
++            },
++            "type": "array"
++          },
++          "ready_to_export": {
++            "type": "boolean"
++          },
++          "ready_to_run": {
++            "type": "boolean"
++          },
++          "scene_revision": {
++            "format": "int64",
++            "minimum": 0,
++            "type": "integer"
++          }
++        },
++        "required": [
++          "scene_revision",
++          "ready_to_run",
++          "ready_to_export",
++          "checks",
++          "blockers",
++          "capabilities"
++        ],
++        "type": "object"
++      },
+       "NullableF64PatchValue": {
+         "oneOf": [
+           {
+             "format": "double",
+             "type": "number"
+           },
+           {
+             "default": null,
+             "type": "null"
+           }
+@@ -42793,20 +42907,43 @@
+           },
+           "409": {
+             "description": "Revision conflict"
+           }
+         },
+         "tags": [
+           "model"
+         ]
+       }
+     },
++    "/v2/sessions/current/model/readiness": {
++      "get": {
++        "operationId": "model_get_sessions_current_model_readiness",
++        "responses": {
++          "200": {
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/ModelReadinessResource"
++                }
++              }
++            },
++            "description": "Derived readiness of the current canonical authoring model"
++          },
++          "404": {
++            "description": "No active workspace or scene document"
++          }
++        },
++        "tags": [
++          "model"
++        ]
++      }
++    },
+     "/v2/sessions/current/model/realized-regions": {
+       "get": {
+         "operationId": "model_get_sessions_current_model_realized_regions",
+         "responses": {
+           "200": {
+             "content": {
+               "application/json": {
+                 "schema": {
+                   "$ref": "#/components/schemas/RegionListResource"
+                 }
+@@ -45183,22 +45320,22 @@
+     {
+       "description": "Session checkpoints, exports, imports, assets, and recovery",
+       "name": "persistence"
+     },
+     {
+       "description": "Runtime diagnostics, GPU telemetry, and engine logs",
+       "name": "diagnostics"
+     }
+   ],
+   "x-fullmag-build-identity": {
+-    "built_at_utc": "2026-08-23T13:36:18Z",
+-    "git_commit": "1d16fdecfdd1df62971af234acd329802dfb8e32",
++    "built_at_utc": "2026-08-23T14:21:27Z",
++    "git_commit": "2d7ffcd43b226f0f401ea26d3354dc78e6b71eff",
+     "source_snapshot_sha256": "unknown",
+     "worktree_state": "dirty"
+   },
+   "x-fullmag-study-primitive-stage-kinds": [
+     "relax",
+     "run",
+     "eigenmodes",
+     "frequency_response",
+     "hysteresis",
+     "change_device",
+diff --git a/apps/control-room/src/kernel/authoring/scratchAuthoringReadiness.test.ts b/apps/control-room/src/kernel/authoring/scratchAuthoringReadiness.test.ts
+new file mode 100644
+index 000000000..5a3dca681
+--- /dev/null
++++ b/apps/control-room/src/kernel/authoring/scratchAuthoringReadiness.test.ts
+@@ -0,0 +1,67 @@
++import { describe, expect, it } from "vitest";
++
++import type { ModelReadinessResource } from "../api/apiTypes";
++import {
++  resolveRunAvailability,
++  toChecklist,
++} from "./scratchAuthoringReadiness";
++
++function emptyReadiness(): ModelReadinessResource {
++  return {
++    blockers: ["Add at least one magnetic object."],
++    capabilities: {
++      move: { available: true, reason: null },
++      rotate: {
++        available: false,
++        reason:
++          "Rotate and Scale require a canonical geometry contract newer than ProblemIR 0.3.",
++      },
++      scale: {
++        available: false,
++        reason:
++          "Rotate and Scale require a canonical geometry contract newer than ProblemIR 0.3.",
++      },
++    },
++    checks: [
++      { id: "study", label: "Study", reason: "Add a study stage.", state: "blocked" },
++      { id: "geometry", label: "Geometry", reason: "Add at least one magnetic object.", state: "blocked" },
++      { id: "texture", label: "Initial magnetization", reason: "Assign initial magnetization.", state: "blocked" },
++      { id: "material", label: "Material", reason: "Assign a material.", state: "blocked" },
++      { id: "discretization", label: "Discretization", reason: "Configure discretization.", state: "blocked" },
++      { id: "interactions", label: "Interactions", reason: "Enable an interaction.", state: "blocked" },
++    ],
++    ready_to_export: false,
++    ready_to_run: false,
++    scene_revision: 0,
++  };
++}
++
++describe("scratch authoring readiness presentation", () => {
++  it("maps server checks to the stable product order without revalidating physics", () => {
++    expect(toChecklist(emptyReadiness()).map((item) => [item.id, item.state])).toEqual([
++      ["geometry", "blocked"],
++      ["material", "blocked"],
++      ["texture", "blocked"],
++      ["interactions", "blocked"],
++      ["discretization", "blocked"],
++      ["study", "blocked"],
++    ]);
++  });
++
++  it("uses the first server blocker as the Run disabled reason", () => {
++    expect(resolveRunAvailability(emptyReadiness())).toEqual({
++      enabled: false,
++      reason: "Add at least one magnetic object.",
++    });
++  });
++
++  it("enables Run only from the server ready_to_run decision", () => {
++    expect(
++      resolveRunAvailability({
++        ...emptyReadiness(),
++        blockers: [],
++        ready_to_run: true,
++      }),
++    ).toEqual({ enabled: true, reason: null });
++  });
++});
+diff --git a/apps/control-room/src/kernel/authoring/scratchAuthoringReadiness.ts b/apps/control-room/src/kernel/authoring/scratchAuthoringReadiness.ts
+new file mode 100644
+index 000000000..8a2e89755
+--- /dev/null
++++ b/apps/control-room/src/kernel/authoring/scratchAuthoringReadiness.ts
+@@ -0,0 +1,42 @@
++import type {
++  ModelReadinessCheck,
++  ModelReadinessResource,
++} from "../api/apiTypes";
++
++const CHECK_ORDER = [
++  "geometry",
++  "material",
++  "texture",
++  "interactions",
++  "discretization",
++  "study",
++] as const;
++
++const CHECK_LABELS: Record<(typeof CHECK_ORDER)[number], string> = {
++  discretization: "Discretization",
++  geometry: "Geometry",
++  interactions: "Interactions",
++  material: "Material",
++  study: "Study",
++  texture: "Initial magnetization",
++};
++
++export function toChecklist(
++  readiness: ModelReadinessResource,
++): ModelReadinessCheck[] {
++  const checksById = new Map(readiness.checks.map((check) => [check.id, check]));
++  return CHECK_ORDER.flatMap((id) => {
++    const check = checksById.get(id);
++    return check ? [{ ...check, label: CHECK_LABELS[id] }] : [];
++  });
++}
++
++export function resolveRunAvailability(
++  readiness: ModelReadinessResource,
++): { enabled: boolean; reason: string | null } {
++  if (readiness.ready_to_run) return { enabled: true, reason: null };
++  return {
++    enabled: false,
++    reason: readiness.blockers[0] ?? "Complete the model checklist before running.",
++  };
++}
+diff --git a/apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.test.ts b/apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.test.ts
+index d87e81962..04f7d3ffb 100644
+--- a/apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.test.ts
++++ b/apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.test.ts
+@@ -3,20 +3,21 @@ import { describe, expect, it, vi } from "vitest";
+ import {
+   ANALYSIS_HYSTERESIS_BOOKMARKS_PATH,
+   DATA_FIELDS_PATH,
+   DATA_FIELD_VECTOR_PATH,
+   DATA_SCALARS_PATH,
+   DIAGNOSTICS_ENGINE_LOG_PATH,
+   DIAGNOSTICS_SOLVER_PROFILE_PATH,
+   MESHING_BUILDS_CURRENT_PATH,
+   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+   MODEL_GEOMETRY_VALIDATION_PATH,
++  MODEL_READINESS_PATH,
+   MODEL_SCENE_PATH,
+   MODEL_STUDY_PATH,
+   MODEL_REGION_DIAGNOSTICS_PATH,
+   PERSISTENCE_CHECKPOINTS_PATH,
+   PERSISTENCE_EXPORTS_PATH,
+   PERSISTENCE_FIELD_STATE_EXPORTS_PATH,
+   PERSISTENCE_FIELD_STATE_IMPORT_INSPECTIONS_PATH,
+   PERSISTENCE_FIELD_STATE_IMPORTS_PATH,
+   PERSISTENCE_IMPORTS_PATH,
+   SIMULATION_COMMANDS_PATH,
+@@ -3088,20 +3089,53 @@ describe("study runtime command contributions", () => {
+       },
+       source: "test" as const,
+     };
+ 
+     expect(registry.isEnabled("study.run", context)).toBe(false);
+     expect(registry.get("study.run")?.disabledReason?.(context)).toBe(
+       "A runtime command is already active.",
+     );
+   });
+ 
++  it("gates study Run on the server-owned model readiness resource", () => {
++    const registry = registryWithStudyRuntimeCommands();
++    const resourceData = runtimeResourceData();
++    resourceData[MODEL_READINESS_PATH] = {
++      blockers: ["Assign initial magnetization to every magnetic object."],
++      checks: [],
++      ready_to_export: false,
++      ready_to_run: false,
++      scene_revision: 3,
++    };
++    const blockedContext = {
++      api: {} as never,
++      resourceData,
++      source: "test" as const,
++    };
++
++    expect(registry.isEnabled("study.run", blockedContext)).toBe(false);
++    expect(registry.get("study.run")?.disabledReason?.(blockedContext)).toBe(
++      "Assign initial magnetization to every magnetic object.",
++    );
++
++    resourceData[MODEL_READINESS_PATH] = {
++      blockers: [],
++      checks: [],
++      ready_to_export: true,
++      ready_to_run: true,
++      scene_revision: 3,
++    };
++
++    expect(registry.isEnabled("study.run", blockedContext)).toBe(true);
++    expect(registry.get("study.run")?.disabledReason?.(blockedContext)).toBeNull();
++  });
++
+   it("does not let stale active command queue block a newer inactive lifecycle state", () => {
+     const registry = registryWithStudyRuntimeCommands();
+     const context = {
+       api: {} as never,
+       resourceData: runtimeResourceData({
+         commands: [
+           {
+             command_id: "cmd-stale-solve",
+             kind: "solve",
+             status: "running",
+diff --git a/apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts b/apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts
+index 6d2aaa364..bda83541c 100644
+--- a/apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts
++++ b/apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts
+@@ -1,20 +1,21 @@
+ import {
+   ANALYSIS_HYSTERESIS_BOOKMARKS_PATH,
+   DATA_FIELDS_PATH,
+   DATA_FIELD_VECTOR_PATH,
+   DATA_SCALARS_PATH,
+   DIAGNOSTICS_ENGINE_LOG_PATH,
+   DIAGNOSTICS_SOLVER_PROFILE_PATH,
+   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+   MESHING_BUILDS_CURRENT_PATH,
+   MODEL_GEOMETRY_VALIDATION_PATH,
++  MODEL_READINESS_PATH,
+   MODEL_REGION_DIAGNOSTICS_PATH,
+   MODEL_SCENE_PATH,
+   MODEL_STUDY_PATH,
+   PERSISTENCE_CHECKPOINTS_PATH,
+   PERSISTENCE_EXPORTS_PATH,
+   PERSISTENCE_FIELD_STATE_EXPORTS_PATH,
+   PERSISTENCE_FIELD_STATE_IMPORT_INSPECTIONS_PATH,
+   PERSISTENCE_FIELD_STATE_IMPORTS_PATH,
+   PERSISTENCE_IMPORTS_PATH,
+   SIMULATION_COMMANDS_PATH,
+@@ -28,20 +29,21 @@ import {
+   VISUALIZATION_STATE_PATH,
+ } from "../api/apiPaths";
+ import type { JsonObject, StructuredCommandRequest } from "../api/apiTypes";
+ import type {
+   CheckpointEntry,
+   CheckpointListResource,
+   CommandQueueStatusResource,
+   LiveStatusResource,
+   MeshActiveBuildResource,
+   MeshSharedDomainManifestResource,
++  ModelReadinessResource,
+   CurrentRunResource,
+   FieldStateTargetRef,
+   HysteresisBookmarkPointRequest,
+   HysteresisPointSchema,
+   RegionDiagnosticsResource,
+   RuntimeCommandPrecondition,
+   RuntimeCommandTarget,
+   SolverProfileResource,
+   SolverStatusResource,
+   StageExecutionResource,
+@@ -425,20 +427,33 @@ function backendRuntimeControl(
+   return queue?.runtime_controls?.find((entry) => entry.kind === kind) ?? null;
+ }
+ 
+ function runtimeReadinessDisabledReason(
+   context: CommandContext,
+   kind: Extract<
+     SimpleStudyRuntimeCommandKind,
+     "compute_energies" | "compute_fields" | "solve"
+   >,
+ ): string | null {
++  if (kind === "solve") {
++    const readiness = resourceData<ModelReadinessResource>(
++      context,
++      MODEL_READINESS_PATH,
++    );
++    if (readiness) {
++      return readiness.ready_to_run
++        ? null
++        : readiness.blockers[0] ??
++            "Complete the model checklist before running.";
++    }
++  }
++
+   const status = resourceData<LiveStatusResource>(
+     context,
+     SESSION_STATUS_RESOURCE_KEY,
+   );
+   if (!status) return "Session status is unavailable.";
+ 
+   if (kind === "compute_fields" && !status.capabilities.binary_fields) {
+     return "Field data plane is unavailable.";
+   }
+ 
+diff --git a/crates/fullmag-api/src/openapi_v2.rs b/crates/fullmag-api/src/openapi_v2.rs
+index 8930b44d8..3c714b6a0 100644
+--- a/crates/fullmag-api/src/openapi_v2.rs
++++ b/crates/fullmag-api/src/openapi_v2.rs
+@@ -111,20 +111,21 @@ use utoipa::OpenApi;
+         crate::router_v2::handlers::meshing::mesh::get_mesh_region_quality,
+         crate::router_v2::handlers::meshing::mesh::get_mesh_object_size_field,
+         crate::router_v2::handlers::meshing::mesh::get_mesh_object_topology,
+         crate::router_v2::handlers::meshing::mesh::get_mesh_part_topology,
+         crate::router_v2::handlers::meshing::mesh::get_mesh_histogram_bin_elements,
+         crate::router_v2::handlers::meshing::mesh::get_mesh_interface_config,
+         crate::router_v2::handlers::meshing::mesh::replace_mesh_interface_config,
+         crate::router_v2::handlers::meshing::mesh::get_mesh_interface_report,
+         crate::router_v2::handlers::meshing::mesh::get_mesh_interface_quality,
+         crate::router_v2::handlers::model::authoring::get_authoring_scene,
++        crate::router_v2::handlers::model::readiness::get_model_readiness,
+         crate::router_v2::handlers::model::authoring::replace_authoring_scene,
+         crate::router_v2::handlers::model::authoring::patch_authoring_scene,
+         crate::router_v2::handlers::model::physics_graph::get_physics_graph,
+         crate::router_v2::handlers::model::authoring::get_current_transports,
+         crate::router_v2::handlers::model::authoring::get_current_transport,
+         crate::router_v2::handlers::model::authoring::create_current_transport,
+         crate::router_v2::handlers::model::authoring::patch_current_transport,
+         crate::router_v2::handlers::model::authoring::delete_current_transport,
+         crate::router_v2::handlers::model::authoring::get_spin_transports,
+         crate::router_v2::handlers::model::authoring::get_spin_transport,
+diff --git a/crates/fullmag-api/src/router_v2/handlers/meshing/mesh.rs b/crates/fullmag-api/src/router_v2/handlers/meshing/mesh.rs
+index 7622aef47..28ecca1fe 100644
+--- a/crates/fullmag-api/src/router_v2/handlers/meshing/mesh.rs
++++ b/crates/fullmag-api/src/router_v2/handlers/meshing/mesh.rs
+@@ -3840,20 +3840,24 @@ fn mesh_build_provenance(snapshot: &SessionStateResponse) -> MeshBuildProvenance
+             .and_then(Value::as_u64),
+     };
+ 
+     if provenance.source_scene_revision.is_some() {
+         return provenance;
+     }
+ 
+     clean_scene_mesh_provenance(snapshot).unwrap_or(provenance)
+ }
+ 
++pub(crate) fn mesh_source_scene_revision(snapshot: &SessionStateResponse) -> Option<u64> {
++    mesh_build_provenance(snapshot).source_scene_revision
++}
++
+ fn clean_scene_mesh_provenance(snapshot: &SessionStateResponse) -> Option<MeshBuildProvenance> {
+     let scene = snapshot.scene_document.as_ref()?;
+     let mesh = snapshot.fem_mesh.as_ref()?;
+     if scene
+         .objects
+         .iter()
+         .any(|object| object.tags.iter().any(|tag| tag == "mesh:dirty"))
+     {
+         return None;
+     }
+diff --git a/crates/fullmag-api/src/router_v2/handlers/model.rs b/crates/fullmag-api/src/router_v2/handlers/model.rs
+index ce536f53f..21426da52 100644
+--- a/crates/fullmag-api/src/router_v2/handlers/model.rs
++++ b/crates/fullmag-api/src/router_v2/handlers/model.rs
+@@ -1,9 +1,11 @@
+ pub mod authoring;
+ pub mod frozen_spins;
+ pub mod physics_graph;
+ pub mod planar_monitors;
++pub mod readiness;
+ 
+ pub use authoring::*;
+ pub use frozen_spins::*;
+ pub use physics_graph::*;
+ pub use planar_monitors::*;
++pub use readiness::*;
+diff --git a/crates/fullmag-api/src/router_v2/handlers/model/readiness.rs b/crates/fullmag-api/src/router_v2/handlers/model/readiness.rs
+new file mode 100644
+index 000000000..b2db0cb3e
+--- /dev/null
++++ b/crates/fullmag-api/src/router_v2/handlers/model/readiness.rs
+@@ -0,0 +1,278 @@
++use std::collections::BTreeSet;
++use std::sync::Arc;
++
++use axum::{extract::State, Json};
++use serde::{Deserialize, Serialize};
++use utoipa::ToSchema;
++
++use crate::error::ApiError;
++use crate::types::{AppState, SessionStateResponse};
++
++const TRANSFORM_CAPABILITY_REASON: &str =
++    "Rotate and Scale require a canonical geometry contract newer than ProblemIR 0.3.";
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
++#[serde(rename_all = "snake_case")]
++pub enum ModelReadinessCheckState {
++    Complete,
++    Blocked,
++    Stale,
++}
++
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
++pub struct ModelReadinessCheck {
++    pub id: String,
++    pub state: ModelReadinessCheckState,
++    pub label: String,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub target_resource: Option<String>,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub reason: Option<String>,
++}
++
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
++pub struct ModelAuthoringCapability {
++    pub available: bool,
++    pub reason: Option<String>,
++}
++
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
++pub struct ModelAuthoringCapabilities {
++    #[serde(rename = "move")]
++    pub move_object: ModelAuthoringCapability,
++    pub rotate: ModelAuthoringCapability,
++    pub scale: ModelAuthoringCapability,
++}
++
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
++pub struct ModelReadinessResource {
++    pub scene_revision: u64,
++    pub ready_to_run: bool,
++    pub ready_to_export: bool,
++    pub checks: Vec<ModelReadinessCheck>,
++    pub blockers: Vec<String>,
++    pub capabilities: ModelAuthoringCapabilities,
++}
++
++#[utoipa::path(
++    get,
++    path = "/v2/sessions/current/model/readiness",
++    responses(
++        (status = 200, description = "Derived readiness of the current canonical authoring model", body = ModelReadinessResource),
++        (status = 404, description = "No active workspace or scene document"),
++    ),
++    tag = "model"
++)]
++pub async fn get_model_readiness(
++    State(state): State<Arc<AppState>>,
++) -> Result<Json<ModelReadinessResource>, ApiError> {
++    let snapshot = state.current_live_state.read().await;
++    let snapshot = snapshot
++        .as_ref()
++        .ok_or_else(|| ApiError::not_found("no active local session"))?;
++    let scene = snapshot
++        .scene_document
++        .as_ref()
++        .ok_or_else(|| ApiError::not_found("no authoring scene document"))?;
++    Ok(Json(build_model_readiness(snapshot, scene)))
++}
++
++fn build_model_readiness(
++    snapshot: &SessionStateResponse,
++    scene: &fullmag_authoring::SceneDocument,
++) -> ModelReadinessResource {
++    let object_ids = scene
++        .objects
++        .iter()
++        .filter(|object| object.visible && object.role == "magnet")
++        .map(|object| object.id.as_str())
++        .collect::<Vec<_>>();
++    let materials = scene
++        .materials
++        .iter()
++        .map(|material| material.id.as_str())
++        .collect::<BTreeSet<_>>();
++    let textures = scene
++        .magnetization_assets
++        .iter()
++        .map(|texture| texture.id.as_str())
++        .collect::<BTreeSet<_>>();
++
++    let geometry = presence_check(
++        "geometry",
++        "Geometry",
++        !object_ids.is_empty(),
++        "model/scene",
++        "Add at least one magnetic object.",
++    );
++    let material = presence_check(
++        "material",
++        "Material",
++        !object_ids.is_empty()
++            && scene
++                .objects
++                .iter()
++                .filter(|object| object_ids.contains(&object.id.as_str()))
++                .all(|object| materials.contains(object.material_ref.as_str())),
++        "model/materials",
++        "Assign a material to every magnetic object.",
++    );
++    let texture = presence_check(
++        "texture",
++        "Initial magnetization",
++        !object_ids.is_empty()
++            && scene
++                .objects
++                .iter()
++                .filter(|object| object_ids.contains(&object.id.as_str()))
++                .all(|object| {
++                    object
++                        .magnetization_ref
++                        .as_deref()
++                        .is_some_and(|id| textures.contains(id))
++                }),
++        "model/magnetization-assets",
++        "Assign initial magnetization to every magnetic object.",
++    );
++    let interactions = presence_check(
++        "interactions",
++        "Interactions",
++        !object_ids.is_empty()
++            && scene
++                .objects
++                .iter()
++                .filter(|object| object_ids.contains(&object.id.as_str()))
++                .all(|object| object.physics_stack.iter().any(|entry| entry.enabled)),
++        "model/objects/interactions",
++        "Enable at least one interaction for every magnetic object.",
++    );
++    let discretization = discretization_check(snapshot, scene);
++    let study = presence_check(
++        "study",
++        "Study",
++        !scene.study.stages.is_empty() || scene.study.study_pipeline.is_some(),
++        "model/study",
++        "Add at least one study stage.",
++    );
++
++    let checks = vec![
++        geometry,
++        material,
++        texture,
++        interactions,
++        discretization,
++        study,
++    ];
++    let validation_error = fullmag_authoring::validate_scene_document(scene)
++        .err()
++        .map(|error| error.to_string());
++    let mut blockers = checks
++        .iter()
++        .filter(|check| check.state != ModelReadinessCheckState::Complete)
++        .filter_map(|check| check.reason.clone())
++        .collect::<Vec<_>>();
++    if let Some(error) = validation_error.as_ref() {
++        blockers.push(error.clone());
++    }
++    let ready_to_run = blockers.is_empty();
++    let export_checks_complete = checks[..4]
++        .iter()
++        .all(|check| check.state == ModelReadinessCheckState::Complete);
++
++    ModelReadinessResource {
++        scene_revision: scene.revision,
++        ready_to_run,
++        ready_to_export: export_checks_complete && validation_error.is_none(),
++        checks,
++        blockers,
++        capabilities: ModelAuthoringCapabilities {
++            move_object: ModelAuthoringCapability {
++                available: true,
++                reason: None,
++            },
++            rotate: unavailable_transform_capability(),
++            scale: unavailable_transform_capability(),
++        },
++    }
++}
++
++fn presence_check(
++    id: &str,
++    label: &str,
++    complete: bool,
++    target_resource: &str,
++    blocked_reason: &str,
++) -> ModelReadinessCheck {
++    ModelReadinessCheck {
++        id: id.to_string(),
++        state: if complete {
++            ModelReadinessCheckState::Complete
++        } else {
++            ModelReadinessCheckState::Blocked
++        },
++        label: label.to_string(),
++        target_resource: Some(target_resource.to_string()),
++        reason: (!complete).then(|| blocked_reason.to_string()),
++    }
++}
++
++fn discretization_check(
++    snapshot: &SessionStateResponse,
++    scene: &fullmag_authoring::SceneDocument,
++) -> ModelReadinessCheck {
++    let backend = scene
++        .study
++        .backend
++        .as_deref()
++        .filter(|backend| !backend.is_empty())
++        .unwrap_or(scene.study.requested_backend.as_str())
++        .to_ascii_lowercase();
++    match backend.as_str() {
++        "fdm" => {
++            let configured =
++                scene.study.fdm.as_ref().is_some_and(|fdm| {
++                    fdm.default_cell.is_some() || !fdm.per_object_grid.is_empty()
++                });
++            presence_check(
++                "discretization",
++                "Discretization",
++                configured,
++                "model/study",
++                "Configure an FDM grid before running.",
++            )
++        }
++        "fem" => {
++            let source_revision =
++                crate::router_v2::handlers::meshing::mesh::mesh_source_scene_revision(snapshot);
++            let current = snapshot.fem_mesh.is_some() && source_revision == Some(scene.revision);
++            ModelReadinessCheck {
++                id: "discretization".to_string(),
++                state: if current {
++                    ModelReadinessCheckState::Complete
++                } else if snapshot.fem_mesh.is_some() {
++                    ModelReadinessCheckState::Stale
++                } else {
++                    ModelReadinessCheckState::Blocked
++                },
++                label: "Discretization".to_string(),
++                target_resource: Some("meshing/builds/current".to_string()),
++                reason: (!current)
++                    .then(|| "Build a current shared-domain mesh before running.".to_string()),
++            }
++        }
++        _ => presence_check(
++            "discretization",
++            "Discretization",
++            false,
++            "model/study",
++            "Choose FDM or FEM discretization.",
++        ),
++    }
++}
++
++fn unavailable_transform_capability() -> ModelAuthoringCapability {
++    ModelAuthoringCapability {
++        available: false,
++        reason: Some(TRANSFORM_CAPABILITY_REASON.to_string()),
++    }
++}
+diff --git a/crates/fullmag-api/src/router_v2/mod.rs b/crates/fullmag-api/src/router_v2/mod.rs
+index c47f66fd3..eb9ec02a9 100644
+--- a/crates/fullmag-api/src/router_v2/mod.rs
++++ b/crates/fullmag-api/src/router_v2/mod.rs
+@@ -60,20 +60,24 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
+             "/v2/sessions/current/events/communication-policy",
+             get(handlers::platform::get_communication_policy)
+                 .patch(handlers::platform::patch_communication_policy),
+         )
+         .route(
+             "/v2/sessions/current/model/scene",
+             get(handlers::model::get_authoring_scene)
+                 .put(handlers::model::replace_authoring_scene)
+                 .patch(handlers::model::patch_authoring_scene),
+         )
++        .route(
++            "/v2/sessions/current/model/readiness",
++            get(handlers::model::get_model_readiness),
++        )
+         .route(
+             "/v2/sessions/current/model/physics-graph",
+             get(handlers::model::get_physics_graph),
+         )
+         .route(
+             "/v2/sessions/current/model/planar-monitors",
+             get(handlers::model::list_planar_monitors)
+                 .post(handlers::model::create_planar_monitor),
+         )
+         .route(
+diff --git a/crates/fullmag-api/src/router_v2/tests.rs b/crates/fullmag-api/src/router_v2/tests.rs
+index 621759f51..8485f9bc0 100644
+--- a/crates/fullmag-api/src/router_v2/tests.rs
++++ b/crates/fullmag-api/src/router_v2/tests.rs
+@@ -1103,20 +1103,158 @@ async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64)
+             runtime_state: RuntimeLifecycleState::Running,
+         });
+         snapshot.state_version = state_version;
+     }
+ }
+ 
+ fn test_router() -> axum::Router {
+     build_v2_router().with_state(test_app_state())
+ }
+ 
++#[tokio::test]
++async fn model_readiness_reports_all_empty_scene_blockers_in_stable_order() {
++    let state = test_app_state_with_live_session().await;
++    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
++        snapshot.scene_document = Some(
++            crate::router_v2::handlers::sessions::create::create_empty_scene_document(
++                &crate::schemas::sessions::CreateSessionRequest {
++                    backend: "fdm".into(),
++                    device: "cpu".into(),
++                    name: "Empty".into(),
++                    precision: "double".into(),
++                    replace_current: false,
++                },
++            )
++            .expect("empty scratch scene"),
++        );
++    }
++    let response = build_v2_router()
++        .with_state(state)
++        .oneshot(
++            Request::builder()
++                .uri("/v2/sessions/current/model/readiness")
++                .body(Body::empty())
++                .unwrap(),
++        )
++        .await
++        .unwrap();
++
++    assert_eq!(response.status(), StatusCode::OK);
++    let body = body_json(response).await;
++    assert_eq!(body["ready_to_run"], false);
++    assert_eq!(body["ready_to_export"], false);
++    assert_eq!(
++        body["checks"]
++            .as_array()
++            .unwrap()
++            .iter()
++            .map(|check| check["id"].as_str().unwrap())
++            .collect::<Vec<_>>(),
++        vec![
++            "geometry",
++            "material",
++            "texture",
++            "interactions",
++            "discretization",
++            "study",
++        ]
++    );
++    assert_eq!(body["blockers"][0], "Add at least one magnetic object.");
++    assert_eq!(body["capabilities"]["move"]["available"], true);
++    assert_eq!(body["capabilities"]["rotate"]["available"], false);
++    assert_eq!(
++        body["capabilities"]["rotate"]["reason"],
++        "Rotate and Scale require a canonical geometry contract newer than ProblemIR 0.3."
++    );
++}
++
++#[tokio::test]
++async fn model_readiness_accepts_complete_fdm_scene() {
++    let state = test_app_state_with_live_session().await;
++    let mut scene = sample_scene_document_with_stage(serde_json::json!({
++        "entrypoint_kind": "flat_relax",
++        "kind": "relax",
++        "algorithm": "projected_gradient_bb",
++        "stage_id": "relax-1"
++    }));
++    scene.study.requested_backend = "fdm".into();
++    scene.study.fdm = Some(fullmag_authoring::SceneFdmDiscretizationState {
++        default_cell: Some([1.0e-9, 1.0e-9, 1.0e-9]),
++        ..Default::default()
++    });
++    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
++        snapshot.scene_document = Some(scene);
++    }
++    let response = build_v2_router()
++        .with_state(state)
++        .oneshot(
++            Request::builder()
++                .uri("/v2/sessions/current/model/readiness")
++                .body(Body::empty())
++                .unwrap(),
++        )
++        .await
++        .unwrap();
++
++    assert_eq!(response.status(), StatusCode::OK);
++    let body = body_json(response).await;
++    assert_eq!(body["ready_to_run"], true);
++    assert_eq!(body["ready_to_export"], true);
++    assert_eq!(body["blockers"], serde_json::json!([]));
++}
++
++#[tokio::test]
++async fn model_readiness_marks_fem_mesh_stale_against_scene_revision() {
++    let state = test_app_state_with_live_session().await;
++    let mut scene = sample_scene_document_with_stage(serde_json::json!({
++        "entrypoint_kind": "flat_relax",
++        "kind": "relax",
++        "algorithm": "projected_gradient_bb",
++        "stage_id": "relax-1"
++    }));
++    scene.study.requested_backend = "fem".into();
++    let scene_revision = scene.revision;
++    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
++        snapshot.scene_document = Some(scene);
++        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
++        snapshot.mesh_revision = 9;
++        snapshot.mesh_workspace = Some(serde_json::json!({
++            "last_build_summary": { "source_scene_revision": scene_revision - 1 }
++        }));
++    }
++    let response = build_v2_router()
++        .with_state(state)
++        .oneshot(
++            Request::builder()
++                .uri("/v2/sessions/current/model/readiness")
++                .body(Body::empty())
++                .unwrap(),
++        )
++        .await
++        .unwrap();
++
++    assert_eq!(response.status(), StatusCode::OK);
++    let body = body_json(response).await;
++    assert_eq!(body["ready_to_run"], false);
++    let discretization = body["checks"]
++        .as_array()
++        .unwrap()
++        .iter()
++        .find(|check| check["id"] == "discretization")
++        .unwrap();
++    assert_eq!(discretization["state"], "stale");
++    assert_eq!(
++        discretization["reason"],
++        "Build a current shared-domain mesh before running."
++    );
++}
++
+ #[tokio::test]
+ async fn create_scratch_session_accepts_explicit_fdm_and_fem_cpu_double_requests() {
+     let app = test_router();
+ 
+     let response = app
+         .clone()
+         .oneshot(
+             Request::builder()
+                 .method("POST")
+                 .uri("/v2/sessions")

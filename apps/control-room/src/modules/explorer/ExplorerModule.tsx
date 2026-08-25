@@ -182,7 +182,9 @@ function qualityStatus(value: unknown): string | null {
 }
 
 type ExplorerModelRuntimeStatus = {
-  capabilities: Pick<LiveStatusResource["capabilities"], "explicit_topology">;
+  capabilities: Pick<LiveStatusResource["capabilities"], "explicit_topology"> & {
+    active_lane_discretization?: string | null;
+  };
   domain: Pick<LiveStatusResource["domain"], "discretization">;
   resources: Pick<
     LiveStatusResource["resources"],
@@ -194,9 +196,17 @@ function selectExplorerModelRuntimeStatus(status: {
   data: LiveStatusResource | null;
 }): ExplorerModelRuntimeStatus | null {
   if (!status.data) return null;
+  const activeLane = status.data.capabilities?.active_lane;
+  const hasActiveLane = Object.prototype.hasOwnProperty.call(
+    status.data.capabilities,
+    "active_lane",
+  );
   return {
     capabilities: {
       explicit_topology: status.data.capabilities.explicit_topology,
+      ...(hasActiveLane
+        ? { active_lane_discretization: activeLane?.resolved?.discretization ?? null }
+        : {}),
     },
     domain: {
       discretization: status.data.domain.discretization,
@@ -218,12 +228,29 @@ function explorerModelRuntimeStatusEquals(
   return (
     previous.capabilities.explicit_topology ===
       next.capabilities.explicit_topology &&
+    previous.capabilities.active_lane_discretization ===
+      next.capabilities.active_lane_discretization &&
     previous.domain.discretization === next.domain.discretization &&
     previous.resources.mesh_build_revision ===
       next.resources.mesh_build_revision &&
     previous.resources.mesh_revision === next.resources.mesh_revision &&
     previous.resources.stages_revision === next.resources.stages_revision
   );
+}
+
+export function resolveExplorerModelDiscretization({
+  activeLaneDiscretization,
+  domainDiscretization,
+}: {
+  activeLaneDiscretization: string | null | undefined;
+  domainDiscretization: string | null | undefined;
+}): "fdm" | "fem" | null {
+  if (activeLaneDiscretization !== undefined) {
+    const activeLane = activeLaneDiscretization?.trim().toLowerCase();
+    return activeLane === "fdm" || activeLane === "fem" ? activeLane : null;
+  }
+  const domain = domainDiscretization?.trim().toLowerCase();
+  return domain === "fdm" || domain === "fem" ? domain : null;
 }
 
 function planarMonitorTargetCapabilitiesFromResources({
@@ -361,21 +388,21 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     selectExplorerModelRuntimeStatus,
     { enabled: modelTabActive, isEqual: explorerModelRuntimeStatusEquals },
   );
+  const modelDiscretization = resolveExplorerModelDiscretization({
+    activeLaneDiscretization:
+      sessionStatusData?.capabilities.active_lane_discretization,
+    domainDiscretization: sessionStatusData?.domain.discretization,
+  });
   const modelResource = useSceneResource({ enabled: modelTabActive });
   const domainMeta = useDomainMetaResource({ enabled: modelTabActive });
   const fdmMultilayerLayout = useFdmMultilayerLayoutResource({
-    enabled:
-      modelTabActive &&
-      sessionStatusData?.domain.discretization.toLowerCase() === "fdm",
+    enabled: modelTabActive && modelDiscretization === "fdm",
   });
   const universeMeshPolicy = useUniverseMeshPolicyResource({
-    enabled:
-      modelTabActive &&
-      sessionStatusData?.domain.discretization.toLowerCase() === "fem",
+    enabled: modelTabActive && modelDiscretization === "fem",
   });
   const fdmRegionMembership = useFdmRegionMembershipResource({
-    enabled:
-      modelTabActive && sessionStatusData?.domain.discretization.toLowerCase() === "fdm",
+    enabled: modelTabActive && modelDiscretization === "fdm",
   });
   const modelRegions = useModelRegionsResource({ enabled: modelTabActive });
   const regionIds = useMemo(
@@ -550,7 +577,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   );
   const planarMonitorTargetCapabilities = useMemo(
     () => planarMonitorTargetCapabilitiesFromResources({
-      discretization: sessionStatusData?.domain.discretization,
+      discretization: modelDiscretization,
       fdmMembership: fdmRegionMembership,
       femTopologyReady: manifest.status === "ready" && manifest.data !== null,
       regions: modelRegions,
@@ -562,7 +589,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       manifest.status,
       modelRegions,
       modelResource,
-      sessionStatusData?.domain.discretization,
+      modelDiscretization,
     ],
   );
 
@@ -616,12 +643,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           domainMeta: domainMeta.data,
           fdmMultilayerLayout: fdmMultilayerLayout.data,
           fdmMultilayerLayoutStatus: fdmMultilayerLayout.status,
-          domainDiscretization:
-            sessionStatusData?.domain.discretization.toLowerCase() === "fdm"
-              ? "fdm"
-              : sessionStatusData?.domain.discretization.toLowerCase() === "fem"
-                ? "fem"
-                : null,
+          domainDiscretization: modelDiscretization,
           domainPresentationStatus,
           domainPresentation,
         }),
@@ -689,9 +711,9 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           }],
     );
     const femAirbox =
-      sessionStatusData?.domain.discretization.toLowerCase() === "fem"
+      modelDiscretization === "fem"
         ? resolveCurrentFemAirboxEvidence({
-            currentMeshRevision: sessionStatusData.resources.mesh_revision,
+            currentMeshRevision: sessionStatusData?.resources.mesh_revision ?? null,
             manifest: { data: manifest.data, status: manifest.status },
             policy: {
               data: universeMeshPolicy.data,
@@ -759,6 +781,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     universeMeshPolicy.data,
     universeMeshPolicy.status,
     sessionStatusData,
+    modelDiscretization,
     fdmRegionMembership.data,
     fdmRegionMembership.status,
     modelCouplings.data,

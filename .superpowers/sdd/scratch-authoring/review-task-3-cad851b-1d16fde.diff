@@ -1,0 +1,691 @@
+# Review package: cad851bf2..1d16fdecf
+
+## Commits
+1d16fdecf feat(frontend): add scratch problem entry flow
+
+## Files changed
+ apps/control-room/src/kernel/api/ControlRoomApi.ts |   3 +
+ apps/control-room/src/kernel/api/apiTypes.ts       |  10 ++
+ apps/control-room/src/kernel/events/eventTypes.ts  |   3 +
+ apps/control-room/src/kernel/layout/AppMenuBar.tsx |  75 ++++++++++++++-
+ .../src/kernel/layout/EmptyWorkspace.tsx           |  26 ++++++
+ .../src/kernel/layout/NewProblemDialog.test.tsx    |  19 ++++
+ .../src/kernel/layout/NewProblemDialog.tsx         | 102 +++++++++++++++++++++
+ .../src/kernel/layout/WorkspaceShellClient.tsx     |  39 ++++++--
+ .../src/kernel/layout/appMenuModel.tsx             |   1 -
+ .../src/kernel/layout/shellCommands.ts             |  20 +++-
+ .../kernel/resources/useSessionCollection.test.ts  |  10 ++
+ .../src/kernel/resources/useSessionCollection.ts   |  42 +++++++++
+ 12 files changed, 337 insertions(+), 13 deletions(-)
+
+## Diff
+diff --git a/apps/control-room/src/kernel/api/ControlRoomApi.ts b/apps/control-room/src/kernel/api/ControlRoomApi.ts
+index 21b90b303..7169ff617 100644
+--- a/apps/control-room/src/kernel/api/ControlRoomApi.ts
++++ b/apps/control-room/src/kernel/api/ControlRoomApi.ts
+@@ -382,20 +382,21 @@ import type {
+   SpinAuthoringDeleteRequest,
+   PhysicsGraphResource,
+   ScriptSyncRequest,
+   ScriptSyncResponse,
+   ScriptSourceResponse,
+   TopologicalChargeQuery,
+   TopologicalChargeResource,
+   SessionAssetImportResponse,
+   SessionExportRequest,
+   SessionExportResponse,
++  SessionCollectionResource,
+   SessionImportCommitRequest,
+   SessionImportCommitResponse,
+   SessionImportInspectRequest,
+   SessionImportInspectResponse,
+   SolverEnergyCurrentResource,
+   SolverEnergyHistoryResource,
+   SolverProfileResource,
+   SimulationPreparationResource,
+   SolverStatusResource,
+   StageExecutionResource,
+@@ -721,20 +722,22 @@ export class ControlRoomApi {
+   private readonly binaryDecodeScheduler: BinaryDecodeScheduler;
+   private readonly requestDiagnostics: RequestDiagnosticsController | null;
+   private readonly fetchImpl: FetchLike;
+   private readonly maxGetRetries: number;
+   private readonly retryDelayMs: number;
+   private readonly requestIdFactory: () => string;
+   private readonly transport: OpenApiV2Transport;
+   private readonly fieldMaterializationRequests = new Map<string, Promise<void>>();
+ 
+   readonly sessions = {
++    list: (options?: RequestOptions) =>
++      this.requestJson<SessionCollectionResource>(SESSIONS_PATH, options),
+     create: (input: CreateSessionRequest, options?: RequestOptions) =>
+       this.postJson<CreateSessionResponse, CreateSessionRequest>(
+         SESSIONS_PATH,
+         input,
+         options,
+       ),
+     current: {
+       status: (options?: RequestOptions) =>
+         this.requestJson<LiveStatusResource>(SESSION_STATUS_PATH, options),
+     },
+diff --git a/apps/control-room/src/kernel/api/apiTypes.ts b/apps/control-room/src/kernel/api/apiTypes.ts
+index b9768ba8c..9a280d9ca 100644
+--- a/apps/control-room/src/kernel/api/apiTypes.ts
++++ b/apps/control-room/src/kernel/api/apiTypes.ts
+@@ -1,17 +1,27 @@
+ import type { components } from "./generated/openapi-v2-types";
+ 
+ export type ResourceRevision = string | number;
+ type JsonPrimitive = boolean | null | number | string;
+ export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
+ export type JsonObject = { [key: string]: JsonValue };
+ 
++export interface SessionCollectionResource {
++  readonly schema_version: string;
++  readonly sessions: readonly {
++    readonly current: boolean;
++    readonly name: string;
++    readonly session_id: string;
++    readonly status: string;
++  }[];
++}
++
+ export type ObjectInteractionKind =
+   | "exchange"
+   | "demag"
+   | "interfacial_dmi"
+   | "uniaxial_anisotropy";
+ 
+ interface BaseAuthoringTransaction {
+   base_revision?: number | null;
+ }
+ 
+diff --git a/apps/control-room/src/kernel/events/eventTypes.ts b/apps/control-room/src/kernel/events/eventTypes.ts
+index 1ebfaa7c4..13ce41b5f 100644
+--- a/apps/control-room/src/kernel/events/eventTypes.ts
++++ b/apps/control-room/src/kernel/events/eventTypes.ts
+@@ -52,20 +52,23 @@ export interface KernelEventMap {
+   "workspace:selection-changed": {
+     selectionId: string | null;
+     source: ModuleId;
+   };
+   "workspace:layout-changed": {
+     state: LayoutState;
+   };
+   "workspace:focus-changed": {
+     state: LayoutState;
+   };
++  "workspace:new-problem-requested": {
++    source: "menu" | "shortcut" | "workspace";
++  };
+   "explorer:texture-load-node-requested": {
+     objectId: string;
+     source: ModuleId;
+   };
+   "explorer:tab-requested": {
+     source: ModuleId;
+     tab: "diagnostics" | "jobs" | "model" | "resources" | "results";
+   };
+   "footer:tab-requested": {
+     reason?: string;
+diff --git a/apps/control-room/src/kernel/layout/AppMenuBar.tsx b/apps/control-room/src/kernel/layout/AppMenuBar.tsx
+index fe0d3b46f..51e669938 100644
+--- a/apps/control-room/src/kernel/layout/AppMenuBar.tsx
++++ b/apps/control-room/src/kernel/layout/AppMenuBar.tsx
+@@ -1,25 +1,26 @@
+ "use client";
+ 
+ import { ChevronDown, Search } from "lucide-react";
+-import { useEffect, useMemo, useReducer, useSyncExternalStore } from "react";
++import { useEffect, useMemo, useReducer, useState, useSyncExternalStore } from "react";
+ 
+ import { useTheme } from "@/design/theme/ThemeProvider";
+ import {
+   SIMULATION_SOLVER_STATUS_PATH,
+   SESSION_STATUS_PATH,
+ } from "@/kernel/api/apiPaths";
+ import { createCommandContext } from "@/kernel/commands/commandContext";
+ import { useKernel } from "@/kernel/KernelContext";
+ import { useRuntimeCommandControlResourceData } from "@/kernel/resources/studyRuntimeResources";
+ import { readDetailedRuntimeState } from "@/kernel/runtime/runtimeStateDisplay";
+ import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
++import { useSessionCollection } from "@/kernel/resources/useSessionCollection";
+ import {
+   EMPTY_OBJECT_VISUALIZATION_SNAPSHOT,
+   useObjectVisualizationSelector,
+ } from "@/kernel/visualization/useObjectVisualization";
+ import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
+ import { FullmagMark } from "@/shared/brand/FullmagLogo";
+ import { Button } from "@/shared/ui/Button";
+ import {
+   Dialog,
+   DialogClose,
+@@ -58,20 +59,21 @@ import {
+   resolveApiConnectionErrorDetails,
+   resolveHeaderSessionDisplay,
+   resolveHydrationSafeHeaderSessionSource,
+   selectHeaderSessionSource,
+ } from "./AppMenuBarHeaderModel";
+ import { CommunicationPolicyDialog } from "./CommunicationPolicyDialog";
+ import { DataPreviewDialog } from "./DataPreviewDialog";
+ import { MaterialLibraryDialog } from "./MaterialLibraryDialog";
+ import { RegistryInspectorDialog } from "./RegistryInspectorDialog";
+ import { DiagnosticRecorderDialog } from "./diagnostic-recorder/DiagnosticRecorderDialog";
++import { NewProblemDialog } from "./NewProblemDialog";
+ 
+ function subscribeToHydration(): () => void {
+   return () => {};
+ }
+ 
+ function clientHydratedSnapshot(): boolean {
+   return true;
+ }
+ 
+ function serverHydratedSnapshot(): boolean {
+@@ -347,53 +349,118 @@ function appMenuDialogReducer(
+         ? state
+         : { ...state, registryOpen: action.open };
+     case "thread-manager":
+       return state.threadManagerOpen === action.open
+         ? state
+         : { ...state, threadManagerOpen: action.open };
+   }
+ }
+ 
+ export function AppMenuBar() {
++  const sessions = useSessionCollection();
++
++  return sessions.state === "ready" ? <SessionAppMenuBar /> : <NoSessionAppMenuBar />;
++}
++
++function NoSessionAppMenuBar() {
++  const kernel = useKernel();
++  const { theme, setTheme } = useTheme();
++  const [newProblemOpen, setNewProblemOpen] = useState(false);
++  const commandContext = createCommandContext("menu", kernel, {
++    sourceDetail: "app-menu",
++  });
++  useEffect(
++    () => kernel.bus.on("workspace:new-problem-requested", () => {
++      setNewProblemOpen(true);
++    }),
++    [kernel.bus],
++  );
++  const runCommand = (commandId: string, input?: unknown) => {
++    if (kernel.commands.get(commandId)) {
++      void kernel.commands.execute(commandId, commandContext, input);
++    }
++  };
++  const isCommandDisabled = (commandId: string) => {
++    const command = kernel.commands.get(commandId);
++    return command ? !kernel.commands.isEnabled(commandId, commandContext) : false;
++  };
++
++  return (
++    <header className="fm-header">
++      <div className="fm-header__brand">
++        <FullmagMark size={20} className="fm-header__logo" />
++        <div className="fm-header__brand-copy">
++          <span className="fm-header__title">Fullmag</span>
++          <span className="fm-header__subtitle">No active session</span>
++        </div>
++      </div>
++      <nav className="fm-header__nav" aria-label="Main menu">
++        {MAIN_MENUS.map((menu) => (
++          <HeaderDropdown
++            key={menu.id}
++            isCommandActive={(commandId) => kernel.commands.isActive(commandId, commandContext)}
++            isCommandDisabled={isCommandDisabled}
++            menu={menu}
++            onCommand={runCommand}
++          />
++        ))}
++      </nav>
++      <div className="fm-header__actions">
++        <ThemeSwitcher theme={theme} onThemeChange={setTheme} />
++      </div>
++      <NewProblemDialog
++        hasActiveSession={false}
++        open={newProblemOpen}
++        onOpenChange={setNewProblemOpen}
++      />
++    </header>
++  );
++}
++
++function SessionAppMenuBar() {
+   const kernel = useKernel();
+   const { theme, setTheme } = useTheme();
+   const hydrated = useSyncExternalStore(
+     subscribeToHydration,
+     clientHydratedSnapshot,
+     serverHydratedSnapshot,
+   );
+   const sessionStatus = useSessionStatusSelector(selectHeaderSessionSource, {
+     isEqual: headerSessionSourceEquals,
+   });
+   const visibleSessionStatus = resolveHydrationSafeHeaderSessionSource(
+     sessionStatus,
+     hydrated,
+   );
+   const [dialogState, dispatchDialogState] = useReducer(
+     appMenuDialogReducer,
+     APP_MENU_DIALOG_INITIAL_STATE,
+   );
++  const [newProblemOpen, setNewProblemOpen] = useState(false);
+   const setDataPreviewOpen = (open: boolean) =>
+     dispatchDialogState({ open, type: "data-preview" });
+   const setCommunicationOpen = (open: boolean) =>
+     dispatchDialogState({ open, type: "communication" });
+   const setRegistryOpen = (open: boolean) =>
+     dispatchDialogState({ open, type: "registry" });
+   const setThreadManagerOpen = (open: boolean) =>
+     dispatchDialogState({ open, type: "thread-manager" });
+   const setMaterialLibraryOpen = (open: boolean) =>
+     dispatchDialogState({ open, type: "material-library" });
+   useEffect(() => {
+     return kernel.bus.on("diagnostics:recorder-open-requested", () => {
+       dispatchDialogState({ open: true, type: "thread-manager" });
+     });
+   }, [kernel.bus]);
++  useEffect(() => kernel.bus.on("workspace:new-problem-requested", () => {
++    setNewProblemOpen(true);
++  }), [kernel.bus]);
+   const visualizationSnapshot = useObjectVisualizationSelector((snapshot) =>
+     dialogState.registryOpen ? snapshot : EMPTY_OBJECT_VISUALIZATION_SNAPSHOT,
+   );
+   const runtimeResourceData = useRuntimeCommandControlResourceData();
+   const sessionDisplay = resolveHeaderSessionDisplay(
+     visibleSessionStatus,
+     readDetailedRuntimeState(runtimeResourceData[SIMULATION_SOLVER_STATUS_PATH]),
+   );
+   const visualizationState = useVisualizationStateResource({ enabled: true });
+   const visualizationSyncSnapshot = useSyncExternalStore(
+@@ -589,20 +656,26 @@ export function AppMenuBar() {
+       <DataPreviewDialog
+         onOpenChange={setDataPreviewOpen}
+         open={dialogState.dataPreviewOpen}
+       />
+ 
+       <CommunicationPolicyDialog
+         onOpenChange={setCommunicationOpen}
+         open={dialogState.communicationOpen}
+       />
+ 
++      <NewProblemDialog
++        hasActiveSession
++        open={newProblemOpen}
++        onOpenChange={setNewProblemOpen}
++      />
++
+       <div className="fm-header__separator" />
+ 
+       <div className="fm-header__run-controls" aria-label="Runtime controls">
+         {RUN_CONTROLS.map((action) => (
+           <Button
+             key={action.id}
+             className="fm-header__run-btn"
+             data-run-control={action.id}
+             disabled={
+               (action.disabled || isCommandDisabled(action.id)) || undefined
+diff --git a/apps/control-room/src/kernel/layout/EmptyWorkspace.tsx b/apps/control-room/src/kernel/layout/EmptyWorkspace.tsx
+new file mode 100644
+index 000000000..bb539cdc8
+--- /dev/null
++++ b/apps/control-room/src/kernel/layout/EmptyWorkspace.tsx
+@@ -0,0 +1,26 @@
++"use client";
++
++import { createCommandContext } from "../commands/commandContext";
++import { useKernel } from "../KernelContext";
++import { Button } from "@/shared/ui/Button";
++
++export function EmptyWorkspace() {
++  const kernel = useKernel();
++  const openNewProblem = () => {
++    void kernel.commands.execute(
++      "workspace.new-problem",
++      createCommandContext("menu", kernel, { sourceDetail: "empty-workspace" }),
++    );
++  };
++
++  return (
++    <main className="grid min-h-0 flex-1 place-items-center p-8" data-state="no-session">
++      <section className="grid max-w-md gap-3 text-center">
++        <p className="font-fm-ui text-fm-control font-medium text-fm-accent">Workspace</p>
++        <h1 className="font-fm-ui text-2xl font-semibold tracking-tight text-fm-primary">Create a simulation</h1>
++        <p className="text-fm-secondary">Start with an empty FDM or FEM problem. Configure its model and execution after creation.</p>
++        <div><Button type="button" onClick={openNewProblem}>Create simulation</Button></div>
++      </section>
++    </main>
++  );
++}
+diff --git a/apps/control-room/src/kernel/layout/NewProblemDialog.test.tsx b/apps/control-room/src/kernel/layout/NewProblemDialog.test.tsx
+new file mode 100644
+index 000000000..04685bfb9
+--- /dev/null
++++ b/apps/control-room/src/kernel/layout/NewProblemDialog.test.tsx
+@@ -0,0 +1,19 @@
++import { describe, expect, it } from "vitest";
++
++import { MAIN_MENUS } from "./appMenuModel";
++import { SHELL_COMMANDS } from "./shellCommands";
++
++describe("New Problem entry command", () => {
++  it("keeps New Problem visible and executable from the shared File menu", () => {
++    const fileMenu = MAIN_MENUS.find((menu) => menu.id === "file");
++    const menuEntry = fileMenu?.children?.find(
++      (entry) => entry.id === "workspace.new-problem",
++    );
++    const command = SHELL_COMMANDS.find(
++      (entry) => entry.id === "workspace.new-problem",
++    );
++
++    expect(menuEntry).toMatchObject({ label: "New Problem", shortcut: "Ctrl+N" });
++    expect(command?.isEnabled).toBeUndefined();
++  });
++});
+diff --git a/apps/control-room/src/kernel/layout/NewProblemDialog.tsx b/apps/control-room/src/kernel/layout/NewProblemDialog.tsx
+new file mode 100644
+index 000000000..5854bcd72
+--- /dev/null
++++ b/apps/control-room/src/kernel/layout/NewProblemDialog.tsx
+@@ -0,0 +1,102 @@
++"use client";
++
++import { useState, type ReactNode } from "react";
++
++import { MODEL_SCENE_PATH, SESSIONS_PATH, SESSION_STATUS_PATH } from "../api/apiPaths";
++import { useKernel } from "../KernelContext";
++import { Button } from "@/shared/ui/Button";
++import {
++  Dialog,
++  DialogClose,
++  DialogContent,
++  DialogDescription,
++  DialogFooter,
++  DialogHeader,
++  DialogTitle,
++} from "@/shared/ui/Dialog";
++import { SegmentedControl } from "@/shared/ui/SegmentedControl";
++
++type Backend = "fdm" | "fem";
++
++export function NewProblemDialog({
++  hasActiveSession,
++  onOpenChange,
++  open,
++}: {
++  readonly hasActiveSession: boolean;
++  readonly onOpenChange: (open: boolean) => void;
++  readonly open: boolean;
++}) {
++  const kernel = useKernel();
++  const [backend, setBackend] = useState<Backend>("fdm");
++  const [name, setName] = useState("Untitled problem");
++  const [replaceConfirmed, setReplaceConfirmed] = useState(false);
++  const [pending, setPending] = useState(false);
++  const [error, setError] = useState<string | null>(null);
++
++  const create = async () => {
++    setPending(true);
++    setError(null);
++    try {
++      const response = await kernel.api.sessions.create({
++        backend,
++        device: "cpu",
++        name,
++        precision: "double",
++        replace_current: hasActiveSession,
++      });
++      const revision = response.revisions.state_version || 1;
++      kernel.resources.invalidate(SESSIONS_PATH, revision);
++      kernel.resources.invalidate(SESSION_STATUS_PATH, revision);
++      kernel.resources.invalidate(MODEL_SCENE_PATH, revision);
++      onOpenChange(false);
++    } catch (cause) {
++      setError(cause instanceof Error ? cause.message : "Unable to create the simulation.");
++    } finally {
++      setPending(false);
++    }
++  };
++
++  return (
++    <Dialog open={open} onOpenChange={onOpenChange}>
++      <DialogContent aria-describedby="fm-new-problem-description">
++        <DialogHeader>
++          <DialogTitle>New Problem</DialogTitle>
++          <DialogDescription id="fm-new-problem-description">
++            Create an empty canonical simulation problem.
++          </DialogDescription>
++        </DialogHeader>
++        <div className="grid gap-4">
++          <label className="grid gap-1.5 font-fm-ui text-fm-control text-fm-secondary" htmlFor="fm-new-problem-name">
++            Name
++            <input className="fm-inspector-input" disabled={pending} id="fm-new-problem-name" value={name} onChange={(event) => setName(event.target.value)} />
++          </label>
++          <Selection label="Discretization">
++            <SegmentedControl aria-label="Discretization" disabled={pending} options={[{ label: "FDM", value: "fdm" }, { label: "FEM", value: "fem" }]} value={backend} onValueChange={setBackend} />
++          </Selection>
++          <Selection label="Device">
++            <SegmentedControl aria-label="Device" disabled options={[{ label: "CPU", value: "cpu" }]} value="cpu" onValueChange={() => undefined} />
++          </Selection>
++          <Selection label="Precision">
++            <SegmentedControl aria-label="Precision" disabled options={[{ label: "Double", value: "double" }]} value="double" onValueChange={() => undefined} />
++          </Selection>
++          {hasActiveSession ? (
++            <label className="flex items-start gap-2 text-fm-control text-fm-secondary">
++              <input checked={replaceConfirmed} disabled={pending} type="checkbox" onChange={(event) => setReplaceConfirmed(event.target.checked)} />
++              Replace the active session. Its unsaved workspace state will be lost.
++            </label>
++          ) : null}
++          {error ? <p className="text-fm-control text-fm-danger" role="alert">{error}</p> : null}
++        </div>
++        <DialogFooter>
++          <DialogClose asChild><Button disabled={pending} size="sm" type="button" variant="ghost">Cancel</Button></DialogClose>
++          <Button disabled={pending || !name.trim() || (hasActiveSession && !replaceConfirmed)} size="sm" type="button" onClick={create}>{pending ? "Creating…" : "Create"}</Button>
++        </DialogFooter>
++      </DialogContent>
++    </Dialog>
++  );
++}
++
++function Selection({ children, label }: { readonly children: ReactNode; readonly label: string }) {
++  return <div className="grid gap-1.5"><span className="font-fm-ui text-fm-control text-fm-secondary">{label}</span>{children}</div>;
++}
+diff --git a/apps/control-room/src/kernel/layout/WorkspaceShellClient.tsx b/apps/control-room/src/kernel/layout/WorkspaceShellClient.tsx
+index 997e48a8b..97e4e9c74 100644
+--- a/apps/control-room/src/kernel/layout/WorkspaceShellClient.tsx
++++ b/apps/control-room/src/kernel/layout/WorkspaceShellClient.tsx
+@@ -1,27 +1,46 @@
+ "use client";
+ 
+ import {
+   WorkspaceStartupGateView,
+   useSimulationStartupOverlayState,
+ } from "./SimulationStartupOverlay";
++import { useSessionCollection } from "../resources/useSessionCollection";
++import { EmptyWorkspace } from "./EmptyWorkspace";
+ import { WorkspaceRenderProfiler } from "../performance/reactRenderProfiler";
+ import { SlotHost } from "./SlotHost";
+ import { WorkspaceDockLayout } from "./WorkspaceDockLayout";
+ 
+ export function WorkspaceShellClient() {
++  const sessions = useSessionCollection();
++
++  if (sessions.state !== "ready") {
++    return (
++      <>
++        <SlotHost slotId="app-menu" />
++        <EmptyWorkspace />
++      </>
++    );
++  }
++
++  return <ActiveWorkspaceShell />;
++}
++
++function ActiveWorkspaceShell() {
+   const startupState = useSimulationStartupOverlayState();
+ 
+   return (
+-    <WorkspaceStartupGateView state={startupState}>
++    <>
+       <SlotHost slotId="app-menu" />
+-      <SlotHost slotId="ribbon" />
+-      <WorkspaceRenderProfiler id="WorkspaceDockLayout">
+-        <WorkspaceDockLayout />
+-      </WorkspaceRenderProfiler>
+-      <SlotHost slotId="status-bar" />
+-      <div className="fm-workspace-overlay-host">
+-        <SlotHost slotId="overlay" />
+-      </div>
+-    </WorkspaceStartupGateView>
++      <WorkspaceStartupGateView state={startupState}>
++        <SlotHost slotId="ribbon" />
++        <WorkspaceRenderProfiler id="WorkspaceDockLayout">
++          <WorkspaceDockLayout />
++        </WorkspaceRenderProfiler>
++        <SlotHost slotId="status-bar" />
++        <div className="fm-workspace-overlay-host">
++          <SlotHost slotId="overlay" />
++        </div>
++      </WorkspaceStartupGateView>
++    </>
+   );
+ }
+diff --git a/apps/control-room/src/kernel/layout/appMenuModel.tsx b/apps/control-room/src/kernel/layout/appMenuModel.tsx
+index d5bbbe5e5..ad7e1ec55 100644
+--- a/apps/control-room/src/kernel/layout/appMenuModel.tsx
++++ b/apps/control-room/src/kernel/layout/appMenuModel.tsx
+@@ -41,21 +41,20 @@ export interface HeaderQuickAction {
+   disabled?: boolean;
+   icon: ReactNode;
+   id: string;
+   label: string;
+ }
+ 
+ const HIDDEN_PLACEHOLDER_COMMAND_IDS = new Set([
+   "workspace.preferences",
+   "workspace.docs",
+   "workspace.about",
+-  "workspace.new-problem",
+   "workspace.save-sync",
+   "workspace.undo",
+   "workspace.redo",
+   "workspace.view-2d",
+   "execution.fdm-cpu",
+   "execution.fdm-gpu",
+   "execution.fem-cpu",
+   "workspace.diagnostics",
+   "workspace.api-console",
+   "workspace.script-view",
+diff --git a/apps/control-room/src/kernel/layout/shellCommands.ts b/apps/control-room/src/kernel/layout/shellCommands.ts
+index 5b1adc923..4bf5404e1 100644
+--- a/apps/control-room/src/kernel/layout/shellCommands.ts
++++ b/apps/control-room/src/kernel/layout/shellCommands.ts
+@@ -98,21 +98,39 @@ export const SHELL_COMMANDS: CommandContribution[] = [
+     scope: "global",
+     isActive: (ctx) => ctx.layout?.get().panelVisible.bottom ?? true,
+     run: (ctx) => {
+       ctx.layout?.togglePanel("bottom");
+       return { status: "completed" };
+     },
+   },
+   disabledPlaceholder("workspace.preferences", "Preferences", "Application"),
+   disabledPlaceholder("workspace.docs", "Physics Documentation", "Application"),
+   disabledPlaceholder("workspace.about", "About Fullmag", "Application"),
+-  disabledPlaceholder("workspace.new-problem", "New Problem", "File", "Ctrl+N"),
++  {
++    id: "workspace.new-problem",
++    title: "New Problem",
++    group: "workspace",
++    category: "File",
++    scope: "global",
++    shortcut: "Ctrl+N",
++    run: (ctx) => {
++      ctx.bus?.emit("workspace:new-problem-requested", {
++        source:
++          ctx.source === "shortcut"
++            ? "shortcut"
++            : ctx.source === "menu"
++              ? "menu"
++              : "workspace",
++      });
++      return { status: "completed" };
++    },
++  },
+   disabledPlaceholder("workspace.save-sync", "Save / Sync", "File", "Ctrl+S"),
+   {
+     id: "workspace.export-python",
+     title: "Export Python DSL",
+     group: "workspace",
+     category: "File",
+     scope: "workspace",
+     isEnabled: (ctx) => Boolean(ctx.api),
+     disabledReason: (ctx) =>
+       ctx.api ? null : "Export Python DSL requires an active workspace API.",
+diff --git a/apps/control-room/src/kernel/resources/useSessionCollection.test.ts b/apps/control-room/src/kernel/resources/useSessionCollection.test.ts
+new file mode 100644
+index 000000000..845a6f28a
+--- /dev/null
++++ b/apps/control-room/src/kernel/resources/useSessionCollection.test.ts
+@@ -0,0 +1,10 @@
++import { describe, expect, it } from "vitest";
++
++import { ControlRoomApi } from "../api/ControlRoomApi";
++
++describe("session collection facade", () => {
++  it("exposes the typed GET /v2/sessions entry point needed to distinguish an empty collection", () => {
++    const api = new ControlRoomApi({ baseUrl: "http://localhost" });
++    expect(typeof (api.sessions as { list?: unknown }).list).toBe("function");
++  });
++});
+diff --git a/apps/control-room/src/kernel/resources/useSessionCollection.ts b/apps/control-room/src/kernel/resources/useSessionCollection.ts
+new file mode 100644
+index 000000000..555561412
+--- /dev/null
++++ b/apps/control-room/src/kernel/resources/useSessionCollection.ts
+@@ -0,0 +1,42 @@
++"use client";
++
++import { useCallback } from "react";
++
++import { SESSIONS_PATH } from "../api/apiPaths";
++import type { SessionCollectionResource } from "../api/apiTypes";
++import { useKernel } from "../KernelContext";
++
++import type { ResourceResult } from "./resourceTypes";
++import { useResource } from "./useResource";
++
++export type SessionCollectionState = "error" | "loading" | "no-session" | "ready";
++
++export function resolveSessionCollectionState(
++  collection: SessionCollectionResource,
++): Exclude<SessionCollectionState, "error" | "loading"> {
++  return collection.sessions.length > 0 ? "ready" : "no-session";
++}
++
++export function useSessionCollection(): {
++  readonly resource: ResourceResult<SessionCollectionResource>;
++  readonly state: SessionCollectionState;
++} {
++  const { api } = useKernel();
++  const load = useCallback(
++    ({ signal }: { signal: AbortSignal }) => api.sessions.list({ signal }),
++    [api],
++  );
++  const resource = useResource<SessionCollectionResource>({
++    load,
++    resolveRevision: () => null,
++    resourceKey: SESSIONS_PATH,
++  });
++  const state =
++    resource.status === "error"
++      ? "error"
++      : resource.data
++        ? resolveSessionCollectionState(resource.data)
++        : "loading";
++
++  return { resource, state };
++}

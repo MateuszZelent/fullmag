@@ -2731,6 +2731,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/model/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_readiness"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/model/realized-regions": {
         parameters: {
             query?: never;
@@ -3705,9 +3721,20 @@ export interface components {
             kind: "replace_scene";
             scene: Record<string, never>;
         } | {
+            /** Format: int64 */
+            base_revision?: number | null;
             /** @enum {string} */
             kind: "merge_patch";
             merge_patch: Record<string, never>;
+        } | {
+            asset?: Record<string, never> | null;
+            /** Format: int64 */
+            base_revision?: number | null;
+            /** @enum {string} */
+            kind: "patch_magnetization";
+            magnetization_ref?: string | null;
+            object_id: string;
+            region_id?: string | null;
         } | {
             /** Format: int64 */
             base_revision?: number | null;
@@ -4198,6 +4225,19 @@ export interface components {
             status: string;
             /** Format: double */
             utilization_cpu_percent: number;
+        };
+        CreateSessionRequest: {
+            backend: components["schemas"]["ScratchSessionBackend"];
+            device: components["schemas"]["ScratchSessionDevice"];
+            name: string;
+            precision: components["schemas"]["ScratchSessionPrecision"];
+            replace_current?: boolean;
+        };
+        CreateSessionResponse: {
+            revisions: components["schemas"]["ScratchSessionRevisionsResource"];
+            scene_document: components["schemas"]["ScratchSceneDocumentResource"];
+            session_id: string;
+            status: components["schemas"]["ScratchSessionStatusResource"];
         };
         /** @enum {string} */
         CrossSectionImageColorScale: "jet" | "viridis" | "hot" | "coolwarm" | "plasma" | "inferno";
@@ -6626,6 +6666,8 @@ export interface components {
             references?: components["schemas"]["MaterialReferenceResource"][];
             /** Format: int64 */
             region_coefficients_revision?: number | null;
+            /** Format: int64 */
+            scene_revision: number;
         };
         MeshActiveBuildResource: {
             /** @description Current active build descriptor and progress metadata. */
@@ -7390,6 +7432,33 @@ export interface components {
             /** Format: int64 */
             uptime_seconds: number;
         };
+        ModelAuthoringCapabilities: {
+            move: components["schemas"]["ModelAuthoringCapability"];
+            rotate: components["schemas"]["ModelAuthoringCapability"];
+            scale: components["schemas"]["ModelAuthoringCapability"];
+        };
+        ModelAuthoringCapability: {
+            available: boolean;
+            reason?: string | null;
+        };
+        ModelReadinessCheck: {
+            id: string;
+            label: string;
+            reason?: string | null;
+            state: components["schemas"]["ModelReadinessCheckState"];
+            target_resource?: string | null;
+        };
+        /** @enum {string} */
+        ModelReadinessCheckState: "complete" | "blocked" | "stale";
+        ModelReadinessResource: {
+            blockers: string[];
+            capabilities: components["schemas"]["ModelAuthoringCapabilities"];
+            checks: components["schemas"]["ModelReadinessCheck"][];
+            ready_to_export: boolean;
+            ready_to_run: boolean;
+            /** Format: int64 */
+            scene_revision: number;
+        };
         NullableF64PatchValue: number | null;
         NullableStringPatchValue: string | null;
         NullableU32PatchValue: number | null;
@@ -7429,6 +7498,8 @@ export interface components {
             transform?: Record<string, never> | null;
         };
         ObjectInteractionPatchRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
             enabled?: boolean | null;
             params: Record<string, never>;
             present?: boolean | null;
@@ -7439,6 +7510,8 @@ export interface components {
             object_id: string;
             params: Record<string, never>;
             present: boolean;
+            /** Format: int64 */
+            scene_revision: number;
         };
         ObjectMagnetizationAverage: {
             /** Format: double */
@@ -9192,6 +9265,33 @@ export interface components {
         SceneTransportExecutionMode: "strict" | "extended";
         /** @enum {string} */
         SceneTransportPrecision: "single" | "double";
+        ScratchSceneDocumentResource: {
+            objects: components["schemas"]["SceneObjectResource"][];
+            /** Format: int64 */
+            revision?: number | null;
+            scene?: null | components["schemas"]["SceneMetadataResource"];
+            schema_version: components["schemas"]["ScratchSceneSchemaVersion"];
+            version?: string | null;
+        };
+        /** @enum {string} */
+        ScratchSceneSchemaVersion: "0.3";
+        /** @enum {string} */
+        ScratchSessionBackend: "fdm" | "fem";
+        /** @enum {string} */
+        ScratchSessionDevice: "cpu";
+        /** @enum {string} */
+        ScratchSessionPrecision: "double";
+        ScratchSessionRevisionsResource: {
+            /** Format: int64 */
+            scene_revision: number;
+            /** Format: int64 */
+            state_version: number;
+        };
+        ScratchSessionStatusResource: {
+            effective_execution: components["schemas"]["SessionExecutionResource"];
+            fallback: string | null;
+            requested_execution: components["schemas"]["SessionExecutionResource"];
+        };
         ScriptSourceResponse: {
             bytes: number;
             script_path: string;
@@ -9425,6 +9525,11 @@ export interface components {
         SessionCommandability: "allowed" | "forbidden" | "read_only";
         /** @enum {string} */
         SessionConnectivity: "connected" | "degraded" | "disconnected";
+        SessionExecutionResource: {
+            backend: components["schemas"]["ScratchSessionBackend"];
+            device: components["schemas"]["ScratchSessionDevice"];
+            precision: components["schemas"]["ScratchSessionPrecision"];
+        };
         SessionExportRequest: {
             compression?: null | components["schemas"]["CompressionProfile"];
             /** @description Optional session name override. */
@@ -9484,6 +9589,10 @@ export interface components {
             session_resource: components["schemas"]["SessionResourceLifecycle"];
             solver: string;
         };
+        SessionListResource: {
+            schema_version: string;
+            sessions: components["schemas"]["SessionSummaryResource"][];
+        };
         /** @enum {string} */
         SessionResourceLifecycle: "active" | "tombstoned";
         SessionSummary: {
@@ -9493,6 +9602,12 @@ export interface components {
             session_epoch: string;
             session_id: string;
             workspace_root: string;
+        };
+        SessionSummaryResource: {
+            current: boolean;
+            name: string;
+            session_id: string;
+            status: string;
         };
         SimulationPreparationResource: {
             active_stage_id?: null | components["schemas"]["PreparationStageId"];
@@ -11350,7 +11465,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["SessionListResource"];
+                };
             };
         };
     };
@@ -11361,17 +11478,30 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateSessionRequest"];
+            };
+        };
         responses: {
-            /** @description Current session returned */
-            200: {
+            /** @description Scratch session created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateSessionResponse"];
+                };
+            };
+            /** @description Invalid scratch session request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description The local runtime only exposes the current session */
-            400: {
+            /** @description An active local session already exists */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -19212,6 +19342,33 @@ export interface operations {
             };
             /** @description Revision conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_readiness: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Derived readiness of the current canonical authoring model */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelReadinessResource"];
+                };
+            };
+            /** @description No active workspace or scene document */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

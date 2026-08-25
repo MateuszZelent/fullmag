@@ -3,6 +3,7 @@
 mod adapters;
 mod builder;
 mod geometry;
+mod material_requirements;
 mod physics_graph;
 mod region_revisions;
 mod scene;
@@ -17,8 +18,11 @@ pub use adapters::{
 };
 pub use builder::*;
 pub use geometry::*;
+pub use material_requirements::*;
 pub use physics_graph::*;
 pub use region_revisions::*;
 pub use scene::*;
 pub use spin_transport::*;
-pub use validation::{validate_scene_document, SceneDocumentValidationError};
+pub use validation::{
+    validate_scene_document, validate_scene_document_for_authoring, SceneDocumentValidationError,
+};

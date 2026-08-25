@@ -41,8 +41,5 @@
   },
   "devDependencies": {
     "react-doctor": "^0.9.12"
-  },
-  "dependencies": {
-    "next": "^16.3.1"
   }
 }

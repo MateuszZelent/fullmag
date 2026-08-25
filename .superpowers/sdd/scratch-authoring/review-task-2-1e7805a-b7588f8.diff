@@ -1,0 +1,898 @@
+# Review package: 1e7805a08..b7588f8a6
+
+## Commits
+b7588f8a6 feat(frontend): expose typed session creation
+
+## Files changed
+ .../src/kernel/api/ControlRoomApi.test.ts          |  58 +++++-
+ apps/control-room/src/kernel/api/ControlRoomApi.ts |  10 ++
+ .../src/kernel/api/generated/openapi-v2-types.ts   |  64 ++++++-
+ .../src/kernel/api/generated/openapi-v2.json       | 196 ++++++++++++++++++++-
+ crates/fullmag-api/src/openapi_v2.rs               |  27 ++-
+ crates/fullmag-api/src/router_v2/tests.rs          |  27 +++
+ 6 files changed, 369 insertions(+), 13 deletions(-)
+
+## Diff
+diff --git a/apps/control-room/src/kernel/api/ControlRoomApi.test.ts b/apps/control-room/src/kernel/api/ControlRoomApi.test.ts
+index 87ce07a37..abb925b0f 100644
+--- a/apps/control-room/src/kernel/api/ControlRoomApi.test.ts
++++ b/apps/control-room/src/kernel/api/ControlRoomApi.test.ts
+@@ -14,21 +14,21 @@ import type {
+   AuthoringTransactionRequest,
+   BinaryResourceResult,
+   CurrentTransportMutationRequest,
+   FieldAvailabilityQuery,
+   FdmSingleGridFieldVectorQuery,
+   FdmScopedFieldVectorQuery,
+   FieldVectorResponseMetadata,
+   LiveStatusResource,
+   SimulationPreparationResource,
+ } from "./apiTypes";
+-import { SIMULATION_PREPARATION_PATH } from "./apiPaths";
++import { SESSIONS_PATH, SIMULATION_PREPARATION_PATH } from "./apiPaths";
+ import type { DecodedFieldVector } from "./codecs";
+ import { RequestDiagnosticsController } from "./RequestDiagnosticsController";
+ import { activeLaneCapabilityFixture } from "../resources/activeLaneCapabilityFixture.testSupport";
+ 
+ const contractHeaders = { "x-api-contract-version": "1.0.0" };
+ 
+ describe("derived B_drive display quantity", () => {
+   it("adds B_drive to a catalog only when H_drive exists", () => {
+     const catalog = withDerivedDriveFluxDensity({
+       domain_generation_id: "domain-1",
+@@ -886,20 +886,76 @@ describe("ControlRoomApi", () => {
+     const status = await api.sessions.current.status();
+ 
+     expect(status.resources.fields_revision).toBe(7);
+     const headers = new Headers(observedInit?.headers);
+     expect(observedUrl).toBe("http://127.0.0.1:8765/v2/sessions/current/status");
+     expect(observedInit?.method).toBe("GET");
+     expect(headers.get("x-request-id")).toBe("req-1");
+     expect(headers.get("x-fullmag-contract-version")).toBeNull();
+   });
+ 
++  it("creates a scratch session through the typed sessions facade", async () => {
++    let observedInit: RequestInit | undefined;
++    let observedUrl = "";
++    const api = new ControlRoomApi({
++      baseUrl: "http://127.0.0.1:8765",
++      fetchImpl: async (url, init) => {
++        observedUrl = String(url);
++        observedInit = init;
++        return jsonResponse(
++          {
++            session_id: "session-scratch",
++            status: {
++              requested_execution: {
++                backend: "fem",
++                device: "cpu",
++                precision: "double",
++              },
++              effective_execution: {
++                backend: "fem",
++                device: "cpu",
++                precision: "double",
++              },
++              fallback: null,
++            },
++            scene_document: {
++              schema_version: "0.3",
++              version: "scene.v2",
++              revision: 0,
++              scene: null,
++              objects: [],
++            },
++            revisions: { scene_revision: 0, state_version: 1 },
++          },
++          { status: 201 },
++        );
++      },
++    });
++
++    const created = await api.sessions.create({
++      name: "Scratch FEM",
++      backend: "fem",
++      device: "cpu",
++      precision: "double",
++    });
++
++    expect(created.session_id).toBe("session-scratch");
++    expect(observedUrl).toBe(`http://127.0.0.1:8765${SESSIONS_PATH}`);
++    expect(observedInit?.method).toBe("POST");
++    expect(parseRequestJsonBody(observedInit?.body)).toMatchObject({
++      backend: "fem",
++      device: "cpu",
++      name: "Scratch FEM",
++      precision: "double",
++    });
++  });
++
+   it("loads magnetic response sweep artifacts through the analysis facade", async () => {
+     let observedInit: RequestInit | undefined;
+     let observedUrl = "";
+     const fetchImpl = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+       observedUrl = String(url);
+       observedInit = init;
+       return jsonResponse({
+         frequencies: [{ frequency_hz: 1e9, response_amplitude: 2.5 }],
+         schema_version: "magnetic_response_sweep.v1",
+       });
+diff --git a/apps/control-room/src/kernel/api/ControlRoomApi.ts b/apps/control-room/src/kernel/api/ControlRoomApi.ts
+index 0cb9f6643..21b90b303 100644
+--- a/apps/control-room/src/kernel/api/ControlRoomApi.ts
++++ b/apps/control-room/src/kernel/api/ControlRoomApi.ts
+@@ -157,20 +157,21 @@ import {
+   PERSISTENCE_CHECKPOINT_RESTORE_PATH,
+   PERSISTENCE_CHECKPOINTS_PATH,
+   PERSISTENCE_EXPORTS_PATH,
+   PERSISTENCE_FIELD_STATE_EXPORTS_PATH,
+   PERSISTENCE_FIELD_STATE_IMPORT_INSPECTIONS_PATH,
+   PERSISTENCE_FIELD_STATE_IMPORTS_PATH,
+   PERSISTENCE_IMPORT_INSPECTIONS_PATH,
+   PERSISTENCE_IMPORTS_PATH,
+   PLATFORM_CAPABILITIES_PATH,
+   PLATFORM_HEALTH_PATH,
++  SESSIONS_PATH,
+   SESSION_EVENTS_COMMUNICATION_POLICY_PATH,
+   SESSION_STATUS_PATH,
+   SIMULATION_COMMAND_DETAIL_PATH,
+   SIMULATION_COMMANDS_PATH,
+   SIMULATION_OBJECT_METRICS_PATH,
+   SIMULATION_PREPARATION_PATH,
+   SIMULATION_RUN_CURRENT_PATH,
+   SIMULATION_RUN_PATH,
+   SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
+   SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
+@@ -403,20 +404,23 @@ import type {
+   StudyRuntimeResource,
+   UniversePatchRequest,
+   UniverseResource,
+   VisualizationClientAckEntry,
+   VisualizationClientAckRequest,
+   VisualizationClientAckResource,
+   VisualizationStatePatch,
+   VisualizationStateResource,
+ } from "./apiTypes";
+ 
++type CreateSessionRequest = components["schemas"]["CreateSessionRequest"];
++type CreateSessionResponse = components["schemas"]["CreateSessionResponse"];
++
+ function optionalIntegerHeader(headers: Headers, name: string): number | null {
+   const raw = headers.get(name);
+   if (raw === null || raw.trim() === "") return null;
+   const value = Number(raw);
+   return Number.isSafeInteger(value) && value >= 0 ? value : null;
+ }
+ 
+ export function parseFieldVectorResponseMetadata(
+   headers: Headers,
+ ): FieldVectorResponseMetadata {
+@@ -717,20 +721,26 @@ export class ControlRoomApi {
+   private readonly binaryDecodeScheduler: BinaryDecodeScheduler;
+   private readonly requestDiagnostics: RequestDiagnosticsController | null;
+   private readonly fetchImpl: FetchLike;
+   private readonly maxGetRetries: number;
+   private readonly retryDelayMs: number;
+   private readonly requestIdFactory: () => string;
+   private readonly transport: OpenApiV2Transport;
+   private readonly fieldMaterializationRequests = new Map<string, Promise<void>>();
+ 
+   readonly sessions = {
++    create: (input: CreateSessionRequest, options?: RequestOptions) =>
++      this.postJson<CreateSessionResponse, CreateSessionRequest>(
++        SESSIONS_PATH,
++        input,
++        options,
++      ),
+     current: {
+       status: (options?: RequestOptions) =>
+         this.requestJson<LiveStatusResource>(SESSION_STATUS_PATH, options),
+     },
+   };
+ 
+   readonly platform = {
+     capabilities: (options?: RequestOptions) =>
+       this.requestJson<PlatformCapabilitiesResource>(
+         PLATFORM_CAPABILITIES_PATH,
+diff --git a/apps/control-room/src/kernel/api/generated/openapi-v2-types.ts b/apps/control-room/src/kernel/api/generated/openapi-v2-types.ts
+index adb276402..517c25f48 100644
+--- a/apps/control-room/src/kernel/api/generated/openapi-v2-types.ts
++++ b/apps/control-room/src/kernel/api/generated/openapi-v2-types.ts
+@@ -3906,20 +3906,22 @@ export interface components {
+             explicit_topology: boolean;
+             gpu_telemetry: boolean;
+             node_fields: boolean;
+             preview_2d: boolean;
+             preview_3d: boolean;
+             scalar_history: boolean;
+             structured_grid: boolean;
+             transport_authoring?: null | components["schemas"]["TransportAuthoringCapabilityMap"];
+         };
+         CheckpointCreateRequest: {
++            /** Format: int64 */
++            expected_state_version?: number | null;
+             profile?: components["schemas"]["SaveProfile"];
+             reason?: string | null;
+         };
+         CheckpointCreateResponse: {
+             checkpoint: components["schemas"]["CheckpointEntry"];
+         };
+         CheckpointEntry: {
+             artifact_ref: string;
+             backend_family?: string | null;
+             checkpoint_id: string;
+@@ -3944,20 +3946,22 @@ export interface components {
+             step: number;
+             /** Format: double */
+             time_s: number;
+             /** Format: int64 */
+             vector_count: number;
+         };
+         CheckpointListResponse: {
+             checkpoints: components["schemas"]["CheckpointEntry"][];
+         };
+         CheckpointRestoreRequest: {
++            /** Format: int64 */
++            expected_state_version?: number | null;
+             reason?: string | null;
+         };
+         CheckpointRestoreResponse: {
+             checkpoint: components["schemas"]["CheckpointEntry"];
+             /** Format: int64 */
+             field_revision: number;
+             restore_class: components["schemas"]["RestoreClass"];
+             /** Format: int64 */
+             restored_vector_count: number;
+             warnings: string[];
+@@ -4188,20 +4192,33 @@ export interface components {
+             /** Format: double */
+             process_rss_mb: number;
+             /** Format: int32 */
+             process_threads: number;
+             reason?: string | null;
+             sample_time_unix_ms: number;
+             status: string;
+             /** Format: double */
+             utilization_cpu_percent: number;
+         };
++        CreateSessionRequest: {
++            backend: string;
++            device: string;
++            name: string;
++            precision: string;
++            replace_current?: boolean;
++        };
++        CreateSessionResponse: {
++            revisions: components["schemas"]["ScratchSessionRevisionsResource"];
++            scene_document: components["schemas"]["ScratchSceneDocumentResource"];
++            session_id: string;
++            status: components["schemas"]["ScratchSessionStatusResource"];
++        };
+         /** @enum {string} */
+         CrossSectionImageColorScale: "jet" | "viridis" | "hot" | "coolwarm" | "plasma" | "inferno";
+         /** @enum {string} */
+         CrossSectionQualityMetric: "gamma" | "sicn" | "volume" | "skewness" | "aspect_ratio" | "max_angle" | "min_edge";
+         CurrentRunResource: {
+             /** Format: int32 */
+             active_stage_index?: number | null;
+             active_stage_kind?: string | null;
+             artifact_dir: string;
+             /** Format: double */
+@@ -9181,20 +9198,39 @@ export interface components {
+         /** @enum {string} */
+         SceneTransportCoupling: "one_way" | "bidirectional";
+         /** @enum {string} */
+         SceneTransportDevice: "cpu" | "gpu" | "auto";
+         /** @enum {string} */
+         SceneTransportDiscretization: "fdm" | "fem" | "auto";
+         /** @enum {string} */
+         SceneTransportExecutionMode: "strict" | "extended";
+         /** @enum {string} */
+         SceneTransportPrecision: "single" | "double";
++        ScratchSceneDocumentResource: {
++            objects: components["schemas"]["SceneObjectResource"][];
++            /** Format: int64 */
++            revision?: number | null;
++            scene?: null | components["schemas"]["SceneMetadataResource"];
++            schema_version: string;
++            version?: string | null;
++        };
++        ScratchSessionRevisionsResource: {
++            /** Format: int64 */
++            scene_revision: number;
++            /** Format: int64 */
++            state_version: number;
++        };
++        ScratchSessionStatusResource: {
++            effective_execution: components["schemas"]["SessionExecutionResource"];
++            fallback?: string | null;
++            requested_execution: components["schemas"]["SessionExecutionResource"];
++        };
+         ScriptSourceResponse: {
+             bytes: number;
+             script_path: string;
+             source: string;
+         };
+         ScriptSyncRequest: {
+             overrides?: unknown;
+         };
+         ScriptSyncResponse: {
+             bytes_written: number;
+@@ -9414,20 +9450,25 @@ export interface components {
+             asset_id: string;
+             session_id: string;
+             stored_path: string;
+             summary: components["schemas"]["ImportedAssetSummary"];
+             target_realization: string;
+         };
+         /** @enum {string} */
+         SessionCommandability: "allowed" | "forbidden" | "read_only";
+         /** @enum {string} */
+         SessionConnectivity: "connected" | "degraded" | "disconnected";
++        SessionExecutionResource: {
++            backend: string;
++            device: string;
++            precision: string;
++        };
+         SessionExportRequest: {
+             compression?: null | components["schemas"]["CompressionProfile"];
+             /** @description Optional session name override. */
+             name?: string | null;
+             /** @description Save profile: "compact", "solved", "resume", "archive". */
+             profile: components["schemas"]["SaveProfile"];
+             /** @description Optional UI workspace snapshot provided by frontend. */
+             ui_state?: unknown;
+         };
+         SessionExportResponse: {
+@@ -11350,36 +11391,49 @@ export interface operations {
+             };
+         };
+     };
+     sessions_post_sessions: {
+         parameters: {
+             query?: never;
+             header?: never;
+             path?: never;
+             cookie?: never;
+         };
+-        requestBody?: never;
++        requestBody: {
++            content: {
++                "application/json": components["schemas"]["CreateSessionRequest"];
++            };
++        };
+         responses: {
+-            /** @description Current session returned */
+-            200: {
++            /** @description Scratch session created */
++            201: {
+                 headers: {
+                     [name: string]: unknown;
+                 };
+-                content?: never;
++                content: {
++                    "application/json": components["schemas"]["CreateSessionResponse"];
++                };
+             };
+-            /** @description The local runtime only exposes the current session */
++            /** @description Invalid scratch session request */
+             400: {
+                 headers: {
+                     [name: string]: unknown;
+                 };
+                 content?: never;
+             };
++            /** @description An active local session already exists */
++            409: {
++                headers: {
++                    [name: string]: unknown;
++                };
++                content?: never;
++            };
+         };
+     };
+     sessions_get_sessions_current: {
+         parameters: {
+             query?: never;
+             header?: never;
+             path?: never;
+             cookie?: never;
+         };
+         requestBody?: never;
+diff --git a/apps/control-room/src/kernel/api/generated/openapi-v2.json b/apps/control-room/src/kernel/api/generated/openapi-v2.json
+index 5dfef15c7..41bae4839 100644
+--- a/apps/control-room/src/kernel/api/generated/openapi-v2.json
++++ b/apps/control-room/src/kernel/api/generated/openapi-v2.json
+@@ -1393,20 +1393,28 @@
+           "gpu_telemetry",
+           "preview_2d",
+           "preview_3d",
+           "algorithms_available",
+           "active_lane"
+         ],
+         "type": "object"
+       },
+       "CheckpointCreateRequest": {
+         "properties": {
++          "expected_state_version": {
++            "format": "int64",
++            "minimum": 0,
++            "type": [
++              "integer",
++              "null"
++            ]
++          },
+           "profile": {
+             "$ref": "#/components/schemas/SaveProfile"
+           },
+           "reason": {
+             "type": [
+               "string",
+               "null"
+             ]
+           }
+         },
+@@ -1541,20 +1549,28 @@
+             "type": "array"
+           }
+         },
+         "required": [
+           "checkpoints"
+         ],
+         "type": "object"
+       },
+       "CheckpointRestoreRequest": {
+         "properties": {
++          "expected_state_version": {
++            "format": "int64",
++            "minimum": 0,
++            "type": [
++              "integer",
++              "null"
++            ]
++          },
+           "reason": {
+             "type": [
+               "string",
+               "null"
+             ]
+           }
+         },
+         "type": "object"
+       },
+       "CheckpointRestoreResponse": {
+@@ -2613,20 +2629,69 @@
+           "logical_cpus",
+           "utilization_cpu_percent",
+           "process_cpu_percent",
+           "memory_used_mb",
+           "memory_total_mb",
+           "process_rss_mb",
+           "process_threads"
+         ],
+         "type": "object"
+       },
++      "CreateSessionRequest": {
++        "properties": {
++          "backend": {
++            "type": "string"
++          },
++          "device": {
++            "type": "string"
++          },
++          "name": {
++            "type": "string"
++          },
++          "precision": {
++            "type": "string"
++          },
++          "replace_current": {
++            "type": "boolean"
++          }
++        },
++        "required": [
++          "name",
++          "backend",
++          "device",
++          "precision"
++        ],
++        "type": "object"
++      },
++      "CreateSessionResponse": {
++        "properties": {
++          "revisions": {
++            "$ref": "#/components/schemas/ScratchSessionRevisionsResource"
++          },
++          "scene_document": {
++            "$ref": "#/components/schemas/ScratchSceneDocumentResource"
++          },
++          "session_id": {
++            "type": "string"
++          },
++          "status": {
++            "$ref": "#/components/schemas/ScratchSessionStatusResource"
++          }
++        },
++        "required": [
++          "session_id",
++          "status",
++          "scene_document",
++          "revisions"
++        ],
++        "type": "object"
++      },
+       "CrossSectionImageColorScale": {
+         "enum": [
+           "jet",
+           "viridis",
+           "hot",
+           "coolwarm",
+           "plasma",
+           "inferno"
+         ],
+         "type": "string"
+@@ -22453,20 +22518,102 @@
+         ],
+         "type": "string"
+       },
+       "SceneTransportPrecision": {
+         "enum": [
+           "single",
+           "double"
+         ],
+         "type": "string"
+       },
++      "ScratchSceneDocumentResource": {
++        "properties": {
++          "objects": {
++            "items": {
++              "$ref": "#/components/schemas/SceneObjectResource"
++            },
++            "type": "array"
++          },
++          "revision": {
++            "format": "int64",
++            "minimum": 0,
++            "type": [
++              "integer",
++              "null"
++            ]
++          },
++          "scene": {
++            "oneOf": [
++              {
++                "type": "null"
++              },
++              {
++                "$ref": "#/components/schemas/SceneMetadataResource"
++              }
++            ]
++          },
++          "schema_version": {
++            "type": "string"
++          },
++          "version": {
++            "type": [
++              "string",
++              "null"
++            ]
++          }
++        },
++        "required": [
++          "schema_version",
++          "objects"
++        ],
++        "type": "object"
++      },
++      "ScratchSessionRevisionsResource": {
++        "properties": {
++          "scene_revision": {
++            "format": "int64",
++            "minimum": 0,
++            "type": "integer"
++          },
++          "state_version": {
++            "format": "int64",
++            "minimum": 0,
++            "type": "integer"
++          }
++        },
++        "required": [
++          "state_version",
++          "scene_revision"
++        ],
++        "type": "object"
++      },
++      "ScratchSessionStatusResource": {
++        "properties": {
++          "effective_execution": {
++            "$ref": "#/components/schemas/SessionExecutionResource"
++          },
++          "fallback": {
++            "type": [
++              "string",
++              "null"
++            ]
++          },
++          "requested_execution": {
++            "$ref": "#/components/schemas/SessionExecutionResource"
++          }
++        },
++        "required": [
++          "requested_execution",
++          "effective_execution"
++        ],
++        "type": "object"
++      },
+       "ScriptSourceResponse": {
+         "properties": {
+           "bytes": {
+             "minimum": 0,
+             "type": "integer"
+           },
+           "script_path": {
+             "type": "string"
+           },
+           "source": {
+@@ -23466,20 +23613,39 @@
+         "type": "string"
+       },
+       "SessionConnectivity": {
+         "enum": [
+           "connected",
+           "degraded",
+           "disconnected"
+         ],
+         "type": "string"
+       },
++      "SessionExecutionResource": {
++        "properties": {
++          "backend": {
++            "type": "string"
++          },
++          "device": {
++            "type": "string"
++          },
++          "precision": {
++            "type": "string"
++          }
++        },
++        "required": [
++          "backend",
++          "device",
++          "precision"
++        ],
++        "type": "object"
++      },
+       "SessionExportRequest": {
+         "properties": {
+           "compression": {
+             "oneOf": [
+               {
+                 "type": "null"
+               },
+               {
+                 "$ref": "#/components/schemas/CompressionProfile",
+                 "description": "Compression: \"speed\", \"balanced\", \"smallest\"."
+@@ -30754,26 +30920,46 @@
+           "200": {
+             "description": "Available sessions"
+           }
+         },
+         "tags": [
+           "sessions"
+         ]
+       },
+       "post": {
+         "operationId": "sessions_post_sessions",
++        "requestBody": {
++          "content": {
++            "application/json": {
++              "schema": {
++                "$ref": "#/components/schemas/CreateSessionRequest"
++              }
++            }
++          },
++          "required": true
++        },
+         "responses": {
+-          "200": {
+-            "description": "Current session returned"
++          "201": {
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/CreateSessionResponse"
++                }
++              }
++            },
++            "description": "Scratch session created"
+           },
+           "400": {
+-            "description": "The local runtime only exposes the current session"
++            "description": "Invalid scratch session request"
++          },
++          "409": {
++            "description": "An active local session already exists"
+           }
+         },
+         "tags": [
+           "sessions"
+         ]
+       }
+     },
+     "/v2/sessions/current": {
+       "get": {
+         "operationId": "sessions_get_sessions_current",
+@@ -44923,22 +45109,22 @@
+     {
+       "description": "Session checkpoints, exports, imports, assets, and recovery",
+       "name": "persistence"
+     },
+     {
+       "description": "Runtime diagnostics, GPU telemetry, and engine logs",
+       "name": "diagnostics"
+     }
+   ],
+   "x-fullmag-build-identity": {
+-    "built_at_utc": "2026-08-20T23:03:53Z",
+-    "git_commit": "f79c65d43ef2ac550f89932b47940489f719acb0",
++    "built_at_utc": "2026-08-23T12:20:07Z",
++    "git_commit": "1e7805a0855256f9e08180733bf0be9047a20fae",
+     "source_snapshot_sha256": "unknown",
+     "worktree_state": "dirty"
+   },
+   "x-fullmag-study-primitive-stage-kinds": [
+     "relax",
+     "run",
+     "eigenmodes",
+     "frequency_response",
+     "hysteresis",
+     "change_device",
+diff --git a/crates/fullmag-api/src/openapi_v2.rs b/crates/fullmag-api/src/openapi_v2.rs
+index 4ef8fcba3..ab3b7ec32 100644
+--- a/crates/fullmag-api/src/openapi_v2.rs
++++ b/crates/fullmag-api/src/openapi_v2.rs
+@@ -4,20 +4,21 @@ use serde_json::{json, Value};
+ use utoipa::OpenApi;
+ 
+ #[derive(OpenApi)]
+ #[openapi(
+     paths(
+         crate::router_v2::handlers::platform::realtime::get_asyncapi_document,
+         crate::router_v2::handlers::platform::realtime::get_asyncapi_docs,
+         crate::router_v2::handlers::platform::realtime::get_communication_policy,
+         crate::router_v2::handlers::platform::realtime::patch_communication_policy,
+         crate::router_v2::handlers::platform::realtime::ws_current_live,
++        crate::router_v2::handlers::sessions::create,
+         crate::router_v2::handlers::sessions::status::get_status,
+         crate::router_v2::handlers::data::domain::get_domain_meta,
+         crate::router_v2::handlers::data::domain::get_fdm_multilayer_layout,
+         crate::router_v2::handlers::data::domain::get_fdm_multilayer_layer_active_mask,
+         crate::router_v2::handlers::data::domain::get_fdm_multilayer_layer_region_membership,
+         crate::router_v2::handlers::data::domain::get_fdm_multilayer_layer_region_memberships,
+         crate::router_v2::handlers::data::domain::get_domain_topology,
+         crate::router_v2::handlers::data::domain::get_domain_slice_mesh_overlay,
+         crate::router_v2::handlers::data::material_fields::get_material_field_data_catalog,
+         crate::router_v2::handlers::data::material_fields::get_material_field_data,
+@@ -269,20 +270,26 @@ use utoipa::OpenApi;
+         crate::router_v2::handlers::persistence::session::restore_checkpoint,
+         crate::router_v2::handlers::persistence::session::export_field_state,
+         crate::router_v2::handlers::persistence::session::inspect_field_state,
+         crate::router_v2::handlers::persistence::session::import_field_state,
+         crate::router_v2::handlers::persistence::session::list_recovery,
+         crate::router_v2::handlers::persistence::session::clear_recovery,
+         crate::router_v2::handlers::platform::system::get_capabilities,
+         crate::router_v2::handlers::platform::system::get_health,
+     ),
+     components(schemas(
++        crate::schemas::sessions::CreateSessionRequest,
++        crate::schemas::sessions::CreateSessionResponse,
++        crate::schemas::sessions::ScratchSceneDocumentResource,
++        crate::schemas::sessions::ScratchSessionRevisionsResource,
++        crate::schemas::sessions::ScratchSessionStatusResource,
++        crate::schemas::sessions::SessionExecutionResource,
+         crate::schemas::status::LiveStatus,
+         crate::schemas::status::SessionSummary,
+         crate::schemas::status::RunSummary,
+         crate::schemas::status::SolverSummary,
+         crate::schemas::status::SessionLifecycleSummary,
+         crate::schemas::status::SessionResourceLifecycle,
+         crate::schemas::status::SessionConnectivity,
+         crate::schemas::status::SessionCommandability,
+         crate::schemas::status::DisplaySelection,
+         crate::schemas::status::DomainSummary,
+@@ -847,23 +854,39 @@ fn add_session_collection_paths(doc: &mut Value) {
+         "/v2/sessions".to_string(),
+         json!({
+             "get": {
+                 "tags": ["sessions"],
+                 "operationId": "sessions_list_sessions",
+                 "responses": {"200": {"description": "Available sessions"}}
+             },
+             "post": {
+                 "tags": ["sessions"],
+                 "operationId": "sessions_create_session",
++                "requestBody": {
++                    "required": true,
++                    "content": {
++                        "application/json": {
++                            "schema": {"$ref": "#/components/schemas/CreateSessionRequest"}
++                        }
++                    }
++                },
+                 "responses": {
+-                    "200": {"description": "Current session returned"},
+-                    "400": {"description": "The local runtime only exposes the current session"}
++                    "201": {
++                        "description": "Scratch session created",
++                        "content": {
++                            "application/json": {
++                                "schema": {"$ref": "#/components/schemas/CreateSessionResponse"}
++                            }
++                        }
++                    },
++                    "400": {"description": "Invalid scratch session request"},
++                    "409": {"description": "An active local session already exists"}
+                 }
+             }
+         }),
+     );
+     paths.insert(
+         "/v2/sessions/current".to_string(),
+         json!({
+             "get": {
+                 "tags": ["sessions"],
+                 "operationId": "sessions_get_current_session",
+diff --git a/crates/fullmag-api/src/router_v2/tests.rs b/crates/fullmag-api/src/router_v2/tests.rs
+index 59b9ba029..780ee14f1 100644
+--- a/crates/fullmag-api/src/router_v2/tests.rs
++++ b/crates/fullmag-api/src/router_v2/tests.rs
+@@ -39215,20 +39215,47 @@ fn openapi_v2_exposes_professional_session_tree() {
+             "data",
+             "visualization",
+             "workspace",
+             "analysis",
+             "persistence",
+             "diagnostics",
+         ]
+     );
+ }
+ 
++#[test]
++fn openapi_session_creation_declares_typed_request_and_outcomes() {
++    let openapi = crate::openapi_v2::openapi_json();
++    let post = &openapi["paths"]["/v2/sessions"]["post"];
++
++    assert_eq!(
++        post["requestBody"]["content"]["application/json"]["schema"]["$ref"],
++        "#/components/schemas/CreateSessionRequest"
++    );
++    assert_eq!(
++        post["responses"]["201"]["content"]["application/json"]["schema"]["$ref"],
++        "#/components/schemas/CreateSessionResponse"
++    );
++    assert!(post["responses"].get("400").is_some());
++    assert!(post["responses"].get("409").is_some());
++
++    let schemas = &openapi["components"]["schemas"];
++    for schema in [
++        "CreateSessionRequest",
++        "CreateSessionResponse",
++        "ScratchSessionStatusResource",
++        "SessionExecutionResource",
++    ] {
++        assert!(schemas.get(schema).is_some(), "OpenAPI missing {schema}");
++    }
++}
++
+ #[test]
+ fn openapi_v2_has_no_public_v1_paths() {
+     let value = crate::openapi_v2::openapi_json();
+     let paths = value
+         .get("paths")
+         .and_then(|p| p.as_object())
+         .expect("OpenAPI v2 paths must be an object");
+ 
+     let public_v1_paths = paths
+         .keys()

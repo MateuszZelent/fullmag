@@ -1,6 +1,7 @@
 import {
   MODEL_COUPLINGS_PATH,
   MODEL_REGIONS_PATH,
+  MODEL_READINESS_PATH,
   MODEL_SCENE_PATH,
 } from "../api/apiPaths";
 import type { RegionListResource } from "../api/apiTypes";
@@ -44,6 +45,7 @@ function couplingDisabledReason(context: CommandContext): string | null {
 function invalidateAuthoringModel(context: CommandContext): void {
   const revision = `${Date.now()}`;
   context.resources?.invalidate(MODEL_SCENE_PATH, revision);
+  context.resources?.invalidate(MODEL_READINESS_PATH, revision);
   context.resources?.invalidate(MODEL_REGIONS_PATH, revision);
   context.resources?.invalidate(MODEL_COUPLINGS_PATH, revision);
 }

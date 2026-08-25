@@ -40,7 +40,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             "/v2/platform/docs/asyncapi",
             get(handlers::platform::get_asyncapi_docs),
         )
-        .route("/v2/sessions", get(list_sessions).post(create_session))
+        .route(
+            "/v2/sessions",
+            get(list_sessions).post(handlers::sessions::create),
+        )
         .route(
             "/v2/sessions/current",
             get(get_current_session).patch(patch_current_session),
@@ -63,6 +66,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::model::get_authoring_scene)
                 .put(handlers::model::replace_authoring_scene)
                 .patch(handlers::model::patch_authoring_scene),
+        )
+        .route(
+            "/v2/sessions/current/model/readiness",
+            get(handlers::model::get_model_readiness),
         )
         .route(
             "/v2/sessions/current/model/physics-graph",
@@ -434,6 +441,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/sessions/current/simulation/commands/:command_id",
             get(handlers::simulation::get_command_detail),
+        )
+        .route(
+            "/v2/sessions/current/simulation/commands/:command_id/failure",
+            post(handlers::simulation::report_command_failure),
         )
         .route(
             "/v2/sessions/current/diagnostics/solver-profile",
@@ -993,30 +1004,24 @@ async fn get_openapi_json() -> Json<Value> {
     Json(crate::openapi_v2::openapi_json())
 }
 
-async fn list_sessions(State(state): State<Arc<AppState>>) -> Json<Value> {
+async fn list_sessions(
+    State(state): State<Arc<AppState>>,
+) -> Json<crate::schemas::sessions::SessionListResource> {
     let guard = state.current_live_state.read().await;
     let sessions = guard
         .as_ref()
         .map(|snapshot| {
-            vec![json!({
-                "session_id": snapshot.session.session_id,
-                "name": snapshot.session.problem_name,
-                "status": snapshot.session.status,
-                "current": true,
-            })]
+            vec![crate::schemas::sessions::SessionSummaryResource {
+                session_id: snapshot.session.session_id.clone(),
+                name: snapshot.session.problem_name.clone(),
+                status: snapshot.session.status.clone(),
+                current: true,
+            }]
         })
         .unwrap_or_default();
-    Json(json!({
-        "schema_version": "2.0.0",
-        "sessions": sessions,
-    }))
-}
-
-async fn create_session() -> Result<Json<Value>, ApiError> {
-    Err(ApiError {
-        status: StatusCode::BAD_REQUEST,
-        message: "the local runtime currently exposes only /v2/sessions/current".to_string(),
-        diagnostics: Vec::new(),
+    Json(crate::schemas::sessions::SessionListResource {
+        schema_version: "2.0.0".to_string(),
+        sessions,
     })
 }
 
@@ -1038,6 +1043,7 @@ async fn get_current_session(State(state): State<Arc<AppState>>) -> Result<Json<
 async fn patch_current_session() -> Result<Json<Value>, ApiError> {
     Err(ApiError {
         status: StatusCode::BAD_REQUEST,
+        code: None,
         message: "session metadata mutation is not yet supported by the local runtime".to_string(),
         diagnostics: Vec::new(),
     })

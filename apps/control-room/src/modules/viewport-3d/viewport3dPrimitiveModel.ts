@@ -33,7 +33,9 @@ export interface Viewport3DPrimitiveObject {
   magnetizationTexturePreview: Viewport3DMagnetizationTexturePreview | null;
   meshState: Viewport3DPrimitiveMeshState;
   objectId: string;
+  role?: string | null;
   sceneRevision: number;
+  translation?: [number, number, number];
 }
 
 export interface Viewport3DBoxCylinderDifferencePreview {
@@ -59,6 +61,7 @@ export interface Viewport3DMagnetizationTexturePreview {
 }
 
 export interface Viewport3DPrimitiveRenderModel {
+  draftOverlay?: Viewport3DPrimitiveObject | null;
   objects: Viewport3DPrimitiveObject[];
   sceneRevision: number | null;
 }
@@ -494,7 +497,9 @@ export function buildViewport3DPrimitiveRenderModel(
         ),
         meshState: state,
         objectId,
+        role: objectRole,
         sceneRevision,
+        translation: asVec3(transform?.translation) ?? [0, 0, 0],
       },
     ];
   });
@@ -508,12 +513,13 @@ export function buildViewport3DPrimitiveRenderModel(
 export function buildViewport3DPrimitiveFrameKey(
   primitiveModel: Viewport3DPrimitiveRenderModel | null | undefined,
 ): string {
-  if (!primitiveModel?.objects.length) {
+  if (!primitiveModel?.objects.length && !primitiveModel?.draftOverlay) {
     return `${primitiveModel?.sceneRevision ?? "none"}:empty`;
   }
   return [
     primitiveModel.sceneRevision ?? "none",
     ...primitiveModel.objects.map((object) => object.geometryKey),
+    primitiveModel.draftOverlay?.geometryKey ?? "no-draft",
   ].join("|");
 }
 

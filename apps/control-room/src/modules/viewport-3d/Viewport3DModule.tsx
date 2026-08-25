@@ -109,6 +109,10 @@ import {
   VIEWPORT_3D_ORBIT_DEBUG_LIMITS,
 } from "./layers/CameraControls";
 import { Viewport3DScene } from "./layers/Viewport3DScene";
+import {
+  useViewport3DObjectMoveInteraction,
+  Viewport3DMoveConflictPanel,
+} from "./Viewport3DObjectMoveInteraction";
 import type { Viewport3DAirboxFrameState } from "./layers/Viewport3DScene";
 import { recordViewport3DCameraTrajectorySample } from "./layers/viewport3DCameraTrajectoryProbe";
 import { resolveViewport3DTargetSurfaceLayerInput } from "./layers/viewport3DLayerPassInputs";
@@ -1214,7 +1218,10 @@ interface Viewport3DFrameProps
   extends Omit<
     Viewport3DSceneProps,
     | "colors"
+    | "moveDraftResetRevision"
+    | "moveToolObjectId"
     | "onOrbitDebugAnglesChange"
+    | "onMoveCommit"
     | "onVisualizationFrameCommitted"
     | "orbitDebugAngles"
     | "orbitDebugCommitRevision"
@@ -1253,6 +1260,9 @@ interface Viewport3DFrameProps
   scalarColorPalette: string;
   sessionIdentity: SessionResourceIdentity | null;
   selectedLabel: string;
+  sceneRefetch: () => void;
+  sceneRevision: number | null;
+  sceneStatus: string;
   slotId: ModuleProps["slotId"];
   status: string;
   topologyRevision: number | string | null;
@@ -1748,6 +1758,9 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   quantityId,
   sessionIdentity,
   selectedLabel,
+  sceneRefetch,
+  sceneRevision,
+  sceneStatus,
   slotId,
   status,
   visualizationEffectiveRenderMode,
@@ -1787,6 +1800,22 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     useState<string | null>(null);
   const [inspectHover, setInspectHover] =
     useState<Viewport3DInspectHover | null>(null);
+  const moveTargetEligible = Boolean(
+    sceneProps.selectedObjectId &&
+      sceneProps.primitiveModel?.objects.some(
+        (object) =>
+          object.objectId === sceneProps.selectedObjectId &&
+          object.role === "magnet",
+      ),
+  );
+  const moveInteraction = useViewport3DObjectMoveInteraction({
+    moveTargetEligible,
+    sceneRefetch,
+    sceneRevision,
+    sceneStatus,
+    selectedObjectId: sceneProps.selectedObjectId,
+    sessionId: sessionIdentity?.sessionId ?? null,
+  });
   const lastRenderedMeshRevision = useRef<number | string | null>(null);
   const sendVisualizationAck = useVisualizationClientAckSender({ api: kernel.api });
   const visualizationAckRevisionRef = useRef<{
@@ -2547,6 +2576,9 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             }
             onInspectClear={clearInspectHover}
             onInspectSample={updateInspectHover}
+            onMoveCommit={moveInteraction.commitMove}
+            moveToolObjectId={moveInteraction.moveToolObjectId}
+            moveDraftResetRevision={moveInteraction.moveDraftResetRevision}
             onVisualizationFrameCommitted={onVisualizationFrameCommitted}
             visualProfileId={visualProfile.id}
           />
@@ -2575,6 +2607,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           provenance={visibleInspectProvenance}
         />
       ) : null}
+      <Viewport3DMoveConflictPanel interaction={moveInteraction} />
       <Viewport3DFdmSelectionAnnouncement
         announcement={fdmSelectionAnnouncement}
       />

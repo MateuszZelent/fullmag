@@ -4,6 +4,7 @@ import {
   useMeshBuildCurrent,
   useMeshBuildLatestSuccessful,
   useMeshUniverseReportResource,
+  useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { shouldLoadRuntimeMeshBuild } from "@/kernel/resources/studyRuntimeResources";
 
@@ -20,20 +21,28 @@ export function AirboxMeshBuildPanel({ selection }: InspectorPanelProps) {
   const report = useMeshUniverseReportResource({ enabled: buildEnabled });
   const current = useMeshBuildCurrent({ enabled: buildEnabled });
   const latest = useMeshBuildLatestSuccessful({ enabled: buildEnabled });
+  const scene = useSceneResource({ enabled: buildEnabled });
   const lifecycle = buildAirboxMeshBuildModel({
     current: current.data ?? null,
+    currentSceneRevision:
+      scene.data?.scene_revision ?? scene.data?.revision ?? null,
     latest: latest.data ?? null,
     report: report.data ?? null,
   });
 
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
-      <InspectorGroup title="Airbox Mesh Build" badge={lifecycle.status}>
+      <InspectorGroup
+        title="Airbox Mesh Build"
+        badge={lifecycle.freshness === "stale" ? "stale" : lifecycle.status}
+      >
         <FieldRow label="Lifecycle" value={lifecycle.status} />
         <FieldRow label="Reason" value={lifecycle.reason} />
         <FieldRow label="Build mode" value={lifecycle.buildMode ?? "not published"} />
         <FieldRow label="Current build revision" value={String(current.data?.revision ?? "unknown")} />
+        <FieldRow label="Current scene revision" value={String(lifecycle.sceneRevision ?? "unknown")} />
         <FieldRow label="Source scene revision" value={String(lifecycle.sourceSceneRevision ?? "unknown")} />
+        <FieldRow label="Mesh freshness" value={lifecycle.freshness} />
         <FieldRow label="Latest successful revision" value={String(lifecycle.latestSuccess.revision ?? "unknown")} />
         <FieldRow label="Universe report revision" value={String(report.data?.revision ?? "unknown")} />
         <FieldRow

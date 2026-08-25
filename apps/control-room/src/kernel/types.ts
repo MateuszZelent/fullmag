@@ -14,6 +14,7 @@ import type { RealtimeConnectionController } from "./realtime/RealtimeConnection
 import type { ResourceInvalidationController } from "./resources/ResourceInvalidationController";
 import type { SelectionController } from "./selection/SelectionController";
 import type { DiagnosticRecorderController } from "./performance/diagnostic-recorder/DiagnosticRecorderController";
+import type { ObjectMoveToolController } from "./authoring/ObjectMoveToolController";
 import type { AnalysisFieldOverlayController } from "./visualization/AnalysisFieldOverlayController";
 import type { ChartViewportHandoffController } from "./visualization/ChartViewportHandoffController";
 import type { CameraRegistryController } from "./visualization/CameraRegistryController";
@@ -70,6 +71,7 @@ export interface KernelApi {
   readonly diagnostics: RequestDiagnosticsController;
   readonly diagnosticRecorder: DiagnosticRecorderController;
   readonly modules: ModuleRegistry;
+  readonly objectMoveTool: ObjectMoveToolController;
   readonly realtime: RealtimeInvalidationBridge;
   readonly realtimeConnection: RealtimeConnectionController;
   readonly resources: ResourceInvalidationController;

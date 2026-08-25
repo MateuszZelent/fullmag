@@ -40,6 +40,24 @@ impl Display for SceneDocumentValidationError {
 impl std::error::Error for SceneDocumentValidationError {}
 
 pub fn validate_scene_document(scene: &SceneDocument) -> Result<(), SceneDocumentValidationError> {
+    validate_scene_document_with_mode(scene, true)
+}
+
+/// Validates the structural authoring contract without requiring solve assets.
+///
+/// A scratch scene is allowed to persist a geometry draft before the user has
+/// created and assigned its material and initial magnetization. The strict
+/// validator above remains the execution/export gate for a complete model.
+pub fn validate_scene_document_for_authoring(
+    scene: &SceneDocument,
+) -> Result<(), SceneDocumentValidationError> {
+    validate_scene_document_with_mode(scene, false)
+}
+
+fn validate_scene_document_with_mode(
+    scene: &SceneDocument,
+    require_solve_refs: bool,
+) -> Result<(), SceneDocumentValidationError> {
     if scene.version != "scene.v1" && scene.version != "scene.v2" {
         return Err(SceneDocumentValidationError::new(format!(
             "unsupported SceneDocument version '{}'",
@@ -143,6 +161,9 @@ pub fn validate_scene_document(scene: &SceneDocument) -> Result<(), SceneDocumen
             )?;
         }
         if object.role != "magnet" {
+            continue;
+        }
+        if !require_solve_refs {
             continue;
         }
         if !material_ids.contains(&object.material_ref) {
@@ -3104,6 +3125,28 @@ mod tests {
     fn generic_swept_prism_allows_reject_transition_policy() {
         validate_requested_layered_mesh("mesh", &valid_generic_swept_prism(), true)
             .expect("generic swept prism must preserve transition='reject'");
+    }
+
+    #[test]
+    fn authoring_validation_accepts_geometry_before_material_and_texture() {
+        let scene: SceneDocument = serde_json::from_value(serde_json::json!({
+            "version": "scene.v2",
+            "objects": [{
+                "id": "magnet-x",
+                "name": "Magnet X",
+                "geometry": {
+                    "geometry_kind": "Box",
+                    "geometry_params": {"size": [1.0e-7, 1.0e-7, 1.0e-8]}
+                },
+                "material_ref": ""
+            }]
+        }))
+        .expect("geometry-only authoring scene should deserialize");
+
+        validate_scene_document_for_authoring(&scene)
+            .expect("geometry may be authored before material and texture assignment");
+        validate_scene_document(&scene)
+            .expect_err("execution validation must still require material and texture");
     }
 
     #[test]

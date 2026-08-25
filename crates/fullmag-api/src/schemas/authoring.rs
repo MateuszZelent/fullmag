@@ -967,6 +967,7 @@ pub struct MaterialReferenceResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct MaterialResource {
+    pub scene_revision: u64,
     pub region_coefficients_revision: Option<u64>,
     pub id: String,
     pub name: String,
@@ -1018,6 +1019,7 @@ pub struct MaterialPatchRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ObjectInteractionResource {
+    pub scene_revision: u64,
     pub object_id: String,
     pub interaction_kind: String,
     pub present: bool,
@@ -1028,6 +1030,8 @@ pub struct ObjectInteractionResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ObjectInteractionPatchRequest {
+    #[serde(default)]
+    pub base_revision: Option<u64>,
     pub present: Option<bool>,
     pub enabled: Option<bool>,
     #[schema(value_type = Object)]
@@ -1464,8 +1468,22 @@ pub enum AuthoringTransactionRequest {
         scene: Value,
     },
     MergePatch {
+        #[serde(default)]
+        base_revision: Option<u64>,
         #[schema(value_type = Object)]
         merge_patch: Value,
+    },
+    PatchMagnetization {
+        #[serde(default)]
+        base_revision: Option<u64>,
+        object_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        region_id: Option<String>,
+        #[schema(value_type = Object, nullable)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        asset: Option<Value>,
+        #[serde(default, deserialize_with = "deserialize_nullable_string_patch_field")]
+        magnetization_ref: Option<NullableStringPatchValue>,
     },
     PatchObjectGeometry {
         object_id: String,

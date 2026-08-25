@@ -649,13 +649,23 @@ describe("buildModelTree", () => {
       "session.root",
       "definitions.root",
       "model.planar.monitors",
-      "universe.root",
       "objects.root",
     ]) {
       expect(nodes.find((node) => node.kind === kind), kind).toMatchObject({
         selectable: false,
       });
     }
+  });
+
+  it("keeps the Universe root selectable for domain authoring", () => {
+    const nodes = flattenExplorerNodes(buildModelTree({
+      domainDiscretization: "fem",
+      objects: [{ id: "film", label: "Film" }],
+    }));
+
+    expect(nodes.find((node) => node.kind === "universe.root")).toMatchObject({
+      selectable: true,
+    });
   });
 
   it("marks Boundary Faces ready when the shared mesh is realized", () => {

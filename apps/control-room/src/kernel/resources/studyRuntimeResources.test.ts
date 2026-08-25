@@ -30,6 +30,7 @@ import {
   MESHING_PERIODIC_PAIRS_PATH,
   MESHING_SUMMARY_PATH,
   MODEL_SCENE_PATH,
+  MODEL_READINESS_PATH,
   PERSISTENCE_CHECKPOINTS_PATH,
   SIMULATION_RUN_CURRENT_PATH,
   SIMULATION_RUN_PATH,
@@ -42,6 +43,7 @@ import { activeLaneCapabilityFixture } from "./activeLaneCapabilityFixture.testS
 
 import {
   STUDY_RUNTIME_CONTROL_RESOURCE_KEYS,
+  readyCommandResourceData,
   frequencyDomainManifestRevision,
   frequencyDomainSweepProgressRevision,
   frequencyDomainTextArtifactRevision,
@@ -202,9 +204,16 @@ function statusWith({
   LiveStatusResource,
   "capabilities" | "domain" | "resources" | "run" | "session"
 > {
+  const activeLane = activeLaneCapabilityFixture();
+  activeLane.authored = { ...activeLane.authored, discretization };
+  activeLane.requested = { ...activeLane.requested, discretization };
+  activeLane.resolved = {
+    ...(activeLane.resolved ?? activeLane.requested),
+    discretization,
+  };
   return {
     capabilities: {
-      active_lane: activeLaneCapabilityFixture(),
+      active_lane: activeLane,
       algorithms_available: [],
       binary_fields: true,
       cell_fields: true,
@@ -236,6 +245,38 @@ function statusWith({
 }
 
 describe("study runtime command resource bundles", () => {
+  it("loads model readiness into both production command resource bundles", () => {
+    const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
+    const fullBundle = source.slice(
+      source.indexOf("export function useStudyRuntimeCommandResourceData"),
+      source.indexOf("export function useRuntimeCommandControlResourceData"),
+    );
+    const controlBundle = source.slice(
+      source.indexOf("export function useRuntimeCommandControlResourceData"),
+      source.indexOf("export function useObjectMetricsResource"),
+    );
+
+    expect(fullBundle).toContain("useModelReadinessResource");
+    expect(fullBundle).toContain("buildRuntimeCommandControlResourceData");
+    expect(controlBundle).toContain("useModelReadinessResource");
+    expect(controlBundle).toContain("buildRuntimeCommandControlResourceData");
+    expect(STUDY_RUNTIME_CONTROL_RESOURCE_KEYS).toContain(MODEL_READINESS_PATH);
+  });
+
+  it("withholds a retained readiness snapshot while its production resource is stale", () => {
+    const retained = {
+      blockers: [],
+      checks: [],
+      ready_to_export: true,
+      ready_to_run: true,
+      scene_revision: 3,
+    };
+
+    expect(readyCommandResourceData(retained, "ready")).toBe(retained);
+    expect(readyCommandResourceData(retained, "stale")).toBeNull();
+    expect(readyCommandResourceData(retained, "loading")).toBeNull();
+    expect(readyCommandResourceData(retained, "error")).toBeNull();
+  });
   it("measures the sampled solver trace at load and commit without polling", () => {
     const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
     const profileHook = source.slice(
@@ -1157,6 +1198,46 @@ describe("study runtime command resource bundles", () => {
         }),
       ),
     ).toBe(true);
+  });
+
+  it("uses the active FEM lane when the legacy domain field still says FDM", () => {
+    const status = statusWith({ resources: { mesh_revision: 5 } });
+    status.domain.discretization = "fdm";
+    status.capabilities.active_lane = {
+      ...status.capabilities.active_lane,
+      authored: { ...status.capabilities.active_lane.authored, discretization: "fem" },
+      requested: { ...status.capabilities.active_lane.requested, discretization: "fem" },
+      resolved: {
+        ...(status.capabilities.active_lane.resolved ??
+          status.capabilities.active_lane.requested),
+        discretization: "fem",
+      },
+    };
+
+    expect(shouldLoadRuntimeMeshManifest(true, status)).toBe(true);
+  });
+
+  it("fails closed for an unresolved active lane instead of using requested FEM", () => {
+    const status = statusWith({ resources: { mesh_revision: 5 } });
+    status.domain.discretization = "fdm";
+    status.capabilities.active_lane = {
+      ...status.capabilities.active_lane,
+      requested: { ...status.capabilities.active_lane.requested, discretization: "fem" },
+      resolved: null,
+    };
+
+    expect(shouldLoadRuntimeMeshManifest(true, status)).toBe(false);
+  });
+
+  it("fails closed when the active lane field is present but null", () => {
+    const status = statusWith({ resources: { mesh_revision: 5 } });
+    status.domain.discretization = "fdm";
+    status.capabilities = {
+      ...status.capabilities,
+      active_lane: null,
+    } as unknown as typeof status.capabilities;
+
+    expect(shouldLoadRuntimeMeshManifest(true, status)).toBe(false);
   });
 
   it("loads current run and scalar resources only after status points at data", () => {

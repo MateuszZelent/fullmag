@@ -765,6 +765,7 @@ interface OrbitCameraControlsProps {
   onCameraInteractionStart?: (epoch?: number) => void;
   onOrbitDebugAnglesChange?: (angles: Viewport3DOrbitDebugAngles) => void;
   tracker: Viewport3DResourceTracker;
+  interactionBlocked?: boolean;
 }
 
 
@@ -1249,6 +1250,7 @@ export function OrbitCameraControls(props: OrbitCameraControlsProps) {
     <DreiOrbitControls
       ref={controlsRef}
       makeDefault
+      enabled={!props.interactionBlocked}
       domElement={domElement}
       dampingFactor={options.dampingFactor}
       enableDamping={options.enableDamping}

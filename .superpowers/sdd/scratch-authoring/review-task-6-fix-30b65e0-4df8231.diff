@@ -1,0 +1,2092 @@
+# Review package: 30b65e027..4df823171
+
+## Commits
+4df823171 fix(viewport): complete move interaction lifecycle
+
+## Files changed
+ apps/control-room/src/kernel/KernelProvider.tsx    |   4 +
+ .../kernel/authoring/ObjectMoveToolController.ts   |  50 +++++++
+ .../authoring/objectMoveConflictWorkflow.test.tsx  | 161 +++++++++++++++++++++
+ .../kernel/authoring/objectMoveConflictWorkflow.ts |  47 ++++++
+ .../src/kernel/commands/commandContext.ts          |   1 +
+ .../src/kernel/commands/commandTypes.ts            |   2 +
+ .../src/kernel/layout/SlotHost.test.tsx            |   2 +
+ .../src/kernel/layout/ViewportTabHost.test.tsx     |   2 +
+ .../src/kernel/layout/WorkspaceDockLayout.test.tsx |   2 +
+ apps/control-room/src/kernel/types.ts              |   2 +
+ .../visualization/useVisualizationDebug.test.tsx   |   2 +
+ .../src/modules/explorer/explorerSelection.test.ts |   2 +
+ .../src/modules/ribbon/RibbonModule.tsx            |  19 ++-
+ .../src/modules/ribbon/ribbonCommands.ts           |  53 +++++--
+ .../src/modules/ribbon/ribbonStructure.test.ts     |  77 ++++++++++
+ .../modules/viewport-3d/MoveObjectGizmo.test.tsx   | 130 ++++++++++++++++-
+ .../src/modules/viewport-3d/MoveObjectGizmo.tsx    | 155 +++++++++++++++-----
+ .../src/modules/viewport-3d/Viewport3DModule.tsx   |  48 +++---
+ .../modules/viewport-3d/layers/Viewport3DScene.tsx |  36 +++--
+ .../viewport-3d/viewport3dPrimitiveModel.test.ts   |   2 +-
+ 20 files changed, 707 insertions(+), 90 deletions(-)
+
+## Diff
+diff --git a/apps/control-room/src/kernel/KernelProvider.tsx b/apps/control-room/src/kernel/KernelProvider.tsx
+index 9f7ec2c8f..1e51bac21 100644
+--- a/apps/control-room/src/kernel/KernelProvider.tsx
++++ b/apps/control-room/src/kernel/KernelProvider.tsx
+@@ -72,20 +72,21 @@ import { CameraRegistryController } from "./visualization/CameraRegistryControll
+ import { AnalysisFieldOverlayController } from "./visualization/AnalysisFieldOverlayController";
+ import { ANALYSIS_FIELD_OVERLAY_COMMANDS } from "./visualization/analysisFieldOverlayCommandContributions";
+ import {
+   ObjectVisualizationController,
+   type VisualizationTargetPatch,
+   type VisualizationTargetRef,
+ } from "./visualization/ObjectVisualizationController";
+ import { VisualizationDebugController } from "./visualization/VisualizationDebugController";
+ import { VisualizationRegistrySyncController } from "./visualization/VisualizationRegistrySyncController";
+ import { VISUALIZATION_TARGET_COMMANDS } from "./visualization/visualizationCommandContributions";
++import { ObjectMoveToolController } from "./authoring/ObjectMoveToolController";
+ import { resolveControlRoomModules } from "@/modules";
+ 
+ installPerformanceMeasureGuard();
+ 
+ interface KernelProviderProps {
+   children: ReactNode;
+ }
+ 
+ function createKernel(): KernelApi {
+   const bus = new EventBus<KernelEventMap>();
+@@ -112,24 +113,26 @@ function createKernel(): KernelApi {
+     diagnostics,
+   });
+   const commands = new CommandRegistry();
+   commands.attach(bus);
+   commands.attachDiagnostics(commandDiagnostics);
+ 
+   const modules = new ModuleRegistry();
+   const resources = new ResourceInvalidationController(bus);
+   const selection = new SelectionController(bus);
+   const layout = new LayoutController(bus);
++  const objectMoveTool = new ObjectMoveToolController();
+   const chartViewportHandoff = new ChartViewportHandoffController();
+   bus.on("session:status-changed", ({ status }) => {
+     if (status !== "connected") {
+       chartViewportHandoff.cancel("Session changed while loading a chart field.");
++      objectMoveTool.clear();
+     }
+   });
+   const cameraRegistry = new CameraRegistryController({
+     api: api.visualization,
+   });
+   const analysisFieldOverlay = new AnalysisFieldOverlayController();
+   const visualization = new ObjectVisualizationController();
+   const visualizationDebug = new VisualizationDebugController();
+   const visualizationSync = new VisualizationRegistrySyncController({
+     api: api.visualization,
+@@ -184,20 +187,21 @@ function createKernel(): KernelApi {
+     analysisFieldOverlay,
+     bus,
+     chartViewportHandoff,
+     cameraRegistry,
+     commandDiagnostics,
+     commands,
+     diagnostics,
+     diagnosticRecorder,
+     layout,
+     modules,
++    objectMoveTool,
+     realtime,
+     realtimeConnection,
+     resources,
+     selection,
+     visualization,
+     visualizationDebug,
+     visualizationSync,
+   };
+ }
+ 
+diff --git a/apps/control-room/src/kernel/authoring/ObjectMoveToolController.ts b/apps/control-room/src/kernel/authoring/ObjectMoveToolController.ts
+new file mode 100644
+index 000000000..75c7f29b1
+--- /dev/null
++++ b/apps/control-room/src/kernel/authoring/ObjectMoveToolController.ts
+@@ -0,0 +1,50 @@
++"use client";
++
++import { useSyncExternalStore } from "react";
++
++export interface ObjectMoveToolState {
++  mode: "move";
++  objectId: string;
++}
++
++type Listener = () => void;
++
++export class ObjectMoveToolController {
++  private state: ObjectMoveToolState | null = null;
++  private readonly listeners = new Set<Listener>();
++
++  getSnapshot(): ObjectMoveToolState | null {
++    return this.state;
++  }
++
++  activate(objectId: string): void {
++    if (this.state?.objectId === objectId) return;
++    this.state = { mode: "move", objectId };
++    this.notify();
++  }
++
++  clear(): void {
++    if (this.state === null) return;
++    this.state = null;
++    this.notify();
++  }
++
++  subscribe(listener: Listener): () => void {
++    this.listeners.add(listener);
++    return () => this.listeners.delete(listener);
++  }
++
++  private notify(): void {
++    for (const listener of this.listeners) listener();
++  }
++}
++
++export function useObjectMoveTool(
++  controller: ObjectMoveToolController,
++): ObjectMoveToolState | null {
++  return useSyncExternalStore(
++    (listener) => controller.subscribe(listener),
++    () => controller.getSnapshot(),
++    () => null,
++  );
++}
+diff --git a/apps/control-room/src/kernel/authoring/objectMoveConflictWorkflow.test.tsx b/apps/control-room/src/kernel/authoring/objectMoveConflictWorkflow.test.tsx
+new file mode 100644
+index 000000000..859aa43d8
+--- /dev/null
++++ b/apps/control-room/src/kernel/authoring/objectMoveConflictWorkflow.test.tsx
+@@ -0,0 +1,161 @@
++import { createElement } from "react";
++import { renderToStaticMarkup } from "react-dom/server";
++import { describe, expect, it, vi } from "vitest";
++
++import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
++import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
++import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
++import { EventBus } from "@/kernel/events/EventBus";
++import type { KernelEventMap } from "@/kernel/events/eventTypes";
++import { KernelContext } from "@/kernel/KernelContext";
++import { LayoutController } from "@/kernel/layout/LayoutController";
++import { SelectionController } from "@/kernel/selection/SelectionController";
++import { RIBBON_COMMANDS } from "@/modules/ribbon/ribbonCommands";
++import {
++  createMoveGestureController,
++  Viewport3DMoveToolLayer,
++} from "@/modules/viewport-3d/MoveObjectGizmo";
++import { buildViewport3DPrimitiveRenderModel } from "@/modules/viewport-3d/viewport3dPrimitiveModel";
++
++import { ObjectMoveToolController } from "./ObjectMoveToolController";
++import {
++  commitObjectMoveWorkflow,
++  rebaseObjectMoveConflict,
++  type ObjectMoveConflict,
++} from "./objectMoveConflictWorkflow";
++
++describe("object move integration", () => {
++  it("runs Ribbon Move, preserves an absolute draft through 409/refetch/rebase, and clears it only after retry ACK", async () => {
++    const bus = new EventBus<KernelEventMap>();
++    const layout = new LayoutController(bus);
++    const selection = new SelectionController(bus);
++    const objectMoveTool = new ObjectMoveToolController();
++    selection.set({
++      kind: "object.root",
++      label: "Magnet",
++      nodeId: "model:object:magnet",
++      objectId: "magnet",
++      ref: {
++        kind: "object.root",
++        nodeId: "model:object:magnet",
++        objectId: "magnet",
++        type: "scene-object",
++        visualizationTargetId: "object:magnet",
++      },
++    }, "test");
++    const sceneAt41 = {
++      objects: [{
++        geometry: { geometry_kind: "Box", geometry_params: { size: [2e-9, 2e-9, 2e-9] } },
++        id: "magnet",
++        name: "Magnet",
++        role: "magnet",
++        transform: { translation: [1e-9, 0, 0] },
++      }],
++      revision: 41,
++    };
++    const commands = new CommandRegistry();
++    for (const command of RIBBON_COMMANDS) commands.register(command);
++    const commandContext = {
++      api: {} as never,
++      layout,
++      objectMoveTool,
++      resourceData: { [MODEL_SCENE_PATH]: sceneAt41 },
++      selection,
++      source: "test" as const,
++    };
++
++    expect(await commands.execute("geometry.move-selected", commandContext)).toEqual({
++      status: "completed",
++    });
++    const primitiveModel = buildViewport3DPrimitiveRenderModel(sceneAt41, null);
++    const mounted = renderToStaticMarkup(
++      createElement(
++        KernelContext.Provider,
++        { value: { objectMoveTool } as never },
++        createElement(Viewport3DMoveToolLayer, {
++          moveDraftResetRevision: 0,
++          moveToolObjectId: objectMoveTool.getSnapshot()?.objectId ?? null,
++          onCommit: vi.fn(),
++          primitiveModel,
++          selectedObjectId: "magnet",
++        }),
++      ),
++    );
++    expect(mounted).toContain("name=\"move-gizmo:magnet\"");
++
++    const commitTransaction = vi
++      .fn()
++      .mockRejectedValueOnce(
++        new ControlRoomApiError("stale", 409, "request-1", "revision_conflict"),
++      )
++      .mockResolvedValueOnce({ scene_revision: 43 });
++    const invalidate = vi.fn();
++    const draftChanges = vi.fn();
++    const gestureActiveChanges = vi.fn();
++    const release = vi.fn();
++    let conflict: ObjectMoveConflict | null = null;
++    let resetRevision = 0;
++    const commit = (objectId: string, translation: [number, number, number], baseRevision: number) =>
++      commitObjectMoveWorkflow({
++        api: { model: { commitTransaction } } as never,
++        baseRevision,
++        objectId,
++        onAcknowledged: () => {
++          draftChanges(null);
++          resetRevision += 1;
++          conflict = null;
++        },
++        onConflict: (next) => { conflict = next; },
++        resources: { invalidate } as never,
++        translation,
++      });
++    const gesture = createMoveGestureController({
++      baseRevision: 41,
++      objectId: "magnet",
++      onCommit: commit,
++      onDraftChange: draftChanges,
++      onGestureActiveChange: gestureActiveChanges,
++      origin: [1e-9, 0, 0],
++    });
++
++    gesture.begin("x", 7, [0, 0, 0], vi.fn(), release);
++    gesture.move(7, [4e-9, 0, 0]);
++    await gesture.end(7);
++
++    expect(commitTransaction).toHaveBeenCalledTimes(1);
++    expect(commitTransaction.mock.calls[0]?.[0]).toMatchObject({
++      base_revision: 41,
++      transform: { translation: [5e-9, 0, 0] },
++    });
++    expect(draftChanges).not.toHaveBeenLastCalledWith(null);
++    expect(conflict).toMatchObject({
++      baseRevision: 41,
++      phase: "conflict",
++      translation: [5e-9, 0, 0],
++    });
++    expect(invalidate).not.toHaveBeenCalled();
++    expect(release).toHaveBeenCalledOnce();
++    expect(gestureActiveChanges.mock.calls).toEqual([[true], [false]]);
++
++    const refetchStates: string[] = [];
++    refetchStates.push("loading");
++    const sceneAt42 = { ...sceneAt41, revision: 42 };
++    refetchStates.push("ready");
++    conflict = rebaseObjectMoveConflict(conflict!, sceneAt42.revision);
++    expect(conflict.translation).toEqual([5e-9, 0, 0]);
++    expect(refetchStates).toEqual(["loading", "ready"]);
++
++    await commit(conflict.objectId, conflict.translation, conflict.baseRevision);
++
++    expect(commitTransaction).toHaveBeenCalledTimes(2);
++    expect(commitTransaction.mock.calls[1]?.[0]).toMatchObject({
++      base_revision: 42,
++      transform: { translation: [5e-9, 0, 0] },
++    });
++    expect(invalidate).toHaveBeenCalledTimes(7);
++    expect(invalidate.mock.calls.every(([, revision]) => revision === 43)).toBe(true);
++    expect(draftChanges).toHaveBeenLastCalledWith(null);
++    expect(resetRevision).toBe(1);
++    expect(conflict).toBeNull();
++  });
++});
+diff --git a/apps/control-room/src/kernel/authoring/objectMoveConflictWorkflow.ts b/apps/control-room/src/kernel/authoring/objectMoveConflictWorkflow.ts
+new file mode 100644
+index 000000000..48db34f43
+--- /dev/null
++++ b/apps/control-room/src/kernel/authoring/objectMoveConflictWorkflow.ts
+@@ -0,0 +1,47 @@
++import type { ControlRoomApi } from "@/kernel/api/ControlRoomApi";
++import type { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
++
++import {
++  commitObjectTranslation,
++  isObjectTranslationRevisionConflict,
++  type ObjectTranslation,
++} from "./objectTranslationMutation";
++
++export interface ObjectMoveConflict {
++  baseRevision: number;
++  objectId: string;
++  phase: "conflict" | "rebased" | "retrying";
++  translation: ObjectTranslation;
++}
++
++export async function commitObjectMoveWorkflow(options: {
++  api: ControlRoomApi;
++  baseRevision: number;
++  objectId: string;
++  onAcknowledged: () => void;
++  onConflict: (conflict: ObjectMoveConflict) => void;
++  resources: ResourceInvalidationController;
++  translation: ObjectTranslation;
++}): Promise<boolean> {
++  try {
++    await commitObjectTranslation(options);
++    options.onAcknowledged();
++    return true;
++  } catch (error) {
++    if (!isObjectTranslationRevisionConflict(error)) throw error;
++    options.onConflict({
++      baseRevision: options.baseRevision,
++      objectId: options.objectId,
++      phase: "conflict",
++      translation: [...options.translation],
++    });
++    return false;
++  }
++}
++
++export function rebaseObjectMoveConflict(
++  conflict: ObjectMoveConflict,
++  sceneRevision: number,
++): ObjectMoveConflict {
++  return { ...conflict, baseRevision: sceneRevision, phase: "rebased" };
++}
+diff --git a/apps/control-room/src/kernel/commands/commandContext.ts b/apps/control-room/src/kernel/commands/commandContext.ts
+index c5fea9f43..26258d62c 100644
+--- a/apps/control-room/src/kernel/commands/commandContext.ts
++++ b/apps/control-room/src/kernel/commands/commandContext.ts
+@@ -9,19 +9,20 @@ export function createCommandContext(
+ ): CommandContext {
+   return {
+     api: kernel.api,
+     analysisFieldOverlay: kernel.analysisFieldOverlay,
+     bus: kernel.bus,
+     chartViewportHandoff: kernel.chartViewportHandoff,
+     cameraRegistry: kernel.cameraRegistry,
+     input: patch.input,
+     source,
+     layout: kernel.layout,
++    objectMoveTool: kernel.objectMoveTool,
+     resourceData: patch.resourceData,
+     resources: kernel.resources,
+     selection: kernel.selection,
+     sourceDetail: patch.sourceDetail,
+     visualization: kernel.visualization,
+     visualizationSync: kernel.visualizationSync,
+     visualizationTarget: patch.visualizationTarget,
+   };
+ }
+diff --git a/apps/control-room/src/kernel/commands/commandTypes.ts b/apps/control-room/src/kernel/commands/commandTypes.ts
+index abc813afc..ba3b59674 100644
+--- a/apps/control-room/src/kernel/commands/commandTypes.ts
++++ b/apps/control-room/src/kernel/commands/commandTypes.ts
+@@ -5,20 +5,21 @@ import type { LayoutController } from "../layout/LayoutController";
+ import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
+ import type { SelectionController } from "../selection/SelectionController";
+ import type { AnalysisFieldOverlayController } from "../visualization/AnalysisFieldOverlayController";
+ import type { ChartViewportHandoffController } from "../visualization/ChartViewportHandoffController";
+ import type { CameraRegistryController } from "../visualization/CameraRegistryController";
+ import type { ObjectVisualizationController } from "../visualization/ObjectVisualizationController";
+ import type { VisualizationRegistrySyncController } from "../visualization/VisualizationRegistrySyncController";
+ import type { VisualizationTargetRef } from "../visualization/ObjectVisualizationController";
+ import type { EventBus } from "../events/EventBus";
+ import type { KernelEventMap } from "../events/eventTypes";
++import type { ObjectMoveToolController } from "../authoring/ObjectMoveToolController";
+ 
+ export type CommandId = string;
+ type CommandGroupId = string;
+ export type CommandCategory = string;
+ 
+ export interface CommandContext {
+   source:
+     | "explorer"
+     | "analysis-plots"
+     | "live-charts"
+@@ -28,20 +29,21 @@ export interface CommandContext {
+     | "ribbon"
+     | "shortcut"
+     | "test";
+   api?: ControlRoomApi;
+   analysisFieldOverlay?: AnalysisFieldOverlayController;
+   bus?: EventBus<KernelEventMap>;
+   chartViewportHandoff?: ChartViewportHandoffController;
+   cameraRegistry?: CameraRegistryController;
+   input?: unknown;
+   layout?: LayoutController;
++  objectMoveTool?: ObjectMoveToolController;
+   resourceData?: Readonly<Record<string, unknown>>;
+   resources?: ResourceInvalidationController;
+   selection?: SelectionController;
+   sourceDetail?: string;
+   visualization?: ObjectVisualizationController;
+   visualizationSync?: VisualizationRegistrySyncController;
+   /** Canonical target resolved by a UI surface with scene and mesh provenance. */
+   visualizationTarget?: VisualizationTargetRef | null;
+ }
+ 
+diff --git a/apps/control-room/src/kernel/layout/SlotHost.test.tsx b/apps/control-room/src/kernel/layout/SlotHost.test.tsx
+index 1a2cbe382..137a46d8b 100644
+--- a/apps/control-room/src/kernel/layout/SlotHost.test.tsx
++++ b/apps/control-room/src/kernel/layout/SlotHost.test.tsx
+@@ -8,20 +8,21 @@ import { CommandRegistry } from "../commands/CommandRegistry";
+ import { EventBus } from "../events/EventBus";
+ import type { KernelEventMap } from "../events/eventTypes";
+ import { KernelContext } from "../KernelContext";
+ import { LayoutController } from "./LayoutController";
+ import { ModuleRegistry } from "../module/ModuleRegistry";
+ import { DiagnosticRecorderController } from "../performance/diagnostic-recorder/DiagnosticRecorderController";
+ import { RealtimeConnectionController } from "../realtime/RealtimeConnectionController";
+ import { RealtimeInvalidationBridge } from "../realtime/RealtimeInvalidationBridge";
+ import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
+ import { SelectionController } from "../selection/SelectionController";
++import { ObjectMoveToolController } from "../authoring/ObjectMoveToolController";
+ import type { KernelApi } from "../types";
+ import { AnalysisFieldOverlayController } from "../visualization/AnalysisFieldOverlayController";
+ import { ChartViewportHandoffController } from "@/kernel/visualization/ChartViewportHandoffController";
+ import { CameraRegistryController } from "../visualization/CameraRegistryController";
+ import { ObjectVisualizationController } from "../visualization/ObjectVisualizationController";
+ import { VisualizationDebugController } from "../visualization/VisualizationDebugController";
+ import { VisualizationRegistrySyncController } from "../visualization/VisualizationRegistrySyncController";
+ import { viewport3dManifest } from "@/modules/viewport-3d/manifest";
+ 
+ import { SlotHost } from "./SlotHost";
+@@ -40,20 +41,21 @@ function makeKernel(): KernelApi {
+   chartViewportHandoff: new ChartViewportHandoffController(),
+     bus,
+     cameraRegistry: new CameraRegistryController({ api: api.visualization }),
+     commandDiagnostics: new CommandDiagnosticsController(),
+     commands: new CommandRegistry(),
+     diagnostics: new RequestDiagnosticsController(),
+     diagnosticRecorder: new DiagnosticRecorderController({
+       config: { enabled: false },
+     }),
+     modules: new ModuleRegistry(),
++    objectMoveTool: new ObjectMoveToolController(),
+     realtime: new RealtimeInvalidationBridge(resources),
+     realtimeConnection: new RealtimeConnectionController(),
+     resources,
+     selection: new SelectionController(bus),
+     layout: new LayoutController(bus),
+     visualization: new ObjectVisualizationController(),
+     visualizationDebug: new VisualizationDebugController(),
+     visualizationSync: new VisualizationRegistrySyncController({
+       api: api.visualization,
+       resources,
+diff --git a/apps/control-room/src/kernel/layout/ViewportTabHost.test.tsx b/apps/control-room/src/kernel/layout/ViewportTabHost.test.tsx
+index a250c02d4..41715900a 100644
+--- a/apps/control-room/src/kernel/layout/ViewportTabHost.test.tsx
++++ b/apps/control-room/src/kernel/layout/ViewportTabHost.test.tsx
+@@ -7,20 +7,21 @@ import { CommandDiagnosticsController } from "../commands/CommandDiagnosticsCont
+ import { CommandRegistry } from "../commands/CommandRegistry";
+ import { EventBus } from "../events/EventBus";
+ import type { KernelEventMap } from "../events/eventTypes";
+ import { KernelContext } from "../KernelContext";
+ import { ModuleRegistry } from "../module/ModuleRegistry";
+ import { DiagnosticRecorderController } from "../performance/diagnostic-recorder/DiagnosticRecorderController";
+ import { RealtimeConnectionController } from "../realtime/RealtimeConnectionController";
+ import { RealtimeInvalidationBridge } from "../realtime/RealtimeInvalidationBridge";
+ import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
+ import { SelectionController } from "../selection/SelectionController";
++import { ObjectMoveToolController } from "../authoring/ObjectMoveToolController";
+ import type { KernelApi, ModuleManifest } from "../types";
+ import { AnalysisFieldOverlayController } from "../visualization/AnalysisFieldOverlayController";
+ import { ChartViewportHandoffController } from "@/kernel/visualization/ChartViewportHandoffController";
+ import { CameraRegistryController } from "../visualization/CameraRegistryController";
+ import { ObjectVisualizationController } from "../visualization/ObjectVisualizationController";
+ import { VisualizationDebugController } from "../visualization/VisualizationDebugController";
+ import { VisualizationRegistrySyncController } from "../visualization/VisualizationRegistrySyncController";
+ 
+ import { LayoutController } from "./LayoutController";
+ import {
+@@ -53,20 +54,21 @@ function makeKernel(): KernelApi {
+     bus,
+     cameraRegistry: new CameraRegistryController({ api: api.visualization }),
+     commandDiagnostics: new CommandDiagnosticsController(),
+     commands: new CommandRegistry(),
+     diagnostics: new RequestDiagnosticsController(),
+     diagnosticRecorder: new DiagnosticRecorderController({
+       config: { enabled: false },
+     }),
+     layout: new LayoutController(bus),
+     modules: new ModuleRegistry(),
++    objectMoveTool: new ObjectMoveToolController(),
+     realtime: new RealtimeInvalidationBridge(resources),
+     realtimeConnection: new RealtimeConnectionController(),
+     resources,
+     selection: new SelectionController(bus),
+     visualization: new ObjectVisualizationController(),
+     visualizationDebug: new VisualizationDebugController(),
+     visualizationSync: new VisualizationRegistrySyncController({
+       api: api.visualization,
+       resources,
+     }),
+diff --git a/apps/control-room/src/kernel/layout/WorkspaceDockLayout.test.tsx b/apps/control-room/src/kernel/layout/WorkspaceDockLayout.test.tsx
+index e059c7ddf..06e66d8b1 100644
+--- a/apps/control-room/src/kernel/layout/WorkspaceDockLayout.test.tsx
++++ b/apps/control-room/src/kernel/layout/WorkspaceDockLayout.test.tsx
+@@ -7,20 +7,21 @@ import { CommandDiagnosticsController } from "../commands/CommandDiagnosticsCont
+ import { CommandRegistry } from "../commands/CommandRegistry";
+ import { EventBus } from "../events/EventBus";
+ import type { KernelEventMap } from "../events/eventTypes";
+ import { KernelContext } from "../KernelContext";
+ import { ModuleRegistry } from "../module/ModuleRegistry";
+ import { DiagnosticRecorderController } from "../performance/diagnostic-recorder/DiagnosticRecorderController";
+ import { RealtimeConnectionController } from "../realtime/RealtimeConnectionController";
+ import { RealtimeInvalidationBridge } from "../realtime/RealtimeInvalidationBridge";
+ import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
+ import { SelectionController } from "../selection/SelectionController";
++import { ObjectMoveToolController } from "../authoring/ObjectMoveToolController";
+ import type { KernelApi } from "../types";
+ import { AnalysisFieldOverlayController } from "../visualization/AnalysisFieldOverlayController";
+ import { ChartViewportHandoffController } from "@/kernel/visualization/ChartViewportHandoffController";
+ import { CameraRegistryController } from "../visualization/CameraRegistryController";
+ import { ObjectVisualizationController } from "../visualization/ObjectVisualizationController";
+ import { VisualizationDebugController } from "../visualization/VisualizationDebugController";
+ import { VisualizationRegistrySyncController } from "../visualization/VisualizationRegistrySyncController";
+ 
+ import { LayoutController } from "./LayoutController";
+ import { WorkspaceDockLayout } from "./WorkspaceDockLayout";
+@@ -40,20 +41,21 @@ function makeKernel(): KernelApi {
+     bus,
+     cameraRegistry: new CameraRegistryController({ api: api.visualization }),
+     commandDiagnostics: new CommandDiagnosticsController(),
+     commands: new CommandRegistry(),
+     diagnostics: new RequestDiagnosticsController(),
+     diagnosticRecorder: new DiagnosticRecorderController({
+       config: { enabled: false },
+     }),
+     layout: new LayoutController(bus),
+     modules: new ModuleRegistry(),
++    objectMoveTool: new ObjectMoveToolController(),
+     realtime: new RealtimeInvalidationBridge(resources),
+     realtimeConnection: new RealtimeConnectionController(),
+     resources,
+     selection: new SelectionController(bus),
+     visualization: new ObjectVisualizationController(),
+     visualizationDebug: new VisualizationDebugController(),
+     visualizationSync: new VisualizationRegistrySyncController({
+       api: api.visualization,
+       resources,
+     }),
+diff --git a/apps/control-room/src/kernel/types.ts b/apps/control-room/src/kernel/types.ts
+index 7f399e837..869909f86 100644
+--- a/apps/control-room/src/kernel/types.ts
++++ b/apps/control-room/src/kernel/types.ts
+@@ -7,20 +7,21 @@ import type { CommandContribution } from "./commands/commandTypes";
+ import type { CommandRegistry } from "./commands/CommandRegistry";
+ import type { EventBus } from "./events/EventBus";
+ import type { KernelEventMap } from "./events/eventTypes";
+ import type { LayoutController } from "./layout/LayoutController";
+ import type { ModuleRegistry } from "./module/ModuleRegistry";
+ import type { RealtimeInvalidationBridge } from "./realtime/RealtimeInvalidationBridge";
+ import type { RealtimeConnectionController } from "./realtime/RealtimeConnectionController";
+ import type { ResourceInvalidationController } from "./resources/ResourceInvalidationController";
+ import type { SelectionController } from "./selection/SelectionController";
+ import type { DiagnosticRecorderController } from "./performance/diagnostic-recorder/DiagnosticRecorderController";
++import type { ObjectMoveToolController } from "./authoring/ObjectMoveToolController";
+ import type { AnalysisFieldOverlayController } from "./visualization/AnalysisFieldOverlayController";
+ import type { ChartViewportHandoffController } from "./visualization/ChartViewportHandoffController";
+ import type { CameraRegistryController } from "./visualization/CameraRegistryController";
+ import type { ObjectVisualizationController } from "./visualization/ObjectVisualizationController";
+ import type { VisualizationDebugController } from "./visualization/VisualizationDebugController";
+ import type { VisualizationRegistrySyncController } from "./visualization/VisualizationRegistrySyncController";
+ 
+ export type SlotId =
+   | "app-menu"
+   | "ribbon"
+@@ -63,19 +64,20 @@ export interface KernelApi {
+   readonly api: ControlRoomApi;
+   readonly analysisFieldOverlay: AnalysisFieldOverlayController;
+   readonly bus: EventBus<KernelEventMap>;
+   readonly chartViewportHandoff: ChartViewportHandoffController;
+   readonly cameraRegistry: CameraRegistryController;
+   readonly commandDiagnostics: CommandDiagnosticsController;
+   readonly commands: CommandRegistry;
+   readonly diagnostics: RequestDiagnosticsController;
+   readonly diagnosticRecorder: DiagnosticRecorderController;
+   readonly modules: ModuleRegistry;
++  readonly objectMoveTool: ObjectMoveToolController;
+   readonly realtime: RealtimeInvalidationBridge;
+   readonly realtimeConnection: RealtimeConnectionController;
+   readonly resources: ResourceInvalidationController;
+   readonly selection: SelectionController;
+   readonly visualization: ObjectVisualizationController;
+   readonly visualizationDebug: VisualizationDebugController;
+   readonly visualizationSync: VisualizationRegistrySyncController;
+   readonly layout: LayoutController;
+ }
+diff --git a/apps/control-room/src/kernel/visualization/useVisualizationDebug.test.tsx b/apps/control-room/src/kernel/visualization/useVisualizationDebug.test.tsx
+index b124605bf..ded564a0e 100644
+--- a/apps/control-room/src/kernel/visualization/useVisualizationDebug.test.tsx
++++ b/apps/control-room/src/kernel/visualization/useVisualizationDebug.test.tsx
+@@ -8,20 +8,21 @@ import { CommandRegistry } from "../commands/CommandRegistry";
+ import { EventBus } from "../events/EventBus";
+ import type { KernelEventMap } from "../events/eventTypes";
+ import { KernelContext } from "../KernelContext";
+ import { LayoutController } from "../layout/LayoutController";
+ import { ModuleRegistry } from "../module/ModuleRegistry";
+ import { DiagnosticRecorderController } from "../performance/diagnostic-recorder/DiagnosticRecorderController";
+ import { RealtimeConnectionController } from "../realtime/RealtimeConnectionController";
+ import { RealtimeInvalidationBridge } from "../realtime/RealtimeInvalidationBridge";
+ import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
+ import { SelectionController } from "../selection/SelectionController";
++import { ObjectMoveToolController } from "../authoring/ObjectMoveToolController";
+ import type { KernelApi } from "../types";
+ import { AnalysisFieldOverlayController } from "./AnalysisFieldOverlayController";
+ import { ChartViewportHandoffController } from "@/kernel/visualization/ChartViewportHandoffController";
+ import { CameraRegistryController } from "./CameraRegistryController";
+ import { ObjectVisualizationController } from "./ObjectVisualizationController";
+ import { VisualizationDebugController } from "./VisualizationDebugController";
+ import type { VisualizationDebugSnapshot } from "./visualizationDebugTypes";
+ import { VisualizationRegistrySyncController } from "./VisualizationRegistrySyncController";
+ import {
+   useVisualizationDebugDemand,
+@@ -39,20 +40,21 @@ function makeKernel(): KernelApi {
+     bus,
+     cameraRegistry: new CameraRegistryController({ api: api.visualization }),
+     commandDiagnostics: new CommandDiagnosticsController(),
+     commands: new CommandRegistry(),
+     diagnostics: new RequestDiagnosticsController(),
+     diagnosticRecorder: new DiagnosticRecorderController({
+       config: { enabled: false },
+     }),
+     layout: new LayoutController(bus),
+     modules: new ModuleRegistry(),
++    objectMoveTool: new ObjectMoveToolController(),
+     realtime: new RealtimeInvalidationBridge(resources),
+     realtimeConnection: new RealtimeConnectionController(),
+     resources,
+     selection: new SelectionController(bus),
+     visualization: new ObjectVisualizationController(),
+     visualizationDebug: new VisualizationDebugController(),
+     visualizationSync: new VisualizationRegistrySyncController({
+       api: api.visualization,
+       resources,
+     }),
+diff --git a/apps/control-room/src/modules/explorer/explorerSelection.test.ts b/apps/control-room/src/modules/explorer/explorerSelection.test.ts
+index 3fa9291d0..8d64e7376 100644
+--- a/apps/control-room/src/modules/explorer/explorerSelection.test.ts
++++ b/apps/control-room/src/modules/explorer/explorerSelection.test.ts
+@@ -21,20 +21,21 @@ import { CommandDiagnosticsController } from "@/kernel/commands/CommandDiagnosti
+ import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
+ import { EventBus } from "@/kernel/events/EventBus";
+ import type { KernelEventMap } from "@/kernel/events/eventTypes";
+ import { LayoutController } from "@/kernel/layout/LayoutController";
+ import { ModuleRegistry } from "@/kernel/module/ModuleRegistry";
+ import { DiagnosticRecorderController } from "@/kernel/performance/diagnostic-recorder/DiagnosticRecorderController";
+ import { RealtimeConnectionController } from "@/kernel/realtime/RealtimeConnectionController";
+ import { RealtimeInvalidationBridge } from "@/kernel/realtime/RealtimeInvalidationBridge";
+ import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
+ import { SelectionController } from "@/kernel/selection/SelectionController";
++import { ObjectMoveToolController } from "@/kernel/authoring/ObjectMoveToolController";
+ import type { KernelApi } from "@/kernel/types";
+ import { AnalysisFieldOverlayController } from "@/kernel/visualization/AnalysisFieldOverlayController";
+ import { ChartViewportHandoffController } from "@/kernel/visualization/ChartViewportHandoffController";
+ import { CameraRegistryController } from "@/kernel/visualization/CameraRegistryController";
+ import {
+   AIRBOX_VISUALIZATION_TARGET,
+   ObjectVisualizationController,
+   resolveVisualizationTargetFromSelection,
+ } from "@/kernel/visualization/ObjectVisualizationController";
+ import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
+@@ -80,20 +81,21 @@ function makeKernel(): KernelApi {
+     bus,
+     cameraRegistry: new CameraRegistryController({ api: api.visualization }),
+     commandDiagnostics: new CommandDiagnosticsController(),
+     commands,
+     diagnostics: new RequestDiagnosticsController(),
+     diagnosticRecorder: new DiagnosticRecorderController({
+       config: { enabled: false },
+     }),
+     layout: new LayoutController(bus),
+     modules: new ModuleRegistry(),
++    objectMoveTool: new ObjectMoveToolController(),
+     realtime: new RealtimeInvalidationBridge(resources),
+     realtimeConnection: new RealtimeConnectionController(),
+     resources,
+     selection: new SelectionController(bus),
+     visualization: new ObjectVisualizationController(),
+     visualizationDebug: new VisualizationDebugController(),
+     visualizationSync: new VisualizationRegistrySyncController({
+       api: api.visualization,
+       resources,
+     }),
+diff --git a/apps/control-room/src/modules/ribbon/RibbonModule.tsx b/apps/control-room/src/modules/ribbon/RibbonModule.tsx
+index 68b0a7b16..adc764e69 100644
+--- a/apps/control-room/src/modules/ribbon/RibbonModule.tsx
++++ b/apps/control-room/src/modules/ribbon/RibbonModule.tsx
+@@ -1,20 +1,21 @@
+ "use client";
+ 
+ import { useMemo, useState, useSyncExternalStore } from "react";
+ 
+ import type { LiveStatusResource } from "@/kernel/api/apiTypes";
+ import {
+   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+   MESHING_CAPABILITIES_PATH,
+   MESHING_SUMMARY_PATH,
+   MODEL_GEOMETRY_CAPABILITIES_PATH,
++  MODEL_SCENE_PATH,
+   PERSISTENCE_CHECKPOINTS_PATH,
+   VISUALIZATION_STATE_PATH,
+ } from "@/kernel/api/apiPaths";
+ import type { ModuleProps } from "@/kernel/types";
+ import { createCommandContext } from "@/kernel/commands/commandContext";
+ import { useLayoutActions, useLayoutSelector } from "@/kernel/layout/useLayout";
+ import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
+ import {
+   useGeometryCapabilitiesResource,
+   useGeometryValidationResource,
+@@ -163,21 +164,23 @@ function ribbonRuntimeStatusEquals(
+   );
+ }
+ 
+ export default function RibbonModule({ kernel }: ModuleProps) {
+   const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null);
+   const [pendingGlobalQuantity, setPendingGlobalQuantity] =
+     useState<ApplyGlobalQuantityInput | null>(null);
+   const activeTab = useLayoutSelector((layout) => layout.activeModuleTab);
+   const { setActiveTab } = useLayoutActions();
+   const selection = useSelectionSelector((currentSelection) =>
+-    activeTab === "view" ? currentSelection : EMPTY_SELECTION,
++    activeTab === "view" || activeTab === "geometry"
++      ? currentSelection
++      : EMPTY_SELECTION,
+   );
+   const visualization = useObjectVisualizationController();
+   const visualizationSnapshot = useObjectVisualizationSelector((snapshot) =>
+     activeTab === "view" ? snapshot : EMPTY_OBJECT_VISUALIZATION_SNAPSHOT,
+   );
+   const needsGeometryResources =
+     activeTab === "geometry" || activeTab === "mesh";
+   const needsRuntimeResources = ribbonTabNeedsRuntimeResources(activeTab);
+   const needsMeshResources =
+     activeTab === "mesh" ||
+@@ -228,21 +231,23 @@ export default function RibbonModule({ kernel }: ModuleProps) {
+   const meshSummary = useMeshSummaryResource({
+     enabled: shouldLoadRuntimeMeshSummary(
+       needsMeshResources,
+       sessionStatusData,
+     ),
+   });
+   const meshSemantics = useMeshSemanticsResource({
+     enabled: needsMeshResources,
+   });
+   const scene = useSceneResource({
+-    enabled: activeTab === "view" && selection.ref?.type === "mesh-part",
++    enabled:
++      activeTab === "geometry" ||
++      (activeTab === "view" && selection.ref?.type === "mesh-part"),
+   });
+   const sceneObjectIds = useMemo(
+     () => visualizationSceneObjectIds(scene.data),
+     [scene.data],
+   );
+   const selectedMeshPart = useMemo(
+     () =>
+       selection.ref?.type === "mesh-part"
+         ? meshManifest.data?.mesh_parts?.find(
+             (part) => part.id === selection.ref?.nodeId,
+@@ -270,20 +275,25 @@ export default function RibbonModule({ kernel }: ModuleProps) {
+   });
+   const checkpointCatalog = useCheckpointCatalogResource({
+     enabled: needsRuntimeResources,
+   });
+   const commandDetail = useCommandDetailResource(selectedCommandId);
+   const commandVersion = useSyncExternalStore(
+     (listener) => kernel.commands.subscribe(listener),
+     () => kernel.commands.getVersion(),
+     () => kernel.commands.getVersion(),
+   );
++  const objectMoveToolState = useSyncExternalStore(
++    (listener) => kernel.objectMoveTool.subscribe(listener),
++    () => kernel.objectMoveTool.getSnapshot(),
++    () => null,
++  );
+ 
+   const visualizationTarget = useMemo(
+     () =>
+       resolveRibbonVisualizationTarget({
+         sceneObjectIds,
+         selectedMeshPart,
+         selection,
+         visualizationState: visualizationState.data,
+       }),
+     [sceneObjectIds, selectedMeshPart, selection, visualizationState.data],
+@@ -303,20 +313,21 @@ export default function RibbonModule({ kernel }: ModuleProps) {
+             sessionStatus: needsSessionStatusResources
+               ? sessionStatusData
+               : null,
+             solverStatus: needsRuntimeResources ? solverStatus.data : null,
+             stageExecution: needsRuntimeResources ? stageExecution.data : null,
+           }),
+           [MESHING_BUILDS_LATEST_SUCCESSFUL_PATH]: meshBuildLatest.data,
+           [MESHING_CAPABILITIES_PATH]: meshCapabilities.data,
+           [MESHING_SUMMARY_PATH]: meshSummary.data,
+           [MODEL_GEOMETRY_CAPABILITIES_PATH]: geometryCapabilities.data,
++          [MODEL_SCENE_PATH]: scene.status === "ready" ? scene.data : null,
+           [PERSISTENCE_CHECKPOINTS_PATH]: needsRuntimeResources
+             ? checkpointCatalog.data
+             : null,
+           [VISUALIZATION_STATE_PATH]: visualizationState.data,
+         },
+         sourceDetail: activeTab,
+         visualizationTarget,
+       }),
+     [
+       activeTab,
+@@ -324,34 +335,37 @@ export default function RibbonModule({ kernel }: ModuleProps) {
+       geometryValidation.data,
+       kernel,
+       checkpointCatalog.data,
+       commandQueue.data,
+       meshBuildCurrent.data,
+       needsRuntimeResources,
+       meshBuildLatest.data,
+       meshCapabilities.data,
+       meshManifest.data,
+       meshSummary.data,
++      scene.data,
++      scene.status,
+       modelReadiness.data,
+       modelReadiness.status,
+       needsSessionStatusResources,
+       sessionStatusData,
+       solverStatus.data,
+       stageExecution.data,
+       visualizationState.data,
+       visualizationTarget,
+     ],
+   );
+ 
+   const tabContent = useMemo(
+     () => {
+       void commandVersion;
++      void objectMoveToolState;
+       return buildRibbonTabContent(activeTab, {
+         api: kernel.api,
+         commandContext,
+         commands: kernel.commands,
+         fieldCatalog: fieldCatalog.data,
+         quantityCatalog: quantityCatalog.data,
+         meshBuildCurrent: meshBuildCurrent.data,
+         meshBuildLatest: meshBuildLatest.data,
+         meshCapabilities: meshCapabilities.data,
+         meshSemantics: meshSemantics.data,
+@@ -363,20 +377,21 @@ export default function RibbonModule({ kernel }: ModuleProps) {
+         sessionStatus: sessionStatusData,
+         visualization,
+         visualizationSnapshot,
+         visualizationState: visualizationState.data,
+       });
+     },
+     [
+       activeTab,
+       commandContext,
+       commandVersion,
++      objectMoveToolState,
+       fieldCatalog.data,
+       quantityCatalog.data,
+       kernel.api,
+       kernel.commands,
+       kernel.resources,
+       meshBuildCurrent.data,
+       meshBuildLatest.data,
+       meshCapabilities.data,
+       meshSemantics.data,
+       meshSummary.data,
+diff --git a/apps/control-room/src/modules/ribbon/ribbonCommands.ts b/apps/control-room/src/modules/ribbon/ribbonCommands.ts
+index a11714835..1e9d36677 100644
+--- a/apps/control-room/src/modules/ribbon/ribbonCommands.ts
++++ b/apps/control-room/src/modules/ribbon/ribbonCommands.ts
+@@ -7,20 +7,21 @@ import type {
+ import { normalizeQuantityIdOrDefault } from "@/kernel/api/quantityIds";
+ import type {
+   CommandContext,
+   CommandContribution,
+   CommandResult,
+ } from "@/kernel/commands/commandTypes";
+ import type { Selection } from "@/kernel/selection/selectionTypes";
+ import {
+   MODEL_FROZEN_SPIN_PATH,
+   MODEL_FROZEN_SPINS_PATH,
++  MODEL_SCENE_PATH,
+   VISUALIZATION_STATE_PATH,
+ } from "@/kernel/api/apiPaths";
+ import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
+ import { resolveActiveLaneOperation } from "@/kernel/resources/useActiveLaneCapabilities";
+ import { beginPlanarMonitorDraft } from "@/kernel/workspace/crossSectionWorkspace";
+ import {
+   BACKEND_INTERACTION_IDS,
+   findInteractionSpec,
+   interactionAvailabilityForDiscretization,
+   normalizeInteractionDiscretization,
+@@ -130,32 +131,37 @@ export function visualizationAirboxCommandInput(
+   return patch;
+ }
+ 
+ export const RIBBON_COMMANDS: CommandContribution[] = [
+   {
+     id: RIBBON_GEOMETRY_MOVE_SELECTED_COMMAND,
+     title: "Move selected object",
+     group: "ribbon-geometry",
+     category: "Geometry",
+     scope: "selection",
+-    isEnabled: (context) =>
+-      Boolean(context.api) && context.selection?.get().ref?.type === "scene-object",
+-    disabledReason: (context) => {
+-      if (!context.api) return "The current session API is unavailable.";
+-      return context.selection?.get().ref?.type === "scene-object"
+-        ? null
+-        : "Select a canonical scene object to move.";
++    isEnabled: (context) => moveSelectedDisabledReason(context) === null,
++    disabledReason: moveSelectedDisabledReason,
++    isActive: (context) => {
++      const objectId = selectedSceneObjectId(context);
++      return Boolean(
++        objectId && context.objectMoveTool?.getSnapshot()?.objectId === objectId,
++      );
+     },
+     run: (context) => {
+-      if (context.selection?.get().ref?.type !== "scene-object") {
+-        return { message: "Select a canonical scene object to move.", status: "failed" };
++      const reason = moveSelectedDisabledReason(context);
++      const objectId = selectedSceneObjectId(context);
++      if (reason || !objectId || !context.objectMoveTool) {
++        return { message: reason ?? "Move tool state is unavailable.", status: "failed" };
+       }
++      context.objectMoveTool.activate(objectId);
++      context.layout?.setActiveViewportMainModule("viewport-3d");
++      context.layout?.setFocusedSlot("viewport-main");
+       return { status: "completed" };
+     },
+   },
+   {
+     id: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+     title: "Patch Visualization State",
+     group: "ribbon-visualization",
+     category: "View",
+     scope: "workspace",
+     isEnabled: (context) => Boolean(context.api),
+@@ -296,20 +302,49 @@ export const RIBBON_COMMANDS: CommandContribution[] = [
+       Boolean(context.selection) && physicsInteractionOperation(context).enabled,
+     disabledReason: (context) => {
+       if (!context.selection) return "Selection controller is not available.";
+       const operation = physicsInteractionOperation(context);
+       return operation.enabled ? null : operation.reason;
+     },
+     run: selectPhysicsInteractionFromCommand,
+   },
+ ];
+ 
++function selectedSceneObjectId(context: CommandContext): string | null {
++  const selection = context.selection?.get();
++  if (selection?.ref?.type !== "scene-object") return null;
++  return selection.ref.objectId ?? selection.objectId ?? null;
++}
++
++function moveSelectedDisabledReason(context: CommandContext): string | null {
++  if (!context.api) return "The current session API is unavailable.";
++  if (!context.objectMoveTool) return "Move tool state is unavailable.";
++  const objectId = selectedSceneObjectId(context);
++  if (!objectId) return "Select a canonical magnetic scene object to move.";
++  const scene = context.resourceData?.[MODEL_SCENE_PATH];
++  if (!scene || typeof scene !== "object" || Array.isArray(scene)) {
++    return "The revisioned model scene is not ready.";
++  }
++  const record = scene as Record<string, unknown>;
++  if (typeof record.revision !== "number") {
++    return "The revisioned model scene is not ready.";
++  }
++  const objects = Array.isArray(record.objects) ? record.objects : [];
++  const object = objects.find((candidate) => {
++    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return false;
++    return (candidate as Record<string, unknown>).id === objectId;
++  }) as Record<string, unknown> | undefined;
++  return object?.role === "magnet"
++    ? null
++    : "Select a canonical magnetic scene object to move.";
++}
++
+ function frozenSpinsSelection(context: CommandContext): {
+   objectId: string;
+   regionId: string | null;
+ } | null {
+   const selection = context.selection?.get() as Selection | null | undefined;
+   if (!selection?.objectId) return null;
+   if (
+     selection.kind !== "object.root" &&
+     selection.kind !== "object.region"
+   ) {
+diff --git a/apps/control-room/src/modules/ribbon/ribbonStructure.test.ts b/apps/control-room/src/modules/ribbon/ribbonStructure.test.ts
+index fc6ef8369..82af2f8b1 100644
+--- a/apps/control-room/src/modules/ribbon/ribbonStructure.test.ts
++++ b/apps/control-room/src/modules/ribbon/ribbonStructure.test.ts
+@@ -27,31 +27,37 @@ import {
+ import {
+   resolveRibbonActionTriggerState,
+   resolveRibbonIconColor,
+   RibbonGroupsRow,
+ } from "./RibbonGroupsRow";
+ import { RIBBON_TABS, type RibbonMenuNode, type RibbonTabContent } from "./ribbonTypes";
+ import { RibbonTabStrip } from "./RibbonTabStrip";
+ import {
+   MESHING_CAPABILITIES_PATH,
+   MODEL_GEOMETRY_VALIDATION_PATH,
++  MODEL_SCENE_PATH,
+   MODEL_READINESS_PATH,
+   SIMULATION_COMMANDS_PATH,
+   SIMULATION_SOLVER_STATUS_PATH,
+   SIMULATION_STAGES_EXECUTION_PATH,
+   VISUALIZATION_STATE_PATH,
+ } from "@/kernel/api/apiPaths";
+ import type {
+   VisualizationStatePatch,
+   VisualizationStateResource,
+ } from "@/kernel/api/apiTypes";
+ import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
++import { ObjectMoveToolController } from "@/kernel/authoring/ObjectMoveToolController";
++import { EventBus } from "@/kernel/events/EventBus";
++import type { KernelEventMap } from "@/kernel/events/eventTypes";
++import { LayoutController } from "@/kernel/layout/LayoutController";
++import { SelectionController } from "@/kernel/selection/SelectionController";
+ import type { CommandContext } from "@/kernel/commands/commandTypes";
+ import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
+ import { activeLaneCapabilityFixture } from "@/kernel/resources/activeLaneCapabilityFixture.testSupport";
+ import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
+ import { STUDY_RUNTIME_COMMANDS } from "@/kernel/runtime/studyRuntimeCommandContributions";
+ import {
+   AIRBOX_VISUALIZATION_TARGET,
+   FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET,
+   ObjectVisualizationController,
+ } from "@/kernel/visualization/ObjectVisualizationController";
+@@ -5096,20 +5102,91 @@ describe("ribbon structure", () => {
+       ]),
+     );
+     const frameAllAction = actions.find((action) => action.id === "builder-frame-all");
+ 
+     expect(frameAllAction).toMatchObject({
+       commandId: "viewport-3d.fit",
+     });
+     expect(frameAllAction).not.toHaveProperty("disabled");
+   });
+ 
++  it("executes Move by activating the selected magnetic object and focusing the 3D viewport", async () => {
++    const bus = new EventBus<KernelEventMap>();
++    const selection = new SelectionController(bus);
++    const layout = new LayoutController(bus);
++    const objectMoveTool = new ObjectMoveToolController();
++    selection.set(selectedMeshObject(), "test");
++    layout.setActiveViewportMainModule("analysis-plots");
++    const registry = createRibbonCommandRegistry();
++    const context = {
++      api: {} as never,
++      layout,
++      objectMoveTool,
++      resourceData: {
++        [MODEL_SCENE_PATH]: {
++          objects: [{ id: "box", role: "magnet" }],
++          revision: 8,
++        },
++      },
++      selection,
++      source: "test" as const,
++    };
++
++    expect(registry.isEnabled("geometry.move-selected", context)).toBe(true);
++    expect(objectMoveTool.getSnapshot()).toBeNull();
++
++    expect(await registry.execute("geometry.move-selected", context)).toEqual({
++      status: "completed",
++    });
++    expect(objectMoveTool.getSnapshot()).toEqual({ mode: "move", objectId: "box" });
++    expect(layout.get().activeViewportMainModuleId).toBe("viewport-3d");
++    expect(layout.get().focusedSlot).toBe("viewport-main");
++    expect(registry.isActive("geometry.move-selected", context)).toBe(true);
++  });
++
++  it("fails Move closed while scene readiness is unavailable and leaves Rotate/Scale request-free", async () => {
++    const bus = new EventBus<KernelEventMap>();
++    const selection = new SelectionController(bus);
++    selection.set(selectedMeshObject(), "test");
++    const objectMoveTool = new ObjectMoveToolController();
++    const registry = createRibbonCommandRegistry();
++    const commitTransaction = vi.fn();
++    const context = {
++      api: { model: { commitTransaction } } as never,
++      objectMoveTool,
++      resourceData: { [MODEL_SCENE_PATH]: null },
++      selection,
++      source: "test" as const,
++    };
++
++    expect(registry.isEnabled("geometry.move-selected", context)).toBe(false);
++    expect(registry.get("geometry.move-selected")?.disabledReason?.(context)).toBe(
++      "The revisioned model scene is not ready.",
++    );
++    expect(await registry.execute("geometry.move-selected", context)).toEqual({
++      message: "The revisioned model scene is not ready.",
++      status: "failed",
++    });
++    const rotateAndScale = ALL_TAB_CONTENT.geometry.groups
++      .flatMap((group) => group.actions)
++      .filter((action) => ["builder-tool-rotate", "builder-tool-scale"].includes(action.id));
++    expect(rotateAndScale).toHaveLength(2);
++    for (const action of rotateAndScale) {
++      expect(action).toMatchObject({
++        disabled: true,
++        tooltip: "Rotate and Scale require a canonical geometry contract newer than ProblemIR 0.3.",
++      });
++      expect(action).not.toHaveProperty("commandId");
++    }
++    expect(commitTransaction).not.toHaveBeenCalled();
++  });
++
+   it("exposes concrete study stage authoring commands in the Study ribbon", () => {
+     const addStageGroup = ALL_TAB_CONTENT.study.groups.find(
+       (group) => group.id === "add-stage",
+     );
+     const selectionGroup = ALL_TAB_CONTENT.study.groups.find(
+       (group) => group.id === "study-selection",
+     );
+ 
+     expect(addStageGroup?.actions.map((action) => action.id)).toEqual(
+       expect.arrayContaining([
+diff --git a/apps/control-room/src/modules/viewport-3d/MoveObjectGizmo.test.tsx b/apps/control-room/src/modules/viewport-3d/MoveObjectGizmo.test.tsx
+index f0532d6f6..bd54c622a 100644
+--- a/apps/control-room/src/modules/viewport-3d/MoveObjectGizmo.test.tsx
++++ b/apps/control-room/src/modules/viewport-3d/MoveObjectGizmo.test.tsx
+@@ -1,71 +1,187 @@
+ import { describe, expect, it, vi } from "vitest";
+ 
+ import {
+   PROBLEM_IR_03_RIGID_TRANSFORM_REASON,
+   createMoveGestureController,
++  installMoveGestureTerminalListeners,
++  moveAxisPointerHandlers,
+ } from "./MoveObjectGizmo";
+ import { commitObjectTranslation } from "@/kernel/authoring/objectTranslationMutation";
+ 
+ describe("MoveObjectGizmo", () => {
+   it("keeps pointer movement local and commits the final SI translation once", async () => {
+     const onDraftChange = vi.fn();
+     const onCommit = vi.fn().mockResolvedValue(undefined);
+     const capture = vi.fn();
+     const release = vi.fn();
+     const controller = createMoveGestureController({
+       baseRevision: 17,
+       objectId: "magnet-x",
+       onCommit,
+       onDraftChange,
+       origin: [1e-9, 2e-9, 3e-9],
+     });
+ 
+-    controller.begin("x", 4, [0, 0, 0], capture);
++    controller.begin("x", 4, [0, 0, 0], capture, release);
+     controller.move(4, [2e-9, 8e-9, 0]);
+     controller.move(4, [5e-9, 9e-9, 0]);
+ 
+     expect(capture).toHaveBeenCalledWith(4);
+     expect(onCommit).not.toHaveBeenCalled();
+     expect(onDraftChange).toHaveBeenLastCalledWith({
+       objectId: "magnet-x",
+       origin: [1e-9, 2e-9, 3e-9],
+       translation: [6e-9, 2e-9, 3e-9],
+     });
+ 
+-    await controller.end(4, release);
++    await controller.end(4);
+ 
+     expect(release).toHaveBeenCalledWith(4);
+     expect(onCommit).toHaveBeenCalledTimes(1);
+     expect(onCommit).toHaveBeenCalledWith("magnet-x", [6e-9, 2e-9, 3e-9], 17);
++    expect(onDraftChange).toHaveBeenLastCalledWith(null);
+   });
+ 
+-  it("cancels with Escape, restores origin, and sends no request", () => {
++  it("preserves the final draft when the commit reports a revision conflict", async () => {
++    const onDraftChange = vi.fn();
++    const controller = createMoveGestureController({
++      baseRevision: 3,
++      objectId: "stale-magnet",
++      onCommit: vi.fn().mockResolvedValue(false),
++      onDraftChange,
++      origin: [0, 0, 0],
++    });
++    controller.begin("y", 8, [0, 0, 0], vi.fn(), vi.fn());
++    controller.move(8, [0, 7e-9, 0]);
++
++    await controller.end(8);
++
++    expect(onDraftChange).toHaveBeenLastCalledWith({
++      objectId: "stale-magnet",
++      origin: [0, 0, 0],
++      translation: [0, 7e-9, 0],
++    });
++  });
++
++  it("explicitly cancels once, clears the draft, restores OrbitControls, and sends no request", () => {
+     const onDraftChange = vi.fn();
+     const onCommit = vi.fn();
++    const onGestureActiveChange = vi.fn();
++    const release = vi.fn();
+     const controller = createMoveGestureController({
+       baseRevision: 9,
+       objectId: "magnet-y",
+       onCommit,
+       onDraftChange,
++      onGestureActiveChange,
+       origin: [0, 0, 0],
+     });
+ 
+-    controller.begin("z", 2, [0, 0, 0], vi.fn());
++    controller.begin("z", 2, [0, 0, 0], vi.fn(), release);
+     controller.move(2, [0, 0, 3e-9]);
+     expect(controller.cancel()).toBe(true);
++    expect(controller.cancel()).toBe(false);
+ 
+-    expect(onDraftChange).toHaveBeenLastCalledWith({
+-      objectId: "magnet-y",
++    expect(release).toHaveBeenCalledOnce();
++    expect(release).toHaveBeenCalledWith(2);
++    expect(onDraftChange).toHaveBeenLastCalledWith(null);
++    expect(onGestureActiveChange.mock.calls).toEqual([[true], [false]]);
++    expect(onCommit).not.toHaveBeenCalled();
++  });
++
++  it.each(["Escape", "unmount"])(
++    "wires %s to release capture once, clear the draft, restore OrbitControls, and send no request",
++    (path) => {
++      const onCommit = vi.fn();
++      const release = vi.fn();
++      const onDraftChange = vi.fn();
++      const onGestureActiveChange = vi.fn();
++      const controller = createMoveGestureController({
++        baseRevision: 9,
++        objectId: "lifecycle-magnet",
++        onCommit,
++        onDraftChange,
++        onGestureActiveChange,
++        origin: [0, 0, 0],
++      });
++      const keydown: { listener: ((event: Event) => void) | null } = {
++        listener: null,
++      };
++      const target = {
++        addEventListener: vi.fn((_type: string, listener: EventListenerOrEventListenerObject) => {
++          keydown.listener = listener as (event: Event) => void;
++        }),
++        removeEventListener: vi.fn(),
++      } as never;
++      const cleanup = installMoveGestureTerminalListeners(controller, target);
++      controller.begin("z", 6, [0, 0, 0], vi.fn(), release);
++      controller.move(6, [0, 0, 9e-9]);
++
++      if (path === "Escape") {
++        keydown.listener?.({ key: "Escape", preventDefault: vi.fn() } as never);
++      } else {
++        cleanup();
++      }
++
++      expect(release).toHaveBeenCalledOnce();
++      expect(onDraftChange).toHaveBeenLastCalledWith(null);
++      expect(onGestureActiveChange.mock.calls).toEqual([[true], [false]]);
++      expect(onCommit).not.toHaveBeenCalled();
++      cleanup();
++      expect(release).toHaveBeenCalledOnce();
++    },
++  );
++
++  it("restores OrbitControls and releases capture when commit throws", async () => {
++    const release = vi.fn();
++    const onGestureActiveChange = vi.fn();
++    const controller = createMoveGestureController({
++      baseRevision: 9,
++      objectId: "magnet-error",
++      onCommit: vi.fn().mockRejectedValue(new Error("network")),
++      onDraftChange: vi.fn(),
++      onGestureActiveChange,
+       origin: [0, 0, 0],
+-      translation: [0, 0, 0],
+     });
++    controller.begin("x", 3, [0, 0, 0], vi.fn(), release);
++
++    await expect(controller.end(3)).rejects.toThrow("network");
++
++    expect(release).toHaveBeenCalledOnce();
++    expect(onGestureActiveChange.mock.calls).toEqual([[true], [false]]);
++    expect(controller.cancel()).toBe(false);
++  });
++
++  it("wires R3F pointercancel and lostpointercapture to the idempotent terminal cleanup", () => {
++    const releasePointerCapture = vi.fn();
++    const onCommit = vi.fn();
++    const controller = createMoveGestureController({
++      baseRevision: 1,
++      objectId: "wired-magnet",
++      onCommit,
++      onDraftChange: vi.fn(),
++      origin: [0, 0, 0],
++    });
++    const handlers = moveAxisPointerHandlers(controller, "x");
++    const event = {
++      point: { x: 0, y: 0, z: 0 },
++      pointerId: 11,
++      stopPropagation: vi.fn(),
++      target: { releasePointerCapture, setPointerCapture: vi.fn() },
++    } as never;
++
++    handlers.onPointerDown(event);
++    handlers.onPointerCancel(event);
++    handlers.onLostPointerCapture(event);
++
++    expect(releasePointerCapture).toHaveBeenCalledOnce();
+     expect(onCommit).not.toHaveBeenCalled();
+   });
+ 
+   it("publishes the exact canonical-contract reason for Rotate and Scale", () => {
+     expect(PROBLEM_IR_03_RIGID_TRANSFORM_REASON).toBe(
+       "Rotate and Scale require a canonical geometry contract newer than ProblemIR 0.3.",
+     );
+   });
+ 
+   it("uses one revision-safe API transaction and bounded ACK invalidations", async () => {
+diff --git a/apps/control-room/src/modules/viewport-3d/MoveObjectGizmo.tsx b/apps/control-room/src/modules/viewport-3d/MoveObjectGizmo.tsx
+index 4bae33080..002baed26 100644
+--- a/apps/control-room/src/modules/viewport-3d/MoveObjectGizmo.tsx
++++ b/apps/control-room/src/modules/viewport-3d/MoveObjectGizmo.tsx
+@@ -1,95 +1,116 @@
+ "use client";
+ 
+ import type { ThreeEvent } from "@react-three/fiber";
+ import { useEffect, useMemo, useState } from "react";
+ 
+-import type { Viewport3DPrimitiveObject } from "./viewport3dPrimitiveModel";
++import type {
++  Viewport3DPrimitiveRenderModel,
++  Viewport3DPrimitiveObject,
++} from "./viewport3dPrimitiveModel";
+ export { PROBLEM_IR_03_RIGID_TRANSFORM_REASON } from "@/kernel/authoring/objectTranslationMutation";
+ 
+ export type MoveAxis = "x" | "y" | "z";
+ export type Translation3 = [number, number, number];
+ 
+ export interface MoveDraft {
+   objectId: string;
+   origin: Translation3;
+   translation: Translation3;
+ }
+ 
+ interface MoveGestureControllerOptions {
+   baseRevision: number;
+   objectId: string;
+   onCommit: (
+     objectId: string,
+     translation: Translation3,
+     baseRevision: number,
+-  ) => Promise<void> | void;
++  ) => Promise<boolean | void> | boolean | void;
+   onDraftChange: (draft: MoveDraft | null) => void;
+   onGestureActiveChange?: (active: boolean) => void;
+   origin: Translation3;
+ }
+ 
+ export function createMoveGestureController({
+   baseRevision,
+   objectId,
+   onCommit,
+   onDraftChange,
+   onGestureActiveChange,
+   origin,
+ }: MoveGestureControllerOptions) {
+   let active:
+-    | { axis: MoveAxis; pointerId: number; start: Translation3 }
++    | {
++        axis: MoveAxis;
++        pointerId: number;
++        releasePointerCapture: (pointerId: number) => void;
++        start: Translation3;
++      }
+     | null = null;
+   let translation: Translation3 = [...origin];
+ 
+   const publish = () =>
+     onDraftChange({ objectId, origin: [...origin], translation: [...translation] });
+ 
+   return {
+     begin(
+       axis: MoveAxis,
+       pointerId: number,
+       point: Translation3,
+       setPointerCapture: (pointerId: number) => void,
++      releasePointerCapture: (pointerId: number) => void,
+     ): void {
+-      active = { axis, pointerId, start: [...point] };
++      if (active) cancelActive(false);
++      active = { axis, pointerId, releasePointerCapture, start: [...point] };
+       translation = [...origin];
+       setPointerCapture(pointerId);
+       onGestureActiveChange?.(true);
+       publish();
+     },
+     cancel(): boolean {
+       if (!active) return false;
+-      active = null;
+-      translation = [...origin];
+-      publish();
+-      onGestureActiveChange?.(false);
++      cancelActive(true);
+       return true;
+     },
+-    async end(
+-      pointerId: number,
+-      releasePointerCapture: (pointerId: number) => void,
+-    ): Promise<void> {
++    async end(pointerId: number): Promise<void> {
+       if (!active || active.pointerId !== pointerId) return;
+-      active = null;
+-      releasePointerCapture(pointerId);
+-      onGestureActiveChange?.(false);
+-      await onCommit(objectId, [...translation], baseRevision);
++      releaseActiveCapture();
++      const committed = await onCommit(objectId, [...translation], baseRevision);
++      if (committed !== false) onDraftChange(null);
+     },
+     move(pointerId: number, point: Translation3): void {
+       if (!active || active.pointerId !== pointerId) return;
+       const axisIndex = active.axis === "x" ? 0 : active.axis === "y" ? 1 : 2;
+       translation = [...origin];
+       translation[axisIndex] += point[axisIndex] - active.start[axisIndex];
+       publish();
+     },
+   };
++
++  function releaseActiveCapture(): void {
++    const terminal = active;
++    if (!terminal) return;
++    active = null;
++    try {
++      terminal.releasePointerCapture(terminal.pointerId);
++    } catch {
++      // Capture may already have been released by the browser before lostpointercapture.
++    }
++    onGestureActiveChange?.(false);
++  }
++
++  function cancelActive(clearDraft: boolean): void {
++    releaseActiveCapture();
++    translation = [...origin];
++    if (clearDraft) onDraftChange(null);
++  }
+ }
+ 
+ export function MoveObjectGizmo({
+   baseRevision,
+   object,
+   onCommit,
+   onDraftChange,
+   onGestureActiveChange,
+ }: {
+   baseRevision: number;
+@@ -120,68 +141,130 @@ export function MoveObjectGizmo({
+       onCommit,
+       onDraftChange,
+       onGestureActiveChange,
+       originX,
+       originY,
+       originZ,
+     ],
+   );
+ 
+   useEffect(() => {
+-    const onKeyDown = (event: KeyboardEvent) => {
+-      if (event.key === "Escape" && controller.cancel()) {
+-        event.preventDefault();
+-      }
+-    };
+-    window.addEventListener("keydown", onKeyDown);
+-    return () => {
+-      controller.cancel();
+-      window.removeEventListener("keydown", onKeyDown);
+-    };
++    return installMoveGestureTerminalListeners(controller, window);
+   }, [controller]);
+ 
+   const offset: Translation3 = draft
+     ? [
+         draft.translation[0] - draft.origin[0],
+         draft.translation[1] - draft.origin[1],
+         draft.translation[2] - draft.origin[2],
+       ]
+     : [0, 0, 0];
+   const length = Math.max(Math.max(...object.bounds.size) * 0.7, 1e-12);
+ 
+   return (
+     <group
++      name={`move-gizmo:${object.objectId}`}
+       position={offset}
+       userData={{ gizmo: "move", objectId: object.objectId }}
+     >
+       <mesh userData={{ draftPreview: true }}>
+         <boxGeometry args={object.bounds.size} />
+         <meshBasicMaterial color="#89b4fa" opacity={0.22} transparent wireframe />
+       </mesh>
+       {(["x", "y", "z"] as const).map((axis, index) => (
+         <mesh
++          {...moveAxisPointerHandlers(controller, axis)}
+           key={axis}
+           position={axisPosition(axis, length)}
+           rotation={axisRotation(axis)}
+           userData={{ axis, gizmo: "move-axis", objectId: object.objectId }}
+-          onPointerDown={(event) => beginAxisDrag(controller, axis, event)}
+-          onPointerMove={(event) => moveAxisDrag(controller, event)}
+-          onPointerUp={(event) => void endAxisDrag(controller, event)}
+         >
+           <cylinderGeometry args={[length * 0.035, length * 0.035, length, 10]} />
+           <meshBasicMaterial color={["#f38ba8", "#a6e3a1", "#89b4fa"][index]} depthTest={false} />
+         </mesh>
+       ))}
+     </group>
+   );
+ }
+ 
++export function installMoveGestureTerminalListeners(
++  controller: ReturnType<typeof createMoveGestureController>,
++  target: Pick<Window, "addEventListener" | "removeEventListener">,
++): () => void {
++  const onKeyDown = (event: Event) => {
++    const keyboardEvent = event as KeyboardEvent;
++    if (keyboardEvent.key === "Escape" && controller.cancel()) {
++      keyboardEvent.preventDefault();
++    }
++  };
++  target.addEventListener("keydown", onKeyDown);
++  return () => {
++    controller.cancel();
++    target.removeEventListener("keydown", onKeyDown);
++  };
++}
++
++export function moveAxisPointerHandlers(
++  controller: ReturnType<typeof createMoveGestureController>,
++  axis: MoveAxis,
++) {
++  return {
++    onLostPointerCapture: (event: ThreeEvent<PointerEvent>) =>
++      cancelAxisDrag(controller, event),
++    onPointerCancel: (event: ThreeEvent<PointerEvent>) =>
++      cancelAxisDrag(controller, event),
++    onPointerDown: (event: ThreeEvent<PointerEvent>) =>
++      beginAxisDrag(controller, axis, event),
++    onPointerMove: (event: ThreeEvent<PointerEvent>) =>
++      moveAxisDrag(controller, event),
++    onPointerUp: (event: ThreeEvent<PointerEvent>) =>
++      void endAxisDrag(controller, event),
++  };
++}
++
++export function Viewport3DMoveToolLayer({
++  moveDraftResetRevision,
++  moveToolObjectId,
++  onCommit,
++  onGestureActiveChange,
++  primitiveModel,
++  selectedObjectId,
++}: {
++  moveDraftResetRevision: number;
++  moveToolObjectId: string | null;
++  onCommit: MoveGestureControllerOptions["onCommit"];
++  onGestureActiveChange?: (active: boolean) => void;
++  primitiveModel: Viewport3DPrimitiveRenderModel | null;
++  selectedObjectId: string | null;
++}) {
++  if (
++    !selectedObjectId ||
++    moveToolObjectId !== selectedObjectId ||
++    primitiveModel?.sceneRevision == null
++  ) return null;
++  return primitiveModel.objects
++    .filter((object) => object.objectId === selectedObjectId)
++    .map((object) => (
++      <group
++        key={`move:${object.objectId}:${moveDraftResetRevision}`}
++        position={object.bounds.center}
++      >
++        <MoveObjectGizmo
++          baseRevision={primitiveModel.sceneRevision as number}
++          object={object}
++          onCommit={onCommit}
++          onGestureActiveChange={onGestureActiveChange}
++        />
++      </group>
++    ));
++}
++
+ function eventPoint(event: ThreeEvent<PointerEvent>): Translation3 {
+   return [event.point.x, event.point.y, event.point.z];
+ }
+ 
+ function pointerTarget(event: ThreeEvent<PointerEvent>): Element & {
+   releasePointerCapture(pointerId: number): void;
+   setPointerCapture(pointerId: number): void;
+ } {
+   return event.target as Element & {
+     releasePointerCapture(pointerId: number): void;
+@@ -191,40 +274,46 @@ function pointerTarget(event: ThreeEvent<PointerEvent>): Element & {
+ 
+ function beginAxisDrag(
+   controller: ReturnType<typeof createMoveGestureController>,
+   axis: MoveAxis,
+   event: ThreeEvent<PointerEvent>,
+ ): void {
+   event.stopPropagation();
+   const target = pointerTarget(event);
+   controller.begin(axis, event.pointerId, eventPoint(event), (pointerId) =>
+     target.setPointerCapture(pointerId),
++    (pointerId) => target.releasePointerCapture(pointerId),
+   );
+ }
+ 
+ function moveAxisDrag(
+   controller: ReturnType<typeof createMoveGestureController>,
+   event: ThreeEvent<PointerEvent>,
+ ): void {
+   event.stopPropagation();
+   controller.move(event.pointerId, eventPoint(event));
+ }
+ 
+ async function endAxisDrag(
+   controller: ReturnType<typeof createMoveGestureController>,
+   event: ThreeEvent<PointerEvent>,
+ ): Promise<void> {
+   event.stopPropagation();
+-  const target = pointerTarget(event);
+-  await controller.end(event.pointerId, (pointerId) =>
+-    target.releasePointerCapture(pointerId),
+-  );
++  await controller.end(event.pointerId);
++}
++
++function cancelAxisDrag(
++  controller: ReturnType<typeof createMoveGestureController>,
++  event: ThreeEvent<PointerEvent>,
++): void {
++  event.stopPropagation();
++  controller.cancel();
+ }
+ 
+ function axisPosition(axis: MoveAxis, length: number): Translation3 {
+   if (axis === "x") return [length / 2, 0, 0];
+   if (axis === "y") return [0, length / 2, 0];
+   return [0, 0, length / 2];
+ }
+ 
+ function axisRotation(axis: MoveAxis): Translation3 {
+   if (axis === "x") return [0, 0, -Math.PI / 2];
+diff --git a/apps/control-room/src/modules/viewport-3d/Viewport3DModule.tsx b/apps/control-room/src/modules/viewport-3d/Viewport3DModule.tsx
+index 4a0cd41ca..3add61cf7 100644
+--- a/apps/control-room/src/modules/viewport-3d/Viewport3DModule.tsx
++++ b/apps/control-room/src/modules/viewport-3d/Viewport3DModule.tsx
+@@ -26,24 +26,28 @@ import type {
+ import {
+   quantityUnitForColorbar,
+   resolveCanonicalQuantityId,
+ } from "@/kernel/api/quantityIds";
+ import {
+   viewport3DAuditRenderErrorInjectionEnabledFromBrowserConfig,
+   viewport3DOrbitDebugEnabledFromBrowserConfig,
+ } from "@/kernel/browserFullmagConfig";
+ import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
+ import {
+-  commitObjectTranslation,
+-  isObjectTranslationRevisionConflict,
+   type ObjectTranslation,
+ } from "@/kernel/authoring/objectTranslationMutation";
++import {
++  commitObjectMoveWorkflow,
++  rebaseObjectMoveConflict,
++  type ObjectMoveConflict,
++} from "@/kernel/authoring/objectMoveConflictWorkflow";
++import { useObjectMoveTool } from "@/kernel/authoring/ObjectMoveToolController";
+ import { useMeshHistogramBinElementsResource } from "@/kernel/resources/geometryLifecycleResources";
+ import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
+ import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
+ import { useFieldMetaResource } from "@/kernel/resources/studyRuntimeResources";
+ import {
+   frozenSpinsMaskIdFromResource,
+   useFrozenSpinsActivePreviewId,
+   useFrozenSpinsMaskResource,
+   useFrozenSpinsPreviewResource,
+ } from "@/kernel/resources/frozenSpinsResources";
+@@ -1212,20 +1216,22 @@ function useMeshSizeHistogramHighlight(
+       }),
+     [bus],
+   );
+   return highlight;
+ }
+ 
+ interface Viewport3DFrameProps
+   extends Omit<
+     Viewport3DSceneProps,
+     | "colors"
++    | "moveDraftResetRevision"
++    | "moveToolObjectId"
+     | "onOrbitDebugAnglesChange"
+     | "onMoveCommit"
+     | "onVisualizationFrameCommitted"
+     | "orbitDebugAngles"
+     | "orbitDebugCommitRevision"
+     | "orbitDebugRevision"
+   > {
+   cameraDialogOpen: boolean;
+   cameraDialogState: Viewport3DSceneProps["cameraState"];
+   cameraResource: VisualizationStateResource["camera"] | null;
+@@ -1790,26 +1796,23 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
+   const [orbitDebugAngles, setOrbitDebugAngles] =
+     useState<Viewport3DOrbitDebugAngles>(() =>
+       normalizeViewport3DOrbitDebugAngles(null),
+     );
+   const [orbitDebugRevision, setOrbitDebugRevision] = useState(0);
+   const [orbitDebugCommitRevision, setOrbitDebugCommitRevision] = useState(0);
+   const [dismissedResourceIssueKey, setDismissedResourceIssueKey] =
+     useState<string | null>(null);
+   const [inspectHover, setInspectHover] =
+     useState<Viewport3DInspectHover | null>(null);
+-  const [moveConflict, setMoveConflict] = useState<{
+-    baseRevision: number;
+-    objectId: string;
+-    phase: "conflict" | "refetched" | "rebased" | "retrying";
+-    translation: ObjectTranslation;
+-  } | null>(null);
++  const [moveConflict, setMoveConflict] = useState<ObjectMoveConflict | null>(null);
++  const [moveDraftResetRevision, setMoveDraftResetRevision] = useState(0);
++  const moveTool = useObjectMoveTool(kernel.objectMoveTool);
+   const lastRenderedMeshRevision = useRef<number | string | null>(null);
+   const sendVisualizationAck = useVisualizationClientAckSender({ api: kernel.api });
+   const visualizationAckRevisionRef = useRef<{
+     resourceFrameKey: string;
+     revision: number;
+   } | null>(null);
+   const visualizationAckKindsRef = useRef(
+     new Map<number, {
+       changeKind: "data" | "style";
+       dataIdentity: VisualizationDataAdoptionIdentity | null;
+@@ -2263,41 +2266,40 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
+   );
+   const handleCanvasPointerMissed = useCallback(() => {
+     clearInspectHover();
+     onClearSelection();
+   }, [clearInspectHover, onClearSelection]);
+   const commitMove = useCallback(async (
+     objectId: string,
+     translation: ObjectTranslation,
+     baseRevision: number,
+   ) => {
+-    try {
+-      await commitObjectTranslation({
+-        api: kernel.api,
+-        baseRevision,
+-        objectId,
+-        resources: kernel.resources,
+-        translation,
+-      });
+-      setMoveConflict(null);
+-    } catch (error) {
+-      if (!isObjectTranslationRevisionConflict(error)) throw error;
+-      setMoveConflict({ baseRevision, objectId, phase: "conflict", translation });
+-    }
++    return commitObjectMoveWorkflow({
++      api: kernel.api,
++      baseRevision,
++      objectId,
++      onAcknowledged: () => {
++        setMoveConflict(null);
++        setMoveDraftResetRevision((revision) => revision + 1);
++      },
++      onConflict: setMoveConflict,
++      resources: kernel.resources,
++      translation,
++    });
+   }, [kernel.api, kernel.resources]);
+   const rebaseMove = useCallback(() => {
+     if (
+       !moveConflict ||
+       sceneRevision === null ||
+       sceneRevision === moveConflict.baseRevision
+     ) return;
+-    setMoveConflict({ ...moveConflict, baseRevision: sceneRevision, phase: "rebased" });
++    setMoveConflict(rebaseObjectMoveConflict(moveConflict, sceneRevision));
+   }, [moveConflict, sceneRevision]);
+   const retryMove = useCallback(async () => {
+     if (!moveConflict || moveConflict.phase !== "rebased") return;
+     const retry = { ...moveConflict, phase: "retrying" as const };
+     setMoveConflict(retry);
+     await commitMove(retry.objectId, retry.translation, retry.baseRevision);
+   }, [commitMove, moveConflict]);
+   const moveCanRebase = Boolean(
+     moveConflict?.phase === "conflict" &&
+       sceneRevision !== null &&
+@@ -2588,20 +2590,22 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
+             hysteresisReplayGlyphModel={hysteresisReplayGlyphModel}
+             orbitDebugAngles={orbitDebugAngles}
+             orbitDebugCommitRevision={orbitDebugCommitRevision}
+             orbitDebugRevision={orbitDebugRevision}
+             onOrbitDebugAnglesChange={
+               orbitDebugEnabled ? syncOrbitDebugAngles : undefined
+             }
+             onInspectClear={clearInspectHover}
+             onInspectSample={updateInspectHover}
+             onMoveCommit={commitMove}
++            moveToolObjectId={moveTool?.objectId ?? null}
++            moveDraftResetRevision={moveDraftResetRevision}
+             onVisualizationFrameCommitted={onVisualizationFrameCommitted}
+             visualProfileId={visualProfile.id}
+           />
+         </Viewport3DCanvas>
+       ) : (
+         <div className="fm-viewport-3d__placeholder">Preparing viewport</div>
+       )}
+       {discretizationKind && (
+         <div
+           aria-label={`Discretization method: ${discretizationKind}`}
+diff --git a/apps/control-room/src/modules/viewport-3d/layers/Viewport3DScene.tsx b/apps/control-room/src/modules/viewport-3d/layers/Viewport3DScene.tsx
+index 6eff92bf0..774ec294b 100644
+--- a/apps/control-room/src/modules/viewport-3d/layers/Viewport3DScene.tsx
++++ b/apps/control-room/src/modules/viewport-3d/layers/Viewport3DScene.tsx
+@@ -156,21 +156,21 @@ import { clampNumber, sameTuple3 } from "../viewport3dMath";
+ import { createViewport3DCameraGestureRef } from "./viewport3DCameraGesture";
+ import type { Viewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
+ import type { FdmUniverseOutsideSupportOverlayModel } from "../model/fdmUniverseOverlay";
+ import type { Viewport3DFdmTargetRenderView } from "../model/viewport3DFdmTargetViews";
+ import type { FdmAirboxPassPlan } from "./fdmAirboxPassPlan";
+ import type { Viewport3DVectorBuildReference } from "../viewport3dRenderModel";
+ import {
+   FrozenSpinsOverlay,
+   type FrozenSpinsOverlayModel,
+ } from "./FrozenSpinsOverlay";
+-import { MoveObjectGizmo, type Translation3 } from "../MoveObjectGizmo";
++import { Viewport3DMoveToolLayer, type Translation3 } from "../MoveObjectGizmo";
+ 
+ const EMPTY_REGION_OVERLAYS: readonly RegionOverlayInput[] = [];
+ 
+ interface Viewport3DSceneProps {
+   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
+   sessionIdentity?: SessionResourceIdentity | null;
+   bounds: Viewport3DBounds | null;
+   cameraOrthographicScale: number | null;
+   cameraProjection: Viewport3DCameraProjection;
+   cameraState: Viewport3DCameraState;
+@@ -243,21 +243,23 @@ interface Viewport3DSceneProps {
+   onSelectRegion: (selection: RegionOverlaySelection) => void;
+   onSelectDomain: () => void;
+   onSelectFdmTarget: (target: VisualizationTargetRef) => void;
+   onSelectFdmUniverseOutsideSupport: () => void;
+   onSelectFdmCell?: (instanceId: number) => void;
+   onSelectPart: (selection: Viewport3DPartSelection) => void;
+   onMoveCommit: (
+     objectId: string,
+     translation: Translation3,
+     baseRevision: number,
+-  ) => Promise<void> | void;
++  ) => Promise<boolean | void> | boolean | void;
++  moveToolObjectId: string | null;
++  moveDraftResetRevision: number;
+   orbitDebugAngles: Viewport3DOrbitDebugAngles;
+   orbitDebugCommitRevision: number;
+   orbitDebugRevision: number;
+   fallbackSettings: VisualizationTargetSettings;
+   primitiveModel: Viewport3DPrimitiveRenderModel | null;
+   resetCameraRevision: number;
+   requestDiagnostics: RequestDiagnosticsController;
+   resourceFrameKey: string;
+   regionOverlayMode: RegionOverlayMode;
+   regionOverlays: readonly RegionOverlayInput[];
+@@ -1061,20 +1063,22 @@ function Viewport3DModelLayerStack({
+   materialProfile,
+   meshQualityColors,
+   meshQualityOverlayVisible,
+   meshRegionOverlayParts,
+   meshRegionOverlays,
+   periodicOverlayModel,
+   meshSizeHighlightModel,
+   onInspectClear,
+   onInspectSample,
+   onMoveCommit,
++  moveToolObjectId,
++  moveDraftResetRevision,
+   onMoveGestureActiveChange,
+   onSelectDomain,
+   onSelectFdmTarget,
+   onSelectFdmUniverseOutsideSupport,
+   onSelectFdmCell,
+   onSelectObject,
+   onSelectPart,
+   onSelectRegion,
+   primitiveModel,
+   regionOverlayMode,
+@@ -1117,20 +1121,22 @@ function Viewport3DModelLayerStack({
+   | "meshQualityColors"
+   | "meshQualityOverlayVisible"
+   | "meshRegionOverlayParts"
+   | "meshRegionOverlays"
+   | "periodicOverlayModel"
+   | "meshSizeHighlightModel"
+   | "inspectEnabled"
+   | "onInspectClear"
+   | "onInspectSample"
+   | "onMoveCommit"
++  | "moveToolObjectId"
++  | "moveDraftResetRevision"
+   | "onSelectDomain"
+   | "onSelectFdmTarget"
+   | "onSelectFdmUniverseOutsideSupport"
+   | "onSelectFdmCell"
+   | "onSelectObject"
+   | "onSelectPart"
+   | "onSelectRegion"
+   | "primitiveModel"
+   | "regionOverlayMode"
+   | "regionOverlays"
+@@ -1397,34 +1403,28 @@ function Viewport3DModelLayerStack({
+         <PrimitiveObjectLayer
+           colors={colors}
+           getObjectSettings={getObjectSettings}
+           materialProfile={materialProfile}
+           onSelectObject={onSelectObject}
+           primitiveModel={primitiveModel}
+           realizedObjectIds={realizedFdmObjectIds}
+           tracker={tracker}
+         />
+       ) : null}
+-      {selectedObjectId && primitiveModel?.sceneRevision != null
+-        ? primitiveModel.objects
+-            .filter((object) => object.objectId === selectedObjectId)
+-            .map((object) => (
+-              <group key={`move:${object.objectId}`} position={object.bounds.center}>
+-                <MoveObjectGizmo
+-                  baseRevision={primitiveModel.sceneRevision as number}
+-                  object={object}
+-                  onCommit={onMoveCommit}
+-                  onGestureActiveChange={onMoveGestureActiveChange}
+-                />
+-              </group>
+-            ))
+-        : null}
++      <Viewport3DMoveToolLayer
++        moveDraftResetRevision={moveDraftResetRevision}
++        moveToolObjectId={moveToolObjectId}
++        onCommit={onMoveCommit}
++        onGestureActiveChange={onMoveGestureActiveChange}
++        primitiveModel={primitiveModel}
++        selectedObjectId={selectedObjectId}
++      />
+       {!fdmLaneActive &&
+       stageVisibility.baseGeometry &&
+       viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (
+         <TopologyMeshLayer
+           adoptionRegistry={adoptionRegistry}
+           colors={colors}
+           sessionIdentity={sessionIdentity}
+           fieldModel={stagedFieldModel}
+           getPartSettings={getPartSettings}
+           materialProfile={materialProfile}
+@@ -1745,20 +1745,22 @@ export function Viewport3DScene({
+   topologyModel,
+   topologyRevision,
+   vectorColorMode,
+   vectorStyle,
+   visualizationRevision,
+   hslReferenceVisible,
+   inspectEnabled,
+   onInspectClear,
+   onInspectSample,
+   onMoveCommit,
++  moveToolObjectId,
++  moveDraftResetRevision,
+   scaleLabelsVisible,
+   scaleUnitMode,
+   viewCubeVisible,
+   visualProfileId,
+ }: Viewport3DSceneProps) {
+   const invalidate = useBatchedInvalidate("camera");
+   const setThreeState = useThree((state) => state.set);
+   const viewportSize = useThree((state) => state.size);
+   const orthographicCameraRef = useRef<ThreeOrthographicCamera>(null);
+   const perspectiveCameraRef = useRef<ThreePerspectiveCamera>(null);
+@@ -2037,20 +2039,22 @@ export function Viewport3DScene({
+         materialProfile={materialProfile}
+         meshQualityColors={meshQualityColors}
+         meshQualityOverlayVisible={meshQualityOverlayVisible}
+         meshRegionOverlayParts={meshRegionOverlayParts}
+         meshRegionOverlays={meshRegionOverlays}
+         periodicOverlayModel={periodicOverlayModel}
+         meshSizeHighlightModel={meshSizeHighlightModel}
+         onInspectClear={inspectClearArbitrator.clear}
+         onInspectSample={handleArbitratedInspectSample}
+         onMoveCommit={onMoveCommit}
++        moveToolObjectId={moveToolObjectId}
++        moveDraftResetRevision={moveDraftResetRevision}
+         onMoveGestureActiveChange={setMoveGestureActive}
+         onSelectDomain={onSelectDomain}
+         onSelectFdmTarget={onSelectFdmTarget}
+         onSelectFdmUniverseOutsideSupport={onSelectFdmUniverseOutsideSupport}
+         onSelectFdmCell={onSelectFdmCell}
+         onSelectObject={onSelectObject}
+         onSelectPart={onSelectPart}
+         onSelectRegion={onSelectRegion}
+         primitiveModel={primitiveModel}
+         regionOverlayMode={regionOverlayMode}
+diff --git a/apps/control-room/src/modules/viewport-3d/viewport3dPrimitiveModel.test.ts b/apps/control-room/src/modules/viewport-3d/viewport3dPrimitiveModel.test.ts
+index a27a8f08a..7efa5e6eb 100644
+--- a/apps/control-room/src/modules/viewport-3d/viewport3dPrimitiveModel.test.ts
++++ b/apps/control-room/src/modules/viewport-3d/viewport3dPrimitiveModel.test.ts
+@@ -83,21 +83,21 @@ describe("viewport3dPrimitiveModel", () => {
+         "box:Box:{\"size\":[1,2,3]}:{\"translation\":[4,5,6]}",
+       kind: "box",
+       label: "Box",
+       meshState: "primitive-only",
+       objectId: "box",
+       sceneRevision: 7,
+     });
+     expect(model.objects[0]?.bounds.center).toEqual([4, 5, 6]);
+     expect(model.objects[0]?.bounds.size).toEqual([1, 2, 3]);
+     expect(buildViewport3DPrimitiveFrameKey(model)).toBe(
+-      "7|box:Box:{\"size\":[1,2,3]}:{\"translation\":[4,5,6]}",
++      "7|box:Box:{\"size\":[1,2,3]}:{\"translation\":[4,5,6]}|no-draft",
+     );
+   });
+ 
+   it("builds primitive-only entries when the API uses scene_revision", () => {
+     const model = buildViewport3DPrimitiveRenderModel(
+       {
+         objects: [
+           {
+             geometry: {
+               geometry_kind: "Box",

@@ -1,4 +1,5 @@
 import type {
+  AuthoringTransactionRequest,
   JsonObject,
   ObjectPatchRequest,
   RegionListResource,
@@ -334,6 +335,19 @@ function requiredPlane(value: string | undefined, label: string): string {
 }
 
 type TextureVector3 = [number, number, number];
+
+export function normalizeUniformMagnetizationDirection(
+  direction: TextureVector3,
+): TextureVector3 {
+  if (!direction.every(Number.isFinite)) {
+    throw new Error("Uniform magnetization direction must be finite.");
+  }
+  const norm = Math.hypot(direction[0], direction[1], direction[2]);
+  if (!Number.isFinite(norm) || norm <= 1e-12) {
+    throw new Error("Uniform magnetization direction must be nonzero.");
+  }
+  return [direction[0] / norm, direction[1] / norm, direction[2] / norm];
+}
 
 function wallCenterDirection(
   left: TextureVector3,
@@ -697,6 +711,23 @@ export function buildMagnetizationAssignmentPatch(
     base_revision: baseRevision,
     magnetization_ref: normalizeMagnetizationRef(draft.magnetizationRef),
   };
+}
+
+export function buildMagnetizationTransactionRequest(
+  model: ObjectMagneticTexturePanelModel,
+  asset: MagnetizationAssetDraft | null,
+  magnetizationRef: string | null,
+): AuthoringTransactionRequest {
+  const transaction = {
+    base_revision: model.baseRevision,
+    kind: "patch_magnetization" as const,
+    object_id: model.objectId,
+    magnetization_ref: magnetizationRef,
+    ...(asset ? { asset: asset as JsonObject } : {}),
+  };
+  return model.targetKind === "region" && model.regionId
+    ? { ...transaction, region_id: model.regionId }
+    : transaction;
 }
 
 export function objectMagneticTexturePresetChangePatch(
@@ -1133,11 +1164,11 @@ function presetParamsFromDraft(
   }
 
   return {
-    direction: [
+    direction: normalizeUniformMagnetizationDirection([
       requiredNumber(draft.directionX, "Direction X"),
       requiredNumber(draft.directionY, "Direction Y"),
       requiredNumber(draft.directionZ, "Direction Z"),
-    ],
+    ]),
   };
 }
 

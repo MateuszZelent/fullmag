@@ -3,6 +3,7 @@ import { useState } from "react";
 import {
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_READINESS_PATH,
   MODEL_SCENE_PATH,
   VISUALIZATION_STATE_PATH,
 } from "@/kernel/api/apiPaths";
@@ -108,6 +109,7 @@ function invalidateAuthoringResources(
     resources.invalidate(MODEL_SCENE_PATH, revision);
   }
   resources.invalidate(MODEL_GEOMETRY_VALIDATION_PATH, revision);
+  resources.invalidate(MODEL_READINESS_PATH, revision);
   resources.invalidate(MODEL_GEOMETRY_DIAGNOSTICS_PATH, revision);
   resources.invalidate(MESH_BUILD_CURRENT_RESOURCE_KEY, revision);
   resources.invalidate(MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY, revision);

@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronDown, Search } from "lucide-react";
-import { useEffect, useMemo, useReducer, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useReducer, useState, useSyncExternalStore } from "react";
 
 import { useTheme } from "@/design/theme/ThemeProvider";
 import {
@@ -13,6 +13,7 @@ import { useKernel } from "@/kernel/KernelContext";
 import { useRuntimeCommandControlResourceData } from "@/kernel/resources/studyRuntimeResources";
 import { readDetailedRuntimeState } from "@/kernel/runtime/runtimeStateDisplay";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import { useSessionCollection } from "@/kernel/resources/useSessionCollection";
 import {
   EMPTY_OBJECT_VISUALIZATION_SNAPSHOT,
   useObjectVisualizationSelector,
@@ -65,6 +66,7 @@ import { DataPreviewDialog } from "./DataPreviewDialog";
 import { MaterialLibraryDialog } from "./MaterialLibraryDialog";
 import { RegistryInspectorDialog } from "./RegistryInspectorDialog";
 import { DiagnosticRecorderDialog } from "./diagnostic-recorder/DiagnosticRecorderDialog";
+import { NewProblemDialog } from "./NewProblemDialog";
 
 function subscribeToHydration(): () => void {
   return () => {};
@@ -354,6 +356,84 @@ function appMenuDialogReducer(
 }
 
 export function AppMenuBar() {
+  const sessions = useSessionCollection();
+
+  return sessions.state === "ready" ? (
+    <SessionAppMenuBar />
+  ) : (
+    <NoSessionAppMenuBar state={sessions.state} />
+  );
+}
+
+function NoSessionAppMenuBar({
+  state,
+}: {
+  readonly state: "error" | "loading" | "no-session";
+}) {
+  const kernel = useKernel();
+  const { theme, setTheme } = useTheme();
+  const [newProblemOpen, setNewProblemOpen] = useState(false);
+  const commandContext = createCommandContext("menu", kernel, {
+    sourceDetail: "app-menu",
+  });
+  useEffect(
+    () => kernel.bus.on("workspace:new-problem-requested", () => {
+      setNewProblemOpen(true);
+    }),
+    [kernel.bus],
+  );
+  const runCommand = (commandId: string, input?: unknown) => {
+    if (kernel.commands.get(commandId)) {
+      void kernel.commands.execute(commandId, commandContext, input);
+    }
+  };
+  const isCommandDisabled = (commandId: string) => {
+    if (commandId === "workspace.new-problem" && state !== "no-session") {
+      return true;
+    }
+    const command = kernel.commands.get(commandId);
+    return command ? !kernel.commands.isEnabled(commandId, commandContext) : false;
+  };
+
+  return (
+    <header className="fm-header">
+      <div className="fm-header__brand">
+        <FullmagMark size={20} className="fm-header__logo" />
+        <div className="fm-header__brand-copy">
+          <span className="fm-header__title">Fullmag</span>
+          <span className="fm-header__subtitle">
+            {state === "no-session"
+              ? "No active session"
+              : state === "loading"
+                ? "Checking sessions"
+                : "Session list unavailable"}
+          </span>
+        </div>
+      </div>
+      <nav className="fm-header__nav" aria-label="Main menu">
+        {MAIN_MENUS.map((menu) => (
+          <HeaderDropdown
+            key={menu.id}
+            isCommandActive={(commandId) => kernel.commands.isActive(commandId, commandContext)}
+            isCommandDisabled={isCommandDisabled}
+            menu={menu}
+            onCommand={runCommand}
+          />
+        ))}
+      </nav>
+      <div className="fm-header__actions">
+        <ThemeSwitcher theme={theme} onThemeChange={setTheme} />
+      </div>
+      <NewProblemDialog
+        hasActiveSession={false}
+        open={state === "no-session" && newProblemOpen}
+        onOpenChange={setNewProblemOpen}
+      />
+    </header>
+  );
+}
+
+function SessionAppMenuBar() {
   const kernel = useKernel();
   const { theme, setTheme } = useTheme();
   const hydrated = useSyncExternalStore(
@@ -372,6 +452,7 @@ export function AppMenuBar() {
     appMenuDialogReducer,
     APP_MENU_DIALOG_INITIAL_STATE,
   );
+  const [newProblemOpen, setNewProblemOpen] = useState(false);
   const setDataPreviewOpen = (open: boolean) =>
     dispatchDialogState({ open, type: "data-preview" });
   const setCommunicationOpen = (open: boolean) =>
@@ -387,6 +468,9 @@ export function AppMenuBar() {
       dispatchDialogState({ open: true, type: "thread-manager" });
     });
   }, [kernel.bus]);
+  useEffect(() => kernel.bus.on("workspace:new-problem-requested", () => {
+    setNewProblemOpen(true);
+  }), [kernel.bus]);
   const visualizationSnapshot = useObjectVisualizationSelector((snapshot) =>
     dialogState.registryOpen ? snapshot : EMPTY_OBJECT_VISUALIZATION_SNAPSHOT,
   );
@@ -594,6 +678,12 @@ export function AppMenuBar() {
       <CommunicationPolicyDialog
         onOpenChange={setCommunicationOpen}
         open={dialogState.communicationOpen}
+      />
+
+      <NewProblemDialog
+        hasActiveSession
+        open={newProblemOpen}
+        onOpenChange={setNewProblemOpen}
       />
 
       <div className="fm-header__separator" />

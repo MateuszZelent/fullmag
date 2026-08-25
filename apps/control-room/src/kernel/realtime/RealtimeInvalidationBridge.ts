@@ -39,10 +39,16 @@ import {
   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
   MESHING_SUMMARY_PATH,
   MODEL_MATERIAL_FIELDS_PATH,
+  MODEL_MAGNETIZATION_ASSET_PATH,
+  MODEL_MATERIAL_PATH,
+  MODEL_OBJECT_GEOMETRY_PATH,
+  MODEL_OBJECT_INTERACTION_PATH,
+  MODEL_READINESS_PATH,
   MODEL_REALIZED_REGIONS_PATH,
   MODEL_REGION_DIAGNOSTICS_PATH,
   MODEL_REGIONS_PATH,
   MODEL_SCENE_PATH,
+  MODEL_STUDY_PATH,
   SESSION_CURRENT_PATH,
   SIMULATION_COMMANDS_PATH,
   SIMULATION_OBJECT_METRICS_PATH,
@@ -332,6 +338,21 @@ const SESSION_STATUS_RECOMMENDED_FETCHES = new Set<string>([
   SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
 ]);
+
+const MODEL_READINESS_DEPENDENCY_PATHS = [
+  MODEL_STUDY_PATH,
+  MODEL_MATERIAL_PATH,
+  MODEL_MAGNETIZATION_ASSET_PATH,
+  MODEL_OBJECT_GEOMETRY_PATH,
+  MODEL_OBJECT_INTERACTION_PATH,
+  MESHING_BUILDS_CURRENT_PATH,
+] as const;
+
+function isModelReadinessDependency(resourceKey: string): boolean {
+  return MODEL_READINESS_DEPENDENCY_PATHS.some((pathTemplate) =>
+    stageScopedRegex(pathTemplate).test(resourceKey),
+  );
+}
 
 function shouldInvalidateSessionStatus(recommendedFetch?: string): boolean {
   return (
@@ -721,6 +742,7 @@ export class RealtimeInvalidationBridge {
       this.resources.invalidatePrefix(resourceKey, revision);
       this.invalidateSceneDocumentDependents(resourceKey, revision);
       this.invalidateMeshBuildCompletionDependents(resourceKey, revision);
+      this.invalidateModelReadinessDependent(resourceKey, revision);
       this.invalidateFdmMembershipDependents(resourceKey, revision);
       this.invalidateHysteresisAnalysisDependents(resourceKey, revision);
       const dependentStatusRevision =
@@ -782,6 +804,7 @@ export class RealtimeInvalidationBridge {
     if (recommendedFetch !== MESHING_BUILDS_LATEST_SUCCESSFUL_PATH) return;
 
     this.resources.invalidate(MODEL_SCENE_PATH, revision);
+    this.resources.invalidate(MODEL_READINESS_PATH, revision);
     this.resources.invalidate(MESHING_BUILDS_CURRENT_PATH, revision);
     this.resources.invalidate(MESHING_SUMMARY_PATH, revision);
     this.resources.invalidate(MESHING_SEMANTICS_PATH, revision);
@@ -854,6 +877,7 @@ export class RealtimeInvalidationBridge {
     this.resources.invalidate(MODEL_REALIZED_REGIONS_PATH, dependentRevision);
     this.resources.invalidate(MODEL_REGION_DIAGNOSTICS_PATH, dependentRevision);
     this.resources.invalidate(MODEL_MATERIAL_FIELDS_PATH, dependentRevision);
+    this.resources.invalidate(MODEL_READINESS_PATH, dependentRevision);
     this.resources.invalidateMatching(
       (resourceKey) =>
         matchesStageScopedResource(
@@ -881,6 +905,17 @@ export class RealtimeInvalidationBridge {
           SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
         ),
       dependentRevision,
+    );
+  }
+
+  private invalidateModelReadinessDependent(
+    recommendedFetch: string,
+    revision: ResourceRevision,
+  ): void {
+    if (!isModelReadinessDependency(recommendedFetch)) return;
+    this.resources.invalidate(
+      MODEL_READINESS_PATH,
+      dependentResourceRevision(recommendedFetch, revision),
     );
   }
 

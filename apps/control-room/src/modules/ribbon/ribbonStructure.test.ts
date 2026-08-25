@@ -34,6 +34,8 @@ import { RibbonTabStrip } from "./RibbonTabStrip";
 import {
   MESHING_CAPABILITIES_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_SCENE_PATH,
+  MODEL_READINESS_PATH,
   SIMULATION_COMMANDS_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
@@ -44,6 +46,11 @@ import type {
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
+import { ObjectMoveToolController } from "@/kernel/authoring/ObjectMoveToolController";
+import { EventBus } from "@/kernel/events/EventBus";
+import type { KernelEventMap } from "@/kernel/events/eventTypes";
+import { LayoutController } from "@/kernel/layout/LayoutController";
+import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 import { activeLaneCapabilityFixture } from "@/kernel/resources/activeLaneCapabilityFixture.testSupport";
@@ -59,12 +66,21 @@ import {
   crossSectionWorkspaceStore,
   resetCrossSectionWorkspaceForTests,
 } from "@/kernel/workspace/crossSectionWorkspace";
+
 import { GEOMETRY_LIFECYCLE_COMMANDS } from "@/kernel/authoring/geometryLifecycleCommandContributions";
 import { MAGNETIZATION_TEXTURE_COMMANDS } from "@/kernel/authoring/magnetization-texture/commands";
 import { REGION_COMMANDS } from "@/kernel/authoring/regionCommandContributions";
 import { SHELL_COMMANDS } from "@/kernel/layout/shellCommands";
 import { ANALYSIS_FIELD_OVERLAY_COMMANDS } from "@/kernel/visualization/analysisFieldOverlayCommandContributions";
 import { ALL_MODULES } from "@/modules/registry";
+
+const READY_MODEL_READINESS = {
+  blockers: [],
+  checks: [],
+  ready_to_export: true,
+  ready_to_run: true,
+  scene_revision: 1,
+};
 
 type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K];
@@ -4622,6 +4638,7 @@ describe("ribbon structure", () => {
         api: { commands: { submit: vi.fn() } } as never,
         resourceData: {
           [MODEL_GEOMETRY_VALIDATION_PATH]: { diagnostics: [] },
+          [MODEL_READINESS_PATH]: READY_MODEL_READINESS,
           [SESSION_STATUS_RESOURCE_KEY]: {
             capabilities: {
               binary_fields: true,
@@ -4689,6 +4706,7 @@ describe("ribbon structure", () => {
         api: { commands: { submit: vi.fn() } } as never,
         resourceData: {
           [MODEL_GEOMETRY_VALIDATION_PATH]: { diagnostics: [] },
+          [MODEL_READINESS_PATH]: READY_MODEL_READINESS,
           [SESSION_STATUS_RESOURCE_KEY]: {
             capabilities: {
               binary_fields: true,
@@ -4822,6 +4840,13 @@ describe("ribbon structure", () => {
       api: { commands: { submit: vi.fn() } } as never,
       resourceData: {
         [MODEL_GEOMETRY_VALIDATION_PATH]: { diagnostics: [] },
+        [MODEL_READINESS_PATH]: {
+          ...READY_MODEL_READINESS,
+          blockers: [
+            "Build a current shared-domain mesh before running. Open Mesh Jobs or Build Shared-Domain Mesh.",
+          ],
+          ready_to_run: false,
+        },
         [SESSION_STATUS_RESOURCE_KEY]: {
           capabilities: {
             binary_fields: true,
@@ -5041,7 +5066,6 @@ describe("ribbon structure", () => {
       "builder-add-tube",
       "builder-add-wedge",
       "builder-add-polygon_prism",
-      "builder-tool-move",
       "builder-tool-rotate",
       "builder-tool-scale",
       "builder-mode-camera",
@@ -5059,12 +5083,105 @@ describe("ribbon structure", () => {
         expect(action.disabled, action.id).toBe(true);
       }
     }
+    const transformActions = actions.filter((action) =>
+      ["builder-tool-move", "builder-tool-rotate", "builder-tool-scale"].includes(action.id),
+    );
+    expect(transformActions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "builder-tool-move", commandId: "geometry.move-selected" }),
+        expect.objectContaining({
+          disabled: true,
+          id: "builder-tool-rotate",
+          tooltip: "Rotate and Scale require a canonical geometry contract newer than ProblemIR 0.3.",
+        }),
+        expect.objectContaining({
+          disabled: true,
+          id: "builder-tool-scale",
+          tooltip: "Rotate and Scale require a canonical geometry contract newer than ProblemIR 0.3.",
+        }),
+      ]),
+    );
     const frameAllAction = actions.find((action) => action.id === "builder-frame-all");
 
     expect(frameAllAction).toMatchObject({
       commandId: "viewport-3d.fit",
     });
     expect(frameAllAction).not.toHaveProperty("disabled");
+  });
+
+  it("executes Move by activating the selected magnetic object and focusing the 3D viewport", async () => {
+    const bus = new EventBus<KernelEventMap>();
+    const selection = new SelectionController(bus);
+    const layout = new LayoutController(bus);
+    const objectMoveTool = new ObjectMoveToolController();
+    selection.set(selectedMeshObject(), "test");
+    layout.setActiveViewportMainModule("analysis-plots");
+    const registry = createRibbonCommandRegistry();
+    const context = {
+      api: {} as never,
+      layout,
+      objectMoveTool,
+      resourceData: {
+        [MODEL_SCENE_PATH]: {
+          objects: [{ id: "box", role: "magnet" }],
+          revision: 8,
+        },
+      },
+      selection,
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("geometry.move-selected", context)).toBe(true);
+    expect(objectMoveTool.getSnapshot()).toBeNull();
+
+    expect(await registry.execute("geometry.move-selected", context)).toEqual({
+      status: "completed",
+    });
+    expect(objectMoveTool.getSnapshot()).toEqual({
+      activationId: 1,
+      mode: "move",
+      objectId: "box",
+    });
+    expect(layout.get().activeViewportMainModuleId).toBe("viewport-3d");
+    expect(layout.get().focusedSlot).toBe("viewport-main");
+    expect(registry.isActive("geometry.move-selected", context)).toBe(true);
+  });
+
+  it("fails Move closed while scene readiness is unavailable and leaves Rotate/Scale request-free", async () => {
+    const bus = new EventBus<KernelEventMap>();
+    const selection = new SelectionController(bus);
+    selection.set(selectedMeshObject(), "test");
+    const objectMoveTool = new ObjectMoveToolController();
+    const registry = createRibbonCommandRegistry();
+    const commitTransaction = vi.fn();
+    const context = {
+      api: { model: { commitTransaction } } as never,
+      objectMoveTool,
+      resourceData: { [MODEL_SCENE_PATH]: null },
+      selection,
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("geometry.move-selected", context)).toBe(false);
+    expect(registry.get("geometry.move-selected")?.disabledReason?.(context)).toBe(
+      "The revisioned model scene is not ready.",
+    );
+    expect(await registry.execute("geometry.move-selected", context)).toEqual({
+      message: "The revisioned model scene is not ready.",
+      status: "failed",
+    });
+    const rotateAndScale = ALL_TAB_CONTENT.geometry.groups
+      .flatMap((group) => group.actions)
+      .filter((action) => ["builder-tool-rotate", "builder-tool-scale"].includes(action.id));
+    expect(rotateAndScale).toHaveLength(2);
+    for (const action of rotateAndScale) {
+      expect(action).toMatchObject({
+        disabled: true,
+        tooltip: "Rotate and Scale require a canonical geometry contract newer than ProblemIR 0.3.",
+      });
+      expect(action).not.toHaveProperty("commandId");
+    }
+    expect(commitTransaction).not.toHaveBeenCalled();
   });
 
   it("exposes concrete study stage authoring commands in the Study ribbon", () => {

@@ -11,6 +11,7 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::platform::realtime::get_communication_policy,
         crate::router_v2::handlers::platform::realtime::patch_communication_policy,
         crate::router_v2::handlers::platform::realtime::ws_current_live,
+        crate::router_v2::handlers::sessions::create,
         crate::router_v2::handlers::sessions::status::get_status,
         crate::router_v2::handlers::data::domain::get_domain_meta,
         crate::router_v2::handlers::data::domain::get_fdm_multilayer_layout,
@@ -117,6 +118,7 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::meshing::mesh::get_mesh_interface_report,
         crate::router_v2::handlers::meshing::mesh::get_mesh_interface_quality,
         crate::router_v2::handlers::model::authoring::get_authoring_scene,
+        crate::router_v2::handlers::model::readiness::get_model_readiness,
         crate::router_v2::handlers::model::authoring::replace_authoring_scene,
         crate::router_v2::handlers::model::authoring::patch_authoring_scene,
         crate::router_v2::handlers::model::physics_graph::get_physics_graph,
@@ -200,6 +202,7 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::simulation::commands::submit_command,
         crate::router_v2::handlers::simulation::runtime::get_command_status,
         crate::router_v2::handlers::simulation::runtime::get_command_detail,
+        crate::router_v2::handlers::simulation::runtime::report_command_failure,
         crate::router_v2::handlers::persistence::assets::import_asset,
         crate::router_v2::handlers::simulation::runtime::get_current_run,
         crate::router_v2::handlers::simulation::runtime::get_simulation_preparation,
@@ -276,6 +279,18 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::platform::system::get_health,
     ),
     components(schemas(
+        crate::schemas::sessions::CreateSessionRequest,
+        crate::schemas::sessions::CreateSessionResponse,
+        crate::schemas::sessions::SessionListResource,
+        crate::schemas::sessions::SessionSummaryResource,
+        crate::schemas::sessions::ScratchSceneSchemaVersion,
+        crate::schemas::sessions::ScratchSceneDocumentResource,
+        crate::schemas::sessions::ScratchSessionBackend,
+        crate::schemas::sessions::ScratchSessionDevice,
+        crate::schemas::sessions::ScratchSessionPrecision,
+        crate::schemas::sessions::ScratchSessionRevisionsResource,
+        crate::schemas::sessions::ScratchSessionStatusResource,
+        crate::schemas::sessions::SessionExecutionResource,
         crate::schemas::status::LiveStatus,
         crate::schemas::status::SessionSummary,
         crate::schemas::status::RunSummary,
@@ -849,14 +864,39 @@ fn add_session_collection_paths(doc: &mut Value) {
             "get": {
                 "tags": ["sessions"],
                 "operationId": "sessions_list_sessions",
-                "responses": {"200": {"description": "Available sessions"}}
+                "responses": {
+                    "200": {
+                        "description": "Available sessions",
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/SessionListResource"}
+                            }
+                        }
+                    }
+                }
             },
             "post": {
                 "tags": ["sessions"],
                 "operationId": "sessions_create_session",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {"$ref": "#/components/schemas/CreateSessionRequest"}
+                        }
+                    }
+                },
                 "responses": {
-                    "200": {"description": "Current session returned"},
-                    "400": {"description": "The local runtime only exposes the current session"}
+                    "201": {
+                        "description": "Scratch session created",
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/CreateSessionResponse"}
+                            }
+                        }
+                    },
+                    "400": {"description": "Invalid scratch session request"},
+                    "409": {"description": "An active local session already exists"}
                 }
             }
         }),

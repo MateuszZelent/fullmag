@@ -51,6 +51,23 @@ export interface StudyFdmDraft {
   perMagnet: string;
 }
 
+export type FdmGridVector = [number, number, number];
+
+export interface FdmGridPreviewEntry {
+  objectId: string;
+  cell: FdmGridVector;
+  geometryExtent: FdmGridVector;
+  extent: FdmGridVector;
+  counts: FdmGridVector;
+  cellCount: number;
+}
+
+export interface FdmGridPreview {
+  lane: "fdm";
+  entries: FdmGridPreviewEntry[];
+  totalCellCount: number;
+}
+
 export interface StudyAdaptiveTimestepDraft {
   atol: string;
   dtInitial: string;
@@ -86,6 +103,7 @@ export interface StudyGlobalDraftValidation {
 }
 
 export interface StudyExecutionDiscretizationContext {
+  baseRevision?: number | null;
   requestedBackend?: string | null;
   requestedDiscretization?: string | null;
   sessionDiscretization?: string | null;
@@ -176,6 +194,7 @@ export function validateStudyGlobalDraft(
     activeLane?: ActiveLaneCapabilitySnapshot | null;
     algorithmsAvailable?: readonly string[];
     magneticObjectCount?: number;
+    magneticObjectIds?: readonly string[];
     requestedDiscretization?: string | null;
     sessionDiscretization?: string | null;
   },
@@ -237,7 +256,12 @@ export function validateStudyGlobalDraft(
     sessionDiscretization: capabilities?.sessionDiscretization,
   });
   if (explicitFdm) {
-    validateFdmDraft(issues, draft.fdm, draft.demagRealization);
+    validateFdmDraft(
+      issues,
+      draft.fdm,
+      draft.demagRealization,
+      capabilities?.magneticObjectIds,
+    );
     if (
       capabilities?.magneticObjectCount !== undefined &&
       capabilities.magneticObjectCount > 1 &&
@@ -302,6 +326,9 @@ export function buildStudyGlobalMergePatch(
   study.solver = solverDraftToScene(draft.solver);
   return {
     kind: "merge_patch",
+    ...(context.baseRevision === undefined || context.baseRevision === null
+      ? {}
+      : { base_revision: context.baseRevision }),
     merge_patch: {
       study,
     },
@@ -364,7 +391,7 @@ function solverDraftToScene(draft: StudySolverDraft): JsonObject {
 
   const solver: JsonObject = {
     adaptive_timestep: null,
-    demag_interval_s: optionalNumber(draft.demagInterval),
+    demag_interval_s: optionalNumericText(draft.demagInterval),
     dt_initial: null,
     dt_max: null,
     dt_min: null,
@@ -377,26 +404,26 @@ function solverDraftToScene(draft: StudySolverDraft): JsonObject {
     torque_tolerance: draft.torqueTolerance,
   };
   if (draft.timestepMode === "fixed") {
-    solver.fixed_timestep = optionalNumber(draft.fixDt);
+    solver.fixed_timestep = optionalNumericText(draft.fixDt);
   } else if (draft.timestepMode === "adaptive_max_error") {
-    solver.dt_initial = optionalNumber(draft.dtInitial);
-    solver.dt_min = optionalNumber(draft.dtMin);
-    solver.dt_max = optionalNumber(draft.dtMax);
-    solver.max_err = optionalNumber(draft.maxErr);
+    solver.dt_initial = optionalNumericText(draft.dtInitial);
+    solver.dt_min = optionalNumericText(draft.dtMin);
+    solver.dt_max = optionalNumericText(draft.dtMax);
+    solver.max_err = optionalNumericText(draft.maxErr);
   } else if (draft.timestepMode === "adaptive_advanced") {
     const advanced = draft.adaptiveTimestep;
     solver.adaptive_timestep = advanced
       ? {
-          atol: optionalNumber(advanced.atol),
-          rtol: optionalNumber(advanced.rtol),
-          dt_initial: optionalNumber(advanced.dtInitial),
-          dt_min: optionalNumber(advanced.dtMin),
-          dt_max: optionalNumber(advanced.dtMax),
-          safety: optionalNumber(advanced.safety),
-          growth_limit: optionalNumber(advanced.growthLimit),
-          shrink_limit: optionalNumber(advanced.shrinkLimit),
-          max_spin_rotation: optionalNumber(advanced.maxSpinRotation),
-          norm_tolerance: optionalNumber(advanced.normTolerance),
+          atol: optionalNumericText(advanced.atol),
+          rtol: optionalNumericText(advanced.rtol),
+          dt_initial: optionalNumericText(advanced.dtInitial),
+          dt_min: optionalNumericText(advanced.dtMin),
+          dt_max: optionalNumericText(advanced.dtMax),
+          safety: optionalNumericText(advanced.safety),
+          growth_limit: optionalNumericText(advanced.growthLimit),
+          shrink_limit: optionalNumericText(advanced.shrinkLimit),
+          max_spin_rotation: optionalNumericText(advanced.maxSpinRotation),
+          norm_tolerance: optionalNumericText(advanced.normTolerance),
         }
       : null;
   }
@@ -441,10 +468,109 @@ function fdmDraftToScene(draft: StudyFdmDraft): JsonObject {
   };
 }
 
+/**
+ * Calculate the structured-grid coverage implied by the authored FDM policy.
+ * This is a preview only: no mesh/topology resource is materialized here.
+ */
+export function resolveFdmGridPreview(
+  scene: unknown,
+  draft: StudyGlobalDraft,
+): FdmGridPreview {
+  const objects = asRecord(scene)?.objects;
+  if (!Array.isArray(objects)) {
+    return { lane: "fdm", entries: [], totalCellCount: 0 };
+  }
+  const fdm = draft.fdm;
+  if (!fdm) return { lane: "fdm", entries: [], totalCellCount: 0 };
+
+  const defaultCell = optionalPositiveVector3(fdm.defaultCell);
+  const overrides = parseFdmPerMagnetOverrides(fdm.perMagnet);
+  const entries: FdmGridPreviewEntry[] = [];
+  for (const rawObject of objects) {
+    const object = asRecord(rawObject);
+    if (object?.role !== "magnet") continue;
+    const objectId = typeof object.id === "string" ? object.id.trim() : "";
+    if (!objectId) continue;
+    const cell = overrides[objectId] ?? defaultCell;
+    if (!cell) continue;
+    const geometryExtent = geometryExtentForFdmPreview(object);
+    if (!geometryExtent || geometryExtent.some((value) => value <= 0)) continue;
+    const counts = geometryExtent.map((extent, index) =>
+      Math.max(1, Math.ceil(extent / cell[index])),
+    ) as FdmGridVector;
+    const extent = counts.map((count, index) =>
+      Number((count * cell[index]).toPrecision(15)),
+    ) as FdmGridVector;
+    const cellCount = counts[0] * counts[1] * counts[2];
+    entries.push({ objectId, cell, geometryExtent, extent, counts, cellCount });
+  }
+  return {
+    lane: "fdm",
+    entries,
+    totalCellCount: entries.reduce((total, entry) => total + entry.cellCount, 0),
+  };
+}
+
+function parseFdmPerMagnetOverrides(
+  value: string,
+): Record<string, FdmGridVector> {
+  if (!value.trim()) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return {};
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const overrides: Record<string, FdmGridVector> = {};
+  for (const [objectId, rawOverride] of Object.entries(parsed)) {
+    const cell = optionalPositiveVector3Value(asRecord(rawOverride)?.cell);
+    if (cell) overrides[objectId] = cell;
+  }
+  return overrides;
+}
+
+function geometryExtentForFdmPreview(object: JsonRecord): FdmGridVector | null {
+  const geometry = asRecord(object.geometry);
+  const params = asRecord(geometry?.geometry_params);
+  const boundsMin = finiteVector3Value(geometry?.bounds_min);
+  const boundsMax = finiteVector3Value(geometry?.bounds_max);
+  if (boundsMin && boundsMax) {
+    const bounds = boundsMax.map((value, index) => value - boundsMin[index]) as FdmGridVector;
+    if (bounds.every((value) => value > 0)) return bounds;
+  }
+
+  const geometryKind = String(geometry?.geometry_kind ?? geometry?.kind ?? "").toLowerCase();
+  const paramsSize = finiteVector3Value(params?.size ?? params?.dimensions);
+  if (paramsSize && paramsSize.every((value) => value > 0)) return paramsSize;
+  if (geometryKind === "cylinder") {
+    const radius = finitePositiveNumber(params?.radius);
+    const height = finitePositiveNumber(params?.height);
+    return radius !== null && height !== null
+      ? [radius * 2, radius * 2, height]
+      : null;
+  }
+  if (geometryKind === "sphere") {
+    const radius = finitePositiveNumber(params?.radius);
+    return radius === null ? null : [radius * 2, radius * 2, radius * 2];
+  }
+  if (geometryKind === "archwaveguide" || geometryKind === "arch_waveguide") {
+    const length = finitePositiveNumber(params?.length);
+    const width = finitePositiveNumber(params?.width);
+    const height = finitePositiveNumber(params?.height);
+    const archHeight = finitePositiveNumber(params?.arch_height);
+    return length !== null && width !== null && height !== null && archHeight !== null
+      ? [length, width, height + archHeight]
+      : null;
+  }
+  return null;
+}
+
 function validateFdmDraft(
   issues: StudyGlobalDraftValidation[],
   draft: StudyFdmDraft | undefined,
   legacyStrategy: string,
+  magneticObjectIds?: readonly string[],
 ): void {
   const effective = draft ?? createFdmDraft(null, legacyStrategy);
   const strategy = normalizeDemagStrategy(
@@ -523,18 +649,51 @@ function validateFdmDraft(
       });
     }
   }
-  if (effective.defaultCell.trim() && !optionalVector3(effective.defaultCell)) {
+  if (effective.defaultCell.trim() && !optionalPositiveVector3(effective.defaultCell)) {
     issues.push({
-      message: "FDM default cell must contain three finite numbers.",
+      message: "FDM default cell must contain three finite positive SI values.",
       severity: "error",
     });
   }
   validateOptionalJsonObject(issues, effective.perMagnet, "FDM per-magnet grids");
+  validateFdmPerMagnetOverrides(issues, effective.perMagnet, magneticObjectIds);
   if (strategyValid && !effective.defaultCell.trim() && !effective.perMagnet.trim()) {
     issues.push({
       message: "FDM requires a default cell or per-magnet grid specification.",
       severity: "error",
     });
+  }
+}
+
+function validateFdmPerMagnetOverrides(
+  issues: StudyGlobalDraftValidation[],
+  value: string,
+  magneticObjectIds?: readonly string[],
+): void {
+  if (!value.trim()) return;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+  const knownIds = magneticObjectIds ? new Set(magneticObjectIds) : null;
+  for (const [objectId, rawOverride] of Object.entries(parsed)) {
+    if (knownIds && !knownIds.has(objectId)) {
+      issues.push({
+        message: `FDM per-magnet grid ${objectId} does not match a magnetic object_id.`,
+        severity: "error",
+      });
+    }
+    const override = asRecord(rawOverride);
+    const cell = override?.cell;
+    if (!optionalPositiveVector3Value(cell)) {
+      issues.push({
+        message: `FDM per-magnet grid ${objectId} cell must contain three finite positive SI values.`,
+        severity: "error",
+      });
+    }
   }
 }
 
@@ -569,7 +728,7 @@ function validateSolverDraft(
     const advanced = draft.adaptiveTimestep;
     validateNonnegativeText(issues, advanced.atol, "Absolute tolerance");
     validateNonnegativeText(issues, advanced.rtol, "Relative tolerance");
-    if (Number(advanced.atol) === 0 && Number(advanced.rtol) === 0) {
+    if (parseNumericText(advanced.atol) === 0 && parseNumericText(advanced.rtol) === 0) {
       issues.push({ message: "At least one advanced tolerance must be positive.", severity: "error" });
     }
     validatePositiveText(issues, advanced.dtMin, "Adaptive dt min");
@@ -629,16 +788,16 @@ function validateController(
   validatePositiveText(issues, adaptive.shrinkLimit, "Adaptive shrink limit");
   validateOptionalPositiveText(issues, adaptive.maxSpinRotation, "Max spin rotation");
   validateOptionalPositiveText(issues, adaptive.normTolerance, "Norm tolerance");
-  const safety = Number(adaptive.safety);
-  const growth = Number(adaptive.growthLimit);
-  const shrink = Number(adaptive.shrinkLimit);
-  if (Number.isFinite(safety) && safety > 1) {
+  const safety = parseNumericText(adaptive.safety);
+  const growth = parseNumericText(adaptive.growthLimit);
+  const shrink = parseNumericText(adaptive.shrinkLimit);
+  if (safety !== null && safety > 1) {
     issues.push({ message: "Adaptive safety must be at most one.", severity: "error" });
   }
-  if (Number.isFinite(growth) && growth <= 1) {
+  if (growth !== null && growth <= 1) {
     issues.push({ message: "Adaptive growth limit must be greater than one.", severity: "error" });
   }
-  if (Number.isFinite(shrink) && shrink >= 1) {
+  if (shrink !== null && shrink >= 1) {
     issues.push({ message: "Adaptive shrink limit must be less than one.", severity: "error" });
   }
 }
@@ -649,19 +808,18 @@ function validateAdaptiveBounds(
   minimum: string,
   maximum: string,
 ): void {
-  const min = Number(minimum);
-  const max = maximum.trim() ? Number(maximum) : null;
-  if (Number.isFinite(min) && max !== null && Number.isFinite(max) && max < min) {
+  const min = parseNumericText(minimum);
+  const max = maximum.trim() ? parseNumericText(maximum) : null;
+  if (min !== null && max !== null && max < min) {
     issues.push({
       message: "Adaptive dt max must be greater than or equal to dt min.",
       severity: "error",
     });
   }
-  const first = initial.trim() ? Number(initial) : null;
+  const first = initial.trim() ? parseNumericText(initial) : null;
   if (
     first !== null &&
-    Number.isFinite(first) &&
-    (first < min || (max !== null && first > max))
+    (min === null || first < min || (max !== null && first > max))
   ) {
     issues.push({ message: "Initial dt must lie within adaptive bounds.", severity: "error" });
   }
@@ -672,8 +830,8 @@ function validatePositiveText(
   value: string,
   label: string,
 ): void {
-  const parsed = Number(value);
-  if (!value.trim() || !Number.isFinite(parsed) || parsed <= 0) {
+  const parsed = parseNumericText(value);
+  if (!value.trim() || parsed === null || parsed <= 0) {
     issues.push({ message: `${label} must be finite and positive.`, severity: "error" });
   }
 }
@@ -691,8 +849,8 @@ function validateNonnegativeText(
   value: string,
   label: string,
 ): void {
-  const parsed = Number(value);
-  if (!value.trim() || !Number.isFinite(parsed) || parsed < 0) {
+  const parsed = parseNumericText(value);
+  if (!value.trim() || parsed === null || parsed < 0) {
     issues.push({ message: `${label} must be finite and nonnegative.`, severity: "error" });
   }
 }
@@ -700,6 +858,21 @@ function validateNonnegativeText(
 function optionalNumber(value: string): number | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function optionalNumericText(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return parseNumericText(trimmed) === null ? null : trimmed;
+}
+
+const NUMERIC_TEXT_PATTERN = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+function parseNumericText(value: string): number | null {
+  const trimmed = value.trim();
+  if (!NUMERIC_TEXT_PATTERN.test(trimmed)) return null;
   const parsed = Number(trimmed);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -783,6 +956,38 @@ function optionalVector3(value: string): number[] | null {
     values.push(Number(entry));
   }
   return values.length === 3 && values.every(Number.isFinite) ? values : null;
+}
+
+function optionalPositiveVector3(value: string): FdmGridVector | null {
+  return optionalPositiveVector3Value(
+    value
+      .split(/[;,\s]+/)
+      .map((token) => token.trim())
+      .filter(Boolean)
+      .map((token) => Number(token)),
+  );
+}
+
+function optionalPositiveVector3Value(value: unknown): FdmGridVector | null {
+  const values = finiteVector3Value(value);
+  return values && values.every((entry) => entry > 0) ? values : null;
+}
+
+function finiteVector3Value(value: unknown): FdmGridVector | null {
+  if (
+    !Array.isArray(value) ||
+    value.length !== 3 ||
+    !value.every((entry) => typeof entry === "number" && Number.isFinite(entry))
+  ) {
+    return null;
+  }
+  return value as FdmGridVector;
+}
+
+function finitePositiveNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : null;
 }
 
 function optionalPositiveIntegerVector(value: string, length: number): number[] | null {

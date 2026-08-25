@@ -5,6 +5,11 @@ type JsonPrimitive = boolean | null | number | string;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
 export type JsonObject = { [key: string]: JsonValue };
 
+export type SessionListResource = components["schemas"]["SessionListResource"];
+export type ModelReadinessResource =
+  components["schemas"]["ModelReadinessResource"];
+export type ModelReadinessCheck = components["schemas"]["ModelReadinessCheck"];
+
 export type ObjectInteractionKind =
   | "exchange"
   | "demag"
@@ -433,7 +438,17 @@ export type StudyRuntimeResource =
   components["schemas"]["StudyRuntimeResource"];
 export type AuthoringTransactionRequest =
   | { kind: "replace_scene"; scene: JsonObject }
-  | { kind: "merge_patch"; merge_patch: JsonObject }
+  | (BaseAuthoringTransaction & {
+      kind: "merge_patch";
+      merge_patch: JsonObject;
+    })
+  | (BaseAuthoringTransaction & {
+      asset?: JsonObject | null;
+      kind: "patch_magnetization";
+      magnetization_ref?: string | null;
+      object_id: string;
+      region_id?: string | null;
+    })
   | (BaseAuthoringTransaction & ObjectGeometryPatchRequest & {
       kind: "patch_object_geometry";
       object_id: string;
@@ -548,6 +563,7 @@ export interface ObjectRegionPatchRequest extends BaseAuthoringTransaction {
 export type ObjectRegionReorderRequest =
   components["schemas"]["ObjectRegionReorderRequest"];
 export interface ObjectInteractionPatchRequest {
+  base_revision?: number | null;
   enabled?: boolean | null;
   params?: JsonObject;
   present?: boolean | null;
@@ -558,6 +574,7 @@ export interface ObjectInteractionResource {
   object_id: string;
   params: JsonObject;
   present: boolean;
+  scene_revision: number;
 }
 export interface ObjectPatchRequest extends BaseAuthoringTransaction {
   absorbing_boundary?: JsonObject | null;

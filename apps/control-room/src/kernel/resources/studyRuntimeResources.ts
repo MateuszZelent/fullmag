@@ -49,6 +49,7 @@ import {
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_SUMMARY_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_READINESS_PATH,
   MODEL_SCENE_PATH,
   PERSISTENCE_CHECKPOINT_PATH,
   PERSISTENCE_CHECKPOINTS_PATH,
@@ -94,6 +95,7 @@ import type {
   JsonValue,
   MagneticResponseSweepResource,
   MeshPeriodicPairsResource,
+  ModelReadinessResource,
   ObjectMetricsResource,
   SolverEnergyCurrentResource,
   SolverEnergyHistoryResource,
@@ -200,6 +202,7 @@ export const STUDY_RUNTIME_CONTROL_RESOURCE_KEYS = [
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_READINESS_PATH,
   SESSION_STATUS_RESOURCE_KEY,
   SIMULATION_COMMANDS_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
@@ -412,7 +415,10 @@ export function shouldLoadRuntimeMeshManifest(
         capabilities: Pick<
           LiveStatusResource["capabilities"],
           "explicit_topology"
-        >;
+        > & {
+          active_lane_discretization?: string | null;
+          active_lane?: LiveStatusResource["capabilities"]["active_lane"] | null;
+        };
         domain: Pick<LiveStatusResource["domain"], "discretization">;
         resources: Pick<LiveStatusResource["resources"], "mesh_revision"> &
           Partial<
@@ -423,9 +429,26 @@ export function shouldLoadRuntimeMeshManifest(
     | undefined,
 ): boolean {
   if (!enabled || !status) return false;
+  const hasActiveLaneDiscretization = Object.prototype.hasOwnProperty.call(
+    status.capabilities,
+    "active_lane_discretization",
+  );
+  const hasActiveLane = Object.prototype.hasOwnProperty.call(
+    status.capabilities,
+    "active_lane",
+  );
+  const activeLaneDiscretization = hasActiveLaneDiscretization
+    ? status.capabilities.active_lane_discretization
+    : hasActiveLane
+      ? status.capabilities.active_lane?.resolved?.discretization ?? null
+      : undefined;
+  const laneDiscretization =
+    activeLaneDiscretization !== undefined
+      ? activeLaneDiscretization
+      : status.domain.discretization;
   const requiresSharedDomain =
     status.capabilities.explicit_topology ||
-    status.domain.discretization.toLowerCase() === "fem";
+    laneDiscretization?.toLowerCase() === "fem";
   return (
     requiresSharedDomain &&
     (hasPositiveRevision(status.resources.mesh_revision) ||
@@ -2285,6 +2308,68 @@ export function useSolverProfileResource({
   return { ...resource, data: mergedProfile };
 }
 
+export function useModelReadinessResource({
+  enabled = true,
+}: RuntimeResourceOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) => api.model.readiness({ signal }),
+    [api],
+  );
+
+  return useResource<ModelReadinessResource>({
+    enabled,
+    load,
+    resolveRevision: (data) => data.scene_revision,
+    resourceKey: MODEL_READINESS_PATH,
+  });
+}
+
+export function readyCommandResourceData<T>(
+  data: T | null,
+  status: string,
+): T | null {
+  return status === "ready" ? data : null;
+}
+
+interface RuntimeCommandControlResourceDataInput {
+  commandQueue: unknown;
+  geometryValidation: unknown;
+  meshBuildCurrent: unknown;
+  meshManifest: unknown;
+  modelReadinessData: ModelReadinessResource | null;
+  modelReadinessStatus: string;
+  sessionStatus: unknown;
+  solverStatus: unknown;
+  stageExecution: unknown;
+}
+
+export function buildRuntimeCommandControlResourceData({
+  commandQueue,
+  geometryValidation,
+  meshBuildCurrent,
+  meshManifest,
+  modelReadinessData,
+  modelReadinessStatus,
+  sessionStatus,
+  solverStatus,
+  stageExecution,
+}: RuntimeCommandControlResourceDataInput): Readonly<Record<string, unknown>> {
+  return {
+    [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: meshManifest,
+    [MESHING_BUILDS_CURRENT_PATH]: meshBuildCurrent,
+    [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation,
+    [MODEL_READINESS_PATH]: readyCommandResourceData(
+      modelReadinessData,
+      modelReadinessStatus,
+    ),
+    [SESSION_STATUS_RESOURCE_KEY]: sessionStatus,
+    [SIMULATION_COMMANDS_PATH]: commandQueue,
+    [SIMULATION_SOLVER_STATUS_PATH]: solverStatus,
+    [SIMULATION_STAGES_EXECUTION_PATH]: stageExecution,
+  };
+}
+
 export function useStudyRuntimeCommandResourceData({
   enabled = true,
 }: RuntimeResourceOptions = {}): Readonly<Record<string, unknown>> {
@@ -2299,6 +2384,7 @@ export function useStudyRuntimeCommandResourceData({
     enabled: shouldLoadRuntimeCurrentRun(enabled, sessionStatus),
   });
   const geometryValidation = useGeometryValidationResource({ enabled });
+  const modelReadiness = useModelReadinessResource({ enabled });
   const meshBuildCurrent = useMeshBuildCurrent({
     enabled: shouldLoadRuntimeMeshBuild(enabled, sessionStatus),
   });
@@ -2321,19 +2407,23 @@ export function useStudyRuntimeCommandResourceData({
 
   return useMemo(
     () => ({
+      ...buildRuntimeCommandControlResourceData({
+        commandQueue: commandQueue.data,
+        geometryValidation: geometryValidation.data,
+        meshBuildCurrent: meshBuildCurrent.data,
+        meshManifest: meshManifest.data,
+        modelReadinessData: modelReadiness.data,
+        modelReadinessStatus: modelReadiness.status,
+        sessionStatus: enabled ? sessionStatus : null,
+        solverStatus: solverStatus.data,
+        stageExecution: stageExecution.data,
+      }),
       [DIAGNOSTICS_SOLVER_PROFILE_PATH]: solverProfile.data,
-      [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: meshManifest.data,
-      [MESHING_BUILDS_CURRENT_PATH]: meshBuildCurrent.data,
       [MESHING_BUILDS_LATEST_SUCCESSFUL_PATH]: meshBuildLatest.data,
       [MESHING_SUMMARY_PATH]: meshSummary.data,
-      [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation.data,
       [MODEL_SCENE_PATH]: scene.data,
       [PERSISTENCE_CHECKPOINTS_PATH]: checkpointCatalog.data,
-      [SESSION_STATUS_RESOURCE_KEY]: enabled ? sessionStatus : null,
-      [SIMULATION_COMMANDS_PATH]: commandQueue.data,
       [SIMULATION_RUN_CURRENT_PATH]: currentRun.data,
-      [SIMULATION_SOLVER_STATUS_PATH]: solverStatus.data,
-      [SIMULATION_STAGES_EXECUTION_PATH]: stageExecution.data,
     }),
     [
       checkpointCatalog.data,
@@ -2345,6 +2435,8 @@ export function useStudyRuntimeCommandResourceData({
       meshBuildLatest.data,
       meshManifest.data,
       meshSummary.data,
+      modelReadiness.data,
+      modelReadiness.status,
       scene.data,
       sessionStatus,
       solverProfile.data,
@@ -2367,6 +2459,7 @@ export function useRuntimeCommandControlResourceData({
     enabled: shouldLoadRuntimeCommandQueue(enabled, sessionStatus),
   });
   const geometryValidation = useGeometryValidationResource({ enabled });
+  const modelReadiness = useModelReadinessResource({ enabled });
   const meshBuildCurrent = useMeshBuildCurrent({
     enabled:
       includeSharedDomainReadiness &&
@@ -2385,21 +2478,26 @@ export function useRuntimeCommandControlResourceData({
   });
 
   return useMemo(
-    () => ({
-      [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: meshManifest.data,
-      [MESHING_BUILDS_CURRENT_PATH]: meshBuildCurrent.data,
-      [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation.data,
-      [SESSION_STATUS_RESOURCE_KEY]: enabled ? sessionStatus : null,
-      [SIMULATION_COMMANDS_PATH]: commandQueue.data,
-      [SIMULATION_SOLVER_STATUS_PATH]: solverStatus.data,
-      [SIMULATION_STAGES_EXECUTION_PATH]: stageExecution.data,
-    }),
+    () =>
+      buildRuntimeCommandControlResourceData({
+        commandQueue: commandQueue.data,
+        geometryValidation: geometryValidation.data,
+        meshBuildCurrent: meshBuildCurrent.data,
+        meshManifest: meshManifest.data,
+        modelReadinessData: modelReadiness.data,
+        modelReadinessStatus: modelReadiness.status,
+        sessionStatus: enabled ? sessionStatus : null,
+        solverStatus: solverStatus.data,
+        stageExecution: stageExecution.data,
+      }),
     [
       commandQueue.data,
       enabled,
       geometryValidation.data,
       meshBuildCurrent.data,
       meshManifest.data,
+      modelReadiness.data,
+      modelReadiness.status,
       sessionStatus,
       solverStatus.data,
       stageExecution.data,

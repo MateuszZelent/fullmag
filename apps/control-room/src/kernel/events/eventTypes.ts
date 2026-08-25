@@ -59,6 +59,9 @@ export interface KernelEventMap {
   "workspace:focus-changed": {
     state: LayoutState;
   };
+  "workspace:new-problem-requested": {
+    source: "menu" | "shortcut" | "workspace";
+  };
   "explorer:texture-load-node-requested": {
     objectId: string;
     source: ModuleId;

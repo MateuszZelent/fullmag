@@ -46,8 +46,11 @@ struct ApiStatusSnapshot {
 pub(super) struct CurrentLiveDisplaySelectionHandle {
     shared: Arc<(Mutex<CurrentLiveControlState>, Condvar)>,
     stop: Arc<AtomicBool>,
+    owner_lost: Arc<AtomicBool>,
+    command_polling_ready: Arc<AtomicBool>,
     running_interrupt: Arc<Mutex<Option<InteractiveStageInterrupt>>>,
     running_interrupt_requested: Arc<AtomicBool>,
+    owner_session_id: Option<String>,
     worker_owner: bool,
 }
 
@@ -56,8 +59,11 @@ impl Clone for CurrentLiveDisplaySelectionHandle {
         Self {
             shared: Arc::clone(&self.shared),
             stop: Arc::clone(&self.stop),
+            owner_lost: Arc::clone(&self.owner_lost),
+            command_polling_ready: Arc::clone(&self.command_polling_ready),
             running_interrupt: Arc::clone(&self.running_interrupt),
             running_interrupt_requested: Arc::clone(&self.running_interrupt_requested),
+            owner_session_id: self.owner_session_id.clone(),
             worker_owner: false,
         }
     }
@@ -74,6 +80,10 @@ pub(super) enum InteractiveStageInterrupt {
 
 impl CurrentLiveDisplaySelectionHandle {
     pub(super) fn spawn() -> Self {
+        Self::spawn_for_session(None)
+    }
+
+    pub(super) fn spawn_for_session(session_id: Option<String>) -> Self {
         let initial_display_selection = current_live_display_selection().unwrap_or_default();
         let handle = Self {
             shared: Arc::new((
@@ -84,15 +94,40 @@ impl CurrentLiveDisplaySelectionHandle {
                 Condvar::new(),
             )),
             stop: Arc::new(AtomicBool::new(false)),
+            owner_lost: Arc::new(AtomicBool::new(false)),
+            command_polling_ready: Arc::new(AtomicBool::new(false)),
             running_interrupt: Arc::new(Mutex::new(None)),
             running_interrupt_requested: Arc::new(AtomicBool::new(false)),
+            owner_session_id: session_id,
             worker_owner: true,
         };
         let worker = handle.clone();
+        let worker_owner_lost = Arc::clone(&handle.owner_lost);
         std::thread::spawn(move || {
             let mut after_seq = 0u64;
             while !worker.stop.load(Ordering::Relaxed) {
-                match wait_for_current_live_control(after_seq, 1_000) {
+                if let Some(owner_session_id) = worker.owner_session_id.as_deref() {
+                    if current_live_session_matches(owner_session_id) == Some(false) {
+                        worker_owner_lost.store(true, Ordering::Release);
+                        worker
+                            .running_interrupt_requested
+                            .store(true, Ordering::Release);
+                        eprintln!(
+                            "[fullmag-host] stopping command poller after current session changed (owner={owner_session_id})"
+                        );
+                        worker.stop.store(true, Ordering::Release);
+                        break;
+                    }
+                }
+                if !worker.command_polling_ready.load(Ordering::Acquire) {
+                    std::thread::sleep(Duration::from_millis(50));
+                    continue;
+                }
+                match wait_for_current_live_control(
+                    after_seq,
+                    1_000,
+                    worker.owner_session_id.as_deref(),
+                ) {
                     Ok(Some(command)) => {
                         after_seq = after_seq.max(command.seq);
                         eprintln!(
@@ -121,6 +156,14 @@ impl CurrentLiveDisplaySelectionHandle {
             cvar.notify_all();
         });
         handle
+    }
+
+    pub(super) fn enable_command_polling(&self) {
+        self.command_polling_ready.store(true, Ordering::Release);
+    }
+
+    pub(super) fn owner_session_lost(&self) -> bool {
+        self.owner_lost.load(Ordering::Acquire)
     }
 
     pub(super) fn display_selection_snapshot(&self) -> CurrentDisplaySelection {
@@ -258,6 +301,13 @@ impl CurrentLiveDisplaySelectionHandle {
     }
 
     pub(super) fn process_running_control(&self) -> Option<fullmag_runner::StepAction> {
+        if self.owner_session_lost() {
+            self.set_running_interrupt(InteractiveStageInterrupt::Close);
+            eprintln!(
+                "[fullmag-host] attached runtime owner session was replaced — stopping solver"
+            );
+            return Some(fullmag_runner::StepAction::Stop);
+        }
         self.running_interrupt_requested
             .store(false, Ordering::Relaxed);
         loop {
@@ -526,6 +576,7 @@ impl InteractiveRuntimeHost {
         }
 
         self.refresh_idle_preview(continuation_slice, live_workspace);
+        self.control.enable_command_polling();
     }
 
     pub(super) fn enter_paused(
@@ -564,6 +615,7 @@ impl InteractiveRuntimeHost {
                 );
             }
         }
+        self.control.enable_command_polling();
     }
 
     pub(super) fn replace_base_problem(&mut self, base_problem: ProblemIR) {
@@ -1048,7 +1100,7 @@ mod tests {
     };
     use fullmag_runner::StepStats;
     use std::collections::VecDeque;
-    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Condvar, Mutex};
 
     fn workspace_state_for_energy_refresh() -> LocalLiveWorkspaceState {
@@ -1169,8 +1221,11 @@ mod tests {
                 Condvar::new(),
             )),
             stop: Arc::new(AtomicBool::new(false)),
+            owner_lost: Arc::new(AtomicBool::new(false)),
+            command_polling_ready: Arc::new(AtomicBool::new(true)),
             running_interrupt: Arc::new(Mutex::new(None)),
             running_interrupt_requested: Arc::new(AtomicBool::new(false)),
+            owner_session_id: None,
             worker_owner: true,
         }
     }
@@ -1279,8 +1334,11 @@ mod tests {
                 Condvar::new(),
             )),
             stop: Arc::new(AtomicBool::new(false)),
+            owner_lost: Arc::new(AtomicBool::new(false)),
+            command_polling_ready: Arc::new(AtomicBool::new(true)),
             running_interrupt: Arc::new(Mutex::new(None)),
             running_interrupt_requested: Arc::new(AtomicBool::new(false)),
+            owner_session_id: None,
             worker_owner: true,
         };
 
@@ -1295,6 +1353,21 @@ mod tests {
     }
 
     #[test]
+    fn owner_session_loss_stops_running_solver() {
+        let handle = test_control_handle();
+        handle.owner_lost.store(true, Ordering::Release);
+
+        assert_eq!(
+            handle.process_running_control(),
+            Some(fullmag_runner::StepAction::Stop)
+        );
+        assert_eq!(
+            handle.take_running_interrupt(),
+            Some(super::InteractiveStageInterrupt::Close)
+        );
+    }
+
+    #[test]
     fn dropping_running_control_clone_does_not_stop_owner_worker() {
         let handle = CurrentLiveDisplaySelectionHandle {
             shared: Arc::new((
@@ -1305,8 +1378,11 @@ mod tests {
                 Condvar::new(),
             )),
             stop: Arc::new(AtomicBool::new(false)),
+            owner_lost: Arc::new(AtomicBool::new(false)),
+            command_polling_ready: Arc::new(AtomicBool::new(true)),
             running_interrupt: Arc::new(Mutex::new(None)),
             running_interrupt_requested: Arc::new(AtomicBool::new(false)),
+            owner_session_id: None,
             worker_owner: true,
         };
 
@@ -1525,15 +1601,18 @@ fn supports_idle_preview_cache_refresh(status: InteractivePreviewStatus) -> bool
 fn wait_for_current_live_control(
     after_seq: u64,
     timeout_ms: u64,
+    session_id: Option<&str>,
 ) -> Result<Option<SessionCommand>> {
-    let response = match current_live_api_client()
+    let mut request = current_live_api_client()
         .get(internal_live_api_url("control/wait"))
         .query(&[
             ("afterSeq", after_seq.to_string()),
             ("timeoutMs", timeout_ms.to_string()),
-        ])
-        .send()
-    {
+        ]);
+    if let Some(session_id) = session_id {
+        request = request.query(&[("sessionId", session_id.to_string())]);
+    }
+    let response = match request.send() {
         Ok(response) => response,
         Err(_) => return Ok(None),
     };
@@ -1550,6 +1629,21 @@ fn wait_for_current_live_control(
             status
         ),
     }
+}
+
+fn current_live_session_matches(owner_session_id: &str) -> Option<bool> {
+    let response = current_live_api_client()
+        .get(format!("{}/v2/sessions/current/status", api_base_url()))
+        .send()
+        .ok()?
+        .error_for_status()
+        .ok()?;
+    let body = response.json::<Value>().ok()?;
+    let current_session_id = body
+        .get("session")
+        .and_then(|session| session.get("session_id"))
+        .and_then(Value::as_str)?;
+    Some(current_session_id == owner_session_id)
 }
 
 fn current_live_display_selection() -> Result<CurrentDisplaySelection> {
