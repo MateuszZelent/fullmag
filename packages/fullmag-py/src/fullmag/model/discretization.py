@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from numbers import Integral, Real
 from typing import Any, Literal, Sequence
 
-from fullmag._validation import as_vector3, require_positive
+from fullmag._validation import as_vector3, require_finite, require_positive
 
 
 # ---------------------------------------------------------------------------
@@ -457,6 +458,8 @@ class FEM:
         )
         if resolved_maximum_element_size is None:
             raise TypeError("FEM requires maximum_element_size")
+        if isinstance(maximum_element_size, bool) or isinstance(hmax, bool):
+            raise TypeError("maximum_element_size must be a real number, not bool")
         if hmax is not None and maximum_element_size is not None:
             if float(hmax) != float(maximum_element_size):
                 raise ValueError("hmax must match maximum_element_size when both are provided")
@@ -473,8 +476,9 @@ class FEM:
         return self.maximum_element_size
 
     def __post_init__(self) -> None:
-        if self.order < 1:
-            raise ValueError("order must be >= 1")
+        if isinstance(self.order, bool) or not isinstance(self.order, Integral) or self.order < 1:
+            raise ValueError("order must be an integer >= 1")
+        object.__setattr__(self, "order", int(self.order))
         require_positive(self.maximum_element_size, "maximum_element_size")
         if self.mesh is not None and not self.mesh.strip():
             raise ValueError("mesh must not be empty when provided")
@@ -578,6 +582,64 @@ class MeshSizeControls:
         }
 
 
+_MESH_SIZE_CALIBRATIONS = (
+    "general_physics",
+    "micromagnetics_static",
+    "micromagnetics_relaxation",
+    "micromagnetics_frequency_domain",
+    "magnetostatics_dominated",
+    "imported_surface_cleanup",
+)
+_MESH_SIZE_PRESETS = (
+    "extremely_fine",
+    "extra_fine",
+    "finer",
+    "fine",
+    "normal",
+    "coarse",
+    "coarser",
+    "extra_coarse",
+    "extremely_coarse",
+)
+_MESH_SIZE_PRESET_ALIASES = {
+    "extra fine": "extra_fine",
+    "extra_fine": "extra_fine",
+    "extremely fine": "extremely_fine",
+    "extremely_fine": "extremely_fine",
+    "extrafine": "extra_fine",
+    "extremelyfine": "extremely_fine",
+    "very fine": "extra_fine",
+    "very_fine": "extra_fine",
+    "coarser_mesh": "coarser",
+    "extra coarse": "extra_coarse",
+    "extra_coarse": "extra_coarse",
+    "extremely coarse": "extremely_coarse",
+    "extremely_coarse": "extremely_coarse",
+    "extracoarse": "extra_coarse",
+    "extremelycoarse": "extremely_coarse",
+}
+
+
+def _normalize_mesh_recipe_vocabulary(
+    field_name: str,
+    value: str | None,
+    supported: tuple[str, ...],
+    aliases: dict[str, str] | None = None,
+) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a string or None")
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    if not normalized:
+        return None
+    if aliases is not None:
+        normalized = aliases.get(normalized, normalized)
+    if normalized not in supported:
+        raise ValueError(f"{field_name} must be one of {supported!r}, got {value!r}")
+    return normalized
+
+
 @dataclass(frozen=True, slots=True)
 class PerObjectMeshRecipe:
     """Full mesh recipe for a single ferromagnetic object.
@@ -649,8 +711,8 @@ class PerObjectMeshRecipe:
     exact_layer_count: bool | None = None
 
     # ── quality assessment ──
-    compute_quality: bool = False
-    per_element_quality: bool = False
+    compute_quality: bool | None = None
+    per_element_quality: bool | None = None
 
     # ── extra size fields (appended to global list) ──
     size_fields: list[dict[str, Any]] = field(default_factory=list)
@@ -659,6 +721,125 @@ class PerObjectMeshRecipe:
     operations: list[MeshOperation] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        if self.source is not None:
+            raise ValueError(
+                "per-object mesh source is unavailable; use FEM(mesh=...) for "
+                "the supported study-level imported mesh route"
+            )
+
+        object.__setattr__(
+            self,
+            "calibrate_for",
+            _normalize_mesh_recipe_vocabulary(
+                "calibrate_for", self.calibrate_for, _MESH_SIZE_CALIBRATIONS
+            ),
+        )
+        object.__setattr__(
+            self,
+            "size_preset",
+            _normalize_mesh_recipe_vocabulary(
+                "size_preset",
+                self.size_preset,
+                _MESH_SIZE_PRESETS,
+                _MESH_SIZE_PRESET_ALIASES,
+            ),
+        )
+
+        if self.order is not None:
+            if isinstance(self.order, bool) or not isinstance(self.order, Integral):
+                raise TypeError("order must be an integer")
+            object.__setattr__(self, "order", int(self.order))
+
+        for field_name in ("algorithm_2d", "algorithm_3d"):
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, Integral):
+                raise TypeError(f"{field_name} must be an integer")
+            object.__setattr__(self, field_name, int(value))
+
+        if not isinstance(self.through_thickness_symmetric, bool):
+            raise TypeError("through_thickness_symmetric must be a boolean")
+
+        for field_name in (
+            "maximum_element_size",
+            "minimum_element_size",
+            "hmax",
+            "hmin",
+        ):
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, Real):
+                raise TypeError(f"{field_name} must be a positive number")
+            require_positive(value, field_name)
+
+        effective_maximum = (
+            self.maximum_element_size
+            if self.maximum_element_size is not None
+            else self.hmax
+        )
+        effective_minimum = (
+            self.minimum_element_size
+            if self.minimum_element_size is not None
+            else self.hmin
+        )
+        if (
+            effective_minimum is not None
+            and effective_maximum is not None
+            and effective_minimum > effective_maximum
+        ):
+            raise ValueError(
+                "minimum_element_size/hmin must not exceed maximum_element_size/hmax"
+            )
+
+        for field_name in (
+            "size_factor",
+            "curvature_factor",
+            "growth_rate",
+            "narrow_region_resolution",
+            "boundary_layer_thickness",
+            "boundary_layer_stretching",
+            "through_thickness_element_ratio",
+        ):
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, Real):
+                raise TypeError(f"{field_name} must be a positive number")
+            require_positive(value, field_name)
+
+        for field_name in ("size_from_curvature", "narrow_regions"):
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, Integral):
+                raise TypeError(f"{field_name} must be an integer")
+            if value < 0:
+                raise ValueError(f"{field_name} must be >= 0")
+            object.__setattr__(self, field_name, int(value))
+
+        for field_name in ("optimize_iters", "boundary_layer_count"):
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, Integral):
+                raise TypeError(f"{field_name} must be an integer")
+            if value < 1:
+                raise ValueError(f"{field_name} must be >= 1")
+            object.__setattr__(self, field_name, int(value))
+            object.__setattr__(self, field_name, int(value))
+
+        if self.smoothing_steps is not None:
+            if isinstance(self.smoothing_steps, bool) or not isinstance(
+                self.smoothing_steps, Integral
+            ):
+                raise TypeError("smoothing_steps must be an integer")
+            if self.smoothing_steps < 0:
+                raise ValueError("smoothing_steps must be >= 0")
+            object.__setattr__(self, "smoothing_steps", int(self.smoothing_steps))
+            object.__setattr__(self, "smoothing_steps", int(self.smoothing_steps))
+
         if self.through_thickness_elements is not None:
             if (
                 isinstance(self.through_thickness_elements, bool)
@@ -699,6 +880,10 @@ class PerObjectMeshRecipe:
             self.exact_layer_count, bool
         ):
             raise TypeError("exact_layer_count must be bool")
+        for field_name in ("compute_quality", "per_element_quality"):
+            value = getattr(self, field_name)
+            if value is not None and not isinstance(value, bool):
+                raise TypeError(f"{field_name} must be bool")
 
         if self.topology == "tetrahedral" and any(
             value is not None
@@ -810,15 +995,16 @@ class PerObjectMeshRecipe:
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True, slots=True)
 class SharedMeshAssemblyPolicy:
-    """Controls how per-object recipes are assembled into one shared-domain mesh.
+    """Preserved compatibility record for shared-domain assembly policy.
+
+    The current shared-domain builder accepts this object for API compatibility
+    but does not consume its fields. Use explicit object, interface, and airbox
+    targets for effective sizing.
 
     Attributes:
-        interface_hmax_factor: Size factor at domain interfaces relative to
-            the local object maximum element size (< 1 = finer at boundaries).
-        enforce_conforming: Require a conforming mesh (shared vertices at
-            domain boundaries) via OCC ``fragment``.
-        airbox_hmax_factor: Element size in the airbox as a multiple of the
-            global maximum element size.  Larger = coarser airbox.
+        interface_hmax_factor: Validated, preserved compatibility value.
+        enforce_conforming: Preserved compatibility value.
+        airbox_hmax_factor: Validated, preserved compatibility value.
     """
 
     interface_hmax_factor: float = 0.5
@@ -826,10 +1012,16 @@ class SharedMeshAssemblyPolicy:
     airbox_hmax_factor: float = 3.0
 
     def __post_init__(self) -> None:
+        for field_name in ("interface_hmax_factor", "airbox_hmax_factor"):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, Real):
+                raise TypeError(f"{field_name} must be a real number")
+            require_finite(value, field_name)
+        if not isinstance(self.enforce_conforming, bool):
+            raise TypeError("enforce_conforming must be a boolean")
         if not 0.0 < self.interface_hmax_factor <= 1.0:
             raise ValueError("interface_hmax_factor must be in (0, 1]")
-        if self.airbox_hmax_factor <= 0.0:
-            raise ValueError("airbox_hmax_factor must be positive")
+        require_positive(self.airbox_hmax_factor, "airbox_hmax_factor")
 
     def to_ir(self) -> dict[str, object]:
         return {

@@ -70,8 +70,6 @@ export interface ObjectMeshPolicyDraft {
   source: string;
   smoothingSteps: string;
   sweepFaceMeshing: string;
-  sweepDestination: string;
-  sweepSource: string;
   calibrateFor: string;
   sizePreset: string;
   sizeFactor: string;
@@ -218,16 +216,28 @@ export function validateObjectMeshTopologyCapabilities(
   draft: ObjectMeshPolicyDraft,
   capabilities: ObjectMeshTopologyCapabilities,
 ): string | null {
-  const rawConfig = parseConfig(draft.configText);
   const built = buildObjectMeshPolicyReplaceRequest(draft);
-  const rawRequestsMixed = rawConfig.ok && requestsExactLayeredPrism(rawConfig.value);
-  const builtRequestsMixed =
-    "request" in built &&
-    built.request.config !== null &&
-    requestsExactLayeredPrism(built.request.config ?? {});
-  if (!rawRequestsMixed && !builtRequestsMixed) return null;
-  if (capabilities.layeredPrism.enabled) return null;
-  return `Exact layered prism authoring is unavailable: ${capabilities.layeredPrism.reason}`;
+  const builtConfig = "request" in built ? built.request.config : null;
+  if (!builtConfig || !requestsExactLayeredPrism(builtConfig)) return null;
+  if (!capabilities.layeredPrism.enabled) {
+    return `Exact layered prism authoring is unavailable: ${capabilities.layeredPrism.reason}`;
+  }
+  const requestedLayerCounts = [builtConfig.through_thickness_elements].filter(
+    (value): value is number => typeof value === "number" && Number.isInteger(value),
+  );
+  const supportedLayerCounts = new Set(
+    capabilities.layeredPrism.supportedLayerCounts,
+  );
+  if (
+    requestedLayerCounts.some(
+      (layerCount) => !supportedLayerCounts.has(layerCount),
+    )
+  ) {
+    return `Exact layered prism supports ${capabilities.layeredPrism.supportedLayerCounts.join(
+      ", ",
+    )} through-thickness elements.`;
+  }
+  return null;
 }
 
 export function formatObjectMeshPolicyConfig(
@@ -235,6 +245,29 @@ export function formatObjectMeshPolicyConfig(
 ): string {
   if (!config || Object.keys(config).length === 0) return "{}";
   return JSON.stringify(config, null, 2);
+}
+
+const LAYERED_MESH_POLICY_KEYS = [
+  "element_family",
+  "exact_layer_count",
+  "mesh_strategy",
+  "order",
+  "sweep_direction",
+  "sweep_face_meshing",
+  "through_thickness_distribution",
+  "through_thickness_element_ratio",
+  "through_thickness_elements",
+  "through_thickness_symmetric",
+  "topology",
+  "transition_policy",
+] as const;
+
+export function clearObjectMeshStrategyFromConfig(configText: string): string {
+  const parsed = parseConfig(configText);
+  if (!parsed.ok) return configText;
+  const value = { ...parsed.value };
+  for (const key of LAYERED_MESH_POLICY_KEYS) delete value[key];
+  return formatObjectMeshPolicyConfig(value);
 }
 
 export function draftFromObjectMeshPolicyResource(
@@ -328,8 +361,6 @@ export function draftFromObjectMeshPolicyResource(
     sizePreset: readStringText(config.size_preset),
     smoothingSteps: readNumberText(config.smoothing_steps),
     sweepFaceMeshing: readStringText(config.sweep_face_meshing),
-    sweepDestination: readStringText(config.sweep_destination),
-    sweepSource: readStringText(config.sweep_source),
     throughThicknessDistribution: readStringText(
       config.through_thickness_distribution,
     ),
@@ -470,8 +501,6 @@ export function buildObjectMeshPolicyReplaceRequest({
   sizeFactor,
   sizeFromCurvature,
   sweepFaceMeshing,
-  sweepDestination,
-  sweepSource,
   throughThicknessDistribution,
   throughThicknessElementRatio,
   throughThicknessElements,
@@ -490,6 +519,26 @@ export function buildObjectMeshPolicyReplaceRequest({
   const config = parseConfig(configText);
   if (!config.ok) return { error: config.error };
   const value = { ...config.value };
+  delete value.sweep_source;
+  delete value.sweep_destination;
+  const preserveRawLayeredPrism =
+    value.mesh_strategy === "swept_prism" && !meshStrategy.trim();
+  const preserveRawLayeredPrismField = (key: string, text: string): boolean =>
+    preserveRawLayeredPrism &&
+    !text.trim() &&
+    Object.prototype.hasOwnProperty.call(value, key);
+  const advancedSource = value.source;
+  if (
+    source.trim() ||
+    (advancedSource !== undefined &&
+      advancedSource !== null &&
+      advancedSource !== "")
+  ) {
+    return {
+      error:
+        "Per-object mesh source is unavailable; use the study-level imported mesh route.",
+    };
+  }
 
   const numericFields: Array<[
     key: string,
@@ -551,6 +600,14 @@ export function buildObjectMeshPolicyReplaceRequest({
   ];
 
   for (const [key, text, label, integer, allowZero] of numericFields) {
+    if (preserveRawLayeredPrismField(key, text)) continue;
+    if (
+      key === "through_thickness_elements" &&
+      !text.trim() &&
+      Object.prototype.hasOwnProperty.call(value, key)
+    ) {
+      continue;
+    }
     const parsed = parsePositiveNumber(text, label, integer, allowZero);
     if (!parsed.ok) return { error: parsed.error };
     applyOptionalNumber(value, key, parsed.value);
@@ -594,27 +651,58 @@ export function buildObjectMeshPolicyReplaceRequest({
     cornerTransitionDistanceValue.value,
   );
 
-  applyOptionalString(value, "mesh_strategy", meshStrategy);
-  applyOptionalString(value, "topology", topology);
-  applyOptionalString(value, "transition_policy", transitionPolicy);
+  if (
+    meshStrategy.trim() ||
+    !Object.prototype.hasOwnProperty.call(value, "mesh_strategy")
+  ) {
+    applyOptionalString(value, "mesh_strategy", meshStrategy);
+  }
+  applyOptionalString(
+    value,
+    "topology",
+    topology,
+    preserveRawLayeredPrismField("topology", topology),
+  );
+  applyOptionalString(
+    value,
+    "transition_policy",
+    transitionPolicy,
+    preserveRawLayeredPrismField("transition_policy", transitionPolicy),
+  );
   applyOptionalString(value, "optimize", optimize);
   applyOptionalString(value, "source", source);
   applyOptionalString(
     value,
     "through_thickness_distribution",
     throughThicknessDistribution,
+    preserveRawLayeredPrismField(
+      "through_thickness_distribution",
+      throughThicknessDistribution,
+    ),
   );
-  applyOptionalString(value, "sweep_face_meshing", sweepFaceMeshing);
-  applyOptionalString(value, "sweep_source", sweepSource);
-  applyOptionalString(value, "sweep_destination", sweepDestination);
+  applyOptionalString(
+    value,
+    "sweep_face_meshing",
+    sweepFaceMeshing,
+    preserveRawLayeredPrismField("sweep_face_meshing", sweepFaceMeshing),
+  );
   applyOptionalString(value, "calibrate_for", calibrateFor);
   applyOptionalString(value, "size_preset", sizePreset);
   applyOptionalBoolean(
     value,
     "through_thickness_symmetric",
     throughThicknessSymmetric,
+    preserveRawLayeredPrismField(
+      "through_thickness_symmetric",
+      throughThicknessSymmetric,
+    ),
   );
-  applyOptionalBoolean(value, "exact_layer_count", exactLayerCount);
+  if (
+    exactLayerCount.trim() ||
+    !Object.prototype.hasOwnProperty.call(value, "exact_layer_count")
+  ) {
+    applyOptionalBoolean(value, "exact_layer_count", exactLayerCount);
+  }
   if (meshStrategy === "swept_prism") {
     const layerCount = value.through_thickness_elements;
     if (
@@ -1374,9 +1462,13 @@ function applyOptionalString(
   config: JsonObject,
   key: string,
   value: string,
+  preserveExistingWhenBlank = false,
 ): void {
   const trimmed = value.trim();
   if (!trimmed) {
+    if (preserveExistingWhenBlank && Object.prototype.hasOwnProperty.call(config, key)) {
+      return;
+    }
     delete config[key];
     return;
   }
@@ -1388,9 +1480,13 @@ function applyOptionalBoolean(
   config: JsonObject,
   key: string,
   value: string,
+  preserveExistingWhenBlank = false,
 ): void {
   const trimmed = value.trim();
   if (!trimmed) {
+    if (preserveExistingWhenBlank && Object.prototype.hasOwnProperty.call(config, key)) {
+      return;
+    }
     delete config[key];
     return;
   }

@@ -26,7 +26,7 @@ from fullmag.model.antenna import (
 from fullmag.model.couplings import Coupling
 from fullmag.model.constraints import FrozenSpins
 from fullmag.model.current_transport import CurrentTransport
-from fullmag.model.discretization import DiscretizationHints, FEM
+from fullmag.model.discretization import DiscretizationHints, FEM, PerObjectMeshRecipe
 from fullmag.model.dynamics import LLG
 from fullmag.model.domain_frame import build_domain_frame, geometry_bounds
 from fullmag.model.energy import BulkDMI, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, PiecewiseLinear, StaticFieldMap, ThermalNoise, UniaxialAnisotropy, Zeeman
@@ -316,6 +316,7 @@ def _fem_mesh_cache_key(
     *,
     study_universe: dict[str, object] | None = None,
     mesh_workflow: dict[str, object] | None = None,
+    per_object_recipes: Mapping[str, PerObjectMeshRecipe] | None = None,
 ) -> str:
     payload = {
         "version": _FEM_MESH_CACHE_VERSION,
@@ -323,6 +324,10 @@ def _fem_mesh_cache_key(
         "fem": hints.to_ir(),
         "study_universe": study_universe,
         "mesh_workflow": mesh_workflow,
+        "per_object_recipes": {
+            str(name): recipe.to_ir()
+            for name, recipe in (per_object_recipes or {}).items()
+        },
     }
     return sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
@@ -389,6 +394,7 @@ def build_geometry_assets_for_request(
     discretization: DiscretizationHints | None,
     study_universe: dict[str, object] | None = None,
     mesh_workflow: dict[str, object] | None = None,
+    per_object_recipes: Mapping[str, PerObjectMeshRecipe] | None = None,
     object_regions: Sequence[dict[str, object]] | None = None,
     asset_cache: dict[str, dict[str, Any] | None] | None = None,
     _copy_cached_assets: bool = True,
@@ -407,6 +413,7 @@ def build_geometry_assets_for_request(
         discretization=discretization,
         study_universe=study_universe,
         mesh_workflow=mesh_workflow,
+        per_object_recipes=per_object_recipes,
         object_regions=object_regions,
         fdm_only=fdm_only,
     )
@@ -558,6 +565,7 @@ def build_geometry_assets_for_request(
                         discretization.fem,
                         study_universe=study_universe,
                         mesh_workflow=mesh_workflow,
+                        per_object_recipes=per_object_recipes,
                     )
                     cache_path = (
                         fem_mesh_cache_dir.joinpath(f"{mesh_cache_key}.npz")
@@ -579,6 +587,7 @@ def build_geometry_assets_for_request(
                             discretization.fem,
                             study_universe=study_universe,
                             mesh_workflow=mesh_workflow,
+                            per_object_recipes=dict(per_object_recipes or {}),
                         )
                         mesh = _drop_degenerate_tetrahedra(
                             mesh,
@@ -667,6 +676,7 @@ def build_geometry_assets_for_request(
                     discretization.fem,
                     study_universe=study_universe,
                     mesh_workflow=mesh_workflow,
+                    per_object_recipes=dict(per_object_recipes or {}),
                     object_regions=authored_regions,
                 )
             )
@@ -714,6 +724,7 @@ def _geometry_asset_cache_key(
     discretization: DiscretizationHints,
     study_universe: dict[str, object] | None,
     mesh_workflow: dict[str, object] | None,
+    per_object_recipes: Mapping[str, PerObjectMeshRecipe] | None,
     object_regions: Sequence[dict[str, object]] | None,
     fdm_only: bool,
 ) -> str:
@@ -731,6 +742,10 @@ def _geometry_asset_cache_key(
     }
     if not fdm_only:
         payload["mesh_workflow"] = mesh_workflow
+        payload["per_object_recipes"] = {
+            str(name): recipe.to_ir()
+            for name, recipe in (per_object_recipes or {}).items()
+        }
         payload["object_regions"] = list(object_regions or [])
     return json.dumps(payload, sort_keys=True)
 
@@ -1784,6 +1799,11 @@ class Problem:
         )
         geometry_assets = None
         if include_geometry_assets:
+            per_object_recipes = {
+                magnet.geometry.geometry_name: magnet.mesh
+                for magnet in self.magnets
+                if isinstance(magnet.mesh, PerObjectMeshRecipe)
+            }
             owner_geometry_names = {
                 magnet.name: magnet.geometry.geometry_name for magnet in self.magnets
             }
@@ -1801,6 +1821,7 @@ class Problem:
                 discretization=discretization,
                 study_universe=study_universe,
                 mesh_workflow=mesh_workflow,
+                per_object_recipes=per_object_recipes,
                 object_regions=object_region_mesh_specs,
                 asset_cache=effective_asset_cache,
                 _copy_cached_assets=_copy_cached_geometry_assets,
@@ -2140,6 +2161,11 @@ class Problem:
             requested_backend=requested_backend,
             geometries=geometries,
             discretization=discretization,
+            per_object_recipes={
+                magnet.geometry.geometry_name: magnet.mesh
+                for magnet in self.magnets
+                if isinstance(magnet.mesh, PerObjectMeshRecipe)
+            },
             mesh_workflow=(
                 self.runtime_metadata.get("mesh_workflow")
                 if isinstance(self.runtime_metadata.get("mesh_workflow"), dict)

@@ -152,7 +152,14 @@ from fullmag.model.problem import (
     resolve_geometry_sources,
     RuntimeSelection,
 )
-from fullmag.model.discretization import FDM, FDMGrid, FEM, FDMDemag, FemLinearSolverPolicy
+from fullmag.model.discretization import (
+    FDM,
+    FDMGrid,
+    FEM,
+    FDMDemag,
+    FemLinearSolverPolicy,
+    _MESH_SIZE_PRESET_ALIASES,
+)
 from fullmag.model.geometry import Box, Translate
 from fullmag.model.eigen import serialize_dispersion_validation, serialize_k0_kittel_validation
 
@@ -164,17 +171,6 @@ _MESH_SIZE_CALIBRATIONS = (
     "magnetostatics_dominated",
     "imported_surface_cleanup",
 )
-_MESH_SIZE_PRESET_ALIASES = {
-    "extremely fine": "extremely_fine",
-    "extremelyfine": "extremely_fine",
-    "extra fine": "extra_fine",
-    "extrafine": "extra_fine",
-    "very_fine": "extra_fine",
-    "extra coarse": "extra_coarse",
-    "extracoarse": "extra_coarse",
-    "extremely coarse": "extremely_coarse",
-    "extremelycoarse": "extremely_coarse",
-}
 _MESH_SIZE_PRESETS = (
     "extremely_fine",
     "extra_fine",
@@ -1670,6 +1666,12 @@ class GeometryMeshHandle:
         exact_layer_count : bool, optional
             Require the requested through-thickness element count exactly.
         """
+        if source is not None:
+            raise ValueError(
+                "per-object mesh source is unavailable; use FEM(mesh=...) for "
+                "the supported study-level imported mesh route"
+            )
+
         spec = copy.deepcopy(self._owner._mesh_spec)
         if cell_size is not None:
             if any(
@@ -1711,8 +1713,6 @@ class GeometryMeshHandle:
             spec.hmin = resolved_hmin
         if order is not None:
             spec.order = order
-        if source is not None:
-            spec.source = source
         if calibrate_for is not None:
             spec.calibrate_for = _normalize_mesh_calibration(calibrate_for)
         if size_preset is not None:
