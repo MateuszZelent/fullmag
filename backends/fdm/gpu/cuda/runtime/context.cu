@@ -2141,23 +2141,25 @@ bool context_capture_pre_step_state(Context &ctx) {
     ctx.gpu_transport_pre_step_adaptive_previous_error = ctx.adaptive_previous_error;
     ctx.gpu_transport_pre_step_abm_startup = ctx.abm_startup;
     ctx.gpu_transport_pre_step_abm_last_dt = ctx.abm_last_dt;
-    uint64_t payload_bytes = 0;
+    uint64_t step_transaction_capture_d2d_bytes = 0;
     if (!context_step_transaction_payload_bytes(
             ctx.cell_count, scalar_bytes,
-            ctx.integrator == FULLMAG_FDM_INTEGRATOR_ABM3, payload_bytes)) {
+            ctx.integrator == FULLMAG_FDM_INTEGRATOR_ABM3,
+            step_transaction_capture_d2d_bytes)) {
         ctx.step_transaction_accounting_valid = false;
     } else {
-        (void)context_step_transaction_checked_add(
-            ctx, ctx.step_transaction_capture_d2d_bytes, payload_bytes);
-        (void)context_step_transaction_checked_add(
-            ctx, ctx.step_transaction_capture_count, 1);
+        (void)context_commit_step_transaction_capture_sample(
+            ctx, step_transaction_capture_d2d_bytes);
     }
     return true;
 }
 
 bool context_rollback_pre_step_state(Context &ctx) {
+    if (ctx.step_transaction_rollback_sample_pending) {
+        context_discard_step_transaction_rollback_sample(ctx);
+    }
     if (!ctx.gpu_transport_pre_step_m_valid) {
-        ctx.step_transaction_accounting_valid = false;
+        context_discard_step_transaction_rollback_sample(ctx);
         ctx.last_error = "pre-step magnetization snapshot is unavailable";
         return false;
     }
@@ -2165,12 +2167,13 @@ bool context_rollback_pre_step_state(Context &ctx) {
         ? sizeof(double) : sizeof(float);
     const size_t bytes = static_cast<size_t>(ctx.cell_count) * scalar_bytes;
     const cudaStream_t stream = context_compute_stream(ctx);
+    const bool restored_abm_history = ctx.gpu_transport_pre_step_abm_valid;
     const auto rollback_started_at = std::chrono::steady_clock::now();
     // A rejected legacy fixed-step integrator can still have default-stream
     // writers in flight.  Complete those writers before restoring on the
     // dedicated compute stream.
     if (cudaStreamSynchronize(nullptr) != cudaSuccess) {
-        ctx.step_transaction_accounting_valid = false;
+        context_discard_step_transaction_rollback_sample(ctx);
         ctx.last_error = "failed to order rejected integrator work before rollback";
         return false;
     }
@@ -2185,7 +2188,7 @@ bool context_rollback_pre_step_state(Context &ctx) {
         cudaMemcpyDeviceToDevice, stream);
     if (copy_x != cudaSuccess || copy_y != cudaSuccess || copy_z != cudaSuccess ||
         cudaStreamSynchronize(stream) != cudaSuccess) {
-        ctx.step_transaction_accounting_valid = false;
+        context_discard_step_transaction_rollback_sample(ctx);
         ctx.last_error = "failed to restore bound transport pre-step magnetization";
         return false;
     }
@@ -2197,11 +2200,23 @@ bool context_rollback_pre_step_state(Context &ctx) {
          !copy_field_d2d_async(
              ctx.abm_f_n2, ctx.gpu_transport_pre_step_abm_f_n2, bytes, stream) ||
          cudaStreamSynchronize(stream) != cudaSuccess)) {
-        ctx.step_transaction_accounting_valid = false;
+        context_discard_step_transaction_rollback_sample(ctx);
         ctx.last_error = "failed to restore pre-step ABM history";
         return false;
     }
-    const bool restored_abm_history = ctx.gpu_transport_pre_step_abm_valid;
+    const auto rollback_finished_at = std::chrono::steady_clock::now();
+    const uint64_t rollback_latency_ns = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            rollback_finished_at - rollback_started_at).count());
+    uint64_t step_transaction_rollback_d2d_bytes = 0;
+    if (!context_step_transaction_payload_bytes(
+            ctx.cell_count, scalar_bytes, restored_abm_history,
+            step_transaction_rollback_d2d_bytes)) {
+        context_discard_step_transaction_rollback_sample(ctx);
+    } else {
+        (void)context_stage_step_transaction_rollback_sample(
+            ctx, step_transaction_rollback_d2d_bytes, rollback_latency_ns);
+    }
     ctx.gpu_transport_pre_step_m_valid = false;
     ctx.gpu_transport_pre_step_abm_valid = false;
     ctx.step_count = ctx.gpu_transport_pre_step_step_count;
@@ -2218,24 +2233,6 @@ bool context_rollback_pre_step_state(Context &ctx) {
     ctx.adaptive_previous_error = ctx.gpu_transport_pre_step_adaptive_previous_error;
     ctx.abm_startup = ctx.gpu_transport_pre_step_abm_startup;
     ctx.abm_last_dt = ctx.gpu_transport_pre_step_abm_last_dt;
-    uint64_t payload_bytes = 0;
-    if (!context_step_transaction_payload_bytes(
-            ctx.cell_count, scalar_bytes, restored_abm_history, payload_bytes)) {
-        ctx.step_transaction_accounting_valid = false;
-        return true;
-    }
-    const uint64_t rollback_latency_ns = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now() - rollback_started_at).count());
-    (void)context_step_transaction_checked_add(
-        ctx, ctx.step_transaction_rollback_latency_total_ns,
-        rollback_latency_ns);
-    ctx.step_transaction_rollback_latency_max_ns = std::max(
-        ctx.step_transaction_rollback_latency_max_ns, rollback_latency_ns);
-    (void)context_step_transaction_checked_add(
-        ctx, ctx.step_transaction_rollback_d2d_bytes, payload_bytes);
-    (void)context_step_transaction_checked_add(
-        ctx, ctx.step_transaction_rollback_count, 1);
     return true;
 }
 

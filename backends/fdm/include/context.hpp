@@ -434,6 +434,9 @@ struct Context {
     uint64_t step_transaction_rollback_d2d_bytes = 0;
     uint64_t step_transaction_rollback_latency_total_ns = 0;
     uint64_t step_transaction_rollback_latency_max_ns = 0;
+    bool step_transaction_rollback_sample_pending = false;
+    uint64_t step_transaction_pending_rollback_d2d_bytes = 0;
+    uint64_t step_transaction_pending_rollback_latency_ns = 0;
     bool observables_valid = false;
 
     // Complete v2 timestep policy (fixed unless explicitly enabled).
@@ -623,6 +626,74 @@ inline bool context_step_transaction_checked_add(
     }
     destination += value;
     return true;
+}
+inline bool context_commit_step_transaction_capture_sample(
+    Context &ctx, uint64_t payload_bytes)
+{
+    uint64_t capture_bytes = ctx.step_transaction_capture_d2d_bytes;
+    uint64_t capture_count = ctx.step_transaction_capture_count;
+    const bool bytes_valid = context_step_transaction_checked_add(
+        ctx, capture_bytes, payload_bytes);
+    const bool count_valid = context_step_transaction_checked_add(
+        ctx, capture_count, 1);
+    if (!bytes_valid || !count_valid) return false;
+    ctx.step_transaction_capture_d2d_bytes = capture_bytes;
+    ctx.step_transaction_capture_count = capture_count;
+    return true;
+}
+inline void context_discard_step_transaction_rollback_sample(Context &ctx)
+{
+    ctx.step_transaction_rollback_sample_pending = false;
+    ctx.step_transaction_pending_rollback_d2d_bytes = 0;
+    ctx.step_transaction_pending_rollback_latency_ns = 0;
+    ctx.step_transaction_accounting_valid = false;
+}
+inline bool context_stage_step_transaction_rollback_sample(
+    Context &ctx, uint64_t payload_bytes, uint64_t latency_ns)
+{
+    if (ctx.step_transaction_rollback_sample_pending) {
+        context_discard_step_transaction_rollback_sample(ctx);
+        return false;
+    }
+    ctx.step_transaction_pending_rollback_d2d_bytes = payload_bytes;
+    ctx.step_transaction_pending_rollback_latency_ns = latency_ns;
+    ctx.step_transaction_rollback_sample_pending = true;
+    return true;
+}
+inline bool context_commit_step_transaction_rollback_sample(Context &ctx)
+{
+    if (!ctx.step_transaction_rollback_sample_pending) {
+        ctx.step_transaction_accounting_valid = false;
+        return false;
+    }
+    uint64_t latency_total =
+        ctx.step_transaction_rollback_latency_total_ns;
+    uint64_t rollback_bytes = ctx.step_transaction_rollback_d2d_bytes;
+    uint64_t rollback_count = ctx.step_transaction_rollback_count;
+    const bool total_valid = context_step_transaction_checked_add(
+        ctx, latency_total,
+        ctx.step_transaction_pending_rollback_latency_ns);
+    const uint64_t latency_max =
+        ctx.step_transaction_pending_rollback_latency_ns >
+            ctx.step_transaction_rollback_latency_max_ns
+        ? ctx.step_transaction_pending_rollback_latency_ns
+        : ctx.step_transaction_rollback_latency_max_ns;
+    const bool bytes_valid = context_step_transaction_checked_add(
+        ctx, rollback_bytes,
+        ctx.step_transaction_pending_rollback_d2d_bytes);
+    const bool count_valid = context_step_transaction_checked_add(
+        ctx, rollback_count, 1);
+    const bool sample_valid = total_valid && bytes_valid && count_valid;
+    if (sample_valid) {
+        ctx.step_transaction_rollback_latency_total_ns = latency_total;
+        ctx.step_transaction_rollback_latency_max_ns = latency_max;
+        ctx.step_transaction_rollback_d2d_bytes = rollback_bytes;
+        ctx.step_transaction_rollback_count = rollback_count;
+    }
+    ctx.step_transaction_rollback_sample_pending = false;
+    ctx.step_transaction_pending_rollback_d2d_bytes = 0;
+    ctx.step_transaction_pending_rollback_latency_ns = 0;
+    return sample_valid;
 }
 inline bool context_get_step_transaction_telemetry_v1(
     const Context &ctx,

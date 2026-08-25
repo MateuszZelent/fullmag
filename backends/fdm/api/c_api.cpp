@@ -119,8 +119,15 @@ bool rollback_step_transaction(Context &ctx)
     context_invalidate_observables(ctx);
     const bool observables_restored =
         state_restored && context_refresh_observables(ctx);
+    const bool rollback_succeeded =
+        state_restored && transport_restored && observables_restored;
+    if (rollback_succeeded) {
+        (void)context_commit_step_transaction_rollback_sample(ctx);
+    } else {
+        context_discard_step_transaction_rollback_sample(ctx);
+    }
     ctx.last_error = primary_error;
-    return state_restored && transport_restored && observables_restored;
+    return rollback_succeeded;
 }
 
 int execute_single_grid_step_transaction(
