@@ -144,6 +144,9 @@ int execute_single_grid_step_transaction(
             ctx.step_fsal_reused = false;
             ctx.accepted_step_pending = false;
             ctx.fsal_pending = false;
+            if (!context_begin_step_transaction_attempt(ctx)) {
+                return FULLMAG_FDM_ERR_INVALID;
+            }
             if (ctx.gpu_transport_rhs.active) {
                 if (ctx.gpu_transport_attempt_generation == UINT64_MAX) {
                     ctx.last_error = "bound spin-transport attempt identity exhausted";
@@ -2199,14 +2202,12 @@ int fullmag_fdm_backend_get_step_transaction_telemetry_v1(
     fullmag_fdm_backend *handle,
     fullmag_fdm_step_transaction_telemetry_v1 *out_telemetry)
 {
-#if FULLMAG_HAS_CUDA
     if (!handle || !out_telemetry) return FULLMAG_FDM_ERR_INVALID;
+#if FULLMAG_HAS_CUDA
     auto *ctx = reinterpret_cast<Context *>(handle);
     return context_get_step_transaction_telemetry_v1(*ctx, out_telemetry)
         ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_ABI;
 #else
-    (void)handle;
-    (void)out_telemetry;
     return FULLMAG_FDM_ERR_CUDA;
 #endif
 }

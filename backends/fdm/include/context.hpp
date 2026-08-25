@@ -428,6 +428,9 @@ struct Context {
     uint64_t stale_publication_count = 0;
     uint64_t transaction_commit_count = 0;
     bool step_transaction_accounting_valid = true;
+    // Monotonic identity for every single-grid step transaction. This is
+    // deliberately separate from the optional transport attempt identity.
+    uint64_t step_transaction_attempt_generation = 0;
     uint64_t step_transaction_capture_count = 0;
     uint64_t step_transaction_rollback_count = 0;
     uint64_t step_transaction_capture_d2d_bytes = 0;
@@ -617,6 +620,17 @@ inline bool context_step_transaction_payload_bytes(
     out_bytes = payload_bytes;
     return true;
 }
+inline bool context_begin_step_transaction_attempt(Context &ctx)
+{
+    if (ctx.step_transaction_attempt_generation ==
+        std::numeric_limits<uint64_t>::max()) {
+        ctx.step_transaction_accounting_valid = false;
+        ctx.last_error = "step transaction attempt generation exhausted";
+        return false;
+    }
+    ++ctx.step_transaction_attempt_generation;
+    return true;
+}
 inline bool context_step_transaction_checked_add(
     Context &ctx, uint64_t &destination, uint64_t value)
 {
@@ -720,7 +734,7 @@ inline bool context_get_step_transaction_telemetry_v1(
     result.rollback_latency_max_ns =
         ctx.step_transaction_rollback_latency_max_ns;
     result.accepted_step_index = ctx.accepted_step_index;
-    result.attempt_generation = ctx.gpu_transport_attempt_generation;
+    result.attempt_generation = ctx.step_transaction_attempt_generation;
     result.thermal_rng_draws = ctx.thermal_rng_draws;
     result.stale_publication_count = ctx.stale_publication_count;
     *out_telemetry = result;

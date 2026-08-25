@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -74,6 +75,49 @@ int main() {
             transaction_accounting_overflow.step_transaction_capture_count, 1) &&
         !transaction_accounting_overflow.step_transaction_accounting_valid &&
         transaction_accounting_overflow.step_transaction_capture_count == UINT64_MAX;
+
+    Context transaction_attempt_context{};
+    transaction_attempt_context.accepted_step_index = 17;
+    fullmag_fdm_step_transaction_telemetry_v1 first_attempt_telemetry{};
+    first_attempt_telemetry.abi_version =
+        FULLMAG_FDM_STEP_TRANSACTION_TELEMETRY_ABI_V1;
+    first_attempt_telemetry.struct_size = sizeof(first_attempt_telemetry);
+    const bool first_unbound_transaction_started =
+        context_begin_step_transaction_attempt(transaction_attempt_context) &&
+        context_get_step_transaction_telemetry_v1(
+            transaction_attempt_context, &first_attempt_telemetry) &&
+        first_attempt_telemetry.attempt_generation == 1 &&
+        transaction_attempt_context.accepted_step_index == 17;
+    fullmag_fdm_step_transaction_telemetry_v1 second_attempt_telemetry{};
+    second_attempt_telemetry.abi_version =
+        FULLMAG_FDM_STEP_TRANSACTION_TELEMETRY_ABI_V1;
+    second_attempt_telemetry.struct_size = sizeof(second_attempt_telemetry);
+    const bool second_unbound_transaction_started =
+        context_begin_step_transaction_attempt(transaction_attempt_context) &&
+        context_get_step_transaction_telemetry_v1(
+            transaction_attempt_context, &second_attempt_telemetry) &&
+        second_attempt_telemetry.attempt_generation == 2 &&
+        transaction_attempt_context.accepted_step_index == 17;
+    Context transaction_attempt_overflow{};
+    transaction_attempt_overflow.step_transaction_attempt_generation = UINT64_MAX;
+    const bool transaction_attempt_overflow_fails_closed =
+        !context_begin_step_transaction_attempt(transaction_attempt_overflow) &&
+        !transaction_attempt_overflow.step_transaction_accounting_valid &&
+        transaction_attempt_overflow.step_transaction_attempt_generation == UINT64_MAX;
+
+    fullmag_fdm_step_transaction_telemetry_v1 cpu_only_telemetry{};
+    cpu_only_telemetry.abi_version =
+        FULLMAG_FDM_STEP_TRANSACTION_TELEMETRY_ABI_V1;
+    cpu_only_telemetry.struct_size = sizeof(cpu_only_telemetry);
+    const bool cpu_only_telemetry_null_requests_are_invalid =
+        fullmag_fdm_backend_get_step_transaction_telemetry_v1(
+            nullptr, &cpu_only_telemetry) == FULLMAG_FDM_ERR_INVALID &&
+        fullmag_fdm_backend_get_step_transaction_telemetry_v1(
+            reinterpret_cast<fullmag_fdm_backend *>(uintptr_t{1}), nullptr) ==
+            FULLMAG_FDM_ERR_INVALID &&
+        fullmag_fdm_backend_get_step_transaction_telemetry_v1(
+            reinterpret_cast<fullmag_fdm_backend *>(uintptr_t{1}),
+            &cpu_only_telemetry) == FULLMAG_FDM_ERR_CUDA;
 
     Context capture_sample{};
     const bool capture_sample_commits_atomically =
@@ -299,7 +343,7 @@ int main() {
     step_transaction_telemetry_context.step_transaction_rollback_latency_total_ns = 23;
     step_transaction_telemetry_context.step_transaction_rollback_latency_max_ns = 29;
     step_transaction_telemetry_context.accepted_step_index = 31;
-    step_transaction_telemetry_context.gpu_transport_attempt_generation = 37;
+    step_transaction_telemetry_context.step_transaction_attempt_generation = 37;
     step_transaction_telemetry_context.thermal_rng_draws = 41;
     step_transaction_telemetry_context.stale_publication_count = 43;
     fullmag_fdm_step_transaction_telemetry_v1 step_transaction_telemetry{};
@@ -601,6 +645,17 @@ int main() {
     const auto step_api = api.substr(step_api_begin, step_api_end - step_api_begin);
     const auto inactive_legacy_begin = step_api.find("#if 0");
     const auto active_step_api = step_api.substr(0, inactive_legacy_begin);
+    const auto single_grid_step_api_begin = api.find(
+        "int execute_single_grid_step_transaction(");
+    const auto single_grid_step_api_end = api.find(
+        "#endif", single_grid_step_api_begin);
+    const auto single_grid_step_api = api.substr(
+        single_grid_step_api_begin,
+        single_grid_step_api_end - single_grid_step_api_begin);
+    const auto transaction_attempt_begin = single_grid_step_api.find(
+        "context_begin_step_transaction_attempt(ctx)");
+    const auto pre_step_capture_begin = single_grid_step_api.find(
+        "context_capture_pre_step_state(ctx)");
     const auto transaction_telemetry_api_begin = api.find(
         "int fullmag_fdm_backend_get_step_transaction_telemetry_v1(");
     const auto transaction_telemetry_api_end = api.find(
@@ -654,6 +709,20 @@ int main() {
             transaction_accounting_fails_closed,
         "FDM-GPU-TRX-001-B1-RED",
         "step transaction payload bytes are exact and overflow-safe",
+        failures);
+    report(
+        first_unbound_transaction_started && second_unbound_transaction_started &&
+            transaction_attempt_overflow_fails_closed &&
+            transaction_attempt_begin != std::string::npos &&
+            pre_step_capture_begin != std::string::npos &&
+            transaction_attempt_begin < pre_step_capture_begin,
+        "FDM-GPU-TRX-001-B7-RED",
+        "single-grid transactions own a monotonic fail-closed attempt generation",
+        failures);
+    report(
+        cpu_only_telemetry_null_requests_are_invalid,
+        "FDM-GPU-TRX-001-B8-RED",
+        "CPU-only telemetry getter rejects null requests before reporting CUDA unavailable",
         failures);
 
     report(
