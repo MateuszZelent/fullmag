@@ -146,3 +146,15 @@ Quality/History tabs. Full description: {doc}`../../../frontend/meshing/object-m
 | object recipe | `packages/fullmag-py/src/fullmag/model/discretization.py` | `PerObjectMeshRecipe` | validation tests |
 | ordered operations | `packages/fullmag-py/src/fullmag/world.py` | `_MeshOperationSpec` | class definition |
 | typed swept controls | `packages/fullmag-py/src/fullmag/model/discretization.py` | `SweptMeshControls` | validation tests |
+
+```{toctree}
+:maxdepth: 2
+
+../../../discretization/per-object-meshing
+free-tetrahedral
+thin-film-tetrahedral
+swept-prism
+swept-hex
+boundary-layers
+imported-mesh
+```
