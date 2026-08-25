@@ -2188,6 +2188,22 @@ int fullmag_fdm_backend_get_fsal_telemetry_v2(
         ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_ABI;
 }
 
+int fullmag_fdm_backend_get_step_transaction_telemetry_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_step_transaction_telemetry_v1 *out_telemetry)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !out_telemetry) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    return context_get_step_transaction_telemetry_v1(*ctx, out_telemetry)
+        ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_ABI;
+#else
+    (void)handle;
+    (void)out_telemetry;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
 int fullmag_fdm_backend_execution_receipt_v1(
     fullmag_fdm_backend *handle,
     fullmag_fdm_execution_receipt_v1 *out_receipt)
