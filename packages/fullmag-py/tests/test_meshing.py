@@ -315,7 +315,6 @@ class LayeredMeshDslValidationTests(unittest.TestCase):
             {"through_thickness_element_ratio": 0.0},
             {"size_from_curvature": -1},
             {"narrow_regions": -1},
-            {"smoothing_steps": 0},
             {"optimize_iters": 0},
             {"boundary_layer_count": 0},
             {"algorithm_2d": True},
@@ -331,6 +330,20 @@ class LayeredMeshDslValidationTests(unittest.TestCase):
         self.assertEqual((recipe.algorithm_2d, recipe.algorithm_3d), (6, 10))
         self.assertIs(type(recipe.algorithm_2d), int)
         self.assertIs(type(recipe.algorithm_3d), int)
+        self.assertEqual(PerObjectMeshRecipe(smoothing_steps=0).smoothing_steps, 0)
+
+    def test_shared_mesh_assembly_policy_rejects_invalid_contract_values(self) -> None:
+        invalid = (
+            {"enforce_conforming": "false"},
+            {"enforce_conforming": 1},
+            {"airbox_hmax_factor": float("nan")},
+            {"airbox_hmax_factor": float("inf")},
+            {"airbox_hmax_factor": 0.0},
+            {"interface_hmax_factor": float("nan")},
+        )
+        for kwargs in invalid:
+            with self.subTest(kwargs=kwargs), self.assertRaises((TypeError, ValueError)):
+                SharedMeshAssemblyPolicy(**kwargs)
 
     def test_per_object_recipe_rejects_unavailable_object_mesh_source(self) -> None:
         with self.assertRaisesRegex(ValueError, r"FEM\(mesh=\.\.\.\)"):

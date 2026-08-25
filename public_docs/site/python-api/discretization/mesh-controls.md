@@ -155,13 +155,13 @@ where the active mesh workflow applies that factor.
 
 | Python field | Type | Default | SI unit | Validation / meaning | ProblemIR |
 |---|---|---:|---:|---|---|
-| `MeshSizeControls.calibrate_for` | `str or None` | `None` | $1$ | supported provenance vocabulary; currently no numerical effect | size policy `calibrate_for` |
-| `MeshSizeControls.size_preset` | `str or None` | `None` | $1$ | supported preset name | size policy `size_preset` |
-| `MeshSizeControls.maximum_element_size` | `float or None` | `None` | $\mathrm{m}$ | positive upper target | size policy `maximum_element_size` |
-| `MeshSizeControls.minimum_element_size` | `float or None` | `None` | $\mathrm{m}$ | positive lower target | size policy `minimum_element_size` |
-| `MeshSizeControls.maximum_element_growth_rate` | `float or None` | `None` | $1$ | positive; stage-first public facade accepts the practical range through 2.5 | size policy `maximum_element_growth_rate` |
-| `MeshSizeControls.curvature_factor` | `float or None` | `None` | $1$ | positive curvature size factor | size policy `curvature_factor` |
-| `MeshSizeControls.narrow_region_resolution` | `float or None` | `None` | $1$ | positive narrow-feature target | size policy `narrow_region_resolution` |
+| `MeshSizeControls.calibrate_for` | `str or None` | `None` | $1$ | standalone compatibility payload; constructor does not validate it | none; no authoring facade attaches it |
+| `MeshSizeControls.size_preset` | `str or None` | `None` | $1$ | standalone compatibility payload; constructor does not validate it | none; no authoring facade attaches it |
+| `MeshSizeControls.maximum_element_size` | `float or None` | `None` | $\mathrm{m}$ | standalone compatibility payload; constructor does not validate it | none; no authoring facade attaches it |
+| `MeshSizeControls.minimum_element_size` | `float or None` | `None` | $\mathrm{m}$ | standalone compatibility payload; constructor does not validate it | none; no authoring facade attaches it |
+| `MeshSizeControls.maximum_element_growth_rate` | `float or None` | `None` | $1$ | standalone compatibility payload; constructor does not validate it | none; no authoring facade attaches it |
+| `MeshSizeControls.curvature_factor` | `float or None` | `None` | $1$ | standalone compatibility payload; constructor does not validate it | none; no authoring facade attaches it |
+| `MeshSizeControls.narrow_region_resolution` | `float or None` | `None` | $1$ | standalone compatibility payload; constructor does not validate it | none; no authoring facade attaches it |
 
 ## `SharedMeshAssemblyPolicy`
 

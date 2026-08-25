@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from numbers import Integral, Real
 from typing import Any, Literal, Sequence
 
-from fullmag._validation import as_vector3, require_positive
+from fullmag._validation import as_vector3, require_finite, require_positive
 
 
 # ---------------------------------------------------------------------------
@@ -816,11 +816,7 @@ class PerObjectMeshRecipe:
             if value < 0:
                 raise ValueError(f"{field_name} must be >= 0")
 
-        for field_name in (
-            "smoothing_steps",
-            "optimize_iters",
-            "boundary_layer_count",
-        ):
+        for field_name in ("optimize_iters", "boundary_layer_count"):
             value = getattr(self, field_name)
             if value is None:
                 continue
@@ -828,6 +824,14 @@ class PerObjectMeshRecipe:
                 raise TypeError(f"{field_name} must be an integer")
             if value < 1:
                 raise ValueError(f"{field_name} must be >= 1")
+
+        if self.smoothing_steps is not None:
+            if isinstance(self.smoothing_steps, bool) or not isinstance(
+                self.smoothing_steps, Integral
+            ):
+                raise TypeError("smoothing_steps must be an integer")
+            if self.smoothing_steps < 0:
+                raise ValueError("smoothing_steps must be >= 0")
 
         if self.through_thickness_elements is not None:
             if (
@@ -1001,10 +1005,16 @@ class SharedMeshAssemblyPolicy:
     airbox_hmax_factor: float = 3.0
 
     def __post_init__(self) -> None:
+        for field_name in ("interface_hmax_factor", "airbox_hmax_factor"):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, Real):
+                raise TypeError(f"{field_name} must be a real number")
+            require_finite(value, field_name)
+        if not isinstance(self.enforce_conforming, bool):
+            raise TypeError("enforce_conforming must be a boolean")
         if not 0.0 < self.interface_hmax_factor <= 1.0:
             raise ValueError("interface_hmax_factor must be in (0, 1]")
-        if self.airbox_hmax_factor <= 0.0:
-            raise ValueError("airbox_hmax_factor must be positive")
+        require_positive(self.airbox_hmax_factor, "airbox_hmax_factor")
 
     def to_ir(self) -> dict[str, object]:
         return {
