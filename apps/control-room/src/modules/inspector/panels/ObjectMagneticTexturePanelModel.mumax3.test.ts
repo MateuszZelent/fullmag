@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { MAGNETIZATION_TEXTURE_PRESETS } from "@/shared/domain/magnetization-texture/texturePresets";
+import {
+  MAGNETIZATION_TEXTURE_PRESETS,
+  magnetizationTexturePresetOptions,
+} from "@/shared/domain/magnetization-texture/texturePresets";
 
 import {
   buildObjectMagneticTextureAssetDraft,
@@ -46,6 +49,15 @@ describe("Mumax3 magnetic texture UI coverage", () => {
       "hopfion",
       "hopfion_compact_support",
     ]);
+  });
+
+  it("keeps the legacy random_seeded asset selectable after hydration", () => {
+    expect(
+      magnetizationTexturePresetOptions("random_seeded").map((preset) => preset.id),
+    ).toContain("random_seeded");
+    expect(
+      magnetizationTexturePresetOptions("random").map((preset) => preset.id),
+    ).not.toContain("random_seeded");
   });
 
   it.each([

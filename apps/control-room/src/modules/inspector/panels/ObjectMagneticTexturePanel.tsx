@@ -20,7 +20,7 @@ import {
   buildMagnetizationAssetPatch as buildTextureAssetPatch,
   buildMagnetizationAssignmentPatch as buildTextureAssignmentPatch,
 } from "@/shared/domain/magnetization-texture/draftModel";
-import { MAGNETIZATION_TEXTURE_PRESETS } from "@/shared/domain/magnetization-texture/texturePresets";
+import { magnetizationTexturePresetOptions } from "@/shared/domain/magnetization-texture/texturePresets";
 import type { MagnetizationTextureTarget } from "@/shared/domain/magnetization-texture/types";
 import { Button } from "@/shared/ui/Button";
 
@@ -140,7 +140,7 @@ export function MagneticTextureAssignmentSection({
           updateDraft(objectMagneticTexturePresetChangePatch(model, draft, nextPreset));
         }}
       >
-        {MAGNETIZATION_TEXTURE_PRESETS.map((preset) => (
+        {magnetizationTexturePresetOptions(draft.presetKind).map((preset) => (
           <option key={preset.id} value={preset.id}>
             {preset.label}
           </option>

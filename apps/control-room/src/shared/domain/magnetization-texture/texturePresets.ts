@@ -105,3 +105,17 @@ export const MAGNETIZATION_TEXTURE_PRESETS: readonly MagnetizationTexturePreset[
     label: "Hopfion (Compact Support)",
   },
 ] as const;
+
+const LEGACY_RANDOM_SEEDED_PRESET: MagnetizationTexturePreset = {
+  defaultParams: { seed: 1 },
+  id: "random_seeded",
+  label: "Random seeded (legacy)",
+};
+
+export function magnetizationTexturePresetOptions(
+  currentPresetId: MagnetizationTexturePresetId,
+): readonly MagnetizationTexturePreset[] {
+  return currentPresetId === "random_seeded"
+    ? [...MAGNETIZATION_TEXTURE_PRESETS, LEGACY_RANDOM_SEEDED_PRESET]
+    : MAGNETIZATION_TEXTURE_PRESETS;
+}
