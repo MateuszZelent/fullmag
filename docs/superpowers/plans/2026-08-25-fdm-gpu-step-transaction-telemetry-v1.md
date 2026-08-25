@@ -19,7 +19,7 @@
 
 ---
 
-### Zadanie 1: Zamrozić publiczny ABI C i Rust
+### Task 1: Zamrozić publiczny ABI C i Rust
 
 **Pliki:**
 - Modyfikuj: `native/include/fullmag_fdm.h`
@@ -121,7 +121,7 @@ Przed commitem uruchomić osobno `git diff --cached --name-only`. Commit:
 feat(fdm): define step transaction telemetry ABI
 ```
 
-### Zadanie 2: Mierzyć rzeczywiste capture i rollback w natywnym Context
+### Task 2: Mierzyć rzeczywiste capture i rollback w natywnym Context
 
 **Pliki:**
 - Modyfikuj: `backends/fdm/include/context.hpp`
@@ -150,7 +150,7 @@ Test ma oczekiwać `3 * cells * scalar_bytes` dla magnetyzacji, `12 * cells * sc
 
 - [ ] **Krok 2: Uruchomić CTest i potwierdzić RED**
 
-Użyć komend z Zadania 1, kroku 2. Oczekiwane: brak funkcji lub niespełnione asercje payloadu.
+Użyć komend z Task 1, kroku 2. Oczekiwane: brak funkcji lub niespełnione asercje payloadu.
 
 - [ ] **Krok 3: Zaimplementować minimalną bezpieczną arytmetykę**
 
@@ -209,7 +209,7 @@ Commit:
 feat(fdm): measure GPU step transaction costs
 ```
 
-### Zadanie 3: Zachować telemetrykę bezstratnie w provenance runnera
+### Task 3: Zachować telemetrykę bezstratnie w provenance runnera
 
 **Pliki:**
 - Modyfikuj: `crates/fullmag-runner/src/types.rs`
@@ -268,14 +268,14 @@ Commit:
 feat(runner): publish FDM GPU transaction telemetry
 ```
 
-### Zadanie 4: Weryfikacja końcowa i dowód braku artefaktów Git
+### Task 4: Weryfikacja końcowa i dowód braku artefaktów Git
 
 **Pliki:**
-- Modyfikuj tylko w razie potrzeby korekty źródłowej: pliki z Zadań 1–3
+- Modyfikuj tylko w razie potrzeby korekty źródłowej: pliki z Task 1–3
 - Nie twórz w repozytorium żadnych wyników buildów ani raportów generowanych
 
 **Interfejsy:**
-- Konsumuje: pełny kontrakt z Zadań 1–3
+- Konsumuje: pełny kontrakt z Task 1–3
 - Produkuje: dowód spełnienia telemetrycznej części `FDM-GPU-TRX-001`
 
 - [ ] **Krok 1: Uruchomić formatowanie i testy kontraktowe**
