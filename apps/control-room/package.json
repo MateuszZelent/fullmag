@@ -36,6 +36,7 @@
     "smoke:study-authoring-ui": "node scripts/smoke-study-authoring-ui.mjs",
     "smoke:scratch-authoring-fdm": "node scripts/smoke-scratch-authoring-fdm.mjs",
     "smoke:scratch-authoring-fem": "node scripts/smoke-scratch-authoring-fem.mjs",
+    "smoke:scratch-authoring-ui": "node scripts/smoke-scratch-authoring-ui.mjs",
     "test:scratch-authoring-browser": "node --test scripts/lib/scratch-authoring-browser.test.mjs",
     "smoke:transport-authoring-ui": "node scripts/smoke-transport-authoring-ui-cdp.mjs",
     "verify:transport-managed-runtime": "node scripts/verify-transport-managed-runtime.mjs",

@@ -221,6 +221,15 @@ test("browser smoke allowlists only known optional HTTP responses", () => {
     }),
     false,
   );
+  assert.equal(
+    isExpectedScratchHttpError({
+      status: 404,
+      method: "GET",
+      url: "http://127.0.0.1:8765/v2/sessions/current/model/objects/magnet/interactions/interfacial_dmi",
+      body: "",
+    }),
+    true,
+  );
 });
 
 test("command evidence normalizes lifecycle and published mesh revisions", () => {

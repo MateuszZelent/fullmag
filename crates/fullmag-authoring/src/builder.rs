@@ -916,7 +916,7 @@ const fn default_adaptive_mesh_max_passes() -> u32 {
 // --- ScriptBuilderSolverState defaults ---
 
 fn default_solver_integrator() -> String {
-    "rkf45".to_string()
+    "rk45".to_string()
 }
 
 fn default_solver_timestep() -> String {
@@ -979,6 +979,7 @@ mod tests {
     #[test]
     fn solver_defaults_match_canonical_relax_defaults() {
         let defaults = ScriptBuilderSolverState::default();
+        assert_eq!(defaults.integrator, "rk45");
         assert_eq!(defaults.relax_algorithm, "llg_overdamped");
         assert_eq!(defaults.torque_tolerance, "1e-4");
         assert_eq!(defaults.max_relax_steps, "5000");

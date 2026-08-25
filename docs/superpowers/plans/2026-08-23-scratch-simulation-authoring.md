@@ -821,3 +821,37 @@ test owner-loss ma **1 passed**, a filtr `wait_for_solve` ma **4 passed**.
   eksporcie, bez automatycznej aktywacji z material defaults.
 - E2 FEM pozostaje otwarte wyłącznie z powodu niedostępnego managed FEM runtime;
   wymagane są `just ensure-managed-fem-runtime` i późniejszy smoke FEM/CPU.
+
+### Aktualizacja realizacji 2026-08-25 — realny UI scratch i kontrakt capability
+
+- Rzeczywisty smoke Playwright dla pustej sesji FDM/CPU/double przeszedł pełną
+  ścieżkę kliknięć: primitive Box, transform, material, material parameters,
+  uniform-Y texture, exchange, demag oraz globalny/per-object FDM grid.
+  Końcowa scena miała rewizję `9` i zapisany `per_object_grid`.
+- Naprawiono brak `snapshot.capabilities` w pustej sesji. Profil lane jest
+  publikowany dla FDM CPU i FEM CPU, ale kwalifikacja pozostaje jawnie
+  `not_asserted`; UI nie omija planera ani nie wykonuje ukrytego fallbacku.
+- Naprawiono serializację pól solvera w `StudyGlobalAuthoringModel`: pola
+  tekstowe `SceneStudyState` nie są już wysyłane jako liczby. Regresja obejmuje
+  fixed/adaptive timestep i advanced tolerances.
+- Nowe bramki: model study **31/31**, capability API FDM/FEM **2/2**, smoke UI
+  `apps/control-room/scripts/smoke-scratch-authoring-ui.mjs` zakończony kodem
+  `0`. E1 authoring UI jest potwierdzone; E2 solver/browser
+  FEM nadal czeka na managed runtime.
+
+### Aktualizacja realizacji 2026-08-25 — oba backendy i eksport solvera
+
+- Ten sam smoke UI działa teraz jawnie dla `CONTROL_ROOM_SCRATCH_BACKEND=fdm`
+  i `fem`. Oba przypadki zaczynają od `POST /v2/sessions` bez bieżącej sesji,
+  wykonują pełną ścieżkę Box → transform → CoFeB → `Uniform Y` → interactions,
+  a następnie zapisują backendową politykę siatki/demag. Oba manifesty kończą
+  się kodem `0` i rewizją sceny `11`; FEM jest dowodem authoringu i kontraktu
+  SceneDocument, nie dowodem uruchomienia solvera.
+- Naprawiono domyślny integrator eksportu (`rkf45` → `rk45`) oraz parser liczb
+  tekstowych solvera. Nieobsługiwane formaty, np. `0x10`, są odrzucane przed
+  wysłaniem merge-patcha; zapis SI i round-trip zachowują tekstową reprezentację
+  pól SceneStudyState.
+- Wynik bramek: model study **32/32**, helper browser **7/7**, capability API
+  **2/2**, test domyślnego solvera **1/1**. Pozostaje wyłącznie infrastruktura
+  E2/E5: managed FEM, `mesh_build`/`relax` i browser qualification z
+  `requested/effective/resolved == FEM/CPU`.

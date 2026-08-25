@@ -215,6 +215,7 @@ fn scratch_snapshot(
         solver_profile: None,
         fem_mesh: None,
     });
+    snapshot.capabilities = fullmag_runner::scratch_authoring_capabilities(&execution.backend);
     snapshot.metadata = Some(json!({
         "requested_execution": execution,
         "effective_execution": execution,
@@ -246,5 +247,51 @@ mod tests {
         assert_eq!(scene.study.requested_backend, "fdm");
         assert_eq!(scene.study.requested_device, "cpu");
         assert_eq!(scene.study.requested_precision, "double");
+    }
+
+    #[test]
+    fn scratch_snapshot_publishes_cpu_lane_capabilities_before_first_command() {
+        let request = CreateSessionRequest {
+            name: "Scratch".to_string(),
+            backend: "fdm".to_string(),
+            device: "cpu".to_string(),
+            precision: "double".to_string(),
+            replace_current: false,
+        };
+        let execution = validated_execution(&request).expect("scratch execution must validate");
+        let scene = create_empty_scene_document(&request).expect("scene must be created");
+        let snapshot = scratch_snapshot("session-test", "Scratch", &execution, scene);
+        let capabilities = snapshot
+            .capabilities
+            .expect("scratch sessions need a lane capability snapshot before authoring");
+
+        assert_eq!(capabilities.engine_id.as_str(), "fdm_cpu_reference");
+        assert!(capabilities
+            .supported_terms
+            .iter()
+            .any(|term| term == "exchange"));
+    }
+
+    #[test]
+    fn scratch_snapshot_publishes_fem_cpu_lane_capabilities_before_first_command() {
+        let request = CreateSessionRequest {
+            name: "Scratch FEM".to_string(),
+            backend: "fem".to_string(),
+            device: "cpu".to_string(),
+            precision: "double".to_string(),
+            replace_current: false,
+        };
+        let execution = validated_execution(&request).expect("scratch execution must validate");
+        let scene = create_empty_scene_document(&request).expect("scene must be created");
+        let snapshot = scratch_snapshot("session-test", "Scratch FEM", &execution, scene);
+        let capabilities = snapshot
+            .capabilities
+            .expect("FEM scratch sessions need a lane capability snapshot before authoring");
+
+        assert_eq!(capabilities.engine_id.as_str(), "fem_cpu_native");
+        assert!(capabilities
+            .supported_terms
+            .iter()
+            .any(|term| term == "exchange"));
     }
 }

@@ -391,7 +391,7 @@ function solverDraftToScene(draft: StudySolverDraft): JsonObject {
 
   const solver: JsonObject = {
     adaptive_timestep: null,
-    demag_interval_s: optionalNumber(draft.demagInterval),
+    demag_interval_s: optionalNumericText(draft.demagInterval),
     dt_initial: null,
     dt_max: null,
     dt_min: null,
@@ -404,26 +404,26 @@ function solverDraftToScene(draft: StudySolverDraft): JsonObject {
     torque_tolerance: draft.torqueTolerance,
   };
   if (draft.timestepMode === "fixed") {
-    solver.fixed_timestep = optionalNumber(draft.fixDt);
+    solver.fixed_timestep = optionalNumericText(draft.fixDt);
   } else if (draft.timestepMode === "adaptive_max_error") {
-    solver.dt_initial = optionalNumber(draft.dtInitial);
-    solver.dt_min = optionalNumber(draft.dtMin);
-    solver.dt_max = optionalNumber(draft.dtMax);
-    solver.max_err = optionalNumber(draft.maxErr);
+    solver.dt_initial = optionalNumericText(draft.dtInitial);
+    solver.dt_min = optionalNumericText(draft.dtMin);
+    solver.dt_max = optionalNumericText(draft.dtMax);
+    solver.max_err = optionalNumericText(draft.maxErr);
   } else if (draft.timestepMode === "adaptive_advanced") {
     const advanced = draft.adaptiveTimestep;
     solver.adaptive_timestep = advanced
       ? {
-          atol: optionalNumber(advanced.atol),
-          rtol: optionalNumber(advanced.rtol),
-          dt_initial: optionalNumber(advanced.dtInitial),
-          dt_min: optionalNumber(advanced.dtMin),
-          dt_max: optionalNumber(advanced.dtMax),
-          safety: optionalNumber(advanced.safety),
-          growth_limit: optionalNumber(advanced.growthLimit),
-          shrink_limit: optionalNumber(advanced.shrinkLimit),
-          max_spin_rotation: optionalNumber(advanced.maxSpinRotation),
-          norm_tolerance: optionalNumber(advanced.normTolerance),
+          atol: optionalNumericText(advanced.atol),
+          rtol: optionalNumericText(advanced.rtol),
+          dt_initial: optionalNumericText(advanced.dtInitial),
+          dt_min: optionalNumericText(advanced.dtMin),
+          dt_max: optionalNumericText(advanced.dtMax),
+          safety: optionalNumericText(advanced.safety),
+          growth_limit: optionalNumericText(advanced.growthLimit),
+          shrink_limit: optionalNumericText(advanced.shrinkLimit),
+          max_spin_rotation: optionalNumericText(advanced.maxSpinRotation),
+          norm_tolerance: optionalNumericText(advanced.normTolerance),
         }
       : null;
   }
@@ -728,7 +728,7 @@ function validateSolverDraft(
     const advanced = draft.adaptiveTimestep;
     validateNonnegativeText(issues, advanced.atol, "Absolute tolerance");
     validateNonnegativeText(issues, advanced.rtol, "Relative tolerance");
-    if (Number(advanced.atol) === 0 && Number(advanced.rtol) === 0) {
+    if (parseNumericText(advanced.atol) === 0 && parseNumericText(advanced.rtol) === 0) {
       issues.push({ message: "At least one advanced tolerance must be positive.", severity: "error" });
     }
     validatePositiveText(issues, advanced.dtMin, "Adaptive dt min");
@@ -788,9 +788,9 @@ function validateController(
   validatePositiveText(issues, adaptive.shrinkLimit, "Adaptive shrink limit");
   validateOptionalPositiveText(issues, adaptive.maxSpinRotation, "Max spin rotation");
   validateOptionalPositiveText(issues, adaptive.normTolerance, "Norm tolerance");
-  const safety = Number(adaptive.safety);
-  const growth = Number(adaptive.growthLimit);
-  const shrink = Number(adaptive.shrinkLimit);
+  const safety = parseNumericText(adaptive.safety);
+  const growth = parseNumericText(adaptive.growthLimit);
+  const shrink = parseNumericText(adaptive.shrinkLimit);
   if (Number.isFinite(safety) && safety > 1) {
     issues.push({ message: "Adaptive safety must be at most one.", severity: "error" });
   }
@@ -808,19 +808,19 @@ function validateAdaptiveBounds(
   minimum: string,
   maximum: string,
 ): void {
-  const min = Number(minimum);
-  const max = maximum.trim() ? Number(maximum) : null;
+  const min = parseNumericText(minimum);
+  const max = maximum.trim() ? parseNumericText(maximum) : null;
   if (Number.isFinite(min) && max !== null && Number.isFinite(max) && max < min) {
     issues.push({
       message: "Adaptive dt max must be greater than or equal to dt min.",
       severity: "error",
     });
   }
-  const first = initial.trim() ? Number(initial) : null;
+  const first = initial.trim() ? parseNumericText(initial) : null;
   if (
     first !== null &&
     Number.isFinite(first) &&
-    (first < min || (max !== null && first > max))
+    (min === null || first < min || (max !== null && first > max))
   ) {
     issues.push({ message: "Initial dt must lie within adaptive bounds.", severity: "error" });
   }
@@ -831,7 +831,7 @@ function validatePositiveText(
   value: string,
   label: string,
 ): void {
-  const parsed = Number(value);
+  const parsed = parseNumericText(value);
   if (!value.trim() || !Number.isFinite(parsed) || parsed <= 0) {
     issues.push({ message: `${label} must be finite and positive.`, severity: "error" });
   }
@@ -850,7 +850,7 @@ function validateNonnegativeText(
   value: string,
   label: string,
 ): void {
-  const parsed = Number(value);
+  const parsed = parseNumericText(value);
   if (!value.trim() || !Number.isFinite(parsed) || parsed < 0) {
     issues.push({ message: `${label} must be finite and nonnegative.`, severity: "error" });
   }
@@ -859,6 +859,21 @@ function validateNonnegativeText(
 function optionalNumber(value: string): number | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function optionalNumericText(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return parseNumericText(trimmed) === null ? null : trimmed;
+}
+
+const NUMERIC_TEXT_PATTERN = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+function parseNumericText(value: string): number | null {
+  const trimmed = value.trim();
+  if (!NUMERIC_TEXT_PATTERN.test(trimmed)) return null;
   const parsed = Number(trimmed);
   return Number.isFinite(parsed) ? parsed : null;
 }

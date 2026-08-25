@@ -592,10 +592,10 @@ describe("StudyGlobalAuthoringModel", () => {
             demag_interval_s: null,
             dt_initial: null,
             dt_max: null,
-            dt_min: 1e-16,
+            dt_min: "1e-16",
             fixed_timestep: null,
             integrator: "rk45",
-            max_err: 1e-6,
+            max_err: "1e-6",
             max_relax_steps: "5000",
             relax_algorithm: "llg_overdamped",
             torque_tolerance: "1e-4",
@@ -604,6 +604,60 @@ describe("StudyGlobalAuthoringModel", () => {
         },
       },
     });
+  });
+
+  it("keeps solver timestep values as scene text fields", () => {
+    const request = buildStudyGlobalMergePatch({
+      demagEnabled: true,
+      demagRealization: "auto",
+      exchangeEnabled: true,
+      externalField: "",
+      femDemagSolverPolicy: "",
+      requestedBackend: "fdm",
+      requestedCpuThreads: "",
+      requestedDevice: "cpu",
+      requestedMode: "strict",
+      requestedPrecision: "double",
+      solver: {
+        adaptiveTimestep: null,
+        demagInterval: "",
+        dtInitial: "",
+        dtMax: "",
+        dtMin: "",
+        energyTolerance: "",
+        fixDt: "1e-13",
+        integrator: "heun",
+        maxErr: "",
+        maxRelaxSteps: "5000",
+        relaxAlgorithm: "llg_overdamped",
+        timestepMode: "fixed",
+        torqueTolerance: "1e-4",
+      },
+    });
+
+    if (request.kind !== "merge_patch") throw new Error("expected merge patch");
+    expect(request.merge_patch.study.solver).toMatchObject({
+      fixed_timestep: "1e-13",
+      integrator: "heun",
+    });
+  });
+
+  it("rejects non-decimal solver text instead of emitting backend-invalid values", () => {
+    const draft = createStudyGlobalDraft({
+      study: {
+        requested_backend: "fdm",
+        solver: {
+          fixed_timestep: "0x10",
+          integrator: "heun",
+        },
+      },
+    });
+    const request = buildStudyGlobalMergePatch(draft);
+    if (request.kind !== "merge_patch") throw new Error("expected merge patch");
+    expect(request.merge_patch.study.solver?.fixed_timestep).toBeNull();
+    expect(validateStudyGlobalDraft(draft).map((issue) => issue.message)).toContain(
+      "Fixed dt must be finite and positive.",
+    );
   });
 
   it("carries the authored scene revision on an FDM grid transaction", () => {
@@ -703,13 +757,13 @@ describe("StudyGlobalAuthoringModel", () => {
     expect(request.merge_patch.study).toMatchObject({
       solver: {
         adaptive_timestep: {
-          atol: 1e-8,
-          rtol: 1e-5,
+          atol: "1e-8",
+          rtol: "0.00001",
           dt_initial: null,
-          dt_min: 1e-16,
-          dt_max: 1e-13,
-          max_spin_rotation: 0.15,
-          norm_tolerance: 2e-6,
+          dt_min: "1e-16",
+          dt_max: "1e-13",
+          max_spin_rotation: "0.15",
+          norm_tolerance: "0.000002",
         },
       },
     });

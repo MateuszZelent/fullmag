@@ -37,7 +37,10 @@ export function isExpectedScratchHttpError(entry) {
   if (entry.status === 404 && /\/simulation\/(preparation|runs\/current)$/.test(entry.url)) {
     return true;
   }
-  if (entry.status === 404 && /\/interactions\/uniaxial_anisotropy$/.test(entry.url)) {
+  if (
+    entry.status === 404 &&
+    /\/interactions\/(?:uniaxial_anisotropy|interfacial_dmi)$/.test(entry.url)
+  ) {
     return true;
   }
   return entry.status === 409 &&

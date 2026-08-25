@@ -409,3 +409,64 @@ kanonicznego managed FEM na hoście z działającym WSL/ext4 storage, wykonanie
 `just run-scratch-authoring-fem-browser-smoke fem_execution=cpu` i dołączenie
 manifestu z `requested/effective/resolved == FEM/CPU`; dopiero wtedy można
 oznaczyć E2/E5 jako PASS.
+
+### Aktualizacja dowodowa 2026-08-25 (rzeczywisty przepływ UI scratch)
+
+- Został wykonany rzeczywisty, headless browser smoke przez Control Room dla
+  pustej sesji FDM/CPU/double: utworzenie Boxa jako `X ferromagnet`, zmiana
+  translacji, utworzenie i przypisanie materiału CoFeB, zapis tekstury
+  `Uniform Y`, parametrów `Ms/Aex/alpha/Dind/Dbulk`, włączenie exchange i
+  demag oraz zapis globalnej i per-object siatki FDM. Końcowy dokument sceny
+  miał rewizję `9`, a każda z tych sekcji była obecna w canonical
+  `SceneDocument`.
+- Smoke ujawnił dwie realne luki kontraktu, które zostały naprawione:
+  1. pusta sesja nie publikowała `snapshot.capabilities`, przez co Inspector
+     słusznie blokował teksturę i interakcje jako `stale`; `POST /v2/sessions`
+     publikuje teraz jawny profil wybranej linii CPU FDM/FEM z
+     `qualification.status=not_asserted`, bez ukrytego fallbacku;
+  2. formularz Study serializował tekstowe pola solvera (np.
+     `fixed_timestep`) jako liczby, więc backend odrzucał `Apply Grid` błędem
+     typu. Solverowe wartości są teraz zachowywane jako tekst SI zgodnie z
+     `SceneStudyState`.
+- Regresje: model study **31/31**, test capability API FDM+FEM **2/2**.
+  Powtarzalny skrypt `apps/control-room/scripts/smoke-scratch-authoring-ui.mjs`
+  uruchomiony z `CONTROL_ROOM_API_BASE` i `CONTROL_ROOM_URL` zakończył się
+  kodem `0`; odpowiedź końcowa zawierała
+  `study.fdm.default_cell=[8e-9,8e-9,4e-9]` oraz per-object
+  `per_object_grid[object_id].cell=[4e-9,4e-9,4e-9]`.
+- Pozostaje jedna bramka środowiskowa: managed FEM nie ma dostępnego obrazu,
+  `/zfn2` ani `/mnt/fullmag-zfn2-native`, więc nie można uczciwie oznaczyć
+  wykonania solvera FEM i browser smoke FEM jako PASS. Aktualny stan celu to
+  około **92%**; pozostałe ~8% to kwalifikacja managed FEM i jej manifest
+  `requested/effective/resolved == FEM/CPU`.
+
+### Aktualizacja końcowa authoringu UI 2026-08-25
+
+- Smoke Playwright został powtórzony dla obu backendów z pustej sesji. FDM
+  zakończył się kodem `0` z rewizją sceny `11`, a FEM zakończył się kodem `0`
+  z rewizją `11`. W obu manifestach przechodzą: primitive Box, pełna
+  translacja `[2e-8,-1e-8,0]`, material CoFeB, parametry `Ms/Aex/alpha/Dind/Dbulk`,
+  tekstura `Uniform Y`, rzeczywiste przełączenie exchange/demag off→on oraz
+  zapis odpowiedniej polityki backendu. Dowody są w
+  `C:\Users\admin\Documents\Fullmag\.fullmag\scratch-evidence\scratch-ui-fdm-final.log`
+  i `scratch-ui-fem-final.log`.
+- Naprawiono kontrakt eksportu solvera: domyślny integrator authoringu został
+  zmieniony z nieobsługiwanego `rkf45` na kanoniczne `rk45`; synchronizacja
+  modelu nie kończy się już tracebackiem DSL. Tekstowe liczby solvera używają
+  teraz wspólnego gramatycznego parsera dziesiętnego/wykładniczego, więc np.
+  `0x10` nie przechodzi walidacji i nie jest po cichu wysyłane jako wartość
+  backendowo niepoprawna.
+- Allowlista smoke obejmuje wyłącznie znane opcjonalne `404`, w tym
+  `interfacial_dmi`; nieoczekiwane `404`, `5xx`, błędy sieciowe i błędy runtime
+  nadal kończą smoke jako failure. Sprzątanie Playwright zamyka context i
+  browser przez `Promise.allSettled` również po błędzie.
+- Bramka regresyjna po tej iteracji: model study **32/32**, helper browser
+  **7/7**, capability API FDM/FEM **2/2**, test domyślnego solvera Rust **1/1**,
+  build `fullmag-api` **PASS**, ESLint zmienionych plików **PASS**.
+
+Stan celu aktualizuję do około **94% zrealizowania**. Pozostałe ~6% nie dotyczy
+już procedur authoringu UI: to uruchomienie kanonicznego managed FEM oraz
+rzeczywiste `mesh_build`/`relax` i browser qualification FEM z manifestem
+`requested/effective/resolved == FEM/CPU`. Bez dostępnego `/zfn2`, obrazu
+`fullmag-native.ext4` i archiwum runtime nie oznaczam tej bramki jako PASS ani
+nie zastępuję jej hostowym buildem.
