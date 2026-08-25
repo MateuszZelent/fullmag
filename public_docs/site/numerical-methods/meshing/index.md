@@ -142,6 +142,7 @@ def build_fdm_study():
     study = fm.study("mesh_choice_fdm")
     study.engine("fdm")
     study.device("cpu", precision="double")
+    study.mode("strict")
     study.universe(
         mode="manual",
         size=(160 * nm, 320 * nm, 10 * nm),
@@ -158,7 +159,7 @@ def build_fdm_study():
     film.m = fm.texture.uniform(1.0, 0.0, 0.0)
     study.exchange()
     study.demag()
-    study.stages.add_relax(stage_id="equilibrium", max_steps=10_000)
+    study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, max_steps=10_000, tolA=1.0e-4)
     return study
 
 
@@ -195,7 +196,7 @@ def build_fem_study():
     magnet.m = fm.texture.uniform(1.0, 0.0, 0.0)
     study.exchange()
     study.demag(realization="poisson_robin")
-    study.stages.add_relax(stage_id="equilibrium", max_steps=10_000, tolT=1.0e-6)
+    study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, max_steps=10_000, tolT=1.0e-6)
     return study
 ```
 
