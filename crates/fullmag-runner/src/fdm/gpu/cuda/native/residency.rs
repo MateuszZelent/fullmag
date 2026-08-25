@@ -17,9 +17,11 @@ fn finalize_receipt_result<T>(
     mut artifacts: Option<&mut crate::artifact_pipeline::ArtifactRecorder>,
     outcome: Result<T, RunError>,
 ) -> Result<T, RunError> {
-    let receipt = receipt_result.as_ref().ok().cloned().unwrap_or_else(|| {
-        FdmGpuExecutionReceipt::strict_unvalidated(&provenance.precision)
-    });
+    let receipt = receipt_result
+        .as_ref()
+        .ok()
+        .cloned()
+        .unwrap_or_else(|| FdmGpuExecutionReceipt::strict_unvalidated(&provenance.precision));
     provenance.fdm_gpu_execution_receipt = Some(receipt);
     if let Some(artifacts) = artifacts.as_deref_mut() {
         artifacts.update_provenance(provenance.clone());
@@ -63,15 +65,28 @@ pub(super) fn validate_native_operator_masks(
     executed_host: u64,
     executed_unknown: u64,
 ) -> Result<(), RunError> {
-    let unknown = (required | resolved_device | resolved_host | resolved_unknown |
-        executed_device | executed_host | executed_unknown) & !KNOWN_OPERATOR_MASK;
+    let unknown = (required
+        | resolved_device
+        | resolved_host
+        | resolved_unknown
+        | executed_device
+        | executed_host
+        | executed_unknown)
+        & !KNOWN_OPERATOR_MASK;
     if unknown != 0 {
-        return Err(preflight_error(format!("unknown_operator_mask={unknown:#x}")));
+        return Err(preflight_error(format!(
+            "unknown_operator_mask={unknown:#x}"
+        )));
     }
-    if required == 0 || resolved_device & required != required || resolved_host != 0 ||
-        resolved_unknown != 0 || resolved_device & !required != 0 ||
-        executed_device & !required != 0 || executed_host != 0 ||
-        executed_unknown != (required & !executed_device) {
+    if required == 0
+        || resolved_device & required != required
+        || resolved_host != 0
+        || resolved_unknown != 0
+        || resolved_device & !required != 0
+        || executed_device & !required != 0
+        || executed_host != 0
+        || executed_unknown != (required & !executed_device)
+    {
         return Err(preflight_error(format!(
             "required={required:#x} resolved_device={resolved_device:#x} resolved_host={resolved_host:#x} resolved_unknown={resolved_unknown:#x} executed_device={executed_device:#x} executed_host={executed_host:#x} executed_unknown={executed_unknown:#x}"
         )));
@@ -127,9 +142,7 @@ impl FdmGpuReceiptLifecycle {
     }
 }
 
-pub(super) fn validate_strict_preflight(
-    receipt: &FdmGpuExecutionReceipt,
-) -> Result<(), RunError> {
+pub(super) fn validate_strict_preflight(receipt: &FdmGpuExecutionReceipt) -> Result<(), RunError> {
     if receipt.requested != "gpu" && receipt.requested != "auto" {
         return Err(preflight_error(format!(
             "requested={} expected=gpu|auto",
@@ -148,10 +161,12 @@ pub(super) fn validate_strict_preflight(
             receipt.fallback_count
         )));
     }
-    if !receipt.accounting_valid || receipt.required_operator_mask == 0 ||
-        receipt.resolved_device_operator_mask != receipt.required_operator_mask ||
-        receipt.resolved_host_operator_mask != 0 ||
-        receipt.resolved_unknown_operator_mask != 0 {
+    if !receipt.accounting_valid
+        || receipt.required_operator_mask == 0
+        || receipt.resolved_device_operator_mask != receipt.required_operator_mask
+        || receipt.resolved_host_operator_mask != 0
+        || receipt.resolved_unknown_operator_mask != 0
+    {
         return Err(preflight_error(format!(
             "required={:#x} resolved_device={:#x} resolved_host={:#x} resolved_unknown={:#x} accounting_valid={}",
             receipt.required_operator_mask,
@@ -180,10 +195,11 @@ pub(crate) fn validate_strict_final_receipt(
     receipt: &FdmGpuExecutionReceipt,
 ) -> Result<(), RunError> {
     validate_strict_preflight(receipt)?;
-    if receipt.executed != "cuda_fdm" ||
-        receipt.executed_device_operator_mask != receipt.required_operator_mask ||
-        receipt.executed_host_operator_mask != 0 ||
-        receipt.executed_unknown_operator_mask != 0 {
+    if receipt.executed != "cuda_fdm"
+        || receipt.executed_device_operator_mask != receipt.required_operator_mask
+        || receipt.executed_host_operator_mask != 0
+        || receipt.executed_unknown_operator_mask != 0
+    {
         return Err(RunError {
             message: "strict FDM GPU final execution is not fully device-proven".to_string(),
         });
@@ -195,8 +211,7 @@ pub(crate) fn validate_strict_final_receipt(
         || counts.hot_loop_full_vector_d2h_bytes != 0
     {
         return Err(RunError {
-            message: "strict FDM GPU hot-loop full-vector transfer count must be zero"
-                .to_string(),
+            message: "strict FDM GPU hot-loop full-vector transfer count must be zero".to_string(),
         });
     }
     if counts.hot_loop_host_compute_count != 0 {
@@ -204,9 +219,7 @@ pub(crate) fn validate_strict_final_receipt(
             message: "strict FDM GPU hot-loop host-compute count must be zero".to_string(),
         });
     }
-    if counts.hot_loop_host_sync_count
-        > counts.hot_loop_control_scalar_host_sync_count
-    {
+    if counts.hot_loop_host_sync_count > counts.hot_loop_control_scalar_host_sync_count {
         return Err(RunError {
             message: "strict FDM GPU hot-loop contains an unclassified host synchronization"
                 .to_string(),
@@ -263,17 +276,20 @@ fn operator_location_name(
 #[cfg(feature = "cuda")]
 fn precision_name(value: u32) -> Result<&'static str, RunError> {
     match value {
-        value if value == ffi::fullmag_fdm_precision::FULLMAG_FDM_PRECISION_SINGLE as u32 => Ok("single"),
-        value if value == ffi::fullmag_fdm_precision::FULLMAG_FDM_PRECISION_DOUBLE as u32 => Ok("double"),
-        other => Err(preflight_error(format!("unknown precision discriminant={other}"))),
+        value if value == ffi::fullmag_fdm_precision::FULLMAG_FDM_PRECISION_SINGLE as u32 => {
+            Ok("single")
+        }
+        value if value == ffi::fullmag_fdm_precision::FULLMAG_FDM_PRECISION_DOUBLE as u32 => {
+            Ok("double")
+        }
+        other => Err(preflight_error(format!(
+            "unknown precision discriminant={other}"
+        ))),
     }
 }
 
 #[cfg(feature = "cuda")]
-fn integrator_realization(
-    integrator: u32,
-    precision: &str,
-) -> Result<String, RunError> {
+fn integrator_realization(integrator: u32, precision: &str) -> Result<String, RunError> {
     let name = match integrator {
         value if value == ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_HEUN as u32 => "heun",
         value if value == ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_RK4 as u32 => "rk4",
@@ -286,7 +302,11 @@ fn integrator_realization(
             )))
         }
     };
-    let suffix = if precision == "single" { "fp32" } else { "fp64" };
+    let suffix = if precision == "single" {
+        "fp32"
+    } else {
+        "fp64"
+    };
     Ok(format!("cuda_{name}_{suffix}"))
 }
 
@@ -350,9 +370,7 @@ fn execution_receipt_v2_request() -> ffi::fullmag_fdm_execution_receipt_v2 {
 }
 
 #[cfg(feature = "cuda")]
-pub(super) fn query_execution_device_ordinal(
-    backend: &NativeFdmBackend,
-) -> Result<i32, RunError> {
+pub(super) fn query_execution_device_ordinal(backend: &NativeFdmBackend) -> Result<i32, RunError> {
     let mut native = execution_receipt_v2_request();
     let status = unsafe {
         ffi::fullmag_fdm_backend_execution_receipt_v2(backend.handle as *mut _, &mut native)
@@ -431,7 +449,14 @@ pub(super) fn query_execution_receipt(
         native.required_operator_mask,
         ffi::FULLMAG_FDM_OPERATOR_EXCHANGE,
         "exchange",
-        format!("cuda_exchange_{}", if precision == "single" { "fp32" } else { "fp64" }),
+        format!(
+            "cuda_exchange_{}",
+            if precision == "single" {
+                "fp32"
+            } else {
+                "fp64"
+            }
+        ),
     );
     push_operator(
         &mut operator_residency,
@@ -462,19 +487,63 @@ pub(super) fn query_execution_receipt(
         "cuda_reduction".to_string(),
     );
     for (bit, operator, realization) in [
-        (ffi::FULLMAG_FDM_OPERATOR_EXTERNAL_FIELD, "external_field", "cuda_external_field"),
-        (ffi::FULLMAG_FDM_OPERATOR_MASKS, "masks", "cuda_device_masks"),
-        (ffi::FULLMAG_FDM_OPERATOR_MAGNETOELASTIC, "magnetoelastic", "cuda_magnetoelastic"),
-        (ffi::FULLMAG_FDM_OPERATOR_THERMAL, "thermal", "cuda_counter_brown_noise"),
-        (ffi::FULLMAG_FDM_OPERATOR_ZHANG_LI_STT, "zhang_li_stt", "cuda_zhang_li_stt"),
-        (ffi::FULLMAG_FDM_OPERATOR_SLONCZEWSKI_STT, "slonczewski_stt", "cuda_slonczewski_stt"),
+        (
+            ffi::FULLMAG_FDM_OPERATOR_EXTERNAL_FIELD,
+            "external_field",
+            "cuda_external_field",
+        ),
+        (
+            ffi::FULLMAG_FDM_OPERATOR_MASKS,
+            "masks",
+            "cuda_device_masks",
+        ),
+        (
+            ffi::FULLMAG_FDM_OPERATOR_MAGNETOELASTIC,
+            "magnetoelastic",
+            "cuda_magnetoelastic",
+        ),
+        (
+            ffi::FULLMAG_FDM_OPERATOR_THERMAL,
+            "thermal",
+            "cuda_counter_brown_noise",
+        ),
+        (
+            ffi::FULLMAG_FDM_OPERATOR_ZHANG_LI_STT,
+            "zhang_li_stt",
+            "cuda_zhang_li_stt",
+        ),
+        (
+            ffi::FULLMAG_FDM_OPERATOR_SLONCZEWSKI_STT,
+            "slonczewski_stt",
+            "cuda_slonczewski_stt",
+        ),
         (ffi::FULLMAG_FDM_OPERATOR_SOT, "sot", "cuda_sot"),
         (ffi::FULLMAG_FDM_OPERATOR_OERSTED, "oersted", "cuda_oersted"),
-        (ffi::FULLMAG_FDM_OPERATOR_BOUNDARY_CORRECTION, "boundary_correction", "cuda_boundary_correction"),
-        (ffi::FULLMAG_FDM_OPERATOR_MULTILAYER_TRANSFER, "multilayer_transfer", "cuda_multilayer_transfer"),
-        (ffi::FULLMAG_FDM_OPERATOR_MULTILAYER_INTERACTIONS, "multilayer_interactions", "cuda_multilayer_interactions"),
-        (ffi::FULLMAG_FDM_OPERATOR_MULTILAYER_DEMAG, "multilayer_demag", "cuda_multilayer_demag"),
-        (ffi::FULLMAG_FDM_OPERATOR_GPU_TRANSPORT, "gpu_transport", "cuda_m1_transport"),
+        (
+            ffi::FULLMAG_FDM_OPERATOR_BOUNDARY_CORRECTION,
+            "boundary_correction",
+            "cuda_boundary_correction",
+        ),
+        (
+            ffi::FULLMAG_FDM_OPERATOR_MULTILAYER_TRANSFER,
+            "multilayer_transfer",
+            "cuda_multilayer_transfer",
+        ),
+        (
+            ffi::FULLMAG_FDM_OPERATOR_MULTILAYER_INTERACTIONS,
+            "multilayer_interactions",
+            "cuda_multilayer_interactions",
+        ),
+        (
+            ffi::FULLMAG_FDM_OPERATOR_MULTILAYER_DEMAG,
+            "multilayer_demag",
+            "cuda_multilayer_demag",
+        ),
+        (
+            ffi::FULLMAG_FDM_OPERATOR_GPU_TRANSPORT,
+            "gpu_transport",
+            "cuda_m1_transport",
+        ),
     ] {
         push_operator(
             &mut operator_residency,
@@ -521,8 +590,7 @@ pub(super) fn query_execution_receipt(
             hot_loop_host_compute_count: native.hot_loop_host_compute_count,
             hot_loop_host_sync_count: native.hot_loop_host_sync_count,
             hot_loop_control_scalar_d2h_bytes: native.hot_loop_control_scalar_d2h_bytes,
-            hot_loop_control_scalar_host_sync_count:
-                native.hot_loop_control_scalar_host_sync_count,
+            hot_loop_control_scalar_host_sync_count: native.hot_loop_control_scalar_host_sync_count,
         },
         validation_state: "unvalidated".to_string(),
         accounting_valid: native.accounting_valid == 1,
@@ -533,9 +601,7 @@ pub(super) fn query_execution_receipt(
 
 #[cfg(test)]
 mod tests {
-    use crate::types::{
-        FdmGpuExecutionReceipt, FdmGpuOperatorResidency, FdmGpuTransferCounts,
-    };
+    use crate::types::{FdmGpuExecutionReceipt, FdmGpuOperatorResidency, FdmGpuTransferCounts};
 
     #[test]
     fn strict_preflight_rejects_non_device_operator_before_first_step() {
@@ -594,7 +660,9 @@ mod tests {
     fn scalar_control_readback_is_separate_from_forbidden_vector_transfers() {
         let mut receipt = strict_device_receipt();
         receipt.transfer_counts.hot_loop_control_scalar_d2h_bytes = 8;
-        receipt.transfer_counts.hot_loop_control_scalar_host_sync_count = 1;
+        receipt
+            .transfer_counts
+            .hot_loop_control_scalar_host_sync_count = 1;
         receipt.transfer_counts.hot_loop_host_sync_count = 1;
 
         super::validate_strict_final_receipt(&receipt)
@@ -614,9 +682,16 @@ mod tests {
         let known = super::known_operator_mask();
         let unknown = 1_u64 << 63;
         assert!(super::validate_native_operator_masks(known, known, 0, 0, known, 0, 0).is_ok());
-        assert!(super::validate_native_operator_masks(known | unknown, known, 0, 0, known, 0, 0).is_err());
-        assert!(super::validate_native_operator_masks(known, known, unknown, 0, known, 0, 0).is_err());
-        assert!(super::validate_native_operator_masks(known, known, 0, 0, known, 0, unknown).is_err());
+        assert!(
+            super::validate_native_operator_masks(known | unknown, known, 0, 0, known, 0, 0)
+                .is_err()
+        );
+        assert!(
+            super::validate_native_operator_masks(known, known, unknown, 0, known, 0, 0).is_err()
+        );
+        assert!(
+            super::validate_native_operator_masks(known, known, 0, 0, known, 0, unknown).is_err()
+        );
     }
 
     #[test]

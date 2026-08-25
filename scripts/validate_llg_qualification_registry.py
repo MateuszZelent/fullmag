@@ -49,6 +49,7 @@ QUALIFICATION_LANES = {
     "explicit_fixed_fem_cpu_double": ("fem", "cpu", "double", "fixed"),
     "explicit_fixed_fem_gpu_double": ("fem", "gpu", "double", "fixed"),
     "explicit_adaptive_fdm_cpu_double": ("fdm", "cpu", "double", "adaptive"),
+    "explicit_adaptive_fdm_cuda_double": ("fdm", "cuda", "double", "adaptive"),
     "explicit_adaptive_fem_cpu_double": ("fem", "cpu", "double", "adaptive"),
     "explicit_adaptive_fem_gpu_double": ("fem", "gpu", "double", "adaptive"),
 }

@@ -1,7 +1,7 @@
 {
   "document": {"path": "docs/physics/interactive-observation-and-restart-semantics.md"},
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "unqualified", "reason": "No persistent-observation runtime receipt."},
+    {"solver": "FDM", "device": "CPU", "status": "unqualified", "reason": "Persistent observation and generic ExactResume have no runtime receipt; coupled M3 alone has bounded checkpoint digest and restart unit/integration proof."},
     {"solver": "FDM", "device": "GPU", "status": "unqualified", "reason": "No persistent-observation runtime receipt."},
     {"solver": "FEM", "device": "CPU", "status": "unqualified", "reason": "No persistent-observation runtime receipt."},
     {"solver": "FEM", "device": "GPU", "status": "unqualified", "reason": "No persistent-observation runtime receipt."}
@@ -45,6 +45,13 @@
     {"id": "terminal-update-gap", "path": "crates/fullmag-runner/src/interactive/runtime.rs", "symbol": "build_atomic_terminal_update", "responsibility": "Current eager terminal update superseded by the target on-demand contract.", "evidence_status": "gap_evidence"},
     {"id": "current-fields-gap", "path": "crates/fullmag-cli/src/interactive_runtime_host.rs", "symbol": "compute_current_fields", "responsibility": "Current-only field materialization that does not implement the target source-neutral functional.", "evidence_status": "gap_evidence"},
     {"id": "checkpoint-capture-gap", "path": "crates/fullmag-session/src/capture.rs", "symbol": "capture_checkpoint", "responsibility": "Current checkpoint capture that does not prove exact restore semantics.", "evidence_status": "gap_evidence"},
+    {"id": "fdm-cpu-coupled-checkpoint", "path": "crates/fullmag-runner/src/fdm/cpu/spin_transport.rs", "symbol": "coupled_checkpoint", "responsibility": "Materialize the complete accepted coupled M3 continuation state, accepted/rejected/rollback counters, thermal interval identity, and payload digest.", "evidence_status": "unit_integration_proof"},
+    {"id": "fdm-cpu-coupled-checkpoint-digest", "path": "crates/fullmag-runner/src/fdm/cpu/spin_transport.rs", "symbol": "coupled_checkpoint_payload_sha256", "responsibility": "Compute SHA-256 over the canonical coupled M3 checkpoint payload with an empty digest field.", "evidence_status": "unit_integration_proof"},
+    {"id": "fdm-cpu-coupled-checkpoint-restore", "path": "crates/fullmag-runner/src/fdm/cpu/spin_transport.rs", "symbol": "restore_coupled_checkpoint", "responsibility": "Validate digest, identity, and complete state before atomically restoring workflow continuation.", "evidence_status": "unit_integration_proof"},
+    {"id": "fdm-cpu-coupled-heun-trial", "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs", "symbol": "heun_trial_with_external_stage_terms_and_lte", "responsibility": "Build a coupled Heun magnetization candidate without advancing the accepted thermal interval.", "evidence_status": "unit_integration_proof"},
+    {"id": "fdm-cpu-coupled-heun-commit", "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs", "symbol": "execute_coupled_heun_trial", "responsibility": "Commit transport workflow, magnetization, and thermal interval as one coupled Heun transaction.", "evidence_status": "unit_integration_proof"},
+    {"id": "fdm-cpu-engine-error-codes", "path": "crates/fullmag-engine/src/fdm/shared/types.rs", "symbol": "EngineErrorCode", "responsibility": "Define stable engine failure reasons, including distinct NaN and infinity codes.", "evidence_status": "unit_integration_proof"},
+    {"id": "fdm-cpu-runner-error-code-propagation", "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs", "symbol": "engine_run_error", "responsibility": "Carry an engine reason code into the runner failure record without parsing diagnostic text.", "evidence_status": "unit_integration_proof"},
     {"id": "table-autosave-api", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class TableAutosave", "responsibility": "Validate and lower the public scalar-table autosave policy."},
     {"id": "field-autosave-api", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class FieldAutosave", "responsibility": "Validate and lower the public field autosave policy."},
     {"id": "stage-autosave-api", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class StageAutosave", "responsibility": "Validate and lower the public stage autosave policy."}

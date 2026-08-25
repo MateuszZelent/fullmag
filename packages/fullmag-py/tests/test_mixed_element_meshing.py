@@ -17,6 +17,7 @@ import fullmag.meshing._gmsh_types as gmsh_types
 from fullmag import world as flat_world
 from fullmag.meshing._gmsh_extraction import (
     _GMSH_TO_FULLMAG_NODE_PERMUTATION,
+    _derive_facet_roles,
     _extract_mesh_data,
 )
 from fullmag.meshing._gmsh_infra import _scale_mesh_nodes
@@ -89,6 +90,21 @@ def test_mixed_tetra_repair_uses_default_gmsh_optimizer() -> None:
     _repair_mixed_tetrahedra(gmsh)
 
     gmsh.model.mesh.optimize.assert_called_once_with("", niter=1)
+
+
+def test_qualified_boundary_markers_bypass_volume_face_adjacency() -> None:
+    roles = _derive_facet_roles(
+        ["tet4"],
+        np.asarray([0, 4]),
+        np.asarray([0, 1, 2, 3]),
+        np.asarray([1]),
+        np.asarray([0, 3, 6]),
+        np.asarray([0, 1, 2, 0, 1, 3]),
+        np.asarray([10, 7]),
+        boundary_role_markers=(10, 7),
+    )
+
+    assert roles == ["material_interface", "exterior"]
 
 
 def test_gmsh_prism6_node_order_has_an_explicit_canonical_permutation() -> None:

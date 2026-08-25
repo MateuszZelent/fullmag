@@ -22,20 +22,11 @@ use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 #[cfg(feature = "cuda")]
 use crate::preview::flatten_vectors;
 #[cfg(feature = "cuda")]
+use crate::relaxation::direct_minimizer::direct_minimizer_control;
+#[cfg(feature = "cuda")]
 use crate::relaxation::{
     llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
 };
-#[cfg(feature = "cuda")]
-use crate::relaxation_direct_minimizer::{
-    apply_direct_minimizer_step_metrics, direct_minimizer_control,
-    direct_minimizer_gradient_degenerate, direct_minimizer_gradient_norm_sq,
-    direct_minimizer_step_budget, nonlinear_cg_descent_direction_dot,
-    nonlinear_cg_initial_step_size, nonlinear_cg_line_search, nonlinear_cg_next_direction,
-    projected_gradient_line_search, projected_gradient_step_size_update, DirectMinimizerAlgorithm,
-    DirectMinimizerState, DirectMinimizerTrialEvaluation,
-};
-#[cfg(feature = "cuda")]
-use crate::relaxation_vector_math::{max_torque_from_field, tangent_gradient_from_field};
 #[cfg(feature = "cuda")]
 use crate::scalar_metrics::{
     apply_average_m_to_step_stats_with_active_mask, scalar_row_due, single_object_scalars,
@@ -117,7 +108,6 @@ pub(crate) fn execute_cuda_fdm(
             message: "frozen_spins_cuda_direct_minimizer_unqualified: native CUDA BB/NCG does not yet consume the resolved frozen reference during trial retractions".to_string(),
         });
     }
-    crate::fdm::reject_adaptive_cuda_single_grid_plan(plan)?;
     if until_seconds <= 0.0 {
         return Err(RunError {
             message: "until_seconds must be positive".to_string(),
@@ -243,6 +233,8 @@ pub(crate) fn execute_cuda_fdm(
     let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     let mut last_preview_revision: Option<u64> = None;
     let mut cancelled = false;
+    let mut numerical_stagnation = false;
+    let mut direct_minimizer_torque_confirmed = false;
     let mut current_stats = backend.snapshot_step_stats(plan.grid.cells)?;
     ensure_single_object_scalars(&mut current_stats, "free");
     let mut final_frozen_checkpoint = frozen_spins_checkpoint_value(
@@ -255,217 +247,22 @@ pub(crate) fn execute_cuda_fdm(
     )?;
 
     if let Some(direct_minimizer) = direct_minimizer_control(plan.relaxation.as_ref()) {
-        let control = direct_minimizer.control;
-        latest_stats = Some(current_stats.clone());
-        let mut state = DirectMinimizerState::new(
-            backend.copy_m(cell_count)?,
-            backend.copy_h_eff(cell_count)?,
-            current_stats.e_total,
-        );
-        let ms_apm = plan
-            .material
-            .ms_field
-            .clone()
-            .unwrap_or_else(|| vec![plan.material.saturation_magnetisation; cell_count]);
-        let cell_volume_m3 = plan.cell_size.iter().product::<f64>();
-        let volumes_m3 = (0..cell_count)
-            .map(|index| {
-                if plan
-                    .active_mask
-                    .as_ref()
-                    .is_none_or(|mask| mask.get(index).copied().unwrap_or(false))
-                {
-                    cell_volume_m3
-                } else {
-                    0.0
-                }
-            })
-            .collect::<Vec<_>>();
-
-        while state.accepted_steps < direct_minimizer_step_budget(control) {
-            if let Some(live) = live.as_mut() {
-                if let Some(display_selection) = live.display_selection.map(|get| get()) {
-                    let preview_due = display_refresh_due(
-                        last_preview_revision,
-                        &display_selection,
-                        current_stats.step,
-                    );
-                    let preview_targets_global_scalar =
-                        display_is_global_scalar(&display_selection);
-                    let preview_field = if preview_due && !preview_targets_global_scalar {
-                        let request = display_selection.preview_request();
-                        Some(backend.copy_live_preview_field(
-                            &request,
-                            plan.grid.cells,
-                            plan.active_mask.as_deref(),
-                        )?)
-                    } else {
-                        None
-                    };
-                    let action = (live.on_step)(StepUpdate {
-                        coupled_checkpoint: final_frozen_checkpoint.clone(),
-                        stats: current_stats.clone(),
-                        grid: live.grid,
-                        fem_mesh_generation_id: None,
-                        magnetization: Some(flatten_vectors(&state.magnetization)),
-                        preview_field,
-                        cached_preview_fields: None,
-                        scalar_row_due: preview_due && preview_targets_global_scalar,
-                        finished: false,
-                    });
-                    if preview_due {
-                        last_preview_revision = Some(display_selection.revision);
-                    }
-                    if action == StepAction::Stop {
-                        cancelled = true;
-                        break;
-                    }
-                }
-            }
-            if cancelled {
-                break;
-            }
-
-            let max_torque = max_torque_from_field(&state.magnetization, &state.h_eff);
-            let g_norm_sq = direct_minimizer_gradient_norm_sq(&state.gradient);
-            if direct_minimizer_gradient_degenerate(g_norm_sq) {
-                break;
-            }
-
-            let mut trial_lambda = state.step_size;
-            let (trial_stats, m_trial) = match direct_minimizer.algorithm {
-                DirectMinimizerAlgorithm::ProjectedGradientBb => {
-                    let accepted_trial = projected_gradient_line_search(
-                        state.energy_j,
-                        g_norm_sq,
-                        &state.magnetization,
-                        &state.gradient,
-                        &state.h_eff,
-                        trial_lambda,
-                        &ms_apm,
-                        &volumes_m3,
-                        None,
-                        |trial| {
-                            backend.upload_magnetization(trial)?;
-                            backend.refresh_observables()?;
-                            let mut stats = backend.snapshot_step_stats(plan.grid.cells)?;
-                            ensure_single_object_scalars(&mut stats, "free");
-                            Ok::<_, RunError>(DirectMinimizerTrialEvaluation {
-                                energy_j: stats.e_total,
-                                stats,
-                            })
-                        },
-                    )?;
-                    trial_lambda = accepted_trial.step_size;
-                    let trial_stats = accepted_trial.stats;
-                    let m_trial = accepted_trial.magnetization;
-
-                    let h_eff_new = backend.copy_h_eff(cell_count)?;
-                    let g_new = tangent_gradient_from_field(&m_trial, &h_eff_new);
-
-                    let step_size_update = projected_gradient_step_size_update(
-                        &state.magnetization,
-                        &m_trial,
-                        &state.gradient,
-                        &g_new,
-                        &ms_apm,
-                        &volumes_m3,
-                        state.use_bb1,
-                        state.reset_consecutive,
-                    );
-                    state.step_size = step_size_update.step_size;
-                    state.use_bb1 = step_size_update.use_bb1;
-                    state.reset_consecutive = step_size_update.reset_consecutive;
-
-                    state.h_eff = h_eff_new;
-                    state.gradient = g_new;
-                    (trial_stats, m_trial)
-                }
-                DirectMinimizerAlgorithm::NonlinearCg => {
-                    let p_dot_g = nonlinear_cg_descent_direction_dot(
-                        &mut state.search_direction,
-                        &state.gradient,
-                        &ms_apm,
-                        &volumes_m3,
-                    );
-                    trial_lambda = nonlinear_cg_initial_step_size(&state.search_direction);
-
-                    let accepted_trial = nonlinear_cg_line_search(
-                        state.energy_j,
-                        p_dot_g,
-                        &state.magnetization,
-                        &state.h_eff,
-                        &state.search_direction,
-                        trial_lambda,
-                        &ms_apm,
-                        &volumes_m3,
-                        None,
-                        |trial| {
-                            backend.upload_magnetization(trial)?;
-                            backend.refresh_observables()?;
-                            let mut stats = backend.snapshot_step_stats(plan.grid.cells)?;
-                            ensure_single_object_scalars(&mut stats, "free");
-                            Ok::<_, RunError>(DirectMinimizerTrialEvaluation {
-                                energy_j: stats.e_total,
-                                stats,
-                            })
-                        },
-                    )?;
-                    trial_lambda = accepted_trial.step_size;
-                    let trial_stats = accepted_trial.stats;
-                    let m_trial = accepted_trial.magnetization;
-
-                    let h_eff_new = backend.copy_h_eff(cell_count)?;
-                    let g_new = tangent_gradient_from_field(&m_trial, &h_eff_new);
-                    state.search_direction = nonlinear_cg_next_direction(
-                        &m_trial,
-                        &state.gradient,
-                        &g_new,
-                        &state.search_direction,
-                        &ms_apm,
-                        &volumes_m3,
-                        state.accepted_steps + 1,
-                    );
-                    state.h_eff = h_eff_new;
-                    state.gradient = g_new;
-                    state.step_size = trial_lambda;
-                    (trial_stats, m_trial)
-                }
-            };
-
-            state.magnetization = m_trial;
-            state.energy_j = trial_stats.e_total;
-            state.accepted_steps += 1;
-            final_frozen_checkpoint = frozen_spins_checkpoint_value(
-                plan,
-                frozen_spins_state.as_ref(),
-                &state.magnetization,
-                state.accepted_steps,
-                0.0,
-                trial_lambda,
-            )?;
-
-            let mut accepted_stats = trial_stats.clone();
-            let torque_apm = apply_direct_minimizer_step_metrics(
-                &mut accepted_stats,
-                state.accepted_steps,
-                trial_lambda,
-                &state.magnetization,
-                &state.h_eff,
-                plan.active_mask.as_deref(),
-            );
-            ensure_single_object_scalars(&mut accepted_stats, "free");
-
-            artifacts.record_scalar(&accepted_stats)?;
-            steps.push(accepted_stats.clone());
-            latest_stats = Some(accepted_stats.clone());
-            current_stats = accepted_stats;
-
-            let energy_plateau_range = energy_plateau.record(state.energy_j);
-            if torque_confirmation.observe(control, energy_plateau_range, torque_apm) {
-                break;
-            }
-        }
+        let outcome = crate::fdm::gpu::cuda::direct_minimizer::execute_direct_minimizer(
+            &mut backend,
+            plan,
+            cell_count,
+            direct_minimizer,
+            current_stats,
+            live.as_mut(),
+            &mut artifacts,
+            &mut steps,
+            &mut energy_plateau,
+            last_preview_revision,
+        )?;
+        latest_stats = outcome.latest_stats;
+        cancelled = outcome.cancelled;
+        direct_minimizer_torque_confirmed = outcome.torque_confirmed;
+        numerical_stagnation = outcome.numerical_stagnation;
     } else {
         let dt = initial_dt.expect("LLG execution requires a resolved timestep policy");
         while current_time < until_seconds {
@@ -496,6 +293,11 @@ pub(crate) fn execute_cuda_fdm(
                         magnetization: None,
                         preview_field,
                         cached_preview_fields: None,
+                        hysteresis_field_m_t: None,
+                        hysteresis_point_index: None,
+                        hysteresis_settle_step_index: None,
+                        hysteresis_settle_step_kind: None,
+                        hysteresis_settle_step_method: None,
                         scalar_row_due: preview_due && preview_targets_global_scalar,
                         finished: false,
                     });
@@ -602,6 +404,11 @@ pub(crate) fn execute_cuda_fdm(
                     magnetization,
                     preview_field,
                     cached_preview_fields: None,
+                    hysteresis_field_m_t: None,
+                    hysteresis_point_index: None,
+                    hysteresis_settle_step_index: None,
+                    hysteresis_settle_step_kind: None,
+                    hysteresis_settle_step_method: None,
                     scalar_row_due: due_scalar_row
                         || (preview_due && preview_targets_global_scalar),
                     finished: false,
@@ -692,11 +499,11 @@ pub(crate) fn execute_cuda_fdm(
         plan.relaxation.as_ref(),
         crate::relaxation::RelaxationCompletionMetrics {
             max_torque_apm: latest_stats.as_ref().map(|stats| stats.max_torque_Apm),
-            torque_confirmed: torque_confirmation.confirmed(),
+            torque_confirmed: torque_confirmation.confirmed() || direct_minimizer_torque_confirmed,
             accepted_energy_plateau_range_j: energy_plateau.range(),
             steps: latest_stats.as_ref().map_or(0, |stats| stats.step),
             relaxation_time_s: latest_stats.as_ref().map(|stats| stats.time),
-            numerical_stagnation: false,
+            numerical_stagnation,
         },
     );
 

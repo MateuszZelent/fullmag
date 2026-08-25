@@ -66,9 +66,16 @@ fn main() {
         panic!("cmake configure for fullmag_fdm failed");
     }
 
+    let cmake_config = if std::env::var("DEBUG").as_deref() == Ok("true") {
+        "Debug"
+    } else {
+        "Release"
+    };
     let build_status = std::process::Command::new(&cmake)
         .arg("--build")
         .arg(&build_dir)
+        .arg("--config")
+        .arg(cmake_config)
         .arg("--target")
         .arg("fullmag_fdm")
         .status()
@@ -77,15 +84,17 @@ fn main() {
         panic!("cmake build for fullmag_fdm failed");
     }
 
-    println!(
-        "cargo:rustc-link-search=native={}",
-        build_dir.join("backends/fdm").display()
-    );
+    let native_lib_dir = if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        build_dir.join("backends/fdm").join(&cmake_config)
+    } else {
+        build_dir.join("backends/fdm")
+    };
+    println!("cargo:rustc-link-search=native={}", native_lib_dir.display());
     println!("cargo:rustc-link-lib=dylib=fullmag_fdm");
     emit_unix_runtime_rpath("$ORIGIN/../lib");
     println!(
         "cargo:metadata=lib_dir={}",
-        build_dir.join("backends/fdm").display()
+        native_lib_dir.display()
     );
 }
 

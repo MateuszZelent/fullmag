@@ -143,6 +143,36 @@ Pełna historia pozostaje na dysku; RAM/VRAM przechowuje accepted primary state,
 plan/domenę/materiały, operatory/workspaces, wszystkie policzone quantity
 bieżącego źródła oraz jedną wybraną ramkę i jej cache prezentacyjny.
 
+Obecna ścieżka FDM CPU coupled M3 ma ograniczony, wykonywalny checkpoint
+`fullmag.fdm.coupled_m3_checkpoint.v1`. Payload obejmuje bieżącą i poprzednią
+magnetyzację, czas i poprzednie `dt`, zaakceptowane nośniki charge/spin/Oersted,
+stany przejściowe, historie nieliniowe, error controller, rewizje, liczniki
+accepted/rejected/rollback, kursor telemetryki oraz seed i accepted-interval
+counter RNG.
+Pole `payload_sha256` jest SHA-256 kanonicznej serializacji całego checkpointu
+z pustym polem digestu. Brak, zły format albo niezgodność digestu kończą restore
+błędem przed zmianą workflow. Payloady utworzone przed dodaniem digestu są
+jawnie odrzucane; nie są migrowane heurystycznie. Ten ograniczony dowód nie
+promuje zwykłego FDM CPU, autosave ani wszystkich układów sprzężonych do
+ogólnego `ExactResume`.
+
+W ścieżce FDM CPU coupled Heun runner buduje kandydat magnetyzacji w istniejących
+buforach integratora, a kandydat transportu w cache próby chronionym przez
+`begin_attempt`/`rollback`; gorąca pętla nie klonuje pełnego stanu. Najpierw
+zatwierdza workflow transportowy, następnie podmienia zaakceptowany stan
+magnetyzacji, a licznik zaakceptowanego interwału termicznego zwiększa dokładnie
+raz dopiero po obu tych operacjach. Błąd końcowego
+`workflow.commit()` pozostawia magnetyzację, stan transportu i licznik RNG bez
+zmian; retry używa tego samego interwału termicznego. Jest to ograniczony dowód
+atomowości coupled Heun, a nie kwalifikacja adaptacyjnego stochastycznego LLG.
+Termiczny generator FDM CPU jest licznikowy: każda ewaluacja pola wyznacza cztery
+wartości uniform dla aktywnego cella z klucza `(seed, thermal_counter, cell,
+stream)` i nie przesuwa mutable kursora losowań. Stanową metryką RNG jest więc
+`thermal_counter`, a nie liczba ponownych obliczeń hashy podczas RHS. Checkpoint
+wymusza `thermal_counter == accepted_steps`, co dowodzi dokładnie jednego commit
+interwału termicznego na zaakceptowany krok; `rollback_count` zlicza wyłącznie
+próby posiadające aktywny checkpoint transakcji.
+
 (python-api)=
 ## 5. Python API
 
@@ -231,12 +261,23 @@ atomowy swap albo pozostawia aktywną sesję bez zmian.
 proweniencji. `validation errors` są typowane, a `unsupported combinations`
 są odrzucane przed alokacją albo compute, bez degradacji lane'u.
 
+FDM CPU przenosi stabilny `EngineErrorCode` niezależnie od tekstu diagnostyki.
+Kontrakt rozróżnia co najmniej: niepoprawne wejście i krok czasu, `NaN`,
+`+/-Inf`, brak capability, brak pamięci, błąd solvera, brak zbieżności,
+błąd przerwania,
+błąd solvera sprzężonego oraz trzy terminalne zakończenia kontrolera
+adaptacyjnego. `NaN` i `Inf` nie mogą być scalone w jeden powód. Konwersja
+silnik→runner zapisuje kod bez parsowania komunikatu; tekst pozostaje wyłącznie
+diagnozą dla człowieka. Błąd sprzężonego etapu lub commitu zachowuje kod
+`coupled_solver_failure` i nie commituje magnetyzacji, transportu ani licznika
+interwału termicznego.
+
 (discrete-realization)=
 ## 8. Realizacje dyskretne i status lane'ów
 
 | Solver | Device | Neutralny kontrakt | Obecny status dowodów |
 |---|---|---|---|
-| FDM | CPU | rezydentny live state, osobny historical evaluator, jeden `ComputeQuantities` | kontrakt dokumentacyjny; brak end-to-end receipts |
+| FDM | CPU | rezydentny live state, osobny historical evaluator, jeden `ComputeQuantities` | coupled M3 ma unit/integration proof kompletnego checkpointu i restartu z SHA-256; persistent observation i ogólny `ExactResume` pozostają niezakwalifikowane |
 | FDM | GPU | te same identyfikatory, jednostki i błędy; osobne CUDA buffers/workspaces | source obecny fragmentarycznie; brak kwalifikacji persistent observation |
 | FEM | CPU | te same źródła i batch; osobna realizacja MFEM/hypre | source obecny fragmentarycznie; brak kwalifikacji persistent observation |
 | FEM | GPU | te same źródła i batch; osobna realizacja MFEM/hypre/libCEED/CUDA | source obecny fragmentarycznie; brak kwalifikacji persistent observation |
@@ -277,8 +318,16 @@ walidacja numeryczna i production qualification. Minimalny zestaw obejmuje:
 8. każda lane wymaga własnego runtime receipt; GPU receipt zawiera device ID i
    dowód braku fallbacku.
 
-Obecny status: wyłącznie kontrakt źródłowy/dokumentacyjny. Task 0 nie dostarcza
-runtime receipts i nie kwalifikuje żadnej lane.
+Dla ograniczonego FDM CPU coupled M3 dodatkowe testy sprawdzają zgodność
+trajektorii i zaakceptowanego artefaktu po resume z przebiegiem nieprzerwanym,
+zgodność termicznego accepted-interval counter, odrzucenie każdego mismatchu
+publicznej tożsamości oraz odrzucenie skończonej korupcji magnetyzacji przez
+`payload_sha256` bez modyfikacji workflow.
+
+Obecny status persistent observation pozostaje kontraktem
+źródłowym/dokumentacyjnym bez runtime receipts. Wyjątkiem o wąskim zakresie
+jest unit/integration proof checkpointu FDM CPU coupled M3; nie kwalifikuje on
+całej lane ani pozostałych kontraktów tej strony.
 
 (limitations)=
 ## 11. Ograniczenia, kompletność i prace odroczone
@@ -313,6 +362,13 @@ runtime receipts i nie kwalifikuje żadnej lane.
 | obecny eager batch do zastąpienia | `crates/fullmag-runner/src/interactive/runtime.rs` | `build_atomic_terminal_update` | bieżąca luka: terminalny snapshot FDM | FDM CPU/GPU | superseded/gap evidence, nie źródło równania docelowego |
 | bieżąca komenda pól | `crates/fullmag-cli/src/interactive_runtime_host.rs` | `compute_current_fields` | bieżąca luka: materializacja current | wszystkie | gap evidence, nie źródło równania docelowego |
 | checkpoint session store | `crates/fullmag-session/src/capture.rs` | `capture_checkpoint` | bieżący capture CAS | wszystkie | gap evidence, exact restore nieudowodniony |
+| checkpoint coupled M3 | `crates/fullmag-runner/src/fdm/cpu/spin_transport.rs` | `coupled_checkpoint` | materializacja pełnego accepted continuation state, liczników accepted/rejected/rollback i digestu | FDM CPU coupled M3 | unit/integration proof |
+| integralność checkpointu coupled M3 | `crates/fullmag-runner/src/fdm/cpu/spin_transport.rs` | `coupled_checkpoint_payload_sha256` | SHA-256 kanonicznego payloadu bez pola digestu | FDM CPU coupled M3 | test korupcji skończonej wartości |
+| atomowy restore coupled M3 | `crates/fullmag-runner/src/fdm/cpu/spin_transport.rs` | `restore_coupled_checkpoint` | walidacja digestu, tożsamości i kompletności przed commit | FDM CPU coupled M3 | resume i mutation tests |
+| trial coupled Heun bez skutków ubocznych RNG | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `heun_trial_with_external_stage_terms_and_lte` | budowa kandydata magnetyzacji bez zatwierdzania interwału termicznego | FDM CPU coupled Heun | unit/integration fault injection |
+| atomowy owner coupled Heun | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `execute_coupled_heun_trial` | wspólny commit workflow, magnetyzacji i licznika RNG po sukcesie | FDM CPU coupled Heun | workflow-commit failure regression |
+| stabilne kody błędów silnika | `crates/fullmag-engine/src/fdm/shared/types.rs` | `EngineErrorCode` | osobne powody dla NaN, Inf, capability, OOM, solvera, zbieżności, przerwania i terminalnych decyzji adaptacyjnych | FDM CPU | unit/integration proof |
+| propagacja kodu silnik→runner | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `engine_run_error` | zapis kodu powodu bez parsowania tekstu diagnostycznego | FDM CPU | coupled fault-injection regression |
 | publiczne `TableAutosave` | `packages/fullmag-py/src/fullmag/model/study.py` | `class TableAutosave` | authoring, walidacja i lowering tabeli | wszystkie | source presence; bez promocji runtime |
 | publiczne `FieldAutosave` | `packages/fullmag-py/src/fullmag/model/study.py` | `class FieldAutosave` | authoring, walidacja i lowering pola | wszystkie | source presence; bez promocji runtime |
 | publiczne `StageAutosave` | `packages/fullmag-py/src/fullmag/model/study.py` | `class StageAutosave` | authoring, walidacja i lowering polityki stage | wszystkie | source presence; bez promocji runtime |

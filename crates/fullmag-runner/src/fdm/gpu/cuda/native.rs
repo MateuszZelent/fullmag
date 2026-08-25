@@ -457,10 +457,10 @@ pub(crate) struct NativeFdmBackend {
     gpu_transport_bound: bool,
 }
 
-#[cfg(any(feature = "cuda", test))]
-pub(crate) mod residency;
 #[cfg(feature = "cuda")]
 mod device;
+#[cfg(any(feature = "cuda", test))]
+pub(crate) mod residency;
 #[cfg(feature = "cuda")]
 pub(crate) use device::DeviceInfo;
 
@@ -1391,8 +1391,12 @@ impl NativeFdmBackend {
             let message = match create_status {
                 ffi::FULLMAG_FDM_ERR_INVALID => "CUDA FDM plan descriptor is invalid",
                 ffi::FULLMAG_FDM_ERR_CUDA => "CUDA FDM backend initialization failed",
-                ffi::FULLMAG_FDM_ERR_INTERNAL => "CUDA FDM backend initialization failed internally",
-                ffi::FULLMAG_FDM_ERR_INTERRUPTED => "CUDA FDM backend initialization was interrupted",
+                ffi::FULLMAG_FDM_ERR_INTERNAL => {
+                    "CUDA FDM backend initialization failed internally"
+                }
+                ffi::FULLMAG_FDM_ERR_INTERRUPTED => {
+                    "CUDA FDM backend initialization was interrupted"
+                }
                 ffi::FULLMAG_FDM_ERR_DT_MIN_EXHAUSTED => {
                     "CUDA FDM backend exhausted dt_min during initialization"
                 }
@@ -1680,9 +1684,8 @@ impl NativeFdmBackend {
         let device_ordinal = residency::query_execution_device_ordinal(self)?;
         let identity = ffi::fullmag_fdm_checkpoint_execution_identity_v3 {
             abi_version: ffi::FULLMAG_FDM_CHECKPOINT_EXECUTION_IDENTITY_ABI_V3,
-            struct_size: std::mem::size_of::<
-                ffi::fullmag_fdm_checkpoint_execution_identity_v3,
-            >() as u32,
+            struct_size: std::mem::size_of::<ffi::fullmag_fdm_checkpoint_execution_identity_v3>()
+                as u32,
             requested_backend,
             resolved_backend: ffi::FULLMAG_FDM_CHECKPOINT_BACKEND_FDM,
             executed_backend: ffi::FULLMAG_FDM_CHECKPOINT_BACKEND_FDM,
@@ -1705,10 +1708,7 @@ impl NativeFdmBackend {
             reserved0: 0,
         };
         let rc = unsafe {
-            ffi::fullmag_fdm_backend_set_checkpoint_execution_identity_v3(
-                self.handle,
-                &identity,
-            )
+            ffi::fullmag_fdm_backend_set_checkpoint_execution_identity_v3(self.handle, &identity)
         };
         if rc != ffi::FULLMAG_FDM_OK {
             return Err(self.last_error_or("committing LLG checkpoint execution identity failed"));
@@ -3319,9 +3319,8 @@ mod tests {
                         value.assume_init()
                     };
                     let stats_before = step_stats_bytes(&stats);
-                    let rc = unsafe {
-                        ffi::fullmag_fdm_backend_step(backend.handle, dt, &mut stats)
-                    };
+                    let rc =
+                        unsafe { ffi::fullmag_fdm_backend_step(backend.handle, dt, &mut stats) };
                     if rc == ffi::FULLMAG_FDM_OK {
                         assert_eq!(fail_at, interrupted_polls + 1);
                         completed_without_injection = true;
@@ -3357,7 +3356,10 @@ mod tests {
                     interrupted_polls >= 2,
                     "{integrator:?}/{precision:?} must expose integrator and final-stats polls"
                 );
-                assert!(completed_without_injection, "fault poll matrix must terminate");
+                assert!(
+                    completed_without_injection,
+                    "fault poll matrix must terminate"
+                );
             }
         }
     }

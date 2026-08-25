@@ -145,7 +145,8 @@ def is_registered_scaffold(path: Path, repo_root: Path) -> bool:
         return False
     try:
         expected = _independent_scaffold_text(page_spec)
-        return expected is not None and path.read_bytes() == expected.encode("utf-8")
+        actual = path.read_bytes().replace(b"\r\n", b"\n")
+        return expected is not None and actual == expected.encode("utf-8")
     except (OSError, UnicodeError, ValueError, TypeError):
         return False
 

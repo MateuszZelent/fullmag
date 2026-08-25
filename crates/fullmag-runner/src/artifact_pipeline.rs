@@ -21,7 +21,11 @@ use crate::fdm::gpu::cuda::native::{
 #[cfg(feature = "fem-gpu")]
 use crate::native_fem::{NativeFemFieldSnapshot, NativeFemFieldSnapshotInfo};
 use crate::table_autosave::{TableAutosaveConfig, TableStore};
-use crate::types::{ExecutionProvenance, FieldSnapshot, RunError, StepStats};
+use crate::types::{ExecutionProvenance, FieldSnapshot, RunError, SolverAttemptRecord, StepStats};
+use fullmag_engine::{
+    AdaptiveAttemptDecision, AdaptiveAttemptReason, AdaptiveAttemptRecord,
+    MAX_ADAPTIVE_ATTEMPT_RECORDS,
+};
 
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use std::collections::HashMap;
@@ -165,6 +169,84 @@ pub(crate) fn apply_artifact_enqueue_metrics(
         .saturating_add(metrics.block_wall_time_ns);
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CpuAdaptiveAttemptBatch {
+    records: [AdaptiveAttemptRecord; MAX_ADAPTIVE_ATTEMPT_RECORDS],
+    count: usize,
+    target_step: u64,
+    time: f64,
+    enable_demag: bool,
+    estimator_order: u32,
+}
+
+impl CpuAdaptiveAttemptBatch {
+    pub(crate) fn new(
+        attempts: &[AdaptiveAttemptRecord],
+        target_step: u64,
+        time: f64,
+        enable_demag: bool,
+        estimator_order: u32,
+    ) -> Self {
+        let count = attempts.len().min(MAX_ADAPTIVE_ATTEMPT_RECORDS);
+        let mut records = [AdaptiveAttemptRecord::default(); MAX_ADAPTIVE_ATTEMPT_RECORDS];
+        records[..count].copy_from_slice(&attempts[..count]);
+        Self {
+            records,
+            count,
+            target_step,
+            time,
+            enable_demag,
+            estimator_order,
+        }
+    }
+
+    fn materialize_into(self, target: &mut Vec<SolverAttemptRecord>) {
+        target.clear();
+        target.reserve(self.count);
+        for record in &self.records[..self.count] {
+            target.push(SolverAttemptRecord {
+                attempt: u64::from(record.attempt),
+                target_step: self.target_step,
+                time: self.time,
+                dt_attempt: record.dt_attempt,
+                eta: record.normalized_error,
+                max_norm_defect: None,
+                max_spin_rotation: None,
+                decision: adaptive_attempt_decision_name(record.decision).to_string(),
+                reason: adaptive_attempt_reason_name(record.reason).to_string(),
+                dt_next: record.dt_next,
+                demag_solves: if self.enable_demag {
+                    record.rhs_evals
+                } else {
+                    0
+                },
+                demag_iterations: 0,
+                demag_residual: 0.0,
+                rhs_evals: record.rhs_evals,
+                estimator_order: self.estimator_order as i32,
+            });
+        }
+    }
+}
+
+fn adaptive_attempt_decision_name(decision: AdaptiveAttemptDecision) -> &'static str {
+    match decision {
+        AdaptiveAttemptDecision::Accepted => "accepted",
+        AdaptiveAttemptDecision::Retry => "retry",
+        AdaptiveAttemptDecision::Failed => "failed",
+    }
+}
+
+fn adaptive_attempt_reason_name(reason: AdaptiveAttemptReason) -> &'static str {
+    match reason {
+        AdaptiveAttemptReason::WithinTolerance => "within_tolerance",
+        AdaptiveAttemptReason::ErrorAboveTolerance => "error_above_tolerance",
+        AdaptiveAttemptReason::DtMinExhausted => "dt_min_exhausted",
+        AdaptiveAttemptReason::NonFiniteError => "non_finite_error",
+        AdaptiveAttemptReason::RetryLimitExhausted => "retry_limit_exhausted",
+    }
+}
+
 enum ArtifactJob {
     ScalarRow(StepStats),
     FieldSnapshot {
@@ -190,6 +272,10 @@ enum ArtifactJob {
         primary_error: String,
         acknowledgement: mpsc::Sender<Result<(), String>>,
     },
+    TerminalCpuAdaptiveAttempts {
+        batch: CpuAdaptiveAttemptBatch,
+        acknowledgement: mpsc::Sender<Result<(), String>>,
+    },
     Shutdown,
 }
 
@@ -207,6 +293,10 @@ impl ArtifactJob {
             #[cfg(feature = "fem-gpu")]
             ArtifactJob::NativeFemFieldSnapshot { .. } => 0,
             ArtifactJob::FailedRunProvenance { .. } => 0,
+            ArtifactJob::TerminalCpuAdaptiveAttempts { batch, .. } => batch
+                .count
+                .saturating_mul(std::mem::size_of::<AdaptiveAttemptRecord>())
+                as u64,
             ArtifactJob::UpdateProvenance { .. } => 0,
             ArtifactJob::Shutdown => 0,
         }
@@ -267,6 +357,67 @@ impl ArtifactPipelineSender {
             primary_error,
             Duration::from_secs(10),
         )
+    }
+
+    fn publish_terminal_cpu_adaptive_attempts(
+        &self,
+        batch: CpuAdaptiveAttemptBatch,
+    ) -> Result<(), RunError> {
+        self.publish_terminal_cpu_adaptive_attempts_with_timeout(batch, Duration::from_secs(10))
+    }
+
+    fn publish_terminal_cpu_adaptive_attempts_with_timeout(
+        &self,
+        batch: CpuAdaptiveAttemptBatch,
+        timeout: Duration,
+    ) -> Result<(), RunError> {
+        let deadline = std::time::Instant::now() + timeout;
+        let (acknowledgement, completed) = mpsc::channel();
+        let mut job = ArtifactJob::TerminalCpuAdaptiveAttempts {
+            batch,
+            acknowledgement,
+        };
+        let queue_depth_after = self.queue_depth.fetch_add(1, Ordering::Relaxed) + 1;
+        self.diagnostics
+            .current_queue_depth
+            .store(queue_depth_after as u64, Ordering::Relaxed);
+        update_atomic_max(&self.diagnostics.max_queue_depth, queue_depth_after as u64);
+        loop {
+            match self.tx.try_send(job) {
+                Ok(()) => break,
+                Err(mpsc::TrySendError::Full(returned)) => {
+                    job = returned;
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    if remaining.is_zero() {
+                        self.rollback_queue_depth();
+                        return Err(RunError {
+                            message: "timed out enqueueing terminal solver attempts".into(),
+                        });
+                    }
+                    thread::park_timeout(remaining.min(Duration::from_millis(1)));
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    self.rollback_queue_depth();
+                    return Err(RunError {
+                        message:
+                            "artifact writer stopped before terminal solver attempts were queued"
+                                .into(),
+                    });
+                }
+            }
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        match completed.recv_timeout(remaining) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(message)) => Err(RunError { message }),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(RunError {
+                message: "timed out waiting for terminal solver attempts".into(),
+            }),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(RunError {
+                message: "artifact writer stopped before terminal solver attempts were durable"
+                    .into(),
+            }),
+        }
     }
 
     fn update_provenance(&self, provenance: ExecutionProvenance) -> Result<(), RunError> {
@@ -961,6 +1112,7 @@ pub(crate) struct ArtifactRecorder {
     /// trace after execution; it must not be confused with `RunResult.steps`,
     /// which intentionally contains only requested output rows.
     solver_steps: Vec<StepStats>,
+    cpu_adaptive_attempts: Vec<CpuAdaptiveAttemptBatch>,
     pipeline: Option<ArtifactPipelineSender>,
     provenance: ExecutionProvenance,
     physics_execution_context: Option<crate::physics_graph_execution::PhysicsGraphExecutionContext>,
@@ -976,6 +1128,7 @@ impl ArtifactRecorder {
             field_snapshots: Vec::new(),
             field_snapshot_count: 0,
             solver_steps: Vec::new(),
+            cpu_adaptive_attempts: Vec::new(),
             pipeline: None,
             provenance,
             physics_execution_context: None,
@@ -997,6 +1150,7 @@ impl ArtifactRecorder {
             field_snapshots: Vec::new(),
             field_snapshot_count: 0,
             solver_steps: Vec::new(),
+            cpu_adaptive_attempts: Vec::new(),
             pipeline: Some(pipeline),
             provenance,
             physics_execution_context,
@@ -1049,6 +1203,20 @@ impl ArtifactRecorder {
         self.solver_steps.push(stats.clone());
     }
 
+    pub(crate) fn record_cpu_adaptive_attempts(&mut self, batch: CpuAdaptiveAttemptBatch) {
+        self.cpu_adaptive_attempts.push(batch);
+    }
+
+    pub(crate) fn publish_terminal_cpu_adaptive_attempts(
+        &mut self,
+        batch: CpuAdaptiveAttemptBatch,
+    ) -> Result<(), RunError> {
+        if let Some(pipeline) = self.pipeline.as_ref() {
+            pipeline.publish_terminal_cpu_adaptive_attempts(batch)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn observe_physics_execution(&mut self) {
         if let Some(context) = self.physics_execution_context.as_ref() {
             context.observe_workflow(&mut self.provenance);
@@ -1062,6 +1230,24 @@ impl ArtifactRecorder {
     }
 
     pub(crate) fn take_solver_steps(&mut self) -> Vec<StepStats> {
+        let mut batches = std::mem::take(&mut self.cpu_adaptive_attempts)
+            .into_iter()
+            .peekable();
+        for step in &mut self.solver_steps {
+            if batches
+                .peek()
+                .is_some_and(|batch| batch.target_step == step.step)
+            {
+                batches
+                    .next()
+                    .expect("peeked adaptive attempt batch")
+                    .materialize_into(&mut step.solver_attempts);
+            }
+        }
+        assert!(
+            batches.next().is_none(),
+            "CPU adaptive attempt batch has no matching accepted solver step"
+        );
         std::mem::take(&mut self.solver_steps)
     }
 
@@ -1818,6 +2004,13 @@ fn writer_loop(
                 );
                 let _ = acknowledgement.send(result);
             }
+            ArtifactJob::TerminalCpuAdaptiveAttempts {
+                batch,
+                acknowledgement,
+            } => {
+                let result = write_terminal_cpu_adaptive_attempts(output_dir, &batch);
+                let _ = acknowledgement.send(result);
+            }
             ArtifactJob::UpdateProvenance {
                 provenance,
                 acknowledgement,
@@ -1928,6 +2121,59 @@ fn write_failed_run_provenance_atomic(
         let _ = fs::remove_file(&temporary_path);
     }
     result
+}
+
+fn write_terminal_cpu_adaptive_attempts(
+    output_dir: &Path,
+    batch: &CpuAdaptiveAttemptBatch,
+) -> Result<(), String> {
+    let path = output_dir.join("solver_attempts.csv");
+    let write_header = fs::metadata(&path)
+        .map(|meta| meta.len() == 0)
+        .unwrap_or(true);
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|error| format!("failed to open '{}': {error}", path.display()))?;
+    let mut attempts = BufWriter::new(file);
+    if write_header {
+        writeln!(attempts, "attempt,target_step,t_s,dt_attempt_s,eta,max_norm_defect,max_spin_rotation_rad,decision,reason,dt_next_s,demag_solves,demag_iterations,demag_residual,rhs_evals,estimator_order")
+            .map_err(|error| format!("failed to write '{}': {error}", path.display()))?;
+    }
+    for record in &batch.records[..batch.count] {
+        let decision = adaptive_attempt_decision_name(record.decision);
+        let reason = adaptive_attempt_reason_name(record.reason);
+        let demag_solves = if batch.enable_demag {
+            record.rhs_evals
+        } else {
+            0
+        };
+        writeln!(
+            attempts,
+            "{},{},{:.17e},{:.17e},{:.17e},,,{},{},{:.17e},{},0,{:.17e},{},{}",
+            record.attempt,
+            batch.target_step,
+            batch.time,
+            record.dt_attempt,
+            record.normalized_error,
+            decision,
+            reason,
+            record.dt_next,
+            demag_solves,
+            0.0,
+            record.rhs_evals,
+            batch.estimator_order,
+        )
+        .map_err(|error| format!("failed to write '{}': {error}", path.display()))?;
+    }
+    attempts
+        .flush()
+        .map_err(|error| format!("failed to flush '{}': {error}", path.display()))?;
+    attempts
+        .get_ref()
+        .sync_all()
+        .map_err(|error| format!("failed to sync '{}': {error}", path.display()))
 }
 
 enum ArtifactWriterJobKind {
@@ -2094,6 +2340,127 @@ mod tests {
             #[cfg(feature = "fem-gpu")]
             accepted_step_fields: Arc::new(Vec::new()),
         }
+    }
+
+    fn terminal_attempt_batch(target_step: u64) -> CpuAdaptiveAttemptBatch {
+        CpuAdaptiveAttemptBatch::new(
+            &[AdaptiveAttemptRecord {
+                attempt: 1,
+                dt_attempt: 1e-12,
+                normalized_error: 2.0,
+                decision: AdaptiveAttemptDecision::Failed,
+                reason: AdaptiveAttemptReason::DtMinExhausted,
+                dt_next: 1e-12,
+                rhs_evals: 4,
+            }],
+            target_step,
+            0.0,
+            false,
+            2,
+        )
+    }
+
+    #[test]
+    fn terminal_attempt_full_queue_timeout_rolls_back_depth() {
+        let (tx, receiver) = mpsc::sync_channel(1);
+        tx.send(ArtifactJob::Shutdown).expect("fill test queue");
+        let sender = isolated_pipeline_sender(tx, 1);
+        let error = sender
+            .publish_terminal_cpu_adaptive_attempts_with_timeout(
+                terminal_attempt_batch(1),
+                Duration::from_millis(25),
+            )
+            .expect_err("full queue must time out");
+        assert!(error.message.contains("timed out enqueueing"));
+        assert_eq!(sender.queue_depth.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            sender
+                .diagnostics
+                .current_queue_depth
+                .load(Ordering::Relaxed),
+            1
+        );
+        drop(receiver);
+    }
+
+    #[test]
+    fn terminal_attempt_disconnected_queue_rolls_back_depth() {
+        let (tx, receiver) = mpsc::sync_channel(1);
+        drop(receiver);
+        let sender = isolated_pipeline_sender(tx, 0);
+        let error = sender
+            .publish_terminal_cpu_adaptive_attempts_with_timeout(
+                terminal_attempt_batch(1),
+                Duration::from_millis(25),
+            )
+            .expect_err("disconnected queue must fail");
+        assert!(error
+            .message
+            .contains("before terminal solver attempts were queued"));
+        assert_eq!(sender.queue_depth.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            sender
+                .diagnostics
+                .current_queue_depth
+                .load(Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
+    fn terminal_attempt_stalled_ack_uses_remaining_deadline() {
+        let (tx, receiver) = mpsc::sync_channel(1);
+        let sender = isolated_pipeline_sender(tx, 0);
+        let stalled = thread::spawn(move || {
+            let job = receiver.recv().expect("receive terminal attempt job");
+            thread::sleep(Duration::from_millis(75));
+            drop(job);
+        });
+        let error = sender
+            .publish_terminal_cpu_adaptive_attempts_with_timeout(
+                terminal_attempt_batch(1),
+                Duration::from_millis(25),
+            )
+            .expect_err("stalled acknowledgement must time out");
+        assert!(error
+            .message
+            .contains("waiting for terminal solver attempts"));
+        stalled.join().expect("stalled receiver exits");
+    }
+
+    #[test]
+    fn recorder_materializes_multiple_adaptive_batches_in_step_order() {
+        let mut recorder = ArtifactRecorder::in_memory(ExecutionProvenance::default());
+        for step in 1..=2 {
+            recorder.record_cpu_adaptive_attempts(terminal_attempt_batch(step));
+            recorder.record_solver_step(&StepStats {
+                step,
+                time: step as f64 * 1e-12,
+                dt: 1e-12,
+                ..StepStats::default()
+            });
+        }
+
+        let steps = recorder.take_solver_steps();
+
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0].solver_attempts[0].target_step, 1);
+        assert_eq!(steps[1].solver_attempts[0].target_step, 2);
+        assert_eq!(steps[0].solver_attempts[0].decision, "failed");
+        assert_eq!(steps[1].solver_attempts[0].reason, "dt_min_exhausted");
+    }
+
+    #[test]
+    #[should_panic(expected = "no matching accepted solver step")]
+    fn recorder_rejects_unmatched_adaptive_batch_in_release_visible_path() {
+        let mut recorder = ArtifactRecorder::in_memory(ExecutionProvenance::default());
+        recorder.record_cpu_adaptive_attempts(terminal_attempt_batch(2));
+        recorder.record_solver_step(&StepStats {
+            step: 1,
+            ..StepStats::default()
+        });
+
+        let _ = recorder.take_solver_steps();
     }
 
     #[test]

@@ -4641,6 +4641,11 @@ fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
       case "$run_mode" in interactive|headless) ;; *) echo "unsupported run mode: $run_mode (expected interactive or headless)" >&2; exit 2 ;; esac; \
       if [ -z "$script" ]; then echo "missing script path; example: just fullmag windows=True build=True dev fdm gpu ./examples/permalloy_layer_bimeron_prism_single_layer_relax_300nm.py" >&2; exit 2; fi; \
       if [ ! -f "$script" ]; then echo "script not found: $script" >&2; exit 2; fi; \
+      host_windows="false"; \
+      case "$(uname -s 2>/dev/null || true)" in MINGW*|MSYS*|CYGWIN*) host_windows="true" ;; esac; \
+      if [ "$backend" = "fem" ] && [ "$device" = "gpu" ] && { [ "$windows" = "true" ] || [ "$host_windows" = "true" ]; }; then \
+        exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{ repo_root }}/scripts/windows/run_fullmag_wsl.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port"; \
+      fi; \
       if [ "$windows" = "true" ]; then \
         exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{ repo_root }}/scripts/windows/run_fullmag.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port"; \
       fi; \

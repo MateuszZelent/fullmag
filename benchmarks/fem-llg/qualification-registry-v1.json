@@ -175,7 +175,7 @@
       "validated_at": null,
       "validator_schema": null,
       "completed_gates": [],
-      "reason": "No exact adaptive FDM CPU qualification artifact is registered."
+      "reason": "Bounded RK23/RK45 retry/failure traces, constant-field oracle, exact RHS accounting, and the bounded steady-state allocation/work-to-accuracy gate pass across AoS, buffer-SoA and persistent-SoA; no clean hash-bound artifact for an exact adaptive FDM CPU integrator/interaction tuple is registered."
     },
     {
       "key": {
