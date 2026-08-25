@@ -914,4 +914,6 @@ FEM w kanonicznym managed runtime.
 - [x] Potwierdzono czysty worktree po testach i brak błędów `git diff --check`.
 - [ ] Managed FEM nadal wymaga poprawnego obrazu/storage; bieżący host ma
   tylko dystrybucję WSL `Ubuntu`, 0-bajtowy `fullmag-native.ext4`, brak
-  `fem-gpu-host-latest.tar` i brak obrazu `fullmag/fem-gpu:local`.
+  `fem-gpu-host-latest.tar` i brak obrazu `fullmag/fem-gpu:local`. Znaleziony
+  `fullmag/fem-gpu:windows-local` jest developerskim obrazem CUDA z komendą
+  `sleep infinity`, nie wyeksportowanym managed runtime.

@@ -564,8 +564,10 @@ container-backed `just`.
   nazwa `Ubuntu2` nie istnieje w bieżącym hoście): obraz
   `/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4` nadal ma
   **0 B**, nie jest zamontowany jako ext4, brak archiwum
-  `fem-gpu-host-latest.tar`, aktywnego bundla oraz lokalnego obrazu
-  `fullmag/fem-gpu:local`.
+  `fem-gpu-host-latest.tar`, aktywnego bundla oraz kanonicznego obrazu
+  `fullmag/fem-gpu:local`. Istniejący `fullmag/fem-gpu:windows-local`
+  (17,1 GB) jest obrazem developerskim z `CMD sleep infinity`, a nie
+  wyeksportowanym host runtime; sam tag nie spełnia kontraktu managed bundle.
 
 Nie powstał nowy kod produkcyjny, ponieważ ponowna kwalifikacja potwierdziła,
 że jedyną brakującą bramką jest zewnętrzny managed runtime FEM; nie wolno jej

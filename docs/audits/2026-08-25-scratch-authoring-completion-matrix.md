@@ -27,7 +27,7 @@ około **97%**, pozostałe **3%** to wykonanie i kwalifikacja solvera FEM.
 | Eksport Python/ProblemIR 0.3 | PASS | `test_scratch_authoring_ui_roundtrip.py`: **9 passed** przy zgodnym środowisku `uv` |
 | Invalidation, revision safety i stabilność Inspectora | PASS (frontend) | targeted Vitest **21 plików / 356/356**, helper browser **7/7**, delayed-ACK regression identity/focus/scroll/opacity/animation |
 | FDM/FEM browser authoring smoke | PASS | `CONTROL_ROOM_SCRATCH_BACKEND=fdm/fem` na świeżym Next/API; oba manifesty zakończone kodem `0` |
-| Managed FEM `mesh_build`/`relax` i browser qualification | BLOCKED | `justfile:ensure-managed-fem-runtime` wymaga bundla; `fullmag-native.ext4` ma 0 B, brak archiwum runtime, brak ext4 mount, aktywnego bundla i obrazu `fullmag/fem-gpu:local` |
+| Managed FEM `mesh_build`/`relax` i browser qualification | BLOCKED | `justfile:ensure-managed-fem-runtime` wymaga bundla; `fullmag-native.ext4` ma 0 B, brak archiwum runtime, brak ext4 mount i aktywnego bundla; dostępny `fullmag/fem-gpu:windows-local` jest tylko obrazem developerskim, nie host runtime |
 
 ## Bramy niezaliczone
 
