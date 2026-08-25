@@ -36,7 +36,7 @@ build_time = os.environ.get("FULLMAG_DOCS_BUILD_TIME")
 if not build_time:
     build_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 html_context = {"fem_docs_build_time": build_time}
-exclude_patterns = ["_build", "internal", "generated", "README.md"]
+exclude_patterns = ["_build", "internal", "generated", "README.md", "**/PAGE_TEMPLATE.md"]
 source_suffix = {".md": "markdown", ".rst": "restructuredtext"}
 
 myst_enable_extensions = [
