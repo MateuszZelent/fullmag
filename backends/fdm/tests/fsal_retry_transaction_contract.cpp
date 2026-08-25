@@ -109,15 +109,20 @@ int main() {
     cpu_only_telemetry.abi_version =
         FULLMAG_FDM_STEP_TRANSACTION_TELEMETRY_ABI_V1;
     cpu_only_telemetry.struct_size = sizeof(cpu_only_telemetry);
-    const bool cpu_only_telemetry_null_requests_are_invalid =
+    const bool telemetry_null_requests_are_invalid =
         fullmag_fdm_backend_get_step_transaction_telemetry_v1(
             nullptr, &cpu_only_telemetry) == FULLMAG_FDM_ERR_INVALID &&
         fullmag_fdm_backend_get_step_transaction_telemetry_v1(
             reinterpret_cast<fullmag_fdm_backend *>(uintptr_t{1}), nullptr) ==
-            FULLMAG_FDM_ERR_INVALID &&
+            FULLMAG_FDM_ERR_INVALID;
+#if !FULLMAG_FDM_CONTRACT_HAS_CUDA
+    const bool cpu_only_telemetry_valid_request_is_cuda_unavailable =
         fullmag_fdm_backend_get_step_transaction_telemetry_v1(
             reinterpret_cast<fullmag_fdm_backend *>(uintptr_t{1}),
             &cpu_only_telemetry) == FULLMAG_FDM_ERR_CUDA;
+#else
+    const bool cpu_only_telemetry_valid_request_is_cuda_unavailable = true;
+#endif
 
     Context capture_sample{};
     const bool capture_sample_commits_atomically =
@@ -720,9 +725,10 @@ int main() {
         "single-grid transactions own a monotonic fail-closed attempt generation",
         failures);
     report(
-        cpu_only_telemetry_null_requests_are_invalid,
+        telemetry_null_requests_are_invalid &&
+            cpu_only_telemetry_valid_request_is_cuda_unavailable,
         "FDM-GPU-TRX-001-B8-RED",
-        "CPU-only telemetry getter rejects null requests before reporting CUDA unavailable",
+        "telemetry getter rejects null requests before reporting CUDA unavailable",
         failures);
 
     report(
