@@ -1,0 +1,112 @@
+{
+  "document": {
+    "path": "docs/audits/llg-solver-2026-08-21/fdm-cpu.md",
+    "audited_source_revision": "969efa0941905825ac569d525f4bdaefc059e2af",
+    "immutable_source_base_url": "https://github.com/MateuszZelent/fullmag/blob/969efa0941905825ac569d525f4bdaefc059e2af/"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "Osobny raport lane FEM CPU."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "Osobny raport lane FEM GPU."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "Osobny raport lane FDM GPU."
+    }
+  ],
+  "equations": [],
+  "symbols": [
+    {
+      "id": "H_eff",
+      "latex": "H_{\\mathrm{eff}}",
+      "meaning": "efektywne pole magnetyczne używane przez RHS",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "gamma_0",
+      "latex": "\\gamma_0",
+      "meaning": "bezwzględna stała żyromagnetyczna dla pola $H$",
+      "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "fdm-cpu-effective-field-live",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "symbol": "effective_field_into_soa_ws_at_time",
+      "responsibility": "Składa live effective field dla integratorów SoA."
+    },
+    {
+      "id": "fdm-cpu-rhs-live",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "symbol": "llg_rhs_soa_into",
+      "responsibility": "Oblicza live RHS LLG z pola w trwałych buforach SoA."
+    },
+    {
+      "id": "fdm-cpu-adaptive-max",
+      "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs",
+      "symbol": "max_error_norm_soa_buf",
+      "responsibility": "Redukuje wektorowy błąd adaptacyjny do maksimum po aktywnych komórkach."
+    },
+    {
+      "id": "fdm-cpu-adaptive-max-aos",
+      "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs",
+      "symbol": "max_error_norm_buf",
+      "responsibility": "Redukuje błąd adaptacyjny w buforze AoS do maksimum po aktywnych komórkach."
+    },
+    {
+      "id": "fdm-cpu-fft-workspace",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs",
+      "symbol": "FftWorkspace",
+      "responsibility": "Utrzymuje trwałe bufory i plany FFT dla FDM CPU."
+    },
+    {
+      "id": "fdm-cpu-rk23-live",
+      "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs",
+      "symbol": "rk23_step_soa_state_buf",
+      "responsibility": "Realizuje live adaptacyjny krok RK23 w reprezentacji SoA."
+    },
+    {
+      "id": "fdm-cpu-rk45-live",
+      "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs",
+      "symbol": "rk45_step_soa_state_buf",
+      "responsibility": "Realizuje live adaptacyjny krok RK45 w reprezentacji SoA."
+    },
+    {
+      "id": "fdm-cpu-exchange",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "symbol": "exchange_field_add_into",
+      "responsibility": "Dodaje operator exchange wyznaczający ograniczenie stiffness."
+    },
+    {
+      "id": "fdm-cpu-demag-fft",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "symbol": "demag_field_add_into_soa_fft_backend",
+      "responsibility": "Realizuje kosztowny składnik demag FFT w live field path."
+    },
+    {
+      "id": "fdm-cpu-relaxation-stop",
+      "path": "crates/fullmag-runner/src/relaxation/convergence.rs",
+      "symbol": "effective_max_torque_apm",
+      "responsibility": "Wybiera świeżą metrykę torque używaną przez kontrakt stopu relaksacji."
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  }
+}

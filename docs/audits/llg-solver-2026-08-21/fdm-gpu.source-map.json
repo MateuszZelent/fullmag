@@ -1,0 +1,118 @@
+{
+  "document": {
+    "path": "docs/audits/llg-solver-2026-08-21/fdm-gpu.md",
+    "audited_source_revision": "969efa0941905825ac569d525f4bdaefc059e2af",
+    "immutable_source_base_url": "https://github.com/MateuszZelent/fullmag/blob/969efa0941905825ac569d525f4bdaefc059e2af/"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "Osobny raport lane FEM CPU."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "Osobny raport lane FEM GPU."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "Osobny raport lane FDM CPU."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [
+    {
+      "id": "H_eff",
+      "latex": "H_{\\mathrm{eff}}",
+      "meaning": "efektywne pole magnetyczne używane przez RHS",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "dt",
+      "latex": "\\Delta t",
+      "meaning": "krok czasu wspieranej ścieżki fixed-step",
+      "si_unit": "\\mathrm{s}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "fdm-gpu-receipt",
+      "path": "backends/fdm/api/c_api.cpp",
+      "symbol": "fullmag_fdm_backend_execution_receipt_v2",
+      "responsibility": "Eksportuje receipt faktycznego wykonania backendu FDM."
+    },
+    {
+      "id": "fdm-gpu-step-transaction",
+      "path": "backends/fdm/api/c_api.cpp",
+      "symbol": "execute_single_grid_step_transaction",
+      "responsibility": "Steruje transakcją kroku i licznikami transferów wykonania GPU."
+    },
+    {
+      "id": "fdm-gpu-rk23-error",
+      "path": "backends/fdm/gpu/cuda/integrators/llg_rk23_fp64.cu",
+      "symbol": "rk23_error_kernel",
+      "responsibility": "Wytwarza per-cell błędy osadzonego kroku RK23."
+    },
+    {
+      "id": "fdm-gpu-dp45-error",
+      "path": "backends/fdm/gpu/cuda/integrators/llg_dp45_fp64.cu",
+      "symbol": "dp45_error_kernel",
+      "responsibility": "Wytwarza per-cell błędy osadzonego kroku Dormand-Prince 4/5."
+    },
+    {
+      "id": "fdm-gpu-adaptive-reduction",
+      "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu",
+      "symbol": "reduce_adaptive_error_policy",
+      "responsibility": "Redukuje błędy adaptacyjne przez hierarchiczne maksimum i wyznacza politykę kroku."
+    },
+    {
+      "id": "fdm-gpu-free-set-torque-reduction",
+      "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu",
+      "symbol": "reduce_max_cross_norm_fp64",
+      "responsibility": "Redukuje moment po wszystkich komórkach bez maski wolnego zbioru, co dokumentuje defekt FrozenSpins."
+    },
+    {
+      "id": "fdm-gpu-buffer-setup",
+      "path": "backends/fdm/gpu/cuda/runtime/context.cu",
+      "symbol": "context_alloc_device",
+      "responsibility": "Alokuje trwały stan urządzenia poza steady-state hot loop."
+    },
+    {
+      "id": "fdm-gpu-precision-gate",
+      "path": "backends/fdm/api/c_api.cpp",
+      "symbol": "valid_precision",
+      "responsibility": "Waliduje jawny wariant precyzji backendu FDM."
+    },
+    {
+      "id": "fdm-gpu-reject-transaction",
+      "path": "backends/fdm/gpu/cuda/integrators/fsal_policy.hpp",
+      "symbol": "context_reject_staged_step",
+      "responsibility": "Przywraca staged state i politykę FSAL po odrzuconym kroku."
+    },
+    {
+      "id": "fdm-gpu-adaptive-reduction-test",
+      "path": "backends/fdm/tests/adaptive_error_reduction_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Testuje strukturalnie pipeline redukcji błędu adaptacyjnego; nie zastępuje parity lokalizowanego błędu na GPU."
+    },
+    {
+      "id": "fdm-gpu-fsal-test",
+      "path": "backends/fdm/tests/fsal_retry_transaction_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Testuje kontrakt retry i rollback FSAL."
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  }
+}

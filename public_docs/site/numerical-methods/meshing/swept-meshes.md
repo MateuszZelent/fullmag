@@ -275,9 +275,9 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 
 ## Related documentation
 
-- [Swept prism](fem/ferromagnet/swept-prism.html)
-- [Swept hex](fem/ferromagnet/swept-hex.html)
-- [Mixed elements](fem/ferromagnet/mixed-elements.html)
+- [Swept prism](fem/ferromagnet/swept-prism.md)
+- [Swept hex](fem/ferromagnet/swept-hex.md)
+- [Mixed elements](fem/ferromagnet/mixed-elements.md)
 
 ## References
 

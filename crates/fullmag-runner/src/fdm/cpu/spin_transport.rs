@@ -488,6 +488,14 @@ fn coupled_checkpoint_payload_sha256(
     Ok(format!("{:x}", Sha256::digest(payload)))
 }
 
+pub(crate) fn coupled_checkpoint_payload_sha256_value(
+    value: &serde_json::Value,
+) -> Result<String, RunError> {
+    let checkpoint: FdmCoupledCheckpoint = serde_json::from_value(value.clone())
+        .map_err(|error| run_error(format!("invalid coupled M3 checkpoint payload: {error}")))?;
+    coupled_checkpoint_payload_sha256(&checkpoint)
+}
+
 pub(crate) fn validate_coupled_m3_checkpoint_value(
     value: &serde_json::Value,
     vector_count: usize,

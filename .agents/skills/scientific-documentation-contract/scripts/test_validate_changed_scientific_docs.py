@@ -205,6 +205,156 @@ This page reserves the public documentation location for FDM CPU exchange.
 
         self.assertEqual(validate_changed(self.repo, self.base, "HEAD"), [])
 
+    def test_changed_numerical_method_page_requires_adjacent_source_map(self) -> None:
+        page = self.repo / "public_docs/site/numerical-methods/meshing/example.md"
+        page.parent.mkdir(parents=True)
+        page.write_text("# Mesh example\n", encoding="utf-8")
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "add numerical method page")
+
+        errors = validate_changed(self.repo, self.base, "HEAD")
+
+        self.assertIn(
+            "changed scientific page requires sidecar manifest: "
+            "public_docs/site/numerical-methods/meshing/example.source-map.json",
+            errors,
+        )
+
+    def test_numerical_method_source_map_checks_pinned_symbol(self) -> None:
+        page = self.repo / "public_docs/site/numerical-methods/meshing/example.md"
+        page.parent.mkdir(parents=True)
+        page.write_text(
+            """# Mesh example
+
+## Scope and purpose
+Mesh construction.
+
+## Scientific and numerical model
+```{math}
+:label: eq-mesh
+h = 1\\,\\mathrm{m}
+```
+
+## Parameters
+| Python / IR key | ProblemIR destination |
+| --- | --- |
+| `mesh.cell` | `mesh.cell` |
+
+## Python API
+```python
+study = build_mesh()  # %%
+```
+
+## Control Room workflow
+Select the mesh policy.
+
+## Diagnostics and failure semantics
+Invalid mesh requests fail closed.
+
+## Where this is implemented
+`src/example.py` — `build_mesh`
+""",
+            encoding="utf-8",
+        )
+        source = self.repo / "src/example.py"
+        source.parent.mkdir()
+        source.write_text("def build_mesh():\n    return None\n", encoding="utf-8")
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "add numerical method page and source")
+        revision = _git(self.repo, "rev-parse", "HEAD")
+        manifest = page.with_suffix(".source-map.json")
+        manifest.write_text(
+            "{\n"
+            f'  "document": {{"path": "public_docs/site/numerical-methods/meshing/example.md", '
+            f'"reviewed_revision": "{revision}"}},\n'
+            '  "backend_matrix": [\n'
+            '    {"solver": "FEM", "device": "CPU", "status": "source-backed"},\n'
+            '    {"solver": "FEM", "device": "GPU", "status": "source-backed"},\n'
+            '    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "fixture"},\n'
+            '    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "fixture"}\n'
+            '  ],\n'
+            '  "sources": [{"id": "mesh", "path": "src/example.py", '
+            '"symbol": "build_mesh", "responsibility": "mesh construction"}]\n'
+            "}\n",
+            encoding="utf-8",
+        )
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "map numerical method source")
+
+        self.assertEqual(validate_changed(self.repo, self.base, "HEAD"), [])
+
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(
+                '"solver": "FEM"', '"solver": []', 1
+            ),
+            encoding="utf-8",
+        )
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "reject malformed backend lane")
+        errors = validate_changed(self.repo, self.base, "HEAD")
+
+        self.assertTrue(
+            any("backend_matrix lane solver/device must be strings" in error for error in errors),
+            errors,
+        )
+
+    def test_numerical_method_source_map_rejects_blob_revision(self) -> None:
+        page = self.repo / "public_docs/site/numerical-methods/meshing/example.md"
+        page.parent.mkdir(parents=True)
+        page.write_text(
+            """# Mesh example
+
+## Scope and purpose
+## Scientific and numerical model
+```{math}
+:label: eq-mesh
+h = 1\\,\\mathrm{m}
+```
+## Parameters
+| Python / IR key | ProblemIR destination |
+| --- | --- |
+| `mesh.cell` | `mesh.cell` |
+## Python API
+```python
+build_mesh()
+```
+## Control Room workflow
+## Diagnostics and failure semantics
+## Where this is implemented
+`src/example.py` — `build_mesh`
+""",
+            encoding="utf-8",
+        )
+        source = self.repo / "src/example.py"
+        source.parent.mkdir(exist_ok=True)
+        source.write_text("def build_mesh():\n    return None\n", encoding="utf-8")
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "add numerical method source")
+        revision = _git(self.repo, "rev-parse", "HEAD")
+        tree = _git(self.repo, "rev-parse", f"{revision}^{{tree}}")
+        manifest = page.with_suffix(".source-map.json")
+        manifest.write_text(
+            "{\n"
+            f'  "document": {{"path": "public_docs/site/numerical-methods/meshing/example.md", '
+            f'"reviewed_revision": "{tree}"}},\n'
+            '  "backend_matrix": [\n'
+            '    {"solver": "FEM", "device": "CPU", "status": "source-backed"},\n'
+            '    {"solver": "FEM", "device": "GPU", "status": "source-backed"},\n'
+            '    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "fixture"},\n'
+            '    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "fixture"}\n'
+            '  ],\n'
+            '  "sources": [{"id": "mesh", "path": "src/example.py", '
+            '"symbol": "build_mesh", "responsibility": "mesh construction"}]\n'
+            "}\n",
+            encoding="utf-8",
+        )
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "map tree revision")
+
+        errors = validate_changed(self.repo, self.base, "HEAD")
+
+        self.assertTrue(any("must name a commit" in error for error in errors), errors)
+
     def test_deleted_sidecar_cannot_leave_a_scientific_page_unmapped(self) -> None:
         page = self.repo / "public_docs/site/physics/exchange.md"
         manifest = self.repo / "public_docs/site/physics/exchange.source-map.json"

@@ -137,6 +137,7 @@ film.m = fm.texture.uniform(1.0, 0.0, 0.0)
 study.exchange()
 study.demag(realization="poisson_robin")
 study.build_domain_mesh()
+study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, max_steps=10_000, tolT=1.0e-6)
 ```
 
 ## Control Room workflow
@@ -199,9 +200,9 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 
 ## Related documentation
 
-- [Refinement](../../refinement.html)
-- [Boundary layers](../ferromagnet/boundary-layers.html)
-- [Periodic airbox](../airbox/periodic-airbox.html)
+- [Refinement](../../refinement.md)
+- [Boundary layers](../ferromagnet/boundary-layers.md)
+- [Periodic airbox](../airbox/periodic-airbox.md)
 
 ## References
 

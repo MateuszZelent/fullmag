@@ -24722,7 +24722,15 @@ fn complete_coupled_m3_checkpoint() -> serde_json::Value {
     });
     checkpoint["accepted"]["modules"][0]["runtime_owner"] =
         serde_json::json!("fdm_cpu_rust_coupled_transport_reference_v1");
+    refresh_coupled_m3_checkpoint_digest(&mut checkpoint);
     checkpoint
+}
+
+fn refresh_coupled_m3_checkpoint_digest(checkpoint: &mut serde_json::Value) {
+    checkpoint["payload_sha256"] = serde_json::json!("");
+    if let Ok(digest) = fullmag_runner::coupled_m3_checkpoint_payload_sha256(checkpoint) {
+        checkpoint["payload_sha256"] = serde_json::json!(digest);
+    }
 }
 
 fn append_coupled_m3_checkpoint_module(checkpoint: &mut serde_json::Value, module_id: &str) {
@@ -24743,6 +24751,7 @@ fn append_coupled_m3_checkpoint_module(checkpoint: &mut serde_json::Value, modul
         .unwrap()
         .insert(module_id.to_string(), serde_json::json!([]));
     refresh_coupled_m3_checkpoint_aggregates(checkpoint);
+    refresh_coupled_m3_checkpoint_digest(checkpoint);
 }
 
 fn refresh_coupled_m3_checkpoint_aggregates(checkpoint: &mut serde_json::Value) {
@@ -24856,6 +24865,7 @@ async fn session_checkpoint_create_captures_live_magnetization() {
     assert_eq!(detail["vector_count"], 2);
     let mut active_after_capture = coupled_checkpoint.clone();
     active_after_capture["magnetization"][0] = serde_json::json!([0.0, 0.0, 1.0]);
+    refresh_coupled_m3_checkpoint_digest(&mut active_after_capture);
     state
         .current_live_state
         .write()
@@ -25282,6 +25292,10 @@ async fn coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_with
             target[last] = value;
         }
         invalid.push((label, candidate));
+    }
+
+    for (_, candidate) in &mut invalid {
+        refresh_coupled_m3_checkpoint_digest(candidate);
     }
 
     for (label, candidate) in invalid {

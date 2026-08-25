@@ -205,13 +205,15 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 - Gmsh reference manual, mesh algorithms, size fields, extrusion and physical groups: [gmsh.info/doc/texinfo](https://gmsh.info/doc/texinfo/).
 
 - A. J. Newell, W. Williams and D. J. Dunlop, “A generalization of the demagnetizing tensor for nonuniform magnetization,” *J. Geophys. Res.* **98** (1993), 9551–9555, [doi:10.1029/93JB00694](https://doi.org/10.1029/93JB00694).
-- A. Aharoni, “Demagnetizing factors for rectangular ferromagnetic prisms,” *J. Appl. Phys.* **83** (1998), 3432–3434, [doi:10.1063/1.367113](https://doi.org/10.1063/1.367113).## Documentation tree
+- A. Aharoni, “Demagnetizing factors for rectangular ferromagnetic prisms,” *J. Appl. Phys.* **83** (1998), 3432–3434, [doi:10.1063/1.367113](https://doi.org/10.1063/1.367113).
 
-    ```{toctree}
-    :maxdepth: 2
+## Documentation tree
 
-    ../fdm-grids
+```{toctree}
+:maxdepth: 2
+
+../fdm-grids
 boundary-correction
 multi-magnet-grids
 periodic-grids
-    ```
+```
