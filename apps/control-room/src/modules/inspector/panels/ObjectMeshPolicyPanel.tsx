@@ -52,6 +52,7 @@ import {
 } from "./inspectorDraftState";
 import {
   buildObjectMeshPolicyReplaceRequest,
+  clearObjectMeshStrategyFromConfig,
   defaultObjectMeshPolicyResource,
   draftFromObjectMeshPolicyResource,
   draftIdentityKeyForObjectMeshPolicyResource,
@@ -450,11 +451,10 @@ export function ObjectMeshSweepStrategySection({
                 transitionPolicy: "pyramid_to_tetrahedra",
               }
             : {
+                configText: clearObjectMeshStrategyFromConfig(draft.configText),
                 exactLayerCount: "",
                 meshStrategy,
-                sweepDestination: "",
                 sweepFaceMeshing: "",
-                sweepSource: "",
                 throughThicknessDistribution: "",
                 throughThicknessElementRatio: "",
                 throughThicknessElements: "",
@@ -522,8 +522,6 @@ export function ObjectMeshSweepStrategySection({
         <option value="triangular">Triangular</option>
         <option value="quadrilateral">Quadrilateral</option>
       </FormField>
-      <FormField disabled={layeredControlsDisabled} help={OBJECT_MESH_HELP.sweep} label="Sweep source" type="text" value={draft.sweepSource} onChange={(event) => updateDraft({ sweepSource: event.target.value })} />
-      <FormField disabled={layeredControlsDisabled} help={OBJECT_MESH_HELP.sweep} label="Sweep destination" type="text" value={draft.sweepDestination} onChange={(event) => updateDraft({ sweepDestination: event.target.value })} />
     </InspectorGroup>
   );
 }

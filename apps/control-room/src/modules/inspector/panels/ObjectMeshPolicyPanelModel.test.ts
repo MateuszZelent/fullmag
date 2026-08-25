@@ -4,6 +4,7 @@ import type { MeshObjectConfigResource } from "@/kernel/api/apiTypes";
 
 import {
   buildObjectMeshPolicyReplaceRequest,
+  clearObjectMeshStrategyFromConfig,
   defaultObjectMeshPolicyResource,
   draftFromObjectMeshPolicyResource,
   draftIdentityKeyForObjectMeshPolicyResource,
@@ -144,12 +145,94 @@ describe("ObjectMeshPolicyPanelModel", () => {
       }),
       exactLayerCount: "",
       meshStrategy: "",
+      present: true,
       topology: "",
     });
 
     expect(validateObjectMeshTopologyCapabilities(draft, capabilities)).toContain(
       "not advertised",
     );
+  });
+
+  it("rejects an Advanced JSON prism layer count outside capability scope", () => {
+    const capabilities = resolveObjectMeshTopologyCapabilities({
+      mesh_capabilities: {
+        "mesh.topology.mixed_p1": { status: "validated" },
+        "mesh.swept.prism": { status: "validated" },
+        "mesh.transition.pyramid_tet": { status: "validated" },
+        "mesh.exact_layer_count": {
+          status: "validated",
+          supported_layer_counts: [1, 2, 3],
+        },
+      },
+    });
+    const draft = objectMeshPolicyDraft({
+      configText: JSON.stringify({
+        element_family: "prism",
+        exact_layer_count: true,
+        mesh_strategy: "swept_prism",
+        through_thickness_elements: 4,
+        topology: "prismatic",
+      }),
+      exactLayerCount: "",
+      meshStrategy: "",
+      present: true,
+      throughThicknessElements: "",
+      topology: "",
+    });
+
+    expect(validateObjectMeshTopologyCapabilities(draft, capabilities)).toBe(
+      "Exact layered prism supports 1, 2, 3 through-thickness elements.",
+    );
+  });
+
+  it("validates the effective layer count after structured controls override Advanced JSON", () => {
+    const capabilities = resolveObjectMeshTopologyCapabilities({
+      mesh_capabilities: {
+        "mesh.topology.mixed_p1": { status: "validated" },
+        "mesh.swept.prism": { status: "validated" },
+        "mesh.transition.pyramid_tet": { status: "validated" },
+        "mesh.exact_layer_count": {
+          status: "validated",
+          supported_layer_counts: [1, 2, 3],
+        },
+      },
+    });
+    const draft = objectMeshPolicyDraft({
+      configText: JSON.stringify({
+        mesh_strategy: "swept_prism",
+        through_thickness_elements: 4,
+      }),
+      meshStrategy: "swept_prism",
+      throughThicknessElements: "2",
+    });
+
+    expect(validateObjectMeshTopologyCapabilities(draft, capabilities)).toBeNull();
+  });
+
+  it("ignores stale Advanced JSON layers after switching to free tetrahedral", () => {
+    const capabilities = resolveObjectMeshTopologyCapabilities({
+      mesh_capabilities: {
+        "mesh.topology.mixed_p1": { status: "validated" },
+        "mesh.swept.prism": { status: "validated" },
+        "mesh.transition.pyramid_tet": { status: "validated" },
+        "mesh.exact_layer_count": {
+          status: "validated",
+          supported_layer_counts: [1, 2, 3],
+        },
+      },
+    });
+    const draft = objectMeshPolicyDraft({
+      configText: JSON.stringify({
+        mesh_strategy: "swept_prism",
+        through_thickness_elements: 4,
+      }),
+      meshStrategy: "free_tetrahedral",
+      present: true,
+      throughThicknessElements: "",
+    });
+
+    expect(validateObjectMeshTopologyCapabilities(draft, capabilities)).toBeNull();
   });
 
   it("formats nullable backend config as an editable object draft", () => {
@@ -194,8 +277,6 @@ describe("ObjectMeshPolicyPanelModel", () => {
         source: "mesh.msh",
         smoothing_steps: 4,
         sweep_face_meshing: "triangular",
-        sweep_destination: "top",
-        sweep_source: "bottom",
         through_thickness_distribution: "fixed",
         through_thickness_elements: 1,
         transition_distance: "airbox_boundary",
@@ -235,8 +316,6 @@ describe("ObjectMeshPolicyPanelModel", () => {
       source: "mesh.msh",
       smoothingSteps: "4",
       sweepFaceMeshing: "triangular",
-      sweepDestination: "top",
-      sweepSource: "bottom",
       throughThicknessDistribution: "fixed",
       throughThicknessElements: "1",
       transitionDistance: "airbox_boundary",
@@ -292,6 +371,82 @@ describe("ObjectMeshPolicyPanelModel", () => {
     expect(result).toEqual({
       error: "Exact layered prism supports 1, 2, or 3 through-thickness elements.",
     });
+  });
+
+  it("preserves a complete raw prism tuple when structured controls are blank", () => {
+    const rawConfig = {
+      mesh_strategy: "swept_prism",
+      topology: "prismatic",
+      element_family: "prism",
+      order: 1,
+      sweep_direction: "y",
+      sweep_face_meshing: "triangular",
+      through_thickness_distribution: "geometric",
+      through_thickness_element_ratio: 1.25,
+      through_thickness_elements: 2,
+      through_thickness_symmetric: true,
+      transition_policy: "pyramid_to_tetrahedra",
+      exact_layer_count: true,
+    };
+
+    const result = buildObjectMeshPolicyReplaceRequest(objectMeshPolicyDraft({
+      configText: JSON.stringify(rawConfig),
+      exactLayerCount: "",
+      meshStrategy: "",
+      order: "",
+      sweepFaceMeshing: "",
+      throughThicknessDistribution: "",
+      throughThicknessElementRatio: "",
+      throughThicknessElements: "",
+      throughThicknessSymmetric: "",
+      topology: "",
+      transitionPolicy: "",
+      present: true,
+    }));
+
+    expect(result).toMatchObject({ request: { config: rawConfig } });
+  });
+
+  it("removes the raw layered strategy after selecting inherited", () => {
+    const configText = clearObjectMeshStrategyFromConfig(
+      JSON.stringify({
+        maximum_element_size: 5e-9,
+        mesh_strategy: "swept_prism",
+        topology: "prismatic",
+        exact_layer_count: true,
+      }),
+    );
+
+    const result = buildObjectMeshPolicyReplaceRequest(objectMeshPolicyDraft({
+      configText,
+      meshStrategy: "",
+      present: true,
+    }));
+
+    expect(result).toMatchObject({ request: { config: {} } });
+    expect(result).not.toHaveProperty("request.config.mesh_strategy");
+    expect(result).not.toHaveProperty("request.config.topology");
+    expect(result).not.toHaveProperty("request.config.exact_layer_count");
+  });
+
+  it("rejects per-object imported mesh sources from structured and Advanced JSON input", () => {
+    const expected = {
+      error:
+        "Per-object mesh source is unavailable; use the study-level imported mesh route.",
+    };
+    expect(
+      buildObjectMeshPolicyReplaceRequest(objectMeshPolicyDraft({
+        configText: "{}",
+        present: true,
+        source: "object.mesh",
+      })),
+    ).toEqual(expected);
+    expect(
+      buildObjectMeshPolicyReplaceRequest(objectMeshPolicyDraft({
+        configText: JSON.stringify({ source: "object.mesh" }),
+        present: true,
+      })),
+    ).toEqual(expected);
   });
 
   it("normalizes contradictory exact prism controls to the approved preset", () => {
@@ -585,11 +740,8 @@ describe("ObjectMeshPolicyPanelModel", () => {
         perElementQuality: "true",
         present: true,
         sizeFromCurvature: "16",
-        source: "mesh.msh",
         smoothingSteps: "2",
         sweepFaceMeshing: "triangular",
-        sweepDestination: "top",
-        sweepSource: "bottom",
         throughThicknessDistribution: "fixed",
         throughThicknessElements: "1",
       })),
@@ -629,12 +781,9 @@ describe("ObjectMeshPolicyPanelModel", () => {
           per_element_quality: true,
           size_factor: 1,
           size_from_curvature: 16,
-          source: "mesh.msh",
           smoothing_steps: 2,
           sweep_face_meshing: "triangular",
-          sweep_destination: "top",
           sweep_direction: "auto",
-          sweep_source: "bottom",
           through_thickness_distribution: "fixed",
           through_thickness_element_ratio: 1,
           through_thickness_elements: 1,
@@ -653,6 +802,29 @@ describe("ObjectMeshPolicyPanelModel", () => {
     ).toEqual({
       request: { config: null },
     });
+  });
+
+  it("does not persist unsupported sweep source and destination selectors", () => {
+    const result = buildObjectMeshPolicyReplaceRequest(objectMeshPolicyDraft({
+      configText: JSON.stringify({
+        mesh_strategy: "swept_prism",
+        sweep_destination: "top",
+        sweep_source: "bottom",
+      }),
+      meshStrategy: "swept_prism",
+      present: true,
+      throughThicknessElements: "1",
+    }));
+
+    expect(result).toMatchObject({
+      request: {
+        config: {
+          mesh_strategy: "swept_prism",
+        },
+      },
+    });
+    expect(result).not.toHaveProperty("request.config.sweep_source");
+    expect(result).not.toHaveProperty("request.config.sweep_destination");
   });
 
   it("builds a structured ObjectCoreRelaxation size field without dropping other fields", () => {

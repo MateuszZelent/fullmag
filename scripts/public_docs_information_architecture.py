@@ -197,6 +197,7 @@ _INTERACTION_TITLES = {
     "inter-region-couplings": "Inter-Region Couplings",
 }
 REFERENCE_PAGE_TITLES = {
+    "python-api/magnets-and-textures/mumax3-compatibility.md": "Mumax3 Texture Compatibility",
     "python-api/geometry/universe-and-domain.md": "Universe and Domain",
     "python-api/discretization/per-object-meshing.md": "Per-Object Meshing",
     "python-api/outputs/modes-and-spectra.md": "Modes and Spectra",
@@ -241,6 +242,7 @@ REFERENCE_PAGE_TITLES = {
     "python-api/interactions/inter-region-couplings.md": "Inter-region couplings Python API",
 }
 REFERENCE_PAGE_LABELS = {
+    "python-api/magnets-and-textures/mumax3-compatibility.md": "public-docs-python-api-mumax3-texture-compatibility",
     "physics/interactions/zeeman/index.md": "public-docs-physics-interactions-zeeman",
     "physics/interactions/magnetoelastic/index.md": "public-docs-physics-interactions-magnetoelastic",
     "physics/interactions/spin-transfer-torque/index.md": "public-docs-physics-interactions-stt",
@@ -252,6 +254,9 @@ REFERENCE_PAGE_LABELS = {
     "python-api/interactions/spin-orbit-torque.md": "sot-api-problem-statement",
     "python-api/interactions/magnetoelastic.md": "magnetoelastic-api-problem-statement",
     "python-api/discretization/fdm-multilayer-convolution.md": "python-api-fdm-multilayer-convolution",
+}
+REFERENCE_PAGE_STATUSES = {
+    "python-api/magnets-and-textures/mumax3-compatibility.md": "implemented",
 }
 
 
@@ -328,6 +333,7 @@ PYTHON_API_REFERENCE_PAGES = {
     "python-api/geometry/index.md",
     "python-api/materials/index.md",
     "python-api/magnets-and-textures/index.md",
+    "python-api/magnets-and-textures/mumax3-compatibility.md",
     "python-api/current-and-excitations/index.md",
     "python-api/boundary-conditions/index.md",
     "python-api/discretization/index.md",
@@ -438,6 +444,14 @@ def _section(
                 f"{directory}/{page}.md",
                 _page_title(f"{directory}/{page}.md", _title(page)),
                 f"the {title.lower()} reference for {_title(page)}",
+                status=REFERENCE_PAGE_STATUSES.get(
+                    f"{directory}/{page}.md",
+                    "partial"
+                    if f"{directory}/{page}.md" in PHYSICS_REFERENCE_PAGES
+                    or f"{directory}/{page}.md" in PYTHON_API_REFERENCE_PAGES
+                    or f"{directory}/{page}.md" in NUMERICAL_METHODS_REFERENCE_PAGES
+                    else "planned",
+                ),
             )
             for page in pages
         ),
@@ -528,7 +542,7 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
     *_section("python-api/problem", "Problem", ("problem", "validation", "problem-ir", "round-trip"), "the Python API Problem reference"),
     *_section("python-api/geometry", "Geometry", ("primitives", "transforms", "boolean-operations", "imported-geometry", "regions", "universe-and-domain", "auxiliary-geometry"), "the Python API geometry reference"),
     *_section("python-api/materials", "Materials", ("material", "spatial-parameter-fields", "elastic-materials", "magnetostriction-laws"), "the Python API materials reference"),
-    *_section("python-api/magnets-and-textures", "Magnets and Textures", ("ferromagnet", "initial-magnetization", "uniform-texture", "preset-textures"), "the Python API magnets and textures reference"),
+    *_section("python-api/magnets-and-textures", "Magnets and Textures", ("ferromagnet", "initial-magnetization", "uniform-texture", "preset-textures", "mumax3-compatibility"), "the Python API magnets and textures reference"),
     _reference(
         "python-api/interactions/index.md",
         "Interactions",

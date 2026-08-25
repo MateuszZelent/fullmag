@@ -20,7 +20,7 @@ import {
   buildMagnetizationAssetPatch as buildTextureAssetPatch,
   buildMagnetizationAssignmentPatch as buildTextureAssignmentPatch,
 } from "@/shared/domain/magnetization-texture/draftModel";
-import { MAGNETIZATION_TEXTURE_PRESETS } from "@/shared/domain/magnetization-texture/texturePresets";
+import { magnetizationTexturePresetOptions } from "@/shared/domain/magnetization-texture/texturePresets";
 import type { MagnetizationTextureTarget } from "@/shared/domain/magnetization-texture/types";
 import { Button } from "@/shared/ui/Button";
 
@@ -38,6 +38,7 @@ import {
 } from "./inspectorDraftState";
 import {
   buildObjectMagneticTextureAssetDraft,
+  magneticTextureProjectionOptions,
   objectMagneticTextureDraftFromModel,
   objectMagneticTextureDraftDirty,
   objectMagneticTextureDraftIdentityKey,
@@ -139,7 +140,7 @@ export function MagneticTextureAssignmentSection({
           updateDraft(objectMagneticTexturePresetChangePatch(model, draft, nextPreset));
         }}
       >
-        {MAGNETIZATION_TEXTURE_PRESETS.map((preset) => (
+        {magnetizationTexturePresetOptions(draft.presetKind).map((preset) => (
           <option key={preset.id} value={preset.id}>
             {preset.label}
           </option>
@@ -193,6 +194,37 @@ const BIMERON_FIELDS = [
   { field: "vorticity", label: "Vorticity" },
   { field: "helicity_rad", label: "Helicity", unit: "rad" },
   { field: "background_sign", label: "Background Sign" },
+] as const satisfies readonly DraftNumberFieldSpec[];
+
+
+const SKYRMIONIUM_FIELDS = [
+  { field: "inner_radius", label: "Inner Radius", unit: "m" },
+  { field: "outer_radius", label: "Outer Radius", unit: "m" },
+  { field: "wall_width", label: "Wall Width", unit: "m" },
+  { field: "chirality", label: "Chirality" },
+  { field: "background_sign", label: "Background Sign" },
+] as const satisfies readonly DraftNumberFieldSpec[];
+
+const HOPFION_FIELDS = [
+  { field: "radius", label: "Radius", unit: "m" },
+  { field: "hopf_charge", label: "Hopf Charge" },
+  { field: "background_sign", label: "Background Sign" },
+  { field: "axial_scale", label: "Axial Scale" },
+  { field: "phase_rad", label: "Phase", unit: "rad" },
+] as const satisfies readonly DraftNumberFieldSpec[];
+
+const COMPACT_HOPFION_FIELDS = [
+  { field: "major_radius", label: "Major Radius", unit: "m" },
+  { field: "minor_radius", label: "Minor Radius", unit: "m" },
+] as const satisfies readonly DraftNumberFieldSpec[];
+
+const VORTEX_WALL_FIELDS = [
+  { field: "wall_half_width", label: "Wall Half-Width", unit: "m" },
+  { field: "left_mx", label: "Left mx" },
+  { field: "right_mx", label: "Right mx" },
+  { field: "circulation", label: "Circulation" },
+  { field: "core_polarity", label: "Core Polarity" },
+  { field: "core_radius", label: "Core Radius", unit: "m" },
 ] as const satisfies readonly DraftNumberFieldSpec[];
 
 function patchDraftField(
@@ -332,7 +364,7 @@ export function MagneticTexturePresetParametersSection({
           }}
         />
       ) : null}
-      {draft.presetKind === "random_seeded" ? (
+      {draft.presetKind === "random" || draft.presetKind === "random_seeded" ? (
         <DraftNumberField draft={draft} field="seed" label="Seed" updateDraft={updateDraft} />
       ) : null}
       {draft.presetKind === "vortex" || draft.presetKind === "antivortex" ? (
@@ -342,10 +374,53 @@ export function MagneticTexturePresetParametersSection({
         </>
       ) : null}
       {draft.presetKind === "bloch_skyrmion" ||
-      draft.presetKind === "neel_skyrmion" ? (
+      draft.presetKind === "neel_skyrmion" ||
+      draft.presetKind === "antiskyrmion" ? (
         <>
           <PlaneSelect draft={draft} updateDraft={updateDraft} />
           <DraftNumberFields draft={draft} fields={SKYRMION_FIELDS} updateDraft={updateDraft} />
+        </>
+      ) : null}
+
+      {draft.presetKind === "skyrmionium" ? (
+        <>
+          <PlaneSelect draft={draft} updateDraft={updateDraft} />
+          <DraftSelectField
+            draft={draft}
+            field="kind"
+            label="Kind"
+            options={WALL_KIND_OPTIONS}
+            updateDraft={updateDraft}
+          />
+          <DraftNumberFields
+            draft={draft}
+            fields={SKYRMIONIUM_FIELDS}
+            updateDraft={updateDraft}
+          />
+        </>
+      ) : null}
+      {draft.presetKind === "hopfion" ? (
+        <DraftNumberFields
+          draft={draft}
+          fields={HOPFION_FIELDS}
+          updateDraft={updateDraft}
+        />
+      ) : null}
+      {draft.presetKind === "hopfion_compact_support" ? (
+        <DraftNumberFields
+          draft={draft}
+          fields={COMPACT_HOPFION_FIELDS}
+          updateDraft={updateDraft}
+        />
+      ) : null}
+      {draft.presetKind === "vortex_wall" ? (
+        <>
+          <PlaneSelect draft={draft} updateDraft={updateDraft} />
+          <DraftNumberFields
+            draft={draft}
+            fields={VORTEX_WALL_FIELDS}
+            updateDraft={updateDraft}
+          />
         </>
       ) : null}
       {draft.presetKind === "bimeron" ? (
@@ -555,6 +630,7 @@ export function MagneticTextureMappingSection({
   draft: ObjectMagneticTextureDraft;
   updateDraft: UpdateMagneticTextureDraft;
 }) {
+  const projectionOptions = magneticTextureProjectionOptions(draft.presetKind);
   return (
     <InspectorGroup title="Mapping" collapsible defaultOpen={false}>
       <FormField label="Space" type="select" value={draft.mappingSpace} onChange={(event) => updateDraft({ mappingSpace: event.target.value })}>
@@ -562,10 +638,10 @@ export function MagneticTextureMappingSection({
         <option value="world">World</option>
       </FormField>
       <FormField label="Projection" type="select" value={draft.mappingProjection} onChange={(event) => updateDraft({ mappingProjection: event.target.value })}>
-        <option value="object_local">Object local</option>
-        <option value="planar_xy">Planar XY</option>
-        <option value="planar_xz">Planar XZ</option>
-        <option value="planar_yz">Planar YZ</option>
+        {projectionOptions.includes("object_local") && <option value="object_local">Object local</option>}
+        {projectionOptions.includes("planar_xy") && <option value="planar_xy">Planar XY</option>}
+        {projectionOptions.includes("planar_xz") && <option value="planar_xz">Planar XZ</option>}
+        {projectionOptions.includes("planar_yz") && <option value="planar_yz">Planar YZ</option>}
       </FormField>
       <FormField label="Clamp" type="select" value={draft.clampMode} onChange={(event) => updateDraft({ clampMode: event.target.value })}>
         <option value="none">None</option>

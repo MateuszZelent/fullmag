@@ -34,7 +34,7 @@ from fullmag.meshing.gmsh_bridge import (
     MeshData,
     SharedDomainMeshResult,
 )
-from fullmag.model.discretization import PerObjectMeshRecipe
+from fullmag.model.discretization import MeshOperation, PerObjectMeshRecipe
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +380,16 @@ class ResolutionPrecedenceTests(unittest.TestCase):
         )
         self.assertAlmostEqual(airbox_hmax, 200e-9)
 
+    def test_fem_hmax_remains_object_default_with_explicit_airbox_hmax(self):
+        geom = fm.Box(2.0, 2.0, 2.0, name="left")
+        _, by_geom = _resolve_requested_partition_hmaxs(
+            [geom], fm.FEM(order=1, hmax=100e-9),
+            airbox=self._airbox(maximum_element_size=200e-9),
+            mesh_workflow=None,
+            per_object_recipes=None,
+        )
+        self.assertAlmostEqual(by_geom["left"], 100e-9)
+
     def test_effective_targets_auto_interface_and_transition(self):
         """When bulk_hmax < default, transition is auto-derived but interface is not."""
         geom = fm.Box(2.0, 2.0, 2.0, name="left")
@@ -588,6 +598,25 @@ class SingleObjectPreviewTests(unittest.TestCase):
 
         gen.assert_called_once()
         self.assertAlmostEqual(gen.call_args.kwargs["hmax"], 15e-9)
+
+    def test_realize_fem_mesh_asset_rejects_direct_recipe_operations(self):
+        geom = fm.Box(2.0, 2.0, 2.0, name="sample")
+
+        with patch(
+            "fullmag.meshing.asset_pipeline.generate_mesh",
+        ) as gen:
+            with self.assertRaisesRegex(ValueError, "mesh operation executor unavailable"):
+                realize_fem_mesh_asset(
+                    geom,
+                    fm.FEM(order=1, hmax=100e-9),
+                    per_object_recipes={
+                        "sample": PerObjectMeshRecipe(
+                            operations=[MeshOperation(kind="refine")],
+                        )
+                    },
+                )
+
+        gen.assert_not_called()
 
 
 # ===================================================================

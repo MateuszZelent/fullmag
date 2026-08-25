@@ -576,6 +576,75 @@ class texture:
             preview_proxy="sphere",
         )
 
+
+    @staticmethod
+    def vortex_wall(
+        wall_half_width: float,
+        left_mx: float = 1.0,
+        right_mx: float = -1.0,
+        circulation: int | None = None,
+        core_polarity: int = 1,
+        core_radius: float = 1.0e-9,
+        plane: Literal["xy", "xz", "yz"] = "xy",
+        *,
+        preset_version: int = 2,
+    ) -> PresetTexture:
+        # Mumax3-compatible vortex wall with explicit physical core and wall scales.
+
+        _require_v2_preset(preset_version, "vortex_wall")
+        wall_half_width = _require_finite_positive(wall_half_width, "wall_half_width")
+        left_mx = float(left_mx)
+        right_mx = float(right_mx)
+        if not math.isfinite(left_mx) or left_mx == 0.0:
+            raise ValueError("left_mx must be finite and nonzero")
+        if not math.isfinite(right_mx) or right_mx == 0.0:
+            raise ValueError("right_mx must be finite and nonzero")
+        if circulation is None:
+            circulation = 1 if left_mx * right_mx > 0.0 else -1
+        else:
+            circulation = _require_sign(circulation, "circulation")
+        core_polarity = _require_sign(core_polarity, "core_polarity")
+        core_radius = _require_finite_positive(core_radius, "core_radius")
+        plane = _require_plane(plane)
+        return PresetTexture(
+            preset_version=2,
+            preset_kind="vortex_wall",
+            params={
+                "wall_half_width": wall_half_width,
+                "left_mx": left_mx,
+                "right_mx": right_mx,
+                "circulation": circulation,
+                "core_polarity": core_polarity,
+                "core_radius": core_radius,
+                "plane": plane,
+            },
+            preview_proxy="box",
+        )
+
+    @staticmethod
+    def hopfion_compact_support(
+        major_radius: float,
+        minor_radius: float,
+        *,
+        preset_version: int = 2,
+    ) -> PresetTexture:
+        # Mumax3 HopfionCompactSupport profile with exact uniform exterior.
+
+        _require_v2_preset(preset_version, "hopfion_compact_support")
+        major_radius = _require_finite_positive(major_radius, "major_radius")
+        minor_radius = _require_finite_positive(minor_radius, "minor_radius")
+        if minor_radius > major_radius:
+            raise ValueError("minor_radius must be <= major_radius")
+        return PresetTexture(
+            preset_version=2,
+            preset_kind="hopfion_compact_support",
+            params={
+                "major_radius": major_radius,
+                "minor_radius": minor_radius,
+            },
+            preview_proxy="torus",
+        )
+
     @staticmethod
     def bimeron(
         radius: float,

@@ -70,7 +70,11 @@ from fullmag.meshing._gmsh_extraction import (
     _extract_gmsh_typed_connectivity,
     _orient_periodic_boundary_faces,
 )
-from fullmag.model.discretization import PerObjectMeshRecipe, SharedMeshAssemblyPolicy
+from fullmag.model.discretization import (
+    MeshOperation,
+    PerObjectMeshRecipe,
+    SharedMeshAssemblyPolicy,
+)
 from fullmag.meshing.gmsh_bridge import (
     ALGO_3D_DELAUNAY,
     ALGO_3D_FRONTAL,
@@ -287,6 +291,114 @@ class LayeredMeshDslValidationTests(unittest.TestCase):
                 ValueError, "layered mesh intent is incomplete"
             ):
                 self.film.mesh(**kwargs)
+
+    def test_per_object_recipe_rejects_invalid_direct_size_targets(self) -> None:
+        invalid = (
+            {"maximum_element_size": -1.0},
+            {"minimum_element_size": 0.0},
+            {"hmax": float("nan")},
+            {"hmin": float("inf")},
+            {"maximum_element_size": True},
+            {"maximum_element_size": "1e-9"},
+            {"minimum_element_size": 2.0, "maximum_element_size": 1.0},
+            {"hmin": 2.0, "hmax": 1.0},
+        )
+        for kwargs in invalid:
+            with self.subTest(kwargs=kwargs), self.assertRaises((TypeError, ValueError)):
+                PerObjectMeshRecipe(**kwargs)
+
+    def test_per_object_recipe_rejects_invalid_direct_numeric_controls(self) -> None:
+        invalid = (
+            {"size_factor": 0.0},
+            {"curvature_factor": float("nan")},
+            {"growth_rate": -1.0},
+            {"growth_rate": float("inf")},
+            {"narrow_region_resolution": 0.0},
+            {"boundary_layer_thickness": -1.0},
+            {"boundary_layer_stretching": float("nan")},
+            {"through_thickness_element_ratio": 0.0},
+            {"size_from_curvature": -1},
+            {"narrow_regions": -1},
+            {"optimize_iters": 0},
+            {"boundary_layer_count": 0},
+            {"algorithm_2d": True},
+            {"algorithm_3d": 1.5},
+            {"algorithm_2d": float("inf")},
+            {"through_thickness_symmetric": "false"},
+        )
+        for kwargs in invalid:
+            with self.subTest(kwargs=kwargs), self.assertRaises((TypeError, ValueError)):
+                PerObjectMeshRecipe(**kwargs)
+
+        recipe = PerObjectMeshRecipe(algorithm_2d=np.int64(6), algorithm_3d=np.int64(10))
+        self.assertEqual((recipe.algorithm_2d, recipe.algorithm_3d), (6, 10))
+        self.assertIs(type(recipe.algorithm_2d), int)
+        self.assertIs(type(recipe.algorithm_3d), int)
+        recipe = PerObjectMeshRecipe(
+            size_from_curvature=np.int64(6),
+            narrow_regions=np.int64(10),
+        )
+        self.assertEqual((recipe.size_from_curvature, recipe.narrow_regions), (6, 10))
+        self.assertIs(type(recipe.size_from_curvature), int)
+        self.assertIs(type(recipe.narrow_regions), int)
+        recipe = PerObjectMeshRecipe(
+            optimize_iters=np.int64(2),
+            boundary_layer_count=np.int64(3),
+        )
+        self.assertEqual((recipe.optimize_iters, recipe.boundary_layer_count), (2, 3))
+        self.assertIs(type(recipe.optimize_iters), int)
+        self.assertIs(type(recipe.boundary_layer_count), int)
+        json.dumps(recipe.to_ir())
+        self.assertEqual(PerObjectMeshRecipe(smoothing_steps=0).smoothing_steps, 0)
+
+    def test_shared_mesh_assembly_policy_rejects_invalid_contract_values(self) -> None:
+        invalid = (
+            {"enforce_conforming": "false"},
+            {"enforce_conforming": 1},
+            {"airbox_hmax_factor": float("nan")},
+            {"airbox_hmax_factor": float("inf")},
+            {"airbox_hmax_factor": 0.0},
+            {"interface_hmax_factor": float("nan")},
+        )
+        for kwargs in invalid:
+            with self.subTest(kwargs=kwargs), self.assertRaises((TypeError, ValueError)):
+                SharedMeshAssemblyPolicy(**kwargs)
+
+    def test_per_object_recipe_rejects_unavailable_object_mesh_source(self) -> None:
+        with self.assertRaisesRegex(ValueError, r"FEM\(mesh=\.\.\.\)"):
+            PerObjectMeshRecipe(source="object.mesh")
+
+    def test_per_object_recipe_validates_and_normalizes_size_vocabulary(self) -> None:
+        with self.assertRaisesRegex(ValueError, "calibrate_for"):
+            PerObjectMeshRecipe(calibrate_for="unknown")
+        with self.assertRaisesRegex(ValueError, "size_preset"):
+            PerObjectMeshRecipe(size_preset="unknown")
+
+        recipe = PerObjectMeshRecipe(
+            calibrate_for="Micromagnetics Relaxation",
+            size_preset="Extra Fine",
+        )
+        self.assertEqual(recipe.calibrate_for, "micromagnetics_relaxation")
+        self.assertEqual(recipe.size_preset, "extra_fine")
+
+        for alias, canonical in (
+            ("very_fine", "extra_fine"),
+            ("extrafine", "extra_fine"),
+            ("coarser_mesh", "coarser"),
+        ):
+            with self.subTest(alias=alias):
+                self.assertEqual(
+                    PerObjectMeshRecipe(size_preset=alias).size_preset,
+                    canonical,
+                )
+
+    def test_per_object_recipe_rejects_boolean_order_and_normalizes_integral(self) -> None:
+        with self.assertRaisesRegex(TypeError, "order must be an integer"):
+            PerObjectMeshRecipe(order=True)
+
+        recipe = PerObjectMeshRecipe(order=np.int64(2))
+        self.assertEqual(recipe.order, 2)
+        self.assertIs(type(recipe.order), int)
 
     def test_per_object_recipe_rejects_invalid_or_incoherent_layered_intent(self) -> None:
         invalid = (
@@ -2711,6 +2823,17 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertAlmostEqual(bulk_field["VIn"], 8e-9)
         self.assertGreater(float(bulk_field["VOut"]), 1e21)
 
+    def test_mesh_options_preserve_zero_smoothing_steps(self) -> None:
+        geometry = fm.Box(2.0, 2.0, 2.0, name="left")
+        mesh_options = _mesh_options_from_runtime_metadata(
+            {"mesh_options": {"smoothing_steps": 0}},
+            geometries=[geometry],
+            default_hmax=20e-9,
+            include_size_fields=False,
+        )
+
+        self.assertEqual(mesh_options.smoothing_steps, 0)
+
     def test_surface_prep_mesh_options_skip_component_only_size_fields(self) -> None:
         geometry = fm.ArchWaveguide(
             length=100e-9,
@@ -3032,6 +3155,28 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(mesh_options.smoothing_steps, 4)
         self.assertEqual(mesh_options.optimize, "Netgen")
         self.assertEqual(mesh_options.optimize_iters, 6)
+
+    def test_size_only_recipe_inherits_global_quality_flags(self) -> None:
+        geometry = fm.Box(20e-9, 20e-9, 5e-9, name="sample")
+
+        mesh_options = _mesh_options_from_runtime_metadata(
+            {
+                "mesh_options": {
+                    "compute_quality": True,
+                    "per_element_quality": True,
+                },
+                "per_geometry": [],
+            },
+            geometries=[geometry],
+            default_hmax=20e-9,
+            component_aware=True,
+            per_object_recipes={
+                "sample": PerObjectMeshRecipe(maximum_element_size=10e-9),
+            },
+        )
+
+        self.assertTrue(mesh_options.compute_quality)
+        self.assertTrue(mesh_options.per_element_quality)
 
     def test_runtime_mesh_options_reject_conflicting_recipe_global_controls(self) -> None:
         left = fm.Box(20e-9, 20e-9, 5e-9, name="left")
@@ -5930,6 +6075,23 @@ class MeshScaffoldTests(unittest.TestCase):
                 },
             )
 
+    def test_direct_per_object_mesh_operation_without_executor_fails_closed(self) -> None:
+        film = fm.Box(size=(200e-9, 200e-9, 10e-9), name="film")
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "mesh operation executor unavailable: kind='refine' scope='film'",
+        ):
+            realize_fem_domain_mesh_asset_from_components_with_report(
+                [film],
+                fm.FEM(order=1, hmax=20e-9),
+                per_object_recipes={
+                    "film": PerObjectMeshRecipe(
+                        operations=[MeshOperation(kind="refine")]
+                    )
+                },
+            )
+
     def test_frozen_magnetic_submesh_source_loads_mesh_markers_and_interface_faces(self) -> None:
         frozen_mesh = MeshData.from_legacy_tet4(
             nodes=np.asarray(
@@ -8401,8 +8563,45 @@ class FieldStackAcceptanceTests(unittest.TestCase):
                 "left": PerObjectMeshRecipe(hmax=20e-9),
             },
         )
-        self.assertAlmostEqual(resolved.per_object["left"].hmax, 20e-9)
+        self.assertAlmostEqual(resolved.per_object["left"].hmax, 20e-9, delta=1e-18)
         self.assertEqual(resolved.per_object["left"].source, "recipe_override")
+
+    def test_resolve_shared_domain_targets_uses_canonical_recipe_maximum(self) -> None:
+        left = fm.Box(2.0, 2.0, 2.0, name="left")
+        resolved = resolve_shared_domain_targets(
+            [left],
+            fm.FEM(order=1, hmax=100e-9),
+            airbox_hmax=200e-9,
+            mesh_workflow={
+                "per_geometry": [{"geometry": "left", "hmax": "50e-9"}],
+            },
+            per_object_recipes={
+                "left": PerObjectMeshRecipe(maximum_element_size=20e-9),
+            },
+        )
+
+        self.assertAlmostEqual(resolved.per_object["left"].hmax, 20e-9, delta=1e-18)
+        self.assertEqual(resolved.per_object["left"].source, "recipe_override")
+
+    def test_shared_target_source_tracks_the_field_that_supplies_hmax(self) -> None:
+        left = fm.Box(2.0, 2.0, 2.0, name="left")
+        resolved = resolve_shared_domain_targets(
+            [left],
+            fm.FEM(order=1, hmax=100e-9),
+            airbox_hmax=None,
+            mesh_workflow={
+                "default_mesh": {"hmax": 80e-9},
+                "per_geometry": [
+                    {"geometry": "left", "mode": "custom", "hmax": 50e-9},
+                ],
+            },
+            per_object_recipes={
+                "left": PerObjectMeshRecipe(compute_quality=True),
+            },
+        )
+
+        self.assertAlmostEqual(resolved.per_object["left"].hmax, 50e-9, delta=1e-18)
+        self.assertEqual(resolved.per_object["left"].source, "local_override")
 
     def test_shared_domain_size_fields_keep_airbox_hmax_as_outer_target(self) -> None:
         """Airbox hmax must not replace FEM.hmax, but fields need it as VOut."""

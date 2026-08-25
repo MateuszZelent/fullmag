@@ -533,6 +533,60 @@ fn hopfion(params: &BTreeMap<String, Value>, point: [f64; 3]) -> Result<[f64; 3]
     )
 }
 
+fn vortex_wall(
+    params: &BTreeMap<String, Value>,
+    point: [f64; 3],
+) -> Result<[f64; 3], TextureError> {
+    let wall_half_width = positive(params, "wall_half_width", None)?;
+    let left_mx = finite_number(params, "left_mx", Some(1.0))?;
+    let right_mx = finite_number(params, "right_mx", Some(-1.0))?;
+    if left_mx == 0.0 {
+        return Err(invalid("left_mx", "must be finite and nonzero"));
+    }
+    if right_mx == 0.0 {
+        return Err(invalid("right_mx", "must be finite and nonzero"));
+    }
+    if point[0] < -wall_half_width {
+        return Ok([left_mx.signum(), 0.0, 0.0]);
+    }
+    if point[0] > wall_half_width {
+        return Ok([right_mx.signum(), 0.0, 0.0]);
+    }
+    vortex(params, point, 1.0)
+}
+
+fn hopfion_compact_support(
+    params: &BTreeMap<String, Value>,
+    point: [f64; 3],
+) -> Result<[f64; 3], TextureError> {
+    let major_radius = positive(params, "major_radius", None)?;
+    let minor_radius = positive(params, "minor_radius", None)?;
+    if minor_radius > major_radius {
+        return Err(invalid(
+            "minor_radius",
+            "minor_radius must be <= major_radius",
+        ));
+    }
+
+    let psi = point[1].atan2(point[0]);
+    let toroidal_radial = point[0] * psi.cos() + point[1] * psi.sin() - major_radius;
+    let rho = point[2].hypot(toroidal_radial);
+    if rho >= minor_radius {
+        return Ok([0.0, 0.0, 1.0]);
+    }
+
+    let local_phi = point[2].atan2(toroidal_radial);
+    let phi = -local_phi + psi;
+    let normalized_radius = rho / minor_radius;
+    let compact_denominator = 1.0 - normalized_radius * normalized_radius;
+    let theta = std::f64::consts::PI * (1.0 - 1.0 / compact_denominator).exp();
+    Ok([
+        phi.cos() * theta.sin(),
+        phi.sin() * theta.sin(),
+        theta.cos(),
+    ])
+}
+
 fn axis_vector(axis: &str) -> Result<[f64; 3], TextureError> {
     match axis {
         "x" => Ok([1.0, 0.0, 0.0]),
@@ -740,11 +794,13 @@ fn local_evaluate(
         }
         "vortex" => vortex(params, point, 1.0),
         "antivortex" => vortex(params, point, -1.0),
+        "vortex_wall" => vortex_wall(params, point),
         "bloch_skyrmion" => skyrmion(params, point, 1.0, SkyrmionWallType::Bloch),
         "neel_skyrmion" => skyrmion(params, point, 1.0, SkyrmionWallType::Neel),
         "antiskyrmion" => skyrmion(params, point, -1.0, SkyrmionWallType::Neel),
         "skyrmionium" => skyrmionium(params, point),
         "hopfion" => hopfion(params, point),
+        "hopfion_compact_support" => hopfion_compact_support(params, point),
         "bimeron" => bimeron(params, point),
         "domain_wall" => domain_wall(params, point),
         "two_domain" => two_domain(params, point),
@@ -762,6 +818,7 @@ fn is_metric(preset_kind: &str) -> bool {
         preset_kind,
         "vortex"
             | "antivortex"
+            | "vortex_wall"
             | "bloch_skyrmion"
             | "neel_skyrmion"
             | "antiskyrmion"
@@ -780,10 +837,10 @@ fn sample_v2(
     points: &[TextureSamplePoint],
 ) -> Result<Vec<[f64; 3]>, TextureError> {
     let frame = resolve_frame(params, mapping)?;
-    if preset_kind == "hopfion" && frame.is_some() {
+    if matches!(preset_kind, "hopfion" | "hopfion_compact_support") && frame.is_some() {
         return Err(invalid(
             "mapping.projection",
-            "hopfion is three-dimensional and requires object_local projection",
+            "the selected hopfion preset is three-dimensional and requires object_local projection",
         ));
     }
     let prepared_transform = PreparedTextureTransform::prepare(transform)?;

@@ -19,6 +19,7 @@ run_gate() {
   case "$current_gate" in
     rust-quantity-api-cli-contracts)
       cargo test -p fullmag-quantities --no-fail-fast
+      cargo test -p fullmag-plan --test magnetization_textures_v2_parity --test mumax3_texture_compatibility --no-fail-fast
       cargo test -p fullmag-runner quantities --no-fail-fast
       cargo test -p fullmag-api router_v2 --no-fail-fast
       cargo test -p fullmag-cli interactive_runtime_host --no-fail-fast

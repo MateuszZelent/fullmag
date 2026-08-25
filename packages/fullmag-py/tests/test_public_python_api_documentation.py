@@ -28,6 +28,10 @@ API_PARAMETER_OWNERS: dict[str, Path] = {
     "texture.antiskyrmion": Path("python-api/magnets-and-textures/preset-textures.md"),
     "texture.skyrmionium": Path("python-api/magnets-and-textures/preset-textures.md"),
     "texture.hopfion": Path("python-api/magnets-and-textures/preset-textures.md"),
+    "texture.vortex_wall": Path("python-api/magnets-and-textures/mumax3-compatibility.md"),
+    "texture.hopfion_compact_support": Path(
+        "python-api/magnets-and-textures/mumax3-compatibility.md"
+    ),
     "texture.bimeron": Path("python-api/magnets-and-textures/preset-textures.md"),
     "texture.domain_wall": Path("python-api/magnets-and-textures/preset-textures.md"),
     "texture.two_domain": Path("python-api/magnets-and-textures/preset-textures.md"),
@@ -69,6 +73,8 @@ API_CONSTRUCTORS = {
     "texture.antiskyrmion": fm.texture.antiskyrmion,
     "texture.skyrmionium": fm.texture.skyrmionium,
     "texture.hopfion": fm.texture.hopfion,
+    "texture.vortex_wall": fm.texture.vortex_wall,
+    "texture.hopfion_compact_support": fm.texture.hopfion_compact_support,
     "texture.bimeron": fm.texture.bimeron,
     "texture.domain_wall": fm.texture.domain_wall,
     "texture.two_domain": fm.texture.two_domain,
