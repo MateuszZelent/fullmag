@@ -1,9 +1,9 @@
 //! ExchangeLlgProblem struct definition, constructors, and public API dispatch.
 
 use crate::{
-    CellSize, EffectiveFieldObservables, EffectiveFieldTerms, EngineError, EvaluationRequest,
-    ExchangeLlgState, ExchangeLlgStateSoA, FdmBoundaryPolicy, FdmDemagBoundary, FftWorkspace,
-    FrozenSpinsState, GridShape, IntegratorBuffers, LlgConfig, MaterialParameters,
+    CellSize, EffectiveFieldObservables, EffectiveFieldTerms, EngineError, EngineErrorCode,
+    EvaluationRequest, ExchangeLlgState, ExchangeLlgStateSoA, FdmBoundaryPolicy, FdmDemagBoundary,
+    FftWorkspace, FrozenSpinsState, GridShape, IntegratorBuffers, LlgConfig, MaterialParameters,
     RegionalFieldDriveTerm, ResolvedFdmPeriodicWorkspace, Result, StepReport, TimeIntegrator,
     Vector3,
 };
@@ -500,9 +500,13 @@ impl ExchangeLlgProblem {
         evaluation: EvaluationRequest,
     ) -> Result<StepReport> {
         self.ensure_state_matches_grid(state)?;
-        if dt <= 0.0 {
-            return Err(EngineError::new("dt must be positive"));
+        if !dt.is_finite() || dt <= 0.0 {
+            return Err(EngineError::with_code(
+                EngineErrorCode::InvalidTimestep,
+                "dt must be finite and positive",
+            ));
         }
+        bufs.begin_adaptive_step();
 
         let result = match self.dynamics.integrator {
             TimeIntegrator::Heun if self.soa_fast_path_supported() => {
@@ -528,9 +532,8 @@ impl ExchangeLlgProblem {
         };
         if result.is_ok() {
             self.restore_frozen_reference(&mut state.magnetization);
+            self.advance_thermal_step();
         }
-        // Advance thermal RNG counter after each step attempt
-        self.advance_thermal_step();
         result
     }
 
@@ -549,14 +552,18 @@ impl ExchangeLlgProblem {
         evaluation: EvaluationRequest,
     ) -> Result<StepReport> {
         self.ensure_soa_state_matches_grid(state)?;
-        if dt <= 0.0 {
-            return Err(EngineError::new("dt must be positive"));
+        if !dt.is_finite() || dt <= 0.0 {
+            return Err(EngineError::with_code(
+                EngineErrorCode::InvalidTimestep,
+                "dt must be finite and positive",
+            ));
         }
         if !self.soa_fast_path_supported() {
             return Err(EngineError::new(
                 "SoA state stepping requires a problem supported by the CPU SoA fast path",
             ));
         }
+        bufs.begin_adaptive_step();
 
         let result = match self.dynamics.integrator {
             TimeIntegrator::Heun => self.heun_step_soa_state_buf(state, dt, ws, bufs, evaluation),
@@ -565,7 +572,9 @@ impl ExchangeLlgProblem {
             TimeIntegrator::RK45 => self.rk45_step_soa_state_buf(state, dt, ws, bufs, evaluation),
             TimeIntegrator::ABM3 => self.abm3_step_soa_state_buf(state, dt, ws, bufs, evaluation),
         };
-        self.advance_thermal_step();
+        if result.is_ok() {
+            self.advance_thermal_step();
+        }
         result
     }
 

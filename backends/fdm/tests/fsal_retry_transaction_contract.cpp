@@ -48,6 +48,18 @@ int main() {
     FsalReuseInput thermal_input = exact_input;
     thermal_input.temperature = 300.0;
     const auto thermal_decision = rhs_allows_fsal_reuse(thermal_input);
+    Context decision_telemetry_context{};
+    context_note_fsal_decision(decision_telemetry_context, thermal_decision);
+    FsalReuseInput time_mismatch_input = exact_input;
+    time_mismatch_input.requested.accepted_time_bits = fsal_double_bits(2.0e-12);
+    const auto time_mismatch_decision = rhs_allows_fsal_reuse(time_mismatch_input);
+    context_note_fsal_decision(decision_telemetry_context, time_mismatch_decision);
+    const bool denied_reuse_reasons_are_counted =
+        decision_telemetry_context.fsal_invalidation_count == 2 &&
+        decision_telemetry_context.fsal_invalidation_reason_counts
+            [FULLMAG_FDM_FSAL_INVALIDATION_THERMAL_ACTIVE] == 1 &&
+        decision_telemetry_context.fsal_invalidation_reason_counts
+            [FULLMAG_FDM_FSAL_INVALIDATION_TIME_MISMATCH] == 1;
     Context transaction_context{};
     const uint64_t invalidations_before_noop =
         transaction_context.fsal_invalidation_count;
@@ -70,6 +82,15 @@ int main() {
         !transaction_context.fsal_valid &&
         transaction_context.fsal_invalidation_reason ==
             FULLMAG_FDM_FSAL_INVALIDATION_FIELD_MISMATCH;
+    fullmag_fdm_fsal_telemetry_v2 reason_telemetry{};
+    reason_telemetry.abi_version = FULLMAG_FDM_FSAL_TELEMETRY_ABI_V2;
+    reason_telemetry.struct_size = sizeof(reason_telemetry);
+    const bool reason_counts_are_typed =
+        context_get_fsal_telemetry_v2(transaction_context, &reason_telemetry) &&
+        reason_telemetry.invalidation_reason_counts
+            [FULLMAG_FDM_FSAL_INVALIDATION_TRANSPORT_STATE_MISMATCH] == 1 &&
+        reason_telemetry.invalidation_reason_counts
+            [FULLMAG_FDM_FSAL_INVALIDATION_FIELD_MISMATCH] == 1;
     fullmag_fdm_fsal_telemetry_v1 invalid_telemetry{};
     invalid_telemetry.abi_version = FULLMAG_FDM_FSAL_TELEMETRY_ABI_V1 + 1;
     invalid_telemetry.struct_size = sizeof(invalid_telemetry);
@@ -533,15 +554,20 @@ int main() {
         contains(checkpoint, "legacy LLG checkpoint v1 import is unsupported") &&
             contains(checkpoint, "context_llg_checkpoint_import_v3") &&
             contains(checkpoint, "ctx.accepted_step_index = header.info.accepted_step_index") &&
-            contains(checkpoint, "ctx.fsal_valid = header.info.fsal_valid != 0") &&
-            contains(checkpoint, "ctx.fsal_accepted_state_revision =") &&
+            !contains(checkpoint, "ctx.fsal_valid = header.info.fsal_valid != 0") &&
+            contains(checkpoint,
+                "FULLMAG_FDM_FSAL_INVALIDATION_CHECKPOINT_RESTORE") &&
             contains(checkpoint, "checkpoint_identity_v3_valid"),
         "FDM-GPU-NUM-003-D",
-        "checkpoint v3 restores exact RNG/FSAL identity and legacy imports fail closed",
+        "checkpoint v3 restores exact RNG identity, invalidates FSAL, and legacy imports fail closed",
         failures);
     report(
         contains(header, "fullmag_fdm_fsal_invalidation_reason") &&
             contains(header, "fullmag_fdm_fsal_telemetry_v1") &&
+            contains(header, "fullmag_fdm_fsal_telemetry_v2") &&
+            contains(header, "fullmag_fdm_backend_get_fsal_telemetry_v2") &&
+            reason_counts_are_typed &&
+            denied_reuse_reasons_are_counted &&
             contains(header, "fullmag_fdm_backend_get_fsal_telemetry_v1") &&
             invalid_telemetry_unchanged &&
             contains(policy, "out_telemetry->abi_version !=") &&
@@ -554,6 +580,7 @@ int main() {
             contains(header, "stale_publication_count") &&
             contains(header, "transaction_commit_count") &&
             contains(rust, "pub struct fullmag_fdm_fsal_telemetry_v1") &&
+            contains(rust, "pub struct fullmag_fdm_fsal_telemetry_v2") &&
             contains(rust, "pub fsal_reused") &&
             contains(rust, "pub transaction_commit_count"),
         "FDM-GPU-NUM-003-E",

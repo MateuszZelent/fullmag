@@ -92,11 +92,11 @@ int main() {
     check(rk45_fp32.find("dt_min_exhausted") != std::string::npos,
           "CUDA FP32 RK45 propagates typed dt_min exhaustion");
     for (const auto *source : {&rk23, &rk45, &rk23_fp32, &rk45_fp32}) {
-        check(source->find("const bool fsal_valid_before_step = ctx.fsal_valid") !=
+        check(source->find("FULLMAG_FDM_FSAL_INVALIDATION_STEP_ERROR") !=
                   std::string::npos,
-              "CUDA adaptive step snapshots pre-attempt FSAL validity");
-        check(source->find("ctx.fsal_valid = fsal_valid_before_step") != std::string::npos,
-              "CUDA dt_min terminal return restores exact pre-attempt FSAL validity");
+              "CUDA dt_min terminal return invalidates pre-attempt FSAL state");
+        check(source->find("ctx.fsal_valid = fsal_valid_before_step") == std::string::npos,
+              "CUDA dt_min terminal return never republishes pre-attempt FSAL state");
     }
 
     for (const auto &golden : fullmag::adaptive::kAdaptiveDecisionGoldenVectors) {

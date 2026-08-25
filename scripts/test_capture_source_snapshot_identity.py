@@ -198,6 +198,34 @@ def test_runtime_snapshot_ignores_untracked_impl_racetrack_repository(
     assert identity["dirty_path_content"] == []
 
 
+def test_runtime_snapshot_ignores_untracked_codex_usage_repository(
+    tmp_path: Path,
+) -> None:
+    repo = _repository(tmp_path)
+    codex_usage = repo / "Codex-Usage"
+    codex_usage.mkdir()
+    _git(codex_usage, "init", "-q")
+    (codex_usage / "README.md").write_text("local tooling\n", encoding="utf-8")
+
+    result = subprocess.run(
+        (
+            sys.executable,
+            str(CAPTURE),
+            "--repo-root",
+            str(repo),
+            "--ignore-non-runtime-dirty",
+        ),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    identity = json.loads(result.stdout)
+    assert identity["source_snapshot_dirty"] is False
+    assert identity["dirty_path_content"] == []
+
+
 def test_runtime_snapshot_does_not_ignore_other_untracked_repository(
     tmp_path: Path,
 ) -> None:

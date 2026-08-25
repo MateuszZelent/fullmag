@@ -688,6 +688,7 @@ pub const FULLMAG_FDM_FSAL_INVALIDATION_CHECKPOINT_RESTORE: fullmag_fdm_fsal_inv
     14;
 pub const FULLMAG_FDM_FSAL_INVALIDATION_STALE_PUBLICATION: fullmag_fdm_fsal_invalidation_reason =
     15;
+pub const FULLMAG_FDM_FSAL_INVALIDATION_REASON_COUNT: usize = 16;
 
 pub const FULLMAG_FDM_FSAL_TELEMETRY_ABI_V1: u32 = 1;
 
@@ -704,6 +705,24 @@ pub struct fullmag_fdm_fsal_telemetry_v1 {
     pub accepted_step_index: u64,
     pub stale_publication_count: u64,
     pub transaction_commit_count: u64,
+}
+
+pub const FULLMAG_FDM_FSAL_TELEMETRY_ABI_V2: u32 = 2;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_fsal_telemetry_v2 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub fsal_reused: u32,
+    pub fsal_invalidation_reason: fullmag_fdm_fsal_invalidation_reason,
+    pub fsal_invalidation_count: u64,
+    pub rhs_evaluations_saved: u64,
+    pub thermal_rng_draws: u64,
+    pub accepted_step_index: u64,
+    pub stale_publication_count: u64,
+    pub transaction_commit_count: u64,
+    pub invalidation_reason_counts: [u64; FULLMAG_FDM_FSAL_INVALIDATION_REASON_COUNT],
 }
 
 pub const FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1: u32 = 1;
@@ -1497,6 +1516,11 @@ extern "C" {
         out_telemetry: *mut fullmag_fdm_fsal_telemetry_v1,
     ) -> i32;
 
+    pub fn fullmag_fdm_backend_get_fsal_telemetry_v2(
+        handle: *mut fullmag_fdm_backend,
+        out_telemetry: *mut fullmag_fdm_fsal_telemetry_v2,
+    ) -> i32;
+
     pub fn fullmag_fdm_backend_set_interrupt_poll(
         handle: *mut fullmag_fdm_backend,
         poll_fn: fullmag_fdm_interrupt_poll_fn,
@@ -2194,6 +2218,21 @@ mod tests {
             *mut fullmag_fdm_backend,
             *mut fullmag_fdm_fsal_telemetry_v1,
         ) -> i32 = fullmag_fdm_backend_get_fsal_telemetry_v1;
+    }
+
+    #[test]
+    fn fsal_telemetry_v2_appends_typed_reason_counts() {
+        assert_eq!(size_of::<fullmag_fdm_fsal_telemetry_v2>(), 192);
+        assert_eq!(offset_of!(fullmag_fdm_fsal_telemetry_v2, abi_version), 0);
+        assert_eq!(offset_of!(fullmag_fdm_fsal_telemetry_v2, struct_size), 4);
+        assert_eq!(
+            offset_of!(fullmag_fdm_fsal_telemetry_v2, invalidation_reason_counts),
+            64
+        );
+        let _query: unsafe extern "C" fn(
+            *mut fullmag_fdm_backend,
+            *mut fullmag_fdm_fsal_telemetry_v2,
+        ) -> i32 = fullmag_fdm_backend_get_fsal_telemetry_v2;
     }
 
     #[test]

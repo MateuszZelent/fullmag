@@ -5,9 +5,10 @@
 
 use crate::vector::{add, cross, norm, normalized, scale};
 use crate::{
-    CoupledImexArk2Stage, CoupledImexArk2Tableau, EvaluationRequest, ExchangeLlgProblem,
-    ExchangeLlgState, ExchangeLlgStateSoA, ExternalStageTerms, FftWorkspace, IntegratorBuffers,
-    Result, RhsEvaluation, StepReport, Vector3, VectorFieldSoA,
+    AdaptiveAttemptDecision, AdaptiveAttemptReason, AdaptiveAttemptRecord, CoupledImexArk2Stage,
+    CoupledImexArk2Tableau, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState,
+    ExchangeLlgStateSoA, ExternalStageTerms, FftWorkspace, IntegratorBuffers, Result,
+    RhsEvaluation, StepReport, Vector3, VectorFieldSoA,
 };
 
 #[cfg(feature = "parallel")]
@@ -18,7 +19,8 @@ enum AdaptiveDecision {
     Accepted(f64),
     Retry(f64),
     DtMinExhausted,
-    NonFinite,
+    NonFinite(crate::EngineErrorCode),
+    RetryLimitExhausted,
 }
 
 fn decide_adaptive_step(
@@ -28,8 +30,11 @@ fn decide_adaptive_step(
     previous_error: Option<f64>,
     cfg: crate::AdaptiveStepConfig,
 ) -> AdaptiveDecision {
-    if !error.is_finite() {
-        return AdaptiveDecision::NonFinite;
+    if error.is_nan() {
+        return AdaptiveDecision::NonFinite(crate::EngineErrorCode::NaNValue);
+    }
+    if error.is_infinite() {
+        return AdaptiveDecision::NonFinite(crate::EngineErrorCode::InfiniteValue);
     }
     if error > 1.0 && dt <= cfg.dt_min {
         return AdaptiveDecision::DtMinExhausted;
@@ -70,13 +75,69 @@ fn decide_adaptive_attempt(
     error: f64,
     previous_error: Option<f64>,
     cfg: crate::AdaptiveStepConfig,
+    rhs_evals: u32,
     bufs: &mut IntegratorBuffers,
 ) -> AdaptiveDecision {
     #[cfg(test)]
     bufs.record_adaptive_attempt_for_tests(dt);
-    #[cfg(not(test))]
-    let _ = bufs;
-    decide_adaptive_step(order_est, dt, error, previous_error, cfg)
+    let mut decision = decide_adaptive_step(order_est, dt, error, previous_error, cfg);
+    if matches!(decision, AdaptiveDecision::Retry(_)) && bufs.adaptive_retry_budget_exhausted() {
+        decision = AdaptiveDecision::RetryLimitExhausted;
+    }
+    let (published_decision, reason, dt_next) = match decision {
+        AdaptiveDecision::Accepted(next) => (
+            AdaptiveAttemptDecision::Accepted,
+            AdaptiveAttemptReason::WithinTolerance,
+            next,
+        ),
+        AdaptiveDecision::Retry(next) => (
+            AdaptiveAttemptDecision::Retry,
+            AdaptiveAttemptReason::ErrorAboveTolerance,
+            next,
+        ),
+        AdaptiveDecision::DtMinExhausted => (
+            AdaptiveAttemptDecision::Failed,
+            AdaptiveAttemptReason::DtMinExhausted,
+            dt,
+        ),
+        AdaptiveDecision::NonFinite(_) => (
+            AdaptiveAttemptDecision::Failed,
+            AdaptiveAttemptReason::NonFiniteError,
+            dt,
+        ),
+        AdaptiveDecision::RetryLimitExhausted => (
+            AdaptiveAttemptDecision::Failed,
+            AdaptiveAttemptReason::RetryLimitExhausted,
+            dt,
+        ),
+    };
+    bufs.record_adaptive_attempt(AdaptiveAttemptRecord {
+        attempt: 0,
+        dt_attempt: dt,
+        normalized_error: error,
+        decision: published_decision,
+        reason,
+        dt_next,
+        rhs_evals,
+    });
+    decision
+}
+
+#[derive(Default)]
+struct AttemptRhsCounter {
+    count: u32,
+}
+
+impl AttemptRhsCounter {
+    #[inline]
+    fn record(&mut self) {
+        self.count += 1;
+    }
+
+    #[inline]
+    fn finish(self) -> u32 {
+        self.count
+    }
 }
 
 #[cfg(feature = "parallel")]
@@ -115,11 +176,11 @@ mod adaptive_decision_tests {
         );
         assert_eq!(
             decide_adaptive_step(4, 1e-6, f64::NAN, None, cfg),
-            AdaptiveDecision::NonFinite
+            AdaptiveDecision::NonFinite(crate::EngineErrorCode::NaNValue)
         );
         assert_eq!(
             decide_adaptive_step(4, 1e-6, f64::INFINITY, None, cfg),
-            AdaptiveDecision::NonFinite
+            AdaptiveDecision::NonFinite(crate::EngineErrorCode::InfiniteValue)
         );
         assert_eq!(
             decide_adaptive_step(4, cfg.dt_min, 4.0, None, cfg),
@@ -150,6 +211,43 @@ mod adaptive_decision_tests {
             panic!("finite rejection must retry");
         };
         assert!(next < dt);
+    }
+
+    #[test]
+    fn adaptive_retry_budget_fails_with_a_bounded_terminal_record() {
+        let mut problem = adaptive_test_problem(crate::TimeIntegrator::RK23);
+        problem.dynamics.adaptive.dt_min = 1.0e-300;
+        problem.dynamics.adaptive.headroom = 1.0;
+        problem.dynamics.adaptive.shrink_limit = 0.99;
+        let mut state = problem.uniform_state([1.0, 0.0, 0.0]).expect("state");
+        let mut workspace = problem.create_workspace();
+        let mut buffers = problem.create_integrator_buffers();
+        buffers.set_adaptive_error_script_for_tests(std::iter::repeat_n(
+            f64::from_bits(1.0f64.to_bits() + 1),
+            51,
+        ));
+
+        let error = problem
+            .rk23_step_buf(
+                &mut state,
+                1.0,
+                &mut workspace,
+                &mut buffers,
+                crate::EvaluationRequest::Minimal,
+            )
+            .expect_err("retry budget must terminate");
+
+        assert_eq!(error.to_string(), "adaptive_retry_limit_exhausted");
+        assert_eq!(buffers.adaptive_attempts().len(), 51);
+        assert_eq!(buffers.adaptive_rejected_attempts(), 50);
+        assert_eq!(
+            buffers
+                .adaptive_attempts()
+                .last()
+                .expect("terminal attempt")
+                .reason,
+            crate::AdaptiveAttemptReason::RetryLimitExhausted
+        );
     }
 
     fn adaptive_test_problem(integrator: crate::TimeIntegrator) -> crate::ExchangeLlgProblem {
@@ -206,6 +304,7 @@ mod adaptive_decision_tests {
             }
             .expect_err("AoS non-finite error norm must terminate");
             assert_eq!(error.to_string(), "non_finite_adaptive_error");
+            assert_eq!(error.code(), crate::EngineErrorCode::NaNValue);
             assert_eq!(aos, aos_before);
 
             let mut soa_aos = problem
@@ -234,6 +333,7 @@ mod adaptive_decision_tests {
             }
             .expect_err("SoA-buffer non-finite error norm must terminate");
             assert_eq!(error.to_string(), "non_finite_adaptive_error");
+            assert_eq!(error.code(), crate::EngineErrorCode::InfiniteValue);
             assert_eq!(soa_aos, soa_aos_before);
 
             let mut persistent_soa = problem
@@ -263,6 +363,7 @@ mod adaptive_decision_tests {
             }
             .expect_err("persistent-SoA non-finite error norm must terminate");
             assert_eq!(error.to_string(), "non_finite_adaptive_error");
+            assert_eq!(error.code(), crate::EngineErrorCode::NaNValue);
             assert_eq!(persistent_soa, persistent_soa_before);
         }
     }
@@ -373,6 +474,7 @@ mod adaptive_decision_tests {
                 crate::EvaluationRequest::Minimal,
             )
             .expect("accepted AoS RK45 step");
+        assert_eq!(aos_bufs.adaptive_attempts()[0].rhs_evals, 7);
         assert!(aos.k_fsal.is_some());
         let aos_before = aos.clone();
         aos_bufs.set_adaptive_error_script_for_tests([f64::NAN]);
@@ -386,7 +488,53 @@ mod adaptive_decision_tests {
             )
             .expect_err("terminal AoS RK45 rejection");
         assert_eq!(error.to_string(), "non_finite_adaptive_error");
+        assert_eq!(
+            aos_bufs
+                .adaptive_attempts()
+                .last()
+                .expect("terminal AoS attempt")
+                .rhs_evals,
+            6
+        );
         assert_eq!(aos, aos_before);
+
+        let mut buffer_soa = problem
+            .uniform_state([1.0, 0.0, 0.0])
+            .expect("buffer-SoA state");
+        let mut buffer_soa_ws = problem.create_workspace();
+        let mut buffer_soa_bufs = problem.create_integrator_buffers();
+        problem
+            .rk45_step_soa_buf(
+                &mut buffer_soa,
+                1.0e-6,
+                &mut buffer_soa_ws,
+                &mut buffer_soa_bufs,
+                crate::EvaluationRequest::Minimal,
+            )
+            .expect("accepted buffer-SoA RK45 step");
+        assert_eq!(buffer_soa_bufs.adaptive_attempts()[0].rhs_evals, 7);
+        assert!(buffer_soa.k_fsal.is_some());
+        let buffer_soa_before = buffer_soa.clone();
+        buffer_soa_bufs.set_adaptive_error_script_for_tests([f64::NAN]);
+        let error = problem
+            .rk45_step_soa_buf(
+                &mut buffer_soa,
+                1.0e-6,
+                &mut buffer_soa_ws,
+                &mut buffer_soa_bufs,
+                crate::EvaluationRequest::Minimal,
+            )
+            .expect_err("terminal buffer-SoA RK45 rejection");
+        assert_eq!(error.to_string(), "non_finite_adaptive_error");
+        assert_eq!(
+            buffer_soa_bufs
+                .adaptive_attempts()
+                .last()
+                .expect("terminal buffer-SoA attempt")
+                .rhs_evals,
+            6
+        );
+        assert_eq!(buffer_soa, buffer_soa_before);
 
         let mut persistent_soa = problem
             .uniform_state([1.0, 0.0, 0.0])
@@ -403,6 +551,7 @@ mod adaptive_decision_tests {
                 crate::EvaluationRequest::Minimal,
             )
             .expect("accepted persistent-SoA RK45 step");
+        assert_eq!(persistent_soa_bufs.adaptive_attempts()[0].rhs_evals, 7);
         assert!(persistent_soa.k_fsal.is_some());
         let persistent_soa_before = persistent_soa.clone();
         persistent_soa_bufs.set_adaptive_error_script_for_tests([f64::INFINITY]);
@@ -416,6 +565,14 @@ mod adaptive_decision_tests {
             )
             .expect_err("terminal persistent-SoA RK45 rejection");
         assert_eq!(error.to_string(), "non_finite_adaptive_error");
+        assert_eq!(
+            persistent_soa_bufs
+                .adaptive_attempts()
+                .last()
+                .expect("terminal persistent-SoA attempt")
+                .rhs_evals,
+            6
+        );
         assert_eq!(persistent_soa, persistent_soa_before);
     }
 
@@ -474,7 +631,10 @@ impl ExchangeLlgProblem {
         const DELTA: f64 = CoupledImexArk2Tableau::DELTA;
         self.ensure_state_matches_grid(state)?;
         if dt <= 0.0 || !dt.is_finite() {
-            return Err(crate::EngineError::new("dt must be finite and positive"));
+            return Err(crate::EngineError::with_code(
+                crate::EngineErrorCode::InvalidTimestep,
+                "dt must be finite and positive",
+            ));
         }
         let n = state.magnetization.len();
         let t0 = state.time_seconds;
@@ -637,6 +797,37 @@ impl ExchangeLlgProblem {
         ws: &mut FftWorkspace,
         bufs: &mut IntegratorBuffers,
         evaluation: EvaluationRequest,
+        external_terms: F,
+    ) -> Result<StepReport>
+    where
+        F: FnMut(
+            &[Vector3],
+            f64,
+            Option<crate::fdm::TransportStageErrorBudget>,
+        ) -> Result<ExternalStageTerms>,
+    {
+        let report = self.heun_trial_with_external_stage_terms_and_lte(
+            state,
+            dt,
+            ws,
+            bufs,
+            evaluation,
+            external_terms,
+        )?;
+        self.commit_heun_trial(state, bufs, dt);
+        Ok(report)
+    }
+
+    /// Build a coupled Heun candidate without advancing the thermal interval.
+    /// The coupled owner must commit its other authoritative state first and
+    /// then call [`Self::commit_heun_trial`] exactly once.
+    pub fn heun_trial_with_external_stage_terms_and_lte<F>(
+        &self,
+        state: &ExchangeLlgState,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
         mut external_terms: F,
     ) -> Result<StepReport>
     where
@@ -648,7 +839,10 @@ impl ExchangeLlgProblem {
     {
         self.ensure_state_matches_grid(state)?;
         if dt <= 0.0 || !dt.is_finite() {
-            return Err(crate::EngineError::new("dt must be finite and positive"));
+            return Err(crate::EngineError::with_code(
+                crate::EngineErrorCode::InvalidTimestep,
+                "dt must be finite and positive",
+            ));
         }
         let n = state.magnetization.len();
         let t0 = state.time_seconds;
@@ -745,11 +939,22 @@ impl ExchangeLlgProblem {
         eval.max_torque_Apm = final_reductions.max_torque_free_apm;
         eval.max_torque_all_Apm = final_reductions.max_torque_all_apm;
 
+        Ok(eval.into_step_report(t0 + dt, dt, false))
+    }
+
+    /// Commit the candidate left by
+    /// [`Self::heun_trial_with_external_stage_terms_and_lte`].
+    pub fn commit_heun_trial(
+        &self,
+        state: &mut ExchangeLlgState,
+        bufs: &IntegratorBuffers,
+        dt: f64,
+    ) {
+        let n = state.magnetization.len();
         state.magnetization[..n].copy_from_slice(&bufs.delta[..n]);
         self.restore_frozen_reference(&mut state.magnetization[..n]);
-        state.time_seconds = t0 + dt;
+        state.time_seconds += dt;
         self.advance_thermal_step();
-        Ok(eval.into_step_report(state.time_seconds, dt, false))
     }
 
     // -----------------------------------------------------------------------
@@ -1195,6 +1400,7 @@ impl ExchangeLlgProblem {
         bufs.m0[..n].copy_from_slice(&state.magnetization);
 
         loop {
+            let mut rhs_evals = AttemptRhsCounter::default();
             // k1 = f(t, m0)
             self.effective_field_into_ws_at_time(&bufs.m0[..n], ws, &mut bufs.h_eff[..n], t0);
             self.llg_rhs_from_fields_with_direct_torques_into(
@@ -1202,6 +1408,7 @@ impl ExchangeLlgProblem {
                 &bufs.h_eff[..n],
                 &mut bufs.k[0][..n],
             );
+            rhs_evals.record();
 
             // m1 = normalize(m0 + dt/2 * k1)
             {
@@ -1233,6 +1440,7 @@ impl ExchangeLlgProblem {
                 &bufs.h_eff[..n],
                 &mut bufs.k[1][..n],
             );
+            rhs_evals.record();
 
             // m2 = normalize(m0 + 3dt/4 * k2)
             {
@@ -1264,6 +1472,7 @@ impl ExchangeLlgProblem {
                 &bufs.h_eff[..n],
                 &mut bufs.k[2][..n],
             );
+            rhs_evals.record();
 
             // y3 = normalize(m0 + dt*(2/9*k1 + 1/3*k2 + 4/9*k3))
             {
@@ -1313,6 +1522,7 @@ impl ExchangeLlgProblem {
                 &bufs.h_eff[..n],
                 &mut bufs.k[3][..n],
             );
+            rhs_evals.record();
 
             // Error
             let error = self.max_error_norm_buf(
@@ -1336,6 +1546,7 @@ impl ExchangeLlgProblem {
                     normalized_error,
                     state.adaptive_previous_error,
                     cfg,
+                    rhs_evals.finish(),
                     bufs,
                 )
             } else {
@@ -1364,10 +1575,22 @@ impl ExchangeLlgProblem {
             match decision {
                 AdaptiveDecision::Retry(next) => dt = next,
                 AdaptiveDecision::DtMinExhausted => {
-                    return Err(crate::EngineError::new("dt_min_exhausted"));
+                    return Err(crate::EngineError::with_code(
+                        crate::EngineErrorCode::AdaptiveDtMinExhausted,
+                        "dt_min_exhausted",
+                    ));
                 }
-                AdaptiveDecision::NonFinite => {
-                    return Err(crate::EngineError::new("non_finite_adaptive_error"));
+                AdaptiveDecision::NonFinite(code) => {
+                    return Err(crate::EngineError::with_code(
+                        code,
+                        "non_finite_adaptive_error",
+                    ));
+                }
+                AdaptiveDecision::RetryLimitExhausted => {
+                    return Err(crate::EngineError::with_code(
+                        crate::EngineErrorCode::AdaptiveRetryLimitExhausted,
+                        "adaptive_retry_limit_exhausted",
+                    ));
                 }
                 AdaptiveDecision::Accepted(_) => unreachable!("accepted decision returned above"),
             }
@@ -1393,8 +1616,10 @@ impl ExchangeLlgProblem {
         bufs.soa.m0.scatter_from_aos(&state.magnetization);
 
         loop {
+            let mut rhs_evals = AttemptRhsCounter::default();
             self.effective_field_into_soa_ws_at_time(&bufs.soa.m0, ws, &mut bufs.soa.h_eff, t0);
             self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
+            rhs_evals.record();
 
             for i in 0..n {
                 let stage = normalized([
@@ -1413,6 +1638,7 @@ impl ExchangeLlgProblem {
                 t0 + 0.5 * dt,
             );
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
+            rhs_evals.record();
 
             for i in 0..n {
                 let stage = normalized([
@@ -1431,6 +1657,7 @@ impl ExchangeLlgProblem {
                 t0 + 0.75 * dt,
             );
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[2]);
+            rhs_evals.record();
 
             for i in 0..n {
                 let weighted_x = (2.0 / 9.0) * bufs.soa.k[0].x[i]
@@ -1459,6 +1686,7 @@ impl ExchangeLlgProblem {
                 t0 + dt,
             );
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[3]);
+            rhs_evals.record();
 
             let error = self.max_error_norm_soa_buf(
                 &[
@@ -1481,6 +1709,7 @@ impl ExchangeLlgProblem {
                     normalized_error,
                     state.adaptive_previous_error,
                     cfg,
+                    rhs_evals.finish(),
                     bufs,
                 )
             } else {
@@ -1510,10 +1739,22 @@ impl ExchangeLlgProblem {
             match decision {
                 AdaptiveDecision::Retry(next) => dt = next,
                 AdaptiveDecision::DtMinExhausted => {
-                    return Err(crate::EngineError::new("dt_min_exhausted"));
+                    return Err(crate::EngineError::with_code(
+                        crate::EngineErrorCode::AdaptiveDtMinExhausted,
+                        "dt_min_exhausted",
+                    ));
                 }
-                AdaptiveDecision::NonFinite => {
-                    return Err(crate::EngineError::new("non_finite_adaptive_error"));
+                AdaptiveDecision::NonFinite(code) => {
+                    return Err(crate::EngineError::with_code(
+                        code,
+                        "non_finite_adaptive_error",
+                    ));
+                }
+                AdaptiveDecision::RetryLimitExhausted => {
+                    return Err(crate::EngineError::with_code(
+                        crate::EngineErrorCode::AdaptiveRetryLimitExhausted,
+                        "adaptive_retry_limit_exhausted",
+                    ));
                 }
                 AdaptiveDecision::Accepted(_) => unreachable!("accepted decision returned above"),
             }
@@ -1575,6 +1816,7 @@ impl ExchangeLlgProblem {
         const E7: f64 = -1.0 / 40.0;
 
         loop {
+            let mut rhs_evals = AttemptRhsCounter::default();
             // Stage 1 — FSAL: reuse k7 from previous accepted step
             let reusable_fsal = (!dynamic_oersted).then(|| state.k_fsal.as_ref()).flatten();
             if let Some(fsal) = reusable_fsal {
@@ -1586,6 +1828,7 @@ impl ExchangeLlgProblem {
                     &bufs.h_eff[..n],
                     &mut bufs.k[0][..n],
                 );
+                rhs_evals.record();
             }
 
             // Stage 2
@@ -1618,6 +1861,7 @@ impl ExchangeLlgProblem {
                 &bufs.h_eff[..n],
                 &mut bufs.k[1][..n],
             );
+            rhs_evals.record();
 
             // Stage 3
             {
@@ -1655,6 +1899,7 @@ impl ExchangeLlgProblem {
                 &bufs.h_eff[..n],
                 &mut bufs.k[2][..n],
             );
+            rhs_evals.record();
 
             // Stage 4
             {
@@ -1698,6 +1943,7 @@ impl ExchangeLlgProblem {
                 &bufs.h_eff[..n],
                 &mut bufs.k[3][..n],
             );
+            rhs_evals.record();
 
             // Stage 5
             {
@@ -1752,6 +1998,7 @@ impl ExchangeLlgProblem {
                 &bufs.h_eff[..n],
                 &mut bufs.k[4][..n],
             );
+            rhs_evals.record();
 
             // Stage 6
             {
@@ -1810,6 +2057,7 @@ impl ExchangeLlgProblem {
                 &bufs.h_eff[..n],
                 &mut bufs.k[5][..n],
             );
+            rhs_evals.record();
 
             // 5th-order solution → m_stage
             {
@@ -1867,6 +2115,7 @@ impl ExchangeLlgProblem {
                 &bufs.h_eff[..n],
                 &mut bufs.k[6][..n],
             );
+            rhs_evals.record();
 
             // Error estimate
             let error = self.max_error_norm_buf(
@@ -1885,6 +2134,7 @@ impl ExchangeLlgProblem {
                     normalized_error,
                     state.adaptive_previous_error,
                     cfg,
+                    rhs_evals.finish(),
                     bufs,
                 )
             } else {
@@ -1895,7 +2145,13 @@ impl ExchangeLlgProblem {
                 state.magnetization[..n].copy_from_slice(&bufs.m_stage[..n]);
                 self.restore_frozen_reference(&mut state.magnetization[..n]);
                 state.time_seconds += dt;
-                state.k_fsal = (!dynamic_oersted).then(|| bufs.k[6][..n].to_vec());
+                if dynamic_oersted {
+                    state.k_fsal = None;
+                } else if let Some(fsal) = &mut state.k_fsal {
+                    fsal.copy_from_slice(&bufs.k[6][..n]);
+                } else {
+                    state.k_fsal = Some(bufs.k[6][..n].to_vec());
+                }
                 let eval = self.compute_step_observables_at_time(
                     &state.magnetization,
                     ws,
@@ -1914,10 +2170,22 @@ impl ExchangeLlgProblem {
             match decision {
                 AdaptiveDecision::Retry(next) => dt = next,
                 AdaptiveDecision::DtMinExhausted => {
-                    return Err(crate::EngineError::new("dt_min_exhausted"));
+                    return Err(crate::EngineError::with_code(
+                        crate::EngineErrorCode::AdaptiveDtMinExhausted,
+                        "dt_min_exhausted",
+                    ));
                 }
-                AdaptiveDecision::NonFinite => {
-                    return Err(crate::EngineError::new("non_finite_adaptive_error"));
+                AdaptiveDecision::NonFinite(code) => {
+                    return Err(crate::EngineError::with_code(
+                        code,
+                        "non_finite_adaptive_error",
+                    ));
+                }
+                AdaptiveDecision::RetryLimitExhausted => {
+                    return Err(crate::EngineError::with_code(
+                        crate::EngineErrorCode::AdaptiveRetryLimitExhausted,
+                        "adaptive_retry_limit_exhausted",
+                    ));
                 }
                 AdaptiveDecision::Accepted(_) => unreachable!("accepted decision returned above"),
             }
@@ -1975,12 +2243,14 @@ impl ExchangeLlgProblem {
         const E7: f64 = -1.0 / 40.0;
 
         loop {
+            let mut rhs_evals = AttemptRhsCounter::default();
             let reusable_fsal = (!dynamic_oersted).then(|| state.k_fsal.as_ref()).flatten();
             if let Some(fsal) = reusable_fsal {
                 bufs.soa.k[0].scatter_from_aos(&fsal);
             } else {
                 self.effective_field_into_soa_ws_at_time(&bufs.soa.m0, ws, &mut bufs.soa.h_eff, t0);
                 self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
+                rhs_evals.record();
             }
 
             for i in 0..n {
@@ -2000,6 +2270,7 @@ impl ExchangeLlgProblem {
                 t0 + (1.0 / 5.0) * dt,
             );
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
+            rhs_evals.record();
 
             for i in 0..n {
                 let stage = normalized([
@@ -2018,6 +2289,7 @@ impl ExchangeLlgProblem {
                 t0 + (3.0 / 10.0) * dt,
             );
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[2]);
+            rhs_evals.record();
 
             for i in 0..n {
                 let stage = normalized([
@@ -2045,6 +2317,7 @@ impl ExchangeLlgProblem {
                 t0 + (4.0 / 5.0) * dt,
             );
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[3]);
+            rhs_evals.record();
 
             for i in 0..n {
                 let stage = normalized([
@@ -2075,6 +2348,7 @@ impl ExchangeLlgProblem {
                 t0 + (8.0 / 9.0) * dt,
             );
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[4]);
+            rhs_evals.record();
 
             for i in 0..n {
                 let stage = normalized([
@@ -2108,6 +2382,7 @@ impl ExchangeLlgProblem {
                 t0 + dt,
             );
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[5]);
+            rhs_evals.record();
 
             for i in 0..n {
                 let stage = normalized([
@@ -2142,6 +2417,7 @@ impl ExchangeLlgProblem {
                 t0 + dt,
             );
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[6]);
+            rhs_evals.record();
 
             let error = self.max_error_norm_soa_buf(
                 &[(0, E1), (2, E3), (3, E4), (4, E5), (5, E6), (6, E7)],
@@ -2159,6 +2435,7 @@ impl ExchangeLlgProblem {
                     normalized_error,
                     state.adaptive_previous_error,
                     cfg,
+                    rhs_evals.finish(),
                     bufs,
                 )
             } else {
@@ -2170,7 +2447,13 @@ impl ExchangeLlgProblem {
                     .m_stage
                     .gather_into_aos(&mut state.magnetization[..n]);
                 state.time_seconds += dt;
-                state.k_fsal = (!dynamic_oersted).then(|| bufs.soa.k[6].gather_to_aos());
+                if dynamic_oersted {
+                    state.k_fsal = None;
+                } else if let Some(fsal) = &mut state.k_fsal {
+                    bufs.soa.k[6].gather_into_aos(fsal);
+                } else {
+                    state.k_fsal = Some(bufs.soa.k[6].gather_to_aos());
+                }
                 let eval = self.compute_step_observables_at_time(
                     &state.magnetization,
                     ws,
@@ -2189,10 +2472,22 @@ impl ExchangeLlgProblem {
             match decision {
                 AdaptiveDecision::Retry(next) => dt = next,
                 AdaptiveDecision::DtMinExhausted => {
-                    return Err(crate::EngineError::new("dt_min_exhausted"));
+                    return Err(crate::EngineError::with_code(
+                        crate::EngineErrorCode::AdaptiveDtMinExhausted,
+                        "dt_min_exhausted",
+                    ));
                 }
-                AdaptiveDecision::NonFinite => {
-                    return Err(crate::EngineError::new("non_finite_adaptive_error"));
+                AdaptiveDecision::NonFinite(code) => {
+                    return Err(crate::EngineError::with_code(
+                        code,
+                        "non_finite_adaptive_error",
+                    ));
+                }
+                AdaptiveDecision::RetryLimitExhausted => {
+                    return Err(crate::EngineError::with_code(
+                        crate::EngineErrorCode::AdaptiveRetryLimitExhausted,
+                        "adaptive_retry_limit_exhausted",
+                    ));
                 }
                 AdaptiveDecision::Accepted(_) => unreachable!("accepted decision returned above"),
             }
@@ -2659,8 +2954,10 @@ impl ExchangeLlgProblem {
         bufs.soa.m0.copy_from(&state.magnetization);
 
         loop {
+            let mut rhs_evals = AttemptRhsCounter::default();
             self.effective_field_into_soa_ws_at_time(&bufs.soa.m0, ws, &mut bufs.soa.h_eff, t0);
             self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
+            rhs_evals.record();
 
             for i in 0..n {
                 let stage = normalized([
@@ -2679,6 +2976,7 @@ impl ExchangeLlgProblem {
                 t0 + 0.5 * dt,
             );
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
+            rhs_evals.record();
 
             for i in 0..n {
                 let stage = normalized([
@@ -2697,6 +2995,7 @@ impl ExchangeLlgProblem {
                 t0 + 0.75 * dt,
             );
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[2]);
+            rhs_evals.record();
 
             for i in 0..n {
                 let weighted_x = (2.0 / 9.0) * bufs.soa.k[0].x[i]
@@ -2725,6 +3024,7 @@ impl ExchangeLlgProblem {
                 t0 + dt,
             );
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[3]);
+            rhs_evals.record();
 
             let error = self.max_error_norm_soa_buf(
                 &[
@@ -2747,6 +3047,7 @@ impl ExchangeLlgProblem {
                     normalized_error,
                     state.adaptive_previous_error,
                     cfg,
+                    rhs_evals.finish(),
                     bufs,
                 )
             } else {
@@ -2772,10 +3073,22 @@ impl ExchangeLlgProblem {
             match decision {
                 AdaptiveDecision::Retry(next) => dt = next,
                 AdaptiveDecision::DtMinExhausted => {
-                    return Err(crate::EngineError::new("dt_min_exhausted"));
+                    return Err(crate::EngineError::with_code(
+                        crate::EngineErrorCode::AdaptiveDtMinExhausted,
+                        "dt_min_exhausted",
+                    ));
                 }
-                AdaptiveDecision::NonFinite => {
-                    return Err(crate::EngineError::new("non_finite_adaptive_error"));
+                AdaptiveDecision::NonFinite(code) => {
+                    return Err(crate::EngineError::with_code(
+                        code,
+                        "non_finite_adaptive_error",
+                    ));
+                }
+                AdaptiveDecision::RetryLimitExhausted => {
+                    return Err(crate::EngineError::with_code(
+                        crate::EngineErrorCode::AdaptiveRetryLimitExhausted,
+                        "adaptive_retry_limit_exhausted",
+                    ));
                 }
                 AdaptiveDecision::Accepted(_) => unreachable!("accepted decision returned above"),
             }
@@ -2835,12 +3148,14 @@ impl ExchangeLlgProblem {
         const E7: f64 = -1.0 / 40.0;
 
         loop {
+            let mut rhs_evals = AttemptRhsCounter::default();
             let reusable_fsal = (!dynamic_oersted).then(|| state.k_fsal.as_ref()).flatten();
             if let Some(fsal) = reusable_fsal {
                 bufs.soa.k[0].copy_from(&fsal);
             } else {
                 self.effective_field_into_soa_ws_at_time(&bufs.soa.m0, ws, &mut bufs.soa.h_eff, t0);
                 self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
+                rhs_evals.record();
             }
 
             for i in 0..n {
@@ -2860,6 +3175,7 @@ impl ExchangeLlgProblem {
                 t0 + (1.0 / 5.0) * dt,
             );
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
+            rhs_evals.record();
 
             for i in 0..n {
                 let stage = normalized([
@@ -2878,6 +3194,7 @@ impl ExchangeLlgProblem {
                 t0 + (3.0 / 10.0) * dt,
             );
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[2]);
+            rhs_evals.record();
 
             for i in 0..n {
                 let stage = normalized([
@@ -2905,6 +3222,7 @@ impl ExchangeLlgProblem {
                 t0 + (4.0 / 5.0) * dt,
             );
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[3]);
+            rhs_evals.record();
 
             for i in 0..n {
                 let stage = normalized([
@@ -2935,6 +3253,7 @@ impl ExchangeLlgProblem {
                 t0 + (8.0 / 9.0) * dt,
             );
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[4]);
+            rhs_evals.record();
 
             for i in 0..n {
                 let stage = normalized([
@@ -2968,6 +3287,7 @@ impl ExchangeLlgProblem {
                 t0 + dt,
             );
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[5]);
+            rhs_evals.record();
 
             for i in 0..n {
                 let stage = normalized([
@@ -3002,6 +3322,7 @@ impl ExchangeLlgProblem {
                 t0 + dt,
             );
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[6]);
+            rhs_evals.record();
 
             let error = self.max_error_norm_soa_buf(
                 &[(0, E1), (2, E3), (3, E4), (4, E5), (5, E6), (6, E7)],
@@ -3019,6 +3340,7 @@ impl ExchangeLlgProblem {
                     normalized_error,
                     state.adaptive_previous_error,
                     cfg,
+                    rhs_evals.finish(),
                     bufs,
                 )
             } else {
@@ -3051,10 +3373,22 @@ impl ExchangeLlgProblem {
             match decision {
                 AdaptiveDecision::Retry(next) => dt = next,
                 AdaptiveDecision::DtMinExhausted => {
-                    return Err(crate::EngineError::new("dt_min_exhausted"));
+                    return Err(crate::EngineError::with_code(
+                        crate::EngineErrorCode::AdaptiveDtMinExhausted,
+                        "dt_min_exhausted",
+                    ));
                 }
-                AdaptiveDecision::NonFinite => {
-                    return Err(crate::EngineError::new("non_finite_adaptive_error"));
+                AdaptiveDecision::NonFinite(code) => {
+                    return Err(crate::EngineError::with_code(
+                        code,
+                        "non_finite_adaptive_error",
+                    ));
+                }
+                AdaptiveDecision::RetryLimitExhausted => {
+                    return Err(crate::EngineError::with_code(
+                        crate::EngineErrorCode::AdaptiveRetryLimitExhausted,
+                        "adaptive_retry_limit_exhausted",
+                    ));
                 }
                 AdaptiveDecision::Accepted(_) => unreachable!("accepted decision returned above"),
             }
@@ -3448,7 +3782,8 @@ where
 {
     let n = magnetization.len();
     if terms.additional_field_apm.len() != n || terms.direct_torque_per_s.len() != n {
-        return Err(crate::EngineError::new(
+        return Err(crate::EngineError::with_code(
+            crate::EngineErrorCode::InvalidInput,
             "external stage fields and torques must match the FDM grid",
         ));
     }
@@ -3459,7 +3794,19 @@ where
         .flatten()
         .any(|value| !value.is_finite())
     {
-        return Err(crate::EngineError::new(
+        let code = if terms
+            .additional_field_apm
+            .iter()
+            .chain(&terms.direct_torque_per_s)
+            .flatten()
+            .any(|value| value.is_nan())
+        {
+            crate::EngineErrorCode::NaNValue
+        } else {
+            crate::EngineErrorCode::InfiniteValue
+        };
+        return Err(crate::EngineError::with_code(
+            code,
             "external stage fields and torques must be finite",
         ));
     }

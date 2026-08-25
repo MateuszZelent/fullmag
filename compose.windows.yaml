@@ -1,0 +1,78 @@
+services:
+  fullmag-windows-fem-gpu:
+    build:
+      context: .
+      dockerfile: docker/fem-gpu/Dockerfile
+      args:
+        FULLMAG_CUDA_BASE_IMAGE: ${FULLMAG_CUDA_BASE_IMAGE:-nvidia/cuda:12.6.3-devel-ubuntu22.04}
+        FULLMAG_CUDA_ARCHITECTURES: ${FULLMAG_CUDA_ARCHITECTURES:-80-real;89-real;90-real;90-virtual}
+        FULLMAG_HYPRE_GPU_ARCHITECTURES: "${FULLMAG_HYPRE_GPU_ARCHITECTURES:-60 70 80 89 90}"
+        FULLMAG_HYPRE_MEMORY_VARIANT: "${FULLMAG_HYPRE_MEMORY_VARIANT:-baseline}"
+    image: ${FULLMAG_WINDOWS_FEM_GPU_IMAGE:-fullmag/fem-gpu:windows-local}
+    working_dir: /workspace
+    # Docker Desktop's NVIDIA runtime injects GPU support; Windows/WSL runs explicit commands below.
+    # Do not depend on the base image's vendor entrypoint when the image store has a damaged script layer.
+    entrypoint: []
+    command: ["sleep", "infinity"]
+    volumes:
+      - type: bind
+        source: ${FULLMAG_WINDOWS_REPO:-.}
+        target: /workspace
+      - type: bind
+        source: ${FULLMAG_WINDOWS_STATE_ROOT:-D:/fullmag-cache/state}
+        target: /workspace/.fullmag
+      - type: bind
+        source: ${FULLMAG_WINDOWS_BUILD_ROOT:-D:/fullmag-build}
+        target: /workspace/.fullmag-build
+      - type: bind
+        source: ${FULLMAG_WINDOWS_CACHE_ROOT:-D:/fullmag-cache}
+        target: /workspace/.fullmag-cache
+      - type: bind
+        source: ${FULLMAG_WINDOWS_CARGO_HOME:-D:/fullmag-cache/cargo}
+        target: /workspace/.fullmag-cargo
+      - type: bind
+        source: ${FULLMAG_WINDOWS_RUSTUP_HOME:-D:/fullmag-cache/rustup}
+        target: /workspace/.fullmag-rustup
+      - type: bind
+        source: ${FULLMAG_WINDOWS_PNPM_ROOT:-D:/fullmag-cache/pnpm}
+        target: /pnpm
+      - type: bind
+        source: ${FULLMAG_WINDOWS_NODE_MODULES_ROOT:-D:/fullmag-cache/node-modules}
+        target: /workspace/node_modules
+      - type: bind
+        source: ${FULLMAG_WINDOWS_CONTROL_ROOM_NODE_MODULES_ROOT:-D:/fullmag-cache/control-room-node_modules}
+        target: /workspace/apps/control-room/node_modules
+      - type: bind
+        source: ${FULLMAG_WINDOWS_TEMP_ROOT:-D:/fullmag-tmp}
+        target: /tmp/fullmag-windows
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+      HOME: /root
+      CARGO_HOME: /workspace/.fullmag-cargo
+      RUSTUP_HOME: /workspace/.fullmag-rustup
+      CARGO_TARGET_ROOT: /workspace/.fullmag-build/cargo-targets
+      FULLMAG_CARGO_TARGET_ROOT: /workspace/.fullmag-build/cargo-targets
+      FULLMAG_PYTHON: /usr/bin/python3
+      FULLMAG_USE_MFEM_STACK: "ON"
+      FULLMAG_FEM_REQUIRE_GPU: "1"
+      FULLMAG_FEM_REQUIRE_CEED: "1"
+      FULLMAG_FEM_WITH_SLEPC: "ON"
+      FULLMAG_FEM_GPU_MIN_NODES: "0"
+      FULLMAG_FEM_MFEM_DEVICE: ceed-cuda:/gpu/cuda/shared
+      FULLMAG_CUDA_ARCHITECTURES: ${FULLMAG_CUDA_ARCHITECTURES:-80-real;89-real;90-real;90-virtual}
+      CMAKE_PREFIX_PATH: /opt/fullmag-deps
+      PKG_CONFIG_PATH: /opt/fullmag-deps/lib/pkgconfig:/opt/fullmag-deps/lib64/pkgconfig
+      LD_LIBRARY_PATH: /usr/local/cuda/lib64:/opt/fullmag-deps/lib
+      PATH: /usr/local/cuda/bin:/root/.cargo/bin:/pnpm:/opt/fullmag-deps/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      PNPM_HOME: /pnpm
+      npm_config_store_dir: /pnpm/store
+      COREPACK_HOME: /workspace/.fullmag-cache/corepack
+      CUDA_CACHE_PATH: /workspace/.fullmag-cache/cuda
+      PLAYWRIGHT_BROWSERS_PATH: /workspace/.fullmag-cache/playwright-browsers
+      PYTHONPYCACHEPREFIX: /workspace/.fullmag-cache/python-bytecode
+      TMPDIR: /tmp/fullmag-windows
+      TEMP: /tmp/fullmag-windows
+      TMP: /tmp/fullmag-windows
+    gpus: all
+    ports:
+      - "${FULLMAG_WINDOWS_WEB_PORT:-3100}:3100"

@@ -254,7 +254,26 @@
         "fem_gpu_public": "implemented"
       },
       "validated_workloads": [],
-      "notes": "The fail-closed registry key is capability ID + qualification ID + backend + device + precision + integrator + timestep policy. Promotion additionally requires an exact qualification artifact hash, clean managed-runtime source-input hash, validated scope, validation time, validator schema, and all prerequisite gates. Missing, stale, dirty, mismatched, or incomplete evidence resolves to unvalidated. Current entries remain unvalidated until fresh schema-v3 CPU/GPU/parity artifacts satisfy those bindings; FEM single precision cannot be promoted by this registry.",
+      "qualification_binding": {
+        "id": "source_bound_execution_receipt",
+        "fem_gpu_status": "implemented/unvalidated",
+        "artifact_schema": "fullmag.fem_gpu_execution_receipt.native_projection.v1",
+        "rust_projection": "FemGpuExecutionReceipt.v1",
+        "native_abi_version": 1,
+        "native_struct_size": 136,
+        "require_exact_fields": true,
+        "require_requested_resolved_executed": true,
+        "required_execution_class": "device_resident",
+        "require_complete_executed_device_mask": true,
+        "require_zero_fallback": true,
+        "require_attempt_counts": true,
+        "require_zero_strict_compute_transfers": true,
+        "require_accounting_valid": true,
+        "require_matching_source_snapshot_sha256": true,
+        "require_complete_operator_ids": true,
+        "hybrid_cpu_poisson_satisfies_strict": false
+      },
+    "notes": "The fail-closed registry key is capability ID + qualification ID + backend + device + precision + integrator + timestep policy. FDM CPU adaptive RK23/RK45 has bounded retry/failure telemetry, constant-field oracle evidence, exact RHS accounting and a bounded steady-state allocation/work-to-accuracy regression gate across AoS, buffer-SoA and persistent-SoA. SoA permits zero measured allocations; parallel AoS permits only the process-measured Rayon scheduler injection budget of at most one allocation per accepted step. The lane remains unvalidated until a clean hash-bound artifact covers the exact integrator and interaction tuple. FEM GPU source-bound qualification additionally requires the exact versioned artifact schema and Rust projection, native ABI-v1 handshake, requested/resolved/executed identity, accounting validity, attempt counts, executed-device evidence, complete operator IDs and matching CPU/GPU source snapshots; missing, hybrid, stale, malformed, unknown or incomplete receipt evidence fails closed. Promotion additionally requires an exact qualification artifact hash, clean managed-runtime source-input hash, validated scope, validation time, validator schema, and all prerequisite gates. Missing, stale, dirty, mismatched, or incomplete evidence resolves to unvalidated. Current entries remain unvalidated until fresh schema-v3 CPU/GPU/parity artifacts satisfy those bindings; FEM single precision cannot be promoted by this registry.",
       "validation_state": "unvalidated"
     },
     {

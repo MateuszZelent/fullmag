@@ -7,16 +7,66 @@ use crate::Vector3;
 
 // ── Error ──────────────────────────────────────────────────────────────
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EngineErrorCode {
+    Unspecified,
+    InvalidInput,
+    InvalidTimestep,
+    NaNValue,
+    InfiniteValue,
+    CapabilityUnavailable,
+    OutOfMemory,
+    SolverFailure,
+    NonConvergence,
+    Interrupted,
+    CoupledSolverFailure,
+    AdaptiveDtMinExhausted,
+    AdaptiveRetryLimitExhausted,
+}
+
+impl EngineErrorCode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unspecified => "unspecified",
+            Self::InvalidInput => "invalid_input",
+            Self::InvalidTimestep => "invalid_timestep",
+            Self::NaNValue => "nan_value",
+            Self::InfiniteValue => "infinite_value",
+            Self::CapabilityUnavailable => "capability_unavailable",
+            Self::OutOfMemory => "out_of_memory",
+            Self::SolverFailure => "solver_failure",
+            Self::NonConvergence => "non_convergence",
+            Self::Interrupted => "interrupted",
+            Self::CoupledSolverFailure => "coupled_solver_failure",
+            Self::AdaptiveDtMinExhausted => "adaptive_dt_min_exhausted",
+            Self::AdaptiveRetryLimitExhausted => "adaptive_retry_limit_exhausted",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EngineError {
+    code: EngineErrorCode,
     message: String,
 }
 
 impl EngineError {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
+            code: EngineErrorCode::Unspecified,
             message: message.into(),
         }
+    }
+
+    pub fn with_code(code: EngineErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+
+    pub const fn code(&self) -> EngineErrorCode {
+        self.code
     }
 }
 
@@ -29,6 +79,25 @@ impl fmt::Display for EngineError {
 impl Error for EngineError {}
 
 pub type Result<T> = std::result::Result<T, EngineError>;
+
+#[cfg(test)]
+mod engine_error_code_tests {
+    use super::EngineErrorCode;
+
+    #[test]
+    fn stable_reason_codes_cover_required_failure_classes() {
+        assert_eq!(EngineErrorCode::NaNValue.as_str(), "nan_value");
+        assert_eq!(EngineErrorCode::InfiniteValue.as_str(), "infinite_value");
+        assert_eq!(
+            EngineErrorCode::CapabilityUnavailable.as_str(),
+            "capability_unavailable"
+        );
+        assert_eq!(EngineErrorCode::OutOfMemory.as_str(), "out_of_memory");
+        assert_eq!(EngineErrorCode::SolverFailure.as_str(), "solver_failure");
+        assert_eq!(EngineErrorCode::NonConvergence.as_str(), "non_convergence");
+        assert_eq!(EngineErrorCode::Interrupted.as_str(), "interrupted");
+    }
+}
 
 /// Dynamic terms supplied by a coupled solver for one explicit integrator
 /// stage. Both arrays use the canonical FDM cell ordering.
