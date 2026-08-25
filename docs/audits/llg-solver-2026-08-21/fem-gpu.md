@@ -2,7 +2,7 @@
 
 **Repozytorium:** `MateuszZelent/fullmag`
 **Gałąź bazowa:** `master`
-**Audytowana rewizja źródeł:** [`b24750409fcf2bdb24364ecd7177bbe3ffe39e76`](https://github.com/MateuszZelent/fullmag/tree/b24750409fcf2bdb24364ecd7177bbe3ffe39e76)
+**Audytowana rewizja źródeł:** [`969efa0941905825ac569d525f4bdaefc059e2af`](https://github.com/MateuszZelent/fullmag/tree/969efa0941905825ac569d525f4bdaefc059e2af)
 **Data:** 2026-08-21
 **Metoda:** statyczny audyt kompletności device lane, host/device ownership, operatorów FEM, redukcji, integratora, fizyki i testów executed-device.
 
@@ -17,13 +17,13 @@ FEM GPU należy klasyfikować według faktycznego poziomu rezydencji: (1) etykie
 | Ustalenie | Stan i pewność | Implementacja (`ścieżka + symbol`) | Test/reproducer |
 |---|---|---|---|
 | Executed-device proof | fail-closed receipt i walidacja potwierdzone statycznie; kwalifikacja sprzętowa otwarta | `backends/fem/gpu/cuda/runtime/execution_receipt.cpp` — `gpu_execution_receipt_commit_attempt`; `crates/fullmag-runner/src/fem/execution_receipt.rs` — `validate_strict_fem_gpu_execution_receipt` | `backends/fem/tests/gpu_strict_execution_contract.cpp` plus managed GPU runtime receipt |
-| Device-resident integrator | częściowo potwierdzone, wysoka | `backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp` — `gpu_rk_device_resident_step`; `backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp` — `context_step_explicit_rk_mfem` | strict no-fallback dla Heun, RK4, RK23 i RK45 |
+| Device-resident integrator | częściowo potwierdzone, wysoka | `backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp` — `gpu_rk_plan_device_resident`; `backends/fem/gpu/cuda/integrators/rk/rk_step.cu` — `gpu_rk_device_resident_step`; `backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp` — `context_step_explicit_rk_mfem` | strict no-fallback dla Heun, RK4, RK23 i RK45 |
 | Trwałość danych FEM | potwierdzone struktury, wynik hot-loop otwarty | `backends/fem/gpu/cuda/state/gpu_state.cpp` — `gpu_state_initialize`; `backends/fem/include/context.hpp` — `Context` | `backends/fem/tests/gpu_state_runtime_contract.cpp` i profiler alokacji |
 | Partial assembly/matrix-free | zależne od operatora, średnia | `backends/fem/gpu/cuda/exchange/exchange_plan.cpp` — `gpu_exchange_plan_stage_exchange` | `backends/fem/examples/pa_benchmark.cpp` dla macierzy rozmiarów/operatorów |
 | Redukcje i transfery | potwierdzone liczniki, wynik runtime otwarty | `backends/fem/cpu/mfem/runtime/state_io.cpp` — `record_device_to_host`; `backends/fem/gpu/cuda/transfer/transfer_audit.hpp` — `TransferAuditRuntimeState` | `backends/fem/tests/transfer_audit.cpp` plus hardware strict-residency |
 | Lokalizacja preconditionera | jawna dla planów demag, średnia | `backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp` — `initialize_demag_poisson_hypre_device_solver`, `configure_demag_poisson_hypre_preconditioner` | telemetryka backendu i sweep preconditionera bez host fallbacku |
 | Single/mixed precision | single obecnie nieobsługiwane, wysoka | `crates/fullmag-runner/src/native_fem/tests/runtime_smoke.rs` — `native_fem_single_precision_rejection_is_gpu_specific` | najpierw zachować jawne odrzucenie; po przyszłej implementacji osobno parity i time-to-accuracy |
-| Stiffness explicit RK | luka pomiarowa, średnia | `backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp` — `gpu_rk_device_resident_step` | sweep `h_min` dla każdego wspieranego integratora |
+| Stiffness explicit RK | luka pomiarowa, średnia | `backends/fem/gpu/cuda/integrators/rk/rk_step.cu` — `gpu_rk_device_resident_step` | sweep `h_min` dla każdego wspieranego integratora |
 
 ### P0 — sprzętowy executed-device proof nadal blokuje deklarację produkcyjną
 
@@ -156,12 +156,29 @@ Produkcję dowodzi wyłącznie strict hardware runtime z device identity; termik
 (fem-gpu-python-api)=
 ### Python API
 
-Raport nie dodaje publicznego konstruktora. Minimalny wykonywalny znacznik lane:
+Raport nie dodaje publicznego konstruktora. Poniższy scenariusz stage-first przechodzi przez publiczny DSL; launcher może go załadować w trybie lightweight, aby wykonać lowering ProblemIR i planowanie FEM GPU bez uruchamiania długiego solve:
 
 ```python
 # %%
-audit_lane = "FEM GPU"
-assert audit_lane == "FEM GPU"
+import fullmag as fm
+
+nm = 1.0e-9
+study = fm.study("llg_audit_fem_gpu")
+study.engine("fem")
+study.device("gpu", precision="double")
+study.mode("strict")
+study.universe(mode="manual", size=(32 * nm, 32 * nm, 8 * nm))
+study.universe.mesh(maximum_element_size=16 * nm)
+magnet = study.geometry(fm.Box(size=(24 * nm, 24 * nm, 4 * nm), name="audit_fem_gpu"), name="audit_fem_gpu")
+magnet.Ms = 8.0e5
+magnet.Aex = 13.0e-12
+magnet.alpha = 0.1
+magnet.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+magnet.mesh(maximum_element_size=8 * nm, order=1)
+study.demag(realization="poisson_robin")
+study.fem_demag_solver(solver="CG", preconditioner="AMG", rtol=1.0e-8, max_iterations=20)
+study.build_domain_mesh()
+study.stages.add_relax(stage_id="audit", algorithm="projected_gradient_bb", tolT=5.0e-9, max_steps=1)
 ```
 
 (fem-gpu-problem-ir)=

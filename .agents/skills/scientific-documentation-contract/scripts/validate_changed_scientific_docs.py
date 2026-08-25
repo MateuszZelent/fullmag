@@ -9,10 +9,19 @@ import sys
 from pathlib import Path, PurePosixPath
 from types import ModuleType
 
-from validate_scientific_docs import validate_page
+from validate_scientific_docs import (
+    _safe_path,
+    _source_symbol_declarations,
+    validate_page,
+)
 
 
-SCIENTIFIC_ROOTS = ("docs/physics", "public_docs/site/physics")
+SCIENTIFIC_ROOTS = (
+    "docs/physics",
+    "public_docs/site/physics",
+    "public_docs/site/numerical-methods",
+)
+NUMERICAL_METHODS_ROOT = "public_docs/site/numerical-methods"
 EXEMPT_NAMES = {"README.md", "index.md"}
 EXEMPT_PATHS = {
     # Governance for authoring physics notes, not a physical/numerical model note.
@@ -52,6 +61,70 @@ def _manifest_for(page: str) -> str:
 
 def _page_for(manifest: str) -> str:
     return manifest.removesuffix(".source-map.json") + ".md"
+
+
+def _is_numerical_method_page(path: str) -> bool:
+    candidate = PurePosixPath(path)
+    return candidate.suffix == ".md" and candidate.is_relative_to(NUMERICAL_METHODS_ROOT)
+
+
+def _validate_numerical_method_manifest(
+    repo: Path, manifest_path: str, manifest: object
+) -> list[str]:
+    """Validate the lighter source contract used by numerical-method reference pages.
+
+    These pages are implementation references, not publication-style physics notes. They
+    still require a pinned revision and executable path+symbol evidence, but do not inherit
+    the physics-note equation and parameter-table contract.
+    """
+    errors: list[str] = []
+    if not isinstance(manifest, dict):
+        return ["manifest must be an object"]
+    document = manifest.get("document")
+    if not isinstance(document, dict):
+        return ["document must be an object"]
+    expected_page = _page_for(manifest_path)
+    if document.get("path") != expected_page:
+        errors.append(f"document.path must equal adjacent page {expected_page}")
+    reviewed_revision = document.get("reviewed_revision")
+    if not isinstance(reviewed_revision, str) or len(reviewed_revision) != 40:
+        errors.append("document.reviewed_revision must be a full 40-character commit")
+    elif _git(repo, "cat-file", "-e", reviewed_revision).returncode != 0:
+        errors.append(f"document.reviewed_revision is not present in the repository: {reviewed_revision}")
+
+    sources = manifest.get("sources")
+    if not isinstance(sources, list) or not sources:
+        errors.append("sources must be a non-empty list")
+        return errors
+    source_ids: set[str] = set()
+    for index, source in enumerate(sources):
+        label = f"sources[{index}]"
+        if not isinstance(source, dict):
+            errors.append(f"{label} must be an object")
+            continue
+        for field in ("id", "path", "symbol", "responsibility"):
+            if not isinstance(source.get(field), str) or not source[field].strip():
+                errors.append(f"{label}.{field} is required")
+        source_id = source.get("id")
+        if isinstance(source_id, str):
+            if source_id in source_ids:
+                errors.append(f"duplicate source id: {source_id}")
+            source_ids.add(source_id)
+        path = _safe_path(source.get("path"), f"{label}.path", errors)
+        symbol = source.get("symbol")
+        if path is None or not isinstance(symbol, str) or not symbol.strip():
+            continue
+        source_file = repo / path
+        if not source_file.is_file():
+            errors.append(f"{label} source path does not exist: {path}")
+            continue
+        source_text = source_file.read_text(encoding="utf-8", errors="replace")
+        declarations = _source_symbol_declarations(path, source_text, symbol)
+        if not declarations:
+            errors.append(f"{label} declaration not found in {path}: {symbol}")
+        elif len(declarations) != 1:
+            errors.append(f"{label} declaration is not unique in {path}: {symbol}")
+    return errors
 
 
 def _load_architecture_manifest(repo_root: Path) -> ModuleType | None:
@@ -205,7 +278,11 @@ def validate_changed(repo: Path, base: str, head: str) -> list[str]:
             )
         errors.extend(
             f"{manifest_path}: {error}"
-            for error in validate_page(repo, manifest)
+            for error in (
+                _validate_numerical_method_manifest(repo, manifest_path, manifest)
+                if _is_numerical_method_page(expected_page)
+                else validate_page(repo, manifest)
+            )
         )
     return errors
 

@@ -105,6 +105,7 @@ nm = 1.0e-9
 study = fm.study("fdm_boundary_correction")
 study.engine("fdm")
 study.device("cpu", precision="double")
+study.mode("strict")
 study.cell(5 * nm, 5 * nm, 10 * nm)
 
 # Select: "none", "volume", or "full".

@@ -2,7 +2,7 @@
 
 **Repozytorium:** `MateuszZelent/fullmag`
 **Gałąź bazowa:** `master`
-**Audytowana rewizja źródeł:** [`b24750409fcf2bdb24364ecd7177bbe3ffe39e76`](https://github.com/MateuszZelent/fullmag/tree/b24750409fcf2bdb24364ecd7177bbe3ffe39e76)
+**Audytowana rewizja źródeł:** [`969efa0941905825ac569d525f4bdaefc059e2af`](https://github.com/MateuszZelent/fullmag/tree/969efa0941905825ac569d525f4bdaefc059e2af)
 **Data:** 2026-08-21
 **Metoda:** audyt statyczny kontraktów FEM, assembly/apply, pól efektywnych, integratora i kosztu solverów pomocniczych. Wydajność wymaga profilu z MFEM/Hypre na reprezentatywnej siatce.
 
@@ -137,12 +137,29 @@ Wnioski statyczne dotyczą wskazanego entry pointu MFEM; koszt wymaga profilu ma
 (fem-cpu-python-api)=
 ### Python API
 
-Raport nie dodaje publicznego konstruktora. Minimalny wykonywalny znacznik lane:
+Raport nie dodaje publicznego konstruktora. Poniższy scenariusz stage-first przechodzi przez publiczny DSL; launcher może go załadować w trybie lightweight, aby wykonać lowering ProblemIR i planowanie FEM CPU bez uruchamiania długiego solve:
 
 ```python
 # %%
-audit_lane = "FEM CPU"
-assert audit_lane == "FEM CPU"
+import fullmag as fm
+
+nm = 1.0e-9
+study = fm.study("llg_audit_fem_cpu")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.universe(mode="manual", size=(32 * nm, 32 * nm, 8 * nm))
+study.universe.mesh(maximum_element_size=16 * nm)
+magnet = study.geometry(fm.Box(size=(24 * nm, 24 * nm, 4 * nm), name="audit_fem_cpu"), name="audit_fem_cpu")
+magnet.Ms = 8.0e5
+magnet.Aex = 13.0e-12
+magnet.alpha = 0.1
+magnet.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+magnet.mesh(maximum_element_size=8 * nm, order=1)
+study.demag(realization="poisson_robin")
+study.fem_demag_solver(solver="CG", preconditioner="AMG", rtol=1.0e-8, max_iterations=20)
+study.build_domain_mesh()
+study.stages.add_relax(stage_id="audit", algorithm="projected_gradient_bb", tolT=5.0e-9, max_steps=1)
 ```
 
 (fem-cpu-problem-ir)=

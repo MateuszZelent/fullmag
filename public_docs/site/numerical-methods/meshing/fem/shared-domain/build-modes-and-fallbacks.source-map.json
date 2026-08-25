@@ -1,0 +1,14 @@
+{
+  "document": {
+    "path": "public_docs/site/numerical-methods/meshing/fem/shared-domain/build-modes-and-fallbacks.md",
+    "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
+  },
+  "sources": [
+    {
+      "id": "fem_asset",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "realize_fem_mesh_asset",
+      "responsibility": "FEM mesh asset realization and fallback lifecycle."
+    }
+  ]
+}

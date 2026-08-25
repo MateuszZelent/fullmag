@@ -109,6 +109,7 @@ nm = 1.0e-9
 study = fm.study("fdm_two_magnet_stack")
 study.engine("fdm")
 study.device("cpu", precision="double")
+study.mode("strict")
 study.fdm(
     default_cell=(2 * nm, 2 * nm, 1 * nm),
     demag=fm.FDMDemag(

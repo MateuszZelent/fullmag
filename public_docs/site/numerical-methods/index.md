@@ -13,14 +13,12 @@ This family documents algorithms that operate on an already defined spatial disc
 time integration, relaxation, demagnetization solves, eigensolvers, frequency-domain response, and
 state transfer.
 
-Meshing is intentionally not a child of this page. It has its own backend branch under
-{doc}`meshing/index`, because geometry realization, topology, airbox construction, and quality
-governance form an independent subsystem.
+Meshing is intentionally owned by the Backend branch at {doc}`meshing/index`, because geometry
+realization, topology, airbox construction, and quality governance form an independent subsystem.
 
 ```{toctree}
 :maxdepth: 2
 
-meshing/index
 time-integration/index
 relaxation/index
 demag-solvers/index

@@ -1,0 +1,14 @@
+{
+  "document": {
+    "path": "public_docs/site/numerical-methods/meshing/fem/shared-domain/selectors-and-attributes.md",
+    "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
+  },
+  "sources": [
+    {
+      "id": "selectors",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_selectors.py",
+      "symbol": "resolve_entity_selectors",
+      "responsibility": "Semantic selector resolution and markers."
+    }
+  ]
+}

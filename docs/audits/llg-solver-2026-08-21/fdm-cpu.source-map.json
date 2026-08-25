@@ -1,8 +1,8 @@
 {
   "document": {
     "path": "docs/audits/llg-solver-2026-08-21/fdm-cpu.md",
-    "audited_source_revision": "b24750409fcf2bdb24364ecd7177bbe3ffe39e76",
-    "immutable_source_base_url": "https://github.com/MateuszZelent/fullmag/blob/b24750409fcf2bdb24364ecd7177bbe3ffe39e76/"
+    "audited_source_revision": "969efa0941905825ac569d525f4bdaefc059e2af",
+    "immutable_source_base_url": "https://github.com/MateuszZelent/fullmag/blob/969efa0941905825ac569d525f4bdaefc059e2af/"
   },
   "backend_matrix": [
     {
@@ -62,6 +62,18 @@
       "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs",
       "symbol": "max_error_norm_soa_buf",
       "responsibility": "Redukuje wektorowy błąd adaptacyjny do maksimum po aktywnych komórkach."
+    },
+    {
+      "id": "fdm-cpu-adaptive-max-aos",
+      "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs",
+      "symbol": "max_error_norm_buf",
+      "responsibility": "Redukuje błąd adaptacyjny w buforze AoS do maksimum po aktywnych komórkach."
+    },
+    {
+      "id": "fdm-cpu-fft-workspace",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs",
+      "symbol": "FftWorkspace",
+      "responsibility": "Utrzymuje trwałe bufory i plany FFT dla FDM CPU."
     },
     {
       "id": "fdm-cpu-rk23-live",

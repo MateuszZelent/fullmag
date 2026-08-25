@@ -1,0 +1,14 @@
+{
+  "document": {
+    "path": "public_docs/site/numerical-methods/meshing/fem/ferromagnet/mixed-elements.md",
+    "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
+  },
+  "sources": [
+    {
+      "id": "mixed_repair",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_repair_mixed_tetrahedra",
+      "responsibility": "Mixed-topology repair and quality handling."
+    }
+  ]
+}

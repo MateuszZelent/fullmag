@@ -2,7 +2,7 @@
 
 **Repozytorium:** `MateuszZelent/fullmag`
 **Gałąź bazowa:** `master`
-**Audytowana rewizja źródeł:** [`b24750409fcf2bdb24364ecd7177bbe3ffe39e76`](https://github.com/MateuszZelent/fullmag/tree/b24750409fcf2bdb24364ecd7177bbe3ffe39e76)
+**Audytowana rewizja źródeł:** [`969efa0941905825ac569d525f4bdaefc059e2af`](https://github.com/MateuszZelent/fullmag/tree/969efa0941905825ac569d525f4bdaefc059e2af)
 **Data:** 2026-08-21
 **Metoda:** audyt statyczny architektury, fizyki, numeryki, testów i hot path; zalecenia wydajnościowe wymagają potwierdzenia profilem na reprezentatywnym CPU.
 
@@ -121,12 +121,27 @@ Wnioski statyczne obowiązują dla kodu wskazanego w indeksie. Wydajność i ska
 (fdm-cpu-python-api)=
 ### Python API
 
-Raport nie dodaje publicznego konstruktora. Minimalny wykonywalny znacznik lane:
+Raport nie dodaje publicznego konstruktora. Poniższy scenariusz stage-first przechodzi przez publiczny DSL; launcher może go załadować w trybie lightweight, aby wykonać lowering ProblemIR i planowanie FDM CPU bez uruchamiania długiego solve:
 
 ```python
 # %%
-audit_lane = "FDM CPU"
-assert audit_lane == "FDM CPU"
+import fullmag as fm
+
+nm = 1.0e-9
+study = fm.study("llg_audit_fdm_cpu")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.universe(mode="manual", size=(32 * nm, 32 * nm, 8 * nm))
+study.cell(4 * nm, 4 * nm, 4 * nm)
+magnet = study.geometry(fm.Box(size=(24 * nm, 24 * nm, 4 * nm), name="audit_fdm_cpu"), name="audit_fdm_cpu")
+magnet.Ms = 8.0e5
+magnet.Aex = 13.0e-12
+magnet.alpha = 0.1
+magnet.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.exchange()
+study.demag()
+study.stages.add_relax(stage_id="audit", algorithm="llg_overdamped", dt=5.0e-13, tolA=1.0e-4, max_steps=1)
 ```
 
 (fdm-cpu-problem-ir)=
@@ -174,7 +189,8 @@ Audyt statyczny nie jest dowodem wydajności ani kwalifikacji sprzętowej.
 |---|---|---|---|---|---|---|
 | Live effective field | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `effective_field_into_soa_ws_at_time` | składa pole dla integratorów SoA | FDM CPU | call chain RK23/RK45 | dowód statyczny |
 | Live RHS LLG | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `llg_rhs_soa_into` | oblicza RHS z pola w trwałych buforach SoA | FDM CPU | wymagany constant-field oracle i profil alokatora | implementacja potwierdzona; test bezpośredni brak |
-| Maksymalna norma adaptacyjna | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `max_error_norm_soa_buf` | maksimum błędu po aktywnych komórkach | FDM CPU | brak testu z nierównymi, skończonymi błędami per-cell; test `direct_cpu_entry_points_propagate_injected_nonfinite_error_norm` nie wchodzi w redukcję | wyłącznie dowód statyczny |
+| Maksymalna norma adaptacyjna (AoS) | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `max_error_norm_buf` | maksimum błędu po aktywnych komórkach w buforze AoS | FDM CPU | brak testu z nierównymi, skończonymi błędami per-cell; test `direct_cpu_entry_points_propagate_injected_nonfinite_error_norm` nie wchodzi w redukcję | wyłącznie dowód statyczny |
+| Maksymalna norma adaptacyjna (SoA) | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `max_error_norm_soa_buf` | maksimum błędu po aktywnych komórkach w buforze SoA | FDM CPU | brak testu z nierównymi, skończonymi błędami per-cell; test `direct_cpu_entry_points_propagate_injected_nonfinite_error_norm` nie wchodzi w redukcję | wyłącznie dowód statyczny |
 | RK23 SoA | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `rk23_step_soa_state_buf` | live adaptacyjny krok RK23 | FDM CPU | profil steady-state | dowód statyczny |
 | RK45 SoA | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `rk45_step_soa_state_buf` | live adaptacyjny krok RK45 | FDM CPU | profil steady-state | dowód statyczny |
 | Exchange | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `exchange_field_add_into` | operator lokalny wyznaczający stiffness | FDM CPU | refinement `h_min` | hipoteza pomiarowa |

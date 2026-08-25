@@ -2,7 +2,7 @@
 
 **Repozytorium:** `MateuszZelent/fullmag`
 **Gałąź bazowa:** `master`
-**Audytowana rewizja źródeł:** [`b24750409fcf2bdb24364ecd7177bbe3ffe39e76`](https://github.com/MateuszZelent/fullmag/tree/b24750409fcf2bdb24364ecd7177bbe3ffe39e76)
+**Audytowana rewizja źródeł:** [`969efa0941905825ac569d525f4bdaefc059e2af`](https://github.com/MateuszZelent/fullmag/tree/969efa0941905825ac569d525f4bdaefc059e2af)
 **Data:** 2026-08-21
 **Metoda:** statyczny audyt ścieżki GPU, kontraktów planner/runtime, pamięci, synchronizacji, fizyki i numeryki. Rzeczywistą wydajność musi potwierdzić timeline na docelowym GPU.
 
@@ -163,12 +163,27 @@ Kwalifikacja GPU wymaga receipt z faktycznym urządzeniem; obecna publiczna term
 (fdm-gpu-python-api)=
 ### Python API
 
-Raport nie dodaje publicznego konstruktora. Minimalny wykonywalny znacznik lane:
+Raport nie dodaje publicznego konstruktora. Poniższy scenariusz stage-first przechodzi przez publiczny DSL; launcher może go załadować w trybie lightweight, aby wykonać lowering ProblemIR i planowanie FDM GPU bez uruchamiania długiego solve:
 
 ```python
 # %%
-audit_lane = "FDM GPU"
-assert audit_lane == "FDM GPU"
+import fullmag as fm
+
+nm = 1.0e-9
+study = fm.study("llg_audit_fdm_gpu")
+study.engine("fdm")
+study.device("gpu", precision="double")
+study.mode("strict")
+study.universe(mode="manual", size=(32 * nm, 32 * nm, 8 * nm))
+study.cell(4 * nm, 4 * nm, 4 * nm)
+magnet = study.geometry(fm.Box(size=(24 * nm, 24 * nm, 4 * nm), name="audit_fdm_gpu"), name="audit_fdm_gpu")
+magnet.Ms = 8.0e5
+magnet.Aex = 13.0e-12
+magnet.alpha = 0.1
+magnet.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.exchange()
+study.demag()
+study.stages.add_relax(stage_id="audit", algorithm="llg_overdamped", dt=5.0e-13, tolA=1.0e-4, max_steps=1)
 ```
 
 (fdm-gpu-problem-ir)=

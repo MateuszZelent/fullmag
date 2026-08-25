@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "public_docs/site/_extensions
 
 import public_docs_information_architecture_v2 as information_architecture
 import legacy_redirects
+from check_public_docs_information_architecture import _front_matter_status
 
 from public_docs_information_architecture_v2 import (
     INTERACTION_SLUGS,
@@ -167,6 +168,12 @@ class PublicDocumentationInformationArchitectureTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(check_pages((spec,), root), [])
+
+    def test_effective_status_normalizes_quoted_yaml_scalar(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "guide.md"
+            path.write_text('---\nstatus: "implemented"\n---\n', encoding="utf-8")
+            self.assertEqual(_front_matter_status(path), "implemented")
 
     def test_write_creates_missing_files_without_overwriting(self) -> None:
         spec = PageSpec(

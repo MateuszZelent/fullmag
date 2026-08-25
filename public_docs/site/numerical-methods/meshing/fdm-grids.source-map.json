@@ -42,8 +42,8 @@
     {"id": "fdm", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDM", "responsibility": "Default/per-magnet grids and boundary-correction request."},
     {"id": "demag_policy", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDMDemag", "responsibility": "Single-grid and multilayer common-grid policy."},
     {"id": "newell", "path": "crates/fullmag-fdm-demag/src/newell.rs", "symbol": "compute_newell_kernels", "responsibility": "Cell-geometry-dependent Newell demagnetization tensor."},
-    {"id": "fft", "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs", "symbol": "compute_newell_kernel_spectra; compute_periodic_newell_kernel_spectra", "responsibility": "Open/periodic tensor spectra and grid-dependent cache objects."},
-    {"id": "interaction_owned", "path": "public_docs/site/physics/interactions/index.md", "symbol": "interaction-specific terminal pages", "responsibility": "Exact local stencils and boundary equations are interaction-owned."}
+    {"id": "fft", "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs", "symbol": "FftWorkspace", "responsibility": "Open/periodic tensor spectra and grid-dependent cache objects."},
+    {"id": "interaction_owned", "path": "public_docs/site/physics/interactions/index.md", "symbol": "DOC-ANCHOR:public-docs-physics-interactions-root", "evidence_status": "planned_contract", "responsibility": "Exact local stencils and boundary equations are interaction-owned."}
   ],
   "public_api": {
     "parameters": [

@@ -1,8 +1,8 @@
 {
   "document": {
     "path": "docs/audits/llg-solver-2026-08-21/fdm-gpu.md",
-    "audited_source_revision": "b24750409fcf2bdb24364ecd7177bbe3ffe39e76",
-    "immutable_source_base_url": "https://github.com/MateuszZelent/fullmag/blob/b24750409fcf2bdb24364ecd7177bbe3ffe39e76/"
+    "audited_source_revision": "969efa0941905825ac569d525f4bdaefc059e2af",
+    "immutable_source_base_url": "https://github.com/MateuszZelent/fullmag/blob/969efa0941905825ac569d525f4bdaefc059e2af/"
   },
   "backend_matrix": [
     {
