@@ -86,9 +86,11 @@ not claim support for a general Lifshitz tensor, lower-symmetry crystals,
 surface-only DMI, or an independently authored DMI boundary operator.
 
 The FDM planner accepts explicit Bulk DMI only when all three FDM axes are
-periodic. Its local kernels have center-value substitution for inactive or
-missing non-periodic neighbors, but that closure is not presented as the
-natural exchange+DMI boundary. Multilayer FDM planning rejects Bulk DMI.
+periodic. On the CPU reference, the scalar energy is assembled from oriented
+active faces; for a fully active periodic grid this is algebraically equivalent
+to the centered curl reduction. CUDA retains its centered periodic kernel and
+requires a separate executed-device parity gate. Multilayer FDM planning
+rejects Bulk DMI.
 
 FEM uses a nodal vector field, quadrature weak residual, and lumped-mass field
 projection. Its element coefficient is the arithmetic mean of nodal
@@ -112,7 +114,7 @@ $$
 \end{bmatrix}_i.
 $$
 
-Thus
+Thus, on the interior,
 
 $$
 \mathbf H_{b,i}=-\frac{2D_b}{\mu_0M_{s,i}}
@@ -122,8 +124,11 @@ E_b=\sum_{i\in\mathcal A}
 D_b\,[\mathbf m_i\cdot(\nabla_h\times\mathbf m)_i]V_i.
 $$
 
-Periodic axes wrap. The FP64 and FP32 CUDA field/reduction paths use the same
-curl sign. Source presence is not executed-device qualification.
+Periodic axes wrap. The CPU reference uses the oriented active-face energy and
+the field obtained from its directional derivative, so an active-mask boundary
+does not silently become a zero-gradient DMI closure. The FP64 and FP32 CUDA
+field/reduction paths retain the centered periodic realization; source presence
+is not executed-device qualification.
 
 ### 4.2 FEM CPU and GPU
 

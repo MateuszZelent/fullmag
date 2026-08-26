@@ -157,9 +157,10 @@ not double-counting.
   it rejects other normals rather than silently rotating a stencil.
 - A missing `interface_normal` resolves to $(0,0,1)$ in FEM and is the only executable FDM
   orientation.
-- FDM is a cell-centered Cartesian approximation with centered differences and active-neighbor
-  clamping at non-periodic or inactive neighbors. The clamping is an implemented boundary closure,
-  not a general proof of the continuum natural boundary law.
+- FDM is a cell-centered Cartesian approximation. The CPU reference derives its boundary
+  contribution from oriented active-face energy and applies the resulting natural-boundary
+  correction at non-periodic or inactive neighbors. The CUDA lane retains its own centered
+  stencil contract until executed-device parity is qualified.
 - FEM uses the weak residual over magnetic elements, quadrature evaluation, and lumped-mass field
   projection. It is not the same discrete operator as the FDM stencil.
 - A material `Dind_field` is a FEM-resolved nodal coefficient field. Its length and finite values
@@ -169,7 +170,7 @@ not double-counting.
 
 | Solver | Device | Status | Realization and qualification boundary |
 |---|---|---|---|
-| FDM | CPU | reference | Double-precision centered finite differences, $+\hat{\mathbf z}$ stencil, active-neighbor clamping, and cell-volume energy. |
+| FDM | CPU | reference | Double-precision centered interior stencil plus oriented active-face energy, axis-aligned natural-boundary corrections, and cell-volume observables. |
 | FDM | GPU | implemented | FP64 and FP32 CUDA effective-field kernels plus FP64/FP32-compatible scalar reduction; executed-device parity remains a separate gate. |
 | FEM | CPU | implemented | MFEM element/quadrature weak residual, optional nodal `Dind_field`, lumped-mass projection, and energy accumulation. |
 | FEM | GPU | implemented | Device tetrahedral weak-residual kernel, device field buffers, and final DMI energy reduction; device execution and parity require runtime evidence. |
@@ -228,11 +229,12 @@ are planner/runtime errors; no CPU fallback is implied by a GPU source path.
 ### FDM CPU
 
 The CPU reference evaluates the $+\hat{\mathbf z}$ form at active cell $i$ with centered
-differences:
+differences in the interior. Its energy is defined on oriented active faces; for an x-face
+between active cells $L$ and $R$,
 
 ```{math}
 :label: eq-interfacial-dmi-fdm-field
-\mathbf H_{\mathrm i,i}
+\mathbf H_{\mathrm i,i}^{\mathrm{int}}
 =\frac{2D}{\mu_0M_{s,i}}
 \begin{bmatrix}
 \delta_xm_z\\
@@ -241,24 +243,30 @@ differences:
 \end{bmatrix}_i,
 \qquad
 E_{\mathrm i}^{\mathrm{FDM}}
-=\sum_{i\in\mathcal A}D
-\left[m_z(\delta_xm_x+\delta_ym_y)-m_x\delta_xm_z-m_y\delta_ym_z\right]_iV_i.
+=\sum_{f\in\mathcal F_x^{\mathrm{act}}}D S_x
+\left[\bar m_z\,\Delta_xm_x-\bar m_x\,\Delta_xm_z\right]_f
++\sum_{f\in\mathcal F_y^{\mathrm{act}}}D S_y
+\left[\bar m_z\,\Delta_ym_y-\bar m_y\,\Delta_ym_z\right]_f.
 ```
 
-Here $\delta_x$ and $\delta_y$ use $1/(2\Delta x)$ and $1/(2\Delta y)$. Periodic axes wrap
-neighbors. At an inactive or non-periodic missing neighbor, the implementation substitutes the
-center cell, making the corresponding centered difference zero. Inactive cells return zero field
-and do not contribute to energy. The allocating and in-place CPU paths share the same coefficient
-and stencil contract.
+Here $\delta_x$ and $\delta_y$ use $1/(2\Delta x)$ and $1/(2\Delta y)$, while
+$\Delta_a m=m_R-m_L$ and $S_a$ is the face area. Periodic axes wrap neighbors and contribute
+oriented periodic faces. An inactive or non-periodic missing neighbor contributes no face energy;
+the CPU field adds the analytic variation of that missing face so that the discrete field and
+energy satisfy the same directional derivative. This is the axis-aligned natural-boundary
+realization for allocating and in-place AoS and SoA paths. Inactive cells return zero field and do
+not contribute to energy.
 
 ### FDM GPU
 
-The FP64 and FP32 `combine_effective_field` kernels perform the same local centered-difference
+The FP64 and FP32 `combine_effective_field` kernels retain the local centered-difference
 calculation in the fused effective-field path. They compute neighbor indices from periodic flags,
-clamp inactive neighbors to the current cell, scale by $2/(\mu_0M_s)$, and add the result to the
-effective field. The CUDA reduction kernel independently evaluates the same density and multiplies
-by cell volume before block reduction. FP32 changes arithmetic precision, not the requested
-physical coefficient or stencil. A compiled kernel is not evidence of executed-device parity.
+clamp inactive neighbors to the current cell, and add the result to the effective field. The CUDA
+reduction kernel independently evaluates its centered density and multiplies by cell volume before
+block reduction. This CUDA closure is a separate qualification target; it must not be presented as
+the CPU face-energy natural-boundary realization. FP32 changes arithmetic precision, not the
+requested physical coefficient or CUDA stencil. A compiled kernel is not evidence of executed-device
+parity.
 
 ### FEM CPU
 
@@ -314,7 +322,7 @@ path-plus-symbol identity. The ownership split is:
 - `InterfacialDMI` and `Material` define public authoring and serialization;
 - `plan_fdm` rejects non-`+z` normals and resolves the scalar term;
 - `plan_fem` normalizes the normal, imports material coefficients, and resolves fields;
-- FDM CPU owns centered-difference field and energy;
+- FDM CPU owns the centered interior field, active-face energy, and natural-boundary correction;
 - FDM CUDA owns FP64/FP32 fused fields and reductions;
 - FEM CPU owns the MFEM weak residual, projection, and energy;
 - FEM CUDA owns device residual, field dispatch, and final energy reduction.
@@ -375,8 +383,8 @@ claims require device identity, executed kernels, and a documented tolerance.
 | FDM plan | `crates/fullmag-plan/src/fdm.rs` | `plan_fdm` | scalar term resolution and duplicate/unsupported checks | FDM |
 | FEM normal | `crates/fullmag-plan/src/fem.rs` | `resolve_interfacial_dmi_normal` | default and normalization of active normal | FEM |
 | FEM material fields | `crates/fullmag-plan/src/fem.rs` | `build_region_material_fields` | resolved `Dind_field` material realization | FEM |
-| FDM CPU field | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `interfacial_dmi_field` | allocating centered-difference field | FDM CPU |
-| FDM CPU energy | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `dmi_energy_from_soa` | cell-volume iDMI energy | FDM CPU |
+| FDM CPU field | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `interfacial_dmi_field` | allocating centered-interior field plus face-boundary correction | FDM CPU |
+| FDM CPU energy | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `dmi_energy_from_soa` | oriented active-face iDMI energy | FDM CPU |
 | FDM FP64 field | `backends/fdm/gpu/cuda/demag_fp64.cu` | `combine_effective_field_fp64_kernel` | fused FP64 iDMI field | FDM GPU |
 | FDM FP32 field | `backends/fdm/gpu/cuda/demag_fp32.cu` | `combine_effective_field_fp32_kernel` | fused FP32 iDMI field | FDM GPU |
 | FDM GPU energy | `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` | `dmi_energy_blocks_kernel` | FP64/FP32 templated scalar density reduction | FDM GPU |

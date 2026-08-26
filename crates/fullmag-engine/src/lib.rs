@@ -383,18 +383,44 @@ mod tests {
         }
     }
 
-    fn expected_native_centered_dmi_energy(
+    fn expected_face_dmi_energy(
         problem: &ExchangeLlgProblem,
         magnetization: &[Vector3],
     ) -> f64 {
         let grid = problem.grid;
-        let dx = problem.cell_size.dx;
-        let dy = problem.cell_size.dy;
-        let dz = problem.cell_size.dz;
-        let volume = problem.cell_size.volume();
         let bpx = matches!(problem.boundary_policy.x, AxisBoundary::Periodic);
         let bpy = matches!(problem.boundary_policy.y, AxisBoundary::Periodic);
         let bpz = matches!(problem.boundary_policy.z, AxisBoundary::Periodic);
+        let sx = problem.cell_size.dy * problem.cell_size.dz;
+        let sy = problem.cell_size.dx * problem.cell_size.dz;
+        let sz = problem.cell_size.dx * problem.cell_size.dy;
+        let interfacial = problem.terms.interfacial_dmi.unwrap_or(0.0);
+        let bulk = problem.terms.bulk_dmi.unwrap_or(0.0);
+        let face_energy = |left: Vector3, right: Vector3, axis: usize, surface: f64| {
+            let average = [
+                0.5 * (left[0] + right[0]),
+                0.5 * (left[1] + right[1]),
+                0.5 * (left[2] + right[2]),
+            ];
+            let jump = [
+                right[0] - left[0],
+                right[1] - left[1],
+                right[2] - left[2],
+            ];
+            let density_integral = match axis {
+                0 => {
+                    interfacial * (average[2] * jump[0] - average[0] * jump[2])
+                        + bulk * (average[2] * jump[1] - average[1] * jump[2])
+                }
+                1 => {
+                    interfacial * (average[2] * jump[1] - average[1] * jump[2])
+                        + bulk * (average[0] * jump[2] - average[2] * jump[0])
+                }
+                2 => bulk * (average[1] * jump[0] - average[0] * jump[1]),
+                _ => unreachable!("DMI face axis must be x, y, or z"),
+            };
+            surface * density_integral
+        };
 
         let mut energy = 0.0;
         for flat in 0..grid.cell_count() {
@@ -404,40 +430,22 @@ mod tests {
             let x = flat % grid.nx;
             let y = (flat / grid.nx) % grid.ny;
             let z = flat / (grid.nx * grid.ny);
-            let sample = |neighbor: usize| {
+            if bpx || x + 1 < grid.nx {
+                let neighbor = grid.index(neighbor_index(x, grid.nx, 1, bpx), y, z);
                 if problem.is_active(neighbor) {
-                    neighbor
-                } else {
-                    flat
-                }
-            };
-            let xp = sample(grid.index(neighbor_index(x, grid.nx, 1, bpx), y, z));
-            let xm = sample(grid.index(neighbor_index(x, grid.nx, -1, bpx), y, z));
-            let yp = sample(grid.index(x, neighbor_index(y, grid.ny, 1, bpy), z));
-            let ym = sample(grid.index(x, neighbor_index(y, grid.ny, -1, bpy), z));
-            let zp = sample(grid.index(x, y, neighbor_index(z, grid.nz, 1, bpz)));
-            let zm = sample(grid.index(x, y, neighbor_index(z, grid.nz, -1, bpz)));
-
-            let m = magnetization[flat];
-            if let Some(d) = problem.terms.interfacial_dmi {
-                if d.abs() > 0.0 {
-                    let dmx_dx = (magnetization[xp][0] - magnetization[xm][0]) / (2.0 * dx);
-                    let dmy_dy = (magnetization[yp][1] - magnetization[ym][1]) / (2.0 * dy);
-                    let dmz_dx = (magnetization[xp][2] - magnetization[xm][2]) / (2.0 * dx);
-                    let dmz_dy = (magnetization[yp][2] - magnetization[ym][2]) / (2.0 * dy);
-                    energy +=
-                        volume * d * (m[2] * (dmx_dx + dmy_dy) - m[0] * dmz_dx - m[1] * dmz_dy);
+                    energy += face_energy(magnetization[flat], magnetization[neighbor], 0, sx);
                 }
             }
-            if let Some(d) = problem.terms.bulk_dmi {
-                if d.abs() > 0.0 {
-                    let curl_x = (magnetization[yp][2] - magnetization[ym][2]) / (2.0 * dy)
-                        - (magnetization[zp][1] - magnetization[zm][1]) / (2.0 * dz);
-                    let curl_y = (magnetization[zp][0] - magnetization[zm][0]) / (2.0 * dz)
-                        - (magnetization[xp][2] - magnetization[xm][2]) / (2.0 * dx);
-                    let curl_z = (magnetization[xp][1] - magnetization[xm][1]) / (2.0 * dx)
-                        - (magnetization[yp][0] - magnetization[ym][0]) / (2.0 * dy);
-                    energy += volume * d * (m[0] * curl_x + m[1] * curl_y + m[2] * curl_z);
+            if bpy || y + 1 < grid.ny {
+                let neighbor = grid.index(x, neighbor_index(y, grid.ny, 1, bpy), z);
+                if problem.is_active(neighbor) {
+                    energy += face_energy(magnetization[flat], magnetization[neighbor], 1, sy);
+                }
+            }
+            if bpz || z + 1 < grid.nz {
+                let neighbor = grid.index(x, y, neighbor_index(z, grid.nz, 1, bpz));
+                if problem.is_active(neighbor) {
+                    energy += face_energy(magnetization[flat], magnetization[neighbor], 2, sz);
                 }
             }
         }
@@ -690,7 +698,7 @@ mod tests {
     }
 
     #[test]
-    fn dmi_scalar_energy_matches_native_centered_density_contract() {
+    fn dmi_scalar_energy_matches_face_energy_contract() {
         let grid = GridShape::new(3, 3, 3).expect("valid grid");
         let problem = ExchangeLlgProblem::with_terms_and_mask(
             grid,
@@ -732,7 +740,7 @@ mod tests {
         let state = problem
             .new_state(raw_magnetization)
             .expect("state should build");
-        let expected = expected_native_centered_dmi_energy(&problem, state.magnetization());
+        let expected = expected_face_dmi_energy(&problem, state.magnetization());
         assert!(expected.abs() > 1e-12);
 
         let mut report_ws = problem.create_workspace();
@@ -754,7 +762,7 @@ mod tests {
 
         assert!(
             (report.dmi_energy_joules - expected).abs() <= 1e-12,
-            "StepReport DMI energy differs from native centered density: {} vs {expected}",
+            "StepReport DMI energy differs from face-energy oracle: {} vs {expected}",
             report.dmi_energy_joules
         );
         assert!(
@@ -770,6 +778,104 @@ mod tests {
             (soa_energy - expected).abs() <= 1e-12,
             "SoA total energy differs from DMI expected energy: {soa_energy} vs {expected}"
         );
+    }
+
+    #[test]
+    fn fdm_dmi_face_energy_matches_field_directional_derivative_on_open_and_mask_boundaries() {
+        let grid = GridShape::new(3, 2, 2).expect("valid grid");
+        let masks = [
+            None,
+            Some(
+                (0..grid.cell_count())
+                    .map(|flat| flat % grid.nx != 1 || flat / grid.nx != 0)
+                    .collect::<Vec<_>>(),
+            ),
+        ];
+        let dmi_values = [
+            (0.7 * MU0, 0.0),
+            (-0.7 * MU0, 0.0),
+            (0.0, 0.9 * MU0),
+            (0.0, -0.9 * MU0),
+        ];
+
+        for mask in masks {
+            for (interfacial_dmi, bulk_dmi) in dmi_values {
+                let problem = ExchangeLlgProblem::with_terms_and_mask(
+                    grid,
+                    CellSize::new(1.0, 1.5, 0.75).expect("valid cell size"),
+                    MaterialParameters::new(2.0, 0.8 * MU0, 0.2).expect("valid material"),
+                    LlgConfig::new(1.0, TimeIntegrator::Heun).expect("valid llg config"),
+                    EffectiveFieldTerms {
+                        exchange: false,
+                        demag: false,
+                        interfacial_dmi: Some(interfacial_dmi),
+                        bulk_dmi: Some(bulk_dmi),
+                        ..Default::default()
+                    },
+                    mask.clone(),
+                )
+                .expect("DMI problem should build");
+                let magnetization = (0..grid.cell_count())
+                    .map(|flat| {
+                        let x = flat % grid.nx;
+                        let y = (flat / grid.nx) % grid.ny;
+                        let z = flat / (grid.nx * grid.ny);
+                        [
+                            0.3 + 0.11 * x as f64 - 0.07 * z as f64,
+                            -0.2 + 0.13 * y as f64 + 0.05 * z as f64,
+                            0.4 - 0.09 * x as f64 + 0.08 * y as f64,
+                        ]
+                    })
+                    .collect::<Vec<_>>();
+                let variation = (0..grid.cell_count())
+                    .map(|flat| {
+                        let active = mask.as_ref().is_none_or(|mask| mask[flat]);
+                        if !active {
+                            return [0.0, 0.0, 0.0];
+                        }
+                        let x = flat % grid.nx;
+                        let y = (flat / grid.nx) % grid.ny;
+                        [
+                            0.17 - 0.03 * x as f64,
+                            -0.11 + 0.02 * y as f64,
+                            0.07 + 0.05 * (flat / (grid.nx * grid.ny)) as f64,
+                        ]
+                    })
+                    .collect::<Vec<_>>();
+                let interfacial_field = problem.interfacial_dmi_field(&magnetization);
+                let bulk_field = problem.bulk_dmi_field(&magnetization);
+                let predicted = -problem.material.saturation_magnetisation
+                    * MU0
+                    * problem.cell_size.volume()
+                    * interfacial_field
+                        .iter()
+                        .zip(&bulk_field)
+                        .zip(&variation)
+                        .map(|((interfacial, bulk), variation)| {
+                            dot(add(*interfacial, *bulk), *variation)
+                        })
+                        .sum::<f64>();
+                let epsilon = 1.0e-7;
+                let plus = magnetization
+                    .iter()
+                    .zip(&variation)
+                    .map(|(m, variation)| add(*m, scale(*variation, epsilon)))
+                    .collect::<Vec<_>>();
+                let minus = magnetization
+                    .iter()
+                    .zip(&variation)
+                    .map(|(m, variation)| add(*m, scale(*variation, -epsilon)))
+                    .collect::<Vec<_>>();
+                let finite_difference = (problem.dmi_energy_from_vectors(&plus)
+                    - problem.dmi_energy_from_vectors(&minus))
+                    / (2.0 * epsilon);
+                let tolerance = 1.0e-9_f64.max(predicted.abs() * 1.0e-8);
+                assert!(
+                    (finite_difference - predicted).abs() <= tolerance,
+                    "DMI directional derivative mismatch: finite_difference={finite_difference:.16e}, predicted={predicted:.16e}, tolerance={tolerance:.3e}"
+                );
+            }
+        }
     }
 
     #[test]
