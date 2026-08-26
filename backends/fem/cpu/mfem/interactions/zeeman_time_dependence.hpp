@@ -7,6 +7,12 @@
 
 namespace fullmag::fem {
 
+/*
+ * Zeeman time-dependence value owner. This module owns descriptor copying and
+ * stage-time evaluation. It does not own regional target selection, field
+ * projection, or effective-field composition.
+ */
+
 struct OwnedTimeDependence {
     uint32_t kind = FULLMAG_FEM_TIME_CONSTANT;
     fullmag_fem_time_dependence_parameters parameters{};

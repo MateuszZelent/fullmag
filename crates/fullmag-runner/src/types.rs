@@ -3468,6 +3468,12 @@ pub struct FdmCpuStateLayoutProvenance {
     pub executed: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rejection_reason: Option<String>,
+    /// Projected-RK state constraint resolved for the same CPU execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection_policy: Option<String>,
+    /// Stable implementation identity of the projected-RK constraint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection_realization: Option<String>,
 }
 
 impl FdmCpuStateLayoutProvenance {
@@ -3489,6 +3495,8 @@ impl FdmCpuStateLayoutProvenance {
             resolved: resolved.to_string(),
             executed: resolved.to_string(),
             rejection_reason,
+            projection_policy: None,
+            projection_realization: None,
         }
     }
 }
@@ -4428,6 +4436,8 @@ mod tests {
                 resolved: "aos_xyz".to_string(),
                 executed: "aos_xyz".to_string(),
                 rejection_reason: Some("spatial_damping".to_string()),
+                projection_policy: None,
+                projection_realization: None,
             }),
             ..ExecutionProvenance::default()
         };

@@ -1472,6 +1472,14 @@ def _fdm_from_overrides(
     else:
         demag = base.demag if isinstance(base, FDM) else None
 
+    projection_policy = (
+        raw.get("projection_policy")
+        if "projection_policy" in raw
+        else base.projection_policy if isinstance(base, FDM) else None
+    )
+    if projection_policy is not None and not isinstance(projection_policy, str):
+        raise ValueError("fdm.projection_policy must be a string or null")
+
     boundary_correction = (
         raw.get("boundary_correction")
         if "boundary_correction" in raw
@@ -1495,6 +1503,7 @@ def _fdm_from_overrides(
         default_cell=default_cell,
         per_magnet=per_magnet,
         demag=demag,
+        projection_policy=projection_policy,
         boundary_correction=boundary_correction,
         boundary_phi_floor=boundary_phi_floor,
         boundary_delta_min=boundary_delta_min,
@@ -1519,6 +1528,7 @@ def _uses_canonical_fdm_mesh_authoring(fdm: FDM) -> bool:
         and fdm.boundary_correction in (None, "none")
         and fdm.boundary_phi_floor is None
         and fdm.boundary_delta_min is None
+        and fdm.projection_policy is None
         and (
             demag is None
             or (
@@ -1665,6 +1675,7 @@ def _render_runtime(
             fdm.demag is not None
             or fdm.boundary_phi_floor is not None
             or fdm.boundary_delta_min is not None
+            or fdm.projection_policy is not None
         )
         if canonical_mesh_authoring:
             pass
@@ -1695,6 +1706,10 @@ def _render_runtime(
                         f"common_cell_size={fdm.demag.common_cell_size!r}"
                     )
                 fdm_kwargs.append(f"demag=fm.FDMDemag({', '.join(demag_kwargs)})")
+            if fdm.projection_policy is not None:
+                fdm_kwargs.append(
+                    f"projection_policy={_py_repr(fdm.projection_policy)}"
+                )
             if fdm.boundary_correction is not None:
                 fdm_kwargs.append(
                     f"boundary_correction={_py_repr(fdm.boundary_correction)}"
@@ -7988,6 +8003,7 @@ def _export_fdm(problem: Problem) -> dict[str, object] | None:
         "boundary_correction": fdm.boundary_correction,
         "boundary_phi_floor": fdm.boundary_phi_floor,
         "boundary_delta_min": fdm.boundary_delta_min,
+        "projection_policy": fdm.projection_policy,
     }
     if fdm.demag is not None:
         payload["demag"] = {

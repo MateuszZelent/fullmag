@@ -11,6 +11,12 @@ namespace fullmag::fem {
 struct Context;
 
 /*
+ * Prescribed-SOT interaction owner. This module owns SOT plan state,
+ * envelope evaluation, target masks, and the explicit RHS contribution. It
+ * does not own spin/charge transport, Context construction, or RK lifecycle.
+ */
+
+/*
  * Runtime owner for the local prescribed-SOT source.
  *
  * The state is intentionally separate from solved SHE/spin transport. It

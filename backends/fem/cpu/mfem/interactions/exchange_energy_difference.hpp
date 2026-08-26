@@ -11,6 +11,13 @@ namespace fullmag::fem {
 struct Context;
 
 /*
+ * Exchange energy-difference owner for the CPU/MFEM relaxation path.
+ * This module owns the quadratic exchange increment from an already applied
+ * symmetric form. It does not own exchange assembly, field projection, GPU
+ * exchange buffers, or relaxation transaction lifecycle.
+ */
+
+/*
  * Accumulate (trial - base)^T K_A (trial + base) from an already applied
  * symmetric exchange form. The arguments contain one scalar component.
  */

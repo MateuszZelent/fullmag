@@ -196,10 +196,11 @@ void invalid_scalar_inputs_fail_closed() {
     }
 }
 
-fullmag::fem::Context make_context();
+void configure_context(fullmag::fem::Context &ctx);
 
 void invalid_runtime_decision_does_not_mutate_controller_state() {
-    auto ctx = make_context();
+    fullmag::fem::Context ctx;
+    configure_context(ctx);
     ctx.adaptive_dt.prev_error_norm = 0.25;
     ctx.adaptive_dt.has_prev_error_norm = true;
     ctx.adaptive_dt.rejected_steps = 7;
@@ -219,7 +220,8 @@ void inactive_nonfinite_previous_error_fails_without_mutation() {
              std::numeric_limits<double>::quiet_NaN(),
              std::numeric_limits<double>::infinity(),
          }) {
-        auto ctx = make_context();
+        fullmag::fem::Context ctx;
+        configure_context(ctx);
         ctx.adaptive_dt.prev_error_norm = previous;
         ctx.adaptive_dt.has_prev_error_norm = false;
         ctx.adaptive_dt.rejected_steps = 9;
@@ -441,8 +443,7 @@ void adaptive_dt_controller_is_owned_by_integrator_module() {
     }
 }
 
-fullmag::fem::Context make_context() {
-    fullmag::fem::Context ctx;
+void configure_context(fullmag::fem::Context &ctx) {
     ctx.adaptive_dt.enabled = true;
     ctx.base_plan.dt_seconds = 1.0e-12;
     ctx.adaptive_dt.dt_min = 1.0e-15;
@@ -451,11 +452,11 @@ fullmag::fem::Context make_context() {
     ctx.adaptive_dt.dt_grow_max = 3.0;
     ctx.adaptive_dt.dt_shrink_min = 0.2;
     ctx.adaptive_dt.prev_error_norm = 1.0;
-    return ctx;
 }
 
 void disabled_or_nonpositive_error_keeps_current_dt() {
-    auto ctx = make_context();
+    fullmag::fem::Context ctx;
+    configure_context(ctx);
     ctx.adaptive_dt.enabled = false;
     const auto disabled = fullmag::fem::adaptive_pi_step(ctx, 1.0e-12, 0.5, 4);
     check(disabled.kind == fullmag::fem::adaptive::AdaptiveDecisionKind::accepted, "disabled adaptive step is accepted");
@@ -472,7 +473,8 @@ void disabled_or_nonpositive_error_keeps_current_dt() {
 }
 
 void accepted_error_grows_dt_and_updates_previous_error() {
-    auto ctx = make_context();
+    fullmag::fem::Context ctx;
+    configure_context(ctx);
     ctx.adaptive_dt.safety_factor = 0.9;
     ctx.adaptive_dt.prev_error_norm = 0.5;
     ctx.adaptive_dt.has_prev_error_norm = true;
@@ -485,7 +487,8 @@ void accepted_error_grows_dt_and_updates_previous_error() {
 }
 
 void runtime_adapter_uses_attempted_dt_not_stale_plan_dt() {
-    auto ctx = make_context();
+    fullmag::fem::Context ctx;
+    configure_context(ctx);
     ctx.base_plan.dt_seconds = 9.0e-12;
     ctx.adaptive_dt.prev_error_norm = 0.5;
     ctx.adaptive_dt.has_prev_error_norm = true;
@@ -498,7 +501,8 @@ void runtime_adapter_uses_attempted_dt_not_stale_plan_dt() {
 }
 
 void rejected_error_shrinks_dt_and_counts_rejection() {
-    auto ctx = make_context();
+    fullmag::fem::Context ctx;
+    configure_context(ctx);
     ctx.adaptive_dt.prev_error_norm = 0.75;
     ctx.adaptive_dt.safety_factor = 0.9;
     const auto result = fullmag::fem::adaptive_pi_step(ctx, 1.0e-12, 4.0, 4);

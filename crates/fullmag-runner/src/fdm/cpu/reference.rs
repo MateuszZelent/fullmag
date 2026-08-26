@@ -8,14 +8,14 @@ use fullmag_engine::{
     AdaptiveStepConfig, AxisBoundary, CellSize, CubicAnisotropyConfig, EffectiveFieldTerms,
     EngineError, EngineErrorCode, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState,
     ExchangeLlgStateSoA, ExternalStageTerms, FdmBoundaryPolicy, FftWorkspace, GridShape,
-    IntegratorBuffers, LlgConfig, MagnetoelasticTermConfig, MaterialParameters,
+    IntegratorBuffers, LlgConfig, MagnetoelasticTermConfig, MaterialParameters, ProjectionPolicy,
     OerstedCylinderConfig, RegionalFieldDriveTerm, ResolvedFdmPeriodicWorkspace,
     SlonczewskiSttConfig, SotConfig, SotFormula, StepReport, TimeIntegrator,
     UniaxialAnisotropyConfig, Vector3, ZhangLiFormula, ZhangLiSttConfig,
 };
 use fullmag_ir::{
-    AdaptiveTimeStepIR, ExecutionPrecision, FdmPlanIR, IntegratorChoice, OutputIR,
-    RelaxationAlgorithmIR, RelaxationControlIR, StageCompletionIR,
+    AdaptiveTimeStepIR, ExecutionPrecision, FdmPlanIR, FdmProjectionPolicyIR, IntegratorChoice,
+    OutputIR, RelaxationAlgorithmIR, RelaxationControlIR, StageCompletionIR,
 };
 
 use super::spin_transport::{
@@ -713,6 +713,16 @@ fn materialize_reference_problem(
         })
 }
 
+fn resolved_projection_policy(plan: &FdmPlanIR) -> FdmProjectionPolicyIR {
+    plan.projection_policy.unwrap_or_default()
+}
+
+fn engine_projection_policy(policy: FdmProjectionPolicyIR) -> ProjectionPolicy {
+    match policy {
+        FdmProjectionPolicyIR::UnitSphere => ProjectionPolicy::UnitSphere,
+    }
+}
+
 fn build_reference_problem(plan: &FdmPlanIR) -> Result<ExchangeLlgProblem, RunError> {
     validate_single_grid_budget(plan)?;
     let grid = GridShape::new(
@@ -742,11 +752,13 @@ fn build_reference_problem(plan: &FdmPlanIR) -> Result<ExchangeLlgProblem, RunEr
         IntegratorChoice::Rk45 => TimeIntegrator::RK45,
         IntegratorChoice::Abm3 => TimeIntegrator::ABM3,
     };
+    let projection_policy = engine_projection_policy(resolved_projection_policy(plan));
     let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
     let mut dynamics = LlgConfig::new(plan.gyromagnetic_ratio, integrator)
         .map_err(|e| RunError {
             message: format!("LLG: {}", e),
         })?
+        .with_projection_policy(projection_policy)
         .with_precession_enabled(!pure_damping_relax);
     if let Some(adaptive) = plan.adaptive_timestep.as_ref() {
         dynamics = dynamics.with_adaptive(AdaptiveStepConfig {
@@ -1268,11 +1280,15 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         ..Default::default()
     };
     let use_soa_state = spin_transport.is_none() && problem.soa_fast_path_supported();
-    provenance.fdm_cpu_state_layout = Some(FdmCpuStateLayoutProvenance::from_problem(
+    let projection_policy = resolved_projection_policy(plan);
+    let mut state_layout = FdmCpuStateLayoutProvenance::from_problem(
         &problem,
         use_soa_state,
         spin_transport.is_some().then_some("coupled_spin_transport"),
-    ));
+    );
+    state_layout.projection_policy = Some(projection_policy.as_str().to_string());
+    state_layout.projection_realization = Some(projection_policy.realization_version().to_string());
+    provenance.fdm_cpu_state_layout = Some(state_layout);
     apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
     if is_direct_minimization && problem.soa_fast_path_supported() {
         provenance.energy_minimizer_realization =
@@ -3245,7 +3261,8 @@ mod tests {
     use fullmag_ir::{
         AdaptiveTimeStepIR, AdaptiveToleranceModeIR, AxisBoundary as IrAxisBoundary,
         DriveActivationIR, ExchangeBoundaryCondition, ExecutionPrecision, FdmDemagPeriodicityIR,
-        FdmMaterialIR, FdmPeriodicityIR, FieldDriveKindIR, FieldSpatialProfileIR, FieldTargetIR,
+        FdmMaterialIR, FdmPeriodicityIR, FdmProjectionPolicyIR, FieldDriveKindIR,
+        FieldSpatialProfileIR, FieldTargetIR,
         FieldTimeOriginIR, GridDimensions, IntegratorChoice, RegionalFieldDriveIR, RelaxStopIR,
         RelaxationAlgorithmIR, RelaxationControlIR, ResolvedFrozenSpinsPlanIR,
         ResolvedRegionalFieldDriveBasisIR, SelectionAuthoredFingerprintIR, SelectionCertificateIR,
@@ -3396,6 +3413,30 @@ mod tests {
         assert!(adaptive_problem.dynamics.adaptive_enabled);
         assert_eq!(adaptive_problem.dynamics.adaptive.dt_min, 1e-16);
         assert_eq!(adaptive_problem.dynamics.adaptive.dt_max, 1e-14);
+    }
+
+    #[test]
+    fn reference_runner_executes_and_provenances_resolved_projection_policy() {
+        let mut plan = make_test_plan();
+        plan.projection_policy = Some(FdmProjectionPolicyIR::UnitSphere);
+
+        let problem = build_reference_problem(&plan).expect("reference problem");
+        assert_eq!(
+            problem.dynamics.projection_policy,
+            fullmag_engine::ProjectionPolicy::UnitSphere
+        );
+
+        let executed = execute_reference_fdm(&plan, 3e-14, &[], None, None)
+            .expect("projected-RK reference run");
+        let layout = executed
+            .provenance
+            .fdm_cpu_state_layout
+            .expect("CPU FDM layout provenance");
+        assert_eq!(layout.projection_policy.as_deref(), Some("unit_sphere"));
+        assert_eq!(
+            layout.projection_realization.as_deref(),
+            Some(FdmProjectionPolicyIR::UNIT_SPHERE_REALIZATION_VERSION)
+        );
     }
 
     #[test]

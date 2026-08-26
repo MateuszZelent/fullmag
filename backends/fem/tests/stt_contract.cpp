@@ -466,8 +466,7 @@ void prescribed_sot_module_owns_local_physics() {
         "Context must store SOT state through the SOT owner");
 }
 
-fullmag::fem::Context make_sot_context() {
-    fullmag::fem::Context ctx;
+void configure_sot_context(fullmag::fem::Context &ctx) {
     ctx.mesh.n_nodes = 1;
     ctx.mesh.magnetic_node_mask = {1u};
     ctx.sot.enabled = true;
@@ -481,11 +480,11 @@ fullmag::fem::Context make_sot_context() {
     ctx.material_fields.material.saturation_magnetisation = 800e3;
     ctx.material_fields.material.damping = 0.1;
     ctx.material_fields.material.gyromagnetic_ratio = kGammaMu0Test;
-    return ctx;
 }
 
 void prescribed_sot_rhs_matches_si_oracle_and_current_reversal() {
-    auto ctx = make_sot_context();
+    fullmag::fem::Context ctx;
+    configure_sot_context(ctx);
     const std::vector<double> m = {1.0, 0.0, 0.0};
     std::vector<double> rhs(3u, 0.0);
     double max_rhs = 0.0;
@@ -514,7 +513,8 @@ void prescribed_sot_rhs_matches_si_oracle_and_current_reversal() {
 }
 
 void prescribed_sot_rhs_respects_magnetic_and_target_masks() {
-    auto ctx = make_sot_context();
+    fullmag::fem::Context ctx;
+    configure_sot_context(ctx);
     ctx.sot.active_node_mask = {0u};
     const std::vector<double> m = {1.0, 0.0, 0.0};
     std::vector<double> rhs(3u, 0.0);
@@ -652,8 +652,7 @@ void prescribed_sot_event_alignment_handles_pulse_pwl_and_stage_local_time() {
         "PWL event outside the requested interval must not clip the step");
 }
 
-fullmag::fem::Context make_slonczewski_context() {
-    fullmag::fem::Context ctx;
+void configure_slonczewski_context(fullmag::fem::Context &ctx) {
     ctx.mesh.n_nodes = 1;
     ctx.stt.slonczewski_enabled = true;
     ctx.stt.current_density_am2 = {0.0, 0.0, 1.0e12};
@@ -665,11 +664,11 @@ fullmag::fem::Context make_slonczewski_context() {
     ctx.stt.current_sign = 1.0;
     ctx.material_fields.material.saturation_magnetisation = 800e3;
     ctx.material_fields.material.gyromagnetic_ratio = kGammaMu0Test;
-    return ctx;
 }
 
 void slonczewski_cpp_rhs_uses_current_sign_and_field_like_term() {
-    auto ctx = make_slonczewski_context();
+    fullmag::fem::Context ctx;
+    configure_slonczewski_context(ctx);
     const std::vector<double> m = {1.0, 0.0, 0.0};
     std::vector<double> rhs(3u, 0.0);
 
@@ -692,7 +691,8 @@ void slonczewski_cpp_rhs_uses_current_sign_and_field_like_term() {
 }
 
 void macrospin_cpp_sign_and_precession_direction_match_reference() {
-    auto ctx = make_slonczewski_context();
+    fullmag::fem::Context ctx;
+    configure_slonczewski_context(ctx);
     ctx.stt.epsilon_prime = 0.0;
     const std::vector<double> m = {1.0, 0.0, 0.0};
     std::vector<double> rhs(3u, 0.0);
@@ -724,7 +724,8 @@ void macrospin_cpp_sign_and_precession_direction_match_reference() {
 }
 
 void slonczewski_uses_geometry_thickness_fallback_when_explicit_thickness_is_zero() {
-    auto ctx = make_slonczewski_context();
+    fullmag::fem::Context ctx;
+    configure_slonczewski_context(ctx);
     ctx.stt.free_layer_thickness = 0.0;
     ctx.mesh.n_nodes = 2;
     ctx.mesh.nodes_xyz = {
@@ -754,7 +755,8 @@ void slonczewski_uses_geometry_thickness_fallback_when_explicit_thickness_is_zer
 }
 
 void slonczewski_direct_torque_matches_effective_field_form_with_gilbert_damping() {
-    auto ctx = make_slonczewski_context();
+    fullmag::fem::Context ctx;
+    configure_slonczewski_context(ctx);
     ctx.material_fields.material.damping = 0.2;
     ctx.stt.epsilon_prime = 0.35;
     const std::vector<double> m = {1.0, 0.0, 0.0};
@@ -778,7 +780,8 @@ void slonczewski_direct_torque_matches_effective_field_form_with_gilbert_damping
 }
 
 void slonczewski_skips_nonmagnetic_nodes() {
-    auto ctx = make_slonczewski_context();
+    fullmag::fem::Context ctx;
+    configure_slonczewski_context(ctx);
     ctx.mesh.magnetic_node_mask = {0u};
     const std::vector<double> m = {1.0, 0.0, 0.0};
     std::vector<double> rhs = {1.0, 2.0, 3.0};
@@ -791,7 +794,8 @@ void slonczewski_skips_nonmagnetic_nodes() {
 }
 
 void canonical_slonczewski_uses_signed_stack_current_exact_constants_and_target_mask() {
-    auto ctx = make_slonczewski_context();
+    fullmag::fem::Context ctx;
+    configure_slonczewski_context(ctx);
     ctx.mesh.n_nodes = 2;
     ctx.stt.formula_version = FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V2;
     ctx.stt.realization_version = FULLMAG_FEM_STT_REALIZATION_SLONCZEWSKI_THIN_LAYER_V1;
@@ -835,8 +839,7 @@ void canonical_slonczewski_uses_signed_stack_current_exact_constants_and_target_
     check_near(reversed_normal[2], -rhs[2], std::abs(rhs[2]) * 1e-12, "canonical Slonczewski stack-normal reversal z");
 }
 
-fullmag::fem::Context make_zhang_li_context() {
-    fullmag::fem::Context ctx;
+void configure_zhang_li_context(fullmag::fem::Context &ctx) {
     ctx.mesh.n_nodes = 4;
     ctx.mesh.n_elements = 1;
     ctx.stt.zhang_li_enabled = true;
@@ -853,11 +856,11 @@ fullmag::fem::Context make_zhang_li_context() {
     };
     ctx.mesh.cell_nodes = {0, 1, 2, 3};
     ctx.mesh.magnetic_element_mask = {1u};
-    return ctx;
 }
 
 void zhang_li_rhs_uses_gilbert_alpha_beta_projection() {
-    auto ctx = make_zhang_li_context();
+    fullmag::fem::Context ctx;
+    configure_zhang_li_context(ctx);
     ctx.stt.beta = 0.2;
     ctx.material_fields.material.damping = 0.5;
     const std::vector<double> m = {
@@ -888,7 +891,8 @@ void zhang_li_rhs_uses_gilbert_alpha_beta_projection() {
 }
 
 void canonical_zhang_li_uses_g_over_two_sign_and_no_beta_denominator() {
-    auto ctx = make_zhang_li_context();
+    fullmag::fem::Context ctx;
+    configure_zhang_li_context(ctx);
     ctx.stt.formula_version = FULLMAG_FEM_STT_FORMULA_ZHANG_LI_V1;
     ctx.stt.operator_version = FULLMAG_FEM_STT_OPERATOR_ZL_CENTRAL_REFERENCE_V1;
     ctx.stt.lande_g = 1.7;
@@ -931,7 +935,8 @@ void canonical_zhang_li_uses_g_over_two_sign_and_no_beta_denominator() {
 }
 
 void zhang_li_rhs_uses_tetra_gradient_and_nodal_projection() {
-    auto ctx = make_zhang_li_context();
+    fullmag::fem::Context ctx;
+    configure_zhang_li_context(ctx);
     const std::vector<double> m = {
         1.0, 0.0, 0.0,
         1.0, 0.0, 1.0,
@@ -954,7 +959,8 @@ void zhang_li_rhs_uses_tetra_gradient_and_nodal_projection() {
 }
 
 void zhang_li_skew_tetra_affine_rhs_matches_analytic_gradient() {
-    auto ctx = make_zhang_li_context();
+    fullmag::fem::Context ctx;
+    configure_zhang_li_context(ctx);
     ctx.mesh.nodes_xyz = {
         0.0, 0.0, 0.0,
         2.0, 0.0, 0.0,
@@ -1024,8 +1030,10 @@ void zhang_li_skew_tetra_affine_rhs_matches_analytic_gradient() {
 }
 
 void zhang_li_current_direction_reverses_rhs() {
-    auto forward = make_zhang_li_context();
-    auto reverse = make_zhang_li_context();
+    fullmag::fem::Context forward;
+    configure_zhang_li_context(forward);
+    fullmag::fem::Context reverse;
+    configure_zhang_li_context(reverse);
     reverse.stt.current_density_am2 = {-1.0e12, 0.0, 0.0};
     const std::vector<double> m = {
         1.0, 0.0, 0.0,
@@ -1049,7 +1057,8 @@ void zhang_li_current_direction_reverses_rhs() {
 }
 
 void zhang_li_adds_torque_without_scaling_existing_rhs() {
-    auto ctx = make_zhang_li_context();
+    fullmag::fem::Context ctx;
+    configure_zhang_li_context(ctx);
     const std::vector<double> m = {
         1.0, 0.0, 0.0,
         1.0, 0.0, 1.0,
@@ -1071,7 +1080,8 @@ void zhang_li_adds_torque_without_scaling_existing_rhs() {
 }
 
 void combined_stt_updates_max_rhs() {
-    auto ctx = make_slonczewski_context();
+    fullmag::fem::Context ctx;
+    configure_slonczewski_context(ctx);
     const std::vector<double> m = {1.0, 0.0, 0.0};
     std::vector<double> rhs(3u, 0.0);
     double max_rhs = 0.0;
@@ -1183,7 +1193,8 @@ void canonical_stt_plan_import_rejects_read_only_slonczewski_v1() {
 }
 
 void canonical_stt_gpu_plan_reaches_device_prerequisite_after_formula_qualification() {
-    auto slonczewski = make_slonczewski_context();
+    fullmag::fem::Context slonczewski;
+    configure_slonczewski_context(slonczewski);
     slonczewski.stt.formula_version = FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V2;
     std::string reason;
     const auto slonczewski_plan =
@@ -1194,7 +1205,9 @@ void canonical_stt_gpu_plan_reaches_device_prerequisite_after_formula_qualificat
             reason.find("device-resident") != std::string::npos,
         "canonical Slonczewski GPU plan must reach device prerequisites after formula qualification");
 
-    auto zhang_li = make_zhang_li_context();
+    fullmag::fem::Context zhang_li;
+
+    configure_zhang_li_context(zhang_li);
     zhang_li.stt.formula_version = FULLMAG_FEM_STT_FORMULA_ZHANG_LI_V1;
     reason.clear();
     const auto zhang_li_plan = fullmag::fem::gpu_rk_plan_device_resident(zhang_li, reason);

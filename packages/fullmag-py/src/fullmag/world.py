@@ -6159,6 +6159,7 @@ def fdm(
     boundary_correction: str | None = None,
     boundary_phi_floor: float | None = None,
     boundary_delta_min: float | None = None,
+    projection_policy: str | None = None,
 ) -> FDM:
     """Set complete FDM hints, including native per-magnet grids."""
     warnings.warn(
@@ -6172,6 +6173,7 @@ def fdm(
         default_cell=default_cell,
         per_magnet=dict(per_magnet) if per_magnet is not None else None,
         demag=demag,
+        projection_policy=projection_policy,
         boundary_correction=boundary_correction,
         boundary_phi_floor=boundary_phi_floor,
         boundary_delta_min=boundary_delta_min,

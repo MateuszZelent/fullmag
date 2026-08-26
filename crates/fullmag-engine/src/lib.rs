@@ -160,6 +160,94 @@ mod tests {
         )
     }
 
+    fn projected_rk_macrospin_error(integrator: TimeIntegrator, dt: f64) -> f64 {
+        let problem = ExchangeLlgProblem::with_terms(
+            GridShape::new(1, 1, 1).expect("valid grid"),
+            CellSize::new(1.0, 1.0, 1.0).expect("valid cell size"),
+            MaterialParameters::new(1.0, 1.0e-30, 0.0).expect("valid material"),
+            LlgConfig::new(1.0, integrator).expect("valid LLG config"),
+            EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                external_field: Some([0.0, 0.0, 1.0]),
+                ..Default::default()
+            },
+        );
+        let final_time = 0.8;
+        let steps = (final_time / dt).round() as usize;
+        let mut state = problem
+            .new_state(vec![[1.0, 0.0, 0.0]])
+            .expect("macrospin state");
+        let mut workspace = problem.create_workspace();
+        let mut buffers = problem.create_integrator_buffers();
+        for _ in 0..steps {
+            match integrator {
+                TimeIntegrator::Heun => problem
+                    .heun_step_buf(
+                        &mut state,
+                        dt,
+                        &mut workspace,
+                        &mut buffers,
+                        EvaluationRequest::Minimal,
+                    )
+                    .expect("Heun step"),
+                TimeIntegrator::RK4 => problem
+                    .rk4_step_buf(
+                        &mut state,
+                        dt,
+                        &mut workspace,
+                        &mut buffers,
+                        EvaluationRequest::Minimal,
+                    )
+                    .expect("RK4 step"),
+                TimeIntegrator::RK23 => problem
+                    .rk23_step_buf(
+                        &mut state,
+                        dt,
+                        &mut workspace,
+                        &mut buffers,
+                        EvaluationRequest::Minimal,
+                    )
+                    .expect("RK23 step"),
+                TimeIntegrator::RK45 => problem
+                    .rk45_step_buf(
+                        &mut state,
+                        dt,
+                        &mut workspace,
+                        &mut buffers,
+                        EvaluationRequest::Minimal,
+                    )
+                    .expect("RK45 step"),
+                TimeIntegrator::ABM3 => panic!("ABM3 is not a projected RK tableau"),
+            };
+        }
+        let exact = [final_time.cos(), final_time.sin(), 0.0];
+        let actual = state.magnetization()[0];
+        ((actual[0] - exact[0]).powi(2)
+            + (actual[1] - exact[1]).powi(2)
+            + (actual[2] - exact[2]).powi(2))
+        .sqrt()
+    }
+
+    #[test]
+    fn projected_rk_macrospin_has_qualified_temporal_order() {
+        let cases = [
+            (TimeIntegrator::Heun, 1.5),
+            (TimeIntegrator::RK4, 3.2),
+            (TimeIntegrator::RK23, 2.2),
+            (TimeIntegrator::RK45, 4.0),
+        ];
+        for (integrator, minimum_order) in cases {
+            let coarse = projected_rk_macrospin_error(integrator, 0.04);
+            let fine = projected_rk_macrospin_error(integrator, 0.02);
+            let observed_order = (coarse / fine).log2();
+            assert!(
+                observed_order >= minimum_order,
+                "{integrator:?} projected RK order {observed_order:.3} below {minimum_order:.3} (coarse={coarse:.3e}, fine={fine:.3e})"
+            );
+        }
+    }
+
     #[test]
     fn effective_field_terms_default_enables_demag() {
         let terms = EffectiveFieldTerms::default();
