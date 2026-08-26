@@ -99,13 +99,14 @@ validation:
 | `mesh.swept.prism` | CPU/GPU `implemented`; FDM `unsupported` | implemented | native Python meshing and native contract tests preserve `prism6` without tet conversion; managed public-runtime proof is missing | `prism6` magnetic cells with no tet conversion |
 | `mesh.transition.pyramid_tet` | CPU/GPU `implemented`; FDM `unsupported` | implemented | conforming `pyramid5` transition and `tet4` far-air topology remain certificate-bound in source and contract tests | `pyramid5` air transition and `tet4` far air |
 | `mesh.exact_layer_count` | CPU/GPU `implemented`; FDM `unsupported` | implemented | accepted certificate requires requested = realized = `L`, exact `L+1` magnetic planes for `L in {1,2,3}`, empty report/certificate fallbacks, and `degraded=false` | exact `layers` in `{1,2,3}` for one physical film |
-| `fem.cpu.exchange_demag.mixed_p1` | `implemented` | implemented | bounded CPU/strict/double P1 exchange/Poisson/relaxation contracts include uniform uniaxial Ku1/Ku2 and an MFEM-mass analytic oracle, but no immutable managed public-runtime report exists | MFEM/hypre CPU double, exchange + uniform Zeeman + optional uniform uniaxial Ku1/Ku2 + Poisson Robin/Dirichlet |
-| `fem.gpu.exchange_demag.mixed_p1` | `implemented` | implemented | bounded GPU/strict/double P1 exchange/Poisson/relaxation contracts execute uniform uniaxial Ku1/Ku2 through CUDA PG-BB and NCG on the certified mesh, but no immutable managed public-runtime report exists | MFEM/libCEED/CUDA GPU double with optional uniform uniaxial Ku1/Ku2 on the same certified mesh |
+| `fem.cpu.exchange_demag.mixed_p1` | `implemented` | implemented | bounded CPU/strict/double P1 exchange/Poisson/relaxation contracts accept uniform or nodal-P1 uniaxial and cubic anisotropy plus interfacial/bulk DMI on the magnetic prism oracle; evidence is source/contract only | MFEM/hypre CPU double, exchange + uniform Zeeman + uniform/nodal uniaxial/cubic anisotropy + CPU DMI + Poisson Robin/Dirichlet |
+| `fem.gpu.exchange_demag.mixed_p1` | `implemented` | implemented | bounded GPU/strict/double P1 contracts accept uniform or nodal-P1 uniaxial and cubic anisotropy; DMI remains fail-closed as `gpu_dmi_kernel_not_mixed_p1`; evidence is source/contract only and no runtime qualification is claimed | MFEM/libCEED/CUDA GPU double with uniform/nodal uniaxial/cubic anisotropy on the same certified mesh; GPU DMI rejected |
 
 The current first-slice legality is explicit FEM, explicit CPU or GPU, strict mode,
 double precision, P1, one Box, an exact layer count in `{1,2,3}`, one shared-domain airbox,
-uniform `Ms`/`Aex`, exchange, optional uniform Zeeman and uniform uniaxial
-`Ku1`/`Ku2` with one normalized axis, Poisson Robin/Dirichlet,
+uniform `Ms`/`Aex`, exchange, optional uniform Zeeman, uniform or nodal-P1
+uniaxial/cubic anisotropy with normalized material axes, CPU-only interfacial
+or bulk DMI, and Poisson Robin/Dirichlet,
 and PG-BB, NCG, or overdamped LLG. `auto`, single, extended, and hidden
 fallback remain illegal.
 Every mixed-P1 mesh feature capability publishes
@@ -116,9 +117,12 @@ Strict execution requires both the certificate and enclosing build report to
 record `fallbacks_triggered=[]`, plus build-report `degraded=false`; no prism-to-tet, GPU-to-CPU,
 or mixed-to-free-tetrahedral fallback is legal.
 
-Spatial `Ku1`/`Ku2`/axis fields and cubic anisotropy remain rejected before backend startup.
+Nodal `Ku1`/`Ku2` and `Kc1`/`Kc2`/`Kc3` fields and cubic anisotropy are part of
+the bounded source-contract slice. Nodal `Ms`/`Aex`/`alpha` fields remain
+rejected before backend startup. GPU DMI is rejected with the stable
+`gpu_dmi_kernel_not_mixed_p1` predicate; CPU DMI is admitted by the CPU row.
 Until separately qualified, all modes reject before backend startup when a
-mixed-P1 request includes FEM/BEM, PBC/Floquet, DMI, STT, thermal,
+mixed-P1 request includes FEM/BEM, PBC/Floquet, GPU DMI, STT, thermal,
 magnetoelasticity, regional projections, eigen/frequency-domain studies,
 DG0/material interfaces, order greater than one, arbitrary OCC shapes,
 multiple bodies, or multilayers. FDM and hybrid lanes are unsupported. The

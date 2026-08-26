@@ -333,17 +333,26 @@ Własność pozostaje backends-first:
 - strict nigdy nie wywołuje splittera prism-to-tet, nie zmienia mixed P1 na
   free-tetrahedral i nie wykonuje ukrytego fallbacku GPU->CPU.
 
-Pierwszy cel kwalifikacji to jeden osiowy Box, P1, conforming shared-domain
+Pierwszy cel implementacyjny to jeden osiowy Box, P1, conforming shared-domain
 airbox, jednorodne `Ms/Aex`, exchange, jednorodny Zeeman, Poisson
-Robin/Dirichlet, double oraz PG-BB/NCG/overdamped LLG. FEM/BEM, PBC/Floquet,
-DMI/STT/thermal/magnetoelastic, regional projections, eigen/frequency-domain,
-DG0/material interfaces, order>1, arbitrary OCC, multi-body i multilayer
-pozostają fail-closed do osobnej kwalifikacji.
+Robin/Dirichlet, double oraz PG-BB/NCG/overdamped LLG. W tym celu FEM CPU
+przyjmuje uniform/nodal-P1 uniaxial i cubic anisotropy oraz interfacial/bulk
+DMI ze statusem `implemented` i wyłącznie dowodem source/contract. FEM GPU przyjmuje uniform/nodal-P1
+uniaxial i cubic anisotropy, ale DMI odrzuca fail-closed z tokenem
+`gpu_dmi_kernel_not_mixed_p1`. Ten status dotyczy źródeł i kontraktów, bez
+twierdzenia o kwalifikacji runtime. FEM/BEM, PBC/Floquet, STT/thermal/
+magnetoelastic, regional projections, eigen/frequency-domain, DG0/material
+interfaces, order>1, arbitrary OCC, multi-body i multilayer pozostają
+fail-closed do osobnego zakresu.
 
-Obecny stan jest `implemented` wyłącznie dla jawnego FEM CPU lub GPU/strict/double P1,
-jednego osiowego Boxa i certyfikowanej liczby warstw z dokładnego zbioru
-`{1,2,3}`, z exchange, opcjonalnym
-jednorodnym Zeemanem, Poisson Robin/Dirichlet oraz PG-BB/NCG/overdamped LLG.
+Obecny stan topologii, operatorów i rozszerzenia lokalnych interakcji jest
+`implemented`; dostępny dowód pozostaje wyłącznie source/contract. CPU obejmuje uniform/nodal
+uniaxial i cubic anisotropy oraz DMI, GPU obejmuje uniform/nodal uniaxial i
+cubic anisotropy, a GPU DMI pozostaje odrzucone przez
+`gpu_dmi_kernel_not_mixed_p1`. Zakres wspólny to jawny FEM CPU lub GPU/strict/
+double P1, jeden osiowy Box i certyfikowana liczba warstw z dokładnego zbioru
+`{1,2,3}`, z exchange, opcjonalnym jednorodnym Zeemanem, Poisson
+Robin/Dirichlet oraz PG-BB/NCG/overdamped LLG.
 Source i operator contract tests nie są dowodem publicznego managed runtime,
 więc `production_executable` i `validated` pozostają nieprzyznane do czasu
 świeżego publicznego uruchomienia SP4 z immutable reportem. Auto device/backend,

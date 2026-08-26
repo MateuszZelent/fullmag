@@ -1,8 +1,8 @@
 # FEM mixed prism/pyramid shared-domain mesh
 
-- Status: bounded FEM CPU/GPU double mixed-P1 relaxation lanes implemented in source/contracts; managed public-runtime proof pending; wider scopes fail closed
+- Status: bounded FEM CPU/GPU double mixed-P1 relaxation lanes `implemented`; evidence is source/contract only, no runtime qualification is asserted, and wider scopes fail closed
 - Owners: Fullmag core
-- Last updated: 2026-07-30
+- Last updated: 2026-08-26
 - Related ADRs: `docs/adr/0021-native-mixed-p1-fem-topology.md`
 - Related specs:
   - `docs/specs/capability-matrix-v0.md`
@@ -35,15 +35,22 @@ through only the bounded CPU and GPU lanes below. Every wider physics, geometry,
 precision, device, or workflow tuple remains fail-closed before native operator
 startup.
 
-The first qualification target is deliberately narrow: one axis-aligned
+The first implementation target is deliberately narrow: one axis-aligned
 `Box`, P1, one conforming shared-domain airbox, exact layer count in
-`{1, 2, 3}`, uniform `Ms` and `Aex`, exchange,
-uniform Zeeman, uniform uniaxial `Ku1`/`Ku2` with one normalized axis,
+`{1, 2, 3}`, uniform `Ms` and `Aex`, exchange, uniform Zeeman,
 Poisson Robin or Dirichlet demag, explicit FEM CPU or GPU double precision,
-strict execution, and PG-BB, NCG, or overdamped LLG relaxation.
-Those exact certificate-bound device tuples are currently `implemented`, not
-`production_executable` or `validated`, because no immutable managed public
-CPU/GPU SP4 runtime report exists yet. Device `auto`, single/extended/hybrid
+strict execution, and PG-BB, NCG, or overdamped LLG relaxation. Within that
+target, local interactions are lane-specific:
+
+- FEM CPU accepts uniform or nodal-P1 uniaxial and cubic anisotropy, plus
+  interfacial and bulk DMI, with status `implemented` and source/contract
+  evidence only.
+- FEM GPU accepts uniform or nodal-P1 uniaxial and cubic anisotropy, while DMI
+  fails closed with `gpu_dmi_kernel_not_mixed_p1`; the accepted anisotropy
+  slice has status `implemented` with source/contract evidence only.
+
+These statuses describe checked-in source, planner, and contract evidence only;
+they do not assert runtime qualification. Device `auto`, single/extended/hybrid
 execution, and wider tuples remain `unsupported`; no fallback is permitted.
 
 (governing-equations)=
@@ -75,8 +82,9 @@ E_{\mathrm Z}
 = -\mu_0\int_{\Omega_m}\mathbf M\cdot\mathbf H_{\mathrm{ext}}\,\mathrm dV.
 ```
 
-Uniform uniaxial anisotropy is a local nodal interaction and retains its
-existing negative-power energy convention:
+Uniaxial anisotropy is a local nodal interaction and retains its existing
+negative-power energy convention. The coefficients may be uniform or supplied
+as nodal-P1 material fields in the bounded mixed-P1 source contract:
 
 ```{math}
 :label: eq-mixed-p1-uniaxial-anisotropy
@@ -96,7 +104,9 @@ E_{\\mathrm u}
 
 For mixed P1, topology enters this local term only through the certified
 magnetic nodal mass-row-sum weights. No tetrahedral connectivity is consumed
-by the uniform CPU or CUDA nodal field/energy realization.
+by the CPU or CUDA nodal field/energy realization. Cubic anisotropy follows the
+same local nodal ownership for uniform or nodal `Kc1`/`Kc2`/`Kc3`; its canonical
+energy contract remains in `docs/physics/fem_anisotropy_cubic.md`.
 
 ### 2.2 Scalar Poisson demagnetization and signs
 
@@ -187,9 +197,12 @@ scale; production certificates apply the SI tolerances below after realization.
   has exactly $L+1$ normal-coordinate node planes.
 - One prism layer is still a three-dimensional P1 discretization. It is not a
   thickness-averaged, 2.5D, shell, or macrospin model.
-- `Ms`, `Aex`, `Ku1`, and `Ku2` are uniform in the first qualification
-  workload; the uniaxial axis is one normalized material vector. Spatial
-  anisotropy fields remain unsupported.
+- `Ms` and `Aex` are uniform in the bounded workload. `Ku1`/`Ku2` and
+  `Kc1`/`Kc2`/`Kc3` may be uniform or nodal-P1 fields; the uniaxial and cubic
+  axes remain authored normalized material vectors.
+- Interfacial and bulk DMI are admitted only on FEM CPU in this mixed-P1
+  contract. FEM GPU rejects any DMI before native startup with
+  `gpu_dmi_kernel_not_mixed_p1`.
 - The magnetic domain contains only `prism6`; `pyramid5` and `tet4` are air
   cells and must never carry a magnetic material marker.
 - The first supported facets are `tri3 | quad4` and the polynomial/order
@@ -284,10 +297,19 @@ on connectivity order, basis traces, signs, material masks, energy ownership,
 quadrature sufficiency, requested/resolved provenance, and rejection reasons.
 
 The target is double precision only. The bounded explicit CPU and GPU lanes are
-`implemented` in source, operator, planner, and startup contracts. Neither lane
-is yet `production_executable` or `validated`; forced GPU cannot fall back to
-CPU. Neither lane may call the legacy prism-to-tet compatibility splitter in
-strict mode.
+`implemented`; current evidence comes from source, operator, planner, and
+startup contracts. This is not runtime qualification evidence. Forced GPU cannot fall
+back to CPU. Neither lane may call the legacy prism-to-tet compatibility
+splitter in strict mode.
+
+The local-interaction admission is deliberately separate by device:
+
+| FEM lane | Mixed-P1 local-interaction contract | Stable source boundary |
+|---|---|---|
+| CPU | Uniform or nodal-P1 uniaxial and cubic anisotropy; interfacial and bulk DMI; `implemented`, source/contract evidence only | `packages/fullmag-py/src/fullmag/model/problem.py::_validate_authored_mixed_p1_scope`, `crates/fullmag-plan/src/mesh.rs::validate_mixed_p1_execution_scope`, `backends/fem/core/fem_mesh.cpp::validate_supported_physics_topology` |
+| GPU | Uniform or nodal-P1 uniaxial and cubic anisotropy; DMI rejected fail-closed as `gpu_dmi_kernel_not_mixed_p1`; accepted anisotropy slice `implemented`, source/contract evidence only | `packages/fullmag-py/src/fullmag/model/problem.py::_validate_authored_mixed_p1_scope`, `crates/fullmag-plan/src/mesh.rs::mixed_p1_scope_failed_predicates`, `backends/fem/core/fem_mesh.cpp::validate_supported_physics_topology` |
+
+The lane table records source/contract admission, not a managed runtime result.
 
 #### 3.3.1 Mixed-P1 GPU operator and residency contract
 
@@ -658,9 +680,10 @@ $L\in\{1,2,3\}$ with requested count equal to realized count and exactly
 $L+1$ magnetic planes. Counts `0` and `4`, a non-exact request, a stale or
 mismatched fingerprint, any fallback, or `degraded=true` reject before native
 startup. Unsupported combinations—including `time_evolution`, FEM/BEM,
-PBC/Floquet, DMI, STT, thermal, magnetoelastic, regional projection,
+PBC/Floquet, GPU DMI, STT, thermal, magnetoelastic, regional projection,
 frequency-domain/eigen studies, DG0 interfaces, high order, multiple bodies,
-and physical multilayers—retain their existing rejection. A free-tetrahedral
+and physical multilayers—retain their existing rejection. CPU DMI is admitted
+by the lane-specific source contract. A free-tetrahedral
 mesh is an explicit alternative configuration, never an automatic fallback.
 
 ### 4.4 Planner and capability matrix
@@ -676,19 +699,21 @@ fem.cpu.exchange_demag.mixed_p1
 fem.gpu.exchange_demag.mixed_p1
 ```
 
-The four mesh capabilities and both bounded CPU/GPU operator capabilities are
-`implemented`. Neither operator lane is `production_executable` or `validated`
-until the next managed proof. The legal implementation target is strict FEM,
-explicit CPU or GPU, double precision, the narrow workload in Section 1, and
-no fallback. `auto` remains rejecting. Authored device intent, a managed-launcher
-override, the plan-bound effective device, and resolved execution must remain
-distinct provenance.
+The four mesh capabilities, both bounded CPU/GPU operator capabilities, and the
+local-interaction extension are `implemented`; evidence for the extension is
+source/contract only. Neither operator lane is `production_executable` or `validated`. The
+legal implementation target is strict FEM, explicit CPU or GPU, double
+precision, the narrow workload in Section 1, and no fallback. `auto` remains
+rejecting. Authored device intent, a managed-launcher override, the plan-bound
+effective device, and resolved execution must remain distinct provenance.
 
-Uniform uniaxial anisotropy is optional in this tuple; cubic and spatial
-anisotropy remain rejected.
+On CPU, uniform or nodal-P1 uniaxial/cubic anisotropy and interfacial/bulk DMI
+are admitted. On GPU, uniform or nodal-P1 uniaxial/cubic anisotropy is admitted,
+but DMI remains fail-closed with `gpu_dmi_kernel_not_mixed_p1`. This paragraph
+is source-contract status only and makes no runtime qualification claim.
 
 Until separately qualified, planning rejects FEM/BEM demag, PBC/Floquet,
-DMI/STT/thermal/magnetoelastic terms, regional projections, eigen/frequency-
+GPU DMI, STT/thermal/magnetoelastic terms, regional projections, eigen/frequency-
 domain studies, DG0/material interfaces, order greater than one, arbitrary OCC
 shapes, multiple bodies, and multilayers.
 
@@ -821,8 +846,11 @@ own fresh managed evidence:
 - constant-field and linear-manufactured-solution patch tests across mixed
   interfaces;
 - exchange directional-derivative and convergence tests;
-- uniform `Ku1`/`Ku2` field and energy checks on certified mixed magnetic
-  prism nodes using MFEM mass-row-sum weights, including CPU/CUDA parity;
+- uniform and nodal `Ku1`/`Ku2`, plus cubic `Kc1`/`Kc2`/`Kc3`, field and energy
+  contract checks on certified mixed magnetic prism nodes using MFEM mass-row-
+  sum weights for the CPU and GPU anisotropy paths;
+- CPU interfacial and bulk DMI field/energy contracts on the magnetic `prism6`
+  oracle; GPU DMI rejection with `gpu_dmi_kernel_not_mixed_p1`;
 - manufactured Poisson solution and RHS/sign tests across all three cell types;
 - Dirichlet/Robin airbox convergence and existing sphere/ellipsoid demag gates;
 - PG-BB/NCG energy-descent and overdamped-LLG trajectory/stop-reason gates;
@@ -877,11 +905,12 @@ No lower level implies a higher one.
 (limitations)=
 ## 7. Known limits and deferred work
 
-- Spatial `Ku1`/`Ku2` or axis fields and cubic anisotropy are not included
-  in the bounded mixed-P1 tuple.
+- Nodal `Ku1`/`Ku2` and `Kc1`/`Kc2`/`Kc3` are included in the bounded
+  source-contract tuple; nodal `Ms`/`Aex`/`alpha` fields and wider axis-field
+  variants remain outside it.
 - Arbitrary OCC shapes, cylinders, imported CAD/STL, multiple bodies, and
   multilayers are deferred.
-- PBC/Floquet, FEM/BEM/FMM, frequency-domain/eigen, DMI, STT, thermal,
+- PBC/Floquet, FEM/BEM/FMM, frequency-domain/eigen, GPU DMI, STT, thermal,
   magnetoelasticity, regional projections, DG0/material-interface publication,
   and order greater than one are deferred.
 - Adaptive remeshing and state transfer across mixed topology are deferred.
@@ -928,5 +957,9 @@ No lower level implies a higher one.
 | Demag field recovery | `backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp` | `recover_demag_poisson_field` | recovers $\mathbf H_{\mathrm{demag}}$ on magnetic cells | FEM CPU | manufactured/operator contracts; managed proof pending |
 | Demag energy | `backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp` | `demag_poisson_energy_from_field` | evaluates the existing demag-energy sign contract | FEM CPU | energy contracts; managed proof pending |
 | Magnetic nodal weights | `backends/fem/core/fem_mesh.cpp` | `compute_node_volumes` | synchronizes mixed P1 mass-row-sum volume weights | FEM CPU/GPU shared contract | native material/metric contracts |
-| Uniform uniaxial CPU field/energy | `backends/fem/cpu/mfem/interactions/anisotropy_uniaxial.cpp` | `compute_uniaxial_anisotropy_field` | evaluates local `Ku1`/`Ku2` field and mass-lumped energy without cell-connectivity assumptions | FEM CPU | mixed-P1 anisotropy contract |
-| Uniform uniaxial GPU field/energy | `backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu` | `fullmag_cuda_uniaxial_anisotropy_field_energy_blocks` | evaluates the same local nodal contract on device | FEM GPU | mixed-P1 CUDA contract; managed proof pending |
+| Uniform/nodal uniaxial CPU field/energy | `backends/fem/cpu/mfem/interactions/anisotropy_uniaxial.cpp` | `compute_uniaxial_anisotropy_field` | evaluates local `Ku1`/`Ku2` fields and mass-lumped energy without cell-connectivity assumptions | FEM CPU | source/contract evidence |
+| Uniform/nodal uniaxial GPU field/energy | `backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu` | `fullmag_cuda_uniaxial_anisotropy_field_energy_blocks` | evaluates the same local nodal contract on device | FEM GPU | source/contract evidence |
+| Uniform/nodal cubic CPU field/energy | `backends/fem/cpu/mfem/interactions/anisotropy_cubic.cpp` | `compute_cubic_anisotropy_field` | evaluates local `Kc1`/`Kc2`/`Kc3` fields and energy on magnetic P1 nodes | FEM CPU | source/contract evidence |
+| Uniform/nodal cubic GPU field/energy | `backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu` | `fullmag_cuda_cubic_anisotropy_field_energy_blocks` | evaluates the same cubic nodal contract on device | FEM GPU | source/contract evidence |
+| CPU interfacial/bulk DMI | `backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp`; `backends/fem/cpu/mfem/interactions/dmi_bulk.cpp` | `compute_interfacial_dmi_field`; `compute_bulk_dmi_field` | evaluates DMI fields and energies on magnetic prism6 elements | FEM CPU | source/contract evidence |
+| GPU mixed-P1 DMI rejection | `backends/fem/core/fem_mesh.cpp` | `validate_supported_physics_topology` | rejects mixed-P1 GPU DMI with `gpu_dmi_kernel_not_mixed_p1` before unsupported startup | FEM GPU | fail-closed source/contract evidence |

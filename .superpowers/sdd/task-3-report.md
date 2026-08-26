@@ -1,168 +1,127 @@
-# Raport Task 3 — Python geometry parity i convenience `disk`
+# Task 3 — końcowa weryfikacja modala diagnostycznego
 
-## Status
+## Focused test suite
 
-`IMPLEMENTED_WITH_EXTERNAL_REGRESSION_BLOCKER`
-
-Zakres Task 3 jest zaimplementowany i focused testy są zielone. Szeroka bramka
-`test_api.py` dobiegła do końca, ale ujawniła jeden powtarzalny, niezwiązany z
-Task 3 błąd istniejącego kontraktu tekstur. Bramka szeroka pozostaje formalnie
-niezaliczona; nie zmieniono będących poza zakresem `test_api.py` ani
-`fullmag/init/textures.py`.
-
-## Zakres wykonany
-
-- Dodano równoległy, niemutowalny AST `SelectionGeometry` w
-  `packages/fullmag-py/src/fullmag/model/geometry.py`. Nie zastępuje on
-  istniejącego scenicznego `Geometry`, więc nie zmienia legacy payloadów
-  geometrii, regionów ani eksportu skryptów.
-- `fm.shapes.disk(...)` tworzy finite cylinder z kanonicznymi polami
-  `center_m`, `axis`, `radius_m` i `height_m`; normalna jest normalizowana.
-- `fm.shapes.disk(..., extrusion="through_object", object_id=...)` zachowuje
-  nierozstrzygniętą typed policy z obiektem. Nie udaje wyznaczonej wysokości
-  przed loweringiem bounds obiektu.
-- `fm.shapes.affine(...)`, `fm.shapes.rotate(...)` i `fm.shapes.scale(...)`
-  tworzą wyłącznie serializowalny AST `affine` z `translation_m`,
-  `rotation_xyzw`, `scale` i `pivot_m`; nie wykonują selekcji punktów w
-  Pythonie.
-- Gotowe buildery są także eksportowane na poziomie `fullmag`:
-  `fm.disk`, `fm.affine`, `fm.rotate`, `fm.scale`.
-
-## Dowód TDD
-
-### RED
-
-Pierwsze uruchomienie bez ustawionego lokalnego import path zakończyło się
-collection error `ModuleNotFoundError: No module named 'fullmag'`; nie jest
-traktowane jako dowód RED.
-
-Po ustawieniu `PYTHONPATH=packages/fullmag-py/src` uruchomiono:
+Polecenie:
 
 ```text
-pytest -q packages/fullmag-py/tests/test_selection_geometry.py
+env TMPDIR=/tmp pnpm --dir apps/control-room exec vitest run src/kernel/layout/simulationPreparationDiagnostics.test.ts src/kernel/layout/simulationPreparationModel.test.ts src/kernel/layout/SimulationPreparationMounted.test.tsx
 ```
 
-Wynik: `9 failed`. Wszystkie oczekiwane zachowania failowały przez brak
-`fullmag.shapes.disk`, `fullmag.shapes.rotate` i `fullmag.shapes.affine`
-(`AttributeError`), a nie przez błąd test harnessu.
+Wynik: exit 0; 3 pliki i 43/43 testy przeszły.
 
-### GREEN
+## Typecheck i integralność diffu
 
-Po minimalnej implementacji uruchomiono:
+Polecenia:
 
 ```text
-PYTHONPATH=packages/fullmag-py/src pytest -q packages/fullmag-py/tests/test_selection_geometry.py
+pnpm --dir apps/control-room typecheck
+node --check apps/control-room/scripts/smoke-simulation-preparation.mjs
+git diff --check
 ```
 
-Wynik: `9 passed in 0.48s`.
+Wynik: wszystkie exit 0; typy tras wygenerowano bez błędów.
 
-Testy obejmują finite disk lowering, normalizację normalnej i center,
-`radius <= 0`, `thickness <= 0`, zerową normalną, brak `object_id` dla
-`through_object`, nierozstrzygniętą typed policy, JSON round-trip z nested
-`scale`/`rotate`/`affine` oraz nieodwracalną skalę.
+## React Doctor
 
-## Weryfikacja
-
-| Bramka | Wynik |
-|---|---|
-| Focused selection geometry | PASS — 40 passed in 0.30s po fixupie review |
-| `git diff --check -- packages/fullmag-py` | PASS — exit 0 |
-| Wymagany `test_api.py` | NIEZALICZONE — pełny wynik: 313 passed, 1 skipped, 1 unrelated failure w 92.40s |
-
-## Self-review
-
-- Legacy `Geometry` nadal serializuje poprzedni scene/region IR; nowy typ ma
-  jednoznaczną nazwę `SelectionGeometry` i nie jest do niego podstawiany.
-- Finite `disk` nie ma wrappera extrusion i dokładnie emituje cylinder
-  wymagany przez kontrakt.
-- `through_object` przechowuje wyłącznie requested intent; wysokość nie jest
-  lokalnie szacowana ani wykonywana.
-- Walidacja odrzuca niefinityczne wektory, zerową normalną, zerowy komponent
-  skali i zerowy quaternion. Skala ujemna pozostaje legalna, bo jest
-  odwracalna.
-- Nie dodano `SelectionExprIR`, `FrozenSpins`, lokalnego point-in-geometry ani
-  zmian w lowering/runtime.
-
-## Pozostały blocker
-
-Wymagana regresja została uruchomiona do końca:
+Polecenie:
 
 ```text
-PYTHONPATH=packages/fullmag-py/src pytest -q packages/fullmag-py/tests/test_selection_geometry.py packages/fullmag-py/tests/test_api.py
+npx react-doctor@latest --verbose --scope changed
 ```
 
-Broad gate ma świeży wynik końcowy, ale nie jest PASS z powodu opisanej niżej
-niezależnej rozbieżności `preset_version`.
+Pierwsza próba w sandboxie nie uzyskała DNS do npm (`EAI_AGAIN`). Powtórzenie z zatwierdzonym dostępem sieciowym zakończyło się exit 0: 8 zmienionych plików, wynik 100/100, brak problemów.
 
-## Fixup po review
+## Browser smoke
 
-### Domknięty kontrakt
-
-- `SelectionGeometry` jest zamkniętą klasą bazową canonical AST, a konstruktor
-  `SelectionAffine` akceptuje wyłącznie dokładne typy
-  `SelectionCylinder | SelectionAffine`. String, mapping, dowolny obiekt,
-  subclass i obiekt z własnym `to_ir()` nie są przyjmowane jako dzieci.
-- Authored AST jest rozdzielony od canonical `geometry_predicate.v1`.
-  `SelectionThroughObjectDisk` ma wyłącznie `to_authored_ir()` z
-  `kind="disk"` i typed `ThroughObjectExtrusion`; nie ma `to_ir()` i nie może
-  serializować się jako skończony canonical cylinder przed loweringiem bounds
-  obiektu i przecięciem z `in_object` w Task 4.
-- Canonical affine i authored affine są osobnymi immutable dataclasses.
-  Transformacje przez `fm.affine`, `fm.rotate` i `fm.scale` zachowują tę
-  granicę również dla zagnieżdżonego `through_object`.
-- Wszystkie składowe liczbowe przechodzą ścisłą walidację przed konwersją.
-  `bool`, stringi i nienumeryczne sekwencje są odrzucane; NaN/Inf są
-  odrzucane; radius/thickness muszą być dodatnie; normal/quaternion niezerowe;
-  każdy komponent scale niezerowy.
-- `SelectionGeometry.from_ir()` i
-  `AuthoredSelectionGeometry.from_authored_ir()` odtwarzają typed AST,
-  odrzucają nieznane/brakujące pola oraz złe warianty, kopiują wejściowe
-  listy/mappingi do immutable tuples i zwracają świeże listy/dicty przy każdej
-  serializacji.
-- Publiczny namespace eksportuje dokładnie aliasy builderów `affine`, `disk`,
-  `rotate`, `scale`; wewnętrzne klasy AST nie zostały dodane do
-  `fullmag.__all__`.
-
-### RED po review
-
-Pierwsza próba nowych testów zakończyła się collection error przez bezpośredni
-import jeszcze nieistniejącej klasy `AuthoredSelectionGeometry`; nie jest
-zaliczona jako behavioural RED. Po zmianie testu na odwołanie przez moduł:
+Istniejący `apps/control-room/scripts/smoke-simulation-preparation.mjs` otrzymał ukierunkowany tryb:
 
 ```text
-PYTHONPATH=packages/fullmag-py/src pytest -q packages/fullmag-py/tests/test_selection_geometry.py
-19 failed, 20 passed in 0.40s
+CONTROL_ROOM_SIMULATION_PREPARATION_FAILURE_ONLY=1
 ```
 
-Failowały oczekiwane klasy zachowania: akceptacja `bool`/stringów, brak
-runtime closure dzieci AST, `through_object` udający cylinder, brak typed
-`from_ir`/`from_authored_ir`, brak copy-safe round-trip oraz brak walidacji
-typed extrusion policy.
+Tryb używa prawdziwego `/workspace`, Radix Dialog, kanonicznego `GET /v2/sessions`, zasobu statusu oraz początkowego zasobu HTTP `GET /v2/sessions/current/simulation/preparation`. Trasa WebSocket jest jedynie skonfigurowana; narrow lane nie wysyła, nie czeka na ani nie weryfikuje invalidacji WebSocket. Nie montuje niepowiązanych zasobów viewportu po stanie ready.
 
-### GREEN po review
-
-Po minimalnej implementacji i końcowym wzmocnieniu copy-safety:
+Polecenie:
 
 ```text
-PYTHONPATH=packages/fullmag-py/src pytest -q packages/fullmag-py/tests/test_selection_geometry.py
-40 passed in 0.30s
+env TMPDIR=/tmp CONTROL_ROOM_URL=http://127.0.0.1:3107/workspace CONTROL_ROOM_SIMULATION_PREPARATION_FAILURE_ONLY=1 pnpm --dir apps/control-room smoke:simulation-preparation
 ```
 
-### Pełna bramka i niezależny blocker
+Wynik: exit 0. Potwierdzone asercje:
 
-Wymagany proces nie został przerwany i dobiegł do końca:
+- failure-dialog-auto-open;
+- known-predicate-action dla `gpu_dmi_kernel_not_mixed_p1`;
+- full-report-collapsed;
+- full-report-expanded;
+- copy-full-report;
+- viewport-blocked;
+- dialog-geometry-in-viewport;
+- dialog-focus-trapped;
+- dialog-reduced-motion-stable;
+- network-failures-none;
+- console-errors-none;
+- page-errors-none;
+- http-errors-none.
+
+Dowody wizualne:
+
+- `.superpowers/sdd/evidence/simulation-preparation-failure-collapsed.png`
+- `.superpowers/sdd/evidence/simulation-preparation-failure-expanded.png`
+
+Ręczna kontrola screenshotów potwierdziła: modal mieści się w viewport 1440x900, zwinięty raport nie wypiera stopki, rozwinięty raport ma własny scroll, a stopka pozostaje widoczna. Te własności są dodatkowo objęte automatycznymi pomiarami geometrii i fokusu opisanymi poniżej.
+
+## Diagnostyka starego broad smoke
+
+Pełny historyczny przebieg najpierw ujawnił brak fixture `GET /v2/sessions`, a po jego dodaniu dotarł do nieaktualnego oczekiwania na dwa zasoby po stanie ready. Zamiast poszerzać ten modalowy gate o kilkadziesiąt niepowiązanych zasobów workspace dodano failure-only lane. Ograniczony zrzut stanu przy błędzie pozostaje w skrypcie, aby kolejne drifty raportowały body, requesty i błędy zamiast kończyć się samym timeoutem.
+
+## Granica API
+
+Zmiana produkcyjna jest frontend-only. Nie zmieniono OpenAPI v2, wygenerowanych typów/transportu, API facade, hooków ani codeców. HTTP v2 pozostaje źródłem prawdy; WebSocket przenosi tylko zdarzenie/invalidation. Komponent nie wykonuje bezpośredniego `fetch()` i nie tworzy ścieżek endpointów.
+
+## Fix po review — dowody
+
+### Bounded diagnostics
+
+`consoleErrors`, `failedResponses`, `networkFailures` i `pageErrors` są teraz
+ograniczane przy zapisie do 12 wpisów. Teksty mają limit 400 znaków, URL-e 600
+znaków, a body zrzutu 2 000 znaków; każdy collector raportuje liczbę `dropped`.
+Oba bloki `catch` wywołują wspólny `boundedFailureSnapshot`, więc nie mogą
+serializować nieograniczonych tablic. W narrow lane `networkFailures` jest
+asertywnie puste, podobnie jak pozostałe trzy klasy błędów.
+
+TDD: przed implementacją uruchomiono celowy kontrakt
+`CONTROL_ROOM_SIMULATION_PREPARATION_ASSERT_BOUNDS=1 node apps/control-room/scripts/smoke-simulation-preparation.mjs`.
+Zakończył się oczekiwanym RED: `Diagnostic collector did not retain a fixed
+number of entries.` Po dodaniu limitu, obcinania i licznika wynik to exit 0:
+`bounded-diagnostic-collector-contract`.
+
+### Dialog, fokus i reduced motion
+
+Po rozwinięciu raportu smoke mierzy `boundingBox()` dialogu i wszystkich
+przycisków stopki względem viewportu 1440×900. Sprawdza, że
+`document.activeElement` pozostaje wewnątrz dialogu po auto-open, kliknięciu
+`summary` oraz kopiowaniu. Dla failure dialog `reducedMotion: "reduce"` jest
+włączane przed auto-open, sprawdzane są stabilna geometria i fokus, po czym
+ustawienie jest przywracane do `no-preference`. Te same pomocniki są użyte w
+zachowanym broad lane; jego semantyka connecting/planning/meshing/reconnect/
+ready/failure i revision-only invalidation nie została zawężona.
+
+Świeży narrow smoke po fixie:
 
 ```text
-PYTHONPATH=packages/fullmag-py/src pytest -q \
-  packages/fullmag-py/tests/test_selection_geometry.py \
-  packages/fullmag-py/tests/test_api.py
-1 failed, 313 passed, 1 skipped, 41 warnings in 92.40s
+TMPDIR=/tmp CONTROL_ROOM_URL=http://127.0.0.1:3107/workspace CONTROL_ROOM_SIMULATION_PREPARATION_FAILURE_ONLY=1 pnpm smoke:simulation-preparation
 ```
 
-Jedyny failure to
-`ProblemApiTests.test_random_initializer_serializes_to_ir`. Aktualne
-`fm.texture.random(seed=42)` emituje `preset_version: 2` z
-`packages/fullmag-py/src/fullmag/init/textures.py`, a istniejące oczekiwanie w
-`test_api.py:2160` nadal nie zawiera tego pola. Celowana reprodukcja zakończyła
-się identycznie (`1 failed in 0.46s`). Ani producent tekstury, ani test nie są
-częścią Task 3; zgodnie z zakresem nie zostały zmienione.
+Wynik: exit 0. Potwierdzone: `failure-dialog-auto-open`,
+`full-report-collapsed`, `full-report-expanded`, `dialog-geometry-in-viewport`,
+`dialog-focus-trapped`, `dialog-reduced-motion-stable`, `copy-full-report`,
+`network-failures-none`, `console-errors-none`, `page-errors-none` i
+`http-errors-none`.
+
+### Broad lane
+
+**NOT VERIFIED — fresh broad execution.** Broad lane został przejrzany jako
+zachowany w źródle, ale nie został uruchomiony świeżo po tym fixie. Jego
+WebSocket invalidation należy kwalifikować osobnym pełnym przebiegiem, nie na
+podstawie narrow lane.

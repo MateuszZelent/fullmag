@@ -228,7 +228,21 @@ export class TestElement extends TestNode {
   }
 
   click(): void {
-    this.dispatchEvent(new TestEvent("click", { bubbles: true }));
+    const event = new TestEvent("click", { bubbles: true });
+    this.dispatchEvent(event);
+    if (
+      event.defaultPrevented ||
+      this.tagName !== "SUMMARY" ||
+      !(this.parentNode instanceof TestElement) ||
+      this.parentNode.tagName !== "DETAILS"
+    ) {
+      return;
+    }
+    if (this.parentNode.hasAttribute("open")) {
+      this.parentNode.removeAttribute("open");
+    } else {
+      this.parentNode.setAttribute("open", "");
+    }
   }
 
   focus(): void {

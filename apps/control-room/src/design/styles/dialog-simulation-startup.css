@@ -509,11 +509,82 @@
   max-height: min(820px, calc(100vh - (2 * var(--fm-space-6))));
 }
 
+.fm-simulation-preparation-failure-dialog__body {
+  display: grid;
+  gap: var(--fm-space-4);
+  max-height: min(620px, calc(100vh - (2 * var(--fm-space-12))));
+  overflow-y: auto;
+  padding-right: var(--fm-space-2);
+}
+
+.fm-simulation-preparation-failure-dialog__body section {
+  display: grid;
+  gap: var(--fm-space-2);
+}
+
+.fm-simulation-preparation-failure-dialog__body h3 {
+  margin: 0;
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  line-height: 1.25;
+  text-transform: uppercase;
+}
+
+.fm-simulation-preparation-failure-dialog__causes {
+  display: grid;
+  gap: var(--fm-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fm-simulation-preparation-failure-dialog__cause {
+  display: grid;
+  gap: var(--fm-space-1);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-panel);
+  color: var(--fm-text-secondary);
+  padding: var(--fm-space-3);
+  font-size: var(--fm-font-size-sm);
+  line-height: 1.45;
+}
+
+.fm-simulation-preparation-failure-dialog__cause strong {
+  color: var(--fm-text-primary);
+}
+
+.fm-simulation-preparation-failure-dialog__cause code {
+  color: var(--fm-text-muted);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-simulation-preparation-failure-dialog__full-report {
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-panel);
+  padding: var(--fm-space-2) var(--fm-space-3);
+}
+
+.fm-simulation-preparation-failure-dialog__full-report summary {
+  color: var(--fm-text-secondary);
+  cursor: pointer;
+  font-size: var(--fm-font-size-sm);
+  font-weight: 600;
+}
+
 .fm-simulation-preparation-failure-dialog__report {
   max-height: 280px;
   overflow: auto;
-  margin: 0;
-  color: var(--fm-text-primary);
+  margin: var(--fm-space-3) 0 0;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-canvas);
+  color: var(--fm-text-secondary);
+  padding: var(--fm-space-3);
   font-family: var(--fm-font-mono);
   font-size: var(--fm-font-size-xs);
   line-height: 1.45;
