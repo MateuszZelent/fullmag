@@ -475,6 +475,17 @@ impl AbmHistory {
 /// 50 rejected attempts followed by one accepted or terminal attempt.
 pub const MAX_ADAPTIVE_ATTEMPT_RECORDS: usize = 51;
 
+/// Layout selected for a reusable integrator buffer set.
+///
+/// A buffer set must not silently switch between AoS and SoA after its first
+/// step.  Such a switch changes the executed operator realization and would
+/// make a single session's provenance ambiguous.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FdmCpuStateLayout {
+    Aos,
+    Soa,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdaptiveAttemptDecision {
     Accepted,
@@ -536,6 +547,7 @@ pub struct IntegratorBuffers {
     pub h_scratch: Vec<Vector3>,
     /// RHS output buffer for zero-alloc report computation.
     pub rhs: Vec<Vector3>,
+    layout: Option<FdmCpuStateLayout>,
     adaptive_attempts: [AdaptiveAttemptRecord; MAX_ADAPTIVE_ATTEMPT_RECORDS],
     adaptive_attempt_count: usize,
     adaptive_accepted_attempts: u32,
@@ -565,6 +577,7 @@ impl IntegratorBuffers {
             h_eff: zero(),
             h_scratch: zero(),
             rhs: zero(),
+            layout: None,
             adaptive_attempts: [AdaptiveAttemptRecord::default(); MAX_ADAPTIVE_ATTEMPT_RECORDS],
             adaptive_attempt_count: 0,
             adaptive_accepted_attempts: 0,
@@ -584,6 +597,22 @@ impl IntegratorBuffers {
 
     pub fn adaptive_rejected_attempts(&self) -> u32 {
         self.adaptive_rejected_attempts
+    }
+
+    pub(crate) fn select_layout(&mut self, layout: FdmCpuStateLayout) -> Result<()> {
+        match self.layout {
+            None => {
+                self.layout = Some(layout);
+                Ok(())
+            }
+            Some(selected) if selected == layout => Ok(()),
+            Some(selected) => Err(EngineError::with_code(
+                crate::EngineErrorCode::CapabilityUnavailable,
+                format!(
+                    "FDM CPU state layout changed for reusable buffers: selected={selected:?}, requested={layout:?}; create a new buffer set at the session boundary"
+                ),
+            )),
+        }
     }
 
     pub(crate) fn begin_adaptive_step(&mut self) {

@@ -4118,9 +4118,12 @@ mod tests {
 
     #[test]
     fn compatibility_integrators_delegate_to_workspace_path() {
-        let source = include_str!("fem.rs");
+        // `include_str!` preserves the file's physical line endings.  Normalize
+        // them before using a multi-line source marker so this contract test is
+        // stable on both LF and CRLF checkouts.
+        let source = include_str!("fem.rs").replace("\r\n", "\n");
         let compatibility = source_between(
-            source,
+            &source,
             "// Compatibility-only allocating path retained",
             "    // -----------------------------------------------------------------------\n    // Error norm helper",
         );

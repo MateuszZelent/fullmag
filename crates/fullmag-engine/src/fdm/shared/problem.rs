@@ -7,6 +7,7 @@ use crate::{
     RegionalFieldDriveTerm, ResolvedFdmPeriodicWorkspace, Result, StepReport, TimeIntegrator,
     Vector3,
 };
+use crate::fdm::cpu::state::FdmCpuStateLayout;
 use std::sync::atomic::{AtomicU64, Ordering};
 use sha2::Digest;
 
@@ -512,6 +513,11 @@ impl ExchangeLlgProblem {
                 "dt must be finite and positive",
             ));
         }
+        bufs.select_layout(if self.soa_fast_path_supported() {
+            FdmCpuStateLayout::Soa
+        } else {
+            FdmCpuStateLayout::Aos
+        })?;
         bufs.begin_adaptive_step();
         self.set_thermal_dt_for_attempt(dt);
 
@@ -575,6 +581,7 @@ impl ExchangeLlgProblem {
                 format!("CPU SoA fast path unavailable: {reason}"),
             ));
         }
+        bufs.select_layout(FdmCpuStateLayout::Soa)?;
         bufs.begin_adaptive_step();
         self.set_thermal_dt_for_attempt(dt);
 

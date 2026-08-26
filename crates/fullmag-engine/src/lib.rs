@@ -879,6 +879,49 @@ mod tests {
     }
 
     #[test]
+    fn reusable_fdm_buffers_reject_layout_changes_without_mutating_state() {
+        let grid = GridShape::new(2, 1, 1).expect("grid");
+        let mut problem = ExchangeLlgProblem::with_terms(
+            grid,
+            CellSize::new(1.0, 1.0, 1.0).expect("cell size"),
+            MaterialParameters::new(1.0, 1.0e-30, 0.1).expect("material"),
+            LlgConfig::new(1.0, TimeIntegrator::Heun).expect("LLG"),
+            EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                ..Default::default()
+            },
+        );
+        let mut state = problem.uniform_state([1.0, 0.0, 0.0]).expect("state");
+        let mut workspace = problem.create_workspace();
+        let mut buffers = problem.create_integrator_buffers();
+        problem
+            .step_with_buffers_evaluation(
+                &mut state,
+                1.0e-3,
+                &mut workspace,
+                &mut buffers,
+                EvaluationRequest::Minimal,
+            )
+            .expect("initial SoA-capable step");
+        let digest_before = state.transactional_state_digest();
+
+        problem.alpha_field = Some(vec![0.1; grid.cell_count()]);
+        let error = problem
+            .step_with_buffers_evaluation(
+                &mut state,
+                1.0e-3,
+                &mut workspace,
+                &mut buffers,
+                EvaluationRequest::Minimal,
+            )
+            .expect_err("layout change must fail closed");
+        assert_eq!(error.code(), EngineErrorCode::CapabilityUnavailable);
+        assert!(error.to_string().contains("state layout changed"));
+        assert_eq!(state.transactional_state_digest(), digest_before);
+    }
+
+    #[test]
     fn step_report_carries_anisotropy_energy_for_cpu_scalar_rows() {
         let grid = GridShape::new(3, 1, 1).expect("valid grid");
         let problem = ExchangeLlgProblem::with_terms(
