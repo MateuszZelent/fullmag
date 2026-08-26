@@ -158,11 +158,20 @@ __global__ void dp45_error_kernel(
     const double * __restrict__ k7x, const double * __restrict__ k7y, const double * __restrict__ k7z,
     const double * __restrict__ m0x, const double * __restrict__ m0y, const double * __restrict__ m0z,
     const double * __restrict__ m1x, const double * __restrict__ m1y, const double * __restrict__ m1z,
+    const uint8_t * __restrict__ active_mask,
+    const uint8_t * __restrict__ frozen_mask,
+    int has_active_mask,
+    int has_frozen_mask,
     double * __restrict__ error_sq,
     int n, double dt, double atol, double rtol)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
+    if ((has_active_mask && active_mask[idx] == 0) ||
+        (has_frozen_mask && frozen_mask[idx] != 0)) {
+        error_sq[idx] = 0.0;
+        return;
+    }
 
     // DP45 error weights: E1=71/57600, E3=-71/16695, E4=71/1920, E5=-17253/339200, E6=22/525, E7=-1/40
     const double E1 = 71.0 / 57600.0;
@@ -396,6 +405,8 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const double*>(ctx.k_fsal.x), static_cast<const double*>(ctx.k_fsal.y), static_cast<const double*>(ctx.k_fsal.z),
             static_cast<const double*>(ctx.tmp.x), static_cast<const double*>(ctx.tmp.y), static_cast<const double*>(ctx.tmp.z),
             static_cast<const double*>(ctx.m.x), static_cast<const double*>(ctx.m.y), static_cast<const double*>(ctx.m.z),
+            ctx.active_mask, ctx.frozen_mask,
+            ctx.has_active_mask ? 1 : 0, ctx.has_frozen_mask ? 1 : 0,
             ctx.reduction_scratch,
             n, dt, ctx.adaptive_atol, ctx.adaptive_rtol);
 

@@ -126,11 +126,20 @@ __global__ void dp45_error_fp32_kernel(
     const float * __restrict__ k7x, const float * __restrict__ k7y, const float * __restrict__ k7z,
     const float * __restrict__ m0x, const float * __restrict__ m0y, const float * __restrict__ m0z,
     const float * __restrict__ m1x, const float * __restrict__ m1y, const float * __restrict__ m1z,
+    const uint8_t * __restrict__ active_mask,
+    const uint8_t * __restrict__ frozen_mask,
+    int has_active_mask,
+    int has_frozen_mask,
     double * __restrict__ error_sq,
     int n, double dt, double atol, double rtol)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
+    if ((has_active_mask && active_mask[idx] == 0) ||
+        (has_frozen_mask && frozen_mask[idx] != 0)) {
+        error_sq[idx] = 0.0;
+        return;
+    }
     const double E1 = 71.0/57600.0, E3 = -71.0/16695.0, E4 = 71.0/1920.0;
     const double E5 = -17253.0/339200.0, E6 = 22.0/525.0, E7 = -1.0/40.0;
     double ex = dt*(E1*(double)k1x[idx] + E3*(double)k3x[idx] + E4*(double)k4x[idx] + E5*(double)k5x[idx] + E6*(double)k6x[idx] + E7*(double)k7x[idx]);
@@ -324,6 +333,8 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const float*>(ctx.k_fsal.x), static_cast<const float*>(ctx.k_fsal.y), static_cast<const float*>(ctx.k_fsal.z),
             static_cast<const float*>(ctx.tmp.x), static_cast<const float*>(ctx.tmp.y), static_cast<const float*>(ctx.tmp.z),
             static_cast<const float*>(ctx.m.x), static_cast<const float*>(ctx.m.y), static_cast<const float*>(ctx.m.z),
+            ctx.active_mask, ctx.frozen_mask,
+            ctx.has_active_mask ? 1 : 0, ctx.has_frozen_mask ? 1 : 0,
             ctx.reduction_scratch, n, dt, ctx.adaptive_atol, ctx.adaptive_rtol);
 
         AdaptiveErrorPolicy policy = reduce_error_policy(ctx, ctx.cell_count, dt);

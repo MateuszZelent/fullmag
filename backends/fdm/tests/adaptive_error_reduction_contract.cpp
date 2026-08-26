@@ -94,6 +94,30 @@ void adaptive_error_reductions_stay_device_side() {
     check(
         adaptive_sources.find("pow(ctx.adaptive_max_error / error") == std::string::npos,
         "adaptive RK23/DP45 steps must not compute dt policy with host-side pow()");
+
+    for (const std::string *source : {&dp45_fp64, &dp45_fp32, &rk23_fp64, &rk23_fp32}) {
+        check(
+            source->find("const uint8_t * __restrict__ active_mask") != std::string::npos,
+            "adaptive error kernels must receive the active-cell mask");
+        check(
+            source->find("const uint8_t * __restrict__ frozen_mask") != std::string::npos,
+            "adaptive error kernels must receive the frozen-spin mask");
+        check(
+            source->find("has_active_mask && active_mask[idx] == 0") != std::string::npos,
+            "adaptive error kernels must exclude inactive cells from the norm");
+        check(
+            source->find("has_frozen_mask && frozen_mask[idx] != 0") != std::string::npos,
+            "adaptive error kernels must exclude frozen cells from the norm");
+        check(
+            source->find("ctx.active_mask, ctx.frozen_mask") != std::string::npos,
+            "adaptive error launches must pass both canonical masks");
+    }
+    check(
+        reductions.find("const bool finite_max_sq = isfinite(max_sq)") != std::string::npos,
+        "device adaptive reduction must fail closed on non-finite max error");
+    check(
+        reductions.find("non_finite_adaptive_error") != std::string::npos,
+        "host adaptive reduction must publish a typed non-finite error reason");
 }
 
 void adaptive_error_scalar_reduction_uses_compute_stream() {

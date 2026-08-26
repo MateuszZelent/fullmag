@@ -288,3 +288,42 @@ fn bounded_device_resident_dispatch_precedes_legacy_multilayer_shapes() {
         "bounded D-07 plans must select the device-resident lane while non-qualified plans retain legacy dispatch"
     );
 }
+
+#[test]
+fn fdm_gpu_adaptive_error_kernels_exclude_inactive_and_frozen_cells() {
+    let root = crate_root().join("../../backends/fdm/gpu/cuda");
+    for relative in [
+        "integrators/llg_rk23_fp32.cu",
+        "integrators/llg_rk23_fp64.cu",
+        "integrators/llg_dp45_fp32.cu",
+        "integrators/llg_dp45_fp64.cu",
+    ] {
+        let source = std::fs::read_to_string(root.join(relative))
+            .unwrap_or_else(|error| panic!("read adaptive error source {relative}: {error}"));
+        assert!(
+            source.contains("const uint8_t * __restrict__ active_mask")
+                && source.contains("const uint8_t * __restrict__ frozen_mask"),
+            "{relative} must receive both canonical masks"
+        );
+        assert!(
+            source.contains("has_active_mask && active_mask[idx] == 0")
+                && source.contains("has_frozen_mask && frozen_mask[idx] != 0"),
+            "{relative} must exclude inactive and frozen cells from adaptive error"
+        );
+        assert!(
+            source.contains("ctx.active_mask, ctx.frozen_mask"),
+            "{relative} must pass both masks at the kernel launch"
+        );
+    }
+
+    let reductions = std::fs::read_to_string(root.join("runtime/reductions_fp64.cu"))
+        .expect("read adaptive reduction source");
+    assert!(
+        reductions.contains("const bool finite_max_sq = isfinite(max_sq)"),
+        "device adaptive policy must fail closed on a non-finite reduction"
+    );
+    assert!(
+        reductions.contains("non_finite_adaptive_error"),
+        "host adaptive policy must publish a non-finite error reason"
+    );
+}

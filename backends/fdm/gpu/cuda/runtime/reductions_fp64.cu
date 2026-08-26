@@ -16,6 +16,7 @@
 
 #include <cuda_runtime.h>
 #include <cmath>
+#include <limits>
 
 namespace fullmag {
 namespace fdm {
@@ -112,7 +113,8 @@ __global__ void adaptive_error_policy_kernel(
     double exponent)
 {
     double max_sq = max_error_sq != nullptr ? max_error_sq[0] : 0.0;
-    double error = max_sq > 0.0 ? sqrt(max_sq) : 0.0;
+    const bool finite_max_sq = isfinite(max_sq) && max_sq >= 0.0;
+    double error = finite_max_sq ? (max_sq > 0.0 ? sqrt(max_sq) : 0.0) : CUDART_INF;
     double dt_candidate = dt;
     if (error > 0.0) {
         dt_candidate = adaptive_safety * dt * pow(adaptive_threshold / error, exponent);
@@ -126,7 +128,7 @@ __global__ void adaptive_error_policy_kernel(
         dt_candidate = adaptive_dt_max;
     }
     // A failed attempt at the lower bound is terminal: dt_min_exhausted.
-    double accepted = error <= adaptive_threshold ? 1.0
+    double accepted = isfinite(error) && error <= adaptive_threshold ? 1.0
         : (dt <= adaptive_dt_min ? -1.0 : 0.0);
     policy_out[0] = error;
     policy_out[1] = dt_candidate;
@@ -833,7 +835,10 @@ AdaptiveErrorPolicy reduce_adaptive_error_policy(
         fullmag_fdm_record_control_scalar_d2h(ctx, sizeof(double));
         fullmag_fdm_record_control_scalar_host_sync(ctx);
         if (!context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy")) return policy;
-        policy.error = max_sq > 0.0 ? std::sqrt(max_sq) : 0.0;
+        const bool finite_max_sq = std::isfinite(max_sq) && max_sq >= 0.0;
+        policy.error = finite_max_sq
+            ? (max_sq > 0.0 ? std::sqrt(max_sq) : 0.0)
+            : std::numeric_limits<double>::infinity();
         fullmag_fdm_record_hot_loop_host_compute(ctx);
         const int order_est = exponent == 0.2 ? 4 : 2;
         const auto decision = adaptive::decide_adaptive_step(
@@ -888,6 +893,10 @@ AdaptiveErrorPolicy reduce_adaptive_error_policy(
     policy.dt_candidate = host_values[1];
     policy.accepted = host_values[2] >= 0.5 ? 1 : 0;
     policy.dt_min_exhausted = host_values[2] < -0.5;
+    if (!std::isfinite(policy.error)) {
+        policy.accepted = 0;
+        ctx.last_error = "non_finite_adaptive_error";
+    }
     return policy;
 }
 
