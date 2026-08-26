@@ -18,6 +18,7 @@ Na bieżącym `master` wykonano brakujące bramy testowe wskazane w tym audycie:
 - `finite_error_reduction_uses_active_free_cells_for_aos_and_soa` sprawdza nierówne skończone błędy, ignorowanie komórek nieaktywnych i frozen oraz zgodność redukcji AoS/SoA;
 - `max_error_norm_buf` i `max_error_norm_soa_buf` jawnie filtrują komórki poza swobodną dziedziną przed redukcją;
 - stałokrokowe persistent-SoA RK23/RK45 nie wykonują już konwersji `to_aos`/`to_soa` w każdym kroku.
+- `adaptive_cpu_meets_steady_state_allocation_and_rhs_to_accuracy_budgets` mierzy alokacje po rozgrzaniu dla RK23/RK45 w reprezentacjach AoS, buffer-SoA i persistent-SoA; pełny budżet pozostałych integratorów i outputów pozostaje otwarty.
 
 Brak tych testów w historycznym rejestrze poniżej dotyczy rewizji audytowanej 2026-08-21; aktualny dowód wykonania zapisano także w `docs/reviews/2026-08-20-public-interactions/gpt_pro/audit_1/STATUS-2026-08-26.md`.
 
