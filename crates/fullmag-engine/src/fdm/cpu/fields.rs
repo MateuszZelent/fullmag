@@ -1206,6 +1206,9 @@ impl ExchangeLlgProblem {
         self.frozen_spins
             .as_ref()
             .is_none_or(|frozen| frozen.frozen_dof_count() == 0)
+            && self.ms_field.is_none()
+            && self.a_field.is_none()
+            && self.alpha_field.is_none()
     }
 
     pub(crate) fn exchange_field_add_into_soa(

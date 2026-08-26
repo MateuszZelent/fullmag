@@ -58,3 +58,45 @@ fn soa_step_report_counts_oersted_field_once() {
         report.max_effective_field_amplitude
     );
 }
+
+#[test]
+fn soa_fast_path_fails_closed_for_spatial_material_fields() {
+    let problem = ExchangeLlgProblem::with_terms(
+        GridShape::new(2, 1, 1).expect("valid grid"),
+        CellSize::new(1.0e-9, 1.0e-9, 1.0e-9).expect("valid cell size"),
+        MaterialParameters::new(8.0e5, 1.0e-11, 0.02).expect("valid material"),
+        LlgConfig::new(2.211e5, TimeIntegrator::Heun).expect("valid dynamics"),
+        EffectiveFieldTerms {
+            exchange: false,
+            demag: false,
+            ..Default::default()
+        },
+    )
+    .with_spatial_fields(
+        Some(vec![8.0e5, 9.0e5]),
+        Some(vec![1.0e-11, 2.0e-11]),
+        Some(vec![0.02, 0.03]),
+    )
+    .expect("spatial material fields match the grid");
+
+    assert!(!problem.soa_fast_path_supported());
+
+    let mut state = problem
+        .uniform_state([1.0, 0.0, 0.0])
+        .expect("valid state")
+        .to_soa();
+    let mut workspace = problem.create_workspace();
+    let mut buffers = problem.create_integrator_buffers();
+    let error = problem
+        .step_soa_with_buffers_evaluation(
+            &mut state,
+            1.0e-12,
+            &mut workspace,
+            &mut buffers,
+            fullmag_engine::EvaluationRequest::Minimal,
+        )
+        .expect_err("SoA must reject unsupported spatial material fields");
+    assert!(error
+        .to_string()
+        .contains("CPU SoA fast path"));
+}
