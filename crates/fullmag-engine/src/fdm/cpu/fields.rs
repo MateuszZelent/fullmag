@@ -3579,6 +3579,20 @@ impl ExchangeLlgProblem {
 
         // Oersted field from cylindrical conductor (STNO / MTJ)
         self.oersted_field_add_into_at_time(&mut h_eff, time_seconds);
+        for drive in self
+            .regional_field_drives
+            .iter()
+            .filter(|drive| drive.enabled)
+        {
+            let multiplier = drive.multiplier_at(time_seconds);
+            for (index, basis) in drive.basis_field.iter().enumerate().take(h_eff.len()) {
+                if self.is_active(index) {
+                    h_eff[index][0] += multiplier * basis[0];
+                    h_eff[index][1] += multiplier * basis[1];
+                    h_eff[index][2] += multiplier * basis[2];
+                }
+            }
+        }
 
         h_eff
     }

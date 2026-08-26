@@ -1,6 +1,6 @@
 use fullmag_engine::{
     CellSize, EffectiveFieldTerms, ExchangeLlgProblem, GridShape, LlgConfig, MaterialParameters,
-    OerstedCylinderConfig, TimeIntegrator,
+    OerstedCylinderConfig, RegionalFieldDriveTerm, TimeIntegrator,
 };
 
 fn norm(vector: [f64; 3]) -> f64 {
@@ -99,4 +99,42 @@ fn soa_fast_path_fails_closed_for_spatial_material_fields() {
     assert!(error
         .to_string()
         .contains("CPU SoA fast path"));
+}
+
+#[test]
+fn aos_and_soa_effective_fields_include_regional_drive_once() {
+    let mut problem = ExchangeLlgProblem::with_terms(
+        GridShape::new(2, 1, 1).expect("valid grid"),
+        CellSize::new(1.0e-9, 1.0e-9, 1.0e-9).expect("valid cell size"),
+        MaterialParameters::new(8.0e5, 1.0e-11, 0.02).expect("valid material"),
+        LlgConfig::new(2.211e5, TimeIntegrator::Heun).expect("valid dynamics"),
+        EffectiveFieldTerms {
+            exchange: false,
+            demag: false,
+            ..Default::default()
+        },
+    );
+    problem.regional_field_drives.push(RegionalFieldDriveTerm {
+        basis_field: vec![[1.0, 2.0, 3.0], [-4.0, 5.0, -6.0]],
+        waveform: fullmag_ir::TimeDependenceIR::Constant,
+        time_offset_s: 0.0,
+        enabled: true,
+    });
+    let state = problem
+        .uniform_state([1.0, 0.0, 0.0])
+        .expect("valid state");
+    let aos_field = problem
+        .effective_field(&state)
+        .expect("AoS effective field must be available");
+    let soa_state = state.to_soa();
+    let mut soa_field = fullmag_engine::VectorFieldSoA::zeros(2);
+    let mut soa_workspace = problem.create_workspace();
+    problem.effective_field_into_soa_ws_at(
+        soa_state.magnetization(),
+        state.time_seconds,
+        &mut soa_workspace,
+        &mut soa_field,
+    );
+
+    assert_eq!(aos_field, soa_field.gather_to_aos());
 }
