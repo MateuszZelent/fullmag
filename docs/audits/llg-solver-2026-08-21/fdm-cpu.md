@@ -8,7 +8,18 @@
 
 ## Werdykt
 
-FDM CPU pozostaje referencyjną ścieżką poprawności, ale nie może być traktowany jako wzorzec wydajności bez osobnego profilu kosztu pól, algebry LLG, redukcji i alokacji. Konwencja `H_eff`/`gamma_0` oraz maksymalna norma błędu są rozstrzygnięte przez kanoniczny kontrakt i implementację; bezpośredni analityczny test stałego pola dla live SoA RHS pozostaje jednak brakującą bramką. Otwarte są także pomiary alokacji, kosztu demag, stiffness i polityki wątków.
+FDM CPU pozostaje referencyjną ścieżką poprawności, ale nie może być traktowany jako wzorzec wydajności bez osobnego profilu kosztu pól, algebry LLG, redukcji i alokacji. Konwencja `H_eff`/`gamma_0` oraz maksymalna norma błędu są rozstrzygnięte przez kanoniczny kontrakt i implementację; bezpośredni analityczny test stałego pola dla live SoA RHS oraz test redukcji po komórkach zostały dodane w remediacji 2026-08-26. Otwarte są nadal pomiary alokacji, kosztu demag, stiffness i polityki wątków.
+
+### Aktualizacja remediacji — 2026-08-26
+
+Na bieżącym `master` wykonano brakujące bramy testowe wskazane w tym audycie:
+
+- `constant_field_live_soa_rhs_and_trajectory_match_analytic_llg` porównuje live SoA RHS z analityczną konwencją LLG, sprawdza parytet AoS/SoA oraz trajektorię stałego pola;
+- `finite_error_reduction_uses_active_free_cells_for_aos_and_soa` sprawdza nierówne skończone błędy, ignorowanie komórek nieaktywnych i frozen oraz zgodność redukcji AoS/SoA;
+- `max_error_norm_buf` i `max_error_norm_soa_buf` jawnie filtrują komórki poza swobodną dziedziną przed redukcją;
+- stałokrokowe persistent-SoA RK23/RK45 nie wykonują już konwersji `to_aos`/`to_soa` w każdym kroku.
+
+Brak tych testów w historycznym rejestrze poniżej dotyczy rewizji audytowanej 2026-08-21; aktualny dowód wykonania zapisano także w `docs/reviews/2026-08-20-public-interactions/gpt_pro/audit_1/STATUS-2026-08-26.md`.
 
 ## Ustalenia priorytetowe
 
@@ -16,9 +27,9 @@ FDM CPU pozostaje referencyjną ścieżką poprawności, ale nie może być trak
 
 | Ustalenie | Stan i pewność | Implementacja (`ścieżka + symbol`) | Test/reproducer |
 |---|---|---|---|
-| Konwencja LLG | implementacja potwierdzona, test bezpośredni brak | `crates/fullmag-engine/src/fdm/cpu/fields.rs` — `effective_field_into_soa_ws_at_time`, `llg_rhs_soa_into` | wymagany analityczny constant-field RHS/trajectory; test SOT nie pokrywa tej ścieżki |
-| Maksymalna norma adaptacyjna | implementacja potwierdzona statycznie, test redukcji brak | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` — `max_error_norm_buf`, `max_error_norm_soa_buf` | wymagany test nierównych, skończonych błędów per-cell dla obu redukcji; `direct_cpu_entry_points_propagate_injected_nonfinite_error_norm` potwierdza tylko propagację `NaN` i rollback |
-| Brak alokacji w live RHS | defekt potwierdzony statycznie dla stałokrokowych RK23/RK45; ścieżki adaptive wymagają profilu | `crates/fullmag-engine/src/fdm/cpu/fields.rs` — `effective_field_into_soa_ws_at_time`, `llg_rhs_soa_into`; `crates/fullmag-engine/src/fdm/cpu/integrators.rs` — `rk23_step_soa_state_buf`, `rk45_step_soa_state_buf` | stałokrokowa gałąź wykonuje `state.to_aos()` i `aos.to_soa()` przy każdym kroku; dodać test alokatora dla obu polityk |
+| Konwencja LLG | implementacja i test bezpośredni potwierdzone | `crates/fullmag-engine/src/fdm/cpu/fields.rs` — `effective_field_into_soa_ws_at_time`, `llg_rhs_soa_into` | `constant_field_live_soa_rhs_and_trajectory_match_analytic_llg` |
+| Maksymalna norma adaptacyjna | implementacja i test redukcji potwierdzone | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` — `max_error_norm_buf`, `max_error_norm_soa_buf` | `finite_error_reduction_uses_active_free_cells_for_aos_and_soa`; test propagacji `NaN` nadal pokrywa rollback |
+| Brak alokacji w live RHS | stałokrokowe persistent-SoA RK23/RK45 nie konwertują stanu przez AoS; ścieżki adaptive wymagają profilu | `crates/fullmag-engine/src/fdm/cpu/fields.rs` — `effective_field_into_soa_ws_at_time`, `llg_rhs_soa_into`; `crates/fullmag-engine/src/fdm/cpu/integrators.rs` — `rk23_step_soa_state_buf`, `rk45_step_soa_state_buf` | `fixed_rk23_rk45_aos_and_soa_use_exact_dt_without_adaptive_suggestion`; profil alokatora dla pełnej macierzy nadal otwarty |
 | Stiffness exchange | luka pomiarowa, średnia | `crates/fullmag-engine/src/fdm/cpu/fields.rs` — `exchange_field_add_into` | refinement `h_min` i time-to-error dla każdego legalnego integratora |
 | Koszt demag per stage | luka pomiarowa, średnia | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` — `rk23_step_soa_state_buf`, `rk45_step_soa_state_buf`; `crates/fullmag-engine/src/fdm/cpu/fields.rs` — `demag_field_add_into_soa_fft_backend` | licznik `demag_solves` i profil accepted/rejected step |
 | Planowanie CPU/Rayon/FFT | luka pomiarowa, niska | `crates/fullmag-engine/src/fdm/cpu/fft.rs` — `FftWorkspace`; `crates/fullmag-engine/src/fdm/cpu/fft_backend.rs` — `RustFftBackend` | sweep Rayon/FFT z affinity, bandwidth i LLC misses; Hypre nie uczestniczy w FDM CPU |
@@ -26,11 +37,11 @@ FDM CPU pozostaje referencyjną ścieżką poprawności, ale nie może być trak
 
 ### Stan potwierdzony — kanoniczna konwencja LLG
 
-Konwencja nie jest otwartą decyzją: `docs/physics/0960-canonical-llg-time-domain-solver-and-qualification-contract.md` (identyfikator `LLG-TD-POLICY-V1`) oraz `docs/physics/llg_conventions.md` (sekcja `Gamma Convention`) definiują `H_eff` w A/m, `gamma_0` w m/(A s) i mianownik Gilberta `1/(1+alpha^2)`. Live SoA integratory przechodzą przez `effective_field_into_soa_ws_at_time` i `llg_rhs_soa_into`. Istniejący test SOT nie podaje znanego `H_eff` tej ścieżce, dlatego status testowy konwencji pozostaje niepotwierdzony do czasu analitycznego constant-field RHS/trajectory oracle.
+Konwencja nie jest otwartą decyzją: `docs/physics/0960-canonical-llg-time-domain-solver-and-qualification-contract.md` (identyfikator `LLG-TD-POLICY-V1`) oraz `docs/physics/llg_conventions.md` (sekcja `Gamma Convention`) definiują `H_eff` w A/m, `gamma_0` w m/(A s) i mianownik Gilberta `1/(1+alpha^2)`. Live SoA integratory przechodzą przez `effective_field_into_soa_ws_at_time` i `llg_rhs_soa_into`. Test `constant_field_live_soa_rhs_and_trajectory_match_analytic_llg` podaje znane stałe `H_eff`, sprawdza analityczny RHS oraz trajektorię bez tłumienia; test SOT pozostaje dodatkowym pokryciem członu niekonserwatywnego.
 
 ### Stan potwierdzony — kanoniczna maksymalna norma błędu
 
-`LLG-TD-MAX-ERR-V1` wymaga maksimum wektorowego błędu po aktywnych komórkach, a nie RMS. Właścicielami implementacji są `crates/fullmag-engine/src/fdm/cpu/integrators.rs` (`max_error_norm_buf`, `max_error_norm_soa_buf`). Maksimum chroni przed rozcieńczeniem lokalnego dużego błędu wraz ze wzrostem siatki. Obecny test `direct_cpu_entry_points_propagate_injected_nonfinite_error_norm` zwraca wstrzyknięty `NaN` przed obliczeniem błędów per-cell, więc potwierdza propagację wartości niefinitywnej i rollback, ale nie samą redukcję maksimum. Brakującą bramką jest test z nierównymi, skończonymi błędami per-cell, wywołujący osobno `max_error_norm_buf` i `max_error_norm_soa_buf`; do tego czasu kontrakt redukcji ma wyłącznie dowód statyczny.
+`LLG-TD-MAX-ERR-V1` wymaga maksimum wektorowego błędu po aktywnych, swobodnych komórkach, a nie RMS. Właścicielami implementacji są `crates/fullmag-engine/src/fdm/cpu/integrators.rs` (`max_error_norm_buf`, `max_error_norm_soa_buf`). Maksimum chroni przed rozcieńczeniem lokalnego dużego błędu wraz ze wzrostem siatki, a filtr `is_error_cell_active` wyklucza domenę nieaktywną i frozen przed redukcją. Test `finite_error_reduction_uses_active_free_cells_for_aos_and_soa` sprawdza nierówne skończone wartości osobno dla obu layoutów; `direct_cpu_entry_points_propagate_injected_nonfinite_error_norm` nadal potwierdza propagację wartości niefinitywnej i rollback.
 
 ### P1 — alokacje i kopie w `step/RHS` są niedopuszczalne w steady state
 
@@ -188,11 +199,11 @@ Audyt statyczny nie jest dowodem wydajności ani kwalifikacji sprzętowej.
 | Twierdzenie | Ścieżka | Symbol | Odpowiedzialność | Lane | Test/dowód | Status |
 |---|---|---|---|---|---|---|
 | Live effective field | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `effective_field_into_soa_ws_at_time` | składa pole dla integratorów SoA | FDM CPU | call chain RK23/RK45 | dowód statyczny |
-| Live RHS LLG | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `llg_rhs_soa_into` | oblicza RHS z pola w trwałych buforach SoA | FDM CPU | wymagany constant-field oracle i profil alokatora | implementacja potwierdzona; test bezpośredni brak |
-| Maksymalna norma adaptacyjna (AoS) | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `max_error_norm_buf` | maksimum błędu po aktywnych komórkach w buforze AoS | FDM CPU | brak testu z nierównymi, skończonymi błędami per-cell; test `direct_cpu_entry_points_propagate_injected_nonfinite_error_norm` nie wchodzi w redukcję | wyłącznie dowód statyczny |
-| Maksymalna norma adaptacyjna (SoA) | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `max_error_norm_soa_buf` | maksimum błędu po aktywnych komórkach w buforze SoA | FDM CPU | brak testu z nierównymi, skończonymi błędami per-cell; test `direct_cpu_entry_points_propagate_injected_nonfinite_error_norm` nie wchodzi w redukcję | wyłącznie dowód statyczny |
-| RK23 SoA | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `rk23_step_soa_state_buf` | adaptive używa trwałych buforów SoA; fixed-step konwertuje `state.to_aos()`/`aos.to_soa()` | FDM CPU | test alokatora dla fixed/adaptive | defekt fixed-step potwierdzony statycznie |
-| RK45 SoA | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `rk45_step_soa_state_buf` | adaptive używa trwałych buforów SoA; fixed-step konwertuje `state.to_aos()`/`aos.to_soa()` | FDM CPU | test alokatora dla fixed/adaptive | defekt fixed-step potwierdzony statycznie |
+| Live RHS LLG | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `llg_rhs_soa_into` | oblicza RHS z pola w trwałych buforach SoA | FDM CPU | `constant_field_live_soa_rhs_and_trajectory_match_analytic_llg` | implementacja i oracle potwierdzone; profil alokatora otwarty |
+| Maksymalna norma adaptacyjna (AoS) | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `max_error_norm_buf` | maksimum błędu po aktywnych, swobodnych komórkach w buforze AoS | FDM CPU | `finite_error_reduction_uses_active_free_cells_for_aos_and_soa` | test redukcji potwierdzony |
+| Maksymalna norma adaptacyjna (SoA) | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `max_error_norm_soa_buf` | maksimum błędu po aktywnych, swobodnych komórkach w buforze SoA | FDM CPU | `finite_error_reduction_uses_active_free_cells_for_aos_and_soa` | test redukcji potwierdzony |
+| RK23 SoA | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `rk23_step_soa_state_buf` | adaptive i fixed-step używają trwałych buforów SoA | FDM CPU | `fixed_rk23_rk45_aos_and_soa_use_exact_dt_without_adaptive_suggestion` | fixed-step naprawiony; profil adaptive otwarty |
+| RK45 SoA | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `rk45_step_soa_state_buf` | adaptive i fixed-step używają trwałych buforów SoA | FDM CPU | `fixed_rk23_rk45_aos_and_soa_use_exact_dt_without_adaptive_suggestion` | fixed-step naprawiony; profil adaptive otwarty |
 | Exchange | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `exchange_field_add_into` | operator lokalny wyznaczający stiffness | FDM CPU | refinement `h_min` | hipoteza pomiarowa |
 | Demag FFT | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `demag_field_add_into_soa_fft_backend` | kosztowny składnik pola per stage | FDM CPU | licznik ocen demag | hipoteza pomiarowa |
 | Workspace FFT | `crates/fullmag-engine/src/fdm/cpu/fft.rs` | `FftWorkspace` | trwałe bufory i plany FFT | FDM CPU | sweep Rayon/FFT | dowód statyczny; koszt otwarty |
