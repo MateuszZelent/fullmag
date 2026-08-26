@@ -1,5 +1,8 @@
 # Subagent-driven development progress
 
+Simulation preparation failure diagnostics Task 1: complete (working-tree evidence; 31/31 focused tests, typecheck, independent re-review approved; no commit by policy).
+Simulation preparation failure diagnostics Task 2: complete (working-tree evidence; mounted 12/12, typecheck, independent re-review approved; browser gate delegated to Task 3; no commit by policy).
+
 ## Plan: Solver audit remediation (2026-08-22)
 
 - Worktree: `D:\\git\\fullmag`

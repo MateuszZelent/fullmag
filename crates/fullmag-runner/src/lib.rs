@@ -1830,6 +1830,15 @@ fn require_supported_fem_topology(
     let mut demag_count = 0usize;
     let mut demag_realization_supported = true;
     let mut energy_supported = true;
+    let resolved_demag_is_supported_poisson = relaxation_plan.is_some_and(|fem| {
+        matches!(
+            fem.demag_realization,
+            Some(
+                fullmag_ir::ResolvedFemDemagIR::PoissonRobin
+                    | fullmag_ir::ResolvedFemDemagIR::PoissonDirichlet
+            )
+        )
+    });
     for term in &problem.energy_terms {
         match term {
             fullmag_ir::EnergyTermIR::Exchange => exchange_count += 1,
@@ -1839,7 +1848,9 @@ fn require_supported_fem_topology(
                     realization,
                     fullmag_ir::RequestedFemDemagIR::PoissonRobin
                         | fullmag_ir::RequestedFemDemagIR::PoissonDirichlet
-                ) {
+                ) && !(*realization == fullmag_ir::RequestedFemDemagIR::Auto
+                    && resolved_demag_is_supported_poisson)
+                {
                     demag_realization_supported = false;
                 }
             }
@@ -5849,6 +5860,46 @@ mod tests {
                 error.message
             );
         }
+    }
+
+    #[test]
+    fn fem_topology_guard_accepts_auto_demag_resolved_to_poisson_robin() {
+        let (mut problem, plan) = certified_mixed_cpu_relaxation_guard_fixture();
+        problem.energy_terms = vec![
+            fullmag_ir::EnergyTermIR::Exchange,
+            fullmag_ir::EnergyTermIR::Demag {
+                realization: fullmag_ir::RequestedFemDemagIR::Auto,
+            },
+        ];
+
+        require_supported_fem_topology(&problem, &plan).expect(
+            "default demag=Auto must cross the mixed-P1 guard when the plan resolves Poisson Robin",
+        );
+    }
+
+    #[test]
+    fn fem_topology_guard_rejects_auto_demag_with_non_poisson_resolved_plan() {
+        let (mut problem, mut plan) = certified_mixed_cpu_relaxation_guard_fixture();
+        problem.energy_terms = vec![
+            fullmag_ir::EnergyTermIR::Exchange,
+            fullmag_ir::EnergyTermIR::Demag {
+                realization: fullmag_ir::RequestedFemDemagIR::Auto,
+            },
+        ];
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            unreachable!()
+        };
+        fem.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler);
+
+        let error = topology_guard_error(&problem, &plan);
+        assert!(
+            error.contains("fem_demag_realization_not_poisson_robin_or_dirichlet"),
+            "{error}"
+        );
+        assert!(
+            error.contains("demag_realization_not_poisson_robin_or_dirichlet"),
+            "{error}"
+        );
     }
 
     #[cfg(feature = "fem-gpu")]
