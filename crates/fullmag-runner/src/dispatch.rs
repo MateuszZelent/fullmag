@@ -5607,6 +5607,7 @@ fn begin_native_fem_stage_after_strict_gpu_preflight(
     native_execution_mode: &str,
     plan: &FemPlanIR,
     gpu_rk_plan: &NativeFemGpuRkPlanInfo,
+    validate_native_plan: impl FnOnce() -> Result<(), RunError>,
     begin_stage: impl FnOnce() -> Result<(), RunError>,
 ) -> Result<(), RunError> {
     validate_strict_native_fem_gpu_preflight(
@@ -5616,6 +5617,9 @@ fn begin_native_fem_stage_after_strict_gpu_preflight(
         plan,
         gpu_rk_plan,
     )?;
+    if execution_mode == ExecutionMode::Strict && engine == FemEngine::NativeGpu {
+        validate_native_plan()?;
+    }
     begin_stage()
 }
 
@@ -5932,6 +5936,7 @@ fn execute_native_fem(
         native_execution_mode,
         plan,
         &gpu_rk_plan_info,
+        || backend.validate_strict_gpu_rk_plan(),
         || backend.begin_stage(plan.time_stage.start_time_s),
     )?;
     let device_info = backend.device_info()?;
@@ -8132,6 +8137,7 @@ mod tests {
         #[derive(Default)]
         struct RecordingLifecycle {
             backend_creation: u8,
+            native_plan_preflight: u8,
             begin_stage: u8,
             step: u8,
             receipt: u8,
@@ -8152,6 +8158,10 @@ mod tests {
             &plan,
             &incomplete,
             || {
+                rejected_lifecycle.native_plan_preflight += 1;
+                Ok(())
+            },
+            || {
                 rejected_lifecycle.begin_stage += 1;
                 rejected_lifecycle.step += 1;
                 rejected_lifecycle.receipt += 1;
@@ -8166,6 +8176,7 @@ mod tests {
         assert!(incomplete_err
             .message
             .contains("stage_exchange_device_resident=false"));
+        assert_eq!(rejected_lifecycle.native_plan_preflight, 0);
         assert_eq!(rejected_lifecycle.begin_stage, 0);
         assert_eq!(rejected_lifecycle.step, 0);
         assert_eq!(rejected_lifecycle.receipt, 0);
@@ -8212,6 +8223,38 @@ mod tests {
         )
         .is_ok());
 
+        let mut native_rejected_lifecycle = RecordingLifecycle::default();
+        let native_plan_err = begin_native_fem_stage_after_strict_gpu_preflight(
+            FemEngine::NativeGpu,
+            ExecutionMode::Strict,
+            "all_in_gpu_legacy_sparse",
+            &plan,
+            &gpu_rk_ready_plan_for_log_test(),
+            || {
+                native_rejected_lifecycle.native_plan_preflight += 1;
+                Err(RunError {
+                    message: "GPU RK strict operator-mask preflight rejected device plan"
+                        .to_string(),
+                })
+            },
+            || {
+                native_rejected_lifecycle.begin_stage += 1;
+                native_rejected_lifecycle.step += 1;
+                native_rejected_lifecycle.receipt += 1;
+                native_rejected_lifecycle.provenance += 1;
+                Ok(())
+            },
+        )
+        .expect_err("native strict operator-mask preflight must reject before stage lifecycle");
+        assert!(native_plan_err
+            .message
+            .contains("GPU RK strict operator-mask preflight rejected device plan"));
+        assert_eq!(native_rejected_lifecycle.native_plan_preflight, 1);
+        assert_eq!(native_rejected_lifecycle.begin_stage, 0);
+        assert_eq!(native_rejected_lifecycle.step, 0);
+        assert_eq!(native_rejected_lifecycle.receipt, 0);
+        assert_eq!(native_rejected_lifecycle.provenance, 0);
+
         let mut accepted_lifecycle = RecordingLifecycle::default();
         let mut exchange_only = gpu_rk_ready_plan_for_log_test();
         exchange_only.uses_gpu_poisson = false;
@@ -8225,11 +8268,16 @@ mod tests {
             &plan,
             &exchange_only,
             || {
+                accepted_lifecycle.native_plan_preflight += 1;
+                Ok(())
+            },
+            || {
                 accepted_lifecycle.begin_stage += 1;
                 Ok(())
             },
         )
         .is_ok());
+        assert_eq!(accepted_lifecycle.native_plan_preflight, 1);
         assert_eq!(accepted_lifecycle.begin_stage, 1);
     }
 

@@ -2886,6 +2886,14 @@ impl NativeFemBackend {
         Ok(NativeFemGpuRkPlanInfo::from_ffi(info))
     }
 
+    pub(crate) fn validate_strict_gpu_rk_plan(&self) -> Result<(), RunError> {
+        let rc = unsafe { ffi::fullmag_fem_backend_validate_strict_gpu_rk_plan(self.handle) };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM GPU strict RK plan validation failed"));
+        }
+        Ok(())
+    }
+
     pub(crate) fn gpu_execution_receipt(
         &self,
     ) -> Result<runtime_info::NativeFemGpuExecutionReceipt, RunError> {

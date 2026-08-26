@@ -3562,6 +3562,21 @@ int fullmag_fem_backend_get_gpu_rk_plan_info(
     return FULLMAG_FEM_OK;
 }
 
+int fullmag_fem_backend_validate_strict_gpu_rk_plan(fullmag_fem_backend *handle) {
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_validate_strict_gpu_rk_plan received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    std::string reason;
+    const auto plan = fullmag::fem::gpu_rk_plan_device_resident(handle->context, reason);
+    if (!fullmag::fem::gpu_rk_plan_is_strict_device_resident(plan, reason)) {
+        fullmag_fem_set_handle_error(handle, reason.c_str());
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    }
+    return FULLMAG_FEM_OK;
+}
+
 int fullmag_fem_backend_gpu_execution_receipt_v1(
     fullmag_fem_backend *handle,
     fullmag_fem_gpu_execution_receipt_v1 *out_receipt
