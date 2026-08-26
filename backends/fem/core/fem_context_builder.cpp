@@ -30,6 +30,7 @@
 #include "cpu/mfem/interactions/thermal_brown.hpp"
 #include "cpu/mfem/interactions/zeeman.hpp"
 #include "cpu/mfem/integrators/adaptive_dt.hpp"
+#include "cpu/mfem/integrators/rk_step_transaction.hpp"
 #include "cpu/mfem/runtime/aos_field.hpp"
 #include "cpu/mfem/runtime/field_refresh.hpp"
 #include "gpu/cuda/runtime/gpu_state_runtime.hpp"
@@ -39,6 +40,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
+#include <new>
 
 namespace fullmag::fem {
 
@@ -183,6 +186,21 @@ bool build_context_from_plan(
 #endif
     if (!initialize_context_gpu_state(ctx, error)) {
         return false;
+    }
+    ctx.stepper.workspace.attempt_checkpoint.reset();
+    if (ctx.adaptive_dt.enabled &&
+        (ctx.base_plan.integrator == FULLMAG_FEM_INTEGRATOR_RK23_BS ||
+         ctx.base_plan.integrator == FULLMAG_FEM_INTEGRATOR_RK45_DP54)) {
+        try {
+            ctx.stepper.workspace.attempt_checkpoint =
+                std::make_unique<RkAttemptCacheSnapshot>(ctx, false);
+        } catch (const std::bad_alloc &) {
+            error = "RK attempt cache checkpoint allocation failed during setup";
+            return false;
+        }
+        if (!ctx.stepper.workspace.attempt_checkpoint->prepare(error)) {
+            return false;
+        }
     }
     return true;
 }

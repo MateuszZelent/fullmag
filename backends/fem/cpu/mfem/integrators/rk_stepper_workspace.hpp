@@ -1,10 +1,12 @@
 #pragma once
 
 #include "cpu/mfem/integrators/rk_tableau.hpp"
+#include "cpu/mfem/integrators/rk_step_transaction.hpp"
 #include "cpu/mfem/interactions/stt.hpp"
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace fullmag::fem {
@@ -34,6 +36,7 @@ struct StepperWorkspace {
     std::vector<double> h_eff_tmp;                 // temp effective field
     SttWorkspace stt;                              // temp direct-torque scratch
     std::vector<double> err;                       // error = h*(b_hi - b_lo) . K
+    std::unique_ptr<RkAttemptCacheSnapshot> attempt_checkpoint;
     bool fsal_valid = false;                       // true when k[0] holds valid FSAL RHS
 };
 

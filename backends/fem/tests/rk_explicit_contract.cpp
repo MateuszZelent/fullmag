@@ -138,6 +138,10 @@ void rk_workspace_is_owned_by_integrator_module() {
         rk_workspace.find("StepperWorkspace workspace") != std::string::npos,
         "RK stepper runtime state must own the reusable StepperWorkspace");
     check(
+        rk_workspace.find("std::unique_ptr<RkAttemptCacheSnapshot> attempt_checkpoint") !=
+            std::string::npos,
+        "adaptive RK attempt checkpoint must be owned by the reusable workspace");
+    check(
         context_header.find("RkStepperRuntimeState stepper{}") != std::string::npos,
         "Context must store RK workspace through the runtime owner");
     check(
@@ -165,6 +169,11 @@ void rk_workspace_is_owned_by_integrator_module() {
     check(
         rk_explicit_step.find("bool context_step_explicit_rk_mfem(") != std::string::npos,
         "explicit RK stepper must be defined in rk_explicit_step.cpp");
+    check(
+        rk_explicit_step.find("std::make_unique<RkAttemptCacheSnapshot>(ctx, false)") !=
+            std::string::npos &&
+            rk_explicit_step.find("fallback_attempt_cache") != std::string::npos,
+        "adaptive RK stepper must allocate its compatibility checkpoint outside the attempt loop");
 }
 
 void integrator_source_files_document_module_boundaries() {

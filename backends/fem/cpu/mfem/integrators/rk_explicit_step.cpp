@@ -160,6 +160,25 @@ bool context_step_explicit_rk_mfem(
     const bool fsal_reuse_allowed = rk_rhs_allows_fsal_reuse(ctx);
     double exchange_energy_final = 0.0;
     double demag_energy_final = 0.0;
+    std::unique_ptr<RkAttemptCacheSnapshot> fallback_attempt_cache;
+    RkAttemptCacheSnapshot *attempt_cache = nullptr;
+    if (adaptive) {
+        if (ws.attempt_checkpoint != nullptr) {
+            attempt_cache = ws.attempt_checkpoint.get();
+        } else {
+            try {
+                fallback_attempt_cache =
+                    std::make_unique<RkAttemptCacheSnapshot>(ctx, false);
+            } catch (const std::bad_alloc &) {
+                error = "RK attempt cache snapshot allocation failed";
+                return false;
+            }
+            if (!fallback_attempt_cache->prepare(error)) {
+                return false;
+            }
+            attempt_cache = fallback_attempt_cache.get();
+        }
+    }
 
     for (;;) {
         ctx.adaptive_dt.current_dt = dt;
@@ -185,9 +204,8 @@ bool context_step_explicit_rk_mfem(
         }
         const uint32_t demag_solves_before_attempt = ctx.poisson_demag.solves_current_step;
         const uint32_t rhs_before_attempt = total_rhs;
-        std::unique_ptr<RkAttemptCacheSnapshot> attempt_cache;
-        if (adaptive) {
-            attempt_cache = std::make_unique<RkAttemptCacheSnapshot>(ctx);
+        if (adaptive && !attempt_cache->capture(error)) {
+            return false;
         }
         ws.m_backup = ctx.state.m_xyz;
         if (ctx.frozen_spins.enabled()) {

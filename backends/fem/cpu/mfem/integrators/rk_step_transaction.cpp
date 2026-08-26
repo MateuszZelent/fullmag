@@ -83,6 +83,16 @@ void restore_vector(mfem::Vector *vector, const std::vector<double> &snapshot)
     }
     std::copy(snapshot.begin(), snapshot.end(), vector->GetData());
 }
+
+void capture_vector_into(const mfem::Vector *vector, std::vector<double> &snapshot)
+{
+    if (vector == nullptr) {
+        snapshot.clear();
+        return;
+    }
+    snapshot.resize(static_cast<size_t>(vector->Size()));
+    std::copy(vector->GetData(), vector->GetData() + vector->Size(), snapshot.begin());
+}
 #endif
 
 struct PhaseTimingSnapshot {
@@ -544,28 +554,37 @@ bool rk_restore_active_step_device_checkpoint(Context &ctx, std::string &error)
 struct RkAttemptCacheSnapshot::Impl {
     explicit Impl(Context &context, bool profile_enabled)
         : ctx(context),
-          profile_enabled(profile_enabled),
-          anisotropy(context.anisotropy),
-          magnetoelastic(context.magnetoelastic),
-          exchange(context.exchange),
-          demag(context.demag),
-          zeeman(context.zeeman),
-          dmi(context.dmi),
-          effective_field(context.effective_field),
-          oersted(context.oersted),
-          stage_transport(context.stage_transport),
-          gpu_hybrid_stage_m(context.gpu_state.device.demag_poisson.hybrid_stage_m_xyz),
-          gpu_hybrid_demag(context.gpu_state.device.demag_poisson.hybrid_demag_xyz),
-          gpu_hybrid_demag_energy(context.gpu_state.device.demag_poisson.hybrid_demag_energy_joules)
+          profile_enabled(profile_enabled)
     {
+    }
+
+    void capture()
+    {
+        anisotropy = ctx.anisotropy;
+        magnetoelastic = ctx.magnetoelastic;
+        exchange = ctx.exchange;
+        demag = ctx.demag;
+        zeeman = ctx.zeeman;
+        dmi = ctx.dmi;
+        effective_field = ctx.effective_field;
+        oersted = ctx.oersted;
+        stage_transport = ctx.stage_transport;
+        gpu_hybrid_stage_m = ctx.gpu_state.device.demag_poisson.hybrid_stage_m_xyz;
+        gpu_hybrid_demag = ctx.gpu_state.device.demag_poisson.hybrid_demag_xyz;
+        gpu_hybrid_demag_energy =
+            ctx.gpu_state.device.demag_poisson.hybrid_demag_energy_joules;
 #if FULLMAG_HAS_MFEM_STACK
-        poisson_solution = capture_vector(context.poisson_demag.solution_vec);
-        periodic_solution = capture_vector(context.poisson_demag.periodic_solution);
-        poisson_grid_function = capture_vector(context.poisson_demag.gf_potential);
-        if (auto *workspace = demag_fem_bem_workspace(context)) {
-            fem_bem_u1 = capture_vector(workspace->u1.get());
-            fem_bem_u2 = capture_vector(workspace->u2.get());
-            fem_bem_total = capture_vector(workspace->total_potential.get());
+        capture_vector_into(ctx.poisson_demag.solution_vec, poisson_solution);
+        capture_vector_into(ctx.poisson_demag.periodic_solution, periodic_solution);
+        capture_vector_into(ctx.poisson_demag.gf_potential, poisson_grid_function);
+        if (auto *workspace = demag_fem_bem_workspace(ctx)) {
+            capture_vector_into(workspace->u1.get(), fem_bem_u1);
+            capture_vector_into(workspace->u2.get(), fem_bem_u2);
+            capture_vector_into(workspace->total_potential.get(), fem_bem_total);
+        } else {
+            fem_bem_u1.clear();
+            fem_bem_u2.clear();
+            fem_bem_total.clear();
         }
 #endif
     }
@@ -678,19 +697,68 @@ struct RkAttemptCacheSnapshot::Impl {
 };
 
 RkAttemptCacheSnapshot::RkAttemptCacheSnapshot(Context &ctx)
+    : RkAttemptCacheSnapshot(ctx, true)
+{
+}
+
+RkAttemptCacheSnapshot::RkAttemptCacheSnapshot(Context &ctx, bool capture_now)
     : impl_(nullptr)
 {
     const bool profile_enabled = step_profile_enabled(ctx);
-    const auto capture_start = profile_enabled ? SteadyClock::now() : SteadyClock::time_point{};
+    const auto capture_start =
+        capture_now && profile_enabled ? SteadyClock::now() : SteadyClock::time_point{};
     impl_ = std::make_unique<Impl>(ctx, profile_enabled);
+    if (capture_now) {
+        impl_->capture();
+        if (profile_enabled) {
+            const auto capture_done = SteadyClock::now();
+            auto &telemetry = ctx.stepper.transaction_telemetry;
+            telemetry.attempt_cache_capture_count += 1;
+            telemetry.attempt_cache_capture_wall_time_ns +=
+                elapsed_wall_time_ns(capture_start, capture_done);
+            telemetry.attempt_cache_snapshot_payload_bytes += impl_->snapshot_payload_bytes();
+        }
+    }
+}
+
+bool RkAttemptCacheSnapshot::prepare(std::string &error)
+{
+    if (impl_ == nullptr) {
+        error = "RK attempt cache snapshot is not initialized";
+        return false;
+    }
+    try {
+        impl_->capture();
+    } catch (const std::bad_alloc &) {
+        error = "RK attempt cache snapshot preparation allocation failed";
+        return false;
+    }
+    return true;
+}
+
+bool RkAttemptCacheSnapshot::capture(std::string &error)
+{
+    if (impl_ == nullptr) {
+        error = "RK attempt cache snapshot is not initialized";
+        return false;
+    }
+    const bool profile_enabled = impl_->profile_enabled;
+    const auto capture_start = profile_enabled ? SteadyClock::now() : SteadyClock::time_point{};
+    try {
+        impl_->capture();
+    } catch (const std::bad_alloc &) {
+        error = "RK attempt cache snapshot capture allocation failed";
+        return false;
+    }
     if (profile_enabled) {
         const auto capture_done = SteadyClock::now();
-        auto &telemetry = ctx.stepper.transaction_telemetry;
+        auto &telemetry = impl_->ctx.stepper.transaction_telemetry;
         telemetry.attempt_cache_capture_count += 1;
         telemetry.attempt_cache_capture_wall_time_ns +=
             elapsed_wall_time_ns(capture_start, capture_done);
         telemetry.attempt_cache_snapshot_payload_bytes += impl_->snapshot_payload_bytes();
     }
+    return true;
 }
 
 RkAttemptCacheSnapshot::~RkAttemptCacheSnapshot() = default;

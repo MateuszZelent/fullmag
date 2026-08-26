@@ -43,11 +43,14 @@ bool rk_restore_active_step_device_checkpoint(Context &ctx, std::string &error);
 class RkAttemptCacheSnapshot {
 public:
     explicit RkAttemptCacheSnapshot(Context &ctx);
+    RkAttemptCacheSnapshot(Context &ctx, bool capture_now);
     ~RkAttemptCacheSnapshot();
 
     RkAttemptCacheSnapshot(const RkAttemptCacheSnapshot &) = delete;
     RkAttemptCacheSnapshot &operator=(const RkAttemptCacheSnapshot &) = delete;
 
+    bool prepare(std::string &error);
+    bool capture(std::string &error);
     void restore_preserving_attempt_counters();
 
 private:
