@@ -36,11 +36,12 @@ body.Aex = 13.0e-12
 body.alpha = 0.02
 body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
-study.exchange()
-study.demag()
 study.stages.add_run(stage_id="sample", until=1.0e-12)
 ```
 
+`exchange` and `demag` are active by default. Use `study.demag(realization=...)` only to
+configure a non-default realization and `study.disable_demag()` only for an intentional
+demag-free model. The compatibility form `study.demag(enabled=False)` remains accepted.
 `model` and `realization` are mutually exclusive. `variant` is legal only for `model="airbox"`.
 
 ## Core parameters
@@ -50,6 +51,8 @@ study.stages.add_run(stage_id="sample", until=1.0e-12)
 | `model` | `str or None` | `None` | requested family: `airbox`, `bem`, `fredkin_koehler`, `fmm` | enum; capability later |
 | `variant` | `str or None` | `None` | `auto`, `robin`, or `dirichlet` for airbox | rejected for other models |
 | `realization` | `str or None` | `None` | legacy explicit realization/alias | cannot accompany `model` |
+| no demag control call | authoring default | active | include demagnetization | none |
+| `study.disable_demag()` | method | not called | explicitly remove demagnetization | no parameters |
 
 FDM grids, multilayer convolution, periodicity, boundary correction, and FEM linear-solver policy
 belong to discretization objects. Do not duplicate their full parameter tables on this interaction

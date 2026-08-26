@@ -104,5 +104,8 @@ def test_bimeron_example_accepts_uniform_uniaxial_mixed_p1_before_geometry_asset
     loaded = load_problem_from_script(EXAMPLE, lightweight_assets=True)
     problem_ir = loaded.problem.to_ir(include_geometry_assets=False)
 
+    term_kinds = [term["kind"] for term in problem_ir["energy_terms"]]
+    assert "exchange" in term_kinds
+    assert "demag" in term_kinds
     assert problem_ir["materials"][0]["uniaxial_anisotropy"] == pytest.approx(1.0e5)
     assert problem_ir["materials"][0]["anisotropy_axis"] == [0.0, 0.0, 1.0]

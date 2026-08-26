@@ -50,8 +50,6 @@ film.Aex = 13.0e-12
 film.alpha = 0.1
 film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 
-study.exchange()
-study.demag()
 study.solver(fix_dt=5.0e-13, gamma=2.211e5)
 
 study.stages.add_relax(
@@ -81,8 +79,9 @@ study.stages.add_relax(
 - `film.Ms`, `film.Aex` and `film.alpha` set saturation magnetization
   $\mathrm{A\,m^{-1}}$, exchange stiffness $\mathrm{J\,m^{-1}}$ and the Gilbert damping
   parameter ($1$, dimensionless).
-- `study.exchange()` and `study.demag()` register exchange and the FDM demagnetizing-field
-  interaction. No FEM Airbox realization is requested on this lane.
+- Exchange and demagnetization are registered by default. `film.Aex` supplies the exchange
+  stiffness; it is not an enable call. Use `study.disable_exchange()` or
+  `study.disable_demag()` only for an intentional opt-out.
 - `study.solver(fix_dt=..., gamma=...)` sets the fixed solver timestep and the positive
   gyromagnetic ratio in $\mathrm{m\,A^{-1}\,s^{-1}}$.
 - `study.stages.add_relax(...)` declares the ordered relaxation stage; its `.tableautosave(...)`

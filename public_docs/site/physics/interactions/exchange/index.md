@@ -167,6 +167,9 @@ canonical stage workflow. This is the form used by the public script loader and 
 
 The following block is both a regular Python script and a Jupyter-compatible sequence of `# %%`
 cells. It builds an exchange-only study with relaxation followed by a physical-time run.
+Exchange is active by default. The material assignment `body.Aex = ...` supplies the stiffness;
+it does not need a matching `study.exchange()`. An intentional exchange-free model must call
+`study.disable_exchange()`.
 
 ```python
 # %% Imports and SI constants
@@ -176,7 +179,6 @@ nm = 1.0e-9
 
 study = fm.study("exchange_only")
 study.engine("fdm")
-study.exchange()
 study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 1 * nm))
 
 # %% Geometry and material

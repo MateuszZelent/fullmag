@@ -1,0 +1,289 @@
+{
+  "document": {
+    "path": "docs/physics/0880-active-effective-field-terms.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "implemented",
+      "scope": "Active ProblemIR terms select CPU exchange and demag operators.",
+      "qualification": "scenario-specific",
+      "evidence": "existing planner and CPU runtime tests"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "implemented",
+      "scope": "Active ProblemIR terms select CUDA exchange and demag operators.",
+      "qualification": "executed-device evidence required",
+      "evidence": "source and lane-specific runtime gates"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "implemented",
+      "scope": "Active ProblemIR terms select native MFEM exchange and demag operators.",
+      "qualification": "operator and workload specific",
+      "evidence": "existing planner and managed runtime gates"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "implemented",
+      "scope": "Active ProblemIR terms select native CUDA/MFEM exchange and demag operators.",
+      "qualification": "managed executed-device evidence required",
+      "evidence": "source and lane-specific managed runtime gates"
+    }
+  ],
+  "sources": [
+    {
+      "id": "python-world-state",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class _WorldState",
+      "responsibility": "owns default-on exchange and demag authoring flags"
+    },
+    {
+      "id": "python-lowering",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "_build_problem",
+      "responsibility": "constructs active Exchange and Demag terms and preserves authored demag configuration"
+    },
+    {
+      "id": "python-exchange-term",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class Exchange",
+      "responsibility": "public exchange term and ProblemIR lowering"
+    },
+    {
+      "id": "python-demag-term",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class Demag",
+      "responsibility": "public demag term, realization normalization, and ProblemIR lowering"
+    },
+    {
+      "id": "python-render-exchange",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_exchange",
+      "responsibility": "omits default exchange and emits explicit disable"
+    },
+    {
+      "id": "python-render-demag",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_demag",
+      "responsibility": "separates demag realization configuration from explicit disable"
+    },
+    {
+      "id": "scene-study",
+      "path": "crates/fullmag-authoring/src/scene.rs",
+      "symbol": "SceneStudyState",
+      "responsibility": "preserves default-true browser authoring flags"
+    },
+    {
+      "id": "fdm-planner",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "plan_fdm",
+      "responsibility": "resolves FDM operators from active ProblemIR terms"
+    },
+    {
+      "id": "fem-planner",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "plan_fem",
+      "responsibility": "resolves FEM operators from active ProblemIR terms"
+    },
+    {
+      "id": "python-contract-tests",
+      "path": "packages/fullmag-py/tests/test_api.py",
+      "symbol": "class ProblemApiTests",
+      "responsibility": "proves default terms, explicit opt-out, canonical rewrite, and round-trip"
+    }
+  ],
+  "symbols": [
+    {
+      "id": "m",
+      "latex": "$\\mathbf m$",
+      "meaning": "reduced magnetization",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "M",
+      "latex": "$\\mathbf M$",
+      "meaning": "magnetization",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "Ms",
+      "latex": "$M_s$",
+      "meaning": "saturation magnetization",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "Heff",
+      "latex": "$\\mathbf H_{\\mathrm{eff}}$",
+      "meaning": "active effective field",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "Hi",
+      "latex": "$\\mathbf H_i$",
+      "meaning": "field contribution of active term $i$",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "Hd",
+      "latex": "$\\mathbf H_{\\mathrm d}$",
+      "meaning": "demagnetizing field",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "Ei",
+      "latex": "$E_i$",
+      "meaning": "energy functional of term $i$",
+      "si_unit": "$\\mathrm{J}$"
+    },
+    {
+      "id": "Eex",
+      "latex": "$E_{\\mathrm{ex}}$",
+      "meaning": "exchange energy",
+      "si_unit": "$\\mathrm{J}$"
+    },
+    {
+      "id": "Ed",
+      "latex": "$E_{\\mathrm d}$",
+      "meaning": "demagnetizing energy",
+      "si_unit": "$\\mathrm{J}$"
+    },
+    {
+      "id": "Aex",
+      "latex": "$A_{\\mathrm{ex}}$",
+      "meaning": "exchange stiffness field",
+      "si_unit": "$\\mathrm{J\\,m^{-1}}$"
+    },
+    {
+      "id": "mu0",
+      "latex": "$\\mu_0$",
+      "meaning": "vacuum permeability",
+      "si_unit": "$\\mathrm{N\\,A^{-2}}$"
+    },
+    {
+      "id": "Omega",
+      "latex": "$\\Omega_m$",
+      "meaning": "magnetic domain",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "active",
+      "latex": "$\\mathcal A$",
+      "meaning": "authored set of active energy terms",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "grad",
+      "latex": "$\\nabla$",
+      "meaning": "spatial gradient",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "norm",
+      "latex": "$\\lVert\\cdot\\rVert_F$",
+      "meaning": "Frobenius norm",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "dV",
+      "latex": "$\\mathrm dV$",
+      "meaning": "volume measure",
+      "si_unit": "$\\mathrm{m^3}$"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-active-effective-field",
+      "symbols": [
+        "m",
+        "Ms",
+        "Heff",
+        "Hi",
+        "Ei",
+        "mu0",
+        "active"
+      ],
+      "sources": [
+        "python-world-state",
+        "python-lowering"
+      ]
+    },
+    {
+      "id": "eq-active-exchange",
+      "symbols": [
+        "m",
+        "Eex",
+        "Aex",
+        "Omega",
+        "grad",
+        "norm",
+        "dV"
+      ],
+      "sources": [
+        "python-exchange-term",
+        "python-lowering"
+      ]
+    },
+    {
+      "id": "eq-active-demag",
+      "symbols": [
+        "m",
+        "Ms",
+        "Hd",
+        "Ed",
+        "mu0",
+        "Omega",
+        "dV"
+      ],
+      "sources": [
+        "python-demag-term",
+        "python-lowering"
+      ]
+    }
+  ],
+  "public_api": {
+    "constructors": [
+      "fullmag.disable_exchange",
+      "fullmag.disable_demag",
+      "fullmag.StudyBuilder.disable_exchange",
+      "fullmag.StudyBuilder.disable_demag"
+    ],
+    "parameters": [
+      {
+        "python": "fm.disable_exchange()",
+        "type": "operation",
+        "default": "not called",
+        "si_unit": "$1$",
+        "validation": "no parameters",
+        "meaning": "explicitly remove exchange",
+        "backend_support": "all authoring lanes",
+        "problem_ir": "absence of `kind=exchange`"
+      },
+      {
+        "python": "fm.disable_demag()",
+        "type": "operation",
+        "default": "not called",
+        "si_unit": "$1$",
+        "validation": "no parameters",
+        "meaning": "explicitly remove demag",
+        "backend_support": "all authoring lanes",
+        "problem_ir": "absence of `kind=demag`"
+      },
+      {
+        "python": "study.demag(realization=...)",
+        "type": "operation",
+        "default": "default realization",
+        "si_unit": "$1$",
+        "validation": "supported canonical realization string",
+        "meaning": "configure active demag",
+        "backend_support": "realization-dependent",
+        "problem_ir": "`kind=demag` plus realization"
+      }
+    ]
+  }
+}

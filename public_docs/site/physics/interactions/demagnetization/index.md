@@ -119,11 +119,12 @@ body.Aex = 13.0e-12
 body.alpha = 0.02
 body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
-study.exchange()
-study.demag()
 study.stages.add_run(stage_id="sample", until=1.0e-12)
 ```
 
+Exchange and demagnetization are active by default. Call `study.demag(realization=...)` only to
+select a non-default realization. Call `study.disable_demag()` only when the authored physics
+intentionally excludes demagnetization.
 A FEM request should state its realization and solver policy explicitly, for example
 `study.demag(realization="poisson_robin")`, together with the airbox and mesh controls.
 

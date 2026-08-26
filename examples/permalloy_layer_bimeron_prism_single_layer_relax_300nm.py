@@ -75,7 +75,6 @@ layer.mesh.thin_film(
 )
 
 # Interactions, mesh, and solver
-study.exchange()
 study.demag(realization="poisson_robin")
 study.objects.mesh.defaults(
     algorithm_2d=6,

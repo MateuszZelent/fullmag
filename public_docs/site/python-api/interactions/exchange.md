@@ -36,12 +36,14 @@ body.Aex = 13.0e-12
 body.alpha = 0.02
 body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
-study.exchange()
 study.stages.add_relax(stage_id="relax", algorithm="projected_gradient_bb", max_steps=500, tolT=1.0e-6)
 ```
 
-Exchange is enabled by `study.exchange()` or represented by `fullmag.Exchange()`. The exchange
-stiffness is material-owned (`A` in `Material`, exposed as `Aex` on a study geometry handle).
+Exchange is active by default; assigning a positive `Aex` supplies its material coefficient and
+does not require `study.exchange()`. Use `study.disable_exchange()` only for an intentional
+exchange-free model. The compatibility form `study.exchange(enabled=False)` remains accepted.
+The exchange stiffness is material-owned (`A` in `Material`, exposed as `Aex` on a study
+geometry handle).
 
 ## Parameters
 
@@ -51,7 +53,8 @@ stiffness is material-owned (`A` in `Material`, exposed as `Aex` on a study geom
 | `Material.A` | `float` | required for active exchange | $\mathrm{J\,m^{-1}}$ | Python + IR | `materials[].exchange_stiffness` |
 | geometry-handle `.Aex` | `float` | unset | $\mathrm{J\,m^{-1}}$ | facade + IR | same canonical material field |
 | `Material.A_field` | sequence or artifact | unset | $\mathrm{J\,m^{-1}}$ | planner cardinality/finite checks | spatial material field |
-| `study.exchange()` | method | disabled until called | — | study builder | canonical `Exchange()` term |
+| no exchange control call | authoring default | active | $1$ | study builder | canonical `Exchange()` term |
+| `study.disable_exchange()` | method | not called | $1$ | study builder | exchange term absent |
 
 (api-exchange-problem-ir)=
 ## Lowering

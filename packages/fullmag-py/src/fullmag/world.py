@@ -5519,6 +5519,14 @@ class StudyBuilder:
         exchange(enabled=enabled)
         return self
 
+    def disable_exchange(self) -> "StudyBuilder":
+        disable_exchange()
+        return self
+
+    def disable_demag(self) -> "StudyBuilder":
+        disable_demag()
+        return self
+
     def thermal_noise(
         self, temperature: float, *, seed: int | None = None
     ) -> "StudyBuilder":
@@ -6037,6 +6045,16 @@ def demag(
 def exchange(*, enabled: bool = True) -> None:
     """Configure whether exchange contributes to H_eff in the flat API."""
     _state._exchange_enabled = bool(enabled)
+
+
+def disable_exchange() -> None:
+    """Explicitly remove exchange from the authored effective field."""
+    _state._exchange_enabled = False
+
+
+def disable_demag() -> None:
+    """Explicitly remove demagnetization from the authored effective field."""
+    _state._demag_enabled = False
 
 
 def thermal_noise(temperature: float, *, seed: int | None = None) -> ThermalNoise:
@@ -8492,6 +8510,8 @@ def _build_problem(
 
     runtime_metadata: dict[str, Any] = {"interactive_session_requested": s._interactive}
     runtime_metadata["script_api_surface"] = s._api_surface
+    if s._demag_realization is not None:
+        runtime_metadata["authored_demag_realization"] = s._demag_realization
     if s._study_universe is not None:
         runtime_metadata["study_universe"] = s._study_universe.to_ir()
     if s._wait_for_solve:

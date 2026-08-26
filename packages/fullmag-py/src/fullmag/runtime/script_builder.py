@@ -745,14 +745,17 @@ def _render_scene_document_bootstrap(builder: Mapping[str, object]) -> str:
     if not handles:
         raise ValueError("SceneDocument export requires at least one magnetic object.")
 
-    if builder.get("exchange_enabled") is not None:
-        lines.append(f"study.exchange(enabled={bool(builder.get('exchange_enabled'))!r})")
-    if builder.get("demag_enabled") is not None:
-        demag_kwargs: dict[str, object] = {"enabled": bool(builder.get("demag_enabled"))}
-        realization = builder.get("demag_realization")
-        if isinstance(realization, str) and realization.strip():
-            demag_kwargs["realization"] = realization
-        lines.append(f"study.demag({_python_keyword_args(demag_kwargs)})")
+    if builder.get("exchange_enabled") is False:
+        lines.append("study.disable_exchange()")
+    demag_enabled = builder.get("demag_enabled")
+    realization = builder.get("demag_realization")
+    explicit_demag_realization = (
+        isinstance(realization, str) and bool(realization.strip())
+    )
+    if explicit_demag_realization:
+        lines.append(f"study.demag(realization={_python_literal(realization)})")
+    if demag_enabled is False:
+        lines.append("study.disable_demag()")
 
     external_field = builder.get("external_field")
     if isinstance(external_field, (list, tuple)) and len(external_field) == 3:
@@ -7929,7 +7932,10 @@ def _problem_demag_realization(problem: Problem) -> str | None:
     for term in problem.energy:
         if isinstance(term, Demag):
             return term.realization
-    return None
+    authored = _normalize_mapping(problem.runtime_metadata).get(
+        "authored_demag_realization"
+    )
+    return str(authored) if isinstance(authored, str) and authored.strip() else None
 
 
 def _problem_has_exchange(problem: Problem) -> bool:
@@ -8014,7 +8020,7 @@ def _render_exchange(
         return []
     return [
         "# Effective-field terms",
-        f"{_surface_call(surface, 'exchange')}(enabled=False)",
+        f"{_surface_call(surface, 'disable_exchange')}()",
     ]
 
 
@@ -8030,23 +8036,16 @@ def _render_demag(
         "",
         "auto",
     }
-    fdm = problem.discretization.fdm if problem.discretization is not None else None
-    canonical_fdm = (
-        surface == "study"
-        and isinstance(fdm, FDM)
-        and _uses_canonical_fdm_mesh_authoring(fdm)
-    )
-    if enabled and not explicit_realization and not canonical_fdm:
+    if enabled and not explicit_realization:
         return []
-    kwargs: list[str] = []
-    if not enabled:
-        kwargs.append("enabled=False")
+    lines = ["# Outer boundary / demag"]
     if explicit_realization:
-        kwargs.append(f"realization={_py_repr(realization)}")
-    return [
-        "# Outer boundary / demag",
-        f"{_surface_call(surface, 'demag')}({', '.join(kwargs)})",
-    ]
+        lines.append(
+            f"{_surface_call(surface, 'demag')}(realization={_py_repr(realization)})"
+        )
+    if not enabled:
+        lines.append(f"{_surface_call(surface, 'disable_demag')}()")
+    return lines
 
 
 def _render_thermal_noise(problem: Problem, *, surface: str) -> list[str]:
