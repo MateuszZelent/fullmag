@@ -604,7 +604,9 @@ mod adaptive_decision_tests {
             aos_before
         );
 
-        let mut buffer_soa = problem.uniform_state([1.0, 0.0, 0.0]).expect("buffer SoA state");
+        let mut buffer_soa = problem
+            .uniform_state([1.0, 0.0, 0.0])
+            .expect("buffer SoA state");
         let mut buffer_soa_ws = problem.create_workspace();
         let mut buffer_soa_bufs = problem.create_integrator_buffers();
         for _ in 0..3 {
@@ -664,6 +666,110 @@ mod adaptive_decision_tests {
             .expect_err("persistent SoA non-finite candidate must fail before commit");
         assert_eq!(error.code(), crate::EngineErrorCode::NaNValue);
         assert_eq!(persistent_soa.transactional_state_digest(), persistent_before);
+    }
+
+    #[test]
+    fn abm3_restarts_history_before_using_changed_dt() {
+        let problem = crate::ExchangeLlgProblem::with_terms(
+            crate::GridShape::new(1, 1, 1).expect("grid"),
+            crate::CellSize::new(1.0, 1.0, 1.0).expect("cell"),
+            crate::MaterialParameters::new(1.0, 1.0e-30, 0.1).expect("material"),
+            crate::LlgConfig::new(100.0, crate::TimeIntegrator::ABM3).expect("LLG"),
+            crate::EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                ..Default::default()
+            },
+        );
+        let startup_dt = 1.0e-3;
+        let changed_dt = 1.01e-3;
+
+        let mut aos = problem.uniform_state([1.0, 0.0, 0.0]).expect("AoS state");
+        let mut aos_ws = problem.create_workspace();
+        let mut aos_bufs = problem.create_integrator_buffers();
+        for _ in 0..3 {
+            problem
+                .abm3_step_buf(
+                    &mut aos,
+                    startup_dt,
+                    &mut aos_ws,
+                    &mut aos_bufs,
+                    crate::EvaluationRequest::Minimal,
+                )
+                .expect("AoS startup step");
+        }
+        assert!(aos.abm_history.is_ready());
+        problem
+            .abm3_step_buf(
+                &mut aos,
+                changed_dt,
+                &mut aos_ws,
+                &mut aos_bufs,
+                crate::EvaluationRequest::Minimal,
+            )
+            .expect("AoS restart step");
+        assert_eq!(aos.abm_history.startup_steps, 1);
+        assert!(aos.abm_history.f_n_minus_1.is_none());
+        assert_eq!(aos.abm_history.last_dt, changed_dt);
+
+        let mut buffer_soa = problem.uniform_state([1.0, 0.0, 0.0]).expect("buffer SoA state");
+        let mut buffer_soa_ws = problem.create_workspace();
+        let mut buffer_soa_bufs = problem.create_integrator_buffers();
+        for _ in 0..3 {
+            problem
+                .abm3_step_soa_buf(
+                    &mut buffer_soa,
+                    startup_dt,
+                    &mut buffer_soa_ws,
+                    &mut buffer_soa_bufs,
+                    crate::EvaluationRequest::Minimal,
+                )
+                .expect("buffer SoA startup step");
+        }
+        assert!(buffer_soa.abm_history.is_ready());
+        problem
+            .abm3_step_soa_buf(
+                &mut buffer_soa,
+                changed_dt,
+                &mut buffer_soa_ws,
+                &mut buffer_soa_bufs,
+                crate::EvaluationRequest::Minimal,
+            )
+            .expect("buffer SoA restart step");
+        assert_eq!(buffer_soa.abm_history.startup_steps, 1);
+        assert!(buffer_soa.abm_history.f_n_minus_1.is_none());
+        assert_eq!(buffer_soa.abm_history.last_dt, changed_dt);
+
+        let mut persistent_soa = problem
+            .uniform_state([1.0, 0.0, 0.0])
+            .expect("persistent SoA state")
+            .to_soa();
+        let mut persistent_soa_ws = problem.create_workspace();
+        let mut persistent_soa_bufs = problem.create_integrator_buffers();
+        for _ in 0..3 {
+            problem
+                .abm3_step_soa_state_buf(
+                    &mut persistent_soa,
+                    startup_dt,
+                    &mut persistent_soa_ws,
+                    &mut persistent_soa_bufs,
+                    crate::EvaluationRequest::Minimal,
+                )
+                .expect("persistent SoA startup step");
+        }
+        assert!(persistent_soa.abm_history.is_ready());
+        problem
+            .abm3_step_soa_state_buf(
+                &mut persistent_soa,
+                changed_dt,
+                &mut persistent_soa_ws,
+                &mut persistent_soa_bufs,
+                crate::EvaluationRequest::Minimal,
+            )
+            .expect("persistent SoA restart step");
+        assert_eq!(persistent_soa.abm_history.startup_steps, 1);
+        assert!(persistent_soa.abm_history.f_n_minus_1.is_none());
+        assert_eq!(persistent_soa.abm_history.last_dt, changed_dt);
     }
 
     #[test]
@@ -2719,9 +2825,10 @@ impl ExchangeLlgProblem {
     ) -> Result<StepReport> {
         let n = state.magnetization.len();
         let t0 = state.time_seconds;
+        let dt_changed = state.abm_history.requires_restart_for_dt(dt);
 
         // During startup, fall back to Heun to build history
-        if !state.abm_history.is_ready() {
+        if dt_changed || !state.abm_history.is_ready() {
             bufs.m0[..n].copy_from_slice(&state.magnetization);
 
             // k1 = f(t, m0)
@@ -2917,9 +3024,13 @@ impl ExchangeLlgProblem {
     ) -> Result<StepReport> {
         let n = state.magnetization.len();
         let t0 = state.time_seconds;
+        let dt_changed = state.abm_history.requires_restart_for_dt(dt);
 
-        if !state.abm_history.is_ready() {
+        if dt_changed || !state.abm_history.is_ready() {
             let mut trial_state = state.clone();
+            if dt_changed {
+                trial_state.abm_history.restart();
+            }
             let report = self.heun_step_soa_buf(&mut trial_state, dt, ws, bufs, evaluation)?;
 
             bufs.soa.m0.scatter_from_aos(&trial_state.magnetization);
@@ -3636,10 +3747,15 @@ impl ExchangeLlgProblem {
     ) -> Result<StepReport> {
         let n = state.magnetization.len();
         let t0 = state.time_seconds;
+        let dt_changed = state.abm_history.requires_restart_for_dt(dt);
 
-        if !state.abm_history.is_ready() {
+        if dt_changed || !state.abm_history.is_ready() {
             let mut trial_state = state.clone();
-            let report = self.heun_step_soa_state_buf(&mut trial_state, dt, ws, bufs, evaluation)?;
+            if dt_changed {
+                trial_state.abm_history.restart();
+            }
+            let report =
+                self.heun_step_soa_state_buf(&mut trial_state, dt, ws, bufs, evaluation)?;
 
             self.effective_field_into_soa_ws_at_time(
                 &trial_state.magnetization,

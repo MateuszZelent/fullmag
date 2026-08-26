@@ -8,6 +8,22 @@ use crate::{
 };
 use sha2::{Digest, Sha256};
 
+/// Relative step-size tolerance for the fixed-step ABM3 history.
+///
+/// ABM3 uses fixed-step coefficients. A step-size change outside this small
+/// round-off window must restart the multistep history before evaluating the
+/// predictor; otherwise the first step after the change mixes incompatible
+/// coefficients and stale RHS samples.
+pub(crate) const ABM_DT_RELATIVE_TOLERANCE: f64 = 1.0e-12;
+
+fn abm_dt_changed(last_dt: f64, dt: f64) -> bool {
+    if last_dt <= 0.0 {
+        return false;
+    }
+    let scale = last_dt.abs().max(dt.abs()).max(f64::MIN_POSITIVE);
+    (dt - last_dt).abs() > ABM_DT_RELATIVE_TOLERANCE * scale
+}
+
 // ── ExchangeLlgStateSoA ───────────────────────────────────────────────
 
 /// Structure-of-Arrays state for FDM LLG solver.
@@ -136,6 +152,19 @@ impl AbmHistorySoA {
             && self.f_n_minus_2.is_some()
     }
 
+    pub(crate) fn requires_restart_for_dt(&self, dt: f64) -> bool {
+        abm_dt_changed(self.last_dt, dt)
+    }
+
+    pub(crate) fn restart_if_dt_changed(&mut self, dt: f64) -> bool {
+        if self.requires_restart_for_dt(dt) {
+            self.restart();
+            true
+        } else {
+            false
+        }
+    }
+
     pub(crate) fn f_n(&self) -> Option<&VectorFieldSoA> {
         self.f_n.as_ref()
     }
@@ -149,10 +178,7 @@ impl AbmHistorySoA {
     }
 
     pub(crate) fn push_copy_from_soa(&mut self, f: &VectorFieldSoA, dt: f64) {
-        // Check if dt has changed significantly — if so, restart.
-        if self.last_dt > 0.0 && (dt - self.last_dt).abs() / self.last_dt > 0.1 {
-            self.restart();
-        }
+        self.restart_if_dt_changed(dt);
 
         let mut newest = self
             .f_n_minus_2
@@ -382,6 +408,19 @@ impl AbmHistory {
             && self.f_n_minus_2.is_some()
     }
 
+    pub(crate) fn requires_restart_for_dt(&self, dt: f64) -> bool {
+        abm_dt_changed(self.last_dt, dt)
+    }
+
+    pub(crate) fn restart_if_dt_changed(&mut self, dt: f64) -> bool {
+        if self.requires_restart_for_dt(dt) {
+            self.restart();
+            true
+        } else {
+            false
+        }
+    }
+
     pub(crate) fn f_n(&self) -> Option<&[Vector3]> {
         self.f_n.as_deref()
     }
@@ -396,10 +435,7 @@ impl AbmHistory {
 
     /// Push a new RHS evaluation, rotating the history buffer.
     pub(crate) fn push(&mut self, f: Vec<Vector3>, dt: f64) {
-        // Check if dt has changed significantly — if so, restart.
-        if self.last_dt > 0.0 && (dt - self.last_dt).abs() / self.last_dt > 0.1 {
-            self.restart();
-        }
+        self.restart_if_dt_changed(dt);
         self.f_n_minus_2 = self.f_n_minus_1.take();
         self.f_n_minus_1 = self.f_n.take();
         self.f_n = Some(f);
@@ -412,10 +448,7 @@ impl AbmHistory {
     /// This preserves [`Self::push`] ordering and restart semantics, but after
     /// all three slots exist it rotates and overwrites existing allocations.
     pub(crate) fn push_copy_from_slice(&mut self, f: &[Vector3], dt: f64) {
-        // Check if dt has changed significantly — if so, restart.
-        if self.last_dt > 0.0 && (dt - self.last_dt).abs() / self.last_dt > 0.1 {
-            self.restart();
-        }
+        self.restart_if_dt_changed(dt);
 
         let mut newest = self
             .f_n_minus_2
