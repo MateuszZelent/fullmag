@@ -1079,6 +1079,16 @@ add_executable(
     tests/gpu_strict_execution_contract.cpp
 )
 target_link_libraries(fem_gpu_strict_execution_contract PRIVATE fullmag_fem)
+if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA)
+    target_link_libraries(fem_gpu_strict_execution_contract PRIVATE CUDA::cudart)
+endif()
+if(FULLMAG_USE_MFEM_STACK)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_gpu_strict_execution_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_gpu_strict_execution_contract PRIVATE mfem)
+    endif()
+endif()
 target_include_directories(fem_gpu_strict_execution_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}

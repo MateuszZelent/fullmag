@@ -24,6 +24,9 @@
 #include "cpu/mfem/runtime/step_metrics.hpp"
 #include "cpu/mfem/runtime/mfem_device.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
+#if FULLMAG_HAS_CUDA_RUNTIME
+#include "gpu/cuda/integrators/rk/rk_step_preflight.hpp"
+#endif
 #include "gpu/cuda/runtime/execution_receipt.hpp"
 #include "gpu/cuda/relaxation/nonlinear_cg.hpp"
 #include "gpu/cuda/relaxation/pgbb.hpp"
@@ -57,6 +60,44 @@ int run_backend_step_attempt(
 #if FULLMAG_HAS_MFEM_STACK
     error.clear();
     energy_rejected = false;
+    const bool gpu_requested = mfem_device_requests_gpu(ctx);
+    const bool strict_gpu_request =
+        ctx.gpu_state.execution_request ==
+        FULLMAG_FEM_GPU_EXECUTION_REQUEST_STRICT_DEVICE;
+#if FULLMAG_HAS_CUDA_RUNTIME
+    if (gpu_requested && strict_gpu_request) {
+        GpuRkStepPreflight preflight{};
+        const auto &preflight_tableau = tableau_for_integrator(ctx.base_plan.integrator);
+        if (!gpu_rk_prepare_step_preflight(
+                ctx,
+                preflight_tableau,
+                dt_seconds,
+                preflight,
+                error)) {
+            if (error.empty()) {
+                error = "strict FEM GPU execution failed native step preflight";
+            }
+            set_stage_completion(
+                ctx,
+                FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+                nullptr,
+                0.0,
+                0.0);
+            return FULLMAG_FEM_ERR_UNAVAILABLE;
+        }
+    }
+#else
+    if (gpu_requested && strict_gpu_request) {
+        error = "strict FEM GPU execution requires CUDA runtime support";
+        set_stage_completion(
+            ctx,
+            FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+            nullptr,
+            0.0,
+            0.0);
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    }
+#endif
     const bool previous_energy_valid =
         ctx.stage_completion.relax_previous_total_energy_valid;
     const double previous_energy_j =
@@ -115,7 +156,6 @@ int run_backend_step_attempt(
     bool ok = false;
     ctx.interrupt.step_interrupted = false;
     ctx.transfer_audit.audit.reset_step_violation();
-    const bool gpu_requested = mfem_device_requests_gpu(ctx);
     if (gpu_requested) {
         gpu_attempt_hot_loop.emplace(
             ctx.transfer_audit.audit,

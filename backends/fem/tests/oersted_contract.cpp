@@ -303,8 +303,7 @@ void check_near(double actual, double expected, double tol, const char *msg) {
     }
 }
 
-fullmag::fem::Context make_cylinder_context() {
-    fullmag::fem::Context ctx;
+void configure_cylinder_context(fullmag::fem::Context &ctx) {
     ctx.mesh.n_nodes = 4;
     ctx.mesh.nodes_xyz = {
         0.0, 0.0, 0.0,
@@ -317,11 +316,11 @@ fullmag::fem::Context make_cylinder_context() {
     ctx.oersted.radius = 1.0;
     ctx.oersted.center = {0.0, 0.0, 0.0};
     ctx.oersted.axis = {0.0, 0.0, 2.0};
-    return ctx;
 }
 
 void analytical_cylinder_is_precomputed_for_unit_current() {
-    auto ctx = make_cylinder_context();
+    fullmag::fem::Context ctx;
+    configure_cylinder_context(ctx);
     std::string error;
 
     check(
@@ -364,7 +363,8 @@ void analytical_cylinder_is_precomputed_for_unit_current() {
 }
 
 void invalid_axis_is_rejected() {
-    auto ctx = make_cylinder_context();
+    fullmag::fem::Context ctx;
+    configure_cylinder_context(ctx);
     ctx.oersted.axis = {0.0, 0.0, 0.0};
     std::string error;
 
@@ -375,7 +375,8 @@ void invalid_axis_is_rejected() {
 }
 
 void time_modulation_scales_cylinder_current() {
-    auto ctx = make_cylinder_context();
+    fullmag::fem::Context ctx;
+    configure_cylinder_context(ctx);
 
     ctx.oersted.time_dep_kind = 1;
     ctx.oersted.time_dep_freq = 1.0;
@@ -407,7 +408,8 @@ void time_modulation_scales_cylinder_current() {
 }
 
 void time_modulation_uses_explicit_evaluation_time() {
-    auto ctx = make_cylinder_context();
+    fullmag::fem::Context ctx;
+    configure_cylinder_context(ctx);
     ctx.oersted.time_dep_kind = 1;
     ctx.oersted.time_dep_freq = 1.0;
     ctx.oersted.time_dep_phase = 0.0;
@@ -454,7 +456,8 @@ void time_modulation_uses_explicit_evaluation_time() {
 }
 
 void rk_tableau_time_samples_cover_sinus_and_pulse_edge() {
-    auto ctx = make_cylinder_context();
+    fullmag::fem::Context ctx;
+    configure_cylinder_context(ctx);
     ctx.oersted.time_dep_kind = 1;
     ctx.oersted.time_dep_freq = 1.0;
     ctx.oersted.time_dep_phase = 0.0;
@@ -517,7 +520,8 @@ void explicit_oersted_field_is_added_unscaled() {
 }
 
 void public_oersted_field_materializes_cylinder_at_explicit_time() {
-    auto ctx = make_cylinder_context();
+    fullmag::fem::Context ctx;
+    configure_cylinder_context(ctx);
     std::string error;
     check(fullmag::fem::normalize_oersted_cylinder_axis(ctx, error), error.c_str());
     check(fullmag::fem::initialize_oersted_cylinder_field(ctx, error), error.c_str());

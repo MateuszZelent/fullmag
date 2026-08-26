@@ -8,6 +8,7 @@
 #include "cpu/mfem/integrators/rk_explicit.hpp"
 
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 #include <string>
 
@@ -35,14 +36,18 @@ void make_exchange_context_ready(Context &ctx, fullmag_fem_integrator integrator
     ctx.gpu_state.device.lifecycle.node_count = 8;
     ctx.gpu_state.device.lifecycle.dof_len = 24;
     ctx.gpu_state.device.lifecycle.stage_count = gpu_rk_stage_count(integrator);
+    ctx.gpu_state.residency.source_of_truth =
+        FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH;
+    ctx.gpu_state.residency.host_state = FemGpuSyncState::HostClean;
+    ctx.gpu_state.residency.device_state = FemGpuSyncState::DeviceClean;
     ctx.gpu_state.legacy_exchange.legacy_sparse_metadata_ready = true;
     ctx.gpu_state.legacy_exchange.lumped_mass_ready = true;
     ctx.gpu_state.device.runtime_coefficients.uploaded = true;
     ctx.gpu_state.device.legacy_exchange.uploaded = true;
     ctx.gpu_state.device.legacy_exchange.rows = 8;
     ctx.gpu_state.device.legacy_exchange.cols = 8;
-    ctx.gpu_state.device.legacy_exchange.csr_row_offsets = reinterpret_cast<int *>(1);
-    ctx.gpu_state.device.legacy_exchange.csr_col_indices = reinterpret_cast<int *>(1);
+    ctx.gpu_state.device.legacy_exchange.csr_row_offsets = reinterpret_cast<uint32_t *>(1);
+    ctx.gpu_state.device.legacy_exchange.csr_col_indices = reinterpret_cast<uint32_t *>(1);
     ctx.gpu_state.device.legacy_exchange.csr_values = reinterpret_cast<double *>(1);
     ctx.gpu_state.device.materials.ms = reinterpret_cast<double *>(1);
     ctx.gpu_state.device.materials.alpha = reinterpret_cast<double *>(1);
@@ -264,6 +269,7 @@ void public_strict_hybrid_rejects_before_preflight_attempt()
     fullmag_fem_backend backend{};
     Context &ctx = backend.context;
     make_exchange_context_ready(ctx, FULLMAG_FEM_INTEGRATOR_HEUN);
+    ctx.mfem_device.device_string_override = "cuda";
     ctx.demag.enabled = true;
     ctx.poisson_demag.gpu_demag_mode = FULLMAG_FEM_GPU_DEMAG_HYBRID_CPU_POISSON;
     check(fullmag_fem_backend_set_gpu_execution_request_v1(
@@ -297,6 +303,25 @@ void public_strict_hybrid_rejects_before_preflight_attempt()
               after.executed_host_operator_mask == before.executed_host_operator_mask &&
               after.executed_unknown_operator_mask == before.executed_unknown_operator_mask,
           "strict hybrid rejection must leave executed masks unchanged");
+
+    fullmag_fem_step_stats stats{};
+    check(fullmag_fem_backend_step(&backend, 1.0e-15, &stats) == FULLMAG_FEM_ERR_UNAVAILABLE,
+          "public strict hybrid backend step must fail before opening a transaction");
+    const char *backend_error = fullmag_fem_backend_last_error(&backend);
+    check(backend_error != nullptr &&
+              std::string(backend_error) ==
+                  "strict FEM GPU execution rejects explicit hybrid_cpu_poisson compatibility mode",
+          "public strict hybrid backend step must preserve the typed preflight diagnostic");
+    const auto after_backend_step = gpu_execution_receipt_snapshot(
+        ctx.gpu_state.execution_receipt);
+    check(!gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt),
+          "public strict hybrid backend step must not begin an execution attempt");
+    check(after_backend_step.accepted_step_count == before.accepted_step_count &&
+              after_backend_step.rejected_attempt_count == before.rejected_attempt_count &&
+              after_backend_step.failed_attempt_count == before.failed_attempt_count,
+          "public strict hybrid backend step must leave receipt lifecycle counters unchanged");
+    check(ctx.stepper.transaction_telemetry.step_transaction_begin_count == 0u,
+          "public strict hybrid backend step must reject before RkStepTransaction::begin");
 }
 
 void public_compatibility_hybrid_remains_executable()
