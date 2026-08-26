@@ -2894,6 +2894,24 @@ impl NativeFemBackend {
         Ok(())
     }
 
+    pub(crate) fn set_gpu_execution_request(
+        &mut self,
+        strict_device: bool,
+    ) -> Result<(), RunError> {
+        let request = if strict_device {
+            ffi::fullmag_fem_gpu_execution_request_v1::FULLMAG_FEM_GPU_EXECUTION_REQUEST_STRICT_DEVICE
+        } else {
+            ffi::fullmag_fem_gpu_execution_request_v1::FULLMAG_FEM_GPU_EXECUTION_REQUEST_COMPATIBILITY
+        };
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_set_gpu_execution_request_v1(self.handle, request)
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("setting FEM GPU execution request failed"));
+        }
+        Ok(())
+    }
+
     pub(crate) fn gpu_execution_receipt(
         &self,
     ) -> Result<runtime_info::NativeFemGpuExecutionReceipt, RunError> {

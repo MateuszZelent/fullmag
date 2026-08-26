@@ -246,6 +246,19 @@ void strict_transfer_audit_rejects_compute_traffic_only()
           "compute D2H transfer must reject strict commit");
 }
 
+void public_execution_request_rejects_invalid_values()
+{
+    fullmag_fem_backend backend{};
+    check(fullmag_fem_backend_set_gpu_execution_request_v1(
+              &backend,
+              static_cast<fullmag_fem_gpu_execution_request_v1>(99)) == FULLMAG_FEM_ERR_INVALID,
+          "public GPU execution request must reject unknown policy values");
+    check(fullmag_fem_backend_set_gpu_execution_request_v1(
+              nullptr,
+              FULLMAG_FEM_GPU_EXECUTION_REQUEST_COMPATIBILITY) == FULLMAG_FEM_ERR_INVALID,
+          "public GPU execution request must reject a null backend handle");
+}
+
 void public_strict_hybrid_rejects_before_preflight_attempt()
 {
     fullmag_fem_backend backend{};
@@ -352,6 +365,7 @@ int main()
     planner_proves_strict_device_hypre_and_rejects_hybrid_host_unknown();
     final_reduction_owner_and_lifecycle_preserve_last_commit();
     strict_transfer_audit_rejects_compute_traffic_only();
+    public_execution_request_rejects_invalid_values();
     public_strict_hybrid_rejects_before_preflight_attempt();
     public_compatibility_hybrid_remains_executable();
     public_strict_device_resident_remains_executable();

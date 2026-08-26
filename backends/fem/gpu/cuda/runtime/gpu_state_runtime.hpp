@@ -130,6 +130,8 @@ struct GpuStateRuntimeState {
     GpuRkPhaseTimingRuntimeState rk_phase_timings{};
     GpuRkTransactionTelemetryRuntimeState rk_transaction_telemetry{};
     FemGpuExecutionReceiptRuntimeState execution_receipt{};
+    fullmag_fem_gpu_execution_request_v1 execution_request =
+        FULLMAG_FEM_GPU_EXECUTION_REQUEST_COMPATIBILITY;
 };
 
 /*

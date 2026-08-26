@@ -5912,6 +5912,9 @@ fn execute_native_fem(
         native_execution_mode,
         || NativeFemBackend::create_with_initial_effective_field(plan, needs_initial_snapshot),
     )?;
+    if engine == FemEngine::NativeGpu {
+        backend.set_gpu_execution_request(execution_mode == ExecutionMode::Strict)?;
+    }
     let gpu_rk_plan_info = backend.gpu_rk_plan_info()?;
     if let Some(provider) =
         StageOerstedProvider::from_plan_with_coupled(plan, coupled_stage_provider.clone())?

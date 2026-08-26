@@ -1886,6 +1886,13 @@ pub enum fullmag_fem_gpu_demag_mode {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_gpu_execution_request_v1 {
+    FULLMAG_FEM_GPU_EXECUTION_REQUEST_COMPATIBILITY = 0,
+    FULLMAG_FEM_GPU_EXECUTION_REQUEST_STRICT_DEVICE = 1,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct fullmag_fem_gpu_state_info {
     pub allocated: i32,
     pub node_count: u64,
@@ -2087,6 +2094,10 @@ extern "C" {
     pub fn fullmag_fem_backend_begin_stage(
         handle: *mut fullmag_fem_backend,
         stage_start_time_s: f64,
+    ) -> i32;
+    pub fn fullmag_fem_backend_set_gpu_execution_request_v1(
+        handle: *mut fullmag_fem_backend,
+        request: fullmag_fem_gpu_execution_request_v1,
     ) -> i32;
     pub fn fullmag_fem_backend_reconfigure_regional_field_drives(
         handle: *mut fullmag_fem_backend,

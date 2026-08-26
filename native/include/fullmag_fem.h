@@ -1739,6 +1739,16 @@ typedef enum {
     FULLMAG_FEM_GPU_DEMAG_HYBRID_CPU_POISSON = 2,
 } fullmag_fem_gpu_demag_mode;
 
+/*
+ * Public policy for the native FEM GPU RK preflight. Compatibility preserves
+ * the existing executable hybrid/operator-acceleration lanes; strict_device
+ * must resolve every required operator to the device before a step begins.
+ */
+typedef enum {
+    FULLMAG_FEM_GPU_EXECUTION_REQUEST_COMPATIBILITY = 0,
+    FULLMAG_FEM_GPU_EXECUTION_REQUEST_STRICT_DEVICE = 1,
+} fullmag_fem_gpu_execution_request_v1;
+
 typedef struct {
     int allocated;
     uint64_t node_count;
@@ -1927,6 +1937,11 @@ int fullmag_fem_get_regional_field_drive_abi_layout(
 int fullmag_fem_backend_begin_stage(
     fullmag_fem_backend *handle,
     double stage_start_time_s
+);
+
+int fullmag_fem_backend_set_gpu_execution_request_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_gpu_execution_request_v1 request
 );
 
 int fullmag_fem_backend_reconfigure_regional_field_drives(

@@ -76,9 +76,13 @@ bool gpu_rk_prepare_step_preflight(
         return false;
     }
 
-    if (plan.execution_class == FemGpuExecutionClass::DeviceResident &&
-        !gpu_rk_plan_is_strict_device_resident(plan, reason)) {
-        return false;
+    const bool strict_request =
+        ctx.gpu_state.execution_request ==
+        FULLMAG_FEM_GPU_EXECUTION_REQUEST_STRICT_DEVICE;
+    if (strict_request || plan.execution_class == FemGpuExecutionClass::DeviceResident) {
+        if (!gpu_rk_plan_is_strict_device_resident(plan, reason)) {
+            return false;
+        }
     }
     const auto current_receipt = gpu_execution_receipt_snapshot(
         ctx.gpu_state.execution_receipt);

@@ -2765,6 +2765,35 @@ int fullmag_fem_backend_begin_stage(
     return FULLMAG_FEM_OK;
 }
 
+int fullmag_fem_backend_set_gpu_execution_request_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_gpu_execution_request_v1 request)
+{
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_set_gpu_execution_request_v1 received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (request != FULLMAG_FEM_GPU_EXECUTION_REQUEST_COMPATIBILITY &&
+        request != FULLMAG_FEM_GPU_EXECUTION_REQUEST_STRICT_DEVICE) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_set_gpu_execution_request_v1 received unsupported request");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (fullmag::fem::gpu_execution_receipt_attempt_active(
+            handle->context.gpu_state.execution_receipt)) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_set_gpu_execution_request_v1 cannot change policy during an active attempt");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    handle->context.gpu_state.execution_request = request;
+    handle->last_error.clear();
+    fullmag_fem_clear_global_error();
+    return FULLMAG_FEM_OK;
+}
+
 int fullmag_fem_backend_reconfigure_regional_field_drives(
     fullmag_fem_backend *handle,
     const fullmag_fem_regional_field_drive_desc *drives,
