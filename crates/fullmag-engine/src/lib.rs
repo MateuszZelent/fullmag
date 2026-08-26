@@ -249,6 +249,108 @@ mod tests {
     }
 
     #[test]
+    fn constant_field_live_soa_rhs_and_trajectory_match_analytic_llg() {
+        let field_amplitude = 2.5;
+        let alpha = 0.2;
+        let gamma = 3.0;
+        let problem = ExchangeLlgProblem::with_terms(
+            GridShape::new(1, 1, 1).expect("valid grid"),
+            CellSize::new(1.0, 1.0, 1.0).expect("valid cell size"),
+            MaterialParameters::new(1.0, 1.0e-30, alpha).expect("valid material"),
+            LlgConfig::new(gamma, TimeIntegrator::RK4).expect("valid LLG config"),
+            EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                external_field: Some([0.0, 0.0, field_amplitude]),
+                ..Default::default()
+            },
+        );
+        let magnetization = vec![[1.0, 0.0, 0.0]];
+        let mut workspace = problem.create_workspace();
+        let mut soa_field = VectorFieldSoA::zeros(1);
+        let soa_magnetization = VectorFieldSoA::from_aos(&magnetization);
+        problem.effective_field_into_soa_ws_at(
+            &soa_magnetization,
+            0.0,
+            &mut workspace,
+            &mut soa_field,
+        );
+        assert_vector_close(
+            [soa_field.x[0], soa_field.y[0], soa_field.z[0]],
+            [0.0, 0.0, field_amplitude],
+            1.0e-15,
+        );
+
+        let mut soa_rhs = VectorFieldSoA::zeros(1);
+        problem.llg_rhs_soa_into(&soa_magnetization, &soa_field, &mut soa_rhs);
+        let gamma_bar = gamma / (1.0 + alpha * alpha);
+        assert_vector_close(
+            [soa_rhs.x[0], soa_rhs.y[0], soa_rhs.z[0]],
+            [0.0, gamma_bar * field_amplitude, gamma_bar * alpha * field_amplitude],
+            1.0e-15,
+        );
+
+        let mut aos_field = vec![[0.0; 3]];
+        problem.effective_field_into_ws_at_time(
+            &magnetization,
+            &mut workspace,
+            &mut aos_field,
+            0.0,
+        );
+        let mut aos_rhs = vec![[0.0; 3]];
+        problem.llg_rhs_from_fields_with_direct_torques_into(
+            &magnetization,
+            &aos_field,
+            &mut aos_rhs,
+        );
+        assert_vector_close(aos_field[0], [0.0, 0.0, field_amplitude], 1.0e-15);
+        assert_vector_close(
+            aos_rhs[0],
+            [soa_rhs.x[0], soa_rhs.y[0], soa_rhs.z[0]],
+            1.0e-15,
+        );
+
+        let trajectory_problem = ExchangeLlgProblem::with_terms(
+            GridShape::new(1, 1, 1).expect("valid grid"),
+            CellSize::new(1.0, 1.0, 1.0).expect("valid cell size"),
+            MaterialParameters::new(1.0, 1.0e-30, 0.0).expect("valid material"),
+            LlgConfig::new(gamma, TimeIntegrator::RK4).expect("valid LLG config"),
+            EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                external_field: Some([0.0, 0.0, field_amplitude]),
+                ..Default::default()
+            },
+        );
+        let dt = 5.0e-4;
+        let steps = 800;
+        let mut trajectory_state = trajectory_problem
+            .new_state(magnetization)
+            .expect("trajectory state")
+            .to_soa();
+        let mut trajectory_workspace = trajectory_problem.create_workspace();
+        let mut trajectory_buffers = trajectory_problem.create_integrator_buffers();
+        for _ in 0..steps {
+            trajectory_problem
+                .rk4_step_soa_state_buf(
+                    &mut trajectory_state,
+                    dt,
+                    &mut trajectory_workspace,
+                    &mut trajectory_buffers,
+                    EvaluationRequest::Minimal,
+                )
+                .expect("constant-field RK4 step");
+        }
+        let final_time = dt * steps as f64;
+        let angle = gamma * field_amplitude * final_time;
+        assert_vector_close(
+            trajectory_state.magnetization.gather_to_aos()[0],
+            [angle.cos(), angle.sin(), 0.0],
+            1.0e-11,
+        );
+    }
+
+    #[test]
     fn effective_field_terms_default_enables_demag() {
         let terms = EffectiveFieldTerms::default();
         assert!(terms.exchange);
@@ -300,6 +402,120 @@ mod tests {
             (derivative + 6.0 * MU0).abs() < 1e-15,
             "regional drive energy derivative must match the effective field, got {derivative}"
         );
+    }
+
+    #[test]
+    fn regional_drive_energy_is_reported_for_aos_and_soa_full_steps() {
+        let grid = GridShape::new(2, 1, 1).expect("valid grid");
+        let mut problem = ExchangeLlgProblem::with_terms(
+            grid,
+            CellSize::new(1.0, 1.0, 1.0).expect("valid cell size"),
+            MaterialParameters::new(2.0, 1.0, 0.1).expect("valid material"),
+            LlgConfig::new(1.0, TimeIntegrator::Heun).expect("valid llg config"),
+            EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                ..Default::default()
+            },
+        );
+        problem.regional_field_drives.push(RegionalFieldDriveTerm {
+            basis_field: vec![[0.0, 3.0, 0.0], [0.0, -1.0, 0.0]],
+            waveform: fullmag_ir::TimeDependenceIR::Constant,
+            time_offset_s: 0.0,
+            enabled: true,
+        });
+
+        let mut aos_state = problem
+            .new_state(vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+            .expect("AoS state");
+        let mut soa_state = aos_state.clone();
+        let mut aos_workspace = problem.create_workspace();
+        let mut soa_workspace = problem.create_workspace();
+        let mut aos_buffers = problem.create_integrator_buffers();
+        let mut soa_buffers = problem.create_integrator_buffers();
+
+        let aos_report = problem
+            .heun_step_buf(
+                &mut aos_state,
+                1.0e-3,
+                &mut aos_workspace,
+                &mut aos_buffers,
+                EvaluationRequest::Full,
+            )
+            .expect("AoS Heun step");
+        let soa_report = problem
+            .heun_step_soa_buf(
+                &mut soa_state,
+                1.0e-3,
+                &mut soa_workspace,
+                &mut soa_buffers,
+                EvaluationRequest::Full,
+            )
+            .expect("SoA Heun step");
+
+        let mut aos_energy_workspace = problem.create_workspace();
+        let aos_energy = problem.total_energy_from_vectors_ws(
+            aos_state.magnetization(),
+            &mut aos_energy_workspace,
+        );
+        let soa_magnetization = VectorFieldSoA::from_aos(soa_state.magnetization());
+        let mut soa_energy_workspace = problem.create_workspace();
+        let mut soa_scratch = VectorFieldSoA::zeros(grid.cell_count());
+        let soa_energy = problem.total_energy_from_soa_ws(
+            &soa_magnetization,
+            &mut soa_energy_workspace,
+            &mut soa_scratch,
+        );
+        let external_density = problem
+            .external_energy_density(&aos_state)
+            .expect("external energy density");
+        let external_density_integral: f64 = external_density.iter().sum();
+        let total_density = problem
+            .total_energy_density(&aos_state)
+            .expect("total energy density");
+        let total_density_integral: f64 = total_density.iter().sum();
+
+        for (label, actual, expected) in [
+            (
+                "AoS external energy",
+                aos_report.external_energy_joules,
+                aos_energy,
+            ),
+            (
+                "AoS total energy",
+                aos_report.total_energy_joules,
+                aos_energy,
+            ),
+            (
+                "SoA external energy",
+                soa_report.external_energy_joules,
+                soa_energy,
+            ),
+            (
+                "SoA total energy",
+                soa_report.total_energy_joules,
+                soa_energy,
+            ),
+            (
+                "external energy density",
+                external_density_integral,
+                aos_energy,
+            ),
+            ("total energy density", total_density_integral, aos_energy),
+        ] {
+            assert!(
+                (actual - expected).abs() <= 1.0e-12,
+                "{label} must include regional drives: actual={actual}, expected={expected}"
+            );
+        }
+        let observables = problem.observe(&aos_state).expect("public observables");
+        assert!((observables.external_energy_joules - aos_energy).abs() <= 1.0e-12);
+        assert!((observables.total_energy_joules - aos_energy).abs() <= 1.0e-12);
+        let expected_field = problem.regional_drive_field_at_time(aos_state.time_seconds);
+        for (actual, expected) in observables.effective_field.iter().zip(expected_field) {
+            assert_vector_close(*actual, expected, 1.0e-12);
+        }
+        assert_step_report_close(soa_report, aos_report, 1.0e-12);
     }
 
     #[test]
@@ -2004,6 +2220,12 @@ mod tests {
             assert_eq!(soa_report.dt_used, dt);
             assert_eq!(soa_report.time_seconds, dt);
             assert_eq!(soa_report.suggested_next_dt, None);
+            assert_step_report_close(soa_report, aos_report, 1e-12);
+            assert_vector_close(
+                soa.magnetization().gather_to_aos()[0],
+                aos.magnetization()[0],
+                1e-12,
+            );
         }
     }
 

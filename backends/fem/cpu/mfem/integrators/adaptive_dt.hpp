@@ -94,17 +94,18 @@ adaptive::AdaptiveStepDecision cpu_adaptive_step_decision(
 /*
  * Compute the nodewise vector-normalized error for an adaptive explicit RK step.
  *
- * Inputs are AoS magnetization vectors. For each node, the scale is
- * `atol + rtol * max(||m_old||_2, ||m_new||_2)`; the returned norm is the
- * maximum vector error norm divided by that scale. A value of `1` is exactly
- * at tolerance. Invalid sizes and nonfinite values return infinity so the
- * attempt fails closed.
+ * Inputs are AoS magnetization vectors. For each active, non-frozen node, the
+ * scale is `atol + rtol * max(||m_old||_2, ||m_new||_2)`; the returned norm is
+ * the maximum vector error norm divided by that scale. A value of `1` is
+ * exactly at tolerance. Empty masks make all nodes eligible. Invalid sizes and
+ * nonfinite values return infinity so the attempt fails closed.
  */
 double compute_adaptive_error_norm(
     const std::vector<double> &err,
     const std::vector<double> &m_old,
     const std::vector<double> &m_new,
     const std::vector<uint8_t> &magnetic_node_mask,
+    const std::vector<uint8_t> &frozen_node_mask,
     double atol,
     double rtol);
 
@@ -114,6 +115,7 @@ bool compute_adaptive_attempt_guard_metric(
     const std::vector<double> &m_old,
     const std::vector<double> &m_candidate,
     const std::vector<uint8_t> &magnetic_node_mask,
+    const std::vector<uint8_t> &frozen_node_mask,
     double &acceptance_metric,
     AdaptiveAttemptGuardMetrics &metrics,
     std::string &error);

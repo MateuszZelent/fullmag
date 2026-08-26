@@ -5177,6 +5177,7 @@ mod tests {
                 boundary_correction: None,
                 boundary_phi_floor: None,
                 boundary_delta_min: None,
+                projection_policy: None,
             }),
             fem: None,
             hybrid: None,

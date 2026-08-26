@@ -27,6 +27,45 @@ uint64_t saturating_add_u64(uint64_t lhs, uint64_t rhs)
         : lhs + rhs;
 }
 
+double max_cross_norm_aos_impl(
+    const std::vector<double> &a_xyz,
+    const std::vector<double> &b_xyz,
+    const std::vector<uint8_t> *magnetic_node_mask,
+    const std::vector<uint8_t> *frozen_node_mask)
+{
+    if (a_xyz.size() % 3u != 0u || b_xyz.size() != a_xyz.size()) {
+        return std::numeric_limits<double>::infinity();
+    }
+    const size_t n = a_xyz.size() / 3u;
+    if ((magnetic_node_mask != nullptr &&
+         !magnetic_node_mask->empty() && magnetic_node_mask->size() != n) ||
+        (frozen_node_mask != nullptr &&
+         !frozen_node_mask->empty() && frozen_node_mask->size() != n)) {
+        return std::numeric_limits<double>::infinity();
+    }
+
+    double max_value = 0.0;
+    for (size_t i = 0; i < n; ++i) {
+        if (magnetic_node_mask != nullptr &&
+            !magnetic_node_mask->empty() && (*magnetic_node_mask)[i] == 0u) {
+            continue;
+        }
+        if (frozen_node_mask != nullptr &&
+            !frozen_node_mask->empty() && (*frozen_node_mask)[i] != 0u) {
+            continue;
+        }
+        const size_t base = i * 3u;
+        const double cx = a_xyz[base + 1] * b_xyz[base + 2] -
+                          a_xyz[base + 2] * b_xyz[base + 1];
+        const double cy = a_xyz[base + 2] * b_xyz[base + 0] -
+                          a_xyz[base + 0] * b_xyz[base + 2];
+        const double cz = a_xyz[base + 0] * b_xyz[base + 1] -
+                          a_xyz[base + 1] * b_xyz[base + 0];
+        max_value = std::max(max_value, std::sqrt(cx * cx + cy * cy + cz * cz));
+    }
+    return max_value;
+}
+
 } // namespace
 
 std::array<double, 3> average_magnetization_components(const Context &ctx)
@@ -112,19 +151,17 @@ double max_cross_norm_aos(
     const std::vector<double> &a_xyz,
     const std::vector<double> &b_xyz)
 {
-    double max_value = 0.0;
-    const size_t n = a_xyz.size() / 3u;
-    for (size_t i = 0; i < n; ++i) {
-        const size_t base = i * 3u;
-        const double cx = a_xyz[base + 1] * b_xyz[base + 2] -
-                          a_xyz[base + 2] * b_xyz[base + 1];
-        const double cy = a_xyz[base + 2] * b_xyz[base + 0] -
-                          a_xyz[base + 0] * b_xyz[base + 2];
-        const double cz = a_xyz[base + 0] * b_xyz[base + 1] -
-                          a_xyz[base + 1] * b_xyz[base + 0];
-        max_value = std::max(max_value, std::sqrt(cx * cx + cy * cy + cz * cz));
-    }
-    return max_value;
+    return max_cross_norm_aos_impl(a_xyz, b_xyz, nullptr, nullptr);
+}
+
+double max_cross_norm_aos_free(
+    const std::vector<double> &a_xyz,
+    const std::vector<double> &b_xyz,
+    const std::vector<uint8_t> &magnetic_node_mask,
+    const std::vector<uint8_t> &frozen_node_mask)
+{
+    return max_cross_norm_aos_impl(
+        a_xyz, b_xyz, &magnetic_node_mask, &frozen_node_mask);
 }
 
 void fill_demag_solver_stats(
@@ -220,7 +257,15 @@ void fill_common_step_metrics(
     stats.max_effective_field_amplitude = max_norm_aos(ctx.effective_field.h_xyz);
     stats.max_demag_field_amplitude = max_norm_aos(ctx.demag.h_xyz);
     stats.max_rhs_amplitude = max_rhs;
-    stats.max_torque_Apm = max_cross_norm_aos(ctx.state.m_xyz, ctx.effective_field.h_xyz);
+    static const std::vector<uint8_t> no_frozen_nodes;
+    const auto &frozen_nodes = ctx.frozen_spins.enabled()
+        ? ctx.frozen_spins.mask()
+        : no_frozen_nodes;
+    stats.max_torque_Apm = max_cross_norm_aos_free(
+        ctx.state.m_xyz,
+        ctx.effective_field.h_xyz,
+        ctx.mesh.magnetic_node_mask,
+        frozen_nodes);
     const auto average = average_magnetization_components(ctx);
     stats.mx = average[0];
     stats.my = average[1];

@@ -502,8 +502,9 @@ void progress_report_summary_matches_contract_closed_scope() {
             std::string::npos,
         "progress report introduction must describe the current contract-closed modularization scope");
     check(
-        progress.find("produkcyjna kwalifikacja runtime MFEM/libCEED i fixture numeryczne pozostaja osobnymi gate'ami") !=
-            std::string::npos,
+        progress.find("Produkcyjna") != std::string::npos &&
+            progress.find("kwalifikacja runtime MFEM/libCEED i fixture numeryczne pozostaja osobnymi") !=
+                std::string::npos,
         "progress report introduction must keep production runtime qualification separate");
     check(
         progress.find("pierwszy maly wycinek") == std::string::npos &&

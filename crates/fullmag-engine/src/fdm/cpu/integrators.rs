@@ -334,6 +334,57 @@ mod adaptive_decision_tests {
     }
 
     #[test]
+    fn finite_error_reduction_uses_active_free_cells_for_aos_and_soa() {
+        let grid = crate::GridShape::new(4, 1, 1).expect("valid grid");
+        let mut problem = crate::ExchangeLlgProblem::with_terms_and_mask(
+            grid,
+            crate::CellSize::new(1.0, 1.0, 1.0).expect("valid cell size"),
+            crate::MaterialParameters::new(1.0, 1.0e-30, 0.1).expect("valid material"),
+            crate::LlgConfig::new(1.0, crate::TimeIntegrator::RK23).expect("valid LLG config"),
+            crate::EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                ..Default::default()
+            },
+            Some(vec![true, false, true, true]),
+        )
+        .expect("masked problem");
+        problem.frozen_spins = Some(
+            crate::FrozenSpinsState::from_checkpoint(
+                vec![false, false, false, true],
+                vec![[1.0, 0.0, 0.0]; 4],
+                1,
+                2,
+                1,
+            )
+            .expect("frozen state"),
+        );
+
+        let mut buffers = problem.create_integrator_buffers();
+        buffers.k[0][0] = [0.25, 0.0, 0.0];
+        buffers.k[0][1] = [f64::NAN, 0.0, 0.0];
+        buffers.k[0][2] = [1.5, 0.0, 0.0];
+        buffers.k[0][3] = [9.0, 0.0, 0.0];
+        buffers
+            .soa
+            .k[0]
+            .x
+            .copy_from_slice(&[0.25, f64::NAN, 1.5, 9.0]);
+        buffers.soa.k[0].y.fill(0.0);
+        buffers.soa.k[0].z.fill(0.0);
+
+        let weighted_stages = [(0usize, 1.0)];
+        assert_eq!(
+            problem.max_error_norm_buf(&weighted_stages, &mut buffers, 1.0, 4),
+            1.5
+        );
+        assert_eq!(
+            problem.max_error_norm_soa_buf(&weighted_stages, &mut buffers, 1.0, 4),
+            1.5
+        );
+    }
+
+    #[test]
     fn direct_cpu_entry_points_record_injected_retry_dt() {
         for integrator in [crate::TimeIntegrator::RK23, crate::TimeIntegrator::RK45] {
             let problem = adaptive_test_problem(integrator);
@@ -3300,16 +3351,14 @@ impl ExchangeLlgProblem {
         bufs: &mut IntegratorBuffers,
         evaluation: EvaluationRequest,
     ) -> Result<StepReport> {
-        if !self.dynamics.adaptive_enabled {
-            let mut aos = state.to_aos();
-            let report = self.rk23_step_soa_buf(&mut aos, dt, ws, bufs, evaluation)?;
-            *state = aos.to_soa();
-            return Ok(report);
-        }
         let cfg = self.dynamics.adaptive;
         let mut adaptive_controller =
             AdaptiveStepController::new(2, cfg, state.adaptive_previous_error);
-        let mut dt = dt.min(cfg.dt_max).max(cfg.dt_min);
+        let mut dt = if self.dynamics.adaptive_enabled {
+            dt.min(cfg.dt_max).max(cfg.dt_min)
+        } else {
+            dt
+        };
         let n = state.magnetization.len();
         let t0 = state.time_seconds;
         bufs.soa.m0.copy_from(&state.magnetization);
@@ -3466,16 +3515,14 @@ impl ExchangeLlgProblem {
         bufs: &mut IntegratorBuffers,
         evaluation: EvaluationRequest,
     ) -> Result<StepReport> {
-        if !self.dynamics.adaptive_enabled {
-            let mut aos = state.to_aos();
-            let report = self.rk45_step_soa_buf(&mut aos, dt, ws, bufs, evaluation)?;
-            *state = aos.to_soa();
-            return Ok(report);
-        }
         let cfg = self.dynamics.adaptive;
         let mut adaptive_controller =
             AdaptiveStepController::new(4, cfg, state.adaptive_previous_error);
-        let mut dt = dt.min(cfg.dt_max).max(cfg.dt_min);
+        let mut dt = if self.dynamics.adaptive_enabled {
+            dt.min(cfg.dt_max).max(cfg.dt_min)
+        } else {
+            dt
+        };
         let n = state.magnetization.len();
         let t0 = state.time_seconds;
         let dynamic_oersted = self
@@ -3963,10 +4010,13 @@ impl ExchangeLlgProblem {
             (0.0, 0.0)
         };
 
-        let external_energy_joules = if self.has_external_zeeman_source() {
+        let external_energy_joules = if self.has_external_zeeman_source()
+            || self.regional_field_drives.iter().any(|drive| drive.enabled)
+        {
             h_scratch.fill_zero();
             self.external_field_add_into_soa(h_scratch);
             self.oersted_field_add_into_soa_at_time(h_scratch, time_seconds);
+            self.regional_field_drives_add_into_soa_at_time(h_scratch, time_seconds);
             let energy = self.full_field_energy_from_soa(magnetization, h_scratch);
             add_soa_into(h_eff, h_scratch);
             energy
@@ -4047,6 +4097,15 @@ impl ExchangeLlgProblem {
     // -----------------------------------------------------------------------
     // Error norm from buffer-indexed k-stages
     // -----------------------------------------------------------------------
+    #[inline]
+    fn is_error_cell_active(&self, index: usize) -> bool {
+        self.is_active(index)
+            && !self
+                .frozen_spins
+                .as_ref()
+                .is_some_and(|frozen| frozen.is_frozen(index))
+    }
+
     pub(crate) fn max_error_norm_buf(
         &self,
         weighted_stages: &[(usize, f64)],
@@ -4064,6 +4123,9 @@ impl ExchangeLlgProblem {
         let rtol = cfg.rtol;
 
         let compute_err = |i: usize| -> f64 {
+            if !self.is_error_cell_active(i) {
+                return 0.0;
+            }
             let mut err = [0.0, 0.0, 0.0];
             for &(k_idx, w) in weighted_stages {
                 err[0] += w * bufs.k[k_idx][i][0];
@@ -4120,6 +4182,9 @@ impl ExchangeLlgProblem {
         let rtol = cfg.rtol;
 
         let compute_err = |i: usize| -> f64 {
+            if !self.is_error_cell_active(i) {
+                return 0.0;
+            }
             let mut err = [0.0, 0.0, 0.0];
             for &(k_idx, w) in weighted_stages {
                 err[0] += w * bufs.soa.k[k_idx].x[i];

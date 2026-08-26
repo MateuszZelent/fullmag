@@ -415,10 +415,13 @@ impl ExchangeLlgProblem {
 
     pub fn external_energy_density(&self, state: &ExchangeLlgState) -> Result<Vec<f64>> {
         self.ensure_state_matches_grid(state)?;
-        if !self.has_external_zeeman_source() {
+        if !self.has_external_zeeman_source()
+            && !self.regional_field_drives.iter().any(|drive| drive.enabled)
+        {
             return Ok(vec![0.0; self.grid.cell_count()]);
         }
-        let field = self.external_zeeman_field_vectors();
+        let mut field = self.external_zeeman_field_vectors_at_time(state.time_seconds);
+        self.regional_field_drives_add_into_at_time(&mut field, state.time_seconds);
         Ok(self.external_energy_density_from_fields(state.magnetization(), &field))
     }
 

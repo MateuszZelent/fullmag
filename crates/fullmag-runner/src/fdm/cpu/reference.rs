@@ -2685,28 +2685,8 @@ fn observe_state_with_antenna_field(
     let antenna_field = antenna_field_override
         .unwrap_or_else(|| vec![[0.0, 0.0, 0.0]; state.magnetization().len()]);
     let drive_field = problem.regional_drive_field_at_time(state.time_seconds);
-    let drive_energy = -crate::MU0
-        * problem.material.saturation_magnetisation
-        * problem.cell_size.volume()
-        * state
-            .magnetization()
-            .iter()
-            .zip(&drive_field)
-            .enumerate()
-            .filter(|(index, _)| {
-                !problem
-                    .active_mask
-                    .as_ref()
-                    .is_some_and(|mask| !mask[*index])
-            })
-            .map(|(_, (m, h))| m[0] * h[0] + m[1] * h[1] + m[2] * h[2])
-            .sum::<f64>();
+    let drive_energy = regional_drive_energy(problem, state.magnetization(), &drive_field);
     let mut effective_field = observables.effective_field;
-    for (total, drive) in effective_field.iter_mut().zip(&drive_field) {
-        total[0] += drive[0];
-        total[1] += drive[1];
-        total[2] += drive[2];
-    }
     if let Some(active_mask) = problem.active_mask.as_deref() {
         reconstruct_inactive_fdm_visual_effective_field(
             &mut effective_field,
@@ -2714,6 +2694,7 @@ fn observe_state_with_antenna_field(
             &external_field,
             &oersted_field,
             &antenna_field,
+            &drive_field,
             active_mask,
         );
     }
@@ -2753,7 +2734,7 @@ fn observe_state_with_antenna_field(
         drive_energy,
         anisotropy_energy: observables.anisotropy_energy_joules,
         dmi_energy: observables.dmi_energy_joules,
-        total_energy: observables.total_energy_joules + drive_energy,
+        total_energy: observables.total_energy_joules,
         max_dm_dt: observables.max_rhs_amplitude,
         max_rhs_all_norm_per_s: observables.max_rhs_all_amplitude,
         max_h_eff: observables.max_effective_field_amplitude,
@@ -2770,6 +2751,7 @@ fn reconstruct_inactive_fdm_visual_effective_field(
     external_field: &[Vector3],
     oersted_field: &[Vector3],
     antenna_field: &[Vector3],
+    drive_field: &[Vector3],
     active_mask: &[bool],
 ) {
     for (index, total) in effective_field.iter_mut().enumerate() {
@@ -2792,9 +2774,35 @@ fn reconstruct_inactive_fdm_visual_effective_field(
                 + antenna_field
                     .get(index)
                     .map(|value| value[component])
+                    .unwrap_or(0.0)
+                + drive_field
+                    .get(index)
+                    .map(|value| value[component])
                     .unwrap_or(0.0);
         }
     }
+}
+
+fn regional_drive_energy(
+    problem: &ExchangeLlgProblem,
+    magnetization: &[Vector3],
+    drive_field: &[Vector3],
+) -> f64 {
+    let cell_volume = problem.cell_size.volume();
+    -crate::MU0
+        * cell_volume
+        * magnetization
+            .iter()
+            .zip(drive_field)
+            .enumerate()
+            .filter(|(index, _)| {
+                !problem
+                    .active_mask
+                    .as_ref()
+                    .is_some_and(|mask| !mask[*index])
+            })
+            .map(|(index, (m, h))| problem.ms_at(index) * (m[0] * h[0] + m[1] * h[1] + m[2] * h[2]))
+            .sum::<f64>()
 }
 
 fn make_step_stats_from_report(
@@ -2805,21 +2813,7 @@ fn make_step_stats_from_report(
     problem: &ExchangeLlgProblem,
 ) -> StepStats {
     let drive_field = problem.regional_drive_field_at_time(report.time_seconds);
-    let drive_energy = -crate::MU0
-        * problem.material.saturation_magnetisation
-        * problem.cell_size.volume()
-        * magnetization
-            .iter()
-            .zip(&drive_field)
-            .enumerate()
-            .filter(|(index, _)| {
-                !problem
-                    .active_mask
-                    .as_ref()
-                    .is_some_and(|mask| !mask[*index])
-            })
-            .map(|(_, (m, h))| m[0] * h[0] + m[1] * h[1] + m[2] * h[2])
-            .sum::<f64>();
+    let drive_energy = regional_drive_energy(problem, magnetization, &drive_field);
     let mut stats = StepStats {
         step,
         time: report.time_seconds,
@@ -2830,7 +2824,7 @@ fn make_step_stats_from_report(
         e_drive: drive_energy,
         e_ani: report.anisotropy_energy_joules,
         e_dmi: report.dmi_energy_joules,
-        e_total: report.total_energy_joules + drive_energy,
+        e_total: report.total_energy_joules,
         max_dm_dt: report.max_rhs_amplitude,
         max_rhs_norm_per_s: report.max_rhs_amplitude,
         max_rhs_all_norm_per_s: report.max_rhs_all_amplitude,
@@ -3197,12 +3191,16 @@ impl<'a> DirectFieldSnapshotCache<'a> {
                 let demag_field = self.base_values("H_demag", name)?.to_vec();
                 let external_field = self.base_values("H_ext", name)?.to_vec();
                 let oersted_field = self.base_values("H_oe", name)?.to_vec();
+                let drive_field = self
+                    .problem
+                    .regional_drive_field_at_time(self.state.time_seconds);
                 reconstruct_inactive_fdm_visual_effective_field(
                     &mut effective_field,
                     &demag_field,
                     &external_field,
                     &oersted_field,
                     self.antenna_field.unwrap_or(&[]),
+                    &drive_field,
                     active_mask,
                 );
             }
@@ -3726,7 +3724,7 @@ mod tests {
             migration: None,
         };
         let h = 1e-3 / crate::MU0;
-        let plan = FdmPlanIR {
+        let mut plan = FdmPlanIR {
             enable_exchange: false,
             regional_field_drive_bases: vec![ResolvedRegionalFieldDriveBasisIR {
                 drive: drive.clone(),
@@ -3737,9 +3735,15 @@ mod tests {
             field_drives: vec![drive],
             ..make_test_plan()
         };
+        plan.active_mask = Some((0..16).map(|index| index < 8).collect());
+        plan.material.ms_field = Some((0..16).map(|index| 400e3 + index as f64 * 10e3).collect());
         let outputs = [
             OutputIR::Field {
                 name: "H_drive".into(),
+                every_seconds: 1e-14,
+            },
+            OutputIR::Field {
+                name: "H_eff".into(),
                 every_seconds: 1e-14,
             },
             OutputIR::Scalar {
@@ -3760,8 +3764,35 @@ mod tests {
             .values
             .chunks_exact(3)
             .all(|value| { value[0] == 0.0 && value[1] == h && value[2] == 0.0 }));
+        let effective_field = executed
+            .field_snapshots
+            .iter()
+            .find(|snapshot| snapshot.name == "H_eff")
+            .expect("H_eff snapshot");
+        assert!(effective_field
+            .values
+            .chunks_exact(3)
+            .all(|value| { value[0] == 0.0 && value[1] == h && value[2] == 0.0 }));
         assert!(executed.result.steps.iter().any(|step| step.e_drive != 0.0));
-        assert!(executed.result.steps.iter().all(|step| step.e_ext == 0.0));
+        for step in &executed.result.steps {
+            assert_eq!(step.e_ex, 0.0);
+            assert_eq!(step.e_demag, 0.0);
+            assert_eq!(step.e_ani, 0.0);
+            assert_eq!(step.e_dmi, 0.0);
+            let energy_tolerance = 1e-12 * step.e_total.abs().max(step.e_drive.abs()).max(1e-30);
+            assert!(
+                (step.e_ext - step.e_drive).abs() <= energy_tolerance,
+                "regional drive must appear once in external energy: e_ext={}, e_drive={}",
+                step.e_ext,
+                step.e_drive
+            );
+            assert!(
+                (step.e_total - step.e_drive).abs() <= energy_tolerance,
+                "regional drive must appear exactly once in total energy: e_total={}, e_drive={}",
+                step.e_total,
+                step.e_drive
+            );
+        }
     }
 
     #[test]

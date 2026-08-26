@@ -3,6 +3,7 @@ target/
 dist/
 build/
 native/build*/
+apps/desktop/src-tauri/gen/
 *.o
 *.so
 *.a
@@ -16,6 +17,8 @@ native/build*/
 !.github/**/*.md
 *.zip
 *.patch
+*.orig
+*.rej
 *.tar.gz
 *.egg-info/
 *.egg

@@ -24,6 +24,7 @@ double compute_adaptive_error_norm(
     const std::vector<double> &m_old,
     const std::vector<double> &m_new,
     const std::vector<uint8_t> &magnetic_node_mask,
+    const std::vector<uint8_t> &frozen_node_mask,
     double atol,
     double rtol);
 } // namespace fullmag::fem
@@ -536,6 +537,7 @@ void adaptive_error_norm_uses_nodewise_vector_l2_scale() {
         m_old,
         m_new,
         {1u},
+        {},
         0.01,
         0.1);
 
@@ -559,9 +561,96 @@ void adaptive_relative_only_error_ignores_inactive_airbox_nodes() {
     const std::vector<uint8_t> mask{0u, 1u};
 
     const double norm = fullmag::fem::compute_adaptive_error_norm(
-        err, m_old, m_new, mask, 0.0, 1.0e-6);
+        err, m_old, m_new, mask, {}, 0.0, 1.0e-6);
 
     check_near(norm, 0.1, 1.0e-15, "relative-only error ignores inactive airbox node");
+}
+
+void adaptive_norms_exclude_frozen_nodes() {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const std::vector<double> err{
+        0.1, 0.0, 0.0,
+        nan, nan, nan,
+    };
+    const std::vector<double> m_old{
+        1.0, 0.0, 0.0,
+        nan, nan, nan,
+    };
+    const std::vector<double> m_new = m_old;
+    const std::vector<uint8_t> magnetic_mask{1u, 1u};
+    const std::vector<uint8_t> frozen_mask{0u, 1u};
+
+    const double norm = fullmag::fem::compute_adaptive_error_norm(
+        err,
+        m_old,
+        m_new,
+        magnetic_mask,
+        frozen_mask,
+        0.0,
+        1.0);
+    check_near(norm, 0.1, 1.0e-15, "adaptive error norm excludes frozen node");
+
+    fullmag::fem::AdaptiveDtRuntimeState policy{};
+    policy.has_norm_tolerance = true;
+    policy.norm_tolerance = 0.01;
+    policy.has_max_spin_rotation = true;
+    policy.max_spin_rotation = 0.1;
+    const std::vector<double> candidate{
+        1.0, 0.0, 0.0,
+        nan, nan, nan,
+    };
+    fullmag::fem::AdaptiveAttemptGuardMetrics metrics{};
+    double acceptance_metric = 0.0;
+    std::string error;
+    check(
+        fullmag::fem::compute_adaptive_attempt_guard_metric(
+            policy,
+            0.25,
+            m_old,
+            candidate,
+            magnetic_mask,
+            frozen_mask,
+            acceptance_metric,
+            metrics,
+            error),
+        "adaptive geometry guards exclude frozen node");
+    check_near(metrics.max_norm_defect, 0.0, 0.0, "frozen node does not affect norm defect");
+    check_near(metrics.max_spin_rotation, 0.0, 0.0, "frozen node does not affect spin rotation");
+    check_near(acceptance_metric, 0.25, 0.0, "frozen node does not affect acceptance metric");
+}
+
+void adaptive_norms_fail_closed_on_frozen_mask_mismatch() {
+    const std::vector<double> one_node{1.0, 0.0, 0.0};
+    const std::vector<uint8_t> magnetic_mask{1u};
+    const std::vector<uint8_t> malformed_frozen_mask{0u, 1u};
+    const double norm = fullmag::fem::compute_adaptive_error_norm(
+        one_node,
+        one_node,
+        one_node,
+        magnetic_mask,
+        malformed_frozen_mask,
+        0.0,
+        1.0);
+    check(!std::isfinite(norm), "adaptive error norm rejects frozen mask extent mismatch");
+
+    fullmag::fem::AdaptiveAttemptGuardMetrics metrics{};
+    double acceptance_metric = 0.0;
+    std::string error;
+    check(
+        !fullmag::fem::compute_adaptive_attempt_guard_metric(
+            fullmag::fem::AdaptiveDtRuntimeState{},
+            0.25,
+            one_node,
+            one_node,
+            magnetic_mask,
+            malformed_frozen_mask,
+            acceptance_metric,
+            metrics,
+            error),
+        "adaptive geometry guards reject frozen mask extent mismatch");
+    check(
+        error.find("frozen-node mask size mismatch") != std::string::npos,
+        "frozen mask extent mismatch reports a typed reason");
 }
 
 void adaptive_attempt_guards_measure_pre_normalization_geometry() {
@@ -580,6 +669,7 @@ void adaptive_attempt_guards_measure_pre_normalization_geometry() {
         1.0, 0.0, 0.0,
     };
     const std::vector<uint8_t> mask{1u, 1u};
+    const std::vector<uint8_t> frozen_mask{0u, 0u};
     fullmag::fem::AdaptiveAttemptGuardMetrics metrics{};
     double acceptance_metric = 0.0;
     std::string error;
@@ -591,6 +681,7 @@ void adaptive_attempt_guards_measure_pre_normalization_geometry() {
             old_m,
             candidate,
             mask,
+            frozen_mask,
             acceptance_metric,
             metrics,
             error),
@@ -613,6 +704,7 @@ void adaptive_attempt_guards_fail_closed_on_invalid_active_vectors() {
     policy.enabled = true;
     const std::vector<double> old_m{1.0, 0.0, 0.0};
     const std::vector<uint8_t> mask{1u};
+    const std::vector<uint8_t> frozen_mask{0u};
     for (double invalid : {
              0.0,
              std::numeric_limits<double>::denorm_min(),
@@ -630,6 +722,7 @@ void adaptive_attempt_guards_fail_closed_on_invalid_active_vectors() {
                 old_m,
                 candidate,
                 mask,
+                frozen_mask,
                 acceptance_metric,
                 metrics,
                 error),
@@ -643,6 +736,7 @@ void adaptive_attempt_guards_fail_closed_on_invalid_active_vectors() {
     };
     const std::vector<double> candidate_with_airbox = old_with_airbox;
     const std::vector<uint8_t> airbox_mask{0u, 1u};
+    const std::vector<uint8_t> no_frozen_mask{};
     fullmag::fem::AdaptiveAttemptGuardMetrics metrics{};
     double acceptance_metric = 0.0;
     std::string error;
@@ -653,6 +747,7 @@ void adaptive_attempt_guards_fail_closed_on_invalid_active_vectors() {
             old_with_airbox,
             candidate_with_airbox,
             airbox_mask,
+            no_frozen_mask,
             acceptance_metric,
             metrics,
             error),
@@ -850,6 +945,8 @@ int main() {
     rejected_error_shrinks_dt_and_counts_rejection();
     adaptive_error_norm_uses_nodewise_vector_l2_scale();
     adaptive_relative_only_error_ignores_inactive_airbox_nodes();
+    adaptive_norms_exclude_frozen_nodes();
+    adaptive_norms_fail_closed_on_frozen_mask_mismatch();
     adaptive_attempt_guards_measure_pre_normalization_geometry();
     adaptive_attempt_guards_fail_closed_on_invalid_active_vectors();
     gpu_adaptive_error_norm_uses_nodewise_vector_l2_scale();

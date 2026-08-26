@@ -34,6 +34,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -138,6 +139,10 @@ bool context_step_explicit_rk_mfem(
     }
 
     ctx.adaptive_dt.current_dt = dt_seconds;
+    static const std::vector<uint8_t> no_frozen_nodes;
+    const auto &frozen_node_mask = ctx.frozen_spins.enabled()
+        ? ctx.frozen_spins.mask()
+        : no_frozen_nodes;
     ctx.stepper.attempt_trace.records.clear();
 
     const size_t dof_len = ctx.state.m_xyz.size();
@@ -320,6 +325,7 @@ bool context_step_explicit_rk_mfem(
                 ws.m_backup,
                 ws.m_candidate,
                 ctx.mesh.magnetic_node_mask,
+                frozen_node_mask,
                 ctx.adaptive_dt.atol,
                 ctx.adaptive_dt.rtol);
             if (!compute_adaptive_attempt_guard_metric(
@@ -328,6 +334,7 @@ bool context_step_explicit_rk_mfem(
                     ws.m_backup,
                     ws.m_candidate,
                     ctx.mesh.magnetic_node_mask,
+                    frozen_node_mask,
                     acceptance_metric,
                     guard_metrics,
                     error)) {
@@ -415,6 +422,7 @@ bool context_step_explicit_rk_mfem(
                     ws.m_backup,
                     ws.m_candidate,
                     ctx.mesh.magnetic_node_mask,
+                    frozen_node_mask,
                     acceptance_metric,
                     guard_metrics,
                     error)) {

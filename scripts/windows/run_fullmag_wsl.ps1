@@ -290,7 +290,13 @@ grep -Fxq cuda-fem-gpu /workspace/.fullmag/local/launcher-build-mode
     # PowerShell here-strings use CRLF on Windows; bash treats the trailing
     # carriage return in `pipefail` as part of the option name.
     $buildCommand = $buildCommand.Replace("`r`n", "`n").Replace("`r", "`n")
-    Invoke-DockerCompose @("run", "--rm", "--no-deps", "fullmag-windows-fem-gpu", "bash", "-lc", $buildCommand)
+    # Pass a single ASCII-safe argument through Docker/Compose. Directly
+    # forwarding a multiline PowerShell string can corrupt shell option names
+    # when Windows argument marshalling reintroduces carriage returns.
+    $buildCommandBytes = [System.Text.Encoding]::UTF8.GetBytes($buildCommand)
+    $buildCommandBase64 = [Convert]::ToBase64String($buildCommandBytes)
+    $buildCommandPayload = "printf '%s' '$buildCommandBase64' | base64 --decode | bash"
+    Invoke-DockerCompose @("run", "--rm", "--no-deps", "fullmag-windows-fem-gpu", "bash", "-lc", $buildCommandPayload)
   } elseif (-not (Test-Path -LiteralPath (Join-Path $StateRoot "local\bin\fullmag") -PathType Leaf)) {
     throw "Container-local FEM GPU launcher is missing at $StateRoot\local\bin\fullmag; rerun with build=True"
   }

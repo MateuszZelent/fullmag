@@ -4,6 +4,7 @@
 #include "cpu/mfem/runtime/phase_timings.hpp"
 
 #include <array>
+#include <cstdint>
 #include <vector>
 
 namespace fullmag::fem {
@@ -29,6 +30,17 @@ double max_norm_aos(const std::vector<double> &field_xyz);
 double max_cross_norm_aos(
     const std::vector<double> &a_xyz,
     const std::vector<double> &b_xyz);
+
+/*
+ * Compute the maximum vector norm of `a x b` over magnetic, non-frozen
+ * nodes. Empty masks mean that every node in that dimension is eligible;
+ * invalid vector or mask extents return positive infinity (fail-closed).
+ */
+double max_cross_norm_aos_free(
+    const std::vector<double> &a_xyz,
+    const std::vector<double> &b_xyz,
+    const std::vector<uint8_t> &magnetic_node_mask,
+    const std::vector<uint8_t> &frozen_node_mask);
 
 /*
  * Fill demag-specific solver stats and CPU thread provenance.
