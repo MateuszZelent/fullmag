@@ -314,6 +314,67 @@ pub enum TimeIntegrator {
     ABM3,
 }
 
+/// Explicit projection policy used by constrained RK stages.
+///
+/// The CPU FDM implementation currently realizes the embedded RK tableaus as
+/// projected methods: every trial stage and accepted candidate is projected
+/// back to the unit sphere before the next RHS evaluation.  Keeping this
+/// policy typed prevents the operation from being mistaken for an accidental
+/// vector normalization hidden in a tableau implementation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProjectionPolicy {
+    #[default]
+    UnitSphere,
+}
+
+/// Stable identity of the current FDM RK projection realization.
+pub const FDM_RK_PROJECTION_REALIZATION_VERSION: &str =
+    "fullmag.fdm.rk_projection.unit_sphere.v1";
+
+impl ProjectionPolicy {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::UnitSphere => "unit_sphere",
+        }
+    }
+
+    pub const fn realization_version(self) -> &'static str {
+        match self {
+            Self::UnitSphere => FDM_RK_PROJECTION_REALIZATION_VERSION,
+        }
+    }
+
+    pub fn project(self, vector: Vector3) -> Result<Vector3> {
+        match self {
+            Self::UnitSphere => crate::vector::normalized(vector),
+        }
+    }
+}
+
+#[cfg(test)]
+mod projection_policy_tests {
+    use super::{EngineErrorCode, ProjectionPolicy, FDM_RK_PROJECTION_REALIZATION_VERSION};
+
+    #[test]
+    fn unit_sphere_projection_has_stable_identity_and_fail_closed_nonfinite_input() {
+        let policy = ProjectionPolicy::default();
+        assert_eq!(policy.as_str(), "unit_sphere");
+        assert_eq!(
+            policy.realization_version(),
+            FDM_RK_PROJECTION_REALIZATION_VERSION
+        );
+
+        let projected = policy.project([3.0, 4.0, 0.0]).expect("finite vector projects");
+        assert!((projected[0] - 0.6).abs() < 1.0e-15);
+        assert!((projected[1] - 0.8).abs() < 1.0e-15);
+        assert_eq!(policy.project([0.0, 0.0, 0.0]).expect("inactive cell"), [0.0; 3]);
+        assert_eq!(
+            policy.project([f64::NAN, 0.0, 0.0]).unwrap_err().code(),
+            EngineErrorCode::NaNValue
+        );
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AdaptiveStepConfig {
     pub max_error: f64,
@@ -481,6 +542,8 @@ use crate::DEFAULT_GYROMAGNETIC_RATIO;
 pub struct LlgConfig {
     pub gyromagnetic_ratio: f64,
     pub integrator: TimeIntegrator,
+    /// Explicit constrained-RK projection policy for this solver session.
+    pub projection_policy: ProjectionPolicy,
     /// True only when the public problem selected an adaptive timestep policy.
     /// Embedded RK tableaus remain fixed-step when this is false.
     pub adaptive_enabled: bool,
@@ -493,6 +556,7 @@ impl Default for LlgConfig {
         Self {
             gyromagnetic_ratio: DEFAULT_GYROMAGNETIC_RATIO,
             integrator: TimeIntegrator::Heun,
+            projection_policy: ProjectionPolicy::default(),
             adaptive_enabled: false,
             adaptive: AdaptiveStepConfig::default(),
             precession_enabled: true,
@@ -508,6 +572,7 @@ impl LlgConfig {
         Ok(Self {
             gyromagnetic_ratio,
             integrator,
+            projection_policy: ProjectionPolicy::default(),
             adaptive_enabled: false,
             adaptive: AdaptiveStepConfig::default(),
             precession_enabled: true,
@@ -517,6 +582,11 @@ impl LlgConfig {
     pub fn with_adaptive(mut self, config: AdaptiveStepConfig) -> Self {
         self.adaptive_enabled = true;
         self.adaptive = config;
+        self
+    }
+
+    pub fn with_projection_policy(mut self, policy: ProjectionPolicy) -> Self {
+        self.projection_policy = policy;
         self
     }
 

@@ -135,6 +135,8 @@ fn default_dynamics(integrator: TimeIntegrator) -> LlgConfig {
     LlgConfig {
         gyromagnetic_ratio: fullmag_engine::DEFAULT_GYROMAGNETIC_RATIO,
         integrator,
+        projection_policy: fullmag_engine::ProjectionPolicy::default(),
+        adaptive_enabled: false,
         adaptive: AdaptiveStepConfig::default(),
         precession_enabled: true,
     }

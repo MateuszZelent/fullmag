@@ -43,7 +43,8 @@ pub use shared::types::{
     neighbor_index, AdaptiveStepConfig, AdaptiveStepController, AdaptiveStepDecision,
     AxisBoundary, CellSize, CoupledImexArk2Stage, CoupledImexArk2Tableau,
     EngineError, EngineErrorCode, EvaluationRequest, ExternalStageTerms, FdmBoundaryPolicy,
-    FdmDemagBoundary, GridShape, LlgConfig, MaterialParameters,
+    FdmDemagBoundary, GridShape, LlgConfig, MaterialParameters, ProjectionPolicy,
     ResolvedFdmPeriodicWorkspace, Result, TimeIntegrator, TransportStageErrorBudget,
     FDM_ADAPTIVE_CONTROLLER_MAX_REJECTED_ATTEMPTS, FDM_ADAPTIVE_CONTROLLER_POLICY_VERSION,
+    FDM_RK_PROJECTION_REALIZATION_VERSION,
 };

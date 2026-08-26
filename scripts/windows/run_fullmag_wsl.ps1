@@ -287,6 +287,9 @@ FULLMAG_CUDA_BASE_IMAGE=$CudaBaseImage FULLMAG_CARGO_TARGET_ROOT=/workspace/.ful
 test -x /workspace/.fullmag/local/bin/fullmag
 grep -Fxq cuda-fem-gpu /workspace/.fullmag/local/launcher-build-mode
 "@
+    # PowerShell here-strings use CRLF on Windows; bash treats the trailing
+    # carriage return in `pipefail` as part of the option name.
+    $buildCommand = $buildCommand.Replace("`r`n", "`n").Replace("`r", "`n")
     Invoke-DockerCompose @("run", "--rm", "--no-deps", "fullmag-windows-fem-gpu", "bash", "-lc", $buildCommand)
   } elseif (-not (Test-Path -LiteralPath (Join-Path $StateRoot "local\bin\fullmag") -PathType Leaf)) {
     throw "Container-local FEM GPU launcher is missing at $StateRoot\local\bin\fullmag; rerun with build=True"
