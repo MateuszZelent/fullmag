@@ -420,7 +420,7 @@ fn native_fem_non_fsal_final_refresh_reuses_stepper_workspace() {
     );
 
     let rhs_start = source
-        .find("if (final_stage_cache_valid) {\n        max_rhs_final = max_norm_aos(ws.k[0]);")
+        .find("double max_rhs_final = 0.0;")
         .expect("post-step RHS block");
     let rhs_rest = &source[rhs_start..];
     let rhs_end = rhs_rest
@@ -430,6 +430,12 @@ fn native_fem_non_fsal_final_refresh_reuses_stepper_workspace() {
     assert!(
         rhs_body.contains("ws.k[0], max_rhs_final"),
         "non-FSAL post-step RHS should reuse an existing stepper derivative buffer"
+    );
+    assert!(
+        rhs_body.contains(
+            "const auto &final_rhs = ws.fsal_valid ? ws.k[0] : ws.k[tab.stages - 1];"
+        ),
+        "post-step RHS should select the cached first stage only when FSAL is valid"
     );
     assert!(
         !rhs_body.contains("std::vector<double> rhs_final"),
