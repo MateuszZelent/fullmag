@@ -248,6 +248,7 @@ pub(crate) fn write_json_atomic(
     writer.write_all(&bytes).map_err(|error| error.to_string())?;
     writer.flush().map_err(|error| error.to_string())?;
     writer.get_ref().sync_all().map_err(|error| error.to_string())?;
+    drop(writer);
     replace_file_atomically(&temporary, path)?;
     Ok(())
 }

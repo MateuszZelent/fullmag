@@ -3314,6 +3314,7 @@ impl NativeFemBackend {
                 }
                 Ok(SolverAttemptRecord {
                     attempt: record.attempt,
+                    adaptive_controller_policy_version: None,
                     target_step: record.target_step,
                     time: checked_native_nonnegative("solver attempt time", record.time_seconds)?,
                     dt_attempt: checked_native_nonnegative(

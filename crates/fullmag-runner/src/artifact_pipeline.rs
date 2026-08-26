@@ -206,6 +206,9 @@ impl CpuAdaptiveAttemptBatch {
         for record in &self.records[..self.count] {
             target.push(SolverAttemptRecord {
                 attempt: u64::from(record.attempt),
+                adaptive_controller_policy_version: Some(
+                    record.controller_policy_version.to_string(),
+                ),
                 target_step: self.target_step,
                 time: self.time,
                 dt_attempt: record.dt_attempt,
@@ -2136,7 +2139,7 @@ fn write_terminal_cpu_adaptive_attempts(
         .map_err(|error| format!("failed to open '{}': {error}", path.display()))?;
     let mut attempts = BufWriter::new(file);
     if write_header {
-        writeln!(attempts, "attempt,target_step,t_s,dt_attempt_s,eta,max_norm_defect,max_spin_rotation_rad,decision,reason,dt_next_s,demag_solves,demag_iterations,demag_residual,rhs_evals,estimator_order")
+        writeln!(attempts, "attempt,target_step,t_s,dt_attempt_s,eta,max_norm_defect,max_spin_rotation_rad,decision,reason,dt_next_s,demag_solves,demag_iterations,demag_residual,rhs_evals,estimator_order,adaptive_controller_policy_version")
             .map_err(|error| format!("failed to write '{}': {error}", path.display()))?;
     }
     for record in &batch.records[..batch.count] {
@@ -2149,7 +2152,7 @@ fn write_terminal_cpu_adaptive_attempts(
         };
         writeln!(
             attempts,
-            "{},{},{:.17e},{:.17e},{:.17e},,,{},{},{:.17e},{},0,{:.17e},{},{}",
+            "{},{},{:.17e},{:.17e},{:.17e},,,{},{},{:.17e},{},0,{:.17e},{},{},{}",
             record.attempt,
             batch.target_step,
             batch.time,
@@ -2162,6 +2165,7 @@ fn write_terminal_cpu_adaptive_attempts(
             0.0,
             record.rhs_evals,
             batch.estimator_order,
+            record.controller_policy_version,
         )
         .map_err(|error| format!("failed to write '{}': {error}", path.display()))?;
     }
@@ -2343,6 +2347,7 @@ mod tests {
     fn terminal_attempt_batch(target_step: u64) -> CpuAdaptiveAttemptBatch {
         CpuAdaptiveAttemptBatch::new(
             &[AdaptiveAttemptRecord {
+                controller_policy_version: fullmag_engine::FDM_ADAPTIVE_CONTROLLER_POLICY_VERSION,
                 attempt: 1,
                 dt_attempt: 1e-12,
                 normalized_error: 2.0,

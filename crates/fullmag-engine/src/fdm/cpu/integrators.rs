@@ -5,24 +5,18 @@
 
 use crate::vector::{add, cross, norm, normalized, scale};
 use crate::{
-    AdaptiveAttemptDecision, AdaptiveAttemptReason, AdaptiveAttemptRecord, CoupledImexArk2Stage,
-    CoupledImexArk2Tableau, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState,
-    ExchangeLlgStateSoA, ExternalStageTerms, FftWorkspace, IntegratorBuffers, Result,
-    RhsEvaluation, StepReport, Vector3, VectorFieldSoA,
+    AdaptiveAttemptDecision, AdaptiveAttemptReason, AdaptiveAttemptRecord, AdaptiveStepController,
+    AdaptiveStepDecision, CoupledImexArk2Stage, CoupledImexArk2Tableau, EvaluationRequest,
+    ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA, ExternalStageTerms, FftWorkspace,
+    IntegratorBuffers, Result, RhsEvaluation, StepReport, Vector3, VectorFieldSoA,
 };
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum AdaptiveDecision {
-    Accepted(f64),
-    Retry(f64),
-    DtMinExhausted,
-    NonFinite(crate::EngineErrorCode),
-    RetryLimitExhausted,
-}
+type AdaptiveDecision = AdaptiveStepDecision;
 
+#[cfg(test)]
 fn decide_adaptive_step(
     order_est: i32,
     dt: f64,
@@ -30,65 +24,19 @@ fn decide_adaptive_step(
     previous_error: Option<f64>,
     cfg: crate::AdaptiveStepConfig,
 ) -> AdaptiveDecision {
-    if error.is_nan() {
-        return AdaptiveDecision::NonFinite(crate::EngineErrorCode::NaNValue);
-    }
-    if error.is_infinite() {
-        return AdaptiveDecision::NonFinite(crate::EngineErrorCode::InfiniteValue);
-    }
-    // Treat a representationally rounded value just above `dt_min` as the
-    // minimum-step boundary.  Otherwise a rejected attempt can schedule one
-    // redundant retry at the same clamped `dt_min`.
-    let at_dt_min = dt <= cfg.dt_min
-        || (dt - cfg.dt_min).abs() <= cfg.dt_min * (4.0 * f64::EPSILON);
-    if error > 1.0 && at_dt_min {
-        return AdaptiveDecision::DtMinExhausted;
-    }
-    let accepted = error <= 1.0;
-    let raw_ratio = if error == 0.0 {
-        cfg.growth_limit
-    } else {
-        let scale = 1.0 / f64::from(order_est + 1);
-        if accepted {
-            previous_error.filter(|value| *value > 0.0).map_or_else(
-                || cfg.headroom * error.powf(-scale),
-                |previous| cfg.headroom * error.powf(-0.7 * scale) * previous.powf(0.4 * scale),
-            )
-        } else {
-            cfg.headroom * error.powf(-scale)
-        }
-    };
-    let next =
-        (dt * raw_ratio.clamp(cfg.shrink_limit, cfg.growth_limit)).clamp(cfg.dt_min, cfg.dt_max);
-    if accepted {
-        AdaptiveDecision::Accepted(next)
-    } else if next < dt {
-        AdaptiveDecision::Retry(next)
-    } else {
-        let decreased = dt.next_down();
-        if decreased > 0.0 && decreased >= cfg.dt_min {
-            AdaptiveDecision::Retry(decreased)
-        } else {
-            AdaptiveDecision::DtMinExhausted
-        }
-    }
+    AdaptiveStepController::new(order_est, cfg, previous_error).decide(dt, error)
 }
 
 fn decide_adaptive_attempt(
-    order_est: i32,
     dt: f64,
     error: f64,
-    previous_error: Option<f64>,
-    cfg: crate::AdaptiveStepConfig,
     rhs_evals: u32,
     bufs: &mut IntegratorBuffers,
+    controller: &mut AdaptiveStepController,
 ) -> AdaptiveDecision {
     #[cfg(test)]
     bufs.record_adaptive_attempt_for_tests(dt);
-    let mut decision = decide_adaptive_step(order_est, dt, error, previous_error, cfg);
-    if matches!(decision, AdaptiveDecision::Retry(_)) && bufs.adaptive_retry_budget_exhausted() {
-        decision = AdaptiveDecision::RetryLimitExhausted;
-    }
+    let decision = controller.decide(dt, error);
     let (published_decision, reason, dt_next) = match decision {
         AdaptiveDecision::Accepted(next) => (
             AdaptiveAttemptDecision::Accepted,
@@ -117,6 +65,7 @@ fn decide_adaptive_attempt(
         ),
     };
     bufs.record_adaptive_attempt(AdaptiveAttemptRecord {
+        controller_policy_version: controller.policy_version(),
         attempt: 0,
         dt_attempt: dt,
         normalized_error: error,
@@ -1755,6 +1704,8 @@ impl ExchangeLlgProblem {
         evaluation: EvaluationRequest,
     ) -> Result<StepReport> {
         let cfg = self.dynamics.adaptive;
+        let mut adaptive_controller =
+            AdaptiveStepController::new(2, cfg, state.adaptive_previous_error);
         let mut dt = if self.dynamics.adaptive_enabled {
             dt.min(cfg.dt_max).max(cfg.dt_min)
         } else {
@@ -1907,13 +1858,11 @@ impl ExchangeLlgProblem {
             let normalized_error = error / thr;
             let decision = if self.dynamics.adaptive_enabled {
                 decide_adaptive_attempt(
-                    2,
                     dt,
                     normalized_error,
-                    state.adaptive_previous_error,
-                    cfg,
                     rhs_evals.finish(),
                     bufs,
+                    &mut adaptive_controller,
                 )
             } else {
                 AdaptiveDecision::Accepted(dt)
@@ -1932,8 +1881,11 @@ impl ExchangeLlgProblem {
                     evaluation,
                     state.time_seconds,
                 );
-                state.adaptive_previous_error =
-                    self.dynamics.adaptive_enabled.then_some(normalized_error);
+                state.adaptive_previous_error = if self.dynamics.adaptive_enabled {
+                    adaptive_controller.previous_error()
+                } else {
+                    None
+                };
                 let mut report = eval.into_step_report(state.time_seconds, dt, false);
                 report.suggested_next_dt = self.dynamics.adaptive_enabled.then_some(dt_next);
                 return Ok(report);
@@ -1972,6 +1924,8 @@ impl ExchangeLlgProblem {
         evaluation: EvaluationRequest,
     ) -> Result<StepReport> {
         let cfg = self.dynamics.adaptive;
+        let mut adaptive_controller =
+            AdaptiveStepController::new(2, cfg, state.adaptive_previous_error);
         let mut dt = if self.dynamics.adaptive_enabled {
             dt.min(cfg.dt_max).max(cfg.dt_min)
         } else {
@@ -2071,13 +2025,11 @@ impl ExchangeLlgProblem {
             let normalized_error = error / thr;
             let decision = if self.dynamics.adaptive_enabled {
                 decide_adaptive_attempt(
-                    2,
                     dt,
                     normalized_error,
-                    state.adaptive_previous_error,
-                    cfg,
                     rhs_evals.finish(),
                     bufs,
+                    &mut adaptive_controller,
                 )
             } else {
                 AdaptiveDecision::Accepted(dt)
@@ -2097,8 +2049,11 @@ impl ExchangeLlgProblem {
                     evaluation,
                     state.time_seconds,
                 );
-                state.adaptive_previous_error =
-                    self.dynamics.adaptive_enabled.then_some(normalized_error);
+                state.adaptive_previous_error = if self.dynamics.adaptive_enabled {
+                    adaptive_controller.previous_error()
+                } else {
+                    None
+                };
                 let mut report = eval.into_step_report(state.time_seconds, dt, false);
                 report.suggested_next_dt = self.dynamics.adaptive_enabled.then_some(dt_next);
                 return Ok(report);
@@ -2140,6 +2095,8 @@ impl ExchangeLlgProblem {
         evaluation: EvaluationRequest,
     ) -> Result<StepReport> {
         let cfg = self.dynamics.adaptive;
+        let mut adaptive_controller =
+            AdaptiveStepController::new(4, cfg, state.adaptive_previous_error);
         let mut dt = if self.dynamics.adaptive_enabled {
             dt.min(cfg.dt_max).max(cfg.dt_min)
         } else {
@@ -2497,13 +2454,11 @@ impl ExchangeLlgProblem {
             let normalized_error = error / thr;
             let decision = if self.dynamics.adaptive_enabled {
                 decide_adaptive_attempt(
-                    4,
                     dt,
                     normalized_error,
-                    state.adaptive_previous_error,
-                    cfg,
                     rhs_evals.finish(),
                     bufs,
+                    &mut adaptive_controller,
                 )
             } else {
                 AdaptiveDecision::Accepted(dt)
@@ -2529,8 +2484,11 @@ impl ExchangeLlgProblem {
                     evaluation,
                     state.time_seconds,
                 );
-                state.adaptive_previous_error =
-                    self.dynamics.adaptive_enabled.then_some(normalized_error);
+                state.adaptive_previous_error = if self.dynamics.adaptive_enabled {
+                    adaptive_controller.previous_error()
+                } else {
+                    None
+                };
                 let mut report = eval.into_step_report(state.time_seconds, dt, false);
                 report.suggested_next_dt = self.dynamics.adaptive_enabled.then_some(dt_next);
                 return Ok(report);
@@ -2569,6 +2527,8 @@ impl ExchangeLlgProblem {
         evaluation: EvaluationRequest,
     ) -> Result<StepReport> {
         let cfg = self.dynamics.adaptive;
+        let mut adaptive_controller =
+            AdaptiveStepController::new(4, cfg, state.adaptive_previous_error);
         let mut dt = if self.dynamics.adaptive_enabled {
             dt.min(cfg.dt_max).max(cfg.dt_min)
         } else {
@@ -2799,13 +2759,11 @@ impl ExchangeLlgProblem {
             let normalized_error = error / thr;
             let decision = if self.dynamics.adaptive_enabled {
                 decide_adaptive_attempt(
-                    4,
                     dt,
                     normalized_error,
-                    state.adaptive_previous_error,
-                    cfg,
                     rhs_evals.finish(),
                     bufs,
+                    &mut adaptive_controller,
                 )
             } else {
                 AdaptiveDecision::Accepted(dt)
@@ -2834,8 +2792,11 @@ impl ExchangeLlgProblem {
                     evaluation,
                     state.time_seconds,
                 );
-                state.adaptive_previous_error =
-                    self.dynamics.adaptive_enabled.then_some(normalized_error);
+                state.adaptive_previous_error = if self.dynamics.adaptive_enabled {
+                    adaptive_controller.previous_error()
+                } else {
+                    None
+                };
                 let mut report = eval.into_step_report(state.time_seconds, dt, false);
                 report.suggested_next_dt = self.dynamics.adaptive_enabled.then_some(dt_next);
                 return Ok(report);
@@ -3341,6 +3302,8 @@ impl ExchangeLlgProblem {
             return Ok(report);
         }
         let cfg = self.dynamics.adaptive;
+        let mut adaptive_controller =
+            AdaptiveStepController::new(2, cfg, state.adaptive_previous_error);
         let mut dt = dt.min(cfg.dt_max).max(cfg.dt_min);
         let n = state.magnetization.len();
         let t0 = state.time_seconds;
@@ -3436,13 +3399,11 @@ impl ExchangeLlgProblem {
             let normalized_error = error / thr;
             let decision = if self.dynamics.adaptive_enabled {
                 decide_adaptive_attempt(
-                    2,
                     dt,
                     normalized_error,
-                    state.adaptive_previous_error,
-                    cfg,
                     rhs_evals.finish(),
                     bufs,
+                    &mut adaptive_controller,
                 )
             } else {
                 AdaptiveDecision::Accepted(dt)
@@ -3458,8 +3419,11 @@ impl ExchangeLlgProblem {
                     evaluation,
                     state.time_seconds,
                 );
-                state.adaptive_previous_error =
-                    self.dynamics.adaptive_enabled.then_some(normalized_error);
+                state.adaptive_previous_error = if self.dynamics.adaptive_enabled {
+                    adaptive_controller.previous_error()
+                } else {
+                    None
+                };
                 let mut report = eval.into_step_report(state.time_seconds, dt, false);
                 report.suggested_next_dt = self.dynamics.adaptive_enabled.then_some(dt_next);
                 return Ok(report);
@@ -3504,6 +3468,8 @@ impl ExchangeLlgProblem {
             return Ok(report);
         }
         let cfg = self.dynamics.adaptive;
+        let mut adaptive_controller =
+            AdaptiveStepController::new(4, cfg, state.adaptive_previous_error);
         let mut dt = dt.min(cfg.dt_max).max(cfg.dt_min);
         let n = state.magnetization.len();
         let t0 = state.time_seconds;
@@ -3730,13 +3696,11 @@ impl ExchangeLlgProblem {
             let normalized_error = error / thr;
             let decision = if self.dynamics.adaptive_enabled {
                 decide_adaptive_attempt(
-                    4,
                     dt,
                     normalized_error,
-                    state.adaptive_previous_error,
-                    cfg,
                     rhs_evals.finish(),
                     bufs,
+                    &mut adaptive_controller,
                 )
             } else {
                 AdaptiveDecision::Accepted(dt)
@@ -3759,8 +3723,11 @@ impl ExchangeLlgProblem {
                     evaluation,
                     state.time_seconds,
                 );
-                state.adaptive_previous_error =
-                    self.dynamics.adaptive_enabled.then_some(normalized_error);
+                state.adaptive_previous_error = if self.dynamics.adaptive_enabled {
+                    adaptive_controller.previous_error()
+                } else {
+                    None
+                };
                 let mut report = eval.into_step_report(state.time_seconds, dt, false);
                 report.suggested_next_dt = self.dynamics.adaptive_enabled.then_some(dt_next);
                 return Ok(report);

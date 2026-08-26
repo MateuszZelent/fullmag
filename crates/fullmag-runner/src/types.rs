@@ -337,6 +337,8 @@ pub enum StepAction {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SolverAttemptRecord {
     pub attempt: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_controller_policy_version: Option<String>,
     pub target_step: u64,
     pub time: f64,
     pub dt_attempt: f64,

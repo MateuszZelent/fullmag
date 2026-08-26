@@ -2017,12 +2017,12 @@ fn write_solver_diagnostics_artifacts(
     )?;
 
     let mut attempts = fs::File::create(output_dir.join("solver_attempts.csv"))?;
-    writeln!(attempts, "attempt,target_step,t_s,dt_attempt_s,eta,max_norm_defect,max_spin_rotation_rad,decision,reason,dt_next_s,demag_solves,demag_iterations,demag_residual,rhs_evals,estimator_order")?;
+    writeln!(attempts, "attempt,target_step,t_s,dt_attempt_s,eta,max_norm_defect,max_spin_rotation_rad,decision,reason,dt_next_s,demag_solves,demag_iterations,demag_residual,rhs_evals,estimator_order,adaptive_controller_policy_version")?;
     for step in steps {
         for record in &step.solver_attempts {
             writeln!(
                 attempts,
-                "{},{},{:.17e},{:.17e},{:.17e},{},{},{},{},{:.17e},{},{},{:.17e},{},{}",
+                "{},{},{:.17e},{:.17e},{:.17e},{},{},{},{},{:.17e},{},{},{:.17e},{},{},{}",
                 record.attempt,
                 record.target_step,
                 record.time,
@@ -2044,6 +2044,10 @@ fn write_solver_diagnostics_artifacts(
                 record.demag_residual,
                 record.rhs_evals,
                 record.estimator_order,
+                record
+                    .adaptive_controller_policy_version
+                    .as_deref()
+                    .unwrap_or_default(),
             )?;
         }
     }
@@ -6906,6 +6910,7 @@ mod tests {
         };
         let rejected_attempt = SolverAttemptRecord {
             attempt: 0,
+            adaptive_controller_policy_version: None,
             target_step: 1,
             time: 0.0,
             dt_attempt: 4.0e-15,
@@ -7010,6 +7015,7 @@ mod tests {
         };
         accepted.solver_attempts.push(SolverAttemptRecord {
             attempt: 0,
+            adaptive_controller_policy_version: None,
             target_step: 7,
             time: 7.25e-12,
             dt_attempt: 1.0e-12,

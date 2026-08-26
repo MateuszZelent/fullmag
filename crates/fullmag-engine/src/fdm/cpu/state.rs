@@ -4,7 +4,8 @@ use crate::fdm::shared::observables::{EffectiveFieldObservables, StepReport};
 use crate::vector::normalized;
 use crate::{
     EngineError, EvaluationRequest, ExchangeLlgProblem, FftWorkspace, GridShape, Result, Vector3,
-    VectorFieldSoA,
+    VectorFieldSoA, FDM_ADAPTIVE_CONTROLLER_MAX_REJECTED_ATTEMPTS,
+    FDM_ADAPTIVE_CONTROLLER_POLICY_VERSION,
 };
 use sha2::{Digest, Sha256};
 
@@ -473,7 +474,8 @@ impl AbmHistory {
 
 /// Maximum number of records for one adaptive outer-step transaction: up to
 /// 50 rejected attempts followed by one accepted or terminal attempt.
-pub const MAX_ADAPTIVE_ATTEMPT_RECORDS: usize = 51;
+pub const MAX_ADAPTIVE_ATTEMPT_RECORDS: usize =
+    FDM_ADAPTIVE_CONTROLLER_MAX_REJECTED_ATTEMPTS as usize + 1;
 
 /// Layout selected for a reusable integrator buffer set.
 ///
@@ -504,6 +506,7 @@ pub enum AdaptiveAttemptReason {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AdaptiveAttemptRecord {
+    pub controller_policy_version: &'static str,
     pub attempt: u32,
     pub dt_attempt: f64,
     pub normalized_error: f64,
@@ -516,6 +519,7 @@ pub struct AdaptiveAttemptRecord {
 impl Default for AdaptiveAttemptRecord {
     fn default() -> Self {
         Self {
+            controller_policy_version: FDM_ADAPTIVE_CONTROLLER_POLICY_VERSION,
             attempt: 0,
             dt_attempt: 0.0,
             normalized_error: 0.0,
@@ -625,14 +629,11 @@ impl IntegratorBuffers {
         }
     }
 
-    pub(crate) fn adaptive_retry_budget_exhausted(&self) -> bool {
-        self.adaptive_rejected_attempts >= 50
-    }
-
     pub(crate) fn record_adaptive_attempt(&mut self, mut record: AdaptiveAttemptRecord) {
         if self.adaptive_attempt_count >= MAX_ADAPTIVE_ATTEMPT_RECORDS {
             return;
         }
+        record.controller_policy_version = FDM_ADAPTIVE_CONTROLLER_POLICY_VERSION;
         record.attempt = self.adaptive_attempt_count as u32 + 1;
         match record.decision {
             AdaptiveAttemptDecision::Accepted => self.adaptive_accepted_attempts += 1,

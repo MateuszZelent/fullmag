@@ -40,8 +40,10 @@ pub use shared::terms::{
     UniaxialAnisotropyConfig, ZhangLiFormula, ZhangLiSttConfig,
 };
 pub use shared::types::{
-    neighbor_index, AdaptiveStepConfig, AxisBoundary, CellSize, CoupledImexArk2Stage,
-    CoupledImexArk2Tableau, EngineError, EngineErrorCode, EvaluationRequest, ExternalStageTerms,
-    FdmBoundaryPolicy, FdmDemagBoundary, GridShape, LlgConfig, MaterialParameters,
+    neighbor_index, AdaptiveStepConfig, AdaptiveStepController, AdaptiveStepDecision,
+    AxisBoundary, CellSize, CoupledImexArk2Stage, CoupledImexArk2Tableau,
+    EngineError, EngineErrorCode, EvaluationRequest, ExternalStageTerms, FdmBoundaryPolicy,
+    FdmDemagBoundary, GridShape, LlgConfig, MaterialParameters,
     ResolvedFdmPeriodicWorkspace, Result, TimeIntegrator, TransportStageErrorBudget,
+    FDM_ADAPTIVE_CONTROLLER_MAX_REJECTED_ATTEMPTS, FDM_ADAPTIVE_CONTROLLER_POLICY_VERSION,
 };

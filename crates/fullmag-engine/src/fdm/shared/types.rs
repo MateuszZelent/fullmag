@@ -344,6 +344,137 @@ impl Default for AdaptiveStepConfig {
     }
 }
 
+/// Stable identity of the Rust FDM CPU adaptive-step controller policy.
+///
+/// Attempt telemetry carries this value so a recorded retry trace cannot be
+/// interpreted with a different accept/reject policy after a solver change.
+pub const FDM_ADAPTIVE_CONTROLLER_POLICY_VERSION: &str = "fullmag.fdm.adaptive_controller.v1";
+
+/// Default bounded retry budget for one adaptive outer-step transaction.
+pub const FDM_ADAPTIVE_CONTROLLER_MAX_REJECTED_ATTEMPTS: u32 = 50;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AdaptiveStepDecision {
+    Accepted(f64),
+    Retry(f64),
+    DtMinExhausted,
+    NonFinite(EngineErrorCode),
+    RetryLimitExhausted,
+}
+
+/// Public, versioned PI controller shared by all Rust FDM CPU embedded-RK
+/// representations.  It owns the previous accepted error and retry budget;
+/// rejected attempts never update the PI history.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AdaptiveStepController {
+    order_estimate: i32,
+    config: AdaptiveStepConfig,
+    previous_error: Option<f64>,
+    rejected_attempts: u32,
+    max_rejected_attempts: u32,
+}
+
+impl AdaptiveStepController {
+    pub const POLICY_VERSION: &'static str = FDM_ADAPTIVE_CONTROLLER_POLICY_VERSION;
+    pub const DEFAULT_MAX_REJECTED_ATTEMPTS: u32 = FDM_ADAPTIVE_CONTROLLER_MAX_REJECTED_ATTEMPTS;
+
+    pub fn new(
+        order_estimate: i32,
+        config: AdaptiveStepConfig,
+        previous_error: Option<f64>,
+    ) -> Self {
+        Self {
+            order_estimate,
+            config,
+            previous_error,
+            rejected_attempts: 0,
+            max_rejected_attempts: Self::DEFAULT_MAX_REJECTED_ATTEMPTS,
+        }
+    }
+
+    pub fn with_max_rejected_attempts(mut self, max_rejected_attempts: u32) -> Self {
+        self.max_rejected_attempts = max_rejected_attempts;
+        self
+    }
+
+    pub const fn policy_version(&self) -> &'static str {
+        Self::POLICY_VERSION
+    }
+
+    pub const fn previous_error(&self) -> Option<f64> {
+        self.previous_error
+    }
+
+    pub const fn rejected_attempts(&self) -> u32 {
+        self.rejected_attempts
+    }
+
+    pub const fn max_rejected_attempts(&self) -> u32 {
+        self.max_rejected_attempts
+    }
+
+    fn retry_or_fail(&mut self, dt_next: f64) -> AdaptiveStepDecision {
+        if self.rejected_attempts >= self.max_rejected_attempts {
+            AdaptiveStepDecision::RetryLimitExhausted
+        } else {
+            self.rejected_attempts += 1;
+            AdaptiveStepDecision::Retry(dt_next)
+        }
+    }
+
+    pub fn decide(&mut self, dt: f64, error: f64) -> AdaptiveStepDecision {
+        if error.is_nan() {
+            return AdaptiveStepDecision::NonFinite(EngineErrorCode::NaNValue);
+        }
+        if error.is_infinite() {
+            return AdaptiveStepDecision::NonFinite(EngineErrorCode::InfiniteValue);
+        }
+        // Treat a representationally rounded value just above `dt_min` as the
+        // minimum-step boundary.  Otherwise a rejected attempt can schedule
+        // one redundant retry at the same clamped `dt_min`.
+        let at_dt_min = dt <= self.config.dt_min
+            || (dt - self.config.dt_min).abs() <= self.config.dt_min * (4.0 * f64::EPSILON);
+        if error > 1.0 && at_dt_min {
+            return AdaptiveStepDecision::DtMinExhausted;
+        }
+        let accepted = error <= 1.0;
+        let raw_ratio = if error == 0.0 {
+            self.config.growth_limit
+        } else {
+            let scale = 1.0 / f64::from(self.order_estimate + 1);
+            if accepted {
+                self.previous_error
+                    .filter(|value| *value > 0.0)
+                    .map_or_else(
+                        || self.config.headroom * error.powf(-scale),
+                        |previous| {
+                            self.config.headroom
+                                * error.powf(-0.7 * scale)
+                                * previous.powf(0.4 * scale)
+                        },
+                    )
+            } else {
+                self.config.headroom * error.powf(-scale)
+            }
+        };
+        let next = (dt * raw_ratio.clamp(self.config.shrink_limit, self.config.growth_limit))
+            .clamp(self.config.dt_min, self.config.dt_max);
+        if accepted {
+            self.previous_error = Some(error);
+            AdaptiveStepDecision::Accepted(next)
+        } else if next < dt {
+            self.retry_or_fail(next)
+        } else {
+            let decreased = dt.next_down();
+            if decreased > 0.0 && decreased >= self.config.dt_min {
+                self.retry_or_fail(decreased)
+            } else {
+                AdaptiveStepDecision::DtMinExhausted
+            }
+        }
+    }
+}
+
 use crate::DEFAULT_GYROMAGNETIC_RATIO;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
