@@ -241,11 +241,11 @@ Transport frontendowy pozostaje wyłącznie wygenerowanym v2 transportem przez
    niezmienione semantycznie.
 ## 10. Uzupełnienie naprawy przyczynowej
 
-Strict mixed-P1 pozostaje w obecnym, zakwalifikowanym zakresie exchange + demag.
+Strict mixed-P1 pozostaje w zakwalifikowanym zakresie exchange + demag + opcjonalna jednorodna anizotropia jednoosiowa Ku1/Ku2 ze stałą osią. Anizotropia kubiczna, przestrzenne pola parametrów materiałowych i pozostałe niezakwalifikowane interakcje nadal są odrzucane.
 Gdy authored discretization jednoznacznie żąda `swept_prism` z przejściem
 `pyramid_to_tetrahedra`, planner sprawdza predykaty niezależne od certyfikatu
 przed Gmsh. Błąd zawiera stabilną, uporządkowaną listę, między innymi
-`missing_exchange` i `unsupported_uniaxial_anisotropy`. Końcowa walidacja
+`missing_exchange` i `unsupported_cubic_anisotropy`. Końcowa walidacja
 materialized mesh nadal sprawdza certyfikat, topologię, jakość i backend.
 
 Raport mixed mesh nie wywołuje pełnego `MeshData.to_ir()` tylko dla

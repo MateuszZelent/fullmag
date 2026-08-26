@@ -88,12 +88,11 @@ def test_bimeron_example_uses_the_qualified_shared_domain_mesh_route() -> None:
     assert isinstance(keywords["optimize"], ast.Constant)
     assert keywords["optimize"].value is None
     assert ast.literal_eval(keywords["optimize_iterations"]) == 0
-def test_bimeron_example_rejects_unsupported_mixed_p1_before_geometry_assets() -> None:
+
+
+def test_bimeron_example_accepts_uniform_uniaxial_mixed_p1_before_geometry_assets() -> None:
     loaded = load_problem_from_script(EXAMPLE, lightweight_assets=True)
+    problem_ir = loaded.problem.to_ir(include_geometry_assets=False)
 
-    with pytest.raises(ValueError) as captured:
-        loaded.problem.to_ir(include_geometry_assets=False)
-
-    detail = str(captured.value)
-    assert "fem_mixed_p1_scope_rejected" in detail
-    assert "unsupported_uniaxial_anisotropy" in detail
+    assert problem_ir["materials"][0]["uniaxial_anisotropy"] == pytest.approx(1.0e5)
+    assert problem_ir["materials"][0]["anisotropy_axis"] == [0.0, 0.0, 1.0]

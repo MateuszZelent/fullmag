@@ -10,7 +10,7 @@
 
 ## Ograniczenia globalne
 
-- Nie rozszerzać mixed-P1 poza zakwalifikowane exchange + demag.
+- Zachować zakwalifikowany zakres mixed-P1: exchange + demag + opcjonalna jednorodna anizotropia jednoosiowa Ku1/Ku2; nadal odrzucać anizotropię kubiczną, pola materiałowe i pozostałe niezakwalifikowane interakcje.
 - Nie usuwać anizotropii ani nie zmieniać fizyki skryptu użytkownika.
 - Nie dodawać endpointu ani pola OpenAPI.
 - Nie wymyślać procentu ani ETA dla operacji bez mianownika.
@@ -29,7 +29,7 @@
 - Produkuje: uporządkowane identyfikatory naruszeń authored scope i materialized scope.
 - Zachowuje: istniejący publiczny błąd planera oraz końcową walidację certyfikatu.
 
-- [ ] Dodać test, że authored `swept_prism + pyramid_to_tetrahedra` z brakującym exchange i anizotropią jest odrzucany przed wymaganiem mesh asset.
+- [ ] Dodać test, że authored `swept_prism + pyramid_to_tetrahedra` z brakującym exchange i anizotropią kubiczną jest odrzucany przed wymaganiem mesh asset.
 - [ ] Uruchomić test i potwierdzić RED: obecny planner przechodzi do materializacji albo nie zawiera obu identyfikatorów.
 - [ ] Wyodrębnić kolektor predykatów i wywołać preflight tylko dla jednoznacznego authored mixed intent.
 - [ ] Zachować pełne sprawdzenie certyfikatu po materializacji.

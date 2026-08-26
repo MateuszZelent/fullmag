@@ -395,7 +395,7 @@ describe("SimulationStartupOverlay", () => {
       active_stage_id: null,
       failure: {
         diagnostics_correlation_id: "diag-42",
-        detail: "failed_predicates=[unsupported_uniaxial_anisotropy]",
+        detail: "failed_predicates=[unsupported_cubic_anisotropy]",
         error_code: "mesh_generation_failed",
         stage_id: "meshing",
         summary: "Mesh generation did not converge.",
@@ -409,7 +409,7 @@ describe("SimulationStartupOverlay", () => {
     );
     const kernel = startupGateKernel();
     expect(state.failure?.detail).toBe(
-      "failed_predicates=[unsupported_uniaxial_anisotropy]",
+      "failed_predicates=[unsupported_cubic_anisotropy]",
     );
     const html = renderToStaticMarkup(
       <KernelContext.Provider value={kernel}>
@@ -438,7 +438,7 @@ describe("SimulationStartupOverlay", () => {
       environment: { token: "secret-token" },
       failure: {
         diagnostics_correlation_id: "diag-42",
-        detail: "failed_predicates=[unsupported_uniaxial_anisotropy]",
+        detail: "failed_predicates=[unsupported_cubic_anisotropy]",
         error_code: "mesh_generation_failed",
         stage_id: "meshing" as const,
         summary: "Mesh generation did not converge.",
@@ -472,7 +472,7 @@ describe("SimulationStartupOverlay", () => {
     };
 
     expect(projection.failure.detail).toBe(
-      "failed_predicates=[unsupported_uniaxial_anisotropy]",
+      "failed_predicates=[unsupported_cubic_anisotropy]",
     );
     expect(projection.log_tail).toHaveLength(200);
     expect(projection.stages[1]?.clock_adjustment).toEqual({

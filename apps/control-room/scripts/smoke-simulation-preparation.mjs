@@ -220,6 +220,7 @@ function preparationFixture(kind) {
       completed_at_unix_ms: baseTime + 22_000,
       failure: {
         diagnostics_correlation_id: "prep-smoke-3",
+        detail: "Managed GPU runtime rejected the requested CUDA capability set.",
         error_code: "solver_initialization_failed",
         stage_id: "solver_initialization",
         summary: "GPU runtime initialization failed.",
@@ -763,9 +764,41 @@ try {
   currentPreparation = preparationFixture("failed");
   preparationRevision = 5;
   sendPreparationInvalidation(5);
-  await page.getByRole("heading", { name: "Simulation preparation failed" }).waitFor();
+  await page
+    .locator(".fm-simulation-startup__title")
+    .getByText("Simulation preparation failed", { exact: true })
+    .waitFor();
   await page.getByRole("button", { name: "Copy diagnostics" }).waitFor();
-  const openDiagnostics = page.getByRole("button", { name: "Open full diagnostics" });
+  const failureDialog = page.getByRole("dialog");
+  await failureDialog.waitFor();
+  await failureDialog
+    .getByText("Managed GPU runtime rejected the requested CUDA capability set.", {
+      exact: true,
+    })
+    .waitFor();
+  await failureDialog.getByText("740ms", { exact: true }).waitFor();
+  await failureDialog.getByText("prep-smoke-3", { exact: true }).waitFor();
+  await failureDialog
+    .getByRole("button", { name: "Copy diagnostic report" })
+    .click();
+  await failureDialog
+    .getByRole("status")
+    .getByText("Diagnostic report copied to clipboard.", { exact: true })
+    .waitFor();
+  await failureDialog.getByRole("button", { name: "Close" }).click();
+  await failureDialog.waitFor({ state: "detached" });
+  await page.waitForTimeout(250);
+  assert(
+    (await page.getByRole("dialog").count()) === 0,
+    "Failure dialog reopened for the same failure identity after manual close.",
+  );
+  await page.getByRole("button", { name: "View error details" }).click();
+  await page.getByRole("dialog").waitFor();
+  await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
+  await page.getByRole("dialog").waitFor({ state: "detached" });
+  const openDiagnostics = page
+    .locator(".fm-simulation-startup__actions")
+    .getByRole("button", { name: "Open full diagnostics" });
   await openDiagnostics.waitFor();
   assert(
     (await page.locator(".fm-simulation-startup__detail").textContent()) ===
@@ -787,7 +820,10 @@ try {
     (await page.locator('[data-slot-id="panel-bottom"]').count()) === 1,
     "Mounted diagnostics consumer was not visible after the failure action.",
   );
-  await page.getByRole("heading", { name: "Simulation preparation failed" }).waitFor();
+  await page
+    .locator(".fm-simulation-startup__title")
+    .getByText("Simulation preparation failed", { exact: true })
+    .waitFor();
 
   const preparationChanges = preparationRealtimeChanges();
   assert(

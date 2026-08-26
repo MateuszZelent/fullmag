@@ -1,4 +1,9 @@
-import { act } from "react";
+import {
+  act,
+  type ComponentProps,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -41,11 +46,69 @@ import {
 } from "./simulationPreparationModel";
 import {
   findElement,
+  findElements,
   installSimulationPreparationTestDom,
   TestElement,
   TestEvent,
 } from "./simulationPreparationTestDom.test-support";
 import { footerManifest } from "../../modules/footer/manifest";
+
+vi.mock("@/shared/ui/Dialog", async () => {
+  const React = await import("react");
+  const DialogContext = React.createContext<{
+    onOpenChange: (open: boolean) => void;
+    open: boolean;
+  }>({
+    onOpenChange: (_open: boolean) => undefined,
+    open: false,
+  });
+
+  return {
+    Dialog: ({
+      children,
+      onOpenChange,
+      open,
+    }: {
+      children: ReactNode;
+      onOpenChange: (open: boolean) => void;
+      open: boolean;
+    }) => (
+      <DialogContext.Provider value={{ onOpenChange, open }}>
+        {children}
+      </DialogContext.Provider>
+    ),
+    DialogClose: ({
+      asChild: _asChild,
+      children,
+    }: {
+      asChild?: boolean;
+      children: ReactElement<{ onClick?: () => void }>;
+    }) => {
+      const context = React.useContext(DialogContext);
+      return React.cloneElement(children, {
+        onClick: () => {
+          children.props.onClick?.();
+          context.onOpenChange(false);
+        },
+      });
+    },
+    DialogContent: ({
+      children,
+      ...props
+    }: ComponentProps<"section">) => {
+      const context = React.useContext(DialogContext);
+      return context.open ? (
+        <section role="dialog" {...props}>
+          {children}
+        </section>
+      ) : null;
+    },
+    DialogDescription: (props: ComponentProps<"p">) => <p {...props} />,
+    DialogFooter: (props: ComponentProps<"div">) => <div {...props} />,
+    DialogHeader: (props: ComponentProps<"div">) => <div {...props} />,
+    DialogTitle: (props: ComponentProps<"h2">) => <h2 {...props} />,
+  };
+});
 
 interface Deferred<TData> {
   readonly promise: Promise<TData>;
@@ -237,6 +300,138 @@ describe("mounted simulation preparation UI", () => {
     expect(layout.get().focusedSlot).toBe("panel-bottom");
 
     unsubscribe();
+    await act(async () => root.unmount());
+    dom.restore();
+  });
+
+  it("auto-opens one precise failure dialog per failure identity and allows manual reopen", async () => {
+    const clipboardWrite = vi.fn<(text: string) => Promise<void>>();
+    clipboardWrite.mockResolvedValue(undefined);
+    const dom = installSimulationPreparationTestDom({
+      clipboard: { writeText: clipboardWrite },
+    });
+    const { kernel } = makeKernel({
+      loadPreparation: async () => preparationFixture(),
+      loadStatus: async () => statusFixture(),
+    });
+    const model = resolveSimulationPreparationViewModel(
+      resource(failedPreparationFixture()),
+      resource(statusFixture()),
+      20_000,
+    );
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+
+    await act(async () => {
+      root.render(
+        <KernelContext.Provider value={kernel}>
+          <SimulationStartupOverlayView state={model} />
+        </KernelContext.Provider>,
+      );
+      await Promise.resolve();
+    });
+    await settleDialog();
+
+    expect(findDialogs(dom.document.body)).toHaveLength(1);
+    expect(dom.document.body.textContent).toContain(
+      "failed_predicates=[unsupported_cubic_anisotropy]",
+    );
+    expect(dom.document.body.textContent).toContain("diag-42");
+    expect(dom.document.body.textContent).toContain("16.2s");
+
+    await act(async () => findButton(dom.document.body, "Close").click());
+    expect(findDialogs(dom.document.body)).toHaveLength(0);
+
+    await act(async () => {
+      root.render(
+        <KernelContext.Provider value={kernel}>
+          <SimulationStartupOverlayView state={model} />
+        </KernelContext.Provider>,
+      );
+      await Promise.resolve();
+    });
+    expect(findDialogs(dom.document.body)).toHaveLength(0);
+
+    await act(async () => findButton(container, "View error details").click());
+    expect(findDialogs(dom.document.body)).toHaveLength(1);
+
+    await act(async () => {
+      findButton(dom.document.body, "Copy diagnostic report").click();
+      await Promise.resolve();
+    });
+    expect(clipboardWrite).toHaveBeenCalledTimes(1);
+    expect(clipboardWrite.mock.calls[0]?.[0]).toContain("diag-42");
+    expect(dom.document.body.textContent).toContain(
+      "Diagnostic report copied to clipboard.",
+    );
+    expect(findButton(dom.document.body, "Copy again")).toBeTruthy();
+
+    await act(async () => findButton(dom.document.body, "Close").click());
+    const nextFailure = {
+      ...failedPreparationFixture(),
+      revision: 9,
+    };
+    const nextModel = resolveSimulationPreparationViewModel(
+      resource(nextFailure),
+      resource(statusFixture({ preparationRevision: 9 })),
+      21_000,
+    );
+    await act(async () => {
+      root.render(
+        <KernelContext.Provider value={kernel}>
+          <SimulationStartupOverlayView state={nextModel} />
+        </KernelContext.Provider>,
+      );
+    });
+    expect(findDialogs(dom.document.body)).toHaveLength(1);
+
+    await act(async () => root.unmount());
+    dom.restore();
+  });
+
+  it("reports clipboard failure accessibly and keeps copy retryable", async () => {
+    const clipboardWrite = vi.fn<(text: string) => Promise<void>>();
+    clipboardWrite.mockRejectedValue(new Error("clipboard unavailable"));
+    const dom = installSimulationPreparationTestDom({
+      clipboard: { writeText: clipboardWrite },
+    });
+    const { kernel } = makeKernel({
+      loadPreparation: async () => preparationFixture(),
+      loadStatus: async () => statusFixture(),
+    });
+    const model = resolveSimulationPreparationViewModel(
+      resource(failedPreparationFixture()),
+      resource(statusFixture()),
+      20_000,
+    );
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+
+    await act(async () => {
+      root.render(
+        <KernelContext.Provider value={kernel}>
+          <SimulationStartupOverlayView state={model} />
+        </KernelContext.Provider>,
+      );
+      await Promise.resolve();
+    });
+    await settleDialog();
+    await act(async () => {
+      findButton(dom.document.body, "Copy diagnostic report").click();
+      await Promise.resolve();
+    });
+
+    expect(dom.document.body.textContent).toContain(
+      "Could not copy diagnostic report. Try again.",
+    );
+    await act(async () => {
+      findButton(dom.document.body, "Retry copy").click();
+      await Promise.resolve();
+    });
+    expect(clipboardWrite).toHaveBeenCalledTimes(2);
+
     await act(async () => root.unmount());
     dom.restore();
   });
@@ -581,7 +776,7 @@ function failedPreparationFixture(): SimulationPreparationResource {
     active_stage_id: null,
     failure: {
       diagnostics_correlation_id: "diag-42",
-      detail: "failed_predicates=[unsupported_uniaxial_anisotropy]",
+      detail: "failed_predicates=[unsupported_cubic_anisotropy]",
       error_code: "mesh_generation_failed",
       stage_id: "meshing",
       summary: "Mesh generation did not converge.",
@@ -688,6 +883,14 @@ function makeKernel({
   return { bus, kernel, layout, realtimeConnection, resources };
 }
 
+async function settleDialog(): Promise<void> {
+  for (let index = 0; index < 4; index += 1) {
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
+}
+
 async function settleMountedModule(): Promise<void> {
   await act(async () => {
     await footerManifest.component();
@@ -728,6 +931,13 @@ function findButton(container: TestElement, name: string): TestElement {
       (element.getAttribute("aria-label") === name ||
         element.textContent.includes(name)),
     `Button ${name}`,
+  );
+}
+
+function findDialogs(container: TestElement): TestElement[] {
+  return findElements(
+    container,
+    (element) => element.getAttribute("role") === "dialog",
   );
 }
 

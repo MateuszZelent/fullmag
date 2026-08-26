@@ -14923,6 +14923,33 @@ fn fem_planner_accepts_certified_mixed_p1_gpu_double_and_binds_gpu_provenance() 
 }
 
 #[test]
+fn fem_planner_accepts_uniform_uniaxial_anisotropy_on_certified_mixed_p1() {
+    for device in ["cpu", "gpu"] {
+        let mut ir = mixed_cpu_relaxation_ir(
+            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+        );
+        ir.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({"device": device, "precision": "double"}),
+        );
+        ir.materials[0].uniaxial_anisotropy = Some(1.0e5);
+        ir.materials[0].uniaxial_anisotropy_k2 = Some(2.0e4);
+        ir.materials[0].anisotropy_axis = Some([0.0, 0.0, 1.0]);
+
+        let planned = plan(&ir).unwrap_or_else(|error| {
+            panic!("uniform uniaxial anisotropy must plan on mixed P1 {device}: {error:?}")
+        });
+        let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+            panic!("qualified mixed P1 anisotropy must resolve to FEM")
+        };
+        assert_eq!(fem.material.uniaxial_anisotropy, Some(1.0e5));
+        assert_eq!(fem.material.uniaxial_anisotropy_k2, Some(2.0e4));
+        assert_eq!(fem.material.anisotropy_axis, Some([0.0, 0.0, 1.0]));
+    }
+}
+
+#[test]
 fn fem_planner_preserves_legacy_v2_when_rebinding_packed_certificate() {
     let mut ir = mixed_cpu_relaxation_ir(
         fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
@@ -15145,8 +15172,9 @@ fn fem_planner_reports_every_failed_mixed_p1_scope_predicate() {
     );
     ir.energy_terms
         .retain(|term| !matches!(term, fullmag_ir::EnergyTermIR::Exchange));
-    ir.materials[0].uniaxial_anisotropy = Some(1.0e5);
-    ir.materials[0].anisotropy_axis = Some([0.0, 0.0, 1.0]);
+    ir.materials[0].cubic_anisotropy_kc1 = Some(1.0e5);
+    ir.materials[0].cubic_anisotropy_axis1 = Some([1.0, 0.0, 0.0]);
+    ir.materials[0].cubic_anisotropy_axis2 = Some([0.0, 1.0, 0.0]);
 
     let reason = plan(&ir)
         .expect_err("mixed P1 must report every failed scope predicate")
@@ -15155,10 +15183,7 @@ fn fem_planner_reports_every_failed_mixed_p1_scope_predicate() {
 
     assert!(reason.contains("fem_mixed_p1_scope_rejected"), "{reason}");
     assert!(reason.contains("missing_exchange"), "{reason}");
-    assert!(
-        reason.contains("unsupported_uniaxial_anisotropy"),
-        "{reason}"
-    );
+    assert!(reason.contains("unsupported_cubic_anisotropy"), "{reason}");
 }
 
 #[test]
