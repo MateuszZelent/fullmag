@@ -405,6 +405,120 @@ mod tests {
     }
 
     #[test]
+    fn regional_drive_energy_is_reported_for_aos_and_soa_full_steps() {
+        let grid = GridShape::new(2, 1, 1).expect("valid grid");
+        let mut problem = ExchangeLlgProblem::with_terms(
+            grid,
+            CellSize::new(1.0, 1.0, 1.0).expect("valid cell size"),
+            MaterialParameters::new(2.0, 1.0, 0.1).expect("valid material"),
+            LlgConfig::new(1.0, TimeIntegrator::Heun).expect("valid llg config"),
+            EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                ..Default::default()
+            },
+        );
+        problem.regional_field_drives.push(RegionalFieldDriveTerm {
+            basis_field: vec![[0.0, 3.0, 0.0], [0.0, -1.0, 0.0]],
+            waveform: fullmag_ir::TimeDependenceIR::Constant,
+            time_offset_s: 0.0,
+            enabled: true,
+        });
+
+        let mut aos_state = problem
+            .new_state(vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+            .expect("AoS state");
+        let mut soa_state = aos_state.clone();
+        let mut aos_workspace = problem.create_workspace();
+        let mut soa_workspace = problem.create_workspace();
+        let mut aos_buffers = problem.create_integrator_buffers();
+        let mut soa_buffers = problem.create_integrator_buffers();
+
+        let aos_report = problem
+            .heun_step_buf(
+                &mut aos_state,
+                1.0e-3,
+                &mut aos_workspace,
+                &mut aos_buffers,
+                EvaluationRequest::Full,
+            )
+            .expect("AoS Heun step");
+        let soa_report = problem
+            .heun_step_soa_buf(
+                &mut soa_state,
+                1.0e-3,
+                &mut soa_workspace,
+                &mut soa_buffers,
+                EvaluationRequest::Full,
+            )
+            .expect("SoA Heun step");
+
+        let mut aos_energy_workspace = problem.create_workspace();
+        let aos_energy = problem.total_energy_from_vectors_ws(
+            aos_state.magnetization(),
+            &mut aos_energy_workspace,
+        );
+        let soa_magnetization = VectorFieldSoA::from_aos(soa_state.magnetization());
+        let mut soa_energy_workspace = problem.create_workspace();
+        let mut soa_scratch = VectorFieldSoA::zeros(grid.cell_count());
+        let soa_energy = problem.total_energy_from_soa_ws(
+            &soa_magnetization,
+            &mut soa_energy_workspace,
+            &mut soa_scratch,
+        );
+        let external_density = problem
+            .external_energy_density(&aos_state)
+            .expect("external energy density");
+        let external_density_integral: f64 = external_density.iter().sum();
+        let total_density = problem
+            .total_energy_density(&aos_state)
+            .expect("total energy density");
+        let total_density_integral: f64 = total_density.iter().sum();
+
+        for (label, actual, expected) in [
+            (
+                "AoS external energy",
+                aos_report.external_energy_joules,
+                aos_energy,
+            ),
+            (
+                "AoS total energy",
+                aos_report.total_energy_joules,
+                aos_energy,
+            ),
+            (
+                "SoA external energy",
+                soa_report.external_energy_joules,
+                soa_energy,
+            ),
+            (
+                "SoA total energy",
+                soa_report.total_energy_joules,
+                soa_energy,
+            ),
+            (
+                "external energy density",
+                external_density_integral,
+                aos_energy,
+            ),
+            ("total energy density", total_density_integral, aos_energy),
+        ] {
+            assert!(
+                (actual - expected).abs() <= 1.0e-12,
+                "{label} must include regional drives: actual={actual}, expected={expected}"
+            );
+        }
+        let observables = problem.observe(&aos_state).expect("public observables");
+        assert!((observables.external_energy_joules - aos_energy).abs() <= 1.0e-12);
+        assert!((observables.total_energy_joules - aos_energy).abs() <= 1.0e-12);
+        let expected_field = problem.regional_drive_field_at_time(aos_state.time_seconds);
+        for (actual, expected) in observables.effective_field.iter().zip(expected_field) {
+            assert_vector_close(*actual, expected, 1.0e-12);
+        }
+        assert_step_report_close(soa_report, aos_report, 1.0e-12);
+    }
+
+    #[test]
     fn spatial_material_fields_exchange_energy_field_taylor_consistency() {
         let grid = GridShape::new(4, 3, 1).unwrap();
         let cs = CellSize::new(5.0e-9, 5.0e-9, 5.0e-9).unwrap();

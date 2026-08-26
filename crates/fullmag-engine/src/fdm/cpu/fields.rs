@@ -309,6 +309,7 @@ impl ExchangeLlgProblem {
         {
             *effective = add(*effective, *oersted);
         }
+        self.regional_field_drives_add_into_at_time(&mut effective_field, time_seconds);
         self.thermal_field_add_into(&mut effective_field);
         let mut rhs = {
             let compute = |i: usize| {
@@ -345,12 +346,14 @@ impl ExchangeLlgProblem {
             || self.terms.per_node_field.is_some()
             || self.static_external_field.is_some()
             || self.terms.oersted_cylinder.is_some()
+            || self.regional_field_drives.iter().any(|drive| drive.enabled)
         {
-            let combined_external = external_field
+            let mut combined_external = external_field
                 .iter()
                 .zip(cylinder_oersted_field.iter())
                 .map(|(external, oersted)| add(*external, *oersted))
                 .collect::<Vec<_>>();
+            self.regional_field_drives_add_into_at_time(&mut combined_external, time_seconds);
             self.external_energy_from_fields(magnetization, &combined_external)
         } else {
             0.0
@@ -638,8 +641,15 @@ impl ExchangeLlgProblem {
     }
 
     pub(crate) fn external_zeeman_field_vectors(&self) -> Vec<Vector3> {
+        self.external_zeeman_field_vectors_at_time(0.0)
+    }
+
+    pub(crate) fn external_zeeman_field_vectors_at_time(
+        &self,
+        time_seconds: f64,
+    ) -> Vec<Vector3> {
         let mut field = self.external_field_vectors();
-        self.oersted_field_add_into(&mut field);
+        self.oersted_field_add_into_at_time(&mut field, time_seconds);
         field
     }
 
@@ -1344,6 +1354,27 @@ impl ExchangeLlgProblem {
         }
     }
 
+    pub(crate) fn regional_field_drives_add_into_at_time(
+        &self,
+        h_eff: &mut [Vector3],
+        time_seconds: f64,
+    ) {
+        for drive in self
+            .regional_field_drives
+            .iter()
+            .filter(|drive| drive.enabled)
+        {
+            let multiplier = drive.multiplier_at(time_seconds);
+            for (index, basis) in drive.basis_field.iter().enumerate().take(h_eff.len()) {
+                if self.is_active(index) {
+                    h_eff[index][0] += multiplier * basis[0];
+                    h_eff[index][1] += multiplier * basis[1];
+                    h_eff[index][2] += multiplier * basis[2];
+                }
+            }
+        }
+    }
+
     pub(crate) fn demag_field_add_into_soa_fft_backend(
         &self,
         magnetization: &VectorFieldSoA,
@@ -1868,6 +1899,27 @@ impl ExchangeLlgProblem {
         }
     }
 
+    pub(crate) fn regional_field_drives_add_into_soa_at_time(
+        &self,
+        h_eff: &mut VectorFieldSoA,
+        time_seconds: f64,
+    ) {
+        for drive in self
+            .regional_field_drives
+            .iter()
+            .filter(|drive| drive.enabled)
+        {
+            let multiplier = drive.multiplier_at(time_seconds);
+            for (index, basis) in drive.basis_field.iter().enumerate().take(h_eff.len()) {
+                if self.is_active(index) {
+                    h_eff.x[index] += multiplier * basis[0];
+                    h_eff.y[index] += multiplier * basis[1];
+                    h_eff.z[index] += multiplier * basis[2];
+                }
+            }
+        }
+    }
+
     pub fn effective_field_into_soa_ws(
         &self,
         magnetization: &VectorFieldSoA,
@@ -1933,20 +1985,7 @@ impl ExchangeLlgProblem {
         self.interfacial_dmi_field_add_into_soa(magnetization, h_eff);
         self.bulk_dmi_field_add_into_soa(magnetization, h_eff);
         self.oersted_field_add_into_soa_at_time(h_eff, time_seconds);
-        for drive in self
-            .regional_field_drives
-            .iter()
-            .filter(|drive| drive.enabled)
-        {
-            let multiplier = drive.multiplier_at(time_seconds);
-            for (index, basis) in drive.basis_field.iter().enumerate().take(h_eff.len()) {
-                if self.is_active(index) {
-                    h_eff.x[index] += multiplier * basis[0];
-                    h_eff.y[index] += multiplier * basis[1];
-                    h_eff.z[index] += multiplier * basis[2];
-                }
-            }
-        }
+        self.regional_field_drives_add_into_soa_at_time(h_eff, time_seconds);
     }
 
     pub(crate) fn llg_rhs_soa_into(
@@ -2660,20 +2699,7 @@ impl ExchangeLlgProblem {
 
         // Oersted field from cylindrical conductor (STNO / MTJ)
         self.oersted_field_add_into_at_time(h_eff, time_seconds);
-        for drive in self
-            .regional_field_drives
-            .iter()
-            .filter(|drive| drive.enabled)
-        {
-            let multiplier = drive.multiplier_at(time_seconds);
-            for (index, basis) in drive.basis_field.iter().enumerate().take(h_eff.len()) {
-                if self.is_active(index) {
-                    h_eff[index][0] += multiplier * basis[0];
-                    h_eff[index][1] += multiplier * basis[1];
-                    h_eff[index][2] += multiplier * basis[2];
-                }
-            }
-        }
+        self.regional_field_drives_add_into_at_time(h_eff, time_seconds);
     }
 
     /// Effective field accumulation with telemetry instrumentation.
@@ -3470,12 +3496,15 @@ impl ExchangeLlgProblem {
         };
 
         // ── External ──────────────────────────────────────────────────
-        let external_energy_joules = if self.has_external_zeeman_source() {
+        let external_energy_joules = if self.has_external_zeeman_source()
+            || self.regional_field_drives.iter().any(|drive| drive.enabled)
+        {
             for h in h_scratch[..n].iter_mut() {
                 *h = [0.0, 0.0, 0.0];
             }
             self.external_field_add_into(&mut h_scratch[..n]);
             self.oersted_field_add_into_at_time(&mut h_scratch[..n], time_seconds);
+            self.regional_field_drives_add_into_at_time(&mut h_scratch[..n], time_seconds);
             let e = self.external_energy_from_fields(magnetization, &h_scratch[..n]);
             for i in 0..n {
                 h_eff[i] = add(h_eff[i], h_scratch[i]);
@@ -3804,20 +3833,7 @@ impl ExchangeLlgProblem {
 
         // Oersted field from cylindrical conductor (STNO / MTJ)
         self.oersted_field_add_into_at_time(&mut h_eff, time_seconds);
-        for drive in self
-            .regional_field_drives
-            .iter()
-            .filter(|drive| drive.enabled)
-        {
-            let multiplier = drive.multiplier_at(time_seconds);
-            for (index, basis) in drive.basis_field.iter().enumerate().take(h_eff.len()) {
-                if self.is_active(index) {
-                    h_eff[index][0] += multiplier * basis[0];
-                    h_eff[index][1] += multiplier * basis[1];
-                    h_eff[index][2] += multiplier * basis[2];
-                }
-            }
-        }
+        self.regional_field_drives_add_into_at_time(&mut h_eff, time_seconds);
 
         h_eff
     }
@@ -3849,6 +3865,7 @@ impl ExchangeLlgProblem {
             *h = add(add(add(*h, ani_field[i]), idmi_field[i]), bdmi_field[i]);
         }
         self.oersted_field_add_into_at_time(&mut h_eff, time_seconds);
+        self.regional_field_drives_add_into_at_time(&mut h_eff, time_seconds);
         h_eff
     }
 
@@ -4072,6 +4089,7 @@ impl ExchangeLlgProblem {
 
         // Oersted field from cylindrical conductor (STNO / MTJ)
         self.oersted_field_add_into(&mut effective_field);
+        self.regional_field_drives_add_into_at_time(&mut effective_field, 0.0);
 
         let mut rhs: Vec<Vector3> = magnetization
             .iter()
@@ -4109,8 +4127,11 @@ impl ExchangeLlgProblem {
         } else {
             0.0
         };
-        let external_energy_joules = if self.has_external_zeeman_source() {
-            let external_zeeman_field = self.external_zeeman_field_vectors();
+        let external_energy_joules = if self.has_external_zeeman_source()
+            || self.regional_field_drives.iter().any(|drive| drive.enabled)
+        {
+            let mut external_zeeman_field = self.external_zeeman_field_vectors();
+            self.regional_field_drives_add_into_at_time(&mut external_zeeman_field, 0.0);
             self.external_energy_from_fields(magnetization, &external_zeeman_field)
         } else {
             0.0

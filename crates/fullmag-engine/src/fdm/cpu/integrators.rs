@@ -4010,10 +4010,13 @@ impl ExchangeLlgProblem {
             (0.0, 0.0)
         };
 
-        let external_energy_joules = if self.has_external_zeeman_source() {
+        let external_energy_joules = if self.has_external_zeeman_source()
+            || self.regional_field_drives.iter().any(|drive| drive.enabled)
+        {
             h_scratch.fill_zero();
             self.external_field_add_into_soa(h_scratch);
             self.oersted_field_add_into_soa_at_time(h_scratch, time_seconds);
+            self.regional_field_drives_add_into_soa_at_time(h_scratch, time_seconds);
             let energy = self.full_field_energy_from_soa(magnetization, h_scratch);
             add_soa_into(h_eff, h_scratch);
             energy
