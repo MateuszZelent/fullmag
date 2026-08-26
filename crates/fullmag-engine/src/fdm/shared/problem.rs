@@ -559,8 +559,12 @@ impl ExchangeLlgProblem {
             ));
         }
         if !self.soa_fast_path_supported() {
-            return Err(EngineError::new(
-                "SoA state stepping requires a problem supported by the CPU SoA fast path",
+            let reason = self
+                .soa_fast_path_rejection_reason()
+                .unwrap_or("capability_matrix_rejected");
+            return Err(EngineError::with_code(
+                EngineErrorCode::CapabilityUnavailable,
+                format!("CPU SoA fast path unavailable: {reason}"),
             ));
         }
         bufs.begin_adaptive_step();

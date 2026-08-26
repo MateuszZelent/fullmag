@@ -47,8 +47,9 @@ use crate::schedules::{
     OutputSchedule,
 };
 use crate::types::{
-    ExecutedRun, ExecutionProvenance, FieldSnapshot, LivePreviewRequest, LiveStepConsumer,
-    RunError, RunResult, RunStatus, StateObservables, StepAction, StepStats, StepUpdate,
+    ExecutedRun, ExecutionProvenance, FdmCpuStateLayoutProvenance, FieldSnapshot,
+    LivePreviewRequest, LiveStepConsumer, RunError, RunResult, RunStatus, StateObservables,
+    StepAction, StepStats, StepUpdate,
 };
 
 use std::{env, time::Instant};
@@ -1208,6 +1209,12 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         },
         ..Default::default()
     };
+    let use_soa_state = spin_transport.is_none() && problem.soa_fast_path_supported();
+    provenance.fdm_cpu_state_layout = Some(FdmCpuStateLayoutProvenance::from_problem(
+        &problem,
+        use_soa_state,
+        spin_transport.is_some().then_some("coupled_spin_transport"),
+    ));
     apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
     if is_direct_minimization && problem.soa_fast_path_supported() {
         provenance.energy_minimizer_realization =
@@ -1262,7 +1269,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
     // --- Create FFT workspace once for the entire simulation ---
     let mut fft_workspace = problem.create_workspace();
     let mut integrator_bufs = problem.create_integrator_buffers();
-    let mut state_soa = if spin_transport.is_none() && problem.soa_fast_path_supported() {
+    let mut state_soa = if use_soa_state {
         Some(state.to_soa())
     } else {
         None

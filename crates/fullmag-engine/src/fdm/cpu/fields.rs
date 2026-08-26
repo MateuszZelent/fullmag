@@ -1203,12 +1203,31 @@ impl ExchangeLlgProblem {
 
     /// Whether the problem can step through the persistent SoA CPU fast path.
     pub fn soa_fast_path_supported(&self) -> bool {
-        self.frozen_spins
+        self.soa_fast_path_rejection_reason().is_none()
+    }
+
+    /// Stable capability reason for a problem that cannot use the persistent
+    /// SoA CPU layout.  The caller may keep the AoS layout only when this
+    /// capability is rejected before the session starts; no mid-step layout
+    /// fallback is allowed.
+    pub fn soa_fast_path_rejection_reason(&self) -> Option<&'static str> {
+        if self
+            .frozen_spins
             .as_ref()
-            .is_none_or(|frozen| frozen.frozen_dof_count() == 0)
-            && self.ms_field.is_none()
-            && self.a_field.is_none()
-            && self.alpha_field.is_none()
+            .is_some_and(|frozen| frozen.frozen_dof_count() != 0)
+        {
+            return Some("frozen_spins");
+        }
+        if self.ms_field.is_some() {
+            return Some("spatial_saturation_magnetisation");
+        }
+        if self.a_field.is_some() {
+            return Some("spatial_exchange_stiffness");
+        }
+        if self.alpha_field.is_some() {
+            return Some("spatial_damping");
+        }
+        None
     }
 
     pub(crate) fn exchange_field_add_into_soa(

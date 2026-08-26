@@ -34,9 +34,9 @@ use crate::schedules::{
     OutputSchedule,
 };
 use crate::types::{
-    ExecutedRun, ExecutionProvenance, FemStageExecutionContext, FieldSnapshot, LivePreviewField,
-    LivePreviewRequest, ResolvedFallback, RunError, RunResult, RunStatus, StateObservables,
-    StepAction, StepStats, StepUpdate,
+    ExecutedRun, ExecutionProvenance, FdmCpuStateLayoutProvenance, FemStageExecutionContext,
+    FieldSnapshot, LivePreviewField, LivePreviewRequest, ResolvedFallback, RunError, RunResult,
+    RunStatus, StateObservables, StepAction, StepStats, StepUpdate,
 };
 use crate::DisplaySelectionState;
 
@@ -667,6 +667,15 @@ mod tests {
             }
         };
         assert!(cpu.soa_fast_path_active());
+        let layout = cpu
+            .provenance
+            .fdm_cpu_state_layout
+            .as_ref()
+            .expect("CPU interactive runtime must publish its state layout");
+        assert_eq!(layout.requested, "auto");
+        assert_eq!(layout.resolved, "soa_xyz");
+        assert_eq!(layout.executed, "soa_xyz");
+        assert_eq!(layout.rejection_reason, None);
 
         let display_selection = || {
             let mut state = DisplaySelectionState::default();
@@ -1389,6 +1398,13 @@ impl InteractiveFdmPreviewRuntime {
                 let fft_workspace = problem.create_workspace();
                 let integrator_buffers = problem.create_integrator_buffers();
                 let mut provenance = cpu_execution_provenance(plan)?;
+                provenance.fdm_cpu_state_layout = Some(
+                    FdmCpuStateLayoutProvenance::from_problem(
+                        &problem,
+                        state_soa.is_some(),
+                        None,
+                    ),
+                );
                 attach_resolved_fallback_to_provenance(&mut provenance, fallback);
                 InteractiveFdmPreviewRuntimeInner::Cpu(CpuInteractiveFdmPreviewRuntime {
                     problem,
@@ -5501,6 +5517,7 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
         charge_transport: None,
         transport_modules: Vec::new(),
         fdm_gpu_transport_telemetry: None,
+        fdm_cpu_state_layout: None,
         fdm_gpu_execution_receipt: None,
         fdm_gpu_step_transaction_telemetry: None,
         fem_gpu_execution_receipt: None,
@@ -5610,6 +5627,7 @@ fn cuda_execution_provenance(
         charge_transport: None,
         transport_modules: Vec::new(),
         fdm_gpu_transport_telemetry: None,
+        fdm_cpu_state_layout: None,
         fem_gpu_execution_receipt: None,
         fdm_gpu_execution_receipt: None,
         fdm_gpu_step_transaction_telemetry: None,
@@ -5739,6 +5757,7 @@ fn fem_gpu_execution_provenance(
         charge_transport: None,
         transport_modules: Vec::new(),
         fdm_gpu_transport_telemetry: None,
+        fdm_cpu_state_layout: None,
         fdm_gpu_execution_receipt: None,
         fdm_gpu_step_transaction_telemetry: None,
         fem_gpu_execution_receipt: None,

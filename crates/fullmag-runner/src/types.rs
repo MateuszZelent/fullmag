@@ -3198,6 +3198,10 @@ pub struct ExecutionProvenance {
     /// Measured native CUDA M1 transport residency and provenance counters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fdm_gpu_transport_telemetry: Option<FdmGpuTransportTelemetry>,
+    /// CPU FDM state-layout receipt. `requested` is the public auto policy;
+    /// `resolved` and `executed` are the layout actually used by the run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fdm_cpu_state_layout: Option<FdmCpuStateLayoutProvenance>,
     /// Native CUDA Context receipt proving requested, resolved, and executed
     /// FDM LLG residency together with setup and hot-loop transfer counters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3417,6 +3421,38 @@ pub struct ExecutionProvenance {
     /// FEM Poisson demag solver policy and observed solve result.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fem_poisson_demag: Option<FemPoissonDemagProvenance>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FdmCpuStateLayoutProvenance {
+    pub requested: String,
+    pub resolved: String,
+    pub executed: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejection_reason: Option<String>,
+}
+
+impl FdmCpuStateLayoutProvenance {
+    pub(crate) fn from_problem(
+        problem: &fullmag_engine::ExchangeLlgProblem,
+        soa_active: bool,
+        execution_rejection_reason: Option<&str>,
+    ) -> Self {
+        let resolved = if soa_active { "soa_xyz" } else { "aos_xyz" };
+        let rejection_reason = (!soa_active)
+            .then(|| {
+                execution_rejection_reason
+                    .or_else(|| problem.soa_fast_path_rejection_reason())
+                    .unwrap_or("capability_matrix_rejected")
+                    .to_string()
+            });
+        Self {
+            requested: "auto".to_string(),
+            resolved: resolved.to_string(),
+            executed: resolved.to_string(),
+            rejection_reason,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -3784,8 +3820,9 @@ mod tests {
     use super::{
         fem_mesh_fingerprint_count, fem_mesh_payload_build_count, fem_mesh_topology_fingerprint,
         normalized_payload_element_markers, reset_fem_mesh_fingerprint_count,
-        reset_fem_mesh_payload_build_count, ExecutionProvenance, FemMeshPartPayload, FemMeshPayload,
-        FemPoissonDemagProvenance, InitialTimestepReason, LegacyDtPolicy, LivePreviewField,
+        reset_fem_mesh_payload_build_count, ExecutionProvenance, FdmCpuStateLayoutProvenance,
+        FemMeshPartPayload, FemMeshPayload, FemPoissonDemagProvenance, InitialTimestepReason,
+        LegacyDtPolicy, LivePreviewField,
         LlgTimestepCapabilityId, LlgTimestepQualificationId, RequestedTimestepPolicy,
         ResolvedTimestepPolicy, StageFemMeshAsset, StepStats, StepUpdate, TimestepBackend,
         TimestepDevice, TimestepExecutionIdentity, TimestepPolicyProvenance,
@@ -4343,6 +4380,29 @@ mod tests {
         let value = serde_json::to_value(provenance).unwrap();
         assert!(value.get("timestep_policy").is_some());
         assert!(value.get("dt_policy").is_none());
+    }
+
+    #[test]
+    fn fdm_cpu_state_layout_provenance_round_trips() {
+        let provenance = ExecutionProvenance {
+            fdm_cpu_state_layout: Some(FdmCpuStateLayoutProvenance {
+                requested: "auto".to_string(),
+                resolved: "aos_xyz".to_string(),
+                executed: "aos_xyz".to_string(),
+                rejection_reason: Some("spatial_damping".to_string()),
+            }),
+            ..ExecutionProvenance::default()
+        };
+        let value = serde_json::to_value(&provenance).expect("layout receipt should serialize");
+        assert_eq!(value["fdm_cpu_state_layout"]["requested"], "auto");
+        assert_eq!(value["fdm_cpu_state_layout"]["resolved"], "aos_xyz");
+        assert_eq!(
+            value["fdm_cpu_state_layout"]["rejection_reason"],
+            "spatial_damping"
+        );
+        let decoded: ExecutionProvenance =
+            serde_json::from_value(value).expect("layout receipt should deserialize");
+        assert_eq!(decoded.fdm_cpu_state_layout, provenance.fdm_cpu_state_layout);
     }
 
     #[test]

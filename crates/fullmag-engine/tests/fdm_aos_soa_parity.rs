@@ -80,6 +80,10 @@ fn soa_fast_path_fails_closed_for_spatial_material_fields() {
     .expect("spatial material fields match the grid");
 
     assert!(!problem.soa_fast_path_supported());
+    assert_eq!(
+        problem.soa_fast_path_rejection_reason(),
+        Some("spatial_saturation_magnetisation")
+    );
 
     let mut state = problem
         .uniform_state([1.0, 0.0, 0.0])
@@ -98,7 +102,7 @@ fn soa_fast_path_fails_closed_for_spatial_material_fields() {
         .expect_err("SoA must reject unsupported spatial material fields");
     assert!(error
         .to_string()
-        .contains("CPU SoA fast path"));
+        .contains("CPU SoA fast path unavailable: spatial_saturation_magnetisation"));
 }
 
 #[test]

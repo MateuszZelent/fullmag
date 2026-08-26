@@ -152,6 +152,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
         charge_transport: None,
         transport_modules: Vec::new(),
         fdm_gpu_transport_telemetry: None,
+        fdm_cpu_state_layout: None,
         fdm_gpu_execution_receipt: None,
         fdm_gpu_step_transaction_telemetry: None,
         fem_gpu_execution_receipt: None,
