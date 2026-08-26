@@ -3558,7 +3558,7 @@ impl ExchangeLlgProblem {
         let external_energy_joules = if self.has_external_zeeman_source() {
             h_scratch.fill_zero();
             self.external_field_add_into_soa(h_scratch);
-            self.oersted_field_add_into_soa(h_scratch);
+            self.oersted_field_add_into_soa_at_time(h_scratch, time_seconds);
             let energy = self.full_field_energy_from_soa(magnetization, h_scratch);
             add_soa_into(h_eff, h_scratch);
             energy
@@ -3571,7 +3571,6 @@ impl ExchangeLlgProblem {
         self.interfacial_dmi_field_add_into_soa(magnetization, h_eff);
         self.bulk_dmi_field_add_into_soa(magnetization, h_eff);
         self.thermal_field_add_into_soa(h_eff);
-        self.oersted_field_add_into_soa_at_time(h_eff, time_seconds);
 
         let mel_energy_joules = self.magnetoelastic_energy_soa(magnetization);
         let ani_energy_joules = self.anisotropy_energy_from_soa(magnetization);
