@@ -196,6 +196,11 @@ Audyt statyczny nie jest dowodem wydajności ani kwalifikacji sprzętowej.
 
 1. T. L. Gilbert, “A phenomenological theory of damping in ferromagnetic materials,” *IEEE Transactions on Magnetics* 40, 3443–3449 (2004), https://doi.org/10.1109/TMAG.2004.836740.
 
+(fdm-cpu-runner-remediation)=
+### Uzupełnienie remediacji runnera
+
+Po przeniesieniu regionalnego napędu do kanonicznego `observe()` runner CPU nie dolicza go ponownie do `e_ext` ani `e_total`. `regional_drive_energy` zachowuje osobne `e_drive` z lokalnym `M_s`, a `reconstruct_inactive_fdm_visual_effective_field` dodaje napęd tylko w nieaktywnych komórkach wizualizacji. Regresję obejmuje `regional_drive_produces_distinct_field_and_energy_outputs`.
+
 (fdm-cpu-source-code-index)=
 ### Indeks kodu źródłowego
 
