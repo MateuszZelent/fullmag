@@ -5601,14 +5601,13 @@ fn validate_strict_native_fem_gpu_preflight(
 }
 
 #[cfg(feature = "fem-gpu")]
-fn begin_native_fem_stage_after_strict_gpu_preflight(
+fn strict_native_fem_gpu_stage_preflight(
     engine: FemEngine,
     execution_mode: ExecutionMode,
     native_execution_mode: &str,
     plan: &FemPlanIR,
     gpu_rk_plan: &NativeFemGpuRkPlanInfo,
     validate_native_plan: impl FnOnce() -> Result<(), RunError>,
-    begin_stage: impl FnOnce() -> Result<(), RunError>,
 ) -> Result<(), RunError> {
     validate_strict_native_fem_gpu_preflight(
         engine,
@@ -5620,6 +5619,15 @@ fn begin_native_fem_stage_after_strict_gpu_preflight(
     if execution_mode == ExecutionMode::Strict && engine == FemEngine::NativeGpu {
         validate_native_plan()?;
     }
+    Ok(())
+}
+
+#[cfg(feature = "fem-gpu")]
+fn begin_native_fem_stage_after_strict_gpu_preflight(
+    preflight: Result<(), RunError>,
+    begin_stage: impl FnOnce() -> Result<(), RunError>,
+) -> Result<(), RunError> {
+    preflight?;
     begin_stage()
 }
 
@@ -5930,13 +5938,16 @@ fn execute_native_fem(
             message: "FEM stage transport callback was requested by the planner but no provider could be materialized".into(),
         });
     }
-    begin_native_fem_stage_after_strict_gpu_preflight(
+    let strict_gpu_preflight = strict_native_fem_gpu_stage_preflight(
         engine,
         execution_mode,
         native_execution_mode,
         plan,
         &gpu_rk_plan_info,
         || backend.validate_strict_gpu_rk_plan(),
+    );
+    begin_native_fem_stage_after_strict_gpu_preflight(
+        strict_gpu_preflight,
         || backend.begin_stage(plan.time_stage.start_time_s),
     )?;
     let device_info = backend.device_info()?;
@@ -8151,7 +8162,7 @@ mod tests {
         incomplete.reason = "stage H_ex is not device-resident".to_string();
 
         let mut rejected_lifecycle = RecordingLifecycle::default();
-        let incomplete_err = begin_native_fem_stage_after_strict_gpu_preflight(
+        let incomplete_preflight = strict_native_fem_gpu_stage_preflight(
             FemEngine::NativeGpu,
             ExecutionMode::Strict,
             "all_in_gpu_legacy_sparse",
@@ -8161,6 +8172,9 @@ mod tests {
                 rejected_lifecycle.native_plan_preflight += 1;
                 Ok(())
             },
+        );
+        let incomplete_err = begin_native_fem_stage_after_strict_gpu_preflight(
+            incomplete_preflight,
             || {
                 rejected_lifecycle.begin_stage += 1;
                 rejected_lifecycle.step += 1;
@@ -8224,7 +8238,7 @@ mod tests {
         .is_ok());
 
         let mut native_rejected_lifecycle = RecordingLifecycle::default();
-        let native_plan_err = begin_native_fem_stage_after_strict_gpu_preflight(
+        let native_plan_preflight = strict_native_fem_gpu_stage_preflight(
             FemEngine::NativeGpu,
             ExecutionMode::Strict,
             "all_in_gpu_legacy_sparse",
@@ -8237,6 +8251,9 @@ mod tests {
                         .to_string(),
                 })
             },
+        );
+        let native_plan_err = begin_native_fem_stage_after_strict_gpu_preflight(
+            native_plan_preflight,
             || {
                 native_rejected_lifecycle.begin_stage += 1;
                 native_rejected_lifecycle.step += 1;
@@ -8261,7 +8278,7 @@ mod tests {
         exchange_only.demag_operator_mode = "none".to_string();
         exchange_only.hypre_execution_policy = "none".to_string();
         exchange_only.demag_residency = "none".to_string();
-        assert!(begin_native_fem_stage_after_strict_gpu_preflight(
+        let accepted_preflight = strict_native_fem_gpu_stage_preflight(
             FemEngine::NativeGpu,
             ExecutionMode::Strict,
             "all_in_gpu_legacy_sparse",
@@ -8271,6 +8288,9 @@ mod tests {
                 accepted_lifecycle.native_plan_preflight += 1;
                 Ok(())
             },
+        );
+        assert!(begin_native_fem_stage_after_strict_gpu_preflight(
+            accepted_preflight,
             || {
                 accepted_lifecycle.begin_stage += 1;
                 Ok(())
