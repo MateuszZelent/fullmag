@@ -187,6 +187,7 @@ bool build_context_from_plan(
     if (!initialize_context_gpu_state(ctx, error)) {
         return false;
     }
+    rk_step_transaction_reset_workspace(ctx.stepper.workspace);
     ctx.stepper.workspace.attempt_checkpoint.reset();
     if (ctx.adaptive_dt.enabled &&
         (ctx.base_plan.integrator == FULLMAG_FEM_INTEGRATOR_RK23_BS ||
@@ -201,6 +202,12 @@ bool build_context_from_plan(
         if (!ctx.stepper.workspace.attempt_checkpoint->prepare(error)) {
             return false;
         }
+    }
+    try {
+        rk_step_transaction_prepare_workspace(ctx.stepper.workspace);
+    } catch (const std::bad_alloc &) {
+        error = "RK step transaction journal allocation failed during setup";
+        return false;
     }
     return true;
 }

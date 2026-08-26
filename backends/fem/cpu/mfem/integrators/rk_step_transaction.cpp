@@ -65,14 +65,6 @@ bool step_profile_enabled(const Context &ctx)
 }
 
 #if FULLMAG_HAS_MFEM_STACK
-std::vector<double> capture_vector(const mfem::Vector *vector)
-{
-    if (vector == nullptr) {
-        return {};
-    }
-    return std::vector<double>(vector->GetData(), vector->GetData() + vector->Size());
-}
-
 void restore_vector(mfem::Vector *vector, const std::vector<double> &snapshot)
 {
     if (vector == nullptr || snapshot.empty()) {
@@ -229,50 +221,73 @@ void restore_phase_timings(
 
 struct RkStepTransaction::Impl {
     explicit Impl(Context &context, bool profile_enabled)
-        : ctx(context),
-          profile_enabled(profile_enabled),
-          base_plan(context.base_plan),
-          adaptive_dt(context.adaptive_dt),
-          anisotropy(context.anisotropy),
-          magnetoelastic(context.magnetoelastic),
-          stage_completion(context.stage_completion),
-          state(context.state),
-          exchange(context.exchange),
-          demag(context.demag),
-          zeeman(context.zeeman),
-          dmi(context.dmi),
-          effective_field(context.effective_field),
-          oersted(context.oersted),
-          stage_transport(context.stage_transport),
-          thermal_brown(context.thermal_brown),
-          transfer_audit(context.transfer_audit.audit),
-          gpu_residency(context.gpu_state.device.residency),
-          gpu_fsal_valid(context.gpu_state.device.rk.fsal_valid),
-          gpu_hybrid_stage_m(context.gpu_state.device.demag_poisson.hybrid_stage_m_xyz),
-          gpu_hybrid_demag(context.gpu_state.device.demag_poisson.hybrid_demag_xyz),
-          gpu_hybrid_demag_energy(context.gpu_state.device.demag_poisson.hybrid_demag_energy_joules),
-          phase_timings(capture_phase_timings(context.gpu_state.rk_phase_timings)),
-          cpu_fsal_valid(context.stepper.workspace.fsal_valid),
-          cpu_k0(context.stepper.workspace.k[0]),
-          attempt_trace(context.stepper.attempt_trace)
+        : ctx(context), profile_enabled(profile_enabled)
     {
+        capture_host();
+    }
+
+    void capture_host()
+    {
+        base_plan = ctx.base_plan;
+        adaptive_dt = ctx.adaptive_dt;
+        anisotropy = ctx.anisotropy;
+        magnetoelastic = ctx.magnetoelastic;
+        stage_completion = ctx.stage_completion;
+        state = ctx.state;
+        exchange = ctx.exchange;
+        demag = ctx.demag;
+        zeeman = ctx.zeeman;
+        dmi = ctx.dmi;
+        effective_field = ctx.effective_field;
+        oersted = ctx.oersted;
+        stage_transport = ctx.stage_transport;
+        thermal_brown = ctx.thermal_brown;
+        transfer_audit = ctx.transfer_audit.audit;
+        gpu_residency = ctx.gpu_state.device.residency;
+        gpu_fsal_valid = ctx.gpu_state.device.rk.fsal_valid;
+        gpu_hybrid_stage_m = ctx.gpu_state.device.demag_poisson.hybrid_stage_m_xyz;
+        gpu_hybrid_demag = ctx.gpu_state.device.demag_poisson.hybrid_demag_xyz;
+        gpu_hybrid_demag_energy =
+            ctx.gpu_state.device.demag_poisson.hybrid_demag_energy_joules;
+        phase_timings = capture_phase_timings(ctx.gpu_state.rk_phase_timings);
+        cpu_fsal_valid = ctx.stepper.workspace.fsal_valid;
+        cpu_k0 = ctx.stepper.workspace.k[0];
+        attempt_trace = ctx.stepper.attempt_trace;
 #if FULLMAG_HAS_MFEM_STACK
-        poisson_step_state = capture_poisson_step_state(context.poisson_demag);
-        poisson_solution = capture_vector(context.poisson_demag.solution_vec);
-        periodic_solution = capture_vector(context.poisson_demag.periodic_solution);
-        poisson_grid_function = capture_vector(context.poisson_demag.gf_potential);
-        if (auto *workspace = demag_fem_bem_workspace(context)) {
-            fem_bem_u1 = capture_vector(workspace->u1.get());
-            fem_bem_u2 = capture_vector(workspace->u2.get());
-            fem_bem_total = capture_vector(workspace->total_potential.get());
-            fem_bem_boundary = capture_vector(workspace->boundary_values_global.get());
-            fem_bem_rhs = capture_vector(workspace->laplace_rhs.get());
+        poisson_step_state = capture_poisson_step_state(ctx.poisson_demag);
+        capture_vector_into(ctx.poisson_demag.solution_vec, poisson_solution);
+        capture_vector_into(ctx.poisson_demag.periodic_solution, periodic_solution);
+        capture_vector_into(ctx.poisson_demag.gf_potential, poisson_grid_function);
+        if (auto *workspace = demag_fem_bem_workspace(ctx)) {
+            capture_vector_into(workspace->u1.get(), fem_bem_u1);
+            capture_vector_into(workspace->u2.get(), fem_bem_u2);
+            capture_vector_into(workspace->total_potential.get(), fem_bem_total);
+            capture_vector_into(workspace->boundary_values_global.get(), fem_bem_boundary);
+            capture_vector_into(workspace->laplace_rhs.get(), fem_bem_rhs);
             fem_bem_last_u1_iterations = workspace->last_u1_iterations;
             fem_bem_last_u2_iterations = workspace->last_u2_iterations;
             fem_bem_last_u1_residual = workspace->last_u1_residual;
             fem_bem_last_u2_residual = workspace->last_u2_residual;
+        } else {
+            fem_bem_u1.clear();
+            fem_bem_u2.clear();
+            fem_bem_total.clear();
+            fem_bem_boundary.clear();
+            fem_bem_rhs.clear();
+            fem_bem_last_u1_iterations = 0;
+            fem_bem_last_u2_iterations = 0;
+            fem_bem_last_u1_residual = 0.0;
+            fem_bem_last_u2_residual = 0.0;
         }
 #endif
+    }
+
+    void prepare_for_begin(bool enabled)
+    {
+        profile_enabled = enabled;
+        capture_host();
+        begun = false;
+        finished = false;
     }
 
     uint64_t host_snapshot_payload_bytes() const
@@ -397,12 +412,12 @@ struct RkStepTransaction::Impl {
     ThermalBrownRuntimeState thermal_brown;
     TransferAudit transfer_audit;
     FemGpuResidencyDeviceState gpu_residency;
-    bool gpu_fsal_valid;
+    bool gpu_fsal_valid = false;
     std::vector<double> gpu_hybrid_stage_m;
     std::vector<double> gpu_hybrid_demag;
-    double gpu_hybrid_demag_energy;
+    double gpu_hybrid_demag_energy = 0.0;
     PhaseTimingSnapshot phase_timings;
-    bool cpu_fsal_valid;
+    bool cpu_fsal_valid = false;
     std::vector<double> cpu_k0;
     RkAttemptTraceState attempt_trace;
 #if FULLMAG_HAS_MFEM_STACK
@@ -423,6 +438,28 @@ struct RkStepTransaction::Impl {
     bool begun = false;
     bool finished = false;
 };
+
+struct RkStepTransactionJournal {
+    std::unique_ptr<RkStepTransaction::Impl> snapshot;
+};
+
+void RkStepTransactionJournalDeleter::operator()(
+    RkStepTransactionJournal *journal) const noexcept
+{
+    delete journal;
+}
+
+void rk_step_transaction_prepare_workspace(StepperWorkspace &workspace)
+{
+    if (workspace.transaction_journal == nullptr) {
+        workspace.transaction_journal.reset(new RkStepTransactionJournal());
+    }
+}
+
+void rk_step_transaction_reset_workspace(StepperWorkspace &workspace) noexcept
+{
+    workspace.transaction_journal.reset();
+}
 
 RkStepTransaction::RkStepTransaction(Context &ctx)
     : ctx_(&ctx)
@@ -445,7 +482,19 @@ bool RkStepTransaction::begin(std::string &error)
     const bool profile_enabled = step_profile_enabled(*ctx_);
     const auto begin_start = profile_enabled ? SteadyClock::now() : SteadyClock::time_point{};
     try {
-        impl_ = std::make_unique<Impl>(*ctx_, profile_enabled);
+        rk_step_transaction_prepare_workspace(ctx_->stepper.workspace);
+        journal_ = ctx_->stepper.workspace.transaction_journal.get();
+        if (journal_->snapshot != nullptr &&
+            journal_->snapshot->begun && !journal_->snapshot->finished) {
+            error = "RK step transaction is already active for this Context";
+            return false;
+        }
+        if (journal_->snapshot == nullptr) {
+            journal_->snapshot = std::make_unique<Impl>(*ctx_, profile_enabled);
+        } else {
+            journal_->snapshot->prepare_for_begin(profile_enabled);
+        }
+        impl_ = journal_->snapshot.get();
     } catch (const std::bad_alloc &) {
         error = "RK step transaction host snapshot allocation failed";
         return false;

@@ -6,6 +6,15 @@
 namespace fullmag::fem {
 
 struct Context;
+struct StepperWorkspace;
+struct RkStepTransactionJournal;
+
+struct RkStepTransactionJournalDeleter {
+    void operator()(RkStepTransactionJournal *journal) const noexcept;
+};
+
+using RkStepTransactionJournalPtr =
+    std::unique_ptr<RkStepTransactionJournal, RkStepTransactionJournalDeleter>;
 
 /*
  * One native FEM explicit-RK call transaction.
@@ -13,6 +22,9 @@ struct Context;
  * Host and device state are captured by begin(), with device copies ordered on
  * the solver compute stream. Unless commit() is called, rollback restores
  * every published field/cache/controller/residency/counter owned by the step.
+ * The host snapshot storage is owned by StepperWorkspace and recaptured in
+ * place across public steps; the remaining deep-copy payload is intentionally
+ * retained until the minimal-journal migration is independently qualified.
  */
 class RkStepTransaction {
 public:
@@ -27,10 +39,16 @@ public:
     void commit();
 
 private:
+    friend struct RkStepTransactionJournal;
     struct Impl;
     Context *ctx_ = nullptr;
-    std::unique_ptr<Impl> impl_;
+    RkStepTransactionJournal *journal_ = nullptr;
+    Impl *impl_ = nullptr;
 };
+
+/* Prepare or reset the reusable host journal during Context setup. */
+void rk_step_transaction_prepare_workspace(StepperWorkspace &workspace);
+void rk_step_transaction_reset_workspace(StepperWorkspace &workspace) noexcept;
 
 /* Restore the device checkpoint owned by the active outer step transaction. */
 bool rk_restore_active_step_device_checkpoint(Context &ctx, std::string &error);

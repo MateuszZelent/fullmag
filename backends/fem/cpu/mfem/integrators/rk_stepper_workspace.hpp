@@ -16,14 +16,21 @@ namespace fullmag::fem {
  *
  * The native FEM explicit RK path reuses these AOS buffers across accepted and
  * rejected steps: magnetization backup, stage RHS vectors, temporary effective
- * fields, adaptive error estimates, and the FSAL cache validity flag. The
- * structure contains storage only; physical RHS assembly and time integration
- * live in the RK modules.
+ * fields, adaptive error estimates, the host transaction journal, and the FSAL
+ * cache validity flag. The structure contains storage only; physical RHS
+ * assembly and time integration live in the RK modules.
  *
  * It does not evaluate stage RHS, advance time, compose H_eff, or own adaptive
  * accept/reject policy.
  */
 struct StepperWorkspace {
+    StepperWorkspace() = default;
+    ~StepperWorkspace();
+    StepperWorkspace(const StepperWorkspace &other);
+    StepperWorkspace &operator=(const StepperWorkspace &other);
+    StepperWorkspace(StepperWorkspace &&other) noexcept;
+    StepperWorkspace &operator=(StepperWorkspace &&other) noexcept;
+
     bool allocated = false;
     std::size_t dof_len = 0;                       // n_nodes * 3
     int stages = 0;                                // currently allocated RK stages
@@ -36,6 +43,7 @@ struct StepperWorkspace {
     std::vector<double> h_eff_tmp;                 // temp effective field
     SttWorkspace stt;                              // temp direct-torque scratch
     std::vector<double> err;                       // error = h*(b_hi - b_lo) . K
+    RkStepTransactionJournalPtr transaction_journal;
     std::unique_ptr<RkAttemptCacheSnapshot> attempt_checkpoint;
     bool fsal_valid = false;                       // true when k[0] holds valid FSAL RHS
 };

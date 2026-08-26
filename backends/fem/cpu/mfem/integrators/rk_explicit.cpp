@@ -12,8 +12,101 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <utility>
 
 namespace fullmag::fem {
+
+StepperWorkspace::~StepperWorkspace() = default;
+
+StepperWorkspace::StepperWorkspace(const StepperWorkspace &other)
+    : allocated(other.allocated),
+      dof_len(other.dof_len),
+      stages(other.stages),
+      m_backup(other.m_backup),
+      m_stage(other.m_stage),
+      m_candidate(other.m_candidate),
+      h_ex_tmp(other.h_ex_tmp),
+      h_demag_tmp(other.h_demag_tmp),
+      h_eff_tmp(other.h_eff_tmp),
+      stt(other.stt),
+      err(other.err),
+      attempt_checkpoint(nullptr),
+      fsal_valid(other.fsal_valid)
+{
+    for (int i = 0; i < MAX_RK_STAGES; ++i) {
+        k[i] = other.k[i];
+    }
+}
+
+StepperWorkspace &StepperWorkspace::operator=(const StepperWorkspace &other)
+{
+    if (this == &other) {
+        return *this;
+    }
+    allocated = other.allocated;
+    dof_len = other.dof_len;
+    stages = other.stages;
+    m_backup = other.m_backup;
+    for (int i = 0; i < MAX_RK_STAGES; ++i) {
+        k[i] = other.k[i];
+    }
+    m_stage = other.m_stage;
+    m_candidate = other.m_candidate;
+    h_ex_tmp = other.h_ex_tmp;
+    h_demag_tmp = other.h_demag_tmp;
+    h_eff_tmp = other.h_eff_tmp;
+    stt = other.stt;
+    err = other.err;
+    transaction_journal.reset();
+    attempt_checkpoint.reset();
+    fsal_valid = other.fsal_valid;
+    return *this;
+}
+
+StepperWorkspace::StepperWorkspace(StepperWorkspace &&other) noexcept
+    : allocated(other.allocated),
+      dof_len(other.dof_len),
+      stages(other.stages),
+      m_backup(std::move(other.m_backup)),
+      m_stage(std::move(other.m_stage)),
+      m_candidate(std::move(other.m_candidate)),
+      h_ex_tmp(std::move(other.h_ex_tmp)),
+      h_demag_tmp(std::move(other.h_demag_tmp)),
+      h_eff_tmp(std::move(other.h_eff_tmp)),
+      stt(std::move(other.stt)),
+      err(std::move(other.err)),
+      attempt_checkpoint(nullptr),
+      fsal_valid(other.fsal_valid)
+{
+    for (int i = 0; i < MAX_RK_STAGES; ++i) {
+        k[i] = std::move(other.k[i]);
+    }
+}
+
+StepperWorkspace &StepperWorkspace::operator=(StepperWorkspace &&other) noexcept
+{
+    if (this == &other) {
+        return *this;
+    }
+    allocated = other.allocated;
+    dof_len = other.dof_len;
+    stages = other.stages;
+    m_backup = std::move(other.m_backup);
+    for (int i = 0; i < MAX_RK_STAGES; ++i) {
+        k[i] = std::move(other.k[i]);
+    }
+    m_stage = std::move(other.m_stage);
+    m_candidate = std::move(other.m_candidate);
+    h_ex_tmp = std::move(other.h_ex_tmp);
+    h_demag_tmp = std::move(other.h_demag_tmp);
+    h_eff_tmp = std::move(other.h_eff_tmp);
+    stt = std::move(other.stt);
+    err = std::move(other.err);
+    transaction_journal.reset();
+    attempt_checkpoint.reset();
+    fsal_valid = other.fsal_valid;
+    return *this;
+}
 
 /*
  * Explicit Runge-Kutta time integrators for the native FEM LLG backend.
