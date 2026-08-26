@@ -5,8 +5,8 @@ use crate::periodic::reduction::{
 };
 use crate::{
     add, cross, dot, max_cross_norm, norm, normalized, scale, sub, AbmHistory,
-    EffectiveFieldObservables, EffectiveFieldTerms, EngineError, LlgConfig, MaterialParameters,
-    Result, RhsEvaluation, StepReport, TimeIntegrator, Vector3, MU0,
+    EffectiveFieldObservables, EffectiveFieldTerms, EngineError, EngineErrorCode, LlgConfig,
+    MaterialParameters, Result, RhsEvaluation, StepReport, TimeIntegrator, Vector3, MU0,
 };
 use fullmag_ir::MeshIR;
 #[cfg(feature = "parallel")]
@@ -25,12 +25,18 @@ const SPARSE_CG_TOL: f64 = 1e-10;
 const SPARSE_CG_MAX_ITER: usize = 1000;
 /// Maximum rejected attempts for one adaptive RK step before failing clearly.
 const MAX_ADAPTIVE_STEP_REJECTIONS: usize = 128;
+const ADAPTIVE_DT_MIN_ULPS: f64 = 4.0;
 /// Tolerance for barycentric coordinate inclusion test.
 const BARYCENTRIC_INCLUSION_EPS: f64 = 1e-9;
 const CUBIC_AXIS_ORTHOGONALITY_DOT_TOL: f64 = 1e-3;
 const CUBIC_AXIS_ORTHOGONALITY_CROSS_MIN_NORM: f64 = 1e-6;
 const CUBIC_AXIS_VALIDATION_ERROR: &str =
     "cubic anisotropy axes must be finite, normalized and mutually orthogonal";
+
+#[inline]
+fn adaptive_dt_min_reached(dt: f64, dt_min: f64) -> bool {
+    dt <= dt_min || (dt - dt_min).abs() <= dt_min * (ADAPTIVE_DT_MIN_ULPS * f64::EPSILON)
+}
 
 // ── C10: FEM CPU production backend dispatch ──
 
@@ -1916,7 +1922,18 @@ impl FemLlgProblem {
                 n,
             );
 
-            if error <= cfg.max_error || dt <= cfg.dt_min {
+            if !error.is_finite() {
+                let code = if error.is_nan() {
+                    EngineErrorCode::NaNValue
+                } else {
+                    EngineErrorCode::InfiniteValue
+                };
+                return Err(EngineError::with_code(
+                    code,
+                    "adaptive_rk23_non_finite_error",
+                ));
+            }
+            if error <= cfg.max_error {
                 state.magnetization[..n].copy_from_slice(&ws.m_stage[..n]);
                 state.time_seconds += dt;
                 let dt_next = (cfg.headroom
@@ -1931,6 +1948,13 @@ impl FemLlgProblem {
                     false,
                     Some(dt_next),
                 );
+            }
+
+            if adaptive_dt_min_reached(dt, cfg.dt_min) {
+                return Err(EngineError::with_code(
+                    EngineErrorCode::AdaptiveDtMinExhausted,
+                    "adaptive_rk23_dt_min_exhausted",
+                ));
             }
 
             let dt_new = cfg.headroom * dt * (cfg.max_error / error).powf(1.0 / 3.0);
@@ -2085,7 +2109,18 @@ impl FemLlgProblem {
                 n,
             );
 
-            if error <= cfg.max_error || dt <= cfg.dt_min {
+            if !error.is_finite() {
+                let code = if error.is_nan() {
+                    EngineErrorCode::NaNValue
+                } else {
+                    EngineErrorCode::InfiniteValue
+                };
+                return Err(EngineError::with_code(
+                    code,
+                    "adaptive_rk45_non_finite_error",
+                ));
+            }
+            if error <= cfg.max_error {
                 state.magnetization[..n].copy_from_slice(&ws.m_stage[..n]);
                 state.time_seconds += dt;
                 store_fsal_cache(state, &ws.k[6][..n]);
@@ -2100,6 +2135,13 @@ impl FemLlgProblem {
                     false,
                     Some(dt_next),
                 );
+            }
+
+            if adaptive_dt_min_reached(dt, cfg.dt_min) {
+                return Err(EngineError::with_code(
+                    EngineErrorCode::AdaptiveDtMinExhausted,
+                    "adaptive_rk45_dt_min_exhausted",
+                ));
             }
 
             let dt_new = cfg.headroom * dt * (cfg.max_error / error).powf(0.2);
@@ -4114,6 +4156,59 @@ mod tests {
             !rk45.contains("state.k_fsal = None") && !rk45.contains("state.k_fsal.take()"),
             "RK45 must not consume the previous FSAL derivative until a step is accepted"
         );
+        for (name, source) in [("RK23", rk23), ("RK45", rk45)] {
+            assert!(
+                source.contains("adaptive_dt_min_reached"),
+                "{name} must reject an over-tolerance candidate at the minimum step"
+            );
+            assert!(
+                source.contains("non_finite_error"),
+                "{name} must fail closed on a non-finite error estimate"
+            );
+        }
+    }
+
+    #[test]
+    fn adaptive_rk_rejects_over_tolerance_at_dt_min_without_state_commit() {
+        for integrator in [TimeIntegrator::RK23, TimeIntegrator::RK45] {
+            let mut problem = unit_tet_problem();
+            problem.dynamics = LlgConfig::new(10.0, integrator)
+                .expect("LLG config")
+                .with_adaptive(crate::AdaptiveStepConfig {
+                    max_error: 1.0e-30,
+                    dt_min: 0.2,
+                    dt_max: 0.2,
+                    headroom: 0.9,
+                    rtol: 0.0,
+                    growth_limit: 2.0,
+                    shrink_limit: 0.2,
+                });
+            problem.terms.external_field = Some([0.0, 1.0, 0.0]);
+
+            let initial = vec![[1.0, 0.0, 0.0]; problem.topology.n_nodes];
+            let mut state = problem.new_state(initial.clone()).expect("initial state");
+            let error = problem
+                .step(&mut state, 0.2)
+                .expect_err("over-tolerance minimum step must fail");
+
+            assert_eq!(error.code(), EngineErrorCode::AdaptiveDtMinExhausted);
+            assert_eq!(
+                error.to_string(),
+                format!("adaptive_{integrator:?}_dt_min_exhausted").to_lowercase()
+            );
+            assert_eq!(state.time_seconds, 0.0);
+            assert_eq!(state.magnetization, initial);
+        }
+    }
+
+    #[test]
+    fn adaptive_dt_min_boundary_accepts_rounding_but_not_a_real_larger_step() {
+        let dt_min: f64 = 1.0e-6;
+        let one_ulp_above = f64::from_bits(dt_min.to_bits() + 1);
+
+        assert!(adaptive_dt_min_reached(dt_min, dt_min));
+        assert!(adaptive_dt_min_reached(one_ulp_above, dt_min));
+        assert!(!adaptive_dt_min_reached(dt_min * 1.01, dt_min));
     }
 
     #[test]
