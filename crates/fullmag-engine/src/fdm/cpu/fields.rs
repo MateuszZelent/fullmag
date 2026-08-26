@@ -1504,15 +1504,16 @@ impl ExchangeLlgProblem {
     }
 
     pub(crate) fn thermal_field_add_into_soa(&self, h_eff: &mut VectorFieldSoA) {
+        let thermal_dt = self.thermal_dt_for_evaluation();
         let base_factor = match thermal_base_factor(
             self.temperature,
             self.dynamics.gyromagnetic_ratio,
             self.cell_size.volume(),
         ) {
-            Some(factor) if self.thermal_dt > 0.0 && self.thermal_dt.is_finite() => factor,
+            Some(factor) if thermal_dt > 0.0 && thermal_dt.is_finite() => factor,
             _ => return,
         };
-        let dt_scale = 1.0 / self.thermal_dt.sqrt();
+        let dt_scale = 1.0 / thermal_dt.sqrt();
         let global_seed = self.thermal_seed;
         let step = self.thermal_step();
 
@@ -2095,15 +2096,16 @@ impl ExchangeLlgProblem {
 
     /// Counter-based thermal field with an explicit step index for reproducibility.
     pub(crate) fn thermal_field_add_into_step(&self, h_eff: &mut [Vector3], step: u64) {
+        let thermal_dt = self.thermal_dt_for_evaluation();
         let base_factor = match thermal_base_factor(
             self.temperature,
             self.dynamics.gyromagnetic_ratio,
             self.cell_size.volume(),
         ) {
-            Some(factor) if self.thermal_dt > 0.0 && self.thermal_dt.is_finite() => factor,
+            Some(factor) if thermal_dt > 0.0 && thermal_dt.is_finite() => factor,
             _ => return,
         };
-        let dt_scale = 1.0 / self.thermal_dt.sqrt();
+        let dt_scale = 1.0 / thermal_dt.sqrt();
 
         // ── Counter-based RNG (B7 reproducibility) ─────────────────────
         // Deterministic seed per cell: hash(global_seed, step_counter, cell_index).
@@ -2214,8 +2216,9 @@ impl ExchangeLlgProblem {
             self.dynamics.gyromagnetic_ratio,
             self.cell_size.volume(),
         );
-        let thermal_dt_scale = (self.thermal_dt > 0.0 && self.thermal_dt.is_finite())
-            .then(|| 1.0 / self.thermal_dt.sqrt());
+        let thermal_dt = self.thermal_dt_for_evaluation();
+        let thermal_dt_scale = (thermal_dt > 0.0 && thermal_dt.is_finite())
+            .then(|| 1.0 / thermal_dt.sqrt());
         let (has_thermal, thermal_base, thermal_dt_scale) = match (thermal_base, thermal_dt_scale)
         {
             (Some(base), Some(dt_scale)) => (true, base, dt_scale),
@@ -3591,13 +3594,14 @@ impl ExchangeLlgProblem {
 
         // Brown thermal field.  Keep this legacy public path on the same
         // per-cell material contract as the fused execution path.
+        let thermal_dt = self.thermal_dt_for_evaluation();
         if let (Some(base_factor), true) = (
             thermal_base_factor(
                 self.temperature,
                 self.dynamics.gyromagnetic_ratio,
                 self.cell_size.volume(),
             ),
-            self.thermal_dt > 0.0 && self.thermal_dt.is_finite(),
+            thermal_dt > 0.0 && thermal_dt.is_finite(),
         ) {
             use std::cell::RefCell;
 
@@ -3605,7 +3609,7 @@ impl ExchangeLlgProblem {
                 static RNG: RefCell<u64> = const { RefCell::new(42u64) };
             }
 
-            let dt_scale = 1.0 / self.thermal_dt.sqrt();
+            let dt_scale = 1.0 / thermal_dt.sqrt();
 
             RNG.with(|seed_cell| {
                 let mut seed = *seed_cell.borrow();

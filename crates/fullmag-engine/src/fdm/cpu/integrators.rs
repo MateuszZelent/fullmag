@@ -459,6 +459,214 @@ mod adaptive_decision_tests {
     }
 
     #[test]
+    fn adaptive_retry_reuses_thermal_counter_draw_and_scales_it_to_new_dt() {
+        let mut retry_problem = adaptive_test_problem(crate::TimeIntegrator::RK23);
+        retry_problem.temperature = 300.0;
+        retry_problem.thermal_dt = 0.2;
+        retry_problem.thermal_seed = 0x5eed;
+        let mut retry_state = retry_problem
+            .uniform_state([1.0, 0.0, 0.0])
+            .expect("retry state");
+        let mut retry_ws = retry_problem.create_workspace();
+        let mut retry_bufs = retry_problem.create_integrator_buffers();
+        retry_bufs.set_adaptive_error_script_for_tests([4.0, 0.0]);
+        retry_problem
+            .step_with_buffers_evaluation(
+                &mut retry_state,
+                1.0,
+                &mut retry_ws,
+                &mut retry_bufs,
+                crate::EvaluationRequest::Minimal,
+            )
+            .expect("retrying thermal step");
+
+        let mut clean_problem = adaptive_test_problem(crate::TimeIntegrator::RK23);
+        clean_problem.temperature = 300.0;
+        clean_problem.thermal_dt = 0.2;
+        clean_problem.thermal_seed = 0x5eed;
+        let mut clean_state = clean_problem
+            .uniform_state([1.0, 0.0, 0.0])
+            .expect("clean state");
+        let mut clean_ws = clean_problem.create_workspace();
+        let mut clean_bufs = clean_problem.create_integrator_buffers();
+        clean_bufs.set_adaptive_error_script_for_tests([0.0]);
+        clean_problem
+            .step_with_buffers_evaluation(
+                &mut clean_state,
+                0.2,
+                &mut clean_ws,
+                &mut clean_bufs,
+                crate::EvaluationRequest::Minimal,
+            )
+            .expect("clean thermal step");
+
+        assert_eq!(retry_state, clean_state);
+        assert_eq!(retry_problem.thermal_step(), 1);
+        assert_eq!(clean_problem.thermal_step(), 1);
+        assert_eq!(
+            retry_problem
+                .transactional_state_digest(&retry_state)
+                .expect("retry digest"),
+            clean_problem
+                .transactional_state_digest(&clean_state)
+                .expect("clean digest")
+        );
+    }
+
+    #[test]
+    fn failed_adaptive_attempt_preserves_transactional_digest_and_rng_interval() {
+        let problem = adaptive_test_problem(crate::TimeIntegrator::RK45);
+        let mut state = problem.uniform_state([1.0, 0.0, 0.0]).expect("state");
+        let mut workspace = problem.create_workspace();
+        let mut buffers = problem.create_integrator_buffers();
+        buffers.set_adaptive_error_script_for_tests([0.0]);
+        problem
+            .step_with_buffers_evaluation(
+                &mut state,
+                1.0e-6,
+                &mut workspace,
+                &mut buffers,
+                crate::EvaluationRequest::Minimal,
+            )
+            .expect("accepted FSAL seed step");
+        let before = problem
+            .transactional_state_digest(&state)
+            .expect("state digest");
+        let thermal_before = problem.thermal_step();
+        buffers.set_adaptive_error_script_for_tests([f64::NAN]);
+        let error = problem
+            .step_with_buffers_evaluation(
+                &mut state,
+                1.0e-6,
+                &mut workspace,
+                &mut buffers,
+                crate::EvaluationRequest::Minimal,
+            )
+            .expect_err("injected non-finite adaptive error");
+
+        assert_eq!(error.code(), crate::EngineErrorCode::NaNValue);
+        assert_eq!(
+            problem
+                .transactional_state_digest(&state)
+                .expect("post-failure digest"),
+            before
+        );
+        assert_eq!(problem.thermal_step(), thermal_before);
+    }
+
+    #[test]
+    fn abm_failure_before_commit_preserves_magnetization_time_and_history_digest() {
+        let problem = crate::ExchangeLlgProblem::with_terms(
+            crate::GridShape::new(1, 1, 1).expect("grid"),
+            crate::CellSize::new(1.0, 1.0, 1.0).expect("cell"),
+            crate::MaterialParameters::new(1.0, 1.0e-30, 0.1).expect("material"),
+            crate::LlgConfig::new(100.0, crate::TimeIntegrator::ABM3).expect("LLG"),
+            crate::EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                ..Default::default()
+            },
+        );
+        let dt = 1.0e-3;
+
+        let mut aos = problem.uniform_state([1.0, 0.0, 0.0]).expect("AoS state");
+        let mut aos_ws = problem.create_workspace();
+        let mut aos_bufs = problem.create_integrator_buffers();
+        for _ in 0..3 {
+            problem
+                .abm3_step_buf(
+                    &mut aos,
+                    dt,
+                    &mut aos_ws,
+                    &mut aos_bufs,
+                    crate::EvaluationRequest::Minimal,
+                )
+                .expect("ABM startup step");
+        }
+        aos.magnetization_mut()[0] = [f64::NAN; 3];
+        let aos_before = problem
+            .transactional_state_digest(&aos)
+            .expect("AoS digest");
+        let error = problem
+            .abm3_step_buf(
+                &mut aos,
+                dt,
+                &mut aos_ws,
+                &mut aos_bufs,
+                crate::EvaluationRequest::Minimal,
+            )
+            .expect_err("non-finite candidate must fail before commit");
+        assert_eq!(error.code(), crate::EngineErrorCode::NaNValue);
+        assert_eq!(
+            problem
+                .transactional_state_digest(&aos)
+                .expect("AoS post-failure digest"),
+            aos_before
+        );
+
+        let mut buffer_soa = problem.uniform_state([1.0, 0.0, 0.0]).expect("buffer SoA state");
+        let mut buffer_soa_ws = problem.create_workspace();
+        let mut buffer_soa_bufs = problem.create_integrator_buffers();
+        for _ in 0..3 {
+            problem
+                .abm3_step_soa_buf(
+                    &mut buffer_soa,
+                    dt,
+                    &mut buffer_soa_ws,
+                    &mut buffer_soa_bufs,
+                    crate::EvaluationRequest::Minimal,
+                )
+                .expect("SoA startup step");
+        }
+        buffer_soa.magnetization_mut()[0] = [f64::NAN; 3];
+        let buffer_soa_before = buffer_soa.transactional_state_digest();
+        let error = problem
+            .abm3_step_soa_buf(
+                &mut buffer_soa,
+                dt,
+                &mut buffer_soa_ws,
+                &mut buffer_soa_bufs,
+                crate::EvaluationRequest::Minimal,
+            )
+            .expect_err("non-finite SoA candidate must fail before commit");
+        assert_eq!(error.code(), crate::EngineErrorCode::NaNValue);
+        assert_eq!(buffer_soa.transactional_state_digest(), buffer_soa_before);
+
+        let mut persistent_soa = problem
+            .uniform_state([1.0, 0.0, 0.0])
+            .expect("persistent SoA state")
+            .to_soa();
+        let mut persistent_ws = problem.create_workspace();
+        let mut persistent_bufs = problem.create_integrator_buffers();
+        for _ in 0..3 {
+            problem
+                .abm3_step_soa_state_buf(
+                    &mut persistent_soa,
+                    dt,
+                    &mut persistent_ws,
+                    &mut persistent_bufs,
+                    crate::EvaluationRequest::Minimal,
+                )
+                .expect("persistent SoA startup step");
+        }
+        persistent_soa.magnetization.x[0] = f64::NAN;
+        persistent_soa.magnetization.y[0] = f64::NAN;
+        persistent_soa.magnetization.z[0] = f64::NAN;
+        let persistent_before = persistent_soa.transactional_state_digest();
+        let error = problem
+            .abm3_step_soa_state_buf(
+                &mut persistent_soa,
+                dt,
+                &mut persistent_ws,
+                &mut persistent_bufs,
+                crate::EvaluationRequest::Minimal,
+            )
+            .expect_err("persistent SoA non-finite candidate must fail before commit");
+        assert_eq!(error.code(), crate::EngineErrorCode::NaNValue);
+        assert_eq!(persistent_soa.transactional_state_digest(), persistent_before);
+    }
+
+    #[test]
     fn rk45_terminal_rejection_preserves_fsal_for_aos_and_persistent_soa() {
         let problem = adaptive_test_problem(crate::TimeIntegrator::RK45);
 
@@ -1400,6 +1608,7 @@ impl ExchangeLlgProblem {
         bufs.m0[..n].copy_from_slice(&state.magnetization);
 
         loop {
+            self.set_thermal_dt_for_attempt(dt);
             let mut rhs_evals = AttemptRhsCounter::default();
             // k1 = f(t, m0)
             self.effective_field_into_ws_at_time(&bufs.m0[..n], ws, &mut bufs.h_eff[..n], t0);
@@ -1616,6 +1825,7 @@ impl ExchangeLlgProblem {
         bufs.soa.m0.scatter_from_aos(&state.magnetization);
 
         loop {
+            self.set_thermal_dt_for_attempt(dt);
             let mut rhs_evals = AttemptRhsCounter::default();
             self.effective_field_into_soa_ws_at_time(&bufs.soa.m0, ws, &mut bufs.soa.h_eff, t0);
             self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
@@ -1816,6 +2026,7 @@ impl ExchangeLlgProblem {
         const E7: f64 = -1.0 / 40.0;
 
         loop {
+            self.set_thermal_dt_for_attempt(dt);
             let mut rhs_evals = AttemptRhsCounter::default();
             // Stage 1 — FSAL: reuse k7 from previous accepted step
             let reusable_fsal = (!dynamic_oersted).then(|| state.k_fsal.as_ref()).flatten();
@@ -2243,6 +2454,7 @@ impl ExchangeLlgProblem {
         const E7: f64 = -1.0 / 40.0;
 
         loop {
+            self.set_thermal_dt_for_attempt(dt);
             let mut rhs_evals = AttemptRhsCounter::default();
             let reusable_fsal = (!dynamic_oersted).then(|| state.k_fsal.as_ref()).flatten();
             if let Some(fsal) = reusable_fsal {
@@ -2554,14 +2766,15 @@ impl ExchangeLlgProblem {
 
             // corrected = normalize(m0 + dt/2 * (k1 + k2))
             {
-                let (mag, m0, k0, k1) = (
-                    &mut state.magnetization[..n],
+                let (stage, m0, k0, k1) = (
+                    &mut bufs.m_stage[..n],
                     &bufs.m0[..n],
                     &bufs.k[0][..n],
                     &bufs.k[1][..n],
                 );
                 #[cfg(feature = "parallel")]
-                mag.par_iter_mut()
+                stage
+                    .par_iter_mut()
                     .zip(m0.par_iter())
                     .zip(k0.par_iter())
                     .zip(k1.par_iter())
@@ -2571,36 +2784,38 @@ impl ExchangeLlgProblem {
                     })?;
                 #[cfg(not(feature = "parallel"))]
                 for i in 0..n {
-                    mag[i] = normalized(add(m0[i], scale(add(k0[i], k1[i]), 0.5 * dt)))?;
+                    stage[i] = normalized(add(m0[i], scale(add(k0[i], k1[i]), 0.5 * dt)))?;
                 }
             }
-            self.restore_frozen_reference(&mut state.magnetization[..n]);
-            state.time_seconds += dt;
+            self.restore_frozen_reference(&mut bufs.m_stage[..n]);
+            let accepted_time = t0 + dt;
 
             // Store RHS at accepted point for history
             self.effective_field_into_ws_at_time(
-                state.magnetization(),
+                &bufs.m_stage[..n],
                 ws,
                 &mut bufs.h_eff[..n],
-                t0 + dt,
+                accepted_time,
             );
             self.llg_rhs_from_fields_with_direct_torques_into(
-                state.magnetization(),
+                &bufs.m_stage[..n],
                 &bufs.h_eff[..n],
                 &mut bufs.k[0][..n],
             );
-            state.abm_history.push(bufs.k[0][..n].to_vec(), dt);
 
             let eval = self.compute_step_observables_at_time(
-                &state.magnetization,
+                &bufs.m_stage[..n],
                 ws,
                 &mut bufs.h_eff,
                 &mut bufs.h_scratch,
                 &mut bufs.rhs,
                 evaluation,
-                state.time_seconds,
+                accepted_time,
             );
-            return Ok(eval.into_step_report(state.time_seconds, dt, false));
+            state.magnetization[..n].copy_from_slice(&bufs.m_stage[..n]);
+            state.time_seconds = accepted_time;
+            state.abm_history.push(bufs.k[0][..n].to_vec(), dt);
+            return Ok(eval.into_step_report(accepted_time, dt, false));
         }
 
         // --- Full ABM3 step ---
@@ -2645,15 +2860,16 @@ impl ExchangeLlgProblem {
             &mut bufs.k[0][..n],
         );
 
-        // Adams–Moulton corrector → state.magnetization
+        // Adams–Moulton corrector → trial candidate
         {
-            let (mag, m0, k0) = (
-                &mut state.magnetization[..n],
+            let (stage, m0, k0) = (
+                &mut bufs.m_stage[..n],
                 &bufs.m0[..n],
                 &bufs.k[0][..n],
             );
             #[cfg(feature = "parallel")]
-            mag.par_iter_mut()
+            stage
+                .par_iter_mut()
                 .zip(m0.par_iter())
                 .enumerate()
                 .try_for_each(|(i, (m, m0))| -> Result<()> {
@@ -2670,25 +2886,25 @@ impl ExchangeLlgProblem {
                     add(scale(k0[i], 5.0 / 12.0), scale(f_n[i], 8.0 / 12.0)),
                     scale(f_n1[i], -1.0 / 12.0),
                 );
-                mag[i] = normalized(add(m0[i], scale(corr, dt)))?;
+                stage[i] = normalized(add(m0[i], scale(corr, dt)))?;
             }
         }
-        self.restore_frozen_reference(&mut state.magnetization[..n]);
-        state.time_seconds += dt;
-
-        // Push f_star (k[0]) into history
-        state.abm_history.push(bufs.k[0][..n].to_vec(), dt);
+        self.restore_frozen_reference(&mut bufs.m_stage[..n]);
+        let accepted_time = t0 + dt;
 
         let eval = self.compute_step_observables_at_time(
-            &state.magnetization,
+            &bufs.m_stage[..n],
             ws,
             &mut bufs.h_eff,
             &mut bufs.h_scratch,
             &mut bufs.rhs,
             evaluation,
-            state.time_seconds,
+            accepted_time,
         );
-        Ok(eval.into_step_report(state.time_seconds, dt, false))
+        state.magnetization[..n].copy_from_slice(&bufs.m_stage[..n]);
+        state.time_seconds = accepted_time;
+        state.abm_history.push(bufs.k[0][..n].to_vec(), dt);
+        Ok(eval.into_step_report(accepted_time, dt, false))
     }
 
     pub(crate) fn abm3_step_soa_buf(
@@ -2703,9 +2919,10 @@ impl ExchangeLlgProblem {
         let t0 = state.time_seconds;
 
         if !state.abm_history.is_ready() {
-            let report = self.heun_step_soa_buf(state, dt, ws, bufs, evaluation)?;
+            let mut trial_state = state.clone();
+            let report = self.heun_step_soa_buf(&mut trial_state, dt, ws, bufs, evaluation)?;
 
-            bufs.soa.m0.scatter_from_aos(&state.magnetization);
+            bufs.soa.m0.scatter_from_aos(&trial_state.magnetization);
             self.effective_field_into_soa_ws_at_time(
                 &bufs.soa.m0,
                 ws,
@@ -2714,7 +2931,10 @@ impl ExchangeLlgProblem {
             );
             self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
             bufs.soa.k[0].gather_into_aos(&mut bufs.k[0][..n]);
-            state.abm_history.push_copy_from_slice(&bufs.k[0][..n], dt);
+            trial_state
+                .abm_history
+                .push_copy_from_slice(&bufs.k[0][..n], dt);
+            *state = trial_state;
 
             return Ok(report);
         }
@@ -2756,27 +2976,36 @@ impl ExchangeLlgProblem {
                 - (1.0 / 12.0) * bufs.soa.k[2].y[i];
             let corr_z = (5.0 / 12.0) * bufs.soa.k[0].z[i] + (8.0 / 12.0) * bufs.soa.k[1].z[i]
                 - (1.0 / 12.0) * bufs.soa.k[2].z[i];
-            state.magnetization[i] = normalized([
+            let corrected = normalized([
                 bufs.soa.m0.x[i] + dt * corr_x,
                 bufs.soa.m0.y[i] + dt * corr_y,
                 bufs.soa.m0.z[i] + dt * corr_z,
             ])?;
+            bufs.soa.m_stage.x[i] = corrected[0];
+            bufs.soa.m_stage.y[i] = corrected[1];
+            bufs.soa.m_stage.z[i] = corrected[2];
         }
-        state.time_seconds += dt;
 
         bufs.soa.k[0].gather_into_aos(&mut bufs.k[0][..n]);
-        state.abm_history.push_copy_from_slice(&bufs.k[0][..n], dt);
 
-        let eval = self.compute_step_observables_at_time(
-            &state.magnetization,
-            ws,
-            &mut bufs.h_eff,
-            &mut bufs.h_scratch,
-            &mut bufs.rhs,
-            evaluation,
-            state.time_seconds,
-        );
-        Ok(eval.into_step_report(state.time_seconds, dt, false))
+        let accepted_time = t0 + dt;
+        let eval = {
+            let soa = &mut bufs.soa;
+            let (rhs_slots, scratch_slots) = soa.k.split_at_mut(1);
+            self.compute_step_observables_soa_parts(
+                &soa.m_stage,
+                ws,
+                &mut soa.h_eff,
+                &mut rhs_slots[0],
+                &mut scratch_slots[0],
+                evaluation,
+                accepted_time,
+            )
+        };
+        bufs.soa.m_stage.gather_into_aos(&mut state.magnetization[..n]);
+        state.time_seconds = accepted_time;
+        state.abm_history.push_copy_from_slice(&bufs.k[0][..n], dt);
+        Ok(eval.into_step_report(accepted_time, dt, false))
     }
 
     pub(crate) fn heun_step_soa_state_buf(
@@ -2954,6 +3183,7 @@ impl ExchangeLlgProblem {
         bufs.soa.m0.copy_from(&state.magnetization);
 
         loop {
+            self.set_thermal_dt_for_attempt(dt);
             let mut rhs_evals = AttemptRhsCounter::default();
             self.effective_field_into_soa_ws_at_time(&bufs.soa.m0, ws, &mut bufs.soa.h_eff, t0);
             self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
@@ -3148,6 +3378,7 @@ impl ExchangeLlgProblem {
         const E7: f64 = -1.0 / 40.0;
 
         loop {
+            self.set_thermal_dt_for_attempt(dt);
             let mut rhs_evals = AttemptRhsCounter::default();
             let reusable_fsal = (!dynamic_oersted).then(|| state.k_fsal.as_ref()).flatten();
             if let Some(fsal) = reusable_fsal {
@@ -3407,16 +3638,22 @@ impl ExchangeLlgProblem {
         let t0 = state.time_seconds;
 
         if !state.abm_history.is_ready() {
-            let report = self.heun_step_soa_state_buf(state, dt, ws, bufs, evaluation)?;
+            let mut trial_state = state.clone();
+            let report = self.heun_step_soa_state_buf(&mut trial_state, dt, ws, bufs, evaluation)?;
 
             self.effective_field_into_soa_ws_at_time(
-                &state.magnetization,
+                &trial_state.magnetization,
                 ws,
                 &mut bufs.soa.h_eff,
                 t0 + dt,
             );
-            self.llg_rhs_soa_into(&state.magnetization, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
-            state.abm_history.push_copy_from_soa(&bufs.soa.k[0], dt);
+            self.llg_rhs_soa_into(
+                &trial_state.magnetization,
+                &bufs.soa.h_eff,
+                &mut bufs.soa.k[0],
+            );
+            trial_state.abm_history.push_copy_from_soa(&bufs.soa.k[0], dt);
+            *state = trial_state;
 
             return Ok(report);
         }
@@ -3473,22 +3710,33 @@ impl ExchangeLlgProblem {
                 bufs.soa.m0.y[i] + dt * corr_y,
                 bufs.soa.m0.z[i] + dt * corr_z,
             ])?;
-            state.magnetization.x[i] = updated[0];
-            state.magnetization.y[i] = updated[1];
-            state.magnetization.z[i] = updated[2];
+            bufs.soa.m_stage.x[i] = updated[0];
+            bufs.soa.m_stage.y[i] = updated[1];
+            bufs.soa.m_stage.z[i] = updated[2];
         }
-        state.time_seconds += dt;
+        let accepted_time = t0 + dt;
+        {
+            let (rhs_slots, scratch_slots) = bufs.soa.k.split_at_mut(1);
+            scratch_slots[5].copy_from(&rhs_slots[0]);
+        }
 
-        state.abm_history.push_copy_from_soa(&bufs.soa.k[0], dt);
-
-        let eval = self.compute_step_observables_soa(
-            &state.magnetization,
-            ws,
-            bufs,
-            evaluation,
-            state.time_seconds,
-        );
-        Ok(eval.into_step_report(state.time_seconds, dt, false))
+        let eval = {
+            let soa = &mut bufs.soa;
+            let (rhs_slots, scratch_slots) = soa.k.split_at_mut(1);
+            self.compute_step_observables_soa_parts(
+                &soa.m_stage,
+                ws,
+                &mut soa.h_eff,
+                &mut rhs_slots[0],
+                &mut scratch_slots[0],
+                evaluation,
+                accepted_time,
+            )
+        };
+        state.magnetization.copy_from(&bufs.soa.m_stage);
+        state.time_seconds = accepted_time;
+        state.abm_history.push_copy_from_soa(&bufs.soa.k[6], dt);
+        Ok(eval.into_step_report(accepted_time, dt, false))
     }
 
     fn compute_step_observables_soa(
@@ -3499,26 +3747,45 @@ impl ExchangeLlgProblem {
         evaluation: EvaluationRequest,
         time_seconds: f64,
     ) -> RhsEvaluation {
+        let soa = &mut bufs.soa;
+        let (rhs_slots, scratch_slots) = soa.k.split_at_mut(1);
+        self.compute_step_observables_soa_parts(
+            magnetization,
+            ws,
+            &mut soa.h_eff,
+            &mut rhs_slots[0],
+            &mut scratch_slots[0],
+            evaluation,
+            time_seconds,
+        )
+    }
+
+    fn compute_step_observables_soa_parts(
+        &self,
+        magnetization: &VectorFieldSoA,
+        ws: &mut FftWorkspace,
+        h_eff: &mut VectorFieldSoA,
+        rhs_out: &mut VectorFieldSoA,
+        h_scratch: &mut VectorFieldSoA,
+        evaluation: EvaluationRequest,
+        time_seconds: f64,
+    ) -> RhsEvaluation {
         match evaluation {
             EvaluationRequest::Minimal => self.compute_step_observables_soa_minimal(
                 magnetization,
                 ws,
-                &mut bufs.soa.h_eff,
-                &mut bufs.soa.k[0],
+                h_eff,
+                rhs_out,
                 time_seconds,
             ),
-            EvaluationRequest::Full => {
-                let soa = &mut bufs.soa;
-                let (rhs_slots, scratch_slots) = soa.k.split_at_mut(1);
-                self.compute_step_observables_soa_full(
-                    magnetization,
-                    ws,
-                    &mut soa.h_eff,
-                    &mut rhs_slots[0],
-                    &mut scratch_slots[0],
-                    time_seconds,
-                )
-            }
+            EvaluationRequest::Full => self.compute_step_observables_soa_full(
+                magnetization,
+                ws,
+                h_eff,
+                rhs_out,
+                h_scratch,
+                time_seconds,
+            ),
         }
     }
 

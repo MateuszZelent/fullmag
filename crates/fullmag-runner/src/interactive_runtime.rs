@@ -5520,6 +5520,7 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
         fdm_cpu_state_layout: None,
         fdm_gpu_execution_receipt: None,
         fdm_gpu_step_transaction_telemetry: None,
+        fdm_cpu_step_transaction_telemetry: None,
         fem_gpu_execution_receipt: None,
         executed_physics_kinds: if timestep_policy.is_some()
             && (plan.zhang_li_formula_version.is_some()

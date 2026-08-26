@@ -47,9 +47,9 @@ use crate::schedules::{
     OutputSchedule,
 };
 use crate::types::{
-    ExecutedRun, ExecutionProvenance, FdmCpuStateLayoutProvenance, FieldSnapshot,
-    LivePreviewRequest, LiveStepConsumer, RunError, RunResult, RunStatus, StateObservables,
-    StepAction, StepStats, StepUpdate,
+    ExecutedRun, ExecutionProvenance, FdmCpuStateLayoutProvenance, FdmCpuStepTransactionTelemetry,
+    FieldSnapshot, LivePreviewRequest, LiveStepConsumer, RunError, RunResult, RunStatus,
+    StateObservables, StepAction, StepStats, StepUpdate,
 };
 
 use std::{env, time::Instant};
@@ -1168,6 +1168,8 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
     let mut last_solver_dt = resume_previous_timestep.unwrap_or(0.0);
     let mut steps: Vec<StepStats> = Vec::new();
     let mut step_count: u64 = resume_step_count.unwrap_or(0);
+    let mut cpu_rejected_attempt_count = 0u64;
+    let mut cpu_rollback_count = 0u64;
     let mut final_coupled_checkpoint = None;
     // Keep the resolved Frozen Spins state in the live update stream as an
     // opaque restart payload.  This is the only safe way for session pause
@@ -1707,6 +1709,10 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
             };
             if spin_transport.is_none() {
                 apply_cpu_adaptive_attempt_telemetry(&mut latest_stats, &integrator_bufs, plan);
+                cpu_rejected_attempt_count = cpu_rejected_attempt_count
+                    .saturating_add(u64::from(latest_stats.rejected_attempts));
+                cpu_rollback_count =
+                    cpu_rollback_count.saturating_add(u64::from(latest_stats.rejected_attempts));
                 if matches!(
                     plan.integrator.unwrap_or(IntegratorChoice::Heun),
                     IntegratorChoice::Rk23 | IntegratorChoice::Rk45
@@ -2043,6 +2049,24 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         }
     }
 
+    let checkpoint_digest = problem
+        .transactional_state_digest(&state)
+        .map_err(|error| RunError {
+            message: format!("CPU FDM transaction checkpoint digest: {error}"),
+        })?;
+    let mut final_provenance = artifacts.provenance_snapshot();
+    final_provenance.fdm_cpu_step_transaction_telemetry = Some(FdmCpuStepTransactionTelemetry {
+        schema_version: "fullmag.fdm.cpu.step_transaction.v1".to_string(),
+        accepted_step_count: step_count,
+        rejected_attempt_count: cpu_rejected_attempt_count,
+        rollback_count: cpu_rollback_count,
+        thermal_interval_index: problem.thermal_step(),
+        thermal_rng_draws: (problem.temperature > 0.0)
+            .then_some(problem.thermal_step())
+            .unwrap_or(0),
+        checkpoint_digest,
+    });
+    artifacts.replace_provenance_synchronously(final_provenance)?;
     let diagnostic_trace = artifacts.take_solver_steps();
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
     let mut status = if paused {
@@ -3264,6 +3288,36 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn reference_runner_publishes_cpu_step_transaction_telemetry() {
+        let plan = FdmPlanIR {
+            temperature: Some(300.0),
+            ..make_test_plan()
+        };
+        let executed =
+            execute_reference_fdm(&plan, 3e-14, &[], None, None).expect("thermal reference run");
+        let telemetry = executed
+            .provenance
+            .fdm_cpu_step_transaction_telemetry
+            .expect("CPU transaction telemetry");
+
+        assert_eq!(
+            telemetry.schema_version,
+            "fullmag.fdm.cpu.step_transaction.v1"
+        );
+        assert!(telemetry.accepted_step_count > 0);
+        assert_eq!(
+            telemetry.thermal_interval_index,
+            telemetry.accepted_step_count
+        );
+        assert_eq!(
+            telemetry.thermal_rng_draws,
+            telemetry.thermal_interval_index
+        );
+        assert_eq!(telemetry.rollback_count, telemetry.rejected_attempt_count);
+        assert!(telemetry.checkpoint_digest.starts_with("sha256:"));
     }
 
     #[test]

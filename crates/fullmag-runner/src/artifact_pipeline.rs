@@ -1258,12 +1258,10 @@ impl ArtifactRecorder {
         self.provenance = provenance;
     }
 
-    #[cfg(feature = "fem-gpu")]
     pub(crate) fn provenance_snapshot(&self) -> ExecutionProvenance {
         self.provenance.clone()
     }
 
-    #[cfg(feature = "fem-gpu")]
     pub(crate) fn replace_provenance_synchronously(
         &mut self,
         provenance: ExecutionProvenance,

@@ -6,6 +6,7 @@ use crate::{
     EngineError, EvaluationRequest, ExchangeLlgProblem, FftWorkspace, GridShape, Result, Vector3,
     VectorFieldSoA,
 };
+use sha2::{Digest, Sha256};
 
 // ── ExchangeLlgStateSoA ───────────────────────────────────────────────
 
@@ -71,6 +72,13 @@ impl ExchangeLlgStateSoA {
     /// Read-only access to the SoA magnetization.
     pub fn magnetization(&self) -> &VectorFieldSoA {
         &self.magnetization
+    }
+
+    /// Return the canonical digest of this persistent SoA state. The digest
+    /// uses the AoS semantic ordering so an AoS/SoA conversion does not alter
+    /// checkpoint identity.
+    pub fn transactional_state_digest(&self) -> String {
+        self.to_aos().transactional_state_digest()
     }
 }
 
@@ -275,6 +283,68 @@ impl ExchangeLlgState {
     pub fn to_soa(&self) -> ExchangeLlgStateSoA {
         ExchangeLlgStateSoA::from_aos(self)
     }
+
+    /// Return a bit-preserving digest of the authoritative state, including
+    /// FSAL, adaptive-controller memory, and ABM history. This is deliberately
+    /// independent of serde field ordering and is suitable for rollback tests.
+    pub fn transactional_state_digest(&self) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(b"fullmag.fdm.solver-state.v1\0");
+        update_u64(&mut hasher, self.grid.nx as u64);
+        update_u64(&mut hasher, self.grid.ny as u64);
+        update_u64(&mut hasher, self.grid.nz as u64);
+        update_f64(&mut hasher, self.time_seconds);
+        update_vectors(&mut hasher, &self.magnetization);
+        update_optional_vectors(&mut hasher, self.k_fsal.as_deref());
+        update_optional_f64(&mut hasher, self.adaptive_previous_error);
+        update_abm_history(&mut hasher, &self.abm_history);
+        format!("sha256:{:x}", hasher.finalize())
+    }
+}
+
+fn update_u64(hasher: &mut Sha256, value: u64) {
+    hasher.update(value.to_le_bytes());
+}
+
+fn update_f64(hasher: &mut Sha256, value: f64) {
+    hasher.update(value.to_bits().to_le_bytes());
+}
+
+fn update_vectors(hasher: &mut Sha256, values: &[Vector3]) {
+    update_u64(hasher, values.len() as u64);
+    for value in values {
+        update_f64(hasher, value[0]);
+        update_f64(hasher, value[1]);
+        update_f64(hasher, value[2]);
+    }
+}
+
+fn update_optional_vectors(hasher: &mut Sha256, values: Option<&[Vector3]>) {
+    match values {
+        Some(values) => {
+            hasher.update([1]);
+            update_vectors(hasher, values);
+        }
+        None => hasher.update([0]),
+    }
+}
+
+fn update_optional_f64(hasher: &mut Sha256, value: Option<f64>) {
+    match value {
+        Some(value) => {
+            hasher.update([1]);
+            update_f64(hasher, value);
+        }
+        None => hasher.update([0]),
+    }
+}
+
+fn update_abm_history(hasher: &mut Sha256, history: &AbmHistory) {
+    update_optional_vectors(hasher, history.f_n.as_deref());
+    update_optional_vectors(hasher, history.f_n_minus_1.as_deref());
+    update_optional_vectors(hasher, history.f_n_minus_2.as_deref());
+    update_u64(hasher, history.startup_steps as u64);
+    update_f64(hasher, history.last_dt);
 }
 
 // ── AbmHistory ─────────────────────────────────────────────────────────

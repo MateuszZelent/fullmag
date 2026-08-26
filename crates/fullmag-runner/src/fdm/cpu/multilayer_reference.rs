@@ -155,6 +155,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
         fdm_cpu_state_layout: None,
         fdm_gpu_execution_receipt: None,
         fdm_gpu_step_transaction_telemetry: None,
+        fdm_cpu_step_transaction_telemetry: None,
         fem_gpu_execution_receipt: None,
         executed_physics_kinds: Vec::new(),
         executed_physics_module_ids: Vec::new(),

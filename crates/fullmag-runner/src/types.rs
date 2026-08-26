@@ -2827,6 +2827,18 @@ pub struct FdmGpuStepTransactionTelemetry {
     pub stale_publication_count: u64,
 }
 
+/// CPU FDM transaction counters captured after reference execution.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FdmCpuStepTransactionTelemetry {
+    pub schema_version: String,
+    pub accepted_step_count: u64,
+    pub rejected_attempt_count: u64,
+    pub rollback_count: u64,
+    pub thermal_interval_index: u64,
+    pub thermal_rng_draws: u64,
+    pub checkpoint_digest: String,
+}
+
 impl FdmGpuExecutionReceipt {
     pub fn strict_unvalidated(precision: &str) -> Self {
         Self {
@@ -2878,6 +2890,27 @@ mod fdm_gpu_execution_receipt_contract_tests {
         assert_eq!(telemetry["rollback_latency_max_ns"], 900);
         assert_eq!(telemetry["attempt_generation"], 8);
         assert_eq!(telemetry["accounting_valid"], true);
+    }
+
+    #[test]
+    fn execution_provenance_serializes_fdm_cpu_step_transaction_telemetry() {
+        let mut provenance = ExecutionProvenance::default();
+        provenance.fdm_cpu_step_transaction_telemetry = Some(FdmCpuStepTransactionTelemetry {
+            schema_version: "fullmag.fdm.cpu.step_transaction.v1".into(),
+            accepted_step_count: 7,
+            rejected_attempt_count: 2,
+            rollback_count: 2,
+            thermal_interval_index: 7,
+            thermal_rng_draws: 7,
+            checkpoint_digest: "sha256:test".into(),
+        });
+
+        let value = serde_json::to_value(provenance).expect("serialize provenance");
+        let telemetry = &value["fdm_cpu_step_transaction_telemetry"];
+        assert_eq!(telemetry["accepted_step_count"], 7);
+        assert_eq!(telemetry["rollback_count"], 2);
+        assert_eq!(telemetry["thermal_interval_index"], 7);
+        assert_eq!(telemetry["checkpoint_digest"], "sha256:test");
     }
 
     #[test]
@@ -3209,6 +3242,9 @@ pub struct ExecutionProvenance {
     /// Native CUDA counters for FDM GPU step-transaction capture and rollback.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fdm_gpu_step_transaction_telemetry: Option<FdmGpuStepTransactionTelemetry>,
+    /// CPU reference counters for accepted/rejected FDM step transactions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fdm_cpu_step_transaction_telemetry: Option<FdmCpuStepTransactionTelemetry>,
     /// Native FEM receipt preserving requested, resolved, and actually executed
     /// GPU residency without inferring execution from the RK plan.
     #[serde(default, skip_serializing_if = "Option::is_none")]
