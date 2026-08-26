@@ -36,7 +36,12 @@ fn decide_adaptive_step(
     if error.is_infinite() {
         return AdaptiveDecision::NonFinite(crate::EngineErrorCode::InfiniteValue);
     }
-    if error > 1.0 && dt <= cfg.dt_min {
+    // Treat a representationally rounded value just above `dt_min` as the
+    // minimum-step boundary.  Otherwise a rejected attempt can schedule one
+    // redundant retry at the same clamped `dt_min`.
+    let at_dt_min = dt <= cfg.dt_min
+        || (dt - cfg.dt_min).abs() <= cfg.dt_min * (4.0 * f64::EPSILON);
+    if error > 1.0 && at_dt_min {
         return AdaptiveDecision::DtMinExhausted;
     }
     let accepted = error <= 1.0;
@@ -211,6 +216,17 @@ mod adaptive_decision_tests {
             panic!("finite rejection must retry");
         };
         assert!(next < dt);
+    }
+
+    #[test]
+    fn adaptive_controller_treats_one_ulp_above_dt_min_as_exhausted() {
+        let cfg = test_config();
+        let just_above_min = f64::from_bits(cfg.dt_min.to_bits() + 1);
+        assert!(just_above_min > cfg.dt_min);
+        assert_eq!(
+            decide_adaptive_step(4, just_above_min, 4.0, None, cfg),
+            AdaptiveDecision::DtMinExhausted
+        );
     }
 
     #[test]
