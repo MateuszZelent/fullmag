@@ -36,10 +36,10 @@ void make_exchange_context_ready(Context &ctx, fullmag_fem_integrator integrator
     ctx.gpu_state.device.lifecycle.node_count = 8;
     ctx.gpu_state.device.lifecycle.dof_len = 24;
     ctx.gpu_state.device.lifecycle.stage_count = gpu_rk_stage_count(integrator);
-    ctx.gpu_state.residency.source_of_truth =
+    ctx.gpu_state.device.residency.source_of_truth =
         FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH;
-    ctx.gpu_state.residency.host_state = FemGpuSyncState::HostClean;
-    ctx.gpu_state.residency.device_state = FemGpuSyncState::DeviceClean;
+    ctx.gpu_state.device.residency.host_state = FemGpuSyncState::HostClean;
+    ctx.gpu_state.device.residency.device_state = FemGpuSyncState::DeviceClean;
     ctx.gpu_state.legacy_exchange.legacy_sparse_metadata_ready = true;
     ctx.gpu_state.legacy_exchange.lumped_mass_ready = true;
     ctx.gpu_state.device.runtime_coefficients.uploaded = true;
