@@ -121,6 +121,15 @@ def test_windows_wsl_fem_gpu_launcher_is_container_backed_and_d_resident() -> No
     assert "run_fullmag.ps1" not in launcher
 
 
+def test_windows_wsl_build_script_uses_binary_safe_bash_payload() -> None:
+    launcher = WSL_LAUNCHER.read_text(encoding="utf-8")
+
+    assert '[System.Text.Encoding]::UTF8.GetBytes($buildCommand)' in launcher
+    assert '[Convert]::ToBase64String($buildCommandBytes)' in launcher
+    assert "base64 --decode | bash" in launcher
+    assert '.Replace("`r`n", "`n").Replace("`r", "`n")' in launcher
+
+
 def test_windows_wsl_launcher_uses_windows_powershell_relative_path_api() -> None:
     launcher = WSL_LAUNCHER.read_text(encoding="utf-8")
 
