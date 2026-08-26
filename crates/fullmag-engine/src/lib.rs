@@ -1364,6 +1364,33 @@ mod tests {
     }
 
     #[test]
+    fn soa_rhs_masks_frozen_spins_like_aos() {
+        let mut problem = zeeman_problem([0.0, 0.0, 1.0]);
+        let magnetization = vec![[1.0, 0.0, 0.0]; 2];
+        let mut state = problem
+            .new_state(magnetization.clone())
+            .expect("state should build");
+        problem
+            .capture_frozen_spins_at_activation(
+                &resolved_frozen_spins(vec![true, false]),
+                &mut state,
+            )
+            .expect("frozen-spin activation should succeed");
+
+        let h_eff = vec![[0.0, 0.0, 1.0]; 2];
+        let mut aos_rhs = vec![[0.0; 3]; 2];
+        problem.llg_rhs_from_fields_with_direct_torques_into(&magnetization, &h_eff, &mut aos_rhs);
+        let magnetization_soa = VectorFieldSoA::from_aos(&magnetization);
+        let h_eff_soa = VectorFieldSoA::from_aos(&h_eff);
+        let mut soa_rhs = VectorFieldSoA::zeros(2);
+        problem.llg_rhs_soa_into(&magnetization_soa, &h_eff_soa, &mut soa_rhs);
+
+        assert_eq!(aos_rhs, soa_rhs.gather_to_aos());
+        assert_eq!(aos_rhs[0], [0.0; 3]);
+        assert_ne!(aos_rhs[1], [0.0; 3]);
+    }
+
+    #[test]
     fn coupled_ars_masks_external_direct_torque_after_all_rhs_terms_and_reports_free_all() {
         let (problem, mut state) = frozen_coupled_problem();
         let initial_frozen = state.magnetization()[0];

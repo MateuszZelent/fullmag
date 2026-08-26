@@ -1,6 +1,6 @@
 //! Runtime ownership for the resolved FDM frozen-spin constraint.
 
-use crate::{EngineError, Result, Vector3};
+use crate::{EngineError, Result, Vector3, VectorFieldSoA};
 use fullmag_ir::ResolvedFrozenSpinsPlanIR;
 
 /// Dense reference-state constraint captured atomically at stage activation.
@@ -106,6 +106,17 @@ impl FrozenSpinsState {
         for (value, frozen) in rhs.iter_mut().zip(&self.frozen_mask) {
             if *frozen {
                 *value = [0.0; 3];
+            }
+        }
+    }
+
+    pub fn mask_final_rhs_soa(&self, rhs: &mut VectorFieldSoA) {
+        debug_assert_eq!(rhs.len(), self.frozen_mask.len());
+        for (index, frozen) in self.frozen_mask.iter().enumerate() {
+            if *frozen {
+                rhs.x[index] = 0.0;
+                rhs.y[index] = 0.0;
+                rhs.z[index] = 0.0;
             }
         }
     }

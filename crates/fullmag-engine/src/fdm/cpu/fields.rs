@@ -1969,6 +1969,9 @@ impl ExchangeLlgProblem {
             out.z[i] = rhs[2];
         }
         self.direct_torques_add_into_soa(magnetization, out);
+        if let Some(frozen) = &self.frozen_spins {
+            frozen.mask_final_rhs_soa(out);
+        }
     }
 
     pub(crate) fn llg_rhs_from_fields_with_direct_torques_into(
