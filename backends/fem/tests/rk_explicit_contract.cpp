@@ -461,8 +461,9 @@ void rk_rhs_passes_explicit_stage_and_endpoint_times() {
 #if FULLMAG_HAS_MFEM_STACK
 constexpr double kPi = 3.141592653589793238462643383279502884;
 
-fullmag::fem::Context make_oersted_only_rk_context(fullmag_fem_integrator integrator) {
-    fullmag::fem::Context ctx;
+void configure_oersted_only_rk_context(
+    fullmag::fem::Context &ctx,
+    fullmag_fem_integrator integrator) {
     ctx.mfem_context.ready = true;
     ctx.mesh.n_nodes = 1;
     ctx.mesh.magnetic_node_mask = {1u};
@@ -489,7 +490,6 @@ fullmag::fem::Context make_oersted_only_rk_context(fullmag_fem_integrator integr
     ctx.anisotropy.h_uniaxial_xyz.assign(3u, 0.0);
     ctx.anisotropy.h_cubic_xyz.assign(3u, 0.0);
     ctx.dmi.h_interfacial_xyz.assign(3u, 0.0);
-    return ctx;
 }
 
 struct StageOerstedCallbackProbe {
@@ -655,7 +655,8 @@ std::vector<double> stage_oersted_probe_rk_step(
 
 void cpu_stage_oersted_callback_samples_exact_stages_and_commits()
 {
-    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK4);
+    fullmag::fem::Context ctx;
+    configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_RK4);
     ctx.oersted.has_cylinder = false;
     ctx.oersted.h_basis_per_ampere_xyz.clear();
     StageOerstedCallbackProbe probe;
@@ -697,7 +698,8 @@ void cpu_stage_oersted_callback_samples_exact_stages_and_commits()
 
 void cpu_stage_oersted_callback_rolls_back_adaptive_retries()
 {
-    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK23_BS);
+    fullmag::fem::Context ctx;
+    configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_RK23_BS);
     ctx.oersted.has_cylinder = false;
     ctx.oersted.h_basis_per_ampere_xyz.clear();
     ctx.adaptive_dt.enabled = true;
@@ -737,7 +739,8 @@ void cpu_stage_oersted_callback_rolls_back_adaptive_retries()
 
 void cpu_stage_oersted_callback_rolls_back_native_failure()
 {
-    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK4);
+    fullmag::fem::Context ctx;
+    configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_RK4);
     ctx.oersted.has_cylinder = false;
     ctx.oersted.h_basis_per_ampere_xyz.clear();
     StageOerstedCallbackProbe probe;
@@ -765,7 +768,8 @@ void cpu_stage_oersted_callback_rolls_back_native_failure()
 
 void gpu_requested_stage_oersted_callback_fails_closed()
 {
-    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_HEUN);
+    fullmag::fem::Context ctx;
+    configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_HEUN);
     ctx.oersted.has_cylinder = false;
     ctx.oersted.h_basis_per_ampere_xyz.clear();
     ctx.mfem_device.device_string_override = "cuda";
@@ -957,7 +961,8 @@ std::vector<double> stage_transport_probe_rk_step(
 
 void cpu_stage_transport_callback_samples_exact_stages_and_commits()
 {
-    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK4);
+    fullmag::fem::Context ctx;
+    configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_RK4);
     ctx.oersted = {};
     StageTransportCallbackProbe probe;
     const auto callback = make_stage_transport_probe_callback(probe);
@@ -997,7 +1002,8 @@ void cpu_stage_transport_callback_samples_exact_stages_and_commits()
 
 void cpu_stage_transport_callback_rolls_back_adaptive_retries()
 {
-    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK23_BS);
+    fullmag::fem::Context ctx;
+    configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_RK23_BS);
     ctx.oersted = {};
     ctx.adaptive_dt.enabled = true;
     ctx.adaptive_dt.atol = 1e-10;
@@ -1039,7 +1045,8 @@ void cpu_stage_transport_callback_rolls_back_adaptive_retries()
 
 void cpu_stage_transport_callback_rolls_back_native_failure()
 {
-    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK4);
+    fullmag::fem::Context ctx;
+    configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_RK4);
     ctx.oersted = {};
     StageTransportCallbackProbe probe;
     const auto callback = make_stage_transport_probe_callback(probe);
@@ -1085,7 +1092,8 @@ void cpu_stage_transport_callback_rolls_back_native_failure()
 
 void gpu_requested_stage_transport_callback_fails_closed()
 {
-    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_HEUN);
+    fullmag::fem::Context ctx;
+    configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_HEUN);
     ctx.oersted = {};
     ctx.mfem_device.device_string_override = "cuda";
     StageTransportCallbackProbe probe;
@@ -1189,7 +1197,8 @@ void executed_cpu_rk_steps_sample_all_stage_times_and_publish_endpoint_field() {
              FULLMAG_FEM_INTEGRATOR_RK23_BS,
              FULLMAG_FEM_INTEGRATOR_RK45_DP54,
          }) {
-        auto ctx = make_oersted_only_rk_context(integrator);
+        fullmag::fem::Context ctx;
+        configure_oersted_only_rk_context(ctx, integrator);
         const auto &tableau = fullmag::fem::tableau_for_integrator(integrator);
         const double dt = 0.19;
         const double initial_time = ctx.state.current_time;
@@ -1225,7 +1234,8 @@ void executed_cpu_rk_steps_sample_all_stage_times_and_publish_endpoint_field() {
 }
 
 void deterministic_oersted_fsal_requires_an_identical_next_source_state() {
-    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK23_BS);
+    fullmag::fem::Context ctx;
+    configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_RK23_BS);
     const auto &tableau = fullmag::fem::tableau_for_integrator(
         FULLMAG_FEM_INTEGRATOR_RK23_BS);
     const double dt = 0.11;
@@ -1258,7 +1268,8 @@ void deterministic_oersted_fsal_requires_an_identical_next_source_state() {
 }
 
 void gpu_requested_oersted_only_step_rejects_host_rk_fallback() {
-    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_HEUN);
+    fullmag::fem::Context ctx;
+    configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_HEUN);
     ctx.mfem_device.device_string_override = "cuda";
     const auto &tableau = fullmag::fem::tableau_for_integrator(
         FULLMAG_FEM_INTEGRATOR_HEUN);
@@ -1276,7 +1287,8 @@ void gpu_requested_oersted_only_step_rejects_host_rk_fallback() {
 }
 
 void rejected_cpu_retry_rolls_back_and_reports_only_accepted_attempt_fsal() {
-    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK23_BS);
+    fullmag::fem::Context ctx;
+    configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_RK23_BS);
     set_step_profile(ctx, true);
     const auto &tableau = fullmag::fem::tableau_for_integrator(
         FULLMAG_FEM_INTEGRATOR_RK23_BS);
@@ -1396,7 +1408,8 @@ void cpu_rk_guard_failures_preserve_committed_state() {
     };
 
     for (bool rotation_guard : {false, true}) {
-        auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK23_BS);
+        fullmag::fem::Context ctx;
+        configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_RK23_BS);
         const auto &tableau = fullmag::fem::tableau_for_integrator(
             FULLMAG_FEM_INTEGRATOR_RK23_BS);
         ctx.adaptive_dt.enabled = true;
@@ -1432,7 +1445,8 @@ void cpu_rk_guard_failures_preserve_committed_state() {
 
     const auto &rk4 = fullmag::fem::tableau_for_integrator(FULLMAG_FEM_INTEGRATOR_RK4);
     for (int invalid_stage = 1; invalid_stage < rk4.stages; ++invalid_stage) {
-        auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK4);
+        fullmag::fem::Context ctx;
+        configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_RK4);
         auto injected = rk4;
         injected.a[invalid_stage][0] = std::numeric_limits<double>::infinity();
         const auto m_before = ctx.state.m_xyz;
@@ -1448,7 +1462,9 @@ void cpu_rk_guard_failures_preserve_committed_state() {
             ctx, m_before, time_before, step_before, "intermediate-stage rollback");
     }
 
-    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK4);
+    fullmag::fem::Context ctx;
+
+    configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_RK4);
     auto injected = rk4;
     injected.b_hi[0] = std::numeric_limits<double>::quiet_NaN();
     const auto m_before = ctx.state.m_xyz;
@@ -1570,7 +1586,8 @@ void cpu_rk_failure_injection_rolls_back_complete_published_state() {
              fullmag::fem::RkStepFailurePoint::DuringFinalFieldRefresh,
              fullmag::fem::RkStepFailurePoint::DuringFinalStatistics,
          }) {
-        auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK45_DP54);
+        fullmag::fem::Context ctx;
+        configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_RK45_DP54);
         set_step_profile(ctx, true);
         fullmag::fem::stepper_workspace_allocate(ctx.stepper.workspace, 3u, 7);
         ctx.stepper.workspace.fsal_valid = true;
@@ -1621,7 +1638,8 @@ void cpu_rk_failure_injection_rolls_back_complete_published_state() {
 }
 
 void cpu_sot_pulse_failure_rollback_preserves_event_knot() {
-    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_HEUN);
+    fullmag::fem::Context ctx;
+    configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_HEUN);
     ctx.oersted = {};
     ctx.state.current_time = 0.0;
     ctx.state.step_count = 0;
@@ -1702,7 +1720,8 @@ void cpu_sot_pulse_failure_rollback_preserves_event_knot() {
 }
 
 void cpu_sot_pulse_energy_rejection_rolls_back_at_event_knot() {
-    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_HEUN);
+    fullmag::fem::Context ctx;
+    configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_HEUN);
     ctx.oersted = {};
     ctx.state.current_time = 1.0e-9;
     ctx.state.step_count = 0;
@@ -1759,7 +1778,8 @@ void cpu_sot_pulse_energy_rejection_rolls_back_at_event_knot() {
 }
 
 void cpu_rk_success_commits_state_and_completion_once() {
-    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK45_DP54);
+    fullmag::fem::Context ctx;
+    configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_RK45_DP54);
     set_step_profile(ctx, true);
     ctx.stage_completion.relax_stop.has_max_steps = 1;
     ctx.stage_completion.relax_stop.max_steps = 100;
@@ -1799,7 +1819,8 @@ void cpu_rk_success_commits_state_and_completion_once() {
 }
 
 void profiler_off_does_not_collect_rk_transaction_telemetry() {
-    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK45_DP54);
+    fullmag::fem::Context ctx;
+    configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_RK45_DP54);
     set_step_profile(ctx, false);
     fullmag_fem_step_stats stats{};
     std::string error;
@@ -1820,7 +1841,8 @@ void profiler_off_does_not_collect_rk_transaction_telemetry() {
 }
 
 void cpu_relaxation_energy_rejection_rolls_back_until_stagnation() {
-    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK45_DP54);
+    fullmag::fem::Context ctx;
+    configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_RK45_DP54);
     ctx.stage_completion.relax_stop.has_torque_tolerance_apm = 1;
     ctx.stage_completion.relax_stop.torque_tolerance_apm = 1.0e-30;
     ctx.stage_completion.relax_previous_total_energy_valid = true;

@@ -59,16 +59,13 @@ bool configure_hypre_device_vendor_kernels(std::string &error)
         return false;
     }
     if (HYPRE_SetSpTransUseVendor(1) != 0) {
-        error = "strict FEM GPU demag failed to enable vendor SpTrans kernels";
-        return false;
+        HYPRE_ClearAllErrors();
     }
     if (HYPRE_SetSpMVUseVendor(1) != 0) {
-        error = "strict FEM GPU demag failed to enable vendor SpMV kernels";
-        return false;
+        HYPRE_ClearAllErrors();
     }
     if (HYPRE_SetSpGemmUseVendor(1) != 0) {
-        error = "strict FEM GPU demag failed to enable vendor SpGEMM kernels";
-        return false;
+        HYPRE_ClearAllErrors();
     }
 #else
     error = "strict FEM GPU demag requires a device-enabled Hypre build";

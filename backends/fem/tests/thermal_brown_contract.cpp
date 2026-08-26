@@ -322,8 +322,7 @@ void sigma_formula_matches_brown_field_contract() {
         "zero dt sigma");
 }
 
-fullmag::fem::Context make_thermal_context() {
-    fullmag::fem::Context ctx;
+void configure_thermal_context(fullmag::fem::Context &ctx) {
     ctx.mesh.n_nodes = 2;
     ctx.thermal_brown.temperature = 300.0;
     ctx.adaptive_dt.current_dt = 2.0e-12;
@@ -336,11 +335,11 @@ fullmag::fem::Context make_thermal_context() {
     ctx.material_fields.alpha_field = {0.1, 0.2};
     ctx.material_fields.Ms_field = {800e3, 400e3};
     ctx.mesh.magnetic_node_mask = {1u, 0u};
-    return ctx;
 }
 
 void refresh_uses_per_node_sigma_mask_and_cache() {
-    auto ctx = make_thermal_context();
+    fullmag::fem::Context ctx;
+    configure_thermal_context(ctx);
 
     fullmag::fem::initialize_thermal_brown_field(ctx);
     check(ctx.thermal_brown.h_xyz.size() == 6u, "thermal field buffer size");
@@ -372,8 +371,10 @@ void refresh_uses_per_node_sigma_mask_and_cache() {
 }
 
 void seeded_replay_is_deterministic_for_same_time_and_dt() {
-    auto first = make_thermal_context();
-    auto replay = make_thermal_context();
+    fullmag::fem::Context first;
+    configure_thermal_context(first);
+    fullmag::fem::Context replay;
+    configure_thermal_context(replay);
 
     fullmag::fem::refresh_thermal_brown_field(first);
     fullmag::fem::refresh_thermal_brown_field(replay);
@@ -389,7 +390,8 @@ void seeded_replay_is_deterministic_for_same_time_and_dt() {
 }
 
 void retry_reuses_raw_normal_and_rescales_thermal_field() {
-    auto ctx = make_thermal_context();
+    fullmag::fem::Context ctx;
+    configure_thermal_context(ctx);
 
     fullmag::fem::refresh_thermal_brown_field(ctx);
     const auto first_refresh = ctx.thermal_brown.h_xyz;
@@ -423,7 +425,8 @@ void retry_reuses_raw_normal_and_rescales_thermal_field() {
 }
 
 std::vector<double> collect_thermal_samples(double dt, int sample_count) {
-    auto ctx = make_thermal_context();
+    fullmag::fem::Context ctx;
+    configure_thermal_context(ctx);
     ctx.mesh.n_nodes = 1;
     ctx.mesh.node_volumes = {1.0e-27};
     ctx.mesh.magnetic_node_mask = {1u};

@@ -24,7 +24,11 @@ inline std::string read_text_file(const std::filesystem::path &path) {
     }
     std::ostringstream buffer;
     buffer << in.rdbuf();
-    return buffer.str();
+    std::string text = buffer.str();
+    for (std::size_t offset = 0; (offset = text.find("\r\n", offset)) != std::string::npos;) {
+        text.erase(offset, 1);
+    }
+    return text;
 }
 
 inline std::filesystem::path fem_source_root() {

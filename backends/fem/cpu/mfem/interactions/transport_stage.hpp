@@ -10,6 +10,12 @@ namespace fullmag::fem {
 
 struct Context;
 
+/*
+ * Reciprocal transport-stage interaction owner. This module owns callback
+ * materialization and attempt bookkeeping. It does not own the charge/spin
+ * transport solve, effective-field composition, or RK transaction lifecycle.
+ */
+
 /* Runtime owner for the public reciprocal transport torque callback.  The
  * callback returns a direct LLG RHS contribution in 1/s for every magnetic
  * node at the exact RK stage; attempt hooks are kept here so reject/commit
