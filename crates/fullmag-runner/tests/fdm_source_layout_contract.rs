@@ -326,4 +326,9 @@ fn fdm_gpu_adaptive_error_kernels_exclude_inactive_and_frozen_cells() {
         reductions.contains("non_finite_adaptive_error"),
         "host adaptive policy must publish a non-finite error reason"
     );
+    assert!(
+        reductions.contains("ADAPTIVE_DT_MIN_ULP_FACTOR")
+            && reductions.contains("fabs(dt - adaptive_dt_min)"),
+        "device adaptive policy must share the rounded dt_min exhaustion boundary"
+    );
 }

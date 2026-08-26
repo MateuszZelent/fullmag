@@ -118,6 +118,10 @@ void adaptive_error_reductions_stay_device_side() {
     check(
         reductions.find("non_finite_adaptive_error") != std::string::npos,
         "host adaptive reduction must publish a typed non-finite error reason");
+    check(
+        reductions.find("ADAPTIVE_DT_MIN_ULP_FACTOR") != std::string::npos &&
+            reductions.find("fabs(dt - adaptive_dt_min)") != std::string::npos,
+        "device adaptive policy must share the rounded dt_min exhaustion boundary");
 }
 
 void adaptive_error_scalar_reduction_uses_compute_stream() {

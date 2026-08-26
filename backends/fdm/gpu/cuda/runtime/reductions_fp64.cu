@@ -25,6 +25,7 @@ extern void set_cuda_error(Context &ctx, const char *operation, cudaError_t err)
 
 static constexpr double MU0 = 4.0 * M_PI * 1e-7;
 static constexpr int REDUCTION_BLOCK_SIZE = 256;
+static constexpr double ADAPTIVE_DT_MIN_ULP_FACTOR = 4.0 * 2.2204460492503130808e-16;
 
 template <typename T>
 __device__ __forceinline__ double to_f64(T value) {
@@ -127,9 +128,11 @@ __global__ void adaptive_error_policy_kernel(
     } else {
         dt_candidate = adaptive_dt_max;
     }
+    const bool at_dt_min = dt <= adaptive_dt_min ||
+        fabs(dt - adaptive_dt_min) <= adaptive_dt_min * ADAPTIVE_DT_MIN_ULP_FACTOR;
     // A failed attempt at the lower bound is terminal: dt_min_exhausted.
     double accepted = isfinite(error) && error <= adaptive_threshold ? 1.0
-        : (dt <= adaptive_dt_min ? -1.0 : 0.0);
+        : (at_dt_min ? -1.0 : 0.0);
     policy_out[0] = error;
     policy_out[1] = dt_candidate;
     policy_out[2] = accepted;
