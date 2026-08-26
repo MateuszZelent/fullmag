@@ -54,6 +54,35 @@ pub enum IntegratorChoice {
     Abm3,
 }
 
+/// FDM projected-RK state constraint policy.
+///
+/// The policy is carried in the resolved plan so that the CPU/GPU realizations
+/// cannot silently disagree about whether intermediate RK states are
+/// normalized.  `unit_sphere` is currently the only qualified realization.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FdmProjectionPolicyIR {
+    #[default]
+    UnitSphere,
+}
+
+impl FdmProjectionPolicyIR {
+    pub const UNIT_SPHERE_REALIZATION_VERSION: &'static str =
+        "fullmag.fdm.rk_projection.unit_sphere.v1";
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::UnitSphere => "unit_sphere",
+        }
+    }
+
+    pub const fn realization_version(self) -> &'static str {
+        match self {
+            Self::UnitSphere => Self::UNIT_SPHERE_REALIZATION_VERSION,
+        }
+    }
+}
+
 // ── Relaxation algorithm ──────────────────────────────────────────────────────
 
 /// Algorithm selection for relaxation (energy-minimization) studies.

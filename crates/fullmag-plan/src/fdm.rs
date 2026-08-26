@@ -2497,6 +2497,13 @@ pub(crate) fn plan_fdm(
     let relaxation = controls.relaxation;
     let adaptive_timestep = controls.adaptive_timestep;
     let field_refresh = controls.field_refresh;
+    let projection_policy = problem
+        .backend_policy
+        .discretization_hints
+        .as_ref()
+        .and_then(|hints| hints.fdm.as_ref())
+        .and_then(|hints| hints.projection_policy)
+        .unwrap_or_default();
     if adaptive_timestep.is_some()
         && (has_thermal_noise || thermal_temperature.unwrap_or(0.0) > 0.0)
     {
@@ -2856,6 +2863,7 @@ pub(crate) fn plan_fdm(
         periodicity: problem.pbc.clone(),
         resolved_periodic_images,
         integrator,
+        projection_policy: Some(projection_policy),
         fixed_timestep,
         adaptive_timestep,
         field_refresh,

@@ -190,6 +190,9 @@ class FemLinearSolverPolicy:
 # ---------------------------------------------------------------------------
 # FDM discretization hints (top-level)
 # ---------------------------------------------------------------------------
+_FDM_PROJECTION_POLICIES = ("unit_sphere",)
+
+
 @dataclass(frozen=True, slots=True)
 class FDM:
     """FDM discretization hints with per-magnet native grid support.
@@ -216,6 +219,7 @@ class FDM:
     default_cell: tuple[float, float, float] | None = None
     per_magnet: dict[str, FDMGrid] | None = None
     demag: FDMDemag | None = None
+    projection_policy: str | None = None  # projected-RK state constraint; None = qualified default
     boundary_correction: str | None = None  # "none" | "volume" (T0) | "full" (T1)
     boundary_phi_floor: float | None = None  # min volume fraction for stability (default 0.05)
     boundary_delta_min: float | None = None  # min δ for T1 ECB stencil stability [m] (default 0.1*min(dx,dy,dz))
@@ -228,6 +232,7 @@ class FDM:
         default_cell: Sequence[float] | None = None,
         per_magnet: dict[str, FDMGrid] | None = None,
         demag: FDMDemag | None = None,
+        projection_policy: str | None = None,
         boundary_correction: str | None = None,
         boundary_phi_floor: float | None = None,
         boundary_delta_min: float | None = None,
@@ -253,6 +258,13 @@ class FDM:
                     raise TypeError("per_magnet values must be FDMGrid instances")
         object.__setattr__(self, "per_magnet", per_magnet)
         object.__setattr__(self, "demag", demag)
+
+        if projection_policy is not None and projection_policy not in _FDM_PROJECTION_POLICIES:
+            raise ValueError(
+                f"projection_policy must be one of {_FDM_PROJECTION_POLICIES!r}, "
+                f"got {projection_policy!r}"
+            )
+        object.__setattr__(self, "projection_policy", projection_policy)
 
         # Validate boundary correction
         _BOUNDARY_CORRECTIONS = ("none", "volume", "full")
@@ -309,6 +321,8 @@ class FDM:
             ir["boundary_phi_floor"] = self.boundary_phi_floor
         if self.boundary_delta_min is not None:
             ir["boundary_delta_min"] = self.boundary_delta_min
+        if self.projection_policy is not None:
+            ir["projection_policy"] = self.projection_policy
         return ir
 
 

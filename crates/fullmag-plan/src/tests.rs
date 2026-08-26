@@ -4292,6 +4292,7 @@ fn fem_shared_domain_ir_for_magnetoelastic() -> ProblemIR {
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
             order: 1,
@@ -4553,6 +4554,7 @@ fn fem_backend_with_mesh_asset_plans_successfully() {
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
             order: 1,
@@ -4642,6 +4644,7 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
             order: 1,
@@ -5002,6 +5005,7 @@ fn fem_backend_interfacial_dmi_defaults_interface_normal_to_z_in_strict_mode() {
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
             order: 1,
@@ -5075,6 +5079,7 @@ fn fem_plan_serializes_mesh_parts() {
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
             order: 1,
@@ -5246,6 +5251,7 @@ fn fem_backend_with_air_elements_lowers_study_universe_to_air_box_config() {
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
             order: 1,
@@ -5359,6 +5365,7 @@ fn fem_backend_with_air_elements_accepts_marker_99_in_strict_mode() {
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
             order: 1,
@@ -5468,6 +5475,7 @@ fn fem_backend_with_air_elements_rejects_unknown_boundary_marker_in_strict_mode(
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
             order: 1,
@@ -5528,6 +5536,7 @@ fn fem_backend_without_air_elements_rejects_missing_shared_airbox_mesh() {
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
             order: 1,
@@ -5598,6 +5607,7 @@ fn fem_backend_fredkin_koehler_demag_plans_on_body_only_mesh_without_airbox() {
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
             order: 1,
@@ -5690,6 +5700,7 @@ fn fem_backend_rejects_requested_shared_domain_without_air_elements() {
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
             order: 1,
@@ -5764,6 +5775,7 @@ fn fem_backend_populates_domain_frame_and_domain_mesh_mode() {
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
             order: 1,
@@ -5860,6 +5872,7 @@ fn fem_backend_prefers_domain_frame_declared_universe_over_legacy_study_universe
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
             order: 1,
@@ -5944,6 +5957,7 @@ fn fem_backend_with_mesh_source_json_plans_successfully() {
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
             order: 1,
@@ -5989,6 +6003,7 @@ fn fem_backend_multibody_merges_disjoint_mesh_assets() {
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
             order: 1,
@@ -7737,6 +7752,7 @@ fn single_precision_is_rejected_for_phase_one_cpu_execution() {
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
             order: 1,
@@ -7808,6 +7824,7 @@ fn single_precision_is_rejected_with_gpu_specific_reason_when_cuda_device_reques
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
             order: 1,
@@ -7945,6 +7962,7 @@ fn multilayer_single_precision_is_rejected_without_cuda_device_request() {
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: None,
         hybrid: None,
@@ -8036,6 +8054,7 @@ fn multilayer_single_precision_is_accepted_when_cuda_device_requested() {
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: None,
         hybrid: None,
@@ -8127,6 +8146,7 @@ fn stacked_two_body_multilayer_problem() -> ProblemIR {
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: None,
         hybrid: None,
@@ -10123,6 +10143,7 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
             order: 1,
@@ -10872,6 +10893,7 @@ fn fem_eigen_backend_interfacial_dmi_defaults_interface_normal_to_z_in_strict_mo
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
             order: 1,
@@ -10961,6 +10983,7 @@ fn fem_eigen_auto_demag_resolves_to_poisson_robin_on_shared_domain_mesh_with_air
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
             order: 1,
@@ -12750,6 +12773,7 @@ fn fem_plan_fails_when_shared_domain_requested_but_no_domain_mesh_asset() {
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
             order: 1,
@@ -12836,6 +12860,7 @@ fn fem_plan_succeeds_when_shared_domain_has_domain_mesh_asset() {
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: Some(fullmag_ir::FemHintsIR {
             order: 1,
@@ -13259,6 +13284,7 @@ fn fdm_boundary_params_passthrough_phi_floor_and_delta_min() {
             boundary_correction: Some("full".to_string()),
             boundary_phi_floor: Some(0.1),
             boundary_delta_min: Some(0.5e-9),
+            projection_policy: None,
         }),
         fem: None,
         hybrid: None,
@@ -13291,6 +13317,27 @@ fn fdm_boundary_params_passthrough_phi_floor_and_delta_min() {
 }
 
 #[test]
+fn fdm_projected_rk_policy_is_resolved_into_backend_plan() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let fdm = ir
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("bootstrap example must provide FDM hints");
+    fdm.projection_policy = Some(fullmag_ir::FdmProjectionPolicyIR::UnitSphere);
+
+    let planned = plan(&ir).expect("explicit projected-RK policy should be plannable");
+    let BackendPlanIR::Fdm(fdm_plan) = planned.backend_plan else {
+        panic!("bootstrap example should resolve to an FDM plan");
+    };
+    assert_eq!(
+        fdm_plan.projection_policy,
+        Some(fullmag_ir::FdmProjectionPolicyIR::UnitSphere)
+    );
+}
+
+#[test]
 fn fdm_boundary_correction_rejects_geometry_without_supported_sdf() {
     for tier in ["volume", "full"] {
         let mut ir = ProblemIR::bootstrap_example();
@@ -13308,6 +13355,7 @@ fn fdm_boundary_correction_rejects_geometry_without_supported_sdf() {
                 boundary_correction: Some(tier.to_string()),
                 boundary_phi_floor: None,
                 boundary_delta_min: None,
+                projection_policy: None,
             }),
             fem: None,
             hybrid: None,
@@ -13358,6 +13406,7 @@ fn fdm_translated_difference_keeps_boundary_sdf_realization() {
             boundary_correction: Some("full".to_string()),
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: None,
         hybrid: None,
@@ -13396,6 +13445,7 @@ fn fdm_translated_base_boundary_sdf_matches_active_mask_coordinates() {
             boundary_correction: Some("full".to_string()),
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: None,
         hybrid: None,
@@ -13682,6 +13732,7 @@ fn fdm_cuda_fp32_subcell_boundary_is_capability_gated_until_field_energy_parity(
             boundary_correction: Some("full".to_string()),
             boundary_phi_floor: None,
             boundary_delta_min: None,
+            projection_policy: None,
         }),
         fem: None,
         hybrid: None,
@@ -16897,6 +16948,7 @@ fn fdm_per_magnet_cells_resolve_without_hidden_fallback() {
         boundary_correction: None,
         boundary_phi_floor: None,
         boundary_delta_min: None,
+        projection_policy: None,
     };
 
     assert_eq!(cell_for_magnet(&hints, "left").unwrap(), [1e-9, 2e-9, 3e-9]);

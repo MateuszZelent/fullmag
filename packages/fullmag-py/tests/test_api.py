@@ -3979,6 +3979,15 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(payload["per_magnet"]["left"]["cell"], [1e-9, 2e-9, 3e-9])
         self.assertEqual(payload["per_magnet"]["right"]["cell"], [2e-9, 2e-9, 3e-9])
 
+    def test_fdm_projection_policy_is_explicit_and_validated(self) -> None:
+        hints = fm.FDM(
+            cell=(2e-9, 2e-9, 2e-9),
+            projection_policy="unit_sphere",
+        )
+        self.assertEqual(hints.to_ir()["projection_policy"], "unit_sphere")
+        with self.assertRaisesRegex(ValueError, "projection_policy must be one of"):
+            fm.FDM(cell=(2e-9, 2e-9, 2e-9), projection_policy="legacy")
+
     def test_script_export_preserves_per_magnet_fdm_grids(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             script_path = Path(tmp_dir) / "per_magnet_export.py"
@@ -4001,6 +4010,7 @@ class ProblemApiTests(unittest.TestCase):
                         ),
                         boundary_phi_floor=0.1,
                         boundary_delta_min=0.2e-9,
+                        projection_policy="unit_sphere",
                     )
                     left = fm.geometry(fm.Box(size=(10e-9, 10e-9, 3e-9), name="left"), name="left")
                     right = fm.geometry(fm.Box(size=(10e-9, 10e-9, 3e-9), name="right"), name="right")
@@ -4016,6 +4026,7 @@ class ProblemApiTests(unittest.TestCase):
             rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
             self.assertIn('fm.fdm(per_magnet={"left": fm.FDMGrid', rewritten)
             self.assertIn('demag=fm.FDMDemag(strategy="multilayer_convolution"', rewritten)
+            self.assertIn('projection_policy="unit_sphere"', rewritten)
 
             rewritten_path = Path(tmp_dir) / "per_magnet_export_rewritten.py"
             rewritten_path.write_text(rewritten, encoding="utf-8")
@@ -4031,6 +4042,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertFalse(fdm.demag.explain)
         self.assertEqual(fdm.boundary_phi_floor, 0.1)
         self.assertEqual(fdm.boundary_delta_min, 0.2e-9)
+        self.assertEqual(fdm.projection_policy, "unit_sphere")
 
     def test_fdm_demag_rejects_removed_single_grid_fallback_switch(self) -> None:
         with self.assertRaisesRegex(ValueError, "allow_single_grid_fallback.*removed"):

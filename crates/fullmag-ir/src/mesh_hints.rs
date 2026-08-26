@@ -1,8 +1,8 @@
 #[allow(unused_imports)]
 use crate::{
     ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR, FdmPeriodicityIR,
-    FemLinearSolverPolicy, FieldRefreshPolicyIR, HybridHintsIR, IntegratorChoice,
-    RelaxationControlIR,
+    FdmProjectionPolicyIR, FemLinearSolverPolicy, FieldRefreshPolicyIR, HybridHintsIR,
+    IntegratorChoice, RelaxationControlIR,
 };
 use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -40,6 +40,10 @@ pub struct FdmHintsIR {
     /// Backend default: 0.1 × min(dx, dy, dz).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boundary_delta_min: Option<f64>,
+    /// Projected-RK state constraint used by the FDM time integrator.
+    /// `None` preserves the historical default and resolves to `unit_sphere`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection_policy: Option<FdmProjectionPolicyIR>,
 }
 
 fn is_zero_cell(cell: &[f64; 3]) -> bool {

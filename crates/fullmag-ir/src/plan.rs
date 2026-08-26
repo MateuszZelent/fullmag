@@ -3,7 +3,8 @@ use crate::{
     AdaptiveTimeStepIR, AntennaSpatialProfileIR, BackendTarget, CurrentModuleIR, DomainFrameIR,
     EigenDampingPolicyIR, EigenNormalizationIR, EigenOperatorConfigIR, EigenTargetIR,
     EquilibriumSourceIR, ExchangeBoundaryCondition, ExecutionMode, ExecutionPrecision,
-    FdmDemagPeriodicityIR, FdmMultilayerPlanIR, FdmPeriodicityIR, FemDomainMeshAssetIR,
+    FdmDemagPeriodicityIR, FdmMultilayerPlanIR, FdmPeriodicityIR, FdmProjectionPolicyIR,
+    FemDomainMeshAssetIR,
     FemLinearSolverPolicy, FemSharedDomainBuildReportIR, FieldRefreshPolicyIR,
     FrequencyExcitationIR, FrequencyResponseNormalizationIR, FrequencySweepIR, GeometryEntryIR,
     IntegratorChoice, KSamplingIR, MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR,
@@ -718,6 +719,10 @@ pub struct FdmPlanIR {
     pub resolved_periodic_images: Option<ResolvedPeriodicImagesIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub integrator: Option<IntegratorChoice>,
+    /// Resolved projected-RK state constraint.  Legacy plans with no field
+    /// resolve to the qualified `unit_sphere` policy in the runner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection_policy: Option<FdmProjectionPolicyIR>,
     pub fixed_timestep: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adaptive_timestep: Option<AdaptiveTimeStepIR>,
@@ -2070,6 +2075,25 @@ mod tests {
         let decoded: FdmPlanIR =
             serde_json::from_value(encoded).expect("legacy FDM plan deserializes");
         assert!(decoded.fdm_gpu_charge_transports.is_empty());
+    }
+
+    #[test]
+    fn fdm_projection_policy_round_trips_with_stable_realization_identity() {
+        let mut plan = FdmPlanIR::default();
+        plan.projection_policy = Some(crate::FdmProjectionPolicyIR::UnitSphere);
+        let encoded = serde_json::to_value(&plan).expect("FDM plan serializes");
+        assert_eq!(encoded["projection_policy"], "unit_sphere");
+
+        let decoded: FdmPlanIR =
+            serde_json::from_value(encoded).expect("FDM plan deserializes");
+        let policy = decoded
+            .projection_policy
+            .expect("projection policy must survive round-trip");
+        assert_eq!(policy.as_str(), "unit_sphere");
+        assert_eq!(
+            policy.realization_version(),
+            crate::FdmProjectionPolicyIR::UNIT_SPHERE_REALIZATION_VERSION
+        );
     }
 
     #[test]
