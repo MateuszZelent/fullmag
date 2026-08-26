@@ -17,6 +17,7 @@
 #include <cuda_runtime.h>
 #include <cmath>
 #include <limits>
+#include <math_constants.h>
 
 namespace fullmag {
 namespace fdm {
