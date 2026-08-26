@@ -891,6 +891,41 @@ mod adaptive_decision_tests {
     }
 
     #[test]
+    fn rk45_soa_buffer_reuses_aos_fsal_storage_after_warmup() {
+        let problem = adaptive_test_problem(crate::TimeIntegrator::RK45);
+        let mut state = problem.uniform_state([1.0, 0.0, 0.0]).expect("SoA-buffer state");
+        let mut ws = problem.create_workspace();
+        let mut bufs = problem.create_integrator_buffers();
+
+        problem
+            .rk45_step_soa_buf(
+                &mut state,
+                1.0e-6,
+                &mut ws,
+                &mut bufs,
+                crate::EvaluationRequest::Minimal,
+            )
+            .expect("first buffer-SoA RK45 step");
+        let (fsal_ptr, fsal_capacity) = {
+            let fsal = state.k_fsal.as_ref().expect("FSAL cache after first step");
+            (fsal.as_ptr(), fsal.capacity())
+        };
+
+        problem
+            .rk45_step_soa_buf(
+                &mut state,
+                1.0e-6,
+                &mut ws,
+                &mut bufs,
+                crate::EvaluationRequest::Minimal,
+            )
+            .expect("second buffer-SoA RK45 step");
+        let fsal = state.k_fsal.as_ref().expect("FSAL cache after second step");
+        assert_eq!(fsal.as_ptr(), fsal_ptr);
+        assert_eq!(fsal.capacity(), fsal_capacity);
+    }
+
+    #[test]
     fn cpu_controller_matches_task6_golden_vectors_and_zero_error_growth_limit() {
         let cfg = crate::AdaptiveStepConfig {
             max_error: 1.0,
@@ -2770,7 +2805,9 @@ impl ExchangeLlgProblem {
                 } else if let Some(fsal) = &mut state.k_fsal {
                     bufs.soa.k[6].gather_into_aos(fsal);
                 } else {
-                    state.k_fsal = Some(bufs.soa.k[6].gather_to_aos());
+                    let mut fsal = vec![[0.0; 3]; n];
+                    bufs.soa.k[6].gather_into_aos(&mut fsal);
+                    state.k_fsal = Some(fsal);
                 }
                 let eval = self.compute_step_observables_at_time(
                     &state.magnetization,
