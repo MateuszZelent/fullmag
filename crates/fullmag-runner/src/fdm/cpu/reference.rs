@@ -1520,7 +1520,10 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     resolved_per_node_external_field(plan, state.time_seconds);
             }
             let wall_start = Instant::now();
-            let previous_magnetization = state.magnetization().to_vec();
+            let previous_magnetization = spin_transport
+                .as_ref()
+                .filter(|workflow| workflow.has_transient())
+                .map(|_| state.magnetization().to_vec());
             let mut report = if let Some(workflow) = spin_transport.as_mut() {
                 let transient = workflow.has_transient();
                 if transient {
@@ -1752,7 +1755,9 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     workflow
                         .coupled_checkpoint(
                             state.magnetization(),
-                            &previous_magnetization,
+                            previous_magnetization
+                                .as_deref()
+                                .expect("transient checkpoint must retain pre-step magnetization"),
                             report.dt_used,
                             problem.thermal_seed,
                             problem.thermal_step(),
@@ -4691,13 +4696,12 @@ mod tests {
         for field in update.cached_preview_fields.as_ref().unwrap() {
             assert_eq!(field.preview_grid, plan.grid.cells);
             assert_eq!(field.original_grid, plan.grid.cells);
-            let expected_components = if field.quantity.starts_with("eden_")
-                || field.quantity.starts_with("mat_")
-            {
-                1
-            } else {
-                3
-            };
+            let expected_components =
+                if field.quantity.starts_with("eden_") || field.quantity.starts_with("mat_") {
+                    1
+                } else {
+                    3
+                };
             assert_eq!(
                 field.vector_field_values.len(),
                 plan.initial_magnetization.len() * expected_components,
