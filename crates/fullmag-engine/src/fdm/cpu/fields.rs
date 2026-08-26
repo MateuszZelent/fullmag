@@ -2130,6 +2130,7 @@ impl ExchangeLlgProblem {
         let n = magnetization.len();
         let ext = self.terms.external_field;
         let per_node_field = self.terms.per_node_field.as_ref();
+        let static_field = self.static_external_field.as_ref();
         let ms_safe = self.material.saturation_magnetisation.max(1e-30);
 
         let uni_data = self.terms.uniaxial_anisotropy.as_ref().map(|uni| {
@@ -2189,6 +2190,11 @@ impl ExchangeLlgProblem {
                 h[2] += ext[2];
             }
             if let Some(value) = per_node_field.and_then(|field| field.get(i)) {
+                h[0] += value[0];
+                h[1] += value[1];
+                h[2] += value[2];
+            }
+            if let Some(value) = static_field.and_then(|field| field.get(i)) {
                 h[0] += value[0];
                 h[1] += value[1];
                 h[2] += value[2];
@@ -4776,5 +4782,47 @@ mod stt_tests {
         let observable_energy =
             problem.demag_energy_from_fields(state.magnetization(), &observable_field);
         assert_eq!(observable_energy, masked_energy);
+    }
+
+    #[test]
+    fn fused_aos_and_soa_include_static_external_field_map() {
+        let problem = ExchangeLlgProblem::with_terms(
+            GridShape::new(2, 1, 1).unwrap(),
+            CellSize::new(1.0e-9, 1.0e-9, 1.0e-9).unwrap(),
+            MaterialParameters::new(800.0e3, 13.0e-12, 0.1).unwrap(),
+            LlgConfig::default(),
+            EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                ..Default::default()
+            },
+        )
+        .with_static_external_field(Some(vec![
+            [0.0, 1.0, 2.0],
+            [3.0, 4.0, 5.0],
+        ]))
+        .unwrap();
+        let magnetization = vec![[1.0, 0.0, 0.0]; 2];
+
+        let mut aos_field = vec![[0.0; 3]; 2];
+        let mut aos_workspace = problem.create_workspace();
+        problem.effective_field_into_ws_at_time(
+            &magnetization,
+            &mut aos_workspace,
+            &mut aos_field,
+            0.0,
+        );
+
+        let soa_magnetization = VectorFieldSoA::from_aos(&magnetization);
+        let mut soa_field = VectorFieldSoA::zeros(2);
+        let mut soa_workspace = problem.create_workspace();
+        problem.effective_field_into_soa_ws_at(
+            &soa_magnetization,
+            0.0,
+            &mut soa_workspace,
+            &mut soa_field,
+        );
+
+        assert_eq!(aos_field, soa_field.gather_to_aos());
     }
 }
