@@ -2142,6 +2142,15 @@ int fullmag_fem_backend_get_gpu_rk_plan_info(
     fullmag_fem_gpu_rk_plan_info *out_info
 );
 
+/*
+ * Validate the complete native GPU RK operator plan before a stage starts.
+ * This is intentionally separate from the descriptive plan-info query: strict
+ * callers need the same mask-level validation used by the CUDA step preflight.
+ */
+int fullmag_fem_backend_validate_strict_gpu_rk_plan(
+    fullmag_fem_backend *handle
+);
+
 int fullmag_fem_backend_gpu_execution_receipt_v1(
     fullmag_fem_backend *handle,
     fullmag_fem_gpu_execution_receipt_v1 *out_receipt

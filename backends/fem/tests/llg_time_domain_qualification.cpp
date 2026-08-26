@@ -181,6 +181,9 @@ void require_requested_execution_lane(fullmag_fem_backend *backend)
     require(
         rk_plan.uses_cuda_kernels != 0,
         std::string("GPU qualification does not use CUDA RK kernels: ") + rk_plan.reason);
+    require(
+        fullmag_fem_backend_validate_strict_gpu_rk_plan(backend) == FULLMAG_FEM_OK,
+        std::string("strict GPU RK operator-plan preflight failed: ") + last_error(backend));
 }
 
 void require_gpu_device_source_of_truth(fullmag_fem_backend *backend, const char *phase)

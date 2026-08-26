@@ -2251,6 +2251,10 @@ extern "C" {
         out_info: *mut fullmag_fem_gpu_rk_plan_info,
     ) -> i32;
 
+    pub fn fullmag_fem_backend_validate_strict_gpu_rk_plan(
+        handle: *mut fullmag_fem_backend,
+    ) -> i32;
+
     pub fn fullmag_fem_backend_gpu_execution_receipt_v1(
         handle: *mut fullmag_fem_backend,
         out_receipt: *mut fullmag_fem_gpu_execution_receipt_v1,
