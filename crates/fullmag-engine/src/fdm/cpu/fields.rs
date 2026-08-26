@@ -154,6 +154,43 @@ fn oersted_envelope_at_time(cfg: &OerstedCylinderConfig, time_seconds: f64) -> f
     }
 }
 
+const BOLTZMANN_CONSTANT: f64 = 1.380649e-23;
+const MU0_THERMAL: f64 = 1.2566370614359173e-6;
+
+/// Return the material-independent part of Brown's thermal amplitude.
+///
+/// The per-cell `Ms` and `alpha` factors are applied by
+/// `thermal_sigma_for_cell`, while the timestep factor is kept separate so a
+/// retry only changes one common multiplier.
+#[inline]
+fn thermal_base_factor(temperature: f64, gamma0: f64, cell_volume: f64) -> Option<f64> {
+    if !(temperature > 0.0
+        && gamma0 > 0.0
+        && cell_volume > 0.0
+        && temperature.is_finite()
+        && gamma0.is_finite()
+        && cell_volume.is_finite())
+    {
+        return None;
+    }
+    let factor = 2.0 * BOLTZMANN_CONSTANT * temperature / (gamma0 * MU0_THERMAL * cell_volume);
+    factor.is_finite().then_some(factor)
+}
+
+#[inline]
+fn thermal_sigma_for_cell(
+    base_factor: f64,
+    dt_scale: f64,
+    ms: f64,
+    alpha: f64,
+) -> Option<f64> {
+    if !(ms > 0.0 && alpha >= 0.0 && ms.is_finite() && alpha.is_finite()) {
+        return None;
+    }
+    let sigma = (base_factor * alpha / ms).sqrt() * dt_scale;
+    sigma.is_finite().then_some(sigma)
+}
+
 fn prescribed_sot_scales(
     cfg: &SotConfig,
     saturation_magnetisation: f64,
@@ -274,7 +311,9 @@ impl ExchangeLlgProblem {
         }
         self.thermal_field_add_into(&mut effective_field);
         let mut rhs = {
-            let compute = |i: usize| self.llg_rhs_from_field(magnetization[i], effective_field[i]);
+            let compute = |i: usize| {
+                self.llg_rhs_from_field_at(i, magnetization[i], effective_field[i])
+            };
             #[cfg(feature = "parallel")]
             {
                 (0..magnetization.len())
@@ -1465,23 +1504,15 @@ impl ExchangeLlgProblem {
     }
 
     pub(crate) fn thermal_field_add_into_soa(&self, h_eff: &mut VectorFieldSoA) {
-        if self.temperature <= 0.0
-            || self.material.saturation_magnetisation <= 0.0
-            || self.thermal_dt <= 0.0
-        {
-            return;
-        }
-
-        let alpha = self.material.damping;
-        let ms = self.material.saturation_magnetisation;
-        let gamma0 = self.dynamics.gyromagnetic_ratio;
-        let v_cell = self.cell_size.dx * self.cell_size.dy * self.cell_size.dz;
-        const KB: f64 = 1.380649e-23;
-        const MU0_LOCAL: f64 = 1.2566370614359173e-6;
-
-        let sigma = (2.0 * alpha * KB * self.temperature
-            / (gamma0 * MU0_LOCAL * ms * v_cell * self.thermal_dt))
-            .sqrt();
+        let base_factor = match thermal_base_factor(
+            self.temperature,
+            self.dynamics.gyromagnetic_ratio,
+            self.cell_size.volume(),
+        ) {
+            Some(factor) if self.thermal_dt > 0.0 && self.thermal_dt.is_finite() => factor,
+            _ => return,
+        };
+        let dt_scale = 1.0 / self.thermal_dt.sqrt();
         let global_seed = self.thermal_seed;
         let step = self.thermal_step();
 
@@ -1506,6 +1537,14 @@ impl ExchangeLlgProblem {
             if !self.is_active(i) {
                 continue;
             }
+            let Some(sigma) = thermal_sigma_for_cell(
+                base_factor,
+                dt_scale,
+                self.ms_at(i),
+                self.alpha_at(i),
+            ) else {
+                continue;
+            };
             let ci = i as u64;
             let u1 = counter_uniform(global_seed, step, ci, 0).max(1e-300);
             let u2 = counter_uniform(global_seed, step, ci, 1);
@@ -2056,24 +2095,15 @@ impl ExchangeLlgProblem {
 
     /// Counter-based thermal field with an explicit step index for reproducibility.
     pub(crate) fn thermal_field_add_into_step(&self, h_eff: &mut [Vector3], step: u64) {
-        if self.temperature <= 0.0
-            || self.material.saturation_magnetisation <= 0.0
-            || self.thermal_dt <= 0.0
-        {
-            return;
-        }
-
-        let alpha = self.material.damping;
-        let ms = self.material.saturation_magnetisation;
-        let gamma0 = self.dynamics.gyromagnetic_ratio;
-        let v_cell = self.cell_size.dx * self.cell_size.dy * self.cell_size.dz;
-        const KB: f64 = 1.380649e-23;
-        #[allow(unused)]
-        const MU0_LOCAL: f64 = 1.2566370614359173e-6;
-
-        let sigma = (2.0 * alpha * KB * self.temperature
-            / (gamma0 * MU0_LOCAL * ms * v_cell * self.thermal_dt))
-            .sqrt();
+        let base_factor = match thermal_base_factor(
+            self.temperature,
+            self.dynamics.gyromagnetic_ratio,
+            self.cell_size.volume(),
+        ) {
+            Some(factor) if self.thermal_dt > 0.0 && self.thermal_dt.is_finite() => factor,
+            _ => return,
+        };
+        let dt_scale = 1.0 / self.thermal_dt.sqrt();
 
         // ── Counter-based RNG (B7 reproducibility) ─────────────────────
         // Deterministic seed per cell: hash(global_seed, step_counter, cell_index).
@@ -2102,6 +2132,17 @@ impl ExchangeLlgProblem {
         }
 
         let compute_noise = |i: usize, h: &mut Vector3| {
+            if !self.is_active(i) {
+                return;
+            }
+            let Some(sigma) = thermal_sigma_for_cell(
+                base_factor,
+                dt_scale,
+                self.ms_at(i),
+                self.alpha_at(i),
+            ) else {
+                return;
+            };
             let ci = i as u64;
             let u1 = counter_uniform(global_seed, step, ci, 0).max(1e-300);
             let u2 = counter_uniform(global_seed, step, ci, 1);
@@ -2166,25 +2207,19 @@ impl ExchangeLlgProblem {
             (c1, c2, c3, cub.kc1, cub.kc2, cub.kc3)
         });
 
-        // Thermal noise setup
-        let has_thermal = self.temperature > 0.0
-            && self.material.saturation_magnetisation > 0.0
-            && self.thermal_dt > 0.0;
-        let thermal_sigma = if has_thermal {
-            let alpha = self.material.damping;
-            let gamma0 = self.dynamics.gyromagnetic_ratio;
-            let v_cell = self.cell_size.dx * self.cell_size.dy * self.cell_size.dz;
-            const KB: f64 = 1.380649e-23;
-            const MU0_LOCAL: f64 = 1.2566370614359173e-6;
-            (2.0 * alpha * KB * self.temperature
-                / (gamma0
-                    * MU0_LOCAL
-                    * self.material.saturation_magnetisation
-                    * v_cell
-                    * self.thermal_dt))
-                .sqrt()
-        } else {
-            0.0
+        // Thermal noise setup.  Ms/alpha are resolved per cell below; only
+        // the temperature, geometry and timestep factors are shared.
+        let thermal_base = thermal_base_factor(
+            self.temperature,
+            self.dynamics.gyromagnetic_ratio,
+            self.cell_size.volume(),
+        );
+        let thermal_dt_scale = (self.thermal_dt > 0.0 && self.thermal_dt.is_finite())
+            .then(|| 1.0 / self.thermal_dt.sqrt());
+        let (has_thermal, thermal_base, thermal_dt_scale) = match (thermal_base, thermal_dt_scale)
+        {
+            (Some(base), Some(dt_scale)) => (true, base, dt_scale),
+            _ => (false, 0.0, 0.0),
         };
         let thermal_seed = self.thermal_seed;
         let thermal_step = self.thermal_step();
@@ -2255,6 +2290,14 @@ impl ExchangeLlgProblem {
 
             // Thermal noise
             if has_thermal {
+                let Some(thermal_sigma) = thermal_sigma_for_cell(
+                    thermal_base,
+                    thermal_dt_scale,
+                    self.ms_at(i),
+                    self.alpha_at(i),
+                ) else {
+                    return;
+                };
                 let ci = i as u64;
                 let counter_uniform = |stream: u64| -> f64 {
                     let key = thermal_seed
@@ -2561,9 +2604,9 @@ impl ExchangeLlgProblem {
         const MU_B: f64 = 9.2740091523e-24;
         const E_CHARGE: f64 = 1.60217646e-19;
 
-        let ms = self.material.saturation_magnetisation.max(1e-30);
+        let ms = self.ms_at(flat).max(1e-30);
         let beta = cfg.non_adiabaticity;
-        let alpha = self.material.damping;
+        let alpha = self.alpha_at(flat);
         let b = (cfg.spin_polarization * MU_B) / (2.0 * E_CHARGE * ms * (1.0 + beta * beta));
         let ux = b * cfg.current_density[0];
         let uy = b * cfg.current_density[1];
@@ -2665,14 +2708,7 @@ impl ExchangeLlgProblem {
         // historical literal until a canonical formula version is introduced.
         const E_CHARGE: f64 = 1.60217662e-19;
 
-        let ms = self.material.saturation_magnetisation.max(1e-30);
         let beta = cfg.non_adiabaticity;
-        let alpha = self.material.damping;
-        let (adiabatic_scale, cross_scale) = gilbert_zhang_li_scales(beta, alpha);
-        let b = (cfg.spin_polarization * MU_B) / (E_CHARGE * ms * (1.0 + beta * beta));
-        let ux = b * cfg.current_density[0];
-        let uy = b * cfg.current_density[1];
-        let uz = b * cfg.current_density[2];
 
         let nx = self.grid.nx;
         let ny = self.grid.ny;
@@ -2687,6 +2723,14 @@ impl ExchangeLlgProblem {
                 if !self.is_active(flat) {
                     return [0.0, 0.0, 0.0];
                 }
+                let ms = self.ms_at(flat).max(1e-30);
+                let alpha = self.alpha_at(flat);
+                let (adiabatic_scale, cross_scale) = gilbert_zhang_li_scales(beta, alpha);
+                let b =
+                    (cfg.spin_polarization * MU_B) / (E_CHARGE * ms * (1.0 + beta * beta));
+                let ux = b * cfg.current_density[0];
+                let uy = b * cfg.current_density[1];
+                let uz = b * cfg.current_density[2];
                 let x = flat % nx;
                 let y = (flat / nx) % ny;
                 let z = flat / (nx * ny);
@@ -2780,9 +2824,9 @@ impl ExchangeLlgProblem {
                 slonczewski_torque_from_config(
                     magnetization[flat],
                     cfg,
-                    self.material.damping,
+                    self.alpha_at(flat),
                     self.dynamics.gyromagnetic_ratio,
-                    self.material.saturation_magnetisation,
+                    self.ms_at(flat),
                 )
             })
             .collect()
@@ -2805,9 +2849,9 @@ impl ExchangeLlgProblem {
                 prescribed_sot_torque_from_config(
                     magnetization[flat],
                     cfg,
-                    self.material.saturation_magnetisation,
+                    self.ms_at(flat),
                     self.dynamics.gyromagnetic_ratio,
-                    self.material.damping,
+                    self.alpha_at(flat),
                 )
             })
             .collect()
@@ -2833,14 +2877,7 @@ impl ExchangeLlgProblem {
         const MU_B: f64 = 9.274009994e-24;
         const E_CHARGE: f64 = 1.60217662e-19;
 
-        let ms = self.material.saturation_magnetisation.max(1e-30);
         let beta = cfg.non_adiabaticity;
-        let alpha = self.material.damping;
-        let (adiabatic_scale, cross_scale) = gilbert_zhang_li_scales(beta, alpha);
-        let b = (cfg.spin_polarization * MU_B) / (E_CHARGE * ms * (1.0 + beta * beta));
-        let ux = b * cfg.current_density[0];
-        let uy = b * cfg.current_density[1];
-        let uz = b * cfg.current_density[2];
 
         let nx = self.grid.nx;
         let ny = self.grid.ny;
@@ -2855,6 +2892,13 @@ impl ExchangeLlgProblem {
             if !self.is_active(flat) {
                 return;
             }
+            let ms = self.ms_at(flat).max(1e-30);
+            let alpha = self.alpha_at(flat);
+            let (adiabatic_scale, cross_scale) = gilbert_zhang_li_scales(beta, alpha);
+            let b = (cfg.spin_polarization * MU_B) / (E_CHARGE * ms * (1.0 + beta * beta));
+            let ux = b * cfg.current_density[0];
+            let uy = b * cfg.current_density[1];
+            let uz = b * cfg.current_density[2];
             let x = flat % nx;
             let y = (flat / nx) % ny;
             let z = flat / (nx * ny);
@@ -2955,14 +2999,7 @@ impl ExchangeLlgProblem {
         const MU_B: f64 = 9.274009994e-24;
         const E_CHARGE: f64 = 1.60217662e-19;
 
-        let ms = self.material.saturation_magnetisation.max(1e-30);
         let beta = cfg.non_adiabaticity;
-        let alpha = self.material.damping;
-        let (adiabatic_scale, cross_scale) = gilbert_zhang_li_scales(beta, alpha);
-        let b = (cfg.spin_polarization * MU_B) / (E_CHARGE * ms * (1.0 + beta * beta));
-        let ux = b * cfg.current_density[0];
-        let uy = b * cfg.current_density[1];
-        let uz = b * cfg.current_density[2];
 
         let nx = self.grid.nx;
         let ny = self.grid.ny;
@@ -2976,6 +3013,13 @@ impl ExchangeLlgProblem {
             if !self.is_active(flat) {
                 continue;
             }
+            let ms = self.ms_at(flat).max(1e-30);
+            let alpha = self.alpha_at(flat);
+            let (adiabatic_scale, cross_scale) = gilbert_zhang_li_scales(beta, alpha);
+            let b = (cfg.spin_polarization * MU_B) / (E_CHARGE * ms * (1.0 + beta * beta));
+            let ux = b * cfg.current_density[0];
+            let uy = b * cfg.current_density[1];
+            let uz = b * cfg.current_density[2];
             let x = flat % nx;
             let y = (flat / nx) % ny;
             let z = flat / (nx * ny);
@@ -3061,9 +3105,9 @@ impl ExchangeLlgProblem {
             let torque = slonczewski_torque_from_config(
                 magnetization[flat],
                 cfg,
-                self.material.damping,
+                self.alpha_at(flat),
                 self.dynamics.gyromagnetic_ratio,
-                self.material.saturation_magnetisation,
+                self.ms_at(flat),
             );
             o[0] += torque[0];
             o[1] += torque[1];
@@ -3106,9 +3150,9 @@ impl ExchangeLlgProblem {
                     magnetization.z[flat],
                 ],
                 cfg,
-                self.material.damping,
+                self.alpha_at(flat),
                 self.dynamics.gyromagnetic_ratio,
-                self.material.saturation_magnetisation,
+                self.ms_at(flat),
             );
             out.x[flat] += torque[0];
             out.y[flat] += torque[1];
@@ -3136,9 +3180,9 @@ impl ExchangeLlgProblem {
             let torque = prescribed_sot_torque_from_config(
                 magnetization[flat],
                 cfg,
-                self.material.saturation_magnetisation,
+                self.ms_at(flat),
                 self.dynamics.gyromagnetic_ratio,
-                self.material.damping,
+                self.alpha_at(flat),
             );
             o[0] += torque[0];
             o[1] += torque[1];
@@ -3181,9 +3225,9 @@ impl ExchangeLlgProblem {
                     magnetization.z[flat],
                 ],
                 cfg,
-                self.material.saturation_magnetisation,
+                self.ms_at(flat),
                 self.dynamics.gyromagnetic_ratio,
-                self.material.damping,
+                self.alpha_at(flat),
             );
             out.x[flat] += torque[0];
             out.y[flat] += torque[1];
@@ -3545,31 +3589,27 @@ impl ExchangeLlgProblem {
             *h = add(add(add(*h, ani_field[i]), idmi_field[i]), bdmi_field[i]);
         }
 
-        // Brown thermal field
-        if self.temperature > 0.0
-            && self.material.saturation_magnetisation > 0.0
-            && self.thermal_dt > 0.0
-        {
+        // Brown thermal field.  Keep this legacy public path on the same
+        // per-cell material contract as the fused execution path.
+        if let (Some(base_factor), true) = (
+            thermal_base_factor(
+                self.temperature,
+                self.dynamics.gyromagnetic_ratio,
+                self.cell_size.volume(),
+            ),
+            self.thermal_dt > 0.0 && self.thermal_dt.is_finite(),
+        ) {
             use std::cell::RefCell;
 
             thread_local! {
                 static RNG: RefCell<u64> = const { RefCell::new(42u64) };
             }
 
-            let alpha = self.material.damping;
-            let ms = self.material.saturation_magnetisation;
-            let gamma0 = self.dynamics.gyromagnetic_ratio;
-            let v_cell = self.cell_size.dx * self.cell_size.dy * self.cell_size.dz;
-            const KB: f64 = 1.380649e-23;
-            const MU0: f64 = 1.2566370614359173e-6;
-
-            let sigma = (2.0 * alpha * KB * self.temperature
-                / (gamma0 * MU0 * ms * v_cell * self.thermal_dt))
-                .sqrt();
+            let dt_scale = 1.0 / self.thermal_dt.sqrt();
 
             RNG.with(|seed_cell| {
                 let mut seed = *seed_cell.borrow();
-                for h in h_eff.iter_mut() {
+                for (i, h) in h_eff.iter_mut().enumerate() {
                     let (n0, n1, n2) = {
                         let next_u = |s: &mut u64| -> f64 {
                             *s ^= *s >> 12;
@@ -3588,9 +3628,16 @@ impl ExchangeLlgProblem {
                         let theta2 = 2.0 * std::f64::consts::PI * u4;
                         (r1 * theta1.cos(), r1 * theta1.sin(), r2 * theta2.cos())
                     };
-                    h[0] += sigma * n0;
-                    h[1] += sigma * n1;
-                    h[2] += sigma * n2;
+                    if let Some(sigma) = thermal_sigma_for_cell(
+                        base_factor,
+                        dt_scale,
+                        self.ms_at(i),
+                        self.alpha_at(i),
+                    ) {
+                        h[0] += sigma * n0;
+                        h[1] += sigma * n1;
+                        h[2] += sigma * n2;
+                    }
                 }
                 *seed_cell.borrow_mut() = seed;
             });
@@ -4448,6 +4495,101 @@ mod stt_tests {
     }
 
     #[test]
+    fn spatial_material_thermal_noise_uses_local_ms_and_alpha_in_aos_and_fused_paths() {
+        let grid = GridShape::new(2, 1, 1).unwrap();
+        let cell_size = CellSize::new(1.0e-9, 1.0e-9, 1.0e-9).unwrap();
+        let mut spatial = ExchangeLlgProblem::with_terms_and_mask(
+            grid,
+            cell_size,
+            MaterialParameters::new(800.0e3, 13.0e-12, 0.2).unwrap(),
+            LlgConfig::default(),
+            EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                ..Default::default()
+            },
+            Some(vec![true, true]),
+        )
+        .unwrap()
+        .with_spatial_fields(
+            Some(vec![400.0e3, 1_600.0e3]),
+            None,
+            Some(vec![0.05, 0.8]),
+        )
+        .unwrap();
+        spatial.temperature = 300.0;
+        spatial.thermal_dt = 2.5e-13;
+        spatial.thermal_seed = 0x5eed;
+
+        let mut spatial_noise = vec![[0.0; 3]; 2];
+        spatial.thermal_field_add_into_step(&mut spatial_noise, 7);
+
+        for (index, (ms, alpha)) in [(400.0e3, 0.05), (1_600.0e3, 0.8)]
+            .into_iter()
+            .enumerate()
+        {
+            let mut scalar = ExchangeLlgProblem::with_terms(
+                grid,
+                cell_size,
+                MaterialParameters::new(ms, 13.0e-12, alpha).unwrap(),
+                LlgConfig::default(),
+                EffectiveFieldTerms {
+                    exchange: false,
+                    demag: false,
+                    ..Default::default()
+                },
+            );
+            scalar.temperature = spatial.temperature;
+            scalar.thermal_dt = spatial.thermal_dt;
+            scalar.thermal_seed = spatial.thermal_seed;
+            let mut scalar_noise = vec![[0.0; 3]; 2];
+            scalar.thermal_field_add_into_step(&mut scalar_noise, 7);
+            assert_eq!(spatial_noise[index], scalar_noise[index]);
+        }
+
+        spatial.restore_thermal_step(7);
+        let mut fused_noise = vec![[0.0; 3]; 2];
+        let mut workspace = spatial.create_workspace();
+        spatial.effective_field_into_ws(
+            &[[1.0, 0.0, 0.0]; 2],
+            &mut workspace,
+            &mut fused_noise,
+        );
+        assert_eq!(fused_noise, spatial_noise);
+    }
+
+    #[test]
+    fn inactive_spatial_material_cells_do_not_receive_thermal_noise() {
+        let grid = GridShape::new(2, 1, 1).unwrap();
+        let mut problem = ExchangeLlgProblem::with_terms_and_mask(
+            grid,
+            CellSize::new(1.0e-9, 1.0e-9, 1.0e-9).unwrap(),
+            MaterialParameters::new(800.0e3, 13.0e-12, 0.2).unwrap(),
+            LlgConfig::default(),
+            EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                ..Default::default()
+            },
+            Some(vec![true, false]),
+        )
+        .unwrap()
+        .with_spatial_fields(
+            Some(vec![800.0e3, 800.0e3]),
+            None,
+            Some(vec![0.2, 0.2]),
+        )
+        .unwrap();
+        problem.temperature = 300.0;
+        problem.thermal_dt = 2.5e-13;
+
+        let mut field = vec![[0.0; 3]; 2];
+        problem.thermal_field_add_into_step(&mut field, 11);
+        assert!(field[0].iter().all(|component| component.is_finite()));
+        assert_eq!(field[1], [0.0; 3]);
+    }
+
+    #[test]
     fn sot_macrospin_is_converted_to_rhs_with_gilbert_projection() {
         let problem = one_cell_problem(0.2);
         let cfg = SotConfig {
@@ -4776,6 +4918,121 @@ mod stt_tests {
         let soa_add = soa_add.gather_to_aos();
         assert_eq!(aos_add, torque);
         assert_eq!(soa_add, torque);
+    }
+
+    #[test]
+    fn local_ms_and_alpha_are_used_by_all_cpu_direct_torque_layouts() {
+        let grid = GridShape::new(2, 1, 1).unwrap();
+        let cell_size = CellSize::new(1.0e-9, 1.0e-9, 1.0e-9).unwrap();
+        let spatial = ExchangeLlgProblem::new(
+            grid,
+            cell_size,
+            MaterialParameters::new(800.0e3, 13.0e-12, 0.2).unwrap(),
+            LlgConfig::default(),
+        )
+        .with_spatial_fields(
+            Some(vec![400.0e3, 1_600.0e3]),
+            None,
+            Some(vec![0.05, 0.8]),
+        )
+        .unwrap();
+        let magnetization = vec![[0.4, 0.7, 0.2], [0.1, 0.3, 0.9]];
+        let zhang = ZhangLiSttConfig {
+            formula: ZhangLiFormula::LegacyFullmagV0,
+            current_density: [1.0e12, -2.0e11, 0.0],
+            spin_polarization: 0.8,
+            non_adiabaticity: 0.1,
+        };
+        let slon = SlonczewskiSttConfig {
+            formula: SlonczewskiFormula::FullmagV2,
+            current_density_magnitude: 7.0e11,
+            spin_polarization_axis: [0.0, 0.0, 1.0],
+            lambda: 1.7,
+            epsilon_prime: 0.13,
+            degree: 0.6,
+            thickness: 1.5e-9,
+            current_sign: -1.0,
+            active_mask: None,
+        };
+        let sot = SotConfig {
+            formula: SotFormula::FullmagV1,
+            current_density: 1.0e12,
+            xi_dl: 0.35,
+            xi_fl: 0.15,
+            sigma: [0.0, 0.0, 1.0],
+            thickness: 1.5e-9,
+            active_mask: None,
+            envelope: None,
+        };
+
+        let spatial_zhang = spatial.zhang_li_stt_torque(&magnetization, &zhang);
+        let spatial_slon = spatial.slonczewski_stt_torque(&magnetization, &slon);
+        let spatial_sot = spatial.sot_torque(&magnetization, &sot);
+
+        for (index, (ms, alpha)) in [(400.0e3, 0.05), (1_600.0e3, 0.8)]
+            .into_iter()
+            .enumerate()
+        {
+            let scalar = ExchangeLlgProblem::new(
+                grid,
+                cell_size,
+                MaterialParameters::new(ms, 13.0e-12, alpha).unwrap(),
+                LlgConfig::default(),
+            );
+            let scalar_zhang = scalar.zhang_li_stt_torque(&magnetization, &zhang);
+            let scalar_slon = scalar.slonczewski_stt_torque(&magnetization, &slon);
+            let scalar_sot = scalar.sot_torque(&magnetization, &sot);
+            for component in 0..3 {
+                check_close(
+                    spatial_zhang[index][component],
+                    scalar_zhang[index][component],
+                    scalar_zhang[index][component].abs() * 1.0e-12 + 1.0e-18,
+                );
+                check_close(
+                    spatial_slon[index][component],
+                    scalar_slon[index][component],
+                    scalar_slon[index][component].abs() * 1.0e-12 + 1.0e-18,
+                );
+                check_close(
+                    spatial_sot[index][component],
+                    scalar_sot[index][component],
+                    scalar_sot[index][component].abs() * 1.0e-12 + 1.0e-18,
+                );
+            }
+        }
+
+        let mut zhang_aos = vec![[0.0; 3]; 2];
+        spatial.zhang_li_stt_torque_add_into(&magnetization, &zhang, &mut zhang_aos);
+        let mut zhang_soa = VectorFieldSoA::zeros(2);
+        spatial.zhang_li_stt_torque_add_into_soa(
+            &VectorFieldSoA::from_aos(&magnetization),
+            &zhang,
+            &mut zhang_soa,
+        );
+        assert_eq!(zhang_aos, spatial_zhang);
+        assert_eq!(zhang_soa.gather_to_aos(), spatial_zhang);
+
+        let mut slon_aos = vec![[0.0; 3]; 2];
+        spatial.slonczewski_stt_torque_add_into(&magnetization, &slon, &mut slon_aos);
+        let mut slon_soa = VectorFieldSoA::zeros(2);
+        spatial.slonczewski_stt_torque_add_into_soa(
+            &VectorFieldSoA::from_aos(&magnetization),
+            &slon,
+            &mut slon_soa,
+        );
+        assert_eq!(slon_aos, spatial_slon);
+        assert_eq!(slon_soa.gather_to_aos(), spatial_slon);
+
+        let mut sot_aos = vec![[0.0; 3]; 2];
+        spatial.sot_torque_add_into(&magnetization, &sot, &mut sot_aos);
+        let mut sot_soa = VectorFieldSoA::zeros(2);
+        spatial.sot_torque_add_into_soa(
+            &VectorFieldSoA::from_aos(&magnetization),
+            &sot,
+            &mut sot_soa,
+        );
+        assert_eq!(sot_aos, spatial_sot);
+        assert_eq!(sot_soa.gather_to_aos(), spatial_sot);
     }
 
     #[test]

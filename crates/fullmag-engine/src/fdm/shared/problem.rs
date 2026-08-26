@@ -638,9 +638,18 @@ impl ExchangeLlgProblem {
                     n
                 )));
             }
-            if field.iter().any(|&v| !v.is_finite() || v <= 0.0) {
+            if field.iter().any(|&v| !v.is_finite() || v < 0.0) {
                 return Err(EngineError::new(
-                    "ms_field contains non-finite or non-positive values".to_string(),
+                    "ms_field contains non-finite or negative values".to_string(),
+                ));
+            }
+            if field
+                .iter()
+                .enumerate()
+                .any(|(index, &value)| value == 0.0 && self.is_active(index))
+            {
+                return Err(EngineError::new(
+                    "ms_field contains zero on an active cell".to_string(),
                 ));
             }
         }

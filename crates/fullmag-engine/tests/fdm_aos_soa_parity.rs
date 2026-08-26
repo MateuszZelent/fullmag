@@ -106,6 +106,50 @@ fn soa_fast_path_fails_closed_for_spatial_material_fields() {
 }
 
 #[test]
+fn inactive_zero_ms_is_allowed_but_active_zero_ms_is_rejected() {
+    let mut problem = ExchangeLlgProblem::with_terms_and_mask(
+        GridShape::new(2, 1, 1).expect("valid grid"),
+        CellSize::new(1.0e-9, 1.0e-9, 1.0e-9).expect("valid cell size"),
+        MaterialParameters::new(8.0e5, 1.0e-11, 0.02).expect("valid material"),
+        LlgConfig::new(2.211e5, TimeIntegrator::Heun).expect("valid dynamics"),
+        EffectiveFieldTerms {
+            exchange: false,
+            demag: false,
+            ..Default::default()
+        },
+        Some(vec![false, true]),
+    )
+    .expect("masked problem should build")
+    .with_spatial_fields(
+        Some(vec![0.0, 8.0e5]),
+        None,
+        Some(vec![0.02, 0.02]),
+    )
+    .expect("zero Ms is valid outside the active domain");
+    problem.temperature = 300.0;
+    problem.thermal_dt = 2.0e-13;
+    let mut workspace = problem.create_workspace();
+    let field = problem.effective_field_from_vectors_ws(&[[0.0; 3]; 2], &mut workspace);
+    assert_eq!(field[0], [0.0; 3]);
+    assert!(field[1].iter().all(|component| component.is_finite()));
+
+    let active_zero = ExchangeLlgProblem::with_terms_and_mask(
+        GridShape::new(2, 1, 1).expect("valid grid"),
+        CellSize::new(1.0e-9, 1.0e-9, 1.0e-9).expect("valid cell size"),
+        MaterialParameters::new(8.0e5, 1.0e-11, 0.02).expect("valid material"),
+        LlgConfig::new(2.211e5, TimeIntegrator::Heun).expect("valid dynamics"),
+        EffectiveFieldTerms::default(),
+        Some(vec![true, true]),
+    )
+    .expect("masked problem should build")
+    .with_spatial_fields(Some(vec![0.0, 8.0e5]), None, None)
+    .expect_err("zero Ms on an active cell must be rejected");
+    assert!(active_zero
+        .to_string()
+        .contains("ms_field contains zero on an active cell"));
+}
+
+#[test]
 fn aos_and_soa_effective_fields_include_regional_drive_once() {
     let mut problem = ExchangeLlgProblem::with_terms(
         GridShape::new(2, 1, 1).expect("valid grid"),
