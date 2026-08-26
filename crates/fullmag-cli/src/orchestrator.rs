@@ -11861,7 +11861,7 @@ mod tests {
         state.simulation_preparation = Some(preparation);
         LocalLiveWorkspace::new(
             state,
-            CurrentLivePublisher::spawn("prep-orchestration-test"),
+            CurrentLivePublisher::spawn_with_test_sink("prep-orchestration-test", |_, _| Ok(())),
         )
     }
 
@@ -14387,8 +14387,6 @@ mod tests {
             regions: Vec::new(),
             materials: Vec::new(),
             magnets: Vec::new(),
-            selections: Vec::new(),
-            magnetization_constraints: Vec::new(),
             energy_terms: Vec::new(),
             study: StudyIR::TimeEvolution {
                 dynamics: DynamicsIR::Llg {

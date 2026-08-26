@@ -1437,13 +1437,6 @@ fn mixed_p1_scope_failed_predicates(
         failed.push("material_count_not_one");
     }
     if problem.materials.iter().any(|material| {
-        material.uniaxial_anisotropy.is_some()
-            || material.uniaxial_anisotropy_k2.is_some()
-            || material.anisotropy_axis.is_some()
-    }) {
-        failed.push("unsupported_uniaxial_anisotropy");
-    }
-    if problem.materials.iter().any(|material| {
         material.cubic_anisotropy_kc1.is_some()
             || material.cubic_anisotropy_kc2.is_some()
             || material.cubic_anisotropy_kc3.is_some()
@@ -1542,7 +1535,7 @@ fn validate_mixed_p1_execution_scope(
         return Ok(());
     }
     Err(format!(
-        "fem_mixed_p1_scope_rejected: failed_predicates=[{}]; required=explicit_fem+explicit_cpu_or_gpu+strict+double+P1+one_axis_aligned_box+exact_1_to_3_layers+uniform_material+exchange+poisson_robin_or_dirichlet+PG_BB_or_NCG_or_LLG_overdamped; requested_backend={:?}; requested_device={}; requested_precision={:?}; execution_mode={:?}; study={:?}; energy_terms={:?}; fallback=none",
+        "fem_mixed_p1_scope_rejected: failed_predicates=[{}]; required=explicit_fem+explicit_cpu_or_gpu+strict+double+P1+one_axis_aligned_box+exact_1_to_3_layers+uniform_material+exchange+optional_uniform_uniaxial_anisotropy+poisson_robin_or_dirichlet+PG_BB_or_NCG_or_LLG_overdamped; requested_backend={:?}; requested_device={}; requested_precision={:?}; execution_mode={:?}; study={:?}; energy_terms={:?}; fallback=none",
         failed.join(","),
         problem.backend_policy.requested_backend,
         effective_runtime_device(problem),

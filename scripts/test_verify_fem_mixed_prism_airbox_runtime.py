@@ -1962,6 +1962,16 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                     report_mktemp_index == -1 or helper_index < report_mktemp_index
                 )
 
+    def test_native_mixed_p1_uniaxial_recipe_runs_focused_cpu_and_cuda_gate(self) -> None:
+        justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+        recipe = justfile.split(
+            "verify-fem-mixed-p1-uniaxial-native-contract:", 1
+        )[1].split("\n# MESH-GATE-002", 1)[0]
+        self.assertIn("--target fem_mixed_p1_contract", recipe)
+        self.assertEqual(recipe.count("FULLMAG_MIXED_P1_ANISOTROPY_ONLY=1"), 2)
+        self.assertIn("FULLMAG_MIXED_P1_ROLLBACK_DEVICE=cpu", recipe)
+        self.assertIn("FULLMAG_MIXED_P1_ROLLBACK_DEVICE=cuda", recipe)
+
     def test_worktree_gate_reuses_valid_shared_python_without_host_ensurepip(self) -> None:
         justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
         managed_recipe = justfile.split("fem-managed-headless fem_execution", 1)[1].split(

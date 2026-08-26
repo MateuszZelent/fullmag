@@ -33,6 +33,7 @@ export interface SimulationPreparationFailureView {
   readonly correlationId: string | null;
   readonly detail: string | null;
   readonly errorCode: string;
+  readonly stageElapsedLabel: string;
   readonly stageLabel: string;
   readonly summary: string;
 }
@@ -89,6 +90,9 @@ export function resolveSimulationPreparationViewModel(
     stages.find((stage) => stage.status === "active") ??
     null;
   const stageLabels = new Map(stages.map((stage) => [stage.id, stage.label]));
+  const failureStage = snapshot.failure
+    ? stages.find((stage) => stage.id === snapshot.failure?.stage_id) ?? null
+    : null;
   const progress = resolveProgress(activeStage, snapshot);
   const isStale = preparation.status === "stale";
   const isFailed = snapshot.status === "failed";
@@ -98,6 +102,7 @@ export function resolveSimulationPreparationViewModel(
         correlationId: snapshot.failure.diagnostics_correlation_id ?? null,
         detail: snapshot.failure.detail ?? null,
         errorCode: snapshot.failure.error_code,
+        stageElapsedLabel: failureStage?.elapsedLabel ?? "—",
         stageLabel:
           stageLabels.get(snapshot.failure.stage_id) ?? snapshot.failure.stage_id,
         summary: snapshot.failure.summary,

@@ -1487,13 +1487,6 @@ def _validate_authored_mixed_p1_scope(
     if len(material_payloads) != 1:
         failed.append("material_count_not_one")
     if any(
-        payload.get("uniaxial_anisotropy") is not None
-        or payload.get("uniaxial_anisotropy_k2") is not None
-        or payload.get("anisotropy_axis") is not None
-        for payload in material_payloads
-    ):
-        failed.append("unsupported_uniaxial_anisotropy")
-    if any(
         payload.get(key) is not None
         for payload in material_payloads
         for key in (
@@ -1522,7 +1515,7 @@ def _validate_authored_mixed_p1_scope(
         raise ValueError(
             "fem_mixed_p1_scope_rejected: "
             f"phase=authored_preflight; failed_predicates=[{','.join(failed)}]; "
-            "qualified_scope=exchange+poisson_robin_or_dirichlet; fallback=none"
+            "qualified_scope=exchange+uniform_uniaxial_anisotropy+poisson_robin_or_dirichlet; fallback=none"
         )
 
 

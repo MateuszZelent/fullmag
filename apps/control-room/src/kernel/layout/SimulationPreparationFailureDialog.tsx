@@ -54,10 +54,21 @@ export function SimulationPreparationFailureDialog({
             {failure.detail ??
               "The runtime did not expose an additional safe error detail."}
           </p>
+          <p aria-live="polite" className="fm-visually-hidden" role="status">
+            {copyState === "copied"
+              ? "Diagnostic report copied to clipboard."
+              : copyState === "failed"
+                ? "Could not copy diagnostic report. Try again."
+                : ""}
+          </p>
           <dl className="fm-dialog__details">
             <div className="fm-dialog__details-row">
               <dt className="fm-dialog__details-label">Stage</dt>
               <dd className="fm-dialog__details-value">{failure.stageLabel}</dd>
+            </div>
+            <div className="fm-dialog__details-row">
+              <dt>Stage duration</dt>
+              <dd>{failure.stageElapsedLabel}</dd>
             </div>
             <div className="fm-dialog__details-row">
               <dt>Error code</dt>
@@ -88,9 +99,9 @@ export function SimulationPreparationFailureDialog({
         <DialogFooter>
           <Button onClick={onCopy} size="sm" type="button">
             {copyState === "copied"
-              ? "Diagnostic report copied"
+              ? "Copy again"
               : copyState === "failed"
-                ? "Copy failed"
+                ? "Retry copy"
                 : "Copy diagnostic report"}
           </Button>
           <Button

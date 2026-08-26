@@ -38,8 +38,9 @@ startup.
 The first qualification target is deliberately narrow: one axis-aligned
 `Box`, P1, one conforming shared-domain airbox, exact layer count in
 `{1, 2, 3}`, uniform `Ms` and `Aex`, exchange,
-uniform Zeeman, Poisson Robin or Dirichlet demag, explicit FEM CPU or GPU double
-precision, strict execution, and PG-BB, NCG, or overdamped LLG relaxation.
+uniform Zeeman, uniform uniaxial `Ku1`/`Ku2` with one normalized axis,
+Poisson Robin or Dirichlet demag, explicit FEM CPU or GPU double precision,
+strict execution, and PG-BB, NCG, or overdamped LLG relaxation.
 Those exact certificate-bound device tuples are currently `implemented`, not
 `production_executable` or `validated`, because no immutable managed public
 CPU/GPU SP4 runtime report exists yet. Device `auto`, single/extended/hybrid
@@ -73,6 +74,29 @@ E_{\mathrm{ex}}
 E_{\mathrm Z}
 = -\mu_0\int_{\Omega_m}\mathbf M\cdot\mathbf H_{\mathrm{ext}}\,\mathrm dV.
 ```
+
+Uniform uniaxial anisotropy is a local nodal interaction and retains its
+existing negative-power energy convention:
+
+```{math}
+:label: eq-mixed-p1-uniaxial-anisotropy
+
+q=\\mathbf m\\cdot\\mathbf u,
+\\qquad
+E_{\\mathrm u}
+=\\int_{\\Omega_m}\\left(-K_{u1}q^2-K_{u2}q^4\\right)\\,\\mathrm dV.
+```
+
+```{math}
+:label: eq-mixed-p1-uniaxial-field
+
+\\mathbf H_{\\mathrm u}
+=\\frac{2K_{u1}q+4K_{u2}q^3}{\\mu_0M_s}\\,\\mathbf u.
+```
+
+For mixed P1, topology enters this local term only through the certified
+magnetic nodal mass-row-sum weights. No tetrahedral connectivity is consumed
+by the uniform CPU or CUDA nodal field/energy realization.
 
 ### 2.2 Scalar Poisson demagnetization and signs
 
@@ -135,6 +159,12 @@ Prism, pyramid, and tetrahedron assembly must reproduce these signs exactly.
 | $E_{\mathrm Z}$ | Zeeman energy | $\mathrm{J}$ |
 | $E_{\mathrm{demag}}$ | demagnetization energy | $\mathrm{J}$ |
 | $E_{\partial D}$ | demagnetization boundary contribution | $\mathrm{J}$ |
+| $\mathbf u$ | normalized uniaxial anisotropy axis | $1$ |
+| $q$ | magnetization projection on the uniaxial axis | $1$ |
+| $K_{u1}$ | first-order uniaxial anisotropy constant | $\mathrm{J\,m^{-3}}$ |
+| $K_{u2}$ | second-order uniaxial anisotropy constant | $\mathrm{J\,m^{-3}}$ |
+| $\mathbf H_{\mathrm u}$ | uniaxial anisotropy effective field | $\mathrm{A\,m^{-1}}$ |
+| $E_{\mathrm u}$ | uniaxial anisotropy energy | $\mathrm{J}$ |
 | $t$ | magnetic film thickness | $\mathrm{m}$ |
 | $L$ | requested and realized prism-cell layers | $1$ |
 | $\tau_{\mathrm{plane}}$ | node-plane comparison tolerance | $\mathrm{m}$ |
@@ -157,7 +187,9 @@ scale; production certificates apply the SI tolerances below after realization.
   has exactly $L+1$ normal-coordinate node planes.
 - One prism layer is still a three-dimensional P1 discretization. It is not a
   thickness-averaged, 2.5D, shell, or macrospin model.
-- `Ms` and `Aex` are uniform in the first qualification workload.
+- `Ms`, `Aex`, `Ku1`, and `Ku2` are uniform in the first qualification
+  workload; the uniaxial axis is one normalized material vector. Spatial
+  anisotropy fields remain unsupported.
 - The magnetic domain contains only `prism6`; `pyramid5` and `tet4` are air
   cells and must never carry a magnetic material marker.
 - The first supported facets are `tri3 | quad4` and the polynomial/order
@@ -652,6 +684,9 @@ no fallback. `auto` remains rejecting. Authored device intent, a managed-launche
 override, the plan-bound effective device, and resolved execution must remain
 distinct provenance.
 
+Uniform uniaxial anisotropy is optional in this tuple; cubic and spatial
+anisotropy remain rejected.
+
 Until separately qualified, planning rejects FEM/BEM demag, PBC/Floquet,
 DMI/STT/thermal/magnetoelastic terms, regional projections, eigen/frequency-
 domain studies, DG0/material interfaces, order greater than one, arbitrary OCC
@@ -786,6 +821,8 @@ own fresh managed evidence:
 - constant-field and linear-manufactured-solution patch tests across mixed
   interfaces;
 - exchange directional-derivative and convergence tests;
+- uniform `Ku1`/`Ku2` field and energy checks on certified mixed magnetic
+  prism nodes using MFEM mass-row-sum weights, including CPU/CUDA parity;
 - manufactured Poisson solution and RHS/sign tests across all three cell types;
 - Dirichlet/Robin airbox convergence and existing sphere/ellipsoid demag gates;
 - PG-BB/NCG energy-descent and overdamped-LLG trajectory/stop-reason gates;
@@ -840,6 +877,8 @@ No lower level implies a higher one.
 (limitations)=
 ## 7. Known limits and deferred work
 
+- Spatial `Ku1`/`Ku2` or axis fields and cubic anisotropy are not included
+  in the bounded mixed-P1 tuple.
 - Arbitrary OCC shapes, cylinders, imported CAD/STL, multiple bodies, and
   multilayers are deferred.
 - PBC/Floquet, FEM/BEM/FMM, frequency-domain/eigen, DMI, STT, thermal,
@@ -889,3 +928,5 @@ No lower level implies a higher one.
 | Demag field recovery | `backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp` | `recover_demag_poisson_field` | recovers $\mathbf H_{\mathrm{demag}}$ on magnetic cells | FEM CPU | manufactured/operator contracts; managed proof pending |
 | Demag energy | `backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp` | `demag_poisson_energy_from_field` | evaluates the existing demag-energy sign contract | FEM CPU | energy contracts; managed proof pending |
 | Magnetic nodal weights | `backends/fem/core/fem_mesh.cpp` | `compute_node_volumes` | synchronizes mixed P1 mass-row-sum volume weights | FEM CPU/GPU shared contract | native material/metric contracts |
+| Uniform uniaxial CPU field/energy | `backends/fem/cpu/mfem/interactions/anisotropy_uniaxial.cpp` | `compute_uniaxial_anisotropy_field` | evaluates local `Ku1`/`Ku2` field and mass-lumped energy without cell-connectivity assumptions | FEM CPU | mixed-P1 anisotropy contract |
+| Uniform uniaxial GPU field/energy | `backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu` | `fullmag_cuda_uniaxial_anisotropy_field_energy_blocks` | evaluates the same local nodal contract on device | FEM GPU | mixed-P1 CUDA contract; managed proof pending |

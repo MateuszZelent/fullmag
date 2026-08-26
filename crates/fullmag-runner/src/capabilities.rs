@@ -552,7 +552,7 @@ fn mixed_p1_feature_capabilities(
     const FDM_REASON: &str =
         "Mixed-P1 shared-domain topology is FEM-only; FDM retains Cartesian cells.";
     const OPERATOR_SCOPE: &str =
-        "double; one axis-aligned P1 Box; one conforming shared-domain airbox; requested_layers=realized_layers={1,2,3}; magnetic_node_planes=requested_layers+1; uniform Ms/Aex; exchange; uniform Zeeman; Poisson Robin|Dirichlet; PG-BB|NCG|overdamped LLG; no fallback";
+        "double; one axis-aligned P1 Box; one conforming shared-domain airbox; requested_layers=realized_layers={1,2,3}; magnetic_node_planes=requested_layers+1; uniform Ms/Aex/Ku1/Ku2 and one anisotropy axis; exchange; uniform Zeeman; Poisson Robin|Dirichlet; PG-BB|NCG|overdamped LLG; no fallback";
 
     let mesh_status = match fem_engine {
         Some(FemEngine::CpuNative | FemEngine::NativeGpu) => FeatureCapabilityStatus::Implemented,
@@ -1086,6 +1086,9 @@ mod tests {
         assert!(cpu_operator
             .scope
             .contains("magnetic_node_planes=requested_layers+1"));
+        assert!(cpu_operator
+            .scope
+            .contains("uniform Ms/Aex/Ku1/Ku2 and one anisotropy axis"));
     }
 
     #[test]
@@ -1125,6 +1128,9 @@ mod tests {
         assert!(gpu_operator
             .scope
             .contains("magnetic_node_planes=requested_layers+1"));
+        assert!(gpu_operator
+            .scope
+            .contains("uniform Ms/Aex/Ku1/Ku2 and one anisotropy axis"));
     }
 
     #[test]

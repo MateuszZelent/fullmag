@@ -10,6 +10,7 @@
 #if FULLMAG_HAS_MFEM_STACK
 
 #include "context.hpp"
+#include "cpu/mfem/interactions/anisotropy_uniaxial.hpp"
 #include "cpu/mfem/interactions/demag.hpp"
 #include "cpu/mfem/interactions/demag_poisson_recovery.hpp"
 #include "cpu/mfem/interactions/zeeman_uniform_field.hpp"
@@ -486,6 +487,43 @@ void distorted_prism_mass_weights_match_independent_mfem_oracle()
               std::accumulate(actual.begin(), actual.end(), 0.0),
               std::accumulate(oracle.begin(), oracle.end(), 0.0)),
           "production distorted-prism row sums must conserve the independent MFEM volume");
+    fullmag::fem::context_destroy_mfem(ctx);
+}
+
+void mixed_p1_uniform_uniaxial_field_and_energy_use_mfem_mass_weights()
+{
+    fullmag::fem::Context ctx{};
+    ctx.mesh = conforming_prism_pyramid_tet();
+    ctx.mesh.magnetic_element_mask = {1,0,0};
+    ctx.mesh.magnetic_node_mask = {1,1,1,1,1,1,0,0};
+    initialize_uniform_material(ctx);
+    ctx.anisotropy.uniaxial_enabled = true;
+    ctx.anisotropy.uniaxial_Ku = 1.0e5;
+    ctx.anisotropy.uniaxial_Ku2 = 2.0e4;
+    ctx.anisotropy.uniaxial_axis = {0.0, 0.0, 1.0};
+    for (uint32_t node = 0; node < 6u; ++node) {
+        const size_t base = 3u * static_cast<size_t>(node);
+        ctx.state.m_xyz[base] = 0.0;
+        ctx.state.m_xyz[base + 2u] = 1.0;
+    }
+    initialize_mfem_and_check_magnetic_volume(ctx, 0.5);
+
+    std::vector<double> field;
+    double energy = 0.0;
+    fullmag::fem::compute_uniaxial_anisotropy_field(ctx, ctx.state.m_xyz, field, &energy);
+    constexpr double mu0 = 1.2566370614359172953850573533118e-6;
+    const double expected_hz = (2.0e5 + 8.0e4) / (mu0 * 8.0e5);
+    for (uint32_t node = 0; node < ctx.mesh.n_nodes; ++node) {
+        const size_t base = 3u * static_cast<size_t>(node);
+        check(field[base] == 0.0 && field[base + 1u] == 0.0,
+              "mixed-P1 uniaxial field must remain axis-local");
+        const double expected = node < 6u ? expected_hz : 0.0;
+        check(std::abs(field[base + 2u] - expected) <=
+                  256.0 * std::numeric_limits<double>::epsilon() * std::abs(expected_hz),
+              "mixed-P1 uniaxial field must match the analytic nodal value");
+    }
+    check(std::abs(energy - (-6.0e4)) <= 1.0e-10,
+          "mixed-P1 uniaxial energy must use the conserved 0.5 m3 MFEM mass weights");
     fullmag::fem::context_destroy_mfem(ctx);
 }
 
@@ -1271,7 +1309,8 @@ struct MixedGpuRuntimeFixture {
 
 std::unique_ptr<MixedGpuRuntimeFixture> initialize_mixed_gpu_runtime(
     fullmag_fem_integrator integrator,
-    bool enable_device_hypre_demag)
+    bool enable_device_hypre_demag,
+    bool enable_uniform_uniaxial = false)
 {
     auto fixture = std::make_unique<MixedGpuRuntimeFixture>();
     auto &context = fixture->context;
@@ -1284,6 +1323,12 @@ std::unique_ptr<MixedGpuRuntimeFixture> initialize_mixed_gpu_runtime(
     context.base_plan.precession_enabled = false;
     context.mfem_device.device_string_override = "cuda";
     context.mfem_device.gpu_device_index = 0;
+    if (enable_uniform_uniaxial) {
+        context.anisotropy.uniaxial_enabled = true;
+        context.anisotropy.uniaxial_Ku = 1.0e5;
+        context.anisotropy.uniaxial_Ku2 = 2.0e4;
+        context.anisotropy.uniaxial_axis = {0.0, 0.0, 1.0};
+    }
     context.demag.enabled = enable_device_hypre_demag;
     if (enable_device_hypre_demag) {
         context.demag.realization = FULLMAG_FEM_DEMAG_AIRBOX_ROBIN;
@@ -1336,7 +1381,14 @@ std::unique_ptr<MixedGpuRuntimeFixture> initialize_mixed_gpu_runtime(
               context.gpu_state.device.mesh_geometry.magnetic_element_mask == nullptr,
           "exchange-only mixed relaxation must not upload flat tetrahedral geometry");
     check(context.gpu_state.device.legacy_exchange.uploaded,
-          "exchange-only mixed relaxation requires assembled MFEM CSR on CUDA");
+          "mixed relaxation requires assembled MFEM exchange CSR on CUDA");
+    if (enable_uniform_uniaxial) {
+        check(context.gpu_state.device.materials.ku != nullptr &&
+                  context.gpu_state.device.materials.ku2 != nullptr &&
+                  context.gpu_state.device.materials.anisotropy_axis_x != nullptr &&
+                  context.gpu_state.device.fields.h_ani.x != nullptr,
+              "mixed uniform uniaxial anisotropy requires device-resident material and field buffers");
+    }
     if (enable_device_hypre_demag) {
         check(fullmag::fem::gpu_demag_poisson_ready(context),
               "mixed relaxation with demag requires a ready device-Hypre workspace");
@@ -1589,7 +1641,7 @@ void mixed_p1_gpu_direct_minimizers_use_device_armijo_without_tet_geometry()
     for (const bool enable_device_hypre_demag : {false, true}) {
         for (const auto &item : cases) {
             auto fixture = initialize_mixed_gpu_runtime(
-                FULLMAG_FEM_INTEGRATOR_HEUN, enable_device_hypre_demag);
+                FULLMAG_FEM_INTEGRATOR_HEUN, enable_device_hypre_demag, true);
             auto &context = fixture->context;
             const std::string case_name = std::string(item.name) +
                 (enable_device_hypre_demag ? "/device_hypre" : "/exchange_only");
@@ -1736,6 +1788,13 @@ void mixed_p1_gpu_llg_overdamped_runs_every_explicit_rk_without_tet_geometry()
 
 int main()
 {
+    const char *anisotropy_only = std::getenv("FULLMAG_MIXED_P1_ANISOTROPY_ONLY");
+    if (anisotropy_only != nullptr && std::string(anisotropy_only) == "1") {
+        mixed_p1_uniform_uniaxial_field_and_energy_use_mfem_mass_weights();
+        mixed_p1_gpu_direct_minimizers_use_device_armijo_without_tet_geometry();
+        return 0;
+    }
+
     single_element_families_preserve_geometry_dofs_vertices_and_attributes();
     zero_marker_uses_an_unoccupied_positive_air_attribute();
     legal_int_max_marker_without_air_is_preserved();
@@ -1754,6 +1813,7 @@ int main()
     mixed_p1_gpu_direct_minimizers_use_device_armijo_without_tet_geometry();
     mixed_p1_gpu_llg_overdamped_runs_every_explicit_rk_without_tet_geometry();
     mfem_mass_weights_cover_tet_prism_and_mixed_magnetic_domains();
+    mixed_p1_uniform_uniaxial_field_and_energy_use_mfem_mass_weights();
     distorted_prism_mass_weights_match_independent_mfem_oracle();
     mixed_core_measure_over_arity_is_not_published_as_runtime_node_volume();
     mixed_nodal_ms_and_a_follow_validated_mfem_realization();

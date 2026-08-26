@@ -349,12 +349,38 @@ function SimulationPreparationFailureActions({
 }: {
   state: SimulationStartupOverlayState;
 }) {
+  const snapshot = state.preparation;
+  const failureIdentity =
+    snapshot && state.failure
+      ? JSON.stringify([
+          snapshot.preparation_id,
+          snapshot.revision,
+          state.failure.errorCode,
+        ])
+      : "resource-error";
+
+  return (
+    <SimulationPreparationFailureAttempt
+      initiallyOpen={Boolean(snapshot && state.failure)}
+      key={failureIdentity}
+      state={state}
+    />
+  );
+}
+
+function SimulationPreparationFailureAttempt({
+  initiallyOpen,
+  state,
+}: {
+  initiallyOpen: boolean;
+  state: SimulationStartupOverlayState;
+}) {
   const kernel = useKernel();
   const snapshot = state.preparation;
   const [copyState, setCopyState] = useState<"copied" | "failed" | "idle">(
     "idle",
   );
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(initiallyOpen);
   const diagnosticReport = snapshot
     ? serializeSimulationPreparationDiagnostics(snapshot)
     : "";
@@ -362,6 +388,7 @@ function SimulationPreparationFailureActions({
   const copyDiagnostics = async () => {
     if (!snapshot) return;
 
+    setCopyState("idle");
     try {
       await navigator.clipboard.writeText(diagnosticReport);
       setCopyState("copied");

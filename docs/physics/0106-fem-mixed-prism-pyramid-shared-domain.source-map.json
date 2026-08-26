@@ -38,6 +38,16 @@
       "sources": ["exchange-operator", "zeeman-energy"]
     },
     {
+      "id": "eq-mixed-p1-uniaxial-anisotropy",
+      "symbols": ["q", "m", "u", "Eu", "Ku1", "Ku2", "OmegaM"],
+      "sources": ["uniaxial-cpu", "uniaxial-gpu"]
+    },
+    {
+      "id": "eq-mixed-p1-uniaxial-field",
+      "symbols": ["Huniaxial", "q", "u", "Ku1", "Ku2", "mu0", "Ms"],
+      "sources": ["uniaxial-cpu", "uniaxial-gpu"]
+    },
+    {
       "id": "eq-mixed-p1-demag-strong",
       "symbols": ["phi", "M", "Hdemag", "domainD", "OmegaAir"],
       "sources": ["demag-rhs", "demag-recovery"]
@@ -90,6 +100,12 @@
     {"id": "EZ", "latex": "E_{\\mathrm Z}", "meaning": "Zeeman energy", "si_unit": "\\mathrm{J}"},
     {"id": "Edemag", "latex": "E_{\\mathrm{demag}}", "meaning": "demagnetization energy", "si_unit": "\\mathrm{J}"},
     {"id": "Eboundary", "latex": "E_{\\partial D}", "meaning": "demagnetization boundary contribution", "si_unit": "\\mathrm{J}"},
+    {"id": "u", "latex": "\\mathbf u", "meaning": "normalized uniaxial anisotropy axis", "si_unit": "1"},
+    {"id": "q", "latex": "q", "meaning": "magnetization projection on the uniaxial axis", "si_unit": "1"},
+    {"id": "Ku1", "latex": "K_{u1}", "meaning": "first-order uniaxial anisotropy constant", "si_unit": "\\mathrm{J\\,m^{-3}}"},
+    {"id": "Ku2", "latex": "K_{u2}", "meaning": "second-order uniaxial anisotropy constant", "si_unit": "\\mathrm{J\\,m^{-3}}"},
+    {"id": "Huniaxial", "latex": "\\mathbf H_{\\mathrm u}", "meaning": "uniaxial anisotropy effective field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "Eu", "latex": "E_{\\mathrm u}", "meaning": "uniaxial anisotropy energy", "si_unit": "\\mathrm{J}"},
     {"id": "thickness", "latex": "t", "meaning": "magnetic film thickness", "si_unit": "\\mathrm{m}"},
     {"id": "layerCount", "latex": "L", "meaning": "requested and realized prism-cell layers", "si_unit": "1"},
     {"id": "planeTolerance", "latex": "\\tau_{\\mathrm{plane}}", "meaning": "node-plane comparison tolerance", "si_unit": "\\mathrm{m}"},
@@ -122,7 +138,9 @@
     {"id": "demag-rhs", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp", "symbol": "assemble_demag_poisson_rhs", "responsibility": "Assemble the magnetic-cell Poisson weak-form source."},
     {"id": "demag-recovery", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp", "symbol": "recover_demag_poisson_field", "responsibility": "Recover the demagnetizing field on magnetic cells."},
     {"id": "demag-energy", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp", "symbol": "demag_poisson_energy_from_field", "responsibility": "Evaluate the existing demagnetization-energy sign contract."},
-    {"id": "node-volumes", "path": "backends/fem/core/fem_mesh.cpp", "symbol": "compute_node_volumes", "responsibility": "Synchronize mixed-P1 mass-row-sum magnetic nodal weights."}
+    {"id": "node-volumes", "path": "backends/fem/core/fem_mesh.cpp", "symbol": "compute_node_volumes", "responsibility": "Synchronize mixed-P1 mass-row-sum magnetic nodal weights."},
+    {"id": "uniaxial-cpu", "path": "backends/fem/cpu/mfem/interactions/anisotropy_uniaxial.cpp", "symbol": "compute_uniaxial_anisotropy_field", "responsibility": "Evaluate uniform uniaxial field and MFEM mass-lumped energy on magnetic P1 nodes."},
+    {"id": "uniaxial-gpu", "path": "backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu", "symbol": "fullmag_cuda_uniaxial_anisotropy_field_energy_blocks", "responsibility": "Evaluate the same local uniform uniaxial field and energy contract on CUDA."}
   ],
   "public_api": {
     "parameters": [
