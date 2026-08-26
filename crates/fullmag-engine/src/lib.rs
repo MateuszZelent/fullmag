@@ -44,13 +44,14 @@ pub use fdm::{
     DemagKernelSpectra, EffectiveFieldObservables, EffectiveFieldTerms, EngineError,
     EngineErrorCode, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA,
     ExternalStageTerms, FdmBoundaryPolicy, FdmDemagBoundary, FftWorkspace, GridShape,
-    IntegratorBuffers, LlgConfig, MagnetoelasticTermConfig, MaterialParameters,
+    IntegratorBuffers, LlgConfig, MagnetoelasticTermConfig, MaterialParameters, ProjectionPolicy,
     OerstedCylinderConfig, ReferenceDemoReport, RegionalFieldDriveTerm,
     ResolvedFdmPeriodicWorkspace, Result, RhsEvaluation, SlonczewskiFormula, SlonczewskiSttConfig,
     SolverSession, SotConfig, SotFormula, StepReport, TimeIntegrator, UniaxialAnisotropyConfig,
     VectorFieldSoA, ZhangLiFormula, ZhangLiSttConfig,
     FDM_CPU_ADAPTIVE_RK23_MAX_RHS_EVALS_TO_ORACLE, FDM_CPU_ADAPTIVE_RK45_MAX_RHS_EVALS_TO_ORACLE,
     FDM_ADAPTIVE_CONTROLLER_MAX_REJECTED_ATTEMPTS, FDM_ADAPTIVE_CONTROLLER_POLICY_VERSION,
+    FDM_RK_PROJECTION_REALIZATION_VERSION,
     MAX_ADAPTIVE_ATTEMPT_RECORDS,
 };
 

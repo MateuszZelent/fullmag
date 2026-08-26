@@ -3,7 +3,7 @@
 //! All methods are `impl ExchangeLlgProblem` — Rust allows splitting impls
 //! across multiple files within the same crate.
 
-use crate::vector::{add, cross, norm, normalized, scale};
+use crate::vector::{add, cross, norm, scale};
 use crate::{
     AdaptiveAttemptDecision, AdaptiveAttemptReason, AdaptiveAttemptRecord, AdaptiveStepController,
     AdaptiveStepDecision, CoupledImexArk2Stage, CoupledImexArk2Tableau, EvaluationRequest,
@@ -926,6 +926,11 @@ mod adaptive_decision_tests {
 }
 
 impl ExchangeLlgProblem {
+    #[inline]
+    fn project_stage(&self, vector: Vector3) -> Result<Vector3> {
+        self.dynamics.projection_policy.project(vector)
+    }
+
     /// Transactional explicit partition of canonical ARS(2,3,2). The coupled
     /// transport owner supplies stage-consistent implicit spin/charge terms;
     /// this method never substitutes Heun for the public coupled integrator.
@@ -966,7 +971,7 @@ impl ExchangeLlgProblem {
         )?;
 
         for i in 0..n {
-            bufs.m_stage[i] = normalized(add(bufs.m0[i], scale(bufs.k[0][i], GAMMA * dt)))?;
+            bufs.m_stage[i] = self.project_stage(add(bufs.m0[i], scale(bufs.k[0][i], GAMMA * dt)))?;
         }
         self.restore_frozen_reference(&mut bufs.m_stage[..n]);
         self.effective_field_into_ws_at_time(
@@ -990,7 +995,7 @@ impl ExchangeLlgProblem {
         )?;
 
         for i in 0..n {
-            bufs.delta[i] = normalized(add(
+            bufs.delta[i] = self.project_stage(add(
                 bufs.m0[i],
                 scale(
                     add(scale(bufs.k[0][i], DELTA), scale(bufs.k[1][i], 1.0 - DELTA)),
@@ -1015,7 +1020,7 @@ impl ExchangeLlgProblem {
         )?;
 
         for i in 0..n {
-            bufs.delta[i] = normalized(add(
+            bufs.delta[i] = self.project_stage(add(
                 bufs.m0[i],
                 scale(
                     add(scale(bufs.k[1][i], 1.0 - GAMMA), scale(bufs.k[2][i], GAMMA)),
@@ -1174,7 +1179,7 @@ impl ExchangeLlgProblem {
         )?;
 
         for i in 0..n {
-            bufs.m_stage[i] = normalized(add(bufs.m0[i], scale(bufs.k[0][i], dt)))?;
+            bufs.m_stage[i] = self.project_stage(add(bufs.m0[i], scale(bufs.k[0][i], dt)))?;
         }
         self.restore_frozen_reference(&mut bufs.m_stage[..n]);
 
@@ -1192,7 +1197,7 @@ impl ExchangeLlgProblem {
         // `delta` owns the corrected candidate until the coupled solve and
         // final observables have both succeeded.
         for i in 0..n {
-            bufs.delta[i] = normalized(add(
+            bufs.delta[i] = self.project_stage(add(
                 bufs.m0[i],
                 scale(add(bufs.k[0][i], bufs.k[1][i]), 0.5 * dt),
             ))?;
@@ -1303,12 +1308,12 @@ impl ExchangeLlgProblem {
                 .zip(m0.par_iter())
                 .zip(k0.par_iter())
                 .try_for_each(|((s, m), k)| -> Result<()> {
-                    *s = normalized(add(*m, scale(*k, dt)))?;
+                    *s = self.project_stage(add(*m, scale(*k, dt)))?;
                     Ok(())
                 })?;
             #[cfg(not(feature = "parallel"))]
             for i in 0..n {
-                stage[i] = normalized(add(m0[i], scale(k0[i], dt)))?;
+                stage[i] = self.project_stage(add(m0[i], scale(k0[i], dt)))?;
             }
         }
 
@@ -1335,12 +1340,12 @@ impl ExchangeLlgProblem {
                 .zip(k0.par_iter())
                 .zip(k1.par_iter())
                 .try_for_each(|(((m, m0), k0), k1)| -> Result<()> {
-                    *m = normalized(add(*m0, scale(add(*k0, *k1), 0.5 * dt)))?;
+                    *m = self.project_stage(add(*m0, scale(add(*k0, *k1), 0.5 * dt)))?;
                     Ok(())
                 })?;
             #[cfg(not(feature = "parallel"))]
             for i in 0..n {
-                mag[i] = normalized(add(m0[i], scale(add(k0[i], k1[i]), 0.5 * dt)))?;
+                mag[i] = self.project_stage(add(m0[i], scale(add(k0[i], k1[i]), 0.5 * dt)))?;
             }
         }
         self.restore_frozen_reference(&mut state.magnetization[..n]);
@@ -1374,7 +1379,7 @@ impl ExchangeLlgProblem {
         self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
 
         for i in 0..n {
-            let predicted = normalized([
+            let predicted = self.project_stage([
                 bufs.soa.m0.x[i] + dt * bufs.soa.k[0].x[i],
                 bufs.soa.m0.y[i] + dt * bufs.soa.k[0].y[i],
                 bufs.soa.m0.z[i] + dt * bufs.soa.k[0].z[i],
@@ -1393,7 +1398,7 @@ impl ExchangeLlgProblem {
         self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
 
         for i in 0..n {
-            state.magnetization[i] = normalized([
+            state.magnetization[i] = self.project_stage([
                 bufs.soa.m0.x[i] + 0.5 * dt * (bufs.soa.k[0].x[i] + bufs.soa.k[1].x[i]),
                 bufs.soa.m0.y[i] + 0.5 * dt * (bufs.soa.k[0].y[i] + bufs.soa.k[1].y[i]),
                 bufs.soa.m0.z[i] + 0.5 * dt * (bufs.soa.k[0].z[i] + bufs.soa.k[1].z[i]),
@@ -1445,12 +1450,12 @@ impl ExchangeLlgProblem {
                 .zip(m0.par_iter())
                 .zip(kj.par_iter())
                 .try_for_each(|((s, m), k)| -> Result<()> {
-                    *s = normalized(add(*m, scale(*k, 0.5 * dt)))?;
+                    *s = self.project_stage(add(*m, scale(*k, 0.5 * dt)))?;
                     Ok(())
                 })?;
             #[cfg(not(feature = "parallel"))]
             for i in 0..n {
-                stage[i] = normalized(add(m0[i], scale(kj[i], 0.5 * dt)))?;
+                stage[i] = self.project_stage(add(m0[i], scale(kj[i], 0.5 * dt)))?;
             }
         }
         self.restore_frozen_reference(&mut bufs.m_stage[..n]);
@@ -1475,12 +1480,12 @@ impl ExchangeLlgProblem {
                 .zip(m0.par_iter())
                 .zip(kj.par_iter())
                 .try_for_each(|((s, m), k)| -> Result<()> {
-                    *s = normalized(add(*m, scale(*k, 0.5 * dt)))?;
+                    *s = self.project_stage(add(*m, scale(*k, 0.5 * dt)))?;
                     Ok(())
                 })?;
             #[cfg(not(feature = "parallel"))]
             for i in 0..n {
-                stage[i] = normalized(add(m0[i], scale(kj[i], 0.5 * dt)))?;
+                stage[i] = self.project_stage(add(m0[i], scale(kj[i], 0.5 * dt)))?;
             }
         }
         self.restore_frozen_reference(&mut bufs.m_stage[..n]);
@@ -1505,12 +1510,12 @@ impl ExchangeLlgProblem {
                 .zip(m0.par_iter())
                 .zip(kj.par_iter())
                 .try_for_each(|((s, m), k)| -> Result<()> {
-                    *s = normalized(add(*m, scale(*k, dt)))?;
+                    *s = self.project_stage(add(*m, scale(*k, dt)))?;
                     Ok(())
                 })?;
             #[cfg(not(feature = "parallel"))]
             for i in 0..n {
-                stage[i] = normalized(add(m0[i], scale(kj[i], dt)))?;
+                stage[i] = self.project_stage(add(m0[i], scale(kj[i], dt)))?;
             }
         }
         self.restore_frozen_reference(&mut bufs.m_stage[..n]);
@@ -1535,7 +1540,7 @@ impl ExchangeLlgProblem {
             mag.par_iter_mut()
                 .enumerate()
                 .try_for_each(|(i, m)| -> Result<()> {
-                    *m = normalized(add(
+                    *m = self.project_stage(add(
                         m0[i],
                         scale(
                             add(add(k0[i], scale(k1[i], 2.0)), add(scale(k2[i], 2.0), k3[i])),
@@ -1546,7 +1551,7 @@ impl ExchangeLlgProblem {
                 })?;
             #[cfg(not(feature = "parallel"))]
             for i in 0..n {
-                mag[i] = normalized(add(
+                mag[i] = self.project_stage(add(
                     m0[i],
                     scale(
                         add(add(k0[i], scale(k1[i], 2.0)), add(scale(k2[i], 2.0), k3[i])),
@@ -1586,7 +1591,7 @@ impl ExchangeLlgProblem {
         self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
 
         for i in 0..n {
-            let stage = normalized([
+            let stage = self.project_stage([
                 bufs.soa.m0.x[i] + 0.5 * dt * bufs.soa.k[0].x[i],
                 bufs.soa.m0.y[i] + 0.5 * dt * bufs.soa.k[0].y[i],
                 bufs.soa.m0.z[i] + 0.5 * dt * bufs.soa.k[0].z[i],
@@ -1604,7 +1609,7 @@ impl ExchangeLlgProblem {
         self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
 
         for i in 0..n {
-            let stage = normalized([
+            let stage = self.project_stage([
                 bufs.soa.m0.x[i] + 0.5 * dt * bufs.soa.k[1].x[i],
                 bufs.soa.m0.y[i] + 0.5 * dt * bufs.soa.k[1].y[i],
                 bufs.soa.m0.z[i] + 0.5 * dt * bufs.soa.k[1].z[i],
@@ -1622,7 +1627,7 @@ impl ExchangeLlgProblem {
         self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[2]);
 
         for i in 0..n {
-            let stage = normalized([
+            let stage = self.project_stage([
                 bufs.soa.m0.x[i] + dt * bufs.soa.k[2].x[i],
                 bufs.soa.m0.y[i] + dt * bufs.soa.k[2].y[i],
                 bufs.soa.m0.z[i] + dt * bufs.soa.k[2].z[i],
@@ -1647,7 +1652,7 @@ impl ExchangeLlgProblem {
                 + (2.0 * bufs.soa.k[2].y[i] + bufs.soa.k[3].y[i]);
             let weighted_z = (bufs.soa.k[0].z[i] + 2.0 * bufs.soa.k[1].z[i])
                 + (2.0 * bufs.soa.k[2].z[i] + bufs.soa.k[3].z[i]);
-            state.magnetization[i] = normalized([
+            state.magnetization[i] = self.project_stage([
                 bufs.soa.m0.x[i] + dt6 * weighted_x,
                 bufs.soa.m0.y[i] + dt6 * weighted_y,
                 bufs.soa.m0.z[i] + dt6 * weighted_z,
@@ -1737,12 +1742,12 @@ impl ExchangeLlgProblem {
                     .zip(m0.par_iter())
                     .zip(kj.par_iter())
                     .try_for_each(|((s, m), k)| -> Result<()> {
-                        *s = normalized(add(*m, scale(*k, f)))?;
+                        *s = self.project_stage(add(*m, scale(*k, f)))?;
                         Ok(())
                     })?;
                 #[cfg(not(feature = "parallel"))]
                 for i in 0..n {
-                    stage[i] = normalized(add(m0[i], scale(kj[i], f)))?;
+                    stage[i] = self.project_stage(add(m0[i], scale(kj[i], f)))?;
                 }
             }
             self.restore_frozen_reference(&mut bufs.m_stage[..n]);
@@ -1769,12 +1774,12 @@ impl ExchangeLlgProblem {
                     .zip(m0.par_iter())
                     .zip(kj.par_iter())
                     .try_for_each(|((s, m), k)| -> Result<()> {
-                        *s = normalized(add(*m, scale(*k, f)))?;
+                        *s = self.project_stage(add(*m, scale(*k, f)))?;
                         Ok(())
                     })?;
                 #[cfg(not(feature = "parallel"))]
                 for i in 0..n {
-                    stage[i] = normalized(add(m0[i], scale(kj[i], f)))?;
+                    stage[i] = self.project_stage(add(m0[i], scale(kj[i], f)))?;
                 }
             }
             self.restore_frozen_reference(&mut bufs.m_stage[..n]);
@@ -1810,7 +1815,7 @@ impl ExchangeLlgProblem {
                             ),
                             dt,
                         );
-                        *s = normalized(add(*m, *d))?;
+                        *s = self.project_stage(add(*m, *d))?;
                         Ok(())
                     })?;
                 #[cfg(not(feature = "parallel"))]
@@ -1822,7 +1827,7 @@ impl ExchangeLlgProblem {
                         ),
                         dt,
                     );
-                    stage[i] = normalized(add(m0[i], delta[i]))?;
+                    stage[i] = self.project_stage(add(m0[i], delta[i]))?;
                 }
             }
 
@@ -1943,7 +1948,7 @@ impl ExchangeLlgProblem {
             rhs_evals.record();
 
             for i in 0..n {
-                let stage = normalized([
+                let stage = self.project_stage([
                     bufs.soa.m0.x[i] + 0.5 * dt * bufs.soa.k[0].x[i],
                     bufs.soa.m0.y[i] + 0.5 * dt * bufs.soa.k[0].y[i],
                     bufs.soa.m0.z[i] + 0.5 * dt * bufs.soa.k[0].z[i],
@@ -1962,7 +1967,7 @@ impl ExchangeLlgProblem {
             rhs_evals.record();
 
             for i in 0..n {
-                let stage = normalized([
+                let stage = self.project_stage([
                     bufs.soa.m0.x[i] + 0.75 * dt * bufs.soa.k[1].x[i],
                     bufs.soa.m0.y[i] + 0.75 * dt * bufs.soa.k[1].y[i],
                     bufs.soa.m0.z[i] + 0.75 * dt * bufs.soa.k[1].z[i],
@@ -1990,7 +1995,7 @@ impl ExchangeLlgProblem {
                 let weighted_z = (2.0 / 9.0) * bufs.soa.k[0].z[i]
                     + (1.0 / 3.0) * bufs.soa.k[1].z[i]
                     + (4.0 / 9.0) * bufs.soa.k[2].z[i];
-                let stage = normalized([
+                let stage = self.project_stage([
                     bufs.soa.m0.x[i] + dt * weighted_x,
                     bufs.soa.m0.y[i] + dt * weighted_y,
                     bufs.soa.m0.z[i] + dt * weighted_z,
@@ -2166,12 +2171,12 @@ impl ExchangeLlgProblem {
                     .zip(m0.par_iter())
                     .zip(k0.par_iter())
                     .try_for_each(|((s, m), k)| -> Result<()> {
-                        *s = normalized(add(*m, scale(*k, f)))?;
+                        *s = self.project_stage(add(*m, scale(*k, f)))?;
                         Ok(())
                     })?;
                 #[cfg(not(feature = "parallel"))]
                 for i in 0..n {
-                    stage[i] = normalized(add(m0[i], scale(k0[i], f)))?;
+                    stage[i] = self.project_stage(add(m0[i], scale(k0[i], f)))?;
                 }
             }
             self.restore_frozen_reference(&mut bufs.m_stage[..n]);
@@ -2198,7 +2203,7 @@ impl ExchangeLlgProblem {
                     .zip(m0.par_iter())
                     .enumerate()
                     .try_for_each(|(i, (s, m))| -> Result<()> {
-                        *s = normalized(add(
+                        *s = self.project_stage(add(
                             *m,
                             scale(add(scale(k0[i], A31), scale(k1[i], A32)), dt),
                         ))?;
@@ -2206,7 +2211,7 @@ impl ExchangeLlgProblem {
                     })?;
                 #[cfg(not(feature = "parallel"))]
                 for i in 0..n {
-                    stage[i] = normalized(add(
+                    stage[i] = self.project_stage(add(
                         m0[i],
                         scale(add(scale(k0[i], A31), scale(k1[i], A32)), dt),
                     ))?;
@@ -2236,7 +2241,7 @@ impl ExchangeLlgProblem {
                     .zip(m0.par_iter())
                     .enumerate()
                     .try_for_each(|(i, (s, m))| -> Result<()> {
-                        *s = normalized(add(
+                        *s = self.project_stage(add(
                             *m,
                             scale(
                                 add(add(scale(k0[i], A41), scale(k1[i], A42)), scale(k2[i], A43)),
@@ -2247,7 +2252,7 @@ impl ExchangeLlgProblem {
                     })?;
                 #[cfg(not(feature = "parallel"))]
                 for i in 0..n {
-                    stage[i] = normalized(add(
+                    stage[i] = self.project_stage(add(
                         m0[i],
                         scale(
                             add(add(scale(k0[i], A41), scale(k1[i], A42)), scale(k2[i], A43)),
@@ -2285,7 +2290,7 @@ impl ExchangeLlgProblem {
                     .zip(m0.par_iter())
                     .enumerate()
                     .try_for_each(|(i, (s, m))| -> Result<()> {
-                        *s = normalized(add(
+                        *s = self.project_stage(add(
                             *m,
                             scale(
                                 add(
@@ -2299,7 +2304,7 @@ impl ExchangeLlgProblem {
                     })?;
                 #[cfg(not(feature = "parallel"))]
                 for i in 0..n {
-                    stage[i] = normalized(add(
+                    stage[i] = self.project_stage(add(
                         m0[i],
                         scale(
                             add(
@@ -2341,7 +2346,7 @@ impl ExchangeLlgProblem {
                     .zip(m0.par_iter())
                     .enumerate()
                     .try_for_each(|(i, (s, m))| -> Result<()> {
-                        *s = normalized(add(
+                        *s = self.project_stage(add(
                             *m,
                             scale(
                                 add(
@@ -2358,7 +2363,7 @@ impl ExchangeLlgProblem {
                     })?;
                 #[cfg(not(feature = "parallel"))]
                 for i in 0..n {
-                    stage[i] = normalized(add(
+                    stage[i] = self.project_stage(add(
                         m0[i],
                         scale(
                             add(
@@ -2400,7 +2405,7 @@ impl ExchangeLlgProblem {
                     .zip(m0.par_iter())
                     .enumerate()
                     .try_for_each(|(i, (s, m))| -> Result<()> {
-                        *s = normalized(add(
+                        *s = self.project_stage(add(
                             *m,
                             scale(
                                 add(
@@ -2414,7 +2419,7 @@ impl ExchangeLlgProblem {
                     })?;
                 #[cfg(not(feature = "parallel"))]
                 for i in 0..n {
-                    stage[i] = normalized(add(
+                    stage[i] = self.project_stage(add(
                         m0[i],
                         scale(
                             add(
@@ -2583,7 +2588,7 @@ impl ExchangeLlgProblem {
             }
 
             for i in 0..n {
-                let stage = normalized([
+                let stage = self.project_stage([
                     bufs.soa.m0.x[i] + dt * A21 * bufs.soa.k[0].x[i],
                     bufs.soa.m0.y[i] + dt * A21 * bufs.soa.k[0].y[i],
                     bufs.soa.m0.z[i] + dt * A21 * bufs.soa.k[0].z[i],
@@ -2602,7 +2607,7 @@ impl ExchangeLlgProblem {
             rhs_evals.record();
 
             for i in 0..n {
-                let stage = normalized([
+                let stage = self.project_stage([
                     bufs.soa.m0.x[i] + dt * (A31 * bufs.soa.k[0].x[i] + A32 * bufs.soa.k[1].x[i]),
                     bufs.soa.m0.y[i] + dt * (A31 * bufs.soa.k[0].y[i] + A32 * bufs.soa.k[1].y[i]),
                     bufs.soa.m0.z[i] + dt * (A31 * bufs.soa.k[0].z[i] + A32 * bufs.soa.k[1].z[i]),
@@ -2621,7 +2626,7 @@ impl ExchangeLlgProblem {
             rhs_evals.record();
 
             for i in 0..n {
-                let stage = normalized([
+                let stage = self.project_stage([
                     bufs.soa.m0.x[i]
                         + dt * (A41 * bufs.soa.k[0].x[i]
                             + A42 * bufs.soa.k[1].x[i]
@@ -2649,7 +2654,7 @@ impl ExchangeLlgProblem {
             rhs_evals.record();
 
             for i in 0..n {
-                let stage = normalized([
+                let stage = self.project_stage([
                     bufs.soa.m0.x[i]
                         + dt * (A51 * bufs.soa.k[0].x[i]
                             + A52 * bufs.soa.k[1].x[i]
@@ -2680,7 +2685,7 @@ impl ExchangeLlgProblem {
             rhs_evals.record();
 
             for i in 0..n {
-                let stage = normalized([
+                let stage = self.project_stage([
                     bufs.soa.m0.x[i]
                         + dt * (A61 * bufs.soa.k[0].x[i]
                             + A62 * bufs.soa.k[1].x[i]
@@ -2714,7 +2719,7 @@ impl ExchangeLlgProblem {
             rhs_evals.record();
 
             for i in 0..n {
-                let stage = normalized([
+                let stage = self.project_stage([
                     bufs.soa.m0.x[i]
                         + dt * (B1 * bufs.soa.k[0].x[i]
                             + B3 * bufs.soa.k[2].x[i]
@@ -2862,12 +2867,12 @@ impl ExchangeLlgProblem {
                     .zip(m0.par_iter())
                     .zip(k0.par_iter())
                     .try_for_each(|((s, m), k)| -> Result<()> {
-                        *s = normalized(add(*m, scale(*k, dt)))?;
+                        *s = self.project_stage(add(*m, scale(*k, dt)))?;
                         Ok(())
                     })?;
                 #[cfg(not(feature = "parallel"))]
                 for i in 0..n {
-                    stage[i] = normalized(add(m0[i], scale(k0[i], dt)))?;
+                    stage[i] = self.project_stage(add(m0[i], scale(k0[i], dt)))?;
                 }
             }
 
@@ -2900,12 +2905,12 @@ impl ExchangeLlgProblem {
                     .zip(k0.par_iter())
                     .zip(k1.par_iter())
                     .try_for_each(|(((m, m0), k0), k1)| -> Result<()> {
-                        *m = normalized(add(*m0, scale(add(*k0, *k1), 0.5 * dt)))?;
+                        *m = self.project_stage(add(*m0, scale(add(*k0, *k1), 0.5 * dt)))?;
                         Ok(())
                     })?;
                 #[cfg(not(feature = "parallel"))]
                 for i in 0..n {
-                    stage[i] = normalized(add(m0[i], scale(add(k0[i], k1[i]), 0.5 * dt)))?;
+                    stage[i] = self.project_stage(add(m0[i], scale(add(k0[i], k1[i]), 0.5 * dt)))?;
                 }
             }
             self.restore_frozen_reference(&mut bufs.m_stage[..n]);
@@ -2959,7 +2964,7 @@ impl ExchangeLlgProblem {
                         add(scale(f_n[i], 23.0 / 12.0), scale(f_n1[i], -16.0 / 12.0)),
                         scale(f_n2[i], 5.0 / 12.0),
                     );
-                    *s = normalized(add(*m, scale(pred, dt)))?;
+                    *s = self.project_stage(add(*m, scale(pred, dt)))?;
                     Ok(())
                 })?;
             #[cfg(not(feature = "parallel"))]
@@ -2968,7 +2973,7 @@ impl ExchangeLlgProblem {
                     add(scale(f_n[i], 23.0 / 12.0), scale(f_n1[i], -16.0 / 12.0)),
                     scale(f_n2[i], 5.0 / 12.0),
                 );
-                stage[i] = normalized(add(m0[i], scale(pred, dt)))?;
+                stage[i] = self.project_stage(add(m0[i], scale(pred, dt)))?;
             }
         }
 
@@ -2998,7 +3003,7 @@ impl ExchangeLlgProblem {
                         add(scale(k0[i], 5.0 / 12.0), scale(f_n[i], 8.0 / 12.0)),
                         scale(f_n1[i], -1.0 / 12.0),
                     );
-                    *m = normalized(add(*m0, scale(corr, dt)))?;
+                    *m = self.project_stage(add(*m0, scale(corr, dt)))?;
                     Ok(())
                 })?;
             #[cfg(not(feature = "parallel"))]
@@ -3007,7 +3012,7 @@ impl ExchangeLlgProblem {
                     add(scale(k0[i], 5.0 / 12.0), scale(f_n[i], 8.0 / 12.0)),
                     scale(f_n1[i], -1.0 / 12.0),
                 );
-                stage[i] = normalized(add(m0[i], scale(corr, dt)))?;
+                stage[i] = self.project_stage(add(m0[i], scale(corr, dt)))?;
             }
         }
         self.restore_frozen_reference(&mut bufs.m_stage[..n]);
@@ -3076,7 +3081,7 @@ impl ExchangeLlgProblem {
                 + (5.0 / 12.0) * bufs.soa.k[3].y[i];
             let pred_z = (23.0 / 12.0) * bufs.soa.k[1].z[i] - (16.0 / 12.0) * bufs.soa.k[2].z[i]
                 + (5.0 / 12.0) * bufs.soa.k[3].z[i];
-            let stage = normalized([
+            let stage = self.project_stage([
                 bufs.soa.m0.x[i] + dt * pred_x,
                 bufs.soa.m0.y[i] + dt * pred_y,
                 bufs.soa.m0.z[i] + dt * pred_z,
@@ -3101,7 +3106,7 @@ impl ExchangeLlgProblem {
                 - (1.0 / 12.0) * bufs.soa.k[2].y[i];
             let corr_z = (5.0 / 12.0) * bufs.soa.k[0].z[i] + (8.0 / 12.0) * bufs.soa.k[1].z[i]
                 - (1.0 / 12.0) * bufs.soa.k[2].z[i];
-            let corrected = normalized([
+            let corrected = self.project_stage([
                 bufs.soa.m0.x[i] + dt * corr_x,
                 bufs.soa.m0.y[i] + dt * corr_y,
                 bufs.soa.m0.z[i] + dt * corr_z,
@@ -3149,7 +3154,7 @@ impl ExchangeLlgProblem {
         self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
 
         for i in 0..n {
-            let predicted = normalized([
+            let predicted = self.project_stage([
                 bufs.soa.m0.x[i] + dt * bufs.soa.k[0].x[i],
                 bufs.soa.m0.y[i] + dt * bufs.soa.k[0].y[i],
                 bufs.soa.m0.z[i] + dt * bufs.soa.k[0].z[i],
@@ -3168,7 +3173,7 @@ impl ExchangeLlgProblem {
         self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
 
         for i in 0..n {
-            let corrected = normalized([
+            let corrected = self.project_stage([
                 bufs.soa.m0.x[i] + 0.5 * dt * (bufs.soa.k[0].x[i] + bufs.soa.k[1].x[i]),
                 bufs.soa.m0.y[i] + 0.5 * dt * (bufs.soa.k[0].y[i] + bufs.soa.k[1].y[i]),
                 bufs.soa.m0.z[i] + 0.5 * dt * (bufs.soa.k[0].z[i] + bufs.soa.k[1].z[i]),
@@ -3205,7 +3210,7 @@ impl ExchangeLlgProblem {
         self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
 
         for i in 0..n {
-            let stage = normalized([
+            let stage = self.project_stage([
                 bufs.soa.m0.x[i] + 0.5 * dt * bufs.soa.k[0].x[i],
                 bufs.soa.m0.y[i] + 0.5 * dt * bufs.soa.k[0].y[i],
                 bufs.soa.m0.z[i] + 0.5 * dt * bufs.soa.k[0].z[i],
@@ -3223,7 +3228,7 @@ impl ExchangeLlgProblem {
         self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
 
         for i in 0..n {
-            let stage = normalized([
+            let stage = self.project_stage([
                 bufs.soa.m0.x[i] + 0.5 * dt * bufs.soa.k[1].x[i],
                 bufs.soa.m0.y[i] + 0.5 * dt * bufs.soa.k[1].y[i],
                 bufs.soa.m0.z[i] + 0.5 * dt * bufs.soa.k[1].z[i],
@@ -3241,7 +3246,7 @@ impl ExchangeLlgProblem {
         self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[2]);
 
         for i in 0..n {
-            let stage = normalized([
+            let stage = self.project_stage([
                 bufs.soa.m0.x[i] + dt * bufs.soa.k[2].x[i],
                 bufs.soa.m0.y[i] + dt * bufs.soa.k[2].y[i],
                 bufs.soa.m0.z[i] + dt * bufs.soa.k[2].z[i],
@@ -3266,7 +3271,7 @@ impl ExchangeLlgProblem {
                 + (2.0 * bufs.soa.k[2].y[i] + bufs.soa.k[3].y[i]);
             let weighted_z = (bufs.soa.k[0].z[i] + 2.0 * bufs.soa.k[1].z[i])
                 + (2.0 * bufs.soa.k[2].z[i] + bufs.soa.k[3].z[i]);
-            let updated = normalized([
+            let updated = self.project_stage([
                 bufs.soa.m0.x[i] + dt6 * weighted_x,
                 bufs.soa.m0.y[i] + dt6 * weighted_y,
                 bufs.soa.m0.z[i] + dt6 * weighted_z,
@@ -3317,7 +3322,7 @@ impl ExchangeLlgProblem {
             rhs_evals.record();
 
             for i in 0..n {
-                let stage = normalized([
+                let stage = self.project_stage([
                     bufs.soa.m0.x[i] + 0.5 * dt * bufs.soa.k[0].x[i],
                     bufs.soa.m0.y[i] + 0.5 * dt * bufs.soa.k[0].y[i],
                     bufs.soa.m0.z[i] + 0.5 * dt * bufs.soa.k[0].z[i],
@@ -3336,7 +3341,7 @@ impl ExchangeLlgProblem {
             rhs_evals.record();
 
             for i in 0..n {
-                let stage = normalized([
+                let stage = self.project_stage([
                     bufs.soa.m0.x[i] + 0.75 * dt * bufs.soa.k[1].x[i],
                     bufs.soa.m0.y[i] + 0.75 * dt * bufs.soa.k[1].y[i],
                     bufs.soa.m0.z[i] + 0.75 * dt * bufs.soa.k[1].z[i],
@@ -3364,7 +3369,7 @@ impl ExchangeLlgProblem {
                 let weighted_z = (2.0 / 9.0) * bufs.soa.k[0].z[i]
                     + (1.0 / 3.0) * bufs.soa.k[1].z[i]
                     + (4.0 / 9.0) * bufs.soa.k[2].z[i];
-                let stage = normalized([
+                let stage = self.project_stage([
                     bufs.soa.m0.x[i] + dt * weighted_x,
                     bufs.soa.m0.y[i] + dt * weighted_y,
                     bufs.soa.m0.z[i] + dt * weighted_z,
@@ -3520,7 +3525,7 @@ impl ExchangeLlgProblem {
             }
 
             for i in 0..n {
-                let stage = normalized([
+                let stage = self.project_stage([
                     bufs.soa.m0.x[i] + dt * A21 * bufs.soa.k[0].x[i],
                     bufs.soa.m0.y[i] + dt * A21 * bufs.soa.k[0].y[i],
                     bufs.soa.m0.z[i] + dt * A21 * bufs.soa.k[0].z[i],
@@ -3539,7 +3544,7 @@ impl ExchangeLlgProblem {
             rhs_evals.record();
 
             for i in 0..n {
-                let stage = normalized([
+                let stage = self.project_stage([
                     bufs.soa.m0.x[i] + dt * (A31 * bufs.soa.k[0].x[i] + A32 * bufs.soa.k[1].x[i]),
                     bufs.soa.m0.y[i] + dt * (A31 * bufs.soa.k[0].y[i] + A32 * bufs.soa.k[1].y[i]),
                     bufs.soa.m0.z[i] + dt * (A31 * bufs.soa.k[0].z[i] + A32 * bufs.soa.k[1].z[i]),
@@ -3558,7 +3563,7 @@ impl ExchangeLlgProblem {
             rhs_evals.record();
 
             for i in 0..n {
-                let stage = normalized([
+                let stage = self.project_stage([
                     bufs.soa.m0.x[i]
                         + dt * (A41 * bufs.soa.k[0].x[i]
                             + A42 * bufs.soa.k[1].x[i]
@@ -3586,7 +3591,7 @@ impl ExchangeLlgProblem {
             rhs_evals.record();
 
             for i in 0..n {
-                let stage = normalized([
+                let stage = self.project_stage([
                     bufs.soa.m0.x[i]
                         + dt * (A51 * bufs.soa.k[0].x[i]
                             + A52 * bufs.soa.k[1].x[i]
@@ -3617,7 +3622,7 @@ impl ExchangeLlgProblem {
             rhs_evals.record();
 
             for i in 0..n {
-                let stage = normalized([
+                let stage = self.project_stage([
                     bufs.soa.m0.x[i]
                         + dt * (A61 * bufs.soa.k[0].x[i]
                             + A62 * bufs.soa.k[1].x[i]
@@ -3651,7 +3656,7 @@ impl ExchangeLlgProblem {
             rhs_evals.record();
 
             for i in 0..n {
-                let stage = normalized([
+                let stage = self.project_stage([
                     bufs.soa.m0.x[i]
                         + dt * (B1 * bufs.soa.k[0].x[i]
                             + B3 * bufs.soa.k[2].x[i]
@@ -3816,7 +3821,7 @@ impl ExchangeLlgProblem {
                 + (5.0 / 12.0) * bufs.soa.k[3].y[i];
             let pred_z = (23.0 / 12.0) * bufs.soa.k[1].z[i] - (16.0 / 12.0) * bufs.soa.k[2].z[i]
                 + (5.0 / 12.0) * bufs.soa.k[3].z[i];
-            let stage = normalized([
+            let stage = self.project_stage([
                 bufs.soa.m0.x[i] + dt * pred_x,
                 bufs.soa.m0.y[i] + dt * pred_y,
                 bufs.soa.m0.z[i] + dt * pred_z,
@@ -3841,7 +3846,7 @@ impl ExchangeLlgProblem {
                 - (1.0 / 12.0) * bufs.soa.k[2].y[i];
             let corr_z = (5.0 / 12.0) * bufs.soa.k[0].z[i] + (8.0 / 12.0) * bufs.soa.k[1].z[i]
                 - (1.0 / 12.0) * bufs.soa.k[2].z[i];
-            let updated = normalized([
+            let updated = self.project_stage([
                 bufs.soa.m0.x[i] + dt * corr_x,
                 bufs.soa.m0.y[i] + dt * corr_y,
                 bufs.soa.m0.z[i] + dt * corr_z,
