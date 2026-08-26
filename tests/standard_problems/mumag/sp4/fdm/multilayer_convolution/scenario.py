@@ -127,7 +127,6 @@ study.save("H_demag", every=1e-12)
 
 # Disconnected bodies keep exchange local; no inter-object exchange edge is
 # authored.  This condition is recorded in runtime provenance below.
-study.exchange(enabled=True)
 study.runtime_metadata("fdm_multilayer_qualification", STUDY_METADATA)
 study.runtime_metadata("airbox_observation", AIRBOX_RUNTIME)
 study.b_ext(-24.6e-3, 4.3e-3, 0.0)

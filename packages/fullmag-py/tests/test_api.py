@@ -719,7 +719,6 @@ class ProblemApiTests(unittest.TestCase):
                     first = film.add_region("core", fm.Cylinder(radius=15e-9, height=2e-9))
                     film.remove_region(first)
                     film.add_region("core", fm.Cylinder(radius=20e-9, height=2e-9))
-                    study.exchange()
                     """
                 ).strip()
                 + "\n",
@@ -846,7 +845,6 @@ class ProblemApiTests(unittest.TestCase):
                     film.Ms = 800e3
                     film.Aex = 13e-12
                     film.add_region("core", fm.Cylinder(radius=15e-9, height=2e-9))
-                    study.exchange()
                     """
                 ).strip()
                 + "\n",
@@ -872,7 +870,6 @@ class ProblemApiTests(unittest.TestCase):
             region="core",
         )
         study.couplings.exchange(core, shell, coupling_id="core_shell_exchange")
-        study.exchange()
 
         before = flat_world._build_problem().to_ir(include_geometry_assets=False)
         self.assertEqual(len(before["material_parameter_fields"]), 1)
@@ -950,7 +947,6 @@ class ProblemApiTests(unittest.TestCase):
             J1=-0.3e-3,
             coupling_id="layer_a_layer_b_rkky",
         )
-        study.exchange()
         study.solver(integrator="rk23")
         fm.run(1e-12)
 
@@ -1060,7 +1056,6 @@ class ProblemApiTests(unittest.TestCase):
                         J1=-0.3e-3,
                         coupling_id="film_reference_rkky",
                     )
-                    study.exchange()
                     """
                 ).strip()
                 + "\n",
@@ -1151,7 +1146,6 @@ class ProblemApiTests(unittest.TestCase):
                         inter_exchange=6.5e-12,
                         coupling_id="core_shell_exchange",
                     )
-                    study.exchange()
                     """
                 ).strip()
                 + "\n",
@@ -4665,7 +4659,6 @@ class ProblemApiTests(unittest.TestCase):
         core.mesh(maximum_element_size=3e-9)
         core.set_material("ms", fm.fields.constant(760e3, unit="A/m"), priority=2)
 
-        study.exchange()
         study.run(1e-12)
         """
 

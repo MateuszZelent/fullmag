@@ -45,7 +45,6 @@ core.mesh(
     order=1,
 )
 
-study.exchange()
 study.demag(realization="poisson_robin")
 study.stages.add_relax(
     algorithm="llg_overdamped",

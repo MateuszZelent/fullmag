@@ -134,7 +134,6 @@ plate.mesh(
     optimize_iterations=1,
 )
 
-study.exchange()
 study.demag(realization="poisson_robin")
 study.fem_demag_solver(
     solver="CG",

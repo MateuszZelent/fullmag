@@ -61,7 +61,6 @@ for layer, saturation_magnetisation in zip(
     layer.m = fm.init.UniformMagnetization(INITIAL_M)
 
 study.save("H_demag", every=1e-14)
-study.exchange(enabled=True)
 study.runtime_metadata(
     "fdm_multilayer_qualification",
     {

@@ -567,6 +567,11 @@ timestep policy. Missing or mismatched artifact/source evidence fails closed to
 
 ## Capability matrix
 
+FEM demag preserves requested versus resolved semantics: the default request `auto` resolves to
+`poisson_robin` on shared-domain airbox plans, including strict mixed-P1 CPU/GPU planning.
+Explicit `poisson_robin` and `poisson_dirichlet` remain legal; unsupported realizations fail
+closed. Users do not need to author a backend-specific demag realization to enter this scope.
+
 | Feature | FDM | FEM | Hybrid | Tier | Notes |
 |---------|-----|-----|--------|------|-------|
 | `Box` geometry | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Box→grid lowering for FDM and Box→mesh lowering for FEM |

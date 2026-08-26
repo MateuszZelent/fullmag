@@ -55,7 +55,6 @@ for layer in (bottom, middle, top):
     layer.m = fm.init.UniformMagnetization(INITIAL_M)
 
 study.save("H_demag", every=1e-12)
-study.exchange(enabled=True)
 study.runtime_metadata(
     "fdm_multilayer_qualification",
     {

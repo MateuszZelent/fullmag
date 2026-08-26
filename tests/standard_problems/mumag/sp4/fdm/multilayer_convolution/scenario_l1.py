@@ -36,7 +36,6 @@ bottom.Aex = 1.3e-11
 bottom.alpha = 0.02
 bottom.m = fm.init.UniformMagnetization((0.9950371902099893, 0.09950371902099893, 0.0))
 study.save("H_demag", every=1e-12)
-study.exchange(enabled=True)
 study.runtime_metadata(
     "fdm_multilayer_qualification",
     {

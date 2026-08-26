@@ -1383,6 +1383,22 @@ fn mixed_p1_scope_failed_predicates(
         .as_ref()
         .and_then(|hints| hints.fem.as_ref())
         .map(|hints| hints.order);
+    let device = match effective_runtime_device(problem) {
+        "cuda" => "gpu",
+        device => device,
+    };
+    let has_dmi = problem.energy_terms.iter().any(|term| {
+        matches!(
+            term,
+            fullmag_ir::EnergyTermIR::InterfacialDmi { .. }
+                | fullmag_ir::EnergyTermIR::BulkDmi { .. }
+        )
+    }) || problem.materials.iter().any(|material| {
+        material.interfacial_dmi.is_some()
+            || material.bulk_dmi.is_some()
+            || material.dind_field.is_some()
+            || material.dbulk_field.is_some()
+    });
     let mut exchange_count = 0usize;
     let mut demag_count = 0usize;
     let mut unsupported_energy = false;
@@ -1392,12 +1408,15 @@ fn mixed_p1_scope_failed_predicates(
             fullmag_ir::EnergyTermIR::Demag { realization }
                 if matches!(
                     realization,
-                    fullmag_ir::RequestedFemDemagIR::PoissonRobin
+                    fullmag_ir::RequestedFemDemagIR::Auto
+                        | fullmag_ir::RequestedFemDemagIR::PoissonRobin
                         | fullmag_ir::RequestedFemDemagIR::PoissonDirichlet
                 ) =>
             {
                 demag_count += 1;
             }
+            fullmag_ir::EnergyTermIR::InterfacialDmi { .. }
+            | fullmag_ir::EnergyTermIR::BulkDmi { .. } => {}
             fullmag_ir::EnergyTermIR::Zeeman { .. } => {}
             _ => unsupported_energy = true,
         }
@@ -1413,7 +1432,7 @@ fn mixed_p1_scope_failed_predicates(
     if problem.backend_policy.execution_precision != fullmag_ir::ExecutionPrecision::Double {
         failed.push("precision_not_double");
     }
-    if !matches!(effective_runtime_device(problem), "cpu" | "gpu") {
+    if !matches!(device, "cpu" | "gpu") {
         failed.push("device_not_explicit_cpu_or_gpu");
     }
     if fem_order != Some(1) {
@@ -1437,27 +1456,9 @@ fn mixed_p1_scope_failed_predicates(
         failed.push("material_count_not_one");
     }
     if problem.materials.iter().any(|material| {
-        material.cubic_anisotropy_kc1.is_some()
-            || material.cubic_anisotropy_kc2.is_some()
-            || material.cubic_anisotropy_kc3.is_some()
-            || material.cubic_anisotropy_axis1.is_some()
-            || material.cubic_anisotropy_axis2.is_some()
-    }) {
-        failed.push("unsupported_cubic_anisotropy");
-    }
-    if problem.materials.iter().any(|material| {
         material.ms_field.is_some()
             || material.a_field.is_some()
             || material.alpha_field.is_some()
-            || material.ku_field.is_some()
-            || material.ku2_field.is_some()
-            || material.kc1_field.is_some()
-            || material.kc2_field.is_some()
-            || material.kc3_field.is_some()
-            || material.interfacial_dmi.is_some()
-            || material.bulk_dmi.is_some()
-            || material.dind_field.is_some()
-            || material.dbulk_field.is_some()
     }) {
         failed.push("unsupported_material_field_or_dmi");
     }
@@ -1509,6 +1510,9 @@ fn mixed_p1_scope_failed_predicates(
     if unsupported_energy {
         failed.push("unsupported_energy_term");
     }
+    if has_dmi && device == "gpu" {
+        failed.push("gpu_dmi_kernel_not_mixed_p1");
+    }
     if !(1..=3).contains(&certificate.requested_layer_count) {
         failed.push("requested_layer_count_outside_1_to_3");
     }
@@ -1535,7 +1539,7 @@ fn validate_mixed_p1_execution_scope(
         return Ok(());
     }
     Err(format!(
-        "fem_mixed_p1_scope_rejected: failed_predicates=[{}]; required=explicit_fem+explicit_cpu_or_gpu+strict+double+P1+one_axis_aligned_box+exact_1_to_3_layers+uniform_material+exchange+optional_uniform_uniaxial_anisotropy+poisson_robin_or_dirichlet+PG_BB_or_NCG_or_LLG_overdamped; requested_backend={:?}; requested_device={}; requested_precision={:?}; execution_mode={:?}; study={:?}; energy_terms={:?}; fallback=none",
+        "fem_mixed_p1_scope_rejected: failed_predicates=[{}]; required=explicit_fem+explicit_cpu_or_gpu+strict+double+P1+one_axis_aligned_box+exact_1_to_3_layers+uniform_material+exchange+uniform_or_nodal_uniaxial_or_cubic_anisotropy+cpu_dmi_only+auto_or_poisson_open_boundary_order_one+PG_BB_or_NCG_or_LLG_overdamped; requested_backend={:?}; requested_device={}; requested_precision={:?}; execution_mode={:?}; study={:?}; energy_terms={:?}; fallback=none",
         failed.join(","),
         problem.backend_policy.requested_backend,
         effective_runtime_device(problem),

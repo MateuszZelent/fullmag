@@ -53,7 +53,6 @@ study.couplings.rkky(
     coupling_id="free_layer_reference_rkky",
 )
 
-study.exchange()
 study.demag(realization="poisson_robin")
 study.stages.add_relax(
     algorithm="llg_overdamped",

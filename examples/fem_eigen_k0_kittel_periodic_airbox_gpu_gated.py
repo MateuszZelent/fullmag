@@ -39,7 +39,6 @@ body.mesh(maximum_element_size=40e-9, order=1)
 
 study.pbc(x=True, demag="periodic_airbox_k0")
 study.b_ext(BIAS_FIELDS_T[0], 0.0, 0.0)
-study.exchange()
 study.demag(realization="poisson_robin")
 study.build_domain_mesh()
 

@@ -77,7 +77,6 @@ body.mesh.thin_film(
 
 study.pbc(x=True, demag="periodic_airbox_k0")
 study.b_ext(BIAS_FIELDS_T[0], 0.0, 0.0)
-study.exchange()
 study.demag(realization="poisson_robin")
 study.build_domain_mesh()
 

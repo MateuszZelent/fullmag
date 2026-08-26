@@ -43,7 +43,6 @@ study.domain_mesh(
 )
 
 study.b_ext(10e-3, 0.0, 0.0)
-study.exchange()
 study.demag(realization="poisson_robin")
 study.fem_demag_solver(
     solver="CG",

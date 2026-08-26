@@ -50,7 +50,6 @@ film.m = fm.texture.neel_skyrmion(
 if BACKEND == "fem":
     film.mesh(minimum_element_size=5e-9, maximum_element_size=10e-9, order=1)
 
-study.exchange()
 study.demag(realization="poisson_robin")
 study.solver(dt=1e-13)
 study.stages.add_relax(algorithm="llg_overdamped", max_steps=1, tolA=1e-3)

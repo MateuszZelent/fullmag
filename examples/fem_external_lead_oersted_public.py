@@ -148,7 +148,7 @@ study.device("cpu", precision="double")
 study.mode("strict")
 study.universe(mode="manual", size=(1.0, 1.0, 1.0), center=(0.5, 0.5, 0.5))
 study.domain_mesh(DEVICE_MESH, region_markers={"device": 1})
-study.exchange(enabled=False)
+study.disable_exchange()
 study.demag(enabled=False)
 
 device = study.geometry(fm.Box(size=(1.0, 1.0, 1.0), name="device"), name="device")

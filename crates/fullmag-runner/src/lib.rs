@@ -1826,130 +1826,260 @@ fn require_supported_fem_topology(
             message: "fem_mixed_p1_runtime_provenance_stale: capability status must be implemented until managed public runtime proof exists; fallback=none".to_string(),
         });
     }
-    let supported_relaxation = relaxation_plan.is_some_and(|fem| {
-        fem.fe_order == 1
-            && fem.precision == fullmag_ir::ExecutionPrecision::Double
-            && fem.enable_exchange
-            && fem.enable_demag
-            && matches!(
-                fem.demag_realization,
-                Some(
-                    fullmag_ir::ResolvedFemDemagIR::PoissonRobin
-                        | fullmag_ir::ResolvedFemDemagIR::PoissonDirichlet
-                )
-            )
-            && fem.relaxation.as_ref().is_some_and(|relaxation| {
-                matches!(
-                    relaxation.algorithm,
-                    fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
-                        | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
-                        | fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped
-                )
-            })
-            && fem.interfacial_dmi.is_none()
-            && fem.bulk_dmi.is_none()
-            && fem.current_modules.is_empty()
-            && fem.field_drives.is_empty()
-            && fem.temperature.is_none()
-            && fem.magnetoelastic.is_none()
-            && fem.mechanics.is_none()
-    });
     let mut exchange_count = 0usize;
     let mut demag_count = 0usize;
+    let mut demag_realization_supported = true;
     let mut energy_supported = true;
     for term in &problem.energy_terms {
         match term {
             fullmag_ir::EnergyTermIR::Exchange => exchange_count += 1,
-            fullmag_ir::EnergyTermIR::Demag { realization }
-                if matches!(
+            fullmag_ir::EnergyTermIR::Demag { realization } => {
+                demag_count += 1;
+                if !matches!(
                     realization,
                     fullmag_ir::RequestedFemDemagIR::PoissonRobin
                         | fullmag_ir::RequestedFemDemagIR::PoissonDirichlet
-                ) =>
-            {
-                demag_count += 1
+                ) {
+                    demag_realization_supported = false;
+                }
             }
+            fullmag_ir::EnergyTermIR::InterfacialDmi { .. }
+            | fullmag_ir::EnergyTermIR::BulkDmi { .. } => {}
             fullmag_ir::EnergyTermIR::Zeeman { .. } => {}
             _ => energy_supported = false,
         }
     }
-    let material_supported = problem.materials.len() == 1
-        && problem.materials.iter().all(|material| {
-            material.uniaxial_anisotropy.is_none()
-                && material.uniaxial_anisotropy_k2.is_none()
-                && material.anisotropy_axis.is_none()
-                && material.cubic_anisotropy_kc1.is_none()
-                && material.cubic_anisotropy_kc2.is_none()
-                && material.cubic_anisotropy_kc3.is_none()
-                && material.cubic_anisotropy_axis1.is_none()
-                && material.cubic_anisotropy_axis2.is_none()
-                && material.ms_field.is_none()
-                && material.a_field.is_none()
-                && material.alpha_field.is_none()
-                && material.ku_field.is_none()
-                && material.ku2_field.is_none()
-                && material.kc1_field.is_none()
-                && material.kc2_field.is_none()
-                && material.kc3_field.is_none()
-                && material.interfacial_dmi.is_none()
-                && material.bulk_dmi.is_none()
-                && material.dind_field.is_none()
-                && material.dbulk_field.is_none()
-        });
-    let problem_scope = problem.backend_policy.requested_backend == fullmag_ir::BackendTarget::Fem
-        && problem.backend_policy.execution_precision == fullmag_ir::ExecutionPrecision::Double
-        && problem.validation_profile.execution_mode == fullmag_ir::ExecutionMode::Strict
-        && matches!(requested_device.as_str(), "cpu" | "gpu")
-        && problem.geometry.entries.len() == 1
-        && matches!(
-            problem.geometry.entries[0],
-            fullmag_ir::GeometryEntryIR::Box { .. }
+    let has_dmi = relaxation_plan.is_some_and(|fem| {
+        fem.interfacial_dmi.is_some()
+            || fem.bulk_dmi.is_some()
+            || fem.dind_field.is_some()
+            || fem.dbulk_field.is_some()
+    }) || problem.energy_terms.iter().any(|term| {
+        matches!(
+            term,
+            fullmag_ir::EnergyTermIR::InterfacialDmi { .. }
+                | fullmag_ir::EnergyTermIR::BulkDmi { .. }
         )
-        && problem.regions.len() == 1
-        && material_supported
-        && problem.magnets.len() == 1
-        && problem.object_regions.is_empty()
-        && problem.material_parameter_fields.is_empty()
-        && problem.couplings.is_empty()
-        && problem.current_modules.is_empty()
-        && problem.field_drives.is_empty()
-        && problem.spin_torque_modules.is_empty()
-        && problem.current_density.is_none()
-        && problem.stt_degree.is_none()
-        && problem.stt_beta.is_none()
-        && problem.stt_spin_polarization.is_none()
-        && problem.stt_lambda.is_none()
-        && problem.stt_epsilon_prime.is_none()
-        && problem.stt_thickness.is_none()
-        && problem.stt_fixed_layer_position.is_none()
-        && problem.temperature.is_none()
-        && problem.elastic_materials.is_empty()
-        && problem.elastic_bodies.is_empty()
-        && problem.magnetostriction_laws.is_empty()
-        && problem.mechanical_bcs.is_empty()
-        && problem.mechanical_loads.is_empty()
-        && problem.pbc.is_none()
-        && exchange_count == 1
-        && demag_count == 1
-        && energy_supported
-        && (1..=3).contains(&certificate.requested_layer_count)
-        && certificate.realized_layer_count == certificate.requested_layer_count
-        && certificate.magnetic_plane_coordinates_m.len()
-            == certificate.requested_layer_count as usize + 1
-        && certificate.fallbacks_triggered.is_empty()
-        && matches!(
-            problem.study,
-            fullmag_ir::StudyIR::Relaxation {
-                algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+    }) || problem.materials.iter().any(|material| {
+        material.interfacial_dmi.is_some()
+            || material.bulk_dmi.is_some()
+            || material.dind_field.is_some()
+            || material.dbulk_field.is_some()
+    });
+    let mut failed_predicates = Vec::new();
+    if problem.backend_policy.requested_backend != fullmag_ir::BackendTarget::Fem {
+        failed_predicates.push("backend_not_fem");
+    }
+    if problem.backend_policy.execution_precision != fullmag_ir::ExecutionPrecision::Double {
+        failed_predicates.push("execution_precision_not_double");
+    }
+    if problem.validation_profile.execution_mode != fullmag_ir::ExecutionMode::Strict {
+        failed_predicates.push("execution_mode_not_strict");
+    }
+    if !matches!(requested_device.as_str(), "cpu" | "gpu") {
+        failed_predicates.push("explicit_device_cpu_or_gpu_required");
+    }
+    if let Some(fem) = relaxation_plan {
+        if fem.fe_order != 1 {
+            failed_predicates.push("fem_fe_order_not_p1");
+        }
+        if fem.precision != fullmag_ir::ExecutionPrecision::Double {
+            failed_predicates.push("fem_precision_not_double");
+        }
+        if !fem.enable_exchange {
+            failed_predicates.push("fem_exchange_disabled");
+        }
+        if !fem.enable_demag {
+            failed_predicates.push("fem_demag_disabled");
+        }
+        if !matches!(
+            fem.demag_realization,
+            Some(
+                fullmag_ir::ResolvedFemDemagIR::PoissonRobin
+                    | fullmag_ir::ResolvedFemDemagIR::PoissonDirichlet
+            )
+        ) {
+            failed_predicates.push("fem_demag_realization_not_poisson_robin_or_dirichlet");
+        }
+        if fem.relaxation.is_none() {
+            failed_predicates.push("fem_relaxation_plan_missing");
+        }
+        if !fem.relaxation.as_ref().is_some_and(|relaxation| {
+            matches!(
+                relaxation.algorithm,
+                fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
                     | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
-                    | fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
-                ..
+                    | fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped
+            )
+        }) {
+            failed_predicates.push("fem_relaxation_algorithm_unsupported");
+        }
+        if !fem.current_modules.is_empty() {
+            failed_predicates.push("fem_current_modules_present");
+        }
+        if !fem.field_drives.is_empty() {
+            failed_predicates.push("fem_field_drives_present");
+        }
+        if fem.temperature.is_some() {
+            failed_predicates.push("fem_temperature_present");
+        }
+        if fem.magnetoelastic.is_some() {
+            failed_predicates.push("fem_magnetoelastic_present");
+        }
+        if fem.mechanics.is_some() {
+            failed_predicates.push("fem_mechanics_present");
+        }
+    } else {
+        failed_predicates.push("fem_relaxation_plan_missing");
+    }
+    if problem.geometry.entries.len() != 1 {
+        failed_predicates.push("geometry_count_not_one");
+    } else if !matches!(
+        problem.geometry.entries[0],
+        fullmag_ir::GeometryEntryIR::Box { .. }
+    ) {
+        failed_predicates.push("geometry_not_box");
+    }
+    if problem.regions.len() != 1 {
+        failed_predicates.push("region_count_not_one");
+    }
+    if problem.materials.len() != 1 {
+        failed_predicates.push("material_count_not_one");
+    }
+    if problem.magnets.len() != 1 {
+        failed_predicates.push("magnet_count_not_one");
+    }
+    if !problem.object_regions.is_empty() {
+        failed_predicates.push("object_region_count_not_zero");
+    }
+    if problem
+        .materials
+        .iter()
+        .any(|material| material.ms_field.is_some())
+    {
+        failed_predicates.push("ms_field_not_uniform");
+    }
+    if problem
+        .materials
+        .iter()
+        .any(|material| material.a_field.is_some())
+    {
+        failed_predicates.push("a_field_not_uniform");
+    }
+    if problem
+        .materials
+        .iter()
+        .any(|material| material.alpha_field.is_some())
+    {
+        failed_predicates.push("alpha_field_not_uniform");
+    }
+    if !problem.material_parameter_fields.is_empty() {
+        failed_predicates.push("material_parameter_fields_present");
+    }
+    if !problem.couplings.is_empty() {
+        failed_predicates.push("couplings_present");
+    }
+    if !problem.current_modules.is_empty() {
+        failed_predicates.push("current_modules_present");
+    }
+    if !problem.field_drives.is_empty() {
+        failed_predicates.push("field_drives_present");
+    }
+    if !problem.spin_torque_modules.is_empty() {
+        failed_predicates.push("spin_torque_modules_present");
+    }
+    if problem.current_density.is_some() {
+        failed_predicates.push("current_density_present");
+    }
+    if problem.stt_degree.is_some() {
+        failed_predicates.push("stt_degree_present");
+    }
+    if problem.stt_beta.is_some() {
+        failed_predicates.push("stt_beta_present");
+    }
+    if problem.stt_spin_polarization.is_some() {
+        failed_predicates.push("stt_spin_polarization_present");
+    }
+    if problem.stt_lambda.is_some() {
+        failed_predicates.push("stt_lambda_present");
+    }
+    if problem.stt_epsilon_prime.is_some() {
+        failed_predicates.push("stt_epsilon_prime_present");
+    }
+    if problem.stt_thickness.is_some() {
+        failed_predicates.push("stt_thickness_present");
+    }
+    if problem.stt_fixed_layer_position.is_some() {
+        failed_predicates.push("stt_fixed_layer_position_present");
+    }
+    if problem.temperature.is_some() {
+        failed_predicates.push("temperature_present");
+    }
+    if !problem.elastic_materials.is_empty() {
+        failed_predicates.push("elastic_materials_present");
+    }
+    if !problem.elastic_bodies.is_empty() {
+        failed_predicates.push("elastic_bodies_present");
+    }
+    if !problem.magnetostriction_laws.is_empty() {
+        failed_predicates.push("magnetostriction_laws_present");
+    }
+    if !problem.mechanical_bcs.is_empty() {
+        failed_predicates.push("mechanical_bcs_present");
+    }
+    if !problem.mechanical_loads.is_empty() {
+        failed_predicates.push("mechanical_loads_present");
+    }
+    if problem.pbc.is_some() {
+        failed_predicates.push("periodic_boundary_conditions_present");
+    }
+    if exchange_count != 1 {
+        failed_predicates.push("exchange_count_not_one");
+    }
+    if demag_count != 1 {
+        failed_predicates.push("demag_count_not_one");
+    }
+    if !demag_realization_supported {
+        failed_predicates.push("demag_realization_not_poisson_robin_or_dirichlet");
+    }
+    if !energy_supported {
+        failed_predicates.push("unsupported_energy_term");
+    }
+    if !(1..=3).contains(&certificate.requested_layer_count) {
+        failed_predicates.push("certificate_requested_layer_count_not_supported");
+    }
+    if certificate.realized_layer_count != certificate.requested_layer_count {
+        failed_predicates.push("certificate_realized_layer_count_mismatch");
+    }
+    if certificate.magnetic_plane_coordinates_m.len()
+        != certificate.requested_layer_count as usize + 1
+    {
+        failed_predicates.push("certificate_magnetic_plane_count_mismatch");
+    }
+    if !certificate.fallbacks_triggered.is_empty() {
+        failed_predicates.push("certificate_fallbacks_triggered");
+    }
+    match &problem.study {
+        fullmag_ir::StudyIR::Relaxation { algorithm, .. } => {
+            if !matches!(
+                algorithm,
+                fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+                    | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
+                    | fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped
+            ) {
+                failed_predicates.push("study_relaxation_algorithm_unsupported");
             }
-        );
-    if !supported_relaxation || !problem_scope {
+        }
+        _ => failed_predicates.push("study_not_relaxation"),
+    }
+    if has_dmi && requested_device == "gpu" {
+        failed_predicates.push("gpu_dmi_kernel_not_mixed_p1");
+    }
+    if !failed_predicates.is_empty() {
         return Err(RunError {
             message: format!(
-                "fem_mixed_p1_runtime_scope_rejected: study={study_kind}; requested_device={requested_device}; precision={precision:?}; required=explicit_cpu_or_gpu+strict+double+P1+exchange+poisson_robin_or_dirichlet+PG_BB_or_NCG_or_LLG_overdamped; fallback=none"
+                "fem_mixed_p1_runtime_scope_rejected: study={study_kind}; requested_device={requested_device}; precision={precision:?}; required=explicit_cpu_or_gpu+strict+double+P1+exchange+poisson_robin_or_dirichlet+PG_BB_or_NCG_or_LLG_overdamped; failed_predicates=[{}]; fallback=none",
+                failed_predicates.join(",")
             ),
         });
     }
@@ -5436,8 +5566,22 @@ mod tests {
     fn fem_topology_guard_fully_bound_mixed_frequency_plan_reaches_scope_rejection() {
         let (problem, plan) = certified_mixed_topology_guard_fixture();
 
-        let expected = "fem_mixed_p1_runtime_scope_rejected: study=fem_frequency_response; requested_device=cpu; precision=Double; required=explicit_cpu_or_gpu+strict+double+P1+exchange+poisson_robin_or_dirichlet+PG_BB_or_NCG_or_LLG_overdamped; fallback=none";
-        assert_eq!(topology_guard_error(&problem, &plan), expected);
+        let expected = "fem_mixed_p1_runtime_scope_rejected: study=fem_frequency_response; requested_device=cpu; precision=Double; required=explicit_cpu_or_gpu+strict+double+P1+exchange+poisson_robin_or_dirichlet+PG_BB_or_NCG_or_LLG_overdamped; failed_predicates=[fem_relaxation_plan_missing,demag_count_not_one,study_not_relaxation]; fallback=none";
+        let actual = topology_guard_error(&problem, &plan);
+        assert_eq!(actual, expected);
+        for false_plan_predicate in [
+            "fem_fe_order_not_p1",
+            "fem_precision_not_double",
+            "fem_exchange_disabled",
+            "fem_demag_disabled",
+            "fem_demag_realization_not_poisson_robin_or_dirichlet",
+            "fem_relaxation_algorithm_unsupported",
+        ] {
+            assert!(
+                !actual.contains(false_plan_predicate),
+                "unexpected {false_plan_predicate}: {actual}"
+            );
+        }
         assert_eq!(
             resolve_planned_runtime_engine(&problem, &plan)
                 .expect_err("engine resolution must reject mixed topology")
@@ -5507,6 +5651,84 @@ mod tests {
         }
     }
 
+    #[test]
+    fn fem_topology_guard_accepts_nodal_and_cubic_anisotropy_on_cpu_and_gpu() {
+        for requested_device in [
+            fullmag_ir::ExecutionDevice::Cpu,
+            fullmag_ir::ExecutionDevice::Gpu,
+        ] {
+            let (mut problem, mut plan) =
+                certified_mixed_relaxation_guard_fixture_for_layers_and_device(
+                    1,
+                    requested_device,
+                );
+            let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+                panic!("mixed relaxation fixture must produce a FEM plan");
+            };
+            let node_count = fem.mesh.nodes.len();
+            problem.materials[0].uniaxial_anisotropy = Some(1.0e5);
+            problem.materials[0].uniaxial_anisotropy_k2 = Some(2.0e4);
+            problem.materials[0].anisotropy_axis = Some([0.0, 0.0, 1.0]);
+            problem.materials[0].ku_field = Some(vec![1.0e5; node_count]);
+            problem.materials[0].ku2_field = Some(vec![2.0e4; node_count]);
+            problem.materials[0].cubic_anisotropy_kc1 = Some(3.0e4);
+            problem.materials[0].cubic_anisotropy_kc2 = Some(4.0e3);
+            problem.materials[0].cubic_anisotropy_kc3 = Some(5.0e2);
+            problem.materials[0].cubic_anisotropy_axis1 = Some([1.0, 0.0, 0.0]);
+            problem.materials[0].cubic_anisotropy_axis2 = Some([0.0, 1.0, 0.0]);
+            problem.materials[0].kc1_field = Some(vec![3.0e4; node_count]);
+            problem.materials[0].kc2_field = Some(vec![4.0e3; node_count]);
+            problem.materials[0].kc3_field = Some(vec![5.0e2; node_count]);
+            fem.material = problem.materials[0].clone();
+            fem.anisotropy_axis_field = Some(vec![[0.0, 0.0, 1.0]; node_count]);
+
+            require_supported_fem_topology(&problem, &plan).unwrap_or_else(|error| {
+                panic!(
+                    "mixed P1 {requested_device:?} nodal/cubic anisotropy must cross the runner guard: {error:?}"
+                )
+            });
+        }
+    }
+
+    #[test]
+    fn fem_topology_guard_accepts_cpu_dmi_and_rejects_gpu_tetrahedral_only_dmi_kernel() {
+        let (mut cpu_problem, mut cpu_plan) =
+            certified_mixed_relaxation_guard_fixture_for_layers_and_device(
+                1,
+                fullmag_ir::ExecutionDevice::Cpu,
+            );
+        cpu_problem
+            .energy_terms
+            .push(fullmag_ir::EnergyTermIR::BulkDmi { d: 2.0e-3 });
+        let BackendPlanIR::Fem(cpu_fem) = &mut cpu_plan.backend_plan else {
+            panic!("mixed relaxation fixture must produce a FEM plan");
+        };
+        cpu_fem.bulk_dmi = Some(2.0e-3);
+        require_supported_fem_topology(&cpu_problem, &cpu_plan)
+            .expect("mixed P1 CPU DMI uses the topology-aware MFEM weak operator");
+
+        let (mut gpu_problem, mut gpu_plan) =
+            certified_mixed_relaxation_guard_fixture_for_layers_and_device(
+                1,
+                fullmag_ir::ExecutionDevice::Gpu,
+            );
+        gpu_problem
+            .energy_terms
+            .push(fullmag_ir::EnergyTermIR::BulkDmi { d: 2.0e-3 });
+        let BackendPlanIR::Fem(gpu_fem) = &mut gpu_plan.backend_plan else {
+            panic!("mixed relaxation fixture must produce a FEM plan");
+        };
+        gpu_fem.bulk_dmi = Some(2.0e-3);
+        let error = require_supported_fem_topology(&gpu_problem, &gpu_plan)
+            .expect_err("mixed P1 GPU DMI must fail before its tetrahedral-only CUDA kernel");
+        assert!(
+            error
+                .message
+                .contains("failed_predicates=[gpu_dmi_kernel_not_mixed_p1]"),
+            "{error:?}"
+        );
+        assert!(error.message.contains("fallback=none"), "{error:?}");
+    }
     #[test]
     fn fem_topology_guard_rejects_correctly_bound_exact_four_layer_cpu_and_gpu() {
         for requested_device in [

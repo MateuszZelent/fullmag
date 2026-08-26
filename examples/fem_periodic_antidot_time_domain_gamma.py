@@ -69,7 +69,6 @@ hole_transition.mesh(
 )
 
 study.b_ext(10e-3, 0.0, 0.0)
-study.exchange()
 study.demag(realization="poisson_robin")
 study.fem_demag_solver(solver="CG", preconditioner="AMG", rtol=1e-12, max_iterations=500)
 study.objects.mesh.defaults(

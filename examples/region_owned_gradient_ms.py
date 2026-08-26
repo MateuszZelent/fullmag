@@ -45,7 +45,6 @@ track.set_material_field(
     priority=10,
 )
 
-study.exchange()
 study.demag(realization="poisson_robin")
 study.stages.add_relax(
     algorithm="llg_overdamped",

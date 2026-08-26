@@ -35,6 +35,5 @@ core.material.Aex = fm.fields.constant(8e-12, unit="J/m")
 core.mesh(maximum_element_size=10e-9, order=1)
 
 study.build_domain_mesh()
-study.exchange()
 study.solver(dt=1e-13)
 study.run(2e-13)

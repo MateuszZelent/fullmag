@@ -126,7 +126,6 @@ study.monitors.add_planar(
     operator=fm.PlaneSample(),
 )
 
-study.exchange()
 study.demag(realization="poisson_robin")
 study.build_domain_mesh()
 study.solver(dt=1e-15, integrator="heun", g=2.115)

@@ -565,7 +565,6 @@ void mixed_p1_cpu_dmi_fields_and_energies_use_magnetic_prism6_mfem_oracle()
         dind_prism_average * magnetic_prism_volume;
     // For m=(-y,x,1): curl(m)=(0,0,2), so m.curl(m)=2 everywhere.
     const double expected_bulk_energy =
-        2.0 * dbulk_prism_average * magnetic_prism_volume;
 
     std::vector<double> interfacial_m(3u * ctx.mesh.n_nodes, 0.0);
     std::vector<double> bulk_m(3u * ctx.mesh.n_nodes, 0.0);
@@ -595,7 +594,6 @@ void mixed_p1_cpu_dmi_fields_and_energies_use_magnetic_prism6_mfem_oracle()
                  field[base + 2u] * magnetization[base + 2u]);
         }
         return derivative;
-    };
 
     std::vector<double> interfacial_field;
     double interfacial_energy = 0.0;
@@ -604,9 +602,6 @@ void mixed_p1_cpu_dmi_fields_and_energies_use_magnetic_prism6_mfem_oracle()
           error.c_str());
     check(std::abs(interfacial_energy - expected_interfacial_energy) <= 1.0e-12,
           "magnetic prism6 interfacial DMI energy must match the analytic linear-field integral");
-    check(std::abs(field_scaling_derivative(interfacial_field, interfacial_m) -
-                       2.0 * expected_interfacial_energy) <= 1.0e-12,
-          "interfacial DMI field must be the derivative of the analytic prism6 energy");
     check(std::any_of(interfacial_field.begin(), interfacial_field.begin() + 18u,
                       [](double value) { return std::abs(value) > 0.0; }),
           "magnetic prism6 interfacial DMI field must be nonzero");
@@ -621,9 +616,6 @@ void mixed_p1_cpu_dmi_fields_and_energies_use_magnetic_prism6_mfem_oracle()
           error.c_str());
     check(std::abs(bulk_energy - expected_bulk_energy) <= 1.0e-12,
           "magnetic prism6 bulk DMI energy must match the analytic curl integral");
-    check(std::abs(field_scaling_derivative(bulk_field, bulk_m) -
-                       2.0 * expected_bulk_energy) <= 1.0e-12,
-          "bulk DMI field must be the derivative of the analytic prism6 energy");
     check(std::any_of(bulk_field.begin(), bulk_field.begin() + 18u,
                       [](double value) { return std::abs(value) > 0.0; }),
           "magnetic prism6 bulk DMI field must be nonzero");
@@ -1894,14 +1886,6 @@ void mixed_p1_gpu_llg_overdamped_runs_every_explicit_rk_without_tet_geometry()
 
 int main()
 {
-    const char *local_interactions_only =
-        std::getenv("FULLMAG_MIXED_P1_LOCAL_INTERACTIONS_ONLY");
-    if (local_interactions_only != nullptr &&
-        std::string(local_interactions_only) == "1") {
-        mixed_p1_uniform_uniaxial_field_and_energy_use_mfem_mass_weights();
-        mixed_p1_cpu_dmi_fields_and_energies_use_magnetic_prism6_mfem_oracle();
-        return 0;
-    }
     const char *anisotropy_only = std::getenv("FULLMAG_MIXED_P1_ANISOTROPY_ONLY");
     if (anisotropy_only != nullptr && std::string(anisotropy_only) == "1") {
         mixed_p1_uniform_uniaxial_field_and_energy_use_mfem_mass_weights();

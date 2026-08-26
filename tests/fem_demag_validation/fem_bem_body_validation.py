@@ -106,7 +106,7 @@ def build_fem_bem_sphere_study(*, label: str, hmax: float):
     )
 
     study.build_mesh()
-    study.exchange(enabled=False)
+    study.disable_exchange()
     study.demag(model="fredkin_koehler")
     study.solver(max_error=1e-8, integrator="rk45")
     study.save("E_demag", every=1.0)

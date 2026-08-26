@@ -59,7 +59,6 @@ plate.Aex = AEX
 plate.alpha = ALPHA
 plate.m = fm.texture.vortex(circulation=1, core_polarity=1)
 
-study.exchange()
 study.demag()
 # The standard-problem reference uses gamma=2.211e5 m/(A s).  Fullmag's
 # explicit gamma field avoids silently substituting a different g-factor.

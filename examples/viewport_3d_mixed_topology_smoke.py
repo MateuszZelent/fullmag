@@ -55,7 +55,6 @@ film.mesh.thin_film(
 )
 film.visualization(show=True, mode="surface", active_quantity_id="m")
 
-study.exchange()
 study.demag(realization="poisson_robin")
 study.build_domain_mesh()
 

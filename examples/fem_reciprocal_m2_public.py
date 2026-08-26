@@ -33,7 +33,6 @@ study.universe.mesh(maximum_element_size=10.0 * NM)
 # production SP5/airbox gate owns demagnetization separately; disable it before
 # materializing the shared FEM mesh so the mesh/runtime contract cannot infer
 # an airbox demag realization from an earlier build request.
-study.exchange()
 study.demag(enabled=False)
 
 body = study.geometry(fm.Box(size=BODY_SIZE, name="m2_body"), name="m2_body")

@@ -58,7 +58,6 @@ study.universe(
     center=(TRACK_LENGTH / 2.0, TRACK_WIDTH / 2.0, (HM_THICKNESS + FM_THICKNESS) / 2.0),
 )
 study.cell(*CELL)
-study.exchange()
 study.demag()
 study.solver(integrator="rk4", fix_dt=FIXED_TIMESTEP, gamma=221_100.0)
 

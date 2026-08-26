@@ -14693,6 +14693,10 @@ fn fem_planner_accepts_certified_mixed_p1_cpu_double_and_rebinds_packed_certific
             fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
             fullmag_ir::RequestedFemDemagIR::PoissonRobin,
         ),
+        (
+            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            fullmag_ir::RequestedFemDemagIR::Auto,
+        ),
     ] {
         let ir = mixed_cpu_relaxation_ir(algorithm, demag_realization);
         let asset = ir
@@ -14723,6 +14727,13 @@ fn fem_planner_accepts_certified_mixed_p1_cpu_double_and_rebinds_packed_certific
         let BackendPlanIR::Fem(fem) = planned.backend_plan else {
             panic!("qualified mixed P1 relaxation must resolve to FEM");
         };
+        if demag_realization == fullmag_ir::RequestedFemDemagIR::Auto {
+            assert_eq!(
+                fem.demag_realization,
+                Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin),
+                "mixed P1 auto demag must preserve requested intent and resolve to Poisson Robin",
+            );
+        }
         let final_fingerprint = fem.mesh.mixed_topology_fingerprint_v3().unwrap();
         assert_ne!(source_fingerprint, final_fingerprint);
         let report = fem
@@ -14936,6 +14947,24 @@ fn fem_planner_accepts_uniform_uniaxial_anisotropy_on_certified_mixed_p1() {
         ir.materials[0].uniaxial_anisotropy = Some(1.0e5);
         ir.materials[0].uniaxial_anisotropy_k2 = Some(2.0e4);
         ir.materials[0].anisotropy_axis = Some([0.0, 0.0, 1.0]);
+        let node_count = ir
+            .geometry_assets
+            .as_ref()
+            .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
+            .and_then(|asset| asset.mesh.as_ref())
+            .expect("mixed fixture must carry an inline mesh")
+            .nodes
+            .len();
+        ir.materials[0].ku_field = Some(vec![1.0e5; node_count]);
+        ir.materials[0].ku2_field = Some(vec![2.0e4; node_count]);
+        ir.materials[0].cubic_anisotropy_kc1 = Some(3.0e4);
+        ir.materials[0].cubic_anisotropy_kc2 = Some(4.0e3);
+        ir.materials[0].cubic_anisotropy_kc3 = Some(5.0e2);
+        ir.materials[0].cubic_anisotropy_axis1 = Some([1.0, 0.0, 0.0]);
+        ir.materials[0].cubic_anisotropy_axis2 = Some([0.0, 1.0, 0.0]);
+        ir.materials[0].kc1_field = Some(vec![3.0e4; node_count]);
+        ir.materials[0].kc2_field = Some(vec![4.0e3; node_count]);
+        ir.materials[0].kc3_field = Some(vec![5.0e2; node_count]);
 
         let planned = plan(&ir).unwrap_or_else(|error| {
             panic!("uniform uniaxial anisotropy must plan on mixed P1 {device}: {error:?}")
@@ -14947,6 +14976,65 @@ fn fem_planner_accepts_uniform_uniaxial_anisotropy_on_certified_mixed_p1() {
         assert_eq!(fem.material.uniaxial_anisotropy_k2, Some(2.0e4));
         assert_eq!(fem.material.anisotropy_axis, Some([0.0, 0.0, 1.0]));
     }
+}
+
+#[test]
+fn fem_planner_accepts_cpu_dmi_terms_and_nodal_d_fields_on_certified_mixed_p1() {
+    let mut ir = mixed_cpu_relaxation_ir(
+        fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+        fullmag_ir::RequestedFemDemagIR::Auto,
+    );
+    let node_count = ir
+        .geometry_assets
+        .as_ref()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
+        .and_then(|asset| asset.mesh.as_ref())
+        .expect("mixed fixture must carry an inline mesh")
+        .nodes
+        .len();
+    ir.energy_terms.extend([
+        fullmag_ir::EnergyTermIR::InterfacialDmi {
+            d: 2.0e-3,
+            interface_normal: None,
+        },
+        fullmag_ir::EnergyTermIR::BulkDmi { d: 3.0e-3 },
+    ]);
+    ir.materials[0].interfacial_dmi = Some(2.0e-3);
+    ir.materials[0].bulk_dmi = Some(3.0e-3);
+    ir.materials[0].dind_field = Some(vec![2.0e-3; node_count]);
+    ir.materials[0].dbulk_field = Some(vec![3.0e-3; node_count]);
+
+    let planned = plan(&ir).expect("mixed P1 CPU DMI must plan");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("mixed P1 CPU DMI must resolve to FEM")
+    };
+    assert_eq!(fem.interfacial_dmi, Some(2.0e-3));
+    assert_eq!(fem.bulk_dmi, Some(3.0e-3));
+}
+
+#[test]
+fn fem_planner_rejects_gpu_dmi_with_stable_mixed_p1_predicate() {
+    let mut ir = mixed_cpu_relaxation_ir(
+        fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+        fullmag_ir::RequestedFemDemagIR::Auto,
+    );
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "gpu", "precision": "double"}),
+    );
+    ir.energy_terms
+        .push(fullmag_ir::EnergyTermIR::BulkDmi { d: 3.0e-3 });
+
+    let reason = plan(&ir)
+        .expect_err("mixed P1 GPU DMI must reject before CUDA startup")
+        .reasons
+        .join("\n");
+    assert!(
+        reason.contains("failed_predicates=[gpu_dmi_kernel_not_mixed_p1]"),
+        "{reason}"
+    );
+    assert!(reason.contains("gpu_dmi_kernel_not_mixed_p1"), "{reason}");
+    assert!(reason.contains("fallback=none"), "{reason}");
 }
 
 #[test]
@@ -15080,7 +15168,7 @@ fn fem_planner_rejects_every_mixed_p1_execution_tuple_outside_bounded_strict_sp4
         "extended",
         "time_evolution",
         "missing_exchange",
-        "dmi",
+        "ms_field",
         "fem_bem",
         "high_order",
         "non_box",
@@ -15111,9 +15199,7 @@ fn fem_planner_rejects_every_mixed_p1_execution_tuple_outside_bounded_strict_sp4
                 ir.energy_terms
                     .retain(|term| !matches!(term, fullmag_ir::EnergyTermIR::Exchange));
             }
-            "dmi" => ir
-                .energy_terms
-                .push(fullmag_ir::EnergyTermIR::BulkDmi { d: 1.0 }),
+            "ms_field" => ir.materials[0].ms_field = Some(vec![8.0e5; 8]),
             "fem_bem" => {
                 ir.energy_terms = vec![
                     fullmag_ir::EnergyTermIR::Exchange,
@@ -15172,9 +15258,7 @@ fn fem_planner_reports_every_failed_mixed_p1_scope_predicate() {
     );
     ir.energy_terms
         .retain(|term| !matches!(term, fullmag_ir::EnergyTermIR::Exchange));
-    ir.materials[0].cubic_anisotropy_kc1 = Some(1.0e5);
-    ir.materials[0].cubic_anisotropy_axis1 = Some([1.0, 0.0, 0.0]);
-    ir.materials[0].cubic_anisotropy_axis2 = Some([0.0, 1.0, 0.0]);
+    ir.materials[0].ms_field = Some(vec![8.0e5; 8]);
 
     let reason = plan(&ir)
         .expect_err("mixed P1 must report every failed scope predicate")
@@ -15183,7 +15267,11 @@ fn fem_planner_reports_every_failed_mixed_p1_scope_predicate() {
 
     assert!(reason.contains("fem_mixed_p1_scope_rejected"), "{reason}");
     assert!(reason.contains("missing_exchange"), "{reason}");
-    assert!(reason.contains("unsupported_cubic_anisotropy"), "{reason}");
+    assert!(
+        reason.contains("auto_or_poisson_open_boundary_order_one"),
+        "{reason}"
+    );
+    assert!(reason.contains("unsupported_material_field_or_dmi"), "{reason}");
 }
 
 #[test]

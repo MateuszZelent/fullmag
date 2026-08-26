@@ -69,7 +69,6 @@ for side, sign in (("left", -1.0), ("right", 1.0)):
         absorber.material.alpha = alpha
 
 study.b_ext(10e-3, 0.0, 0.0)
-study.exchange()
 study.demag(realization="poisson_robin")
 study.fem_demag_solver(solver="CG", preconditioner="AMG", rtol=1e-11, max_iterations=500)
 study.build_domain_mesh()

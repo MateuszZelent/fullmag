@@ -572,8 +572,7 @@ bool validate_supported_physics_topology(
         error =
             "native FEM mixed P1 scope rejected: required=explicit_cpu_or_gpu+double+P1+"
             "prism6_magnetic+pyramid5_tet4_air+tri3_quad4+exchange+"
-            "poisson_robin_or_dirichlet+uniform_Ms_A_alpha+local_anisotropy_cpu_or_cuda+"
-            "dmi_cpu_only; failed_predicates=[" + failed_predicates + "]; fallback=none";
+            "poisson_robin_or_dirichlet+uniform_material; fallback=none";
         return false;
     }
     return true;

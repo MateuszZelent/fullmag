@@ -117,7 +117,6 @@ for ring in (top_ring,):
     ring.mesh(maximum_element_size=25 * NM, minimum_element_size=2.5 * NM, order=1)
 
 # Interactions, mesh, and solver
-# study.exchange()
 study.demag(realization="poisson_robin")
 study.objects.mesh.defaults(
     algorithm_2d=6,

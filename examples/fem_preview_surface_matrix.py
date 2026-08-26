@@ -84,7 +84,6 @@ if ENERGY_QUALIFICATION in {"", "dg0_ms"}:
     lower_ms.material.Ms = 400e3
 
 study.build_domain_mesh()
-study.exchange()
 study.demag(realization="poisson_robin")
 study.b_ext(0.0, 0.0, 0.02)
 study.solver(dt=1e-13)

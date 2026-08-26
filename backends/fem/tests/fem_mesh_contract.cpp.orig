@@ -110,10 +110,6 @@ struct MeshBuffers {
     std::vector<uint32_t> facet_markers{3u, 4u, 5u};
     std::vector<uint32_t> periodic_node_pairs{15u, 16u};
     std::vector<uint32_t> periodic_boundary_pair_markers{5u, 6u};
-    std::vector<double> ms_field;
-    std::vector<double> a_field;
-    std::vector<double> alpha_field;
-    std::vector<double> ms_element_field;
 
     fullmag_fem_mesh_desc desc() const {
         fullmag_fem_mesh_desc mesh{};
@@ -357,25 +353,8 @@ void native_physics_gate_accepts_only_qualified_explicit_cpu_or_cuda_mixed_p1_op
         {"thermal", [](fullmag_fem_plan_desc &value, MeshBuffers &) {
              value.temperature = 300.0;
          }},
-        {"DG0", [](fullmag_fem_plan_desc &value, MeshBuffers &buffers) {
-             buffers.ms_element_field.assign(value.mesh.cell_types_len, 8.0e5);
-             value.ms_element_field = buffers.ms_element_field.data();
-             value.ms_element_field_len = buffers.ms_element_field.size();
-         }},
-        {"nodal Ms", [](fullmag_fem_plan_desc &value, MeshBuffers &buffers) {
-             buffers.ms_field.assign(value.mesh.nodes_xyz_len / 3u, 8.0e5);
-             value.ms_field = buffers.ms_field.data();
-             value.ms_field_len = buffers.ms_field.size();
-         }},
-        {"nodal A", [](fullmag_fem_plan_desc &value, MeshBuffers &buffers) {
-             buffers.a_field.assign(value.mesh.nodes_xyz_len / 3u, 13.0e-12);
-             value.a_field = buffers.a_field.data();
-             value.a_field_len = buffers.a_field.size();
-         }},
-        {"nodal alpha", [](fullmag_fem_plan_desc &value, MeshBuffers &buffers) {
-             buffers.alpha_field.assign(value.mesh.nodes_xyz_len / 3u, 0.02);
-             value.alpha_field = buffers.alpha_field.data();
-             value.alpha_field_len = buffers.alpha_field.size();
+        {"DG0", [](fullmag_fem_plan_desc &value, MeshBuffers &) {
+             value.ms_element_field_len = value.mesh.cell_types_len;
          }},
         {"PBC", [](fullmag_fem_plan_desc &value, MeshBuffers &mesh) {
              mesh.periodic_node_pairs = {0u, 1u};

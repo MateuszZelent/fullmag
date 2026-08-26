@@ -125,7 +125,6 @@ study.monitors.add_planar(
     operator=fm.PlaneSample(),
 )
 
-study.exchange()
 study.demag()
 study.solver(dt=1e-15, integrator="heun", g=2.115)
 study.save("m", every=1e-15)

@@ -15435,7 +15435,6 @@ body.Aex = 13e-12
 body.alpha = 0.1
 body.m = fm.texture.uniform(1, 0, 0)
 
-study.exchange()
 study.run(1e-12)
 "#,
     )
@@ -30856,7 +30855,6 @@ waveguide.Aex = 13e-12
 waveguide.alpha = 0.1
 waveguide.m = fm.texture.uniform(1.0, 0.0, 0.0)
 {region_block}
-study.exchange()
 "#
     )
 }

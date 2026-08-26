@@ -52,7 +52,6 @@ study.monitors.add_planar(
     ),
 )
 
-study.exchange()
 study.build_domain_mesh()
 study.solver(dt=1e-15, integrator="heun", g=2.115)
 study.save("m", every=1e-15)

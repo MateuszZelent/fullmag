@@ -294,7 +294,6 @@ body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 apply_periodic_airbox_mesh_policy(body)
 
 study.b_ext(*APPLIED_B_T)
-study.exchange()
 study.demag(realization="poisson_robin")
 study.fem_demag_solver(
     solver="CG",

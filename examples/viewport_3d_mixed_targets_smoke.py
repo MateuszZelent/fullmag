@@ -73,7 +73,6 @@ add_target("permalloy_layer", -TARGET_SPACING, (1.0, 0.0, 0.0))
 add_target("cofeb_top_ring", 0.0, (0.0, 1.0, 0.0))
 add_target("cofeb_bottom_ring", TARGET_SPACING, (0.0, 0.0, 1.0))
 
-study.exchange()
 study.demag(realization="poisson_robin")
 study.build_domain_mesh()
 

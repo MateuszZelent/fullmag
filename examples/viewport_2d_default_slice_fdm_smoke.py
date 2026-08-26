@@ -40,7 +40,6 @@ film.Aex = 13e-12
 film.alpha = 0.1
 film.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
-study.exchange()
 study.demag()
 study.solver(dt=1e-15, integrator="heun", g=2.115)
 study.save("m", every=1e-15)

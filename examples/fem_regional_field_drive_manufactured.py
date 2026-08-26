@@ -20,7 +20,7 @@ magnet.Aex = 13e-12
 magnet.alpha = 0.01
 magnet.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 study.b_ext(0.0, 0.0, 20e-3)
-study.exchange(enabled=False)
+study.disable_exchange()
 study.demag(enabled=False)
 study.solver(integrator=integrator, dt=dt, g=2.0)
 waveform = (

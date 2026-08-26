@@ -176,6 +176,13 @@ removes its object from `energy_terms`; no boolean solver mask is added to `Prob
 derive `enable_exchange` and `enable_demag` from membership in this list and then resolve backend,
 device, precision, demag realization, and execution mode.
 
+For strict mixed-P1 FEM, the default requested demag realization `auto` is legal and resolves to
+`poisson_robin`, matching the ordinary FEM planner. The authored `ProblemIR` retains `auto` as
+requested intent; the execution plan records concrete `poisson_robin` as resolved reality. Explicit
+`poisson_robin` and `poisson_dirichlet` remain legal, while unsupported demag models still fail
+closed. The mixed-P1 preflight must therefore accept `auto` without requiring a solver-internal
+configuration call from the user.
+
 SceneDocument retains `exchange_enabled` and `demag_enabled` booleans because authoring must
 round-trip an explicit opt-out. `authored_demag_realization` in Python runtime metadata preserves
 a chosen realization even when demag is inactive; it does not activate the term or alter planner
@@ -190,6 +197,7 @@ legality.
 - A demag realization exports as `demag(realization=...)`; if inactive, `disable_demag()` follows.
 - Legacy `enabled=False` input is accepted and canonicalized to the new disable form.
 - Unsupported active-term combinations fail in planning; no disabled term is silently restored.
+- Mixed-P1 FEM accepts requested demag `auto` and resolves it to `poisson_robin` in the planner.
 - An explicitly disabled term remains absent from field, energy, and observable computation.
 
 Requested intent consists of the authored active-term switches and any selected demag realization.

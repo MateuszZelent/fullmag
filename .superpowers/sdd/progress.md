@@ -390,3 +390,5 @@ source-layout and FEM physics-validation failures.
 - Task 1 FDM midplane RED: complete (commit `b1464b481`, expected RED `z=0.0` vs `-0.5`, independent review approved).
 - Task 2 cell-centered FDM default slice: complete (commits `a750062ca`, `d47029f97`; overflow RED then source tests 15/15 and endpoint 1/1 pass; independent re-review approved).
 - Task 3 source parity: complete (commit `48ed0c3f6`; field meta/vector/planar revision, generation, stats and payload parity; focused 1/1 pass; independent re-review approved).
+
+Task mixed-P1 local interactions 1: complete (working-tree scope, final review clean; 3 Rust exact tests and managed focused native contract passed).

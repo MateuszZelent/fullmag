@@ -31,7 +31,6 @@ film.alpha = 0.1
 film.m = fm.texture.uniform(1.0, 0.0, 0.0)
 film.mesh(minimum_element_size=5 * NM, maximum_element_size=20 * NM, order=1)
 
-study.exchange()
 study.demag(realization="poisson_robin")
 study.build_domain_mesh()
 study.solver(dt=1e-15, integrator="heun", g=2.115)

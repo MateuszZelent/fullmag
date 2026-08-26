@@ -1462,13 +1462,23 @@ def _validate_authored_mixed_p1_scope(
         for term in energy_terms
         if hasattr(term, "to_ir")
     ]
+    device = runtime_selection.get("device")
+    dmi_kinds = {"interfacial_dmi", "bulk_dmi"}
+    has_dmi = any(payload.get("kind") in dmi_kinds for payload in energy_payloads) or any(
+        payload.get(key) is not None
+        for payload in material_payloads
+        for key in ("interfacial_dmi", "bulk_dmi", "dind_field", "dbulk_field")
+    )
     failed: list[str] = []
+    if device not in {"cpu", "cuda", "gpu"}:
+        failed.append("device_not_explicit_cpu_or_gpu")
     exchange_count = sum(
         payload.get("kind") == "exchange" for payload in energy_payloads
     )
     qualified_demag_count = sum(
         payload.get("kind") == "demag"
-        and payload.get("realization") in {"poisson_robin", "poisson_dirichlet"}
+        and payload.get("realization")
+        in {"auto", "poisson_robin", "poisson_dirichlet"}
         for payload in energy_payloads
     )
     if exchange_count == 0:
@@ -1480,33 +1490,22 @@ def _validate_authored_mixed_p1_scope(
     elif qualified_demag_count != 1:
         failed.append("demag_term_count_not_one")
     if any(
-        payload.get("kind") not in {"exchange", "demag", "zeeman"}
+        payload.get("kind")
+        not in {"exchange", "demag", "zeeman", "interfacial_dmi", "bulk_dmi"}
         for payload in energy_payloads
     ):
         failed.append("unsupported_energy_term")
+    if device in {"cuda", "gpu"} and has_dmi:
+        failed.append("gpu_dmi_kernel_not_mixed_p1")
     if len(material_payloads) != 1:
         failed.append("material_count_not_one")
     if any(
         payload.get(key) is not None
         for payload in material_payloads
         for key in (
-            "cubic_anisotropy_kc1",
-            "cubic_anisotropy_kc2",
-            "cubic_anisotropy_kc3",
-            "cubic_anisotropy_axis1",
-            "cubic_anisotropy_axis2",
-            "interfacial_dmi",
-            "bulk_dmi",
             "ms_field",
             "a_field",
             "alpha_field",
-            "ku_field",
-            "ku2_field",
-            "kc1_field",
-            "kc2_field",
-            "kc3_field",
-            "dind_field",
-            "dbulk_field",
         )
     ):
         failed.append("unsupported_material_field_or_dmi")
@@ -1515,7 +1514,7 @@ def _validate_authored_mixed_p1_scope(
         raise ValueError(
             "fem_mixed_p1_scope_rejected: "
             f"phase=authored_preflight; failed_predicates=[{','.join(failed)}]; "
-            "qualified_scope=exchange+uniform_uniaxial_anisotropy+poisson_robin_or_dirichlet; fallback=none"
+            "qualified_scope=exchange+uniform_or_nodal_uniaxial_or_cubic_anisotropy+cpu_dmi_only+auto_or_poisson_open_boundary_order_one; fallback=none"
         )
 
 

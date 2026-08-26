@@ -306,7 +306,6 @@ def test_stage_first_multilayer_material_and_region_authoring_round_trips_stages
                 region=reference_core,
             )
 
-            study.exchange()
             study.demag()
             study.stages.add_relax(
                 stage_id="relax",
