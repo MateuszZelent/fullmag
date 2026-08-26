@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 
 namespace fullmag::adaptive {
 
@@ -90,7 +91,10 @@ inline Decision decide(const Policy &policy, const Input &input) {
         return failed(DecisionReason::invalid_previous_error, input);
     }
     const bool accepted = input.error_current <= 1.0;
-    if (!accepted && input.dt_attempt <= policy.dt_min) {
+    const bool at_dt_min = input.dt_attempt <= policy.dt_min ||
+        input.dt_attempt - policy.dt_min <=
+            policy.dt_min * (4.0 * std::numeric_limits<double>::epsilon());
+    if (!accepted && at_dt_min) {
         return {DecisionKind::failed, DecisionReason::dt_min_exhausted,
                 policy.dt_min, 1.0};
     }

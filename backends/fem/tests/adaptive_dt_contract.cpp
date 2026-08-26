@@ -149,6 +149,14 @@ void rejected_error_at_dt_min_is_typed_exhaustion() {
     check(decision.kind == AdaptiveDecisionKind::failed, "dt_min exhaustion is terminal, not retry");
     check(decision.reason == AdaptiveDecisionReason::dt_min_exhausted, "typed dt_min_exhausted reason");
     check_near(decision.dt_next, 1.0e-16, 0.0, "dt_min exhaustion retains bounded timestep");
+
+    const auto rounded_above = std::nextafter(input.dt_attempt, std::numeric_limits<double>::infinity());
+    const auto rounded_decision = decide_adaptive_step(
+        canonical_policy(4), {rounded_above, input.error_current, input.error_previous, true});
+    check(rounded_decision.kind == AdaptiveDecisionKind::failed,
+          "one-ULP-above-dt_min rejection must remain terminal");
+    check(rounded_decision.reason == AdaptiveDecisionReason::dt_min_exhausted,
+          "one-ULP-above-dt_min rejection must retain typed exhaustion");
 }
 
 void invalid_scalar_inputs_fail_closed() {
