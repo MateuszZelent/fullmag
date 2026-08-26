@@ -2004,6 +2004,12 @@ mod tests {
             assert_eq!(soa_report.dt_used, dt);
             assert_eq!(soa_report.time_seconds, dt);
             assert_eq!(soa_report.suggested_next_dt, None);
+            assert_step_report_close(soa_report, aos_report, 1e-12);
+            assert_vector_close(
+                soa.magnetization().gather_to_aos()[0],
+                aos.magnetization()[0],
+                1e-12,
+            );
         }
     }
 

@@ -3300,16 +3300,14 @@ impl ExchangeLlgProblem {
         bufs: &mut IntegratorBuffers,
         evaluation: EvaluationRequest,
     ) -> Result<StepReport> {
-        if !self.dynamics.adaptive_enabled {
-            let mut aos = state.to_aos();
-            let report = self.rk23_step_soa_buf(&mut aos, dt, ws, bufs, evaluation)?;
-            *state = aos.to_soa();
-            return Ok(report);
-        }
         let cfg = self.dynamics.adaptive;
         let mut adaptive_controller =
             AdaptiveStepController::new(2, cfg, state.adaptive_previous_error);
-        let mut dt = dt.min(cfg.dt_max).max(cfg.dt_min);
+        let mut dt = if self.dynamics.adaptive_enabled {
+            dt.min(cfg.dt_max).max(cfg.dt_min)
+        } else {
+            dt
+        };
         let n = state.magnetization.len();
         let t0 = state.time_seconds;
         bufs.soa.m0.copy_from(&state.magnetization);
@@ -3466,16 +3464,14 @@ impl ExchangeLlgProblem {
         bufs: &mut IntegratorBuffers,
         evaluation: EvaluationRequest,
     ) -> Result<StepReport> {
-        if !self.dynamics.adaptive_enabled {
-            let mut aos = state.to_aos();
-            let report = self.rk45_step_soa_buf(&mut aos, dt, ws, bufs, evaluation)?;
-            *state = aos.to_soa();
-            return Ok(report);
-        }
         let cfg = self.dynamics.adaptive;
         let mut adaptive_controller =
             AdaptiveStepController::new(4, cfg, state.adaptive_previous_error);
-        let mut dt = dt.min(cfg.dt_max).max(cfg.dt_min);
+        let mut dt = if self.dynamics.adaptive_enabled {
+            dt.min(cfg.dt_max).max(cfg.dt_min)
+        } else {
+            dt
+        };
         let n = state.magnetization.len();
         let t0 = state.time_seconds;
         let dynamic_oersted = self
