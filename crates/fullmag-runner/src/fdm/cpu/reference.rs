@@ -1507,6 +1507,12 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                         crate::schedules::OUTPUT_TIME_TOLERANCE,
                     )
                 });
+            let step_evaluation = fdm_step_evaluation_request(
+                plan,
+                state.time_seconds + dt_step,
+                &scalar_schedules,
+                live.as_ref(),
+            );
             if crate::antenna_fields::has_time_varying_antenna_zeeman_masks(
                 &plan.antenna_zeeman_masks,
             ) {
@@ -1629,6 +1635,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     dt_step,
                     &mut fft_workspace,
                     &mut integrator_bufs,
+                    step_evaluation,
                 );
                 match result {
                     Ok(report) => report,
@@ -2200,6 +2207,27 @@ fn frozen_spins_checkpoint_value(
         })
 }
 
+fn fdm_step_evaluation_request(
+    plan: &FdmPlanIR,
+    predicted_time: f64,
+    scalar_schedules: &[OutputSchedule],
+    live: Option<&LiveStepConsumer>,
+) -> EvaluationRequest {
+    let scalar_output_due = scalar_schedules
+        .iter()
+        .any(|schedule| is_due(predicted_time, schedule.next_time));
+    let relaxation_needs_energy = plan
+        .relaxation
+        .as_ref()
+        .is_some_and(|control| control.stop.energy_tolerance_j.is_some());
+
+    if scalar_output_due || relaxation_needs_energy || live.is_some() {
+        EvaluationRequest::Full
+    } else {
+        EvaluationRequest::Minimal
+    }
+}
+
 fn step_reference_fdm_problem(
     problem: &ExchangeLlgProblem,
     state: &mut ExchangeLlgState,
@@ -2207,6 +2235,7 @@ fn step_reference_fdm_problem(
     dt_step: f64,
     fft_workspace: &mut FftWorkspace,
     integrator_bufs: &mut IntegratorBuffers,
+    evaluation: EvaluationRequest,
 ) -> Result<StepReport, EngineError> {
     if state_soa.is_none() && problem.soa_fast_path_supported() {
         *state_soa = Some(state.to_soa());
@@ -2218,12 +2247,18 @@ fn step_reference_fdm_problem(
             dt_step,
             fft_workspace,
             integrator_bufs,
-            EvaluationRequest::Full,
+            evaluation,
         )?;
         soa.write_back_to(state);
         Ok(report)
     } else {
-        problem.step_with_buffers(state, dt_step, fft_workspace, integrator_bufs)
+        problem.step_with_buffers_evaluation(
+            state,
+            dt_step,
+            fft_workspace,
+            integrator_bufs,
+            evaluation,
+        )
     }
 }
 
@@ -3204,6 +3239,26 @@ mod tests {
     }
 
     #[test]
+    fn headless_fdm_steps_skip_full_observables_until_requested() {
+        let plan = make_test_plan();
+        assert_eq!(
+            fdm_step_evaluation_request(&plan, 1.0e-14, &[], None),
+            EvaluationRequest::Minimal
+        );
+
+        let scalar_schedule = [OutputSchedule {
+            name: "E_total".to_string(),
+            every_seconds: 1.0e-14,
+            next_time: 1.0e-14,
+            last_sampled_time: None,
+        }];
+        assert_eq!(
+            fdm_step_evaluation_request(&plan, 1.0e-14, &scalar_schedule, None),
+            EvaluationRequest::Full
+        );
+    }
+
+    #[test]
     fn reference_construction_preserves_fixed_vs_adaptive_embedded_rk_policy() {
         let fixed = FdmPlanIR {
             integrator: Some(IntegratorChoice::Rk45),
@@ -3351,6 +3406,7 @@ mod tests {
             1e-12,
             &mut fft_workspace,
             &mut integrator_bufs,
+            EvaluationRequest::Full,
         )
         .expect("adaptive step");
         let mut stats = StepStats {
@@ -4635,9 +4691,18 @@ mod tests {
         for field in update.cached_preview_fields.as_ref().unwrap() {
             assert_eq!(field.preview_grid, plan.grid.cells);
             assert_eq!(field.original_grid, plan.grid.cells);
+            let expected_components = if field.quantity.starts_with("eden_")
+                || field.quantity.starts_with("mat_")
+            {
+                1
+            } else {
+                3
+            };
             assert_eq!(
                 field.vector_field_values.len(),
-                plan.initial_magnetization.len() * 3
+                plan.initial_magnetization.len() * expected_components,
+                "unexpected component count for {}",
+                field.quantity
             );
             assert!(!field.auto_downscaled);
         }
@@ -5984,6 +6049,7 @@ mod tests {
             1e-14,
             &mut fft_workspace,
             &mut integrator_bufs,
+            EvaluationRequest::Full,
         )
         .expect("step should execute");
 
