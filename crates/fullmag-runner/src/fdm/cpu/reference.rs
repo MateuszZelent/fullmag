@@ -14,8 +14,8 @@ use fullmag_engine::{
     UniaxialAnisotropyConfig, Vector3, ZhangLiFormula, ZhangLiSttConfig,
 };
 use fullmag_ir::{
-    ExecutionPrecision, FdmPlanIR, IntegratorChoice, OutputIR, RelaxationAlgorithmIR,
-    RelaxationControlIR, StageCompletionIR,
+    AdaptiveTimeStepIR, ExecutionPrecision, FdmPlanIR, IntegratorChoice, OutputIR,
+    RelaxationAlgorithmIR, RelaxationControlIR, StageCompletionIR,
 };
 
 use super::spin_transport::{
@@ -55,6 +55,62 @@ use crate::types::{
 use std::{env, time::Instant};
 
 pub(crate) const CPU_FFT_BACKEND_ENV: &str = "FULLMAG_CPU_FFT_BACKEND";
+
+const MAX_COUPLED_ADAPTIVE_REJECTIONS: u64 = 50;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum CoupledAdaptiveDecision {
+    Accepted(f64),
+    Retry(f64),
+    DtMinExhausted,
+    NonFinite,
+}
+
+fn coupled_adaptive_dt_min_reached(dt: f64, dt_min: f64) -> bool {
+    dt <= dt_min || (dt - dt_min).abs() <= dt_min * (4.0 * f64::EPSILON)
+}
+
+fn decide_coupled_adaptive_step(
+    error: f64,
+    dt: f64,
+    adaptive: &AdaptiveTimeStepIR,
+) -> CoupledAdaptiveDecision {
+    if !error.is_finite() {
+        return CoupledAdaptiveDecision::NonFinite;
+    }
+
+    let dt_max = adaptive.dt_max.unwrap_or(f64::INFINITY);
+    let factor = if error == 0.0 {
+        adaptive.growth_limit
+    } else {
+        (adaptive.safety * error.powf(-1.0 / 3.0))
+            .clamp(adaptive.shrink_limit, adaptive.growth_limit)
+    };
+    let mut next_dt = (dt * factor).clamp(adaptive.dt_min, dt_max);
+    if error <= 1.0 {
+        return if next_dt.is_finite() {
+            CoupledAdaptiveDecision::Accepted(next_dt)
+        } else {
+            CoupledAdaptiveDecision::NonFinite
+        };
+    }
+    if coupled_adaptive_dt_min_reached(dt, adaptive.dt_min) {
+        return CoupledAdaptiveDecision::DtMinExhausted;
+    }
+    if next_dt >= dt {
+        let decreased = dt.next_down();
+        if decreased > 0.0 && decreased >= adaptive.dt_min {
+            next_dt = decreased;
+        } else {
+            return CoupledAdaptiveDecision::DtMinExhausted;
+        }
+    }
+    if next_dt.is_finite() {
+        CoupledAdaptiveDecision::Retry(next_dt)
+    } else {
+        CoupledAdaptiveDecision::NonFinite
+    }
+}
 
 #[cfg(test)]
 thread_local! {
@@ -1570,37 +1626,46 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                                 adaptive.atol,
                                 adaptive.rtol,
                             )?;
-                            let factor = if error == 0.0 {
-                                adaptive.growth_limit
-                            } else {
-                                (adaptive.safety * error.powf(-1.0 / 3.0))
-                                    .clamp(adaptive.shrink_limit, adaptive.growth_limit)
-                            };
-                            let next_dt = (attempted_dt * factor)
-                                .max(adaptive.dt_min)
-                                .min(adaptive.dt_max.unwrap_or(f64::INFINITY));
-                            if error <= 1.0 {
-                                *workflow = half_workflow;
-                                workflow.set_step_counters(
-                                    accepted_before.saturating_add(1),
-                                    rejected_before.saturating_add(rejected_trials),
-                                );
-                                workflow.set_error_controller(next_dt, error);
-                                state = half_state;
-                                half_report.dt_used = attempted_dt;
-                                half_report.suggested_next_dt = Some(next_dt);
-                                problem.commit_coupled_imex_ark2_step();
-                                break half_report;
+                            match decide_coupled_adaptive_step(error, attempted_dt, adaptive) {
+                                CoupledAdaptiveDecision::Accepted(next_dt) => {
+                                    *workflow = half_workflow;
+                                    workflow.set_step_counters(
+                                        accepted_before.saturating_add(1),
+                                        rejected_before.saturating_add(rejected_trials),
+                                    );
+                                    workflow.set_error_controller(next_dt, error);
+                                    state = half_state;
+                                    half_report.dt_used = attempted_dt;
+                                    half_report.suggested_next_dt = Some(next_dt);
+                                    problem.commit_coupled_imex_ark2_step();
+                                    break half_report;
+                                }
+                                CoupledAdaptiveDecision::Retry(next_dt) => {
+                                    rejected_trials = rejected_trials.saturating_add(1);
+                                    if rejected_trials >= MAX_COUPLED_ADAPTIVE_REJECTIONS {
+                                        return Err(RunError {
+                                            message: format!(
+                                                "Step {step_count}: [adaptive_retry_limit_exhausted] coupled ARS exceeded {MAX_COUPLED_ADAPTIVE_REJECTIONS} rejected attempts"
+                                            ),
+                                        });
+                                    }
+                                    attempted_dt = next_dt;
+                                }
+                                CoupledAdaptiveDecision::DtMinExhausted => {
+                                    return Err(RunError {
+                                        message: format!(
+                                            "Step {step_count}: [adaptive_dt_min_exhausted] coupled ARS LTE {error:.6e} exceeds 1 at dt_min"
+                                        ),
+                                    });
+                                }
+                                CoupledAdaptiveDecision::NonFinite => {
+                                    return Err(RunError {
+                                        message: format!(
+                                            "Step {step_count}: [non_finite_adaptive_error] coupled ARS LTE is not finite"
+                                        ),
+                                    });
+                                }
                             }
-                            rejected_trials = rejected_trials.saturating_add(1);
-                            if attempted_dt <= adaptive.dt_min {
-                                return Err(RunError {
-                                    message: format!(
-                                        "Step {step_count}: coupled ARS LTE {error:.6e} exceeds 1 at dt_min"
-                                    ),
-                                });
-                            }
-                            attempted_dt = next_dt;
                         }
                     } else {
                         let report = execute_coupled_ars_trial(
@@ -3188,6 +3253,43 @@ mod tests {
         SELECTION_CERTIFICATE_SCHEMA_VERSION,
     };
     use sha2::{Digest, Sha256};
+
+    fn adaptive_test_policy() -> AdaptiveTimeStepIR {
+        AdaptiveTimeStepIR {
+            tolerance_mode: AdaptiveToleranceModeIR::Advanced,
+            atol: 1.0e-8,
+            rtol: 0.0,
+            dt_initial: Some(1.0e-3),
+            dt_min: 1.0e-6,
+            dt_max: Some(1.0e-2),
+            safety: 0.8,
+            growth_limit: 2.0,
+            shrink_limit: 0.2,
+            max_spin_rotation: None,
+            norm_tolerance: None,
+        }
+    }
+
+    #[test]
+    fn coupled_adaptive_controller_fails_closed_and_makes_progress() {
+        let adaptive = adaptive_test_policy();
+        let CoupledAdaptiveDecision::Retry(next_dt) =
+            decide_coupled_adaptive_step(4.0, 1.0e-3, &adaptive)
+        else {
+            panic!("finite rejection must schedule a retry");
+        };
+        assert!(next_dt < 1.0e-3);
+        assert!(next_dt >= adaptive.dt_min);
+        assert_eq!(
+            decide_coupled_adaptive_step(f64::NAN, 1.0e-3, &adaptive),
+            CoupledAdaptiveDecision::NonFinite
+        );
+        let one_ulp_above = f64::from_bits(adaptive.dt_min.to_bits() + 1);
+        assert_eq!(
+            decide_coupled_adaptive_step(4.0, one_ulp_above, &adaptive),
+            CoupledAdaptiveDecision::DtMinExhausted
+        );
+    }
 
     fn make_test_plan() -> FdmPlanIR {
         FdmPlanIR {
