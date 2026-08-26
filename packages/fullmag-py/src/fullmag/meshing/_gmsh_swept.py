@@ -663,7 +663,7 @@ def _optimize_mixed_pyramid_apices(gmsh: Any) -> float:
 def _repair_mixed_tetrahedra(gmsh: Any) -> None:
     """Repair Delaunay tetrahedra before certifying a mixed prism mesh."""
     emit_progress("Gmsh: repairing mixed-domain tetrahedra")
-    gmsh.model.mesh.optimize("", niter=1)
+    gmsh.model.mesh.optimize("Netgen", niter=1)
 
 
 class SweepabilityResult:

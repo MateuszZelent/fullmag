@@ -84,12 +84,12 @@ def test_mixed_face_frequency_counting_is_linear_in_face_count() -> None:
     assert CountingFace.comparisons <= len(faces)
 
 
-def test_mixed_tetra_repair_uses_default_gmsh_optimizer() -> None:
+def test_mixed_tetra_repair_uses_netgen_gmsh_optimizer() -> None:
     gmsh = Mock()
 
     _repair_mixed_tetrahedra(gmsh)
 
-    gmsh.model.mesh.optimize.assert_called_once_with("", niter=1)
+    gmsh.model.mesh.optimize.assert_called_once_with("Netgen", niter=1)
 
 
 def test_qualified_boundary_markers_bypass_volume_face_adjacency() -> None:

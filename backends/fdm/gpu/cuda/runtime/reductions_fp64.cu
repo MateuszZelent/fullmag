@@ -15,6 +15,7 @@
 #include "adaptive_step_decision.hpp"
 
 #include <cuda_runtime.h>
+#include <math_constants.h>
 #include <cmath>
 #include <limits>
 

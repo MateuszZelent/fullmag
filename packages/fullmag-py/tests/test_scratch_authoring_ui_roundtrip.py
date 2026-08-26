@@ -171,6 +171,9 @@ def test_scene_document_exports_without_a_base_script(backend: str) -> None:
         source = render_scene_document_as_script(scene)
         assert "import fullmag as fm" in source
         assert "x-ferromagnet" in source
+        assert "study.exchange(" not in source
+        assert "study.demag(" not in source
+        assert "enabled=True" not in source
         if backend == "fdm":
             assert "study.fdm(" not in source
             assert "study.objects.mesh.defaults(cell_size=" in source

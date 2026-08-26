@@ -3033,6 +3033,38 @@ class ProblemApiTests(unittest.TestCase):
 
             rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
             self.assertIn('study.demag(realization="poisson_robin")', rewritten)
+            self.assertNotIn("study.exchange(", rewritten)
+            self.assertNotIn("enabled=True", rewritten)
+
+    def test_study_defaults_exchange_and_demag_without_enable_calls(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "default_effective_field_terms.py"
+            path.write_text(
+                "\n".join(
+                    [
+                        "import fullmag as fm",
+                        "study = fm.study('default_effective_field_terms')",
+                        "study.engine('fem')",
+                        "body = study.geometry(fm.Box(20e-9, 20e-9, 10e-9), name='body')",
+                        "body.Ms = 800e3",
+                        "body.Aex = 13e-12",
+                        "body.alpha = 0.1",
+                        "body.m = fm.texture.uniform(1, 0, 0)",
+                        "study.run(1e-12)",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            loaded = fm.load_problem_from_script(path)
+            term_kinds = [term["kind"] for term in loaded.problem.to_ir()["energy_terms"]]
+            self.assertIn("exchange", term_kinds)
+            self.assertIn("demag", term_kinds)
+
+            rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            self.assertNotIn("study.exchange(", rewritten)
+            self.assertNotIn("study.demag(", rewritten)
 
     def test_flat_script_can_disable_exchange_and_demag_effective_field_terms(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -3042,8 +3074,8 @@ class ProblemApiTests(unittest.TestCase):
                     [
                         "import fullmag as fm",
                         "fm.engine('fem')",
-                        "fm.exchange(enabled=False)",
-                        "fm.demag(enabled=False)",
+                        "fm.disable_exchange()",
+                        "fm.disable_demag()",
                         "fm.b_ext(0.0, 0.0, 0.01)",
                         "body = fm.geometry(fm.Box(20e-9, 20e-9, 10e-9), name='body')",
                         "body.Ms = 800e3",
@@ -3075,8 +3107,43 @@ class ProblemApiTests(unittest.TestCase):
             self.assertEqual(round_trip["demag_enabled"], False)
 
             rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
-            self.assertIn("fm.exchange(enabled=False)", rewritten)
-            self.assertIn("fm.demag(enabled=False)", rewritten)
+            self.assertIn("fm.disable_exchange()", rewritten)
+            self.assertIn("fm.disable_demag()", rewritten)
+
+    def test_study_disable_methods_preserve_demag_configuration_for_round_trip(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "disabled_study_effective_field_terms.py"
+            path.write_text(
+                "\n".join(
+                    [
+                        "import fullmag as fm",
+                        "study = fm.study('disabled_study_effective_field_terms')",
+                        "study.engine('fem')",
+                        "study.demag(realization='poisson_robin')",
+                        "study.disable_exchange()",
+                        "study.disable_demag()",
+                        "fm.b_ext(0.0, 0.0, 0.01)",
+                        "body = study.geometry(fm.Box(20e-9, 20e-9, 10e-9), name='body')",
+                        "body.Ms = 800e3",
+                        "body.Aex = 13e-12",
+                        "body.alpha = 0.1",
+                        "body.m = fm.texture.uniform(1, 0, 0)",
+                        "study.run(1e-12)",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            loaded = fm.load_problem_from_script(path)
+            term_kinds = [term["kind"] for term in loaded.problem.to_ir()["energy_terms"]]
+            self.assertNotIn("exchange", term_kinds)
+            self.assertNotIn("demag", term_kinds)
+
+            rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            self.assertIn('study.demag(realization="poisson_robin")', rewritten)
+            self.assertIn("study.disable_exchange()", rewritten)
+            self.assertIn("study.disable_demag()", rewritten)
 
     def test_study_shared_domain_mesh_rewrite_uses_build_domain_mesh(self) -> None:
         script = """

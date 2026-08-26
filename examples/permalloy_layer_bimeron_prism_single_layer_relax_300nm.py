@@ -66,6 +66,7 @@ layer.m = fm.texture.bimeron(
 layer.mesh.thin_film(
     maximum_element_size=20 * NM,
     minimum_element_size=1.6 * NM,
+    interface_maximum_element_size=10 * NM,
     order=1,
     layers=1,
     topology="prismatic",
@@ -74,7 +75,7 @@ layer.mesh.thin_film(
 )
 
 # Interactions, mesh, and solver
-# study.exchange()
+study.exchange()
 study.demag(realization="poisson_robin")
 study.objects.mesh.defaults(
     algorithm_2d=6,

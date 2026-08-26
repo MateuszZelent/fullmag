@@ -50,6 +50,7 @@ def test_bimeron_example_contains_only_one_centered_layer_and_one_prism_layer() 
     mesh_keywords = {keyword.arg: keyword.value for keyword in thin_film.keywords if keyword.arg}
     assert ast.unparse(mesh_keywords["maximum_element_size"]) == "20 * NM"
     assert ast.unparse(mesh_keywords["minimum_element_size"]) == "1.6 * NM"
+    assert ast.unparse(mesh_keywords["interface_maximum_element_size"]) == "10 * NM"
     assert ast.literal_eval(mesh_keywords["layers"]) == 1
     assert ast.literal_eval(mesh_keywords["topology"]) == "prismatic"
     assert ast.literal_eval(mesh_keywords["exact_layers"]) is True
@@ -71,6 +72,15 @@ def test_bimeron_minimization_uses_accepted_step_table_autosave() -> None:
         isinstance(call.func.value, ast.Name) and call.func.value.id == "study"
         for call in table_calls
     )
+
+
+def test_bimeron_example_uses_default_exchange_and_configured_demag() -> None:
+    tree = ast.parse(EXAMPLE.read_text(encoding="utf-8"), filename=str(EXAMPLE))
+
+    assert not _calls(tree, "exchange")
+    assert not _calls(tree, "disable_exchange")
+    assert not _calls(tree, "disable_demag")
+    assert len(_calls(tree, "demag")) == 1
 
 
 def test_bimeron_example_uses_the_qualified_shared_domain_mesh_route() -> None:
