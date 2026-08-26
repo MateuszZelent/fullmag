@@ -464,6 +464,11 @@ bool context_step_explicit_rk_mfem(
         if (ctx.frozen_spins.enabled()) {
             ctx.frozen_spins.project_onto_reference(ws.m_candidate);
         }
+        if (final_stage_cache_valid) {
+            final_stage_cache_valid =
+                ws.m_candidate.size() == ws.m_stage.size() &&
+                std::equal(ws.m_candidate.cbegin(), ws.m_candidate.cend(), ws.m_stage.cbegin());
+        }
         if (poll_interrupt(ctx)) {
             ws.fsal_valid = false;
             return true;
@@ -476,7 +481,7 @@ bool context_step_explicit_rk_mfem(
             return false;
         }
 
-        if (tab.fsal && fsal_reuse_allowed) {
+        if (tab.fsal && fsal_reuse_allowed && final_stage_cache_valid) {
             std::swap(ws.k[0], ws.k[tab.stages - 1]);
             ws.fsal_valid = true;
         } else {
@@ -542,7 +547,8 @@ bool context_step_explicit_rk_mfem(
 
     double max_rhs_final = 0.0;
     if (final_stage_cache_valid) {
-        max_rhs_final = max_norm_aos(ws.k[0]);
+        const auto &final_rhs = ws.fsal_valid ? ws.k[0] : ws.k[tab.stages - 1];
+        max_rhs_final = max_norm_aos(final_rhs);
     } else {
         if (!materialize_transport_stage_rhs(
                 ctx,

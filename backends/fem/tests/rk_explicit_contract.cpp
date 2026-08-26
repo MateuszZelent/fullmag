@@ -9,6 +9,7 @@
 #include "cpu/mfem/integrators/rk_stepper_workspace.hpp"
 #include "cpu/mfem/runtime/backend_step.hpp"
 #include "cpu/mfem/runtime/state_io.hpp"
+#include "cpu/mfem/runtime/step_metrics.hpp"
 
 #include <array>
 #include <cmath>
@@ -1267,6 +1268,67 @@ void deterministic_oersted_fsal_requires_an_identical_next_source_state() {
     check(stats.fsal_reused == 0u, "source-state mismatch must not report FSAL reuse");
 }
 
+void brown_thermal_final_rhs_uses_last_stage_without_fsal() {
+    fullmag::fem::Context ctx;
+    configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_RK23_BS);
+    ctx.mesh.node_volumes = {1.0e-27};
+    ctx.material_fields.material.saturation_magnetisation = 800e3;
+    ctx.thermal_brown.temperature = 300.0;
+    ctx.thermal_brown.seed = 1234u;
+    fullmag::fem::initialize_thermal_brown_field(ctx);
+
+    const auto &tableau = fullmag::fem::tableau_for_integrator(
+        FULLMAG_FEM_INTEGRATOR_RK23_BS);
+    fullmag_fem_step_stats stats{};
+    std::string error;
+    check(
+        fullmag::fem::context_step_explicit_rk_mfem(ctx, tableau, 0.11, stats, error),
+        error.c_str());
+
+    check(stats.fsal_reused == 0u, "Brown thermal RHS must not reuse FSAL");
+    const double first_stage_rhs = fullmag::fem::max_norm_aos(ctx.stepper.workspace.k[0]);
+    const double last_stage_rhs = fullmag::fem::max_norm_aos(
+        ctx.stepper.workspace.k[tableau.stages - 1]);
+    check(
+        std::fabs(first_stage_rhs - last_stage_rhs) > 1e-12,
+        "Brown thermal fixture must distinguish first and last stage RHS");
+    check_near(
+        stats.max_rhs_amplitude,
+        last_stage_rhs,
+        std::max(1.0, last_stage_rhs) * 1e-14,
+        "Brown thermal final stats must use the last stage RHS without FSAL");
+}
+
+void cpu_fsal_endpoint_cache_requires_matching_candidate_state() {
+    fullmag::fem::Context ctx;
+    configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_RK23_BS);
+    ctx.oersted.has_cylinder = false;
+    ctx.oersted.h_basis_per_ampere_xyz.clear();
+    StageOerstedCallbackProbe probe;
+    const auto callback = make_stage_oersted_probe_callback(probe);
+    std::string error;
+    check(
+        fullmag::fem::configure_oersted_stage_callback(ctx, &callback, error),
+        error.c_str());
+
+    auto injected = fullmag::fem::tableau_for_integrator(
+        FULLMAG_FEM_INTEGRATOR_RK23_BS);
+    injected.b_hi[0] += 0.5;
+    fullmag_fem_step_stats stats{};
+    check(
+        fullmag::fem::context_step_explicit_rk_mfem(ctx, injected, 0.19, stats, error),
+        error.c_str());
+
+    check(stats.fsal_reused == 0u, "mismatched endpoint state must not report FSAL reuse");
+    check(!ctx.stepper.workspace.fsal_valid, "mismatched endpoint state must invalidate FSAL");
+    check(
+        probe.evaluation_times.size() == static_cast<size_t>(injected.stages + 1),
+        "mismatched endpoint state must trigger one endpoint field refresh");
+    check(
+        (probe.stage_identities.back() & 0xffffu) == 0xffffu,
+        "mismatched endpoint refresh must use the reserved endpoint identity");
+}
+
 void gpu_requested_oersted_only_step_rejects_host_rk_fallback() {
     fullmag::fem::Context ctx;
     configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_HEUN);
@@ -1977,6 +2039,8 @@ int main() {
 #if FULLMAG_HAS_MFEM_STACK
     executed_cpu_rk_steps_sample_all_stage_times_and_publish_endpoint_field();
     deterministic_oersted_fsal_requires_an_identical_next_source_state();
+    brown_thermal_final_rhs_uses_last_stage_without_fsal();
+    cpu_fsal_endpoint_cache_requires_matching_candidate_state();
     cpu_stage_oersted_callback_samples_exact_stages_and_commits();
     cpu_stage_oersted_callback_rolls_back_adaptive_retries();
     cpu_stage_oersted_callback_rolls_back_native_failure();

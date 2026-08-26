@@ -21,6 +21,7 @@ FEM CPU ma największe ryzyko kosztu algorytmicznego, nie samej algebry LLG. Je�
 | Reprezentacja state/DOF | potwierdzone właścicielstwo, wysoka | `backends/fem/include/context.hpp` — `Context`; `backends/fem/cpu/mfem/runtime/state_io.cpp` — `context_upload_magnetization_f64`, `context_sync_gpu_magnetization_to_host` | transfer-audit i parity true/local DOF |
 | Projekcja przez macierz masy | potwierdzone istnienie operatora, koszt otwarty | `backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp` — `apply_exchange_component_mass_projection` | sweep tolerancji i liczby iteracji względem błędu RK |
 | Reuse demag | częściowo potwierdzone, średnia | `backends/fem/cpu/mfem/interactions/demag_poisson_cache.cpp` — `demag_poisson_try_load_cached_field`; `demag_poisson_solve.cpp` — `context_compute_demag_poisson` | licznik rebuildów i iteracji per stage |
+| Endpoint cache/FSAL | częściowo naprawione, wysoka | `backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp` — `context_step_explicit_rk_mfem` | `fem_rk_explicit_contract`: zgodność stanu kandydata z ostatnim stage, Brown `max_rhs` i endpoint refresh; operator-count/performance oracle pozostaje otwarty |
 | Norma/stop na siatce FEM z frozen spins | naprawione źródłowo, wysoka | `backends/fem/cpu/mfem/runtime/step_metrics.cpp` — `fill_common_step_metrics`, `max_cross_norm_aos_free`; `backends/fem/cpu/mfem/runtime/stage_completion.hpp` — `update_stage_completion_from_stats` | `just verify-fem-dg0-step-metrics-contract` — managed native fixture wyklucza Airbox i frozen oraz sprawdza przypadek all-frozen |
 | Oversubscription | częściowo potwierdzona polityka, koszt otwarty | `backends/fem/cpu/mfem/runtime/cpu_threads.cpp` — `configure_fem_host_runtime_threads`; `backends/fem/include/context.hpp` — `Context::cpu_threads` | sweep OpenMP/MFEM/Hypre threads z NUMA affinity |
 
@@ -53,6 +54,12 @@ Jeżeli RHS wymaga rozwiązania z macierzą masy, koszt i tolerancja tego rozwi�
 Ponowne budowanie operatora, warunków brzegowych, gauge lub airbox mapping jest niedopuszczalne. Tylko źródło zależne od `m` powinno się zmieniać w kroku.
 
 **Naprawa:** trwały operator i preconditioner, aktualizacja RHS, kontrola liczby iteracji per stage oraz polityka reuse/rebuild oparta na mierzalnej degradacji.
+
+### P1 — endpoint accepted musi odpowiadać cache ostatniego stage
+
+W metodach FSAL pole i RHS ostatniego stage mogą zostać opublikowane jako endpoint tylko wtedy, gdy po normalizacji i projekcji stan accepted jest identyczny ze stanem, dla którego wykonano ostatni apply. `context_step_explicit_rk_mfem` sprawdza tę zgodność element po elemencie; przy rozbieżności wykonuje jawny endpoint refresh i unieważnia FSAL. Gdy FSAL jest wyłączony przez stochastyczną termikę, ale cache pola endpointu jest poprawny, `max_rhs_amplitude` pochodzi z RHS ostatniego stage, a nie z `k[0]`.
+
+Managed `fem_rk_explicit_contract` obejmuje oba przypadki: rozbieżny kandydat wymusza endpoint refresh, a Brown thermal publikuje metrykę z ostatniego stage. Pełny operator-count, niezależny oracle fizyczny i steady-state performance gate pozostają otwarte.
 
 ### P1 — adaptacyjna norma błędu zachowuje maksimum po węzłach
 
@@ -211,6 +218,7 @@ Audyt statyczny nie kwalifikuje kosztu MFEM/Hypre bez wykonania zarządzanego be
 | Mass projection | `backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp` | `apply_exchange_component_mass_projection` | projekcja exchange przez mass matrix | FEM CPU | `exchange_contract` | test kontraktu; koszt otwarty |
 | Cache demag | `backends/fem/cpu/mfem/interactions/demag_poisson_cache.cpp` | `demag_poisson_try_load_cached_field` | reuse pola demag | FEM CPU | `demag_poisson_contract` | test kontraktu |
 | Solve demag | `backends/fem/cpu/mfem/interactions/demag_poisson_solve.cpp` | `context_compute_demag_poisson` | Poisson solve po aktualizacji RHS | FEM CPU | `demag_poisson_contract` | test kontraktu; koszt otwarty |
+| Endpoint cache/FSAL | `backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp` | `context_step_explicit_rk_mfem` | walidacja accepted endpoint względem ostatniego stage i wybór RHS metryk | FEM CPU | `fem_rk_explicit_contract` | managed test PASS; operator-count/oracle/performance otwarte |
 | Native torque metric | `backends/fem/cpu/mfem/runtime/step_metrics.cpp` | `fill_common_step_metrics` | publikuje `max_torque_Apm` | FEM CPU | `just verify-fem-dg0-step-metrics-contract` | naprawione: redukcja używa active magnetic free-set |
 | Torque reduction | `backends/fem/cpu/mfem/runtime/step_metrics.cpp` | `max_cross_norm_aos_free` | maksimum po aktywnych, niefrozen węzłach | FEM CPU | pinned/non-magnetic i all-frozen fixture | test managed native PASS |
 | Adaptive error norm | `backends/fem/cpu/mfem/integrators/adaptive_dt.cpp` | `compute_adaptive_error_norm` | maksimum błędu po aktywnych, niefrozen węzłach | FEM CPU | `fem_adaptive_dt_contract` | test managed native PASS; RMS ważony masą pozostaje otwarty |
