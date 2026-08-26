@@ -19,12 +19,91 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace fullmag::fem {
 
 #if FULLMAG_HAS_MFEM_STACK
+namespace {
+
+mfem::SparseMatrix *regularize_sparse_matrix_zero_rows(
+    const mfem::SparseMatrix &matrix);
+
+mfem::SparseMatrix *reduce_sparse_matrix_by_periodic_classes(
+    const mfem::SparseMatrix &matrix,
+    const Context &ctx)
+{
+    const int n_reduced = static_cast<int>(ctx.mesh.periodic_reduced_node_count);
+    if (n_reduced <= 0 || matrix.Height() != static_cast<int>(ctx.mesh.n_nodes) ||
+        matrix.Width() != static_cast<int>(ctx.mesh.n_nodes) ||
+        ctx.mesh.periodic_reduced_node.size() != static_cast<size_t>(ctx.mesh.n_nodes)) {
+        throw std::runtime_error("periodic exchange mass reduction has incompatible dimensions");
+    }
+
+    auto *reduced = new mfem::SparseMatrix(n_reduced, n_reduced);
+    mfem::Array<int> columns;
+    mfem::Vector values;
+    for (int row = 0; row < matrix.Height(); ++row) {
+        const int reduced_row = static_cast<int>(
+            ctx.mesh.periodic_reduced_node[static_cast<size_t>(row)]);
+        if (reduced_row < 0 || reduced_row >= n_reduced) {
+            delete reduced;
+            throw std::runtime_error("periodic exchange mass map contains an invalid row class");
+        }
+        matrix.GetRow(row, columns, values);
+        for (int entry = 0; entry < columns.Size(); ++entry) {
+            const int column = columns[entry];
+            if (column < 0 || column >= matrix.Width()) {
+                delete reduced;
+                throw std::runtime_error(
+                    "periodic exchange mass matrix contains an invalid column");
+            }
+            const int reduced_column = static_cast<int>(
+                ctx.mesh.periodic_reduced_node[static_cast<size_t>(column)]);
+            if (reduced_column < 0 || reduced_column >= n_reduced) {
+                delete reduced;
+                throw std::runtime_error(
+                    "periodic exchange mass map contains an invalid column class");
+            }
+            reduced->Add(reduced_row, reduced_column, values[entry]);
+        }
+    }
+    reduced->Finalize();
+    auto *regularized = regularize_sparse_matrix_zero_rows(*reduced);
+    delete reduced;
+    return regularized;
+}
+
+mfem::SparseMatrix *regularize_sparse_matrix_zero_rows(
+    const mfem::SparseMatrix &matrix)
+{
+    if (matrix.Height() != matrix.Width()) {
+        throw std::runtime_error("exchange mass solve matrix must be square");
+    }
+
+    auto *regularized = new mfem::SparseMatrix(matrix.Height(), matrix.Width());
+    mfem::Array<int> columns;
+    mfem::Vector values;
+    for (int row = 0; row < matrix.Height(); ++row) {
+        matrix.GetRow(row, columns, values);
+        bool has_nonzero = false;
+        for (int entry = 0; entry < columns.Size(); ++entry) {
+            const double value = values[entry];
+            regularized->Add(row, columns[entry], value);
+            has_nonzero = has_nonzero || value != 0.0;
+        }
+        if (!has_nonzero) {
+            regularized->Add(row, row, 1.0);
+        }
+    }
+    regularized->Finalize();
+    return regularized;
+}
+
+} // namespace
+
 bool initialize_exchange_operator_mfem(
     Context &ctx,
     mfem::Mesh &mesh,
@@ -42,6 +121,15 @@ bool initialize_exchange_operator_mfem(
     auto inv_lumped_mass = std::make_unique<mfem::Vector>(fes.GetNDofs());
     auto exchange_tmp_vec = std::make_unique<mfem::Vector>(fes.GetNDofs());
     auto exchange_out_vec = std::make_unique<mfem::Vector>(fes.GetNDofs());
+    std::unique_ptr<mfem::SparseMatrix> consistent_mass_matrix;
+    std::unique_ptr<mfem::GSSmoother> consistent_mass_preconditioner;
+    std::unique_ptr<mfem::CGSolver> consistent_mass_solver;
+    std::unique_ptr<mfem::SparseMatrix> periodic_mass_matrix;
+    std::unique_ptr<mfem::GSSmoother> periodic_mass_preconditioner;
+    std::unique_ptr<mfem::CGSolver> periodic_mass_solver;
+    std::unique_ptr<mfem::Vector> periodic_mass_rhs;
+    std::unique_ptr<mfem::Vector> periodic_mass_solution;
+    std::unique_ptr<mfem::Vector> periodic_mass_residual;
     mass_ones->UseDevice(use_device);
     mass_lumped->UseDevice(use_device);
     inv_lumped_mass->UseDevice(use_device);
@@ -178,6 +266,47 @@ bool initialize_exchange_operator_mfem(
         return false;
     }
 
+    if (ctx.exchange.mfem.use_consistent_mass) {
+        consistent_mass_matrix.reset(
+            regularize_sparse_matrix_zero_rows(mass_form->SpMat()));
+        consistent_mass_preconditioner =
+            std::make_unique<mfem::GSSmoother>(*consistent_mass_matrix);
+        consistent_mass_solver = std::make_unique<mfem::CGSolver>();
+        consistent_mass_solver->SetRelTol(1e-10);
+        consistent_mass_solver->SetAbsTol(0.0);
+        consistent_mass_solver->SetMaxIter(200);
+        consistent_mass_solver->SetPrintLevel(0);
+        consistent_mass_solver->SetPreconditioner(*consistent_mass_preconditioner);
+        consistent_mass_solver->SetOperator(*consistent_mass_matrix);
+
+        const bool has_periodic_mass_map =
+            ctx.mesh.periodic_reduced_node_count > 0 &&
+            ctx.mesh.periodic_reduced_node.size() == static_cast<size_t>(ctx.mesh.n_nodes);
+        if (has_periodic_mass_map) {
+            periodic_mass_matrix.reset(
+                reduce_sparse_matrix_by_periodic_classes(mass_form->SpMat(), ctx));
+            periodic_mass_preconditioner =
+                std::make_unique<mfem::GSSmoother>(*periodic_mass_matrix);
+            periodic_mass_solver = std::make_unique<mfem::CGSolver>();
+            periodic_mass_solver->SetRelTol(1e-10);
+            periodic_mass_solver->SetAbsTol(0.0);
+            periodic_mass_solver->SetMaxIter(std::max(
+                200,
+                static_cast<int>(ctx.mesh.periodic_reduced_node_count) * 10));
+            periodic_mass_solver->SetPrintLevel(0);
+            periodic_mass_solver->SetPreconditioner(*periodic_mass_preconditioner);
+            periodic_mass_solver->SetOperator(*periodic_mass_matrix);
+            periodic_mass_rhs = std::make_unique<mfem::Vector>(
+                static_cast<int>(ctx.mesh.periodic_reduced_node_count));
+            periodic_mass_solution = std::make_unique<mfem::Vector>(
+                static_cast<int>(ctx.mesh.periodic_reduced_node_count));
+            periodic_mass_residual = std::make_unique<mfem::Vector>(
+                static_cast<int>(ctx.mesh.periodic_reduced_node_count));
+            *periodic_mass_solution = 0.0;
+            *periodic_mass_residual = 0.0;
+        }
+    }
+
     ctx.exchange.mfem.exchange_form = exchange_form.release();
     ctx.exchange.mfem.mass_form = mass_form.release();
     ctx.exchange.mfem.mass_ones = mass_ones.release();
@@ -185,6 +314,17 @@ bool initialize_exchange_operator_mfem(
     ctx.exchange.mfem.inv_lumped_mass = inv_lumped_mass.release();
     ctx.exchange.mfem.tmp_vec = exchange_tmp_vec.release();
     ctx.exchange.mfem.out_vec = exchange_out_vec.release();
+    ctx.exchange.mfem.consistent_mass_matrix = consistent_mass_matrix.release();
+    ctx.exchange.mfem.consistent_mass_preconditioner = consistent_mass_preconditioner.release();
+    ctx.exchange.mfem.consistent_mass_solver = consistent_mass_solver.release();
+    ctx.exchange.mfem.periodic_mass_matrix = periodic_mass_matrix.release();
+    ctx.exchange.mfem.periodic_mass_preconditioner = periodic_mass_preconditioner.release();
+    ctx.exchange.mfem.periodic_mass_solver = periodic_mass_solver.release();
+    ctx.exchange.mfem.periodic_mass_rhs = periodic_mass_rhs.release();
+    ctx.exchange.mfem.periodic_mass_solution = periodic_mass_solution.release();
+    ctx.exchange.mfem.periodic_mass_residual = periodic_mass_residual.release();
+    ctx.exchange.mfem.periodic_mass_setup_count =
+        ctx.exchange.mfem.periodic_mass_matrix != nullptr ? 1u : 0u;
     return true;
 }
 #endif

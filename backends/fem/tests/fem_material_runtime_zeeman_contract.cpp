@@ -57,8 +57,7 @@ double independent_two_tetra_oracle(
     return -kMu0 * sum;
 }
 
-fullmag::fem::Context sharp_ms_context() {
-    fullmag::fem::Context ctx;
+void sharp_ms_context(fullmag::fem::Context &ctx) {
     ctx.mesh.n_nodes = 6u;
     ctx.mesh.n_elements = 3u;
     ctx.mesh.nodes_xyz = {
@@ -90,11 +89,11 @@ fullmag::fem::Context sharp_ms_context() {
         -41.0, 43.0, 47.0,
         53.0, -59.0, 61.0,
     };
-    return ctx;
 }
 
 void context_adapter_keeps_ordered_active_scope_and_drives_sharp_ms_zeeman() {
-    auto ctx = sharp_ms_context();
+    fullmag::fem::Context ctx;
+    sharp_ms_context(ctx);
     std::string error;
     check(fullmag::fem::initialize_material_runtime(ctx, error),
           "material runtime adapter must construct from validated mesh and masks");
@@ -134,7 +133,8 @@ void context_adapter_keeps_ordered_active_scope_and_drives_sharp_ms_zeeman() {
 }
 
 void sharp_ms_zeeman_difference_tracks_component_termwise_roundoff() {
-    auto ctx = sharp_ms_context();
+    fullmag::fem::Context ctx;
+    sharp_ms_context(ctx);
     for (std::size_t node = 0; node < ctx.mesh.n_nodes; ++node) {
         const std::size_t base = node * 3u;
         ctx.zeeman.h_ext_xyz[base + 0u] = 1.0;

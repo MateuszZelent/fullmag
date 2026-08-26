@@ -7,11 +7,14 @@
 #include "cpu/mfem/interactions/exchange_runtime.hpp"
 #include "fullmag_fem.h"
 
+#include <cstdint>
 #include <vector>
 
 namespace mfem {
 class BilinearForm;
 class CGSolver;
+class GSSmoother;
+class SparseMatrix;
 class Vector;
 }
 
@@ -41,7 +44,18 @@ struct ExchangeMfemRuntimeState {
     mfem::Vector *inv_lumped_mass = nullptr;
     mfem::Vector *tmp_vec = nullptr;
     mfem::Vector *out_vec = nullptr;
+    mfem::SparseMatrix *consistent_mass_matrix = nullptr;
+    mfem::GSSmoother *consistent_mass_preconditioner = nullptr;
     mfem::CGSolver *consistent_mass_solver = nullptr;
+    mfem::SparseMatrix *periodic_mass_matrix = nullptr;
+    mfem::GSSmoother *periodic_mass_preconditioner = nullptr;
+    mfem::CGSolver *periodic_mass_solver = nullptr;
+    mfem::Vector *periodic_mass_rhs = nullptr;
+    mfem::Vector *periodic_mass_solution = nullptr;
+    mfem::Vector *periodic_mass_residual = nullptr;
+    uint64_t consistent_mass_solver_applies = 0;
+    uint64_t periodic_mass_solver_applies = 0;
+    uint64_t periodic_mass_setup_count = 0;
     bool ready = false;
 };
 

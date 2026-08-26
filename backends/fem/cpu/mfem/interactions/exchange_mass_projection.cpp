@@ -36,103 +36,74 @@ void copy_mfem_vector_to_host(const mfem::Vector &src, std::vector<double> &dst)
     }
 }
 
-double dot_host_vectors(const std::vector<double> &a, const std::vector<double> &b) {
-    double value = 0.0;
-    for (size_t i = 0; i < a.size(); ++i) {
-        value += a[i] * b[i];
-    }
-    return value;
-}
-
 bool apply_periodic_consistent_mass_component(
-    const Context &ctx,
-    mfem::BilinearForm &mass_form,
+    Context &ctx,
     const mfem::Vector &rhs_full,
     mfem::Vector &h_component,
     std::vector<double> &h_component_host)
 {
     const int ndofs = rhs_full.Size();
     const uint32_t n_reduced = ctx.mesh.periodic_reduced_node_count;
-    if (n_reduced == 0 || ctx.mesh.periodic_reduced_node.size() != static_cast<size_t>(ndofs)) {
+    auto *reduced_matrix = static_cast<mfem::SparseMatrix *>(
+        ctx.exchange.mfem.periodic_mass_matrix);
+    auto *reduced_solver = static_cast<mfem::CGSolver *>(
+        ctx.exchange.mfem.periodic_mass_solver);
+    auto *reduced_rhs = static_cast<mfem::Vector *>(
+        ctx.exchange.mfem.periodic_mass_rhs);
+    auto *reduced_solution = static_cast<mfem::Vector *>(
+        ctx.exchange.mfem.periodic_mass_solution);
+    auto *reduced_residual = static_cast<mfem::Vector *>(
+        ctx.exchange.mfem.periodic_mass_residual);
+    if (n_reduced == 0 || ctx.mesh.periodic_reduced_node.size() != static_cast<size_t>(ndofs) ||
+        reduced_matrix == nullptr || reduced_solver == nullptr || reduced_rhs == nullptr ||
+        reduced_solution == nullptr || reduced_residual == nullptr ||
+        reduced_matrix->Height() != static_cast<int>(n_reduced) ||
+        reduced_matrix->Width() != static_cast<int>(n_reduced) ||
+        reduced_rhs->Size() != static_cast<int>(n_reduced) ||
+        reduced_solution->Size() != static_cast<int>(n_reduced) ||
+        reduced_residual->Size() != static_cast<int>(n_reduced)) {
         return false;
     }
 
-    std::vector<double> rhs_reduced(static_cast<size_t>(n_reduced), 0.0);
+    *reduced_rhs = 0.0;
+    double *rhs_reduced_host = audited_host_write(*reduced_rhs);
     const double *rhs_host = audited_host_read(rhs_full);
     for (int i = 0; i < ndofs; ++i) {
         const uint32_t reduced = ctx.mesh.periodic_reduced_node[static_cast<size_t>(i)];
-        rhs_reduced[static_cast<size_t>(reduced)] += rhs_host[i];
+        if (reduced >= n_reduced) {
+            return false;
+        }
+        rhs_reduced_host[static_cast<size_t>(reduced)] += rhs_host[i];
     }
 
-    const bool use_device = mfem::Device::IsEnabled();
-    auto multiply_reduced_mass =
-        [&](const std::vector<double> &x_reduced, std::vector<double> &out_reduced) {
-            mfem::Vector full_x(ndofs);
-            mfem::Vector full_y(ndofs);
-            full_x.UseDevice(use_device);
-            full_y.UseDevice(use_device);
-            double *x_host = audited_host_write(full_x);
-            for (int i = 0; i < ndofs; ++i) {
-                const uint32_t reduced = ctx.mesh.periodic_reduced_node[static_cast<size_t>(i)];
-                x_host[i] = x_reduced[static_cast<size_t>(reduced)];
-            }
-
-            mass_form.Mult(full_x, full_y);
-            out_reduced.assign(static_cast<size_t>(n_reduced), 0.0);
-            const double *y_host = audited_host_read(full_y);
-            for (int i = 0; i < ndofs; ++i) {
-                const uint32_t reduced = ctx.mesh.periodic_reduced_node[static_cast<size_t>(i)];
-                out_reduced[static_cast<size_t>(reduced)] += y_host[i];
-            }
-        };
-
-    std::vector<double> solution(static_cast<size_t>(n_reduced), 0.0);
-    std::vector<double> residual = rhs_reduced;
-    std::vector<double> direction = residual;
-    std::vector<double> operator_direction;
-    double residual_norm_sq = dot_host_vectors(residual, residual);
-    const double rhs_norm = std::sqrt(residual_norm_sq);
+    const double rhs_norm = reduced_rhs->Norml2();
+    *reduced_solution = 0.0;
     if (rhs_norm <= 1e-30) {
         h_component = 0.0;
         copy_mfem_vector_to_host(h_component, h_component_host);
         return true;
     }
-    const double tolerance_sq = std::pow(std::max(1e-20, 1e-10 * rhs_norm), 2.0);
-    const int max_iter = std::max(200, static_cast<int>(n_reduced) * 10);
-    for (int iter = 0; iter < max_iter && residual_norm_sq > tolerance_sq; ++iter) {
-        multiply_reduced_mass(direction, operator_direction);
-        const double denom = dot_host_vectors(direction, operator_direction);
-        if (!std::isfinite(denom) || denom <= 0.0) {
-            return false;
-        }
-        const double alpha = residual_norm_sq / denom;
-        for (uint32_t i = 0; i < n_reduced; ++i) {
-            solution[static_cast<size_t>(i)] += alpha * direction[static_cast<size_t>(i)];
-            residual[static_cast<size_t>(i)] -= alpha * operator_direction[static_cast<size_t>(i)];
-        }
-        const double next_residual_norm_sq = dot_host_vectors(residual, residual);
-        if (!std::isfinite(next_residual_norm_sq)) {
-            return false;
-        }
-        if (next_residual_norm_sq <= tolerance_sq) {
-            residual_norm_sq = next_residual_norm_sq;
-            break;
-        }
-        const double beta = next_residual_norm_sq / residual_norm_sq;
-        for (uint32_t i = 0; i < n_reduced; ++i) {
-            direction[static_cast<size_t>(i)] =
-                residual[static_cast<size_t>(i)] + beta * direction[static_cast<size_t>(i)];
-        }
-        residual_norm_sq = next_residual_norm_sq;
-    }
-    if (residual_norm_sq > tolerance_sq) {
+
+    reduced_solver->Mult(*reduced_rhs, *reduced_solution);
+    reduced_matrix->Mult(*reduced_solution, *reduced_residual);
+    *reduced_residual -= *reduced_rhs;
+    const double absolute_residual = reduced_residual->Norml2();
+    const double residual_limit = std::max(1e-20, 1e-10 * rhs_norm);
+    if (!reduced_solver->GetConverged() || !std::isfinite(absolute_residual) ||
+        absolute_residual > residual_limit ||
+        !std::isfinite(reduced_solution->Norml2())) {
         return false;
     }
 
+    ++ctx.exchange.mfem.periodic_mass_solver_applies;
+    const double *solution_host = audited_host_read(*reduced_solution);
     double *h_host = audited_host_write(h_component);
     for (int i = 0; i < ndofs; ++i) {
         const uint32_t reduced = ctx.mesh.periodic_reduced_node[static_cast<size_t>(i)];
-        h_host[i] = -(2.0 / kMu0) * solution[static_cast<size_t>(reduced)];
+        if (reduced >= n_reduced) {
+            return false;
+        }
+        h_host[i] = -(2.0 / kMu0) * solution_host[static_cast<size_t>(reduced)];
     }
     copy_mfem_vector_to_host(h_component, h_component_host);
     return true;
@@ -196,7 +167,6 @@ bool apply_exchange_component_mass_projection(
             }
             return apply_periodic_consistent_mass_component(
                 *ctx,
-                mass_form,
                 tmp,
                 h_component,
                 h_component_host);
@@ -246,28 +216,34 @@ bool apply_exchange_component_mass_projection(
 
     if (use_consistent_mass) {
         std::unique_ptr<mfem::CGSolver> local_solver;
+        std::unique_ptr<mfem::GSSmoother> local_preconditioner;
         mfem::CGSolver *cg_solver = nullptr;
         if (ctx != nullptr) {
-            if (ctx->exchange.mfem.consistent_mass_solver == nullptr) {
-                ctx->exchange.mfem.consistent_mass_solver = new mfem::CGSolver();
-                ctx->exchange.mfem.consistent_mass_solver->SetRelTol(1e-10);
-                ctx->exchange.mfem.consistent_mass_solver->SetAbsTol(0.0);
-                ctx->exchange.mfem.consistent_mass_solver->SetMaxIter(200);
-                ctx->exchange.mfem.consistent_mass_solver->SetPrintLevel(0);
-                ctx->exchange.mfem.consistent_mass_solver->SetOperator(mass_form);
-            }
             cg_solver = ctx->exchange.mfem.consistent_mass_solver;
+            if (ctx->exchange.mfem.consistent_mass_matrix == nullptr ||
+                cg_solver == nullptr ||
+                ctx->exchange.mfem.consistent_mass_preconditioner == nullptr) {
+                return false;
+            }
         } else {
+            local_preconditioner = std::make_unique<mfem::GSSmoother>(mass_form.SpMat());
             local_solver = std::make_unique<mfem::CGSolver>();
             local_solver->SetRelTol(1e-10);
             local_solver->SetAbsTol(0.0);
             local_solver->SetMaxIter(200);
             local_solver->SetPrintLevel(0);
-            local_solver->SetOperator(mass_form);
+            local_solver->SetPreconditioner(*local_preconditioner);
+            local_solver->SetOperator(mass_form.SpMat());
             cg_solver = local_solver.get();
         }
         h_component = 0.0;
         cg_solver->Mult(tmp, h_component);
+        if (!cg_solver->GetConverged() || !std::isfinite(h_component.Norml2())) {
+            return false;
+        }
+        if (ctx != nullptr) {
+            ++ctx->exchange.mfem.consistent_mass_solver_applies;
+        }
         h_component *= -(2.0 / kMu0);
     } else {
         const double *tmp_host = audited_host_read(tmp);

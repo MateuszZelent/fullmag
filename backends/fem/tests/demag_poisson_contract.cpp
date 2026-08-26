@@ -803,8 +803,7 @@ void demag_rhs_sign_contract_matches_laplace_phi_equals_div_m() {
         "Poisson demag RHS must not negate the Ms*m source coefficient");
 }
 
-fullmag::fem::Context sharp_ms_demag_context() {
-    fullmag::fem::Context ctx;
+void sharp_ms_demag_context(fullmag::fem::Context &ctx) {
     ctx.mesh.n_nodes = 6;
     ctx.mesh.n_elements = 3;
     ctx.mesh.nodes_xyz = {
@@ -823,7 +822,6 @@ fullmag::fem::Context sharp_ms_demag_context() {
     std::string error;
     check(fullmag::fem::initialize_material_runtime(ctx, error),
           "sharp demag fixture must build the typed material runtime");
-    return ctx;
 }
 
 struct SharpMsP1TermwiseOracle {
@@ -872,7 +870,8 @@ SharpMsP1TermwiseOracle sharp_ms_p1_termwise_oracle(
 }
 
 void sharp_ms_demag_energy_and_delta_use_active_exact_mass() {
-    auto ctx = sharp_ms_demag_context();
+    fullmag::fem::Context ctx;
+    sharp_ms_demag_context(ctx);
     const std::vector<double> current = {
         1.0, 0.0, 0.0,  0.0, 0.0, 0.0,  0.0, 0.0, 0.0,
         0.0, 0.0, 0.0,  0.0, 0.0, 0.0,  99.0, 99.0, 99.0,
@@ -957,7 +956,8 @@ void sharp_ms_demag_rhs_uses_typed_element_accessor() {
 
 #if FULLMAG_HAS_MFEM_STACK
 void sharp_ms_demag_rhs_matches_elementwise_p1_gradient_oracle() {
-    auto ctx = sharp_ms_demag_context();
+    fullmag::fem::Context ctx;
+    sharp_ms_demag_context(ctx);
     mfem::Mesh mesh(3, 6, 3, 0, 3);
     const double vertices[][3] = {
         {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 1.0, 0.0},
@@ -1110,11 +1110,11 @@ std::vector<double> magnetic_mass_row_sums(
     return std::vector<double>(weights.GetData(), weights.GetData() + weights.Size());
 }
 
-fullmag::fem::Context mixed_poisson_context(
+void mixed_poisson_context(
+    fullmag::fem::Context &ctx,
     mfem::Mesh &mesh,
     mfem::FiniteElementSpace &fes,
     const std::vector<uint8_t> &magnetic_elements) {
-    fullmag::fem::Context ctx;
     ctx.base_plan.fe_order = 1u;
     ctx.mfem_context.mesh = &mesh;
     ctx.mfem_context.fes = &fes;
@@ -1166,14 +1166,14 @@ fullmag::fem::Context mixed_poisson_context(
     ctx.cpu_threads.effective_omp_threads = 1;
     ctx.integration_weights.mfem_lumped_mass =
         magnetic_mass_row_sums(mesh, fes, 7);
-    return ctx;
 }
 
 void nonperiodic_poisson_uses_p2_potential_over_p1_magnetization() {
     mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
     mfem::H1_FECollection state_fec(1, 3);
     mfem::FiniteElementSpace state_fes(&mesh, &state_fec);
-    auto ctx = mixed_poisson_context(mesh, state_fes, {1u, 0u, 0u});
+    fullmag::fem::Context ctx;
+    mixed_poisson_context(ctx, mesh, state_fes, {1u, 0u, 0u});
 
     std::string error;
     check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
@@ -1213,7 +1213,8 @@ void periodic_poisson_remains_explicit_p1_node_class_space() {
     mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh(true);
     mfem::H1_FECollection state_fec(1, 3);
     mfem::FiniteElementSpace state_fes(&mesh, &state_fec);
-    auto ctx = mixed_poisson_context(mesh, state_fes, {1u, 0u, 0u});
+    fullmag::fem::Context ctx;
+    mixed_poisson_context(ctx, mesh, state_fes, {1u, 0u, 0u});
     ctx.mesh.periodic_node_pairs = {0u, 7u};
     ctx.mesh.periodic_reduced_node = {0u, 1u, 2u, 3u, 4u, 5u, 6u, 0u};
     ctx.mesh.periodic_representative_nodes = {0u, 1u, 2u, 3u, 4u, 5u, 6u};
@@ -1267,7 +1268,8 @@ void mixed_p1_gpu_rhs_and_magnetic_recovery_match_cpu_mfem() {
     mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
     mfem::H1_FECollection fixture_fec(1, 3);
     mfem::FiniteElementSpace fixture_fes(&mesh, &fixture_fec);
-    auto ctx = mixed_poisson_context(mesh, fixture_fes, {1u, 0u, 0u});
+    fullmag::fem::Context ctx;
+    mixed_poisson_context(ctx, mesh, fixture_fes, {1u, 0u, 0u});
     std::string error;
     check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
                  "mixed CUDA/Hypre Poisson CPU workspace initialization");
@@ -1530,7 +1532,8 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
     mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
     mfem::H1_FECollection fixture_fec(1, 3);
     mfem::FiniteElementSpace fixture_fes(&mesh, &fixture_fec);
-    auto ctx = mixed_poisson_context(mesh, fixture_fes, {1u, 0u, 0u});
+    fullmag::fem::Context ctx;
+    mixed_poisson_context(ctx, mesh, fixture_fes, {1u, 0u, 0u});
     ctx.demag.realization = realization;
     const std::vector<double> m_xyz = smooth_magnetization(mesh, 0.2);
     std::string error;
@@ -1683,8 +1686,9 @@ void mixed_poisson_manufactured_rhs_stiffness_recovery_and_trace() {
     mesh.SetAttributes();
     mfem::H1_FECollection fixture_fec(1, 3);
     mfem::FiniteElementSpace fixture_fes(&mesh, &fixture_fec);
-    auto ctx = mixed_poisson_context(
-        mesh, fixture_fes, std::vector<uint8_t>(static_cast<size_t>(mesh.GetNE()), 1u));
+    fullmag::fem::Context ctx;
+    mixed_poisson_context(
+        ctx, mesh, fixture_fes, std::vector<uint8_t>(static_cast<size_t>(mesh.GetNE()), 1u));
     std::string error;
     check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
                  "mixed manufactured Poisson initialization");
@@ -1854,7 +1858,8 @@ void mixed_poisson_uses_continuous_weak_flux_not_continuous_physical_hn() {
 
     mfem::H1_FECollection fixture_fec(1, 3);
     mfem::FiniteElementSpace fixture_fes(&mesh, &fixture_fec);
-    auto ctx = mixed_poisson_context(mesh, fixture_fes, {1u,0u,0u});
+    fullmag::fem::Context ctx;
+    mixed_poisson_context(ctx, mesh, fixture_fes, {1u,0u,0u});
     std::string error;
     check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
                  "continuous weak-flux Poisson initialization");
@@ -2011,7 +2016,8 @@ MixedPoissonSolveResult solve_mixed_poisson(
     mfem::H1_FECollection fixture_fec(1, 3);
     mfem::FiniteElementSpace fixture_fes(&mesh, &fixture_fec);
     const auto magnetic_elements = element_mask_for_attribute(mesh, 7);
-    auto ctx = mixed_poisson_context(mesh, fixture_fes, magnetic_elements);
+    fullmag::fem::Context ctx;
+    mixed_poisson_context(ctx, mesh, fixture_fes, magnetic_elements);
     check(magnetization.size() == 3u * static_cast<size_t>(fixture_fes.GetNDofs()),
           "mixed Poisson solve magnetization extent");
     std::string error;

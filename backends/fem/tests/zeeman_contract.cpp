@@ -566,13 +566,11 @@ void check_near(double actual, double expected, double tol, const char *msg) {
     }
 }
 
-fullmag::fem::Context make_context() {
-    fullmag::fem::Context ctx;
+void make_context(fullmag::fem::Context &ctx) {
     ctx.mesh.n_nodes = 2;
     ctx.material_fields.material.saturation_magnetisation = 800e3;
     ctx.material_fields.Ms_field = {800e3, 1.0e6};
     ctx.integration_weights.mfem_lumped_mass = {2.0e-27, 3.0e-27};
-    return ctx;
 }
 
 void plan_fields_are_imported_by_zeeman_module() {
@@ -607,7 +605,8 @@ void plan_fields_are_imported_by_zeeman_module() {
 }
 
 void disabled_zeeman_is_zero() {
-    auto ctx = make_context();
+    fullmag::fem::Context ctx;
+    make_context(ctx);
     ctx.zeeman.has_external_field = false;
     ctx.zeeman.external_field_am = {10.0, 20.0, 30.0};
 
@@ -636,7 +635,8 @@ void disabled_zeeman_is_zero() {
 }
 
 void uniform_field_is_broadcast_added_and_integrated() {
-    auto ctx = make_context();
+    fullmag::fem::Context ctx;
+    make_context(ctx);
     ctx.zeeman.has_external_field = true;
     ctx.zeeman.external_field_am = {100.0, 200.0, 300.0};
 

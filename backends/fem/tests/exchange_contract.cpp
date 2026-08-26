@@ -252,9 +252,24 @@ void exchange_runtime_state_is_owned_by_aggregate_module() {
             exchange_header.find("mfem::Vector *inv_lumped_mass") != std::string::npos &&
             exchange_header.find("mfem::Vector *tmp_vec") != std::string::npos &&
             exchange_header.find("mfem::Vector *out_vec") != std::string::npos &&
+            exchange_header.find("mfem::SparseMatrix *consistent_mass_matrix") !=
+                std::string::npos &&
+            exchange_header.find("mfem::GSSmoother *consistent_mass_preconditioner") !=
+                std::string::npos &&
             exchange_header.find("mfem::CGSolver *consistent_mass_solver") != std::string::npos &&
+            exchange_header.find("mfem::SparseMatrix *periodic_mass_matrix") !=
+                std::string::npos &&
+            exchange_header.find("mfem::GSSmoother *periodic_mass_preconditioner") !=
+                std::string::npos &&
+            exchange_header.find("mfem::CGSolver *periodic_mass_solver") !=
+                std::string::npos &&
+            exchange_header.find("mfem::Vector *periodic_mass_rhs") != std::string::npos &&
+            exchange_header.find("mfem::Vector *periodic_mass_solution") !=
+                std::string::npos &&
+            exchange_header.find("mfem::Vector *periodic_mass_residual") !=
+                std::string::npos &&
             exchange_header.find("bool ready") != std::string::npos,
-        "exchange MFEM runtime state must own forms, mass vectors, component buffers, consistent-mass solver, readiness, and consistent-mass policy");
+        "exchange MFEM runtime state must own forms, mass vectors, component buffers, preconditioned consistent-mass solvers, periodic reduced workspace, readiness, and consistent-mass policy");
     check(
         exchange_header.find("void *exchange_form") == std::string::npos &&
             exchange_header.find("void *mass_form") == std::string::npos &&
@@ -263,7 +278,17 @@ void exchange_runtime_state_is_owned_by_aggregate_module() {
             exchange_header.find("void *inv_lumped_mass") == std::string::npos &&
             exchange_header.find("void *tmp_vec") == std::string::npos &&
             exchange_header.find("void *out_vec") == std::string::npos &&
-            exchange_header.find("void *consistent_mass_solver") == std::string::npos,
+            exchange_header.find("void *consistent_mass_matrix") == std::string::npos &&
+            exchange_header.find("void *consistent_mass_preconditioner") ==
+                std::string::npos &&
+            exchange_header.find("void *consistent_mass_solver") == std::string::npos &&
+            exchange_header.find("void *periodic_mass_matrix") == std::string::npos &&
+            exchange_header.find("void *periodic_mass_preconditioner") ==
+                std::string::npos &&
+            exchange_header.find("void *periodic_mass_solver") == std::string::npos &&
+            exchange_header.find("void *periodic_mass_rhs") == std::string::npos &&
+            exchange_header.find("void *periodic_mass_solution") == std::string::npos &&
+            exchange_header.find("void *periodic_mass_residual") == std::string::npos,
         "exchange MFEM runtime state must use typed MFEM pointers, not void pointers");
     check(
         exchange_header.find("ExchangeMfemRuntimeState mfem{}") != std::string::npos,
@@ -295,6 +320,8 @@ void exchange_mass_projection_is_owned_by_mass_module() {
         read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange.cpp");
     const std::string mass_projection = read_text_file(
         root / "cpu" / "mfem" / "interactions" / "exchange_mass_projection.cpp");
+    const std::string exchange_operator = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "exchange_operator.cpp");
 
     const char *lumping_symbol = "void prepare_exchange_mass_lumping(";
     const char *projection_symbol = "bool apply_exchange_component_mass_projection(";
@@ -319,11 +346,30 @@ void exchange_mass_projection_is_owned_by_mass_module() {
         mass_projection.find(consistent_mass_marker) != std::string::npos,
         "consistent-mass projection solve must be defined in exchange_mass_projection.cpp");
     check(
-        mass_projection.find("new mfem::CGSolver()") != std::string::npos,
-        "consistent-mass projection must allocate the reusable CG solver lazily");
+        mass_projection.find("SetOperator(mass_form.SpMat())") != std::string::npos,
+        "context-free consistent-mass projection must bind the sparse mass operator once when creating the solver");
     check(
-        mass_projection.find("SetOperator(mass_form)") != std::string::npos,
-        "consistent-mass projection must bind the mass operator once when creating the solver");
+        exchange_operator.find("std::make_unique<mfem::CGSolver>()") != std::string::npos &&
+            exchange_operator.find("std::make_unique<mfem::GSSmoother>") !=
+                std::string::npos &&
+            exchange_operator.find("SetPreconditioner(*consistent_mass_preconditioner)") !=
+                std::string::npos &&
+            exchange_operator.find(
+                "regularize_sparse_matrix_zero_rows(mass_form->SpMat())") !=
+                std::string::npos &&
+            exchange_operator.find("SetOperator(*consistent_mass_matrix)") !=
+                std::string::npos,
+        "consistent-mass solver and preconditioner must be built during exchange setup");
+    check(
+        exchange_operator.find("reduce_sparse_matrix_by_periodic_classes") !=
+            std::string::npos &&
+            exchange_operator.find("periodic_mass_matrix") != std::string::npos,
+        "periodic consistent-mass projection must build and retain a reduced operator");
+    check(
+        mass_projection.find("mfem::Vector full_x") == std::string::npos &&
+            mass_projection.find("mfem::Vector full_y") == std::string::npos &&
+            mass_projection.find("std::vector<double> solution(") == std::string::npos,
+        "periodic consistent-mass projection must not allocate full or solver vectors per apply");
 }
 
 void exchange_legacy_gpu_upload_is_owned_by_upload_module() {
@@ -430,12 +476,10 @@ void check_zero_field(const std::vector<double> &field, const char *label) {
     }
 }
 
-fullmag::fem::Context make_context() {
-    fullmag::fem::Context ctx;
+void make_context(fullmag::fem::Context &ctx) {
     ctx.mesh.n_nodes = 2;
     ctx.material_fields.material.exchange_stiffness = 1.3e-11;
     ctx.material_fields.material.saturation_magnetisation = 800e3;
-    return ctx;
 }
 
 void exchange_plan_fields_are_imported_by_aggregate() {
@@ -630,6 +674,7 @@ void initialize_production_exchange(
     const std::vector<uint8_t> &magnetic_elements)
 {
     ctx.exchange.enabled = true;
+    ctx.exchange.mfem.use_consistent_mass = true;
     ctx.mesh.magnetic_element_mask = magnetic_elements;
     std::string error;
     check(
@@ -740,6 +785,82 @@ void check_projection_contracts(
             1.0e-11 * std::max(1.0, std::abs(energy)),
             "production mixed-P1 exchange projection must preserve energy");
     }
+}
+
+void periodic_consistent_mass_projection_reuses_reduced_workspace()
+{
+    mfem::Mesh mesh = single_exchange_cell(mfem::Geometry::TETRAHEDRON);
+    mfem::H1_FECollection fec(1, 3);
+    mfem::FiniteElementSpace fes(&mesh, &fec);
+    mfem::ConstantCoefficient a_coeff(1.7);
+    mfem::ConstantCoefficient ms_coeff(4.0);
+    fullmag::fem::Context ctx;
+    ctx.exchange.enabled = true;
+    ctx.exchange.mfem.use_consistent_mass = true;
+    ctx.mesh.n_nodes = static_cast<uint32_t>(fes.GetNDofs());
+    ctx.mesh.magnetic_element_mask = {1u};
+    ctx.mesh.periodic_reduced_node = {0u, 1u, 2u, 0u};
+    ctx.mesh.periodic_reduced_node_count = 3u;
+    std::string error;
+    check(
+        fullmag::fem::initialize_exchange_operator_mfem(
+            ctx, mesh, fes, a_coeff, ms_coeff, error),
+        error.c_str());
+    check(ctx.exchange.mfem.periodic_mass_matrix != nullptr,
+        "periodic consistent-mass setup must retain a reduced mass matrix");
+    check(ctx.exchange.mfem.periodic_mass_preconditioner != nullptr,
+        "periodic consistent-mass setup must retain a preconditioner");
+    check(ctx.exchange.mfem.periodic_mass_solver != nullptr,
+        "periodic consistent-mass setup must retain a solver");
+    check(ctx.exchange.mfem.periodic_mass_rhs != nullptr &&
+        ctx.exchange.mfem.periodic_mass_solution != nullptr &&
+        ctx.exchange.mfem.periodic_mass_residual != nullptr,
+        "periodic consistent-mass setup must retain reduced solver vectors");
+    auto *const matrix = ctx.exchange.mfem.periodic_mass_matrix;
+    auto *const solver = ctx.exchange.mfem.periodic_mass_solver;
+    auto *const rhs = ctx.exchange.mfem.periodic_mass_rhs;
+    auto *const solution = ctx.exchange.mfem.periodic_mass_solution;
+    check(ctx.exchange.mfem.periodic_mass_setup_count == 1u,
+        "periodic consistent-mass setup must be counted exactly once");
+
+    mfem::GridFunction field(&fes);
+    mfem::GridFunction ms_field(&fes);
+    mfem::FunctionCoefficient linear(
+        [](const mfem::Vector &x) { return x[0] + 2.0 * x[1] - 3.0 * x[2]; });
+    field.ProjectCoefficient(linear);
+    ms_field.ProjectCoefficient(ms_coeff);
+    mfem::Vector tmp(fes.GetNDofs());
+    mfem::Vector h_component(fes.GetNDofs());
+    std::vector<double> h_host;
+    for (int repeat = 0; repeat < 2; ++repeat) {
+        check(
+            fullmag::fem::apply_exchange_component_mass_projection(
+                &ctx,
+                false,
+                *ctx.exchange.mfem.exchange_form,
+                field,
+                ms_field,
+                *ctx.exchange.mfem.inv_lumped_mass,
+                *ctx.exchange.mfem.mass_form,
+                true,
+                tmp,
+                h_component,
+                h_host,
+                nullptr),
+            "periodic consistent-mass projection must converge");
+        for (double value : h_host) {
+            check(std::isfinite(value),
+                "periodic consistent-mass projection must produce finite values");
+        }
+    }
+    check(ctx.exchange.mfem.periodic_mass_matrix == matrix &&
+        ctx.exchange.mfem.periodic_mass_solver == solver &&
+        ctx.exchange.mfem.periodic_mass_rhs == rhs &&
+        ctx.exchange.mfem.periodic_mass_solution == solution,
+        "periodic consistent-mass applies must reuse setup-owned workspace pointers");
+    check(ctx.exchange.mfem.periodic_mass_solver_applies == 2u,
+        "periodic consistent-mass telemetry must count both solver applies");
+    fullmag::fem::context_destroy_mfem(ctx);
 }
 
 void production_exchange_supports_each_mixed_p1_cell_family()
@@ -1588,7 +1709,8 @@ void adapter_backed_sharp_material_exchange_excludes_air_and_preserves_identity(
 
 #if !FULLMAG_HAS_MFEM_STACK
 void disabled_exchange_is_zero_without_mfem_stack() {
-    auto ctx = make_context();
+    fullmag::fem::Context ctx;
+    make_context(ctx);
     ctx.exchange.enabled = false;
     const std::vector<double> m = {
         1.0, 0.0, 0.0,
@@ -1612,7 +1734,8 @@ void disabled_exchange_is_zero_without_mfem_stack() {
 }
 
 void active_exchange_reports_mfem_requirement_without_stack() {
-    auto ctx = make_context();
+    fullmag::fem::Context ctx;
+    make_context(ctx);
     ctx.exchange.enabled = true;
     const std::vector<double> m = {
         1.0, 0.0, 0.0,
@@ -1640,6 +1763,7 @@ int main() {
     exchange_source_files_document_module_boundaries();
     exchange_plan_fields_are_imported_by_aggregate();
 #if FULLMAG_HAS_MFEM_STACK
+    periodic_consistent_mass_projection_reuses_reduced_workspace();
     production_exchange_supports_each_mixed_p1_cell_family();
     production_exchange_masks_air_in_conforming_mixed_domain();
 #if FULLMAG_HAS_CUDA_RUNTIME
