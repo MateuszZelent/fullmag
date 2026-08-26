@@ -107,6 +107,7 @@ void step_metrics_are_owned_by_runtime_module() {
         "std::array<double, 3> average_magnetization_components(",
         "double max_norm_aos(",
         "double max_cross_norm_aos(",
+        "double max_cross_norm_aos_free(",
         "void fill_demag_solver_stats(",
         "void fill_common_step_metrics(",
     };
@@ -223,6 +224,101 @@ void fill_common_step_metrics_reports_energy_fields_torque_and_averages() {
 #endif
 }
 
+void torque_metric_excludes_non_magnetic_and_frozen_nodes() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 3;
+    ctx.mesh.magnetic_node_mask = {1u, 0u, 1u};
+    ctx.state.m_xyz = {
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+    };
+    ctx.effective_field.h_xyz = {
+        0.0, 2.0, 0.0,
+        0.0, 100.0, 0.0,
+        100.0, 0.0, 0.0,
+    };
+    const uint8_t frozen_mask[] = {0u, 0u, 1u};
+    const double frozen_reference[] = {
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+    };
+    std::string error;
+    check(
+        ctx.frozen_spins.import_descriptor(
+            frozen_mask,
+            3u,
+            frozen_reference,
+            9u,
+            3u,
+            2u,
+            "step-metrics-test",
+            error),
+        "frozen descriptor imports for torque free-set test");
+
+    fullmag_fem_step_stats stats{};
+    fullmag::fem::fill_common_step_metrics(ctx, stats, 0.0, nullptr);
+    check_near(
+        stats.max_torque_Apm,
+        2.0,
+        1e-15,
+        "torque metric excludes airbox and frozen nodes");
+}
+
+void torque_metric_is_zero_for_all_frozen_nodes() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 2;
+    ctx.mesh.magnetic_node_mask = {1u, 1u};
+    ctx.state.m_xyz = {
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+    };
+    ctx.effective_field.h_xyz = {
+        0.0, 100.0, 0.0,
+        100.0, 0.0, 0.0,
+    };
+    const uint8_t frozen_mask[] = {1u, 1u};
+    const double frozen_reference[] = {
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+    };
+    std::string error;
+    check(
+        ctx.frozen_spins.import_descriptor(
+            frozen_mask,
+            2u,
+            frozen_reference,
+            6u,
+            2u,
+            2u,
+            "step-metrics-all-frozen-test",
+            error),
+        "all-frozen descriptor imports for torque free-set test");
+
+    fullmag_fem_step_stats stats{};
+    fullmag::fem::fill_common_step_metrics(ctx, stats, 0.0, nullptr);
+    check_near(
+        stats.max_torque_Apm,
+        0.0,
+        0.0,
+        "torque metric is zero for an all-frozen magnetic set");
+}
+
+void torque_metric_fails_closed_on_mask_extent_mismatch() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 1;
+    ctx.mesh.magnetic_node_mask = {1u, 1u};
+    ctx.state.m_xyz = {1.0, 0.0, 0.0};
+    ctx.effective_field.h_xyz = {0.0, 1.0, 0.0};
+
+    fullmag_fem_step_stats stats{};
+    fullmag::fem::fill_common_step_metrics(ctx, stats, 0.0, nullptr);
+    check(
+        !std::isfinite(stats.max_torque_Apm),
+        "torque metric fails closed on a mask extent mismatch");
+}
+
 void average_magnetization_consumes_dg0_ms_without_nodal_projection() {
     fullmag::fem::Context ctx;
     ctx.mesh.n_nodes = 8;
@@ -307,6 +403,9 @@ void mixed_average_does_not_fallback_to_geometry_over_arity_node_volumes() {
 int main() {
     step_metrics_are_owned_by_runtime_module();
     fill_common_step_metrics_reports_energy_fields_torque_and_averages();
+    torque_metric_excludes_non_magnetic_and_frozen_nodes();
+    torque_metric_is_zero_for_all_frozen_nodes();
+    torque_metric_fails_closed_on_mask_extent_mismatch();
     average_magnetization_consumes_dg0_ms_without_nodal_projection();
     dg0_average_magnetization_is_allocation_free();
     mixed_average_does_not_fallback_to_geometry_over_arity_node_volumes();
