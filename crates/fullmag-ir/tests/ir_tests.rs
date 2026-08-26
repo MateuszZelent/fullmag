@@ -4217,6 +4217,23 @@ fn llg_requires_supported_integrator() {
         .any(|error| error.contains("llg.integrator must be one of")));
 }
 
+#[test]
+fn adaptive_validation_rejects_fixed_step_abm3() {
+    let mut ir = valid_adaptive_problem();
+    let StudyIR::TimeEvolution { dynamics, .. } = &mut ir.study else {
+        unreachable!()
+    };
+    let DynamicsIR::Llg { integrator, .. } = dynamics;
+    *integrator = "abm3".to_string();
+
+    let errors = ir
+        .validate()
+        .expect_err("adaptive ABM3 must fail before planning");
+    assert!(errors.iter().any(|error| {
+        error.contains("llg.adaptive_timestep requires an embedded-error integrator")
+    }));
+}
+
 fn valid_adaptive_problem() -> ProblemIR {
     let mut ir = ProblemIR::bootstrap_example();
     let sampling = ir.study.sampling().clone();
