@@ -125,6 +125,7 @@ double compute_adaptive_error_norm(
     const std::vector<double> &m_old,
     const std::vector<double> &m_new,
     const std::vector<uint8_t> &magnetic_node_mask,
+    const std::vector<uint8_t> &frozen_node_mask,
     double atol,
     double rtol)
 {
@@ -136,8 +137,14 @@ double compute_adaptive_error_norm(
     if (!magnetic_node_mask.empty() && magnetic_node_mask.size() != n) {
         return std::numeric_limits<double>::infinity();
     }
+    if (!frozen_node_mask.empty() && frozen_node_mask.size() != n) {
+        return std::numeric_limits<double>::infinity();
+    }
     for (size_t i = 0; i < n; ++i) {
         if (!magnetic_node_mask.empty() && magnetic_node_mask[i] == 0u) {
+            continue;
+        }
+        if (!frozen_node_mask.empty() && frozen_node_mask[i] != 0u) {
             continue;
         }
         const size_t b = i * 3u;
@@ -169,6 +176,7 @@ bool compute_adaptive_attempt_guard_metric(
     const std::vector<double> &m_old,
     const std::vector<double> &m_candidate,
     const std::vector<uint8_t> &magnetic_node_mask,
+    const std::vector<uint8_t> &frozen_node_mask,
     double &acceptance_metric,
     AdaptiveAttemptGuardMetrics &metrics,
     std::string &error)
@@ -188,6 +196,10 @@ bool compute_adaptive_attempt_guard_metric(
         error = "adaptive attempt guard magnetic-node mask size mismatch";
         return false;
     }
+    if (!frozen_node_mask.empty() && frozen_node_mask.size() != nodes) {
+        error = "adaptive attempt guard frozen-node mask size mismatch";
+        return false;
+    }
     if (policy.has_norm_tolerance &&
         (!std::isfinite(policy.norm_tolerance) || policy.norm_tolerance <= 0.0)) {
         error = "adaptive norm_tolerance must be finite and positive";
@@ -202,7 +214,8 @@ bool compute_adaptive_attempt_guard_metric(
     for (size_t node = 0; node < nodes; ++node) {
         const size_t base = node * 3u;
         const bool active = magnetic_node_mask.empty() || magnetic_node_mask[node] != 0u;
-        if (!active) {
+        const bool frozen = !frozen_node_mask.empty() && frozen_node_mask[node] != 0u;
+        if (!active || frozen) {
             continue;
         }
         const double ox = m_old[base + 0u];
