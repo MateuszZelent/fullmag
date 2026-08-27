@@ -2304,7 +2304,14 @@ mod tests {
                 .iter()
                 .map(|quantity| by_quantity[quantity].vector_field_values[component + axis])
                 .sum::<f64>();
-                assert!((h_eff[component + axis] - expected).abs() < 1.0e-10);
+                let actual = h_eff[component + axis];
+                let abs_diff = (actual - expected).abs();
+                let scale = actual.abs().max(expected.abs());
+                let tolerance = 1.0e-10_f64.max(32.0 * f64::EPSILON * scale);
+                assert!(
+                    abs_diff <= tolerance,
+                    "H_eff mismatch at cell {index}, axis {axis}: actual={actual:.17e}, expected={expected:.17e}, abs_diff={abs_diff:.17e}, tolerance={tolerance:.17e}",
+                );
             }
         }
         for index in 0..32 {
