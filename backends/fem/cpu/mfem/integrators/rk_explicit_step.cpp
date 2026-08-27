@@ -386,10 +386,16 @@ bool context_step_explicit_rk_mfem(
                 }
                 ws.err[i] = dt * err_accum;
             }
-            double err_norm = compute_adaptive_error_norm(
+            const std::vector<double> *norm_weights =
+                &ctx.integration_weights.mfem_lumped_mass;
+            if (norm_weights->empty()) {
+                norm_weights = &ctx.mesh.node_volumes;
+            }
+            double err_norm = compute_adaptive_error_norm_mass_weighted(
                 ws.err,
                 ws.m_backup,
                 ws.m_candidate,
+                *norm_weights,
                 ctx.mesh.magnetic_node_mask,
                 frozen_node_mask,
                 ctx.adaptive_dt.atol,

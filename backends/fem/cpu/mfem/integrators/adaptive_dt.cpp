@@ -170,6 +170,85 @@ double compute_adaptive_error_norm(
     return max_scaled;
 }
 
+double compute_adaptive_error_norm_mass_weighted(
+    const std::vector<double> &err,
+    const std::vector<double> &m_old,
+    const std::vector<double> &m_new,
+    const std::vector<double> &node_weights,
+    const std::vector<uint8_t> &magnetic_node_mask,
+    const std::vector<uint8_t> &frozen_node_mask,
+    double atol,
+    double rtol)
+{
+    if (err.size() != m_old.size() || err.size() != m_new.size() ||
+        err.size() % 3u != 0u || !std::isfinite(atol) || atol < 0.0 ||
+        !std::isfinite(rtol) || rtol < 0.0 || (atol == 0.0 && rtol == 0.0)) {
+        return std::numeric_limits<double>::infinity();
+    }
+    const size_t n = err.size() / 3u;
+    if (node_weights.size() != n ||
+        (!magnetic_node_mask.empty() && magnetic_node_mask.size() != n) ||
+        (!frozen_node_mask.empty() && frozen_node_mask.size() != n)) {
+        return std::numeric_limits<double>::infinity();
+    }
+
+    long double weighted_error_sq = 0.0L;
+    long double normalization_measure = 0.0L;
+    size_t eligible_nodes = 0u;
+    for (size_t i = 0; i < n; ++i) {
+        if (!magnetic_node_mask.empty() && magnetic_node_mask[i] == 0u) {
+            continue;
+        }
+        if (!frozen_node_mask.empty() && frozen_node_mask[i] != 0u) {
+            continue;
+        }
+
+        const double weight = node_weights[i];
+        if (!std::isfinite(weight) || weight <= 0.0) {
+            return std::numeric_limits<double>::infinity();
+        }
+        const size_t b = i * 3u;
+        const double error_norm = std::hypot(err[b], std::hypot(err[b + 1u], err[b + 2u]));
+        const double old_state_norm = std::hypot(
+            m_old[b], std::hypot(m_old[b + 1u], m_old[b + 2u]));
+        const double high_order_state_norm = std::hypot(
+            m_new[b], std::hypot(m_new[b + 1u], m_new[b + 2u]));
+        const double scale = atol + rtol * std::max(old_state_norm, high_order_state_norm);
+        if (!std::isfinite(error_norm) || !std::isfinite(old_state_norm) ||
+            !std::isfinite(high_order_state_norm) || !std::isfinite(scale) || scale <= 0.0) {
+            return std::numeric_limits<double>::infinity();
+        }
+        const double scaled = error_norm / scale;
+        if (!std::isfinite(scaled)) {
+            return std::numeric_limits<double>::infinity();
+        }
+
+        const long double weighted = static_cast<long double>(weight) *
+            static_cast<long double>(scaled) * static_cast<long double>(scaled);
+        weighted_error_sq += weighted;
+        normalization_measure += static_cast<long double>(weight);
+        if (!std::isfinite(weighted_error_sq) || !std::isfinite(normalization_measure)) {
+            return std::numeric_limits<double>::infinity();
+        }
+        ++eligible_nodes;
+    }
+
+    if (eligible_nodes == 0u) {
+        return 0.0;
+    }
+    if (!(normalization_measure > 0.0L)) {
+        return std::numeric_limits<double>::infinity();
+    }
+    const long double rms_sq = weighted_error_sq / normalization_measure;
+    if (!std::isfinite(rms_sq) || rms_sq < 0.0L) {
+        return std::numeric_limits<double>::infinity();
+    }
+    const double rms = static_cast<double>(std::sqrt(rms_sq));
+    return std::isfinite(rms)
+        ? rms
+        : std::numeric_limits<double>::infinity();
+}
+
 bool compute_adaptive_attempt_guard_metric(
     const AdaptiveDtRuntimeState &policy,
     double embedded_error_metric,

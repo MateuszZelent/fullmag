@@ -92,7 +92,9 @@ adaptive::AdaptiveStepDecision cpu_adaptive_step_decision(
     const adaptive::AdaptiveStepInput &input);
 
 /*
- * Compute the nodewise vector-normalized error for an adaptive explicit RK step.
+ * Compute the maximum nodewise vector-normalized error for an adaptive explicit
+ * RK step. This remains available as an explicit max-error/legacy reduction;
+ * production adaptive FEM steps use the mass-weighted reduction below.
  *
  * Inputs are AoS magnetization vectors. For each active, non-frozen node, the
  * scale is `atol + rtol * max(||m_old||_2, ||m_new||_2)`; the returned norm is
@@ -104,6 +106,25 @@ double compute_adaptive_error_norm(
     const std::vector<double> &err,
     const std::vector<double> &m_old,
     const std::vector<double> &m_new,
+    const std::vector<uint8_t> &magnetic_node_mask,
+    const std::vector<uint8_t> &frozen_node_mask,
+    double atol,
+    double rtol);
+
+/*
+ * Compute the FEM-measure mass-weighted RMS error for an adaptive explicit RK
+ * step. `node_weights` are lumped magnetic masses/dual volumes in m^3; their
+ * common scale cancels from the normalized RMS denominator. Airbox/inactive
+ * and frozen nodes are excluded before reading their vectors or weights.
+ * Invalid extents, tolerances, active weights, or nonfinite values return
+ * infinity so an adaptive attempt fails closed instead of silently falling
+ * back to the unweighted maximum.
+ */
+double compute_adaptive_error_norm_mass_weighted(
+    const std::vector<double> &err,
+    const std::vector<double> &m_old,
+    const std::vector<double> &m_new,
+    const std::vector<double> &node_weights,
     const std::vector<uint8_t> &magnetic_node_mask,
     const std::vector<uint8_t> &frozen_node_mask,
     double atol,

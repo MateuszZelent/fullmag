@@ -174,6 +174,13 @@ void rk_workspace_is_owned_by_integrator_module() {
             std::string::npos &&
             rk_explicit_step.find("fallback_attempt_cache") != std::string::npos,
         "adaptive RK stepper must allocate its compatibility checkpoint outside the attempt loop");
+    check(
+        rk_explicit_step.find("compute_adaptive_error_norm_mass_weighted(") !=
+            std::string::npos &&
+            rk_explicit_step.find("ctx.integration_weights.mfem_lumped_mass") !=
+                std::string::npos &&
+            rk_explicit_step.find("ctx.mesh.node_volumes") != std::string::npos,
+        "adaptive RK production path must consume canonical FEM measure weights");
 }
 
 void integrator_source_files_document_module_boundaries() {
@@ -530,6 +537,7 @@ void configure_oersted_only_rk_context(
     ctx.mfem_context.ready = true;
     ctx.mesh.n_nodes = 1;
     ctx.mesh.magnetic_node_mask = {1u};
+    ctx.mesh.node_volumes = {1.0};
     ctx.state.m_xyz = {1.0, 0.2, -0.1};
     fullmag::fem::normalize_aos_field(ctx.state.m_xyz);
     ctx.state.current_time = 0.071;

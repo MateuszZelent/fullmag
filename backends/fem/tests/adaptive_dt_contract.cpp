@@ -389,6 +389,9 @@ void adaptive_dt_controller_is_owned_by_integrator_module() {
         adaptive.find("double compute_adaptive_error_norm(") != std::string::npos,
         "adaptive RK error norm must be defined in adaptive_dt.cpp");
     check(
+        adaptive.find("double compute_adaptive_error_norm_mass_weighted(") != std::string::npos,
+        "FEM adaptive RK weighted error norm must be defined in adaptive_dt.cpp");
+    check(
         context.find("adaptive_config.atol must be finite") == std::string::npos,
         "Context must not own adaptive config validation");
     check(
@@ -546,6 +549,106 @@ void adaptive_error_norm_uses_nodewise_vector_l2_scale() {
         0.5 / 0.41,
         1e-15,
         "adaptive error norm scales by max old/high-order vector norm");
+}
+
+void adaptive_mass_weighted_error_norm_uses_fem_measure() {
+    const std::vector<double> err{
+        1.0, 0.0, 0.0,
+        3.0, 0.0, 0.0,
+    };
+    const std::vector<double> m_old{
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+    };
+    const std::vector<double> m_new = m_old;
+    const double weighted = fullmag::fem::compute_adaptive_error_norm_mass_weighted(
+        err,
+        m_old,
+        m_new,
+        {3.0, 1.0},
+        {1u, 1u},
+        {},
+        0.0,
+        1.0);
+
+    check_near(
+        weighted,
+        std::sqrt(3.0),
+        1e-15,
+        "adaptive error norm uses mass-weighted RMS over active nodes");
+    check(
+        weighted < 3.0,
+        "mass-weighted RMS must not silently reduce to the nodewise maximum");
+}
+
+void adaptive_mass_weighted_error_norm_excludes_airbox_and_frozen_nodes() {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const std::vector<double> err{
+        nan, nan, nan,
+        0.5, 0.0, 0.0,
+        nan, nan, nan,
+    };
+    const std::vector<double> m_old{
+        nan, nan, nan,
+        1.0, 0.0, 0.0,
+        nan, nan, nan,
+    };
+    const std::vector<double> m_new = m_old;
+    const double weighted = fullmag::fem::compute_adaptive_error_norm_mass_weighted(
+        err,
+        m_old,
+        m_new,
+        {nan, 2.0, nan},
+        {0u, 1u, 1u},
+        {0u, 0u, 1u},
+        0.0,
+        1.0);
+
+    check_near(
+        weighted,
+        0.5,
+        1e-15,
+        "mass-weighted RMS excludes Airbox and frozen nodes before reading data");
+}
+
+void adaptive_mass_weighted_error_norm_fails_closed_on_invalid_measure() {
+    const std::vector<double> one_node{1.0, 0.0, 0.0};
+    const std::vector<uint8_t> active{1u};
+    const double inf = std::numeric_limits<double>::infinity();
+
+    check(
+        !std::isfinite(fullmag::fem::compute_adaptive_error_norm_mass_weighted(
+            one_node,
+            one_node,
+            one_node,
+            {},
+            active,
+            {},
+            0.0,
+            1.0)),
+        "mass-weighted RMS rejects missing measure");
+    check(
+        !std::isfinite(fullmag::fem::compute_adaptive_error_norm_mass_weighted(
+            one_node,
+            one_node,
+            one_node,
+            {-1.0},
+            active,
+            {},
+            0.0,
+            1.0)),
+        "mass-weighted RMS rejects negative active measure");
+    check(
+        !std::isfinite(fullmag::fem::compute_adaptive_error_norm_mass_weighted(
+            one_node,
+            one_node,
+            one_node,
+            {inf},
+            active,
+            {},
+            0.0,
+            1.0)),
+        "mass-weighted RMS rejects nonfinite active measure");
 }
 
 void adaptive_relative_only_error_ignores_inactive_airbox_nodes() {
@@ -944,6 +1047,9 @@ int main() {
     runtime_adapter_uses_attempted_dt_not_stale_plan_dt();
     rejected_error_shrinks_dt_and_counts_rejection();
     adaptive_error_norm_uses_nodewise_vector_l2_scale();
+    adaptive_mass_weighted_error_norm_uses_fem_measure();
+    adaptive_mass_weighted_error_norm_excludes_airbox_and_frozen_nodes();
+    adaptive_mass_weighted_error_norm_fails_closed_on_invalid_measure();
     adaptive_relative_only_error_ignores_inactive_airbox_nodes();
     adaptive_norms_exclude_frozen_nodes();
     adaptive_norms_fail_closed_on_frozen_mask_mismatch();
