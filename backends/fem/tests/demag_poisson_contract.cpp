@@ -230,6 +230,76 @@ void nonperiodic_hypre_demag_rejects_one_iteration_candidate() {
     ctx.poisson_demag.poisson_bc_op = nullptr;
 }
 
+void nonperiodic_hypre_rejected_candidate_preserves_published_warm_start() {
+    fullmag::fem::Context ctx;
+    configure_one_iteration_demag_solver(ctx);
+    ctx.demag.solver.relative_tolerance = 1.0e-10;
+    ctx.demag.solver.max_iterations = 100;
+    mfem::SparseMatrix op = nontrivial_spd_matrix(8);
+    ctx.poisson_demag.poisson_bc_op = &op;
+
+    mfem::Vector rhs(8);
+    mfem::Vector warm_start(8);
+    warm_start = 0.0;
+    for (int i = 0; i < rhs.Size(); ++i) {
+        rhs(i) = 1.0 + static_cast<double>(i % 3);
+    }
+    const mfem::Vector *solved = nullptr;
+    std::string error;
+    check_result(
+        fullmag::fem::solve_demag_poisson_hypre(
+            ctx,
+            rhs,
+            warm_start,
+            solved,
+            error),
+        error,
+        "non-periodic Hypre accepted-solution setup");
+    check(solved != nullptr && fullmag::fem::demag_poisson_hypre_has_warm_start(ctx),
+          "successful non-periodic Hypre solve publishes a warm start");
+    const uint64_t fresh_guess_count = ctx.poisson_demag.fresh_zero_guess_count;
+
+    ctx.demag.solver.max_iterations = 0;
+    solved = reinterpret_cast<const mfem::Vector *>(0x1);
+    error.clear();
+    check(
+        !fullmag::fem::solve_demag_poisson_hypre(
+            ctx,
+            rhs,
+            warm_start,
+            solved,
+            error),
+        "invalid post-setup policy must reject the Hypre candidate");
+    check(solved == nullptr,
+          "rejected non-periodic Hypre candidate must not be published");
+    check(error.find("max_iterations=0") != std::string::npos,
+          "fault-injected Hypre rejection must report the invalid attempt policy");
+    check(fullmag::fem::demag_poisson_hypre_has_warm_start(ctx),
+          "rejected non-periodic Hypre candidate preserves the accepted warm start");
+    check(ctx.poisson_demag.fresh_zero_guess_count == fresh_guess_count,
+          "rejected cached Hypre candidate does not manufacture a fresh zero guess");
+
+    ctx.demag.solver.max_iterations = 100;
+    solved = nullptr;
+    error.clear();
+    check_result(
+        fullmag::fem::solve_demag_poisson_hypre(
+            ctx,
+            rhs,
+            warm_start,
+            solved,
+            error),
+        error,
+        "non-periodic Hypre recovery from retained warm start");
+    check(solved != nullptr &&
+              ctx.poisson_demag.fresh_zero_guess_count == fresh_guess_count &&
+              ctx.poisson_demag.setup_count == 1u,
+          "recovery reuses the retained Hypre solution and setup");
+
+    fullmag::fem::destroy_demag_poisson_hypre_workspace(ctx);
+    ctx.poisson_demag.poisson_bc_op = nullptr;
+}
+
 void periodic_demag_rejects_one_iteration_candidate() {
     fullmag::fem::Context ctx;
     configure_one_iteration_demag_solver(ctx);
@@ -312,6 +382,34 @@ void periodic_demag_reuses_warm_start_and_resets_after_failure() {
     check(solved != nullptr, "periodic warm-start solve publishes a lifted solution");
     check(ctx.poisson_demag.fresh_zero_guess_count == 2u,
           "periodic warm-start solve does not zero the previous solution");
+
+    for (int i = 0; i < rhs.Size(); ++i) {
+        rhs(i) = -rhs(i);
+    }
+    ctx.demag.solver.max_iterations = 1;
+    ctx.demag.solver.relative_tolerance = 1.0e-14;
+    solved = reinterpret_cast<mfem::Vector *>(0x1);
+    error.clear();
+    check(
+        !fullmag::fem::solve_demag_periodic_poisson_reduced(
+            ctx, rhs, solved, solve_wall_time_ns, error),
+        "periodic solve after an accepted warm start must reject a one-iteration candidate");
+    check(solved == nullptr,
+          "rejected periodic candidate must not publish a lifted solution");
+    check(ctx.poisson_demag.fresh_zero_guess_count == 2u,
+          "rejected periodic candidate must retain the accepted warm start");
+
+    ctx.demag.solver.max_iterations = 100;
+    ctx.demag.solver.relative_tolerance = 1.0e-10;
+    solved = nullptr;
+    error.clear();
+    check_result(
+        fullmag::fem::solve_demag_periodic_poisson_reduced(
+            ctx, rhs, solved, solve_wall_time_ns, error),
+        error,
+        "periodic recovery from retained accepted warm start");
+    check(solved != nullptr && ctx.poisson_demag.fresh_zero_guess_count == 2u,
+          "periodic recovery reuses the retained solution without a fresh zero guess");
 
     fullmag::fem::destroy_demag_periodic_poisson_reduction(ctx);
     ctx.poisson_demag.poisson_bc_op = nullptr;
@@ -2594,7 +2692,11 @@ void demag_periodic_reduction_is_owned_by_poisson_periodic_module() {
         periodic.find("periodic_workspace->solver.GetConverged()") != std::string::npos &&
             periodic.find("validate_demag_linear_solve_result(result, error)") !=
                 std::string::npos &&
-            periodic.find("residual_vector.Norml2()") != std::string::npos,
+            periodic.find("mfem::Vector &residual = periodic_workspace->residual;") !=
+                std::string::npos &&
+            periodic.find("residual.Norml2()") != std::string::npos &&
+            periodic.find("mfem::Vector residual_vector(rhs_p->Size())") ==
+                std::string::npos,
         "Poisson periodic reduced solve must validate convergence with a recomputed true residual");
     const std::size_t periodic_reset = periodic.find("*x_p = 0.0;");
     const std::size_t periodic_apply = periodic.find("solver_apply_wall_start");
@@ -2608,11 +2710,16 @@ void demag_periodic_reduction_is_owned_by_poisson_periodic_module() {
             periodic.find("if (!used_cached_solution)") != std::string::npos,
         "Poisson periodic reduced solve must use a qualified warm-start after the first solve");
     check(
-        periodic.find("periodic_workspace->x_p_contains_solution = false") !=
+        periodic.find("mfem::Vector accepted_solution_backup;") !=
+                std::string::npos &&
+            periodic.find("const auto rollback_rejected_candidate = [&]()") !=
+                std::string::npos &&
+            periodic.find(
+                "periodic_workspace->x_p_contains_solution = used_cached_solution;") !=
                 std::string::npos &&
             periodic.find("periodic_workspace->x_p_contains_solution = true") !=
                 std::string::npos,
-        "Poisson periodic reduced solve must clear warm-start state on failure and publish it on success");
+        "Poisson periodic reduced solve must restore the last accepted warm start after rejection and publish only validated candidates");
     check(
         periodic.find("ctx.poisson_demag.last_iterations = 0;") == std::string::npos,
         "Poisson periodic reduced solve must not report hard-coded zero iterations");
@@ -2841,6 +2948,14 @@ void demag_hypre_solve_returns_workspace_solution_without_final_host_copy() {
             hypre.find("ctx.poisson_demag.fresh_zero_guess_count += 1;") !=
                 std::string::npos,
         "CPU Hypre solve must publish setup and fresh-guess telemetry at the actual apply boundary");
+    check(
+        hypre.find("mfem::Vector accepted_solution_backup;") != std::string::npos &&
+            hypre.find("const auto rollback_rejected_candidate = [&]()") !=
+                std::string::npos &&
+            hypre.find(
+                "poisson_hypre_workspace->x_par_contains_solution = used_cached_solution;") !=
+                std::string::npos,
+        "CPU Hypre solve must restore the last accepted warm start after a rejected candidate");
 }
 
 void demag_poisson_solver_runtime_state_is_owned_by_poisson_module() {
@@ -3481,6 +3596,7 @@ int main() {
     mixed_poisson_energy_sign_and_directional_derivative();
     mixed_poisson_matches_independently_refined_all_tet_reference();
     nonperiodic_hypre_demag_rejects_one_iteration_candidate();
+    nonperiodic_hypre_rejected_candidate_preserves_published_warm_start();
     periodic_demag_rejects_one_iteration_candidate();
     periodic_demag_reuses_warm_start_and_resets_after_failure();
 #endif

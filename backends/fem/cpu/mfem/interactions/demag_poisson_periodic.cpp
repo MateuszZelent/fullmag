@@ -44,6 +44,8 @@ bool demag_periodic_poisson_reduction_requested(const Context &ctx)
 struct PeriodicPoissonReducedWorkspace {
     explicit PeriodicPoissonReducedWorkspace(mfem::SparseMatrix &op)
         : preconditioner(op)
+        , accepted_solution_backup(op.Height())
+        , residual(op.Height())
     {
         solver.iterative_mode = true;
         solver.SetPreconditioner(preconditioner);
@@ -60,6 +62,8 @@ struct PeriodicPoissonReducedWorkspace {
     mfem::GSSmoother preconditioner;
     mfem::CGSolver solver;
     mfem::Vector full_solution;
+    mfem::Vector accepted_solution_backup;
+    mfem::Vector residual;
     bool x_p_contains_solution = false;
 };
 
@@ -218,18 +222,52 @@ bool solve_demag_periodic_poisson_reduced(
         *x_p = 0.0;
         ctx.poisson_demag.fresh_zero_guess_count += 1;
         ctx.poisson_demag.fresh_zero_guess_count_current_step += 1;
+    } else {
+        periodic_workspace->accepted_solution_backup = *x_p;
     }
+    const auto rollback_rejected_candidate = [&]() {
+        if (used_cached_solution) {
+            *x_p = periodic_workspace->accepted_solution_backup;
+        } else {
+            *x_p = 0.0;
+        }
+        periodic_workspace->x_p_contains_solution = used_cached_solution;
+    };
     const auto solver_apply_wall_start = FemSteadyClock::now();
-    periodic_workspace->solver.Mult(*rhs_p, *x_p);
+    try {
+        periodic_workspace->solver.Mult(*rhs_p, *x_p);
+    } catch (const std::exception &ex) {
+        ctx.poisson_demag.last_solver_apply_wall_time_ns =
+            elapsed_ns(solver_apply_wall_start);
+        rollback_rejected_candidate();
+        error = std::string("Periodic Poisson solver apply failed: ") + ex.what();
+        return false;
+    } catch (...) {
+        ctx.poisson_demag.last_solver_apply_wall_time_ns =
+            elapsed_ns(solver_apply_wall_start);
+        rollback_rejected_candidate();
+        error = "Periodic Poisson solver apply failed with an unknown error";
+        return false;
+    }
     ctx.poisson_demag.last_solver_apply_wall_time_ns =
         elapsed_ns(solver_apply_wall_start);
     const int iterations = periodic_workspace->solver.GetNumIterations();
     auto *periodic_matrix =
         static_cast<mfem::SparseMatrix *>(ctx.poisson_demag.periodic_matrix);
-    mfem::Vector residual_vector(rhs_p->Size());
-    periodic_matrix->Mult(*x_p, residual_vector);
-    residual_vector -= *rhs_p;
-    const double absolute_residual = residual_vector.Norml2();
+    mfem::Vector &residual = periodic_workspace->residual;
+    try {
+        periodic_matrix->Mult(*x_p, residual);
+        residual -= *rhs_p;
+    } catch (const std::exception &ex) {
+        rollback_rejected_candidate();
+        error = std::string("Periodic Poisson residual certification failed: ") + ex.what();
+        return false;
+    } catch (...) {
+        rollback_rejected_candidate();
+        error = "Periodic Poisson residual certification failed with an unknown error";
+        return false;
+    }
+    const double absolute_residual = residual.Norml2();
     const double rhs_norm = rhs_p->Norml2();
     const double relative_residual = rhs_norm > 0.0
         ? absolute_residual / rhs_norm
@@ -249,8 +287,7 @@ bool solve_demag_periodic_poisson_reduced(
     result.absolute_tolerance = abs_tol;
     result.max_iterations = static_cast<uint32_t>(max_iter);
     if (!validate_demag_linear_solve_result(result, error)) {
-        *x_p = 0.0;
-        periodic_workspace->x_p_contains_solution = false;
+        rollback_rejected_candidate();
         return false;
     }
 

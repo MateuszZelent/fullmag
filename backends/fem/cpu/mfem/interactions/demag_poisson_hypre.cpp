@@ -13,6 +13,7 @@
 #include "cpu/mfem/runtime/mpi_init.hpp"
 #include "fem_common.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <memory>
@@ -34,12 +35,14 @@ struct PoissonHypreWorkspace {
         HYPRE_BigInt *row_starts)
         : rhs_bc(static_cast<int>(glob_size))
         , residual(static_cast<int>(glob_size))
+        , accepted_solution_backup(static_cast<int>(glob_size))
         , b_par(comm, glob_size, row_starts)
         , x_par(comm, glob_size, row_starts)
     {}
 
     mfem::Vector rhs_bc;
     mfem::Vector residual;
+    mfem::Vector accepted_solution_backup;
     mfem::HypreParVector b_par;
     mfem::HypreParVector x_par;
     bool x_par_contains_solution = false;
@@ -92,6 +95,19 @@ void destroy_hypre_preconditioner(
     default:
         break;
     }
+}
+
+bool copy_host_vector(
+    const mfem::Vector &source,
+    mfem::Vector &destination)
+{
+    if (source.Size() != destination.Size()) {
+        return false;
+    }
+    const double *source_host = audited_host_read(source);
+    double *destination_host = audited_host_write(destination);
+    std::copy(source_host, source_host + source.Size(), destination_host);
+    return true;
 }
 #endif
 
@@ -336,6 +352,10 @@ bool solve_demag_poisson_hypre(
     }
 
     auto *solver = static_cast<mfem::HypreSolver *>(ctx.poisson_demag.cached_hypre_solver);
+    if (solver == nullptr) {
+        error = "Poisson Hypre solver is null during solver apply";
+        return false;
+    }
 
     mfem::HypreParVector &b_par = poisson_hypre_workspace->b_par;
     mfem::HypreParVector &x_par = poisson_hypre_workspace->x_par;
@@ -350,19 +370,60 @@ bool solve_demag_poisson_hypre(
         b_host[i] = rhs_host[i];
     }
     if (!poisson_hypre_workspace->x_par_contains_solution) {
-        const double *sol_host = audited_host_read(warm_start_solution);
-        double *x_host = audited_host_write(x_par);
-        for (int i = 0; i < warm_start_solution.Size(); ++i) {
-            x_host[i] = sol_host[i];
+        if (!copy_host_vector(warm_start_solution, x_par)) {
+            error = "Hypre warm-start vector size mismatch during Poisson solve";
+            return false;
         }
+    }
+    if (used_cached_solution &&
+        !copy_host_vector(
+            x_par,
+            poisson_hypre_workspace->accepted_solution_backup)) {
+        error = "Hypre accepted-solution backup size mismatch during Poisson solve";
+        return false;
     }
     if (!used_cached_solution) {
         ctx.poisson_demag.fresh_zero_guess_count += 1;
         ctx.poisson_demag.fresh_zero_guess_count_current_step += 1;
     }
 
+    const auto rollback_rejected_candidate = [&]() {
+        const bool restored = used_cached_solution
+            ? copy_host_vector(
+                poisson_hypre_workspace->accepted_solution_backup,
+                x_par)
+            : copy_host_vector(warm_start_solution, x_par);
+        if (!restored) {
+            x_par = 0.0;
+            poisson_hypre_workspace->x_par_contains_solution = false;
+            return false;
+        }
+        poisson_hypre_workspace->x_par_contains_solution = used_cached_solution;
+        return true;
+    };
+
     const auto solver_apply_wall_start = FemSteadyClock::now();
-    solver->Mult(b_par, x_par);
+    try {
+        solver->Mult(b_par, x_par);
+    } catch (const std::exception &ex) {
+        ctx.poisson_demag.last_solver_apply_wall_time_ns =
+            elapsed_ns(solver_apply_wall_start);
+        const bool restored = rollback_rejected_candidate();
+        error = std::string("Hypre Poisson solver apply failed: ") + ex.what();
+        if (!restored) {
+            error += "; accepted solution rollback failed";
+        }
+        return false;
+    } catch (...) {
+        ctx.poisson_demag.last_solver_apply_wall_time_ns =
+            elapsed_ns(solver_apply_wall_start);
+        const bool restored = rollback_rejected_candidate();
+        error = "Hypre Poisson solver apply failed with an unknown error";
+        if (!restored) {
+            error += "; accepted solution rollback failed";
+        }
+        return false;
+    }
     ctx.poisson_demag.last_solver_apply_wall_time_ns = elapsed_ns(solver_apply_wall_start);
 
     mfem::real_t final_residual = 0.0;
@@ -404,11 +465,28 @@ bool solve_demag_poisson_hypre(
             ctx.poisson_demag.cached_hypre_par);
         if (active_operator == nullptr) {
             error = "independent CPU Poisson residual certification requires the cached Hypre operator";
+            if (!rollback_rejected_candidate()) {
+                error += "; accepted solution rollback failed";
+            }
             return false;
         }
-        active_operator->Mult(x_par, poisson_hypre_workspace->residual);
-        poisson_hypre_workspace->residual.Add(-1.0, b_par);
-        absolute_residual = poisson_hypre_workspace->residual.Norml2();
+        try {
+            active_operator->Mult(x_par, poisson_hypre_workspace->residual);
+            poisson_hypre_workspace->residual.Add(-1.0, b_par);
+            absolute_residual = poisson_hypre_workspace->residual.Norml2();
+        } catch (const std::exception &ex) {
+            error = std::string("Hypre Poisson residual certification failed: ") + ex.what();
+            if (!rollback_rejected_candidate()) {
+                error += "; accepted solution rollback failed";
+            }
+            return false;
+        } catch (...) {
+            error = "Hypre Poisson residual certification failed with an unknown error";
+            if (!rollback_rejected_candidate()) {
+                error += "; accepted solution rollback failed";
+            }
+            return false;
+        }
         final_residual = rhs_norm > 0.0
             ? static_cast<mfem::real_t>(absolute_residual / rhs_norm)
             : static_cast<mfem::real_t>(absolute_residual);
@@ -433,8 +511,9 @@ bool solve_demag_poisson_hypre(
     result.absolute_tolerance = ctx.demag.solver.absolute_tolerance;
     result.max_iterations = ctx.demag.solver.max_iterations;
     if (!validate_demag_linear_solve_result(result, error)) {
-        x_par = 0.0;
-        poisson_hypre_workspace->x_par_contains_solution = false;
+        if (!rollback_rejected_candidate()) {
+            error += "; accepted solution rollback failed";
+        }
         return false;
     }
 
