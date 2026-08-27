@@ -216,6 +216,16 @@ void nonperiodic_hypre_demag_rejects_one_iteration_candidate() {
     check(error.find("max_iterations=1") != std::string::npos, "failure includes maximum iterations");
     check(!fullmag::fem::demag_poisson_hypre_has_warm_start(ctx),
           "failed non-periodic Hypre candidate must not become a warm start");
+    check(ctx.poisson_demag.setup_count == 1u &&
+              ctx.poisson_demag.setup_count_current_step == 1u &&
+              ctx.poisson_demag.fresh_zero_guess_count == 1u &&
+              ctx.poisson_demag.fresh_zero_guess_count_current_step == 1u,
+          "non-periodic Hypre setup and fresh-guess telemetry counts the rejected apply");
+    fullmag::fem::reset_demag_poisson_hypre_initial_guess(ctx);
+    check(fullmag::fem::demag_poisson_hypre_has_warm_start(ctx) &&
+              ctx.poisson_demag.fresh_zero_guess_count == 2u &&
+              ctx.poisson_demag.fresh_zero_guess_count_current_step == 2u,
+          "explicit Hypre reset records a fresh zero guess without rebuilding setup");
     fullmag::fem::destroy_demag_poisson_hypre_workspace(ctx);
     ctx.poisson_demag.poisson_bc_op = nullptr;
 }
@@ -2442,6 +2452,11 @@ void demag_hypre_solve_returns_workspace_solution_without_final_host_copy() {
         solve.find("gf_potential->SetFromTrueDofs(*solved_solution);") !=
             std::string::npos,
         "Poisson demag potential cache must use the returned solved Hypre vector");
+    check(
+        hypre.find("ctx.poisson_demag.setup_count += 1;") != std::string::npos &&
+            hypre.find("ctx.poisson_demag.fresh_zero_guess_count += 1;") !=
+                std::string::npos,
+        "CPU Hypre solve must publish setup and fresh-guess telemetry at the actual apply boundary");
 }
 
 void demag_poisson_solver_runtime_state_is_owned_by_poisson_module() {

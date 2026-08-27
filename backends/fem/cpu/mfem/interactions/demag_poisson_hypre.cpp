@@ -90,6 +90,8 @@ void reset_demag_poisson_hypre_initial_guess(Context &ctx)
     if (workspace != nullptr) {
         workspace->x_par = 0.0;
         workspace->x_par_contains_solution = true;
+        ctx.poisson_demag.fresh_zero_guess_count += 1;
+        ctx.poisson_demag.fresh_zero_guess_count_current_step += 1;
     }
     auto *potential =
         static_cast<mfem::GridFunction *>(ctx.poisson_demag.gf_potential);
@@ -148,6 +150,10 @@ void destroy_demag_poisson_hypre_workspace(Context &ctx)
     ctx.poisson_demag.last_setup_wall_time_ns = 0;
     ctx.poisson_demag.last_solver_apply_wall_time_ns = 0;
     ctx.poisson_demag.last_solver_setup_reused = false;
+    ctx.poisson_demag.setup_count = 0;
+    ctx.poisson_demag.setup_count_current_step = 0;
+    ctx.poisson_demag.fresh_zero_guess_count = 0;
+    ctx.poisson_demag.fresh_zero_guess_count_current_step = 0;
 }
 
 bool solve_demag_poisson_hypre(
@@ -271,6 +277,8 @@ bool solve_demag_poisson_hypre(
         ctx.poisson_demag.cached_hypre_solver = solver;
 
         ctx.poisson_demag.solver_setup = true;
+        ctx.poisson_demag.setup_count += 1;
+        ctx.poisson_demag.setup_count_current_step += 1;
         ctx.poisson_demag.last_setup_wall_time_ns = elapsed_ns(setup_wall_start);
     }
 
@@ -282,6 +290,7 @@ bool solve_demag_poisson_hypre(
         error = "Hypre vector size mismatch during Poisson solve";
         return false;
     }
+    const bool used_cached_solution = poisson_hypre_workspace->x_par_contains_solution;
     const double *rhs_host = audited_host_read(rhs_bc);
     double *b_host = audited_host_write(b_par);
     for (int i = 0; i < rhs_bc.Size(); ++i) {
@@ -293,6 +302,10 @@ bool solve_demag_poisson_hypre(
         for (int i = 0; i < warm_start_solution.Size(); ++i) {
             x_host[i] = sol_host[i];
         }
+    }
+    if (!used_cached_solution) {
+        ctx.poisson_demag.fresh_zero_guess_count += 1;
+        ctx.poisson_demag.fresh_zero_guess_count_current_step += 1;
     }
 
     const auto solver_apply_wall_start = FemSteadyClock::now();
