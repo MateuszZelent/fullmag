@@ -13,6 +13,7 @@ telemetry = []
 fullmag-ir = { path = "../fullmag-ir" }
 fullmag-fdm-demag = { path = "../fullmag-fdm-demag" }
 rustfft = "6.4"
+realfft = "3.5"
 rayon = { version = "1.10", optional = true }
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"

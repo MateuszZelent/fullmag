@@ -340,11 +340,24 @@ impl FdmPeriodicityIR {
             ExecutionPrecision::Single => 4_u64,
             ExecutionPrecision::Double => 8_u64,
         };
-        // Six complex kernel spectra plus six complex work buffers.
-        let estimated_bytes = padded_cells
+        // Three real-domain buffers plus six half-spectrum kernels and six
+        // half-spectrum work buffers.
+        let spectral_x = padded_counts[0] / 2 + 1;
+        let spectral_cells = spectral_x
+            .checked_mul(padded_counts[1])
+            .and_then(|value| value.checked_mul(padded_counts[2]))
+            .ok_or_else(|| "FDM half-spectrum cell count overflow".to_string())?;
+        let real_buffer_bytes = padded_cells
+            .checked_mul(3)
+            .and_then(|value| value.checked_mul(bytes_per_value))
+            .ok_or_else(|| "FDM real workspace byte estimate overflow".to_string())?;
+        let spectral_buffer_bytes = spectral_cells
             .checked_mul(12)
             .and_then(|value| value.checked_mul(2))
             .and_then(|value| value.checked_mul(bytes_per_value))
+            .ok_or_else(|| "FDM spectral workspace byte estimate overflow".to_string())?;
+        let estimated_bytes = real_buffer_bytes
+            .checked_add(spectral_buffer_bytes)
             .ok_or_else(|| "FDM periodic workspace byte estimate overflow".to_string())?;
         const MAX_PERIODIC_WORKSPACE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
         if estimated_bytes > MAX_PERIODIC_WORKSPACE_BYTES {
@@ -591,7 +604,10 @@ mod tests {
         assert_eq!(resolved.resolved_image_counts, [0, 0, 0]);
         assert_eq!(resolved.padded_counts, [64, 32, 8]);
         assert_eq!(resolved.image_terms, 1);
-        assert_eq!(resolved.estimated_bytes, 64 * 32 * 8 * 12 * 2 * 8);
+        assert_eq!(
+            resolved.estimated_bytes,
+            64 * 32 * 8 * 3 * 8 + (64 / 2 + 1) * 32 * 8 * 12 * 2 * 8
+        );
         assert_eq!(resolved.kernel, "newell_truncated_images_fft");
     }
 
@@ -606,7 +622,10 @@ mod tests {
             .expect("periodic truncated-images policy should resolve");
         assert_eq!(resolved.padded_counts, [4, 6, 4]);
         assert_eq!(resolved.image_terms, 3);
-        assert_eq!(resolved.estimated_bytes, 4 * 6 * 4 * 12 * 2 * 4);
+        assert_eq!(
+            resolved.estimated_bytes,
+            4 * 6 * 4 * 3 * 4 + (4 / 2 + 1) * 6 * 4 * 12 * 2 * 4
+        );
     }
 
     #[test]

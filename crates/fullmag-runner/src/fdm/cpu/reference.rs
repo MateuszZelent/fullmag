@@ -15,8 +15,8 @@ use fullmag_engine::{
     AdaptiveStepConfig, AxisBoundary, CellSize, CubicAnisotropyConfig, EffectiveFieldTerms,
     EngineError, EngineErrorCode, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState,
     ExchangeLlgStateSoA, ExternalStageTerms, FdmBoundaryPolicy, FftWorkspace, GridShape,
-    IntegratorBuffers, LlgConfig, MagnetoelasticTermConfig, MaterialParameters, ProjectionPolicy,
-    OerstedCylinderConfig, RegionalFieldDriveTerm, ResolvedFdmPeriodicWorkspace,
+    IntegratorBuffers, LlgConfig, MagnetoelasticTermConfig, MaterialParameters,
+    OerstedCylinderConfig, ProjectionPolicy, RegionalFieldDriveTerm, ResolvedFdmPeriodicWorkspace,
     SlonczewskiSttConfig, SotConfig, SotFormula, StepReport, TimeIntegrator,
     UniaxialAnisotropyConfig, Vector3, ZhangLiFormula, ZhangLiSttConfig,
 };
@@ -6230,10 +6230,13 @@ mod tests {
         assert_eq!(receipt.requested_backend, "auto");
         assert_eq!(receipt.resolved_backend, "rustfft");
         assert_eq!(receipt.executed_backend, "rustfft");
-        assert_eq!(receipt.backend_version.as_deref(), Some("6.4.1"));
-        assert_eq!(receipt.plan_mode, "rustfft_planner_cached");
+        assert_eq!(
+            receipt.backend_version.as_deref(),
+            Some("rustfft=6.4.1;realfft=3.5.0")
+        );
+        assert_eq!(receipt.plan_mode, "realfft_r2c_planner_cached");
         assert_eq!(receipt.thread_count, None);
-        assert_eq!(receipt.workspace_layout, "full_complex");
+        assert_eq!(receipt.workspace_layout, "half_spectrum_r2c");
     }
 
     #[test]

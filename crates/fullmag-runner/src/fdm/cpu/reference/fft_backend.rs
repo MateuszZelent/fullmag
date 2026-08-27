@@ -1,9 +1,9 @@
 use crate::types::{FdmFftExecutionProvenance, RunError};
 use fullmag_ir::FdmFftPlanIR;
 
-const RUSTFFT_CRATE_VERSION: &str = "6.4.1";
-const RUSTFFT_PLAN_MODE: &str = "rustfft_planner_cached";
-const RUSTFFT_WORKSPACE_LAYOUT: &str = "full_complex";
+const RUSTFFT_CRATE_VERSION: &str = "rustfft=6.4.1;realfft=3.5.0";
+const RUSTFFT_PLAN_MODE: &str = "realfft_r2c_planner_cached";
+const RUSTFFT_WORKSPACE_LAYOUT: &str = "half_spectrum_r2c";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CpuFftBackend {

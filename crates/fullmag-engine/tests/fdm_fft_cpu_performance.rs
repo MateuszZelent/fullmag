@@ -3,6 +3,7 @@
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     hint::black_box,
+    mem::size_of,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     time::{Duration, Instant},
 };
@@ -137,7 +138,7 @@ fn benchmark_operation(repeats: usize, mut operation: impl FnMut()) -> Duration 
 }
 
 #[test]
-fn rustfft_demag_reuses_preallocated_transform_lines_after_warmup() {
+fn rustfft_r2c_demag_reuses_preallocated_workspace_after_warmup() {
     let shape = [4, 3, 2];
     let cell_count = shape.iter().product();
     let mut workspace = FftWorkspace::new(shape[0], shape[1], shape[2], 1.0, 1.0, 1.0);
@@ -193,6 +194,13 @@ fn rustfft_demag_reuses_preallocated_transform_lines_after_warmup() {
     assert_eq!(telemetry.execution_thread_count, 1);
     assert!(telemetry.plan_creation_time_ns > 0);
     assert!(telemetry.workspace_bytes > 0);
+    let padded_cells = (shape[0] * 2) * (shape[1] * 2) * (shape[2] * 2);
+    let full_complex_bytes = padded_cells * 12 * size_of::<rustfft::num_complex::Complex<f64>>();
+    assert!(
+        telemetry.workspace_bytes < full_complex_bytes as u64,
+        "half-spectrum workspace did not reduce owned bytes: {} >= {full_complex_bytes}",
+        telemetry.workspace_bytes
+    );
     assert_eq!(telemetry.forward_fft_count, 6);
     assert_eq!(telemetry.inverse_fft_count, 6);
     assert!(telemetry.fft_elapsed_time_ns > 0);
@@ -200,7 +208,7 @@ fn rustfft_demag_reuses_preallocated_transform_lines_after_warmup() {
 
 #[test]
 #[ignore = "release-only break-even benchmark; run explicitly with --ignored --exact"]
-fn rustfft_demag_reports_direct_convolution_break_even() {
+fn rustfft_r2c_demag_reports_direct_convolution_break_even() {
     let commit = std::env::var("FULLMAG_BENCH_COMMIT").unwrap_or_else(|_| "unrecorded".into());
     let build_identity =
         std::env::var("FULLMAG_BENCH_BUILD_ID").unwrap_or_else(|_| "unrecorded".into());
@@ -248,12 +256,14 @@ fn rustfft_demag_reports_direct_convolution_break_even() {
         println!(
             "{}",
             json!({
-                "schema": "fullmag.fdm.cpu_fft_break_even.v1",
+                "schema": "fullmag.fdm.cpu_fft_break_even.v2",
                 "commit": commit,
                 "build_identity": build_identity,
                 "requested_backend": "rustfft",
                 "resolved_backend": "rustfft",
                 "executed_backend": "rustfft",
+                "plan_mode": "realfft_r2c_planner_cached",
+                "workspace_layout": "half_spectrum_r2c",
                 "precision": "double",
                 "device": "cpu",
                 "interaction_realization": "newell_demag",
@@ -275,7 +285,7 @@ fn rustfft_demag_reports_direct_convolution_break_even() {
     println!(
         "{}",
         json!({
-            "schema": "fullmag.fdm.cpu_fft_break_even.v1",
+            "schema": "fullmag.fdm.cpu_fft_break_even.v2",
             "commit": commit,
             "build_identity": build_identity,
             "break_even_cells": break_even_cells,

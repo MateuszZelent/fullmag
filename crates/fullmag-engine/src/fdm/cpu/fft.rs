@@ -3,8 +3,9 @@
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
 use sha2::{Digest, Sha256};
-use std::{mem::size_of, sync::Arc, time::Instant};
+use std::{mem::size_of, time::Instant};
 
+use super::r2c::R2c3dPlan;
 use crate::fdm::shared::types::{AxisBoundary, FdmBoundaryPolicy, ResolvedFdmPeriodicWorkspace};
 
 use crate::newell;
@@ -12,7 +13,7 @@ use crate::Vector3;
 
 // ── FftWorkspace ───────────────────────────────────────────────────────
 
-pub const FDM_FFT_WORKSPACE_TELEMETRY_SCHEMA_VERSION: &str = "fullmag.fdm.fft_workspace.v1";
+pub const FDM_FFT_WORKSPACE_TELEMETRY_SCHEMA_VERSION: &str = "fullmag.fdm.fft_workspace.v2";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FftWorkspaceTelemetry {
@@ -20,8 +21,8 @@ pub struct FftWorkspaceTelemetry {
     pub lifecycle_key_sha256: String,
     pub execution_thread_count: u32,
     pub plan_creation_time_ns: u64,
-    /// Allocator-reserved bytes for complex buffers owned by the workspace.
-    /// RustFFT does not expose the heap footprint of its opaque plan objects.
+    /// Allocator-reserved bytes for real and complex buffers owned by the workspace.
+    /// RustFFT and RealFFT do not expose the heap footprint of their opaque plan objects.
     pub workspace_bytes: u64,
     pub forward_fft_count: u64,
     pub inverse_fft_count: u64,
@@ -52,7 +53,7 @@ fn fft_workspace_key_sha256(
 ) -> String {
     let mut hasher = Sha256::new();
     hasher.update(FDM_FFT_WORKSPACE_TELEMETRY_SCHEMA_VERSION.as_bytes());
-    hasher.update(b"rustfft\0double\0full_complex");
+    hasher.update(b"rustfft\0double\0half_spectrum_r2c");
     for value in cells {
         hasher.update(u64::try_from(value).unwrap_or(u64::MAX).to_le_bytes());
     }
@@ -79,20 +80,18 @@ pub struct FftWorkspace {
     pub(crate) nx: usize,
     pub(crate) ny: usize,
     pub(crate) nz: usize,
-    pub(crate) fwd_x: Arc<dyn Fft<f64>>,
-    pub(crate) fwd_y: Arc<dyn Fft<f64>>,
-    pub(crate) fwd_z: Arc<dyn Fft<f64>>,
-    pub(crate) inv_x: Arc<dyn Fft<f64>>,
-    pub(crate) inv_y: Arc<dyn Fft<f64>>,
-    pub(crate) inv_z: Arc<dyn Fft<f64>>,
+    transform: R2c3dPlan,
     /// Padded grid dimensions (2×N per axis).
     pub px: usize,
     pub py: usize,
     pub pz: usize,
-    /// Re-usable scratch line buffers.
-    pub(crate) line_y: Vec<Complex<f64>>,
-    pub(crate) line_z: Vec<Complex<f64>>,
-    /// Re-usable padded frequency-domain buffers (avoids allocation per demag call).
+    /// Stored X frequencies in the Hermitian half-spectrum.
+    pub sx: usize,
+    /// Re-usable padded real-domain buffers, shared by M input and H output.
+    buf_rx: Vec<f64>,
+    buf_ry: Vec<f64>,
+    buf_rz: Vec<f64>,
+    /// Re-usable half-spectrum buffers (avoids allocation per demag call).
     pub(crate) buf_mx: Vec<Complex<f64>>,
     pub(crate) buf_my: Vec<Complex<f64>>,
     pub(crate) buf_mz: Vec<Complex<f64>>,
@@ -172,10 +171,22 @@ fn checked_workspace_resolution(
             .ok_or_else(|| "padded grid cell count overflow".to_string())
     })?;
     const MAX_WORKSPACE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
-    let estimated_bytes = padded_cells
+    let spectral_x = padded[0] / 2 + 1;
+    let spectral_cells = spectral_x
+        .checked_mul(padded[1])
+        .and_then(|value| value.checked_mul(padded[2]))
+        .ok_or_else(|| "periodic half-spectrum cell count overflow".to_string())?;
+    let real_buffer_bytes = padded_cells
+        .checked_mul(3)
+        .and_then(|value| value.checked_mul(8))
+        .ok_or_else(|| "periodic real workspace byte estimate overflow".to_string())?;
+    let spectral_buffer_bytes = spectral_cells
         .checked_mul(12)
         .and_then(|value| value.checked_mul(2))
         .and_then(|value| value.checked_mul(8))
+        .ok_or_else(|| "periodic spectral workspace byte estimate overflow".to_string())?;
+    let estimated_bytes = real_buffer_bytes
+        .checked_add(spectral_buffer_bytes)
         .ok_or_else(|| "periodic FFT workspace byte estimate overflow".to_string())?;
     if estimated_bytes > MAX_WORKSPACE_BYTES {
         return Err(format!(
@@ -209,70 +220,64 @@ impl FftWorkspace {
     }
 
     fn new_unchecked(nx: usize, ny: usize, nz: usize, dx: f64, dy: f64, dz: f64) -> Self {
+        let kernels = newell::compute_newell_kernels(nx, ny, nz, dx, dy, dz);
+        Self::from_real_kernels(nx, ny, nz, dx, dy, dz, kernels, [false; 3], [0; 3])
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_real_kernels(
+        nx: usize,
+        ny: usize,
+        nz: usize,
+        dx: f64,
+        dy: f64,
+        dz: f64,
+        kernels: newell::NewellKernels,
+        periodic: [bool; 3],
+        image_counts: [u32; 3],
+    ) -> Self {
         let plan_started = Instant::now();
         let thread_count = execution_thread_count();
-        let px = nx * 2;
-        let py = ny * 2;
-        let pz = nz * 2;
+        let px = kernels.px;
+        let py = kernels.py;
+        let pz = kernels.pz;
         let padded_len = px * py * pz;
-        let mut planner = FftPlanner::<f64>::new();
+        let mut transform = R2c3dPlan::new(px, py, pz);
+        let sx = transform.spectral_x_len();
+        let spectral_len = transform.spectral_len();
         let zero = Complex::new(0.0, 0.0);
 
-        let fwd_x = planner.plan_fft_forward(px);
-        let fwd_y = planner.plan_fft_forward(py);
-        let fwd_z = planner.plan_fft_forward(pz);
-
-        // Precompute Newell kernels in real space, then FFT each component.
-        let nk = newell::compute_newell_kernels(nx, ny, nz, dx, dy, dz);
-
-        let fft_kernel = |real: Vec<f64>| -> Vec<Complex<f64>> {
-            let mut buf: Vec<Complex<f64>> =
-                real.into_iter().map(|v| Complex::new(v, 0.0)).collect();
-            // 3D FFT: x then y then z, same as fft3_m_forward
-            let mut line_y_tmp = vec![zero; py];
-            let mut line_z_tmp = vec![zero; pz];
-            fft3_core(
-                &mut buf,
-                px,
-                py,
-                pz,
-                &*fwd_x,
-                &*fwd_y,
-                &*fwd_z,
-                &mut line_y_tmp,
-                &mut line_z_tmp,
-            );
-            buf
+        let mut fft_kernel = |mut real: Vec<f64>| -> Vec<Complex<f64>> {
+            let mut spectrum = vec![zero; spectral_len];
+            transform.forward(&mut real, &mut spectrum);
+            spectrum
         };
-
-        let kern_xx = fft_kernel(nk.n_xx);
-        let kern_yy = fft_kernel(nk.n_yy);
-        let kern_zz = fft_kernel(nk.n_zz);
-        let kern_xy = fft_kernel(nk.n_xy);
-        let kern_xz = fft_kernel(nk.n_xz);
-        let kern_yz = fft_kernel(nk.n_yz);
+        let kern_xx = fft_kernel(kernels.n_xx);
+        let kern_yy = fft_kernel(kernels.n_yy);
+        let kern_zz = fft_kernel(kernels.n_zz);
+        let kern_xy = fft_kernel(kernels.n_xy);
+        let kern_xz = fft_kernel(kernels.n_xz);
+        let kern_yz = fft_kernel(kernels.n_yz);
+        drop(fft_kernel);
 
         let mut workspace = Self {
             nx,
             ny,
             nz,
-            fwd_x,
-            fwd_y: planner.plan_fft_forward(py),
-            fwd_z: planner.plan_fft_forward(pz),
-            inv_x: planner.plan_fft_inverse(px),
-            inv_y: planner.plan_fft_inverse(py),
-            inv_z: planner.plan_fft_inverse(pz),
+            transform,
             px,
             py,
             pz,
-            line_y: vec![zero; py],
-            line_z: vec![zero; pz],
-            buf_mx: vec![zero; padded_len],
-            buf_my: vec![zero; padded_len],
-            buf_mz: vec![zero; padded_len],
-            buf_hx: vec![zero; padded_len],
-            buf_hy: vec![zero; padded_len],
-            buf_hz: vec![zero; padded_len],
+            sx,
+            buf_rx: vec![0.0; padded_len],
+            buf_ry: vec![0.0; padded_len],
+            buf_rz: vec![0.0; padded_len],
+            buf_mx: vec![zero; spectral_len],
+            buf_my: vec![zero; spectral_len],
+            buf_mz: vec![zero; spectral_len],
+            buf_hx: vec![zero; spectral_len],
+            buf_hy: vec![zero; spectral_len],
+            buf_hz: vec![zero; spectral_len],
             kern_xx,
             kern_yy,
             kern_zz,
@@ -284,8 +289,8 @@ impl FftWorkspace {
                 lifecycle_key_sha256: fft_workspace_key_sha256(
                     [nx, ny, nz],
                     [dx, dy, dz],
-                    [false; 3],
-                    [0; 3],
+                    periodic,
+                    image_counts,
                     thread_count,
                 ),
                 execution_thread_count: thread_count,
@@ -419,26 +424,10 @@ impl FftWorkspace {
         boundary: &FdmBoundaryPolicy,
         image_counts: [u32; 3],
     ) -> Self {
-        let plan_started = Instant::now();
-        let thread_count = execution_thread_count();
         let pbc_x = matches!(boundary.x, AxisBoundary::Periodic);
         let pbc_y = matches!(boundary.y, AxisBoundary::Periodic);
         let pbc_z = matches!(boundary.z, AxisBoundary::Periodic);
-
-        let px = if pbc_x { nx } else { nx * 2 };
-        let py = if pbc_y { ny } else { ny * 2 };
-        let pz = if pbc_z { nz } else { nz * 2 };
-        let padded_len = px * py * pz;
-        let mut planner = FftPlanner::<f64>::new();
-        let zero = Complex::new(0.0, 0.0);
-
-        let fwd_x = planner.plan_fft_forward(px);
-        let fwd_y = planner.plan_fft_forward(py);
-        let fwd_z = planner.plan_fft_forward(pz);
-
-        // Compute periodic kernel via truncated images:
-        // N^pbc(r) = Σ_{|n_i| ≤ I_i on periodic axes} N^open(r + n · L)
-        let nk = compute_periodic_newell_kernels(
+        let kernels = compute_periodic_newell_kernels(
             nx,
             ny,
             nz,
@@ -448,88 +437,28 @@ impl FftWorkspace {
             [pbc_x, pbc_y, pbc_z],
             image_counts,
         );
-
-        let fft_kernel = |real: Vec<f64>| -> Vec<Complex<f64>> {
-            let mut buf: Vec<Complex<f64>> =
-                real.into_iter().map(|v| Complex::new(v, 0.0)).collect();
-            let mut line_y_tmp = vec![zero; py];
-            let mut line_z_tmp = vec![zero; pz];
-            fft3_core(
-                &mut buf,
-                px,
-                py,
-                pz,
-                &*fwd_x,
-                &*fwd_y,
-                &*fwd_z,
-                &mut line_y_tmp,
-                &mut line_z_tmp,
-            );
-            buf
-        };
-
-        let kern_xx = fft_kernel(nk.n_xx);
-        let kern_yy = fft_kernel(nk.n_yy);
-        let kern_zz = fft_kernel(nk.n_zz);
-        let kern_xy = fft_kernel(nk.n_xy);
-        let kern_xz = fft_kernel(nk.n_xz);
-        let kern_yz = fft_kernel(nk.n_yz);
-
-        let mut workspace = Self {
+        Self::from_real_kernels(
             nx,
             ny,
             nz,
-            fwd_x,
-            fwd_y: planner.plan_fft_forward(py),
-            fwd_z: planner.plan_fft_forward(pz),
-            inv_x: planner.plan_fft_inverse(px),
-            inv_y: planner.plan_fft_inverse(py),
-            inv_z: planner.plan_fft_inverse(pz),
-            px,
-            py,
-            pz,
-            line_y: vec![zero; py],
-            line_z: vec![zero; pz],
-            buf_mx: vec![zero; padded_len],
-            buf_my: vec![zero; padded_len],
-            buf_mz: vec![zero; padded_len],
-            buf_hx: vec![zero; padded_len],
-            buf_hy: vec![zero; padded_len],
-            buf_hz: vec![zero; padded_len],
-            kern_xx,
-            kern_yy,
-            kern_zz,
-            kern_xy,
-            kern_xz,
-            kern_yz,
-            telemetry: FftWorkspaceTelemetry {
-                lifecycle_revision: 1,
-                lifecycle_key_sha256: fft_workspace_key_sha256(
-                    [nx, ny, nz],
-                    [dx, dy, dz],
-                    [pbc_x, pbc_y, pbc_z],
-                    image_counts,
-                    thread_count,
-                ),
-                execution_thread_count: thread_count,
-                plan_creation_time_ns: 0,
-                workspace_bytes: 0,
-                forward_fft_count: 0,
-                inverse_fft_count: 0,
-                fft_elapsed_time_ns: 0,
-            },
-        };
-        workspace.telemetry.plan_creation_time_ns = elapsed_ns(plan_started);
-        workspace.telemetry.workspace_bytes = workspace.allocated_buffer_bytes();
-        workspace
+            dx,
+            dy,
+            dz,
+            kernels,
+            [pbc_x, pbc_y, pbc_z],
+            image_counts,
+        )
     }
 
     fn allocated_buffer_bytes(&self) -> u64 {
-        let complex_values = self
-            .line_y
+        let real_values = self
+            .buf_rx
             .capacity()
-            .saturating_add(self.line_z.capacity())
-            .saturating_add(self.buf_mx.capacity())
+            .saturating_add(self.buf_ry.capacity())
+            .saturating_add(self.buf_rz.capacity());
+        let complex_values = self
+            .buf_mx
+            .capacity()
             .saturating_add(self.buf_my.capacity())
             .saturating_add(self.buf_mz.capacity())
             .saturating_add(self.buf_hx.capacity())
@@ -541,35 +470,39 @@ impl FftWorkspace {
             .saturating_add(self.kern_xy.capacity())
             .saturating_add(self.kern_xz.capacity())
             .saturating_add(self.kern_yz.capacity());
-        u64::try_from(complex_values.saturating_mul(size_of::<Complex<f64>>())).unwrap_or(u64::MAX)
+        let owned = real_values
+            .saturating_mul(size_of::<f64>())
+            .saturating_add(complex_values.saturating_mul(size_of::<Complex<f64>>()));
+        u64::try_from(owned)
+            .unwrap_or(u64::MAX)
+            .saturating_add(self.transform.owned_buffer_bytes())
     }
 
     pub fn telemetry(&self) -> FftWorkspaceTelemetry {
         self.telemetry.clone()
     }
 
-    /// Zero out only the three M frequency-domain buffers.
+    /// Zero out the three padded real-domain buffers before packing M.
     ///
-    /// H buffers (buf_hx/hy/hz) are fully overwritten by the spectral
+    /// Spectrum and H buffers are fully overwritten by the transforms and
     /// tensor multiply and therefore do not need pre-zeroing.
     pub(crate) fn clear_m_bufs(&mut self) {
-        let zero = Complex::new(0.0, 0.0);
         #[cfg(feature = "parallel")]
         {
             use rayon::prelude::*;
-            self.buf_mx.par_iter_mut().for_each(|v| *v = zero);
-            self.buf_my.par_iter_mut().for_each(|v| *v = zero);
-            self.buf_mz.par_iter_mut().for_each(|v| *v = zero);
+            self.buf_rx.par_iter_mut().for_each(|value| *value = 0.0);
+            self.buf_ry.par_iter_mut().for_each(|value| *value = 0.0);
+            self.buf_rz.par_iter_mut().for_each(|value| *value = 0.0);
         }
         #[cfg(not(feature = "parallel"))]
         {
             for v in self
-                .buf_mx
+                .buf_rx
                 .iter_mut()
-                .chain(self.buf_my.iter_mut())
-                .chain(self.buf_mz.iter_mut())
+                .chain(self.buf_ry.iter_mut())
+                .chain(self.buf_rz.iter_mut())
             {
-                *v = zero;
+                *v = 0.0;
             }
         }
     }
@@ -582,9 +515,9 @@ impl FftWorkspace {
                     let source = x + self.nx * (y + self.ny * z);
                     let destination = padded_index(self.px, self.py, x, y, z);
                     let moment = moment_at(source);
-                    self.buf_mx[destination] = Complex::new(moment[0], 0.0);
-                    self.buf_my[destination] = Complex::new(moment[1], 0.0);
-                    self.buf_mz[destination] = Complex::new(moment[2], 0.0);
+                    self.buf_rx[destination] = moment[0];
+                    self.buf_ry[destination] = moment[1];
+                    self.buf_rz[destination] = moment[2];
                 }
             }
         }
@@ -598,9 +531,9 @@ impl FftWorkspace {
         let source = padded_index(self.px, self.py, x, y, z);
         let normalization = 1.0 / (self.px * self.py * self.pz) as f64;
         [
-            self.buf_hx[source].re * normalization,
-            self.buf_hy[source].re * normalization,
-            self.buf_hz[source].re * normalization,
+            self.buf_rx[source] * normalization,
+            self.buf_ry[source] * normalization,
+            self.buf_rz[source] * normalization,
         ]
     }
 
@@ -656,39 +589,9 @@ impl FftWorkspace {
     /// Forward FFT on the three M-component buffers (buf_mx, buf_my, buf_mz).
     pub(crate) fn fft3_m_forward(&mut self) {
         let started = Instant::now();
-        fft3_core(
-            &mut self.buf_mx,
-            self.px,
-            self.py,
-            self.pz,
-            &*self.fwd_x,
-            &*self.fwd_y,
-            &*self.fwd_z,
-            &mut self.line_y,
-            &mut self.line_z,
-        );
-        fft3_core(
-            &mut self.buf_my,
-            self.px,
-            self.py,
-            self.pz,
-            &*self.fwd_x,
-            &*self.fwd_y,
-            &*self.fwd_z,
-            &mut self.line_y,
-            &mut self.line_z,
-        );
-        fft3_core(
-            &mut self.buf_mz,
-            self.px,
-            self.py,
-            self.pz,
-            &*self.fwd_x,
-            &*self.fwd_y,
-            &*self.fwd_z,
-            &mut self.line_y,
-            &mut self.line_z,
-        );
+        self.transform.forward(&mut self.buf_rx, &mut self.buf_mx);
+        self.transform.forward(&mut self.buf_ry, &mut self.buf_my);
+        self.transform.forward(&mut self.buf_rz, &mut self.buf_mz);
         self.telemetry.forward_fft_count = self.telemetry.forward_fft_count.saturating_add(3);
         self.telemetry.fft_elapsed_time_ns = self
             .telemetry
@@ -699,39 +602,9 @@ impl FftWorkspace {
     /// Inverse FFT on the three H-component buffers (buf_hx, buf_hy, buf_hz).
     pub(crate) fn fft3_h_inverse(&mut self) {
         let started = Instant::now();
-        fft3_core(
-            &mut self.buf_hx,
-            self.px,
-            self.py,
-            self.pz,
-            &*self.inv_x,
-            &*self.inv_y,
-            &*self.inv_z,
-            &mut self.line_y,
-            &mut self.line_z,
-        );
-        fft3_core(
-            &mut self.buf_hy,
-            self.px,
-            self.py,
-            self.pz,
-            &*self.inv_x,
-            &*self.inv_y,
-            &*self.inv_z,
-            &mut self.line_y,
-            &mut self.line_z,
-        );
-        fft3_core(
-            &mut self.buf_hz,
-            self.px,
-            self.py,
-            self.pz,
-            &*self.inv_x,
-            &*self.inv_y,
-            &*self.inv_z,
-            &mut self.line_y,
-            &mut self.line_z,
-        );
+        self.transform.inverse(&mut self.buf_hx, &mut self.buf_rx);
+        self.transform.inverse(&mut self.buf_hy, &mut self.buf_ry);
+        self.transform.inverse(&mut self.buf_hz, &mut self.buf_rz);
         self.telemetry.inverse_fft_count = self.telemetry.inverse_fft_count.saturating_add(3);
         self.telemetry.fft_elapsed_time_ns = self
             .telemetry
@@ -742,6 +615,33 @@ impl FftWorkspace {
 
 // ── Newell kernel spectra helpers ──────────────────────────────────────
 
+fn flatten_full_spectrum(
+    half: &[Complex<f64>],
+    px: usize,
+    py: usize,
+    pz: usize,
+    sx: usize,
+) -> Vec<f64> {
+    let mut flat = Vec::with_capacity(px * py * pz * 2);
+    for z in 0..pz {
+        for y in 0..py {
+            for x in 0..px {
+                let value = if x < sx {
+                    half[padded_index(sx, py, x, y, z)]
+                } else {
+                    let mirrored_x = px - x;
+                    let mirrored_y = (py - y) % py;
+                    let mirrored_z = (pz - z) % pz;
+                    half[padded_index(sx, py, mirrored_x, mirrored_y, mirrored_z)].conj()
+                };
+                flat.push(value.re);
+                flat.push(value.im);
+            }
+        }
+    }
+    flat
+}
+
 pub fn compute_newell_kernel_spectra(
     nx: usize,
     ny: usize,
@@ -751,13 +651,14 @@ pub fn compute_newell_kernel_spectra(
     dz: f64,
 ) -> DemagKernelSpectra {
     let workspace = FftWorkspace::new(nx, ny, nz, dx, dy, dz);
-    let flatten = |values: &[Complex<f64>]| -> Vec<f64> {
-        let mut flat = Vec::with_capacity(values.len() * 2);
-        for value in values {
-            flat.push(value.re);
-            flat.push(value.im);
-        }
-        flat
+    let flatten = |values| {
+        flatten_full_spectrum(
+            values,
+            workspace.px,
+            workspace.py,
+            workspace.pz,
+            workspace.sx,
+        )
     };
 
     DemagKernelSpectra {
@@ -802,13 +703,14 @@ pub fn compute_periodic_newell_kernel_spectra(
     };
     let workspace =
         FftWorkspace::new_with_boundary(nx, ny, nz, dx, dy, dz, &boundary, image_counts);
-    let flatten = |values: &[Complex<f64>]| -> Vec<f64> {
-        let mut flat = Vec::with_capacity(values.len() * 2);
-        for value in values {
-            flat.push(value.re);
-            flat.push(value.im);
-        }
-        flat
+    let flatten = |values| {
+        flatten_full_spectrum(
+            values,
+            workspace.px,
+            workspace.py,
+            workspace.pz,
+            workspace.sx,
+        )
     };
 
     DemagKernelSpectra {
@@ -1034,24 +936,35 @@ pub(crate) fn fft3_core(
     }
 }
 
-/// 3D FFT using cached workspace plans (avoids per-call FftPlanner).
+/// Legacy full-complex 3D FFT retained for tests and compatibility helpers.
 #[allow(dead_code)]
 pub(crate) fn fft3_with_workspace(data: &mut [Complex<f64>], ws: &mut FftWorkspace, inverse: bool) {
+    let mut planner = FftPlanner::<f64>::new();
     let (fft_x, fft_y, fft_z) = if inverse {
-        (&*ws.inv_x, &*ws.inv_y, &*ws.inv_z)
+        (
+            planner.plan_fft_inverse(ws.px),
+            planner.plan_fft_inverse(ws.py),
+            planner.plan_fft_inverse(ws.pz),
+        )
     } else {
-        (&*ws.fwd_x, &*ws.fwd_y, &*ws.fwd_z)
+        (
+            planner.plan_fft_forward(ws.px),
+            planner.plan_fft_forward(ws.py),
+            planner.plan_fft_forward(ws.pz),
+        )
     };
+    let mut line_y = vec![Complex::new(0.0, 0.0); ws.py];
+    let mut line_z = vec![Complex::new(0.0, 0.0); ws.pz];
     fft3_core(
         data,
         ws.px,
         ws.py,
         ws.pz,
-        fft_x,
-        fft_y,
-        fft_z,
-        &mut ws.line_y,
-        &mut ws.line_z,
+        &*fft_x,
+        &*fft_y,
+        &*fft_z,
+        &mut line_y,
+        &mut line_z,
     );
 }
 
@@ -1081,7 +994,8 @@ pub(crate) fn zero_vectors(len: usize) -> Vec<Vector3> {
 
 #[cfg(test)]
 mod normalization_tests {
-    use super::{fft3_core, padded_index};
+    use super::{compute_newell_kernel_spectra, fft3_core, padded_index};
+    use crate::newell;
     use rustfft::{num_complex::Complex, FftPlanner};
     use std::f64::consts::TAU;
 
@@ -1170,6 +1084,50 @@ mod normalization_tests {
         let normalization = (nx * ny * nz) as f64;
         for (actual, expected) in transformed.iter().zip(&original) {
             assert_complex_close(*actual / normalization, *expected, 2e-12);
+        }
+    }
+
+    #[test]
+    fn expanded_r2c_kernel_spectra_match_full_complex_fft_layout() {
+        let [nx, ny, nz] = [3, 2, 1];
+        let [px, py, pz] = [nx * 2, ny * 2, nz * 2];
+        let spectra = compute_newell_kernel_spectra(nx, ny, nz, 1.0, 1.0, 1.0);
+        let kernels = newell::compute_newell_kernels(nx, ny, nz, 1.0, 1.0, 1.0);
+        let mut planner = FftPlanner::<f64>::new();
+        let forward_x = planner.plan_fft_forward(px);
+        let forward_y = planner.plan_fft_forward(py);
+        let forward_z = planner.plan_fft_forward(pz);
+
+        for (real, expanded) in [
+            (kernels.n_xx, spectra.n_xx),
+            (kernels.n_yy, spectra.n_yy),
+            (kernels.n_zz, spectra.n_zz),
+            (kernels.n_xy, spectra.n_xy),
+            (kernels.n_xz, spectra.n_xz),
+            (kernels.n_yz, spectra.n_yz),
+        ] {
+            let mut expected: Vec<_> = real
+                .into_iter()
+                .map(|value| Complex::new(value, 0.0))
+                .collect();
+            let mut line_y = vec![Complex::new(0.0, 0.0); py];
+            let mut line_z = vec![Complex::new(0.0, 0.0); pz];
+            fft3_core(
+                &mut expected,
+                px,
+                py,
+                pz,
+                &*forward_x,
+                &*forward_y,
+                &*forward_z,
+                &mut line_y,
+                &mut line_z,
+            );
+            assert_eq!(expanded.len(), expected.len() * 2);
+            for (index, expected) in expected.into_iter().enumerate() {
+                let actual = Complex::new(expanded[index * 2], expanded[index * 2 + 1]);
+                assert_complex_close(actual, expected, 3e-12);
+            }
         }
     }
 }
