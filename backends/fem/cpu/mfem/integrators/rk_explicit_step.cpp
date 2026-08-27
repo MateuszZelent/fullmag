@@ -391,6 +391,7 @@ bool context_step_explicit_rk_mfem(
             if (norm_weights->empty()) {
                 norm_weights = &ctx.mesh.node_volumes;
             }
+            AdaptiveErrorNormMetrics norm_metrics{};
             double err_norm = compute_adaptive_error_norm_mass_weighted(
                 ws.err,
                 ws.m_backup,
@@ -399,7 +400,8 @@ bool context_step_explicit_rk_mfem(
                 ctx.mesh.magnetic_node_mask,
                 frozen_node_mask,
                 ctx.adaptive_dt.atol,
-                ctx.adaptive_dt.rtol);
+                ctx.adaptive_dt.rtol,
+                &norm_metrics);
             if (!compute_adaptive_attempt_guard_metric(
                     ctx.adaptive_dt,
                     err_norm,
@@ -443,6 +445,14 @@ bool context_step_explicit_rk_mfem(
                 total_rhs - rhs_before_attempt,
                 tab.order_est,
             });
+            auto &attempt_record = ctx.stepper.attempt_trace.records.back();
+            attempt_record.error_norm_type = 2u; // mass_weighted_rms
+            attempt_record.active_node_count = norm_metrics.active_node_count;
+            attempt_record.active_measure = norm_metrics.active_measure;
+            attempt_record.normalization_denominator =
+                norm_metrics.normalization_denominator;
+            attempt_record.max_scaled_error = norm_metrics.max_scaled_error;
+            attempt_record.weighted_rms_error = norm_metrics.weighted_rms_error;
             if (result.kind == adaptive::AdaptiveDecisionKind::failed) {
                 ctx.state.m_xyz = ws.m_backup;
                 if (ctx.frozen_spins.enabled()) {

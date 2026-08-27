@@ -561,6 +561,7 @@ void adaptive_mass_weighted_error_norm_uses_fem_measure() {
         1.0, 0.0, 0.0,
     };
     const std::vector<double> m_new = m_old;
+    fullmag::fem::AdaptiveErrorNormMetrics metrics{};
     const double weighted = fullmag::fem::compute_adaptive_error_norm_mass_weighted(
         err,
         m_old,
@@ -569,7 +570,8 @@ void adaptive_mass_weighted_error_norm_uses_fem_measure() {
         {1u, 1u},
         {},
         0.0,
-        1.0);
+        1.0,
+        &metrics);
 
     check_near(
         weighted,
@@ -579,6 +581,15 @@ void adaptive_mass_weighted_error_norm_uses_fem_measure() {
     check(
         weighted < 3.0,
         "mass-weighted RMS must not silently reduce to the nodewise maximum");
+    check(metrics.active_node_count == 2u, "weighted RMS receipt counts active nodes");
+    check_near(metrics.active_measure, 4.0, 0.0, "weighted RMS receipt reports active measure");
+    check_near(
+        metrics.normalization_denominator,
+        metrics.active_measure,
+        0.0,
+        "weighted RMS receipt reports its normalization denominator");
+    check_near(metrics.max_scaled_error, 3.0, 0.0, "weighted RMS receipt reports max scaled error");
+    check_near(metrics.weighted_rms_error, weighted, 0.0, "weighted RMS receipt reports RMS");
 }
 
 void adaptive_mass_weighted_error_norm_excludes_airbox_and_frozen_nodes() {

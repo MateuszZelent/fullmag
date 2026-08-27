@@ -53,6 +53,19 @@ struct AdaptiveAttemptGuardMetrics {
 };
 
 /*
+ * Native receipt for one mass-weighted adaptive error reduction. The measure
+ * and denominator are reported in the same dual-volume/lumped-mass units;
+ * their ratio is dimensionless and is the normalization used by the RMS.
+ */
+struct AdaptiveErrorNormMetrics {
+    uint64_t active_node_count = 0;
+    double active_measure = 0.0;
+    double normalization_denominator = 0.0;
+    double max_scaled_error = 0.0;
+    double weighted_rms_error = 0.0;
+};
+
+/*
  * Initialize adaptive RK plan fields.
  *
  * Validates the optional ABI adaptive_config and copies tolerances, time-step
@@ -128,7 +141,8 @@ double compute_adaptive_error_norm_mass_weighted(
     const std::vector<uint8_t> &magnetic_node_mask,
     const std::vector<uint8_t> &frozen_node_mask,
     double atol,
-    double rtol);
+    double rtol,
+    AdaptiveErrorNormMetrics *metrics = nullptr);
 
 bool compute_adaptive_attempt_guard_metric(
     const AdaptiveDtRuntimeState &policy,

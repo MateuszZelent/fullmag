@@ -178,8 +178,12 @@ double compute_adaptive_error_norm_mass_weighted(
     const std::vector<uint8_t> &magnetic_node_mask,
     const std::vector<uint8_t> &frozen_node_mask,
     double atol,
-    double rtol)
+    double rtol,
+    AdaptiveErrorNormMetrics *metrics)
 {
+    if (metrics != nullptr) {
+        *metrics = {};
+    }
     if (err.size() != m_old.size() || err.size() != m_new.size() ||
         err.size() % 3u != 0u || !std::isfinite(atol) || atol < 0.0 ||
         !std::isfinite(rtol) || rtol < 0.0 || (atol == 0.0 && rtol == 0.0)) {
@@ -223,6 +227,11 @@ double compute_adaptive_error_norm_mass_weighted(
             return std::numeric_limits<double>::infinity();
         }
 
+        if (metrics != nullptr) {
+            metrics->active_node_count += 1u;
+            metrics->max_scaled_error = std::max(metrics->max_scaled_error, scaled);
+        }
+
         const long double weighted = static_cast<long double>(weight) *
             static_cast<long double>(scaled) * static_cast<long double>(scaled);
         weighted_error_sq += weighted;
@@ -234,6 +243,9 @@ double compute_adaptive_error_norm_mass_weighted(
     }
 
     if (eligible_nodes == 0u) {
+        if (metrics != nullptr) {
+            metrics->weighted_rms_error = 0.0;
+        }
         return 0.0;
     }
     if (!(normalization_measure > 0.0L)) {
@@ -244,9 +256,15 @@ double compute_adaptive_error_norm_mass_weighted(
         return std::numeric_limits<double>::infinity();
     }
     const double rms = static_cast<double>(std::sqrt(rms_sq));
-    return std::isfinite(rms)
-        ? rms
-        : std::numeric_limits<double>::infinity();
+    if (!std::isfinite(rms)) {
+        return std::numeric_limits<double>::infinity();
+    }
+    if (metrics != nullptr) {
+        metrics->active_measure = static_cast<double>(normalization_measure);
+        metrics->normalization_denominator = metrics->active_measure;
+        metrics->weighted_rms_error = rms;
+    }
+    return rms;
 }
 
 bool compute_adaptive_attempt_guard_metric(

@@ -181,6 +181,12 @@ void rk_workspace_is_owned_by_integrator_module() {
                 std::string::npos &&
             rk_explicit_step.find("ctx.mesh.node_volumes") != std::string::npos,
         "adaptive RK production path must consume canonical FEM measure weights");
+    check(
+        rk_explicit_step.find("error_norm_type = 2u") != std::string::npos &&
+            rk_explicit_step.find("active_node_count = norm_metrics.active_node_count") !=
+                std::string::npos &&
+            rk_explicit_step.find("normalization_denominator") != std::string::npos,
+        "adaptive RK production path must publish the native weighted-norm receipt");
 }
 
 void integrator_source_files_document_module_boundaries() {
@@ -793,6 +799,22 @@ void cpu_stage_oersted_callback_rolls_back_adaptive_retries()
         fullmag::fem::run_backend_step(ctx, 0.8, stats, error) == FULLMAG_FEM_OK,
         error.c_str());
     check(stats.rejected_attempts > 0u, "dynamic stage callback fixture must reject an initial attempt");
+    check(!ctx.stepper.attempt_trace.records.empty(),
+        "adaptive RK must retain an attempt record for the accepted retry");
+    const auto &accepted_attempt = ctx.stepper.attempt_trace.records.back();
+    check(accepted_attempt.error_norm_type == 2u,
+        "adaptive RK attempt receipt must identify mass-weighted RMS");
+    check(accepted_attempt.active_node_count == 1u,
+        "adaptive RK attempt receipt must publish active node count");
+    check_near(accepted_attempt.active_measure, 1.0, 0.0,
+        "adaptive RK attempt receipt must publish active FEM measure");
+    check_near(
+        accepted_attempt.normalization_denominator,
+        accepted_attempt.active_measure,
+        0.0,
+        "adaptive RK attempt receipt must publish normalization denominator");
+    check(std::isfinite(accepted_attempt.weighted_rms_error),
+        "adaptive RK attempt receipt must publish finite weighted RMS");
     check(
         probe.begin_count == stats.rejected_attempts + 1u,
         "every adaptive stage callback attempt must have a begin hook");

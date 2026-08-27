@@ -133,6 +133,13 @@ struct RkAttemptRecord {
     double demag_linear_residual = 0.0;
     uint32_t rhs_evaluations = 0;
     int32_t estimator_order = 0;
+    // Native adaptive FEM norm receipt; zero means fixed-step/no reduction.
+    uint32_t error_norm_type = 0;
+    uint64_t active_node_count = 0;
+    double active_measure = 0.0;
+    double normalization_denominator = 0.0;
+    double max_scaled_error = 0.0;
+    double weighted_rms_error = 0.0;
 };
 
 struct RkAttemptTraceState {
