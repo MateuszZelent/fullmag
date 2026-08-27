@@ -696,13 +696,15 @@ pub(crate) fn fft3_core(
     fft_x: &dyn Fft<f64>,
     fft_y: &dyn Fft<f64>,
     fft_z: &dyn Fft<f64>,
-    _line_y: &mut [Complex<f64>],
-    _line_z: &mut [Complex<f64>],
+    line_y: &mut [Complex<f64>],
+    line_z: &mut [Complex<f64>],
 ) {
     #[cfg(feature = "parallel")]
     {
         use rayon::prelude::*;
         use std::cell::RefCell;
+
+        let _ = (line_y, line_z);
 
         // Cast the mutable pointer to usize so it is Send+Sync and can be
         // shared across Rayon closures.  We convert back inside each closure.
@@ -777,6 +779,9 @@ pub(crate) fn fft3_core(
 
     #[cfg(not(feature = "parallel"))]
     {
+        debug_assert!(line_y.len() >= ny);
+        debug_assert!(line_z.len() >= nz);
+
         // X-axis transforms (contiguous in memory)
         for z in 0..nz {
             for y in 0..ny {
@@ -786,29 +791,27 @@ pub(crate) fn fft3_core(
         }
 
         // Y-axis transforms (strided, use scratch line)
-        let mut line_y_buf = vec![Complex::new(0.0, 0.0); ny];
         for z in 0..nz {
             for x in 0..nx {
                 for y in 0..ny {
-                    line_y_buf[y] = data[padded_index(nx, ny, x, y, z)];
+                    line_y[y] = data[padded_index(nx, ny, x, y, z)];
                 }
-                fft_y.process(&mut line_y_buf);
+                fft_y.process(&mut line_y[..ny]);
                 for y in 0..ny {
-                    data[padded_index(nx, ny, x, y, z)] = line_y_buf[y];
+                    data[padded_index(nx, ny, x, y, z)] = line_y[y];
                 }
             }
         }
 
         // Z-axis transforms (strided, use scratch line)
-        let mut line_z_buf = vec![Complex::new(0.0, 0.0); nz];
         for y in 0..ny {
             for x in 0..nx {
                 for z in 0..nz {
-                    line_z_buf[z] = data[padded_index(nx, ny, x, y, z)];
+                    line_z[z] = data[padded_index(nx, ny, x, y, z)];
                 }
-                fft_z.process(&mut line_z_buf);
+                fft_z.process(&mut line_z[..nz]);
                 for z in 0..nz {
-                    data[padded_index(nx, ny, x, y, z)] = line_z_buf[z];
+                    data[padded_index(nx, ny, x, y, z)] = line_z[z];
                 }
             }
         }
