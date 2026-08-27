@@ -1204,6 +1204,11 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
     let mut step_count: u64 = resume_step_count.unwrap_or(0);
     let mut cpu_rejected_attempt_count = 0u64;
     let mut cpu_rollback_count = 0u64;
+    let mut accepted_state_publication_count = 0u64;
+    let mut accepted_state_publication_copy_bytes = 0u64;
+    let mut accepted_state_publication_full_field_copy_count = 0u64;
+    let mut scheduled_field_snapshot_metrics = FieldCopyMetrics::default();
+    let mut live_field_snapshot_metrics = FieldCopyMetrics::default();
     let mut cpu_evaluation_telemetry = FdmCpuEvaluationTelemetry {
         schema_version: "fullmag.fdm.cpu.evaluation.v1".to_string(),
         minimal_step_count: 0,
@@ -1303,7 +1308,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
             &mut artifacts,
         )?;
     } else {
-        record_due_outputs(
+        scheduled_field_snapshot_metrics.add(record_due_outputs(
             &problem,
             &state,
             Some(resolved_antenna_zeeman_field(plan, state.time_seconds)),
@@ -1315,7 +1320,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
             &mut field_schedules,
             &mut steps,
             &mut artifacts,
-        )?;
+        )?);
     }
 
     // --- Create FFT workspace once for the entire simulation ---
@@ -1448,6 +1453,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     .is_some_and(|consumer| consumer.initial_snapshot)
             {
                 if let Some(live) = live.as_mut() {
+                    let live_materialization_started = Instant::now();
                     let display_selection = live.display_selection.map(|get| get());
                     let preview_due = display_selection
                         .as_ref()
@@ -1495,13 +1501,27 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     } else {
                         None
                     };
+                    let magnetization = Some(flatten_vectors(state.magnetization()));
+                    let mut live_copy_metrics = FieldCopyMetrics::default();
+                    if let Some(values) = magnetization.as_deref() {
+                        live_copy_metrics.add_f64_payload(values);
+                    }
+                    if let Some(field) = preview_field.as_ref() {
+                        live_copy_metrics.add_f64_payload(&field.vector_field_values);
+                    }
+                    if live_copy_metrics.payload_count > 0 {
+                        live_copy_metrics.wall_time_ns =
+                            live_materialization_started.elapsed().as_nanos() as u64;
+                    }
+                    live_field_snapshot_metrics.add(live_copy_metrics);
+                    apply_step_field_copy_metrics(&mut current_stats, live_copy_metrics);
                     let action = (live.on_step)(StepUpdate {
                         coupled_checkpoint: final_frozen_checkpoint.clone(),
                         stats: current_stats.clone(),
                         scalar_row_due: preview_due && preview_targets_global_scalar,
                         grid: live.grid,
                         fem_mesh_generation_id: None,
-                        magnetization: Some(flatten_vectors(state.magnetization())),
+                        magnetization,
                         preview_field,
                         cached_preview_fields: None,
                         hysteresis_field_m_t: None,
@@ -1702,7 +1722,19 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     step_evaluation,
                 );
                 match result {
-                    Ok(report) => report,
+                    Ok((report, state_copy)) => {
+                        if state_copy.full_field_copy_count > 0 {
+                            accepted_state_publication_count =
+                                accepted_state_publication_count.saturating_add(1);
+                            accepted_state_publication_copy_bytes =
+                                accepted_state_publication_copy_bytes
+                                    .saturating_add(state_copy.copied_bytes);
+                            accepted_state_publication_full_field_copy_count =
+                                accepted_state_publication_full_field_copy_count
+                                    .saturating_add(state_copy.full_field_copy_count);
+                        }
+                        report
+                    }
                     Err(error) => {
                         let primary = RunError {
                             message: format!("Step {}: {}", step_count, error),
@@ -1820,11 +1852,6 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                 }
             }
             apply_frozen_spin_step_telemetry(&mut latest_stats, &problem, state.magnetization());
-            current_stats = latest_stats.clone();
-            // Preserve every accepted adaptive/fixed controller step for the
-            // solver diagnostics trace.  User-visible scalar schedules remain
-            // independent and may be sparse.
-            artifacts.record_solver_step(&latest_stats);
 
             final_coupled_checkpoint = spin_transport
                 .as_ref()
@@ -1857,7 +1884,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
             )?;
 
             if !default_scalar_trace || !field_schedules.is_empty() {
-                record_due_outputs(
+                let due_output_metrics = record_due_outputs(
                     &problem,
                     &state,
                     Some(resolved_antenna_zeeman_field(plan, state.time_seconds)),
@@ -1870,9 +1897,12 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     &mut steps,
                     &mut artifacts,
                 )?;
+                scheduled_field_snapshot_metrics.add(due_output_metrics);
+                apply_step_field_copy_metrics(&mut latest_stats, due_output_metrics);
             }
 
             if let Some(live) = live.as_mut() {
+                let live_materialization_started = Instant::now();
                 let heavy_payload_every = live.field_every_n.max(1);
                 let display_selection = live.display_selection.map(|get| get());
                 let preview_due = display_selection
@@ -1950,6 +1980,20 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                         problem.active_mask.as_deref(),
                     );
                 }
+                let mut live_copy_metrics = FieldCopyMetrics::default();
+                if let Some(values) = magnetization.as_deref() {
+                    live_copy_metrics.add_f64_payload(values);
+                }
+                if let Some(field) = preview_field.as_ref() {
+                    live_copy_metrics.add_f64_payload(&field.vector_field_values);
+                }
+                if live_copy_metrics.payload_count > 0 {
+                    live_copy_metrics.wall_time_ns =
+                        live_materialization_started.elapsed().as_nanos() as u64;
+                }
+                live_field_snapshot_metrics.add(live_copy_metrics);
+                apply_step_field_copy_metrics(&mut update_stats, live_copy_metrics);
+                apply_step_field_copy_metrics(&mut latest_stats, live_copy_metrics);
                 let action = (live.on_step)(StepUpdate {
                     coupled_checkpoint: final_frozen_checkpoint
                         .clone()
@@ -1991,6 +2035,12 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                 }
             }
 
+            current_stats = latest_stats.clone();
+            // Preserve every accepted adaptive/fixed controller step for the
+            // solver diagnostics trace. User-visible scalar schedules remain
+            // independent and may be sparse.
+            artifacts.record_solver_step(&latest_stats);
+
             if cancelled || paused {
                 break;
             }
@@ -2021,7 +2071,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         }
     }
 
-    record_final_outputs(
+    let finalization_field_snapshot_metrics = record_final_outputs(
         &problem,
         &state,
         Some(resolved_antenna_zeeman_field(plan, state.time_seconds)),
@@ -2036,7 +2086,8 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
 
     if !paused && !cancelled {
         if let Some(live) = live.as_mut() {
-            if let Some(final_stats) = steps.last().cloned() {
+            if let Some(mut final_stats) = steps.last().cloned() {
+                let live_materialization_started = Instant::now();
                 let display_selection = live.display_selection.map(|get| get());
                 let materialization_quantities = field_materialization_quantity_ids();
                 let materialization_quantities = active_fdm_preview_quantities(
@@ -2118,6 +2169,26 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                 } else {
                     None
                 };
+                let magnetization = Some(flatten_vectors(state.magnetization()));
+                let mut live_copy_metrics = FieldCopyMetrics::default();
+                if let Some(values) = magnetization.as_deref() {
+                    live_copy_metrics.add_f64_payload(values);
+                }
+                if let Some(field) = preview_field.as_ref() {
+                    live_copy_metrics.add_f64_payload(&field.vector_field_values);
+                }
+                for field in &cached_preview_fields {
+                    live_copy_metrics.add_f64_payload(&field.vector_field_values);
+                }
+                if live_copy_metrics.payload_count > 0 {
+                    live_copy_metrics.wall_time_ns =
+                        live_materialization_started.elapsed().as_nanos() as u64;
+                }
+                live_field_snapshot_metrics.add(live_copy_metrics);
+                apply_finalization_field_copy_metrics(&mut final_stats, live_copy_metrics);
+                if let Some(stats) = steps.last_mut() {
+                    apply_finalization_field_copy_metrics(stats, live_copy_metrics);
+                }
                 let _ = (live.on_step)(StepUpdate {
                     coupled_checkpoint: final_frozen_checkpoint
                         .clone()
@@ -2126,7 +2197,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     scalar_row_due: true,
                     grid: live.grid,
                     fem_mesh_generation_id: None,
-                    magnetization: Some(flatten_vectors(state.magnetization())),
+                    magnetization,
                     preview_field,
                     cached_preview_fields: Some(cached_preview_fields),
                     hysteresis_field_m_t: None,
@@ -2141,6 +2212,14 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         }
     }
 
+    let final_state_sync = if !is_direct_minimization {
+        state_soa
+            .as_ref()
+            .map(|soa| soa.write_back_to(&mut state))
+            .unwrap_or_default()
+    } else {
+        Default::default()
+    };
     let checkpoint_digest = problem
         .transactional_state_digest(&state)
         .map_err(|error| RunError {
@@ -2163,7 +2242,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         });
     }
     final_provenance.fdm_cpu_step_transaction_telemetry = Some(FdmCpuStepTransactionTelemetry {
-        schema_version: "fullmag.fdm.cpu.step_transaction.v1".to_string(),
+        schema_version: "fullmag.fdm.cpu.step_transaction.v3".to_string(),
         accepted_step_count: step_count,
         rejected_attempt_count: cpu_rejected_attempt_count,
         rollback_count: cpu_rollback_count,
@@ -2171,6 +2250,18 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         thermal_rng_draws: (problem.temperature > 0.0)
             .then_some(problem.thermal_step())
             .unwrap_or(0),
+        accepted_state_publication_count,
+        accepted_state_publication_copy_bytes,
+        accepted_state_publication_full_field_copy_count,
+        final_state_sync_copy_bytes: final_state_sync.copied_bytes,
+        final_state_sync_full_field_copy_count: final_state_sync.full_field_copy_count,
+        scheduled_field_snapshot_payload_count: scheduled_field_snapshot_metrics.payload_count,
+        scheduled_field_snapshot_copy_bytes: scheduled_field_snapshot_metrics.copy_bytes,
+        live_field_snapshot_payload_count: live_field_snapshot_metrics.payload_count,
+        live_field_snapshot_copy_bytes: live_field_snapshot_metrics.copy_bytes,
+        finalization_field_snapshot_payload_count: finalization_field_snapshot_metrics
+            .payload_count,
+        finalization_field_snapshot_copy_bytes: finalization_field_snapshot_metrics.copy_bytes,
         checkpoint_digest,
     });
     if !is_direct_minimization {
@@ -2339,7 +2430,7 @@ fn step_reference_fdm_problem(
     fft_workspace: &mut FftWorkspace,
     integrator_bufs: &mut IntegratorBuffers,
     evaluation: EvaluationRequest,
-) -> Result<StepReport, EngineError> {
+) -> Result<(StepReport, fullmag_engine::FdmCpuStateCopyTelemetry), EngineError> {
     if state_soa.is_none() && problem.soa_fast_path_supported() {
         *state_soa = Some(state.to_soa());
     }
@@ -2352,16 +2443,18 @@ fn step_reference_fdm_problem(
             integrator_bufs,
             evaluation,
         )?;
-        soa.write_back_to(state);
-        Ok(report)
+        let state_copy = soa.publish_accepted_to(state);
+        Ok((report, state_copy))
     } else {
-        problem.step_with_buffers_evaluation(
-            state,
-            dt_step,
-            fft_workspace,
-            integrator_bufs,
-            evaluation,
-        )
+        problem
+            .step_with_buffers_evaluation(
+                state,
+                dt_step,
+                fft_workspace,
+                integrator_bufs,
+                evaluation,
+            )
+            .map(|report| (report, Default::default()))
     }
 }
 
@@ -2398,6 +2491,59 @@ fn infer_direct_minimizer_completion(
     )
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct FieldCopyMetrics {
+    payload_count: u64,
+    copy_bytes: u64,
+    wall_time_ns: u64,
+}
+
+impl FieldCopyMetrics {
+    fn add(&mut self, other: Self) {
+        self.payload_count = self.payload_count.saturating_add(other.payload_count);
+        self.copy_bytes = self.copy_bytes.saturating_add(other.copy_bytes);
+        self.wall_time_ns = self.wall_time_ns.saturating_add(other.wall_time_ns);
+    }
+
+    fn from_f64_payload(values: &[f64], wall_time_ns: u64) -> Self {
+        Self {
+            payload_count: 1,
+            copy_bytes: (values.len() as u64).saturating_mul(std::mem::size_of::<f64>() as u64),
+            wall_time_ns,
+        }
+    }
+
+    fn add_f64_payload(&mut self, values: &[f64]) {
+        self.payload_count = self.payload_count.saturating_add(1);
+        self.copy_bytes = self.copy_bytes.saturating_add(
+            (values.len() as u64).saturating_mul(std::mem::size_of::<f64>() as u64),
+        );
+    }
+}
+
+fn flatten_field_snapshot(values: Vec<Vector3>) -> (Vec<f64>, FieldCopyMetrics) {
+    let started = Instant::now();
+    let values = FieldSnapshot::flatten_vec3(values);
+    let metrics = FieldCopyMetrics::from_f64_payload(&values, started.elapsed().as_nanos() as u64);
+    (values, metrics)
+}
+
+fn apply_step_field_copy_metrics(stats: &mut StepStats, metrics: FieldCopyMetrics) {
+    stats.field_copy_bytes = stats.field_copy_bytes.saturating_add(metrics.copy_bytes);
+    stats.field_copy_wall_time_ns = stats
+        .field_copy_wall_time_ns
+        .saturating_add(metrics.wall_time_ns);
+}
+
+fn apply_finalization_field_copy_metrics(stats: &mut StepStats, metrics: FieldCopyMetrics) {
+    stats.finalization_field_copy_bytes = stats
+        .finalization_field_copy_bytes
+        .saturating_add(metrics.copy_bytes);
+    stats.finalization_field_copy_wall_time_ns = stats
+        .finalization_field_copy_wall_time_ns
+        .saturating_add(metrics.wall_time_ns);
+}
+
 fn record_due_outputs(
     problem: &ExchangeLlgProblem,
     state: &ExchangeLlgState,
@@ -2410,7 +2556,8 @@ fn record_due_outputs(
     field_schedules: &mut [OutputSchedule],
     steps: &mut Vec<StepStats>,
     artifacts: &mut ArtifactRecorder,
-) -> Result<(), RunError> {
+) -> Result<FieldCopyMetrics, RunError> {
+    let mut copy_metrics = FieldCopyMetrics::default();
     let scalar_due = scalar_schedules
         .iter()
         .any(|schedule| is_due(state.time_seconds, schedule.next_time));
@@ -2422,7 +2569,7 @@ fn record_due_outputs(
     let has_due_fields = !due_field_names.is_empty();
 
     if !scalar_due && due_field_names.is_empty() {
-        return Ok(());
+        return Ok(copy_metrics);
     }
 
     if due_field_names
@@ -2445,6 +2592,8 @@ fn record_due_outputs(
 
         let mut direct_fields = DirectFieldSnapshotCache::new(problem, state);
         for name in due_field_names {
+            let (values, field_metrics) = flatten_field_snapshot(direct_fields.select(&name)?);
+            copy_metrics.add(field_metrics);
             artifacts.record_field_snapshot(FieldSnapshot {
                 name: name.clone(),
                 step,
@@ -2455,13 +2604,19 @@ fn record_due_outputs(
                 location: "sample".into(),
                 scope: "full".into(),
                 revision: step.saturating_add(1),
-                values: FieldSnapshot::flatten_vec3(direct_fields.select(&name)?),
+                values,
             })?;
         }
         if has_due_fields {
             advance_due_schedules(field_schedules, state.time_seconds);
         }
-        return Ok(());
+        if let Some(stats) = steps
+            .last_mut()
+            .filter(|stats| same_time(stats.time, state.time_seconds))
+        {
+            apply_step_field_copy_metrics(stats, copy_metrics);
+        }
+        return Ok(copy_metrics);
     }
 
     let observables = observe_state_with_antenna_field(problem, state, antenna_field)?;
@@ -2482,6 +2637,9 @@ fn record_due_outputs(
 
     if !due_field_names.is_empty() {
         for name in due_field_names {
+            let (values, field_metrics) =
+                flatten_field_snapshot(select_state_observable_field(&observables, &name, true)?);
+            copy_metrics.add(field_metrics);
             artifacts.record_field_snapshot(FieldSnapshot {
                 name: name.clone(),
                 step,
@@ -2492,17 +2650,20 @@ fn record_due_outputs(
                 location: "sample".into(),
                 scope: "full".into(),
                 revision: step.saturating_add(1),
-                values: FieldSnapshot::flatten_vec3(select_state_observable_field(
-                    &observables,
-                    &name,
-                    true,
-                )?),
+                values,
             })?;
         }
         advance_due_schedules(field_schedules, state.time_seconds);
     }
 
-    Ok(())
+    if let Some(stats) = steps
+        .last_mut()
+        .filter(|stats| same_time(stats.time, state.time_seconds))
+    {
+        apply_step_field_copy_metrics(stats, copy_metrics);
+    }
+
+    Ok(copy_metrics)
 }
 
 fn record_scalar_snapshot(
@@ -2539,7 +2700,8 @@ fn record_final_outputs(
     field_schedules: &[OutputSchedule],
     steps: &mut Vec<StepStats>,
     artifacts: &mut ArtifactRecorder,
-) -> Result<(), RunError> {
+) -> Result<FieldCopyMetrics, RunError> {
+    let mut copy_metrics = FieldCopyMetrics::default();
     let has_current_scalar = steps
         .last()
         .map(|stats| same_time(stats.time, state.time_seconds))
@@ -2575,7 +2737,7 @@ fn record_final_outputs(
         .collect::<Vec<_>>();
 
     if !need_scalar && missing_field_names.is_empty() {
-        return Ok(());
+        return Ok(copy_metrics);
     }
 
     if !need_scalar
@@ -2585,6 +2747,8 @@ fn record_final_outputs(
     {
         let mut direct_fields = DirectFieldSnapshotCache::new(problem, state);
         for name in missing_field_names {
+            let (values, field_metrics) = flatten_field_snapshot(direct_fields.select(&name)?);
+            copy_metrics.add(field_metrics);
             artifacts.record_field_snapshot(FieldSnapshot {
                 name: name.clone(),
                 step,
@@ -2595,10 +2759,16 @@ fn record_final_outputs(
                 location: "sample".into(),
                 scope: "full".into(),
                 revision: step.saturating_add(1),
-                values: FieldSnapshot::flatten_vec3(direct_fields.select(&name)?),
+                values,
             })?;
         }
-        return Ok(());
+        if let Some(stats) = steps
+            .last_mut()
+            .filter(|stats| same_time(stats.time, state.time_seconds))
+        {
+            apply_finalization_field_copy_metrics(stats, copy_metrics);
+        }
+        return Ok(copy_metrics);
     }
 
     if need_scalar
@@ -2615,6 +2785,8 @@ fn record_final_outputs(
 
         let mut direct_fields = DirectFieldSnapshotCache::new(problem, state);
         for name in missing_field_names {
+            let (values, field_metrics) = flatten_field_snapshot(direct_fields.select(&name)?);
+            copy_metrics.add(field_metrics);
             artifacts.record_field_snapshot(FieldSnapshot {
                 name: name.clone(),
                 step,
@@ -2625,10 +2797,13 @@ fn record_final_outputs(
                 location: "sample".into(),
                 scope: "full".into(),
                 revision: step.saturating_add(1),
-                values: FieldSnapshot::flatten_vec3(direct_fields.select(&name)?),
+                values,
             })?;
         }
-        return Ok(());
+        if let Some(stats) = steps.last_mut() {
+            apply_finalization_field_copy_metrics(stats, copy_metrics);
+        }
+        return Ok(copy_metrics);
     }
 
     let observables = observe_state_with_antenna_field(problem, state, antenna_field)?;
@@ -2647,6 +2822,9 @@ fn record_final_outputs(
     }
 
     for name in missing_field_names {
+        let (values, field_metrics) =
+            flatten_field_snapshot(select_state_observable_field(&observables, &name, true)?);
+        copy_metrics.add(field_metrics);
         artifacts.record_field_snapshot(FieldSnapshot {
             name: name.clone(),
             step,
@@ -2657,15 +2835,15 @@ fn record_final_outputs(
             location: "sample".into(),
             scope: "full".into(),
             revision: step.saturating_add(1),
-            values: FieldSnapshot::flatten_vec3(select_state_observable_field(
-                &observables,
-                &name,
-                true,
-            )?),
+            values,
         })?;
     }
 
-    Ok(())
+    if let Some(stats) = steps.last_mut() {
+        apply_finalization_field_copy_metrics(stats, copy_metrics);
+    }
+
+    Ok(copy_metrics)
 }
 
 pub(crate) fn observe_state(
@@ -3513,6 +3691,8 @@ mod tests {
             temperature: Some(300.0),
             ..make_test_plan()
         };
+        let field_bytes =
+            (plan.initial_magnetization.len() * std::mem::size_of::<Vector3>()) as u64;
         let executed =
             execute_reference_fdm(&plan, 3e-14, &[], None, None).expect("thermal reference run");
         let telemetry = executed
@@ -3522,9 +3702,29 @@ mod tests {
 
         assert_eq!(
             telemetry.schema_version,
-            "fullmag.fdm.cpu.step_transaction.v1"
+            "fullmag.fdm.cpu.step_transaction.v3"
         );
         assert!(telemetry.accepted_step_count > 0);
+        assert_eq!(
+            telemetry.accepted_state_publication_count,
+            telemetry.accepted_step_count
+        );
+        assert_eq!(
+            telemetry.accepted_state_publication_full_field_copy_count,
+            telemetry.accepted_step_count
+        );
+        assert_eq!(
+            telemetry.accepted_state_publication_copy_bytes,
+            telemetry.accepted_step_count * field_bytes
+        );
+        assert_eq!(telemetry.final_state_sync_full_field_copy_count, 1);
+        assert_eq!(telemetry.final_state_sync_copy_bytes, field_bytes);
+        assert_eq!(telemetry.scheduled_field_snapshot_payload_count, 0);
+        assert_eq!(telemetry.scheduled_field_snapshot_copy_bytes, 0);
+        assert_eq!(telemetry.live_field_snapshot_payload_count, 0);
+        assert_eq!(telemetry.live_field_snapshot_copy_bytes, 0);
+        assert_eq!(telemetry.finalization_field_snapshot_payload_count, 0);
+        assert_eq!(telemetry.finalization_field_snapshot_copy_bytes, 0);
         assert_eq!(
             telemetry.thermal_interval_index,
             telemetry.accepted_step_count
@@ -3545,6 +3745,7 @@ mod tests {
         let minimal_telemetry = minimal
             .provenance
             .fdm_cpu_evaluation_telemetry
+            .as_ref()
             .expect("CPU evaluation telemetry");
         assert_eq!(
             minimal_telemetry.schema_version,
@@ -3552,6 +3753,16 @@ mod tests {
         );
         assert_eq!(minimal_telemetry.minimal_step_count, 3);
         assert_eq!(minimal_telemetry.full_step_count, 0);
+        let minimal_copy = minimal
+            .provenance
+            .fdm_cpu_step_transaction_telemetry
+            .as_ref()
+            .expect("minimal CPU copy telemetry");
+        assert_eq!(minimal_copy.accepted_state_publication_count, 3);
+        assert_eq!(
+            minimal_copy.accepted_state_publication_full_field_copy_count,
+            3
+        );
 
         let outputs = [OutputIR::Scalar {
             name: "E_total".to_string(),
@@ -3562,10 +3773,24 @@ mod tests {
         let full_telemetry = full
             .provenance
             .fdm_cpu_evaluation_telemetry
+            .as_ref()
             .expect("CPU evaluation telemetry");
         assert_eq!(full_telemetry.minimal_step_count, 0);
         assert_eq!(full_telemetry.full_step_count, 3);
         assert!(full_telemetry.full_step_wall_time_ns > 0);
+        let full_copy = full
+            .provenance
+            .fdm_cpu_step_transaction_telemetry
+            .as_ref()
+            .expect("full CPU copy telemetry");
+        assert_eq!(
+            full_copy.accepted_state_publication_copy_bytes,
+            minimal_copy.accepted_state_publication_copy_bytes
+        );
+        assert_eq!(
+            full_copy.accepted_state_publication_full_field_copy_count,
+            minimal_copy.accepted_state_publication_full_field_copy_count
+        );
     }
 
     #[test]
@@ -3616,7 +3841,7 @@ mod tests {
         let mut state_soa = problem.soa_fast_path_supported().then(|| state.to_soa());
         let mut fft_workspace = problem.create_workspace();
         let mut integrator_bufs = problem.create_integrator_buffers();
-        let report = step_reference_fdm_problem(
+        let (report, _) = step_reference_fdm_problem(
             &problem,
             &mut state,
             &mut state_soa,
@@ -4600,6 +4825,59 @@ mod tests {
             assert_eq!(snapshots[0].step, 0);
             assert!(snapshots[1].step > 0);
         }
+        let telemetry = executed
+            .provenance
+            .fdm_cpu_step_transaction_telemetry
+            .as_ref()
+            .expect("CPU field-copy telemetry");
+        let field_bytes =
+            (plan.initial_magnetization.len() * std::mem::size_of::<Vector3>()) as u64;
+        assert_eq!(telemetry.scheduled_field_snapshot_payload_count, 5);
+        assert_eq!(
+            telemetry.scheduled_field_snapshot_copy_bytes,
+            5 * field_bytes
+        );
+        assert_eq!(telemetry.finalization_field_snapshot_payload_count, 5);
+        assert_eq!(
+            telemetry.finalization_field_snapshot_copy_bytes,
+            5 * field_bytes
+        );
+        assert_eq!(telemetry.live_field_snapshot_payload_count, 0);
+        assert_eq!(telemetry.live_field_snapshot_copy_bytes, 0);
+    }
+
+    #[test]
+    fn scheduled_field_copy_receipt_counts_each_due_snapshot_once() {
+        let plan = make_test_plan();
+        let outputs = [
+            OutputIR::Field {
+                name: "m".to_string(),
+                every_seconds: 1e-14,
+            },
+            OutputIR::Scalar {
+                name: "E_total".to_string(),
+                every_seconds: 1e-14,
+            },
+        ];
+
+        let executed = execute_reference_fdm(&plan, 3e-14, &outputs, None, None)
+            .expect("scheduled field-copy receipt run");
+        let telemetry = executed
+            .provenance
+            .fdm_cpu_step_transaction_telemetry
+            .as_ref()
+            .expect("CPU field-copy telemetry");
+        let field_bytes =
+            (plan.initial_magnetization.len() * std::mem::size_of::<Vector3>()) as u64;
+
+        assert_eq!(executed.field_snapshots.len(), 4);
+        assert_eq!(telemetry.scheduled_field_snapshot_payload_count, 4);
+        assert_eq!(
+            telemetry.scheduled_field_snapshot_copy_bytes,
+            4 * field_bytes
+        );
+        assert_eq!(telemetry.finalization_field_snapshot_payload_count, 0);
+        assert_eq!(telemetry.finalization_field_snapshot_copy_bytes, 0);
     }
 
     #[test]
@@ -4812,15 +5090,29 @@ mod tests {
         };
         let mut magnetization_updates = 0usize;
         let mut terminal_cache_updates = 0usize;
+        let mut expected_live_payload_count = 0u64;
+        let mut expected_live_copy_bytes = 0u64;
         let mut on_step = |update: StepUpdate| -> StepAction {
             if let Some(values) = update.magnetization.as_ref() {
                 magnetization_updates += 1;
                 assert_eq!(values.len(), plan.initial_magnetization.len() * 3);
+                expected_live_payload_count += 1;
+                expected_live_copy_bytes += (values.len() * std::mem::size_of::<f64>()) as u64;
+            }
+            if let Some(field) = update.preview_field.as_ref() {
+                expected_live_payload_count += 1;
+                expected_live_copy_bytes +=
+                    (field.vector_field_values.len() * std::mem::size_of::<f64>()) as u64;
             }
             assert!(update.preview_field.is_none());
             if update.cached_preview_fields.is_some() {
                 terminal_cache_updates += 1;
                 assert!(update.magnetization.is_some());
+            }
+            for field in update.cached_preview_fields.as_deref().unwrap_or_default() {
+                expected_live_payload_count += 1;
+                expected_live_copy_bytes +=
+                    (field.vector_field_values.len() * std::mem::size_of::<f64>()) as u64;
             }
             StepAction::Continue
         };
@@ -4855,6 +5147,20 @@ mod tests {
             observe_calls <= 2,
             "live magnetization payload should read state directly between refreshes and observe only for final outputs and the terminal cache; observe_state calls: {observe_calls}"
         );
+        let telemetry = executed
+            .provenance
+            .fdm_cpu_step_transaction_telemetry
+            .as_ref()
+            .expect("CPU live field-copy telemetry");
+        assert_eq!(
+            telemetry.live_field_snapshot_payload_count,
+            expected_live_payload_count
+        );
+        assert_eq!(
+            telemetry.live_field_snapshot_copy_bytes,
+            expected_live_copy_bytes
+        );
+        assert!(telemetry.live_field_snapshot_payload_count > magnetization_updates as u64);
     }
 
     #[test]
@@ -5061,6 +5367,16 @@ mod tests {
         }
         assert!(first_update.preview_field.is_some());
         assert!(!first_update.finished);
+        let telemetry = executed
+            .provenance
+            .fdm_cpu_step_transaction_telemetry
+            .as_ref()
+            .expect("initial live field-copy telemetry");
+        let payload_bytes =
+            (plan.initial_magnetization.len() * std::mem::size_of::<Vector3>()) as u64;
+        assert_eq!(telemetry.live_field_snapshot_payload_count, 2);
+        assert_eq!(telemetry.live_field_snapshot_copy_bytes, 2 * payload_bytes);
+        assert_eq!(first_update.stats.field_copy_bytes, 2 * payload_bytes);
     }
 
     #[test]
@@ -6159,7 +6475,7 @@ mod tests {
             ..Default::default()
         });
 
-        record_final_outputs(
+        let metrics = record_final_outputs(
             &problem,
             &state,
             None,
@@ -6180,6 +6496,12 @@ mod tests {
         );
         let (field_snapshots, field_snapshot_count, _) = artifacts.finish();
         assert_eq!(field_snapshot_count, 1);
+        assert_eq!(metrics.payload_count, 1);
+        assert_eq!(
+            metrics.copy_bytes,
+            2 * std::mem::size_of::<Vector3>() as u64
+        );
+        assert_eq!(steps[0].finalization_field_copy_bytes, metrics.copy_bytes);
         assert_eq!(field_snapshots[0].name, "m.y");
         assert_eq!(
             field_snapshots[0].vec3_values().unwrap(),
@@ -6262,7 +6584,9 @@ mod tests {
 
         let mut fft_workspace = problem.create_workspace();
         let mut integrator_bufs = problem.create_integrator_buffers();
-        let report = step_reference_fdm_problem(
+        let expected_copy_bytes =
+            (state.magnetization().len() * std::mem::size_of::<Vector3>()) as u64;
+        let (report, state_copy) = step_reference_fdm_problem(
             &problem,
             &mut state,
             &mut state_soa,
@@ -6276,6 +6600,77 @@ mod tests {
         assert!(state_soa.is_some());
         assert!(report.total_energy_joules.is_finite());
         assert_eq!(state.time_seconds, report.time_seconds);
+        assert_eq!(state_copy.copied_bytes, expected_copy_bytes);
+        assert_eq!(state_copy.full_field_copy_count, 1);
+    }
+
+    #[test]
+    fn failed_persistent_soa_step_does_not_publish_or_mutate_accepted_state() {
+        let plan = make_test_plan();
+        let (mut problem, mut published_state) =
+            build_snapshot_problem_and_state(&plan).expect("problem");
+        let mut state_soa = Some(published_state.to_soa());
+        let published_before = published_state.transactional_state_digest();
+        let authoritative_before = state_soa
+            .as_ref()
+            .expect("persistent SoA state")
+            .transactional_state_digest();
+        let mut fft_workspace = problem.create_workspace();
+        let mut integrator_bufs = problem.create_integrator_buffers();
+
+        problem.terms.external_field = Some([f64::NAN, 0.0, 0.0]);
+        let error = step_reference_fdm_problem(
+            &problem,
+            &mut published_state,
+            &mut state_soa,
+            1e-14,
+            &mut fft_workspace,
+            &mut integrator_bufs,
+            EvaluationRequest::Minimal,
+        )
+        .expect_err("non-finite RHS must fail before accepted-state publication");
+
+        assert_eq!(error.code(), EngineErrorCode::NaNValue);
+        assert_eq!(
+            published_state.transactional_state_digest(),
+            published_before
+        );
+        assert_eq!(
+            state_soa
+                .as_ref()
+                .expect("persistent SoA state after failure")
+                .transactional_state_digest(),
+            authoritative_before
+        );
+
+        problem.terms.external_field = Some([0.0, 0.0, 0.0]);
+        let (_report, state_copy) = step_reference_fdm_problem(
+            &problem,
+            &mut published_state,
+            &mut state_soa,
+            1e-14,
+            &mut fft_workspace,
+            &mut integrator_bufs,
+            EvaluationRequest::Minimal,
+        )
+        .expect("repaired step must publish exactly once");
+
+        assert_eq!(state_copy.full_field_copy_count, 1);
+        assert_eq!(
+            state_copy.copied_bytes,
+            (published_state.magnetization().len() * std::mem::size_of::<Vector3>()) as u64
+        );
+        assert_eq!(
+            published_state.transactional_state_digest(),
+            state_soa
+                .as_ref()
+                .expect("persistent SoA state after accepted step")
+                .transactional_state_digest()
+        );
+        assert_ne!(
+            published_state.transactional_state_digest(),
+            published_before
+        );
     }
 
     #[test]

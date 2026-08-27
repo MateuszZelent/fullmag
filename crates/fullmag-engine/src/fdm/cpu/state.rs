@@ -47,6 +47,13 @@ pub struct ExchangeLlgStateSoA {
     pub(crate) abm_history: AbmHistorySoA,
 }
 
+/// Exact host-copy accounting for publishing a persistent SoA accepted state.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FdmCpuStateCopyTelemetry {
+    pub copied_bytes: u64,
+    pub full_field_copy_count: u64,
+}
+
 impl ExchangeLlgStateSoA {
     /// Create from an existing AoS state (cheap copy).
     pub fn from_aos(state: &ExchangeLlgState) -> Self {
@@ -72,13 +79,42 @@ impl ExchangeLlgStateSoA {
         }
     }
 
-    /// Write SoA state back into an existing AoS state.
-    pub fn write_back_to(&self, state: &mut ExchangeLlgState) {
+    /// Publish only the accepted magnetization and time required by ordinary
+    /// runner output. Integrator caches remain authoritative in this SoA state.
+    pub fn publish_accepted_to(&self, state: &mut ExchangeLlgState) -> FdmCpuStateCopyTelemetry {
         self.magnetization.gather_into_aos(&mut state.magnetization);
         state.time_seconds = self.time_seconds;
-        state.k_fsal = self.k_fsal.as_ref().map(|k| k.gather_to_aos());
+        FdmCpuStateCopyTelemetry {
+            copied_bytes: vector_field_bytes(self.magnetization.len()),
+            full_field_copy_count: 1,
+        }
+    }
+
+    /// Synchronize the complete transactional state into an AoS mirror.
+    pub fn write_back_to(&self, state: &mut ExchangeLlgState) -> FdmCpuStateCopyTelemetry {
+        let mut telemetry = self.publish_accepted_to(state);
+        match (&self.k_fsal, &mut state.k_fsal) {
+            (Some(source), Some(target)) => {
+                source.gather_into_aos(target);
+                telemetry.copied_bytes = telemetry
+                    .copied_bytes
+                    .saturating_add(vector_field_bytes(source.len()));
+                telemetry.full_field_copy_count += 1;
+            }
+            (Some(source), target @ None) => {
+                *target = Some(source.gather_to_aos());
+                telemetry.copied_bytes = telemetry
+                    .copied_bytes
+                    .saturating_add(vector_field_bytes(source.len()));
+                telemetry.full_field_copy_count += 1;
+            }
+            (None, target) => *target = None,
+        }
         state.adaptive_previous_error = self.adaptive_previous_error;
-        state.abm_history = self.abm_history.to_aos();
+        let history = state.abm_history.copy_from_soa(&self.abm_history);
+        telemetry.copied_bytes = telemetry.copied_bytes.saturating_add(history.copied_bytes);
+        telemetry.full_field_copy_count += history.full_field_copy_count;
+        telemetry
     }
 
     /// Number of cells.
@@ -434,16 +470,6 @@ impl AbmHistory {
         self.f_n_minus_2.as_deref()
     }
 
-    /// Push a new RHS evaluation, rotating the history buffer.
-    pub(crate) fn push(&mut self, f: Vec<Vector3>, dt: f64) {
-        self.restart_if_dt_changed(dt);
-        self.f_n_minus_2 = self.f_n_minus_1.take();
-        self.f_n_minus_1 = self.f_n.take();
-        self.f_n = Some(f);
-        self.startup_steps = (self.startup_steps + 1).min(3);
-        self.last_dt = dt;
-    }
-
     /// Push a new RHS evaluation by copying into a reusable history slot.
     ///
     /// This preserves [`Self::push`] ordering and restart semantics, but after
@@ -465,9 +491,44 @@ impl AbmHistory {
         self.last_dt = dt;
     }
 
+    fn copy_from_soa(&mut self, source: &AbmHistorySoA) -> FdmCpuStateCopyTelemetry {
+        fn copy_slot(
+            target: &mut Option<Vec<Vector3>>,
+            source: Option<&VectorFieldSoA>,
+        ) -> FdmCpuStateCopyTelemetry {
+            match (target.as_mut(), source) {
+                (Some(target), Some(source)) => source.gather_into_aos(target),
+                (None, Some(source)) => *target = Some(source.gather_to_aos()),
+                (_, None) => *target = None,
+            }
+            source.map_or_else(FdmCpuStateCopyTelemetry::default, |source| {
+                FdmCpuStateCopyTelemetry {
+                    copied_bytes: vector_field_bytes(source.len()),
+                    full_field_copy_count: 1,
+                }
+            })
+        }
+
+        let mut telemetry = copy_slot(&mut self.f_n, source.f_n());
+        for slot in [
+            copy_slot(&mut self.f_n_minus_1, source.f_n_minus_1()),
+            copy_slot(&mut self.f_n_minus_2, source.f_n_minus_2()),
+        ] {
+            telemetry.copied_bytes = telemetry.copied_bytes.saturating_add(slot.copied_bytes);
+            telemetry.full_field_copy_count += slot.full_field_copy_count;
+        }
+        self.startup_steps = source.startup_steps;
+        self.last_dt = source.last_dt;
+        telemetry
+    }
+
     pub(crate) fn restart(&mut self) {
         *self = Self::new();
     }
+}
+
+fn vector_field_bytes(len: usize) -> u64 {
+    (len as u64).saturating_mul(std::mem::size_of::<Vector3>() as u64)
 }
 
 // ── IntegratorBuffers ──────────────────────────────────────────────────

@@ -2883,6 +2883,39 @@ pub struct FdmCpuStepTransactionTelemetry {
     pub rollback_count: u64,
     pub thermal_interval_index: u64,
     pub thermal_rng_draws: u64,
+    /// Persistent-SoA accepted-state publications performed in this execution segment.
+    #[serde(default)]
+    pub accepted_state_publication_count: u64,
+    /// Host bytes copied by those per-step accepted-state publications.
+    #[serde(default)]
+    pub accepted_state_publication_copy_bytes: u64,
+    /// Full vector-field copies performed by accepted-state publication.
+    #[serde(default)]
+    pub accepted_state_publication_full_field_copy_count: u64,
+    /// Host bytes copied by the one final full transactional-state synchronization.
+    #[serde(default)]
+    pub final_state_sync_copy_bytes: u64,
+    /// Full vector-field copies performed by final transactional-state synchronization.
+    #[serde(default)]
+    pub final_state_sync_full_field_copy_count: u64,
+    /// Scheduled artifact field payloads materialized by this execution segment.
+    #[serde(default)]
+    pub scheduled_field_snapshot_payload_count: u64,
+    /// Exact serialized `f64` payload bytes materialized for scheduled field snapshots.
+    #[serde(default)]
+    pub scheduled_field_snapshot_copy_bytes: u64,
+    /// Live vector-field payloads materialized for callbacks, including magnetization and previews.
+    #[serde(default)]
+    pub live_field_snapshot_payload_count: u64,
+    /// Exact `f64` payload bytes materialized for live callbacks.
+    #[serde(default)]
+    pub live_field_snapshot_copy_bytes: u64,
+    /// End-of-stage artifact field payloads materialized outside the regular output schedule.
+    #[serde(default)]
+    pub finalization_field_snapshot_payload_count: u64,
+    /// Exact serialized `f64` payload bytes materialized during finalization.
+    #[serde(default)]
+    pub finalization_field_snapshot_copy_bytes: u64,
     pub checkpoint_digest: String,
 }
 
@@ -2953,12 +2986,23 @@ mod fdm_gpu_execution_receipt_contract_tests {
     fn execution_provenance_serializes_fdm_cpu_step_transaction_telemetry() {
         let mut provenance = ExecutionProvenance::default();
         provenance.fdm_cpu_step_transaction_telemetry = Some(FdmCpuStepTransactionTelemetry {
-            schema_version: "fullmag.fdm.cpu.step_transaction.v1".into(),
+            schema_version: "fullmag.fdm.cpu.step_transaction.v3".into(),
             accepted_step_count: 7,
             rejected_attempt_count: 2,
             rollback_count: 2,
             thermal_interval_index: 7,
             thermal_rng_draws: 7,
+            accepted_state_publication_count: 7,
+            accepted_state_publication_copy_bytes: 16_800,
+            accepted_state_publication_full_field_copy_count: 7,
+            final_state_sync_copy_bytes: 9_600,
+            final_state_sync_full_field_copy_count: 4,
+            scheduled_field_snapshot_payload_count: 3,
+            scheduled_field_snapshot_copy_bytes: 7_200,
+            live_field_snapshot_payload_count: 5,
+            live_field_snapshot_copy_bytes: 12_000,
+            finalization_field_snapshot_payload_count: 1,
+            finalization_field_snapshot_copy_bytes: 2_400,
             checkpoint_digest: "sha256:test".into(),
         });
 
@@ -2967,7 +3011,64 @@ mod fdm_gpu_execution_receipt_contract_tests {
         assert_eq!(telemetry["accepted_step_count"], 7);
         assert_eq!(telemetry["rollback_count"], 2);
         assert_eq!(telemetry["thermal_interval_index"], 7);
+        assert_eq!(telemetry["accepted_state_publication_copy_bytes"], 16_800);
+        assert_eq!(telemetry["final_state_sync_full_field_copy_count"], 4);
+        assert_eq!(telemetry["scheduled_field_snapshot_copy_bytes"], 7_200);
+        assert_eq!(telemetry["live_field_snapshot_payload_count"], 5);
+        assert_eq!(telemetry["finalization_field_snapshot_copy_bytes"], 2_400);
         assert_eq!(telemetry["checkpoint_digest"], "sha256:test");
+    }
+
+    #[test]
+    fn fdm_cpu_step_transaction_v1_defaults_copy_telemetry_to_zero() {
+        let legacy = serde_json::json!({
+            "schema_version": "fullmag.fdm.cpu.step_transaction.v1",
+            "accepted_step_count": 3,
+            "rejected_attempt_count": 0,
+            "rollback_count": 0,
+            "thermal_interval_index": 0,
+            "thermal_rng_draws": 0,
+            "checkpoint_digest": "sha256:legacy"
+        });
+        let telemetry: FdmCpuStepTransactionTelemetry =
+            serde_json::from_value(legacy).expect("legacy CPU transaction receipt");
+
+        assert_eq!(telemetry.accepted_state_publication_count, 0);
+        assert_eq!(telemetry.accepted_state_publication_copy_bytes, 0);
+        assert_eq!(telemetry.final_state_sync_copy_bytes, 0);
+        assert_eq!(telemetry.scheduled_field_snapshot_payload_count, 0);
+        assert_eq!(telemetry.scheduled_field_snapshot_copy_bytes, 0);
+        assert_eq!(telemetry.live_field_snapshot_payload_count, 0);
+        assert_eq!(telemetry.live_field_snapshot_copy_bytes, 0);
+        assert_eq!(telemetry.finalization_field_snapshot_payload_count, 0);
+        assert_eq!(telemetry.finalization_field_snapshot_copy_bytes, 0);
+    }
+
+    #[test]
+    fn fdm_cpu_step_transaction_v2_defaults_snapshot_telemetry_to_zero() {
+        let legacy = serde_json::json!({
+            "schema_version": "fullmag.fdm.cpu.step_transaction.v2",
+            "accepted_step_count": 3,
+            "rejected_attempt_count": 0,
+            "rollback_count": 0,
+            "thermal_interval_index": 0,
+            "thermal_rng_draws": 0,
+            "accepted_state_publication_count": 3,
+            "accepted_state_publication_copy_bytes": 7_200,
+            "accepted_state_publication_full_field_copy_count": 3,
+            "final_state_sync_copy_bytes": 2_400,
+            "final_state_sync_full_field_copy_count": 1,
+            "checkpoint_digest": "sha256:legacy-v2"
+        });
+        let telemetry: FdmCpuStepTransactionTelemetry =
+            serde_json::from_value(legacy).expect("v2 CPU transaction receipt");
+
+        assert_eq!(telemetry.scheduled_field_snapshot_payload_count, 0);
+        assert_eq!(telemetry.scheduled_field_snapshot_copy_bytes, 0);
+        assert_eq!(telemetry.live_field_snapshot_payload_count, 0);
+        assert_eq!(telemetry.live_field_snapshot_copy_bytes, 0);
+        assert_eq!(telemetry.finalization_field_snapshot_payload_count, 0);
+        assert_eq!(telemetry.finalization_field_snapshot_copy_bytes, 0);
     }
 
     #[test]

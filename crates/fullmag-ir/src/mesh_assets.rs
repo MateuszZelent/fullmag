@@ -3258,19 +3258,56 @@ pub struct SolverMeshArtifactRefIR {
     pub build_report: Option<FemSharedDomainBuildReportIR>,
 }
 
+fn deserialize_optional_requested_policy<'de, D>(
+    deserializer: D,
+) -> Result<Option<crate::FemMeshPolicyIR>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    if value.is_null() {
+        return Err(serde::de::Error::custom(
+            "fem_mesh_policy_malformed_value at /requested_policy: explicit null is not allowed; omit the field",
+        ));
+    }
+    crate::FemMeshPolicyIR::from_json_value(value)
+        .map(Some)
+        .map_err(|error| {
+            serde::de::Error::custom(error.with_pointer_prefix("/requested_policy").to_string())
+        })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct MeshSemanticsIR {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_requested_policy",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub requested_policy: Option<crate::FemMeshPolicyIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub universe_mesh_config: Option<UniverseMeshConfigIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub per_object_mesh_configs: Vec<PerObjectMeshConfigIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solver_mesh: Option<SolverMeshArtifactRefIR>,
+    #[serde(flatten)]
+    pub legacy_extensions: BTreeMap<String, Value>,
 }
 
 impl MeshSemanticsIR {
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
+
+        if let Some(policy) = &self.requested_policy {
+            if let Err(error) = policy.validate() {
+                errors.push(
+                    error
+                        .with_pointer_prefix("/mesh_semantics/requested_policy")
+                        .to_string(),
+                );
+            }
+        }
 
         if let Some(universe) = &self.universe_mesh_config {
             if universe.mode.trim().is_empty() {
