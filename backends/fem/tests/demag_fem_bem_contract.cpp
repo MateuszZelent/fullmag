@@ -111,8 +111,7 @@ std::filesystem::path fem_source_root() {
     return std::filesystem::current_path() / this_file.parent_path().parent_path();
 }
 
-fullmag::fem::Context unit_tet_context() {
-    fullmag::fem::Context ctx;
+void unit_tet_context(fullmag::fem::Context &ctx) {
     ctx.mesh.n_nodes = 4;
     ctx.mesh.n_elements = 1;
     ctx.mesh.nodes_xyz = {
@@ -134,11 +133,11 @@ fullmag::fem::Context unit_tet_context() {
     ctx.mesh.facet_markers = {1, 1, 1, 1};
     ctx.material_fields.material.saturation_magnetisation = 800e3;
     ctx.integration_weights.mfem_lumped_mass = {1.0, 1.0, 1.0, 1.0};
-    return ctx;
 }
 
 void boundary_surface_extracts_closed_body_only_tet() {
-    auto ctx = unit_tet_context();
+    fullmag::fem::Context ctx;
+    unit_tet_context(ctx);
     fullmag::fem::DemagBoundarySurface surface;
     std::string error;
 
@@ -162,7 +161,8 @@ void boundary_surface_extracts_closed_body_only_tet() {
 }
 
 void dense_bem_operator_is_finite_and_has_constant_sanity() {
-    auto ctx = unit_tet_context();
+    fullmag::fem::Context ctx;
+    unit_tet_context(ctx);
     fullmag::fem::DemagBoundarySurface surface;
     std::string error;
     check(fullmag::fem::build_demag_boundary_surface(ctx, surface, error), error.c_str());
@@ -188,7 +188,8 @@ void dense_bem_operator_is_finite_and_has_constant_sanity() {
 }
 
 void fem_bem_energy_matches_demag_energy_contract() {
-    auto ctx = unit_tet_context();
+    fullmag::fem::Context ctx;
+    unit_tet_context(ctx);
     const std::vector<double> m = {
         1.0, 0.0, 0.0,
         1.0, 0.0, 0.0,

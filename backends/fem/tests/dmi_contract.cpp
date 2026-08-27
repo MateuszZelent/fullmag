@@ -365,15 +365,14 @@ void check_zero_field(const std::vector<double> &field, const char *label) {
     }
 }
 
-fullmag::fem::Context make_context() {
-    fullmag::fem::Context ctx;
+void make_context(fullmag::fem::Context &ctx) {
     ctx.mesh.n_nodes = 2;
     ctx.material_fields.material.saturation_magnetisation = 800e3;
-    return ctx;
 }
 
 void disabled_interfacial_dmi_is_zero() {
-    auto ctx = make_context();
+    fullmag::fem::Context ctx;
+    make_context(ctx);
     ctx.dmi.interfacial_enabled = false;
     const std::vector<double> m = {
         1.0, 0.0, 0.0,
@@ -393,7 +392,8 @@ void disabled_interfacial_dmi_is_zero() {
 }
 
 void disabled_bulk_dmi_is_zero() {
-    auto ctx = make_context();
+    fullmag::fem::Context ctx;
+    make_context(ctx);
     ctx.dmi.bulk_enabled = false;
     const std::vector<double> m = {
         1.0, 0.0, 0.0,
@@ -413,7 +413,8 @@ void disabled_bulk_dmi_is_zero() {
 }
 
 void active_dmi_reports_mfem_requirement_without_stack() {
-    auto ctx = make_context();
+    fullmag::fem::Context ctx;
+    make_context(ctx);
     ctx.dmi.interfacial_enabled = true;
     ctx.dmi.interfacial_D = 1.0e-3;
     const std::vector<double> m = {
@@ -439,7 +440,8 @@ void active_dmi_reports_mfem_requirement_without_stack() {
 }
 
 void active_bulk_dmi_reports_mfem_requirement_without_stack() {
-    auto ctx = make_context();
+    fullmag::fem::Context ctx;
+    make_context(ctx);
     ctx.dmi.bulk_enabled = true;
     ctx.dmi.bulk_D = 1.0e-3;
     const std::vector<double> m = {

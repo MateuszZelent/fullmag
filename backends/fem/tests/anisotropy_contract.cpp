@@ -296,13 +296,11 @@ void check_near(double actual, double expected, double tol, const char *msg) {
     }
 }
 
-fullmag::fem::Context make_base_context() {
-    fullmag::fem::Context ctx;
+void make_base_context(fullmag::fem::Context &ctx) {
     ctx.mesh.n_nodes = 3;
     ctx.material_fields.material.saturation_magnetisation = 800e3;
     ctx.integration_weights.mfem_lumped_mass = {2.0e-27, 3.0e-27, 5.0e-27};
     ctx.mesh.magnetic_node_mask = {1u, 1u, 0u};
-    return ctx;
 }
 
 void anisotropy_plan_fields_are_imported_by_aggregate() {
@@ -358,7 +356,8 @@ void anisotropy_plan_fields_are_imported_by_aggregate() {
 }
 
 void uniaxial_uses_per_node_terms_and_energy_convention() {
-    auto ctx = make_base_context();
+    fullmag::fem::Context ctx;
+    make_base_context(ctx);
     ctx.anisotropy.uniaxial_enabled = true;
     ctx.anisotropy.uniaxial_axis = {0.0, 0.0, 1.0};
     ctx.anisotropy.uniaxial_Ku = 0.0;
@@ -404,7 +403,8 @@ void uniaxial_uses_per_node_terms_and_energy_convention() {
 }
 
 void uniaxial_uses_per_node_axis_field() {
-    auto ctx = make_base_context();
+    fullmag::fem::Context ctx;
+    make_base_context(ctx);
     ctx.anisotropy.uniaxial_enabled = true;
     ctx.anisotropy.uniaxial_axis = {0.0, 0.0, 1.0};
     ctx.anisotropy.uniaxial_Ku = 1.0e5;
@@ -432,7 +432,8 @@ void uniaxial_uses_per_node_axis_field() {
 }
 
 void cubic_reports_energy_and_field_in_crystal_frame() {
-    auto ctx = make_base_context();
+    fullmag::fem::Context ctx;
+    make_base_context(ctx);
     ctx.anisotropy.cubic_enabled = true;
     ctx.anisotropy.cubic_axis1 = {1.0, 0.0, 0.0};
     ctx.anisotropy.cubic_axis2 = {0.0, 1.0, 0.0};
