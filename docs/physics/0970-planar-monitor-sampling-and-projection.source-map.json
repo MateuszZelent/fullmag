@@ -21,13 +21,13 @@
       "solver": "FEM",
       "device": "CPU",
       "status": "focused-tests-only-unqualified",
-      "reason": "Only a complete Tet4/P1 nodal field over all published mesh nodes is accepted; scoped carriers are unsupported. Dynamic-extent routing has structural source/test evidence only, and managed/browser/runtime/production execution is unqualified."
+      "reason": "Tet4 and Prism6 nodal P1 sampling, native face topology, mapped compact carriers, and quantity-domain-aware default targeting have focused tests. Managed/browser/runtime/production execution is not yet qualified."
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "source-compatible-unqualified",
-      "reason": "Only a complete transported Tet4/P1 nodal field over all mesh nodes may enter the CPU sampler; scoped carriers are unqualified, no fresh GPU source/device proof exists, and native GPU sampling is absent."
+      "reason": "A compatible transported Tet4 or Prism6 nodal P1 field may enter the CPU postprocessor; no fresh GPU source/device proof exists and native GPU sampling is absent."
     }
   ],
   "contract_types": [
@@ -167,6 +167,11 @@
       "sources": ["fem-sample", "clipped-tetra"]
     },
     {
+      "id": "eq-planar-fem-prism6",
+      "symbols": ["q", "Na", "qa", "a", "r", "s", "zeta", "x"],
+      "sources": ["fem-sample", "fem-element-contract", "clipped-convex-element", "sampling-tests"]
+    },
+    {
       "id": "eq-planar-node-average",
       "symbols": ["qnodes", "N", "qa", "a"],
       "sources": ["fem-sample", "sampling-tests"]
@@ -209,8 +214,11 @@
     {"id": "qc", "latex": "q_c", "meaning": "Cell-constant FDM value", "si_unit": "[q]"},
     {"id": "Vcij", "latex": "V_{c,ij}", "meaning": "Cell/pixel-support intersection volume", "si_unit": "\\mathrm{m^3}"},
     {"id": "a", "latex": "a", "meaning": "Local FEM node index", "si_unit": "1"},
-    {"id": "Na", "latex": "N_a", "meaning": "P1 barycentric basis function", "si_unit": "1"},
+    {"id": "Na", "latex": "N_a", "meaning": "Tet4 barycentric or Prism6 triangle-P1 tensor-product interval-P1 basis function", "si_unit": "1"},
     {"id": "qa", "latex": "q_a", "meaning": "Nodal P1 value", "si_unit": "[q]"},
+    {"id": "r", "latex": "r", "meaning": "First Prism6 triangle reference coordinate", "si_unit": "1"},
+    {"id": "s", "latex": "s", "meaning": "Second Prism6 triangle reference coordinate", "si_unit": "1"},
+    {"id": "zeta", "latex": "\\zeta", "meaning": "Prism6 interval reference coordinate", "si_unit": "1"},
     {"id": "N", "latex": "N", "meaning": "Number of nodes in an arithmetic average", "si_unit": "1"},
     {"id": "qnodes", "latex": "q_{\\mathrm{nodes}}", "meaning": "Illegal unweighted nodal mean", "si_unit": "[q]"},
     {"id": "pi", "latex": "\\pi", "meaning": "Circle constant", "si_unit": "1"},
@@ -342,6 +350,12 @@
       "responsibility": "Clip a tetrahedron to a pixel prism and integrate its linear payload."
     },
     {
+      "id": "clipped-convex-element",
+      "path": "crates/fullmag-api/src/planar_sampling/geometry.rs",
+      "symbol": "integrate_clipped_convex_element",
+      "responsibility": "Clip a native Tet4 or Prism6 convex cell to a pixel prism and integrate its nodal P1 payload."
+    },
+    {
       "id": "weighted-reduction",
       "path": "crates/fullmag-api/src/planar_sampling/reduction.rs",
       "symbol": "finish",
@@ -352,6 +366,12 @@
       "path": "crates/fullmag-api/src/planar_sampling/fem.rs",
       "symbol": "sample",
       "responsibility": "Dispatch FEM P1 plane, slab, depth, and supported surface sampling."
+    },
+    {
+      "id": "fem-element-contract",
+      "path": "crates/fullmag-api/src/planar_sampling/contract.rs",
+      "symbol": "FemPlanarElement",
+      "responsibility": "Preserve native Tet4 and Prism6 nodes, edges, and faces for planar postprocessing."
     },
     {
       "id": "fem-surface",
@@ -375,7 +395,7 @@
       "id": "fem-field-carrier",
       "path": "crates/fullmag-api/src/router_v2/handlers/data/field_resolution.rs",
       "symbol": "extract_fem_field",
-      "responsibility": "Admit only complete Tet4/P1 nodal fields whose flattened value count matches all published mesh nodes."
+      "responsibility": "Resolve nodal field carriers; planar target admission subsequently validates Tet4 or Prism6 topology and required mapped nodes."
     },
     {
       "id": "api-planar-meta",

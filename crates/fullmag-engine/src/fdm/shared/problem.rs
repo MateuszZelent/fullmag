@@ -1,5 +1,6 @@
 //! ExchangeLlgProblem struct definition, constructors, and public API dispatch.
 
+use crate::fdm::cpu::state::FdmCpuStateLayout;
 use crate::{
     CellSize, EffectiveFieldObservables, EffectiveFieldTerms, EngineError, EngineErrorCode,
     EvaluationRequest, ExchangeLlgState, ExchangeLlgStateSoA, FdmBoundaryPolicy, FdmDemagBoundary,
@@ -7,9 +8,8 @@ use crate::{
     RegionalFieldDriveTerm, ResolvedFdmPeriodicWorkspace, Result, StepReport, TimeIntegrator,
     Vector3,
 };
-use crate::fdm::cpu::state::FdmCpuStateLayout;
-use std::sync::atomic::{AtomicU64, Ordering};
 use sha2::Digest;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Debug)]
 pub struct ExchangeLlgProblem {
@@ -647,9 +647,10 @@ impl ExchangeLlgProblem {
     /// current integrator attempt. Adaptive retries replace this value before
     /// evaluating their stages, while the counter/seed remain unchanged.
     pub(crate) fn set_thermal_dt_for_attempt(&self, dt: f64) {
-        let bits = (dt.is_finite() && dt > 0.0).then_some(dt.to_bits()).unwrap_or(0);
-        self.thermal_dt_override_bits
-            .store(bits, Ordering::Relaxed);
+        let bits = (dt.is_finite() && dt > 0.0)
+            .then_some(dt.to_bits())
+            .unwrap_or(0);
+        self.thermal_dt_override_bits.store(bits, Ordering::Relaxed);
     }
 
     /// Clear the attempt-local thermal timestep override after a public step

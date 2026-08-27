@@ -28,7 +28,6 @@ mod derived_fields;
 mod dispatch;
 pub mod eigen;
 mod fdm;
-mod solvers;
 #[allow(dead_code)]
 pub(crate) mod fem;
 #[path = "fem_reference.rs"]
@@ -43,6 +42,7 @@ mod observation;
 mod physics_graph_execution;
 mod preview;
 pub mod quantities;
+mod solvers;
 pub use observation::{
     observation_provider_policy, ObservationLane, ObservationProviderPolicy,
     ObservationProviderResolver,
@@ -404,9 +404,7 @@ pub fn validate_coupled_m3_checkpoint_value(
 }
 
 /// Compute the canonical payload digest used by coupled-M3 checkpoint envelopes.
-pub fn coupled_m3_checkpoint_payload_sha256(
-    value: &serde_json::Value,
-) -> Result<String, RunError> {
+pub fn coupled_m3_checkpoint_payload_sha256(value: &serde_json::Value) -> Result<String, RunError> {
     fdm::cpu::spin_transport::coupled_checkpoint_payload_sha256_value(value)
 }
 
@@ -440,12 +438,12 @@ pub fn validate_frozen_spins_checkpoint_value(
 // Public re-exports (unchanged API surface).
 pub use capabilities::{
     resolve_quantity_capability, scratch_authoring_capabilities, BackendCapabilities,
-    FeatureCapability, FeatureCapabilityStatus,
-    FieldCarrierDescriptor, FieldPayloadState, QuantityMaterializationCapability,
-    QuantityProviderCapability, QuantityProviderRegistrySource, QuantityPublicationCapability,
-    QuantityRenderCapability, QuantityRequestCapability, ResolvedQuantityCapability,
-    ResolvedQuantityCapabilityContext, ResolvedQuantityProviderRegistry, RuntimeEngineId,
-    MIXED_P1_FEATURE_CAPABILITY_IDS, MIXED_P1_MESH_FEATURE_CAPABILITY_IDS,
+    FeatureCapability, FeatureCapabilityStatus, FieldCarrierDescriptor, FieldPayloadState,
+    QuantityMaterializationCapability, QuantityProviderCapability, QuantityProviderRegistrySource,
+    QuantityPublicationCapability, QuantityRenderCapability, QuantityRequestCapability,
+    ResolvedQuantityCapability, ResolvedQuantityCapabilityContext,
+    ResolvedQuantityProviderRegistry, RuntimeEngineId, MIXED_P1_FEATURE_CAPABILITY_IDS,
+    MIXED_P1_MESH_FEATURE_CAPABILITY_IDS,
 };
 pub use interactive::backend::BackendGeometry;
 pub use interactive::checkpoints::RunOutcome;
@@ -488,8 +486,8 @@ pub use types::{
     AuxiliaryArtifact, ExecutionProvenance, FdmGpuExecutionReceipt, FdmGpuOperatorResidency,
     FdmGpuTransferCounts, FemCrossoverDecision, FemEigenRunResult, FemMeshObjectSegment,
     FemMeshPartPayload, FemMeshPayload, InitialTimestepReason, LegacyDtPolicy,
-    LiveFieldMaterializationState, LiveFieldMaterializationStatus,
-    LivePreviewField, LivePreviewRequest, LiveVectorFieldSnapshot, LlgTimestepCapabilityId,
+    LiveFieldMaterializationState, LiveFieldMaterializationStatus, LivePreviewField,
+    LivePreviewRequest, LiveVectorFieldSnapshot, LlgTimestepCapabilityId,
     LlgTimestepQualificationId, RequestedTimestepPolicy, ResolvedFallback, ResolvedTimestepPolicy,
     RunError, RunResult, RunStatus, RuntimeEngineInfo, SolverAttemptRecord, StageFemMeshAsset,
     StageFemMeshIdentity, StepAction, StepStats, StepUpdate, TimestepBackend, TimestepDevice,
@@ -5673,10 +5671,7 @@ mod tests {
             fullmag_ir::ExecutionDevice::Gpu,
         ] {
             let (mut problem, mut plan) =
-                certified_mixed_relaxation_guard_fixture_for_layers_and_device(
-                    1,
-                    requested_device,
-                );
+                certified_mixed_relaxation_guard_fixture_for_layers_and_device(1, requested_device);
             let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
                 panic!("mixed relaxation fixture must produce a FEM plan");
             };

@@ -178,12 +178,7 @@ fn thermal_base_factor(temperature: f64, gamma0: f64, cell_volume: f64) -> Optio
 }
 
 #[inline]
-fn thermal_sigma_for_cell(
-    base_factor: f64,
-    dt_scale: f64,
-    ms: f64,
-    alpha: f64,
-) -> Option<f64> {
+fn thermal_sigma_for_cell(base_factor: f64, dt_scale: f64, ms: f64, alpha: f64) -> Option<f64> {
     if !(ms > 0.0 && alpha >= 0.0 && ms.is_finite() && alpha.is_finite()) {
         return None;
     }
@@ -312,9 +307,8 @@ impl ExchangeLlgProblem {
         self.regional_field_drives_add_into_at_time(&mut effective_field, time_seconds);
         self.thermal_field_add_into(&mut effective_field);
         let mut rhs = {
-            let compute = |i: usize| {
-                self.llg_rhs_from_field_at(i, magnetization[i], effective_field[i])
-            };
+            let compute =
+                |i: usize| self.llg_rhs_from_field_at(i, magnetization[i], effective_field[i]);
             #[cfg(feature = "parallel")]
             {
                 (0..magnetization.len())
@@ -644,10 +638,7 @@ impl ExchangeLlgProblem {
         self.external_zeeman_field_vectors_at_time(0.0)
     }
 
-    pub(crate) fn external_zeeman_field_vectors_at_time(
-        &self,
-        time_seconds: f64,
-    ) -> Vec<Vector3> {
+    pub(crate) fn external_zeeman_field_vectors_at_time(&self, time_seconds: f64) -> Vec<Vector3> {
         let mut field = self.external_field_vectors();
         self.oersted_field_add_into_at_time(&mut field, time_seconds);
         field
@@ -909,37 +900,49 @@ impl ExchangeLlgProblem {
         let mut energy = 0.0;
 
         if px || x + 1 < self.grid.nx {
-            let neighbor = self.grid.index(neighbor_index(x, self.grid.nx, 1, px), y, z);
+            let neighbor = self
+                .grid
+                .index(neighbor_index(x, self.grid.nx, 1, px), y, z);
             if self.is_active(neighbor) {
                 energy += 0.5 * self.dmi_face_energy(value(flat), value(neighbor), 0, sx);
             }
         }
         if px || x > 0 {
-            let neighbor = self.grid.index(neighbor_index(x, self.grid.nx, -1, px), y, z);
+            let neighbor = self
+                .grid
+                .index(neighbor_index(x, self.grid.nx, -1, px), y, z);
             if self.is_active(neighbor) {
                 energy += 0.5 * self.dmi_face_energy(value(neighbor), value(flat), 0, sx);
             }
         }
         if py || y + 1 < self.grid.ny {
-            let neighbor = self.grid.index(x, neighbor_index(y, self.grid.ny, 1, py), z);
+            let neighbor = self
+                .grid
+                .index(x, neighbor_index(y, self.grid.ny, 1, py), z);
             if self.is_active(neighbor) {
                 energy += 0.5 * self.dmi_face_energy(value(flat), value(neighbor), 1, sy);
             }
         }
         if py || y > 0 {
-            let neighbor = self.grid.index(x, neighbor_index(y, self.grid.ny, -1, py), z);
+            let neighbor = self
+                .grid
+                .index(x, neighbor_index(y, self.grid.ny, -1, py), z);
             if self.is_active(neighbor) {
                 energy += 0.5 * self.dmi_face_energy(value(neighbor), value(flat), 1, sy);
             }
         }
         if pz || z + 1 < self.grid.nz {
-            let neighbor = self.grid.index(x, y, neighbor_index(z, self.grid.nz, 1, pz));
+            let neighbor = self
+                .grid
+                .index(x, y, neighbor_index(z, self.grid.nz, 1, pz));
             if self.is_active(neighbor) {
                 energy += 0.5 * self.dmi_face_energy(value(flat), value(neighbor), 2, sz);
             }
         }
         if pz || z > 0 {
-            let neighbor = self.grid.index(x, y, neighbor_index(z, self.grid.nz, -1, pz));
+            let neighbor = self
+                .grid
+                .index(x, y, neighbor_index(z, self.grid.nz, -1, pz));
             if self.is_active(neighbor) {
                 energy += 0.5 * self.dmi_face_energy(value(neighbor), value(flat), 2, sz);
             }
@@ -955,11 +958,7 @@ impl ExchangeLlgProblem {
             0.5 * (left[1] + right[1]),
             0.5 * (left[2] + right[2]),
         ];
-        let jump = [
-            right[0] - left[0],
-            right[1] - left[1],
-            right[2] - left[2],
-        ];
+        let jump = [right[0] - left[0], right[1] - left[1], right[2] - left[2]];
         let density_integral = match axis {
             0 => {
                 interfacial * (average[2] * jump[0] - average[0] * jump[2])
@@ -982,12 +981,24 @@ impl ExchangeLlgProblem {
         let px = matches!(self.boundary_policy.x, AxisBoundary::Periodic);
         let py = matches!(self.boundary_policy.y, AxisBoundary::Periodic);
         let pz = matches!(self.boundary_policy.z, AxisBoundary::Periodic);
-        let xp = self.grid.index(neighbor_index(x, self.grid.nx, 1, px), y, z);
-        let xm = self.grid.index(neighbor_index(x, self.grid.nx, -1, px), y, z);
-        let yp = self.grid.index(x, neighbor_index(y, self.grid.ny, 1, py), z);
-        let ym = self.grid.index(x, neighbor_index(y, self.grid.ny, -1, py), z);
-        let zp = self.grid.index(x, y, neighbor_index(z, self.grid.nz, 1, pz));
-        let zm = self.grid.index(x, y, neighbor_index(z, self.grid.nz, -1, pz));
+        let xp = self
+            .grid
+            .index(neighbor_index(x, self.grid.nx, 1, px), y, z);
+        let xm = self
+            .grid
+            .index(neighbor_index(x, self.grid.nx, -1, px), y, z);
+        let yp = self
+            .grid
+            .index(x, neighbor_index(y, self.grid.ny, 1, py), z);
+        let ym = self
+            .grid
+            .index(x, neighbor_index(y, self.grid.ny, -1, py), z);
+        let zp = self
+            .grid
+            .index(x, y, neighbor_index(z, self.grid.nz, 1, pz));
+        let zm = self
+            .grid
+            .index(x, y, neighbor_index(z, self.grid.nz, -1, pz));
         [
             (!px && x + 1 == self.grid.nx) || !self.is_active(xp),
             (!px && x == 0) || !self.is_active(xm),
@@ -1110,9 +1121,7 @@ impl ExchangeLlgProblem {
                 let dx_mx = (xp[0] - xm[0]) / (2.0 * dx);
                 let dy_my = (yp[1] - ym[1]) / (2.0 * dy);
 
-                let boundary = self.interfacial_dmi_boundary_correction(
-                    flat, center, d, ms,
-                );
+                let boundary = self.interfacial_dmi_boundary_correction(flat, center, d, ms);
                 [
                     pf * dx_mz + boundary[0],
                     pf * dy_mz + boundary[1],
@@ -1713,12 +1722,9 @@ impl ExchangeLlgProblem {
             if !self.is_active(i) {
                 continue;
             }
-            let Some(sigma) = thermal_sigma_for_cell(
-                base_factor,
-                dt_scale,
-                self.ms_at(i),
-                self.alpha_at(i),
-            ) else {
+            let Some(sigma) =
+                thermal_sigma_for_cell(base_factor, dt_scale, self.ms_at(i), self.alpha_at(i))
+            else {
                 continue;
             };
             let ci = i as u64;
@@ -2331,12 +2337,9 @@ impl ExchangeLlgProblem {
             if !self.is_active(i) {
                 return;
             }
-            let Some(sigma) = thermal_sigma_for_cell(
-                base_factor,
-                dt_scale,
-                self.ms_at(i),
-                self.alpha_at(i),
-            ) else {
+            let Some(sigma) =
+                thermal_sigma_for_cell(base_factor, dt_scale, self.ms_at(i), self.alpha_at(i))
+            else {
                 return;
             };
             let ci = i as u64;
@@ -2411,10 +2414,9 @@ impl ExchangeLlgProblem {
             self.cell_size.volume(),
         );
         let thermal_dt = self.thermal_dt_for_evaluation();
-        let thermal_dt_scale = (thermal_dt > 0.0 && thermal_dt.is_finite())
-            .then(|| 1.0 / thermal_dt.sqrt());
-        let (has_thermal, thermal_base, thermal_dt_scale) = match (thermal_base, thermal_dt_scale)
-        {
+        let thermal_dt_scale =
+            (thermal_dt > 0.0 && thermal_dt.is_finite()).then(|| 1.0 / thermal_dt.sqrt());
+        let (has_thermal, thermal_base, thermal_dt_scale) = match (thermal_base, thermal_dt_scale) {
             (Some(base), Some(dt_scale)) => (true, base, dt_scale),
             _ => (false, 0.0, 0.0),
         };
@@ -2910,8 +2912,7 @@ impl ExchangeLlgProblem {
                 let ms = self.ms_at(flat).max(1e-30);
                 let alpha = self.alpha_at(flat);
                 let (adiabatic_scale, cross_scale) = gilbert_zhang_li_scales(beta, alpha);
-                let b =
-                    (cfg.spin_polarization * MU_B) / (E_CHARGE * ms * (1.0 + beta * beta));
+                let b = (cfg.spin_polarization * MU_B) / (E_CHARGE * ms * (1.0 + beta * beta));
                 let ux = b * cfg.current_density[0];
                 let uy = b * cfg.current_density[1];
                 let uz = b * cfg.current_density[2];
@@ -4691,11 +4692,7 @@ mod stt_tests {
             Some(vec![true, true]),
         )
         .unwrap()
-        .with_spatial_fields(
-            Some(vec![400.0e3, 1_600.0e3]),
-            None,
-            Some(vec![0.05, 0.8]),
-        )
+        .with_spatial_fields(Some(vec![400.0e3, 1_600.0e3]), None, Some(vec![0.05, 0.8]))
         .unwrap();
         spatial.temperature = 300.0;
         spatial.thermal_dt = 2.5e-13;
@@ -4704,10 +4701,7 @@ mod stt_tests {
         let mut spatial_noise = vec![[0.0; 3]; 2];
         spatial.thermal_field_add_into_step(&mut spatial_noise, 7);
 
-        for (index, (ms, alpha)) in [(400.0e3, 0.05), (1_600.0e3, 0.8)]
-            .into_iter()
-            .enumerate()
-        {
+        for (index, (ms, alpha)) in [(400.0e3, 0.05), (1_600.0e3, 0.8)].into_iter().enumerate() {
             let mut scalar = ExchangeLlgProblem::with_terms(
                 grid,
                 cell_size,
@@ -4730,11 +4724,7 @@ mod stt_tests {
         spatial.restore_thermal_step(7);
         let mut fused_noise = vec![[0.0; 3]; 2];
         let mut workspace = spatial.create_workspace();
-        spatial.effective_field_into_ws(
-            &[[1.0, 0.0, 0.0]; 2],
-            &mut workspace,
-            &mut fused_noise,
-        );
+        spatial.effective_field_into_ws(&[[1.0, 0.0, 0.0]; 2], &mut workspace, &mut fused_noise);
         assert_eq!(fused_noise, spatial_noise);
     }
 
@@ -4754,11 +4744,7 @@ mod stt_tests {
             Some(vec![true, false]),
         )
         .unwrap()
-        .with_spatial_fields(
-            Some(vec![800.0e3, 800.0e3]),
-            None,
-            Some(vec![0.2, 0.2]),
-        )
+        .with_spatial_fields(Some(vec![800.0e3, 800.0e3]), None, Some(vec![0.2, 0.2]))
         .unwrap();
         problem.temperature = 300.0;
         problem.thermal_dt = 2.5e-13;
@@ -5110,11 +5096,7 @@ mod stt_tests {
             MaterialParameters::new(800.0e3, 13.0e-12, 0.2).unwrap(),
             LlgConfig::default(),
         )
-        .with_spatial_fields(
-            Some(vec![400.0e3, 1_600.0e3]),
-            None,
-            Some(vec![0.05, 0.8]),
-        )
+        .with_spatial_fields(Some(vec![400.0e3, 1_600.0e3]), None, Some(vec![0.05, 0.8]))
         .unwrap();
         let magnetization = vec![[0.4, 0.7, 0.2], [0.1, 0.3, 0.9]];
         let zhang = ZhangLiSttConfig {
@@ -5149,10 +5131,7 @@ mod stt_tests {
         let spatial_slon = spatial.slonczewski_stt_torque(&magnetization, &slon);
         let spatial_sot = spatial.sot_torque(&magnetization, &sot);
 
-        for (index, (ms, alpha)) in [(400.0e3, 0.05), (1_600.0e3, 0.8)]
-            .into_iter()
-            .enumerate()
-        {
+        for (index, (ms, alpha)) in [(400.0e3, 0.05), (1_600.0e3, 0.8)].into_iter().enumerate() {
             let scalar = ExchangeLlgProblem::new(
                 grid,
                 cell_size,
@@ -5267,10 +5246,7 @@ mod stt_tests {
                 ..Default::default()
             },
         )
-        .with_static_external_field(Some(vec![
-            [0.0, 1.0, 2.0],
-            [3.0, 4.0, 5.0],
-        ]))
+        .with_static_external_field(Some(vec![[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]]))
         .unwrap();
         let magnetization = vec![[1.0, 0.0, 0.0]; 2];
 

@@ -394,6 +394,13 @@ finite `position_fraction` in `[0,1]` and a positive finite slab thickness;
 legacy v8 persistence input is migrated privately and is never dual-written
 as `active_monitor_id`.
 
+Default-source target resolution is quantity-domain aware: `magnetic_only`
+quantities such as `m` select `magnetic_domain`, while full-domain quantities
+retain `domain`. FEM nodal carriers accept native Tet4 and Prism6 P1 topology;
+Prism6 uses its six-node isoparametric basis and native triangular/quadrilateral
+faces. Pyramid5 and Hex8 remain explicit `422` cases. No public path, query,
+binary codec, or generated transport type changes for this topology extension.
+
 Mutations carry `expected_scene_revision`, use the canonical scene transaction
 owner, update script export, and emit invalidation. Monitor JSON contains only
 physical target, frame, extent, and operator. Quantity and presentation state

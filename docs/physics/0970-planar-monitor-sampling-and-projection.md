@@ -278,7 +278,11 @@ exceed $10^{-12}$ times the maximum raster vector norm receive
 | $q_c$ | Cell-constant FDM value | $[q]$ |
 | $V_{c,ij}$ | Cell/pixel-support intersection volume | $\mathrm{m^3}$ |
 | $a$ | Local FEM node index | $1$ |
-| $N_a$ | P1 barycentric basis function | $1$ |
+| $N_a$ | Tet4 barycentric or Prism6 triangle-P1 tensor-product interval-P1 basis function | $1$ |
+| $r$ | First Prism6 triangle reference coordinate | $1$ |
+| $s$ | Second Prism6 triangle reference coordinate | $1$ |
+| $\zeta$ | Prism6 interval reference coordinate | $1$ |
+| $J$ | Jacobian of the Prism6 isoparametric map | $\mathrm{m}$ |
 | $q_a$ | Nodal P1 value | $[q]$ |
 | $N$ | Number of nodes in an arithmetic average | $1$ |
 | $q_{\mathrm{nodes}}$ | Illegal unweighted nodal mean | $[q]$ |
@@ -292,14 +296,16 @@ buffer.
 ## Assumptions and validity
 
 - FDM fields are cell-centred and reconstructed as cell-constant.
-- FEM sampling accepts only a full-carrier tetrahedral P1 nodal payload: after
+- FEM sampling accepts complete or explicitly mapped nodal P1 payloads on
+  topology-valid Tet4 and Prism6 cells: after
   component flattening, the value count must equal the complete published mesh
   node count. Element scoping is applied only after that carrier is loaded.
   Element-local, selected-part-only, discontinuous, cell-centred, and
   higher-order FEM payloads are unsupported; no P1 fallback is legal.
 - FDM volume reduction decomposes each hexahedral cell into six tetrahedra.
-- FEM volume reduction clips tetrahedra against pixel prisms and integrates
-  the P1 field over the clipped polyhedron.
+- FEM volume reduction clips the native convex Tet4 or Prism6 cell against
+  pixel prisms and integrates the P1 field over the clipped polyhedron. Prism6
+  is not reduced to its first four nodes and is not silently tetrahedralized.
 - FEM surface projection currently supports only `object_boundary`.
   `region_boundary` and `named_surface` are authorable but reject during
   sampling because their topology is not published.
@@ -565,8 +571,8 @@ currently implemented sampling kernels execute on CPU.
 |---|---|---|---|---|---|---|
 | FDM CPU | `domain`: full rectangular carrier; `magnetic_domain`: all active cells; `region`: exact numeric membership; `object`: only conditionally correct for single-object/all-active-equivalent grids and incorrect for general multi-object grids; `mesh_part`/`airbox`: unsupported; every dynamic extent tag is unqualified because all three reuse post-target selected-mask bounds | Published cell-centred structured-grid field plus matching membership for non-domain targets; explicit extent required for authored monitors | plane, slab, depth; surface unsupported | CPU binary64 | `Default` resolves a full-domain target and axis-preset frame, then reuses these operators; it adds no qualification to the lane | managed science artifact passed only for its explicit/fixture extent; multi-object object targeting, all dynamic extent policies, default-source runtime/browser/production, and end-to-end runtime remain unqualified because the same recipe ended RED in the browser |
 | FDM GPU | Same target and dynamic-extent restrictions as FDM CPU after compatible field transport | Compatible transported cell-centred structured-grid field; source device/precision is absent from planar metadata; explicit extent required for authored monitors | plane, slab, depth; surface unsupported | CPU binary64 | `Default` is source-compatible with the same CPU sampler only; no device identity or native GPU sampler is implied | no fresh GPU-source/device proof, no correct distinct dynamic-policy proof, no multi-object object-target proof, and no native GPU sampling |
-| FEM CPU | Authored target plus optional intersecting `mesh_part`/`airbox` element scope; scoped dynamic extents are incorrect because all dynamic kinds use global mesh nodes | Complete published tetrahedral P1 nodal field over all mesh nodes; scoped/local and higher-order carriers unsupported | plane, slab, depth, `object_boundary` surface; use explicit extent for scoped correctness | CPU binary64 | `Default` resolves the published domain target and axis-preset frame, then reuses the P1 sampler; it adds no qualification to the lane | focused numerical/API tests exist; dynamic scoped extents, default-source resolution, fresh managed FEM, browser, runtime, and production are unqualified |
-| FEM GPU | Same target, scope, dynamic-extent, and surface restrictions as FEM CPU after compatible field transport | Complete transported tetrahedral P1 nodal field over all mesh nodes; source device/precision is absent from planar metadata | same P1 operators as FEM CPU; use explicit extent for scoped correctness | CPU binary64 | `Default` is source-compatible with the same CPU sampler only; no device identity or native GPU sampling is implied | no fresh GPU-source/device proof, no scoped dynamic-extent/default-source proof, and no native GPU sampling |
+| FEM CPU | Authored target plus optional intersecting `mesh_part`/`airbox` element scope | Complete or explicitly mapped nodal P1 field on Tet4/Prism6; Pyramid5/Hex8 reject | plane, slab, depth, `object_boundary` surface | CPU binary64 | `Default` selects `magnetic_domain` for `magnetic_only` quantities and `domain` for full-domain quantities | focused Tet4 and Prism6 numerical/target tests pass; managed FEM and browser qualification remain separate gates |
+| FEM GPU | Same target, scope, and surface rules as FEM CPU after compatible field transport | Transported nodal P1 Tet4/Prism6 field; source device/precision is absent from planar metadata | same CPU P1 postprocessor | CPU binary64 | quantity-domain-aware target selection is identical; no native GPU sampler is implied | source-compatible only until fresh managed GPU-source/browser proof |
 
 ### FDM realization
 
@@ -603,8 +609,8 @@ only dynamic-extent form with Task 0 numerical evidence.
 
 ### FEM P1 realization
 
-Plane sampling locates a containing tetrahedron and evaluates the nodal P1
-field by barycentric interpolation:
+Plane sampling locates a containing Tet4 or Prism6 element. Tet4 uses
+barycentric interpolation:
 
 ```{math}
 :label: eq-planar-fem-p1
@@ -612,16 +618,32 @@ q_h(\mathbf x)=\sum_{a=1}^{4}N_a(\mathbf x)\,q_a,\qquad
 \sum_{a=1}^{4}N_a(\mathbf x)=1 .
 ```
 
-Slab/depth integration clips each tetrahedron against the pixel prism and
-integrates the linear field over the clipped polyhedron. Surface projection
-extracts exterior tetrahedral faces, clips them in $(u,v)$, integrates the P1
-trace with physical triangle area, and applies the requested visibility
-policy. Spatial lookup is currently a direct element traversal, not the
-previously planned revision-keyed spatial index.
+For Prism6, the reference basis is triangle-P1 $\times$ interval-P1:
+
+```{math}
+:label: eq-planar-fem-prism6
+\begin{aligned}
+N_1&=(1-r-s)(1-\zeta), & N_2&=r(1-\zeta), & N_3&=s(1-\zeta),\\
+N_4&=(1-r-s)\zeta,     & N_5&=r\zeta,     & N_6&=s\zeta,\\
+\mathbf x(r,s,\zeta)&=\sum_{a=1}^{6}N_a\mathbf x_a,
+&q_h(\mathbf x)&=\sum_{a=1}^{6}N_a q_a .
+\end{aligned}
+```
+
+The sampler solves the isoparametric inverse map with a bounded Newton solve
+and rejects singular Jacobians or reference coordinates outside the prism.
+The basis has partition of unity and reproduces constant and affine physical
+fields because geometry and field use the same $N_a$.
+
+Slab/depth integration clips each native convex cell against the pixel prism.
+The Prism6 carrier supplies two triangular and three quadrilateral faces;
+surface projection extracts those native exterior faces, clips them in
+$(u,v)$, integrates their P1 trace with physical area, and applies the requested
+visibility policy. Spatial lookup is currently a direct element traversal.
 
 The API admits this realization only when the flattened field has exactly
 $n_{\mathrm{comp}}$ values for every node of the complete published mesh and
-the mesh is Tet4. Target and runtime scope alter element markers after loading;
+the mesh uses Tet4 or Prism6. Target and runtime scope alter element markers after loading;
 they do not narrow the field carrier. Moreover, all three FEM dynamic extent
 tags currently derive bounds from the complete `fem.nodes` array. Thus
 `target_bounds`, `magnetic_domain`, and `universe` resolve to the same global
@@ -773,8 +795,9 @@ Structural validation does not prove scientific correctness.
   implementing distinct target, magnetic-domain, and universe policies;
   explicit extents are required until PM-N13 passes.
 - FEM region-boundary and named-surface topology are absent.
-- FEM carriers must be complete full-mesh nodal Tet4/P1 fields; scoped/local,
-  discontinuous, cell-centred, and higher-order carriers are absent.
+- FEM planar carriers support nodal P1 Tet4 and Prism6 with identity or explicit
+  local-to-global mapping. Pyramid5, Hex8, discontinuous, cell-centred, and
+  higher-order carriers reject explicitly.
 - FEM dynamic extents ignore target/scope markers and use all mesh nodes, so
   scoped dynamic extents are incorrect and unqualified.
 - `include_air_as_zero` currently contributes empty-bin zeros to API metadata

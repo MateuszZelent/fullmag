@@ -75,6 +75,28 @@ describe("footerModel", () => {
     expect(formatTransportWindow(125_000)).toBe("2 min");
   });
 
+  it("counts aggregated transport occurrences instead of visible rows", () => {
+    const summary = buildTransportTrafficSummary([
+      entry({
+        byteLength: 512,
+        channel: "websocket",
+        firstTimestampMs: 1_000,
+        occurrenceCount: 4,
+        timestampMs: 4_000,
+      }),
+    ]);
+
+    expect(summary).toMatchObject({
+      byteLength: 512,
+      rxCount: 4,
+      totalCount: 4,
+      websocketCount: 4,
+      windowMs: 3_000,
+    });
+    expect(summary.estimatedEventsPerMinute).toBe(80);
+    expect(summary.topEndpoints[0]).toMatchObject({ count: 4, rxCount: 4 });
+  });
+
   it("builds compact clickable message previews", () => {
     expect(buildTransportMessagePreview(entry({ direction: "tx" }))).toBe(
       `TX GET ${SESSION_STATUS_PATH}`,

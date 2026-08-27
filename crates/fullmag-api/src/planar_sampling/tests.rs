@@ -430,6 +430,98 @@ fn skew_tetra_field() -> FemPlanarField {
 }
 
 #[test]
+fn planar_sampling_prism6_p1_reproduces_affine_world_field() {
+    let nodes = vec![
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 1.0],
+        [0.0, 1.0, 1.0],
+    ];
+    let values = nodes
+        .iter()
+        .map(|point| 2.0 * point[0] - 3.0 * point[1] + 5.0 * point[2] + 7.0)
+        .collect();
+    let field = FemPlanarField::new_mixed(
+        1,
+        nodes,
+        vec![super::FemPlanarElement::Prism6([0, 1, 2, 3, 4, 5])],
+        vec![1],
+        values,
+    )
+    .unwrap();
+
+    let (_, value) = super::fem::interpolate_at(&field, [0.2, 0.3, 0.4]).unwrap();
+    assert!((value[0] - (2.0 * 0.2 - 3.0 * 0.3 + 5.0 * 0.4 + 7.0)).abs() < 1.0e-12);
+}
+
+#[test]
+fn planar_sampling_prism6_plane_volume_surface_and_overlay_are_supported() {
+    let nodes = vec![
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 1.0],
+        [0.0, 1.0, 1.0],
+    ];
+    let field = FemPlanarField::new_mixed(
+        1,
+        nodes,
+        vec![super::FemPlanarElement::Prism6([0, 1, 2, 3, 4, 5])],
+        vec![1],
+        vec![4.0; 6],
+    )
+    .unwrap();
+    let frame = PlanarFrameIR {
+        extent: PlanarExtentIR::Explicit {
+            u_min_m: 0.0,
+            u_max_m: 1.0,
+            v_min_m: 0.0,
+            v_max_m: 1.0,
+        },
+        ..explicit_frame([0.0, 0.0, 0.5], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0])
+    };
+
+    let plane = PlanarSamplingEngine::sample_fem(
+        &field,
+        &request(frame.clone(), PlanarOperatorIR::PlaneSample, [1, 1]),
+    )
+    .unwrap();
+    assert_eq!(plane.scalar_values, vec![4.0]);
+    assert_eq!(plane.overlay.unwrap().polygons.len(), 1);
+
+    let depth = PlanarSamplingEngine::sample_fem(
+        &field,
+        &request(
+            frame.clone(),
+            PlanarOperatorIR::DepthProjection {
+                reduction: PlanarReductionIR::MeanOccupied,
+                empty_policy: EmptyPolicyIR::ExcludeEmpty,
+            },
+            [1, 1],
+        ),
+    )
+    .unwrap();
+    assert!((depth.scalar_values[0] - 4.0).abs() < 1.0e-12);
+
+    let surface = PlanarSamplingEngine::sample_fem(
+        &field,
+        &request(
+            frame,
+            PlanarOperatorIR::SurfaceProjection {
+                boundary: fullmag_ir::SurfaceBoundarySelectorIR::ObjectBoundary,
+                visibility_policy: fullmag_ir::SurfaceVisibilityPolicyIR::AreaWeightedOverlap,
+            },
+            [1, 1],
+        ),
+    )
+    .unwrap();
+    assert!((surface.scalar_values[0] - 4.0).abs() < 1.0e-12);
+}
+
+#[test]
 fn planar_sampling_fem_p1_linear_arbitrary_plane_is_barycentric() {
     let field = skew_tetra_field();
     let frame = PlanarFrameIR {

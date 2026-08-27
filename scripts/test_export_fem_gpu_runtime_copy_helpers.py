@@ -454,7 +454,7 @@ def test_export_script_refreshes_identity_before_configured_release_clean() -> N
     script = EXPORT_SCRIPT.read_text(encoding="utf-8")
     identity_clean_index = script.find("cargo +nightly clean -p fullmag-build-info")
     release_clean_index = script.find("cargo +nightly clean --workspace --release")
-    build_index = script.find("cargo +nightly build")
+    build_index = script.find("cargo +nightly -Z checksum-freshness build")
     copy_index = script.find('FEM_LIB="$(only_native_lib_dir')
 
     assert identity_clean_index != -1
@@ -470,7 +470,7 @@ def test_export_script_defaults_to_bounded_parallel_cargo_builds() -> None:
     script = EXPORT_SCRIPT.read_text(encoding="utf-8")
 
     assert ': "${FULLMAG_FEM_RUNTIME_CARGO_JOBS:=8}"' in script
-    assert 'cargo +nightly build -j "$cargo_jobs"' in script
+    assert 'cargo +nightly -Z checksum-freshness build -j "$cargo_jobs"' in script
 
 
 def test_managed_runtime_staleness_uses_exact_source_snapshot_identity() -> None:
@@ -507,7 +507,7 @@ def test_export_script_restores_runtime_bundle_to_host_owner() -> None:
 def test_export_script_restores_staging_owner_when_container_build_fails() -> None:
     script = EXPORT_SCRIPT.read_text(encoding="utf-8")
     trap_index = script.find("trap restore_staging_owner EXIT")
-    build_index = script.find("cargo +nightly build")
+    build_index = script.find("cargo +nightly -Z checksum-freshness build")
 
     assert "restore_staging_owner() {" in script
     assert 'chown -R "${FULLMAG_HOST_UID}:${FULLMAG_HOST_GID}" "${runtime_root}"' in script
@@ -1517,12 +1517,13 @@ def test_export_keeps_container_temp_registry_and_build_log_on_durable_ext4() ->
 def test_export_can_resume_safely_without_cleaning_completed_target() -> None:
     exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
 
-    assert ': "${FULLMAG_FEM_RUNTIME_REUSE_BUILD:=0}"' in exporter
+    assert 'source "${SOURCE_ROOT}/scripts/lib/managed_fem_build_policy.sh"' in exporter
+    assert "resolve_managed_fem_build_policy" in exporter
     assert 'case "${FULLMAG_FEM_RUNTIME_REUSE_BUILD}" in' in exporter
     assert 'if [ "${FULLMAG_FEM_RUNTIME_REUSE_BUILD}" = "0" ]; then' in exporter
     assert "cargo +nightly clean --workspace --release" in exporter
-    assert "cargo +nightly build -j \"$cargo_jobs\"" in exporter
-    assert "reusing the task-specific target through Cargo freshness checks" in exporter
+    assert "cargo +nightly -Z checksum-freshness build -j \"$cargo_jobs\"" in exporter
+    assert "reusing the task-specific target through Cargo checksum freshness" in exporter
 
 
 def test_export_reuses_a_stable_source_snapshot_path_for_cargo_freshness() -> None:
@@ -1573,6 +1574,19 @@ def test_export_publishes_durable_copy_before_switching_aliases() -> None:
     latest_index = exporter.index('mv -f "${persistent_staging_archive}"')
     repo_alias_index = exporter.index('mv -Tf "${repo_next_alias}"')
     assert archive_index < latest_index < repo_alias_index
+
+
+def test_export_archive_copy_verification_is_profile_aware_and_overridable() -> None:
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    assert ': "${FULLMAG_NATIVE_STORAGE_PROFILE:=canonical}"' in exporter
+    assert ': "${FULLMAG_RUNTIME_ARCHIVE_COPY_VERIFY:=auto}"' in exporter
+    assert 'case "${FULLMAG_RUNTIME_ARCHIVE_COPY_VERIFY}" in' in exporter
+    assert 'local-d) FULLMAG_RUNTIME_ARCHIVE_COPY_VERIFY=0 ;;' in exporter
+    assert 'canonical) FULLMAG_RUNTIME_ARCHIVE_COPY_VERIFY=1 ;;' in exporter
+    assert 'if [ "${FULLMAG_RUNTIME_ARCHIVE_COPY_VERIFY}" = "1" ]; then' in exporter
+    assert 'cmp -s "${persistent_archive}" "${persistent_staging_archive}"' in exporter
+    assert "archive validation remains enabled" in exporter
 
 
 def test_export_validates_persistent_archive_before_switching_repo_alias() -> None:
@@ -1747,10 +1761,13 @@ def test_ensure_managed_runtime_rebuilds_an_invalid_bundle() -> None:
     assert "Managed FEM runtime bundle is invalid; restoring the persistent build first." in ensure_recipe
     assert "bash scripts/restore_persistent_fem_runtime.sh" in ensure_recipe
     assert "if ! validate_current >/dev/null 2>&1; then" in ensure_recipe
-    assert "FULLMAG_FEM_RUNTIME_REUSE_BUILD=0 just rebuild-fem-runtime" in ensure_recipe
+    assert "source scripts/lib/managed_fem_build_policy.sh" in ensure_recipe
+    assert "resolve_managed_fem_build_policy" in ensure_recipe
+    assert "FULLMAG_FEM_RUNTIME_REUSE_BUILD=0 just rebuild-fem-runtime" not in ensure_recipe
     assert (
         "FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT=1 "
-        "FULLMAG_FEM_RUNTIME_REUSE_BUILD=0 just rebuild-fem-runtime"
+        'FULLMAG_FEM_RUNTIME_REUSE_BUILD="$FULLMAG_FEM_RUNTIME_REUSE_BUILD" '
+        "just rebuild-fem-runtime"
     ) in ensure_recipe
     assert "runtime_rebuilt=1" in ensure_recipe
     assert "capture_source_snapshot_identity.py" in ensure_recipe
@@ -1998,3 +2015,38 @@ def test_export_script_replaces_existing_versioned_native_symlinks() -> None:
     assert function_start != -1
     assert function_end != -1
     assert 'ln -sfn "$(readlink "$src")" "$dest"' in copy_entry_function
+
+
+def test_export_reuse_uses_checksum_freshness_instead_of_snapshot_mtime() -> None:
+    script = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    assert "cargo +nightly -Z checksum-freshness build" in script
+    assert 'FULLMAG_FEM_RUNTIME_REUSE_BUILD="${FULLMAG_FEM_RUNTIME_REUSE_BUILD}"' in script
+    assert "cargo +nightly clean --workspace --release" in script
+
+
+def test_export_invalidates_only_native_sys_crates_when_native_inputs_change() -> None:
+    script = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    assert "managed_fem_native_build_inputs.v1.txt" in script
+    assert "FULLMAG_NATIVE_BUILD_SOURCE_SHA256" in script
+    assert '["build_inputs"]["source_input_manifest_sha256"]' in script
+    assert "FULLMAG_MANAGED_FEM_IMAGE_ID" in script
+    assert ".fullmag-managed-fem-native-build-v1" in script
+    assert (
+        "cargo +nightly clean -p fullmag-fem-sys -p fullmag-fdm-sys"
+        in script
+    )
+    assert (
+        'native_build_fingerprint="fullmag-managed-fem-native-build.v1'
+        in script
+    )
+    assert '${FULLMAG_CUDA_ARCHITECTURES}' in script
+    assert '${FULLMAG_ENABLE_NVTX}' in script
+
+    build_index = script.find(
+        "cargo +nightly -Z checksum-freshness build"
+    )
+    stamp_move_index = script.find(
+        'mv "${native_build_stamp_tmp}" "${native_build_stamp}"'
+    )

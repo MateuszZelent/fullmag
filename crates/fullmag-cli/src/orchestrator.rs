@@ -5014,9 +5014,7 @@ fn execute_manual_interactive_remesh(
             }
         }
     } else {
-        eprintln!(
-            "[fullmag] structured-grid mesh is already materialized for the active FDM plan"
-        );
+        eprintln!("[fullmag] structured-grid mesh is already materialized for the active FDM plan");
         let source_scene_revision = mesh_source_scene_revision(&opts);
         let mesh_summary = serde_json::json!({
             "kind": "mesh_build_summary",
@@ -6961,11 +6959,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     // runtime after the browser explicitly replaces it with a runnable scene.
     let _scratch_runtime = if !args.headless {
         std::env::current_exe().ok().map(|executable| {
-            crate::scratch_runtime::spawn(
-                api_port(),
-                executable,
-                Some(session_id.clone()),
-            )
+            crate::scratch_runtime::spawn(api_port(), executable, Some(session_id.clone()))
         })
     } else {
         None
@@ -7803,17 +7797,17 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     // ── wait_for_solve gate ──────────────────────────────────────────────
     let wait_for_solve_requested = attached_wait_for_solve_enabled()
         || stages
-        .first()
-        .map(|stage| {
-            stage
-                .ir
-                .problem_meta
-                .runtime_metadata
-                .get("wait_for_solve")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
-        })
-        .unwrap_or(false);
+            .first()
+            .map(|stage| {
+                stage
+                    .ir
+                    .problem_meta
+                    .runtime_metadata
+                    .get("wait_for_solve")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
     let _is_fem_backend = matches!(&initial_execution_plan.backend_plan, BackendPlanIR::Fem(_));
     let wait_for_solve_supported = wait_for_solve_supported(&initial_execution_plan.backend_plan);
 
@@ -8296,29 +8290,30 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 }
                 WaitForSolveCommandAction::StartSolver => {
                     if matches!(cmd.kind.as_str(), "relax" | "run" | "solve") {
-                        let Some(mut command_stage) =
-                            (match build_interactive_command_stage(&stages[0].ir, &cmd) {
-                                Ok(Some(stage)) => Some(stage),
-                                Ok(None) => {
-                                    let message = format!(
+                        let Some(mut command_stage) = (match build_interactive_command_stage(
+                            &stages[0].ir,
+                            &cmd,
+                        ) {
+                            Ok(Some(stage)) => Some(stage),
+                            Ok(None) => {
+                                let message = format!(
                                         "wait_for_solve command '{}' did not produce an executable stage",
                                         cmd.kind
                                     );
-                                    live_workspace.push_log("error", message.clone());
-                                    eprintln!("[fullmag] {message}");
-                                    None
-                                }
-                                Err(error) => {
-                                    let message = format!(
-                                        "wait_for_solve command '{}' rejected: {}",
-                                        cmd.kind, error
-                                    );
-                                    live_workspace.push_log("error", message.clone());
-                                    eprintln!("[fullmag] {message}");
-                                    None
-                                }
-                            })
-                        else {
+                                live_workspace.push_log("error", message.clone());
+                                eprintln!("[fullmag] {message}");
+                                None
+                            }
+                            Err(error) => {
+                                let message = format!(
+                                    "wait_for_solve command '{}' rejected: {}",
+                                    cmd.kind, error
+                                );
+                                live_workspace.push_log("error", message.clone());
+                                eprintln!("[fullmag] {message}");
+                                None
+                            }
+                        }) else {
                             continue;
                         };
                         apply_current_fem_overrides(
@@ -8364,10 +8359,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         }
                         live_workspace.push_log(
                             "info",
-                            format!(
-                                "Applied solver command payload overrides for {}",
-                                cmd.kind
-                            ),
+                            format!("Applied solver command payload overrides for {}", cmd.kind),
                         );
                     }
                     eprintln!("[fullmag] compute requested — starting solver");
@@ -12512,9 +12504,10 @@ mod tests {
             failure.detail.as_deref(),
             Some("materialized validator leaked <path>")
         );
-        assert!(failure.diagnostics_correlation_id.as_deref().is_some_and(
-            |value| value.starts_with("preparation-solver_initialization-")
-        ));
+        assert!(failure
+            .diagnostics_correlation_id
+            .as_deref()
+            .is_some_and(|value| value.starts_with("preparation-solver_initialization-")));
         assert!(preparation.log_tail.iter().any(|entry| {
             entry.stage_id == PreparationStageId::SolverInitialization
                 && entry.message == "Checking fully materialized runtime validity"
@@ -12564,9 +12557,10 @@ mod tests {
             failure.detail.as_deref(),
             Some("materialized planner leaked backend internals")
         );
-        assert!(failure.diagnostics_correlation_id.as_deref().is_some_and(
-            |value| value.starts_with("preparation-solver_initialization-")
-        ));
+        assert!(failure
+            .diagnostics_correlation_id
+            .as_deref()
+            .is_some_and(|value| value.starts_with("preparation-solver_initialization-")));
         assert!(preparation.log_tail.iter().any(|entry| {
             entry.stage_id == PreparationStageId::SolverInitialization
                 && entry.message == "Checking the fully materialized execution plan"

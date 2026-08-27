@@ -89,13 +89,13 @@ fn main() {
     } else {
         build_dir.join("backends/fdm")
     };
-    println!("cargo:rustc-link-search=native={}", native_lib_dir.display());
-    println!("cargo:rustc-link-lib=dylib=fullmag_fdm");
-    emit_unix_runtime_rpath("$ORIGIN/../lib");
     println!(
-        "cargo:metadata=lib_dir={}",
+        "cargo:rustc-link-search=native={}",
         native_lib_dir.display()
     );
+    println!("cargo:rustc-link-lib=dylib=fullmag_fdm");
+    emit_unix_runtime_rpath("$ORIGIN/../lib");
+    println!("cargo:metadata=lib_dir={}", native_lib_dir.display());
 }
 
 fn emit_unix_runtime_rpath(path: &str) {
@@ -116,7 +116,11 @@ fn generate_execution_receipt_value_assertions() {
     let mut executed_backend_count = 0usize;
     let mut operator_location_count = 0usize;
     let mut operator_mask_count = 0usize;
-    for line in source.lines().map(str::trim).filter(|line| !line.is_empty()) {
+    for line in source
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
         let (macro_name, arguments) = line
             .split_once('(')
             .expect("receipt values line must be a macro invocation");
@@ -136,12 +140,23 @@ fn generate_execution_receipt_value_assertions() {
         let rust_value = value.trim().replace("ull", "u64");
         assertions.push_str(&format!(
             "assert_eq!({}, {}, \"unexpected receipt ABI value for {}\");\n",
-            name.trim(), rust_value, name.trim()
+            name.trim(),
+            rust_value,
+            name.trim()
         ));
     }
-    assert_eq!(execution_class_count, 5, "execution class value count drift");
-    assert_eq!(executed_backend_count, 2, "executed backend value count drift");
-    assert_eq!(operator_location_count, 5, "operator location value count drift");
+    assert_eq!(
+        execution_class_count, 5,
+        "execution class value count drift"
+    );
+    assert_eq!(
+        executed_backend_count, 2,
+        "executed backend value count drift"
+    );
+    assert_eq!(
+        operator_location_count, 5,
+        "operator location value count drift"
+    );
     assert_eq!(operator_mask_count, 19, "operator mask value count drift");
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
     std::fs::write(
@@ -166,7 +181,11 @@ fn generate_execution_receipt_layout_assertions_for(
     let mut assertions = String::new();
     let mut field_count = 0usize;
     let mut size_count = 0usize;
-    for line in source.lines().map(str::trim).filter(|line| !line.is_empty()) {
+    for line in source
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
         let (macro_name, arguments) = line
             .split_once('(')
             .expect("receipt layout line must be a macro invocation");
@@ -193,27 +212,24 @@ fn generate_execution_receipt_layout_assertions_for(
             other => panic!("unknown receipt layout macro: {other}"),
         }
     }
-    assert_eq!(field_count, expected_field_count, "receipt layout field count drift");
+    assert_eq!(
+        field_count, expected_field_count,
+        "receipt layout field count drift"
+    );
     assert_eq!(size_count, 1, "receipt layout size declaration drift");
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
     std::fs::write(
-        out_dir.join(format!("execution_receipt_{abi_suffix}_layout_assertions.rs")),
+        out_dir.join(format!(
+            "execution_receipt_{abi_suffix}_layout_assertions.rs"
+        )),
         format!("{{\n{assertions}}}\n"),
     )
     .expect("writing generated execution receipt layout assertions should succeed");
 }
 
 fn generate_execution_receipt_layout_assertions() {
-    generate_execution_receipt_layout_assertions_for(
-        "v1",
-        "fullmag_fdm_execution_receipt_v1",
-        32,
-    );
-    generate_execution_receipt_layout_assertions_for(
-        "v2",
-        "fullmag_fdm_execution_receipt_v2",
-        36,
-    );
+    generate_execution_receipt_layout_assertions_for("v1", "fullmag_fdm_execution_receipt_v1", 32);
+    generate_execution_receipt_layout_assertions_for("v2", "fullmag_fdm_execution_receipt_v2", 36);
 }
 
 fn generate_plan_desc_layout_assertions() {
@@ -303,8 +319,14 @@ fn generate_plan_desc_layout_assertions() {
             "assert_eq!({offset_expression}, {expected}, \"unexpected offset for {label}\");\n"
         ));
     }
-    assert_eq!(header_fields, 2, "v2 layout manifest header field count drift");
-    assert_eq!(aggregate_fields, 2, "v2 layout manifest aggregate field count drift");
+    assert_eq!(
+        header_fields, 2,
+        "v2 layout manifest header field count drift"
+    );
+    assert_eq!(
+        aggregate_fields, 2,
+        "v2 layout manifest aggregate field count drift"
+    );
     assert_eq!(base_fields, 140, "base plan descriptor field count drift");
     assert_eq!(grid_fields, 6, "grid descriptor field count drift");
     assert_eq!(material_fields, 4, "material descriptor field count drift");

@@ -209,10 +209,55 @@ impl FdmPlanarField {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) enum FemPlanarElement {
+    Tet4([u32; 4]),
+    Prism6([u32; 6]),
+}
+
+impl FemPlanarElement {
+    pub(super) fn nodes(&self) -> &[u32] {
+        match self {
+            Self::Tet4(nodes) => nodes,
+            Self::Prism6(nodes) => nodes,
+        }
+    }
+
+    pub(super) fn edges(&self) -> &'static [(usize, usize)] {
+        match self {
+            Self::Tet4(_) => &[(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)],
+            Self::Prism6(_) => &[
+                (0, 1),
+                (1, 2),
+                (2, 0),
+                (3, 4),
+                (4, 5),
+                (5, 3),
+                (0, 3),
+                (1, 4),
+                (2, 5),
+            ],
+        }
+    }
+
+    pub(super) fn faces(&self) -> &'static [&'static [usize]] {
+        match self {
+            Self::Tet4(_) => &[&[0, 2, 1], &[0, 1, 3], &[0, 3, 2], &[1, 2, 3]],
+            Self::Prism6(_) => &[
+                &[0, 2, 1],
+                &[3, 4, 5],
+                &[0, 1, 4, 3],
+                &[1, 2, 5, 4],
+                &[2, 0, 3, 5],
+            ],
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct FemPlanarField {
     n_comp: usize,
     nodes: Vec<[f64; 3]>,
-    elements: Vec<[u32; 4]>,
+    elements: Vec<FemPlanarElement>,
     element_markers: Vec<u32>,
     values: Vec<f64>,
 }
@@ -225,6 +270,22 @@ impl FemPlanarField {
         element_markers: Vec<u32>,
         values: Vec<f64>,
     ) -> Result<Self, ApiError> {
+        Self::new_mixed(
+            n_comp,
+            nodes,
+            elements.into_iter().map(FemPlanarElement::Tet4).collect(),
+            element_markers,
+            values,
+        )
+    }
+
+    pub(crate) fn new_mixed(
+        n_comp: usize,
+        nodes: Vec<[f64; 3]>,
+        elements: Vec<FemPlanarElement>,
+        element_markers: Vec<u32>,
+        values: Vec<f64>,
+    ) -> Result<Self, ApiError> {
         if n_comp == 0
             || nodes.is_empty()
             || elements.is_empty()
@@ -232,7 +293,7 @@ impl FemPlanarField {
             || values.len() != nodes.len().saturating_mul(n_comp)
             || elements
                 .iter()
-                .flatten()
+                .flat_map(FemPlanarElement::nodes)
                 .any(|index| *index as usize >= nodes.len())
         {
             return Err(ApiError::bad_request(
@@ -254,7 +315,7 @@ impl FemPlanarField {
     pub(super) fn n_comp(&self) -> usize {
         self.n_comp
     }
-    pub(super) fn elements(&self) -> &[[u32; 4]] {
+    pub(super) fn elements(&self) -> &[FemPlanarElement] {
         &self.elements
     }
     pub(super) fn markers(&self) -> &[u32] {
@@ -266,11 +327,20 @@ impl FemPlanarField {
 
     #[cfg(test)]
     pub(crate) fn refine_uniform_p1(&self) -> Self {
+        assert!(
+            self.elements
+                .iter()
+                .all(|element| matches!(element, FemPlanarElement::Tet4(_))),
+            "uniform test refinement is defined only for Tet4"
+        );
         let mut nodes = self.nodes.clone();
         let mut values = self.values.clone();
         let mut elements = Vec::with_capacity(self.elements.len() * 4);
         let mut markers = Vec::with_capacity(self.elements.len() * 4);
         for (element_index, element) in self.elements.iter().enumerate() {
+            let FemPlanarElement::Tet4(element) = element else {
+                unreachable!("guarded above")
+            };
             let centroid = (0..3)
                 .map(|axis| {
                     element
@@ -293,10 +363,10 @@ impl FemPlanarField {
             }
             let [a, b, c, d] = *element;
             elements.extend([
-                [centroid_id, b, c, d],
-                [a, centroid_id, c, d],
-                [a, b, centroid_id, d],
-                [a, b, c, centroid_id],
+                FemPlanarElement::Tet4([centroid_id, b, c, d]),
+                FemPlanarElement::Tet4([a, centroid_id, c, d]),
+                FemPlanarElement::Tet4([a, b, centroid_id, d]),
+                FemPlanarElement::Tet4([a, b, c, centroid_id]),
             ]);
             markers.extend(
                 [self.element_markers

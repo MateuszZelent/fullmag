@@ -1838,9 +1838,7 @@ mod tests {
                 detail: "Serializing and validating the shared-domain mesh (45.0s elapsed)"
                     .to_string(),
                 progress_percent: None,
-                progress_label: Some(
-                    "serializing and validating shared-domain mesh".to_string()
-                ),
+                progress_label: Some("serializing and validating shared-domain mesh".to_string()),
             })
         );
     }

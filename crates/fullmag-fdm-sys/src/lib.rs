@@ -1507,9 +1507,7 @@ extern "C" {
         out_receipt: *mut fullmag_fdm_plan_desc_v2,
     ) -> i32;
 
-    pub fn fullmag_fdm_plan_ingestion_v2_destroy(
-        ingestion: *mut fullmag_fdm_plan_ingestion_v2,
-    );
+    pub fn fullmag_fdm_plan_ingestion_v2_destroy(ingestion: *mut fullmag_fdm_plan_ingestion_v2);
 
     pub fn fullmag_fdm_backend_create_time_policy_v2_checked(
         plan: *const fullmag_fdm_plan_desc_v2,
@@ -2548,35 +2546,89 @@ mod tests {
         assert_eq!(FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V2, 2);
         assert_eq!(size_of::<fullmag_fdm_llg_checkpoint_info_v2>(), 248);
         assert_eq!(align_of::<fullmag_fdm_llg_checkpoint_info_v2>(), 8);
-        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v2, device_ordinal), 40);
-        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v2, cell_count), 48);
-        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v2, accepted_step_index), 72);
-        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v2, current_time), 88);
-        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v2, rhs_source_revision), 112);
-        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v2, abm_last_dt), 152);
-        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v2, adaptive_previous_error), 168);
-        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v2, fsal_accepted_state_revision), 176);
-        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v2, fsal_integrator_identity), 240);
+        assert_eq!(
+            offset_of!(fullmag_fdm_llg_checkpoint_info_v2, device_ordinal),
+            40
+        );
+        assert_eq!(
+            offset_of!(fullmag_fdm_llg_checkpoint_info_v2, cell_count),
+            48
+        );
+        assert_eq!(
+            offset_of!(fullmag_fdm_llg_checkpoint_info_v2, accepted_step_index),
+            72
+        );
+        assert_eq!(
+            offset_of!(fullmag_fdm_llg_checkpoint_info_v2, current_time),
+            88
+        );
+        assert_eq!(
+            offset_of!(fullmag_fdm_llg_checkpoint_info_v2, rhs_source_revision),
+            112
+        );
+        assert_eq!(
+            offset_of!(fullmag_fdm_llg_checkpoint_info_v2, abm_last_dt),
+            152
+        );
+        assert_eq!(
+            offset_of!(fullmag_fdm_llg_checkpoint_info_v2, adaptive_previous_error),
+            168
+        );
+        assert_eq!(
+            offset_of!(
+                fullmag_fdm_llg_checkpoint_info_v2,
+                fsal_accepted_state_revision
+            ),
+            176
+        );
+        assert_eq!(
+            offset_of!(fullmag_fdm_llg_checkpoint_info_v2, fsal_integrator_identity),
+            240
+        );
     }
 
     #[test]
     fn llg_checkpoint_info_v3_matches_the_exact_execution_and_rng_layout() {
         assert_eq!(FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V3, 3);
-        assert_eq!(size_of::<fullmag_fdm_checkpoint_execution_identity_v3>(), 88);
-        assert_eq!(align_of::<fullmag_fdm_checkpoint_execution_identity_v3>(), 4);
+        assert_eq!(
+            size_of::<fullmag_fdm_checkpoint_execution_identity_v3>(),
+            88
+        );
+        assert_eq!(
+            align_of::<fullmag_fdm_checkpoint_execution_identity_v3>(),
+            4
+        );
         assert_eq!(
             offset_of!(fullmag_fdm_checkpoint_execution_identity_v3, device_ordinal),
             80
         );
         assert_eq!(size_of::<fullmag_fdm_llg_checkpoint_info_v3>(), 320);
         assert_eq!(align_of::<fullmag_fdm_llg_checkpoint_info_v3>(), 8);
-        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v3, execution_identity), 8);
-        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v3, cell_count), 104);
-        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v3, thermal_seed), 160);
-        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v3, rng_algorithm), 168);
-        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v3, fsal_valid), 216);
         assert_eq!(
-            offset_of!(fullmag_fdm_llg_checkpoint_info_v3, fsal_accepted_state_revision),
+            offset_of!(fullmag_fdm_llg_checkpoint_info_v3, execution_identity),
+            8
+        );
+        assert_eq!(
+            offset_of!(fullmag_fdm_llg_checkpoint_info_v3, cell_count),
+            104
+        );
+        assert_eq!(
+            offset_of!(fullmag_fdm_llg_checkpoint_info_v3, thermal_seed),
+            160
+        );
+        assert_eq!(
+            offset_of!(fullmag_fdm_llg_checkpoint_info_v3, rng_algorithm),
+            168
+        );
+        assert_eq!(
+            offset_of!(fullmag_fdm_llg_checkpoint_info_v3, fsal_valid),
+            216
+        );
+        assert_eq!(
+            offset_of!(
+                fullmag_fdm_llg_checkpoint_info_v3,
+                fsal_accepted_state_revision
+            ),
             248
         );
         assert_eq!(

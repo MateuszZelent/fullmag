@@ -15322,7 +15322,10 @@ fn fem_planner_reports_every_failed_mixed_p1_scope_predicate() {
         reason.contains("auto_or_poisson_open_boundary_order_one"),
         "{reason}"
     );
-    assert!(reason.contains("unsupported_material_field_or_dmi"), "{reason}");
+    assert!(
+        reason.contains("unsupported_material_field_or_dmi"),
+        "{reason}"
+    );
 }
 
 #[test]

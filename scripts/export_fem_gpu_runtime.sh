@@ -6,6 +6,8 @@ REPO_ROOT="${FULLMAG_RUNTIME_PUBLICATION_REPO_ROOT:-${SOURCE_ROOT}}"
 source "${SOURCE_ROOT}/scripts/lib/managed_fem_image_identity.sh"
 source "${SOURCE_ROOT}/scripts/lib/managed_fem_runtime_storage.sh"
 source "${SOURCE_ROOT}/scripts/lib/managed_fem_native_storage.sh"
+source "${SOURCE_ROOT}/scripts/lib/managed_fem_build_policy.sh"
+: "${FULLMAG_NATIVE_STORAGE_PROFILE:=canonical}"
 RUNTIME_PARENT="${REPO_ROOT}/.fullmag/runtimes"
 RUNTIME_ROOT="${RUNTIME_PARENT}/fem-gpu-host"
 VARIANTS_ROOT=""
@@ -28,6 +30,7 @@ bootstrapped_source_snapshot_root="${FULLMAG_BOOTSTRAPPED_SOURCE_SNAPSHOT_ROOT:-
 bootstrapped_source_provenance_file="${FULLMAG_BOOTSTRAPPED_SOURCE_PROVENANCE_FILE:-}"
 source_identity_file=""
 source_provenance_json=""
+FULLMAG_NATIVE_BUILD_SOURCE_SHA256=""
 SOURCE_SNAPSHOT_ROOT=""
 source_snapshot_materialize_root=""
 source_identity_owned=0
@@ -204,6 +207,8 @@ cd "${SOURCE_ROOT}"
 #rm -rf target/* target/.* 2>/dev/null || true
 
 resolve_managed_fem_native_storage
+resolve_managed_fem_build_policy
+readonly FULLMAG_NATIVE_STORAGE_PROFILE
 readonly FULLMAG_NATIVE_BUILD_STORAGE_ROOT
 readonly FULLMAG_NATIVE_BUILD_IMAGE
 readonly FULLMAG_NATIVE_MOUNT_VIEW
@@ -228,8 +233,8 @@ readonly VARIANTS_ROOT STAGING_ROOT
 : "${FULLMAG_FEM_RUNTIME_VARIANT:=hypre-${FULLMAG_HYPRE_MEMORY_VARIANT}}"
 : "${FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY:=8.9}"
 : "${FULLMAG_ENABLE_NVTX:=0}"
-: "${FULLMAG_FEM_RUNTIME_REUSE_BUILD:=0}"
 : "${FULLMAG_RUNTIME_PRUNE:=1}"
+: "${FULLMAG_RUNTIME_ARCHIVE_COPY_VERIFY:=auto}"
 case "${FULLMAG_RUNTIME_PRUNE}" in
   0|1) ;;
   *) echo "[export_fem_gpu_runtime] FULLMAG_RUNTIME_PRUNE must be 0 or 1" >&2; exit 2 ;;
@@ -242,6 +247,29 @@ case "${FULLMAG_FEM_RUNTIME_REUSE_BUILD}" in
   0|1) ;;
   *) echo "[export_fem_gpu_runtime] FULLMAG_FEM_RUNTIME_REUSE_BUILD must be 0 or 1" >&2; exit 2 ;;
 esac
+case "${FULLMAG_RUNTIME_ARCHIVE_COPY_VERIFY}" in
+  auto)
+    case "${FULLMAG_NATIVE_STORAGE_PROFILE}" in
+      canonical) FULLMAG_RUNTIME_ARCHIVE_COPY_VERIFY=1 ;;
+      local-d) FULLMAG_RUNTIME_ARCHIVE_COPY_VERIFY=0 ;;
+      *)
+        echo "[export_fem_gpu_runtime] unsupported FULLMAG_NATIVE_STORAGE_PROFILE: ${FULLMAG_NATIVE_STORAGE_PROFILE}" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  0|1) ;;
+  *)
+    echo "[export_fem_gpu_runtime] FULLMAG_RUNTIME_ARCHIVE_COPY_VERIFY must be auto, 0, or 1" >&2
+    exit 2
+    ;;
+esac
+readonly FULLMAG_RUNTIME_ARCHIVE_COPY_VERIFY
+if [ "${FULLMAG_RUNTIME_ARCHIVE_COPY_VERIFY}" = "1" ]; then
+  echo "[export_fem_gpu_runtime] verifying durable latest archive copy byte-for-byte"
+else
+  echo "[export_fem_gpu_runtime] skipping durable latest archive byte comparison; archive validation remains enabled"
+fi
 validate_container_target_dir
 if [ ! -d "${FULLMAG_BUILD_ROOT}" ] || [ ! -w "${FULLMAG_BUILD_ROOT}" ]; then
   echo "[export_fem_gpu_runtime] persistent build root is missing or not writable: ${FULLMAG_BUILD_ROOT}" >&2
@@ -276,6 +304,32 @@ prepare_source_provenance() {
     --source-input-manifest "${REPO_ROOT}/scripts/managed_fem_runtime_source_inputs.v1.txt" \
     "${source_provenance_args[@]}" \
     --output "${source_provenance_json}"
+}
+
+prepare_native_build_source_digest() {
+  if [ -n "${FULLMAG_NATIVE_BUILD_SOURCE_SHA256}" ]; then
+    return 0
+  fi
+  local -a native_source_args=()
+  case "${FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT:-0}" in
+    0) ;;
+    1) native_source_args+=(--allow-dirty) ;;
+    *)
+      echo "[export_fem_gpu_runtime] FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT must be 0 or 1" >&2
+      return 2
+      ;;
+  esac
+  FULLMAG_NATIVE_BUILD_SOURCE_SHA256="$(
+    python3 scripts/hash_managed_fem_runtime_sources.py \
+      --repo-root "${REPO_ROOT}" \
+      --source-input-manifest "${REPO_ROOT}/scripts/managed_fem_native_build_inputs.v1.txt" \
+      "${native_source_args[@]}" |
+      python3 -c 'import hashlib,json,sys; payload=json.load(sys.stdin); source=payload["source_provenance"]["source_inputs_sha256"]; manifest=payload["build_inputs"]["source_input_manifest_sha256"]; print(hashlib.sha256((source+"\0"+manifest).encode()).hexdigest())'
+  )"
+  if ! [[ "${FULLMAG_NATIVE_BUILD_SOURCE_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "[export_fem_gpu_runtime] native build source digest is invalid" >&2
+    return 2
+  fi
 }
 
 verify_source_snapshot_identity() {
@@ -314,6 +368,7 @@ bootstrap_new_source_snapshot() {
     --ignore-non-runtime-dirty \
     --output "${source_identity_file}"
   prepare_source_provenance
+  prepare_native_build_source_digest
   source_snapshot_sha256="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_snapshot_sha256"])' "${source_identity_file}")"
   SOURCE_SNAPSHOT_ROOT="${FULLMAG_CONTAINER_TARGET_DIR}/source-cache.${source_snapshot_sha256}"
   if [ -e "${SOURCE_SNAPSHOT_ROOT}" ]; then
@@ -382,6 +437,7 @@ FULLMAG_HOST_UID="$(id -u)"
 FULLMAG_HOST_GID="$(id -g)"
 resolve_source_snapshot_bootstrap
 prepare_source_provenance
+prepare_native_build_source_digest
 if [ ! -f "${source_identity_file}" ] || [ ! -d "${SOURCE_SNAPSHOT_ROOT}" ]; then
   echo "[export_fem_gpu_runtime] immutable source snapshot bootstrap is incomplete" >&2
   exit 2
@@ -398,7 +454,7 @@ if [ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_
   echo "[export_fem_gpu_runtime] source provenance commit differs from immutable source snapshot" >&2
   exit 2
 fi
-readonly FULLMAG_SOURCE_GIT_COMMIT FULLMAG_SOURCE_GIT_TREE FULLMAG_SOURCE_WORKTREE_STATE FULLMAG_SOURCE_SNAPSHOT_SHA256
+readonly FULLMAG_SOURCE_GIT_COMMIT FULLMAG_SOURCE_GIT_TREE FULLMAG_SOURCE_WORKTREE_STATE FULLMAG_SOURCE_SNAPSHOT_SHA256 FULLMAG_NATIVE_BUILD_SOURCE_SHA256
 verify_source_snapshot_identity
 cd "${SOURCE_SNAPSHOT_ROOT}"
 
@@ -413,6 +469,8 @@ FULLMAG_FEM_GPU_IMAGE="${docker_image_id}" docker compose --profile fem-gpu run 
   -e FULLMAG_FEM_RUNTIME_CARGO_JOBS="${FULLMAG_FEM_RUNTIME_CARGO_JOBS}" \
   -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES}" \
   -e FULLMAG_ENABLE_NVTX="${FULLMAG_ENABLE_NVTX}" \
+  -e FULLMAG_NATIVE_BUILD_SOURCE_SHA256="${FULLMAG_NATIVE_BUILD_SOURCE_SHA256}" \
+  -e FULLMAG_MANAGED_FEM_IMAGE_ID="${docker_image_id}" \
   -e FULLMAG_HOST_UID="${FULLMAG_HOST_UID}" \
   -e FULLMAG_HOST_GID="${FULLMAG_HOST_GID}" \
   -e FULLMAG_SOURCE_GIT_COMMIT="${FULLMAG_SOURCE_GIT_COMMIT}" \
@@ -425,10 +483,19 @@ FULLMAG_FEM_GPU_IMAGE="${docker_image_id}" docker compose --profile fem-gpu run 
   fem-gpu bash -lc '
 set -euo pipefail
 runtime_root="${FULLMAG_RUNTIME_EXPORT_STAGING:?missing managed FEM runtime staging directory}"
+native_build_stamp="/workspace/target/.fullmag-managed-fem-native-build-v1"
+native_build_stamp_tmp="${native_build_stamp}.tmp.$$"
+native_build_fingerprint="fullmag-managed-fem-native-build.v1|source=${FULLMAG_NATIVE_BUILD_SOURCE_SHA256:?missing native build source digest}|image=${FULLMAG_MANAGED_FEM_IMAGE_ID:?missing managed FEM image ID}|cuda=${FULLMAG_CUDA_ARCHITECTURES:?missing CUDA architectures}|nvtx=${FULLMAG_ENABLE_NVTX:?missing NVTX policy}"
+if ! [[ "${FULLMAG_NATIVE_BUILD_SOURCE_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "[export_fem_gpu_runtime] native build source digest is invalid inside the build container" >&2
+  exit 2
+fi
+rm -f -- "${native_build_stamp_tmp}"
 mkdir -p "${TMPDIR}" "${CARGO_HOME}"
 restore_staging_owner() {
   local status="$?"
   trap - EXIT
+  rm -f -- "${native_build_stamp_tmp}"
   if [ -e "${runtime_root}" ]; then
     chown -R "${FULLMAG_HOST_UID}:${FULLMAG_HOST_GID}" "${runtime_root}" 2>/dev/null || true
     chmod -R u+rwX,go+rX,go-w "${runtime_root}" 2>/dev/null || true
@@ -472,7 +539,14 @@ if [ "${FULLMAG_FEM_RUNTIME_REUSE_BUILD}" = "0" ]; then
     exit 2
   fi
 else
-  echo "[export_fem_gpu_runtime] reusing the task-specific target through Cargo freshness checks"
+  if [ -f "${native_build_stamp}" ] &&
+     [ "$(cat "${native_build_stamp}")" = "${native_build_fingerprint}" ]; then
+    echo "[export_fem_gpu_runtime] reusing native CMake/CUDA artifacts with an exact build fingerprint"
+  else
+    echo "[export_fem_gpu_runtime] native build fingerprint changed; invalidating only FEM/FDM sys crates"
+    cargo +nightly clean -p fullmag-fem-sys -p fullmag-fdm-sys
+  fi
+  echo "[export_fem_gpu_runtime] reusing the task-specific target through Cargo checksum freshness"
 fi
 
 echo "[export_fem_gpu_runtime] building fullmag-cli, fullmag-api, and PyO3 core with cuda fem-gpu release features"
@@ -485,7 +559,9 @@ echo "[export_fem_gpu_runtime] cargo build jobs: ${cargo_jobs}"
 if [ "${FULLMAG_ENABLE_NVTX}" = "1" ]; then
   export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }--cfg fullmag_enable_nvtx --check-cfg=cfg(fullmag_enable_nvtx)"
 fi
-FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES}" FULLMAG_USE_MFEM_STACK=ON cargo +nightly build -j "$cargo_jobs" -p fullmag-cli -p fullmag-api -p fullmag-py-core --features "fullmag-cli/cuda fullmag-cli/fem-gpu fullmag-cli/stage-autosave-hdf5 fullmag-api/cuda fullmag-api/fem-gpu fullmag-api/stage-autosave-hdf5" --release 2>&1 | tee "${TMPDIR}/fullmag-build.log"
+FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES}" FULLMAG_USE_MFEM_STACK=ON cargo +nightly -Z checksum-freshness build -j "$cargo_jobs" -p fullmag-cli -p fullmag-api -p fullmag-py-core --features "fullmag-cli/cuda fullmag-cli/fem-gpu fullmag-cli/stage-autosave-hdf5 fullmag-api/cuda fullmag-api/fem-gpu fullmag-api/stage-autosave-hdf5" --release 2>&1 | tee "${TMPDIR}/fullmag-build.log"
+printf "%s\n" "${native_build_fingerprint}" > "${native_build_stamp_tmp}"
+mv "${native_build_stamp_tmp}" "${native_build_stamp}"
 echo "[export_fem_gpu_runtime] clearing previous runtime bundle contents"
 clear_runtime_bundle_contents
 echo "[export_fem_gpu_runtime] copying launcher and API binaries"
@@ -1233,9 +1309,11 @@ publish_runtime_bundle() {
   validate_persistent_runtime_archive "${persistent_archive}" "${variant_root}"
   persistent_staging_archive="${PERSISTENT_LATEST_ARCHIVE}.staging.$$"
   cp -- "${persistent_archive}" "${persistent_staging_archive}"
-  if ! cmp -s "${persistent_archive}" "${persistent_staging_archive}"; then
-    echo "[export_fem_gpu_runtime] durable latest archive copy differs from immutable archive" >&2
-    return 2
+  if [ "${FULLMAG_RUNTIME_ARCHIVE_COPY_VERIFY}" = "1" ]; then
+    if ! cmp -s "${persistent_archive}" "${persistent_staging_archive}"; then
+      echo "[export_fem_gpu_runtime] durable latest archive copy differs from immutable archive" >&2
+      return 2
+    fi
   fi
   verify_source_snapshot_identity
   mv -f "${persistent_staging_archive}" "${PERSISTENT_LATEST_ARCHIVE}"

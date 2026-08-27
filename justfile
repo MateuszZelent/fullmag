@@ -5163,6 +5163,8 @@ run-nanoflower-interactive-quadro-gpu:
 
 ensure-managed-fem-runtime:
     bash -euo pipefail -c '\
+      source scripts/lib/managed_fem_build_policy.sh; \
+      resolve_managed_fem_build_policy; \
       identity_file="$(mktemp "${TMPDIR:-/tmp}/fullmag-current-source.XXXXXXXXXX.json")"; \
       trap '\''rm -f -- "$identity_file"'\'' EXIT; \
       python3 scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --output "$identity_file"; \
@@ -5195,7 +5197,7 @@ ensure-managed-fem-runtime:
               --runtime-root .fullmag/runtimes/fem-gpu-host; \
             runtime_reused_for_non_runtime_changes=1; \
           else \
-            FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT=1 FULLMAG_FEM_RUNTIME_REUSE_BUILD=0 just rebuild-fem-runtime; \
+            FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT=1 FULLMAG_FEM_RUNTIME_REUSE_BUILD="$FULLMAG_FEM_RUNTIME_REUSE_BUILD" just rebuild-fem-runtime; \
             runtime_rebuilt=1; \
           fi; \
         fi; \
@@ -5699,6 +5701,9 @@ verify-viewport-2d-planar-compact-full-contract:
     mkdir -p .fullmag/reports/viewport-2d-planar-monitor-smoke
     set -o pipefail; docker compose --profile fem-gpu run --rm fem-gpu bash -lc 'cd /workspace && cargo test -p fullmag-api planar_sampling::target_tests::compact_fem_plane_and_slab_match_equivalent_full_carrier -- --exact' 2>&1 | tee .fullmag/reports/viewport-2d-planar-monitor-smoke/compact-full-contract.log
     "{{repo_python}}" scripts/analysis/validate_planar_monitor_sampling.py --verify-compact-full-contract-log .fullmag/reports/viewport-2d-planar-monitor-smoke/compact-full-contract.log --compact-full-contract-output .fullmag/reports/viewport-2d-planar-monitor-smoke/compact-full-contract-report.json
+
+verify-planar-sampling-prism6-contract:
+    docker compose --profile fem-gpu run --rm fem-gpu bash -lc 'cd /workspace && cargo test -p fullmag-api prism6 --no-fail-fast && cargo test -p fullmag-api planar_sampling:: --no-fail-fast'
 
 aggregate-viewport-2d-planar-monitor-qualification:
     "{{repo_python}}" scripts/analysis/validate_planar_monitor_sampling.py --aggregate-report-root .fullmag/reports/viewport-2d-planar-monitor-smoke

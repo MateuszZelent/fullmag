@@ -40,19 +40,17 @@ pub use fdm::{
     compute_periodic_newell_kernel_spectra, run_reference_exchange_demo, AbmHistory, AbmHistorySoA,
     AdaptiveAttemptDecision, AdaptiveAttemptReason, AdaptiveAttemptRecord, AdaptiveStepConfig,
     AdaptiveStepController, AdaptiveStepDecision, AxisBoundary, CellSize, CoupledImexArk2Stage,
-    CoupledImexArk2Tableau, CubicAnisotropyConfig,
-    DemagKernelSpectra, EffectiveFieldObservables, EffectiveFieldTerms, EngineError,
-    EngineErrorCode, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA,
-    ExternalStageTerms, FdmBoundaryPolicy, FdmDemagBoundary, FftWorkspace, GridShape,
-    IntegratorBuffers, LlgConfig, MagnetoelasticTermConfig, MaterialParameters, ProjectionPolicy,
-    OerstedCylinderConfig, ReferenceDemoReport, RegionalFieldDriveTerm,
-    ResolvedFdmPeriodicWorkspace, Result, RhsEvaluation, SlonczewskiFormula, SlonczewskiSttConfig,
-    SolverSession, SotConfig, SotFormula, StepReport, TimeIntegrator, UniaxialAnisotropyConfig,
-    VectorFieldSoA, ZhangLiFormula, ZhangLiSttConfig,
-    FDM_CPU_ADAPTIVE_RK23_MAX_RHS_EVALS_TO_ORACLE, FDM_CPU_ADAPTIVE_RK45_MAX_RHS_EVALS_TO_ORACLE,
+    CoupledImexArk2Tableau, CubicAnisotropyConfig, DemagKernelSpectra, EffectiveFieldObservables,
+    EffectiveFieldTerms, EngineError, EngineErrorCode, EvaluationRequest, ExchangeLlgProblem,
+    ExchangeLlgState, ExchangeLlgStateSoA, ExternalStageTerms, FdmBoundaryPolicy, FdmDemagBoundary,
+    FftWorkspace, GridShape, IntegratorBuffers, LlgConfig, MagnetoelasticTermConfig,
+    MaterialParameters, OerstedCylinderConfig, ProjectionPolicy, ReferenceDemoReport,
+    RegionalFieldDriveTerm, ResolvedFdmPeriodicWorkspace, Result, RhsEvaluation,
+    SlonczewskiFormula, SlonczewskiSttConfig, SolverSession, SotConfig, SotFormula, StepReport,
+    TimeIntegrator, UniaxialAnisotropyConfig, VectorFieldSoA, ZhangLiFormula, ZhangLiSttConfig,
     FDM_ADAPTIVE_CONTROLLER_MAX_REJECTED_ATTEMPTS, FDM_ADAPTIVE_CONTROLLER_POLICY_VERSION,
-    FDM_RK_PROJECTION_REALIZATION_VERSION,
-    MAX_ADAPTIVE_ATTEMPT_RECORDS,
+    FDM_CPU_ADAPTIVE_RK23_MAX_RHS_EVALS_TO_ORACLE, FDM_CPU_ADAPTIVE_RK45_MAX_RHS_EVALS_TO_ORACLE,
+    FDM_RK_PROJECTION_REALIZATION_VERSION, MAX_ADAPTIVE_ATTEMPT_RECORDS,
 };
 
 // ── Vector math utilities ─────────────────────────────────────────────
@@ -286,7 +284,11 @@ mod tests {
         let gamma_bar = gamma / (1.0 + alpha * alpha);
         assert_vector_close(
             [soa_rhs.x[0], soa_rhs.y[0], soa_rhs.z[0]],
-            [0.0, gamma_bar * field_amplitude, gamma_bar * alpha * field_amplitude],
+            [
+                0.0,
+                gamma_bar * field_amplitude,
+                gamma_bar * alpha * field_amplitude,
+            ],
             1.0e-15,
         );
 
@@ -454,10 +456,8 @@ mod tests {
             .expect("SoA Heun step");
 
         let mut aos_energy_workspace = problem.create_workspace();
-        let aos_energy = problem.total_energy_from_vectors_ws(
-            aos_state.magnetization(),
-            &mut aos_energy_workspace,
-        );
+        let aos_energy = problem
+            .total_energy_from_vectors_ws(aos_state.magnetization(), &mut aos_energy_workspace);
         let soa_magnetization = VectorFieldSoA::from_aos(soa_state.magnetization());
         let mut soa_energy_workspace = problem.create_workspace();
         let mut soa_scratch = VectorFieldSoA::zeros(grid.cell_count());
@@ -690,10 +690,7 @@ mod tests {
         }
     }
 
-    fn expected_face_dmi_energy(
-        problem: &ExchangeLlgProblem,
-        magnetization: &[Vector3],
-    ) -> f64 {
+    fn expected_face_dmi_energy(problem: &ExchangeLlgProblem, magnetization: &[Vector3]) -> f64 {
         let grid = problem.grid;
         let bpx = matches!(problem.boundary_policy.x, AxisBoundary::Periodic);
         let bpy = matches!(problem.boundary_policy.y, AxisBoundary::Periodic);
@@ -709,11 +706,7 @@ mod tests {
                 0.5 * (left[1] + right[1]),
                 0.5 * (left[2] + right[2]),
             ];
-            let jump = [
-                right[0] - left[0],
-                right[1] - left[1],
-                right[2] - left[2],
-            ];
+            let jump = [right[0] - left[0], right[1] - left[1], right[2] - left[2]];
             let density_integral = match axis {
                 0 => {
                     interfacial * (average[2] * jump[0] - average[0] * jump[2])

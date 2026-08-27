@@ -2097,10 +2097,7 @@ fn read_checkpoint_coupled_state(
         payload.backend_family.as_str(),
         "fdm_cpu_reference" | "fdm_cuda" | "fem_cpu" | "fem_gpu"
     );
-    if payload.format != "fullmag.backend_state.v1"
-        || !supported_backend
-        || !supported_integrator
-    {
+    if payload.format != "fullmag.backend_state.v1" || !supported_backend || !supported_integrator {
         return Err(ApiError::bad_request(
             "unsupported backend checkpoint envelope",
         ));
@@ -2203,7 +2200,11 @@ fn checkpoint_compatibility(snapshot: &SessionStateResponse) -> CheckpointCompat
     let restart_abi = Some(format!(
         "{}:{}",
         runtime_family,
-        snapshot.session.resolved_engine_id.as_deref().unwrap_or("default")
+        snapshot
+            .session
+            .resolved_engine_id
+            .as_deref()
+            .unwrap_or("default")
     ));
     let problem_hash = snapshot.scene_document.as_ref().and_then(|scene| {
         serde_json::to_vec(scene)
@@ -2977,17 +2978,15 @@ mod planar_presentation_migration_tests {
 
     #[test]
     fn checkpoint_request_types_support_expected_state_version() {
-        let req_create: CheckpointCreateRequest = serde_json::from_str(
-            r#"{"expected_state_version": 42, "reason": "test"}"#,
-        )
-        .expect("deserialize create req");
+        let req_create: CheckpointCreateRequest =
+            serde_json::from_str(r#"{"expected_state_version": 42, "reason": "test"}"#)
+                .expect("deserialize create req");
         assert_eq!(req_create.expected_state_version, Some(42));
         assert_eq!(req_create.reason.as_deref(), Some("test"));
 
-        let req_restore: CheckpointRestoreRequest = serde_json::from_str(
-            r#"{"expected_state_version": 99}"#,
-        )
-        .expect("deserialize restore req");
+        let req_restore: CheckpointRestoreRequest =
+            serde_json::from_str(r#"{"expected_state_version": 99}"#)
+                .expect("deserialize restore req");
         assert_eq!(req_restore.expected_state_version, Some(99));
     }
 }

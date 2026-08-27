@@ -9,6 +9,7 @@ import {
 import {
   ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
+  DATA_FIELD_AVAILABILITY_PATH,
   DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
   DATA_FDM_REGION_MEMBERSHIPS_PATH,
   DATA_FIELDS_PATH,
@@ -476,6 +477,45 @@ describe("RealtimeInvalidationBridge", () => {
 
     expect(resources.getRevision(DATA_FIELDS_PATH)).toBe(11);
     expect(resources.getRevision(DATA_QUANTITIES_PATH)).toBe(11);
+  });
+
+  it("does not fan a field catalog revision out to field payload resources", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const availabilityKey = DATA_FIELD_AVAILABILITY_PATH.replace(
+      "{quantity_id}",
+      "m",
+    );
+    const vectorKey = serializeCanonicalFieldVectorResourceKey(
+      canonicalFieldVectorQuery("m", { component: "full" }),
+    );
+
+    resources.subscribe(availabilityKey, () => {});
+    resources.subscribe(vectorKey, () => {});
+
+    expect(
+      bridge.handleEvent({
+        payload: {
+          changes: [
+            {
+              recommended_fetch: DATA_FIELDS_PATH,
+              resource: "fields",
+              resource_id: "catalog",
+              revision: 12,
+            },
+          ],
+        },
+        seq: 12,
+        session_id: "session-1",
+        type: "resource.batch_changed",
+      }),
+    ).toBe(true);
+
+    expect(resources.getRevision(DATA_FIELDS_PATH)).toBe(12);
+    expect(resources.getRevision(DATA_QUANTITIES_PATH)).toBe(12);
+    expect(resources.getRevision(availabilityKey)).toBeNull();
+    expect(resources.getRevision(vectorKey)).toBeNull();
   });
 
   it("invalidates session-scoped runtime resources when a run appears in the current session", () => {

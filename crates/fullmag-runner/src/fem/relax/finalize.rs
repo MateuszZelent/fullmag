@@ -59,16 +59,28 @@ mod tests {
     #[test]
     fn invalid_strict_receipt_executes_zero_terminal_success_side_effects() {
         let receipt = FemGpuExecutionReceipt {
-            requested: "strict_device".into(), resolved: "device_resident".into(),
-            executed: "cuda_fem".into(), execution_class: FemGpuExecutionClass::DeviceResident,
-            device_ordinal: 0, precision: "double".into(), integrator: "heun".into(),
-            required_operator_mask: 0x3ff, resolved_device_operator_mask: 0x3ff,
-            resolved_host_operator_mask: 0, resolved_unknown_operator_mask: 0,
-            executed_device_operator_mask: 0x3ff, executed_host_operator_mask: 1,
-            executed_unknown_operator_mask: 0, fallback_count: 0, accepted_step_count: 1,
-            rejected_attempt_count: 0, failed_attempt_count: 0,
-            hot_loop_compute_h2d_bytes: 0, hot_loop_compute_d2h_bytes: 0,
-            hot_loop_compute_host_sync_count: 0, accounting_valid: true,
+            requested: "strict_device".into(),
+            resolved: "device_resident".into(),
+            executed: "cuda_fem".into(),
+            execution_class: FemGpuExecutionClass::DeviceResident,
+            device_ordinal: 0,
+            precision: "double".into(),
+            integrator: "heun".into(),
+            required_operator_mask: 0x3ff,
+            resolved_device_operator_mask: 0x3ff,
+            resolved_host_operator_mask: 0,
+            resolved_unknown_operator_mask: 0,
+            executed_device_operator_mask: 0x3ff,
+            executed_host_operator_mask: 1,
+            executed_unknown_operator_mask: 0,
+            fallback_count: 0,
+            accepted_step_count: 1,
+            rejected_attempt_count: 0,
+            failed_attempt_count: 0,
+            hot_loop_compute_h2d_bytes: 0,
+            hot_loop_compute_d2h_bytes: 0,
+            hot_loop_compute_host_sync_count: 0,
+            accounting_valid: true,
         };
         let mut terminal_side_effects = 0;
         let result = run_after_strict_receipt_gate(&receipt, "strict_device", || {
@@ -86,7 +98,10 @@ fn run_after_strict_receipt_gate<T>(
 ) -> Result<T, RunError> {
     if request == "strict_device" {
         validate_strict_fem_gpu_execution_receipt(receipt).map_err(|error| RunError {
-            message: format!("strict native FEM GPU execution receipt rejected: {}", error.token()),
+            message: format!(
+                "strict native FEM GPU execution receipt rejected: {}",
+                error.token()
+            ),
         })?;
     }
     Ok(success())
@@ -147,8 +162,7 @@ pub(crate) fn finalize_native_fem_relaxation(
     // side effect. The same value is published to open stores and returned in
     // ExecutedRun; no later provenance mutation is permitted.
     let mut final_provenance = artifacts.provenance_snapshot();
-    final_provenance.fem_poisson_demag =
-        fem_poisson_demag_provenance(plan, Some(&final_stats));
+    final_provenance.fem_poisson_demag = fem_poisson_demag_provenance(plan, Some(&final_stats));
     let gpu_state_info = backend.gpu_state_info()?;
     let gpu_rk_plan_info = backend.gpu_rk_plan_info()?;
     apply_native_fem_runtime_contract(
@@ -162,11 +176,9 @@ pub(crate) fn finalize_native_fem_relaxation(
         let receipt = backend
             .gpu_execution_receipt()?
             .into_provenance(&finalization.fem_gpu_receipt_request);
-        run_after_strict_receipt_gate(
-            &receipt,
-            &finalization.fem_gpu_receipt_request,
-            || final_provenance.fem_gpu_execution_receipt = Some(receipt.clone()),
-        )?;
+        run_after_strict_receipt_gate(&receipt, &finalization.fem_gpu_receipt_request, || {
+            final_provenance.fem_gpu_execution_receipt = Some(receipt.clone())
+        })?;
     }
     artifacts.replace_provenance_synchronously(final_provenance)?;
     if let Some(mut terminal_stats) = finalization.terminal_stats {

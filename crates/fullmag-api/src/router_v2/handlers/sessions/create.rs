@@ -59,12 +59,14 @@ pub async fn create(
 
     let display_revision = state.current_display_selection.read().await.revision;
     let realtime_state =
-        current_live_realtime_state_from_snapshot(state.as_ref(), &snapshot, display_revision).await;
-    publish_current_live_realtime_batch_changed(state.as_ref(), &realtime_state, false, 0)
-        .await?;
+        current_live_realtime_state_from_snapshot(state.as_ref(), &snapshot, display_revision)
+            .await;
+    publish_current_live_realtime_batch_changed(state.as_ref(), &realtime_state, false, 0).await?;
 
     let scene = SceneResource::from_scene_document(scene_document).map_err(|error| {
-        ApiError::internal(format!("failed to serialize empty authoring scene: {error}"))
+        ApiError::internal(format!(
+            "failed to serialize empty authoring scene: {error}"
+        ))
     })?;
     Ok((
         StatusCode::CREATED,

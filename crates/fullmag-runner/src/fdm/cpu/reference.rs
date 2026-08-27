@@ -8,8 +8,8 @@ use fullmag_engine::{
     AdaptiveStepConfig, AxisBoundary, CellSize, CubicAnisotropyConfig, EffectiveFieldTerms,
     EngineError, EngineErrorCode, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState,
     ExchangeLlgStateSoA, ExternalStageTerms, FdmBoundaryPolicy, FftWorkspace, GridShape,
-    IntegratorBuffers, LlgConfig, MagnetoelasticTermConfig, MaterialParameters, ProjectionPolicy,
-    OerstedCylinderConfig, RegionalFieldDriveTerm, ResolvedFdmPeriodicWorkspace,
+    IntegratorBuffers, LlgConfig, MagnetoelasticTermConfig, MaterialParameters,
+    OerstedCylinderConfig, ProjectionPolicy, RegionalFieldDriveTerm, ResolvedFdmPeriodicWorkspace,
     SlonczewskiSttConfig, SotConfig, SotFormula, StepReport, TimeIntegrator,
     UniaxialAnisotropyConfig, Vector3, ZhangLiFormula, ZhangLiSttConfig,
 };
@@ -3263,12 +3263,11 @@ mod tests {
         AdaptiveTimeStepIR, AdaptiveToleranceModeIR, AxisBoundary as IrAxisBoundary,
         DriveActivationIR, ExchangeBoundaryCondition, ExecutionPrecision, FdmDemagPeriodicityIR,
         FdmMaterialIR, FdmPeriodicityIR, FdmProjectionPolicyIR, FieldDriveKindIR,
-        FieldSpatialProfileIR, FieldTargetIR,
-        FieldTimeOriginIR, GridDimensions, IntegratorChoice, RegionalFieldDriveIR, RelaxStopIR,
-        RelaxationAlgorithmIR, RelaxationControlIR, ResolvedFrozenSpinsPlanIR,
-        ResolvedRegionalFieldDriveBasisIR, SelectionAuthoredFingerprintIR, SelectionCertificateIR,
-        StageStopReason, TimeDependenceIR, RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION,
-        SELECTION_CERTIFICATE_SCHEMA_VERSION,
+        FieldSpatialProfileIR, FieldTargetIR, FieldTimeOriginIR, GridDimensions, IntegratorChoice,
+        RegionalFieldDriveIR, RelaxStopIR, RelaxationAlgorithmIR, RelaxationControlIR,
+        ResolvedFrozenSpinsPlanIR, ResolvedRegionalFieldDriveBasisIR,
+        SelectionAuthoredFingerprintIR, SelectionCertificateIR, StageStopReason, TimeDependenceIR,
+        RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION, SELECTION_CERTIFICATE_SCHEMA_VERSION,
     };
     use sha2::{Digest, Sha256};
 

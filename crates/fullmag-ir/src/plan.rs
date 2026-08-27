@@ -4,15 +4,14 @@ use crate::{
     EigenDampingPolicyIR, EigenNormalizationIR, EigenOperatorConfigIR, EigenTargetIR,
     EquilibriumSourceIR, ExchangeBoundaryCondition, ExecutionMode, ExecutionPrecision,
     FdmDemagPeriodicityIR, FdmMultilayerPlanIR, FdmPeriodicityIR, FdmProjectionPolicyIR,
-    FemDomainMeshAssetIR,
-    FemLinearSolverPolicy, FemSharedDomainBuildReportIR, FieldRefreshPolicyIR,
-    FrequencyExcitationIR, FrequencyResponseNormalizationIR, FrequencySweepIR, GeometryEntryIR,
-    IntegratorChoice, KSamplingIR, MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR,
-    MaterialParameterNameIR, MechanicalBoundaryConditionIR, MechanicalLoadIR, MeshIR,
-    ModeTrackingIR, OerstedRealization, OutputIR, PrescribedSotV1DriveIR, RegionRefIR,
-    RegionalFieldDriveIR, RelaxStopIR, RelaxationAlgorithmIR, ResolvedFdmGpuChargeTransportIR,
-    ResolvedPeriodicImagesIR, ResolvedSpinTransportPlanIR, SeedPolicy, SpinWaveBoundaryConditionIR,
-    ThermalSeedConfig, TimeDependenceIR, TimeEnvelopeIR,
+    FemDomainMeshAssetIR, FemLinearSolverPolicy, FemSharedDomainBuildReportIR,
+    FieldRefreshPolicyIR, FrequencyExcitationIR, FrequencyResponseNormalizationIR,
+    FrequencySweepIR, GeometryEntryIR, IntegratorChoice, KSamplingIR, MagnetostrictionLawIR,
+    MaterialFieldLocationIR, MaterialIR, MaterialParameterNameIR, MechanicalBoundaryConditionIR,
+    MechanicalLoadIR, MeshIR, ModeTrackingIR, OerstedRealization, OutputIR, PrescribedSotV1DriveIR,
+    RegionRefIR, RegionalFieldDriveIR, RelaxStopIR, RelaxationAlgorithmIR,
+    ResolvedFdmGpuChargeTransportIR, ResolvedPeriodicImagesIR, ResolvedSpinTransportPlanIR,
+    SeedPolicy, SpinWaveBoundaryConditionIR, ThermalSeedConfig, TimeDependenceIR, TimeEnvelopeIR,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
@@ -2084,8 +2083,7 @@ mod tests {
         let encoded = serde_json::to_value(&plan).expect("FDM plan serializes");
         assert_eq!(encoded["projection_policy"], "unit_sphere");
 
-        let decoded: FdmPlanIR =
-            serde_json::from_value(encoded).expect("FDM plan deserializes");
+        let decoded: FdmPlanIR = serde_json::from_value(encoded).expect("FDM plan deserializes");
         let policy = decoded
             .projection_policy
             .expect("projection policy must survive round-trip");

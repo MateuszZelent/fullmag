@@ -13,7 +13,6 @@ import {
 import {
   useCallback,
   useEffect,
-  useRef,
   useMemo,
   useState,
   useSyncExternalStore,
@@ -42,17 +41,10 @@ import { DiagnosticRecorderFooterPanel } from "./DiagnosticRecorderFooterPanel";
 import { MeshJobsPanel } from "./MeshJobsPanel";
 import { TransportLogTable } from "./TransportLogTable";
 
-const EMPTY_DIAGNOSTIC_ENTRIES: RequestDiagnosticEntry[] = [];
-
 const FOOTER_PANEL_CLASS_NAME =
   "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden [&>*]:h-full [&>*]:min-h-0 [&>*]:min-w-0 [&>*]:flex-1";
 const FOOTER_CONTENT_CLASS_NAME =
   "fm-footer__content flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden";
-
-interface FooterDiagnosticsSnapshot {
-  entries: RequestDiagnosticEntry[];
-  signature: string;
-}
 
 export default function FooterModule(props: ModuleProps) {
   return (
@@ -271,32 +263,18 @@ function useTransportDiagnostics(
   },
 ): RequestDiagnosticEntry[] {
   const { channel, direction } = filters;
-  const snapshotRef = useRef<FooterDiagnosticsSnapshot | null>(null);
-  const subscribe = useCallback(
-    (onStoreChange: () => void) =>
-      kernel.diagnostics.subscribe(onStoreChange),
-    [kernel.diagnostics],
+  const version = useSyncExternalStore(
+    kernel.diagnostics.subscribe.bind(kernel.diagnostics),
+    kernel.diagnostics.getVersion.bind(kernel.diagnostics),
+    () => 0,
   );
-  const getSnapshot = useCallback(() => {
-    const entries = filterTransportEntries(
+  return useMemo(() => {
+    void version;
+    return filterTransportEntries(
       kernel.diagnostics.listNewestFirst(),
       { channel, direction },
     );
-    const signature = transportEntriesSignature(entries);
-    const previous = snapshotRef.current;
-    if (previous?.signature === signature) {
-      return previous.entries;
-    }
-
-    snapshotRef.current = { entries, signature };
-    return entries;
-  }, [channel, direction, kernel.diagnostics]);
-
-  return useSyncExternalStore(
-    subscribe,
-    getSnapshot,
-    () => EMPTY_DIAGNOSTIC_ENTRIES,
-  );
+  }, [channel, direction, kernel.diagnostics, version]);
 }
 
 function useCommandDiagnostics(kernel: ModuleProps["kernel"]): CommandDiagnosticEntry[] {
@@ -310,12 +288,6 @@ function useCommandDiagnostics(kernel: ModuleProps["kernel"]): CommandDiagnostic
     void version;
     return kernel.commandDiagnostics.listNewestFirst();
   }, [kernel.commandDiagnostics, version]);
-}
-
-function transportEntriesSignature(
-  entries: readonly RequestDiagnosticEntry[],
-): string {
-  return entries.map((entry) => entry.id).join("|");
 }
 
 function FilterButton({
