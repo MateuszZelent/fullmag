@@ -29,127 +29,537 @@
   "equations": [
     {
       "id": "eq-mixed-p1-magnetization",
-      "symbols": ["m", "M", "Ms"],
-      "sources": ["demag-rhs"]
+      "symbols": [
+        "m",
+        "M",
+        "Ms"
+      ],
+      "sources": [
+        "demag-rhs"
+      ]
     },
     {
       "id": "eq-mixed-p1-exchange-zeeman",
-      "symbols": ["Eex", "EZ", "Aex", "m", "M", "Hext", "mu0", "OmegaM"],
-      "sources": ["exchange-operator", "zeeman-energy"]
+      "symbols": [
+        "Eex",
+        "EZ",
+        "Aex",
+        "m",
+        "M",
+        "Hext",
+        "mu0",
+        "OmegaM"
+      ],
+      "sources": [
+        "exchange-operator",
+        "zeeman-energy"
+      ]
     },
     {
       "id": "eq-mixed-p1-uniaxial-anisotropy",
-      "symbols": ["q", "m", "u", "Eu", "Ku1", "Ku2", "OmegaM"],
-      "sources": ["uniaxial-cpu", "uniaxial-gpu"]
+      "symbols": [
+        "q",
+        "m",
+        "u",
+        "Eu",
+        "Ku1",
+        "Ku2",
+        "OmegaM"
+      ],
+      "sources": [
+        "uniaxial-cpu",
+        "uniaxial-gpu"
+      ]
     },
     {
       "id": "eq-mixed-p1-uniaxial-field",
-      "symbols": ["Huniaxial", "q", "u", "Ku1", "Ku2", "mu0", "Ms"],
-      "sources": ["uniaxial-cpu", "uniaxial-gpu"]
+      "symbols": [
+        "Huniaxial",
+        "q",
+        "u",
+        "Ku1",
+        "Ku2",
+        "mu0",
+        "Ms"
+      ],
+      "sources": [
+        "uniaxial-cpu",
+        "uniaxial-gpu"
+      ]
     },
     {
       "id": "eq-mixed-p1-demag-strong",
-      "symbols": ["phi", "M", "Hdemag", "domainD", "OmegaAir"],
-      "sources": ["demag-rhs", "demag-recovery"]
+      "symbols": [
+        "phi",
+        "M",
+        "Hdemag",
+        "domainD",
+        "OmegaAir"
+      ],
+      "sources": [
+        "demag-rhs",
+        "demag-recovery"
+      ]
     },
     {
       "id": "eq-mixed-p1-demag-weak",
-      "symbols": ["phi", "testV", "M", "domainD", "OmegaM"],
-      "sources": ["demag-rhs"]
+      "symbols": [
+        "phi",
+        "testV",
+        "M",
+        "domainD",
+        "OmegaM"
+      ],
+      "sources": [
+        "demag-rhs"
+      ]
     },
     {
       "id": "eq-mixed-p1-demag-energy",
-      "symbols": ["Edemag", "mu0", "M", "Hdemag", "OmegaM", "Eboundary"],
-      "sources": ["demag-energy"]
+      "symbols": [
+        "Edemag",
+        "mu0",
+        "M",
+        "Hdemag",
+        "OmegaM",
+        "Eboundary"
+      ],
+      "sources": [
+        "demag-energy"
+      ]
     },
     {
       "id": "eq-mixed-p1-mass-weights",
-      "symbols": ["massEntry", "basisNi", "nodalWeight", "OmegaM"],
-      "sources": ["node-volumes"]
+      "symbols": [
+        "massEntry",
+        "basisNi",
+        "nodalWeight",
+        "OmegaM"
+      ],
+      "sources": [
+        "node-volumes"
+      ]
     },
     {
       "id": "eq-mixed-p1-volume-conservation",
-      "symbols": ["nodalWeight", "OmegaM"],
-      "sources": ["node-volumes"]
+      "symbols": [
+        "nodalWeight",
+        "OmegaM"
+      ],
+      "sources": [
+        "node-volumes"
+      ]
     },
     {
       "id": "eq-mixed-p1-average-magnetization",
-      "symbols": ["m", "Ms", "nodalWeight"],
-      "sources": ["node-volumes"]
+      "symbols": [
+        "m",
+        "Ms",
+        "nodalWeight"
+      ],
+      "sources": [
+        "node-volumes"
+      ]
     },
     {
       "id": "eq-mixed-p1-plane-tolerance",
-      "symbols": ["planeTolerance", "thickness"],
-      "sources": ["certificate"]
+      "symbols": [
+        "planeTolerance",
+        "thickness"
+      ],
+      "sources": [
+        "certificate"
+      ]
     }
   ],
   "symbols": [
-    {"id": "m", "latex": "\\mathbf m", "meaning": "reduced magnetization", "si_unit": "1"},
-    {"id": "M", "latex": "\\mathbf M", "meaning": "magnetization", "si_unit": "\\mathrm{A\\,m^{-1}}"},
-    {"id": "Ms", "latex": "M_s", "meaning": "saturation magnetization", "si_unit": "\\mathrm{A\\,m^{-1}}"},
-    {"id": "Aex", "latex": "A_{\\mathrm{ex}}", "meaning": "exchange stiffness", "si_unit": "\\mathrm{J\\,m^{-1}}"},
-    {"id": "Hext", "latex": "\\mathbf H_{\\mathrm{ext}}", "meaning": "external magnetic field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
-    {"id": "Hdemag", "latex": "\\mathbf H_{\\mathrm{demag}}", "meaning": "demagnetizing field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
-    {"id": "phi", "latex": "\\phi", "meaning": "magnetic scalar potential", "si_unit": "\\mathrm{A}"},
-    {"id": "mu0", "latex": "\\mu_0", "meaning": "vacuum permeability", "si_unit": "\\mathrm{N\\,A^{-2}}"},
-    {"id": "OmegaM", "latex": "\\Omega_m", "meaning": "magnetic domain", "si_unit": "\\mathrm{m^3}"},
-    {"id": "OmegaAir", "latex": "\\Omega_{\\mathrm{air}}", "meaning": "air domain", "si_unit": "\\mathrm{m^3}"},
-    {"id": "domainD", "latex": "D", "meaning": "conforming shared domain", "si_unit": "\\mathrm{m^3}"},
-    {"id": "testV", "latex": "v", "meaning": "scalar H1 test function", "si_unit": "1"},
-    {"id": "Eex", "latex": "E_{\\mathrm{ex}}", "meaning": "exchange energy", "si_unit": "\\mathrm{J}"},
-    {"id": "EZ", "latex": "E_{\\mathrm Z}", "meaning": "Zeeman energy", "si_unit": "\\mathrm{J}"},
-    {"id": "Edemag", "latex": "E_{\\mathrm{demag}}", "meaning": "demagnetization energy", "si_unit": "\\mathrm{J}"},
-    {"id": "Eboundary", "latex": "E_{\\partial D}", "meaning": "demagnetization boundary contribution", "si_unit": "\\mathrm{J}"},
-    {"id": "u", "latex": "\\mathbf u", "meaning": "normalized uniaxial anisotropy axis", "si_unit": "1"},
-    {"id": "q", "latex": "q", "meaning": "magnetization projection on the uniaxial axis", "si_unit": "1"},
-    {"id": "Ku1", "latex": "K_{u1}", "meaning": "first-order uniaxial anisotropy constant", "si_unit": "\\mathrm{J\\,m^{-3}}"},
-    {"id": "Ku2", "latex": "K_{u2}", "meaning": "second-order uniaxial anisotropy constant", "si_unit": "\\mathrm{J\\,m^{-3}}"},
-    {"id": "Huniaxial", "latex": "\\mathbf H_{\\mathrm u}", "meaning": "uniaxial anisotropy effective field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
-    {"id": "Eu", "latex": "E_{\\mathrm u}", "meaning": "uniaxial anisotropy energy", "si_unit": "\\mathrm{J}"},
-    {"id": "thickness", "latex": "t", "meaning": "magnetic film thickness", "si_unit": "\\mathrm{m}"},
-    {"id": "layerCount", "latex": "L", "meaning": "requested and realized prism-cell layers", "si_unit": "1"},
-    {"id": "planeTolerance", "latex": "\\tau_{\\mathrm{plane}}", "meaning": "node-plane comparison tolerance", "si_unit": "\\mathrm{m}"},
-    {"id": "jacobian", "latex": "J_K", "meaning": "element-map Jacobian determinant", "si_unit": "\\mathrm{m^3}"},
-    {"id": "basisNi", "latex": "N_i", "meaning": "scalar P1 nodal basis function", "si_unit": "1"},
-    {"id": "massEntry", "latex": "M_{ij}", "meaning": "scalar mass-matrix entry", "si_unit": "\\mathrm{m^3}"},
-    {"id": "nodalWeight", "latex": "w_i", "meaning": "magnetic nodal volume weight", "si_unit": "\\mathrm{m^3}"}
+    {
+      "id": "m",
+      "latex": "\\mathbf m",
+      "meaning": "reduced magnetization",
+      "si_unit": "1"
+    },
+    {
+      "id": "M",
+      "latex": "\\mathbf M",
+      "meaning": "magnetization",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "Ms",
+      "latex": "M_s",
+      "meaning": "saturation magnetization",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "Aex",
+      "latex": "A_{\\mathrm{ex}}",
+      "meaning": "exchange stiffness",
+      "si_unit": "\\mathrm{J\\,m^{-1}}"
+    },
+    {
+      "id": "Hext",
+      "latex": "\\mathbf H_{\\mathrm{ext}}",
+      "meaning": "external magnetic field",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "Hdemag",
+      "latex": "\\mathbf H_{\\mathrm{demag}}",
+      "meaning": "demagnetizing field",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "phi",
+      "latex": "\\phi",
+      "meaning": "magnetic scalar potential",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "mu0",
+      "latex": "\\mu_0",
+      "meaning": "vacuum permeability",
+      "si_unit": "\\mathrm{N\\,A^{-2}}"
+    },
+    {
+      "id": "OmegaM",
+      "latex": "\\Omega_m",
+      "meaning": "magnetic domain",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "OmegaAir",
+      "latex": "\\Omega_{\\mathrm{air}}",
+      "meaning": "air domain",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "domainD",
+      "latex": "D",
+      "meaning": "conforming shared domain",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "testV",
+      "latex": "v",
+      "meaning": "scalar H1 test function",
+      "si_unit": "1"
+    },
+    {
+      "id": "Eex",
+      "latex": "E_{\\mathrm{ex}}",
+      "meaning": "exchange energy",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
+      "id": "EZ",
+      "latex": "E_{\\mathrm Z}",
+      "meaning": "Zeeman energy",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
+      "id": "Edemag",
+      "latex": "E_{\\mathrm{demag}}",
+      "meaning": "demagnetization energy",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
+      "id": "Eboundary",
+      "latex": "E_{\\partial D}",
+      "meaning": "demagnetization boundary contribution",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
+      "id": "u",
+      "latex": "\\mathbf u",
+      "meaning": "normalized uniaxial anisotropy axis",
+      "si_unit": "1"
+    },
+    {
+      "id": "q",
+      "latex": "q",
+      "meaning": "magnetization projection on the uniaxial axis",
+      "si_unit": "1"
+    },
+    {
+      "id": "Ku1",
+      "latex": "K_{u1}",
+      "meaning": "first-order uniaxial anisotropy constant",
+      "si_unit": "\\mathrm{J\\,m^{-3}}"
+    },
+    {
+      "id": "Ku2",
+      "latex": "K_{u2}",
+      "meaning": "second-order uniaxial anisotropy constant",
+      "si_unit": "\\mathrm{J\\,m^{-3}}"
+    },
+    {
+      "id": "Huniaxial",
+      "latex": "\\mathbf H_{\\mathrm u}",
+      "meaning": "uniaxial anisotropy effective field",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "Eu",
+      "latex": "E_{\\mathrm u}",
+      "meaning": "uniaxial anisotropy energy",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
+      "id": "thickness",
+      "latex": "t",
+      "meaning": "magnetic film thickness",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "layerCount",
+      "latex": "L",
+      "meaning": "requested and realized prism-cell layers",
+      "si_unit": "1"
+    },
+    {
+      "id": "planeTolerance",
+      "latex": "\\tau_{\\mathrm{plane}}",
+      "meaning": "node-plane comparison tolerance",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "jacobian",
+      "latex": "J_K",
+      "meaning": "element-map Jacobian determinant",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "basisNi",
+      "latex": "N_i",
+      "meaning": "scalar P1 nodal basis function",
+      "si_unit": "1"
+    },
+    {
+      "id": "massEntry",
+      "latex": "M_{ij}",
+      "meaning": "scalar mass-matrix entry",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "nodalWeight",
+      "latex": "w_i",
+      "meaning": "magnetic nodal volume weight",
+      "si_unit": "\\mathrm{m^3}"
+    }
   ],
   "sources": [
-    {"id": "python-authoring", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "thin_film", "responsibility": "Validate and lower public prismatic thin-film intent."},
-    {"id": "python-ir-publication-test", "path": "packages/fullmag-py/tests/test_api.py", "symbol": "test_mixed_p1_publication_example_lowers_complete_mesh_entry_to_problem_ir", "responsibility": "Execute the published Python authoring path and compare its complete per-geometry mesh entry with current ProblemIR lowering."},
-    {"id": "mesher", "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py", "symbol": "generate_swept_box_mesh", "responsibility": "Generate exact stacked magnetic prisms and the conforming shared air domain."},
-    {"id": "certificate", "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py", "symbol": "_attach_mixed_layer_topology_certificate", "responsibility": "Recompute and bind exact-layer and shared-domain evidence."},
-    {"id": "python-mixed-p1-scope", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "_validate_authored_mixed_p1_scope", "responsibility": "Admit uniform or nodal uniaxial/cubic anisotropy and CPU DMI while preserving fail-closed GPU DMI authoring semantics."},
-    {"id": "planner", "path": "crates/fullmag-plan/src/mesh.rs", "symbol": "validate_mixed_p1_execution_scope", "responsibility": "Enforce the bounded exact-layer relaxation legality matrix, including lane-specific anisotropy and DMI scope."},
-    {"id": "capabilities", "path": "crates/fullmag-runner/src/capabilities.rs", "symbol": "mixed_p1_feature_capabilities", "responsibility": "Publish machine-readable implemented status and bounded scope."},
-    {"id": "fmmt-v2-serializer", "path": "crates/fullmag-api/src/field_store.rs", "symbol": "serialize_fem_mesh_topology_binary_v2", "responsibility": "Serialize typed CSR topology and exact optional u64 cell/facet identities in the backward-compatible FMMT v2 layout."},
-    {"id": "fmmt-v2-decoder", "path": "apps/control-room/src/kernel/api/codecs/topologyCodec.ts", "symbol": "decodeTopology", "responsibility": "Decode FMMT v2 sections while retaining exact global ordinals as BigUint64Array values."},
-    {"id": "fmmt-v2-layout", "path": "apps/control-room/src/kernel/api/codecs/topologyCodec.ts", "symbol": "topologyByteLayout", "responsibility": "Compute aligned optional ordinal ranges for legacy, cell-only, facet-only, and combined FMMT v2 payloads."},
-    {"id": "fmmt-v2-range-loader", "path": "apps/control-room/src/kernel/api/ControlRoomApi.ts", "symbol": "loadTopologySectionsByRange", "responsibility": "Range-fetch every declared topology section into its exact typed-array representation."},
-    {"id": "mixed-topology-render-index", "path": "apps/control-room/src/modules/viewport-3d/viewport3dTopologyIndexModel.ts", "symbol": "buildViewport3DTopologyIndexBundle", "responsibility": "Derive render topology while retaining local owner indices and exact global cell ordinals."},
-    {"id": "mixed-topology-surface-selection", "path": "apps/control-room/src/modules/viewport-3d/layers/MeshPartLayer.tsx", "symbol": "resolveMeshPartSurfacePickIdentity", "responsibility": "Expose exact cell identity only for complete aligned maps and preserve boundary-only legacy picks only when all identity maps are absent."},
-    {"id": "step0-field-authoring", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class StageAutosave", "responsibility": "Carry the canonical three-field step-0 autosave request without changing the physical model."},
-    {"id": "step0-field-dispatch", "path": "crates/fullmag-runner/src/dispatch.rs", "symbol": "record_native_fem_initial_field_snapshots", "responsibility": "Record requested native field snapshots before direct minimization and advance their schedules."},
-    {"id": "step0-native-stats", "path": "backends/fem/cpu/mfem/runtime/snapshot.cpp", "symbol": "context_snapshot_stats_mfem", "responsibility": "Evaluate current-state fields, energies, and maximum torque without a solver step."},
-    {"id": "step0-zarr-writer", "path": "crates/fullmag-runner/src/artifact_pipeline.rs", "symbol": "append_fem_snapshot", "responsibility": "Serialize immutable native FEM field snapshots as component-major Zarr v2 chunks."},
-    {"id": "step0-artifact-validator", "path": "scripts/verify_fem_mixed_prism_airbox_runtime.py", "symbol": "validate_runtime_artifacts", "responsibility": "Bind step-0 scalar and field artifacts to source, topology, state, engine, and precision."},
-    {"id": "step0-operator-comparison", "path": "scripts/verify_fem_mixed_prism_airbox_runtime.py", "symbol": "compare_runtime_summaries", "responsibility": "Compare same-state magnetic-node fields, energies, and maximum torque under frozen tolerances without capability promotion."},
-    {"id": "exchange-operator", "path": "backends/fem/cpu/mfem/interactions/exchange_operator.cpp", "symbol": "initialize_exchange_operator_mfem", "responsibility": "Assemble the topology-aware MFEM exchange operator."},
-    {"id": "zeeman-energy", "path": "backends/fem/cpu/mfem/interactions/zeeman_energy.cpp", "symbol": "zeeman_energy_from_field", "responsibility": "Evaluate uniform Zeeman energy with the existing sign and units."},
-    {"id": "demag-rhs", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp", "symbol": "assemble_demag_poisson_rhs", "responsibility": "Assemble the magnetic-cell Poisson weak-form source."},
-    {"id": "demag-recovery", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp", "symbol": "recover_demag_poisson_field", "responsibility": "Recover the demagnetizing field on magnetic cells."},
-    {"id": "demag-energy", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp", "symbol": "demag_poisson_energy_from_field", "responsibility": "Evaluate the existing demagnetization-energy sign contract."},
-    {"id": "node-volumes", "path": "backends/fem/core/fem_mesh.cpp", "symbol": "compute_node_volumes", "responsibility": "Synchronize mixed-P1 mass-row-sum magnetic nodal weights."},
-    {"id": "uniaxial-cpu", "path": "backends/fem/cpu/mfem/interactions/anisotropy_uniaxial.cpp", "symbol": "compute_uniaxial_anisotropy_field", "responsibility": "Evaluate uniform or nodal-P1 uniaxial field and MFEM mass-lumped energy on magnetic P1 nodes."},
-    {"id": "uniaxial-gpu", "path": "backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu", "symbol": "fullmag_cuda_uniaxial_anisotropy_field_energy_blocks", "responsibility": "Evaluate the same local uniform or nodal-P1 uniaxial field and energy contract on CUDA."},
-    {"id": "cubic-cpu", "path": "backends/fem/cpu/mfem/interactions/anisotropy_cubic.cpp", "symbol": "compute_cubic_anisotropy_field", "responsibility": "Evaluate uniform or nodal-P1 cubic anisotropy field and energy on magnetic P1 nodes."},
-    {"id": "cubic-gpu", "path": "backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu", "symbol": "fullmag_cuda_cubic_anisotropy_field_energy_blocks", "responsibility": "Evaluate uniform or nodal-P1 cubic anisotropy field and energy on CUDA."},
-    {"id": "interfacial-dmi-cpu", "path": "backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp", "symbol": "compute_interfacial_dmi_field", "responsibility": "Evaluate interfacial DMI field and energy through the topology-aware FEM CPU operator."},
-    {"id": "bulk-dmi-cpu", "path": "backends/fem/cpu/mfem/interactions/dmi_bulk.cpp", "symbol": "compute_bulk_dmi_field", "responsibility": "Evaluate bulk DMI field and energy through the topology-aware FEM CPU operator."},
-    {"id": "mixed-p1-native-scope", "path": "backends/fem/core/fem_mesh.cpp", "symbol": "validate_supported_physics_topology", "responsibility": "Admit the bounded mixed-P1 CPU/GPU anisotropy scopes and reject GPU DMI fail-closed with gpu_dmi_kernel_not_mixed_p1 before native startup."},
-    {"id": "fmmq-v1-writer", "path": "packages/fullmag-py/src/fullmag/meshing/remesh_cli.py", "symbol": "_write_quality_data_artifact_if_available", "responsibility": "Write the current tet4-only FMMQ v1 quality payload."},
-    {"id": "fmmq-v1-decoder", "path": "apps/control-room/src/kernel/api/codecs/meshQualityDataCodec.ts", "symbol": "decodeMeshQualityData", "responsibility": "Decode the current FMMQ v1 layout."},
-    {"id": "fmmq-v2-contract", "path": "docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md", "symbol": "DOC-ANCHOR:fmmq-v2-contract", "responsibility": "Define planned topology-aware FMMQ v2 and v1 exit gates.", "evidence_status": "planned_contract"}
+    {
+      "id": "python-authoring",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "thin_film",
+      "responsibility": "Validate and lower public prismatic thin-film intent."
+    },
+    {
+      "id": "python-ir-publication-test",
+      "path": "packages/fullmag-py/tests/test_api.py",
+      "symbol": "test_mixed_p1_publication_example_lowers_complete_mesh_entry_to_problem_ir",
+      "responsibility": "Execute the published Python authoring path and compare its complete per-geometry mesh entry with current ProblemIR lowering."
+    },
+    {
+      "id": "mesher",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "generate_swept_box_mesh",
+      "responsibility": "Generate exact stacked magnetic prisms and the conforming shared air domain."
+    },
+    {
+      "id": "certificate",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py",
+      "symbol": "_attach_mixed_layer_topology_certificate",
+      "responsibility": "Recompute and bind exact-layer and shared-domain evidence."
+    },
+    {
+      "id": "python-mixed-p1-scope",
+      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
+      "symbol": "_validate_authored_mixed_p1_scope",
+      "responsibility": "Admit uniform or nodal uniaxial/cubic anisotropy and CPU DMI while preserving fail-closed GPU DMI authoring semantics."
+    },
+    {
+      "id": "planner",
+      "path": "crates/fullmag-plan/src/mesh.rs",
+      "symbol": "validate_mixed_p1_execution_scope",
+      "responsibility": "Enforce the bounded exact-layer relaxation legality matrix, including lane-specific anisotropy and DMI scope."
+    },
+    {
+      "id": "capabilities",
+      "path": "crates/fullmag-runner/src/capabilities.rs",
+      "symbol": "mixed_p1_feature_capabilities",
+      "responsibility": "Publish machine-readable implemented status and bounded scope."
+    },
+    {
+      "id": "fmmt-v2-serializer",
+      "path": "crates/fullmag-api/src/field_store.rs",
+      "symbol": "serialize_fem_mesh_topology_binary_v2",
+      "responsibility": "Serialize typed CSR topology and exact optional u64 cell/facet identities in the backward-compatible FMMT v2 layout."
+    },
+    {
+      "id": "fmmt-v2-decoder",
+      "path": "apps/control-room/src/kernel/api/codecs/topologyCodec.ts",
+      "symbol": "decodeTopology",
+      "responsibility": "Decode FMMT v2 sections while retaining exact global ordinals as BigUint64Array values."
+    },
+    {
+      "id": "fmmt-v2-layout",
+      "path": "apps/control-room/src/kernel/api/codecs/topologyCodec.ts",
+      "symbol": "topologyByteLayout",
+      "responsibility": "Compute aligned optional ordinal ranges for legacy, cell-only, facet-only, and combined FMMT v2 payloads."
+    },
+    {
+      "id": "fmmt-v2-range-loader",
+      "path": "apps/control-room/src/kernel/api/ControlRoomApi.ts",
+      "symbol": "loadTopologySectionsByRange",
+      "responsibility": "Range-fetch every declared topology section into its exact typed-array representation."
+    },
+    {
+      "id": "mixed-topology-render-index",
+      "path": "apps/control-room/src/modules/viewport-3d/viewport3dTopologyIndexModel.ts",
+      "symbol": "buildViewport3DTopologyIndexBundle",
+      "responsibility": "Derive render topology while retaining local owner indices and exact global cell ordinals."
+    },
+    {
+      "id": "mixed-topology-surface-selection",
+      "path": "apps/control-room/src/modules/viewport-3d/layers/MeshPartLayer.tsx",
+      "symbol": "resolveMeshPartSurfacePickIdentity",
+      "responsibility": "Expose exact cell identity only for complete aligned maps and preserve boundary-only legacy picks only when all identity maps are absent."
+    },
+    {
+      "id": "step0-field-authoring",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class StageAutosave",
+      "responsibility": "Carry the canonical three-field step-0 autosave request without changing the physical model."
+    },
+    {
+      "id": "step0-field-dispatch",
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "record_native_fem_initial_field_snapshots",
+      "responsibility": "Record requested native field snapshots before direct minimization and advance their schedules."
+    },
+    {
+      "id": "step0-native-stats",
+      "path": "backends/fem/cpu/mfem/runtime/snapshot.cpp",
+      "symbol": "context_snapshot_stats_mfem",
+      "responsibility": "Evaluate current-state fields, energies, and maximum torque without a solver step."
+    },
+    {
+      "id": "step0-zarr-writer",
+      "path": "crates/fullmag-runner/src/artifact_pipeline.rs",
+      "symbol": "append_fem_snapshot",
+      "responsibility": "Serialize immutable native FEM field snapshots as component-major Zarr v2 chunks."
+    },
+    {
+      "id": "step0-artifact-validator",
+      "path": "scripts/verify_fem_mixed_prism_airbox_runtime.py",
+      "symbol": "validate_runtime_artifacts",
+      "responsibility": "Bind step-0 scalar and field artifacts to source, topology, state, engine, and precision."
+    },
+    {
+      "id": "step0-operator-comparison",
+      "path": "scripts/verify_fem_mixed_prism_airbox_runtime.py",
+      "symbol": "compare_runtime_summaries",
+      "responsibility": "Compare same-state magnetic-node fields, energies, and maximum torque under frozen tolerances without capability promotion."
+    },
+    {
+      "id": "exchange-operator",
+      "path": "backends/fem/cpu/mfem/interactions/exchange_operator.cpp",
+      "symbol": "initialize_exchange_operator_mfem",
+      "responsibility": "Assemble the topology-aware MFEM exchange operator."
+    },
+    {
+      "id": "zeeman-energy",
+      "path": "backends/fem/cpu/mfem/interactions/zeeman_energy.cpp",
+      "symbol": "zeeman_energy_from_field",
+      "responsibility": "Evaluate uniform Zeeman energy with the existing sign and units."
+    },
+    {
+      "id": "demag-rhs",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp",
+      "symbol": "assemble_demag_poisson_rhs",
+      "responsibility": "Assemble the magnetic-cell Poisson weak-form source."
+    },
+    {
+      "id": "demag-recovery",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp",
+      "symbol": "recover_demag_poisson_field",
+      "responsibility": "Recover the demagnetizing field on magnetic cells."
+    },
+    {
+      "id": "demag-energy",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp",
+      "symbol": "demag_poisson_energy_from_field",
+      "responsibility": "Evaluate the existing demagnetization-energy sign contract."
+    },
+    {
+      "id": "node-volumes",
+      "path": "backends/fem/core/fem_mesh.cpp",
+      "symbol": "compute_node_volumes",
+      "responsibility": "Synchronize mixed-P1 mass-row-sum magnetic nodal weights."
+    },
+    {
+      "id": "uniaxial-cpu",
+      "path": "backends/fem/cpu/mfem/interactions/anisotropy_uniaxial.cpp",
+      "symbol": "compute_uniaxial_anisotropy_field",
+      "responsibility": "Evaluate uniform or nodal-P1 uniaxial field and MFEM mass-lumped energy on magnetic P1 nodes."
+    },
+    {
+      "id": "uniaxial-gpu",
+      "path": "backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu",
+      "symbol": "fullmag_cuda_uniaxial_anisotropy_field_energy_blocks",
+      "responsibility": "Evaluate the same local uniform or nodal-P1 uniaxial field and energy contract on CUDA."
+    },
+    {
+      "id": "cubic-cpu",
+      "path": "backends/fem/cpu/mfem/interactions/anisotropy_cubic.cpp",
+      "symbol": "compute_cubic_anisotropy_field",
+      "responsibility": "Evaluate uniform or nodal-P1 cubic anisotropy field and energy on magnetic P1 nodes."
+    },
+    {
+      "id": "cubic-gpu",
+      "path": "backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu",
+      "symbol": "fullmag_cuda_cubic_anisotropy_field_energy_blocks",
+      "responsibility": "Evaluate uniform or nodal-P1 cubic anisotropy field and energy on CUDA."
+    },
+    {
+      "id": "interfacial-dmi-cpu",
+      "path": "backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp",
+      "symbol": "compute_interfacial_dmi_field",
+      "responsibility": "Evaluate interfacial DMI field and energy through the topology-aware FEM CPU operator."
+    },
+    {
+      "id": "bulk-dmi-cpu",
+      "path": "backends/fem/cpu/mfem/interactions/dmi_bulk.cpp",
+      "symbol": "compute_bulk_dmi_field",
+      "responsibility": "Evaluate bulk DMI field and energy through the topology-aware FEM CPU operator."
+    },
+    {
+      "id": "mixed-p1-native-scope",
+      "path": "backends/fem/core/fem_mesh.cpp",
+      "symbol": "validate_supported_physics_topology",
+      "responsibility": "Admit the bounded mixed-P1 CPU/GPU anisotropy scopes and reject GPU DMI fail-closed with gpu_dmi_kernel_not_mixed_p1 before native startup."
+    },
+    {
+      "id": "fmmq-v1-writer",
+      "path": "packages/fullmag-py/src/fullmag/meshing/remesh_cli.py",
+      "symbol": "_write_quality_data_artifact_if_available",
+      "responsibility": "Write parallel FMMQ v1 metric arrays without topology identity; mixed-derived arrays may be emitted but cannot qualify a mixed mesh."
+    },
+    {
+      "id": "fmmq-v1-decoder",
+      "path": "apps/control-room/src/kernel/api/codecs/meshQualityDataCodec.ts",
+      "symbol": "decodeMeshQualityData",
+      "responsibility": "Decode the current FMMQ v1 layout."
+    },
+    {
+      "id": "fmmq-v2-contract",
+      "path": "docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md",
+      "symbol": "DOC-ANCHOR:fmmq-v2-contract",
+      "responsibility": "Define planned topology-aware FMMQ v2 and v1 exit gates.",
+      "evidence_status": "planned_contract"
+    }
   ],
   "public_api": {
     "parameters": [

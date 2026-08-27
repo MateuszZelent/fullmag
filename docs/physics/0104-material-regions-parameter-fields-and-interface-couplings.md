@@ -47,55 +47,20 @@ This note defines the contract for:
 (material-regions-governing-equations)=
 ### 2.1 Governing equations
 
-For a single material object, the reduced magnetization is
-
-```text
-m : Omega x [0, T] -> S^2
-M(x, t) = Ms(x) m(x, t)
-```
-
-`m` belongs to the material object, not to each authored region. Regions inside
-one object are spatial selectors over the same field `m`.
-
-The exchange energy for a heterogeneous single-object continuum is
-
-```text
-E_ex = integral_Omega A(x) |grad m|^2 dV
-```
-
-The exchange effective field is
-
-```text
-H_ex = 2 / (mu0 Ms(x)) div(A(x) grad m)
-```
-
-Across a sharp internal material interface `Gamma` inside one object, with no
-additional surface coupling, the natural condition is exchange flux continuity:
-
-```text
-A_1 partial_n m_1 = A_2 partial_n m_2
-```
-
-Dla nakładających się ograniczeń siatki regionów obowiązuje ta sama kanoniczna
-algebra co dla obiektu i airboxu:
-
-```{math}
-:label: eq-material-region-mesh-composition
-
-h_{\mathrm{target}}(\mathbf x)=
-\max\!\left(\min_{u\in\mathcal U(\mathbf x)}u,
-             \max_{\ell\in\mathcal L(\mathbf x)}\ell\right).
-```
-
-
-
-The source-mapped canonical forms used by this publication are:
+For one material object, the canonical reduced-field and physical-magnetization
+contract is
 
 ```{math}
 :label: material-magnetization
 
+\mathbf m:\Omega\times[0,T]\to S^2,
+\qquad
 \mathbf M(\mathbf x,t)=M_s(\mathbf x)\mathbf m(\mathbf x,t).
 ```
+
+Authored regions are selectors over this single field; they do not create
+independent magnetization degrees of freedom. The heterogeneous exchange energy
+and its effective field are
 
 ```{math}
 :label: material-exchange-energy
@@ -109,23 +74,50 @@ E_\mathrm{ex}=\int_\Omega A(\mathbf x)|\nabla\mathbf m|^2\,\mathrm dV.
 \mathbf H_\mathrm{ex}=\frac{2}{\mu_0 M_s}\nabla\!\cdot(A\nabla\mathbf m).
 ```
 
+Across a sharp internal interface $\Gamma$ without a separate surface
+coupling, the natural condition is exchange-flux continuity:
+
 ```{math}
 :label: material-exchange-flux
 
-A_1\partial_n\mathbf m_1=A_2\partial_n\mathbf m_2.
+A_1\partial_n\mathbf m_1=A_2\partial_n\mathbf m_2
+\qquad\text{on }\Gamma.
 ```
+
+Dla nakładających się ograniczeń siatki regionów obowiązuje ta sama kanoniczna
+algebra co dla obiektu i airboxu:
+
+```{math}
+:label: eq-material-region-mesh-composition
+
+h_{\mathrm{target}}(\mathbf x)=
+\max\!\left(\min_{u\in\mathcal U(\mathbf x)}u,
+             \max_{\ell\in\mathcal L(\mathbf x)}\ell\right).
+```
+
+For separate material objects, direct exchange is absent unless explicitly
+authored. Demagnetization still couples their total physical magnetization.
+RKKY/interlayer exchange is the surface energy
 
 ```{math}
 :label: material-rkky-energy
 
-E_\mathrm{RKKY}=-J_1\int_\Gamma \mathbf m_1\!\cdot\!\mathbf m_2\,\mathrm dS.
+E_\mathrm{RKKY}=-J_1\int_\Gamma
+\mathbf m_1\!\cdot\!\mathbf m_2\,\mathrm dS.
 ```
+
+It cannot be represented by assigning volumetric $A$ on the two sides. A
+region-local parameter transition is
 
 ```{math}
 :label: material-transition-blend
 
-p(\mathbf x)=p_\mathrm{parent}+w(d(\mathbf x),h_\mathrm{local})(p_\mathrm{region}-p_\mathrm{parent}).
+p(\mathbf x)=p_\mathrm{parent}
++w(d(\mathbf x),h_\mathrm{local})
+\left(p_\mathrm{region}-p_\mathrm{parent}\right).
 ```
+
+The corresponding discrete FDM and FEM exchange contracts are
 
 ```{math}
 :label: material-fdm-harmonic-exchange
@@ -136,7 +128,10 @@ A_{ij}=\frac{2A_iA_j}{A_i+A_j}\,s_{ij}.
 ```{math}
 :label: material-fdm-exchange-field
 
-\mathbf H_{\mathrm{ex},i}=\frac{2}{\mu_0M_{s,i}V_i}\sum_j A_{ij}\frac{S_{ij}}{d_{ij}}(\mathbf m_j-\mathbf m_i).
+\mathbf H_{\mathrm{ex},i}=
+\frac{2}{\mu_0M_{s,i}V_i}
+\sum_j A_{ij}\frac{S_{ij}}{d_{ij}}
+(\mathbf m_j-\mathbf m_i).
 ```
 
 ```{math}
@@ -149,59 +144,60 @@ Regionowe `maximum_element_size` jest upper target, a
 `minimum_element_size` jest lower bound; żadna nazwa regionu nie aktywuje
 fizyki ani nie może ominąć dolnego ograniczenia.
 
-This is the physical reason that two regions inside one object are not
-automatically disconnected. They share one continuum field.
-
-For multiple material objects, each object owns its own reduced field:
-
-```text
-m_k : Omega_k x [0, T] -> S^2
-M_k = Ms_k(x) m_k
-```
-
-Direct exchange between two objects is absent unless the user declares an
-explicit coupling. Demag still acts through the total physical magnetization
-over all objects.
-
-RKKY/interlayer exchange is a surface energy:
-
-```text
-E_RKKY = -J1 integral_Gamma (m_1 dot m_2) dS
-```
-
-where `J1` has units `J/m^2`. It is not represented by setting the volumetric
-exchange stiffness `Aex` on both sides.
-
 (material-regions-symbols-and-si-units)=
 ### 2.2 Symbols and SI units
 
-| Symbol / parameter | Meaning | SI unit |
+| Symbol | Meaning | SI unit |
 |---|---|---|
-| `m` | reduced magnetization | dimensionless |
-| `M` | physical magnetization | `A/m` |
-| `Ms(x)` | saturation magnetization | `A/m` |
-| `A(x)`, `Aex` | exchange stiffness | `J/m` |
-| `alpha(x)` | Gilbert damping | dimensionless |
-| `Ku1(x)`, `Ku2(x)` | uniaxial anisotropy constants | `J/m^3` |
-| `Kc1(x)`, `Kc2(x)`, `Kc3(x)` | cubic anisotropy constants | `J/m^3` |
-| `Dind(x)` | interfacial DMI coefficient | `J/m^2` |
-| `Dbulk(x)` | bulk DMI coefficient | `J/m^2` under the current Fullmag convention |
-| `J1` | bilinear RKKY/interlayer surface coupling | `J/m^2` |
-| `mu0` | vacuum permeability | `N/A^2` |
-| $\mathbf x$ | physical mesh-policy point | $\mathrm m$ |
-| $\mathcal U(\mathbf x)$ | eligible upper mesh-size targets | $\mathrm m$ |
-| $\mathcal L(\mathbf x)$ | eligible lower mesh-size bounds | $\mathrm m$ |
-| $h_\mathrm{target}(\mathbf x)$ | resolved mesh target | $\mathrm m$ |
+| $\mathbf x$ | physical point | $\mathrm m$ |
+| $t$ | time | $\mathrm s$ |
+| $T$ | terminal time | $\mathrm s$ |
+| $\Omega$ | magnetic volume domain | $\mathrm{m^3}$ |
+| $\Gamma$ | material interface surface | $\mathrm{m^2}$ |
+| $S^2$ | unit sphere of reduced magnetization | $1$ |
 | $\mathbf m$ | reduced magnetization | $1$ |
+| $\mathbf m_1$ | reduced magnetization on side 1 | $1$ |
+| $\mathbf m_2$ | reduced magnetization on side 2 | $1$ |
+| $\mathbf m_i$ | reduced magnetization in cell i | $1$ |
+| $\mathbf m_j$ | reduced magnetization in cell j | $1$ |
 | $\mathbf M$ | physical magnetization | $\mathrm{A/m}$ |
-| $M_s$ | saturation magnetization field | $\mathrm{A/m}$ |
-| $A$ | exchange stiffness field | $\mathrm{J/m}$ |
+| $M_s$ | saturation magnetization | $\mathrm{A/m}$ |
+| $M_{s,i}$ | cell saturation magnetization | $\mathrm{A/m}$ |
+| $E_\mathrm{ex}$ | exchange energy | $\mathrm J$ |
+| $E_\mathrm{RKKY}$ | RKKY/interlayer energy | $\mathrm J$ |
+| $A$ | exchange stiffness | $\mathrm{J/m}$ |
+| $A_i$ | cell-i exchange stiffness | $\mathrm{J/m}$ |
+| $A_j$ | cell-j exchange stiffness | $\mathrm{J/m}$ |
+| $A_1$ | side-1 exchange stiffness | $\mathrm{J/m}$ |
+| $A_2$ | side-2 exchange stiffness | $\mathrm{J/m}$ |
+| $\nabla$ | spatial derivative | $\mathrm{m^{-1}}$ |
+| $\partial_n$ | outward-normal derivative | $\mathrm{m^{-1}}$ |
+| $\mathrm dV$ | volume measure | $\mathrm{m^3}$ |
+| $\mathrm dS$ | surface measure | $\mathrm{m^2}$ |
+| $\mathbf H_\mathrm{ex}$ | exchange effective field | $\mathrm{A/m}$ |
+| $\mathbf H_{\mathrm{ex},i}$ | cell-i exchange effective field | $\mathrm{A/m}$ |
 | $\mu_0$ | vacuum permeability | $\mathrm{N/A^2}$ |
-| $J_1$ | bilinear surface coupling | $\mathrm{J/m^2}$ |
-| $p$ | material parameter | $parameter-dependent$ |
+| $J_1$ | bilinear surface-coupling density | $\mathrm{J/m^2}$ |
+| $\mathcal U(\mathbf x)$ | eligible upper mesh-size targets | $\mathrm m$ |
+| $u$ | one upper target | $\mathrm m$ |
+| $\mathcal L(\mathbf x)$ | eligible lower mesh-size bounds | $\mathrm m$ |
+| $\ell$ | one lower bound | $\mathrm m$ |
+| $h_\mathrm{target}$ | resolved mesh target | $\mathrm m$ |
+| $p$ | selected material parameter | $\{\mathrm{A/m},\mathrm{J/m},1,\mathrm{J/m^3},\mathrm{J/m^2}\}$ |
+| $p_\mathrm{parent}$ | parent material parameter | $\{\mathrm{A/m},\mathrm{J/m},1,\mathrm{J/m^3},\mathrm{J/m^2}\}$ |
+| $p_\mathrm{region}$ | region material parameter | $\{\mathrm{A/m},\mathrm{J/m},1,\mathrm{J/m^3},\mathrm{J/m^2}\}$ |
 | $w$ | smooth transition weight | $1$ |
 | $d$ | signed selector distance | $\mathrm m$ |
+| $h_\mathrm{local}$ | local mesh length used by mesh-relative transition | $\mathrm m$ |
 | $A_{ij}$ | discrete pair exchange coefficient | $\mathrm{J/m}$ |
+| $s_{ij}$ | authored dimensionless exchange scale | $1$ |
+| $i$ | current-cell index | $1$ |
+| $j$ | neighbor-cell index | $1$ |
+| $V_i$ | cell volume | $\mathrm{m^3}$ |
+| $S_{ij}$ | shared-face area | $\mathrm{m^2}$ |
+| $d_{ij}$ | cell-center distance | $\mathrm m$ |
+| $M_{M_s}$ | saturation-weighted FEM mass operator | $\mathrm{A\,m^2}$ |
+| $K_A$ | exchange-weighted FEM stiffness operator | $\mathrm J$ |
 
 (material-regions-assumptions-and-validity)=
 ### 2.3 Assumptions and approximations
@@ -680,28 +676,60 @@ Regionowa część mesh API jest wyczerpująco zmapowana poniżej:
 | `ObjectRegion.mesh.transition_distance` | `float \| None` | `None` | $\mathrm m$ | finite and non-negative | region transition span | FEM by capability | `object_regions[].mesh_policy.transition_distance` | `packages/fullmag-py/src/fullmag/model/structure.py::ObjectRegion` |
 | `ObjectRegion.mesh.order` | `int \| None` | `None` | $1$ | integer at least one | region FEM basis-order intent | FEM by capability | `object_regions[].mesh_policy.order` | `packages/fullmag-py/src/fullmag/model/structure.py::ObjectRegion` |
 
-Public material fields, constructors, and couplings are exhaustively mapped:
+Public material names, every constructor argument, and every coupling argument are mapped below. Units on `unit` arguments are metadata strings (`1` as the string field itself); the physical field-value unit is fixed by the selected material name.
 
 | Python | Type | Default | SI unit | Validation / error | Meaning | Backend support | ProblemIR destination | Source |
 |---|---|---|---|---|---|---|---|---|
-| `MaterialParameterName.Ms` | `scalar or vector MaterialParameterField` | `object value` | $parameter-specific SI$ | finite; Ms positive in active magnetic material; vector arity validated | authored material parameter field | capability-gated FDM/FEM CPU/GPU | `MaterialParameterNameIR::Ms` | `packages/fullmag-py/src/fullmag/model/structure.py::_MATERIAL_PARAMETER_NAMES` |
-| `MaterialParameterName.Aex` | `scalar or vector MaterialParameterField` | `object value` | $parameter-specific SI$ | finite; Ms positive in active magnetic material; vector arity validated | authored material parameter field | capability-gated FDM/FEM CPU/GPU | `MaterialParameterNameIR::Aex` | `packages/fullmag-py/src/fullmag/model/structure.py::_MATERIAL_PARAMETER_NAMES` |
-| `MaterialParameterName.Alpha` | `scalar or vector MaterialParameterField` | `object value` | $parameter-specific SI$ | finite; Ms positive in active magnetic material; vector arity validated | authored material parameter field | capability-gated FDM/FEM CPU/GPU | `MaterialParameterNameIR::Alpha` | `packages/fullmag-py/src/fullmag/model/structure.py::_MATERIAL_PARAMETER_NAMES` |
-| `MaterialParameterName.Ku1` | `scalar or vector MaterialParameterField` | `object value` | $parameter-specific SI$ | finite; Ms positive in active magnetic material; vector arity validated | authored material parameter field | capability-gated FDM/FEM CPU/GPU | `MaterialParameterNameIR::Ku1` | `packages/fullmag-py/src/fullmag/model/structure.py::_MATERIAL_PARAMETER_NAMES` |
-| `MaterialParameterName.Ku2` | `scalar or vector MaterialParameterField` | `object value` | $parameter-specific SI$ | finite; Ms positive in active magnetic material; vector arity validated | authored material parameter field | capability-gated FDM/FEM CPU/GPU | `MaterialParameterNameIR::Ku2` | `packages/fullmag-py/src/fullmag/model/structure.py::_MATERIAL_PARAMETER_NAMES` |
-| `MaterialParameterName.AnisotropyAxis` | `scalar or vector MaterialParameterField` | `object value` | $parameter-specific SI$ | finite; Ms positive in active magnetic material; vector arity validated | authored material parameter field | capability-gated FDM/FEM CPU/GPU | `MaterialParameterNameIR::AnisotropyAxis` | `packages/fullmag-py/src/fullmag/model/structure.py::_MATERIAL_PARAMETER_NAMES` |
-| `MaterialParameterName.Kc1` | `scalar or vector MaterialParameterField` | `object value` | $parameter-specific SI$ | finite; Ms positive in active magnetic material; vector arity validated | authored material parameter field | capability-gated FDM/FEM CPU/GPU | `MaterialParameterNameIR::Kc1` | `packages/fullmag-py/src/fullmag/model/structure.py::_MATERIAL_PARAMETER_NAMES` |
-| `MaterialParameterName.Kc2` | `scalar or vector MaterialParameterField` | `object value` | $parameter-specific SI$ | finite; Ms positive in active magnetic material; vector arity validated | authored material parameter field | capability-gated FDM/FEM CPU/GPU | `MaterialParameterNameIR::Kc2` | `packages/fullmag-py/src/fullmag/model/structure.py::_MATERIAL_PARAMETER_NAMES` |
-| `MaterialParameterName.Kc3` | `scalar or vector MaterialParameterField` | `object value` | $parameter-specific SI$ | finite; Ms positive in active magnetic material; vector arity validated | authored material parameter field | capability-gated FDM/FEM CPU/GPU | `MaterialParameterNameIR::Kc3` | `packages/fullmag-py/src/fullmag/model/structure.py::_MATERIAL_PARAMETER_NAMES` |
-| `MaterialParameterName.Dind` | `scalar or vector MaterialParameterField` | `object value` | $parameter-specific SI$ | finite; Ms positive in active magnetic material; vector arity validated | authored material parameter field | capability-gated FDM/FEM CPU/GPU | `MaterialParameterNameIR::Dind` | `packages/fullmag-py/src/fullmag/model/structure.py::_MATERIAL_PARAMETER_NAMES` |
-| `MaterialParameterName.Dbulk` | `scalar or vector MaterialParameterField` | `object value` | $parameter-specific SI$ | finite; Ms positive in active magnetic material; vector arity validated | authored material parameter field | capability-gated FDM/FEM CPU/GPU | `MaterialParameterNameIR::Dbulk` | `packages/fullmag-py/src/fullmag/model/structure.py::_MATERIAL_PARAMETER_NAMES` |
-| `fm.fields.constant` | `MaterialParameterField` | `required arguments` | $declared field unit$ | constructor-specific finite values, dimensions, frame and location validation | authored material parameter field constructor | capability-gated FDM/FEM CPU/GPU | `MaterialParameterFieldIR` | `packages/fullmag-py/src/fullmag/model/structure.py::MaterialParameterField.constant` |
-| `fm.fields.linear` | `MaterialParameterField` | `required arguments` | $declared field unit$ | constructor-specific finite values, dimensions, frame and location validation | authored material parameter field constructor | capability-gated FDM/FEM CPU/GPU | `MaterialParameterFieldIR` | `packages/fullmag-py/src/fullmag/model/structure.py::MaterialParameterField.linear` |
-| `fm.fields.radial` | `MaterialParameterField` | `required arguments` | $declared field unit$ | constructor-specific finite values, dimensions, frame and location validation | authored material parameter field constructor | capability-gated FDM/FEM CPU/GPU | `MaterialParameterFieldIR` | `packages/fullmag-py/src/fullmag/model/structure.py::MaterialParameterField.radial` |
-| `fm.fields.sampled` | `MaterialParameterField` | `required arguments` | $declared field unit$ | constructor-specific finite values, dimensions, frame and location validation | authored material parameter field constructor | capability-gated FDM/FEM CPU/GPU | `MaterialParameterFieldIR` | `packages/fullmag-py/src/fullmag/model/structure.py::MaterialParameterField.sampled` |
-| `study.couplings.exchange` | `Coupling` | `required endpoints` | $J/m or J/m^2 by coupling$ | endpoints, mode and finite coupling parameters validated; unsupported runtime blocks | explicit inter-object/interface coupling | capability-gated FDM/FEM CPU/GPU | `CouplingIR` | `packages/fullmag-py/src/fullmag/model/couplings.py::CouplingRegistry.exchange` |
-| `study.couplings.rkky` | `Coupling` | `required endpoints` | $J/m or J/m^2 by coupling$ | endpoints, mode and finite coupling parameters validated; unsupported runtime blocks | explicit inter-object/interface coupling | capability-gated FDM/FEM CPU/GPU | `CouplingIR` | `packages/fullmag-py/src/fullmag/model/couplings.py::CouplingRegistry.rkky` |
-| `study.couplings.interlayer_exchange` | `Coupling` | `required endpoints` | $J/m or J/m^2 by coupling$ | endpoints, mode and finite coupling parameters validated; unsupported runtime blocks | explicit inter-object/interface coupling | capability-gated FDM/FEM CPU/GPU | `CouplingIR` | `packages/fullmag-py/src/fullmag/model/couplings.py::CouplingRegistry.interlayer_exchange` |
+| `MaterialParameterName.Ms` | `MaterialParameterField` | `authored assignment value` | $\mathrm{A/m}$ | constant scalar must be > 0; positivity of non-constant or vector payloads is not checked by the current Python assignment validator and remains a fail-closed planner/runtime requirement | typed Ms material-parameter selection | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterNameIR::Ms` | `packages/fullmag-py/src/fullmag/model/structure.py::_normalize_parameter_name` |
+| `MaterialParameterName.Aex` | `MaterialParameterField` | `authored assignment value` | $\mathrm{J/m}$ | constant scalar must be >= 0; non-negativity of non-constant or vector payloads is not checked by the current Python assignment validator | typed Aex material-parameter selection | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterNameIR::Aex` | `packages/fullmag-py/src/fullmag/model/structure.py::_normalize_parameter_name` |
+| `MaterialParameterName.Alpha` | `MaterialParameterField` | `authored assignment value` | $1$ | constant scalar must be >= 0; non-negativity of non-constant or vector payloads is not checked by the current Python assignment validator | typed Alpha material-parameter selection | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterNameIR::Alpha` | `packages/fullmag-py/src/fullmag/model/structure.py::_normalize_parameter_name` |
+| `MaterialParameterName.Ku1` | `MaterialParameterField` | `authored assignment value` | $\mathrm{J/m^3}$ | constant scalar must be finite; the generic field container currently accepts incompatible vector arity, which a consuming planner must reject | typed Ku1 material-parameter selection | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterNameIR::Ku1` | `packages/fullmag-py/src/fullmag/model/structure.py::_normalize_parameter_name` |
+| `MaterialParameterName.Ku2` | `MaterialParameterField` | `authored assignment value` | $\mathrm{J/m^3}$ | constant scalar must be finite; the generic field container currently accepts incompatible vector arity, which a consuming planner must reject | typed Ku2 material-parameter selection | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterNameIR::Ku2` | `packages/fullmag-py/src/fullmag/model/structure.py::_normalize_parameter_name` |
+| `MaterialParameterName.AnisotropyAxis` | `MaterialParameterField` | `authored assignment value` | $1$ | physical value is a finite three-vector; the current generic assignment validator does not reject a scalar payload, which is a current limitation | typed AnisotropyAxis material-parameter selection | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterNameIR::AnisotropyAxis` | `packages/fullmag-py/src/fullmag/model/structure.py::_normalize_parameter_name` |
+| `MaterialParameterName.Kc1` | `MaterialParameterField` | `authored assignment value` | $\mathrm{J/m^3}$ | constant scalar must be finite; incompatible vector arity is a current validation limitation | typed Kc1 material-parameter selection | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterNameIR::Kc1` | `packages/fullmag-py/src/fullmag/model/structure.py::_normalize_parameter_name` |
+| `MaterialParameterName.Kc2` | `MaterialParameterField` | `authored assignment value` | $\mathrm{J/m^3}$ | constant scalar must be finite; incompatible vector arity is a current validation limitation | typed Kc2 material-parameter selection | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterNameIR::Kc2` | `packages/fullmag-py/src/fullmag/model/structure.py::_normalize_parameter_name` |
+| `MaterialParameterName.Kc3` | `MaterialParameterField` | `authored assignment value` | $\mathrm{J/m^3}$ | constant scalar must be finite; incompatible vector arity is a current validation limitation | typed Kc3 material-parameter selection | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterNameIR::Kc3` | `packages/fullmag-py/src/fullmag/model/structure.py::_normalize_parameter_name` |
+| `MaterialParameterName.Dind` | `MaterialParameterField` | `authored assignment value` | $\mathrm{J/m^2}$ | constant scalar must be finite; either sign is allowed; incompatible vector arity is a current validation limitation | typed Dind material-parameter selection | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterNameIR::Dind` | `packages/fullmag-py/src/fullmag/model/structure.py::_normalize_parameter_name` |
+| `MaterialParameterName.Dbulk` | `MaterialParameterField` | `authored assignment value` | $\mathrm{J/m^2}$ | constant scalar must be finite; either sign is allowed; incompatible vector arity is a current validation limitation | typed Dbulk material-parameter selection | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterNameIR::Dbulk` | `packages/fullmag-py/src/fullmag/model/structure.py::_normalize_parameter_name` |
+| `fm.fields.constant.value` | `float \| tuple[float, float, float]` | `required` | $\{\mathrm{A/m},\mathrm{J/m},1,\mathrm{J/m^3},\mathrm{J/m^2}\}$ | scalar must be finite; vector must contain exactly three finite components; otherwise ValueError | constant scalar/vector payload | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Constant.value` | `packages/fullmag-py/src/fullmag/fields.py::constant` |
+| `fm.fields.constant.unit` | `str \| None` | `None` | $1$ | when provided, must be non-empty; current Python code does not validate that the string matches the selected parameter SI unit | declared unit metadata | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Constant.unit` | `packages/fullmag-py/src/fullmag/fields.py::constant` |
+| `fm.fields.linear.base` | `float` | `required` | $\{\mathrm{A/m},\mathrm{J/m},1,\mathrm{J/m^3},\mathrm{J/m^2}\}$ | must be finite; otherwise ValueError | field value at the object-frame origin | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Linear.base` | `packages/fullmag-py/src/fullmag/fields.py::linear` |
+| `fm.fields.linear.gradient` | `tuple[float, float, float]` | `required` | $\{\mathrm{A/m^2},\mathrm{J/m^2},\mathrm{m^{-1}},\mathrm{J/m^4},\mathrm{J/m^3}\}$ | must contain exactly three finite components; otherwise ValueError | spatial gradient | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Linear.gradient` | `packages/fullmag-py/src/fullmag/fields.py::linear` |
+| `fm.fields.linear.frame` | `Literal["object", "world"]` | `"object"` | $1$ | case-normalized to object/world; any other token gives ValueError | coordinate frame | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Linear.frame` | `packages/fullmag-py/src/fullmag/fields.py::linear` |
+| `fm.fields.linear.unit` | `str \| None` | `None` | $1$ | when provided, must be non-empty; SI consistency with the target parameter is not currently machine-validated | declared base-value unit metadata | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Linear.unit` | `packages/fullmag-py/src/fullmag/fields.py::linear` |
+| `fm.fields.radial.center` | `tuple[float, float, float]` | `required` | $\mathrm m$ | must contain exactly three finite components; otherwise ValueError | radial-field center | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Radial.center` | `packages/fullmag-py/src/fullmag/fields.py::radial` |
+| `fm.fields.radial.radius` | `float` | `required` | $\mathrm m$ | must be finite and > 0; otherwise ValueError | radial transition radius | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Radial.radius` | `packages/fullmag-py/src/fullmag/fields.py::radial` |
+| `fm.fields.radial.inside` | `float` | `required` | $\{\mathrm{A/m},\mathrm{J/m},1,\mathrm{J/m^3},\mathrm{J/m^2}\}$ | must be finite; otherwise ValueError | value inside the radius | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Radial.inside` | `packages/fullmag-py/src/fullmag/fields.py::radial` |
+| `fm.fields.radial.outside` | `float` | `required` | $\{\mathrm{A/m},\mathrm{J/m},1,\mathrm{J/m^3},\mathrm{J/m^2}\}$ | must be finite; otherwise ValueError | value outside the radius | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Radial.outside` | `packages/fullmag-py/src/fullmag/fields.py::radial` |
+| `fm.fields.radial.frame` | `Literal["object", "world"]` | `"object"` | $1$ | case-normalized to object/world; any other token gives ValueError | coordinate frame | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Radial.frame` | `packages/fullmag-py/src/fullmag/fields.py::radial` |
+| `fm.fields.radial.unit` | `str \| None` | `None` | $1$ | when provided, must be non-empty; SI consistency with the target parameter is not currently machine-validated | declared field-value unit metadata | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Radial.unit` | `packages/fullmag-py/src/fullmag/fields.py::radial` |
+| `fm.fields.sampled.asset_id` | `str` | `required` | $1$ | must be non-empty; otherwise ValueError | sampled-field artifact identity | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Sampled.asset_id` | `packages/fullmag-py/src/fullmag/fields.py::sampled` |
+| `fm.fields.sampled.component_count` | `int` | `required` | $1$ | integer must be >= 1; otherwise ValueError; compatibility with the selected material parameter is a current planner-validation boundary | components per sample | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Sampled.component_count` | `packages/fullmag-py/src/fullmag/fields.py::sampled` |
+| `fm.fields.sampled.location` | `Literal["cell", "node", "element", "quadrature"]` | `required` | $1$ | case-normalized to the four listed tokens; any other token gives ValueError | sample association | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Sampled.location` | `packages/fullmag-py/src/fullmag/fields.py::sampled` |
+| `fm.fields.sampled.unit` | `str` | `required` | $1$ | must be non-empty; SI consistency with the selected parameter is not currently machine-validated | declared sampled-value unit metadata | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `MaterialParameterFieldIR::Sampled.unit` | `packages/fullmag-py/src/fullmag/fields.py::sampled` |
+| `study.couplings.exchange.source` | `object \| ObjectRegion \| CouplingEndpoint \| str` | `required` | $1$ | must resolve to an object, ObjectRegion, CouplingEndpoint, or non-empty object name; otherwise TypeError/ValueError | source endpoint | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `CouplingIR.source` | `packages/fullmag-py/src/fullmag/world.py::StudyCouplingsHandle.exchange` |
+| `study.couplings.exchange.target` | `object \| ObjectRegion \| CouplingEndpoint \| str` | `required` | $1$ | must resolve to an object, ObjectRegion, CouplingEndpoint, or non-empty object name; otherwise TypeError/ValueError | target endpoint | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `CouplingIR.target` | `packages/fullmag-py/src/fullmag/world.py::StudyCouplingsHandle.exchange` |
+| `study.couplings.exchange.mode` | `Literal["harmonic_mean", "explicit", "disabled"]` | `"harmonic_mean"` | $1$ | invalid token gives ValueError; harmonic_mean forbids inter_exchange; explicit requires it; disabled requires scale=0 or None | exchange coupling policy | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `CouplingParametersIR::Exchange.mode` | `packages/fullmag-py/src/fullmag/world.py::StudyCouplingsHandle.exchange` |
+| `study.couplings.exchange.scale` | `float \| None` | `None` | $1$ | when provided, must be finite and >= 0; disabled mode accepts only 0 or None | dimensionless exchange scale | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `CouplingParametersIR::Exchange.scale` | `packages/fullmag-py/src/fullmag/world.py::StudyCouplingsHandle.exchange` |
+| `study.couplings.exchange.inter_exchange` | `float \| None` | `None` | $\mathrm{J/m}$ | when provided, must be finite; required for explicit mode and forbidden for harmonic_mean | explicit inter-object exchange stiffness | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `CouplingParametersIR::Exchange.inter_exchange` | `packages/fullmag-py/src/fullmag/world.py::StudyCouplingsHandle.exchange` |
+| `study.couplings.exchange.coupling_id` | `str \| None` | `None` | $1$ | None generates a deterministic id; an authored id must be non-empty when lowered with to_ir, otherwise ValueError | coupling identity | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `CouplingIR.coupling_id` | `packages/fullmag-py/src/fullmag/world.py::StudyCouplingsHandle.exchange` |
+| `study.couplings.exchange.enabled` | `bool` | `True` | $1$ | current lowering coerces by bool(value) rather than rejecting non-bool input; strict type validation is a current limitation | activation flag | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `CouplingIR.enabled` | `packages/fullmag-py/src/fullmag/world.py::StudyCouplingsHandle.exchange` |
+| `study.couplings.exchange.capability_policy` | `Literal["require_runtime", "authored_only"]` | `"require_runtime"` | $1$ | any other token gives ValueError | runtime capability policy | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `CouplingIR.capability_policy` | `packages/fullmag-py/src/fullmag/world.py::StudyCouplingsHandle.exchange` |
+| `study.couplings.rkky.source` | `object \| ObjectRegion \| CouplingEndpoint \| str` | `required` | $1$ | must resolve to CouplingEndpoint.surface with selector top/bottom/left/right/front/back; otherwise ValueError | source endpoint | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `CouplingIR.source` | `packages/fullmag-py/src/fullmag/world.py::StudyCouplingsHandle.rkky` |
+| `study.couplings.rkky.target` | `object \| ObjectRegion \| CouplingEndpoint \| str` | `required` | $1$ | must resolve to CouplingEndpoint.surface with selector top/bottom/left/right/front/back; otherwise ValueError | target endpoint | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `CouplingIR.target` | `packages/fullmag-py/src/fullmag/world.py::StudyCouplingsHandle.rkky` |
+| `study.couplings.rkky.J1` | `float` | `required` | $\mathrm{J/m^2}$ | must be finite; either sign is allowed; otherwise ValueError | bilinear RKKY surface density | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `CouplingParametersIR::Rkky.j1` | `packages/fullmag-py/src/fullmag/world.py::StudyCouplingsHandle.rkky` |
+| `study.couplings.rkky.coupling_id` | `str \| None` | `None` | $1$ | None generates a deterministic id; an authored id must be non-empty when lowered with to_ir, otherwise ValueError | coupling identity | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `CouplingIR.coupling_id` | `packages/fullmag-py/src/fullmag/world.py::StudyCouplingsHandle.rkky` |
+| `study.couplings.rkky.enabled` | `bool` | `True` | $1$ | current lowering coerces by bool(value); strict type validation is a current limitation | activation flag | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `CouplingIR.enabled` | `packages/fullmag-py/src/fullmag/world.py::StudyCouplingsHandle.rkky` |
+| `study.couplings.rkky.capability_policy` | `Literal["require_runtime", "authored_only"]` | `"require_runtime"` | $1$ | any other token gives ValueError | runtime capability policy | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `CouplingIR.capability_policy` | `packages/fullmag-py/src/fullmag/world.py::StudyCouplingsHandle.rkky` |
+| `study.couplings.interlayer_exchange.source` | `object \| ObjectRegion \| CouplingEndpoint \| str` | `required` | $1$ | must resolve to CouplingEndpoint.surface with selector top/bottom/left/right/front/back; otherwise ValueError | source endpoint | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `CouplingIR.source` | `packages/fullmag-py/src/fullmag/world.py::StudyCouplingsHandle.interlayer_exchange` |
+| `study.couplings.interlayer_exchange.target` | `object \| ObjectRegion \| CouplingEndpoint \| str` | `required` | $1$ | must resolve to CouplingEndpoint.surface with selector top/bottom/left/right/front/back; otherwise ValueError | target endpoint | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `CouplingIR.target` | `packages/fullmag-py/src/fullmag/world.py::StudyCouplingsHandle.interlayer_exchange` |
+| `study.couplings.interlayer_exchange.J1` | `float` | `required` | $\mathrm{J/m^2}$ | must be finite; either sign is allowed; otherwise ValueError | bilinear interlayer surface density | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `CouplingParametersIR::InterlayerExchange.j1` | `packages/fullmag-py/src/fullmag/world.py::StudyCouplingsHandle.interlayer_exchange` |
+| `study.couplings.interlayer_exchange.J2` | `float \| None` | `None` | $\mathrm{J/m^2}$ | when provided, must be finite; either sign is allowed; otherwise ValueError | biquadratic interlayer surface density | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `CouplingParametersIR::InterlayerExchange.j2` | `packages/fullmag-py/src/fullmag/world.py::StudyCouplingsHandle.interlayer_exchange` |
+| `study.couplings.interlayer_exchange.coupling_id` | `str \| None` | `None` | $1$ | None generates a deterministic id; an authored id must be non-empty when lowered with to_ir, otherwise ValueError | coupling identity | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `CouplingIR.coupling_id` | `packages/fullmag-py/src/fullmag/world.py::StudyCouplingsHandle.interlayer_exchange` |
+| `study.couplings.interlayer_exchange.enabled` | `bool` | `True` | $1$ | current lowering coerces by bool(value); strict type validation is a current limitation | activation flag | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `CouplingIR.enabled` | `packages/fullmag-py/src/fullmag/world.py::StudyCouplingsHandle.interlayer_exchange` |
+| `study.couplings.interlayer_exchange.capability_policy` | `Literal["require_runtime", "authored_only"]` | `"require_runtime"` | $1$ | any other token gives ValueError | runtime capability policy | authored IR on FDM/FEM CPU/GPU; runtime capability-gated | `CouplingIR.capability_policy` | `packages/fullmag-py/src/fullmag/world.py::StudyCouplingsHandle.interlayer_exchange` |
+
+Example:
 
 Example:
 
@@ -724,7 +752,7 @@ upper = study.geometry(
     fm.Box(size=(120e-9, 60e-9, 2e-9)).translate((0.0, 0.0, 1e-9)),
     name="upper",
 )
-lower.Ms = fm.fields.linear(base=800e3, gradient=(0.0, 2.0e11, 0.0), frame="object")
+lower.Ms = 800e3
 lower.Aex = 13e-12
 lower.alpha = 0.02
 lower.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
@@ -744,6 +772,27 @@ study.couplings.rkky(
 )
 study.stages.add_relax(stage_id="relax", algorithm="projected_gradient_bb", max_steps=1)
 ```
+
+The executable study deliberately uses scalar `lower.Ms`: assigning a
+`MaterialParameterField` directly to the scalar material slot is not supported
+and currently fails during stage lowering. Field construction and descriptor
+lowering are current and can be inspected independently:
+
+```pycon
+>>> ms_profile = fm.fields.linear(
+...     base=800e3,
+...     gradient=(0.0, 2.0e11, 0.0),
+...     frame="object",
+...     unit="A/m",
+... )
+>>> ms_profile.to_ir()
+{'kind': 'linear', 'base': 800000.0, 'gradient': [0.0, 200000000000.0, 0.0], 'frame': 'object', 'unit': 'A/m'}
+```
+
+Direct property assignment such as `lower.Ms = ms_profile` remains outside the
+current builder contract; adding that ergonomic builder path is planned. Until
+then, `MaterialParameterField.to_ir()` proves descriptor semantics only and is
+not evidence that a selected runtime consumes the spatial field.
 
 `ObjectRegion.mesh` uses the same maximum/minimum ordering rule as object mesh
 controls. `fm.fields.constant`, `linear`, `radial`, and `sampled` are the

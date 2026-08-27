@@ -169,7 +169,7 @@ obiecuje structured in-plane meshing ani niezależnego study-wide default.
 
 | Warstwa | Ścieżka | Symbol | Odpowiedzialność |
 |---|---|---|---|
-| Python API | `packages/fullmag-py/src/fullmag/world.py` | `class GeometryMeshHandle` | walidacja i lowering pięciu parametrów |
+| Python API | `packages/fullmag-py/src/fullmag/world.py` | `class GeometryMeshHandle` | walidacja i lowering sześciu parametrów |
 | Normalizacja | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_perimeter_refinement_config` | pary edge/corner i ograniczenia |
 | Gmsh | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_build_field_stack` | lokalne pola rozmiaru |
 | Raport | `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py` | `_build_shared_domain_build_report` | resolved mesh evidence |

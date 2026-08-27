@@ -754,8 +754,11 @@ claimed by this bounded transport change. FMMT v1 remains readable only for tetr
 sessions; it must never carry disguised or truncated mixed cells.
 
 Mesh-quality transport is a separate format from FMMT. The **current** writer
-and decoder implement only `FMMQ v1`: a tet4-only array layout with the current
-metric identifiers. It is not valid evidence for prism6 or pyramid5 quality.
+and decoder implement only `FMMQ v1`: parallel metric arrays without topology,
+element-family, or per-cell identity. The writer can serialize arrays produced
+for a mixed mesh, but the payload cannot prove which topology each sample
+belongs to and therefore cannot qualify prism6, pyramid5, or any mixed mesh.
+Tet4-only use is a qualification limit, not a writer guard.
 The **planned** `FMMQ v2` contract in ADR 0027 adds topology-aware metric IDs,
 sampling rules, units, producer/version identity, zone ownership and exact
 cell-identity binding. No document may claim that v2 is implemented until its
@@ -981,6 +984,6 @@ No lower level implies a higher one.
 | Uniform/nodal cubic GPU field/energy | `backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu` | `fullmag_cuda_cubic_anisotropy_field_energy_blocks` | evaluates the same cubic nodal contract on device | FEM GPU | source/contract evidence |
 | CPU interfacial/bulk DMI | `backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp`; `backends/fem/cpu/mfem/interactions/dmi_bulk.cpp` | `compute_interfacial_dmi_field`; `compute_bulk_dmi_field` | evaluates DMI fields and energies on magnetic prism6 elements | FEM CPU | source/contract evidence |
 | GPU mixed-P1 DMI rejection | `backends/fem/core/fem_mesh.cpp` | `validate_supported_physics_topology` | rejects mixed-P1 GPU DMI with `gpu_dmi_kernel_not_mixed_p1` before unsupported startup | FEM GPU | fail-closed source/contract evidence |
-| FMMQ v1 writer | `packages/fullmag-py/src/fullmag/meshing/remesh_cli.py` | `_write_quality_data_artifact_if_available` | zapisuje bieżący tet4-only FMMQ v1 | FEM tetra | current source contract |
+| FMMQ v1 writer | `packages/fullmag-py/src/fullmag/meshing/remesh_cli.py` | `_write_quality_data_artifact_if_available` | zapisuje bieżące równoległe tablice FMMQ v1 bez tożsamości topologii; może zapisać tablice z mixed mesh, ale payload nie kwalifikuje mixed | writer: current; qualification: tetra-only limit | current source contract |
 | FMMQ v1 decoder | `apps/control-room/src/kernel/api/codecs/meshQualityDataCodec.ts` | `decodeMeshQualityData` | dekoduje bieżący układ FMMQ v1 | Control room | current codec tests |
 | FMMQ v2 contract | `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md` | `DOC-ANCHOR:fmmq-v2-contract` | definiuje planowany topology-aware v2 i v1 exit | Cross-layer contract | planned contract |
