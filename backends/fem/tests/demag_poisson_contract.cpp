@@ -1547,6 +1547,73 @@ void failed_hypre_setup_does_not_publish_partial_state() {
     fullmag::fem::context_destroy_poisson(ctx);
 }
 
+void failed_poisson_reinitialize_preserves_published_state() {
+    mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
+    mfem::H1_FECollection state_fec(1, 3);
+    mfem::FiniteElementSpace state_fes(&mesh, &state_fec);
+    fullmag::fem::Context ctx;
+    mixed_poisson_context(ctx, mesh, state_fes, {1u, 0u, 0u});
+
+    std::string error;
+    check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
+                 "Poisson reinitialize rollback setup");
+    auto *const old_potential_fes = ctx.poisson_demag.potential_fes;
+    auto *const old_boundary_operator = ctx.poisson_demag.poisson_bc_op;
+    const auto old_key = ctx.poisson_demag.operator_lifecycle.active_key;
+    const auto old_setup_count = ctx.poisson_demag.operator_lifecycle.setup_count;
+    const auto old_failed_setup_count =
+        ctx.poisson_demag.operator_lifecycle.failed_setup_count;
+
+    ctx.poisson_demag.boundary_marker = 999;
+    error.clear();
+    check(
+        !fullmag::fem::context_initialize_poisson(ctx, error),
+        "invalid Poisson reinitialize must fail closed");
+    check(
+        error.find("poisson_boundary_marker=999") != std::string::npos,
+        "failed Poisson reinitialize must report the invalid boundary marker");
+    check(
+        ctx.poisson_demag.ready &&
+            ctx.poisson_demag.potential_fes == old_potential_fes &&
+            ctx.poisson_demag.poisson_bc_op == old_boundary_operator &&
+            ctx.poisson_demag.operator_lifecycle.active_key == old_key &&
+            ctx.poisson_demag.operator_lifecycle.setup_count == old_setup_count &&
+            ctx.poisson_demag.operator_lifecycle.setup_complete,
+        "failed Poisson reinitialize must retain the previously published operator");
+    check(
+        ctx.poisson_demag.operator_lifecycle.failed_setup_count ==
+            old_failed_setup_count + 1u,
+        "failed Poisson reinitialize must increment only failed-setup telemetry");
+
+    ctx.poisson_demag.boundary_marker = 9;
+    std::vector<double> m_xyz(
+        3u * static_cast<size_t>(state_fes.GetNDofs()), 0.0);
+    for (int node = 0; node < state_fes.GetNDofs(); ++node) {
+        const size_t base = 3u * static_cast<size_t>(node);
+        m_xyz[base] = 1.0 + 0.01 * static_cast<double>(node);
+        m_xyz[base + 1u] = -0.02 * static_cast<double>(node);
+        m_xyz[base + 2u] = 0.15;
+    }
+    std::vector<double> h_demag;
+    double demag_energy = 0.0;
+    error.clear();
+    check_result(
+        fullmag::fem::context_compute_demag_poisson(
+            ctx,
+            m_xyz,
+            h_demag,
+            demag_energy,
+            false,
+            nullptr,
+            error),
+        error,
+        "previous Poisson operator must remain usable after failed reinitialize");
+    check(
+        h_demag.size() == m_xyz.size() && std::isfinite(demag_energy),
+        "retained Poisson operator must publish finite recovery after rollback");
+    fullmag::fem::context_destroy_poisson(ctx);
+}
+
 std::vector<double> apply_demag_rhs_csr(
     const fullmag::fem::DeviceCsrTriple &op,
     const std::vector<double> &m_xyz) {
@@ -3402,6 +3469,7 @@ int main() {
     poisson_dependency_key_fails_closed_after_mesh_or_policy_mutation();
     nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves();
     failed_hypre_setup_does_not_publish_partial_state();
+    failed_poisson_reinitialize_preserves_published_state();
     mixed_poisson_manufactured_rhs_stiffness_recovery_and_trace();
     mixed_poisson_rhs_is_magnetic_only_with_air_present();
     mixed_p1_gpu_rhs_and_magnetic_recovery_match_cpu_mfem();
