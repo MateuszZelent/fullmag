@@ -1000,6 +1000,101 @@ pub(crate) fn zero_vectors(len: usize) -> Vec<Vector3> {
     vec![[0.0, 0.0, 0.0]; len]
 }
 
+#[cfg(test)]
+mod normalization_tests {
+    use super::{fft3_core, padded_index};
+    use rustfft::{num_complex::Complex, FftPlanner};
+    use std::f64::consts::TAU;
+
+    fn direct_dft_3d(input: &[Complex<f64>], nx: usize, ny: usize, nz: usize) -> Vec<Complex<f64>> {
+        let mut output = vec![Complex::new(0.0, 0.0); input.len()];
+        for kz in 0..nz {
+            for ky in 0..ny {
+                for kx in 0..nx {
+                    let mut sum = Complex::new(0.0, 0.0);
+                    for z in 0..nz {
+                        for y in 0..ny {
+                            for x in 0..nx {
+                                let phase = -TAU
+                                    * ((kx * x) as f64 / nx as f64
+                                        + (ky * y) as f64 / ny as f64
+                                        + (kz * z) as f64 / nz as f64);
+                                sum += input[padded_index(nx, ny, x, y, z)]
+                                    * Complex::new(phase.cos(), phase.sin());
+                            }
+                        }
+                    }
+                    output[padded_index(nx, ny, kx, ky, kz)] = sum;
+                }
+            }
+        }
+        output
+    }
+
+    fn assert_complex_close(actual: Complex<f64>, expected: Complex<f64>, tolerance: f64) {
+        let error = (actual - expected).norm();
+        let scale = expected.norm().max(1.0);
+        assert!(
+            error <= tolerance * scale,
+            "actual={actual:?} expected={expected:?} error={error} tolerance={tolerance}"
+        );
+    }
+
+    #[test]
+    fn fft3_matches_direct_dft_and_round_trip_normalization() {
+        let [nx, ny, nz] = [3, 2, 2];
+        let original: Vec<_> = (0..nx * ny * nz)
+            .map(|index| {
+                let value = index as f64;
+                Complex::new((0.37 * value).sin() + 0.1 * value, (0.23 * value).cos())
+            })
+            .collect();
+        let expected_forward = direct_dft_3d(&original, nx, ny, nz);
+
+        let mut planner = FftPlanner::<f64>::new();
+        let forward_x = planner.plan_fft_forward(nx);
+        let forward_y = planner.plan_fft_forward(ny);
+        let forward_z = planner.plan_fft_forward(nz);
+        let inverse_x = planner.plan_fft_inverse(nx);
+        let inverse_y = planner.plan_fft_inverse(ny);
+        let inverse_z = planner.plan_fft_inverse(nz);
+        let mut line_y = vec![Complex::new(0.0, 0.0); ny];
+        let mut line_z = vec![Complex::new(0.0, 0.0); nz];
+        let mut transformed = original.clone();
+
+        fft3_core(
+            &mut transformed,
+            nx,
+            ny,
+            nz,
+            &*forward_x,
+            &*forward_y,
+            &*forward_z,
+            &mut line_y,
+            &mut line_z,
+        );
+        for (actual, expected) in transformed.iter().zip(&expected_forward) {
+            assert_complex_close(*actual, *expected, 2e-12);
+        }
+
+        fft3_core(
+            &mut transformed,
+            nx,
+            ny,
+            nz,
+            &*inverse_x,
+            &*inverse_y,
+            &*inverse_z,
+            &mut line_y,
+            &mut line_z,
+        );
+        let normalization = (nx * ny * nz) as f64;
+        for (actual, expected) in transformed.iter().zip(&original) {
+            assert_complex_close(*actual / normalization, *expected, 2e-12);
+        }
+    }
+}
+
 /// Compute PBC Newell kernels via truncated images.
 ///
 /// For each cell offset `(i, j, k)` in the padded grid `(px × py × pz)`:
