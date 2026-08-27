@@ -1169,6 +1169,7 @@ dependencies = [
 name = "fullmag-bench"
 version = "0.1.0"
 dependencies = [
+ "fullmag-build-info",
  "fullmag-engine",
  "fullmag-fdm-demag",
  "fullmag-ir",
