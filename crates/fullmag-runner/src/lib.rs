@@ -2659,6 +2659,7 @@ fn fem_eigen_progress_update(
         hysteresis_settle_step_kind: None,
         hysteresis_settle_step_method: None,
         scalar_row_due: false,
+        terminal_field_snapshot: false,
         finished: progress.phase == "completed",
     }
 }
@@ -2952,6 +2953,7 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
         hysteresis_settle_step_kind: None,
         hysteresis_settle_step_method: None,
         scalar_row_due: true,
+        terminal_field_snapshot: false,
         finished: true,
     });
 
@@ -3400,6 +3402,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         hysteresis_settle_step_kind: None,
         hysteresis_settle_step_method: None,
         scalar_row_due: true,
+        terminal_field_snapshot: false,
         finished: true,
     });
 
@@ -3743,6 +3746,7 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
         hysteresis_settle_step_kind: None,
         hysteresis_settle_step_method: None,
         scalar_row_due: true,
+        terminal_field_snapshot: false,
         finished: true,
     });
 

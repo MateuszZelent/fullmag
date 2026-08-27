@@ -1529,6 +1529,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                         hysteresis_settle_step_index: None,
                         hysteresis_settle_step_kind: None,
                         hysteresis_settle_step_method: None,
+                        terminal_field_snapshot: false,
                         finished: false,
                     });
                     if preview_due {
@@ -1969,6 +1970,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     hysteresis_settle_step_index: None,
                     hysteresis_settle_step_kind: None,
                     hysteresis_settle_step_method: None,
+                    terminal_field_snapshot: false,
                     finished: false,
                 });
                 if preview_due {
@@ -2136,6 +2138,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     hysteresis_settle_step_index: None,
                     hysteresis_settle_step_kind: None,
                     hysteresis_settle_step_method: None,
+                    terminal_field_snapshot: false,
                     finished: false,
                 });
             }

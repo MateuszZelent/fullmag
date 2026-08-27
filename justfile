@@ -167,11 +167,13 @@ verify-fem-mixed-prism-airbox-runtime:
       "$managed_python" -c "import numpy, scipy, gmsh, meshio, trimesh, h5py, zarr"; \
       durable_root="${FULLMAG_MIXED_PRISM_AIRBOX_DURABLE_ROOT:-/mnt/fullmag-zfn2-native}"; \
       report_root="${FULLMAG_MIXED_PRISM_AIRBOX_REPORT_ROOT:-${durable_root}/reports/fullmag/fem-mixed-prism-airbox-runtime}"; \
+      source scripts/lib/managed_fem_native_storage.sh; \
+      resolve_managed_fem_native_storage; \
       source scripts/lib/managed_fem_runtime_storage.sh; \
       source scripts/lib/managed_fem_report_storage.sh; \
       run_dir="$(create_managed_fem_report_run_root \
         "$durable_root" "$report_root" \
-        "/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4" \
+        "$FULLMAG_NATIVE_BUILD_IMAGE" \
         "/sys/block")"; \
       echo "mixed prism-airbox report root: $run_dir"; \
       temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/fullmag-mixed-prism-airbox-runtime.XXXXXX")"; \
@@ -5794,9 +5796,11 @@ verify-fem-sp4-mixed-matrix-smoke:
     just ensure-managed-fem-runtime
     durable_root="${FULLMAG_SP4_MIXED_MATRIX_DURABLE_ROOT:-/mnt/fullmag-zfn2-native}"; \
       report_base="${FULLMAG_SP4_MIXED_MATRIX_REPORT_ROOT:-${durable_root}/reports/fullmag/standard-problems/mumag/sp4/fem/mixed-matrix-smoke}"; \
+      source scripts/lib/managed_fem_native_storage.sh; \
+      resolve_managed_fem_native_storage; \
       source scripts/lib/managed_fem_runtime_storage.sh; \
       source scripts/lib/managed_fem_report_storage.sh; \
-      report_root="$(create_managed_fem_report_run_root "$durable_root" "$report_base" "/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4" "/sys/block")"; \
+      report_root="$(create_managed_fem_report_run_root "$durable_root" "$report_base" "$FULLMAG_NATIVE_BUILD_IMAGE" "/sys/block")"; \
       echo "mixed SP4 matrix report root: $report_root"; \
       python3 scripts/run_fem_sp4_mixed_matrix.py --durable-root "$durable_root" --report-root "$report_root" --max-steps 1 --evidence-mode one_step_runtime_smoke
 
@@ -5804,9 +5808,11 @@ verify-fem-sp4-mixed-matrix:
     just ensure-managed-fem-runtime
     durable_root="${FULLMAG_SP4_MIXED_MATRIX_DURABLE_ROOT:-/mnt/fullmag-zfn2-native}"; \
       report_base="${FULLMAG_SP4_MIXED_MATRIX_REPORT_ROOT:-${durable_root}/reports/fullmag/standard-problems/mumag/sp4/fem/mixed-matrix}"; \
+      source scripts/lib/managed_fem_native_storage.sh; \
+      resolve_managed_fem_native_storage; \
       source scripts/lib/managed_fem_runtime_storage.sh; \
       source scripts/lib/managed_fem_report_storage.sh; \
-      report_root="$(create_managed_fem_report_run_root "$durable_root" "$report_base" "/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4" "/sys/block")"; \
+      report_root="$(create_managed_fem_report_run_root "$durable_root" "$report_base" "$FULLMAG_NATIVE_BUILD_IMAGE" "/sys/block")"; \
       echo "mixed SP4 matrix report root: $report_root"; \
       python3 scripts/run_fem_sp4_mixed_matrix.py --durable-root "$durable_root" --report-root "$report_root"
 

@@ -1536,13 +1536,21 @@ def test_export_reuses_a_stable_source_snapshot_path_for_cargo_freshness() -> No
 
 def test_export_defaults_to_exact_persistent_build_root() -> None:
     exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+    native_storage_helper = (
+        REPO_ROOT / "scripts/lib/managed_fem_native_storage.sh"
+    ).read_text(encoding="utf-8")
     storage_helper = (
         REPO_ROOT / "scripts/lib/managed_fem_runtime_storage.sh"
     ).read_text(encoding="utf-8")
 
     assert (
-        'readonly FULLMAG_NATIVE_BUILD_STORAGE_ROOT="/zfn2/mateuszz/git/fullmag"'
+        'source "${SOURCE_ROOT}/scripts/lib/managed_fem_native_storage.sh"'
         in exporter
+    )
+    assert "resolve_managed_fem_native_storage" in exporter
+    assert (
+        'FULLMAG_NATIVE_BUILD_STORAGE_ROOT="/zfn2/mateuszz/git/fullmag"'
+        in native_storage_helper
     )
     assert 'readonly FULLMAG_BUILD_ROOT="${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}"' in exporter
     assert (

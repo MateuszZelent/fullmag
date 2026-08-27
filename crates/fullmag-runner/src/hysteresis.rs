@@ -852,6 +852,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
                 scalar_row_due: true,
+                terminal_field_snapshot: false,
                 finished: point_idx == sweep_values_mT.len() - 1,
             });
         }
@@ -3273,6 +3274,7 @@ fn hysteresis_progress_update(
         hysteresis_settle_step_kind: Some(hysteresis_settle_step_kind(step).to_string()),
         hysteresis_settle_step_method: Some(hysteresis_settle_step_method(step).to_string()),
         scalar_row_due: false,
+        terminal_field_snapshot: false,
         finished: false,
     }
 }
@@ -6348,6 +6350,7 @@ mod tests {
             hysteresis_settle_step_kind: None,
             hysteresis_settle_step_method: None,
             scalar_row_due: false,
+            terminal_field_snapshot: false,
             finished: false,
         };
 

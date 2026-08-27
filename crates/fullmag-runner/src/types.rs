@@ -1571,6 +1571,12 @@ pub struct StepUpdate {
     /// True when this update also represents a due scalar-row sample.
     #[serde(default)]
     pub scalar_row_due: bool,
+    /// Internal runner→CLI marker for a complete authoritative field generation.
+    ///
+    /// Individual asynchronously materialized fields must leave this false even
+    /// when their own materialization timestamp is populated.
+    #[serde(default)]
+    pub terminal_field_snapshot: bool,
     /// true when simulation has completed.
     #[serde(default)]
     pub finished: bool,
@@ -4168,6 +4174,7 @@ mod tests {
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
                 scalar_row_due: false,
+                terminal_field_snapshot: false,
                 finished: step == 7,
             };
             assert_eq!(
@@ -4301,6 +4308,7 @@ mod tests {
             hysteresis_settle_step_kind: None,
             hysteresis_settle_step_method: None,
             scalar_row_due: false,
+            terminal_field_snapshot: false,
             finished: false,
         };
 
@@ -4355,6 +4363,7 @@ mod tests {
             hysteresis_settle_step_kind: None,
             hysteresis_settle_step_method: None,
             scalar_row_due: false,
+            terminal_field_snapshot: false,
             finished: false,
         };
 
@@ -4412,6 +4421,7 @@ mod tests {
             hysteresis_settle_step_kind: None,
             hysteresis_settle_step_method: None,
             scalar_row_due: false,
+            terminal_field_snapshot: false,
             finished: true,
         };
 

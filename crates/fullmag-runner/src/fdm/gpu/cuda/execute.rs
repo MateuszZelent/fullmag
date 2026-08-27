@@ -299,6 +299,7 @@ pub(crate) fn execute_cuda_fdm(
                         hysteresis_settle_step_kind: None,
                         hysteresis_settle_step_method: None,
                         scalar_row_due: preview_due && preview_targets_global_scalar,
+                        terminal_field_snapshot: false,
                         finished: false,
                     });
                     if preview_due {

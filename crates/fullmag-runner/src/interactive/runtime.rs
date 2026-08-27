@@ -83,6 +83,7 @@ pub(crate) fn build_atomic_terminal_update(
         hysteresis_settle_step_kind: None,
         hysteresis_settle_step_method: None,
         scalar_row_due: true,
+        terminal_field_snapshot: false,
         finished: true,
     }))
 }

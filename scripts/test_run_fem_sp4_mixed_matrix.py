@@ -23,6 +23,29 @@ ORIGINAL_AUTHORITATIVE_RUNTIME_VALIDATOR = executor._run_authoritative_runtime_v
 
 
 class MixedSP4MatrixExecutorTests(unittest.TestCase):
+    def test_local_d_profile_selects_local_native_backing_image(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"FULLMAG_NATIVE_STORAGE_PROFILE": "local-d"},
+            clear=False,
+        ):
+            self.assertEqual(
+                executor._native_backing_image(),
+                Path("/mnt/d/git/fullmag/fullmag-native.ext4"),
+            )
+
+    def test_unknown_native_storage_profile_fails_closed(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"FULLMAG_NATIVE_STORAGE_PROFILE": "unexpected"},
+            clear=False,
+        ):
+            with self.assertRaisesRegex(
+                executor.ExecutionError,
+                "FULLMAG_NATIVE_STORAGE_PROFILE",
+            ):
+                executor._native_backing_image()
+
     @staticmethod
     def _runtime_manifest_payload() -> dict[str, object]:
         library = {
@@ -1443,6 +1466,8 @@ class MixedSP4MatrixExecutorTests(unittest.TestCase):
         self.assertIn("FULLMAG_SP4_MIXED_MATRIX_DURABLE_ROOT", recipes)
         self.assertIn("FULLMAG_SP4_MIXED_MATRIX_REPORT_ROOT", recipes)
         self.assertIn("/mnt/fullmag-zfn2-native", recipes)
+        self.assertIn("managed_fem_native_storage.sh", recipes)
+        self.assertIn('"$FULLMAG_NATIVE_BUILD_IMAGE"', recipes)
         self.assertIn("--durable-root", recipes)
         self.assertIn("--max-steps 1", recipes)
         self.assertIn("--evidence-mode one_step_runtime_smoke", recipes)

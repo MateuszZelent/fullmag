@@ -853,6 +853,12 @@ mod realtime_change_tests {
                 && !change.broad
                 && change.quantity_ids == vec!["m".to_string()]
         }));
+        assert!(changes.iter().any(|change| {
+            matches!(change.resource, RealtimeResourceName::PlanarFields)
+                && change.resource_id.as_deref() == Some("field")
+                && !change.broad
+                && change.quantity_ids == vec!["m".to_string()]
+        }));
     }
 
     #[test]
@@ -1060,6 +1066,29 @@ mod realtime_change_tests {
             .0
             .iter()
             .all(|change| matches!(change.resource, RealtimeResourceName::Fields)));
+    }
+
+    #[test]
+    fn planar_field_changes_use_the_field_sample_qos_lane() {
+        let policy = current_live_realtime_communication_policy_defaults();
+        let batches = split_realtime_changes_for_qos(
+            vec![RealtimeResourceChange {
+                resource: RealtimeResourceName::PlanarFields,
+                revision: 6,
+                resource_id: Some("field".to_string()),
+                quantity_ids: vec!["m".to_string()],
+                broad: false,
+                domain_generation_id: Some("1".to_string()),
+                recommended_fetch: None,
+            }],
+            true,
+            250,
+            &policy,
+        );
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].1, true);
+        assert_eq!(batches[0].2, policy.field_sample_publish_ms);
     }
 }
 

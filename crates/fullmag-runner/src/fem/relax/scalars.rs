@@ -27,6 +27,7 @@ pub(crate) fn publish_initial_scalar_without_field_snapshot(
         hysteresis_settle_step_kind: None,
         hysteresis_settle_step_method: None,
         scalar_row_due: true,
+        terminal_field_snapshot: false,
         finished: false,
     }))
 }

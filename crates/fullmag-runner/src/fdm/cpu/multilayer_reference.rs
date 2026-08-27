@@ -316,6 +316,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
                 scalar_row_due: false,
+                terminal_field_snapshot: false,
                 finished: false,
             });
             match action {
@@ -419,6 +420,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
                 hysteresis_settle_step_index: None,
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
+                terminal_field_snapshot: false,
                 finished: false,
             });
         }

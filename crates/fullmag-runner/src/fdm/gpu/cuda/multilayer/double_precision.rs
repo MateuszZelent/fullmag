@@ -125,6 +125,7 @@ pub(super) fn execute_cuda_assisted_multilayer_double(
                 preview_field: None,
                 cached_preview_fields: None,
                 scalar_row_due: false,
+                terminal_field_snapshot: false,
                 finished: false,
             });
             match action {

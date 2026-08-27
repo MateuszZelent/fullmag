@@ -51,24 +51,18 @@ class ManagedFemRuntimeTargetMountTest(unittest.TestCase):
             source,
         )
         self.assertIn(
-            f'readonly FULLMAG_NATIVE_BUILD_STORAGE_ROOT="{CANONICAL_STORAGE_ROOT}"',
+            'source "${SOURCE_ROOT}/scripts/lib/managed_fem_native_storage.sh"',
             source,
         )
-        self.assertIn(
+        self.assertIn("resolve_managed_fem_native_storage", source)
+        self.assertNotIn(
             f'readonly FULLMAG_NATIVE_BUILD_IMAGE="{CANONICAL_IMAGE}"',
             source,
         )
-        self.assertIn(
+        self.assertNotIn(
             f'readonly FULLMAG_NATIVE_MOUNT_VIEW="{MOUNT_VIEW}"',
             source,
         )
-        for variable in (
-            "FULLMAG_NATIVE_BUILD_STORAGE_ROOT",
-            "FULLMAG_NATIVE_BUILD_IMAGE",
-            "FULLMAG_NATIVE_MOUNT_VIEW",
-            "FULLMAG_CONTAINER_TARGET_DIR",
-        ):
-            self.assertNotIn(f'"${{{variable}:=', source)
         self.assertIn('findmnt -n -o FSTYPE --target "${probe_path}"', storage_source)
         self.assertIn('findmnt -n -o SOURCE --target "${probe_path}"', storage_source)
         self.assertIn('/loop/backing_file', storage_source)
@@ -282,6 +276,10 @@ class ManagedFemRuntimeTargetMountTest(unittest.TestCase):
                 shutil.copy2(
                     REPO_ROOT / "scripts/lib/managed_fem_runtime_storage.sh",
                     library / "managed_fem_runtime_storage.sh",
+                )
+                shutil.copy2(
+                    REPO_ROOT / "scripts/lib/managed_fem_native_storage.sh",
+                    library / "managed_fem_native_storage.sh",
                 )
                 runtime_parent = repo_root / ".fullmag" / "runtimes"
                 self.assertFalse(runtime_parent.exists())

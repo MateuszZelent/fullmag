@@ -341,6 +341,7 @@ pub(super) fn execute_native_stacked_cuda_multilayer(
                     preview_field: None,
                     cached_preview_fields: None,
                     scalar_row_due: false,
+                    terminal_field_snapshot: false,
                     finished: false,
                 });
                 match action {
@@ -363,6 +364,7 @@ pub(super) fn execute_native_stacked_cuda_multilayer(
                 preview_field: None,
                 cached_preview_fields: None,
                 scalar_row_due: false,
+                terminal_field_snapshot: false,
                 finished: false,
             });
             match action {
