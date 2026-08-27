@@ -30,8 +30,8 @@ pub const FDM_CPU_ADAPTIVE_RK45_MAX_RHS_EVALS_TO_ORACLE: u32 = 135;
 
 pub use cpu::state::{
     AbmHistory, AbmHistorySoA, AdaptiveAttemptDecision, AdaptiveAttemptReason,
-    AdaptiveAttemptRecord, ExchangeLlgState, ExchangeLlgStateSoA, IntegratorBuffers, SolverSession,
-    MAX_ADAPTIVE_ATTEMPT_RECORDS,
+    AdaptiveAttemptRecord, ExchangeLlgState, ExchangeLlgStateSoA, FdmCpuStateCopyTelemetry,
+    IntegratorBuffers, SolverSession, MAX_ADAPTIVE_ATTEMPT_RECORDS,
 };
 pub use shared::observables::{EffectiveFieldObservables, RhsEvaluation, StepReport};
 

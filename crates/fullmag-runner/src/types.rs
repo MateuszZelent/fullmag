@@ -2883,6 +2883,21 @@ pub struct FdmCpuStepTransactionTelemetry {
     pub rollback_count: u64,
     pub thermal_interval_index: u64,
     pub thermal_rng_draws: u64,
+    /// Persistent-SoA accepted-state publications performed in this execution segment.
+    #[serde(default)]
+    pub accepted_state_publication_count: u64,
+    /// Host bytes copied by those per-step accepted-state publications.
+    #[serde(default)]
+    pub accepted_state_publication_copy_bytes: u64,
+    /// Full vector-field copies performed by accepted-state publication.
+    #[serde(default)]
+    pub accepted_state_publication_full_field_copy_count: u64,
+    /// Host bytes copied by the one final full transactional-state synchronization.
+    #[serde(default)]
+    pub final_state_sync_copy_bytes: u64,
+    /// Full vector-field copies performed by final transactional-state synchronization.
+    #[serde(default)]
+    pub final_state_sync_full_field_copy_count: u64,
     pub checkpoint_digest: String,
 }
 
@@ -2953,12 +2968,17 @@ mod fdm_gpu_execution_receipt_contract_tests {
     fn execution_provenance_serializes_fdm_cpu_step_transaction_telemetry() {
         let mut provenance = ExecutionProvenance::default();
         provenance.fdm_cpu_step_transaction_telemetry = Some(FdmCpuStepTransactionTelemetry {
-            schema_version: "fullmag.fdm.cpu.step_transaction.v1".into(),
+            schema_version: "fullmag.fdm.cpu.step_transaction.v2".into(),
             accepted_step_count: 7,
             rejected_attempt_count: 2,
             rollback_count: 2,
             thermal_interval_index: 7,
             thermal_rng_draws: 7,
+            accepted_state_publication_count: 7,
+            accepted_state_publication_copy_bytes: 16_800,
+            accepted_state_publication_full_field_copy_count: 7,
+            final_state_sync_copy_bytes: 9_600,
+            final_state_sync_full_field_copy_count: 4,
             checkpoint_digest: "sha256:test".into(),
         });
 
@@ -2967,7 +2987,28 @@ mod fdm_gpu_execution_receipt_contract_tests {
         assert_eq!(telemetry["accepted_step_count"], 7);
         assert_eq!(telemetry["rollback_count"], 2);
         assert_eq!(telemetry["thermal_interval_index"], 7);
+        assert_eq!(telemetry["accepted_state_publication_copy_bytes"], 16_800);
+        assert_eq!(telemetry["final_state_sync_full_field_copy_count"], 4);
         assert_eq!(telemetry["checkpoint_digest"], "sha256:test");
+    }
+
+    #[test]
+    fn fdm_cpu_step_transaction_v1_defaults_copy_telemetry_to_zero() {
+        let legacy = serde_json::json!({
+            "schema_version": "fullmag.fdm.cpu.step_transaction.v1",
+            "accepted_step_count": 3,
+            "rejected_attempt_count": 0,
+            "rollback_count": 0,
+            "thermal_interval_index": 0,
+            "thermal_rng_draws": 0,
+            "checkpoint_digest": "sha256:legacy"
+        });
+        let telemetry: FdmCpuStepTransactionTelemetry =
+            serde_json::from_value(legacy).expect("legacy CPU transaction receipt");
+
+        assert_eq!(telemetry.accepted_state_publication_count, 0);
+        assert_eq!(telemetry.accepted_state_publication_copy_bytes, 0);
+        assert_eq!(telemetry.final_state_sync_copy_bytes, 0);
     }
 
     #[test]

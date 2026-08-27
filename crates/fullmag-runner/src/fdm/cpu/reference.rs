@@ -1204,6 +1204,9 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
     let mut step_count: u64 = resume_step_count.unwrap_or(0);
     let mut cpu_rejected_attempt_count = 0u64;
     let mut cpu_rollback_count = 0u64;
+    let mut accepted_state_publication_count = 0u64;
+    let mut accepted_state_publication_copy_bytes = 0u64;
+    let mut accepted_state_publication_full_field_copy_count = 0u64;
     let mut cpu_evaluation_telemetry = FdmCpuEvaluationTelemetry {
         schema_version: "fullmag.fdm.cpu.evaluation.v1".to_string(),
         minimal_step_count: 0,
@@ -1702,7 +1705,19 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     step_evaluation,
                 );
                 match result {
-                    Ok(report) => report,
+                    Ok((report, state_copy)) => {
+                        if state_copy.full_field_copy_count > 0 {
+                            accepted_state_publication_count =
+                                accepted_state_publication_count.saturating_add(1);
+                            accepted_state_publication_copy_bytes =
+                                accepted_state_publication_copy_bytes
+                                    .saturating_add(state_copy.copied_bytes);
+                            accepted_state_publication_full_field_copy_count =
+                                accepted_state_publication_full_field_copy_count
+                                    .saturating_add(state_copy.full_field_copy_count);
+                        }
+                        report
+                    }
                     Err(error) => {
                         let primary = RunError {
                             message: format!("Step {}: {}", step_count, error),
@@ -2141,6 +2156,14 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         }
     }
 
+    let final_state_sync = if !is_direct_minimization {
+        state_soa
+            .as_ref()
+            .map(|soa| soa.write_back_to(&mut state))
+            .unwrap_or_default()
+    } else {
+        Default::default()
+    };
     let checkpoint_digest = problem
         .transactional_state_digest(&state)
         .map_err(|error| RunError {
@@ -2163,7 +2186,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         });
     }
     final_provenance.fdm_cpu_step_transaction_telemetry = Some(FdmCpuStepTransactionTelemetry {
-        schema_version: "fullmag.fdm.cpu.step_transaction.v1".to_string(),
+        schema_version: "fullmag.fdm.cpu.step_transaction.v2".to_string(),
         accepted_step_count: step_count,
         rejected_attempt_count: cpu_rejected_attempt_count,
         rollback_count: cpu_rollback_count,
@@ -2171,6 +2194,11 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         thermal_rng_draws: (problem.temperature > 0.0)
             .then_some(problem.thermal_step())
             .unwrap_or(0),
+        accepted_state_publication_count,
+        accepted_state_publication_copy_bytes,
+        accepted_state_publication_full_field_copy_count,
+        final_state_sync_copy_bytes: final_state_sync.copied_bytes,
+        final_state_sync_full_field_copy_count: final_state_sync.full_field_copy_count,
         checkpoint_digest,
     });
     if !is_direct_minimization {
@@ -2339,7 +2367,7 @@ fn step_reference_fdm_problem(
     fft_workspace: &mut FftWorkspace,
     integrator_bufs: &mut IntegratorBuffers,
     evaluation: EvaluationRequest,
-) -> Result<StepReport, EngineError> {
+) -> Result<(StepReport, fullmag_engine::FdmCpuStateCopyTelemetry), EngineError> {
     if state_soa.is_none() && problem.soa_fast_path_supported() {
         *state_soa = Some(state.to_soa());
     }
@@ -2352,16 +2380,18 @@ fn step_reference_fdm_problem(
             integrator_bufs,
             evaluation,
         )?;
-        soa.write_back_to(state);
-        Ok(report)
+        let state_copy = soa.publish_accepted_to(state);
+        Ok((report, state_copy))
     } else {
-        problem.step_with_buffers_evaluation(
-            state,
-            dt_step,
-            fft_workspace,
-            integrator_bufs,
-            evaluation,
-        )
+        problem
+            .step_with_buffers_evaluation(
+                state,
+                dt_step,
+                fft_workspace,
+                integrator_bufs,
+                evaluation,
+            )
+            .map(|report| (report, Default::default()))
     }
 }
 
@@ -3513,6 +3543,8 @@ mod tests {
             temperature: Some(300.0),
             ..make_test_plan()
         };
+        let field_bytes =
+            (plan.initial_magnetization.len() * std::mem::size_of::<Vector3>()) as u64;
         let executed =
             execute_reference_fdm(&plan, 3e-14, &[], None, None).expect("thermal reference run");
         let telemetry = executed
@@ -3522,9 +3554,23 @@ mod tests {
 
         assert_eq!(
             telemetry.schema_version,
-            "fullmag.fdm.cpu.step_transaction.v1"
+            "fullmag.fdm.cpu.step_transaction.v2"
         );
         assert!(telemetry.accepted_step_count > 0);
+        assert_eq!(
+            telemetry.accepted_state_publication_count,
+            telemetry.accepted_step_count
+        );
+        assert_eq!(
+            telemetry.accepted_state_publication_full_field_copy_count,
+            telemetry.accepted_step_count
+        );
+        assert_eq!(
+            telemetry.accepted_state_publication_copy_bytes,
+            telemetry.accepted_step_count * field_bytes
+        );
+        assert_eq!(telemetry.final_state_sync_full_field_copy_count, 1);
+        assert_eq!(telemetry.final_state_sync_copy_bytes, field_bytes);
         assert_eq!(
             telemetry.thermal_interval_index,
             telemetry.accepted_step_count
@@ -3545,6 +3591,7 @@ mod tests {
         let minimal_telemetry = minimal
             .provenance
             .fdm_cpu_evaluation_telemetry
+            .as_ref()
             .expect("CPU evaluation telemetry");
         assert_eq!(
             minimal_telemetry.schema_version,
@@ -3552,6 +3599,16 @@ mod tests {
         );
         assert_eq!(minimal_telemetry.minimal_step_count, 3);
         assert_eq!(minimal_telemetry.full_step_count, 0);
+        let minimal_copy = minimal
+            .provenance
+            .fdm_cpu_step_transaction_telemetry
+            .as_ref()
+            .expect("minimal CPU copy telemetry");
+        assert_eq!(minimal_copy.accepted_state_publication_count, 3);
+        assert_eq!(
+            minimal_copy.accepted_state_publication_full_field_copy_count,
+            3
+        );
 
         let outputs = [OutputIR::Scalar {
             name: "E_total".to_string(),
@@ -3562,10 +3619,24 @@ mod tests {
         let full_telemetry = full
             .provenance
             .fdm_cpu_evaluation_telemetry
+            .as_ref()
             .expect("CPU evaluation telemetry");
         assert_eq!(full_telemetry.minimal_step_count, 0);
         assert_eq!(full_telemetry.full_step_count, 3);
         assert!(full_telemetry.full_step_wall_time_ns > 0);
+        let full_copy = full
+            .provenance
+            .fdm_cpu_step_transaction_telemetry
+            .as_ref()
+            .expect("full CPU copy telemetry");
+        assert_eq!(
+            full_copy.accepted_state_publication_copy_bytes,
+            minimal_copy.accepted_state_publication_copy_bytes
+        );
+        assert_eq!(
+            full_copy.accepted_state_publication_full_field_copy_count,
+            minimal_copy.accepted_state_publication_full_field_copy_count
+        );
     }
 
     #[test]
@@ -3616,7 +3687,7 @@ mod tests {
         let mut state_soa = problem.soa_fast_path_supported().then(|| state.to_soa());
         let mut fft_workspace = problem.create_workspace();
         let mut integrator_bufs = problem.create_integrator_buffers();
-        let report = step_reference_fdm_problem(
+        let (report, _) = step_reference_fdm_problem(
             &problem,
             &mut state,
             &mut state_soa,
@@ -6262,7 +6333,9 @@ mod tests {
 
         let mut fft_workspace = problem.create_workspace();
         let mut integrator_bufs = problem.create_integrator_buffers();
-        let report = step_reference_fdm_problem(
+        let expected_copy_bytes =
+            (state.magnetization().len() * std::mem::size_of::<Vector3>()) as u64;
+        let (report, state_copy) = step_reference_fdm_problem(
             &problem,
             &mut state,
             &mut state_soa,
@@ -6276,6 +6349,8 @@ mod tests {
         assert!(state_soa.is_some());
         assert!(report.total_energy_joules.is_finite());
         assert_eq!(state.time_seconds, report.time_seconds);
+        assert_eq!(state_copy.copied_bytes, expected_copy_bytes);
+        assert_eq!(state_copy.full_field_copy_count, 1);
     }
 
     #[test]

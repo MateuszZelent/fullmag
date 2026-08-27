@@ -5,7 +5,7 @@ use std::{
 
 use fullmag_engine::{
     constant_z_field_llg_from_positive_x, CellSize, EffectiveFieldTerms, EvaluationRequest,
-    ExchangeLlgProblem, GridShape, LlgConfig, MaterialParameters, TimeIntegrator,
+    ExchangeLlgProblem, GridShape, LlgConfig, MaterialParameters, SolverSession, TimeIntegrator,
 };
 
 const GAMMA: f64 = 2.211e5;
@@ -21,35 +21,59 @@ struct ProcessAllocationCounter;
 static COUNT_ALLOCATIONS: AtomicBool = AtomicBool::new(false);
 static ALLOCATION_COUNT: AtomicUsize = AtomicUsize::new(0);
 static ALLOCATION_BYTES: AtomicUsize = AtomicUsize::new(0);
+static LIVE_BYTES: AtomicUsize = AtomicUsize::new(0);
 
 #[global_allocator]
 static ALLOCATOR: ProcessAllocationCounter = ProcessAllocationCounter;
 
 fn record_allocation(bytes: usize) {
+    LIVE_BYTES.fetch_add(bytes, Ordering::SeqCst);
     if COUNT_ALLOCATIONS.load(Ordering::SeqCst) {
         ALLOCATION_COUNT.fetch_add(1, Ordering::SeqCst);
         ALLOCATION_BYTES.fetch_add(bytes, Ordering::SeqCst);
     }
 }
 
+fn record_reallocation(old_size: usize, new_size: usize) {
+    if new_size >= old_size {
+        LIVE_BYTES.fetch_add(new_size - old_size, Ordering::SeqCst);
+    } else {
+        LIVE_BYTES.fetch_sub(old_size - new_size, Ordering::SeqCst);
+    }
+    if COUNT_ALLOCATIONS.load(Ordering::SeqCst) {
+        ALLOCATION_COUNT.fetch_add(1, Ordering::SeqCst);
+        ALLOCATION_BYTES.fetch_add(new_size, Ordering::SeqCst);
+    }
+}
+
 unsafe impl GlobalAlloc for ProcessAllocationCounter {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        record_allocation(layout.size());
-        unsafe { System.alloc(layout) }
+        let pointer = unsafe { System.alloc(layout) };
+        if !pointer.is_null() {
+            record_allocation(layout.size());
+        }
+        pointer
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) }
+        unsafe { System.dealloc(ptr, layout) };
+        LIVE_BYTES.fetch_sub(layout.size(), Ordering::SeqCst);
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        record_allocation(layout.size());
-        unsafe { System.alloc_zeroed(layout) }
+        let pointer = unsafe { System.alloc_zeroed(layout) };
+        if !pointer.is_null() {
+            record_allocation(layout.size());
+        }
+        pointer
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        record_allocation(new_size);
-        unsafe { System.realloc(ptr, layout, new_size) }
+        let pointer = unsafe { System.realloc(ptr, layout, new_size) };
+        if !pointer.is_null() {
+            record_reallocation(layout.size(), new_size);
+        }
+        pointer
     }
 }
 
@@ -80,6 +104,16 @@ fn fixed_problem(integrator: TimeIntegrator) -> ExchangeLlgProblem {
     )
 }
 
+fn run_abm3_session_digest() -> String {
+    let mut session =
+        SolverSession::new(fixed_problem(TimeIntegrator::ABM3), vec![[1.0, 0.0, 0.0]])
+            .expect("session");
+    for _ in 0..8 {
+        session.step(DT).expect("session step");
+    }
+    session.state().transactional_state_digest()
+}
+
 #[test]
 fn fixed_cpu_production_path_has_zero_steady_state_allocations_and_bytes() {
     for integrator in [
@@ -106,9 +140,11 @@ fn fixed_cpu_production_path_has_zero_steady_state_allocations_and_bytes() {
                         evaluation,
                     )
                     .expect("warmup step");
-                state.write_back_to(&mut published_state);
+                state.publish_accepted_to(&mut published_state);
             }
 
+            let mut copied_bytes = 0_u64;
+            let mut full_field_copy_count = 0_u64;
             let (allocations, allocated_bytes) = measured_allocations(|| {
                 for _ in 0..MEASURED_STEPS {
                     problem
@@ -120,7 +156,10 @@ fn fixed_cpu_production_path_has_zero_steady_state_allocations_and_bytes() {
                             evaluation,
                         )
                         .expect("measured step");
-                    state.write_back_to(&mut published_state);
+                    let copy = state.publish_accepted_to(&mut published_state);
+                    copied_bytes = copied_bytes.saturating_add(copy.copied_bytes);
+                    full_field_copy_count =
+                        full_field_copy_count.saturating_add(copy.full_field_copy_count);
                 }
             });
 
@@ -131,6 +170,26 @@ fn fixed_cpu_production_path_has_zero_steady_state_allocations_and_bytes() {
             assert_eq!(
                 allocated_bytes, 0,
                 "{integrator:?} {evaluation:?} allocated {allocated_bytes} bytes after warmup"
+            );
+            assert_eq!(
+                copied_bytes,
+                MEASURED_STEPS as u64 * std::mem::size_of::<[f64; 3]>() as u64,
+                "{integrator:?} {evaluation:?} must copy exactly one accepted magnetization per step",
+            );
+            assert_eq!(full_field_copy_count, MEASURED_STEPS as u64);
+            let final_sync = state.write_back_to(&mut published_state);
+            let expected_final_field_copies = if integrator == TimeIntegrator::ABM3 {
+                4
+            } else {
+                1
+            };
+            assert_eq!(
+                final_sync.full_field_copy_count, expected_final_field_copies,
+                "{integrator:?} {evaluation:?} final sync copied an unexpected number of full fields",
+            );
+            assert_eq!(
+                final_sync.copied_bytes,
+                expected_final_field_copies * std::mem::size_of::<[f64; 3]>() as u64,
             );
             assert_eq!(state.time_seconds, published_state.time_seconds);
             assert_eq!(
@@ -154,5 +213,32 @@ fn fixed_cpu_production_path_has_zero_steady_state_allocations_and_bytes() {
                 "{integrator:?} {evaluation:?} oracle error {error:.6e} exceeds {MAX_ORACLE_ERROR:.6e}"
             );
         }
+    }
+
+    // Prime process-global worker state, then prove sequential sessions release
+    // every task-owned allocation instead of retaining workspace capacity.
+    drop(run_abm3_session_digest());
+    let retained_baseline = LIVE_BYTES.load(Ordering::SeqCst);
+    for _ in 0..32 {
+        drop(run_abm3_session_digest());
+        assert_eq!(
+            LIVE_BYTES.load(Ordering::SeqCst),
+            retained_baseline,
+            "completed FDM CPU sessions must not retain task-owned heap capacity",
+        );
+    }
+
+    // Each concurrent session owns independent state/workspace buffers. Exact
+    // digests catch cross-session aliasing, not just crashes or finite values.
+    let expected_digest = run_abm3_session_digest();
+    let sessions = (0..8)
+        .map(|_| std::thread::spawn(run_abm3_session_digest))
+        .collect::<Vec<_>>();
+    for session in sessions {
+        assert_eq!(
+            session.join().expect("session thread"),
+            expected_digest,
+            "concurrent FDM CPU sessions must remain bitwise independent",
+        );
     }
 }
