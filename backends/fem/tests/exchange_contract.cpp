@@ -901,7 +901,8 @@ void periodic_consistent_mass_projection_reuses_reduced_workspace()
     mfem::Vector tmp(fes.GetNDofs());
     mfem::Vector h_component(fes.GetNDofs());
     std::vector<double> h_host;
-    for (int repeat = 0; repeat < 2; ++repeat) {
+    constexpr int kRepeatedApplies = 100;
+    for (int repeat = 0; repeat < kRepeatedApplies; ++repeat) {
         check(
             fullmag::fem::apply_exchange_component_mass_projection(
                 &ctx,
@@ -927,13 +928,17 @@ void periodic_consistent_mass_projection_reuses_reduced_workspace()
         ctx.exchange.mfem.periodic_mass_rhs == rhs &&
         ctx.exchange.mfem.periodic_mass_solution == solution,
         "periodic consistent-mass applies must reuse setup-owned workspace pointers");
-    check(ctx.exchange.mfem.periodic_mass_solver_applies == 2u,
-        "periodic consistent-mass telemetry must count both solver applies");
+    check(ctx.exchange.mfem.periodic_mass_solver_applies ==
+              static_cast<uint64_t>(kRepeatedApplies),
+        "periodic consistent-mass telemetry must count every repeated solver apply");
     check(
         ctx.exchange.mfem.operator_lifecycle.active_key == setup_key &&
-            ctx.exchange.mfem.operator_lifecycle.apply_count == 2u &&
-            ctx.exchange.mfem.operator_lifecycle.reuse_count == 2u,
-        "repeated exchange applies must reuse the setup-owned dependency-keyed operator");
+            ctx.exchange.mfem.operator_lifecycle.setup_count == 1u &&
+            ctx.exchange.mfem.operator_lifecycle.apply_count ==
+                static_cast<uint64_t>(kRepeatedApplies) &&
+            ctx.exchange.mfem.operator_lifecycle.reuse_count ==
+                static_cast<uint64_t>(kRepeatedApplies),
+        "100 repeated exchange applies must reuse the one setup-owned dependency-keyed operator");
 
     fullmag_fem_plan_desc changed_plan{};
     changed_plan.enable_exchange = 1;
