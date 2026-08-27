@@ -1421,6 +1421,131 @@ void mixed_poisson_context(
         magnetic_mass_row_sums(mesh, fes, 7);
 }
 
+mfem::Mesh manufactured_airbox_slab_mesh() {
+    mfem::Mesh mesh = mfem::Mesh::MakeCartesian3D(
+        3, 1, 1, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0);
+    constexpr double left_interface = 1.0 / 3.0;
+    constexpr double right_interface = 2.0 / 3.0;
+    for (int element = 0; element < mesh.GetNE(); ++element) {
+        mfem::Array<int> vertices;
+        mesh.GetElementVertices(element, vertices);
+        double centroid_x = 0.0;
+        for (int vertex : vertices) {
+            centroid_x += mesh.GetVertex(vertex)[0];
+        }
+        centroid_x /= static_cast<double>(vertices.Size());
+        mesh.GetElement(element)->SetAttribute(
+            centroid_x > left_interface && centroid_x < right_interface ? 7 : 1);
+    }
+    for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
+        mfem::Array<int> vertices;
+        mesh.GetBdrElementVertices(boundary, vertices);
+        bool on_left = true;
+        bool on_right = true;
+        for (int vertex : vertices) {
+            const double x = mesh.GetVertex(vertex)[0];
+            on_left = on_left && std::fabs(x) <= 1.0e-14;
+            on_right = on_right && std::fabs(x - 1.0) <= 1.0e-14;
+        }
+        mesh.GetBdrElement(boundary)->SetAttribute(on_left || on_right ? 9 : 8);
+    }
+    mesh.SetAttributes();
+    return mesh;
+}
+
+void airbox_dirichlet_and_robin_match_manufactured_slab_oracle() {
+    constexpr double left_interface = 1.0 / 3.0;
+    constexpr double right_interface = 2.0 / 3.0;
+    constexpr double relative_oracle_tolerance = 2.0e-10;
+    const auto exact_potential = [=](const mfem::Vector &x) {
+        if (x[0] <= left_interface || x[0] >= right_interface) {
+            return 0.0;
+        }
+        return (x[0] - left_interface) * (right_interface - x[0]);
+    };
+    const auto exact_magnetization_x = [](const mfem::Vector &x) {
+        return 1.0 - 2.0 * x[0];
+    };
+
+    for (const int realization : {
+             FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET,
+             FULLMAG_FEM_DEMAG_AIRBOX_ROBIN}) {
+        mfem::Mesh mesh = manufactured_airbox_slab_mesh();
+        mfem::H1_FECollection state_fec(1, 3);
+        mfem::FiniteElementSpace state_fes(&mesh, &state_fec);
+        fullmag::fem::Context ctx;
+        mixed_poisson_context(
+            ctx,
+            mesh,
+            state_fes,
+            element_mask_for_attribute(mesh, 7));
+        ctx.demag.realization = realization;
+
+        std::string error;
+        check_result(
+            fullmag::fem::context_initialize_poisson(ctx, error),
+            error,
+            "manufactured slab Airbox Poisson initialization");
+
+        mfem::GridFunction magnetization_x(&state_fes);
+        mfem::FunctionCoefficient magnetization_coefficient(exact_magnetization_x);
+        magnetization_x.ProjectCoefficient(magnetization_coefficient);
+        std::vector<double> magnetization(
+            3u * static_cast<size_t>(state_fes.GetNDofs()), 0.0);
+        for (int dof = 0; dof < state_fes.GetNDofs(); ++dof) {
+            magnetization[3u * static_cast<size_t>(dof)] = magnetization_x[dof];
+        }
+
+        std::vector<double> recovered_field;
+        double demag_energy = 0.0;
+        check_result(
+            fullmag::fem::context_compute_demag_poisson(
+                ctx,
+                magnetization,
+                recovered_field,
+                demag_energy,
+                false,
+                nullptr,
+                error),
+            error,
+            "manufactured slab Airbox Poisson solve");
+
+        auto &potential_fes =
+            *static_cast<mfem::FiniteElementSpace *>(ctx.poisson_demag.potential_fes);
+        auto &actual_potential_grid =
+            *static_cast<mfem::GridFunction *>(ctx.poisson_demag.gf_potential);
+        mfem::GridFunction expected_potential_grid(&potential_fes);
+        mfem::FunctionCoefficient potential_coefficient(exact_potential);
+        expected_potential_grid.ProjectCoefficient(potential_coefficient);
+        mfem::Vector actual_potential;
+        mfem::Vector expected_potential;
+        actual_potential_grid.GetTrueDofs(actual_potential);
+        expected_potential_grid.GetTrueDofs(expected_potential);
+        mfem::Vector potential_difference(actual_potential.Size());
+        potential_difference = actual_potential;
+        potential_difference -= expected_potential;
+        check(
+            potential_difference.Norml2() <=
+                relative_oracle_tolerance *
+                    std::max(1.0e-30, expected_potential.Norml2()),
+            "Dirichlet/Robin Airbox potential must match the independent manufactured P2 oracle");
+
+        const double expected_energy = kMu0Test / 162.0;
+        check_near(
+            demag_energy,
+            expected_energy,
+            relative_oracle_tolerance * expected_energy,
+            "Dirichlet/Robin Airbox energy must match the independent SI oracle");
+        check_near(
+            ctx.poisson_demag.last_variational_energy_joules,
+            expected_energy,
+            relative_oracle_tolerance * expected_energy,
+            "Dirichlet/Robin Airbox variational telemetry must match the independent SI oracle");
+
+        fullmag::fem::context_destroy_poisson(ctx);
+    }
+}
+
 void nonperiodic_poisson_uses_p2_potential_over_p1_magnetization() {
     mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
     mfem::H1_FECollection state_fec(1, 3);
@@ -3626,6 +3751,7 @@ int main() {
     failed_hypre_setup_does_not_publish_partial_state();
     failed_poisson_reinitialize_preserves_published_state();
     mixed_poisson_manufactured_rhs_stiffness_recovery_and_trace();
+    airbox_dirichlet_and_robin_match_manufactured_slab_oracle();
     mixed_poisson_rhs_is_magnetic_only_with_air_present();
     mixed_p1_gpu_rhs_and_magnetic_recovery_match_cpu_mfem();
 #if FULLMAG_HAS_CUDA_RUNTIME && defined(MFEM_USE_MPI)
