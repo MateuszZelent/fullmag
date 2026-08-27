@@ -5,9 +5,9 @@ use std::{
 };
 
 use fullmag_ir::{
-    BackendPlanIR, DriveActivationIR, EnergyTermIR, FdmDemagHintsIR, FieldDriveKindIR,
-    FieldSpatialProfileIR, FieldTargetIR, FieldTimeOriginIR, OutputIR, ProblemIR,
-    RegionalFieldDriveIR, RequestedFemDemagIR, StudyIR, TimeDependenceIR,
+    BackendPlanIR, DriveActivationIR, DynamicsIR, EnergyTermIR, FdmDemagHintsIR, FieldDriveKindIR,
+    FieldSpatialProfileIR, FieldTargetIR, FieldTimeOriginIR, InitialMagnetizationIR, OutputIR,
+    ProblemIR, RegionalFieldDriveIR, RequestedFemDemagIR, StudyIR, TimeDependenceIR,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -17,6 +17,10 @@ use super::alloc_counter;
 
 const SCHEMA_VERSION: &str = "fullmag.fdm.cpu.production_qualification.v1";
 const DT_S: f64 = 1e-13;
+const ACCURACY_FIELD_B_T: f64 = 1e-2;
+const ACCURACY_FINAL_TIME_S: f64 = 1e-9;
+const ACCURACY_TOLERANCE: f64 = 1e-3;
+const ACCURACY_TIMESTEPS_S: [f64; 3] = [5e-11, 2.5e-11, 1.25e-11];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -85,7 +89,34 @@ struct ProductionQualificationSuite {
     qualification_status: &'static str,
     qualification_blockers: Vec<&'static str>,
     process_peak_resident_bytes: u64,
+    time_to_accuracy: TimeToAccuracyEvidence,
     results: Vec<ProductionRunEvidence>,
+}
+
+#[derive(Debug, Serialize)]
+struct TimeToAccuracyEvidence {
+    oracle_id: &'static str,
+    tolerance_max_abs: f64,
+    field_b_t: f64,
+    final_time_s: f64,
+    exact_magnetization: [f64; 3],
+    first_passing_timestep_s: f64,
+    first_passing_wall_time_ns: u64,
+    observed_order_coarse_to_fine: f64,
+    runs: Vec<TimeToAccuracyRunEvidence>,
+}
+
+#[derive(Debug, Serialize)]
+struct TimeToAccuracyRunEvidence {
+    timestep_s: f64,
+    expected_steps: u64,
+    planner_wall_time_ns: u64,
+    end_to_end_wall_time_ns: u64,
+    max_abs_error: f64,
+    passes: bool,
+    final_magnetization: [f64; 3],
+    requested_execution: Value,
+    execution_provenance: Value,
 }
 
 pub(super) fn run_from_args(args: &[String]) -> Result<(), String> {
@@ -129,6 +160,11 @@ pub(super) fn run_from_args(args: &[String]) -> Result<(), String> {
         results.extend(fixture_results);
     }
 
+    let time_to_accuracy = run_time_to_accuracy(&config.output_root)?;
+    let mut qualification_blockers = vec!["hardware_baseline_threshold_not_approved"];
+    if config.profile == Profile::Smoke {
+        qualification_blockers.push("full_fixture_profile_not_run");
+    }
     let suite = ProductionQualificationSuite {
         schema_version: SCHEMA_VERSION,
         commit: config.commit,
@@ -138,11 +174,9 @@ pub(super) fn run_from_args(args: &[String]) -> Result<(), String> {
             Profile::Full => "full".to_string(),
         },
         qualification_status: "evidence_only",
-        qualification_blockers: vec![
-            "time_to_accuracy_oracle_missing",
-            "hardware_baseline_threshold_not_approved",
-        ],
+        qualification_blockers,
         process_peak_resident_bytes: process_peak_resident_bytes()?,
+        time_to_accuracy,
         results,
     };
     let encoded =
@@ -361,18 +395,178 @@ fn qualification_problem(fixture: Fixture, mode: RunMode) -> ProblemIR {
     problem
 }
 
-fn validate_execution(metadata: &Value, fixture: Fixture, mode: RunMode) -> Result<(), String> {
-    let provenance = &metadata["execution_provenance"];
-    if provenance["execution_engine"] != "cpu_reference"
-        || provenance["precision"] != "double"
-        || !provenance["resolved_fallback"].is_null()
+fn run_time_to_accuracy(output_root: &Path) -> Result<TimeToAccuracyEvidence, String> {
+    let field_h_apm = ACCURACY_FIELD_B_T / fullmag_engine::MU0;
+    let exact_magnetization = fullmag_engine::constant_z_field_llg_from_positive_x(
+        2.211e5,
+        0.02,
+        field_h_apm,
+        ACCURACY_FINAL_TIME_S,
+    );
+    let mut runs = Vec::new();
+    for (index, timestep_s) in ACCURACY_TIMESTEPS_S.into_iter().enumerate() {
+        let expected_steps_f64 = ACCURACY_FINAL_TIME_S / timestep_s;
+        let expected_steps = expected_steps_f64.round() as u64;
+        if (expected_steps_f64 - expected_steps as f64).abs() > 32.0 * f64::EPSILON {
+            return Err(format!(
+                "accuracy timestep {timestep_s:.6e} does not divide final time exactly"
+            ));
+        }
+        let problem = accuracy_problem(timestep_s);
+        let planner_started = Instant::now();
+        let plan = fullmag_plan::plan(&problem)
+            .map_err(|error| format!("planning accuracy timestep {timestep_s:.6e}: {error}"))?;
+        let planner_wall_time_ns = elapsed_ns(planner_started);
+        let BackendPlanIR::Fdm(fdm) = &plan.backend_plan else {
+            return Err("accuracy oracle resolved to a non-FDM backend".to_string());
+        };
+        if fdm.grid.cells != [1, 1, 1] {
+            return Err(format!(
+                "accuracy oracle must resolve one macrospin cell, got {:?}",
+                fdm.grid.cells
+            ));
+        }
+        let run_dir = output_root.join(format!("accuracy-{index}"));
+        let run_started = Instant::now();
+        let result =
+            fullmag_runner::run_planned_problem(&problem, &plan, ACCURACY_FINAL_TIME_S, &run_dir)
+                .map_err(|error| format!("running accuracy timestep {timestep_s:.6e}: {error}"))?;
+        let end_to_end_wall_time_ns = elapsed_ns(run_started);
+        let actual = result
+            .final_magnetization
+            .first()
+            .copied()
+            .ok_or_else(|| "accuracy oracle produced no final magnetization".to_string())?;
+        if result.final_magnetization.len() != 1 {
+            return Err("accuracy oracle produced more than one macrospin cell".to_string());
+        }
+        let max_abs_error = actual
+            .iter()
+            .zip(exact_magnetization)
+            .map(|(actual, exact)| (actual - exact).abs())
+            .fold(0.0_f64, f64::max);
+        let metadata = read_json(&run_dir.join("metadata.json"))?;
+        validate_exact_cpu_execution(
+            &metadata["execution_provenance"],
+            &format!("accuracy timestep {timestep_s:.6e}"),
+        )?;
+        let evaluation = &metadata["execution_provenance"]["fdm_cpu_evaluation_telemetry"];
+        let minimal = required_u64(evaluation, "minimal_step_count")?;
+        let full = required_u64(evaluation, "full_step_count")?;
+        if minimal.saturating_add(full) != expected_steps {
+            return Err(format!(
+                "accuracy timestep {timestep_s:.6e} executed {} steps instead of {expected_steps}",
+                minimal.saturating_add(full)
+            ));
+        }
+        let transaction = &metadata["execution_provenance"]["fdm_cpu_step_transaction_telemetry"];
+        if required_u64(transaction, "accepted_step_count")? != expected_steps
+            || required_u64(transaction, "rejected_attempt_count")? != 0
+        {
+            return Err(format!(
+                "accuracy timestep {timestep_s:.6e} did not execute {expected_steps} accepted steps without rejection"
+            ));
+        }
+        runs.push(TimeToAccuracyRunEvidence {
+            timestep_s,
+            expected_steps,
+            planner_wall_time_ns,
+            end_to_end_wall_time_ns,
+            max_abs_error,
+            passes: max_abs_error <= ACCURACY_TOLERANCE,
+            final_magnetization: actual,
+            requested_execution: metadata["requested_execution"].clone(),
+            execution_provenance: metadata["execution_provenance"].clone(),
+        });
+    }
+    if !runs
+        .windows(2)
+        .all(|pair| pair[1].max_abs_error < pair[0].max_abs_error)
     {
+        return Err("accuracy error did not decrease under timestep refinement".to_string());
+    }
+    let observed_order_coarse_to_fine = (runs[0].max_abs_error / runs[2].max_abs_error).ln()
+        / (runs[0].timestep_s / runs[2].timestep_s).ln();
+    if !observed_order_coarse_to_fine.is_finite() || observed_order_coarse_to_fine < 1.5 {
         return Err(format!(
-            "{} {} did not execute exact CPU-double intent without fallback",
-            fixture.name,
-            mode.as_str()
+            "Heun accuracy order {observed_order_coarse_to_fine:.6} is below 1.5"
         ));
     }
+    let first_passing = runs
+        .iter()
+        .find(|run| run.passes)
+        .ok_or_else(|| format!("no timestep met max-abs tolerance {ACCURACY_TOLERANCE:.6e}"))?;
+    let first_passing_timestep_s = first_passing.timestep_s;
+    let first_passing_wall_time_ns = first_passing.end_to_end_wall_time_ns;
+
+    Ok(TimeToAccuracyEvidence {
+        oracle_id: "constant_z_field_llg_from_positive_x.v1",
+        tolerance_max_abs: ACCURACY_TOLERANCE,
+        field_b_t: ACCURACY_FIELD_B_T,
+        final_time_s: ACCURACY_FINAL_TIME_S,
+        exact_magnetization,
+        first_passing_timestep_s,
+        first_passing_wall_time_ns,
+        observed_order_coarse_to_fine,
+        runs,
+    })
+}
+
+fn accuracy_problem(timestep_s: f64) -> ProblemIR {
+    let mut problem = ProblemIR::bootstrap_example();
+    problem.problem_meta.name = format!("fdm_cpu_time_to_accuracy_{timestep_s:.6e}");
+    problem.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cpu", "source": "fdm_cpu_accuracy_oracle"}),
+    );
+    problem.energy_terms = vec![EnergyTermIR::Exchange];
+    problem.magnets[0].initial_magnetization = Some(InitialMagnetizationIR::Uniform {
+        value: [1.0, 0.0, 0.0],
+    });
+    problem.field_drives = vec![RegionalFieldDriveIR {
+        id: "accuracy_constant_field".to_string(),
+        name: "accuracy_constant_field".to_string(),
+        kind: FieldDriveKindIR::Regional,
+        enabled: true,
+        target: FieldTargetIR::Global {},
+        amplitude_b_t: ACCURACY_FIELD_B_T,
+        direction: [0.0, 0.0, 1.0],
+        spatial_profile: FieldSpatialProfileIR::Uniform {},
+        waveform: TimeDependenceIR::Constant,
+        time_origin: FieldTimeOriginIR::Absolute,
+        activation: DriveActivationIR::AllTimeEvolution {},
+        migration: None,
+    }];
+    let hints = problem
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("bootstrap FDM hints");
+    hints.cell = [200e-9, 20e-9, 6e-9];
+    hints.demag = None;
+    let StudyIR::TimeEvolution { dynamics, sampling } = &mut problem.study else {
+        unreachable!("bootstrap fixture is time evolution");
+    };
+    let DynamicsIR::Llg {
+        integrator,
+        fixed_timestep,
+        adaptive_timestep,
+        ..
+    } = dynamics;
+    *integrator = "heun".to_string();
+    *fixed_timestep = Some(timestep_s);
+    *adaptive_timestep = None;
+    sampling.outputs = vec![OutputIR::Field {
+        name: "m".to_string(),
+        every_seconds: ACCURACY_FINAL_TIME_S,
+    }];
+    problem
+}
+
+fn validate_execution(metadata: &Value, fixture: Fixture, mode: RunMode) -> Result<(), String> {
+    let provenance = &metadata["execution_provenance"];
+    validate_exact_cpu_execution(provenance, &format!("{} {}", fixture.name, mode.as_str()))?;
     let fft = &provenance["fdm_fft_execution"];
     if fft["requested_backend"] != "rustfft"
         || fft["resolved_backend"] != "rustfft"
@@ -407,6 +601,20 @@ fn validate_execution(metadata: &Value, fixture: Fixture, mode: RunMode) -> Resu
             return Err("full fixture must execute only Full steps".to_string());
         }
         _ => {}
+    }
+    Ok(())
+}
+
+fn validate_exact_cpu_execution(provenance: &Value, label: &str) -> Result<(), String> {
+    if provenance["execution_engine"] != "cpu_reference"
+        || provenance["precision"] != "double"
+        || !provenance["resolved_fallback"].is_null()
+        || provenance["execution_resolution"]["resolution_mode"] != "exact"
+        || provenance["execution_resolution"]["fallback_occurred"] != false
+    {
+        return Err(format!(
+            "{label} did not execute exact CPU-double intent without fallback"
+        ));
     }
     Ok(())
 }
@@ -581,5 +789,20 @@ mod tests {
     #[test]
     fn process_peak_resident_memory_is_reported() {
         assert!(process_peak_resident_bytes().expect("process peak RSS") > 0);
+    }
+
+    #[test]
+    fn time_to_accuracy_fixtures_plan_one_exact_cpu_macrospin() {
+        for timestep_s in ACCURACY_TIMESTEPS_S {
+            let problem = accuracy_problem(timestep_s);
+            let plan = fullmag_plan::plan(&problem).expect("accuracy fixture should plan");
+            let BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+                panic!("accuracy fixture must plan FDM");
+            };
+            assert_eq!(fdm.grid.cells, [1, 1, 1]);
+            assert!(!fdm.enable_demag);
+            assert_eq!(fdm.regional_field_drive_bases.len(), 1);
+            assert_eq!(fdm.fixed_timestep, Some(timestep_s));
+        }
     }
 }
