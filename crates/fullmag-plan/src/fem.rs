@@ -3817,7 +3817,7 @@ pub(crate) fn plan_fem(
             fem_plan.gyromagnetic_ratio,
         ) {
             provenance_notes.push(format!(
-                "FEM-CPU-NUM-002 exchange stiffness estimate: h_min_m={:.6e} A_max_J_per_m={:.6e} Ms_min_A_per_m={:.6e} gamma_mu0_m_per_A_s={:.6e} omega_ex_max_per_s={:.6e} explicit_dt_limit_s={:.6e} safety_factor={:.3} basis=2A/(mu0*Ms*h_min^2) policy=advisory",
+                "FEM-CPU-NUM-002 exchange stiffness estimate: h_min_m={:.6e} A_max_J_per_m={:.6e} Ms_min_A_per_m={:.6e} gamma_mu0_m_per_A_s={:.6e} omega_ex_max_per_s={:.6e} explicit_dt_limit_s={:.6e} safety_factor={:.3} basis=2A/(mu0*Ms*h_min^2) policy=reject_strict_warn_extended",
                 estimate.h_min_m,
                 estimate.max_exchange_stiffness_j_per_m,
                 estimate.min_saturation_magnetisation_a_per_m,
@@ -3827,14 +3827,35 @@ pub(crate) fn plan_fem(
                 FEM_EXCHANGE_STABILITY_SAFETY_FACTOR,
             ));
             if let Some(fixed_timestep) = fem_plan.fixed_timestep {
-                let status = if fixed_timestep <= estimate.explicit_dt_limit_s {
-                    "within_conservative_limit"
-                } else {
+                let exceeds_limit = fixed_timestep > estimate.explicit_dt_limit_s;
+                let status = if exceeds_limit {
                     "above_conservative_limit"
+                } else {
+                    "within_conservative_limit"
                 };
                 provenance_notes.push(format!(
-                    "FEM-CPU-NUM-002 fixed timestep advisory: dt_s={fixed_timestep:.6e} status={status}; planner does not reject or auto-switch integrators yet"
+                    "FEM-CPU-NUM-002 fixed timestep advisory: dt_s={fixed_timestep:.6e} status={status}"
                 ));
+                if exceeds_limit && fem_plan.integrator.is_some() {
+                    let requested = requested_integrator
+                        .map(fullmag_ir::RequestedIntegratorIR::as_str)
+                        .unwrap_or("none");
+                    let resolved = format!("{:?}", fem_plan.integrator);
+                    let reason = format!(
+                        "FEM-CPU-NUM-002 fixed timestep dt_s={fixed_timestep:.6e} exceeds conservative exchange limit dt_limit_s={:.6e} for requested integrator '{}' (resolved={resolved}); choose a smaller fixed_timestep or an implicit/IMEX execution lane",
+                        estimate.explicit_dt_limit_s, requested
+                    );
+                    if problem.validation_profile.execution_mode
+                        == fullmag_ir::ExecutionMode::Strict
+                    {
+                        return Err(PlanError {
+                            reasons: vec![format!("{reason}; rejected in execution_mode='strict'")],
+                        });
+                    }
+                    provenance_notes.push(format!(
+                        "FEM-CPU-NUM-002 stiffness warning: {reason}; admitted only in execution_mode='extended'"
+                    ));
+                }
             }
         } else {
             provenance_notes.push(
