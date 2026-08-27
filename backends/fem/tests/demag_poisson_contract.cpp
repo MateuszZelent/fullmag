@@ -262,6 +262,60 @@ void periodic_demag_rejects_one_iteration_candidate() {
     fullmag::fem::destroy_demag_periodic_poisson_reduction(ctx);
     ctx.poisson_demag.poisson_bc_op = nullptr;
 }
+
+void periodic_demag_reuses_warm_start_and_resets_after_failure() {
+    fullmag::fem::Context ctx;
+    configure_one_iteration_demag_solver(ctx);
+    ctx.demag.enabled = true;
+    ctx.mesh.n_nodes = 8;
+    ctx.mesh.periodic_node_pairs = {0u, 7u};
+    ctx.mesh.periodic_reduced_node = {0u, 1u, 2u, 3u, 4u, 5u, 6u, 0u};
+    ctx.mesh.periodic_representative_nodes = {0u, 1u, 2u, 3u, 4u, 5u, 6u};
+    ctx.mesh.periodic_reduced_node_count = 7;
+    mfem::SparseMatrix op = nontrivial_spd_matrix(8);
+    ctx.poisson_demag.poisson_bc_op = &op;
+    std::string error;
+    check(fullmag::fem::initialize_demag_periodic_poisson_reduction(ctx, error),
+          "periodic warm-start test reduction initializes");
+
+    mfem::Vector rhs(8);
+    for (int i = 0; i < rhs.Size(); ++i) {
+        rhs(i) = 1.0 + static_cast<double>(i % 3);
+    }
+    mfem::Vector *solved = nullptr;
+    uint64_t solve_wall_time_ns = 0;
+    check(
+        !fullmag::fem::solve_demag_periodic_poisson_reduced(
+            ctx, rhs, solved, solve_wall_time_ns, error),
+        "periodic warm-start test first one-iteration solve rejects");
+    check(ctx.poisson_demag.fresh_zero_guess_count == 1u,
+          "periodic rejected solve records one fresh zero guess");
+
+    ctx.demag.solver.max_iterations = 100;
+    ctx.demag.solver.relative_tolerance = 1.0e-10;
+    solved = nullptr;
+    error.clear();
+    check(
+        fullmag::fem::solve_demag_periodic_poisson_reduced(
+            ctx, rhs, solved, solve_wall_time_ns, error),
+        error.c_str());
+    check(solved != nullptr, "periodic converged solve publishes a lifted solution");
+    check(ctx.poisson_demag.fresh_zero_guess_count == 2u,
+          "periodic solve after failure starts from a fresh zero guess");
+
+    solved = nullptr;
+    error.clear();
+    check(
+        fullmag::fem::solve_demag_periodic_poisson_reduced(
+            ctx, rhs, solved, solve_wall_time_ns, error),
+        error.c_str());
+    check(solved != nullptr, "periodic warm-start solve publishes a lifted solution");
+    check(ctx.poisson_demag.fresh_zero_guess_count == 2u,
+          "periodic warm-start solve does not zero the previous solution");
+
+    fullmag::fem::destroy_demag_periodic_poisson_reduction(ctx);
+    ctx.poisson_demag.poisson_bc_op = nullptr;
+}
 #endif
 
 std::string read_text_file(const std::filesystem::path &path) {
@@ -2343,7 +2397,18 @@ void demag_periodic_reduction_is_owned_by_poisson_periodic_module() {
     check(
         periodic_reset != std::string::npos && periodic_apply != std::string::npos &&
             periodic_reset < periodic_apply,
-        "Poisson periodic reduced solve must reset the reduced solution before each fresh tangent solve");
+        "Poisson periodic reduced solve must reset the reduced solution before a fresh tangent solve");
+    check(
+        periodic.find("solver.iterative_mode = true") != std::string::npos &&
+            periodic.find("x_p_contains_solution") != std::string::npos &&
+            periodic.find("if (!used_cached_solution)") != std::string::npos,
+        "Poisson periodic reduced solve must use a qualified warm-start after the first solve");
+    check(
+        periodic.find("periodic_workspace->x_p_contains_solution = false") !=
+                std::string::npos &&
+            periodic.find("periodic_workspace->x_p_contains_solution = true") !=
+                std::string::npos,
+        "Poisson periodic reduced solve must clear warm-start state on failure and publish it on success");
     check(
         periodic.find("ctx.poisson_demag.last_iterations = 0;") == std::string::npos,
         "Poisson periodic reduced solve must not report hard-coded zero iterations");
@@ -3210,6 +3275,7 @@ int main() {
     mixed_poisson_matches_independently_refined_all_tet_reference();
     nonperiodic_hypre_demag_rejects_one_iteration_candidate();
     periodic_demag_rejects_one_iteration_candidate();
+    periodic_demag_reuses_warm_start_and_resets_after_failure();
 #endif
     demag_boundary_operator_is_owned_by_poisson_boundary_module();
     demag_periodic_reduction_is_owned_by_poisson_periodic_module();
