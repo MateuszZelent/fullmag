@@ -76,9 +76,15 @@ impl ExchangeLlgStateSoA {
     pub fn write_back_to(&self, state: &mut ExchangeLlgState) {
         self.magnetization.gather_into_aos(&mut state.magnetization);
         state.time_seconds = self.time_seconds;
-        state.k_fsal = self.k_fsal.as_ref().map(|k| k.gather_to_aos());
+        match (&self.k_fsal, &mut state.k_fsal) {
+            (Some(source), Some(target)) => source.gather_into_aos(target),
+            (Some(source), target @ None) => {
+                *target = Some(source.gather_to_aos());
+            }
+            (None, target) => *target = None,
+        }
         state.adaptive_previous_error = self.adaptive_previous_error;
-        state.abm_history = self.abm_history.to_aos();
+        state.abm_history.copy_from_soa(&self.abm_history);
     }
 
     /// Number of cells.
@@ -434,16 +440,6 @@ impl AbmHistory {
         self.f_n_minus_2.as_deref()
     }
 
-    /// Push a new RHS evaluation, rotating the history buffer.
-    pub(crate) fn push(&mut self, f: Vec<Vector3>, dt: f64) {
-        self.restart_if_dt_changed(dt);
-        self.f_n_minus_2 = self.f_n_minus_1.take();
-        self.f_n_minus_1 = self.f_n.take();
-        self.f_n = Some(f);
-        self.startup_steps = (self.startup_steps + 1).min(3);
-        self.last_dt = dt;
-    }
-
     /// Push a new RHS evaluation by copying into a reusable history slot.
     ///
     /// This preserves [`Self::push`] ordering and restart semantics, but after
@@ -463,6 +459,22 @@ impl AbmHistory {
         self.f_n = Some(newest);
         self.startup_steps = (self.startup_steps + 1).min(3);
         self.last_dt = dt;
+    }
+
+    fn copy_from_soa(&mut self, source: &AbmHistorySoA) {
+        fn copy_slot(target: &mut Option<Vec<Vector3>>, source: Option<&VectorFieldSoA>) {
+            match (target.as_mut(), source) {
+                (Some(target), Some(source)) => source.gather_into_aos(target),
+                (None, Some(source)) => *target = Some(source.gather_to_aos()),
+                (_, None) => *target = None,
+            }
+        }
+
+        copy_slot(&mut self.f_n, source.f_n());
+        copy_slot(&mut self.f_n_minus_1, source.f_n_minus_1());
+        copy_slot(&mut self.f_n_minus_2, source.f_n_minus_2());
+        self.startup_steps = source.startup_steps;
+        self.last_dt = source.last_dt;
     }
 
     pub(crate) fn restart(&mut self) {

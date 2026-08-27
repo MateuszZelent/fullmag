@@ -2998,7 +2998,7 @@ impl ExchangeLlgProblem {
             );
             state.magnetization[..n].copy_from_slice(&bufs.m_stage[..n]);
             state.time_seconds = accepted_time;
-            state.abm_history.push(bufs.k[0][..n].to_vec(), dt);
+            state.abm_history.push_copy_from_slice(&bufs.k[0][..n], dt);
             return Ok(eval.into_step_report(accepted_time, dt, false));
         }
 
@@ -3083,7 +3083,7 @@ impl ExchangeLlgProblem {
         );
         state.magnetization[..n].copy_from_slice(&bufs.m_stage[..n]);
         state.time_seconds = accepted_time;
-        state.abm_history.push(bufs.k[0][..n].to_vec(), dt);
+        state.abm_history.push_copy_from_slice(&bufs.k[0][..n], dt);
         Ok(eval.into_step_report(accepted_time, dt, false))
     }
 
