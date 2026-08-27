@@ -49,3 +49,17 @@ fn public_authored_policy_round_trips_without_legacy_mesh_workflow() {
         fingerprint
     );
 }
+
+#[test]
+fn requested_policy_absence_is_distinct_from_explicit_null() {
+    let missing: MeshSemanticsIR = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert!(missing.requested_policy.is_none());
+
+    let error = serde_json::from_value::<MeshSemanticsIR>(serde_json::json!({
+        "requested_policy": null
+    }))
+    .expect_err("explicit requested_policy=null must fail closed")
+    .to_string();
+    assert!(error.contains("fem_mesh_policy_malformed_value"), "{error}");
+    assert!(error.contains("/requested_policy"), "{error}");
+}

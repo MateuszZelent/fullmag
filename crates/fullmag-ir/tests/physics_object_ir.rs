@@ -749,3 +749,151 @@ fn v0_3_mesh_aliases_reject_malformed_or_conflicting_present_values() {
         assert!(error.contains(expected_path), "{case_id}: {error}");
     }
 }
+
+#[test]
+fn v0_3_mesh_policy_migration_rejects_explicit_null_known_fields() {
+    let cases = [
+        (
+            "per_geometry_order",
+            serde_json::json!({
+                "per_geometry": [{"geometry": "strip", "order": null}]
+            }),
+            None,
+            "/problem_meta/runtime_metadata/mesh_workflow/per_geometry/0/order",
+        ),
+        (
+            "per_geometry_maximum_element_size",
+            serde_json::json!({
+                "per_geometry": [{
+                    "geometry": "strip",
+                    "maximum_element_size": null
+                }]
+            }),
+            None,
+            "/problem_meta/runtime_metadata/mesh_workflow/per_geometry/0/maximum_element_size",
+        ),
+        (
+            "per_geometry_mode",
+            serde_json::json!({
+                "per_geometry": [{"geometry": "strip", "mode": null}]
+            }),
+            None,
+            "/problem_meta/runtime_metadata/mesh_workflow/per_geometry/0/mode",
+        ),
+        (
+            "study_universe_airbox_grading",
+            serde_json::json!({}),
+            Some(serde_json::json!({"airbox_grading": null})),
+            "/problem_meta/runtime_metadata/study_universe/airbox_grading",
+        ),
+    ];
+
+    for (case_id, workflow, study_universe, expected_path) in cases {
+        let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+        let runtime_metadata = value["problem_meta"]["runtime_metadata"]
+            .as_object_mut()
+            .unwrap();
+        runtime_metadata.insert("mesh_workflow".to_string(), workflow);
+        if let Some(study_universe) = study_universe {
+            runtime_metadata.insert("study_universe".to_string(), study_universe);
+        }
+
+        let error = migrate_v0_3_problem_ir_to_v0_4(&mut value)
+            .expect_err("present known mesh-policy field must not silently default");
+        assert!(error.contains(expected_path), "{case_id}: {error}");
+    }
+}
+
+#[test]
+fn v0_3_mesh_policy_migration_keeps_nullable_writer_envelopes() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value["problem_meta"]["runtime_metadata"]["mesh_workflow"] = serde_json::json!({
+        "fem": {"order": 1, "hmax": 20e-9, "mesh": null},
+        "mesh_options": null
+    });
+    value["problem_meta"]["runtime_metadata"]["study_universe"] = serde_json::Value::Null;
+
+    migrate_v0_3_problem_ir_to_v0_4(&mut value).unwrap();
+    let decoded: ProblemIRV04 = serde_json::from_value(value).unwrap();
+    decoded.validate().unwrap();
+    assert!(decoded.fem_mesh_policy().is_some());
+}
+
+#[test]
+fn v0_3_mesh_policy_migration_is_atomic_on_late_error() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value["problem_meta"]["runtime_metadata"]["mesh_workflow"] = serde_json::json!({
+        "per_geometry": [{
+            "geometry": "strip",
+            "maximum_element_size": 3e-9,
+            "order": 2,
+            "mesh_strategy": "thin_film_tetrahedral"
+        }]
+    });
+    let before = value.clone();
+
+    migrate_v0_3_problem_ir_to_v0_4(&mut value)
+        .expect_err("unsupported P2 must fail after exercising the migration path");
+    assert_eq!(value, before, "failed migration must not mutate its input");
+}
+
+#[test]
+fn v0_3_global_defaults_cover_nonmagnetic_object_self_aliases() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    let mut spacer = value["geometry"]["entries"][0].clone();
+    spacer["name"] = serde_json::json!("spacer");
+    value["geometry"]["entries"]
+        .as_array_mut()
+        .unwrap()
+        .push(spacer);
+    value["problem_meta"]["runtime_metadata"]["mesh_workflow"] = serde_json::json!({
+        "default_mesh": {
+            "maximum_element_size": 4e-9,
+            "mesh_strategy": "free_tetrahedral"
+        }
+    });
+
+    migrate_v0_3_problem_ir_to_v0_4(&mut value).unwrap();
+    let decoded: ProblemIRV04 = serde_json::from_value(value).unwrap();
+    let policy = decoded.fem_mesh_policy().unwrap();
+    let targets = policy
+        .materials
+        .iter()
+        .map(|material| material.target.object_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        targets,
+        std::collections::BTreeSet::from(["obj_spacer", "obj_strip"])
+    );
+}
+#[test]
+fn v0_3_migration_rejects_cross_namespace_object_alias_collision_atomically() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value["magnets"][0]["object_id"] = serde_json::json!("spacer");
+    let mut spacer = value["geometry"]["entries"][0].clone();
+    spacer["name"] = serde_json::json!("spacer");
+    value["geometry"]["entries"]
+        .as_array_mut()
+        .unwrap()
+        .push(spacer);
+    value["problem_meta"]["runtime_metadata"]["mesh_workflow"] = serde_json::json!({
+        "per_geometry": [{
+            "geometry": "spacer",
+            "maximum_element_size": 4e-9,
+            "mesh_strategy": "free_tetrahedral"
+        }]
+    });
+    let before = value.clone();
+
+    let error = migrate_v0_3_problem_ir_to_v0_4(&mut value)
+        .expect_err("object aliases from names and custom object IDs must not be ambiguous");
+    assert!(
+        error.contains("/geometry/entries/1/name"),
+        "unexpected collision pointer: {error}"
+    );
+    assert!(
+        error.contains("ambiguous legacy object alias 'spacer'"),
+        "{error}"
+    );
+    assert_eq!(value, before, "failed alias migration must remain atomic");
+}

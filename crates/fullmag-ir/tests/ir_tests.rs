@@ -8052,3 +8052,105 @@ fn problem_v0_4_deserialization_preserves_nested_mesh_policy_code_and_pointer() 
         "{error}"
     );
 }
+
+#[test]
+fn fem_mesh_policy_direct_deserialization_runs_semantic_validation() {
+    let payload = serde_json::json!({
+        "schema_version": "fem_mesh_policy.v1",
+        "geometric_element_order": 2,
+        "materials": [],
+        "interfaces": [],
+        "sweeps": []
+    });
+
+    let error = FemMeshPolicyIR::from_json_value(payload.clone())
+        .expect_err("direct constructor must reject semantically unsupported P2");
+    assert_eq!(
+        error.code().as_str(),
+        "fem_mesh_policy_unsupported_element_order"
+    );
+    assert_eq!(error.pointer(), "/geometric_element_order");
+
+    let serde_error = serde_json::from_value::<FemMeshPolicyIR>(payload)
+        .expect_err("Serde entry point must run the same semantic validation")
+        .to_string();
+    assert!(
+        serde_error.contains("fem_mesh_policy_unsupported_element_order"),
+        "{serde_error}"
+    );
+    assert!(
+        serde_error.contains("/geometric_element_order"),
+        "{serde_error}"
+    );
+}
+
+#[test]
+fn fem_mesh_policy_rejects_unknown_nested_target_field_with_escaped_pointer() {
+    let error = FemMeshPolicyIR::from_json_value(serde_json::json!({
+        "schema_version": "fem_mesh_policy.v1",
+        "geometric_element_order": 1,
+        "materials": [{
+            "target": {
+                "object_id": "obj_strip",
+                "future/~selector": true
+            },
+            "strategy_intent": "tetrahedral"
+        }],
+        "interfaces": [],
+        "sweeps": []
+    }))
+    .expect_err("unknown nested target field must fail closed");
+
+    assert_eq!(error.code().as_str(), "fem_mesh_policy_unknown_field");
+    assert_eq!(error.pointer(), "/materials/0/target/future~1~0selector");
+}
+
+#[test]
+fn fem_mesh_policy_canonical_bytes_and_digest_are_frozen() {
+    let policy = FemMeshPolicyIR::from_json_value(serde_json::json!({
+        "schema_version": "fem_mesh_policy.v1",
+        "geometric_element_order": 1,
+        "materials": [
+            {
+                "target": {"object_id": "obj_z"},
+                "strategy_intent": "tetrahedral",
+                "maximum_element_size": 3e-9
+            },
+            {
+                "target": {"object_id": "obj_a"},
+                "strategy_intent": "thin_film_tetrahedral",
+                "maximum_element_size": 2e-9
+            }
+        ],
+        "interfaces": [],
+        "sweeps": [],
+        "growth": {
+            "definition_id": "adjacent_size_growth.v1",
+            "cell_size_definition_id": "cell.max_edge.v1",
+            "max_neighbor_ratio": 1.3,
+            "relative_tolerance": -0.0
+        },
+        "quality": {"thresholds": []}
+    }))
+    .unwrap();
+
+    let canonical = String::from_utf8(policy.canonical_json().unwrap()).unwrap();
+    let fingerprint = policy.policy_fingerprint().unwrap();
+
+    let mut reordered = policy.clone();
+    reordered.materials.reverse();
+    reordered.growth.as_mut().unwrap().relative_tolerance = 0.0;
+    assert_eq!(
+        String::from_utf8(reordered.canonical_json().unwrap()).unwrap(),
+        canonical
+    );
+    assert_eq!(reordered.policy_fingerprint().unwrap(), fingerprint);
+    assert_eq!(
+        canonical,
+        r#"{"schema_version":"fem_mesh_policy.v1","geometric_element_order":1,"materials":[{"target":{"object_id":"obj_a"},"strategy_intent":"thin_film_tetrahedral","maximum_element_size":2e-9},{"target":{"object_id":"obj_z"},"strategy_intent":"tetrahedral","maximum_element_size":3e-9}],"growth":{"definition_id":"adjacent_size_growth.v1","cell_size_definition_id":"cell.max_edge.v1","max_neighbor_ratio":1.3,"relative_tolerance":0.0},"quality":{"compute_summary":false,"per_element":false}}"#
+    );
+    assert_eq!(
+        fingerprint,
+        "sha256:05f950d4ecd8c74e363b1c0174e150107107f78b73dfb9be0fa9c082b104acdd"
+    );
+}

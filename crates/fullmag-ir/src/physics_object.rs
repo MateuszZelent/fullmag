@@ -493,9 +493,35 @@ fn object_id_for(legacy_name: &str) -> String {
     format!("obj_{legacy_name}")
 }
 
+fn insert_legacy_object_alias(
+    aliases: &mut BTreeMap<String, String>,
+    alias: &str,
+    object_id: &str,
+    pointer: &str,
+) -> Result<(), String> {
+    if let Some(existing) = aliases.get(alias) {
+        if existing != object_id {
+            return Err(format!(
+                "{pointer}: ambiguous legacy object alias '{alias}' resolves to both '{existing}' and '{object_id}'"
+            ));
+        }
+        return Ok(());
+    }
+    aliases.insert(alias.to_string(), object_id.to_string());
+    Ok(())
+}
+
 /// Migrate one 0.3 JSON document to the explicit 0.4 object wire model.
 /// It is deliberately opt-in: direct `ProblemIR` deserialization still reads 0.3.
+/// Failed migrations are atomic and leave the caller-owned document unchanged.
 pub fn migrate_v0_3_problem_ir_to_v0_4(value: &mut Value) -> Result<(), String> {
+    let mut candidate = value.clone();
+    migrate_v0_3_problem_ir_to_v0_4_in_place(&mut candidate)?;
+    *value = candidate;
+    Ok(())
+}
+
+fn migrate_v0_3_problem_ir_to_v0_4_in_place(value: &mut Value) -> Result<(), String> {
     let root = value
         .as_object_mut()
         .ok_or_else(|| "ProblemIR payload must be a JSON object".to_string())?;
@@ -597,8 +623,18 @@ pub fn migrate_v0_3_problem_ir_to_v0_4(value: &mut Value) -> Result<(), String> 
                 "/magnets/{index}/name: duplicate migrated object name '{name}'"
             ));
         }
-        object_id_by_legacy_name.insert(name.clone(), object_id.clone());
-        object_id_by_legacy_name.insert(object_id.clone(), object_id.clone());
+        insert_legacy_object_alias(
+            &mut object_id_by_legacy_name,
+            &name,
+            &object_id,
+            &format!("/magnets/{index}/name"),
+        )?;
+        insert_legacy_object_alias(
+            &mut object_id_by_legacy_name,
+            &object_id,
+            &object_id,
+            &format!("/magnets/{index}/object_id"),
+        )?;
         magnetic_geometry_ids.insert(geometry_id.clone());
 
         let assignment_id = format!("assignment_{object_id}");
@@ -666,7 +702,19 @@ pub fn migrate_v0_3_problem_ir_to_v0_4(value: &mut Value) -> Result<(), String> 
         } else {
             PhysicsObjectTypeIR::Geometry
         };
-        object_id_by_legacy_name.insert(name.clone(), object_id.clone());
+        let alias_pointer = format!("/geometry/entries/{index}/name");
+        insert_legacy_object_alias(
+            &mut object_id_by_legacy_name,
+            name,
+            &object_id,
+            &alias_pointer,
+        )?;
+        insert_legacy_object_alias(
+            &mut object_id_by_legacy_name,
+            &object_id,
+            &object_id,
+            &alias_pointer,
+        )?;
         objects.push(PhysicsObjectIR::new(
             object_id,
             name.clone(),

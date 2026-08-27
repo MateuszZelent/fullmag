@@ -563,15 +563,17 @@ fn normalize_transition_signed_zero(value: &mut Option<FemMeshTransitionDistance
 impl FemMeshPolicyIR {
     pub fn from_json_value(value: Value) -> Result<Self, MeshPolicyValidationError> {
         preflight_policy_value(&value)?;
-        serde_path_to_error::deserialize::<_, FemMeshPolicyWire>(value)
-            .map(Into::into)
-            .map_err(|cause| {
+        let wire =
+            serde_path_to_error::deserialize::<_, FemMeshPolicyWire>(value).map_err(|cause| {
                 error(
                     MeshPolicyValidationCode::FemMeshPolicyMalformedValue,
                     serde_path_to_json_pointer(cause.path()),
                     cause.to_string(),
                 )
-            })
+            })?;
+        let policy = Self::from(wire);
+        policy.validate()?;
+        Ok(policy)
     }
 
     pub fn validate(&self) -> Result<(), MeshPolicyValidationError> {
@@ -1076,40 +1078,45 @@ impl FemMeshPolicyIR {
         }
         let mut policy = Self::default();
         let mut has_policy = false;
-        let fem = legacy_optional_object(
-            root.get("fem"),
-            "/problem_meta/runtime_metadata/mesh_workflow/fem",
-        )?;
+        let fem_base = "/problem_meta/runtime_metadata/mesh_workflow/fem";
+        let fem = legacy_optional_object(root.get("fem"), fem_base)?;
+        if let Some(fem) = fem {
+            reject_explicit_null_legacy_fields(fem, &["order", "hmax"], fem_base)?;
+        }
         let mut requested_order = fem
-            .map(|fem| {
-                legacy_u8(
-                    fem,
-                    "order",
-                    "/problem_meta/runtime_metadata/mesh_workflow/fem",
-                )
-            })
+            .map(|fem| legacy_u8(fem, "order", fem_base))
             .transpose()?
             .flatten();
         let mut growth_candidates = Vec::new();
-        let mesh_options = legacy_optional_object(
-            root.get("mesh_options"),
-            "/problem_meta/runtime_metadata/mesh_workflow/mesh_options",
-        )?;
-        let default_mesh = legacy_optional_object(
-            root.get("default_mesh"),
-            "/problem_meta/runtime_metadata/mesh_workflow/default_mesh",
-        )?;
+        let mesh_options_base = "/problem_meta/runtime_metadata/mesh_workflow/mesh_options";
+        let default_mesh_base = "/problem_meta/runtime_metadata/mesh_workflow/default_mesh";
+        let mesh_options = legacy_optional_object(root.get("mesh_options"), mesh_options_base)?;
+        let default_mesh = legacy_optional_object(root.get("default_mesh"), default_mesh_base)?;
         if let Some(mesh_options) = mesh_options {
-            reject_unsupported_legacy_mesh_controls(
+            reject_explicit_null_legacy_fields(
                 mesh_options,
-                "/problem_meta/runtime_metadata/mesh_workflow/mesh_options",
+                LEGACY_MATERIAL_POLICY_FIELDS,
+                mesh_options_base,
             )?;
+            reject_explicit_null_legacy_fields(
+                mesh_options,
+                LEGACY_AUXILIARY_POLICY_FIELDS,
+                mesh_options_base,
+            )?;
+            reject_unsupported_legacy_mesh_controls(mesh_options, mesh_options_base)?;
         }
         if let Some(default_mesh) = default_mesh {
-            reject_unsupported_legacy_mesh_controls(
+            reject_explicit_null_legacy_fields(
                 default_mesh,
-                "/problem_meta/runtime_metadata/mesh_workflow/default_mesh",
+                LEGACY_MATERIAL_POLICY_FIELDS,
+                default_mesh_base,
             )?;
+            reject_explicit_null_legacy_fields(
+                default_mesh,
+                LEGACY_AUXILIARY_POLICY_FIELDS,
+                default_mesh_base,
+            )?;
+            reject_unsupported_legacy_mesh_controls(default_mesh, default_mesh_base)?;
         }
         let has_explicit_per_geometry = root
             .get("per_geometry")
@@ -1163,6 +1170,8 @@ impl FemMeshPolicyIR {
                 let entry = entry
                     .as_object()
                     .ok_or_else(|| format!("{base}: expected an object"))?;
+                reject_explicit_null_legacy_fields(entry, LEGACY_MATERIAL_POLICY_FIELDS, &base)?;
+                reject_explicit_null_legacy_fields(entry, LEGACY_AUXILIARY_POLICY_FIELDS, &base)?;
                 reject_unsupported_legacy_mesh_controls(entry, &base)?;
                 entries_to_migrate.push((entry.clone(), base));
             }
@@ -1411,12 +1420,22 @@ impl FemMeshPolicyIR {
         let mut migrated_airbox: Option<(serde_json::Map<String, Value>, String, bool)> = None;
         let workflow_airbox_base = "/problem_meta/runtime_metadata/mesh_workflow/airbox";
         if let Some(airbox) = legacy_optional_object(root.get("airbox"), workflow_airbox_base)? {
+            reject_explicit_null_legacy_fields(
+                airbox,
+                LEGACY_AIRBOX_POLICY_FIELDS,
+                workflow_airbox_base,
+            )?;
             migrated_airbox = Some((airbox.clone(), workflow_airbox_base.to_string(), false));
         } else if let Some(study_universe) = legacy_optional_object(
             study_universe,
             "/problem_meta/runtime_metadata/study_universe",
         )? {
             let base = "/problem_meta/runtime_metadata/study_universe";
+            reject_explicit_null_legacy_fields(
+                study_universe,
+                LEGACY_STUDY_UNIVERSE_POLICY_FIELDS,
+                base,
+            )?;
             let mut airbox = serde_json::Map::new();
             for (source, destination) in [
                 ("airbox_hmin", "near_element_size"),
@@ -1424,7 +1443,7 @@ impl FemMeshPolicyIR {
                 ("airbox_growth_rate", "element_ratio"),
                 ("airbox_grading", "grading"),
             ] {
-                if let Some(value) = study_universe.get(source).filter(|value| !value.is_null()) {
+                if let Some(value) = study_universe.get(source) {
                     airbox.insert(destination.to_string(), value.clone());
                 }
             }
@@ -1576,6 +1595,7 @@ fn preflight_policy_value(value: &Value) -> Result<(), MeshPolicyValidationError
             "corner_extent",
         ],
     )?;
+    preflight_target_fields(root.get("materials"), "/materials")?;
     preflight_transition_fields(
         root.get("materials"),
         "/materials",
@@ -1592,6 +1612,7 @@ fn preflight_policy_value(value: &Value) -> Result<(), MeshPolicyValidationError
         ],
         &["maximum_element_size", "thickness"],
     )?;
+    preflight_target_fields(root.get("interfaces"), "/interfaces")?;
     preflight_transition_fields(
         root.get("interfaces"),
         "/interfaces",
@@ -1614,6 +1635,7 @@ fn preflight_policy_value(value: &Value) -> Result<(), MeshPolicyValidationError
         ],
         &["element_ratio"],
     )?;
+    preflight_target_fields(root.get("sweeps"), "/sweeps")?;
     if let Some(airbox) = root.get("airbox") {
         let airbox = object_value(airbox, "/airbox")?;
         reject_unknown(
@@ -1715,6 +1737,24 @@ fn object_value<'a>(
             "expected an object",
         )
     })
+}
+
+fn preflight_target_fields(
+    value: Option<&Value>,
+    pointer: &str,
+) -> Result<(), MeshPolicyValidationError> {
+    let Some(entries) = value.and_then(Value::as_array) else {
+        return Ok(());
+    };
+    for (index, entry) in entries.iter().enumerate() {
+        let Some(target) = entry.as_object().and_then(|entry| entry.get("target")) else {
+            continue;
+        };
+        let target_pointer = format!("{pointer}/{index}/target");
+        let target = object_value(target, &target_pointer)?;
+        reject_unknown(target, &["object_id", "region_id"], &target_pointer)?;
+    }
+    Ok(())
 }
 
 fn reject_unknown(
@@ -1903,6 +1943,51 @@ const LEGACY_LAYER_POLICY_FIELDS: &[&str] = &[
     "transition_policy",
     "exact_layer_count",
 ];
+
+const LEGACY_AUXILIARY_POLICY_FIELDS: &[&str] = &[
+    "mode",
+    "maximum_element_growth_rate",
+    "growth_rate",
+    "compute_quality",
+    "per_element_quality",
+];
+
+const LEGACY_AIRBOX_POLICY_FIELDS: &[&str] = &[
+    "near_element_size",
+    "minimum_element_size",
+    "hmin",
+    "far_element_size",
+    "maximum_element_size",
+    "hmax",
+    "transition_distance",
+    "element_ratio",
+    "maximum_element_growth_rate",
+    "growth_rate",
+    "grading",
+];
+
+const LEGACY_STUDY_UNIVERSE_POLICY_FIELDS: &[&str] = &[
+    "airbox_hmin",
+    "airbox_hmax",
+    "airbox_growth_rate",
+    "airbox_grading",
+];
+
+fn reject_explicit_null_legacy_fields(
+    object: &serde_json::Map<String, Value>,
+    fields: &[&str],
+    base: &str,
+) -> Result<(), String> {
+    if let Some(field) = fields
+        .iter()
+        .find(|field| object.get(**field).is_some_and(Value::is_null))
+    {
+        return Err(format!(
+            "fem_mesh_policy_malformed_value at {base}/{field}: present legacy mesh-policy field must not be null"
+        ));
+    }
+    Ok(())
+}
 
 fn reject_unsupported_legacy_mesh_controls(
     object: &serde_json::Map<String, Value>,
