@@ -560,9 +560,13 @@ decision, reason, dt_next, demag_iterations, demag_residual
 
 Native FEM publishes the latest step trace through the versioned
 `fullmag_fem_backend_solver_attempt_count_v1` and
-`fullmag_fem_backend_copy_solver_attempts_v1` ABI symbols. The trace capacity
-is 64 records, which is greater than the canonical 50-rejection budget plus
-the accepted attempt. Capacity exhaustion fails the step; records are never
+`fullmag_fem_backend_copy_solver_attempts_v1` ABI symbols. The v1 record
+remains frozen for compatibility; the additive
+`fullmag_fem_backend_copy_solver_attempts_v2` record additionally carries the
+executed error-norm type, active-node count, active measure, normalization
+denominator, maximum scaled error, and weighted RMS. The trace capacity is 64
+records, which is greater than the canonical 50-rejection budget plus the
+accepted attempt. Capacity exhaustion fails the step; records are never
 silently truncated. A failed outer step transaction restores the previously
 published trace together with solver state.
 

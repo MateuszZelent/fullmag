@@ -187,6 +187,18 @@ fn solver_attempt_reason(value: u32) -> Result<&'static str, RunError> {
 }
 
 #[cfg(feature = "fem-gpu")]
+fn solver_attempt_error_norm_type(value: u32) -> Result<Option<&'static str>, RunError> {
+    match value {
+        ffi::FULLMAG_FEM_SOLVER_ERROR_NORM_NONE => Ok(None),
+        ffi::FULLMAG_FEM_SOLVER_ERROR_NORM_MAX => Ok(Some("max")),
+        ffi::FULLMAG_FEM_SOLVER_ERROR_NORM_MASS_WEIGHTED_RMS => Ok(Some("mass_weighted_rms")),
+        _ => Err(RunError {
+            message: format!("native FEM returned unknown solver error norm type {value}"),
+        }),
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
 fn validate_native_step_stats(stats: &ffi::fullmag_fem_step_stats) -> Result<f64, RunError> {
     for (label, value) in [
         ("exchange_energy_joules", stats.exchange_energy_joules),
@@ -3288,10 +3300,10 @@ impl NativeFemBackend {
                 ),
             });
         }
-        let mut raw = vec![ffi::fullmag_fem_solver_attempt_record_v1::default(); count as usize];
+        let mut raw = vec![ffi::fullmag_fem_solver_attempt_record_v2::default(); count as usize];
         let mut copied = 0u64;
         let rc = unsafe {
-            ffi::fullmag_fem_backend_copy_solver_attempts_v1(
+            ffi::fullmag_fem_backend_copy_solver_attempts_v2(
                 self.handle,
                 raw.as_mut_ptr(),
                 count,
@@ -3303,18 +3315,54 @@ impl NativeFemBackend {
         }
         raw.into_iter()
             .map(|record| {
-                if record.abi_version != ffi::FULLMAG_FEM_SOLVER_ATTEMPT_RECORD_V1_ABI_VERSION
+                if record.abi_version != ffi::FULLMAG_FEM_SOLVER_ATTEMPT_RECORD_V2_ABI_VERSION
                     || record.struct_size as usize
-                        != std::mem::size_of::<ffi::fullmag_fem_solver_attempt_record_v1>()
+                        != std::mem::size_of::<ffi::fullmag_fem_solver_attempt_record_v2>()
                 {
                     return Err(RunError {
-                        message: "native FEM returned an incompatible solver-attempt ABI record"
+                        message: "native FEM returned an incompatible solver-attempt ABI v2 record"
                             .to_string(),
                     });
                 }
+                let error_norm_type = solver_attempt_error_norm_type(record.error_norm_type)?;
+                let (
+                    active_node_count,
+                    active_measure,
+                    normalization_denominator,
+                    max_scaled_error,
+                    weighted_rms_error,
+                ) = if error_norm_type.is_some() {
+                    (
+                        Some(record.active_node_count),
+                        Some(checked_native_nonnegative(
+                            "solver attempt active measure",
+                            record.active_measure,
+                        )?),
+                        Some(checked_native_nonnegative(
+                            "solver attempt normalization denominator",
+                            record.normalization_denominator,
+                        )?),
+                        Some(checked_native_nonnegative(
+                            "solver attempt max scaled error",
+                            record.max_scaled_error,
+                        )?),
+                        Some(checked_native_nonnegative(
+                            "solver attempt weighted RMS error",
+                            record.weighted_rms_error,
+                        )?),
+                    )
+                } else {
+                    (None, None, None, None, None)
+                };
                 Ok(SolverAttemptRecord {
                     attempt: record.attempt,
                     adaptive_controller_policy_version: None,
+                    error_norm_type: error_norm_type.map(str::to_string),
+                    active_node_count,
+                    active_measure,
+                    normalization_denominator,
+                    max_scaled_error,
+                    weighted_rms_error,
                     target_step: record.target_step,
                     time: checked_native_nonnegative("solver attempt time", record.time_seconds)?,
                     dt_attempt: checked_native_nonnegative(

@@ -1184,6 +1184,40 @@ typedef struct {
     int32_t estimator_order;
 } fullmag_fem_solver_attempt_record_v1;
 
+#define FULLMAG_FEM_SOLVER_ATTEMPT_RECORD_V2_ABI_VERSION 2u
+
+typedef enum {
+    FULLMAG_FEM_SOLVER_ERROR_NORM_NONE = 0,
+    FULLMAG_FEM_SOLVER_ERROR_NORM_MAX = 1,
+    FULLMAG_FEM_SOLVER_ERROR_NORM_MASS_WEIGHTED_RMS = 2,
+} fullmag_fem_solver_error_norm_type;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t attempt;
+    uint64_t target_step;
+    double time_seconds;
+    double dt_attempt_seconds;
+    double eta;
+    double max_norm_defect;
+    double max_spin_rotation;
+    uint32_t decision;
+    uint32_t reason;
+    double dt_next_seconds;
+    uint32_t demag_solve_count;
+    uint32_t demag_linear_iterations;
+    double demag_linear_residual;
+    uint32_t rhs_evaluations;
+    int32_t estimator_order;
+    uint32_t error_norm_type;
+    uint64_t active_node_count;
+    double active_measure;
+    double normalization_denominator;
+    double max_scaled_error;
+    double weighted_rms_error;
+} fullmag_fem_solver_attempt_record_v2;
+
 typedef struct {
     char name[128];
     int is_gpu_enabled;
@@ -2116,6 +2150,13 @@ int fullmag_fem_backend_solver_attempt_count_v1(
 int fullmag_fem_backend_copy_solver_attempts_v1(
     fullmag_fem_backend *handle,
     fullmag_fem_solver_attempt_record_v1 *out_records,
+    uint64_t capacity,
+    uint64_t *out_count
+);
+
+int fullmag_fem_backend_copy_solver_attempts_v2(
+    fullmag_fem_backend *handle,
+    fullmag_fem_solver_attempt_record_v2 *out_records,
     uint64_t capacity,
     uint64_t *out_count
 );

@@ -1250,6 +1250,39 @@ pub struct fullmag_fem_solver_attempt_record_v1 {
     pub estimator_order: i32,
 }
 
+pub const FULLMAG_FEM_SOLVER_ATTEMPT_RECORD_V2_ABI_VERSION: u32 = 2;
+pub const FULLMAG_FEM_SOLVER_ERROR_NORM_NONE: u32 = 0;
+pub const FULLMAG_FEM_SOLVER_ERROR_NORM_MAX: u32 = 1;
+pub const FULLMAG_FEM_SOLVER_ERROR_NORM_MASS_WEIGHTED_RMS: u32 = 2;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct fullmag_fem_solver_attempt_record_v2 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub attempt: u64,
+    pub target_step: u64,
+    pub time_seconds: f64,
+    pub dt_attempt_seconds: f64,
+    pub eta: f64,
+    pub max_norm_defect: f64,
+    pub max_spin_rotation: f64,
+    pub decision: u32,
+    pub reason: u32,
+    pub dt_next_seconds: f64,
+    pub demag_solve_count: u32,
+    pub demag_linear_iterations: u32,
+    pub demag_linear_residual: f64,
+    pub rhs_evaluations: u32,
+    pub estimator_order: i32,
+    pub error_norm_type: u32,
+    pub active_node_count: u64,
+    pub active_measure: f64,
+    pub normalization_denominator: f64,
+    pub max_scaled_error: f64,
+    pub weighted_rms_error: f64,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct fullmag_fem_device_info {
@@ -2226,6 +2259,13 @@ extern "C" {
         out_count: *mut u64,
     ) -> i32;
 
+    pub fn fullmag_fem_backend_copy_solver_attempts_v2(
+        handle: *mut fullmag_fem_backend,
+        out_records: *mut fullmag_fem_solver_attempt_record_v2,
+        capacity: u64,
+        out_count: *mut u64,
+    ) -> i32;
+
     pub fn fullmag_fem_backend_take_accepted_energy_proof_v1(
         handle: *mut fullmag_fem_backend,
         out_proof: *mut fullmag_fem_accepted_energy_proof_v1,
@@ -2455,6 +2495,29 @@ mod tests {
             2 * std::mem::size_of::<u32>()
         );
         assert_eq!(FULLMAG_FEM_ADAPTIVE_CONFIG_V2_ABI_VERSION, 2);
+    }
+
+    #[test]
+    fn solver_attempt_v2_layout_extends_v1_without_mutating_it() {
+        assert_eq!(FULLMAG_FEM_SOLVER_ATTEMPT_RECORD_V1_ABI_VERSION, 1);
+        assert_eq!(FULLMAG_FEM_SOLVER_ATTEMPT_RECORD_V2_ABI_VERSION, 2);
+        assert_eq!(
+            std::mem::size_of::<fullmag_fem_solver_attempt_record_v1>(),
+            104
+        );
+        assert_eq!(
+            std::mem::size_of::<fullmag_fem_solver_attempt_record_v2>(),
+            152
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_solver_attempt_record_v2, error_norm_type),
+            104
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_solver_attempt_record_v2, active_node_count),
+            112
+        );
+        assert_eq!(FULLMAG_FEM_SOLVER_ERROR_NORM_MASS_WEIGHTED_RMS, 2);
     }
 
     /// Verify the Rust observable enum has the expected number of variants

@@ -721,6 +721,30 @@ FastModeResult qualify_fast_mode(const ExchangeModeDefinition &mode)
         "fast-mode trace must end with an accepted attempt");
     require(accepted.eta <= 1.0, "accepted fast-mode eta must not exceed one");
     require(accepted.dt_attempt_seconds < first_dt, "fast-mode accepted dt must shrink from first proposal");
+    std::vector<fullmag_fem_solver_attempt_record_v2> attempts_v2(attempt_count);
+    uint64_t copied_v2 = 0;
+    require(
+        fullmag_fem_backend_copy_solver_attempts_v2(
+            backend, attempts_v2.data(), attempts_v2.size(), &copied_v2) == FULLMAG_FEM_OK,
+        std::string("copy fast-mode v2 attempts: ") + last_error(backend));
+    require(copied_v2 == attempt_count, "fast-mode v2 attempt copy count mismatch");
+    const auto &accepted_v2 = attempts_v2.back();
+    require(
+        accepted_v2.abi_version == FULLMAG_FEM_SOLVER_ATTEMPT_RECORD_V2_ABI_VERSION &&
+            accepted_v2.struct_size == sizeof(fullmag_fem_solver_attempt_record_v2),
+        "fast-mode v2 attempt receipt ABI is incompatible");
+    if (!g_use_gpu) {
+        require(
+            accepted_v2.error_norm_type == FULLMAG_FEM_SOLVER_ERROR_NORM_MASS_WEIGHTED_RMS,
+            "CPU fast-mode attempt receipt must identify mass-weighted RMS");
+        require(accepted_v2.active_node_count > 0, "CPU fast-mode receipt has no active nodes");
+        require(
+            std::isfinite(accepted_v2.active_measure) && accepted_v2.active_measure > 0.0 &&
+                accepted_v2.normalization_denominator == accepted_v2.active_measure &&
+                std::isfinite(accepted_v2.max_scaled_error) &&
+                std::isfinite(accepted_v2.weighted_rms_error),
+            "CPU fast-mode receipt has invalid weighted-norm metrics");
+    }
     require_strict_gpu_hot_loop(backend);
     require_strict_gpu_execution_receipt(backend);
     const auto final_m = copy_field(backend, FULLMAG_FEM_OBSERVABLE_M, "fast-mode M");

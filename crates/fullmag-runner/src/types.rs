@@ -339,6 +339,18 @@ pub struct SolverAttemptRecord {
     pub attempt: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adaptive_controller_policy_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_norm_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_node_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_measure: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normalization_denominator: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_scaled_error: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weighted_rms_error: Option<f64>,
     pub target_step: u64,
     pub time: f64,
     pub dt_attempt: f64,
