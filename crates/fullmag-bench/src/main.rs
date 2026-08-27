@@ -25,24 +25,37 @@ mod alloc_counter {
 
     pub static ALLOC_COUNT: AtomicU64 = AtomicU64::new(0);
     pub static ALLOC_BYTES: AtomicU64 = AtomicU64::new(0);
+    static LIVE_BYTES: AtomicU64 = AtomicU64::new(0);
+    static PEAK_LIVE_BYTES: AtomicU64 = AtomicU64::new(0);
+    static BASELINE_LIVE_BYTES: AtomicU64 = AtomicU64::new(0);
 
     pub struct CountingAllocator;
 
     unsafe impl GlobalAlloc for CountingAllocator {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            ALLOC_COUNT.fetch_add(1, Ordering::Relaxed);
-            ALLOC_BYTES.fetch_add(layout.size() as u64, Ordering::Relaxed);
-            unsafe { System.alloc(layout) }
+            let pointer = unsafe { System.alloc(layout) };
+            if !pointer.is_null() {
+                let bytes = layout.size() as u64;
+                ALLOC_COUNT.fetch_add(1, Ordering::Relaxed);
+                ALLOC_BYTES.fetch_add(bytes, Ordering::Relaxed);
+                let live = LIVE_BYTES.fetch_add(bytes, Ordering::Relaxed) + bytes;
+                PEAK_LIVE_BYTES.fetch_max(live, Ordering::Relaxed);
+            }
+            pointer
         }
 
         unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
             unsafe { System.dealloc(ptr, layout) }
+            LIVE_BYTES.fetch_sub(layout.size() as u64, Ordering::Relaxed);
         }
     }
 
     pub fn reset() {
+        let baseline = LIVE_BYTES.load(Ordering::Relaxed);
         ALLOC_COUNT.store(0, Ordering::Relaxed);
         ALLOC_BYTES.store(0, Ordering::Relaxed);
+        BASELINE_LIVE_BYTES.store(baseline, Ordering::Relaxed);
+        PEAK_LIVE_BYTES.store(baseline, Ordering::Relaxed);
     }
 
     pub fn snapshot() -> (u64, u64) {
@@ -50,6 +63,12 @@ mod alloc_counter {
             ALLOC_COUNT.load(Ordering::Relaxed),
             ALLOC_BYTES.load(Ordering::Relaxed),
         )
+    }
+
+    pub fn peak_live_growth_bytes() -> u64 {
+        PEAK_LIVE_BYTES
+            .load(Ordering::Relaxed)
+            .saturating_sub(BASELINE_LIVE_BYTES.load(Ordering::Relaxed))
     }
 }
 

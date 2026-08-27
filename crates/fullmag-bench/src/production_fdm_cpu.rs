@@ -68,6 +68,7 @@ struct ProductionRunEvidence {
     end_to_end_wall_time_ns: u64,
     allocation_count: u64,
     allocation_bytes: u64,
+    peak_live_heap_growth_bytes: u64,
     backend_plan_sha256: String,
     final_magnetization_sha256: String,
     requested_execution: Value,
@@ -83,6 +84,7 @@ struct ProductionQualificationSuite {
     profile: String,
     qualification_status: &'static str,
     qualification_blockers: Vec<&'static str>,
+    process_peak_resident_bytes: u64,
     results: Vec<ProductionRunEvidence>,
 }
 
@@ -137,10 +139,10 @@ pub(super) fn run_from_args(args: &[String]) -> Result<(), String> {
         },
         qualification_status: "evidence_only",
         qualification_blockers: vec![
-            "peak_memory_measurement_missing",
             "time_to_accuracy_oracle_missing",
             "hardware_baseline_threshold_not_approved",
         ],
+        process_peak_resident_bytes: process_peak_resident_bytes()?,
         results,
     };
     let encoded =
@@ -247,6 +249,14 @@ fn run_fixture(
             .map_err(|error| format!("running {} {}: {error}", fixture.name, mode.as_str()))?;
     let end_to_end_wall_time_ns = elapsed_ns(run_started);
     let (allocation_count, allocation_bytes) = alloc_counter::snapshot();
+    let peak_live_heap_growth_bytes = alloc_counter::peak_live_growth_bytes();
+    if peak_live_heap_growth_bytes == 0 {
+        return Err(format!(
+            "{} {} did not report peak live heap growth",
+            fixture.name,
+            mode.as_str()
+        ));
+    }
     let metadata = read_json(&run_dir.join("metadata.json"))?;
     validate_execution(&metadata, fixture, mode)?;
 
@@ -265,6 +275,7 @@ fn run_fixture(
         end_to_end_wall_time_ns,
         allocation_count,
         allocation_bytes,
+        peak_live_heap_growth_bytes,
         backend_plan_sha256,
         final_magnetization_sha256: magnetization_sha256(&result.final_magnetization),
         requested_execution: metadata["requested_execution"].clone(),
@@ -452,6 +463,85 @@ fn elapsed_ns(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX)
 }
 
+#[cfg(windows)]
+fn process_peak_resident_bytes() -> Result<u64, String> {
+    use std::{ffi::c_void, mem::size_of};
+
+    #[repr(C)]
+    struct ProcessMemoryCounters {
+        cb: u32,
+        page_fault_count: u32,
+        peak_working_set_size: usize,
+        working_set_size: usize,
+        quota_peak_paged_pool_usage: usize,
+        quota_paged_pool_usage: usize,
+        quota_peak_non_paged_pool_usage: usize,
+        quota_non_paged_pool_usage: usize,
+        pagefile_usage: usize,
+        peak_pagefile_usage: usize,
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCurrentProcess() -> *mut c_void;
+    }
+    #[link(name = "psapi")]
+    unsafe extern "system" {
+        fn GetProcessMemoryInfo(
+            process: *mut c_void,
+            counters: *mut ProcessMemoryCounters,
+            size: u32,
+        ) -> i32;
+    }
+
+    let mut counters = ProcessMemoryCounters {
+        cb: u32::try_from(size_of::<ProcessMemoryCounters>())
+            .map_err(|_| "process memory counter layout exceeds u32".to_string())?,
+        page_fault_count: 0,
+        peak_working_set_size: 0,
+        working_set_size: 0,
+        quota_peak_paged_pool_usage: 0,
+        quota_paged_pool_usage: 0,
+        quota_peak_non_paged_pool_usage: 0,
+        quota_non_paged_pool_usage: 0,
+        pagefile_usage: 0,
+        peak_pagefile_usage: 0,
+    };
+    let succeeded =
+        unsafe { GetProcessMemoryInfo(GetCurrentProcess(), &mut counters, counters.cb) };
+    if succeeded == 0 {
+        return Err(format!(
+            "GetProcessMemoryInfo failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    u64::try_from(counters.peak_working_set_size)
+        .map_err(|_| "peak working set exceeds u64".to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn process_peak_resident_bytes() -> Result<u64, String> {
+    let status = fs::read_to_string("/proc/self/status")
+        .map_err(|error| format!("reading /proc/self/status: {error}"))?;
+    let line = status
+        .lines()
+        .find(|line| line.starts_with("VmHWM:"))
+        .ok_or_else(|| "VmHWM is missing from /proc/self/status".to_string())?;
+    let kib = line
+        .split_ascii_whitespace()
+        .nth(1)
+        .ok_or_else(|| "VmHWM has no numeric value".to_string())?
+        .parse::<u64>()
+        .map_err(|error| format!("parsing VmHWM: {error}"))?;
+    kib.checked_mul(1024)
+        .ok_or_else(|| "VmHWM byte conversion overflow".to_string())
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn process_peak_resident_bytes() -> Result<u64, String> {
+    Err("peak resident memory is unsupported on this platform".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,5 +576,10 @@ mod tests {
         assert!(validate_output_root(Path::new("relative")).is_err());
         let repository = std::env::current_dir().expect("repository path");
         assert!(validate_output_root(&repository.join("benchmark-output")).is_err());
+    }
+
+    #[test]
+    fn process_peak_resident_memory_is_reported() {
+        assert!(process_peak_resident_bytes().expect("process peak RSS") > 0);
     }
 }
