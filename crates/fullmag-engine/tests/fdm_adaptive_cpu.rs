@@ -1,8 +1,8 @@
 use fullmag_engine::{
-    AdaptiveAttemptDecision, AdaptiveStepConfig, AdaptiveStepController, AdaptiveStepDecision,
-    CellSize, EffectiveFieldTerms, EvaluationRequest, ExchangeLlgProblem, GridShape, LlgConfig,
-    MaterialParameters, TimeIntegrator, FDM_ADAPTIVE_CONTROLLER_POLICY_VERSION,
-    MAX_ADAPTIVE_ATTEMPT_RECORDS,
+    constant_z_field_llg_from_positive_x, AdaptiveAttemptDecision, AdaptiveStepConfig,
+    AdaptiveStepController, AdaptiveStepDecision, CellSize, EffectiveFieldTerms, EvaluationRequest,
+    ExchangeLlgProblem, GridShape, LlgConfig, MaterialParameters, TimeIntegrator,
+    FDM_ADAPTIVE_CONTROLLER_POLICY_VERSION, MAX_ADAPTIVE_ATTEMPT_RECORDS,
 };
 
 const INITIAL_DT: f64 = 1.0;
@@ -305,13 +305,7 @@ fn fdm_adaptive_cpu_matches_constant_field_llg_oracle() {
             dt = report.suggested_next_dt.unwrap_or(report.dt_used);
         }
 
-        let omega = GAMMA * FIELD_Z_APM / (1.0 + ALPHA * ALPHA);
-        let damping_rate = ALPHA * omega;
-        let expected = [
-            1.0 / (damping_rate * FINAL_TIME).cosh() * (omega * FINAL_TIME).cos(),
-            1.0 / (damping_rate * FINAL_TIME).cosh() * (omega * FINAL_TIME).sin(),
-            (damping_rate * FINAL_TIME).tanh(),
-        ];
+        let expected = constant_z_field_llg_from_positive_x(GAMMA, ALPHA, FIELD_Z_APM, FINAL_TIME);
         let actual = state.magnetization()[0];
         let error = actual
             .iter()

@@ -4,9 +4,10 @@ use std::{
 };
 
 use fullmag_engine::{
-    AdaptiveStepConfig, CellSize, EffectiveFieldTerms, EvaluationRequest, ExchangeLlgProblem,
-    GridShape, LlgConfig, MaterialParameters, TimeIntegrator,
-    FDM_CPU_ADAPTIVE_RK23_MAX_RHS_EVALS_TO_ORACLE, FDM_CPU_ADAPTIVE_RK45_MAX_RHS_EVALS_TO_ORACLE,
+    constant_z_field_llg_from_positive_x, AdaptiveStepConfig, CellSize, EffectiveFieldTerms,
+    EvaluationRequest, ExchangeLlgProblem, GridShape, LlgConfig, MaterialParameters,
+    TimeIntegrator, FDM_CPU_ADAPTIVE_RK23_MAX_RHS_EVALS_TO_ORACLE,
+    FDM_CPU_ADAPTIVE_RK45_MAX_RHS_EVALS_TO_ORACLE,
 };
 
 const GAMMA: f64 = 2.211e5;
@@ -263,13 +264,7 @@ fn run_persistent_soa(integrator: TimeIntegrator) -> QualificationOutcome {
 }
 
 fn oracle_error(actual: [f64; 3]) -> f64 {
-    let omega = GAMMA * FIELD_Z_APM / (1.0 + ALPHA * ALPHA);
-    let damping_rate = ALPHA * omega;
-    let expected = [
-        1.0 / (damping_rate * FINAL_TIME).cosh() * (omega * FINAL_TIME).cos(),
-        1.0 / (damping_rate * FINAL_TIME).cosh() * (omega * FINAL_TIME).sin(),
-        (damping_rate * FINAL_TIME).tanh(),
-    ];
+    let expected = constant_z_field_llg_from_positive_x(GAMMA, ALPHA, FIELD_Z_APM, FINAL_TIME);
     actual
         .iter()
         .zip(expected)

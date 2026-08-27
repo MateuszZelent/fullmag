@@ -35,6 +35,7 @@ pub type Vector3 = [f64; 3];
 // ── Re-exports from FDM modules ───────────────────────────────────────
 pub use fdm::neighbor_index;
 pub use fdm::shared::frozen_spins::FrozenSpinsState;
+pub use fdm::constant_z_field_llg_from_positive_x;
 pub use fdm::{
     compute_newell_kernel_spectra, compute_newell_kernel_spectra_thin_film_2d,
     compute_periodic_newell_kernel_spectra, run_reference_exchange_demo, AbmHistory, AbmHistorySoA,

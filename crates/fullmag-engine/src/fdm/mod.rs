@@ -5,9 +5,11 @@
 
 pub mod cpu;
 pub(crate) mod demo;
+pub mod oracle;
 pub mod shared;
 
 pub use demo::{run_reference_exchange_demo, ReferenceDemoReport};
+pub use oracle::constant_z_field_llg_from_positive_x;
 
 pub use cpu::fft::{
     compute_newell_kernel_spectra, compute_newell_kernel_spectra_thin_film_2d,
