@@ -408,7 +408,6 @@ pub(crate) fn execute_cuda_fdm(
                     magnetization,
                     preview_field,
                     cached_preview_fields: None,
-                    terminal_field_snapshot: false,
                     hysteresis_field_m_t: None,
                     hysteresis_point_index: None,
                     hysteresis_settle_step_index: None,
