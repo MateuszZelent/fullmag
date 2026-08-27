@@ -1670,6 +1670,7 @@ fn fdm_demag_hints_enforce_common_grid_mode_matrix_at_validation_boundary() {
             FdmDemagHintsIR {
                 strategy: "auto".to_string(),
                 mode: "two_d_stack".to_string(),
+                fft_backend: "auto".to_string(),
                 common_cells: Some([4, 4, 1]),
                 common_cells_xy: None,
                 common_cell_size: None,
@@ -1680,6 +1681,7 @@ fn fdm_demag_hints_enforce_common_grid_mode_matrix_at_validation_boundary() {
             FdmDemagHintsIR {
                 strategy: "auto".to_string(),
                 mode: "three_d".to_string(),
+                fft_backend: "auto".to_string(),
                 common_cells: None,
                 common_cells_xy: Some([4, 4]),
                 common_cell_size: None,
@@ -1690,6 +1692,7 @@ fn fdm_demag_hints_enforce_common_grid_mode_matrix_at_validation_boundary() {
             FdmDemagHintsIR {
                 strategy: "auto".to_string(),
                 mode: "auto".to_string(),
+                fft_backend: "auto".to_string(),
                 common_cells: Some([4, 4, 1]),
                 common_cells_xy: Some([4, 4]),
                 common_cell_size: None,
@@ -1721,6 +1724,7 @@ fn fdm_demag_hints_round_trip_preserves_known_wire_values() {
     let hints = FdmDemagHintsIR {
         strategy: "multilayer_convolution".to_string(),
         mode: "two_d_stack".to_string(),
+        fft_backend: "auto".to_string(),
         common_cells: None,
         common_cells_xy: Some([16, 8]),
         common_cell_size: None,
