@@ -122,6 +122,10 @@ void source_inventory_covers_every_production_failure_boundary()
             transaction.find("std::numeric_limits<uint64_t>::max()") !=
                 std::string::npos,
         "transaction byte accounting must use saturating addition");
+    check(
+        runtime_state.find("transaction_journal") != std::string::npos &&
+            transaction.find("prepare_for_begin") != std::string::npos,
+        "RK transaction storage must be workspace-owned and recaptured in place");
 }
 
 void rollback_restores_transaction_owned_state_and_counts_payload()
@@ -177,6 +181,30 @@ void profiler_off_does_not_allocate_or_count_transaction_telemetry()
           "profiler-off must not calculate host restore bytes");
 }
 
+void repeated_transactions_reuse_workspace_journal()
+{
+    fullmag::fem::Context ctx;
+    initialize_transaction_context(ctx, true);
+    std::string error;
+
+    fullmag::fem::RkStepTransaction first(ctx);
+    check(first.begin(error), error.c_str());
+    auto *journal = ctx.stepper.workspace.transaction_journal.get();
+    check(journal != nullptr, "first transaction must prepare a workspace journal");
+    check(first.rollback(error), error.c_str());
+
+    fullmag::fem::RkStepTransaction second(ctx);
+    check(second.begin(error), error.c_str());
+    check(
+        ctx.stepper.workspace.transaction_journal.get() == journal,
+        "repeated transactions must reuse the workspace journal allocation");
+    check(second.rollback(error), error.c_str());
+    check(
+        ctx.stepper.transaction_telemetry.step_transaction_begin_count == 2u &&
+            ctx.stepper.transaction_telemetry.step_transaction_rollback_count == 2u,
+        "repeated profiled transactions must preserve begin/rollback accounting");
+}
+
 } // namespace
 
 int main()
@@ -184,5 +212,6 @@ int main()
     source_inventory_covers_every_production_failure_boundary();
     rollback_restores_transaction_owned_state_and_counts_payload();
     profiler_off_does_not_allocate_or_count_transaction_telemetry();
+    repeated_transactions_reuse_workspace_journal();
     return 0;
 }

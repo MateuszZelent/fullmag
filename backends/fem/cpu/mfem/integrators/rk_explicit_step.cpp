@@ -160,6 +160,25 @@ bool context_step_explicit_rk_mfem(
     const bool fsal_reuse_allowed = rk_rhs_allows_fsal_reuse(ctx);
     double exchange_energy_final = 0.0;
     double demag_energy_final = 0.0;
+    std::unique_ptr<RkAttemptCacheSnapshot> fallback_attempt_cache;
+    RkAttemptCacheSnapshot *attempt_cache = nullptr;
+    if (adaptive) {
+        if (ws.attempt_checkpoint != nullptr) {
+            attempt_cache = ws.attempt_checkpoint.get();
+        } else {
+            try {
+                fallback_attempt_cache =
+                    std::make_unique<RkAttemptCacheSnapshot>(ctx, false);
+            } catch (const std::bad_alloc &) {
+                error = "RK attempt cache snapshot allocation failed";
+                return false;
+            }
+            if (!fallback_attempt_cache->prepare(error)) {
+                return false;
+            }
+            attempt_cache = fallback_attempt_cache.get();
+        }
+    }
 
     for (;;) {
         ctx.adaptive_dt.current_dt = dt;
@@ -185,9 +204,8 @@ bool context_step_explicit_rk_mfem(
         }
         const uint32_t demag_solves_before_attempt = ctx.poisson_demag.solves_current_step;
         const uint32_t rhs_before_attempt = total_rhs;
-        std::unique_ptr<RkAttemptCacheSnapshot> attempt_cache;
-        if (adaptive) {
-            attempt_cache = std::make_unique<RkAttemptCacheSnapshot>(ctx);
+        if (adaptive && !attempt_cache->capture(error)) {
+            return false;
         }
         ws.m_backup = ctx.state.m_xyz;
         if (ctx.frozen_spins.enabled()) {
@@ -464,6 +482,11 @@ bool context_step_explicit_rk_mfem(
         if (ctx.frozen_spins.enabled()) {
             ctx.frozen_spins.project_onto_reference(ws.m_candidate);
         }
+        if (final_stage_cache_valid) {
+            final_stage_cache_valid =
+                ws.m_candidate.size() == ws.m_stage.size() &&
+                std::equal(ws.m_candidate.cbegin(), ws.m_candidate.cend(), ws.m_stage.cbegin());
+        }
         if (poll_interrupt(ctx)) {
             ws.fsal_valid = false;
             return true;
@@ -476,7 +499,7 @@ bool context_step_explicit_rk_mfem(
             return false;
         }
 
-        if (tab.fsal && fsal_reuse_allowed) {
+        if (tab.fsal && fsal_reuse_allowed && final_stage_cache_valid) {
             std::swap(ws.k[0], ws.k[tab.stages - 1]);
             ws.fsal_valid = true;
         } else {
@@ -542,7 +565,8 @@ bool context_step_explicit_rk_mfem(
 
     double max_rhs_final = 0.0;
     if (final_stage_cache_valid) {
-        max_rhs_final = max_norm_aos(ws.k[0]);
+        const auto &final_rhs = ws.fsal_valid ? ws.k[0] : ws.k[tab.stages - 1];
+        max_rhs_final = max_norm_aos(final_rhs);
     } else {
         if (!materialize_transport_stage_rhs(
                 ctx,
