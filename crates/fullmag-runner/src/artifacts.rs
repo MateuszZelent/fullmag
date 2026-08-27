@@ -18,7 +18,7 @@ use crate::types::{
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
-use std::io::{Error, ErrorKind, Write};
+use std::io::{BufWriter, Error, ErrorKind, Write};
 use std::path::Path;
 
 const MU0_H_PER_M: f64 = 1.256_637_062_12e-6;
@@ -130,10 +130,27 @@ fn solver_diagnostic_steps(executed: &ExecutedRun) -> Option<Vec<StepStats>> {
         })
 }
 
+#[cfg(test)]
 fn execution_provenance_json(
     plan: &fullmag_ir::ExecutionPlanIR,
     execution_provenance: &crate::types::ExecutionProvenance,
 ) -> std::io::Result<serde_json::Value> {
+    validate_execution_provenance_for_artifacts(plan, execution_provenance)?;
+    let mut value =
+        serde_json::to_value(execution_provenance).expect("ExecutionProvenance must serialize");
+    if let Some(transfer) = fdm_multilayer_transfer_realization(plan, execution_provenance) {
+        value
+            .as_object_mut()
+            .expect("ExecutionProvenance must serialize to an object")
+            .insert("fdm_multilayer_transfer".to_string(), transfer);
+    }
+    Ok(value)
+}
+
+fn validate_execution_provenance_for_artifacts(
+    plan: &fullmag_ir::ExecutionPlanIR,
+    execution_provenance: &crate::types::ExecutionProvenance,
+) -> std::io::Result<()> {
     if plan.common.execution_mode == fullmag_ir::ExecutionMode::Strict
         && execution_provenance.execution_engine == "fem_native_gpu"
         && (execution_provenance.mfem_version.is_none()
@@ -144,15 +161,94 @@ fn execution_provenance_json(
             "strict native FEM GPU artifacts require MFEM and HYPRE versions from the loaded runtime",
         ));
     }
-    let mut value =
-        serde_json::to_value(execution_provenance).expect("ExecutionProvenance must serialize");
-    if let Some(transfer) = fdm_multilayer_transfer_realization(plan, execution_provenance) {
-        value
-            .as_object_mut()
-            .expect("ExecutionProvenance must serialize to an object")
-            .insert("fdm_multilayer_transfer".to_string(), transfer);
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+struct MetadataExecutionProvenance<'a> {
+    #[serde(flatten)]
+    execution: &'a crate::types::ExecutionProvenance,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fdm_multilayer_transfer: Option<&'a serde_json::Value>,
+    execution_resolution: &'a FinalExecutionResolutionProvenance,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    physics_graph: Option<&'a serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thermal: Option<&'a serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    spin_torque: Option<&'a serde_json::Value>,
+}
+
+struct RunMetadata<'a> {
+    problem: &'a fullmag_ir::ProblemIR,
+    plan: &'a fullmag_ir::ExecutionPlanIR,
+    requested_execution: &'a serde_json::Value,
+    field_context: &'a FieldArtifactContext,
+    mesh: &'a serde_json::Value,
+    region_realization_revisions: &'a serde_json::Value,
+    periodic_antidot_relaxation: &'a serde_json::Value,
+    execution_provenance: &'a MetadataExecutionProvenance<'a>,
+    runtime_threading: &'a serde_json::Value,
+    demag_runtime: &'a serde_json::Value,
+    fem_cpu_relaxation_qualification: &'a serde_json::Value,
+    fem_gpu_relaxation_qualification: &'a serde_json::Value,
+    executed: &'a ExecutedRun,
+    accepted_solver_steps: usize,
+    artifact_pipeline: &'a serde_json::Value,
+    material_field_assets: &'a [serde_json::Value],
+    sampling_resolution: Option<&'a serde_json::Value>,
+}
+
+impl serde::Serialize for RunMetadata<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+
+        let mut map = serializer.serialize_map(Some(26))?;
+        map.serialize_entry("problem_name", &self.problem.problem_meta.name)?;
+        map.serialize_entry("ir_version", &self.problem.ir_version)?;
+        map.serialize_entry("source_hash", &self.problem.problem_meta.source_hash)?;
+        map.serialize_entry("problem_meta", &self.problem.problem_meta)?;
+        map.serialize_entry("pbc", &self.problem.pbc)?;
+        map.serialize_entry("execution_plan", self.plan)?;
+        map.serialize_entry("requested_execution", self.requested_execution)?;
+        map.serialize_entry("artifact_layout", &self.field_context.layout)?;
+        map.serialize_entry("mesh", self.mesh)?;
+        map.serialize_entry(
+            "region_realization_revisions",
+            self.region_realization_revisions,
+        )?;
+        map.serialize_entry(
+            "periodic_antidot_relaxation",
+            self.periodic_antidot_relaxation,
+        )?;
+        map.serialize_entry("execution_provenance", self.execution_provenance)?;
+        map.serialize_entry("runtime_threading", self.runtime_threading)?;
+        map.serialize_entry("demag_runtime", self.demag_runtime)?;
+        map.serialize_entry(
+            "fem_cpu_relaxation_qualification",
+            self.fem_cpu_relaxation_qualification,
+        )?;
+        map.serialize_entry(
+            "fem_gpu_relaxation_qualification",
+            self.fem_gpu_relaxation_qualification,
+        )?;
+        map.serialize_entry("engine_version", env!("CARGO_PKG_VERSION"))?;
+        map.serialize_entry("build_identity", &build_identity_json())?;
+        map.serialize_entry("status", &self.executed.result.status)?;
+        map.serialize_entry("completion", &self.executed.result.completion)?;
+        map.serialize_entry("scalar_rows", &self.executed.result.steps.len())?;
+        map.serialize_entry("accepted_solver_steps", &self.accepted_solver_steps)?;
+        map.serialize_entry("field_snapshots", &self.executed.field_snapshot_count)?;
+        map.serialize_entry("artifact_pipeline", self.artifact_pipeline)?;
+        map.serialize_entry("material_field_assets", self.material_field_assets)?;
+        if let Some(sampling_resolution) = self.sampling_resolution {
+            map.serialize_entry("sampling_resolution", sampling_resolution)?;
+        }
+        map.end()
     }
-    Ok(value)
 }
 
 fn fdm_multilayer_transfer_realization(
@@ -1727,7 +1823,7 @@ pub(crate) fn write_artifacts(
     let mesh_metadata = mesh_runtime_metadata(plan);
     let region_realization_revisions = region_realization_revisions_metadata(problem);
     let material_field_assets = write_material_field_artifacts(output_dir, plan)?;
-    let mut execution_provenance_json = execution_provenance_json(plan, &execution_provenance)?;
+    validate_execution_provenance_for_artifacts(plan, &execution_provenance)?;
     let execution_resolution =
         final_execution_resolution_provenance(problem, plan, &execution_provenance)?;
     field_context.execution_resolution = Some(execution_resolution.clone());
@@ -1739,68 +1835,31 @@ pub(crate) fn write_artifacts(
         }
     }
     write_sampling_resolution_artifact(output_dir, sampling_resolution)?;
-    execution_provenance_json
-        .as_object_mut()
-        .expect("ExecutionProvenance must serialize to an object")
-        .insert(
-            "execution_resolution".to_string(),
-            serde_json::to_value(execution_resolution)
-                .expect("FinalExecutionResolutionProvenance must serialize"),
-        );
     let physics_graph_artifact = physics_graph_provenance_artifact(problem, plan, Some(executed))?;
-    if let Some(artifact) = physics_graph_artifact.as_ref() {
-        let graph_provenance: serde_json::Value =
+    let graph_provenance = physics_graph_artifact
+        .as_ref()
+        .map(|artifact| {
             serde_json::from_slice(&artifact.bytes).map_err(|error| {
                 Error::new(
                     ErrorKind::InvalidData,
                     format!("physics graph provenance artifact is invalid JSON: {error}"),
                 )
-            })?;
-        execution_provenance_json
-            .as_object_mut()
-            .expect("ExecutionProvenance must serialize to an object")
-            .insert("physics_graph".to_string(), graph_provenance);
-    }
-    if let Some(thermal) = thermal_execution_provenance(plan, accepted_steps, &execution_provenance)
-    {
-        execution_provenance_json
-            .as_object_mut()
-            .expect("ExecutionProvenance must serialize to an object")
-            .insert("thermal".to_string(), thermal);
-    }
+            })
+        })
+        .transpose()?;
+    let thermal = thermal_execution_provenance(plan, accepted_steps, &execution_provenance);
     let spin_torque_provenance = fem_spin_torque_provenance(problem, plan, &execution_provenance);
-    if let Some(spin_torque) = spin_torque_provenance.as_ref() {
-        execution_provenance_json
-            .as_object_mut()
-            .expect("ExecutionProvenance must serialize to an object")
-            .insert("spin_torque".to_string(), spin_torque.clone());
-    }
-
-    let mut metadata = serde_json::json!({
-        "problem_name": problem.problem_meta.name,
-        "ir_version": problem.ir_version,
-        "source_hash": problem.problem_meta.source_hash,
-        "problem_meta": problem.problem_meta,
-        "pbc": problem.pbc,
-        "execution_plan": plan,
-        "requested_execution": requested_execution,
-        "artifact_layout": field_context.layout.clone(),
-        "mesh": mesh_metadata,
-        "region_realization_revisions": region_realization_revisions,
-        "periodic_antidot_relaxation": periodic_antidot_relaxation,
-        "execution_provenance": execution_provenance_json,
-        "runtime_threading": runtime_threading,
-        "demag_runtime": demag_runtime,
-        "fem_cpu_relaxation_qualification": fem_cpu_relaxation_qualification,
-        "fem_gpu_relaxation_qualification": fem_gpu_relaxation_qualification,
-        "engine_version": env!("CARGO_PKG_VERSION"),
-        "build_identity": build_identity_json(),
-        "status": executed.result.status,
-        "completion": executed.result.completion,
-        "scalar_rows": executed.result.steps.len(),
-        "accepted_solver_steps": accepted_steps.len(),
-        "field_snapshots": executed.field_snapshot_count,
-        "artifact_pipeline": streamed.map(|summary| serde_json::json!({
+    let fdm_multilayer_transfer = fdm_multilayer_transfer_realization(plan, &execution_provenance);
+    let metadata_execution_provenance = MetadataExecutionProvenance {
+        execution: &execution_provenance,
+        fdm_multilayer_transfer: fdm_multilayer_transfer.as_ref(),
+        execution_resolution: &execution_resolution,
+        physics_graph: graph_provenance.as_ref(),
+        thermal: thermal.as_ref(),
+        spin_torque: spin_torque_provenance.as_ref(),
+    };
+    let artifact_pipeline = streamed.map_or(serde_json::Value::Null, |summary| {
+        serde_json::json!({
             "scalar_rows_written": summary.scalar_rows_written,
             "field_snapshots_written": summary.field_snapshots_written,
             "writer_jobs_completed": summary.writer_jobs_completed,
@@ -1808,18 +1867,36 @@ pub(crate) fn write_artifacts(
             "scalar_row_writer_wall_time_ns": summary.scalar_row_writer_wall_time_ns,
             "field_snapshot_writer_wall_time_ns": summary.field_snapshot_writer_wall_time_ns,
             "native_field_snapshot_writer_wall_time_ns": summary.native_field_snapshot_writer_wall_time_ns,
-        })),
-        "material_field_assets": material_field_assets,
+        })
     });
-    if let Some(sampling_resolution) = sampling_resolution {
-        metadata
-            .as_object_mut()
-            .expect("run metadata must be an object")
-            .insert("sampling_resolution".into(), sampling_resolution.clone());
-    }
+    let metadata = RunMetadata {
+        problem,
+        plan,
+        requested_execution: &requested_execution,
+        field_context: &field_context,
+        mesh: &mesh_metadata,
+        region_realization_revisions: &region_realization_revisions,
+        periodic_antidot_relaxation: &periodic_antidot_relaxation,
+        execution_provenance: &metadata_execution_provenance,
+        runtime_threading: &runtime_threading,
+        demag_runtime: &demag_runtime,
+        fem_cpu_relaxation_qualification: &fem_cpu_relaxation_qualification,
+        fem_gpu_relaxation_qualification: &fem_gpu_relaxation_qualification,
+        executed,
+        accepted_solver_steps: accepted_steps.len(),
+        artifact_pipeline: &artifact_pipeline,
+        material_field_assets: &material_field_assets,
+        sampling_resolution,
+    };
     let metadata_path = output_dir.join("metadata.json");
-    let mut metadata_file = fs::File::create(&metadata_path)?;
-    metadata_file.write_all(serde_json::to_string_pretty(&metadata).unwrap().as_bytes())?;
+    let mut metadata_file = BufWriter::new(fs::File::create(&metadata_path)?);
+    serde_json::to_writer_pretty(&mut metadata_file, &metadata).map_err(|error| {
+        Error::new(
+            ErrorKind::InvalidData,
+            format!("serializing run metadata: {error}"),
+        )
+    })?;
+    metadata_file.flush()?;
 
     if let Some(spin_torque) = spin_torque_provenance {
         let path = output_dir.join("physics/spin_torque_provenance.v1.json");
@@ -6588,17 +6665,28 @@ mod tests {
         let problem = fem_execution_problem("cpu", ExecutionMode::Extended);
         let mut plan = test_fem_execution_plan();
         plan.common.execution_mode = ExecutionMode::Extended;
+        let provenance = ExecutionProvenance {
+            execution_engine: "fem_cpu_native".to_string(),
+            precision: "double".to_string(),
+            ..ExecutionProvenance::default()
+        };
+        let expected_provenance = execution_provenance_json(&plan, &provenance)
+            .expect("legacy typed provenance projection must serialize");
         let metadata = write_final_execution_test_metadata_without_fem_policy(
             "cpu-exact",
             &problem,
             &plan,
-            ExecutionProvenance {
-                execution_engine: "fem_cpu_native".to_string(),
-                precision: "double".to_string(),
-                ..ExecutionProvenance::default()
-            },
+            provenance,
         )
         .expect("CPU final metadata should be written");
+
+        let mut actual_provenance = metadata["execution_provenance"].clone();
+        let actual_provenance_object = actual_provenance
+            .as_object_mut()
+            .expect("metadata execution provenance must be an object");
+        actual_provenance_object.remove("execution_resolution");
+        actual_provenance_object.remove("resolved_cpu_threads");
+        assert_eq!(actual_provenance, expected_provenance);
 
         let resolution = &metadata["execution_provenance"]["execution_resolution"];
         assert_eq!(resolution["authored_request"]["backend"], "fem");
