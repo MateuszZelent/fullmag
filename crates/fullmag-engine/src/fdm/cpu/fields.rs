@@ -3,9 +3,7 @@
 //!
 //! Every function here lives inside `impl ExchangeLlgProblem`.
 
-use rustfft::num_complex::Complex;
-
-use crate::fdm::cpu::fft::{combine_fields_4, padded_index, zero_vectors};
+use crate::fdm::cpu::fft::{combine_fields_4, zero_vectors};
 use crate::fdm::cpu::fft_backend::FdmFftBackend;
 use crate::fdm::shared::types::{neighbor_index, AxisBoundary};
 use crate::magnetoelastic;
@@ -525,77 +523,21 @@ impl ExchangeLlgProblem {
         ws: &mut FftWorkspace,
         mask_inactive_output: bool,
     ) -> Vec<Vector3> {
-        let px = ws.px;
-        let py = ws.py;
-        let pz = ws.pz;
-        let padded_len = px * py * pz;
-
-        ws.clear_m_bufs();
-
-        for z in 0..self.grid.nz {
-            for y in 0..self.grid.ny {
-                for x in 0..self.grid.nx {
-                    let src_index = self.grid.index(x, y, z);
-                    let dst_index = padded_index(px, py, x, y, z);
-                    let moment = if self.is_active(src_index) {
-                        scale(magnetization[src_index], self.ms_at(src_index))
-                    } else {
-                        [0.0, 0.0, 0.0]
-                    };
-                    ws.buf_mx[dst_index] = Complex::new(moment[0], 0.0);
-                    ws.buf_my[dst_index] = Complex::new(moment[1], 0.0);
-                    ws.buf_mz[dst_index] = Complex::new(moment[2], 0.0);
-                }
+        ws.convolve_moments(|source| {
+            if self.is_active(source) {
+                scale(magnetization[source], self.ms_at(source))
+            } else {
+                [0.0; 3]
             }
-        }
+        });
 
-        ws.fft3_m_forward();
-
-        #[cfg(feature = "parallel")]
-        {
-            let (mx_sl, my_sl, mz_sl) = (&ws.buf_mx[..], &ws.buf_my[..], &ws.buf_mz[..]);
-            let (kxx, kyy, kzz) = (&ws.kern_xx[..], &ws.kern_yy[..], &ws.kern_zz[..]);
-            let (kxy, kxz, kyz) = (&ws.kern_xy[..], &ws.kern_xz[..], &ws.kern_yz[..]);
-            let hx = &mut ws.buf_hx[..];
-            let hy = &mut ws.buf_hy[..];
-            let hz = &mut ws.buf_hz[..];
-            hx.par_iter_mut().enumerate().for_each(|(i, h)| {
-                *h = -(kxx[i] * mx_sl[i] + kxy[i] * my_sl[i] + kxz[i] * mz_sl[i]);
-            });
-            hy.par_iter_mut().enumerate().for_each(|(i, h)| {
-                *h = -(kxy[i] * mx_sl[i] + kyy[i] * my_sl[i] + kyz[i] * mz_sl[i]);
-            });
-            hz.par_iter_mut().enumerate().for_each(|(i, h)| {
-                *h = -(kxz[i] * mx_sl[i] + kyz[i] * my_sl[i] + kzz[i] * mz_sl[i]);
-            });
-        }
-        #[cfg(not(feature = "parallel"))]
-        {
-            for i in 0..padded_len {
-                let mx = ws.buf_mx[i];
-                let my = ws.buf_my[i];
-                let mz = ws.buf_mz[i];
-                ws.buf_hx[i] = -(ws.kern_xx[i] * mx + ws.kern_xy[i] * my + ws.kern_xz[i] * mz);
-                ws.buf_hy[i] = -(ws.kern_xy[i] * mx + ws.kern_yy[i] * my + ws.kern_yz[i] * mz);
-                ws.buf_hz[i] = -(ws.kern_xz[i] * mx + ws.kern_yz[i] * my + ws.kern_zz[i] * mz);
-            }
-        }
-
-        ws.fft3_h_inverse();
-
-        let normalisation = 1.0 / padded_len as f64;
         let mut field = vec![[0.0, 0.0, 0.0]; self.grid.cell_count()];
         for z in 0..self.grid.nz {
             for y in 0..self.grid.ny {
                 for x in 0..self.grid.nx {
-                    let src_index = padded_index(px, py, x, y, z);
                     let dst_index = self.grid.index(x, y, z);
                     field[dst_index] = if !mask_inactive_output || self.is_active(dst_index) {
-                        [
-                            ws.buf_hx[src_index].re * normalisation,
-                            ws.buf_hy[src_index].re * normalisation,
-                            ws.buf_hz[src_index].re * normalisation,
-                        ]
+                        ws.convolved_field_at(x, y, z)
                     } else {
                         [0.0, 0.0, 0.0]
                     };
@@ -1231,74 +1173,23 @@ impl ExchangeLlgProblem {
         ws: &mut FftWorkspace,
         h_eff: &mut [Vector3],
     ) {
-        let px = ws.px;
-        let py = ws.py;
-        let pz = ws.pz;
-        let padded_len = px * py * pz;
-
-        ws.clear_m_bufs();
+        ws.convolve_moments(|source| {
+            if self.is_active(source) {
+                scale(magnetization[source], self.ms_at(source))
+            } else {
+                [0.0; 3]
+            }
+        });
 
         for z in 0..self.grid.nz {
             for y in 0..self.grid.ny {
                 for x in 0..self.grid.nx {
-                    let src_index = self.grid.index(x, y, z);
-                    let dst_index = padded_index(px, py, x, y, z);
-                    let moment = if self.is_active(src_index) {
-                        scale(magnetization[src_index], self.ms_at(src_index))
-                    } else {
-                        [0.0, 0.0, 0.0]
-                    };
-                    ws.buf_mx[dst_index] = Complex::new(moment[0], 0.0);
-                    ws.buf_my[dst_index] = Complex::new(moment[1], 0.0);
-                    ws.buf_mz[dst_index] = Complex::new(moment[2], 0.0);
-                }
-            }
-        }
-
-        ws.fft3_m_forward();
-
-        #[cfg(feature = "parallel")]
-        {
-            let (mx_sl, my_sl, mz_sl) = (&ws.buf_mx[..], &ws.buf_my[..], &ws.buf_mz[..]);
-            let (kxx, kyy, kzz) = (&ws.kern_xx[..], &ws.kern_yy[..], &ws.kern_zz[..]);
-            let (kxy, kxz, kyz) = (&ws.kern_xy[..], &ws.kern_xz[..], &ws.kern_yz[..]);
-            let hx = &mut ws.buf_hx[..];
-            let hy = &mut ws.buf_hy[..];
-            let hz = &mut ws.buf_hz[..];
-            hx.par_iter_mut().enumerate().for_each(|(i, h)| {
-                *h = -(kxx[i] * mx_sl[i] + kxy[i] * my_sl[i] + kxz[i] * mz_sl[i]);
-            });
-            hy.par_iter_mut().enumerate().for_each(|(i, h)| {
-                *h = -(kxy[i] * mx_sl[i] + kyy[i] * my_sl[i] + kyz[i] * mz_sl[i]);
-            });
-            hz.par_iter_mut().enumerate().for_each(|(i, h)| {
-                *h = -(kxz[i] * mx_sl[i] + kyz[i] * my_sl[i] + kzz[i] * mz_sl[i]);
-            });
-        }
-        #[cfg(not(feature = "parallel"))]
-        {
-            for i in 0..padded_len {
-                let mx = ws.buf_mx[i];
-                let my = ws.buf_my[i];
-                let mz = ws.buf_mz[i];
-                ws.buf_hx[i] = -(ws.kern_xx[i] * mx + ws.kern_xy[i] * my + ws.kern_xz[i] * mz);
-                ws.buf_hy[i] = -(ws.kern_xy[i] * mx + ws.kern_yy[i] * my + ws.kern_yz[i] * mz);
-                ws.buf_hz[i] = -(ws.kern_xz[i] * mx + ws.kern_yz[i] * my + ws.kern_zz[i] * mz);
-            }
-        }
-
-        ws.fft3_h_inverse();
-
-        let normalisation = 1.0 / padded_len as f64;
-        for z in 0..self.grid.nz {
-            for y in 0..self.grid.ny {
-                for x in 0..self.grid.nx {
-                    let src_index = padded_index(px, py, x, y, z);
                     let dst_index = self.grid.index(x, y, z);
                     if self.is_active(dst_index) {
-                        h_eff[dst_index][0] += ws.buf_hx[src_index].re * normalisation;
-                        h_eff[dst_index][1] += ws.buf_hy[src_index].re * normalisation;
-                        h_eff[dst_index][2] += ws.buf_hz[src_index].re * normalisation;
+                        let field = ws.convolved_field_at(x, y, z);
+                        h_eff[dst_index][0] += field[0];
+                        h_eff[dst_index][1] += field[1];
+                        h_eff[dst_index][2] += field[2];
                     }
                 }
             }

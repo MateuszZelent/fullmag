@@ -574,6 +574,85 @@ impl FftWorkspace {
         }
     }
 
+    pub(crate) fn convolve_moments(&mut self, mut moment_at: impl FnMut(usize) -> Vector3) {
+        self.clear_m_bufs();
+        for z in 0..self.nz {
+            for y in 0..self.ny {
+                for x in 0..self.nx {
+                    let source = x + self.nx * (y + self.ny * z);
+                    let destination = padded_index(self.px, self.py, x, y, z);
+                    let moment = moment_at(source);
+                    self.buf_mx[destination] = Complex::new(moment[0], 0.0);
+                    self.buf_my[destination] = Complex::new(moment[1], 0.0);
+                    self.buf_mz[destination] = Complex::new(moment[2], 0.0);
+                }
+            }
+        }
+
+        self.fft3_m_forward();
+        self.multiply_kernel_spectra();
+        self.fft3_h_inverse();
+    }
+
+    pub(crate) fn convolved_field_at(&self, x: usize, y: usize, z: usize) -> Vector3 {
+        let source = padded_index(self.px, self.py, x, y, z);
+        let normalization = 1.0 / (self.px * self.py * self.pz) as f64;
+        [
+            self.buf_hx[source].re * normalization,
+            self.buf_hy[source].re * normalization,
+            self.buf_hz[source].re * normalization,
+        ]
+    }
+
+    fn multiply_kernel_spectra(&mut self) {
+        #[cfg(feature = "parallel")]
+        {
+            use rayon::prelude::*;
+
+            let (mx, my, mz) = (&self.buf_mx[..], &self.buf_my[..], &self.buf_mz[..]);
+            let (kxx, kyy, kzz) = (&self.kern_xx[..], &self.kern_yy[..], &self.kern_zz[..]);
+            let (kxy, kxz, kyz) = (&self.kern_xy[..], &self.kern_xz[..], &self.kern_yz[..]);
+            self.buf_hx
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(index, field)| {
+                    *field =
+                        -(kxx[index] * mx[index] + kxy[index] * my[index] + kxz[index] * mz[index]);
+                });
+            self.buf_hy
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(index, field)| {
+                    *field =
+                        -(kxy[index] * mx[index] + kyy[index] * my[index] + kyz[index] * mz[index]);
+                });
+            self.buf_hz
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(index, field)| {
+                    *field =
+                        -(kxz[index] * mx[index] + kyz[index] * my[index] + kzz[index] * mz[index]);
+                });
+        }
+        #[cfg(not(feature = "parallel"))]
+        {
+            for index in 0..self.buf_mx.len() {
+                let mx = self.buf_mx[index];
+                let my = self.buf_my[index];
+                let mz = self.buf_mz[index];
+                self.buf_hx[index] = -(self.kern_xx[index] * mx
+                    + self.kern_xy[index] * my
+                    + self.kern_xz[index] * mz);
+                self.buf_hy[index] = -(self.kern_xy[index] * mx
+                    + self.kern_yy[index] * my
+                    + self.kern_yz[index] * mz);
+                self.buf_hz[index] = -(self.kern_xz[index] * mx
+                    + self.kern_yz[index] * my
+                    + self.kern_zz[index] * mz);
+            }
+        }
+    }
+
     /// Forward FFT on the three M-component buffers (buf_mx, buf_my, buf_mz).
     pub(crate) fn fft3_m_forward(&mut self) {
         let started = Instant::now();

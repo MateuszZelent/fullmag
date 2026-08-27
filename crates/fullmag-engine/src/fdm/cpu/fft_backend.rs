@@ -72,14 +72,6 @@ impl RustFftBackend {
     }
 }
 
-use rustfft::num_complex::Complex;
-
-/// Helper: padded linear index from (x,y,z) with padded row stride `px` and `py`.
-#[inline]
-fn padded_index(px: usize, py: usize, x: usize, y: usize, z: usize) -> usize {
-    x + px * (y + py * z)
-}
-
 impl FdmFftBackend for FftWorkspace {
     fn convolve_demag(
         &mut self,
@@ -93,80 +85,29 @@ impl FdmFftBackend for FftWorkspace {
             debug_assert_eq!(mask.len(), m.len());
         }
 
-        let px = self.px;
-        let py = self.py;
-        let padded_len = px * py * self.pz;
+        let nx = self.nx;
+        let ny = self.ny;
+        self.convolve_moments(|source| {
+            if active_mask.map(|mask| mask[source]).unwrap_or(true) {
+                [
+                    m.x[source] * saturation_magnetisation,
+                    m.y[source] * saturation_magnetisation,
+                    m.z[source] * saturation_magnetisation,
+                ]
+            } else {
+                [0.0; 3]
+            }
+        });
 
-        // 1. Clear M buffers (H buffers overwritten by tensor multiply)
-        self.clear_m_bufs();
-
-        // 2. Pack physical → padded
         for z in 0..self.nz {
             for y in 0..self.ny {
                 for x in 0..self.nx {
-                    let src = x + self.nx * (y + self.ny * z);
-                    let dst = padded_index(px, py, x, y, z);
-                    if active_mask.map(|mask| mask[src]).unwrap_or(true) {
-                        self.buf_mx[dst] = Complex::new(m.x[src] * saturation_magnetisation, 0.0);
-                        self.buf_my[dst] = Complex::new(m.y[src] * saturation_magnetisation, 0.0);
-                        self.buf_mz[dst] = Complex::new(m.z[src] * saturation_magnetisation, 0.0);
-                    }
-                }
-            }
-        }
-
-        // 3. Forward FFT
-        self.fft3_m_forward();
-
-        // 4. Spectral tensor multiply (uses ws.kern_* which were precomputed)
-        #[cfg(feature = "parallel")]
-        {
-            use rayon::prelude::*;
-            let (mx_sl, my_sl, mz_sl) = (&self.buf_mx[..], &self.buf_my[..], &self.buf_mz[..]);
-            let (kxx, kyy, kzz) = (&self.kern_xx[..], &self.kern_yy[..], &self.kern_zz[..]);
-            let (kxy, kxz, kyz) = (&self.kern_xy[..], &self.kern_xz[..], &self.kern_yz[..]);
-            let hx = &mut self.buf_hx[..];
-            let hy = &mut self.buf_hy[..];
-            let hz = &mut self.buf_hz[..];
-            hx.par_iter_mut().enumerate().for_each(|(i, h)| {
-                *h = -(kxx[i] * mx_sl[i] + kxy[i] * my_sl[i] + kxz[i] * mz_sl[i]);
-            });
-            hy.par_iter_mut().enumerate().for_each(|(i, h)| {
-                *h = -(kxy[i] * mx_sl[i] + kyy[i] * my_sl[i] + kyz[i] * mz_sl[i]);
-            });
-            hz.par_iter_mut().enumerate().for_each(|(i, h)| {
-                *h = -(kxz[i] * mx_sl[i] + kyz[i] * my_sl[i] + kzz[i] * mz_sl[i]);
-            });
-        }
-        #[cfg(not(feature = "parallel"))]
-        {
-            for i in 0..padded_len {
-                let mx = self.buf_mx[i];
-                let my = self.buf_my[i];
-                let mz = self.buf_mz[i];
-                self.buf_hx[i] =
-                    -(self.kern_xx[i] * mx + self.kern_xy[i] * my + self.kern_xz[i] * mz);
-                self.buf_hy[i] =
-                    -(self.kern_xy[i] * mx + self.kern_yy[i] * my + self.kern_yz[i] * mz);
-                self.buf_hz[i] =
-                    -(self.kern_xz[i] * mx + self.kern_yz[i] * my + self.kern_zz[i] * mz);
-            }
-        }
-
-        // 5. Inverse FFT
-        self.fft3_h_inverse();
-
-        // 6. Unpack + accumulate into out_h
-        let norm = 1.0 / padded_len as f64;
-        for z in 0..self.nz {
-            for y in 0..self.ny {
-                for x in 0..self.nx {
-                    let src = padded_index(px, py, x, y, z);
-                    let dst = x + self.nx * (y + self.ny * z);
+                    let dst = x + nx * (y + ny * z);
                     if active_mask.map(|mask| mask[dst]).unwrap_or(true) {
-                        out_h.x[dst] += self.buf_hx[src].re * norm;
-                        out_h.y[dst] += self.buf_hy[src].re * norm;
-                        out_h.z[dst] += self.buf_hz[src].re * norm;
+                        let field = self.convolved_field_at(x, y, z);
+                        out_h.x[dst] += field[0];
+                        out_h.y[dst] += field[1];
+                        out_h.z[dst] += field[2];
                     }
                 }
             }
