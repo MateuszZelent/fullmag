@@ -33,6 +33,49 @@ h_i>0,
 \qquad \sum_{i=0}^{N_z-1}h_i=t.
 ```
 
+The implementation first constructs dimensionless raw weights and then
+normalizes them. For the non-symmetric case,
+
+```{math}
+:label: eq-swept-layer-weights
+
+w_i=
+\begin{cases}
+1, & D=\mathtt{fixed}\ \text{or}\ r=1,\\
+1+(r-1)\dfrac{i}{N_z-1}, & D=\mathtt{linear},\ N_z>1,\\
+r^i, & D=\mathtt{exponential},
+\end{cases}
+\qquad
+f_i=\frac{w_i}{\sum_{k=0}^{N_z-1}w_k},
+\qquad h_i=t f_i.
+```
+
+The single-layer linear case is defined separately as $f_0=1$. The current
+helper also takes the uniform branch whenever $r=1$, independently of the
+distribution token.
+
+For symmetric grading with $m=\lfloor N_z/2\rfloor$, let
+$(q_0,\ldots,q_{m-1})$ be the already-normalized non-symmetric distribution
+returned for $m$ layers with the same distribution and ratio. The
+implementation forms
+
+```{math}
+:label: eq-swept-symmetric-normalization
+
+\boldsymbol u=
+\begin{cases}
+(q_0,\ldots,q_{m-1},q_{m-1},\ldots,q_0), & N_z=2m,\\
+(q_0,\ldots,q_{m-1},1/N_z,q_{m-1},\ldots,q_0), & N_z=2m+1,
+\end{cases}
+\qquad
+f_i=\frac{u_i}{\sum_k u_k},
+\qquad h_i=t f_i.
+```
+
+This is an implementation contract, including the second normalization after
+mirroring; it is not equivalent to independently assigning half of the
+physical thickness to each half-vector.
+
 (swept-mesh-symbols-and-si-units)=
 ## 3. Symbols and SI units
 
@@ -46,6 +89,13 @@ h_i>0,
 | $h_i$ | physical height of layer $i$ | $\mathrm m$ |
 | $i$ | layer index | $1$ |
 | $\tau_\mathrm{plane}$ | plane grouping tolerance | $\mathrm m$ |
+| $D$ | distribution token | $1$ |
+| $r$ | requested element ratio | $1$ |
+| $w_i$ | raw non-symmetric layer weight | $1$ |
+| $f_i$ | normalized layer-height fraction | $1$ |
+| $m$ | floor of half the layer count | $1$ |
+| $q_i$ | normalized half-vector weight | $1$ |
+| $u_i$ | provisional mirrored weight | $1$ |
 
 (swept-mesh-assumptions-and-validity)=
 ## 4. Assumptions and validity
@@ -65,14 +115,22 @@ h_i>0,
 
 | Python | Type | Default | SI unit | Validation / error | Meaning | Backend support | ProblemIR destination | Source |
 |---|---|---|---|---|---|---|---|---|
-| `GeometryMeshHandle.swept.elements` | `int` | `6` | $1$ | integer $\ge1$; otherwise `ValueError` | layer count | FEM CPU/GPU authoring | `runtime_metadata.mesh_workflow.per_geometry[].through_thickness_elements` | `world.py::GeometryMeshHandle.swept` |
-| `GeometryMeshHandle.swept.distribution` | `"fixed" \| "linear" \| "exponential"` | `"fixed"` | $1$ | other token gives `ValueError`; exact layers require `fixed` | layer-height law | FEM CPU/GPU authoring | `runtime_metadata.mesh_workflow.per_geometry[].through_thickness_distribution` | `world.py::GeometryMeshHandle.swept` |
-| `GeometryMeshHandle.swept.element_ratio` | `float` | `1.0` | $1$ | finite positive; exact layers require $1$ | last/first layer-height ratio | FEM CPU/GPU authoring | `runtime_metadata.mesh_workflow.per_geometry[].through_thickness_element_ratio` | `world.py::GeometryMeshHandle.swept` |
-| `GeometryMeshHandle.swept.symmetric` | `bool` | `False` | $1$ | exact layers reject `True` | mirror grading about mid-plane | FEM CPU/GPU authoring | `runtime_metadata.mesh_workflow.per_geometry[].through_thickness_symmetric` | `world.py::GeometryMeshHandle.swept` |
-| `GeometryMeshHandle.swept.face_meshing` | `"triangular" \| "quadrilateral"` | `"triangular"` | $1$ | other token gives `ValueError` | source-face topology | FEM CPU/GPU authoring | `runtime_metadata.mesh_workflow.per_geometry[].sweep_face_meshing` | `world.py::GeometryMeshHandle.swept` |
-| `GeometryMeshHandle.swept.sweep_direction` | `"auto" \| "x" \| "y" \| "z"` | `"auto"` | $1$ | other token gives `ValueError` | requested sweep axis | FEM CPU/GPU authoring | `runtime_metadata.mesh_workflow.per_geometry[].sweep_direction` | `world.py::GeometryMeshHandle.swept` |
-| `GeometryMeshHandle.swept.transition` | `"pyramid_to_tetrahedra" \| "reject" \| None` | `None` | $1$ | hex plus pyramid transition gives `ValueError` | shared-domain transition policy | bounded prism lane only when supported | `runtime_metadata.mesh_workflow.per_geometry[].transition_policy` | `world.py::GeometryMeshHandle.swept` |
-| `GeometryMeshHandle.swept.exact_layers` | `bool \| None` | `None` | $1$ | non-bool gives `TypeError`; strict prism resolves `None` to `True` | require requested=realized layer count | bounded mixed-P1 FEM | `runtime_metadata.mesh_workflow.per_geometry[].exact_layer_count` | `world.py::GeometryMeshHandle.swept` |
+| `GeometryMeshHandle.swept.elements` | `int` | `6` | $1$ | integer $\ge1$; otherwise `ValueError` | layer count | FEM CPU/GPU authoring | `runtime_metadata.mesh_workflow.per_geometry[].through_thickness_elements` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.swept` |
+| `GeometryMeshHandle.swept.distribution` | `"fixed" \| "linear" \| "exponential"` | `"fixed"` | $1$ | other token gives `ValueError`; exact layers require `fixed` | layer-height law | FEM CPU/GPU authoring | `runtime_metadata.mesh_workflow.per_geometry[].through_thickness_distribution` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.swept` |
+| `GeometryMeshHandle.swept.element_ratio` | `float` | `1.0` | $1$ | finite positive; exact layers require $1$ | last/first layer-height ratio | FEM CPU/GPU authoring | `runtime_metadata.mesh_workflow.per_geometry[].through_thickness_element_ratio` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.swept` |
+| `GeometryMeshHandle.swept.symmetric` | `bool` | `False` | $1$ | exact layers reject `True` | mirror grading about mid-plane | FEM CPU/GPU authoring | `runtime_metadata.mesh_workflow.per_geometry[].through_thickness_symmetric` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.swept` |
+| `GeometryMeshHandle.swept.face_meshing` | `"triangular" \| "quadrilateral"` | `"triangular"` | $1$ | other token gives `ValueError` | source-face topology | FEM CPU/GPU authoring | `runtime_metadata.mesh_workflow.per_geometry[].sweep_face_meshing` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.swept` |
+| `GeometryMeshHandle.swept.sweep_direction` | `"auto" \| "x" \| "y" \| "z"` | `"auto"` | $1$ | other token gives `ValueError` | requested sweep axis | FEM CPU/GPU authoring | `runtime_metadata.mesh_workflow.per_geometry[].sweep_direction` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.swept` |
+| `GeometryMeshHandle.swept.transition` | `"pyramid_to_tetrahedra" \| "reject" \| None` | `None` | $1$ | triangular defaults to pyramid transition; quadrilateral defaults to reject; hex plus pyramid transition gives `ValueError` | shared-domain transition policy | bounded prism lane only when supported | `runtime_metadata.mesh_workflow.per_geometry[].transition_policy` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.swept` |
+| `GeometryMeshHandle.swept.exact_layers` | `bool \| None` | `None` | $1$ | non-bool gives `TypeError`; `None` resolves to `True`; prism with `False` rejects outside `extended` | require requested=realized layer count | bounded mixed-P1 FEM | `runtime_metadata.mesh_workflow.per_geometry[].exact_layer_count` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.swept` |
+
+| Mode | Face meshing / family | `exact_layers` | Transition | Result |
+|---|---|---|---|---|
+| `strict` | triangular / `prism6` | `None` or `True` | `None` or `pyramid_to_tetrahedra` | accepted; `None` normalizes to exact and transition defaults to pyramid-to-tetrahedra |
+| `strict` | triangular / `prism6` | `False` | any | rejected: non-exact prism execution is extended-only |
+| `extended` | triangular / `prism6` | `False` | `None`, `pyramid_to_tetrahedra`, or `reject` | accepted authoring; realized fallback must be reported |
+| any | quadrilateral / `hex8` | `None`, `True`, or `False` | `None` or `reject` | accepted authoring; `None` transition normalizes to reject; current bounded mixed-P1 execution does not qualify hex |
+| any | quadrilateral / `hex8` | any | `pyramid_to_tetrahedra` | rejected with `ValueError` |
 
 ```python
 # %% Author exact three-dimensional prism layers.
@@ -81,14 +139,20 @@ import fullmag as fm
 fm.reset()
 study = fm.study("swept-film")
 study.engine("fem")
+study.device("cpu", precision="double")
 study.mode("strict")
 study.universe(mode="manual", size=(120e-9, 80e-9, 60e-9))
 study.universe.mesh(maximum_element_size=20e-9)
 film = study.geometry(fm.Box(size=(24e-9, 12e-9, 3e-9)), name="film")
-film.Ms, film.Aex, film.m = 800e3, 13e-12, fm.texture.uniform(1, 0, 0)
+film.Ms = 800e3
+film.Aex = 13e-12
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 film.mesh(maximum_element_size=3e-9, order=1)
 film.mesh.swept(elements=3, distribution="fixed", face_meshing="triangular", exact_layers=True)
-study.relax(algorithm="projected_gradient_bb", max_steps=1)
+study.exchange()
+study.demag(realization="poisson_robin")
+study.stages.add_relax(stage_id="relax", algorithm="projected_gradient_bb", max_steps=1)
 ```
 
 (swept-mesh-problem-ir)=

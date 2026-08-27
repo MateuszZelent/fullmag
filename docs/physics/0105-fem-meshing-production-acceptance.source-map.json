@@ -1,59 +1,342 @@
 {
-  "document": {"path": "docs/physics/0105-fem-meshing-production-acceptance.md"},
+  "document": {
+    "path": "docs/physics/0105-fem-meshing-production-acceptance.md"
+  },
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "documented"},
-    {"solver": "FEM", "device": "GPU", "status": "documented"},
-    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "FDM uses a regular-grid certificate, not the shared-domain FEM mesh gate."},
-    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "FDM uses a regular-grid certificate, not the shared-domain FEM mesh gate."}
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM uses a regular-grid certificate, not the shared-domain FEM mesh gate."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM uses a regular-grid certificate, not the shared-domain FEM mesh gate."
+    }
   ],
   "equations": [
-    {"id": "eq-fem-mesh-size-composition", "symbols": ["x", "upper", "lower", "h_target"], "sources": ["policy-adr"]},
-    {"id": "eq-fem-mesh-curvature-source", "symbols": ["x", "h_curvature", "curvature_factor", "radius"], "sources": ["size-controls", "policy-adr"]},
-    {"id": "eq-fem-mesh-realized-growth", "symbols": ["cell_k", "cell_l", "h_k", "h_l", "rho_kl"], "sources": ["policy-adr"]},
-    {"id": "eq-fem-mesh-relative-jacobian-floor", "symbols": ["jacobian", "xi_q", "tau_j", "h_k", "epsilon64"], "sources": ["jacobian-sampling"]}
+    {
+      "id": "eq-fem-mesh-size-composition",
+      "symbols": [
+        "x",
+        "upper",
+        "lower",
+        "h_target"
+      ],
+      "sources": [
+        "policy-adr"
+      ]
+    },
+    {
+      "id": "eq-fem-mesh-curvature-source",
+      "symbols": [
+        "x",
+        "h_curvature",
+        "curvature_factor",
+        "radius"
+      ],
+      "sources": [
+        "size-controls",
+        "policy-adr"
+      ]
+    },
+    {
+      "id": "eq-fem-mesh-realized-growth",
+      "symbols": [
+        "cell_k",
+        "cell_l",
+        "h_k",
+        "h_l",
+        "rho_kl"
+      ],
+      "sources": [
+        "policy-adr"
+      ]
+    },
+    {
+      "id": "eq-fem-mesh-relative-jacobian-floor",
+      "symbols": [
+        "jacobian",
+        "xi_q",
+        "tau_j",
+        "h_k",
+        "epsilon64"
+      ],
+      "sources": [
+        "jacobian-sampling"
+      ]
+    }
   ],
   "symbols": [
-    {"id": "x", "latex": "\\mathbf x", "meaning": "punkt fizyczny, w którym rozwiązywana jest polityka", "si_unit": "\\mathrm m"},
-    {"id": "upper", "latex": "\\mathcal U(\\mathbf x)", "meaning": "uprawnione górne ograniczenia rozmiaru w punkcie", "si_unit": "\\mathrm m"},
-    {"id": "lower", "latex": "\\mathcal L(\\mathbf x)", "meaning": "uprawnione dolne ograniczenia rozmiaru w punkcie", "si_unit": "\\mathrm m"},
-    {"id": "h_target", "latex": "h_\\mathrm{target}(\\mathbf x)", "meaning": "rozwiązany docelowy rozmiar elementu", "si_unit": "\\mathrm m"},
-    {"id": "h_curvature", "latex": "h_\\kappa(\\mathbf x)", "meaning": "niezależny curvature upper target", "si_unit": "\\mathrm m"},
-    {"id": "curvature_factor", "latex": "\\kappa", "meaning": "`curvature_factor`", "si_unit": "1"},
-    {"id": "radius", "latex": "R(\\mathbf x)", "meaning": "dodatni lokalny promień krzywizny", "si_unit": "\\mathrm m"},
-    {"id": "cell_k", "latex": "K,L", "meaning": "finalne komórki dzielące pełną ścianę", "si_unit": "1"},
-    {"id": "cell_l", "latex": "K,L", "meaning": "finalne komórki dzielące pełną ścianę", "si_unit": "1"},
-    {"id": "h_k", "latex": "h_K,h_L", "meaning": "metryka rozmiaru komórki przypisana danemu metric ID", "si_unit": "\\mathrm m"},
-    {"id": "h_l", "latex": "h_K,h_L", "meaning": "metryka rozmiaru komórki przypisana danemu metric ID", "si_unit": "\\mathrm m"},
-    {"id": "rho_kl", "latex": "\\rho_{KL}", "meaning": "zrealizowany stosunek rozmiarów sąsiadów", "si_unit": "1"},
-    {"id": "jacobian", "latex": "J_K", "meaning": "mapa elementu referencyjnego do fizycznego", "si_unit": "\\mathrm m"},
-    {"id": "xi_q", "latex": "\\boldsymbol\\xi_q", "meaning": "normowany punkt kwadratury referencyjnej", "si_unit": "1"},
-    {"id": "det_jacobian", "latex": "\\det J_K(\\boldsymbol\\xi_q)", "meaning": "wyznacznik Jacobianu w próbce", "si_unit": "\\mathrm{m^3}"},
-    {"id": "tau_j", "latex": "\\tau_J", "meaning": "względny próg numerycznej degeneracji", "si_unit": "1"},
-    {"id": "epsilon64", "latex": "\\epsilon_{64}", "meaning": "machine epsilon IEEE-754 binary64", "si_unit": "1"},
-    {"id": "thickness", "latex": "t", "meaning": "fizyczna grubość filmu", "si_unit": "\\mathrm m"},
-    {"id": "layer_count", "latex": "N_z", "meaning": "żądana i zrealizowana liczba warstw komórek", "si_unit": "1"},
-    {"id": "plane_tolerance", "latex": "\\tau_\\mathrm{plane}", "meaning": "tolerancja grupowania płaszczyzn sweep", "si_unit": "\\mathrm m"},
-    {"id": "sicn", "latex": "q_\\mathrm{SICN}", "meaning": "signed inverse condition number z określonego producenta", "si_unit": "1"},
-    {"id": "gamma", "latex": "q_\\gamma", "meaning": "gamma quality z określonego producenta", "si_unit": "1"},
-    {"id": "scaled_jacobian", "latex": "q_\\mathrm{SJ}", "meaning": "topology-aware scaled Jacobian", "si_unit": "1"},
-    {"id": "volume", "latex": "V_K", "meaning": "dodatnia objętość fizyczna komórki", "si_unit": "\\mathrm{m^3}"},
-    {"id": "distance", "latex": "d_K", "meaning": "odległość centroidu komórki od właściciela danej strefy", "si_unit": "\\mathrm m"}
+    {
+      "id": "x",
+      "latex": "\\mathbf x",
+      "meaning": "punkt fizyczny, w którym rozwiązywana jest polityka",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "upper",
+      "latex": "\\mathcal U(\\mathbf x)",
+      "meaning": "uprawnione górne ograniczenia rozmiaru w punkcie",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "lower",
+      "latex": "\\mathcal L(\\mathbf x)",
+      "meaning": "uprawnione dolne ograniczenia rozmiaru w punkcie",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "h_target",
+      "latex": "h_\\mathrm{target}(\\mathbf x)",
+      "meaning": "rozwiązany docelowy rozmiar elementu",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "h_curvature",
+      "latex": "h_\\kappa(\\mathbf x)",
+      "meaning": "niezależny curvature upper target",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "curvature_factor",
+      "latex": "\\kappa",
+      "meaning": "`curvature_factor`",
+      "si_unit": "1"
+    },
+    {
+      "id": "radius",
+      "latex": "R(\\mathbf x)",
+      "meaning": "dodatni lokalny promień krzywizny",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "cell_k",
+      "latex": "K,L",
+      "meaning": "finalne komórki dzielące pełną ścianę",
+      "si_unit": "1"
+    },
+    {
+      "id": "cell_l",
+      "latex": "K,L",
+      "meaning": "finalne komórki dzielące pełną ścianę",
+      "si_unit": "1"
+    },
+    {
+      "id": "h_k",
+      "latex": "h_K^\\mathrm{strict}",
+      "meaning": "strict-validation characteristic scale: maximum pairwise vertex distance",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "h_l",
+      "latex": "h_K^\\mathrm{strict}",
+      "meaning": "strict-validation characteristic scale: maximum pairwise vertex distance",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "rho_kl",
+      "latex": "\\rho_{KL}",
+      "meaning": "zrealizowany stosunek rozmiarów sąsiadów",
+      "si_unit": "1"
+    },
+    {
+      "id": "jacobian",
+      "latex": "J_K",
+      "meaning": "mapa elementu referencyjnego do fizycznego",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "xi_q",
+      "latex": "\\boldsymbol\\xi_q",
+      "meaning": "normowany punkt kwadratury referencyjnej",
+      "si_unit": "1"
+    },
+    {
+      "id": "det_jacobian",
+      "latex": "\\det J_K(\\boldsymbol\\xi_q)",
+      "meaning": "wyznacznik Jacobianu w próbce",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "tau_j",
+      "latex": "\\tau_J",
+      "meaning": "względny próg numerycznej degeneracji",
+      "si_unit": "1"
+    },
+    {
+      "id": "epsilon64",
+      "latex": "\\epsilon_{64}",
+      "meaning": "machine epsilon IEEE-754 binary64",
+      "si_unit": "1"
+    },
+    {
+      "id": "thickness",
+      "latex": "t",
+      "meaning": "fizyczna grubość filmu",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "layer_count",
+      "latex": "N_z",
+      "meaning": "żądana i zrealizowana liczba warstw komórek",
+      "si_unit": "1"
+    },
+    {
+      "id": "plane_tolerance",
+      "latex": "\\tau_\\mathrm{plane}",
+      "meaning": "tolerancja grupowania płaszczyzn sweep",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "sicn",
+      "latex": "q_\\mathrm{SICN}",
+      "meaning": "signed inverse condition number z określonego producenta",
+      "si_unit": "1"
+    },
+    {
+      "id": "gamma",
+      "latex": "q_\\gamma",
+      "meaning": "gamma quality z określonego producenta",
+      "si_unit": "1"
+    },
+    {
+      "id": "scaled_jacobian",
+      "latex": "q_\\mathrm{SJ}",
+      "meaning": "topology-aware scaled Jacobian",
+      "si_unit": "1"
+    },
+    {
+      "id": "volume",
+      "latex": "V_K",
+      "meaning": "dodatnia objętość fizyczna komórki",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "distance",
+      "latex": "d_K",
+      "meaning": "odległość centroidu komórki od właściciela danej strefy",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "h_air",
+      "latex": "h_K^\\mathrm{air}",
+      "meaning": "regular-tetrahedron-equivalent size used by current airbox percentile diagnostics",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "h_edge",
+      "latex": "h_K^\\mathrm{edge},h_L^\\mathrm{edge}",
+      "meaning": "maximum canonical-edge sizes used by the adjacency growth metric",
+      "si_unit": "\\mathrm m"
+    }
   ],
   "sources": [
-    {"id": "geometry-mesh-handle", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class GeometryMeshHandle", "responsibility": "Owns current public mesh authoring and validation."},
-    {"id": "size-controls", "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py", "symbol": "resolve_user_mesh_size_controls", "responsibility": "Resolves current COMSOL-like size controls and presets."},
-    {"id": "field-stack", "path": "packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py", "symbol": "_build_field_stack", "responsibility": "Builds the current deterministic Gmsh size-field plan."},
-    {"id": "gmsh-metrics", "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py", "symbol": "_extract_quality_metrics", "responsibility": "Extracts current Gmsh SICN, gamma, and volume arrays."},
-    {"id": "jacobian-sampling", "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py", "symbol": "_cell_jacobian_determinants", "responsibility": "Evaluates topology-specific Jacobian samples."},
-    {"id": "fmmq-v1-writer", "path": "packages/fullmag-py/src/fullmag/meshing/remesh_cli.py", "symbol": "_write_quality_data_artifact_if_available", "responsibility": "Writes the current FMMQ v1 artifact."},
-    {"id": "fmmq-v1-decoder", "path": "apps/control-room/src/kernel/api/codecs/meshQualityDataCodec.ts", "symbol": "decodeMeshQualityData", "responsibility": "Decodes the current exact FMMQ v1 layout."},
-    {"id": "policy-adr", "path": "docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md", "symbol": "DOC-ANCHOR:canonical-fem-mesh-policy", "responsibility": "Defines the accepted canonical policy and evidence envelope.", "evidence_status": "planned_contract"},
-    {"id": "fmmq-v2-adr", "path": "docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md", "symbol": "DOC-ANCHOR:fmmq-v2-contract", "responsibility": "Defines planned FMMQ v2 and v1 exit criteria.", "evidence_status": "planned_contract"}
+    {
+      "id": "geometry-mesh-handle",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class GeometryMeshHandle",
+      "responsibility": "Owns current public mesh authoring and validation."
+    },
+    {
+      "id": "size-controls",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "resolve_user_mesh_size_controls",
+      "responsibility": "Resolves current COMSOL-like size controls and presets."
+    },
+    {
+      "id": "field-stack",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py",
+      "symbol": "_build_field_stack",
+      "responsibility": "Builds the current deterministic Gmsh size-field plan."
+    },
+    {
+      "id": "gmsh-metrics",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py",
+      "symbol": "_extract_quality_metrics",
+      "responsibility": "Extracts current Gmsh SICN, gamma, and volume arrays."
+    },
+    {
+      "id": "jacobian-sampling",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "_cell_jacobian_determinants",
+      "responsibility": "Evaluates topology-specific Jacobian samples."
+    },
+    {
+      "id": "fmmq-v1-writer",
+      "path": "packages/fullmag-py/src/fullmag/meshing/remesh_cli.py",
+      "symbol": "_write_quality_data_artifact_if_available",
+      "responsibility": "Writes the current FMMQ v1 artifact."
+    },
+    {
+      "id": "fmmq-v1-decoder",
+      "path": "apps/control-room/src/kernel/api/codecs/meshQualityDataCodec.ts",
+      "symbol": "decodeMeshQualityData",
+      "responsibility": "Decodes the current exact FMMQ v1 layout."
+    },
+    {
+      "id": "policy-adr",
+      "path": "docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md",
+      "symbol": "DOC-ANCHOR:canonical-fem-mesh-policy",
+      "responsibility": "Defines the accepted canonical policy and evidence envelope.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "fmmq-v2-adr",
+      "path": "docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md",
+      "symbol": "DOC-ANCHOR:fmmq-v2-contract",
+      "responsibility": "Defines planned FMMQ v2 and v1 exit criteria.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "strict-mesh-validation",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "validate_strict",
+      "responsibility": "Computes maximum pairwise vertex distance and the strict relative determinant floor.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fmmq-v1-rust-reader",
+      "path": "crates/fullmag-api/src/fem_cross_section.rs",
+      "symbol": "per_element_quality_metric_from_fmmq",
+      "responsibility": "Reads active FMMQ v1 per-element arrays.",
+      "evidence_status": "implemented"
+    }
   ],
   "public_api": {
     "parameters": [
-      {"python": "GeometryMeshHandle.configure.compute_quality", "type": "bool | None", "default": "None", "si_unit": "1", "validation": "`bool` lub `None`; zły typ jest odrzucany przez canonical authoring validation", "meaning": "żąda summary jakości po meshing", "backend_support": "FEM CPU/GPU; FDM N/A", "problem_ir": "runtime_metadata.mesh_workflow.per_geometry[].compute_quality"},
-      {"python": "GeometryMeshHandle.configure.per_element_quality", "type": "bool | None", "default": "None", "si_unit": "1", "validation": "`bool` lub `None`; wymagane dla per-element artifact", "meaning": "żąda per-element arrays; samo ustawienie nie dowodzi FMMQ v2", "backend_support": "FEM CPU/GPU; FDM N/A", "problem_ir": "runtime_metadata.mesh_workflow.per_geometry[].per_element_quality"}
+      {
+        "python": "GeometryMeshHandle.configure.compute_quality",
+        "type": "bool | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "zamierzony kontrakt: `bool` lub `None`; bieżący `configure` nie waliduje typu i zapisuje wartość bezpośrednio; planowany `TypeError` przed lowering",
+        "meaning": "żąda summary jakości po meshing",
+        "backend_support": "FEM CPU/GPU; FDM N/A",
+        "problem_ir": "runtime_metadata.mesh_workflow.per_geometry[].compute_quality"
+      },
+      {
+        "python": "GeometryMeshHandle.configure.per_element_quality",
+        "type": "bool | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "zamierzony kontrakt: `bool` lub `None`; bieżący `configure` nie waliduje typu; planowany `TypeError`; `True` jest wymagane dla per-element artifact",
+        "meaning": "żąda per-element arrays; samo ustawienie nie dowodzi FMMQ v2",
+        "backend_support": "FEM CPU/GPU; FDM N/A",
+        "problem_ir": "runtime_metadata.mesh_workflow.per_geometry[].per_element_quality"
+      }
     ]
   }
 }

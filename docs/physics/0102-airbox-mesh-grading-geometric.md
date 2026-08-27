@@ -15,6 +15,33 @@ object/interface target selected by canonical
 (airbox-grading-governing-equations)=
 ## 2. Governing equations
 
+In a source-free air region the scalar magnetostatic potential satisfies
+
+```{math}
+:label: eq-airbox-laplace
+
+\nabla^2\phi=0.
+```
+
+For a localized source, the exterior multipole expansion has the asymptotic
+orders
+
+```{math}
+:label: eq-airbox-multipole-decay
+
+|\phi_\ell(r)|=O(r^{-(\ell+1)}),
+\qquad
+|\nabla\phi_\ell(r)|=O(r^{-(\ell+2)}),
+\qquad r\to\infty,
+```
+
+where the dipole term ($\ell=1$) is commonly the leading nonzero far-field
+contribution for a finite magnet. This decay motivates allocating smaller
+elements near the magnetic interface and larger elements farther away. It
+does not by itself prove an element-count reduction or a solution-error bound;
+those are scenario- and discretization-dependent and require the 0105 measured
+quality, convergence, and observable gates.
+
 For distance $d$ over resolved span $[d_0,d_1]$:
 
 ```{math}
@@ -47,6 +74,10 @@ legacy explicit option, not the default scientific recommendation.
 
 | LaTeX token | Meaning | SI unit |
 |---|---|---|
+| $\phi$ | scalar magnetostatic potential in air | $\mathrm A$ |
+| $r$ | radial distance in the exterior asymptotic model | $\mathrm m$ |
+| $\ell$ | multipole order | $1$ |
+| $O(\cdot)$ | asymptotic order | stated by its argument |
 | $d$ | distance from the owning magnetic feature | $\mathrm m$ |
 | $d_0$ | hold/start distance | $\mathrm m$ |
 | $d_1$ | resolved outer transition distance | $\mathrm m$ |
@@ -69,16 +100,22 @@ legacy explicit option, not the default scientific recommendation.
   positive radius is sampled.
 - The current spherical envelope has its own radial expression; production
   status still requires the same distance-band evidence.
+- The Laplace and multipole equations apply to the source-free exterior model;
+  material interfaces supply boundary data and the bounded airbox plus Robin
+  truncation approximate the infinite exterior.
+- The decay order is physical motivation only. Mesh error also depends on
+  polynomial order, element shape, boundary truncation, coefficients and the
+  target observable; no universal $\varepsilon(h)$ law is asserted here.
 
 (airbox-grading-python-api)=
 ## 5. Python API
 
 | Python | Type | Default | SI unit | Validation / error | Meaning | Backend support | ProblemIR destination | Source |
 |---|---|---|---|---|---|---|---|---|
-| `study.universe.mesh.maximum_element_size` | `float \| None` | `None` | $\mathrm m$ | finite $>0$; malformed value gives `ValueError` | far-air upper target | FEM CPU/GPU | `runtime_metadata.mesh_workflow.airbox.maximum_element_size` | `world.py::StudyUniverseHandle.mesh` |
-| `study.universe.mesh.minimum_element_size` | `float \| None` | `None` | $\mathrm m$ | finite $>0$ and $\le$ maximum; conflict gives `ValueError` | near-air lower policy, never magnetic clamp | FEM CPU/GPU | `runtime_metadata.mesh_workflow.airbox.minimum_element_size` | `world.py::StudyUniverseHandle.mesh` |
-| `study.universe.mesh.maximum_element_growth_rate` | `float \| None` | `None` | $1$ | finite $0<g\le2.5$; otherwise `ValueError` | requested air growth/ramp shape | FEM CPU/GPU | `runtime_metadata.mesh_workflow.airbox.maximum_element_growth_rate` | `world.py::StudyUniverseHandle.mesh` |
-| `study.universe.mesh.grading` | `"auto" \| "geometric" \| "linear" \| None` | `None` | $1$ | other token gives `ValueError` | grading algorithm intent | FEM CPU/GPU | `runtime_metadata.mesh_workflow.airbox.grading` | `world.py::StudyUniverseHandle.mesh` |
+| `study.universe.mesh.maximum_element_size` | `float \| None` | `None` | $\mathrm m$ | finite $>0$; malformed value gives `ValueError` | far-air upper target | FEM CPU/GPU | `runtime_metadata.mesh_workflow.airbox.maximum_element_size` | `packages/fullmag-py/src/fullmag/world.py::StudyUniverseHandle.mesh` |
+| `study.universe.mesh.minimum_element_size` | `float \| None` | `None` | $\mathrm m$ | finite $>0$ and $\le$ maximum; conflict gives `ValueError` | near-air lower policy, never magnetic clamp | FEM CPU/GPU | `runtime_metadata.mesh_workflow.airbox.minimum_element_size` | `packages/fullmag-py/src/fullmag/world.py::StudyUniverseHandle.mesh` |
+| `study.universe.mesh.maximum_element_growth_rate` | `float \| None` | `None` | $1$ | finite $0<g\le2.5$; otherwise `ValueError` | requested air growth/ramp shape | FEM CPU/GPU | `runtime_metadata.mesh_workflow.airbox.maximum_element_growth_rate` | `packages/fullmag-py/src/fullmag/world.py::StudyUniverseHandle.mesh` |
+| `study.universe.mesh.grading` | `"auto" \| "geometric" \| "linear" \| None` | `None` | $1$ | other token gives `ValueError` | grading algorithm intent | FEM CPU/GPU | `runtime_metadata.mesh_workflow.airbox.grading` | `packages/fullmag-py/src/fullmag/world.py::StudyUniverseHandle.mesh` |
 
 Compatibility aliases `hmax`, `hmin`, and `growth_rate` are accepted by the
 current reader, but canonical exporters emit the long names.
@@ -90,6 +127,7 @@ import fullmag as fm
 fm.reset()
 study = fm.study("airbox-grading")
 study.engine("fem")
+study.device("cpu", precision="double")
 study.mode("strict")
 study.universe(mode="manual", size=(300e-9, 220e-9, 180e-9))
 study.universe.mesh(
@@ -99,9 +137,14 @@ study.universe.mesh(
     grading="geometric",
 )
 body = study.geometry(fm.Box(size=(80e-9, 40e-9, 4e-9)), name="film")
-body.Ms, body.Aex, body.m = 800e3, 13e-12, fm.texture.uniform(1, 0, 0)
+body.Ms = 800e3
+body.Aex = 13e-12
+body.alpha = 0.02
+body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 body.mesh(maximum_element_size=4e-9, transition_distance="airbox_boundary")
-study.relax(algorithm="projected_gradient_bb", max_steps=1)
+study.exchange()
+study.demag(realization="poisson_robin")
+study.stages.add_relax(stage_id="relax", algorithm="projected_gradient_bb", max_steps=1)
 ```
 
 (airbox-grading-problem-ir)=
@@ -177,3 +220,4 @@ production criteria, not claims about the current partial report.
 | Geometric profile | `packages/fullmag-py/src/fullmag/meshing/_airbox_grading.py` | `_geometric_size_profile_expression` | emits normalized geometric expression | FEM meshing | unit tests |
 | Airbox field | `packages/fullmag-py/src/fullmag/meshing/_airbox_grading.py` | `_add_airbox_grading_field` | creates GEO/OCC airbox grading field | FEM meshing | Gmsh tests |
 | Boundary span | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_resolve_airbox_boundary_transition_span` | resolves numeric side/corner transition spans | FEM meshing | planner tests |
+| Physical model | `docs/physics/0102-airbox-mesh-grading-geometric.md` | `DOC-ANCHOR:airbox-grading-governing-equations` | source-free exterior equations motivating grading | FEM contract | publication review |

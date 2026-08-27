@@ -9,7 +9,7 @@
 ## Context
 
 Fullmag has working FEM mesh controls, shared-domain tetrahedral generation,
-bounded mixed-P1 topology, mesh reports, and a tetrahedron-only FMMQ v1 data
+bounded mixed-P1 topology, mesh reports, and an active FMMQ v1 data
 path. Their public meanings are nevertheless spread across Python compatibility
 aliases, Gmsh field composition, build reports, certificates, API projections,
 and Control Room assumptions. A value displayed as a target or quality metric
@@ -105,23 +105,30 @@ non-finite values, count mismatches, and trailing bytes. A mixed payload may
 contain separate arrays for `tet4`, `prism6`, `pyramid5`, and `hex8`; consumers
 must never apply a tetrahedron metric to another family.
 
-Current FMMQ v1 remains a read-only compatibility format for legacy tet4-only
-sessions. It is not upgraded in place and never carries mixed topology. The v1
-reader may be removed only after all of these criteria hold:
+Current FMMQ v1 is an active writer/reader format. Its header records only the
+element count and SICN/gamma/volume flags; it carries no cell-family,
+topology-fingerprint, mesh-revision, metric-version, sampling, or global-ordinal
+identity. The writer can therefore emit arrays for a mixed mesh when arrays are
+present, and the transport readers can decode them, but such a payload cannot
+qualify mixed topology. The separate Control Room topology guard may decline to
+render non-tet4 data; that guard is not a property of the v1 byte format.
 
-1. every supported writer emits v2;
+FMMQ v1 is not upgraded in place. The v1 reader may be removed only after all
+of these criteria hold:
+
+1. every v1 writer has been cut off and every supported writer emits v2;
 2. API range delivery, generated clients, Control Room decoding, quality
    mapping, cross-section selection, and persisted-session loading accept v2;
 3. a tested migration or read path exists for retained v1 tet4 artifacts;
 4. unknown-version, tamper, stale-revision, metric/topology, ordinal, and
    malformed-section tests pass across producer and consumers;
-5. two consecutive releases record no production dependence on a v1-only
-   writer or consumer; and
+5. two consecutive releases record no production dependence on a v1 writer or
+   v1-only consumer; and
 6. removal is announced in compatibility documentation.
 
-The current repository has FMMQ v1 only; FMMQ v2 is a planned contract. Mixed
-quality currently remains in certificate/report JSON and must not be described
-as FMMQ v2 evidence.
+The current repository has FMMQ v1 writers and readers only; FMMQ v2 is a
+planned contract. Mixed quality currently remains in certificate/report JSON.
+Neither a mixed v1 payload nor that JSON may be described as FMMQ v2 evidence.
 
 (fem-mesh-v04-cutover)=
 ### One atomic ProblemIR V04 cutover
@@ -172,7 +179,7 @@ The implementation sequence may be staged behind non-writing feature gates,
 but there is one externally visible V04 writer cutover. FMMQ v2 is additive:
 writers change to v2 only after all current consumers decode it; readers retain
 v1 under the exit criteria above. A rollback disables the new writer/codec and
-continues to read legacy v1 tet4 artifacts. It must not reinterpret v2 mixed
+continues to read retained v1 artifacts. It must not reinterpret v2 mixed
 quality as v1 or discard requested mesh intent.
 
 ## Tests and validation

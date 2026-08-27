@@ -87,6 +87,64 @@ h_{\mathrm{target}}(\mathbf x)=
              \max_{\ell\in\mathcal L(\mathbf x)}\ell\right).
 ```
 
+
+
+The source-mapped canonical forms used by this publication are:
+
+```{math}
+:label: material-magnetization
+
+\mathbf M(\mathbf x,t)=M_s(\mathbf x)\mathbf m(\mathbf x,t).
+```
+
+```{math}
+:label: material-exchange-energy
+
+E_\mathrm{ex}=\int_\Omega A(\mathbf x)|\nabla\mathbf m|^2\,\mathrm dV.
+```
+
+```{math}
+:label: material-exchange-field
+
+\mathbf H_\mathrm{ex}=\frac{2}{\mu_0 M_s}\nabla\!\cdot(A\nabla\mathbf m).
+```
+
+```{math}
+:label: material-exchange-flux
+
+A_1\partial_n\mathbf m_1=A_2\partial_n\mathbf m_2.
+```
+
+```{math}
+:label: material-rkky-energy
+
+E_\mathrm{RKKY}=-J_1\int_\Gamma \mathbf m_1\!\cdot\!\mathbf m_2\,\mathrm dS.
+```
+
+```{math}
+:label: material-transition-blend
+
+p(\mathbf x)=p_\mathrm{parent}+w(d(\mathbf x),h_\mathrm{local})(p_\mathrm{region}-p_\mathrm{parent}).
+```
+
+```{math}
+:label: material-fdm-harmonic-exchange
+
+A_{ij}=\frac{2A_iA_j}{A_i+A_j}\,s_{ij}.
+```
+
+```{math}
+:label: material-fdm-exchange-field
+
+\mathbf H_{\mathrm{ex},i}=\frac{2}{\mu_0M_{s,i}V_i}\sum_j A_{ij}\frac{S_{ij}}{d_{ij}}(\mathbf m_j-\mathbf m_i).
+```
+
+```{math}
+:label: material-fem-weighted-mass
+
+M_{M_s}\mathbf H_\mathrm{ex}=-\frac{2}{\mu_0}K_A\mathbf m.
+```
+
 Regionowe `maximum_element_size` jest upper target, a
 `minimum_element_size` jest lower bound; żadna nazwa regionu nie aktywuje
 fizyki ani nie może ominąć dolnego ograniczenia.
@@ -134,6 +192,16 @@ exchange stiffness `Aex` on both sides.
 | $\mathcal U(\mathbf x)$ | eligible upper mesh-size targets | $\mathrm m$ |
 | $\mathcal L(\mathbf x)$ | eligible lower mesh-size bounds | $\mathrm m$ |
 | $h_\mathrm{target}(\mathbf x)$ | resolved mesh target | $\mathrm m$ |
+| $\mathbf m$ | reduced magnetization | $1$ |
+| $\mathbf M$ | physical magnetization | $\mathrm{A/m}$ |
+| $M_s$ | saturation magnetization field | $\mathrm{A/m}$ |
+| $A$ | exchange stiffness field | $\mathrm{J/m}$ |
+| $\mu_0$ | vacuum permeability | $\mathrm{N/A^2}$ |
+| $J_1$ | bilinear surface coupling | $\mathrm{J/m^2}$ |
+| $p$ | material parameter | $parameter-dependent$ |
+| $w$ | smooth transition weight | $1$ |
+| $d$ | signed selector distance | $\mathrm m$ |
+| $A_{ij}$ | discrete pair exchange coefficient | $\mathrm{J/m}$ |
 
 (material-regions-assumptions-and-validity)=
 ### 2.3 Assumptions and approximations
@@ -607,84 +675,82 @@ Regionowa część mesh API jest wyczerpująco zmapowana poniżej:
 
 | Python | Type | Default | SI unit | Validation / error | Meaning | Backend support | ProblemIR destination | Source |
 |---|---|---|---|---|---|---|---|---|
-| `ObjectRegion.mesh.maximum_element_size` | `float \| None` | `None` | $\mathrm m$ | finite and positive | region upper target | FDM/FEM by capability | `object_regions[].mesh_policy.maximum_element_size` | `structure.py::class ObjectRegion` |
-| `ObjectRegion.mesh.minimum_element_size` | `float \| None` | `None` | $\mathrm m$ | finite, positive, and not above maximum | region lower bound | FDM/FEM by capability | `object_regions[].mesh_policy.minimum_element_size` | `structure.py::class ObjectRegion` |
-| `ObjectRegion.mesh.transition_distance` | `float \| None` | `None` | $\mathrm m$ | finite and non-negative | region transition span | FEM by capability | `object_regions[].mesh_policy.transition_distance` | `structure.py::class ObjectRegion` |
-| `ObjectRegion.mesh.order` | `int \| None` | `None` | $1$ | integer at least one | region FEM basis-order intent | FEM by capability | `object_regions[].mesh_policy.order` | `structure.py::class ObjectRegion` |
+| `ObjectRegion.mesh.maximum_element_size` | `float \| None` | `None` | $\mathrm m$ | finite and positive | region upper target | FDM/FEM by capability | `object_regions[].mesh_policy.maximum_element_size` | `packages/fullmag-py/src/fullmag/model/structure.py::ObjectRegion` |
+| `ObjectRegion.mesh.minimum_element_size` | `float \| None` | `None` | $\mathrm m$ | finite, positive, and not above maximum | region lower bound | FDM/FEM by capability | `object_regions[].mesh_policy.minimum_element_size` | `packages/fullmag-py/src/fullmag/model/structure.py::ObjectRegion` |
+| `ObjectRegion.mesh.transition_distance` | `float \| None` | `None` | $\mathrm m$ | finite and non-negative | region transition span | FEM by capability | `object_regions[].mesh_policy.transition_distance` | `packages/fullmag-py/src/fullmag/model/structure.py::ObjectRegion` |
+| `ObjectRegion.mesh.order` | `int \| None` | `None` | $1$ | integer at least one | region FEM basis-order intent | FEM by capability | `object_regions[].mesh_policy.order` | `packages/fullmag-py/src/fullmag/model/structure.py::ObjectRegion` |
+
+Public material fields, constructors, and couplings are exhaustively mapped:
+
+| Python | Type | Default | SI unit | Validation / error | Meaning | Backend support | ProblemIR destination | Source |
+|---|---|---|---|---|---|---|---|---|
+| `MaterialParameterName.Ms` | `scalar or vector MaterialParameterField` | `object value` | $parameter-specific SI$ | finite; Ms positive in active magnetic material; vector arity validated | authored material parameter field | capability-gated FDM/FEM CPU/GPU | `MaterialParameterNameIR::Ms` | `packages/fullmag-py/src/fullmag/model/structure.py::_MATERIAL_PARAMETER_NAMES` |
+| `MaterialParameterName.Aex` | `scalar or vector MaterialParameterField` | `object value` | $parameter-specific SI$ | finite; Ms positive in active magnetic material; vector arity validated | authored material parameter field | capability-gated FDM/FEM CPU/GPU | `MaterialParameterNameIR::Aex` | `packages/fullmag-py/src/fullmag/model/structure.py::_MATERIAL_PARAMETER_NAMES` |
+| `MaterialParameterName.Alpha` | `scalar or vector MaterialParameterField` | `object value` | $parameter-specific SI$ | finite; Ms positive in active magnetic material; vector arity validated | authored material parameter field | capability-gated FDM/FEM CPU/GPU | `MaterialParameterNameIR::Alpha` | `packages/fullmag-py/src/fullmag/model/structure.py::_MATERIAL_PARAMETER_NAMES` |
+| `MaterialParameterName.Ku1` | `scalar or vector MaterialParameterField` | `object value` | $parameter-specific SI$ | finite; Ms positive in active magnetic material; vector arity validated | authored material parameter field | capability-gated FDM/FEM CPU/GPU | `MaterialParameterNameIR::Ku1` | `packages/fullmag-py/src/fullmag/model/structure.py::_MATERIAL_PARAMETER_NAMES` |
+| `MaterialParameterName.Ku2` | `scalar or vector MaterialParameterField` | `object value` | $parameter-specific SI$ | finite; Ms positive in active magnetic material; vector arity validated | authored material parameter field | capability-gated FDM/FEM CPU/GPU | `MaterialParameterNameIR::Ku2` | `packages/fullmag-py/src/fullmag/model/structure.py::_MATERIAL_PARAMETER_NAMES` |
+| `MaterialParameterName.AnisotropyAxis` | `scalar or vector MaterialParameterField` | `object value` | $parameter-specific SI$ | finite; Ms positive in active magnetic material; vector arity validated | authored material parameter field | capability-gated FDM/FEM CPU/GPU | `MaterialParameterNameIR::AnisotropyAxis` | `packages/fullmag-py/src/fullmag/model/structure.py::_MATERIAL_PARAMETER_NAMES` |
+| `MaterialParameterName.Kc1` | `scalar or vector MaterialParameterField` | `object value` | $parameter-specific SI$ | finite; Ms positive in active magnetic material; vector arity validated | authored material parameter field | capability-gated FDM/FEM CPU/GPU | `MaterialParameterNameIR::Kc1` | `packages/fullmag-py/src/fullmag/model/structure.py::_MATERIAL_PARAMETER_NAMES` |
+| `MaterialParameterName.Kc2` | `scalar or vector MaterialParameterField` | `object value` | $parameter-specific SI$ | finite; Ms positive in active magnetic material; vector arity validated | authored material parameter field | capability-gated FDM/FEM CPU/GPU | `MaterialParameterNameIR::Kc2` | `packages/fullmag-py/src/fullmag/model/structure.py::_MATERIAL_PARAMETER_NAMES` |
+| `MaterialParameterName.Kc3` | `scalar or vector MaterialParameterField` | `object value` | $parameter-specific SI$ | finite; Ms positive in active magnetic material; vector arity validated | authored material parameter field | capability-gated FDM/FEM CPU/GPU | `MaterialParameterNameIR::Kc3` | `packages/fullmag-py/src/fullmag/model/structure.py::_MATERIAL_PARAMETER_NAMES` |
+| `MaterialParameterName.Dind` | `scalar or vector MaterialParameterField` | `object value` | $parameter-specific SI$ | finite; Ms positive in active magnetic material; vector arity validated | authored material parameter field | capability-gated FDM/FEM CPU/GPU | `MaterialParameterNameIR::Dind` | `packages/fullmag-py/src/fullmag/model/structure.py::_MATERIAL_PARAMETER_NAMES` |
+| `MaterialParameterName.Dbulk` | `scalar or vector MaterialParameterField` | `object value` | $parameter-specific SI$ | finite; Ms positive in active magnetic material; vector arity validated | authored material parameter field | capability-gated FDM/FEM CPU/GPU | `MaterialParameterNameIR::Dbulk` | `packages/fullmag-py/src/fullmag/model/structure.py::_MATERIAL_PARAMETER_NAMES` |
+| `fm.fields.constant` | `MaterialParameterField` | `required arguments` | $declared field unit$ | constructor-specific finite values, dimensions, frame and location validation | authored material parameter field constructor | capability-gated FDM/FEM CPU/GPU | `MaterialParameterFieldIR` | `packages/fullmag-py/src/fullmag/model/structure.py::MaterialParameterField.constant` |
+| `fm.fields.linear` | `MaterialParameterField` | `required arguments` | $declared field unit$ | constructor-specific finite values, dimensions, frame and location validation | authored material parameter field constructor | capability-gated FDM/FEM CPU/GPU | `MaterialParameterFieldIR` | `packages/fullmag-py/src/fullmag/model/structure.py::MaterialParameterField.linear` |
+| `fm.fields.radial` | `MaterialParameterField` | `required arguments` | $declared field unit$ | constructor-specific finite values, dimensions, frame and location validation | authored material parameter field constructor | capability-gated FDM/FEM CPU/GPU | `MaterialParameterFieldIR` | `packages/fullmag-py/src/fullmag/model/structure.py::MaterialParameterField.radial` |
+| `fm.fields.sampled` | `MaterialParameterField` | `required arguments` | $declared field unit$ | constructor-specific finite values, dimensions, frame and location validation | authored material parameter field constructor | capability-gated FDM/FEM CPU/GPU | `MaterialParameterFieldIR` | `packages/fullmag-py/src/fullmag/model/structure.py::MaterialParameterField.sampled` |
+| `study.couplings.exchange` | `Coupling` | `required endpoints` | $J/m or J/m^2 by coupling$ | endpoints, mode and finite coupling parameters validated; unsupported runtime blocks | explicit inter-object/interface coupling | capability-gated FDM/FEM CPU/GPU | `CouplingIR` | `packages/fullmag-py/src/fullmag/model/couplings.py::CouplingRegistry.exchange` |
+| `study.couplings.rkky` | `Coupling` | `required endpoints` | $J/m or J/m^2 by coupling$ | endpoints, mode and finite coupling parameters validated; unsupported runtime blocks | explicit inter-object/interface coupling | capability-gated FDM/FEM CPU/GPU | `CouplingIR` | `packages/fullmag-py/src/fullmag/model/couplings.py::CouplingRegistry.rkky` |
+| `study.couplings.interlayer_exchange` | `Coupling` | `required endpoints` | $J/m or J/m^2 by coupling$ | endpoints, mode and finite coupling parameters validated; unsupported runtime blocks | explicit inter-object/interface coupling | capability-gated FDM/FEM CPU/GPU | `CouplingIR` | `packages/fullmag-py/src/fullmag/model/couplings.py::CouplingRegistry.interlayer_exchange` |
 
 Example:
 
 ```python
-# %% Najpierw zdefiniuj pełną geometrię, regiony i stage graph.
-waveguide = study.geometry(
-    fm.shapes.arch_waveguide(length=2.5e-6, width=1.0e-6, height=2e-9),
-    name="waveguide",
+# %% Complete canonical FEM study with material fields and explicit coupling.
+import fullmag as fm
+
+study = fm.study("material-fields-and-coupling")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.universe(mode="manual", size=(260e-9, 180e-9, 100e-9))
+study.universe.mesh(maximum_element_size=24e-9)
+
+lower = study.geometry(
+    fm.Box(size=(120e-9, 60e-9, 2e-9)).translate((0.0, 0.0, -1e-9)),
+    name="lower",
 )
-
-core = waveguide.add_region(
-    "skyrmion_core",
-    shape=fm.shapes.cylinder(radius=60e-9, height=2e-9),
+upper = study.geometry(
+    fm.Box(size=(120e-9, 60e-9, 2e-9)).translate((0.0, 0.0, 1e-9)),
+    name="upper",
 )
-core.mesh.maximum_element_size = 1e-9
-core.material.Ms = 7.5e5
-core.m = fm.texture.neel_skyrmion(300e-9, 40e-9, -1, 1, "xy")
-```
+lower.Ms = fm.fields.linear(base=800e3, gradient=(0.0, 2.0e11, 0.0), frame="object")
+lower.Aex = 13e-12
+lower.alpha = 0.02
+lower.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+upper.Ms = 780e3
+upper.Aex = 12e-12
+upper.alpha = 0.02
+upper.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+lower.mesh(maximum_element_size=6e-9)
+upper.mesh(maximum_element_size=6e-9)
 
-Region mesh policy is a local sizing policy unless the region explicitly asks
-for a conformal realization. A region with `realization_policy="inherit"` may
-emit local mesh size fields and diagnostic authored overlays, but it does not
-create a separate FEM domain marker or field-capable mesh-part visualization
-target. A conformal region may create a realized region marker/mesh part when
-the backend can fragment the owner geometry.
-
-Mesh controls are validated with the same ordering rule as object mesh
-controls: if both bounds are present, `minimum_element_size <=
-maximum_element_size`. Reversed ranges are invalid because they make local
-Gmsh size fields ambiguous and can otherwise look like ignored region controls.
-For local region size fields, `maximum_element_size` is the requested target
-size inside the region (`VIn` in the Gmsh field). `minimum_element_size` is the
-lower bound that must be allowed by the global Gmsh characteristic-length clamp;
-it is not the target size by itself. A region-local target below an object-level
-minimum must therefore lower the generated `Mesh.CharacteristicLengthMin`, or
-the local field is clipped before meshing.
-
-Smooth gradients should be authored as fields:
-
-```python
-waveguide.material.Ms = fm.fields.linear(
-    base=7.7e5,
-    gradient=(0.0, 2.0e11, 0.0),
-    frame="object",
-)
-```
-
-Object-object coupling must be explicit:
-
-```python
-study.couplings.exchange(layer_a, layer_b, mode="harmonic_mean")
+study.exchange()
+study.demag(realization="poisson_robin")
 study.couplings.rkky(
-    source=layer_a.surface("top"),
-    target=layer_b.surface("bottom"),
+    source=lower.surface("top"),
+    target=upper.surface("bottom"),
     J1=-0.3e-3,
 )
+study.stages.add_relax(stage_id="relax", algorithm="projected_gradient_bb", max_steps=1)
 ```
 
-Precomputed shared-domain FEM meshes may carry authored-region conformal
-markers explicitly:
-
-```python
-study.domain_mesh(
-    "prebuilt_domain.json",
-    region_markers={"waveguide": 1},
-    object_region_markers={"waveguide:skyrmion_core": 2},
-)
-```
-
-`object_region_markers` are not generated from region shapes by this API. They
-are declarations that the referenced marker IDs already exist in the mesh
-element marker array. The planner must reject metadata-only markers that do not
-appear in the mesh topology.
-
+`ObjectRegion.mesh` uses the same maximum/minimum ordering rule as object mesh
+controls. `fm.fields.constant`, `linear`, `radial`, and `sampled` are the
+implemented field constructors. Inter-object exchange, RKKY, and interlayer
+exchange are authored only through `study.couplings`; precomputed conformal
+markers remain declarations about an already-populated mesh, not generated
+region topology.
 (material-regions-problem-ir)=
 ### 4.2 ProblemIR representation
 
@@ -892,3 +958,10 @@ must include:
 | ProblemIR | `crates/fullmag-ir/src/model.rs` | `RegionMeshPolicyIR` | typowane cztery pola polityki |
 | Walidacja IR | `crates/fullmag-ir/src/lib.rs` | `validate_region_mesh_policy` | skończoność, dodatniość i order |
 | Meshing | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_build_field_stack` | regionowe pola rozmiaru |
+| Python fields | `packages/fullmag-py/src/fullmag/model/structure.py` | `class MaterialParameterField` | public authored field constructors |
+| Python vocabulary | `packages/fullmag-py/src/fullmag/model/structure.py` | `class MaterialParameterField` | accepted parameter-field owner |
+| Python couplings | `packages/fullmag-py/src/fullmag/model/couplings.py` | `class CouplingRegistry` | explicit exchange/RKKY authoring |
+| ProblemIR fields | `crates/fullmag-ir/src/model.rs` | `MaterialParameterFieldIR` | typed field intent |
+| ProblemIR vocabulary | `crates/fullmag-ir/src/model.rs` | `MaterialParameterNameIR` | typed parameter names |
+| ProblemIR couplings | `crates/fullmag-ir/src/model.rs` | `CouplingIR` | typed explicit couplings |
+| FEM material core | `backends/fem/core/fem_element_quadrature_material.hpp` | `class ElementQuadratureMaterial` | element/quadrature material access |

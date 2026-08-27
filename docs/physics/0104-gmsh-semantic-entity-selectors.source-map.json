@@ -1,33 +1,174 @@
 {
-  "document": {"path": "docs/physics/0104-gmsh-semantic-entity-selectors.md"},
+  "document": {
+    "path": "docs/physics/0104-gmsh-semantic-entity-selectors.md"
+  },
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "documented"},
-    {"solver": "FEM", "device": "GPU", "status": "documented"},
-    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "FDM has no Gmsh entities."},
-    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "FDM has no Gmsh entities."}
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM has no Gmsh entities."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM has no Gmsh entities."
+    }
   ],
   "equations": [
-    {"id": "eq-entity-selector-distance", "symbols": ["point", "entity", "distance"], "sources": ["selector-resolver"]}
+    {
+      "id": "eq-entity-selector-distance",
+      "symbols": [
+        "point",
+        "entity",
+        "distance"
+      ],
+      "sources": [
+        "selector-resolver"
+      ]
+    }
   ],
   "symbols": [
-    {"id": "point", "latex": "\\mathbf p", "meaning": "public selector point", "si_unit": "\\mathrm m"},
-    {"id": "entity", "latex": "E", "meaning": "final OCC entity", "si_unit": "1"},
-    {"id": "distance", "latex": "d", "meaning": "point-to-entity distance", "si_unit": "\\mathrm m"},
-    {"id": "count", "latex": "n", "meaning": "number of requested matches", "si_unit": "1"},
-    {"id": "tag", "latex": "\\mathrm{tag}", "meaning": "resolved Gmsh entity identifier", "si_unit": "1"}
+    {
+      "id": "point",
+      "latex": "\\mathbf p",
+      "meaning": "public selector point",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "entity",
+      "latex": "E",
+      "meaning": "final OCC entity",
+      "si_unit": "1"
+    },
+    {
+      "id": "distance",
+      "latex": "d",
+      "meaning": "point-to-entity distance",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "count",
+      "latex": "n",
+      "meaning": "number of requested matches",
+      "si_unit": "1"
+    },
+    {
+      "id": "tag",
+      "latex": "\\mathrm{tag}",
+      "meaning": "resolved Gmsh entity identifier",
+      "si_unit": "1"
+    }
   ],
   "sources": [
-    {"id": "surface-helper", "path": "packages/fullmag-py/src/fullmag/meshing/mesh_controls.py", "symbol": "nearest_surface_to_point", "responsibility": "Builds and validates the surface selector descriptor."},
-    {"id": "curve-helper", "path": "packages/fullmag-py/src/fullmag/meshing/mesh_controls.py", "symbol": "nearest_curve_to_point", "responsibility": "Builds and validates the curve selector descriptor."},
-    {"id": "selector-resolver", "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_selectors.py", "symbol": "resolve_entity_selectors", "responsibility": "Resolves requested selectors to final Gmsh tags."},
-    {"id": "orphan-diagnostics", "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_selectors.py", "symbol": "collect_orphan_entity_diagnostics", "responsibility": "Collects current orphan-entity diagnostics."}
+    {
+      "id": "surface-helper",
+      "path": "packages/fullmag-py/src/fullmag/meshing/mesh_controls.py",
+      "symbol": "nearest_surface_to_point",
+      "responsibility": "Builds and validates the surface selector descriptor.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "curve-helper",
+      "path": "packages/fullmag-py/src/fullmag/meshing/mesh_controls.py",
+      "symbol": "nearest_curve_to_point",
+      "responsibility": "Builds and validates the curve selector descriptor.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "selector-resolver",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_selectors.py",
+      "symbol": "resolve_entity_selectors",
+      "responsibility": "Resolves requested selectors to final Gmsh tags.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "orphan-diagnostics",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_selectors.py",
+      "symbol": "collect_orphan_entity_diagnostics",
+      "responsibility": "Collects current orphan-entity diagnostics.",
+      "evidence_status": "implemented"
+    }
   ],
-  "public_api": {"parameters": [
-    {"python": "nearest_surface_to_point.point", "type": "Sequence[number]", "default": "required", "si_unit": "\\mathrm m", "validation": "exactly three numeric coordinates", "meaning": "surface query point", "backend_support": "FEM CPU/GPU", "problem_ir": "runtime_metadata.mesh_workflow selectors[].point"},
-    {"python": "nearest_surface_to_point.geometry", "type": "str | None", "default": "None", "si_unit": "1", "validation": "non-empty when provided", "meaning": "optional component scope", "backend_support": "FEM CPU/GPU", "problem_ir": "runtime_metadata.mesh_workflow selectors[].geometry"},
-    {"python": "nearest_surface_to_point.count", "type": "int", "default": "1", "si_unit": "1", "validation": "integer at least one", "meaning": "surface match count", "backend_support": "FEM CPU/GPU", "problem_ir": "runtime_metadata.mesh_workflow selectors[].count"},
-    {"python": "nearest_curve_to_point.point", "type": "Sequence[number]", "default": "required", "si_unit": "\\mathrm m", "validation": "exactly three numeric coordinates", "meaning": "curve query point", "backend_support": "FEM CPU/GPU", "problem_ir": "runtime_metadata.mesh_workflow selectors[].point"},
-    {"python": "nearest_curve_to_point.geometry", "type": "str | None", "default": "None", "si_unit": "1", "validation": "non-empty when provided", "meaning": "optional component scope", "backend_support": "FEM CPU/GPU", "problem_ir": "runtime_metadata.mesh_workflow selectors[].geometry"},
-    {"python": "nearest_curve_to_point.count", "type": "int", "default": "1", "si_unit": "1", "validation": "integer at least one", "meaning": "curve match count", "backend_support": "FEM CPU/GPU", "problem_ir": "runtime_metadata.mesh_workflow selectors[].count"}
-  ]}
+  "public_api": {
+    "parameters": [
+      {
+        "python": "nearest_surface_to_point.point",
+        "type": "Sequence[number]",
+        "default": "required",
+        "si_unit": "\\mathrm m",
+        "validation": "exactly three numeric coordinates",
+        "meaning": "surface query point",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "runtime_metadata.mesh_workflow selectors[].point",
+        "source": "packages/fullmag-py/src/fullmag/meshing/mesh_controls.py::nearest_surface_to_point"
+      },
+      {
+        "python": "nearest_surface_to_point.geometry",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "non-empty when provided",
+        "meaning": "optional component scope",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "runtime_metadata.mesh_workflow selectors[].geometry",
+        "source": "packages/fullmag-py/src/fullmag/meshing/mesh_controls.py::nearest_surface_to_point"
+      },
+      {
+        "python": "nearest_surface_to_point.count",
+        "type": "int",
+        "default": "1",
+        "si_unit": "1",
+        "validation": "integer at least one",
+        "meaning": "surface match count",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "runtime_metadata.mesh_workflow selectors[].count",
+        "source": "packages/fullmag-py/src/fullmag/meshing/mesh_controls.py::nearest_surface_to_point"
+      },
+      {
+        "python": "nearest_curve_to_point.point",
+        "type": "Sequence[number]",
+        "default": "required",
+        "si_unit": "\\mathrm m",
+        "validation": "exactly three numeric coordinates",
+        "meaning": "curve query point",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "runtime_metadata.mesh_workflow selectors[].point",
+        "source": "packages/fullmag-py/src/fullmag/meshing/mesh_controls.py::nearest_curve_to_point"
+      },
+      {
+        "python": "nearest_curve_to_point.geometry",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "non-empty when provided",
+        "meaning": "optional component scope",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "runtime_metadata.mesh_workflow selectors[].geometry",
+        "source": "packages/fullmag-py/src/fullmag/meshing/mesh_controls.py::nearest_curve_to_point"
+      },
+      {
+        "python": "nearest_curve_to_point.count",
+        "type": "int",
+        "default": "1",
+        "si_unit": "1",
+        "validation": "integer at least one",
+        "meaning": "curve match count",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "runtime_metadata.mesh_workflow selectors[].count",
+        "source": "packages/fullmag-py/src/fullmag/meshing/mesh_controls.py::nearest_curve_to_point"
+      }
+    ]
+  }
 }

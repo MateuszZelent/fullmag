@@ -65,29 +65,41 @@ regularnej siatki bocznej.
 
 | Python | Type | Default | SI unit | Validation / error | Meaning | Backend support | ProblemIR destination | Source |
 |---|---|---|---|---|---|---|---|---|
-| `GeometryMeshHandle.configure.edge_hmax` | `float \| None` | `None` | $\mathrm m$ | positive and paired with edge_thickness | edge-band upper target | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].edge_hmax` | `world.py::class GeometryMeshHandle` |
-| `GeometryMeshHandle.configure.edge_thickness` | `float \| None` | `None` | $\mathrm m$ | positive, paired, and below half the smaller in-plane dimension | edge-band width | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].edge_thickness` | `world.py::class GeometryMeshHandle` |
-| `GeometryMeshHandle.configure.corner_hmax` | `float \| None` | `None` | $\mathrm m$ | positive, paired, and no larger than edge_hmax when both exist | corner upper target | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].corner_hmax` | `world.py::class GeometryMeshHandle` |
-| `GeometryMeshHandle.configure.corner_extent` | `float \| None` | `None` | $\mathrm m$ | positive, paired, and below half the smaller in-plane dimension | corner-zone extent | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].corner_extent` | `world.py::class GeometryMeshHandle` |
-| `GeometryMeshHandle.configure.corner_transition_distance` | `float \| None` | `None` | $\mathrm m$ | positive and requires the corner pair | air-side corner transition span | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].corner_transition_distance` | `world.py::class GeometryMeshHandle` |
+| `GeometryMeshHandle.configure.edge_maximum_element_size` | `float \| None` | `None` | $\mathrm m$ | positive and paired with edge_thickness | edge-band upper target | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].edge_hmax` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.configure` |
+| `GeometryMeshHandle.configure.edge_thickness` | `float \| None` | `None` | $\mathrm m$ | positive, paired, and below half the smaller in-plane dimension | edge-band width | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].edge_thickness` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.configure` |
+| `GeometryMeshHandle.configure.edge_transition_distance` | `float \| str \| None` | `None` | $\mathrm m$ | dodatnia liczba albo `airbox_boundary` (akceptowane aliasy: `airbox-boundary`, `auto_boundary`); wymaga kompletnej pary edge, w przeciwnym razie `ValueError` | air-side edge transition span | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].edge_transition_distance` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.configure` |
+| `GeometryMeshHandle.configure.corner_maximum_element_size` | `float \| None` | `None` | $\mathrm m$ | positive, paired, and no larger than edge_hmax when both exist | corner upper target | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].corner_hmax` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.configure` |
+| `GeometryMeshHandle.configure.corner_extent` | `float \| None` | `None` | $\mathrm m$ | positive, paired, and below half the smaller in-plane dimension | corner-zone extent | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].corner_extent` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.configure` |
+| `GeometryMeshHandle.configure.corner_transition_distance` | `float \| str \| None` | `None` | $\mathrm m$ | dodatnia liczba albo `airbox_boundary` (akceptowane aliasy: `airbox-boundary`, `auto_boundary`); wymaga kompletnej pary corner, w przeciwnym razie `ValueError` | air-side corner transition span | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].corner_transition_distance` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.configure` |
 
 ```python
-# %% Zdefiniuj geometrię, materiał i wszystkie etapy przed uruchomieniem.
+# %% Complete canonical FEM study with edge and corner refinement.
 import fullmag as fm
 
-study = fm.Study("edge-corner")
-body = study.world.add(fm.Box((200e-9, 80e-9, 4e-9)), name="strip")
-body.mesh.configure(
+study = fm.study("edge-corner")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.universe(mode="manual", size=(320e-9, 200e-9, 120e-9))
+study.universe.mesh(maximum_element_size=30e-9)
+
+body = study.geometry(fm.Box(size=(200e-9, 80e-9, 4e-9)), name="strip")
+body.Ms = 800e3
+body.Aex = 13e-12
+body.alpha = 0.02
+body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+body.mesh(
     maximum_element_size=8e-9,
-    edge_hmax=4e-9,
+    edge_maximum_element_size=4e-9,
     edge_thickness=12e-9,
-    corner_hmax=2e-9,
+    edge_transition_distance=20e-9,
+    corner_maximum_element_size=2e-9,
     corner_extent=10e-9,
     corner_transition_distance=20e-9,
 )
-study.add(fm.Relaxation(name="relax"))
-study.add(fm.Dynamics(name="run", duration=1e-9))
-study.run()
+study.exchange()
+study.demag(realization="poisson_robin")
+study.stages.add_relax(stage_id="relax", algorithm="projected_gradient_bb", max_steps=1)
 ```
 
 (edge-corner-problem-ir)=

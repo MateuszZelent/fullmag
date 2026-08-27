@@ -13,8 +13,10 @@ Siatka FEM jest produkcyjna tylko wtedy, gdy authored policy, rozwiązany plan
 pól rozmiaru, finalna wspólna siatka solvera i publikowane dowody opisują ten
 sam model. Ta nota definiuje jeden gate dla polityki rozmiaru, stref,
 topologii, sweep, wzrostu i jakości. Nie promuje obecnej implementacji:
-tetrahedralne raporty Gmsh i mixed-P1 certificate są częściowe, FMMQ v1 jest
-tet4-only, a FMMQ v2 pozostaje planowany.
+tetrahedralne raporty Gmsh i mixed-P1 certificate są częściowe. Aktywny
+writer oraz czytniki FMMQ v1 nie kodują rodziny/topologii komórki; writer
+może wyemitować v1 także dla mixed mesh, lecz taki payload nie może
+kwalifikować mixed topology. FMMQ v2 pozostaje planowany.
 
 (fem-meshing-acceptance-governing-equations)=
 ## 2. Governing equations
@@ -66,7 +68,7 @@ $K$ numeryczna degeneracja skaluje się z jej rozmiarem:
 :label: eq-fem-mesh-relative-jacobian-floor
 
 |\det J_K(\boldsymbol\xi_q)|
-\le \tau_J h_K^3,
+\le \tau_J (h_K^\mathrm{strict})^3,
 \qquad \tau_J=64\,\epsilon_{64}.
 ```
 
@@ -85,7 +87,9 @@ Każdy ujemny $\det J_K$ jest inwersją niezależnie od wartości progu.
 | $\kappa$ | `curvature_factor` | $1$ |
 | $R(\mathbf x)$ | dodatni lokalny promień krzywizny | $\mathrm m$ |
 | $K,L$ | finalne komórki dzielące pełną ścianę | $1$ |
-| $h_K,h_L$ | metryka rozmiaru komórki przypisana danemu metric ID | $\mathrm m$ |
+| $h_K^\mathrm{strict}$ | strict-validation characteristic scale: maximum pairwise vertex distance | $\mathrm m$ |
+| $h_K^\mathrm{air}$ | regular-tetrahedron-equivalent size used by current airbox percentile diagnostics | $\mathrm m$ |
+| $h_K^\mathrm{edge},h_L^\mathrm{edge}$ | maximum canonical-edge sizes used by the adjacency growth metric | $\mathrm m$ |
 | $\rho_{KL}$ | zrealizowany stosunek rozmiarów sąsiadów | $1$ |
 | $J_K$ | mapa elementu referencyjnego do fizycznego | $\mathrm m$ |
 | $\boldsymbol\xi_q$ | normowany punkt kwadratury referencyjnej | $1$ |
@@ -135,6 +139,41 @@ nieustrukturyzowana siatka source face może być wyciągnięta do dokładnych
 `prism6`. Structured in-plane jest osobną, obecnie niezaimplementowaną
 semantyką i nie wolno jej wywnioskować z `swept`, `fixed` lub `prismatic`.
 
+
+### 4.3 Mirrored periodic seam v6
+
+Gdy shared-domain mesh deklaruje okresowość FEM, acceptance wymaga dokładnej
+bijekcji zbiorów węzłów dla każdej pary markerów ścian. Pary muszą zachować po
+translacji topologię wierzchołków, pole, orientację, przeciwne normalne,
+ownership domeny elementu i object-region. Dla wielu osi wymagane są domknięte,
+niezależne od kolejności klasy równoważności krawędzi i naroży; nearest-centroid
+match ani sama lista residual pairs nie stanowią dowodu. Certificate v6 jest
+związany z bieżącym topology fingerprint oraz identities region/material przed
+assembly solvera. Brak bijekcji, niezgodny fingerprint lub niezamknięta klasa
+jest hard failure.
+
+### 4.4 Adaptive-estimator truthfulness
+
+- FEM relaxation adaptivity może używać tylko jawnie nazwanego estymatora:
+  `energy_delta`, `max_torque_delta` albo `solution_change`.
+- `eigenfrequency_delta` pozostaje unsupported, dopóki aktywny stage nie
+  publikuje rzeczywistej obserwabli eigenfrequency i jej estymatora. Musi fail
+  closed; zmiana energii nie jest estymatorem częstotliwości własnej.
+- Każdy zaakceptowany pass zapisuje requested criterion oraz resolved estimator
+  w runtime provenance. Pass zmieniający topology wymaga także state-transfer
+  i mesh-certificate gates z tej noty.
+
+### 4.5 Interaktywne budżety ArchWaveguide
+
+Domyślny interaktywny `examples/arch_waveguide_relax_50nm.py` musi
+materializować się poniżej 75 000 węzłów i 450 000 tetrahedrów, bez
+automatycznego coarsening przed jawnym poleceniem compute. Jeżeli aktywna jest
+legacy dense-demag realization, musi także zmieścić się w skonfigurowanym
+interaktywnym budżecie RAM. Kanoniczny przykład używa `poisson_robin`, więc
+legacy dense-FEM RAM warning nie ma do niego zastosowania. Zmiana któregokolwiek
+limitu wymaga w tym samym commit measured evidence: starego i nowego limitu,
+fixture, wall time, node count, tetrahedron count i RAM estimate.
+
 (fem-meshing-acceptance-python-api)=
 ## 5. Python API
 
@@ -142,8 +181,8 @@ Ta nota nie dodaje nowych parametrów. Dwa istniejące przełączniki dowodów s
 
 | Python | Typ | Default | SI | Walidacja i błąd | Znaczenie | Backend | ProblemIR destination | Source |
 |---|---|---|---|---|---|---|---|---|
-| `GeometryMeshHandle.configure.compute_quality` | `bool \| None` | `None` | $1$ | `bool` lub `None`; zły typ jest odrzucany przez canonical authoring validation | żąda summary jakości po meshing | FEM CPU/GPU; FDM N/A | `runtime_metadata.mesh_workflow.per_geometry[].compute_quality` | `packages/fullmag-py/src/fullmag/world.py::class GeometryMeshHandle` |
-| `GeometryMeshHandle.configure.per_element_quality` | `bool \| None` | `None` | $1$ | `bool` lub `None`; wymagane dla per-element artifact | żąda per-element arrays; samo ustawienie nie dowodzi FMMQ v2 | FEM CPU/GPU; FDM N/A | `runtime_metadata.mesh_workflow.per_geometry[].per_element_quality` | `packages/fullmag-py/src/fullmag/world.py::class GeometryMeshHandle` |
+| `GeometryMeshHandle.configure.compute_quality` | `bool \| None` | `None` | $1$ | zamierzony kontrakt: `bool` lub `None`; bieżący `configure` nie waliduje typu i zapisuje wartość bezpośrednio; planowany `TypeError` przed lowering | żąda summary jakości po meshing | FEM CPU/GPU; FDM N/A | `runtime_metadata.mesh_workflow.per_geometry[].compute_quality` | `packages/fullmag-py/src/fullmag/world.py::class GeometryMeshHandle` |
+| `GeometryMeshHandle.configure.per_element_quality` | `bool \| None` | `None` | $1$ | zamierzony kontrakt: `bool` lub `None`; bieżący `configure` nie waliduje typu; planowany `TypeError`; `True` jest wymagane dla per-element artifact | żąda per-element arrays; samo ustawienie nie dowodzi FMMQ v2 | FEM CPU/GPU; FDM N/A | `runtime_metadata.mesh_workflow.per_geometry[].per_element_quality` | `packages/fullmag-py/src/fullmag/world.py::class GeometryMeshHandle` |
 
 ```python
 # %% Author requested mesh evidence; this does not claim production qualification.
@@ -152,6 +191,7 @@ import fullmag as fm
 fm.reset()
 study = fm.study("mesh-acceptance")
 study.engine("fem")
+study.device("cpu", precision="double")
 study.mode("strict")
 study.universe(mode="manual", size=(120e-9, 80e-9, 60e-9))
 study.universe.mesh(
@@ -161,6 +201,10 @@ study.universe.mesh(
     grading="geometric",
 )
 film = study.geometry(fm.Box(size=(24e-9, 12e-9, 3e-9)), name="film")
+film.Ms = 800e3
+film.Aex = 13e-12
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 film.mesh(
     maximum_element_size=3e-9,
     minimum_element_size=1e-9,
@@ -168,7 +212,9 @@ film.mesh(
     compute_quality=True,
     per_element_quality=True,
 )
-study.relax(algorithm="projected_gradient_bb", max_steps=1)
+study.exchange()
+study.demag(realization="poisson_robin")
+study.stages.add_relax(stage_id="relax", algorithm="projected_gradient_bb", max_steps=1)
 ```
 
 (fem-meshing-acceptance-problem-ir)=
@@ -219,19 +265,21 @@ with at least 30 bins and never replace the underlying array.
 |---|---|---|---|---|
 | `topology.manifold.v1` | wszystkie canonical faces z posortowanych global node IDs | interior owner count $=2$, exterior $=1$, duplicates/orphans $=0$ | dowolna różnica fail | implemented dla istniejących certificate paths |
 | `topology.exact_layers.v1` | wszystkie magnetic nodes, grupowanie współrzędnej normalnej przez $\tau_\mathrm{plane}$ | requested $=$ realized $=N_z$ i planes $=N_z+1$ | brak/wrong plane lub fallback fail | bounded mixed-P1 implemented, szersze scope unsupported |
-| `cell.det_jacobian.v1` | tet: jeden stały affine determinant; prism: 3 triangle points $\times\{\pm1/\sqrt3\}$; pyramid: $r,s\in\{\pm1/\sqrt3\}$ i $t=1/3\pm\sqrt{10}/15$; hex: $2^3$ Gauss points | wszystkie determinants $>\tau_J h_K^3$; każdy negative fail niezależnie od progu | missing/non-finite/non-positive fail | topology-aware certificate path implemented |
+| `cell.strict_scale.max_pairwise_vertex_distance.v1` | każda finalna komórka; maksimum odległości po wszystkich parach jej wierzchołków | skończone $h_K^\mathrm{strict}>0$; bez agregacji lub subsamplingu | missing/non-finite/non-positive fail | implemented w `MeshData.validate_strict` |
+| `cell.det_jacobian.v1` | tet: jeden stały affine determinant; prism: 3 triangle points $\times\{\pm1/\sqrt3\}$; pyramid: $r,s\in\{\pm1/\sqrt3\}$ i $t=1/3\pm\sqrt{10}/15$; hex: $2^3$ Gauss points | wszystkie determinants $>\tau_J(h_K^\mathrm{strict})^3$; każdy negative fail niezależnie od progu | missing/non-finite/non-positive fail | topology-aware certificate path implemented |
 | `gmsh.min_sicn.v1` | wszystkie finalne element tags obsługiwane przez Gmsh, `minSICN` | p05 $\ge0.1$ i minimum $>0$ | inny producer/proxy nie spełnia gate | tetra reports implemented; mixed production evidence nie jest FMMQ v2 |
 | `gmsh.gamma.v1` | wszystkie finalne element tags, Gmsh `gamma` | minimum $\ge0.08$ | brak per-element array daje `not_qualified` | tetra reports implemented |
 | `tetra_decomposition_scaled_jacobian.v1` | wszystkie sub-tet samples z jawnego decomposition każdego prism/pyramid/tet | per-family p05 $\ge0.1$ i każde minimum $>0$ | musi pozostać proxy o tej nazwie; nie SICN | mixed certificate implemented |
 | `cell.volume.v1` | całkowanie mapy na wszystkich komórkach; SI $\mathrm{m^3}$ | $V_K>0$; względny CAD/shared-domain error $\le10^{-8}$ | non-finite/non-positive lub przekroczenie fail | tet + bounded mixed certificate implemented |
-| `cell.max_edge.v1` | maksimum wszystkich canonical edges komórki | object/interface p95 $\le1.25h_\mathrm{target}$ i max $\le1.50h_\mathrm{target}$ | pusty wymagany scope lub przekroczenie fail | kontrakt planowany; obecne tet-equivalent stats nie są tym gate'em |
-| `adjacent_size_growth.v1` | każda para komórek dzieląca pełną ścianę w tym samym resolved growth graph | $\rho_{KL}\le g(1+0.05)$ | cross-zone pary są oceniane tylko, gdy plan jawnie łączy ich growth graph; przekroczenie fail | planowany |
+| `cell.max_edge.v1` | $h_K^\mathrm{edge}$: maksimum wszystkich canonical edges komórki; agregacja po pełnym scope | object/interface p95 $\le1.25h_\mathrm{target}$ i max $\le1.50h_\mathrm{target}$ | pusty wymagany scope lub przekroczenie fail | kontrakt planowany; obecne tet-equivalent stats nie są tym gate'em |
+| `adjacent_size_growth.v1` | każda para komórek dzieląca pełną ścianę w tym samym resolved growth graph | $\rho_{KL}=\max(h_K^\mathrm{edge},h_L^\mathrm{edge})/\min(h_K^\mathrm{edge},h_L^\mathrm{edge})\le g(1+0.05)$ | cross-zone pary są oceniane tylko, gdy plan jawnie łączy ich growth graph; przekroczenie fail | planowany |
+| `airbox.regular_tet_equivalent_size.v1` | $h_K^\mathrm{air}=(6\sqrt2|V_K|)^{1/3}$ dla każdej finalnej air cell; bieżący diagnostic, bez mixed-topology claim | wszystkie wartości skończone i dodatnie; percentyle używają pełnego posortowanego binary64 scope | missing/non-finite/non-positive fail; nie spełnia strict-scale ani mixed gate | implemented dla bieżących tetra reports |
 | `airbox.distance_bands.v1` | centroidy air cells w pasmach $[0,0.1d]$, $(0.45d,0.55d]$, $(0.9d,d]$ osobno dla surface, edge, corner i każdej strony bbox | każde wymagane pasmo niepuste; p50/p95 size niemaleją z tolerancją $5\%$; far p95 w $[0.75h_\mathrm{air,max},1.25h_\mathrm{air,max}]$ | puste pasmo, odwrócony trend lub brak corner/side coverage fail | częściowe testy istnieją; pełny raport/gate planowany |
 | `evidence.identity.v1` | wszystkie element ordinals i payload sections | dokładna zgodność count, order, topology fingerprint, mesh revision i metric metadata | stale/duplicate/missing/tampered fail | JSON certificate częściowo; FMMQ v2 planowany |
 
 Gmsh `Mesh.CharacteristicLengthMin` jest wyłącznie implementacyjną obwiednią.
 Nie może zastąpić strefowego $\max\mathcal L$ ani przyciąć lokalnego upper
-target. Obecne `characteristic_size=(6\sqrt2|V_K|)^{1/3}` jest jawnie
+target. `airbox.regular_tet_equivalent_size.v1` jest jawnie
 tetra-equivalent diagnostic, nie `cell.max_edge.v1` i nie mixed-topology gate.
 
 (fem-meshing-acceptance-implementation-mapping)=
@@ -243,8 +291,8 @@ tetra-equivalent diagnostic, nie `cell.max_edge.v1` i nie mixed-topology gate.
   dokładną algebrę i strefową eligibility.
 - `_extract_quality_metrics` pobiera bieżące Gmsh SICN/gamma/volume.
 - `_cell_jacobian_determinants` implementuje jawne topology sampling points.
-- `_write_quality_data_artifact_if_available` emituje wyłącznie FMMQ v1.
-- `decodeMeshQualityData` akceptuje obecnie wyłącznie FMMQ v1.
+- `_write_quality_data_artifact_if_available` jest aktywnym writerem FMMQ v1; nie koduje family/topology i nie ma mixed guard.
+- `decodeMeshQualityData` oraz Rust `per_element_quality_metric_from_fmmq` są aktywnymi czytnikami v1. UI `topologySupportsTet4FmmqQuality` jest osobną ochroną prezentacji, nie cechą ani guardem formatu.
 
 (fem-meshing-acceptance-validation)=
 ## 10. Validation
@@ -261,12 +309,58 @@ multi-object, component-aware i concatenated STL fallback, bbox/spherical
 airbox oraz bounded mixed-P1. Każdy wiersz publikuje `passed`, `degraded`,
 `unsupported` albo `failed`; brak raportu nie jest sukcesem.
 
+
+### 10.1 Pełna macierz S1-S13
+
+| ID | Geometry / workflow | Airbox | Required result |
+|---|---|---|---|
+| S1 | `fm.Box` thin film, one magnetic object | bbox | air-side surface, edge, and corner refinement active; object and airbox statistics separate |
+| S2 | flat `fm.ArchWaveguide(arch_height=0)` | bbox | box-like lowering preserves one-through-thickness intent and stable air grading |
+| S3 | curved `fm.ArchWaveguide(arch_height>0)` | bbox | geometric surface/edge/corner fields realized without body-only restriction |
+| S4 | `fm.Cylinder` | bbox | curved sidewall and top/bottom edges give smooth air-side grading without interface coarsening |
+| S5 | multi-object box + cylinder | bbox | per-object targets remain independent; airbox follows the finest eligible local target |
+| S6 | imported STL component-aware path | bbox | realized/degraded operations reported without secondary planner exceptions |
+| S7 | imported STL concatenated fallback | bbox | unsupported component-only fields use an explicit approximation or degraded status |
+| S8 | coarse airbox maximum plus fine object target | bbox | interface p95 respects object target; populated far/corner bands approach airbox target |
+| S9 | spherical airbox | sphere | radial grading implemented and tested, otherwise scenario is unsupported |
+| S10 | swept/thin-film strategy | bbox | metric provenance truthful; proxy is never mislabeled SICN |
+| S11 | Control Room mesh diagnostics | bbox | scoped counts/histograms and selected-bin highlighting exposed through typed API/UI |
+| S12 | `examples/arch_waveguide_relax_50nm.py` | bbox | no fallback crash or silent coarsen; passes explicit node/tet/RAM budget |
+| S13 | axis-aligned Box, native mixed P1, one magnetic layer | bbox | note-0106 gates: prism-only magnet, pyramid/tet-only air, exact two-plane certificate, conforming manifold, no fallback |
+
+### 10.2 Wymagane obserwable API/UI
+
+Każda produkcyjna siatka publikuje w logach, mesh IR, typed API resource i —
+gdy dotyczy — Control Room: requested i realized mesh controls; total counts
+węzłów, elementów i boundary faces; cell/facet counts według canonical topology
+i regionu; per-part counts; magnetic-air interface i outer-airbox face counts;
+characteristic-size oraz edge-length histograms (co najmniej 30 bins); quality
+histogram z metric/producer/version; worst-element samples; global element/node
+ordinals dla zaznaczonego histogram bin; degraded operation statuses; topology
+fingerprint, mesh revision i evidence identity. UI nie może rekonstruować tych
+wartości z display geometry ani podmieniać brakującego payloadu zerami.
+
+### 10.3 Pełny release gate
+
+Produkcyjną kwalifikację może nadać wyłącznie:
+
+```bash
+just verify-fem-meshing-production
+```
+
+Receptura musi wykonać Python meshing tests i Python API/round-trip tests, Rust
+IR/planner/API tests, OpenAPI generation z clean-diff check, frontend lint,
+typecheck i tests, browser/WebGL viewport smoke z widocznym canvas, żywym
+context i niezerowym drawing buffer, managed native FEM CPU/GPU runtime proof
+dla deklarowanych lanes oraz końcowy `git diff --check`. Pominięty składnik,
+synthetic-only oracle albo niepowiązany fingerprint daje `not_qualified`.
+
 (fem-meshing-acceptance-limitations)=
 ## 11. Limitations
 
 - FMMQ v2 i topology-aware per-element mixed quality carrier nie są jeszcze
   zaimplementowane.
-- Bieżący FMMQ v1 pozostaje wyłącznie dla legacy tet4.
+- Aktywny FMMQ v1 writer może zapisać również mixed mesh, a czytniki dekodują layout v1, ale format nie zawiera family/topology identity i dlatego nie może kwalifikować mixed topology. V1 można wycofać dopiero po odcięciu wszystkich writerów v1 i migracji wymaganych konsumentów.
 - Pełne growth/size/airbox gates z tabeli są kontraktem implementacyjnym, nie
   opisem obecnego production-qualified runtime.
 - Arbitrary invalid/non-manifold CAD repair, anisotropic user fields i hybrid
@@ -295,7 +389,9 @@ airbox oraz bounded mixed-P1. Każdy wiersz publikuje `passed`, `degraded`,
 | Field stack | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_build_field_stack` | current deterministic size-field descriptors | FEM CPU/GPU | implemented, complete evidence pending |
 | Gmsh metrics | `packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py` | `_extract_quality_metrics` | current SICN/gamma/volume extraction | FEM CPU/GPU | implemented for current report path |
 | Jacobian sampling | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `_cell_jacobian_determinants` | topology-aware determinant samples | FEM CPU/GPU | implemented certificate evidence |
-| FMMQ v1 writer | `packages/fullmag-py/src/fullmag/meshing/remesh_cli.py` | `_write_quality_data_artifact_if_available` | writes current tet4-compatible FMMQ v1 arrays | FEM CPU/GPU transport | implemented v1; v2 planned |
-| FMMQ v1 decoder | `apps/control-room/src/kernel/api/codecs/meshQualityDataCodec.ts` | `decodeMeshQualityData` | decodes current exact v1 layout | unified Control Room | implemented v1; v2 planned |
+| FMMQ v1 writer | `packages/fullmag-py/src/fullmag/meshing/remesh_cli.py` | `_write_quality_data_artifact_if_available` | writes active FMMQ v1 arrays without family/topology identity | FEM CPU/GPU transport | implemented v1; v2 planned |
+| FMMQ v1 TS reader | `apps/control-room/src/kernel/api/codecs/meshQualityDataCodec.ts` | `decodeMeshQualityData` | decodes active v1 layout; format identity is insufficient for mixed qualification | unified Control Room | implemented v1; v2 planned |
+| FMMQ v1 Rust reader | `crates/fullmag-api/src/fem_cross_section.rs` | `per_element_quality_metric_from_fmmq` | reads active v1 per-element arrays | API | implemented v1; v2 planned |
+| Strict characteristic scale | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `validate_strict` | computes maximum pairwise vertex distance and relative determinant floor | FEM meshing | implemented |
 | Canonical planned policy | `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md` | `DOC-ANCHOR:canonical-fem-mesh-policy` | accepted upper/lower, zones, curvature, sweep and quality decision | cross-layer | planned contract |
 | Planned FMMQ v2 | `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md` | `DOC-ANCHOR:fmmq-v2-contract` | typed per-family quality transport and v1 exit criteria | API/Control Room | planned contract |

@@ -62,43 +62,57 @@ i obserwable FEM CPU/GPU pozostają backend-neutral.
 
 | Python | Type | Default | SI unit | Validation / error | Meaning | Backend support | ProblemIR destination | Source |
 |---|---|---|---|---|---|---|---|---|
-| `GeometryMeshHandle.thin_film.maximum_element_size` | `float \| str \| None` | `None` | $\mathrm m$ | positive value or supported preset | body upper target | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].maximum_element_size` | `world.py::class GeometryMeshHandle` |
-| `GeometryMeshHandle.thin_film.minimum_element_size` | `float \| None` | `None` | $\mathrm m$ | positive and not above maximum | body lower bound | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].minimum_element_size` | `world.py::class GeometryMeshHandle` |
-| `GeometryMeshHandle.thin_film.order` | `int \| None` | `None` | $1$ | prismatic lane supports P1 only | FEM basis order | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].order` | `world.py::class GeometryMeshHandle` |
-| `GeometryMeshHandle.thin_film.curvature_factor` | `float \| None` | `None` | $1$ | positive when provided | curvature upper-target factor | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].curvature_factor` | `world.py::class GeometryMeshHandle` |
-| `GeometryMeshHandle.thin_film.narrow_region_resolution` | `float \| None` | `None` | $1$ | positive when provided | elements across a narrow gap | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].narrow_region_resolution` | `world.py::class GeometryMeshHandle` |
-| `GeometryMeshHandle.thin_film.layers` | `int` | `1` | $1$ | integer at least one | through-thickness layer count | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].through_thickness_elements` | `world.py::class GeometryMeshHandle` |
-| `GeometryMeshHandle.thin_film.topology` | `"tetrahedral" \| "prismatic" \| None` | `None` | $1$ | other token gives ValueError | requested mesh topology | FEM CPU/GPU by capability | `runtime_metadata.mesh_workflow.per_geometry[].topology` | `world.py::class GeometryMeshHandle` |
-| `GeometryMeshHandle.thin_film.exact_layers` | `bool \| None` | `None` | $1$ | only valid for prismatic topology | require exact layer count | bounded mixed-P1 FEM | `runtime_metadata.mesh_workflow.per_geometry[].exact_layer_count` | `world.py::class GeometryMeshHandle` |
-| `GeometryMeshHandle.thin_film.transition` | `"pyramid_to_tetrahedra" \| "reject" \| None` | `None` | $1$ | only valid for prismatic topology | shared-domain transition policy | bounded mixed-P1 FEM | `runtime_metadata.mesh_workflow.per_geometry[].transition_policy` | `world.py::class GeometryMeshHandle` |
-| `GeometryMeshHandle.thin_film.interface_maximum_element_size` | `float \| None` | `None` | $\mathrm m$ | positive when provided | interface upper target | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].interface_maximum_element_size` | `world.py::class GeometryMeshHandle` |
-| `GeometryMeshHandle.thin_film.interface_thickness` | `float \| None` | `None` | $\mathrm m$ | positive when provided | interface halo thickness | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].interface_thickness` | `world.py::class GeometryMeshHandle` |
-| `GeometryMeshHandle.thin_film.transition_distance` | `float \| str \| None` | `None` | $\mathrm m$ | positive value or supported token | surface transition span | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].transition_distance` | `world.py::class GeometryMeshHandle` |
-| `GeometryMeshHandle.thin_film.edge_maximum_element_size` | `float \| None` | `None` | $\mathrm m$ | positive and paired with edge_thickness | edge upper target | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].edge_hmax` | `world.py::class GeometryMeshHandle` |
-| `GeometryMeshHandle.thin_film.edge_thickness` | `float \| None` | `None` | $\mathrm m$ | positive and paired with edge target | edge zone width | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].edge_thickness` | `world.py::class GeometryMeshHandle` |
-| `GeometryMeshHandle.thin_film.edge_transition_distance` | `float \| str \| None` | `None` | $\mathrm m$ | positive value or supported token | edge air transition span | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].edge_transition_distance` | `world.py::class GeometryMeshHandle` |
-| `GeometryMeshHandle.thin_film.corner_maximum_element_size` | `float \| None` | `None` | $\mathrm m$ | positive and paired with corner_extent | corner upper target | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].corner_hmax` | `world.py::class GeometryMeshHandle` |
-| `GeometryMeshHandle.thin_film.corner_extent` | `float \| None` | `None` | $\mathrm m$ | positive and paired with corner target | corner zone extent | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].corner_extent` | `world.py::class GeometryMeshHandle` |
-| `GeometryMeshHandle.thin_film.corner_transition_distance` | `float \| str \| None` | `None` | $\mathrm m$ | positive value or supported token | corner air transition span | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].corner_transition_distance` | `world.py::class GeometryMeshHandle` |
+| `GeometryMeshHandle.thin_film.hmax` | `float \| str \| None` | `None` | $\mathrm m$ | alias of `maximum_element_size`; conflicting values give `ValueError` | compatibility alias | FEM CPU/GPU | same as canonical maximum | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film` |
+| `GeometryMeshHandle.thin_film.maximum_element_size` | `float \| str \| None` | `None` | $\mathrm m$ | positive value or supported preset | body upper target | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].maximum_element_size` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film` |
+| `GeometryMeshHandle.thin_film.hmin` | `float \| None` | `None` | $\mathrm m$ | alias of `minimum_element_size`; conflicting values give `ValueError` | compatibility alias | FEM CPU/GPU | same as canonical minimum | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film` |
+| `GeometryMeshHandle.thin_film.minimum_element_size` | `float \| None` | `None` | $\mathrm m$ | positive and not above maximum | body lower bound | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].minimum_element_size` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film` |
+| `GeometryMeshHandle.thin_film.order` | `int \| None` | `None` | $1$ | prismatic lane supports P1 only | FEM basis order | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].order` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film` |
+| `GeometryMeshHandle.thin_film.curvature_factor` | `float \| None` | `None` | $1$ | positive when provided | curvature upper-target factor | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].curvature_factor` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film` |
+| `GeometryMeshHandle.thin_film.narrow_region_resolution` | `float \| None` | `None` | $1$ | positive when provided | elements across a narrow gap | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].narrow_region_resolution` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film` |
+| `GeometryMeshHandle.thin_film.layers` | `int` | `1` | $1$ | integer at least one | through-thickness layer count | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].through_thickness_elements` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film` |
+| `GeometryMeshHandle.thin_film.topology` | `"tetrahedral" \| "prismatic" \| None` | `None` | $1$ | other token gives ValueError | requested mesh topology | FEM CPU/GPU by capability | `runtime_metadata.mesh_workflow.per_geometry[].topology` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film` |
+| `GeometryMeshHandle.thin_film.exact_layers` | `bool \| None` | `None` | $1$ | only valid for prismatic topology | require exact layer count | bounded mixed-P1 FEM | `runtime_metadata.mesh_workflow.per_geometry[].exact_layer_count` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film` |
+| `GeometryMeshHandle.thin_film.transition` | `"pyramid_to_tetrahedra" \| "reject" \| None` | `None` | $1$ | only valid for prismatic topology | shared-domain transition policy | bounded mixed-P1 FEM | `runtime_metadata.mesh_workflow.per_geometry[].transition_policy` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film` |
+| `GeometryMeshHandle.thin_film.surface_maximum_element_size` | `float \| None` | `None` | $\mathrm m$ | positive when provided | interface upper target | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].interface_maximum_element_size` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film` |
+| `GeometryMeshHandle.thin_film.surface_thickness` | `float \| None` | `None` | $\mathrm m$ | positive when provided | interface halo thickness | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].interface_thickness` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film` |
+| `GeometryMeshHandle.thin_film.surface_transition_distance` | `float \| str \| None` | `None` | $\mathrm m$ | nieujemna liczba albo `airbox_boundary` (akceptowane aliasy: `airbox-boundary`, `auto_boundary`); inna wartość daje `ValueError` | surface transition span | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].transition_distance` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film` |
+| `GeometryMeshHandle.thin_film.edge_maximum_element_size` | `float \| None` | `None` | $\mathrm m$ | positive and paired with edge_thickness | edge upper target | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].edge_hmax` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film` |
+| `GeometryMeshHandle.thin_film.edge_thickness` | `float \| None` | `None` | $\mathrm m$ | positive and paired with edge target | edge zone width | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].edge_thickness` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film` |
+| `GeometryMeshHandle.thin_film.edge_transition_distance` | `float \| str \| None` | `None` | $\mathrm m$ | dodatnia liczba albo `airbox_boundary` (akceptowane aliasy: `airbox-boundary`, `auto_boundary`); wymaga kompletnej pary edge, w przeciwnym razie `ValueError` | edge air transition span | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].edge_transition_distance` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film` |
+| `GeometryMeshHandle.thin_film.corner_maximum_element_size` | `float \| None` | `None` | $\mathrm m$ | positive and paired with corner_extent | corner upper target | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].corner_hmax` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film` |
+| `GeometryMeshHandle.thin_film.corner_extent` | `float \| None` | `None` | $\mathrm m$ | positive and paired with corner target | corner zone extent | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].corner_extent` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film` |
+| `GeometryMeshHandle.thin_film.corner_transition_distance` | `float \| str \| None` | `None` | $\mathrm m$ | dodatnia liczba albo `airbox_boundary` (akceptowane aliasy: `airbox-boundary`, `auto_boundary`); wymaga kompletnej pary corner, w przeciwnym razie `ValueError` | corner air transition span | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].corner_transition_distance` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film` |
 
 ```python
-# %% Zbuduj cały stage graph przed uruchomieniem.
+# %% Complete canonical FEM thin-film study.
 import fullmag as fm
 
-study = fm.Study("thin-film")
-film = study.world.add(fm.Box((200e-9, 100e-9, 4e-9)), name="film")
+study = fm.study("thin-film")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.universe(mode="manual", size=(320e-9, 220e-9, 120e-9))
+study.universe.mesh(maximum_element_size=30e-9)
+
+film = study.geometry(fm.Box(size=(200e-9, 100e-9, 4e-9)), name="film")
+film.Ms = 800e3
+film.Aex = 13e-12
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 film.mesh.thin_film(
     maximum_element_size=8e-9,
+    minimum_element_size=2e-9,
     layers=4,
     topology="prismatic",
     exact_layers=True,
     transition="pyramid_to_tetrahedra",
-    interface_maximum_element_size=4e-9,
-    interface_thickness=8e-9,
+    surface_maximum_element_size=4e-9,
+    surface_thickness=8e-9,
+    surface_transition_distance="airbox_boundary",
 )
-study.add(fm.Relaxation(name="relax"))
-study.add(fm.Dynamics(name="run", duration=1e-9))
-study.run()
+study.exchange()
+study.demag(realization="poisson_robin")
+study.stages.add_relax(stage_id="relax", algorithm="projected_gradient_bb", max_steps=1)
 ```
 
 (thin-film-mesh-problem-ir)=

@@ -1,34 +1,233 @@
 {
-  "document":{"path":"docs/physics/0102-airbox-mesh-grading-geometric.md"},
-  "backend_matrix":[
-    {"solver":"FEM","device":"CPU","status":"documented"},{"solver":"FEM","device":"GPU","status":"documented"},
-    {"solver":"FDM","device":"CPU","status":"not-applicable","reason":"FDM has no conforming Poisson airbox mesh."},{"solver":"FDM","device":"GPU","status":"not-applicable","reason":"FDM has no conforming Poisson airbox mesh."}
+  "document": {
+    "path": "docs/physics/0102-airbox-mesh-grading-geometric.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM has no conforming Poisson airbox mesh."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM has no conforming Poisson airbox mesh."
+    }
   ],
-  "equations":[
-    {"id":"eq-airbox-normalized-distance","symbols":["distance","start_distance","outer_distance","normalized_distance"],"sources":["transition-span"]},
-    {"id":"eq-airbox-geometric-profile","symbols":["distance","normalized_distance","growth","profile","air_size","hmin","hmax"],"sources":["geometric-profile"]}
+  "equations": [
+    {
+      "id": "eq-airbox-laplace",
+      "symbols": [
+        "potential"
+      ],
+      "sources": [
+        "poisson-robin-physics"
+      ]
+    },
+    {
+      "id": "eq-airbox-multipole-decay",
+      "symbols": [
+        "potential",
+        "radius",
+        "multipole_order"
+      ],
+      "sources": [
+        "poisson-robin-physics"
+      ]
+    },
+    {
+      "id": "eq-airbox-normalized-distance",
+      "symbols": [
+        "distance",
+        "start_distance",
+        "outer_distance",
+        "normalized_distance"
+      ],
+      "sources": [
+        "transition-span"
+      ]
+    },
+    {
+      "id": "eq-airbox-geometric-profile",
+      "symbols": [
+        "distance",
+        "normalized_distance",
+        "growth",
+        "profile",
+        "air_size",
+        "hmin",
+        "hmax"
+      ],
+      "sources": [
+        "geometric-profile"
+      ]
+    }
   ],
-  "symbols":[
-    {"id":"distance","latex":"d","meaning":"distance from the owning magnetic feature","si_unit":"\\mathrm m"},
-    {"id":"start_distance","latex":"d_0","meaning":"hold/start distance","si_unit":"\\mathrm m"},
-    {"id":"outer_distance","latex":"d_1","meaning":"resolved outer transition distance","si_unit":"\\mathrm m"},
-    {"id":"normalized_distance","latex":"s(d)","meaning":"clamped normalized distance","si_unit":"1"},
-    {"id":"growth","latex":"g","meaning":"geometric ramp-shape/growth parameter","si_unit":"1"},
-    {"id":"profile","latex":"\\psi(s,g)","meaning":"normalized geometric interpolation","si_unit":"1"},
-    {"id":"air_size","latex":"h(d)","meaning":"airbox target size at distance $d$","si_unit":"\\mathrm m"},
-    {"id":"hmin","latex":"h_\\min","meaning":"eligible near-feature air target","si_unit":"\\mathrm m"},
-    {"id":"hmax","latex":"h_\\max","meaning":"far-air maximum target","si_unit":"\\mathrm m"}
+  "symbols": [
+    {
+      "id": "potential",
+      "latex": "\\phi",
+      "meaning": "scalar magnetostatic potential in air",
+      "si_unit": "\\mathrm A"
+    },
+    {
+      "id": "radius",
+      "latex": "r",
+      "meaning": "radial distance in the exterior asymptotic model",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "multipole_order",
+      "latex": "\\ell",
+      "meaning": "multipole order",
+      "si_unit": "1"
+    },
+    {
+      "id": "distance",
+      "latex": "d",
+      "meaning": "distance from the owning magnetic feature",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "start_distance",
+      "latex": "d_0",
+      "meaning": "hold/start distance",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "outer_distance",
+      "latex": "d_1",
+      "meaning": "resolved outer transition distance",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "normalized_distance",
+      "latex": "s(d)",
+      "meaning": "clamped normalized distance",
+      "si_unit": "1"
+    },
+    {
+      "id": "growth",
+      "latex": "g",
+      "meaning": "geometric ramp-shape/growth parameter",
+      "si_unit": "1"
+    },
+    {
+      "id": "profile",
+      "latex": "\\psi(s,g)",
+      "meaning": "normalized geometric interpolation",
+      "si_unit": "1"
+    },
+    {
+      "id": "air_size",
+      "latex": "h(d)",
+      "meaning": "airbox target size at distance $d$",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "hmin",
+      "latex": "h_\\min",
+      "meaning": "eligible near-feature air target",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "hmax",
+      "latex": "h_\\max",
+      "meaning": "far-air maximum target",
+      "si_unit": "\\mathrm m"
+    }
   ],
-  "sources":[
-    {"id":"universe-api","path":"packages/fullmag-py/src/fullmag/world.py","symbol":"class StudyUniverseHandle","responsibility":"Validates and lowers public airbox mesh controls."},
-    {"id":"transition-span","path":"packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py","symbol":"_resolve_airbox_boundary_transition_span","responsibility":"Resolves the current boundary grading span."},
-    {"id":"geometric-profile","path":"packages/fullmag-py/src/fullmag/meshing/_airbox_grading.py","symbol":"_geometric_size_profile_expression","responsibility":"Builds the geometric size profile expression."},
-    {"id":"airbox-field","path":"packages/fullmag-py/src/fullmag/meshing/_airbox_grading.py","symbol":"_add_airbox_grading_field","responsibility":"Adds the current airbox grading field."}
+  "sources": [
+    {
+      "id": "universe-api",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyUniverseHandle",
+      "responsibility": "Validates and lowers public airbox mesh controls.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "transition-span",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py",
+      "symbol": "_resolve_airbox_boundary_transition_span",
+      "responsibility": "Resolves the current boundary grading span.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "geometric-profile",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_airbox_grading.py",
+      "symbol": "_geometric_size_profile_expression",
+      "responsibility": "Builds the geometric size profile expression.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "airbox-field",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_airbox_grading.py",
+      "symbol": "_add_airbox_grading_field",
+      "responsibility": "Adds the current airbox grading field.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "poisson-robin-physics",
+      "path": "docs/physics/0102-airbox-mesh-grading-geometric.md",
+      "symbol": "DOC-ANCHOR:airbox-grading-governing-equations",
+      "responsibility": "Defines the source-free exterior equations used to motivate grading.",
+      "evidence_status": "planned_contract"
+    }
   ],
-  "public_api":{"parameters":[
-    {"python":"study.universe.mesh.maximum_element_size","type":"float | None","default":"None","si_unit":"\\mathrm m","validation":"finite $>0$; malformed value gives `ValueError`","meaning":"far-air upper target","backend_support":"FEM CPU/GPU","problem_ir":"runtime_metadata.mesh_workflow.airbox.maximum_element_size"},
-    {"python":"study.universe.mesh.minimum_element_size","type":"float | None","default":"None","si_unit":"\\mathrm m","validation":"finite $>0$ and $\\le$ maximum; conflict gives `ValueError`","meaning":"near-air lower policy, never magnetic clamp","backend_support":"FEM CPU/GPU","problem_ir":"runtime_metadata.mesh_workflow.airbox.minimum_element_size"},
-    {"python":"study.universe.mesh.maximum_element_growth_rate","type":"float | None","default":"None","si_unit":"1","validation":"finite $0<g\\le2.5$; otherwise `ValueError`","meaning":"requested air growth/ramp shape","backend_support":"FEM CPU/GPU","problem_ir":"runtime_metadata.mesh_workflow.airbox.maximum_element_growth_rate"},
-    {"python":"study.universe.mesh.grading","type":"\"auto\" | \"geometric\" | \"linear\" | None","default":"None","si_unit":"1","validation":"other token gives `ValueError`","meaning":"grading algorithm intent","backend_support":"FEM CPU/GPU","problem_ir":"runtime_metadata.mesh_workflow.airbox.grading"}
-  ]}
+  "public_api": {
+    "parameters": [
+      {
+        "python": "study.universe.mesh.maximum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "finite $>0$; malformed value gives `ValueError`",
+        "meaning": "far-air upper target",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "runtime_metadata.mesh_workflow.airbox.maximum_element_size"
+      },
+      {
+        "python": "study.universe.mesh.minimum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "finite $>0$ and $\\le$ maximum; conflict gives `ValueError`",
+        "meaning": "near-air lower policy, never magnetic clamp",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "runtime_metadata.mesh_workflow.airbox.minimum_element_size"
+      },
+      {
+        "python": "study.universe.mesh.maximum_element_growth_rate",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "finite $0<g\\le2.5$; otherwise `ValueError`",
+        "meaning": "requested air growth/ramp shape",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "runtime_metadata.mesh_workflow.airbox.maximum_element_growth_rate"
+      },
+      {
+        "python": "study.universe.mesh.grading",
+        "type": "\"auto\" | \"geometric\" | \"linear\" | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "other token gives `ValueError`",
+        "meaning": "grading algorithm intent",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "runtime_metadata.mesh_workflow.airbox.grading"
+      }
+    ]
+  }
 }

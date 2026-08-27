@@ -94,19 +94,19 @@ blokuje budowę przed Gmsh.
 (python-api)=
 ## 5. Python API
 
-| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR destination |
-|---|---|---|---|---|---|---|---|
-| `study.mesh.save.path` | `str \| Path` | required | $1$ | Must end in .fullmag-mesh and resolve to a strictly valid shared-domain FEM mesh. | Native artifact destination. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset` |
-| `study.mesh.load.path` | `str \| Path` | required | $1$ | Schema, digests, authoring fingerprint, topology fingerprint, markers, and certificates must validate. | Native artifact source. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset` |
-| `study.mesh.save_or_load.path` | `str \| Path` | required | $1$ | Corrupt and unsupported artifacts fail closed; only missing or authoring-stale artifacts rebuild. | Reusable native artifact path. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset` |
-| `study.mesh.export.path` | `str \| Path` | required | $1$ | Must end in .mphtxt for COMSOL or .msh for Gmsh; every marker must have a semantic name. | Interchange destination. | FEM CPU/GPU | `not stored; external artifact` |
-| `study.mesh.export.format` | `str` | auto | $1$ | auto, comsol, or gmsh; auto resolves from suffix. | Interchange format selector. | FEM CPU/GPU | `not stored; external artifact` |
-| `study.mesh.import_.path` | `str \| Path` | required | $1$ | Must be a supported COMSOL .mphtxt v4 or Gmsh .msh file. | External mesh source. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset` |
-| `study.mesh.import_.region_map` | `Mapping[str, int] \| None` | None | $1$ | Required when a matching sidecar or unambiguous Physical Volume names are absent. | External volume name to canonical marker mapping. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset.region_markers` |
-| `study.mesh.import_.boundary_map` | `Mapping[str, int] \| None` | None | $1$ | Required for boundary selections not recoverable from sidecar or Physical Surface names. | External surface name to canonical marker mapping. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset.mesh.boundary_markers` |
-| `study.mesh.import_.region_entity_map` | `Mapping[int, int] \| None` | None | $1$ | COMSOL only; required without a matching sidecar. | COMSOL domain entity to canonical Fullmag volume marker. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset.element_markers` |
-| `study.mesh.import_.boundary_entity_map` | `Mapping[int, int] \| None` | None | $1$ | COMSOL only; required without a matching sidecar. | COMSOL boundary entity to canonical Fullmag boundary marker. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset.mesh.boundary_markers` |
-| `study.mesh.import_.coordinate_unit` | `str \| None` | None | $1$ | m, mm, um, or nm; required when no valid sidecar supplies the unit. | Unit of imported node coordinates. | FEM CPU/GPU | `normalized to geometry_assets.fem_domain_mesh_asset.mesh.nodes in metres` |
+| Python | Type | Default | SI unit | Validation / explicit error | Meaning | Backend support | ProblemIR destination | Source |
+|---|---|---|---|---|---|---|---|---|
+| `study.mesh.save.path` | `str \| Path` | required | $1$ | otherwise `ValueError`; must end in `.fullmag-mesh` and resolve to a strictly valid shared-domain FEM mesh. | Native artifact destination. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset` | `packages/fullmag-py/src/fullmag/meshing/persistence.py::save_mesh_artifact` |
+| `study.mesh.load.path` | `str \| Path` | required | $1$ | Schema, digests, authoring fingerprint, topology fingerprint, markers, and certificates must validate. | Native artifact source. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset` | `packages/fullmag-py/src/fullmag/meshing/persistence.py::load_mesh_artifact` |
+| `study.mesh.save_or_load.path` | `str \| Path` | required | $1$ | Corrupt and unsupported artifacts fail closed; only missing or authoring-stale artifacts rebuild. | Reusable native artifact path. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset` | `packages/fullmag-py/src/fullmag/world.py::StudyMeshHandle.save_or_load` |
+| `study.mesh.export.path` | `str \| Path` | required | $1$ | otherwise `ValueError`; must end in `.mphtxt` for COMSOL or .msh for Gmsh; every marker must have a semantic name. | Interchange destination. | FEM CPU/GPU | `not stored; external artifact` | `packages/fullmag-py/src/fullmag/world.py::StudyMeshHandle.export` |
+| `study.mesh.export.format` | `str` | auto | $1$ | auto, comsol, or gmsh; auto resolves from suffix. | Interchange format selector. | FEM CPU/GPU | `not stored; external artifact` | `packages/fullmag-py/src/fullmag/world.py::StudyMeshHandle.export` |
+| `study.mesh.import_.path` | `str \| Path` | required | $1$ | otherwise `ValueError`; must be a supported COMSOL .mphtxt v4 or Gmsh .msh file. | External mesh source. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset` | `packages/fullmag-py/src/fullmag/world.py::StudyMeshHandle.import_` |
+| `study.mesh.import_.region_map` | `Mapping[str, int] \| None` | None | $1$ | otherwise `ValueError`; required when a matching sidecar or unambiguous Physical Volume names are absent. | External volume name to canonical marker mapping. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset.region_markers` | `packages/fullmag-py/src/fullmag/meshing/persistence.py::import_comsol_mesh` |
+| `study.mesh.import_.boundary_map` | `Mapping[str, int] \| None` | None | $1$ | otherwise `ValueError`; required for boundary selections not recoverable from sidecar or Physical Surface names. | External surface name to canonical marker mapping. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset.mesh.boundary_markers` | `packages/fullmag-py/src/fullmag/meshing/persistence.py::import_comsol_mesh` |
+| `study.mesh.import_.region_entity_map` | `Mapping[int, int] \| None` | None | $1$ | otherwise `ValueError`; COMSOL only and required without a matching sidecar. | COMSOL domain entity to canonical Fullmag volume marker. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset.element_markers` | `packages/fullmag-py/src/fullmag/meshing/persistence.py::import_comsol_mesh` |
+| `study.mesh.import_.boundary_entity_map` | `Mapping[int, int] \| None` | None | $1$ | otherwise `ValueError`; COMSOL only and required without a matching sidecar. | COMSOL boundary entity to canonical Fullmag boundary marker. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset.mesh.boundary_markers` | `packages/fullmag-py/src/fullmag/meshing/persistence.py::import_comsol_mesh` |
+| `study.mesh.import_.coordinate_unit` | `str \| None` | None | $1$ | otherwise `ValueError`; one of `m`, `mm`, `um`, `nm`, and required when no valid sidecar supplies the unit. | Unit of imported node coordinates. | FEM CPU/GPU | `normalized to geometry_assets.fem_domain_mesh_asset.mesh.nodes in metres` | `packages/fullmag-py/src/fullmag/meshing/persistence.py::import_comsol_mesh` |
 
 ```python
 # %%
@@ -114,6 +114,8 @@ import fullmag as fm
 
 study = fm.study("cached_relaxation")
 study.engine("fem")
+study.device("cpu", precision="double")
+study.mode("strict")
 study.universe(mode="auto", padding=(100e-9, 100e-9, 100e-9))
 study.universe.mesh(maximum_element_size=100e-9)
 
@@ -121,7 +123,14 @@ film = study.geometry(
     fm.Box(size=(500e-9, 125e-9, 3e-9), name="film_geom"),
     name="film",
 )
+film.Ms = 800e3
+film.Aex = 13e-12
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 film.mesh(maximum_element_size=3e-9)
+study.exchange()
+study.demag(realization="poisson_robin")
+study.stages.add_relax(stage_id="relax", algorithm="projected_gradient_bb", max_steps=1)
 
 # %%
 # First run builds and saves. Matching later runs load without Gmsh.

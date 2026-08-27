@@ -50,28 +50,40 @@ są niezależne od selektora.
 
 | Python | Type | Default | SI unit | Validation / error | Meaning | Backend support | ProblemIR destination | Source |
 |---|---|---|---|---|---|---|---|---|
-| `nearest_surface_to_point.point` | `Sequence[number]` | `required` | $\mathrm m$ | exactly three numeric coordinates | surface query point | FEM CPU/GPU | `runtime_metadata.mesh_workflow selectors[].point` | `mesh_controls.py::nearest_surface_to_point` |
-| `nearest_surface_to_point.geometry` | `str \| None` | `None` | $1$ | non-empty when provided | optional component scope | FEM CPU/GPU | `runtime_metadata.mesh_workflow selectors[].geometry` | `mesh_controls.py::nearest_surface_to_point` |
-| `nearest_surface_to_point.count` | `int` | `1` | $1$ | integer at least one | surface match count | FEM CPU/GPU | `runtime_metadata.mesh_workflow selectors[].count` | `mesh_controls.py::nearest_surface_to_point` |
-| `nearest_curve_to_point.point` | `Sequence[number]` | `required` | $\mathrm m$ | exactly three numeric coordinates | curve query point | FEM CPU/GPU | `runtime_metadata.mesh_workflow selectors[].point` | `mesh_controls.py::nearest_curve_to_point` |
-| `nearest_curve_to_point.geometry` | `str \| None` | `None` | $1$ | non-empty when provided | optional component scope | FEM CPU/GPU | `runtime_metadata.mesh_workflow selectors[].geometry` | `mesh_controls.py::nearest_curve_to_point` |
-| `nearest_curve_to_point.count` | `int` | `1` | $1$ | integer at least one | curve match count | FEM CPU/GPU | `runtime_metadata.mesh_workflow selectors[].count` | `mesh_controls.py::nearest_curve_to_point` |
+| `nearest_surface_to_point.point` | `Sequence[number]` | `required` | $\mathrm m$ | exactly three numeric coordinates | surface query point | FEM CPU/GPU | `runtime_metadata.mesh_workflow selectors[].point` | `packages/fullmag-py/src/fullmag/meshing/mesh_controls.py::nearest_surface_to_point` |
+| `nearest_surface_to_point.geometry` | `str \| None` | `None` | $1$ | non-empty when provided | optional component scope | FEM CPU/GPU | `runtime_metadata.mesh_workflow selectors[].geometry` | `packages/fullmag-py/src/fullmag/meshing/mesh_controls.py::nearest_surface_to_point` |
+| `nearest_surface_to_point.count` | `int` | `1` | $1$ | integer at least one | surface match count | FEM CPU/GPU | `runtime_metadata.mesh_workflow selectors[].count` | `packages/fullmag-py/src/fullmag/meshing/mesh_controls.py::nearest_surface_to_point` |
+| `nearest_curve_to_point.point` | `Sequence[number]` | `required` | $\mathrm m$ | exactly three numeric coordinates | curve query point | FEM CPU/GPU | `runtime_metadata.mesh_workflow selectors[].point` | `packages/fullmag-py/src/fullmag/meshing/mesh_controls.py::nearest_curve_to_point` |
+| `nearest_curve_to_point.geometry` | `str \| None` | `None` | $1$ | non-empty when provided | optional component scope | FEM CPU/GPU | `runtime_metadata.mesh_workflow selectors[].geometry` | `packages/fullmag-py/src/fullmag/meshing/mesh_controls.py::nearest_curve_to_point` |
+| `nearest_curve_to_point.count` | `int` | `1` | $1$ | integer at least one | curve match count | FEM CPU/GPU | `runtime_metadata.mesh_workflow selectors[].count` | `packages/fullmag-py/src/fullmag/meshing/mesh_controls.py::nearest_curve_to_point` |
 
 ```python
-# %% Zdefiniuj selektory razem z pełnym study przed uruchomieniem.
+# %% Complete canonical FEM study with semantic entity selectors.
 import fullmag as fm
 from fullmag.meshing import nearest_curve_to_point, nearest_surface_to_point
 
-study = fm.Study("selectors")
-body = study.world.add(fm.Box((100e-9, 40e-9, 4e-9)), name="free_layer")
+study = fm.study("selectors")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.universe(mode="manual", size=(180e-9, 120e-9, 80e-9))
+study.universe.mesh(maximum_element_size=20e-9)
+
+body = study.geometry(fm.Box(size=(100e-9, 40e-9, 4e-9)), name="free_layer")
+body.Ms = 800e3
+body.Aex = 13e-12
+body.alpha = 0.02
+body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 surface = nearest_surface_to_point(point=(50e-9, 0.0, 2e-9), geometry="free_layer")
 curve = nearest_curve_to_point(point=(50e-9, 20e-9, 2e-9), geometry="free_layer")
-body.mesh.configure(
+body.mesh(
+    maximum_element_size=8e-9,
     boundary_layer_target_surface_selectors=[surface],
     boundary_layer_target_curve_selectors=[curve],
 )
-study.add(fm.Relaxation(name="relax"))
-study.run()
+study.exchange()
+study.demag(realization="poisson_robin")
+study.stages.add_relax(stage_id="relax", algorithm="projected_gradient_bb", max_steps=1)
 ```
 
 (entity-selectors-problem-ir)=

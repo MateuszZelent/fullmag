@@ -530,6 +530,7 @@ import fullmag as fm
 fm.reset()
 study = fm.study("mixed-p1-layers")
 study.engine("fem")
+study.device("cpu", precision="double")
 study.mode("strict")
 study.universe(mode="manual", size=(100e-9, 80e-9, 65e-9))
 film = study.geometry(
@@ -539,7 +540,7 @@ film = study.geometry(
 film.Ms = 800e3
 film.Aex = 13e-12
 film.alpha = 0.1
-film.m = fm.texture.uniform(1, 0, 0)
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 film.mesh.thin_film(
     maximum_element_size=3e-9,
     layers=3,
@@ -548,7 +549,9 @@ film.mesh.thin_film(
     transition="pyramid_to_tetrahedra",
     order=1,
 )
-study.relax(algorithm="projected_gradient_bb", max_steps=1)
+study.exchange()
+study.demag(realization="poisson_robin")
+study.stages.add_relax(stage_id="relax", algorithm="projected_gradient_bb", max_steps=1)
 ```
 
 The public Python API and its lowering preserve the requested prismatic
