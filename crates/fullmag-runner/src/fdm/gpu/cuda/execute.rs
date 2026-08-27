@@ -181,6 +181,8 @@ pub(crate) fn execute_cuda_fdm(
     };
     let initial_dt = timestep_policy.as_ref().map(|policy| policy.initial_dt());
     let mut steps = Vec::new();
+    let fdm_fft_execution =
+        crate::fdm::resolve_cuda_fft_execution_for_demag(plan.enable_demag, plan.fft.as_ref())?;
     let mut provenance = ExecutionProvenance {
         execution_engine: "cuda_fdm".to_string(),
         precision: match plan.precision {
@@ -205,6 +207,7 @@ pub(crate) fn execute_cuda_fdm(
             plan,
         ),
         fdm_gpu_execution_receipt: Some(initial_execution_receipt),
+        fdm_fft_execution,
         timestep_policy,
         executed_physics_kinds: if direct_minimizer_control(plan.relaxation.as_ref()).is_none()
             && (plan.zhang_li_formula_version.is_some()
@@ -405,6 +408,7 @@ pub(crate) fn execute_cuda_fdm(
                     magnetization,
                     preview_field,
                     cached_preview_fields: None,
+                    terminal_field_snapshot: false,
                     hysteresis_field_m_t: None,
                     hysteresis_point_index: None,
                     hysteresis_settle_step_index: None,

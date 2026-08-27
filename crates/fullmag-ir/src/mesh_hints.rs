@@ -57,12 +57,19 @@ pub struct FdmGridHintsIR {
 
 pub const FDM_DEMAG_STRATEGIES: &[&str] = &["auto", "single_grid", "multilayer_convolution"];
 pub const FDM_DEMAG_MODES: &[&str] = &["auto", "two_d_stack", "three_d"];
+pub const FDM_FFT_BACKENDS: &[&str] = &["auto", "rustfft", "fftw", "mkl", "cufft"];
+
+fn default_fdm_fft_backend() -> String {
+    "auto".to_string()
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FdmDemagHintsIR {
     pub strategy: String,
     pub mode: String,
+    #[serde(default = "default_fdm_fft_backend")]
+    pub fft_backend: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub common_cells: Option<[u32; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -76,6 +83,8 @@ pub struct FdmDemagHintsIR {
 struct FdmDemagHintsWireIR {
     strategy: String,
     mode: String,
+    #[serde(default = "default_fdm_fft_backend")]
+    fft_backend: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     common_cells: Option<[u32; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -93,6 +102,7 @@ impl<'de> Deserialize<'de> for FdmDemagHintsIR {
         let hints = Self {
             strategy: wire.strategy,
             mode: wire.mode,
+            fft_backend: wire.fft_backend,
             common_cells: wire.common_cells,
             common_cells_xy: wire.common_cells_xy,
             common_cell_size: wire.common_cell_size,
@@ -121,6 +131,12 @@ impl FdmDemagHintsIR {
             errors.push(format!(
                 "fdm.demag.mode '{}' is unsupported; expected one of auto, two_d_stack, three_d",
                 self.mode
+            ));
+        }
+        if !FDM_FFT_BACKENDS.contains(&self.fft_backend.as_str()) {
+            errors.push(format!(
+                "fdm.demag.fft_backend '{}' is unsupported; expected one of auto, rustfft, fftw, mkl, cufft",
+                self.fft_backend
             ));
         }
         if self.common_cells.is_some() && self.common_cells_xy.is_some() {
@@ -229,6 +245,8 @@ pub struct FdmMultilayerPlanIR {
     pub layers: Vec<FdmLayerPlanIR>,
     pub enable_exchange: bool,
     pub enable_demag: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fft: Option<crate::plan::FdmFftPlanIR>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_field: Option<[f64; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -546,6 +564,8 @@ struct FdmMultilayerPlanWireIR {
     enable_exchange: bool,
     enable_demag: bool,
     #[serde(default)]
+    fft: Option<crate::plan::FdmFftPlanIR>,
+    #[serde(default)]
     external_field: Option<[f64; 3]>,
     #[serde(default)]
     interfacial_dmi: Option<f64>,
@@ -762,6 +782,7 @@ impl<'de> Deserialize<'de> for FdmMultilayerPlanIR {
             layers: wire.layers,
             enable_exchange: wire.enable_exchange,
             enable_demag: wire.enable_demag,
+            fft: wire.fft,
             external_field: wire.external_field,
             interfacial_dmi: wire.interfacial_dmi,
             bulk_dmi: wire.bulk_dmi,
@@ -1010,6 +1031,43 @@ mod multilayer_contract_tests {
     use super::*;
     use crate::plan::FdmGridCertificateIR;
 
+    #[test]
+    fn fdm_fft_legacy_demag_policy_defaults_backend_to_auto() {
+        let hints: FdmDemagHintsIR = serde_json::from_value(serde_json::json!({
+            "strategy": "auto",
+            "mode": "auto"
+        }))
+        .expect("legacy FDM demag policy should remain compatible");
+
+        assert_eq!(hints.fft_backend, "auto");
+    }
+
+    #[test]
+    fn fdm_fft_demag_policy_round_trip_preserves_explicit_backend() {
+        let hints: FdmDemagHintsIR = serde_json::from_value(serde_json::json!({
+            "strategy": "single_grid",
+            "mode": "three_d",
+            "fft_backend": "fftw"
+        }))
+        .expect("known FFT backend request should deserialize");
+        let encoded = serde_json::to_value(&hints).expect("FFT backend request should serialize");
+
+        assert_eq!(encoded["fft_backend"], "fftw");
+    }
+
+    #[test]
+    fn fdm_fft_demag_policy_rejects_unknown_backend() {
+        let error = serde_json::from_value::<FdmDemagHintsIR>(serde_json::json!({
+            "strategy": "auto",
+            "mode": "auto",
+            "fft_backend": "vendor_magic"
+        }))
+        .expect_err("unknown FFT backend must fail at the IR boundary");
+
+        assert!(error.to_string().contains("fdm.demag.fft_backend"));
+        assert!(error.to_string().contains("vendor_magic"));
+    }
+
     fn legacy_plan_fixture() -> FdmMultilayerPlanIR {
         let layers = vec![FdmLayerPlanIR {
             magnet_name: "free".to_string(),
@@ -1050,6 +1108,7 @@ mod multilayer_contract_tests {
             layers,
             enable_exchange: false,
             enable_demag: true,
+            fft: None,
             external_field: None,
             interfacial_dmi: None,
             bulk_dmi: None,

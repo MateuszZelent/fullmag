@@ -6,9 +6,8 @@
 mod fft_backend;
 
 pub(crate) use fft_backend::{
-    resolve_cpu_fft_backend_for_demag,
-    resolve_cpu_fft_backend_name_for_demag,
-    CPU_FFT_BACKEND_ENV,
+    resolve_cpu_fft_backend_for_demag, resolve_cpu_fft_backend_name_for_demag,
+    resolve_cpu_fft_execution_for_demag,
 };
 
 use fullmag_engine::{
@@ -428,7 +427,7 @@ pub(crate) fn snapshot_preview(
     plan: &FdmPlanIR,
     request: &LivePreviewRequest,
 ) -> Result<crate::LivePreviewField, RunError> {
-    resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
+    resolve_cpu_fft_backend_name_for_demag(plan.enable_demag, plan.fft.as_ref())?;
     let (problem, state) = build_snapshot_problem_and_state(plan)?;
     snapshot_preview_from_state(
         &problem,
@@ -472,7 +471,7 @@ pub(crate) fn snapshot_vector_fields(
     quantities: &[&str],
     request: &LivePreviewRequest,
 ) -> Result<Vec<crate::LivePreviewField>, RunError> {
-    resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
+    resolve_cpu_fft_backend_name_for_demag(plan.enable_demag, plan.fft.as_ref())?;
     let (mut problem, state) = build_snapshot_problem_and_state(plan)?;
     problem.terms.per_node_field = resolved_per_node_external_field(plan, state.time_seconds);
     let antenna_field = resolved_antenna_zeeman_field(plan, state.time_seconds);
@@ -1205,11 +1204,16 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         state.time_seconds,
         last_solver_dt,
     )?;
-    let fft_backend = resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
+    let fdm_fft_execution =
+        resolve_cpu_fft_execution_for_demag(plan.enable_demag, plan.fft.as_ref())?;
+    let fft_backend = fdm_fft_execution
+        .as_ref()
+        .map(|execution| execution.executed_backend.clone());
     let mut provenance = ExecutionProvenance {
         execution_engine: "cpu_reference".to_string(),
         precision: "double".to_string(),
         transport_modules: super::spin_transport::fdm_transport_execution_provenance(plan),
+        fdm_fft_execution,
         demag_operator_kind: if plan.enable_demag {
             Some("tensor_fft_newell".to_string())
         } else {
@@ -3216,13 +3220,12 @@ mod tests {
     use fullmag_ir::{
         AdaptiveTimeStepIR, AdaptiveToleranceModeIR, AxisBoundary as IrAxisBoundary,
         DriveActivationIR, ExchangeBoundaryCondition, ExecutionPrecision, FdmDemagPeriodicityIR,
-        FdmMaterialIR, FdmPeriodicityIR, FdmProjectionPolicyIR, FieldDriveKindIR,
-        FieldSpatialProfileIR, FieldTargetIR,
-        FieldTimeOriginIR, GridDimensions, IntegratorChoice, RegionalFieldDriveIR, RelaxStopIR,
-        RelaxationAlgorithmIR, RelaxationControlIR, ResolvedFrozenSpinsPlanIR,
-        ResolvedRegionalFieldDriveBasisIR, SelectionAuthoredFingerprintIR, SelectionCertificateIR,
-        StageStopReason, TimeDependenceIR, RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION,
-        SELECTION_CERTIFICATE_SCHEMA_VERSION,
+        FdmFftPlanIR, FdmMaterialIR, FdmPeriodicityIR, FdmProjectionPolicyIR, FieldDriveKindIR,
+        FieldSpatialProfileIR, FieldTargetIR, FieldTimeOriginIR, GridDimensions, IntegratorChoice,
+        RegionalFieldDriveIR, RelaxStopIR, RelaxationAlgorithmIR, RelaxationControlIR,
+        ResolvedFrozenSpinsPlanIR, ResolvedRegionalFieldDriveBasisIR,
+        SelectionAuthoredFingerprintIR, SelectionCertificateIR, StageStopReason, TimeDependenceIR,
+        RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION, SELECTION_CERTIFICATE_SCHEMA_VERSION,
     };
     use sha2::{Digest, Sha256};
 
@@ -3797,13 +3800,6 @@ mod tests {
         assert_eq!(absolute[0].multiplier_at(1.5), 0.0);
     }
 
-    fn cpu_fft_env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| std::sync::Mutex::new(()))
-            .lock()
-            .expect("CPU FFT backend env lock should not be poisoned")
-    }
-
     fn direct_minimizer_test_control() -> RelaxationControlIR {
         RelaxationControlIR {
             algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
@@ -3932,29 +3928,6 @@ mod tests {
         assert_eq!(completion.reason, Some(StageStopReason::BackendError));
     }
 
-    struct EnvVarGuard {
-        key: &'static str,
-        previous: Option<String>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let previous = std::env::var(key).ok();
-            std::env::set_var(key, value);
-            Self { key, previous }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            if let Some(previous) = &self.previous {
-                std::env::set_var(self.key, previous);
-            } else {
-                std::env::remove_var(self.key);
-            }
-        }
-    }
-
     fn make_relaxation_precession_test_plan() -> FdmPlanIR {
         FdmPlanIR {
             grid: GridDimensions { cells: [1, 1, 1] },
@@ -4065,11 +4038,12 @@ mod tests {
 
     #[test]
     fn snapshot_preview_rejects_unimplemented_cpu_fft_backend_for_demag() {
-        let _lock = cpu_fft_env_lock();
-        let _env = EnvVarGuard::set(CPU_FFT_BACKEND_ENV, "fftw");
         let plan = FdmPlanIR {
             enable_exchange: false,
             enable_demag: true,
+            fft: Some(FdmFftPlanIR {
+                requested_backend: "fftw".to_string(),
+            }),
             ..make_test_plan()
         };
 
@@ -4085,11 +4059,11 @@ mod tests {
             Err(err) => err,
         };
 
-        assert!(err.message.contains(CPU_FFT_BACKEND_ENV));
+        assert!(err.message.contains("fdm.demag.fft_backend"));
         assert!(err.message.contains("fftw"));
         assert!(err
             .message
-            .contains("supported CPU FDM FFT backends: rustfft"));
+            .contains("supported CPU FDM FFT backends: auto, rustfft"));
     }
 
     #[test]
@@ -6221,11 +6195,53 @@ mod tests {
         let err = resolve_cpu_fft_backend_for_demag(true, Some("fftw"))
             .expect_err("fftw is not implemented in this build");
 
-        assert!(err.message.contains("FULLMAG_CPU_FFT_BACKEND"));
+        assert!(err.message.contains("fdm.demag.fft_backend"));
         assert!(err.message.contains("fftw"));
         assert!(err
             .message
-            .contains("supported CPU FDM FFT backends: rustfft"));
+            .contains("supported CPU FDM FFT backends: auto, rustfft"));
+    }
+
+    #[test]
+    fn cpu_fft_execution_receipt_preserves_requested_resolved_and_executed_backend() {
+        let fft = FdmFftPlanIR {
+            requested_backend: "auto".to_string(),
+        };
+
+        let receipt = resolve_cpu_fft_execution_for_demag(true, Some(&fft))
+            .expect("auto CPU FFT request should resolve")
+            .expect("demag-enabled plan should produce an FFT receipt");
+
+        assert_eq!(receipt.requested_backend, "auto");
+        assert_eq!(receipt.resolved_backend, "rustfft");
+        assert_eq!(receipt.executed_backend, "rustfft");
+        assert_eq!(receipt.backend_version.as_deref(), Some("6.4.1"));
+        assert_eq!(receipt.plan_mode, "rustfft_planner_cached");
+        assert_eq!(receipt.thread_count, Some(1));
+        assert_eq!(receipt.workspace_layout, "full_complex");
+    }
+
+    #[test]
+    fn reference_runner_executes_the_planned_cpu_fft_backend_without_fallback() {
+        let plan = FdmPlanIR {
+            enable_demag: true,
+            fft: Some(FdmFftPlanIR {
+                requested_backend: "rustfft".to_string(),
+            }),
+            ..make_test_plan()
+        };
+
+        let executed = execute_reference_fdm(&plan, 1.0e-14, &[], None, None)
+            .expect("planned RustFFT execution");
+        let receipt = executed
+            .provenance
+            .fdm_fft_execution
+            .expect("CPU FFT execution receipt");
+
+        assert_eq!(receipt.requested_backend, "rustfft");
+        assert_eq!(receipt.resolved_backend, "rustfft");
+        assert_eq!(receipt.executed_backend, "rustfft");
+        assert!(!executed.provenance.lossy_fallback_used);
     }
 
     #[test]

@@ -4,7 +4,40 @@ pub(crate) mod gpu;
 pub(crate) mod multilayer;
 pub(crate) mod schedules;
 
-use crate::types::RunError;
+use crate::types::{FdmFftExecutionProvenance, RunError};
+
+pub(crate) fn resolve_cuda_fft_execution_for_demag(
+    demag_enabled: bool,
+    fft: Option<&fullmag_ir::FdmFftPlanIR>,
+) -> Result<Option<FdmFftExecutionProvenance>, RunError> {
+    if !demag_enabled && fft.is_some() {
+        return Err(RunError {
+            message: "FDM plan carries an FFT request while demag is disabled".to_string(),
+        });
+    }
+    if !demag_enabled {
+        return Ok(None);
+    }
+    let requested = fft
+        .map(|fft| fft.requested_backend.as_str())
+        .unwrap_or("auto");
+    if !matches!(requested, "auto" | "cufft") {
+        return Err(RunError {
+            message: format!(
+                "fdm.demag.fft_backend='{requested}' is not available for CUDA FDM demag in this build; supported CUDA FDM FFT backends: auto, cufft"
+            ),
+        });
+    }
+    Ok(Some(FdmFftExecutionProvenance {
+        requested_backend: requested.to_string(),
+        resolved_backend: "cufft".to_string(),
+        executed_backend: "cufft".to_string(),
+        backend_version: None,
+        plan_mode: "cufft_explicit_workspace".to_string(),
+        thread_count: None,
+        workspace_layout: "full_complex".to_string(),
+    }))
+}
 
 #[cfg(any(feature = "cuda", test))]
 pub(crate) fn next_fdm_attempt_dt(
@@ -605,6 +638,7 @@ mod tests {
             ],
             enable_exchange: true,
             enable_demag: true,
+            fft: None,
             external_field: None,
             interfacial_dmi: None,
             bulk_dmi: None,

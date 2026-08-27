@@ -1636,6 +1636,7 @@ mod tests {
             layers,
             enable_exchange: false,
             enable_demag: false,
+            fft: None,
             external_field: None,
             interfacial_dmi: None,
             bulk_dmi: None,

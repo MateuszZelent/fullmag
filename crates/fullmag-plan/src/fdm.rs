@@ -6,8 +6,8 @@ use fullmag_fdm_demag::{
 use fullmag_ir::{
     AxisBoundary, BackendPlanIR, BackendTarget, CommonPlanMeta, ConstraintActivationIR,
     DiscretizationHintsIR, EnergyTermIR, ExchangeBoundaryCondition, ExchangeCouplingModeIR,
-    ExecutionPlanIR, ExecutionPrecision, FdmGridCertificateIR, FdmLayerPlanIR, FdmMaterialIR,
-    FdmMultilayerPlanIR, FdmMultilayerSummaryIR, FdmPlanIR, FrozenReferencePolicyIR,
+    ExecutionPlanIR, ExecutionPrecision, FdmFftPlanIR, FdmGridCertificateIR, FdmLayerPlanIR,
+    FdmMaterialIR, FdmMultilayerPlanIR, FdmMultilayerSummaryIR, FdmPlanIR, FrozenReferencePolicyIR,
     GeometryEntryIR, GridDimensions, InitialMagnetizationIR, IntegratorChoice, OutputPlanIR,
     ProblemIR, ProvenancePlanIR, RegionFrameIR, RegionShapeIR, RelaxationAlgorithmIR, SeedPolicy,
     SelectionMembershipPolicyIR, ThermalSeedConfig, TimeDependenceIR, IR_VERSION,
@@ -39,12 +39,66 @@ use crate::spin_torque::{
     resolve_legacy_spin_torque, resolve_sot_fields, SpinTorqueExecutableLane,
 };
 use crate::util::{
-    active_stage_id, generate_random_unit_vectors, runtime_requests_cuda, GRID_TOLERANCE, MU0,
+    active_stage_id, generate_random_unit_vectors, runtime_device_request, runtime_requests_cuda,
+    GRID_TOLERANCE, MU0,
 };
 use crate::validate::{
     planned_study_controls, validate_executable_outputs, validate_grid_asset_cell_size,
 };
 use crate::{AffineTransform3, BoundaryMembership, GeometryPredicate};
+
+fn plan_fdm_fft(
+    problem: &ProblemIR,
+    enable_demag: bool,
+    errors: &mut Vec<String>,
+) -> Option<FdmFftPlanIR> {
+    let policy = problem
+        .backend_policy
+        .discretization_hints
+        .as_ref()
+        .and_then(|hints| hints.fdm.as_ref())
+        .and_then(|fdm| fdm.demag.as_ref());
+    if let Some(policy) = policy {
+        if let Err(reasons) = policy.validate() {
+            errors.extend(reasons);
+        }
+    }
+    let requested = policy
+        .map(|policy| policy.fft_backend.as_str())
+        .unwrap_or("auto");
+
+    if !enable_demag {
+        if requested != "auto" {
+            errors.push(format!(
+                "fdm.demag.fft_backend='{requested}' requires an active demag interaction"
+            ));
+        }
+        return None;
+    }
+
+    match requested {
+        "fftw" | "mkl" => errors.push(format!(
+            "fdm.demag.fft_backend='{requested}' is not available in this build; qualified FDM FFT backends are rustfft on CPU and cufft on CUDA"
+        )),
+        "rustfft" if matches!(runtime_device_request(problem), Some("cuda" | "gpu")) => {
+            errors.push(
+                "fdm.demag.fft_backend='rustfft' is incompatible with an explicit CUDA device request"
+                    .to_string(),
+            );
+        }
+        "cufft" if matches!(runtime_device_request(problem), Some("cpu")) => {
+            errors.push(
+                "fdm.demag.fft_backend='cufft' is incompatible with an explicit CPU device request"
+                    .to_string(),
+            );
+        }
+        _ => {}
+    }
+
+    Some(FdmFftPlanIR {
+        requested_backend: requested.to_string(),
+    })
+}
 
 /// Calculate the full host tensor payload required by the multilayer ABI v2.
 ///
@@ -2504,6 +2558,7 @@ pub(crate) fn plan_fdm(
         .and_then(|hints| hints.fdm.as_ref())
         .and_then(|hints| hints.projection_policy)
         .unwrap_or_default();
+    let fft = plan_fdm_fft(problem, enable_demag, &mut errors);
     if adaptive_timestep.is_some()
         && (has_thermal_noise || thermal_temperature.unwrap_or(0.0) > 0.0)
     {
@@ -2850,6 +2905,7 @@ pub(crate) fn plan_fdm(
         },
         enable_exchange,
         enable_demag,
+        fft,
         external_field,
         static_external_field_xyz,
         antenna_zeeman_masks,
@@ -3668,11 +3724,6 @@ pub(crate) fn plan_fdm_multilayer(
         });
     }
     let demag_hints = fdm_hints.demag.as_ref();
-    if let Some(policy) = demag_hints {
-        if let Err(reasons) = policy.validate() {
-            errors.extend(reasons);
-        }
-    }
     let requested_strategy = demag_hints
         .map(|policy| policy.strategy.as_str())
         .unwrap_or("auto");
@@ -3780,6 +3831,7 @@ pub(crate) fn plan_fdm_multilayer(
             }
         }
     }
+    let fft = plan_fdm_fft(problem, enable_demag, &mut errors);
     if bulk_dmi.is_some() {
         errors.push(
             "BulkDmi requires a natural exchange+DMI free-surface boundary condition; the current executable multilayer FDM lane does not implement it. Use a qualified fully periodic single-grid FDM plan or remove BulkDmi."
@@ -4605,6 +4657,7 @@ pub(crate) fn plan_fdm_multilayer(
         layers,
         enable_exchange,
         enable_demag,
+        fft,
         external_field,
         interfacial_dmi,
         bulk_dmi,

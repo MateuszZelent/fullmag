@@ -3298,6 +3298,70 @@ fn bootstrap_example_plans_successfully() {
     }
 }
 
+fn fdm_fft_policy_problem(fft_backend: &str) -> ProblemIR {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.energy_terms.push(fullmag_ir::EnergyTermIR::Demag {
+        realization: fullmag_ir::RequestedFemDemagIR::default(),
+    });
+    let fdm = ir
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("bootstrap FDM hints");
+    fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
+        strategy: "single_grid".to_string(),
+        mode: "three_d".to_string(),
+        fft_backend: fft_backend.to_string(),
+        common_cells: None,
+        common_cells_xy: None,
+        common_cell_size: None,
+    });
+    ir
+}
+
+#[test]
+fn fdm_fft_request_reaches_the_executable_plan_without_resolution_drift() {
+    let planned = plan(&fdm_fft_policy_problem("rustfft"))
+        .expect("qualified RustFFT request should plan for CPU FDM");
+    let BackendPlanIR::Fdm(fdm) = planned.backend_plan else {
+        panic!("expected single-grid FDM plan");
+    };
+
+    assert_eq!(
+        fdm.fft.as_ref().map(|fft| fft.requested_backend.as_str()),
+        Some("rustfft")
+    );
+}
+
+#[test]
+fn fdm_fft_planner_rejects_unavailable_vendor_backend() {
+    let error = plan(&fdm_fft_policy_problem("fftw"))
+        .expect_err("unavailable FFTW request must fail before runtime dispatch");
+
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("fdm.demag.fft_backend='fftw'")
+            && reason.contains("not available in this build")
+    }));
+}
+
+#[test]
+fn fdm_fft_planner_rejects_explicit_device_mismatches() {
+    for (backend, device) in [("rustfft", "gpu"), ("cufft", "cpu")] {
+        let mut ir = fdm_fft_policy_problem(backend);
+        ir.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({"device": device}),
+        );
+
+        let error = plan(&ir).expect_err("FFT backend/device mismatch must fail in the planner");
+        assert!(error.reasons.iter().any(|reason| {
+            reason.contains(&format!("fdm.demag.fft_backend='{backend}'"))
+                && reason.contains("incompatible")
+        }));
+    }
+}
+
 #[test]
 fn fdm_plan_materializes_frozen_spins_from_problem_ir() {
     let mut ir = ProblemIR::bootstrap_example();
@@ -8023,6 +8087,7 @@ fn multilayer_single_precision_is_rejected_without_cuda_device_request() {
             demag: Some(fullmag_ir::FdmDemagHintsIR {
                 strategy: "multilayer_convolution".to_string(),
                 mode: "two_d_stack".to_string(),
+                fft_backend: "auto".to_string(),
                 common_cells: None,
                 common_cells_xy: None,
                 common_cell_size: None,
@@ -8115,6 +8180,7 @@ fn multilayer_single_precision_is_accepted_when_cuda_device_requested() {
             demag: Some(fullmag_ir::FdmDemagHintsIR {
                 strategy: "multilayer_convolution".to_string(),
                 mode: "two_d_stack".to_string(),
+                fft_backend: "auto".to_string(),
                 common_cells: None,
                 common_cells_xy: None,
                 common_cell_size: None,
@@ -8207,6 +8273,7 @@ fn stacked_two_body_multilayer_problem() -> ProblemIR {
             demag: Some(fullmag_ir::FdmDemagHintsIR {
                 strategy: "multilayer_convolution".to_string(),
                 mode: "two_d_stack".to_string(),
+                fft_backend: "auto".to_string(),
                 common_cells: None,
                 common_cells_xy: None,
                 common_cell_size: None,
@@ -8325,6 +8392,7 @@ fn fdm_common_cell_size_resolves_heterogeneous_native_grids_without_rounding() {
     fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
         strategy: "auto".to_string(),
         mode: "auto".to_string(),
+        fft_backend: "auto".to_string(),
         common_cells: None,
         common_cells_xy: None,
         common_cell_size: Some([2e-9, 2e-9, 2.5e-9]),
@@ -8389,6 +8457,7 @@ fn eight_layer_multilayer_problem_for_kernel_budget() -> ProblemIR {
     fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
         strategy: "multilayer_convolution".to_string(),
         mode: "three_d".to_string(),
+        fft_backend: "auto".to_string(),
         common_cells: Some([262_144, 1, 1]),
         common_cells_xy: None,
         common_cell_size: None,
@@ -8465,6 +8534,7 @@ fn three_layer_catalog_problem(thicknesses_m: [f64; 3]) -> ProblemIR {
     fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
         strategy: "multilayer_convolution".to_string(),
         mode: "two_d_stack".to_string(),
+        fft_backend: "auto".to_string(),
         common_cells: None,
         common_cells_xy: Some([20, 10]),
         common_cell_size: None,
@@ -8581,6 +8651,7 @@ fn cuda_three_d_identity_multilayer_problem() -> ProblemIR {
     fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
         strategy: "multilayer_convolution".to_string(),
         mode: "three_d".to_string(),
+        fft_backend: "auto".to_string(),
         common_cells: Some([20, 10, 1]),
         common_cells_xy: None,
         common_cell_size: None,
@@ -8813,6 +8884,7 @@ fn explicit_single_layer_multilayer_strategy_uses_multilayer_plan() {
     fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
         strategy: "multilayer_convolution".to_string(),
         mode: "auto".to_string(),
+        fft_backend: "auto".to_string(),
         common_cells: None,
         common_cells_xy: None,
         common_cell_size: None,
@@ -8870,6 +8942,7 @@ fn multilayer_planner_rejects_every_non_neutral_boundary_intent() {
                     .demag = Some(fullmag_ir::FdmDemagHintsIR {
                     strategy: "multilayer_convolution".to_string(),
                     mode: "auto".to_string(),
+                    fft_backend: "auto".to_string(),
                     common_cells: None,
                     common_cells_xy: None,
                     common_cell_size: None,
@@ -8914,6 +8987,7 @@ fn multilayer_planner_resolves_common_grid_modes_without_overriding_explicit_mod
     fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
         strategy: "multilayer_convolution".to_string(),
         mode: "auto".to_string(),
+        fft_backend: "auto".to_string(),
         common_cells: Some([20, 10, 1]),
         common_cells_xy: None,
         common_cell_size: None,
@@ -8936,6 +9010,7 @@ fn multilayer_planner_resolves_common_grid_modes_without_overriding_explicit_mod
     fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
         strategy: "multilayer_convolution".to_string(),
         mode: "auto".to_string(),
+        fft_backend: "auto".to_string(),
         common_cells: None,
         common_cells_xy: Some([20, 10]),
         common_cell_size: None,
@@ -8958,6 +9033,7 @@ fn multilayer_planner_resolves_common_grid_modes_without_overriding_explicit_mod
     fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
         strategy: "multilayer_convolution".to_string(),
         mode: "two_d_stack".to_string(),
+        fft_backend: "auto".to_string(),
         common_cells: Some([20, 10, 1]),
         common_cells_xy: None,
         common_cell_size: None,
@@ -9004,6 +9080,7 @@ fn two_d_stack_fails_closed_for_native_thickness_without_moment_preserving_avera
     fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
         strategy: "multilayer_convolution".to_string(),
         mode: "two_d_stack".to_string(),
+        fft_backend: "auto".to_string(),
         common_cells: None,
         common_cells_xy: Some([20, 10]),
         common_cell_size: None,
@@ -9579,6 +9656,7 @@ fn forced_cuda_explicit_single_magnet_multilayer_uses_multilayer_material_field_
         .demag = Some(fullmag_ir::FdmDemagHintsIR {
         strategy: "multilayer_convolution".to_string(),
         mode: "three_d".to_string(),
+        fft_backend: "auto".to_string(),
         common_cells: None,
         common_cells_xy: None,
         common_cell_size: None,
@@ -9928,6 +10006,7 @@ fn stacked_two_body_problem_lowers_to_multilayer_plan() {
     fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
         strategy: "multilayer_convolution".to_string(),
         mode: "three_d".to_string(),
+        fft_backend: "auto".to_string(),
         common_cells: Some([20, 10, 1]),
         common_cells_xy: None,
         common_cell_size: None,

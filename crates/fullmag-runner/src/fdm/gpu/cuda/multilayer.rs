@@ -1606,10 +1606,13 @@ fn device_resident_multilayer_provenance(
         None,
         crate::types::TimestepExecutionLane::fdm_cuda(plan.precision),
     )?;
+    let fdm_fft_execution =
+        crate::fdm::resolve_cuda_fft_execution_for_demag(plan.enable_demag, plan.fft.as_ref())?;
     Ok(ExecutionProvenance {
         charge_transport: None,
         execution_engine: "cuda_native_multilayer_convolution".to_string(),
         precision: "double".to_string(),
+        fdm_fft_execution,
         demag_operator_kind: Some("native_multilayer_tensor_fft_newell".to_string()),
         fft_backend: Some("cuFFT".to_string()),
         device_name: device_info.as_ref().map(|info| info.name.clone()),
@@ -1888,10 +1891,19 @@ fn assisted_multilayer_provenance(
         None,
         crate::types::TimestepExecutionLane::fdm_cuda(plan.precision),
     )?;
+    let fdm_fft_execution = if native_demag_enabled {
+        crate::fdm::resolve_cuda_fft_execution_for_demag(plan.enable_demag, plan.fft.as_ref())?
+    } else {
+        crate::fdm::cpu::reference::resolve_cpu_fft_execution_for_demag(
+            plan.enable_demag,
+            plan.fft.as_ref(),
+        )?
+    };
     Ok(ExecutionProvenance {
         charge_transport: None,
         execution_engine: "cuda_assisted_multilayer".to_string(),
         precision: precision_name(plan.precision).to_string(),
+        fdm_fft_execution,
         demag_operator_kind: if plan.enable_demag {
             Some(
                 if native_demag_enabled {
@@ -2098,6 +2110,7 @@ fn build_native_stacked_cuda_plan(
             material: reference_material.clone(),
             enable_exchange: plan.enable_exchange,
             enable_demag: plan.enable_demag,
+            fft: plan.fft.clone(),
             external_field: plan.external_field,
             antenna_zeeman_masks: Vec::new(),
             field_drives: Vec::new(),
@@ -2193,9 +2206,14 @@ fn execute_native_stacked_cuda_multilayer(
         native.combined_plan.adaptive_timestep.as_ref(),
         crate::types::TimestepExecutionLane::fdm_cuda(native.combined_plan.precision),
     )?;
+    let fdm_fft_execution = crate::fdm::resolve_cuda_fft_execution_for_demag(
+        native.combined_plan.enable_demag,
+        native.combined_plan.fft.as_ref(),
+    )?;
     let provenance = ExecutionProvenance {
         execution_engine: "cuda_native_multilayer_single_grid".to_string(),
         precision: precision_name(native.combined_plan.precision).to_string(),
+        fdm_fft_execution,
         demag_operator_kind: if native.combined_plan.enable_demag {
             Some("tensor_fft_newell".to_string())
         } else {
@@ -2494,6 +2512,7 @@ fn single_layer_cuda_plan(plan: &FdmMultilayerPlanIR, layer: &FdmLayerPlanIR) ->
         },
         enable_exchange: plan.enable_exchange,
         enable_demag: false,
+        fft: None,
         external_field: plan.external_field,
         antenna_zeeman_masks: Vec::new(),
         field_drives: Vec::new(),
@@ -4098,6 +4117,43 @@ mod tests {
         assert_eq!(telemetry.d2h_bytes, 384);
     }
 
+    #[test]
+    fn fdm_fft_device_resident_multilayer_provenance_records_cufft_execution() {
+        let provenance = device_resident_multilayer_provenance(
+            &make_plan(true, ExecutionPrecision::Double),
+            None,
+            None,
+            DeviceResidentMultilayerTransferCounters::default(),
+        )
+        .expect("device-resident plan should resolve cuFFT provenance");
+        let receipt = provenance
+            .fdm_fft_execution
+            .expect("demag execution must publish an FFT receipt");
+
+        assert_eq!(receipt.requested_backend, "auto");
+        assert_eq!(receipt.resolved_backend, "cufft");
+        assert_eq!(receipt.executed_backend, "cufft");
+    }
+
+    #[test]
+    fn fdm_fft_assisted_multilayer_provenance_records_rustfft_execution() {
+        let provenance = assisted_multilayer_provenance(
+            &make_plan(true, ExecutionPrecision::Double),
+            None,
+            false,
+            CudaTransferCounters::default(),
+            None,
+        )
+        .expect("assisted plan should resolve RustFFT provenance");
+        let receipt = provenance
+            .fdm_fft_execution
+            .expect("demag execution must publish an FFT receipt");
+
+        assert_eq!(receipt.requested_backend, "auto");
+        assert_eq!(receipt.resolved_backend, "rustfft");
+        assert_eq!(receipt.executed_backend, "rustfft");
+    }
+
     fn manufactured_rhs_single(state: &[Vec<[f32; 3]>]) -> Result<Vec<Vec<[f32; 3]>>, RunError> {
         Ok(state
             .iter()
@@ -4206,6 +4262,7 @@ mod tests {
             ],
             enable_exchange: true,
             enable_demag,
+            fft: None,
             external_field: None,
             interfacial_dmi: None,
             bulk_dmi: None,
@@ -4723,6 +4780,7 @@ mod tests {
             ],
             enable_exchange: true,
             enable_demag: true,
+            fft: None,
             external_field: None,
             interfacial_dmi: None,
             bulk_dmi: None,

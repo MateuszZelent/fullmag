@@ -281,9 +281,13 @@ pub(crate) fn materialize_airbox_observation_snapshot(
     provenance.demag_operator_kind = plan
         .enable_demag
         .then(|| "multilayer_tensor_fft_newell".to_string());
-    provenance.fft_backend =
-        super::reference::resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)
+    provenance.fdm_fft_execution =
+        super::reference::resolve_cpu_fft_execution_for_demag(plan.enable_demag, plan.fft.as_ref())
             .map_err(|error| error.to_string())?;
+    provenance.fft_backend = provenance
+        .fdm_fft_execution
+        .as_ref()
+        .map(|execution| execution.executed_backend.clone());
     let executed = ExecutedRun {
         result: crate::types::RunResult {
             status: crate::types::RunStatus::Completed,
@@ -642,6 +646,7 @@ mod tests {
             layers: vec![layer],
             enable_exchange: true,
             enable_demag: true,
+            fft: None,
             external_field: None,
             interfacial_dmi: None,
             bulk_dmi: None,

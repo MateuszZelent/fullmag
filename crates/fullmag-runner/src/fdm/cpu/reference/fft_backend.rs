@@ -1,8 +1,10 @@
-use crate::types::RunError;
+use crate::types::{FdmFftExecutionProvenance, RunError};
+use fullmag_ir::FdmFftPlanIR;
 
-use std::env;
-
-pub(crate) const CPU_FFT_BACKEND_ENV: &str = "FULLMAG_CPU_FFT_BACKEND";
+const RUSTFFT_CRATE_VERSION: &str = "6.4.1";
+const RUSTFFT_PLAN_MODE: &str = "rustfft_planner_cached";
+const RUSTFFT_THREAD_COUNT: u32 = 1;
+const RUSTFFT_WORKSPACE_LAYOUT: &str = "full_complex";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CpuFftBackend {
@@ -15,13 +17,6 @@ impl CpuFftBackend {
             CpuFftBackend::RustFft => "rustfft",
         }
     }
-}
-
-pub(crate) fn requested_cpu_fft_backend_from_env() -> Option<String> {
-    env::var(CPU_FFT_BACKEND_ENV)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
 }
 
 pub(crate) fn resolve_cpu_fft_backend_for_demag(
@@ -42,16 +37,40 @@ pub(crate) fn resolve_cpu_fft_backend_for_demag(
         "auto" | "rustfft" => Ok(Some(CpuFftBackend::RustFft)),
         other => Err(RunError {
             message: format!(
-                "{CPU_FFT_BACKEND_ENV}='{other}' is not available for CPU FDM demag in this build; supported CPU FDM FFT backends: rustfft"
+                "fdm.demag.fft_backend='{other}' is not available for CPU FDM demag in this build; supported CPU FDM FFT backends: auto, rustfft"
             ),
         }),
     }
 }
 
+pub(crate) fn resolve_cpu_fft_execution_for_demag(
+    demag_enabled: bool,
+    fft: Option<&FdmFftPlanIR>,
+) -> Result<Option<FdmFftExecutionProvenance>, RunError> {
+    if !demag_enabled && fft.is_some() {
+        return Err(RunError {
+            message: "FDM plan carries an FFT request while demag is disabled".to_string(),
+        });
+    }
+    let requested = fft
+        .map(|fft| fft.requested_backend.as_str())
+        .unwrap_or("auto");
+    let resolved = resolve_cpu_fft_backend_for_demag(demag_enabled, Some(requested))?;
+    Ok(resolved.map(|backend| FdmFftExecutionProvenance {
+        requested_backend: requested.to_string(),
+        resolved_backend: backend.as_str().to_string(),
+        executed_backend: backend.as_str().to_string(),
+        backend_version: Some(RUSTFFT_CRATE_VERSION.to_string()),
+        plan_mode: RUSTFFT_PLAN_MODE.to_string(),
+        thread_count: Some(RUSTFFT_THREAD_COUNT),
+        workspace_layout: RUSTFFT_WORKSPACE_LAYOUT.to_string(),
+    }))
+}
+
 pub(crate) fn resolve_cpu_fft_backend_name_for_demag(
     demag_enabled: bool,
+    fft: Option<&FdmFftPlanIR>,
 ) -> Result<Option<String>, RunError> {
-    let requested = requested_cpu_fft_backend_from_env();
-    resolve_cpu_fft_backend_for_demag(demag_enabled, requested.as_deref())
-        .map(|backend| backend.map(|backend| backend.as_str().to_string()))
+    resolve_cpu_fft_execution_for_demag(demag_enabled, fft)
+        .map(|execution| execution.map(|execution| execution.executed_backend))
 }

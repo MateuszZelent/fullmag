@@ -1462,6 +1462,7 @@ def _fdm_from_overrides(
             demag = FDMDemag(
                 strategy=str(raw_demag.get("strategy", "auto")),
                 mode=str(raw_demag.get("mode", "auto")),
+                fft_backend=str(raw_demag.get("fft_backend", "auto")),
                 common_cells=common_cells,
                 common_cells_xy=common_cells_xy,
                 common_cell_size=common_cell_size,
@@ -1693,6 +1694,7 @@ def _render_runtime(
                 demag_kwargs = [
                     f"strategy={_py_repr(fdm.demag.strategy)}",
                     f"mode={_py_repr(fdm.demag.mode)}",
+                    f"fft_backend={_py_repr(fdm.demag.fft_backend)}",
                     f"explain={fdm.demag.explain!r}",
                 ]
                 if fdm.demag.common_cells is not None:
@@ -8009,6 +8011,7 @@ def _export_fdm(problem: Problem) -> dict[str, object] | None:
         payload["demag"] = {
             "strategy": fdm.demag.strategy,
             "mode": fdm.demag.mode,
+            "fft_backend": fdm.demag.fft_backend,
             "common_cells": list(fdm.demag.common_cells)
             if fdm.demag.common_cells is not None
             else None,

@@ -109,6 +109,17 @@ def test_common_cell_size_rejects_legacy_common_counts() -> None:
         )
 
 
+def test_fft_backend_request_round_trips_without_runtime_fallback() -> None:
+    hints = fm.FDMDemag(fft_backend="fftw")
+
+    assert hints.to_ir()["fft_backend"] == "fftw"
+
+
+def test_fft_backend_rejects_unknown_policy_name() -> None:
+    with pytest.raises(ValueError, match="fft_backend must be one of"):
+        fm.FDMDemag(fft_backend="vendor_magic")
+
+
 def test_legacy_study_fdm_warns_with_canonical_mesh_migration() -> None:
     fm.reset()
     study = fm.study("legacy_fdm")
@@ -138,6 +149,7 @@ def test_two_object_two_d_policy_preserves_requested_auto_in_ir() -> None:
         "demag": {
             "strategy": "auto",
             "mode": "auto",
+            "fft_backend": "auto",
             "common_cells_xy": [256, 128],
         },
     }

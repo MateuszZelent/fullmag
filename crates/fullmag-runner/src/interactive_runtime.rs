@@ -5515,7 +5515,11 @@ fn copy_cuda_base_field_values(
 }
 
 fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, RunError> {
-    let fft_backend = cpu_reference::resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
+    let fdm_fft_execution =
+        cpu_reference::resolve_cpu_fft_execution_for_demag(plan.enable_demag, plan.fft.as_ref())?;
+    let fft_backend = fdm_fft_execution
+        .as_ref()
+        .map(|execution| execution.executed_backend.clone());
     let timestep_policy =
         if crate::relaxation::direct_minimizer::direct_minimizer_control(plan.relaxation.as_ref())
             .is_some()
@@ -5538,6 +5542,7 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
         fdm_gpu_execution_receipt: None,
         fdm_gpu_step_transaction_telemetry: None,
         fdm_cpu_step_transaction_telemetry: None,
+        fdm_fft_execution,
         fem_gpu_execution_receipt: None,
         executed_physics_kinds: if timestep_policy.is_some()
             && (plan.zhang_li_formula_version.is_some()
@@ -5630,6 +5635,8 @@ fn cuda_execution_provenance(
     plan: &FdmPlanIR,
     device_info: &crate::fdm::gpu::cuda::native::DeviceInfo,
 ) -> Result<ExecutionProvenance, RunError> {
+    let fdm_fft_execution =
+        crate::fdm::resolve_cuda_fft_execution_for_demag(plan.enable_demag, plan.fft.as_ref())?;
     let timestep_policy =
         if crate::fem::relax::algorithm::native_step_control(plan.relaxation.as_ref()).is_some() {
             None
@@ -5650,6 +5657,7 @@ fn cuda_execution_provenance(
         fdm_gpu_execution_receipt: None,
         fdm_gpu_step_transaction_telemetry: None,
         fdm_cpu_step_transaction_telemetry: None,
+        fdm_fft_execution,
         executed_physics_kinds: if timestep_policy.is_some()
             && (plan.zhang_li_formula_version.is_some()
                 || plan.slonczewski_formula_version.is_some()

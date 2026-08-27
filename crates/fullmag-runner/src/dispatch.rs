@@ -11,7 +11,7 @@
 //! - `gpu`: force native FEM GPU, fail if unavailable
 
 use fullmag_ir::{
-    BackendPlanIR, ExecutionMode, FdmMultilayerPlanIR, FdmPlanIR, FemEigenPlanIR,
+    BackendPlanIR, ExecutionMode, FdmFftPlanIR, FdmMultilayerPlanIR, FdmPlanIR, FemEigenPlanIR,
     FemMeshPartSelector, FemPlanIR, OutputIR, ProblemIR, RelaxationAlgorithmIR,
 };
 use serde_json::Value;
@@ -559,14 +559,45 @@ fn validate_runtime_initial_magnetization(plan: &FemPlanIR) -> Result<(), RunErr
     Ok(())
 }
 
+fn constrain_fdm_device_for_fft(
+    requested_device: String,
+    fft: Option<&FdmFftPlanIR>,
+) -> Result<String, RunError> {
+    let Some(fft) = fft else {
+        return Ok(requested_device);
+    };
+    match (fft.requested_backend.as_str(), requested_device.as_str()) {
+        ("auto", _) => Ok(requested_device),
+        ("rustfft", "auto") => Ok("cpu".to_string()),
+        ("rustfft", "cpu") => Ok(requested_device),
+        ("rustfft", "gpu" | "cuda") => Err(RunError {
+            message: "fdm.demag.fft_backend='rustfft' cannot execute on the requested GPU device"
+                .to_string(),
+        }),
+        ("cufft", "auto") => Ok("gpu".to_string()),
+        ("cufft", "gpu" | "cuda") => Ok("gpu".to_string()),
+        ("cufft", "cpu") => Err(RunError {
+            message: "fdm.demag.fft_backend='cufft' cannot execute on the requested CPU device"
+                .to_string(),
+        }),
+        (other, _) => Err(RunError {
+            message: format!(
+                "fdm.demag.fft_backend='{other}' is not executable; supported runtime requests are auto, rustfft, and cufft"
+            ),
+        }),
+    }
+}
+
 fn resolve_fdm_engine_with_registry(
     problem: &ProblemIR,
     registry: &RuntimeRegistry,
     _explicit_selection: bool,
     plan: Option<&FdmPlanIR>,
+    fft: Option<&FdmFftPlanIR>,
 ) -> Result<DispatchEngineResolution, RunError> {
     apply_runtime_gpu_index(problem, "fdm");
-    let requested_device = requested_registry_device_for_fdm(problem);
+    let requested_device =
+        constrain_fdm_device_for_fft(requested_registry_device_for_fdm(problem), fft)?;
     let guard_requested_device =
         crate::solver_runtime::selection::public_fdm_gpu_charge_device_request(problem);
     let forced_device = requested_device != "auto";
@@ -1322,12 +1353,20 @@ pub(crate) fn resolve_with_registry(
     let plan = fullmag_plan::plan(problem)?;
     match registry {
         Some(registry) => match &plan.backend_plan {
-            BackendPlanIR::Fdm(fdm) => {
-                resolve_fdm_engine_with_registry(problem, registry, explicit_selection, Some(fdm))
-            }
-            BackendPlanIR::FdmMultilayer(_) => {
-                resolve_fdm_engine_with_registry(problem, registry, explicit_selection, None)
-            }
+            BackendPlanIR::Fdm(fdm) => resolve_fdm_engine_with_registry(
+                problem,
+                registry,
+                explicit_selection,
+                Some(fdm),
+                fdm.fft.as_ref(),
+            ),
+            BackendPlanIR::FdmMultilayer(multilayer) => resolve_fdm_engine_with_registry(
+                problem,
+                registry,
+                explicit_selection,
+                None,
+                multilayer.fft.as_ref(),
+            ),
             BackendPlanIR::Fem(fem) => resolve_fem_engine_with_registry(
                 problem,
                 registry,
@@ -5290,6 +5329,7 @@ fn execute_cuda_fdm(
                     magnetization,
                     preview_field,
                     cached_preview_fields: None,
+                    terminal_field_snapshot: false,
                     hysteresis_field_m_t: None,
                     hysteresis_point_index: None,
                     hysteresis_settle_step_index: None,
@@ -6654,6 +6694,42 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn fdm_fft_explicit_backend_constrains_auto_device_selection() {
+        let rustfft = FdmFftPlanIR {
+            requested_backend: "rustfft".to_string(),
+        };
+        let cufft = FdmFftPlanIR {
+            requested_backend: "cufft".to_string(),
+        };
+
+        assert_eq!(
+            constrain_fdm_device_for_fft("auto".to_string(), Some(&rustfft))
+                .expect("RustFFT should select CPU"),
+            "cpu"
+        );
+        assert_eq!(
+            constrain_fdm_device_for_fft("auto".to_string(), Some(&cufft))
+                .expect("cuFFT should select GPU"),
+            "gpu"
+        );
+    }
+
+    #[test]
+    fn fdm_fft_explicit_backend_rejects_incompatible_runtime_device() {
+        for (backend, device) in [("rustfft", "gpu"), ("cufft", "cpu")] {
+            let fft = FdmFftPlanIR {
+                requested_backend: backend.to_string(),
+            };
+            let error = constrain_fdm_device_for_fft(device.to_string(), Some(&fft))
+                .expect_err("runtime device mismatch must fail closed");
+
+            assert!(error.message.contains(&format!(
+                "fdm.demag.fft_backend='{backend}'"
+            )));
+        }
+    }
 
     struct TempDirGuard {
         path: PathBuf,

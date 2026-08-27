@@ -147,7 +147,13 @@ pub(crate) fn execute_reference_fdm_multilayer(
     let dt = timestep_policy.initial_dt();
     let mut steps: Vec<StepStats> = Vec::new();
     let mut step_count = 0u64;
-    let fft_backend = super::reference::resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
+    let fdm_fft_execution = super::reference::resolve_cpu_fft_execution_for_demag(
+        plan.enable_demag,
+        plan.fft.as_ref(),
+    )?;
+    let fft_backend = fdm_fft_execution
+        .as_ref()
+        .map(|execution| execution.executed_backend.clone());
     let provenance = ExecutionProvenance {
         charge_transport: None,
         transport_modules: Vec::new(),
@@ -156,6 +162,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
         fdm_gpu_execution_receipt: None,
         fdm_gpu_step_transaction_telemetry: None,
         fdm_cpu_step_transaction_telemetry: None,
+        fdm_fft_execution,
         fem_gpu_execution_receipt: None,
         executed_physics_kinds: Vec::new(),
         executed_physics_module_ids: Vec::new(),
@@ -1725,6 +1732,7 @@ mod tests {
             layers,
             enable_exchange: true,
             enable_demag,
+            fft: None,
             external_field: None,
             interfacial_dmi: None,
             bulk_dmi: None,

@@ -98,6 +98,7 @@ class FdmUiRoundTripTests(unittest.TestCase):
                         demag=fm.FDMDemag(
                             strategy="single_grid",
                             mode="three_d",
+                            fft_backend="rustfft",
                             common_cells=(64, 32, 4),
                             explain=True,
                         ),
@@ -149,7 +150,7 @@ class FdmUiRoundTripTests(unittest.TestCase):
                 rendered,
             )
             self.assertIn(
-                'demag=fm.FDMDemag(strategy="multilayer_convolution", mode="two_d_stack", explain=False',
+                'demag=fm.FDMDemag(strategy="multilayer_convolution", mode="two_d_stack", fft_backend="rustfft", explain=False',
                 rendered,
             )
             self.assertNotIn('fm.demag(realization="multilayer_convolution")', rendered)
@@ -162,6 +163,7 @@ class FdmUiRoundTripTests(unittest.TestCase):
         self.assertIsNotNone(fdm)
         self.assertEqual(fdm.demag.strategy, "multilayer_convolution")
         self.assertEqual(fdm.demag.mode, "two_d_stack")
+        self.assertEqual(fdm.demag.fft_backend, "rustfft")
         self.assertEqual(fdm.demag.common_cells_xy, (64, 32))
         self.assertFalse(fdm.demag.explain)
         self.assertEqual(fdm.boundary_correction, "full")
@@ -172,6 +174,7 @@ class FdmUiRoundTripTests(unittest.TestCase):
             {
                 "strategy": "multilayer_convolution",
                 "mode": "two_d_stack",
+                "fft_backend": "rustfft",
                 "common_cells_xy": [64, 32],
             },
         )

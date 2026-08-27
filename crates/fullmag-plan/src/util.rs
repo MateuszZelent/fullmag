@@ -42,6 +42,10 @@ pub(crate) const GRID_TOLERANCE: f64 = 1e-6;
 
 /// Returns `true` when the user requested a CUDA device via `runtime_metadata`.
 pub(crate) fn runtime_requests_cuda(problem: &ProblemIR) -> bool {
+    runtime_device_request(problem).is_some_and(|d| d == "cuda" || d == "gpu")
+}
+
+pub(crate) fn runtime_device_request(problem: &ProblemIR) -> Option<&str> {
     problem
         .problem_meta
         .runtime_metadata
@@ -54,7 +58,6 @@ pub(crate) fn runtime_requests_cuda(problem: &ProblemIR) -> bool {
         })
         .and_then(|v| v.get("device"))
         .and_then(|v| v.as_str())
-        .is_some_and(|d| d == "cuda" || d == "gpu")
 }
 
 #[cfg(test)]

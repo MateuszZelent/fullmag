@@ -36,6 +36,7 @@ class FDMGrid:
 # ---------------------------------------------------------------------------
 _DEMAG_STRATEGIES = ("auto", "single_grid", "multilayer_convolution")
 _DEMAG_MODES = ("auto", "two_d_stack", "three_d")
+_DEMAG_FFT_BACKENDS = ("auto", "rustfft", "fftw", "mkl", "cufft")
 _FEM_LINEAR_SOLVERS = ("CG", "GMRES")
 _FEM_PRECONDITIONERS = ("AMG", "JACOBI", "NONE")
 
@@ -55,6 +56,8 @@ class FDMDemag:
             ``"three_d"`` for full 3-D stacks.
         common_cells: Explicit 3-D common convolution grid size.
         common_cells_xy: Explicit 2-D common grid (for ``two_d_stack``).
+        fft_backend: Requested FFT realization. Unsupported realizations are
+            preserved in IR and rejected fail-closed by capability planning.
         explain: Print a human-readable plan summary before running.
 
     Example::
@@ -71,6 +74,7 @@ class FDMDemag:
     common_cells: tuple[int, int, int] | None = None
     common_cells_xy: tuple[int, int] | None = None
     common_cell_size: tuple[float, float, float] | None = None
+    fft_backend: Literal["auto", "rustfft", "fftw", "mkl", "cufft"] = "auto"
     # Compatibility-only input. It is never lowered because silent fallback
     # is not a public execution contract.
     allow_single_grid_fallback: bool | None = field(default=None, repr=False)
@@ -90,6 +94,11 @@ class FDMDemag:
         if self.mode not in _DEMAG_MODES:
             raise ValueError(
                 f"mode must be one of {_DEMAG_MODES!r}, got {self.mode!r}"
+            )
+        if self.fft_backend not in _DEMAG_FFT_BACKENDS:
+            raise ValueError(
+                f"fft_backend must be one of {_DEMAG_FFT_BACKENDS!r}, "
+                f"got {self.fft_backend!r}"
             )
         if self.common_cells is not None and self.common_cells_xy is not None:
             raise ValueError("cannot specify both 'common_cells' and 'common_cells_xy'")
@@ -128,6 +137,7 @@ class FDMDemag:
         ir: dict[str, object] = {
             "strategy": self.strategy,
             "mode": self.mode,
+            "fft_backend": self.fft_backend,
         }
         if self.common_cells is not None:
             ir["common_cells"] = list(self.common_cells)

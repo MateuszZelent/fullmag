@@ -653,6 +653,13 @@ pub struct TimeStageContextIR {
     pub start_time_s: f64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FdmFftPlanIR {
+    /// Canonical authoring request. Runtime resolution must preserve this
+    /// value and fail closed instead of substituting an unavailable backend.
+    pub requested_backend: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct FdmPlanIR {
     /// Physical world-space origin of the resolved FDM grid (lower corner), in metres.
@@ -684,6 +691,8 @@ pub struct FdmPlanIR {
     pub material: FdmMaterialIR,
     pub enable_exchange: bool,
     pub enable_demag: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fft: Option<FdmFftPlanIR>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_field: Option<[f64; 3]>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

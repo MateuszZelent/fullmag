@@ -3263,6 +3263,18 @@ pub struct FinalExecutionResolutionProvenance {
 }
 
 /// Included in artifact metadata for reproducibility.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FdmFftExecutionProvenance {
+    pub requested_backend: String,
+    pub resolved_backend: String,
+    pub executed_backend: String,
+    pub backend_version: Option<String>,
+    pub plan_mode: String,
+    pub thread_count: Option<u32>,
+    pub workspace_layout: String,
+}
+
+/// Included in artifact metadata for reproducibility.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExecutionProvenance {
     /// Engine that executed the run: e.g. "cpu_reference", "cuda_fdm",
@@ -3292,6 +3304,9 @@ pub struct ExecutionProvenance {
     /// CPU reference counters for accepted/rejected FDM step transactions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fdm_cpu_step_transaction_telemetry: Option<FdmCpuStepTransactionTelemetry>,
+    /// FDM FFT request, resolution, and actually executed realization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fdm_fft_execution: Option<FdmFftExecutionProvenance>,
     /// Native FEM receipt preserving requested, resolved, and actually executed
     /// GPU residency without inferring execution from the RK plan.
     #[serde(default, skip_serializing_if = "Option::is_none")]
