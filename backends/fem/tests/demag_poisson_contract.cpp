@@ -1684,9 +1684,9 @@ void nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves() {
     check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
                  "repeated Poisson solve workspace initialization");
     const auto setup_key = ctx.poisson_demag.operator_lifecycle.active_key;
-    auto *const cached_matrix = ctx.poisson_demag.cached_hypre_par;
-    auto *const cached_solver = ctx.poisson_demag.cached_hypre_solver;
-    check(cached_matrix == nullptr && cached_solver == nullptr,
+    auto *const lazy_cached_matrix = ctx.poisson_demag.cached_hypre_par;
+    auto *const lazy_cached_solver = ctx.poisson_demag.cached_hypre_solver;
+    check(lazy_cached_matrix == nullptr && lazy_cached_solver == nullptr,
           "Hypre operator workspace is lazy before the first solve");
 
     std::vector<double> m_xyz(
@@ -1701,6 +1701,19 @@ void nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves() {
     constexpr int kRepeatedSolves = 100;
     std::vector<double> h_demag;
     double demag_energy = 0.0;
+    fullmag::fem::PoissonRhsWorkspace *steady_rhs_workspace = nullptr;
+    fullmag::fem::DemagRecoveryWorkspace *steady_recovery_workspace = nullptr;
+    fullmag::fem::PoissonHypreWorkspace *steady_hypre_workspace = nullptr;
+    mfem::LinearForm *steady_rhs_form = nullptr;
+    mfem::Vector *steady_rhs_vector = nullptr;
+    mfem::Vector *steady_solution_vector = nullptr;
+    mfem::GridFunction *steady_potential_grid = nullptr;
+    mfem::HypreParMatrix *steady_hypre_matrix = nullptr;
+    mfem::HypreSolver *steady_hypre_solver = nullptr;
+    const double *steady_field_data = nullptr;
+    const double *steady_visual_field_data = nullptr;
+    size_t steady_field_capacity = 0u;
+    size_t steady_visual_field_capacity = 0u;
     for (int repeat = 0; repeat < kRepeatedSolves; ++repeat) {
         error.clear();
         check_result(fullmag::fem::context_compute_demag_poisson(
@@ -1715,6 +1728,39 @@ void nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves() {
                      "repeated nonperiodic Poisson solve");
         check(h_demag.size() == m_xyz.size() && std::isfinite(demag_energy),
               "repeated Poisson solve must publish finite field and energy");
+        if (repeat == 0) {
+            steady_rhs_workspace = ctx.poisson_demag.rhs_workspace;
+            steady_recovery_workspace = ctx.poisson_demag.recovery_workspace;
+            steady_hypre_workspace = ctx.poisson_demag.hypre_workspace;
+            steady_rhs_form = ctx.poisson_demag.rhs_form;
+            steady_rhs_vector = ctx.poisson_demag.rhs_vec;
+            steady_solution_vector = ctx.poisson_demag.solution_vec;
+            steady_potential_grid = ctx.poisson_demag.gf_potential;
+            steady_hypre_matrix = ctx.poisson_demag.cached_hypre_par;
+            steady_hypre_solver = ctx.poisson_demag.cached_hypre_solver;
+            steady_field_data = h_demag.data();
+            steady_visual_field_data = ctx.demag.h_visual_xyz.data();
+            steady_field_capacity = h_demag.capacity();
+            steady_visual_field_capacity = ctx.demag.h_visual_xyz.capacity();
+        } else {
+            check(
+                ctx.poisson_demag.rhs_workspace == steady_rhs_workspace &&
+                    ctx.poisson_demag.recovery_workspace == steady_recovery_workspace &&
+                    ctx.poisson_demag.hypre_workspace == steady_hypre_workspace &&
+                    ctx.poisson_demag.rhs_form == steady_rhs_form &&
+                    ctx.poisson_demag.rhs_vec == steady_rhs_vector &&
+                    ctx.poisson_demag.solution_vec == steady_solution_vector &&
+                    ctx.poisson_demag.gf_potential == steady_potential_grid &&
+                    ctx.poisson_demag.cached_hypre_par == steady_hypre_matrix &&
+                    ctx.poisson_demag.cached_hypre_solver == steady_hypre_solver,
+                "steady-state Poisson solve must preserve every setup-owned storage identity");
+            check(
+                h_demag.data() == steady_field_data &&
+                    h_demag.capacity() == steady_field_capacity &&
+                    ctx.demag.h_visual_xyz.data() == steady_visual_field_data &&
+                    ctx.demag.h_visual_xyz.capacity() == steady_visual_field_capacity,
+                "steady-state Poisson solve must not reallocate field output storage");
+        }
     }
 
     check(ctx.poisson_demag.operator_lifecycle.active_key == setup_key,
@@ -1730,7 +1776,8 @@ void nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves() {
     check(ctx.poisson_demag.fresh_zero_guess_count == 1u,
           "repeated Poisson solves must reuse the first converged Hypre solution");
     check(ctx.poisson_demag.cached_hypre_par != nullptr &&
-              ctx.poisson_demag.cached_hypre_solver != nullptr,
+              ctx.poisson_demag.cached_hypre_solver != nullptr &&
+              ctx.poisson_demag.last_solver_setup_reused,
           "repeated Poisson solves must retain cached Hypre operator and solver");
 
     fullmag::fem::context_destroy_poisson(ctx);
