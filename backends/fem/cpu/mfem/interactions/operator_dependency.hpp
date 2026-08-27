@@ -2,7 +2,13 @@
 
 #include <cstdint>
 
+namespace mfem {
+class Mesh;
+}
+
 namespace fullmag::fem {
+
+struct Context;
 
 /*
  * Immutable inputs that determine the assembled MFEM exchange operator.
@@ -56,5 +62,15 @@ struct OperatorLifecycleReceipt {
     std::uint64_t failed_setup_count = 0;
     bool setup_complete = false;
 };
+
+/*
+ * Recompute the dependency key observed by the public MFEM runtime.  The
+ * exchange field path uses this before every apply so mutations of an
+ * operator input fail closed instead of silently reusing stale assembly.
+ */
+OperatorDependencyKey make_exchange_operator_dependency_key(
+    const Context &ctx,
+    const mfem::Mesh &mesh,
+    bool use_device);
 
 } // namespace fullmag::fem

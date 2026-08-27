@@ -146,7 +146,7 @@ std::uint64_t hash_periodic_data(const Context &ctx)
     return state;
 }
 
-OperatorDependencyKey make_exchange_operator_dependency_key(
+OperatorDependencyKey make_exchange_operator_dependency_key_impl(
     const Context &ctx,
     const mfem::Mesh &mesh,
     bool use_device)
@@ -256,6 +256,14 @@ mfem::SparseMatrix *regularize_sparse_matrix_zero_rows(
 }
 
 } // namespace
+
+OperatorDependencyKey make_exchange_operator_dependency_key(
+    const Context &ctx,
+    const mfem::Mesh &mesh,
+    bool use_device)
+{
+    return make_exchange_operator_dependency_key_impl(ctx, mesh, use_device);
+}
 
 bool initialize_exchange_operator_mfem(
     Context &ctx,

@@ -364,10 +364,13 @@ void exchange_operator_lifecycle_is_revision_driven() {
                 std::string::npos,
         "exchange setup must publish its dependency key only after setup succeeds");
     check(
-        field_module.find("operator_lifecycle.setup_complete") != std::string::npos &&
+        field_module.find("make_exchange_operator_dependency_key") != std::string::npos &&
+            field_module.find("current_key != ctx.exchange.mfem.operator_lifecycle.active_key") !=
+                std::string::npos &&
+            field_module.find("operator_lifecycle.setup_complete") != std::string::npos &&
             mass_projection.find("operator_lifecycle.apply_count") != std::string::npos &&
             mass_projection.find("operator_lifecycle.reuse_count") != std::string::npos,
-        "exchange apply must fail closed without setup and count reuse of the published operator");
+        "exchange apply must detect changed dependencies, fail closed without setup, and count reuse");
     check(
         aggregate.find("lifecycle.invalidation_count") != std::string::npos &&
             aggregate.find("lifecycle.setup_complete = false") !=
@@ -940,6 +943,43 @@ void periodic_consistent_mass_projection_reuses_reduced_workspace()
         !ctx.exchange.mfem.operator_lifecycle.setup_complete &&
             ctx.exchange.mfem.operator_lifecycle.invalidation_count == 1u,
         "changing exchange projection policy must invalidate the active operator receipt");
+    fullmag::fem::context_destroy_mfem(ctx);
+}
+
+void exchange_public_apply_fails_closed_after_mesh_mutation()
+{
+    mfem::Mesh mesh = single_exchange_cell(mfem::Geometry::TETRAHEDRON);
+    mfem::H1_FECollection fec(1, 3);
+    mfem::FiniteElementSpace fes(&mesh, &fec);
+    mfem::ConstantCoefficient a_coeff(1.7);
+    mfem::ConstantCoefficient ms_coeff(4.0);
+    fullmag::fem::Context ctx;
+    ctx.exchange.enabled = true;
+    ctx.mesh.n_nodes = static_cast<uint32_t>(fes.GetNDofs());
+    ctx.mesh.magnetic_element_mask = {1u};
+    std::string error;
+    check(
+        fullmag::fem::initialize_exchange_operator_mfem(
+            ctx, mesh, fes, a_coeff, ms_coeff, error),
+        error.c_str());
+
+    ctx.mfem_context.mesh = &mesh;
+    ctx.mfem_context.ready = true;
+    mesh.GetVertex(0)[0] += 0.125;
+    std::vector<double> h_ex;
+    error.clear();
+    check(
+        !fullmag::fem::compute_exchange_for_magnetization(
+            ctx, {}, h_ex, nullptr, nullptr, false, error),
+        "public exchange apply must fail closed after a mesh mutation");
+    check(
+        error.find("dependencies changed") != std::string::npos &&
+            !ctx.exchange.mfem.operator_lifecycle.setup_complete &&
+            ctx.exchange.mfem.operator_lifecycle.invalidation_count == 1u,
+        "mesh mutation must invalidate the published exchange lifecycle receipt");
+
+    ctx.mfem_context.mesh = nullptr;
+    ctx.mfem_context.ready = false;
     fullmag::fem::context_destroy_mfem(ctx);
 }
 
@@ -1845,6 +1885,7 @@ int main() {
     exchange_plan_fields_are_imported_by_aggregate();
 #if FULLMAG_HAS_MFEM_STACK
     periodic_consistent_mass_projection_reuses_reduced_workspace();
+    exchange_public_apply_fails_closed_after_mesh_mutation();
     production_exchange_supports_each_mixed_p1_cell_family();
     production_exchange_masks_air_in_conforming_mixed_domain();
 #if FULLMAG_HAS_CUDA_RUNTIME
