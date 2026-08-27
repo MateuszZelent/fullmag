@@ -1473,6 +1473,80 @@ void nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves() {
     fullmag::fem::context_destroy_poisson(ctx);
 }
 
+void failed_hypre_setup_does_not_publish_partial_state() {
+    mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
+    mfem::H1_FECollection state_fec(1, 3);
+    mfem::FiniteElementSpace state_fes(&mesh, &state_fec);
+    fullmag::fem::Context ctx;
+    mixed_poisson_context(ctx, mesh, state_fes, {1u, 0u, 0u});
+    ctx.demag.solver.preconditioner =
+        static_cast<fullmag_fem_preconditioner>(999);
+
+    std::string error;
+    check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
+                 "failed Hypre setup regression initialization");
+    std::vector<double> m_xyz(
+        3u * static_cast<size_t>(state_fes.GetNDofs()), 0.0);
+    for (int node = 0; node < state_fes.GetNDofs(); ++node) {
+        const size_t base = 3u * static_cast<size_t>(node);
+        m_xyz[base] = 1.0 + 0.01 * static_cast<double>(node);
+        m_xyz[base + 1u] = -0.02 * static_cast<double>(node);
+        m_xyz[base + 2u] = 0.15;
+    }
+
+    std::vector<double> h_demag;
+    double demag_energy = 0.0;
+    error.clear();
+    check(
+        !fullmag::fem::context_compute_demag_poisson(
+            ctx,
+            m_xyz,
+            h_demag,
+            demag_energy,
+            false,
+            nullptr,
+            error),
+        "unsupported Hypre preconditioner must fail closed");
+    check(
+        error.find("Unsupported native FEM demag preconditioner enum") !=
+            std::string::npos,
+        "failed Hypre setup must report the unsupported preconditioner");
+    check(
+        !ctx.poisson_demag.solver_setup &&
+            ctx.poisson_demag.hypre_workspace == nullptr &&
+            ctx.poisson_demag.cached_hypre_par == nullptr &&
+            ctx.poisson_demag.cached_hypre_preconditioner == nullptr &&
+            ctx.poisson_demag.cached_hypre_solver == nullptr,
+        "failed Hypre setup must not publish partial workspace or solver state");
+    check(
+        ctx.poisson_demag.setup_count == 0u,
+        "failed Hypre setup must not increment setup count");
+
+    fullmag::fem::context_destroy_poisson(ctx);
+    mixed_poisson_context(ctx, mesh, state_fes, {1u, 0u, 0u});
+    check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
+                 "Hypre setup recovery initialization");
+    error.clear();
+    check_result(
+        fullmag::fem::context_compute_demag_poisson(
+            ctx,
+            m_xyz,
+            h_demag,
+            demag_energy,
+            false,
+            nullptr,
+            error),
+        error,
+        "valid Hypre setup must succeed after failed setup");
+    check(
+        ctx.poisson_demag.solver_setup &&
+            ctx.poisson_demag.hypre_workspace != nullptr &&
+            ctx.poisson_demag.cached_hypre_par != nullptr &&
+            ctx.poisson_demag.cached_hypre_solver != nullptr,
+        "recovered Hypre setup must publish a complete workspace");
+    fullmag::fem::context_destroy_poisson(ctx);
+}
+
 std::vector<double> apply_demag_rhs_csr(
     const fullmag::fem::DeviceCsrTriple &op,
     const std::vector<double> &m_xyz) {
@@ -2650,7 +2724,7 @@ void demag_hypre_solve_is_owned_by_poisson_hypre_module() {
         "bool demag_poisson_hypre_has_warm_start(",
         "void destroy_demag_poisson_hypre_workspace(",
         "bool solve_demag_poisson_hypre(",
-        "auto *A_par = new mfem::HypreParMatrix",
+        "staged_A = new mfem::HypreParMatrix",
         "new mfem::HypreBoomerAMG",
         "new mfem::HyprePCG",
         "new mfem::HypreGMRES",
@@ -3327,6 +3401,7 @@ int main() {
     periodic_poisson_remains_explicit_p1_node_class_space();
     poisson_dependency_key_fails_closed_after_mesh_or_policy_mutation();
     nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves();
+    failed_hypre_setup_does_not_publish_partial_state();
     mixed_poisson_manufactured_rhs_stiffness_recovery_and_trace();
     mixed_poisson_rhs_is_magnetic_only_with_air_present();
     mixed_p1_gpu_rhs_and_magnetic_recovery_match_cpu_mfem();
