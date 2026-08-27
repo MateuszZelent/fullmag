@@ -41,10 +41,49 @@ void debug_checkpoint(const char *stage)
     std::fflush(stderr);
 }
 
+class PoissonSetupAttempt final {
+public:
+    explicit PoissonSetupAttempt(Context &ctx) : ctx_(ctx) {}
+
+    ~PoissonSetupAttempt()
+    {
+        if (!committed_) {
+            ++ctx_.poisson_demag.operator_lifecycle.failed_setup_count;
+        }
+    }
+
+    void commit() noexcept { committed_ = true; }
+
+private:
+    Context &ctx_;
+    bool committed_ = false;
+};
+
+bool poisson_resources_present(const Context &ctx)
+{
+    const auto &poisson = ctx.poisson_demag;
+    return poisson.ready ||
+        poisson.potential_fec != nullptr ||
+        poisson.potential_fes != nullptr ||
+        poisson.gf_potential != nullptr ||
+        poisson.poisson_bilinear != nullptr ||
+        poisson.poisson_bc_op != nullptr ||
+        poisson.rhs_workspace != nullptr ||
+        poisson.solution_vec != nullptr ||
+        poisson.recovery_workspace != nullptr ||
+        poisson.periodic_workspace != nullptr ||
+        poisson.hypre_workspace != nullptr ||
+        poisson.gpu_workspace != nullptr;
+}
+
 } // namespace
 
 bool context_initialize_poisson(Context &ctx, std::string &error)
 {
+    if (poisson_resources_present(ctx)) {
+        context_destroy_poisson(ctx);
+    }
+    PoissonSetupAttempt setup_attempt(ctx);
     try {
         debug_checkpoint("context_initialize_poisson:enter");
         auto *mesh = static_cast<mfem::Mesh *>(ctx.mfem_context.mesh);
@@ -112,7 +151,12 @@ bool context_initialize_poisson(Context &ctx, std::string &error)
             return false;
         }
 
+        ctx.poisson_demag.operator_lifecycle.active_key =
+            make_poisson_operator_dependency_key(ctx, *mesh, use_device);
+        ctx.poisson_demag.operator_lifecycle.setup_count += 1u;
+        ctx.poisson_demag.operator_lifecycle.setup_complete = true;
         ctx.poisson_demag.ready = true;
+        setup_attempt.commit();
         debug_checkpoint("context_initialize_poisson:done");
         return true;
     } catch (const std::exception &ex) {
@@ -152,6 +196,7 @@ void context_destroy_poisson(Context &ctx)
     ctx.poisson_demag.last_recovered_field_energy_joules = 0.0;
     ctx.poisson_demag.ess_tdof_list.clear();
     ctx.poisson_demag.ready = false;
+    ctx.poisson_demag.operator_lifecycle = {};
 }
 #endif
 

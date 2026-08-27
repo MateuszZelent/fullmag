@@ -272,7 +272,9 @@ std::string read_text_file(const std::filesystem::path &path) {
     }
     std::ostringstream buffer;
     buffer << in.rdbuf();
-    return buffer.str();
+    std::string text = buffer.str();
+    text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());
+    return text;
 }
 
 std::filesystem::path fem_source_root() {
@@ -495,6 +497,55 @@ void poisson_source_files_document_module_boundaries() {
     check(
         telemetry.find("does not assemble RHS, solve Poisson, recover fields, compute energy, or manage cache") != std::string::npos,
         "Poisson demag telemetry source file must document its non-owning compute boundary");
+}
+
+void poisson_dependency_key_and_guard_are_owned_by_dependency_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string dependency = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "demag_poisson_dependency.cpp");
+    const std::string runtime = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "demag_poisson_runtime.hpp");
+    const std::string dispatcher = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "demag.cpp");
+    const std::string solve = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "demag_poisson_solve.cpp");
+    const std::string cache = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "demag_poisson_cache.cpp");
+
+    check(
+        dependency.find("Poisson demag dependency source contract") != std::string::npos,
+        "Poisson dependency source must document its source contract");
+    for (const char *field : {
+             "mesh_topology_revision",
+             "mesh_geometry_revision",
+             "potential_order",
+             "material_membership_revision",
+             "boundary_revision",
+             "periodic_revision",
+             "realization_revision",
+             "solver_policy_revision"}) {
+        check(
+            runtime.find(field) != std::string::npos,
+            "Poisson dependency key must expose every operator input revision");
+    }
+    check(
+        runtime.find("PoissonOperatorLifecycleReceipt") != std::string::npos,
+        "Poisson runtime must expose a lifecycle receipt");
+    check(
+        dependency.find("destroy_demag_poisson_hypre_workspace(ctx)") != std::string::npos &&
+            dependency.find("destroy_demag_periodic_poisson_reduction(ctx)") != std::string::npos,
+        "Poisson dependency invalidation must tear down stale solver workspaces");
+    check(
+        dispatcher.find("demag_poisson_operator_dependencies_current(ctx, error)") !=
+            std::string::npos,
+        "demag dispatcher must validate Poisson dependencies before cache dispatch");
+    check(
+        solve.find("demag_poisson_operator_dependencies_current(ctx, error)") !=
+            std::string::npos,
+        "Poisson solve must validate dependencies before RHS/solver work");
+    check(
+        cache.find("demag_poisson_operator_dependencies_current(") == std::string::npos,
+        "Poisson cache module must not own dependency validation");
 }
 
 void poisson_debug_env_gate_is_cached_on_hot_path() {
@@ -1240,6 +1291,68 @@ void periodic_poisson_remains_explicit_p1_node_class_space() {
           "static periodic node-class Poisson must remain explicitly P1");
     check(potential_fes.GetTrueVSize() == state_fes.GetTrueVSize(),
           "periodic P1 potential must remain compatible with node classes");
+    fullmag::fem::context_destroy_poisson(ctx);
+}
+
+void poisson_dependency_key_fails_closed_after_mesh_or_policy_mutation() {
+    mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
+    mfem::H1_FECollection state_fec(1, 3);
+    mfem::FiniteElementSpace state_fes(&mesh, &state_fec);
+    fullmag::fem::Context ctx;
+    mixed_poisson_context(ctx, mesh, state_fes, {1u, 0u, 0u});
+
+    std::string error;
+    check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
+                 "Poisson dependency lifecycle setup");
+    const auto active_key = ctx.poisson_demag.operator_lifecycle.active_key;
+    check(ctx.poisson_demag.operator_lifecycle.setup_complete,
+          "Poisson dependency lifecycle publishes complete setup");
+    check(ctx.poisson_demag.operator_lifecycle.setup_count == 1u,
+          "Poisson dependency lifecycle publishes one setup");
+    check(
+        fullmag::fem::make_poisson_operator_dependency_key(
+            ctx, mesh, mfem::Device::IsEnabled()) == active_key,
+        "Poisson dependency key is stable without input mutation");
+
+    ctx.poisson_demag.robin_beta_factor += 0.25;
+    check(
+        fullmag::fem::make_poisson_operator_dependency_key(
+            ctx, mesh, mfem::Device::IsEnabled()) != active_key,
+        "Poisson dependency key includes the Robin policy");
+    ctx.poisson_demag.robin_beta_factor -= 0.25;
+
+    mesh.GetVertex(0)[0] += 0.125;
+    ctx.demag.cache_valid = true;
+    ctx.demag.cached_xyz = {1.0, 2.0, 3.0};
+    ctx.demag.cached_visual_xyz = {4.0, 5.0, 6.0};
+
+    std::vector<double> h_demag;
+    double demag_energy = 0.0;
+    error.clear();
+    check(
+        !fullmag::fem::context_compute_demag_poisson(
+            ctx,
+            {},
+            h_demag,
+            demag_energy,
+            false,
+            nullptr,
+            error),
+        "Poisson public solve fails closed after mesh mutation");
+    check(
+        error.find("dependencies changed") != std::string::npos,
+        "Poisson dependency failure names the changed dependencies");
+    check(!ctx.poisson_demag.ready &&
+              !ctx.poisson_demag.operator_lifecycle.setup_complete,
+          "Poisson dependency mutation marks operator unavailable");
+    check(ctx.poisson_demag.operator_lifecycle.invalidation_count == 1u,
+          "Poisson dependency mutation increments invalidation count");
+    check(!ctx.demag.cache_valid && ctx.demag.cached_xyz.empty() &&
+              ctx.demag.cached_visual_xyz.empty(),
+          "Poisson dependency mutation invalidates frozen field cache");
+    check(ctx.poisson_demag.operator_lifecycle.active_key == active_key,
+          "Poisson receipt retains the last published key for diagnostics");
+
     fullmag::fem::context_destroy_poisson(ctx);
 }
 
@@ -2225,9 +2338,11 @@ void demag_periodic_reduction_is_owned_by_poisson_periodic_module() {
                 std::string::npos &&
             periodic.find("residual_vector.Norml2()") != std::string::npos,
         "Poisson periodic reduced solve must validate convergence with a recomputed true residual");
+    const std::size_t periodic_reset = periodic.find("*x_p = 0.0;");
+    const std::size_t periodic_apply = periodic.find("solver_apply_wall_start");
     check(
-        periodic.find("*x_p = 0.0;\n    const auto solver_apply_wall_start") !=
-            std::string::npos,
+        periodic_reset != std::string::npos && periodic_apply != std::string::npos &&
+            periodic_reset < periodic_apply,
         "Poisson periodic reduced solve must reset the reduced solution before each fresh tangent solve");
     check(
         periodic.find("ctx.poisson_demag.last_iterations = 0;") == std::string::npos,
@@ -3062,6 +3177,7 @@ int main() {
     poisson_runtime_wrappers_are_owned_by_separate_modules();
     poisson_aggregate_header_documents_submodule_boundaries();
     poisson_source_files_document_module_boundaries();
+    poisson_dependency_key_and_guard_are_owned_by_dependency_module();
     poisson_debug_env_gate_is_cached_on_hot_path();
     demag_energy_uses_half_factor_ms_mass_and_magnetic_mask();
 #if FULLMAG_HAS_MFEM_STACK
@@ -3081,6 +3197,7 @@ int main() {
     sharp_ms_demag_rhs_matches_elementwise_p1_gradient_oracle();
     nonperiodic_poisson_uses_p2_potential_over_p1_magnetization();
     periodic_poisson_remains_explicit_p1_node_class_space();
+    poisson_dependency_key_fails_closed_after_mesh_or_policy_mutation();
     mixed_poisson_manufactured_rhs_stiffness_recovery_and_trace();
     mixed_poisson_rhs_is_magnetic_only_with_air_present();
     mixed_p1_gpu_rhs_and_magnetic_recovery_match_cpu_mfem();

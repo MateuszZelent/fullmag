@@ -55,6 +55,9 @@ bool context_compute_demag_poisson(
     PhaseTimings *timings,
     std::string &error)
 {
+    if (!demag_poisson_operator_dependencies_current(ctx, error)) {
+        return false;
+    }
     if (!ctx.poisson_demag.ready) {
         error = "Poisson demag requested before initialization";
         return false;
@@ -72,6 +75,10 @@ bool context_compute_demag_poisson(
     if (rhs == nullptr) {
         error = "Poisson RHS assembly returned a null RHS vector";
         return false;
+    }
+    ++ctx.poisson_demag.operator_lifecycle.apply_count;
+    if (ctx.poisson_demag.operator_lifecycle.apply_count > 1u) {
+        ++ctx.poisson_demag.operator_lifecycle.reuse_count;
     }
     const uint64_t assemble_wall_time_ns = elapsed_ns(assemble_wall_start);
     if (allow_interrupt && poll_interrupt(ctx)) {

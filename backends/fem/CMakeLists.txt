@@ -82,6 +82,7 @@ set(FEM_SOURCES
     cpu/mfem/interactions/demag_poisson.cpp
     cpu/mfem/interactions/demag_poisson_boundary.cpp
     cpu/mfem/interactions/demag_poisson_cache.cpp
+    cpu/mfem/interactions/demag_poisson_dependency.cpp
     cpu/mfem/interactions/demag_poisson_energy.cpp
     cpu/mfem/interactions/demag_poisson_field.cpp
     cpu/mfem/interactions/demag_poisson_hypre.cpp
