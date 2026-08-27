@@ -9,6 +9,7 @@ name = "fullmag-bench"
 path = "src/main.rs"
 
 [dependencies]
+fullmag-build-info = { path = "../fullmag-build-info" }
 fullmag-engine = { path = "../fullmag-engine", features = ["parallel", "telemetry"] }
 fullmag-fdm-demag = { path = "../fullmag-fdm-demag" }
 fullmag-ir = { path = "../fullmag-ir" }

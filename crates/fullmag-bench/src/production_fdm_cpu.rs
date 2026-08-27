@@ -85,12 +85,41 @@ struct ProductionQualificationSuite {
     schema_version: &'static str,
     commit: String,
     build_identity: String,
+    source_identity: SourceIdentityEvidence,
+    hardware_identity: HardwareIdentity,
+    hardware_fingerprint_sha256: String,
     profile: String,
     qualification_status: &'static str,
     qualification_blockers: Vec<&'static str>,
     process_peak_resident_bytes: u64,
     time_to_accuracy: TimeToAccuracyEvidence,
     results: Vec<ProductionRunEvidence>,
+}
+
+#[derive(Debug, Serialize)]
+struct SourceIdentityEvidence {
+    built_at_utc: &'static str,
+    git_commit: &'static str,
+    worktree_state: &'static str,
+    source_snapshot_sha256: &'static str,
+    rustc_version: &'static str,
+    target_triple: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct HardwareIdentity {
+    operating_system: &'static str,
+    architecture: &'static str,
+    cpu_vendor: String,
+    cpu_brand: String,
+    detected_cpu_features: Vec<&'static str>,
+    available_logical_cpu_count: usize,
+    rayon_thread_count: usize,
+    rayon_num_threads_environment: Option<String>,
+    thread_policy: &'static str,
+    precision_policy: &'static str,
+    accelerator_driver: &'static str,
+    accelerator_toolkit: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -122,6 +151,9 @@ struct TimeToAccuracyRunEvidence {
 pub(super) fn run_from_args(args: &[String]) -> Result<(), String> {
     let config = parse_args(args)?;
     validate_output_root(&config.output_root)?;
+    let source_identity = source_identity(&config.commit)?;
+    let hardware_identity = hardware_identity()?;
+    let hardware_fingerprint_sha256 = sha256_json(&hardware_identity)?;
     fs::create_dir_all(&config.output_root)
         .map_err(|error| format!("creating output root: {error}"))?;
 
@@ -169,6 +201,9 @@ pub(super) fn run_from_args(args: &[String]) -> Result<(), String> {
         schema_version: SCHEMA_VERSION,
         commit: config.commit,
         build_identity: config.build_identity,
+        source_identity,
+        hardware_identity,
+        hardware_fingerprint_sha256,
         profile: match config.profile {
             Profile::Smoke => "smoke".to_string(),
             Profile::Full => "full".to_string(),
@@ -232,6 +267,142 @@ fn required_environment(name: &str) -> Result<String, String> {
         .ok()
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| format!("{name} must be set to a non-empty value"))
+}
+
+fn source_identity(expected_commit: &str) -> Result<SourceIdentityEvidence, String> {
+    if !is_lower_hex(expected_commit, 40) {
+        return Err("FULLMAG_BENCH_COMMIT must be exactly 40 lowercase hex digits".to_string());
+    }
+    let identity = fullmag_build_info::identity();
+    if identity.git_commit != expected_commit {
+        return Err(format!(
+            "embedded build commit {} does not match requested benchmark commit {expected_commit}",
+            identity.git_commit
+        ));
+    }
+    if !matches!(identity.worktree_state, "clean" | "dirty") {
+        return Err(format!(
+            "embedded worktree state must be clean or dirty, got {}",
+            identity.worktree_state
+        ));
+    }
+    if !is_lower_hex(identity.source_snapshot_sha256, 64) {
+        return Err("embedded source snapshot must be exactly 64 lowercase hex digits".to_string());
+    }
+    Ok(SourceIdentityEvidence {
+        built_at_utc: identity.built_at_utc,
+        git_commit: identity.git_commit,
+        worktree_state: identity.worktree_state,
+        source_snapshot_sha256: identity.source_snapshot_sha256,
+        rustc_version: env!("FULLMAG_BENCH_RUSTC_VERSION"),
+        target_triple: env!("FULLMAG_BENCH_TARGET"),
+    })
+}
+
+fn is_lower_hex(value: &str, length: usize) -> bool {
+    value.len() == length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn hardware_identity() -> Result<HardwareIdentity, String> {
+    let (cpu_vendor, cpu_brand) = x86_cpu_identity()?;
+    let available_logical_cpu_count = std::thread::available_parallelism()
+        .map_err(|error| format!("resolving available logical CPU count: {error}"))?
+        .get();
+    let rayon_thread_count = rayon::current_num_threads();
+    if rayon_thread_count == 0 || rayon_thread_count > available_logical_cpu_count {
+        return Err(format!(
+            "Rayon thread count {rayon_thread_count} is outside available CPU count {available_logical_cpu_count}"
+        ));
+    }
+    Ok(HardwareIdentity {
+        operating_system: std::env::consts::OS,
+        architecture: std::env::consts::ARCH,
+        cpu_vendor,
+        cpu_brand,
+        detected_cpu_features: detected_x86_cpu_features(),
+        available_logical_cpu_count,
+        rayon_thread_count,
+        rayon_num_threads_environment: std::env::var("RAYON_NUM_THREADS").ok(),
+        thread_policy: "rayon_global_pool",
+        precision_policy: "cpu_reference_double",
+        accelerator_driver: "not_applicable_cpu_reference",
+        accelerator_toolkit: "not_applicable_cpu_reference",
+    })
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn x86_cpu_identity() -> Result<(String, String), String> {
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::__cpuid;
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::__cpuid;
+
+    let leaf_zero = __cpuid(0);
+    let mut vendor_bytes = Vec::with_capacity(12);
+    vendor_bytes.extend_from_slice(&leaf_zero.ebx.to_le_bytes());
+    vendor_bytes.extend_from_slice(&leaf_zero.edx.to_le_bytes());
+    vendor_bytes.extend_from_slice(&leaf_zero.ecx.to_le_bytes());
+    let vendor = String::from_utf8(vendor_bytes)
+        .map_err(|error| format!("decoding CPUID vendor: {error}"))?;
+
+    let maximum_extended_leaf = __cpuid(0x8000_0000).eax;
+    if maximum_extended_leaf < 0x8000_0004 {
+        return Err("CPUID processor brand leaves are unavailable".to_string());
+    }
+    let mut brand_bytes = Vec::with_capacity(48);
+    for leaf in 0x8000_0002..=0x8000_0004 {
+        let values = __cpuid(leaf);
+        brand_bytes.extend_from_slice(&values.eax.to_le_bytes());
+        brand_bytes.extend_from_slice(&values.ebx.to_le_bytes());
+        brand_bytes.extend_from_slice(&values.ecx.to_le_bytes());
+        brand_bytes.extend_from_slice(&values.edx.to_le_bytes());
+    }
+    let brand = String::from_utf8(brand_bytes)
+        .map_err(|error| format!("decoding CPUID processor brand: {error}"))?
+        .trim_matches(char::from(0))
+        .trim()
+        .to_string();
+    if vendor.is_empty() || brand.is_empty() {
+        return Err("CPUID returned an empty CPU vendor or brand".to_string());
+    }
+    Ok((vendor, brand))
+}
+
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+fn x86_cpu_identity() -> Result<(String, String), String> {
+    Err(format!(
+        "hardware qualification identity is not implemented for architecture {}",
+        std::env::consts::ARCH
+    ))
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn detected_x86_cpu_features() -> Vec<&'static str> {
+    let mut features = Vec::new();
+    if std::arch::is_x86_feature_detected!("sse2") {
+        features.push("sse2");
+    }
+    if std::arch::is_x86_feature_detected!("avx") {
+        features.push("avx");
+    }
+    if std::arch::is_x86_feature_detected!("avx2") {
+        features.push("avx2");
+    }
+    if std::arch::is_x86_feature_detected!("fma") {
+        features.push("fma");
+    }
+    if std::arch::is_x86_feature_detected!("avx512f") {
+        features.push("avx512f");
+    }
+    features
+}
+
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+fn detected_x86_cpu_features() -> Vec<&'static str> {
+    Vec::new()
 }
 
 fn validate_output_root(output_root: &Path) -> Result<(), String> {
@@ -789,6 +960,26 @@ mod tests {
     #[test]
     fn process_peak_resident_memory_is_reported() {
         assert!(process_peak_resident_bytes().expect("process peak RSS") > 0);
+    }
+
+    #[test]
+    fn hardware_identity_is_complete_and_stably_hashable() {
+        let identity = hardware_identity().expect("supported qualification hardware");
+        assert!(!identity.cpu_vendor.is_empty());
+        assert!(!identity.cpu_brand.is_empty());
+        assert!(identity.available_logical_cpu_count > 0);
+        assert!(identity.rayon_thread_count > 0);
+        let first = sha256_json(&identity).expect("hash hardware identity");
+        let second = sha256_json(&identity).expect("hash hardware identity again");
+        assert_eq!(first, second);
+        assert!(first.starts_with("sha256:"));
+        assert_eq!(first.len(), 71);
+    }
+
+    #[test]
+    fn source_identity_rejects_noncanonical_commit_before_execution() {
+        let error = source_identity("b01851826").expect_err("abbreviated commit must fail");
+        assert!(error.contains("exactly 40 lowercase hex digits"));
     }
 
     #[test]
