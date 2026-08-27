@@ -163,7 +163,7 @@ void exchange_responsibilities_are_owned_by_separate_modules() {
         context.find("consistent_mass_requested") == std::string::npos,
         "context_from_plan must not keep local exchange consistent-mass state");
     check(
-        aggregate.find("ctx.exchange.enabled = plan.enable_exchange != 0;") !=
+        aggregate.find("const bool enabled = plan.enable_exchange != 0;") !=
             std::string::npos,
         "exchange plan import must own the exchange enable flag");
     check(
@@ -312,6 +312,67 @@ void exchange_runtime_state_is_owned_by_aggregate_module() {
             context_header.find(flat_exchange_field) == std::string::npos,
             "Context must not own flat MFEM exchange runtime workspace fields");
     }
+}
+
+void exchange_operator_lifecycle_is_revision_driven() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string dependency_header = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "operator_dependency.hpp");
+    const std::string exchange_header = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "exchange.hpp");
+    const std::string operator_module = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "exchange_operator.cpp");
+    const std::string field_module = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "exchange_field.cpp");
+    const std::string mass_projection = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "exchange_mass_projection.cpp");
+    const std::string aggregate = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "exchange.cpp");
+
+    check(
+        dependency_header.find("struct OperatorDependencyKey") != std::string::npos &&
+            dependency_header.find("mesh_topology_revision") != std::string::npos &&
+            dependency_header.find("mesh_geometry_revision") != std::string::npos &&
+            dependency_header.find("fe_order") != std::string::npos &&
+            dependency_header.find("material_coefficient_revision") != std::string::npos &&
+            dependency_header.find("boundary_revision") != std::string::npos &&
+            dependency_header.find("periodic_revision") != std::string::npos &&
+            dependency_header.find("device_mode") != std::string::npos,
+        "exchange dependency key must cover mesh, FE, material, boundary, periodic, and device inputs");
+    check(
+        dependency_header.find("struct OperatorLifecycleReceipt") != std::string::npos &&
+            dependency_header.find("setup_count") != std::string::npos &&
+            dependency_header.find("apply_count") != std::string::npos &&
+            dependency_header.find("reuse_count") != std::string::npos &&
+            dependency_header.find("invalidation_count") != std::string::npos &&
+            dependency_header.find("failed_setup_count") != std::string::npos,
+        "exchange lifecycle receipt must publish setup/apply/reuse/invalidation counters");
+    check(
+        exchange_header.find("OperatorLifecycleReceipt operator_lifecycle") !=
+            std::string::npos,
+        "exchange MFEM runtime must own the typed operator lifecycle receipt");
+    check(
+        operator_module.find("ExchangeSetupAttempt setup_attempt(ctx)") !=
+                std::string::npos &&
+            operator_module.find("make_exchange_operator_dependency_key") !=
+                std::string::npos &&
+            operator_module.find("operator_lifecycle.active_key") !=
+                std::string::npos &&
+            operator_module.find("operator_lifecycle.setup_count += 1u") !=
+                std::string::npos &&
+            operator_module.find("operator_lifecycle.setup_complete = true") !=
+                std::string::npos,
+        "exchange setup must publish its dependency key only after setup succeeds");
+    check(
+        field_module.find("operator_lifecycle.setup_complete") != std::string::npos &&
+            mass_projection.find("operator_lifecycle.apply_count") != std::string::npos &&
+            mass_projection.find("operator_lifecycle.reuse_count") != std::string::npos,
+        "exchange apply must fail closed without setup and count reuse of the published operator");
+    check(
+        aggregate.find("lifecycle.invalidation_count") != std::string::npos &&
+            aggregate.find("lifecycle.setup_complete = false") !=
+                std::string::npos,
+        "changing exchange plan policy must invalidate the published operator key");
 }
 
 void exchange_mass_projection_is_owned_by_mass_module() {
@@ -822,6 +883,11 @@ void periodic_consistent_mass_projection_reuses_reduced_workspace()
     auto *const solution = ctx.exchange.mfem.periodic_mass_solution;
     check(ctx.exchange.mfem.periodic_mass_setup_count == 1u,
         "periodic consistent-mass setup must be counted exactly once");
+    check(
+        ctx.exchange.mfem.operator_lifecycle.setup_complete &&
+            ctx.exchange.mfem.operator_lifecycle.setup_count == 1u,
+        "exchange setup must publish one complete dependency-keyed lifecycle receipt");
+    const auto setup_key = ctx.exchange.mfem.operator_lifecycle.active_key;
 
     mfem::GridFunction field(&fes);
     mfem::GridFunction ms_field(&fes);
@@ -860,6 +926,20 @@ void periodic_consistent_mass_projection_reuses_reduced_workspace()
         "periodic consistent-mass applies must reuse setup-owned workspace pointers");
     check(ctx.exchange.mfem.periodic_mass_solver_applies == 2u,
         "periodic consistent-mass telemetry must count both solver applies");
+    check(
+        ctx.exchange.mfem.operator_lifecycle.active_key == setup_key &&
+            ctx.exchange.mfem.operator_lifecycle.apply_count == 2u &&
+            ctx.exchange.mfem.operator_lifecycle.reuse_count == 2u,
+        "repeated exchange applies must reuse the setup-owned dependency-keyed operator");
+
+    fullmag_fem_plan_desc changed_plan{};
+    changed_plan.enable_exchange = 1;
+    changed_plan.use_consistent_mass = 0;
+    fullmag::fem::initialize_exchange_plan_fields(ctx, changed_plan);
+    check(
+        !ctx.exchange.mfem.operator_lifecycle.setup_complete &&
+            ctx.exchange.mfem.operator_lifecycle.invalidation_count == 1u,
+        "changing exchange projection policy must invalidate the active operator receipt");
     fullmag::fem::context_destroy_mfem(ctx);
 }
 
@@ -1758,6 +1838,7 @@ void active_exchange_reports_mfem_requirement_without_stack() {
 int main() {
     exchange_responsibilities_are_owned_by_separate_modules();
     exchange_runtime_state_is_owned_by_aggregate_module();
+    exchange_operator_lifecycle_is_revision_driven();
     exchange_mass_projection_is_owned_by_mass_module();
     exchange_legacy_gpu_upload_is_owned_by_upload_module();
     exchange_source_files_document_module_boundaries();

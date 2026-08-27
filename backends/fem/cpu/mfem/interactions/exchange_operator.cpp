@@ -21,12 +21,165 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace fullmag::fem {
 
 #if FULLMAG_HAS_MFEM_STACK
 namespace {
+
+constexpr std::uint64_t kFnvOffsetBasis = 1469598103934665603ull;
+constexpr std::uint64_t kFnvPrime = 1099511628211ull;
+
+template <typename T>
+void hash_bytes(std::uint64_t &state, const T *values, std::size_t count)
+{
+    static_assert(std::is_trivially_copyable_v<T>);
+    const auto *bytes = reinterpret_cast<const unsigned char *>(values);
+    for (std::size_t i = 0; i < count * sizeof(T); ++i) {
+        state ^= static_cast<std::uint64_t>(bytes[i]);
+        state *= kFnvPrime;
+    }
+}
+
+template <typename T>
+void hash_scalar(std::uint64_t &state, const T &value)
+{
+    hash_bytes(state, &value, 1u);
+}
+
+template <typename T>
+void hash_vector(std::uint64_t &state, const std::vector<T> &values)
+{
+    const std::uint64_t size = static_cast<std::uint64_t>(values.size());
+    hash_scalar(state, size);
+    if (!values.empty()) {
+        hash_bytes(state, values.data(), values.size());
+    }
+}
+
+std::uint64_t hash_mesh_topology(const Context &ctx, const mfem::Mesh &mesh)
+{
+    std::uint64_t state = kFnvOffsetBasis;
+    hash_scalar(state, ctx.mesh.n_nodes);
+    hash_scalar(state, ctx.mesh.n_elements);
+    hash_vector(state, ctx.mesh.cell_types);
+    hash_vector(state, ctx.mesh.cell_offsets);
+    hash_vector(state, ctx.mesh.cell_nodes);
+    hash_vector(state, ctx.mesh.cell_global_ordinals);
+    hash_vector(state, ctx.mesh.cell_markers);
+    hash_scalar(state, mesh.GetNV());
+    hash_scalar(state, mesh.GetNE());
+    for (int element = 0; element < mesh.GetNE(); ++element) {
+        hash_scalar(state, mesh.GetElementBaseGeometry(element));
+        hash_scalar(state, mesh.GetAttribute(element));
+        mfem::Array<int> vertices;
+        mesh.GetElementVertices(element, vertices);
+        hash_scalar(state, vertices.Size());
+        for (int vertex = 0; vertex < vertices.Size(); ++vertex) {
+            hash_scalar(state, vertices[vertex]);
+        }
+    }
+    return state;
+}
+
+std::uint64_t hash_mesh_geometry(const Context &ctx, const mfem::Mesh &mesh)
+{
+    std::uint64_t state = kFnvOffsetBasis;
+    hash_vector(state, ctx.mesh.nodes_xyz);
+    hash_scalar(state, mesh.GetNV());
+    hash_scalar(state, mesh.SpaceDimension());
+    for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) {
+        hash_bytes(
+            state,
+            mesh.GetVertex(vertex),
+            static_cast<std::size_t>(mesh.SpaceDimension()));
+    }
+    return state;
+}
+
+std::uint64_t hash_material_coefficients(const Context &ctx)
+{
+    std::uint64_t state = kFnvOffsetBasis;
+    hash_scalar(state, ctx.material_fields.material.saturation_magnetisation);
+    hash_scalar(state, ctx.material_fields.material.exchange_stiffness);
+    hash_vector(state, ctx.material_fields.Ms_field);
+    hash_vector(state, ctx.material_fields.Ms_element_field);
+    hash_vector(state, ctx.material_fields.A_field);
+    hash_vector(state, ctx.material_fields.A_element_field);
+    return state;
+}
+
+std::uint64_t hash_boundary_data(const Context &ctx, const mfem::Mesh &mesh)
+{
+    std::uint64_t state = kFnvOffsetBasis;
+    hash_vector(state, ctx.mesh.magnetic_element_mask);
+    hash_vector(state, ctx.mesh.magnetic_node_mask);
+    hash_scalar(state, mesh.GetNBE());
+    for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
+        hash_scalar(state, mesh.GetBdrElementGeometry(boundary));
+        hash_scalar(state, mesh.GetBdrElement(boundary)->GetAttribute());
+        mfem::Array<int> vertices;
+        mesh.GetBdrElementVertices(boundary, vertices);
+        hash_scalar(state, vertices.Size());
+        for (int vertex = 0; vertex < vertices.Size(); ++vertex) {
+            hash_scalar(state, vertices[vertex]);
+        }
+    }
+    return state;
+}
+
+std::uint64_t hash_periodic_data(const Context &ctx)
+{
+    std::uint64_t state = kFnvOffsetBasis;
+    hash_scalar(state, ctx.mesh.periodic_reduced_node_count);
+    hash_vector(state, ctx.mesh.periodic_node_pairs);
+    hash_vector(state, ctx.mesh.periodic_reduced_node);
+    hash_vector(state, ctx.mesh.periodic_representative_nodes);
+
+    std::vector<std::uint32_t> boundary_markers(
+        ctx.mesh.periodic_boundary_marker_set.begin(),
+        ctx.mesh.periodic_boundary_marker_set.end());
+    std::sort(boundary_markers.begin(), boundary_markers.end());
+    hash_vector(state, boundary_markers);
+    return state;
+}
+
+OperatorDependencyKey make_exchange_operator_dependency_key(
+    const Context &ctx,
+    const mfem::Mesh &mesh,
+    bool use_device)
+{
+    OperatorDependencyKey key;
+    key.mesh_topology_revision = hash_mesh_topology(ctx, mesh);
+    key.mesh_geometry_revision = hash_mesh_geometry(ctx, mesh);
+    key.fe_order = ctx.base_plan.fe_order;
+    key.material_coefficient_revision = hash_material_coefficients(ctx);
+    key.boundary_revision = hash_boundary_data(ctx, mesh);
+    key.periodic_revision = hash_periodic_data(ctx);
+    key.device_mode = use_device ? 1u : 0u;
+    key.device_index = static_cast<std::int32_t>(ctx.mfem_context.selected_device_index);
+    return key;
+}
+
+class ExchangeSetupAttempt final {
+public:
+    explicit ExchangeSetupAttempt(Context &ctx) : ctx_(ctx) {}
+
+    ~ExchangeSetupAttempt()
+    {
+        if (!committed_) {
+            ++ctx_.exchange.mfem.operator_lifecycle.failed_setup_count;
+        }
+    }
+
+    void commit() noexcept { committed_ = true; }
+
+private:
+    Context &ctx_;
+    bool committed_ = false;
+};
 
 mfem::SparseMatrix *regularize_sparse_matrix_zero_rows(
     const mfem::SparseMatrix &matrix);
@@ -112,6 +265,7 @@ bool initialize_exchange_operator_mfem(
     mfem::Coefficient &ms_coeff,
     std::string &error)
 {
+    ExchangeSetupAttempt setup_attempt(ctx);
     const bool use_device = mfem::Device::IsEnabled();
     auto exchange_form = std::make_unique<mfem::BilinearForm>(&fes);
     auto mass_form = std::make_unique<mfem::BilinearForm>(&fes);
@@ -325,6 +479,11 @@ bool initialize_exchange_operator_mfem(
     ctx.exchange.mfem.periodic_mass_residual = periodic_mass_residual.release();
     ctx.exchange.mfem.periodic_mass_setup_count =
         ctx.exchange.mfem.periodic_mass_matrix != nullptr ? 1u : 0u;
+    ctx.exchange.mfem.operator_lifecycle.active_key =
+        make_exchange_operator_dependency_key(ctx, mesh, use_device);
+    ctx.exchange.mfem.operator_lifecycle.setup_count += 1u;
+    ctx.exchange.mfem.operator_lifecycle.setup_complete = true;
+    setup_attempt.commit();
     return true;
 }
 #endif

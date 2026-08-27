@@ -5,6 +5,7 @@
 #include "cpu/mfem/interactions/exchange_legacy_gpu_upload.hpp"
 #include "cpu/mfem/interactions/exchange_operator.hpp"
 #include "cpu/mfem/interactions/exchange_runtime.hpp"
+#include "cpu/mfem/interactions/operator_dependency.hpp"
 #include "fullmag_fem.h"
 
 #include <cstdint>
@@ -56,6 +57,7 @@ struct ExchangeMfemRuntimeState {
     uint64_t consistent_mass_solver_applies = 0;
     uint64_t periodic_mass_solver_applies = 0;
     uint64_t periodic_mass_setup_count = 0;
+    OperatorLifecycleReceipt operator_lifecycle{};
     bool ready = false;
 };
 

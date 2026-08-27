@@ -54,6 +54,10 @@ bool compute_exchange_for_magnetization(
         error = "MFEM exchange requested before MFEM context initialization";
         return false;
     }
+    if (!ctx.exchange.mfem.operator_lifecycle.setup_complete) {
+        error = "MFEM exchange operator dependencies are invalid; setup must be rebuilt before apply";
+        return false;
+    }
 
     auto *exchange_form = static_cast<mfem::BilinearForm *>(ctx.exchange.mfem.exchange_form);
     auto *mass_form = static_cast<mfem::BilinearForm *>(ctx.exchange.mfem.mass_form);

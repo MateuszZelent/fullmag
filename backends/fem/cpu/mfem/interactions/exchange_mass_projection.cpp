@@ -151,6 +151,10 @@ bool apply_exchange_component_mass_projection(
     std::vector<double> &h_component_host,
     double *energy_out)
 {
+    if (ctx != nullptr && ctx->exchange.mfem.operator_lifecycle.setup_complete) {
+        ++ctx->exchange.mfem.operator_lifecycle.apply_count;
+        ++ctx->exchange.mfem.operator_lifecycle.reuse_count;
+    }
     exchange_form.Mult(m_component, tmp);
     if (allow_interrupt && ctx != nullptr && poll_interrupt(*ctx)) {
         return false;

@@ -453,6 +453,7 @@ void context_destroy_mfem(Context &ctx)
     ctx.exchange.mfem.consistent_mass_solver_applies = 0;
     ctx.exchange.mfem.periodic_mass_solver_applies = 0;
     ctx.exchange.mfem.periodic_mass_setup_count = 0;
+    ctx.exchange.mfem.operator_lifecycle = {};
     ctx.mfem_context.gf_ms = nullptr;
     ctx.mfem_context.gf_a = nullptr;
     ctx.mfem_context.gf_mz = nullptr;
