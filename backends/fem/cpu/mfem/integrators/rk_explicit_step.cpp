@@ -30,7 +30,9 @@
 #include "gpu/cuda/integrators/rk/rk.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -55,7 +57,52 @@ bool rk_rhs_allows_fsal_reuse(const fullmag::fem::Context &ctx)
     if (ctx.thermal_brown.temperature > 0.0) {
         return false;
     }
+    // Stage callbacks receive a stage identity and may carry mutable source
+    // state. Without a separate query-only revision endpoint, reusing their
+    // last-stage RHS across accepted-step boundaries would be speculative.
+    if (ctx.oersted.has_stage_callback || ctx.stage_transport.has_stage_callback) {
+        return false;
+    }
     return true;
+}
+
+bool last_stage_samples_accepted_endpoint(
+    const fullmag::fem::ExplicitTableau &tab)
+{
+    if (tab.stages <= 0 || tab.stages > fullmag::fem::MAX_RK_STAGES) {
+        return false;
+    }
+    return std::isfinite(tab.c[tab.stages - 1]) &&
+        std::abs(tab.c[tab.stages - 1] - 1.0) <=
+            64.0 * std::numeric_limits<double>::epsilon();
+}
+
+fullmag::fem::RkFinalRefreshReason endpoint_refresh_reason(
+    const fullmag::fem::ExplicitTableau &tab,
+    const fullmag::fem::EndpointCacheValidity &validity)
+{
+    if (validity.valid()) {
+        return fullmag::fem::RkFinalRefreshReason::CacheHit;
+    }
+    if (!tab.fsal) {
+        return fullmag::fem::RkFinalRefreshReason::NonFsalTableau;
+    }
+    if (!validity.state) {
+        return fullmag::fem::RkFinalRefreshReason::CandidateStateMismatch;
+    }
+    if (!validity.time) {
+        return fullmag::fem::RkFinalRefreshReason::EndpointTimeMismatch;
+    }
+    if (!validity.dynamic_sources) {
+        return fullmag::fem::RkFinalRefreshReason::DynamicSourceChanged;
+    }
+    if (!validity.transport) {
+        return fullmag::fem::RkFinalRefreshReason::TransportSourceChanged;
+    }
+    if (!validity.projection) {
+        return fullmag::fem::RkFinalRefreshReason::ProjectionMismatch;
+    }
+    return fullmag::fem::RkFinalRefreshReason::CacheUnavailable;
 }
 
 uint64_t stage_identity(
@@ -148,6 +195,7 @@ bool context_step_explicit_rk_mfem(
     const size_t dof_len = ctx.state.m_xyz.size();
     stepper_workspace_allocate(ctx.stepper.workspace, dof_len, tab.stages);
     auto &ws = ctx.stepper.workspace;
+    ws.endpoint_telemetry = {};
 
     const bool adaptive = (tab.order_est > 0) && ctx.adaptive_dt.enabled;
     double dt = dt_seconds;
@@ -483,9 +531,20 @@ bool context_step_explicit_rk_mfem(
             ctx.frozen_spins.project_onto_reference(ws.m_candidate);
         }
         if (final_stage_cache_valid) {
-            final_stage_cache_valid =
+            auto &validity = ws.endpoint_telemetry.cache_validity;
+            validity.state =
                 ws.m_candidate.size() == ws.m_stage.size() &&
                 std::equal(ws.m_candidate.cbegin(), ws.m_candidate.cend(), ws.m_stage.cbegin());
+            validity.time = validity.state && last_stage_samples_accepted_endpoint(tab);
+            // Brown noise is cached for the current accepted interval, so it
+            // is valid for this endpoint but is deliberately excluded from
+            // the next-step FSAL gate. Callback realizations are stage-identity
+            // and mutable-source aware; they require an explicit endpoint
+            // evaluation instead of assuming the last stage is reusable.
+            validity.dynamic_sources = validity.time && !ctx.oersted.has_stage_callback;
+            validity.transport = validity.time && !ctx.stage_transport.has_stage_callback;
+            validity.projection = validity.state;
+            final_stage_cache_valid = validity.valid();
         }
         if (poll_interrupt(ctx)) {
             ws.fsal_valid = false;
@@ -509,11 +568,19 @@ bool context_step_explicit_rk_mfem(
         break;
     }
 
+    auto &endpoint_telemetry = ws.endpoint_telemetry;
+    endpoint_telemetry.final_refresh_reason = endpoint_refresh_reason(
+        tab,
+        endpoint_telemetry.cache_validity);
+    const uint32_t demag_solves_before_endpoint_refresh =
+        ctx.poisson_demag.solves_current_step;
     if (final_stage_cache_valid) {
+        endpoint_telemetry.endpoint_cache_hits += 1u;
         std::swap(ctx.exchange.h_xyz, ws.h_ex_tmp);
         std::swap(ctx.demag.h_xyz, ws.h_demag_tmp);
         std::swap(ctx.effective_field.h_xyz, ws.h_eff_tmp);
     } else {
+        endpoint_telemetry.endpoint_refreshes += 1u;
         if (!compute_effective_fields_for_magnetization(
                 ctx,
                 ws.m_candidate,
@@ -537,6 +604,10 @@ bool context_step_explicit_rk_mfem(
             }
             return false;
         }
+        endpoint_telemetry.extra_poisson_solves +=
+            static_cast<uint64_t>(
+                ctx.poisson_demag.solves_current_step -
+                demag_solves_before_endpoint_refresh);
         if (rk_step_inject_failure(
                 ctx,
                 RkStepFailurePoint::DuringFinalFieldRefresh,
@@ -598,6 +669,7 @@ bool context_step_explicit_rk_mfem(
         }
         max_rhs_final = max_norm_aos(ws.k[0]);
         total_rhs += 1;
+        endpoint_telemetry.final_rhs_evaluations += 1u;
     }
 
     stats.step = ctx.state.step_count;
@@ -611,6 +683,7 @@ bool context_step_explicit_rk_mfem(
     stats.fsal_reused = fsal_used ? 1 : 0;
     apply_phase_timings(stats, timings);
     stats.wall_time_ns = elapsed_ns(wall_start);
+    endpoint_telemetry.accepted_step_wall_time_ns = stats.wall_time_ns;
     update_stage_completion_from_stats(ctx, stats);
 
     return true;

@@ -356,6 +356,55 @@ void workspace_allocates_common_buffers() {
     check(ws.err.size() == 9u, "adaptive error buffer allocated");
 }
 
+void endpoint_cache_telemetry_has_explicit_validity_dimensions() {
+    fullmag::fem::EndpointCacheValidity validity{};
+    check(!validity.valid(), "an empty endpoint cache validity must be invalid");
+    validity.state = true;
+    validity.time = true;
+    validity.dynamic_sources = true;
+    validity.transport = true;
+    validity.projection = true;
+    check(validity.valid(), "all endpoint cache validity dimensions must be required");
+
+    fullmag::fem::StepperWorkspace ws;
+    ws.endpoint_telemetry.cache_validity = validity;
+    ws.endpoint_telemetry.final_refresh_reason =
+        fullmag::fem::RkFinalRefreshReason::CacheHit;
+    ws.endpoint_telemetry.final_rhs_evaluations = 2u;
+    ws.endpoint_telemetry.extra_poisson_solves = 3u;
+    check(
+        ws.endpoint_telemetry.final_refresh_reason ==
+            fullmag::fem::RkFinalRefreshReason::CacheHit &&
+            ws.endpoint_telemetry.final_rhs_evaluations == 2u &&
+            ws.endpoint_telemetry.extra_poisson_solves == 3u,
+        "endpoint telemetry must be typed and owned by the CPU RK workspace");
+
+    const std::filesystem::path root = fem_source_root();
+    const std::string stepper_header = read_text_file(
+        root / "cpu" / "mfem" / "integrators" / "rk_stepper_workspace.hpp");
+    const std::string step_source = read_text_file(
+        root / "cpu" / "mfem" / "integrators" / "rk_explicit_step.cpp");
+    for (const char *field : {
+             "bool state",
+             "bool time",
+             "bool dynamic_sources",
+             "bool transport",
+             "bool projection",
+             "final_rhs_evaluations",
+             "extra_poisson_solves",
+             "accepted_step_wall_time_ns",
+         }) {
+        check(
+            stepper_header.find(field) != std::string::npos,
+            "endpoint telemetry header must expose every required validity/cost field");
+    }
+    check(
+        step_source.find("endpoint_refresh_reason") != std::string::npos &&
+            step_source.find("endpoint_telemetry.extra_poisson_solves") !=
+                std::string::npos,
+        "CPU RK step must account for the final refresh reason and Poisson cost");
+}
+
 void rk_transaction_payload_inventory_covers_owned_vectors() {
     const std::string transaction = read_text_file(
         fem_source_root() / "cpu" / "mfem" / "integrators" / "rk_step_transaction.cpp");
@@ -410,6 +459,10 @@ void fsal_reuse_requires_matching_source_state() {
         rk_explicit_step.find("ctx.thermal_brown.temperature > 0.0") !=
             std::string::npos,
         "CPU RK FSAL reuse gate must reject stochastic Brown thermal RHS");
+    check(
+        rk_explicit_step.find("ctx.oersted.has_stage_callback || ctx.stage_transport.has_stage_callback") !=
+            std::string::npos,
+        "CPU RK FSAL reuse gate must reject mutable stage callback sources");
     check(
         rk_explicit_step.find("ctx.oersted.time_dep_kind != 0u") ==
             std::string::npos,
@@ -1240,6 +1293,39 @@ void executed_cpu_rk_steps_sample_all_stage_times_and_publish_endpoint_field() {
             integrator == FULLMAG_FEM_INTEGRATOR_RK23_BS ? 4u : 7u;
         check(stats.rhs_evaluations == expected_rhs, "CPU RK first-step RHS count");
         check(stats.fsal_reused == 0u, "CPU RK first step cannot reuse FSAL");
+        const auto &endpoint = ctx.stepper.workspace.endpoint_telemetry;
+        check(
+            endpoint.accepted_step_wall_time_ns == stats.wall_time_ns &&
+                endpoint.accepted_step_wall_time_ns > 0u,
+            "CPU RK endpoint telemetry must publish accepted-step wall time");
+        if (integrator == FULLMAG_FEM_INTEGRATOR_HEUN ||
+            integrator == FULLMAG_FEM_INTEGRATOR_RK4) {
+            check(
+                endpoint.final_refresh_reason ==
+                    fullmag::fem::RkFinalRefreshReason::NonFsalTableau,
+                "non-FSAL tableau must report its explicit endpoint refresh reason");
+            check(
+                endpoint.endpoint_refreshes == 1u &&
+                    endpoint.endpoint_cache_hits == 0u &&
+                    endpoint.final_rhs_evaluations == 1u,
+                "non-FSAL tableau must report one endpoint refresh and RHS evaluation");
+        } else {
+            check(
+                endpoint.final_refresh_reason ==
+                    fullmag::fem::RkFinalRefreshReason::CacheHit,
+                "FSAL tableau must report an accepted endpoint cache hit");
+            check(
+                endpoint.endpoint_refreshes == 0u &&
+                    endpoint.endpoint_cache_hits == 1u &&
+                    endpoint.final_rhs_evaluations == 0u &&
+                    endpoint.extra_poisson_solves == 0u,
+                "FSAL tableau must avoid an extra endpoint RHS/Poisson solve");
+            check(
+                endpoint.cache_validity.state && endpoint.cache_validity.time &&
+                    endpoint.cache_validity.dynamic_sources &&
+                    endpoint.cache_validity.transport && endpoint.cache_validity.projection,
+                "FSAL endpoint cache must satisfy every validity dimension");
+        }
     }
 }
 
@@ -1262,6 +1348,11 @@ void deterministic_oersted_fsal_requires_an_identical_next_source_state() {
         fullmag::fem::context_step_explicit_rk_mfem(ctx, tableau, dt, stats, error),
         error.c_str());
     check(stats.fsal_reused == 1u, "deterministic Oersted endpoint may be reused by FSAL");
+    check(
+        ctx.stepper.workspace.endpoint_telemetry.final_refresh_reason ==
+            fullmag::fem::RkFinalRefreshReason::CacheHit &&
+            ctx.stepper.workspace.endpoint_telemetry.final_rhs_evaluations == 0u,
+        "deterministic Oersted FSAL step must retain its endpoint cache");
     check_vector_near(ctx.state.m_xyz, expected_second, 2e-13, "FSAL Oersted second step");
 
     std::vector<double> uploaded = ctx.state.m_xyz;
@@ -1306,6 +1397,12 @@ void brown_thermal_final_rhs_uses_last_stage_without_fsal() {
         last_stage_rhs,
         std::max(1.0, last_stage_rhs) * 1e-14,
         "Brown thermal final stats must use the last stage RHS without FSAL");
+    check(
+        ctx.stepper.workspace.endpoint_telemetry.final_refresh_reason ==
+            fullmag::fem::RkFinalRefreshReason::CacheHit &&
+            ctx.stepper.workspace.endpoint_telemetry.final_rhs_evaluations == 0u &&
+            ctx.stepper.workspace.endpoint_telemetry.cache_validity.dynamic_sources,
+        "Brown thermal endpoint cache may serve the current interval but not next-step FSAL");
 }
 
 void cpu_fsal_endpoint_cache_requires_matching_candidate_state() {
@@ -1330,6 +1427,12 @@ void cpu_fsal_endpoint_cache_requires_matching_candidate_state() {
 
     check(stats.fsal_reused == 0u, "mismatched endpoint state must not report FSAL reuse");
     check(!ctx.stepper.workspace.fsal_valid, "mismatched endpoint state must invalidate FSAL");
+    check(
+        ctx.stepper.workspace.endpoint_telemetry.final_refresh_reason ==
+            fullmag::fem::RkFinalRefreshReason::CandidateStateMismatch &&
+            ctx.stepper.workspace.endpoint_telemetry.endpoint_refreshes == 1u &&
+            ctx.stepper.workspace.endpoint_telemetry.final_rhs_evaluations == 1u,
+        "mismatched endpoint must report one explicit refresh and final RHS evaluation");
     check(
         probe.evaluation_times.size() == static_cast<size_t>(injected.stages + 1),
         "mismatched endpoint state must trigger one endpoint field refresh");
@@ -2040,6 +2143,7 @@ int main() {
     workspace_reallocates_when_stage_count_grows();
     workspace_invalidates_fsal_when_stage_count_shrinks();
     workspace_allocates_common_buffers();
+    endpoint_cache_telemetry_has_explicit_validity_dimensions();
     rk_transaction_payload_inventory_covers_owned_vectors();
     fsal_reuse_requires_matching_source_state();
     rk_rhs_passes_explicit_stage_and_endpoint_times();
