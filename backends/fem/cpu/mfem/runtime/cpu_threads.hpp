@@ -28,6 +28,13 @@ struct CpuThreadRuntimeState {
     int requested_omp_threads = 1;
     int effective_omp_threads = 1;
     int cap_reason = 0;
+    // The native FEM runtime owns this process-level OpenMP safety policy.
+    // These fields are published only after configure_fem_host_runtime_threads
+    // has applied the policy, so provenance cannot confuse the default value
+    // with an executed configuration.
+    bool dynamic_threads_disabled = false;
+    bool nested_parallelism_disabled = false;
+    int max_active_parallel_levels = 0;
 };
 
 enum CpuThreadCapReason {

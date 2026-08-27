@@ -39,6 +39,8 @@ struct FemMeshRuntimeState {
     std::vector<uint32_t> periodic_reduced_node;
     std::vector<uint32_t> periodic_representative_nodes;
     uint32_t periodic_reduced_node_count = 0;
+    // Stable content revision for the local-node periodic reduction map.
+    uint64_t periodic_map_revision = 0;
     std::unordered_set<uint32_t> periodic_boundary_marker_set;
     std::vector<uint8_t> magnetic_element_mask;
     std::vector<uint8_t> magnetic_node_mask;

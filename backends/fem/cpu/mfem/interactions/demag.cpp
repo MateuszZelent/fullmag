@@ -172,6 +172,10 @@ bool compute_demag_field_for_magnetization(
 {
     demag_energy = 0.0;
 
+    if (!demag_poisson_operator_dependencies_current(ctx, error)) {
+        return false;
+    }
+
     DemagFieldUpdateDecision decision{};
     if (!plan_demag_field_update(ctx, decision, error)) {
         return false;
@@ -217,6 +221,9 @@ bool compute_fresh_demag_field_for_magnetization(
     std::string &error)
 {
     demag_energy = 0.0;
+    if (!demag_poisson_operator_dependencies_current(ctx, error)) {
+        return false;
+    }
     const FreshDemagSolveSideEffects side_effects(ctx);
 
     bool ok = false;

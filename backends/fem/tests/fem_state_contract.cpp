@@ -132,6 +132,7 @@ void state_plan_initialization_validates_copies_projects_and_resets_time() {
     ctx.mesh.periodic_reduced_node = {0u, 0u};
     ctx.mesh.periodic_representative_nodes = {0u};
     ctx.mesh.periodic_reduced_node_count = 1u;
+    ctx.mesh.periodic_map_revision = 1u;
 
     const double initial_m[] = {
         2.0, 0.0, 0.0,

@@ -23,6 +23,56 @@ namespace fullmag::fem {
  * It does not evaluate stage RHS, advance time, compose H_eff, or own adaptive
  * accept/reject policy.
  */
+/*
+ * Validity dimensions for an accepted endpoint field/RHS cache.
+ *
+ * Each dimension is explicit so a future source or projection change cannot
+ * be hidden behind one aggregate boolean. The cache is reusable only when all
+ * dimensions are true; FSAL reuse adds the separate autonomous-source gate in
+ * the step owner.
+ */
+struct EndpointCacheValidity {
+    bool state = false;
+    bool time = false;
+    bool dynamic_sources = false;
+    bool transport = false;
+    bool projection = false;
+
+    bool valid() const noexcept
+    {
+        return state && time && dynamic_sources && transport && projection;
+    }
+};
+
+enum class RkFinalRefreshReason : uint32_t {
+    NotEvaluated = 0,
+    CacheHit = 1,
+    NonFsalTableau = 2,
+    CandidateStateMismatch = 3,
+    EndpointTimeMismatch = 4,
+    DynamicSourceChanged = 5,
+    TransportSourceChanged = 6,
+    ProjectionMismatch = 7,
+    CacheUnavailable = 8,
+};
+
+/*
+ * Per-public-step telemetry for the CPU accepted-endpoint decision.
+ *
+ * Counters describe only the terminal accepted attempt: rejected attempts
+ * retain their existing attempt trace and demag counters. No storage is
+ * allocated in the RK hot loop.
+ */
+struct RkEndpointTelemetry {
+    EndpointCacheValidity cache_validity{};
+    RkFinalRefreshReason final_refresh_reason = RkFinalRefreshReason::NotEvaluated;
+    uint64_t final_rhs_evaluations = 0;
+    uint64_t extra_poisson_solves = 0;
+    uint64_t endpoint_cache_hits = 0;
+    uint64_t endpoint_refreshes = 0;
+    uint64_t accepted_step_wall_time_ns = 0;
+};
+
 struct StepperWorkspace {
     StepperWorkspace() = default;
     ~StepperWorkspace();
@@ -46,6 +96,7 @@ struct StepperWorkspace {
     RkStepTransactionJournalPtr transaction_journal;
     std::unique_ptr<RkAttemptCacheSnapshot> attempt_checkpoint;
     bool fsal_valid = false;                       // true when k[0] holds valid FSAL RHS
+    RkEndpointTelemetry endpoint_telemetry{};
 };
 
 enum class RkStepFailurePoint : uint32_t {
@@ -82,6 +133,13 @@ struct RkAttemptRecord {
     double demag_linear_residual = 0.0;
     uint32_t rhs_evaluations = 0;
     int32_t estimator_order = 0;
+    // Native adaptive FEM norm receipt; zero means fixed-step/no reduction.
+    uint32_t error_norm_type = 0;
+    uint64_t active_node_count = 0;
+    double active_measure = 0.0;
+    double normalization_denominator = 0.0;
+    double max_scaled_error = 0.0;
+    double weighted_rms_error = 0.0;
 };
 
 struct RkAttemptTraceState {
@@ -100,8 +158,8 @@ struct RkAttemptTraceState {
  * attempt-cache counters remain separate from the outer accepted-step
  * transaction so retry overhead is not mistaken for a committed step.
  *
- * This is native owner state only. ABI/API/UI publication is a separate
- * versioned propagation task.
+ * This is native owner state only. ABI/API/UI publication crosses a separate
+ * versioned propagation boundary.
  */
 struct RkTransactionTelemetryState {
     uint64_t step_transaction_begin_count = 0;

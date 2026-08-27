@@ -31,7 +31,8 @@ StepperWorkspace::StepperWorkspace(const StepperWorkspace &other)
       stt(other.stt),
       err(other.err),
       attempt_checkpoint(nullptr),
-      fsal_valid(other.fsal_valid)
+      fsal_valid(other.fsal_valid),
+      endpoint_telemetry(other.endpoint_telemetry)
 {
     for (int i = 0; i < MAX_RK_STAGES; ++i) {
         k[i] = other.k[i];
@@ -60,6 +61,7 @@ StepperWorkspace &StepperWorkspace::operator=(const StepperWorkspace &other)
     transaction_journal.reset();
     attempt_checkpoint.reset();
     fsal_valid = other.fsal_valid;
+    endpoint_telemetry = other.endpoint_telemetry;
     return *this;
 }
 
@@ -76,7 +78,8 @@ StepperWorkspace::StepperWorkspace(StepperWorkspace &&other) noexcept
       stt(std::move(other.stt)),
       err(std::move(other.err)),
       attempt_checkpoint(nullptr),
-      fsal_valid(other.fsal_valid)
+      fsal_valid(other.fsal_valid),
+      endpoint_telemetry(std::move(other.endpoint_telemetry))
 {
     for (int i = 0; i < MAX_RK_STAGES; ++i) {
         k[i] = std::move(other.k[i]);
@@ -105,6 +108,7 @@ StepperWorkspace &StepperWorkspace::operator=(StepperWorkspace &&other) noexcept
     transaction_journal.reset();
     attempt_checkpoint.reset();
     fsal_valid = other.fsal_valid;
+    endpoint_telemetry = std::move(other.endpoint_telemetry);
     return *this;
 }
 
@@ -183,6 +187,7 @@ void stepper_workspace_allocate(StepperWorkspace &ws, std::size_t dof_len, int s
     prepare_stt_workspace(ws.stt, dof_len, dof_len / 3u);
     ws.err.resize(dof_len, 0.0);
     ws.fsal_valid = false;
+    ws.endpoint_telemetry = {};
     ws.allocated = true;
 }
 

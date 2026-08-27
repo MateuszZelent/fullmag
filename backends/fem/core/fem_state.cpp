@@ -34,7 +34,10 @@ bool initialize_state_plan_fields(
     std::vector<double> initial_m(
         plan.initial_magnetization_xyz,
         plan.initial_magnetization_xyz + static_cast<size_t>(plan.initial_magnetization_len));
-    project_static_periodic_aos(ctx, initial_m);
+    if (!project_static_periodic_aos_checked(ctx, initial_m, error)) {
+        error = "initial magnetization periodic projection failed: " + error;
+        return false;
+    }
     if (!normalize_active_magnetization_aos(ctx, initial_m, error)) {
         error = "initial magnetization normalization failed: " + error;
         return false;

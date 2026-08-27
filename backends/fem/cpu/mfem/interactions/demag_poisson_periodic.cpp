@@ -45,6 +45,7 @@ struct PeriodicPoissonReducedWorkspace {
     explicit PeriodicPoissonReducedWorkspace(mfem::SparseMatrix &op)
         : preconditioner(op)
     {
+        solver.iterative_mode = true;
         solver.SetPreconditioner(preconditioner);
         solver.SetOperator(op);
         solver.SetPrintLevel(0);
@@ -59,6 +60,7 @@ struct PeriodicPoissonReducedWorkspace {
     mfem::GSSmoother preconditioner;
     mfem::CGSolver solver;
     mfem::Vector full_solution;
+    bool x_p_contains_solution = false;
 };
 
 namespace {
@@ -211,7 +213,12 @@ bool solve_demag_periodic_poisson_reduced(
     periodic_workspace->configure(rel_tol, abs_tol, max_iter);
     ctx.poisson_demag.last_setup_wall_time_ns = 0;
     ctx.poisson_demag.last_solver_setup_reused = true;
-    *x_p = 0.0;
+    const bool used_cached_solution = periodic_workspace->x_p_contains_solution;
+    if (!used_cached_solution) {
+        *x_p = 0.0;
+        ctx.poisson_demag.fresh_zero_guess_count += 1;
+        ctx.poisson_demag.fresh_zero_guess_count_current_step += 1;
+    }
     const auto solver_apply_wall_start = FemSteadyClock::now();
     periodic_workspace->solver.Mult(*rhs_p, *x_p);
     ctx.poisson_demag.last_solver_apply_wall_time_ns =
@@ -243,11 +250,13 @@ bool solve_demag_periodic_poisson_reduced(
     result.max_iterations = static_cast<uint32_t>(max_iter);
     if (!validate_demag_linear_solve_result(result, error)) {
         *x_p = 0.0;
+        periodic_workspace->x_p_contains_solution = false;
         return false;
     }
 
     mfem::Vector &lifted_solution = periodic_workspace->full_solution;
     lift_vector_by_periodic_classes(ctx, *x_p, lifted_solution);
+    periodic_workspace->x_p_contains_solution = true;
     solve_wall_time_ns = elapsed_ns(solve_wall_start);
     full_solution = &lifted_solution;
     return true;

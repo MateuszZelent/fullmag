@@ -6837,6 +6837,74 @@ fn attach_unit_fem_domain_mesh(ir: &mut ProblemIR) {
 }
 
 #[test]
+fn fem_exchange_stiffness_rejects_unsafe_fixed_step_in_strict_mode() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    attach_unit_fem_domain_mesh(&mut ir);
+    let mesh = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .and_then(|asset| asset.mesh.as_mut())
+        .expect("unit FEM domain mesh");
+    for node in &mut mesh.nodes {
+        for coordinate in node {
+            *coordinate *= 1.0e-9;
+        }
+    }
+    if let fullmag_ir::StudyIR::TimeEvolution {
+        dynamics: fullmag_ir::DynamicsIR::Llg { fixed_timestep, .. },
+        ..
+    } = &mut ir.study
+    {
+        *fixed_timestep = Some(1.0e-12);
+    } else {
+        panic!("bootstrap example must use LLG time evolution");
+    }
+
+    let error = plan(&ir).expect_err("strict FEM planning must reject an unsafe fixed step");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("FEM-CPU-NUM-002")
+            && reason.contains("exceeds conservative exchange limit")
+            && reason.contains("execution_mode='strict'")
+    }));
+}
+
+#[test]
+fn fem_exchange_stiffness_warns_for_unsafe_fixed_step_in_extended_mode() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    ir.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Extended;
+    attach_unit_fem_domain_mesh(&mut ir);
+    let mesh = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .and_then(|asset| asset.mesh.as_mut())
+        .expect("unit FEM domain mesh");
+    for node in &mut mesh.nodes {
+        for coordinate in node {
+            *coordinate *= 1.0e-9;
+        }
+    }
+    if let fullmag_ir::StudyIR::TimeEvolution {
+        dynamics: fullmag_ir::DynamicsIR::Llg { fixed_timestep, .. },
+        ..
+    } = &mut ir.study
+    {
+        *fixed_timestep = Some(1.0e-12);
+    } else {
+        panic!("bootstrap example must use LLG time evolution");
+    }
+
+    let planned = plan(&ir).expect("extended FEM planning should retain an explicit warning");
+    assert!(planned.provenance.notes.iter().any(|note| {
+        note.contains("FEM-CPU-NUM-002 stiffness warning")
+            && note.contains("admitted only in execution_mode='extended'")
+    }));
+}
+
+#[test]
 fn fem_dmi_field_outputs_require_matching_dmi_terms() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;

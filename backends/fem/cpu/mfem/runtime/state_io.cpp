@@ -400,7 +400,10 @@ int context_upload_magnetization_f64(
     }
 
     std::vector<double> uploaded_m(m_xyz, m_xyz + static_cast<size_t>(len));
-    project_static_periodic_aos(ctx, uploaded_m);
+    if (!project_static_periodic_aos_checked(ctx, uploaded_m, error)) {
+        error = "upload_magnetization: periodic projection failed: " + error;
+        return FULLMAG_FEM_ERR_INVALID;
+    }
     if (!normalize_active_magnetization_aos(ctx, uploaded_m, error)) {
         error = "upload_magnetization: " + error;
         return FULLMAG_FEM_ERR_INVALID;

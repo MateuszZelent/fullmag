@@ -19,12 +19,253 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace fullmag::fem {
 
 #if FULLMAG_HAS_MFEM_STACK
+namespace {
+
+constexpr std::uint64_t kFnvOffsetBasis = 1469598103934665603ull;
+constexpr std::uint64_t kFnvPrime = 1099511628211ull;
+
+template <typename T>
+void hash_bytes(std::uint64_t &state, const T *values, std::size_t count)
+{
+    static_assert(std::is_trivially_copyable_v<T>);
+    const auto *bytes = reinterpret_cast<const unsigned char *>(values);
+    for (std::size_t i = 0; i < count * sizeof(T); ++i) {
+        state ^= static_cast<std::uint64_t>(bytes[i]);
+        state *= kFnvPrime;
+    }
+}
+
+template <typename T>
+void hash_scalar(std::uint64_t &state, const T &value)
+{
+    hash_bytes(state, &value, 1u);
+}
+
+template <typename T>
+void hash_vector(std::uint64_t &state, const std::vector<T> &values)
+{
+    const std::uint64_t size = static_cast<std::uint64_t>(values.size());
+    hash_scalar(state, size);
+    if (!values.empty()) {
+        hash_bytes(state, values.data(), values.size());
+    }
+}
+
+std::uint64_t hash_mesh_topology(const Context &ctx, const mfem::Mesh &mesh)
+{
+    std::uint64_t state = kFnvOffsetBasis;
+    hash_scalar(state, ctx.mesh.n_nodes);
+    hash_scalar(state, ctx.mesh.n_elements);
+    hash_vector(state, ctx.mesh.cell_types);
+    hash_vector(state, ctx.mesh.cell_offsets);
+    hash_vector(state, ctx.mesh.cell_nodes);
+    hash_vector(state, ctx.mesh.cell_global_ordinals);
+    hash_vector(state, ctx.mesh.cell_markers);
+    hash_scalar(state, mesh.GetNV());
+    hash_scalar(state, mesh.GetNE());
+    for (int element = 0; element < mesh.GetNE(); ++element) {
+        hash_scalar(state, mesh.GetElementBaseGeometry(element));
+        hash_scalar(state, mesh.GetAttribute(element));
+        mfem::Array<int> vertices;
+        mesh.GetElementVertices(element, vertices);
+        hash_scalar(state, vertices.Size());
+        for (int vertex = 0; vertex < vertices.Size(); ++vertex) {
+            hash_scalar(state, vertices[vertex]);
+        }
+    }
+    return state;
+}
+
+std::uint64_t hash_mesh_geometry(const Context &ctx, const mfem::Mesh &mesh)
+{
+    std::uint64_t state = kFnvOffsetBasis;
+    hash_vector(state, ctx.mesh.nodes_xyz);
+    hash_scalar(state, mesh.GetNV());
+    hash_scalar(state, mesh.SpaceDimension());
+    for (int vertex = 0; vertex < mesh.GetNV(); ++vertex) {
+        hash_bytes(
+            state,
+            mesh.GetVertex(vertex),
+            static_cast<std::size_t>(mesh.SpaceDimension()));
+    }
+    return state;
+}
+
+std::uint64_t hash_material_coefficients(const Context &ctx)
+{
+    std::uint64_t state = kFnvOffsetBasis;
+    hash_scalar(state, ctx.material_fields.material.saturation_magnetisation);
+    hash_scalar(state, ctx.material_fields.material.exchange_stiffness);
+    hash_vector(state, ctx.material_fields.Ms_field);
+    hash_vector(state, ctx.material_fields.Ms_element_field);
+    hash_vector(state, ctx.material_fields.A_field);
+    hash_vector(state, ctx.material_fields.A_element_field);
+    return state;
+}
+
+std::uint64_t hash_boundary_data(const Context &ctx, const mfem::Mesh &mesh)
+{
+    std::uint64_t state = kFnvOffsetBasis;
+    hash_vector(state, ctx.mesh.magnetic_element_mask);
+    hash_vector(state, ctx.mesh.magnetic_node_mask);
+    hash_scalar(state, mesh.GetNBE());
+    for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
+        hash_scalar(state, mesh.GetBdrElementGeometry(boundary));
+        hash_scalar(state, mesh.GetBdrElement(boundary)->GetAttribute());
+        mfem::Array<int> vertices;
+        mesh.GetBdrElementVertices(boundary, vertices);
+        hash_scalar(state, vertices.Size());
+        for (int vertex = 0; vertex < vertices.Size(); ++vertex) {
+            hash_scalar(state, vertices[vertex]);
+        }
+    }
+    return state;
+}
+
+std::uint64_t hash_periodic_data(const Context &ctx)
+{
+    std::uint64_t state = kFnvOffsetBasis;
+    hash_scalar(state, ctx.mesh.periodic_reduced_node_count);
+    hash_vector(state, ctx.mesh.periodic_node_pairs);
+    hash_vector(state, ctx.mesh.periodic_reduced_node);
+    hash_vector(state, ctx.mesh.periodic_representative_nodes);
+
+    std::vector<std::uint32_t> boundary_markers(
+        ctx.mesh.periodic_boundary_marker_set.begin(),
+        ctx.mesh.periodic_boundary_marker_set.end());
+    std::sort(boundary_markers.begin(), boundary_markers.end());
+    hash_vector(state, boundary_markers);
+    return state;
+}
+
+OperatorDependencyKey make_exchange_operator_dependency_key_impl(
+    const Context &ctx,
+    const mfem::Mesh &mesh,
+    bool use_device)
+{
+    OperatorDependencyKey key;
+    key.mesh_topology_revision = hash_mesh_topology(ctx, mesh);
+    key.mesh_geometry_revision = hash_mesh_geometry(ctx, mesh);
+    key.fe_order = ctx.base_plan.fe_order;
+    key.material_coefficient_revision = hash_material_coefficients(ctx);
+    key.boundary_revision = hash_boundary_data(ctx, mesh);
+    key.periodic_revision = hash_periodic_data(ctx);
+    key.device_mode = use_device ? 1u : 0u;
+    key.device_index = static_cast<std::int32_t>(ctx.mfem_context.selected_device_index);
+    return key;
+}
+
+class ExchangeSetupAttempt final {
+public:
+    explicit ExchangeSetupAttempt(Context &ctx) : ctx_(ctx) {}
+
+    ~ExchangeSetupAttempt()
+    {
+        if (!committed_) {
+            ++ctx_.exchange.mfem.operator_lifecycle.failed_setup_count;
+        }
+    }
+
+    void commit() noexcept { committed_ = true; }
+
+private:
+    Context &ctx_;
+    bool committed_ = false;
+};
+
+mfem::SparseMatrix *regularize_sparse_matrix_zero_rows(
+    const mfem::SparseMatrix &matrix);
+
+mfem::SparseMatrix *reduce_sparse_matrix_by_periodic_classes(
+    const mfem::SparseMatrix &matrix,
+    const Context &ctx)
+{
+    const int n_reduced = static_cast<int>(ctx.mesh.periodic_reduced_node_count);
+    if (n_reduced <= 0 || matrix.Height() != static_cast<int>(ctx.mesh.n_nodes) ||
+        matrix.Width() != static_cast<int>(ctx.mesh.n_nodes) ||
+        ctx.mesh.periodic_reduced_node.size() != static_cast<size_t>(ctx.mesh.n_nodes)) {
+        throw std::runtime_error("periodic exchange mass reduction has incompatible dimensions");
+    }
+
+    auto *reduced = new mfem::SparseMatrix(n_reduced, n_reduced);
+    mfem::Array<int> columns;
+    mfem::Vector values;
+    for (int row = 0; row < matrix.Height(); ++row) {
+        const int reduced_row = static_cast<int>(
+            ctx.mesh.periodic_reduced_node[static_cast<size_t>(row)]);
+        if (reduced_row < 0 || reduced_row >= n_reduced) {
+            delete reduced;
+            throw std::runtime_error("periodic exchange mass map contains an invalid row class");
+        }
+        matrix.GetRow(row, columns, values);
+        for (int entry = 0; entry < columns.Size(); ++entry) {
+            const int column = columns[entry];
+            if (column < 0 || column >= matrix.Width()) {
+                delete reduced;
+                throw std::runtime_error(
+                    "periodic exchange mass matrix contains an invalid column");
+            }
+            const int reduced_column = static_cast<int>(
+                ctx.mesh.periodic_reduced_node[static_cast<size_t>(column)]);
+            if (reduced_column < 0 || reduced_column >= n_reduced) {
+                delete reduced;
+                throw std::runtime_error(
+                    "periodic exchange mass map contains an invalid column class");
+            }
+            reduced->Add(reduced_row, reduced_column, values[entry]);
+        }
+    }
+    reduced->Finalize();
+    auto *regularized = regularize_sparse_matrix_zero_rows(*reduced);
+    delete reduced;
+    return regularized;
+}
+
+mfem::SparseMatrix *regularize_sparse_matrix_zero_rows(
+    const mfem::SparseMatrix &matrix)
+{
+    if (matrix.Height() != matrix.Width()) {
+        throw std::runtime_error("exchange mass solve matrix must be square");
+    }
+
+    auto *regularized = new mfem::SparseMatrix(matrix.Height(), matrix.Width());
+    mfem::Array<int> columns;
+    mfem::Vector values;
+    for (int row = 0; row < matrix.Height(); ++row) {
+        matrix.GetRow(row, columns, values);
+        bool has_nonzero = false;
+        for (int entry = 0; entry < columns.Size(); ++entry) {
+            const double value = values[entry];
+            regularized->Add(row, columns[entry], value);
+            has_nonzero = has_nonzero || value != 0.0;
+        }
+        if (!has_nonzero) {
+            regularized->Add(row, row, 1.0);
+        }
+    }
+    regularized->Finalize();
+    return regularized;
+}
+
+} // namespace
+
+OperatorDependencyKey make_exchange_operator_dependency_key(
+    const Context &ctx,
+    const mfem::Mesh &mesh,
+    bool use_device)
+{
+    return make_exchange_operator_dependency_key_impl(ctx, mesh, use_device);
+}
+
 bool initialize_exchange_operator_mfem(
     Context &ctx,
     mfem::Mesh &mesh,
@@ -33,6 +274,7 @@ bool initialize_exchange_operator_mfem(
     mfem::Coefficient &ms_coeff,
     std::string &error)
 {
+    ExchangeSetupAttempt setup_attempt(ctx);
     const bool use_device = mfem::Device::IsEnabled();
     auto exchange_form = std::make_unique<mfem::BilinearForm>(&fes);
     auto mass_form = std::make_unique<mfem::BilinearForm>(&fes);
@@ -42,6 +284,23 @@ bool initialize_exchange_operator_mfem(
     auto inv_lumped_mass = std::make_unique<mfem::Vector>(fes.GetNDofs());
     auto exchange_tmp_vec = std::make_unique<mfem::Vector>(fes.GetNDofs());
     auto exchange_out_vec = std::make_unique<mfem::Vector>(fes.GetNDofs());
+    std::unique_ptr<mfem::SparseMatrix> consistent_mass_matrix;
+    std::unique_ptr<mfem::GSSmoother> consistent_mass_preconditioner;
+    std::unique_ptr<mfem::CGSolver> consistent_mass_solver;
+    std::unique_ptr<mfem::SparseMatrix> periodic_mass_matrix;
+    std::unique_ptr<mfem::GSSmoother> periodic_mass_preconditioner;
+    std::unique_ptr<mfem::CGSolver> periodic_mass_solver;
+    std::unique_ptr<mfem::Vector> periodic_mass_rhs;
+    std::unique_ptr<mfem::Vector> periodic_mass_solution;
+    std::unique_ptr<mfem::Vector> periodic_mass_residual;
+    std::vector<double> integration_weights;
+    std::vector<double> node_volumes;
+    uint64_t legacy_sparse_rows = 0;
+    uint64_t legacy_sparse_cols = 0;
+    uint64_t legacy_sparse_nnz = 0;
+    bool legacy_sparse_metadata_ready = false;
+    // Keep Context publication deferred until every potentially-throwing
+    // assembly, mass validation, and periodic reduction step has succeeded.
     mass_ones->UseDevice(use_device);
     mass_lumped->UseDevice(use_device);
     inv_lumped_mass->UseDevice(use_device);
@@ -126,12 +385,12 @@ bool initialize_exchange_operator_mfem(
         return false;
     }
     std::copy(exchange_values.begin(), exchange_values.end(), exchange_values_raw);
-    ctx.gpu_state.legacy_exchange.legacy_sparse_metadata_ready = true;
-    ctx.gpu_state.legacy_exchange.legacy_sparse_rows =
+    legacy_sparse_metadata_ready = true;
+    legacy_sparse_rows =
         static_cast<uint64_t>(std::max(0, exchange_spmat.Height()));
-    ctx.gpu_state.legacy_exchange.legacy_sparse_cols =
+    legacy_sparse_cols =
         static_cast<uint64_t>(std::max(0, exchange_spmat.Width()));
-    ctx.gpu_state.legacy_exchange.legacy_sparse_nnz =
+    legacy_sparse_nnz =
         static_cast<uint64_t>(std::max(0, exchange_spmat.NumNonZeroElems()));
 
     mass_form->SetAssemblyLevel(mfem::AssemblyLevel::LEGACY);
@@ -151,24 +410,22 @@ bool initialize_exchange_operator_mfem(
         *mass_ones,
         *mass_lumped,
         *inv_lumped_mass,
-        ctx.integration_weights.mfem_lumped_mass,
+        integration_weights,
         use_device);
-    if (ctx.integration_weights.mfem_lumped_mass.size() !=
+    if (integration_weights.size() !=
             static_cast<size_t>(fes.GetNDofs()) ||
         std::any_of(
-            ctx.integration_weights.mfem_lumped_mass.begin(),
-            ctx.integration_weights.mfem_lumped_mass.end(),
+            integration_weights.begin(),
+            integration_weights.end(),
             [](double value) { return !std::isfinite(value) || value < 0.0; })) {
         error = "assembled MFEM magnetic volume mass row sums are invalid";
         return false;
     }
-    ctx.mesh.node_volumes = ctx.integration_weights.mfem_lumped_mass;
-    ctx.gpu_state.legacy_exchange.lumped_mass_ready =
-        ctx.integration_weights.mfem_lumped_mass.size() == static_cast<size_t>(fes.GetNDofs());
+    node_volumes = integration_weights;
 
     const bool has_nonzero_lumped_mass = std::any_of(
-        ctx.integration_weights.mfem_lumped_mass.begin(),
-        ctx.integration_weights.mfem_lumped_mass.end(),
+        integration_weights.begin(),
+        integration_weights.end(),
         [](double value) { return value > 0.0; });
     if (!has_nonzero_lumped_mass) {
         error = "FEM validation: MFEM magnetic volume mass is zero on every "
@@ -178,6 +435,48 @@ bool initialize_exchange_operator_mfem(
         return false;
     }
 
+    if (ctx.exchange.mfem.use_consistent_mass) {
+        consistent_mass_matrix.reset(
+            regularize_sparse_matrix_zero_rows(mass_form->SpMat()));
+        consistent_mass_preconditioner =
+            std::make_unique<mfem::GSSmoother>(*consistent_mass_matrix);
+        consistent_mass_solver = std::make_unique<mfem::CGSolver>();
+        consistent_mass_solver->SetRelTol(1e-10);
+        consistent_mass_solver->SetAbsTol(0.0);
+        consistent_mass_solver->SetMaxIter(200);
+        consistent_mass_solver->SetPrintLevel(0);
+        consistent_mass_solver->SetPreconditioner(*consistent_mass_preconditioner);
+        consistent_mass_solver->SetOperator(*consistent_mass_matrix);
+
+        const bool has_periodic_mass_map =
+            ctx.mesh.periodic_reduced_node_count > 0 &&
+            ctx.mesh.periodic_reduced_node.size() == static_cast<size_t>(ctx.mesh.n_nodes);
+        if (has_periodic_mass_map) {
+            periodic_mass_matrix.reset(
+                reduce_sparse_matrix_by_periodic_classes(mass_form->SpMat(), ctx));
+            periodic_mass_preconditioner =
+                std::make_unique<mfem::GSSmoother>(*periodic_mass_matrix);
+            periodic_mass_solver = std::make_unique<mfem::CGSolver>();
+            periodic_mass_solver->SetRelTol(1e-10);
+            periodic_mass_solver->SetAbsTol(0.0);
+            periodic_mass_solver->SetMaxIter(std::max(
+                200,
+                static_cast<int>(ctx.mesh.periodic_reduced_node_count) * 10));
+            periodic_mass_solver->SetPrintLevel(0);
+            periodic_mass_solver->SetPreconditioner(*periodic_mass_preconditioner);
+            periodic_mass_solver->SetOperator(*periodic_mass_matrix);
+            periodic_mass_rhs = std::make_unique<mfem::Vector>(
+                static_cast<int>(ctx.mesh.periodic_reduced_node_count));
+            periodic_mass_solution = std::make_unique<mfem::Vector>(
+                static_cast<int>(ctx.mesh.periodic_reduced_node_count));
+            periodic_mass_residual = std::make_unique<mfem::Vector>(
+                static_cast<int>(ctx.mesh.periodic_reduced_node_count));
+            *periodic_mass_solution = 0.0;
+            *periodic_mass_residual = 0.0;
+        }
+    }
+
+    const auto active_key = make_exchange_operator_dependency_key(ctx, mesh, use_device);
     ctx.exchange.mfem.exchange_form = exchange_form.release();
     ctx.exchange.mfem.mass_form = mass_form.release();
     ctx.exchange.mfem.mass_ones = mass_ones.release();
@@ -185,6 +484,29 @@ bool initialize_exchange_operator_mfem(
     ctx.exchange.mfem.inv_lumped_mass = inv_lumped_mass.release();
     ctx.exchange.mfem.tmp_vec = exchange_tmp_vec.release();
     ctx.exchange.mfem.out_vec = exchange_out_vec.release();
+    ctx.exchange.mfem.consistent_mass_matrix = consistent_mass_matrix.release();
+    ctx.exchange.mfem.consistent_mass_preconditioner = consistent_mass_preconditioner.release();
+    ctx.exchange.mfem.consistent_mass_solver = consistent_mass_solver.release();
+    ctx.exchange.mfem.periodic_mass_matrix = periodic_mass_matrix.release();
+    ctx.exchange.mfem.periodic_mass_preconditioner = periodic_mass_preconditioner.release();
+    ctx.exchange.mfem.periodic_mass_solver = periodic_mass_solver.release();
+    ctx.exchange.mfem.periodic_mass_rhs = periodic_mass_rhs.release();
+    ctx.exchange.mfem.periodic_mass_solution = periodic_mass_solution.release();
+    ctx.exchange.mfem.periodic_mass_residual = periodic_mass_residual.release();
+    ctx.exchange.mfem.periodic_mass_setup_count =
+        ctx.exchange.mfem.periodic_mass_matrix != nullptr ? 1u : 0u;
+    ctx.integration_weights.mfem_lumped_mass = std::move(integration_weights);
+    ctx.mesh.node_volumes = std::move(node_volumes);
+    ctx.gpu_state.legacy_exchange.legacy_sparse_metadata_ready =
+        legacy_sparse_metadata_ready;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_rows = legacy_sparse_rows;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_cols = legacy_sparse_cols;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_nnz = legacy_sparse_nnz;
+    ctx.gpu_state.legacy_exchange.lumped_mass_ready = true;
+    ctx.exchange.mfem.operator_lifecycle.active_key = active_key;
+    ctx.exchange.mfem.operator_lifecycle.setup_count += 1u;
+    ctx.exchange.mfem.operator_lifecycle.setup_complete = true;
+    setup_attempt.commit();
     return true;
 }
 #endif

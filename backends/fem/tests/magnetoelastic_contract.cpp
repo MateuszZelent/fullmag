@@ -300,8 +300,7 @@ void check_near(double actual, double expected, double tol, const char *msg) {
     }
 }
 
-fullmag::fem::Context make_context() {
-    fullmag::fem::Context ctx;
+void make_context(fullmag::fem::Context &ctx) {
     ctx.mesh.n_nodes = 2;
     ctx.magnetoelastic.enabled = true;
     ctx.magnetoelastic.b1 = 1.0e6;
@@ -310,11 +309,11 @@ fullmag::fem::Context make_context() {
     ctx.magnetoelastic.strain_voigt = {0.1, 0.2, 0.3, 0.04, 0.06, 0.08};
     ctx.material_fields.material.saturation_magnetisation = 800e3;
     ctx.integration_weights.mfem_lumped_mass = {5.0e-27, 7.0e-27};
-    return ctx;
 }
 
 void uniform_strain_field_and_energy_follow_b1_b2_contract() {
-    auto ctx = make_context();
+    fullmag::fem::Context ctx;
+    make_context(ctx);
     const std::vector<double> m = {
         1.0, 2.0, 3.0,
         0.0, 1.0, 0.0,
@@ -361,7 +360,8 @@ void uniform_strain_field_and_energy_follow_b1_b2_contract() {
 }
 
 void per_node_strain_and_masking_are_respected() {
-    auto ctx = make_context();
+    fullmag::fem::Context ctx;
+    make_context(ctx);
     ctx.magnetoelastic.uniform_strain = false;
     ctx.magnetoelastic.strain_voigt = {
         0.1, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -421,7 +421,8 @@ void magnetoelastic_plan_import_copies_coupling_and_strain() {
 }
 
 void magnetoelastic_runtime_upload_updates_strain_and_recomputes_field() {
-    auto ctx = make_context();
+    fullmag::fem::Context ctx;
+    make_context(ctx);
     ctx.magnetoelastic.uniform_strain = true;
     ctx.magnetoelastic.strain_voigt.clear();
     ctx.state.m_xyz = {

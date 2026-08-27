@@ -3,6 +3,25 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Public CPU explicit-RK accepted-endpoint cache decision and cost receipt.
+///
+/// The receipt is optional because non-RK steps and device-resident lanes do
+/// not publish the CPU endpoint-cache realization.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EndpointCacheTelemetry {
+    pub final_refresh_reason: String,
+    pub cache_state_valid: bool,
+    pub cache_time_valid: bool,
+    pub cache_dynamic_sources_valid: bool,
+    pub cache_transport_valid: bool,
+    pub cache_projection_valid: bool,
+    pub final_rhs_evaluations: u64,
+    pub extra_poisson_solves: u64,
+    pub endpoint_cache_hits: u64,
+    pub endpoint_refreshes: u64,
+    pub accepted_step_wall_time_ns: u64,
+}
+
 /// Solver-internal telemetry for one integration step.
 ///
 /// This is _not_ physics — it is implementation and performance metadata.
@@ -96,6 +115,9 @@ pub struct StepDiagnostics {
     pub frozen_dof_count: u64,
     #[serde(default)]
     pub free_dof_count: u64,
+    /// Optional native CPU RK accepted-endpoint cache receipt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint_cache_telemetry: Option<EndpointCacheTelemetry>,
 }
 
 /// Per-step physical scalar observations.

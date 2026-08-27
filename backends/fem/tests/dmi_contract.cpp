@@ -216,6 +216,38 @@ void dmi_element_loops_are_parallelized_with_thread_local_residuals() {
     }
 }
 
+void dmi_periodic_projection_has_one_owner() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string interfacial = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "dmi_interfacial.cpp");
+    const std::string bulk =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "dmi_bulk.cpp");
+    const std::string workspace_header = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "dmi_workspace.hpp");
+    const std::string workspace_impl = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "dmi_workspace.cpp");
+
+    const char *periodic_helper = "prepare_dmi_periodic_input(";
+    check(
+        workspace_header.find(periodic_helper) != std::string::npos,
+        "DMI workspace header must own the shared periodic-input helper");
+    check(
+        workspace_impl.find(periodic_helper) != std::string::npos,
+        "DMI workspace implementation must own the shared periodic-input helper");
+    check(
+        workspace_impl.find("project_static_periodic_aos(ctx, projected_m_xyz)") !=
+            std::string::npos,
+        "DMI workspace must apply the canonical periodic projection");
+    for (const std::string *source : {&interfacial, &bulk}) {
+        check(
+            source->find(periodic_helper) != std::string::npos,
+            "both DMI owners must use the shared periodic-input helper");
+        check(
+            source->find("project_static_periodic_aos") == std::string::npos,
+            "DMI owners must not duplicate periodic projection policy");
+    }
+}
+
 void dmi_runtime_state_is_owned_by_aggregate_module() {
     const std::filesystem::path root = fem_source_root();
     const std::string context_header = read_text_file(root / "include" / "context.hpp");
@@ -365,15 +397,14 @@ void check_zero_field(const std::vector<double> &field, const char *label) {
     }
 }
 
-fullmag::fem::Context make_context() {
-    fullmag::fem::Context ctx;
+void make_context(fullmag::fem::Context &ctx) {
     ctx.mesh.n_nodes = 2;
     ctx.material_fields.material.saturation_magnetisation = 800e3;
-    return ctx;
 }
 
 void disabled_interfacial_dmi_is_zero() {
-    auto ctx = make_context();
+    fullmag::fem::Context ctx;
+    make_context(ctx);
     ctx.dmi.interfacial_enabled = false;
     const std::vector<double> m = {
         1.0, 0.0, 0.0,
@@ -393,7 +424,8 @@ void disabled_interfacial_dmi_is_zero() {
 }
 
 void disabled_bulk_dmi_is_zero() {
-    auto ctx = make_context();
+    fullmag::fem::Context ctx;
+    make_context(ctx);
     ctx.dmi.bulk_enabled = false;
     const std::vector<double> m = {
         1.0, 0.0, 0.0,
@@ -413,7 +445,8 @@ void disabled_bulk_dmi_is_zero() {
 }
 
 void active_dmi_reports_mfem_requirement_without_stack() {
-    auto ctx = make_context();
+    fullmag::fem::Context ctx;
+    make_context(ctx);
     ctx.dmi.interfacial_enabled = true;
     ctx.dmi.interfacial_D = 1.0e-3;
     const std::vector<double> m = {
@@ -439,7 +472,8 @@ void active_dmi_reports_mfem_requirement_without_stack() {
 }
 
 void active_bulk_dmi_reports_mfem_requirement_without_stack() {
-    auto ctx = make_context();
+    fullmag::fem::Context ctx;
+    make_context(ctx);
     ctx.dmi.bulk_enabled = true;
     ctx.dmi.bulk_D = 1.0e-3;
     const std::vector<double> m = {
@@ -500,6 +534,7 @@ int main() {
     dmi_source_files_document_module_boundaries();
     dmi_leaf_headers_document_non_owning_boundaries();
     dmi_element_loops_are_parallelized_with_thread_local_residuals();
+    dmi_periodic_projection_has_one_owner();
     dmi_runtime_state_is_owned_by_aggregate_module();
     bulk_dmi_is_owned_by_bulk_module();
     interfacial_dmi_is_owned_by_interfacial_module();

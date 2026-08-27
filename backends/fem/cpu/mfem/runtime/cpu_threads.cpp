@@ -136,6 +136,9 @@ void configure_fem_host_runtime_threads(Context &ctx)
     ctx.cpu_threads.requested_omp_threads = request.requested_threads;
     ctx.cpu_threads.effective_omp_threads = request.requested_threads;
     ctx.cpu_threads.cap_reason = FULLMAG_FEM_CPU_THREAD_CAP_NONE;
+    ctx.cpu_threads.dynamic_threads_disabled = true;
+    ctx.cpu_threads.nested_parallelism_disabled = true;
+    ctx.cpu_threads.max_active_parallel_levels = 1;
     if (request.auto_requested) {
         const bool gpu_host_runtime = mfem_device_requests_gpu(ctx);
         ctx.cpu_threads.effective_omp_threads =
@@ -148,6 +151,14 @@ void configure_fem_host_runtime_threads(Context &ctx)
             : auto_cpu_thread_cap_reason_for_context(ctx, request.requested_threads);
     }
 #ifdef _OPENMP
+    // MFEM, Hypre/AMG and BLAS may all enter OpenMP regions. Keep one runtime
+    // owner and reject nested teams instead of multiplying the configured
+    // budget at an inner operator or solver phase.
+    omp_set_dynamic(0);
+    omp_set_nested(0);
+#if _OPENMP >= 200805
+    omp_set_max_active_levels(1);
+#endif
     omp_set_num_threads(ctx.cpu_threads.effective_omp_threads);
 #endif
 }
@@ -161,13 +172,14 @@ void log_cpu_runtime_selection(const Context &ctx)
 
     std::fprintf(
         stderr,
-        "[fullmag-fem] cpu runtime: poisson_solver=%s preconditioner=%s cpu_threads=%s requested_omp_threads=%d effective_omp_threads=%d cap_reason=%d mesh_nodes=%u elements=%u\n",
+        "[fullmag-fem] cpu runtime: poisson_solver=%s preconditioner=%s cpu_threads=%s requested_omp_threads=%d effective_omp_threads=%d cap_reason=%d dynamic_threads=disabled nested_parallelism=disabled max_active_parallel_levels=%d mesh_nodes=%u elements=%u\n",
         demag_poisson_linear_solver_name(ctx.demag.solver.solver),
         demag_poisson_preconditioner_name(ctx.demag.solver.preconditioner),
         thread_mode,
         ctx.cpu_threads.requested_omp_threads,
         ctx.cpu_threads.effective_omp_threads,
         ctx.cpu_threads.cap_reason,
+        ctx.cpu_threads.max_active_parallel_levels,
         ctx.mesh.n_nodes,
         ctx.mesh.n_elements);
 }

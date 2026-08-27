@@ -216,6 +216,16 @@ void nonperiodic_hypre_demag_rejects_one_iteration_candidate() {
     check(error.find("max_iterations=1") != std::string::npos, "failure includes maximum iterations");
     check(!fullmag::fem::demag_poisson_hypre_has_warm_start(ctx),
           "failed non-periodic Hypre candidate must not become a warm start");
+    check(ctx.poisson_demag.setup_count == 1u &&
+              ctx.poisson_demag.setup_count_current_step == 1u &&
+              ctx.poisson_demag.fresh_zero_guess_count == 1u &&
+              ctx.poisson_demag.fresh_zero_guess_count_current_step == 1u,
+          "non-periodic Hypre setup and fresh-guess telemetry counts the rejected apply");
+    fullmag::fem::reset_demag_poisson_hypre_initial_guess(ctx);
+    check(fullmag::fem::demag_poisson_hypre_has_warm_start(ctx) &&
+              ctx.poisson_demag.fresh_zero_guess_count == 2u &&
+              ctx.poisson_demag.fresh_zero_guess_count_current_step == 2u,
+          "explicit Hypre reset records a fresh zero guess without rebuilding setup");
     fullmag::fem::destroy_demag_poisson_hypre_workspace(ctx);
     ctx.poisson_demag.poisson_bc_op = nullptr;
 }
@@ -252,6 +262,60 @@ void periodic_demag_rejects_one_iteration_candidate() {
     fullmag::fem::destroy_demag_periodic_poisson_reduction(ctx);
     ctx.poisson_demag.poisson_bc_op = nullptr;
 }
+
+void periodic_demag_reuses_warm_start_and_resets_after_failure() {
+    fullmag::fem::Context ctx;
+    configure_one_iteration_demag_solver(ctx);
+    ctx.demag.enabled = true;
+    ctx.mesh.n_nodes = 8;
+    ctx.mesh.periodic_node_pairs = {0u, 7u};
+    ctx.mesh.periodic_reduced_node = {0u, 1u, 2u, 3u, 4u, 5u, 6u, 0u};
+    ctx.mesh.periodic_representative_nodes = {0u, 1u, 2u, 3u, 4u, 5u, 6u};
+    ctx.mesh.periodic_reduced_node_count = 7;
+    mfem::SparseMatrix op = nontrivial_spd_matrix(8);
+    ctx.poisson_demag.poisson_bc_op = &op;
+    std::string error;
+    check(fullmag::fem::initialize_demag_periodic_poisson_reduction(ctx, error),
+          "periodic warm-start test reduction initializes");
+
+    mfem::Vector rhs(8);
+    for (int i = 0; i < rhs.Size(); ++i) {
+        rhs(i) = 1.0 + static_cast<double>(i % 3);
+    }
+    mfem::Vector *solved = nullptr;
+    uint64_t solve_wall_time_ns = 0;
+    check(
+        !fullmag::fem::solve_demag_periodic_poisson_reduced(
+            ctx, rhs, solved, solve_wall_time_ns, error),
+        "periodic warm-start test first one-iteration solve rejects");
+    check(ctx.poisson_demag.fresh_zero_guess_count == 1u,
+          "periodic rejected solve records one fresh zero guess");
+
+    ctx.demag.solver.max_iterations = 100;
+    ctx.demag.solver.relative_tolerance = 1.0e-10;
+    solved = nullptr;
+    error.clear();
+    check(
+        fullmag::fem::solve_demag_periodic_poisson_reduced(
+            ctx, rhs, solved, solve_wall_time_ns, error),
+        error.c_str());
+    check(solved != nullptr, "periodic converged solve publishes a lifted solution");
+    check(ctx.poisson_demag.fresh_zero_guess_count == 2u,
+          "periodic solve after failure starts from a fresh zero guess");
+
+    solved = nullptr;
+    error.clear();
+    check(
+        fullmag::fem::solve_demag_periodic_poisson_reduced(
+            ctx, rhs, solved, solve_wall_time_ns, error),
+        error.c_str());
+    check(solved != nullptr, "periodic warm-start solve publishes a lifted solution");
+    check(ctx.poisson_demag.fresh_zero_guess_count == 2u,
+          "periodic warm-start solve does not zero the previous solution");
+
+    fullmag::fem::destroy_demag_periodic_poisson_reduction(ctx);
+    ctx.poisson_demag.poisson_bc_op = nullptr;
+}
 #endif
 
 std::string read_text_file(const std::filesystem::path &path) {
@@ -262,7 +326,9 @@ std::string read_text_file(const std::filesystem::path &path) {
     }
     std::ostringstream buffer;
     buffer << in.rdbuf();
-    return buffer.str();
+    std::string text = buffer.str();
+    text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());
+    return text;
 }
 
 std::filesystem::path fem_source_root() {
@@ -485,6 +551,55 @@ void poisson_source_files_document_module_boundaries() {
     check(
         telemetry.find("does not assemble RHS, solve Poisson, recover fields, compute energy, or manage cache") != std::string::npos,
         "Poisson demag telemetry source file must document its non-owning compute boundary");
+}
+
+void poisson_dependency_key_and_guard_are_owned_by_dependency_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string dependency = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "demag_poisson_dependency.cpp");
+    const std::string runtime = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "demag_poisson_runtime.hpp");
+    const std::string dispatcher = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "demag.cpp");
+    const std::string solve = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "demag_poisson_solve.cpp");
+    const std::string cache = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "demag_poisson_cache.cpp");
+
+    check(
+        dependency.find("Poisson demag dependency source contract") != std::string::npos,
+        "Poisson dependency source must document its source contract");
+    for (const char *field : {
+             "mesh_topology_revision",
+             "mesh_geometry_revision",
+             "potential_order",
+             "material_membership_revision",
+             "boundary_revision",
+             "periodic_revision",
+             "realization_revision",
+             "solver_policy_revision"}) {
+        check(
+            runtime.find(field) != std::string::npos,
+            "Poisson dependency key must expose every operator input revision");
+    }
+    check(
+        runtime.find("PoissonOperatorLifecycleReceipt") != std::string::npos,
+        "Poisson runtime must expose a lifecycle receipt");
+    check(
+        dependency.find("destroy_demag_poisson_hypre_workspace(ctx)") != std::string::npos &&
+            dependency.find("destroy_demag_periodic_poisson_reduction(ctx)") != std::string::npos,
+        "Poisson dependency invalidation must tear down stale solver workspaces");
+    check(
+        dispatcher.find("demag_poisson_operator_dependencies_current(ctx, error)") !=
+            std::string::npos,
+        "demag dispatcher must validate Poisson dependencies before cache dispatch");
+    check(
+        solve.find("demag_poisson_operator_dependencies_current(ctx, error)") !=
+            std::string::npos,
+        "Poisson solve must validate dependencies before RHS/solver work");
+    check(
+        cache.find("demag_poisson_operator_dependencies_current(") == std::string::npos,
+        "Poisson cache module must not own dependency validation");
 }
 
 void poisson_debug_env_gate_is_cached_on_hot_path() {
@@ -803,8 +918,7 @@ void demag_rhs_sign_contract_matches_laplace_phi_equals_div_m() {
         "Poisson demag RHS must not negate the Ms*m source coefficient");
 }
 
-fullmag::fem::Context sharp_ms_demag_context() {
-    fullmag::fem::Context ctx;
+void sharp_ms_demag_context(fullmag::fem::Context &ctx) {
     ctx.mesh.n_nodes = 6;
     ctx.mesh.n_elements = 3;
     ctx.mesh.nodes_xyz = {
@@ -823,7 +937,6 @@ fullmag::fem::Context sharp_ms_demag_context() {
     std::string error;
     check(fullmag::fem::initialize_material_runtime(ctx, error),
           "sharp demag fixture must build the typed material runtime");
-    return ctx;
 }
 
 struct SharpMsP1TermwiseOracle {
@@ -872,7 +985,8 @@ SharpMsP1TermwiseOracle sharp_ms_p1_termwise_oracle(
 }
 
 void sharp_ms_demag_energy_and_delta_use_active_exact_mass() {
-    auto ctx = sharp_ms_demag_context();
+    fullmag::fem::Context ctx;
+    sharp_ms_demag_context(ctx);
     const std::vector<double> current = {
         1.0, 0.0, 0.0,  0.0, 0.0, 0.0,  0.0, 0.0, 0.0,
         0.0, 0.0, 0.0,  0.0, 0.0, 0.0,  99.0, 99.0, 99.0,
@@ -957,7 +1071,8 @@ void sharp_ms_demag_rhs_uses_typed_element_accessor() {
 
 #if FULLMAG_HAS_MFEM_STACK
 void sharp_ms_demag_rhs_matches_elementwise_p1_gradient_oracle() {
-    auto ctx = sharp_ms_demag_context();
+    fullmag::fem::Context ctx;
+    sharp_ms_demag_context(ctx);
     mfem::Mesh mesh(3, 6, 3, 0, 3);
     const double vertices[][3] = {
         {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 1.0, 0.0},
@@ -1110,11 +1225,11 @@ std::vector<double> magnetic_mass_row_sums(
     return std::vector<double>(weights.GetData(), weights.GetData() + weights.Size());
 }
 
-fullmag::fem::Context mixed_poisson_context(
+void mixed_poisson_context(
+    fullmag::fem::Context &ctx,
     mfem::Mesh &mesh,
     mfem::FiniteElementSpace &fes,
     const std::vector<uint8_t> &magnetic_elements) {
-    fullmag::fem::Context ctx;
     ctx.base_plan.fe_order = 1u;
     ctx.mfem_context.mesh = &mesh;
     ctx.mfem_context.fes = &fes;
@@ -1166,14 +1281,14 @@ fullmag::fem::Context mixed_poisson_context(
     ctx.cpu_threads.effective_omp_threads = 1;
     ctx.integration_weights.mfem_lumped_mass =
         magnetic_mass_row_sums(mesh, fes, 7);
-    return ctx;
 }
 
 void nonperiodic_poisson_uses_p2_potential_over_p1_magnetization() {
     mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
     mfem::H1_FECollection state_fec(1, 3);
     mfem::FiniteElementSpace state_fes(&mesh, &state_fec);
-    auto ctx = mixed_poisson_context(mesh, state_fes, {1u, 0u, 0u});
+    fullmag::fem::Context ctx;
+    mixed_poisson_context(ctx, mesh, state_fes, {1u, 0u, 0u});
 
     std::string error;
     check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
@@ -1213,7 +1328,8 @@ void periodic_poisson_remains_explicit_p1_node_class_space() {
     mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh(true);
     mfem::H1_FECollection state_fec(1, 3);
     mfem::FiniteElementSpace state_fes(&mesh, &state_fec);
-    auto ctx = mixed_poisson_context(mesh, state_fes, {1u, 0u, 0u});
+    fullmag::fem::Context ctx;
+    mixed_poisson_context(ctx, mesh, state_fes, {1u, 0u, 0u});
     ctx.mesh.periodic_node_pairs = {0u, 7u};
     ctx.mesh.periodic_reduced_node = {0u, 1u, 2u, 3u, 4u, 5u, 6u, 0u};
     ctx.mesh.periodic_representative_nodes = {0u, 1u, 2u, 3u, 4u, 5u, 6u};
@@ -1229,6 +1345,272 @@ void periodic_poisson_remains_explicit_p1_node_class_space() {
           "static periodic node-class Poisson must remain explicitly P1");
     check(potential_fes.GetTrueVSize() == state_fes.GetTrueVSize(),
           "periodic P1 potential must remain compatible with node classes");
+    fullmag::fem::context_destroy_poisson(ctx);
+}
+
+void poisson_dependency_key_fails_closed_after_mesh_or_policy_mutation() {
+    mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
+    mfem::H1_FECollection state_fec(1, 3);
+    mfem::FiniteElementSpace state_fes(&mesh, &state_fec);
+    fullmag::fem::Context ctx;
+    mixed_poisson_context(ctx, mesh, state_fes, {1u, 0u, 0u});
+
+    std::string error;
+    check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
+                 "Poisson dependency lifecycle setup");
+    const auto active_key = ctx.poisson_demag.operator_lifecycle.active_key;
+    check(ctx.poisson_demag.operator_lifecycle.setup_complete,
+          "Poisson dependency lifecycle publishes complete setup");
+    check(ctx.poisson_demag.operator_lifecycle.setup_count == 1u,
+          "Poisson dependency lifecycle publishes one setup");
+    check(
+        fullmag::fem::make_poisson_operator_dependency_key(
+            ctx, mesh, mfem::Device::IsEnabled()) == active_key,
+        "Poisson dependency key is stable without input mutation");
+
+    ctx.poisson_demag.robin_beta_factor += 0.25;
+    check(
+        fullmag::fem::make_poisson_operator_dependency_key(
+            ctx, mesh, mfem::Device::IsEnabled()) != active_key,
+        "Poisson dependency key includes the Robin policy");
+    ctx.poisson_demag.robin_beta_factor -= 0.25;
+
+    mesh.GetVertex(0)[0] += 0.125;
+    ctx.demag.cache_valid = true;
+    ctx.demag.cached_xyz = {1.0, 2.0, 3.0};
+    ctx.demag.cached_visual_xyz = {4.0, 5.0, 6.0};
+
+    std::vector<double> h_demag;
+    double demag_energy = 0.0;
+    error.clear();
+    check(
+        !fullmag::fem::context_compute_demag_poisson(
+            ctx,
+            {},
+            h_demag,
+            demag_energy,
+            false,
+            nullptr,
+            error),
+        "Poisson public solve fails closed after mesh mutation");
+    check(
+        error.find("dependencies changed") != std::string::npos,
+        "Poisson dependency failure names the changed dependencies");
+    check(!ctx.poisson_demag.ready &&
+              !ctx.poisson_demag.operator_lifecycle.setup_complete,
+          "Poisson dependency mutation marks operator unavailable");
+    check(ctx.poisson_demag.operator_lifecycle.invalidation_count == 1u,
+          "Poisson dependency mutation increments invalidation count");
+    check(!ctx.demag.cache_valid && ctx.demag.cached_xyz.empty() &&
+              ctx.demag.cached_visual_xyz.empty(),
+          "Poisson dependency mutation invalidates frozen field cache");
+    check(ctx.poisson_demag.operator_lifecycle.active_key == active_key,
+          "Poisson receipt retains the last published key for diagnostics");
+
+    fullmag::fem::context_destroy_poisson(ctx);
+}
+
+void nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves() {
+    mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
+    mfem::H1_FECollection state_fec(1, 3);
+    mfem::FiniteElementSpace state_fes(&mesh, &state_fec);
+    fullmag::fem::Context ctx;
+    mixed_poisson_context(ctx, mesh, state_fes, {1u, 0u, 0u});
+
+    std::string error;
+    check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
+                 "repeated Poisson solve workspace initialization");
+    const auto setup_key = ctx.poisson_demag.operator_lifecycle.active_key;
+    auto *const cached_matrix = ctx.poisson_demag.cached_hypre_par;
+    auto *const cached_solver = ctx.poisson_demag.cached_hypre_solver;
+    check(cached_matrix == nullptr && cached_solver == nullptr,
+          "Hypre operator workspace is lazy before the first solve");
+
+    std::vector<double> m_xyz(
+        3u * static_cast<size_t>(state_fes.GetNDofs()), 0.0);
+    for (int node = 0; node < state_fes.GetNDofs(); ++node) {
+        const size_t base = 3u * static_cast<size_t>(node);
+        m_xyz[base] = 1.0 + 0.01 * static_cast<double>(node);
+        m_xyz[base + 1u] = -0.02 * static_cast<double>(node);
+        m_xyz[base + 2u] = 0.15;
+    }
+
+    constexpr int kRepeatedSolves = 100;
+    std::vector<double> h_demag;
+    double demag_energy = 0.0;
+    for (int repeat = 0; repeat < kRepeatedSolves; ++repeat) {
+        error.clear();
+        check_result(fullmag::fem::context_compute_demag_poisson(
+                         ctx,
+                         m_xyz,
+                         h_demag,
+                         demag_energy,
+                         false,
+                         nullptr,
+                         error),
+                     error,
+                     "repeated nonperiodic Poisson solve");
+        check(h_demag.size() == m_xyz.size() && std::isfinite(demag_energy),
+              "repeated Poisson solve must publish finite field and energy");
+    }
+
+    check(ctx.poisson_demag.operator_lifecycle.active_key == setup_key,
+          "repeated Poisson solves must preserve the dependency key");
+    check(ctx.poisson_demag.operator_lifecycle.setup_count == 1u &&
+              ctx.poisson_demag.setup_count == 1u,
+          "100 repeated Poisson solves must perform exactly one operator setup");
+    check(ctx.poisson_demag.operator_lifecycle.apply_count ==
+              static_cast<uint64_t>(kRepeatedSolves) &&
+              ctx.poisson_demag.operator_lifecycle.reuse_count ==
+                  static_cast<uint64_t>(kRepeatedSolves - 1),
+          "100 repeated Poisson solves must reuse the setup-owned operator");
+    check(ctx.poisson_demag.fresh_zero_guess_count == 1u,
+          "repeated Poisson solves must reuse the first converged Hypre solution");
+    check(ctx.poisson_demag.cached_hypre_par != nullptr &&
+              ctx.poisson_demag.cached_hypre_solver != nullptr,
+          "repeated Poisson solves must retain cached Hypre operator and solver");
+
+    fullmag::fem::context_destroy_poisson(ctx);
+}
+
+void failed_hypre_setup_does_not_publish_partial_state() {
+    mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
+    mfem::H1_FECollection state_fec(1, 3);
+    mfem::FiniteElementSpace state_fes(&mesh, &state_fec);
+    fullmag::fem::Context ctx;
+    mixed_poisson_context(ctx, mesh, state_fes, {1u, 0u, 0u});
+    ctx.demag.solver.preconditioner =
+        static_cast<fullmag_fem_preconditioner>(999);
+
+    std::string error;
+    check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
+                 "failed Hypre setup regression initialization");
+    std::vector<double> m_xyz(
+        3u * static_cast<size_t>(state_fes.GetNDofs()), 0.0);
+    for (int node = 0; node < state_fes.GetNDofs(); ++node) {
+        const size_t base = 3u * static_cast<size_t>(node);
+        m_xyz[base] = 1.0 + 0.01 * static_cast<double>(node);
+        m_xyz[base + 1u] = -0.02 * static_cast<double>(node);
+        m_xyz[base + 2u] = 0.15;
+    }
+
+    std::vector<double> h_demag;
+    double demag_energy = 0.0;
+    error.clear();
+    check(
+        !fullmag::fem::context_compute_demag_poisson(
+            ctx,
+            m_xyz,
+            h_demag,
+            demag_energy,
+            false,
+            nullptr,
+            error),
+        "unsupported Hypre preconditioner must fail closed");
+    check(
+        error.find("Unsupported native FEM demag preconditioner enum") !=
+            std::string::npos,
+        "failed Hypre setup must report the unsupported preconditioner");
+    check(
+        !ctx.poisson_demag.solver_setup &&
+            ctx.poisson_demag.hypre_workspace == nullptr &&
+            ctx.poisson_demag.cached_hypre_par == nullptr &&
+            ctx.poisson_demag.cached_hypre_preconditioner == nullptr &&
+            ctx.poisson_demag.cached_hypre_solver == nullptr,
+        "failed Hypre setup must not publish partial workspace or solver state");
+    check(
+        ctx.poisson_demag.setup_count == 0u,
+        "failed Hypre setup must not increment setup count");
+
+    fullmag::fem::context_destroy_poisson(ctx);
+    mixed_poisson_context(ctx, mesh, state_fes, {1u, 0u, 0u});
+    check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
+                 "Hypre setup recovery initialization");
+    error.clear();
+    check_result(
+        fullmag::fem::context_compute_demag_poisson(
+            ctx,
+            m_xyz,
+            h_demag,
+            demag_energy,
+            false,
+            nullptr,
+            error),
+        error,
+        "valid Hypre setup must succeed after failed setup");
+    check(
+        ctx.poisson_demag.solver_setup &&
+            ctx.poisson_demag.hypre_workspace != nullptr &&
+            ctx.poisson_demag.cached_hypre_par != nullptr &&
+            ctx.poisson_demag.cached_hypre_solver != nullptr,
+        "recovered Hypre setup must publish a complete workspace");
+    fullmag::fem::context_destroy_poisson(ctx);
+}
+
+void failed_poisson_reinitialize_preserves_published_state() {
+    mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
+    mfem::H1_FECollection state_fec(1, 3);
+    mfem::FiniteElementSpace state_fes(&mesh, &state_fec);
+    fullmag::fem::Context ctx;
+    mixed_poisson_context(ctx, mesh, state_fes, {1u, 0u, 0u});
+
+    std::string error;
+    check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
+                 "Poisson reinitialize rollback setup");
+    auto *const old_potential_fes = ctx.poisson_demag.potential_fes;
+    auto *const old_boundary_operator = ctx.poisson_demag.poisson_bc_op;
+    const auto old_key = ctx.poisson_demag.operator_lifecycle.active_key;
+    const auto old_setup_count = ctx.poisson_demag.operator_lifecycle.setup_count;
+    const auto old_failed_setup_count =
+        ctx.poisson_demag.operator_lifecycle.failed_setup_count;
+
+    ctx.poisson_demag.boundary_marker = 999;
+    error.clear();
+    check(
+        !fullmag::fem::context_initialize_poisson(ctx, error),
+        "invalid Poisson reinitialize must fail closed");
+    check(
+        error.find("poisson_boundary_marker=999") != std::string::npos,
+        "failed Poisson reinitialize must report the invalid boundary marker");
+    check(
+        ctx.poisson_demag.ready &&
+            ctx.poisson_demag.potential_fes == old_potential_fes &&
+            ctx.poisson_demag.poisson_bc_op == old_boundary_operator &&
+            ctx.poisson_demag.operator_lifecycle.active_key == old_key &&
+            ctx.poisson_demag.operator_lifecycle.setup_count == old_setup_count &&
+            ctx.poisson_demag.operator_lifecycle.setup_complete,
+        "failed Poisson reinitialize must retain the previously published operator");
+    check(
+        ctx.poisson_demag.operator_lifecycle.failed_setup_count ==
+            old_failed_setup_count + 1u,
+        "failed Poisson reinitialize must increment only failed-setup telemetry");
+
+    ctx.poisson_demag.boundary_marker = 9;
+    std::vector<double> m_xyz(
+        3u * static_cast<size_t>(state_fes.GetNDofs()), 0.0);
+    for (int node = 0; node < state_fes.GetNDofs(); ++node) {
+        const size_t base = 3u * static_cast<size_t>(node);
+        m_xyz[base] = 1.0 + 0.01 * static_cast<double>(node);
+        m_xyz[base + 1u] = -0.02 * static_cast<double>(node);
+        m_xyz[base + 2u] = 0.15;
+    }
+    std::vector<double> h_demag;
+    double demag_energy = 0.0;
+    error.clear();
+    check_result(
+        fullmag::fem::context_compute_demag_poisson(
+            ctx,
+            m_xyz,
+            h_demag,
+            demag_energy,
+            false,
+            nullptr,
+            error),
+        error,
+        "previous Poisson operator must remain usable after failed reinitialize");
+    check(
+        h_demag.size() == m_xyz.size() && std::isfinite(demag_energy),
+        "retained Poisson operator must publish finite recovery after rollback");
     fullmag::fem::context_destroy_poisson(ctx);
 }
 
@@ -1267,7 +1649,8 @@ void mixed_p1_gpu_rhs_and_magnetic_recovery_match_cpu_mfem() {
     mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
     mfem::H1_FECollection fixture_fec(1, 3);
     mfem::FiniteElementSpace fixture_fes(&mesh, &fixture_fec);
-    auto ctx = mixed_poisson_context(mesh, fixture_fes, {1u, 0u, 0u});
+    fullmag::fem::Context ctx;
+    mixed_poisson_context(ctx, mesh, fixture_fes, {1u, 0u, 0u});
     std::string error;
     check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
                  "mixed CUDA/Hypre Poisson CPU workspace initialization");
@@ -1530,7 +1913,8 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
     mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
     mfem::H1_FECollection fixture_fec(1, 3);
     mfem::FiniteElementSpace fixture_fes(&mesh, &fixture_fec);
-    auto ctx = mixed_poisson_context(mesh, fixture_fes, {1u, 0u, 0u});
+    fullmag::fem::Context ctx;
+    mixed_poisson_context(ctx, mesh, fixture_fes, {1u, 0u, 0u});
     ctx.demag.realization = realization;
     const std::vector<double> m_xyz = smooth_magnetization(mesh, 0.2);
     std::string error;
@@ -1683,8 +2067,9 @@ void mixed_poisson_manufactured_rhs_stiffness_recovery_and_trace() {
     mesh.SetAttributes();
     mfem::H1_FECollection fixture_fec(1, 3);
     mfem::FiniteElementSpace fixture_fes(&mesh, &fixture_fec);
-    auto ctx = mixed_poisson_context(
-        mesh, fixture_fes, std::vector<uint8_t>(static_cast<size_t>(mesh.GetNE()), 1u));
+    fullmag::fem::Context ctx;
+    mixed_poisson_context(
+        ctx, mesh, fixture_fes, std::vector<uint8_t>(static_cast<size_t>(mesh.GetNE()), 1u));
     std::string error;
     check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
                  "mixed manufactured Poisson initialization");
@@ -1854,7 +2239,8 @@ void mixed_poisson_uses_continuous_weak_flux_not_continuous_physical_hn() {
 
     mfem::H1_FECollection fixture_fec(1, 3);
     mfem::FiniteElementSpace fixture_fes(&mesh, &fixture_fec);
-    auto ctx = mixed_poisson_context(mesh, fixture_fes, {1u,0u,0u});
+    fullmag::fem::Context ctx;
+    mixed_poisson_context(ctx, mesh, fixture_fes, {1u,0u,0u});
     std::string error;
     check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
                  "continuous weak-flux Poisson initialization");
@@ -2011,7 +2397,8 @@ MixedPoissonSolveResult solve_mixed_poisson(
     mfem::H1_FECollection fixture_fec(1, 3);
     mfem::FiniteElementSpace fixture_fes(&mesh, &fixture_fec);
     const auto magnetic_elements = element_mask_for_attribute(mesh, 7);
-    auto ctx = mixed_poisson_context(mesh, fixture_fes, magnetic_elements);
+    fullmag::fem::Context ctx;
+    mixed_poisson_context(ctx, mesh, fixture_fes, magnetic_elements);
     check(magnetization.size() == 3u * static_cast<size_t>(fixture_fes.GetNDofs()),
           "mixed Poisson solve magnetization extent");
     std::string error;
@@ -2209,10 +2596,23 @@ void demag_periodic_reduction_is_owned_by_poisson_periodic_module() {
                 std::string::npos &&
             periodic.find("residual_vector.Norml2()") != std::string::npos,
         "Poisson periodic reduced solve must validate convergence with a recomputed true residual");
+    const std::size_t periodic_reset = periodic.find("*x_p = 0.0;");
+    const std::size_t periodic_apply = periodic.find("solver_apply_wall_start");
     check(
-        periodic.find("*x_p = 0.0;\n    const auto solver_apply_wall_start") !=
-            std::string::npos,
-        "Poisson periodic reduced solve must reset the reduced solution before each fresh tangent solve");
+        periodic_reset != std::string::npos && periodic_apply != std::string::npos &&
+            periodic_reset < periodic_apply,
+        "Poisson periodic reduced solve must reset the reduced solution before a fresh tangent solve");
+    check(
+        periodic.find("solver.iterative_mode = true") != std::string::npos &&
+            periodic.find("x_p_contains_solution") != std::string::npos &&
+            periodic.find("if (!used_cached_solution)") != std::string::npos,
+        "Poisson periodic reduced solve must use a qualified warm-start after the first solve");
+    check(
+        periodic.find("periodic_workspace->x_p_contains_solution = false") !=
+                std::string::npos &&
+            periodic.find("periodic_workspace->x_p_contains_solution = true") !=
+                std::string::npos,
+        "Poisson periodic reduced solve must clear warm-start state on failure and publish it on success");
     check(
         periodic.find("ctx.poisson_demag.last_iterations = 0;") == std::string::npos,
         "Poisson periodic reduced solve must not report hard-coded zero iterations");
@@ -2391,7 +2791,7 @@ void demag_hypre_solve_is_owned_by_poisson_hypre_module() {
         "bool demag_poisson_hypre_has_warm_start(",
         "void destroy_demag_poisson_hypre_workspace(",
         "bool solve_demag_poisson_hypre(",
-        "auto *A_par = new mfem::HypreParMatrix",
+        "staged_A = new mfem::HypreParMatrix",
         "new mfem::HypreBoomerAMG",
         "new mfem::HyprePCG",
         "new mfem::HypreGMRES",
@@ -2436,6 +2836,11 @@ void demag_hypre_solve_returns_workspace_solution_without_final_host_copy() {
         solve.find("gf_potential->SetFromTrueDofs(*solved_solution);") !=
             std::string::npos,
         "Poisson demag potential cache must use the returned solved Hypre vector");
+    check(
+        hypre.find("ctx.poisson_demag.setup_count += 1;") != std::string::npos &&
+            hypre.find("ctx.poisson_demag.fresh_zero_guess_count += 1;") !=
+                std::string::npos,
+        "CPU Hypre solve must publish setup and fresh-guess telemetry at the actual apply boundary");
 }
 
 void demag_poisson_solver_runtime_state_is_owned_by_poisson_module() {
@@ -3041,6 +3446,7 @@ int main() {
     poisson_runtime_wrappers_are_owned_by_separate_modules();
     poisson_aggregate_header_documents_submodule_boundaries();
     poisson_source_files_document_module_boundaries();
+    poisson_dependency_key_and_guard_are_owned_by_dependency_module();
     poisson_debug_env_gate_is_cached_on_hot_path();
     demag_energy_uses_half_factor_ms_mass_and_magnetic_mask();
 #if FULLMAG_HAS_MFEM_STACK
@@ -3060,6 +3466,10 @@ int main() {
     sharp_ms_demag_rhs_matches_elementwise_p1_gradient_oracle();
     nonperiodic_poisson_uses_p2_potential_over_p1_magnetization();
     periodic_poisson_remains_explicit_p1_node_class_space();
+    poisson_dependency_key_fails_closed_after_mesh_or_policy_mutation();
+    nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves();
+    failed_hypre_setup_does_not_publish_partial_state();
+    failed_poisson_reinitialize_preserves_published_state();
     mixed_poisson_manufactured_rhs_stiffness_recovery_and_trace();
     mixed_poisson_rhs_is_magnetic_only_with_air_present();
     mixed_p1_gpu_rhs_and_magnetic_recovery_match_cpu_mfem();
@@ -3072,6 +3482,7 @@ int main() {
     mixed_poisson_matches_independently_refined_all_tet_reference();
     nonperiodic_hypre_demag_rejects_one_iteration_candidate();
     periodic_demag_rejects_one_iteration_candidate();
+    periodic_demag_reuses_warm_start_and_resets_after_failure();
 #endif
     demag_boundary_operator_is_owned_by_poisson_boundary_module();
     demag_periodic_reduction_is_owned_by_poisson_periodic_module();

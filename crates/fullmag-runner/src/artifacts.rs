@@ -2017,12 +2017,12 @@ fn write_solver_diagnostics_artifacts(
     )?;
 
     let mut attempts = fs::File::create(output_dir.join("solver_attempts.csv"))?;
-    writeln!(attempts, "attempt,target_step,t_s,dt_attempt_s,eta,max_norm_defect,max_spin_rotation_rad,decision,reason,dt_next_s,demag_solves,demag_iterations,demag_residual,rhs_evals,estimator_order,adaptive_controller_policy_version")?;
+    writeln!(attempts, "attempt,target_step,t_s,dt_attempt_s,eta,max_norm_defect,max_spin_rotation_rad,decision,reason,dt_next_s,demag_solves,demag_iterations,demag_residual,rhs_evals,estimator_order,adaptive_controller_policy_version,error_norm_type,active_node_count,active_measure,normalization_denominator,max_scaled_error,weighted_rms_error")?;
     for step in steps {
         for record in &step.solver_attempts {
             writeln!(
                 attempts,
-                "{},{},{:.17e},{:.17e},{:.17e},{},{},{},{},{:.17e},{},{},{:.17e},{},{},{}",
+                "{},{},{:.17e},{:.17e},{:.17e},{},{},{},{},{:.17e},{},{},{:.17e},{},{},{},{},{},{},{},{},{}",
                 record.attempt,
                 record.target_step,
                 record.time,
@@ -2047,6 +2047,27 @@ fn write_solver_diagnostics_artifacts(
                 record
                     .adaptive_controller_policy_version
                     .as_deref()
+                    .unwrap_or_default(),
+                record.error_norm_type.as_deref().unwrap_or_default(),
+                record
+                    .active_node_count
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+                record
+                    .active_measure
+                    .map(|value| format!("{value:.17e}"))
+                    .unwrap_or_default(),
+                record
+                    .normalization_denominator
+                    .map(|value| format!("{value:.17e}"))
+                    .unwrap_or_default(),
+                record
+                    .max_scaled_error
+                    .map(|value| format!("{value:.17e}"))
+                    .unwrap_or_default(),
+                record
+                    .weighted_rms_error
+                    .map(|value| format!("{value:.17e}"))
                     .unwrap_or_default(),
             )?;
         }
@@ -6911,6 +6932,12 @@ mod tests {
         let rejected_attempt = SolverAttemptRecord {
             attempt: 0,
             adaptive_controller_policy_version: None,
+            error_norm_type: Some("mass_weighted_rms".to_string()),
+            active_node_count: Some(2),
+            active_measure: Some(4.0),
+            normalization_denominator: Some(4.0),
+            max_scaled_error: Some(3.0),
+            weighted_rms_error: Some(2.1213203435596424),
             target_step: 1,
             time: 0.0,
             dt_attempt: 4.0e-15,
@@ -6962,6 +6989,19 @@ mod tests {
             "header plus one row per accepted step"
         );
         assert!(attempts.contains("error_above_tolerance"));
+        let receipt_row = attempts
+            .lines()
+            .nth(1)
+            .unwrap()
+            .split(',')
+            .collect::<Vec<_>>();
+        assert_eq!(receipt_row.len(), 22);
+        assert_eq!(receipt_row[16], "mass_weighted_rms");
+        assert_eq!(receipt_row[17], "2");
+        assert_eq!(receipt_row[18], format!("{:.17e}", 4.0));
+        assert_eq!(receipt_row[19], format!("{:.17e}", 4.0));
+        assert_eq!(receipt_row[20], format!("{:.17e}", 3.0));
+        assert_eq!(receipt_row[21], format!("{:.17e}", 2.1213203435596424));
         let accepted_rows = accepted.lines().collect::<Vec<_>>();
         let proof = accepted_rows[1].split(',').collect::<Vec<_>>();
         assert_eq!(proof[20], "true");
@@ -7020,6 +7060,12 @@ mod tests {
             time: 7.25e-12,
             dt_attempt: 1.0e-12,
             eta: 2.0,
+            error_norm_type: None,
+            active_node_count: None,
+            active_measure: None,
+            normalization_denominator: None,
+            max_scaled_error: None,
+            weighted_rms_error: None,
             decision: "retry".to_string(),
             reason: "error_above_tolerance".to_string(),
             dt_next: accepted.dt,

@@ -49,7 +49,77 @@ std::string magnetization_node_context(
         "/" + std::to_string(nodes);
 }
 
+bool validate_periodic_node_map(const Context &ctx, std::string &error)
+{
+    const size_t nodes = static_cast<size_t>(ctx.mesh.n_nodes);
+    const auto &reduced = ctx.mesh.periodic_reduced_node;
+    const auto &representatives = ctx.mesh.periodic_representative_nodes;
+    if (reduced.empty()) {
+        if (!representatives.empty() || ctx.mesh.periodic_reduced_node_count != 0) {
+            error = "periodic AoS map has representatives without a reduced-node map";
+            return false;
+        }
+        return true;
+    }
+    if (reduced.size() != nodes) {
+        error = "periodic AoS reduced-node map size mismatch";
+        return false;
+    }
+    const size_t class_count = ctx.mesh.periodic_reduced_node_count != 0
+        ? static_cast<size_t>(ctx.mesh.periodic_reduced_node_count)
+        : representatives.size();
+    if (class_count == 0 || representatives.size() != class_count) {
+        error = "periodic AoS representative map size mismatch";
+        return false;
+    }
+    for (uint32_t representative : representatives) {
+        if (representative >= ctx.mesh.n_nodes) {
+            error = "periodic AoS representative references a node outside the mesh";
+            return false;
+        }
+    }
+    for (uint32_t class_index : reduced) {
+        if (static_cast<size_t>(class_index) >= class_count) {
+            error = "periodic AoS reduced-node class index is out of range";
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
+
+bool bind_local_node_aos_vector_field(
+    const Context &ctx,
+    std::vector<double> &field_xyz,
+    AosVectorFieldView &view,
+    std::string &error)
+{
+    const size_t nodes = static_cast<size_t>(ctx.mesh.n_nodes);
+    if (nodes > std::numeric_limits<size_t>::max() / 3u ||
+        field_xyz.size() != nodes * 3u) {
+        error = "local-node AoS field length mismatch";
+        return false;
+    }
+    if (!validate_periodic_node_map(ctx, error)) {
+        return false;
+    }
+    if (!ctx.mesh.periodic_reduced_node.empty() &&
+        ctx.mesh.periodic_reduced_node_count == 0) {
+        error = "local-node AoS field has no periodic-node class count";
+        return false;
+    }
+    if (!ctx.mesh.periodic_reduced_node.empty() &&
+        ctx.mesh.periodic_map_revision == 0) {
+        error = "local-node AoS field has no periodic-map revision";
+        return false;
+    }
+    view.data = field_xyz.empty() ? nullptr : field_xyz.data();
+    view.node_count = nodes;
+    view.space = AosVectorFieldSpace::local_nodes;
+    view.periodic_map_revision = ctx.mesh.periodic_map_revision;
+    return true;
+}
 
 void unpack_aos_to_components(
     const std::vector<double> &aos,
@@ -159,6 +229,11 @@ void project_static_periodic_aos(
     if (ctx.mesh.periodic_reduced_node.empty()) {
         return;
     }
+    std::string error;
+    if (!validate_periodic_node_map(ctx, error) ||
+        field_xyz.size() != static_cast<size_t>(ctx.mesh.n_nodes) * 3u) {
+        return;
+    }
     for (uint32_t node = 0; node < ctx.mesh.n_nodes; ++node) {
         const uint32_t reduced = ctx.mesh.periodic_reduced_node[static_cast<size_t>(node)];
         const uint32_t representative =
@@ -169,6 +244,31 @@ void project_static_periodic_aos(
         field_xyz[dst + 1u] = field_xyz[src + 1u];
         field_xyz[dst + 2u] = field_xyz[src + 2u];
     }
+}
+
+bool project_static_periodic_aos_checked(
+    const Context &ctx,
+    std::vector<double> &field_xyz,
+    std::string &error)
+{
+    AosVectorFieldView view;
+    if (!bind_local_node_aos_vector_field(ctx, field_xyz, view, error)) {
+        return false;
+    }
+    if (view.periodic_map_revision == 0) {
+        return true;
+    }
+    for (size_t node = 0; node < view.node_count; ++node) {
+        const uint32_t reduced = ctx.mesh.periodic_reduced_node[node];
+        const uint32_t representative =
+            ctx.mesh.periodic_representative_nodes[static_cast<size_t>(reduced)];
+        const size_t dst = node * 3u;
+        const size_t src = static_cast<size_t>(representative) * 3u;
+        view.data[dst + 0u] = view.data[src + 0u];
+        view.data[dst + 1u] = view.data[src + 1u];
+        view.data[dst + 2u] = view.data[src + 2u];
+    }
+    return true;
 }
 
 } // namespace fullmag::fem

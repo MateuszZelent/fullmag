@@ -53,6 +53,19 @@ struct AdaptiveAttemptGuardMetrics {
 };
 
 /*
+ * Native receipt for one mass-weighted adaptive error reduction. The measure
+ * and denominator are reported in the same dual-volume/lumped-mass units;
+ * their ratio is dimensionless and is the normalization used by the RMS.
+ */
+struct AdaptiveErrorNormMetrics {
+    uint64_t active_node_count = 0;
+    double active_measure = 0.0;
+    double normalization_denominator = 0.0;
+    double max_scaled_error = 0.0;
+    double weighted_rms_error = 0.0;
+};
+
+/*
  * Initialize adaptive RK plan fields.
  *
  * Validates the optional ABI adaptive_config and copies tolerances, time-step
@@ -92,7 +105,9 @@ adaptive::AdaptiveStepDecision cpu_adaptive_step_decision(
     const adaptive::AdaptiveStepInput &input);
 
 /*
- * Compute the nodewise vector-normalized error for an adaptive explicit RK step.
+ * Compute the maximum nodewise vector-normalized error for an adaptive explicit
+ * RK step. This remains available as an explicit max-error/legacy reduction;
+ * production adaptive FEM steps use the mass-weighted reduction below.
  *
  * Inputs are AoS magnetization vectors. For each active, non-frozen node, the
  * scale is `atol + rtol * max(||m_old||_2, ||m_new||_2)`; the returned norm is
@@ -108,6 +123,26 @@ double compute_adaptive_error_norm(
     const std::vector<uint8_t> &frozen_node_mask,
     double atol,
     double rtol);
+
+/*
+ * Compute the FEM-measure mass-weighted RMS error for an adaptive explicit RK
+ * step. `node_weights` are lumped magnetic masses/dual volumes in m^3; their
+ * common scale cancels from the normalized RMS denominator. Airbox/inactive
+ * and frozen nodes are excluded before reading their vectors or weights.
+ * Invalid extents, tolerances, active weights, or nonfinite values return
+ * infinity so an adaptive attempt fails closed instead of silently falling
+ * back to the unweighted maximum.
+ */
+double compute_adaptive_error_norm_mass_weighted(
+    const std::vector<double> &err,
+    const std::vector<double> &m_old,
+    const std::vector<double> &m_new,
+    const std::vector<double> &node_weights,
+    const std::vector<uint8_t> &magnetic_node_mask,
+    const std::vector<uint8_t> &frozen_node_mask,
+    double atol,
+    double rtol,
+    AdaptiveErrorNormMetrics *metrics = nullptr);
 
 bool compute_adaptive_attempt_guard_metric(
     const AdaptiveDtRuntimeState &policy,

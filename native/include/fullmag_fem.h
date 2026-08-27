@@ -1144,6 +1144,42 @@ typedef struct {
     double demag_recovered_field_energy_joules;
 } fullmag_fem_step_stats;
 
+/*
+ * Versioned CPU explicit-RK accepted-endpoint cache telemetry.  This is an
+ * additive query rather than an extension of fullmag_fem_step_stats so older
+ * callers never receive writes past the struct they allocated.
+ */
+#define FULLMAG_FEM_ENDPOINT_CACHE_TELEMETRY_V1_ABI_VERSION 1u
+
+typedef enum {
+    FULLMAG_FEM_ENDPOINT_REFRESH_NOT_EVALUATED = 0,
+    FULLMAG_FEM_ENDPOINT_REFRESH_CACHE_HIT = 1,
+    FULLMAG_FEM_ENDPOINT_REFRESH_NON_FSAL_TABLEAU = 2,
+    FULLMAG_FEM_ENDPOINT_REFRESH_CANDIDATE_STATE_MISMATCH = 3,
+    FULLMAG_FEM_ENDPOINT_REFRESH_ENDPOINT_TIME_MISMATCH = 4,
+    FULLMAG_FEM_ENDPOINT_REFRESH_DYNAMIC_SOURCE_CHANGED = 5,
+    FULLMAG_FEM_ENDPOINT_REFRESH_TRANSPORT_SOURCE_CHANGED = 6,
+    FULLMAG_FEM_ENDPOINT_REFRESH_PROJECTION_MISMATCH = 7,
+    FULLMAG_FEM_ENDPOINT_REFRESH_CACHE_UNAVAILABLE = 8,
+} fullmag_fem_endpoint_refresh_reason;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t final_rhs_evaluations;
+    uint64_t extra_poisson_solves;
+    uint64_t endpoint_cache_hits;
+    uint64_t endpoint_refreshes;
+    uint64_t accepted_step_wall_time_ns;
+    uint32_t available;
+    uint32_t final_refresh_reason;
+    uint32_t cache_state_valid;
+    uint32_t cache_time_valid;
+    uint32_t cache_dynamic_sources_valid;
+    uint32_t cache_transport_valid;
+    uint32_t cache_projection_valid;
+} fullmag_fem_endpoint_cache_telemetry_v1;
+
 #define FULLMAG_FEM_ACCEPTED_ENERGY_PROOF_V1_ABI_VERSION 1u
 
 typedef struct {
@@ -1183,6 +1219,40 @@ typedef struct {
     uint32_t rhs_evaluations;
     int32_t estimator_order;
 } fullmag_fem_solver_attempt_record_v1;
+
+#define FULLMAG_FEM_SOLVER_ATTEMPT_RECORD_V2_ABI_VERSION 2u
+
+typedef enum {
+    FULLMAG_FEM_SOLVER_ERROR_NORM_NONE = 0,
+    FULLMAG_FEM_SOLVER_ERROR_NORM_MAX = 1,
+    FULLMAG_FEM_SOLVER_ERROR_NORM_MASS_WEIGHTED_RMS = 2,
+} fullmag_fem_solver_error_norm_type;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t attempt;
+    uint64_t target_step;
+    double time_seconds;
+    double dt_attempt_seconds;
+    double eta;
+    double max_norm_defect;
+    double max_spin_rotation;
+    uint32_t decision;
+    uint32_t reason;
+    double dt_next_seconds;
+    uint32_t demag_solve_count;
+    uint32_t demag_linear_iterations;
+    double demag_linear_residual;
+    uint32_t rhs_evaluations;
+    int32_t estimator_order;
+    uint32_t error_norm_type;
+    uint64_t active_node_count;
+    double active_measure;
+    double normalization_denominator;
+    double max_scaled_error;
+    double weighted_rms_error;
+} fullmag_fem_solver_attempt_record_v2;
 
 typedef struct {
     char name[128];
@@ -2108,6 +2178,11 @@ int fullmag_fem_backend_snapshot_stats(
     fullmag_fem_step_stats *out_stats
 );
 
+int fullmag_fem_backend_snapshot_endpoint_cache_telemetry_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_endpoint_cache_telemetry_v1 *out_telemetry
+);
+
 int fullmag_fem_backend_solver_attempt_count_v1(
     fullmag_fem_backend *handle,
     uint64_t *out_count
@@ -2116,6 +2191,13 @@ int fullmag_fem_backend_solver_attempt_count_v1(
 int fullmag_fem_backend_copy_solver_attempts_v1(
     fullmag_fem_backend *handle,
     fullmag_fem_solver_attempt_record_v1 *out_records,
+    uint64_t capacity,
+    uint64_t *out_count
+);
+
+int fullmag_fem_backend_copy_solver_attempts_v2(
+    fullmag_fem_backend *handle,
+    fullmag_fem_solver_attempt_record_v2 *out_records,
     uint64_t capacity,
     uint64_t *out_count
 );

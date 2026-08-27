@@ -3355,6 +3355,50 @@ int fullmag_fem_backend_snapshot_stats(
 #endif
 }
 
+int fullmag_fem_backend_snapshot_endpoint_cache_telemetry_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_endpoint_cache_telemetry_v1 *out_telemetry
+)
+{
+    if (out_telemetry == nullptr) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_snapshot_endpoint_cache_telemetry_v1 received null out_telemetry");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_snapshot_endpoint_cache_telemetry_v1 received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+
+#if FULLMAG_HAS_MFEM_STACK
+    const auto &source = handle->context.stepper.workspace.endpoint_telemetry;
+    *out_telemetry = {};
+    out_telemetry->abi_version = FULLMAG_FEM_ENDPOINT_CACHE_TELEMETRY_V1_ABI_VERSION;
+    out_telemetry->struct_size = sizeof(*out_telemetry);
+    out_telemetry->final_rhs_evaluations = source.final_rhs_evaluations;
+    out_telemetry->extra_poisson_solves = source.extra_poisson_solves;
+    out_telemetry->endpoint_cache_hits = source.endpoint_cache_hits;
+    out_telemetry->endpoint_refreshes = source.endpoint_refreshes;
+    out_telemetry->accepted_step_wall_time_ns = source.accepted_step_wall_time_ns;
+    out_telemetry->available =
+        source.final_refresh_reason != fullmag::fem::RkFinalRefreshReason::NotEvaluated ? 1u : 0u;
+    out_telemetry->final_refresh_reason = static_cast<uint32_t>(source.final_refresh_reason);
+    out_telemetry->cache_state_valid = source.cache_validity.state ? 1u : 0u;
+    out_telemetry->cache_time_valid = source.cache_validity.time ? 1u : 0u;
+    out_telemetry->cache_dynamic_sources_valid = source.cache_validity.dynamic_sources ? 1u : 0u;
+    out_telemetry->cache_transport_valid = source.cache_validity.transport ? 1u : 0u;
+    out_telemetry->cache_projection_valid = source.cache_validity.projection ? 1u : 0u;
+    handle->last_error.clear();
+    fullmag_fem_clear_global_error();
+    return FULLMAG_FEM_OK;
+#else
+    fullmag_fem_set_handle_error(handle, kUnavailableMessage);
+    return FULLMAG_FEM_ERR_UNAVAILABLE;
+#endif
+}
+
 int fullmag_fem_backend_solver_attempt_count_v1(
     fullmag_fem_backend *handle,
     uint64_t *out_count)
@@ -3404,6 +3448,53 @@ int fullmag_fem_backend_copy_solver_attempts_v1(
         target.demag_linear_residual = source.demag_linear_residual;
         target.rhs_evaluations = source.rhs_evaluations;
         target.estimator_order = source.estimator_order;
+    }
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_copy_solver_attempts_v2(
+    fullmag_fem_backend *handle,
+    fullmag_fem_solver_attempt_record_v2 *out_records,
+    uint64_t capacity,
+    uint64_t *out_count)
+{
+    if (handle == nullptr || out_count == nullptr || (capacity > 0u && out_records == nullptr)) {
+        fullmag_fem_set_handle_error(handle, "solver attempt v2 copy requires valid handle, output count, and capacity buffer");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    const auto &records = handle->context.stepper.attempt_trace.records;
+    *out_count = static_cast<uint64_t>(records.size());
+    if (capacity < records.size()) {
+        fullmag_fem_set_handle_error(handle, "solver attempt v2 copy capacity is smaller than the current trace");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    for (size_t index = 0; index < records.size(); ++index) {
+        const auto &source = records[index];
+        auto &target = out_records[index];
+        target = {};
+        target.abi_version = FULLMAG_FEM_SOLVER_ATTEMPT_RECORD_V2_ABI_VERSION;
+        target.struct_size = sizeof(target);
+        target.attempt = source.attempt;
+        target.target_step = source.target_step;
+        target.time_seconds = source.time_seconds;
+        target.dt_attempt_seconds = source.dt_attempt_seconds;
+        target.eta = source.eta;
+        target.max_norm_defect = source.max_norm_defect;
+        target.max_spin_rotation = source.max_spin_rotation;
+        target.decision = static_cast<uint32_t>(source.decision);
+        target.reason = source.reason;
+        target.dt_next_seconds = source.dt_next_seconds;
+        target.demag_solve_count = source.demag_solve_count;
+        target.demag_linear_iterations = source.demag_linear_iterations;
+        target.demag_linear_residual = source.demag_linear_residual;
+        target.rhs_evaluations = source.rhs_evaluations;
+        target.estimator_order = source.estimator_order;
+        target.error_norm_type = source.error_norm_type;
+        target.active_node_count = source.active_node_count;
+        target.active_measure = source.active_measure;
+        target.normalization_denominator = source.normalization_denominator;
+        target.max_scaled_error = source.max_scaled_error;
+        target.weighted_rms_error = source.weighted_rms_error;
     }
     return FULLMAG_FEM_OK;
 }

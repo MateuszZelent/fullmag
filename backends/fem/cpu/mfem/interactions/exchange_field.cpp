@@ -8,6 +8,7 @@
 #include "cpu/mfem/interactions/exchange_field.hpp"
 
 #include "context.hpp"
+#include "cpu/mfem/interactions/operator_dependency.hpp"
 #include "cpu/mfem/runtime/interrupt.hpp"
 #include "cpu/mfem/interactions/exchange_mass_projection.hpp"
 #include "cpu/mfem/runtime/aos_field.hpp"
@@ -52,6 +53,26 @@ bool compute_exchange_for_magnetization(
 {
     if (!ctx.mfem_context.ready) {
         error = "MFEM exchange requested before MFEM context initialization";
+        return false;
+    }
+    if (!ctx.exchange.mfem.operator_lifecycle.setup_complete) {
+        error = "MFEM exchange operator dependencies are invalid; setup must be rebuilt before apply";
+        return false;
+    }
+    auto *mesh = ctx.mfem_context.mesh;
+    if (mesh == nullptr) {
+        error = "MFEM exchange operator dependencies cannot be checked without a mesh";
+        return false;
+    }
+    const auto current_key = make_exchange_operator_dependency_key(
+        ctx,
+        *mesh,
+        mfem::Device::IsEnabled());
+    if (current_key != ctx.exchange.mfem.operator_lifecycle.active_key) {
+        ++ctx.exchange.mfem.operator_lifecycle.invalidation_count;
+        ctx.exchange.mfem.operator_lifecycle.setup_complete = false;
+        ctx.exchange.mfem.ready = false;
+        error = "MFEM exchange operator dependencies changed; setup must be rebuilt before apply";
         return false;
     }
 

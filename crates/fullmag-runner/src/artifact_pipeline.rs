@@ -209,6 +209,12 @@ impl CpuAdaptiveAttemptBatch {
                 adaptive_controller_policy_version: Some(
                     record.controller_policy_version.to_string(),
                 ),
+                error_norm_type: None,
+                active_node_count: None,
+                active_measure: None,
+                normalization_denominator: None,
+                max_scaled_error: None,
+                weighted_rms_error: None,
                 target_step: self.target_step,
                 time: self.time,
                 dt_attempt: record.dt_attempt,
@@ -2134,7 +2140,7 @@ fn write_terminal_cpu_adaptive_attempts(
         .map_err(|error| format!("failed to open '{}': {error}", path.display()))?;
     let mut attempts = BufWriter::new(file);
     if write_header {
-        writeln!(attempts, "attempt,target_step,t_s,dt_attempt_s,eta,max_norm_defect,max_spin_rotation_rad,decision,reason,dt_next_s,demag_solves,demag_iterations,demag_residual,rhs_evals,estimator_order,adaptive_controller_policy_version")
+        writeln!(attempts, "attempt,target_step,t_s,dt_attempt_s,eta,max_norm_defect,max_spin_rotation_rad,decision,reason,dt_next_s,demag_solves,demag_iterations,demag_residual,rhs_evals,estimator_order,adaptive_controller_policy_version,error_norm_type,active_node_count,active_measure,normalization_denominator,max_scaled_error,weighted_rms_error")
             .map_err(|error| format!("failed to write '{}': {error}", path.display()))?;
     }
     for record in &batch.records[..batch.count] {
@@ -2147,7 +2153,7 @@ fn write_terminal_cpu_adaptive_attempts(
         };
         writeln!(
             attempts,
-            "{},{},{:.17e},{:.17e},{:.17e},,,{},{},{:.17e},{},0,{:.17e},{},{},{}",
+            "{},{},{:.17e},{:.17e},{:.17e},,,{},{},{:.17e},{},0,{:.17e},{},{},{},,,,,,",
             record.attempt,
             batch.target_step,
             batch.time,
