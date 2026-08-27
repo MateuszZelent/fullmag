@@ -1,135 +1,163 @@
-# Rectangular waveguide edge and corner mesh refinement
+# Prostokątne zagęszczanie FEM przy krawędziach i narożach
 
-## 1. Physical / numerical statement
+- Status: terminal contract
+- Ostatnia aktualizacja: 2026-08-27
+- Decyzja: [ADR 0027](../adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md)
+- Gate produkcyjny: [0105](0105-fem-meshing-production-acceptance.md)
 
-This note defines a **discretization-only** refinement mode for ferromagnetic
-waveguides in the FEM shared-domain mesh pipeline.
+(edge-corner-problem-statement)=
+## Problem statement
 
-The goal is to make the solver mesh:
-- denser near the **in-plane edges** of the rectangular ferromagnet,
-- densest near the **in-plane corners**,
-- coarser in the object center,
+Polityka jest wyłącznie polityką dyskretyzacji współdzielonej domeny FEM.
+Zagęszcza cztery pasy krawędziowe i cztery strefy narożne prostokątnego
+ferromagnetyka oraz, na jawne żądanie, sąsiadujące powietrze. Nie zmienia
+geometrii fizycznej, materiału, warunków brzegowych ani obserwabli.
 
-without changing physics, material parameters, regions, airbox semantics, or
-observable definitions.
+(edge-corner-governing-equations)=
+## Governing equations
 
-Production-readiness criteria for rectangular edge/corner refinement are
-defined in `docs/physics/0105-fem-meshing-production-acceptance.md`.
+Nie zmieniają się równania LLG ani słabe formy. Polityka rozmiaru spełnia
 
-This is not a new energy term or boundary condition. It is a controlled spatial
-mesh-size policy for geometries where edge-localized magnetization structure can
-matter more than the central bulk.
+```{math}
+:label: eq-edge-corner-size-composition
 
-## 2. Public semantics
+h_{\mathrm{target}}(\mathbf x)=
+\max\!\left(\min_{u\in\mathcal U(\mathbf x)}u,
+             \max_{\ell\in\mathcal L(\mathbf x)}\ell\right).
+```
 
-The per-object mesh controls are:
+`edge_hmax` i `corner_hmax` są lokalnymi **upper targets**. Lower bounds,
+w tym jawne minimum użytkownika, nigdy nie są obchodzone przez pas lub naroże.
 
-- `edge_hmax`
-- `edge_thickness`
-- `corner_hmax`
-- `corner_extent`
-- `corner_transition_distance`
+```{math}
+:label: eq-edge-corner-distance
 
-All values are in SI metres.
+d_E(\mathbf x)=\min_{\mathbf y\in E}\lVert\mathbf x-\mathbf y\rVert_2.
+```
 
-Interpretation:
-- `edge_hmax`: target element size inside four in-plane edge bands.
-- `edge_thickness`: inward width of each edge band from the rectangular boundary.
-- `corner_hmax`: target element size inside four in-plane corner zones.
-- `corner_extent`: in-plane extent of each corner zone along both lateral axes.
-- `corner_transition_distance`: optional air-side transition distance from
-  component boundary endpoints back toward the far-field airbox target.
+Odległość do odzyskanej krzywej lub punktu narożnego steruje tylko lokalnym
+przejściem rozmiaru.
 
-For `Box`, `Translate(Box)`, and flat `ArchWaveguide` objects with
-`arch_height = 0`, the two largest dimensions define the in-plane axes. The
-smallest dimension is treated as thickness. Refinement spans the full thickness;
-it does not create separate top/bottom surface shells.
+(edge-corner-symbols-and-si-units)=
+## Symbols and SI units
 
-For non-box component-aware geometries, edge and corner controls lower to
-distance fields from recovered component boundary curves and curve endpoints.
-Those fields intentionally cross the conformal object-air interface, so they
-can refine the neighboring airbox around sharp magnetic edges.
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $\mathbf x$ | physical point | $\mathrm m$ |
+| $\mathcal U$ | eligible upper size targets | $\mathrm m$ |
+| $\mathcal L$ | eligible lower size bounds | $\mathrm m$ |
+| $h_\mathrm{target}$ | resolved target size | $\mathrm m$ |
+| $E$ | selected edge or corner set | $1$ |
+| $d_E$ | Euclidean distance from the selected entity | $\mathrm m$ |
 
-## 3. Scope and limits
+(edge-corner-assumptions-and-validity)=
+## Assumptions and validity
 
-V1 supports:
-- `Box`
-- `Translate(Box)`
-- flat `ArchWaveguide` (`arch_height = 0`)
-- FEM shared-domain meshing with component-aware volume identity
+Semantyka prostokątna dotyczy `Box`, `Translate(Box)` i płaskiego
+`ArchWaveguide` z `arch_height=0`. Dwie największe osie są in-plane, najmniejsza
+jest grubością; pasy obejmują pełną grubość. Dla geometrii komponentowej
+realizacja może użyć odzyskanych krzywych i ich końców. Exact through-thickness
+layers nie oznaczają structured in-plane meshing: ten kontrakt nie gwarantuje
+regularnej siatki bocznej.
 
-V2 additionally supports component-aware edge/corner distance fields for
-non-box geometries when Gmsh recovers boundary curves and endpoints.
+(edge-corner-python-api)=
+## Python API
 
-This note does not define:
-- automatic projection to arbitrary polygonal perimeter refinement
-- independent default/global study-object edge/corner policies
+| Python | Type | Default | SI unit | Validation / error | Meaning | Backend support | ProblemIR destination | Source |
+|---|---|---|---|---|---|---|---|---|
+| `GeometryMeshHandle.configure.edge_hmax` | `float \| None` | `None` | $\mathrm m$ | positive and paired with edge_thickness | edge-band upper target | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].edge_hmax` | `world.py::class GeometryMeshHandle` |
+| `GeometryMeshHandle.configure.edge_thickness` | `float \| None` | `None` | $\mathrm m$ | positive, paired, and below half the smaller in-plane dimension | edge-band width | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].edge_thickness` | `world.py::class GeometryMeshHandle` |
+| `GeometryMeshHandle.configure.corner_hmax` | `float \| None` | `None` | $\mathrm m$ | positive, paired, and no larger than edge_hmax when both exist | corner upper target | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].corner_hmax` | `world.py::class GeometryMeshHandle` |
+| `GeometryMeshHandle.configure.corner_extent` | `float \| None` | `None` | $\mathrm m$ | positive, paired, and below half the smaller in-plane dimension | corner-zone extent | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].corner_extent` | `world.py::class GeometryMeshHandle` |
+| `GeometryMeshHandle.configure.corner_transition_distance` | `float \| None` | `None` | $\mathrm m$ | positive and requires the corner pair | air-side corner transition span | FEM CPU/GPU | `runtime_metadata.mesh_workflow.per_geometry[].corner_transition_distance` | `world.py::class GeometryMeshHandle` |
 
-## 4. Validation rules
+```python
+# %% Zdefiniuj geometrię, materiał i wszystkie etapy przed uruchomieniem.
+import fullmag as fm
 
-- `edge_hmax` requires `edge_thickness`
-- `corner_hmax` requires `corner_extent`
-- `corner_hmax <= edge_hmax` when both are present
-- `corner_transition_distance` requires `corner_hmax` and `corner_extent`
-- `edge_thickness < 0.5 * min(in_plane_dimensions)`
-- `corner_extent < 0.5 * min(in_plane_dimensions)`
+study = fm.Study("edge-corner")
+body = study.world.add(fm.Box((200e-9, 80e-9, 4e-9)), name="strip")
+body.mesh.configure(
+    maximum_element_size=8e-9,
+    edge_hmax=4e-9,
+    edge_thickness=12e-9,
+    corner_hmax=2e-9,
+    corner_extent=10e-9,
+    corner_transition_distance=20e-9,
+)
+study.add(fm.Relaxation(name="relax"))
+study.add(fm.Dynamics(name="run", duration=1e-9))
+study.run()
+```
 
-`transition_distance` remains a separate surface object-to-air grading control.
-It is not inherited by corner endpoint fields. Use
-`corner_transition_distance` when a corner-specific air plume is intended.
+(edge-corner-problem-ir)=
+## ProblemIR and provenance
 
-## 5. FEM interpretation
+Requested intent zapisuje pięć wartości per geometry w
+`runtime_metadata.mesh_workflow.per_geometry[]`. Resolved execution zapisuje
+rozpoznany typ geometrii, osie in-plane, wybrane encje, rozmiary i odległości.
+Tagi Gmsh są dowodem realizacji, nie kanonicznym zamiennikiem intencji.
+Wartości V04 przechodzą wyłącznie w jednym atomic cutover z ADR 0024 i 0027;
+dual-write V03/V04 jest zabroniony.
 
-For rectangular boxes, refinement is lowered into local background mesh-size
-fields restricted to the ferromagnet volume:
-- four edge-aligned sub-boxes
-- four corner sub-boxes
+(edge-corner-backend-matrix)=
+## Backend matrix
 
-For flat arch waveguides, the same rectangular in-plane semantics are lowered
-into analytic edge-distance and corner-distance fields restricted to the
-ferromagnet volume. This avoids relying on recovered CAD curve endpoints for the
-magnetic-body refinement while keeping air-side edge/corner plumes as explicit
-boundary-curve and endpoint distance fields.
-The body-local analytic fields are emitted only when the requested edge/corner
-size is finer than the magnetic-body bulk size; otherwise they are a no-op and
-only the air-side plume is kept.
+| Lane | Status |
+|---|---|
+| FEM CPU | authoring i aktualny planner Gmsh; kwalifikacja według 0105 |
+| FEM GPU | ta sama siatka i semantyka; brak osobnej polityki GPU |
+| FDM CPU | not applicable |
+| FDM GPU | not applicable |
 
-For non-box component-aware geometries, refinement is lowered into unrestricted
-distance fields from component boundary curves and curve endpoints. These fields
-are allowed to refine the airbox side of the conformal interface.
+(edge-corner-discrete-realization)=
+## Discrete realization
 
-The active element size is the minimum of:
-- the bulk object target,
-- edge sub-box targets,
-- corner sub-box targets,
-- any other non-conflicting active lower-size constraints
+Box/flat-arch realizations budują pola pasów i naroży w magnetic bulk; jawne
+transition distances rozszerzają wyłącznie odpowiedni plume na transition air.
+Wynik jest składany z innymi upper/lower constraints przed uruchomieniem Gmsh.
 
-The mesh growth back toward the object center remains governed by the existing
-global/object growth-rate semantics.
+(edge-corner-round-trip-and-failure-semantics)=
+## Round-trip and failure semantics
 
-## 6. FDM interpretation
+Eksport Python zachowuje requested intent bez normalizacji do tagów. Validation errors
+odrzucają niekompletne pary i niepoprawne rozmiary; unsupported combinations
+geometrii są odrzucane i nie wolno po cichu rozszerzyć celu na cały obiekt.
+Brak encji lub niezdolność backendu jest błędem przed startem solvera.
 
-None. This feature is FEM-only and has no FDM discretization meaning.
+(edge-corner-implementation-mapping)=
+## Implementation mapping
 
-## 7. UI / script / provenance impact
+`GeometryMeshHandle.configure` waliduje API. `_perimeter_refinement_config`
+normalizuje pary, a `_build_field_stack` tworzy ograniczone pola tła. Ten mapping
+opisuje stan bieżący; pełne dowody produkcyjne pozostają bramką 0105.
 
-- Python DSL exposes the kwargs directly on `body.mesh(...)`
-- script export and builder round-trip preserve the fields verbatim
-- UI object-mesh authoring may expose box-local controls separately from
-  component-boundary controls
-- mesh build reports may expose resolved edge/corner targets per object
+(edge-corner-validation)=
+## Validation
 
-## 8. Validation plan
+- Unit: każda para, dodatniość, relacja corner/edge i granice wymiarów.
+- Integracja Gmsh: dokładnie cztery pasy i cztery strefy dla box/flat arch.
+- Naukowa: zliczenie komórek strefami i rozkład jakości według 0105.
+- Regresja: identyczne requested intent i resolved execution dla FEM CPU/GPU.
 
-- DSL round-trip tests for load -> export -> rewrite
-- field-planner tests for 4 edge + 4 corner regions
-- rejection tests for geometry mismatch and interface-shell conflict
-- UI/session tests for builder/options round-trip
+(edge-corner-limitations)=
+## Limitations
 
-## 9. Deferred work
+Dowolne krzywe i CAD wymagają stabilnej odzyskanej topologii. Polityka nie
+obiecuje structured in-plane meshing ani niezależnego study-wide default.
 
-- support for curved or swept waveguides
-- support for imported CAD/STL objects with robust perimeter extraction when
-  component boundary identity is unavailable
-- separate edge transition-distance semantics
-- study-level defaults for perimeter refinement
+(edge-corner-scientific-bibliography)=
+## Scientific bibliography
+
+- P. L. George, H. Borouchaki, *Delaunay Triangulation and Meshing*, 1998.
+- Gmsh reference manual, background mesh fields and OCC entities.
+
+(edge-corner-source-code-index)=
+## Source-code index
+
+| Warstwa | Ścieżka | Symbol | Odpowiedzialność |
+|---|---|---|---|
+| Python API | `packages/fullmag-py/src/fullmag/world.py` | `class GeometryMeshHandle` | walidacja i lowering pięciu parametrów |
+| Normalizacja | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_perimeter_refinement_config` | pary edge/corner i ograniczenia |
+| Gmsh | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_build_field_stack` | lokalne pola rozmiaru |
+| Raport | `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py` | `_build_shared_domain_build_report` | resolved mesh evidence |

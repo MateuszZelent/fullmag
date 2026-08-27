@@ -99,6 +99,12 @@ utrzymywać dwóch równorzędnych edytowalnych modeli w jednej scenie. Po
 przełączeniu stary eksport może działać wyłącznie jako jawne narzędzie dla
 modeli reprezentowalnych bezstratnie.
 
+Ta sama atomowa granica obejmuje kanoniczne polityki siatki universe/object/
+region opisane w `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md`.
+Nie wolno osobno przełączać mesh writera, dual-write polityk v0.3/V04 ani
+scalać dwóch edytowalnych reprezentacji. Migrator przenosi legacy mesh intent
+do V04 dokładnie raz, po czym jedynym źródłem authoringu jest obiekt V04.
+
 ## Tests and validation
 
 - Python/IR golden round-trip każdego typu i kombinacji modułów;

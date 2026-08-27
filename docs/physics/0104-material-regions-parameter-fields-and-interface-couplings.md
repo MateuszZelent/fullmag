@@ -2,8 +2,8 @@
 
 - Status: accepted implementation contract
 - Owners: Fullmag core
-- Last updated: 2026-06-08
-- Related ADRs: `docs/adr/0011-resource-first-api.md`, `docs/adr/0013-frontend-v2-module-kernel.md`
+- Last updated: 2026-08-27
+- Related ADRs: `docs/adr/0011-resource-first-api.md`, `docs/adr/0013-frontend-v2-module-kernel.md`, `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md`
 - Related specs: `docs/specs/resource-first-control-room-api-v2.md`
 - Related plans:
   - `docs/plans/active/region-owned-mesh-material-texture-plan-2026-06-04-pl.md`
@@ -15,6 +15,7 @@
   - `docs/physics/0400-fdm-exchange-demag-zeeman.md`
   - `docs/physics/0410-fem-exchange-demag-zeeman-mfem-gpu.md`
 
+(material-regions-problem-statement)=
 ## 1. Problem statement
 
 Fullmag needs one canonical way to describe local mesh refinement, local
@@ -43,6 +44,7 @@ This note defines the contract for:
 
 ## 2. Physical model
 
+(material-regions-governing-equations)=
 ### 2.1 Governing equations
 
 For a single material object, the reduced magnetization is
@@ -74,6 +76,21 @@ additional surface coupling, the natural condition is exchange flux continuity:
 A_1 partial_n m_1 = A_2 partial_n m_2
 ```
 
+Dla nakładających się ograniczeń siatki regionów obowiązuje ta sama kanoniczna
+algebra co dla obiektu i airboxu:
+
+```{math}
+:label: eq-material-region-mesh-composition
+
+h_{\mathrm{target}}(\mathbf x)=
+\max\!\left(\min_{u\in\mathcal U(\mathbf x)}u,
+             \max_{\ell\in\mathcal L(\mathbf x)}\ell\right).
+```
+
+Regionowe `maximum_element_size` jest upper target, a
+`minimum_element_size` jest lower bound; żadna nazwa regionu nie aktywuje
+fizyki ani nie może ominąć dolnego ograniczenia.
+
 This is the physical reason that two regions inside one object are not
 automatically disconnected. They share one continuum field.
 
@@ -97,6 +114,7 @@ E_RKKY = -J1 integral_Gamma (m_1 dot m_2) dS
 where `J1` has units `J/m^2`. It is not represented by setting the volumetric
 exchange stiffness `Aex` on both sides.
 
+(material-regions-symbols-and-si-units)=
 ### 2.2 Symbols and SI units
 
 | Symbol / parameter | Meaning | SI unit |
@@ -112,7 +130,12 @@ exchange stiffness `Aex` on both sides.
 | `Dbulk(x)` | bulk DMI coefficient | `J/m^2` under the current Fullmag convention |
 | `J1` | bilinear RKKY/interlayer surface coupling | `J/m^2` |
 | `mu0` | vacuum permeability | `N/A^2` |
+| $\mathbf x$ | physical mesh-policy point | $\mathrm m$ |
+| $\mathcal U(\mathbf x)$ | eligible upper mesh-size targets | $\mathrm m$ |
+| $\mathcal L(\mathbf x)$ | eligible lower mesh-size bounds | $\mathrm m$ |
+| $h_\mathrm{target}(\mathbf x)$ | resolved mesh target | $\mathrm m$ |
 
+(material-regions-assumptions-and-validity)=
 ### 2.3 Assumptions and approximations
 
 1. One material object owns one reduced magnetization field `m`.
@@ -135,6 +158,8 @@ exchange stiffness `Aex` on both sides.
    note.
 9. Full RKKY runtime support is capability-gated. If authored RKKY cannot be
    realized by the selected backend, the run is blocked.
+10. Exact through-thickness layers and structured in-plane meshing are odrębnymi
+    własnościami; regionowa polityka rozmiaru nie gwarantuje żadnej z nich.
 
 ### 2.4 Region-local material transition semantics
 
@@ -566,6 +591,7 @@ not a change in public physics semantics.
 
 ## 4. API, IR, and planner impact
 
+(material-regions-python-api)=
 ### 4.1 Python API surface
 
 The canonical public model is:
@@ -577,9 +603,19 @@ The canonical public model is:
 - optional convenience aliases such as `waveguide.interfaces` that lower into
   `study.couplings`.
 
+Regionowa część mesh API jest wyczerpująco zmapowana poniżej:
+
+| Python | Type | Default | SI unit | Validation / error | Meaning | Backend support | ProblemIR destination | Source |
+|---|---|---|---|---|---|---|---|---|
+| `ObjectRegion.mesh.maximum_element_size` | `float \| None` | `None` | $\mathrm m$ | finite and positive | region upper target | FDM/FEM by capability | `object_regions[].mesh_policy.maximum_element_size` | `structure.py::class ObjectRegion` |
+| `ObjectRegion.mesh.minimum_element_size` | `float \| None` | `None` | $\mathrm m$ | finite, positive, and not above maximum | region lower bound | FDM/FEM by capability | `object_regions[].mesh_policy.minimum_element_size` | `structure.py::class ObjectRegion` |
+| `ObjectRegion.mesh.transition_distance` | `float \| None` | `None` | $\mathrm m$ | finite and non-negative | region transition span | FEM by capability | `object_regions[].mesh_policy.transition_distance` | `structure.py::class ObjectRegion` |
+| `ObjectRegion.mesh.order` | `int \| None` | `None` | $1$ | integer at least one | region FEM basis-order intent | FEM by capability | `object_regions[].mesh_policy.order` | `structure.py::class ObjectRegion` |
+
 Example:
 
 ```python
+# %% Najpierw zdefiniuj pełną geometrię, regiony i stage graph.
 waveguide = study.geometry(
     fm.shapes.arch_waveguide(length=2.5e-6, width=1.0e-6, height=2e-9),
     name="waveguide",
@@ -649,6 +685,7 @@ are declarations that the referenced marker IDs already exist in the mesh
 element marker array. The planner must reject metadata-only markers that do not
 appear in the mesh topology.
 
+(material-regions-problem-ir)=
 ### 4.2 ProblemIR representation
 
 `ProblemIR` needs distinct authored and realized concepts:
@@ -673,6 +710,11 @@ Required validation:
 - RKKY endpoints are surface/object boundary endpoints,
 - unsupported RKKY blocks runtime planning,
 - multilayer FDM + region-owned material/coupling is rejected for v1.
+
+Planowane typowane pola V04 dla regionowej polityki siatki przechodzą w jednym
+atomic cutover razem z ADR 0024 i ADR 0027. Requested intent pozostaje w
+`ObjectRegionIR.mesh_policy`; resolved execution, markery i realne pola należą
+do artifacts/provenance. Dual-write V03/V04 i heurystyczne odczyty są zabronione.
 
 ### 4.3 Planner and capability-matrix impact
 
@@ -700,7 +742,41 @@ Surface selector v1:
 - FEM resolves it to boundary face markers in the shared-domain mesh,
 - named surfaces and arbitrary feature selectors are v2.
 
-### 4.4 Review decision log
+(material-regions-backend-matrix)=
+### 4.4 Backend matrix
+
+| Lane | Region mesh policy | Material/interface physics |
+|---|---|---|
+| FDM CPU | regular-grid realization | canonical reference where capability exists |
+| FDM GPU | regular-grid realization | capability-gated parity, no silent CPU fallback |
+| FEM CPU | conformal or explicit projection | shared-domain coefficients and markers |
+| FEM GPU | ta sama canonical mesh intent | osobna realizacja runtime, wspólna semantyka |
+
+(material-regions-discrete-realization)=
+### 4.5 Discrete realization
+
+FDM materializuje maski i pola na komórkach. FEM materializuje conformal domain
+markers albo jawnie raportowaną projekcję. Region mesh-only pozostaje polem
+rozmiaru i nie tworzy niezależnych stopni swobody magnetyzacji.
+
+(material-regions-round-trip-and-failure-semantics)=
+### 4.6 Round-trip and failure semantics
+
+Python/UI round-trip zachowuje requested intent: właściciela, nazwę, shape,
+`mesh_policy`, material fields i couplings. Resolved execution zachowuje
+markery, projection/conformal mode oraz capability result. Validation errors
+blokują niepoprawne zakresy i `Ms<=0`; unsupported combinations blokują planner.
+Nie wolno porzucać regionu lub coupling po cichu.
+
+(material-regions-implementation-mapping)=
+### 4.7 Implementation mapping
+
+`ObjectRegion.mesh` zapisuje cztery bieżące parametry. `RegionMeshPolicyIR` jest
+ich typowanym kontraktem Rust, a `validate_region_mesh_policy` weryfikuje liczby.
+Pełna realizacja wszystkich material/interface przypadków pozostaje zgodna z
+macierzą capability i nie wynika z samej obecności tych typów.
+
+### 4.8 Review decision log
 
 The following answers close the architectural questions raised during review.
 They are part of the physics contract, not implementation preferences.
@@ -721,6 +797,7 @@ They are part of the physics contract, not implementation preferences.
 | Is old `MaterialIR.ms_field` authored intent? | No. It is a realized/runtime compatibility payload; authored fields use `MaterialParameterFieldIR`. |
 | How are object contacts discovered? | Contact discovery is a runtime materialization step: FDM uses mask adjacency; FEM uses shared-domain boundary/domain markers. |
 
+(material-regions-validation)=
 ## 5. Validation strategy
 
 ### 5.1 Analytical checks
@@ -772,6 +849,7 @@ must include:
 - [ ] Tests / benchmarks
 - [x] Documentation
 
+(material-regions-limitations)=
 ## 7. Known limits and deferred work
 
 - Full production RKKY runtime operators are deferred until backend capability
@@ -795,6 +873,7 @@ must include:
 - Runtime texture authoring is deferred; region texture override in v1 is an
   initial-condition feature.
 
+(material-regions-scientific-bibliography)=
 ## 8. References
 
 - Mumax+/Mumax region exchange semantics: default harmonic mean inside one
@@ -803,3 +882,13 @@ must include:
   markers for sharp material interfaces.
 - Fullmag masterplan:
   `docs/plans/active/region-owned-implementation-masterplan-2026-06-04-pl.md`.
+
+(material-regions-source-code-index)=
+## 9. Source-code index
+
+| Warstwa | Ścieżka | Symbol | Odpowiedzialność |
+|---|---|---|---|
+| Python API | `packages/fullmag-py/src/fullmag/model/structure.py` | `class ObjectRegion` | owner-scoped region i `mesh_policy` |
+| ProblemIR | `crates/fullmag-ir/src/model.rs` | `RegionMeshPolicyIR` | typowane cztery pola polityki |
+| Walidacja IR | `crates/fullmag-ir/src/lib.rs` | `validate_region_mesh_policy` | skończoność, dodatniość i order |
+| Meshing | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_build_field_stack` | regionowe pola rozmiaru |

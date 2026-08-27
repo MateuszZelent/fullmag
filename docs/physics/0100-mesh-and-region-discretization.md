@@ -2,8 +2,9 @@
 
 - Status: implemented for FEM linear-mesh persistence, COMSOL MPHTXT v4, and Gmsh 4.1 interchange
 - Owners: Fullmag core
-- Last updated: 2026-07-30
+- Last updated: 2026-08-27
 - Related specs: `docs/specs/mesh-roundtrip-semantics-v1.md`, `docs/specs/geometry-policy-v0.md`, `docs/specs/material-assignment-and-spatial-fields-v0.md`
+- Governing ADR: `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md`
 
 (problem-statement)=
 ## 1. Problem statement
@@ -27,6 +28,27 @@ Zeeman, torque, relaxation, dynamics, and frequency-domain weak forms operate.
 Loading is legal only when the current mesh-producing authoring document has
 the same canonical fingerprint as the saved artifact.
 
+Rozwiązanie strefowej polityki rozmiaru jest zdefiniowane przez
+
+```{math}
+:label: eq-canonical-mesh-size-policy
+
+h_\mathrm{target}(\mathbf x)
+=\max\!\left(
+\min_{u\in\mathcal U(\mathbf x)}u,
+\max_{\ell\in\mathcal L(\mathbf x)}\ell
+\right),
+\qquad \min\varnothing=+\infty,\quad\max\varnothing=0.
+```
+
+`Max(Min(upper), Max(lower))` jest algebrą produktu, a nie przypadkową
+kolejnością Gmsh fields. Eligibility powstaje osobno dla universe/far-air,
+magnetic bulk, region/interface, surface, edge, corner, transition air,
+boundary layer i swept layer. Curvature jest osobnym upper source
+$h_\kappa=\kappa R$ aktywnym wyłącznie przez jawną politykę; nie zmienia
+maximum, minimum ani growth. Konflikt lower $>$ upper w tej samej strefie
+blokuje budowę przed Gmsh.
+
 (symbols-and-si-units)=
 ## 3. Symbols and SI units
 
@@ -42,6 +64,12 @@ the same canonical fingerprint as the saved artifact.
 | $\epsilon_{V,P}$ | Relative volume error recorded by the Python mixed-mesh certificate producer | $1$ |
 | $\epsilon_{V,R}$ | Relative volume error independently recomputed by the Rust validator | $1$ |
 | $\tau_V$ | Physical relative-volume acceptance limit for mixed-mesh certificates | $1$ |
+| $\mathbf x$ | Physical policy-evaluation point | $\mathrm m$ |
+| $\mathcal U(\mathbf x)$ | Eligible upper size constraints at $\mathbf x$ | $\mathrm m$ |
+| $\mathcal L(\mathbf x)$ | Eligible lower size constraints at $\mathbf x$ | $\mathrm m$ |
+| $h_\mathrm{target}(\mathbf x)$ | Resolved target element size | $\mathrm m$ |
+| $\kappa$ | Curvature factor | $1$ |
+| $R$ | Sampled positive local curvature radius | $\mathrm m$ |
 
 (assumptions-and-validity)=
 ## 4. Assumptions and validity
@@ -57,6 +85,11 @@ the same canonical fingerprint as the saved artifact.
   `.fullmag.json` sidecar and are revalidated on import.
 - Higher-order external elements and ambiguous or incomplete Physical Groups
   fail closed.
+- Exact through-thickness layers mean an exact three-dimensional cell-layer and
+  node-plane count only. They do not imply a structured Cartesian,
+  tensor-product, or mapped in-plane mesh.
+- ProblemIR V04 mesh policy changes only with the single atomic writer cutover
+  in ADR 0024/0027; v0.3 and V04 are never parallel editable canonical models.
 
 (python-api)=
 ## 5. Python API
@@ -275,3 +308,4 @@ FDM CPU and FDM GPU use the separate structured-grid certificate.
 | Gmsh import | `packages/fullmag-py/src/fullmag/meshing/persistence.py` | `import_gmsh_mesh` | Unit conversion, group mapping, new identity | FEM CPU/GPU | Interchange and air-marker tests |
 | Typed topology | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `class MeshData` | Canonical arrays, validation, fingerprints, quality serialization | FEM CPU/GPU | Persistence and meshing tests |
 | IR ingress | `packages/fullmag-py/src/fullmag/model/problem.py` | `build_geometry_assets_for_request` | Inline persisted mesh in `FemDomainMeshAssetIR` | FEM CPU/GPU | Materialization test |
+| Canonical mesh policy | `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md` | `DOC-ANCHOR:canonical-fem-mesh-policy` | Planowana algebra stref, upper/lower bounds, curvature i migracja | Cross-layer contract | planned contract |

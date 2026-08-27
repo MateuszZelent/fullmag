@@ -8,7 +8,9 @@
     {"solver": "FDM", "device": "CPU", "status": "unsupported", "reason": "The API persists unstructured FEM meshes; FDM uses its separate grid certificate."},
     {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "The API persists unstructured FEM meshes; FDM uses its separate grid certificate."}
   ],
-  "equations": [],
+  "equations": [
+    {"id": "eq-canonical-mesh-size-policy", "symbols": ["x", "upper", "lower", "h_target"], "sources": ["canonical-mesh-policy"]}
+  ],
   "symbols": [
     {"id": "x_i", "latex": "\\mathbf{x}_i", "meaning": "Coordinate of mesh node i", "si_unit": "\\mathrm{m}"},
     {"id": "m_e", "latex": "m_e", "meaning": "Canonical Fullmag volume marker", "si_unit": "1"},
@@ -20,6 +22,12 @@
     ,{"id": "epsilon_V_P", "latex": "\\epsilon_{V,P}", "meaning": "Relative volume error recorded by the Python mixed-mesh certificate producer", "si_unit": "1"}
     ,{"id": "epsilon_V_R", "latex": "\\epsilon_{V,R}", "meaning": "Relative volume error independently recomputed by the Rust validator", "si_unit": "1"}
     ,{"id": "tau_V", "latex": "\\tau_V", "meaning": "Physical relative-volume acceptance limit for mixed-mesh certificates", "si_unit": "1"}
+    ,{"id": "x", "latex": "\\mathbf x", "meaning": "Physical policy-evaluation point", "si_unit": "\\mathrm m"}
+    ,{"id": "upper", "latex": "\\mathcal U(\\mathbf x)", "meaning": "Eligible upper size constraints at $\\mathbf x$", "si_unit": "\\mathrm m"}
+    ,{"id": "lower", "latex": "\\mathcal L(\\mathbf x)", "meaning": "Eligible lower size constraints at $\\mathbf x$", "si_unit": "\\mathrm m"}
+    ,{"id": "h_target", "latex": "h_\\mathrm{target}(\\mathbf x)", "meaning": "Resolved target element size", "si_unit": "\\mathrm m"}
+    ,{"id": "curvature_factor", "latex": "\\kappa", "meaning": "Curvature factor", "si_unit": "1"}
+    ,{"id": "radius", "latex": "R", "meaning": "Sampled positive local curvature radius", "si_unit": "\\mathrm m"}
   ],
   "sources": [
     {"id": "study-mesh", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyMeshHandle", "responsibility": "Owns the public study mesh persistence and interchange facade."},
@@ -31,7 +39,8 @@
     {"id": "gmsh-import", "path": "packages/fullmag-py/src/fullmag/meshing/persistence.py", "symbol": "import_gmsh_mesh", "responsibility": "Imports and validates supported Gmsh topology."},
     {"id": "mesh-data", "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py", "symbol": "class MeshData", "responsibility": "Owns canonical typed FEM topology and fingerprints."},
     {"id": "problem-ingress", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "build_geometry_assets_for_request", "responsibility": "Inlines persisted topology into the existing FEM domain mesh asset."},
-    {"id": "mixed-volume-evidence-validation", "path": "crates/fullmag-ir/src/mesh_assets.rs", "symbol": "validate_mixed_certificate_evidence_against_mesh", "responsibility": "Recomputes mixed-mesh certificate evidence and applies the dedicated cross-language relative-volume comparison boundary."}
+    {"id": "mixed-volume-evidence-validation", "path": "crates/fullmag-ir/src/mesh_assets.rs", "symbol": "validate_mixed_certificate_evidence_against_mesh", "responsibility": "Recomputes mixed-mesh certificate evidence and applies the dedicated cross-language relative-volume comparison boundary."},
+    {"id": "canonical-mesh-policy", "path": "docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md", "symbol": "DOC-ANCHOR:canonical-fem-mesh-policy", "responsibility": "Defines canonical zone eligibility, upper/lower composition, independent curvature, exact-layer meaning, and atomic migration.", "evidence_status": "planned_contract"}
   ],
   "public_api": {
     "parameters": [

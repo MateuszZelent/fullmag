@@ -146,7 +146,10 @@
     {"id": "cubic-gpu", "path": "backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu", "symbol": "fullmag_cuda_cubic_anisotropy_field_energy_blocks", "responsibility": "Evaluate uniform or nodal-P1 cubic anisotropy field and energy on CUDA."},
     {"id": "interfacial-dmi-cpu", "path": "backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp", "symbol": "compute_interfacial_dmi_field", "responsibility": "Evaluate interfacial DMI field and energy through the topology-aware FEM CPU operator."},
     {"id": "bulk-dmi-cpu", "path": "backends/fem/cpu/mfem/interactions/dmi_bulk.cpp", "symbol": "compute_bulk_dmi_field", "responsibility": "Evaluate bulk DMI field and energy through the topology-aware FEM CPU operator."},
-    {"id": "mixed-p1-native-scope", "path": "backends/fem/core/fem_mesh.cpp", "symbol": "validate_supported_physics_topology", "responsibility": "Admit the bounded mixed-P1 CPU/GPU anisotropy scopes and reject GPU DMI fail-closed with gpu_dmi_kernel_not_mixed_p1 before native startup."}
+    {"id": "mixed-p1-native-scope", "path": "backends/fem/core/fem_mesh.cpp", "symbol": "validate_supported_physics_topology", "responsibility": "Admit the bounded mixed-P1 CPU/GPU anisotropy scopes and reject GPU DMI fail-closed with gpu_dmi_kernel_not_mixed_p1 before native startup."},
+    {"id": "fmmq-v1-writer", "path": "packages/fullmag-py/src/fullmag/meshing/remesh_cli.py", "symbol": "_write_quality_data_artifact_if_available", "responsibility": "Write the current tet4-only FMMQ v1 quality payload."},
+    {"id": "fmmq-v1-decoder", "path": "apps/control-room/src/kernel/api/codecs/meshQualityDataCodec.ts", "symbol": "decodeMeshQualityData", "responsibility": "Decode the current FMMQ v1 layout."},
+    {"id": "fmmq-v2-contract", "path": "docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md", "symbol": "DOC-ANCHOR:fmmq-v2-contract", "responsibility": "Define planned topology-aware FMMQ v2 and v1 exit gates.", "evidence_status": "planned_contract"}
   ],
   "public_api": {
     "parameters": [

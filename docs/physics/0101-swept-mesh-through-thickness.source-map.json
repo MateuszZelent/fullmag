@@ -1,0 +1,40 @@
+{
+  "document": {"path": "docs/physics/0101-swept-mesh-through-thickness.md"},
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "documented"},
+    {"solver": "FEM", "device": "GPU", "status": "documented"},
+    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "FDM already uses directional Cartesian cells."},
+    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "FDM already uses directional Cartesian cells."}
+  ],
+  "equations": [
+    {"id": "eq-swept-fixed-planes", "symbols": ["z0", "zj", "j", "layer_count", "thickness"], "sources": ["layer-heights"]},
+    {"id": "eq-swept-layer-sum", "symbols": ["layer_height", "i", "layer_count", "thickness"], "sources": ["layer-heights"]}
+  ],
+  "symbols": [
+    {"id": "z0", "latex": "z_0", "meaning": "first node-plane coordinate along the sweep direction", "si_unit": "\\mathrm m"},
+    {"id": "zj", "latex": "z_j", "meaning": "coordinate of node plane $j$", "si_unit": "\\mathrm m"},
+    {"id": "j", "latex": "j", "meaning": "node-plane index", "si_unit": "1"},
+    {"id": "layer_count", "latex": "N_z", "meaning": "number of three-dimensional element layers", "si_unit": "1"},
+    {"id": "thickness", "latex": "t", "meaning": "physical swept thickness", "si_unit": "\\mathrm m"},
+    {"id": "layer_height", "latex": "h_i", "meaning": "physical height of layer $i$", "si_unit": "\\mathrm m"},
+    {"id": "i", "latex": "i", "meaning": "layer index", "si_unit": "1"},
+    {"id": "plane_tolerance", "latex": "\\tau_\\mathrm{plane}", "meaning": "plane grouping tolerance", "si_unit": "\\mathrm m"}
+  ],
+  "sources": [
+    {"id": "public-sweep", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class GeometryMeshHandle", "responsibility": "Validates and lowers public swept mesh intent."},
+    {"id": "sweepability", "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py", "symbol": "classify_sweepability", "responsibility": "Resolves supported geometry and sweep thickness."},
+    {"id": "layer-heights", "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py", "symbol": "_compute_layer_heights", "responsibility": "Computes fixed, linear, and exponential layer heights."},
+    {"id": "sweep-dispatch", "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py", "symbol": "generate_swept_mesh", "responsibility": "Dispatches current swept mesh generation."},
+    {"id": "mixed-box", "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py", "symbol": "generate_swept_box_mesh", "responsibility": "Generates the bounded mixed Box shared domain."}
+  ],
+  "public_api": {"parameters": [
+    {"python": "GeometryMeshHandle.swept.elements", "type": "int", "default": "6", "si_unit": "1", "validation": "integer $\\ge1$; otherwise `ValueError`", "meaning": "layer count", "backend_support": "FEM CPU/GPU authoring", "problem_ir": "runtime_metadata.mesh_workflow.per_geometry[].through_thickness_elements"},
+    {"python": "GeometryMeshHandle.swept.distribution", "type": "\"fixed\" | \"linear\" | \"exponential\"", "default": "\"fixed\"", "si_unit": "1", "validation": "other token gives `ValueError`; exact layers require `fixed`", "meaning": "layer-height law", "backend_support": "FEM CPU/GPU authoring", "problem_ir": "runtime_metadata.mesh_workflow.per_geometry[].through_thickness_distribution"},
+    {"python": "GeometryMeshHandle.swept.element_ratio", "type": "float", "default": "1.0", "si_unit": "1", "validation": "finite positive; exact layers require $1$", "meaning": "last/first layer-height ratio", "backend_support": "FEM CPU/GPU authoring", "problem_ir": "runtime_metadata.mesh_workflow.per_geometry[].through_thickness_element_ratio"},
+    {"python": "GeometryMeshHandle.swept.symmetric", "type": "bool", "default": "False", "si_unit": "1", "validation": "exact layers reject `True`", "meaning": "mirror grading about mid-plane", "backend_support": "FEM CPU/GPU authoring", "problem_ir": "runtime_metadata.mesh_workflow.per_geometry[].through_thickness_symmetric"},
+    {"python": "GeometryMeshHandle.swept.face_meshing", "type": "\"triangular\" | \"quadrilateral\"", "default": "\"triangular\"", "si_unit": "1", "validation": "other token gives `ValueError`", "meaning": "source-face topology", "backend_support": "FEM CPU/GPU authoring", "problem_ir": "runtime_metadata.mesh_workflow.per_geometry[].sweep_face_meshing"},
+    {"python": "GeometryMeshHandle.swept.sweep_direction", "type": "\"auto\" | \"x\" | \"y\" | \"z\"", "default": "\"auto\"", "si_unit": "1", "validation": "other token gives `ValueError`", "meaning": "requested sweep axis", "backend_support": "FEM CPU/GPU authoring", "problem_ir": "runtime_metadata.mesh_workflow.per_geometry[].sweep_direction"},
+    {"python": "GeometryMeshHandle.swept.transition", "type": "\"pyramid_to_tetrahedra\" | \"reject\" | None", "default": "None", "si_unit": "1", "validation": "hex plus pyramid transition gives `ValueError`", "meaning": "shared-domain transition policy", "backend_support": "bounded prism lane only when supported", "problem_ir": "runtime_metadata.mesh_workflow.per_geometry[].transition_policy"},
+    {"python": "GeometryMeshHandle.swept.exact_layers", "type": "bool | None", "default": "None", "si_unit": "1", "validation": "non-bool gives `TypeError`; strict prism resolves `None` to `True`", "meaning": "require requested=realized layer count", "backend_support": "bounded mixed-P1 FEM", "problem_ir": "runtime_metadata.mesh_workflow.per_geometry[].exact_layer_count"}
+  ]}
+}

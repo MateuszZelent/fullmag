@@ -1,0 +1,35 @@
+{
+  "document": {"path": "docs/physics/0103-rectangular-waveguide-edge-corner-mesh-refinement.md"},
+  "backend_matrix": [
+    {"solver": "FEM", "device": "CPU", "status": "documented"},
+    {"solver": "FEM", "device": "GPU", "status": "documented"},
+    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "FDM has no Gmsh edge or corner fields."},
+    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "FDM has no Gmsh edge or corner fields."}
+  ],
+  "equations": [
+    {"id": "eq-edge-corner-size-composition", "symbols": ["x", "upper", "lower", "h_target"], "sources": ["policy-adr"]},
+    {"id": "eq-edge-corner-distance", "symbols": ["x", "entity", "distance"], "sources": ["field-stack"]}
+  ],
+  "symbols": [
+    {"id": "x", "latex": "\\mathbf x", "meaning": "physical point", "si_unit": "\\mathrm m"},
+    {"id": "upper", "latex": "\\mathcal U", "meaning": "eligible upper size targets", "si_unit": "\\mathrm m"},
+    {"id": "lower", "latex": "\\mathcal L", "meaning": "eligible lower size bounds", "si_unit": "\\mathrm m"},
+    {"id": "h_target", "latex": "h_\\mathrm{target}", "meaning": "resolved target size", "si_unit": "\\mathrm m"},
+    {"id": "entity", "latex": "E", "meaning": "selected edge or corner set", "si_unit": "1"},
+    {"id": "distance", "latex": "d_E", "meaning": "Euclidean distance from the selected entity", "si_unit": "\\mathrm m"}
+  ],
+  "sources": [
+    {"id": "public-api", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class GeometryMeshHandle", "responsibility": "Validates and lowers per-object edge and corner controls."},
+    {"id": "component-refinement", "path": "packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py", "symbol": "_perimeter_refinement_config", "responsibility": "Normalizes component refinement pairs."},
+    {"id": "field-stack", "path": "packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py", "symbol": "_build_field_stack", "responsibility": "Builds current edge and corner size fields."},
+    {"id": "mesh-report", "path": "packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py", "symbol": "_build_shared_domain_build_report", "responsibility": "Reports resolved mesh evidence."},
+    {"id": "policy-adr", "path": "docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md", "symbol": "DOC-ANCHOR:canonical-fem-mesh-policy", "responsibility": "Defines canonical upper and lower composition.", "evidence_status": "planned_contract"}
+  ],
+  "public_api": {"parameters": [
+    {"python": "GeometryMeshHandle.configure.edge_hmax", "type": "float | None", "default": "None", "si_unit": "\\mathrm m", "validation": "positive and paired with edge_thickness", "meaning": "edge-band upper target", "backend_support": "FEM CPU/GPU", "problem_ir": "runtime_metadata.mesh_workflow.per_geometry[].edge_hmax"},
+    {"python": "GeometryMeshHandle.configure.edge_thickness", "type": "float | None", "default": "None", "si_unit": "\\mathrm m", "validation": "positive, paired, and below half the smaller in-plane dimension", "meaning": "edge-band width", "backend_support": "FEM CPU/GPU", "problem_ir": "runtime_metadata.mesh_workflow.per_geometry[].edge_thickness"},
+    {"python": "GeometryMeshHandle.configure.corner_hmax", "type": "float | None", "default": "None", "si_unit": "\\mathrm m", "validation": "positive, paired, and no larger than edge_hmax when both exist", "meaning": "corner upper target", "backend_support": "FEM CPU/GPU", "problem_ir": "runtime_metadata.mesh_workflow.per_geometry[].corner_hmax"},
+    {"python": "GeometryMeshHandle.configure.corner_extent", "type": "float | None", "default": "None", "si_unit": "\\mathrm m", "validation": "positive, paired, and below half the smaller in-plane dimension", "meaning": "corner-zone extent", "backend_support": "FEM CPU/GPU", "problem_ir": "runtime_metadata.mesh_workflow.per_geometry[].corner_extent"},
+    {"python": "GeometryMeshHandle.configure.corner_transition_distance", "type": "float | None", "default": "None", "si_unit": "\\mathrm m", "validation": "positive and requires the corner pair", "meaning": "air-side corner transition span", "backend_support": "FEM CPU/GPU", "problem_ir": "runtime_metadata.mesh_workflow.per_geometry[].corner_transition_distance"}
+  ]}
+}

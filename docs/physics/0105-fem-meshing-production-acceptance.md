@@ -1,359 +1,301 @@
 # FEM meshing production acceptance
 
-- Status: draft
+- Status: zaakceptowany kontrakt; pełna kwalifikacja produkcyjna pozostaje nieosiągnięta, dopóki wszystkie wymagane metryki, FMMQ v2 i runtime/browser evidence nie przejdą
 - Owners: Fullmag core
-- Last updated: 2026-07-27
-- Related ADRs: `docs/adr/0009-geometry-invalidates-mesh.md`, `docs/adr/0010-magnetization-does-not-invalidate-mesh.md`
-- Related specs: `docs/specs/mesh-roundtrip-semantics-v1.md`, `docs/specs/resource-first-control-room-api-v2.md`
-- Related notes:
-  - `docs/physics/0100-mesh-and-region-discretization.md`
-  - `docs/physics/0102-airbox-mesh-grading-geometric.md`
-  - `docs/physics/0103-rectangular-waveguide-edge-corner-mesh-refinement.md`
-  - `docs/physics/0104-thin-film-shared-domain-meshing.md`
-  - `docs/physics/0106-fem-mixed-prism-pyramid-shared-domain.md`
-  - `docs/physics/0520-fem-robin-airbox-demag-bootstrap-reference.md`
+- Last updated: 2026-08-27
+- Governing ADR: `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md`
+- Related notes: `docs/physics/0100-mesh-and-region-discretization.md`, `docs/physics/0101-swept-mesh-through-thickness.md`, `docs/physics/0102-airbox-mesh-grading-geometric.md`, `docs/physics/0103-rectangular-waveguide-edge-corner-mesh-refinement.md`, `docs/physics/0104-thin-film-shared-domain-meshing.md`, `docs/physics/0106-fem-mixed-prism-pyramid-shared-domain.md`
 
+(fem-meshing-acceptance-problem-statement)=
 ## 1. Problem statement
 
-Fullmag FEM meshing is production-ready only when the requested physical mesh
-intent, the realized shared-domain mesh, and the user-visible diagnostics agree
-for the declared support matrix.
+Siatka FEM jest produkcyjna tylko wtedy, gdy authored policy, rozwiązany plan
+pól rozmiaru, finalna wspólna siatka solvera i publikowane dowody opisują ten
+sam model. Ta nota definiuje jeden gate dla polityki rozmiaru, stref,
+topologii, sweep, wzrostu i jakości. Nie promuje obecnej implementacji:
+tetrahedralne raporty Gmsh i mixed-P1 certificate są częściowe, FMMQ v1 jest
+tet4-only, a FMMQ v2 pozostaje planowany.
 
-The production claim is deliberately scoped. It covers the workflows listed in
-Section 5, not arbitrary invalid CAD, arbitrary anisotropic size fields,
-non-manifold imported surfaces, or unbounded recovery from every Gmsh failure.
+(fem-meshing-acceptance-governing-equations)=
+## 2. Governing equations
 
-## 2. Physical model
+Nie powstaje nowa energia mikromagnetyczna. Dla punktu fizycznego
+$\mathbf x$ zbiór $\mathcal U(\mathbf x)$ zawiera wszystkie uprawnione w danej
+strefie górne ograniczenia rozmiaru, a $\mathcal L(\mathbf x)$ wszystkie
+uprawnione ograniczenia dolne. Kanoniczny cel jest dokładnie
 
-### 2.1 Governing equations
+```{math}
+:label: eq-fem-mesh-size-composition
 
-Meshing does not introduce a new micromagnetic energy term. It defines the
-spatial discretization on which existing FEM weak forms are evaluated.
-
-For Poisson-airbox demagnetics the computational domain is:
-
-```text
-Omega_shared = Omega_magnetic union Omega_air
+h_\mathrm{target}(\mathbf x)
+=\max\!\left(
+  \min_{u\in\mathcal U(\mathbf x)}u,
+  \max_{\ell\in\mathcal L(\mathbf x)}\ell
+\right),
+\qquad \min\varnothing=+\infty,\quad\max\varnothing=0.
 ```
 
-The magnetic-air interface is conforming:
+Wynik musi być skończony i dodatni na całej domenie siatkowania. Konflikt
+$\max\mathcal L>\min\mathcal U$ wewnątrz tej samej strefy jest błędem przed
+Gmsh. Dolne ograniczenie airbox nie jest uprawnione w strefie magnetycznej ani
+na interfejsie, więc nie może przysłonić dokładniejszego celu obiektu.
 
-```text
-Gamma_interface = boundary(Omega_magnetic) intersect boundary(Omega_air)
+Curvature jest niezależnym źródłem górnym, aktywnym tylko z jawnej polityki:
+
+```{math}
+:label: eq-fem-mesh-curvature-source
+
+h_\kappa(\mathbf x)=\kappa R(\mathbf x).
 ```
 
-The outer airbox boundary is:
+Na płaskiej encji albo bez wiarygodnej dodatniej wartości $R$ źródło nie
+uczestniczy w $\mathcal U$; nie emituje zera ani sztucznej wartości zastępczej.
 
-```text
-Gamma_out = boundary(Omega_air) \ Gamma_interface
+Dla sąsiadujących przez pełną ścianę komórek $K,L$ w tym samym grafie growth:
+
+```{math}
+:label: eq-fem-mesh-realized-growth
+
+\rho_{KL}=\frac{\max(h_K,h_L)}{\min(h_K,h_L)}.
 ```
 
-The air scalar potential satisfies the air-domain Laplace equation used by the
-existing FEM demag notes:
+Growth jest ograniczeniem sąsiedztwa, nie far-field maximum. Dla komórki
+$K$ numeryczna degeneracja skaluje się z jej rozmiarem:
 
-```text
-div(grad(phi)) = 0 in Omega_air
+```{math}
+:label: eq-fem-mesh-relative-jacobian-floor
+
+|\det J_K(\boldsymbol\xi_q)|
+\le \tau_J h_K^3,
+\qquad \tau_J=64\,\epsilon_{64}.
 ```
 
-The magnetic subdomain carries magnetization and material coefficients. The air
-subdomain carries demag potential and external-field quantities only. Vector
-fields such as magnetization `m` are undefined in air and must not be rendered
-or sampled as if airbox nodes belonged to magnetic objects.
+Każdy ujemny $\det J_K$ jest inwersją niezależnie od wartości progu.
 
-### 2.2 Symbols and SI units
+(fem-meshing-acceptance-symbols-and-si-units)=
+## 3. Symbols and SI units
 
-| Symbol | Meaning | Unit |
+| LaTeX token | Znaczenie | Jednostka SI |
 |---|---|---|
-| `h_obj` | per-object bulk target size | m |
-| `h_if` | interface/near-surface target size | m |
-| `h_air_min` | near-object airbox target size | m |
-| `h_air_max` | far-field airbox target size | m |
-| `g_air` | airbox geometric grading shape parameter | dimensionless |
-| `d_surface` | surface transition distance | m |
-| `h_edge` | boundary-curve target size | m |
-| `d_edge_hold` | edge plume hold distance | m |
-| `d_edge_transition` | edge plume transition span | m |
-| `h_corner` | endpoint/corner target size | m |
-| `d_corner_hold` | corner hold distance | m |
-| `d_corner_transition` | corner transition span | m |
-| `q_sicn` | signed inverse condition number quality metric | dimensionless |
-| `q_gamma` | gamma or gamma-like quality metric | dimensionless |
-| `det(J_K)` | sampled physical-cell Jacobian determinant | m3 |
-| `h_K` | maximum distance between vertices of cell `K` | m |
-| `tau_J` | relative numerical-degeneracy tolerance | dimensionless |
+| $\mathbf x$ | punkt fizyczny, w którym rozwiązywana jest polityka | $\mathrm m$ |
+| $\mathcal U(\mathbf x)$ | uprawnione górne ograniczenia rozmiaru w punkcie | $\mathrm m$ |
+| $\mathcal L(\mathbf x)$ | uprawnione dolne ograniczenia rozmiaru w punkcie | $\mathrm m$ |
+| $h_\mathrm{target}(\mathbf x)$ | rozwiązany docelowy rozmiar elementu | $\mathrm m$ |
+| $h_\kappa(\mathbf x)$ | niezależny curvature upper target | $\mathrm m$ |
+| $\kappa$ | `curvature_factor` | $1$ |
+| $R(\mathbf x)$ | dodatni lokalny promień krzywizny | $\mathrm m$ |
+| $K,L$ | finalne komórki dzielące pełną ścianę | $1$ |
+| $h_K,h_L$ | metryka rozmiaru komórki przypisana danemu metric ID | $\mathrm m$ |
+| $\rho_{KL}$ | zrealizowany stosunek rozmiarów sąsiadów | $1$ |
+| $J_K$ | mapa elementu referencyjnego do fizycznego | $\mathrm m$ |
+| $\boldsymbol\xi_q$ | normowany punkt kwadratury referencyjnej | $1$ |
+| $\det J_K(\boldsymbol\xi_q)$ | wyznacznik Jacobianu w próbce | $\mathrm{m^3}$ |
+| $\tau_J$ | względny próg numerycznej degeneracji | $1$ |
+| $\epsilon_{64}$ | machine epsilon IEEE-754 binary64 | $1$ |
+| $t$ | fizyczna grubość filmu | $\mathrm m$ |
+| $N_z$ | żądana i zrealizowana liczba warstw komórek | $1$ |
+| $\tau_\mathrm{plane}$ | tolerancja grupowania płaszczyzn sweep | $\mathrm m$ |
+| $q_\mathrm{SICN}$ | signed inverse condition number z określonego producenta | $1$ |
+| $q_\gamma$ | gamma quality z określonego producenta | $1$ |
+| $q_\mathrm{SJ}$ | topology-aware scaled Jacobian | $1$ |
+| $V_K$ | dodatnia objętość fizyczna komórki | $\mathrm{m^3}$ |
+| $d_K$ | odległość centroidu komórki od właściciela danej strefy | $\mathrm m$ |
 
-### 2.3 Assumptions and approximations
+(fem-meshing-acceptance-assumptions-and-validity)=
+## 4. Assumptions and validity
 
-- The production shared-domain mesh is tetrahedral unless a workflow explicitly
-  declares a swept/layered strategy and reports the realized strategy.
-- A mixed-P1 declaration is not a production claim until its exact-layer
-  certificate and lane-specific operator gates from note 0106 pass. Strict
-  mixed-P1 requests never degrade to the tetrahedral path.
-- The mesh is one conforming solver mesh. Region statistics may overlap in node
-  sets at shared interfaces, but element ownership must remain unambiguous.
-- Airbox far-field elements may be much larger than magnetic body elements, but
-  airbox fields must not coarsen object-air interface triangulation.
-- `airbox_growth_rate` and `transition_growth` shape the target-size curve.
-  They are not production proof by themselves; realized element-size growth is
-  accepted only through distance-band diagnostics.
-- Production support requires truthful degradation reports. A fallback path that
-  skips edge/corner fields is allowed only when the report marks the skipped
-  fields and names the missing component topology.
+### 4.1 Strefy i ownership
 
-## 3. Numerical interpretation
+Rozwiązanie polityki używa rozłącznych ról, choć ich geometryczne zasięgi mogą
+się przecinać:
 
-### 3.0 Mirrored periodic seam acceptance
-
-When a shared-domain mesh declares FEM periodicity, acceptance requires an
-exact node-set bijection on each paired face marker. The extracted face pairs
-must preserve vertex topology, area, orientation, opposite normals, element
-domain and object-region ownership after translation. Multi-axis periodic meshes
-also require closed, order-independent edge/corner equivalence classes; a
-nearest-centroid match or a residual-only pair list is insufficient evidence.
-The v6 certificate must be bound to the current topology and region/material
-realization identities before solver assembly.
-
-### 3.1 FDM
-
-No FDM discretization behavior is introduced by this acceptance note. FDM uses
-regular grid cells and active masks. FDM may share geometry intent with FEM, but
-the production readiness criteria here apply to FEM shared-domain meshing only.
-
-### 3.2 FEM
-
-FEM production meshing must satisfy these contracts:
-
-1. **Shared-domain conformance**
-   - magnetic and air volumes share the same interface vertices and faces,
-   - final solver elements have stable volume markers,
-   - `Gamma_interface` and `Gamma_out` have stable boundary markers.
-
-2. **Object priority**
-   - at `Gamma_interface`, the effective target size is no coarser than the
-     relevant per-object surface/interface target,
-   - coarse `h_air_min` or `h_air_max` never clamps object boundary sizing.
-
-3. **Airbox adaptation**
-   - airbox surface-distance, edge-distance, corner-distance, and envelope
-     fields refine near magnetic features and grow toward `h_air_max`,
-   - rectangular airboxes control diagonal and corner regions, not only
-     axis-normal directions,
-   - spherical airboxes either use radial grading or are not included in the
-     production support matrix.
-
-4. **Thin-film adequacy**
-   - through-thickness intent is preserved in metadata and provenance,
-   - surface, edge, and corner refinement spans are independent,
-   - the default interactive examples stay below declared node/tetra/RAM
-     budgets or are not labeled interactive defaults.
-
-   The default interactive arch-waveguide example
-   `examples/arch_waveguide_relax_50nm.py` must materialize below:
-
-   - 75,000 total nodes,
-   - 450,000 tetrahedra,
-   - the configured interactive dense-FEM RAM budget when a legacy dense demag
-     realization is active,
-   - no automatic coarsening before the user explicitly asks to compute.
-
-   The canonical example uses `poisson_robin` demag, where the legacy dense-FEM
-   RAM warning is not applicable. Changing the limits above requires a measured
-   explanation in the same commit with old limit, new limit, fixture, wall time,
-   node count, tetrahedron count, and RAM estimate.
-
-5. **Quality truthfulness**
-   - Gmsh SICN is reported as SICN only when computed as SICN,
-   - swept or topology-proxy quality metrics are labeled as proxy metrics,
-   - per-domain quality and histograms use final shared-domain markers.
-
-   For mixed-P1 meshes, reports also separate `prism6`, `pyramid5`, and `tet4`
-   counts and apply a topology-valid SICN implementation or an honestly named
-   scaled-Jacobian metric. The exact-layer certificate uses p05 `>= 0.1` and
-   rejects non-positive order-2-or-higher Jacobians.
-
-   Strict topology validation is invariant under uniform changes of physical
-   length scale. Unless a caller supplies an explicit SI volume tolerance, a
-   sampled cell Jacobian is numerically degenerate when
-   `abs(det(J_K)) <= tau_J h_K^3`, with `tau_J = 64 epsilon_float64`.
-   `det(J_K)` and `h_K^3` both have unit m3. This numerical guard does not
-   replace the stronger dimensionless SICN/scaled-Jacobian quality gates, and
-   every negative sampled determinant still fails closed as an inversion.
-
-6. **Adaptive criterion truthfulness**
-   - FEM relaxation adaptivity may use only an explicitly named estimator:
-     `energy_delta`, `max_torque_delta`, or `solution_change`.
-   - `eigenfrequency_delta` is unsupported until a real eigenfrequency
-     observable and estimator are available for the active stage. It must fail
-     closed; an energy change is not an eigenfrequency estimate.
-   - Every accepted adaptive pass records the requested criterion and the
-     resolved estimator in runtime provenance. A topology-changing pass also
-     requires the state-transfer and mesh-certificate gates described above.
-
-### 3.3 Hybrid
-
-Hybrid execution is out of scope for this production gate. A future hybrid gate
-must add projection semantics between FEM tetrahedra and auxiliary Cartesian
-grids before it can reuse this production claim.
-
-## 4. API, IR, and planner impact
-
-### 4.1 Python API surface
-
-The public Python mesh surface remains physics-first:
-
-- `study.universe.mesh(...)` describes airbox/far-field mesh policy,
-- `body.mesh(...)` describes per-object mesh policy,
-- `body.mesh.thin_film(...)` is a convenience lowering to canonical per-object
-  mesh metadata,
-- edge/corner controls are per-object feature controls, not global airbox
-  controls,
-- visibility/isolation controls in the browser do not alter physics.
-
-Any production-supported public mesh option must round-trip through Python
-export. Options that are not realized by a backend must fail validation or
-appear in provenance as degraded/ignored.
-
-### 4.2 ProblemIR representation
-
-Production mesh intent lowers through `runtime_metadata.mesh_workflow`.
-`ProblemIR.geometry_assets` may carry the realized mesh, but the mesh asset is
-not the canonical authoring model. The canonical authoring model remains the DSL
-and the lowered mesh workflow.
-
-The realized mesh report must preserve:
-
-- requested airbox target,
-- requested per-object targets,
-- realized size-field kinds,
-- realized operation statuses,
-- fallback/degradation reasons,
-- scoped mesh statistics and quality.
-
-### 4.3 Planner and capability-matrix impact
-
-Planner/capability reporting must distinguish:
-
-- supported production path,
-- supported degraded path,
-- unsupported path,
-- failed path.
-
-The capability matrix must not treat a silently skipped size field as a
-successful production realization. Skipped component-aware edge/corner fields in
-concatenated STL fallback are degraded, not production-equivalent.
-
-## 5. Production support matrix
-
-| ID | Geometry / workflow | Airbox | Required result |
+| Strefa | Właściciel | Dozwolone źródła | Niedozwolony skutek |
 |---|---|---|---|
-| S1 | `fm.Box` thin film, one magnetic object | bbox | air-side surface, edge, and corner refinement all active; object and airbox statistics separate |
-| S2 | flat `fm.ArchWaveguide(arch_height=0)` | bbox | lowered as box-like geometry; thin-film preset preserves one-through-thickness layer intent and stable air grading |
-| S3 | curved `fm.ArchWaveguide(arch_height>0)` | bbox | non-box surface/edge/corner distance fields are geometric and realized without body-only restriction |
-| S4 | `fm.Cylinder` | bbox | curved sidewall and top/bottom edges produce smooth air-side gradient and no object-boundary coarsening |
-| S5 | multi-object box + cylinder | bbox | per-object targets do not overwrite each other; airbox adapts to the finest local object/interface target |
-| S6 | imported STL component-aware path | bbox | fallback reports realized/degraded operations without secondary planner exceptions |
-| S7 | imported STL concatenated fallback | bbox | unsupported component-only fields are approximated by bounds fields or explicitly degraded in report |
-| S8 | bbox airbox with very coarse `airbox_hmax` and small object `hmax` | bbox | interface p95 respects object target; far field approaches airbox target without uncontrolled empty corner regions |
-| S9 | spherical airbox | sphere | radial grading is implemented and tested, or sphere is excluded from the production claim |
-| S10 | swept/thin-film strategy | bbox | quality metrics are truthful; SICN is real or unavailable, never a mislabeled proxy |
-| S11 | control-room mesh diagnostics | bbox | user can read scoped points/nodes/tetrahedra, size histogram, quality histogram, and selected histogram-bin elements |
-| S12 | `examples/arch_waveguide_relax_50nm.py` | bbox | materializes without fallback crash, without silent auto-coarsen for intended interactive preset, and with bounded node/RAM estimate |
-| S13 | axis-aligned Box, native mixed P1, one magnetic layer | bbox | target-only until note 0106 gates pass: prism-only magnet, pyramid/tet-only air, exact two-plane certificate, conforming manifold, `fallbacks_triggered=[]` |
+| magnetic bulk | obiekt magnetyczny | object maximum/minimum, narrow region | airbox minimum nie może coarsen |
+| material/interface | obiekt/region/interfejs | interface target, region target, curvature | brak anonimowego splitu materiału |
+| surface shell | obiekt | surface target i transition | brak zmiany fizyki powierzchni |
+| edge | obiekt | edge target/extent/growth | brak automatycznego rozszerzenia na wszystkie krawędzie sceny |
+| corner | obiekt | corner target/extent/growth | brak dziedziczenia edge bez jawnego loweringu convenience API |
+| transition air | universe + sąsiadujący obiekt | surface/edge/corner plume, air growth | brak body-only restriction dla air-side plume |
+| far air | universe | airbox maximum/minimum/growth | brak wpływu na interface triangulation |
+| boundary layer | jawny selector | count, first thickness, stretching | nierozwiązany selector blokuje build |
+| swept layer | obiekt | topology, direction, distribution, exact count | brak cichego prism-to-tet w strict mode |
 
-## 6. Required observables
+Finalny solve zawsze zużywa jedną conforming shared-domain mesh. `Universe`
+nie jest obiektem magnetycznym. Region z mesh-only policy nie staje się
+materiałem ani niezależnym polem magnetyzacji.
 
-Every production mesh must make these observables available in logs, mesh IR,
-API resources, or UI diagnostics:
+### 4.2 Exact layers a struktura in-plane
 
-- requested mesh controls,
-- realized mesh controls,
-- total node, element, and boundary-face counts,
-- cell and facet counts by canonical topology and region,
-- per-part node, element, and boundary-face counts,
-- magnetic-air interface face counts,
-- outer airbox boundary face counts,
-- characteristic-size histogram with at least 30 bins,
-- edge-length histogram with at least 30 bins,
-- quality histogram with metric provenance,
-- worst-element samples for quality metrics,
-- histogram-bin element/node indices for UI highlighting,
-- degraded operation statuses.
+`exact_layers=N_z` oznacza dokładnie $N_z$ trójwymiarowych warstw komórek i
+$N_z+1$ płaszczyzn wzdłuż osi sweep, z
+$\tau_\mathrm{plane}=\max(10^{-15}\,\mathrm m,10^{-8}t)$. Nie oznacza
+Cartesian, tensor-product ani mapped in-plane mesh. Triangularna, również
+nieustrukturyzowana siatka source face może być wyciągnięta do dokładnych
+`prism6`. Structured in-plane jest osobną, obecnie niezaimplementowaną
+semantyką i nie wolno jej wywnioskować z `swept`, `fixed` lub `prismatic`.
 
-## 7. Validation strategy
+(fem-meshing-acceptance-python-api)=
+## 5. Python API
 
-### 7.1 Analytical checks
+Ta nota nie dodaje nowych parametrów. Dwa istniejące przełączniki dowodów są:
 
-- Pure size-field planner tests prove that each public mesh control produces the
-  expected canonical field descriptor.
-- Fake-Gmsh tests prove that descriptors lower to the expected Gmsh field kinds
-  without component-volume restriction when air-side refinement is intended.
-- Mesh statistics unit tests prove per-marker boundary-face and interface-face
-  counts are computed from final topology.
+| Python | Typ | Default | SI | Walidacja i błąd | Znaczenie | Backend | ProblemIR destination | Source |
+|---|---|---|---|---|---|---|---|---|
+| `GeometryMeshHandle.configure.compute_quality` | `bool \| None` | `None` | $1$ | `bool` lub `None`; zły typ jest odrzucany przez canonical authoring validation | żąda summary jakości po meshing | FEM CPU/GPU; FDM N/A | `runtime_metadata.mesh_workflow.per_geometry[].compute_quality` | `packages/fullmag-py/src/fullmag/world.py::class GeometryMeshHandle` |
+| `GeometryMeshHandle.configure.per_element_quality` | `bool \| None` | `None` | $1$ | `bool` lub `None`; wymagane dla per-element artifact | żąda per-element arrays; samo ustawienie nie dowodzi FMMQ v2 | FEM CPU/GPU; FDM N/A | `runtime_metadata.mesh_workflow.per_geometry[].per_element_quality` | `packages/fullmag-py/src/fullmag/world.py::class GeometryMeshHandle` |
 
-### 7.2 Realized mesh checks
+```python
+# %% Author requested mesh evidence; this does not claim production qualification.
+import fullmag as fm
 
-Small realized Gmsh fixtures must verify:
-
-- object interface p95 does not exceed the requested object/interface target by
-  more than the documented tolerance,
-- airbox near/mid/far/corner distance bands are populated,
-- airbox characteristic-size p95 grows monotonically away from object features
-  within the documented tolerance,
-- edge and corner plumes refine air-side tetrahedra near object perimeter
-  features,
-- fallback reports degradation without replacing the primary failure with a
-  secondary planner error.
-- mixed-P1 feasibility fixtures freeze topology and manifold invariants without
-  freezing incidental far-air tet counts; they do not promote runtime support.
-- strict Jacobian tests apply the same valid and degenerate reference cells at
-  metre and nanometre scales, proving scale invariance while retaining
-  zero/near-zero and negative-Jacobian rejection.
-
-### 7.3 Cross-layer checks
-
-- Python DSL to ProblemIR to script export preserves mesh controls.
-- API v2 exposes the same scoped counts and histograms as `MeshIR`.
-- Control-room panels read mesh diagnostics through typed API resources.
-- Viewport overlays can highlight selected histogram-bin tetrahedra without
-  continuous rendering.
-
-### 7.4 Release gate
-
-Production readiness requires this command to pass:
-
-```bash
-just verify-fem-meshing-production
+fm.reset()
+study = fm.study("mesh-acceptance")
+study.engine("fem")
+study.mode("strict")
+study.universe(mode="manual", size=(120e-9, 80e-9, 60e-9))
+study.universe.mesh(
+    maximum_element_size=20e-9,
+    minimum_element_size=2e-9,
+    maximum_element_growth_rate=1.3,
+    grading="geometric",
+)
+film = study.geometry(fm.Box(size=(24e-9, 12e-9, 3e-9)), name="film")
+film.mesh(
+    maximum_element_size=3e-9,
+    minimum_element_size=1e-9,
+    curvature_factor=0.5,
+    compute_quality=True,
+    per_element_quality=True,
+)
+study.relax(algorithm="projected_gradient_bb", max_steps=1)
 ```
 
-The command must run Python meshing tests, Python API tests, Rust API tests,
-frontend OpenAPI generation, frontend lint/typecheck/tests, viewport smoke for
-mesh visualization, and `git diff --check`.
+(fem-meshing-acceptance-problem-ir)=
+## 6. ProblemIR
 
-## 8. Completeness checklist
+Requested policy stays in `runtime_metadata.mesh_workflow`; realized topology
+and reports stay in `geometry_assets.fem_domain_mesh_asset` and runtime
+provenance. V04 adopts these meanings only through the one atomic writer
+cutover from ADR 0024/0027. Until then v0.3 is the canonical public writer;
+V04 reader/migrator code is not a second editable model.
 
-- [ ] Python API
-- [ ] ProblemIR
-- [ ] Planner
-- [ ] Capability matrix
-- [ ] FDM backend not applicable and explicitly scoped out
-- [ ] FEM backend
-- [ ] Hybrid backend not applicable and explicitly scoped out
-- [ ] Outputs / observables
-- [ ] Tests / benchmarks
-- [ ] Documentation
-- [ ] Production readiness report
+(fem-meshing-acceptance-round-trip-and-failure-semantics)=
+## 7. Round-trip and failure semantics
 
-## 9. Known limits and deferred work
+Python and UI preserve **requested intent** without replacing it by measured
+values. Planning publishes **resolved execution**: selected zones, fields,
+topology, metric IDs, producer versions, and degradation. Validation errors
+reject malformed SI values, conflicts, incomplete sweep tuples, and invalid
+selectors. Unsupported combinations reject before backend startup; strict
+mode never auto-converts topology or falls back device/solver.
 
-- Arbitrary invalid CAD repair is not included.
-- Non-manifold imported surfaces are not included.
-- Arbitrary anisotropic user-defined size fields are not included.
-- Hybrid FEM/FDM projection is not included.
-- Production support applies only to the support matrix rows marked `passed` in
-  the final production readiness report.
+Missing required evidence is `not_qualified`, not `passed`. Non-finite values,
+unknown metric/version, wrong topology family, stale fingerprint/revision,
+duplicate/missing global ordinal, count mismatch, inversion, or missing sample
+is a hard failure. A proxy receives its own metric ID; it cannot satisfy a gate
+named for SICN, gamma, volume, or another metric.
 
-## 10. References
+(fem-meshing-acceptance-discrete-realization)=
+## 8. Discrete realization and metric registry
 
-- Gmsh mesh size fields and OCC fragmentation.
-- `docs/physics/0520-fem-robin-airbox-demag-bootstrap-reference.md`
-- `docs/plans/active/fem-meshing-production-readiness-plan-2026-05-30.md`
+### 8.1 Lane matrix
+
+| Solver | Device | Status |
+|---|---|---|
+| FDM | CPU | not applicable: regular-grid quality has a separate grid certificate |
+| FDM | GPU | not applicable: regular-grid quality has a separate grid certificate |
+| FEM | CPU | documented; tetra summaries and bounded mixed certificate exist, full production gate pending |
+| FEM | GPU | same mesh contract; device/runtime proof is independent and pending where noted |
+
+### 8.2 Normative sampling and tolerances
+
+Gate calculations use every final cell/facet/adjacency in scope; no random or
+display-only subsampling is admissible. Percentiles use the sorted binary64
+array and linear interpolation at index $(n-1)p$. Histograms are diagnostics
+with at least 30 bins and never replace the underlying array.
+
+| Metric ID | Scope i punkty próbkowania | Tolerancja / acceptance | Failure semantics | Stan implementacji |
+|---|---|---|---|---|
+| `topology.manifold.v1` | wszystkie canonical faces z posortowanych global node IDs | interior owner count $=2$, exterior $=1$, duplicates/orphans $=0$ | dowolna różnica fail | implemented dla istniejących certificate paths |
+| `topology.exact_layers.v1` | wszystkie magnetic nodes, grupowanie współrzędnej normalnej przez $\tau_\mathrm{plane}$ | requested $=$ realized $=N_z$ i planes $=N_z+1$ | brak/wrong plane lub fallback fail | bounded mixed-P1 implemented, szersze scope unsupported |
+| `cell.det_jacobian.v1` | tet: jeden stały affine determinant; prism: 3 triangle points $\times\{\pm1/\sqrt3\}$; pyramid: $r,s\in\{\pm1/\sqrt3\}$ i $t=1/3\pm\sqrt{10}/15$; hex: $2^3$ Gauss points | wszystkie determinants $>\tau_J h_K^3$; każdy negative fail niezależnie od progu | missing/non-finite/non-positive fail | topology-aware certificate path implemented |
+| `gmsh.min_sicn.v1` | wszystkie finalne element tags obsługiwane przez Gmsh, `minSICN` | p05 $\ge0.1$ i minimum $>0$ | inny producer/proxy nie spełnia gate | tetra reports implemented; mixed production evidence nie jest FMMQ v2 |
+| `gmsh.gamma.v1` | wszystkie finalne element tags, Gmsh `gamma` | minimum $\ge0.08$ | brak per-element array daje `not_qualified` | tetra reports implemented |
+| `tetra_decomposition_scaled_jacobian.v1` | wszystkie sub-tet samples z jawnego decomposition każdego prism/pyramid/tet | per-family p05 $\ge0.1$ i każde minimum $>0$ | musi pozostać proxy o tej nazwie; nie SICN | mixed certificate implemented |
+| `cell.volume.v1` | całkowanie mapy na wszystkich komórkach; SI $\mathrm{m^3}$ | $V_K>0$; względny CAD/shared-domain error $\le10^{-8}$ | non-finite/non-positive lub przekroczenie fail | tet + bounded mixed certificate implemented |
+| `cell.max_edge.v1` | maksimum wszystkich canonical edges komórki | object/interface p95 $\le1.25h_\mathrm{target}$ i max $\le1.50h_\mathrm{target}$ | pusty wymagany scope lub przekroczenie fail | kontrakt planowany; obecne tet-equivalent stats nie są tym gate'em |
+| `adjacent_size_growth.v1` | każda para komórek dzieląca pełną ścianę w tym samym resolved growth graph | $\rho_{KL}\le g(1+0.05)$ | cross-zone pary są oceniane tylko, gdy plan jawnie łączy ich growth graph; przekroczenie fail | planowany |
+| `airbox.distance_bands.v1` | centroidy air cells w pasmach $[0,0.1d]$, $(0.45d,0.55d]$, $(0.9d,d]$ osobno dla surface, edge, corner i każdej strony bbox | każde wymagane pasmo niepuste; p50/p95 size niemaleją z tolerancją $5\%$; far p95 w $[0.75h_\mathrm{air,max},1.25h_\mathrm{air,max}]$ | puste pasmo, odwrócony trend lub brak corner/side coverage fail | częściowe testy istnieją; pełny raport/gate planowany |
+| `evidence.identity.v1` | wszystkie element ordinals i payload sections | dokładna zgodność count, order, topology fingerprint, mesh revision i metric metadata | stale/duplicate/missing/tampered fail | JSON certificate częściowo; FMMQ v2 planowany |
+
+Gmsh `Mesh.CharacteristicLengthMin` jest wyłącznie implementacyjną obwiednią.
+Nie może zastąpić strefowego $\max\mathcal L$ ani przyciąć lokalnego upper
+target. Obecne `characteristic_size=(6\sqrt2|V_K|)^{1/3}` jest jawnie
+tetra-equivalent diagnostic, nie `cell.max_edge.v1` i nie mixed-topology gate.
+
+(fem-meshing-acceptance-implementation-mapping)=
+## 9. Implementation mapping
+
+- `GeometryMeshHandle.configure` jest aktualnym publicznym ownerem parametrów.
+- `resolve_user_mesh_size_controls` rozwiązuje bieżące COMSOL-like presets.
+- `_build_field_stack` składa bieżący plan pól Gmsh; docelowo musi publikować
+  dokładną algebrę i strefową eligibility.
+- `_extract_quality_metrics` pobiera bieżące Gmsh SICN/gamma/volume.
+- `_cell_jacobian_determinants` implementuje jawne topology sampling points.
+- `_write_quality_data_artifact_if_available` emituje wyłącznie FMMQ v1.
+- `decodeMeshQualityData` akceptuje obecnie wyłącznie FMMQ v1.
+
+(fem-meshing-acceptance-validation)=
+## 10. Validation
+
+Gate dokumentacyjny i kontraktowy obejmuje source-map validator, changed-page
+gate i testy walidatora. Gate produkcyjny pozostaje
+`just verify-fem-meshing-production`, ale przejście obecnej receptury nie może
+promować pełnej polityki z tej noty, dopóki nie zawiera `cell.max_edge.v1`,
+`adjacent_size_growth.v1`, pełnych airbox bands, FMMQ v2, managed native runtime
+i browser/WebGL evidence związanych tym samym fingerprintem.
+
+Macierz realizacji obejmuje Box, flat/curved ArchWaveguide, Cylinder,
+multi-object, component-aware i concatenated STL fallback, bbox/spherical
+airbox oraz bounded mixed-P1. Każdy wiersz publikuje `passed`, `degraded`,
+`unsupported` albo `failed`; brak raportu nie jest sukcesem.
+
+(fem-meshing-acceptance-limitations)=
+## 11. Limitations
+
+- FMMQ v2 i topology-aware per-element mixed quality carrier nie są jeszcze
+  zaimplementowane.
+- Bieżący FMMQ v1 pozostaje wyłącznie dla legacy tet4.
+- Pełne growth/size/airbox gates z tabeli są kontraktem implementacyjnym, nie
+  opisem obecnego production-qualified runtime.
+- Arbitrary invalid/non-manifold CAD repair, anisotropic user fields i hybrid
+  FEM/FDM projection pozostają poza zakresem.
+- Exact layers nie zapewniają structured in-plane mesh.
+
+(fem-meshing-acceptance-scientific-bibliography)=
+## 12. Scientific bibliography
+
+- C. Geuzaine and J.-F. Remacle, “Gmsh: a three-dimensional finite element mesh
+  generator with built-in pre- and post-processing facilities,” *International
+  Journal for Numerical Methods in Engineering* 79(11), 2009,
+  <https://doi.org/10.1002/nme.2579>.
+- P. M. Knupp, “Algebraic mesh quality metrics,” *SIAM Journal on Scientific
+  Computing* 23(1), 2001, <https://doi.org/10.1137/S1064827500371499>.
+- Gmsh 4.15.2 reference manual, mesh quality and background fields,
+  <https://gmsh.info/doc/texinfo/gmsh.html>.
+
+(fem-meshing-acceptance-source-code-index)=
+## 13. Source-code index
+
+| Claim | Path | Stable symbol | Responsibility | Lane | Evidence status |
+|---|---|---|---|---|---|
+| Public policy | `packages/fullmag-py/src/fullmag/world.py` | `class GeometryMeshHandle` | authoring, validation, requested mesh metadata | FEM CPU/GPU | implemented source contract |
+| Size controls | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `resolve_user_mesh_size_controls` | current preset and COMSOL-like control resolution | FEM CPU/GPU | implemented, canonical zone algebra pending |
+| Field stack | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_build_field_stack` | current deterministic size-field descriptors | FEM CPU/GPU | implemented, complete evidence pending |
+| Gmsh metrics | `packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py` | `_extract_quality_metrics` | current SICN/gamma/volume extraction | FEM CPU/GPU | implemented for current report path |
+| Jacobian sampling | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `_cell_jacobian_determinants` | topology-aware determinant samples | FEM CPU/GPU | implemented certificate evidence |
+| FMMQ v1 writer | `packages/fullmag-py/src/fullmag/meshing/remesh_cli.py` | `_write_quality_data_artifact_if_available` | writes current tet4-compatible FMMQ v1 arrays | FEM CPU/GPU transport | implemented v1; v2 planned |
+| FMMQ v1 decoder | `apps/control-room/src/kernel/api/codecs/meshQualityDataCodec.ts` | `decodeMeshQualityData` | decodes current exact v1 layout | unified Control Room | implemented v1; v2 planned |
+| Canonical planned policy | `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md` | `DOC-ANCHOR:canonical-fem-mesh-policy` | accepted upper/lower, zones, curvature, sweep and quality decision | cross-layer | planned contract |
+| Planned FMMQ v2 | `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md` | `DOC-ANCHOR:fmmq-v2-contract` | typed per-family quality transport and v1 exit criteria | API/Control Room | planned contract |

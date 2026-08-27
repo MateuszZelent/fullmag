@@ -1,0 +1,42 @@
+{
+  "document":{"path":"docs/physics/0104-thin-film-shared-domain-meshing.md"},
+  "backend_matrix":[
+    {"solver":"FEM","device":"CPU","status":"documented"},{"solver":"FEM","device":"GPU","status":"documented"},
+    {"solver":"FDM","device":"CPU","status":"not-applicable","reason":"FDM uses a regular grid."},{"solver":"FDM","device":"GPU","status":"not-applicable","reason":"FDM uses a regular grid."}
+  ],
+  "equations":[
+    {"id":"eq-thin-film-layer-height","symbols":["thickness","layer_count","layer_height"],"sources":["swept-box"]},
+    {"id":"eq-thin-film-size-composition","symbols":["x","upper","lower","h_target"],"sources":["policy-adr"]}
+  ],
+  "symbols":[
+    {"id":"thickness","latex":"t","meaning":"film thickness","si_unit":"\\mathrm m"},{"id":"layer_count","latex":"N_z","meaning":"requested and realized exact layer count","si_unit":"1"},{"id":"layer_height","latex":"h_z","meaning":"fixed layer height","si_unit":"\\mathrm m"},
+    {"id":"x","latex":"\\mathbf x","meaning":"physical point","si_unit":"\\mathrm m"},{"id":"upper","latex":"\\mathcal U","meaning":"eligible upper targets","si_unit":"\\mathrm m"},{"id":"lower","latex":"\\mathcal L","meaning":"eligible lower bounds","si_unit":"\\mathrm m"},{"id":"h_target","latex":"h_\\mathrm{target}","meaning":"resolved target size","si_unit":"\\mathrm m"}
+  ],
+  "sources":[
+    {"id":"thin-film-api","path":"packages/fullmag-py/src/fullmag/world.py","symbol":"class GeometryMeshHandle","responsibility":"Validates and lowers thin-film mesh intent."},
+    {"id":"swept-box","path":"packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py","symbol":"generate_swept_box_mesh","responsibility":"Generates the bounded mixed-P1 box shared domain."},
+    {"id":"field-stack","path":"packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py","symbol":"_build_field_stack","responsibility":"Builds current tetrahedral thin-film size fields."},
+    {"id":"quality","path":"packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py","symbol":"_extract_quality_metrics","responsibility":"Extracts current Gmsh quality metrics."},
+    {"id":"policy-adr","path":"docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md","symbol":"DOC-ANCHOR:canonical-fem-mesh-policy","responsibility":"Defines canonical size policy and evidence.","evidence_status":"planned_contract"}
+  ],
+  "public_api":{"parameters":[
+    {"python":"GeometryMeshHandle.thin_film.maximum_element_size","type":"float | str | None","default":"None","si_unit":"\\mathrm m","validation":"positive value or supported preset","meaning":"body upper target","backend_support":"FEM CPU/GPU","problem_ir":"runtime_metadata.mesh_workflow.per_geometry[].maximum_element_size"},
+    {"python":"GeometryMeshHandle.thin_film.minimum_element_size","type":"float | None","default":"None","si_unit":"\\mathrm m","validation":"positive and not above maximum","meaning":"body lower bound","backend_support":"FEM CPU/GPU","problem_ir":"runtime_metadata.mesh_workflow.per_geometry[].minimum_element_size"},
+    {"python":"GeometryMeshHandle.thin_film.order","type":"int | None","default":"None","si_unit":"1","validation":"prismatic lane supports P1 only","meaning":"FEM basis order","backend_support":"FEM CPU/GPU","problem_ir":"runtime_metadata.mesh_workflow.per_geometry[].order"},
+    {"python":"GeometryMeshHandle.thin_film.curvature_factor","type":"float | None","default":"None","si_unit":"1","validation":"positive when provided","meaning":"curvature upper-target factor","backend_support":"FEM CPU/GPU","problem_ir":"runtime_metadata.mesh_workflow.per_geometry[].curvature_factor"},
+    {"python":"GeometryMeshHandle.thin_film.narrow_region_resolution","type":"float | None","default":"None","si_unit":"1","validation":"positive when provided","meaning":"elements across a narrow gap","backend_support":"FEM CPU/GPU","problem_ir":"runtime_metadata.mesh_workflow.per_geometry[].narrow_region_resolution"},
+    {"python":"GeometryMeshHandle.thin_film.layers","type":"int","default":"1","si_unit":"1","validation":"integer at least one","meaning":"through-thickness layer count","backend_support":"FEM CPU/GPU","problem_ir":"runtime_metadata.mesh_workflow.per_geometry[].through_thickness_elements"},
+    {"python":"GeometryMeshHandle.thin_film.topology","type":"\"tetrahedral\" | \"prismatic\" | None","default":"None","si_unit":"1","validation":"other token gives ValueError","meaning":"requested mesh topology","backend_support":"FEM CPU/GPU by capability","problem_ir":"runtime_metadata.mesh_workflow.per_geometry[].topology"},
+    {"python":"GeometryMeshHandle.thin_film.exact_layers","type":"bool | None","default":"None","si_unit":"1","validation":"only valid for prismatic topology","meaning":"require exact layer count","backend_support":"bounded mixed-P1 FEM","problem_ir":"runtime_metadata.mesh_workflow.per_geometry[].exact_layer_count"},
+    {"python":"GeometryMeshHandle.thin_film.transition","type":"\"pyramid_to_tetrahedra\" | \"reject\" | None","default":"None","si_unit":"1","validation":"only valid for prismatic topology","meaning":"shared-domain transition policy","backend_support":"bounded mixed-P1 FEM","problem_ir":"runtime_metadata.mesh_workflow.per_geometry[].transition_policy"},
+    {"python":"GeometryMeshHandle.thin_film.interface_maximum_element_size","type":"float | None","default":"None","si_unit":"\\mathrm m","validation":"positive when provided","meaning":"interface upper target","backend_support":"FEM CPU/GPU","problem_ir":"runtime_metadata.mesh_workflow.per_geometry[].interface_maximum_element_size"},
+    {"python":"GeometryMeshHandle.thin_film.interface_thickness","type":"float | None","default":"None","si_unit":"\\mathrm m","validation":"positive when provided","meaning":"interface halo thickness","backend_support":"FEM CPU/GPU","problem_ir":"runtime_metadata.mesh_workflow.per_geometry[].interface_thickness"},
+    {"python":"GeometryMeshHandle.thin_film.transition_distance","type":"float | str | None","default":"None","si_unit":"\\mathrm m","validation":"positive value or supported token","meaning":"surface transition span","backend_support":"FEM CPU/GPU","problem_ir":"runtime_metadata.mesh_workflow.per_geometry[].transition_distance"},
+    {"python":"GeometryMeshHandle.thin_film.edge_maximum_element_size","type":"float | None","default":"None","si_unit":"\\mathrm m","validation":"positive and paired with edge_thickness","meaning":"edge upper target","backend_support":"FEM CPU/GPU","problem_ir":"runtime_metadata.mesh_workflow.per_geometry[].edge_hmax"},
+    {"python":"GeometryMeshHandle.thin_film.edge_thickness","type":"float | None","default":"None","si_unit":"\\mathrm m","validation":"positive and paired with edge target","meaning":"edge zone width","backend_support":"FEM CPU/GPU","problem_ir":"runtime_metadata.mesh_workflow.per_geometry[].edge_thickness"},
+    {"python":"GeometryMeshHandle.thin_film.edge_transition_distance","type":"float | str | None","default":"None","si_unit":"\\mathrm m","validation":"positive value or supported token","meaning":"edge air transition span","backend_support":"FEM CPU/GPU","problem_ir":"runtime_metadata.mesh_workflow.per_geometry[].edge_transition_distance"},
+    {"python":"GeometryMeshHandle.thin_film.corner_maximum_element_size","type":"float | None","default":"None","si_unit":"\\mathrm m","validation":"positive and paired with corner_extent","meaning":"corner upper target","backend_support":"FEM CPU/GPU","problem_ir":"runtime_metadata.mesh_workflow.per_geometry[].corner_hmax"},
+    {"python":"GeometryMeshHandle.thin_film.corner_extent","type":"float | None","default":"None","si_unit":"\\mathrm m","validation":"positive and paired with corner target","meaning":"corner zone extent","backend_support":"FEM CPU/GPU","problem_ir":"runtime_metadata.mesh_workflow.per_geometry[].corner_extent"},
+    {"python":"GeometryMeshHandle.thin_film.corner_transition_distance","type":"float | str | None","default":"None","si_unit":"\\mathrm m","validation":"positive value or supported token","meaning":"corner air transition span","backend_support":"FEM CPU/GPU","problem_ir":"runtime_metadata.mesh_workflow.per_geometry[].corner_transition_distance"}
+  ]}
+}

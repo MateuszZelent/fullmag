@@ -1,0 +1,27 @@
+{
+  "document":{"path":"docs/physics/0104-material-regions-parameter-fields-and-interface-couplings.md"},
+  "backend_matrix":[
+    {"solver":"FEM","device":"CPU","status":"documented"},{"solver":"FEM","device":"GPU","status":"documented"},
+    {"solver":"FDM","device":"CPU","status":"documented"},{"solver":"FDM","device":"GPU","status":"documented"}
+  ],
+  "equations":[{"id":"eq-material-region-mesh-composition","symbols":["x","upper","lower","h_target"],"sources":["policy-adr"]}],
+  "symbols":[
+    {"id":"x","latex":"\\mathbf x","meaning":"physical mesh-policy point","si_unit":"\\mathrm m"},
+    {"id":"upper","latex":"\\mathcal U","meaning":"eligible upper mesh-size targets","si_unit":"\\mathrm m"},
+    {"id":"lower","latex":"\\mathcal L","meaning":"eligible lower mesh-size bounds","si_unit":"\\mathrm m"},
+    {"id":"h_target","latex":"h_\\mathrm{target}","meaning":"resolved mesh target","si_unit":"\\mathrm m"}
+  ],
+  "sources":[
+    {"id":"region-api","path":"packages/fullmag-py/src/fullmag/model/structure.py","symbol":"class ObjectRegion","responsibility":"Owns public object-region mesh policy."},
+    {"id":"region-ir","path":"crates/fullmag-ir/src/model.rs","symbol":"RegionMeshPolicyIR","responsibility":"Defines typed region mesh policy fields."},
+    {"id":"region-validation","path":"crates/fullmag-ir/src/lib.rs","symbol":"validate_region_mesh_policy","responsibility":"Validates current region mesh values."},
+    {"id":"field-stack","path":"packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py","symbol":"_build_field_stack","responsibility":"Builds current region-related size fields."},
+    {"id":"policy-adr","path":"docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md","symbol":"DOC-ANCHOR:canonical-fem-mesh-policy","responsibility":"Defines canonical size-policy composition.","evidence_status":"planned_contract"}
+  ],
+  "public_api":{"parameters":[
+    {"python":"ObjectRegion.mesh.maximum_element_size","type":"float | None","default":"None","si_unit":"\\mathrm m","validation":"finite and positive","meaning":"region upper target","backend_support":"FDM/FEM by capability","problem_ir":"object_regions[].mesh_policy.maximum_element_size"},
+    {"python":"ObjectRegion.mesh.minimum_element_size","type":"float | None","default":"None","si_unit":"\\mathrm m","validation":"finite, positive, and not above maximum","meaning":"region lower bound","backend_support":"FDM/FEM by capability","problem_ir":"object_regions[].mesh_policy.minimum_element_size"},
+    {"python":"ObjectRegion.mesh.transition_distance","type":"float | None","default":"None","si_unit":"\\mathrm m","validation":"finite and non-negative","meaning":"region transition span","backend_support":"FEM by capability","problem_ir":"object_regions[].mesh_policy.transition_distance"},
+    {"python":"ObjectRegion.mesh.order","type":"int | None","default":"None","si_unit":"1","validation":"integer at least one","meaning":"region FEM basis-order intent","backend_support":"FEM by capability","problem_ir":"object_regions[].mesh_policy.order"}
+  ]}
+}
