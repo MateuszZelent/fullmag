@@ -15,6 +15,8 @@ use fullmag_engine::{
 };
 use serde::Serialize;
 
+mod production_fdm_cpu;
+
 // ── Allocation counting ────────────────────────────────────────────────
 
 mod alloc_counter {
@@ -366,6 +368,21 @@ fn exchange_demag_zeeman() -> EffectiveFieldTerms {
 // ── Main ───────────────────────────────────────────────────────────────
 
 fn main() {
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if args.first().is_some_and(|arg| arg == "fdm-cpu-production") {
+        if let Err(error) = production_fdm_cpu::run_from_args(&args[1..]) {
+            eprintln!("fullmag-bench fdm-cpu-production: {error}");
+            std::process::exit(2);
+        }
+        return;
+    }
+    if !args.is_empty() {
+        eprintln!(
+            "usage: fullmag-bench [fdm-cpu-production --output-root ABSOLUTE_PATH --profile smoke|full]"
+        );
+        std::process::exit(2);
+    }
+
     let num_threads = rayon::current_num_threads();
     eprintln!("fullmag-bench: {} Rayon threads", num_threads);
 

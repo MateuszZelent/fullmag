@@ -1172,9 +1172,12 @@ dependencies = [
  "fullmag-engine",
  "fullmag-fdm-demag",
  "fullmag-ir",
+ "fullmag-plan",
+ "fullmag-runner",
  "rayon",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
