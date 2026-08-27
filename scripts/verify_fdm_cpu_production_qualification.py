@@ -184,11 +184,23 @@ def validate_time_to_accuracy(document: Mapping[str, Any], label: str) -> Mappin
     return evidence
 
 
-def validate_summary(document: Mapping[str, Any], label: str) -> None:
+def validate_summary(
+    document: Mapping[str, Any],
+    label: str,
+    *,
+    allow_legacy_baseline_blocker: bool = False,
+) -> None:
     require(document.get("schema_version") == SUMMARY_SCHEMA, f"{label} schema mismatch")
     require(document.get("profile") == "full", f"{label} is not full profile")
     require(document.get("qualification_status") == "evidence_only", f"{label} harness status changed")
-    require(document.get("qualification_blockers") == ["external_hardware_baseline_gate_pending"], f"{label} blocker set changed")
+    blockers = document.get("qualification_blockers")
+    current_blockers = ["external_hardware_baseline_gate_pending"]
+    legacy_blockers = ["hardware_baseline_threshold_not_approved"]
+    require(
+        blockers == current_blockers
+        or (allow_legacy_baseline_blocker and blockers == legacy_blockers),
+        f"{label} blocker set changed",
+    )
     commit = document.get("commit")
     require(is_lower_hex(commit, 40), f"{label} commit is invalid")
     source = document.get("source_identity")
@@ -211,7 +223,11 @@ def load_group(paths: Sequence[Path], label: str, minimum: int) -> EvidenceGroup
     require(len(set(paths)) == len(paths), f"{label} contains duplicate paths")
     documents = tuple(load_object(path, f"{label} summary") for path in paths)
     for index, document in enumerate(documents):
-        validate_summary(document, f"{label}[{index}]")
+        validate_summary(
+            document,
+            f"{label}[{index}]",
+            allow_legacy_baseline_blocker=label == "baseline",
+        )
     commits = {str(document["commit"]) for document in documents}
     snapshots = {str(document["source_identity"]["source_snapshot_sha256"]) for document in documents}
     fingerprints = {str(document["hardware_fingerprint_sha256"]) for document in documents}

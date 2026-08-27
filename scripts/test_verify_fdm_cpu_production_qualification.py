@@ -134,6 +134,20 @@ class ProductionQualificationVerifierTests(unittest.TestCase):
     def test_accepts_complete_exact_summary(self) -> None:
         validate_summary(summary(), "candidate")
 
+    def test_accepts_legacy_blocker_only_for_historical_baseline(self) -> None:
+        value = summary()
+        value["qualification_blockers"] = [
+            "hardware_baseline_threshold_not_approved"
+        ]
+
+        validate_summary(
+            value,
+            "baseline",
+            allow_legacy_baseline_blocker=True,
+        )
+        with self.assertRaisesRegex(ContractError, "blocker set changed"):
+            validate_summary(value, "candidate")
+
     def test_rejects_fallback_in_production_result(self) -> None:
         value = copy.deepcopy(summary())
         value["results"][0]["execution_provenance"]["execution_resolution"][
