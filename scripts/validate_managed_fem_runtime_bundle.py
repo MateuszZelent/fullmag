@@ -275,7 +275,13 @@ def validate_startup_identity(
         if match is not None:
             break
     if match is None:
-        raise ValueError(f"managed FEM {label} startup build identity is missing")
+        stderr = result.stderr.strip()
+        if len(stderr) > 2048:
+            stderr = f"...{stderr[-2048:]}"
+        raise ValueError(
+            f"managed FEM {label} startup build identity is missing; "
+            f"exit status {result.returncode}; stderr={stderr!r}"
+        )
     if result.returncode != 0:
         raise ValueError(
             f"managed FEM {label} startup identity query exited with status "
