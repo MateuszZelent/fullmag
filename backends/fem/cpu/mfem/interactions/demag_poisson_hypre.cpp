@@ -200,12 +200,20 @@ bool solve_demag_poisson_hypre(
     std::unique_ptr<PoissonHypreWorkspace> staged_workspace;
     auto *poisson_hypre_workspace =
         static_cast<PoissonHypreWorkspace *>(ctx.poisson_demag.hypre_workspace);
-    if (!ctx.poisson_demag.solver_setup && poisson_hypre_workspace == nullptr) {
-        staged_workspace = std::make_unique<PoissonHypreWorkspace>(
-            fullmag_serial_comm(),
-            glob_size,
-            row_starts);
-        poisson_hypre_workspace = staged_workspace.get();
+    try {
+        if (!ctx.poisson_demag.solver_setup && poisson_hypre_workspace == nullptr) {
+            staged_workspace = std::make_unique<PoissonHypreWorkspace>(
+                fullmag_serial_comm(),
+                glob_size,
+                row_starts);
+            poisson_hypre_workspace = staged_workspace.get();
+        }
+    } catch (const std::exception &ex) {
+        error = std::string("Hypre Poisson workspace setup failed: ") + ex.what();
+        return false;
+    } catch (...) {
+        error = "Hypre Poisson workspace setup failed with an unknown error";
+        return false;
     }
     if (poisson_hypre_workspace == nullptr) {
         error = "Poisson Hypre workspace is null during solver apply";
@@ -213,9 +221,17 @@ bool solve_demag_poisson_hypre(
     }
 
     mfem::Vector &rhs_bc = poisson_hypre_workspace->rhs_bc;
-    rhs_bc.SetSize(rhs.Size());
-    rhs_bc = rhs;
-    zero_poisson_essential_values(ctx, rhs_bc);
+    try {
+        rhs_bc.SetSize(rhs.Size());
+        rhs_bc = rhs;
+        zero_poisson_essential_values(ctx, rhs_bc);
+    } catch (const std::exception &ex) {
+        error = std::string("Hypre Poisson RHS staging failed: ") + ex.what();
+        return false;
+    } catch (...) {
+        error = "Hypre Poisson RHS staging failed with an unknown error";
+        return false;
+    }
 
     if (!ctx.poisson_demag.solver_setup) {
         const auto setup_wall_start = FemSteadyClock::now();
