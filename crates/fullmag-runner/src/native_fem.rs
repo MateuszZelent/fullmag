@@ -199,6 +199,87 @@ fn solver_attempt_error_norm_type(value: u32) -> Result<Option<&'static str>, Ru
 }
 
 #[cfg(feature = "fem-gpu")]
+fn endpoint_cache_refresh_reason(value: u32) -> Result<&'static str, RunError> {
+    match value {
+        ffi::FULLMAG_FEM_ENDPOINT_REFRESH_CACHE_HIT => Ok("cache_hit"),
+        ffi::FULLMAG_FEM_ENDPOINT_REFRESH_NON_FSAL_TABLEAU => Ok("non_fsal_tableau"),
+        ffi::FULLMAG_FEM_ENDPOINT_REFRESH_CANDIDATE_STATE_MISMATCH => {
+            Ok("candidate_state_mismatch")
+        }
+        ffi::FULLMAG_FEM_ENDPOINT_REFRESH_ENDPOINT_TIME_MISMATCH => Ok("endpoint_time_mismatch"),
+        ffi::FULLMAG_FEM_ENDPOINT_REFRESH_DYNAMIC_SOURCE_CHANGED => Ok("dynamic_source_changed"),
+        ffi::FULLMAG_FEM_ENDPOINT_REFRESH_TRANSPORT_SOURCE_CHANGED => {
+            Ok("transport_source_changed")
+        }
+        ffi::FULLMAG_FEM_ENDPOINT_REFRESH_PROJECTION_MISMATCH => Ok("projection_mismatch"),
+        ffi::FULLMAG_FEM_ENDPOINT_REFRESH_CACHE_UNAVAILABLE => Ok("cache_unavailable"),
+        _ => Err(RunError {
+            message: format!("native FEM returned unknown endpoint cache refresh reason {value}"),
+        }),
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn endpoint_cache_flag(label: &str, value: u32) -> Result<bool, RunError> {
+    match value {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(RunError {
+            message: format!("native FEM returned invalid endpoint cache flag {label}={value}"),
+        }),
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn endpoint_cache_telemetry_from_ffi(
+    raw: &ffi::fullmag_fem_endpoint_cache_telemetry_v1,
+) -> Result<Option<fullmag_quantities::EndpointCacheTelemetry>, RunError> {
+    if raw.abi_version != ffi::FULLMAG_FEM_ENDPOINT_CACHE_TELEMETRY_V1_ABI_VERSION
+        || raw.struct_size as usize
+            != std::mem::size_of::<ffi::fullmag_fem_endpoint_cache_telemetry_v1>()
+    {
+        return Err(RunError {
+            message: "native FEM returned an incompatible endpoint cache telemetry ABI v1 record"
+                .to_string(),
+        });
+    }
+    let available = endpoint_cache_flag("available", raw.available)?;
+    if !available {
+        if raw.final_refresh_reason != ffi::FULLMAG_FEM_ENDPOINT_REFRESH_NOT_EVALUATED {
+            return Err(RunError {
+                message:
+                    "native FEM marked endpoint cache telemetry unavailable with a refresh reason"
+                        .to_string(),
+            });
+        }
+        return Ok(None);
+    }
+    let final_refresh_reason = endpoint_cache_refresh_reason(raw.final_refresh_reason)?;
+    Ok(Some(fullmag_quantities::EndpointCacheTelemetry {
+        final_refresh_reason: final_refresh_reason.to_string(),
+        cache_state_valid: endpoint_cache_flag("cache_state_valid", raw.cache_state_valid)?,
+        cache_time_valid: endpoint_cache_flag("cache_time_valid", raw.cache_time_valid)?,
+        cache_dynamic_sources_valid: endpoint_cache_flag(
+            "cache_dynamic_sources_valid",
+            raw.cache_dynamic_sources_valid,
+        )?,
+        cache_transport_valid: endpoint_cache_flag(
+            "cache_transport_valid",
+            raw.cache_transport_valid,
+        )?,
+        cache_projection_valid: endpoint_cache_flag(
+            "cache_projection_valid",
+            raw.cache_projection_valid,
+        )?,
+        final_rhs_evaluations: raw.final_rhs_evaluations,
+        extra_poisson_solves: raw.extra_poisson_solves,
+        endpoint_cache_hits: raw.endpoint_cache_hits,
+        endpoint_refreshes: raw.endpoint_refreshes,
+        accepted_step_wall_time_ns: raw.accepted_step_wall_time_ns,
+    }))
+}
+
+#[cfg(feature = "fem-gpu")]
 fn validate_native_step_stats(stats: &ffi::fullmag_fem_step_stats) -> Result<f64, RunError> {
     for (label, value) in [
         ("exchange_energy_joules", stats.exchange_energy_joules),
@@ -3117,6 +3198,7 @@ impl NativeFemBackend {
             return Err(self.last_error_or("FEM GPU step failed"));
         }
 
+        let endpoint_cache_telemetry = self.endpoint_cache_telemetry()?;
         let solver_attempts = self.solver_attempts()?;
         let controller_diagnostics = self.stage_completion_snapshot_ffi()?;
         let accepted_energy_proof: Option<(f64, f64, f64, f64)> = None;
@@ -3218,6 +3300,7 @@ impl NativeFemBackend {
             },
             rhs_evals: stats.rhs_evaluations,
             fsal_reused: stats.fsal_reused != 0,
+            endpoint_cache_telemetry,
             solver_attempts,
             demag_solves: stats.demag_solve_count,
             poisson_iterations: stats.demag_linear_iterations,
@@ -3403,6 +3486,19 @@ impl NativeFemBackend {
                 })
             })
             .collect()
+    }
+
+    fn endpoint_cache_telemetry(
+        &self,
+    ) -> Result<Option<fullmag_quantities::EndpointCacheTelemetry>, RunError> {
+        let mut raw = ffi::fullmag_fem_endpoint_cache_telemetry_v1::default();
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_snapshot_endpoint_cache_telemetry_v1(self.handle, &mut raw)
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM native endpoint cache telemetry snapshot failed"));
+        }
+        endpoint_cache_telemetry_from_ffi(&raw)
     }
 
     pub fn invalidate_fsal(&mut self) -> Result<(), RunError> {
@@ -5129,6 +5225,54 @@ mod tests {
         assert_eq!(step_stats.demag_potential_true_dof_count, 123_456);
         assert_eq!(step_stats.demag_variational_energy_joules, -7.25);
         assert_eq!(step_stats.demag_recovered_field_energy_joules, 9.5);
+    }
+
+    #[test]
+    fn endpoint_cache_telemetry_mapping_preserves_public_receipt() {
+        let mut raw = ffi::fullmag_fem_endpoint_cache_telemetry_v1::default();
+        raw.abi_version = ffi::FULLMAG_FEM_ENDPOINT_CACHE_TELEMETRY_V1_ABI_VERSION;
+        raw.struct_size = std::mem::size_of_val(&raw) as u32;
+        raw.available = 1;
+        raw.final_refresh_reason = ffi::FULLMAG_FEM_ENDPOINT_REFRESH_CACHE_HIT;
+        raw.cache_state_valid = 1;
+        raw.cache_time_valid = 1;
+        raw.cache_dynamic_sources_valid = 1;
+        raw.cache_transport_valid = 1;
+        raw.cache_projection_valid = 1;
+        raw.final_rhs_evaluations = 2;
+        raw.extra_poisson_solves = 3;
+        raw.endpoint_cache_hits = 4;
+        raw.endpoint_refreshes = 5;
+        raw.accepted_step_wall_time_ns = 6;
+
+        let telemetry = endpoint_cache_telemetry_from_ffi(&raw)
+            .unwrap()
+            .expect("available endpoint receipt");
+        assert_eq!(telemetry.final_refresh_reason, "cache_hit");
+        assert!(telemetry.cache_state_valid);
+        assert!(telemetry.cache_time_valid);
+        assert!(telemetry.cache_dynamic_sources_valid);
+        assert!(telemetry.cache_transport_valid);
+        assert!(telemetry.cache_projection_valid);
+        assert_eq!(telemetry.final_rhs_evaluations, 2);
+        assert_eq!(telemetry.extra_poisson_solves, 3);
+        assert_eq!(telemetry.endpoint_cache_hits, 4);
+        assert_eq!(telemetry.endpoint_refreshes, 5);
+        assert_eq!(telemetry.accepted_step_wall_time_ns, 6);
+    }
+
+    #[test]
+    fn endpoint_cache_telemetry_mapping_rejects_corrupt_receipts() {
+        let mut raw = ffi::fullmag_fem_endpoint_cache_telemetry_v1::default();
+        raw.abi_version = ffi::FULLMAG_FEM_ENDPOINT_CACHE_TELEMETRY_V1_ABI_VERSION;
+        raw.struct_size = std::mem::size_of_val(&raw) as u32;
+        raw.available = 1;
+        raw.final_refresh_reason = 99;
+        assert!(endpoint_cache_telemetry_from_ffi(&raw).is_err());
+
+        raw.final_refresh_reason = ffi::FULLMAG_FEM_ENDPOINT_REFRESH_CACHE_HIT;
+        raw.cache_state_valid = 2;
+        assert!(endpoint_cache_telemetry_from_ffi(&raw).is_err());
     }
 
     #[test]

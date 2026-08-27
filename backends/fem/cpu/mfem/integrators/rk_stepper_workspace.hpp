@@ -158,8 +158,8 @@ struct RkAttemptTraceState {
  * attempt-cache counters remain separate from the outer accepted-step
  * transaction so retry overhead is not mistaken for a committed step.
  *
- * This is native owner state only. ABI/API/UI publication is a separate
- * versioned propagation task.
+ * This is native owner state only. ABI/API/UI publication crosses a separate
+ * versioned propagation boundary.
  */
 struct RkTransactionTelemetryState {
     uint64_t step_transaction_begin_count = 0;

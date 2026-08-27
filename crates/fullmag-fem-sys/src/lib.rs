@@ -1255,6 +1255,17 @@ pub const FULLMAG_FEM_SOLVER_ERROR_NORM_NONE: u32 = 0;
 pub const FULLMAG_FEM_SOLVER_ERROR_NORM_MAX: u32 = 1;
 pub const FULLMAG_FEM_SOLVER_ERROR_NORM_MASS_WEIGHTED_RMS: u32 = 2;
 
+pub const FULLMAG_FEM_ENDPOINT_CACHE_TELEMETRY_V1_ABI_VERSION: u32 = 1;
+pub const FULLMAG_FEM_ENDPOINT_REFRESH_NOT_EVALUATED: u32 = 0;
+pub const FULLMAG_FEM_ENDPOINT_REFRESH_CACHE_HIT: u32 = 1;
+pub const FULLMAG_FEM_ENDPOINT_REFRESH_NON_FSAL_TABLEAU: u32 = 2;
+pub const FULLMAG_FEM_ENDPOINT_REFRESH_CANDIDATE_STATE_MISMATCH: u32 = 3;
+pub const FULLMAG_FEM_ENDPOINT_REFRESH_ENDPOINT_TIME_MISMATCH: u32 = 4;
+pub const FULLMAG_FEM_ENDPOINT_REFRESH_DYNAMIC_SOURCE_CHANGED: u32 = 5;
+pub const FULLMAG_FEM_ENDPOINT_REFRESH_TRANSPORT_SOURCE_CHANGED: u32 = 6;
+pub const FULLMAG_FEM_ENDPOINT_REFRESH_PROJECTION_MISMATCH: u32 = 7;
+pub const FULLMAG_FEM_ENDPOINT_REFRESH_CACHE_UNAVAILABLE: u32 = 8;
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct fullmag_fem_solver_attempt_record_v2 {
@@ -1281,6 +1292,25 @@ pub struct fullmag_fem_solver_attempt_record_v2 {
     pub normalization_denominator: f64,
     pub max_scaled_error: f64,
     pub weighted_rms_error: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct fullmag_fem_endpoint_cache_telemetry_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub final_rhs_evaluations: u64,
+    pub extra_poisson_solves: u64,
+    pub endpoint_cache_hits: u64,
+    pub endpoint_refreshes: u64,
+    pub accepted_step_wall_time_ns: u64,
+    pub available: u32,
+    pub final_refresh_reason: u32,
+    pub cache_state_valid: u32,
+    pub cache_time_valid: u32,
+    pub cache_dynamic_sources_valid: u32,
+    pub cache_transport_valid: u32,
+    pub cache_projection_valid: u32,
 }
 
 #[repr(C)]
@@ -2247,6 +2277,11 @@ extern "C" {
         out_stats: *mut fullmag_fem_step_stats,
     ) -> i32;
 
+    pub fn fullmag_fem_backend_snapshot_endpoint_cache_telemetry_v1(
+        handle: *mut fullmag_fem_backend,
+        out_telemetry: *mut fullmag_fem_endpoint_cache_telemetry_v1,
+    ) -> i32;
+
     pub fn fullmag_fem_backend_solver_attempt_count_v1(
         handle: *mut fullmag_fem_backend,
         out_count: *mut u64,
@@ -2518,6 +2553,42 @@ mod tests {
             112
         );
         assert_eq!(FULLMAG_FEM_SOLVER_ERROR_NORM_MASS_WEIGHTED_RMS, 2);
+    }
+
+    #[test]
+    fn endpoint_cache_telemetry_v1_layout_is_versioned_and_stable() {
+        assert_eq!(FULLMAG_FEM_ENDPOINT_CACHE_TELEMETRY_V1_ABI_VERSION, 1);
+        assert_eq!(
+            std::mem::size_of::<fullmag_fem_endpoint_cache_telemetry_v1>(),
+            80
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                fullmag_fem_endpoint_cache_telemetry_v1,
+                final_rhs_evaluations
+            ),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                fullmag_fem_endpoint_cache_telemetry_v1,
+                accepted_step_wall_time_ns
+            ),
+            40
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_endpoint_cache_telemetry_v1, available),
+            48
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                fullmag_fem_endpoint_cache_telemetry_v1,
+                cache_projection_valid
+            ),
+            72
+        );
+        assert_eq!(FULLMAG_FEM_ENDPOINT_REFRESH_CACHE_HIT, 1);
+        assert_eq!(FULLMAG_FEM_ENDPOINT_REFRESH_CACHE_UNAVAILABLE, 8);
     }
 
     /// Verify the Rust observable enum has the expected number of variants

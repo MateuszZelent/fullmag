@@ -3355,6 +3355,50 @@ int fullmag_fem_backend_snapshot_stats(
 #endif
 }
 
+int fullmag_fem_backend_snapshot_endpoint_cache_telemetry_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_endpoint_cache_telemetry_v1 *out_telemetry
+)
+{
+    if (out_telemetry == nullptr) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_snapshot_endpoint_cache_telemetry_v1 received null out_telemetry");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_snapshot_endpoint_cache_telemetry_v1 received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+
+#if FULLMAG_HAS_MFEM_STACK
+    const auto &source = handle->context.stepper.workspace.endpoint_telemetry;
+    *out_telemetry = {};
+    out_telemetry->abi_version = FULLMAG_FEM_ENDPOINT_CACHE_TELEMETRY_V1_ABI_VERSION;
+    out_telemetry->struct_size = sizeof(*out_telemetry);
+    out_telemetry->final_rhs_evaluations = source.final_rhs_evaluations;
+    out_telemetry->extra_poisson_solves = source.extra_poisson_solves;
+    out_telemetry->endpoint_cache_hits = source.endpoint_cache_hits;
+    out_telemetry->endpoint_refreshes = source.endpoint_refreshes;
+    out_telemetry->accepted_step_wall_time_ns = source.accepted_step_wall_time_ns;
+    out_telemetry->available =
+        source.final_refresh_reason != fullmag::fem::RkFinalRefreshReason::NotEvaluated ? 1u : 0u;
+    out_telemetry->final_refresh_reason = static_cast<uint32_t>(source.final_refresh_reason);
+    out_telemetry->cache_state_valid = source.cache_validity.state ? 1u : 0u;
+    out_telemetry->cache_time_valid = source.cache_validity.time ? 1u : 0u;
+    out_telemetry->cache_dynamic_sources_valid = source.cache_validity.dynamic_sources ? 1u : 0u;
+    out_telemetry->cache_transport_valid = source.cache_validity.transport ? 1u : 0u;
+    out_telemetry->cache_projection_valid = source.cache_validity.projection ? 1u : 0u;
+    handle->last_error.clear();
+    fullmag_fem_clear_global_error();
+    return FULLMAG_FEM_OK;
+#else
+    fullmag_fem_set_handle_error(handle, kUnavailableMessage);
+    return FULLMAG_FEM_ERR_UNAVAILABLE;
+#endif
+}
+
 int fullmag_fem_backend_solver_attempt_count_v1(
     fullmag_fem_backend *handle,
     uint64_t *out_count)

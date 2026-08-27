@@ -1144,6 +1144,42 @@ typedef struct {
     double demag_recovered_field_energy_joules;
 } fullmag_fem_step_stats;
 
+/*
+ * Versioned CPU explicit-RK accepted-endpoint cache telemetry.  This is an
+ * additive query rather than an extension of fullmag_fem_step_stats so older
+ * callers never receive writes past the struct they allocated.
+ */
+#define FULLMAG_FEM_ENDPOINT_CACHE_TELEMETRY_V1_ABI_VERSION 1u
+
+typedef enum {
+    FULLMAG_FEM_ENDPOINT_REFRESH_NOT_EVALUATED = 0,
+    FULLMAG_FEM_ENDPOINT_REFRESH_CACHE_HIT = 1,
+    FULLMAG_FEM_ENDPOINT_REFRESH_NON_FSAL_TABLEAU = 2,
+    FULLMAG_FEM_ENDPOINT_REFRESH_CANDIDATE_STATE_MISMATCH = 3,
+    FULLMAG_FEM_ENDPOINT_REFRESH_ENDPOINT_TIME_MISMATCH = 4,
+    FULLMAG_FEM_ENDPOINT_REFRESH_DYNAMIC_SOURCE_CHANGED = 5,
+    FULLMAG_FEM_ENDPOINT_REFRESH_TRANSPORT_SOURCE_CHANGED = 6,
+    FULLMAG_FEM_ENDPOINT_REFRESH_PROJECTION_MISMATCH = 7,
+    FULLMAG_FEM_ENDPOINT_REFRESH_CACHE_UNAVAILABLE = 8,
+} fullmag_fem_endpoint_refresh_reason;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t final_rhs_evaluations;
+    uint64_t extra_poisson_solves;
+    uint64_t endpoint_cache_hits;
+    uint64_t endpoint_refreshes;
+    uint64_t accepted_step_wall_time_ns;
+    uint32_t available;
+    uint32_t final_refresh_reason;
+    uint32_t cache_state_valid;
+    uint32_t cache_time_valid;
+    uint32_t cache_dynamic_sources_valid;
+    uint32_t cache_transport_valid;
+    uint32_t cache_projection_valid;
+} fullmag_fem_endpoint_cache_telemetry_v1;
+
 #define FULLMAG_FEM_ACCEPTED_ENERGY_PROOF_V1_ABI_VERSION 1u
 
 typedef struct {
@@ -2140,6 +2176,11 @@ int fullmag_fem_backend_apply_demag_tangent_with_potential_f64(
 int fullmag_fem_backend_snapshot_stats(
     fullmag_fem_backend *handle,
     fullmag_fem_step_stats *out_stats
+);
+
+int fullmag_fem_backend_snapshot_endpoint_cache_telemetry_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_endpoint_cache_telemetry_v1 *out_telemetry
 );
 
 int fullmag_fem_backend_solver_attempt_count_v1(

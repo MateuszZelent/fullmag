@@ -418,6 +418,37 @@ void endpoint_cache_telemetry_has_explicit_validity_dimensions() {
         "CPU RK step must account for the final refresh reason and Poisson cost");
 }
 
+void endpoint_cache_telemetry_has_public_versioned_abi() {
+    const std::string abi_header = read_text_file(
+        repo_root() / "native" / "include" / "fullmag_fem.h");
+    const std::string abi_source = read_text_file(
+        repo_root() / "backends" / "fem" / "src" / "api.cpp");
+    check(
+        abi_header.find("FULLMAG_FEM_ENDPOINT_CACHE_TELEMETRY_V1_ABI_VERSION") !=
+            std::string::npos &&
+            abi_header.find("fullmag_fem_endpoint_cache_telemetry_v1") !=
+                std::string::npos &&
+            abi_header.find("fullmag_fem_backend_snapshot_endpoint_cache_telemetry_v1") !=
+                std::string::npos,
+        "endpoint cache telemetry must be exposed through an additive versioned C ABI");
+    for (const char *field : {
+             "final_rhs_evaluations",
+             "extra_poisson_solves",
+             "endpoint_cache_hits",
+             "endpoint_refreshes",
+             "accepted_step_wall_time_ns",
+             "cache_state_valid",
+             "cache_time_valid",
+             "cache_dynamic_sources_valid",
+             "cache_transport_valid",
+             "cache_projection_valid",
+         }) {
+        check(
+            abi_source.find(std::string("out_telemetry->") + field) != std::string::npos,
+            "public endpoint telemetry ABI must copy every native receipt field");
+    }
+}
+
 void rk_transaction_payload_inventory_covers_owned_vectors() {
     const std::string transaction = read_text_file(
         fem_source_root() / "cpu" / "mfem" / "integrators" / "rk_step_transaction.cpp");
@@ -2174,6 +2205,7 @@ int main() {
     workspace_invalidates_fsal_when_stage_count_shrinks();
     workspace_allocates_common_buffers();
     endpoint_cache_telemetry_has_explicit_validity_dimensions();
+    endpoint_cache_telemetry_has_public_versioned_abi();
     rk_transaction_payload_inventory_covers_owned_vectors();
     fsal_reuse_requires_matching_source_state();
     rk_rhs_passes_explicit_stage_and_endpoint_times();

@@ -720,6 +720,9 @@ pub struct StepStats {
     pub demag_solves: u32,
     #[serde(default)]
     pub fsal_reused: bool,
+    /// Optional native CPU RK accepted-endpoint cache receipt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint_cache_telemetry: Option<fullmag_quantities::EndpointCacheTelemetry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub solver_attempts: Vec<SolverAttemptRecord>,
     /// Number of PCG iterations in the last Poisson demag solve.
@@ -925,6 +928,7 @@ impl Default for StepStats {
             rhs_evals: 0,
             demag_solves: 0,
             fsal_reused: false,
+            endpoint_cache_telemetry: None,
             solver_attempts: Vec::new(),
             poisson_iterations: 0,
             poisson_final_residual: 0.0,
@@ -993,6 +997,19 @@ mod all_in_gpu_fem_transfer_audit_tests {
             demag_recover_wall_time_ns: 7,
             demag_energy_wall_time_ns: 11,
             extra_energy_wall_time_ns: 29,
+            endpoint_cache_telemetry: Some(fullmag_quantities::EndpointCacheTelemetry {
+                final_refresh_reason: "cache_hit".to_string(),
+                cache_state_valid: true,
+                cache_time_valid: true,
+                cache_dynamic_sources_valid: true,
+                cache_transport_valid: true,
+                cache_projection_valid: true,
+                final_rhs_evaluations: 2,
+                extra_poisson_solves: 3,
+                endpoint_cache_hits: 4,
+                endpoint_refreshes: 5,
+                accepted_step_wall_time_ns: 6,
+            }),
             ..StepStats::default()
         };
 
@@ -1007,6 +1024,15 @@ mod all_in_gpu_fem_transfer_audit_tests {
         assert_eq!(diagnostics.demag_recover_wall_time_ns, 7);
         assert_eq!(diagnostics.demag_energy_wall_time_ns, 11);
         assert_eq!(diagnostics.extra_energy_wall_time_ns, 29);
+        let endpoint = diagnostics
+            .endpoint_cache_telemetry
+            .expect("endpoint receipt should reach canonical diagnostics");
+        assert_eq!(endpoint.final_refresh_reason, "cache_hit");
+        assert_eq!(endpoint.final_rhs_evaluations, 2);
+        assert_eq!(endpoint.extra_poisson_solves, 3);
+        assert_eq!(endpoint.endpoint_cache_hits, 4);
+        assert_eq!(endpoint.endpoint_refreshes, 5);
+        assert_eq!(endpoint.accepted_step_wall_time_ns, 6);
         assert_eq!(diagnostics.relaxation_preconditioner_wall_time_ns, 0);
     }
 
@@ -1447,6 +1473,7 @@ impl StepStats {
             rhs_evals: self.rhs_evals,
             demag_solves: self.demag_solves,
             fsal_reused: self.fsal_reused,
+            endpoint_cache_telemetry: self.endpoint_cache_telemetry.clone(),
             poisson_iterations: self.poisson_iterations,
             poisson_final_residual: self.poisson_final_residual,
             demag_refreshed: self.demag_refreshed,
