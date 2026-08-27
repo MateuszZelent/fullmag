@@ -126,6 +126,7 @@ void upload_magnetization_updates_host_state_and_invalidates_runtime_caches() {
     ctx.mesh.periodic_reduced_node = {0u, 0u};
     ctx.mesh.periodic_representative_nodes = {0u};
     ctx.mesh.periodic_reduced_node_count = 1u;
+    ctx.mesh.periodic_map_revision = 1u;
     ctx.zeeman.has_external_field = true;
     ctx.exchange.enabled = false;
     ctx.demag.enabled = false;

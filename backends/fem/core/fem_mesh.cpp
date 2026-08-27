@@ -38,6 +38,28 @@ constexpr uint8_t kHexFaceNodes[] = {3, 2, 1, 0, 0, 1, 5, 4, 1, 2, 6, 5, 2, 3, 7
 constexpr uint8_t kHexEdgeOffsets[] = {0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24};
 constexpr uint8_t kHexEdgeNodes[] = {0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7};
 
+uint64_t periodic_map_revision(
+    uint32_t n_nodes,
+    const std::vector<uint32_t> &reduced,
+    const std::vector<uint32_t> &representatives)
+{
+    uint64_t hash = 1469598103934665603ull;
+    const auto mix = [&hash](uint64_t value) {
+        hash ^= value;
+        hash *= 1099511628211ull;
+    };
+    mix(n_nodes);
+    mix(static_cast<uint64_t>(reduced.size()));
+    for (uint32_t value : reduced) {
+        mix(value);
+    }
+    mix(static_cast<uint64_t>(representatives.size()));
+    for (uint32_t value : representatives) {
+        mix(value);
+    }
+    return hash == 0 ? 1 : hash;
+}
+
 template <typename T>
 bool validate_span(const T *pointer, uint64_t length, const char *name, std::string &error) {
     if (length > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
@@ -693,6 +715,7 @@ bool build_static_periodic_reduction(Context &ctx, std::string &error) {
     ctx.mesh.periodic_reduced_node.clear();
     ctx.mesh.periodic_representative_nodes.clear();
     ctx.mesh.periodic_reduced_node_count = 0;
+    ctx.mesh.periodic_map_revision = 0;
     if (ctx.mesh.periodic_node_pairs.empty()) {
         return true;
     }
@@ -756,6 +779,10 @@ bool build_static_periodic_reduction(Context &ctx, std::string &error) {
     }
     ctx.mesh.periodic_reduced_node_count =
         static_cast<uint32_t>(ctx.mesh.periodic_representative_nodes.size());
+    ctx.mesh.periodic_map_revision = periodic_map_revision(
+        ctx.mesh.n_nodes,
+        ctx.mesh.periodic_reduced_node,
+        ctx.mesh.periodic_representative_nodes);
     return true;
 }
 

@@ -54,11 +54,13 @@ void aos_helpers_are_owned_by_runtime_module() {
         read_text_file(root / "cpu" / "mfem" / "runtime" / "aos_field.cpp");
 
     const char *symbols[] = {
+        "bool bind_local_node_aos_vector_field(",
         "void unpack_aos_to_components(",
         "void unpack_aos_to_existing_components(",
         "void pack_components_to_aos(",
         "bool normalize_active_magnetization_aos(",
         "void project_static_periodic_aos(",
+        "bool project_static_periodic_aos_checked(",
     };
     for (const char *symbol : symbols) {
         check(bridge.find(symbol) == std::string::npos, "bridge must not own AoS helper");
@@ -92,6 +94,43 @@ void aos_pack_unpack_and_existing_resize_contract() {
     std::vector<double> packed;
     fullmag::fem::pack_components_to_aos(x, y, z, packed);
     check(packed == aos, "pack components to AoS");
+}
+
+void typed_local_node_view_rejects_invalid_shape_and_map() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 2;
+    std::vector<double> field = {
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+    };
+    fullmag::fem::AosVectorFieldView view;
+    std::string error;
+    check(
+        fullmag::fem::bind_local_node_aos_vector_field(ctx, field, view, error),
+        error.c_str());
+    check(view.data == field.data(), "typed AoS view points at local-node storage");
+    check(view.node_count == 2u, "typed AoS view records local-node count");
+    check(
+        view.space == fullmag::fem::AosVectorFieldSpace::local_nodes,
+        "typed AoS view records local-node space");
+
+    field.pop_back();
+    check(
+        !fullmag::fem::bind_local_node_aos_vector_field(ctx, field, view, error),
+        "typed AoS view rejects malformed local-node shape");
+    check(error.find("length mismatch") != std::string::npos, "shape error is explicit");
+
+    field = {
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+    };
+    ctx.mesh.periodic_reduced_node = {0u, 0u};
+    ctx.mesh.periodic_representative_nodes = {0u};
+    ctx.mesh.periodic_reduced_node_count = 1u;
+    check(
+        !fullmag::fem::project_static_periodic_aos_checked(ctx, field, error),
+        "checked periodic projection rejects a map without revision");
+    check(error.find("revision") != std::string::npos, "revision error is explicit");
 }
 
 void active_magnetization_normalization_respects_mask() {
@@ -198,6 +237,7 @@ void periodic_projection_copies_representative_vectors() {
 int main() {
     aos_helpers_are_owned_by_runtime_module();
     aos_pack_unpack_and_existing_resize_contract();
+    typed_local_node_view_rejects_invalid_shape_and_map();
     active_magnetization_normalization_respects_mask();
     active_magnetization_normalization_is_idempotent_at_fp64_roundoff();
     periodic_projection_copies_representative_vectors();

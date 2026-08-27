@@ -1,11 +1,37 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
 namespace fullmag::fem {
 
 struct Context;
+
+enum class AosVectorFieldSpace : std::uint8_t {
+    local_nodes = 0,
+};
+
+/*
+ * Typed boundary for a mutable AoS vector field.
+ *
+ * The view is only valid for the storage and map revision checked by
+ * bind_local_node_aos_vector_field. It prevents a local-node buffer from
+ * being passed as an unlabelled true-DOF field at the state boundary.
+ */
+struct AosVectorFieldView {
+    double *data = nullptr;
+    std::size_t node_count = 0;
+    AosVectorFieldSpace space = AosVectorFieldSpace::local_nodes;
+    std::uint64_t periodic_map_revision = 0;
+};
+
+bool bind_local_node_aos_vector_field(
+    const Context &ctx,
+    std::vector<double> &field_xyz,
+    AosVectorFieldView &view,
+    std::string &error);
 
 /*
  * Split an AoS-3 vector field into component arrays.
@@ -63,5 +89,14 @@ bool normalize_active_magnetization_aos(
 void project_static_periodic_aos(
     const Context &ctx,
     std::vector<double> &field_xyz);
+
+/*
+ * Checked state-boundary variant. It validates the local-node AoS shape and
+ * the periodic map before changing the field, and fails closed on mismatch.
+ */
+bool project_static_periodic_aos_checked(
+    const Context &ctx,
+    std::vector<double> &field_xyz,
+    std::string &error);
 
 } // namespace fullmag::fem
