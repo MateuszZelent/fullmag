@@ -13,6 +13,10 @@
 #include <sstream>
 #include <string>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 namespace {
 
 void check(bool condition, const char *msg) {
@@ -218,6 +222,22 @@ void configure_host_runtime_writes_cpu_context_fields() {
     check(
         ctx.cpu_threads.cap_reason == fullmag::fem::FULLMAG_FEM_CPU_THREAD_CAP_NONE,
         "manual CPU runtime reports no auto cap reason");
+    check(
+        ctx.cpu_threads.dynamic_threads_disabled,
+        "host runtime disables dynamic OpenMP thread adjustment");
+    check(
+        ctx.cpu_threads.nested_parallelism_disabled,
+        "host runtime disables nested parallelism");
+    check(
+        ctx.cpu_threads.max_active_parallel_levels == 1,
+        "host runtime publishes a single active parallel level");
+#ifdef _OPENMP
+    check(omp_get_dynamic() == 0, "OpenMP dynamic teams are disabled");
+    check(omp_get_nested() == 0, "OpenMP nested teams are disabled");
+#if _OPENMP >= 200805
+    check(omp_get_max_active_levels() == 1, "OpenMP active parallel level is one");
+#endif
+#endif
 }
 
 void configure_host_runtime_writes_gpu_context_fields() {
