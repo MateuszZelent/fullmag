@@ -93,7 +93,7 @@ def validate_thresholds(value: Mapping[str, Any]) -> None:
         == "fdm_cpu_reference_double_heun_full_fixture_v1",
         "threshold qualification scope mismatch",
     )
-    integer(value.get("minimum_repetitions"), "minimum_repetitions", minimum=5)
+    integer(value.get("minimum_repetitions"), "minimum_repetitions", minimum=20)
     fields = {
         "timing": ("median_ratio_max", "p95_ratio_max"),
         "allocations": ("count_ratio_max", "bytes_ratio_max"),
@@ -263,6 +263,10 @@ def result_values(group: EvidenceGroup, key: tuple[str, str], field: str) -> lis
 
 
 def assert_cross_group_parity(baseline: EvidenceGroup, candidate: EvidenceGroup) -> None:
+    require(
+        len(baseline.documents) == len(candidate.documents),
+        "baseline and candidate must use the same repetition count",
+    )
     require(baseline.commit != candidate.commit, "candidate commit must differ from baseline commit")
     require(baseline.snapshot != candidate.snapshot, "candidate snapshot must differ from baseline snapshot")
     require(baseline.hardware_fingerprint == candidate.hardware_fingerprint and baseline.hardware == candidate.hardware, "hardware differs from baseline")
@@ -363,7 +367,7 @@ def run(argv: Sequence[str] | None = None) -> int:
         require(threshold_path.is_relative_to(repo_root), "threshold policy must be below repository")
         thresholds = load_object(threshold_path, "threshold policy")
         validate_thresholds(thresholds)
-        minimum = integer(thresholds["minimum_repetitions"], "minimum_repetitions", minimum=5)
+        minimum = integer(thresholds["minimum_repetitions"], "minimum_repetitions", minimum=20)
         baseline_paths = [external(path, repo_root, "baseline summary") for path in arguments.baseline_summary]
         candidate_paths = [external(path, repo_root, "candidate summary") for path in arguments.candidate_summary]
         output = external(arguments.output, repo_root, "output")

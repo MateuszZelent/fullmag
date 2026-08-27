@@ -2,7 +2,7 @@
   "schema_version": "fullmag.fdm.cpu.production_thresholds.v1",
   "policy_status": "approved",
   "qualification_scope": "fdm_cpu_reference_double_heun_full_fixture_v1",
-  "minimum_repetitions": 5,
+  "minimum_repetitions": 20,
   "timing": { "median_ratio_max": 1.15, "p95_ratio_max": 1.25 },
   "allocations": { "count_ratio_max": 1.02, "bytes_ratio_max": 1.05 },
   "peak_live_heap": {
