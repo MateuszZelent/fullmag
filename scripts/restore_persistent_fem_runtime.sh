@@ -3,11 +3,14 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${REPO_ROOT}/scripts/lib/managed_fem_runtime_storage.sh"
-: "${FULLMAG_BUILD_ROOT:=/zfn2/mateuszz/git/fullmag}"
+source "${REPO_ROOT}/scripts/lib/managed_fem_native_storage.sh"
+resolve_managed_fem_native_storage
+readonly FULLMAG_NATIVE_BUILD_STORAGE_ROOT
+readonly FULLMAG_NATIVE_BUILD_IMAGE
+readonly FULLMAG_NATIVE_MOUNT_VIEW
+: "${FULLMAG_BUILD_ROOT:=${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}}"
 archive="${FULLMAG_BUILD_ROOT}/runtimes/fem-gpu-host-latest.tar"
 runtime_parent="${REPO_ROOT}/.fullmag/runtimes"
-readonly FULLMAG_NATIVE_BUILD_IMAGE="/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4"
-readonly FULLMAG_NATIVE_MOUNT_VIEW="/mnt/fullmag-zfn2-native"
 worktree_slug="$(basename "${REPO_ROOT}" | sed 's/[^A-Za-z0-9._-]/-/g')"
 worktree_digest="$(printf '%s' "${REPO_ROOT}" | sha256sum | cut -c1-64)"
 : "${FULLMAG_RUNTIME_VARIANTS_ROOT:=${FULLMAG_NATIVE_MOUNT_VIEW}/managed-fem-runtime/${worktree_slug}-${worktree_digest}/runtime-variants}"

@@ -451,6 +451,7 @@ pub(crate) fn initial_step_update(
             hysteresis_settle_step_kind: None,
             hysteresis_settle_step_method: None,
             scalar_row_due: false,
+            terminal_field_snapshot: false,
             finished: false,
         },
         BackendPlanIR::FdmMultilayer(fdm) => fullmag_runner::StepUpdate {
@@ -471,6 +472,7 @@ pub(crate) fn initial_step_update(
             hysteresis_settle_step_kind: None,
             hysteresis_settle_step_method: None,
             scalar_row_due: false,
+            terminal_field_snapshot: false,
             finished: false,
         },
         BackendPlanIR::Fem(fem) => fullmag_runner::StepUpdate {
@@ -487,6 +489,7 @@ pub(crate) fn initial_step_update(
             hysteresis_settle_step_kind: None,
             hysteresis_settle_step_method: None,
             scalar_row_due: false,
+            terminal_field_snapshot: false,
             finished: false,
         },
         BackendPlanIR::FemEigen(fem) => fullmag_runner::StepUpdate {
@@ -503,6 +506,7 @@ pub(crate) fn initial_step_update(
             hysteresis_settle_step_kind: None,
             hysteresis_settle_step_method: None,
             scalar_row_due: false,
+            terminal_field_snapshot: false,
             finished: false,
         },
         BackendPlanIR::FemFrequencyResponse(fem) => {
@@ -522,6 +526,7 @@ pub(crate) fn initial_step_update(
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
                 scalar_row_due: false,
+                terminal_field_snapshot: false,
                 finished: false,
             }
         }
@@ -606,6 +611,7 @@ pub(crate) fn final_stage_step_update(
             hysteresis_settle_step_kind: None,
             hysteresis_settle_step_method: None,
             scalar_row_due: true,
+            terminal_field_snapshot: false,
             finished,
         },
         BackendPlanIR::FdmMultilayer(fdm) => fullmag_runner::StepUpdate {
@@ -626,6 +632,7 @@ pub(crate) fn final_stage_step_update(
             hysteresis_settle_step_kind: None,
             hysteresis_settle_step_method: None,
             scalar_row_due: true,
+            terminal_field_snapshot: false,
             finished,
         },
         BackendPlanIR::Fem(fem) => fullmag_runner::StepUpdate {
@@ -642,6 +649,7 @@ pub(crate) fn final_stage_step_update(
             hysteresis_settle_step_kind: None,
             hysteresis_settle_step_method: None,
             scalar_row_due: true,
+            terminal_field_snapshot: false,
             finished,
         },
         BackendPlanIR::FemEigen(fem) => fullmag_runner::StepUpdate {
@@ -658,6 +666,7 @@ pub(crate) fn final_stage_step_update(
             hysteresis_settle_step_kind: None,
             hysteresis_settle_step_method: None,
             scalar_row_due: true,
+            terminal_field_snapshot: false,
             finished,
         },
         BackendPlanIR::FemFrequencyResponse(fem) => fullmag_runner::StepUpdate {
@@ -674,6 +683,7 @@ pub(crate) fn final_stage_step_update(
             hysteresis_settle_step_kind: None,
             hysteresis_settle_step_method: None,
             scalar_row_due: true,
+            terminal_field_snapshot: false,
             finished,
         },
     })
@@ -701,6 +711,7 @@ pub(crate) fn snapshot_step_update_from_stats(
             hysteresis_settle_step_kind: None,
             hysteresis_settle_step_method: None,
             scalar_row_due: true,
+            terminal_field_snapshot: false,
             finished,
         },
         BackendPlanIR::FdmMultilayer(fdm) => fullmag_runner::StepUpdate {
@@ -721,6 +732,7 @@ pub(crate) fn snapshot_step_update_from_stats(
             hysteresis_settle_step_kind: None,
             hysteresis_settle_step_method: None,
             scalar_row_due: true,
+            terminal_field_snapshot: false,
             finished,
         },
         BackendPlanIR::Fem(fem) => fullmag_runner::StepUpdate {
@@ -737,6 +749,7 @@ pub(crate) fn snapshot_step_update_from_stats(
             hysteresis_settle_step_kind: None,
             hysteresis_settle_step_method: None,
             scalar_row_due: true,
+            terminal_field_snapshot: false,
             finished,
         },
         BackendPlanIR::FemEigen(fem) => fullmag_runner::StepUpdate {
@@ -753,6 +766,7 @@ pub(crate) fn snapshot_step_update_from_stats(
             hysteresis_settle_step_kind: None,
             hysteresis_settle_step_method: None,
             scalar_row_due: true,
+            terminal_field_snapshot: false,
             finished,
         },
         BackendPlanIR::FemFrequencyResponse(fem) => fullmag_runner::StepUpdate {
@@ -769,6 +783,7 @@ pub(crate) fn snapshot_step_update_from_stats(
             hysteresis_settle_step_kind: None,
             hysteresis_settle_step_method: None,
             scalar_row_due: true,
+            terminal_field_snapshot: false,
             finished,
         },
     }

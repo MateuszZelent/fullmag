@@ -929,6 +929,7 @@ fn execute_cuda_assisted_multilayer_double(
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
                 scalar_row_due: false,
+                terminal_field_snapshot: false,
                 finished: false,
             });
             match action {
@@ -1189,6 +1190,7 @@ fn execute_cuda_assisted_multilayer_single(
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
                 scalar_row_due: false,
+                terminal_field_snapshot: false,
                 finished: false,
             });
             match action {
@@ -1463,6 +1465,7 @@ fn execute_native_device_resident_cuda_multilayer(
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
                 scalar_row_due: false,
+                terminal_field_snapshot: false,
                 finished: false,
             }) {
                 StepAction::Continue => {}
@@ -2309,6 +2312,7 @@ fn execute_native_stacked_cuda_multilayer(
                     hysteresis_settle_step_kind: None,
                     hysteresis_settle_step_method: None,
                     scalar_row_due: false,
+                    terminal_field_snapshot: false,
                     finished: false,
                 });
                 match action {
@@ -2336,6 +2340,7 @@ fn execute_native_stacked_cuda_multilayer(
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
                 scalar_row_due: false,
+                terminal_field_snapshot: false,
                 finished: false,
             });
             match action {

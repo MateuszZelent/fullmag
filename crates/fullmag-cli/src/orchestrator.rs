@@ -1619,6 +1619,7 @@ fn apply_live_step_update_to_workspace_state(
         hysteresis_settle_step_kind: update.hysteresis_settle_step_kind.clone(),
         hysteresis_settle_step_method: update.hysteresis_settle_step_method.clone(),
         scalar_row_due: update.scalar_row_due,
+        terminal_field_snapshot: update.terminal_field_snapshot,
         finished: update.finished,
     };
     state.live_state = live_state_manifest_from_update(update);
@@ -9145,6 +9146,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     hysteresis_settle_step_kind: None,
                     hysteresis_settle_step_method: None,
                     scalar_row_due: true,
+                    terminal_field_snapshot: false,
                     finished: is_final_step && is_session_final_stage,
                 };
                 if live_cadence.should_publish(&update) {
@@ -10773,6 +10775,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         hysteresis_settle_step_kind: None,
                         hysteresis_settle_step_method: None,
                         scalar_row_due: true,
+                        terminal_field_snapshot: false,
                         finished: false,
                     };
                     if live_cadence.should_publish(&update) {
@@ -11754,6 +11757,7 @@ mod tests {
             hysteresis_settle_step_kind: None,
             hysteresis_settle_step_method: None,
             scalar_row_due: false,
+            terminal_field_snapshot: false,
             finished: false,
         }
     }
@@ -13044,6 +13048,7 @@ mod tests {
             hysteresis_settle_step_kind: None,
             hysteresis_settle_step_method: None,
             scalar_row_due: false,
+            terminal_field_snapshot: false,
             finished: false,
         };
 
@@ -13802,6 +13807,7 @@ mod tests {
         e_total.vector_field_values = vec![11.0];
         terminal.stats.time = 2.5e-12;
         terminal.cached_preview_fields = Some(vec![eden_demag, eden_total, mat_ms, e_total]);
+        terminal.terminal_field_snapshot = true;
 
         let _ = apply_live_step_update_to_workspace_state(
             &mut state,
@@ -13843,6 +13849,70 @@ mod tests {
     }
 
     #[test]
+    fn async_materialized_field_batches_merge_without_terminal_replacement() {
+        let mut state = test_workspace_state();
+        state.latest_fields.insert(
+            "m".to_string(),
+            serde_json::json!({
+                "quantity": "m",
+                "values": [[1.0, 0.0, 0.0]],
+                "layout": { "grid_cells": [1, 1, 1], "spatial_kind": "mesh" }
+            }),
+        );
+
+        let mut first = test_step_update(12);
+        let mut h_demag = test_preview_field("H_demag", 12, 2.0);
+        h_demag.quantity_domain = "magnetic_only".to_string();
+        h_demag.materialized_at_unix_ms = 17;
+        first.cached_preview_fields = Some(vec![h_demag]);
+        let _ = apply_live_step_update_to_workspace_state(
+            &mut state,
+            "run-test",
+            "session-test",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            first,
+            true,
+        );
+
+        assert!(state.latest_fields.0.contains_key("m"));
+        assert!(state
+            .pending_preview_fields
+            .to_vec()
+            .iter()
+            .any(|field| field.quantity == "H_demag"));
+        assert!(!state.replace_latest_fields);
+        assert!(state.field_generation.is_none());
+        assert!(!state.clear_preview_cache);
+
+        let mut second = test_step_update(12);
+        let mut h_ex = test_preview_field("H_ex", 13, 3.0);
+        h_ex.quantity_domain = "magnetic_only".to_string();
+        h_ex.materialized_at_unix_ms = 18;
+        second.cached_preview_fields = Some(vec![h_ex]);
+        let _ = apply_live_step_update_to_workspace_state(
+            &mut state,
+            "run-test",
+            "session-test",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            second,
+            true,
+        );
+
+        assert!(state.latest_fields.0.contains_key("m"));
+        let pending_quantities = state
+            .pending_preview_fields
+            .to_vec()
+            .into_iter()
+            .map(|field| field.quantity)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(pending_quantities.contains("H_demag"));
+        assert!(pending_quantities.contains("H_ex"));
+        assert!(!state.replace_latest_fields);
+        assert!(state.field_generation.is_none());
+        assert!(!state.clear_preview_cache);
+    }
+
+    #[test]
     fn interactive_terminal_field_snapshot_does_not_promote_an_ambiguous_scalar_plane() {
         let mut state = test_workspace_state();
         let mut terminal = test_step_update(12);
@@ -13857,6 +13927,7 @@ mod tests {
         eden_demag.vector_field_values = vec![3.0, 4.0];
         eden_demag.materialized_at_unix_ms = 17;
         terminal.cached_preview_fields = Some(vec![eden_demag]);
+        terminal.terminal_field_snapshot = true;
 
         let _ = apply_live_step_update_to_workspace_state(
             &mut state,

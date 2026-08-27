@@ -45,6 +45,7 @@ CANONICAL_NATIVE_MOUNT = Path("/mnt/fullmag-zfn2-native")
 CANONICAL_NATIVE_BACKING_IMAGE = Path(
     "/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4"
 )
+LOCAL_D_NATIVE_BACKING_IMAGE = Path("/mnt/d/git/fullmag/fullmag-native.ext4")
 MANAGED_STORAGE_HELPER = REPO_ROOT / "scripts/lib/managed_fem_runtime_storage.sh"
 TOPOLOGY_FINGERPRINT = re.compile(r"sha256:[0-9a-f]{64}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -58,6 +59,18 @@ REQUIRED_NATIVE_LIBRARIES = ("fullmag_fem", "mfem", "hypre", "libceed")
 
 class ExecutionError(RuntimeError):
     """Raised when the mixed SP4 matrix cannot complete exactly as planned."""
+
+
+def _native_backing_image() -> Path:
+    profile = os.environ.get("FULLMAG_NATIVE_STORAGE_PROFILE", "canonical")
+    if profile == "canonical":
+        return CANONICAL_NATIVE_BACKING_IMAGE
+    if profile == "local-d":
+        return LOCAL_D_NATIVE_BACKING_IMAGE
+    raise ExecutionError(
+        "unsupported FULLMAG_NATIVE_STORAGE_PROFILE: "
+        f"{profile} (expected canonical or local-d)"
+    )
 
 
 Launch = Callable[
@@ -154,10 +167,13 @@ def _validate_durable_storage(
     durable_root: Path,
     *,
     mount_view: Path = CANONICAL_NATIVE_MOUNT,
-    expected_backing_image: Path = CANONICAL_NATIVE_BACKING_IMAGE,
+    expected_backing_image: Path | None = None,
     loop_sysfs_root: Path = Path("/sys/block"),
 ) -> None:
     """Require the canonical loop-backed ext4 storage contract."""
+
+    if expected_backing_image is None:
+        expected_backing_image = _native_backing_image()
 
     try:
         durable_root.relative_to(mount_view)

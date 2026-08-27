@@ -215,6 +215,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 preview_field,
                 cached_preview_fields,
                 scalar_row_due: preview_due && display_is_global_scalar(&display_state),
+                terminal_field_snapshot: false,
                 finished: false,
             });
             if preview_due {
@@ -518,6 +519,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 preview_field,
                 cached_preview_fields,
                 scalar_row_due: preview_due && display_is_global_scalar(&display_state),
+                terminal_field_snapshot: false,
                 finished: false,
             });
             if preview_due {

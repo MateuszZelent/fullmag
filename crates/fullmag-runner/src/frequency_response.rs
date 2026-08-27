@@ -498,6 +498,7 @@ fn dense_frequency_response_progress_update(
         hysteresis_settle_step_kind: None,
         hysteresis_settle_step_method: None,
         scalar_row_due: true,
+        terminal_field_snapshot: false,
         finished: false,
     }
 }
@@ -594,6 +595,7 @@ fn native_frequency_response_progress_update(
         hysteresis_settle_step_kind: None,
         hysteresis_settle_step_method: None,
         scalar_row_due: true,
+        terminal_field_snapshot: false,
         finished: false,
     }
 }

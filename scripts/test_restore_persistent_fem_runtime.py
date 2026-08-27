@@ -12,6 +12,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RESTORE_SCRIPT = REPO_ROOT / "scripts/restore_persistent_fem_runtime.sh"
 STORAGE_HELPER = REPO_ROOT / "scripts/lib/managed_fem_runtime_storage.sh"
+NATIVE_STORAGE_HELPER = REPO_ROOT / "scripts/lib/managed_fem_native_storage.sh"
 CANONICAL_IMAGE = "/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4"
 
 
@@ -108,6 +109,7 @@ def test_restore_rejects_invalid_mount_metadata_before_extraction(
     shutil.copy2(RESTORE_SCRIPT, scripts / RESTORE_SCRIPT.name)
     (scripts / "lib").mkdir()
     shutil.copy2(STORAGE_HELPER, scripts / "lib" / STORAGE_HELPER.name)
+    shutil.copy2(NATIVE_STORAGE_HELPER, scripts / "lib" / NATIVE_STORAGE_HELPER.name)
     _write_fake_validator(scripts / "validate_managed_fem_runtime_bundle.py")
 
     bundle = tmp_path / "bundle"
@@ -153,6 +155,7 @@ def test_restore_rejects_wrong_loop_backing_image_before_extraction(
     shutil.copy2(RESTORE_SCRIPT, scripts / RESTORE_SCRIPT.name)
     (scripts / "lib").mkdir()
     shutil.copy2(STORAGE_HELPER, scripts / "lib" / STORAGE_HELPER.name)
+    shutil.copy2(NATIVE_STORAGE_HELPER, scripts / "lib" / NATIVE_STORAGE_HELPER.name)
     _write_fake_validator(scripts / "validate_managed_fem_runtime_bundle.py")
     bundle = tmp_path / "bundle"
     bundle.mkdir()
@@ -184,6 +187,51 @@ def test_restore_rejects_wrong_loop_backing_image_before_extraction(
     assert not variants_root.exists()
 
 
+def test_restore_local_d_profile_uses_local_backing_image(tmp_path: Path) -> None:
+    fake_repo = tmp_path / "repo"
+    scripts = fake_repo / "scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy2(RESTORE_SCRIPT, scripts / RESTORE_SCRIPT.name)
+    (scripts / "lib").mkdir()
+    shutil.copy2(STORAGE_HELPER, scripts / "lib" / STORAGE_HELPER.name)
+    shutil.copy2(NATIVE_STORAGE_HELPER, scripts / "lib" / NATIVE_STORAGE_HELPER.name)
+    _write_fake_validator(scripts / "validate_managed_fem_runtime_bundle.py")
+
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "manifest.json").write_text(
+        json.dumps({"variant": "local-test"}), encoding="utf-8"
+    )
+    build_root = tmp_path / "persistent"
+    _write_latest_archive(build_root, bundle)
+    variants_root = tmp_path / "local-d/variants"
+    env = {
+        **os.environ,
+        "FULLMAG_NATIVE_STORAGE_PROFILE": "local-d",
+        "FULLMAG_BUILD_ROOT": str(build_root),
+        "FULLMAG_RUNTIME_VARIANTS_ROOT": str(variants_root),
+    }
+    _inject_mount_metadata(
+        tmp_path,
+        env,
+        backing_image="/mnt/d/git/fullmag/fullmag-native.ext4",
+    )
+
+    result = subprocess.run(
+        ["bash", str(scripts / RESTORE_SCRIPT.name)],
+        cwd=fake_repo,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    variants_alias = fake_repo / ".fullmag/runtimes/fem-gpu-variants"
+    assert variants_alias.is_symlink()
+    assert variants_alias.resolve() == variants_root.resolve()
+
+
 def test_restore_repairs_corrupt_same_name_variant_from_latest_archive(
     tmp_path: Path,
 ) -> None:
@@ -193,6 +241,7 @@ def test_restore_repairs_corrupt_same_name_variant_from_latest_archive(
     shutil.copy2(RESTORE_SCRIPT, scripts / RESTORE_SCRIPT.name)
     (scripts / "lib").mkdir()
     shutil.copy2(STORAGE_HELPER, scripts / "lib" / STORAGE_HELPER.name)
+    shutil.copy2(NATIVE_STORAGE_HELPER, scripts / "lib" / NATIVE_STORAGE_HELPER.name)
     _write_fake_validator(scripts / "validate_managed_fem_runtime_bundle.py")
 
     bundle = tmp_path / "bundle"

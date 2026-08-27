@@ -2209,6 +2209,7 @@ impl CpuInteractiveFdmPreviewRuntime {
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
                 scalar_row_due: preview_due && display_is_global_scalar(&display_state),
+                terminal_field_snapshot: false,
                 finished: false,
             });
             if preview_due {
@@ -2309,6 +2310,7 @@ impl CpuInteractiveFdmPreviewRuntime {
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
                 scalar_row_due,
+                terminal_field_snapshot: false,
                 finished: false,
             });
             if preview_due {
@@ -2543,6 +2545,7 @@ impl CpuInteractiveFdmPreviewRuntime {
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
                 scalar_row_due: preview_due && display_is_global_scalar(&display_state),
+                terminal_field_snapshot: false,
                 finished: false,
             });
             if preview_due {
@@ -2656,6 +2659,7 @@ impl CpuInteractiveFdmPreviewRuntime {
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
                 scalar_row_due,
+                terminal_field_snapshot: false,
                 finished: false,
             });
             if preview_due {
@@ -2965,6 +2969,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
                 scalar_row_due: preview_due && display_is_global_scalar(&display_state),
+                terminal_field_snapshot: false,
                 finished: false,
             });
             if preview_due {
@@ -3062,6 +3067,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
                 scalar_row_due,
+                terminal_field_snapshot: false,
                 finished: false,
             });
             if preview_due {
@@ -3351,6 +3357,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
                 scalar_row_due: preview_due && display_is_global_scalar(&display_state),
+                terminal_field_snapshot: false,
                 finished: false,
             });
             if preview_due {
@@ -3459,6 +3466,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
                 scalar_row_due,
+                terminal_field_snapshot: false,
                 finished: false,
             });
             if preview_due {
@@ -3748,6 +3756,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
                 scalar_row_due: preview_due && display_is_global_scalar(&display_state),
+                terminal_field_snapshot: false,
                 finished: false,
             });
             if preview_due {
@@ -3874,6 +3883,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
                 scalar_row_due,
+                terminal_field_snapshot: false,
                 finished: false,
             });
             if preview_due {
@@ -4073,6 +4083,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
                 scalar_row_due: preview_due && display_is_global_scalar(&display_state),
+                terminal_field_snapshot: false,
                 finished: false,
             });
             if preview_due {
@@ -4222,6 +4233,7 @@ impl CpuInteractiveFemPreviewRuntime {
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
                 scalar_row_due,
+                terminal_field_snapshot: false,
                 finished: false,
             });
             if preview_due {
@@ -4485,6 +4497,7 @@ impl GpuInteractiveFemPreviewRuntime {
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
                 scalar_row_due: preview_due && display_is_global_scalar(&display_state),
+                terminal_field_snapshot: false,
                 finished: false,
             });
             if preview_due {
@@ -4574,6 +4587,7 @@ impl GpuInteractiveFemPreviewRuntime {
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
                 scalar_row_due,
+                terminal_field_snapshot: false,
                 finished: false,
             });
             if preview_due {
@@ -4749,6 +4763,7 @@ impl GpuInteractiveFemPreviewRuntime {
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
                 scalar_row_due: preview_due && display_is_global_scalar(&display_state),
+                terminal_field_snapshot: false,
                 finished: false,
             });
             if preview_due {
@@ -4820,6 +4835,7 @@ impl GpuInteractiveFemPreviewRuntime {
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
                 scalar_row_due,
+                terminal_field_snapshot: false,
                 finished: false,
             });
             if preview_due {

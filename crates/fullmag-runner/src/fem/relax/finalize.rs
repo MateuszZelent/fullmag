@@ -271,6 +271,7 @@ pub(crate) fn finalize_native_fem_relaxation(
                 hysteresis_settle_step_kind: None,
                 hysteresis_settle_step_method: None,
                 scalar_row_due: false,
+                terminal_field_snapshot: true,
                 finished: false,
             });
         }
