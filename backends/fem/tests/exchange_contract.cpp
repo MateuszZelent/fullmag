@@ -25,6 +25,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -988,6 +989,71 @@ void exchange_public_apply_fails_closed_after_mesh_mutation()
     fullmag::fem::context_destroy_mfem(ctx);
 }
 
+void failed_exchange_setup_does_not_publish_partial_state()
+{
+    mfem::Mesh mesh = single_exchange_cell(mfem::Geometry::TETRAHEDRON);
+    mfem::H1_FECollection fec(1, 3);
+    mfem::FiniteElementSpace fes(&mesh, &fec);
+    mfem::ConstantCoefficient a_coeff(1.7);
+    mfem::ConstantCoefficient ms_coeff(4.0);
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = static_cast<uint32_t>(fes.GetNDofs());
+    initialize_production_exchange(ctx, mesh, fes, a_coeff, ms_coeff, {1u});
+
+    const auto old_key = ctx.exchange.mfem.operator_lifecycle.active_key;
+    const auto old_setup_count = ctx.exchange.mfem.operator_lifecycle.setup_count;
+    auto *const old_exchange_form = ctx.exchange.mfem.exchange_form;
+    auto *const old_mass_form = ctx.exchange.mfem.mass_form;
+    const auto old_weights = ctx.integration_weights.mfem_lumped_mass;
+    const auto old_node_volumes = ctx.mesh.node_volumes;
+    const auto old_legacy_ready =
+        ctx.gpu_state.legacy_exchange.legacy_sparse_metadata_ready;
+    const auto old_legacy_rows = ctx.gpu_state.legacy_exchange.legacy_sparse_rows;
+    const auto old_legacy_cols = ctx.gpu_state.legacy_exchange.legacy_sparse_cols;
+    const auto old_legacy_nnz = ctx.gpu_state.legacy_exchange.legacy_sparse_nnz;
+    const auto old_lumped_ready = ctx.gpu_state.legacy_exchange.lumped_mass_ready;
+
+    // The malformed periodic map fails after assembly and mass preparation,
+    // which exercises the setup transaction's deferred Context publication.
+    ctx.mesh.periodic_reduced_node_count = 3u;
+    ctx.mesh.periodic_reduced_node.assign(static_cast<size_t>(fes.GetNDofs()), 0u);
+    ctx.mesh.periodic_reduced_node[0] = 3u;
+    bool threw = false;
+    try {
+        std::string error;
+        (void)fullmag::fem::initialize_exchange_operator_mfem(
+            ctx, mesh, fes, a_coeff, ms_coeff, error);
+    } catch (const std::exception &) {
+        threw = true;
+    }
+    check(threw, "malformed periodic exchange setup must fail closed");
+    check(
+        ctx.exchange.mfem.exchange_form == old_exchange_form &&
+            ctx.exchange.mfem.mass_form == old_mass_form &&
+            ctx.exchange.mfem.operator_lifecycle.active_key == old_key &&
+            ctx.exchange.mfem.operator_lifecycle.setup_count == old_setup_count &&
+            ctx.exchange.mfem.operator_lifecycle.setup_complete,
+        "failed exchange setup must retain the previously published operator receipt");
+    check(
+        ctx.integration_weights.mfem_lumped_mass == old_weights &&
+            ctx.mesh.node_volumes == old_node_volumes,
+        "failed exchange setup must not publish partial mass weights");
+    check(
+        ctx.gpu_state.legacy_exchange.legacy_sparse_metadata_ready == old_legacy_ready &&
+            ctx.gpu_state.legacy_exchange.legacy_sparse_rows == old_legacy_rows &&
+            ctx.gpu_state.legacy_exchange.legacy_sparse_cols == old_legacy_cols &&
+            ctx.gpu_state.legacy_exchange.legacy_sparse_nnz == old_legacy_nnz &&
+            ctx.gpu_state.legacy_exchange.lumped_mass_ready == old_lumped_ready,
+        "failed exchange setup must not publish partial GPU exchange metadata");
+    check(
+        ctx.exchange.mfem.operator_lifecycle.failed_setup_count == 1u,
+        "failed exchange setup must increment only the failed-setup receipt counter");
+
+    ctx.mesh.periodic_reduced_node_count = 0u;
+    ctx.mesh.periodic_reduced_node.clear();
+    fullmag::fem::context_destroy_mfem(ctx);
+}
+
 void production_exchange_supports_each_mixed_p1_cell_family()
 {
     constexpr double a_value = 1.7;
@@ -1891,6 +1957,7 @@ int main() {
 #if FULLMAG_HAS_MFEM_STACK
     periodic_consistent_mass_projection_reuses_reduced_workspace();
     exchange_public_apply_fails_closed_after_mesh_mutation();
+    failed_exchange_setup_does_not_publish_partial_state();
     production_exchange_supports_each_mixed_p1_cell_family();
     production_exchange_masks_air_in_conforming_mixed_domain();
 #if FULLMAG_HAS_CUDA_RUNTIME

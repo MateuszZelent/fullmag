@@ -22,6 +22,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace fullmag::fem {
@@ -292,6 +293,14 @@ bool initialize_exchange_operator_mfem(
     std::unique_ptr<mfem::Vector> periodic_mass_rhs;
     std::unique_ptr<mfem::Vector> periodic_mass_solution;
     std::unique_ptr<mfem::Vector> periodic_mass_residual;
+    std::vector<double> integration_weights;
+    std::vector<double> node_volumes;
+    uint64_t legacy_sparse_rows = 0;
+    uint64_t legacy_sparse_cols = 0;
+    uint64_t legacy_sparse_nnz = 0;
+    bool legacy_sparse_metadata_ready = false;
+    // Keep Context publication deferred until every potentially-throwing
+    // assembly, mass validation, and periodic reduction step has succeeded.
     mass_ones->UseDevice(use_device);
     mass_lumped->UseDevice(use_device);
     inv_lumped_mass->UseDevice(use_device);
@@ -376,12 +385,12 @@ bool initialize_exchange_operator_mfem(
         return false;
     }
     std::copy(exchange_values.begin(), exchange_values.end(), exchange_values_raw);
-    ctx.gpu_state.legacy_exchange.legacy_sparse_metadata_ready = true;
-    ctx.gpu_state.legacy_exchange.legacy_sparse_rows =
+    legacy_sparse_metadata_ready = true;
+    legacy_sparse_rows =
         static_cast<uint64_t>(std::max(0, exchange_spmat.Height()));
-    ctx.gpu_state.legacy_exchange.legacy_sparse_cols =
+    legacy_sparse_cols =
         static_cast<uint64_t>(std::max(0, exchange_spmat.Width()));
-    ctx.gpu_state.legacy_exchange.legacy_sparse_nnz =
+    legacy_sparse_nnz =
         static_cast<uint64_t>(std::max(0, exchange_spmat.NumNonZeroElems()));
 
     mass_form->SetAssemblyLevel(mfem::AssemblyLevel::LEGACY);
@@ -401,24 +410,22 @@ bool initialize_exchange_operator_mfem(
         *mass_ones,
         *mass_lumped,
         *inv_lumped_mass,
-        ctx.integration_weights.mfem_lumped_mass,
+        integration_weights,
         use_device);
-    if (ctx.integration_weights.mfem_lumped_mass.size() !=
+    if (integration_weights.size() !=
             static_cast<size_t>(fes.GetNDofs()) ||
         std::any_of(
-            ctx.integration_weights.mfem_lumped_mass.begin(),
-            ctx.integration_weights.mfem_lumped_mass.end(),
+            integration_weights.begin(),
+            integration_weights.end(),
             [](double value) { return !std::isfinite(value) || value < 0.0; })) {
         error = "assembled MFEM magnetic volume mass row sums are invalid";
         return false;
     }
-    ctx.mesh.node_volumes = ctx.integration_weights.mfem_lumped_mass;
-    ctx.gpu_state.legacy_exchange.lumped_mass_ready =
-        ctx.integration_weights.mfem_lumped_mass.size() == static_cast<size_t>(fes.GetNDofs());
+    node_volumes = integration_weights;
 
     const bool has_nonzero_lumped_mass = std::any_of(
-        ctx.integration_weights.mfem_lumped_mass.begin(),
-        ctx.integration_weights.mfem_lumped_mass.end(),
+        integration_weights.begin(),
+        integration_weights.end(),
         [](double value) { return value > 0.0; });
     if (!has_nonzero_lumped_mass) {
         error = "FEM validation: MFEM magnetic volume mass is zero on every "
@@ -469,6 +476,7 @@ bool initialize_exchange_operator_mfem(
         }
     }
 
+    const auto active_key = make_exchange_operator_dependency_key(ctx, mesh, use_device);
     ctx.exchange.mfem.exchange_form = exchange_form.release();
     ctx.exchange.mfem.mass_form = mass_form.release();
     ctx.exchange.mfem.mass_ones = mass_ones.release();
@@ -487,8 +495,15 @@ bool initialize_exchange_operator_mfem(
     ctx.exchange.mfem.periodic_mass_residual = periodic_mass_residual.release();
     ctx.exchange.mfem.periodic_mass_setup_count =
         ctx.exchange.mfem.periodic_mass_matrix != nullptr ? 1u : 0u;
-    ctx.exchange.mfem.operator_lifecycle.active_key =
-        make_exchange_operator_dependency_key(ctx, mesh, use_device);
+    ctx.integration_weights.mfem_lumped_mass = std::move(integration_weights);
+    ctx.mesh.node_volumes = std::move(node_volumes);
+    ctx.gpu_state.legacy_exchange.legacy_sparse_metadata_ready =
+        legacy_sparse_metadata_ready;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_rows = legacy_sparse_rows;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_cols = legacy_sparse_cols;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_nnz = legacy_sparse_nnz;
+    ctx.gpu_state.legacy_exchange.lumped_mass_ready = true;
+    ctx.exchange.mfem.operator_lifecycle.active_key = active_key;
     ctx.exchange.mfem.operator_lifecycle.setup_count += 1u;
     ctx.exchange.mfem.operator_lifecycle.setup_complete = true;
     setup_attempt.commit();
