@@ -257,7 +257,33 @@ void nonperiodic_hypre_rejected_candidate_preserves_published_warm_start() {
         "non-periodic Hypre accepted-solution setup");
     check(solved != nullptr && fullmag::fem::demag_poisson_hypre_has_warm_start(ctx),
           "successful non-periodic Hypre solve publishes a warm start");
+    const int cold_iterations = ctx.poisson_demag.last_iterations;
+    check(cold_iterations > 0,
+          "non-periodic Hypre cold solve must exercise at least one iteration");
+    mfem::Vector accepted_solution(solved->Size());
+    accepted_solution = *solved;
     const uint64_t fresh_guess_count = ctx.poisson_demag.fresh_zero_guess_count;
+
+    solved = nullptr;
+    error.clear();
+    check_result(
+        fullmag::fem::solve_demag_poisson_hypre(
+            ctx,
+            rhs,
+            warm_start,
+            solved,
+            error),
+        error,
+        "non-periodic Hypre warm-start iteration qualification");
+    check(solved != nullptr && ctx.poisson_demag.last_iterations < cold_iterations,
+          "non-periodic Hypre warm start reduces iterations for an unchanged RHS");
+    mfem::Vector warm_start_difference(solved->Size());
+    warm_start_difference = *solved;
+    warm_start_difference -= accepted_solution;
+    check(
+        warm_start_difference.Norml2() <=
+            1.0e-12 * std::max(1.0, accepted_solution.Norml2()),
+        "non-periodic Hypre warm start preserves the qualified solution");
 
     ctx.demag.solver.max_iterations = 0;
     solved = reinterpret_cast<const mfem::Vector *>(0x1);
@@ -372,6 +398,11 @@ void periodic_demag_reuses_warm_start_and_resets_after_failure() {
     check(solved != nullptr, "periodic converged solve publishes a lifted solution");
     check(ctx.poisson_demag.fresh_zero_guess_count == 2u,
           "periodic solve after failure starts from a fresh zero guess");
+    const int cold_iterations = ctx.poisson_demag.last_iterations;
+    check(cold_iterations > 0,
+          "periodic cold solve must exercise at least one iteration");
+    mfem::Vector accepted_solution(solved->Size());
+    accepted_solution = *solved;
 
     solved = nullptr;
     error.clear();
@@ -382,6 +413,15 @@ void periodic_demag_reuses_warm_start_and_resets_after_failure() {
     check(solved != nullptr, "periodic warm-start solve publishes a lifted solution");
     check(ctx.poisson_demag.fresh_zero_guess_count == 2u,
           "periodic warm-start solve does not zero the previous solution");
+    check(ctx.poisson_demag.last_iterations < cold_iterations,
+          "periodic warm start reduces iterations for an unchanged RHS");
+    mfem::Vector warm_start_difference(solved->Size());
+    warm_start_difference = *solved;
+    warm_start_difference -= accepted_solution;
+    check(
+        warm_start_difference.Norml2() <=
+            1.0e-12 * std::max(1.0, accepted_solution.Norml2()),
+        "periodic warm start preserves the qualified solution");
 
     for (int i = 0; i < rhs.Size(); ++i) {
         rhs(i) = -rhs(i);
