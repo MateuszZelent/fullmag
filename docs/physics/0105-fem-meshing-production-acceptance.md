@@ -58,7 +58,7 @@ Dla sąsiadujących przez pełną ścianę komórek $K,L$ w tym samym grafie gro
 ```{math}
 :label: eq-fem-mesh-realized-growth
 
-\rho_{KL}=\frac{\max(h_K,h_L)}{\min(h_K,h_L)}.
+\rho_{KL}=\frac{\max(h_K^\mathrm{edge},h_L^\mathrm{edge})}{\min(h_K^\mathrm{edge},h_L^\mathrm{edge})}.
 ```
 
 Growth jest ograniczeniem sąsiedztwa, nie far-field maximum. Dla komórki
@@ -89,7 +89,10 @@ Każdy ujemny $\det J_K$ jest inwersją niezależnie od wartości progu.
 | $K,L$ | finalne komórki dzielące pełną ścianę | $1$ |
 | $h_K^\mathrm{strict}$ | strict-validation characteristic scale: maximum pairwise vertex distance | $\mathrm m$ |
 | $h_K^\mathrm{air}$ | regular-tetrahedron-equivalent size used by current airbox percentile diagnostics | $\mathrm m$ |
-| $h_K^\mathrm{edge},h_L^\mathrm{edge}$ | maximum canonical-edge sizes used by the adjacency growth metric | $\mathrm m$ |
+| $h_K^\mathrm{edge}$ | maximum canonical-edge size of cell K used by the adjacency growth metric | $\mathrm m$ |
+| $h_L^\mathrm{edge}$ | maximum canonical-edge size of cell L used by the adjacency growth metric | $\mathrm m$ |
+| $\max$ | algebraic maximum operator | $1$ |
+| $\min$ | algebraic minimum operator | $1$ |
 | $\rho_{KL}$ | zrealizowany stosunek rozmiarów sąsiadów | $1$ |
 | $J_K$ | mapa elementu referencyjnego do fizycznego | $\mathrm m$ |
 | $\boldsymbol\xi_q$ | normowany punkt kwadratury referencyjnej | $1$ |

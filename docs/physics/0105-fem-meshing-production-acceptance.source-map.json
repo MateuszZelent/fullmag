@@ -55,11 +55,12 @@
     {
       "id": "eq-fem-mesh-realized-growth",
       "symbols": [
-        "cell_k",
-        "cell_l",
-        "h_k",
-        "h_l",
-        "rho_kl"
+        "cells_kl",
+        "h_k_edge",
+        "h_l_edge",
+        "rho_kl",
+        "max_operator",
+        "min_operator"
       ],
       "sources": [
         "policy-adr"
@@ -71,7 +72,7 @@
         "jacobian",
         "xi_q",
         "tau_j",
-        "h_k",
+        "h_k_strict",
         "epsilon64"
       ],
       "sources": [
@@ -120,30 +121,6 @@
       "id": "radius",
       "latex": "R(\\mathbf x)",
       "meaning": "dodatni lokalny promień krzywizny",
-      "si_unit": "\\mathrm m"
-    },
-    {
-      "id": "cell_k",
-      "latex": "K,L",
-      "meaning": "finalne komórki dzielące pełną ścianę",
-      "si_unit": "1"
-    },
-    {
-      "id": "cell_l",
-      "latex": "K,L",
-      "meaning": "finalne komórki dzielące pełną ścianę",
-      "si_unit": "1"
-    },
-    {
-      "id": "h_k",
-      "latex": "h_K^\\mathrm{strict}",
-      "meaning": "strict-validation characteristic scale: maximum pairwise vertex distance",
-      "si_unit": "\\mathrm m"
-    },
-    {
-      "id": "h_l",
-      "latex": "h_K^\\mathrm{strict}",
-      "meaning": "strict-validation characteristic scale: maximum pairwise vertex distance",
       "si_unit": "\\mathrm m"
     },
     {
@@ -237,9 +214,39 @@
       "si_unit": "\\mathrm m"
     },
     {
-      "id": "h_edge",
-      "latex": "h_K^\\mathrm{edge},h_L^\\mathrm{edge}",
-      "meaning": "maximum canonical-edge sizes used by the adjacency growth metric",
+      "id": "cells_kl",
+      "latex": "K,L",
+      "meaning": "finalne komórki dzielące pełną ścianę",
+      "si_unit": "1"
+    },
+    {
+      "id": "h_k_edge",
+      "latex": "h_K^\\mathrm{edge}",
+      "meaning": "maximum canonical-edge size of cell K used by the adjacency growth metric",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "h_l_edge",
+      "latex": "h_L^\\mathrm{edge}",
+      "meaning": "maximum canonical-edge size of cell L used by the adjacency growth metric",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "max_operator",
+      "latex": "\\max",
+      "meaning": "algebraic maximum operator",
+      "si_unit": "1"
+    },
+    {
+      "id": "min_operator",
+      "latex": "\\min",
+      "meaning": "algebraic minimum operator",
+      "si_unit": "1"
+    },
+    {
+      "id": "h_k_strict",
+      "latex": "h_K^\\mathrm{strict}",
+      "meaning": "strict-validation characteristic scale: maximum pairwise vertex distance",
       "si_unit": "\\mathrm m"
     }
   ],

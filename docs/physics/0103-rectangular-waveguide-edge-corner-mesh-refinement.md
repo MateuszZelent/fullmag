@@ -105,7 +105,7 @@ study.stages.add_relax(stage_id="relax", algorithm="projected_gradient_bb", max_
 (edge-corner-problem-ir)=
 ## ProblemIR and provenance
 
-Requested intent zapisuje pięć wartości per geometry w
+Requested intent zapisuje sześć wartości per geometry w
 `runtime_metadata.mesh_workflow.per_geometry[]`. Resolved execution zapisuje
 rozpoznany typ geometrii, osie in-plane, wybrane encje, rozmiary i odległości.
 Tagi Gmsh są dowodem realizacji, nie kanonicznym zamiennikiem intencji.

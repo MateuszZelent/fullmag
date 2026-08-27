@@ -50,10 +50,13 @@
         "Aex",
         "gradient",
         "m",
-        "dV"
+        "dV",
+        "volume_integral_operator",
+        "norm_squared_operator"
       ],
       "sources": [
-        "quadrature-material"
+        "fem-exchange-assembly",
+        "fem-exchange-field"
       ]
     },
     {
@@ -64,10 +67,12 @@
         "Ms",
         "gradient",
         "Aex",
-        "m"
+        "m",
+        "divergence_operator"
       ],
       "sources": [
-        "quadrature-material"
+        "fem-exchange-assembly",
+        "fem-exchange-field"
       ]
     },
     {
@@ -81,7 +86,7 @@
         "Gamma"
       ],
       "sources": [
-        "quadrature-material"
+        "fem-exchange-assembly"
       ]
     },
     {
@@ -92,7 +97,9 @@
         "lower",
         "upper_member",
         "lower_member",
-        "h_target"
+        "h_target",
+        "max_operator",
+        "min_operator"
       ],
       "sources": [
         "policy-adr"
@@ -106,11 +113,12 @@
         "Gamma",
         "m_1",
         "m_2",
-        "dS"
+        "dS",
+        "surface_integral_operator",
+        "dot_operator"
       ],
       "sources": [
-        "coupling-api",
-        "coupling-ir"
+        "rkky-runtime-gap"
       ]
     },
     {
@@ -138,7 +146,8 @@
         "scale_ij"
       ],
       "sources": [
-        "coupling-ir"
+        "fdm-exchange-field",
+        "fdm-coupling-materialization"
       ]
     },
     {
@@ -154,10 +163,12 @@
         "S_ij",
         "d_ij",
         "m_i",
-        "m_j"
+        "m_j",
+        "sum_j_operator"
       ],
       "sources": [
-        "coupling-ir"
+        "fdm-exchange-field",
+        "fdm-coupling-materialization"
       ]
     },
     {
@@ -170,7 +181,8 @@
         "m"
       ],
       "sources": [
-        "quadrature-material"
+        "fem-exchange-assembly",
+        "fem-exchange-field"
       ]
     }
   ],
@@ -468,6 +480,54 @@
       "latex": "i",
       "meaning": "current-cell index",
       "si_unit": "1"
+    },
+    {
+      "id": "max_operator",
+      "latex": "\\max",
+      "meaning": "algebraic maximum operator",
+      "si_unit": "1"
+    },
+    {
+      "id": "min_operator",
+      "latex": "\\min",
+      "meaning": "algebraic minimum operator",
+      "si_unit": "1"
+    },
+    {
+      "id": "sum_j_operator",
+      "latex": "\\sum_j",
+      "meaning": "finite sum over neighbor index j",
+      "si_unit": "1"
+    },
+    {
+      "id": "dot_operator",
+      "latex": "\\cdot",
+      "meaning": "Euclidean dot-product operator",
+      "si_unit": "1"
+    },
+    {
+      "id": "norm_squared_operator",
+      "latex": "|\\cdot|^2",
+      "meaning": "squared Euclidean-norm operator",
+      "si_unit": "1"
+    },
+    {
+      "id": "divergence_operator",
+      "latex": "\\nabla\\!\\cdot",
+      "meaning": "divergence differential operator",
+      "si_unit": "\\mathrm{m^{-1}}"
+    },
+    {
+      "id": "volume_integral_operator",
+      "latex": "\\int_\\Omega(\\cdot)\\,\\mathrm dV",
+      "meaning": "volume-integration operator",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "surface_integral_operator",
+      "latex": "\\int_\\Gamma(\\cdot)\\,\\mathrm dS",
+      "meaning": "surface-integration operator",
+      "si_unit": "\\mathrm{m^2}"
     }
   ],
   "sources": [
@@ -554,6 +614,48 @@
       "symbol": "class ElementQuadratureMaterial",
       "responsibility": "Owns backend-neutral element/quadrature material access.",
       "evidence_status": "implemented_contract"
+    },
+    {
+      "id": "fem-exchange-assembly",
+      "path": "backends/fem/cpu/mfem/interactions/exchange_operator.cpp",
+      "symbol": "initialize_exchange_operator_mfem",
+      "responsibility": "Assemble the heterogeneous-A diffusion weak form and Ms-weighted mass form; this is executable evidence for the FEM exchange weak form and its natural interior flux continuity, not a general interface-coupling operator.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fem-exchange-field",
+      "path": "backends/fem/cpu/mfem/interactions/exchange_field.cpp",
+      "symbol": "compute_exchange_for_magnetization",
+      "responsibility": "Apply the assembled exchange form, perform mass projection, and accumulate production FEM exchange energy/field.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-exchange-field",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "symbol": "cell_exchange_field",
+      "responsibility": "Implement the rectangular-grid CPU reference specialization of harmonic face exchange and the per-cell exchange field; it does not prove arbitrary unstructured face geometry.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-exchange-energy",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "symbol": "exchange_energy_from_vectors",
+      "responsibility": "Implement the rectangular-grid CPU reference exchange energy with harmonic neighboring material coefficients.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-coupling-materialization",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "materialize_region_exchange_couplings",
+      "responsibility": "Materialize supported explicit/disabled/scaled harmonic region exchange into the FDM pair overrides used by the runtime.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "rkky-runtime-gap",
+      "path": "crates/fullmag-plan/src/validate.rs",
+      "symbol": "region_coupling_is_executable_for_backend",
+      "responsibility": "Fail closed because RKKY is not executable on current backends; the surface-energy equation is a planned scientific contract, not implementation evidence.",
+      "evidence_status": "planned_contract"
     }
   ],
   "public_api": {
@@ -868,10 +970,10 @@
       },
       {
         "python": "fm.fields.sampled.component_count",
-        "type": "int",
+        "type": "int | float (runtime-coerced)",
         "default": "required",
         "si_unit": "1",
-        "validation": "integer must be >= 1; otherwise ValueError; compatibility with the selected material parameter is a current planner-validation boundary",
+        "validation": "annotated as int, but the current runtime accepts real values >= 1 and stores int(component_count), truncating toward zero; for example 1.5 becomes 1; values < 1 give ValueError, while non-integral and bool inputs are not rejected before coercion",
         "meaning": "components per sample",
         "backend_support": "authored IR on FDM/FEM CPU/GPU; runtime capability-gated",
         "problem_ir": "MaterialParameterFieldIR::Sampled.component_count",
@@ -959,7 +1061,7 @@
         "type": "str | None",
         "default": "None",
         "si_unit": "1",
-        "validation": "None generates a deterministic id; an authored id must be non-empty when lowered with to_ir, otherwise ValueError",
+        "validation": "None or the empty string selects the deterministic default id through coupling_id or default_id; a non-empty string is retained",
         "meaning": "coupling identity",
         "backend_support": "authored IR on FDM/FEM CPU/GPU; runtime capability-gated",
         "problem_ir": "CouplingIR.coupling_id",
@@ -1025,7 +1127,7 @@
         "type": "str | None",
         "default": "None",
         "si_unit": "1",
-        "validation": "None generates a deterministic id; an authored id must be non-empty when lowered with to_ir, otherwise ValueError",
+        "validation": "None or the empty string selects the deterministic default id through coupling_id or default_id; a non-empty string is retained",
         "meaning": "coupling identity",
         "backend_support": "authored IR on FDM/FEM CPU/GPU; runtime capability-gated",
         "problem_ir": "CouplingIR.coupling_id",
@@ -1102,7 +1204,7 @@
         "type": "str | None",
         "default": "None",
         "si_unit": "1",
-        "validation": "None generates a deterministic id; an authored id must be non-empty when lowered with to_ir, otherwise ValueError",
+        "validation": "None or the empty string selects the deterministic default id through coupling_id or default_id; a non-empty string is retained",
         "meaning": "coupling identity",
         "backend_support": "authored IR on FDM/FEM CPU/GPU; runtime capability-gated",
         "problem_ir": "CouplingIR.coupling_id",
