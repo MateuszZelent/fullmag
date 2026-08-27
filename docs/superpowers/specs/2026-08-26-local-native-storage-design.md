@@ -35,6 +35,25 @@ niezweryfikowanego katalogu.
 - Profil `canonical` zachowuje dotychczasowe zachowanie.
 - Nie będzie fallbacku do zwykłego katalogu DrvFS/9p ani wyłączenia walidacji.
 
+## Kosztowna weryfikacja kopii archiwum latest
+
+Eksporter nadal tworzy trwałą kopię `fem-gpu-host-latest.tar`, ale kosztowne
+porównanie jej bajt po bajcie z niezmiennym archiwum wariantu jest sterowane
+przez:
+
+```text
+FULLMAG_RUNTIME_ARCHIVE_COPY_VERIFY=auto|0|1
+```
+
+Wartość `auto` zachowuje ścisłe porównanie dla profilu `canonical` i pomija
+wyłącznie to redundantne porównanie dla profilu `local-d`. Wartość `1` wymusza
+porównanie na każdym profilu, a `0` wyłącza je jawnie dla szybkiego trybu
+developerskiego.
+
+Wyłączenie dotyczy tylko kopii `latest`: nadal obowiązują walidacja manifestu,
+hashy i CUDA/HYPRE, dokładne porównanie archiwum niezmiennego z wariantem oraz
+weryfikacja tożsamości źródła przed publikacją aliasu.
+
 ## Przepływ
 
 1. `FULLMAG_NATIVE_STORAGE_PROFILE` jest rozwiązywany przez wspólny helper.

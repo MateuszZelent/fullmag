@@ -387,18 +387,15 @@ pub(crate) fn resolve_fdm_engine_with_trail(
     };
     let policy = normalize_fdm_execution_policy(&requested_policy)?;
 
-    let availability_route =
-        crate::fdm::gpu::cuda::route::resolve_fdm_gpu_availability_route(
-            policy,
-            native_fdm::is_cuda_available(),
-        )?;
+    let availability_route = crate::fdm::gpu::cuda::route::resolve_fdm_gpu_availability_route(
+        policy,
+        native_fdm::is_cuda_available(),
+    )?;
     let resolution = match availability_route {
-        crate::fdm::gpu::cuda::route::FdmGpuAvailabilityRoute::CpuRequested => {
-            EngineResolution {
-                engine: FdmEngine::CpuReference,
-                fallback: None,
-            }
-        }
+        crate::fdm::gpu::cuda::route::FdmGpuAvailabilityRoute::CpuRequested => EngineResolution {
+            engine: FdmEngine::CpuReference,
+            fallback: None,
+        },
         crate::fdm::gpu::cuda::route::FdmGpuAvailabilityRoute::Cuda => EngineResolution {
             engine: FdmEngine::CudaFdm,
             fallback: None,
@@ -800,9 +797,19 @@ mod tests {
 
         let error = super::reject_frozen_spins_fem_execution(&problem)
             .expect_err("high-order FEM must reject frozen spins without explicit true-DOF map");
-        assert!(error.message.starts_with("frozen_spins_fem_fe_order_unsupported:"));
+        assert!(error
+            .message
+            .starts_with("frozen_spins_fem_fe_order_unsupported:"));
 
-        problem.backend_policy.discretization_hints.as_mut().unwrap().fem.as_mut().unwrap().order = 1;
+        problem
+            .backend_policy
+            .discretization_hints
+            .as_mut()
+            .unwrap()
+            .fem
+            .as_mut()
+            .unwrap()
+            .order = 1;
         assert!(
             super::reject_frozen_spins_fem_execution(&problem).is_ok(),
             "P1 FEM must accept frozen spins on qualified lanes"

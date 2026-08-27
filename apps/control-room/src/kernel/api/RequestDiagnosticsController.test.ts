@@ -250,7 +250,9 @@ describe("RequestDiagnosticsController", () => {
     expect(diagnostics.list()[0]).toMatchObject({
       byteLength: 220,
       detail: "message (x2 over 300ms)",
+      firstTimestampMs: 1_000,
       messageType: "resource.batch_changed",
+      occurrenceCount: 2,
       timestampMs: 1_300,
     });
   });

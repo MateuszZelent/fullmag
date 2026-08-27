@@ -12,8 +12,8 @@ use crate::router_v2::handlers::data::resolved_spatial_field::{
 };
 
 use super::{
-    FdmPlanarField, FemPlanarField, PlanarMeshOverlay, PlanarSampleResult, PlanarSamplingEngine,
-    ResolvedPlanarSampleRequest,
+    FdmPlanarField, FemPlanarElement, FemPlanarField, PlanarMeshOverlay, PlanarSampleResult,
+    PlanarSamplingEngine, ResolvedPlanarSampleRequest,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -488,11 +488,7 @@ fn build_fem_target(
             ));
         }
     }
-    let elements = mesh.require_tet4_elements().map_err(|error| {
-        ApiError::unprocessable(format!(
-            "unsupported_element_order: tet4 P1 nodal carrier required: {error}"
-        ))
-    })?;
+    let elements = fem_planar_elements(mesh)?;
     let runtime_scope = match scope {
         ResolvedSpatialScope::MonitorTarget => vec![true; elements.len()],
         ResolvedSpatialScope::MeshPart { scope_id } => {
@@ -527,7 +523,7 @@ fn build_fem_target(
         ));
     }
     let values = expand_fem_values(resolved, mapping, mesh.nodes.len(), &elements, &selected)?;
-    let source = FemPlanarField::new(
+    let source = FemPlanarField::new_mixed(
         resolved.component_count,
         mesh.nodes.clone(),
         elements.clone(),
@@ -561,7 +557,7 @@ fn build_fem_target(
 
 fn select_fem_monitor_target(
     mesh: &fullmag_runner::FemMeshPayload,
-    elements: &[[u32; 4]],
+    elements: &[FemPlanarElement],
     target: &MonitorTargetIR,
 ) -> Vec<bool> {
     match target {
@@ -605,14 +601,14 @@ fn expand_fem_values(
     resolved: &ResolvedSpatialField<'_>,
     mapping: &EntityMapping,
     global_node_count: usize,
-    elements: &[[u32; 4]],
+    elements: &[FemPlanarElement],
     selected: &[bool],
 ) -> Result<Vec<f64>, ApiError> {
     let required_nodes = elements
         .iter()
         .zip(selected)
         .filter(|(_, selected)| **selected)
-        .flat_map(|(element, _)| element)
+        .flat_map(|(element, _)| element.nodes())
         .map(|node| *node as usize)
         .collect::<BTreeSet<_>>();
     if let Some(node) = required_nodes
@@ -620,7 +616,7 @@ fn expand_fem_values(
         .find(|node| **node >= global_node_count)
     {
         return Err(ApiError::conflict(format!(
-            "invalid_fem_connectivity: selected Tet4 node {node} is out of range for {global_node_count} nodes"
+            "invalid_fem_connectivity: selected P1 node {node} is out of range for {global_node_count} nodes"
         )));
     }
     let mut values = vec![f64::NAN; global_node_count.saturating_mul(resolved.component_count)];
@@ -689,14 +685,14 @@ fn fdm_bounds(
 
 fn fem_bounds(
     nodes: &[[f64; 3]],
-    elements: &[[u32; 4]],
+    elements: &[FemPlanarElement],
     selected: &[bool],
 ) -> Result<[[f64; 3]; 2], ApiError> {
     let node_ids = elements
         .iter()
         .zip(selected)
         .filter(|(_, selected)| **selected)
-        .flat_map(|(element, _)| element)
+        .flat_map(|(element, _)| element.nodes())
         .map(|node| *node as usize)
         .collect::<BTreeSet<_>>();
     if node_ids.is_empty() {
@@ -729,7 +725,7 @@ fn optional_fdm_bounds(
 
 fn optional_fem_bounds(
     nodes: &[[f64; 3]],
-    elements: &[[u32; 4]],
+    elements: &[FemPlanarElement],
     selected: &[bool],
 ) -> Result<Option<[[f64; 3]; 2]>, ApiError> {
     if selected.iter().any(|selected| *selected) {
@@ -737,6 +733,44 @@ fn optional_fem_bounds(
     } else {
         Ok(None)
     }
+}
+
+fn fem_planar_elements(
+    mesh: &fullmag_runner::FemMeshPayload,
+) -> Result<Vec<FemPlanarElement>, ApiError> {
+    if mesh.element_markers.len() != mesh.cells.len() {
+        return Err(ApiError::conflict(
+            "invalid_fem_connectivity: element markers differ from cell count",
+        ));
+    }
+    mesh.cells
+        .types
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(ordinal, cell_type)| {
+            let nodes = mesh.cells.item_nodes(ordinal).ok_or_else(|| {
+                ApiError::conflict(format!(
+                    "invalid_fem_connectivity: cell {ordinal} has an invalid CSR range"
+                ))
+            })?;
+            match cell_type {
+                fullmag_ir::FemCellTypeIR::Tet4 => nodes
+                    .try_into()
+                    .map(FemPlanarElement::Tet4)
+                    .map_err(|_| ApiError::conflict("invalid_fem_connectivity: Tet4 arity is not 4")),
+                fullmag_ir::FemCellTypeIR::Prism6 => nodes
+                    .try_into()
+                    .map(FemPlanarElement::Prism6)
+                    .map_err(|_| ApiError::conflict("invalid_fem_connectivity: Prism6 arity is not 6")),
+                fullmag_ir::FemCellTypeIR::Pyramid5 | fullmag_ir::FemCellTypeIR::Hex8 => {
+                    Err(ApiError::unprocessable(format!(
+                        "unsupported_element_order: planar P1 sampling does not support {cell_type:?}"
+                    )))
+                }
+            }
+        })
+        .collect()
 }
 
 fn fem_carrier_identity(topology_fingerprint: &str, mapping: &EntityMapping) -> String {

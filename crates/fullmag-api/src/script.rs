@@ -198,9 +198,8 @@ pub(crate) fn render_scene_document_via_python_helper(
     output_path: &Path,
     scene_document: &SceneDocument,
 ) -> Result<ScriptSyncResponse, ApiError> {
-    std::fs::create_dir_all(workspace_root).map_err(|error| {
-        ApiError::internal(format!("failed to prepare workspace: {}", error))
-    })?;
+    std::fs::create_dir_all(workspace_root)
+        .map_err(|error| ApiError::internal(format!("failed to prepare workspace: {}", error)))?;
     let scene_path = workspace_root.join(format!("scene-export-{}.json", uuid_v4_hex()));
     let scene_body = serde_json::to_string_pretty(scene_document).map_err(|error| {
         ApiError::internal(format!("failed to serialize SceneDocument: {}", error))
@@ -373,10 +372,7 @@ fn python_path_candidates(repo_root: &Path) -> Vec<PathBuf> {
             .join("python")
             .join("python.exe"),
         repo_root.join(".venv").join("bin").join("python"),
-        repo_root
-            .join(".venv")
-            .join("Scripts")
-            .join("python.exe"),
+        repo_root.join(".venv").join("Scripts").join("python.exe"),
         repo_root
             .join("packages")
             .join("fullmag-py")

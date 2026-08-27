@@ -365,9 +365,7 @@ mod adaptive_decision_tests {
         buffers.k[0][1] = [f64::NAN, 0.0, 0.0];
         buffers.k[0][2] = [1.5, 0.0, 0.0];
         buffers.k[0][3] = [9.0, 0.0, 0.0];
-        buffers
-            .soa
-            .k[0]
+        buffers.soa.k[0]
             .x
             .copy_from_slice(&[0.25, f64::NAN, 1.5, 9.0]);
         buffers.soa.k[0].y.fill(0.0);
@@ -681,7 +679,10 @@ mod adaptive_decision_tests {
             )
             .expect_err("persistent SoA non-finite candidate must fail before commit");
         assert_eq!(error.code(), crate::EngineErrorCode::NaNValue);
-        assert_eq!(persistent_soa.transactional_state_digest(), persistent_before);
+        assert_eq!(
+            persistent_soa.transactional_state_digest(),
+            persistent_before
+        );
     }
 
     #[test]
@@ -728,7 +729,9 @@ mod adaptive_decision_tests {
         assert!(aos.abm_history.f_n_minus_1.is_none());
         assert_eq!(aos.abm_history.last_dt, changed_dt);
 
-        let mut buffer_soa = problem.uniform_state([1.0, 0.0, 0.0]).expect("buffer SoA state");
+        let mut buffer_soa = problem
+            .uniform_state([1.0, 0.0, 0.0])
+            .expect("buffer SoA state");
         let mut buffer_soa_ws = problem.create_workspace();
         let mut buffer_soa_bufs = problem.create_integrator_buffers();
         for _ in 0..3 {
@@ -909,7 +912,9 @@ mod adaptive_decision_tests {
     #[test]
     fn rk45_soa_buffer_reuses_aos_fsal_storage_after_warmup() {
         let problem = adaptive_test_problem(crate::TimeIntegrator::RK45);
-        let mut state = problem.uniform_state([1.0, 0.0, 0.0]).expect("SoA-buffer state");
+        let mut state = problem
+            .uniform_state([1.0, 0.0, 0.0])
+            .expect("SoA-buffer state");
         let mut ws = problem.create_workspace();
         let mut bufs = problem.create_integrator_buffers();
 
@@ -1022,7 +1027,8 @@ impl ExchangeLlgProblem {
         )?;
 
         for i in 0..n {
-            bufs.m_stage[i] = self.project_stage(add(bufs.m0[i], scale(bufs.k[0][i], GAMMA * dt)))?;
+            bufs.m_stage[i] =
+                self.project_stage(add(bufs.m0[i], scale(bufs.k[0][i], GAMMA * dt)))?;
         }
         self.restore_frozen_reference(&mut bufs.m_stage[..n]);
         self.effective_field_into_ws_at_time(
@@ -2961,7 +2967,8 @@ impl ExchangeLlgProblem {
                     })?;
                 #[cfg(not(feature = "parallel"))]
                 for i in 0..n {
-                    stage[i] = self.project_stage(add(m0[i], scale(add(k0[i], k1[i]), 0.5 * dt)))?;
+                    stage[i] =
+                        self.project_stage(add(m0[i], scale(add(k0[i], k1[i]), 0.5 * dt)))?;
                 }
             }
             self.restore_frozen_reference(&mut bufs.m_stage[..n]);
@@ -3039,11 +3046,7 @@ impl ExchangeLlgProblem {
 
         // Adams–Moulton corrector → trial candidate
         {
-            let (stage, m0, k0) = (
-                &mut bufs.m_stage[..n],
-                &bufs.m0[..n],
-                &bufs.k[0][..n],
-            );
+            let (stage, m0, k0) = (&mut bufs.m_stage[..n], &bufs.m0[..n], &bufs.k[0][..n]);
             #[cfg(feature = "parallel")]
             stage
                 .par_iter_mut()
@@ -3183,7 +3186,9 @@ impl ExchangeLlgProblem {
                 accepted_time,
             )
         };
-        bufs.soa.m_stage.gather_into_aos(&mut state.magnetization[..n]);
+        bufs.soa
+            .m_stage
+            .gather_into_aos(&mut state.magnetization[..n]);
         state.time_seconds = accepted_time;
         state.abm_history.push_copy_from_slice(&bufs.k[0][..n], dt);
         Ok(eval.into_step_report(accepted_time, dt, false))
@@ -3840,7 +3845,9 @@ impl ExchangeLlgProblem {
                 &bufs.soa.h_eff,
                 &mut bufs.soa.k[0],
             );
-            trial_state.abm_history.push_copy_from_soa(&bufs.soa.k[0], dt);
+            trial_state
+                .abm_history
+                .push_copy_from_soa(&bufs.soa.k[0], dt);
             *state = trial_state;
 
             return Ok(report);

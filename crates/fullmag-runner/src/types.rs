@@ -3029,7 +3029,10 @@ mod fdm_gpu_execution_receipt_contract_tests {
         assert_eq!(receipt["resolved"], "device_resident");
         assert_eq!(receipt["executed"], "cuda_fdm");
         assert_eq!(receipt["fallback_count"], 0);
-        assert_eq!(receipt["transfer_counts"]["observation_full_vector_d2h_count"], 0);
+        assert_eq!(
+            receipt["transfer_counts"]["observation_full_vector_d2h_count"],
+            0
+        );
         assert_eq!(
             receipt["transfer_counts"]["setup_full_vector_h2d_bytes"],
             24
@@ -3591,13 +3594,12 @@ impl FdmCpuStateLayoutProvenance {
         execution_rejection_reason: Option<&str>,
     ) -> Self {
         let resolved = if soa_active { "soa_xyz" } else { "aos_xyz" };
-        let rejection_reason = (!soa_active)
-            .then(|| {
-                execution_rejection_reason
-                    .or_else(|| problem.soa_fast_path_rejection_reason())
-                    .unwrap_or("capability_matrix_rejected")
-                    .to_string()
-            });
+        let rejection_reason = (!soa_active).then(|| {
+            execution_rejection_reason
+                .or_else(|| problem.soa_fast_path_rejection_reason())
+                .unwrap_or("capability_matrix_rejected")
+                .to_string()
+        });
         Self {
             requested: "auto".to_string(),
             resolved: resolved.to_string(),
@@ -3976,10 +3978,9 @@ mod tests {
         normalized_payload_element_markers, reset_fem_mesh_fingerprint_count,
         reset_fem_mesh_payload_build_count, ExecutionProvenance, FdmCpuStateLayoutProvenance,
         FemMeshPartPayload, FemMeshPayload, FemPoissonDemagProvenance, InitialTimestepReason,
-        LegacyDtPolicy, LivePreviewField,
-        LlgTimestepCapabilityId, LlgTimestepQualificationId, RequestedTimestepPolicy,
-        ResolvedTimestepPolicy, StageFemMeshAsset, StepStats, StepUpdate, TimestepBackend,
-        TimestepDevice, TimestepExecutionIdentity, TimestepPolicyProvenance,
+        LegacyDtPolicy, LivePreviewField, LlgTimestepCapabilityId, LlgTimestepQualificationId,
+        RequestedTimestepPolicy, ResolvedTimestepPolicy, StageFemMeshAsset, StepStats, StepUpdate,
+        TimestepBackend, TimestepDevice, TimestepExecutionIdentity, TimestepPolicyProvenance,
         TimestepValidationState,
     };
     use fullmag_ir::{
@@ -4562,7 +4563,10 @@ mod tests {
         );
         let decoded: ExecutionProvenance =
             serde_json::from_value(value).expect("layout receipt should deserialize");
-        assert_eq!(decoded.fdm_cpu_state_layout, provenance.fdm_cpu_state_layout);
+        assert_eq!(
+            decoded.fdm_cpu_state_layout,
+            provenance.fdm_cpu_state_layout
+        );
     }
 
     #[test]

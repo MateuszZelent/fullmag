@@ -41,6 +41,7 @@ describe("Footer Quick Chart lifecycle", () => {
       },
       diagnostics: {
         clear: vi.fn(),
+        getVersion: () => 0,
         listNewestFirst: () => [],
         subscribe: () => () => undefined,
       },

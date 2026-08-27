@@ -758,8 +758,16 @@ fn ambiguous_fdm_membership_fails_closed() {
 }
 
 #[test]
-fn unsupported_fem_cell_carrier_fails_instead_of_falling_back_to_p1_tet4() {
+fn prism6_fem_cell_carrier_samples_without_tet4_fallback() {
     let mut mesh = fem_mesh();
+    mesh.nodes[..6].copy_from_slice(&[
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 1.0],
+        [0.0, 1.0, 1.0],
+    ]);
     mesh.cells = FemConnectivityIR {
         types: vec![FemCellTypeIR::Prism6],
         offsets: vec![0, 6],
@@ -794,14 +802,32 @@ fn unsupported_fem_cell_carrier_fails_instead_of_falling_back_to_p1_tet4() {
             mapping: EntityMapping::Identity { entity_count: 8 },
         },
     };
-    let error = resolve_spatial_target(
+    let target = resolve_spatial_target(
         &field,
         &MonitorTargetIR::MagneticDomain,
         ResolvedSpatialScope::MonitorTarget,
         &PlanarOperatorIR::PlaneSample,
     )
-    .unwrap_err();
-    assert!(error.message.starts_with("unsupported_element_order:"));
+    .unwrap();
+    let sample = sample_resolved_target(
+        &target,
+        &ResolvedPlanarSampleRequest {
+            component: PlanarComponent::Magnitude,
+            ..request(
+                explicit_frame(
+                    [0.0, 0.0, 0.5],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, 0.5, 0.0, 0.5],
+                ),
+                PlanarOperatorIR::PlaneSample,
+                [1, 1],
+            )
+        },
+    )
+    .unwrap();
+    assert_eq!(sample.scalar_values, vec![3.0_f64.sqrt()]);
 }
 
 #[test]

@@ -830,6 +830,7 @@ export async function loadCachedBinaryResource<TData, TMetadata = undefined>(
   options: {
     onFreshAdoption?: () => void;
     preferCached?: boolean;
+    retainCachedOnNotApplicable?: boolean;
     signal?: AbortSignal;
   } = {},
 ): Promise<TData | null> {
@@ -887,6 +888,15 @@ export async function loadCachedBinaryResource<TData, TMetadata = undefined>(
     }
 
     if (result.status === "not-applicable") {
+      if (cached && options.retainCachedOnNotApplicable) {
+        if (!cache.peek(key)) {
+          cache.set(key, cached);
+        } else {
+          cache.get(key);
+        }
+        recordVisualizationDebugPerformanceMetric("cacheHits");
+        return cached.data;
+      }
       cache.delete(key);
       return null;
     }
@@ -1409,6 +1419,7 @@ export function useViewport3DFieldVectorRequest(
             requestKey,
             resources.getRevision(unscopedRequestKey),
           ),
+          retainCachedOnNotApplicable: true,
           signal,
         },
       );
@@ -1523,6 +1534,7 @@ export function useViewport3DAirboxFieldVectors(
                 request.key,
                 resources.getRevision(request.unscopedKey),
               ),
+              retainCachedOnNotApplicable: true,
               signal,
             },
           );
@@ -1784,6 +1796,7 @@ export function useViewport3DQuantityFieldVectors(
                 request.key,
                 resources.getRevision(request.unscopedKey),
               ),
+              retainCachedOnNotApplicable: true,
               signal,
             },
           );
@@ -2014,6 +2027,7 @@ export function useViewport3DPartFieldVectors(
                 request.key,
                 resources.getRevision(request.unscopedKey),
               ),
+              retainCachedOnNotApplicable: true,
               signal,
             },
           );

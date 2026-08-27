@@ -416,6 +416,7 @@ pub(crate) fn execute_cuda_fdm(
                     hysteresis_settle_step_method: None,
                     scalar_row_due: due_scalar_row
                         || (preview_due && preview_targets_global_scalar),
+                    terminal_field_snapshot: false,
                     finished: false,
                 });
                 if preview_due {

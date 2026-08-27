@@ -5077,7 +5077,7 @@ mod tests {
             geometry: "ring".to_string(),
         });
         problem.magnets.push(fullmag_ir::MagnetIR {
-           object_id: Some("ring".to_string()),
+            object_id: Some("ring".to_string()),
             name: "ring".to_string(),
             region: "ring".to_string(),
             material: "Py".to_string(),
@@ -5151,7 +5151,7 @@ mod tests {
         ];
         problem.magnets = vec![
             fullmag_ir::MagnetIR {
-               object_id: Some("free".to_string()),
+                object_id: Some("free".to_string()),
                 name: "free".to_string(),
                 region: "free_region".to_string(),
                 material: "Py".to_string(),
@@ -5161,7 +5161,7 @@ mod tests {
                 absorbing_boundary: None,
             },
             fullmag_ir::MagnetIR {
-               object_id: Some("ref".to_string()),
+                object_id: Some("ref".to_string()),
                 name: "ref".to_string(),
                 region: "ref_region".to_string(),
                 material: "Py".to_string(),
@@ -5251,7 +5251,7 @@ mod tests {
             geometry: "second".to_string(),
         });
         problem.magnets.push(fullmag_ir::MagnetIR {
-           object_id: Some("second".to_string()),
+            object_id: Some("second".to_string()),
             name: "second".to_string(),
             region: "second".to_string(),
             material: "Py".to_string(),

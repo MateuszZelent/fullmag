@@ -395,3 +395,27 @@ source-layout and FEM physics-validation failures.
 - Task 3 source parity: complete (commit `48ed0c3f6`; field meta/vector/planar revision, generation, stats and payload parity; focused 1/1 pass; independent re-review approved).
 
 Task mixed-P1 local interactions 1: complete (working-tree scope, final review clean; 3 Rust exact tests and managed focused native contract passed).
+
+## Plan: FEM meshing production remediation (2026-08-27)
+
+- Worktree: `/home/kkingstoun/git/fullmag/fullmag-worktrees/fem-meshing-production-remediation-20260827`
+- Branch: `codex/fem-meshing-production-remediation-20260827`
+- Frozen base/master: `5ac37c7a8c4715cff7fdf197caede15f94665d9e`
+- Source plan SHA-256: `fd1e3be2008fe18e1ab21cfaad4b976dbef06cf7d213339f283a4d4eb3b9a7fc`
+- Commit policy: task-scoped commits on this branch for safe periodic rebase; no push or integration.
+
+| Task | Status | Implementer | Review | Master sync |
+|---:|---|---|---|---|
+| 0 | complete; Gate 0 PASS | root | baseline evidence matrix in `fem-meshing-task-0-report.md` | equal to master |
+| 1 | complete; Gate 1 PASS (`d6a4ad670..170e4f17a`) | `fem_mesh_task1_impl` + `fem_mesh_task1_fix` | approved after three fix waves; source maps 9/9, validator 28/28, execute smoke 9/9 | local master unchanged at `5ac37c7a8` |
+| 2 | pending | — | — | pending |
+| 3 | pending | — | — | pending |
+| 4 | pending | — | — | pending |
+| 5 | pending | — | — | pending |
+| 6 | pending | — | — | pending |
+| 7 | pending | — | — | pending |
+| 8 | pending | — | — | pending |
+| 9 | pending | — | — | pending |
+| 10 | pending | — | — | pending |
+| 11 | pending | — | — | pending |
+| 12 | pending | — | — | pending |

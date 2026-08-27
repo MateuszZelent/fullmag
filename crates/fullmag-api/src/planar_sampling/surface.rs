@@ -8,10 +8,10 @@ use super::provenance;
 use super::reduction::WeightedAccumulator;
 use super::{FemPlanarField, Occupancy, PlanarSampleResult, ResolvedPlanarSampleRequest};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct BoundaryFace {
-    nodes: [u32; 3],
-    opposite: u32,
+    nodes: Vec<u32>,
+    parent_centroid: [f64; 3],
     parent_element_id: u32,
 }
 
@@ -29,35 +29,29 @@ pub(super) fn sample_boundary(
     visibility: SurfaceVisibilityPolicyIR,
 ) -> Result<PlanarSampleResult, ApiError> {
     let pixel_count = request.resolution[0] as usize * request.resolution[1] as usize;
-    let mut faces_by_key = BTreeMap::<[u32; 3], Vec<BoundaryFace>>::new();
+    let mut faces_by_key = BTreeMap::<Vec<u32>, Vec<BoundaryFace>>::new();
     for (element_index, element) in field.elements().iter().enumerate() {
         if field.markers().get(element_index).copied().unwrap_or(1) == 0 {
             continue;
         }
-        let [a, b, c, d] = *element;
-        for face in [
-            BoundaryFace {
-                nodes: [a, b, c],
-                opposite: d,
+        let parent_centroid = [0, 1, 2].map(|axis| {
+            element
+                .nodes()
+                .iter()
+                .map(|node| field.nodes()[*node as usize][axis])
+                .sum::<f64>()
+                / element.nodes().len() as f64
+        });
+        for local_face in element.faces() {
+            let face = BoundaryFace {
+                nodes: local_face
+                    .iter()
+                    .map(|local| element.nodes()[*local])
+                    .collect(),
+                parent_centroid,
                 parent_element_id: element_index as u32,
-            },
-            BoundaryFace {
-                nodes: [a, b, d],
-                opposite: c,
-                parent_element_id: element_index as u32,
-            },
-            BoundaryFace {
-                nodes: [a, c, d],
-                opposite: b,
-                parent_element_id: element_index as u32,
-            },
-            BoundaryFace {
-                nodes: [b, c, d],
-                opposite: a,
-                parent_element_id: element_index as u32,
-            },
-        ] {
-            let mut key = face.nodes;
+            };
+            let mut key = face.nodes.clone();
             key.sort_unstable();
             faces_by_key.entry(key).or_default().push(face);
         }
@@ -65,22 +59,25 @@ pub(super) fn sample_boundary(
 
     let mut pixel_faces = vec![Vec::<(Vec<f64>, f64, f64, f64, u32)>::new(); pixel_count];
     for faces in faces_by_key.values().filter(|faces| faces.len() == 1) {
-        let face = faces[0];
-        let points = face.nodes.map(|node| field.nodes()[node as usize]);
+        let face = &faces[0];
+        let points = face
+            .nodes
+            .iter()
+            .map(|node| field.nodes()[*node as usize])
+            .collect::<Vec<_>>();
         let ab = sub(points[1], points[0]);
         let ac = sub(points[2], points[0]);
         let area_vector = cross(ab, ac);
         if dot(area_vector, area_vector) == 0.0 {
             continue;
         }
-        let opposite = field.nodes()[face.opposite as usize];
-        let outward_sign = if dot(area_vector, sub(opposite, points[0])) > 0.0 {
+        let outward_sign = if dot(area_vector, sub(face.parent_centroid, points[0])) > 0.0 {
             -1.0
         } else {
             1.0
         };
         let facing = outward_sign * dot(area_vector, frame.normal);
-        let polygon = (0..3)
+        let polygon = (0..points.len())
             .map(|local| SurfaceVertex {
                 world: points[local],
                 uvn: frame.project(points[local]),

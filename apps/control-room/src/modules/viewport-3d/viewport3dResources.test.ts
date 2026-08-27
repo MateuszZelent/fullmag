@@ -1636,6 +1636,47 @@ describe("viewport3dResources", () => {
     expect(cache.get("field:m")?.metadata).toEqual({ topologyHash: "abc123" });
   });
 
+  it("keeps the last-good field vector when a refresh is temporarily not applicable", async () => {
+    const cache = new ResourceCache<string>({ maxBytes: 32 });
+    cache.set("field:m", {
+      byteLength: 4,
+      data: "last-good-field",
+      etag: '"field-1"',
+    });
+
+    await expect(
+      loadCachedBinaryResource(
+        cache,
+        "field:m",
+        async () => ({ etag: null, status: "not-applicable" }),
+        { retainCachedOnNotApplicable: true },
+      ),
+    ).resolves.toBe("last-good-field");
+
+    expect(cache.peek("field:m")).toMatchObject({
+      data: "last-good-field",
+      etag: '"field-1"',
+    });
+  });
+
+  it("clears non-field binary data when it becomes not applicable", async () => {
+    const cache = new ResourceCache<string>({ maxBytes: 32 });
+    cache.set("topology", {
+      byteLength: 4,
+      data: "old-topology",
+      etag: '"topology-1"',
+    });
+
+    await expect(
+      loadCachedBinaryResource(cache, "topology", async () => ({
+        etag: null,
+        status: "not-applicable",
+      })),
+    ).resolves.toBeNull();
+
+    expect(cache.peek("topology")).toBeNull();
+  });
+
   it("restores a cached binary entry when it was evicted during a 304 request", async () => {
     const cache = new ResourceCache<string>({ maxBytes: 8 });
     cache.set("topology", {

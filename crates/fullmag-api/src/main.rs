@@ -477,9 +477,11 @@ fn current_live_realtime_changes_since(
             if !current_live_realtime_change_revision_changed(previous_revisions, change) {
                 return None;
             }
-            if matches!(change.resource, RealtimeResourceName::Fields)
-                && change.resource_id.as_deref() == Some("samples")
-            {
+            let field_sample_change = (matches!(change.resource, RealtimeResourceName::Fields)
+                && change.resource_id.as_deref() == Some("samples"))
+                || (matches!(change.resource, RealtimeResourceName::PlanarFields)
+                    && change.resource_id.as_deref() == Some("field"));
+            if field_sample_change {
                 let quantity_ids = changed_field_sample_quantity_ids(
                     &realtime_state.revisions.field_quantity_revisions,
                     &previous_revisions.field_quantity_revisions,
@@ -1252,7 +1254,10 @@ mod scratch_session_lifecycle_tests {
         )
         .await;
 
-        assert_eq!(stale.expect_err("stale session must be rejected").status, StatusCode::CONFLICT);
+        assert_eq!(
+            stale.expect_err("stale session must be rejected").status,
+            StatusCode::CONFLICT
+        );
         assert_eq!(
             state
                 .current_live_state
@@ -1361,10 +1366,11 @@ mod scratch_session_lifecycle_tests {
             .expect("replacement task must complete")
             .expect("replacement must be created");
 
-        let runner_event = tokio::time::timeout(std::time::Duration::from_millis(100), events.recv())
-            .await
-            .expect("runner must publish before replacement")
-            .expect("realtime channel must remain open");
+        let runner_event =
+            tokio::time::timeout(std::time::Duration::from_millis(100), events.recv())
+                .await
+                .expect("runner must publish before replacement")
+                .expect("realtime channel must remain open");
         let runner_event: LiveRealtimeServerEvent =
             serde_json::from_str(&runner_event.json).expect("runner event must serialize");
         assert!(matches!(
@@ -1378,7 +1384,8 @@ mod scratch_session_lifecycle_tests {
                 .expect("replacement must publish after runner")
                 .expect("realtime channel must remain open");
         let replacement_event: LiveRealtimeServerEvent =
-            serde_json::from_str(&replacement_event.json).expect("replacement event must serialize");
+            serde_json::from_str(&replacement_event.json)
+                .expect("replacement event must serialize");
         assert!(matches!(
             replacement_event,
             LiveRealtimeServerEvent::ResourceBatchChanged { ref session_id, .. }
@@ -1757,8 +1764,10 @@ fn realtime_qos_lane(change: &RealtimeResourceChange) -> RealtimeQosLane {
         return RealtimeQosLane::Immediate;
     }
 
-    if matches!(change.resource, RealtimeResourceName::Fields)
-        && change.resource_id.as_deref() == Some("samples")
+    if (matches!(change.resource, RealtimeResourceName::Fields)
+        && change.resource_id.as_deref() == Some("samples"))
+        || (matches!(change.resource, RealtimeResourceName::PlanarFields)
+            && change.resource_id.as_deref() == Some("field"))
     {
         return RealtimeQosLane::FieldSamples;
     }
@@ -2576,7 +2585,11 @@ impl CurrentLiveSyncKind {
 pub(crate) async fn reset_current_live_session_resources(state: &AppState) {
     *state.current_display_selection.write().await = CurrentDisplaySelection::default();
     *state.current_display_presentation.write().await = DisplayPresentationState::default();
-    state.current_visualization_client_acks.write().await.clear();
+    state
+        .current_visualization_client_acks
+        .write()
+        .await
+        .clear();
     state
         .current_visualization_client_ack_revision
         .store(0, Ordering::Relaxed);
@@ -2590,7 +2603,11 @@ pub(crate) async fn reset_current_live_session_resources(state: &AppState) {
     *state.current_control_next_seq.lock().await = 0;
     let _ = state.current_control_events.send(0);
     state.current_live_realtime_replay.lock().await.clear();
-    state.current_live_realtime_pending_batches.lock().await.clear();
+    state
+        .current_live_realtime_pending_batches
+        .lock()
+        .await
+        .clear();
     state
         .current_live_realtime_next_seq
         .store(0, Ordering::Relaxed);

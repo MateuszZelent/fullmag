@@ -3,12 +3,12 @@ use fullmag_ir::{EmptyPolicyIR, PlanarOperatorIR, PlanarReductionIR};
 
 use super::fdm::finish_reduction;
 use super::frame::{cross, dot, ResolvedFrame};
-use super::geometry::{integrate_clipped_tetra, projected_pixel_bounds, LinearVertex};
+use super::geometry::{integrate_clipped_convex_element, projected_pixel_bounds, LinearVertex};
 use super::provenance;
 use super::reduction::{AccumulatorReduction, WeightedAccumulator};
 use super::surface;
 use super::{
-    FemPlanarField, Occupancy, PlanarCompatibilityReduction, PlanarSampleResult,
+    FemPlanarElement, FemPlanarField, Occupancy, PlanarCompatibilityReduction, PlanarSampleResult,
     ResolvedPlanarSampleRequest,
 };
 use super::{
@@ -80,7 +80,6 @@ pub(super) fn sample_compatibility_depth(
 }
 
 pub(super) fn build_overlay(field: &FemPlanarField, frame: &ResolvedFrame) -> PlanarMeshOverlay {
-    const EDGES: [(usize, usize); 6] = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)];
     let target_face_counts = selected_face_counts(field);
     let mut polygons = Vec::new();
     let mut segments = Vec::new();
@@ -88,10 +87,17 @@ pub(super) fn build_overlay(field: &FemPlanarField, frame: &ResolvedFrame) -> Pl
         if field.markers().get(element_index).copied().unwrap_or(1) == 0 {
             continue;
         }
-        let nodes = element.map(|index| field.nodes()[index as usize]);
-        let projected = nodes.map(|point| frame.project(point));
+        let nodes = element
+            .nodes()
+            .iter()
+            .map(|index| field.nodes()[*index as usize])
+            .collect::<Vec<_>>();
+        let projected = nodes
+            .iter()
+            .map(|point| frame.project(*point))
+            .collect::<Vec<_>>();
         let mut points = Vec::<OverlayPoint>::new();
-        for (a, b) in EDGES {
+        for &(a, b) in element.edges() {
             let da = projected[a][2];
             let db = projected[b][2];
             if da.abs() <= 1.0e-12 {
@@ -99,7 +105,7 @@ pub(super) fn build_overlay(field: &FemPlanarField, frame: &ResolvedFrame) -> Pl
                     &mut points,
                     [projected[a][0], projected[a][1]],
                     nodes[a],
-                    [element[a], element[b]],
+                    [element.nodes()[a], element.nodes()[b]],
                     true,
                 );
             }
@@ -108,7 +114,7 @@ pub(super) fn build_overlay(field: &FemPlanarField, frame: &ResolvedFrame) -> Pl
                     &mut points,
                     [projected[b][0], projected[b][1]],
                     nodes[b],
-                    [element[a], element[b]],
+                    [element.nodes()[a], element.nodes()[b]],
                     true,
                 );
             }
@@ -122,7 +128,13 @@ pub(super) fn build_overlay(field: &FemPlanarField, frame: &ResolvedFrame) -> Pl
                 projected[a][0] + t * (projected[b][0] - projected[a][0]),
                 projected[a][1] + t * (projected[b][1] - projected[a][1]),
             ];
-            push_overlay_point(&mut points, uv, world, [element[a], element[b]], false);
+            push_overlay_point(
+                &mut points,
+                uv,
+                world,
+                [element.nodes()[a], element.nodes()[b]],
+                false,
+            );
         }
         if points.len() < 3 {
             continue;
@@ -191,21 +203,17 @@ fn push_overlay_point(
     });
 }
 
-fn selected_face_counts(field: &FemPlanarField) -> HashMap<[u32; 3], u32> {
+fn selected_face_counts(field: &FemPlanarField) -> HashMap<Vec<u32>, u32> {
     let mut counts = HashMap::new();
     for (element_index, element) in field.elements().iter().enumerate() {
         if field.markers().get(element_index).copied().unwrap_or(1) == 0 {
             continue;
         }
-        for omitted in 0..4 {
-            let mut face = [0; 3];
-            let mut cursor = 0;
-            for (index, node) in element.iter().enumerate() {
-                if index != omitted {
-                    face[cursor] = *node;
-                    cursor += 1;
-                }
-            }
+        for local_face in element.faces() {
+            let mut face = local_face
+                .iter()
+                .map(|local| element.nodes()[*local])
+                .collect::<Vec<_>>();
             face.sort_unstable();
             *counts.entry(face).or_insert(0) += 1;
         }
@@ -216,7 +224,7 @@ fn selected_face_counts(field: &FemPlanarField) -> HashMap<[u32; 3], u32> {
 fn classify_overlay_segment(
     a: &OverlayPoint,
     b: &OverlayPoint,
-    target_face_counts: &HashMap<[u32; 3], u32>,
+    target_face_counts: &HashMap<Vec<u32>, u32>,
 ) -> PlanarOverlaySegmentKind {
     if a.degenerate || b.degenerate {
         return PlanarOverlaySegmentKind::UnclassifiedDegenerate;
@@ -228,18 +236,9 @@ fn classify_overlay_segment(
         b.edge_nodes[1],
     ];
     nodes.sort_unstable();
-    let mut unique = [0; 3];
-    let mut count = 0;
-    for node in nodes {
-        if count == 0 || unique[count - 1] != node {
-            if count == 3 {
-                return PlanarOverlaySegmentKind::UnclassifiedDegenerate;
-            }
-            unique[count] = node;
-            count += 1;
-        }
-    }
-    if count != 3 {
+    let mut unique = nodes.to_vec();
+    unique.dedup();
+    if !(3..=4).contains(&unique.len()) {
         return PlanarOverlaySegmentKind::UnclassifiedDegenerate;
     }
     match target_face_counts.get(&unique).copied() {
@@ -265,8 +264,15 @@ fn sample_plane(
         if field.markers().get(element_index).copied().unwrap_or(1) == 0 {
             continue;
         }
-        let nodes = element.map(|index| field.nodes()[index as usize]);
-        let projected = nodes.map(|point| frame.project(point));
+        let nodes = element
+            .nodes()
+            .iter()
+            .map(|index| field.nodes()[*index as usize])
+            .collect::<Vec<_>>();
+        let projected = nodes
+            .iter()
+            .map(|point| frame.project(*point))
+            .collect::<Vec<_>>();
         let n_min = projected
             .iter()
             .map(|point| point[2])
@@ -312,7 +318,7 @@ fn sample_plane(
                 }
                 let uv = frame.pixel_center(x, y, request.resolution);
                 let point = frame.point(uv[0], uv[1], 0.0);
-                let Some(value) = interpolate_element(field, element, nodes, point) else {
+                let Some(value) = interpolate_element(field, element, &nodes, point) else {
                     continue;
                 };
                 occupancy[index] = Occupancy::Occupied;
@@ -437,18 +443,22 @@ fn sample_volume(
         if field.markers().get(element_index).copied().unwrap_or(1) == 0 {
             continue;
         }
-        let nodes = element.map(|index| field.nodes()[index as usize]);
-        if tetra_volume(nodes) <= 0.0 {
-            continue;
-        }
-        let projected: [LinearVertex; 4] = std::array::from_fn(|local| LinearVertex {
-            position: frame.project(nodes[local]),
-            value: (0..field.n_comp())
-                .map(|component| {
-                    field.values()[element[local] as usize * field.n_comp() + component]
-                })
-                .collect(),
-        });
+        let nodes = element
+            .nodes()
+            .iter()
+            .map(|index| field.nodes()[*index as usize])
+            .collect::<Vec<_>>();
+        let projected = element
+            .nodes()
+            .iter()
+            .enumerate()
+            .map(|(local, node)| LinearVertex {
+                position: frame.project(nodes[local]),
+                value: (0..field.n_comp())
+                    .map(|component| field.values()[*node as usize * field.n_comp() + component])
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
         let Some((x_bounds, y_bounds)) =
             projected_pixel_bounds(&projected, frame.bounds, request.resolution, s_bounds)
         else {
@@ -459,8 +469,9 @@ fn sample_volume(
                 let pixel = (y * request.resolution[0] + x) as usize;
                 let u_min = frame.bounds[0] + x as f64 * du;
                 let v_min = frame.bounds[2] + y as f64 * dv;
-                let contribution = integrate_clipped_tetra(
-                    projected.clone(),
+                let contribution = integrate_clipped_convex_element(
+                    &projected,
+                    element.faces(),
                     [
                         u_min,
                         u_min + du,
@@ -502,8 +513,12 @@ pub(super) fn interpolate_at(field: &FemPlanarField, point: [f64; 3]) -> Option<
         if field.markers().get(element_index).copied().unwrap_or(1) == 0 {
             continue;
         }
-        let nodes = element.map(|index| field.nodes()[index as usize]);
-        let Some(result) = interpolate_element(field, element, nodes, point) else {
+        let nodes = element
+            .nodes()
+            .iter()
+            .map(|index| field.nodes()[*index as usize])
+            .collect::<Vec<_>>();
+        let Some(result) = interpolate_element(field, element, &nodes, point) else {
             continue;
         };
         return Some((element_index as u32, result));
@@ -513,11 +528,14 @@ pub(super) fn interpolate_at(field: &FemPlanarField, point: [f64; 3]) -> Option<
 
 fn interpolate_element(
     field: &FemPlanarField,
-    element: &[u32; 4],
-    nodes: [[f64; 3]; 4],
+    element: &FemPlanarElement,
+    nodes: &[[f64; 3]],
     point: [f64; 3],
 ) -> Option<Vec<f64>> {
-    let weights = barycentric(nodes, point)?;
+    let weights = match element {
+        FemPlanarElement::Tet4(_) => barycentric(nodes.try_into().ok()?, point)?.to_vec(),
+        FemPlanarElement::Prism6(_) => prism6_weights(nodes.try_into().ok()?, point)?.to_vec(),
+    };
     if weights
         .iter()
         .any(|weight| *weight < -1.0e-11 || *weight > 1.0 + 1.0e-11)
@@ -525,13 +543,90 @@ fn interpolate_element(
         return None;
     }
     let mut result = vec![0.0; field.n_comp()];
-    for (local, node) in element.iter().enumerate() {
+    for (local, node) in element.nodes().iter().enumerate() {
         for component in 0..field.n_comp() {
             result[component] +=
                 weights[local] * field.values()[*node as usize * field.n_comp() + component];
         }
     }
     Some(result)
+}
+
+fn prism6_weights(nodes: [[f64; 3]; 6], point: [f64; 3]) -> Option<[f64; 6]> {
+    let mut reference = [1.0 / 3.0, 1.0 / 3.0, 0.5];
+    let scale = nodes
+        .iter()
+        .flat_map(|a| nodes.iter().map(move |b| dot(sub(*a, *b), sub(*a, *b))))
+        .fold(0.0_f64, f64::max)
+        .sqrt()
+        .max(f64::MIN_POSITIVE);
+    for _ in 0..16 {
+        let (weights, derivatives) = prism6_shape(reference);
+        let mapped = [0, 1, 2].map(|axis| {
+            weights
+                .iter()
+                .enumerate()
+                .map(|(local, weight)| weight * nodes[local][axis])
+                .sum::<f64>()
+        });
+        let residual = sub(mapped, point);
+        if dot(residual, residual).sqrt() <= scale * 1.0e-12 {
+            if reference[0] >= -1.0e-11
+                && reference[1] >= -1.0e-11
+                && reference[0] + reference[1] <= 1.0 + 1.0e-11
+                && reference[2] >= -1.0e-11
+                && reference[2] <= 1.0 + 1.0e-11
+            {
+                return Some(weights);
+            }
+            return None;
+        }
+        let jacobian = std::array::from_fn::<_, 3, _>(|column| {
+            [0, 1, 2].map(|axis| {
+                derivatives
+                    .iter()
+                    .enumerate()
+                    .map(|(local, derivative)| derivative[column] * nodes[local][axis])
+                    .sum::<f64>()
+            })
+        });
+        let determinant = dot(jacobian[0], cross(jacobian[1], jacobian[2]));
+        if determinant.abs() <= scale.powi(3) * 1.0e-15 {
+            return None;
+        }
+        let delta = [
+            dot(residual, cross(jacobian[1], jacobian[2])) / determinant,
+            dot(jacobian[0], cross(residual, jacobian[2])) / determinant,
+            dot(jacobian[0], cross(jacobian[1], residual)) / determinant,
+        ];
+        for axis in 0..3 {
+            reference[axis] -= delta[axis];
+        }
+    }
+    None
+}
+
+fn prism6_shape(reference: [f64; 3]) -> ([f64; 6], [[f64; 3]; 6]) {
+    let [r, s, t] = reference;
+    let l0 = 1.0 - r - s;
+    (
+        [
+            l0 * (1.0 - t),
+            r * (1.0 - t),
+            s * (1.0 - t),
+            l0 * t,
+            r * t,
+            s * t,
+        ],
+        [
+            [-(1.0 - t), -(1.0 - t), -l0],
+            [1.0 - t, 0.0, -r],
+            [0.0, 1.0 - t, -s],
+            [-t, -t, l0],
+            [t, 0.0, r],
+            [0.0, t, s],
+        ],
+    )
 }
 
 fn barycentric(nodes: [[f64; 3]; 4], point: [f64; 3]) -> Option<[f64; 4]> {
@@ -547,15 +642,6 @@ fn barycentric(nodes: [[f64; 3]; 4], point: [f64; 3]) -> Option<[f64; 4]> {
     let w1 = dot(a, cross(p, c)) / determinant;
     let w2 = dot(a, cross(b, p)) / determinant;
     Some([w0, w1, w2, 1.0 - w0 - w1 - w2])
-}
-
-pub(super) fn tetra_volume(nodes: [[f64; 3]; 4]) -> f64 {
-    dot(
-        sub(nodes[1], nodes[0]),
-        cross(sub(nodes[2], nodes[0]), sub(nodes[3], nodes[0])),
-    )
-    .abs()
-        / 6.0
 }
 
 pub(super) fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {

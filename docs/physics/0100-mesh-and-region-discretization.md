@@ -2,8 +2,9 @@
 
 - Status: implemented for FEM linear-mesh persistence, COMSOL MPHTXT v4, and Gmsh 4.1 interchange
 - Owners: Fullmag core
-- Last updated: 2026-07-30
+- Last updated: 2026-08-27
 - Related specs: `docs/specs/mesh-roundtrip-semantics-v1.md`, `docs/specs/geometry-policy-v0.md`, `docs/specs/material-assignment-and-spatial-fields-v0.md`
+- Governing ADR: `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md`
 
 (problem-statement)=
 ## 1. Problem statement
@@ -27,6 +28,27 @@ Zeeman, torque, relaxation, dynamics, and frequency-domain weak forms operate.
 Loading is legal only when the current mesh-producing authoring document has
 the same canonical fingerprint as the saved artifact.
 
+Rozwiązanie strefowej polityki rozmiaru jest zdefiniowane przez
+
+```{math}
+:label: eq-canonical-mesh-size-policy
+
+h_\mathrm{target}(\mathbf x)
+=\max\!\left(
+\min_{u\in\mathcal U(\mathbf x)}u,
+\max_{\ell\in\mathcal L(\mathbf x)}\ell
+\right),
+\qquad \min\varnothing=+\infty,\quad\max\varnothing=0.
+```
+
+`Max(Min(upper), Max(lower))` jest algebrą produktu, a nie przypadkową
+kolejnością Gmsh fields. Eligibility powstaje osobno dla universe/far-air,
+magnetic bulk, region/interface, surface, edge, corner, transition air,
+boundary layer i swept layer. Curvature jest osobnym upper source
+$h_\kappa=\kappa R$ aktywnym wyłącznie przez jawną politykę; nie zmienia
+maximum, minimum ani growth. Konflikt lower $>$ upper w tej samej strefie
+blokuje budowę przed Gmsh.
+
 (symbols-and-si-units)=
 ## 3. Symbols and SI units
 
@@ -42,6 +64,12 @@ the same canonical fingerprint as the saved artifact.
 | $\epsilon_{V,P}$ | Relative volume error recorded by the Python mixed-mesh certificate producer | $1$ |
 | $\epsilon_{V,R}$ | Relative volume error independently recomputed by the Rust validator | $1$ |
 | $\tau_V$ | Physical relative-volume acceptance limit for mixed-mesh certificates | $1$ |
+| $\mathbf x$ | Physical policy-evaluation point | $\mathrm m$ |
+| $\mathcal U(\mathbf x)$ | Eligible upper size constraints at $\mathbf x$ | $\mathrm m$ |
+| $\mathcal L(\mathbf x)$ | Eligible lower size constraints at $\mathbf x$ | $\mathrm m$ |
+| $h_\mathrm{target}(\mathbf x)$ | Resolved target element size | $\mathrm m$ |
+| $\kappa$ | Curvature factor | $1$ |
+| $R$ | Sampled positive local curvature radius | $\mathrm m$ |
 
 (assumptions-and-validity)=
 ## 4. Assumptions and validity
@@ -57,23 +85,28 @@ the same canonical fingerprint as the saved artifact.
   `.fullmag.json` sidecar and are revalidated on import.
 - Higher-order external elements and ambiguous or incomplete Physical Groups
   fail closed.
+- Exact through-thickness layers mean an exact three-dimensional cell-layer and
+  node-plane count only. They do not imply a structured Cartesian,
+  tensor-product, or mapped in-plane mesh.
+- ProblemIR V04 mesh policy changes only with the single atomic writer cutover
+  in ADR 0024/0027; v0.3 and V04 are never parallel editable canonical models.
 
 (python-api)=
 ## 5. Python API
 
-| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR destination |
-|---|---|---|---|---|---|---|---|
-| `study.mesh.save.path` | `str \| Path` | required | $1$ | Must end in .fullmag-mesh and resolve to a strictly valid shared-domain FEM mesh. | Native artifact destination. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset` |
-| `study.mesh.load.path` | `str \| Path` | required | $1$ | Schema, digests, authoring fingerprint, topology fingerprint, markers, and certificates must validate. | Native artifact source. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset` |
-| `study.mesh.save_or_load.path` | `str \| Path` | required | $1$ | Corrupt and unsupported artifacts fail closed; only missing or authoring-stale artifacts rebuild. | Reusable native artifact path. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset` |
-| `study.mesh.export.path` | `str \| Path` | required | $1$ | Must end in .mphtxt for COMSOL or .msh for Gmsh; every marker must have a semantic name. | Interchange destination. | FEM CPU/GPU | `not stored; external artifact` |
-| `study.mesh.export.format` | `str` | auto | $1$ | auto, comsol, or gmsh; auto resolves from suffix. | Interchange format selector. | FEM CPU/GPU | `not stored; external artifact` |
-| `study.mesh.import_.path` | `str \| Path` | required | $1$ | Must be a supported COMSOL .mphtxt v4 or Gmsh .msh file. | External mesh source. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset` |
-| `study.mesh.import_.region_map` | `Mapping[str, int] \| None` | None | $1$ | Required when a matching sidecar or unambiguous Physical Volume names are absent. | External volume name to canonical marker mapping. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset.region_markers` |
-| `study.mesh.import_.boundary_map` | `Mapping[str, int] \| None` | None | $1$ | Required for boundary selections not recoverable from sidecar or Physical Surface names. | External surface name to canonical marker mapping. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset.mesh.boundary_markers` |
-| `study.mesh.import_.region_entity_map` | `Mapping[int, int] \| None` | None | $1$ | COMSOL only; required without a matching sidecar. | COMSOL domain entity to canonical Fullmag volume marker. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset.element_markers` |
-| `study.mesh.import_.boundary_entity_map` | `Mapping[int, int] \| None` | None | $1$ | COMSOL only; required without a matching sidecar. | COMSOL boundary entity to canonical Fullmag boundary marker. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset.mesh.boundary_markers` |
-| `study.mesh.import_.coordinate_unit` | `str \| None` | None | $1$ | m, mm, um, or nm; required when no valid sidecar supplies the unit. | Unit of imported node coordinates. | FEM CPU/GPU | `normalized to geometry_assets.fem_domain_mesh_asset.mesh.nodes in metres` |
+| Python | Type | Default | SI unit | Validation / explicit error | Meaning | Backend support | ProblemIR destination | Source |
+|---|---|---|---|---|---|---|---|---|
+| `study.mesh.save.path` | `str \| Path` | required | $1$ | otherwise `ValueError`; must end in `.fullmag-mesh` and resolve to a strictly valid shared-domain FEM mesh. | Native artifact destination. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset` | `packages/fullmag-py/src/fullmag/meshing/persistence.py::save_mesh_artifact` |
+| `study.mesh.load.path` | `str \| Path` | required | $1$ | Schema, digests, authoring fingerprint, topology fingerprint, markers, and certificates must validate. | Native artifact source. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset` | `packages/fullmag-py/src/fullmag/meshing/persistence.py::load_mesh_artifact` |
+| `study.mesh.save_or_load.path` | `str \| Path` | required | $1$ | Corrupt and unsupported artifacts fail closed; only missing or authoring-stale artifacts rebuild. | Reusable native artifact path. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset` | `packages/fullmag-py/src/fullmag/world.py::StudyMeshHandle.save_or_load` |
+| `study.mesh.export.path` | `str \| Path` | required | $1$ | otherwise `ValueError`; must end in `.mphtxt` for COMSOL or .msh for Gmsh; every marker must have a semantic name. | Interchange destination. | FEM CPU/GPU | `not stored; external artifact` | `packages/fullmag-py/src/fullmag/world.py::StudyMeshHandle.export` |
+| `study.mesh.export.format` | `str` | auto | $1$ | auto, comsol, or gmsh; auto resolves from suffix. | Interchange format selector. | FEM CPU/GPU | `not stored; external artifact` | `packages/fullmag-py/src/fullmag/world.py::StudyMeshHandle.export` |
+| `study.mesh.import_.path` | `str \| Path` | required | $1$ | otherwise `ValueError`; must be a supported COMSOL .mphtxt v4 or Gmsh .msh file. | External mesh source. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset` | `packages/fullmag-py/src/fullmag/world.py::StudyMeshHandle.import_` |
+| `study.mesh.import_.region_map` | `Mapping[str, int] \| None` | None | $1$ | otherwise `ValueError`; required when a matching sidecar or unambiguous Physical Volume names are absent. | External volume name to canonical marker mapping. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset.region_markers` | `packages/fullmag-py/src/fullmag/meshing/persistence.py::import_comsol_mesh` |
+| `study.mesh.import_.boundary_map` | `Mapping[str, int] \| None` | None | $1$ | otherwise `ValueError`; required for boundary selections not recoverable from sidecar or Physical Surface names. | External surface name to canonical marker mapping. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset.mesh.boundary_markers` | `packages/fullmag-py/src/fullmag/meshing/persistence.py::import_comsol_mesh` |
+| `study.mesh.import_.region_entity_map` | `Mapping[int, int] \| None` | None | $1$ | otherwise `ValueError`; COMSOL only and required without a matching sidecar. | COMSOL domain entity to canonical Fullmag volume marker. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset.element_markers` | `packages/fullmag-py/src/fullmag/meshing/persistence.py::import_comsol_mesh` |
+| `study.mesh.import_.boundary_entity_map` | `Mapping[int, int] \| None` | None | $1$ | otherwise `ValueError`; COMSOL only and required without a matching sidecar. | COMSOL boundary entity to canonical Fullmag boundary marker. | FEM CPU/GPU | `geometry_assets.fem_domain_mesh_asset.mesh.boundary_markers` | `packages/fullmag-py/src/fullmag/meshing/persistence.py::import_comsol_mesh` |
+| `study.mesh.import_.coordinate_unit` | `str \| None` | None | $1$ | otherwise `ValueError`; one of `m`, `mm`, `um`, `nm`, and required when no valid sidecar supplies the unit. | Unit of imported node coordinates. | FEM CPU/GPU | `normalized to geometry_assets.fem_domain_mesh_asset.mesh.nodes in metres` | `packages/fullmag-py/src/fullmag/meshing/persistence.py::import_comsol_mesh` |
 
 ```python
 # %%
@@ -81,6 +114,8 @@ import fullmag as fm
 
 study = fm.study("cached_relaxation")
 study.engine("fem")
+study.device("cpu", precision="double")
+study.mode("strict")
 study.universe(mode="auto", padding=(100e-9, 100e-9, 100e-9))
 study.universe.mesh(maximum_element_size=100e-9)
 
@@ -88,7 +123,14 @@ film = study.geometry(
     fm.Box(size=(500e-9, 125e-9, 3e-9), name="film_geom"),
     name="film",
 )
+film.Ms = 800e3
+film.Aex = 13e-12
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 film.mesh(maximum_element_size=3e-9)
+study.exchange()
+study.demag(realization="poisson_robin")
+study.stages.add_relax(stage_id="relax", algorithm="projected_gradient_bb", max_steps=1)
 
 # %%
 # First run builds and saves. Matching later runs load without Gmsh.
@@ -275,3 +317,4 @@ FDM CPU and FDM GPU use the separate structured-grid certificate.
 | Gmsh import | `packages/fullmag-py/src/fullmag/meshing/persistence.py` | `import_gmsh_mesh` | Unit conversion, group mapping, new identity | FEM CPU/GPU | Interchange and air-marker tests |
 | Typed topology | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `class MeshData` | Canonical arrays, validation, fingerprints, quality serialization | FEM CPU/GPU | Persistence and meshing tests |
 | IR ingress | `packages/fullmag-py/src/fullmag/model/problem.py` | `build_geometry_assets_for_request` | Inline persisted mesh in `FemDomainMeshAssetIR` | FEM CPU/GPU | Materialization test |
+| Canonical mesh policy | `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md` | `DOC-ANCHOR:canonical-fem-mesh-policy` | Planowana algebra stref, upper/lower bounds, curvature i migracja | Cross-layer contract | planned contract |

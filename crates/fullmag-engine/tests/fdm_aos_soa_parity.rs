@@ -4,7 +4,11 @@ use fullmag_engine::{
 };
 
 fn norm(vector: [f64; 3]) -> f64 {
-    vector.iter().map(|component| component * component).sum::<f64>().sqrt()
+    vector
+        .iter()
+        .map(|component| component * component)
+        .sum::<f64>()
+        .sqrt()
 }
 
 #[test]
@@ -120,11 +124,7 @@ fn inactive_zero_ms_is_allowed_but_active_zero_ms_is_rejected() {
         Some(vec![false, true]),
     )
     .expect("masked problem should build")
-    .with_spatial_fields(
-        Some(vec![0.0, 8.0e5]),
-        None,
-        Some(vec![0.02, 0.02]),
-    )
+    .with_spatial_fields(Some(vec![0.0, 8.0e5]), None, Some(vec![0.02, 0.02]))
     .expect("zero Ms is valid outside the active domain");
     problem.temperature = 300.0;
     problem.thermal_dt = 2.0e-13;
@@ -168,9 +168,7 @@ fn aos_and_soa_effective_fields_include_regional_drive_once() {
         time_offset_s: 0.0,
         enabled: true,
     });
-    let state = problem
-        .uniform_state([1.0, 0.0, 0.0])
-        .expect("valid state");
+    let state = problem.uniform_state([1.0, 0.0, 0.0]).expect("valid state");
     let aos_field = problem
         .effective_field(&state)
         .expect("AoS effective field must be available");

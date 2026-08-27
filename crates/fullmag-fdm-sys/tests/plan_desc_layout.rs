@@ -10,7 +10,10 @@ fn plan_descriptor_has_versioned_complete_layout() {
     assert_eq!(std::mem::align_of::<fullmag_fdm_plan_desc_v2>(), 8);
     assert_eq!(std::mem::size_of::<fullmag_fdm_plan_desc_v2>(), 1384);
 
-    include!(concat!(env!("OUT_DIR"), "/plan_desc_v2_layout_assertions.rs"));
+    include!(concat!(
+        env!("OUT_DIR"),
+        "/plan_desc_v2_layout_assertions.rs"
+    ));
 }
 
 #[test]

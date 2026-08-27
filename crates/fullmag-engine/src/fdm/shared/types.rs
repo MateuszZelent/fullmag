@@ -328,8 +328,7 @@ pub enum ProjectionPolicy {
 }
 
 /// Stable identity of the current FDM RK projection realization.
-pub const FDM_RK_PROJECTION_REALIZATION_VERSION: &str =
-    "fullmag.fdm.rk_projection.unit_sphere.v1";
+pub const FDM_RK_PROJECTION_REALIZATION_VERSION: &str = "fullmag.fdm.rk_projection.unit_sphere.v1";
 
 impl ProjectionPolicy {
     pub const fn as_str(self) -> &'static str {
@@ -364,10 +363,15 @@ mod projection_policy_tests {
             FDM_RK_PROJECTION_REALIZATION_VERSION
         );
 
-        let projected = policy.project([3.0, 4.0, 0.0]).expect("finite vector projects");
+        let projected = policy
+            .project([3.0, 4.0, 0.0])
+            .expect("finite vector projects");
         assert!((projected[0] - 0.6).abs() < 1.0e-15);
         assert!((projected[1] - 0.8).abs() < 1.0e-15);
-        assert_eq!(policy.project([0.0, 0.0, 0.0]).expect("inactive cell"), [0.0; 3]);
+        assert_eq!(
+            policy.project([0.0, 0.0, 0.0]).expect("inactive cell"),
+            [0.0; 3]
+        );
         assert_eq!(
             policy.project([f64::NAN, 0.0, 0.0]).unwrap_err().code(),
             EngineErrorCode::NaNValue

@@ -141,15 +141,19 @@ export function buildTransportTrafficSummary(
   const endpoints = new Map<string, TransportEndpointSummary>();
 
   for (const entry of entries) {
+    const occurrenceCount = entry.occurrenceCount ?? 1;
     byteLength += entry.byteLength ?? 0;
-    oldestTimestampMs = Math.min(oldestTimestampMs, entry.timestampMs);
+    oldestTimestampMs = Math.min(
+      oldestTimestampMs,
+      entry.firstTimestampMs ?? entry.timestampMs,
+    );
     newestTimestampMs = Math.max(newestTimestampMs, entry.timestampMs);
 
-    if (entry.channel === "http") httpCount += 1;
-    if (entry.channel === "performance") performanceCount += 1;
-    if (entry.channel === "websocket") websocketCount += 1;
-    if (entry.direction === "rx") rxCount += 1;
-    if (entry.direction === "tx") txCount += 1;
+    if (entry.channel === "http") httpCount += occurrenceCount;
+    if (entry.channel === "performance") performanceCount += occurrenceCount;
+    if (entry.channel === "websocket") websocketCount += occurrenceCount;
+    if (entry.direction === "rx") rxCount += occurrenceCount;
+    if (entry.direction === "tx") txCount += occurrenceCount;
 
     const label = summarizeTransportPath(entry);
     const endpoint = endpoints.get(label) ?? {
@@ -161,22 +165,23 @@ export function buildTransportTrafficSummary(
       txCount: 0,
     };
     endpoint.byteLength += entry.byteLength ?? 0;
-    endpoint.count += 1;
+    endpoint.count += occurrenceCount;
     endpoint.latestTimestampMs = Math.max(
       endpoint.latestTimestampMs,
       entry.timestampMs,
     );
-    if (entry.direction === "rx") endpoint.rxCount += 1;
-    if (entry.direction === "tx") endpoint.txCount += 1;
+    if (entry.direction === "rx") endpoint.rxCount += occurrenceCount;
+    if (entry.direction === "tx") endpoint.txCount += occurrenceCount;
     endpoints.set(label, endpoint);
   }
 
   const windowMs = Math.max(0, newestTimestampMs - oldestTimestampMs);
+  const totalCount = httpCount + performanceCount + websocketCount;
 
   return {
     byteLength,
     estimatedEventsPerMinute:
-      windowMs >= 1000 ? (entries.length * 60_000) / windowMs : null,
+      windowMs >= 1000 ? (totalCount * 60_000) / windowMs : null,
     httpCount,
     performanceCount,
     rxCount,
@@ -189,7 +194,7 @@ export function buildTransportTrafficSummary(
           left.label.localeCompare(right.label),
       )
       .slice(0, 4),
-    totalCount: entries.length,
+    totalCount,
     txCount,
     websocketCount,
     windowMs,

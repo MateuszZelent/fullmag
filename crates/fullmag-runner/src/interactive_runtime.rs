@@ -13,9 +13,9 @@ use fullmag_ir::{BackendPlanIR, FdmPlanIR, FemPlanIR, OutputIR, ProblemIR};
 use crate::dispatch::{self, FdmEngine, FemEngine};
 use crate::fdm::cpu::reference as cpu_reference;
 #[cfg(feature = "cuda")]
-use crate::fdm::gpu::cuda::native::{NativeFdmBackend, NativeFdmPreviewSnapshot};
-#[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::native::residency::FdmGpuReceiptLifecycle;
+#[cfg(feature = "cuda")]
+use crate::fdm::gpu::cuda::native::{NativeFdmBackend, NativeFdmPreviewSnapshot};
 use crate::fem_baseline;
 #[cfg(feature = "fem-gpu")]
 use crate::native_fem::{DeviceInfo as FemDeviceInfo, NativeFemBackend};
@@ -651,15 +651,14 @@ mod tests {
     #[test]
     fn cpu_interactive_runtime_keeps_supported_fdm_segment_on_persistent_soa_state() {
         let plan = make_soa_fdm_plan();
-        let mut runtime =
-            InteractiveFdmPreviewRuntime::from_fdm_plan(
-                &plan,
-                FdmEngine::CpuReference,
-                None,
-                "cpu",
-                fullmag_ir::ExecutionMode::Strict,
-            )
-                .expect("CPU interactive runtime should build");
+        let mut runtime = InteractiveFdmPreviewRuntime::from_fdm_plan(
+            &plan,
+            FdmEngine::CpuReference,
+            None,
+            "cpu",
+            fullmag_ir::ExecutionMode::Strict,
+        )
+        .expect("CPU interactive runtime should build");
         let cpu = match &mut runtime.inner {
             InteractiveFdmPreviewRuntimeInner::Cpu(cpu) => cpu,
             #[cfg(feature = "cuda")]
@@ -730,15 +729,14 @@ mod tests {
             }),
             field_xyz: vec![[0.0, 250.0, -125.0]; plan.initial_magnetization.len()],
         }];
-        let mut runtime =
-            InteractiveFdmPreviewRuntime::from_fdm_plan(
-                &plan,
-                FdmEngine::CpuReference,
-                None,
-                "cpu",
-                fullmag_ir::ExecutionMode::Strict,
-            )
-                .expect("CPU interactive runtime should build");
+        let mut runtime = InteractiveFdmPreviewRuntime::from_fdm_plan(
+            &plan,
+            FdmEngine::CpuReference,
+            None,
+            "cpu",
+            fullmag_ir::ExecutionMode::Strict,
+        )
+        .expect("CPU interactive runtime should build");
         let display_selection = || {
             let mut state = DisplaySelectionState::default();
             state.selection.quantity = "E_total".to_string();
@@ -928,15 +926,14 @@ mod tests {
             let mut execution_plan = fullmag_plan::plan(&ProblemIR::bootstrap_example())
                 .expect("bootstrap execution plan");
             execution_plan.backend_plan = BackendPlanIR::Fdm(plan.clone());
-            let mut runtime =
-                InteractiveFdmPreviewRuntime::from_fdm_plan(
-                    &plan,
-                    FdmEngine::CpuReference,
-                    None,
-                    "cpu",
-                    fullmag_ir::ExecutionMode::Strict,
-                )
-                    .expect("CPU interactive runtime should build");
+            let mut runtime = InteractiveFdmPreviewRuntime::from_fdm_plan(
+                &plan,
+                FdmEngine::CpuReference,
+                None,
+                "cpu",
+                fullmag_ir::ExecutionMode::Strict,
+            )
+            .expect("CPU interactive runtime should build");
             let executed = ExecutedRun {
                 result: RunResult {
                     status,
@@ -980,15 +977,14 @@ mod tests {
         }
 
         let plan = make_soa_fdm_plan();
-        let mut runtime =
-            InteractiveFdmPreviewRuntime::from_fdm_plan(
-                &plan,
-                FdmEngine::CudaFdm,
-                None,
-                "gpu",
-                fullmag_ir::ExecutionMode::Strict,
-            )
-                .expect("CUDA interactive runtime should build");
+        let mut runtime = InteractiveFdmPreviewRuntime::from_fdm_plan(
+            &plan,
+            FdmEngine::CudaFdm,
+            None,
+            "gpu",
+            fullmag_ir::ExecutionMode::Strict,
+        )
+        .expect("CUDA interactive runtime should build");
         let display_selection = || DisplaySelectionState::default();
         let mut backend_terminal_batches = 0;
         let executed = runtime
@@ -1056,15 +1052,14 @@ mod tests {
     #[test]
     fn cpu_interactive_snapshot_preview_m_uses_direct_state_without_reobserving_state() {
         let plan = make_soa_fdm_plan();
-        let mut runtime =
-            InteractiveFdmPreviewRuntime::from_fdm_plan(
-                &plan,
-                FdmEngine::CpuReference,
-                None,
-                "cpu",
-                fullmag_ir::ExecutionMode::Strict,
-            )
-                .expect("CPU interactive runtime should build");
+        let mut runtime = InteractiveFdmPreviewRuntime::from_fdm_plan(
+            &plan,
+            FdmEngine::CpuReference,
+            None,
+            "cpu",
+            fullmag_ir::ExecutionMode::Strict,
+        )
+        .expect("CPU interactive runtime should build");
 
         reset_observe_state_calls();
         let preview = runtime
@@ -1088,15 +1083,14 @@ mod tests {
     fn cpu_interactive_snapshot_vector_fields_share_direct_effective_field_cache_without_reobserving_state(
     ) {
         let plan = make_soa_fdm_plan();
-        let mut runtime =
-            InteractiveFdmPreviewRuntime::from_fdm_plan(
-                &plan,
-                FdmEngine::CpuReference,
-                None,
-                "cpu",
-                fullmag_ir::ExecutionMode::Strict,
-            )
-                .expect("CPU interactive runtime should build");
+        let mut runtime = InteractiveFdmPreviewRuntime::from_fdm_plan(
+            &plan,
+            FdmEngine::CpuReference,
+            None,
+            "cpu",
+            fullmag_ir::ExecutionMode::Strict,
+        )
+        .expect("CPU interactive runtime should build");
 
         reset_observe_state_calls();
         reset_direct_field_assembly_calls();
@@ -1140,15 +1134,14 @@ mod tests {
         plan.initial_magnetization = std::iter::once([1.0, 0.0, 0.0])
             .chain(std::iter::repeat_n([0.0, 0.0, 0.0], 7))
             .collect();
-        let mut runtime =
-            InteractiveFdmPreviewRuntime::from_fdm_plan(
-                &plan,
-                FdmEngine::CpuReference,
-                None,
-                "cpu",
-                fullmag_ir::ExecutionMode::Strict,
-            )
-                .expect("CPU interactive runtime should build");
+        let mut runtime = InteractiveFdmPreviewRuntime::from_fdm_plan(
+            &plan,
+            FdmEngine::CpuReference,
+            None,
+            "cpu",
+            fullmag_ir::ExecutionMode::Strict,
+        )
+        .expect("CPU interactive runtime should build");
         let cpu = match &mut runtime.inner {
             InteractiveFdmPreviewRuntimeInner::Cpu(cpu) => cpu,
             #[cfg(feature = "cuda")]
@@ -1188,15 +1181,14 @@ mod tests {
         plan.initial_magnetization = std::iter::once([1.0, 0.0, 0.0])
             .chain(std::iter::repeat_n([0.0, 0.0, 0.0], 7))
             .collect();
-        let mut runtime =
-            InteractiveFdmPreviewRuntime::from_fdm_plan(
-                &plan,
-                FdmEngine::CpuReference,
-                None,
-                "cpu",
-                fullmag_ir::ExecutionMode::Strict,
-            )
-                .expect("CPU interactive runtime should build");
+        let mut runtime = InteractiveFdmPreviewRuntime::from_fdm_plan(
+            &plan,
+            FdmEngine::CpuReference,
+            None,
+            "cpu",
+            fullmag_ir::ExecutionMode::Strict,
+        )
+        .expect("CPU interactive runtime should build");
         let display_selection = || {
             let mut state = DisplaySelectionState::default();
             state.selection.quantity = "H_demag".to_string();
@@ -1236,15 +1228,14 @@ mod tests {
     #[test]
     fn cpu_interactive_snapshot_step_stats_uses_last_step_report_without_reobserving_state() {
         let plan = make_soa_fdm_plan();
-        let mut runtime =
-            InteractiveFdmPreviewRuntime::from_fdm_plan(
-                &plan,
-                FdmEngine::CpuReference,
-                None,
-                "cpu",
-                fullmag_ir::ExecutionMode::Strict,
-            )
-                .expect("CPU interactive runtime should build");
+        let mut runtime = InteractiveFdmPreviewRuntime::from_fdm_plan(
+            &plan,
+            FdmEngine::CpuReference,
+            None,
+            "cpu",
+            fullmag_ir::ExecutionMode::Strict,
+        )
+        .expect("CPU interactive runtime should build");
         let display_selection = || {
             let mut state = DisplaySelectionState::default();
             state.selection.quantity = "E_total".to_string();
@@ -1399,13 +1390,11 @@ impl InteractiveFdmPreviewRuntime {
                 let fft_workspace = problem.create_workspace();
                 let integrator_buffers = problem.create_integrator_buffers();
                 let mut provenance = cpu_execution_provenance(plan)?;
-                provenance.fdm_cpu_state_layout = Some(
-                    FdmCpuStateLayoutProvenance::from_problem(
-                        &problem,
-                        state_soa.is_some(),
-                        None,
-                    ),
-                );
+                provenance.fdm_cpu_state_layout = Some(FdmCpuStateLayoutProvenance::from_problem(
+                    &problem,
+                    state_soa.is_some(),
+                    None,
+                ));
                 attach_resolved_fallback_to_provenance(&mut provenance, fallback);
                 InteractiveFdmPreviewRuntimeInner::Cpu(CpuInteractiveFdmPreviewRuntime {
                     problem,
@@ -1427,11 +1416,7 @@ impl InteractiveFdmPreviewRuntime {
                     let device_info = backend.device_info()?;
                     let mut provenance = cuda_execution_provenance(plan, &device_info)?;
                     let (receipt_lifecycle, initial_receipt) =
-                        FdmGpuReceiptLifecycle::begin(
-                            &backend,
-                            requested_device,
-                            execution_mode,
-                        )?;
+                        FdmGpuReceiptLifecycle::begin(&backend, requested_device, execution_mode)?;
                     provenance.fdm_gpu_execution_receipt = Some(initial_receipt);
                     attach_resolved_fallback_to_provenance(&mut provenance, fallback);
                     InteractiveFdmPreviewRuntimeInner::Cuda(CudaInteractiveFdmPreviewRuntime {

@@ -13,10 +13,12 @@ export interface RequestDiagnosticEntry {
   direction: TransportDirection;
   durationMs: number | null;
   etag?: string | null;
+  firstTimestampMs?: number;
   id: string;
   messageType: string | null;
   method: string;
   outcome: TransportOutcome;
+  occurrenceCount?: number;
   path: string;
   requestId: string;
   resourceKey?: string | null;
@@ -94,10 +96,12 @@ export class RequestDiagnosticsController {
       direction: entry.direction ?? "rx",
       durationMs: entry.durationMs ?? null,
       etag: entry.etag ?? null,
+      firstTimestampMs: timestampMs,
       id: `${timestampMs}-${this.sequence++}`,
       messageType: entry.messageType ?? null,
       method: entry.method,
       outcome: entry.outcome,
+      occurrenceCount: 1,
       path: entry.path,
       requestId: entry.requestId,
       resourceKey: entry.resourceKey ?? null,
@@ -203,6 +207,7 @@ export class RequestDiagnosticsController {
         return false;
       }
       aggregate.count += 1;
+      previous.occurrenceCount = aggregate.count;
       previous.byteLength = addNullableByteLengths(previous.byteLength, entry.byteLength);
       previous.detail = aggregateDiagnosticDetail(
         entry.detail,

@@ -1,169 +1,236 @@
-# Swept mesh (through-thickness structured layers)
+# Swept mesh through thickness
 
-- Status: implemented for Box, Cylinder, and ArchWaveguide thin-film surface layering
-- Last updated: 2026-07-27
-- Related specs: `docs/physics/0100-mesh-and-region-discretization.md`
-- Mixed-P1 target: `docs/physics/0106-fem-mixed-prism-pyramid-shared-domain.md`
+- Status: authoring and Box/Cylinder generation implemented; bounded Box mixed-P1 execution has source/contract status only; managed production qualification remains pending
+- Last updated: 2026-08-27
+- Governing ADRs: `docs/adr/0021-native-mixed-p1-fem-topology.md`, `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md`
 
+(swept-mesh-problem-statement)=
 ## 1. Problem statement
 
-Thin-film micromagnetic geometries (bilayers, multilayers, patterned disks, tracks) have large
-in-plane extent relative to their thickness. A fully tetrahedral mesh often wastes elements on the
-thin dimension or produces badly shaped (high-aspect-ratio) tetrahedra that degrade solver accuracy
-and performance.
+Swept meshing resolves a thin three-dimensional body with controlled layers in
+one direction without forcing the whole airbox to the thickness scale. It is a
+discretization strategy, not a shell, 2.5D, macrospin, or new physical model.
 
-A swept (extruded, through-thickness) mesh generates structured prismatic or hexahedral layers along
-the thin direction and meshes the remaining face with an unstructured 2-D triangulation. This gives
-fine through-thickness resolution with high element quality, matching COMSOL's "swept mesh"
-paradigm.
+(swept-mesh-governing-equations)=
+## 2. Governing equations
 
-## 2. Physical model
+For fixed layers of thickness $t$ and exact count $N_z$, node-plane positions
+are
 
-### 2.1 Governing equations
+```{math}
+:label: eq-swept-fixed-planes
 
-No new equations; swept meshing is a discretization strategy. It affects element shape functions,
-quadrature quality, and how exchange/demag operators discretize gradients through the film normal.
+z_j=z_0+\frac{j}{N_z}t,
+\qquad j=0,\ldots,N_z.
+```
 
-### 2.2 Symbols and SI units
+For a non-uniform distribution, positive layer heights must sum to thickness:
 
-| Symbol         | Meaning                          | Unit |
-|----------------|----------------------------------|------|
-| $N_z$          | Number of layers through thickness | —  |
-| $t$            | Total thickness                  | m    |
-| $h_z$          | Layer height ($t / N_z$ for uniform) | m |
+```{math}
+:label: eq-swept-layer-sum
 
-### 2.3 Assumptions and approximations
+h_i>0,
+\qquad \sum_{i=0}^{N_z-1}h_i=t.
+```
 
-- The geometry is prismatic or nearly prismatic along one axis (the sweep direction).
-- Source and target faces are parallel planar or gently curved.
-- In-plane mesh nodes are replicated at each swept layer; node count scales as
-  $N_\text{surface} \times (N_z + 1)$.
+The implementation first constructs dimensionless raw weights and then
+normalizes them. For the non-symmetric case,
 
-## 3. Numerical interpretation
+```{math}
+:label: eq-swept-layer-weights
 
-### 3.1 FDM
+w_i=
+\begin{cases}
+1, & D=\mathtt{fixed}\ \text{or}\ r=1,\\
+1+(r-1)\dfrac{i}{N_z-1}, & D=\mathtt{linear},\ N_z>1,\\
+r^i, & D=\mathtt{exponential},
+\end{cases}
+\qquad
+f_i=\frac{w_i}{\sum_{k=0}^{N_z-1}w_k},
+\qquad h_i=t f_i.
+```
 
-Not applicable. FDM already uses a regular Cartesian grid with explicit cell sizes per direction.
+The single-layer linear case is defined separately as $f_0=1$. The current
+helper also takes the uniform branch whenever $r=1$, independently of the
+distribution token.
 
-### 3.2 FEM
+For symmetric grading with $m=\lfloor N_z/2\rfloor$, let
+$(q_0,\ldots,q_{m-1})$ be the already-normalized non-symmetric distribution
+returned for $m$ layers with the same distribution and ratio. The
+implementation forms
 
-The swept mesh strategy applies to FEM geometries where one direction (typically z for thin films)
-has significantly fewer characteristic lengths than the in-plane directions.
+```{math}
+:label: eq-swept-symmetric-normalization
 
-For `ArchWaveguide`, the supported production path is layered surface-constrained tetrahedral
-meshing: the arch surface is generated with explicit through-thickness layer boundaries, then the
-shared-domain tetrahedral mesh conforms to those layer boundaries. This gives deterministic control
-over "one element through a 2 nm thickness" while preserving the airbox/shared-domain mesh contract.
+\boldsymbol u=
+\begin{cases}
+(q_0,\ldots,q_{m-1},q_{m-1},\ldots,q_0), & N_z=2m,\\
+(q_0,\ldots,q_{m-1},1/N_z,q_{m-1},\ldots,q_0), & N_z=2m+1,
+\end{cases}
+\qquad
+f_i=\frac{u_i}{\sum_k u_k},
+\qquad h_i=t f_i.
+```
 
-**Distribution types:**
+This is an implementation contract, including the second normalization after
+mirroring; it is not equivalent to independently assigning half of the
+physical thickness to each half-vector.
 
-| Distribution  | Layer heights                                      |
-|---------------|---------------------------------------------------|
-| `fixed`       | All layers equal: $h_i = t / N_z$                 |
-| `linear`      | Linear growth: $h_i = h_0 + i \cdot d$            |
-| `exponential` | Geometric growth: $h_i = h_0 \cdot r^i$           |
+(swept-mesh-symbols-and-si-units)=
+## 3. Symbols and SI units
 
-Non-uniform distributions concentrate elements near surfaces (interfaces, free boundaries) where
-exchange and stray-field gradients are strongest.
+| LaTeX token | Meaning | SI unit |
+|---|---|---|
+| $z_0$ | first node-plane coordinate along the sweep direction | $\mathrm m$ |
+| $z_j$ | coordinate of node plane $j$ | $\mathrm m$ |
+| $j$ | node-plane index | $1$ |
+| $N_z$ | number of three-dimensional element layers | $1$ |
+| $t$ | physical swept thickness | $\mathrm m$ |
+| $h_i$ | physical height of layer $i$ | $\mathrm m$ |
+| $i$ | layer index | $1$ |
+| $\tau_\mathrm{plane}$ | plane grouping tolerance | $\mathrm m$ |
+| $D$ | distribution token | $1$ |
+| $r$ | requested element ratio | $1$ |
+| $w_i$ | raw non-symmetric layer weight | $1$ |
+| $f_i$ | normalized layer-height fraction | $1$ |
+| $m$ | floor of half the layer count | $1$ |
+| $q_i$ | normalized half-vector weight | $1$ |
+| $u_i$ | provisional mirrored weight | $1$ |
 
-**Element type:** Swept meshing produces prismatic (wedge) elements from triangular source faces or
-hexahedral elements from quadrilateral source faces. The current tetrahedral solver path may convert
-these cells only when the requested contract permits that realized topology. The strict mixed-P1
-target keeps native `prism6` magnetic cells, uses `pyramid5` only in the air transition, and forbids
-silent prism-to-tet conversion; that target is not executable yet.
+(swept-mesh-assumptions-and-validity)=
+## 4. Assumptions and validity
 
-### 3.3 Hybrid
+- Sweepability is geometry-specific; current generation supports Box and
+  Cylinder, while ArchWaveguide uses layered surface-constrained tetrahedra
+  unless a separately qualified volume sweep exists.
+- `exact_layers=True` requires fixed distribution, unit ratio, no symmetric
+  grading, and an exact $N_z+1$ plane certificate.
+- Exact layers do **not** mean structured in-plane mesh. A triangular source
+  face may be unstructured and still extrude to exact `prism6` layers.
+- Quadrilateral source faces request `hex8`; the current bounded mixed-P1
+  execution contract is prism/pyramid/tet and does not admit hex silently.
 
-Hybrid paths may benefit from a swept mesh on the FEM side while using the in-plane Cartesian grid
-for FDM operators. The interface projection is simpler when the FEM layer boundaries align with FDM
-cell boundaries.
+(swept-mesh-python-api)=
+## 5. Python API
 
-## 4. API, IR, and planner impact
+| Python | Type | Default | SI unit | Validation / error | Meaning | Backend support | ProblemIR destination | Source |
+|---|---|---|---|---|---|---|---|---|
+| `GeometryMeshHandle.swept.elements` | `int` | `6` | $1$ | integer $\ge1$; otherwise `ValueError` | layer count | FEM CPU/GPU authoring | `runtime_metadata.mesh_workflow.per_geometry[].through_thickness_elements` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.swept` |
+| `GeometryMeshHandle.swept.distribution` | `"fixed" \| "linear" \| "exponential"` | `"fixed"` | $1$ | other token gives `ValueError`; exact layers require `fixed` | layer-height law | FEM CPU/GPU authoring | `runtime_metadata.mesh_workflow.per_geometry[].through_thickness_distribution` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.swept` |
+| `GeometryMeshHandle.swept.element_ratio` | `float` | `1.0` | $1$ | finite positive; exact layers require $1$ | last/first layer-height ratio | FEM CPU/GPU authoring | `runtime_metadata.mesh_workflow.per_geometry[].through_thickness_element_ratio` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.swept` |
+| `GeometryMeshHandle.swept.symmetric` | `bool` | `False` | $1$ | exact layers reject `True` | mirror grading about mid-plane | FEM CPU/GPU authoring | `runtime_metadata.mesh_workflow.per_geometry[].through_thickness_symmetric` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.swept` |
+| `GeometryMeshHandle.swept.face_meshing` | `"triangular" \| "quadrilateral"` | `"triangular"` | $1$ | other token gives `ValueError` | source-face topology | FEM CPU/GPU authoring | `runtime_metadata.mesh_workflow.per_geometry[].sweep_face_meshing` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.swept` |
+| `GeometryMeshHandle.swept.sweep_direction` | `"auto" \| "x" \| "y" \| "z"` | `"auto"` | $1$ | other token gives `ValueError` | requested sweep axis | FEM CPU/GPU authoring | `runtime_metadata.mesh_workflow.per_geometry[].sweep_direction` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.swept` |
+| `GeometryMeshHandle.swept.transition` | `"pyramid_to_tetrahedra" \| "reject" \| None` | `None` | $1$ | triangular defaults to pyramid transition; quadrilateral defaults to reject; hex plus pyramid transition gives `ValueError` | shared-domain transition policy | bounded prism lane only when supported | `runtime_metadata.mesh_workflow.per_geometry[].transition_policy` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.swept` |
+| `GeometryMeshHandle.swept.exact_layers` | `bool \| None` | `None` | $1$ | non-bool gives `TypeError`; `None` resolves to `True`; prism with `False` rejects outside `extended` | require requested=realized layer count | bounded mixed-P1 FEM | `runtime_metadata.mesh_workflow.per_geometry[].exact_layer_count` | `packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.swept` |
 
-### 4.1 Python API surface
-
-Current Python object mesh API:
+| Mode | Face meshing / family | `exact_layers` | Transition | Result |
+|---|---|---|---|---|
+| `strict` | triangular / `prism6` | `None` or `True` | `None` or `pyramid_to_tetrahedra` | accepted; `None` normalizes to exact and transition defaults to pyramid-to-tetrahedra |
+| `strict` | triangular / `prism6` | `False` | any | rejected: non-exact prism execution is extended-only |
+| `extended` | triangular / `prism6` | `False` | `None`, `pyramid_to_tetrahedra`, or `reject` | accepted authoring; realized fallback must be reported |
+| any | quadrilateral / `hex8` | `None`, `True`, or `False` | `None` or `reject` | accepted authoring; `None` transition normalizes to reject; current bounded mixed-P1 execution does not qualify hex |
+| any | quadrilateral / `hex8` | any | `pyramid_to_tetrahedra` | rejected with `ValueError` |
 
 ```python
-waveguide.mesh(
-    maximum_element_size=50e-9,
-    minimum_element_size=2e-9,
-    mesh_strategy="swept_prism",
-    through_thickness_elements=1,
-    through_thickness_distribution="fixed",
-    sweep_face_meshing="triangular",
-)
+# %% Author exact three-dimensional prism layers.
+import fullmag as fm
+
+fm.reset()
+study = fm.study("swept-film")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.universe(mode="manual", size=(120e-9, 80e-9, 60e-9))
+study.universe.mesh(maximum_element_size=20e-9)
+film = study.geometry(fm.Box(size=(24e-9, 12e-9, 3e-9)), name="film")
+film.Ms = 800e3
+film.Aex = 13e-12
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+film.mesh(maximum_element_size=3e-9, order=1)
+film.mesh.swept(elements=3, distribution="fixed", face_meshing="triangular", exact_layers=True)
+study.exchange()
+study.demag(realization="poisson_robin")
+study.stages.add_relax(stage_id="relax", algorithm="projected_gradient_bb", max_steps=1)
 ```
 
-The convenience form is:
+(swept-mesh-problem-ir)=
+## 6. ProblemIR
 
-```python
-waveguide.mesh.swept(elements=1, distribution="fixed", face_meshing="triangular")
-```
+Requested sweep fields remain under
+`runtime_metadata.mesh_workflow.per_geometry[]`. Realized cell types, layer
+planes and certificate remain derived mesh evidence. Numeric Gmsh element IDs
+never enter canonical IR.
 
-Swept/layered controls are per-object mesh semantics. A single object may request one through-
-thickness layer when the physical model intentionally assumes no through-thickness variation.
-Fullmag still reports a thin-film diagnostic warning below four layers because that is often too
-coarse for exchange-gradient accuracy.
+Typowany model V04 przechodzi wyłącznie w jednym atomic writer cutover z ADR
+0024/0027; dual-write V03/V04 jest zabroniony.
 
-### 4.2 ProblemIR representation
+(swept-mesh-round-trip-and-failure-semantics)=
+## 7. Round-trip and failure semantics
 
-```rust
-pub struct SweptMeshHintsIR {
-    pub sweep_direction: String,           // "auto" | "x" | "y" | "z"
-    pub num_layers: u32,
-    pub distribution: String,              // "uniform" | "arithmetic" | "geometric"
-    pub growth_rate: Option<f64>,
-}
-```
+Python/UI export preserves requested intent. Resolved execution records the
+actual axis, cell families, plane count, transition and fallback list.
+Validation errors reject malformed or internally contradictory tuples.
+Unsupported combinations reject before backend startup. Strict execution never
+splits prisms to tets, turns exact off, or falls back GPU to CPU.
 
-Attached to `FemPerObjectTargetIR` as an optional `swept` field.
+(swept-mesh-discrete-realization)=
+## 8. Discrete realization
 
-### 4.3 Planner and capability-matrix impact
+| Solver | Device | Status |
+|---|---|---|
+| FDM | CPU | not applicable: Cartesian cells already carry directional size |
+| FDM | GPU | not applicable: Cartesian cells already carry directional size |
+| FEM | CPU | authoring/generation implemented; bounded mixed-P1 source contract, managed qualification pending |
+| FEM | GPU | same topology contract; strict device evidence remains lane-specific and pending |
 
-- The planner must verify that the geometry is prismatic before accepting swept mesh controls.
-- If `sweep_direction = "auto"`, the planner resolves it from the geometry's bounding box
-  (shortest axis).
-- Gmsh availability is sufficient only to author or generate a swept mesh. Native mixed-element
-  execution additionally requires the exact topology, operator, ABI, and lane capabilities in note
-  0106; unsupported combinations reject before backend startup.
+Layer height, plane count, manifoldness, topology and quality sampling use the
+exact gates in notes 0105 and 0106. `structured in-plane` is not a resolved
+method for this API.
 
-## 5. Validation strategy
+(swept-mesh-implementation-mapping)=
+## 9. Implementation mapping
 
-### 5.1 Analytical checks
+`GeometryMeshHandle.swept` validates and lowers authoring;
+`classify_sweepability` resolves geometry eligibility;
+`_compute_layer_heights` constructs distributions; and
+`generate_swept_mesh` dispatches current generators. Bounded Box mixed topology
+is owned by `generate_swept_box_mesh`.
 
-- For a native-prism request, verify exactly
-  `N_\text{surface\_elements} × N_z` magnetic prisms in the realized solver mesh, with no tet split.
-- Verify layer heights match the requested distribution.
+(swept-mesh-validation)=
+## 10. Validation
 
-### 5.2 Cross-backend checks
+Tests require Python/IR/export round-trip; positive heights summing to $t$;
+exact $N_z+1$ planes within
+$\tau_\mathrm{plane}=\max(10^{-15}\,\mathrm m,10^{-8}t)$; correct cell/facet
+families; manifold shared-domain ownership; no hidden splitter; and the 0105
+Jacobian/quality/evidence gates. Runtime claims additionally require managed
+CPU/GPU proof.
 
-- Compare FEM solutions on swept vs. unstructured meshes for a standard thin-film problem.
-- Element quality metrics (SICN, gamma) should improve for swept meshes on thin geometries.
+(swept-mesh-limitations)=
+## 11. Limitations
 
-### 5.3 Regression tests
+- Full curved-volume ArchWaveguide prism/hex sweep is not qualified.
+- Hex shared-domain execution is unsupported by the bounded mixed-P1 lane.
+- Non-fixed distributions cannot claim exact layer spacing/count.
+- Structured in-plane authoring is not implemented.
 
-- Round-trip: Python → IR → session state → UI → export → Python must preserve swept mesh controls.
-- Solver convergence on a 5 nm thin film with 3 swept layers vs. unstructured.
+(swept-mesh-scientific-bibliography)=
+## 12. Scientific bibliography
 
-## 6. Completeness checklist
+- Gmsh 4.15.2 reference manual, extrusion and transfinite meshing,
+  <https://gmsh.info/doc/texinfo/gmsh.html>.
+- P. M. Knupp, “Algebraic mesh quality metrics,”
+  <https://doi.org/10.1137/S1064827500371499>.
 
-- [x] Python API — `mesh_strategy`, `through_thickness_*`, and `mesh.swept(...)`
-- [x] ProblemIR/session metadata — mesh workflow preserves swept controls for single-object and mesh-options paths
-- [x] Planner — swept mesh eligibility check for Box, Cylinder, and ArchWaveguide
-- [ ] Capability matrix — existing swept authoring and native mixed-P1 execution are distinct
-- [ ] FDM backend — N/A
-- [x] FEM backend — Gmsh swept mesh generation for Box/Cylinder and the layered ArchWaveguide
-  surface-constrained tetrahedral path
-- [ ] FEM mixed-P1 backend — native prism/pyramid/tet import and operators
-- [ ] UI — swept mesh controls panel
-- [ ] Round-trip — Python ↔ UI export preservation
-- [x] Validation — ArchWaveguide layered surface topology and runtime metadata regression tests
+(swept-mesh-source-code-index)=
+## 13. Source-code index
 
-## 7. Known limits and deferred work
-
-- Only single-axis sweeps are supported initially (no multi-step COMSOL-style sweeps).
-- Full curved-volume prism/hexahedral sweeping for `ArchWaveguide` is deferred; current support is
-  layered surface-constrained tetrahedral meshing in the shared-domain pipeline.
-- Auto-detection of sweep eligibility relies on bounding-box heuristics; complex non-prismatic
-  geometries may need explicit user hints.
+| Claim | Path | Stable symbol | Responsibility | Lane | Evidence |
+|---|---|---|---|---|---|
+| Public sweep API | `packages/fullmag-py/src/fullmag/world.py` | `class GeometryMeshHandle` | validates and lowers sweep intent | FEM CPU/GPU | Python contract tests |
+| Sweepability | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `classify_sweepability` | resolves supported geometry and thickness | FEM generation | Gmsh tests |
+| Layer heights | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_compute_layer_heights` | computes fixed/linear/exponential heights | FEM generation | unit tests |
+| Sweep dispatch | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `generate_swept_mesh` | dispatches current swept generators | FEM generation | meshing tests |
+| Mixed Box generation | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `generate_swept_box_mesh` | produces bounded prism/pyramid/tet shared domain | FEM CPU/GPU contract | mixed topology tests; managed proof pending |

@@ -397,6 +397,7 @@ export class RealtimeInvalidationBridge {
   private currentRunId: string | null = null;
   private currentSessionId: string | null = null;
   private flushCancel: (() => void) | null = null;
+  private pendingExactFetches = new Set<string>();
   private pendingFetches = new Map<string, ResourceRevision>();
   private pendingMatchers: Array<{
     fieldInvalidation?: "broad" | "exact";
@@ -540,16 +541,18 @@ export class RealtimeInvalidationBridge {
             }
           }
         } else if (recommendedFetch) {
-          this.queueResourceInvalidation(
-            recommendedFetch,
-            change.revision,
-          );
           if (
             recommendedFetch === DATA_FIELDS_PATH &&
             change.resource === "fields" &&
             change.resource_id === "catalog"
           ) {
-            this.queueResourceInvalidation(DATA_QUANTITIES_PATH, change.revision);
+            this.queueExactResourceInvalidation(DATA_FIELDS_PATH, change.revision);
+            this.queueExactResourceInvalidation(
+              DATA_QUANTITIES_PATH,
+              change.revision,
+            );
+          } else {
+            this.queueResourceInvalidation(recommendedFetch, change.revision);
           }
         }
         handled = true;
@@ -647,6 +650,14 @@ export class RealtimeInvalidationBridge {
     );
   }
 
+  private queueExactResourceInvalidation(
+    resourceKey: string,
+    revision: ResourceRevision,
+  ): void {
+    this.pendingExactFetches.add(resourceKey);
+    this.queueResourceInvalidation(resourceKey, revision);
+  }
+
   private recordFieldInvalidation(kind: "broad" | "exact"): void {
     this.fieldInvalidationTelemetry = {
       broadInvalidations:
@@ -728,10 +739,12 @@ export class RealtimeInvalidationBridge {
   }
 
   private flushPendingInvalidations(): void {
+    const pendingExactFetches = this.pendingExactFetches;
     const pendingFetches = this.pendingFetches;
     const pendingPrefixes = this.pendingPrefixes;
     const pendingMatchers = this.pendingMatchers;
     let statusRevision = this.pendingStatusRevision;
+    this.pendingExactFetches = new Set<string>();
     this.pendingFetches = new Map<string, ResourceRevision>();
     this.pendingPrefixes = new Map();
     this.pendingMatchers = [];
@@ -739,7 +752,9 @@ export class RealtimeInvalidationBridge {
 
     for (const [resourceKey, revision] of pendingFetches) {
       this.invalidateResource(resourceKey, revision);
-      this.resources.invalidatePrefix(resourceKey, revision);
+      if (!pendingExactFetches.has(resourceKey)) {
+        this.resources.invalidatePrefix(resourceKey, revision);
+      }
       this.invalidateSceneDocumentDependents(resourceKey, revision);
       this.invalidateMeshBuildCompletionDependents(resourceKey, revision);
       this.invalidateModelReadinessDependent(resourceKey, revision);

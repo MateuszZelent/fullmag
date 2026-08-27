@@ -22,18 +22,18 @@ use std::sync::Arc;
 use tokio::sync::{watch, Mutex, RwLock};
 
 use crate::feature_flags::FeatureFlags;
+use crate::schemas::commands::CommandResponse;
 use crate::schemas::realtime::{
     LiveRealtimeServerEvent, RealtimeResourceChange, RealtimeResourceName,
     RealtimeResourceRevisionMap,
 };
-use crate::schemas::commands::CommandResponse;
 use crate::types::{
     AppState, CommandCompletionState, CommandLifecycleState, CurrentDisplaySelection,
     CurrentLiveFieldFrameRequest, CurrentLiveSnapshotRequest, CurrentWorkspaceLayout,
-    CurrentWorkspaceRibbon, CurrentWorkspaceSelection, DisplayPresentationState, LatestFields,
-    GlobalScalarPreviewState, LiveState, PreviewState, RunManifest, RuntimeLifecycleState,
-    RuntimeStatusView, ScalarRow, SessionCommand, SessionManifest, SessionStateResponse,
-    SimulationPreparationClockAdjustmentSnapshot,
+    CurrentWorkspaceRibbon, CurrentWorkspaceSelection, DisplayPresentationState,
+    GlobalScalarPreviewState, LatestFields, LiveState, PreviewState, RunManifest,
+    RuntimeLifecycleState, RuntimeStatusView, ScalarRow, SessionCommand, SessionManifest,
+    SessionStateResponse, SimulationPreparationClockAdjustmentSnapshot,
     SimulationPreparationFailureSnapshot, SimulationPreparationLogEntrySnapshot,
     SimulationPreparationSnapshot, SimulationPreparationStageSnapshot, StageExecutionRecord,
     StageExecutionState, StageLifecycleState, StepUpdateView, TrackedCommandRecord,
@@ -1627,10 +1627,7 @@ async fn delayed_scratch_session_publication_cannot_enter_replacement_realtime_s
         admitted: Arc::new(tokio::sync::Notify::new()),
         resume: Arc::new(tokio::sync::Notify::new()),
     };
-    *state
-        .current_live_realtime_before_send_hook
-        .lock()
-        .await = Some(hook.clone());
+    *state.current_live_realtime_before_send_hook.lock().await = Some(hook.clone());
     let mut events = state.current_live_realtime_events.subscribe();
 
     let first_state = state.clone();
@@ -1747,7 +1744,11 @@ async fn create_scratch_session_replacement_resets_resources_and_invalidates() {
         "created_at_unix_ms": 1
     }))
     .expect("test command must deserialize");
-    state.current_control_queue.lock().await.push_back(command.clone());
+    state
+        .current_control_queue
+        .lock()
+        .await
+        .push_back(command.clone());
     state.current_command_responses.lock().await.push_back((
         "stale-request".to_string(),
         CommandResponse {
@@ -1757,43 +1758,55 @@ async fn create_scratch_session_replacement_resets_resources_and_invalidates() {
             error: None,
         },
     ));
-    state.current_command_ledger.lock().await.push_back(TrackedCommandRecord {
-        command,
-        request_id: Some("stale-request".to_string()),
-        status: CommandLifecycleState::Queued,
-        dispatched_at_unix_ms: None,
-        completed_at_unix_ms: None,
-        completion_status: None,
-        error: None,
-    });
-    state.current_display_selection.write().await.revision = 9;
-    state.current_visualization_client_acks.write().await.insert(
-        "stale-client".to_string(),
-        crate::schemas::visualization_state::VisualizationClientAckEntry {
-            client_id: "stale-client".to_string(),
-            client_label: None,
-            viewport_id: None,
-            revision: 9,
-            status: crate::schemas::visualization_state::VisualizationClientAckStatus::Applied,
-            effective_render_mode: None,
+    state
+        .current_command_ledger
+        .lock()
+        .await
+        .push_back(TrackedCommandRecord {
+            command,
+            request_id: Some("stale-request".to_string()),
+            status: CommandLifecycleState::Queued,
+            dispatched_at_unix_ms: None,
+            completed_at_unix_ms: None,
+            completion_status: None,
             error: None,
-            received_at_unix_ms: 1,
-        },
-    );
+        });
+    state.current_display_selection.write().await.revision = 9;
+    state
+        .current_visualization_client_acks
+        .write()
+        .await
+        .insert(
+            "stale-client".to_string(),
+            crate::schemas::visualization_state::VisualizationClientAckEntry {
+                client_id: "stale-client".to_string(),
+                client_label: None,
+                viewport_id: None,
+                revision: 9,
+                status: crate::schemas::visualization_state::VisualizationClientAckStatus::Applied,
+                effective_render_mode: None,
+                error: None,
+                received_at_unix_ms: 1,
+            },
+        );
     state
         .current_visualization_client_ack_revision
         .store(9, std::sync::atomic::Ordering::Relaxed);
-    state.current_live_state.write().await.as_mut().unwrap().preview = Some(
-        PreviewState::GlobalScalar(GlobalScalarPreviewState {
-            display_kind: "global_scalar".to_string(),
-            config_revision: 9,
-            source_step: 1,
-            source_time: 0.0,
-            quantity: "E_total".to_string(),
-            unit: "J".to_string(),
-            value: 1.0,
-        }),
-    );
+    state
+        .current_live_state
+        .write()
+        .await
+        .as_mut()
+        .unwrap()
+        .preview = Some(PreviewState::GlobalScalar(GlobalScalarPreviewState {
+        display_kind: "global_scalar".to_string(),
+        config_revision: 9,
+        source_step: 1,
+        source_time: 0.0,
+        quantity: "E_total".to_string(),
+        unit: "J".to_string(),
+        value: 1.0,
+    }));
 
     let replacement = app
         .oneshot(
@@ -1813,7 +1826,11 @@ async fn create_scratch_session_replacement_resets_resources_and_invalidates() {
     assert!(state.current_command_responses.lock().await.is_empty());
     assert!(state.current_command_ledger.lock().await.is_empty());
     assert_eq!(state.current_display_selection.read().await.revision, 0);
-    assert!(state.current_visualization_client_acks.read().await.is_empty());
+    assert!(state
+        .current_visualization_client_acks
+        .read()
+        .await
+        .is_empty());
     assert_eq!(
         state
             .current_visualization_client_ack_revision
@@ -8608,11 +8625,16 @@ async fn quantity_capability_is_separate_from_unmaterialized_field_cache() {
         let mut capabilities =
             resolved_compute_fields_capabilities(&["m", "H_demag", "eden_demag"]);
         capabilities.capability_profile_version = "test-profile".to_string();
-        capabilities.supported_terms =
-            vec!["exchange".to_string(), "demag_tensor_fft_newell".to_string()];
+        capabilities.supported_terms = vec![
+            "exchange".to_string(),
+            "demag_tensor_fft_newell".to_string(),
+        ];
         capabilities.supported_demag_realizations = vec!["tensor_fft_newell".to_string()];
-        capabilities.snapshot_quantities =
-            vec!["m".to_string(), "H_demag".to_string(), "eden_demag".to_string()];
+        capabilities.snapshot_quantities = vec![
+            "m".to_string(),
+            "H_demag".to_string(),
+            "eden_demag".to_string(),
+        ];
         capabilities.scalar_outputs = vec!["E_total".to_string()];
         snapshot.capabilities = Some(capabilities);
         snapshot.latest_fields = LatestFields::default();
@@ -15572,7 +15594,11 @@ async fn authoring_script_sync_renders_empty_workspace_scene_document() {
 
     let status = response.status();
     let json = body_json(response).await;
-    assert_eq!(status, StatusCode::OK, "scratch script sync response: {json:?}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "scratch script sync response: {json:?}"
+    );
     assert_eq!(json["written"], true);
     assert_eq!(json["source_kind"], "scene_document");
     let script_path = script_dir.join("scene_document.py");
@@ -15583,11 +15609,7 @@ async fn authoring_script_sync_renders_empty_workspace_scene_document() {
         .contains("study = fm.study"));
     let guard = state.current_live_state.read().await;
     assert_eq!(
-        guard
-            .as_ref()
-            .expect("live snapshot")
-            .session
-            .script_path,
+        guard.as_ref().expect("live snapshot").session.script_path,
         script_path.display().to_string()
     );
 
@@ -19635,7 +19657,10 @@ async fn authoring_magnetization_transaction_commits_asset_and_assignment_atomic
     let json = body_json(response).await;
     assert_eq!(json["transaction_kind"], "patch_magnetization");
     assert_eq!(json["scene_revision"], 31);
-    assert_eq!(json["committed_scene"]["objects"][0]["magnetization_ref"], "mag-atomic");
+    assert_eq!(
+        json["committed_scene"]["objects"][0]["magnetization_ref"],
+        "mag-atomic"
+    );
     assert!(json["committed_scene"]["magnetization_assets"]
         .as_array()
         .unwrap()
@@ -20255,8 +20280,14 @@ async fn authoring_object_interaction_patch_rejects_stale_base_revision() {
             .unwrap()
     };
 
-    assert_eq!(app.clone().oneshot(request()).await.unwrap().status(), StatusCode::OK);
-    assert_eq!(app.oneshot(request()).await.unwrap().status(), StatusCode::CONFLICT);
+    assert_eq!(
+        app.clone().oneshot(request()).await.unwrap().status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.oneshot(request()).await.unwrap().status(),
+        StatusCode::CONFLICT
+    );
 }
 
 #[tokio::test]
@@ -40031,8 +40062,14 @@ fn openapi_session_creation_declares_typed_request_and_outcomes() {
         request["properties"]["precision"]["$ref"],
         "#/components/schemas/ScratchSessionPrecision"
     );
-    assert_eq!(schemas["ScratchSessionBackend"]["enum"], serde_json::json!(["fdm", "fem"]));
-    assert_eq!(schemas["ScratchSessionDevice"]["enum"], serde_json::json!(["cpu"]));
+    assert_eq!(
+        schemas["ScratchSessionBackend"]["enum"],
+        serde_json::json!(["fdm", "fem"])
+    );
+    assert_eq!(
+        schemas["ScratchSessionDevice"]["enum"],
+        serde_json::json!(["cpu"])
+    );
     assert_eq!(
         schemas["ScratchSessionPrecision"]["enum"],
         serde_json::json!(["double"])

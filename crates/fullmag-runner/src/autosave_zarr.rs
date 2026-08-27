@@ -105,7 +105,7 @@ impl AutosaveTargetWriter for ZarrAutosaveWriter {
         write_json(&stage_path.join("manifest.json"), &effective_manifest)?;
         if !effective_manifest.table_quantities.is_empty() {
             let table = stage_path.join("table");
-                initialize_array(&table, 0, effective_manifest.table_quantities.len())?;
+            initialize_array(&table, 0, effective_manifest.table_quantities.len())?;
             write_json(
                 &table.join(".zattrs"),
                 &json!({"quantities": effective_manifest.table_quantities, "dimension_order": ["sample", "quantity"]}),
@@ -237,17 +237,19 @@ fn initialize_array(path: &Path, sample_count: usize, width: usize) -> Result<()
     )
 }
 
-pub(crate) fn write_json_atomic(
-    path: &Path,
-    value: &impl serde::Serialize,
-) -> Result<(), String> {
+pub(crate) fn write_json_atomic(path: &Path, value: &impl serde::Serialize) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
     let temporary = path.with_extension(format!("tmp.{}", std::process::id()));
     let file = fs::File::create(&temporary).map_err(|error| error.to_string())?;
     let mut writer = BufWriter::new(file);
-    writer.write_all(&bytes).map_err(|error| error.to_string())?;
+    writer
+        .write_all(&bytes)
+        .map_err(|error| error.to_string())?;
     writer.flush().map_err(|error| error.to_string())?;
-    writer.get_ref().sync_all().map_err(|error| error.to_string())?;
+    writer
+        .get_ref()
+        .sync_all()
+        .map_err(|error| error.to_string())?;
     drop(writer);
     replace_file_atomically(&temporary, path)?;
     Ok(())
@@ -425,9 +427,7 @@ mod tests {
             "fem_gpu_execution_receipt": {"executed": "cuda_fem"},
             "requested_backend": "fem",
         });
-        state
-            .update_active_provenance(provenance.clone())
-            .unwrap();
+        state.update_active_provenance(provenance.clone()).unwrap();
         writer.update_provenance(&provenance).unwrap();
         state
             .append_field_sample(
@@ -443,14 +443,10 @@ mod tests {
         let stage = store.join("stages/stage_0000_relax");
         let root_attrs: serde_json::Value =
             serde_json::from_slice(&fs::read(store.join(".zattrs")).unwrap()).unwrap();
-        let field_attrs: serde_json::Value = serde_json::from_slice(
-            &fs::read(stage.join("fields/m/.zattrs")).unwrap(),
-        )
-        .unwrap();
-        let final_manifest: StageManifest = serde_json::from_slice(
-            &fs::read(stage.join("manifest.json")).unwrap(),
-        )
-        .unwrap();
+        let field_attrs: serde_json::Value =
+            serde_json::from_slice(&fs::read(stage.join("fields/m/.zattrs")).unwrap()).unwrap();
+        let final_manifest: StageManifest =
+            serde_json::from_slice(&fs::read(stage.join("manifest.json")).unwrap()).unwrap();
         assert_eq!(root_attrs["provenance"], provenance);
         assert_eq!(field_attrs["provenance"], provenance);
         assert_eq!(final_manifest.provenance, Some(provenance.clone()));
@@ -476,14 +472,12 @@ mod tests {
         state.finish_stage(&mut writer).unwrap();
 
         let inherited_stage = store.join("stages/stage_0001_run");
-        let inherited_field_attrs: serde_json::Value = serde_json::from_slice(
-            &fs::read(inherited_stage.join("fields/m/.zattrs")).unwrap(),
-        )
-        .unwrap();
-        let inherited_manifest: StageManifest = serde_json::from_slice(
-            &fs::read(inherited_stage.join("manifest.json")).unwrap(),
-        )
-        .unwrap();
+        let inherited_field_attrs: serde_json::Value =
+            serde_json::from_slice(&fs::read(inherited_stage.join("fields/m/.zattrs")).unwrap())
+                .unwrap();
+        let inherited_manifest: StageManifest =
+            serde_json::from_slice(&fs::read(inherited_stage.join("manifest.json")).unwrap())
+                .unwrap();
         assert_eq!(inherited_field_attrs["provenance"], provenance);
         assert_eq!(inherited_manifest.provenance, Some(provenance));
         fs::remove_dir_all(root).unwrap();

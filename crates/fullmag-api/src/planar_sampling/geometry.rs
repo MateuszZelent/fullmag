@@ -18,7 +18,7 @@ pub(super) struct MeasureIntegral {
 }
 
 pub(super) fn projected_pixel_bounds(
-    vertices: &[LinearVertex; 4],
+    vertices: &[LinearVertex],
     bounds_uv_m: [f64; 4],
     resolution: [u32; 2],
     s_bounds: [f64; 2],
@@ -84,6 +84,36 @@ pub(super) fn integrate_clipped_tetra(
             vec![a.clone(), d.clone(), c.clone()],
             vec![b, c, d],
         ],
+    };
+    for (axis, limit, keep_greater) in [
+        (0, bounds[0], true),
+        (0, bounds[1], false),
+        (1, bounds[2], true),
+        (1, bounds[3], false),
+        (2, bounds[4], true),
+        (2, bounds[5], false),
+    ] {
+        polyhedron = clip_polyhedron(polyhedron, axis, limit, keep_greater);
+        if polyhedron.faces.is_empty() {
+            return MeasureIntegral {
+                measure: 0.0,
+                integral: Vec::new(),
+            };
+        }
+    }
+    integrate_polyhedron(&polyhedron)
+}
+
+pub(super) fn integrate_clipped_convex_element(
+    vertices: &[LinearVertex],
+    faces: &[&[usize]],
+    bounds: [f64; 6],
+) -> MeasureIntegral {
+    let mut polyhedron = ConvexPolyhedron {
+        faces: faces
+            .iter()
+            .map(|face| face.iter().map(|index| vertices[*index].clone()).collect())
+            .collect(),
     };
     for (axis, limit, keep_greater) in [
         (0, bounds[0], true),

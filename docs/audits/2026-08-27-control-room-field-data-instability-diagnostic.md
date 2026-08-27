@@ -2,7 +2,7 @@
 
 **Data:** 2026-08-27
 **Zakres:** sesja FEM GPU `session-1787783828923-72382`, pola `m` i `H_demag`, zasoby v2, cache zasobów, viewport 3D i planar
-**Stan raportu:** przyczyna przepływu danych potwierdzona; naprawa oczekuje na zatwierdzenie projektu; kwalifikacja WebGL po naprawie jeszcze niewykonana
+**Stan raportu:** przyczyny potwierdzone i naprawione w kodzie; testy jednostkowe, kontraktowe, typecheck, React Doctor i zarządzany test FEM przeszły; kwalifikacja w otwartej przeglądarce jest zablokowana błędem połączenia narzędziowego
 
 ## 1. Streszczenie wykonawcze
 
@@ -478,3 +478,53 @@ Dodatkowo `FooterModule.transportEntriesSignature()` składa sygnaturę wyłącz
 5. Dla stabilnej sesji pojedynczy aktywny carrier ma co najwyżej sekwencję `202 -> 200`; brak `204` po pierwszym przyjętym `200`.
 6. Stopka i eksport posiadają jawne `occurrenceCount`; `Events`, `Rate`, TX/RX i top endpoints używają sumy krotności, a zmiana agregatu odświeża snapshot.
 7. Raport runtime zawiera osobno request count, bytes, cache hits, aborts, retry count, broad/exact invalidations, render reasons i `gl.isContextLost()`.
+
+## 11. Zaimplementowana naprawa
+
+### 11.1. Publikacja backendu i QoS realtime
+
+- Terminalne zastąpienie generacji pól jest rozpoznawane wyłącznie przez jawny znacznik publikacji terminalnej albo zakończenie kroku. Częściowe paczki asynchronicznego materializera są scalane z istniejącą generacją, zamiast ją zastępować.
+- Zdarzenia `PlanarFields/field` zostały zawężone do rzeczywiście zmienionych quantity i skierowane do tego samego kanału QoS co próbki pól. Nie publikują już szerokiej listy wszystkich wielkości przy każdej zmianie.
+- HTTP v2 pozostaje źródłem prawdy. WebSocket nadal wyłącznie unieważnia zasoby; nie dodano drugiej ścieżki transportu danych.
+
+### 11.2. Cache i invalidacja frontendu
+
+- Binarny cache wektorów zachowuje ostatni zgodny bufor po przejściowym `204 not-applicable`. Zachowanie jest opt-in i dotyczy ścieżek field-vector; zasoby topologii nadal są czyszczone po `204`.
+- Invalidacja katalogu pól odświeża dokładnie `/data/fields` oraz `/data/quantities`, bez kaskadowego unieważniania wszystkich zasobów potomnych. Eliminuje to zwielokrotnione refetche po jednej zmianie katalogu.
+- Została zachowana granica centralnego facade/resource hook; komponenty nie otrzymały bezpośrednich wywołań `fetch()` ani ręcznie składanych adresów v2.
+
+### 11.3. Diagnostyka liczby requestów
+
+- `RequestDiagnosticEntry` ma jawne `firstTimestampMs` i `occurrenceCount`.
+- Stopka sumuje rzeczywiste wystąpienia agregatu, a nie liczbę widocznych wierszy. Dotyczy to TX/RX, kanałów, szybkości i rankingu endpointów.
+- Aktualizacja istniejącego agregatu podbija wersję store i wymusza odświeżenie stopki mimo niezmienionego `entry.id`.
+
+### 11.4. Pełne próbkowanie Prism6
+
+- Sampler FEM obsługuje natywne elementy Tet4 i Prism6 bez ukrytej dekompozycji pryzmatu na tetraedry.
+- Interpolacja Prism6 używa izoparametrycznej bazy triangle-P1 × interval-P1 i odwrotnego mapowania Newtona w przestrzeni referencyjnej.
+- Plane, slab, depth/volume, surface oraz overlay używają natywnej geometrii Prism6, w tym dwóch ścian trójkątnych i trzech czworokątnych.
+- Domyślny target planarny jest zależny od dziedziny quantity: `magnetic_only`, w tym `m`, wybiera domenę magnetyczną zamiast pełnego airboxu.
+- Pyramid5, Hex8, nieciągłe i niekompletne nośniki pozostają jawnie odrzucane; zakres capability nie został rozszerzony bez pokrycia numerycznego.
+
+## 12. Wyniki weryfikacji
+
+| Bramka | Wynik | Status |
+|---|---|---|
+| testy publikacji terminalnej i scalania częściowych paczek | regresje przechodzą | PASS |
+| `cargo test -p fullmag-api realtime_change_tests` | 15/15 | PASS |
+| `cargo test -p fullmag-api planar_sampling:: --no-fail-fast` | 53/53 | PASS |
+| zarządzany `just verify-planar-sampling-prism6-contract` w profilu `fem-gpu` | oba zestawy Prism6/planar zakończone kodem 0; pełny zestaw planarny 53/53 | PASS |
+| testy frontendowe cache, realtime, diagnostyki i lifecycle stopki | 118/118 | PASS |
+| `pnpm --dir apps/control-room typecheck` | bez błędów | PASS |
+| React Doctor 0.9.12 na Node 24.19 | 100/100, brak diagnostyk | PASS |
+| walidator publikacyjnej dokumentacji naukowej | walidator i 28 testów walidatora przechodzą | PASS |
+| rzeczywisty smoke otwartej przeglądarki/WebGL | klient in-app browser odrzuca inicjalizację: `sandboxCwd is not a local file URI` | BLOCKED |
+
+## 13. Stan końcowy i pozostałe ryzyko
+
+Naprawione są wszystkie potwierdzone przyczyny rotacji pól, kasowania last-good, nadmiarowych invalidacji, zaniżania liczników oraz stałego `422` dla Prism6. Z testów kontraktowych wynika, że częściowe wyniki materializera nie mogą już usuwać wcześniej opublikowanych pól, a przejściowy brak payloadu nie usuwa widocznego bufora wektorów.
+
+Nie można jeszcze oznaczyć `THREE.WebGLRenderer: Context Lost` jako naprawionego ani nieszkodliwego. Dwie próby połączenia z dokładnie wskazaną przeglądarką aplikacji zakończyły się przed dostępem do strony tym samym błędem infrastruktury narzędziowej. Po przywróceniu połączenia wymagana jest jedna końcowa sesja runtime: co najmniej 60 s, dwa pełne cykle materializera, niezmienna tożsamość canvasu, `gl.isContextLost() === false`, niezerowy drawing buffer, stabilne glyphy oraz pomiar surowych requestów względem budżetu. Jest to brak dowodu przeglądarkowego, a nie znana luka w zaimplementowanym kontrakcie danych.
+
+Pełny przebieg całego pakietu frontendowego nie jest obecnie zielony: poza zakresem tej naprawy istnieje pięć niepowiązanych niepowodzeń oraz trzy pliki bez wykrytego suite. Jedyny ujawniony błąd związany z tym zadaniem — nieaktualny mock diagnostyki w teście lifecycle Quick Chart — został naprawiony i wszedł do powyższego zestawu 118/118. Pozostałych awarii nie maskowano ani nie przypisano tej zmianie.

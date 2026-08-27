@@ -148,6 +148,10 @@ requirements.
 
 ## References
 
+- `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md` defines the
+  common size-policy algebra, exact-layer/in-plane distinction, metric evidence,
+  and FMMQ compatibility envelope without widening this ADR's bounded topology
+  decision.
 - `docs/physics/0106-fem-mixed-prism-pyramid-shared-domain.md`
 - `docs/architecture/backend-golden-masterplan.md`
 - `docs/physics/0900-native-fem-operator-contracts-and-validation.md`

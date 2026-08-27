@@ -507,7 +507,7 @@ async fn build_planar_field_from_source(
     };
     let mut frame = resolved_source.frame.clone();
     let operator = resolved_source.operator.clone();
-    let target_definition = resolved_source.target.clone();
+    let mut target_definition = resolved_source.target.clone();
     let scene_revision = snapshot
         .scene_document
         .as_ref()
@@ -518,6 +518,11 @@ async fn build_planar_field_from_source(
             "quantity_unavailable: quantity '{quantity_id}' is unknown"
         ))
     })?;
+    if matches!(&source, PlanarDataSource::Default)
+        && spec.domain == fullmag_quantities::QuantityDomain::MagneticOnly
+    {
+        target_definition = fullmag_ir::MonitorTargetIR::MagneticDomain;
+    }
     let n_comp = spec.n_comp as usize;
     let current_field_revision = field_quantity_revision(snapshot, quantity_id);
     let generation_id = domain_generation_id(snapshot);

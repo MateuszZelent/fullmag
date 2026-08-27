@@ -2,8 +2,9 @@
 
 - Status: bounded FEM CPU/GPU double mixed-P1 relaxation lanes `implemented`; evidence is source/contract only, no runtime qualification is asserted, and wider scopes fail closed
 - Owners: Fullmag core
-- Last updated: 2026-08-26
-- Related ADRs: `docs/adr/0021-native-mixed-p1-fem-topology.md`
+- Last updated: 2026-08-27
+- Related ADRs: `docs/adr/0021-native-mixed-p1-fem-topology.md`,
+  `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md`
 - Related specs:
   - `docs/specs/capability-matrix-v0.md`
   - `docs/architecture/backend-golden-masterplan.md`
@@ -197,6 +198,9 @@ scale; production certificates apply the SI tolerances below after realization.
   has exactly $L+1$ normal-coordinate node planes.
 - One prism layer is still a three-dimensional P1 discretization. It is not a
   thickness-averaged, 2.5D, shell, or macrospin model.
+- Exact through-thickness layers constrain only the number of 3D cell layers
+  and their normal-coordinate planes. They do not imply structured in-plane
+  meshing; that is a separate request and evidence dimension.
 - `Ms` and `Aex` are uniform in the bounded workload. `Ku1`/`Ku2` and
   `Kc1`/`Kc2`/`Kc3` may be uniform or nodal-P1 fields; the uniaxial and cubic
   axes remain authored normalized material vectors.
@@ -526,6 +530,7 @@ import fullmag as fm
 fm.reset()
 study = fm.study("mixed-p1-layers")
 study.engine("fem")
+study.device("cpu", precision="double")
 study.mode("strict")
 study.universe(mode="manual", size=(100e-9, 80e-9, 65e-9))
 film = study.geometry(
@@ -535,7 +540,7 @@ film = study.geometry(
 film.Ms = 800e3
 film.Aex = 13e-12
 film.alpha = 0.1
-film.m = fm.texture.uniform(1, 0, 0)
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 film.mesh.thin_film(
     maximum_element_size=3e-9,
     layers=3,
@@ -544,7 +549,9 @@ film.mesh.thin_film(
     transition="pyramid_to_tetrahedra",
     order=1,
 )
-study.relax(algorithm="projected_gradient_bb", max_steps=1)
+study.exchange()
+study.demag(realization="poisson_robin")
+study.stages.add_relax(stage_id="relax", algorithm="projected_gradient_bb", max_steps=1)
 ```
 
 The public Python API and its lowering preserve the requested prismatic
@@ -745,6 +752,20 @@ topology-index construction, viewport triangulation, and surface selection
 consume that typed representation. Histogram and Inspector integration are not
 claimed by this bounded transport change. FMMT v1 remains readable only for tetrahedral
 sessions; it must never carry disguised or truncated mixed cells.
+
+Mesh-quality transport is a separate format from FMMT. The **current** writer
+and decoder implement only `FMMQ v1`: parallel metric arrays without topology,
+element-family, or per-cell identity. The writer can serialize arrays produced
+for a mixed mesh, but the payload cannot prove which topology each sample
+belongs to and therefore cannot qualify prism6, pyramid5, or any mixed mesh.
+Tet4-only use is a qualification limit, not a writer guard.
+The **planned** `FMMQ v2` contract in ADR 0027 adds topology-aware metric IDs,
+sampling rules, units, producer/version identity, zone ownership and exact
+cell-identity binding. No document may claim that v2 is implemented until its
+writer, OpenAPI/resource metadata, TypeScript decoder and mixed-cell browser
+test exist. V1 exits only after every supported v2 producer/consumer passes,
+legacy v1 fixtures remain readable, and new mixed-topology runs can no longer
+emit v1.
 
 The UI must show requested topology, realized topology counts, certificate
 status, quality metric identity, exact-layer result, and explicit rejection or
@@ -963,3 +984,6 @@ No lower level implies a higher one.
 | Uniform/nodal cubic GPU field/energy | `backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu` | `fullmag_cuda_cubic_anisotropy_field_energy_blocks` | evaluates the same cubic nodal contract on device | FEM GPU | source/contract evidence |
 | CPU interfacial/bulk DMI | `backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp`; `backends/fem/cpu/mfem/interactions/dmi_bulk.cpp` | `compute_interfacial_dmi_field`; `compute_bulk_dmi_field` | evaluates DMI fields and energies on magnetic prism6 elements | FEM CPU | source/contract evidence |
 | GPU mixed-P1 DMI rejection | `backends/fem/core/fem_mesh.cpp` | `validate_supported_physics_topology` | rejects mixed-P1 GPU DMI with `gpu_dmi_kernel_not_mixed_p1` before unsupported startup | FEM GPU | fail-closed source/contract evidence |
+| FMMQ v1 writer | `packages/fullmag-py/src/fullmag/meshing/remesh_cli.py` | `_write_quality_data_artifact_if_available` | zapisuje bieżące równoległe tablice FMMQ v1 bez tożsamości topologii; może zapisać tablice z mixed mesh, ale payload nie kwalifikuje mixed | writer: current; qualification: tetra-only limit | current source contract |
+| FMMQ v1 decoder | `apps/control-room/src/kernel/api/codecs/meshQualityDataCodec.ts` | `decodeMeshQualityData` | dekoduje bieżący układ FMMQ v1 | Control room | current codec tests |
+| FMMQ v2 contract | `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md` | `DOC-ANCHOR:fmmq-v2-contract` | definiuje planowany topology-aware v2 i v1 exit | Cross-layer contract | planned contract |

@@ -1,220 +1,158 @@
-# Gmsh semantic entity selectors for FEM mesh controls
+# Semantyczne selektory encji Gmsh dla FEM
 
-- Status: draft
-- Owners: Fullmag maintainers
-- Last updated: 2026-05-24
-- Related ADRs: docs/adr/0011-resource-first-api.md
-- Related specs: docs/superpowers/specs/2026-05-24-gmsh-semantic-entity-selectors-design.md
+- Status: terminal contract
+- Ostatnia aktualizacja: 2026-08-27
+- Decyzja: [ADR 0027](../adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md)
 
-## 1. Problem statement
+(entity-selectors-problem-statement)=
+## Problem statement
 
-Fullmag FEM mesh controls can already refine component volumes, component
-surfaces, recovered boundary curves, and explicit surface or curve tag lists.
-The weak point is that raw Gmsh entity tags are implementation artifacts:
-boolean operations, fragmentation, airbox assembly, CAD import, and Gmsh version
-changes can alter tags without changing the physical object.
+Surowe tagi Gmsh są artefaktem realizacji i mogą zmienić się po fragmentacji OCC.
+Publiczny kontrakt wybiera powierzchnię lub krzywą przez intencję geometryczną:
+najbliższą encję do punktu SI, opcjonalnie w zakresie jednego komponentu.
+Selektor steruje wyłącznie meshing; nie zmienia fizyki ani domeny.
 
-This note defines a discretization-only selector layer for FEM meshing. Users
-and higher-level Fullmag code describe a target surface or curve by stable
-semantic intent, such as the nearest entity to a physical point, while the Gmsh
-adapter resolves that intent to concrete entity tags after geometry realization.
+(entity-selectors-governing-equations)=
+## Governing equations
 
-This is not a new energy term, material model, boundary condition, or observable.
-It is a reproducible way to target existing FEM mesh-size and boundary-layer
-controls.
+```{math}
+:label: eq-entity-selector-distance
 
-## 2. Physical model
-
-### 2.1 Governing equations
-
-No governing micromagnetic equation changes. The continuous problem remains the
-same Landau-Lifshitz-Gilbert problem and associated effective-field terms
-defined by the active study.
-
-The selector affects only the spatial discretization map:
-
-```text
-Omega -> T_h(Omega)
+d(\mathbf p,E)=\min_{\mathbf y\in E}\lVert\mathbf p-\mathbf y\rVert_2.
 ```
 
-where `Omega` is the physical FEM domain and `T_h(Omega)` is the conforming
-solver mesh. A selector changes local mesh-size constraints or boundary-layer
-targets used to construct `T_h`; it must not change `Omega`, material regions,
-airbox semantics, or solver boundary conditions.
+Kandydaci są porządkowani leksykograficznie po $(d,\mathrm{tag})$; pierwszych
+$n$ encji stanowi resolved execution. Równania LLG i słabe formy pozostają
+niezmienione.
 
-### 2.2 Symbols and SI units
+(entity-selectors-symbols-and-si-units)=
+## Symbols and SI units
 
-| Symbol | Meaning | Unit |
-| --- | --- | --- |
-| `p = (x, y, z)` | physical selector point | m |
-| `n` | maximum number of matched entities | dimensionless |
-| `d(p, E)` | Euclidean distance from selector point to entity `E` | m |
-| `h_min` | requested local minimum element size | m |
-| `h_max` | requested local maximum element size | m |
-| `T_h` | realized finite-element mesh | m-coordinate topology |
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $\mathbf p$ | public selector point | $\mathrm m$ |
+| $E$ | final OCC entity | $1$ |
+| $d$ | point-to-entity distance | $\mathrm m$ |
+| $n$ | number of requested matches | $1$ |
+| $\mathrm{tag}$ | resolved Gmsh entity identifier | $1$ |
 
-All selector coordinates entering public Fullmag surfaces are SI metres. The
-Gmsh adapter may internally scale geometry for numerical robustness, but it must
-scale selector coordinates by the same factor before resolving entities.
+(entity-selectors-assumptions-and-validity)=
+## Assumptions and validity
 
-### 2.3 Assumptions and approximations
+Rozwiązanie następuje po konstrukcji i fragmentacji geometrii. Współrzędne są
+w metrach, a adapter skaluje punkt dokładnie jak geometrię. Zakres komponentu
+ogranicza kandydatów do odzyskanych encji tego komponentu. Tagi nie są stabilną
+częścią ProblemIR. Exact through-thickness layers i structured in-plane meshing
+są niezależne od selektora.
 
-- Selectors are resolved after Gmsh geometry construction and after OCC
-  boolean/fragment operations that determine final entities.
-- `nearest_surface_to_point` and `nearest_curve_to_point` are geometric
-  selectors. They do not infer physics from material values.
-- If multiple entities are nearly equidistant, resolution is deterministic only
-  after sorting by distance and tag. The resolved tag list must be recorded in
-  mesh provenance.
-- Selectors that cannot resolve any entity fail clearly by default. Silent
-  broadening to the whole component is not allowed.
+(entity-selectors-python-api)=
+## Python API
 
-## 3. Numerical interpretation
-
-### 3.1 FDM
-
-None. FDM meshes are regular grids and do not have Gmsh OCC entity tags. This
-feature has no FDM discretization meaning.
-
-### 3.2 FEM
-
-For FEM, semantic selectors lower to concrete Gmsh entity tags:
-
-- `nearest_surface_to_point` resolves to one or more final surface tags.
-- `nearest_curve_to_point` resolves to one or more final curve tags.
-- component-scoped selectors restrict candidates to the selected component's
-  recovered surfaces or boundary curves.
-- unscoped selectors may use all final OCC entities of the requested dimension.
-
-The resolved tags are then consumed by existing mechanisms:
-
-- boundary layers use `boundary_layer_target_surface_tags` and
-  `boundary_layer_target_curve_tags`;
-- edge-local fields use `EdgeDistanceThreshold`;
-- surface shell fields use `SurfaceDistanceThreshold`;
-- component bulk fields remain unchanged.
-
-The active element size at any point remains the minimum/maximum composition of
-the existing Gmsh background fields and global mesh-size bounds.
-
-### 3.3 Hybrid
-
-Hybrid FDM/FEM remains future work. Selectors apply only to the FEM part of a
-future hybrid domain.
-
-## 4. API, IR, and planner impact
-
-### 4.1 Python API surface
-
-The first implementation should keep public Python additions narrow. The
-preferred public shape is a structured mesh selector dictionary or helper in
-`fm.mesh`, not raw Gmsh calls. Example intent:
+| Python | Type | Default | SI unit | Validation / error | Meaning | Backend support | ProblemIR destination | Source |
+|---|---|---|---|---|---|---|---|---|
+| `nearest_surface_to_point.point` | `Sequence[number]` | `required` | $\mathrm m$ | exactly three numeric coordinates | surface query point | FEM CPU/GPU | `runtime_metadata.mesh_workflow selectors[].point` | `packages/fullmag-py/src/fullmag/meshing/mesh_controls.py::nearest_surface_to_point` |
+| `nearest_surface_to_point.geometry` | `str \| None` | `None` | $1$ | non-empty when provided | optional component scope | FEM CPU/GPU | `runtime_metadata.mesh_workflow selectors[].geometry` | `packages/fullmag-py/src/fullmag/meshing/mesh_controls.py::nearest_surface_to_point` |
+| `nearest_surface_to_point.count` | `int` | `1` | $1$ | integer at least one | surface match count | FEM CPU/GPU | `runtime_metadata.mesh_workflow selectors[].count` | `packages/fullmag-py/src/fullmag/meshing/mesh_controls.py::nearest_surface_to_point` |
+| `nearest_curve_to_point.point` | `Sequence[number]` | `required` | $\mathrm m$ | exactly three numeric coordinates | curve query point | FEM CPU/GPU | `runtime_metadata.mesh_workflow selectors[].point` | `packages/fullmag-py/src/fullmag/meshing/mesh_controls.py::nearest_curve_to_point` |
+| `nearest_curve_to_point.geometry` | `str \| None` | `None` | $1$ | non-empty when provided | optional component scope | FEM CPU/GPU | `runtime_metadata.mesh_workflow selectors[].geometry` | `packages/fullmag-py/src/fullmag/meshing/mesh_controls.py::nearest_curve_to_point` |
+| `nearest_curve_to_point.count` | `int` | `1` | $1$ | integer at least one | curve match count | FEM CPU/GPU | `runtime_metadata.mesh_workflow selectors[].count` | `packages/fullmag-py/src/fullmag/meshing/mesh_controls.py::nearest_curve_to_point` |
 
 ```python
-fm.mesh.boundary_layers(
-    count=3,
-    first_layer_thickness=1e-9,
-    target_surfaces=[
-        fm.mesh.nearest_surface_to_point(
-            geometry="free_layer",
-            point=(50e-9, 0.0, 2.5e-9),
-        )
-    ],
+# %% Complete canonical FEM study with semantic entity selectors.
+import fullmag as fm
+from fullmag.meshing import nearest_curve_to_point, nearest_surface_to_point
+
+study = fm.study("selectors")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.universe(mode="manual", size=(180e-9, 120e-9, 80e-9))
+study.universe.mesh(maximum_element_size=20e-9)
+
+body = study.geometry(fm.Box(size=(100e-9, 40e-9, 4e-9)), name="free_layer")
+body.Ms = 800e3
+body.Aex = 13e-12
+body.alpha = 0.02
+body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+surface = nearest_surface_to_point(point=(50e-9, 0.0, 2e-9), geometry="free_layer")
+curve = nearest_curve_to_point(point=(50e-9, 20e-9, 2e-9), geometry="free_layer")
+body.mesh(
+    maximum_element_size=8e-9,
+    boundary_layer_target_surface_selectors=[surface],
+    boundary_layer_target_curve_selectors=[curve],
 )
+study.exchange()
+study.demag(realization="poisson_robin")
+study.stages.add_relax(stage_id="relax", algorithm="projected_gradient_bb", max_steps=1)
 ```
 
-Existing explicit tag lists remain supported for debugging and advanced import
-workflows, but semantic selectors are the preferred reproducible surface.
+(entity-selectors-problem-ir)=
+## ProblemIR and provenance
 
-### 4.2 ProblemIR representation
+Requested intent zachowuje `kind`, `point`, `geometry` i `count`. Resolved
+execution należy do mesh-build evidence: wersja Gmsh, zakres kandydatów, tagi,
+odległości i przyczyna failure. Atomic V04 cutover obejmuje typowane selektory;
+nie wolno dual-write tagów do kanonicznej intencji.
 
-ProblemIR must preserve requested selector intent separately from resolved Gmsh
-tags. Resolved tags belong in realized mesh build artifacts and provenance, not
-in canonical physical problem intent.
+(entity-selectors-backend-matrix)=
+## Backend matrix
 
-Required distinction:
+| Lane | Status |
+|---|---|
+| FEM CPU | bieżący resolver Gmsh; produkcja po gate 0105 |
+| FEM GPU | identyczna zrealizowana siatka; brak osobnego resolvera GPU |
+| FDM CPU | not applicable |
+| FDM GPU | not applicable |
 
-- requested intent: selector kind, component name, point, dimension, count;
-- resolved realization: Gmsh version, candidate scope, resolved tags, distances,
-  fallback or failure reason.
+(entity-selectors-discrete-realization)=
+## Discrete realization
 
-### 4.3 Planner and capability-matrix impact
+Po fragmentacji OCC resolver tworzy listę kandydatów odpowiedniego wymiaru,
+opcjonalnie ogranicza ją do komponentu, mierzy odległość i wybiera stabilnie po
+$(d,\mathrm{tag})$. Dopiero finalne tagi trafiają do pól lub boundary layers.
 
-The planner must treat semantic Gmsh selectors as a FEM meshing capability. A
-backend that does not use Gmsh may reject them or lower them through an
-equivalent selector implementation only if it can preserve the same requested
-intent and provenance contract.
+(entity-selectors-round-trip-and-failure-semantics)=
+## Round-trip and failure semantics
 
-The capability should be separate from solver execution capability. Mesh
-generation can support semantic selectors even when a native solver backend is
-unavailable.
+Round-trip zachowuje requested intent, nie tagi. Validation errors obejmują zły
+punkt, pustą nazwę i `count<1`. Brak kandydata i nieznany komponent są błędem;
+unsupported combinations muszą zakończyć meshing czytelnym błędem; silent broadening jest
+zabroniony. Remap po CAD jest dozwolony wyłącznie jako nowa resolved execution.
 
-## 5. Runtime, artifacts, and workspace impact
+(entity-selectors-implementation-mapping)=
+## Implementation mapping
 
-Mesh build reports should include:
+`nearest_surface_to_point` i `nearest_curve_to_point` budują deskryptory.
+`resolve_entity_selectors` wybiera finalne tagi po OCC. Bieżąca implementacja
+jest obecna; pełny, wersjonowany raport selektora pozostaje wymaganiem 0105.
 
-- requested selector objects;
-- resolved entity tags;
-- candidate scope;
-- distance values in metres;
-- Gmsh version;
-- orphan-entity diagnostics when available.
+(entity-selectors-validation)=
+## Validation
 
-The control-room UI can initially display this only in diagnostics or mesh build
-details. No viewport authoring UI is required for the first implementation.
+- Unit: walidacja punktu, zakresu i liczności.
+- Real Gmsh: znane ściany/krawędzie box oraz deterministyczny tie-break.
+- Provenance: requested intent i resolved tags są osobnymi polami.
+- Regresja: jawne listy tagów zachowują dotychczasowe zachowanie.
 
-OpenAPI impact is limited to mesh-build artifact/report schemas if those reports
-are exposed through v2 resources. Heavy mesh topology transport is unchanged.
+(entity-selectors-limitations)=
+## Limitations
 
-## 6. Validation strategy
+Brak fuzzy nazw `top`/`left`, automatycznej naprawy CAD i semantyki FDM.
+Stabilność zależy od geometrycznie równoważnego finalnego modelu OCC.
 
-### 6.1 Analytical checks
+(entity-selectors-scientific-bibliography)=
+## Scientific bibliography
 
-Use simple boxes with known face centers. A selector point near the positive-x
-face should resolve a surface whose bounding box lies at the positive-x extent.
+- C. Geuzaine, J.-F. Remacle, “Gmsh: a three-dimensional finite element mesh
+  generator with built-in pre- and post-processing facilities”, 2009.
+- Gmsh reference manual, geometry queries and mesh fields.
 
-### 6.2 Cross-backend checks
+(entity-selectors-source-code-index)=
+## Source-code index
 
-No FDM cross-check is required. FEM CPU/GPU solver parity is unaffected because
-the selector only changes mesh generation.
-
-### 6.3 Regression tests
-
-- Unit-test selector normalization and validation.
-- Use a real `gmsh 4.15.x` test for nearest surface resolution on a box.
-- Use a real `gmsh 4.15.x` test for nearest curve resolution on a box or
-  arch-waveguide CSG path.
-- Verify that unresolved selectors fail with a specific error.
-- Verify that mesh build reports include requested selector and resolved tag
-  provenance.
-- Verify that explicit tag-list workflows remain unchanged.
-
-## 7. Completeness checklist
-
-- [ ] Python API
-- [ ] ProblemIR
-- [ ] Planner
-- [ ] Capability matrix
-- [ ] FDM backend marked not applicable
-- [ ] FEM mesh adapter
-- [ ] Runtime mesh build report
-- [ ] OpenAPI/resource artifact review
-- [ ] Tests / benchmarks
-- [ ] Documentation
-
-## 8. Known limits and deferred work
-
-- No automatic UI picking in the first implementation.
-- No fuzzy semantic names such as "top", "bottom", or "left" until the object
-  frame and transformation semantics are specified.
-- No selector support for non-Gmsh backends until they can report equivalent
-  resolved provenance.
-- No automatic repair of invalid CAD; orphan diagnostics report issues but do
-  not heal geometry.
-
-## 9. References
-
-- Gmsh 4.15.2 reference manual: https://gmsh.info/doc/texinfo/
-- Gmsh 4.15.0 version history: changed `getBoundary` default orientation,
-  added closest-entity APIs, and improved `Constant` / `Restrict` mesh-size
-  fields.
+| Warstwa | Ścieżka | Symbol | Odpowiedzialność |
+|---|---|---|---|
+| Public helper | `packages/fullmag-py/src/fullmag/meshing/mesh_controls.py` | `nearest_surface_to_point` | deskryptor powierzchni |
+| Public helper | `packages/fullmag-py/src/fullmag/meshing/mesh_controls.py` | `nearest_curve_to_point` | deskryptor krzywej |
+| Resolver | `packages/fullmag-py/src/fullmag/meshing/_gmsh_selectors.py` | `resolve_entity_selectors` | requested selector → finalne tagi |
+| Diagnostyka | `packages/fullmag-py/src/fullmag/meshing/_gmsh_selectors.py` | `collect_orphan_entity_diagnostics` | raport osieroconych encji |

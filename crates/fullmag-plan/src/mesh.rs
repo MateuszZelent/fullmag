@@ -1456,9 +1456,7 @@ fn mixed_p1_scope_failed_predicates(
         failed.push("material_count_not_one");
     }
     if problem.materials.iter().any(|material| {
-        material.ms_field.is_some()
-            || material.a_field.is_some()
-            || material.alpha_field.is_some()
+        material.ms_field.is_some() || material.a_field.is_some() || material.alpha_field.is_some()
     }) {
         failed.push("unsupported_material_field_or_dmi");
     }

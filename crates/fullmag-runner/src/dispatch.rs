@@ -74,9 +74,6 @@ use crate::schedules::{
 #[cfg(all(feature = "fem-gpu", not(feature = "cuda")))]
 use crate::schedules::{advance_due_schedules, collect_field_schedules, OutputSchedule};
 pub(crate) use crate::solver_runtime::engine::{EngineResolution, FdmEngine};
-pub(crate) use crate::solvers::fdm::execute::{
-    execute_fdm, execute_fdm_in_mode, execute_fdm_multilayer,
-};
 use crate::solver_runtime::fem_crossover::resolve_auto_fem_plan_device;
 #[cfg(feature = "fem-gpu")]
 use crate::solver_runtime::selection::all_in_gpu_fem_required;
@@ -86,6 +83,9 @@ pub(crate) use crate::solver_runtime::selection::{
     reject_frozen_spins_cuda_execution, reject_frozen_spins_cuda_plan_execution,
     reject_frozen_spins_fem_execution, reject_frozen_spins_fem_plan_execution, resolve_fdm_engine,
     resolve_fdm_engine_for_plan_with_trail, resolve_fdm_engine_with_trail,
+};
+pub(crate) use crate::solvers::fdm::execute::{
+    execute_fdm, execute_fdm_in_mode, execute_fdm_multilayer,
 };
 #[cfg(feature = "fem-gpu")]
 use crate::types::FemPoissonDemagProvenance;
@@ -2049,24 +2049,24 @@ fn resolve_registry_runtime_for_backend(
                     fallback: None,
                 })
             }
-            crate::fdm::gpu::cuda::route::FdmGpuAvailabilityRoute::CpuAutoFallback {
-                reason,
-            } => registry.resolve(backend, "cpu", precision).map(|resolved| {
-                let (original_engine, fallback_engine) =
-                    registry_gpu_to_cpu_fallback_engine_ids(backend);
-                RegistryRuntimeMatch {
-                    runtime_family: resolved.runtime_family,
-                    worker: resolved.worker,
-                    device: "cpu".to_string(),
-                    fallback: Some(runtime_fallback(
-                        original_engine,
-                        fallback_engine,
-                        reason,
-                        "preferred FDM GPU runtime is unavailable; using CPU runtime"
-                            .to_string(),
-                    )),
-                }
-            }),
+            crate::fdm::gpu::cuda::route::FdmGpuAvailabilityRoute::CpuAutoFallback { reason } => {
+                registry.resolve(backend, "cpu", precision).map(|resolved| {
+                    let (original_engine, fallback_engine) =
+                        registry_gpu_to_cpu_fallback_engine_ids(backend);
+                    RegistryRuntimeMatch {
+                        runtime_family: resolved.runtime_family,
+                        worker: resolved.worker,
+                        device: "cpu".to_string(),
+                        fallback: Some(runtime_fallback(
+                            original_engine,
+                            fallback_engine,
+                            reason,
+                            "preferred FDM GPU runtime is unavailable; using CPU runtime"
+                                .to_string(),
+                        )),
+                    }
+                })
+            }
         };
     }
     if requested_device != "auto" {
@@ -5041,7 +5041,8 @@ fn execute_cuda_fdm(
         requested_backend,
         requested_device,
         execution_mode,
-        plan.integrator.unwrap_or(fullmag_ir::IntegratorChoice::Heun),
+        plan.integrator
+            .unwrap_or(fullmag_ir::IntegratorChoice::Heun),
     )?;
     let cell_count = (plan.grid.cells[0] as usize)
         * (plan.grid.cells[1] as usize)
@@ -5119,62 +5120,202 @@ fn execute_cuda_fdm(
     let mut completion_time_s = None;
     let mut completion_max_torque_apm = None;
     let execution_outcome = (|| -> Result<(), RunError> {
-    initial_magnetization = backend.copy_m(cell_count)?;
-    provenance.timestep_policy = if direct_minimizer_control(plan.relaxation.as_ref()).is_some() {
-        None
-    } else {
-        Some(crate::resolve_timestep_policy(
-            plan.integrator,
-            plan.fixed_timestep,
-            plan.adaptive_timestep.as_ref(),
-            crate::types::TimestepExecutionLane::fdm_cuda(plan.precision),
-        )?)
-    };
-    artifacts.update_provenance(provenance.clone());
-    let mut scalar_schedules = collect_scalar_schedules(outputs)?;
-    let (mut transport_field_schedules, mut field_schedules) =
-        partition_cuda_field_schedules(outputs, !plan.spin_transport_plans.is_empty())?;
-    let default_scalar_trace = scalar_schedules.is_empty();
-    capture_initial_cuda_fields(&backend, cell_count, &mut field_schedules, &mut artifacts)?;
+        initial_magnetization = backend.copy_m(cell_count)?;
+        provenance.timestep_policy = if direct_minimizer_control(plan.relaxation.as_ref()).is_some()
+        {
+            None
+        } else {
+            Some(crate::resolve_timestep_policy(
+                plan.integrator,
+                plan.fixed_timestep,
+                plan.adaptive_timestep.as_ref(),
+                crate::types::TimestepExecutionLane::fdm_cuda(plan.precision),
+            )?)
+        };
+        artifacts.update_provenance(provenance.clone());
+        let mut scalar_schedules = collect_scalar_schedules(outputs)?;
+        let (mut transport_field_schedules, mut field_schedules) =
+            partition_cuda_field_schedules(outputs, !plan.spin_transport_plans.is_empty())?;
+        let default_scalar_trace = scalar_schedules.is_empty();
+        capture_initial_cuda_fields(&backend, cell_count, &mut field_schedules, &mut artifacts)?;
 
-    let mut current_stats = backend.snapshot_step_stats(plan.grid.cells)?;
-    ensure_single_object_scalars(&mut current_stats, "free");
+        let mut current_stats = backend.snapshot_step_stats(plan.grid.cells)?;
+        ensure_single_object_scalars(&mut current_stats, "free");
 
-    if let Some(direct_minimizer) = direct_minimizer_control(plan.relaxation.as_ref()) {
-        let outcome = crate::fdm::gpu::cuda::direct_minimizer::execute_direct_minimizer(
-            &mut backend,
-            plan,
-            cell_count,
-            direct_minimizer,
-            current_stats,
-            live.as_mut(),
-            &mut artifacts,
-            &mut steps,
-            &mut energy_plateau,
-            last_preview_revision,
-        )?;
-        latest_stats = outcome.latest_stats;
-        cancelled = outcome.cancelled;
-        direct_minimizer_torque_confirmed = outcome.torque_confirmed;
-        numerical_stagnation = outcome.numerical_stagnation;
-    } else {
-        let mut dt = provenance
-            .timestep_policy
-            .as_ref()
-            .expect("LLG execution requires a resolved timestep policy")
-            .initial_dt();
-        while current_time < until_seconds {
-            if let Some(live) = live.as_mut() {
-                if let Some(display_selection) = live.display_selection.map(|get| get()) {
-                    let preview_due = display_refresh_due(
-                        last_preview_revision,
-                        &display_selection,
-                        current_stats.step,
+        if let Some(direct_minimizer) = direct_minimizer_control(plan.relaxation.as_ref()) {
+            let outcome = crate::fdm::gpu::cuda::direct_minimizer::execute_direct_minimizer(
+                &mut backend,
+                plan,
+                cell_count,
+                direct_minimizer,
+                current_stats,
+                live.as_mut(),
+                &mut artifacts,
+                &mut steps,
+                &mut energy_plateau,
+                last_preview_revision,
+            )?;
+            latest_stats = outcome.latest_stats;
+            cancelled = outcome.cancelled;
+            direct_minimizer_torque_confirmed = outcome.torque_confirmed;
+            numerical_stagnation = outcome.numerical_stagnation;
+        } else {
+            let mut dt = provenance
+                .timestep_policy
+                .as_ref()
+                .expect("LLG execution requires a resolved timestep policy")
+                .initial_dt();
+            while current_time < until_seconds {
+                if let Some(live) = live.as_mut() {
+                    if let Some(display_selection) = live.display_selection.map(|get| get()) {
+                        let preview_due = display_refresh_due(
+                            last_preview_revision,
+                            &display_selection,
+                            current_stats.step,
+                        );
+                        let preview_targets_global_scalar =
+                            display_is_global_scalar(&display_selection);
+                        let preview_field = if preview_due && !preview_targets_global_scalar {
+                            let request = display_selection.preview_request();
+                            Some(backend.copy_live_preview_field(
+                                &request,
+                                plan.grid.cells,
+                                plan.active_mask.as_deref(),
+                            )?)
+                        } else {
+                            None
+                        };
+                        let action = (live.on_step)(StepUpdate {
+                            coupled_checkpoint: None,
+                            stats: current_stats.clone(),
+                            grid: live.grid,
+                            fem_mesh_generation_id: None,
+                            magnetization: None,
+                            preview_field,
+                            cached_preview_fields: None,
+                            hysteresis_field_m_t: None,
+                            hysteresis_point_index: None,
+                            hysteresis_settle_step_index: None,
+                            hysteresis_settle_step_kind: None,
+                            hysteresis_settle_step_method: None,
+                            scalar_row_due: preview_due && preview_targets_global_scalar,
+                            terminal_field_snapshot: false,
+                            finished: false,
+                        });
+                        if preview_due {
+                            last_preview_revision = Some(display_selection.revision);
+                        }
+                        if action == StepAction::Stop {
+                            cancelled = true;
+                            break;
+                        }
+                    }
+                }
+
+                let proposed_dt = dt.min(until_seconds - current_time);
+                let dt_step = crate::time_events::cap_timestep_to_next_event(
+                    current_time,
+                    proposed_dt,
+                    &time_events.times_s,
+                    crate::schedules::OUTPUT_TIME_TOLERANCE,
+                );
+                let interrupt_requested = live
+                    .as_ref()
+                    .and_then(|consumer| consumer.interrupt_requested);
+                let Some(mut stats) = backend.step_interruptible(dt_step, interrupt_requested)?
+                else {
+                    continue;
+                };
+                if let Some(session) = gpu_transport.as_mut() {
+                    session
+                        .observe_bound_llg_accepted_step()
+                        .map_err(|error| RunError {
+                            message: format!(
+                                "accepting public GPU M1 transport artifacts failed: {error}"
+                            ),
+                        })?;
+                }
+                ensure_single_object_scalars(&mut stats, "free");
+                // Keep accepted-step controller telemetry independent of the
+                // user-visible scalar cadence.  MuMax-compatible runs often have
+                // no scalar schedule, but qualification still requires every
+                // accepted step and its retry records.
+                artifacts.record_solver_step(&stats);
+                current_time = stats.time;
+                dt = crate::fdm::next_fdm_attempt_dt(
+                    plan.adaptive_timestep.is_some(),
+                    dt,
+                    stats.dt_suggested,
+                );
+                latest_stats = Some(stats.clone());
+                current_stats = stats.clone();
+                let due_scalar_row = scalar_row_due(&scalar_schedules, stats.time);
+                let mut sampled_stats = stats.clone();
+                let mut magnetization_cache: Option<Vec<[f64; 3]>> = None;
+                if due_scalar_row {
+                    if magnetization_cache.is_none() {
+                        magnetization_cache = Some(backend.copy_m(cell_count)?);
+                    }
+                    apply_average_m_to_step_stats_with_active_mask(
+                        &mut sampled_stats,
+                        magnetization_cache
+                            .as_deref()
+                            .expect("magnetization cache initialized"),
+                        plan.active_mask.as_deref(),
                     );
-                    let preview_targets_global_scalar =
-                        display_is_global_scalar(&display_selection);
+                }
+                if let Some(live) = live.as_mut() {
+                    let heavy_payload_every = live.field_every_n.max(1);
+                    let heavy_payload_due = stats.step % heavy_payload_every == 0;
+                    if heavy_payload_due && !due_scalar_row {
+                        if magnetization_cache.is_none() {
+                            magnetization_cache = Some(backend.copy_m(cell_count)?);
+                        }
+                        apply_average_m_to_step_stats_with_active_mask(
+                            &mut sampled_stats,
+                            magnetization_cache
+                                .as_deref()
+                                .expect("magnetization cache initialized"),
+                            plan.active_mask.as_deref(),
+                        );
+                    }
+                    let display_selection = live.display_selection.map(|get| get());
+                    let preview_due = display_selection
+                        .as_ref()
+                        .map(|selection| {
+                            display_refresh_due(last_preview_revision, selection, stats.step)
+                        })
+                        .unwrap_or(false);
+                    let preview_targets_global_scalar = display_selection
+                        .as_ref()
+                        .is_some_and(display_is_global_scalar);
+                    if preview_due && preview_targets_global_scalar && !due_scalar_row {
+                        if magnetization_cache.is_none() {
+                            magnetization_cache = Some(backend.copy_m(cell_count)?);
+                        }
+                        apply_average_m_to_step_stats_with_active_mask(
+                            &mut sampled_stats,
+                            magnetization_cache
+                                .as_deref()
+                                .expect("magnetization cache initialized"),
+                            plan.active_mask.as_deref(),
+                        );
+                    }
+                    let magnetization = if heavy_payload_due {
+                        if magnetization_cache.is_none() {
+                            magnetization_cache = Some(backend.copy_m(cell_count)?);
+                        }
+                        Some(flatten_vectors(
+                            magnetization_cache
+                                .as_deref()
+                                .expect("magnetization cache initialized"),
+                        ))
+                    } else {
+                        None
+                    };
                     let preview_field = if preview_due && !preview_targets_global_scalar {
-                        let request = display_selection.preview_request();
+                        let selection = display_selection.as_ref().expect("checked preview_due");
+                        let request = selection.preview_request();
                         Some(backend.copy_live_preview_field(
                             &request,
                             plan.grid.cells,
@@ -5185,10 +5326,10 @@ fn execute_cuda_fdm(
                     };
                     let action = (live.on_step)(StepUpdate {
                         coupled_checkpoint: None,
-                        stats: current_stats.clone(),
+                        stats: sampled_stats.clone(),
                         grid: live.grid,
                         fem_mesh_generation_id: None,
-                        magnetization: None,
+                        magnetization,
                         preview_field,
                         cached_preview_fields: None,
                         hysteresis_field_m_t: None,
@@ -5196,235 +5337,97 @@ fn execute_cuda_fdm(
                         hysteresis_settle_step_index: None,
                         hysteresis_settle_step_kind: None,
                         hysteresis_settle_step_method: None,
-                        scalar_row_due: preview_due && preview_targets_global_scalar,
+                        scalar_row_due: due_scalar_row
+                            || (preview_due && preview_targets_global_scalar),
                         terminal_field_snapshot: false,
                         finished: false,
                     });
                     if preview_due {
-                        last_preview_revision = Some(display_selection.revision);
+                        last_preview_revision = Some(
+                            display_selection
+                                .as_ref()
+                                .expect("checked preview_due")
+                                .revision,
+                        );
                     }
                     if action == StepAction::Stop {
                         cancelled = true;
-                        break;
                     }
                 }
-            }
-
-            let proposed_dt = dt.min(until_seconds - current_time);
-            let dt_step = crate::time_events::cap_timestep_to_next_event(
-                current_time,
-                proposed_dt,
-                &time_events.times_s,
-                crate::schedules::OUTPUT_TIME_TOLERANCE,
-            );
-            let interrupt_requested = live
-                .as_ref()
-                .and_then(|consumer| consumer.interrupt_requested);
-            let Some(mut stats) = backend.step_interruptible(dt_step, interrupt_requested)? else {
-                continue;
-            };
-            if let Some(session) = gpu_transport.as_mut() {
-                session
-                    .observe_bound_llg_accepted_step()
-                    .map_err(|error| RunError {
-                        message: format!(
-                            "accepting public GPU M1 transport artifacts failed: {error}"
-                        ),
-                    })?;
-            }
-            ensure_single_object_scalars(&mut stats, "free");
-            // Keep accepted-step controller telemetry independent of the
-            // user-visible scalar cadence.  MuMax-compatible runs often have
-            // no scalar schedule, but qualification still requires every
-            // accepted step and its retry records.
-            artifacts.record_solver_step(&stats);
-            current_time = stats.time;
-            dt = crate::fdm::next_fdm_attempt_dt(
-                plan.adaptive_timestep.is_some(),
-                dt,
-                stats.dt_suggested,
-            );
-            latest_stats = Some(stats.clone());
-            current_stats = stats.clone();
-            let due_scalar_row = scalar_row_due(&scalar_schedules, stats.time);
-            let mut sampled_stats = stats.clone();
-            let mut magnetization_cache: Option<Vec<[f64; 3]>> = None;
-            if due_scalar_row {
-                if magnetization_cache.is_none() {
-                    magnetization_cache = Some(backend.copy_m(cell_count)?);
+                if cancelled {
+                    break;
                 }
-                apply_average_m_to_step_stats_with_active_mask(
-                    &mut sampled_stats,
-                    magnetization_cache
-                        .as_deref()
-                        .expect("magnetization cache initialized"),
-                    plan.active_mask.as_deref(),
-                );
-            }
-            if let Some(live) = live.as_mut() {
-                let heavy_payload_every = live.field_every_n.max(1);
-                let heavy_payload_due = stats.step % heavy_payload_every == 0;
-                if heavy_payload_due && !due_scalar_row {
-                    if magnetization_cache.is_none() {
-                        magnetization_cache = Some(backend.copy_m(cell_count)?);
-                    }
-                    apply_average_m_to_step_stats_with_active_mask(
-                        &mut sampled_stats,
-                        magnetization_cache
-                            .as_deref()
-                            .expect("magnetization cache initialized"),
-                        plan.active_mask.as_deref(),
-                    );
-                }
-                let display_selection = live.display_selection.map(|get| get());
-                let preview_due = display_selection
-                    .as_ref()
-                    .map(|selection| {
-                        display_refresh_due(last_preview_revision, selection, stats.step)
-                    })
-                    .unwrap_or(false);
-                let preview_targets_global_scalar = display_selection
-                    .as_ref()
-                    .is_some_and(display_is_global_scalar);
-                if preview_due && preview_targets_global_scalar && !due_scalar_row {
-                    if magnetization_cache.is_none() {
-                        magnetization_cache = Some(backend.copy_m(cell_count)?);
-                    }
-                    apply_average_m_to_step_stats_with_active_mask(
-                        &mut sampled_stats,
-                        magnetization_cache
-                            .as_deref()
-                            .expect("magnetization cache initialized"),
-                        plan.active_mask.as_deref(),
-                    );
-                }
-                let magnetization = if heavy_payload_due {
-                    if magnetization_cache.is_none() {
-                        magnetization_cache = Some(backend.copy_m(cell_count)?);
-                    }
-                    Some(flatten_vectors(
-                        magnetization_cache
-                            .as_deref()
-                            .expect("magnetization cache initialized"),
-                    ))
-                } else {
-                    None
-                };
-                let preview_field = if preview_due && !preview_targets_global_scalar {
-                    let selection = display_selection.as_ref().expect("checked preview_due");
-                    let request = selection.preview_request();
-                    Some(backend.copy_live_preview_field(
-                        &request,
-                        plan.grid.cells,
-                        plan.active_mask.as_deref(),
-                    )?)
-                } else {
-                    None
-                };
-                let action = (live.on_step)(StepUpdate {
-                    coupled_checkpoint: None,
-                    stats: sampled_stats.clone(),
-                    grid: live.grid,
-                    fem_mesh_generation_id: None,
-                    magnetization,
-                    preview_field,
-                    cached_preview_fields: None,
-                    terminal_field_snapshot: false,
-                    hysteresis_field_m_t: None,
-                    hysteresis_point_index: None,
-                    hysteresis_settle_step_index: None,
-                    hysteresis_settle_step_kind: None,
-                    hysteresis_settle_step_method: None,
-                    scalar_row_due: due_scalar_row
-                        || (preview_due && preview_targets_global_scalar),
-                    finished: false,
+                record_cuda_due_outputs(
+                    &backend,
+                    cell_count,
+                    &sampled_stats,
+                    magnetization_cache.as_deref(),
+                    &mut scalar_schedules,
+                    &mut field_schedules,
+                    &mut steps,
+                    &mut artifacts,
+                )?;
+                record_gpu_transport_due_outputs(
+                    gpu_transport.as_ref(),
+                    gpu_transport_module_id,
+                    plan.grid.cells,
+                    &sampled_stats,
+                    &mut transport_field_schedules,
+                    &mut artifacts,
+                )?;
+                let energy_plateau_range = energy_plateau.record(stats.e_total);
+                let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
+                    stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
+                        || torque_confirmation.observe_stats(
+                            control,
+                            &stats,
+                            energy_plateau_range,
+                            plan.gyromagnetic_ratio,
+                            plan.material.damping,
+                            llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
+                        )
                 });
-                if preview_due {
-                    last_preview_revision = Some(
-                        display_selection
-                            .as_ref()
-                            .expect("checked preview_due")
-                            .revision,
-                    );
+                if stop_for_relaxation {
+                    break;
                 }
-                if action == StepAction::Stop {
-                    cancelled = true;
-                }
-            }
-            if cancelled {
-                break;
-            }
-            record_cuda_due_outputs(
-                &backend,
-                cell_count,
-                &sampled_stats,
-                magnetization_cache.as_deref(),
-                &mut scalar_schedules,
-                &mut field_schedules,
-                &mut steps,
-                &mut artifacts,
-            )?;
-            record_gpu_transport_due_outputs(
-                gpu_transport.as_ref(),
-                gpu_transport_module_id,
-                plan.grid.cells,
-                &sampled_stats,
-                &mut transport_field_schedules,
-                &mut artifacts,
-            )?;
-            let energy_plateau_range = energy_plateau.record(stats.e_total);
-            let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
-                stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                    || torque_confirmation.observe_stats(
-                        control,
-                        &stats,
-                        energy_plateau_range,
-                        plan.gyromagnetic_ratio,
-                        plan.material.damping,
-                        llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
-                    )
-            });
-            if stop_for_relaxation {
-                break;
             }
         }
-    }
 
-    completion_steps = latest_stats.as_ref().map_or(0, |stats| stats.step);
-    completion_time_s = latest_stats.as_ref().map(|stats| stats.time);
-    completion_max_torque_apm = latest_stats.as_ref().map(|stats| stats.max_torque_Apm);
-    final_magnetization = backend.copy_m(cell_count)?;
-    record_gpu_transport_final_outputs(
-        gpu_transport.as_ref(),
-        gpu_transport_module_id,
-        plan.grid.cells,
-        latest_stats.as_ref(),
-        &transport_field_schedules,
-        &mut artifacts,
-    )?;
-    if let Some(session) = gpu_transport.as_mut() {
-        provenance.fdm_gpu_transport_telemetry =
-            Some(session.transport_telemetry().map_err(|error| RunError {
-                message: format!("reading public GPU M1 transport telemetry failed: {error}"),
-            })?);
-        artifacts.update_provenance(provenance.clone());
-        backend.unbind_gpu_transport()?;
-        session.close().map_err(|error| RunError {
-            message: format!("closing public GPU M1 transport session failed: {error}"),
-        })?;
-    }
-    record_cuda_final_outputs(
-        &backend,
-        cell_count,
-        &final_magnetization,
-        latest_stats,
-        default_scalar_trace,
-        &scalar_schedules,
-        &field_schedules,
-        &mut steps,
-        &mut artifacts,
-    )?;
-    Ok(())
+        completion_steps = latest_stats.as_ref().map_or(0, |stats| stats.step);
+        completion_time_s = latest_stats.as_ref().map(|stats| stats.time);
+        completion_max_torque_apm = latest_stats.as_ref().map(|stats| stats.max_torque_Apm);
+        final_magnetization = backend.copy_m(cell_count)?;
+        record_gpu_transport_final_outputs(
+            gpu_transport.as_ref(),
+            gpu_transport_module_id,
+            plan.grid.cells,
+            latest_stats.as_ref(),
+            &transport_field_schedules,
+            &mut artifacts,
+        )?;
+        if let Some(session) = gpu_transport.as_mut() {
+            provenance.fdm_gpu_transport_telemetry =
+                Some(session.transport_telemetry().map_err(|error| RunError {
+                    message: format!("reading public GPU M1 transport telemetry failed: {error}"),
+                })?);
+            artifacts.update_provenance(provenance.clone());
+            backend.unbind_gpu_transport()?;
+            session.close().map_err(|error| RunError {
+                message: format!("closing public GPU M1 transport session failed: {error}"),
+            })?;
+        }
+        record_cuda_final_outputs(
+            &backend,
+            cell_count,
+            &final_magnetization,
+            latest_stats,
+            default_scalar_trace,
+            &scalar_schedules,
+            &field_schedules,
+            &mut steps,
+            &mut artifacts,
+        )?;
+        Ok(())
     })();
     receipt_lifecycle.finalize_after_outcome(
         &backend,
@@ -5990,10 +5993,9 @@ fn execute_native_fem(
         &gpu_rk_plan_info,
         || backend.validate_strict_gpu_rk_plan(),
     );
-    begin_native_fem_stage_after_strict_gpu_preflight(
-        strict_gpu_preflight,
-        || backend.begin_stage(plan.time_stage.start_time_s),
-    )?;
+    begin_native_fem_stage_after_strict_gpu_preflight(strict_gpu_preflight, || {
+        backend.begin_stage(plan.time_stage.start_time_s)
+    })?;
     let device_info = backend.device_info()?;
     let gpu_state_info = backend.gpu_state_info()?;
     validate_native_fem_gpu_engine_runtime_contract(engine, &gpu_rk_plan_info)?;
@@ -6725,9 +6727,9 @@ mod tests {
             let error = constrain_fdm_device_for_fft(device.to_string(), Some(&fft))
                 .expect_err("runtime device mismatch must fail closed");
 
-            assert!(error.message.contains(&format!(
-                "fdm.demag.fft_backend='{backend}'"
-            )));
+            assert!(error
+                .message
+                .contains(&format!("fdm.demag.fft_backend='{backend}'")));
         }
     }
 
@@ -8254,17 +8256,15 @@ mod tests {
                 Ok(())
             },
         );
-        let incomplete_err = begin_native_fem_stage_after_strict_gpu_preflight(
-            incomplete_preflight,
-            || {
+        let incomplete_err =
+            begin_native_fem_stage_after_strict_gpu_preflight(incomplete_preflight, || {
                 rejected_lifecycle.begin_stage += 1;
                 rejected_lifecycle.step += 1;
                 rejected_lifecycle.receipt += 1;
                 rejected_lifecycle.provenance += 1;
                 Ok(())
-            },
-        )
-        .expect_err("strict native GPU must reject an incomplete device-resident plan");
+            })
+            .expect_err("strict native GPU must reject an incomplete device-resident plan");
         assert!(incomplete_err
             .message
             .contains("preflight_reason=fem_gpu_strict_preflight_device_residency_unmet"));
@@ -8333,17 +8333,15 @@ mod tests {
                 })
             },
         );
-        let native_plan_err = begin_native_fem_stage_after_strict_gpu_preflight(
-            native_plan_preflight,
-            || {
+        let native_plan_err =
+            begin_native_fem_stage_after_strict_gpu_preflight(native_plan_preflight, || {
                 native_rejected_lifecycle.begin_stage += 1;
                 native_rejected_lifecycle.step += 1;
                 native_rejected_lifecycle.receipt += 1;
                 native_rejected_lifecycle.provenance += 1;
                 Ok(())
-            },
-        )
-        .expect_err("native strict operator-mask preflight must reject before stage lifecycle");
+            })
+            .expect_err("native strict operator-mask preflight must reject before stage lifecycle");
         assert!(native_plan_err
             .message
             .contains("GPU RK strict operator-mask preflight rejected device plan"));
@@ -8370,14 +8368,13 @@ mod tests {
                 Ok(())
             },
         );
-        assert!(begin_native_fem_stage_after_strict_gpu_preflight(
-            accepted_preflight,
-            || {
+        assert!(
+            begin_native_fem_stage_after_strict_gpu_preflight(accepted_preflight, || {
                 accepted_lifecycle.begin_stage += 1;
                 Ok(())
-            },
-        )
-        .is_ok());
+            },)
+            .is_ok()
+        );
         assert_eq!(accepted_lifecycle.native_plan_preflight, 1);
         assert_eq!(accepted_lifecycle.begin_stage, 1);
     }
@@ -11089,7 +11086,9 @@ mod tests {
         let execute_native_source = &source[start..end];
         let mode_preflight = execute_native_source
             .find("create_native_fem_backend_after_strict_gpu_mode_preflight")
-            .expect("strict native GPU execution must preflight hybrid mode before backend creation");
+            .expect(
+                "strict native GPU execution must preflight hybrid mode before backend creation",
+            );
         let backend_creation = execute_native_source
             .find("NativeFemBackend::create_with_initial_effective_field")
             .expect("native FEM must create a backend after mode preflight");

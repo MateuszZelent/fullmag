@@ -535,12 +535,10 @@ impl ArtifactPipelineSender {
             Ok(Ok(())) => Ok(()),
             Ok(Err(message)) => Err(RunError { message }),
             Err(mpsc::RecvTimeoutError::Timeout) => Err(RunError {
-                message: "timed out waiting for durable failed-run provenance publication"
-                    .into(),
+                message: "timed out waiting for durable failed-run provenance publication".into(),
             }),
             Err(mpsc::RecvTimeoutError::Disconnected) => Err(RunError {
-                message: "artifact writer stopped before failed-run provenance was durable"
-                    .into(),
+                message: "artifact writer stopped before failed-run provenance was durable".into(),
             }),
         }
     }
@@ -1287,10 +1285,8 @@ impl ArtifactRecorder {
         primary: &RunError,
     ) -> Result<(), RunError> {
         if let Some(pipeline) = self.pipeline.as_ref() {
-            pipeline.publish_failed_run_provenance(
-                self.provenance.clone(),
-                primary.message.clone(),
-            )?;
+            pipeline
+                .publish_failed_run_provenance(self.provenance.clone(), primary.message.clone())?;
         }
         Ok(())
     }
@@ -1517,12 +1513,13 @@ impl ZarrFieldSeriesWriter {
         provenance: &ExecutionProvenance,
     ) -> Result<(), String> {
         let path = self.root_dir.join(".zattrs");
-        let mut attrs: serde_json::Value = serde_json::from_slice(
-            &fs::read(&path).map_err(|error| {
+        let mut attrs: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).map_err(|error| {
                 format!("failed to read Zarr attrs '{}': {error}", path.display())
-            })?,
-        )
-        .map_err(|error| format!("failed to decode Zarr attrs '{}': {error}", path.display()))?;
+            })?)
+            .map_err(|error| {
+                format!("failed to decode Zarr attrs '{}': {error}", path.display())
+            })?;
         attrs["provenance"] = crate::artifacts::artifact_provenance_json(context, provenance);
         crate::autosave_zarr::write_json_atomic(&path, &attrs)
             .map_err(|error| format!("failed to update Zarr attrs '{}': {error}", path.display()))
@@ -2004,11 +2001,8 @@ fn writer_loop(
                 primary_error,
                 acknowledgement,
             } => {
-                let result = write_failed_run_provenance_atomic(
-                    output_dir,
-                    &provenance,
-                    &primary_error,
-                );
+                let result =
+                    write_failed_run_provenance_atomic(output_dir, &provenance, &primary_error);
                 let _ = acknowledgement.send(result);
             }
             ArtifactJob::TerminalCpuAdaptiveAttempts {
@@ -2104,18 +2098,19 @@ fn write_failed_run_provenance_atomic(
             )
         })?;
         let mut writer = BufWriter::new(file);
-        writer.write_all(&payload).map_err(|error| {
-            format!("failed to write failed-run provenance: {error}")
-        })?;
-        writer.write_all(b"\n").map_err(|error| {
-            format!("failed to terminate failed-run provenance: {error}")
-        })?;
-        writer.flush().map_err(|error| {
-            format!("failed to flush failed-run provenance: {error}")
-        })?;
-        writer.get_ref().sync_all().map_err(|error| {
-            format!("failed to sync failed-run provenance: {error}")
-        })?;
+        writer
+            .write_all(&payload)
+            .map_err(|error| format!("failed to write failed-run provenance: {error}"))?;
+        writer
+            .write_all(b"\n")
+            .map_err(|error| format!("failed to terminate failed-run provenance: {error}"))?;
+        writer
+            .flush()
+            .map_err(|error| format!("failed to flush failed-run provenance: {error}"))?;
+        writer
+            .get_ref()
+            .sync_all()
+            .map_err(|error| format!("failed to sync failed-run provenance: {error}"))?;
         fs::rename(&temporary_path, &final_path).map_err(|error| {
             format!(
                 "failed to atomically publish failed-run provenance '{}': {error}",
@@ -2302,8 +2297,9 @@ mod tests {
             precision: "double".into(),
             ..ExecutionProvenance::default()
         };
-        provenance.fdm_gpu_execution_receipt =
-            Some(crate::types::FdmGpuExecutionReceipt::strict_unvalidated("double"));
+        provenance.fdm_gpu_execution_receipt = Some(
+            crate::types::FdmGpuExecutionReceipt::strict_unvalidated("double"),
+        );
         let mut recorder = ArtifactRecorder::streaming(provenance, pipeline.sender());
         let primary = RunError {
             message: "injected failure after create/step".into(),
@@ -2320,11 +2316,13 @@ mod tests {
                 .expect("durable failed-run provenance"),
         )
         .expect("valid failed-run provenance JSON");
-        assert_eq!(document["schema_version"], "fullmag_failed_run_provenance.v1");
+        assert_eq!(
+            document["schema_version"],
+            "fullmag_failed_run_provenance.v1"
+        );
         assert_eq!(document["primary_error"], primary.message);
         assert_eq!(
-            document["execution_provenance"]["fdm_gpu_execution_receipt"]
-                ["validation_state"],
+            document["execution_provenance"]["fdm_gpu_execution_receipt"]["validation_state"],
             "unvalidated"
         );
         for success_marker in ["metadata.json", "manifest.json", "run-result.json"] {
@@ -2519,7 +2517,9 @@ mod tests {
                 Duration::from_millis(25),
             )
             .expect_err("full queue must time out");
-        assert!(error.message.contains("enqueueing artifact provenance update"));
+        assert!(error
+            .message
+            .contains("enqueueing artifact provenance update"));
         drop(receiver);
     }
 
@@ -2534,7 +2534,9 @@ mod tests {
                 Duration::from_millis(25),
             )
             .expect_err("disconnected queue must fail");
-        assert!(error.message.contains("before provenance update was queued"));
+        assert!(error
+            .message
+            .contains("before provenance update was queued"));
     }
 
     #[test]
@@ -2552,7 +2554,9 @@ mod tests {
                 Duration::from_millis(25),
             )
             .expect_err("stalled acknowledgement must time out");
-        assert!(error.message.contains("waiting for artifact provenance update"));
+        assert!(error
+            .message
+            .contains("waiting for artifact provenance update"));
         stalled.join().expect("stalled receiver exits");
     }
 
@@ -3021,18 +3025,14 @@ mod tests {
                 .expect("valid terminal FEM snapshot"),
             )
             .expect("enqueue terminal FEM snapshot after receipt update");
-        let expected_full_provenance = crate::artifacts::artifact_provenance_json(
-            &context,
-            &recorder.provenance_snapshot(),
-        );
+        let expected_full_provenance =
+            crate::artifacts::artifact_provenance_json(&context, &recorder.provenance_snapshot());
         drop(recorder);
         pipeline.finish().expect("finish streaming pipeline");
 
         let zattrs: serde_json::Value = serde_json::from_slice(
-            &fs::read(autosave_root.join(
-                "state.zarr/stages/stage_0000_relax/fields/m/.zattrs",
-            ))
-            .expect("read streamed FEM field zattrs"),
+            &fs::read(autosave_root.join("state.zarr/stages/stage_0000_relax/fields/m/.zattrs"))
+                .expect("read streamed FEM field zattrs"),
         )
         .expect("decode streamed FEM field zattrs");
         let root_zattrs: serde_json::Value = serde_json::from_slice(
@@ -3041,10 +3041,8 @@ mod tests {
         )
         .expect("decode existing autosave root zattrs");
         let stage_manifest: serde_json::Value = serde_json::from_slice(
-            &fs::read(autosave_root.join(
-                "state.zarr/stages/stage_0000_relax/manifest.json",
-            ))
-            .expect("read finished stage manifest"),
+            &fs::read(autosave_root.join("state.zarr/stages/stage_0000_relax/manifest.json"))
+                .expect("read finished stage manifest"),
         )
         .expect("decode finished stage manifest");
         assert_eq!(root_zattrs["provenance"], expected_full_provenance);

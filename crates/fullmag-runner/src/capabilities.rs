@@ -1629,10 +1629,7 @@ mod tests {
         );
 
         assert_eq!(resolved.provider, QuantityProviderCapability::Available);
-        assert_eq!(
-            resolved.request,
-            QuantityRequestCapability::FieldVector
-        );
+        assert_eq!(resolved.request, QuantityRequestCapability::FieldVector);
         assert_eq!(
             resolved.materialization,
             QuantityMaterializationCapability::Unmaterialized
