@@ -100,7 +100,7 @@ def summary() -> dict:
         "commit": commit,
         "profile": "full",
         "qualification_status": "evidence_only",
-        "qualification_blockers": ["hardware_baseline_threshold_not_approved"],
+        "qualification_blockers": ["external_hardware_baseline_gate_pending"],
         "source_identity": {
             "git_commit": commit,
             "worktree_state": "clean",

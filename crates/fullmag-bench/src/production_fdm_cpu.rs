@@ -193,7 +193,7 @@ pub(super) fn run_from_args(args: &[String]) -> Result<(), String> {
     }
 
     let time_to_accuracy = run_time_to_accuracy(&config.output_root)?;
-    let mut qualification_blockers = vec!["hardware_baseline_threshold_not_approved"];
+    let mut qualification_blockers = vec!["external_hardware_baseline_gate_pending"];
     if config.profile == Profile::Smoke {
         qualification_blockers.push("full_fixture_profile_not_run");
     }

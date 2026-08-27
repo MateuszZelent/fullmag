@@ -188,7 +188,7 @@ def validate_summary(document: Mapping[str, Any], label: str) -> None:
     require(document.get("schema_version") == SUMMARY_SCHEMA, f"{label} schema mismatch")
     require(document.get("profile") == "full", f"{label} is not full profile")
     require(document.get("qualification_status") == "evidence_only", f"{label} harness status changed")
-    require(document.get("qualification_blockers") == ["hardware_baseline_threshold_not_approved"], f"{label} blocker set changed")
+    require(document.get("qualification_blockers") == ["external_hardware_baseline_gate_pending"], f"{label} blocker set changed")
     commit = document.get("commit")
     require(is_lower_hex(commit, 40), f"{label} commit is invalid")
     source = document.get("source_identity")
