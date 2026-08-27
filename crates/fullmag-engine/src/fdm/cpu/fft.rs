@@ -2,7 +2,8 @@
 
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
-use std::sync::Arc;
+use sha2::{Digest, Sha256};
+use std::{mem::size_of, sync::Arc, time::Instant};
 
 use crate::fdm::shared::types::{AxisBoundary, FdmBoundaryPolicy, ResolvedFdmPeriodicWorkspace};
 
@@ -10,6 +11,63 @@ use crate::newell;
 use crate::Vector3;
 
 // ── FftWorkspace ───────────────────────────────────────────────────────
+
+pub const FDM_FFT_WORKSPACE_TELEMETRY_SCHEMA_VERSION: &str = "fullmag.fdm.fft_workspace.v1";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FftWorkspaceTelemetry {
+    pub lifecycle_revision: u64,
+    pub lifecycle_key_sha256: String,
+    pub execution_thread_count: u32,
+    pub plan_creation_time_ns: u64,
+    /// Allocator-reserved bytes for complex buffers owned by the workspace.
+    /// RustFFT does not expose the heap footprint of its opaque plan objects.
+    pub workspace_bytes: u64,
+    pub forward_fft_count: u64,
+    pub inverse_fft_count: u64,
+    pub fft_elapsed_time_ns: u64,
+}
+
+fn elapsed_ns(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX)
+}
+
+fn execution_thread_count() -> u32 {
+    #[cfg(feature = "parallel")]
+    {
+        u32::try_from(rayon::current_num_threads()).unwrap_or(u32::MAX)
+    }
+    #[cfg(not(feature = "parallel"))]
+    {
+        1
+    }
+}
+
+fn fft_workspace_key_sha256(
+    cells: [usize; 3],
+    cell_size: [f64; 3],
+    periodic: [bool; 3],
+    image_counts: [u32; 3],
+    thread_count: u32,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(FDM_FFT_WORKSPACE_TELEMETRY_SCHEMA_VERSION.as_bytes());
+    hasher.update(b"rustfft\0double\0full_complex");
+    for value in cells {
+        hasher.update(u64::try_from(value).unwrap_or(u64::MAX).to_le_bytes());
+    }
+    for value in cell_size {
+        hasher.update(value.to_bits().to_le_bytes());
+    }
+    for value in periodic {
+        hasher.update([u8::from(value)]);
+    }
+    for value in image_counts {
+        hasher.update(value.to_le_bytes());
+    }
+    hasher.update(thread_count.to_le_bytes());
+    format!("sha256:{:x}", hasher.finalize())
+}
 
 /// Cached FFT plans and scratch buffers for spectral demag.
 ///
@@ -48,6 +106,7 @@ pub struct FftWorkspace {
     pub(crate) kern_xy: Vec<Complex<f64>>,
     pub(crate) kern_xz: Vec<Complex<f64>>,
     pub(crate) kern_yz: Vec<Complex<f64>>,
+    telemetry: FftWorkspaceTelemetry,
 }
 
 #[derive(Debug, Clone)]
@@ -150,6 +209,8 @@ impl FftWorkspace {
     }
 
     fn new_unchecked(nx: usize, ny: usize, nz: usize, dx: f64, dy: f64, dz: f64) -> Self {
+        let plan_started = Instant::now();
+        let thread_count = execution_thread_count();
         let px = nx * 2;
         let py = ny * 2;
         let pz = nz * 2;
@@ -191,7 +252,7 @@ impl FftWorkspace {
         let kern_xz = fft_kernel(nk.n_xz);
         let kern_yz = fft_kernel(nk.n_yz);
 
-        Self {
+        let mut workspace = Self {
             nx,
             ny,
             nz,
@@ -218,7 +279,26 @@ impl FftWorkspace {
             kern_xy,
             kern_xz,
             kern_yz,
-        }
+            telemetry: FftWorkspaceTelemetry {
+                lifecycle_revision: 1,
+                lifecycle_key_sha256: fft_workspace_key_sha256(
+                    [nx, ny, nz],
+                    [dx, dy, dz],
+                    [false; 3],
+                    [0; 3],
+                    thread_count,
+                ),
+                execution_thread_count: thread_count,
+                plan_creation_time_ns: 0,
+                workspace_bytes: 0,
+                forward_fft_count: 0,
+                inverse_fft_count: 0,
+                fft_elapsed_time_ns: 0,
+            },
+        };
+        workspace.telemetry.plan_creation_time_ns = elapsed_ns(plan_started);
+        workspace.telemetry.workspace_bytes = workspace.allocated_buffer_bytes();
+        workspace
     }
 
     /// Create an FFT workspace with per-axis periodic boundary support.
@@ -339,6 +419,8 @@ impl FftWorkspace {
         boundary: &FdmBoundaryPolicy,
         image_counts: [u32; 3],
     ) -> Self {
+        let plan_started = Instant::now();
+        let thread_count = execution_thread_count();
         let pbc_x = matches!(boundary.x, AxisBoundary::Periodic);
         let pbc_y = matches!(boundary.y, AxisBoundary::Periodic);
         let pbc_z = matches!(boundary.z, AxisBoundary::Periodic);
@@ -393,7 +475,7 @@ impl FftWorkspace {
         let kern_xz = fft_kernel(nk.n_xz);
         let kern_yz = fft_kernel(nk.n_yz);
 
-        Self {
+        let mut workspace = Self {
             nx,
             ny,
             nz,
@@ -420,7 +502,50 @@ impl FftWorkspace {
             kern_xy,
             kern_xz,
             kern_yz,
-        }
+            telemetry: FftWorkspaceTelemetry {
+                lifecycle_revision: 1,
+                lifecycle_key_sha256: fft_workspace_key_sha256(
+                    [nx, ny, nz],
+                    [dx, dy, dz],
+                    [pbc_x, pbc_y, pbc_z],
+                    image_counts,
+                    thread_count,
+                ),
+                execution_thread_count: thread_count,
+                plan_creation_time_ns: 0,
+                workspace_bytes: 0,
+                forward_fft_count: 0,
+                inverse_fft_count: 0,
+                fft_elapsed_time_ns: 0,
+            },
+        };
+        workspace.telemetry.plan_creation_time_ns = elapsed_ns(plan_started);
+        workspace.telemetry.workspace_bytes = workspace.allocated_buffer_bytes();
+        workspace
+    }
+
+    fn allocated_buffer_bytes(&self) -> u64 {
+        let complex_values = self
+            .line_y
+            .capacity()
+            .saturating_add(self.line_z.capacity())
+            .saturating_add(self.buf_mx.capacity())
+            .saturating_add(self.buf_my.capacity())
+            .saturating_add(self.buf_mz.capacity())
+            .saturating_add(self.buf_hx.capacity())
+            .saturating_add(self.buf_hy.capacity())
+            .saturating_add(self.buf_hz.capacity())
+            .saturating_add(self.kern_xx.capacity())
+            .saturating_add(self.kern_yy.capacity())
+            .saturating_add(self.kern_zz.capacity())
+            .saturating_add(self.kern_xy.capacity())
+            .saturating_add(self.kern_xz.capacity())
+            .saturating_add(self.kern_yz.capacity());
+        u64::try_from(complex_values.saturating_mul(size_of::<Complex<f64>>())).unwrap_or(u64::MAX)
+    }
+
+    pub fn telemetry(&self) -> FftWorkspaceTelemetry {
+        self.telemetry.clone()
     }
 
     /// Zero out only the three M frequency-domain buffers.
@@ -451,6 +576,7 @@ impl FftWorkspace {
 
     /// Forward FFT on the three M-component buffers (buf_mx, buf_my, buf_mz).
     pub(crate) fn fft3_m_forward(&mut self) {
+        let started = Instant::now();
         fft3_core(
             &mut self.buf_mx,
             self.px,
@@ -484,10 +610,16 @@ impl FftWorkspace {
             &mut self.line_y,
             &mut self.line_z,
         );
+        self.telemetry.forward_fft_count = self.telemetry.forward_fft_count.saturating_add(3);
+        self.telemetry.fft_elapsed_time_ns = self
+            .telemetry
+            .fft_elapsed_time_ns
+            .saturating_add(elapsed_ns(started));
     }
 
     /// Inverse FFT on the three H-component buffers (buf_hx, buf_hy, buf_hz).
     pub(crate) fn fft3_h_inverse(&mut self) {
+        let started = Instant::now();
         fft3_core(
             &mut self.buf_hx,
             self.px,
@@ -521,6 +653,11 @@ impl FftWorkspace {
             &mut self.line_y,
             &mut self.line_z,
         );
+        self.telemetry.inverse_fft_count = self.telemetry.inverse_fft_count.saturating_add(3);
+        self.telemetry.fft_elapsed_time_ns = self
+            .telemetry
+            .fft_elapsed_time_ns
+            .saturating_add(elapsed_ns(started));
     }
 }
 

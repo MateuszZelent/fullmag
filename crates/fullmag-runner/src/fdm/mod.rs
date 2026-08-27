@@ -36,6 +36,7 @@ pub(crate) fn resolve_cuda_fft_execution_for_demag(
         plan_mode: "cufft_explicit_workspace".to_string(),
         thread_count: None,
         workspace_layout: "full_complex".to_string(),
+        runtime_telemetry: None,
     }))
 }
 

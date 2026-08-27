@@ -3,7 +3,6 @@ use fullmag_ir::FdmFftPlanIR;
 
 const RUSTFFT_CRATE_VERSION: &str = "6.4.1";
 const RUSTFFT_PLAN_MODE: &str = "rustfft_planner_cached";
-const RUSTFFT_THREAD_COUNT: u32 = 1;
 const RUSTFFT_WORKSPACE_LAYOUT: &str = "full_complex";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,8 +61,9 @@ pub(crate) fn resolve_cpu_fft_execution_for_demag(
         executed_backend: backend.as_str().to_string(),
         backend_version: Some(RUSTFFT_CRATE_VERSION.to_string()),
         plan_mode: RUSTFFT_PLAN_MODE.to_string(),
-        thread_count: Some(RUSTFFT_THREAD_COUNT),
+        thread_count: None,
         workspace_layout: RUSTFFT_WORKSPACE_LAYOUT.to_string(),
+        runtime_telemetry: None,
     }))
 }
 

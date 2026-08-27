@@ -3262,6 +3262,20 @@ pub struct FinalExecutionResolutionProvenance {
     pub fallback_reason: Option<String>,
 }
 
+/// Runtime-owned CPU FFT workspace evidence captured after execution.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FdmFftRuntimeTelemetry {
+    pub schema_version: String,
+    pub workspace_lifecycle_revision: u64,
+    pub workspace_key_sha256: String,
+    pub plan_creation_time_ns: u64,
+    /// Allocator-reserved bytes for buffers owned by the FFT workspace.
+    pub workspace_bytes: u64,
+    pub forward_fft_count: u64,
+    pub inverse_fft_count: u64,
+    pub fft_elapsed_time_ns: u64,
+}
+
 /// Included in artifact metadata for reproducibility.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FdmFftExecutionProvenance {
@@ -3272,6 +3286,8 @@ pub struct FdmFftExecutionProvenance {
     pub plan_mode: String,
     pub thread_count: Option<u32>,
     pub workspace_layout: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_telemetry: Option<FdmFftRuntimeTelemetry>,
 }
 
 /// Included in artifact metadata for reproducibility.
@@ -3324,8 +3340,7 @@ pub struct ExecutionProvenance {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub demag_operator_kind: Option<String>,
     /// FFT backend used: "rustfft" (CPU) or "cuFFT" (CUDA).
-    /// CPU FDM demag resolves this through `FULLMAG_CPU_FFT_BACKEND`;
-    /// unsupported CPU backends fail instead of silently falling back.
+    /// Unsupported CPU backends fail instead of silently falling back.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fft_backend: Option<String>,
     /// GPU device name, if applicable.

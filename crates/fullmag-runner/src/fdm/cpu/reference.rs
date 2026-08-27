@@ -55,8 +55,8 @@ use crate::schedules::{
 };
 use crate::types::{
     ExecutedRun, ExecutionProvenance, FdmCpuStateLayoutProvenance, FdmCpuStepTransactionTelemetry,
-    FieldSnapshot, LivePreviewRequest, LiveStepConsumer, RunError, RunResult, RunStatus,
-    StateObservables, StepAction, StepStats, StepUpdate,
+    FdmFftRuntimeTelemetry, FieldSnapshot, LivePreviewRequest, LiveStepConsumer, RunError,
+    RunResult, RunStatus, StateObservables, StepAction, StepStats, StepUpdate,
 };
 
 use std::time::Instant;
@@ -2109,6 +2109,21 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
             message: format!("CPU FDM transaction checkpoint digest: {error}"),
         })?;
     let mut final_provenance = artifacts.provenance_snapshot();
+    if let Some(fft_execution) = final_provenance.fdm_fft_execution.as_mut() {
+        let telemetry = fft_workspace.telemetry();
+        fft_execution.thread_count = Some(telemetry.execution_thread_count);
+        fft_execution.runtime_telemetry = Some(FdmFftRuntimeTelemetry {
+            schema_version: fullmag_engine::fdm::FDM_FFT_WORKSPACE_TELEMETRY_SCHEMA_VERSION
+                .to_string(),
+            workspace_lifecycle_revision: telemetry.lifecycle_revision,
+            workspace_key_sha256: telemetry.lifecycle_key_sha256,
+            plan_creation_time_ns: telemetry.plan_creation_time_ns,
+            workspace_bytes: telemetry.workspace_bytes,
+            forward_fft_count: telemetry.forward_fft_count,
+            inverse_fft_count: telemetry.inverse_fft_count,
+            fft_elapsed_time_ns: telemetry.fft_elapsed_time_ns,
+        });
+    }
     final_provenance.fdm_cpu_step_transaction_telemetry = Some(FdmCpuStepTransactionTelemetry {
         schema_version: "fullmag.fdm.cpu.step_transaction.v1".to_string(),
         accepted_step_count: step_count,
@@ -6217,7 +6232,7 @@ mod tests {
         assert_eq!(receipt.executed_backend, "rustfft");
         assert_eq!(receipt.backend_version.as_deref(), Some("6.4.1"));
         assert_eq!(receipt.plan_mode, "rustfft_planner_cached");
-        assert_eq!(receipt.thread_count, Some(1));
+        assert_eq!(receipt.thread_count, None);
         assert_eq!(receipt.workspace_layout, "full_complex");
     }
 
@@ -6241,6 +6256,21 @@ mod tests {
         assert_eq!(receipt.requested_backend, "rustfft");
         assert_eq!(receipt.resolved_backend, "rustfft");
         assert_eq!(receipt.executed_backend, "rustfft");
+        let telemetry = receipt
+            .runtime_telemetry
+            .expect("executed CPU FFT must publish workspace telemetry");
+        assert_eq!(
+            telemetry.schema_version,
+            fullmag_engine::fdm::FDM_FFT_WORKSPACE_TELEMETRY_SCHEMA_VERSION
+        );
+        assert_eq!(telemetry.workspace_lifecycle_revision, 1);
+        assert_eq!(telemetry.workspace_key_sha256.len(), "sha256:".len() + 64);
+        assert!(receipt.thread_count.is_some_and(|count| count > 0));
+        assert!(telemetry.plan_creation_time_ns > 0);
+        assert!(telemetry.workspace_bytes > 0);
+        assert!(telemetry.forward_fft_count > 0);
+        assert_eq!(telemetry.forward_fft_count, telemetry.inverse_fft_count);
+        assert!(telemetry.fft_elapsed_time_ns > 0);
         assert!(!executed.provenance.lossy_fallback_used);
     }
 

@@ -5,7 +5,10 @@ use std::{
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-use fullmag_engine::{fdm::cpu::fft_backend::FdmFftBackend, FftWorkspace, VectorFieldSoA};
+use fullmag_engine::{
+    fdm::cpu::fft_backend::FdmFftBackend, AxisBoundary, FdmBoundaryPolicy, FftWorkspace,
+    VectorFieldSoA,
+};
 
 struct ProcessAllocationCounter;
 
@@ -55,6 +58,33 @@ fn rustfft_demag_reuses_preallocated_transform_lines_after_warmup() {
     let shape = [4, 3, 2];
     let cell_count = shape.iter().product();
     let mut workspace = FftWorkspace::new(shape[0], shape[1], shape[2], 1.0, 1.0, 1.0);
+    let baseline_key = workspace.telemetry().lifecycle_key_sha256;
+    let identical_key = FftWorkspace::new(4, 3, 2, 1.0, 1.0, 1.0)
+        .telemetry()
+        .lifecycle_key_sha256;
+    let resized_key = FftWorkspace::new(5, 3, 2, 1.0, 1.0, 1.0)
+        .telemetry()
+        .lifecycle_key_sha256;
+    let periodic_key = FftWorkspace::new_with_boundary(
+        4,
+        3,
+        2,
+        1.0,
+        1.0,
+        1.0,
+        &FdmBoundaryPolicy {
+            x: AxisBoundary::Periodic,
+            y: AxisBoundary::Open,
+            z: AxisBoundary::Open,
+        },
+        [0, 0, 0],
+    )
+    .telemetry()
+    .lifecycle_key_sha256;
+    assert_eq!(baseline_key, identical_key);
+    assert_ne!(baseline_key, resized_key);
+    assert_ne!(baseline_key, periodic_key);
+
     let mut magnetization = VectorFieldSoA::zeros(cell_count);
     magnetization.x.fill(1.0);
     let mut warm_output = VectorFieldSoA::zeros(cell_count);
@@ -68,4 +98,14 @@ fn rustfft_demag_reuses_preallocated_transform_lines_after_warmup() {
 
     assert_eq!(allocations, 0, "steady-state RustFFT demag allocated");
     assert_eq!(measured_output, warm_output);
+
+    let telemetry = workspace.telemetry();
+    assert_eq!(telemetry.lifecycle_revision, 1);
+    assert_eq!(telemetry.lifecycle_key_sha256.len(), "sha256:".len() + 64);
+    assert_eq!(telemetry.execution_thread_count, 1);
+    assert!(telemetry.plan_creation_time_ns > 0);
+    assert!(telemetry.workspace_bytes > 0);
+    assert_eq!(telemetry.forward_fft_count, 6);
+    assert_eq!(telemetry.inverse_fft_count, 6);
+    assert!(telemetry.fft_elapsed_time_ns > 0);
 }

@@ -12,6 +12,7 @@ pub use demo::{run_reference_exchange_demo, ReferenceDemoReport};
 pub use cpu::fft::{
     compute_newell_kernel_spectra, compute_newell_kernel_spectra_thin_film_2d,
     compute_periodic_newell_kernel_spectra, DemagKernelSpectra, FftWorkspace,
+    FftWorkspaceTelemetry, FDM_FFT_WORKSPACE_TELEMETRY_SCHEMA_VERSION,
 };
 
 pub use shared::problem::ExchangeLlgProblem;
