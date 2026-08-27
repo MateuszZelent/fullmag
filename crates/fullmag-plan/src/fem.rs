@@ -794,6 +794,229 @@ fn exclusive_coefficient_realization_error(
     None
 }
 
+/// Conservative explicit-exchange stiffness estimate for the resolved FEM mesh.
+///
+/// The native FEM plan stores the reduced gyromagnetic factor `gamma_mu0` in
+/// `m/(A s)`, while the exchange field is `2 A / (mu0 Ms) laplacian(m)`.  The
+/// estimate therefore uses `omega_ex = 2 gamma_mu0 A / (mu0 Ms h_min^2)` and a
+/// deliberately conservative safety factor.  It is advisory until the full
+/// integrator-selection and benchmark contract from FEM-CPU-NUM-002 is closed.
+const FEM_EXCHANGE_STABILITY_SAFETY_FACTOR: f64 = 0.1;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct FemExchangeStiffnessEstimate {
+    pub h_min_m: f64,
+    pub max_exchange_stiffness_j_per_m: f64,
+    pub min_saturation_magnetisation_a_per_m: f64,
+    pub gyromagnetic_ratio_m_per_a_s: f64,
+    pub exchange_angular_rate_per_s: f64,
+    pub explicit_dt_limit_s: f64,
+}
+
+pub(crate) fn estimate_fem_exchange_stiffness(
+    mesh: &fullmag_ir::MeshIR,
+    material: &fullmag_ir::MaterialIR,
+    ms_element_field: Option<&[f64]>,
+    a_element_field: Option<&[f64]>,
+    gyromagnetic_ratio: f64,
+) -> Option<FemExchangeStiffnessEstimate> {
+    if !(gyromagnetic_ratio.is_finite() && gyromagnetic_ratio > 0.0)
+        || !(material.saturation_magnetisation.is_finite()
+            && material.saturation_magnetisation > 0.0)
+        || !(material.exchange_stiffness.is_finite() && material.exchange_stiffness > 0.0)
+    {
+        return None;
+    }
+
+    let has_cell_part_classification = match mesh.cells.mesh_parts.len() {
+        0 => false,
+        count if count == mesh.cells.len() => true,
+        _ => return None,
+    };
+    let mut h_min_m = f64::INFINITY;
+    let mut max_exchange_stiffness_j_per_m = material.exchange_stiffness;
+    let mut min_saturation_magnetisation_a_per_m = material.saturation_magnetisation;
+    let mut magnetic_cell_count = 0_usize;
+
+    for cell in mesh.cells.iter() {
+        let magnetic = if has_cell_part_classification {
+            matches!(
+                mesh.cells.mesh_parts.get(cell.ordinal),
+                Some(fullmag_ir::FemCellMeshPartIR::Magnetic)
+            )
+        } else {
+            true
+        };
+        if !magnetic {
+            continue;
+        }
+        magnetic_cell_count += 1;
+
+        let mut cell_h_min_m = f64::INFINITY;
+        for (left_index, left_node) in cell.nodes.iter().enumerate() {
+            let left = mesh.nodes.get(*left_node as usize)?;
+            if !left.iter().all(|value| value.is_finite()) {
+                return None;
+            }
+            for right_node in cell.nodes.iter().skip(left_index + 1) {
+                let right = mesh.nodes.get(*right_node as usize)?;
+                if !right.iter().all(|value| value.is_finite()) {
+                    return None;
+                }
+                let distance_squared = left
+                    .iter()
+                    .zip(right)
+                    .map(|(left, right)| (left - right).powi(2))
+                    .sum::<f64>();
+                if distance_squared.is_finite() && distance_squared > 0.0 {
+                    cell_h_min_m = cell_h_min_m.min(distance_squared.sqrt());
+                }
+            }
+        }
+        if !cell_h_min_m.is_finite() {
+            return None;
+        }
+        h_min_m = h_min_m.min(cell_h_min_m);
+
+        if let Some(values) = a_element_field {
+            let value = *values.get(cell.ordinal)?;
+            if !(value.is_finite() && value > 0.0) {
+                return None;
+            }
+            max_exchange_stiffness_j_per_m = max_exchange_stiffness_j_per_m.max(value);
+        } else if let Some(values) = material.a_field.as_deref() {
+            for node in cell.nodes {
+                let value = *values.get(*node as usize)?;
+                if !(value.is_finite() && value > 0.0) {
+                    return None;
+                }
+                max_exchange_stiffness_j_per_m = max_exchange_stiffness_j_per_m.max(value);
+            }
+        }
+        if let Some(values) = ms_element_field {
+            let value = *values.get(cell.ordinal)?;
+            if !(value.is_finite() && value > 0.0) {
+                return None;
+            }
+            min_saturation_magnetisation_a_per_m = min_saturation_magnetisation_a_per_m.min(value);
+        } else if let Some(values) = material.ms_field.as_deref() {
+            for node in cell.nodes {
+                let value = *values.get(*node as usize)?;
+                if !(value.is_finite() && value > 0.0) {
+                    return None;
+                }
+                min_saturation_magnetisation_a_per_m =
+                    min_saturation_magnetisation_a_per_m.min(value);
+            }
+        }
+    }
+
+    if magnetic_cell_count == 0 || !h_min_m.is_finite() || !(h_min_m > 0.0) {
+        return None;
+    }
+    let exchange_angular_rate_per_s = 2.0 * gyromagnetic_ratio * max_exchange_stiffness_j_per_m
+        / (MU0 * min_saturation_magnetisation_a_per_m * h_min_m.powi(2));
+    if !(exchange_angular_rate_per_s.is_finite() && exchange_angular_rate_per_s > 0.0) {
+        return None;
+    }
+    let explicit_dt_limit_s = FEM_EXCHANGE_STABILITY_SAFETY_FACTOR / exchange_angular_rate_per_s;
+    explicit_dt_limit_s
+        .is_finite()
+        .then_some(FemExchangeStiffnessEstimate {
+            h_min_m,
+            max_exchange_stiffness_j_per_m,
+            min_saturation_magnetisation_a_per_m,
+            gyromagnetic_ratio_m_per_a_s: gyromagnetic_ratio,
+            exchange_angular_rate_per_s,
+            explicit_dt_limit_s,
+        })
+}
+
+#[cfg(test)]
+mod fem_exchange_stiffness_tests {
+    use std::collections::HashMap;
+
+    use fullmag_ir::{FemCellMeshPartIR, FemConnectivityIR, FemFacetConnectivityIR, MeshIR};
+
+    use super::*;
+
+    fn tet_mesh(edge: f64) -> MeshIR {
+        MeshIR {
+            mesh_name: "exchange-stiffness-test".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [edge, 0.0, 0.0],
+                [0.0, edge, 0.0],
+                [0.0, 0.0, edge],
+            ],
+            cells: FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
+            element_markers: vec![1],
+            facets: FemFacetConnectivityIR::empty(),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn exchange_stiffness_limit_scales_with_inverse_h_min_squared() {
+        let material = ProblemIR::bootstrap_example().materials[0].clone();
+        let coarse =
+            estimate_fem_exchange_stiffness(&tet_mesh(1.0), &material, None, None, 2.211e5)
+                .expect("coarse magnetic tet should have a stiffness estimate");
+        let refined =
+            estimate_fem_exchange_stiffness(&tet_mesh(0.5), &material, None, None, 2.211e5)
+                .expect("refined magnetic tet should have a stiffness estimate");
+
+        assert!((coarse.h_min_m - 1.0).abs() < 1.0e-12);
+        assert!((refined.h_min_m - 0.5).abs() < 1.0e-12);
+        assert!(
+            (refined.exchange_angular_rate_per_s / coarse.exchange_angular_rate_per_s - 4.0).abs()
+                < 1.0e-12
+        );
+        assert!((coarse.explicit_dt_limit_s / refined.explicit_dt_limit_s - 4.0).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn exchange_stiffness_uses_only_magnetic_cells_and_local_coefficients() {
+        let mut mesh = tet_mesh(1.0);
+        mesh.nodes.extend([
+            [3.0, 0.0, 0.0],
+            [4.0, 0.0, 0.0],
+            [3.0, 1.0, 0.0],
+            [3.0, 0.0, 1.0],
+        ]);
+        mesh.cells = FemConnectivityIR {
+            types: vec![
+                fullmag_ir::FemCellTypeIR::Tet4,
+                fullmag_ir::FemCellTypeIR::Tet4,
+            ],
+            offsets: vec![0, 4, 8],
+            nodes: vec![0, 1, 2, 3, 4, 5, 6, 7],
+            global_ordinals: vec![0, 1],
+            mesh_parts: vec![
+                FemCellMeshPartIR::Magnetic,
+                FemCellMeshPartIR::TransitionAir,
+            ],
+        };
+        mesh.element_markers = vec![1, 0];
+        let material = ProblemIR::bootstrap_example().materials[0].clone();
+        let estimate = estimate_fem_exchange_stiffness(
+            &mesh,
+            &material,
+            Some(&[700.0e3, 1.0]),
+            Some(&[20.0e-12, 1.0]),
+            2.211e5,
+        )
+        .expect("classified mesh with one magnetic cell should be estimable");
+
+        assert!((estimate.h_min_m - 1.0).abs() < 1.0e-12);
+        assert!((estimate.max_exchange_stiffness_j_per_m - 20.0e-12).abs() < 1.0e-24);
+        assert!((estimate.min_saturation_magnetisation_a_per_m - 700.0e3).abs() < 1.0e-6);
+    }
+}
+
 fn domain_mesh_workflow_mode(problem: &ProblemIR) -> Option<String> {
     mesh_workflow_metadata(problem)
         .and_then(|workflow| workflow.get("domain_mesh_mode"))
@@ -3585,6 +3808,41 @@ pub(crate) fn plan_fem(
         "Executable time-domain FEM requires the native MFEM/libCEED/hypre backend; the Rust FEM baseline remains internal-only for preview and validation helpers"
             .to_string(),
     ];
+    if fem_plan.enable_exchange {
+        if let Some(estimate) = estimate_fem_exchange_stiffness(
+            &fem_plan.mesh,
+            &fem_plan.material,
+            fem_plan.ms_element_field.as_deref(),
+            fem_plan.a_element_field.as_deref(),
+            fem_plan.gyromagnetic_ratio,
+        ) {
+            provenance_notes.push(format!(
+                "FEM-CPU-NUM-002 exchange stiffness estimate: h_min_m={:.6e} A_max_J_per_m={:.6e} Ms_min_A_per_m={:.6e} gamma_mu0_m_per_A_s={:.6e} omega_ex_max_per_s={:.6e} explicit_dt_limit_s={:.6e} safety_factor={:.3} basis=2A/(mu0*Ms*h_min^2) policy=advisory",
+                estimate.h_min_m,
+                estimate.max_exchange_stiffness_j_per_m,
+                estimate.min_saturation_magnetisation_a_per_m,
+                estimate.gyromagnetic_ratio_m_per_a_s,
+                estimate.exchange_angular_rate_per_s,
+                estimate.explicit_dt_limit_s,
+                FEM_EXCHANGE_STABILITY_SAFETY_FACTOR,
+            ));
+            if let Some(fixed_timestep) = fem_plan.fixed_timestep {
+                let status = if fixed_timestep <= estimate.explicit_dt_limit_s {
+                    "within_conservative_limit"
+                } else {
+                    "above_conservative_limit"
+                };
+                provenance_notes.push(format!(
+                    "FEM-CPU-NUM-002 fixed timestep advisory: dt_s={fixed_timestep:.6e} status={status}; planner does not reject or auto-switch integrators yet"
+                ));
+            }
+        } else {
+            provenance_notes.push(
+                "FEM-CPU-NUM-002 exchange stiffness estimate unavailable: resolved magnetic cells or positive finite A/Ms/gamma_mu0 coefficients were not available; planner remains fail-open for this advisory"
+                    .to_string(),
+            );
+        }
+    }
     if let Some(certificate) = periodic_mesh_certificate_v6.as_ref() {
         provenance_notes.push(format!(
             "periodic mesh certificate: schema={} topology={} marker_map={} material_realization={} region_classes={} max_material_residual={:.6e} magnetic_classes={} scalar_classes={} translation_residual_max_m={:.6e} normal_mismatch_max={:.6e}",
