@@ -1410,6 +1410,69 @@ void poisson_dependency_key_fails_closed_after_mesh_or_policy_mutation() {
     fullmag::fem::context_destroy_poisson(ctx);
 }
 
+void nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves() {
+    mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
+    mfem::H1_FECollection state_fec(1, 3);
+    mfem::FiniteElementSpace state_fes(&mesh, &state_fec);
+    fullmag::fem::Context ctx;
+    mixed_poisson_context(ctx, mesh, state_fes, {1u, 0u, 0u});
+
+    std::string error;
+    check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
+                 "repeated Poisson solve workspace initialization");
+    const auto setup_key = ctx.poisson_demag.operator_lifecycle.active_key;
+    auto *const cached_matrix = ctx.poisson_demag.cached_hypre_par;
+    auto *const cached_solver = ctx.poisson_demag.cached_hypre_solver;
+    check(cached_matrix == nullptr && cached_solver == nullptr,
+          "Hypre operator workspace is lazy before the first solve");
+
+    std::vector<double> m_xyz(
+        3u * static_cast<size_t>(state_fes.GetNDofs()), 0.0);
+    for (int node = 0; node < state_fes.GetNDofs(); ++node) {
+        const size_t base = 3u * static_cast<size_t>(node);
+        m_xyz[base] = 1.0 + 0.01 * static_cast<double>(node);
+        m_xyz[base + 1u] = -0.02 * static_cast<double>(node);
+        m_xyz[base + 2u] = 0.15;
+    }
+
+    constexpr int kRepeatedSolves = 100;
+    std::vector<double> h_demag;
+    double demag_energy = 0.0;
+    for (int repeat = 0; repeat < kRepeatedSolves; ++repeat) {
+        error.clear();
+        check_result(fullmag::fem::context_compute_demag_poisson(
+                         ctx,
+                         m_xyz,
+                         h_demag,
+                         demag_energy,
+                         false,
+                         nullptr,
+                         error),
+                     error,
+                     "repeated nonperiodic Poisson solve");
+        check(h_demag.size() == m_xyz.size() && std::isfinite(demag_energy),
+              "repeated Poisson solve must publish finite field and energy");
+    }
+
+    check(ctx.poisson_demag.operator_lifecycle.active_key == setup_key,
+          "repeated Poisson solves must preserve the dependency key");
+    check(ctx.poisson_demag.operator_lifecycle.setup_count == 1u &&
+              ctx.poisson_demag.setup_count == 1u,
+          "100 repeated Poisson solves must perform exactly one operator setup");
+    check(ctx.poisson_demag.operator_lifecycle.apply_count ==
+              static_cast<uint64_t>(kRepeatedSolves) &&
+              ctx.poisson_demag.operator_lifecycle.reuse_count ==
+                  static_cast<uint64_t>(kRepeatedSolves - 1),
+          "100 repeated Poisson solves must reuse the setup-owned operator");
+    check(ctx.poisson_demag.fresh_zero_guess_count == 1u,
+          "repeated Poisson solves must reuse the first converged Hypre solution");
+    check(ctx.poisson_demag.cached_hypre_par != nullptr &&
+              ctx.poisson_demag.cached_hypre_solver != nullptr,
+          "repeated Poisson solves must retain cached Hypre operator and solver");
+
+    fullmag::fem::context_destroy_poisson(ctx);
+}
+
 std::vector<double> apply_demag_rhs_csr(
     const fullmag::fem::DeviceCsrTriple &op,
     const std::vector<double> &m_xyz) {
@@ -3263,6 +3326,7 @@ int main() {
     nonperiodic_poisson_uses_p2_potential_over_p1_magnetization();
     periodic_poisson_remains_explicit_p1_node_class_space();
     poisson_dependency_key_fails_closed_after_mesh_or_policy_mutation();
+    nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves();
     mixed_poisson_manufactured_rhs_stiffness_recovery_and_trace();
     mixed_poisson_rhs_is_magnetic_only_with_air_present();
     mixed_p1_gpu_rhs_and_magnetic_recovery_match_cpu_mfem();
