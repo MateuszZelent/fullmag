@@ -3261,16 +3261,30 @@ pub struct SolverMeshArtifactRefIR {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct MeshSemanticsIR {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_policy: Option<crate::FemMeshPolicyIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub universe_mesh_config: Option<UniverseMeshConfigIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub per_object_mesh_configs: Vec<PerObjectMeshConfigIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solver_mesh: Option<SolverMeshArtifactRefIR>,
+    #[serde(flatten)]
+    pub legacy_extensions: BTreeMap<String, Value>,
 }
 
 impl MeshSemanticsIR {
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
+
+        if let Some(policy) = &self.requested_policy {
+            if let Err(error) = policy.validate() {
+                errors.push(
+                    error
+                        .with_pointer_prefix("/mesh_semantics/requested_policy")
+                        .to_string(),
+                );
+            }
+        }
 
         if let Some(universe) = &self.universe_mesh_config {
             if universe.mode.trim().is_empty() {

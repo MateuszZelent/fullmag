@@ -1,0 +1,158 @@
+{
+  "schema_version": "fem_mesh_policy_validation_cases.v1",
+  "cases": [
+    {
+      "id": "unknown_policy_field",
+      "policy": {
+        "schema_version": "fem_mesh_policy.v1",
+        "geometric_element_order": 1,
+        "materials": [],
+        "interfaces": [],
+        "sweeps": [],
+        "unexpected": true
+      },
+      "expected_code": "fem_mesh_policy_unknown_field",
+      "expected_pointer": "/unexpected"
+    },
+    {
+      "id": "malformed_present_length",
+      "policy": {
+        "schema_version": "fem_mesh_policy.v1",
+        "geometric_element_order": 1,
+        "materials": [
+          {
+            "target": {"object_id": "obj_strip"},
+            "strategy_intent": "tetrahedral",
+            "maximum_element_size": "3 nm"
+          }
+        ],
+        "interfaces": [],
+        "sweeps": []
+      },
+      "expected_code": "fem_mesh_policy_malformed_value",
+      "expected_pointer": "/materials/0/maximum_element_size"
+    },
+    {
+      "id": "unknown_field_uses_rfc6901_pointer_escape",
+      "policy": {
+        "schema_version": "fem_mesh_policy.v1",
+        "geometric_element_order": 1,
+        "materials": [],
+        "interfaces": [],
+        "sweeps": [],
+        "bad/name~suffix": true
+      },
+      "expected_code": "fem_mesh_policy_unknown_field",
+      "expected_pointer": "/bad~1name~0suffix"
+    },
+    {
+      "id": "p2_geometric_order_request",
+      "policy": {
+        "schema_version": "fem_mesh_policy.v1",
+        "geometric_element_order": 2,
+        "materials": [],
+        "interfaces": [],
+        "sweeps": []
+      },
+      "expected_code": "fem_mesh_policy_unsupported_element_order",
+      "expected_pointer": "/geometric_element_order"
+    },
+    {
+      "id": "geometric_airbox_missing_ratio",
+      "policy": {
+        "schema_version": "fem_mesh_policy.v1",
+        "geometric_element_order": 1,
+        "materials": [],
+        "interfaces": [],
+        "airbox": {
+          "law": "geometric",
+          "near_element_size": 2e-9,
+          "far_element_size": 20e-9,
+          "transition_distance": 80e-9
+        },
+        "sweeps": []
+      },
+      "expected_code": "fem_mesh_policy_incomplete_airbox_law",
+      "expected_pointer": "/airbox/element_ratio"
+    },
+    {
+      "id": "invalid_sweep_axis",
+      "policy": {
+        "schema_version": "fem_mesh_policy.v1",
+        "geometric_element_order": 1,
+        "materials": [],
+        "interfaces": [],
+        "sweeps": [
+          {
+            "target": {"object_id": "obj_strip"},
+            "requested_axis": "normal",
+            "layers": 2,
+            "distribution": "fixed",
+            "element_ratio": 1.0,
+            "symmetric": false,
+            "face_topology": "triangular",
+            "family_intent": "prism6",
+            "transition": "pyramid_to_tetrahedra",
+            "exact_layers": true
+          }
+        ]
+      },
+      "expected_code": "fem_mesh_policy_malformed_value",
+      "expected_pointer": "/sweeps/0/requested_axis"
+    },
+    {
+      "id": "noncanonical_growth_cell_size_metric",
+      "policy": {
+        "schema_version": "fem_mesh_policy.v1",
+        "geometric_element_order": 1,
+        "materials": [],
+        "interfaces": [],
+        "sweeps": [],
+        "growth": {
+          "definition_id": "adjacent_size_growth.v1",
+          "cell_size_definition_id": "equivalent_volume_diameter.v1",
+          "max_neighbor_ratio": 1.3,
+          "relative_tolerance": 0.05
+        }
+      },
+      "expected_code": "fem_mesh_policy_invalid_growth",
+      "expected_pointer": "/growth/cell_size_definition_id"
+    },
+    {
+      "id": "invalid_quality_flag_type",
+      "policy": {
+        "schema_version": "fem_mesh_policy.v1",
+        "geometric_element_order": 1,
+        "materials": [],
+        "interfaces": [],
+        "sweeps": [],
+        "quality": {
+          "compute_summary": "yes",
+          "thresholds": []
+        }
+      },
+      "expected_code": "fem_mesh_policy_malformed_value",
+      "expected_pointer": "/quality/compute_summary"
+    },
+    {
+      "id": "unknown_quality_metric_version",
+      "policy": {
+        "schema_version": "fem_mesh_policy.v1",
+        "geometric_element_order": 1,
+        "materials": [],
+        "interfaces": [],
+        "sweeps": [],
+        "quality": {
+          "thresholds": [{
+            "metric_id": "gmsh.min_sicn.v2",
+            "family": "tet4",
+            "scope": "magnetic_bulk",
+            "minimum": 0.1
+          }]
+        }
+      },
+      "expected_code": "fem_mesh_policy_invalid_quality_threshold",
+      "expected_pointer": "/quality/thresholds/0/metric_id"
+    }
+  ]
+}

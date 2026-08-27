@@ -9,6 +9,7 @@ use crate::{
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const PHYSICS_OBJECT_SCHEMA_VERSION: &str = "physics_object.v1";
@@ -418,6 +419,23 @@ impl<'de> Deserialize<'de> for ProblemIRV04 {
         let mut value = Value::deserialize(deserializer)?;
         crate::normalize_frozen_membership_defaults_in_problem_value(&mut value)
             .map_err(serde::de::Error::custom)?;
+        if let Some(policy_value) = value.pointer("/mesh_semantics/requested_policy") {
+            let policy =
+                crate::FemMeshPolicyIR::from_json_value(policy_value.clone()).map_err(|error| {
+                    serde::de::Error::custom(
+                        error
+                            .with_pointer_prefix("/mesh_semantics/requested_policy")
+                            .to_string(),
+                    )
+                })?;
+            policy.validate().map_err(|error| {
+                serde::de::Error::custom(
+                    error
+                        .with_pointer_prefix("/mesh_semantics/requested_policy")
+                        .to_string(),
+                )
+            })?;
+        }
         let wire = ProblemIRV04Wire::deserialize(value).map_err(serde::de::Error::custom)?;
         Ok(wire.into())
     }
@@ -434,6 +452,14 @@ impl ProblemIRV04 {
 
     pub fn validate(&self) -> Result<(), Vec<String>> {
         crate::validate_physics_object_problem(self)
+    }
+
+    /// The only mesh-policy source used by the typed V04 execution contract.
+    /// Legacy runtime metadata is retained for migration provenance only.
+    pub fn fem_mesh_policy(&self) -> Option<&crate::FemMeshPolicyIR> {
+        self.mesh_semantics
+            .as_ref()
+            .and_then(|semantics| semantics.requested_policy.as_ref())
     }
 }
 
@@ -790,6 +816,96 @@ pub fn migrate_v0_3_problem_ir_to_v0_4(value: &mut Value) -> Result<(), String> 
         .or_insert_with(|| Value::Array(Vec::new()));
     root.entry("magnetization_constraints".to_string())
         .or_insert_with(|| Value::Array(Vec::new()));
+
+    if let Some(mesh_semantics) = root.get("mesh_semantics") {
+        let mesh_semantics = mesh_semantics
+            .as_object()
+            .ok_or_else(|| "/mesh_semantics: expected an object".to_string())?;
+        if mesh_semantics.contains_key("requested_policy") {
+            return Err(
+                "/mesh_semantics/requested_policy: V03 input must not contain typed V04 policy"
+                    .to_string(),
+            );
+        }
+    }
+
+    let legacy_mesh_workflow = root
+        .get("problem_meta")
+        .and_then(Value::as_object)
+        .and_then(|meta| meta.get("runtime_metadata"))
+        .and_then(Value::as_object)
+        .and_then(|metadata| metadata.get("mesh_workflow"))
+        .cloned();
+    let legacy_study_universe = root
+        .get("problem_meta")
+        .and_then(Value::as_object)
+        .and_then(|meta| meta.get("runtime_metadata"))
+        .and_then(Value::as_object)
+        .and_then(|metadata| metadata.get("study_universe"))
+        .cloned();
+    if legacy_mesh_workflow.is_some() || legacy_study_universe.is_some() {
+        let workflow = legacy_mesh_workflow
+            .clone()
+            .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+        if let Some(requested_policy) = crate::FemMeshPolicyIR::from_legacy_mesh_workflow(
+            &workflow,
+            legacy_study_universe.as_ref(),
+            &object_id_by_legacy_name,
+        )? {
+            let policy_fingerprint = requested_policy.policy_fingerprint().map_err(|error| {
+                error
+                    .with_pointer_prefix("/mesh_semantics/requested_policy")
+                    .to_string()
+            })?;
+            let source_payload = serde_json::json!({
+                "mesh_workflow": legacy_mesh_workflow.clone(),
+                "study_universe": legacy_study_universe.clone(),
+            });
+            let mut source_hasher = Sha256::new();
+            source_hasher.update(b"fullmag.fem_mesh_policy_migration_source.v1\0");
+            source_hasher.update(
+                serde_json::to_vec(&source_payload)
+                    .expect("legacy mesh-policy migration source serializes"),
+            );
+            let source_fingerprint = format!("sha256:{:x}", source_hasher.finalize());
+            let mesh_semantics = root
+                .entry("mesh_semantics".to_string())
+                .or_insert_with(|| Value::Object(serde_json::Map::new()))
+                .as_object_mut()
+                .ok_or_else(|| "/mesh_semantics: expected an object".to_string())?;
+            mesh_semantics.insert(
+                "requested_policy".to_string(),
+                serde_json::to_value(requested_policy)
+                    .expect("validated FEM mesh policy serializes"),
+            );
+            let runtime_metadata = root
+                .get_mut("problem_meta")
+                .and_then(Value::as_object_mut)
+                .and_then(|meta| meta.get_mut("runtime_metadata"))
+                .and_then(Value::as_object_mut)
+                .ok_or_else(|| "/problem_meta/runtime_metadata: expected an object".to_string())?;
+            let mut source_paths = Vec::new();
+            if legacy_mesh_workflow.is_some() {
+                source_paths.push("/problem_meta/runtime_metadata/mesh_workflow");
+            }
+            if legacy_study_universe.is_some() {
+                source_paths.push("/problem_meta/runtime_metadata/study_universe");
+            }
+            runtime_metadata.insert(
+                "mesh_policy_migration".to_string(),
+                serde_json::json!({
+                    "schema_version": "fem_mesh_policy_migration.v1",
+                    "source_ir_version": "0.3.0",
+                    "source_path": source_paths[0],
+                    "source_paths": source_paths,
+                    "source_snapshot": source_payload,
+                    "source_fingerprint": source_fingerprint,
+                    "resolver_version": "fem_mesh_policy_v03_adapter.v1",
+                    "requested_policy_fingerprint": policy_fingerprint,
+                }),
+            );
+        }
+    }
     crate::normalize_frozen_membership_defaults_in_problem_value(value)?;
     Ok(())
 }
