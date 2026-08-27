@@ -64,6 +64,18 @@ use std::time::Instant;
 
 const MAX_COUPLED_ADAPTIVE_REJECTIONS: u64 = 50;
 
+fn stage_endpoint_roundoff(stage_end_time_s: f64, dt_s: f64) -> f64 {
+    32.0 * f64::EPSILON
+        * stage_end_time_s
+            .abs()
+            .max(dt_s.abs())
+            .max(f64::MIN_POSITIVE)
+}
+
+fn stage_endpoint_reached(current_time_s: f64, stage_end_time_s: f64, dt_s: f64) -> bool {
+    current_time_s >= stage_end_time_s - stage_endpoint_roundoff(stage_end_time_s, dt_s)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum CoupledAdaptiveDecision {
     Accepted(f64),
@@ -1427,7 +1439,9 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                 )
             })
             .unwrap_or_default();
-        while !all_active_dofs_frozen && state.time_seconds < stage_end_time_s {
+        while !all_active_dofs_frozen
+            && !stage_endpoint_reached(state.time_seconds, stage_end_time_s, dt)
+        {
             if step_count == 0
                 && live
                     .as_ref()
@@ -1533,8 +1547,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                             + (workflow.accepted_steps().saturating_add(1) as f64) * fixed_dt
                     })
                 });
-            let endpoint_roundoff =
-                32.0 * f64::EPSILON * stage_end_time_s.abs().max(dt.abs()).max(f64::MIN_POSITIVE);
+            let endpoint_roundoff = stage_endpoint_roundoff(stage_end_time_s, dt);
             let dt_step = canonical_fixed_target
                 .filter(|target| *target <= stage_end_time_s + endpoint_roundoff)
                 .and(plan.fixed_timestep)
@@ -3553,6 +3566,30 @@ mod tests {
         assert_eq!(full_telemetry.minimal_step_count, 0);
         assert_eq!(full_telemetry.full_step_count, 3);
         assert!(full_telemetry.full_step_wall_time_ns > 0);
+    }
+
+    #[test]
+    fn fixed_step_endpoint_roundoff_does_not_create_a_micro_step() {
+        let mut plan = make_test_plan();
+        plan.fixed_timestep = Some(1e-13);
+
+        let executed = execute_reference_fdm(&plan, 6.0 * 1e-13, &[], None, None)
+            .expect("fixed-step reference run");
+        let evaluation = executed
+            .provenance
+            .fdm_cpu_evaluation_telemetry
+            .expect("CPU evaluation telemetry");
+
+        assert_eq!(evaluation.minimal_step_count, 6);
+        assert_eq!(evaluation.full_step_count, 0);
+        assert_eq!(
+            executed
+                .provenance
+                .fdm_cpu_step_transaction_telemetry
+                .expect("CPU transaction telemetry")
+                .accepted_step_count,
+            6
+        );
     }
 
     #[test]
