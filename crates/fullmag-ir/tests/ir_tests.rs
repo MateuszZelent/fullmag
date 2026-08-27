@@ -1670,6 +1670,7 @@ fn fdm_demag_hints_enforce_common_grid_mode_matrix_at_validation_boundary() {
             FdmDemagHintsIR {
                 strategy: "auto".to_string(),
                 mode: "two_d_stack".to_string(),
+                fft_backend: "auto".to_string(),
                 common_cells: Some([4, 4, 1]),
                 common_cells_xy: None,
                 common_cell_size: None,
@@ -1680,6 +1681,7 @@ fn fdm_demag_hints_enforce_common_grid_mode_matrix_at_validation_boundary() {
             FdmDemagHintsIR {
                 strategy: "auto".to_string(),
                 mode: "three_d".to_string(),
+                fft_backend: "auto".to_string(),
                 common_cells: None,
                 common_cells_xy: Some([4, 4]),
                 common_cell_size: None,
@@ -1690,6 +1692,7 @@ fn fdm_demag_hints_enforce_common_grid_mode_matrix_at_validation_boundary() {
             FdmDemagHintsIR {
                 strategy: "auto".to_string(),
                 mode: "auto".to_string(),
+                fft_backend: "auto".to_string(),
                 common_cells: Some([4, 4, 1]),
                 common_cells_xy: Some([4, 4]),
                 common_cell_size: None,
@@ -1721,6 +1724,7 @@ fn fdm_demag_hints_round_trip_preserves_known_wire_values() {
     let hints = FdmDemagHintsIR {
         strategy: "multilayer_convolution".to_string(),
         mode: "two_d_stack".to_string(),
+        fft_backend: "auto".to_string(),
         common_cells: None,
         common_cells_xy: Some([16, 8]),
         common_cell_size: None,
@@ -5574,6 +5578,7 @@ fn mesh_periodic_pair_validation_rejects_duplicate_destination_nodes() {
 #[test]
 fn mesh_semantics_validation_rejects_duplicate_object_ids() {
     let semantics = MeshSemanticsIR {
+        requested_policy: None,
         universe_mesh_config: Some(UniverseMeshConfigIR {
             mode: "auto".to_string(),
             size: Some([1.0, 1.0, 1.0]),
@@ -5600,6 +5605,7 @@ fn mesh_semantics_validation_rejects_duplicate_object_ids() {
                 source: "local_override".to_string(),
             },
         ],
+        legacy_extensions: BTreeMap::new(),
         solver_mesh: Some(SolverMeshArtifactRefIR {
             mesh_name: "solver-domain".to_string(),
             mesh_source: None,
@@ -5614,6 +5620,22 @@ fn mesh_semantics_validation_rejects_duplicate_object_ids() {
     assert!(errors
         .iter()
         .any(|error| error.contains("duplicated object_id 'body'")));
+}
+
+#[test]
+fn mesh_semantics_preserves_unknown_envelope_extensions() {
+    let semantics: MeshSemanticsIR = serde_json::from_value(serde_json::json!({
+        "future_mesh_semantics": {"version": 2}
+    }))
+    .unwrap();
+    assert_eq!(
+        semantics.legacy_extensions["future_mesh_semantics"],
+        serde_json::json!({"version": 2})
+    );
+    assert_eq!(
+        serde_json::to_value(semantics).unwrap()["future_mesh_semantics"],
+        serde_json::json!({"version": 2})
+    );
 }
 
 #[test]
@@ -5644,6 +5666,7 @@ fn declared_universe_accepts_scene_box_as_manual_airbox() {
 fn problem_ir_validation_accepts_valid_mesh_semantics() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.mesh_semantics = Some(MeshSemanticsIR {
+        requested_policy: None,
         universe_mesh_config: Some(UniverseMeshConfigIR {
             mode: "auto".to_string(),
             size: Some([200e-9, 20e-9, 6e-9]),
@@ -5660,6 +5683,7 @@ fn problem_ir_validation_accepts_valid_mesh_semantics() {
             transition_distance: Some(5e-9),
             source: "study_default".to_string(),
         }],
+        legacy_extensions: BTreeMap::new(),
         solver_mesh: Some(SolverMeshArtifactRefIR {
             mesh_name: "strip-shared-domain".to_string(),
             mesh_source: Some("artifact://mesh/strip-shared-domain".to_string()),
@@ -5842,6 +5866,7 @@ fn shared_domain_build_report_preserves_fallback_publication_presence() {
 fn problem_ir_validation_bubbles_mesh_semantics_errors_with_prefix() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.mesh_semantics = Some(MeshSemanticsIR {
+        requested_policy: None,
         universe_mesh_config: Some(UniverseMeshConfigIR {
             mode: String::new(),
             size: Some([1.0, 1.0, 1.0]),
@@ -5858,6 +5883,7 @@ fn problem_ir_validation_bubbles_mesh_semantics_errors_with_prefix() {
             transition_distance: None,
             source: "broken".to_string(),
         }],
+        legacy_extensions: BTreeMap::new(),
         solver_mesh: Some(SolverMeshArtifactRefIR {
             mesh_name: String::new(),
             mesh_source: Some("   ".to_string()),
@@ -7790,5 +7816,341 @@ fn selection_python_golden_fixture_is_canonical_rust_json() {
     assert_eq!(
         serde_json::to_value(definition).unwrap(),
         serde_json::from_str::<serde_json::Value>(fixture).unwrap()
+    );
+}
+
+#[test]
+fn fem_mesh_policy_validation_cases_have_stable_codes_and_json_pointers() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../tests/golden/mesh-policy/validation-cases.v1.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        fixture["schema_version"],
+        "fem_mesh_policy_validation_cases.v1"
+    );
+
+    for case in fixture["cases"].as_array().unwrap() {
+        let error = FemMeshPolicyIR::from_json_value(case["policy"].clone())
+            .and_then(|policy| policy.validate().map(|()| policy))
+            .expect_err(case["id"].as_str().unwrap());
+        assert_eq!(
+            error.code().as_str(),
+            case["expected_code"].as_str().unwrap(),
+            "{}",
+            case["id"]
+        );
+        assert_eq!(
+            error.pointer(),
+            case["expected_pointer"].as_str().unwrap(),
+            "{}",
+            case["id"]
+        );
+    }
+}
+
+#[test]
+fn fem_mesh_policy_rejects_non_finite_present_float() {
+    let mut policy = FemMeshPolicyIR::default();
+    policy.materials.push(FemMaterialMeshPolicyIR {
+        target: RegionRefIR {
+            object_id: "obj_strip".into(),
+            region_id: None,
+        },
+        strategy_intent: FemMeshStrategyIntentIR::Tetrahedral,
+        maximum_element_size: Some(f64::NAN),
+        ..FemMaterialMeshPolicyIR::default()
+    });
+
+    let error = policy.validate().expect_err("NaN must fail closed");
+    assert_eq!(error.code().as_str(), "fem_mesh_policy_non_finite_value");
+    assert_eq!(error.pointer(), "/materials/0/maximum_element_size");
+}
+
+#[test]
+fn fem_mesh_policy_preserves_airbox_boundary_transition_tokens() {
+    let value = serde_json::json!({
+        "schema_version": "fem_mesh_policy.v1",
+        "geometric_element_order": 1,
+        "materials": [{
+            "target": {"object_id": "obj_strip"},
+            "strategy_intent": "thin_film_tetrahedral",
+            "edge_maximum_element_size": 1e-9,
+            "edge_thickness": 2e-9,
+            "edge_transition_distance": "airbox_boundary",
+            "corner_maximum_element_size": 1e-9,
+            "corner_extent": 2e-9,
+            "corner_transition_distance": "airbox_boundary"
+        }],
+        "interfaces": [{
+            "target": {"object_id": "obj_strip"},
+            "maximum_element_size": 2e-9,
+            "thickness": 2e-9,
+            "transition_distance": "airbox_boundary"
+        }],
+        "airbox": {
+            "law": "geometric",
+            "near_element_size": 2e-9,
+            "far_element_size": 20e-9,
+            "transition_distance": "airbox_boundary",
+            "element_ratio": 1.3
+        },
+        "sweeps": []
+    });
+
+    let policy = FemMeshPolicyIR::from_json_value(value).unwrap();
+    policy.validate().unwrap();
+    let canonical: serde_json::Value =
+        serde_json::from_slice(&policy.canonical_json().unwrap()).unwrap();
+    assert_eq!(
+        canonical["materials"][0]["edge_transition_distance"],
+        "airbox_boundary"
+    );
+    assert_eq!(
+        canonical["materials"][0]["corner_transition_distance"],
+        "airbox_boundary"
+    );
+    assert_eq!(
+        canonical["interfaces"][0]["transition_distance"],
+        "airbox_boundary"
+    );
+    assert_eq!(
+        canonical["airbox"]["transition_distance"],
+        "airbox_boundary"
+    );
+
+    let error = FemMeshPolicyIR::from_json_value(serde_json::json!({
+        "schema_version": "fem_mesh_policy.v1",
+        "geometric_element_order": 1,
+        "materials": [],
+        "interfaces": [{
+            "target": {"object_id": "obj_strip"},
+            "maximum_element_size": 2e-9,
+            "thickness": 2e-9,
+            "transition_distance": "nearest_boundary"
+        }],
+        "sweeps": []
+    }))
+    .expect_err("unknown transition token must fail closed");
+    assert_eq!(error.code().as_str(), "fem_mesh_policy_malformed_value");
+    assert_eq!(error.pointer(), "/interfaces/0/transition_distance");
+}
+
+#[test]
+fn fem_mesh_policy_canonical_round_trip_preserves_versioned_fingerprint() {
+    let policy = FemMeshPolicyIR::from_json_value(serde_json::json!({
+        "schema_version": "fem_mesh_policy.v1",
+        "geometric_element_order": 1,
+        "materials": [{
+            "target": {"object_id": "obj_strip"},
+            "strategy_intent": "swept",
+            "maximum_element_size": 3e-9,
+            "minimum_element_size": 1e-9,
+            "edge_maximum_element_size": 1.5e-9,
+            "edge_thickness": 2e-9,
+            "corner_maximum_element_size": 1e-9,
+            "corner_extent": 2e-9
+        }],
+        "interfaces": [{
+            "target": {"object_id": "obj_strip"},
+            "maximum_element_size": 2e-9,
+            "thickness": 2e-9
+        }],
+        "airbox": {
+            "law": "geometric",
+            "near_element_size": 2e-9,
+            "far_element_size": 20e-9,
+            "transition_distance": 80e-9,
+            "element_ratio": 1.3
+        },
+        "sweeps": [{
+            "target": {"object_id": "obj_strip"},
+            "requested_axis": "auto",
+            "layers": 3,
+            "distribution": "fixed",
+            "element_ratio": 1.0,
+            "symmetric": false,
+            "face_topology": "triangular",
+            "family_intent": "prism6",
+            "transition": "pyramid_to_tetrahedra",
+            "exact_layers": true
+        }],
+        "growth": {
+            "definition_id": "adjacent_size_growth.v1",
+            "cell_size_definition_id": "cell.max_edge.v1",
+            "max_neighbor_ratio": 1.3,
+            "relative_tolerance": 0.05
+        },
+        "quality": {"thresholds": []}
+    }))
+    .unwrap();
+    policy.validate().unwrap();
+
+    let canonical = policy.canonical_json().unwrap();
+    let fingerprint = policy.policy_fingerprint().unwrap();
+    assert!(fingerprint.starts_with("sha256:"));
+    let decoded: FemMeshPolicyIR = serde_json::from_slice(&canonical).unwrap();
+    assert_eq!(decoded.canonical_json().unwrap(), canonical);
+    assert_eq!(decoded.policy_fingerprint().unwrap(), fingerprint);
+}
+
+#[test]
+fn fem_mesh_policy_fingerprint_normalizes_signed_zero() {
+    let mut positive = FemMeshPolicyIR::default();
+    positive.growth = Some(MeshGrowthPolicyIR {
+        definition_id: ADJACENT_SIZE_GROWTH_DEFINITION_ID.to_string(),
+        cell_size_definition_id: CELL_MAX_EDGE_SIZE_DEFINITION_ID.to_string(),
+        max_neighbor_ratio: 1.3,
+        relative_tolerance: 0.0,
+    });
+    positive.interfaces.push(FemInterfaceMeshPolicyIR {
+        target: RegionRefIR {
+            object_id: "obj_strip".into(),
+            region_id: None,
+        },
+        maximum_element_size: 2e-9,
+        thickness: 2e-9,
+        transition_distance: Some(FemMeshTransitionDistanceIR::Metres(0.0)),
+    });
+    let mut negative = positive.clone();
+    negative.growth.as_mut().unwrap().relative_tolerance = -0.0;
+    negative.interfaces[0].transition_distance = Some(FemMeshTransitionDistanceIR::Metres(-0.0));
+
+    assert_eq!(
+        positive.canonical_json().unwrap(),
+        negative.canonical_json().unwrap()
+    );
+    assert_eq!(
+        positive.policy_fingerprint().unwrap(),
+        negative.policy_fingerprint().unwrap()
+    );
+}
+
+#[test]
+fn problem_v0_4_deserialization_preserves_nested_mesh_policy_code_and_pointer() {
+    let mut value = serde_json::to_value(ProblemIRV04::bootstrap_example()).unwrap();
+    value["mesh_semantics"] = serde_json::json!({
+        "requested_policy": {
+            "schema_version": "fem_mesh_policy.v1",
+            "geometric_element_order": 1,
+            "materials": [{
+                "target": {"object_id": "obj_strip"},
+                "strategy_intent": "tetrahedral",
+                "maximum_element_size": "3 nm"
+            }],
+            "interfaces": [],
+            "sweeps": []
+        }
+    });
+
+    let error = serde_json::from_value::<ProblemIRV04>(value)
+        .expect_err("malformed nested policy must fail with canonical diagnostics")
+        .to_string();
+    assert!(error.contains("fem_mesh_policy_malformed_value"), "{error}");
+    assert!(
+        error.contains("/mesh_semantics/requested_policy/materials/0/maximum_element_size"),
+        "{error}"
+    );
+}
+
+#[test]
+fn fem_mesh_policy_direct_deserialization_runs_semantic_validation() {
+    let payload = serde_json::json!({
+        "schema_version": "fem_mesh_policy.v1",
+        "geometric_element_order": 2,
+        "materials": [],
+        "interfaces": [],
+        "sweeps": []
+    });
+
+    let error = FemMeshPolicyIR::from_json_value(payload.clone())
+        .expect_err("direct constructor must reject semantically unsupported P2");
+    assert_eq!(
+        error.code().as_str(),
+        "fem_mesh_policy_unsupported_element_order"
+    );
+    assert_eq!(error.pointer(), "/geometric_element_order");
+
+    let serde_error = serde_json::from_value::<FemMeshPolicyIR>(payload)
+        .expect_err("Serde entry point must run the same semantic validation")
+        .to_string();
+    assert!(
+        serde_error.contains("fem_mesh_policy_unsupported_element_order"),
+        "{serde_error}"
+    );
+    assert!(
+        serde_error.contains("/geometric_element_order"),
+        "{serde_error}"
+    );
+}
+
+#[test]
+fn fem_mesh_policy_rejects_unknown_nested_target_field_with_escaped_pointer() {
+    let error = FemMeshPolicyIR::from_json_value(serde_json::json!({
+        "schema_version": "fem_mesh_policy.v1",
+        "geometric_element_order": 1,
+        "materials": [{
+            "target": {
+                "object_id": "obj_strip",
+                "future/~selector": true
+            },
+            "strategy_intent": "tetrahedral"
+        }],
+        "interfaces": [],
+        "sweeps": []
+    }))
+    .expect_err("unknown nested target field must fail closed");
+
+    assert_eq!(error.code().as_str(), "fem_mesh_policy_unknown_field");
+    assert_eq!(error.pointer(), "/materials/0/target/future~1~0selector");
+}
+
+#[test]
+fn fem_mesh_policy_canonical_bytes_and_digest_are_frozen() {
+    let policy = FemMeshPolicyIR::from_json_value(serde_json::json!({
+        "schema_version": "fem_mesh_policy.v1",
+        "geometric_element_order": 1,
+        "materials": [
+            {
+                "target": {"object_id": "obj_z"},
+                "strategy_intent": "tetrahedral",
+                "maximum_element_size": 3e-9
+            },
+            {
+                "target": {"object_id": "obj_a"},
+                "strategy_intent": "thin_film_tetrahedral",
+                "maximum_element_size": 2e-9
+            }
+        ],
+        "interfaces": [],
+        "sweeps": [],
+        "growth": {
+            "definition_id": "adjacent_size_growth.v1",
+            "cell_size_definition_id": "cell.max_edge.v1",
+            "max_neighbor_ratio": 1.3,
+            "relative_tolerance": -0.0
+        },
+        "quality": {"thresholds": []}
+    }))
+    .unwrap();
+
+    let canonical = String::from_utf8(policy.canonical_json().unwrap()).unwrap();
+    let fingerprint = policy.policy_fingerprint().unwrap();
+
+    let mut reordered = policy.clone();
+    reordered.materials.reverse();
+    reordered.growth.as_mut().unwrap().relative_tolerance = 0.0;
+    assert_eq!(
+        String::from_utf8(reordered.canonical_json().unwrap()).unwrap(),
+        canonical
+    );
+    assert_eq!(reordered.policy_fingerprint().unwrap(), fingerprint);
+    assert_eq!(
+        canonical,
+        r#"{"schema_version":"fem_mesh_policy.v1","geometric_element_order":1,"materials":[{"target":{"object_id":"obj_a"},"strategy_intent":"thin_film_tetrahedral","maximum_element_size":2e-9},{"target":{"object_id":"obj_z"},"strategy_intent":"tetrahedral","maximum_element_size":3e-9}],"growth":{"definition_id":"adjacent_size_growth.v1","cell_size_definition_id":"cell.max_edge.v1","max_neighbor_ratio":1.3,"relative_tolerance":0.0},"quality":{"compute_summary":false,"per_element":false}}"#
+    );
+    assert_eq!(
+        fingerprint,
+        "sha256:05f950d4ecd8c74e363b1c0174e150107107f78b73dfb9be0fa9c082b104acdd"
     );
 }

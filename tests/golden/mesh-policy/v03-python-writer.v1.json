@@ -1,0 +1,136 @@
+{
+  "schema_version": "fem_mesh_policy_v03_python_writer.v1",
+  "cases": [
+    {
+      "id": "numeric_thin_film_airbox",
+      "script": "\nimport fullmag as fm\n\nstudy = fm.study(\"v03_numeric_thin_film_airbox\")\nstudy.engine(\"fem\")\nstudy.universe(mode=\"auto\", size=(200e-9, 120e-9, 40e-9), center=(0.0, 0.0, 0.0))\nstudy.universe.mesh(maximum_element_size=80e-9, minimum_element_size=5e-9, maximum_element_growth_rate=1.4, grading=\"geometric\")\nstrip = study.geometry(fm.Box(100e-9, 40e-9, 2e-9), name=\"strip\")\nstrip.Ms = 800e3\nstrip.Aex = 13e-12\nstrip.alpha = 0.1\nstrip.m = fm.texture.uniform(1, 0, 0)\nstrip.mesh.thin_film(maximum_element_size=20e-9, minimum_element_size=2e-9, interface_maximum_element_size=8e-9, interface_thickness=4e-9, transition_distance=60e-9, layers=1)\n",
+      "writer_metadata": {
+        "mesh_workflow": {
+          "build_requested": false,
+          "build_target": "domain",
+          "default_mesh": {},
+          "domain_mesh_mode": "generated_shared_domain_mesh",
+          "explicit_mesh_api": true,
+          "fem": {"hmax": 2e-08, "mesh": null, "order": 1},
+          "mesh_options": null,
+          "operations": [],
+          "per_geometry": [{
+            "corner_extent": 4e-09,
+            "corner_hmax": 2e-09,
+            "corner_transition_distance": 3e-08,
+            "edge_hmax": 2e-09,
+            "edge_thickness": 4e-09,
+            "edge_transition_distance": 3e-08,
+            "geometry": "strip",
+            "hmax": 2e-08,
+            "hmin": 2e-09,
+            "interface_hmax": 8e-09,
+            "interface_thickness": 4e-09,
+            "maximum_element_size": 2e-08,
+            "mesh_strategy": "thin_film_tetrahedral",
+            "minimum_element_size": 2e-09,
+            "mode": "custom",
+            "sweep_face_meshing": "triangular",
+            "through_thickness_distribution": "fixed",
+            "through_thickness_elements": 1,
+            "transition_distance": 6e-08
+          }]
+        },
+        "study_universe": {
+          "airbox_grading": "geometric",
+          "airbox_growth_rate": 1.4,
+          "airbox_hmax": 8e-08,
+          "airbox_hmin": 5e-09,
+          "center": [0.0, 0.0, 0.0],
+          "mode": "auto",
+          "padding": [0.0, 0.0, 0.0],
+          "size": [2e-07, 1.2e-07, 4e-08]
+        }
+      }
+    },
+    {
+      "id": "explicit_hmax_auto",
+      "script": "\nimport fullmag as fm\n\nstudy = fm.study(\"v03_hmax_auto\")\nstudy.engine(\"fem\")\nstrip = study.geometry(fm.Box(100e-9, 40e-9, 2e-9), name=\"strip\")\nstrip.Ms = 800e3\nstrip.Aex = 13e-12\nstrip.alpha = 0.1\nstrip.m = fm.texture.uniform(1, 0, 0)\nstrip.mesh(hmax=\"auto\")\n",
+      "writer_metadata": {
+        "mesh_workflow": {
+          "build_requested": false,
+          "build_target": "mesh",
+          "default_mesh": {},
+          "explicit_mesh_api": true,
+          "fem": {"hmax": 5.6858023018340375e-09, "mesh": null, "order": 1},
+          "mesh_options": null,
+          "operations": [],
+          "per_geometry": [{
+            "geometry": "strip",
+            "hmax": "auto",
+            "maximum_element_size": "auto",
+            "mode": "custom"
+          }]
+        },
+        "study_universe": null
+      }
+    },
+    {
+      "id": "boundary_layer_control",
+      "script": "\nimport fullmag as fm\n\nstudy = fm.study(\"v03_boundary_layer\")\nstudy.engine(\"fem\")\nstrip = study.geometry(fm.Box(100e-9, 40e-9, 2e-9), name=\"strip\")\nstrip.Ms = 800e3\nstrip.Aex = 13e-12\nstrip.alpha = 0.1\nstrip.m = fm.texture.uniform(1, 0, 0)\nstrip.mesh(maximum_element_size=20e-9, **fm.mesh.boundary_layers(count=2, first_layer_thickness=1e-9, stretching=1.2, target_surface_tags=[11]))\n",
+      "writer_metadata": {
+        "mesh_workflow": {
+          "build_requested": false,
+          "build_target": "mesh",
+          "default_mesh": {},
+          "explicit_mesh_api": true,
+          "fem": {"hmax": 2e-08, "mesh": null, "order": 1},
+          "mesh_options": null,
+          "operations": [],
+          "per_geometry": [{
+            "boundary_layer_count": 2,
+            "boundary_layer_stretching": 1.2,
+            "boundary_layer_target_curve_selectors": [],
+            "boundary_layer_target_curve_tags": [],
+            "boundary_layer_target_surface_selectors": [],
+            "boundary_layer_target_surface_tags": [11],
+            "boundary_layer_thickness": 1e-09,
+            "geometry": "strip",
+            "hmax": 2e-08,
+            "maximum_element_size": 2e-08,
+            "mode": "custom"
+          }]
+        },
+        "study_universe": null
+      }
+    },
+    {
+      "id": "size_field_control",
+      "script": "\nimport fullmag as fm\n\nstudy = fm.study(\"v03_size_field\")\nstudy.engine(\"fem\")\nstrip = study.geometry(fm.Box(100e-9, 40e-9, 2e-9), name=\"strip\")\nstrip.Ms = 800e3\nstrip.Aex = 13e-12\nstrip.alpha = 0.1\nstrip.m = fm.texture.uniform(1, 0, 0)\nstrip.mesh(maximum_element_size=20e-9)\nstrip.mesh.size_field(\"Ball\", VIn=2e-9, VOut=20e-9, Radius=30e-9, XCenter=0.0, YCenter=0.0, ZCenter=0.0)\n",
+      "writer_metadata": {
+        "mesh_workflow": {
+          "build_requested": false,
+          "build_target": "mesh",
+          "default_mesh": {},
+          "explicit_mesh_api": true,
+          "fem": {"hmax": 2e-08, "mesh": null, "order": 1},
+          "mesh_options": null,
+          "operations": [],
+          "per_geometry": [{
+            "geometry": "strip",
+            "hmax": 2e-08,
+            "maximum_element_size": 2e-08,
+            "mode": "custom",
+            "size_fields": [{
+              "kind": "Ball",
+              "params": {
+                "Radius": 3e-08,
+                "VIn": 2e-09,
+                "VOut": 2e-08,
+                "XCenter": 0.0,
+                "YCenter": 0.0,
+                "ZCenter": 0.0
+              }
+            }]
+          }]
+        },
+        "study_universe": null
+      }
+    }
+  ]
+}

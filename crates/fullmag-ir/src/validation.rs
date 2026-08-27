@@ -1013,6 +1013,11 @@ fn dot(a: &[f64; 3], b: &[f64; 3]) -> f64 {
 pub(crate) fn validate_physics_object_problem(problem: &ProblemIRV04) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
     validate_v04_magnetization_constraints(problem, &mut errors);
+    if let Some(mesh_semantics) = &problem.mesh_semantics {
+        if let Err(mesh_errors) = mesh_semantics.validate() {
+            errors.extend(mesh_errors);
+        }
+    }
     if problem.ir_version != crate::PROBLEM_IR_V04_VERSION {
         errors.push(format!(
             "ir_version must be '{}' for ProblemIRV04",
