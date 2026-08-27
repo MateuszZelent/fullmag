@@ -8065,7 +8065,11 @@ mod tests {
 
     #[test]
     fn run_problem_streams_artifacts_and_preserves_layout() {
-        let problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({"device": "cpu", "source": "qualification_fixture"}),
+        );
         let unique_suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock drift")
@@ -8093,6 +8097,16 @@ mod tests {
         .expect("metadata should parse");
         assert_eq!(metadata["field_snapshots"].as_u64(), Some(4));
         assert_eq!(metadata["scalar_rows"].as_u64(), Some(2));
+        let evaluation = &metadata["execution_provenance"]["fdm_cpu_evaluation_telemetry"];
+        assert_eq!(
+            evaluation["schema_version"],
+            "fullmag.fdm.cpu.evaluation.v1"
+        );
+        assert_eq!(
+            evaluation["minimal_step_count"].as_u64().unwrap_or(0)
+                + evaluation["full_step_count"].as_u64().unwrap_or(0),
+            2
+        );
 
         fs::remove_dir_all(&output_dir).expect("temporary artifact directory should be removable");
     }

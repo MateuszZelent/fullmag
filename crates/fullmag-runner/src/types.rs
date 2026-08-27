@@ -2886,6 +2886,16 @@ pub struct FdmCpuStepTransactionTelemetry {
     pub checkpoint_digest: String,
 }
 
+/// Runtime-owned evidence for the production CPU FDM evaluation policy.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FdmCpuEvaluationTelemetry {
+    pub schema_version: String,
+    pub minimal_step_count: u64,
+    pub full_step_count: u64,
+    pub minimal_step_wall_time_ns: u64,
+    pub full_step_wall_time_ns: u64,
+}
+
 impl FdmGpuExecutionReceipt {
     pub fn strict_unvalidated(precision: &str) -> Self {
         Self {
@@ -2958,6 +2968,26 @@ mod fdm_gpu_execution_receipt_contract_tests {
         assert_eq!(telemetry["rollback_count"], 2);
         assert_eq!(telemetry["thermal_interval_index"], 7);
         assert_eq!(telemetry["checkpoint_digest"], "sha256:test");
+    }
+
+    #[test]
+    fn execution_provenance_serializes_fdm_cpu_evaluation_telemetry() {
+        let mut provenance = ExecutionProvenance::default();
+        provenance.fdm_cpu_evaluation_telemetry = Some(FdmCpuEvaluationTelemetry {
+            schema_version: "fullmag.fdm.cpu.evaluation.v1".into(),
+            minimal_step_count: 5,
+            full_step_count: 2,
+            minimal_step_wall_time_ns: 1_000,
+            full_step_wall_time_ns: 900,
+        });
+
+        let value = serde_json::to_value(provenance).expect("serialize provenance");
+        let telemetry = &value["fdm_cpu_evaluation_telemetry"];
+        assert_eq!(telemetry["schema_version"], "fullmag.fdm.cpu.evaluation.v1");
+        assert_eq!(telemetry["minimal_step_count"], 5);
+        assert_eq!(telemetry["full_step_count"], 2);
+        assert_eq!(telemetry["minimal_step_wall_time_ns"], 1_000);
+        assert_eq!(telemetry["full_step_wall_time_ns"], 900);
     }
 
     #[test]
@@ -3320,6 +3350,9 @@ pub struct ExecutionProvenance {
     /// CPU reference counters for accepted/rejected FDM step transactions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fdm_cpu_step_transaction_telemetry: Option<FdmCpuStepTransactionTelemetry>,
+    /// Counts and wall time split by the actual Minimal/Full CPU evaluation request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fdm_cpu_evaluation_telemetry: Option<FdmCpuEvaluationTelemetry>,
     /// FDM FFT request, resolution, and actually executed realization.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fdm_fft_execution: Option<FdmFftExecutionProvenance>,

@@ -54,9 +54,10 @@ use crate::schedules::{
     OutputSchedule,
 };
 use crate::types::{
-    ExecutedRun, ExecutionProvenance, FdmCpuStateLayoutProvenance, FdmCpuStepTransactionTelemetry,
-    FdmFftRuntimeTelemetry, FieldSnapshot, LivePreviewRequest, LiveStepConsumer, RunError,
-    RunResult, RunStatus, StateObservables, StepAction, StepStats, StepUpdate,
+    ExecutedRun, ExecutionProvenance, FdmCpuEvaluationTelemetry, FdmCpuStateLayoutProvenance,
+    FdmCpuStepTransactionTelemetry, FdmFftRuntimeTelemetry, FieldSnapshot, LivePreviewRequest,
+    LiveStepConsumer, RunError, RunResult, RunStatus, StateObservables, StepAction, StepStats,
+    StepUpdate,
 };
 
 use std::time::Instant;
@@ -1191,6 +1192,13 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
     let mut step_count: u64 = resume_step_count.unwrap_or(0);
     let mut cpu_rejected_attempt_count = 0u64;
     let mut cpu_rollback_count = 0u64;
+    let mut cpu_evaluation_telemetry = FdmCpuEvaluationTelemetry {
+        schema_version: "fullmag.fdm.cpu.evaluation.v1".to_string(),
+        minimal_step_count: 0,
+        full_step_count: 0,
+        minimal_step_wall_time_ns: 0,
+        full_step_wall_time_ns: 0,
+    };
     let mut final_coupled_checkpoint = None;
     // Keep the resolved Frozen Spins state in the live update stream as an
     // opaque restart payload.  This is the only safe way for session pause
@@ -1731,6 +1739,23 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                 report.dt_used = canonical_dt;
             }
             let wall_elapsed = wall_start.elapsed().as_nanos() as u64;
+            match step_evaluation {
+                EvaluationRequest::Minimal => {
+                    cpu_evaluation_telemetry.minimal_step_count = cpu_evaluation_telemetry
+                        .minimal_step_count
+                        .saturating_add(1);
+                    cpu_evaluation_telemetry.minimal_step_wall_time_ns = cpu_evaluation_telemetry
+                        .minimal_step_wall_time_ns
+                        .saturating_add(wall_elapsed);
+                }
+                EvaluationRequest::Full => {
+                    cpu_evaluation_telemetry.full_step_count =
+                        cpu_evaluation_telemetry.full_step_count.saturating_add(1);
+                    cpu_evaluation_telemetry.full_step_wall_time_ns = cpu_evaluation_telemetry
+                        .full_step_wall_time_ns
+                        .saturating_add(wall_elapsed);
+                }
+            }
             step_count += 1;
             last_solver_dt = report.dt_used;
             if let Some(next) = report.suggested_next_dt {
@@ -2135,6 +2160,9 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
             .unwrap_or(0),
         checkpoint_digest,
     });
+    if !is_direct_minimization {
+        final_provenance.fdm_cpu_evaluation_telemetry = Some(cpu_evaluation_telemetry);
+    }
     artifacts.replace_provenance_synchronously(final_provenance)?;
     let diagnostic_trace = artifacts.take_solver_steps();
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
@@ -3494,6 +3522,37 @@ mod tests {
         );
         assert_eq!(telemetry.rollback_count, telemetry.rejected_attempt_count);
         assert!(telemetry.checkpoint_digest.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn reference_runner_splits_minimal_and_full_evaluation_telemetry() {
+        let plan = make_test_plan();
+        let minimal =
+            execute_reference_fdm(&plan, 3e-14, &[], None, None).expect("headless reference run");
+        let minimal_telemetry = minimal
+            .provenance
+            .fdm_cpu_evaluation_telemetry
+            .expect("CPU evaluation telemetry");
+        assert_eq!(
+            minimal_telemetry.schema_version,
+            "fullmag.fdm.cpu.evaluation.v1"
+        );
+        assert_eq!(minimal_telemetry.minimal_step_count, 3);
+        assert_eq!(minimal_telemetry.full_step_count, 0);
+
+        let outputs = [OutputIR::Scalar {
+            name: "E_total".to_string(),
+            every_seconds: 1e-14,
+        }];
+        let full = execute_reference_fdm(&plan, 3e-14, &outputs, None, None)
+            .expect("full-observable reference run");
+        let full_telemetry = full
+            .provenance
+            .fdm_cpu_evaluation_telemetry
+            .expect("CPU evaluation telemetry");
+        assert_eq!(full_telemetry.minimal_step_count, 0);
+        assert_eq!(full_telemetry.full_step_count, 3);
+        assert!(full_telemetry.full_step_wall_time_ns > 0);
     }
 
     #[test]
