@@ -60,10 +60,11 @@ bool compute_bulk_dmi_field(
 
     auto *dmi_workspace = dmi_element_workspace(ctx);
 
+    if (!prepare_dmi_periodic_input(ctx, m_xyz, dmi_workspace->projected_m_xyz, error)) {
+        return false;
+    }
     const std::vector<double> *exchange_input = &m_xyz;
     if (!ctx.mesh.periodic_reduced_node.empty()) {
-        dmi_workspace->projected_m_xyz = m_xyz;
-        project_static_periodic_aos(ctx, dmi_workspace->projected_m_xyz);
         exchange_input = &dmi_workspace->projected_m_xyz;
     }
 

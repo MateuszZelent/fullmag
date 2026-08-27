@@ -78,6 +78,46 @@ DmiElementWorkspace *dmi_element_workspace(Context &ctx) {
     return workspace;
 }
 
+bool prepare_dmi_periodic_input(
+    Context &ctx,
+    const std::vector<double> &m_xyz,
+    std::vector<double> &projected_m_xyz,
+    std::string &error)
+{
+    const size_t node_count = static_cast<size_t>(ctx.mesh.n_nodes);
+    if (m_xyz.size() != 3u * node_count) {
+        error = "DMI periodic input field size does not match FEM mesh nodes";
+        return false;
+    }
+    projected_m_xyz.clear();
+    if (ctx.mesh.periodic_reduced_node.empty()) {
+        return true;
+    }
+    if (ctx.mesh.periodic_reduced_node.size() != node_count ||
+        ctx.mesh.periodic_reduced_node_count == 0 ||
+        ctx.mesh.periodic_representative_nodes.size() !=
+            static_cast<size_t>(ctx.mesh.periodic_reduced_node_count)) {
+        error = "DMI periodic input requires a complete periodic node-class map";
+        return false;
+    }
+    for (size_t node = 0; node < node_count; ++node) {
+        const uint32_t reduced = ctx.mesh.periodic_reduced_node[node];
+        if (static_cast<size_t>(reduced) >= ctx.mesh.periodic_representative_nodes.size()) {
+            error = "DMI periodic input contains an out-of-range reduced node class";
+            return false;
+        }
+        const uint32_t representative =
+            ctx.mesh.periodic_representative_nodes[static_cast<size_t>(reduced)];
+        if (static_cast<size_t>(representative) >= node_count) {
+            error = "DMI periodic input contains an out-of-range representative node";
+            return false;
+        }
+    }
+    projected_m_xyz = m_xyz;
+    project_static_periodic_aos(ctx, projected_m_xyz);
+    return true;
+}
+
 bool refresh_dmi_grid_functions_from_magnetization(
     Context &ctx,
     const std::vector<double> &m_xyz,

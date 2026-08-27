@@ -50,6 +50,17 @@ struct DmiElementWorkspace {
 
 DmiElementWorkspace *dmi_element_workspace(Context &ctx);
 
+/*
+ * Validate and project an AoS magnetization input once for both DMI owners.
+ * Empty periodic metadata leaves the caller's input untouched; a non-empty
+ * map writes the canonical representative values into `projected_m_xyz`.
+ */
+bool prepare_dmi_periodic_input(
+    Context &ctx,
+    const std::vector<double> &m_xyz,
+    std::vector<double> &projected_m_xyz,
+    std::string &error);
+
 bool refresh_dmi_grid_functions_from_magnetization(
     Context &ctx,
     const std::vector<double> &m_xyz,

@@ -60,7 +60,14 @@ bool compute_interfacial_dmi_field(
 
     auto *dmi_workspace = dmi_element_workspace(ctx);
 
-    if (!refresh_dmi_grid_functions_from_magnetization(ctx, m_xyz, error)) {
+    if (!prepare_dmi_periodic_input(ctx, m_xyz, dmi_workspace->projected_m_xyz, error)) {
+        return false;
+    }
+    const std::vector<double> *dmi_input = &m_xyz;
+    if (!ctx.mesh.periodic_reduced_node.empty()) {
+        dmi_input = &dmi_workspace->projected_m_xyz;
+    }
+    if (!refresh_dmi_grid_functions_from_magnetization(ctx, *dmi_input, error)) {
         return false;
     }
 
