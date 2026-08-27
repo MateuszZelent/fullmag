@@ -6605,6 +6605,75 @@ mod tests {
     }
 
     #[test]
+    fn failed_persistent_soa_step_does_not_publish_or_mutate_accepted_state() {
+        let plan = make_test_plan();
+        let (mut problem, mut published_state) =
+            build_snapshot_problem_and_state(&plan).expect("problem");
+        let mut state_soa = Some(published_state.to_soa());
+        let published_before = published_state.transactional_state_digest();
+        let authoritative_before = state_soa
+            .as_ref()
+            .expect("persistent SoA state")
+            .transactional_state_digest();
+        let mut fft_workspace = problem.create_workspace();
+        let mut integrator_bufs = problem.create_integrator_buffers();
+
+        problem.terms.external_field = Some([f64::NAN, 0.0, 0.0]);
+        let error = step_reference_fdm_problem(
+            &problem,
+            &mut published_state,
+            &mut state_soa,
+            1e-14,
+            &mut fft_workspace,
+            &mut integrator_bufs,
+            EvaluationRequest::Minimal,
+        )
+        .expect_err("non-finite RHS must fail before accepted-state publication");
+
+        assert_eq!(error.code(), EngineErrorCode::NaNValue);
+        assert_eq!(
+            published_state.transactional_state_digest(),
+            published_before
+        );
+        assert_eq!(
+            state_soa
+                .as_ref()
+                .expect("persistent SoA state after failure")
+                .transactional_state_digest(),
+            authoritative_before
+        );
+
+        problem.terms.external_field = Some([0.0, 0.0, 0.0]);
+        let (_report, state_copy) = step_reference_fdm_problem(
+            &problem,
+            &mut published_state,
+            &mut state_soa,
+            1e-14,
+            &mut fft_workspace,
+            &mut integrator_bufs,
+            EvaluationRequest::Minimal,
+        )
+        .expect("repaired step must publish exactly once");
+
+        assert_eq!(state_copy.full_field_copy_count, 1);
+        assert_eq!(
+            state_copy.copied_bytes,
+            (published_state.magnetization().len() * std::mem::size_of::<Vector3>()) as u64
+        );
+        assert_eq!(
+            published_state.transactional_state_digest(),
+            state_soa
+                .as_ref()
+                .expect("persistent SoA state after accepted step")
+                .transactional_state_digest()
+        );
+        assert_ne!(
+            published_state.transactional_state_digest(),
+            published_before
+        );
+    }
+
+    #[test]
     fn cpu_fft_backend_selection_defaults_and_auto_resolve_to_rustfft_for_demag() {
         let default_backend =
             resolve_cpu_fft_backend_for_demag(true, None).expect("default backend should resolve");
