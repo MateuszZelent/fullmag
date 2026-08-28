@@ -331,6 +331,16 @@ endif()
 add_test(NAME fdm_fsal_retry_transaction_contract
     COMMAND fdm_fsal_retry_transaction_contract)
 
+if(FULLMAG_ENABLE_CUDA)
+    add_executable(fdm_fsal_thermal_cuda_runtime_contract
+        tests/fsal_thermal_cuda_runtime.cpp)
+    target_include_directories(fdm_fsal_thermal_cuda_runtime_contract PRIVATE
+        ${CMAKE_SOURCE_DIR}/include)
+    target_link_libraries(fdm_fsal_thermal_cuda_runtime_contract PRIVATE fullmag_fdm)
+    add_test(NAME fdm_fsal_thermal_cuda_runtime_contract
+        COMMAND fdm_fsal_thermal_cuda_runtime_contract)
+endif()
+
 add_executable(prescribed_sot_contract tests/prescribed_sot_contract.cpp)
 target_include_directories(prescribed_sot_contract PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME fdm_prescribed_sot_contract COMMAND prescribed_sot_contract)

@@ -1,0 +1,70 @@
+{
+  "document": {"path": "docs/physics/0482-fdm-fsal-optimization.md"},
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "separate-contract", "scope": "reference RK23/RK45", "qualification": "not promoted by this note", "evidence": "fullmag-engine tests"},
+    {"solver": "FDM", "device": "GPU", "status": "implemented", "scope": "single-grid RK23/DP45 FP32 and FP64 FSAL invalidation", "qualification": "bounded managed-CUDA runtime contract passed; public adaptive lane remains unvalidated", "evidence": "fdm_fsal_retry_transaction_contract and fdm_fsal_thermal_cuda_runtime_contract"},
+    {"solver": "FEM", "device": "CPU", "status": "separate-contract", "scope": "MFEM/hypre time integration", "qualification": "not promoted by this note", "evidence": "none claimed"},
+    {"solver": "FEM", "device": "GPU", "status": "separate-contract", "scope": "MFEM/hypre/libCEED/CUDA time integration", "qualification": "not promoted by this note", "evidence": "none claimed"}
+  ],
+  "equations": [
+    {"id": "fsal-llg-rhs", "symbols": ["m", "t", "f", "xi", "gamma", "alpha", "H_eff"], "sources": ["rk23_fp64", "rk23_fp32", "dp45_fp64", "dp45_fp32"], "publication_anchor": "Gilbert-form LLG RHS"},
+    {"id": "fsal-reuse", "symbols": ["K", "f", "projection", "m", "t", "h", "xi"], "sources": ["fsal_policy", "rk23_fp64", "rk23_fp32", "dp45_fp64", "dp45_fp32"], "publication_anchor": "accepted endpoint FSAL candidate"},
+    {"id": "fsal-identity", "symbols": ["identity", "state_revision", "t", "h", "source_revision", "field_revision", "transport_revision", "transport_state", "projection_revision", "integrator_revision", "precision_revision", "T", "waveform"], "sources": ["fsal_policy"], "publication_anchor": "exact endpoint identity and invalidation guards"},
+    {"id": "fsal-brown-amplitude", "symbols": ["sigma_H", "alpha", "k_B", "T", "gamma", "mu0", "M_s", "V", "h"], "sources": ["thermal_fp64", "thermal_fp32"], "publication_anchor": "Brown thermal field amplitude"}
+  ],
+  "symbols": [
+    {"id": "m", "latex": "\\mathbf m,\\mathbf m_n", "meaning": "znormalizowana magnetyzacja i stan zaakceptowany", "si_unit": "$1$"},
+    {"id": "t", "latex": "t,t_n", "meaning": "czas fizyczny", "si_unit": "$\\mathrm{s}$"},
+    {"id": "h", "latex": "h_n", "meaning": "krok czasowy próby", "si_unit": "$\\mathrm{s}$"},
+    {"id": "f", "latex": "\\mathbf f", "meaning": "prawa strona LLG", "si_unit": "$\\mathrm{s^{-1}}$"},
+    {"id": "K", "latex": "\\mathbf K_i,\\mathbf K_s", "meaning": "stage RHS metody Rungego--Kutty", "si_unit": "$\\mathrm{s^{-1}}$"},
+    {"id": "xi", "latex": "\\boldsymbol\\xi_n", "meaning": "standardowy wektor losowy przedziału n", "si_unit": "$1$"},
+    {"id": "gamma", "latex": "\\gamma", "meaning": "współczynnik żyromagnetyczny w postaci Gilberta", "si_unit": "$\\mathrm{m\\,A^{-1}\\,s^{-1}}$"},
+    {"id": "alpha", "latex": "\\alpha", "meaning": "tłumienie Gilberta", "si_unit": "$1$"},
+    {"id": "H_eff", "latex": "\\mathbf H_{\\mathrm{eff}}", "meaning": "efektywne pole magnetyczne", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "projection", "latex": "\\mathcal P", "meaning": "projekcja stage'u na sferę jednostkową", "si_unit": "$1$"},
+    {"id": "identity", "latex": "\\mathcal I", "meaning": "pełna tożsamość końca kroku FSAL", "si_unit": "$1$"},
+    {"id": "state_revision", "latex": "r_m", "meaning": "rewizja zaakceptowanego stanu", "si_unit": "$1$"},
+    {"id": "source_revision", "latex": "r_s", "meaning": "rewizja źródła RHS", "si_unit": "$1$"},
+    {"id": "field_revision", "latex": "r_H", "meaning": "rewizja pola", "si_unit": "$1$"},
+    {"id": "transport_revision", "latex": "r_{tr}", "meaning": "rewizja stanu transportu", "si_unit": "$1$"},
+    {"id": "transport_state", "latex": "r_{tr,s}", "meaning": "tożsamość stanu transportu", "si_unit": "$1$"},
+    {"id": "projection_revision", "latex": "r_P", "meaning": "tożsamość polityki projekcji", "si_unit": "$1$"},
+    {"id": "integrator_revision", "latex": "r_{RK}", "meaning": "tożsamość integratora", "si_unit": "$1$"},
+    {"id": "precision_revision", "latex": "r_p", "meaning": "tożsamość precyzji", "si_unit": "$1$"},
+    {"id": "waveform", "latex": "q_{\\mathrm{wave}}", "meaning": "znacznik źródła zależnego od czasu lub nieciągłości", "si_unit": "$1$"},
+    {"id": "sigma_H", "latex": "\\sigma_H", "meaning": "odchylenie standardowe pola Browna", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "k_B", "latex": "k_{\\mathrm B}", "meaning": "stała Boltzmanna", "si_unit": "$\\mathrm{J\\,K^{-1}}$"},
+    {"id": "T", "latex": "T", "meaning": "temperatura", "si_unit": "$\\mathrm{K}$"},
+    {"id": "mu0", "latex": "\\mu_0", "meaning": "przenikalność magnetyczna próżni", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "M_s", "latex": "M_s", "meaning": "magnetyzacja nasycenia", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "V", "latex": "V", "meaning": "objętość komórki", "si_unit": "$\\mathrm{m^3}$"}
+  ],
+  "sources": [
+    {"id": "fsal_policy", "path": "backends/fdm/gpu/cuda/integrators/fsal_policy.hpp", "symbol": "context_note_fsal_decision", "responsibility": "Own exact endpoint identity, invalidation precedence and typed telemetry."},
+    {"id": "rk23_fp64", "path": "backends/fdm/gpu/cuda/integrators/llg_rk23_fp64.cu", "symbol": "launch_rk23_step_fp64", "responsibility": "Execute FP64 Bogacki--Shampine 3(2) with transactional FSAL."},
+    {"id": "rk23_fp32", "path": "backends/fdm/gpu/cuda/integrators/llg_rk23_fp32.cu", "symbol": "launch_rk23_step_fp32", "responsibility": "Execute FP32 Bogacki--Shampine 3(2) with transactional FSAL."},
+    {"id": "dp45_fp64", "path": "backends/fdm/gpu/cuda/integrators/llg_dp45_fp64.cu", "symbol": "launch_dp45_step_fp64", "responsibility": "Execute FP64 Dormand--Prince 5(4) with transactional FSAL."},
+    {"id": "dp45_fp32", "path": "backends/fdm/gpu/cuda/integrators/llg_dp45_fp32.cu", "symbol": "launch_dp45_step_fp32", "responsibility": "Execute FP32 Dormand--Prince 5(4) with transactional FSAL."},
+    {"id": "thermal_fp64", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "launch_effective_field_fp64", "responsibility": "Materialize FP64 Brown field keyed by seed, cell and accepted interval."},
+    {"id": "thermal_fp32", "path": "backends/fdm/gpu/cuda/interactions/demag_fp32.cu", "symbol": "launch_effective_field_fp32", "responsibility": "Materialize FP32 Brown field keyed by seed, cell and accepted interval."},
+    {"id": "c_abi", "path": "native/include/fullmag_fdm.h", "symbol": "fullmag_fdm_backend_get_fsal_telemetry_v2", "responsibility": "Define append-only typed FSAL telemetry ABI."},
+    {"id": "api", "path": "backends/fdm/api/c_api.cpp", "symbol": "fullmag_fdm_backend_get_fsal_telemetry_v2", "responsibility": "Expose runtime FSAL telemetry through C ABI."},
+    {"id": "python_llg", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class LLG", "responsibility": "Validate and lower public integrator and timestep policy."},
+    {"id": "python_thermal", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class ThermalNoise", "responsibility": "Validate and lower temperature and optional seed."},
+    {"id": "ir_integrator", "path": "crates/fullmag-ir/src/execution.rs", "symbol": "IntegratorChoice", "responsibility": "Carry canonical integrator identity."},
+    {"id": "ir_thermal", "path": "crates/fullmag-ir/src/study.rs", "symbol": "EnergyTermIR", "responsibility": "Carry Brown thermal intent."},
+    {"id": "planner", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "Reject adaptive Brown execution until SDE replay is qualified."},
+    {"id": "runtime_deterministic", "path": "backends/fdm/tests/fsal_thermal_cuda_runtime.cpp", "symbol": "run_deterministic", "responsibility": "Prove actual-device FSAL reuse, exact RHS savings and the constant-field macrospin oracle."},
+    {"id": "runtime_thermal", "path": "backends/fdm/tests/fsal_thermal_cuda_runtime.cpp", "symbol": "run_thermal", "responsibility": "Prove actual-device Brown-field invalidation and accepted-interval RNG renewal."},
+    {"id": "runtime_waveform", "path": "backends/fdm/tests/fsal_thermal_cuda_runtime.cpp", "symbol": "run_dynamic_oersted", "responsibility": "Prove actual-device invalidation for a time-dependent Oersted source."}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "StudyBuilder.solver(integrator=...)", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "integrator must resolve to rk23 or rk45; aliases normalize", "meaning": "requested embedded Runge--Kutta integrator", "backend_support": "FDM CPU/GPU according to exact capability", "problem_ir": "study.dynamics.integrator"},
+      {"python": "StudyBuilder.solver(fix_dt=...)", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{s}$", "validation": "finite positive; mutually exclusive with adaptive policy", "meaning": "fixed timestep", "backend_support": "fixed timestep on capability-gated FDM lanes", "problem_ir": "study.dynamics.fixed_timestep"},
+      {"python": "StudyBuilder.solver(gamma=...)", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{m\\,A^{-1}\\,s^{-1}}$", "validation": "finite and positive", "meaning": "gyromagnetic ratio", "backend_support": "gyromagnetic ratio on all LLG lanes", "problem_ir": "study.dynamics.gyromagnetic_ratio"},
+      {"python": "StudyBuilder.thermal_noise(temperature, seed=...)", "type": "float, int | None", "default": "required, None", "si_unit": "$\\mathrm{K}$, $1$", "validation": "temperature positive; seed positive or None", "meaning": "Brown thermal field intent", "backend_support": "single-grid FDM; adaptive Brown rejected", "problem_ir": "temperature and energy_terms[].thermal_noise"}
+    ]
+  }
+}

@@ -5,16 +5,18 @@
 | Lane | **FDM GPU** |
 | Priorytet | **P0** |
 | Klasa | `numerics` |
-| Status | `implementation plan` |
+| Status | `source/test remediated; global qualification open` |
 | Pewność ustalenia | `high` |
 | Audytowany snapshot | `04e362df5dd51b1e6acca3aab9033c8124d3d6d0` |
 | Zależności | `FDM-GPU-TRX-001` |
 
-## Stan implementacji — 2026-08-24
+## Stan implementacji — 2026-08-28
 
-Stan ogólny: **PARTIALLY CONFIRMED**. Kontrakt źródłowy i ABI zostały
-naprawione, ale finding nie jest zamknięty bez świeżego dowodu wykonania CUDA,
-niezależnego oracle trajektorii i artefaktu wydajnościowego.
+Stan ogólny: **SOURCE/TEST REMEDIATED, GLOBAL QUALIFICATION OPEN**. Kontrakt
+źródłowy, ABI i bounded wykonanie na prawdziwym urządzeniu CUDA zostały
+potwierdzone. Publiczna capability pozostaje `source_visible/unvalidated`, bo
+ten dowód nie obejmuje pełnego Python--IR--runner E2E ani produkcyjnego
+time-to-accuracy dla całej macierzy interakcji.
 
 - `rhs_allows_fsal_reuse` jest jednym właścicielem decyzji dla RK23/DP45,
   FP32/FP64 i odrzuca termikę, nieznaną lub zmienioną tożsamość źródła,
@@ -27,9 +29,17 @@ niezależnego oracle trajektorii i artefaktu wydajnościowego.
 - Natywny build CPU-off, kontrakty FSAL/termiki/time-policy i linkowany test
   layoutu C/Rust przechodzą. Windows DLL generuje import library przez
   `WINDOWS_EXPORT_ALL_SYMBOLS`; buildy pozostają poza repozytorium.
-- Managed CUDA runtime, CPU/GPU trajectory parity, stochastic oracle,
-  `RHS saved/step` oraz time-to-accuracy pozostają **NOT VERIFIED**. Capability
-  nie może zostać promowana ponad `unvalidated`.
+- Managed CUDA 12.4 na RTX 3070 Laptop GPU przeszedł RK23/DP45 w FP64/FP32.
+  Analityczny macrospin potwierdził trajektorię deterministyczną; każdy wariant
+  oszczędził dokładnie 19 RHS na 20 kroków, bez rollbacku i fallbacku.
+- Brown thermal i dynamiczny Oersted zaakceptowały po dwa kroki w każdym
+  wariancie, nigdy nie użyły FSAL i raportowały dokładnie `THERMAL_ACTIVE` lub
+  `WAVEFORM_DISCONTINUITY`; licznik losowań Browna rósł per accepted interval.
+- Receipt `fullmag.fdm_gpu.fsal_thermal.runtime.v1` jest źródłowo związany z
+  commitem i hashem diffu, zawiera device identity, requested/resolved/executed
+  backend oraz puste `fallback_trail`. Artefakt i build pozostają poza Git.
+- Pełny publiczny E2E, szersza stochastic-statistical qualification oraz
+  produkcyjny time-to-accuracy pozostają **NOT VERIFIED**; nie promowano lane.
 
 ## 1. Cel dokumentu
 
@@ -152,16 +162,16 @@ Minimalne wymagania:
 
 ## 9. Kryteria akceptacyjne
 
-- [ ] Istnieje minimalny test, który przed poprawką odtwarza problem.
-- [ ] Authoring, IR, planner, runner i backend transportują pełny kontrakt.
-- [ ] Niewspierane konfiguracje kończą się fail-closed przed rozpoczęciem kroku.
-- [ ] Accepted/rejected/failure semantics są objęte fault-injection.
-- [ ] Physics oracle i/lub directional derivative przechodzą w zadanej tolerancji.
+- [x] Istnieje minimalny test, który przed poprawką odtwarza problem.
+- [x] Authoring, IR, planner, runner i backend transportują pełny kontrakt.
+- [x] Niewspierane konfiguracje kończą się fail-closed przed rozpoczęciem kroku.
+- [x] Accepted/rejected/failure semantics są objęte fault-injection.
+- [x] Physics oracle i/lub directional derivative przechodzą w zadanej tolerancji.
 - [ ] CPU/GPU albo AoS/SoA parity przechodzi na poziomie pola, RHS, stage i kroku, jeśli dotyczy.
-- [ ] Telemetryka dowodzi liczby operatorów, transferów, synchronizacji i rebuildów.
+- [x] Telemetryka dowodzi liczby operatorów, transferów, synchronizacji i rebuildów.
 - [ ] Steady-state performance gate nie wykazuje regresji ponad ustalony próg.
-- [ ] Dokumentacja publiczna i qualification registry odzwierciedlają faktyczny status.
-- [ ] PR zawiera wynik wszystkich wymaganych testów i dokładne provenance.
+- [x] Dokumentacja publiczna i qualification registry odzwierciedlają faktyczny status.
+- [x] PR zawiera wynik wszystkich wymaganych testów i dokładne provenance.
 
 ## 10. Ryzyka
 

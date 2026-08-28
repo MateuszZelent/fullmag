@@ -287,6 +287,15 @@ int main() {
     FsalReuseInput thermal_input = exact_input;
     thermal_input.temperature = 300.0;
     const auto thermal_decision = rhs_allows_fsal_reuse(thermal_input);
+    FsalReuseInput thermal_empty_cache_input = thermal_input;
+    thermal_empty_cache_input.cache_valid = false;
+    const auto thermal_empty_cache_decision =
+        rhs_allows_fsal_reuse(thermal_empty_cache_input);
+    FsalReuseInput waveform_empty_cache_input = exact_input;
+    waveform_empty_cache_input.cache_valid = false;
+    waveform_empty_cache_input.waveform_discontinuity = true;
+    const auto waveform_empty_cache_decision =
+        rhs_allows_fsal_reuse(waveform_empty_cache_input);
     Context decision_telemetry_context{};
     context_note_fsal_decision(decision_telemetry_context, thermal_decision);
     FsalReuseInput time_mismatch_input = exact_input;
@@ -875,9 +884,14 @@ int main() {
         "cache identity is exact and unknown identities fail closed",
         failures);
     report(
-        !thermal_decision.allowed && empty_publish_is_noop &&
+        !thermal_decision.allowed && !thermal_empty_cache_decision.allowed &&
+            !waveform_empty_cache_decision.allowed && empty_publish_is_noop &&
             transport_revision_invalidates && field_source_revision_invalidates &&
             thermal_decision.reason == FULLMAG_FDM_FSAL_INVALIDATION_THERMAL_ACTIVE &&
+            thermal_empty_cache_decision.reason ==
+                FULLMAG_FDM_FSAL_INVALIDATION_THERMAL_ACTIVE &&
+            waveform_empty_cache_decision.reason ==
+                FULLMAG_FDM_FSAL_INVALIDATION_WAVEFORM_DISCONTINUITY &&
             contains(policy, "temperature > 0.0") &&
             contains(policy, "waveform_discontinuity") &&
             contains(policy, "FSAL_INVALIDATION_TRANSPORT_STATE_MISMATCH") &&

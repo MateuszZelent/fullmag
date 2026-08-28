@@ -51,12 +51,12 @@ inline bool fsal_unknown_identity(const FsalEndpointIdentity &identity) {
 }
 
 inline FsalReuseDecision rhs_allows_fsal_reuse(const FsalReuseInput &input) {
-    if (!input.cache_valid)
-        return {false, FULLMAG_FDM_FSAL_INVALIDATION_CACHE_EMPTY};
     if (input.temperature > 0.0)
         return {false, FULLMAG_FDM_FSAL_INVALIDATION_THERMAL_ACTIVE};
     if (input.waveform_discontinuity)
         return {false, FULLMAG_FDM_FSAL_INVALIDATION_WAVEFORM_DISCONTINUITY};
+    if (!input.cache_valid)
+        return {false, FULLMAG_FDM_FSAL_INVALIDATION_CACHE_EMPTY};
     if (fsal_unknown_identity(input.cached) || fsal_unknown_identity(input.requested))
         return {false, FULLMAG_FDM_FSAL_INVALIDATION_UNKNOWN_IDENTITY};
     if (input.cached.accepted_state_revision != input.requested.accepted_state_revision)

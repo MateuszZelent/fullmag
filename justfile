@@ -836,6 +836,16 @@ verify-fdm-gpu-abi-contract:
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
       fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}/fdm-gpu-plan-abi"; mkdir -p "$build_dir" "$build_dir/cargo-home" "$build_dir/cargo-target"; cmake -S native -B "$build_dir/native" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir/native" --target fullmag_fdm fdm_plan_desc_sentinel_contract; export FULLMAG_FDM_LIB_DIR="$build_dir/native/backends/fdm"; export LD_LIBRARY_PATH="$FULLMAG_FDM_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"; export CARGO_HOME="$build_dir/cargo-home"; export CARGO_TARGET_DIR="$build_dir/cargo-target"; export CARGO_INCREMENTAL=0; cargo test -p fullmag-fdm-sys --test plan_desc_layout -- --nocapture; ctest --test-dir "$build_dir/native/backends/fdm" --output-on-failure --no-tests=error -R "^fdm_plan_desc_sentinel_contract$"; cargo check -p fullmag-runner --features cuda'
 
+verify-fdm-gpu-fsal-contract:
+    docker compose --profile fem-gpu run --rm --no-deps \
+      -v "${FULLMAG_MANAGED_NATIVE_HOST_ROOT:-/mnt/fullmag-zfn2-native}:/mnt/fullmag-zfn2-native" \
+      -e FULLMAG_MANAGED_NATIVE_ROOT="/mnt/fullmag-zfn2-native" \
+      -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      -e FULLMAG_SOURCE_COMMIT="${FULLMAG_SOURCE_COMMIT:-unknown}" \
+      -e FULLMAG_SOURCE_DIFF_SHA256="${FULLMAG_SOURCE_DIFF_SHA256:-unknown}" \
+      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}/fdm-gpu-fsal"; evidence="$build_dir/fsal-thermal-runtime-v1.json"; mkdir -p "$build_dir"; rm -f "$evidence" "$evidence.tmp"; cmake -S native -B "$build_dir/native" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir/native" --target fullmag_fdm fdm_fsal_retry_transaction_contract fdm_fsal_thermal_cuda_runtime_contract; ctest --test-dir "$build_dir/native/backends/fdm" --output-on-failure --no-tests=error -R "^fdm_fsal_(retry_transaction|thermal_cuda_runtime)_contract$"; FULLMAG_FDM_FSAL_CUDA_EVIDENCE_PATH="$evidence.tmp" "$build_dir/native/backends/fdm/fdm_fsal_thermal_cuda_runtime_contract"; test -s "$evidence.tmp"; python3 -m json.tool "$evidence.tmp" >/dev/null; mv "$evidence.tmp" "$evidence"; python3 -m json.tool "$evidence"'
+
 verify-fdm-gpu-strict-residency:
     python3 scripts/fdm_gpu_strict_residency_evidence.py init --final .fullmag/verification/fdm-gpu-strict-residency/execution-receipt.v1.json --candidate .fullmag/verification/fdm-gpu-strict-residency/execution-receipt.v1.candidate.json
     python3 scripts/test_fdm_gpu_strict_residency_evidence.py
