@@ -756,6 +756,14 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
             + ", got " + std::to_string(plan->active_mask_len);
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
+    if (ctx->has_active_mask &&
+        std::none_of(
+            plan->active_mask,
+            plan->active_mask + plan->active_mask_len,
+            [](uint8_t active) { return active != 0; })) {
+        ctx->last_error = "active_mask contains no active cells";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
     if (ctx->has_sot && ctx->sot_formula != FULLMAG_FDM_PRESCRIBED_SOT_LEGACY_V0 &&
         ctx->sot_formula != FULLMAG_FDM_PRESCRIBED_SOT_V1)
     {

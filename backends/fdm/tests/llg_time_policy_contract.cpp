@@ -9,6 +9,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include "fullmag_adaptive_step_decision.hpp"
 #include "fullmag_fdm.h"
@@ -172,6 +173,160 @@ int main() {
     check(error != nullptr && std::string(error).find("invalid complete adaptive") != std::string::npos,
           "semantic incompatibility is visible through deferred creation error");
     fullmag_fdm_backend_destroy(handle);
+
+    const uint8_t empty_active_mask[1] = {0};
+    auto empty_domain = invalid;
+    empty_domain.base.integrator = FULLMAG_FDM_INTEGRATOR_RK23;
+    empty_domain.base.active_mask = empty_active_mask;
+    empty_domain.base.active_mask_len = 1;
+    auto *empty_handle = fullmag_fdm_backend_create_time_policy_v2(&empty_domain);
+    check(empty_handle != nullptr,
+          "empty-domain validation returns a deferred-error handle");
+    const char *empty_error = fullmag_fdm_backend_last_error(empty_handle);
+    check(empty_error != nullptr &&
+              std::string(empty_error).find("active_mask contains no active cells") !=
+                  std::string::npos,
+          "adaptive CUDA rejects a zero-active domain before the first step");
+    fullmag_fdm_backend_destroy(empty_handle);
+
+    auto normalized_error_trace = [&](fullmag_fdm_precision precision,
+            fullmag_fdm_integrator integrator,
+            const std::vector<double> &initial,
+            const std::vector<uint8_t> &active_mask,
+            const std::vector<uint8_t> &frozen_mask) {
+        const uint64_t cells = initial.size() / 3;
+        auto plan = invalid;
+        plan.base.grid = {static_cast<uint32_t>(cells), 1, 1, 1e-9, 1e-9, 1e-9};
+        plan.base.precision = precision;
+        plan.base.integrator = integrator;
+        plan.base.stats_mode = FULLMAG_FDM_STATS_NONE;
+        plan.base.initial_magnetization_xyz = initial.data();
+        plan.base.initial_magnetization_len = initial.size();
+        plan.base.active_mask = active_mask.empty() ? nullptr : active_mask.data();
+        plan.base.active_mask_len = active_mask.size();
+        plan.base.frozen_mask = frozen_mask.empty() ? nullptr : frozen_mask.data();
+        plan.base.frozen_mask_len = frozen_mask.size();
+        plan.base.frozen_reference_xyz =
+            frozen_mask.empty() ? nullptr : initial.data();
+        plan.base.frozen_reference_len =
+            frozen_mask.empty() ? 0 : initial.size();
+        plan.base.has_external_field = 1;
+        plan.base.external_field_am[2] = 2.0e5;
+        plan.time_policy = {1, FULLMAG_FDM_ADAPTIVE_ADVANCED, 1.0e-5, 0.0,
+                            1.0e-16, 5.0e-13, 0.9, 2.0, 0.2,
+                            0, 0.0, 0, 0.0};
+        auto *backend = fullmag_fdm_backend_create_time_policy_v2(&plan);
+        if (backend == nullptr || fullmag_fdm_backend_last_error(backend) != nullptr) {
+            const char *message = backend == nullptr
+                ? "<null handle>" : fullmag_fdm_backend_last_error(backend);
+            std::fprintf(stderr, "adaptive norm fixture creation error: %s\n",
+                         message != nullptr ? message : "<none>");
+        }
+        check(backend != nullptr && fullmag_fdm_backend_last_error(backend) == nullptr,
+              "adaptive norm fixture passes checked-v2 validation");
+        fullmag_fdm_adaptive_batch_step_v1 step{};
+        uint32_t step_count = 0;
+        check(fullmag_fdm_backend_step_adaptive_batch_v1(
+                  backend, 5.0e-13, 5.0e-13, 1, &step, 1,
+                  &step_count) == FULLMAG_FDM_OK &&
+                  step_count == 1,
+              "adaptive norm fixture executes one accepted CUDA step");
+        fullmag_fdm_adaptive_attempt_v1 attempts
+            [FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1]{};
+        uint32_t attempt_count = 0;
+        check(fullmag_fdm_backend_copy_adaptive_attempts_v1(
+                  backend, attempts, FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1,
+                  &attempt_count) == FULLMAG_FDM_OK &&
+                  attempt_count > 0,
+              "adaptive norm fixture publishes its device attempt trace");
+        std::vector<double> errors;
+        errors.reserve(attempt_count);
+        for (uint32_t index = 0; index < attempt_count; ++index) {
+            errors.push_back(attempts[index].normalized_error);
+        }
+        fullmag_fdm_backend_destroy(backend);
+        return errors;
+    };
+
+    auto check_adaptive_norm_domain = [&](fullmag_fdm_precision precision,
+                                           fullmag_fdm_integrator integrator) {
+        const std::vector<double> transverse = {1.0, 0.0, 0.0};
+        const auto single = normalized_error_trace(
+            precision, integrator, transverse, {}, {});
+        std::vector<double> replicated;
+        for (uint32_t cell = 0; cell < 8; ++cell) {
+            replicated.insert(replicated.end(), transverse.begin(), transverse.end());
+        }
+        const auto repeated = normalized_error_trace(
+            precision, integrator, replicated, {}, {});
+        check(single.size() == repeated.size(),
+              "grid replication preserves adaptive attempt count");
+        for (std::size_t index = 0; index < single.size(); ++index) {
+            check(std::abs(single[index] - repeated[index]) <= 1.0e-12,
+                  "per-spin max error norm is invariant under grid replication");
+        }
+
+        const std::vector<double> masked_initial = {
+            1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0,
+        };
+        const auto masked = normalized_error_trace(
+            precision, integrator, masked_initial, {1, 0}, {});
+        check(single.size() == masked.size(),
+              "inactive-cell exclusion preserves adaptive attempt count");
+        for (std::size_t index = 0; index < single.size(); ++index) {
+            check(std::abs(single[index] - masked[index]) <= 1.0e-12,
+                  "inactive cells do not contribute to the adaptive error norm");
+        }
+
+        if (precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+            const std::vector<double> parallel = {0.0, 0.0, 1.0};
+            const auto parallel_only = normalized_error_trace(
+                precision, integrator, parallel, {}, {});
+            const std::vector<double> frozen_initial = {
+                0.0, 0.0, 1.0,
+                1.0, 0.0, 0.0,
+            };
+            const auto frozen = normalized_error_trace(
+                precision, integrator, frozen_initial, {}, {0, 1});
+            check(parallel_only.size() == frozen.size(),
+                  "frozen-spin exclusion preserves adaptive attempt count");
+            for (std::size_t index = 0; index < parallel_only.size(); ++index) {
+                check(std::abs(parallel_only[index] - frozen[index]) <= 1.0e-12,
+                      "frozen spins do not contribute to the adaptive error norm");
+            }
+        } else {
+            const double frozen_initial[6] = {
+                0.0, 0.0, 1.0,
+                1.0, 0.0, 0.0,
+            };
+            const uint8_t frozen_mask[2] = {0, 1};
+            auto frozen_fp32 = invalid;
+            frozen_fp32.base.grid = {2, 1, 1, 1e-9, 1e-9, 1e-9};
+            frozen_fp32.base.precision = FULLMAG_FDM_PRECISION_SINGLE;
+            frozen_fp32.base.integrator = integrator;
+            frozen_fp32.base.initial_magnetization_xyz = frozen_initial;
+            frozen_fp32.base.initial_magnetization_len = 6;
+            frozen_fp32.base.frozen_mask = frozen_mask;
+            frozen_fp32.base.frozen_mask_len = 2;
+            frozen_fp32.base.frozen_reference_xyz = frozen_initial;
+            frozen_fp32.base.frozen_reference_len = 6;
+            auto *handle = fullmag_fdm_backend_create_time_policy_v2(&frozen_fp32);
+            check(handle != nullptr,
+                  "FP32 frozen-spin validation returns a deferred-error handle");
+            const char *message = fullmag_fdm_backend_last_error(handle);
+            check(message != nullptr &&
+                      std::string(message).find("frozen_spins_cuda_fp32_unqualified") !=
+                          std::string::npos,
+                  "FP32 frozen-spin adaptive norm remains fail-closed before execution");
+            fullmag_fdm_backend_destroy(handle);
+        }
+    };
+    for (const auto precision : {FULLMAG_FDM_PRECISION_DOUBLE,
+                                 FULLMAG_FDM_PRECISION_SINGLE}) {
+        check_adaptive_norm_domain(precision, FULLMAG_FDM_INTEGRATOR_RK23);
+        check_adaptive_norm_domain(precision, FULLMAG_FDM_INTEGRATOR_DP45);
+    }
 
     auto check_advanced_tolerance = [&](double atol, double rtol, const char *message) {
         auto advanced = invalid;
