@@ -6,11 +6,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 
 
-SCHEMA_VERSION = "fdm_gpu_execution_receipt_evidence.v1"
+SCHEMA_VERSION = "fdm_gpu_execution_receipt_evidence.v2"
+COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+SHA256_RE = re.compile(r"[0-9a-f]{64}")
 KNOWN_OPERATOR_MASK = (1 << 19) - 1
 TRANSFER_KEYS = {
     "setup_full_vector_h2d_count",
@@ -43,6 +46,8 @@ def _validate_candidate(document: object) -> None:
         "schema_version",
         "validation_state",
         "runtime_check",
+        "source_commit",
+        "source_diff_sha256",
         "requested",
         "resolved",
         "executed",
@@ -67,6 +72,10 @@ def _validate_candidate(document: object) -> None:
         raise ValueError("evidence candidate has an unsupported schema_version")
     if document["validation_state"] != "validated" or document["runtime_check"] != "passed":
         raise ValueError("evidence candidate is not runtime-validated")
+    if COMMIT_RE.fullmatch(str(document["source_commit"])) is None:
+        raise ValueError("evidence candidate source_commit is invalid")
+    if SHA256_RE.fullmatch(str(document["source_diff_sha256"])) is None:
+        raise ValueError("evidence candidate source_diff_sha256 is invalid")
     if document["requested"] != "gpu" or document["resolved"] != "device_resident" or document["executed"] != "cuda_fdm":
         raise ValueError("evidence candidate execution identity is contradictory")
     if not _non_negative_integer(document["device_ordinal"]):
@@ -141,6 +150,8 @@ def initialize(final: Path, candidate: Path) -> None:
         "schema_version": SCHEMA_VERSION,
         "validation_state": "unvalidated",
         "runtime_check": "unavailable",
+        "source_commit": "unknown",
+        "source_diff_sha256": "unknown",
         "requested": "gpu",
         "resolved": "unavailable",
         "executed": "none",
