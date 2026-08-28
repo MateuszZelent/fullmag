@@ -118,6 +118,8 @@ public_docs/site/
 .worktrees_old/
 
 # Local Windows build/cache outputs; keep these outside the repository.
+/.impl-racetrack/
+/Codex-Usage/
 /build-contract-wave2/
 /build-target-*/
 /build-volumes/

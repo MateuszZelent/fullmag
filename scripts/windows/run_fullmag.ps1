@@ -16,8 +16,9 @@ param(
   [ValidateSet("interactive", "headless")]
   [string]$RunMode = "interactive",
 
-  [Parameter(Mandatory = $true)]
   [string]$ScriptPath,
+
+  [switch]$BuildOnly,
 
   [ValidateRange(1, 65535)]
   [int]$WebPort = 3100
@@ -28,22 +29,31 @@ $ProgressPreference = "SilentlyContinue"
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $TargetTriple = "x86_64-pc-windows-msvc"
-$defaultCacheRoot = "D:\fullmag-cache"
-$defaultBuildRoot = "D:\fullmag-build"
+$RepoDriveRoot = [System.IO.Path]::GetPathRoot($RepoRoot)
+$defaultCacheRoot = Join-Path $RepoDriveRoot "fullmag-cache"
+$defaultBuildRoot = Join-Path $RepoDriveRoot "fullmag-build"
 
 function Resolve-AbsolutePath {
   param([Parameter(Mandatory = $true)][string]$Path)
   return [System.IO.Path]::GetFullPath($Path)
 }
 
-function Require-DPath {
+function Require-ExternalBuildPath {
   param(
     [Parameter(Mandatory = $true)][string]$Path,
     [Parameter(Mandatory = $true)][string]$Label
   )
-  $resolved = Resolve-AbsolutePath $Path
-  if ($resolved -notmatch "^[dD]:\\") {
-    throw "$Label must be on drive D:, got $resolved"
+  $resolved = (Resolve-AbsolutePath $Path).TrimEnd("\")
+  $repo = $RepoRoot.TrimEnd("\")
+  if (-not [System.IO.Path]::IsPathRooted($resolved)) {
+    throw "$Label must be an absolute Windows path, got $resolved"
+  }
+  if ($resolved -eq [System.IO.Path]::GetPathRoot($resolved).TrimEnd("\")) {
+    throw "$Label must not use a drive root directly, got $resolved"
+  }
+  if ($resolved.Equals($repo, [System.StringComparison]::OrdinalIgnoreCase) -or
+      $resolved.StartsWith($repo + "\", [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "$Label must be outside the repository, got $resolved"
   }
 }
 
@@ -71,6 +81,20 @@ function Invoke-External {
   }
 }
 
+function Invoke-Uv {
+  param([Parameter()][string[]]$Arguments = @())
+  $managedUv = Join-Path $CacheRoot "tools\Scripts\uv.exe"
+  if (Test-Path -LiteralPath $managedUv -PathType Leaf) {
+    Invoke-External $managedUv $Arguments
+    return
+  }
+  if (Get-Command "uv" -ErrorAction SilentlyContinue) {
+    Invoke-External "uv" $Arguments
+    return
+  }
+  throw "Missing required command: uv; run scripts/windows/setup_fullmag.ps1 -InstallMissing"
+}
+
 function Add-NodePaths {
   $nodeRoot = Join-Path $CacheRoot "node"
   $nodeGlobalRoot = Join-Path $nodeRoot "global"
@@ -95,7 +119,7 @@ function Import-VsEnvironment {
   if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
     throw "vswhere.exe not found; install Visual Studio Build Tools with the C++ workload"
   }
-  $vsPath = (& $vswhere -products "*" -latest -property installationPath 2>$null | Select-Object -First 1).Trim()
+  $vsPath = (& $vswhere -products "*" -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -latest -property installationPath 2>$null | Select-Object -First 1).Trim()
   if (-not $vsPath) {
     throw "Visual Studio / Build Tools installation not found"
   }
@@ -113,14 +137,13 @@ function Import-VsEnvironment {
 }
 
 function Ensure-PythonEnvironment {
-  Require-Command "uv"
   $managedPythonRoot = Join-Path $PythonRoot "managed"
   Ensure-Directory $managedPythonRoot
   if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) {
-    Invoke-External "uv" @(
+    Invoke-Uv @(
       "python", "install", "3.12", "--install-dir", $managedPythonRoot
     )
-    Invoke-External "uv" @(
+    Invoke-Uv @(
       "venv", $PythonVenv, "--python", "3.12", "--managed-python", "--no-project", "--allow-existing"
     )
   }
@@ -128,16 +151,30 @@ function Ensure-PythonEnvironment {
     throw "Fullmag Python environment was not created at $PythonExe"
   }
   $packagePath = Join-Path $RepoRoot "packages\fullmag-py[meshing]"
-  Invoke-External "uv" @(
+  Invoke-Uv @(
     "pip", "install", "--python", $PythonExe, "--editable", $packagePath
   )
 }
 
 function Ensure-ControlRoomDependencies {
   Require-Command "pnpm"
+  $pnpmArguments = @("install", "--frozen-lockfile")
+  $windowsSwc = Get-ChildItem `
+    -LiteralPath (Join-Path $RepoRoot "node_modules\.pnpm") `
+    -Directory `
+    -Filter "@next+swc-win32-x64-msvc@*" `
+    -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+  if ((Test-Path -LiteralPath (Join-Path $RepoRoot "node_modules") -PathType Container) -and
+      $null -eq $windowsSwc) {
+    Write-Host "Replacing non-Windows node_modules with Windows dependencies"
+    $pnpmArguments += "--force"
+  }
+  $previousCi = $env:CI
+  $env:CI = "1"
   Push-Location $RepoRoot
   try {
-    Invoke-External "pnpm" @("install", "--frozen-lockfile")
+    Invoke-External "pnpm" $pnpmArguments
     if ($Frontend -eq "static") {
       $env:FULLMAG_CONTROL_ROOM_STATIC_EXPORT = "1"
       try {
@@ -150,6 +187,11 @@ function Ensure-ControlRoomDependencies {
   }
   finally {
     Pop-Location
+    if ($null -eq $previousCi) {
+      Remove-Item Env:CI -ErrorAction SilentlyContinue
+    } else {
+      $env:CI = $previousCi
+    }
   }
 }
 
@@ -225,7 +267,13 @@ $TargetRoot = if ($env:FULLMAG_WINDOWS_TARGET_DIR) {
   Join-Path $BuildRoot "cargo-targets\fullmag-windows"
 }
 $CargoHome = Join-Path $CacheRoot "cargo"
-$RustupHome = Join-Path $CacheRoot "rustup"
+$RustupHome = if ($env:FULLMAG_WINDOWS_RUSTUP_HOME) {
+  Resolve-AbsolutePath $env:FULLMAG_WINDOWS_RUSTUP_HOME
+} elseif (Get-Command "rustup" -ErrorAction SilentlyContinue) {
+  (& rustup show home 2>$null | Select-Object -First 1).Trim()
+} else {
+  Join-Path $CacheRoot "rustup"
+}
 $PnpmHome = Join-Path $CacheRoot "pnpm-home"
 $PnpmStore = Join-Path $CacheRoot "pnpm-store"
 $NpmCache = Join-Path $CacheRoot "npm-cache"
@@ -244,9 +292,10 @@ $StaticControlRoom = Join-Path $RepoRoot "apps\control-room\out\index.html"
 foreach ($item in @(
   @{ Path = $CacheRoot; Label = "FULLMAG_WINDOWS_CACHE_ROOT" },
   @{ Path = $BuildRoot; Label = "FULLMAG_WINDOWS_BUILD_ROOT" },
-  @{ Path = $TargetRoot; Label = "FULLMAG_WINDOWS_TARGET_DIR" }
+  @{ Path = $TargetRoot; Label = "FULLMAG_WINDOWS_TARGET_DIR" },
+  @{ Path = $RustupHome; Label = "FULLMAG_WINDOWS_RUSTUP_HOME" }
 )) {
-  Require-DPath $item.Path $item.Label
+  Require-ExternalBuildPath $item.Path $item.Label
 }
 
 foreach ($directory in @(
@@ -259,6 +308,7 @@ foreach ($directory in @(
 
 $env:CARGO_HOME = $CargoHome
 $env:RUSTUP_HOME = $RustupHome
+$env:RUSTUP_PERMIT_COPY_RENAME = "1"
 $env:CARGO_TARGET_DIR = $TargetRoot
 $env:CARGO_INCREMENTAL = "0"
 $env:PNPM_HOME = $PnpmHome
@@ -293,6 +343,7 @@ Require-Command "git"
 Require-Command "node"
 if ($BuildMode -eq "true") {
   Require-Command "cargo"
+  Require-Command "rustc"
   Require-Command "rustup"
   Require-Command "cmake"
   Import-VsEnvironment
@@ -304,7 +355,12 @@ if ($BuildMode -eq "true") {
   }
   Ensure-PythonEnvironment
   Ensure-ControlRoomDependencies
-  Invoke-External "rustup" @("target", "add", $TargetTriple)
+  $activeToolchain = (& rustup show active-toolchain 2>&1 | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0 -or $activeToolchain -notmatch "x86_64-pc-windows-msvc") {
+    throw "An existing x86_64-pc-windows-msvc Rust toolchain is required; found: $activeToolchain"
+  }
+  Invoke-External "rustc" @("--version")
+  Invoke-External "cargo" @("--version")
 
   $cargoArguments = @(
     "build", "--release", "--target", $TargetTriple, "-p", "fullmag-cli"
@@ -380,6 +436,19 @@ elseif ($Device -eq "cpu") {
 }
 else {
   Remove-Item Env:FULLMAG_FDM_EXECUTION -ErrorAction SilentlyContinue
+}
+
+if ($BuildOnly) {
+  Write-Host "Windows native Fullmag build is ready"
+  Write-Host "- binary: $FullmagExe"
+  Write-Host "- cargo target: $TargetRoot"
+  Write-Host "- cache root: $CacheRoot"
+  Write-Host "- rustup home: $RustupHome"
+  exit 0
+}
+
+if (-not $ScriptPath) {
+  throw "ScriptPath is required unless -BuildOnly is used"
 }
 
 $resolvedScript = if ([System.IO.Path]::IsPathRooted($ScriptPath)) {
