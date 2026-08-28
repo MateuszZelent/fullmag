@@ -37,6 +37,10 @@ FEM_FACET_ROLES = {"exterior", "material_interface", "periodic_seam"}
 VTK_CELL_TYPES = {"tet4": 10, "hex8": 12, "prism6": 13, "pyramid5": 14}
 
 
+class MeshValidationError(RuntimeError):
+    """Fail-closed rejection of an invalid realized mesh."""
+
+
 def _mixed_deterministic_inputs() -> dict[str, object]:
     return {
         "algorithm_2d": 6,
@@ -983,16 +987,26 @@ _PREVALIDATED_MIXED_CERTIFICATE_TOKEN = object()
 
 
 @dataclass(frozen=True, eq=False)
+class _TrustedTopologyFingerprintV3Context:
+    mesh_without_certificate: "MeshData" = field(repr=False, compare=False)
+    topology_fingerprint_v3: str
+    _capability: object = field(repr=False, compare=False)
+
+
+@dataclass(frozen=True, eq=False)
 class _TrustedNativePreflightReceiptProof:
     mesh_without_certificate: "MeshData" = field(repr=False, compare=False)
     certificate: MixedLayerTopologyCertificate
-    topology_fingerprint_v3: str
+    topology_context: _TrustedTopologyFingerprintV3Context
     certificate_payload_sha256: str
     counts: Mapping[str, int]
     _capability: object = field(repr=False, compare=False)
 
 
 _TRUSTED_NATIVE_PREFLIGHT_RECEIPT_CAPABILITY = object()
+_MINTED_TRUSTED_TOPOLOGY_FINGERPRINT_CONTEXTS: WeakSet[
+    _TrustedTopologyFingerprintV3Context
+] = WeakSet()
 _MINTED_TRUSTED_NATIVE_PREFLIGHT_RECEIPT_PROOFS: WeakSet[
     _TrustedNativePreflightReceiptProof
 ] = WeakSet()
@@ -1129,8 +1143,12 @@ class MeshData:
             interface_marker=certificate.interface_marker,
             _bound_context=carrier.context,
         )
-        actual_fingerprint = context.actual_topology_fingerprint_v3
-        if validation.topology_fingerprint_v3 != actual_fingerprint:
+        actual_fingerprint = mesh_without_certificate.topology_fingerprint_v3()
+        if (
+            context.actual_topology_fingerprint_v3 != actual_fingerprint
+            or context.workspace.topology_fingerprint_v3 != actual_fingerprint
+            or validation.topology_fingerprint_v3 != actual_fingerprint
+        ):
             raise ValueError(
                 "prevalidated mixed certificate topology fingerprint does not match mesh"
             )
@@ -1186,6 +1204,15 @@ class MeshData:
             or proof.certificate is not certificate
         ):
             raise ValueError("trusted native preflight proof identity is stale")
+        context = proof.topology_context
+        if (
+            not isinstance(context, _TrustedTopologyFingerprintV3Context)
+            or context not in _MINTED_TRUSTED_TOPOLOGY_FINGERPRINT_CONTEXTS
+            or context._capability
+            is not _TRUSTED_NATIVE_PREFLIGHT_RECEIPT_CAPABILITY
+            or context.mesh_without_certificate is not mesh_without_certificate
+        ):
+            raise ValueError("trusted topology fingerprint context is invalid")
         current_counts = {
             "nodes": mesh_without_certificate.n_nodes,
             "cells": mesh_without_certificate.n_elements,
@@ -1193,9 +1220,14 @@ class MeshData:
         }
         if dict(proof.counts) != current_counts:
             raise ValueError("trusted native preflight proof counts are stale")
+        current_topology_fingerprint_v3 = (
+            mesh_without_certificate.topology_fingerprint_v3()
+        )
         if (
-            proof.topology_fingerprint_v3
-            != mesh_without_certificate.topology_fingerprint_v3()
+            context.topology_fingerprint_v3 != current_topology_fingerprint_v3
+            or certificate.topology_fingerprint_version != "v3"
+            or certificate.topology_fingerprint
+            != current_topology_fingerprint_v3
         ):
             raise ValueError("trusted native preflight proof topology is stale")
         if proof.certificate_payload_sha256 != _certificate_payload_sha256(certificate):
@@ -2664,11 +2696,31 @@ def _validate_and_create_prevalidated_mixed_certificate(
     )
 
 
+def _bind_trusted_topology_fingerprint_v3(
+    *,
+    mesh_without_certificate: MeshData,
+    _receipt_capability: object,
+) -> _TrustedTopologyFingerprintV3Context:
+    """Compute one identity-bound Python topology fingerprint for trusted load."""
+    if _receipt_capability is not _TRUSTED_NATIVE_PREFLIGHT_RECEIPT_CAPABILITY:
+        raise ValueError("trusted receipt capability is invalid")
+    if mesh_without_certificate.mixed_layer_topology_certificate is not None:
+        raise ValueError("trusted topology context requires an unsigned mesh")
+    context = _TrustedTopologyFingerprintV3Context(
+        mesh_without_certificate=mesh_without_certificate,
+        topology_fingerprint_v3=mesh_without_certificate.topology_fingerprint_v3(),
+        _capability=_TRUSTED_NATIVE_PREFLIGHT_RECEIPT_CAPABILITY,
+    )
+    _MINTED_TRUSTED_TOPOLOGY_FINGERPRINT_CONTEXTS.add(context)
+    return context
+
+
 def _mint_trusted_native_preflight_receipt_proof(
     *,
     mesh_without_certificate: MeshData,
     certificate: MixedLayerTopologyCertificate,
     native_preflight: object,
+    topology_context: _TrustedTopologyFingerprintV3Context,
     expected_topology_fingerprint_v3: str,
     expected_certificate_payload_sha256: str,
     expected_counts: Mapping[str, int],
@@ -2685,6 +2737,14 @@ def _mint_trusted_native_preflight_receipt_proof(
         raise TypeError("trusted receipt certificate has an invalid type")
     if not isinstance(native_preflight, NativeMixedPreflightResult):
         raise TypeError("native preflight result has an invalid type")
+    if (
+        not isinstance(topology_context, _TrustedTopologyFingerprintV3Context)
+        or topology_context not in _MINTED_TRUSTED_TOPOLOGY_FINGERPRINT_CONTEXTS
+        or topology_context._capability
+        is not _TRUSTED_NATIVE_PREFLIGHT_RECEIPT_CAPABILITY
+        or topology_context.mesh_without_certificate is not mesh_without_certificate
+    ):
+        raise ValueError("trusted topology fingerprint context is invalid")
 
     actual_counts = {
         "nodes": mesh_without_certificate.n_nodes,
@@ -2699,7 +2759,7 @@ def _mint_trusted_native_preflight_receipt_proof(
     if native_preflight.counts != actual_counts:
         raise ValueError("native preflight mesh counts do not match the mesh")
 
-    actual_fingerprint = mesh_without_certificate.topology_fingerprint_v3()
+    actual_fingerprint = topology_context.topology_fingerprint_v3
     expected_fingerprint = (
         expected_topology_fingerprint_v3
         if expected_topology_fingerprint_v3.startswith("sha256:")
@@ -2731,7 +2791,7 @@ def _mint_trusted_native_preflight_receipt_proof(
     proof = _TrustedNativePreflightReceiptProof(
         mesh_without_certificate=mesh_without_certificate,
         certificate=certificate,
-        topology_fingerprint_v3=actual_fingerprint,
+        topology_context=topology_context,
         certificate_payload_sha256=actual_payload_sha256,
         counts=MappingProxyType(actual_counts),
         _capability=_TRUSTED_NATIVE_PREFLIGHT_RECEIPT_CAPABILITY,

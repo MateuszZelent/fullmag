@@ -579,7 +579,6 @@ if [ ! -f target/release/lib_fullmag_core.so ]; then
   exit 1
 fi
 install -m 755 target/release/lib_fullmag_core.so ${runtime_root}/_fullmag_core.so
-PYTHONPATH="${runtime_root}" python3 -c "import _fullmag_core; assert callable(getattr(_fullmag_core, \"certify_mixed_mesh_arrays\", None)), \"exported _fullmag_core is missing certify_mixed_mesh_arrays\"; assert callable(getattr(_fullmag_core, \"preflight_mixed_mesh_arrays\", None)), \"exported _fullmag_core is missing preflight_mixed_mesh_arrays\"; assert callable(getattr(_fullmag_core, \"mixed_mesh_topology_codes_json\", None)), \"exported _fullmag_core is missing mixed_mesh_topology_codes_json\""
 latest_native_lib_dir() {
   local pattern="$1"
   local selected
@@ -747,6 +746,7 @@ copy_native_library_group "$FDM_LIB" libfullmag_fdm
 echo "[export_fem_gpu_runtime] bundling native shared-library dependency closure"
 copy_shared_library_dependency_closure ${runtime_root}/lib/libfullmag_fem.so.0 cuda
 copy_shared_library_dependency_closure ${runtime_root}/lib/libfullmag_fdm.so.0 cuda
+LD_LIBRARY_PATH="${runtime_root}/lib:${LD_LIBRARY_PATH:-}" PYTHONPATH="${runtime_root}" python3 -c "import _fullmag_core; assert callable(getattr(_fullmag_core, \"certify_mixed_mesh_arrays\", None)), \"exported _fullmag_core is missing certify_mixed_mesh_arrays\"; assert callable(getattr(_fullmag_core, \"preflight_mixed_mesh_arrays\", None)), \"exported _fullmag_core is missing preflight_mixed_mesh_arrays\"; assert callable(getattr(_fullmag_core, \"mixed_mesh_topology_codes_json\", None)), \"exported _fullmag_core is missing mixed_mesh_topology_codes_json\""
 validate_nvtx_artifact() {
   local artifact="$1"
   shift

@@ -195,15 +195,27 @@ when all receipt bindings are explicit and valid. The v2 manifest contains:
 - exact SHA-256 digest and byte length for `topology.npz`,
   `build-report.json`, and `certification-receipt.json`.
 
-`certification-receipt.json` uses
-`fullmag.mesh-certification-receipt.v1`. Its semantic payload contains no
+New certified mixed artifacts use
+`fullmag.mesh-certification-receipt.v2`. Its semantic payload contains no
 timestamp and binds the topology and build-report member names, lengths, and
 digests; topology fingerprint v3; the complete mixed-certificate payload
 digest and `fullmag.mixed-certificate.rust-rayon.v1` algorithm ID; authoring and
 resolved-policy digests; source snapshot; exact Gmsh and repair-policy
-provenance; certifier backend/thread count; and node/cell/facet counts. The
-manifest binds the receipt member. The receipt does not bind the manifest, so
-the digest graph is acyclic.
+provenance; certifier backend/thread count; node/cell/facet counts; and
+`semantic_manifest_sha256`. The latter is the SHA-256 of canonical compact JSON
+containing exactly `region_markers`, `object_region_markers`, and the sorted
+`boundary_map`. It binds names to their marker meanings, not only the set of
+marker integers. Timestamp, provenance, member descriptors, and the receipt
+descriptor are excluded from that projection. The manifest binds the receipt
+member. The receipt does not bind the complete manifest, so the digest graph is
+acyclic and identical semantic inputs remain deterministic.
+
+Readers preserve the exact historical
+`fullmag.mesh-certification-receipt.v1` parser without adding v2 fields to that
+schema ID. A receipt-v1/artifact-v2 pair receives the portable public full
+audit, including complete certificate, marker, and Rust `MeshIR` validation,
+but is categorically ineligible for `trusted_cache_fast`. It is not rewritten
+or promoted in place. Artifact v3 is not introduced by this receipt migration.
 
 Digest failures, incomplete or colliding semantic maps, unsupported major schema
 versions, and invalid strict `MeshData`/Rust `MeshIR` topology fail closed.
@@ -212,8 +224,8 @@ versions, and invalid strict `MeshData`/Rust `MeshIR` topology fail closed.
 
 | Mode | Source | Mandatory validation | Certificate recomputation |
 |---|---|---|---|
-| `trusted_cache_fast` | internal content-addressed v2 cache entry atomically produced by the current Fullmag | exact member set, every member length and digest, all expected authoring/policy/source/Gmsh/repair/certifier bindings, certificate digest, topology fingerprint, counts, and native typed structural preflight | omitted only after every binding and native preflight succeeds |
-| `portable_full_audit` | explicit user load or save/load path | all v2 binding checks, marker coverage, and Rust `MeshIR` validation | full native certificate audit when the extension is available or required; only outside managed execution, a missing extension uses the complete Python reference with `production_qualified=false`, which is never trusted-cache or managed/release-qualified evidence |
+| `trusted_cache_fast` | internal content-addressed artifact-v2 cache entry with receipt v2, atomically produced by the current Fullmag | exact member set, every member length and digest, all expected authoring/policy/source/Gmsh/repair/certifier bindings, certificate digest, semantic-manifest digest, topology fingerprint, counts, and native typed structural preflight | omitted only after every receipt-v2 binding and native preflight succeeds; receipt v1 is rejected |
+| `portable_full_audit` | explicit user load or save/load path, including artifact v2 carrying legacy receipt v1 | all receipt-version-appropriate bindings, marker coverage, and Rust `MeshIR` validation; receipt v2 additionally binds the canonical semantic-manifest digest | full native certificate audit when the extension is available or required; only outside managed execution, a missing extension uses the complete Python reference with `production_qualified=false`, which is never trusted-cache or managed/release-qualified evidence |
 | `legacy_v1_full_audit` | v1 artifact | existing member checks plus full certificate/mesh and marker validation | required; never promoted in place |
 | `imported_full_audit` | unknown producer or interchange | fail-closed full validation without trusting receipt provenance | required |
 | `forced_audit` | diagnostic or release gate | full validation regardless of internal-cache origin | required and native |

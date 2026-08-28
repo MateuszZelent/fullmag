@@ -9,7 +9,8 @@ from hashlib import sha256
 from typing import Mapping
 
 
-RECEIPT_SCHEMA = "fullmag.mesh-certification-receipt.v1"
+RECEIPT_SCHEMA_V1 = "fullmag.mesh-certification-receipt.v1"
+RECEIPT_SCHEMA_V2 = "fullmag.mesh-certification-receipt.v2"
 ARTIFACT_SCHEMA_V2 = "fullmag.mesh-artifact.v2"
 MIXED_CERTIFICATE_SCHEMA = "fullmag.mixed-layer-topology-certificate.v1"
 MIXED_CERTIFIER_ALGORITHM = "fullmag.mixed-certificate.rust-rayon.v1"
@@ -326,6 +327,153 @@ class CertificationReceiptBindingsV1:
         )
 
 
+_RECEIPT_COMMON_FIELDS = {
+    "schema",
+    "artifact_schema",
+    "topology_member",
+    "build_report_member",
+    "topology_fingerprint_v3",
+    "certificate",
+    "authoring",
+    "producer",
+    "mesh_counts",
+}
+
+
+def _validate_receipt_common(receipt: object, *, expected_schema: str) -> None:
+    if getattr(receipt, "schema") != expected_schema:
+        raise ValueError("certification receipt schema is unsupported")
+    if getattr(receipt, "artifact_schema") != ARTIFACT_SCHEMA_V2:
+        raise ValueError("certification receipt artifact_schema is unsupported")
+    topology_member = getattr(receipt, "topology_member")
+    if not isinstance(topology_member, ArtifactMemberBindingV1) or (
+        topology_member.name != "topology.npz"
+    ):
+        raise ValueError("certification receipt topology_member is invalid")
+    build_report_member = getattr(receipt, "build_report_member")
+    if not isinstance(build_report_member, ArtifactMemberBindingV1) or (
+        build_report_member.name != "build-report.json"
+    ):
+        raise ValueError("certification receipt build_report_member is invalid")
+    _require_sha256(
+        getattr(receipt, "topology_fingerprint_v3"),
+        label="topology_fingerprint_v3",
+    )
+    if not isinstance(getattr(receipt, "certificate"), CertificateBindingV1):
+        raise TypeError("certification receipt certificate is invalid")
+    if not isinstance(getattr(receipt, "authoring"), AuthoringBindingV1):
+        raise TypeError("certification receipt authoring is invalid")
+    if not isinstance(getattr(receipt, "producer"), ProducerBindingV1):
+        raise TypeError("certification receipt producer is invalid")
+    if not isinstance(getattr(receipt, "mesh_counts"), MeshCountsV1):
+        raise TypeError("certification receipt mesh_counts is invalid")
+
+
+def _receipt_common_from_dict(
+    value: Mapping[str, object],
+    *,
+    expected_schema: str,
+    extra_fields: set[str] | None = None,
+) -> dict[str, object]:
+    _require_exact_keys(
+        value,
+        _RECEIPT_COMMON_FIELDS | (extra_fields or set()),
+        label="certification receipt",
+    )
+    if value["schema"] != expected_schema:
+        raise ValueError("certification receipt schema is unsupported")
+    if value["artifact_schema"] != ARTIFACT_SCHEMA_V2:
+        raise ValueError("certification receipt artifact_schema is unsupported")
+    return {
+        "topology_member": ArtifactMemberBindingV1.from_dict(
+            _mapping(value["topology_member"], label="topology_member"),
+            expected_name="topology.npz",
+        ),
+        "build_report_member": ArtifactMemberBindingV1.from_dict(
+            _mapping(value["build_report_member"], label="build_report_member"),
+            expected_name="build-report.json",
+        ),
+        "topology_fingerprint_v3": _require_sha256(
+            value["topology_fingerprint_v3"], label="topology_fingerprint_v3"
+        ),
+        "certificate": CertificateBindingV1.from_dict(
+            _mapping(value["certificate"], label="certificate")
+        ),
+        "authoring": AuthoringBindingV1.from_dict(
+            _mapping(value["authoring"], label="authoring")
+        ),
+        "producer": ProducerBindingV1.from_dict(
+            _mapping(value["producer"], label="producer")
+        ),
+        "mesh_counts": MeshCountsV1.from_dict(
+            _mapping(value["mesh_counts"], label="mesh_counts")
+        ),
+    }
+
+
+def _receipt_common_from_components(
+    *,
+    topology_bytes: bytes,
+    build_report_bytes: bytes,
+    topology_fingerprint_v3: str,
+    certificate_payload_sha256: str,
+    authoring_document_sha256: str,
+    bindings: CertificationReceiptBindingsV1,
+    mesh_counts: Mapping[str, object],
+) -> dict[str, object]:
+    return {
+        "topology_member": ArtifactMemberBindingV1.from_bytes(
+            "topology.npz", topology_bytes
+        ),
+        "build_report_member": ArtifactMemberBindingV1.from_bytes(
+            "build-report.json", build_report_bytes
+        ),
+        "topology_fingerprint_v3": _require_sha256(
+            topology_fingerprint_v3.removeprefix("sha256:"),
+            label="topology_fingerprint_v3",
+        ),
+        "certificate": CertificateBindingV1.from_dict(
+            {
+                "schema": MIXED_CERTIFICATE_SCHEMA,
+                "payload_sha256": certificate_payload_sha256.removeprefix("sha256:"),
+                "algorithm_id": bindings.certifier_algorithm_id,
+            }
+        ),
+        "authoring": AuthoringBindingV1.from_dict(
+            {
+                "document_sha256": authoring_document_sha256,
+                "resolved_policy_sha256": bindings.resolved_policy_sha256,
+            }
+        ),
+        "producer": bindings.producer(),
+        "mesh_counts": MeshCountsV1.from_dict(mesh_counts),
+    }
+
+
+def _receipt_common_to_dict(receipt: object) -> dict[str, object]:
+    return {
+        "schema": getattr(receipt, "schema"),
+        "artifact_schema": getattr(receipt, "artifact_schema"),
+        "topology_member": getattr(receipt, "topology_member").to_dict(),
+        "build_report_member": getattr(receipt, "build_report_member").to_dict(),
+        "topology_fingerprint_v3": getattr(receipt, "topology_fingerprint_v3"),
+        "certificate": getattr(receipt, "certificate").to_dict(),
+        "authoring": getattr(receipt, "authoring").to_dict(),
+        "producer": getattr(receipt, "producer").to_dict(),
+        "mesh_counts": getattr(receipt, "mesh_counts").to_dict(),
+    }
+
+
+def _receipt_json_bytes(receipt: object) -> bytes:
+    return json.dumps(
+        getattr(receipt, "to_dict")(),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+
+
 @dataclass(frozen=True, slots=True)
 class CertificationReceiptV1:
     topology_member: ArtifactMemberBindingV1
@@ -335,73 +483,64 @@ class CertificationReceiptV1:
     authoring: AuthoringBindingV1
     producer: ProducerBindingV1
     mesh_counts: MeshCountsV1
-    schema: str = RECEIPT_SCHEMA
+    schema: str = RECEIPT_SCHEMA_V1
     artifact_schema: str = ARTIFACT_SCHEMA_V2
 
     def __post_init__(self) -> None:
-        if self.schema != RECEIPT_SCHEMA:
-            raise ValueError("certification receipt schema is unsupported")
-        if self.artifact_schema != ARTIFACT_SCHEMA_V2:
-            raise ValueError("certification receipt artifact_schema is unsupported")
-        if not isinstance(self.topology_member, ArtifactMemberBindingV1) or (
-            self.topology_member.name != "topology.npz"
-        ):
-            raise ValueError("certification receipt topology_member is invalid")
-        if not isinstance(self.build_report_member, ArtifactMemberBindingV1) or (
-            self.build_report_member.name != "build-report.json"
-        ):
-            raise ValueError("certification receipt build_report_member is invalid")
-        _require_sha256(self.topology_fingerprint_v3, label="topology_fingerprint_v3")
-        if not isinstance(self.certificate, CertificateBindingV1):
-            raise TypeError("certification receipt certificate is invalid")
-        if not isinstance(self.authoring, AuthoringBindingV1):
-            raise TypeError("certification receipt authoring is invalid")
-        if not isinstance(self.producer, ProducerBindingV1):
-            raise TypeError("certification receipt producer is invalid")
-        if not isinstance(self.mesh_counts, MeshCountsV1):
-            raise TypeError("certification receipt mesh_counts is invalid")
+        _validate_receipt_common(self, expected_schema=RECEIPT_SCHEMA_V1)
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]):
-        expected = {
-            "schema",
-            "artifact_schema",
-            "topology_member",
-            "build_report_member",
-            "topology_fingerprint_v3",
-            "certificate",
-            "authoring",
-            "producer",
-            "mesh_counts",
-        }
-        _require_exact_keys(value, expected, label="certification receipt")
-        if value["schema"] != RECEIPT_SCHEMA:
-            raise ValueError("certification receipt schema is unsupported")
-        if value["artifact_schema"] != ARTIFACT_SCHEMA_V2:
-            raise ValueError("certification receipt artifact_schema is unsupported")
         return cls(
-            topology_member=ArtifactMemberBindingV1.from_dict(
-                _mapping(value["topology_member"], label="topology_member"),
-                expected_name="topology.npz",
-            ),
-            build_report_member=ArtifactMemberBindingV1.from_dict(
-                _mapping(value["build_report_member"], label="build_report_member"),
-                expected_name="build-report.json",
-            ),
-            topology_fingerprint_v3=_require_sha256(
-                value["topology_fingerprint_v3"], label="topology_fingerprint_v3"
-            ),
-            certificate=CertificateBindingV1.from_dict(
-                _mapping(value["certificate"], label="certificate")
-            ),
-            authoring=AuthoringBindingV1.from_dict(
-                _mapping(value["authoring"], label="authoring")
-            ),
-            producer=ProducerBindingV1.from_dict(
-                _mapping(value["producer"], label="producer")
-            ),
-            mesh_counts=MeshCountsV1.from_dict(
-                _mapping(value["mesh_counts"], label="mesh_counts")
+            **_receipt_common_from_dict(
+                value,
+                expected_schema=RECEIPT_SCHEMA_V1,
+            )
+        )
+
+    @classmethod
+    def from_components(cls, **components: object):
+        return cls(**_receipt_common_from_components(**components))  # type: ignore[arg-type]
+
+    def to_dict(self) -> dict[str, object]:
+        return _receipt_common_to_dict(self)
+
+    def to_json_bytes(self) -> bytes:
+        return _receipt_json_bytes(self)
+
+
+@dataclass(frozen=True, slots=True)
+class CertificationReceiptV2:
+    topology_member: ArtifactMemberBindingV1
+    build_report_member: ArtifactMemberBindingV1
+    topology_fingerprint_v3: str
+    semantic_manifest_sha256: str
+    certificate: CertificateBindingV1
+    authoring: AuthoringBindingV1
+    producer: ProducerBindingV1
+    mesh_counts: MeshCountsV1
+    schema: str = RECEIPT_SCHEMA_V2
+    artifact_schema: str = ARTIFACT_SCHEMA_V2
+
+    def __post_init__(self) -> None:
+        _validate_receipt_common(self, expected_schema=RECEIPT_SCHEMA_V2)
+        _require_sha256(
+            self.semantic_manifest_sha256,
+            label="semantic_manifest_sha256",
+        )
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]):
+        common = _receipt_common_from_dict(
+            value,
+            expected_schema=RECEIPT_SCHEMA_V2,
+            extra_fields={"semantic_manifest_sha256"},
+        )
+        return cls(
+            **common,
+            semantic_manifest_sha256=_require_sha256(
+                value["semantic_manifest_sha256"],
+                label="semantic_manifest_sha256",
             ),
         )
 
@@ -409,62 +548,21 @@ class CertificationReceiptV1:
     def from_components(
         cls,
         *,
-        topology_bytes: bytes,
-        build_report_bytes: bytes,
-        topology_fingerprint_v3: str,
-        certificate_payload_sha256: str,
-        authoring_document_sha256: str,
-        bindings: CertificationReceiptBindingsV1,
-        mesh_counts: Mapping[str, object],
+        semantic_manifest_sha256: str,
+        **components: object,
     ):
         return cls(
-            topology_member=ArtifactMemberBindingV1.from_bytes(
-                "topology.npz", topology_bytes
+            **_receipt_common_from_components(**components),  # type: ignore[arg-type]
+            semantic_manifest_sha256=_require_sha256(
+                semantic_manifest_sha256.removeprefix("sha256:"),
+                label="semantic_manifest_sha256",
             ),
-            build_report_member=ArtifactMemberBindingV1.from_bytes(
-                "build-report.json", build_report_bytes
-            ),
-            topology_fingerprint_v3=_require_sha256(
-                topology_fingerprint_v3.removeprefix("sha256:"),
-                label="topology_fingerprint_v3",
-            ),
-            certificate=CertificateBindingV1.from_dict(
-                {
-                    "schema": MIXED_CERTIFICATE_SCHEMA,
-                    "payload_sha256": certificate_payload_sha256.removeprefix(
-                        "sha256:"
-                    ),
-                    "algorithm_id": bindings.certifier_algorithm_id,
-                }
-            ),
-            authoring=AuthoringBindingV1.from_dict(
-                {
-                    "document_sha256": authoring_document_sha256,
-                    "resolved_policy_sha256": bindings.resolved_policy_sha256,
-                }
-            ),
-            producer=bindings.producer(),
-            mesh_counts=MeshCountsV1.from_dict(mesh_counts),
         )
 
     def to_dict(self) -> dict[str, object]:
-        return {
-            "schema": self.schema,
-            "artifact_schema": self.artifact_schema,
-            "topology_member": self.topology_member.to_dict(),
-            "build_report_member": self.build_report_member.to_dict(),
-            "topology_fingerprint_v3": self.topology_fingerprint_v3,
-            "certificate": self.certificate.to_dict(),
-            "authoring": self.authoring.to_dict(),
-            "producer": self.producer.to_dict(),
-            "mesh_counts": self.mesh_counts.to_dict(),
-        }
+        payload = _receipt_common_to_dict(self)
+        payload["semantic_manifest_sha256"] = self.semantic_manifest_sha256
+        return payload
 
     def to_json_bytes(self) -> bytes:
-        return json.dumps(
-            self.to_dict(),
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-            allow_nan=False,
-        ).encode("utf-8")
+        return _receipt_json_bytes(self)

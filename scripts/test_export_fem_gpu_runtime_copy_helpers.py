@@ -2035,6 +2035,22 @@ def test_export_script_replaces_existing_runtime_binaries_before_copying() -> No
     assert 'chmod 755 "$dest"' in copy_binary_function
 
 
+def test_export_script_bundles_native_libraries_before_importing_pyo3_module() -> None:
+    script = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    fem_bundle_index = script.find(
+        'copy_native_library_group "$FEM_LIB" libfullmag_fem'
+    )
+    pyo3_import_index = script.find(
+        'LD_LIBRARY_PATH="${runtime_root}/lib:${LD_LIBRARY_PATH:-}" '
+        'PYTHONPATH="${runtime_root}" python3 -c "import _fullmag_core;'
+    )
+
+    assert fem_bundle_index != -1
+    assert pyo3_import_index != -1
+    assert fem_bundle_index < pyo3_import_index
+
+
 def test_export_script_skips_unversioned_soname_symlink_before_recreating_it() -> None:
     script = EXPORT_SCRIPT.read_text(encoding="utf-8")
 

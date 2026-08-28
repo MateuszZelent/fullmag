@@ -377,7 +377,7 @@
       "id": "mixed-tet-repair",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
       "symbol": "_repair_mixed_tetrahedra",
-      "responsibility": "Validate and execute the private mixed-tetrahedral repair policy before extraction and certificate generation."
+      "responsibility": "Validate and execute the private fail-closed mixed-tetrahedral repair policy before extraction and certificate generation."
     },
     {
       "id": "certificate",
@@ -443,8 +443,15 @@
     {
       "id": "mixed-artifact-certification-receipt",
       "path": "packages/fullmag-py/src/fullmag/meshing/_certification_receipt.py",
+      "symbol": "class CertificationReceiptV2",
+      "responsibility": "Freeze the deterministic artifact-v2 topology, build-report, certificate, authoring, producer, mesh-count, and canonical semantic-manifest bindings without a semantic timestamp.",
+      "evidence_status": "implemented_host_extension_qualified"
+    },
+    {
+      "id": "mixed-artifact-legacy-certification-receipt",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_certification_receipt.py",
       "symbol": "class CertificationReceiptV1",
-      "responsibility": "Freeze the deterministic artifact-v2 topology, build-report, certificate, authoring, producer, and mesh-count bindings without a semantic timestamp.",
+      "responsibility": "Preserve the exact pre-semantic-binding receipt parser for public full audit while excluding it from trusted fast loading.",
       "evidence_status": "implemented_host_extension_qualified"
     },
     {
@@ -452,6 +459,13 @@
       "path": "packages/fullmag-py/src/fullmag/meshing/persistence.py",
       "symbol": "save_mesh_artifact",
       "responsibility": "Emit certified mixed artifact v2 only from complete explicit bindings and a native-required certificate audit while preserving generic v1 full-audit compatibility.",
+      "evidence_status": "implemented_host_extension_qualified"
+    },
+    {
+      "id": "mixed-artifact-semantic-manifest-digest",
+      "path": "packages/fullmag-py/src/fullmag/meshing/persistence.py",
+      "symbol": "_semantic_manifest_sha256",
+      "responsibility": "Hash the normalized geometry/object region names and marker values plus sorted boundary meanings without timestamp, provenance, or member descriptors.",
       "evidence_status": "implemented_host_extension_qualified"
     },
     {
@@ -473,6 +487,13 @@
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
       "symbol": "_mint_trusted_native_preflight_receipt_proof",
       "responsibility": "Mint an identity-bound proof for private certificate attachment after verified receipt bindings and native structural preflight without Python evidence recomputation.",
+      "evidence_status": "implemented_host_extension_qualified"
+    },
+    {
+      "id": "mixed-artifact-trusted-topology-context",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "_bind_trusted_topology_fingerprint_v3",
+      "responsibility": "Compute one Python topology fingerprint and bind it to the unsigned mesh identity for reuse across trusted receipt and native-preflight checks.",
       "evidence_status": "implemented_host_extension_qualified"
     },
     {
