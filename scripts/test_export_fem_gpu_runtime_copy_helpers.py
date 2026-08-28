@@ -881,6 +881,28 @@ def test_managed_runtime_validator_binds_manifest_to_cli_and_api_startup_stamps(
     assert "API startup build identity mismatch" in invalid.stderr
 
 
+def test_managed_runtime_validator_reports_startup_stderr_when_stamp_is_missing(
+    tmp_path: Path,
+) -> None:
+    runtime, ldd, readelf = write_fake_schema_v2_bundle(tmp_path)
+    worker = runtime / "bin/fullmag-fem-gpu-bin"
+    worker.write_text(
+        "#!/bin/sh\nprintf '%s\\n' 'loader failure detail' >&2\nexit 127\n",
+        encoding="utf-8",
+    )
+    manifest_path = runtime / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["integrity"]["worker_sha256"] = hashlib.sha256(worker.read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    invalid = validate_fake_bundle(runtime, ldd, readelf)
+
+    assert invalid.returncode == 2
+    assert "CLI startup build identity is missing" in invalid.stderr
+    assert "exit status 127" in invalid.stderr
+    assert "loader failure detail" in invalid.stderr
+
+
 def test_export_uses_immutable_source_snapshot_when_host_worktree_drifts() -> None:
     exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
 
@@ -1232,7 +1254,7 @@ def test_task10_build_path_declares_fail_closed_hypre_variants() -> None:
     assert "hypre-${FULLMAG_HYPRE_MEMORY_VARIANT}" in exporter
 
     deps_stage, runtime_stage = dockerfile.split(
-        "FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS fem-gpu-dev", 1
+        "FROM cuda-base-normalized AS fem-gpu-dev", 1
     )
     assert deps_stage.index('ARG FULLMAG_HYPRE_MEMORY_VARIANT="baseline"') > deps_stage.index(
         "make -C /tmp/build/libCEED"
@@ -1243,6 +1265,20 @@ def test_task10_build_path_declares_fail_closed_hypre_variants() -> None:
     assert runtime_stage.index(
         'ARG FULLMAG_HYPRE_MEMORY_VARIANT="baseline"'
     ) > runtime_stage.index("COPY --from=deps")
+
+
+def test_managed_runtime_exports_cuda_dependency_closure_without_driver_libraries() -> None:
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    assert "copy_shared_library_dependency_closure ${runtime_root}/lib/libfullmag_fem.so.0 cuda" in exporter
+    assert "copy_shared_library_dependency_closure ${runtime_root}/lib/libfullmag_fdm.so.0 cuda" in exporter
+    assert "cuda:/usr/local/cuda-*/*|cuda:/usr/local/cuda/*" in exporter
+    assert "system:/lib/*|system:/lib64/*|system:/usr/lib/*|system:/usr/lib64/*" in exporter
+    assert "|libcuda|libnvidia-[^/]+)\\.so" in exporter
+    for library in ("libcurand.so*", "libcublas.so*", "libcusparse.so*", "libnvrtc-builtins.so*"):
+        assert f"/usr/local/cuda-12.4/targets/x86_64-linux/lib/{library}" in exporter
+
+    assert "/usr/local/cuda-12.4/targets/x86_64-linux/lib/libcuda.so" not in exporter
 
 
 def test_managed_runtime_validator_rejects_unaddressed_variant_by_default(

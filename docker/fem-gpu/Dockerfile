@@ -1,6 +1,33 @@
 ARG FULLMAG_CUDA_BASE_IMAGE="nvidia/cuda:12.4.1-devel-ubuntu22.04"
 
-FROM ${FULLMAG_CUDA_BASE_IMAGE} AS deps
+FROM ${FULLMAG_CUDA_BASE_IMAGE} AS cuda-base-normalized
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+COPY docker/fem-gpu/normalize_cuda_dpkg_lists.sh /usr/local/sbin/
+RUN /usr/local/sbin/normalize_cuda_dpkg_lists.sh && \
+    if [[ -f /var/lib/dpkg/info/.fullmag-cuda-dpkg-reinstall-required ]]; then \
+      reinstall_packages=( \
+        cuda-libraries-12-4 cuda-nvrtc-12-4 cuda-nvtx-12-4 cuda-opencl-12-4 \
+        libcublas-12-4 libcufft-12-4 libcufile-12-4 libcurand-12-4 \
+        libcusolver-12-4 libcusparse-12-4 libnccl2 libnpp-12-4 \
+        libnvfatbin-12-4 libnvjitlink-12-4 libnvjpeg-12-4 \
+      ) && \
+      reinstall_specs=() && \
+      for package in "${reinstall_packages[@]}"; do \
+        reinstall_specs+=("${package}=$(dpkg-query -W -f='${Version}' "${package}")"); \
+      done && \
+      apt-get update && \
+      apt-get install -y --no-install-recommends --reinstall "${reinstall_specs[@]}" && \
+      rm /var/lib/dpkg/info/.fullmag-cuda-dpkg-reinstall-required && \
+      rm -rf /var/lib/apt/lists/*; \
+    fi && \
+    rm /usr/local/sbin/normalize_cuda_dpkg_lists.sh
+
+COPY --chmod=755 docker/fem-gpu/nvidia-entrypoint/nvidia_entrypoint.sh /opt/nvidia/nvidia_entrypoint.sh
+COPY --chmod=644 docker/fem-gpu/nvidia-entrypoint/entrypoint.d/ /opt/nvidia/entrypoint.d/
+
+FROM cuda-base-normalized AS deps
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -141,7 +168,7 @@ RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build \
     cmake --build /tmp/build/mfem/build -j"$(nproc)" && \
     cmake --install /tmp/build/mfem/build
 
-FROM ${FULLMAG_CUDA_BASE_IMAGE} AS fem-gpu-dev
+FROM cuda-base-normalized AS fem-gpu-dev
 
 ARG FULLMAG_CUDA_ARCHITECTURES="80-real;89-real;90-real;90-virtual"
 ARG NODE_VERSION=24.18.0

@@ -673,10 +673,11 @@ copy_pkg_library_group() {
 }
 copy_shared_library_dependency_closure() {
   local initial_lib="$1"
+  local copy_scope="${2:-system}"
   local dest_dir="${runtime_root}/lib"
   local pending=("$initial_lib")
   local visited=" "
-  local skip_system_runtime_regex="/(ld-linux|ld64|libc|libdl|libm|libpthread|libresolv|librt|libutil|libgcc_s|libstdc\+\+)\.so"
+  local skip_system_runtime_regex="/(ld-linux|ld64|libc|libdl|libm|libpthread|libresolv|librt|libutil|libgcc_s|libstdc\+\+|libcuda|libnvidia-[^/]+)\.so"
   while [ "${#pending[@]}" -gt 0 ]; do
     local lib="${pending[0]}"
     pending=("${pending[@]:1}")
@@ -696,9 +697,14 @@ copy_shared_library_dependency_closure() {
     requested_name="$(basename "$lib")"
     local lib_name
     lib_name="$(basename "$resolved")"
-    case "$resolved" in
-      /lib/*|/lib64/*|/usr/lib/*|/usr/lib64/*)
+    case "$copy_scope:$resolved" in
+      system:/lib/*|system:/lib64/*|system:/usr/lib/*|system:/usr/lib64/*|cuda:/usr/local/cuda-*/*|cuda:/usr/local/cuda/*)
         copy_runtime_resolved_dependency_pair "$lib" "$resolved" "$dest_dir"
+        ;;
+      system:*|cuda:*) ;;
+      *)
+        echo "[export_fem_gpu_runtime] unsupported dependency-copy scope: $copy_scope" >&2
+        exit 2
         ;;
     esac
     while IFS= read -r dep; do
@@ -738,6 +744,9 @@ FDM_LIB="$(latest_native_lib_dir "*fullmag-fdm-sys*/out/native-build/backends/fd
 echo "[export_fem_gpu_runtime] bundling FEM and FDM native libraries"
 copy_native_library_group "$FEM_LIB" libfullmag_fem
 copy_native_library_group "$FDM_LIB" libfullmag_fdm
+echo "[export_fem_gpu_runtime] bundling native shared-library dependency closure"
+copy_shared_library_dependency_closure ${runtime_root}/lib/libfullmag_fem.so.0 cuda
+copy_shared_library_dependency_closure ${runtime_root}/lib/libfullmag_fdm.so.0 cuda
 validate_nvtx_artifact() {
   local artifact="$1"
   shift
@@ -842,11 +851,12 @@ mkdir -p ${runtime_root}/include/openmpi
 cp -a /usr/lib/x86_64-linux-gnu/openmpi/include/. ${runtime_root}/include/openmpi/
 echo "[export_fem_gpu_runtime] bundling CUDA headers included by MFEM"
 cp -a /usr/local/cuda-12.4/targets/x86_64-linux/include/. ${runtime_root}/include/
-echo "[export_fem_gpu_runtime] bundling CUDA shared libraries referenced by MFEMTargets"
+echo "[export_fem_gpu_runtime] bundling CUDA libraries required by metadata or dynamic loading"
 for cuda_lib in \
   /usr/local/cuda-12.4/targets/x86_64-linux/lib/libcurand.so* \
   /usr/local/cuda-12.4/targets/x86_64-linux/lib/libcublas.so* \
-  /usr/local/cuda-12.4/targets/x86_64-linux/lib/libcusparse.so*; do
+  /usr/local/cuda-12.4/targets/x86_64-linux/lib/libcusparse.so* \
+  /usr/local/cuda-12.4/targets/x86_64-linux/lib/libnvrtc-builtins.so*; do
   if [ -e "$cuda_lib" ]; then
     copy_runtime_entry_replace "$cuda_lib" ${runtime_root}/lib
   fi
