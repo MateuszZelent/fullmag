@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <chrono>
 #include <cstring>
@@ -32,6 +33,18 @@ std::filesystem::path repository_root() {
     auto path = std::filesystem::path(__FILE__);
     if (!path.is_absolute()) path = std::filesystem::absolute(path);
     return path.parent_path().parent_path().parent_path().parent_path();
+}
+
+std::array<double, 3> constant_field_macrospin_oracle(double time_seconds) {
+    constexpr double alpha = 0.1;
+    constexpr double gamma = 2.211e5;
+    constexpr double field = 2.0e5;
+    const double gamma_bar = gamma / (1.0 + alpha * alpha);
+    const double phase = gamma_bar * field * time_seconds;
+    const double damping_phase = alpha * phase;
+    const double transverse = 1.0 / std::cosh(damping_phase);
+    return {transverse * std::cos(phase), transverse * std::sin(phase),
+            std::tanh(damping_phase)};
 }
 }
 
@@ -326,6 +339,75 @@ int main() {
                                  FULLMAG_FDM_PRECISION_SINGLE}) {
         check_device_batch(precision, FULLMAG_FDM_INTEGRATOR_RK23);
         check_device_batch(precision, FULLMAG_FDM_INTEGRATOR_DP45);
+    }
+
+    auto check_batched_macrospin_oracle = [&](fullmag_fdm_precision precision,
+                                               fullmag_fdm_integrator integrator) {
+        constexpr double dt = 5.0e-13;
+        constexpr double target_time = 20.0 * dt;
+        auto plan = invalid;
+        plan.base.precision = precision;
+        plan.base.integrator = integrator;
+        plan.base.stats_mode = FULLMAG_FDM_STATS_NONE;
+        plan.base.has_external_field = 1;
+        plan.base.external_field_am[2] = 2.0e5;
+        plan.time_policy = {1, FULLMAG_FDM_ADAPTIVE_ADVANCED, 1.0e-5, 0.0,
+                            1.0e-16, dt, 0.9, 2.0, 0.2, 0, 0.0, 0, 0.0};
+        auto *backend = fullmag_fdm_backend_create_time_policy_v2(&plan);
+        check(backend != nullptr && fullmag_fdm_backend_last_error(backend) == nullptr,
+              "batched macrospin oracle fixture passes checked-v2 validation");
+        fullmag_fdm_adaptive_batch_step_v1 records[64]{};
+        uint32_t count = 0;
+        const int status = fullmag_fdm_backend_step_adaptive_batch_v1(
+            backend, dt, target_time, 64, records, 64, &count);
+        if (status != FULLMAG_FDM_OK) {
+            const char *message = fullmag_fdm_backend_last_error(backend);
+            std::fprintf(stderr, "batched macrospin oracle error: %s\n",
+                         message != nullptr ? message : "<none>");
+        }
+        check(status == FULLMAG_FDM_OK && count > 0 && count <= 64 &&
+                  std::abs(records[count - 1].time_seconds - target_time) <= 1.0e-18,
+              "batched macrospin reaches the exact oracle target time");
+
+        double actual[3]{};
+        check(fullmag_fdm_backend_copy_field_f64(
+                  backend, FULLMAG_FDM_OBSERVABLE_M, actual, 3) == FULLMAG_FDM_OK,
+              "batched macrospin publishes its final magnetization");
+        const auto expected = constant_field_macrospin_oracle(target_time);
+        double max_error = 0.0;
+        for (uint32_t component = 0; component < 3; ++component) {
+            max_error = std::max(max_error,
+                                 std::abs(actual[component] - expected[component]));
+        }
+        const double tolerance = precision == FULLMAG_FDM_PRECISION_DOUBLE
+            ? (integrator == FULLMAG_FDM_INTEGRATOR_RK23 ? 2.0e-5 : 2.0e-8)
+            : 5.0e-4;
+        std::fprintf(stdout,
+                     "adaptive batch macrospin precision=%u integrator=%u accepted=%u error=%.17e tolerance=%.17e\n",
+                     static_cast<unsigned>(precision),
+                     static_cast<unsigned>(integrator), count, max_error, tolerance);
+        check(max_error <= tolerance,
+              "batched adaptive CUDA trajectory matches the independent Gilbert oracle");
+
+        fullmag_fdm_execution_receipt_v2 receipt{};
+        receipt.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2;
+        receipt.struct_size = sizeof(receipt);
+        check(fullmag_fdm_backend_execution_receipt_v2(backend, &receipt) ==
+                  FULLMAG_FDM_OK &&
+                  receipt.executed_backend == FULLMAG_FDM_EXECUTED_CUDA_FDM &&
+                  receipt.precision == precision &&
+                  receipt.integrator == integrator &&
+                  receipt.fallback_count == 0 &&
+                  receipt.accounting_valid == 1 &&
+                  receipt.hot_loop_control_scalar_d2h_bytes == 0 &&
+                  receipt.hot_loop_control_scalar_host_sync_count == 0,
+              "batched macrospin receipt proves exact CUDA execution without fallback or hot-loop control readback");
+        fullmag_fdm_backend_destroy(backend);
+    };
+    for (const auto precision : {FULLMAG_FDM_PRECISION_DOUBLE,
+                                 FULLMAG_FDM_PRECISION_SINGLE}) {
+        check_batched_macrospin_oracle(precision, FULLMAG_FDM_INTEGRATOR_RK23);
+        check_batched_macrospin_oracle(precision, FULLMAG_FDM_INTEGRATOR_DP45);
     }
 
     auto check_failed_batch_rollback = [&](fullmag_fdm_precision precision,

@@ -197,7 +197,7 @@
       "validated_at": null,
       "validator_schema": null,
       "completed_gates": [],
-      "reason": "Native v2 adaptive controller is executable; no exact adaptive FDM CUDA qualification artifact is registered."
+      "reason": "Managed CUDA proves the public headless batched runner, RK23/RK45 FP64 Gilbert macrospin oracle, atomic rollback, same-time field parity, zero fallback, zero hot-loop control-scalar D2H, and at least tenfold fewer terminal synchronizations; no clean hash-bound artifact for an exact adaptive FDM CUDA integrator/interaction tuple is registered."
     }
   ]
 }
