@@ -6,6 +6,7 @@
  */
 
 #include "context.hpp"
+#include "../runtime/adaptive_controller.cuh"
 #include "fsal_policy.hpp"
 
 #include <cuda_runtime.h>
@@ -48,10 +49,12 @@ __global__ void rk23_stage_1_fp32_kernel(
     const float * __restrict__ mx, const float * __restrict__ my, const float * __restrict__ mz,
     const float * __restrict__ k1x, const float * __restrict__ k1y, const float * __restrict__ k1z,
     float * __restrict__ out_x, float * __restrict__ out_y, float * __restrict__ out_z,
-    int n, float dt, float a1)
+    int n, float host_dt, float a1,
+    const AdaptiveDeviceControl *adaptive_control)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
+    const float dt = adaptive_attempt_dt(adaptive_control, host_dt);
     float px = mx[idx] + dt * a1 * k1x[idx];
     float py = my[idx] + dt * a1 * k1y[idx];
     float pz = mz[idx] + dt * a1 * k1z[idx];
@@ -66,10 +69,12 @@ __global__ void rk23_stage_3_fp32_kernel(
     const float * __restrict__ k2x, const float * __restrict__ k2y, const float * __restrict__ k2z,
     const float * __restrict__ k3x, const float * __restrict__ k3y, const float * __restrict__ k3z,
     float * __restrict__ out_x, float * __restrict__ out_y, float * __restrict__ out_z,
-    int n, float dt, float a1, float a2, float a3)
+    int n, float host_dt, float a1, float a2, float a3,
+    const AdaptiveDeviceControl *adaptive_control)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
+    const float dt = adaptive_attempt_dt(adaptive_control, host_dt);
     float px = mx[idx] + dt * (a1*k1x[idx] + a2*k2x[idx] + a3*k3x[idx]);
     float py = my[idx] + dt * (a1*k1y[idx] + a2*k2y[idx] + a3*k3y[idx]);
     float pz = mz[idx] + dt * (a1*k1z[idx] + a2*k2z[idx] + a3*k3z[idx]);
@@ -92,10 +97,12 @@ __global__ void rk23_error_fp32_kernel(
     int has_active_mask,
     int has_frozen_mask,
     double * __restrict__ error_sq,
-    int n, double dt, double atol, double rtol)
+    int n, double host_dt, double atol, double rtol,
+    const AdaptiveDeviceControl *adaptive_control)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
+    const double dt = adaptive_attempt_dt(adaptive_control, host_dt);
     if ((has_active_mask && active_mask[idx] == 0) ||
         (has_frozen_mask && frozen_mask[idx] != 0)) {
         error_sq[idx] = 0.0;
@@ -200,7 +207,7 @@ void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const float*>(ctx.tmp.x), static_cast<const float*>(ctx.tmp.y), static_cast<const float*>(ctx.tmp.z),
             static_cast<const float*>(ctx.k1.x), static_cast<const float*>(ctx.k1.y), static_cast<const float*>(ctx.k1.z),
             static_cast<float*>(ctx.m.x), static_cast<float*>(ctx.m.y), static_cast<float*>(ctx.m.z),
-            n, dt_f, A21);
+            n, dt_f, A21, nullptr);
         if (!compute_rhs_into_fp32(ctx, ctx.k2, n, grid, gamma_bar_f, alpha_f,
                                    step_start_time + static_cast<double>(A21) * dt)) return;
         if (abort_step_from_tmp(ctx)) return;
@@ -210,7 +217,7 @@ void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const float*>(ctx.tmp.x), static_cast<const float*>(ctx.tmp.y), static_cast<const float*>(ctx.tmp.z),
             static_cast<const float*>(ctx.k2.x), static_cast<const float*>(ctx.k2.y), static_cast<const float*>(ctx.k2.z),
             static_cast<float*>(ctx.m.x), static_cast<float*>(ctx.m.y), static_cast<float*>(ctx.m.z),
-            n, dt_f, A32);
+            n, dt_f, A32, nullptr);
         if (!compute_rhs_into_fp32(ctx, ctx.k3, n, grid, gamma_bar_f, alpha_f,
                                    step_start_time + static_cast<double>(A32) * dt)) return;
         if (abort_step_from_tmp(ctx)) return;
@@ -222,7 +229,7 @@ void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const float*>(ctx.k2.x), static_cast<const float*>(ctx.k2.y), static_cast<const float*>(ctx.k2.z),
             static_cast<const float*>(ctx.k3.x), static_cast<const float*>(ctx.k3.y), static_cast<const float*>(ctx.k3.z),
             static_cast<float*>(ctx.m.x), static_cast<float*>(ctx.m.y), static_cast<float*>(ctx.m.z),
-            n, dt_f, B1, B2, B3);
+            n, dt_f, B1, B2, B3, nullptr);
         if (abort_step_from_tmp(ctx)) return;
 
         if (!ctx.adaptive_enabled) {
@@ -255,7 +262,8 @@ void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const float*>(ctx.m.x), static_cast<const float*>(ctx.m.y), static_cast<const float*>(ctx.m.z),
             ctx.active_mask, ctx.frozen_mask,
             ctx.has_active_mask ? 1 : 0, ctx.has_frozen_mask ? 1 : 0,
-            ctx.reduction_scratch, n, dt, ctx.adaptive_atol, ctx.adaptive_rtol);
+            ctx.reduction_scratch, n, dt, ctx.adaptive_atol, ctx.adaptive_rtol,
+            nullptr);
 
         AdaptiveErrorPolicy policy = reduce_error_policy(ctx, ctx.cell_count, dt);
 

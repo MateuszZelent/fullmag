@@ -11,6 +11,7 @@
  */
 
 #include "context.hpp"
+#include "../runtime/adaptive_controller.cuh"
 #include "fsal_policy.hpp"
 
 #include <cuda_runtime.h>
@@ -58,10 +59,12 @@ __global__ void dp45_rk_stage_1_kernel(
     const double * __restrict__ mx, const double * __restrict__ my, const double * __restrict__ mz,
     const double * __restrict__ k1x, const double * __restrict__ k1y, const double * __restrict__ k1z,
     double * __restrict__ out_x, double * __restrict__ out_y, double * __restrict__ out_z,
-    int n, double dt, double a1)
+    int n, double host_dt, double a1,
+    const AdaptiveDeviceControl *adaptive_control)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
+    const double dt = adaptive_attempt_dt(adaptive_control, host_dt);
 
     double px = mx[idx] + dt * a1 * k1x[idx];
     double py = my[idx] + dt * a1 * k1y[idx];
@@ -79,10 +82,12 @@ __global__ void dp45_rk_stage_2_kernel(
     const double * __restrict__ k1x, const double * __restrict__ k1y, const double * __restrict__ k1z,
     const double * __restrict__ k2x, const double * __restrict__ k2y, const double * __restrict__ k2z,
     double * __restrict__ out_x, double * __restrict__ out_y, double * __restrict__ out_z,
-    int n, double dt, double a1, double a2)
+    int n, double host_dt, double a1, double a2,
+    const AdaptiveDeviceControl *adaptive_control)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
+    const double dt = adaptive_attempt_dt(adaptive_control, host_dt);
 
     double px = mx[idx] + dt * (a1 * k1x[idx] + a2 * k2x[idx]);
     double py = my[idx] + dt * (a1 * k1y[idx] + a2 * k2y[idx]);
@@ -102,10 +107,12 @@ __global__ void dp45_rk_stage_4_kernel(
     const double * __restrict__ k3x, const double * __restrict__ k3y, const double * __restrict__ k3z,
     const double * __restrict__ k4x, const double * __restrict__ k4y, const double * __restrict__ k4z,
     double * __restrict__ out_x, double * __restrict__ out_y, double * __restrict__ out_z,
-    int n, double dt, double a1, double a2, double a3, double a4)
+    int n, double host_dt, double a1, double a2, double a3, double a4,
+    const AdaptiveDeviceControl *adaptive_control)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
+    const double dt = adaptive_attempt_dt(adaptive_control, host_dt);
 
     double px = mx[idx] + dt * (a1*k1x[idx] + a2*k2x[idx] + a3*k3x[idx] + a4*k4x[idx]);
     double py = my[idx] + dt * (a1*k1y[idx] + a2*k2y[idx] + a3*k3y[idx] + a4*k4y[idx]);
@@ -126,10 +133,12 @@ __global__ void dp45_rk_stage_5_kernel(
     const double * __restrict__ k4x, const double * __restrict__ k4y, const double * __restrict__ k4z,
     const double * __restrict__ k5x, const double * __restrict__ k5y, const double * __restrict__ k5z,
     double * __restrict__ out_x, double * __restrict__ out_y, double * __restrict__ out_z,
-    int n, double dt, double a1, double a2, double a3, double a4, double a5)
+    int n, double host_dt, double a1, double a2, double a3, double a4, double a5,
+    const AdaptiveDeviceControl *adaptive_control)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
+    const double dt = adaptive_attempt_dt(adaptive_control, host_dt);
 
     double px = mx[idx] + dt * (a1*k1x[idx] + a2*k2x[idx] + a3*k3x[idx] + a4*k4x[idx] + a5*k5x[idx]);
     double py = my[idx] + dt * (a1*k1y[idx] + a2*k2y[idx] + a3*k3y[idx] + a4*k4y[idx] + a5*k5y[idx]);
@@ -163,10 +172,12 @@ __global__ void dp45_error_kernel(
     int has_active_mask,
     int has_frozen_mask,
     double * __restrict__ error_sq,
-    int n, double dt, double atol, double rtol)
+    int n, double host_dt, double atol, double rtol,
+    const AdaptiveDeviceControl *adaptive_control)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
+    const double dt = adaptive_attempt_dt(adaptive_control, host_dt);
     if ((has_active_mask && active_mask[idx] == 0) ||
         (has_frozen_mask && frozen_mask[idx] != 0)) {
         error_sq[idx] = 0.0;
@@ -307,7 +318,7 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const double*>(ctx.tmp.x), static_cast<const double*>(ctx.tmp.y), static_cast<const double*>(ctx.tmp.z),
             static_cast<const double*>(ctx.k1.x), static_cast<const double*>(ctx.k1.y), static_cast<const double*>(ctx.k1.z),
             static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
-            n, dt, A21);
+            n, dt, A21, nullptr);
         if (!compute_rhs_into(ctx, ctx.k2, n, grid, gamma_bar, alpha,
                               step_start_time + (1.0 / 5.0) * dt, 2)) return;
         if (abort_step_from_tmp(ctx)) return;
@@ -318,7 +329,7 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const double*>(ctx.k1.x), static_cast<const double*>(ctx.k1.y), static_cast<const double*>(ctx.k1.z),
             static_cast<const double*>(ctx.k2.x), static_cast<const double*>(ctx.k2.y), static_cast<const double*>(ctx.k2.z),
             static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
-            n, dt, A31, A32);
+            n, dt, A31, A32, nullptr);
         if (!compute_rhs_into(ctx, ctx.k3, n, grid, gamma_bar, alpha,
                               step_start_time + (3.0 / 10.0) * dt, 3)) return;
         if (abort_step_from_tmp(ctx)) return;
@@ -331,7 +342,7 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const double*>(ctx.k3.x), static_cast<const double*>(ctx.k3.y), static_cast<const double*>(ctx.k3.z),
             static_cast<const double*>(ctx.k3.x), static_cast<const double*>(ctx.k3.y), static_cast<const double*>(ctx.k3.z), // dummy, not used
             static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
-            n, dt, A41, A42, A43, 0.0);
+            n, dt, A41, A42, A43, 0.0, nullptr);
         if (!compute_rhs_into(ctx, ctx.k4, n, grid, gamma_bar, alpha,
                               step_start_time + (4.0 / 5.0) * dt, 4)) return;
         if (abort_step_from_tmp(ctx)) return;
@@ -344,7 +355,7 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const double*>(ctx.k3.x), static_cast<const double*>(ctx.k3.y), static_cast<const double*>(ctx.k3.z),
             static_cast<const double*>(ctx.k4.x), static_cast<const double*>(ctx.k4.y), static_cast<const double*>(ctx.k4.z),
             static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
-            n, dt, A51, A52, A53, A54);
+            n, dt, A51, A52, A53, A54, nullptr);
         if (!compute_rhs_into(ctx, ctx.k5, n, grid, gamma_bar, alpha,
                               step_start_time + (8.0 / 9.0) * dt, 5)) return;
         if (abort_step_from_tmp(ctx)) return;
@@ -358,7 +369,7 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const double*>(ctx.k4.x), static_cast<const double*>(ctx.k4.y), static_cast<const double*>(ctx.k4.z),
             static_cast<const double*>(ctx.k5.x), static_cast<const double*>(ctx.k5.y), static_cast<const double*>(ctx.k5.z),
             static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
-            n, dt, A61, A62, A63, A64, A65);
+            n, dt, A61, A62, A63, A64, A65, nullptr);
         if (!compute_rhs_into(ctx, ctx.k6, n, grid, gamma_bar, alpha,
                               step_start_time + dt, 6)) return;
         if (abort_step_from_tmp(ctx)) return;
@@ -372,7 +383,7 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const double*>(ctx.k5.x), static_cast<const double*>(ctx.k5.y), static_cast<const double*>(ctx.k5.z),
             static_cast<const double*>(ctx.k6.x), static_cast<const double*>(ctx.k6.y), static_cast<const double*>(ctx.k6.z),
             static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
-            n, dt, B1, B3, B4, B5, B6);
+            n, dt, B1, B3, B4, B5, B6, nullptr);
         if (abort_step_from_tmp(ctx)) return;
 
         if (!ctx.adaptive_enabled) {
@@ -408,7 +419,7 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             ctx.active_mask, ctx.frozen_mask,
             ctx.has_active_mask ? 1 : 0, ctx.has_frozen_mask ? 1 : 0,
             ctx.reduction_scratch,
-            n, dt, ctx.adaptive_atol, ctx.adaptive_rtol);
+            n, dt, ctx.adaptive_atol, ctx.adaptive_rtol, nullptr);
 
         AdaptiveErrorPolicy policy = reduce_error_policy(ctx, ctx.cell_count, dt);
         if (policy.dt_min_exhausted) {

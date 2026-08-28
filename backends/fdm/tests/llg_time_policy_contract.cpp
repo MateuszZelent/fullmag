@@ -41,6 +41,8 @@ int main() {
     const auto runner = read(root / "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs");
     const auto runtime = read(root / "backends/fdm/gpu/cuda/runtime/context.cu");
     const auto reductions = read(root / "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu");
+    const auto adaptive_controller = read(
+        root / "backends/fdm/gpu/cuda/runtime/adaptive_controller.cuh");
     const auto rk23 = read(root / "backends/fdm/gpu/cuda/integrators/llg_rk23_fp64.cu");
     const auto rk45 = read(root / "backends/fdm/gpu/cuda/integrators/llg_dp45_fp64.cu");
     const auto rk23_fp32 = read(root / "backends/fdm/gpu/cuda/integrators/llg_rk23_fp32.cu");
@@ -79,9 +81,9 @@ int main() {
           "CUDA adaptive policy returns typed dt_min_exhausted");
     check(reductions.find("adaptive::decide_adaptive_step") == std::string::npos,
           "checked-v2 canonical PI decision is not recomputed on the host");
-    check(reductions.find("ADAPTIVE_MAX_REJECTED_ATTEMPTS = 50") !=
+    check(adaptive_controller.find("ADAPTIVE_MAX_REJECTED_ATTEMPTS = 50") !=
               std::string::npos &&
-              reductions.find("ADAPTIVE_DEVICE_REASON_RETRY_LIMIT_EXHAUSTED") !=
+              adaptive_controller.find("ADAPTIVE_DEVICE_REASON_RETRY_LIMIT_EXHAUSTED") !=
                   std::string::npos,
           "CUDA adaptive policy owns the canonical bounded retry limit on device");
     check(reductions.find("dt <= adaptive_dt_min) ? 1.0") == std::string::npos,
