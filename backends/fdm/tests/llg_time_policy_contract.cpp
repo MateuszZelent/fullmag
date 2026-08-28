@@ -237,7 +237,9 @@ int main() {
         check(receipt.hot_loop_host_compute_count == 0,
               "canonical adaptive PI decision performs zero hot-loop host compute");
         const bool uses_conditional_graph =
-            integrator == FULLMAG_FDM_INTEGRATOR_RK23;
+            integrator == FULLMAG_FDM_INTEGRATOR_RK23 ||
+            (precision == FULLMAG_FDM_PRECISION_DOUBLE &&
+             integrator == FULLMAG_FDM_INTEGRATOR_DP45);
         if (uses_conditional_graph) {
             check(receipt.hot_loop_control_scalar_d2h_bytes == 0 &&
                       receipt.hot_loop_control_scalar_host_sync_count == 0,

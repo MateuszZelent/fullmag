@@ -22,9 +22,13 @@ namespace fullmag {
 namespace fdm {
 
 // External declarations
+extern void set_cuda_error(Context &ctx, const char *operation, cudaError_t err);
 extern void launch_exchange_field_fp64(Context &ctx);
+extern void launch_exchange_field_fp64(Context &ctx, cudaStream_t stream);
 extern void launch_demag_field_fp64(Context &ctx);
 extern void launch_effective_field_fp64(Context &ctx, double evaluation_time);
+extern void launch_effective_field_fp64(
+    Context &ctx, double evaluation_time, cudaStream_t stream);
 extern double launch_exchange_energy_fp64(Context &ctx);
 extern double launch_demag_energy_fp64(Context &ctx);
 extern double launch_external_energy_fp64(Context &ctx);
@@ -48,6 +52,27 @@ extern __global__ void llg_rhs_fp64_kernel(
     const double * __restrict__ hx, const double * __restrict__ hy, const double * __restrict__ hz,
     double * __restrict__ out_x, double * __restrict__ out_y, double * __restrict__ out_z,
     int n, double gamma_bar, double alpha, int disable_precession, SttParams stt, SotParams sot);
+
+constexpr double A21 = 1.0 / 5.0;
+constexpr double A31 = 3.0 / 40.0;
+constexpr double A32 = 9.0 / 40.0;
+constexpr double A41 = 44.0 / 45.0;
+constexpr double A42 = -56.0 / 15.0;
+constexpr double A43 = 32.0 / 9.0;
+constexpr double A51 = 19372.0 / 6561.0;
+constexpr double A52 = -25360.0 / 2187.0;
+constexpr double A53 = 64448.0 / 6561.0;
+constexpr double A54 = -212.0 / 729.0;
+constexpr double A61 = 9017.0 / 3168.0;
+constexpr double A62 = -355.0 / 33.0;
+constexpr double A63 = 46732.0 / 5247.0;
+constexpr double A64 = 49.0 / 176.0;
+constexpr double A65 = -5103.0 / 18656.0;
+constexpr double B1 = 35.0 / 384.0;
+constexpr double B3 = 500.0 / 1113.0;
+constexpr double B4 = 125.0 / 192.0;
+constexpr double B5 = -2187.0 / 6784.0;
+constexpr double B6 = 11.0 / 84.0;
 
 /* ── Fused MADD + normalize kernel ──
  *
@@ -223,29 +248,30 @@ static void copy_field_d2d(DeviceVectorField &dst, const DeviceVectorField &src,
 
 static bool compute_rhs_into(Context &ctx, DeviceVectorField &rhs_out,
     int n, int grid, double gamma_bar, double alpha, double evaluation_time,
-    uint64_t stage_id)
+    uint64_t stage_id, bool allow_host_boundaries = true,
+    cudaStream_t stream = nullptr)
 {
     if (ctx.enable_exchange) {
-        launch_exchange_field_fp64(ctx);
-        if (poll_interrupt(ctx)) {
+        launch_exchange_field_fp64(ctx, stream);
+        if (allow_host_boundaries && poll_interrupt(ctx)) {
             abort_step_after_interrupt(ctx);
             return false;
         }
     }
     if (ctx.enable_demag) {
         launch_demag_field_fp64(ctx);
-        if (poll_interrupt(ctx)) {
+        if (allow_host_boundaries && poll_interrupt(ctx)) {
             abort_step_after_interrupt(ctx);
             return false;
         }
     }
-    launch_effective_field_fp64(ctx, evaluation_time);
-    if (poll_interrupt(ctx)) {
+    launch_effective_field_fp64(ctx, evaluation_time, stream);
+    if (allow_host_boundaries && poll_interrupt(ctx)) {
         abort_step_after_interrupt(ctx);
         return false;
     }
 
-    llg_rhs_fp64_kernel<<<grid, 256>>>(
+    llg_rhs_fp64_kernel<<<grid, 256, 0, stream>>>(
         static_cast<const double*>(ctx.m.x),
         static_cast<const double*>(ctx.m.y),
         static_cast<const double*>(ctx.m.z),
@@ -258,13 +284,19 @@ static bool compute_rhs_into(Context &ctx, DeviceVectorField &rhs_out,
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
     fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "DP45 fp64 LLG RHS launch");
-    if (!context_evaluate_gpu_transport_rhs(
-            ctx, ctx.m, evaluation_time,
-            ctx.gpu_transport_active_attempt_id, stage_id) ||
-        !launch_add_gpu_transport_torque_fp64(ctx, ctx.m, rhs_out)) {
-        return false;
+    if (ctx.gpu_transport_rhs.active) {
+        if (!allow_host_boundaries) {
+            ctx.last_error = "adaptive_device_loop_gpu_transport_unsupported";
+            return false;
+        }
+        if (!context_evaluate_gpu_transport_rhs(
+                ctx, ctx.m, evaluation_time,
+                ctx.gpu_transport_active_attempt_id, stage_id) ||
+            !launch_add_gpu_transport_torque_fp64(ctx, ctx.m, rhs_out)) {
+            return false;
+        }
     }
-    if (poll_interrupt(ctx)) {
+    if (allow_host_boundaries && poll_interrupt(ctx)) {
         abort_step_after_interrupt(ctx);
         return false;
     }
@@ -277,6 +309,342 @@ static AdaptiveErrorPolicy reduce_error_policy(Context &ctx, uint64_t n, double 
     return reduce_adaptive_error_policy(ctx, ctx.reduction_scratch, n, dt, 0.2);
 }
 
+static void finish_dp45_accepted_step_fp64(
+    Context &ctx,
+    double dt,
+    double dt_next,
+    fullmag_fdm_step_stats *stats)
+{
+    context_stage_fsal_accepted_step(ctx, dt);
+    if (!fullmag_fdm_should_fill_step_stats(ctx)) {
+        fullmag_fdm_fill_step_stats_metadata(ctx, stats, dt, dt_next);
+        return;
+    }
+    const double e_ex =
+        ctx.enable_exchange ? launch_exchange_energy_fp64(ctx) : 0.0;
+    const double e_demag = launch_demag_energy_fp64(ctx);
+    const double e_ext = launch_external_energy_fp64(ctx);
+    const double e_aniso = reduce_uniaxial_anisotropy_energy_fp64(ctx);
+    const double e_cubic = reduce_cubic_anisotropy_energy_fp64(ctx);
+    const double e_dmi = reduce_dmi_energy_fp64(ctx);
+    const double max_h_eff = reduce_max_norm_fp64(
+        ctx, ctx.work.x, ctx.work.y, ctx.work.z, ctx.cell_count);
+    const double max_h_demag = ctx.enable_demag
+        ? reduce_max_norm_fp64(
+            ctx, ctx.h_demag.x, ctx.h_demag.y, ctx.h_demag.z,
+            ctx.cell_count)
+        : 0.0;
+    const double max_torque = reduce_max_cross_norm_fp64(
+        ctx,
+        ctx.m.x, ctx.m.y, ctx.m.z,
+        ctx.work.x, ctx.work.y, ctx.work.z,
+        ctx.cell_count);
+    const double max_dm_dt = reduce_max_norm_fp64(
+        ctx, ctx.k_fsal.x, ctx.k_fsal.y, ctx.k_fsal.z,
+        ctx.cell_count);
+
+    stats->step = ctx.pending_step_count;
+    stats->time_seconds = ctx.pending_time;
+    stats->dt_seconds = dt;
+    stats->exchange_energy_joules = e_ex;
+    stats->demag_energy_joules = e_demag;
+    stats->external_energy_joules = e_ext;
+    stats->anisotropy_energy_joules = e_aniso;
+    stats->cubic_energy_joules = e_cubic;
+    stats->dmi_energy_joules = e_dmi;
+    stats->total_energy_joules =
+        e_ex + e_demag + e_ext + e_aniso + e_cubic + e_dmi;
+    stats->max_effective_field_amplitude = max_h_eff;
+    stats->max_demag_field_amplitude = max_h_demag;
+    stats->max_rhs_amplitude = max_dm_dt;
+    stats->max_torque_Apm = max_torque;
+    stats->suggested_next_dt = dt_next;
+}
+
+static bool enqueue_dp45_adaptive_attempt_fp64(
+    Context &ctx,
+    int n,
+    int grid,
+    double gamma_bar,
+    double alpha,
+    double step_start_time,
+    cudaStream_t stream)
+{
+    const auto *control = ctx.adaptive_policy_scratch;
+    const size_t bytes = ctx.cell_count * sizeof(double);
+    cudaMemcpyAsync(ctx.m.x, ctx.tmp.x, bytes, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(ctx.m.y, ctx.tmp.y, bytes, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(ctx.m.z, ctx.tmp.z, bytes, cudaMemcpyDeviceToDevice, stream);
+
+    if (!compute_rhs_into(
+            ctx, ctx.k1, n, grid, gamma_bar, alpha, step_start_time,
+            1, false, stream)) return false;
+    dp45_rk_stage_1_kernel<<<grid, 256, 0, stream>>>(
+        static_cast<const double *>(ctx.tmp.x),
+        static_cast<const double *>(ctx.tmp.y),
+        static_cast<const double *>(ctx.tmp.z),
+        static_cast<const double *>(ctx.k1.x),
+        static_cast<const double *>(ctx.k1.y),
+        static_cast<const double *>(ctx.k1.z),
+        static_cast<double *>(ctx.m.x),
+        static_cast<double *>(ctx.m.y),
+        static_cast<double *>(ctx.m.z),
+        n, 0.0, A21, control);
+    if (!compute_rhs_into(
+            ctx, ctx.k2, n, grid, gamma_bar, alpha, step_start_time,
+            2, false, stream)) return false;
+
+    dp45_rk_stage_2_kernel<<<grid, 256, 0, stream>>>(
+        static_cast<const double *>(ctx.tmp.x),
+        static_cast<const double *>(ctx.tmp.y),
+        static_cast<const double *>(ctx.tmp.z),
+        static_cast<const double *>(ctx.k1.x),
+        static_cast<const double *>(ctx.k1.y),
+        static_cast<const double *>(ctx.k1.z),
+        static_cast<const double *>(ctx.k2.x),
+        static_cast<const double *>(ctx.k2.y),
+        static_cast<const double *>(ctx.k2.z),
+        static_cast<double *>(ctx.m.x),
+        static_cast<double *>(ctx.m.y),
+        static_cast<double *>(ctx.m.z),
+        n, 0.0, A31, A32, control);
+    if (!compute_rhs_into(
+            ctx, ctx.k3, n, grid, gamma_bar, alpha, step_start_time,
+            3, false, stream)) return false;
+
+    dp45_rk_stage_4_kernel<<<grid, 256, 0, stream>>>(
+        static_cast<const double *>(ctx.tmp.x),
+        static_cast<const double *>(ctx.tmp.y),
+        static_cast<const double *>(ctx.tmp.z),
+        static_cast<const double *>(ctx.k1.x),
+        static_cast<const double *>(ctx.k1.y),
+        static_cast<const double *>(ctx.k1.z),
+        static_cast<const double *>(ctx.k2.x),
+        static_cast<const double *>(ctx.k2.y),
+        static_cast<const double *>(ctx.k2.z),
+        static_cast<const double *>(ctx.k3.x),
+        static_cast<const double *>(ctx.k3.y),
+        static_cast<const double *>(ctx.k3.z),
+        static_cast<const double *>(ctx.k3.x),
+        static_cast<const double *>(ctx.k3.y),
+        static_cast<const double *>(ctx.k3.z),
+        static_cast<double *>(ctx.m.x),
+        static_cast<double *>(ctx.m.y),
+        static_cast<double *>(ctx.m.z),
+        n, 0.0, A41, A42, A43, 0.0, control);
+    if (!compute_rhs_into(
+            ctx, ctx.k4, n, grid, gamma_bar, alpha, step_start_time,
+            4, false, stream)) return false;
+
+    dp45_rk_stage_4_kernel<<<grid, 256, 0, stream>>>(
+        static_cast<const double *>(ctx.tmp.x),
+        static_cast<const double *>(ctx.tmp.y),
+        static_cast<const double *>(ctx.tmp.z),
+        static_cast<const double *>(ctx.k1.x),
+        static_cast<const double *>(ctx.k1.y),
+        static_cast<const double *>(ctx.k1.z),
+        static_cast<const double *>(ctx.k2.x),
+        static_cast<const double *>(ctx.k2.y),
+        static_cast<const double *>(ctx.k2.z),
+        static_cast<const double *>(ctx.k3.x),
+        static_cast<const double *>(ctx.k3.y),
+        static_cast<const double *>(ctx.k3.z),
+        static_cast<const double *>(ctx.k4.x),
+        static_cast<const double *>(ctx.k4.y),
+        static_cast<const double *>(ctx.k4.z),
+        static_cast<double *>(ctx.m.x),
+        static_cast<double *>(ctx.m.y),
+        static_cast<double *>(ctx.m.z),
+        n, 0.0, A51, A52, A53, A54, control);
+    if (!compute_rhs_into(
+            ctx, ctx.k5, n, grid, gamma_bar, alpha, step_start_time,
+            5, false, stream)) return false;
+
+    dp45_rk_stage_5_kernel<<<grid, 256, 0, stream>>>(
+        static_cast<const double *>(ctx.tmp.x),
+        static_cast<const double *>(ctx.tmp.y),
+        static_cast<const double *>(ctx.tmp.z),
+        static_cast<const double *>(ctx.k1.x),
+        static_cast<const double *>(ctx.k1.y),
+        static_cast<const double *>(ctx.k1.z),
+        static_cast<const double *>(ctx.k2.x),
+        static_cast<const double *>(ctx.k2.y),
+        static_cast<const double *>(ctx.k2.z),
+        static_cast<const double *>(ctx.k3.x),
+        static_cast<const double *>(ctx.k3.y),
+        static_cast<const double *>(ctx.k3.z),
+        static_cast<const double *>(ctx.k4.x),
+        static_cast<const double *>(ctx.k4.y),
+        static_cast<const double *>(ctx.k4.z),
+        static_cast<const double *>(ctx.k5.x),
+        static_cast<const double *>(ctx.k5.y),
+        static_cast<const double *>(ctx.k5.z),
+        static_cast<double *>(ctx.m.x),
+        static_cast<double *>(ctx.m.y),
+        static_cast<double *>(ctx.m.z),
+        n, 0.0, A61, A62, A63, A64, A65, control);
+    if (!compute_rhs_into(
+            ctx, ctx.k6, n, grid, gamma_bar, alpha, step_start_time,
+            6, false, stream)) return false;
+
+    dp45_rk_stage_5_kernel<<<grid, 256, 0, stream>>>(
+        static_cast<const double *>(ctx.tmp.x),
+        static_cast<const double *>(ctx.tmp.y),
+        static_cast<const double *>(ctx.tmp.z),
+        static_cast<const double *>(ctx.k1.x),
+        static_cast<const double *>(ctx.k1.y),
+        static_cast<const double *>(ctx.k1.z),
+        static_cast<const double *>(ctx.k3.x),
+        static_cast<const double *>(ctx.k3.y),
+        static_cast<const double *>(ctx.k3.z),
+        static_cast<const double *>(ctx.k4.x),
+        static_cast<const double *>(ctx.k4.y),
+        static_cast<const double *>(ctx.k4.z),
+        static_cast<const double *>(ctx.k5.x),
+        static_cast<const double *>(ctx.k5.y),
+        static_cast<const double *>(ctx.k5.z),
+        static_cast<const double *>(ctx.k6.x),
+        static_cast<const double *>(ctx.k6.y),
+        static_cast<const double *>(ctx.k6.z),
+        static_cast<double *>(ctx.m.x),
+        static_cast<double *>(ctx.m.y),
+        static_cast<double *>(ctx.m.z),
+        n, 0.0, B1, B3, B4, B5, B6, control);
+    if (!compute_rhs_into(
+            ctx, ctx.k_fsal, n, grid, gamma_bar, alpha, step_start_time,
+            7, false, stream)) return false;
+
+    dp45_error_kernel<<<grid, 256, 0, stream>>>(
+        static_cast<const double *>(ctx.k1.x),
+        static_cast<const double *>(ctx.k1.y),
+        static_cast<const double *>(ctx.k1.z),
+        static_cast<const double *>(ctx.k3.x),
+        static_cast<const double *>(ctx.k3.y),
+        static_cast<const double *>(ctx.k3.z),
+        static_cast<const double *>(ctx.k4.x),
+        static_cast<const double *>(ctx.k4.y),
+        static_cast<const double *>(ctx.k4.z),
+        static_cast<const double *>(ctx.k5.x),
+        static_cast<const double *>(ctx.k5.y),
+        static_cast<const double *>(ctx.k5.z),
+        static_cast<const double *>(ctx.k6.x),
+        static_cast<const double *>(ctx.k6.y),
+        static_cast<const double *>(ctx.k6.z),
+        static_cast<const double *>(ctx.k_fsal.x),
+        static_cast<const double *>(ctx.k_fsal.y),
+        static_cast<const double *>(ctx.k_fsal.z),
+        static_cast<const double *>(ctx.tmp.x),
+        static_cast<const double *>(ctx.tmp.y),
+        static_cast<const double *>(ctx.tmp.z),
+        static_cast<const double *>(ctx.m.x),
+        static_cast<const double *>(ctx.m.y),
+        static_cast<const double *>(ctx.m.z),
+        ctx.active_mask,
+        ctx.frozen_mask,
+        ctx.has_active_mask ? 1 : 0,
+        ctx.has_frozen_mask ? 1 : 0,
+        ctx.reduction_scratch,
+        n,
+        0.0,
+        ctx.adaptive_atol,
+        ctx.adaptive_rtol,
+        control);
+    return enqueue_adaptive_error_policy_device_loop(
+        ctx,
+        ctx.reduction_scratch,
+        ctx.cell_count,
+        0.2,
+        ctx.adaptive_loop_handle);
+}
+
+static bool build_dp45_adaptive_graph_fp64(
+    Context &ctx,
+    int n,
+    int grid,
+    double gamma_bar,
+    double alpha,
+    double step_start_time)
+{
+    cudaStream_t capture_stream = nullptr;
+    if (!context_begin_adaptive_step_graph_body_capture(
+            ctx, capture_stream)) return false;
+    const bool enqueued = enqueue_dp45_adaptive_attempt_fp64(
+        ctx, n, grid, gamma_bar, alpha, step_start_time, capture_stream);
+    return context_finish_adaptive_step_graph_body_capture(
+        ctx,
+        capture_stream,
+        enqueued,
+        FULLMAG_FDM_INTEGRATOR_DP45,
+        FULLMAG_FDM_PRECISION_DOUBLE);
+}
+
+static void launch_dp45_adaptive_graph_step_fp64(
+    Context &ctx,
+    double dt,
+    fullmag_fdm_step_stats *stats,
+    int n,
+    int grid,
+    double gamma_bar,
+    double alpha,
+    double step_start_time)
+{
+    if (!context_adaptive_step_graph_configuration_supported(ctx)) return;
+    if (poll_interrupt(ctx)) {
+        ctx.step_interrupted = true;
+        return;
+    }
+    if (!context_adaptive_step_graph_key_matches(
+            ctx,
+            FULLMAG_FDM_INTEGRATOR_DP45,
+            FULLMAG_FDM_PRECISION_DOUBLE) &&
+        !build_dp45_adaptive_graph_fp64(
+            ctx, n, grid, gamma_bar, alpha, step_start_time)) return;
+
+    const size_t bytes = ctx.cell_count * sizeof(double);
+    cudaError_t error = cudaMemcpyAsync(
+        ctx.tmp.x, ctx.m.x, bytes, cudaMemcpyDeviceToDevice, nullptr);
+    if (error == cudaSuccess) error = cudaMemcpyAsync(
+        ctx.tmp.y, ctx.m.y, bytes, cudaMemcpyDeviceToDevice, nullptr);
+    if (error == cudaSuccess) error = cudaMemcpyAsync(
+        ctx.tmp.z, ctx.m.z, bytes, cudaMemcpyDeviceToDevice, nullptr);
+    if (error != cudaSuccess) {
+        set_cuda_error(ctx, "cudaMemcpyAsync(adaptive_dp45 snapshot)", error);
+        return;
+    }
+
+    AdaptiveDeviceControl initial{};
+    initial.dt_candidate = dt;
+    initial.previous_error = ctx.adaptive_previous_error;
+    initial.has_previous_error =
+        ctx.adaptive_has_previous_error ? 1U : 0U;
+    initial.decision = ADAPTIVE_DEVICE_DECISION_RETRY;
+    AdaptiveDeviceControl terminal{};
+    ctx.trial_dt = dt;
+    if (!context_launch_adaptive_step_graph(ctx, initial, terminal)) return;
+
+    ctx.adaptive_attempt_trace_count = terminal.attempt_index + 1;
+    ctx.adaptive_rejected_attempts = terminal.next_rejected_attempts;
+    if (poll_interrupt(ctx)) {
+        context_invalidate_fsal_cache(
+            ctx, FULLMAG_FDM_FSAL_INVALIDATION_STEP_ERROR);
+        copy_field_d2d(ctx.m, ctx.tmp, ctx.cell_count, nullptr);
+        ctx.step_interrupted = true;
+        return;
+    }
+    if (terminal.decision != ADAPTIVE_DEVICE_DECISION_ACCEPTED) {
+        context_invalidate_fsal_cache(
+            ctx, FULLMAG_FDM_FSAL_INVALIDATION_STEP_ERROR);
+        copy_field_d2d(ctx.m, ctx.tmp, ctx.cell_count, nullptr);
+        context_refresh_observables(ctx);
+        ctx.last_error = adaptive_device_terminal_reason(terminal.reason);
+        return;
+    }
+    ctx.adaptive_has_previous_error = terminal.has_previous_error != 0;
+    ctx.adaptive_previous_error = terminal.previous_error;
+    finish_dp45_accepted_step_fp64(
+        ctx, terminal.dt_attempt, terminal.dt_candidate, stats);
+}
+
 /* ── Full DP45+FSAL step ── */
 
 void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats) {
@@ -287,15 +655,18 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     double gamma_bar = ctx.gamma / (1.0 + alpha * alpha);
     const double step_start_time = ctx.current_time;
 
-    // DP45 Butcher A coefficients
-    const double A21 = 1.0 / 5.0;
-    const double A31 = 3.0 / 40.0,   A32 = 9.0 / 40.0;
-    const double A41 = 44.0 / 45.0,  A42 = -56.0 / 15.0,  A43 = 32.0 / 9.0;
-    const double A51 = 19372.0 / 6561.0, A52 = -25360.0 / 2187.0, A53 = 64448.0 / 6561.0, A54 = -212.0 / 729.0;
-    const double A61 = 9017.0 / 3168.0,  A62 = -355.0 / 33.0,  A63 = 46732.0 / 5247.0, A64 = 49.0 / 176.0, A65 = -5103.0 / 18656.0;
-
-    // 5th-order solution weights (= row 7 of Butcher A for FSAL)
-    const double B1 = 35.0 / 384.0, B3 = 500.0 / 1113.0, B4 = 125.0 / 192.0, B5 = -2187.0 / 6784.0, B6 = 11.0 / 84.0;
+    if (ctx.adaptive_enabled) {
+        launch_dp45_adaptive_graph_step_fp64(
+            ctx,
+            dt,
+            stats,
+            n,
+            grid,
+            gamma_bar,
+            alpha,
+            step_start_time);
+        return;
+    }
 
     // Save original m
     copy_field_d2d(ctx.tmp, ctx.m, ctx.cell_count, context_compute_stream(ctx));
