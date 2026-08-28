@@ -9306,6 +9306,64 @@ fn adaptive_fdm_rejects_brown_thermal_noise_until_sde_replay_is_qualified() {
     }));
 }
 
+fn select_fixed_step_abm3(ir: &mut ProblemIR) {
+    let StudyIR::TimeEvolution { dynamics, .. } = &mut ir.study else {
+        panic!("ABM3 test requires time evolution");
+    };
+    let DynamicsIR::Llg {
+        integrator,
+        fixed_timestep,
+        adaptive_timestep,
+        ..
+    } = dynamics;
+    *integrator = "abm3".to_string();
+    *fixed_timestep = Some(1.0e-15);
+    *adaptive_timestep = None;
+}
+
+#[test]
+fn fixed_step_abm3_rejects_brown_thermal_noise_until_replay_is_qualified() {
+    let mut ir = ProblemIR::bootstrap_example();
+    select_fixed_step_abm3(&mut ir);
+    ir.temperature = Some(300.0);
+
+    let error = plan(&ir).expect_err("ABM3 Brown dynamics must fail closed");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("ABM3")
+            && reason.contains("Brown thermal noise")
+            && reason.contains("fixed-step Heun")
+    }));
+}
+
+#[test]
+fn fixed_step_abm3_rejects_frozen_spins_until_combined_checkpoint_is_qualified() {
+    let mut ir = ProblemIR::bootstrap_example();
+    select_fixed_step_abm3(&mut ir);
+    ir.magnets[0].object_id = Some("strip-object".to_string());
+    ir.magnetization_constraints
+        .push(MagnetizationConstraintIR::FrozenSpins(FrozenSpinsIR {
+            schema_version: FROZEN_SPINS_SCHEMA_VERSION.to_string(),
+            id: "pin-strip".to_string(),
+            name: "Pinned strip".to_string(),
+            enabled: true,
+            selector: SelectionExprIR::InObject {
+                object_id: "strip-object".to_string(),
+            },
+            reference: FrozenReferencePolicyIR::CaptureCurrentAtActivation {},
+            membership: SelectionMembershipPolicyIR::Static {},
+            activation: ConstraintActivationIR::AllStages {},
+            empty_selection: EmptySelectionPolicyIR::Error,
+            inactive_selection: InactiveSelectionPolicyIR::WarnAndIntersect,
+        }));
+
+    let error = plan(&ir).expect_err("ABM3 Frozen Spins must fail closed");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("ABM3")
+            && reason.contains("Frozen Spins")
+            && reason.contains("checkpoint/revision")
+    }));
+}
+
 #[test]
 fn fem_adaptive_modes_and_geometry_guards_reach_native_plan_controls() {
     for zero_field in ["atol", "rtol"] {

@@ -4647,6 +4647,28 @@ pub fn resume_reference_fdm_from_coupled_checkpoint(
     )
 }
 
+/// Resume the fixed-step CPU-double ABM3 reference runtime from its complete,
+/// versioned solver checkpoint. The checkpoint must match the exact FDM plan;
+/// incompatible schemas, timestep policies, or plan identities fail closed.
+pub fn resume_reference_fdm_from_abm3_checkpoint(
+    plan: &FdmPlanIR,
+    checkpoint: serde_json::Value,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+) -> Result<RunResult, RunError> {
+    Ok(
+        cpu_reference::execute_reference_fdm_with_coupled_checkpoint(
+            plan,
+            until_seconds,
+            outputs,
+            None,
+            None,
+            Some(checkpoint),
+        )?
+        .result,
+    )
+}
+
 /// Resume the CPU-double FDM reference lane from a durable Frozen Spins
 /// checkpoint. The resolved mask/reference are restored verbatim; the
 /// authored selector is not evaluated during restart.

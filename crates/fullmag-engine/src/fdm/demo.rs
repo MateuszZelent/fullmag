@@ -57,6 +57,7 @@ pub fn run_reference_exchange_demo(steps: usize, dt: f64) -> Result<ReferenceDem
         max_rhs_all_amplitude: 0.0,
         max_torque_Apm: 0.0,
         max_torque_all_Apm: 0.0,
+        abm3: None,
     };
 
     for _ in 0..steps {

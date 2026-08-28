@@ -81,6 +81,21 @@ bit-identical stage values. Field evaluation order, reduction order, fused kerne
 ownership, and precision can change the last bits and eventually the trajectory of a nonlinear
 system.
 
+### Fixed-step ABM3 boundary
+
+The public `abm3` contract is constant-step only. It uses two Heun startup steps, then the classical
+AB3 predictor and AM3 corrector. After correction, the history stores the RHS evaluated at the
+accepted corrected endpoint, never the predictor RHS. A timestep or solver-revision change clears
+the multistep history and repeats startup; adaptive ABM3 is rejected rather than approximated with
+constant-step coefficients.
+
+The qualified reference scope is FDM CPU double precision with fixed `dt`. Brown thermal noise,
+Frozen Spins, regional discontinuous field drives, staged multilayer execution, and unqualified
+GPU/FEM combinations fail capability planning without integrator fallback. Accepted steps expose
+versioned `solver.abm3` telemetry: startup/reset state, cumulative reset count, and RHS evaluation
+count. Runs emit `solver/fdm_cpu_abm3_checkpoint.v1.json`; resume validates its schema, exact plan
+identity, timestep policy, accepted state, RHS history and history timestamps before mutation.
+
 ## Explicit Runge--Kutta formulation
 
 For an $s$-stage explicit method,
@@ -271,6 +286,9 @@ these dimensions instead of falling back to a different algorithm.
 | FDM GPU scalar maximum support | `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` | `reduce_max_scalar_sqrt` | FDM GPU FP64 |
 | Tangent-plane algorithm vocabulary | `packages/fullmag-py/src/fullmag/model/study.py` | `class Relaxation` | public FEM contract |
 | Ordered relaxation capture | `packages/fullmag-py/src/fullmag/world.py` | `relax_stage` | Python/stage workflow |
+| FDM CPU ABM3 recurrence | `crates/fullmag-engine/src/fdm/cpu/integrators.rs` | `ExchangeLlgProblem::abm3_step_soa_state_buf` | FDM CPU |
+| FDM CPU ABM3 checkpoint | `crates/fullmag-engine/src/fdm/cpu/state.rs` | `FdmCpuSolverCheckpointV1` | FDM CPU |
+| FDM CPU ABM3 resume | `crates/fullmag-runner/src/lib.rs` | `resume_reference_fdm_from_abm3_checkpoint` | public runner |
 
 ## Validation requirements
 

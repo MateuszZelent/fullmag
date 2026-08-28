@@ -29,11 +29,15 @@ pub const FDM_CPU_ADAPTIVE_RK23_MAX_RHS_EVALS_TO_ORACLE: u32 = 2_483;
 pub const FDM_CPU_ADAPTIVE_RK45_MAX_RHS_EVALS_TO_ORACLE: u32 = 135;
 
 pub use cpu::state::{
-    AbmHistory, AbmHistorySoA, AdaptiveAttemptDecision, AdaptiveAttemptReason,
-    AdaptiveAttemptRecord, ExchangeLlgState, ExchangeLlgStateSoA, FdmCpuStateCopyTelemetry,
-    IntegratorBuffers, SolverSession, MAX_ADAPTIVE_ATTEMPT_RECORDS,
+    Abm3CheckpointHistoryV1, AbmHistory, AbmHistorySoA, AdaptiveAttemptDecision,
+    AdaptiveAttemptReason, AdaptiveAttemptRecord, ExchangeLlgState, ExchangeLlgStateSoA,
+    FdmCpuSolverCheckpointV1, FdmCpuStateCopyTelemetry, IntegratorBuffers, SolverSession,
+    FDM_CPU_SOLVER_CHECKPOINT_SCHEMA_VERSION, MAX_ADAPTIVE_ATTEMPT_RECORDS,
 };
-pub use shared::observables::{EffectiveFieldObservables, RhsEvaluation, StepReport};
+pub use shared::observables::{
+    Abm3StepTelemetry, EffectiveFieldObservables, RhsEvaluation, StepReport,
+    FDM_ABM3_STEP_TELEMETRY_SCHEMA_VERSION,
+};
 
 pub use shared::VectorFieldSoA;
 

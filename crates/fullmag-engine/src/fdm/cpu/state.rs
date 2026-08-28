@@ -7,7 +7,34 @@ use crate::{
     VectorFieldSoA, FDM_ADAPTIVE_CONTROLLER_MAX_REJECTED_ATTEMPTS,
     FDM_ADAPTIVE_CONTROLLER_POLICY_VERSION,
 };
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+pub const FDM_CPU_SOLVER_CHECKPOINT_SCHEMA_VERSION: &str = "fullmag.fdm.cpu.solver-checkpoint.v1";
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Abm3CheckpointHistoryV1 {
+    /// Newest accepted sample first: `f_n`, `f_n_minus_1`, `f_n_minus_2`.
+    pub rhs_history: Vec<Vec<Vector3>>,
+    /// Times corresponding one-to-one with `rhs_history`, newest first.
+    pub rhs_times_seconds: Vec<f64>,
+    pub startup_steps: u32,
+    pub last_dt: f64,
+    pub history_resets: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FdmCpuSolverCheckpointV1 {
+    pub schema_version: String,
+    pub grid_cells: [usize; 3],
+    pub magnetization: Vec<Vector3>,
+    pub time_seconds: f64,
+    pub k_fsal: Option<Vec<Vector3>>,
+    pub adaptive_previous_error: Option<f64>,
+    pub abm3: Abm3CheckpointHistoryV1,
+}
 
 /// Relative step-size tolerance for the fixed-step ABM3 history.
 ///
@@ -143,6 +170,7 @@ pub struct AbmHistorySoA {
     pub(crate) f_n_minus_2: Option<VectorFieldSoA>,
     pub(crate) startup_steps: u32,
     pub(crate) last_dt: f64,
+    pub(crate) history_resets: u64,
 }
 
 impl AbmHistorySoA {
@@ -154,6 +182,7 @@ impl AbmHistorySoA {
             f_n_minus_2: None,
             startup_steps: 0,
             last_dt: 0.0,
+            history_resets: 0,
         }
     }
 
@@ -164,6 +193,7 @@ impl AbmHistorySoA {
             f_n_minus_2: h.f_n_minus_2.as_ref().map(|v| VectorFieldSoA::from_aos(v)),
             startup_steps: h.startup_steps,
             last_dt: h.last_dt,
+            history_resets: h.history_resets,
         }
     }
 
@@ -174,12 +204,20 @@ impl AbmHistorySoA {
             f_n_minus_2: self.f_n_minus_2.as_ref().map(|v| v.gather_to_aos()),
             startup_steps: self.startup_steps,
             last_dt: self.last_dt,
+            history_resets: self.history_resets,
         }
     }
 
     #[allow(dead_code)]
     pub(crate) fn restart(&mut self) {
+        let had_history = self.startup_steps != 0
+            || self.last_dt != 0.0
+            || self.f_n.is_some()
+            || self.f_n_minus_1.is_some()
+            || self.f_n_minus_2.is_some();
+        let history_resets = self.history_resets.saturating_add(u64::from(had_history));
         *self = Self::new();
+        self.history_resets = history_resets;
     }
 
     pub(crate) fn is_ready(&self) -> bool {
@@ -342,6 +380,66 @@ impl ExchangeLlgState {
         Ok(())
     }
 
+    /// Capture the complete accepted CPU solver state in a versioned envelope.
+    pub fn solver_checkpoint(&self) -> FdmCpuSolverCheckpointV1 {
+        let rhs_history: Vec<Vec<Vector3>> = [
+            self.abm_history.f_n.as_ref(),
+            self.abm_history.f_n_minus_1.as_ref(),
+            self.abm_history.f_n_minus_2.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .cloned()
+        .collect();
+        let rhs_times_seconds = if rhs_history.is_empty() {
+            Vec::new()
+        } else {
+            (0..rhs_history.len())
+                .map(|index| self.time_seconds - index as f64 * self.abm_history.last_dt)
+                .collect()
+        };
+        FdmCpuSolverCheckpointV1 {
+            schema_version: FDM_CPU_SOLVER_CHECKPOINT_SCHEMA_VERSION.to_string(),
+            grid_cells: [self.grid.nx, self.grid.ny, self.grid.nz],
+            magnetization: self.magnetization.clone(),
+            time_seconds: self.time_seconds,
+            k_fsal: self.k_fsal.clone(),
+            adaptive_previous_error: self.adaptive_previous_error,
+            abm3: Abm3CheckpointHistoryV1 {
+                rhs_history,
+                rhs_times_seconds,
+                startup_steps: self.abm_history.startup_steps,
+                last_dt: self.abm_history.last_dt,
+                history_resets: self.abm_history.history_resets,
+            },
+        }
+    }
+
+    /// Restore a fully validated solver checkpoint without normalizing or
+    /// reconstructing multistep history. Validation is transactional.
+    pub fn restore_solver_checkpoint(
+        &mut self,
+        checkpoint: FdmCpuSolverCheckpointV1,
+    ) -> Result<()> {
+        checkpoint.validate_for_grid(self.grid)?;
+
+        let mut slots = checkpoint.abm3.rhs_history.into_iter();
+        let restored_history = AbmHistory {
+            f_n: slots.next(),
+            f_n_minus_1: slots.next(),
+            f_n_minus_2: slots.next(),
+            startup_steps: checkpoint.abm3.startup_steps,
+            last_dt: checkpoint.abm3.last_dt,
+            history_resets: checkpoint.abm3.history_resets,
+        };
+        self.magnetization = checkpoint.magnetization;
+        self.time_seconds = checkpoint.time_seconds;
+        self.k_fsal = checkpoint.k_fsal;
+        self.adaptive_previous_error = checkpoint.adaptive_previous_error;
+        self.abm_history = restored_history;
+        Ok(())
+    }
+
     /// Convert to SoA layout (allocating).
     pub fn to_soa(&self) -> ExchangeLlgStateSoA {
         ExchangeLlgStateSoA::from_aos(self)
@@ -352,7 +450,7 @@ impl ExchangeLlgState {
     /// independent of serde field ordering and is suitable for rollback tests.
     pub fn transactional_state_digest(&self) -> String {
         let mut hasher = Sha256::new();
-        hasher.update(b"fullmag.fdm.solver-state.v1\0");
+        hasher.update(b"fullmag.fdm.solver-state.v2\0");
         update_u64(&mut hasher, self.grid.nx as u64);
         update_u64(&mut hasher, self.grid.ny as u64);
         update_u64(&mut hasher, self.grid.nz as u64);
@@ -363,6 +461,108 @@ impl ExchangeLlgState {
         update_abm_history(&mut hasher, &self.abm_history);
         format!("sha256:{:x}", hasher.finalize())
     }
+}
+
+impl FdmCpuSolverCheckpointV1 {
+    pub fn validate_for_grid(&self, grid: GridShape) -> Result<()> {
+        let expected_grid = [grid.nx, grid.ny, grid.nz];
+        if self.schema_version != FDM_CPU_SOLVER_CHECKPOINT_SCHEMA_VERSION {
+            return Err(EngineError::new(format!(
+                "unsupported FDM CPU solver checkpoint schema '{}'; expected '{}'",
+                self.schema_version, FDM_CPU_SOLVER_CHECKPOINT_SCHEMA_VERSION
+            )));
+        }
+        if self.grid_cells != expected_grid {
+            return Err(EngineError::new(format!(
+                "FDM CPU solver checkpoint grid mismatch: checkpoint={:?}, expected={expected_grid:?}",
+                self.grid_cells
+            )));
+        }
+        let vector_count = grid.cell_count();
+        validate_checkpoint_vectors("magnetization", &self.magnetization, vector_count)?;
+        if !self.time_seconds.is_finite() || self.time_seconds < 0.0 {
+            return Err(EngineError::new(
+                "FDM CPU solver checkpoint time_seconds must be finite and nonnegative",
+            ));
+        }
+        if let Some(k_fsal) = &self.k_fsal {
+            validate_checkpoint_vectors("k_fsal", k_fsal, vector_count)?;
+        }
+        if self
+            .adaptive_previous_error
+            .is_some_and(|value| !value.is_finite() || value < 0.0)
+        {
+            return Err(EngineError::new(
+                "FDM CPU solver checkpoint adaptive_previous_error must be finite and nonnegative",
+            ));
+        }
+
+        let history = &self.abm3;
+        if history.startup_steps > 3 {
+            return Err(EngineError::new(
+                "FDM CPU solver checkpoint ABM3 startup_steps exceeds 3",
+            ));
+        }
+        let expected_history_len = history.startup_steps as usize;
+        if history.rhs_history.len() != expected_history_len
+            || history.rhs_times_seconds.len() != expected_history_len
+        {
+            return Err(EngineError::new(format!(
+                "FDM CPU solver checkpoint ABM3 history length mismatch: startup_steps={}, rhs={}, times={}",
+                history.startup_steps,
+                history.rhs_history.len(),
+                history.rhs_times_seconds.len()
+            )));
+        }
+        if expected_history_len == 0 {
+            if history.last_dt != 0.0 {
+                return Err(EngineError::new(
+                    "empty FDM CPU solver checkpoint ABM3 history requires last_dt=0",
+                ));
+            }
+            return Ok(());
+        }
+        if !history.last_dt.is_finite() || history.last_dt <= 0.0 {
+            return Err(EngineError::new(
+                "FDM CPU solver checkpoint ABM3 last_dt must be finite and positive",
+            ));
+        }
+        for (index, rhs) in history.rhs_history.iter().enumerate() {
+            validate_checkpoint_vectors(&format!("abm3.rhs_history[{index}]"), rhs, vector_count)?;
+            let actual_time = history.rhs_times_seconds[index];
+            let expected_time = self.time_seconds - index as f64 * history.last_dt;
+            let tolerance = 16.0
+                * f64::EPSILON
+                * actual_time
+                    .abs()
+                    .max(expected_time.abs())
+                    .max(f64::MIN_POSITIVE);
+            if !actual_time.is_finite()
+                || actual_time < 0.0
+                || (actual_time - expected_time).abs() > tolerance
+            {
+                return Err(EngineError::new(format!(
+                    "FDM CPU solver checkpoint ABM3 history time mismatch at index {index}: actual={actual_time}, expected={expected_time}"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_checkpoint_vectors(label: &str, values: &[Vector3], expected: usize) -> Result<()> {
+    if values.len() != expected {
+        return Err(EngineError::new(format!(
+            "FDM CPU solver checkpoint {label} length mismatch: actual={}, expected={expected}",
+            values.len()
+        )));
+    }
+    if values.iter().flatten().any(|value| !value.is_finite()) {
+        return Err(EngineError::new(format!(
+            "FDM CPU solver checkpoint {label} contains a non-finite value"
+        )));
+    }
+    Ok(())
 }
 
 fn update_u64(hasher: &mut Sha256, value: u64) {
@@ -408,6 +608,7 @@ fn update_abm_history(hasher: &mut Sha256, history: &AbmHistory) {
     update_optional_vectors(hasher, history.f_n_minus_2.as_deref());
     update_u64(hasher, history.startup_steps as u64);
     update_f64(hasher, history.last_dt);
+    update_u64(hasher, history.history_resets);
 }
 
 // ── AbmHistory ─────────────────────────────────────────────────────────
@@ -425,6 +626,8 @@ pub struct AbmHistory {
     pub(crate) startup_steps: u32,
     /// Last dt used (ABM requires constant dt; restart if changed)
     pub(crate) last_dt: f64,
+    /// Cumulative explicit invalidations and fixed-step `dt` resets.
+    pub(crate) history_resets: u64,
 }
 
 impl AbmHistory {
@@ -435,6 +638,7 @@ impl AbmHistory {
             f_n_minus_2: None,
             startup_steps: 0,
             last_dt: 0.0,
+            history_resets: 0,
         }
     }
 
@@ -519,11 +723,19 @@ impl AbmHistory {
         }
         self.startup_steps = source.startup_steps;
         self.last_dt = source.last_dt;
+        self.history_resets = source.history_resets;
         telemetry
     }
 
     pub(crate) fn restart(&mut self) {
+        let had_history = self.startup_steps != 0
+            || self.last_dt != 0.0
+            || self.f_n.is_some()
+            || self.f_n_minus_1.is_some()
+            || self.f_n_minus_2.is_some();
+        let history_resets = self.history_resets.saturating_add(u64::from(had_history));
         *self = Self::new();
+        self.history_resets = history_resets;
     }
 }
 
@@ -799,6 +1011,37 @@ impl SolverSession {
             bufs,
             step_count: 0,
         })
+    }
+
+    /// Create a session from a complete, validated CPU solver checkpoint.
+    pub fn from_checkpoint(
+        problem: ExchangeLlgProblem,
+        checkpoint: FdmCpuSolverCheckpointV1,
+    ) -> Result<Self> {
+        let mut state = ExchangeLlgState::uniform(problem.grid, [1.0, 0.0, 0.0])?;
+        state.restore_solver_checkpoint(checkpoint)?;
+        let state_soa = if problem.soa_fast_path_supported() {
+            Some(state.to_soa())
+        } else {
+            None
+        };
+        let fft_ws = problem.create_workspace();
+        let bufs = problem.create_integrator_buffers();
+        Ok(Self {
+            problem,
+            state,
+            state_soa,
+            fft_ws,
+            bufs,
+            step_count: 0,
+        })
+    }
+
+    pub fn checkpoint(&self) -> FdmCpuSolverCheckpointV1 {
+        self.state_soa.as_ref().map_or_else(
+            || self.state.solver_checkpoint(),
+            |state| state.to_aos().solver_checkpoint(),
+        )
     }
 
     /// Advance the simulation by one time step.

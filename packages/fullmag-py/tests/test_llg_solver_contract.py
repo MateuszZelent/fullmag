@@ -251,6 +251,44 @@ class CanonicalLlgSolverContractTests(unittest.TestCase):
         actual = reloaded.problem.study.to_ir()["dynamics"]["adaptive_timestep"]
         self.assertEqual(actual, expected)
 
+    def test_fixed_step_abm3_round_trip_is_lossless(self) -> None:
+        source = """
+        import fullmag as fm
+
+        study = fm.study("fixed_step_abm3")
+        study.engine("fdm")
+        study.cell(5e-9, 5e-9, 5e-9)
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.solver(integrator="abm3", fix_dt=2e-15)
+        study.stages.add_run(until=2e-12)
+        """
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "abm3.py"
+            path.write_text(textwrap.dedent(source), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+            draft = export_builder_draft(loaded)
+            scene = build_scene_document_from_builder(draft)
+            overrides = builder_overrides_from_scene_document(scene)
+            rewritten = rewrite_loaded_problem_script(loaded, overrides=overrides)[
+                "rendered_source"
+            ]
+            rewritten_path = Path(tmp_dir) / "abm3_rewritten.py"
+            rewritten_path.write_text(rewritten, encoding="utf-8")
+            reloaded = fm.load_problem_from_script(rewritten_path, lightweight_assets=True)
+
+        expected = loaded.problem.study.to_ir()["dynamics"]
+        actual = reloaded.problem.study.to_ir()["dynamics"]
+        self.assertEqual(expected["integrator"], "abm3")
+        self.assertEqual(expected["fixed_timestep"], 2e-15)
+        self.assertIsNone(expected.get("adaptive_timestep"))
+        self.assertEqual(actual, expected)
+        self.assertIn('integrator="abm3"', rewritten)
+        self.assertIn("fix_dt=2e-15", rewritten)
+
     def test_advanced_timestep_rejects_convenience_mix_without_mutation(self) -> None:
         self._configure_study()
         fm.solver(fix_dt=2e-15)

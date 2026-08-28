@@ -2535,6 +2535,25 @@ pub(crate) fn plan_fdm(
                 .to_string(),
         );
     }
+    if integrator == Some(IntegratorChoice::Abm3)
+        && (has_thermal_noise || thermal_temperature.unwrap_or(0.0) > 0.0)
+    {
+        errors.push(
+            "ABM3 is not executable with Brown thermal noise because the fixed-step multistep history has no qualified stochastic replay contract; use fixed-step Heun"
+                .to_string(),
+        );
+    }
+    if integrator == Some(IntegratorChoice::Abm3)
+        && problem
+            .magnetization_constraints
+            .iter()
+            .any(|constraint| constraint.frozen_spins().enabled)
+    {
+        errors.push(
+            "ABM3 is not executable with Frozen Spins until the combined constraint and multistep checkpoint/revision contract is qualified; use heun, rk4, rk23, or rk45"
+                .to_string(),
+        );
+    }
     if runtime_requests_cuda(problem)
         && problem
             .field_drives

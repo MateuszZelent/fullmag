@@ -1,6 +1,6 @@
 {
   "schema_version": "capability_matrix.v0",
-  "updated_at": "2026-08-20",
+  "updated_at": "2026-08-28",
   "status_vocabulary": {
     "unsupported": "The current lane has no legal executable realization for this feature.",
     "source_visible": "Source or planner scaffolding exists, but the lane is not a legal public executable path.",
@@ -101,6 +101,28 @@
       },
       "validated_workloads": [],
       "notes": "Exact resume requires integrator, RNG, coupled-carrier, and deterministic-runtime identity. Current capture source is gap evidence only and no lane is executable or qualified.",
+      "validation_state": "unvalidated"
+    },
+    {
+      "id": "time_integrator.abm3.fixed.v1",
+      "label": "Fixed-step FDM CPU ABM3",
+      "lanes": {
+        "fdm_cpu_reference": "reference_executable",
+        "fdm_gpu_production": "unsupported",
+        "fem_cpu_public": "source_visible",
+        "fem_gpu_public": "unsupported"
+      },
+      "precision_scope": ["double"],
+      "execution_mode_scope": ["strict", "extended"],
+      "workload_scope": "Single-grid FDM CPU reference execution with a finite positive fixed timestep, deterministic accepted-state RHS history, and versioned exact ABM3 checkpoint/resume.",
+      "lane_evidence": {
+        "fdm_cpu_reference": {"source_presence": "implemented", "executability": "reference_executable", "validation": "unvalidated", "production_qualification": "unvalidated", "receipts": []},
+        "fdm_gpu_production": {"source_presence": "source_visible", "executability": "unsupported", "validation": "unsupported", "production_qualification": "unsupported", "receipts": []},
+        "fem_cpu_public": {"source_presence": "source_visible", "executability": "unsupported", "validation": "unsupported", "production_qualification": "unsupported", "receipts": []},
+        "fem_gpu_public": {"source_presence": "source_visible", "executability": "unsupported", "validation": "unsupported", "production_qualification": "unsupported", "receipts": []}
+      },
+      "validated_workloads": [],
+      "notes": "The FDM CPU reference lane stores accepted corrected endpoint RHS values, restarts history on timestep or revision changes, exposes typed RHS/reset telemetry, and restores a plan-bound versioned checkpoint fail-closed. Source tests prove third-order constant-field convergence, AoS/buffer-SoA/persistent-SoA parity, accepted-history correctness, reset behavior, transactional fault handling, and bitwise checkpoint continuation. Brown thermal noise, Frozen Spins, regional discontinuous drives, multilayer execution, adaptive ABM3, FDM GPU, and native FEM GPU remain rejected. No source-bound managed qualification receipt is claimed.",
       "validation_state": "unvalidated"
     },
     {

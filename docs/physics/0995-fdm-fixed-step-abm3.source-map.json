@@ -1,0 +1,169 @@
+{
+  "document": {
+    "path": "docs/physics/0995-fdm-fixed-step-abm3.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "implemented",
+      "scope": "fixed-step ABM3 AoS, buffer-SoA, and persistent-SoA reference paths",
+      "qualification": "source-qualified reference execution; managed receipt pending",
+      "evidence": "order, accepted-history, restart, checkpoint, telemetry, planner, and Python round-trip tests"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-qualified",
+      "scope": "not promoted by this CPU contract",
+      "qualification": "requires independent device evidence",
+      "evidence": "none claimed"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "separate-contract",
+      "scope": "reference FEM name only",
+      "qualification": "not promoted by this note",
+      "evidence": "none claimed"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "unsupported",
+      "reason": "The native FEM GPU ABI rejects ABM3."
+    }
+  ],
+  "equations": [
+    {
+      "id": "abm3-llg-rhs",
+      "symbols": ["m", "t", "f", "gamma", "alpha", "H_eff"],
+      "sources": ["aos_abm3", "buffer_soa_abm3", "persistent_soa_abm3"],
+      "publication_anchor": "Gilbert-form LLG initial-value problem"
+    },
+    {
+      "id": "abm3-predictor",
+      "symbols": ["m", "m_predictor", "h", "f"],
+      "sources": ["aos_abm3", "buffer_soa_abm3", "persistent_soa_abm3"],
+      "publication_anchor": "constant-step AB3 predictor"
+    },
+    {
+      "id": "abm3-corrector",
+      "symbols": ["m", "m_predictor", "h", "f", "projection"],
+      "sources": ["aos_abm3", "buffer_soa_abm3", "persistent_soa_abm3"],
+      "publication_anchor": "constant-step AM3 corrector"
+    },
+    {
+      "id": "abm3-accepted-history",
+      "symbols": ["m", "t", "f"],
+      "sources": ["aos_abm3", "buffer_soa_abm3", "persistent_soa_abm3", "abm_history"],
+      "publication_anchor": "accepted corrected endpoint RHS becomes the newest history sample"
+    }
+  ],
+  "symbols": [
+    {"id": "t", "latex": "t,t_n", "meaning": "physical time and accepted-step time", "si_unit": "$\\mathrm{s}$"},
+    {"id": "h", "latex": "h", "meaning": "fixed integration step", "si_unit": "$\\mathrm{s}$"},
+    {"id": "m", "latex": "\\mathbf m,\\mathbf m_n", "meaning": "normalized magnetization", "si_unit": "$1$"},
+    {"id": "m_predictor", "latex": "\\mathbf m_{n+1}^{p}", "meaning": "projected AB3 predictor", "si_unit": "$1$"},
+    {"id": "f", "latex": "\\mathbf f,\\mathbf f_n", "meaning": "LLG RHS at an accepted state", "si_unit": "$\\mathrm{s^{-1}}$"},
+    {"id": "H_eff", "latex": "\\mathbf H_{\\mathrm{eff}}", "meaning": "effective magnetic field strength", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "gamma", "latex": "\\gamma", "meaning": "gyromagnetic ratio", "si_unit": "$\\mathrm{m\\,A^{-1}\\,s^{-1}}$"},
+    {"id": "alpha", "latex": "\\alpha", "meaning": "Gilbert damping", "si_unit": "$1$"},
+    {"id": "projection", "latex": "\\mathcal P", "meaning": "unit-sphere stage projection", "si_unit": "$1$"},
+    {"id": "history_revision", "latex": "r_h", "meaning": "ABM history revision", "si_unit": "$1$"},
+    {"id": "history_resets", "latex": "N_{\\mathrm{reset}}", "meaning": "cumulative history-reset count", "si_unit": "$1$"},
+    {"id": "rhs_evaluations", "latex": "N_{\\mathrm{rhs}}", "meaning": "RHS evaluations in one accepted step", "si_unit": "$1$"}
+  ],
+  "sources": [
+    {
+      "id": "abm_history",
+      "path": "crates/fullmag-engine/src/fdm/cpu/state.rs",
+      "symbol": "AbmHistory",
+      "responsibility": "Own fixed-step accepted RHS history and restart predicate."
+    },
+    {
+      "id": "aos_abm3",
+      "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs",
+      "symbol": "abm3_step_buf",
+      "responsibility": "Execute transactional AoS ABM3 startup and predictor/corrector steps."
+    },
+    {
+      "id": "buffer_soa_abm3",
+      "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs",
+      "symbol": "abm3_step_soa_buf",
+      "responsibility": "Execute transactional buffer-SoA ABM3 steps."
+    },
+    {
+      "id": "persistent_soa_abm3",
+      "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs",
+      "symbol": "abm3_step_soa_state_buf",
+      "responsibility": "Execute transactional persistent-SoA ABM3 steps."
+    },
+    {
+      "id": "ir_validation",
+      "path": "crates/fullmag-ir/src/validation.rs",
+      "symbol": "validate_adaptive_timestep",
+      "responsibility": "Reject adaptive timestep policy for fixed-step ABM3."
+    },
+    {
+      "id": "abm_telemetry",
+      "path": "crates/fullmag-engine/src/fdm/shared/observables.rs",
+      "symbol": "Abm3StepTelemetry",
+      "responsibility": "Publish versioned startup, reset, and RHS evaluation telemetry."
+    },
+    {
+      "id": "engine_checkpoint",
+      "path": "crates/fullmag-engine/src/fdm/cpu/state.rs",
+      "symbol": "FdmCpuSolverCheckpointV1",
+      "responsibility": "Validate and restore complete accepted CPU solver state and ABM3 history."
+    },
+    {
+      "id": "planner_gate",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "plan_fdm",
+      "responsibility": "Reject unqualified discontinuous field-drive execution with ABM3."
+    },
+    {
+      "id": "python_solver",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "Author fixed timestep and canonical ABM3 request."
+    },
+    {
+      "id": "runner_checkpoint",
+      "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs",
+      "symbol": "FdmAbm3RunnerCheckpointV1",
+      "responsibility": "Bind the versioned solver checkpoint to exact plan identity and runtime counters."
+    },
+    {
+      "id": "public_resume",
+      "path": "crates/fullmag-runner/src/lib.rs",
+      "symbol": "resume_reference_fdm_from_abm3_checkpoint",
+      "responsibility": "Expose fail-closed fixed-step ABM3 continuation through the public runner API."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "StudyBuilder.solver(integrator=...)",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "canonical value `abm3`; aliases do not change this contract",
+        "meaning": "requested time integrator",
+        "backend_support": "FDM CPU reference; other lanes remain capability-gated",
+        "problem_ir": "study.dynamics.integrator"
+      },
+      {
+        "python": "StudyBuilder.solver(fix_dt=...)",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{s}$",
+        "validation": "finite and greater than zero; mutually exclusive with adaptive policy",
+        "meaning": "constant ABM3 step",
+        "backend_support": "FDM CPU reference",
+        "problem_ir": "study.dynamics.fixed_timestep"
+      }
+    ]
+  }
+}

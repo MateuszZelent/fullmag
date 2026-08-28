@@ -94,6 +94,22 @@ impl AttemptRhsCounter {
     }
 }
 
+fn tag_abm3_step(
+    mut report: StepReport,
+    startup_step: bool,
+    history_reset_this_step: bool,
+    history_resets_total: u64,
+) -> StepReport {
+    report.abm3 = Some(crate::Abm3StepTelemetry {
+        schema_version: crate::FDM_ABM3_STEP_TELEMETRY_SCHEMA_VERSION,
+        startup_step,
+        history_reset_this_step,
+        history_resets_total,
+        rhs_evaluations: if startup_step { 3 } else { 2 },
+    });
+    report
+}
+
 #[cfg(feature = "parallel")]
 fn max_error_preserving_nonfinite(left: f64, right: f64) -> f64 {
     if !left.is_finite() {
@@ -789,6 +805,158 @@ mod adaptive_decision_tests {
         assert_eq!(persistent_soa.abm_history.startup_steps, 1);
         assert!(persistent_soa.abm_history.f_n_minus_1.is_none());
         assert_eq!(persistent_soa.abm_history.last_dt, changed_dt);
+    }
+
+    fn max_rhs_relative_error(actual: &[crate::Vector3], expected: &[crate::Vector3]) -> f64 {
+        actual
+            .iter()
+            .zip(expected)
+            .flat_map(|(actual, expected)| actual.iter().zip(expected))
+            .map(|(actual, expected)| (actual - expected).abs() / expected.abs().max(1.0))
+            .fold(0.0, f64::max)
+    }
+
+    fn accepted_rhs_aos(
+        problem: &crate::ExchangeLlgProblem,
+        magnetization: &[crate::Vector3],
+        time_seconds: f64,
+    ) -> Vec<crate::Vector3> {
+        let n = magnetization.len();
+        let mut workspace = problem.create_workspace();
+        let mut h_eff = vec![[0.0; 3]; n];
+        let mut h_scratch = vec![[0.0; 3]; n];
+        let mut rhs = vec![[0.0; 3]; n];
+        problem.compute_step_observables_at_time(
+            magnetization,
+            &mut workspace,
+            &mut h_eff,
+            &mut h_scratch,
+            &mut rhs,
+            crate::EvaluationRequest::Minimal,
+            time_seconds,
+        );
+        rhs
+    }
+
+    fn accepted_rhs_soa(
+        problem: &crate::ExchangeLlgProblem,
+        magnetization: &crate::VectorFieldSoA,
+        time_seconds: f64,
+    ) -> crate::VectorFieldSoA {
+        let mut workspace = problem.create_workspace();
+        let mut h_eff = crate::VectorFieldSoA::zeros(magnetization.len());
+        let mut rhs = crate::VectorFieldSoA::zeros(magnetization.len());
+        problem.effective_field_into_soa_ws_at_time(
+            magnetization,
+            &mut workspace,
+            &mut h_eff,
+            time_seconds,
+        );
+        problem.llg_rhs_soa_into(magnetization, &h_eff, &mut rhs);
+        rhs
+    }
+
+    #[test]
+    fn abm3_full_step_history_stores_rhs_at_accepted_corrected_state() {
+        let problem = crate::ExchangeLlgProblem::with_terms(
+            crate::GridShape::new(1, 1, 1).expect("grid"),
+            crate::CellSize::new(1.0, 1.0, 1.0).expect("cell"),
+            crate::MaterialParameters::new(1.0, 1.0e-30, 0.1).expect("material"),
+            crate::LlgConfig::new(100.0, crate::TimeIntegrator::ABM3).expect("LLG"),
+            crate::EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                external_field: Some([0.0, 1.0, 0.0]),
+                ..Default::default()
+            },
+        );
+        let dt = 1.0e-3;
+
+        let mut aos = problem.uniform_state([1.0, 0.0, 0.0]).expect("AoS state");
+        let mut aos_ws = problem.create_workspace();
+        let mut aos_bufs = problem.create_integrator_buffers();
+        for _ in 0..4 {
+            problem
+                .abm3_step_buf(
+                    &mut aos,
+                    dt,
+                    &mut aos_ws,
+                    &mut aos_bufs,
+                    crate::EvaluationRequest::Minimal,
+                )
+                .expect("AoS ABM3 step");
+        }
+        let aos_expected = accepted_rhs_aos(&problem, &aos.magnetization, aos.time_seconds);
+        let aos_error = max_rhs_relative_error(
+            aos.abm_history.f_n().expect("AoS accepted RHS history"),
+            &aos_expected,
+        );
+
+        let mut buffer_soa = problem
+            .uniform_state([1.0, 0.0, 0.0])
+            .expect("buffer-SoA state");
+        let mut buffer_soa_ws = problem.create_workspace();
+        let mut buffer_soa_bufs = problem.create_integrator_buffers();
+        for _ in 0..4 {
+            problem
+                .abm3_step_soa_buf(
+                    &mut buffer_soa,
+                    dt,
+                    &mut buffer_soa_ws,
+                    &mut buffer_soa_bufs,
+                    crate::EvaluationRequest::Minimal,
+                )
+                .expect("buffer-SoA ABM3 step");
+        }
+        let buffer_soa_m = crate::VectorFieldSoA::from_aos(&buffer_soa.magnetization);
+        let buffer_soa_expected =
+            accepted_rhs_soa(&problem, &buffer_soa_m, buffer_soa.time_seconds).gather_to_aos();
+        let buffer_soa_error = max_rhs_relative_error(
+            buffer_soa
+                .abm_history
+                .f_n()
+                .expect("buffer-SoA accepted RHS history"),
+            &buffer_soa_expected,
+        );
+
+        let mut persistent_soa = problem
+            .uniform_state([1.0, 0.0, 0.0])
+            .expect("persistent-SoA state")
+            .to_soa();
+        let mut persistent_soa_ws = problem.create_workspace();
+        let mut persistent_soa_bufs = problem.create_integrator_buffers();
+        for _ in 0..4 {
+            problem
+                .abm3_step_soa_state_buf(
+                    &mut persistent_soa,
+                    dt,
+                    &mut persistent_soa_ws,
+                    &mut persistent_soa_bufs,
+                    crate::EvaluationRequest::Minimal,
+                )
+                .expect("persistent-SoA ABM3 step");
+        }
+        let persistent_soa_expected = accepted_rhs_soa(
+            &problem,
+            &persistent_soa.magnetization,
+            persistent_soa.time_seconds,
+        )
+        .gather_to_aos();
+        let persistent_soa_error = max_rhs_relative_error(
+            &persistent_soa
+                .abm_history
+                .f_n()
+                .expect("persistent-SoA accepted RHS history")
+                .gather_to_aos(),
+            &persistent_soa_expected,
+        );
+
+        assert!(
+            aos_error <= 1.0e-13 && buffer_soa_error <= 1.0e-13 && persistent_soa_error <= 1.0e-13,
+            "ABM3 history must store the accepted corrected endpoint RHS: \
+             AoS={aos_error:.3e}, buffer-SoA={buffer_soa_error:.3e}, \
+             persistent-SoA={persistent_soa_error:.3e}"
+        );
     }
 
     #[test]
@@ -2974,19 +3142,6 @@ impl ExchangeLlgProblem {
             self.restore_frozen_reference(&mut bufs.m_stage[..n]);
             let accepted_time = t0 + dt;
 
-            // Store RHS at accepted point for history
-            self.effective_field_into_ws_at_time(
-                &bufs.m_stage[..n],
-                ws,
-                &mut bufs.h_eff[..n],
-                accepted_time,
-            );
-            self.llg_rhs_from_fields_with_direct_torques_into(
-                &bufs.m_stage[..n],
-                &bufs.h_eff[..n],
-                &mut bufs.k[0][..n],
-            );
-
             let eval = self.compute_step_observables_at_time(
                 &bufs.m_stage[..n],
                 ws,
@@ -2998,8 +3153,13 @@ impl ExchangeLlgProblem {
             );
             state.magnetization[..n].copy_from_slice(&bufs.m_stage[..n]);
             state.time_seconds = accepted_time;
-            state.abm_history.push_copy_from_slice(&bufs.k[0][..n], dt);
-            return Ok(eval.into_step_report(accepted_time, dt, false));
+            state.abm_history.push_copy_from_slice(&bufs.rhs[..n], dt);
+            return Ok(tag_abm3_step(
+                eval.into_step_report(accepted_time, dt, false),
+                true,
+                dt_changed,
+                state.abm_history.history_resets,
+            ));
         }
 
         // --- Full ABM3 step ---
@@ -3083,8 +3243,13 @@ impl ExchangeLlgProblem {
         );
         state.magnetization[..n].copy_from_slice(&bufs.m_stage[..n]);
         state.time_seconds = accepted_time;
-        state.abm_history.push_copy_from_slice(&bufs.k[0][..n], dt);
-        Ok(eval.into_step_report(accepted_time, dt, false))
+        state.abm_history.push_copy_from_slice(&bufs.rhs[..n], dt);
+        Ok(tag_abm3_step(
+            eval.into_step_report(accepted_time, dt, false),
+            false,
+            false,
+            state.abm_history.history_resets,
+        ))
     }
 
     pub(crate) fn abm3_step_soa_buf(
@@ -3105,22 +3270,17 @@ impl ExchangeLlgProblem {
                 trial_state.abm_history.restart();
             }
             let report = self.heun_step_soa_buf(&mut trial_state, dt, ws, bufs, evaluation)?;
-
-            bufs.soa.m0.scatter_from_aos(&trial_state.magnetization);
-            self.effective_field_into_soa_ws_at_time(
-                &bufs.soa.m0,
-                ws,
-                &mut bufs.soa.h_eff,
-                t0 + dt,
-            );
-            self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
-            bufs.soa.k[0].gather_into_aos(&mut bufs.k[0][..n]);
             trial_state
                 .abm_history
-                .push_copy_from_slice(&bufs.k[0][..n], dt);
+                .push_copy_from_slice(&bufs.rhs[..n], dt);
             *state = trial_state;
 
-            return Ok(report);
+            return Ok(tag_abm3_step(
+                report,
+                true,
+                dt_changed,
+                state.abm_history.history_resets,
+            ));
         }
 
         bufs.soa.m0.scatter_from_aos(&state.magnetization);
@@ -3170,8 +3330,6 @@ impl ExchangeLlgProblem {
             bufs.soa.m_stage.z[i] = corrected[2];
         }
 
-        bufs.soa.k[0].gather_into_aos(&mut bufs.k[0][..n]);
-
         let accepted_time = t0 + dt;
         let eval = {
             let soa = &mut bufs.soa;
@@ -3186,12 +3344,18 @@ impl ExchangeLlgProblem {
                 accepted_time,
             )
         };
+        bufs.soa.k[0].gather_into_aos(&mut bufs.k[0][..n]);
         bufs.soa
             .m_stage
             .gather_into_aos(&mut state.magnetization[..n]);
         state.time_seconds = accepted_time;
         state.abm_history.push_copy_from_slice(&bufs.k[0][..n], dt);
-        Ok(eval.into_step_report(accepted_time, dt, false))
+        Ok(tag_abm3_step(
+            eval.into_step_report(accepted_time, dt, false),
+            false,
+            false,
+            state.abm_history.history_resets,
+        ))
     }
 
     pub(crate) fn heun_step_soa_state_buf(
@@ -3833,24 +3997,17 @@ impl ExchangeLlgProblem {
             }
             let report =
                 self.heun_step_soa_state_buf(&mut trial_state, dt, ws, bufs, evaluation)?;
-
-            self.effective_field_into_soa_ws_at_time(
-                &trial_state.magnetization,
-                ws,
-                &mut bufs.soa.h_eff,
-                t0 + dt,
-            );
-            self.llg_rhs_soa_into(
-                &trial_state.magnetization,
-                &bufs.soa.h_eff,
-                &mut bufs.soa.k[0],
-            );
             trial_state
                 .abm_history
                 .push_copy_from_soa(&bufs.soa.k[0], dt);
             *state = trial_state;
 
-            return Ok(report);
+            return Ok(tag_abm3_step(
+                report,
+                true,
+                dt_changed,
+                state.abm_history.history_resets,
+            ));
         }
 
         bufs.soa.m0.copy_from(&state.magnetization);
@@ -3910,11 +4067,6 @@ impl ExchangeLlgProblem {
             bufs.soa.m_stage.z[i] = updated[2];
         }
         let accepted_time = t0 + dt;
-        {
-            let (rhs_slots, scratch_slots) = bufs.soa.k.split_at_mut(1);
-            scratch_slots[5].copy_from(&rhs_slots[0]);
-        }
-
         let eval = {
             let soa = &mut bufs.soa;
             let (rhs_slots, scratch_slots) = soa.k.split_at_mut(1);
@@ -3930,8 +4082,13 @@ impl ExchangeLlgProblem {
         };
         state.magnetization.copy_from(&bufs.soa.m_stage);
         state.time_seconds = accepted_time;
-        state.abm_history.push_copy_from_soa(&bufs.soa.k[6], dt);
-        Ok(eval.into_step_report(accepted_time, dt, false))
+        state.abm_history.push_copy_from_soa(&bufs.soa.k[0], dt);
+        Ok(tag_abm3_step(
+            eval.into_step_report(accepted_time, dt, false),
+            false,
+            false,
+            state.abm_history.history_resets,
+        ))
     }
 
     fn compute_step_observables_soa(

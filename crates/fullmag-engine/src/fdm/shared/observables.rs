@@ -2,6 +2,17 @@
 
 use crate::Vector3;
 
+pub const FDM_ABM3_STEP_TELEMETRY_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Abm3StepTelemetry {
+    pub schema_version: u32,
+    pub startup_step: bool,
+    pub history_reset_this_step: bool,
+    pub history_resets_total: u64,
+    pub rhs_evaluations: u32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[allow(non_snake_case)]
 pub struct StepReport {
@@ -27,6 +38,8 @@ pub struct StepReport {
     pub max_torque_Apm: f64,
     /// Exact field-equilibrium residual over every active DOF in A/m.
     pub max_torque_all_Apm: f64,
+    /// Present only when the accepted step executed the fixed-step ABM3 lane.
+    pub abm3: Option<Abm3StepTelemetry>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -126,6 +139,7 @@ impl RhsEvaluation {
             max_rhs_all_amplitude: self.max_rhs_all_amplitude,
             max_torque_Apm: self.max_torque_Apm,
             max_torque_all_Apm: self.max_torque_all_Apm,
+            abm3: None,
         }
     }
 }

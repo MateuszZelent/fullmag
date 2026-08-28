@@ -33,25 +33,27 @@ pub const DEFAULT_GYROMAGNETIC_RATIO: f64 = 2.211e5;
 pub type Vector3 = [f64; 3];
 
 // ── Re-exports from FDM modules ───────────────────────────────────────
+pub use fdm::constant_z_field_llg_from_positive_x;
 pub use fdm::neighbor_index;
 pub use fdm::shared::frozen_spins::FrozenSpinsState;
-pub use fdm::constant_z_field_llg_from_positive_x;
 pub use fdm::{
     compute_newell_kernel_spectra, compute_newell_kernel_spectra_thin_film_2d,
-    compute_periodic_newell_kernel_spectra, run_reference_exchange_demo, AbmHistory, AbmHistorySoA,
-    AdaptiveAttemptDecision, AdaptiveAttemptReason, AdaptiveAttemptRecord, AdaptiveStepConfig,
-    AdaptiveStepController, AdaptiveStepDecision, AxisBoundary, CellSize, CoupledImexArk2Stage,
-    CoupledImexArk2Tableau, CubicAnisotropyConfig, DemagKernelSpectra, EffectiveFieldObservables,
-    EffectiveFieldTerms, EngineError, EngineErrorCode, EvaluationRequest, ExchangeLlgProblem,
-    ExchangeLlgState, ExchangeLlgStateSoA, ExternalStageTerms, FdmBoundaryPolicy,
-    FdmCpuStateCopyTelemetry, FdmDemagBoundary, FftWorkspace, GridShape, IntegratorBuffers,
-    LlgConfig, MagnetoelasticTermConfig, MaterialParameters, OerstedCylinderConfig,
-    ProjectionPolicy, ReferenceDemoReport, RegionalFieldDriveTerm, ResolvedFdmPeriodicWorkspace,
-    Result, RhsEvaluation, SlonczewskiFormula, SlonczewskiSttConfig, SolverSession, SotConfig,
-    SotFormula, StepReport, TimeIntegrator, UniaxialAnisotropyConfig, VectorFieldSoA,
-    ZhangLiFormula, ZhangLiSttConfig, FDM_ADAPTIVE_CONTROLLER_MAX_REJECTED_ATTEMPTS,
-    FDM_ADAPTIVE_CONTROLLER_POLICY_VERSION, FDM_CPU_ADAPTIVE_RK23_MAX_RHS_EVALS_TO_ORACLE,
-    FDM_CPU_ADAPTIVE_RK45_MAX_RHS_EVALS_TO_ORACLE, FDM_RK_PROJECTION_REALIZATION_VERSION,
+    compute_periodic_newell_kernel_spectra, run_reference_exchange_demo, Abm3CheckpointHistoryV1,
+    Abm3StepTelemetry, AbmHistory, AbmHistorySoA, AdaptiveAttemptDecision, AdaptiveAttemptReason,
+    AdaptiveAttemptRecord, AdaptiveStepConfig, AdaptiveStepController, AdaptiveStepDecision,
+    AxisBoundary, CellSize, CoupledImexArk2Stage, CoupledImexArk2Tableau, CubicAnisotropyConfig,
+    DemagKernelSpectra, EffectiveFieldObservables, EffectiveFieldTerms, EngineError,
+    EngineErrorCode, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA,
+    ExternalStageTerms, FdmBoundaryPolicy, FdmCpuSolverCheckpointV1, FdmCpuStateCopyTelemetry,
+    FdmDemagBoundary, FftWorkspace, GridShape, IntegratorBuffers, LlgConfig,
+    MagnetoelasticTermConfig, MaterialParameters, OerstedCylinderConfig, ProjectionPolicy,
+    ReferenceDemoReport, RegionalFieldDriveTerm, ResolvedFdmPeriodicWorkspace, Result,
+    RhsEvaluation, SlonczewskiFormula, SlonczewskiSttConfig, SolverSession, SotConfig, SotFormula,
+    StepReport, TimeIntegrator, UniaxialAnisotropyConfig, VectorFieldSoA, ZhangLiFormula,
+    ZhangLiSttConfig, FDM_ABM3_STEP_TELEMETRY_SCHEMA_VERSION,
+    FDM_ADAPTIVE_CONTROLLER_MAX_REJECTED_ATTEMPTS, FDM_ADAPTIVE_CONTROLLER_POLICY_VERSION,
+    FDM_CPU_ADAPTIVE_RK23_MAX_RHS_EVALS_TO_ORACLE, FDM_CPU_ADAPTIVE_RK45_MAX_RHS_EVALS_TO_ORACLE,
+    FDM_CPU_SOLVER_CHECKPOINT_SCHEMA_VERSION, FDM_RK_PROJECTION_REALIZATION_VERSION,
     MAX_ADAPTIVE_ATTEMPT_RECORDS,
 };
 

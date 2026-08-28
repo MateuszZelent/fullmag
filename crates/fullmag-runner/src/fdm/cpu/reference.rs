@@ -14,11 +14,11 @@ use fullmag_engine::{
     magnetoelastic::{MagnetoelasticParams, PrescribedStrainField},
     AdaptiveStepConfig, AxisBoundary, CellSize, CubicAnisotropyConfig, EffectiveFieldTerms,
     EngineError, EngineErrorCode, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState,
-    ExchangeLlgStateSoA, ExternalStageTerms, FdmBoundaryPolicy, FftWorkspace, GridShape,
-    IntegratorBuffers, LlgConfig, MagnetoelasticTermConfig, MaterialParameters,
-    OerstedCylinderConfig, ProjectionPolicy, RegionalFieldDriveTerm, ResolvedFdmPeriodicWorkspace,
-    SlonczewskiSttConfig, SotConfig, SotFormula, StepReport, TimeIntegrator,
-    UniaxialAnisotropyConfig, Vector3, ZhangLiFormula, ZhangLiSttConfig,
+    ExchangeLlgStateSoA, ExternalStageTerms, FdmBoundaryPolicy, FdmCpuSolverCheckpointV1,
+    FftWorkspace, GridShape, IntegratorBuffers, LlgConfig, MagnetoelasticTermConfig,
+    MaterialParameters, OerstedCylinderConfig, ProjectionPolicy, RegionalFieldDriveTerm,
+    ResolvedFdmPeriodicWorkspace, SlonczewskiSttConfig, SotConfig, SotFormula, StepReport,
+    TimeIntegrator, UniaxialAnisotropyConfig, Vector3, ZhangLiFormula, ZhangLiSttConfig,
 };
 use fullmag_ir::{
     AdaptiveTimeStepIR, ExecutionPrecision, FdmPlanIR, FdmProjectionPolicyIR, IntegratorChoice,
@@ -60,9 +60,60 @@ use crate::types::{
     StepUpdate,
 };
 
+use sha2::{Digest, Sha256};
 use std::time::Instant;
 
 const MAX_COUPLED_ADAPTIVE_REJECTIONS: u64 = 50;
+const FDM_ABM3_RUNNER_CHECKPOINT_SCHEMA: &str = "fullmag.fdm.cpu.abm3-checkpoint.v1";
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FdmAbm3RunnerCheckpointV1 {
+    schema: String,
+    plan_sha256: String,
+    step: u64,
+    last_dt: f64,
+    thermal_seed: u64,
+    thermal_counter: u64,
+    solver: FdmCpuSolverCheckpointV1,
+}
+
+fn fdm_abm3_plan_sha256(plan: &FdmPlanIR) -> Result<String, RunError> {
+    let bytes = serde_json::to_vec(plan).map_err(|error| RunError {
+        message: format!("serializing FDM plan for ABM3 checkpoint identity: {error}"),
+    })?;
+    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
+}
+
+fn fdm_abm3_checkpoint_value(
+    plan: &FdmPlanIR,
+    problem: &ExchangeLlgProblem,
+    state: &ExchangeLlgState,
+    state_soa: Option<&ExchangeLlgStateSoA>,
+    step: u64,
+    last_dt: f64,
+) -> Result<Option<serde_json::Value>, RunError> {
+    if plan.integrator != Some(IntegratorChoice::Abm3) {
+        return Ok(None);
+    }
+    let solver = state_soa
+        .map(ExchangeLlgStateSoA::to_aos)
+        .unwrap_or_else(|| state.clone())
+        .solver_checkpoint();
+    serde_json::to_value(FdmAbm3RunnerCheckpointV1 {
+        schema: FDM_ABM3_RUNNER_CHECKPOINT_SCHEMA.to_string(),
+        plan_sha256: fdm_abm3_plan_sha256(plan)?,
+        step,
+        last_dt,
+        thermal_seed: problem.thermal_seed,
+        thermal_counter: problem.thermal_step(),
+        solver,
+    })
+    .map(Some)
+    .map_err(|error| RunError {
+        message: format!("serializing FDM CPU ABM3 checkpoint: {error}"),
+    })
+}
 
 fn stage_endpoint_roundoff(stage_end_time_s: f64, dt_s: f64) -> f64 {
     32.0 * f64::EPSILON
@@ -1094,8 +1145,20 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
 
     let (mut problem, mut state) = build_snapshot_problem_and_state(plan)?;
     let mut restored_frozen_checkpoint = None;
+    let mut restored_abm3_checkpoint = None;
     let mut restored_checkpoint = if let Some(value) = coupled_checkpoint {
         if value.get("schema").and_then(serde_json::Value::as_str)
+            == Some(FDM_ABM3_RUNNER_CHECKPOINT_SCHEMA)
+        {
+            restored_abm3_checkpoint = Some(
+                serde_json::from_value::<FdmAbm3RunnerCheckpointV1>(value).map_err(|error| {
+                    RunError {
+                        message: format!("invalid FDM CPU ABM3 checkpoint payload: {error}"),
+                    }
+                })?,
+            );
+            None
+        } else if value.get("schema").and_then(serde_json::Value::as_str)
             == Some(FROZEN_SPINS_CHECKPOINT_SCHEMA)
         {
             restored_frozen_checkpoint = Some(
@@ -1183,6 +1246,57 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
             .map_err(|error| RunError {
                 message: format!("frozen spins activation: {error}"),
             })?;
+    }
+    if let Some(checkpoint) = restored_abm3_checkpoint.take() {
+        if plan.integrator != Some(IntegratorChoice::Abm3) {
+            return Err(RunError {
+                message: "FDM CPU ABM3 checkpoint requires an ABM3 execution plan".to_string(),
+            });
+        }
+        if spin_transport.is_some() || plan.frozen_spins.is_some() {
+            return Err(RunError {
+                message: "FDM CPU ABM3 checkpoint cannot restore an unqualified spin-transport or Frozen Spins combination".to_string(),
+            });
+        }
+        let expected_plan_sha256 = fdm_abm3_plan_sha256(plan)?;
+        if checkpoint.plan_sha256 != expected_plan_sha256 {
+            return Err(RunError {
+                message: format!(
+                    "FDM CPU ABM3 checkpoint plan identity mismatch: checkpoint={}, expected={expected_plan_sha256}",
+                    checkpoint.plan_sha256
+                ),
+            });
+        }
+        if checkpoint.thermal_seed != problem.thermal_seed {
+            return Err(RunError {
+                message:
+                    "FDM CPU ABM3 checkpoint thermal RNG seed does not match the planned problem"
+                        .to_string(),
+            });
+        }
+        if checkpoint.step > 0 && (!checkpoint.last_dt.is_finite() || checkpoint.last_dt <= 0.0) {
+            return Err(RunError {
+                message: "FDM CPU ABM3 checkpoint last_dt must be finite and positive after an accepted step"
+                    .to_string(),
+            });
+        }
+        if !checkpoint.solver.abm3.rhs_history.is_empty()
+            && checkpoint.last_dt != checkpoint.solver.abm3.last_dt
+        {
+            return Err(RunError {
+                message: "FDM CPU ABM3 checkpoint runner last_dt disagrees with solver history"
+                    .to_string(),
+            });
+        }
+        state
+            .restore_solver_checkpoint(checkpoint.solver)
+            .map_err(|error| RunError {
+                message: format!("restoring FDM CPU ABM3 solver checkpoint: {error}"),
+            })?;
+        problem.restore_thermal_step(checkpoint.thermal_counter);
+        resume_timestep = (checkpoint.last_dt > 0.0).then_some(checkpoint.last_dt);
+        resume_previous_timestep = resume_timestep;
+        resume_step_count = Some(checkpoint.step);
     }
     let all_active_dofs_frozen = problem
         .frozen_spins()
@@ -1331,6 +1445,14 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
     } else {
         None
     };
+    let mut final_abm3_checkpoint = fdm_abm3_checkpoint_value(
+        plan,
+        &problem,
+        &state,
+        state_soa.as_ref(),
+        step_count,
+        last_solver_dt,
+    )?;
     let mut direct_minimizer_completion: Option<StageCompletionIR> = None;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let mut torque_confirmation = RelaxationTorqueConfirmation::default();
@@ -1516,7 +1638,9 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     live_field_snapshot_metrics.add(live_copy_metrics);
                     apply_step_field_copy_metrics(&mut current_stats, live_copy_metrics);
                     let action = (live.on_step)(StepUpdate {
-                        coupled_checkpoint: final_frozen_checkpoint.clone(),
+                        coupled_checkpoint: final_abm3_checkpoint
+                            .clone()
+                            .or_else(|| final_frozen_checkpoint.clone()),
                         stats: current_stats.clone(),
                         scalar_row_due: preview_due && preview_targets_global_scalar,
                         grid: live.grid,
@@ -1807,6 +1931,14 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                 dt = next;
             }
             last_step_report = Some(report);
+            final_abm3_checkpoint = fdm_abm3_checkpoint_value(
+                plan,
+                &problem,
+                &state,
+                state_soa.as_ref(),
+                step_count,
+                last_solver_dt,
+            )?;
             let mut latest_stats = StepStats {
                 step: step_count,
                 time: report.time_seconds,
@@ -1852,6 +1984,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                 }
             }
             apply_frozen_spin_step_telemetry(&mut latest_stats, &problem, state.magnetization());
+            apply_abm3_step_telemetry(&mut latest_stats, &report);
 
             final_coupled_checkpoint = spin_transport
                 .as_ref()
@@ -1997,7 +2130,8 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                 let action = (live.on_step)(StepUpdate {
                     coupled_checkpoint: final_frozen_checkpoint
                         .clone()
-                        .or_else(|| final_coupled_checkpoint.clone()),
+                        .or_else(|| final_coupled_checkpoint.clone())
+                        .or_else(|| final_abm3_checkpoint.clone()),
                     stats: update_stats,
                     scalar_row_due: due_scalar_row,
                     grid: live.grid,
@@ -2192,7 +2326,8 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                 let _ = (live.on_step)(StepUpdate {
                     coupled_checkpoint: final_frozen_checkpoint
                         .clone()
-                        .or_else(|| final_coupled_checkpoint.clone()),
+                        .or_else(|| final_coupled_checkpoint.clone())
+                        .or_else(|| final_abm3_checkpoint.clone()),
                     stats: final_stats,
                     scalar_row_due: true,
                     grid: live.grid,
@@ -2348,6 +2483,14 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
             relative_path: "constraints/frozen_spins_checkpoint.v1.json".to_string(),
             bytes: serde_json::to_vec_pretty(&checkpoint).map_err(|error| RunError {
                 message: format!("serializing Frozen Spins checkpoint artifact: {error}"),
+            })?,
+        });
+    }
+    if let Some(checkpoint) = final_abm3_checkpoint {
+        auxiliary_artifacts.push(crate::types::AuxiliaryArtifact {
+            relative_path: "solver/fdm_cpu_abm3_checkpoint.v1.json".to_string(),
+            bytes: serde_json::to_vec_pretty(&checkpoint).map_err(|error| RunError {
+                message: format!("serializing final FDM CPU ABM3 checkpoint artifact: {error}"),
             })?,
         });
     }
@@ -3038,6 +3181,7 @@ fn make_step_stats_from_report(
     );
     apply_frozen_spin_step_telemetry(&mut stats, problem, magnetization);
     stats.per_object_scalars = single_object_scalars("free", &stats);
+    apply_abm3_step_telemetry(&mut stats, report);
     stats
 }
 
@@ -3062,6 +3206,36 @@ fn apply_frozen_spin_step_telemetry(
         stats.max_rhs_all_norm_per_s = stats.max_rhs_norm_per_s;
         stats.max_torque_all_Apm = stats.max_torque_Apm;
     }
+}
+
+fn apply_abm3_step_telemetry(stats: &mut StepStats, report: &StepReport) {
+    let Some(telemetry) = report.abm3 else {
+        return;
+    };
+    let values = stats
+        .per_object_scalars
+        .entry("solver.abm3".to_string())
+        .or_default();
+    values.insert(
+        "schema_version".to_string(),
+        telemetry.schema_version as f64,
+    );
+    values.insert(
+        "startup_step".to_string(),
+        u8::from(telemetry.startup_step) as f64,
+    );
+    values.insert(
+        "history_reset_this_step".to_string(),
+        u8::from(telemetry.history_reset_this_step) as f64,
+    );
+    values.insert(
+        "history_resets_total".to_string(),
+        telemetry.history_resets_total as f64,
+    );
+    values.insert(
+        "rhs_evaluations".to_string(),
+        telemetry.rhs_evaluations as f64,
+    );
 }
 
 fn make_step_stats(
@@ -4934,6 +5108,7 @@ mod tests {
             max_rhs_all_amplitude: 17.0,
             max_torque_Apm: 19.0,
             max_torque_all_Apm: 19.0,
+            abm3: None,
         };
         let mut scalar_schedules = vec![OutputSchedule {
             name: "E_total".to_string(),
@@ -5491,6 +5666,7 @@ mod tests {
             max_rhs_all_amplitude: 8.0,
             max_torque_Apm: 9.0,
             max_torque_all_Apm: 9.0,
+            abm3: None,
         };
         let mut scalar_schedules = vec![OutputSchedule {
             name: "E_total".to_string(),
@@ -7369,5 +7545,93 @@ mod tests {
             [0.0, 0.0, 1.0].map(f64::to_bits),
             "restart must use the persisted reference, not recapture the selector"
         );
+    }
+
+    fn abm3_runner_plan() -> FdmPlanIR {
+        FdmPlanIR {
+            integrator: Some(IntegratorChoice::Abm3),
+            fixed_timestep: Some(1.0e-14),
+            external_field: Some([0.0, 0.0, 1.0e4]),
+            ..make_test_plan()
+        }
+    }
+
+    #[test]
+    fn abm3_runner_checkpoint_resume_matches_uninterrupted_execution() {
+        let plan = abm3_runner_plan();
+        let first = execute_reference_fdm(&plan, 4.0e-14, &[], None, None)
+            .expect("ABM3 checkpoint seed run");
+        let checkpoint_artifact = first
+            .auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "solver/fdm_cpu_abm3_checkpoint.v1.json")
+            .expect("ABM3 run must emit a durable solver checkpoint");
+        let checkpoint: serde_json::Value =
+            serde_json::from_slice(&checkpoint_artifact.bytes).expect("ABM3 checkpoint JSON");
+        assert_eq!(checkpoint["schema"], FDM_ABM3_RUNNER_CHECKPOINT_SCHEMA);
+        assert_eq!(checkpoint["step"], 4);
+        assert_eq!(
+            checkpoint["solver"]["abm3"]["rhs_history"]
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
+        assert_eq!(
+            checkpoint["solver"]["abm3"]["rhs_times_seconds"]
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
+
+        let uninterrupted =
+            execute_reference_fdm(&plan, 5.0e-14, &[], None, None).expect("uninterrupted ABM3 run");
+        let resumed = execute_reference_fdm_with_coupled_checkpoint(
+            &plan,
+            5.0e-14,
+            &[],
+            None,
+            None,
+            Some(checkpoint.clone()),
+        )
+        .expect("resumed ABM3 run");
+        assert_eq!(
+            resumed
+                .result
+                .final_magnetization
+                .iter()
+                .flatten()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            uninterrupted
+                .result
+                .final_magnetization
+                .iter()
+                .flatten()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        );
+        let telemetry = resumed
+            .result
+            .steps
+            .last()
+            .and_then(|stats| stats.per_object_scalars.get("solver.abm3"))
+            .expect("runner must publish ABM3 telemetry");
+        assert_eq!(telemetry["startup_step"], 0.0);
+        assert_eq!(telemetry["rhs_evaluations"], 2.0);
+
+        let mut changed_plan = plan;
+        changed_plan.external_field = Some([0.0, 0.0, 2.0e4]);
+        let error = execute_reference_fdm_with_coupled_checkpoint(
+            &changed_plan,
+            5.0e-14,
+            &[],
+            None,
+            None,
+            Some(checkpoint),
+        )
+        .expect_err("changed physics must invalidate the ABM3 checkpoint");
+        assert!(error.message.contains("plan identity mismatch"));
     }
 }

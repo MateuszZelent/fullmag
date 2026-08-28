@@ -38,6 +38,18 @@ Every product-facing feature should be described with one of these statuses:
 | **`production_executable`** | Executable on the intended production lane. For `Relaxation(*)`, this label additionally requires an exact source-bound managed receipt. |
 | **`validated`** | Executable and benchmarked with explicit regression coverage for the documented workload. For `Relaxation(*)`, this additionally requires an exact source-bound managed receipt. |
 
+### Fixed-step ABM3 capability
+
+`time_integrator.abm3.fixed.v1` is `reference_executable` only for the FDM CPU
+double-precision single-grid lane with a finite positive fixed timestep. The
+runtime stores accepted corrected endpoint RHS history, restarts on timestep or
+revision changes, publishes typed reset/RHS telemetry, and emits a plan-bound
+versioned checkpoint that restores exact continuation state. Adaptive ABM3,
+Brown thermal noise, Frozen Spins, regional discontinuous drives, multilayer
+execution, FDM GPU, and native FEM GPU fail closed. Source tests establish the
+bounded numerical and restart contract, but no managed qualification receipt
+or `validated` status is claimed.
+
 Promocja `Relaxation(*)` jest fail-closed. Receipt musi wskazywać kanoniczny
 identyfikator feature i algorytmu, kanoniczny backend/device/precision lane'u,
 pełną, kanoniczną listę workloadów związaną z `(lane, algorithm)`, runtime/device
