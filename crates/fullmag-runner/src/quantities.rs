@@ -110,6 +110,10 @@ fn has_values(values: &Option<Vec<f64>>) -> bool {
     values.as_ref().is_some_and(|values| !values.is_empty())
 }
 
+fn has_nonzero_external_field(field: Option<[f64; 3]>) -> bool {
+    field.is_some_and(|field| field.into_iter().any(|component| component != 0.0))
+}
+
 fn fdm_quantity_is_active(engine: FdmEngine, plan: &FdmPlanIR, id: QuantityId) -> bool {
     let engine_exposes = match engine {
         FdmEngine::CpuReference => crate::fdm::cpu::reference::can_materialize_preview_quantity(id),
@@ -123,7 +127,7 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         QuantityId::M | QuantityId::HEff | QuantityId::Torque => true,
         QuantityId::HEx => plan.enable_exchange,
         QuantityId::HDemag => plan.enable_demag,
-        QuantityId::HExt => plan.external_field.is_some(),
+        QuantityId::HExt => has_nonzero_external_field(plan.external_field),
         QuantityId::HDrive => plan.field_drives.iter().any(|drive| drive.enabled),
         QuantityId::HOe => plan.has_oersted_cylinder || plan.oersted_field_xyz.is_some(),
         QuantityId::HAni => fdm_has_uniaxial_anisotropy(&plan.material),
@@ -136,7 +140,7 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
             .is_some_and(|temperature| temperature > 0.0),
         QuantityId::EdenEx => plan.enable_exchange,
         QuantityId::EdenDemag => plan.enable_demag,
-        QuantityId::EdenExt => plan.external_field.is_some(),
+        QuantityId::EdenExt => has_nonzero_external_field(plan.external_field),
         QuantityId::EdenDrive => plan.field_drives.iter().any(|drive| drive.enabled),
         QuantityId::EdenAni => {
             fdm_has_uniaxial_anisotropy(&plan.material) || fdm_has_cubic_anisotropy(&plan.material)
@@ -185,7 +189,9 @@ fn fdm_multilayer_quantity_is_active(plan: &FdmMultilayerPlanIR, id: QuantityId)
         | QuantityId::MatAlpha => true,
         QuantityId::HEx | QuantityId::EdenEx => plan.enable_exchange,
         QuantityId::HDemag | QuantityId::EdenDemag => plan.enable_demag,
-        QuantityId::HExt | QuantityId::EdenExt => plan.external_field.is_some(),
+        QuantityId::HExt | QuantityId::EdenExt => {
+            has_nonzero_external_field(plan.external_field)
+        }
         QuantityId::HAni | QuantityId::EdenAni => plan.layers.iter().any(|layer| {
             layer.material.uniaxial_anisotropy_ku1.is_some()
                 || layer.material.uniaxial_anisotropy_ku2.is_some()
@@ -252,7 +258,7 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
         QuantityId::HEx => plan.enable_exchange,
         QuantityId::HDemag => plan.enable_demag,
         QuantityId::DemagPhi => plan.enable_demag,
-        QuantityId::HExt => plan.external_field.is_some(),
+        QuantityId::HExt => has_nonzero_external_field(plan.external_field),
         QuantityId::HAnt => !plan.current_modules.is_empty(),
         QuantityId::HDrive => plan.field_drives.iter().any(|drive| drive.enabled),
         QuantityId::HAni => material_has_uniaxial_anisotropy(&plan.material),
@@ -270,7 +276,7 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
             .is_some_and(|temperature| temperature > 0.0),
         QuantityId::EdenEx => plan.enable_exchange,
         QuantityId::EdenDemag => plan.enable_demag,
-        QuantityId::EdenExt => plan.external_field.is_some(),
+        QuantityId::EdenExt => has_nonzero_external_field(plan.external_field),
         QuantityId::EdenDrive => plan.field_drives.iter().any(|drive| drive.enabled),
         QuantityId::EdenAni => {
             material_has_uniaxial_anisotropy(&plan.material)
@@ -494,6 +500,22 @@ mod tests {
         assert_eq!(
             active_fdm_preview_quantities(FdmEngine::CpuReference, &plan, &quantities),
             vec!["m", "H_ex", "H_demag", "H_ext", "torque", "H_ani", "H_dmi", "H_eff", "H_oe"]
+        );
+    }
+
+    #[test]
+    fn zero_zeeman_field_does_not_advertise_external_field_quantities() {
+        let quantities = ["H_ext", "eden_ext"];
+        let mut fdm = fdm_plan();
+        fdm.external_field = Some([0.0, -0.0, 0.0]);
+        let mut fem = fem_plan();
+        fem.external_field = Some([0.0, -0.0, 0.0]);
+
+        assert!(
+            active_fdm_preview_quantities(FdmEngine::CudaFdm, &fdm, &quantities).is_empty()
+        );
+        assert!(
+            active_fem_preview_quantities(FemEngine::CpuNative, &fem, &quantities).is_empty()
         );
     }
 

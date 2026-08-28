@@ -2363,7 +2363,7 @@ describe("ObjectVisualizationPanelModel", () => {
     expect(fieldCatalogQuantityAvailable(null, "H_demag")).toBe(true);
   });
 
-  it("keeps object magnetization while exposing Airbox magnetization only as disabled", () => {
+  it("keeps object magnetization while omitting it completely from the Airbox list", () => {
     const catalog = {
       domain_generation_id: "fdm-generation-1",
       quantities: [
@@ -2376,11 +2376,9 @@ describe("ObjectVisualizationPanelModel", () => {
     expect(
       visualizationQuantityItems("m", "object", catalog).map((item) => item.value),
     ).toEqual(["m", "H_demag"]);
-    expect(visualizationQuantityItems("m", "airbox", catalog)[0]).toEqual({
-      disabled: true,
-      label: "Unavailable / m",
-      value: "m",
-    });
+    expect(visualizationQuantityItems("m", "airbox", catalog)).toEqual([
+      { label: "Demag field", value: "H_demag" },
+    ]);
   });
 
   it("switches scalar material quantities to colormap surface coloring", () => {

@@ -13,5 +13,9 @@ fullmag-engine = { path = "../fullmag-engine" }
 fullmag-ir = { path = "../fullmag-ir" }
 fullmag-plan = { path = "../fullmag-plan" }
 fullmag-runner = { path = "../fullmag-runner" }
+numpy.workspace = true
 pyo3.workspace = true
+rayon = "1.10"
+serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.10"

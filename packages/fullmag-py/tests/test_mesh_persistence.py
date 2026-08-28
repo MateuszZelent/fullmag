@@ -255,13 +255,13 @@ class MeshPersistenceTests(unittest.TestCase):
             with zipfile.ZipFile(path, "r") as archive:
                 members = {name: archive.read(name) for name in archive.namelist()}
             manifest = __import__("json").loads(members["manifest.json"])
-            manifest["schema"] = "fullmag.mesh-artifact.v2"
+            manifest["schema"] = "fullmag.mesh-artifact.v3"
             members["manifest.json"] = __import__("json").dumps(manifest).encode()
             with zipfile.ZipFile(path, "w") as archive:
                 for name, payload in members.items():
                     archive.writestr(name, payload)
 
-            with self.assertRaisesRegex(MeshArtifactVersionError, "v2"):
+            with self.assertRaisesRegex(MeshArtifactVersionError, "v3"):
                 load_mesh_artifact(path)
 
     def test_native_save_rejects_incomplete_semantic_maps(self) -> None:

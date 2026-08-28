@@ -2260,7 +2260,6 @@ fn build_visualization_target_registry(
             "Airbox",
             VisualizationTargetSource::Airbox,
             airbox_target_settings(
-                active_quantity_id,
                 scalar_color_palette,
                 layers,
                 vector_style,
@@ -2440,13 +2439,12 @@ fn object_target_settings(
 }
 
 fn airbox_target_settings(
-    active_quantity_id: &str,
     scalar_color_palette: &str,
     layers: &VisualizationLayerState,
     vector_style: &VectorStyleVisualizationState,
 ) -> VisualizationResolvedTargetSettings {
     let mut settings = VisualizationResolvedTargetSettings {
-        active_quantity_id: active_quantity_id.to_string(),
+        active_quantity_id: "H_demag".to_string(),
         visible: layers.airbox.visible,
         bounds_visible: layers.airbox.bounds.visible,
         bounds_opacity: layers.airbox.bounds.opacity,

@@ -579,6 +579,7 @@ if [ ! -f target/release/lib_fullmag_core.so ]; then
   exit 1
 fi
 install -m 755 target/release/lib_fullmag_core.so ${runtime_root}/_fullmag_core.so
+PYTHONPATH="${runtime_root}" python3 -c "import _fullmag_core; assert callable(getattr(_fullmag_core, \"certify_mixed_mesh_arrays\", None)), \"exported _fullmag_core is missing certify_mixed_mesh_arrays\"; assert callable(getattr(_fullmag_core, \"preflight_mixed_mesh_arrays\", None)), \"exported _fullmag_core is missing preflight_mixed_mesh_arrays\"; assert callable(getattr(_fullmag_core, \"mixed_mesh_topology_codes_json\", None)), \"exported _fullmag_core is missing mixed_mesh_topology_codes_json\""
 latest_native_lib_dir() {
   local pattern="$1"
   local selected

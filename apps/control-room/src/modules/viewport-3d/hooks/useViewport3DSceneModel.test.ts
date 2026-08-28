@@ -1436,6 +1436,18 @@ describe("useViewport3DSceneModel", () => {
     );
   });
 
+  it("keys the render model by the displayed payload revision", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    const buildStart = source.indexOf("const fieldRenderModel = useMemo");
+    const buildEnd = source.indexOf("const visualizationDebugTargets", buildStart);
+    const buildSource = source.slice(buildStart, buildEnd);
+
+    expect(buildSource).toContain("fieldRevision: primaryFieldRevision");
+    expect(buildSource).not.toContain(
+      "fieldRevision: fieldVector.payloadRevision ?? fieldVector.revision",
+    );
+  });
+
   it("keeps camera transport hold outside the React scene model", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 

@@ -339,7 +339,11 @@ export function resolveTargetFieldAvailabilityMap({
 export function targetFieldAvailabilityIsSelectable(
   availability: TargetFieldAvailability,
 ): boolean {
-  return availability.supported && availability.state !== "unavailable";
+  return (
+    availability.supported &&
+    (availability.state !== "unavailable" ||
+      availability.reasonCode === "field_materialization_error")
+  );
 }
 
 export function targetFieldAvailabilityIsLive(

@@ -660,10 +660,98 @@ def _optimize_mixed_pyramid_apices(gmsh: Any) -> float:
     return max(selected_factors)
 
 
-def _repair_mixed_tetrahedra(gmsh: Any) -> None:
-    """Repair Delaunay tetrahedra before certifying a mixed prism mesh."""
+@dataclass(frozen=True)
+class _MixedTetRepairPolicy:
+    algorithm_id: str
+    method: str
+    iterations: int
+
+
+_MIXED_TET_REPAIR_METHODS = frozenset({"", "Relocate3D", "Netgen"})
+_STRICT_MIXED_TET_REPAIR_POLICY = _MixedTetRepairPolicy(
+    algorithm_id="fullmag.mixed-tet-repair.v1",
+    method="Relocate3D",
+    iterations=1,
+)
+
+
+def _validate_mixed_tet_repair_policy(policy: _MixedTetRepairPolicy) -> None:
+    if not isinstance(policy.algorithm_id, str) or not policy.algorithm_id.strip():
+        raise ValueError("mixed tetrahedral repair algorithm ID must be non-empty")
+    if policy.method not in _MIXED_TET_REPAIR_METHODS:
+        raise ValueError(
+            f"unsupported mixed tetrahedral repair method: {policy.method!r}"
+        )
+    if (
+        isinstance(policy.iterations, bool)
+        or not isinstance(policy.iterations, int)
+        or policy.iterations < 1
+    ):
+        raise ValueError("mixed tetrahedral repair iterations must be at least one")
+
+
+def _qualification_mixed_tet_repair_algorithm_id(
+    method: str,
+    iterations: int,
+) -> str:
+    """Return the deterministic ID for one non-production repair candidate."""
+    candidate = _MixedTetRepairPolicy(
+        algorithm_id="qualification",
+        method=method,
+        iterations=iterations,
+    )
+    _validate_mixed_tet_repair_policy(candidate)
+    method_id = method if method else "default"
+    return (
+        "fullmag.mixed-tet-repair.qualification.v1"
+        f".method-{method_id}.niter-{iterations}"
+    )
+
+
+def _execute_mixed_tet_repair_policy(
+    gmsh: Any,
+    policy: _MixedTetRepairPolicy,
+) -> None:
+    """Execute one validated policy independently of instrumented wrappers."""
+    if not isinstance(policy, _MixedTetRepairPolicy):
+        raise TypeError("mixed tetrahedral repair policy has an invalid type")
+    _validate_mixed_tet_repair_policy(policy)
     emit_progress("Gmsh: repairing mixed-domain tetrahedra")
-    gmsh.model.mesh.optimize("Netgen", niter=1)
+    gmsh.model.mesh.optimize(policy.method, niter=policy.iterations)
+
+
+def _repair_mixed_tetrahedra(
+    gmsh: Any,
+    *,
+    policy: _MixedTetRepairPolicy = _STRICT_MIXED_TET_REPAIR_POLICY,
+) -> None:
+    """Repair Delaunay tetrahedra before certifying a mixed prism mesh."""
+    _execute_mixed_tet_repair_policy(gmsh, policy)
+
+
+def _repair_mixed_tetrahedra_for_qualification(
+    method: str,
+    gmsh: Any,
+    *,
+    iterations: int = 1,
+) -> None:
+    """Run one private qualification candidate through the canonical repair."""
+    policy = (
+        _STRICT_MIXED_TET_REPAIR_POLICY
+        if (
+            method == _STRICT_MIXED_TET_REPAIR_POLICY.method
+            and iterations == _STRICT_MIXED_TET_REPAIR_POLICY.iterations
+        )
+        else _MixedTetRepairPolicy(
+            algorithm_id=_qualification_mixed_tet_repair_algorithm_id(
+                method,
+                iterations,
+            ),
+            method=method,
+            iterations=iterations,
+        )
+    )
+    _execute_mixed_tet_repair_policy(gmsh, policy)
 
 
 class SweepabilityResult:

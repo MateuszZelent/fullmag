@@ -116,6 +116,9 @@ export function quantityItemsForVisualizationTarget(
   const baseItems = quantityCatalog
     ? mergeQuantityItems(capabilityItems, fieldItems)
     : fieldItems;
+  if (targetKind === "airbox") {
+    return baseItems;
+  }
   return baseItems.some((item) => item.value === activeQuantityId)
     ? baseItems
     : [

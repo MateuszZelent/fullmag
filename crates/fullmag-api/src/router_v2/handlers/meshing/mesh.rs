@@ -1467,7 +1467,7 @@ fn mixed_certificate_quality_evidence(
         };
     }
     if let Err(reasons) =
-        fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(certificate, &mesh_ir)
+        fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(&mesh_ir, certificate)
     {
         return MeshMixedCertificateQualityEvidenceResource {
             status: MeshMixedCertificateQualityEvidenceStatus::Rejected,

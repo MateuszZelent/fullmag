@@ -68,7 +68,7 @@ const NUMBER_FIELDS: Array<{
 }> = [
   {
     key: "scalar_telemetry_publish_ms",
-    label: "Scalar sample ms",
+    label: "Scalar delivery ms",
     min: 50,
     step: 50,
   },
@@ -98,7 +98,7 @@ const NUMBER_FIELDS: Array<{
   },
   {
     key: "diagnostics_summary_ms",
-    label: "Diagnostics ms",
+    label: "Diagnostics refresh ms",
     min: 250,
     step: 250,
   },

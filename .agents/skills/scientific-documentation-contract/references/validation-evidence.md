@@ -10,6 +10,13 @@ The public-example guard adds a regression boundary for the authoring workflow: 
 simulation-shaped Python block must use `fm.study(...)` and `study.stages.add_*`; direct
 `fm.Problem(...)` is accepted only as a labelled non-running `ProblemIR`/schema inspection fixture.
 
+The Python source-map constant regression was added before assignment declarations were
+supported. It failed with `declaration not found` for a real module-level policy constant while
+comments and call-site uses remained non-declarations. After the validator change, the assignment
+resolves exactly once and the comment/use-only negative case still fails closed. A follow-up RED
+case proved that `NAME == value` was initially misclassified as assignment; the matcher now rejects
+comparison-only references and the full validator suite remains green.
+
 ## Regression scenarios
 
 Repeat after material changes:

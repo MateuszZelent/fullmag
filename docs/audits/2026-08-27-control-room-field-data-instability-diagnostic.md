@@ -2,7 +2,7 @@
 
 **Data:** 2026-08-27
 **Zakres:** sesja FEM GPU `session-1787783828923-72382`, pola `m` i `H_demag`, zasoby v2, cache zasobów, viewport 3D i planar
-**Stan raportu:** przyczyny potwierdzone i naprawione w kodzie; testy jednostkowe, kontraktowe, typecheck, React Doctor i zarządzany test FEM przeszły; kwalifikacja w otwartej przeglądarce jest zablokowana błędem połączenia narzędziowego
+**Stan raportu:** przyczyny niestabilności pól potwierdzone i naprawione w kodzie; późniejszy audyt częstotliwości telemetryki wykazał dwa otwarte problemy kontraktowe opisane w sekcji 16
 
 ## 1. Streszczenie wykonawcze
 
@@ -519,12 +519,143 @@ Dodatkowo `FooterModule.transportEntriesSignature()` składa sygnaturę wyłącz
 | `pnpm --dir apps/control-room typecheck` | bez błędów | PASS |
 | React Doctor 0.9.12 na Node 24.19 | 100/100, brak diagnostyk | PASS |
 | walidator publikacyjnej dokumentacji naukowej | walidator i 28 testów walidatora przechodzą | PASS |
-| rzeczywisty smoke otwartej przeglądarki/WebGL | klient in-app browser odrzuca inicjalizację: `sandboxCwd is not a local file URI` | BLOCKED |
+| regresje stabilności glyphów i budżetu | 3 pliki, 201/201 | PASS |
+| szersze testy render modelu, alokatora, cache, GPU uploadu i workera | 7 plików, 354/354 | PASS |
+| rzeczywisty smoke Chromium/WebGL | jeden viewport i canvas; `contextLost=false`; drawing buffer `617×556`; brak błędów konsoli | PASS |
+| 16-sekundowy audyt lifecycle po ustabilizowaniu strony | 160/160 zdrowych próbek; 0 remountów, 0 brakujących canvasów, 0 utrat kontekstu | PASS |
 
 ## 13. Stan końcowy i pozostałe ryzyko
 
 Naprawione są wszystkie potwierdzone przyczyny rotacji pól, kasowania last-good, nadmiarowych invalidacji, zaniżania liczników oraz stałego `422` dla Prism6. Z testów kontraktowych wynika, że częściowe wyniki materializera nie mogą już usuwać wcześniej opublikowanych pól, a przejściowy brak payloadu nie usuwa widocznego bufora wektorów.
 
-Nie można jeszcze oznaczyć `THREE.WebGLRenderer: Context Lost` jako naprawionego ani nieszkodliwego. Dwie próby połączenia z dokładnie wskazaną przeglądarką aplikacji zakończyły się przed dostępem do strony tym samym błędem infrastruktury narzędziowej. Po przywróceniu połączenia wymagana jest jedna końcowa sesja runtime: co najmniej 60 s, dwa pełne cykle materializera, niezmienna tożsamość canvasu, `gl.isContextLost() === false`, niezerowy drawing buffer, stabilne glyphy oraz pomiar surowych requestów względem budżetu. Jest to brak dowodu przeglądarkowego, a nie znana luka w zaimplementowanym kontrakcie danych.
+Lokalne Chromium potwierdziło zdrowy WebGL po naprawie: jeden aktywny canvas, `gl.isContextLost() === false`, niezerowy drawing buffer i brak błędów konsoli. Dodatkowy audyt po ustabilizowaniu strony nie wykazał remountu canvasu ani chwilowego zaniku viewportu w 160 próbkach co 100 ms. Nie oznacza to, że historyczny komunikat `Context Lost` był nieszkodliwy; oznacza, że nie wystąpił w kwalifikowanym przebiegu po naprawie.
 
 Pełny przebieg całego pakietu frontendowego nie jest obecnie zielony: poza zakresem tej naprawy istnieje pięć niepowiązanych niepowodzeń oraz trzy pliki bez wykrytego suite. Jedyny ujawniony błąd związany z tym zadaniem — nieaktualny mock diagnostyki w teście lifecycle Quick Chart — został naprawiony i wszedł do powyższego zestawu 118/118. Pozostałych awarii nie maskowano ani nie przypisano tej zmianie.
+
+## 14. Stabilność pozycji glyphów podczas `Next field sync`
+
+### FDI-013 — render model używał rewizji transportu zamiast rewizji widocznego payloadu
+
+**Priorytet:** P0
+**Status:** CONFIRMED / FIXED
+
+`displayedFieldVectorEnvelope` rozdziela payload faktycznie widoczny od nowszego żądania transportowego i wystawia jego własny `etag` jako `primaryFieldRevision`. Mimo tego `buildViewport3DFieldRenderModel()` otrzymywał `fieldVector.payloadRevision ?? fieldVector.revision`. W oknie odświeżenia stary, zachowany payload mógł więc zostać zbudowany i zapisany w cache pod kluczem nowej rewizji. Po przyjściu właściwego payloadu cache uznawał ten klucz za gotowy, mimo że macierze powstały z innych danych.
+
+Naprawa przekazuje `primaryFieldRevision` do render modelu i usuwa zależność buildu od rewizji transportowej. Ta sama tożsamość opisuje teraz jednocześnie dane, segmenty, build workera i wpis derived-buffer cache.
+
+### FDI-014 — count i kolory były ujawniane przed ukończeniem macierzy
+
+**Priorytet:** P0
+**Status:** CONFIRMED / FIXED
+
+Upload kolorów i upload macierzy są osobnymi, kolejkowanymi zadaniami. Poprzednio callback kolorów ustawiał `shaft.count` i `head.count`, podłączał nowy atrybut kolorów oraz oznaczał go jako gotowy dla GPU, zanim zadanie macierzy zakończyło wszystkie batch-e. Przy zmianie liczby aktywnych glyphów odsłaniało to nowe instancje ze starymi lub jeszcze zerowymi transformacjami; przy stałej liczbie mieszało nową orientacyjną kolorystykę ze starym obrotem.
+
+Po naprawie zadanie kolorów wyłącznie przygotowuje bufor CPU. Dopiero `onVisible` ukończonego uploadu macierzy atomowo ustawia count obu instanced meshes, podłącza i oznacza kolory, oznacza obie macierze oraz rejestruje adopcję jednej rewizji. Poprzedni kompletny obraz pozostaje widoczny do tego momentu.
+
+Topologia, geometria strzałek i deterministyczny wybór indeksów węzłów/komórek nie są przebudowywane przez zmianę wartości pola. Dla niezmiennej domeny, scope i budżetu zmieniają się wyłącznie wartości kierunku, skali względnej i koloru.
+
+## 15. Budżet wektorów
+
+### FDI-015 — panel pomijał runtime `sceneCap` i wpadał w fallback 2048
+
+**Priorytet:** P1
+**Status:** CONFIRMED / FIXED
+
+Sesja poprawnie publikowała limit `sampling.max_glyphs=16384`, ale oba wywołania `resolveVisualizationVectorBudgetRange()` w Inspectorze nie otrzymywały `sceneCap`. Model stosował wtedy bezpieczny fallback `DEFAULT_VISUALIZATION_VECTOR_SCENE_CAP=2048`. Dlatego dla 37 418 dostępnych kotwic maksymalna wartość suwaka wynosiła 2048 mimo poprawnie wyświetlanego limitu sceny 16 384.
+
+Naprawa oblicza `vectorSceneCap` przed zakresami i przekazuje go zarówno dla `full`, jak i `surface`. Dla zgłoszonego przypadku prawidłowy zakres wynosi teraz `min(37418, 16384) = 16384`. Limit sceny pozostaje celową polityką GPU; ustawienie 16 384 nie oznacza renderowania wszystkich 37 418 kotwic bez jawnego podniesienia tej polityki i ponownej kwalifikacji wydajnościowej.
+
+## 16. Audyt częstotliwości telemetryki i odświeżeń
+
+### 16.1. Macierz obowiązujących czasów
+
+| Kanał lub zasób | Czas domyślny | Rzeczywista semantyka | Ocena |
+|---|---:|---|---|
+| próbka skalarna `scalar.sample` | 200 ms | CLI zachowuje first + latest + terminal, a API ogranicza faktyczne dostarczenie do UI według bieżącego `scalar_telemetry_publish_ms` | POPRAWNE |
+| publikacja live podczas bootstrap/materializacji | 200 ms | pełny cykl delta tylko przy zgłoszonej zmianie | POPRAWNE |
+| publikacja live podczas pracy solvera | 1000 ms | pełny cykl delta tylko przy zgłoszonej zmianie | POPRAWNE |
+| wiersze tabeli / scalar window | 1000 ms | minimalny odstęp refetch po invalidacji, nie polling | POPRAWNE |
+| próbki pól i invalidacje viewportu | 2000 ms | serwerowy kanał QoS oraz minimalny odstęp refetch aktywnego zasobu | POPRAWNE |
+| lifecycle realtime | 250 ms | okno koalescencji zmian niepilnych | POPRAWNE |
+| `session/status` | 5000 ms | minimalny odstęp refetch po invalidacji, nie polling | POPRAWNE |
+| agregacja diagnostyki transportu | 5000 ms | wyłącznie grupowanie wpisów w pamięci klienta; nie generuje sieci | POPRAWNE |
+| retry po błędzie hooka | 1000 ms | zewnętrzne opóźnienie po błędzie; wewnętrzny retry jest ograniczony do 3 prób i 5 s | CZĘŚCIOWO POPRAWNE |
+| WebSocket reconnect | 5000 ms | jednorazowy timeout po rozłączeniu | POPRAWNE |
+| WebSocket heartbeat | 15000 ms | heartbeat połączenia bez refetchu zasobów | POPRAWNE |
+| heartbeat właściciela CLI | 10000 ms | lekki delta sync służący wykrywaniu utraty właściciela sesji | POPRAWNE |
+| CPU/GPU telemetry | 5000 ms | podczas aktywnego runtime API publikuje exact invalidation w osobnym kanale `DiagnosticsSummary`; HTTP fetch zachodzi tylko dla zasubskrybowanego zasobu | POPRAWNE KONTRAKTOWO; LIVE NOT VERIFIED |
+| viewport 3D bez zmian | 0 klatek | R3F `frameloop="demand"`; tylko ograniczone klatki one-shot | POPRAWNE |
+
+`minRefetchIntervalMs` nie jest pollingiem. Zasób jest pobierany ponownie dopiero po invalidacji lub ręcznym odświeżeniu, a wspólny `ResourceRuntimeStore` deduplikuje wielu konsumentów tego samego `resourceKey` i współdzieli jedno żądanie in-flight.
+
+### FDI-016 — próbki 200 ms są kolejkowane za publisherem 1000 ms
+
+**Priorytet:** P1
+**Status:** CONFIRMED / FIXED
+
+`LiveTelemetryPublishGate` dopuszcza próbkę skalarną co 200 ms. Podczas pracy solvera `CurrentLivePublisher` przechodzi jednak w slow mode i wykonuje cykl publikacji nie częściej niż co 1000 ms. Poprzednio `PendingScalarRows` przechowywał każdą dopuszczoną próbkę, a `publish_pending_scalar_rows()` opróżniał całą kolejkę w pętli przy kolejnym przebudzeniu.
+
+Naprawa ogranicza kolejkę interaktywną do pierwszej, najnowszej pośredniej i terminalnej próbki danej sekwencji. Nowsza próbka pośrednia zastępuje starszą, terminalna zastępuje pośrednią tego samego kroku, a błąd sinka zachowuje first/latest do ponowienia. Test z 10 000 szybkich kroków nie powoduje liniowego wzrostu kolejki. Historia naukowa nadal pozostaje osobno zachowywana przez table autosave.
+
+**Kod:**
+
+- `crates/fullmag-session/src/communication_policy.rs`, `LIVE_SCALAR_TELEMETRY_INTERVAL_MS=200`, `LIVE_PUBLISH_FAST_INTERVAL_MS=200`, `LIVE_PUBLISH_MIN_INTERVAL_MS=1000`;
+- `crates/fullmag-cli/src/live_workspace.rs`, `PendingScalarRows::enqueue_if_new()`, `LiveTelemetryPublishGate` i `publish_pending_scalar_rows()`;
+- `apps/control-room/src/modules/footer/FooterTelemetry.tsx`, bezpośrednie `setSample()` dla każdego zdarzenia `telemetry:scalar-sample`.
+
+### FDI-017 — edytowalny `scalar_telemetry_publish_ms` nie steruje producentem CLI
+
+**Priorytet:** P1
+**Status:** CONFIRMED / FIXED
+
+API przyjmuje i publikuje efektywną wartość `scalar_telemetry_publish_ms`, a frontend aktualizuje lokalną politykę z komunikatu `hello`. Producent próbek w CLI nadal celowo używa wewnętrznej bramki `LIVE_SCALAR_TELEMETRY_INTERVAL`; nie jest to już deklarowane jako częstotliwość producenta.
+
+Naprawa dodaje w API jednego właściciela QoS dla `scalar.sample`. Pierwsza i terminalna próbka omijają okno, próbki pośrednie są latest-only, a zaplanowany flush ponownie odczytuje bieżącą politykę i unieważnia zadania poprzedniego runu. Wartość steruje zatem faktycznym tempem dostarczenia do UI bez udawania, że zmienia częstotliwość kroków solvera. Etykieta `Scalar delivery ms` opisuje tę granicę wprost. Test async potwierdza zmianę deadline'u po patchu 40 -> 140 ms bez restartu.
+
+### FDI-018 — CPU/GPU telemetry może pozostać nieaktualne
+
+**Priorytet:** P2
+**Status:** CONFIRMED / FIXED
+
+`useCpuTelemetryResource()` i `useGpuTelemetryResource()` wykonują fetch po zamontowaniu panelu i nadal nie mają pollingu. API publikuje teraz podczas aktywnego runtime dokładne zmiany dla `/diagnostics/cpu` i `/diagnostics/gpu` w osobnym kanale QoS `DiagnosticsSummary`, sterowanym przez `diagnostics_summary_ms`. `solver-profile` pozostaje w kanale lifecycle.
+
+Frontend używa exact invalidation zamiast unieważniania prefiksu. Istniejący `ResourceRuntimeStore` pobiera zasób tylko przy aktywnym subskrybencie i deduplikuje żądania in-flight, więc zamknięty panel nie generuje GET CPU/GPU. Nie dodano `setInterval`, nowego store ani alternatywnego transportu. Brak aktywnego runtime nie publikuje tych invalidacji.
+
+### 16.2. Interpretacja wcześniejszego logu transportowego
+
+Eksport diagnostyczny z 2026-08-26 zawierał około czterech `scalar.sample` w 3063 ms, czyli w praktyce około 1,3 Hz, zgodnie z wolnym cyklem publishera, a nie 5 Hz sugerowanym przez wartość 200 ms. Ten sam wycinek pokazywał cztery pobrania `/data/fields`, `/data/quantities` i availability w około 3 s. Ta druga część nie była normalną telemetryką: wynikała z naprawionej już rotacji `field_catalog_revision` i błędnej terminalnej klasyfikacji częściowych paczek pól.
+
+Po aktualnym źródle katalog pól należy do lifecycle QoS, próbki pól do okna 2000 ms, a tabele do okna 1000 ms. Testy rozdzielenia QoS przechodzą. Brakuje jednak świeżego, post-fix 60-sekundowego pomiaru runtime z działającym serwerem; status ograniczenia rzeczywistego ruchu pozostaje `NOT VERIFIED` do takiego przebiegu.
+
+### 16.3. Wymagane bramki naprawy
+
+1. Telemetryka UI przechowuje co najwyżej najnowszą nieterminalną próbkę na sekwencję; pierwsza i terminalna próbka są dostarczane dokładnie raz.
+2. `scalar_telemetry_publish_ms` steruje faktycznym producentem end-to-end albo zostaje usunięte z edytowalnej polityki.
+3. W 60-sekundowym przebiegu aktywnego solvera nie występują paczki seryjnych `scalar.sample` z jednego przebudzenia publishera.
+4. Nie ma pobrań `/data/fields` ani `/data/quantities`, jeżeli nie zmienił się skład lub domena katalogu.
+5. CPU/GPU telemetry odświeża się tylko przy widocznym konsumencie i aktywnym runtime, przez invalidację zasobu, bez `setInterval`.
+6. Po zatrzymaniu solvera i ustabilizowaniu workspace’u: zero pollingów API, zero klatek viewportu bez dirty reason i brak wzrostu liczby timerów/subskrypcji.
+
+### 16.4. Weryfikacja audytu
+
+- `cargo test -p fullmag-cli pending_scalar_rows`: 6/6 PASS, w tym first/latest/terminal, retry i ograniczenie kolejki;
+- `cargo test -p fullmag-api realtime_change_tests --bin fullmag-api`: 22/22 PASS, w tym scalar QoS, patch interwału, zmiana runu i osobny `DiagnosticsSummary`;
+- `cargo test -p fullmag-api terminal_snapshot_route_tests --bin fullmag-api`: 1/1 PASS;
+- testy `communicationPolicy`, `RealtimeInvalidationBridge`, `useSessionStatus.performance`, `ResourceRuntimeStore` i `FooterTelemetry`: 4 pliki, 66/66 PASS;
+- `pnpm --dir apps/control-room typecheck`: PASS;
+- `pnpm --dir apps/control-room audit:idle-performance`: PASS;
+- React Doctor 0.9.12, `--scope changed`, z `TMPDIR/TMP/TEMP=/tmp`: zakończony kodem 0; 19 ostrzeżeń w istniejącym szerszym dirty diffie, bez diagnostyki w liniach zmienionych przez tę naprawę;
+- `git diff --check`: PASS;
+- `cargo fmt --all --check`: BLOCKED przez istniejące, niezwiązane zmiany formatowania w `router_v2/handlers/visualization/display.rs` i `crates/fullmag-runner/src/quantities.rs`; pliki Rust tej naprawy nie występują w diffie formatera;
+- brak procesu nasłuchującego na localhost i brak połączenia z portami 3100/8000/8080/3000, dlatego 60-sekundowy pomiar post-fix requestów, WebSocket i bramka WebGL mają status `NOT VERIFIED`.
+
+### 16.5. Status bramek akceptacji
+
+| Bramka z 16.3 | Status | Dowód |
+|---|---|---|
+| latest-only oraz first/terminal dokładnie raz | PASS | 6/6 testów `PendingScalarRows` i 5 testów modelu scalar QoS w API |
+| edytowalna polityka steruje faktycznym dostarczeniem | PASS | test async ponownego odczytu patchowanej polityki; etykieta `Scalar delivery ms` |
+| brak seryjnej paczki `scalar.sample` przez 60 s | NOT VERIFIED | brak działającego backendu/runtime |
+| brak nieuzasadnionych GET `/data/fields` i `/data/quantities` | PASS kontraktowo / NOT VERIFIED live | nie zmieniono katalogowych invalidacji; skupione testy realtime przechodzą; brak pomiaru 60 s |
+| CPU/GPU tylko dla widocznego konsumenta i aktywnego runtime | PASS kontraktowo / NOT VERIFIED live | exact invalidation, brak zdarzeń dla runtime inactive, wspólny demand-driven `ResourceRuntimeStore`; brak pomiaru otwarty/zamknięty panel |
+| zero pollingu API i klatek viewportu po zatrzymaniu | PASS statycznie / NOT VERIFIED live | `audit:idle-performance` PASS i brak nowego timera; brak runtime oraz canvasu do pomiaru |

@@ -177,6 +177,10 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).not.toContain("Math.min(vectorBudgetMax, settings.vectorBudget)");
   });
 
+  it("passes the runtime scene cap into both vector budget ranges", () => {
+    expect(panelSource.match(/sceneCap: vectorSceneCap/g)).toHaveLength(2);
+  });
+
   it("labels and keeps viewport-only rendering preferences out of pending backend transactions", () => {
     expect(panelSource).toContain("visualization.patchViewportPreferences(");
     expect(panelSource).toContain("viewportPreferencesPatch");

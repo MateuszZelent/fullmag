@@ -137,12 +137,18 @@ own per-object sizing; `body.mesh(...)`, `study.universe.mesh(...)`, and
 mesh.fullmag-mesh
 ├── manifest.json
 ├── topology.npz
-└── build-report.json
+├── build-report.json
+└── certification-receipt.json
 ```
 
-`build-report.json` is omitted only when the source mesh legitimately has no
-Gmsh build report, such as a validated external import. The manifest records
-that absence explicitly.
+The four-member form is schema `fullmag.mesh-artifact.v2` and is emitted only
+for a certified mixed mesh whose producer supplies complete authoring, resolved
+policy, source snapshot, Gmsh, repair-policy, and native certifier bindings.
+`build-report.json` and `certification-receipt.json` are mandatory in v2. A
+generic or non-mixed mesh, a validated external import, or a producer missing
+any required binding remains a compatible v1 artifact and is always loaded by
+the full-audit path. The writer never fabricates production provenance merely
+to select v2.
 
 ### 4.1 `topology.npz`
 
@@ -163,9 +169,14 @@ The implementation must first close the current serialization gap: native
 `MeshData.save/load` must round-trip quality and per-domain quality rather than
 dropping them.
 
-### 4.2 `manifest.json`
+### 4.2 `manifest.json` and certification receipt
 
-The manifest uses `fullmag.mesh-artifact.v1` and contains:
+The legacy manifest uses `fullmag.mesh-artifact.v1`. Its existing fields and
+member digests remain readable, but v1 is never eligible for a trusted-cache
+fast path.
+
+The certified mixed writer defaults to `fullmag.mesh-artifact.v2` when and only
+when all receipt bindings are explicit and valid. The v2 manifest contains:
 
 - artifact schema and minimum reader version;
 - SI coordinate unit fixed to `m`;
@@ -181,9 +192,47 @@ The manifest uses `fullmag.mesh-artifact.v1` and contains:
 - mesh-part semantics and periodic certificates inside `topology.npz`;
 - build-report presence;
 - provenance identifying generated, native-loaded, or external-imported origin.
+- exact SHA-256 digest and byte length for `topology.npz`,
+  `build-report.json`, and `certification-receipt.json`.
+
+`certification-receipt.json` uses
+`fullmag.mesh-certification-receipt.v1`. Its semantic payload contains no
+timestamp and binds the topology and build-report member names, lengths, and
+digests; topology fingerprint v3; the complete mixed-certificate payload
+digest and `fullmag.mixed-certificate.rust-rayon.v1` algorithm ID; authoring and
+resolved-policy digests; source snapshot; exact Gmsh and repair-policy
+provenance; certifier backend/thread count; and node/cell/facet counts. The
+manifest binds the receipt member. The receipt does not bind the manifest, so
+the digest graph is acyclic.
 
 Digest failures, incomplete or colliding semantic maps, unsupported major schema
 versions, and invalid strict `MeshData`/Rust `MeshIR` topology fail closed.
+
+### 4.3 Trust modes and rollback
+
+| Mode | Source | Mandatory validation | Certificate recomputation |
+|---|---|---|---|
+| `trusted_cache_fast` | internal content-addressed v2 cache entry atomically produced by the current Fullmag | exact member set, every member length and digest, all expected authoring/policy/source/Gmsh/repair/certifier bindings, certificate digest, topology fingerprint, counts, and native typed structural preflight | omitted only after every binding and native preflight succeeds |
+| `portable_full_audit` | explicit user load or save/load path | all v2 binding checks, marker coverage, and Rust `MeshIR` validation | full native certificate audit when the extension is available or required; only outside managed execution, a missing extension uses the complete Python reference with `production_qualified=false`, which is never trusted-cache or managed/release-qualified evidence |
+| `legacy_v1_full_audit` | v1 artifact | existing member checks plus full certificate/mesh and marker validation | required; never promoted in place |
+| `imported_full_audit` | unknown producer or interchange | fail-closed full validation without trusting receipt provenance | required |
+| `forced_audit` | diagnostic or release gate | full validation regardless of internal-cache origin | required and native |
+
+The public loader exposes no `skip_validation` or `trusted` switch and always
+uses a full audit. Only the private internal-cache loader may request the fast
+path, and it must receive exact expected bindings from the cache owner. If the
+native structural preflight is unavailable, it reports
+`bypassed_native_unavailable` and delegates to the public full audit; it never
+accepts the receipt as fast trust. Managed and forced-release audits require the
+native certifier. Outside managed execution, a missing extension may use the
+complete Python reference audit only with provenance
+`production_qualified=false` and `certifier_backend=python_reference`.
+
+SHA-256 fields are integrity bindings, not author signatures. Unknown future
+artifact or receipt schemas fail closed. Successful full audit of v1 may be
+followed by a separate orchestration-owned v2 cache publication only when that
+owner has the complete current authoring, policy, source, mesher, repair, and
+native-certifier identities. The user artifact is never rewritten during load.
 
 ## 5. Authoring fingerprint
 

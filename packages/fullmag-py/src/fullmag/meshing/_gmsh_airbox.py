@@ -34,16 +34,19 @@ from ._gmsh_types import (
     MeshOptions,
     MeshQualityReport,
     MixedLayerTopologyCertificate,
+    _PREVALIDATED_MIXED_CERTIFICATE_TOKEN,
     MIXED_INTERFACE_MARKER,
     MIXED_QUALITY_METRIC,
     MIXED_SHARED_GEO_STRATEGY,
     MIXED_SHARED_GMSH_VERSION,
     SUPPORTED_VOLUME_ELEMENTS,
-    _cluster_coordinate_planes,
+    _build_mixed_topology_workspace,
     _mixed_mesh_conformity_diagnostics,
+    _mixed_certificate_evidence_payload,
     _mixed_deterministic_inputs,
-    _recompute_mixed_certificate_evidence,
-    _validate_mixed_pyramid_bases,
+    _recompute_and_bind_mixed_certificate_evidence,
+    _require_mixed_topology_workspace,
+    _validate_and_create_prevalidated_mixed_certificate,
 )
 from ._gmsh_infra import _import_gmsh, _configure_gmsh_threads, _GmshProgressLogger
 from ._gmsh_extraction import _extract_quality_metrics
@@ -542,24 +545,30 @@ def _attach_mixed_layer_topology_certificate(
     ):
         raise RuntimeError("mixed shared-domain realization violated magnetic/air markers")
 
-    magnetic_ordinals = np.flatnonzero(mesh.element_markers == 1)
-    magnetic_nodes = np.unique(
-        np.concatenate([mesh.cell_node_ids(int(index)) for index in magnetic_ordinals])
+    workspace = _build_mixed_topology_workspace(
+        mesh,
+        sweep_axis=requested_axis,
+        interface_marker=MIXED_INTERFACE_MARKER,
     )
-    planes, plane_tolerance = _cluster_coordinate_planes(
-        mesh.nodes[magnetic_nodes], requested_axis
+    context = _require_mixed_topology_workspace(
+        mesh,
+        workspace,
+        sweep_axis=requested_axis,
+        interface_marker=MIXED_INTERFACE_MARKER,
+        _actual_topology_fingerprint_v3=workspace.topology_fingerprint_v3,
     )
+    planes = workspace.magnetic_layer_coordinates
+    plane_tolerance = workspace.magnetic_layer_tolerance
     realized_layers = len(planes) - 1
     if realized_layers != requested_layers:
         raise RuntimeError(
             f"mixed shared-domain realization requested {requested_layers} layers "
             f"but resolved {realized_layers}"
         )
-    _validate_mixed_pyramid_bases(mesh, interface_marker=MIXED_INTERFACE_MARKER)
     magnetic_bounds_min_m = tuple(float(-0.5 * value) for value in body_size_m)
     magnetic_bounds_max_m = tuple(float(0.5 * value) for value in body_size_m)
     try:
-        evidence = _recompute_mixed_certificate_evidence(
+        canonical_evidence = _recompute_and_bind_mixed_certificate_evidence(
             mesh,
             sweep_axis=requested_axis,
             interface_marker=MIXED_INTERFACE_MARKER,
@@ -568,11 +577,14 @@ def _attach_mixed_layer_topology_certificate(
             magnetic_bounds_max_m=magnetic_bounds_max_m,
             airbox_bounds_min_m=airbox_bounds_min_m,
             airbox_bounds_max_m=airbox_bounds_max_m,
+            workspace=workspace,
+            _bound_context=context,
         )
     except ValueError as exc:
         raise RuntimeError(
             f"mixed shared-domain authored CAD bounds validation failed: {exc}"
         ) from exc
+    evidence = canonical_evidence.evidence
     conformity = {
         name: int(evidence[name])
         for name in (
@@ -593,6 +605,7 @@ def _attach_mixed_layer_topology_certificate(
             "mixed shared-domain conformity validation failed: "
             f"{conformity}; diagnostics={diagnostics}"
         )
+    topology_fingerprint_v3 = workspace.topology_fingerprint_v3
     certificate = MixedLayerTopologyCertificate(
         certificate_status="accepted",
         requested_sweep_direction="xyz"[requested_axis],
@@ -607,31 +620,23 @@ def _attach_mixed_layer_topology_certificate(
         airbox_bounds_max_m=airbox_bounds_max_m,
         quality_metric=MIXED_QUALITY_METRIC,
         topology_fingerprint_version="v3",
-        topology_fingerprint=mesh.topology_fingerprint_v3(),
+        topology_fingerprint=topology_fingerprint_v3,
         gmsh_version=gmsh_version,
         strategy=_MIXED_SHARED_GEO_STRATEGY,
         effective_gmsh_thread_count=effective_gmsh_thread_count,
         deterministic_inputs=_mixed_deterministic_inputs(),
         fallbacks_triggered=(),
-        **evidence,
+        **_mixed_certificate_evidence_payload(evidence),
     )
-    return MeshData(
-        nodes=mesh.nodes,
-        cell_types=mesh.cell_types,
-        cell_offsets=mesh.cell_offsets,
-        cell_nodes=mesh.cell_nodes,
-        element_markers=mesh.element_markers,
-        facet_types=mesh.facet_types,
-        facet_roles=mesh.facet_roles,
-        facet_offsets=mesh.facet_offsets,
-        facet_nodes=mesh.facet_nodes,
-        boundary_markers=mesh.boundary_markers,
-        cell_global_ordinals=mesh.cell_global_ordinals,
-        facet_global_ordinals=mesh.facet_global_ordinals,
-        cell_mesh_parts=mesh.cell_mesh_parts,
-        quality=mesh.quality,
-        per_domain_quality=mesh.per_domain_quality,
-        mixed_layer_topology_certificate=certificate,
+    validation = _validate_and_create_prevalidated_mixed_certificate(
+        mesh,
+        certificate=certificate,
+        canonical_evidence=canonical_evidence,
+    )
+    return MeshData._from_prevalidated_mixed_certificate(
+        mesh_without_certificate=mesh,
+        validation=validation,
+        token=_PREVALIDATED_MIXED_CERTIFICATE_TOKEN,
     )
 
 

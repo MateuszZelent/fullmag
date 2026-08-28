@@ -87,6 +87,91 @@ pub(crate) struct CurrentLiveRealtimeState {
     pub run_id: Option<String>,
     pub revisions: RealtimeResourceRevisionMap,
     pub mesh_resource_fetches: Vec<String>,
+    pub runtime_active: bool,
+    pub diagnostics_revision: u64,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PendingRealtimeScalarSample {
+    pub session_id: String,
+    pub run_id: Option<String>,
+    pub revision: u64,
+    pub row: ScalarRow,
+    pub terminal: bool,
+}
+
+impl PendingRealtimeScalarSample {
+    fn identity(&self) -> (String, Option<String>) {
+        (self.session_id.clone(), self.run_id.clone())
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct CurrentLiveRealtimeScalarSampleQosState {
+    pub identity: Option<(String, Option<String>)>,
+    pub last_published_at: Option<tokio::time::Instant>,
+    pub pending: Option<PendingRealtimeScalarSample>,
+    pub flush_generation: u64,
+}
+
+#[derive(Debug)]
+enum ScalarSampleQosAction {
+    Publish(PendingRealtimeScalarSample),
+    Schedule { generation: u64, delay: Duration },
+    Pending,
+}
+
+impl CurrentLiveRealtimeScalarSampleQosState {
+    fn admit(
+        &mut self,
+        sample: PendingRealtimeScalarSample,
+        now: tokio::time::Instant,
+        interval_ms: u32,
+    ) -> ScalarSampleQosAction {
+        let identity = sample.identity();
+        if self.identity.as_ref() != Some(&identity) {
+            self.identity = Some(identity);
+            self.last_published_at = None;
+            self.pending = None;
+            self.flush_generation = self.flush_generation.wrapping_add(1);
+        }
+
+        let immediate = sample.row.step <= 1
+            || sample.terminal
+            || self.last_published_at.is_none()
+            || self.last_published_at.is_some_and(|last| {
+                now.saturating_duration_since(last) >= Duration::from_millis(u64::from(interval_ms))
+            });
+        if immediate {
+            self.pending = None;
+            self.last_published_at = Some(now);
+            self.flush_generation = self.flush_generation.wrapping_add(1);
+            return ScalarSampleQosAction::Publish(sample);
+        }
+
+        let already_scheduled = self.pending.is_some();
+        self.pending = Some(sample);
+        if already_scheduled {
+            ScalarSampleQosAction::Pending
+        } else {
+            self.flush_generation = self.flush_generation.wrapping_add(1);
+            let elapsed = self
+                .last_published_at
+                .map(|last| now.saturating_duration_since(last))
+                .unwrap_or_default();
+            ScalarSampleQosAction::Schedule {
+                generation: self.flush_generation,
+                delay: Duration::from_millis(u64::from(interval_ms)).saturating_sub(elapsed),
+            }
+        }
+    }
+
+    fn clear(&mut self) {
+        self.identity = None;
+        self.last_published_at = None;
+        self.pending = None;
+        self.flush_generation = self.flush_generation.wrapping_add(1);
+    }
 }
 
 fn realtime_timestamp_now() -> String {
@@ -135,6 +220,11 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
         session_id: snapshot.session.session_id.clone(),
         run_id: snapshot.run.as_ref().map(|run| run.run_id.clone()),
         mesh_resource_fetches: current_live_mesh_resource_fetches(snapshot),
+        runtime_active: fullmag_runner::RuntimeStatus::from_status_code(
+            &effective_runtime_status_code(snapshot),
+        )
+        .is_busy(),
+        diagnostics_revision: snapshot.state_version,
         revisions: RealtimeResourceRevisionMap {
             topology_revision: router_v2::handlers::sessions::status::topology_revision(
                 snapshot,
@@ -327,6 +417,10 @@ fn current_live_realtime_changes(
             recommended_fetch: Some("/v2/sessions/current/diagnostics/solver-profile".to_string()),
         });
     }
+    changes.extend(current_live_diagnostic_changes(
+        realtime_state.runtime_active,
+        realtime_state.diagnostics_revision,
+    ));
     if realtime_state.revisions.mesh_revision > 0 {
         changes.push(RealtimeResourceChange {
             resource: RealtimeResourceName::Mesh,
@@ -462,6 +556,31 @@ fn current_live_realtime_changes(
     changes
 }
 
+fn current_live_diagnostic_changes(
+    runtime_active: bool,
+    revision: u64,
+) -> Vec<RealtimeResourceChange> {
+    if !runtime_active {
+        return Vec::new();
+    }
+
+    [
+        ("cpu", "/v2/sessions/current/diagnostics/cpu"),
+        ("gpu", "/v2/sessions/current/diagnostics/gpu"),
+    ]
+    .into_iter()
+    .map(|(resource_id, recommended_fetch)| RealtimeResourceChange {
+        resource: RealtimeResourceName::Diagnostics,
+        revision,
+        resource_id: Some(resource_id.to_string()),
+        quantity_ids: Vec::new(),
+        broad: false,
+        domain_generation_id: None,
+        recommended_fetch: Some(recommended_fetch.to_string()),
+    })
+    .collect()
+}
+
 fn current_live_realtime_changes_since(
     realtime_state: &CurrentLiveRealtimeState,
     previous_revisions: Option<&RealtimeResourceRevisionMap>,
@@ -548,7 +667,10 @@ fn current_live_realtime_change_revision_changed(
         },
         RealtimeResourceName::Artifacts => previous.artifacts_revision != change.revision,
         RealtimeResourceName::Logs => previous.engine_log_revision != change.revision,
-        RealtimeResourceName::Diagnostics => previous.solver_profile_revision != change.revision,
+        RealtimeResourceName::Diagnostics => match change.resource_id.as_deref() {
+            Some("cpu" | "gpu") => true,
+            _ => previous.solver_profile_revision != change.revision,
+        },
         RealtimeResourceName::Mesh => {
             previous.mesh_revision != change.revision || domain_generation_changed
         }
@@ -623,6 +745,8 @@ mod realtime_change_tests {
                     .to_string(),
                 "/v2/sessions/current/meshing/mesh/periodic_pairs.v1".to_string(),
             ],
+            runtime_active: false,
+            diagnostics_revision: 0,
         };
 
         let fetches = current_live_realtime_changes(&state)
@@ -656,6 +780,8 @@ mod realtime_change_tests {
             run_id: Some("run-1".to_string()),
             revisions: current,
             mesh_resource_fetches: Vec::new(),
+            runtime_active: false,
+            diagnostics_revision: 0,
         };
 
         let changes = current_live_realtime_changes_since(&state, Some(&previous));
@@ -680,6 +806,8 @@ mod realtime_change_tests {
             run_id: Some("run-1".to_string()),
             revisions: revisions(),
             mesh_resource_fetches: Vec::new(),
+            runtime_active: false,
+            diagnostics_revision: 0,
         });
         let monitor = changes
             .iter()
@@ -730,6 +858,8 @@ mod realtime_change_tests {
             run_id: Some("run-1".to_string()),
             revisions: revisions(),
             mesh_resource_fetches: Vec::new(),
+            runtime_active: false,
+            diagnostics_revision: 0,
         });
 
         assert!(changes.iter().any(|change| {
@@ -767,6 +897,8 @@ mod realtime_change_tests {
                 "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields"
                     .to_string(),
             ],
+            runtime_active: false,
+            diagnostics_revision: 0,
         };
 
         let fetches = current_live_realtime_changes_since(&state, Some(&revisions()))
@@ -794,6 +926,8 @@ mod realtime_change_tests {
             run_id: Some("run-1".to_string()),
             revisions: current,
             mesh_resource_fetches: Vec::new(),
+            runtime_active: false,
+            diagnostics_revision: 0,
         };
 
         let changes = current_live_realtime_changes_since(&state, Some(&previous));
@@ -819,6 +953,8 @@ mod realtime_change_tests {
             run_id: Some("run-1".to_string()),
             revisions: current,
             mesh_resource_fetches: Vec::new(),
+            runtime_active: false,
+            diagnostics_revision: 0,
         };
 
         let changes = current_live_realtime_changes_since(&state, Some(&previous));
@@ -844,6 +980,8 @@ mod realtime_change_tests {
             run_id: Some("run-1".to_string()),
             revisions: current_revisions,
             mesh_resource_fetches: Vec::new(),
+            runtime_active: false,
+            diagnostics_revision: 0,
         };
 
         let changes = current_live_realtime_changes_since(&state, Some(&previous));
@@ -873,6 +1011,8 @@ mod realtime_change_tests {
             run_id: Some("run-1".to_string()),
             revisions: current_revisions,
             mesh_resource_fetches: Vec::new(),
+            runtime_active: false,
+            diagnostics_revision: 0,
         };
 
         let changes = current_live_realtime_changes_since(&state, Some(&previous));
@@ -899,6 +1039,8 @@ mod realtime_change_tests {
             run_id: Some("run-1".to_string()),
             revisions: current,
             mesh_resource_fetches: Vec::new(),
+            runtime_active: false,
+            diagnostics_revision: 0,
         };
 
         let changes = current_live_realtime_changes_since(&state, Some(&previous));
@@ -1091,6 +1233,239 @@ mod realtime_change_tests {
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].1, true);
         assert_eq!(batches[0].2, policy.field_sample_publish_ms);
+    }
+
+    fn scalar_qos_sample(
+        run_id: &str,
+        revision: u64,
+        step: u64,
+        terminal: bool,
+    ) -> PendingRealtimeScalarSample {
+        PendingRealtimeScalarSample {
+            session_id: "session-1".to_string(),
+            run_id: Some(run_id.to_string()),
+            revision,
+            row: ScalarRow {
+                observation_frame: None,
+                step,
+                time: step as f64,
+                solver_dt: 1.0,
+                error_estimate: None,
+                max_error: None,
+                dt_suggested: None,
+                rejected_attempts: 0,
+                pseudo_time_s: None,
+                active_runtime_s: None,
+                mx: 0.0,
+                my: 0.0,
+                mz: 1.0,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                per_object_scalars: HashMap::new(),
+                table_expressions: Vec::new(),
+            },
+            terminal,
+        }
+    }
+
+    #[test]
+    fn scalar_qos_publishes_first_sample_immediately() {
+        let mut state = CurrentLiveRealtimeScalarSampleQosState::default();
+        let now = tokio::time::Instant::now();
+
+        let action = state.admit(scalar_qos_sample("run-1", 1, 1, false), now, 200);
+
+        assert!(matches!(action, ScalarSampleQosAction::Publish(_)));
+        assert!(state.pending.is_none());
+    }
+
+    #[test]
+    fn scalar_qos_keeps_only_latest_sample_inside_window() {
+        let mut state = CurrentLiveRealtimeScalarSampleQosState::default();
+        let now = tokio::time::Instant::now();
+        assert!(matches!(
+            state.admit(scalar_qos_sample("run-1", 1, 1, false), now, 200),
+            ScalarSampleQosAction::Publish(_)
+        ));
+
+        let first_pending = state.admit(
+            scalar_qos_sample("run-1", 2, 2, false),
+            now + Duration::from_millis(10),
+            200,
+        );
+        let replacement = state.admit(
+            scalar_qos_sample("run-1", 3, 3, false),
+            now + Duration::from_millis(20),
+            200,
+        );
+
+        assert!(matches!(
+            first_pending,
+            ScalarSampleQosAction::Schedule { .. }
+        ));
+        assert!(matches!(replacement, ScalarSampleQosAction::Pending));
+        assert_eq!(
+            state.pending.as_ref().map(|sample| sample.revision),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn scalar_qos_terminal_bypasses_window_and_clears_pending() {
+        let mut state = CurrentLiveRealtimeScalarSampleQosState::default();
+        let now = tokio::time::Instant::now();
+        let _ = state.admit(scalar_qos_sample("run-1", 1, 1, false), now, 200);
+        let _ = state.admit(
+            scalar_qos_sample("run-1", 2, 2, false),
+            now + Duration::from_millis(10),
+            200,
+        );
+
+        let action = state.admit(
+            scalar_qos_sample("run-1", 3, 2, true),
+            now + Duration::from_millis(20),
+            200,
+        );
+
+        assert!(matches!(action, ScalarSampleQosAction::Publish(_)));
+        assert!(state.pending.is_none());
+    }
+
+    #[test]
+    fn scalar_qos_new_run_discards_previous_pending_sample() {
+        let mut state = CurrentLiveRealtimeScalarSampleQosState::default();
+        let now = tokio::time::Instant::now();
+        let _ = state.admit(scalar_qos_sample("run-1", 1, 1, false), now, 200);
+        let _ = state.admit(
+            scalar_qos_sample("run-1", 2, 2, false),
+            now + Duration::from_millis(10),
+            200,
+        );
+
+        let action = state.admit(
+            scalar_qos_sample("run-2", 3, 2, false),
+            now + Duration::from_millis(20),
+            200,
+        );
+
+        assert!(matches!(action, ScalarSampleQosAction::Publish(_)));
+        assert!(state.pending.is_none());
+        assert_eq!(
+            state.identity,
+            Some(("session-1".to_string(), Some("run-2".to_string())))
+        );
+    }
+
+    #[tokio::test]
+    async fn scalar_qos_reloads_patched_interval_before_flush() {
+        let state = crate::router_v2::tests::test_app_state();
+        let mut events = state.current_live_realtime_events.subscribe();
+        state
+            .current_live_realtime_policy
+            .write()
+            .await
+            .effective
+            .scalar_telemetry_publish_ms = 40;
+
+        queue_current_live_realtime_scalar_sample(
+            state.as_ref(),
+            scalar_qos_sample("run-1", 1, 1, false),
+        )
+        .await
+        .expect("first scalar sample");
+        events.recv().await.expect("first scalar event");
+
+        queue_current_live_realtime_scalar_sample(
+            state.as_ref(),
+            scalar_qos_sample("run-1", 2, 2, false),
+        )
+        .await
+        .expect("pending scalar sample");
+        state
+            .current_live_realtime_policy
+            .write()
+            .await
+            .effective
+            .scalar_telemetry_publish_ms = 140;
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(80), events.recv())
+                .await
+                .is_err(),
+            "the stale 40 ms deadline must not publish after the policy changes"
+        );
+        let event = tokio::time::timeout(Duration::from_millis(160), events.recv())
+            .await
+            .expect("patched scalar deadline")
+            .expect("latest scalar event");
+        let event: LiveRealtimeServerEvent =
+            serde_json::from_str(&event.json).expect("scalar event JSON");
+        let LiveRealtimeServerEvent::ScalarSample { payload, .. } = event else {
+            panic!("expected scalar.sample event");
+        };
+        assert_eq!(payload.revision, 2);
+    }
+
+    #[test]
+    fn diagnostics_summary_qos_keeps_cpu_gpu_separate_from_solver_profile() {
+        let policy = current_live_realtime_communication_policy_defaults();
+        let mut changes = current_live_diagnostic_changes(true, 42);
+        changes.push(RealtimeResourceChange {
+            resource: RealtimeResourceName::Diagnostics,
+            revision: 7,
+            resource_id: Some("solver-profile".to_string()),
+            quantity_ids: Vec::new(),
+            broad: false,
+            domain_generation_id: None,
+            recommended_fetch: Some("/v2/sessions/current/diagnostics/solver-profile".to_string()),
+        });
+
+        let batches = split_realtime_changes_for_qos(changes, true, 250, &policy);
+
+        assert_eq!(batches.len(), 2);
+        let solver = batches
+            .iter()
+            .find(|(changes, _, _)| {
+                changes
+                    .iter()
+                    .any(|change| change.resource_id.as_deref() == Some("solver-profile"))
+            })
+            .expect("solver-profile lifecycle batch");
+        assert_eq!(solver.2, 250);
+        let hardware = batches
+            .iter()
+            .find(|(changes, _, _)| {
+                changes
+                    .iter()
+                    .any(|change| change.resource_id.as_deref() == Some("cpu"))
+            })
+            .expect("CPU/GPU diagnostics summary batch");
+        assert_eq!(hardware.2, policy.diagnostics_summary_ms);
+        assert_eq!(
+            hardware
+                .0
+                .iter()
+                .filter_map(|change| change.recommended_fetch.as_deref())
+                .collect::<Vec<_>>(),
+            vec![
+                "/v2/sessions/current/diagnostics/cpu",
+                "/v2/sessions/current/diagnostics/gpu",
+            ]
+        );
+    }
+
+    #[test]
+    fn diagnostics_summary_qos_emits_no_cpu_or_gpu_for_inactive_runtime() {
+        assert!(current_live_diagnostic_changes(false, 42).is_empty());
     }
 }
 
@@ -1640,6 +2015,7 @@ fn realtime_coalesced_batch_key(changes: &[RealtimeResourceChange]) -> String {
     match lane {
         RealtimeQosLane::Immediate => "immediate",
         RealtimeQosLane::Lifecycle => "lifecycle",
+        RealtimeQosLane::DiagnosticsSummary => "diagnostics_summary",
         RealtimeQosLane::ScalarRows => "scalar_rows",
         RealtimeQosLane::FieldSamples => "field_samples",
     }
@@ -1709,23 +2085,11 @@ async fn publish_current_live_realtime_resource_changes_unsplit(
     .await
 }
 
-async fn publish_current_live_realtime_scalar_sample(
+async fn publish_current_live_realtime_scalar_sample_now(
     state: &AppState,
-    session_id: String,
-    run_id: Option<String>,
-    revision: u64,
-    row: ScalarRow,
+    sample: PendingRealtimeScalarSample,
 ) -> Result<(), ApiError> {
-    if !state
-        .current_live_realtime_policy
-        .read()
-        .await
-        .effective
-        .scalar_sample_enabled
-    {
-        return Ok(());
-    }
-    let row = serde_json::to_value(row).map_err(|error| {
+    let row = serde_json::to_value(sample.row).map_err(|error| {
         ApiError::internal(format!("failed to serialize scalar sample row: {error}"))
     })?;
     let seq = state
@@ -1737,19 +2101,123 @@ async fn publish_current_live_realtime_scalar_sample(
         LiveRealtimeServerEvent::ScalarSample {
             seq,
             ts: realtime_timestamp_now(),
-            session_id,
-            run_id,
+            session_id: sample.session_id,
+            run_id: sample.run_id,
             contract_version: current_live_realtime_contract_version().to_string(),
-            payload: ScalarSamplePayload { revision, row },
+            payload: ScalarSamplePayload {
+                revision: sample.revision,
+                row,
+            },
         },
     )
     .await
+}
+
+async fn queue_current_live_realtime_scalar_sample(
+    state: &AppState,
+    sample: PendingRealtimeScalarSample,
+) -> Result<(), ApiError> {
+    let policy = state
+        .current_live_realtime_policy
+        .read()
+        .await
+        .effective
+        .clone();
+    if !policy.scalar_sample_enabled {
+        state
+            .current_live_realtime_scalar_sample_qos
+            .lock()
+            .await
+            .clear();
+        return Ok(());
+    }
+
+    let action = state
+        .current_live_realtime_scalar_sample_qos
+        .lock()
+        .await
+        .admit(
+            sample,
+            tokio::time::Instant::now(),
+            policy.scalar_telemetry_publish_ms,
+        );
+    match action {
+        ScalarSampleQosAction::Publish(sample) => {
+            publish_current_live_realtime_scalar_sample_now(state, sample).await
+        }
+        ScalarSampleQosAction::Schedule { generation, delay } => {
+            spawn_current_live_realtime_scalar_sample_flush(state.clone(), generation, delay);
+            Ok(())
+        }
+        ScalarSampleQosAction::Pending => Ok(()),
+    }
+}
+
+fn spawn_current_live_realtime_scalar_sample_flush(
+    state: AppState,
+    generation: u64,
+    initial_delay: Duration,
+) {
+    tokio::spawn(async move {
+        let mut delay = initial_delay;
+        loop {
+            tokio::time::sleep(delay).await;
+            let _session_transition = state.current_live_session_transition.lock().await;
+            let policy = state
+                .current_live_realtime_policy
+                .read()
+                .await
+                .effective
+                .clone();
+            if !policy.scalar_sample_enabled {
+                let mut qos = state.current_live_realtime_scalar_sample_qos.lock().await;
+                if qos.flush_generation == generation {
+                    qos.clear();
+                }
+                return;
+            }
+
+            let now = tokio::time::Instant::now();
+            let interval = Duration::from_millis(u64::from(policy.scalar_telemetry_publish_ms));
+            let (sample, next_delay) = {
+                let mut qos = state.current_live_realtime_scalar_sample_qos.lock().await;
+                if qos.flush_generation != generation {
+                    return;
+                }
+                let Some(last_published_at) = qos.last_published_at else {
+                    qos.clear();
+                    return;
+                };
+                let deadline = last_published_at + interval;
+                if now < deadline {
+                    (None, Some(deadline.saturating_duration_since(now)))
+                } else {
+                    let sample = qos.pending.take();
+                    if sample.is_some() {
+                        qos.last_published_at = Some(now);
+                    }
+                    qos.flush_generation = qos.flush_generation.wrapping_add(1);
+                    (sample, None)
+                }
+            };
+
+            if let Some(next_delay) = next_delay {
+                delay = next_delay;
+                continue;
+            }
+            if let Some(sample) = sample {
+                let _ = publish_current_live_realtime_scalar_sample_now(&state, sample).await;
+            }
+            return;
+        }
+    });
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RealtimeQosLane {
     Immediate,
     Lifecycle,
+    DiagnosticsSummary,
     ScalarRows,
     FieldSamples,
 }
@@ -1778,6 +2246,12 @@ fn realtime_qos_lane(change: &RealtimeResourceChange) -> RealtimeQosLane {
         return RealtimeQosLane::ScalarRows;
     }
 
+    if matches!(change.resource, RealtimeResourceName::Diagnostics)
+        && matches!(change.resource_id.as_deref(), Some("cpu" | "gpu"))
+    {
+        return RealtimeQosLane::DiagnosticsSummary;
+    }
+
     RealtimeQosLane::Lifecycle
 }
 
@@ -1789,6 +2263,7 @@ fn realtime_qos_window_ms(
     match lane {
         RealtimeQosLane::Immediate => 0,
         RealtimeQosLane::Lifecycle => lifecycle_window_ms,
+        RealtimeQosLane::DiagnosticsSummary => policy.diagnostics_summary_ms,
         RealtimeQosLane::ScalarRows => policy.table_rows_min_refetch_ms,
         RealtimeQosLane::FieldSamples => policy.field_sample_publish_ms,
     }
@@ -1828,6 +2303,7 @@ fn realtime_change_allowed_by_policy(
     }
     match realtime_qos_lane(change) {
         RealtimeQosLane::Immediate | RealtimeQosLane::Lifecycle => policy.lifecycle_events_enabled,
+        RealtimeQosLane::DiagnosticsSummary => policy.diagnostics_enabled,
         RealtimeQosLane::ScalarRows => policy.scalar_table_rows_enabled,
         RealtimeQosLane::FieldSamples => policy.field_samples_enabled,
     }
@@ -1848,18 +2324,20 @@ fn split_realtime_changes_for_qos(
 
     let mut immediate_changes = Vec::new();
     let mut lifecycle_changes = Vec::new();
+    let mut diagnostics_summary_changes = Vec::new();
     let mut scalar_row_changes = Vec::new();
     let mut field_sample_changes = Vec::new();
     for change in changes {
         match realtime_qos_lane(&change) {
             RealtimeQosLane::Immediate => immediate_changes.push(change),
             RealtimeQosLane::Lifecycle => lifecycle_changes.push(change),
+            RealtimeQosLane::DiagnosticsSummary => diagnostics_summary_changes.push(change),
             RealtimeQosLane::ScalarRows => scalar_row_changes.push(change),
             RealtimeQosLane::FieldSamples => field_sample_changes.push(change),
         }
     }
 
-    let mut batches = Vec::with_capacity(4);
+    let mut batches = Vec::with_capacity(5);
     if !immediate_changes.is_empty() {
         batches.push((immediate_changes, false, 0));
     }
@@ -1868,6 +2346,13 @@ fn split_realtime_changes_for_qos(
             lifecycle_changes,
             true,
             realtime_qos_window_ms(RealtimeQosLane::Lifecycle, window_ms, policy),
+        ));
+    }
+    if !diagnostics_summary_changes.is_empty() {
+        batches.push((
+            diagnostics_summary_changes,
+            true,
+            realtime_qos_window_ms(RealtimeQosLane::DiagnosticsSummary, window_ms, policy),
         ));
     }
     if !scalar_row_changes.is_empty() {
@@ -1948,6 +2433,9 @@ async fn main() {
         current_live_realtime_replay: Arc::new(Mutex::new(VecDeque::new())),
         current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
         current_live_realtime_pending_batches: Arc::new(Mutex::new(HashMap::new())),
+        current_live_realtime_scalar_sample_qos: Arc::new(Mutex::new(
+            CurrentLiveRealtimeScalarSampleQosState::default(),
+        )),
         current_live_realtime_policy: Arc::new(RwLock::new(
             CurrentLiveRealtimePolicyState::default(),
         )),
@@ -2609,6 +3097,11 @@ pub(crate) async fn reset_current_live_session_resources(state: &AppState) {
         .await
         .clear();
     state
+        .current_live_realtime_scalar_sample_qos
+        .lock()
+        .await
+        .clear();
+    state
         .current_live_realtime_next_seq
         .store(0, Ordering::Relaxed);
     *state.frozen_spins_previews.write().await = Default::default();
@@ -2796,18 +3289,26 @@ where
     );
     let realtime_state =
         current_live_realtime_state_from_snapshot(&state, &next, display_selection.revision).await;
-    let scalar_sample = if has_scalar_row_update {
-        next.scalar_rows.last().cloned().map(|row| {
-            (
-                next.session.session_id.clone(),
-                next.run.as_ref().map(|run| run.run_id.clone()),
-                next.scalar_revision,
-                row,
-            )
-        })
-    } else {
-        None
-    };
+    let scalar_sample =
+        if has_scalar_row_update {
+            next.scalar_rows
+                .last()
+                .cloned()
+                .map(|row| PendingRealtimeScalarSample {
+                    session_id: next.session.session_id.clone(),
+                    run_id: next.run.as_ref().map(|run| run.run_id.clone()),
+                    revision: next.scalar_revision,
+                    row,
+                    terminal: next.live_state.as_ref().is_some_and(|live| {
+                        live.latest_step.finished || live.status == "completed"
+                    }) || matches!(
+                        next.session.status.as_str(),
+                        "completed" | "failed" | "cancelled"
+                    ),
+                })
+        } else {
+            None
+        };
     if state.current_live_session_epoch.load(Ordering::Relaxed) != admission_epoch {
         *current = Some(next);
         return Err(ApiError::conflict("current_live_session_transitioned"));
@@ -2816,9 +3317,8 @@ where
     drop(current);
     crate::router_v2::handlers::sessions::status::record_current_live_heartbeat(state).await;
 
-    if let Some((session_id, run_id, revision, row)) = scalar_sample {
-        publish_current_live_realtime_scalar_sample(&state, session_id, run_id, revision, row)
-            .await?;
+    if let Some(sample) = scalar_sample {
+        queue_current_live_realtime_scalar_sample(state.as_ref(), sample).await?;
     }
 
     if atomic_terminal_field_publish {

@@ -661,6 +661,9 @@ pub(crate) fn test_app_state() -> Arc<AppState> {
         current_live_realtime_replay: Arc::new(Mutex::new(VecDeque::new())),
         current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
         current_live_realtime_pending_batches: Arc::new(Mutex::new(HashMap::new())),
+        current_live_realtime_scalar_sample_qos: Arc::new(Mutex::new(
+            crate::CurrentLiveRealtimeScalarSampleQosState::default(),
+        )),
         current_live_realtime_policy: Arc::new(RwLock::new(
             crate::realtime_policy::CurrentLiveRealtimePolicyState::default(),
         )),
@@ -2728,6 +2731,9 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         current_live_realtime_replay: Arc::new(Mutex::new(VecDeque::new())),
         current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
         current_live_realtime_pending_batches: Arc::new(Mutex::new(HashMap::new())),
+        current_live_realtime_scalar_sample_qos: Arc::new(Mutex::new(
+            crate::CurrentLiveRealtimeScalarSampleQosState::default(),
+        )),
         current_live_realtime_policy: Arc::new(RwLock::new(
             crate::realtime_policy::CurrentLiveRealtimePolicyState::default(),
         )),
@@ -6244,6 +6250,11 @@ async fn visualization_state_exposes_v2_layer_model_with_legacy_projection() {
     assert_eq!(json["layers"]["airbox"]["points"]["visible"], false);
     assert_eq!(json["layers"]["airbox"]["vectors"]["visible"], false);
     assert_eq!(json["targets"]["airbox"]["settings"]["visible"], true);
+    assert_eq!(json["quantity"]["active_quantity_id"], "m");
+    assert_eq!(
+        json["targets"]["airbox"]["settings"]["active_quantity_id"],
+        "H_demag"
+    );
     assert_eq!(json["targets"]["airbox"]["settings"]["render_mode"], "off");
     assert_eq!(
         json["targets"]["airbox"]["settings"]["surface_visible"],

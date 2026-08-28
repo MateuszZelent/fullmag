@@ -854,8 +854,6 @@ function useVectorGlyphUpload({
     if (!shaft || !head || !instanceColorAttr) return;
 
     if (!glyphColors) {
-      shaft.count = glyphCount;
-      head.count = glyphCount;
       syncVectorGlyphColorState({
         hasInstanceColors: false,
         head,
@@ -916,21 +914,8 @@ function useVectorGlyphUpload({
         `vector-glyph-colors:${glyphCount}:${glyphColors.byteLength}`,
       lane: "vector-glyph",
       onVisible: () => {
-        shaft.count = glyphCount;
-        head.count = glyphCount;
-        syncVectorGlyphColorState({
-          hasInstanceColors: true,
-          head,
-          instanceColorAttr,
-          material,
-          materialColor,
-          shaft,
-        });
-        markVectorGlyphAttributeRange(instanceColorAttr, 0, glyphCount, 3);
         measureVectorGlyphWork(VECTOR_GLYPH_COLOR_UPLOAD_MEASURE, startMark);
         measured = true;
-        tracker.recordDirtyFrame("vector-glyph-colors");
-        invalidate();
       },
       signal: abortController.signal,
       targetRevision: uploadKeys?.targetRevision ?? null,
@@ -960,7 +945,7 @@ function useVectorGlyphUpload({
   useEffect(() => {
     const shaft = shaftRef.current;
     const head = headRef.current;
-    if (!glyphTransforms || !shaft || !head) return;
+    if (!glyphTransforms || !shaft || !head || !instanceColorAttr) return;
 
     const activeGlyphs = glyphTransforms;
     const activeShaft = shaft;
@@ -1053,6 +1038,22 @@ function useVectorGlyphUpload({
       onVisible: () => {
         activeShaft.count = activeGlyphs.count;
         activeHead.count = activeGlyphs.count;
+        syncVectorGlyphColorState({
+          hasInstanceColors: Boolean(glyphColors),
+          head: activeHead,
+          instanceColorAttr,
+          material,
+          materialColor,
+          shaft: activeShaft,
+        });
+        if (glyphColors) {
+          markVectorGlyphAttributeRange(
+            instanceColorAttr,
+            0,
+            activeGlyphs.count,
+            3,
+          );
+        }
         markVectorGlyphAttributeRange(
           activeShaft.instanceMatrix,
           0,
@@ -1088,7 +1089,10 @@ function useVectorGlyphUpload({
     glyphColors,
     glyphTransforms,
     headRef,
+    instanceColorAttr,
     invalidate,
+    material,
+    materialColor,
     onAdopted,
     shaftRef,
     targetRevision,
